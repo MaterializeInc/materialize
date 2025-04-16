@@ -22,7 +22,7 @@ use std::fmt::Debug;
 use std::net::{IpAddr, SocketAddr};
 use std::pin::Pin;
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, SystemTime};
 
 use anyhow::Context;
 use async_trait::async_trait;
@@ -40,8 +40,9 @@ use http::{Method, StatusCode};
 use hyper_openssl::SslStream;
 use hyper_openssl::client::legacy::MaybeHttpsStream;
 use hyper_util::rt::TokioIo;
-use mz_adapter::session::{Session, SessionConfig};
+use mz_adapter::session::{Session as AdapterSession, SessionConfig as AdapterSessionConfig};
 use mz_adapter::{AdapterError, AdapterNotice, Client, SessionClient, WebhookAppenderCache};
+use mz_auth::password::Password;
 use mz_frontegg_auth::{Authenticator as FronteggAuthentication, Error as FronteggError};
 use mz_http_util::DynamicFilterTarget;
 use mz_ore::cast::u64_to_usize;
@@ -57,7 +58,7 @@ use openssl::ssl::Ssl;
 use prometheus::{
     COMPUTE_METRIC_QUERIES, FRONTIER_METRIC_QUERIES, STORAGE_METRIC_QUERIES, USAGE_METRIC_QUERIES,
 };
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use serde_json::json;
 use thiserror::Error;
 use tokio::io::AsyncWriteExt;
@@ -65,6 +66,10 @@ use tokio::sync::{oneshot, watch};
 use tower::limit::GlobalConcurrencyLimitLayer;
 use tower::{Service, ServiceBuilder};
 use tower_http::cors::{AllowOrigin, Any, CorsLayer};
+use tower_sessions::{
+    MemoryStore as TowerSessionMemoryStore, Session as TowerSession,
+    SessionManagerLayer as TowerSessionManagerLayer,
+};
 use tracing::{error, warn};
 use uuid::Uuid;
 
@@ -88,6 +93,8 @@ pub use sql::{SqlResponse, WebSocketAuth, WebSocketResponse};
 /// Maximum allowed size for a request.
 pub const MAX_REQUEST_SIZE: usize = u64_to_usize(2 * bytesize::MB);
 
+const SESSION_DURATION: Duration = Duration::from_secs(3600); // 1 hour
+
 #[derive(Debug, Clone)]
 pub struct HttpConfig {
     pub source: &'static str,
@@ -100,6 +107,7 @@ pub struct HttpConfig {
     pub concurrent_webhook_req: Arc<tokio::sync::Semaphore>,
     pub metrics: Metrics,
     pub allow_reserved_roles: bool,
+    pub use_self_hosted_auth: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -148,6 +156,7 @@ impl HttpServer {
             concurrent_webhook_req,
             metrics,
             allow_reserved_roles,
+            use_self_hosted_auth,
         }: HttpConfig,
     ) -> HttpServer {
         let tls_mode = tls.as_ref().map(|tls| tls.mode).unwrap_or(TlsMode::Disable);
@@ -160,7 +169,17 @@ impl HttpServer {
         let adapter_client_rx = adapter_client_rx.shared();
         let webhook_cache = WebhookAppenderCache::new();
 
-        let base_router = base_router(BaseRouterConfig { profiling: false })
+        // Create secure session store and manager
+        let session_store = TowerSessionMemoryStore::default();
+        let session_layer = TowerSessionManagerLayer::new(session_store)
+            // TODO determine this from the tls_mode
+            .with_secure(false) // Enforce HTTPS
+            .with_same_site(tower_sessions::cookie::SameSite::Strict) // Prevent CSRF
+            .with_http_only(true) // Prevent XSS
+            .with_name("mz_session") // Custom cookie name
+            .with_path("/"); // Set cookie path
+
+        let mut base_router = base_router(BaseRouterConfig { profiling: false })
             .layer(middleware::from_fn(move |req, next| {
                 let base_frontegg = Arc::clone(&base_frontegg);
                 async move {
@@ -170,6 +189,7 @@ impl HttpServer {
                         tls_mode,
                         base_frontegg.as_ref().as_ref(),
                         allow_reserved_roles,
+                        use_self_hosted_auth,
                     )
                     .await
                 }
@@ -189,15 +209,26 @@ impl HttpServer {
                     .expose_headers(Any)
                     .max_age(Duration::from_secs(60) * 60),
             );
+        if use_self_hosted_auth {
+            base_router = base_router.layer(session_layer.clone());
+        }
+
         let ws_router = Router::new()
             .route("/api/experimental/sql", routing::get(sql::handle_sql_ws))
             .with_state(WsState {
                 frontegg,
-                adapter_client_rx,
+                adapter_client_rx: adapter_client_rx.clone(),
                 active_connection_counter,
                 helm_chart_version,
                 allow_reserved_roles,
             });
+
+        // TODO should this even exist if we're not using self-hosted auth?
+        let login_router = Router::new()
+            .route("/api/login", routing::post(handle_login))
+            .route("/api/logout", routing::post(handle_logout))
+            .layer(Extension(adapter_client_rx))
+            .layer(session_layer);
 
         let webhook_router = Router::new()
             .route(
@@ -227,6 +258,7 @@ impl HttpServer {
             .merge(base_router)
             .merge(ws_router)
             .merge(webhook_router)
+            .merge(login_router)
             .apply_default_layers(source, metrics);
 
         HttpServer { tls, router }
@@ -563,10 +595,10 @@ impl AuthedClient {
         options: BTreeMap<String, String>,
     ) -> Result<Self, AdapterError>
     where
-        F: FnOnce(&mut Session),
+        F: FnOnce(&mut AdapterSession),
     {
         let conn_id = adapter_client.new_conn_id()?;
-        let mut session = adapter_client.new_session(SessionConfig {
+        let mut session = adapter_client.new_session(AdapterSessionConfig {
             conn_id,
             uuid: Uuid::new_v4(),
             user: user.name,
@@ -699,6 +731,10 @@ enum AuthError {
     MismatchedUser(String),
     #[error("unexpected credentials")]
     UnexpectedCredentials,
+    #[error("session expired")]
+    SessionExpired,
+    #[error("failed to update session")]
+    FailedToUpdateSession,
 }
 
 impl IntoResponse for AuthError {
@@ -719,15 +755,109 @@ impl IntoResponse for AuthError {
     }
 }
 
+// type Auth = (Json<LoginCredentials>, towerSessions)
+// Simplified login handler
+pub async fn handle_login(
+    session: Option<Extension<TowerSession>>,
+    Extension(adapter_client_rx): Extension<Delayed<Client>>,
+    Json(LoginCredentials { username, password }): Json<LoginCredentials>,
+) -> impl IntoResponse {
+    let Ok(adapter_client) = adapter_client_rx.clone().await else {
+        return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({ "status": "false" })),
+        );
+    };
+    if let Err(err) = adapter_client.authenticate(&username, &password).await {
+        warn!(?err, "HTTP login failed authentication");
+        return (StatusCode::UNAUTHORIZED, Json(json!({ "status": "false" })));
+    };
+
+    // Create session data
+    let session_data = TowerSessionData {
+        username,
+        created_at: SystemTime::now(),
+        last_activity: SystemTime::now(),
+    };
+    warn!("session_data {:?}", session_data);
+    // Store session data
+    let session = session.and_then(|Extension(session)| Some(session));
+    let Some(session) = session else {
+        return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({ "status": "false" })),
+        );
+    };
+    match session.insert("data", &session_data).await {
+        Err(_) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({"status": "failed"})),
+        ),
+        Ok(_) => (StatusCode::OK, Json(json!({ "status": "success" }))),
+    }
+}
+
+// Simplified logout handler
+pub async fn handle_logout(session: Option<Extension<TowerSession>>) -> impl IntoResponse {
+    let session = session.and_then(|Extension(session)| Some(session));
+    let Some(session) = session else {
+        return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({ "status": "false" })),
+        );
+    };
+    // Delete session
+    match session.delete().await {
+        Err(_) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({"status": "failed"})),
+        ),
+        Ok(_) => (StatusCode::OK, Json(json!({ "status": "success" }))),
+    }
+}
+
 async fn http_auth(
     mut req: Request,
     next: Next,
     tls_mode: TlsMode,
     frontegg: Option<&FronteggAuthentication>,
+    use_self_hosted_auth: bool,
     allow_reserved_roles: bool,
 ) -> impl IntoResponse + use<> {
+    // First check for session authentication
+    if let Some(session) = req.extensions().get::<TowerSession>() {
+        warn!("got session");
+        if let Ok(Some(session_data)) = session.get::<TowerSessionData>("data").await {
+            warn!("got session data");
+            // Check session expiration
+            if session_data
+                .last_activity
+                .elapsed()
+                .unwrap_or(Duration::MAX)
+                > SESSION_DURATION
+            {
+                let _ = session.delete().await;
+                return Err(AuthError::SessionExpired);
+            }
+            // Update last activity
+            let mut updated_data = session_data.clone();
+            updated_data.last_activity = SystemTime::now();
+            session
+                .insert("data", &updated_data)
+                .await
+                .map_err(|_| AuthError::FailedToUpdateSession)?;
+            // User is authenticated via session
+            req.extensions_mut().insert(AuthedUser {
+                name: session_data.username,
+                external_metadata_rx: None,
+            });
+            return Ok(next.run(req).await);
+        }
+    }
+
     // First, extract the username from the certificate, validating that the
     // connection matches the TLS configuration along the way.
+    // Fall back to existing authentication methods.
     let conn_protocol = req.extensions().get::<ConnProtocol>().unwrap();
     match (tls_mode, &conn_protocol) {
         (TlsMode::Disable, ConnProtocol::Http) => {}
@@ -735,8 +865,10 @@ async fn http_auth(
         (TlsMode::Require, ConnProtocol::Http) => return Err(AuthError::HttpsRequired),
         (TlsMode::Require, ConnProtocol::Https { .. }) => {}
     }
-    let creds = match frontegg {
-        None => {
+    warn!("checking creds");
+    let creds = match (frontegg, use_self_hosted_auth) {
+        (None, false) => {
+            warn!("no frontegg or self hosted auth");
             // If no Frontegg authentication, use whatever is in the HTTP auth
             // header (without checking the password), or fall back to the
             // default user.
@@ -746,7 +878,8 @@ async fn http_auth(
                 Credentials::DefaultUser
             }
         }
-        Some(_) => {
+        (Some(_), _) => {
+            warn!("frontegg auth");
             if let Some(basic) = req.headers().typed_get::<Authorization<Basic>>() {
                 Credentials::Password {
                     username: basic.username().to_string(),
@@ -759,6 +892,11 @@ async fn http_auth(
             } else {
                 return Err(AuthError::MissingHttpAuthentication);
             }
+        }
+        (None, true) => {
+            warn!("self hosted auth only, but somehow missing session data");
+            // TODO tell the user to login here?
+            return Err(AuthError::MissingHttpAuthentication);
         }
     };
 
@@ -1002,4 +1140,17 @@ async fn handle_load_error(error: tower::BoxError) -> impl IntoResponse {
         StatusCode::INTERNAL_SERVER_ERROR,
         Cow::from(format!("Unhandled internal error: {}", error)),
     )
+}
+
+#[derive(Debug, Deserialize, Serialize, PartialEq)]
+pub struct LoginCredentials {
+    username: String,
+    password: Password,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TowerSessionData {
+    username: String,
+    created_at: SystemTime,
+    last_activity: SystemTime,
 }

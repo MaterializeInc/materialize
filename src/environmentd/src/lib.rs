@@ -811,6 +811,7 @@ impl Listeners {
                 concurrent_webhook_req: webhook_concurrency_limit.semaphore(),
                 metrics: http_metrics.clone(),
                 allow_reserved_roles: config.allow_reserved_roles_on_external_ports,
+                use_self_hosted_auth: config.self_hosted_auth,
             });
             mz_server_core::serve(ServeConfig {
                 conns: http_conns,
