@@ -41,7 +41,10 @@ INSERT INTO t2_add_subsource VALUES ('100'), ('200'), (NULL), ('300');
 $ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
 ALTER SYSTEM SET enable_sql_server_source = true;
 
-> CREATE CONNECTION IF NOT EXISTS sql_server_test_connection TO SQL SERVER (
+$ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
+ALTER SYSTEM SET log_filter = 'mz_sql=debug,info';
+
+> CREATE CONNECTION IF NOT EXISTS sql_server_test_add_subsource_conn TO SQL SERVER (
     HOST 'sql-server',
     PORT 1433,
     DATABASE test_30,
@@ -52,7 +55,7 @@ ALTER SYSTEM SET enable_sql_server_source = true;
 # Create a SQL Server Source.
 
 > CREATE SOURCE my_source_add_subsources
-  FROM SQL SERVER CONNECTION sql_server_test_connection
+  FROM SQL SERVER CONNECTION sql_server_test_add_subsource_conn
   FOR TABLES (dbo.t1_add_subsource);
 
 
