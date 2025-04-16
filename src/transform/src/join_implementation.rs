@@ -925,6 +925,20 @@ fn implement_arrangements<'a>(
     )
 }
 
+/// This function continues the surgery that `implement_arrangements` started.
+///
+/// (In theory, this function could be merged into `implement_arrangements`, but it would be a bit
+/// painful, because we need to access the join's `implementation` after `implement_arrangements`,
+/// which would be somewhat convoluted after what `install_lifted_mfp` does.)
+///
+/// The given MFP should be the merged MFP from all the lifted inputs MFPs.
+///
+/// `install_lifted_mfp` mutates the given join expression as follows:
+/// - Puts the given MFP on top of the Join.
+/// - Attends to `equivalences`, which was invalidated by `implement_arrangements` if it refers to a
+///   column that was permuted or created by the given MFP.
+/// - Canonicalizes scalar expressions in maps and filters with respect to the join equivalences.
+///   See inline comment for more details.
 fn install_lifted_mfp(
     new_join: &mut MirRelationExpr,
     mfp: MapFilterProject,
@@ -941,9 +955,16 @@ fn install_lifted_mfp(
                     #[allow(deprecated)]
                     expr.visit_mut_pre_post(
                         &mut |e| {
-                            if let MirScalarExpr::Column(c) = e {
+                            // This has to be a loop! This is because it can happen that the new
+                            // expression is again a column reference, in which case the visitor
+                            // wouldn't be called on it again. (The visitation continues with the
+                            // children of the new expression, but won't visit the new expression
+                            // itself again.)
+                            while let MirScalarExpr::Column(c) = e {
                                 if *c >= mfp.input_arity {
                                     *e = map[*c - mfp.input_arity].clone();
+                                } else {
+                                    break;
                                 }
                             }
                             None
