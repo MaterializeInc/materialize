@@ -65,6 +65,9 @@ side.
 
 ## Non-Goals
 
+- Lift limitation on result having to fit into cluster memory: For non-persist
+  queries, the result is still first staged in an arrangement before we read it
+  out and send it to `environmentd`. Or we read out of an existing arrangement.
 - Change how results are extracted from "the dataflows" on the cluster side.
 - Lift result-size limitation for non-streamable queries.
 
