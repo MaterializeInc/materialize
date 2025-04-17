@@ -596,6 +596,8 @@ crates_repository(
         "//:src/alloc/Cargo.toml",
         "//:src/arrow-util/Cargo.toml",
         "//:src/audit-log/Cargo.toml",
+        "//:src/auth/Cargo.toml",
+        "//:src/authenticator/Cargo.toml",
         "//:src/avro/Cargo.toml",
         "//:src/aws-secrets-controller/Cargo.toml",
         "//:src/aws-util/Cargo.toml",
@@ -704,7 +706,6 @@ crates_repository(
         "//:test/metabase/smoketest/Cargo.toml",
         "//:test/test-util/Cargo.toml",
         "//:misc/bazel/cargo-gazelle/Cargo.toml",
-        "//:src/auth/Cargo.toml",
     ],
     rust_version = RUST_VERSION,
     # Restricting the set of platform triples we support _greatly_ reduces the
