@@ -112,7 +112,16 @@ pub fn get_changes_asc(
 }
 
 /// Cleans up the change table associated with the specified `capture_instance` by
-/// deleting all entries with a `start_lsn` less than `low_water_mark`.
+/// deleting `max_deletes` entries with a `start_lsn` less than `low_water_mark`.
+///
+/// Note: At the moment cleanup is kind of "best effort".  If this query succeeds
+/// then at most `max_delete` rows were deleted, but the number of actual rows
+/// deleted is not returned as part of the query. The number of rows _should_ be
+/// present in an informational message (i.e. a Notice) that is returned, but
+/// [`tiberius`] doesn't expose these to us.
+///
+/// TODO(sql_server2): Update [`tiberius`] to return informational messages so we
+/// can determine how many rows got deleted.
 ///
 /// See: <https://learn.microsoft.com/en-us/sql/relational-databases/system-stored-procedures/sys-sp-cdc-cleanup-change-table-transact-sql?view=sql-server-ver16>.
 pub async fn cleanup_change_table(
