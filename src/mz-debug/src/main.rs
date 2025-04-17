@@ -20,7 +20,7 @@ use mz_build_info::{BuildInfo, build_info};
 use mz_ore::cli::{self, CliConfig};
 use mz_ore::error::ErrorExt;
 use mz_ore::task;
-use tracing::{error, info};
+use tracing::{error, info, warn};
 use tracing_subscriber::EnvFilter;
 use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::util::SubscriberInitExt;
@@ -292,7 +292,7 @@ async fn run(context: Context, args: Args) -> Result<(), anyhow::Error> {
         {
             Ok(dumper) => Some(dumper),
             Err(e) => {
-                error!("Failed to dump system catalog: {}", e);
+                warn!("Failed to dump system catalog: {}", e);
                 None
             }
         };
@@ -309,7 +309,7 @@ async fn run(context: Context, args: Args) -> Result<(), anyhow::Error> {
     let zip_file_name = format!("{}.zip", &base_path.display());
 
     if let Err(e) = zip_debug_folder(PathBuf::from(&zip_file_name), &base_path) {
-        error!("Failed to zip debug directory: {}", e);
+        warn!("Failed to zip debug directory: {}", e);
     } else {
         info!("Created zip debug at {}", &zip_file_name);
     }

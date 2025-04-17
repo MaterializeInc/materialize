@@ -39,7 +39,7 @@ use mz_ore::collections::HashMap;
 use mz_ore::retry::{self};
 use mz_ore::task::{self, JoinHandle};
 use postgres_openssl::{MakeTlsConnector, TlsStream};
-use tracing::{error, info};
+use tracing::{info, warn};
 
 use crate::Context;
 use crate::utils::format_base_path;
@@ -718,7 +718,7 @@ impl<'n> SystemCatalogDumper<'n> {
                 .filter_map(|row| row)
                 .collect::<Vec<_>>(),
             Err(e) => {
-                error!("Failed to get replica names: {}", e);
+                warn!("Failed to get replica names: {}", e);
                 vec![]
             }
         };
@@ -785,7 +785,7 @@ impl<'n> SystemCatalogDumper<'n> {
                     {
                         Ok(()) => Ok(()),
                         Err(err) => {
-                            error!(
+                            warn!(
                                 "{}: {:#}. Retrying...",
                                 format_catalog_dump_error_message(relation_name, cluster_replica),
                                 err
@@ -809,7 +809,7 @@ impl<'n> SystemCatalogDumper<'n> {
             }
             .await
             {
-                error!(
+                warn!(
                     "Failed to cancel query for {}{}",
                     relation_name,
                     cluster_replica
@@ -879,7 +879,7 @@ impl<'n> SystemCatalogDumper<'n> {
             }
 
             if let Err(err) = self.dump_relation(relation, replica).await {
-                error!(
+                warn!(
                     "{}: {:#}.",
                     format_catalog_dump_error_message(relation.name, replica),
                     err,
@@ -893,7 +893,7 @@ impl<'n> SystemCatalogDumper<'n> {
                     } else {
                         "https://materialize.com/docs/sql/alter-cluster/#resizing-1"
                     };
-                    error!("Consider increasing the size of the cluster {}", docs_link);
+                    warn!("Consider increasing the size of the cluster {}", docs_link);
                 }
 
                 let is_missing_catalog_item_err = match err.downcast_ref::<tokio_postgres::Error>()
