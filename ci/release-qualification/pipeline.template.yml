@@ -179,7 +179,7 @@ steps:
       - id: long-parallel-benchmark
         label: "Long Parallel Benchmark"
         depends_on: build-x86_64
-        timeout_in_minutes: 1200
+        timeout_in_minutes: 120
         agents:
           queue: hetzner-x86-64-dedi-8cpu-32gb
         plugins:

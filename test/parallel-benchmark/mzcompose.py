@@ -838,16 +838,16 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     if args.other_tag:
         assert not args.mz_url, "Can't set both --mz-url and --other-tag"
         tag = resolve_tag(args.other_tag)
-        print(f"--- Running against other tag for comparison: {tag}")
+        print(f"--- Running against same version again")
         args.guarantees = False
         other_stats, other_failures = run_once(
             c,
             sharded_scenarios,
             service_names,
-            tag=tag,
-            params=args.other_params,
+            tag=None,
+            params=args.this_params,
             args=args,
-            suffix="other",
+            suffix="this",
             sqlite_store=args.sqlite_store,
         )
         failures.extend(other_failures)
