@@ -49,7 +49,7 @@ mz-kafka-util = { path = "../kafka-util" }
 mz-metrics = { path = "../metrics" }
 mz-mysql-util = { path = "../mysql-util" }
 mz-orchestrator = { path = "../orchestrator" }
-mz-ore = { path = "../ore", features = ["chrono", "async", "process", "tracing", "id_gen"] }
+mz-ore = { path = "../ore", features = ["chrono", "async", "panic", "process", "tracing", "id_gen"] }
 mz-persist-types = { path = "../persist-types" }
 mz-persist-client = { path = "../persist-client" }
 mz-pgcopy = { path = "../pgcopy" }

@@ -1225,7 +1225,9 @@ mod tests {
 
         // empty
         assert_eq!(c.progress_exclusive, 0);
-        assert_err!(mz_ore::panic::catch_unwind(|| c.data_snapshot(d0, 0)));
+        #[allow(clippy::disallowed_methods)] // not using enhanced panic handler in tests
+        let result = std::panic::catch_unwind(|| c.data_snapshot(d0, 0));
+        assert_err!(result);
         assert_eq!(c.data_listen_next(&d0, &0), WaitForTxnsProgress);
 
         // ts 0 (never registered)
@@ -1492,7 +1494,9 @@ mod tests {
         let mut c = TxnsCacheState::new(ShardId::new(), 10, None);
         c.progress_exclusive = 20;
 
-        assert_err!(mz_ore::panic::catch_unwind(|| c.data_listen_next(&d0, &0)));
+        #[allow(clippy::disallowed_methods)] // not using enhanced panic handler in tests
+        let result = std::panic::catch_unwind(|| c.data_listen_next(&d0, &0));
+        assert_err!(result);
 
         let ds = c.data_snapshot(d0, 0);
         assert_eq!(

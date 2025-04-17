@@ -47,7 +47,6 @@ use opentelemetry::{KeyValue, global};
 use opentelemetry_sdk::propagation::TraceContextPropagator;
 use opentelemetry_sdk::{Resource, trace};
 use prometheus::IntCounter;
-use sentry::integrations::debug_images::DebugImagesIntegration;
 use tonic::metadata::MetadataMap;
 use tonic::transport::Endpoint;
 use tracing::{Event, Level, Span, Subscriber, warn};
@@ -534,7 +533,6 @@ where
                     attach_stacktrace: true,
                     release: Some(format!("materialize@{0}", config.build_version).into()),
                     environment: sentry_config.environment.map(Into::into),
-                    integrations: vec![Arc::new(DebugImagesIntegration::new())],
                     ..Default::default()
                 },
             ));

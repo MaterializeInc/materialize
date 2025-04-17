@@ -55,6 +55,14 @@ task_local! {
 ///   * Writes to stderr as atomically as possible, to minimize interleaving
 ///     with concurrent log messages.
 ///
+///   * Reports panics to Sentry.
+///
+///     Sentry installs its own panic hook by default that reports the panic and
+///     then forwards it to the previous panic hook. We can't use that hook
+///     because it would also report panics that we catch-unwind afterwards.
+///     Instead we are invoking the Sentry integration manually here, after the
+///     catch-unwind check.
+///
 ///   * Instructs the entire process to abort if any thread panics.
 ///
 ///     By default, when a thread panics in Rust, only that thread is affected,
@@ -188,6 +196,9 @@ pub fn install_enhanced_handler() {
             let mut stderr = unsafe { File::from_raw_fd(2) };
             let _ = stderr.write_all(buf.as_bytes());
         }
+
+        // Report the panic to Sentry.
+        sentry_panic::panic_handler(panic_info);
 
         process::abort();
     }))
