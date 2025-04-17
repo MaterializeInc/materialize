@@ -1,0 +1,20 @@
+[package]
+name = "mz-authenticator"
+version = "0.1.0"
+authors = ["Materialize, Inc."]
+license = "proprietary"
+edition.workspace = true
+rust-version.workspace = true
+publish = false
+
+[dependencies]
+clap = { version = "4.5.23", features = ["derive"], optional = true }
+mz-adapter = { path = "../adapter" }
+mz-frontegg-auth = { path = "../frontegg-auth" }
+workspace-hack = { version = "0.0.0", path = "../workspace-hack", optional = true }
+
+[lints]
+workspace = true
+
+[features]
+default = ["clap", "workspace-hack"]
