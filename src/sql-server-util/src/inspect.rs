@@ -66,9 +66,9 @@ fn parse_lsn(result: &[tiberius::Row]) -> Result<Lsn, SqlServerError> {
         [row] => {
             let val = row
                 .try_get::<&[u8], _>(0)?
-                .ok_or_else(|| SqlServerError::NullMaxLsn)?;
+                .ok_or_else(|| SqlServerError::NullLsn)?;
             if val.is_empty() {
-                Err(SqlServerError::NullMaxLsn)
+                Err(SqlServerError::NullLsn)
             } else {
                 let lsn = Lsn::try_from(val).map_err(|msg| SqlServerError::InvalidData {
                     column_name: "lsn".to_string(),

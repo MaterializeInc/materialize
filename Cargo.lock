@@ -10764,7 +10764,7 @@ dependencies = [
 [[package]]
 name = "tiberius"
 version = "0.12.3"
-source = "git+https://github.com/MaterializeInc/tiberius?rev=44404855b62017362af80e7835b4968d6c755d53#44404855b62017362af80e7835b4968d6c755d53"
+source = "git+https://github.com/MaterializeInc/tiberius?rev=555076bc80087d21addb929948508c4e1a3c1fa7#555076bc80087d21addb929948508c4e1a3c1fa7"
 dependencies = [
  "async-trait",
  "asynchronous-codec",

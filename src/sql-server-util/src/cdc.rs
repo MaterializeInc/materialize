@@ -338,7 +338,7 @@ impl<'a> CdcStream<'a> {
         fn _map_result<T>(result: Result<T, SqlServerError>) -> RetryResult<T, SqlServerError> {
             match result {
                 Ok(val) => RetryResult::Ok(val),
-                Err(err @ SqlServerError::NullMaxLsn) => RetryResult::RetryableErr(err),
+                Err(err @ SqlServerError::NullLsn) => RetryResult::RetryableErr(err),
                 Err(other) => RetryResult::FatalErr(other),
             }
         }
