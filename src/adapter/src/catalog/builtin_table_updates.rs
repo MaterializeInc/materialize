@@ -27,8 +27,9 @@ use mz_catalog::builtin::{
     MZ_OBJECT_DEPENDENCIES, MZ_OPERATORS, MZ_PENDING_CLUSTER_REPLICAS, MZ_POSTGRES_SOURCE_TABLES,
     MZ_POSTGRES_SOURCES, MZ_PSEUDO_TYPES, MZ_ROLE_MEMBERS, MZ_ROLE_PARAMETERS, MZ_ROLES,
     MZ_SCHEMAS, MZ_SECRETS, MZ_SESSIONS, MZ_SINKS, MZ_SOURCE_REFERENCES, MZ_SOURCES,
-    MZ_SSH_TUNNEL_CONNECTIONS, MZ_STORAGE_USAGE_BY_SHARD, MZ_SUBSCRIPTIONS, MZ_SYSTEM_PRIVILEGES,
-    MZ_TABLES, MZ_TYPE_PG_METADATA, MZ_TYPES, MZ_VIEWS, MZ_WEBHOOKS_SOURCES,
+    MZ_SQL_SERVER_SOURCE_TABLES, MZ_SSH_TUNNEL_CONNECTIONS, MZ_STORAGE_USAGE_BY_SHARD,
+    MZ_SUBSCRIPTIONS, MZ_SYSTEM_PRIVILEGES, MZ_TABLES, MZ_TYPE_PG_METADATA, MZ_TYPES, MZ_VIEWS,
+    MZ_WEBHOOKS_SOURCES,
 };
 use mz_catalog::config::AwsPrincipalContext;
 use mz_catalog::durable::SourceReferences;
@@ -581,6 +582,22 @@ impl CatalogState {
                                         diff,
                                     )
                                 }
+                                "sql-server" => {
+                                    mz_ore::soft_assert_eq_no_log!(external_reference.len(), 3);
+                                    // The left-most qualification of SQL Server tables is
+                                    // the database, but this information is redundant
+                                    // because each SQL Server connection connects to
+                                    // only one database.
+                                    let schema_name = external_reference[1].to_ast_string_simple();
+                                    let table_name = external_reference[2].to_ast_string_simple();
+
+                                    self.pack_sql_server_source_table_update(
+                                        id,
+                                        &schema_name,
+                                        &table_name,
+                                        diff,
+                                    )
+                                }
                                 // Load generator sources don't have any special
                                 // updates.
                                 "load-generator" => vec![],
@@ -696,8 +713,22 @@ impl CatalogState {
                                     diff,
                                 )
                             }
-                            // TODO(sql_server1): Catalog item updates.
-                            "sql-server" => vec![],
+                            "sql-server" => {
+                                mz_ore::soft_assert_eq_no_log!(external_reference.len(), 3);
+                                // The left-most qualification of SQL Server tables is
+                                // the database, but this information is redundant
+                                // because each SQL Server connection connects to
+                                // only one database.
+                                let schema_name = external_reference[1].to_ast_string_simple();
+                                let table_name = external_reference[2].to_ast_string_simple();
+
+                                self.pack_sql_server_source_table_update(
+                                    id,
+                                    &schema_name,
+                                    &table_name,
+                                    diff,
+                                )
+                            }
                             // Load generator sources don't have any special
                             // updates.
                             "load-generator" => vec![],
@@ -1027,6 +1058,24 @@ impl CatalogState {
     ) -> Vec<BuiltinTableUpdate<&'static BuiltinTable>> {
         vec![BuiltinTableUpdate::row(
             &*MZ_MYSQL_SOURCE_TABLES,
+            Row::pack_slice(&[
+                Datum::String(&id.to_string()),
+                Datum::String(schema_name),
+                Datum::String(table_name),
+            ]),
+            diff,
+        )]
+    }
+
+    fn pack_sql_server_source_table_update(
+        &self,
+        id: CatalogItemId,
+        schema_name: &str,
+        table_name: &str,
+        diff: Diff,
+    ) -> Vec<BuiltinTableUpdate<&'static BuiltinTable>> {
+        vec![BuiltinTableUpdate::row(
+            &*MZ_SQL_SERVER_SOURCE_TABLES,
             Row::pack_slice(&[
                 Datum::String(&id.to_string()),
                 Datum::String(schema_name),
