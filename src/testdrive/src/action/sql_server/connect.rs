@@ -23,17 +23,10 @@ pub async fn run_connect(
     let ado_string = cmd.input.join("\n");
 
     let config = Config::from_ado_string(&ado_string).context("parsing ADO string: {}")?;
-    let (client, connection) = Client::connect(config)
+    let client = Client::connect(config)
         .await
         .context("connecting to SQL server")?;
     state.sql_server_clients.insert(name.clone(), client);
-
-    // Spawn the connection in a tokio task so it gets polled.
-    let task_name = format!("sql-server {name} connection");
-    mz_ore::task::spawn(|| task_name, async move {
-        connection.await;
-        tracing::info!("SQL Server connection '{name}' closed");
-    });
 
     Ok(ControlFlow::Continue)
 }
