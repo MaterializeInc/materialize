@@ -373,6 +373,13 @@ pub enum SqlServerSourcePurificationError {
         option_name: String,
         items: Vec<UnresolvedItemName>,
     },
+    #[error("column {schema_name}.{tbl_name}.{col_name} of type {col_type} is not supported")]
+    UnsupportedColumn {
+        schema_name: Arc<str>,
+        tbl_name: Arc<str>,
+        col_name: Arc<str>,
+        col_type: Arc<str>,
+    },
     #[error("No tables found for provided reference")]
     NoTables,
     #[error("programming error: {0}")]
@@ -417,6 +424,9 @@ impl SqlServerSourcePurificationError {
                 the user does not have privileges on the intended tables."
                     .into(),
             ),
+            Self::UnsupportedColumn { .. } => {
+                Some("Use EXCLUDE COLUMNS (...) to exclude a column from this source".into())
+            }
             _ => None,
         }
     }

@@ -113,6 +113,37 @@ pub(super) async fn purify_source_exports(
         )
     }
 
+    // Ensure the columns we intend to include are supported.
+    //
+    // For example, we don't support `text` columns in SQL Server because they
+    // do not include the "before" value when an `UPDATE` occurs. When parsing
+    // the raw metadata for this type we mark the column as "unsupported" but
+    // don't return an error, in case later (here) they intend to exclude that
+    // column.
+    for export in &requested_exports {
+        let table = export.meta.sql_server_table().expect("sql server source");
+        let maybe_excl_cols = excl_cols_map.get(&table.qualified_name());
+        let is_excluded = |name| {
+            maybe_excl_cols
+                .as_ref()
+                .map(|cols| cols.contains(name))
+                .unwrap_or(false)
+        };
+
+        let maybe_bad_column = table
+            .columns
+            .iter()
+            .find(|col| !col.is_supported() && !is_excluded(col.name.as_ref()));
+        if let Some(bad_column) = maybe_bad_column {
+            Err(SqlServerSourcePurificationError::UnsupportedColumn {
+                schema_name: Arc::clone(&table.schema_name),
+                tbl_name: Arc::clone(&table.name),
+                col_name: Arc::clone(&bad_column.name),
+                col_type: Arc::clone(&bad_column.raw_type),
+            })?
+        }
+    }
+
     // TODO(sql_server1): Validate permissions on upstream tables.
 
     let capture_instances: BTreeMap<_, _> = requested_exports
