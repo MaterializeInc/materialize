@@ -46,6 +46,7 @@ use mz_frontegg_auth::{Authenticator as FronteggAuthentication, Error as Fronteg
 use mz_http_util::DynamicFilterTarget;
 use mz_ore::cast::u64_to_usize;
 use mz_ore::metrics::MetricsRegistry;
+use mz_ore::now::{NowFn, SYSTEM_TIME, epoch_to_uuid_v7};
 use mz_ore::str::StrExt;
 use mz_pgwire_common::{ConnectionCounter, ConnectionHandle};
 use mz_repr::user::ExternalUserMetadata;
@@ -66,7 +67,6 @@ use tower::limit::GlobalConcurrencyLimitLayer;
 use tower::{Service, ServiceBuilder};
 use tower_http::cors::{AllowOrigin, Any, CorsLayer};
 use tracing::{error, warn};
-use uuid::Uuid;
 
 use crate::BUILD_INFO;
 use crate::deployment::state::DeploymentStateHandle;
@@ -547,6 +547,7 @@ impl AuthedClient {
         helm_chart_version: Option<String>,
         session_config: F,
         options: BTreeMap<String, String>,
+        now: NowFn,
     ) -> Result<Self, AdapterError>
     where
         F: FnOnce(&mut Session),
@@ -554,7 +555,7 @@ impl AuthedClient {
         let conn_id = adapter_client.new_conn_id()?;
         let mut session = adapter_client.new_session(SessionConfig {
             conn_id,
-            uuid: Uuid::new_v4(),
+            uuid: epoch_to_uuid_v7(&(now)()),
             user: user.name,
             client_ip: Some(peer_addr),
             external_metadata_rx: user.external_metadata_rx,
@@ -655,6 +656,7 @@ where
                     .expect("known to exist")
             },
             options,
+            SYSTEM_TIME.clone(),
         )
         .await
         .map_err(|e| {
@@ -846,6 +848,7 @@ async fn init_ws(
         helm_chart_version.clone(),
         |_session| (),
         options,
+        SYSTEM_TIME.clone(),
     )
     .await?;
 
