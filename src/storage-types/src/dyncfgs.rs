@@ -323,6 +323,6 @@ pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
         .add(&crate::sources::sql_server::CDC_CLEANUP_CHANGE_TABLE)
         .add(&crate::sources::sql_server::CDC_CLEANUP_CHANGE_TABLE_MAX_DELETES)
         .add(&crate::sources::sql_server::SNAPSHOT_MAX_LSN_WAIT)
-        .add(&crate::sources::sql_server::SNAPSHOT_STATS_GRANULARITY)
+        .add(&crate::sources::sql_server::SNAPSHOT_PROGRESS_REPORT_INTERVAL)
         .add(&crate::sources::sql_server::OFFSET_KNOWN_INTERVAL)
 }

@@ -41,10 +41,10 @@ pub const SNAPSHOT_MAX_LSN_WAIT: Config<Duration> = Config::new(
     CDC to be fully enabled) before taking an initial snapshot.",
 );
 
-pub const SNAPSHOT_STATS_GRANULARITY: Config<usize> = Config::new(
-    "sql_server_snapshot_stats_granularity",
-    1000,
-    "Emit a progress update every X events when snapshotting.",
+pub const SNAPSHOT_PROGRESS_REPORT_INTERVAL: Config<Duration> = Config::new(
+    "sql_server_snapshot_progress_report_interval",
+    Duration::from_secs(2),
+    "Interval at which we'll report progress for currently running snapshots.",
 );
 
 pub const CDC_POLL_INTERVAL: Config<Duration> = Config::new(
@@ -65,8 +65,11 @@ pub const CDC_CLEANUP_CHANGE_TABLE: Config<bool> = Config::new(
 /// See: <https://learn.microsoft.com/en-us/sql/relational-databases/system-stored-procedures/sys-sp-cdc-cleanup-change-table-transact-sql?view=sql-server-ver16>.
 pub const CDC_CLEANUP_CHANGE_TABLE_MAX_DELETES: Config<u32> = Config::new(
     "sql_server_cdc_cleanup_change_table_max_deletes",
-    // This is the default documented by SQL Server.
-    5000,
+    // The default in SQL Server is 5,000 but until we change the cleanup
+    // function to call it iteratively we set a large value here.
+    //
+    // TODO(sql_server2): Call the cleanup function iteratively.
+    1_000_000,
     "Maximum number of entries that can be deleted by using a single statement.",
 );
 

@@ -13,6 +13,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::convert::Infallible;
 use std::rc::Rc;
 use std::sync::Arc;
+use std::time::Instant;
 
 use differential_dataflow::AsCollection;
 use differential_dataflow::containers::TimelyStack;
@@ -24,7 +25,7 @@ use mz_sql_server_util::cdc::{CdcEvent, Lsn, Operation as CdcOperation};
 use mz_storage_types::errors::{DataflowError, DecodeError, DecodeErrorKind};
 use mz_storage_types::sources::SqlServerSource;
 use mz_storage_types::sources::sql_server::{
-    CDC_POLL_INTERVAL, SNAPSHOT_MAX_LSN_WAIT, SNAPSHOT_STATS_GRANULARITY,
+    CDC_POLL_INTERVAL, SNAPSHOT_MAX_LSN_WAIT, SNAPSHOT_PROGRESS_REPORT_INTERVAL,
 };
 use mz_timely_util::builder_async::{
     AsyncOutputHandle, OperatorBuilder as AsyncOperatorBuilder, PressOnDropButton,
@@ -158,8 +159,9 @@ pub(crate) fn render<G: Scope<Timestamp = Lsn>>(
                 // As we stream rows for the snapshot we'll track the total we've seen.
                 let mut records_total: usize = 0;
                 let records_known = snapshot_stats.values().sum();
-                let update_granularity =
-                    SNAPSHOT_STATS_GRANULARITY.handle(config.config.config_set());
+                let report_interval =
+                    SNAPSHOT_PROGRESS_REPORT_INTERVAL.handle(config.config.config_set());
+                let mut last_report = Instant::now();
                 if !snapshot_stats.is_empty() {
                     emit_stats(&stats_cap[0], records_known, 0);
                 }
@@ -170,7 +172,8 @@ pub(crate) fn render<G: Scope<Timestamp = Lsn>>(
                     let sql_server_row = data.map_err(TransientError::from)?;
                     records_total = records_total.saturating_add(1);
 
-                    if records_total % update_granularity.get() == 0 {
+                    if last_report.elapsed() > report_interval.get() {
+                        last_report = Instant::now();
                         emit_stats(&stats_cap[0], records_known, records_total);
                     }
 
