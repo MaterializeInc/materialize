@@ -33,12 +33,13 @@ use mz_adapter_types::dyncfgs::{
     WITH_0DT_DEPLOYMENT_DDL_CHECK_INTERVAL, WITH_0DT_DEPLOYMENT_MAX_WAIT,
 };
 use mz_auth::password::Password;
+use mz_authenticator::{Authenticator, AuthenticatorKind};
 use mz_build_info::{BuildInfo, build_info};
 use mz_catalog::config::ClusterReplicaSizeMap;
 use mz_catalog::durable::BootstrapArgs;
 use mz_cloud_resources::CloudResourceController;
 use mz_controller::ControllerConfig;
-use mz_frontegg_auth::Authenticator as FronteggAuthentication;
+use mz_frontegg_auth::{Authenticator as FronteggAuthenticator, FronteggCliArgs};
 use mz_license_keys::ValidatedLicenseKey;
 use mz_ore::future::OreFutureExt;
 use mz_ore::metrics::MetricsRegistry;
@@ -98,7 +99,11 @@ pub struct Config {
     /// Whether to allow reserved users (ie: mz_system) on the external port.
     pub allow_reserved_roles_on_external_ports: bool,
     /// Frontegg JWT authentication configuration.
-    pub frontegg: Option<FronteggAuthentication>,
+    pub frontegg: FronteggCliArgs,
+    /// Authenticator kind for the external ports.
+    pub external_authenticator_kind: AuthenticatorKind,
+    /// Authenticator kind for the internal ports.
+    pub internal_authenticator_kind: AuthenticatorKind,
     /// Origins for which cross-origin resource sharing (CORS) for HTTP requests
     /// is permitted.
     pub cors_allowed_origin: AllowOrigin,
@@ -114,10 +119,6 @@ pub struct Config {
     /// The URL of the Materialize console to proxy from the /internal-console
     /// endpoint on the internal HTTP server.
     pub internal_console_redirect_url: Option<String>,
-    /// Whether to enable self hosted auth
-    pub self_hosted_auth: bool,
-    /// Whether to enable self hosted auth on the internal pg port
-    pub self_hosted_auth_internal: bool,
 
     // === Controller options. ===
     /// Storage and compute controller configuration.
@@ -738,6 +739,28 @@ impl Listeners {
         internal_http_adapter_client_tx
             .send(adapter_client.clone())
             .expect("internal HTTP server should not drop first");
+        let external_authenticator = match config.external_authenticator_kind {
+            AuthenticatorKind::Frontegg => Authenticator::Frontegg(
+                FronteggAuthenticator::from_args(
+                    config.frontegg.clone(),
+                    &config.metrics_registry.clone(),
+                )
+                // TODO create a more specific error type?
+                .map_err(|e| AdapterError::Unstructured(e.into()))?
+                .expect("Frontegg args are required with AuthenticatorKind::Frontegg"),
+            ),
+            AuthenticatorKind::Password => Authenticator::Password(adapter_client.clone()),
+            AuthenticatorKind::None => Authenticator::None,
+        };
+        let internal_authenticator = match config.internal_authenticator_kind {
+            AuthenticatorKind::Frontegg => Authenticator::Frontegg(
+                FronteggAuthenticator::from_args(config.frontegg, &config.metrics_registry.clone())
+                    .map_err(|e| AdapterError::Unstructured(e.into()))?
+                    .expect("Frontegg args are required with AuthenticatorKind::Frontegg"),
+            ),
+            AuthenticatorKind::Password => Authenticator::Password(adapter_client.clone()),
+            AuthenticatorKind::None => Authenticator::None,
+        };
 
         let metrics = mz_pgwire::MetricsConfig::register_into(&config.metrics_registry);
         // Launch SQL server.
@@ -746,8 +769,7 @@ impl Listeners {
                 label: "external_pgwire",
                 tls: pgwire_tls.clone(),
                 adapter_client: adapter_client.clone(),
-                frontegg: config.frontegg.clone(),
-                use_self_hosted_auth: config.self_hosted_auth,
+                authenticator: external_authenticator.clone(),
                 metrics: metrics.clone(),
                 internal: false,
                 active_connection_counter: active_connection_counter.clone(),
@@ -779,8 +801,7 @@ impl Listeners {
                     pgwire_tls
                 }),
                 adapter_client: adapter_client.clone(),
-                frontegg: None,
-                use_self_hosted_auth: config.self_hosted_auth_internal,
+                authenticator: internal_authenticator.clone(),
                 metrics: metrics.clone(),
                 internal: true,
                 active_connection_counter: active_connection_counter.clone(),
@@ -803,7 +824,7 @@ impl Listeners {
             let http_server = HttpServer::new(HttpConfig {
                 source: "external",
                 tls: http_tls,
-                frontegg: config.frontegg.clone(),
+                authenticator: external_authenticator,
                 adapter_client: adapter_client.clone(),
                 allowed_origin: config.cors_allowed_origin.clone(),
                 active_connection_counter: active_connection_counter.clone(),
@@ -811,7 +832,6 @@ impl Listeners {
                 concurrent_webhook_req: webhook_concurrency_limit.semaphore(),
                 metrics: http_metrics.clone(),
                 allow_reserved_roles: config.allow_reserved_roles_on_external_ports,
-                use_self_hosted_auth: config.self_hosted_auth,
             });
             mz_server_core::serve(ServeConfig {
                 conns: http_conns,

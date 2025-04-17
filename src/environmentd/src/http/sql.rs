@@ -33,6 +33,7 @@ use mz_adapter::{
     AdapterError, AdapterNotice, ExecuteContextExtra, ExecuteResponse, ExecuteResponseKind,
     PeekResponseUnary, SessionClient, verify_datum_desc,
 };
+use mz_auth::password::Password;
 use mz_catalog::memory::objects::{Cluster, ClusterReplica};
 use mz_interchange::encode::TypedDatum;
 use mz_interchange::json::{JsonNumberPolicy, ToJson};
@@ -291,7 +292,7 @@ pub async fn handle_sql_ws(
 pub enum WebSocketAuth {
     Basic {
         user: String,
-        password: String,
+        password: Password,
         #[serde(default)]
         options: BTreeMap<String, String>,
     },

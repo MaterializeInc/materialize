@@ -35,6 +35,7 @@ use mz_adapter_types::bootstrap_builtin_cluster_config::{
     SYSTEM_CLUSTER_DEFAULT_REPLICATION_FACTOR,
 };
 use mz_auth::password::Password;
+use mz_authenticator::AuthenticatorKind;
 use mz_aws_secrets_controller::AwsSecretsController;
 use mz_build_info::BuildInfo;
 use mz_catalog::builtin::{
@@ -44,7 +45,7 @@ use mz_catalog::builtin::{
 use mz_catalog::config::ClusterReplicaSizeMap;
 use mz_cloud_resources::{AwsExternalIdPrefix, CloudResourceController};
 use mz_controller::ControllerConfig;
-use mz_frontegg_auth::{Authenticator, FronteggCliArgs};
+use mz_frontegg_auth::FronteggCliArgs;
 use mz_license_keys::{ExpirationBehavior, ValidatedLicenseKey};
 use mz_orchestrator::Orchestrator;
 use mz_orchestrator_kubernetes::{
@@ -234,14 +235,12 @@ pub struct Args {
     /// Frontegg arguments.
     #[clap(flatten)]
     frontegg: FronteggCliArgs,
-    // TODO(auth): we probably want to consolidate all these auth options
-    // into something cleaner.
-    /// Self hosted auth
-    #[clap(long, env = "ENABLE_SELF_HOSTED_AUTH")]
-    enable_self_hosted_auth: bool,
-    /// Self hosted auth over internal port
-    #[clap(long, env = "ENABLE_SELF_HOSTED_AUTH_INTERNAL")]
-    enable_self_hosted_auth_internal: bool,
+    /// Kind of authenticator to use on external sql and HTTP ports.
+    #[clap(long, value_enum, env = "EXTERNAL_AUTHENTICATOR_KIND")]
+    external_authenticator_kind: AuthenticatorKind,
+    /// Kind of authenticator to use on internal sql and HTTP ports.
+    #[clap(long, value_enum, env = "INTERNAL_AUTHENTICATOR_KIND")]
+    internal_authenticator_kind: AuthenticatorKind,
     // === Orchestrator options. ===
     /// The service orchestrator implementation to use.
     #[structopt(long, value_enum, env = "ORCHESTRATOR")]
@@ -813,7 +812,6 @@ fn run(mut args: Args) -> Result<(), anyhow::Error> {
 
     // Configure connections.
     let tls = args.tls.into_config()?;
-    let frontegg = Authenticator::from_args(args.frontegg, &metrics_registry)?;
 
     // Configure CORS.
     let allowed_origins = if !args.cors_allowed_origin.is_empty() {
@@ -1132,13 +1130,13 @@ fn run(mut args: Args) -> Result<(), anyhow::Error> {
                 enable_internal_ports: args.enable_internal_ports,
                 external_login_password_mz_system: args.external_login_password_mz_system,
                 allow_reserved_roles_on_external_ports: args.allow_reserved_roles_on_external_ports,
-                frontegg,
+                frontegg: args.frontegg,
+                external_authenticator_kind: args.external_authenticator_kind,
+                internal_authenticator_kind: args.internal_authenticator_kind,
                 cors_allowed_origin,
                 egress_addresses: args.announce_egress_address,
                 http_host_name: args.http_host_name,
                 internal_console_redirect_url: args.internal_console_redirect_url,
-                self_hosted_auth: args.enable_self_hosted_auth,
-                self_hosted_auth_internal: args.enable_self_hosted_auth_internal,
                 // Controller options.
                 controller,
                 secrets_controller,

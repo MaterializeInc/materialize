@@ -43,7 +43,8 @@ use hyper_util::rt::TokioIo;
 use mz_adapter::session::{Session as AdapterSession, SessionConfig as AdapterSessionConfig};
 use mz_adapter::{AdapterError, AdapterNotice, Client, SessionClient, WebhookAppenderCache};
 use mz_auth::password::Password;
-use mz_frontegg_auth::{Authenticator as FronteggAuthentication, Error as FronteggError};
+use mz_authenticator::Authenticator;
+use mz_frontegg_auth::Error as FronteggError;
 use mz_http_util::DynamicFilterTarget;
 use mz_ore::cast::u64_to_usize;
 use mz_ore::metrics::MetricsRegistry;
@@ -99,7 +100,7 @@ const SESSION_DURATION: Duration = Duration::from_secs(3600); // 1 hour
 pub struct HttpConfig {
     pub source: &'static str,
     pub tls: Option<ReloadingTlsConfig>,
-    pub frontegg: Option<FronteggAuthentication>,
+    pub authenticator: Authenticator,
     pub adapter_client: mz_adapter::Client,
     pub allowed_origin: AllowOrigin,
     pub active_connection_counter: ConnectionCounter,
@@ -107,7 +108,6 @@ pub struct HttpConfig {
     pub concurrent_webhook_req: Arc<tokio::sync::Semaphore>,
     pub metrics: Metrics,
     pub allow_reserved_roles: bool,
-    pub use_self_hosted_auth: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -124,7 +124,7 @@ pub enum TlsMode {
 
 #[derive(Clone)]
 pub struct WsState {
-    frontegg: Arc<Option<FronteggAuthentication>>,
+    authenticator: Arc<Authenticator>,
     adapter_client_rx: Delayed<mz_adapter::Client>,
     active_connection_counter: ConnectionCounter,
     helm_chart_version: Option<String>,
@@ -148,7 +148,7 @@ impl HttpServer {
         HttpConfig {
             source,
             tls,
-            frontegg,
+            authenticator,
             adapter_client,
             allowed_origin,
             active_connection_counter,
@@ -156,12 +156,11 @@ impl HttpServer {
             concurrent_webhook_req,
             metrics,
             allow_reserved_roles,
-            use_self_hosted_auth,
         }: HttpConfig,
     ) -> HttpServer {
         let tls_mode = tls.as_ref().map(|tls| tls.mode).unwrap_or(TlsMode::Disable);
-        let frontegg = Arc::new(frontegg);
-        let base_frontegg = Arc::clone(&frontegg);
+        let authenticator = Arc::new(authenticator);
+        let base_authenticator = Arc::clone(&authenticator);
         let (adapter_client_tx, adapter_client_rx) = oneshot::channel();
         adapter_client_tx
             .send(adapter_client.clone())
@@ -181,15 +180,14 @@ impl HttpServer {
 
         let mut base_router = base_router(BaseRouterConfig { profiling: false })
             .layer(middleware::from_fn(move |req, next| {
-                let base_frontegg = Arc::clone(&base_frontegg);
+                let base_authenticator = Arc::clone(&base_authenticator);
                 async move {
                     http_auth(
                         req,
                         next,
                         tls_mode,
-                        base_frontegg.as_ref().as_ref(),
+                        base_authenticator,
                         allow_reserved_roles,
-                        use_self_hosted_auth,
                     )
                     .await
                 }
@@ -209,14 +207,14 @@ impl HttpServer {
                     .expose_headers(Any)
                     .max_age(Duration::from_secs(60) * 60),
             );
-        if use_self_hosted_auth {
+        if let Authenticator::Password(_) = authenticator.as_ref() {
             base_router = base_router.layer(session_layer.clone());
         }
 
         let ws_router = Router::new()
             .route("/api/experimental/sql", routing::get(sql::handle_sql_ws))
             .with_state(WsState {
-                frontegg,
+                authenticator,
                 adapter_client_rx: adapter_client_rx.clone(),
                 active_connection_counter,
                 helm_chart_version,
@@ -493,7 +491,8 @@ impl InternalHttpServer {
             // attach the x-materialize-user header to all requests it proxies to this api.
             .layer(middleware::from_fn(internal_http_auth))
             .with_state(WsState {
-                frontegg: Arc::new(None),
+                // TODO pass around Arc<Authenticator> everywhere?
+                authenticator: Arc::new(Authenticator::None),
                 adapter_client_rx,
                 active_connection_counter,
                 helm_chart_version: helm_chart_version.clone(),
@@ -729,8 +728,6 @@ enum AuthError {
     MissingHttpAuthentication,
     #[error("{0}")]
     MismatchedUser(String),
-    #[error("unexpected credentials")]
-    UnexpectedCredentials,
     #[error("session expired")]
     SessionExpired,
     #[error("failed to update session")]
@@ -820,8 +817,7 @@ async fn http_auth(
     mut req: Request,
     next: Next,
     tls_mode: TlsMode,
-    frontegg: Option<&FronteggAuthentication>,
-    use_self_hosted_auth: bool,
+    authenticator: Arc<Authenticator>,
     allow_reserved_roles: bool,
 ) -> impl IntoResponse + use<> {
     // First check for session authentication
@@ -865,42 +861,64 @@ async fn http_auth(
         (TlsMode::Require, ConnProtocol::Http) => return Err(AuthError::HttpsRequired),
         (TlsMode::Require, ConnProtocol::Https { .. }) => {}
     }
-    warn!("checking creds");
-    let creds = match (frontegg, use_self_hosted_auth) {
-        (None, false) => {
-            warn!("no frontegg or self hosted auth");
-            // If no Frontegg authentication, use whatever is in the HTTP auth
-            // header (without checking the password), or fall back to the
-            // default user.
-            if let Some(basic) = req.headers().typed_get::<Authorization<Basic>>() {
-                Credentials::User(basic.username().to_string())
-            } else {
-                Credentials::DefaultUser
-            }
-        }
-        (Some(_), _) => {
-            warn!("frontegg auth");
-            if let Some(basic) = req.headers().typed_get::<Authorization<Basic>>() {
-                Credentials::Password {
-                    username: basic.username().to_string(),
-                    password: basic.password().to_string(),
-                }
-            } else if let Some(bearer) = req.headers().typed_get::<Authorization<Bearer>>() {
-                Credentials::Token {
-                    token: bearer.token().to_string(),
-                }
-            } else {
-                return Err(AuthError::MissingHttpAuthentication);
-            }
-        }
-        (None, true) => {
-            warn!("self hosted auth only, but somehow missing session data");
-            // TODO tell the user to login here?
-            return Err(AuthError::MissingHttpAuthentication);
-        }
+    warn!("extracting creds");
+    let creds = if let Some(basic) = req.headers().typed_get::<Authorization<Basic>>() {
+        Some(Credentials::Password {
+            username: basic.username().to_owned(),
+            password: Password(basic.password().to_owned()),
+        })
+    } else if let Some(bearer) = req.headers().typed_get::<Authorization<Bearer>>() {
+        Some(Credentials::Token {
+            token: bearer.token().to_owned(),
+        })
+    } else {
+        None
     };
+    let user = auth(&authenticator, creds, allow_reserved_roles).await?;
+    //let (name, external_metadata_rx) = match authenticator {
+    //    Authenticator::Frontegg(frontegg) => {
+    //        warn!("frontegg auth");
+    //        if let Some(basic) = req.headers().typed_get::<Authorization<Basic>>() {
+    //            let auth_session = frontegg
+    //                .authenticate(basic.username(), basic.password())
+    //                .await?;
+    //            let name = auth_session.user().into();
+    //            let external_metadata_rx = Some(auth_session.external_metadata_rx());
+    //            (name, external_metadata_rx)
+    //        } else if let Some(bearer) = req.headers().typed_get::<Authorization<Bearer>>() {
+    //            let claims = frontegg.validate_access_token(bearer.token(), None)?;
+    //            let (_, external_metadata_rx) = watch::channel(ExternalUserMetadata {
+    //                user_id: claims.user_id,
+    //                admin: claims.is_admin,
+    //            });
+    //            (claims.user, Some(external_metadata_rx))
+    //        } else {
+    //            return Err(AuthError::MissingHttpAuthentication);
+    //        }
+    //    }
+    //    Authenticator::Password(client) => {
+    //        warn!("self hosted auth only, but somehow missing session data");
+    //        // TODO tell the user to login here?
+    //        return Err(AuthError::MissingHttpAuthentication);
+    //    }
+    //    Authenticator::None => {
+    //        warn!("no auth");
+    //        // If no Frontegg authentication, use whatever is in the HTTP auth
+    //        // header (without checking the password), or fall back to the
+    //        // default user.
+    //        let name = if let Some(basic) = req.headers().typed_get::<Authorization<Basic>>() {
+    //            basic.username()
+    //        } else {
+    //            &HTTP_DEFAULT_USER.name
+    //        }
+    //        .to_owned();
+    //        (name, None)
+    //    }
+    //};
 
-    let user = auth(frontegg, creds, allow_reserved_roles).await?;
+    //if !allow_reserved_roles && mz_adapter::catalog::is_reserved_role_name(name.as_str()) {
+    //    return Err(AuthError::InvalidLogin(name));
+    //}
 
     // Add the authenticated user as an extension so downstream handlers can
     // inspect it if necessary.
@@ -912,7 +930,7 @@ async fn http_auth(
 
 async fn init_ws(
     WsState {
-        frontegg,
+        authenticator,
         adapter_client_rx,
         active_connection_counter,
         helm_chart_version,
@@ -941,61 +959,38 @@ async fn init_ws(
             }
         }
     };
-    let (user, options) = match (frontegg.as_ref(), existing_user, ws_auth) {
-        (Some(frontegg), None, ws_auth) => {
-            let (creds, options) = match ws_auth {
-                WebSocketAuth::Basic {
-                    user,
-                    password,
-                    options,
-                } => {
-                    let creds = Credentials::Password {
-                        username: user,
-                        password,
-                    };
-                    (creds, options)
-                }
-                WebSocketAuth::Bearer { token, options } => {
-                    let creds = Credentials::Token { token };
-                    (creds, options)
-                }
-                WebSocketAuth::OptionsOnly { options: _ } => {
-                    anyhow::bail!("expected auth information");
-                }
-            };
-            (
-                auth(Some(frontegg), creds, *allow_reserved_roles).await?,
-                options,
-            )
+    let (user, options) = if let Some(existing_user) = existing_user {
+        // TODO confirm it's ok to ignore cases where we also pass basic or bearer auth.
+        match ws_auth {
+            WebSocketAuth::OptionsOnly { options } => (existing_user, options),
+            _ => {
+                warn!("Unexpected bearer or basic auth provided when using user header");
+                anyhow::bail!("unexpected")
+            }
         }
-        (
-            None,
-            None,
+    } else {
+        let (creds, options) = match ws_auth {
             WebSocketAuth::Basic {
                 user,
-                password: _,
+                password,
                 options,
-            },
-        ) => (
-            auth(None, Credentials::User(user), *allow_reserved_roles).await?,
-            options,
-        ),
-        // No frontegg, specified existing user, we only accept options only.
-        (None, Some(existing_user), WebSocketAuth::OptionsOnly { options }) => {
-            (existing_user, options)
-        }
-        // No frontegg, specified existing user, we do not expect basic or bearer auth.
-        (None, Some(_), WebSocketAuth::Basic { .. } | WebSocketAuth::Bearer { .. }) => {
-            warn!("Unexpected bearer or basic auth provided when using user header");
-            anyhow::bail!("unexpected")
-        }
-        // Specifying both frontegg and an existing user should not be possible.
-        (Some(_), Some(_), _) => anyhow::bail!("unexpected"),
-        // No frontegg, no existing user, and no passed username.
-        (None, None, WebSocketAuth::Bearer { .. } | WebSocketAuth::OptionsOnly { .. }) => {
-            warn!("Unexpected auth type when not using frontegg or user header");
-            anyhow::bail!("unexpected")
-        }
+            } => {
+                let creds = Credentials::Password {
+                    username: user,
+                    password,
+                };
+                (creds, options)
+            }
+            WebSocketAuth::Bearer { token, options } => {
+                let creds = Credentials::Token { token };
+                (creds, options)
+            }
+            WebSocketAuth::OptionsOnly { .. } => {
+                anyhow::bail!("expected auth information");
+            }
+        };
+        let user = auth(authenticator, Some(creds), *allow_reserved_roles).await?;
+        (user, options)
     };
 
     let client = AuthedClient::new(
@@ -1013,63 +1008,64 @@ async fn init_ws(
 }
 
 enum Credentials {
-    User(String),
-    DefaultUser,
-    Password { username: String, password: String },
-    Token { token: String },
+    Password {
+        username: String,
+        password: Password,
+    },
+    Token {
+        token: String,
+    },
 }
 
 async fn auth(
-    frontegg: Option<&FronteggAuthentication>,
-    creds: Credentials,
+    authenticator: &Authenticator,
+    creds: Option<Credentials>,
     allow_reserved_roles: bool,
 ) -> Result<AuthedUser, AuthError> {
-    // There are three places a username may be specified:
-    //
-    //   - certificate common name
-    //   - HTTP Basic authentication
-    //   - JWT email address
-    //
-    // We verify that if any of these are present, they must match any other
-    // that is also present.
-
-    // Then, handle Frontegg authentication if required.
-    let (name, external_metadata_rx) = match (frontegg, creds) {
-        // If no Frontegg authentication, allow the default user.
-        (None, Credentials::DefaultUser) => (HTTP_DEFAULT_USER.name.to_string(), None),
-        // If no Frontegg authentication, allow a protocol-specified user.
-        (None, Credentials::User(name)) => (name, None),
-        // With frontegg disabled, specifying credentials is an error.
-        (None, _) => return Err(AuthError::UnexpectedCredentials),
-        // If we require Frontegg auth, fetch credentials from the HTTP auth
-        // header. Basic auth comes with a username/password, where the password
-        // is the client+secret pair. Bearer auth is an existing JWT that must
-        // be validated. In either case, if a username was specified in the
-        // client cert, it must match that of the JWT.
-        (Some(frontegg), creds) => match creds {
-            Credentials::Password { username, password } => {
-                let auth_session = frontegg.authenticate(&username, &password).await?;
-                let user = auth_session.user().into();
-                let external_metadata_rx = Some(auth_session.external_metadata_rx());
-                (user, external_metadata_rx)
+    // TODO pass session data here?
+    let (name, external_metadata_rx) = match authenticator {
+        Authenticator::Frontegg(frontegg) => {
+            warn!("frontegg auth");
+            match creds {
+                Some(Credentials::Password { username, password }) => {
+                    let auth_session = frontegg.authenticate(&username, &password.0).await?;
+                    let name = auth_session.user().into();
+                    let external_metadata_rx = Some(auth_session.external_metadata_rx());
+                    (name, external_metadata_rx)
+                }
+                Some(Credentials::Token { token }) => {
+                    let claims = frontegg.validate_access_token(&token, None)?;
+                    let (_, external_metadata_rx) = watch::channel(ExternalUserMetadata {
+                        user_id: claims.user_id,
+                        admin: claims.is_admin,
+                    });
+                    (claims.user, Some(external_metadata_rx))
+                }
+                None => return Err(AuthError::MissingHttpAuthentication),
             }
-            Credentials::Token { token } => {
-                let claims = frontegg.validate_access_token(&token, None)?;
-                let (_, external_metadata_rx) = watch::channel(ExternalUserMetadata {
-                    user_id: claims.user_id,
-                    admin: claims.is_admin,
-                });
-                (claims.user, Some(external_metadata_rx))
-            }
-            Credentials::DefaultUser | Credentials::User(_) => {
-                return Err(AuthError::MissingHttpAuthentication);
-            }
-        },
+        }
+        Authenticator::Password(_) => {
+            warn!("self hosted auth only, but somehow missing session data");
+            // TODO tell the user to login here?
+            return Err(AuthError::MissingHttpAuthentication);
+        }
+        Authenticator::None => {
+            warn!("no auth");
+            // If no authentication, use whatever is in the HTTP auth
+            // header (without checking the password), or fall back to the
+            // default user.
+            let name = match creds {
+                Some(Credentials::Password { username, .. }) => username,
+                _ => HTTP_DEFAULT_USER.name.to_owned(),
+            };
+            (name, None)
+        }
     };
 
     if !allow_reserved_roles && mz_adapter::catalog::is_reserved_role_name(name.as_str()) {
         return Err(AuthError::InvalidLogin(name));
     }
+
     Ok(AuthedUser {
         name,
         external_metadata_rx,

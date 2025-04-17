@@ -48,9 +48,11 @@ use mz_adapter_types::bootstrap_builtin_cluster_config::{
     CATALOG_SERVER_CLUSTER_DEFAULT_REPLICATION_FACTOR, PROBE_CLUSTER_DEFAULT_REPLICATION_FACTOR,
     SUPPORT_CLUSTER_DEFAULT_REPLICATION_FACTOR, SYSTEM_CLUSTER_DEFAULT_REPLICATION_FACTOR,
 };
+use mz_authenticator::AuthenticatorKind;
 use mz_catalog::config::ClusterReplicaSizeMap;
 use mz_controller::ControllerConfig;
 use mz_environmentd::CatalogConfig;
+use mz_frontegg_auth::FronteggCliArgs;
 use mz_license_keys::ValidatedLicenseKey;
 use mz_orchestrator_process::{ProcessOrchestrator, ProcessOrchestratorConfig};
 use mz_orchestrator_tracing::{TracingCliArgs, TracingOrchestrator};
@@ -1041,9 +1043,9 @@ impl<'a> RunnerInner<'a> {
             secrets_controller,
             cloud_resource_controller: None,
             tls: None,
-            frontegg: None,
-            self_hosted_auth: false,
-            self_hosted_auth_internal: false,
+            frontegg: FronteggCliArgs::default(),
+            external_authenticator_kind: AuthenticatorKind::None,
+            internal_authenticator_kind: AuthenticatorKind::None,
             cors_allowed_origin: AllowOrigin::list([]),
             unsafe_mode: true,
             all_features: false,

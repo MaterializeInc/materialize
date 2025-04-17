@@ -4909,6 +4909,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "mz-authenticator"
+version = "0.1.0"
+dependencies = [
+ "clap",
+ "mz-adapter",
+ "mz-frontegg-auth",
+ "workspace-hack",
+]
+
+[[package]]
 name = "mz-avro"
 version = "0.7.0"
 dependencies = [
@@ -5621,6 +5631,7 @@ dependencies = [
  "mz-alloc",
  "mz-alloc-default",
  "mz-auth",
+ "mz-authenticator",
  "mz-aws-secrets-controller",
  "mz-build-info",
  "mz-catalog",
@@ -6653,6 +6664,7 @@ dependencies = [
  "mz-adapter",
  "mz-adapter-types",
  "mz-auth",
+ "mz-authenticator",
  "mz-frontegg-auth",
  "mz-ore",
  "mz-pgcopy",
@@ -7222,11 +7234,13 @@ dependencies = [
  "junit-report",
  "md-5",
  "mz-adapter-types",
+ "mz-authenticator",
  "mz-build-info",
  "mz-catalog",
  "mz-controller",
  "mz-dyncfgs",
  "mz-environmentd",
+ "mz-frontegg-auth",
  "mz-license-keys",
  "mz-orchestrator",
  "mz-orchestrator-process",
