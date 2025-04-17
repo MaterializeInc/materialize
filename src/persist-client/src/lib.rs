@@ -21,24 +21,27 @@ use std::sync::Arc;
 
 use differential_dataflow::difference::Semigroup;
 use differential_dataflow::lattice::Lattice;
+use differential_dataflow::trace::Description;
 use mz_build_info::{BuildInfo, build_info};
 use mz_dyncfg::ConfigSet;
 use mz_ore::{instrument, soft_assert_or_log};
 use mz_persist::location::{Blob, Consensus, ExternalError};
 use mz_persist_types::schema::SchemaId;
 use mz_persist_types::{Codec, Codec64, Opaque};
-use timely::progress::Timestamp;
+use timely::progress::{Antichain, Timestamp};
 
 use crate::async_runtime::IsolatedRuntime;
+use crate::batch::{BatchBuilder, BatchBuilderConfig, BatchBuilderInternal, BatchParts};
 use crate::cache::{PersistClientCache, StateCache};
 use crate::cfg::PersistConfig;
 use crate::critical::{CriticalReaderId, SinceHandle};
 use crate::error::InvalidUsage;
 use crate::fetch::{BatchFetcher, BatchFetcherConfig};
-use crate::internal::compact::Compactor;
+use crate::internal::compact::{CompactConfig, Compactor};
 use crate::internal::encoding::{Schemas, parse_id};
 use crate::internal::gc::GarbageCollector;
 use crate::internal::machine::{Machine, retry_external};
+use crate::internal::state::RunOrder;
 use crate::internal::state_versions::StateVersions;
 use crate::metrics::Metrics;
 use crate::read::{LeasedReaderId, READER_LEASE_DURATION, ReadHandle};
@@ -537,6 +540,68 @@ impl PersistClient {
             schemas,
         );
         Ok(writer)
+    }
+
+    /// TODO
+    #[instrument(level = "debug", fields(shard = %shard_id))]
+    pub async fn batch_builder<K, V, T, D>(
+        &self,
+        shard_id: ShardId,
+        write_schemas: Schemas<K, V>,
+        lower: Antichain<T>,
+    ) -> Result<BatchBuilder<K, V, T, D>, InvalidUsage<T>>
+    where
+        K: Debug + Codec,
+        V: Debug + Codec,
+        T: Timestamp + Lattice + Codec64 + Sync,
+        D: Semigroup + Ord + Codec64 + Send + Sync,
+    {
+        let cfg = CompactConfig::new(&self.cfg, shard_id);
+        // WIP: Pass this in as an argument?
+        let shard_metrics = self.metrics.shards.shard(&shard_id, "peek_stash");
+
+        let parts = if let Some(max_runs) = cfg.batch.max_runs {
+            BatchParts::new_compacting::<K, V, D>(
+                cfg,
+                Description::new(
+                    lower.clone(),
+                    Antichain::new(),
+                    Antichain::from_elem(T::minimum()),
+                ),
+                max_runs,
+                Arc::clone(&self.metrics),
+                Arc::clone(&shard_metrics),
+                shard_id,
+                Arc::clone(&self.blob),
+                Arc::clone(&self.isolated_runtime),
+                &self.metrics.user,
+                write_schemas.clone(),
+            )
+        } else {
+            BatchParts::new_ordered(
+                cfg.batch,
+                RunOrder::Unordered,
+                Arc::clone(&self.metrics),
+                Arc::clone(&shard_metrics),
+                shard_id,
+                Arc::clone(&self.blob),
+                Arc::clone(&self.isolated_runtime),
+                &self.metrics.user,
+            )
+        };
+        let builder = BatchBuilderInternal::new(
+            BatchBuilderConfig::new(&self.cfg, shard_id),
+            parts,
+            Arc::clone(&self.metrics),
+            write_schemas.clone(),
+            Arc::clone(&self.blob),
+            shard_id,
+            self.cfg.build_version.clone(),
+        );
+        Ok(BatchBuilder::new(
+            builder,
+            Description::new(lower, Antichain::new(), Antichain::from_elem(T::minimum())),
+        ))
     }
 
     /// Returns the requested schema, if known at the current state.
