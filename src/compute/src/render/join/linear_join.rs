@@ -368,7 +368,7 @@ where
                     name,
                     |_, _| {
                         Box::new(move |input, ok, errs| {
-                            let temp_storage = RowArena::new();
+                            let mut temp_storage = RowArena::new();
                             let mut key_buf = Row::default();
                             let mut val_buf = Row::default();
                             let mut datums = DatumVec::new();

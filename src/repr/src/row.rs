@@ -2796,7 +2796,7 @@ impl RowArena {
     }
 
     /// Clear the contents of the arena.
-    pub fn clear(&self) {
+    pub fn clear(&mut self) {
         self.inner.borrow_mut().clear();
     }
 }
