@@ -30,9 +30,6 @@ EXEC sys.sp_cdc_enable_table @source_schema = 'dbo', @source_name = 't3_text', @
 
 > CREATE SECRET IF NOT EXISTS sql_server_pass AS '${arg.default-sql-server-password}'
 
-$ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
-ALTER SYSTEM SET enable_sql_server_source = true;
-
 > CREATE CONNECTION sql_server_test_connection TO SQL SERVER (
     HOST 'sql-server',
     PORT 1433,
