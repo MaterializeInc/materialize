@@ -124,6 +124,30 @@ src          true  {}
 src_progress true  {}
 tbl          true  {}
 
+# Test that history lag values are rounded to seconds.
+
+> SELECT DISTINCT ON(o.name, r.name)
+    o.name, r.name, l.lag = date_trunc('second', l.lag)
+  FROM mz_internal.mz_wallclock_lag_history l
+  JOIN mz_objects o ON o.id = l.object_id
+  LEFT JOIN mz_cluster_replicas r ON r.id = l.replica_id
+  WHERE l.object_id LIKE 'u%'
+  ORDER BY o.name, r.name, l.occurred_at DESC
+idx          r1     true
+idx          r2     true
+idx_const    r1     true
+idx_const    r2     true
+mv           r1     true
+mv           r2     true
+mv           <null> true
+mv_const     r1     true
+mv_const     r2     true
+mv_const     <null> true
+snk          <null> true
+src          <null> true
+src_progress <null> true
+tbl          <null> true
+
 # Test annotation of histogram measurements with labels.
 
 $ postgres-execute connection=mz_system
