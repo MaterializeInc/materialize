@@ -91,9 +91,7 @@ pub(crate) fn render<G: Scope<Timestamp = Lsn>>(
                     InTask::Yes,
                 )
                 .await?;
-            let (mut client, conn) = mz_sql_server_util::Client::connect(conn_config).await?;
-            // TODO(sql_server1): Move the connection into its own future.
-            mz_ore::task::spawn(|| "sql_server-progress-conn", async move { conn.await });
+            let mut client = mz_sql_server_util::Client::connect(conn_config).await?;
 
             let probe_interval = OFFSET_KNOWN_INTERVAL.handle(config.config.config_set());
             let mut probe_ticker = probe::Ticker::new(|| probe_interval.get(), config.now_fn);
