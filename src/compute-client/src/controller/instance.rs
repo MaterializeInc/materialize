@@ -573,8 +573,8 @@ impl<T: ComputeControllerTimestamp> Instance<T> {
         let now_dt = mz_ore::now::to_datetime(now_ms);
         let now_ts: CheckedTimestamp<_> = now_dt.try_into().expect("must fit");
 
-        let frontier_lag = |frontier: &Antichain<_>| match frontier.as_option() {
-            Some(ts) => (self.wallclock_lag)(ts),
+        let frontier_lag = |frontier: &Antichain<T>| match frontier.as_option() {
+            Some(ts) => (self.wallclock_lag)(ts.clone()),
             None => Duration::ZERO,
         };
 

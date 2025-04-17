@@ -651,12 +651,7 @@ where
         }
 
         let now_fn = config.now.clone();
-        let wallclock_lag: WallclockLagFn<_> = Arc::new(move |time: &T| {
-            let now = mz_repr::Timestamp::new(now_fn());
-            let time_ts: mz_repr::Timestamp = time.clone().into();
-            let lag_ts = now.saturating_sub(time_ts);
-            Duration::from(lag_ts)
-        });
+        let wallclock_lag_fn = WallclockLagFn::new(now_fn);
 
         let controller_metrics = ControllerMetrics::new(&config.metrics_registry);
 
@@ -682,7 +677,7 @@ where
             config.persist_location,
             config.persist_clients,
             config.now.clone(),
-            Arc::clone(&wallclock_lag),
+            wallclock_lag_fn.clone(),
             Arc::clone(&txns_metrics),
             envd_epoch,
             read_only,
@@ -703,7 +698,7 @@ where
             &config.metrics_registry,
             controller_metrics,
             config.now.clone(),
-            wallclock_lag,
+            wallclock_lag_fn,
         );
         let (metrics_tx, metrics_rx) = mpsc::unbounded_channel();
 

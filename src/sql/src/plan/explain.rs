@@ -62,6 +62,10 @@ impl<'a> HirRelationExpr {
                 normalize_subqueries(self).map_err(|e| e.into())
             }))
             .unwrap_or_else(|panic| {
+                // A panic during optimization is always a bug; log an error so we learn about it.
+                // TODO(teskje): collect and log a backtrace from the panic site
+                tracing::error!("caught a panic during `normalize_subqueries`: {panic}");
+
                 let msg = format!("unexpected panic during `normalize_subqueries`: {panic}");
                 Err(ExplainError::UnknownError(msg))
             })?

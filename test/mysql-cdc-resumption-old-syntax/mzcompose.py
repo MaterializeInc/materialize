@@ -31,7 +31,7 @@ from materialize.mzcompose.services.toxiproxy import Toxiproxy
 SERVICES = [
     Alpine(),
     Mz(app_password=""),
-    Materialized(),
+    Materialized(default_replication_factor=2),
     MySql(),
     MySql(
         name="mysql-replica-1",
@@ -122,7 +122,7 @@ def workflow_disruptions(c: Composition) -> None:
 
 def workflow_backup_restore(c: Composition) -> None:
     with c.override(
-        Materialized(sanity_restart=False),
+        Materialized(sanity_restart=False, default_replication_factor=2),
     ):
         scenario = backup_restore_mysql
         print(f"--- Running scenario {scenario.__name__}")
@@ -133,7 +133,7 @@ def workflow_backup_restore(c: Composition) -> None:
 
 def workflow_bin_log_manipulations(c: Composition) -> None:
     with c.override(
-        Materialized(sanity_restart=False),
+        Materialized(sanity_restart=False, default_replication_factor=2),
     ):
         scenarios = [
             reset_master_gtid,
@@ -158,7 +158,10 @@ def workflow_short_bin_log_retention(c: Composition) -> None:
     args = MySql.DEFAULT_ADDITIONAL_ARGS.copy()
     args.append(f"--binlog_expire_logs_seconds={bin_log_expiration_in_sec}")
 
-    with c.override(Materialized(sanity_restart=False), MySql(additional_args=args)):
+    with c.override(
+        Materialized(sanity_restart=False, default_replication_factor=2),
+        MySql(additional_args=args),
+    ):
         scenarios = [logs_expiration_while_mz_down, create_source_after_logs_expiration]
 
         scenarios = buildkite.shard_list(scenarios, lambda s: s.__name__)
@@ -183,7 +186,7 @@ def workflow_master_changes(c: Composition) -> None:
     """
 
     with c.override(
-        Materialized(sanity_restart=False),
+        Materialized(sanity_restart=False, default_replication_factor=2),
         MySql(
             name="mysql-replica-1",
             version=MySql.DEFAULT_VERSION,
@@ -270,7 +273,7 @@ def workflow_switch_to_replica_and_kill_master(c: Composition) -> None:
     """
 
     with c.override(
-        Materialized(sanity_restart=False),
+        Materialized(sanity_restart=False, default_replication_factor=2),
         MySql(
             name="mysql-replica-1",
             version=MySql.DEFAULT_VERSION,

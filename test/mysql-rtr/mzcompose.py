@@ -22,7 +22,7 @@ from materialize.mzcompose.services.toxiproxy import Toxiproxy
 
 SERVICES = [
     MySql(),
-    Materialized(),
+    Materialized(default_replication_factor=2),
     Toxiproxy(),
     Testdrive(
         entrypoint_extra=[

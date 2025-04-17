@@ -274,8 +274,6 @@ ignore = [
     "RUSTSEC-2025-0012",
     # The creator of the crate `paste` has stated in the [`README.md`](https://github.com/dtolnay/paste/blob/master/README.md) that this project is not longer maintained as well as archived the repository
     "RUSTSEC-2024-0436",
-    # Affected version of this crate did not properly parse unknown fields when parsing a user-supplied input.
-    "RUSTSEC-2024-0437",
 ]
 
 # Must be manually kept in sync with about.toml.

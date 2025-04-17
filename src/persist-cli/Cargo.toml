@@ -28,7 +28,7 @@ futures = "0.3.31"
 humantime = "2.2.0"
 mz-http-util = { path = "../http-util" }
 mz-orchestrator-tracing = { path = "../orchestrator-tracing" }
-mz-ore = { path = "../ore", features = ["bytes", "network", "tracing", "test"] }
+mz-ore = { path = "../ore", features = ["bytes", "network", "panic", "tracing", "test"] }
 mz-persist = { path = "../persist" }
 mz-persist-client = { path = "../persist-client" }
 mz-persist-types = { path = "../persist-types" }

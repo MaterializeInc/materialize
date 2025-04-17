@@ -26,9 +26,7 @@ from materialize.mzcompose.services.materialized import Materialized
 
 SERVICES = [
     # Auto-restart so we can keep testing even after we ran into a panic
-    Materialized(
-        restart="on-failure",
-    ),
+    Materialized(restart="on-failure", default_replication_factor=2),
     Service(
         "sqlancer",
         {

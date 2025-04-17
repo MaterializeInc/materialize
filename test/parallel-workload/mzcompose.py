@@ -51,8 +51,8 @@ SERVICES = [
     Minio(setup_materialize=True, additional_directories=["copytos3"]),
     Azurite(),
     Mc(),
-    Materialized(),
-    Materialized(name="materialized2"),
+    Materialized(default_replication_factor=2),
+    Materialized(name="materialized2", default_replication_factor=2),
     Service("sqlsmith", {"mzbuild": "sqlsmith"}),
     Service(
         name="persistcli",
@@ -93,6 +93,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
             ports=["6975:6875", "6976:6876", "6977:6877"],
             sanity_restart=sanity_restart,
             metadata_store="cockroach",
+            default_replication_factor=2,
         ),
         Toxiproxy(seed=random.randrange(2**63)),
     ):

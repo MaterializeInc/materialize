@@ -67,6 +67,7 @@ pub mod num;
 pub mod option;
 pub mod overflowing;
 #[cfg(not(target_family = "wasm"))]
+#[cfg(feature = "panic")]
 pub mod panic;
 pub mod path;
 pub mod permutations;

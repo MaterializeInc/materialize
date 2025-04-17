@@ -778,7 +778,7 @@ fn create_environmentd_statefulset_object(
             name: "MZ_METADATA_BACKEND_URL".to_string(),
             value_from: Some(EnvVarSource {
                 secret_key_ref: Some(SecretKeySelector {
-                    name: Some(mz.backend_secret_name()),
+                    name: mz.backend_secret_name(),
                     key: "metadata_backend_url".to_string(),
                     optional: Some(false),
                 }),
@@ -790,7 +790,7 @@ fn create_environmentd_statefulset_object(
             name: "MZ_PERSIST_BLOB_URL".to_string(),
             value_from: Some(EnvVarSource {
                 secret_key_ref: Some(SecretKeySelector {
-                    name: Some(mz.backend_secret_name()),
+                    name: mz.backend_secret_name(),
                     key: "persist_backend_url".to_string(),
                     optional: Some(false),
                 }),

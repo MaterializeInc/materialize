@@ -23,7 +23,7 @@ SERVICES = [
     Zookeeper(),
     Kafka(),
     SchemaRegistry(),
-    Materialized(),
+    Materialized(default_replication_factor=2),
     Testdrive(),
 ]
 

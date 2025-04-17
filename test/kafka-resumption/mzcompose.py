@@ -32,7 +32,7 @@ SERVICES = [
     SchemaRegistry(),
     Redpanda(),
     Mz(app_password=""),
-    Materialized(),
+    Materialized(default_replication_factor=2),
     Clusterd(),
     Toxiproxy(),
     Testdrive(default_timeout="120s"),
@@ -105,7 +105,8 @@ def workflow_sink_kafka_restart(c: Composition, parser: WorkflowArgumentParser) 
     # producer ID are properly aborted after a broker restart.
     with c.override(
         Materialized(
-            environment_extra=["FAILPOINTS=kafka_sink_commit_transaction=sleep(5000)"]
+            environment_extra=["FAILPOINTS=kafka_sink_commit_transaction=sleep(5000)"],
+            default_replication_factor=2,
         )
     ):
         c.up(*(["materialized"] + get_kafka_services(args.redpanda)))

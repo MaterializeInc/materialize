@@ -91,6 +91,7 @@ SERVICES = [
         additional_system_parameter_defaults={
             "log_filter": "mz_storage::source::postgres=trace,debug,info,warn,error"
         },
+        default_replication_factor=2,
     ),
     Testdrive(),
     TestCerts(),

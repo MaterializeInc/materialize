@@ -1776,8 +1776,8 @@ mod tests {
         // But we can't read it back using v1 because v1 might corrupt it by
         // losing or misinterpreting something written out by a future version
         // of code.
-        let v1_res =
-            mz_ore::panic::catch_unwind(|| UntypedState::<u64>::decode(&v1, bytes.clone()));
+        #[allow(clippy::disallowed_methods)] // not using enhanced panic handler in tests
+        let v1_res = std::panic::catch_unwind(|| UntypedState::<u64>::decode(&v1, bytes.clone()));
         assert_err!(v1_res);
     }
 
@@ -1806,7 +1806,8 @@ mod tests {
         // But we can't read it back using v1 because v1 might corrupt it by
         // losing or misinterpreting something written out by a future version
         // of code.
-        let v1_res = mz_ore::panic::catch_unwind(|| StateDiff::<u64>::decode(&v1, bytes));
+        #[allow(clippy::disallowed_methods)] // not using enhanced panic handler in tests
+        let v1_res = std::panic::catch_unwind(|| StateDiff::<u64>::decode(&v1, bytes));
         assert_err!(v1_res);
     }
 

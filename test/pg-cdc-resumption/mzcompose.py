@@ -29,7 +29,7 @@ from materialize.mzcompose.services.toxiproxy import Toxiproxy
 SERVICES = [
     Alpine(),
     Mz(app_password=""),
-    Materialized(),
+    Materialized(default_replication_factor=2),
     Postgres(),
     Toxiproxy(),
     Testdrive(no_reset=True, default_timeout="300s"),
@@ -106,7 +106,7 @@ def workflow_backup_restore(c: Composition) -> None:
     )
 
     with c.override(
-        Materialized(sanity_restart=False),
+        Materialized(sanity_restart=False, default_replication_factor=2),
         Alpine(volumes=["pgdata:/var/lib/postgresql/data", "tmp:/scratch"]),
         Postgres(volumes=["pgdata:/var/lib/postgresql/data", "tmp:/scratch"]),
     ):

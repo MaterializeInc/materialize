@@ -94,7 +94,7 @@ class Materialized(Service):
         metadata_store: str = METADATA_STORE,
         cluster_replica_size: dict[str, dict[str, Any]] | None = None,
         bootstrap_replica_size: str | None = None,
-        default_cluster_replicas: int = 2,
+        default_replication_factor: int = 1,
     ) -> None:
         if name is None:
             name = "materialized"
@@ -141,9 +141,9 @@ class Materialized(Service):
             f"MZ_BOOTSTRAP_BUILTIN_ANALYTICS_CLUSTER_REPLICA_SIZE={bootstrap_replica_size}",
             # Note(SangJunBak): mz_system and mz_probe have no replicas by default in materialized
             # but we re-enable them here since many of our tests rely on them.
-            f"MZ_BOOTSTRAP_BUILTIN_SYSTEM_CLUSTER_REPLICATION_FACTOR={default_cluster_replicas}",
-            f"MZ_BOOTSTRAP_BUILTIN_PROBE_CLUSTER_REPLICATION_FACTOR={default_cluster_replicas}",
-            f"MZ_BOOTSTRAP_DEFAULT_CLUSTER_REPLICATION_FACTOR={default_cluster_replicas}",
+            f"MZ_BOOTSTRAP_BUILTIN_SYSTEM_CLUSTER_REPLICATION_FACTOR={default_replication_factor}",
+            f"MZ_BOOTSTRAP_BUILTIN_PROBE_CLUSTER_REPLICATION_FACTOR={default_replication_factor}",
+            f"MZ_BOOTSTRAP_DEFAULT_CLUSTER_REPLICATION_FACTOR={default_replication_factor}",
             *environment_extra,
             *DEFAULT_CRDB_ENVIRONMENT,
         ]
@@ -161,6 +161,9 @@ class Materialized(Service):
                 system_parameter_version or image_version
             )
 
+        system_parameter_defaults["default_cluster_replication_factor"] = str(
+            default_replication_factor
+        )
         if additional_system_parameter_defaults is not None:
             system_parameter_defaults.update(additional_system_parameter_defaults)
 
