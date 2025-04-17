@@ -47,11 +47,13 @@ class ScenarioRunner:
     def __init__(
         self,
         scenario: str,
+        mode: str,
         connection: pg8000.native.Connection,
         results_file: Any,
         replica_size: int,
     ) -> None:
         self.scenario = scenario
+        self.mode = mode
         self.connection = connection
         self.results_file = results_file
         self.replica_size = replica_size
@@ -60,8 +62,9 @@ class ScenarioRunner:
         self, name: str, repetition: int, size_bytes: int, time: float
     ) -> None:
         self.results_file.write(
-            f"{self.scenario},{name},{self.replica_size},{repetition},{size_bytes},{int(time * 1_000)}\n"
+            f"{self.scenario},{self.mode},{name},{self.replica_size},{repetition},{size_bytes},{int(time * 1_000)}\n"
         )
+        self.results_file.flush()
 
     def run_query(self, query: str, **params) -> list | None:
         print(f"> {query} {params}")
@@ -71,7 +74,7 @@ class ScenarioRunner:
         self,
         name: str,
         query: list[str],
-        before: list[str] = [],
+        before: list[str] | None = None,
         repetitions: int = 1,
         size_of_index: str | None = None,
     ) -> None:
@@ -144,7 +147,7 @@ class TpccScenario(Scenario):
     def materialize_views(self) -> list[str]:
         return ["lineitem"]
 
-    def setup(self) -> str:
+    def setup(self) -> list[str]:
         return [
             "DROP SOURCE IF EXISTS lgtpch CASCADE;",
             "DROP CLUSTER IF EXISTS lg CASCADE;",
@@ -153,7 +156,7 @@ class TpccScenario(Scenario):
             "SELECT COUNT(*) > 0 FROM region;",
         ]
 
-    def drop(self) -> str:
+    def drop(self) -> list[str]:
         return ["DROP CLUSTER lg CASCADE;"]
 
     def run(self, runner: ScenarioRunner) -> None:
@@ -231,11 +234,13 @@ class TpccScenario(Scenario):
 
 
 class AuctionScenario(Scenario):
+    def name(self) -> str:
+        return f"auction_{10*self.scale}"
 
     def materialize_views(self) -> list[str]:
         return ["auctions", "bids"]
 
-    def drop(self) -> str:
+    def drop(self) -> list[str]:
         return [
             "DROP MATERIALIZED VIEW IF EXISTS auctions CASCADE;",
             "DROP MATERIALIZED VIEW IF EXISTS bids CASCADE;",
@@ -252,7 +257,7 @@ class AuctionScenario(Scenario):
             "DROP CLUSTER IF EXISTS lg CASCADE;",
         ]
 
-    def setup(self) -> str:
+    def setup(self) -> list[str]:
         return [
             "DROP CLUSTER IF EXISTS lg CASCADE;",
             f"CREATE CLUSTER lg SIZE '{self.replica_size}';",
@@ -266,7 +271,7 @@ class AuctionScenario(Scenario):
                 (2, 'Best Pizza in Town'),
                 (3, 'Gift Basket'),
                 (4, 'Custom Art');""",
-            """
+            f"""
             -- Each year-long interval of interest
             CREATE VIEW years AS
             SELECT *
@@ -274,9 +279,9 @@ class AuctionScenario(Scenario):
                 '1970-01-01 00:00:00+00',
                 '2099-01-01 00:00:00+00',
                 '1 year') year
-            WHERE mz_now() BETWEEN year AND year + '1 year' + '1 day';
+            WHERE mz_now() BETWEEN year AND year + '1 year' + '{self.scale} day';
             """,
-            """
+            f"""
             -- Each day-long interval of interest
             CREATE VIEW days AS
             SELECT * FROM (
@@ -284,9 +289,9 @@ class AuctionScenario(Scenario):
                 FROM years
                 UNION ALL SELECT * FROM empty
             )
-            WHERE mz_now() BETWEEN day AND day + '1 day' + '1 day';
+            WHERE mz_now() BETWEEN day AND day + '1 day' + '{self.scale} day';
             """,
-            """
+            f"""
             -- Each hour-long interval of interest
             CREATE VIEW hours AS
             SELECT * FROM (
@@ -294,9 +299,9 @@ class AuctionScenario(Scenario):
                 FROM days
                 UNION ALL SELECT * FROM empty
             )
-            WHERE mz_now() BETWEEN hour AND hour + '1 hour' + '1 day';
+            WHERE mz_now() BETWEEN hour AND hour + '1 hour' + '{self.scale} day';
             """,
-            """
+            f"""
             -- Each minute-long interval of interest
             CREATE VIEW minutes AS
             SELECT * FROM (
@@ -304,9 +309,9 @@ class AuctionScenario(Scenario):
                 FROM hours
                 UNION ALL SELECT * FROM empty
             )
-            WHERE mz_now() BETWEEN minute AND minute + '1 minute' + '1 day';
+            WHERE mz_now() BETWEEN minute AND minute + '1 minute' + '{self.scale} day';
             """,
-            """
+            f"""
             -- Any second-long interval of interest
             CREATE VIEW seconds AS
             SELECT * FROM (
@@ -314,7 +319,7 @@ class AuctionScenario(Scenario):
                 FROM minutes
                 UNION ALL SELECT * FROM empty
             )
-            WHERE mz_now() BETWEEN second AND second + '1 second' + '1 day';
+            WHERE mz_now() BETWEEN second AND second + '1 second' + '{self.scale} day';
             """,
             # Indexes are important to ensure we expand intervals carefully.
             "CREATE DEFAULT INDEX ON years;",
@@ -481,19 +486,19 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     )
 
     with open(f"results_{int(time.time())}.csv", "w") as f:
-        f.write("scenario,test_name,cluster_size,repetition,size_bytes,time_ms\n")
+        f.write("scenario,mode,test_name,cluster_size,repetition,size_bytes,time_ms\n")
         run_scenario_weak(
-            scenario=TpccScenario(1, "50cc"),
+            scenario=TpccScenario(1, "100cc"),
             results_file=f,
             connection=connection,
         )
         run_scenario_weak(
-            scenario=AuctionScenario(1, "100cc"),
+            scenario=AuctionScenario(5, "100cc"),
             results_file=f,
             connection=connection,
         )
         run_scenario_strong(
-            scenario=AuctionScenario(1, None),
+            scenario=AuctionScenario(5, "none"),
             results_file=f,
             connection=connection,
         )
@@ -504,7 +509,7 @@ def run_scenario_weak(
 ) -> None:
 
     runner = ScenarioRunner(
-        scenario.name(), connection, results_file, replica_size="None"
+        scenario.name(), "weak", connection, results_file, replica_size="None"
     )
 
     for query in scenario.drop():
@@ -547,6 +552,8 @@ def run_scenario_strong(
     connection.run("CREATE TABLE t (a int);")
     connection.run("INSERT INTO t VALUES (1);")
 
+    initial_scale = scenario.scale
+
     for replica_size_scale in [
         ("100cc", 1),
         ("200cc", 2),
@@ -557,9 +564,9 @@ def run_scenario_strong(
     ]:  # , "6400cc", "128C"]:
         replica_size = replica_size_scale[0]
         scenario.replica_size = replica_size
-        scenario.scale = replica_size_scale[1]
+        scenario.scale = initial_scale * replica_size_scale[1]
         runner = ScenarioRunner(
-            scenario.name(), connection, results_file, replica_size="None"
+            scenario.name(), "strong", connection, results_file, replica_size
         )
         for query in scenario.drop():
             runner.run_query(dedent(query))
