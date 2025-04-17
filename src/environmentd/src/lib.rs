@@ -744,7 +744,6 @@ impl Listeners {
                 internal: false,
                 active_connection_counter: active_connection_counter.clone(),
                 helm_chart_version: config.helm_chart_version.clone(),
-                now: SYSTEM_TIME.clone(),
             });
             mz_server_core::serve(ServeConfig {
                 conns: sql_conns,
@@ -776,7 +775,6 @@ impl Listeners {
                 internal: true,
                 active_connection_counter: active_connection_counter.clone(),
                 helm_chart_version: config.helm_chart_version.clone(),
-                now: SYSTEM_TIME.clone(),
             });
             mz_server_core::serve(ServeConfig {
                 conns: internal_sql_conns,
