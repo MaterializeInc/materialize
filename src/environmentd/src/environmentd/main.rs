@@ -45,7 +45,7 @@ use mz_catalog::builtin::{
 use mz_catalog::config::ClusterReplicaSizeMap;
 use mz_cloud_resources::{AwsExternalIdPrefix, CloudResourceController};
 use mz_controller::ControllerConfig;
-use mz_frontegg_auth::FronteggCliArgs;
+use mz_frontegg_auth::{Authenticator as FronteggAuthenticator, FronteggCliArgs};
 use mz_license_keys::{ExpirationBehavior, ValidatedLicenseKey};
 use mz_orchestrator::Orchestrator;
 use mz_orchestrator_kubernetes::{
@@ -824,6 +824,7 @@ fn run(mut args: Args) -> Result<(), anyhow::Error> {
 
     // Configure connections.
     let tls = args.tls.into_config()?;
+    let frontegg = FronteggAuthenticator::from_args(args.frontegg, &metrics_registry)?;
 
     // Configure CORS.
     let allowed_origins = if !args.cors_allowed_origin.is_empty() {
@@ -1143,7 +1144,7 @@ fn run(mut args: Args) -> Result<(), anyhow::Error> {
                 enable_internal_ports: args.enable_internal_ports,
                 external_login_password_mz_system: args.external_login_password_mz_system,
                 allow_reserved_roles_on_external_ports: args.allow_reserved_roles_on_external_ports,
-                frontegg: args.frontegg,
+                frontegg,
                 external_authenticator_kind: args.external_authenticator_kind,
                 internal_authenticator_kind: args.internal_authenticator_kind,
                 cors_allowed_origin,

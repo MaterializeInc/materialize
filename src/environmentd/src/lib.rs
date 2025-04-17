@@ -39,7 +39,7 @@ use mz_catalog::config::ClusterReplicaSizeMap;
 use mz_catalog::durable::BootstrapArgs;
 use mz_cloud_resources::CloudResourceController;
 use mz_controller::ControllerConfig;
-use mz_frontegg_auth::{Authenticator as FronteggAuthenticator, FronteggCliArgs};
+use mz_frontegg_auth::Authenticator as FronteggAuthenticator;
 use mz_license_keys::ValidatedLicenseKey;
 use mz_ore::future::OreFutureExt;
 use mz_ore::metrics::MetricsRegistry;
@@ -100,7 +100,7 @@ pub struct Config {
     /// Whether to allow reserved users (ie: mz_system) on the external port.
     pub allow_reserved_roles_on_external_ports: bool,
     /// Frontegg JWT authentication configuration.
-    pub frontegg: FronteggCliArgs,
+    pub frontegg: Option<FronteggAuthenticator>,
     /// Authenticator kind for the external ports.
     pub external_authenticator_kind: AuthenticatorKind,
     /// Authenticator kind for the internal ports.
@@ -742,21 +742,18 @@ impl Listeners {
 
         let external_authenticator = match config.external_authenticator_kind {
             AuthenticatorKind::Frontegg => Authenticator::Frontegg(
-                FronteggAuthenticator::from_args(
-                    config.frontegg.clone(),
-                    &config.metrics_registry.clone(),
-                )
-                // TODO create a more specific error type?
-                .map_err(|e| AdapterError::Unstructured(e.into()))?
-                .expect("Frontegg args are required with AuthenticatorKind::Frontegg"),
+                config
+                    .frontegg
+                    .clone()
+                    .expect("Frontegg args are required with AuthenticatorKind::Frontegg"),
             ),
             AuthenticatorKind::Password => Authenticator::Password(adapter_client.clone()),
             AuthenticatorKind::None => Authenticator::None,
         };
         let internal_authenticator = match config.internal_authenticator_kind {
             AuthenticatorKind::Frontegg => Authenticator::Frontegg(
-                FronteggAuthenticator::from_args(config.frontegg, &config.metrics_registry.clone())
-                    .map_err(|e| AdapterError::Unstructured(e.into()))?
+                config
+                    .frontegg
                     .expect("Frontegg args are required with AuthenticatorKind::Frontegg"),
             ),
             AuthenticatorKind::Password => Authenticator::Password(adapter_client.clone()),
