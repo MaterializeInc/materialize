@@ -237,10 +237,7 @@ class UseClusterdCompute(MzcomposeAction):
             DROP CLUSTER REPLICA quickstart.r1;
             CREATE CLUSTER REPLICA quickstart.r1
                 STORAGECTL ADDRESSES ['clusterd_compute_1:2100'],
-                STORAGE ADDRESSES ['clusterd_compute_1:2103'],
-                COMPUTECTL ADDRESSES ['clusterd_compute_1:2101'],
-                COMPUTE ADDRESSES ['clusterd_compute_1:2102'],
-                WORKERS 1;
+                COMPUTECTL ADDRESSES ['clusterd_compute_1:2101'];
             """,
             port=6877,
             user="mz_system",

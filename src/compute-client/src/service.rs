@@ -19,6 +19,7 @@ use async_trait::async_trait;
 use bytesize::ByteSize;
 use differential_dataflow::consolidation::consolidate_updates;
 use differential_dataflow::lattice::Lattice;
+use futures::future::BoxFuture;
 use mz_expr::row::RowCollection;
 use mz_ore::assert_none;
 use mz_ore::cast::CastFrom;
@@ -83,7 +84,7 @@ pub type ComputeGrpcClient = GrpcClient<ComputeProtoServiceTypes>;
 #[async_trait]
 impl<F, G> ProtoCompute for GrpcServer<F>
 where
-    F: Fn() -> G + Send + Sync + 'static,
+    F: Fn() -> BoxFuture<'static, G> + Send + Sync + 'static,
     G: ComputeClient + 'static,
 {
     type CommandResponseStreamStream = ResponseStream<ProtoComputeResponse>;
@@ -111,13 +112,13 @@ where
 ///   * One instance on the controller side, dispatching between cluster processes.
 ///   * One instance in each cluster process, dispatching between timely worker threads.
 ///
-/// Note that because compute commands, except `CreateTimely` and `UpdateConfiguration`, are only
-/// sent to the first process, the cluster-side instances of `PartitionedComputeState` are not
-/// guaranteed to see all compute commands. Or more specifically: The instance running inside
-/// process 0 sees all commands, whereas the instances running inside the other processes only see
-/// `CreateTimely` and `UpdateConfiguration`. The `PartitionedComputeState` implementation must be
-/// able to cope with this limited visiblity. It does so by performing most of its state management
-/// based on observed compute responses rather than commands.
+/// Note that because compute commands, except `UpdateConfiguration`, are only sent to the first
+/// process, the cluster-side instances of `PartitionedComputeState` are not guaranteed to see all
+/// compute commands. Or more specifically: The instance running inside process 0 sees all
+/// commands, whereas the instances running inside the other processes only see
+/// `UpdateConfiguration`. The `PartitionedComputeState` implementation must be able to cope with
+/// this limited visiblity. It does so by performing most of its state management based on observed
+/// compute responses rather than commands.
 #[derive(Debug)]
 pub struct PartitionedComputeState<T> {
     /// Number of partitions the state machine represents.
@@ -208,25 +209,9 @@ impl<T> PartitionedComputeState<T>
 where
     T: ComputeControllerTimestamp,
 {
-    fn reset(&mut self) {
-        let PartitionedComputeState {
-            parts: _,
-            max_result_size: _,
-            frontiers,
-            peek_responses,
-            pending_subscribes,
-            copy_to_responses,
-        } = self;
-        frontiers.clear();
-        peek_responses.clear();
-        pending_subscribes.clear();
-        copy_to_responses.clear();
-    }
-
     /// Observes commands that move past, and prepares state for responses.
     pub fn observe_command(&mut self, command: &ComputeCommand<T>) {
         match command {
-            ComputeCommand::CreateTimely { .. } => self.reset(),
             ComputeCommand::UpdateConfiguration(config) => {
                 if let Some(max_result_size) = config.max_result_size {
                     self.max_result_size = max_result_size;
@@ -248,17 +233,9 @@ where
         self.observe_command(&command);
 
         // As specified by the compute protocol:
-        //  * Forward `CreateTimely` and `UpdateConfiguration` commands to all shards.
+        //  * Forward `UpdateConfiguration` commands to all shards.
         //  * Forward all other commands to the first shard only.
         match command {
-            ComputeCommand::CreateTimely { config, epoch } => {
-                let timely_cmds = config.split_command(self.parts);
-
-                timely_cmds
-                    .into_iter()
-                    .map(|config| Some(ComputeCommand::CreateTimely { config, epoch }))
-                    .collect()
-            }
             command @ ComputeCommand::UpdateConfiguration(_) => {
                 vec![Some(command); self.parts]
             }

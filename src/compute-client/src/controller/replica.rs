@@ -15,9 +15,8 @@ use std::time::{Duration, Instant};
 
 use anyhow::bail;
 use mz_build_info::BuildInfo;
-use mz_cluster_client::client::{ClusterReplicaLocation, ClusterStartupEpoch, TimelyConfig};
+use mz_cluster_client::client::{ClusterReplicaLocation, ClusterStartupEpoch};
 use mz_compute_types::dyncfgs::ENABLE_COMPUTE_REPLICA_EXPIRATION;
-use mz_controller_types::dyncfgs::ENABLE_CREATE_SOCKETS_V2;
 use mz_dyncfg::ConfigSet;
 use mz_ore::channel::InstrumentedUnboundedSender;
 use mz_ore::retry::{Retry, RetryState};
@@ -35,7 +34,7 @@ use crate::controller::{ComputeControllerTimestamp, ReplicaId};
 use crate::logging::LoggingConfig;
 use crate::metrics::IntCounter;
 use crate::metrics::ReplicaMetrics;
-use crate::protocol::command::{ComputeCommand, InitialComputeParameters, InstanceConfig};
+use crate::protocol::command::{ComputeCommand, InstanceConfig};
 use crate::protocol::response::ComputeResponse;
 use crate::service::{ComputeClient, ComputeGrpcClient};
 
@@ -49,7 +48,6 @@ pub(super) struct ReplicaConfig {
     pub grpc_client: GrpcClientParameters,
     /// The offset to use for replica expiration, if any.
     pub expiration_offset: Option<Duration>,
-    pub initial_config: InitialComputeParameters,
 }
 
 /// A client for a replica task.
@@ -276,22 +274,6 @@ where
     /// contain replica-specific fields that must be adjusted before sending.
     fn specialize_command(&self, command: &mut ComputeCommand<T>) {
         match command {
-            ComputeCommand::CreateTimely { config, epoch } => {
-                *config = TimelyConfig {
-                    workers: self.config.location.workers,
-                    process: 0,
-                    addresses: self.config.location.dataflow_addrs.clone(),
-                    arrangement_exert_proportionality: self
-                        .config
-                        .initial_config
-                        .arrangement_exert_proportionality,
-                    enable_zero_copy: self.config.initial_config.enable_zero_copy,
-                    enable_zero_copy_lgalloc: self.config.initial_config.enable_zero_copy_lgalloc,
-                    zero_copy_limit: self.config.initial_config.zero_copy_limit,
-                    enable_create_sockets_v2: ENABLE_CREATE_SOCKETS_V2.get(&self.dyncfg),
-                };
-                *epoch = self.epoch;
-            }
             ComputeCommand::CreateInstance(InstanceConfig {
                 logging,
                 expiration_offset,
