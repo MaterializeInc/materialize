@@ -40,6 +40,7 @@ use crate::source::types::{
     Probe, ProgressStatisticsUpdate, SourceMessage, SourceRender, StackedCollection,
 };
 
+mod progress;
 mod replication;
 
 #[derive(Debug, Clone)]
@@ -105,7 +106,7 @@ impl SourceRender for SqlServerSource {
         self,
         scope: &mut G,
         config: &RawSourceCreationConfig,
-        _resume_uppers: impl futures::Stream<Item = Antichain<Self::Time>> + 'static,
+        resume_uppers: impl futures::Stream<Item = Antichain<Self::Time>> + 'static,
         _start_signal: impl Future<Output = ()> + 'static,
     ) -> (
         // Timely Collection for each Source Export defined in the provided `config`.
@@ -154,11 +155,19 @@ impl SourceRender for SqlServerSource {
             source_outputs.insert(*id, output_info);
         }
 
-        let (repl_updates, uppers, repl_errs, repl_token) = replication::render(
+        let (repl_updates, uppers, repl_errs, snapshot_stats, repl_token) = replication::render(
             scope.clone(),
             config.clone(),
             source_outputs.clone(),
             self.clone(),
+        );
+
+        let (progress_stats, progress_errs, progress_token) = progress::render(
+            scope.clone(),
+            config.clone(),
+            self.connection.clone(),
+            source_outputs.clone(),
+            resume_uppers,
         );
 
         let partition_count = u64::cast_from(config.source_exports.len());
@@ -177,19 +186,13 @@ impl SourceRender for SqlServerSource {
             data_collections.insert(*id, data_stream.as_collection());
         }
 
-        let stats = std::iter::once(ProgressStatisticsUpdate::Snapshot {
-            records_known: 100,
-            records_staged: 100,
-        })
-        .to_stream(scope);
-
         let health_init = std::iter::once(HealthStatusMessage {
             id: None,
             namespace: Self::STATUS_NAMESPACE,
             update: HealthStatusUpdate::Running,
         })
         .to_stream(scope);
-        let health_errs = repl_errs.map(move |err| {
+        let health_errs = repl_errs.concat(&progress_errs).map(move |err| {
             // This update will cause the dataflow to restart
             let err_string = err.display_with_causes().to_string();
             let update = HealthStatusUpdate::halting(err_string, None);
@@ -205,13 +208,15 @@ impl SourceRender for SqlServerSource {
         });
         let health = health_init.concat(&health_errs);
 
+        let stats = snapshot_stats.concat(&progress_stats);
+
         (
             data_collections,
             uppers,
             health,
             stats,
             None,
-            vec![repl_token],
+            vec![repl_token, progress_token],
         )
     }
 }

@@ -117,6 +117,7 @@ impl<'a> CdcStream<'a> {
     ) -> Result<
         (
             Lsn,
+            BTreeMap<Arc<str>, usize>,
             impl Stream<Item = (Arc<str>, Result<tiberius::Row, SqlServerError>)> + use<'b, 'a>,
         ),
         SqlServerError,
@@ -148,6 +149,18 @@ impl<'a> CdcStream<'a> {
         let lsn = crate::inspect::get_max_lsn(txn.client).await?;
         tracing::info!(?tables, ?lsn, "starting snapshot");
 
+        // Get the size of each table we're about to snapshot.
+        //
+        // TODO(sql_server3): To expose a more "generic" interface it would be nice to
+        // make it configurable about whether or not we take a count first.
+        let mut snapshot_stats = BTreeMap::default();
+        for (capture_instance, schema, table) in &tables {
+            tracing::trace!(%capture_instance, %schema, %table, "snapshot stats start");
+            let size = crate::inspect::snapshot_size(txn.client, &*schema, &*table).await?;
+            snapshot_stats.insert(Arc::clone(capture_instance), size);
+            tracing::trace!(%capture_instance, %schema, %table, "snapshot stats end");
+        }
+
         // Run a `SELECT` query to snapshot the entire table.
         let stream = async_stream::stream! {
             // TODO(sql_server3): A stream of streams would be better here than
@@ -155,8 +168,7 @@ impl<'a> CdcStream<'a> {
             for (capture_instance, schema_name, table_name) in tables {
                 tracing::trace!(%capture_instance, %schema_name, %table_name, "snapshot start");
 
-                let query = format!("SELECT * FROM {schema_name}.{table_name};");
-                let snapshot = txn.client.query_streaming(&query, &[]);
+                let snapshot = crate::inspect::snapshot(txn.client, &*schema_name, &*table_name);
                 let mut snapshot = std::pin::pin!(snapshot);
                 while let Some(result) = snapshot.next().await {
                     yield (Arc::clone(&capture_instance), result);
@@ -172,7 +184,7 @@ impl<'a> CdcStream<'a> {
             }
         };
 
-        Ok((lsn, stream))
+        Ok((lsn, snapshot_stats, stream))
     }
 
     /// Consume `self` returning a [`Stream`] of [`CdcEvent`]s.
@@ -410,6 +422,11 @@ pub enum CdcError {
         column_name: &'static str,
         error: String,
     },
+    #[error("failed to cleanup values for '{capture_instance}' at {low_water_mark}")]
+    CleanupFailed {
+        capture_instance: String,
+        low_water_mark: Lsn,
+    },
 }
 
 /// This type is used to represent the progress of each SQL Server instance in
@@ -497,6 +514,20 @@ impl Lsn {
             block_id,
             record_id,
         }
+    }
+
+    /// Drops the `record_id` portion of the [`Lsn`] so we can fit an "abbreviation"
+    /// of this [`Lsn`] into a [`u64`], without losing the total order.
+    pub fn abbreviate(&self) -> u64 {
+        let mut abbreviated: u64 = 0;
+
+        #[allow(clippy::as_conversions)]
+        {
+            abbreviated += (self.vlf_id as u64) << 32;
+            abbreviated += self.block_id as u64;
+        }
+
+        abbreviated
     }
 }
 
@@ -723,6 +754,26 @@ mod tests {
         }
         proptest!(|(random_bytes in any::<[u8; 10]>())| {
             test_case(random_bytes)
+        })
+    }
+
+    #[mz_ore::test]
+    fn proptest_lsn_abbreviate_total_order() {
+        #[track_caller]
+        fn test_case(bytes: [u8; 10], num_increment: u8) {
+            let lsn = Lsn::try_from_bytes(&bytes[..]).unwrap();
+            let mut new = lsn;
+            for _ in 0..num_increment {
+                new = new.increment();
+            }
+
+            let a = lsn.abbreviate();
+            let b = new.abbreviate();
+
+            assert!(a <= b);
+        }
+        proptest!(|(random_bytes in any::<[u8; 10]>(), num_increment in any::<u8>())| {
+            test_case(random_bytes, num_increment)
         })
     }
 }

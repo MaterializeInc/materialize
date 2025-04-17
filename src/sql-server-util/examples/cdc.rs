@@ -37,6 +37,7 @@
 
 use futures::StreamExt;
 use mz_ore::future::InTask;
+use mz_sql_server_util::cdc::CdcEvent;
 use mz_sql_server_util::config::TunnelConfig;
 use mz_sql_server_util::{Client, Config};
 use tracing_subscriber::EnvFilter;
@@ -55,16 +56,24 @@ async fn main() -> Result<(), anyhow::Error> {
     config.authentication(tiberius::AuthMethod::sql_server("SA", "password123?"));
     config.trust_cert();
 
-    let config = Config::new(config, TunnelConfig::Direct, InTask::No);
-    let (mut client, connection) = Client::connect(config).await?;
+    // Open one client to stream changes.
+    let mz_config = Config::new(config.clone(), TunnelConfig::Direct, InTask::No);
+    let (mut client_1, connection) = Client::connect(mz_config).await?;
     mz_ore::task::spawn(|| "sql-server connection", async move { connection.await });
-    tracing::info!("connection successful!");
+    tracing::info!("connection 1 successful!");
 
     let capture_instances = ["materialize_t1", "materialize_t2"];
-    let mut cdc_handle = client.cdc(capture_instances);
+    let mut cdc_handle = client_1.cdc(capture_instances);
+
+    // Open a second client that we can use to cleanup the underlying change tables.
+    let mz_config = Config::new(config.clone(), TunnelConfig::Direct, InTask::No);
+    let (mut client_2, connection) = Client::connect(mz_config).await?;
+    mz_ore::task::spawn(|| "sql-server connection", async move { connection.await });
+    tracing::info!("connection 2 successful!");
 
     // Get an initial snapshot of the table.
-    let (lsn, snapshot) = cdc_handle.snapshot(None).await?;
+    let (lsn, stats, snapshot) = cdc_handle.snapshot(None).await?;
+    tracing::info!("snapshot stats: {stats:?}");
     {
         let mut snapshot = std::pin::pin!(snapshot);
         while let Some((capture_instance, result)) = snapshot.next().await {
@@ -80,9 +89,31 @@ async fn main() -> Result<(), anyhow::Error> {
     // Get a stream of changes from the table.
     let changes = cdc_handle.into_stream();
     let mut changes = std::pin::pin!(changes);
-    while let Some(change) = changes.next().await {
-        let change = change?;
-        tracing::info!("event: {change:?}");
+    while let Some(result) = changes.next().await {
+        let event = result?;
+        match event {
+            CdcEvent::Data {
+                capture_instance,
+                lsn,
+                changes,
+            } => {
+                tracing::info!("data: {capture_instance} @ {lsn} : {changes:?}");
+            }
+            // We've done all we need with this change, so cleanup the upstream tables.
+            CdcEvent::Progress { next_lsn } => {
+                tracing::info!("progress: received all data < {next_lsn}");
+                for instance in capture_instances {
+                    let result = mz_sql_server_util::inspect::cleanup_change_table(
+                        &mut client_2,
+                        instance,
+                        &next_lsn,
+                        1000,
+                    )
+                    .await?;
+                    tracing::info!(?result, "cleanup: {instance} data < {next_lsn}");
+                }
+            }
+        }
     }
 
     Ok(())
