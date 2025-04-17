@@ -1104,13 +1104,15 @@ fn humanize_sql_for_show_create(
                     });
                 }
                 CreateSourceConnection::SqlServer { options, .. } => {
-                    // TODO(sql_server2): TEXT and EXCLUDE columns operate on 'schema.table.column'
-                    // names, but our references are also qualified by 'database'. We handle the
-                    // mismatch here but should improve the situation.
+                    // TODO(sql_server2): TEXT and EXCLUDE columns are represented by
+                    // `schema.table.column` whereas our external table references are
+                    // `database.schema.table`. We handle the mismatch here but should
+                    // probably fully qualify our TEXT and EXCLUDE column references.
                     let adjusted_references: BTreeSet<_> = curr_references
                         .keys()
                         .map(|name| {
                             if name.0.len() == 3 {
+                                // Strip the database component of the name.
                                 let adjusted_name = name.0[1..].to_vec();
                                 UnresolvedItemName(adjusted_name)
                             } else {
