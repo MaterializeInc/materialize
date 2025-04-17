@@ -58,8 +58,7 @@ async fn main() -> Result<(), anyhow::Error> {
 
     // Open one client to stream changes.
     let mz_config = Config::new(config.clone(), TunnelConfig::Direct, InTask::No);
-    let (mut client_1, connection) = Client::connect(mz_config).await?;
-    mz_ore::task::spawn(|| "sql-server connection", async move { connection.await });
+    let mut client_1 = Client::connect(mz_config).await?;
     tracing::info!("connection 1 successful!");
 
     let capture_instances = ["materialize_t1", "materialize_t2"];
@@ -67,8 +66,7 @@ async fn main() -> Result<(), anyhow::Error> {
 
     // Open a second client that we can use to cleanup the underlying change tables.
     let mz_config = Config::new(config.clone(), TunnelConfig::Direct, InTask::No);
-    let (mut client_2, connection) = Client::connect(mz_config).await?;
-    mz_ore::task::spawn(|| "sql-server connection", async move { connection.await });
+    let mut client_2 = Client::connect(mz_config).await?;
     tracing::info!("connection 2 successful!");
 
     // Get an initial snapshot of the table.

@@ -39,12 +39,6 @@ use crate::desc::SqlServerColumnDecodeType;
 
 /// Higher level wrapper around a [`tiberius::Client`] that models transaction
 /// management like other database clients.
-///
-/// When creating a [`Client`] we return a [`Connection`] which implements [`std::future::Future`]
-/// and must be polled for queries to make progress. Internally a [`Client`] holds the sending side
-/// of a channel and the [`Connection`] receives query requests to run. This enables us to
-/// introduce a [`Transaction`] type that when dropped will cause the `TRANSACTION` in the
-/// connected SQL Server instance to get rolled back.
 #[derive(Debug)]
 pub struct Client {
     tx: UnboundedSender<Request>,
@@ -62,7 +56,7 @@ impl Client {
     /// IntoFuture and does the default good thing of moving the `Connection`
     /// into a tokio task? And a `.raw()` option that will instead return both
     /// the Client and Connection for manual polling.
-    pub async fn connect(config: Config) -> Result<(Self, Connection), SqlServerError> {
+    pub async fn connect(config: Config) -> Result<Self, SqlServerError> {
         // Setup our tunnelling and return any resources that need to be kept
         // alive for the duration of the connection.
         let (tcp, resources): (_, Option<Box<dyn Any + Send + Sync>>) = match &config.tunnel {
@@ -91,16 +85,22 @@ impl Client {
                 (tcp, Some(Box::new(tunnel)))
             }
             TunnelConfig::AwsPrivatelink { connection_id: _ } => {
-                // TODO(sql_server1): Getting this right is tricky because
+                // TODO(sql_server2): Getting this right is tricky because
                 // there is some subtle logic with hostname validation.
                 return Err(SqlServerError::Generic(anyhow::anyhow!(
-                    "TODO(sql_server1): Support PrivateLink connections"
+                    "Support PrivateLink connections"
                 )));
             }
         };
 
         tcp.set_nodelay(true)?;
-        Self::connect_raw(config, tcp, resources).await
+
+        let (client, connection) = Self::connect_raw(config, tcp, resources).await?;
+        mz_ore::task::spawn(|| "sql-server-client-connection", async move {
+            connection.await
+        });
+
+        Ok(client)
     }
 
     pub async fn connect_raw(

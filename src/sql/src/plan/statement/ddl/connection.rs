@@ -538,7 +538,7 @@ impl ConnectionOptionExtracted {
                 scx.require_feature_flag(&vars::ENABLE_SQL_SERVER_SOURCE)?;
 
                 let aws_connection = get_aws_connection_reference(scx, &self)?;
-                // TODO(sql_server1): Support AWS connections for SQL Server. Nothing fundamental
+                // TODO(sql_server2): Support AWS connections for SQL Server. Nothing fundamental
                 // prevents this, just need to wire it up.
                 if aws_connection.is_some() {
                     return Err(PlanError::Unsupported {

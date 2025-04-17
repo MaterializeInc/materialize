@@ -109,9 +109,7 @@ impl SqlServerSource<InlinedConnection> {
                 InTask::No,
             )
             .await?;
-        let (mut client, conn) = mz_sql_server_util::Client::connect(config).await?;
-        // TODO(sql_server1): Make spawning this task automatic.
-        mz_ore::task::spawn(|| "sql server connection", async move { conn.await });
+        let mut client = mz_sql_server_util::Client::connect(config).await?;
 
         let max_lsn = mz_sql_server_util::inspect::get_max_lsn(&mut client).await?;
         Ok(Antichain::from_elem(max_lsn))

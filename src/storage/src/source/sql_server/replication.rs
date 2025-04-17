@@ -48,7 +48,7 @@ use crate::source::types::{
 /// Used as a partition ID to determine the worker that is responsible for
 /// reading data from SQL Server.
 ///
-/// TODO(sql_server1): It's possible we could have different workers
+/// TODO(sql_server2): It's possible we could have different workers
 /// replicate different tables, if we're using SQL Server's CDC features.
 static REPL_READER: &str = "reader";
 
@@ -85,7 +85,7 @@ pub(crate) fn render<G: Scope<Timestamp = Lsn>>(
                 definite_error_cap_set,
             ]: &mut [_; 4] = caps.try_into().unwrap();
 
-            // TODO(sql_server1): Run ingestions across multiple workers.
+            // TODO(sql_server2): Run ingestions across multiple workers.
             if !config.responsible_for(REPL_READER) {
                 return Ok::<_, TransientError>(());
             }
@@ -98,10 +98,7 @@ pub(crate) fn render<G: Scope<Timestamp = Lsn>>(
                     InTask::Yes,
                 )
                 .await?;
-            let (mut client, connection) =
-                mz_sql_server_util::Client::connect(connection_config).await?;
-            // TODO(sql_server1): Move the connection into its own future.
-            mz_ore::task::spawn(|| "sql_server-connection", async move { connection.await });
+            let mut client = mz_sql_server_util::Client::connect(connection_config).await?;
 
             let output_indexes: Vec<_> = outputs
                 .values()

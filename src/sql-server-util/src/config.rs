@@ -69,7 +69,7 @@ pub enum TunnelConfig {
         manager: SshTunnelManager,
         /// Timeout config for the SSH tunnel.
         timeout: SshTimeoutConfig,
-        // TODO(sql_server1): Remove these fields by forking the `tiberius`
+        // TODO(sql_server3): Remove these fields by forking the `tiberius`
         // crate and expose the `get_host` and `get_port` methods.
         //
         // See: <https://github.com/MaterializeInc/tiberius/blob/406ad2780d206617bd41689b1b638bddf4538f89/src/client/config.rs#L174-L191>
