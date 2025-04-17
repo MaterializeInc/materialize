@@ -613,6 +613,7 @@ steps:
               args:
                 [
                   --scenario=RestartEnvironmentdClusterdStorage,
+                  --default-replication-factor=1, # faster
                   "--seed=$BUILDKITE_JOB_ID",
                 ]
 
@@ -645,7 +646,11 @@ steps:
         plugins:
           - ./ci/plugins/mzcompose:
               composition: platform-checks
-              args: [--scenario=NoRestartNoUpgrade, "--seed=$BUILDKITE_JOB_ID"]
+              args: [
+                  --scenario=NoRestartNoUpgrade,
+                  --default-replication-factor=1, # faster
+                  "--seed=$BUILDKITE_JOB_ID"
+              ]
 
   - id: source-sink-errors
     label: "Source/Sink Error Reporting"

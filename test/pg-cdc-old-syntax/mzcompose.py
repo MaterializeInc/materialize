@@ -101,6 +101,7 @@ SERVICES = [
             "log_filter": "mz_storage::source::postgres=trace,debug,info,warn,error"
         },
         external_blob_store=True,
+        default_replication_factor=2,
     ),
     Testdrive(),
     CockroachOrPostgresMetadata(),
@@ -417,6 +418,7 @@ def workflow_migration(c: Composition, parser: WorkflowArgumentParser) -> None:
             additional_system_parameter_defaults={
                 "log_filter": "mz_storage::source::postgres=trace,debug,info,warn,error"
             },
+            default_replication_factor=2,
         )
 
         mz_new = Materialized(
@@ -429,6 +431,7 @@ def workflow_migration(c: Composition, parser: WorkflowArgumentParser) -> None:
                 "log_filter": "mz_storage::source::postgres=trace,debug,info,warn,error",
                 "force_source_table_syntax": "true",
             },
+            default_replication_factor=2,
         )
         with c.override(mz_old, create_postgres(pg_version=pg_version)):
             c.up("materialized", "test-certs", "postgres")

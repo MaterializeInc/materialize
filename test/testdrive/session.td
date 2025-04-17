@@ -26,6 +26,7 @@ cluster_replica                          ""                      "Sets a target 
 current_object_missing_warnings          on                      "Whether to emit warnings when the current database, schema, or cluster is missing (Materialize)."
 database                                 materialize             "Sets the current database (CockroachDB)."
 DateStyle                                "ISO, MDY"              "Sets the display format for date and time values (PostgreSQL)."
+default_cluster_replication_factor       1                       "Default cluster replication factor (Materialize)."
 emit_introspection_query_notice          on                      "Whether to print a notice when querying per-replica introspection sources."
 emit_plan_insights_notice                off                     "Boolean flag indicating whether to send a NOTICE with JSON-formatted plan insights before executing a SELECT statement (Materialize)."
 emit_timestamp_notice                    off                     "Boolean flag indicating whether to send a NOTICE with timestamp explanations of queries (Materialize)."

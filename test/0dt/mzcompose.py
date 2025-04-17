@@ -57,6 +57,7 @@ SERVICES = [
         deploy_generation=0,
         system_parameter_defaults=SYSTEM_PARAMETER_DEFAULTS,
         external_metadata_store=True,
+        default_replication_factor=2,
     ),
     Materialized(
         name="mz_new",
@@ -65,6 +66,7 @@ SERVICES = [
         system_parameter_defaults=SYSTEM_PARAMETER_DEFAULTS,
         restart="on-failure",
         external_metadata_store=True,
+        default_replication_factor=2,
     ),
     Testdrive(
         materialize_url="postgres://materialize@mz_old:6875",
@@ -105,6 +107,8 @@ def workflow_read_only(c: Composition) -> None:
         CREATE CLUSTER cluster SIZE '2-1';
         GRANT ALL ON CLUSTER cluster TO materialize;
         ALTER SYSTEM SET cluster = cluster;
+        CREATE CLUSTER cluster_singlereplica SIZE '1', REPLICATION FACTOR 1;
+        GRANT ALL ON CLUSTER cluster_singlereplica TO materialize;
     """,
         service="mz_old",
         port=6877,
@@ -212,7 +216,7 @@ def workflow_read_only(c: Composition) -> None:
         <null> <null> 1 2
 
         > CREATE SOURCE webhook_source
-          IN CLUSTER cluster
+          IN CLUSTER cluster_singlereplica
           FROM WEBHOOK BODY FORMAT TEXT
 
         $ webhook-append database=materialize schema=public name=webhook_source
@@ -231,6 +235,7 @@ def workflow_read_only(c: Composition) -> None:
             deploy_generation=1,
             external_metadata_store=True,
             system_parameter_defaults=SYSTEM_PARAMETER_DEFAULTS,
+            default_replication_factor=2,
         )
     ):
         c.up("mz_old")
@@ -310,6 +315,7 @@ def workflow_read_only(c: Composition) -> None:
             deploy_generation=1,
             system_parameter_defaults=SYSTEM_PARAMETER_DEFAULTS,
             external_metadata_store=True,
+            default_replication_factor=2,
         )
     ):
         c.up("mz_old")
@@ -393,6 +399,8 @@ def workflow_basic(c: Composition) -> None:
         CREATE CLUSTER cluster SIZE '2-1';
         GRANT ALL ON CLUSTER cluster TO materialize;
         ALTER SYSTEM SET cluster = cluster;
+        CREATE CLUSTER cluster_singlereplica SIZE '1', REPLICATION FACTOR 1;
+        GRANT ALL ON CLUSTER cluster_singlereplica TO materialize;
     """,
         service="mz_old",
         port=6877,
@@ -500,7 +508,7 @@ def workflow_basic(c: Composition) -> None:
         <null> <null> 1 2
 
         > CREATE SOURCE webhook_source
-          IN CLUSTER cluster
+          IN CLUSTER cluster_singlereplica
           FROM WEBHOOK BODY FORMAT TEXT
 
         $ webhook-append database=materialize schema=public name=webhook_source
@@ -891,6 +899,8 @@ def workflow_kafka_source_rehydration(c: Composition) -> None:
         CREATE CLUSTER cluster SIZE '1';
         GRANT ALL ON CLUSTER cluster TO materialize;
         ALTER SYSTEM SET cluster = cluster;
+        CREATE CLUSTER cluster_singlereplica SIZE '1', REPLICATION FACTOR 1;
+        GRANT ALL ON CLUSTER cluster_singlereplica TO materialize;
     """,
         service="mz_old",
         port=6877,
@@ -948,6 +958,7 @@ def workflow_kafka_source_rehydration(c: Composition) -> None:
             system_parameter_defaults=SYSTEM_PARAMETER_DEFAULTS,
             restart="on-failure",
             external_metadata_store=True,
+            default_replication_factor=2,
         )
     ):
         c.up("mz_new")
@@ -998,6 +1009,8 @@ def workflow_pg_source_rehydration(c: Composition) -> None:
         CREATE CLUSTER cluster SIZE '1';
         GRANT ALL ON CLUSTER cluster TO materialize;
         ALTER SYSTEM SET cluster = cluster;
+        CREATE CLUSTER cluster_singlereplica SIZE '1', REPLICATION FACTOR 1;
+        GRANT ALL ON CLUSTER cluster_singlereplica TO materialize;
     """,
         service="mz_old",
         port=6877,
@@ -1070,6 +1083,7 @@ def workflow_pg_source_rehydration(c: Composition) -> None:
             system_parameter_defaults=SYSTEM_PARAMETER_DEFAULTS,
             restart="on-failure",
             external_metadata_store=True,
+            default_replication_factor=2,
         )
     ):
         c.up("mz_new")
@@ -1112,6 +1126,8 @@ def workflow_mysql_source_rehydration(c: Composition) -> None:
         CREATE CLUSTER cluster SIZE '1';
         GRANT ALL ON CLUSTER cluster TO materialize;
         ALTER SYSTEM SET cluster = cluster;
+        CREATE CLUSTER cluster_singlereplica SIZE '1', REPLICATION FACTOR 1;
+        GRANT ALL ON CLUSTER cluster_singlereplica TO materialize;
     """,
         service="mz_old",
         port=6877,
@@ -1185,6 +1201,7 @@ def workflow_mysql_source_rehydration(c: Composition) -> None:
             system_parameter_defaults=SYSTEM_PARAMETER_DEFAULTS,
             restart="on-failure",
             external_metadata_store=True,
+            default_replication_factor=2,
         )
     ):
         c.up("mz_new")
@@ -1233,6 +1250,7 @@ def workflow_kafka_source_failpoint(c: Composition) -> None:
             system_parameter_defaults=SYSTEM_PARAMETER_DEFAULTS,
             external_metadata_store=True,
             environment_extra=["FAILPOINTS=fail_state_multi_put=return"],
+            default_replication_factor=2,
         )
     ):
         c.up("mz_old")
@@ -1246,6 +1264,8 @@ def workflow_kafka_source_failpoint(c: Composition) -> None:
                 CREATE CLUSTER cluster SIZE '1';
                 GRANT ALL ON CLUSTER cluster TO materialize;
                 ALTER SYSTEM SET cluster = cluster;
+                CREATE CLUSTER cluster_singlereplica SIZE '1', REPLICATION FACTOR 1;
+                GRANT ALL ON CLUSTER cluster_singlereplica TO materialize;
                 """
             ),
             service="mz_old",
@@ -1287,6 +1307,7 @@ def workflow_kafka_source_failpoint(c: Composition) -> None:
             system_parameter_defaults=SYSTEM_PARAMETER_DEFAULTS,
             restart="on-failure",
             external_metadata_store=True,
+            default_replication_factor=2,
         ),
         Testdrive(
             materialize_url="postgres://materialize@mz_new:6875",
@@ -1387,6 +1408,7 @@ def workflow_builtin_item_migrations(c: Composition) -> None:
             external_metadata_store=True,
             force_migrations="all",
             healthcheck=LEADER_STATUS_HEALTHCHECK,
+            default_replication_factor=2,
         ),
     ):
         c.up("mz_new")
@@ -1524,6 +1546,8 @@ def workflow_upsert_sources(c: Composition) -> None:
         CREATE CLUSTER cluster SIZE '2-1';
         GRANT ALL ON CLUSTER cluster TO materialize;
         ALTER SYSTEM SET cluster = cluster;
+        CREATE CLUSTER cluster_singlereplica SIZE '1', REPLICATION FACTOR 1;
+        GRANT ALL ON CLUSTER cluster_singlereplica TO materialize;
         ALTER SYSTEM SET max_sources = {num_threads * 2};
         ALTER SYSTEM SET max_materialized_views = {num_threads * 2};
     """,
@@ -1598,6 +1622,7 @@ def workflow_upsert_sources(c: Composition) -> None:
                 system_parameter_defaults=SYSTEM_PARAMETER_DEFAULTS,
                 restart="on-failure",
                 external_metadata_store=True,
+                default_replication_factor=2,
             ),
             Testdrive(
                 materialize_url=f"postgres://materialize@{mz1}:6875",
@@ -1636,6 +1661,8 @@ def workflow_ddl(c: Composition) -> None:
         CREATE CLUSTER cluster SIZE '2-1';
         GRANT ALL ON CLUSTER cluster TO materialize;
         ALTER SYSTEM SET cluster = cluster;
+        CREATE CLUSTER cluster_singlereplica SIZE '1', REPLICATION FACTOR 1;
+        GRANT ALL ON CLUSTER cluster_singlereplica TO materialize;
     """,
         service="mz_old",
         port=6877,
@@ -1743,7 +1770,7 @@ def workflow_ddl(c: Composition) -> None:
         <null> <null> 1 2
 
         > CREATE SOURCE webhook_source
-          IN CLUSTER cluster
+          IN CLUSTER cluster_singlereplica
           FROM WEBHOOK BODY FORMAT TEXT
 
         $ webhook-append database=materialize schema=public name=webhook_source

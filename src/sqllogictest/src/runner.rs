@@ -852,36 +852,6 @@ impl<'a> Runner<'a> {
                 .batch_execute("CREATE CLUSTER quickstart REPLICAS ()")
                 .await?;
         }
-        let mut needs_default_replica = true;
-        for row in inner
-            .system_client
-            .query(
-                "SELECT name, size FROM mz_cluster_replicas
-                 WHERE cluster_id = (SELECT id FROM mz_clusters WHERE name = 'quickstart')",
-                &[],
-            )
-            .await?
-        {
-            let name: &str = row.get("name");
-            let size: &str = row.get("size");
-            if name == "r1" && size == self.config.replicas.to_string() {
-                needs_default_replica = false;
-            } else {
-                inner
-                    .system_client
-                    .batch_execute(&format!("DROP CLUSTER REPLICA quickstart.{}", name))
-                    .await?;
-            }
-        }
-        if needs_default_replica {
-            inner
-                .system_client
-                .batch_execute(&format!(
-                    "CREATE CLUSTER REPLICA quickstart.r1 SIZE '{}'",
-                    self.config.replicas
-                ))
-                .await?;
-        }
 
         // Grant initial privileges.
         inner
@@ -1082,7 +1052,7 @@ impl<'a> RunnerInner<'a> {
             environment_id,
             cluster_replica_sizes: ClusterReplicaSizeMap::for_tests(),
             bootstrap_default_cluster_replica_size: config.replicas.to_string(),
-            bootstrap_default_cluster_replication_factor: 2,
+            bootstrap_default_cluster_replication_factor: 1,
             bootstrap_builtin_system_cluster_config: BootstrapBuiltinClusterConfig {
                 replication_factor: SYSTEM_CLUSTER_DEFAULT_REPLICATION_FACTOR,
                 size: config.replicas.to_string(),

@@ -32,8 +32,8 @@ from materialize.version_list import resolve_ancestor_image_tag
 
 SERVICES = [
     RQG(),
-    Materialized(name="mz_this"),
-    Materialized(name="mz_other"),
+    Materialized(name="mz_this", default_replication_factor=2),
+    Materialized(name="mz_other", default_replication_factor=2),
     Postgres(),
 ]
 
@@ -247,6 +247,7 @@ def run_workload(c: Composition, args: argparse.Namespace, workload: Workload) -
             ports=["16875:6875", "16876:6876", "16877:6877", "16878:6878"],
             image=materialize_image(args.this_tag),
             use_default_volumes=False,
+            default_replication_factor=2,
         ),
     ]
 
@@ -268,6 +269,7 @@ def run_workload(c: Composition, args: argparse.Namespace, workload: Workload) -
                     image=materialize_image(args.other_tag),
                     ports=["26875:6875", "26876:6876", "26877:6877", "26878:6878"],
                     use_default_volumes=False,
+                    default_replication_factor=2,
                 )
             )
             psql_urls.append("postgresql://materialize@mz_other:6875/materialize")

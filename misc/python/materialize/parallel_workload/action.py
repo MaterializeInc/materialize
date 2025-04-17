@@ -38,7 +38,6 @@ from materialize.mzcompose.services.minio import minio_blob_uri
 from materialize.parallel_workload.database import (
     DATA_TYPES,
     DB,
-    MAX_CLUSTER_REPLICAS,
     MAX_CLUSTERS,
     MAX_COLUMNS,
     MAX_DBS,
@@ -1349,13 +1348,6 @@ class SetClusterAction(Action):
 
 
 class CreateClusterReplicaAction(Action):
-    def errors_to_ignore(self, exe: Executor) -> list[str]:
-        result = [
-            "cannot create more than one replica of a cluster containing sources or sinks",
-        ] + super().errors_to_ignore(exe)
-
-        return result
-
     def run(self, exe: Executor) -> bool:
         with exe.db.lock:
             # Keep cluster 0 with 1 replica for sources/sinks
@@ -1363,8 +1355,6 @@ class CreateClusterReplicaAction(Action):
             if not unmanaged_clusters:
                 return False
             cluster = self.rng.choice(unmanaged_clusters)
-            if len(cluster.replicas) >= MAX_CLUSTER_REPLICAS:
-                return False
             cluster.replica_id += 1
         with cluster.lock:
             if cluster not in exe.db.clusters or not cluster.managed:
@@ -1652,6 +1642,7 @@ class KillAction(Action):
                 sanity_restart=self.sanity_restart,
                 additional_system_parameter_defaults=self.system_parameters,
                 metadata_store="cockroach",
+                default_replication_factor=2,
             )
         ):
             self.composition.up("materialized", detach=True)
@@ -1702,6 +1693,7 @@ class ZeroDowntimeDeployAction(Action):
                 restart="on-failure",
                 healthcheck=LEADER_STATUS_HEALTHCHECK,
                 metadata_store="cockroach",
+                default_replication_factor=2,
             ),
         ):
             self.composition.up(mz_service, detach=True)
@@ -1829,14 +1821,6 @@ class DropWebhookSourceAction(Action):
 
 
 class CreateKafkaSourceAction(Action):
-    def errors_to_ignore(self, exe: Executor) -> list[str]:
-        result = super().errors_to_ignore(exe)
-        if exe.db.scenario in (Scenario.Kill, Scenario.ZeroDowntimeDeploy):
-            result.extend(
-                ["cannot create source in cluster with more than one replica"]
-            )
-        return result
-
     def run(self, exe: Executor) -> bool:
         with exe.db.lock:
             if len(exe.db.kafka_sources) >= MAX_KAFKA_SOURCES:
@@ -1848,7 +1832,7 @@ class CreateKafkaSourceAction(Action):
         with schema.lock, cluster.lock:
             if schema not in exe.db.schemas:
                 return False
-            if cluster not in exe.db.clusters or len(cluster.replicas) != 1:
+            if cluster not in exe.db.clusters:
                 return False
 
             try:
@@ -1894,14 +1878,6 @@ class DropKafkaSourceAction(Action):
 
 
 class CreateMySqlSourceAction(Action):
-    def errors_to_ignore(self, exe: Executor) -> list[str]:
-        result = super().errors_to_ignore(exe)
-        if exe.db.scenario in (Scenario.Kill, Scenario.ZeroDowntimeDeploy):
-            result.extend(
-                ["cannot create source in cluster with more than one replica"]
-            )
-        return result
-
     def run(self, exe: Executor) -> bool:
         # See database-issues#6881, not expected to work
         if exe.db.scenario == Scenario.BackupRestore:
@@ -1917,7 +1893,7 @@ class CreateMySqlSourceAction(Action):
         with schema.lock, cluster.lock:
             if schema not in exe.db.schemas:
                 return False
-            if cluster not in exe.db.clusters or len(cluster.replicas) != 1:
+            if cluster not in exe.db.clusters:
                 return False
 
             try:
@@ -1963,14 +1939,6 @@ class DropMySqlSourceAction(Action):
 
 
 class CreatePostgresSourceAction(Action):
-    def errors_to_ignore(self, exe: Executor) -> list[str]:
-        result = super().errors_to_ignore(exe)
-        if exe.db.scenario in (Scenario.Kill, Scenario.ZeroDowntimeDeploy):
-            result.extend(
-                ["cannot create source in cluster with more than one replica"]
-            )
-        return result
-
     def run(self, exe: Executor) -> bool:
         # See database-issues#6881, not expected to work
         if exe.db.scenario == Scenario.BackupRestore:
@@ -1982,14 +1950,11 @@ class CreatePostgresSourceAction(Action):
             source_id = exe.db.postgres_source_id
             exe.db.postgres_source_id += 1
             schema = self.rng.choice(exe.db.schemas)
-            potential_clusters = [c for c in exe.db.clusters if len(c.replicas) == 1]
-            if not potential_clusters:
-                return False
-            cluster = self.rng.choice(potential_clusters)
+            cluster = self.rng.choice(exe.db.clusters)
         with schema.lock, cluster.lock:
             if schema not in exe.db.schemas:
                 return False
-            if cluster not in exe.db.clusters or len(cluster.replicas) != 1:
+            if cluster not in exe.db.clusters:
                 return False
 
             try:
@@ -2037,8 +2002,6 @@ class DropPostgresSourceAction(Action):
 class CreateKafkaSinkAction(Action):
     def errors_to_ignore(self, exe: Executor) -> list[str]:
         return [
-            # Another replica can be created in parallel
-            "cannot create sink in cluster with more than one replica",
             "BYTES format with non-encodable type",
         ] + super().errors_to_ignore(exe)
 
@@ -2048,15 +2011,12 @@ class CreateKafkaSinkAction(Action):
                 return False
             sink_id = exe.db.kafka_sink_id
             exe.db.kafka_sink_id += 1
-            potential_clusters = [c for c in exe.db.clusters if len(c.replicas) == 1]
-            if not potential_clusters:
-                return False
-            cluster = self.rng.choice(potential_clusters)
+            cluster = self.rng.choice(exe.db.clusters)
             schema = self.rng.choice(exe.db.schemas)
         with schema.lock, cluster.lock:
             if schema not in exe.db.schemas:
                 return False
-            if cluster not in exe.db.clusters or len(cluster.replicas) != 1:
+            if cluster not in exe.db.clusters:
                 return False
 
             sink = KafkaSink(

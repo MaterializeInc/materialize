@@ -45,7 +45,7 @@ SERVICES = [
     Minio(setup_materialize=True, additional_directories=["copytos3"]),
     Testdrive(no_reset=True, consistent_seed=True, default_timeout="600s"),
     Mc(),
-    Materialized(),
+    Materialized(default_replication_factor=2),
 ]
 
 SERVICE_NAMES = [
@@ -375,10 +375,20 @@ class WebhookSource(Object):
         self.body_format = rng.choice(["TEXT", "JSON", "JSON ARRAY", "BYTES"])
 
     def create(self) -> str:
-        return f"> CREATE SOURCE {self.name} IN CLUSTER quickstart FROM WEBHOOK BODY FORMAT {self.body_format}"
+        return dedent(
+            f"""
+            > DROP CLUSTER IF EXISTS {self.name}_cluster
+            > CREATE CLUSTER {self.name}_cluster SIZE '1', REPLICATION FACTOR 1
+            > CREATE SOURCE {self.name} IN CLUSTER {self.name}_cluster FROM WEBHOOK BODY FORMAT {self.body_format}
+            """
+        )
 
     def destroy(self) -> str:
-        return f"> DROP SOURCE {self.name} CASCADE"
+        return dedent(
+            f"""
+            > DROP CLUSTER {self.name}_cluster CASCADE
+            """
+        )
 
     def manipulate(self, kind: int) -> str:
         manipulations = [

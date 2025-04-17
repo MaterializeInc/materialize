@@ -40,6 +40,7 @@ class BackupAndRestore(Action):
                 sanity_restart=False,
                 restart="on-failure",
                 metadata_store="cockroach",
+                default_replication_factor=2,
             )
         ):
             c.restore(state.mz_service)

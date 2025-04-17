@@ -28,7 +28,7 @@ class CreateCluster(Check):
                 $ postgres-execute connection=postgres://mz_system@${testdrive.materialize-internal-sql-addr}
                 GRANT CREATECLUSTER ON SYSTEM TO materialize
 
-                > CREATE CLUSTER create_cluster2 (SIZE '2-2');
+                > CREATE CLUSTER create_cluster2 (SIZE '2-2', REPLICATION FACTOR 1);
                 """,
             ]
         ]

@@ -52,6 +52,7 @@ TESTDRIVE_DEFAULT_TIMEOUT = os.environ.get("PLATFORM_CHECKS_TD_TIMEOUT", "300s")
 
 def create_mzs(
     azurite: bool,
+    default_replication_factor: int,
     additional_system_parameter_defaults: dict[str, str] | None = None,
 ) -> list[TestdriveService | Materialized]:
     return [
@@ -64,6 +65,7 @@ def create_mzs(
             volumes_extra=["secrets:/share/secrets"],
             metadata_store="cockroach",
             additional_system_parameter_defaults=additional_system_parameter_defaults,
+            default_replication_factor=default_replication_factor,
         )
         for mz_name in ["materialized", "mz_1", "mz_2", "mz_3", "mz_4", "mz_5"]
     ] + [
@@ -140,7 +142,7 @@ SERVICES = [
     Clusterd(
         name="clusterd_compute_1"
     ),  # Started by some Scenarios, defined here only for the teardown
-    *create_mzs(azurite=False),
+    *create_mzs(azurite=False, default_replication_factor=1),
     Persistcli(),
     SshBastionHost(),
 ]
@@ -227,6 +229,13 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         help="A list of features (e.g. azurite, sql_server), to enable.",
     )
 
+    parser.add_argument(
+        "--default-replication-factor",
+        type=int,
+        default=2,
+        help="Default replication factor for clusters",
+    )
+
     args = parser.parse_args()
     features = Features(args.features)
 
@@ -262,7 +271,11 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         additional_system_parameter_defaults[x[0]] = x[1]
 
     with c.override(
-        *create_mzs(features.azurite_enabled(), additional_system_parameter_defaults)
+        *create_mzs(
+            features.azurite_enabled(),
+            args.default_replication_factor,
+            additional_system_parameter_defaults,
+        )
     ):
         executor = MzcomposeExecutor(composition=c)
         for scenario_class in scenarios:

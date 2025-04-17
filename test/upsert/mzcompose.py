@@ -46,6 +46,7 @@ SERVICES = [
             "upsert_rocksdb_auto_spill_to_disk": "false",
         },
         environment_extra=materialized_environment_extra,
+        default_replication_factor=2,
     ),
     Testdrive(),
     Clusterd(
@@ -119,6 +120,7 @@ def workflow_testdrive(c: Composition, parser: WorkflowArgumentParser) -> None:
             "disk_cluster_replicas_default": "true",
         },
         environment_extra=materialized_environment_extra,
+        default_replication_factor=2,
     )
 
     with c.override(testdrive, materialized):
@@ -193,6 +195,7 @@ def workflow_rehydration(c: Composition) -> None:
                     "storage_shrink_upsert_unused_buffers_by_ratio": "4",
                 },
                 environment_extra=materialized_environment_extra,
+                default_replication_factor=2,
             ),
             Clusterd(
                 name="clusterd1",
@@ -225,6 +228,7 @@ def workflow_rehydration(c: Composition) -> None:
                     "storage_rocksdb_use_merge_operator": "true",
                 },
                 environment_extra=materialized_environment_extra,
+                default_replication_factor=2,
             ),
             Clusterd(
                 name="clusterd1",
@@ -250,6 +254,7 @@ def workflow_rehydration(c: Composition) -> None:
                     "storage_dataflow_delay_sources_past_rehydration": "true",
                 },
                 environment_extra=materialized_environment_extra,
+                default_replication_factor=2,
             ),
             Clusterd(
                 name="clusterd1",
@@ -352,6 +357,7 @@ def workflow_incident_49(c: Composition) -> None:
                     "storage_dataflow_delay_sources_past_rehydration": "true",
                 },
                 environment_extra=materialized_environment_extra,
+                default_replication_factor=2,
             ),
         ),
         (
@@ -362,6 +368,7 @@ def workflow_incident_49(c: Composition) -> None:
                     "storage_dataflow_delay_sources_past_rehydration": "true",
                 },
                 environment_extra=materialized_environment_extra,
+                default_replication_factor=2,
             ),
         ),
     ]:
@@ -500,6 +507,7 @@ def workflow_autospill(c: Composition) -> None:
                     "unsafe_enable_unorchestrated_cluster_replicas": "true",
                     "storage_dataflow_delay_sources_past_rehydration": "true",
                 },
+                default_replication_factor=2,
             ),
         ),
         (
@@ -517,6 +525,7 @@ def workflow_autospill(c: Composition) -> None:
                     # Enable the RocksDB merge operator
                     "storage_rocksdb_use_merge_operator": "true",
                 },
+                default_replication_factor=2,
             ),
         ),
     ]:
@@ -570,6 +579,7 @@ def workflow_load_test(c: Composition, parser: WorkflowArgumentParser) -> None:
                 "storage_dataflow_max_inflight_bytes_disk_only": "true",
             },
             environment_extra=materialized_environment_extra,
+            default_replication_factor=2,
         ),
         Clusterd(
             name="clusterd1",
@@ -671,6 +681,7 @@ def workflow_load_test(c: Composition, parser: WorkflowArgumentParser) -> None:
                     ],
                     additional_system_parameter_defaults=mz_configs,
                     environment_extra=materialized_environment_extra,
+                    default_replication_factor=2,
                 ),
             ):
                 c.kill("materialized", "clusterd1")

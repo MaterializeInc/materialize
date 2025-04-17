@@ -9,7 +9,7 @@
 from textwrap import dedent
 
 from materialize.checks.actions import Testdrive
-from materialize.checks.checks import Check
+from materialize.checks.checks import Check, disabled
 from materialize.checks.common import KAFKA_SCHEMA_WITH_SINGLE_STRING_FIELD
 from materialize.checks.executors import Executor
 from materialize.mz_version import MzVersion
@@ -132,6 +132,9 @@ class Webhook(Check):
         )
 
 
+@disabled(
+    "Reenable when database-issues#9184 is fixed and there is a way to set the cluster"
+)
 class WebhookTable(Check):
     def _can_run(self, e: Executor) -> bool:
         return self.base_version >= MzVersion.parse_mz("v0.130.0-dev")
@@ -141,7 +144,10 @@ class WebhookTable(Check):
             schemas()
             + dedent(
                 """
+                > CREATE CLUSTER webhook_table_cluster REPLICAS (r1 (SIZE '1'));
+                > SET cluster = webhook_table_cluster
                 > CREATE TABLE webhook_table_text FROM WEBHOOK BODY FORMAT TEXT;
+                > SET cluster = quickstart
 
                 $ webhook-append database=materialize schema=public name=webhook_table_text
                 hello_world

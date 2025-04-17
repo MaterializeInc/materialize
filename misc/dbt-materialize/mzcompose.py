@@ -63,6 +63,10 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
                 options=test_case.materialized_options,
                 image=test_case.materialized_image,
                 volumes_extra=["secrets:/secrets"],
+                default_replication_factor=1,
+                additional_system_parameter_defaults={
+                    "default_cluster_replication_factor": "1"
+                },
             )
             test_args = ["dbt-materialize/tests"]
             if args.k:

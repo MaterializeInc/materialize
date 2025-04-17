@@ -35,7 +35,7 @@ SERVICES = [
     Kafka(),
     SchemaRegistry(),
     Mz(app_password=""),
-    Materialized(),
+    Materialized(default_replication_factor=2),
     Toxiproxy(),
     Testdrive(no_reset=True, seed=1),
 ]

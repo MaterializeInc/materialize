@@ -52,6 +52,7 @@ SERVICES = [
         additional_system_parameter_defaults={
             "log_filter": "mz_storage::source::mysql=trace,info"
         },
+        default_replication_factor=2,
     ),
     create_mysql(MySql.DEFAULT_VERSION),
     create_mysql_replica(MySql.DEFAULT_VERSION),
@@ -378,6 +379,7 @@ def workflow_source_timeouts(c: Composition, parser: WorkflowArgumentParser) -> 
             additional_system_parameter_defaults={
                 "log_filter": "mz_storage::source::mysql=trace,info"
             },
+            default_replication_factor=2,
         ),
         Toxiproxy(),
         create_mysql(mysql_version),

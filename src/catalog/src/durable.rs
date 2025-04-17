@@ -530,7 +530,7 @@ pub async fn persist_backed_catalog_state(
 pub fn test_bootstrap_args() -> BootstrapArgs {
     BootstrapArgs {
         default_cluster_replica_size: "1".into(),
-        default_cluster_replication_factor: 2,
+        default_cluster_replication_factor: 1,
         bootstrap_role: None,
         cluster_replica_size_map: ClusterReplicaSizeMap::for_tests(),
     }

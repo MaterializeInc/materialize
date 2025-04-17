@@ -1268,7 +1268,8 @@ class AlterSinkWebhook(Check):
         return Testdrive(
             dedent(
                 """
-                > CREATE SOURCE webhook_alter1 FROM WEBHOOK BODY FORMAT TEXT;
+                > CREATE CLUSTER sink_webhook_cluster SIZE '1', REPLICATION FACTOR 1;
+                > CREATE SOURCE webhook_alter1 IN CLUSTER sink_webhook_cluster FROM WEBHOOK BODY FORMAT TEXT;
                 > CREATE SINK sink_alter_wh FROM webhook_alter1
                   INTO KAFKA CONNECTION kafka_conn (TOPIC 'sink-alter-wh')
                   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
@@ -1284,7 +1285,7 @@ class AlterSinkWebhook(Check):
             Testdrive(dedent(s))
             for s in [
                 """
-                > CREATE SOURCE webhook_alter2 FROM WEBHOOK BODY FORMAT TEXT;
+                > CREATE SOURCE webhook_alter2 IN CLUSTER sink_webhook_cluster FROM WEBHOOK BODY FORMAT TEXT;
 
                 $ set-from-sql var=running_count
                 SELECT COUNT(*)::text FROM mz_internal.mz_sink_status_history JOIN mz_sinks ON mz_internal.mz_sink_status_history.sink_id = mz_sinks.id WHERE name = 'sink_alter_wh';
@@ -1298,7 +1299,7 @@ class AlterSinkWebhook(Check):
                 2
                 """,
                 """
-                > CREATE SOURCE webhook_alter3 FROM WEBHOOK BODY FORMAT TEXT;
+                > CREATE SOURCE webhook_alter3 IN CLUSTER sink_webhook_cluster FROM WEBHOOK BODY FORMAT TEXT;
 
                 $ set-from-sql var=running_count
                 SELECT COUNT(*)::text FROM mz_internal.mz_sink_status_history JOIN mz_sinks ON mz_internal.mz_sink_status_history.sink_id = mz_sinks.id WHERE name = 'sink_alter_wh';

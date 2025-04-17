@@ -47,7 +47,7 @@ CONFLUENT_PLATFORM_VERSIONS = [
 ]
 
 SERVICES = [
-    Materialized(),
+    Materialized(default_replication_factor=2),
     # Occasional timeouts in CI with 60s timeout
     Testdrive(
         volumes_extra=["../testdrive:/workdir/testdrive"], default_timeout="120s"
