@@ -53,7 +53,7 @@ use mz_pgwire_common::{ConnectionCounter, ConnectionHandle};
 use mz_repr::user::ExternalUserMetadata;
 use mz_server_core::{Connection, ConnectionHandler, ReloadingSslContext, Server};
 use mz_sql::session::metadata::SessionMetadata;
-use mz_sql::session::user::{HTTP_DEFAULT_USER, SUPPORT_USER_NAME, SYSTEM_USER_NAME};
+use mz_sql::session::user::HTTP_DEFAULT_USER;
 use mz_sql::session::vars::{Value, Var, VarInput, WELCOME_MESSAGE};
 use openssl::ssl::Ssl;
 use prometheus::{
@@ -100,7 +100,7 @@ const SESSION_DURATION: Duration = Duration::from_secs(3600); // 1 hour
 pub struct HttpConfig {
     pub source: &'static str,
     pub tls: Option<ReloadingTlsConfig>,
-    pub authenticator: Authenticator,
+    pub authenticator: Arc<Authenticator>,
     pub adapter_client: mz_adapter::Client,
     pub allowed_origin: AllowOrigin,
     pub active_connection_counter: ConnectionCounter,
@@ -108,6 +108,13 @@ pub struct HttpConfig {
     pub concurrent_webhook_req: Arc<tokio::sync::Semaphore>,
     pub metrics: Metrics,
     pub allow_reserved_roles: bool,
+    pub internal_route_config: Option<InternalRouteConfig>,
+}
+
+#[derive(Debug, Clone)]
+pub struct InternalRouteConfig {
+    pub deployment_state_handle: DeploymentStateHandle,
+    pub internal_console_redirect_url: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -156,10 +163,10 @@ impl HttpServer {
             concurrent_webhook_req,
             metrics,
             allow_reserved_roles,
+            internal_route_config,
         }: HttpConfig,
     ) -> HttpServer {
         let tls_mode = tls.as_ref().map(|tls| tls.mode).unwrap_or(TlsMode::Disable);
-        let authenticator = Arc::new(authenticator);
         let base_authenticator = Arc::clone(&authenticator);
         let (adapter_client_tx, adapter_client_rx) = oneshot::channel();
         adapter_client_tx
@@ -178,20 +185,22 @@ impl HttpServer {
             .with_name("mz_session") // Custom cookie name
             .with_path("/"); // Set cookie path
 
+        let auth_middleware = middleware::from_fn(move |req, next| {
+            let base_authenticator = Arc::clone(&base_authenticator);
+            async move {
+                http_auth(
+                    req,
+                    next,
+                    tls_mode,
+                    base_authenticator,
+                    allow_reserved_roles,
+                )
+                .await
+            }
+        });
+        let mut router = Router::new();
         let mut base_router = base_router(BaseRouterConfig { profiling: false })
-            .layer(middleware::from_fn(move |req, next| {
-                let base_authenticator = Arc::clone(&base_authenticator);
-                async move {
-                    http_auth(
-                        req,
-                        next,
-                        tls_mode,
-                        base_authenticator,
-                        allow_reserved_roles,
-                    )
-                    .await
-                }
-            }))
+            .layer(auth_middleware.clone())
             .layer(Extension(adapter_client_rx.clone()))
             .layer(Extension(active_connection_counter.clone()))
             .layer(
@@ -211,6 +220,81 @@ impl HttpServer {
             base_router = base_router.layer(session_layer.clone());
         }
 
+        if let Some(internal_route_config) = internal_route_config {
+            let console_config = Arc::new(console::ConsoleProxyConfig::new(
+                internal_route_config.internal_console_redirect_url,
+                "/internal-console".to_string(),
+            ));
+            base_router = base_router
+                .route(
+                    "/api/opentelemetry/config",
+                    routing::put({
+                        move |_: axum::Json<DynamicFilterTarget>| async {
+                            (
+                                StatusCode::BAD_REQUEST,
+                                "This endpoint has been replaced. \
+                            Use the `opentelemetry_filter` system variable."
+                                    .to_string(),
+                            )
+                        }
+                    }),
+                )
+                .route(
+                    "/api/stderr/config",
+                    routing::put({
+                        move |_: axum::Json<DynamicFilterTarget>| async {
+                            (
+                                StatusCode::BAD_REQUEST,
+                                "This endpoint has been replaced. \
+                            Use the `log_filter` system variable."
+                                    .to_string(),
+                            )
+                        }
+                    }),
+                )
+                .route("/api/tracing", routing::get(mz_http_util::handle_tracing))
+                .route(
+                    "/api/catalog/dump",
+                    routing::get(catalog::handle_catalog_dump),
+                )
+                .route(
+                    "/api/catalog/check",
+                    routing::get(catalog::handle_catalog_check),
+                )
+                .route(
+                    "/api/coordinator/check",
+                    routing::get(catalog::handle_coordinator_check),
+                )
+                .route(
+                    "/api/coordinator/dump",
+                    routing::get(catalog::handle_coordinator_dump),
+                )
+                .route(
+                    "/internal-console",
+                    routing::get(|| async { Redirect::temporary("/internal-console/") }),
+                )
+                .route(
+                    "/internal-console/*path",
+                    routing::get(console::handle_internal_console),
+                )
+                .route(
+                    "/internal-console/",
+                    routing::get(console::handle_internal_console),
+                )
+                .layer(Extension(console_config));
+            let leader_router = Router::new()
+                .route("/api/leader/status", routing::get(handle_leader_status))
+                .route("/api/leader/promote", routing::post(handle_leader_promote))
+                .route(
+                    "/api/leader/skip-catchup",
+                    routing::post(handle_leader_skip_catchup),
+                )
+                .layer(auth_middleware)
+                .with_state(internal_route_config.deployment_state_handle);
+            router = router.merge(leader_router);
+        }
+
+        // TODO WTF does this even have auth right now?
         let ws_router = Router::new()
             .route("/api/experimental/sql", routing::get(sql::handle_sql_ws))
             .with_state(WsState {
@@ -252,7 +336,7 @@ impl HttpServer {
                     )),
             );
 
-        let router = Router::new()
+        router = router
             .merge(base_router)
             .merge(ws_router)
             .merge(webhook_router)
@@ -396,19 +480,6 @@ impl Server for MetricsHttpServer {
     }
 }
 
-pub struct InternalHttpConfig {
-    pub metrics_registry: MetricsRegistry,
-    pub adapter_client_rx: oneshot::Receiver<mz_adapter::Client>,
-    pub active_connection_counter: ConnectionCounter,
-    pub helm_chart_version: Option<String>,
-    pub deployment_state_handle: DeploymentStateHandle,
-    pub internal_console_redirect_url: Option<String>,
-}
-
-pub struct InternalHttpServer {
-    router: Router,
-}
-
 pub async fn handle_leader_status(
     State(deployment_state_handle): State<DeploymentStateHandle>,
 ) -> impl IntoResponse {
@@ -453,205 +524,6 @@ pub async fn handle_leader_skip_catchup(
             }));
             (status, body).into_response()
         }
-    }
-}
-
-impl InternalHttpServer {
-    pub fn new(
-        InternalHttpConfig {
-            metrics_registry,
-            adapter_client_rx,
-            active_connection_counter,
-            helm_chart_version,
-            deployment_state_handle,
-            internal_console_redirect_url,
-        }: InternalHttpConfig,
-    ) -> InternalHttpServer {
-        let metrics = Metrics::register_into(&metrics_registry, "mz_internal_http");
-        let console_config = Arc::new(console::ConsoleProxyConfig::new(
-            internal_console_redirect_url,
-            "/internal-console".to_string(),
-        ));
-
-        let adapter_client_rx = adapter_client_rx.shared();
-        let router = base_router(BaseRouterConfig { profiling: true })
-            .route(
-                "/metrics",
-                routing::get(move || async move {
-                    mz_http_util::handle_prometheus(&metrics_registry).await
-                }),
-            )
-            .route(
-                "/metrics/mz_usage",
-                routing::get(|client: AuthedClient| async move {
-                    let registry = sql::handle_promsql(client, USAGE_METRIC_QUERIES).await;
-                    mz_http_util::handle_prometheus(&registry).await
-                }),
-            )
-            .route(
-                "/metrics/mz_frontier",
-                routing::get(|client: AuthedClient| async move {
-                    let registry = sql::handle_promsql(client, FRONTIER_METRIC_QUERIES).await;
-                    mz_http_util::handle_prometheus(&registry).await
-                }),
-            )
-            .route(
-                "/metrics/mz_compute",
-                routing::get(|client: AuthedClient| async move {
-                    let registry = sql::handle_promsql(client, COMPUTE_METRIC_QUERIES).await;
-                    mz_http_util::handle_prometheus(&registry).await
-                }),
-            )
-            .route(
-                "/metrics/mz_storage",
-                routing::get(|client: AuthedClient| async move {
-                    let registry = sql::handle_promsql(client, STORAGE_METRIC_QUERIES).await;
-                    mz_http_util::handle_prometheus(&registry).await
-                }),
-            )
-            .route(
-                "/api/livez",
-                routing::get(mz_http_util::handle_liveness_check),
-            )
-            .route("/api/readyz", routing::get(probe::handle_ready))
-            .route(
-                "/api/opentelemetry/config",
-                routing::put({
-                    move |_: axum::Json<DynamicFilterTarget>| async {
-                        (
-                            StatusCode::BAD_REQUEST,
-                            "This endpoint has been replaced. \
-                            Use the `opentelemetry_filter` system variable."
-                                .to_string(),
-                        )
-                    }
-                }),
-            )
-            .route(
-                "/api/stderr/config",
-                routing::put({
-                    move |_: axum::Json<DynamicFilterTarget>| async {
-                        (
-                            StatusCode::BAD_REQUEST,
-                            "This endpoint has been replaced. \
-                            Use the `log_filter` system variable."
-                                .to_string(),
-                        )
-                    }
-                }),
-            )
-            .route("/api/tracing", routing::get(mz_http_util::handle_tracing))
-            .route(
-                "/api/catalog/dump",
-                routing::get(catalog::handle_catalog_dump),
-            )
-            .route(
-                "/api/catalog/check",
-                routing::get(catalog::handle_catalog_check),
-            )
-            .route(
-                "/api/coordinator/check",
-                routing::get(catalog::handle_coordinator_check),
-            )
-            .route(
-                "/api/coordinator/dump",
-                routing::get(catalog::handle_coordinator_dump),
-            )
-            .route(
-                "/internal-console",
-                routing::get(|| async { Redirect::temporary("/internal-console/") }),
-            )
-            .route(
-                "/internal-console/*path",
-                routing::get(console::handle_internal_console),
-            )
-            .route(
-                "/internal-console/",
-                routing::get(console::handle_internal_console),
-            )
-            .layer(middleware::from_fn(internal_http_auth))
-            .layer(Extension(adapter_client_rx.clone()))
-            .layer(Extension(console_config))
-            .layer(Extension(active_connection_counter.clone()));
-
-        let ws_router = Router::new()
-            .route("/api/experimental/sql", routing::get(sql::handle_sql_ws))
-            // This middleware extracts the MZ user from the x-materialize-user http header.
-            // Normally, browser-initiated websocket requests do not support headers, however for the
-            // Internal HTTP Server the browser would be connecting through teleport, which should
-            // attach the x-materialize-user header to all requests it proxies to this api.
-            .layer(middleware::from_fn(internal_http_auth))
-            .with_state(WsState {
-                // TODO pass around Arc<Authenticator> everywhere?
-                authenticator: Arc::new(Authenticator::None),
-                adapter_client_rx,
-                active_connection_counter,
-                helm_chart_version: helm_chart_version.clone(),
-                allow_reserved_roles: true,
-            });
-
-        let leader_router = Router::new()
-            .route("/api/leader/status", routing::get(handle_leader_status))
-            .route("/api/leader/promote", routing::post(handle_leader_promote))
-            .route(
-                "/api/leader/skip-catchup",
-                routing::post(handle_leader_skip_catchup),
-            )
-            .with_state(deployment_state_handle);
-
-        let router = router
-            .merge(ws_router)
-            .merge(leader_router)
-            .apply_default_layers("internal", metrics);
-
-        InternalHttpServer { router }
-    }
-}
-
-async fn internal_http_auth(mut req: Request, next: Next) -> impl IntoResponse {
-    let user_name = req
-        .headers()
-        .get("x-materialize-user")
-        .map(|h| h.to_str())
-        .unwrap_or_else(|| Ok(SYSTEM_USER_NAME));
-    let user_name = match user_name {
-        Ok(name @ (SUPPORT_USER_NAME | SYSTEM_USER_NAME)) => name.to_string(),
-        _ => {
-            return Err(AuthError::MismatchedUser(format!(
-                "user specified in x-materialize-user must be {SUPPORT_USER_NAME} or {SYSTEM_USER_NAME}"
-            )));
-        }
-    };
-    req.extensions_mut().insert(AuthedUser {
-        name: user_name,
-        external_metadata_rx: None,
-    });
-    Ok(next.run(req).await)
-}
-
-#[async_trait]
-impl Server for InternalHttpServer {
-    const NAME: &'static str = "internal_http";
-
-    fn handle_connection(&self, mut conn: Connection) -> ConnectionHandler {
-        let router = self.router.clone();
-
-        Box::pin(async {
-            let mut make_tower_svc = router.into_make_service_with_connect_info::<SocketAddr>();
-            let direct_peer_addr = conn.peer_addr().context("fetching peer addr")?;
-            let peer_addr = conn
-                .take_proxy_header_address()
-                .await
-                .map(|a| a.source)
-                .unwrap_or(direct_peer_addr);
-            let tower_svc = make_tower_svc.call(peer_addr).await?;
-            let service = hyper::service::service_fn(|req| tower_svc.clone().call(req));
-            let http = hyper::server::conn::http1::Builder::new();
-            http.serve_connection(TokioIo::new(conn), service)
-                .with_upgrades()
-                .err_into()
-                .await
-        })
     }
 }
 
@@ -817,8 +689,6 @@ enum AuthError {
     Frontegg(#[from] FronteggError),
     #[error("missing authorization header")]
     MissingHttpAuthentication,
-    #[error("{0}")]
-    MismatchedUser(String),
     #[error("session expired")]
     SessionExpired,
     #[error("failed to update session")]

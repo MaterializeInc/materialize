@@ -55,15 +55,13 @@ use mz_secrets::SecretsController;
 use mz_server_core::{ConnectionStream, ListenerHandle, ReloadTrigger, ServeConfig, TlsCertConfig};
 use mz_sql::catalog::EnvironmentId;
 use mz_sql::session::vars::{Value, VarInput};
-use tokio::sync::oneshot;
 use tower_http::cors::AllowOrigin;
 use tracing::{Instrument, info, info_span};
 
 use crate::deployment::preflight::{PreflightInput, PreflightOutput};
 use crate::deployment::state::DeploymentState;
 use crate::http::{
-    HttpConfig, HttpServer, InternalHttpConfig, InternalHttpServer, MetricsHttpConfig,
-    MetricsHttpServer,
+    HttpConfig, HttpServer, InternalRouteConfig, MetricsHttpConfig, MetricsHttpServer,
 };
 
 pub use crate::http::{SqlResponse, WebSocketAuth, WebSocketResponse};
@@ -342,26 +340,6 @@ impl Listeners {
             mz_server_core::serve(ServeConfig {
                 server: metrics_http_server,
                 conns: metrics_http_conns,
-                // `environmentd` does not currently need to dynamically
-                // configure graceful termination behavior.
-                dyncfg: None,
-            })
-        });
-
-        // TODO start this later and make it the same as the external one
-        let (internal_http_adapter_client_tx, internal_http_adapter_client_rx) = oneshot::channel();
-        task::spawn(|| "internal_http_server", {
-            let internal_http_server = InternalHttpServer::new(InternalHttpConfig {
-                metrics_registry: config.metrics_registry.clone(),
-                adapter_client_rx: internal_http_adapter_client_rx,
-                active_connection_counter: active_connection_counter.clone(),
-                helm_chart_version: config.helm_chart_version.clone(),
-                deployment_state_handle,
-                internal_console_redirect_url: config.internal_console_redirect_url,
-            });
-            mz_server_core::serve(ServeConfig {
-                server: internal_http_server,
-                conns: internal_http_conns,
                 // `environmentd` does not currently need to dynamically
                 // configure graceful termination behavior.
                 dyncfg: None,
@@ -762,10 +740,6 @@ impl Listeners {
         let serve_postamble_start = Instant::now();
         info!("startup: envd serve: postamble beginning");
 
-        // Install an adapter client in the internal HTTP server.
-        internal_http_adapter_client_tx
-            .send(adapter_client.clone())
-            .expect("internal HTTP server should not drop first");
         let external_authenticator = match config.external_authenticator_kind {
             AuthenticatorKind::Frontegg => Authenticator::Frontegg(
                 FronteggAuthenticator::from_args(
@@ -851,7 +825,7 @@ impl Listeners {
             let http_server = HttpServer::new(HttpConfig {
                 source: "external",
                 tls: http_tls,
-                authenticator: external_authenticator,
+                authenticator: Arc::new(external_authenticator),
                 adapter_client: adapter_client.clone(),
                 allowed_origin: config.cors_allowed_origin.clone(),
                 active_connection_counter: active_connection_counter.clone(),
@@ -859,10 +833,40 @@ impl Listeners {
                 concurrent_webhook_req: webhook_concurrency_limit.semaphore(),
                 metrics: http_metrics.clone(),
                 allow_reserved_roles: config.allow_reserved_roles_on_external_ports,
+                internal_route_config: None,
             });
             mz_server_core::serve(ServeConfig {
                 conns: http_conns,
                 server: http_server,
+                // `environmentd` does not currently need to dynamically
+                // configure graceful termination behavior.
+                dyncfg: None,
+            })
+        });
+
+        let internal_http_metrics =
+            http::Metrics::register_into(&config.metrics_registry, "mz_internal_http");
+        task::spawn(|| "internal_http_server", {
+            let internal_http_server = HttpServer::new(HttpConfig {
+                source: "internal",
+                // TODO
+                tls: None,
+                authenticator: Arc::new(internal_authenticator),
+                adapter_client: adapter_client.clone(),
+                allowed_origin: config.cors_allowed_origin.clone(),
+                active_connection_counter: active_connection_counter.clone(),
+                helm_chart_version: config.helm_chart_version.clone(),
+                concurrent_webhook_req: webhook_concurrency_limit.semaphore(),
+                metrics: internal_http_metrics.clone(),
+                allow_reserved_roles: true,
+                internal_route_config: Some(InternalRouteConfig {
+                    deployment_state_handle,
+                    internal_console_redirect_url: config.internal_console_redirect_url,
+                }),
+            });
+            mz_server_core::serve(ServeConfig {
+                server: internal_http_server,
+                conns: internal_http_conns,
                 // `environmentd` does not currently need to dynamically
                 // configure graceful termination behavior.
                 dyncfg: None,
