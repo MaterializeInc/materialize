@@ -1559,6 +1559,8 @@ fn is_txn_exit_stmt(stmt: &Statement<Raw>) -> bool {
 mod tests {
     use std::collections::BTreeMap;
 
+    use mz_auth::password::Password;
+
     use super::WebSocketAuth;
 
     #[mz_ore::test]
@@ -1573,7 +1575,7 @@ mod tests {
                 json: r#"{ "user": "mz", "password": "1234" }"#,
                 expected: WebSocketAuth::Basic {
                     user: "mz".to_string(),
-                    password: "1234".to_string(),
+                    password: Password("1234".to_string()),
                     options: BTreeMap::default(),
                 },
             },
@@ -1581,7 +1583,7 @@ mod tests {
                 json: r#"{ "user": "mz", "password": "1234", "options": {} }"#,
                 expected: WebSocketAuth::Basic {
                     user: "mz".to_string(),
-                    password: "1234".to_string(),
+                    password: Password("1234".to_string()),
                     options: BTreeMap::default(),
                 },
             },

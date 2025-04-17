@@ -52,7 +52,6 @@ use mz_authenticator::AuthenticatorKind;
 use mz_catalog::config::ClusterReplicaSizeMap;
 use mz_controller::ControllerConfig;
 use mz_environmentd::CatalogConfig;
-use mz_frontegg_auth::FronteggCliArgs;
 use mz_license_keys::ValidatedLicenseKey;
 use mz_orchestrator_process::{ProcessOrchestrator, ProcessOrchestratorConfig};
 use mz_orchestrator_tracing::{TracingCliArgs, TracingOrchestrator};
@@ -1043,7 +1042,7 @@ impl<'a> RunnerInner<'a> {
             secrets_controller,
             cloud_resource_controller: None,
             tls: None,
-            frontegg: FronteggCliArgs::default(),
+            frontegg: None,
             external_authenticator_kind: AuthenticatorKind::None,
             internal_authenticator_kind: AuthenticatorKind::None,
             cors_allowed_origin: AllowOrigin::list([]),
