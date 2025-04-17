@@ -113,15 +113,6 @@ headers  to each message emitted by the sink.
 For more information, see [`CREATE SINK`: `PARTITION
 BY`](/sql/create-sink/kafka/#headers).
 
-### Sink partitioning strategy
-
-Materialize adds the `PARTITION BY` option to the [`CREATE
-SINK`](/sql/create-sink/kafka/#partitioning) command to support  custom
-partitioning strategy.
-
-For more information, see [`CREATE SINK`: `PARTITION
-BY`](/sql/create-sink/kafka/#partitioning).
-
 ### Value decoding error handling
 
 Materialize adds the `VALUE DECODING ERRORS = INLINE` option to configure the
