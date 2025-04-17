@@ -3518,8 +3518,8 @@ where
         let histogram_period =
             WallclockLagHistogramPeriod::from_epoch_millis(now_ms, self.config.config_set());
 
-        let frontier_lag = |frontier: &Antichain<_>| match frontier.as_option() {
-            Some(ts) => (self.wallclock_lag)(ts),
+        let frontier_lag = |frontier: &Antichain<T>| match frontier.as_option() {
+            Some(ts) => (self.wallclock_lag)(ts.clone()),
             None => Duration::ZERO,
         };
 

@@ -586,7 +586,7 @@ where
             self.envd_epoch,
             self.metrics.for_instance(id),
             self.now.clone(),
-            Arc::clone(&self.wallclock_lag),
+            self.wallclock_lag.clone(),
             Arc::clone(&self.dyncfg),
             self.response_tx.clone(),
             self.introspection_tx.clone(),
