@@ -13,7 +13,7 @@
 //! `SHOW CREATE TABLE` and `SHOW VIEWS`. Note that `SHOW <var>` is considered
 //! an SCL statement.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Write;
 
 use mz_ore::assert_none;
@@ -23,7 +23,8 @@ use mz_sql_parser::ast::display::{AstDisplay, FormatMode};
 use mz_sql_parser::ast::{
     CreateSubsourceOptionName, ExternalReferenceExport, ExternalReferences, ObjectType,
     ShowCreateClusterStatement, ShowCreateConnectionStatement, ShowCreateMaterializedViewStatement,
-    ShowObjectType, SystemObjectType, UnresolvedItemName, WithOptionValue,
+    ShowObjectType, SqlServerConfigOptionName, SystemObjectType, UnresolvedItemName,
+    WithOptionValue,
 };
 use mz_sql_pretty::PrettyConfig;
 use query::QueryContext;
@@ -1102,11 +1103,52 @@ fn humanize_sql_for_show_create(
                         }
                     });
                 }
-                CreateSourceConnection::SqlServer { .. } => {
-                    // TODO(sql_server1): Handle SHOW CREATE CONNECTION for SQL Server.
-                    return Err(PlanError::Unsupported {
-                        feature: "SHOW CREATE CONNECTION SQL SERVER".to_string(),
-                        discussion_no: None,
+                CreateSourceConnection::SqlServer { options, .. } => {
+                    // TODO(sql_server2): TEXT and EXCLUDE columns operate on 'schema.table.column'
+                    // names, but our references are also qualified by 'database'. We handle the
+                    // mismatch here but should improve the situation.
+                    let adjusted_references: BTreeSet<_> = curr_references
+                        .keys()
+                        .map(|name| {
+                            if name.0.len() == 3 {
+                                let adjusted_name = name.0[1..].to_vec();
+                                UnresolvedItemName(adjusted_name)
+                            } else {
+                                name.clone()
+                            }
+                        })
+                        .collect();
+
+                    options.retain_mut(|o| {
+                        match o.name {
+                            // Dropping a subsource does not remove any `TEXT COLUMNS`
+                            // values that refer to the table it ingests, which we'll
+                            // handle below.
+                            SqlServerConfigOptionName::TextColumns
+                            | SqlServerConfigOptionName::ExcludeColumns => {}
+                            // Drop details, which does not roundtrip.
+                            SqlServerConfigOptionName::Details => return false,
+                        };
+
+                        match &mut o.value {
+                            Some(WithOptionValue::Sequence(seq_unresolved_item_names)) => {
+                                seq_unresolved_item_names.retain(|v| match v {
+                                    WithOptionValue::UnresolvedItemName(n) => {
+                                        let mut name = n.clone();
+                                        // Remove column reference.
+                                        name.0.truncate(2);
+                                        adjusted_references.contains(&name)
+                                    }
+                                    _ => unreachable!(
+                                        "TEXT COLUMNS + EXCLUDE COLUMNS must be sequence of unresolved item names"
+                                    ),
+                                });
+                                !seq_unresolved_item_names.is_empty()
+                            }
+                            _ => unreachable!(
+                                "TEXT COLUMNS + EXCLUDE COLUMNS must be sequence of unresolved item names"
+                            ),
+                        }
                     });
                 }
                 CreateSourceConnection::MySql { options, .. } => {
