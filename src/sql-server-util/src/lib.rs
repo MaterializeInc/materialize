@@ -62,7 +62,7 @@ impl Client {
     /// IntoFuture and does the default good thing of moving the `Connection`
     /// into a tokio task? And a `.raw()` option that will instead return both
     /// the Client and Connection for manual polling.
-    pub async fn connect(config: Config) -> Result<(Self, Connection), SqlServerError> {
+    pub async fn connect(config: Config) -> Result<Self, SqlServerError> {
         // Setup our tunnelling and return any resources that need to be kept
         // alive for the duration of the connection.
         let (tcp, resources): (_, Option<Box<dyn Any + Send + Sync>>) = match &config.tunnel {
@@ -100,7 +100,13 @@ impl Client {
         };
 
         tcp.set_nodelay(true)?;
-        Self::connect_raw(config, tcp, resources).await
+
+        let (client, connection) = Self::connect_raw(config, tcp, resources).await?;
+        mz_ore::task::spawn(|| "sql-server-client-connection", async move {
+            connection.await
+        });
+
+        Ok(client)
     }
 
     pub async fn connect_raw(

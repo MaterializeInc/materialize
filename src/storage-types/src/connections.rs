@@ -2073,7 +2073,7 @@ impl SqlServerConnectionDetails<InlinedConnection> {
         tracing::debug!(?config, "Validating SQL Server connection");
 
         // Just connecting is enough to validate, no need to send any queries.
-        let (_client, _conn) = mz_sql_server_util::Client::connect(config).await?;
+        let _client = mz_sql_server_util::Client::connect(config).await?;
 
         Ok(())
     }

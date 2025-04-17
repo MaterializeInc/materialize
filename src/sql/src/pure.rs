@@ -971,10 +971,7 @@ async fn purify_create_source(
                     InTask::No,
                 )
                 .await?;
-            let (mut client, conn) = mz_sql_server_util::Client::connect(config).await?;
-            // TODO(sql_server1): Create a version of the client where we don't need to separately
-            // spawn this task.
-            mz_ore::task::spawn(|| "sql-server-conn", async move { conn.await });
+            let mut client = mz_sql_server_util::Client::connect(config).await?;
 
             // Ensure the upstream SQL Server instance is configured to allow CDC.
             //
@@ -1599,11 +1596,7 @@ async fn purify_alter_source_add_subsources(
                     InTask::No,
                 )
                 .await?;
-            let (mut client, conn) = mz_sql_server_util::Client::connect(config).await?;
-            // TODO(sql_server1): Move the spawning of this task into the SQL Server client.
-            mz_ore::task::spawn(|| "sql-server-connection", async move {
-                conn.await;
-            });
+            let mut client = mz_sql_server_util::Client::connect(config).await?;
 
             // Query the upstream SQL Server instance for available tables to replicate.
             let database = sql_server_connection.database.clone().into();
@@ -1723,11 +1716,7 @@ async fn purify_alter_source_refresh_references(
                     InTask::No,
                 )
                 .await?;
-            let (mut client, conn) = mz_sql_server_util::Client::connect(config).await?;
-            // TODO(sql_server1): Move the spawning of this task into the SQL Server client.
-            mz_ore::task::spawn(|| "sql-server-connection", async move {
-                conn.await;
-            });
+            let mut client = mz_sql_server_util::Client::connect(config).await?;
 
             // Query the upstream SQL Server instance for available tables to replicate.
             let source_references = SourceReferenceClient::SqlServer {

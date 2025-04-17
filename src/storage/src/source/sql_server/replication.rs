@@ -98,10 +98,7 @@ pub(crate) fn render<G: Scope<Timestamp = Lsn>>(
                     InTask::Yes,
                 )
                 .await?;
-            let (mut client, connection) =
-                mz_sql_server_util::Client::connect(connection_config).await?;
-            // TODO(sql_server1): Move the connection into its own future.
-            mz_ore::task::spawn(|| "sql_server-connection", async move { connection.await });
+            let mut client = mz_sql_server_util::Client::connect(connection_config).await?;
 
             let output_indexes: Vec<_> = outputs
                 .values()
