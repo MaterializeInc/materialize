@@ -753,8 +753,8 @@ pub enum SqlServerError {
     IO(#[from] tokio::io::Error),
     #[error("found invalid data in the column '{column_name}': {error}")]
     InvalidData { column_name: String, error: String },
-    #[error("got back a null value when querying for the max LSN")]
-    NullMaxLsn,
+    #[error("got back a null value when querying for the LSN")]
+    NullLsn,
     #[error("invalid SQL Server system setting '{name}'. Expected '{expected}'. Got '{actual}'.")]
     InvalidSystemSetting {
         name: String,
@@ -819,14 +819,17 @@ impl SqlServerDecodeError {
         }
     }
 
-    fn invalid_decimal(name: &str, error: dec::ParseDecimalError) -> Self {
-        // These error messages need to remain stable. We're using our own message here
-        // but it's worthwhile to know if `dec` changes the message it returns.
-        let msg = "invalid decimal syntax";
-        mz_ore::soft_assert_eq_or_log!(error.to_string(), msg);
+    fn invalid_char(name: &str, expected_chars: usize, found_chars: usize) -> Self {
         SqlServerDecodeError::InvalidData {
             column_name: name.to_string(),
-            error: msg.to_string(),
+            error: format!("expected {expected_chars} chars found {found_chars}"),
+        }
+    }
+
+    fn invalid_varchar(name: &str, max_chars: usize, found_chars: usize) -> Self {
+        SqlServerDecodeError::InvalidData {
+            column_name: name.to_string(),
+            error: format!("expected max {max_chars} chars found {found_chars}"),
         }
     }
 

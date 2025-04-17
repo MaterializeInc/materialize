@@ -33,6 +33,7 @@ use std::time::Duration;
 
 use derivative::Derivative;
 use futures::{Stream, StreamExt};
+use mz_ore::retry::RetryResult;
 use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
 
@@ -134,29 +135,9 @@ impl<'a> CdcStream<'a> {
             crate::inspect::get_tables_for_capture_instance(self.client, instances).await?;
         tracing::info!(?tables, "got table for capture instance");
 
-        // Before we start a transaction, ensure SQL Server is reporting an LSN.
-        //
-        // If CDC was very recently enabled (e.g. < 30 seconds ago) then it will
-        // report NULL for an LSN. Before we start a transaction, which prevents
-        // the LSN from progressing, we want to wait a bit for SQL Server to
-        // become ready.
-        let (_client, lsn_result) = mz_ore::retry::Retry::default()
-            .max_duration(self.max_lsn_wait)
-            .retry_async_with_state(&mut self.client, |_, client| async {
-                use mz_ore::retry::RetryResult;
-                let result = crate::inspect::get_max_lsn(*client).await;
-                let result = match result {
-                    Ok(lsn) => RetryResult::Ok(lsn),
-                    Err(err @ SqlServerError::NullMaxLsn) => RetryResult::RetryableErr(err),
-                    Err(other) => RetryResult::FatalErr(other),
-                };
-                (client, result)
-            })
-            .await;
-        // Timed out waiting for SQL Server to become ready.
-        if let Err(e) = lsn_result {
-            return Err(e);
-        }
+        // Before starting a transaction where the LSN will not advance, ensure
+        // the upstream DB is ready for CDC.
+        self.wait_for_ready().await?;
 
         self.client
             .set_transaction_isolation(TransactionIsolationLevel::Snapshot)
@@ -342,6 +323,53 @@ impl<'a> CdcStream<'a> {
                 .into());
             }
         }
+
+        Ok(())
+    }
+
+    /// If CDC was recently enabled on an instance of SQL Server then it will report
+    /// `NULL` for the minimum LSN of a capture instance and/or the maximum LSN of the
+    /// entire database.
+    ///
+    /// This method runs a retry loop that waits for the upstream DB to report good
+    /// values. It should be called before taking the initial [`CdcStream::snapshot`]
+    /// to ensure the system is ready to proceed with CDC.
+    async fn wait_for_ready(&mut self) -> Result<(), SqlServerError> {
+        fn _map_result<T>(result: Result<T, SqlServerError>) -> RetryResult<T, SqlServerError> {
+            match result {
+                Ok(val) => RetryResult::Ok(val),
+                Err(err @ SqlServerError::NullLsn) => RetryResult::RetryableErr(err),
+                Err(other) => RetryResult::FatalErr(other),
+            }
+        }
+
+        // Ensure all of the capture instances are reporting an LSN.
+        for instance in self.capture_instances.keys() {
+            let (_client, min_result) = mz_ore::retry::Retry::default()
+                .max_duration(self.max_lsn_wait)
+                .retry_async_with_state(&mut self.client, |_, client| async {
+                    let result = crate::inspect::get_min_lsn(*client, &*instance).await;
+                    (client, _map_result(result))
+                })
+                .await;
+            if let Err(e) = min_result {
+                tracing::warn!(%instance, "did not report a minimum LSN in time");
+                return Err(e);
+            }
+        }
+
+        // Ensure the database is reporting a max LSN.
+        let (_client, lsn_result) = mz_ore::retry::Retry::default()
+            .max_duration(self.max_lsn_wait)
+            .retry_async_with_state(&mut self.client, |_, client| async {
+                let result = crate::inspect::get_max_lsn(*client).await;
+                (client, _map_result(result))
+            })
+            .await;
+        if let Err(e) = lsn_result {
+            tracing::warn!("database did not report a maximum LSN in time");
+            return Err(e);
+        };
 
         Ok(())
     }

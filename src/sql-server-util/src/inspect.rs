@@ -66,9 +66,9 @@ fn parse_lsn(result: &[tiberius::Row]) -> Result<Lsn, SqlServerError> {
         [row] => {
             let val = row
                 .try_get::<&[u8], _>(0)?
-                .ok_or_else(|| SqlServerError::NullMaxLsn)?;
+                .ok_or_else(|| SqlServerError::NullLsn)?;
             if val.is_empty() {
-                Err(SqlServerError::NullMaxLsn)
+                Err(SqlServerError::NullLsn)
             } else {
                 let lsn = Lsn::try_from(val).map_err(|msg| SqlServerError::InvalidData {
                     column_name: "lsn".to_string(),
@@ -214,7 +214,7 @@ SELECT
 FROM sys.tables t
 JOIN sys.schemas s ON t.schema_id = s.schema_id
 JOIN sys.columns c ON t.object_id = c.object_id
-JOIN sys.types ty ON c.system_type_id = ty.system_type_id
+JOIN sys.types ty ON c.user_type_id = ty.user_type_id
 JOIN cdc.change_tables ch ON t.object_id = ch.source_object_id
 ";
     fn get_value<'a, T: tiberius::FromSql<'a>>(

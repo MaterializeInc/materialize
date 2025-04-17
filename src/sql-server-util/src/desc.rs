@@ -22,10 +22,14 @@
 //! create a [`SqlServerRowDecoder`] which will be used when running a source
 //! to efficiently decode [`tiberius::Row`]s into [`mz_repr::Row`]s.
 
+use chrono::SubsecRound;
 use dec::OrderedDecimal;
 use mz_ore::cast::CastFrom;
 use mz_proto::{IntoRustIfSome, ProtoType, RustType};
-use mz_repr::adt::numeric::{Dec, Numeric, NumericMaxScale};
+use mz_repr::adt::char::CharLength;
+use mz_repr::adt::numeric::{Numeric, NumericMaxScale};
+use mz_repr::adt::timestamp::{CheckedTimestamp, TimestampPrecision};
+use mz_repr::adt::varchar::VarCharMaxLength;
 use mz_repr::{ColumnType, Datum, RelationDesc, Row, RowArena, ScalarType};
 use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
@@ -266,7 +270,7 @@ fn parse_data_type(
         "int" => (ScalarType::Int32, SqlServerColumnDecodeType::I32),
         "bigint" => (ScalarType::Int64, SqlServerColumnDecodeType::I64),
         "bit" => (ScalarType::Bool, SqlServerColumnDecodeType::Bool),
-        "decimal" | "numeric" => {
+        "decimal" | "numeric" | "money" | "smallmoney" => {
             // SQL Server supports a precision in the range of [1, 38] and then
             // the scale is 0 <= scale <= precision.
             //
@@ -307,7 +311,7 @@ fn parse_data_type(
         }
         "real" => (ScalarType::Float32, SqlServerColumnDecodeType::F32),
         "double" => (ScalarType::Float64, SqlServerColumnDecodeType::F64),
-        "char" | "nchar" | "varchar" | "nvarchar" | "sysname" => {
+        dt @ ("char" | "nchar" | "varchar" | "nvarchar" | "sysname") => {
             // When the `max_length` is -1 SQL Server will not present us with the "before" value
             // for updated columns.
             //
@@ -320,7 +324,40 @@ fn parse_data_type(
                 });
             }
 
-            (ScalarType::String, SqlServerColumnDecodeType::String)
+            let column_type = match dt {
+                "char" => {
+                    let length = CharLength::try_from(i64::from(raw.max_length)).map_err(|e| {
+                        UnsupportedDataType {
+                            column_name: raw.name.to_string(),
+                            column_type: raw.data_type.to_string(),
+                            reason: e.to_string(),
+                        }
+                    })?;
+                    ScalarType::Char {
+                        length: Some(length),
+                    }
+                }
+                "varchar" => {
+                    let length =
+                        VarCharMaxLength::try_from(i64::from(raw.max_length)).map_err(|e| {
+                            UnsupportedDataType {
+                                column_name: raw.name.to_string(),
+                                column_type: raw.data_type.to_string(),
+                                reason: e.to_string(),
+                            }
+                        })?;
+                    ScalarType::VarChar {
+                        max_length: Some(length),
+                    }
+                }
+                // Determining the max character count for these types is difficult
+                // because of different character encodings, so we fallback to just
+                // representing them as "text".
+                "nchar" | "nvarchar" | "sysname" => ScalarType::String,
+                other => unreachable!("'{other}' checked above"),
+            };
+
+            (column_type, SqlServerColumnDecodeType::String)
         }
         "text" | "ntext" | "image" => {
             // SQL Server docs indicate this should always be 16. There's no
@@ -366,19 +403,55 @@ fn parse_data_type(
         }
         "json" => (ScalarType::Jsonb, SqlServerColumnDecodeType::String),
         "date" => (ScalarType::Date, SqlServerColumnDecodeType::NaiveDate),
+        // SQL Server supports a scale of (and defaults to) 7 digits (aka 100 nanoseconds)
+        // for time related types.
+        //
+        // Internally Materialize supports a scale of 9 (aka nanoseconds), but for Postgres
+        // compatibility we constraint ourselves to a scale of 6 (aka microseconds). By
+        // default we will round values we get from  SQL Server to fit in Materialize.
+        //
+        // TODO(sql_server3): Support a "strict" mode where we're fail the creation of the
+        // source if the scale is too large.
+        // TODO(sql_server3): Support specifying a precision for ScalarType::Time.
+        //
+        // See: <https://learn.microsoft.com/en-us/sql/t-sql/data-types/datetime2-transact-sql?view=sql-server-ver16>.
         "time" => (ScalarType::Time, SqlServerColumnDecodeType::NaiveTime),
-        // TODO(sql_server1): We should probably specify a precision here.
-        "smalldatetime" | "datetime" | "datetime2" => (
-            ScalarType::Timestamp { precision: None },
-            SqlServerColumnDecodeType::NaiveDateTime,
-        ),
-        // TODO(sql_server1): We should probably specify a precision here.
-        "datetimeoffset" => (
-            ScalarType::TimestampTz { precision: None },
-            SqlServerColumnDecodeType::DateTime,
-        ),
+        dt @ ("smalldatetime" | "datetime" | "datetime2" | "datetimeoffset") => {
+            if raw.scale > 7 {
+                tracing::warn!("unexpected scale '{}' from SQL Server", raw.scale);
+            }
+            if raw.scale > mz_repr::adt::timestamp::MAX_PRECISION {
+                tracing::warn!("truncating scale of '{}' for '{}'", raw.scale, dt);
+            }
+            let precision = std::cmp::min(raw.scale, mz_repr::adt::timestamp::MAX_PRECISION);
+            let precision =
+                Some(TimestampPrecision::try_from(i64::from(precision)).expect("known to fit"));
+
+            match dt {
+                "smalldatetime" | "datetime" | "datetime2" => (
+                    ScalarType::Timestamp { precision },
+                    SqlServerColumnDecodeType::NaiveDateTime,
+                ),
+                "datetimeoffset" => (
+                    ScalarType::TimestampTz { precision },
+                    SqlServerColumnDecodeType::DateTime,
+                ),
+                other => unreachable!("'{other}' checked above"),
+            }
+        }
         "uniqueidentifier" => (ScalarType::Uuid, SqlServerColumnDecodeType::Uuid),
-        // TODO(sql_server1): Support more data types.
+        // TODO(sql_server3): Support reading the following types, at least as text:
+        //
+        // * geography
+        // * geometry
+        // * json (preview)
+        // * vector (preview)
+        //
+        // None of these types are implemented in `tiberius`, the crate that
+        // provides our SQL Server client, so we'll need to implement support
+        // for decoding them.
+        //
+        // See <https://learn.microsoft.com/en-us/openspecs/windows_protocols/ms-tds/355f7890-6e91-4978-ab76-2ded17ee09bc>.
         other => {
             return Err(UnsupportedDataType {
                 column_type: other.to_string(),
@@ -492,6 +565,46 @@ impl SqlServerColumnDecodeType {
                 .try_get(name)
                 .map_err(|_| SqlServerDecodeError::invalid_column(name, "string"))?
                 .map(Datum::String),
+            (ScalarType::Char { length }, SqlServerColumnDecodeType::String) => data
+                .try_get(name)
+                .map_err(|_| SqlServerDecodeError::invalid_column(name, "char"))?
+                .map(|val: &str| match length {
+                    Some(expected) => {
+                        let found_chars = val.chars().count();
+                        let expct_chars = usize::cast_from(expected.into_u32());
+                        if found_chars != expct_chars {
+                            Err(SqlServerDecodeError::invalid_char(
+                                name,
+                                expct_chars,
+                                found_chars,
+                            ))
+                        } else {
+                            Ok(Datum::String(val))
+                        }
+                    }
+                    None => Ok(Datum::String(val)),
+                })
+                .transpose()?,
+            (ScalarType::VarChar { max_length }, SqlServerColumnDecodeType::String) => data
+                .try_get(name)
+                .map_err(|_| SqlServerDecodeError::invalid_column(name, "varchar"))?
+                .map(|val: &str| match max_length {
+                    Some(max) => {
+                        let found_chars = val.chars().count();
+                        let max_chars = usize::cast_from(max.into_u32());
+                        if found_chars > max_chars {
+                            Err(SqlServerDecodeError::invalid_varchar(
+                                name,
+                                max_chars,
+                                found_chars,
+                            ))
+                        } else {
+                            Ok(Datum::String(val))
+                        }
+                    }
+                    None => Ok(Datum::String(val)),
+                })
+                .transpose()?,
             (ScalarType::Bytes, SqlServerColumnDecodeType::Bytes) => data
                 .try_get(name)
                 .map_err(|_| SqlServerDecodeError::invalid_column(name, "bytes"))?
@@ -504,13 +617,9 @@ impl SqlServerColumnDecodeType {
                 .try_get(name)
                 .map_err(|_| SqlServerDecodeError::invalid_column(name, "numeric"))?
                 .map(|val: tiberius::numeric::Numeric| {
-                    // TODO(sql_server3): Make decimal parsing more performant.
-                    let numeric = Numeric::context()
-                        .parse(val.to_string())
-                        .map_err(|err| SqlServerDecodeError::invalid_decimal(name, err))?;
-                    Ok::<_, SqlServerDecodeError>(Datum::Numeric(OrderedDecimal(numeric)))
-                })
-                .transpose()?,
+                    let numeric = tiberius_numeric_to_mz_numeric(val);
+                    Datum::Numeric(OrderedDecimal(numeric))
+                }),
             (ScalarType::String, SqlServerColumnDecodeType::Xml) => data
                 .try_get(name)
                 .map_err(|_| SqlServerDecodeError::invalid_column(name, "xml"))?
@@ -525,33 +634,47 @@ impl SqlServerColumnDecodeType {
                     Ok::<_, SqlServerDecodeError>(Datum::Date(date))
                 })
                 .transpose()?,
-            // TODO(sql_server1): SQL Server's time related types support a resolution
-            // of 100 nanoseconds, while Postgres supports 1,000 nanoseconds (aka 1 microsecond).
-            //
-            // Internally we can support 1 nanosecond precision, but we should exercise
-            // this case and see what breaks.
             (ScalarType::Time, SqlServerColumnDecodeType::NaiveTime) => data
                 .try_get(name)
                 .map_err(|_| SqlServerDecodeError::invalid_column(name, "time"))?
-                .map(Datum::Time),
-            (ScalarType::Timestamp { .. }, SqlServerColumnDecodeType::NaiveDateTime) => data
+                .map(|val: chrono::NaiveTime| {
+                    // Postgres' maximum precision is 6 (aka microseconds).
+                    //
+                    // While the Postgres spec supports specifying a precision
+                    // Materialize does not.
+                    let rounded = val.round_subsecs(6);
+                    // Overflowed.
+                    let val = if rounded < val {
+                        val.trunc_subsecs(6)
+                    } else {
+                        val
+                    };
+                    Datum::Time(val)
+                }),
+            (ScalarType::Timestamp { precision }, SqlServerColumnDecodeType::NaiveDateTime) => data
                 .try_get(name)
                 .map_err(|_| SqlServerDecodeError::invalid_column(name, "timestamp"))?
                 .map(|val: chrono::NaiveDateTime| {
-                    let ts = val
+                    let ts: CheckedTimestamp<chrono::NaiveDateTime> = val
                         .try_into()
                         .map_err(|e| SqlServerDecodeError::invalid_timestamp(name, e))?;
-                    Ok::<_, SqlServerDecodeError>(Datum::Timestamp(ts))
+                    let rounded = ts
+                        .round_to_precision(*precision)
+                        .map_err(|e| SqlServerDecodeError::invalid_timestamp(name, e))?;
+                    Ok::<_, SqlServerDecodeError>(Datum::Timestamp(rounded))
                 })
                 .transpose()?,
-            (ScalarType::TimestampTz { .. }, SqlServerColumnDecodeType::DateTime) => data
+            (ScalarType::TimestampTz { precision }, SqlServerColumnDecodeType::DateTime) => data
                 .try_get(name)
                 .map_err(|_| SqlServerDecodeError::invalid_column(name, "timestamptz"))?
                 .map(|val: chrono::DateTime<chrono::Utc>| {
-                    let ts = val
+                    let ts: CheckedTimestamp<chrono::DateTime<chrono::Utc>> = val
                         .try_into()
                         .map_err(|e| SqlServerDecodeError::invalid_timestamp(name, e))?;
-                    Ok::<_, SqlServerDecodeError>(Datum::TimestampTz(ts))
+                    let rounded = ts
+                        .round_to_precision(*precision)
+                        .map_err(|e| SqlServerDecodeError::invalid_timestamp(name, e))?;
+                    Ok::<_, SqlServerDecodeError>(Datum::TimestampTz(rounded))
                 })
                 .transpose()?,
             // We support mapping any type to a string.
@@ -741,6 +864,19 @@ impl RustType<proto_sql_server_column_desc::DecodeType> for SqlServerColumnDecod
     }
 }
 
+/// Numerics in SQL Server have a maximum precision of 38 digits, where [`Numeric`]s in
+/// Materialize have a maximum precision of 39 digits, so this conversion is infallible.
+fn tiberius_numeric_to_mz_numeric(val: tiberius::numeric::Numeric) -> Numeric {
+    let mut scale = Numeric::from(10);
+    let scale_pow = Numeric::from(val.scale());
+    mz_repr::adt::numeric::cx_datum().pow(&mut scale, &scale_pow);
+
+    let mut numeric = mz_repr::adt::numeric::cx_datum().from_i128(val.value());
+    mz_repr::adt::numeric::cx_datum().div(&mut numeric, &scale);
+
+    numeric
+}
+
 /// A decoder from [`tiberius::Row`] to [`mz_repr::Row`].
 ///
 /// The goal of this type is to perform any expensive "downcasts" so in the hot
@@ -769,12 +905,28 @@ impl SqlServerRowDecoder {
                         // TODO(sql_server2): Structured Error.
                         anyhow::anyhow!("no SQL Server column with name {col_name} found")
                     })?;
+                let Some(sql_server_col_typ) = sql_server_col.column_type.as_ref() else {
+                    return Err(SqlServerError::ProgrammingError(format!(
+                        "programming error, {col_name} should have been exluded",
+                    )));
+                };
 
                 // This shouldn't be true, but be defensive.
                 //
-                // TODO(sql_server2): Maybe allow the Materialize column type to be more nullable
-                // than our decoding type?
-                if sql_server_col.column_type.as_ref() != Some(col_type) {
+                // TODO(sql_server2): Maybe allow the Materialize column type to be
+                // more nullable than our decoding type?
+                //
+                // Sad. Our timestamp types don't roundtrip their precision through
+                // parsing so we ignore the mismatch here.
+                let matches = match (&sql_server_col_typ.scalar_type, &col_type.scalar_type) {
+                    (ScalarType::Timestamp { .. }, ScalarType::Timestamp { .. })
+                    | (ScalarType::TimestampTz { .. }, ScalarType::TimestampTz { .. }) => {
+                        // Types match so check nullability.
+                        sql_server_col_typ.nullable == col_type.nullable
+                    }
+                    (_, _) => sql_server_col_typ == col_type,
+                };
+                if !matches {
                     return Err(SqlServerError::ProgrammingError(format!(
                         "programming error, {col_name} has mismatched type {:?} vs {:?}",
                         sql_server_col.column_type, col_type
@@ -783,8 +935,13 @@ impl SqlServerRowDecoder {
 
                 let name = Arc::clone(&sql_server_col.name);
                 let decoder = sql_server_col.decode_type.clone();
+                // Note: We specifically use the `ColumnType` from the SqlServerTableDesc
+                // because it retains precision.
+                //
+                // See: <https://github.com/MaterializeInc/database-issues/issues/3179>.
+                let col_typ = sql_server_col_typ.clone();
 
-                Ok::<_, SqlServerError>((name, col_type.clone(), decoder))
+                Ok::<_, SqlServerError>((name, col_typ, decoder))
             })
             .collect::<Result<_, _>>()?;
 
@@ -813,12 +970,14 @@ mod tests {
 
     use crate::desc::{
         SqlServerColumnDecodeType, SqlServerColumnDesc, SqlServerTableDesc, SqlServerTableRaw,
+        tiberius_numeric_to_mz_numeric,
     };
 
     use super::SqlServerColumnRaw;
     use mz_ore::assert_contains;
     use mz_ore::collections::CollectionExt;
     use mz_repr::adt::numeric::NumericMaxScale;
+    use mz_repr::adt::varchar::VarCharMaxLength;
     use mz_repr::{Datum, RelationDesc, Row, RowArena, ScalarType};
     use tiberius::RowTestExt;
 
@@ -905,7 +1064,7 @@ mod tests {
     #[mz_ore::test]
     fn smoketest_decoder() {
         let sql_server_columns = [
-            SqlServerColumnRaw::new("a", "varchar"),
+            SqlServerColumnRaw::new("a", "varchar").max_length(16),
             SqlServerColumnRaw::new("b", "int").nullable(true),
             SqlServerColumnRaw::new("c", "bit"),
         ];
@@ -917,8 +1076,9 @@ mod tests {
         };
         let sql_server_desc = SqlServerTableDesc::new(sql_server_desc);
 
+        let max_length = Some(VarCharMaxLength::try_from(16).unwrap());
         let relation_desc = RelationDesc::builder()
-            .with_column("a", ScalarType::String.nullable(false))
+            .with_column("a", ScalarType::VarChar { max_length }.nullable(false))
             // Note: In the upstream table 'c' is ordered after 'b'.
             .with_column("c", ScalarType::Bool.nullable(false))
             .with_column("b", ScalarType::Int32.nullable(true))
@@ -1028,6 +1188,19 @@ mod tests {
                 ColumnData::DateTime(Some(datetime)),
             );
         }
+    }
+
+    #[mz_ore::test]
+    fn smoketest_numeric_conversion() {
+        let a = tiberius::numeric::Numeric::new_with_scale(12345, 2);
+        let rnd = tiberius_numeric_to_mz_numeric(a);
+        let og = mz_repr::adt::numeric::cx_datum().parse("123.45").unwrap();
+        assert_eq!(og, rnd);
+
+        let a = tiberius::numeric::Numeric::new_with_scale(-99999, 5);
+        let rnd = tiberius_numeric_to_mz_numeric(a);
+        let og = mz_repr::adt::numeric::cx_datum().parse("-.99999").unwrap();
+        assert_eq!(og, rnd);
     }
 
     // TODO(sql_server2): Proptest the decoder.
