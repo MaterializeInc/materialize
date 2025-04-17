@@ -13,11 +13,9 @@ from pathlib import Path
 from ci import tarball_uploader
 from ci.deploy.deploy_util import rust_version
 from materialize import mzbuild, spawn, ui
-from materialize.mz_version import MzDebugVersion
 from materialize.rustc_flags import Sanitizer
 
 from . import deploy_util
-from .deploy_util import MZ_DEBUG_VERSION
 
 
 def main() -> None:
@@ -32,7 +30,6 @@ def main() -> None:
         bazel_remote_cache=bazel_remote_cache,
     )
     target = f"{repo.rd.arch}-unknown-linux-gnu"
-
 
     print("--- Building mz-debug")
     # The bin/ci-builder uses target-xcompile as the volume and
