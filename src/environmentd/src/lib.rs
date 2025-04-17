@@ -41,7 +41,7 @@ use mz_frontegg_auth::Authenticator as FronteggAuthentication;
 use mz_license_keys::ValidatedLicenseKey;
 use mz_ore::future::OreFutureExt;
 use mz_ore::metrics::MetricsRegistry;
-use mz_ore::now::{NowFn, SYSTEM_TIME};
+use mz_ore::now::NowFn;
 use mz_ore::tracing::TracingHandle;
 use mz_ore::url::SensitiveUrl;
 use mz_ore::{instrument, task};
