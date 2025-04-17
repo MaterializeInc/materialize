@@ -39,12 +39,6 @@ use crate::desc::SqlServerColumnDecodeType;
 
 /// Higher level wrapper around a [`tiberius::Client`] that models transaction
 /// management like other database clients.
-///
-/// When creating a [`Client`] we return a [`Connection`] which implements [`std::future::Future`]
-/// and must be polled for queries to make progress. Internally a [`Client`] holds the sending side
-/// of a channel and the [`Connection`] receives query requests to run. This enables us to
-/// introduce a [`Transaction`] type that when dropped will cause the `TRANSACTION` in the
-/// connected SQL Server instance to get rolled back.
 #[derive(Debug)]
 pub struct Client {
     tx: UnboundedSender<Request>,
