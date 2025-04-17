@@ -246,7 +246,7 @@ impl<'a> SourceReferenceClient<'a> {
             } => {
                 let tables = mz_sql_server_util::inspect::get_tables(client).await?;
 
-                // TODO(sql_server1): Figure out how to handle a single table with
+                // TODO(sql_server2): Figure out how to handle a single table with
                 // multiple capture instances.
                 let mut unique_tables = BTreeMap::default();
                 for table in tables {

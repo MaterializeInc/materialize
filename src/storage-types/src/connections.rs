@@ -2158,7 +2158,6 @@ impl SqlServerConnectionDetails<InlinedConnection> {
                         .ssh_tunnel_manager
                         .clone(),
                     timeout: storage_configuration.parameters.ssh_timeout_config.clone(),
-                    // TODO(sql_server1): These should not be here.
                     host: self.host.clone(),
                     port: self.port,
                 }
@@ -2213,7 +2212,7 @@ impl<C: ConnectionAccess> AlterCompatible for SqlServerConnectionDetails<C> {
     ) -> Result<(), crate::controller::AlterError> {
         let SqlServerConnectionDetails {
             tunnel,
-            // TODO(sql_server1): Figure out how these variables are allowed to change.
+            // TODO(sql_server2): Figure out how these variables are allowed to change.
             host: _,
             port: _,
             database: _,

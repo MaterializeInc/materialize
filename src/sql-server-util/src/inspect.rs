@@ -88,7 +88,7 @@ fn parse_lsn(result: &[tiberius::Row]) -> Result<Lsn, SqlServerError> {
 /// Queries the specified capture instance and returns all changes from
 /// `[start_lsn, end_lsn)`, ordered by `start_lsn` in an ascending fashion.
 ///
-/// TODO(sql_server1): This presents an opportunity for SQL injection. We should create a stored
+/// TODO(sql_server2): This presents an opportunity for SQL injection. We should create a stored
 /// procedure using `QUOTENAME` to sanitize the input for the capture instance provided by the
 /// user.
 pub fn get_changes_asc(

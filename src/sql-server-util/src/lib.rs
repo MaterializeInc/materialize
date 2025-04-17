@@ -91,10 +91,10 @@ impl Client {
                 (tcp, Some(Box::new(tunnel)))
             }
             TunnelConfig::AwsPrivatelink { connection_id: _ } => {
-                // TODO(sql_server1): Getting this right is tricky because
+                // TODO(sql_server2): Getting this right is tricky because
                 // there is some subtle logic with hostname validation.
                 return Err(SqlServerError::Generic(anyhow::anyhow!(
-                    "TODO(sql_server1): Support PrivateLink connections"
+                    "Support PrivateLink connections"
                 )));
             }
         };

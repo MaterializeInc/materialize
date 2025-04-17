@@ -1956,7 +1956,7 @@ async fn purify_create_table_from_source(
             purified_export
         }
         GenericSourceConnection::SqlServer(_sql_server_source) => {
-            // TODO(sql_server1): Support CREATE TABLE ... FROM SOURCE.
+            // TODO(sql_server2): Support CREATE TABLE ... FROM SOURCE.
             return Err(PlanError::Unsupported {
                 feature: "CREATE TABLE ... FROM SQL SERVER SOURCE".to_string(),
                 discussion_no: None,
@@ -2124,7 +2124,7 @@ async fn purify_create_table_from_source(
             })
         }
         PurifiedExportDetails::SqlServer { .. } => {
-            // TODO(sql_server1): Support CREATE TABLE ... FROM SOURCE.
+            // TODO(sql_server2): Support CREATE TABLE ... FROM SOURCE.
             return Err(PlanError::Unsupported {
                 feature: "CREATE TABLE ... FROM SQL SERVER SOURCE".to_string(),
                 discussion_no: None,

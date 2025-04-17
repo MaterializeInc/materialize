@@ -144,7 +144,7 @@ pub(super) async fn purify_source_exports(
         }
     }
 
-    // TODO(sql_server1): Validate permissions on upstream tables.
+    // TODO(sql_server2): Validate permissions on upstream tables.
 
     let capture_instances: BTreeMap<_, _> = requested_exports
         .iter()

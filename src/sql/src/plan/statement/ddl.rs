@@ -976,7 +976,7 @@ pub fn plan_create_source(
                     scx.catalog.resolve_full_name(connection_item.name())
                 ),
             };
-            // TODO(sql_server1): Handle SQL Server connection options.
+            // TODO(sql_server2): Handle SQL Server connection options.
 
             let extras = SqlServerSourceExtras {};
             let connection =
