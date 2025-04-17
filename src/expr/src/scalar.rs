@@ -1376,11 +1376,25 @@ impl MirScalarExpr {
                         } else {
                             // Equivalent expression structure would allow us to push the `If` into the expression.
                             // For example, `IF <cond> THEN x = y ELSE x = z` becomes `x = IF <cond> THEN y ELSE z`.
+                            //
+                            // We have to also make sure that the expressions that will end up in
+                            // the two `If` branches have unionable types. Otherwise, the `If` could
+                            // not be typed by `typ`. An example where this could cause an issue is
+                            // when pulling out `cast_jsonbable_to_jsonb`, which accepts a wide
+                            // range of input types. (In theory, we could still do the optimization
+                            // in this case by inserting appropriate casts, but this corner case is
+                            // not worth the complication for now.)
+                            // See https://github.com/MaterializeInc/database-issues/issues/9182
                             match (&mut **then, &mut **els) {
                                 (
                                     MirScalarExpr::CallUnary { func: f1, expr: e1 },
                                     MirScalarExpr::CallUnary { func: f2, expr: e2 },
-                                ) if f1 == f2 => {
+                                ) if f1 == f2
+                                    && e1
+                                        .typ(column_types)
+                                        .union(&e2.typ(column_types))
+                                        .is_ok() =>
+                                {
                                     *e = cond
                                         .take()
                                         .if_then_else(e1.take(), e2.take())
@@ -1397,7 +1411,13 @@ impl MirScalarExpr {
                                         expr1: e1b,
                                         expr2: e2b,
                                     },
-                                ) if f1 == f2 && e1a == e1b => {
+                                ) if f1 == f2
+                                    && e1a == e1b
+                                    && e2a
+                                        .typ(column_types)
+                                        .union(&e2b.typ(column_types))
+                                        .is_ok() =>
+                                {
                                     *e = e1a.take().call_binary(
                                         cond.take().if_then_else(e2a.take(), e2b.take()),
                                         f1.clone(),
@@ -1414,7 +1434,13 @@ impl MirScalarExpr {
                                         expr1: e1b,
                                         expr2: e2b,
                                     },
-                                ) if f1 == f2 && e2a == e2b => {
+                                ) if f1 == f2
+                                    && e2a == e2b
+                                    && e1a
+                                        .typ(column_types)
+                                        .union(&e1b.typ(column_types))
+                                        .is_ok() =>
+                                {
                                     *e = cond
                                         .take()
                                         .if_then_else(e1a.take(), e1b.take())
