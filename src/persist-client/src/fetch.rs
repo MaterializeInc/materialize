@@ -1129,16 +1129,12 @@ where
         key: &mut Option<K>,
         val: &mut Option<V>,
     ) -> (Result<K, String>, Result<V, String>) {
-        let key = self.metrics.columnar.arrow().key().measure_decoding(|| {
-            let mut key = key.take().unwrap_or_default();
-            keys.decode(idx, &mut key);
-            key
-        });
-        let val = self.metrics.columnar.arrow().val().measure_decoding(|| {
-            let mut val = val.take().unwrap_or_default();
-            vals.decode(idx, &mut val);
-            val
-        });
+        let mut key = key.take().unwrap_or_default();
+        keys.decode(idx, &mut key);
+
+        let mut val = val.take().unwrap_or_default();
+        vals.decode(idx, &mut val);
+
         (Ok(key), Ok(val))
     }
 }
