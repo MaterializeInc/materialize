@@ -8,16 +8,11 @@
 # by the Apache License, Version 2.0.
 
 import hashlib
-from pathlib import Path
-
 import toml
 
-from materialize.mzcompose import (
-    loader,
-)
-from materialize.mzcompose.service import (
-    Service,
-)
+from materialize import MZ_ROOT
+from materialize.mzcompose import loader
+from materialize.mzcompose.service import Service
 
 
 class Mz(Service):
@@ -57,7 +52,7 @@ class Mz(Service):
         # container and the host that runs the docker daemon
         # $TMP does not guarantee that, but loader.composition_path does.
         config_hash = hashlib.sha256(config_str.encode()).hexdigest()
-        config_name = (loader.composition_path or Path(".")) / f"tmp_{config_hash}.toml"
+        config_name = (loader.composition_path or MZ_ROOT) / f"tmp_{config_hash}.toml"
 
         with open(config_name, "w") as f:
             f.write(config_str)
