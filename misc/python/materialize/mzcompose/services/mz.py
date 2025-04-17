@@ -8,6 +8,7 @@
 # by the Apache License, Version 2.0.
 
 import hashlib
+
 import toml
 
 from materialize import MZ_ROOT
