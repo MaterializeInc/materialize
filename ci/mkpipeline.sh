@@ -50,7 +50,7 @@ steps:
     command: bin/ci-builder run min bin/pyactivate -m ci.mkpipeline $pipeline $@
     priority: 200
     agents:
-      queue: hetzner-aarch64-4cpu-8gb
+      queue: hetzner-aarch64-16cpu-32gb
     retry:
       automatic:
         - exit_status: -1
