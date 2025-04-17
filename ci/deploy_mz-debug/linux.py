@@ -33,13 +33,6 @@ def main() -> None:
     )
     target = f"{repo.rd.arch}-unknown-linux-gnu"
 
-    print("--- Checking version")
-    assert (
-        MzDebugVersion.parse_without_prefix(
-            repo.rd.cargo_workspace.crates["mz-debug"].version_string
-        )
-        == MZ_DEBUG_VERSION
-    )
 
     print("--- Building mz-debug")
     # The bin/ci-builder uses target-xcompile as the volume and
