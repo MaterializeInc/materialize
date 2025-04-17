@@ -51,6 +51,8 @@ message ProtoComputeCommand {
 message ProtoInstanceConfig {
   logging.ProtoLoggingConfig logging = 1;
   optional mz_proto.ProtoDuration expiration_offset = 2;
+  string peek_stash_blob_uri = 3;
+  string peek_stash_consensus_uri = 4;
 }
 
 message ProtoIndexTarget {

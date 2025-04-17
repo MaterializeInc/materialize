@@ -45,6 +45,7 @@ use mz_persist_client::Diagnostics;
 use mz_persist_client::cache::PersistClientCache;
 use mz_persist_client::cfg::USE_CRITICAL_SINCE_SNAPSHOT;
 use mz_persist_client::read::ReadHandle;
+use mz_persist_types::PersistLocation;
 use mz_persist_types::codec_impls::UnitSchema;
 use mz_repr::fixed_length::ToDatumIter;
 use mz_repr::{DatumVec, Diff, GlobalId, Row, RowArena, Timestamp};
@@ -104,6 +105,11 @@ pub struct ComputeState {
     pub copy_to_response_buffer: Rc<RefCell<Vec<(GlobalId, CopyToResponse)>>>,
     /// Peek commands that are awaiting fulfillment.
     pub pending_peeks: BTreeMap<Uuid, PendingPeek>,
+    /// Peek responses that we are stashing in persist. We do this
+    /// asynchronously and send back a handle to the batch in the PeekResponse.
+    pub pending_peek_responses: BTreeMap<Uuid, StashPeekResponse>,
+    /// The persist location where we can stash large peek results.
+    pub peek_stash_persist_location: Option<PersistLocation>,
     /// The logger, from Timely's logging framework, if logs are enabled.
     pub compute_logger: Option<logging::compute::Logger>,
     /// A process-global cache of (blob_uri, consensus_uri) -> PersistClient.
@@ -206,6 +212,8 @@ impl ComputeState {
             subscribe_response_buffer: Default::default(),
             copy_to_response_buffer: Default::default(),
             pending_peeks: Default::default(),
+            pending_peek_responses: Default::default(),
+            peek_stash_persist_location: None,
             compute_logger: None,
             persist_clients,
             txns_ctx,
@@ -437,6 +445,8 @@ impl<'a, A: Allocate + 'static> ActiveComputeState<'a, A> {
         }
 
         self.initialize_logging(config.logging);
+
+        self.compute_state.peek_stash_persist_location = Some(config.peek_stash_persist_location);
     }
 
     fn handle_update_configuration(&mut self, params: ComputeParameters) {
@@ -624,6 +634,10 @@ impl<'a, A: Allocate + 'static> ActiveComputeState<'a, A> {
     fn handle_cancel_peek(&mut self, uuid: Uuid) {
         if let Some(peek) = self.compute_state.pending_peeks.remove(&uuid) {
             self.send_peek_response(peek, PeekResponse::Canceled);
+        }
+        if let Some(stash_task) = self.compute_state.pending_peek_responses.remove(&uuid) {
+            // Explicitly drop the task to abort it.
+            drop(stash_task);
         }
     }
 
@@ -882,7 +896,19 @@ impl<'a, A: Allocate + 'static> ActiveComputeState<'a, A> {
 
         if let Some(response) = response {
             let _span = span!(parent: peek.span(), Level::DEBUG, "process_peek").entered();
-            self.send_peek_response(peek, response)
+            let stash_task = StashPeekResponse::start_upload(
+                Arc::clone(&self.compute_state.persist_clients),
+                self.compute_state
+                    .peek_stash_persist_location
+                    .as_ref()
+                    .expect("missing persist location for peek responses"),
+                peek.peek().uuid,
+                response,
+            );
+            self.compute_state
+                .pending_peek_responses
+                .insert(peek.peek().uuid, stash_task);
+            // self.send_peek_response(peek, response)
         } else {
             let uuid = peek.peek().uuid;
             self.compute_state.pending_peeks.insert(uuid, peek);
@@ -1571,6 +1597,84 @@ impl IndexPeek {
         }
 
         Ok(results)
+    }
+}
+
+/// An async task that stashes a peek response in persist and yield a handle to
+/// the batch in a [PeekResponse::Stashed].
+///
+/// Note that `PeekResponseTask` intentionally does not implement or derive
+/// `Clone`, as each `PeekResponseTask` is meant to be dropped after it's
+/// done or no longer needed.
+pub struct StashPeekResponse {
+    /// A background task that's responsible for producing the peek results.
+    /// If we're no longer interested in the results, we abort the task.
+    _abort_handle: AbortOnDropHandle<()>,
+    /// The result of the background task, eventually.
+    result: oneshot::Receiver<(PeekResponse, Duration)>,
+    /// The `tracing::Span` tracking this peek's operation
+    span: tracing::Span,
+}
+
+impl StashPeekResponse {
+    fn start_upload(
+        persist_clients: Arc<PersistClientCache>,
+        persist_location: &PersistLocation,
+        peek_uuid: Uuid,
+        peek_response: PeekResponse,
+    ) -> Self {
+        let (result_tx, result_rx) = oneshot::channel();
+
+        let persist_clients = Arc::clone(&persist_clients);
+        let persist_location = persist_location.clone();
+
+        let task_handle = mz_ore::task::spawn(|| "compute::stash_peek_response", async move {
+            let start = Instant::now();
+
+            let result = Self::do_upload(&persist_clients, persist_location, peek_response).await;
+
+            let result = match result {
+                Ok(peek_response) => peek_response,
+                Err(e) => PeekResponse::Error(e.to_string()),
+            };
+            match result_tx.send((result, start.elapsed())) {
+                Ok(()) => {}
+                Err((_result, elapsed)) => {
+                    debug!(duration = ?elapsed, "dropping result for cancelled peek {peek_uuid}")
+                }
+            }
+        });
+
+        Self {
+            _abort_handle: task_handle.abort_on_drop(),
+            result: result_rx,
+            span: tracing::Span::current(),
+        }
+    }
+
+    async fn do_upload(
+        persist_clients: &PersistClientCache,
+        persist_location: PersistLocation,
+        peek_response: PeekResponse,
+    ) -> Result<PeekResponse, String> {
+        let client = persist_clients
+            .open(persist_location)
+            .await
+            .map_err(|e| e.to_string())?;
+
+        // let mut reader: ReadHandle<SourceData, (), Timestamp, StorageDiff> = client
+        //     .open_leased_reader(
+        //         metadata.data_shard,
+        //         Arc::new(metadata.relation_desc.clone()),
+        //         Arc::new(UnitSchema),
+        //         Diagnostics::from_purpose("persist::peek"),
+        //         USE_CRITICAL_SINCE_SNAPSHOT.get(client.dyncfgs()),
+        //     )
+        //     .await
+        //     .map_err(|e| e.to_string())?;
+
+        todo!();
+        // Ok(result)
     }
 }
 

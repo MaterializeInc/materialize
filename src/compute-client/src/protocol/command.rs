@@ -9,6 +9,7 @@
 
 //! Compute protocol commands.
 
+use std::str::FromStr;
 use std::time::Duration;
 
 use mz_cluster_client::client::{ClusterStartupEpoch, TimelyConfig, TryIntoTimelyConfig};
@@ -17,6 +18,8 @@ use mz_compute_types::plan::render_plan::RenderPlan;
 use mz_dyncfg::ConfigUpdates;
 use mz_expr::RowSetFinishing;
 use mz_ore::tracing::OpenTelemetryContext;
+use mz_ore::url::SensitiveUrl;
+use mz_persist_types::PersistLocation;
 use mz_proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError, any_uuid};
 use mz_repr::{GlobalId, Row};
 use mz_service::params::GrpcClientParameters;
@@ -374,6 +377,8 @@ pub struct InstanceConfig {
     pub logging: LoggingConfig,
     /// The offset relative to the replica startup at which it should expire. None disables feature.
     pub expiration_offset: Option<Duration>,
+    /// The persist location where we can stash large peek results.
+    pub peek_stash_persist_location: PersistLocation,
 }
 
 impl InstanceConfig {
@@ -389,10 +394,12 @@ impl InstanceConfig {
         let InstanceConfig {
             logging: self_logging,
             expiration_offset: self_offset,
+            peek_stash_persist_location: self_peek_stash_persist_location,
         } = self;
         let InstanceConfig {
             logging: other_logging,
             expiration_offset: other_offset,
+            peek_stash_persist_location: other_peek_stash_persist_location,
         } = other;
 
         // Logging is compatible if exactly the same.
@@ -404,7 +411,10 @@ impl InstanceConfig {
         let other_offset = Antichain::from_iter(*other_offset);
         let offset_compatible = timely::PartialOrder::less_equal(&other_offset, &self_offset);
 
-        logging_compatible && offset_compatible
+        let persist_location_compatible =
+            self_peek_stash_persist_location == other_peek_stash_persist_location;
+
+        logging_compatible && offset_compatible && persist_location_compatible
     }
 }
 
@@ -413,6 +423,14 @@ impl RustType<ProtoInstanceConfig> for InstanceConfig {
         ProtoInstanceConfig {
             logging: Some(self.logging.into_proto()),
             expiration_offset: self.expiration_offset.into_proto(),
+            peek_stash_blob_uri: self
+                .peek_stash_persist_location
+                .blob_uri
+                .to_string_unredacted(),
+            peek_stash_consensus_uri: self
+                .peek_stash_persist_location
+                .consensus_uri
+                .to_string_unredacted(),
         }
     }
 
@@ -422,6 +440,10 @@ impl RustType<ProtoInstanceConfig> for InstanceConfig {
                 .logging
                 .into_rust_if_some("ProtoCreateInstance::logging")?,
             expiration_offset: proto.expiration_offset.into_rust()?,
+            peek_stash_persist_location: PersistLocation {
+                blob_uri: SensitiveUrl::from_str(&proto.peek_stash_blob_uri)?,
+                consensus_uri: SensitiveUrl::from_str(&proto.peek_stash_consensus_uri)?,
+            },
         })
     }
 }

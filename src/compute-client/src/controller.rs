@@ -53,6 +53,7 @@ use mz_ore::collections::CollectionExt;
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::NowFn;
 use mz_ore::tracing::OpenTelemetryContext;
+use mz_persist_types::PersistLocation;
 use mz_repr::{Datum, GlobalId, Row, TimestampManipulation};
 use mz_storage_client::controller::StorageController;
 use mz_storage_types::dyncfgs::ORE_OVERFLOWING_BEHAVIOR;
@@ -187,6 +188,8 @@ pub struct ComputeController<T: ComputeControllerTimestamp> {
     config: ComputeParameters,
     /// Compute configuration to apply to new instances as part of the Timely initialization.
     initial_config: InitialComputeParameters,
+    /// The persist location where we can stash large peek results.
+    peek_stash_persist_location: PersistLocation,
     /// A controller response to be returned on the next call to [`ComputeController::process`].
     stashed_response: Option<ComputeControllerResponse<T>>,
     /// A number that increases on every `environmentd` restart.
@@ -229,6 +232,7 @@ impl<T: ComputeControllerTimestamp> ComputeController<T> {
         envd_epoch: NonZeroI64,
         read_only: bool,
         metrics_registry: &MetricsRegistry,
+        peek_stash_persist_location: PersistLocation,
         controller_metrics: ControllerMetrics,
         now: NowFn,
         wallclock_lag: WallclockLagFn<T>,
@@ -299,6 +303,7 @@ impl<T: ComputeControllerTimestamp> ComputeController<T> {
             read_only,
             config: Default::default(),
             initial_config,
+            peek_stash_persist_location,
             stashed_response: None,
             envd_epoch,
             metrics,
@@ -509,6 +514,7 @@ impl<T: ComputeControllerTimestamp> ComputeController<T> {
             read_only,
             config: _,
             initial_config,
+            peek_stash_persist_location: _,
             stashed_response,
             envd_epoch,
             metrics: _,
@@ -773,6 +779,7 @@ where
                 log_logging: config.logging.log_logging,
                 index_logs: Default::default(),
             },
+            peek_stash_persist_location: self.peek_stash_persist_location.clone(),
             grpc_client: self.config.grpc_client.clone(),
             expiration_offset: (!expiration_offset.is_zero()).then_some(expiration_offset),
             initial_config: self.initial_config.clone(),

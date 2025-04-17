@@ -37,6 +37,7 @@ use mz_ore::channel::instrumented_unbounded_channel;
 use mz_ore::now::NowFn;
 use mz_ore::tracing::OpenTelemetryContext;
 use mz_ore::{soft_assert_or_log, soft_panic_or_log};
+use mz_persist_types::PersistLocation;
 use mz_repr::adt::interval::Interval;
 use mz_repr::adt::timestamp::CheckedTimestamp;
 use mz_repr::refresh_schedule::RefreshSchedule;
@@ -1019,6 +1020,8 @@ where
         self.send(ComputeCommand::CreateInstance(InstanceConfig {
             logging: dummy_logging_config,
             expiration_offset: None,
+            // WIP: Think about this!
+            peek_stash_persist_location: PersistLocation::new_in_mem(),
         }));
 
         loop {
