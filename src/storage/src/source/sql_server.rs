@@ -192,7 +192,7 @@ impl SourceRender for SqlServerSource {
         let health_errs = repl_errs.map(move |err| {
             // This update will cause the dataflow to restart
             let err_string = err.display_with_causes().to_string();
-            let update = HealthStatusUpdate::halting(err_string.clone(), None);
+            let update = HealthStatusUpdate::halting(err_string, None);
             // TODO(sql_server2): If the error has anything to do with SSH
             // connections we should use the SSH status namespace.
             let namespace = Self::STATUS_NAMESPACE;
