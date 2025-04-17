@@ -175,6 +175,10 @@ pub struct SqlServerColumnDesc {
     pub column_type: Option<ColumnType>,
     /// Rust type we should parse the data from a [`tiberius::Row`] as.
     pub decode_type: SqlServerColumnDecodeType,
+    /// Raw type of the column as we read it from upstream.
+    ///
+    /// This is useful to keep around for debugging purposes.
+    pub raw_type: Arc<str>,
 }
 
 impl SqlServerColumnDesc {
@@ -203,6 +207,7 @@ impl SqlServerColumnDesc {
             name: Arc::clone(&raw.name),
             column_type,
             decode_type,
+            raw_type: Arc::clone(&raw.data_type),
         }
     }
 
@@ -234,6 +239,7 @@ impl RustType<ProtoSqlServerColumnDesc> for SqlServerColumnDesc {
             name: self.name.to_string(),
             column_type: self.column_type.into_proto(),
             decode_type: Some(self.decode_type.into_proto()),
+            raw_type: self.raw_type.to_string(),
         }
     }
 
@@ -244,6 +250,7 @@ impl RustType<ProtoSqlServerColumnDesc> for SqlServerColumnDesc {
             decode_type: proto
                 .decode_type
                 .into_rust_if_some("ProtoSqlServerColumnDesc::decode_type")?,
+            raw_type: proto.raw_type.into(),
         })
     }
 }
