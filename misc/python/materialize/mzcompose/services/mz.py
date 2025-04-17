@@ -7,7 +7,7 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-import tempfile
+import hashlib
 
 import toml
 
@@ -28,17 +28,6 @@ class Mz(Service):
         environment: str = "staging",
         app_password: str,
     ) -> None:
-        # We must create the temporary config file in a location
-        # that is accessible on the same path in both the ci-builder
-        # container and the host that runs the docker daemon
-        # $TMP does not guarantee that, but loader.composition_path does.
-        config = tempfile.NamedTemporaryFile(
-            dir=loader.composition_path,
-            prefix="tmp_",
-            suffix=".toml",
-            mode="w",
-            delete=False,
-        )
 
         # Production env does not require to specify an endpoint.
         if environment == "production":
@@ -48,7 +37,7 @@ class Mz(Service):
             cloud_endpoint = f"https://api.{environment}.cloud.materialize.com"
             admin_endpoint = f"https://admin.{environment}.cloud.materialize.com"
 
-        toml.dump(
+        config_str = toml.dumps(
             {
                 "profile": "default",
                 "profiles": {
@@ -60,13 +49,20 @@ class Mz(Service):
                     },
                 },
             },
-            config,
         )
-        config.close()
+
+        # We must create the temporary config file in a location
+        # that is accessible on the same path in both the ci-builder
+        # container and the host that runs the docker daemon
+        # $TMP does not guarantee that, but loader.composition_path does.
+        config_hash = hashlib.sha256(config_str.encode()).hexdigest()
+        config_name = loader.composition_path / f"tmp_{config_hash}.toml"
+        with open(config_name, "w") as f:
+            f.write(config_str)
         super().__init__(
             name=name,
             config={
                 "mzbuild": "mz",
-                "volumes": [f"{config.name}:/root/.config/materialize/mz.toml"],
+                "volumes": [f"{config_name}:/root/.config/materialize/mz.toml"],
             },
         )
