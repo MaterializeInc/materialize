@@ -177,19 +177,18 @@ pub(crate) fn render<G: Scope<Timestamp = Lsn>>(
 
             // Set all of the LSNs to start replicating from.
             for output_info in outputs.values() {
-                // TODO(sql_server1): Better unify this with the check above.
-                match *output_info.resume_upper {
-                    [lsn] => {
-                        // We just snapshotted this instance, so use the snapshot LSN.
-                        let initial_lsn = if lsn == Lsn::minimum() {
+                match output_info.resume_upper.as_option() {
+                    // We just snapshotted this instance, so use the snapshot LSN.
+                    Some(lsn) => {
+                        let initial_lsn = if *lsn == Lsn::minimum() {
                             replication_start_lsn
                         } else {
-                            lsn
+                            *lsn
                         };
                         cdc_handle =
                             cdc_handle.start_lsn(&output_info.capture_instance, initial_lsn);
                     }
-                    _ => unreachable!(""),
+                    None => unreachable!("empty resume upper?"),
                 }
             }
 
