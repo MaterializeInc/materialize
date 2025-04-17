@@ -26,7 +26,10 @@ use chrono::SubsecRound;
 use dec::OrderedDecimal;
 use mz_ore::cast::CastFrom;
 use mz_proto::{IntoRustIfSome, ProtoType, RustType};
+use mz_repr::adt::char::CharLength;
+use mz_repr::adt::numeric::{Numeric, NumericMaxScale};
 use mz_repr::adt::timestamp::{CheckedTimestamp, TimestampPrecision};
+use mz_repr::adt::varchar::VarCharMaxLength;
 use mz_repr::{ColumnType, Datum, RelationDesc, Row, RowArena, ScalarType};
 use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
@@ -308,7 +311,7 @@ fn parse_data_type(
         }
         "real" => (ScalarType::Float32, SqlServerColumnDecodeType::F32),
         "double" => (ScalarType::Float64, SqlServerColumnDecodeType::F64),
-        "char" | "nchar" | "varchar" | "nvarchar" | "sysname" => {
+        dt @ ("char" | "nchar" | "varchar" | "nvarchar" | "sysname") => {
             // When the `max_length` is -1 SQL Server will not present us with the "before" value
             // for updated columns.
             //
@@ -321,7 +324,40 @@ fn parse_data_type(
                 });
             }
 
-            (ScalarType::String, SqlServerColumnDecodeType::String)
+            let column_type = match dt {
+                "char" => {
+                    let length = CharLength::try_from(i64::from(raw.max_length)).map_err(|e| {
+                        UnsupportedDataType {
+                            column_name: raw.name.to_string(),
+                            column_type: raw.data_type.to_string(),
+                            reason: e.to_string(),
+                        }
+                    })?;
+                    ScalarType::Char {
+                        length: Some(length),
+                    }
+                }
+                "varchar" => {
+                    let length =
+                        VarCharMaxLength::try_from(i64::from(raw.max_length)).map_err(|e| {
+                            UnsupportedDataType {
+                                column_name: raw.name.to_string(),
+                                column_type: raw.data_type.to_string(),
+                                reason: e.to_string(),
+                            }
+                        })?;
+                    ScalarType::VarChar {
+                        max_length: Some(length),
+                    }
+                }
+                // Determining the max character count for these types is difficult
+                // because of different character encodings, so we fallback to just
+                // representing them as "text".
+                "nchar" | "nvarchar" | "sysname" => ScalarType::String,
+                other => unreachable!("'{other}' checked above"),
+            };
+
+            (column_type, SqlServerColumnDecodeType::String)
         }
         "text" | "ntext" | "image" => {
             // SQL Server docs indicate this should always be 16. There's no
@@ -518,6 +554,46 @@ impl SqlServerColumnDecodeType {
                 .try_get(name)
                 .map_err(|_| SqlServerDecodeError::invalid_column(name, "string"))?
                 .map(Datum::String),
+            (ScalarType::Char { length }, SqlServerColumnDecodeType::String) => data
+                .try_get(name)
+                .map_err(|_| SqlServerDecodeError::invalid_column(name, "char"))?
+                .map(|val: &str| match length {
+                    Some(expected) => {
+                        let found_chars = val.chars().count();
+                        let expct_chars = usize::cast_from(expected.into_u32());
+                        if found_chars != expct_chars {
+                            Err(SqlServerDecodeError::invalid_char(
+                                name,
+                                expct_chars,
+                                found_chars,
+                            ))
+                        } else {
+                            Ok(Datum::String(val))
+                        }
+                    }
+                    None => Ok(Datum::String(val)),
+                })
+                .transpose()?,
+            (ScalarType::VarChar { max_length }, SqlServerColumnDecodeType::String) => data
+                .try_get(name)
+                .map_err(|_| SqlServerDecodeError::invalid_column(name, "varchar"))?
+                .map(|val: &str| match max_length {
+                    Some(max) => {
+                        let found_chars = val.chars().count();
+                        let max_chars = usize::cast_from(max.into_u32());
+                        if found_chars > max_chars {
+                            Err(SqlServerDecodeError::invalid_varchar(
+                                name,
+                                max_chars,
+                                found_chars,
+                            ))
+                        } else {
+                            Ok(Datum::String(val))
+                        }
+                    }
+                    None => Ok(Datum::String(val)),
+                })
+                .transpose()?,
             (ScalarType::Bytes, SqlServerColumnDecodeType::Bytes) => data
                 .try_get(name)
                 .map_err(|_| SqlServerDecodeError::invalid_column(name, "bytes"))?
@@ -890,6 +966,7 @@ mod tests {
     use mz_ore::assert_contains;
     use mz_ore::collections::CollectionExt;
     use mz_repr::adt::numeric::NumericMaxScale;
+    use mz_repr::adt::varchar::VarCharMaxLength;
     use mz_repr::{Datum, RelationDesc, Row, RowArena, ScalarType};
     use tiberius::RowTestExt;
 
@@ -976,7 +1053,7 @@ mod tests {
     #[mz_ore::test]
     fn smoketest_decoder() {
         let sql_server_columns = [
-            SqlServerColumnRaw::new("a", "varchar"),
+            SqlServerColumnRaw::new("a", "varchar").max_length(16),
             SqlServerColumnRaw::new("b", "int").nullable(true),
             SqlServerColumnRaw::new("c", "bit"),
         ];
@@ -988,8 +1065,9 @@ mod tests {
         };
         let sql_server_desc = SqlServerTableDesc::new(sql_server_desc);
 
+        let max_length = Some(VarCharMaxLength::try_from(16).unwrap());
         let relation_desc = RelationDesc::builder()
-            .with_column("a", ScalarType::String.nullable(false))
+            .with_column("a", ScalarType::VarChar { max_length }.nullable(false))
             // Note: In the upstream table 'c' is ordered after 'b'.
             .with_column("c", ScalarType::Bool.nullable(false))
             .with_column("b", ScalarType::Int32.nullable(true))
