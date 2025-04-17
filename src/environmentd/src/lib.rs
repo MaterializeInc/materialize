@@ -61,7 +61,10 @@ use tracing::{Instrument, info, info_span};
 
 use crate::deployment::preflight::{PreflightInput, PreflightOutput};
 use crate::deployment::state::DeploymentState;
-use crate::http::{HttpConfig, HttpServer, InternalHttpConfig, InternalHttpServer};
+use crate::http::{
+    HttpConfig, HttpServer, InternalHttpConfig, InternalHttpServer, MetricsHttpConfig,
+    MetricsHttpServer,
+};
 
 pub use crate::http::{SqlResponse, WebSocketAuth, WebSocketResponse};
 
@@ -214,8 +217,11 @@ pub struct ListenersConfig {
     /// The IP address and port to listen for pgwire connections from the cloud
     /// system on.
     pub internal_sql_listen_addr: SocketAddr,
-    /// The IP address and port to serve the metrics registry from.
+    /// The IP address and port to listen for HTTP connecctions from the cloud
+    /// system on
     pub internal_http_listen_addr: SocketAddr,
+    /// The IP address and port to serve the metrics registry from.
+    pub metrics_http_listen_addr: SocketAddr,
 }
 
 /// Configuration for the Catalog.
@@ -234,6 +240,7 @@ pub struct Listeners {
     http: (ListenerHandle, Pin<Box<dyn ConnectionStream>>),
     internal_sql: (ListenerHandle, Pin<Box<dyn ConnectionStream>>),
     internal_http: (ListenerHandle, Pin<Box<dyn ConnectionStream>>),
+    metrics_http: (ListenerHandle, Pin<Box<dyn ConnectionStream>>),
 }
 
 impl Listeners {
@@ -254,17 +261,20 @@ impl Listeners {
             http_listen_addr,
             internal_sql_listen_addr,
             internal_http_listen_addr,
+            metrics_http_listen_addr,
         }: ListenersConfig,
     ) -> Result<Listeners, io::Error> {
         let sql = mz_server_core::listen(&sql_listen_addr).await?;
         let http = mz_server_core::listen(&http_listen_addr).await?;
         let internal_sql = mz_server_core::listen(&internal_sql_listen_addr).await?;
         let internal_http = mz_server_core::listen(&internal_http_listen_addr).await?;
+        let metrics_http = mz_server_core::listen(&metrics_http_listen_addr).await?;
         Ok(Listeners {
             sql,
             http,
             internal_sql,
             internal_http,
+            metrics_http,
         })
     }
 
@@ -276,6 +286,7 @@ impl Listeners {
             http_listen_addr: SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0),
             internal_sql_listen_addr: SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0),
             internal_http_listen_addr: SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0),
+            metrics_http_listen_addr: SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0),
         })
         .await
     }
@@ -294,6 +305,7 @@ impl Listeners {
             http: (http_listener, http_conns),
             internal_sql: (internal_sql_listener, internal_sql_conns),
             internal_http: (internal_http_listener, internal_http_conns),
+            metrics_http: (metrics_http_listener, metrics_http_conns),
         } = self;
 
         // Validate TLS configuration, if present.
@@ -316,12 +328,27 @@ impl Listeners {
         let active_connection_counter = ConnectionCounter::default();
         let (deployment_state, deployment_state_handle) = DeploymentState::new();
 
-        // Start the internal HTTP server.
+        // Start the metrics HTTP server.
         //
         // We start this server before we've completed initialization so that
         // metrics are accessible during initialization. Some internal HTTP
         // endpoints require the adapter to be initialized; requests to those
         // endpoints block until the adapter client is installed.
+        task::spawn(|| "metrics_http_server", {
+            let metrics_http_server = MetricsHttpServer::new(MetricsHttpConfig {
+                metrics_registry: config.metrics_registry.clone(),
+                active_connection_counter: active_connection_counter.clone(),
+            });
+            mz_server_core::serve(ServeConfig {
+                server: metrics_http_server,
+                conns: metrics_http_conns,
+                // `environmentd` does not currently need to dynamically
+                // configure graceful termination behavior.
+                dyncfg: None,
+            })
+        });
+
+        // TODO start this later and make it the same as the external one
         let (internal_http_adapter_client_tx, internal_http_adapter_client_rx) = oneshot::channel();
         task::spawn(|| "internal_http_server", {
             let internal_http_server = InternalHttpServer::new(InternalHttpConfig {
@@ -879,6 +906,7 @@ impl Listeners {
             http_listener,
             internal_sql_listener,
             internal_http_listener,
+            metrics_http_listener,
             _adapter_handle: adapter_handle,
         })
     }
@@ -921,6 +949,7 @@ pub struct Server {
     http_listener: ListenerHandle,
     internal_sql_listener: ListenerHandle,
     internal_http_listener: ListenerHandle,
+    metrics_http_listener: ListenerHandle,
     _adapter_handle: mz_adapter::Handle,
 }
 
@@ -939,5 +968,9 @@ impl Server {
 
     pub fn internal_http_local_addr(&self) -> SocketAddr {
         self.internal_http_listener.local_addr()
+    }
+
+    pub fn metrics_http_local_addr(&self) -> SocketAddr {
+        self.metrics_http_listener.local_addr()
     }
 }

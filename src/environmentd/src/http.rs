@@ -305,6 +305,97 @@ impl Server for HttpServer {
     }
 }
 
+pub struct MetricsHttpConfig {
+    pub metrics_registry: MetricsRegistry,
+    pub active_connection_counter: ConnectionCounter,
+}
+
+pub struct MetricsHttpServer {
+    router: Router,
+}
+
+impl MetricsHttpServer {
+    pub fn new(
+        MetricsHttpConfig {
+            metrics_registry,
+            active_connection_counter,
+        }: MetricsHttpConfig,
+    ) -> MetricsHttpServer {
+        let metrics = Metrics::register_into(&metrics_registry, "mz_metrics_http");
+        let router = Router::new()
+            .route(
+                "/metrics",
+                routing::get(move || async move {
+                    mz_http_util::handle_prometheus(&metrics_registry).await
+                }),
+            )
+            .route(
+                "/metrics/mz_usage",
+                routing::get(|client: AuthedClient| async move {
+                    let registry = sql::handle_promsql(client, USAGE_METRIC_QUERIES).await;
+                    mz_http_util::handle_prometheus(&registry).await
+                }),
+            )
+            .route(
+                "/metrics/mz_frontier",
+                routing::get(|client: AuthedClient| async move {
+                    let registry = sql::handle_promsql(client, FRONTIER_METRIC_QUERIES).await;
+                    mz_http_util::handle_prometheus(&registry).await
+                }),
+            )
+            .route(
+                "/metrics/mz_compute",
+                routing::get(|client: AuthedClient| async move {
+                    let registry = sql::handle_promsql(client, COMPUTE_METRIC_QUERIES).await;
+                    mz_http_util::handle_prometheus(&registry).await
+                }),
+            )
+            .route(
+                "/metrics/mz_storage",
+                routing::get(|client: AuthedClient| async move {
+                    let registry = sql::handle_promsql(client, STORAGE_METRIC_QUERIES).await;
+                    mz_http_util::handle_prometheus(&registry).await
+                }),
+            )
+            .route(
+                "/api/livez",
+                routing::get(mz_http_util::handle_liveness_check),
+            )
+            .route("/api/readyz", routing::get(probe::handle_ready))
+            .layer(Extension(active_connection_counter.clone()));
+
+        let router = router.apply_default_layers("metrics", metrics);
+
+        MetricsHttpServer { router }
+    }
+}
+
+#[async_trait]
+impl Server for MetricsHttpServer {
+    const NAME: &'static str = "metrics_http";
+
+    fn handle_connection(&self, mut conn: Connection) -> ConnectionHandler {
+        let router = self.router.clone();
+
+        Box::pin(async {
+            let mut make_tower_svc = router.into_make_service_with_connect_info::<SocketAddr>();
+            let direct_peer_addr = conn.peer_addr().context("fetching peer addr")?;
+            let peer_addr = conn
+                .take_proxy_header_address()
+                .await
+                .map(|a| a.source)
+                .unwrap_or(direct_peer_addr);
+            let tower_svc = make_tower_svc.call(peer_addr).await?;
+            let service = hyper::service::service_fn(|req| tower_svc.clone().call(req));
+            let http = hyper::server::conn::http1::Builder::new();
+            http.serve_connection(TokioIo::new(conn), service)
+                .with_upgrades()
+                .err_into()
+                .await
+        })
+    }
+}
+
 pub struct InternalHttpConfig {
     pub metrics_registry: MetricsRegistry,
     pub adapter_client_rx: oneshot::Receiver<mz_adapter::Client>,

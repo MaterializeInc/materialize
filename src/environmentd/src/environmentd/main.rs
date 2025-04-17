@@ -171,6 +171,18 @@ pub struct Args {
         action = ArgAction::Set,
     )]
     enable_internal_ports: bool,
+    /// The address on which to listen for metrics HTTP connections.
+    ///
+    /// Connections to this address are not subject to encryption, authentication,
+    /// or access control.
+    #[clap(
+        long,
+        value_name = "HOST:PORT",
+        env = "METRICS_HTTP_LISTEN_ADDR",
+        default_value = "127.0.0.1:6870",
+        action = ArgAction::Set,
+    )]
+    metrics_http_listen_addr: SocketAddr,
     /// Password for the mz_system user.
     #[clap(
         long,
@@ -1113,6 +1125,7 @@ fn run(mut args: Args) -> Result<(), anyhow::Error> {
             http_listen_addr: args.http_listen_addr,
             internal_sql_listen_addr: args.internal_sql_listen_addr,
             internal_http_listen_addr: args.internal_http_listen_addr,
+            metrics_http_listen_addr: args.metrics_http_listen_addr,
         })
         .await?;
         let catalog_config = CatalogConfig {
