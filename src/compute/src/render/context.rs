@@ -367,9 +367,14 @@ where
     /// If `key` is set, this is a promise that `logic` will produce no results on
     /// records for which the key does not evaluate to the value. This is used to
     /// leap directly to exactly those records.
+    ///
+    /// The `max_demand` parameter limits the number of columns decoded from the
+    /// input. Only the first `max_demand` columns are decoded. Pass `usize::MAX` to
+    /// decode all columns.
     pub fn flat_map<D, I, L>(
         &self,
         key: Option<Row>,
+        max_demand: usize,
         mut logic: L,
     ) -> (Stream<S, I::Item>, Collection<S, DataflowError, Diff>)
     where
@@ -385,8 +390,9 @@ where
         let mut datums = DatumVec::new();
         let logic = move |k: DatumSeq, v: DatumSeq, t, d| {
             let mut datums_borrow = datums.borrow();
-            datums_borrow.extend(k);
-            datums_borrow.extend(v);
+            datums_borrow.extend(k.to_datum_iter().take(max_demand));
+            let max_demand = max_demand.saturating_sub(datums_borrow.len());
+            datums_borrow.extend(v.to_datum_iter().take(max_demand));
             logic(&mut datums_borrow, t, d)
         };
 
@@ -595,7 +601,8 @@ where
                     panic!("The collection arranged by {:?} doesn't exist.", key)
                 });
                 if ENABLE_COMPUTE_RENDER_FUELED_AS_SPECIFIC_COLLECTION.get(config_set) {
-                    let (ok, err) = arranged.flat_map(None, |borrow, t, r| {
+                    // Decode all columns, pass max_demand as usize::MAX.
+                    let (ok, err) = arranged.flat_map(None, usize::MAX, |borrow, t, r| {
                         Some((SharedRow::pack(borrow.iter()), t, r))
                     });
                     (ok.as_collection(), err)
@@ -609,9 +616,8 @@ where
 
     /// Constructs and applies logic to elements of a collection and returns the results.
     ///
-    /// `constructor` takes a permutation and produces the logic to apply on elements. The logic
-    /// conceptually receives `(&Row, &Row)` pairs in the form of a slice. Only after borrowing
-    /// the elements and applying the permutation the datums will be in the expected order.
+    /// The function applies `logic` on elements. The logic conceptually receives
+    /// `(&Row, &Row)` pairs in the form of a datum vec in the expected order.
     ///
     /// If `key_val` is set, this is a promise that `logic` will produce no results on
     /// records for which the key does not evaluate to the value. This is used when we
@@ -619,9 +625,14 @@ where
     /// It is important that `logic` still guard against data that does not satisfy
     /// this constraint, as this method does not statically know that it will have
     /// that arrangement.
+    ///
+    /// The `max_demand` parameter limits the number of columns decoded from the
+    /// input. Only the first `max_demand` columns are decoded. Pass `usize::MAX` to
+    /// decode all columns.
     pub fn flat_map<D, I, L>(
         &self,
         key_val: Option<(Vec<MirScalarExpr>, Option<Row>)>,
+        max_demand: usize,
         mut logic: L,
     ) -> (Stream<S, I::Item>, Collection<S, DataflowError, Diff>)
     where
@@ -635,7 +646,7 @@ where
         if let Some((key, val)) = key_val {
             self.arrangement(&key)
                 .expect("Should have ensured during planning that this arrangement exists.")
-                .flat_map(val, logic)
+                .flat_map(val, max_demand, logic)
         } else {
             use timely::dataflow::operators::Map;
             let (oks, errs) = self
@@ -643,9 +654,9 @@ where
                 .clone()
                 .expect("Invariant violated: CollectionBundle contains no collection.");
             let mut datums = DatumVec::new();
-            let oks = oks
-                .inner
-                .flat_map(move |(v, t, d)| logic(&mut datums.borrow_with(&v), t, d));
+            let oks = oks.inner.flat_map(move |(v, t, d)| {
+                logic(&mut datums.borrow_with_limit(&v, max_demand), t, d)
+            });
             (oks, errs)
         }
     }
@@ -752,7 +763,7 @@ where
         Collection<S, DataflowError, Diff>,
     ) {
         mfp.optimize();
-        let mfp_plan = mfp.into_plan().unwrap();
+        let mfp_plan = mfp.clone().into_plan().unwrap();
 
         // If the MFP is trivial, we can just call `as_collection`.
         // In the case that we weren't going to apply the `key_val` optimization,
@@ -769,44 +780,49 @@ where
             let key = key_val.map(|(k, _v)| k);
             return self.as_specific_collection(key.as_deref(), config_set);
         }
-        let (stream, errors) = self.flat_map(key_val, {
-            let mut datum_vec = DatumVec::new();
-            // Wrap in an `Rc` so that lifetimes work out.
-            let until = std::rc::Rc::new(until);
-            move |row_datums, time, diff| {
-                let binding = SharedRow::get();
-                let mut row_builder = binding.borrow_mut();
-                let until = std::rc::Rc::clone(&until);
-                let temp_storage = RowArena::new();
-                let row_iter = row_datums.iter();
-                let mut datums_local = datum_vec.borrow();
-                datums_local.extend(row_iter);
-                let time = time.clone();
-                let event_time = time.event_time();
-                mfp_plan
-                    .evaluate(
-                        &mut datums_local,
-                        &temp_storage,
-                        event_time,
-                        diff.clone(),
-                        move |time| !until.less_equal(time),
-                        &mut row_builder,
-                    )
-                    .map(move |x| match x {
-                        Ok((row, event_time, diff)) => {
-                            // Copy the whole time, and re-populate event time.
-                            let mut time: S::Timestamp = time.clone();
-                            *time.event_time_mut() = event_time;
-                            (Ok(row), time, diff)
-                        }
-                        Err((e, event_time, diff)) => {
-                            // Copy the whole time, and re-populate event time.
-                            let mut time: S::Timestamp = time.clone();
-                            *time.event_time_mut() = event_time;
-                            (Err(e), time, diff)
-                        }
-                    })
-            }
+
+        let max_demand = mfp.demand().iter().max().map(|x| *x + 1).unwrap_or(0);
+        mfp.permute_fn(|c| c, max_demand);
+        mfp.optimize();
+        let mfp_plan = mfp.into_plan().unwrap();
+
+        let mut datum_vec = DatumVec::new();
+        // Wrap in an `Rc` so that lifetimes work out.
+        let until = std::rc::Rc::new(until);
+
+        let (stream, errors) = self.flat_map(key_val, max_demand, move |row_datums, time, diff| {
+            let binding = SharedRow::get();
+            let mut row_builder = binding.borrow_mut();
+            let until = std::rc::Rc::clone(&until);
+            let temp_storage = RowArena::new();
+            let row_iter = row_datums.iter();
+            let mut datums_local = datum_vec.borrow();
+            datums_local.extend(row_iter);
+            let time = time.clone();
+            let event_time = time.event_time();
+            mfp_plan
+                .evaluate(
+                    &mut datums_local,
+                    &temp_storage,
+                    event_time,
+                    diff.clone(),
+                    move |time| !until.less_equal(time),
+                    &mut row_builder,
+                )
+                .map(move |x| match x {
+                    Ok((row, event_time, diff)) => {
+                        // Copy the whole time, and re-populate event time.
+                        let mut time: S::Timestamp = time.clone();
+                        *time.event_time_mut() = event_time;
+                        (Ok(row), time, diff)
+                    }
+                    Err((e, event_time, diff)) => {
+                        // Copy the whole time, and re-populate event time.
+                        let mut time: S::Timestamp = time.clone();
+                        *time.event_time_mut() = event_time;
+                        (Err(e), time, diff)
+                    }
+                })
         });
 
         use differential_dataflow::AsCollection;
