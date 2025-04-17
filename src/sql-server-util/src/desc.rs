@@ -440,7 +440,18 @@ fn parse_data_type(
             }
         }
         "uniqueidentifier" => (ScalarType::Uuid, SqlServerColumnDecodeType::Uuid),
-        // TODO(sql_server1): Support more data types.
+        // TODO(sql_server3): Support reading the following types, at least as text:
+        //
+        // * geography
+        // * geometry
+        // * json (preview)
+        // * vector (preview)
+        //
+        // None of these types are implemented in `tiberius`, the crate that
+        // provides our SQL Server client, so we'll need to implement support
+        // for decoding them.
+        //
+        // See <https://learn.microsoft.com/en-us/openspecs/windows_protocols/ms-tds/355f7890-6e91-4978-ab76-2ded17ee09bc>.
         other => {
             return Err(UnsupportedDataType {
                 column_type: other.to_string(),
