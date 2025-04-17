@@ -804,7 +804,6 @@ pub fn decode_copy_format_csv(
 
     let mut record = ByteRecord::new();
 
-    let buf = RowArena::new();
     while rdr.read_byte_record(&mut record)? {
         if record.len() == 1 && record.iter().next() == Some(END_OF_COPY_MARKER) {
             break;
@@ -825,7 +824,6 @@ pub fn decode_copy_format_csv(
         let binding = SharedRow::get();
         let mut row_builder = binding.borrow_mut();
         let mut row_packer = row_builder.packer();
-        buf.clear();
 
         for (typ, raw_value) in column_types.iter().zip(record.iter()) {
             if raw_value == null_as_bytes {

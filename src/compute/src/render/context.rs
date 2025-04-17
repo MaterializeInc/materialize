@@ -903,7 +903,7 @@ where
                         let mut key_buf = Row::default();
                         let mut val_buf = Row::default();
                         let mut datums = DatumVec::new();
-                        let temp_storage = RowArena::new();
+                        let mut temp_storage = RowArena::new();
                         while let Some((time, data)) = input.next() {
                             let mut ok_session = ok.session_with_builder(&time);
                             let mut err_session = err.session(&time);
