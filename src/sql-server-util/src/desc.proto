@@ -27,6 +27,8 @@ message ProtoSqlServerColumnDesc {
   mz_repr.relation_and_scalar.ProtoColumnType column_type = 2;
   string raw_type = 21;
 
+  bool is_primary_key = 22;
+
   oneof decode_type {
     google.protobuf.Empty bool = 4;
     google.protobuf.Empty u8 = 5;
