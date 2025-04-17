@@ -134,14 +134,6 @@ if [ -n "${CI_COVERAGE_ENABLED:-}" ] && [ -z "${BUILDKITE_MZCOMPOSE_PLUGIN_SKIP_
     fi
 fi
 
-if [[ "$BUILDKITE_LABEL" =~ Terraform\ .* ]]; then
-  ci_unimportant_heading "terraform: Destroying leftover state in case job was cancelled or timed out..."
-  bin/ci-builder run stable terraform -chdir=test/terraform/aws-temporary destroy || true
-  bin/ci-builder run stable terraform -chdir=test/terraform/gcp-temporary destroy || true
-  PATH="$PWD/test/terraform/azure-temporary/venv/bin:$PATH" VIRTUAL_ENV="$PWD/test/terraform/azure-temporary/venv" bin/ci-builder run stable terraform -chdir=test/terraform/azure-temporary destroy || true
-fi
-rm -rf ~/.kube # Remove potential state from E2E Terraform tests
-
 ci_unimportant_heading ":docker: Cleaning up after mzcompose"
 
 # docker-compose kill may fail attempting to kill containers
@@ -158,10 +150,10 @@ docker ps --all --quiet | xargs --no-run-if-empty docker rm --force --volumes
 
 if [[ "$BUILDKITE_LABEL" =~ Terraform\ .* ]]; then
   ci_unimportant_heading "terraform: Destroying leftover state in case job was cancelled or timed out..."
-  bin/ci-builder run stable terraform -chdir=test/terraform/aws-temporary destroy || true
-  bin/ci-builder run stable terraform -chdir=test/terraform/aws-upgrade destroy || true
-  bin/ci-builder run stable terraform -chdir=test/terraform/gcp-temporary destroy || true
-  bin/ci-builder run stable terraform -chdir=test/terraform/azure-temporary destroy || true
+  bin/ci-builder run stable terraform -chdir=test/terraform/aws-temporary destroy -auto-approve || true
+  bin/ci-builder run stable terraform -chdir=test/terraform/aws-upgrade destroy -auto-approve || true
+  bin/ci-builder run stable terraform -chdir=test/terraform/gcp-temporary destroy -auto-approve || true
+  bin/ci-builder run stable terraform -chdir=test/terraform/azure-temporary destroy -auto-approve || true
 fi
 rm -rf ~/.kube # Remove potential state from E2E Terraform tests
 
