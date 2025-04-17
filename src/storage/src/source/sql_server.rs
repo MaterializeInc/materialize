@@ -18,6 +18,7 @@ use std::sync::Arc;
 use differential_dataflow::AsCollection;
 use itertools::Itertools;
 use mz_ore::cast::CastFrom;
+use mz_ore::error::ErrorExt;
 use mz_repr::{Diff, GlobalId};
 use mz_sql_server_util::SqlServerError;
 use mz_sql_server_util::cdc::Lsn;
@@ -28,8 +29,8 @@ use mz_storage_types::sources::{
 };
 use mz_timely_util::builder_async::PressOnDropButton;
 use timely::container::CapacityContainerBuilder;
-use timely::dataflow::operators::ToStream;
 use timely::dataflow::operators::core::Partition;
+use timely::dataflow::operators::{Concat, Map, ToStream};
 use timely::dataflow::{Scope, Stream as TimelyStream};
 use timely::progress::Antichain;
 
@@ -153,7 +154,7 @@ impl SourceRender for SqlServerSource {
             source_outputs.insert(*id, output_info);
         }
 
-        let (repl_updates, uppers, _repl_err, repl_token) = replication::render(
+        let (repl_updates, uppers, repl_errs, repl_token) = replication::render(
             scope.clone(),
             config.clone(),
             source_outputs.clone(),
@@ -182,12 +183,27 @@ impl SourceRender for SqlServerSource {
         })
         .to_stream(scope);
 
-        let health = std::iter::once(HealthStatusMessage {
+        let health_init = std::iter::once(HealthStatusMessage {
             id: None,
             namespace: Self::STATUS_NAMESPACE,
             update: HealthStatusUpdate::Running,
         })
         .to_stream(scope);
+        let health_errs = repl_errs.map(move |err| {
+            // This update will cause the dataflow to restart
+            let err_string = err.display_with_causes().to_string();
+            let update = HealthStatusUpdate::halting(err_string, None);
+            // TODO(sql_server2): If the error has anything to do with SSH
+            // connections we should use the SSH status namespace.
+            let namespace = Self::STATUS_NAMESPACE;
+
+            HealthStatusMessage {
+                id: None,
+                namespace: namespace.clone(),
+                update,
+            }
+        });
+        let health = health_init.concat(&health_errs);
 
         (
             data_collections,
