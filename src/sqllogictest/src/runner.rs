@@ -48,6 +48,7 @@ use mz_adapter_types::bootstrap_builtin_cluster_config::{
     CATALOG_SERVER_CLUSTER_DEFAULT_REPLICATION_FACTOR, PROBE_CLUSTER_DEFAULT_REPLICATION_FACTOR,
     SUPPORT_CLUSTER_DEFAULT_REPLICATION_FACTOR, SYSTEM_CLUSTER_DEFAULT_REPLICATION_FACTOR,
 };
+use mz_authenticator::AuthenticatorKind;
 use mz_catalog::config::ClusterReplicaSizeMap;
 use mz_controller::ControllerConfig;
 use mz_environmentd::CatalogConfig;
@@ -1042,8 +1043,8 @@ impl<'a> RunnerInner<'a> {
             cloud_resource_controller: None,
             tls: None,
             frontegg: None,
-            self_hosted_auth: false,
-            self_hosted_auth_internal: false,
+            external_authenticator_kind: AuthenticatorKind::None,
+            internal_authenticator_kind: AuthenticatorKind::None,
             cors_allowed_origin: AllowOrigin::list([]),
             unsafe_mode: true,
             all_features: false,
@@ -1101,6 +1102,9 @@ impl<'a> RunnerInner<'a> {
             tls_reload_certs: mz_server_core::cert_reload_never_reload(),
             helm_chart_version: None,
             license_key: ValidatedLicenseKey::for_tests(),
+            external_login_password_mz_system: None,
+            enable_internal_ports: true,
+            allow_reserved_roles_on_external_ports: false,
         };
         // We need to run the server on its own Tokio runtime, which in turn
         // requires its own thread, so that we can wait for any tasks spawned

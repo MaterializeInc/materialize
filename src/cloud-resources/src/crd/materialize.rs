@@ -128,6 +128,8 @@ pub mod v1alpha1 {
         pub in_place_rollout: bool,
         // The name of a secret containing metadata_backend_url and persist_backend_url.
         pub backend_secret_name: String,
+        // The name of a secret containing a `password` key with credentials for the mz_system user.
+        pub external_login_secret_mz_system: Option<String>,
 
         // The value used by environmentd (via the --environment-id flag) to
         // uniquely identify this instance. Must be globally unique, and

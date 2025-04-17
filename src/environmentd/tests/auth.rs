@@ -32,6 +32,8 @@ use hyper_util::client::legacy::connect::HttpConnector;
 use hyper_util::rt::TokioExecutor;
 use itertools::Itertools;
 use jsonwebtoken::{self, DecodingKey, EncodingKey};
+use mz_auth::password::Password;
+use mz_authenticator::AuthenticatorKind;
 use mz_environmentd::test_util::{self, Ca, make_header, make_pg_tls};
 use mz_environmentd::{WebSocketAuth, WebSocketResponse};
 use mz_frontegg_auth::{
@@ -818,7 +820,7 @@ async fn test_auth_base_require_tls_frontegg() {
             TestCase::Ws {
                 auth: &WebSocketAuth::Basic {
                     user: frontegg_user.to_string(),
-                    password: frontegg_password.to_string(),
+                    password: Password(frontegg_password.to_string()),
                     options: BTreeMap::default(),
                 },
                 configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
@@ -835,7 +837,7 @@ async fn test_auth_base_require_tls_frontegg() {
             TestCase::Ws {
                 auth: &WebSocketAuth::Basic {
                     user: "bad user".to_string(),
-                    password: frontegg_password.to_string(),
+                    password: Password(frontegg_password.to_string()),
                     options: BTreeMap::default(),
                 },
                 configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
@@ -881,7 +883,7 @@ async fn test_auth_base_require_tls_frontegg() {
             TestCase::Ws {
                 auth: &WebSocketAuth::Basic {
                     user: frontegg_user_lowercase.to_string(),
-                    password: frontegg_password.to_string(),
+                    password: Password(frontegg_password.to_string()),
                     options: BTreeMap::default(),
                 },
                 configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
@@ -1176,7 +1178,7 @@ async fn test_auth_base_require_tls_frontegg() {
             TestCase::Ws {
                 auth: &WebSocketAuth::Basic {
                     user: (&*SYSTEM_USER.name).into(),
-                    password: frontegg_system_password.to_string(),
+                    password: Password(frontegg_system_password.to_string()),
                     options: BTreeMap::default(),
                 },
                 configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
@@ -1209,7 +1211,7 @@ async fn test_auth_base_require_tls_frontegg() {
             TestCase::Ws {
                 auth: &WebSocketAuth::Basic {
                     user: (&*SYSTEM_USER.name).into(),
-                    password: frontegg_service_system_user_password.to_string(),
+                    password: Password(frontegg_service_system_user_password.to_string()),
                     options: BTreeMap::default(),
                 },
                 configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
@@ -1243,7 +1245,7 @@ async fn test_auth_base_require_tls_frontegg() {
             TestCase::Ws {
                 auth: &WebSocketAuth::Basic {
                     user: (PUBLIC_ROLE_NAME.as_str()).into(),
-                    password: frontegg_system_password.to_string(),
+                    password: Password(frontegg_system_password.to_string()),
                     options: BTreeMap::default(),
                 },
                 configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
@@ -1702,7 +1704,7 @@ async fn test_auth_admin_non_superuser() {
             TestCase::Ws {
                 auth: &WebSocketAuth::Basic {
                     user: frontegg_user.to_string(),
-                    password: frontegg_password.to_string(),
+                    password: Password(frontegg_password.to_string()),
                     options: BTreeMap::default(),
                 },
                 configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
@@ -1847,7 +1849,7 @@ async fn test_auth_admin_superuser() {
             TestCase::Ws {
                 auth: &WebSocketAuth::Basic {
                     user: admin_frontegg_user.to_string(),
-                    password: admin_frontegg_password.to_string(),
+                    password: Password(admin_frontegg_password.to_string()),
                     options: BTreeMap::default(),
                 },
                 configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
@@ -3115,7 +3117,7 @@ async fn test_self_managed_auth() {
             "mz_frontegg_auth=debug,info".to_string(),
         )
         .with_system_parameter_default("enable_self_managed_auth".to_string(), "true".to_string())
-        .with_self_hosted_auth(true)
+        .with_external_authenticator_kind(AuthenticatorKind::Password)
         .with_metrics_registry(metrics_registry)
         .start()
         .await;
@@ -3164,7 +3166,7 @@ async fn test_self_managed_auth_superuser() {
             "mz_frontegg_auth=debug,info".to_string(),
         )
         .with_system_parameter_default("enable_self_managed_auth".to_string(), "true".to_string())
-        .with_self_hosted_auth(true)
+        .with_external_authenticator_kind(AuthenticatorKind::Password)
         .with_metrics_registry(metrics_registry)
         .start()
         .await;
@@ -3213,7 +3215,7 @@ async fn test_self_managed_auth_alter_role() {
             "mz_frontegg_auth=debug,info".to_string(),
         )
         .with_system_parameter_default("enable_self_managed_auth".to_string(), "true".to_string())
-        .with_self_hosted_auth(true)
+        .with_external_authenticator_kind(AuthenticatorKind::Password)
         .with_metrics_registry(metrics_registry)
         .start()
         .await;
