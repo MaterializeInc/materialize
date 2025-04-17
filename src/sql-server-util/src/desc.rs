@@ -266,7 +266,7 @@ fn parse_data_type(
         "int" => (ScalarType::Int32, SqlServerColumnDecodeType::I32),
         "bigint" => (ScalarType::Int64, SqlServerColumnDecodeType::I64),
         "bit" => (ScalarType::Bool, SqlServerColumnDecodeType::Bool),
-        "decimal" | "numeric" => {
+        "decimal" | "numeric" | "money" | "smallmoney" => {
             // SQL Server supports a precision in the range of [1, 38] and then
             // the scale is 0 <= scale <= precision.
             //
@@ -504,13 +504,9 @@ impl SqlServerColumnDecodeType {
                 .try_get(name)
                 .map_err(|_| SqlServerDecodeError::invalid_column(name, "numeric"))?
                 .map(|val: tiberius::numeric::Numeric| {
-                    // TODO(sql_server3): Make decimal parsing more performant.
-                    let numeric = Numeric::context()
-                        .parse(val.to_string())
-                        .map_err(|err| SqlServerDecodeError::invalid_decimal(name, err))?;
-                    Ok::<_, SqlServerDecodeError>(Datum::Numeric(OrderedDecimal(numeric)))
-                })
-                .transpose()?,
+                    let numeric = tiberius_numeric_to_mz_numeric(val);
+                    Datum::Numeric(OrderedDecimal(numeric))
+                }),
             (ScalarType::String, SqlServerColumnDecodeType::Xml) => data
                 .try_get(name)
                 .map_err(|_| SqlServerDecodeError::invalid_column(name, "xml"))?
@@ -741,6 +737,19 @@ impl RustType<proto_sql_server_column_desc::DecodeType> for SqlServerColumnDecod
     }
 }
 
+/// Numerics in SQL Server have a maximum precision of 38 digits, where [`Numeric`]s in
+/// Materialize have a maximum precision of 39 digits, so this conversion is infallible.
+fn tiberius_numeric_to_mz_numeric(val: tiberius::numeric::Numeric) -> Numeric {
+    let mut scale = Numeric::from(10);
+    let scale_pow = Numeric::from(val.scale());
+    mz_repr::adt::numeric::cx_datum().pow(&mut scale, &scale_pow);
+
+    let mut numeric = mz_repr::adt::numeric::cx_datum().from_i128(val.value());
+    mz_repr::adt::numeric::cx_datum().div(&mut numeric, &scale);
+
+    numeric
+}
+
 /// A decoder from [`tiberius::Row`] to [`mz_repr::Row`].
 ///
 /// The goal of this type is to perform any expensive "downcasts" so in the hot
@@ -813,6 +822,7 @@ mod tests {
 
     use crate::desc::{
         SqlServerColumnDecodeType, SqlServerColumnDesc, SqlServerTableDesc, SqlServerTableRaw,
+        tiberius_numeric_to_mz_numeric,
     };
 
     use super::SqlServerColumnRaw;
@@ -1028,6 +1038,19 @@ mod tests {
                 ColumnData::DateTime(Some(datetime)),
             );
         }
+    }
+
+    #[mz_ore::test]
+    fn smoketest_numeric_conversion() {
+        let a = tiberius::numeric::Numeric::new_with_scale(12345, 2);
+        let rnd = tiberius_numeric_to_mz_numeric(a);
+        let og = mz_repr::adt::numeric::cx_datum().parse("123.45").unwrap();
+        assert_eq!(og, rnd);
+
+        let a = tiberius::numeric::Numeric::new_with_scale(-99999, 5);
+        let rnd = tiberius_numeric_to_mz_numeric(a);
+        let og = mz_repr::adt::numeric::cx_datum().parse("-.99999").unwrap();
+        assert_eq!(og, rnd);
     }
 
     // TODO(sql_server2): Proptest the decoder.
