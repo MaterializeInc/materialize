@@ -664,7 +664,7 @@ subsource or table and the corresponding upstream SQL Server table being ingeste
 | Field               | Type             | Meaning                                                                                                        |
 | ------------------- | ---------------- | --------                                                                                                       |
 | `id`                | [`text`]         | The ID of the subsource or table. Corresponds to [`mz_catalog.mz_sources.id`](../mz_catalog#mz_sources) or [`mz_catalog.mz_tables.id`](../mz_catalog#mz_tables).                   |
-| `schema_name`       | [`text`]         | The schema ([or, database](https://dev.mysql.com/doc/refman/8.0/en/glossary.html#glos_schema)) of the upstream table being ingested. |
+| `schema_name`       | [`text`]         | The schema of the upstream table being ingested. |
 | `table_name`        | [`text`]         | The name of the upstream table being ingested. |
 
 ## `mz_kafka_source_tables`
