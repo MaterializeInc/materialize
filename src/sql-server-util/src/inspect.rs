@@ -214,7 +214,7 @@ SELECT
 FROM sys.tables t
 JOIN sys.schemas s ON t.schema_id = s.schema_id
 JOIN sys.columns c ON t.object_id = c.object_id
-JOIN sys.types ty ON c.system_type_id = ty.system_type_id
+JOIN sys.types ty ON c.user_type_id = ty.user_type_id
 JOIN cdc.change_tables ch ON t.object_id = ch.source_object_id
 ";
     fn get_value<'a, T: tiberius::FromSql<'a>>(
