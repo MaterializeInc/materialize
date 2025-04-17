@@ -22,10 +22,11 @@
 //! create a [`SqlServerRowDecoder`] which will be used when running a source
 //! to efficiently decode [`tiberius::Row`]s into [`mz_repr::Row`]s.
 
+use chrono::SubsecRound;
 use dec::OrderedDecimal;
 use mz_ore::cast::CastFrom;
 use mz_proto::{IntoRustIfSome, ProtoType, RustType};
-use mz_repr::adt::numeric::{Dec, Numeric, NumericMaxScale};
+use mz_repr::adt::timestamp::{CheckedTimestamp, TimestampPrecision};
 use mz_repr::{ColumnType, Datum, RelationDesc, Row, RowArena, ScalarType};
 use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
@@ -366,17 +367,42 @@ fn parse_data_type(
         }
         "json" => (ScalarType::Jsonb, SqlServerColumnDecodeType::String),
         "date" => (ScalarType::Date, SqlServerColumnDecodeType::NaiveDate),
+        // SQL Server supports a scale of (and defaults to) 7 digits (aka 100 nanoseconds)
+        // for time related types.
+        //
+        // Internally Materialize supports a scale of 9 (aka nanoseconds), but for Postgres
+        // compatibility we constraint ourselves to a scale of 6 (aka microseconds). By
+        // default we will round values we get from  SQL Server to fit in Materialize.
+        //
+        // TODO(sql_server3): Support a "strict" mode where we're fail the creation of the
+        // source if the scale is too large.
+        // TODO(sql_server3): Support specifying a precision for ScalarType::Time.
+        //
+        // See: <https://learn.microsoft.com/en-us/sql/t-sql/data-types/datetime2-transact-sql?view=sql-server-ver16>.
         "time" => (ScalarType::Time, SqlServerColumnDecodeType::NaiveTime),
-        // TODO(sql_server1): We should probably specify a precision here.
-        "smalldatetime" | "datetime" | "datetime2" => (
-            ScalarType::Timestamp { precision: None },
-            SqlServerColumnDecodeType::NaiveDateTime,
-        ),
-        // TODO(sql_server1): We should probably specify a precision here.
-        "datetimeoffset" => (
-            ScalarType::TimestampTz { precision: None },
-            SqlServerColumnDecodeType::DateTime,
-        ),
+        dt @ ("smalldatetime" | "datetime" | "datetime2" | "datetimeoffset") => {
+            if raw.scale > 7 {
+                tracing::warn!("unexpected scale '{}' from SQL Server", raw.scale);
+            }
+            if raw.scale > mz_repr::adt::timestamp::MAX_PRECISION {
+                tracing::warn!("truncating scale of '{}' for '{}'", raw.scale, dt);
+            }
+            let precision = std::cmp::min(raw.scale, mz_repr::adt::timestamp::MAX_PRECISION);
+            let precision =
+                Some(TimestampPrecision::try_from(i64::from(precision)).expect("known to fit"));
+
+            match dt {
+                "smalldatetime" | "datetime" | "datetime2" => (
+                    ScalarType::Timestamp { precision },
+                    SqlServerColumnDecodeType::NaiveDateTime,
+                ),
+                "datetimeoffset" => (
+                    ScalarType::TimestampTz { precision },
+                    SqlServerColumnDecodeType::DateTime,
+                ),
+                other => unreachable!("'{other}' checked above"),
+            }
+        }
         "uniqueidentifier" => (ScalarType::Uuid, SqlServerColumnDecodeType::Uuid),
         // TODO(sql_server1): Support more data types.
         other => {
@@ -521,33 +547,47 @@ impl SqlServerColumnDecodeType {
                     Ok::<_, SqlServerDecodeError>(Datum::Date(date))
                 })
                 .transpose()?,
-            // TODO(sql_server1): SQL Server's time related types support a resolution
-            // of 100 nanoseconds, while Postgres supports 1,000 nanoseconds (aka 1 microsecond).
-            //
-            // Internally we can support 1 nanosecond precision, but we should exercise
-            // this case and see what breaks.
             (ScalarType::Time, SqlServerColumnDecodeType::NaiveTime) => data
                 .try_get(name)
                 .map_err(|_| SqlServerDecodeError::invalid_column(name, "time"))?
-                .map(Datum::Time),
-            (ScalarType::Timestamp { .. }, SqlServerColumnDecodeType::NaiveDateTime) => data
+                .map(|val: chrono::NaiveTime| {
+                    // Postgres' maximum precision is 6 (aka microseconds).
+                    //
+                    // While the Postgres spec supports specifying a precision
+                    // Materialize does not.
+                    let rounded = val.round_subsecs(6);
+                    // Overflowed.
+                    let val = if rounded < val {
+                        val.trunc_subsecs(6)
+                    } else {
+                        val
+                    };
+                    Datum::Time(val)
+                }),
+            (ScalarType::Timestamp { precision }, SqlServerColumnDecodeType::NaiveDateTime) => data
                 .try_get(name)
                 .map_err(|_| SqlServerDecodeError::invalid_column(name, "timestamp"))?
                 .map(|val: chrono::NaiveDateTime| {
-                    let ts = val
+                    let ts: CheckedTimestamp<chrono::NaiveDateTime> = val
                         .try_into()
                         .map_err(|e| SqlServerDecodeError::invalid_timestamp(name, e))?;
-                    Ok::<_, SqlServerDecodeError>(Datum::Timestamp(ts))
+                    let rounded = ts
+                        .round_to_precision(*precision)
+                        .map_err(|e| SqlServerDecodeError::invalid_timestamp(name, e))?;
+                    Ok::<_, SqlServerDecodeError>(Datum::Timestamp(rounded))
                 })
                 .transpose()?,
-            (ScalarType::TimestampTz { .. }, SqlServerColumnDecodeType::DateTime) => data
+            (ScalarType::TimestampTz { precision }, SqlServerColumnDecodeType::DateTime) => data
                 .try_get(name)
                 .map_err(|_| SqlServerDecodeError::invalid_column(name, "timestamptz"))?
                 .map(|val: chrono::DateTime<chrono::Utc>| {
-                    let ts = val
+                    let ts: CheckedTimestamp<chrono::DateTime<chrono::Utc>> = val
                         .try_into()
                         .map_err(|e| SqlServerDecodeError::invalid_timestamp(name, e))?;
-                    Ok::<_, SqlServerDecodeError>(Datum::TimestampTz(ts))
+                    let rounded = ts
+                        .round_to_precision(*precision)
+                        .map_err(|e| SqlServerDecodeError::invalid_timestamp(name, e))?;
+                    Ok::<_, SqlServerDecodeError>(Datum::TimestampTz(rounded))
                 })
                 .transpose()?,
             // We support mapping any type to a string.
@@ -778,12 +818,28 @@ impl SqlServerRowDecoder {
                         // TODO(sql_server2): Structured Error.
                         anyhow::anyhow!("no SQL Server column with name {col_name} found")
                     })?;
+                let Some(sql_server_col_typ) = sql_server_col.column_type.as_ref() else {
+                    return Err(SqlServerError::ProgrammingError(format!(
+                        "programming error, {col_name} should have been exluded",
+                    )));
+                };
 
                 // This shouldn't be true, but be defensive.
                 //
-                // TODO(sql_server2): Maybe allow the Materialize column type to be more nullable
-                // than our decoding type?
-                if sql_server_col.column_type.as_ref() != Some(col_type) {
+                // TODO(sql_server2): Maybe allow the Materialize column type to be
+                // more nullable than our decoding type?
+                //
+                // Sad. Our timestamp types don't roundtrip their precision through
+                // parsing so we ignore the mismatch here.
+                let matches = match (&sql_server_col_typ.scalar_type, &col_type.scalar_type) {
+                    (ScalarType::Timestamp { .. }, ScalarType::Timestamp { .. })
+                    | (ScalarType::TimestampTz { .. }, ScalarType::TimestampTz { .. }) => {
+                        // Types match so check nullability.
+                        sql_server_col_typ.nullable == col_type.nullable
+                    }
+                    (_, _) => sql_server_col_typ == col_type,
+                };
+                if !matches {
                     return Err(SqlServerError::ProgrammingError(format!(
                         "programming error, {col_name} has mismatched type {:?} vs {:?}",
                         sql_server_col.column_type, col_type
@@ -792,8 +848,13 @@ impl SqlServerRowDecoder {
 
                 let name = Arc::clone(&sql_server_col.name);
                 let decoder = sql_server_col.decode_type.clone();
+                // Note: We specifically use the `ColumnType` from the SqlServerTableDesc
+                // because it retains precision.
+                //
+                // See: <https://github.com/MaterializeInc/database-issues/issues/3179>.
+                let col_typ = sql_server_col_typ.clone();
 
-                Ok::<_, SqlServerError>((name, col_type.clone(), decoder))
+                Ok::<_, SqlServerError>((name, col_typ, decoder))
             })
             .collect::<Result<_, _>>()?;
 
