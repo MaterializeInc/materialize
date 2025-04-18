@@ -50,14 +50,31 @@ pub struct Client<Out, In> {
 impl<Out: Payload, In: Payload> Client<Out, In> {
     /// Connect to the server at the given address.
     pub async fn connect(address: &str, version: Version) -> anyhow::Result<Self> {
+        let dest_host = host_from_address(address);
         let stream = Stream::connect(address).await?;
         info!(%address, "ctp: connected to server");
 
         let mut conn = Connection::start(stream);
-        conn.handshake(version).await?;
+        conn.handshake(version, dest_host).await?;
 
         Ok(Self { conn })
     }
+}
+
+/// Helper function to extract the host part from an address string.
+///
+/// This function assumes addresses to be of the form `<host>:<port>` or `<protocol>:<host>:<port>`
+/// and yields `None` otherwise.
+fn host_from_address(address: &str) -> Option<String> {
+    let mut p = address.split(':');
+    let (host, port) = match (p.next(), p.next(), p.next(), p.next()) {
+        (Some(host), Some(port), None, None) => (host, port),
+        (Some(_protocol), Some(host), Some(port), None) => (host, port),
+        _ => return None,
+    };
+
+    let _: u16 = port.parse().ok()?;
+    Some(host.into())
 }
 
 impl<Out, In> Client<Out, In>
@@ -98,6 +115,7 @@ impl<Out: Payload, In: Payload> GenericClient<Out, In> for Client<Out, In> {
 pub async fn serve<In, Out, H>(
     address: SocketAddr,
     version: Version,
+    server_fqdn: Option<String>,
     handler_fn: impl Fn() -> H,
 ) -> anyhow::Result<()>
 where
@@ -115,9 +133,10 @@ where
         let conn = Connection::start(stream);
         let handler = handler_fn();
         let version = version.clone();
+        let server_fqdn = server_fqdn.clone();
 
         mz_ore::task::spawn(|| "ctp::connection", async {
-            let Err(error) = serve_connection(conn, handler, version).await;
+            let Err(error) = serve_connection(conn, handler, version, server_fqdn).await;
             info!("ctp: connection failed: {error}");
         });
     }
@@ -128,13 +147,14 @@ async fn serve_connection<In, Out, H>(
     mut conn: Connection<Out, In>,
     mut handler: H,
     version: Version,
+    server_fqdn: Option<String>,
 ) -> anyhow::Result<Infallible>
 where
     In: Payload,
     Out: Payload,
     H: GenericClient<In, Out>,
 {
-    conn.handshake(version).await?;
+    conn.handshake(version, server_fqdn).await?;
 
     loop {
         tokio::select! {
@@ -263,19 +283,32 @@ impl<Out: Payload, In: Payload> Connection<Out, In> {
     /// return. The `Hello` message contains information about the originating endpoint that is
     /// used by the receiver to validate compatibility with its peer. Only if both endpoints
     /// determine that they are compatible does the handshake succeed.
-    async fn handshake(&mut self, version: Version) -> anyhow::Result<()> {
+    async fn handshake(
+        &mut self,
+        version: Version,
+        server_fqdn: Option<String>,
+    ) -> anyhow::Result<()> {
         self.send(Message::Hello {
             version: version.clone(),
+            server_fqdn: server_fqdn.clone(),
         })
         .await?;
 
-        let peer_version = match self.recv().await? {
-            Message::Hello { version } => version,
+        let (peer_version, peer_server_fqdn) = match self.recv().await? {
+            Message::Hello {
+                version,
+                server_fqdn,
+            } => (version, server_fqdn),
             msg => bail!("expected Hello message, got {msg:?}"),
         };
 
         if peer_version != version {
             bail!("version mismatch: {peer_version} != {version}");
+        }
+        if let (Some(other), Some(mine)) = (&peer_server_fqdn, &server_fqdn) {
+            if other != mine {
+                bail!("server FQDN mismatch: {other} != {mine}");
+            }
         }
 
         Ok(())
@@ -394,6 +427,8 @@ enum Message<P> {
     Hello {
         /// The version of the originating endpoint.
         version: Version,
+        /// The FQDN of the server endpoint.
+        server_fqdn: Option<String>,
     },
     /// A massage carrying application payload.
     Payload(P),

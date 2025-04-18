@@ -69,6 +69,7 @@ fn test_bidirectional_communication() {
             transport::serve(
                 "turmoil:0.0.0.0:7777".parse().unwrap(),
                 VERSION,
+                Some("server".into()),
                 move || handler.lock().unwrap().take().unwrap(),
             ),
         );
@@ -120,6 +121,7 @@ fn test_server_error() {
             transport::serve(
                 "turmoil:0.0.0.0:7777".parse().unwrap(),
                 VERSION,
+                Some("server".into()),
                 move || handler.lock().unwrap().take().unwrap(),
             ),
         );
@@ -170,6 +172,7 @@ fn test_handshake_version_mismatch() {
             transport::serve(
                 "turmoil:0.0.0.0:7777".parse().unwrap(),
                 SERVER_VERSION,
+                Some("server".into()),
                 move || handler.lock().unwrap().take().unwrap(),
             ),
         );
@@ -189,6 +192,54 @@ fn test_handshake_version_mismatch() {
 
                 let error = result.expect_err("connection must fail");
                 if error.to_string() == "version mismatch: 1.2.3 != 1.2.4" {
+                    Ok(())
+                } else {
+                    Err(error)
+                }
+            })
+            .await
+            .expect("retries forever");
+
+        Ok(())
+    });
+
+    sim.run().unwrap();
+}
+
+#[test] // allow(test-attribute)
+fn test_handshake_fqdn_mismatch() {
+    let mut sim = setup();
+
+    sim.host("server", move || async {
+        let (in_tx, mut in_rx) = mpsc::unbounded_channel::<()>();
+        let (_out_tx, out_rx) = mpsc::unbounded_channel::<()>();
+        let handler = ChannelHandler::new(in_tx, out_rx);
+        let handler = Arc::new(Mutex::new(Some(handler)));
+
+        mz_ore::task::spawn(
+            || "serve",
+            transport::serve(
+                "turmoil:0.0.0.0:7777".parse().unwrap(),
+                VERSION,
+                Some("wrong.server".into()),
+                move || handler.lock().unwrap().take().unwrap(),
+            ),
+        );
+
+        // Client has disconnected.
+        assert_none!(in_rx.recv().await);
+
+        Ok(())
+    });
+
+    sim.client("client", async move {
+        Retry::default()
+            .retry_async(async |_| {
+                let result =
+                    transport::Client::<(), ()>::connect("turmoil:server:7777", VERSION).await;
+
+                let error = result.expect_err("connection must fail");
+                if error.to_string() == "server FQDN mismatch: wrong.server != server" {
                     Ok(())
                 } else {
                     Err(error)
