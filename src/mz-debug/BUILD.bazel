@@ -31,7 +31,7 @@ rust_binary(
     proc_macro_deps = [] + all_crate_deps(proc_macro = True),
     rustc_env = {},
     rustc_flags = [],
-    version = "0.142.0-dev.0",
+    version = "0.142.0",
     deps = [
         "//src/build-info:mz_build_info",
         "//src/cloud-resources:mz_cloud_resources",
