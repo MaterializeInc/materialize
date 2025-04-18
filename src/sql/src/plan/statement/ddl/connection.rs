@@ -547,8 +547,8 @@ impl ConnectionOptionExtracted {
                     });
                 }
 
-                // TODO(sql_server1): Parse the encryption level from the create SQL.
-                let encryption = mz_sql_server_util::config::EncryptionLevel::None;
+                // TODO(sql_server2): Parse the encryption level from the create SQL.
+                let encryption = mz_sql_server_util::config::EncryptionLevel::Preferred;
 
                 // 1433 is the default port for SQL Server instances running over TCP.
                 //
