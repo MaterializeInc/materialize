@@ -20,21 +20,12 @@ impl<'a> Explain<'a> for Explainable<'a, DataflowDescription<Plan>> {
 
     type Text = <DataflowDescription<Plan> as Explain<'a>>::Text;
 
-    type VerboseText = <DataflowDescription<Plan> as Explain<'a>>::VerboseText;
-
     type Json = <DataflowDescription<Plan> as Explain<'a>>::Json;
 
     type Dot = <DataflowDescription<Plan> as Explain<'a>>::Dot;
 
     fn explain_text(&'a mut self, context: &'a Self::Context) -> Result<Self::Text, ExplainError> {
         self.0.explain_text(context)
-    }
-
-    fn explain_verbose_text(
-        &'a mut self,
-        context: &'a Self::Context,
-    ) -> Result<Self::VerboseText, ExplainError> {
-        self.0.explain_verbose_text(context)
     }
 
     fn explain_json(&'a mut self, context: &'a Self::Context) -> Result<Self::Json, ExplainError> {
