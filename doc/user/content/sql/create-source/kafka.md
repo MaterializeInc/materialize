@@ -487,6 +487,10 @@ Operation type | Resource type    | Resource name
 Read           | Topic            | The specified `TOPIC` option
 Read           | Group            | All group IDs starting with the specified [`GROUP ID PREFIX` option](#connection-options)
 
+## Kafka transaction markers
+
+{{< include-md file="shared-content/kafka-transaction-markers.md" >}}
+
 ## Examples
 
 ### Creating a connection
