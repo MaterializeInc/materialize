@@ -233,9 +233,9 @@ impl StatsCollector<ProtoStorageCommand, ProtoStorageResponse> for ReplicaMetric
 pub struct HistoryMetrics {
     /// Number of `CreateTimely` commands.
     pub create_timely_count: UIntGauge,
-    /// Number of `RunIngestions` commands.
+    /// Number of `RunIngestion` commands.
     pub run_ingestions_count: UIntGauge,
-    /// Number of `RunSinks` commands.
+    /// Number of `RunSink` commands.
     pub run_sinks_count: UIntGauge,
     /// Number of `AllowCompaction` commands.
     pub allow_compaction_count: UIntGauge,

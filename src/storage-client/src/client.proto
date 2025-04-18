@@ -36,10 +36,6 @@ message ProtoCompaction {
   mz_repr.antichain.ProtoU64Antichain frontier = 2;
 }
 
-message ProtoAllowCompaction {
-  repeated ProtoCompaction collections = 1;
-}
-
 message ProtoRunIngestionCommand {
   reserved 3;
   reserved "update";
@@ -75,19 +71,6 @@ message ProtoRunSinkCommand {
   mz_storage_types.sinks.ProtoStorageSinkDesc description = 2;
 }
 
-message ProtoRunSinks {
-  repeated ProtoRunSinkCommand sinks = 1;
-}
-
-message ProtoFrontierUppersKind {
-  repeated ProtoTrace traces = 1;
-}
-
-message ProtoTrace {
-  mz_repr.global_id.ProtoGlobalId id = 1;
-  mz_repr.antichain.ProtoU64Antichain upper = 2;
-}
-
 message ProtoStorageCommand {
   message ProtoCreateTimely {
     mz_cluster_client.client.ProtoTimelyConfig config = 1;
@@ -96,11 +79,11 @@ message ProtoStorageCommand {
 
   oneof kind {
     ProtoCreateTimely create_timely = 6;
-    ProtoCreateSources create_sources = 1;
-    ProtoAllowCompaction allow_compaction = 2;
+    ProtoRunIngestionCommand run_ingestion = 1;
+    ProtoCompaction allow_compaction = 2;
     google.protobuf.Empty initialization_complete = 3;
     google.protobuf.Empty allow_writes = 7;
-    ProtoRunSinks run_sinks = 4;
+    ProtoRunSinkCommand run_sink = 4;
     mz_storage_types.parameters.ProtoStorageParameters update_configuration = 5;
     ProtoRunOneshotIngestionsCommand run_oneshot_ingestions = 10;
     ProtoCancelOneshotIngestionsCommand cancel_oneshot_ingestions = 11;
@@ -108,6 +91,11 @@ message ProtoStorageCommand {
 }
 
 message ProtoStorageResponse {
+  message ProtoFrontierUpper {
+    mz_repr.global_id.ProtoGlobalId id = 1;
+    mz_repr.antichain.ProtoU64Antichain upper = 2;
+  }
+
   message ProtoStatisticsUpdates {
     repeated mz_storage_client.statistics.ProtoSourceStatisticsUpdate source_updates = 1;
     repeated mz_storage_client.statistics.ProtoSinkStatisticsUpdate sink_updates = 2;
@@ -134,10 +122,6 @@ message ProtoStorageResponse {
     optional string replica_id = 7;
   }
 
-  message ProtoStatusUpdates {
-    repeated ProtoStatusUpdate updates = 1;
-  }
-
   message ProtoDroppedId {
     mz_repr.global_id.ProtoGlobalId id = 1;
   }
@@ -159,10 +143,10 @@ message ProtoStorageResponse {
   }
 
   oneof kind {
-    ProtoFrontierUppersKind frontier_uppers = 1;
+    ProtoFrontierUpper frontier_upper = 1;
     ProtoDroppedId dropped_id = 2;
     ProtoStatisticsUpdates stats = 3;
-    ProtoStatusUpdates status_updates = 4;
+    ProtoStatusUpdate status_update = 4;
     ProtoStagedBatches staged_batches = 5;
   }
 }

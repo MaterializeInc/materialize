@@ -127,14 +127,13 @@ pub enum StorageCommand<T = mz_repr::Timestamp> {
     AllowWrites,
     /// Update storage instance configuration.
     UpdateConfiguration(StorageParameters),
-    /// Run the enumerated sources, each associated with its identifier.
-    RunIngestions(Vec<RunIngestionCommand>),
+    /// Run the specified ingestion dataflow.
+    RunIngestion(RunIngestionCommand),
     /// Enable compaction in storage-managed collections.
     ///
-    /// Each entry in the vector names a collection and provides a frontier after which
-    /// accumulations must be correct.
-    AllowCompaction(Vec<(GlobalId, Antichain<T>)>),
-    RunSinks(Vec<RunSinkCommand<T>>),
+    /// A collection id and a frontier after which accumulations must be correct.
+    AllowCompaction(GlobalId, Antichain<T>),
+    RunSink(RunSinkCommand<T>),
     /// Run a dataflow which will ingest data from an external source and only __stage__ it in
     /// Persist.
     ///
@@ -163,12 +162,12 @@ impl<T> StorageCommand<T> {
             | InitializationComplete
             | AllowWrites
             | UpdateConfiguration(_)
-            | AllowCompaction(_)
+            | AllowCompaction(_, _)
             | CancelOneshotIngestion { .. } => false,
             // TODO(cf2): multi-replica oneshot ingestions. At the moment returning
             // true here means we can't run `COPY FROM` on multi-replica clusters, this
             // should be easy enough to support though.
-            RunIngestions(_) | RunSinks(_) | RunOneshotIngestion(_) => true,
+            RunIngestion(_) | RunSink(_) | RunOneshotIngestion(_) => true,
         }
     }
 }
@@ -310,17 +309,12 @@ impl RustType<ProtoStorageCommand> for StorageCommand<mz_repr::Timestamp> {
                 StorageCommand::UpdateConfiguration(params) => {
                     UpdateConfiguration(params.into_proto())
                 }
-                StorageCommand::AllowCompaction(collections) => {
-                    AllowCompaction(ProtoAllowCompaction {
-                        collections: collections.into_proto(),
-                    })
-                }
-                StorageCommand::RunIngestions(sources) => CreateSources(ProtoCreateSources {
-                    sources: sources.into_proto(),
+                StorageCommand::AllowCompaction(id, frontier) => AllowCompaction(ProtoCompaction {
+                    id: Some(id.into_proto()),
+                    frontier: Some(frontier.into_proto()),
                 }),
-                StorageCommand::RunSinks(sinks) => RunSinks(ProtoRunSinks {
-                    sinks: sinks.into_proto(),
-                }),
+                StorageCommand::RunIngestion(ingestion) => RunIngestion(ingestion.into_proto()),
+                StorageCommand::RunSink(sink) => RunSink(sink.into_proto()),
                 StorageCommand::RunOneshotIngestion(ingestions) => {
                     RunOneshotIngestions(ProtoRunOneshotIngestionsCommand {
                         ingestions: ingestions.iter().map(|cmd| cmd.into_proto()).collect(),
@@ -350,15 +344,16 @@ impl RustType<ProtoStorageCommand> for StorageCommand<mz_repr::Timestamp> {
             Some(UpdateConfiguration(params)) => {
                 Ok(StorageCommand::UpdateConfiguration(params.into_rust()?))
             }
-            Some(CreateSources(ProtoCreateSources { sources })) => {
-                Ok(StorageCommand::RunIngestions(sources.into_rust()?))
+            Some(RunIngestion(ingestion)) => {
+                Ok(StorageCommand::RunIngestion(ingestion.into_rust()?))
             }
-            Some(AllowCompaction(ProtoAllowCompaction { collections })) => {
-                Ok(StorageCommand::AllowCompaction(collections.into_rust()?))
+            Some(AllowCompaction(ProtoCompaction { id, frontier })) => {
+                Ok(StorageCommand::AllowCompaction(
+                    id.into_rust_if_some("ProtoCompaction::id")?,
+                    frontier.into_rust_if_some("ProtoCompaction::frontier")?,
+                ))
             }
-            Some(RunSinks(ProtoRunSinks { sinks })) => {
-                Ok(StorageCommand::RunSinks(sinks.into_rust()?))
-            }
+            Some(RunSink(sink)) => Ok(StorageCommand::RunSink(sink.into_rust()?)),
             Some(RunOneshotIngestions(oneshot)) => {
                 let ingestions = oneshot
                     .ingestions
@@ -389,28 +384,15 @@ impl Arbitrary for StorageCommand<mz_repr::Timestamp> {
     fn arbitrary_with(_: Self::Parameters) -> Self::Strategy {
         Union::new(vec![
             // TODO(guswynn): cluster-unification: also test `CreateTimely` here.
-            proptest::collection::vec(any::<RunIngestionCommand>(), 1..4)
-                .prop_map(StorageCommand::RunIngestions)
+            any::<RunIngestionCommand>()
+                .prop_map(StorageCommand::RunIngestion)
                 .boxed(),
-            proptest::collection::vec(any::<RunSinkCommand<mz_repr::Timestamp>>(), 1..4)
-                .prop_map(StorageCommand::RunSinks)
+            any::<RunSinkCommand<mz_repr::Timestamp>>()
+                .prop_map(StorageCommand::RunSink)
                 .boxed(),
-            proptest::collection::vec(
-                (
-                    any::<GlobalId>(),
-                    proptest::collection::vec(any::<mz_repr::Timestamp>(), 1..4),
-                ),
-                1..4,
-            )
-            .prop_map(|collections| {
-                StorageCommand::AllowCompaction(
-                    collections
-                        .into_iter()
-                        .map(|(id, frontier_vec)| (id, Antichain::from(frontier_vec)))
-                        .collect(),
-                )
-            })
-            .boxed(),
+            (any::<GlobalId>(), any_antichain())
+                .prop_map(|(id, frontier)| StorageCommand::AllowCompaction(id, frontier))
+                .boxed(),
         ])
     }
 }
@@ -648,29 +630,31 @@ impl From<StatusUpdate> for AppendOnlyUpdate {
 /// Responses that the storage nature of a worker/dataflow can provide back to the coordinator.
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub enum StorageResponse<T = mz_repr::Timestamp> {
-    /// A list of identifiers of traces, with new upper frontiers.
-    FrontierUppers(Vec<(GlobalId, Antichain<T>)>),
+    /// A new upper frontier for the specified identifier.
+    FrontierUpper(GlobalId, Antichain<T>),
     /// Punctuation indicates that no more responses will be transmitted for the specified id
     DroppedId(GlobalId),
     /// Batches that have been staged in Persist and maybe will be linked into a shard.
     StagedBatches(BTreeMap<uuid::Uuid, Vec<Result<ProtoBatch, String>>>),
-
     /// A list of statistics updates, currently only for sources.
     StatisticsUpdates(Vec<SourceStatisticsUpdate>, Vec<SinkStatisticsUpdate>),
-    /// A list of status updates for sources and sinks. Periodically sent from
+    /// A status update for a source or a sink. Periodically sent from
     /// storage workers to convey the latest status information about an object.
-    StatusUpdates(Vec<StatusUpdate>),
+    StatusUpdate(StatusUpdate),
 }
 
 impl RustType<ProtoStorageResponse> for StorageResponse<mz_repr::Timestamp> {
     fn into_proto(&self) -> ProtoStorageResponse {
         use proto_storage_response::Kind::*;
         use proto_storage_response::{
-            ProtoDroppedId, ProtoStagedBatches, ProtoStatisticsUpdates, ProtoStatusUpdates,
+            ProtoDroppedId, ProtoFrontierUpper, ProtoStagedBatches, ProtoStatisticsUpdates,
         };
         ProtoStorageResponse {
             kind: Some(match self {
-                StorageResponse::FrontierUppers(traces) => FrontierUppers(traces.into_proto()),
+                StorageResponse::FrontierUpper(id, upper) => FrontierUpper(ProtoFrontierUpper {
+                    id: Some(id.into_proto()),
+                    upper: Some(upper.into_proto()),
+                }),
                 StorageResponse::DroppedId(id) => DroppedId(ProtoDroppedId {
                     id: Some(id.into_proto()),
                 }),
@@ -686,9 +670,7 @@ impl RustType<ProtoStorageResponse> for StorageResponse<mz_repr::Timestamp> {
                             .collect(),
                     })
                 }
-                StorageResponse::StatusUpdates(updates) => StatusUpdates(ProtoStatusUpdates {
-                    updates: updates.into_proto(),
-                }),
+                StorageResponse::StatusUpdate(update) => StatusUpdate(update.into_proto()),
                 StorageResponse::StagedBatches(staged) => {
                     let batches = staged
                         .into_iter()
@@ -718,13 +700,16 @@ impl RustType<ProtoStorageResponse> for StorageResponse<mz_repr::Timestamp> {
 
     fn from_proto(proto: ProtoStorageResponse) -> Result<Self, TryFromProtoError> {
         use proto_storage_response::Kind::*;
-        use proto_storage_response::{ProtoDroppedId, ProtoStatusUpdates};
+        use proto_storage_response::{ProtoDroppedId, ProtoFrontierUpper};
         match proto.kind {
             Some(DroppedId(ProtoDroppedId { id })) => Ok(StorageResponse::DroppedId(
                 id.into_rust_if_some("ProtoDroppedId::id")?,
             )),
-            Some(FrontierUppers(traces)) => {
-                Ok(StorageResponse::FrontierUppers(traces.into_rust()?))
+            Some(FrontierUpper(ProtoFrontierUpper { id, upper })) => {
+                Ok(StorageResponse::FrontierUpper(
+                    id.into_rust_if_some("ProtoFrontierUpper::id")?,
+                    upper.into_rust_if_some("ProtoFrontierUpper::upper")?,
+                ))
             }
             Some(Stats(stats)) => Ok(StorageResponse::StatisticsUpdates(
                 stats
@@ -738,9 +723,7 @@ impl RustType<ProtoStorageResponse> for StorageResponse<mz_repr::Timestamp> {
                     .map(|update| update.into_rust())
                     .collect::<Result<Vec<_>, TryFromProtoError>>()?,
             )),
-            Some(StatusUpdates(ProtoStatusUpdates { updates })) => {
-                Ok(StorageResponse::StatusUpdates(updates.into_rust()?))
-            }
+            Some(StatusUpdate(update)) => Ok(StorageResponse::StatusUpdate(update.into_rust()?)),
             Some(StagedBatches(staged)) => {
                 let batches: BTreeMap<_, _> = staged
                     .batches
@@ -784,8 +767,8 @@ impl Arbitrary for StorageResponse<mz_repr::Timestamp> {
     fn arbitrary_with(_: Self::Parameters) -> Self::Strategy {
         // TODO(guswynn): test `SourceStatisticsUpdates`
         Union::new(vec![
-            proptest::collection::vec((any::<GlobalId>(), any_antichain()), 1..4)
-                .prop_map(StorageResponse::FrontierUppers)
+            (any::<GlobalId>(), any_antichain())
+                .prop_map(|(id, upper)| StorageResponse::FrontierUpper(id, upper))
                 .boxed(),
         ])
     }
@@ -840,16 +823,16 @@ where
                 // until we are required to manage multiple replicas, we can handle
                 // keeping track of state across restarts of storage server(s).
             }
-            StorageCommand::RunIngestions(ingestions) => ingestions
-                .iter()
-                .for_each(|i| self.insert_new_uppers(i.description.collection_ids())),
-            StorageCommand::RunSinks(exports) => {
-                exports.iter().for_each(|e| self.insert_new_uppers([e.id]))
+            StorageCommand::RunIngestion(ingestion) => {
+                self.insert_new_uppers(ingestion.description.collection_ids());
+            }
+            StorageCommand::RunSink(export) => {
+                self.insert_new_uppers([export.id]);
             }
             StorageCommand::InitializationComplete
             | StorageCommand::AllowWrites
             | StorageCommand::UpdateConfiguration(_)
-            | StorageCommand::AllowCompaction(_)
+            | StorageCommand::AllowCompaction(_, _)
             | StorageCommand::RunOneshotIngestion(_)
             | StorageCommand::CancelOneshotIngestion { .. } => {}
         };
@@ -908,33 +891,25 @@ where
     ) -> Option<Result<StorageResponse<T>, anyhow::Error>> {
         match response {
             // Avoid multiple retractions of minimum time, to present as updates from one worker.
-            StorageResponse::FrontierUppers(list) => {
-                let mut new_uppers = Vec::new();
+            StorageResponse::FrontierUpper(id, new_shard_upper) => {
+                let (frontier, shard_frontiers) = match self.uppers.get_mut(&id) {
+                    Some(value) => value,
+                    None => panic!("Reference to absent collection: {id}"),
+                };
+                let old_upper = frontier.frontier().to_owned();
+                let shard_upper = match &mut shard_frontiers[shard_id] {
+                    Some(shard_upper) => shard_upper,
+                    None => panic!("Reference to absent shard {shard_id} for collection {id}"),
+                };
+                frontier.update_iter(shard_upper.iter().map(|t| (t.clone(), -1)));
+                frontier.update_iter(new_shard_upper.iter().map(|t| (t.clone(), 1)));
+                shard_upper.join_assign(&new_shard_upper);
 
-                for (id, new_shard_upper) in list {
-                    let (frontier, shard_frontiers) = match self.uppers.get_mut(&id) {
-                        Some(value) => value,
-                        None => panic!("Reference to absent collection: {id}"),
-                    };
-                    let old_upper = frontier.frontier().to_owned();
-                    let shard_upper = match &mut shard_frontiers[shard_id] {
-                        Some(shard_upper) => shard_upper,
-                        None => panic!("Reference to absent shard {shard_id} for collection {id}"),
-                    };
-                    frontier.update_iter(shard_upper.iter().map(|t| (t.clone(), -1)));
-                    frontier.update_iter(new_shard_upper.iter().map(|t| (t.clone(), 1)));
-                    shard_upper.join_assign(&new_shard_upper);
-
-                    let new_upper = frontier.frontier();
-                    if PartialOrder::less_than(&old_upper.borrow(), &new_upper) {
-                        new_uppers.push((id, new_upper.to_owned()));
-                    }
-                }
-
-                if new_uppers.is_empty() {
-                    None
+                let new_upper = frontier.frontier();
+                if PartialOrder::less_than(&old_upper.borrow(), &new_upper) {
+                    Some(Ok(StorageResponse::FrontierUpper(id, new_upper.to_owned())))
                 } else {
-                    Some(Ok(StorageResponse::FrontierUppers(new_uppers)))
+                    None
                 }
             }
             StorageResponse::DroppedId(id) => {
@@ -964,8 +939,8 @@ where
                     sink_stats,
                 )))
             }
-            StorageResponse::StatusUpdates(updates) => {
-                Some(Ok(StorageResponse::StatusUpdates(updates)))
+            StorageResponse::StatusUpdate(updates) => {
+                Some(Ok(StorageResponse::StatusUpdate(updates)))
             }
             StorageResponse::StagedBatches(batches) => {
                 let mut finished_batches = BTreeMap::new();
@@ -1091,34 +1066,6 @@ where
             .expect("invalid Persist usage");
 
         batch.into_transmittable_batch()
-    }
-}
-
-impl RustType<ProtoTrace> for (GlobalId, Antichain<mz_repr::Timestamp>) {
-    fn into_proto(&self) -> ProtoTrace {
-        ProtoTrace {
-            id: Some(self.0.into_proto()),
-            upper: Some(self.1.into_proto()),
-        }
-    }
-
-    fn from_proto(proto: ProtoTrace) -> Result<Self, TryFromProtoError> {
-        Ok((
-            proto.id.into_rust_if_some("ProtoTrace::id")?,
-            proto.upper.into_rust_if_some("ProtoTrace::upper")?,
-        ))
-    }
-}
-
-impl RustType<ProtoFrontierUppersKind> for Vec<(GlobalId, Antichain<mz_repr::Timestamp>)> {
-    fn into_proto(&self) -> ProtoFrontierUppersKind {
-        ProtoFrontierUppersKind {
-            traces: self.into_proto(),
-        }
-    }
-
-    fn from_proto(proto: ProtoFrontierUppersKind) -> Result<Self, TryFromProtoError> {
-        proto.traces.into_rust()
     }
 }
 

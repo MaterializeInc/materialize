@@ -36,14 +36,14 @@
 //! when running code that requires `async`. This is needed because a timely
 //! main loop cannot run `async` code.
 //!
-//! ## Example flow of commands for `RunIngestions`
+//! ## Example flow of commands for `RunIngestion`
 //!
 //! With external commands, internal commands, and the async worker,
 //! understanding where and how commands from the controller are realized can
-//! get complicated. We will follow the complete flow for `RunIngestions`, as an
+//! get complicated. We will follow the complete flow for `RunIngestion`, as an
 //! example:
 //!
-//! 1. Worker receives a [`StorageCommand::RunIngestions`] command from the
+//! 1. Worker receives a [`StorageCommand::RunIngestion`] command from the
 //!    controller.
 //! 2. This command is processed in [`StorageState::handle_storage_command`].
 //!    This step cannot render dataflows, because it does not have access to the
@@ -51,7 +51,7 @@
 //!    lifetime of the source, such as the `reported_frontier`. Putting in place
 //!    this reported frontier will enable frontier reporting for that source. We
 //!    will not start reporting when we only see an internal command for
-//!    rendering a dataflow, which can "overtake" the external `RunIngestions`
+//!    rendering a dataflow, which can "overtake" the external `RunIngestion`
 //!    command.
 //! 3. During processing of that command, we call
 //!    [`AsyncStorageWorker::update_frontiers`], which causes a command to
@@ -66,15 +66,15 @@
 //!    [`Worker::handle_internal_storage_command`]. This is what will cause the
 //!    required dataflow to be rendered on all workers.
 //!
-//! The process described above assumes that the `RunIngestions` is _not_ an
+//! The process described above assumes that the `RunIngestion` is _not_ an
 //! update, i.e. it is in response to a `CREATE SOURCE`-like statement.
 //!
-//! The primary distinction when handling a `RunIngestions` that represents an
+//! The primary distinction when handling a `RunIngestion` that represents an
 //! update, is that it might fill out new internal state in the mid-level
 //! clients on the way toward being run.
 
 use std::cell::RefCell;
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::path::PathBuf;
 use std::rc::Rc;
 use std::sync::Arc;
@@ -85,7 +85,6 @@ use crossbeam_channel::{RecvError, TryRecvError};
 use fail::fail_point;
 use mz_ore::now::NowFn;
 use mz_ore::tracing::TracingHandle;
-use mz_ore::vec::VecExt;
 use mz_ore::{soft_assert_or_log, soft_panic_or_log};
 use mz_persist_client::batch::ProtoBatch;
 use mz_persist_client::cache::PersistClientCache;
@@ -870,18 +869,15 @@ impl<'w, A: Allocate> Worker<'w, A> {
             }
         }
 
-        if !new_uppers.is_empty() {
-            self.send_storage_response(response_tx, StorageResponse::FrontierUppers(new_uppers));
+        for (id, upper) in new_uppers {
+            self.send_storage_response(response_tx, StorageResponse::FrontierUpper(id, upper));
         }
     }
 
     /// Pumps latest status updates from the buffer shared with operators and
     /// reports any updates that need reporting.
     pub fn report_status_updates(&mut self, response_tx: &ResponseSender) {
-        let mut to_report = Vec::new();
-
-        // If we haven't done the initial status report, report all current
-        // statuses
+        // If we haven't done the initial status report, report all current statuses
         if !self.storage_state.initial_status_reported {
             // We pull initially reported status updates to "now", so that they
             // sort as the latest update in internal status collections. This
@@ -898,25 +894,22 @@ impl<'w, A: Allocate> Worker<'w, A> {
                     update.timestamp = now_ts.clone();
                     update
                 });
-            to_report.extend(status_updates);
+            for update in status_updates {
+                self.send_storage_response(response_tx, StorageResponse::StatusUpdate(update));
+            }
             self.storage_state.initial_status_reported = true;
         }
 
         // Pump updates into our state and stage them for reporting.
-        if self.storage_state.shared_status_updates.borrow().len() > 0 {
-            for shared_update in self.storage_state.shared_status_updates.take() {
-                let id = shared_update.id;
+        for shared_update in self.storage_state.shared_status_updates.take() {
+            self.send_storage_response(
+                response_tx,
+                StorageResponse::StatusUpdate(shared_update.clone()),
+            );
 
-                to_report.push(shared_update.clone());
-
-                self.storage_state
-                    .latest_status_updates
-                    .insert(id, shared_update.clone());
-            }
-        }
-
-        if !to_report.is_empty() {
-            self.send_storage_response(response_tx, StorageResponse::StatusUpdates(to_report));
+            self.storage_state
+                .latest_status_updates
+                .insert(shared_update.id, shared_update);
         }
     }
 
@@ -1012,8 +1005,8 @@ impl<'w, A: Allocate> Worker<'w, A> {
                 StorageCommand::CreateTimely { .. } => {
                     panic!("CreateTimely must be captured before")
                 }
-                StorageCommand::AllowCompaction(sinces) => {
-                    info!(%worker_id, ?sinces, "reconcile: received AllowCompaction command");
+                StorageCommand::AllowCompaction(id, since) => {
+                    info!(%worker_id, ?id, ?since, "reconcile: received AllowCompaction command");
 
                     // collect all "drop commands". These are `AllowCompaction`
                     // commands that compact to the empty since. Then, later, we make sure
@@ -1021,40 +1014,37 @@ impl<'w, A: Allocate> Worker<'w, A> {
                     // assume that the `AllowCompaction` command is ordered after the
                     // `Create*` commands but don't assert that.
                     // WIP: Should we assert?
-                    let drops = sinces.drain_filter_swapping(|(_id, since)| since.is_empty());
-                    drop_commands.extend(drops.map(|(id, _since)| id));
-                }
-                StorageCommand::RunIngestions(ingestions) => {
-                    info!(%worker_id, ?ingestions, "reconcile: received RunIngestions command");
-
-                    // Ensure that ingestions are forward-rolling alter compatible.
-                    for ingestion in ingestions {
-                        let prev = running_ingestion_descriptions
-                            .insert(ingestion.id, ingestion.description.clone());
-
-                        if let Some(prev_ingest) = prev {
-                            // If the new ingestion is not exactly equal to the currently running
-                            // ingestion, we must either track that we need to synthesize an update
-                            // command to change the ingestion, or panic.
-                            prev_ingest
-                                .alter_compatible(ingestion.id, &ingestion.description)
-                                .expect("only alter compatible ingestions permitted");
-                        }
+                    if since.is_empty() {
+                        drop_commands.insert(*id);
                     }
                 }
-                StorageCommand::RunSinks(exports) => {
-                    info!(%worker_id, ?exports, "reconcile: received RunSinks command");
+                StorageCommand::RunIngestion(ingestion) => {
+                    info!(%worker_id, ?ingestion, "reconcile: received RunIngestion command");
+
+                    // Ensure that ingestions are forward-rolling alter compatible.
+                    let prev = running_ingestion_descriptions
+                        .insert(ingestion.id, ingestion.description.clone());
+
+                    if let Some(prev_ingest) = prev {
+                        // If the new ingestion is not exactly equal to the currently running
+                        // ingestion, we must either track that we need to synthesize an update
+                        // command to change the ingestion, or panic.
+                        prev_ingest
+                            .alter_compatible(ingestion.id, &ingestion.description)
+                            .expect("only alter compatible ingestions permitted");
+                    }
+                }
+                StorageCommand::RunSink(export) => {
+                    info!(%worker_id, ?export, "reconcile: received RunSink command");
 
                     // Ensure that exports are forward-rolling alter compatible.
-                    for export in exports {
-                        let prev = running_exports_descriptions
-                            .insert(export.id, export.description.clone());
+                    let prev =
+                        running_exports_descriptions.insert(export.id, export.description.clone());
 
-                        if let Some(prev_export) = prev {
-                            prev_export
-                                .alter_compatible(export.id, &export.description)
-                                .expect("only alter compatible exports permitted");
-                        }
+                    if let Some(prev_export) = prev {
+                        prev_export
+                            .alter_compatible(export.id, &export.description)
+                            .expect("only alter compatible exports permitted");
                     }
                 }
                 StorageCommand::RunOneshotIngestion(ingestions) => {
@@ -1076,102 +1066,98 @@ impl<'w, A: Allocate> Worker<'w, A> {
 
         // We iterate over this backward to ensure that we keep only the most recent ingestion
         // description.
-        for command in commands.iter_mut().rev() {
-            match command {
+        let mut filtered_commands = VecDeque::new();
+        for mut command in commands.into_iter().rev() {
+            let mut should_keep = true;
+            match &mut command {
                 StorageCommand::CreateTimely { .. } => {
                     panic!("CreateTimely must be captured before")
                 }
-                StorageCommand::RunIngestions(ingestions) => {
-                    ingestions.retain_mut(|ingestion| {
-                        // Subsources can be dropped independently of their
-                        // primary source, so we evaluate them in a separate
-                        // loop.
-                        for export_id in ingestion
-                            .description
-                            .source_exports
-                            .keys()
-                            .filter(|export_id| **export_id != ingestion.id)
-                        {
-                            if drop_commands.remove(export_id) {
-                                info!(%worker_id, %export_id, "reconcile: dropping subsource");
-                                self.storage_state.dropped_ids.push(*export_id);
-                            }
+                StorageCommand::RunIngestion(ingestion) => {
+                    // Subsources can be dropped independently of their
+                    // primary source, so we evaluate them in a separate
+                    // loop.
+                    for export_id in ingestion
+                        .description
+                        .source_exports
+                        .keys()
+                        .filter(|export_id| **export_id != ingestion.id)
+                    {
+                        if drop_commands.remove(export_id) {
+                            info!(%worker_id, %export_id, "reconcile: dropping subsource");
+                            self.storage_state.dropped_ids.push(*export_id);
+                        }
+                    }
+
+                    if drop_commands.remove(&ingestion.id)
+                        || self.storage_state.dropped_ids.contains(&ingestion.id)
+                    {
+                        info!(%worker_id, %ingestion.id, "reconcile: dropping ingestion");
+
+                        // If an ingestion is dropped, so too must all of
+                        // its subsources (i.e. ingestion exports, as well
+                        // as its progress subsource).
+                        for id in ingestion.description.collection_ids() {
+                            drop_commands.remove(&id);
+                            self.storage_state.dropped_ids.push(id);
+                        }
+                        should_keep = false;
+                    } else {
+                        let most_recent_defintion =
+                            seen_most_recent_definition.insert(ingestion.id);
+
+                        if most_recent_defintion {
+                            // If this is the most recent definition, this
+                            // is what we will be running when
+                            // reconciliation completes. This definition
+                            // must not include any dropped subsources.
+                            ingestion.description.source_exports.retain(|export_id, _| {
+                                !self.storage_state.dropped_ids.contains(export_id)
+                            });
+
+                            // After clearing any dropped subsources, we can
+                            // state that we expect all of these to exist.
+                            expected_objects.extend(ingestion.description.collection_ids());
                         }
 
-                        if drop_commands.remove(&ingestion.id)
-                            || self.storage_state.dropped_ids.contains(&ingestion.id)
-                        {
-                            info!(%worker_id, %ingestion.id, "reconcile: dropping ingestion");
+                        let running_ingestion = self.storage_state.ingestions.get(&ingestion.id);
 
-                            // If an ingestion is dropped, so too must all of
-                            // its subsources (i.e. ingestion exports, as well
-                            // as its progress subsource).
-                            for id in ingestion.description.collection_ids() {
-                                drop_commands.remove(&id);
-                                self.storage_state.dropped_ids.push(id);
-                            }
-
-                            false
-                        } else {
-                            let most_recent_defintion =
-                                seen_most_recent_definition.insert(ingestion.id);
-
-                            if most_recent_defintion {
-                                // If this is the most recent definition, this
-                                // is what we will be running when
-                                // reconciliation completes. This definition
-                                // must not include any dropped subsources.
-                                ingestion.description.source_exports.retain(|export_id, _| {
-                                    !self.storage_state.dropped_ids.contains(export_id)
-                                });
-
-                                // After clearing any dropped subsources, we can
-                                // state that we expect all of these to exist.
-                                expected_objects.extend(ingestion.description.collection_ids());
-                            }
-
-                            let running_ingestion =
-                                self.storage_state.ingestions.get(&ingestion.id);
-
-                            // We keep only:
-                            // - The most recent version of the ingestion, which
-                            //   is why these commands are run in reverse.
-                            // - Ingestions whose descriptions are not exactly
-                            //   those that are currently running.
-                            most_recent_defintion
-                                && running_ingestion != Some(&ingestion.description)
-                        }
-                    })
+                        // We keep only:
+                        // - The most recent version of the ingestion, which
+                        //   is why these commands are run in reverse.
+                        // - Ingestions whose descriptions are not exactly
+                        //   those that are currently running.
+                        should_keep = most_recent_defintion
+                            && running_ingestion != Some(&ingestion.description)
+                    }
                 }
-                StorageCommand::RunSinks(exports) => {
-                    exports.retain_mut(|export| {
-                        if drop_commands.remove(&export.id)
-                            // If there were multiple `RunSinks` in the command
-                            // stream, we want to ensure none of them are
-                            // retained.
-                            || self.storage_state.dropped_ids.contains(&export.id)
-                        {
-                            info!(%worker_id, %export.id, "reconcile: dropping sink");
+                StorageCommand::RunSink(export) => {
+                    if drop_commands.remove(&export.id)
+                        // If there were multiple `RunSink` in the command
+                        // stream, we want to ensure none of them are
+                        // retained.
+                        || self.storage_state.dropped_ids.contains(&export.id)
+                    {
+                        info!(%worker_id, %export.id, "reconcile: dropping sink");
 
-                            // Make sure that we report back that the ID was
-                            // dropped.
-                            self.storage_state.dropped_ids.push(export.id);
+                        // Make sure that we report back that the ID was
+                        // dropped.
+                        self.storage_state.dropped_ids.push(export.id);
 
-                            false
-                        } else {
-                            expected_objects.insert(export.id);
+                        should_keep = false
+                    } else {
+                        expected_objects.insert(export.id);
 
-                            let running_sink = self.storage_state.exports.get(&export.id);
+                        let running_sink = self.storage_state.exports.get(&export.id);
 
-                            // We keep only:
-                            // - The most recent version of the sink, which
-                            //   is why these commands are run in reverse.
-                            // - Sinks whose descriptions are not exactly
-                            //   those that are currently running.
-                            seen_most_recent_definition.insert(export.id)
-                                && running_sink != Some(&export.description)
-                        }
-                    })
+                        // We keep only:
+                        // - The most recent version of the sink, which
+                        //   is why these commands are run in reverse.
+                        // - Sinks whose descriptions are not exactly
+                        //   those that are currently running.
+                        should_keep = seen_most_recent_definition.insert(export.id)
+                            && running_sink != Some(&export.description);
+                    }
                 }
                 StorageCommand::RunOneshotIngestion(ingestions) => ingestions.retain(|ingestion| {
                     let already_running = self
@@ -1194,9 +1180,13 @@ impl<'w, A: Allocate> Worker<'w, A> {
                 StorageCommand::InitializationComplete
                 | StorageCommand::AllowWrites
                 | StorageCommand::UpdateConfiguration(_)
-                | StorageCommand::AllowCompaction(_) => (),
+                | StorageCommand::AllowCompaction(_, _) => (),
+            }
+            if should_keep {
+                filtered_commands.push_front(command);
             }
         }
+        let commands = filtered_commands;
 
         // Make sure all the "drop commands" matched up with a source or sink.
         // This is also what the regular handler logic for `AllowCompaction`
@@ -1323,32 +1313,30 @@ impl StorageState {
                         })
                 }
             }
-            StorageCommand::RunIngestions(ingestions) => {
-                for RunIngestionCommand { id, description } in ingestions {
-                    // Remember the ingestion description to facilitate possible
-                    // reconciliation later.
-                    self.ingestions.insert(id, description.clone());
+            StorageCommand::RunIngestion(RunIngestionCommand { id, description }) => {
+                // Remember the ingestion description to facilitate possible
+                // reconciliation later.
+                self.ingestions.insert(id, description.clone());
 
-                    // Initialize shared frontier reporting.
-                    for id in description.collection_ids() {
-                        self.reported_frontiers
-                            .entry(id)
-                            .or_insert(Antichain::from_elem(mz_repr::Timestamp::minimum()));
-                    }
+                // Initialize shared frontier reporting.
+                for id in description.collection_ids() {
+                    self.reported_frontiers
+                        .entry(id)
+                        .or_insert(Antichain::from_elem(mz_repr::Timestamp::minimum()));
+                }
 
-                    // This needs to be done by one worker, which will broadcasts a
-                    // `CreateIngestionDataflow` command to all workers based on the response that
-                    // contains the resumption upper.
-                    //
-                    // Doing this separately on each worker could lead to differing resume_uppers
-                    // which might lead to all kinds of mayhem.
-                    //
-                    // n.b. the ingestion on each worker uses the description from worker 0––not the
-                    // ingestion in the local storage state. This is something we might have
-                    // interest in fixing in the future, e.g. materialize#19907
-                    if self.timely_worker_index == 0 {
-                        self.async_worker.update_frontiers(id, description);
-                    }
+                // This needs to be done by one worker, which will broadcasts a
+                // `CreateIngestionDataflow` command to all workers based on the response that
+                // contains the resumption upper.
+                //
+                // Doing this separately on each worker could lead to differing resume_uppers
+                // which might lead to all kinds of mayhem.
+                //
+                // n.b. the ingestion on each worker uses the description from worker 0––not the
+                // ingestion in the local storage state. This is something we might have
+                // interest in fixing in the future, e.g. materialize#19907
+                if self.timely_worker_index == 0 {
+                    self.async_worker.update_frontiers(id, description);
                 }
             }
             StorageCommand::RunOneshotIngestion(oneshots) => {
@@ -1369,53 +1357,48 @@ impl StorageState {
                     self.drop_oneshot_ingestion(id);
                 }
             }
-            StorageCommand::RunSinks(exports) => {
-                for export in exports {
-                    // Remember the sink description to facilitate possible
-                    // reconciliation later.
-                    let prev = self.exports.insert(export.id, export.description.clone());
+            StorageCommand::RunSink(export) => {
+                // Remember the sink description to facilitate possible
+                // reconciliation later.
+                let prev = self.exports.insert(export.id, export.description.clone());
 
-                    // New sink, add state.
-                    if prev.is_none() {
-                        self.reported_frontiers.insert(
+                // New sink, add state.
+                if prev.is_none() {
+                    self.reported_frontiers.insert(
+                        export.id,
+                        Antichain::from_elem(mz_repr::Timestamp::minimum()),
+                    );
+                }
+
+                // This needs to be broadcast by one worker and go through the internal command
+                // fabric, to ensure consistent ordering of dataflow rendering across all
+                // workers.
+                if self.timely_worker_index == 0 {
+                    self.internal_cmd_tx
+                        .send(InternalStorageCommand::RunSinkDataflow(
                             export.id,
-                            Antichain::from_elem(mz_repr::Timestamp::minimum()),
-                        );
-                    }
-
-                    // This needs to be broadcast by one worker and go through the internal command
-                    // fabric, to ensure consistent ordering of dataflow rendering across all
-                    // workers.
-                    if self.timely_worker_index == 0 {
-                        self.internal_cmd_tx
-                            .send(InternalStorageCommand::RunSinkDataflow(
-                                export.id,
-                                export.description,
-                            ));
-                    }
+                            export.description,
+                        ));
                 }
             }
-            StorageCommand::AllowCompaction(list) => {
-                for (id, frontier) in list {
-                    match self.exports.get_mut(&id) {
-                        Some(export_description) => {
-                            // Update our knowledge of the `as_of`, in case we need to internally
-                            // restart a sink in the future.
-                            export_description.as_of.clone_from(&frontier);
-                        }
-                        // reported_frontiers contains both ingestions and their
-                        // exports
-                        None if self.reported_frontiers.contains_key(&id) => (),
-                        None => {
-                            soft_panic_or_log!("AllowCompaction command for non-existent {id}");
-                            continue;
-                        }
+            StorageCommand::AllowCompaction(id, frontier) => {
+                match self.exports.get_mut(&id) {
+                    Some(export_description) => {
+                        // Update our knowledge of the `as_of`, in case we need to internally
+                        // restart a sink in the future.
+                        export_description.as_of.clone_from(&frontier);
                     }
+                    // reported_frontiers contains both ingestions and their
+                    // exports
+                    None if self.reported_frontiers.contains_key(&id) => (),
+                    None => {
+                        soft_panic_or_log!("AllowCompaction command for non-existent {id}");
+                    }
+                }
 
-                    if frontier.is_empty() {
-                        // Indicates that we may drop `id`, as there are no more valid times to read.
-                        self.drop_collection(id);
-                    }
+                if frontier.is_empty() {
+                    // Indicates that we may drop `id`, as there are no more valid times to read.
+                    self.drop_collection(id);
                 }
             }
         }
