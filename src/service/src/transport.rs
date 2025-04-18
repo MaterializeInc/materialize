@@ -1,0 +1,332 @@
+// Copyright Materialize, Inc. and contributors. All rights reserved.
+//
+// Use of this software is governed by the Business Source License
+// included in the LICENSE file.
+//
+// As of the Change Date specified in that file, in accordance with
+// the Business Source License, use of this software will be governed
+// by the Apache License, Version 2.0.
+
+//! The Cluster Transport Protocol (CTP).
+//!
+//! CTP is the protocol used to transmit commands from controllers to replicas and responses from
+//! replicas to controllers. It runs on top of a reliable bidirectional connection stream, as
+//! provided by TCP or UDS, and adds message framing as well as heartbeating.
+//!
+//! CTP supports any payload type that implements the serde [`Serialize`] and [`Deserialize`]
+//! traits. Messages are encoded using the [`bincode`] format, compressed, and then sent over the
+//! wire with a length prefix.
+
+use std::convert::Infallible;
+use std::fmt;
+use std::marker::PhantomData;
+use std::pin::pin;
+
+use anyhow::{Context, anyhow, bail};
+use async_trait::async_trait;
+use flate2::Compression;
+use flate2::read::DeflateDecoder;
+use flate2::write::DeflateEncoder;
+use futures::future;
+use futures::stream::StreamExt;
+use mz_ore::cast::CastInto;
+use mz_ore::netio::{Listener, Stream};
+use semver::Version;
+use serde::de::DeserializeOwned;
+use serde::{Deserialize, Serialize};
+use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
+use tokio::sync::{mpsc, oneshot};
+use tracing::info;
+
+use crate::client::{GenericClient, Partitionable, Partitioned};
+
+pub trait Payload: fmt::Debug + Send + Serialize + DeserializeOwned + 'static {}
+impl<T: fmt::Debug + Send + Serialize + DeserializeOwned + 'static> Payload for T {}
+
+/// A client for a CTP connection.
+#[derive(Debug)]
+pub struct Client<Out, In> {
+    /// Sender for outbound messages.
+    out_tx: mpsc::UnboundedSender<Out>,
+    /// Receiver for inbound messages.
+    in_rx: mpsc::UnboundedReceiver<In>,
+    /// Channel that receives the error if the connection fails.
+    error_rx: Option<oneshot::Receiver<anyhow::Error>>,
+}
+
+impl<Out: Payload, In: Payload> Client<Out, In> {
+    /// Connect to the server at the given address.
+    pub async fn connect(address: &str, version: Version) -> anyhow::Result<Self> {
+        let stream = Stream::connect(address).await?;
+
+        let (out_tx, out_rx) = mpsc::unbounded_channel();
+        let (in_tx, in_rx) = mpsc::unbounded_channel();
+        let (error_tx, error_rx) = oneshot::channel();
+
+        mz_ore::task::spawn(|| "ctp::client-connection", async {
+            let conn = Connection::new(stream, version);
+            let handler = ChannelHandler::new(in_tx, out_rx);
+
+            let Err(error) = conn.serve(handler).await;
+            let _ = error_tx.send(error);
+        });
+
+        Ok(Self {
+            out_tx,
+            in_rx,
+            error_rx: Some(error_rx),
+        })
+    }
+
+    /// Return the connection error reported by the connection task.
+    ///
+    /// # Panics
+    ///
+    /// Panics if no error has been reported.
+    fn expect_error(&mut self) -> anyhow::Error {
+        if let Some(mut rx) = self.error_rx.take() {
+            rx.try_recv().expect("expected connection error")
+        } else {
+            // An error was reported but we have already taken it in a previous call.
+            // Return a default error instead.
+            anyhow!("connection closed")
+        }
+    }
+}
+
+impl<Out, In> Client<Out, In>
+where
+    Out: Payload,
+    In: Payload,
+    (Out, In): Partitionable<Out, In>,
+{
+    /// Create a `Partitioned` client that connects through CTP.
+    pub async fn connect_partitioned(
+        addresses: Vec<String>,
+        version: Version,
+    ) -> anyhow::Result<Partitioned<Self, Out, In>> {
+        let connects = addresses
+            .iter()
+            .map(|addr| Self::connect(addr, version.clone()));
+        let clients = future::try_join_all(connects).await?;
+        Ok(Partitioned::new(clients))
+    }
+}
+
+#[async_trait]
+impl<Out: Payload, In: Payload> GenericClient<Out, In> for Client<Out, In> {
+    async fn send(&mut self, cmd: Out) -> anyhow::Result<()> {
+        self.out_tx.send(cmd).map_err(|_| self.expect_error())
+    }
+
+    /// # Cancel safety
+    ///
+    /// This method is cancel safe. If `recv` is used as the event in a [`tokio::select!`]
+    /// statement and some other branch completes first, it is guaranteed that no messages were
+    /// received by this client.
+    async fn recv(&mut self) -> anyhow::Result<Option<In>> {
+        // `mpsc::UnboundedReceiver::recv` is cancel safe.
+        match self.in_rx.recv().await {
+            Some(resp) => Ok(Some(resp)),
+            None => Err(self.expect_error()),
+        }
+    }
+}
+
+/// Spawn a CTP server that serves connections at the given address.
+pub async fn serve<In, Out, H>(
+    address: &str,
+    version: Version,
+    handler_fn: impl Fn() -> H,
+) -> anyhow::Result<()>
+where
+    In: Payload,
+    Out: Payload,
+    H: GenericClient<In, Out> + 'static,
+{
+    let listener = Listener::bind(address).await?;
+
+    loop {
+        let (stream, _peer) = listener.accept().await?;
+
+        let handler = handler_fn();
+        let version = version.clone();
+
+        mz_ore::task::spawn(|| "ctp::server-connection", async {
+            let conn = Connection::new(stream, version);
+
+            let Err(error) = conn.serve(handler).await;
+            info!("CTP connection failed: {error}");
+        });
+    }
+}
+
+/// An active CTP connection.
+#[derive(Debug)]
+struct Connection<Out, In> {
+    /// The underlying connection to the peer.
+    stream: Stream,
+    /// The version of this connection endpoint.
+    ///
+    /// Used during the protocol handshake. Both endpoints are required to have the same version
+    /// for the connection to be successfully established.
+    version: Version,
+    _payloads: PhantomData<(Out, In)>,
+}
+
+impl<Out: Payload, In: Payload> Connection<Out, In> {
+    /// Create a new connection wrapping the given stream.
+    fn new(stream: Stream, version: Version) -> Self {
+        Self {
+            stream,
+            version,
+            _payloads: PhantomData,
+        }
+    }
+
+    /// Serve this connection until it fails.
+    async fn serve<H>(mut self, mut handler: H) -> anyhow::Result<Infallible>
+    where
+        H: GenericClient<In, Out>,
+    {
+        self.handshake().await.context("handshake")?;
+
+        // `Connection::recv` is not cancel safe, so we can't use it in a `select!` directly.
+        // Instead we wrap it into an async stream and select on `Stream::next`, which is cancel
+        // safe.
+        let (mut stream_rx, mut stream_tx) = self.stream.split();
+        let mut inbound = pin!(async_stream::stream! {
+            loop {
+                yield Self::recv(&mut stream_rx).await;
+            }
+        });
+
+        loop {
+            tokio::select! {
+                // `Stream::next` is cancel safe: The returned future only holds a reference to the
+                // underlying stream, so dropping it will never lose a value.
+                Some(inbound) = inbound.next() => match inbound? {
+                    Message::Payload(p) => handler.send(p).await?,
+                    Message::Hello { .. } => bail!("received Hello message after handshake"),
+                },
+                // `GenericClient::recv` is documented to be cancel safe.
+                outbound = handler.recv() => match outbound? {
+                    Some(p) => Self::send(&mut stream_tx, Message::Payload(p)).await?,
+                    None => bail!("client disconnected"),
+                }
+            }
+        }
+    }
+
+    /// Perform the protocol handshake.
+    ///
+    /// The handshake consists of each endpoint sending a `Hello` message and receiving one in
+    /// return. The `Hello` message contains information about the originating endpoint that is
+    /// used by the receiver to validate compatibility with its peer. Only if both endpoints
+    /// determine that they are compatible does the handshake succeed.
+    async fn handshake(&mut self) -> anyhow::Result<()> {
+        let hello = Message::Hello {
+            version: self.version.clone(),
+        };
+        Self::send(&mut self.stream, hello).await?;
+
+        match Self::recv(&mut self.stream).await? {
+            Message::Hello { version: v_peer } if v_peer == self.version => (),
+            Message::Hello { version: v_peer } => {
+                bail!("version mismatch: {v_peer} != {}", self.version)
+            }
+            msg => bail!("expected Hello message, got {msg:?}"),
+        }
+
+        Ok(())
+    }
+
+    /// Send a message to the peer.
+    async fn send<W: AsyncWrite + Unpin>(
+        mut writer: W,
+        message: Message<Out>,
+    ) -> anyhow::Result<()> {
+        let bytes = message.wire_encode()?;
+        let len = bytes.len().cast_into();
+
+        writer.write_u64(len).await?;
+        writer.write_all(&bytes).await?;
+
+        Ok(())
+    }
+
+    /// Receive a message from the peer.
+    async fn recv<R: AsyncRead + Unpin>(mut reader: R) -> anyhow::Result<Message<In>> {
+        let len = reader.read_u64().await?;
+        let mut bytes = vec![0; len.cast_into()];
+        reader.read_exact(&mut bytes).await?;
+
+        Message::wire_decode(&bytes)
+    }
+}
+
+/// A connection handler that simply forwards messages over channels.
+#[derive(Debug)]
+pub struct ChannelHandler<In, Out> {
+    tx: mpsc::UnboundedSender<In>,
+    rx: mpsc::UnboundedReceiver<Out>,
+}
+
+impl<In, Out> ChannelHandler<In, Out> {
+    pub fn new(tx: mpsc::UnboundedSender<In>, rx: mpsc::UnboundedReceiver<Out>) -> Self {
+        Self { tx, rx }
+    }
+}
+
+#[async_trait]
+impl<In: Payload, Out: Payload> GenericClient<In, Out> for ChannelHandler<In, Out> {
+    async fn send(&mut self, cmd: In) -> anyhow::Result<()> {
+        let result = self.tx.send(cmd);
+        result.map_err(|_| anyhow!("client channel disconnected"))
+    }
+
+    /// # Cancel safety
+    ///
+    /// This method is cancel safe. If `recv` is used as the event in a [`tokio::select!`]
+    /// statement and some other branch completes first, it is guaranteed that no messages were
+    /// received by this client.
+    async fn recv(&mut self) -> anyhow::Result<Option<Out>> {
+        // `mpsc::UnboundedReceiver::recv` is cancel safe.
+        match self.rx.recv().await {
+            Some(resp) => Ok(Some(resp)),
+            None => bail!("client channel disconnected"),
+        }
+    }
+}
+
+/// A CTP message.
+#[derive(Debug, Serialize, Deserialize)]
+enum Message<P> {
+    /// A handshake message.
+    ///
+    /// Each endpoint sends exactly one `Hello` message as the first message of the protocol,
+    /// announcing compatibility information about itself.
+    Hello {
+        /// The version of the originating endpoint.
+        version: Version,
+    },
+    /// A massage carrying application payload.
+    Payload(P),
+}
+
+impl<P: Payload> Message<P> {
+    /// Encode this message for wire transport.
+    fn wire_encode(&self) -> anyhow::Result<Vec<u8>> {
+        let mut compressor = DeflateEncoder::new(Vec::new(), Compression::default());
+        bincode::serialize_into(&mut compressor, self)?;
+        let bytes = compressor.finish()?;
+        Ok(bytes)
+    }
+
+    /// Decode a wire package back into a message.
+    fn wire_decode(bytes: &[u8]) -> anyhow::Result<Self> {
+        let mut decompressor = DeflateDecoder::new(bytes);
+        let msg = bincode::deserialize_from(&mut decompressor)?;
+        Ok(msg)
+    }
+}
