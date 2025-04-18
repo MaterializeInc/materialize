@@ -267,25 +267,24 @@ impl DisplayText<PlanRenderingContext<'_, MirRelationExpr>> for MirRelationExpr 
         ctx: &mut PlanRenderingContext<'_, MirRelationExpr>,
     ) -> fmt::Result {
         if ctx.config.raw_syntax {
-            self.fmt_raw_syntax(f, ctx)
+            self.fmt_verbose_syntax(f, ctx)
         } else {
-            self.fmt_virtual_syntax(f, ctx)
+            self.fmt_default_syntax(f, ctx)
         }
     }
 }
 
 impl MirRelationExpr {
-    fn fmt_virtual_syntax(
+    fn fmt_default_syntax(
         &self,
-        f: &mut fmt::Formatter<'_>,
-        ctx: &mut PlanRenderingContext<'_, MirRelationExpr>,
+        _f: &mut fmt::Formatter<'_>,
+        _ctx: &mut PlanRenderingContext<'_, MirRelationExpr>,
     ) -> fmt::Result {
-        // no virtual syntax support for now, evolve this
-        // method as its HirRelationExpr counterpart
-        self.fmt_raw_syntax(f, ctx)
+        // TODO(mgree) @@@ finish
+        Ok(())
     }
 
-    fn fmt_raw_syntax(
+    fn fmt_verbose_syntax(
         &self,
         f: &mut fmt::Formatter<'_>,
         ctx: &mut PlanRenderingContext<'_, MirRelationExpr>,
