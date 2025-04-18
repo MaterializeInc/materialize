@@ -152,6 +152,7 @@ def build_mz_debug_async(env: dict[str, str] | None = None) -> None:
                 "mz-debug",
             ],
             cwd=MZ_ROOT,
+            stderr=subprocess.STDOUT,
             env=env,
         )
 
@@ -176,6 +177,7 @@ def run_mz_debug(env: dict[str, str] | None = None) -> None:
                 "materialize",
             ],
             cwd=MZ_ROOT,
+            stderr=subprocess.STDOUT,
             env=env,
         )
     except:

@@ -1209,6 +1209,8 @@ steps:
         - ./ci/plugins/mzcompose:
             composition: terraform
             run: aws-temporary
+            # Cleanup runs in pre-exit hook
+            args: [--no-cleanup]
       branches: "main v*.* lts-v* *aws* *tf* *terraform* *helm* *self-managed* *orchestratord*"
 
     - id: terraform-aws-upgrade
@@ -1225,6 +1227,8 @@ steps:
         - ./ci/plugins/mzcompose:
             composition: terraform
             run: aws-upgrade
+            # Cleanup runs in pre-exit hook
+            args: [--no-cleanup]
       branches: "main v*.* lts-v* *aws* *tf* *terraform* *helm* *self-managed* *orchestratord*"
 
     - id: terraform-gcp
@@ -1240,6 +1244,8 @@ steps:
         - ./ci/plugins/mzcompose:
             composition: terraform
             run: gcp-temporary
+            # Cleanup runs in pre-exit hook
+            args: [--no-cleanup]
       branches: "main v*.* lts-v* *gcp* *tf* *terraform* *helm* *self-managed* *orchestratord*"
 
     - id: terraform-azure
@@ -1255,6 +1261,8 @@ steps:
         - ./ci/plugins/mzcompose:
             composition: terraform
             run: azure-temporary
+            # Cleanup runs in pre-exit hook
+            args: [--no-cleanup]
       branches: "main v*.* lts-v* *azure* *tf* *terraform* *helm* *self-managed* *orchestratord*"
 
   - group: "Output consistency"
