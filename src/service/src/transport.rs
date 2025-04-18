@@ -49,12 +49,29 @@ pub struct Client<Out, In> {
 impl<Out: Message, In: Message> Client<Out, In> {
     /// Connect to the server at the given address.
     pub async fn connect(address: &str, version: Version) -> anyhow::Result<Self> {
+        let dest_host = host_from_address(address);
         let stream = Stream::connect(address).await?;
         info!(%address, "ctp: connected to server");
 
-        let conn = Connection::start(stream, version).await?;
+        let conn = Connection::start(stream, version, dest_host).await?;
         Ok(Self { conn })
     }
+}
+
+/// Helper function to extract the host part from an address string.
+///
+/// This function assumes addresses to be of the form `<host>:<port>` or `<protocol>:<host>:<port>`
+/// and yields `None` otherwise.
+fn host_from_address(address: &str) -> Option<String> {
+    let mut p = address.split(':');
+    let (host, port) = match (p.next(), p.next(), p.next(), p.next()) {
+        (Some(host), Some(port), None, None) => (host, port),
+        (Some(_protocol), Some(host), Some(port), None) => (host, port),
+        _ => return None,
+    };
+
+    let _: u16 = port.parse().ok()?;
+    Some(host.into())
 }
 
 impl<Out, In> Client<Out, In>
@@ -95,6 +112,7 @@ impl<Out: Message, In: Message> GenericClient<Out, In> for Client<Out, In> {
 pub async fn serve<In, Out, H>(
     address: SocketAddr,
     version: Version,
+    server_fqdn: Option<String>,
     handler_fn: impl Fn() -> H,
 ) -> anyhow::Result<()>
 where
@@ -111,9 +129,10 @@ where
 
         let handler = handler_fn();
         let version = version.clone();
+        let server_fqdn = server_fqdn.clone();
 
         mz_ore::task::spawn(|| "ctp::connection", async {
-            let Err(error) = serve_connection(stream, handler, version).await;
+            let Err(error) = serve_connection(stream, handler, version, server_fqdn).await;
             info!("ctp: connection failed: {error}");
         });
     }
@@ -124,13 +143,14 @@ async fn serve_connection<In, Out, H>(
     stream: Stream,
     mut handler: H,
     version: Version,
+    server_fqdn: Option<String>,
 ) -> anyhow::Result<Infallible>
 where
     In: Message,
     Out: Message,
     H: GenericClient<In, Out>,
 {
-    let mut conn = Connection::start(stream, version).await?;
+    let mut conn = Connection::start(stream, version, server_fqdn).await?;
 
     loop {
         tokio::select! {
@@ -175,10 +195,14 @@ struct Connection<Out, In> {
 
 impl<Out: Message, In: Message> Connection<Out, In> {
     /// Start a new connection wrapping the given stream.
-    async fn start(stream: Stream, version: Version) -> anyhow::Result<Self> {
+    async fn start(
+        stream: Stream,
+        version: Version,
+        server_fqdn: Option<String>,
+    ) -> anyhow::Result<Self> {
         let (mut reader, mut writer) = stream.split();
 
-        handshake(&mut reader, &mut writer, version).await?;
+        handshake(&mut reader, &mut writer, version, server_fqdn).await?;
 
         let (out_tx, out_rx) = mpsc::channel(1024);
         let (in_tx, in_rx) = mpsc::channel(1024);
@@ -313,7 +337,12 @@ impl<In: Message, Out: Message> GenericClient<In, Out> for ChannelHandler<In, Ou
 /// `Hello` message. The `Hello` message contains information about the originating endpoint that
 /// is used by the receiver to validate compatibility with its peer. Only if both endpoints
 /// determine that they are compatible does the handshake succeed.
-async fn handshake<R, W>(mut reader: R, mut writer: W, version: Version) -> anyhow::Result<()>
+async fn handshake<R, W>(
+    mut reader: R,
+    mut writer: W,
+    version: Version,
+    server_fqdn: Option<String>,
+) -> anyhow::Result<()>
 where
     R: AsyncRead + Unpin,
     W: AsyncWrite + Unpin,
@@ -325,6 +354,7 @@ where
 
     let hello = Hello {
         version: version.clone(),
+        server_fqdn: server_fqdn.clone(),
     };
     write_message(&mut writer, &hello).await?;
 
@@ -335,10 +365,16 @@ where
 
     let Hello {
         version: peer_version,
+        server_fqdn: peer_server_fqdn,
     } = read_message(&mut reader).await?;
 
     if peer_version != version {
         bail!("version mismatch: {peer_version} != {version}");
+    }
+    if let (Some(other), Some(mine)) = (&peer_server_fqdn, &server_fqdn) {
+        if other != mine {
+            bail!("server FQDN mismatch: {other} != {mine}");
+        }
     }
 
     Ok(())
@@ -349,6 +385,8 @@ where
 struct Hello {
     /// The version of the originating endpoint.
     version: Version,
+    /// The FQDN of the server endpoint.
+    server_fqdn: Option<String>,
 }
 
 /// Write a message into the given writer.
