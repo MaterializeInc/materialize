@@ -256,7 +256,12 @@ where
 
                 timely_cmds
                     .into_iter()
-                    .map(|config| Some(ComputeCommand::CreateTimely { config, epoch }))
+                    .map(|config| {
+                        Some(ComputeCommand::CreateTimely {
+                            config: Box::new(config),
+                            epoch,
+                        })
+                    })
                     .collect()
             }
             command @ ComputeCommand::UpdateConfiguration(_) => {

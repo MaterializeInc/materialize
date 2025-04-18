@@ -118,7 +118,7 @@ where
                     initialization_complete = true;
                 }
                 ComputeCommand::UpdateConfiguration(params) => {
-                    final_configuration.update(params);
+                    final_configuration.update(*params);
                 }
                 ComputeCommand::CreateDataflow(dataflow) => {
                     created_dataflows.push(dataflow);
@@ -205,8 +205,9 @@ where
         let count = u64::from(!final_configuration.all_unset());
         command_counts.update_configuration.borrow().set(count);
         if !final_configuration.all_unset() {
+            let config = Box::new(final_configuration);
             self.commands
-                .push(ComputeCommand::UpdateConfiguration(final_configuration));
+                .push(ComputeCommand::UpdateConfiguration(config));
         }
 
         let count = u64::cast_from(created_dataflows.len());

@@ -35,7 +35,7 @@ use crate::controller::{ComputeControllerTimestamp, ReplicaId};
 use crate::logging::LoggingConfig;
 use crate::metrics::IntCounter;
 use crate::metrics::ReplicaMetrics;
-use crate::protocol::command::{ComputeCommand, InitialComputeParameters, InstanceConfig};
+use crate::protocol::command::{ComputeCommand, InitialComputeParameters};
 use crate::protocol::response::ComputeResponse;
 use crate::service::{ComputeClient, ComputeGrpcClient};
 
@@ -277,7 +277,7 @@ where
     fn specialize_command(&self, command: &mut ComputeCommand<T>) {
         match command {
             ComputeCommand::CreateTimely { config, epoch } => {
-                *config = TimelyConfig {
+                **config = TimelyConfig {
                     workers: self.config.location.workers,
                     process: 0,
                     addresses: self.config.location.dataflow_addrs.clone(),
@@ -292,13 +292,10 @@ where
                 };
                 *epoch = self.epoch;
             }
-            ComputeCommand::CreateInstance(InstanceConfig {
-                logging,
-                expiration_offset,
-            }) => {
-                *logging = self.config.logging.clone();
+            ComputeCommand::CreateInstance(config) => {
+                config.logging = self.config.logging.clone();
                 if ENABLE_COMPUTE_REPLICA_EXPIRATION.get(&self.dyncfg) {
-                    *expiration_offset = self.config.expiration_offset;
+                    config.expiration_offset = self.config.expiration_offset;
                 }
             }
             _ => {}

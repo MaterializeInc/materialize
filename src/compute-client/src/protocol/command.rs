@@ -63,7 +63,7 @@ pub enum ComputeCommand<T = mz_repr::Timestamp> {
     /// they are in.
     CreateTimely {
         /// TODO(database-issues#7533): Add documentation.
-        config: TimelyConfig,
+        config: Box<TimelyConfig>,
         /// TODO(database-issues#7533): Add documentation.
         epoch: ClusterStartupEpoch,
     },
@@ -78,7 +78,7 @@ pub enum ComputeCommand<T = mz_repr::Timestamp> {
     /// dataflows according to the given [`LoggingConfig`].
     ///
     /// [Creation Stage]: super#creation-stage
-    CreateInstance(InstanceConfig),
+    CreateInstance(Box<InstanceConfig>),
 
     /// `InitializationComplete` informs the replica about the end of the [Initialization Stage].
     /// Upon receiving this command, the replica should perform a reconciliation process, to ensure
@@ -128,7 +128,7 @@ pub enum ComputeCommand<T = mz_repr::Timestamp> {
     /// Configuration parameters that should not be applied globally, but only to specific
     /// dataflows or peeks, should be added to the [`DataflowDescription`] or [`Peek`] types,
     /// rather than as [`ComputeParameters`].
-    UpdateConfiguration(ComputeParameters),
+    UpdateConfiguration(Box<ComputeParameters>),
 
     /// `CreateDataflow` instructs the replica to create a dataflow according to the given
     /// [`DataflowDescription`].
@@ -170,7 +170,7 @@ pub enum ComputeCommand<T = mz_repr::Timestamp> {
     /// [`as_of`]: DataflowDescription::as_of
     /// [`Frontiers`]: super::response::ComputeResponse::Frontiers
     /// [`SubscribeResponse`]: super::response::ComputeResponse::SubscribeResponse
-    CreateDataflow(DataflowDescription<RenderPlan<T>, CollectionMetadata, T>),
+    CreateDataflow(Box<DataflowDescription<RenderPlan<T>, CollectionMetadata, T>>),
 
     /// `Schedule` allows the replica to start computation for a compute collection.
     ///
@@ -248,7 +248,7 @@ pub enum ComputeCommand<T = mz_repr::Timestamp> {
     /// [`Rows`]: super::response::PeekResponse::Rows
     /// [`Error`]: super::response::PeekResponse::Error
     /// [`Canceled`]: super::response::PeekResponse::Canceled
-    Peek(Peek<T>),
+    Peek(Box<Peek<T>>),
 
     /// `CancelPeek` instructs the replica to cancel the identified pending peek.
     ///
@@ -278,15 +278,15 @@ impl RustType<ProtoComputeCommand> for ComputeCommand<mz_repr::Timestamp> {
         ProtoComputeCommand {
             kind: Some(match self {
                 ComputeCommand::CreateTimely { config, epoch } => CreateTimely(ProtoCreateTimely {
-                    config: Some(config.into_proto()),
+                    config: Some(*config.into_proto()),
                     epoch: Some(epoch.into_proto()),
                 }),
-                ComputeCommand::CreateInstance(config) => CreateInstance(config.into_proto()),
+                ComputeCommand::CreateInstance(config) => CreateInstance(*config.into_proto()),
                 ComputeCommand::InitializationComplete => InitializationComplete(()),
                 ComputeCommand::UpdateConfiguration(params) => {
-                    UpdateConfiguration(params.into_proto())
+                    UpdateConfiguration(*params.into_proto())
                 }
-                ComputeCommand::CreateDataflow(dataflow) => CreateDataflow(dataflow.into_proto()),
+                ComputeCommand::CreateDataflow(dataflow) => CreateDataflow(*dataflow.into_proto()),
                 ComputeCommand::Schedule(id) => Schedule(id.into_proto()),
                 ComputeCommand::AllowCompaction { id, frontier } => {
                     AllowCompaction(ProtoCompaction {
@@ -294,7 +294,7 @@ impl RustType<ProtoComputeCommand> for ComputeCommand<mz_repr::Timestamp> {
                         frontier: Some(frontier.into_proto()),
                     })
                 }
-                ComputeCommand::Peek(peek) => Peek(peek.into_proto()),
+                ComputeCommand::Peek(peek) => Peek(*peek.into_proto()),
                 ComputeCommand::CancelPeek { uuid } => CancelPeek(uuid.into_proto()),
                 ComputeCommand::AllowWrites => AllowWrites(()),
             }),
@@ -306,18 +306,22 @@ impl RustType<ProtoComputeCommand> for ComputeCommand<mz_repr::Timestamp> {
         use proto_compute_command::*;
         match proto.kind {
             Some(CreateTimely(ProtoCreateTimely { config, epoch })) => {
-                Ok(ComputeCommand::CreateTimely {
-                    config: config.into_rust_if_some("ProtoCreateTimely::config")?,
-                    epoch: epoch.into_rust_if_some("ProtoCreateTimely::epoch")?,
-                })
+                let config = Box::new(config.into_rust_if_some("ProtoCreateTimely::config")?);
+                let epoch = epoch.into_rust_if_some("ProtoCreateTimely::epoch")?;
+                Ok(ComputeCommand::CreateTimely { config, epoch })
             }
-            Some(CreateInstance(config)) => Ok(ComputeCommand::CreateInstance(config.into_rust()?)),
+            Some(CreateInstance(config)) => {
+                let config = Box::new(config.into_rust()?);
+                Ok(ComputeCommand::CreateInstance(config))
+            }
             Some(InitializationComplete(())) => Ok(ComputeCommand::InitializationComplete),
             Some(UpdateConfiguration(params)) => {
-                Ok(ComputeCommand::UpdateConfiguration(params.into_rust()?))
+                let params = Box::new(params.into_rust()?);
+                Ok(ComputeCommand::UpdateConfiguration(params))
             }
             Some(CreateDataflow(dataflow)) => {
-                Ok(ComputeCommand::CreateDataflow(dataflow.into_rust()?))
+                let dataflow = Box::new(dataflow.into_rust()?);
+                Ok(ComputeCommand::CreateDataflow(dataflow))
             }
             Some(Schedule(id)) => Ok(ComputeCommand::Schedule(id.into_rust()?)),
             Some(AllowCompaction(ProtoCompaction { id, frontier })) => {
@@ -326,7 +330,10 @@ impl RustType<ProtoComputeCommand> for ComputeCommand<mz_repr::Timestamp> {
                     frontier: frontier.into_rust_if_some("ProtoAllowCompaction::frontier")?,
                 })
             }
-            Some(Peek(peek)) => Ok(ComputeCommand::Peek(peek.into_rust()?)),
+            Some(Peek(peek)) => {
+                let peek = Box::new(peek.into_rust()?);
+                Ok(ComputeCommand::Peek(peek))
+            }
             Some(CancelPeek(uuid)) => Ok(ComputeCommand::CancelPeek {
                 uuid: uuid.into_rust()?,
             }),
@@ -345,19 +352,25 @@ impl Arbitrary for ComputeCommand<mz_repr::Timestamp> {
     fn arbitrary_with(_: Self::Parameters) -> Self::Strategy {
         Union::new(vec![
             any::<InstanceConfig>()
+                .prop_map(Box::new)
                 .prop_map(ComputeCommand::CreateInstance)
                 .boxed(),
             any::<ComputeParameters>()
+                .prop_map(Box::new)
                 .prop_map(ComputeCommand::UpdateConfiguration)
                 .boxed(),
             any::<DataflowDescription<RenderPlan, CollectionMetadata, mz_repr::Timestamp>>()
+                .prop_map(Box::new)
                 .prop_map(ComputeCommand::CreateDataflow)
                 .boxed(),
             any::<GlobalId>().prop_map(ComputeCommand::Schedule).boxed(),
             (any::<GlobalId>(), any_antichain())
                 .prop_map(|(id, frontier)| ComputeCommand::AllowCompaction { id, frontier })
                 .boxed(),
-            any::<Peek>().prop_map(ComputeCommand::Peek).boxed(),
+            any::<Peek>()
+                .prop_map(Box::new)
+                .prop_map(ComputeCommand::Peek)
+                .boxed(),
             any_uuid()
                 .prop_map(|uuid| ComputeCommand::CancelPeek { uuid })
                 .boxed(),
@@ -368,7 +381,7 @@ impl Arbitrary for ComputeCommand<mz_repr::Timestamp> {
 /// Configuration for a replica, passed with the `CreateInstance`. Replicas should halt
 /// if the controller attempt to reconcile them with different values
 /// for anything in this struct.
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, Arbitrary)]
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize, Arbitrary)]
 pub struct InstanceConfig {
     /// Specification of introspection logging.
     pub logging: LoggingConfig,
@@ -676,7 +689,7 @@ fn empty_otel_ctx() -> impl Strategy<Value = OpenTelemetryContext> {
 impl TryIntoTimelyConfig for ComputeCommand {
     fn try_into_timely_config(self) -> Result<(TimelyConfig, ClusterStartupEpoch), Self> {
         match self {
-            ComputeCommand::CreateTimely { config, epoch } => Ok((config, epoch)),
+            ComputeCommand::CreateTimely { config, epoch } => Ok((*config, epoch)),
             cmd => Err(cmd),
         }
     }
@@ -690,6 +703,12 @@ mod tests {
     use proptest::proptest;
 
     use super::*;
+
+    /// Test to ensure the size of the `ComputeCommand` enum doesn't regress.
+    #[mz_ore::test]
+    fn test_compute_command_size() {
+        assert_eq!(std::mem::size_of::<ComputeCommand>(), 40);
+    }
 
     proptest! {
         #![proptest_config(ProptestConfig::with_cases(32))]

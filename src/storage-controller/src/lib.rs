@@ -317,7 +317,8 @@ where
         self.persist.cfg().apply_from(&config_params.dyncfg_updates);
 
         for instance in self.instances.values_mut() {
-            instance.send(StorageCommand::UpdateConfiguration(config_params.clone()));
+            let params = Box::new(config_params.clone());
+            instance.send(StorageCommand::UpdateConfiguration(params));
         }
         self.config.update(config_params);
         self.statistics_interval_sender
@@ -524,9 +525,10 @@ where
         if !self.read_only {
             instance.send(StorageCommand::AllowWrites);
         }
-        instance.send(StorageCommand::UpdateConfiguration(
-            self.config.parameters.clone(),
-        ));
+
+        let params = Box::new(self.config.parameters.clone());
+        instance.send(StorageCommand::UpdateConfiguration(params));
+
         let old_instance = self.instances.insert(id, instance);
         assert_none!(old_instance, "storage instance {id} already exists");
     }
@@ -1556,7 +1558,7 @@ where
         };
 
         if !self.read_only {
-            instance.send(StorageCommand::RunOneshotIngestion(oneshot_cmd));
+            instance.send(StorageCommand::RunOneshotIngestion(Box::new(oneshot_cmd)));
             let pending = PendingOneshotIngestion {
                 result_tx,
                 cluster_id: instance_id,
@@ -1668,7 +1670,7 @@ where
                 export_id: id,
             })?;
 
-        instance.send(StorageCommand::RunSink(cmd));
+        instance.send(StorageCommand::RunSink(Box::new(cmd)));
         Ok(())
     }
 
@@ -1765,7 +1767,7 @@ where
             })?;
 
             for cmd in cmds {
-                instance.send(StorageCommand::RunSink(cmd));
+                instance.send(StorageCommand::RunSink(Box::new(cmd)));
             }
 
             // Update state only after all possible errors have occurred.
@@ -3323,7 +3325,7 @@ where
                 ingestion_id: id,
             })?;
 
-        let augmented_ingestion = RunIngestionCommand { id, description };
+        let augmented_ingestion = Box::new(RunIngestionCommand { id, description });
         instance.send(StorageCommand::RunIngestion(augmented_ingestion));
 
         Ok(())
@@ -3391,7 +3393,7 @@ where
                 export_id: id,
             })?;
 
-        instance.send(StorageCommand::RunSink(cmd));
+        instance.send(StorageCommand::RunSink(Box::new(cmd)));
 
         Ok(())
     }
