@@ -1137,7 +1137,10 @@ class DependencySet:
     def check(self) -> bool:
         """Check all publishable images in this dependency set exist on Docker
         Hub. Don't try to download or build them."""
-        with ThreadPoolExecutor(max_workers=len(list(self))) as executor:
+        num_deps = len(list(self))
+        if num_deps == 0:
+            return True
+        with ThreadPoolExecutor(max_workers=num_deps) as executor:
             results = list(
                 executor.map(lambda dep: dep.is_published_if_necessary(), list(self))
             )
