@@ -61,7 +61,9 @@ pub struct ExplainContext<'a> {
 /// type `T`.
 #[allow(missing_debug_implementations)]
 pub struct ExplainSinglePlan<'a, T> {
+    /// Configuration for the explain
     pub context: &'a ExplainContext<'a>,
+    /// The plan to explain
     pub plan: AnnotatedPlan<'a, T>,
 }
 
@@ -177,20 +179,11 @@ impl<'a> Explain<'a> for MirRelationExpr {
 
     type Text = ExplainSinglePlan<'a, MirRelationExpr>;
 
-    type VerboseText = ExplainSinglePlan<'a, MirRelationExpr>;
-
     type Json = ExplainSinglePlan<'a, MirRelationExpr>;
 
     type Dot = UnsupportedFormat;
 
     fn explain_text(&'a mut self, context: &'a Self::Context) -> Result<Self::Text, ExplainError> {
-        self.as_explain_single_plan(context)
-    }
-
-    fn explain_verbose_text(
-        &'a mut self,
-        context: &'a Self::Context,
-    ) -> Result<Self::VerboseText, ExplainError> {
         self.as_explain_single_plan(context)
     }
 
