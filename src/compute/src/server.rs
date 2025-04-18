@@ -388,12 +388,20 @@ impl<'w, A: Allocate + 'static> Worker<'w, A> {
 
     fn handle_pending_commands(&mut self) -> Result<(), EpochChange> {
         while let Some(cmd) = self.command_rx.try_recv()? {
+            if matches!(cmd, ComputeCommand::UpdateConfiguration(_)) {
+                tracing::info!("handle_pending_commands: saw UpdateConfiguration");
+            }
+
             self.handle_command(cmd);
         }
         Ok(())
     }
 
     fn handle_command(&mut self, cmd: ComputeCommand) {
+        if matches!(cmd, ComputeCommand::UpdateConfiguration(_)) {
+            tracing::info!("handle_command: saw UpdateConfiguration");
+        }
+
         match &cmd {
             ComputeCommand::CreateInstance(_) => {
                 self.compute_state = Some(ComputeState::new(
@@ -707,6 +715,10 @@ impl<'w, A: Allocate + 'static> Worker<'w, A> {
 
         // Execute the commands to bring us to `new_commands`.
         for command in todo_commands.into_iter() {
+            if matches!(command, ComputeCommand::UpdateConfiguration(_)) {
+                tracing::info!("reconcile: saw UpdateConfiguration");
+            }
+
             self.handle_command(command);
         }
 
@@ -761,7 +773,12 @@ fn spawn_channel_adapter(
                 let serve_rx_channels = || loop {
                     crossbeam_channel::select! {
                         recv(command_rx) -> msg => match msg {
-                            Ok(cmd) => command_tx.send((cmd, epoch)),
+                            Ok(cmd) => {
+                                if matches!(cmd, ComputeCommand::UpdateConfiguration(_)) {
+                                    tracing::info!("channel adapter: saw UpdateConfiguration");
+                                }
+                                command_tx.send((cmd, epoch));
+                            }
                             Err(_) => return Err(()),
                         },
                         recv(response_rx) -> msg => {
