@@ -144,7 +144,7 @@ where
         };
 
         instance.send(StorageCommand::CreateTimely {
-            config: TimelyConfig::default(),
+            config: Default::default(),
             epoch,
         });
 
@@ -349,7 +349,7 @@ where
                 // First absorb into our state, because this might change
                 // scheduling decisions, which need to be respected just below
                 // when sending commands.
-                self.absorb_ingestion(ingestion.clone());
+                self.absorb_ingestion(*ingestion.clone());
 
                 for replica in self.active_replicas(&ingestion.id) {
                     replica.send(StorageCommand::RunIngestion(ingestion.clone()));
@@ -359,7 +359,7 @@ where
                 // First absorb into our state, because this might change
                 // scheduling decisions, which need to be respected just below
                 // when sending commands.
-                self.absorb_export(sink.clone());
+                self.absorb_export(*sink.clone());
 
                 for replica in self.active_replicas(&sink.id) {
                     replica.send(StorageCommand::RunSink(sink.clone()));
@@ -590,10 +590,12 @@ where
                 }
                 for ingestion in ingestion_commands {
                     let replica = self.replicas.get_mut(&replica_id).expect("missing replica");
+                    let ingestion = Box::new(ingestion);
                     replica.send(StorageCommand::RunIngestion(ingestion));
                 }
                 for export in export_commands {
                     let replica = self.replicas.get_mut(&replica_id).expect("missing replica");
+                    let export = Box::new(export);
                     replica.send(StorageCommand::RunSink(export));
                 }
             }
@@ -968,7 +970,7 @@ where
     /// replica-specific fields that must be adjusted before sending.
     fn specialize_command(&self, command: &mut StorageCommand<T>) {
         if let StorageCommand::CreateTimely { config, epoch } = command {
-            *config = TimelyConfig {
+            **config = TimelyConfig {
                 workers: self.config.location.workers,
                 // Overridden by the storage `PartitionedState` implementation.
                 process: 0,

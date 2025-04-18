@@ -112,7 +112,7 @@ pub enum StorageCommand<T = mz_repr::Timestamp> {
     /// Specifies to the storage server(s) the shape of the timely cluster
     /// we want created, before other commands are sent.
     CreateTimely {
-        config: TimelyConfig,
+        config: Box<TimelyConfig>,
         epoch: ClusterStartupEpoch,
     },
     /// Indicates that the controller has sent all commands reflecting its
@@ -126,20 +126,20 @@ pub enum StorageCommand<T = mz_repr::Timestamp> {
     /// analogously to the compute version.
     AllowWrites,
     /// Update storage instance configuration.
-    UpdateConfiguration(StorageParameters),
+    UpdateConfiguration(Box<StorageParameters>),
     /// Run the specified ingestion dataflow.
-    RunIngestion(RunIngestionCommand),
+    RunIngestion(Box<RunIngestionCommand>),
     /// Enable compaction in storage-managed collections.
     ///
     /// A collection id and a frontier after which accumulations must be correct.
     AllowCompaction(GlobalId, Antichain<T>),
-    RunSink(RunSinkCommand<T>),
+    RunSink(Box<RunSinkCommand<T>>),
     /// Run a dataflow which will ingest data from an external source and only __stage__ it in
     /// Persist.
     ///
     /// Unlike regular ingestions/sources, some other component (e.g. `environmentd`) is
     /// responsible for linking the staged data into a shard.
-    RunOneshotIngestion(RunOneshotIngestion),
+    RunOneshotIngestion(Box<RunOneshotIngestion>),
     /// `CancelOneshotIngestion` instructs the replica to cancel the identified oneshot ingestion.
     ///
     /// It is invalid to send a [`CancelOneshotIngestion`] command that references a oneshot
@@ -299,22 +299,22 @@ impl RustType<ProtoStorageCommand> for StorageCommand<mz_repr::Timestamp> {
         ProtoStorageCommand {
             kind: Some(match self {
                 StorageCommand::CreateTimely { config, epoch } => CreateTimely(ProtoCreateTimely {
-                    config: Some(config.into_proto()),
+                    config: Some(*config.into_proto()),
                     epoch: Some(epoch.into_proto()),
                 }),
                 StorageCommand::InitializationComplete => InitializationComplete(()),
                 StorageCommand::AllowWrites => AllowWrites(()),
                 StorageCommand::UpdateConfiguration(params) => {
-                    UpdateConfiguration(params.into_proto())
+                    UpdateConfiguration(*params.into_proto())
                 }
                 StorageCommand::AllowCompaction(id, frontier) => AllowCompaction(ProtoCompaction {
                     id: Some(id.into_proto()),
                     frontier: Some(frontier.into_proto()),
                 }),
-                StorageCommand::RunIngestion(ingestion) => RunIngestion(ingestion.into_proto()),
-                StorageCommand::RunSink(sink) => RunSink(sink.into_proto()),
+                StorageCommand::RunIngestion(ingestion) => RunIngestion(*ingestion.into_proto()),
+                StorageCommand::RunSink(sink) => RunSink(*sink.into_proto()),
                 StorageCommand::RunOneshotIngestion(ingestion) => {
-                    RunOneshotIngestion(ingestion.into_proto())
+                    RunOneshotIngestion(*ingestion.into_proto())
                 }
                 StorageCommand::CancelOneshotIngestion(uuid) => {
                     CancelOneshotIngestion(uuid.into_proto())
@@ -328,18 +328,19 @@ impl RustType<ProtoStorageCommand> for StorageCommand<mz_repr::Timestamp> {
         use proto_storage_command::*;
         match proto.kind {
             Some(CreateTimely(ProtoCreateTimely { config, epoch })) => {
-                Ok(StorageCommand::CreateTimely {
-                    config: config.into_rust_if_some("ProtoCreateTimely::config")?,
-                    epoch: epoch.into_rust_if_some("ProtoCreateTimely::epoch")?,
-                })
+                let config = Box::new(config.into_rust_if_some("ProtoCreateTimely::config")?);
+                let epoch = epoch.into_rust_if_some("ProtoCreateTimely::epoch")?;
+                Ok(StorageCommand::CreateTimely { config, epoch })
             }
             Some(InitializationComplete(())) => Ok(StorageCommand::InitializationComplete),
             Some(AllowWrites(())) => Ok(StorageCommand::AllowWrites),
             Some(UpdateConfiguration(params)) => {
-                Ok(StorageCommand::UpdateConfiguration(params.into_rust()?))
+                let params = Box::new(params.into_rust()?);
+                Ok(StorageCommand::UpdateConfiguration(params))
             }
             Some(RunIngestion(ingestion)) => {
-                Ok(StorageCommand::RunIngestion(ingestion.into_rust()?))
+                let ingestion = Box::new(ingestion.into_rust()?);
+                Ok(StorageCommand::RunIngestion(ingestion))
             }
             Some(AllowCompaction(ProtoCompaction { id, frontier })) => {
                 Ok(StorageCommand::AllowCompaction(
@@ -347,9 +348,13 @@ impl RustType<ProtoStorageCommand> for StorageCommand<mz_repr::Timestamp> {
                     frontier.into_rust_if_some("ProtoCompaction::frontier")?,
                 ))
             }
-            Some(RunSink(sink)) => Ok(StorageCommand::RunSink(sink.into_rust()?)),
+            Some(RunSink(sink)) => {
+                let sink = Box::new(sink.into_rust()?);
+                Ok(StorageCommand::RunSink(sink))
+            }
             Some(RunOneshotIngestion(ingestion)) => {
-                Ok(StorageCommand::RunOneshotIngestion(ingestion.into_rust()?))
+                let ingestion = Box::new(ingestion.into_rust()?);
+                Ok(StorageCommand::RunOneshotIngestion(ingestion))
             }
             Some(CancelOneshotIngestion(uuid)) => {
                 Ok(StorageCommand::CancelOneshotIngestion(uuid.into_rust()?))
@@ -369,9 +374,11 @@ impl Arbitrary for StorageCommand<mz_repr::Timestamp> {
         Union::new(vec![
             // TODO(guswynn): cluster-unification: also test `CreateTimely` here.
             any::<RunIngestionCommand>()
+                .prop_map(Box::new)
                 .prop_map(StorageCommand::RunIngestion)
                 .boxed(),
             any::<RunSinkCommand<mz_repr::Timestamp>>()
+                .prop_map(Box::new)
                 .prop_map(StorageCommand::RunSink)
                 .boxed(),
             (any::<GlobalId>(), any_antichain())
@@ -856,7 +863,12 @@ where
 
                 let timely_cmds = timely_cmds
                     .into_iter()
-                    .map(|config| Some(StorageCommand::CreateTimely { config, epoch }))
+                    .map(|config| {
+                        Some(StorageCommand::CreateTimely {
+                            config: Box::new(config),
+                            epoch,
+                        })
+                    })
                     .collect();
                 timely_cmds
             }
@@ -1074,7 +1086,7 @@ impl RustType<ProtoCompaction> for (GlobalId, Antichain<mz_repr::Timestamp>) {
 impl TryIntoTimelyConfig for StorageCommand {
     fn try_into_timely_config(self) -> Result<(TimelyConfig, ClusterStartupEpoch), Self> {
         match self {
-            StorageCommand::CreateTimely { config, epoch } => Ok((config, epoch)),
+            StorageCommand::CreateTimely { config, epoch } => Ok((*config, epoch)),
             cmd => Err(cmd),
         }
     }
@@ -1088,6 +1100,18 @@ mod tests {
     use proptest::proptest;
 
     use super::*;
+
+    /// Test to ensure the size of the `StorageCommand` enum doesn't regress.
+    #[mz_ore::test]
+    fn test_storage_command_size() {
+        assert_eq!(std::mem::size_of::<StorageCommand>(), 40);
+    }
+
+    /// Test to ensure the size of the `StorageResponse` enum doesn't regress.
+    #[mz_ore::test]
+    fn test_storage_response_size() {
+        assert_eq!(std::mem::size_of::<StorageResponse>(), 120);
+    }
 
     proptest! {
         #![proptest_config(ProptestConfig::with_cases(32))]

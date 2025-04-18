@@ -1306,11 +1306,13 @@ impl StorageState {
                 if self.timely_worker_index == 0 {
                     self.internal_cmd_tx
                         .send(InternalStorageCommand::UpdateConfiguration {
-                            storage_parameters: params,
+                            storage_parameters: *params,
                         })
                 }
             }
-            StorageCommand::RunIngestion(RunIngestionCommand { id, description }) => {
+            StorageCommand::RunIngestion(ingestion) => {
+                let RunIngestionCommand { id, description } = *ingestion;
+
                 // Remember the ingestion description to facilitate possible
                 // reconciliation later.
                 self.ingestions.insert(id, description.clone());

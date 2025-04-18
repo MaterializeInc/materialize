@@ -113,7 +113,7 @@ impl<T: timely::progress::Timestamp + TotalOrder> CommandHistory<T> {
                 cmd @ CreateTimely { .. } => create_timely_command = Some(cmd),
                 InitializationComplete => initialization_complete = true,
                 AllowWrites => allow_writes = true,
-                UpdateConfiguration(params) => final_configuration.update(params),
+                UpdateConfiguration(params) => final_configuration.update(*params),
                 RunIngestion(ingestion) => {
                     final_ingestions.insert(ingestion.id, ingestion);
                 }
@@ -190,8 +190,9 @@ impl<T: timely::progress::Timestamp + TotalOrder> CommandHistory<T> {
         let count = u64::from(!final_configuration.all_unset());
         self.metrics.update_configuration_count.set(count);
         if !final_configuration.all_unset() {
+            let config = Box::new(final_configuration);
             self.commands
-                .push(StorageCommand::UpdateConfiguration(final_configuration));
+                .push(StorageCommand::UpdateConfiguration(config));
         }
 
         let count = u64::cast_from(run_ingestions.len());
@@ -445,10 +446,10 @@ mod tests {
         let mut history = history();
 
         let commands = [
-            StorageCommand::RunIngestion(RunIngestionCommand {
+            StorageCommand::RunIngestion(Box::new(RunIngestionCommand {
                 id: GlobalId::User(1),
                 description: ingestion_description(1, [2], 3),
-            }),
+            })),
             StorageCommand::AllowCompaction(GlobalId::User(1), Antichain::new()),
             StorageCommand::AllowCompaction(GlobalId::User(2), Antichain::new()),
             StorageCommand::AllowCompaction(GlobalId::User(3), Antichain::new()),
@@ -469,10 +470,10 @@ mod tests {
         let mut history = history();
 
         let commands = [
-            StorageCommand::RunIngestion(RunIngestionCommand {
+            StorageCommand::RunIngestion(Box::new(RunIngestionCommand {
                 id: GlobalId::User(1),
                 description: ingestion_description(1, [2], 3),
-            }),
+            })),
             StorageCommand::AllowCompaction(GlobalId::User(1), Antichain::from_elem(1)),
             StorageCommand::AllowCompaction(GlobalId::User(2), Antichain::from_elem(2)),
             StorageCommand::AllowCompaction(GlobalId::User(3), Antichain::from_elem(3)),
@@ -493,10 +494,10 @@ mod tests {
         let mut history = history();
 
         let commands = [
-            StorageCommand::RunIngestion(RunIngestionCommand {
+            StorageCommand::RunIngestion(Box::new(RunIngestionCommand {
                 id: GlobalId::User(1),
                 description: ingestion_description(1, [2], 3),
-            }),
+            })),
             StorageCommand::AllowCompaction(GlobalId::User(2), Antichain::new()),
         ];
 
@@ -515,10 +516,10 @@ mod tests {
         let mut history = history();
 
         let commands = [
-            StorageCommand::RunSink(RunSinkCommand {
+            StorageCommand::RunSink(Box::new(RunSinkCommand {
                 id: GlobalId::User(1),
                 description: sink_description(),
-            }),
+            })),
             StorageCommand::AllowCompaction(GlobalId::User(1), Antichain::new()),
         ];
 
@@ -538,10 +539,10 @@ mod tests {
 
         let sink_desc = sink_description();
         let commands = [
-            StorageCommand::RunSink(RunSinkCommand {
+            StorageCommand::RunSink(Box::new(RunSinkCommand {
                 id: GlobalId::User(1),
                 description: sink_desc.clone(),
-            }),
+            })),
             StorageCommand::AllowCompaction(GlobalId::User(1), Antichain::from_elem(42)),
         ];
 
@@ -557,10 +558,10 @@ mod tests {
             as_of: Antichain::from_elem(42),
             ..sink_desc
         };
-        let expected_commands = [StorageCommand::RunSink(RunSinkCommand {
+        let expected_commands = [StorageCommand::RunSink(Box::new(RunSinkCommand {
             id: GlobalId::User(1),
             description: expected_sink_desc,
-        })];
+        }))];
 
         assert_eq!(commands_after, expected_commands);
     }
