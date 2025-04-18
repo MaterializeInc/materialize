@@ -304,7 +304,7 @@ impl Coordinator {
             .sufficient_collections(source_ids.iter().copied());
 
         let is_json = match format {
-            ExplainFormat::Text | ExplainFormat::VerboseText => false,
+            ExplainFormat::Text => false,
             ExplainFormat::Json => true,
             ExplainFormat::Dot => {
                 return Err(AdapterError::Unsupported("EXPLAIN TIMESTAMP AS DOT"));
