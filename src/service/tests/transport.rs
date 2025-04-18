@@ -36,7 +36,7 @@ fn test_bidirectional_communication() {
 
         mz_ore::task::spawn(
             || "serve",
-            transport::serve("turmoil:0.0.0.0:7777", VERSION, move || {
+            transport::serve("turmoil:0.0.0.0:7777", VERSION, Some("server"), move || {
                 handler.lock().unwrap().take().unwrap()
             }),
         );
@@ -86,7 +86,7 @@ fn test_server_error() {
 
         mz_ore::task::spawn(
             || "serve",
-            transport::serve("turmoil:0.0.0.0:7777", VERSION, move || {
+            transport::serve("turmoil:0.0.0.0:7777", VERSION, Some("server"), move || {
                 handler.lock().unwrap().take().unwrap()
             }),
         );
@@ -129,9 +129,12 @@ fn test_version_mismatch() {
 
         mz_ore::task::spawn(
             || "serve",
-            transport::serve("turmoil:0.0.0.0:7777", SERVER_VERSION, move || {
-                handler.lock().unwrap().take().unwrap()
-            }),
+            transport::serve(
+                "turmoil:0.0.0.0:7777",
+                SERVER_VERSION,
+                Some("server"),
+                move || handler.lock().unwrap().take().unwrap(),
+            ),
         );
 
         // Client has disconnected.
@@ -143,6 +146,45 @@ fn test_version_mismatch() {
     sim.client("client", async move {
         let mut client =
             transport::Client::<i32, ()>::connect("turmoil:server:7777", CLIENT_VERSION).await?;
+
+        // Server has disconnected.
+        assert_err!(client.recv().await);
+
+        Ok(())
+    });
+
+    sim.run().unwrap();
+}
+
+#[test] // allow(test-attribute)
+fn test_hostname_mismatch() {
+    let mut sim = setup();
+
+    sim.host("server", move || async {
+        let (in_tx, mut in_rx) = mpsc::unbounded_channel::<()>();
+        let (_out_tx, out_rx) = mpsc::unbounded_channel::<()>();
+        let handler = ChannelHandler::new(in_tx, out_rx);
+        let handler = Arc::new(Mutex::new(Some(handler)));
+
+        mz_ore::task::spawn(
+            || "serve",
+            transport::serve(
+                "turmoil:0.0.0.0:7777",
+                VERSION,
+                Some("wrong.server"),
+                move || handler.lock().unwrap().take().unwrap(),
+            ),
+        );
+
+        // Client has disconnected.
+        assert_none!(in_rx.recv().await);
+
+        Ok(())
+    });
+
+    sim.client("client", async move {
+        let mut client =
+            transport::Client::<i32, ()>::connect("turmoil:server:7777", VERSION).await?;
 
         // Server has disconnected.
         assert_err!(client.recv().await);

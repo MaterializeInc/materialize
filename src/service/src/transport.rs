@@ -57,6 +57,7 @@ pub struct Client<Out, In> {
 impl<Out: Payload, In: Payload> Client<Out, In> {
     /// Connect to the server at the given address.
     pub async fn connect(address: &str, version: Version) -> anyhow::Result<Self> {
+        let dest_host = host_from_address(address);
         let stream = Stream::connect(address).await?;
 
         let (out_tx, out_rx) = mpsc::unbounded_channel();
@@ -64,7 +65,7 @@ impl<Out: Payload, In: Payload> Client<Out, In> {
         let (error_tx, error_rx) = oneshot::channel();
 
         mz_ore::task::spawn(|| "ctp::client-connection", async {
-            let conn = Connection::new(stream, version);
+            let conn = Connection::new(stream, version, dest_host);
             let handler = ChannelHandler::new(in_tx, out_rx);
 
             let Err(error) = conn.serve(handler).await;
@@ -92,6 +93,22 @@ impl<Out: Payload, In: Payload> Client<Out, In> {
             anyhow!("connection closed")
         }
     }
+}
+
+/// Helper function to extract the host part from an address string.
+///
+/// This function assumes addresses to be of the form `<host>:<port>` or `<protocol>:<host>:<port>`
+/// and yields `None` otherwise.
+fn host_from_address(address: &str) -> Option<String> {
+    let mut p = address.split(':');
+    let (host, port) = match (p.next(), p.next(), p.next(), p.next()) {
+        (Some(host), Some(port), None, None) => (host, port),
+        (Some(_protocol), Some(host), Some(port), None) => (host, port),
+        _ => return None,
+    };
+
+    let _: u16 = port.parse().ok()?;
+    Some(host.into())
 }
 
 impl<Out, In> Client<Out, In>
@@ -137,6 +154,7 @@ impl<Out: Payload, In: Payload> GenericClient<Out, In> for Client<Out, In> {
 pub async fn serve<In, Out, H>(
     address: &str,
     version: Version,
+    server_fqdn: Option<&str>,
     handler_fn: impl Fn() -> H,
 ) -> anyhow::Result<()>
 where
@@ -151,9 +169,10 @@ where
 
         let handler = handler_fn();
         let version = version.clone();
+        let server_fqdn = server_fqdn.map(Into::into);
 
         mz_ore::task::spawn(|| "ctp::server-connection", async {
-            let conn = Connection::new(stream, version);
+            let conn = Connection::new(stream, version, server_fqdn);
 
             let Err(error) = conn.serve(handler).await;
             info!("CTP connection failed: {error}");
@@ -171,15 +190,21 @@ struct Connection<Out, In> {
     /// Used during the protocol handshake. Both endpoints are required to have the same version
     /// for the connection to be successfully established.
     version: Version,
+    /// The FQDN of the server endpoint, if known.
+    ///
+    /// Used during the protcol handshake. If both endpoints know a server FQDN, it must match for
+    /// the connection to be successfully established.
+    server_fqdn: Option<String>,
     _payloads: PhantomData<(Out, In)>,
 }
 
 impl<Out: Payload, In: Payload> Connection<Out, In> {
     /// Create a new connection wrapping the given stream.
-    fn new(stream: Stream, version: Version) -> Self {
+    fn new(stream: Stream, version: Version, server_fqdn: Option<String>) -> Self {
         Self {
             stream,
             version,
+            server_fqdn,
             _payloads: PhantomData,
         }
     }
@@ -227,15 +252,26 @@ impl<Out: Payload, In: Payload> Connection<Out, In> {
     async fn handshake(&mut self) -> anyhow::Result<()> {
         let hello = Message::Hello {
             version: self.version.clone(),
+            server_fqdn: self.server_fqdn.clone(),
         };
         Self::send(&mut self.stream, hello).await?;
 
-        match Self::recv(&mut self.stream).await? {
-            Message::Hello { version: v_peer } if v_peer == self.version => (),
-            Message::Hello { version: v_peer } => {
-                bail!("version mismatch: {v_peer} != {}", self.version)
+        let msg = Self::recv(&mut self.stream).await?;
+        let Message::Hello {
+            version,
+            server_fqdn,
+        } = msg
+        else {
+            bail!("expected Hello message, got {msg:?}");
+        };
+
+        if version != self.version {
+            bail!("version mismatch: {version} != {}", self.version);
+        }
+        if let (Some(other), Some(mine)) = (&server_fqdn, &self.server_fqdn) {
+            if other != mine {
+                bail!("server FQDN mismatch: {other} != {mine}");
             }
-            msg => bail!("expected Hello message, got {msg:?}"),
         }
 
         Ok(())
@@ -309,6 +345,8 @@ enum Message<P> {
     Hello {
         /// The version of the originating endpoint.
         version: Version,
+        /// The FQDN of the server endpoint.
+        server_fqdn: Option<String>,
     },
     /// A massage carrying application payload.
     Payload(P),
