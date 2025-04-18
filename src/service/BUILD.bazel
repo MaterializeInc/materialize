@@ -123,6 +123,45 @@ cargo_build_script(
     deps = ["//src/build-tools:mz_build_tools"] + all_crate_deps(build = True),
 )
 
+rust_test(
+    name = "mz_service_transport_tests",
+    size = "large",
+    srcs = ["tests/transport.rs"],
+    aliases = aliases(
+        normal = True,
+        normal_dev = True,
+        proc_macro = True,
+        proc_macro_dev = True,
+    ),
+    compile_data = [],
+    crate_features = [],
+    crate_name = "transport",
+    data = [],
+    env = {},
+    lint_config = ":lints",
+    proc_macro_deps = [] + all_crate_deps(
+        proc_macro = True,
+        proc_macro_dev = True,
+    ),
+    rustc_env = {},
+    rustc_flags = [],
+    version = "0.0.0",
+    deps = [
+        ":mz_service",
+        "//src/aws-secrets-controller:mz_aws_secrets_controller",
+        "//src/build-info:mz_build_info",
+        "//src/orchestrator-kubernetes:mz_orchestrator_kubernetes",
+        "//src/orchestrator-process:mz_orchestrator_process",
+        "//src/ore:mz_ore",
+        "//src/proto:mz_proto",
+        "//src/repr:mz_repr",
+        "//src/secrets:mz_secrets",
+    ] + all_crate_deps(
+        normal = True,
+        normal_dev = True,
+    ),
+)
+
 extract_cargo_lints(
     name = "lints",
     manifest = "Cargo.toml",
