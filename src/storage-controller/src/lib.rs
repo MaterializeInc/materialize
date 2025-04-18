@@ -1556,7 +1556,7 @@ where
         };
 
         if !self.read_only {
-            instance.send(StorageCommand::RunOneshotIngestion(vec![oneshot_cmd]));
+            instance.send(StorageCommand::RunOneshotIngestion(oneshot_cmd));
             let pending = PendingOneshotIngestion {
                 result_tx,
                 cluster_id: instance_id,
@@ -1589,9 +1589,7 @@ where
 
         match self.instances.get_mut(&pending.cluster_id) {
             Some(instance) => {
-                instance.send(StorageCommand::CancelOneshotIngestion {
-                    ingestions: vec![ingestion_id],
-                });
+                instance.send(StorageCommand::CancelOneshotIngestion(ingestion_id));
             }
             None => {
                 mz_ore::soft_panic_or_log!(
@@ -2368,9 +2366,8 @@ where
                                 // avoid duplicate work once we have active replication.
                                 if let Some(instance) = self.instances.get_mut(&pending.cluster_id)
                                 {
-                                    instance.send(StorageCommand::CancelOneshotIngestion {
-                                        ingestions: vec![ingestion_id],
-                                    });
+                                    instance
+                                        .send(StorageCommand::CancelOneshotIngestion(ingestion_id));
                                 }
                                 // Send the results down our channel.
                                 (pending.result_tx)(batches)

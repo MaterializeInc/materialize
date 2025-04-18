@@ -123,15 +123,11 @@ impl<T: timely::progress::Timestamp + TotalOrder> CommandHistory<T> {
                 AllowCompaction(id, since) => {
                     final_compactions.insert(id, since);
                 }
-                RunOneshotIngestion(oneshots) => {
-                    for oneshot in oneshots {
-                        final_oneshot_ingestions.insert(oneshot.ingestion_id, oneshot);
-                    }
+                RunOneshotIngestion(oneshot) => {
+                    final_oneshot_ingestions.insert(oneshot.ingestion_id, oneshot);
                 }
-                CancelOneshotIngestion { ingestions } => {
-                    for ingestion in ingestions {
-                        final_oneshot_ingestions.remove(&ingestion);
-                    }
+                CancelOneshotIngestion(uuid) => {
+                    final_oneshot_ingestions.remove(&uuid);
                 }
             }
         }
@@ -223,11 +219,10 @@ impl<T: timely::progress::Timestamp + TotalOrder> CommandHistory<T> {
         // CancelOneshotIngestion commands.
         //
         // TODO(cf2): Record metrics on the number of OneshotIngestion commands.
-        if !final_oneshot_ingestions.is_empty() {
-            self.reduced_count += final_oneshot_ingestions.len();
-            let oneshots = final_oneshot_ingestions.into_values().collect();
+        self.reduced_count += final_oneshot_ingestions.len();
+        for ingestion in final_oneshot_ingestions.into_values() {
             self.commands
-                .push(StorageCommand::RunOneshotIngestion(oneshots));
+                .push(StorageCommand::RunOneshotIngestion(ingestion));
         }
 
         let count = u64::cast_from(allow_compaction.len());
