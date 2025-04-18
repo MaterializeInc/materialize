@@ -148,12 +148,14 @@ fi
 ci_collapsed_heading ":docker: Purging all existing docker containers and volumes, regardless of origin"
 docker ps --all --quiet | xargs --no-run-if-empty docker rm --force --volumes
 
-if [[ "$BUILDKITE_LABEL" =~ Terraform\ .* ]]; then
-  ci_unimportant_heading "terraform: Destroying leftover state in case job was cancelled or timed out..."
-  bin/ci-builder run stable terraform -chdir=test/terraform/aws-temporary destroy -auto-approve || true
-  bin/ci-builder run stable terraform -chdir=test/terraform/aws-upgrade destroy -auto-approve || true
-  bin/ci-builder run stable terraform -chdir=test/terraform/gcp-temporary destroy -auto-approve || true
-  bin/ci-builder run stable terraform -chdir=test/terraform/azure-temporary destroy -auto-approve || true
+if [ "$BUILDKITE_STEP_KEY" = "terraform-aws" ]; then
+  run run aws-temporary --no-setup --no-run-testdrive-files || true
+elif [ "$BUILDKITE_STEP_KEY" = "terraform-aws-upgrade" ]; then
+  run run aws-upgrade --no-setup --no-run-testdrive-files || true
+elif [ "$BUILDKITE_STEP_KEY" = "terraform-gcp" ]; then
+  run run gcp-temporary --no-setup --no-run-testdrive-files || true
+elif [ "$BUILDKITE_STEP_KEY" = "terraform-azure" ]; then
+  run run azure-temporary --no-setup --no-run-testdrive-files || true
 fi
 rm -rf ~/.kube # Remove potential state from E2E Terraform tests
 
