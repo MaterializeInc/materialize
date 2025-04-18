@@ -93,6 +93,9 @@ not suitable for full feature set evaluations or production workloads.
 - To start ingesting your own data from an external system like Kafka, MySQL or
   PostgreSQL, check the documentation for [sources](/sql/create-source/).
 
+-   For information on using Materialize Emulator in continuous integration (CI) environments,
+    see [Using Materialize Emulator in CI](/manage/materialize-emulator-ci/).
+
 - Join the [Materialize Community on Slack](https://materialize.com/s/chat).
 
 - To fully evaluate Materialize Cloud, sign up for a [free trial Materialize
