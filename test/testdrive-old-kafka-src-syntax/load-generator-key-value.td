@@ -18,6 +18,9 @@ ALTER SYSTEM SET enable_load_generator_key_value = true
 
 > CREATE CLUSTER lg_cluster SIZE '${arg.default-replica-size}'
 
+$ skip-if
+SELECT mz_version_num() < 13900;
+
 # Error if trying to create with subsources
 ! CREATE SOURCE g FROM LOAD GENERATOR KEY VALUE(
     KEYS 8,
@@ -48,6 +51,8 @@ contains:FOR TABLES
     BATCH SIZE 4
     )  FOR SCHEMAS ("foo");
 contains:FOR SCHEMAS
+
+$ skip-end
 
 # A loadgen that only snapshots.
 > CREATE SOURCE up_no_update
