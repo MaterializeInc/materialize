@@ -1047,14 +1047,13 @@ impl<'w, A: Allocate> Worker<'w, A> {
                             .expect("only alter compatible exports permitted");
                     }
                 }
-                StorageCommand::RunOneshotIngestion(ingestions) => {
-                    info!(%worker_id, ?ingestions, "reconcile: received RunOneshotIngestion command");
-                    create_oneshot_ingestions
-                        .extend(ingestions.iter().map(|ingestion| ingestion.ingestion_id));
+                StorageCommand::RunOneshotIngestion(ingestion) => {
+                    info!(%worker_id, ?ingestion, "reconcile: received RunOneshotIngestion command");
+                    create_oneshot_ingestions.insert(ingestion.ingestion_id);
                 }
-                StorageCommand::CancelOneshotIngestion { ingestions } => {
-                    info!(%worker_id, ?ingestions, "reconcile: received CancelOneshotIngestion command");
-                    cancel_oneshot_ingestions.extend(ingestions.iter());
+                StorageCommand::CancelOneshotIngestion(uuid) => {
+                    info!(%worker_id, %uuid, "reconcile: received CancelOneshotIngestion command");
+                    cancel_oneshot_ingestions.insert(*uuid);
                 }
                 StorageCommand::InitializationComplete
                 | StorageCommand::AllowWrites
@@ -1159,23 +1158,21 @@ impl<'w, A: Allocate> Worker<'w, A> {
                             && running_sink != Some(&export.description);
                     }
                 }
-                StorageCommand::RunOneshotIngestion(ingestions) => ingestions.retain(|ingestion| {
+                StorageCommand::RunOneshotIngestion(ingestion) => {
                     let already_running = self
                         .storage_state
                         .oneshot_ingestions
                         .contains_key(&ingestion.ingestion_id);
                     let was_canceled = cancel_oneshot_ingestions.contains(&ingestion.ingestion_id);
 
-                    !already_running && !was_canceled
-                }),
-                StorageCommand::CancelOneshotIngestion { ingestions } => {
-                    ingestions.retain(|ingestion_id| {
-                        let already_running = self
-                            .storage_state
-                            .oneshot_ingestions
-                            .contains_key(ingestion_id);
-                        already_running
-                    });
+                    should_keep = !already_running && !was_canceled;
+                }
+                StorageCommand::CancelOneshotIngestion(ingestion_id) => {
+                    let already_running = self
+                        .storage_state
+                        .oneshot_ingestions
+                        .contains_key(ingestion_id);
+                    should_keep = already_running;
                 }
                 StorageCommand::InitializationComplete
                 | StorageCommand::AllowWrites
@@ -1339,23 +1336,19 @@ impl StorageState {
                     self.async_worker.update_frontiers(id, description);
                 }
             }
-            StorageCommand::RunOneshotIngestion(oneshots) => {
+            StorageCommand::RunOneshotIngestion(oneshot) => {
                 if self.timely_worker_index == 0 {
-                    for oneshot in oneshots {
-                        self.internal_cmd_tx
-                            .send(InternalStorageCommand::RunOneshotIngestion {
-                                ingestion_id: oneshot.ingestion_id,
-                                collection_id: oneshot.collection_id,
-                                collection_meta: oneshot.collection_meta,
-                                request: oneshot.request,
-                            });
-                    }
+                    self.internal_cmd_tx
+                        .send(InternalStorageCommand::RunOneshotIngestion {
+                            ingestion_id: oneshot.ingestion_id,
+                            collection_id: oneshot.collection_id,
+                            collection_meta: oneshot.collection_meta,
+                            request: oneshot.request,
+                        });
                 }
             }
-            StorageCommand::CancelOneshotIngestion { ingestions } => {
-                for id in ingestions {
-                    self.drop_oneshot_ingestion(id);
-                }
+            StorageCommand::CancelOneshotIngestion(id) => {
+                self.drop_oneshot_ingestion(id);
             }
             StorageCommand::RunSink(export) => {
                 // Remember the sink description to facilitate possible
