@@ -265,30 +265,16 @@ impl ComputeState {
 
         if ENABLE_LGALLOC.get(config) {
             if let Some(path) = &self.context.scratch_directory {
-                let clear_bytes = LGALLOC_SLOW_CLEAR_BYTES.get(config);
-                let eager_return = ENABLE_LGALLOC_EAGER_RECLAMATION.get(config);
                 let file_growth_dampener = LGALLOC_FILE_GROWTH_DAMPENER.get(config);
-                let interval = LGALLOC_BACKGROUND_INTERVAL.get(config);
                 let local_buffer_bytes = LGALLOC_LOCAL_BUFFER_BYTES.get(config);
                 info!(
                     ?path,
-                    backgrund_interval=?interval,
-                    clear_bytes,
-                    eager_return,
-                    file_growth_dampener,
-                    local_buffer_bytes,
-                    "enabling lgalloc"
+                    file_growth_dampener, local_buffer_bytes, "enabling lgalloc"
                 );
-                let background_worker_config = lgalloc::BackgroundWorkerConfig {
-                    interval,
-                    clear_bytes,
-                };
                 lgalloc::lgalloc_set_config(
                     lgalloc::LgAlloc::new()
                         .enable()
                         .with_path(path.clone())
-                        .with_background_config(background_worker_config)
-                        .eager_return(eager_return)
                         .file_growth_dampener(file_growth_dampener)
                         .local_buffer_bytes(local_buffer_bytes),
                 );
