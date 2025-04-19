@@ -1,0 +1,14 @@
+{{ $data := $.Site.Data.best_practices.three_tier_architecture }}
+
+In production, use a three-tier architecture, if feasible. A three-tier
+architecture consists of:
+
+{{ partial "yaml-tables/generic-table.html" (dict "rows" $data.rows "columns"
+$data.columns) }}
+
+Benefits of a three-tier architecture include:
+
+- Support for [blue/green
+  deployments](/manage/dbt/development-workflows/#bluegreen-deployments)
+
+- Independent scaling of each tier.
