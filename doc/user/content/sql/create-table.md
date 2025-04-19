@@ -32,10 +32,6 @@ clarity around best practices."
 
 {{< diagram "col-option.svg" >}}
 
-### `with_options`
-
-{{< diagram "with-options-retain-history.svg" >}}
-
 Field | Use
 ------|-----
 **TEMP** / **TEMPORARY** | Mark the table as [temporary](#temporary-tables).
@@ -44,7 +40,16 @@ _col&lowbar;name_ | The name of the column to be created in the table.
 _col&lowbar;type_ | The data type of the column indicated by _col&lowbar;name_.
 **NOT NULL** | Do not allow the column to contain _NULL_ values. Columns without this constraint can contain _NULL_ values.
 *default_expr* | A default value to use for the column in an [`INSERT`](/sql/insert) statement if an explicit value is not provided. If not specified, `NULL` is assumed.
-_retention_period_ | ***Private preview.** This option has known performance or stability issues and is under active development.* Duration for which Materialize retains historical data, which is useful to implement [durable subscriptions](/transform-data/patterns/durable-subscriptions/#history-retention-period). Accepts positive [interval](/sql/types/interval/) values (e.g. `'1hr'`). Default: `1s`.
+
+### `with_options`
+
+{{< diagram "with-options.svg" >}}
+
+| Field                                    | Value               | Description                                                                                                                                                       |
+|------------------------------------------|---------------------| ----------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **PARTITION BY** _columns_               | `(ident [, ident]*)` | ***Private preview.** This option has known performance or stability issues and is under active development.* The key by which Materialize should internally partition this durable collection. See the [partitioning guide](/transform-data/patterns/partition-by/) for restrictions on valid values and other details.
+| **RETAIN HISTORY FOR** _retention_period_ | `interval`          | ***Private preview.** This option has known performance or stability issues and is under active development.* Duration for which Materialize retains historical data, which is useful to implement [durable subscriptions](/transform-data/patterns/durable-subscriptions/#history-retention-period). Accepts positive [interval](/sql/types/interval/) values (e.g. `'1hr'`). Default: `1s`.
+
 
 ## Details
 
