@@ -97,6 +97,7 @@ pub mod time;
 #[cfg_attr(nightly_doc_features, doc(cfg(feature = "tracing")))]
 #[cfg(feature = "tracing")]
 pub mod tracing;
+pub mod treat_as_equal;
 pub mod url;
 pub mod vec;
 

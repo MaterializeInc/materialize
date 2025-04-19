@@ -171,12 +171,12 @@ Explained Query:
           linear_stage[0]
             closure
               project=()
-            lookup={ relation=0, key=[#0, #1] }
+            lookup={ relation=0, key=[#0{a}, #1{b}] }
             stream={ key=[#0, #1], thinning=() }
           source={ relation=1, key=[#0, #1] }
           Get::PassArrangements materialize.public.t1
             raw=false
-            arrangements[0]={ key=[#0, #1], permutation=id, thinning=() }
+            arrangements[0]={ key=[#0{a}, #1{b}], permutation=id, thinning=() }
             types=[integer?, text?]
           ArrangeBy
             raw=true
@@ -766,9 +766,9 @@ Explained Query:
       Filter (#0{a}) IS NOT NULL // { arity: 9 }
         Join on=(#0{a} = #3{a} = #6{a}) type=delta // { arity: 9 }
           implementation
-            %0:t1 » %1:l0[#0]KA » %2:l0[#0]KA
-            %1:l0 » %0:t1[#0]KAe » %2:l0[#0]KA
-            %2:l0 » %0:t1[#0]KAe » %1:l0[#0]KA
+            %0:t1 » %1:l0[#0{a}]KA » %2:l0[#0{a}]KA
+            %1:l0 » %0:t1[#0{a}]KAe » %2:l0[#0{a}]KA
+            %2:l0 » %0:t1[#0{a}]KAe » %1:l0[#0{a}]KA
           ArrangeBy keys=[[#0{a}]] // { arity: 3 }
             ReadIndex on=materialize.public.t1 idx_t1_b=[lookup values=[("l2"); ("l3")]] // { arity: 3 }
           Get l0 // { arity: 3 }
@@ -805,7 +805,7 @@ Explained Query:
     Filter (#0{a}) IS NOT NULL // { arity: 6 }
       Join on=(#0{a} = #3{a}) type=differential // { arity: 6 }
         implementation
-          %0:t1[#0]KAe » %1:t2[#0]KAe
+          %0:t1[#0{a}]KAe » %1:t2[#0{a}]KAe
         ArrangeBy keys=[[#0{a}]] // { arity: 3 }
           ReadIndex on=materialize.public.t1 idx_t1_b=[lookup value=("l2")] // { arity: 3 }
         ArrangeBy keys=[[#0{a}]] // { arity: 3 }
@@ -1332,7 +1332,7 @@ Explained Query:
         Union
           ReadIndex on=t5 idx_t5_f1=[*** full scan ***]
           Project (#2)
-            Map ((#0{f1} + #1))
+            Map ((#0{f1} + #1{f1}))
               CrossJoin type=differential
                 ArrangeBy keys=[[]]
                   Project (#0{f1})

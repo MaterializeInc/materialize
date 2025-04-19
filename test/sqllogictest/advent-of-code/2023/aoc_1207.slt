@@ -272,7 +272,7 @@ Explained Query:
   With
     cte l0 =
       Project (#3, #4) // { arity: 2 }
-        Map (regexp_split_to_array[" ", case_insensitive=false](#1), array_index(#2, 1), text_to_integer(array_index(#2, 2))) // { arity: 5 }
+        Map (regexp_split_to_array[" ", case_insensitive=false](#1{line}), array_index(#2, 1), text_to_integer(array_index(#2, 2))) // { arity: 5 }
           FlatMap unnest_array(regexp_split_to_array["\n", case_insensitive=false](#0{input})) // { arity: 2 }
             ReadStorage materialize.public.input // { arity: 1 }
     cte l1 =
@@ -287,7 +287,7 @@ Explained Query:
           - (4)
           - (5)
     cte l3 =
-      Map (substr(#0, #1, 1)) // { arity: 3 }
+      Map (substr(#0{hand}, #1{pos}, 1)) // { arity: 3 }
         CrossJoin type=differential // { arity: 2 }
           implementation
             %0:l1[×] » %1:l2[×]
@@ -304,7 +304,7 @@ Explained Query:
       Distinct project=[#0] // { arity: 1 }
         Get l1 // { arity: 1 }
     cte l6 =
-      Reduce group_by=[#0] aggregates=[any((#0 = #1))] // { arity: 2 }
+      Reduce group_by=[#0] aggregates=[any((#0{hand} = #1{right_col0_0}))] // { arity: 2 }
         CrossJoin type=differential // { arity: 2 }
           implementation
             %1:l4[×]ef » %0:l5[×]ef
@@ -312,7 +312,7 @@ Explained Query:
             Get l5 // { arity: 1 }
           ArrangeBy keys=[[]] // { arity: 1 }
             Project (#0) // { arity: 1 }
-              Filter (#1 = 5) // { arity: 2 }
+              Filter (#1{count} = 5) // { arity: 2 }
                 Get l4 // { arity: 2 }
     cte l7 =
       Union // { arity: 2 }
@@ -348,7 +348,7 @@ Explained Query:
         Project (#0) // { arity: 1 }
           Get l9 // { arity: 2 }
     cte l11 =
-      Reduce group_by=[#0] aggregates=[any((#0 = #1))] // { arity: 2 }
+      Reduce group_by=[#0] aggregates=[any((#0{hand} = #1{right_col0_2}))] // { arity: 2 }
         CrossJoin type=differential // { arity: 2 }
           implementation
             %1:l4[×]ef » %0:l10[×]ef
@@ -356,7 +356,7 @@ Explained Query:
             Get l10 // { arity: 1 }
           ArrangeBy keys=[[]] // { arity: 1 }
             Project (#0) // { arity: 1 }
-              Filter (#1 = 4) // { arity: 2 }
+              Filter (#1{count} = 4) // { arity: 2 }
                 Get l4 // { arity: 2 }
     cte l12 =
       Union // { arity: 2 }
@@ -394,10 +394,10 @@ Explained Query:
     cte l16 =
       ArrangeBy keys=[[]] // { arity: 1 }
         Project (#0) // { arity: 1 }
-          Filter (#1 = 3) // { arity: 2 }
+          Filter (#1{count} = 3) // { arity: 2 }
             Get l4 // { arity: 2 }
     cte l17 =
-      Reduce group_by=[#0] aggregates=[any((#0 = #1))] // { arity: 2 }
+      Reduce group_by=[#0] aggregates=[any((#0{hand} = #1{right_col0_4}))] // { arity: 2 }
         CrossJoin type=differential // { arity: 2 }
           implementation
             %1:l16[×]ef » %0:l15[×]ef
@@ -436,10 +436,10 @@ Explained Query:
     cte l21 =
       ArrangeBy keys=[[]] // { arity: 1 }
         Project (#0) // { arity: 1 }
-          Filter (#1 = 2) // { arity: 2 }
+          Filter (#1{count} = 2) // { arity: 2 }
             Get l4 // { arity: 2 }
     cte l22 =
-      Reduce group_by=[#0] aggregates=[any((#0 = #1))] // { arity: 2 }
+      Reduce group_by=[#0] aggregates=[any((#0{hand} = #1{right_col0_6}))] // { arity: 2 }
         CrossJoin type=differential // { arity: 2 }
           implementation
             %1:l21[×]ef » %0:l20[×]ef
@@ -481,7 +481,7 @@ Explained Query:
         Project (#0) // { arity: 1 }
           Get l25 // { arity: 2 }
     cte l27 =
-      Reduce group_by=[#0] aggregates=[any((#0 = #1))] // { arity: 2 }
+      Reduce group_by=[#0] aggregates=[any((#0{hand} = #1{right_col0_8}))] // { arity: 2 }
         CrossJoin type=differential // { arity: 2 }
           implementation
             %1:l16[×]ef » %0:l26[×]ef
@@ -522,7 +522,7 @@ Explained Query:
         Project (#0) // { arity: 1 }
           Get l30 // { arity: 2 }
     cte l32 =
-      Reduce group_by=[#0] aggregates=[any((#0 = #1))] // { arity: 2 }
+      Reduce group_by=[#0] aggregates=[any((#0{hand} = #1{right_col0_10}))] // { arity: 2 }
         Project (#0, #1) // { arity: 2 }
           Filter (#2{count} = 2) // { arity: 3 }
             Reduce group_by=[#0, #1] aggregates=[count(*)] // { arity: 3 }
@@ -566,7 +566,7 @@ Explained Query:
         Project (#0) // { arity: 1 }
           Get l35 // { arity: 2 }
     cte l37 =
-      Reduce group_by=[#0] aggregates=[any((#0 = #1))] // { arity: 2 }
+      Reduce group_by=[#0] aggregates=[any((#0{hand} = #1{right_col0_12}))] // { arity: 2 }
         CrossJoin type=differential // { arity: 2 }
           implementation
             %1:l21[×]ef » %0:l36[×]ef
@@ -584,7 +584,7 @@ Explained Query:
             Get l36 // { arity: 1 }
     cte l39 =
       Project (#1..=#3) // { arity: 3 }
-        Map (translate(#0, "AKQJT98765432", "ABCDEFGHIJKLM")) // { arity: 4 }
+        Map (translate(#0{hand}, "AKQJT98765432", "ABCDEFGHIJKLM")) // { arity: 4 }
           Union // { arity: 3 }
             Project (#0, #1, #3) // { arity: 3 }
               Filter #2{any} // { arity: 4 }
@@ -623,9 +623,9 @@ Explained Query:
                               Get l38 // { arity: 2 }
                           Get l36 // { arity: 1 }
     cte l40 =
-      Reduce aggregates=[sum(#0)] // { arity: 1 }
+      Reduce aggregates=[sum(#0{bid})] // { arity: 1 }
         Project (#0) // { arity: 1 }
-          Filter ((#1 < #3) OR ((#1 = #3) AND (#2 <= #4))) // { arity: 5 }
+          Filter ((#1{rank} < #3{rank}) OR ((#1{rank} = #3{rank}) AND (#2{score} <= #4{score}))) // { arity: 5 }
             CrossJoin type=differential // { arity: 5 }
               implementation
                 %0:l39[×] » %1:l39[×]
@@ -643,45 +643,45 @@ Explained Query:
           Project (#0, #2, #1) // { arity: 3 }
             Get l41 // { arity: 3 }
           Project (#0, #3, #1) // { arity: 3 }
-            Join on=(#0 = #2) type=differential // { arity: 4 }
+            Join on=(#0{hand} = #2{hand}) type=differential // { arity: 4 }
               implementation
-                %0:l3[#0]Kef » %1:l41[#0]Kef
-              ArrangeBy keys=[[#0]] // { arity: 2 }
+                %0:l3[#0{hand}]Kef » %1:l41[#0{hand}]Kef
+              ArrangeBy keys=[[#0{hand}]] // { arity: 2 }
                 Project (#0, #1) // { arity: 2 }
-                  Filter (#2 = "J") AND (#0) IS NOT NULL // { arity: 3 }
+                  Filter (#2{value} = "J") AND (#0{hand}) IS NOT NULL // { arity: 3 }
                     Get l3 // { arity: 3 }
-              ArrangeBy keys=[[#0]] // { arity: 2 }
+              ArrangeBy keys=[[#0{hand}]] // { arity: 2 }
                 Project (#0, #2) // { arity: 2 }
                   Get l41 // { arity: 3 }
     cte l43 =
-      Distinct project=[#0, ((((#1 || #2) || #3) || #4) || #5)] // { arity: 2 }
+      Distinct project=[#0, ((((#1{value} || #2{value}) || #3{value}) || #4{value}) || #5{value})] // { arity: 2 }
         Project (#0, #1, #3, #5, #7, #9) // { arity: 6 }
-          Join on=(#0 = #2 = #4 = #6 = #8) type=delta // { arity: 10 }
+          Join on=(#0{hand} = #2{hand} = #4{hand} = #6{hand} = #8{hand}) type=delta // { arity: 10 }
             implementation
-              %0:l42 » %1:l42[#0]Kef » %2:l42[#0]Kef » %3:l42[#0]Kef » %4:l42[#0]Kef
-              %1:l42 » %0:l42[#0]Kef » %2:l42[#0]Kef » %3:l42[#0]Kef » %4:l42[#0]Kef
-              %2:l42 » %0:l42[#0]Kef » %1:l42[#0]Kef » %3:l42[#0]Kef » %4:l42[#0]Kef
-              %3:l42 » %0:l42[#0]Kef » %1:l42[#0]Kef » %2:l42[#0]Kef » %4:l42[#0]Kef
-              %4:l42 » %0:l42[#0]Kef » %1:l42[#0]Kef » %2:l42[#0]Kef » %3:l42[#0]Kef
-            ArrangeBy keys=[[#0]] // { arity: 2 }
+              %0:l42 » %1:l42[#0{hand}]Kef » %2:l42[#0{hand}]Kef » %3:l42[#0{hand}]Kef » %4:l42[#0{hand}]Kef
+              %1:l42 » %0:l42[#0{hand}]Kef » %2:l42[#0{hand}]Kef » %3:l42[#0{hand}]Kef » %4:l42[#0{hand}]Kef
+              %2:l42 » %0:l42[#0{hand}]Kef » %1:l42[#0{hand}]Kef » %3:l42[#0{hand}]Kef » %4:l42[#0{hand}]Kef
+              %3:l42 » %0:l42[#0{hand}]Kef » %1:l42[#0{hand}]Kef » %2:l42[#0{hand}]Kef » %4:l42[#0{hand}]Kef
+              %4:l42 » %0:l42[#0{hand}]Kef » %1:l42[#0{hand}]Kef » %2:l42[#0{hand}]Kef » %3:l42[#0{hand}]Kef
+            ArrangeBy keys=[[#0{hand}]] // { arity: 2 }
               Project (#0, #1) // { arity: 2 }
-                Filter (#2 = 1) // { arity: 3 }
+                Filter (#2{position} = 1) // { arity: 3 }
                   Get l42 // { arity: 3 }
-            ArrangeBy keys=[[#0]] // { arity: 2 }
+            ArrangeBy keys=[[#0{hand}]] // { arity: 2 }
               Project (#0, #1) // { arity: 2 }
-                Filter (#2 = 2) // { arity: 3 }
+                Filter (#2{position} = 2) // { arity: 3 }
                   Get l42 // { arity: 3 }
-            ArrangeBy keys=[[#0]] // { arity: 2 }
+            ArrangeBy keys=[[#0{hand}]] // { arity: 2 }
               Project (#0, #1) // { arity: 2 }
-                Filter (#2 = 3) // { arity: 3 }
+                Filter (#2{position} = 3) // { arity: 3 }
                   Get l42 // { arity: 3 }
-            ArrangeBy keys=[[#0]] // { arity: 2 }
+            ArrangeBy keys=[[#0{hand}]] // { arity: 2 }
               Project (#0, #1) // { arity: 2 }
-                Filter (#2 = 4) // { arity: 3 }
+                Filter (#2{position} = 4) // { arity: 3 }
                   Get l42 // { arity: 3 }
-            ArrangeBy keys=[[#0]] // { arity: 2 }
+            ArrangeBy keys=[[#0{hand}]] // { arity: 2 }
               Project (#0, #1) // { arity: 2 }
-                Filter (#2 = 5) // { arity: 3 }
+                Filter (#2{position} = 5) // { arity: 3 }
                   Get l42 // { arity: 3 }
     cte l44 =
       Project (#1) // { arity: 1 }
@@ -691,7 +691,7 @@ Explained Query:
         Map (bigint_to_integer(#2{count})) // { arity: 4 }
           Reduce group_by=[#0, #1] aggregates=[count(*)] // { arity: 3 }
             Project (#0, #1) // { arity: 2 }
-              Distinct project=[#0, substr(#0, #1, 1), #1] // { arity: 3 }
+              Distinct project=[#0, substr(#0{new_hand}, #1{pos}, 1), #1] // { arity: 3 }
                 CrossJoin type=differential // { arity: 2 }
                   implementation
                     %0:l44[×] » %1:l2[×]
@@ -702,7 +702,7 @@ Explained Query:
       Distinct project=[#0] // { arity: 1 }
         Get l44 // { arity: 1 }
     cte l47 =
-      Reduce group_by=[#0] aggregates=[any((#0 = #1))] // { arity: 2 }
+      Reduce group_by=[#0] aggregates=[any((#0{new_hand} = #1{right_col0_14}))] // { arity: 2 }
         CrossJoin type=differential // { arity: 2 }
           implementation
             %1:l45[×]ef » %0:l46[×]ef
@@ -710,7 +710,7 @@ Explained Query:
             Get l46 // { arity: 1 }
           ArrangeBy keys=[[]] // { arity: 1 }
             Project (#0) // { arity: 1 }
-              Filter (#1 = 5) // { arity: 2 }
+              Filter (#1{count} = 5) // { arity: 2 }
                 Get l45 // { arity: 2 }
     cte l48 =
       Union // { arity: 2 }
@@ -746,7 +746,7 @@ Explained Query:
         Project (#1) // { arity: 1 }
           Get l50 // { arity: 2 }
     cte l52 =
-      Reduce group_by=[#0] aggregates=[any((#0 = #1))] // { arity: 2 }
+      Reduce group_by=[#0] aggregates=[any((#0{new_hand} = #1{right_col0_16}))] // { arity: 2 }
         CrossJoin type=differential // { arity: 2 }
           implementation
             %1:l45[×]ef » %0:l51[×]ef
@@ -754,7 +754,7 @@ Explained Query:
             Get l51 // { arity: 1 }
           ArrangeBy keys=[[]] // { arity: 1 }
             Project (#0) // { arity: 1 }
-              Filter (#1 = 4) // { arity: 2 }
+              Filter (#1{count} = 4) // { arity: 2 }
                 Get l45 // { arity: 2 }
     cte l53 =
       Union // { arity: 2 }
@@ -792,10 +792,10 @@ Explained Query:
     cte l57 =
       ArrangeBy keys=[[]] // { arity: 1 }
         Project (#0) // { arity: 1 }
-          Filter (#1 = 3) // { arity: 2 }
+          Filter (#1{count} = 3) // { arity: 2 }
             Get l45 // { arity: 2 }
     cte l58 =
-      Reduce group_by=[#0] aggregates=[any((#0 = #1))] // { arity: 2 }
+      Reduce group_by=[#0] aggregates=[any((#0{new_hand} = #1{right_col0_18}))] // { arity: 2 }
         CrossJoin type=differential // { arity: 2 }
           implementation
             %1:l57[×]ef » %0:l56[×]ef
@@ -834,10 +834,10 @@ Explained Query:
     cte l62 =
       ArrangeBy keys=[[]] // { arity: 1 }
         Project (#0) // { arity: 1 }
-          Filter (#1 = 2) // { arity: 2 }
+          Filter (#1{count} = 2) // { arity: 2 }
             Get l45 // { arity: 2 }
     cte l63 =
-      Reduce group_by=[#0] aggregates=[any((#0 = #1))] // { arity: 2 }
+      Reduce group_by=[#0] aggregates=[any((#0{new_hand} = #1{right_col0_20}))] // { arity: 2 }
         CrossJoin type=differential // { arity: 2 }
           implementation
             %1:l62[×]ef » %0:l61[×]ef
@@ -879,7 +879,7 @@ Explained Query:
         Project (#1) // { arity: 1 }
           Get l66 // { arity: 2 }
     cte l68 =
-      Reduce group_by=[#0] aggregates=[any((#0 = #1))] // { arity: 2 }
+      Reduce group_by=[#0] aggregates=[any((#0{new_hand} = #1{right_col0_22}))] // { arity: 2 }
         CrossJoin type=differential // { arity: 2 }
           implementation
             %1:l57[×]ef » %0:l67[×]ef
@@ -920,7 +920,7 @@ Explained Query:
         Project (#1) // { arity: 1 }
           Get l71 // { arity: 2 }
     cte l73 =
-      Reduce group_by=[#0] aggregates=[any((#0 = #1))] // { arity: 2 }
+      Reduce group_by=[#0] aggregates=[any((#0{new_hand} = #1{right_col0_24}))] // { arity: 2 }
         Project (#0, #1) // { arity: 2 }
           Filter (#2{count} = 2) // { arity: 3 }
             Reduce group_by=[#0, #1] aggregates=[count(*)] // { arity: 3 }
@@ -964,7 +964,7 @@ Explained Query:
         Project (#1) // { arity: 1 }
           Get l76 // { arity: 2 }
     cte l78 =
-      Reduce group_by=[#0] aggregates=[any((#0 = #1))] // { arity: 2 }
+      Reduce group_by=[#0] aggregates=[any((#0{new_hand} = #1{right_col0_26}))] // { arity: 2 }
         CrossJoin type=differential // { arity: 2 }
           implementation
             %1:l62[×]ef » %0:l77[×]ef
@@ -982,15 +982,15 @@ Explained Query:
             Get l77 // { arity: 1 }
     cte l80 =
       Project (#1, #3, #4) // { arity: 3 }
-        Join on=(#0 = #2) type=differential // { arity: 5 }
+        Join on=(#0{hand} = #2{hand}) type=differential // { arity: 5 }
           implementation
-            %1[#0]UK » %0:l0[#0]K
-          ArrangeBy keys=[[#0]] // { arity: 2 }
-            Filter (#0) IS NOT NULL // { arity: 2 }
+            %1[#0{hand}]UK » %0:l0[#0{hand}]K
+          ArrangeBy keys=[[#0{hand}]] // { arity: 2 }
+            Filter (#0{hand}) IS NOT NULL // { arity: 2 }
               Get l0 // { arity: 2 }
-          ArrangeBy keys=[[#0]] // { arity: 3 }
+          ArrangeBy keys=[[#0{hand}]] // { arity: 3 }
             TopK group_by=[#0] order_by=[#1 asc nulls_last, #2 asc nulls_last] limit=1 // { arity: 3 }
-              Map (translate(#0, "AKQT98765432J", "ABCDEFGHIJKLM")) // { arity: 3 }
+              Map (translate(#0{hand}, "AKQT98765432J", "ABCDEFGHIJKLM")) // { arity: 3 }
                 Union // { arity: 2 }
                   Project (#0, #3) // { arity: 2 }
                     Filter #2{any} // { arity: 4 }
@@ -1029,9 +1029,9 @@ Explained Query:
                                     Get l79 // { arity: 2 }
                                 Get l77 // { arity: 1 }
     cte l81 =
-      Reduce aggregates=[sum(#0)] // { arity: 1 }
+      Reduce aggregates=[sum(#0{bid})] // { arity: 1 }
         Project (#0) // { arity: 1 }
-          Filter ((#1 < #3) OR ((#1 = #3) AND (#2 <= #4))) // { arity: 5 }
+          Filter ((#1{rank} < #3{rank}) OR ((#1{rank} = #3{rank}) AND (#2{score} <= #4{score}))) // { arity: 5 }
             CrossJoin type=differential // { arity: 5 }
               implementation
                 %0:l80[×] » %1:l80[×]

@@ -1661,7 +1661,7 @@ impl CatalogState {
                 .expect("missing sql information for index key")
                 .to_ast_string_simple();
             let (field_number, expression) = match key {
-                MirScalarExpr::Column(col) => {
+                MirScalarExpr::Column(col, _) => {
                     (Datum::UInt64(u64::cast_from(*col + 1)), Datum::Null)
                 }
                 _ => (Datum::Null, Datum::String(&key_sql)),

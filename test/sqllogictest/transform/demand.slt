@@ -146,13 +146,13 @@ Explained Query:
               ReadStorage materialize.public.t // { arity: 1 }
     cte l1 =
       Project (#4, #5) // { arity: 2 }
-        Map ((#0{a} + #0{a}), (#1{a} + #3)) // { arity: 6 }
-          Join on=(#0{a} = #2) type=differential // { arity: 4 }
+        Map ((#0{a} + #0{a}), (#1{a} + #3{a})) // { arity: 6 }
+          Join on=(#0{a} = #2{key}) type=differential // { arity: 4 }
             implementation
-              %0:l0[#0]K » %1:l0[#0]K
+              %0:l0[#0{key}]K » %1:l0[#0{key}]K
             ArrangeBy keys=[[#0{a}]] // { arity: 2 }
               Get l0 // { arity: 2 }
-            ArrangeBy keys=[[#0]] // { arity: 2 }
+            ArrangeBy keys=[[#0{key}]] // { arity: 2 }
               Project (#2, #3) // { arity: 2 }
                 Map ((#0{a} + 1), -(#1{a})) // { arity: 4 }
                   Get l0 // { arity: 2 }

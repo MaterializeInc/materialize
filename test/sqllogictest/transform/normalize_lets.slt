@@ -104,16 +104,16 @@ Explained Query:
     cte l0 =
       Reduce group_by=[#0]
         Union
-          Filter (#0 < 27)
+          Filter (#0{f0} < 27)
             ReadStorage materialize.public.t1
           Project (#1)
-            Map ((#0 + 1))
+            Map ((#0{i} + 1))
               Get l0
   Return
     Get l0
 
 Source materialize.public.t1
-  filter=((#0 < 27))
+  filter=((#0{f0} < 27))
 
 Target cluster: quickstart
 
@@ -203,11 +203,11 @@ Explained Query:
           Project (#1{dst}, #1{dst})
             ReadStorage materialize.public.edges
           Project (#1{dst}, #3)
-            Join on=(#0{src} = #2) type=differential
+            Join on=(#0{src} = #2{node}) type=differential
               ArrangeBy keys=[[#0{src}]]
                 Filter (#0{src}) IS NOT NULL
                   ReadStorage materialize.public.edges
-              ArrangeBy keys=[[#0]]
+              ArrangeBy keys=[[#0{node}]]
                 Filter (#0{dst}) IS NOT NULL
                   Get l0
   Return
@@ -218,12 +218,12 @@ Explained Query:
             Map (0)
               Get l0
             Project (#1{dst}, #3, #5)
-              Map ((#4 + 1))
-                Join on=(#0{src} = #2) type=differential
+              Map ((#4{round} + 1))
+                Join on=(#0{src} = #2{node}) type=differential
                   ArrangeBy keys=[[#0{src}]]
                     Filter (#0{src}) IS NOT NULL
                       ReadStorage materialize.public.edges
-                  ArrangeBy keys=[[#0]]
+                  ArrangeBy keys=[[#0{node}]]
                     Filter (#0{dst}) IS NOT NULL
                       Get l1
     Return
@@ -255,7 +255,7 @@ Explained Query:
       Distinct project=[#0] monotonic
         Union
           Project (#1)
-            Map ((#0 + 1))
+            Map ((#0{i} + 1))
               Get l0
           Constant
             - (1)
@@ -282,7 +282,7 @@ Explained Query:
       Distinct project=[#0] monotonic
         Union
           Project (#1)
-            Map ((#0 + 1))
+            Map ((#0{i} + 1))
               Get l0
           Constant
             - (1)
@@ -309,7 +309,7 @@ Explained Query:
       Distinct project=[#0] monotonic
         Union
           Project (#1)
-            Map ((#0 + 1))
+            Map ((#0{i} + 1))
               Get l0
           Constant
             - (1)
@@ -448,11 +448,11 @@ Explained Query:
           Project (#1{dst}, #1{dst})
             ReadStorage materialize.public.edges
           Project (#1{dst}, #3)
-            Join on=(#0{src} = #2) type=differential
+            Join on=(#0{src} = #2{node}) type=differential
               ArrangeBy keys=[[#0{src}]]
                 Filter (#0{src}) IS NOT NULL
                   ReadStorage materialize.public.edges
-              ArrangeBy keys=[[#0]]
+              ArrangeBy keys=[[#0{node}]]
                 Filter (#0{dst}) IS NOT NULL
                   Get l0
   Return
@@ -463,12 +463,12 @@ Explained Query:
             Map (0)
               Get l0
             Project (#1{dst}, #3, #5)
-              Map ((#4 + 1))
-                Join on=(#0{src} = #2) type=differential
+              Map ((#4{round} + 1))
+                Join on=(#0{src} = #2{node}) type=differential
                   ArrangeBy keys=[[#0{src}]]
                     Filter (#0{src}) IS NOT NULL
                       ReadStorage materialize.public.edges
-                  ArrangeBy keys=[[#0]]
+                  ArrangeBy keys=[[#0{node}]]
                     Filter (#0{dst}) IS NOT NULL
                       Get l1
     Return
@@ -575,7 +575,7 @@ Explained Query:
     cte l0 =
       Get::PassArrangements materialize.public.potato
         raw=false
-        arrangements[0]={ key=[#0], permutation=id, thinning=(#1) }
+        arrangements[0]={ key=[#0{a}], permutation=id, thinning=(#1) }
         types=[text?, text?]
   Return
     With Mutually Recursive
@@ -590,12 +590,12 @@ Explained Query:
             Union
               Join::Linear
                 linear_stage[0]
-                  lookup={ relation=0, key=[#0] }
+                  lookup={ relation=0, key=[#0{a}] }
                   stream={ key=[#0], thinning=() }
                 source={ relation=1, key=[#0] }
                 Get::PassArrangements l0
                   raw=false
-                  arrangements[0]={ key=[#0], permutation=id, thinning=(#1) }
+                  arrangements[0]={ key=[#0{a}], permutation=id, thinning=(#1) }
                   types=[text?, text?]
                 ArrangeBy
                   raw=true
@@ -605,20 +605,20 @@ Explained Query:
                     - ("russet")
               Join::Linear
                 linear_stage[0]
-                  lookup={ relation=1, key=[#0] }
-                  stream={ key=[#0], thinning=(#1) }
-                source={ relation=0, key=[#0] }
+                  lookup={ relation=1, key=[#0{b}] }
+                  stream={ key=[#0{a}], thinning=(#1) }
+                source={ relation=0, key=[#0{a}] }
                 Get::PassArrangements l0
                   raw=false
-                  arrangements[0]={ key=[#0], permutation=id, thinning=(#1) }
+                  arrangements[0]={ key=[#0{a}], permutation=id, thinning=(#1) }
                   types=[text?, text?]
                 ArrangeBy
                   raw=true
-                  arrangements[0]={ key=[#0], permutation=id, thinning=() }
+                  arrangements[0]={ key=[#0{b}], permutation=id, thinning=() }
                   types=[text]
                   Get::Collection l1
                     project=(#1)
-                    filter=((#1) IS NOT NULL)
+                    filter=((#1{b}) IS NOT NULL)
                     raw=true
     Return
       Get::PassArrangements l1

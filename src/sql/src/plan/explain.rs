@@ -113,7 +113,7 @@ pub fn normalize_subqueries<'a>(expr: &'a mut HirRelationExpr) -> Result<(), Rec
             use HirRelationExpr::Get;
             use HirScalarExpr::{Exists, Select};
             expr.visit_mut_post(&mut |expr: &mut HirScalarExpr| match expr {
-                Exists(expr) | Select(expr) => match expr.as_mut() {
+                Exists(expr, _) | Select(expr, _) => match expr.as_mut() {
                     Get { .. } => (),
                     expr => {
                         // generate fresh local id
@@ -181,14 +181,14 @@ fn id_gen(
 impl ScalarOps for HirScalarExpr {
     fn match_col_ref(&self) -> Option<usize> {
         match self {
-            HirScalarExpr::Column(c) if c.level == 0 => Some(c.column),
+            HirScalarExpr::Column(c, _name) if c.level == 0 => Some(c.column),
             _ => None,
         }
     }
 
     fn references(&self, column: usize) -> bool {
         match self {
-            HirScalarExpr::Column(c) => c.column == column && c.level == 0,
+            HirScalarExpr::Column(c, _name) => c.column == column && c.level == 0,
             _ => false,
         }
     }

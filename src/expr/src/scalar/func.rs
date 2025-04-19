@@ -9606,7 +9606,7 @@ mod test {
             let is_monotone = func.is_monotone();
             let expr = MirScalarExpr::CallUnary {
                 func,
-                expr: Box::new(MirScalarExpr::Column(0)),
+                expr: Box::new(MirScalarExpr::column(0)),
             };
             if is_monotone {
                 proptest!(|(
@@ -9628,8 +9628,8 @@ mod test {
             let (left_monotone, right_monotone) = func.is_monotone();
             let expr = MirScalarExpr::CallBinary {
                 func,
-                expr1: Box::new(MirScalarExpr::Column(0)),
-                expr2: Box::new(MirScalarExpr::Column(1)),
+                expr1: Box::new(MirScalarExpr::column(0)),
+                expr2: Box::new(MirScalarExpr::column(1)),
             };
             proptest!(|(
                 mut left in proptest::array::uniform3(left),

@@ -220,7 +220,7 @@ Explained Query:
     cte l6 =
       Project (#0{product_id}..=#2{base_price}, #10..=#12)
         Map (case when (#5) IS NULL then null else #4 end, case when (#8) IS NULL then null else #7{min_promotion_discount} end)
-          Join on=(#0{product_id} = #3{product_id} = #6{product_id} = #9) type=delta
+          Join on=(#0{product_id} = #3{product_id} = #6{product_id} = #9{product_id}) type=delta
             ArrangeBy keys=[[#0{product_id}]]
               Project (#0{product_id}..=#2{base_price})
                 ReadIndex on=products idx_products_product_name=[*** full scan ***]
@@ -246,7 +246,7 @@ Explained Query:
                         Project (#0{product_id})
                           Get l3
                       Get l4
-            ArrangeBy keys=[[#0]]
+            ArrangeBy keys=[[#0{product_id}]]
               Project (#2, #3)
                 Filter (#2) IS NOT NULL
                   Map (record_get[0](record_get[1](#1)), record_get[0](#1))
@@ -291,7 +291,7 @@ Explained Query:
           Get l6
   Return
     Project (#0{product_id}, #13, #11{last_update_time})
-      Map (case when (#8) IS NULL then null else #7 end, (((((#2{base_price} * case when (#3 <= 3) then 1.2 else case when ((#3 <= 10) AND (#3 >= 4)) then 1.1 else 0.9 end end) * coalesce((1 - (#5 / 100)), 1)) * case when (#12 <= 3) then 1.1 else case when ((#12 <= 10) AND (#12 >= 4)) then 1.05 else 1 end end) * case when (#2{base_price} > #4) then (1 + ((#2{base_price} - #4) / #4)) else (1 - ((#4 - #2{base_price}) / #4)) end) * case when ilike["%cheap%"](varchar_to_text(#1{product_name})) then 0.8 else 1 end))
+      Map (case when (#8) IS NULL then null else #7 end, (((((#2{base_price} * case when (#3{popularity_rank} <= 3) then 1.2 else case when ((#3{popularity_rank} <= 10) AND (#3{popularity_rank} >= 4)) then 1.1 else 0.9 end end) * coalesce((1 - (#5{promotion_discount} / 100)), 1)) * case when (#12{stock_rank} <= 3) then 1.1 else case when ((#12 <= 10) AND (#12 >= 4)) then 1.05 else 1 end end) * case when (#2{base_price} > #4{avg_price}) then (1 + ((#2{base_price} - #4{avg_price}) / #4{avg_price})) else (1 - ((#4{avg_price} - #2{base_price}) / #4{avg_price})) end) * case when ilike["%cheap%"](varchar_to_text(#1{product_name})) then 0.8 else 1 end))
         Join on=(#0{product_id} = #6{product_id} = #9{product_id} = #10{product_id}) type=delta
           ArrangeBy keys=[[#0{product_id}]]
             Get l6
@@ -712,7 +712,7 @@ Explained Query:
                       Get l2
               Project (#4{parent_id}, #1, #5)
                 Map (integer_to_bigint(#2))
-                  Join on=(#0 = #3{category_id}) type=differential
+                  Join on=(#0{category_id} = #3{category_id}) type=differential
                     ArrangeBy keys=[[#0{category_id}]]
                       Get l3
                     ArrangeBy keys=[[#0{category_id}]]
@@ -741,7 +741,7 @@ Explained Query:
             Map (bigint_to_integer(#2{sum}), (#7{count} > 0))
               Join on=(#0{category_id} = #3{category_id} = #6{category_id}) type=delta
                 ArrangeBy keys=[[#0{category_id}]]
-                  Reduce group_by=[#0{category_id}] aggregates=[sum(#1), sum(#2)]
+                  Reduce group_by=[#0{category_id}] aggregates=[sum(#1{total}), sum(#2{item_count})]
                     Project (#0{category_id}, #2, #3)
                       Join on=(#0{category_id} = #1{category_id}) type=differential
                         Get l5

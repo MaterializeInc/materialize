@@ -201,7 +201,7 @@ EXPLAIN RAW PLAN FOR SELECT * FROM x, generate_series(1, a)
 ----
 CrossJoin
   Get materialize.public.x
-  CallTable generate_series(1, #^0, 1)
+  CallTable generate_series(1, #^0{a}, 1)
 
 Target cluster: quickstart
 
@@ -212,7 +212,7 @@ EXPLAIN RAW PLAN FOR SELECT * FROM x, generate_series(100::bigint, a)
 ----
 CrossJoin
   Get materialize.public.x
-  CallTable generate_series(integer_to_bigint(100), integer_to_bigint(#^0), 1)
+  CallTable generate_series(integer_to_bigint(100), integer_to_bigint(#^0{a}), 1)
 
 Target cluster: quickstart
 
@@ -274,7 +274,7 @@ Explained Query:
         Project (#0{a}..=#2{a}) // { arity: 3 }
           Join on=(#1{b} = #3{b}) type=differential // { arity: 4 }
             implementation
-              %0:l0[#1]K » %1:l0[#1]K
+              %0:l0[#1{b}]K » %1:l0[#1{b}]K
             Get l0 // { arity: 2 }
             Get l0 // { arity: 2 }
 
@@ -300,7 +300,7 @@ Explained Query:
         Project (#0{a}..=#2{a}) // { arity: 3 }
           Join on=(#1{b} = #3{b}) type=differential // { arity: 4 }
             implementation
-              %0:l0[#1]K » %1:l0[#1]K
+              %0:l0[#1{b}]K » %1:l0[#1{b}]K
             Get l0 // { arity: 2 }
             Get l0 // { arity: 2 }
 
@@ -324,12 +324,12 @@ Explained Query:
           ReadStorage materialize.public.x // { arity: 2 }
   Return // { arity: 5 }
     Project (#0{a}..=#2{a}, #1{b}, #3) // { arity: 5 }
-      Filter (#0{a} = #3) // { arity: 4 }
+      Filter (#0{a} = #3{b}) // { arity: 4 }
         FlatMap generate_series(#0{a}, #1{b}, 1) // { arity: 4 }
           Project (#0{a}..=#2{a}) // { arity: 3 }
             Join on=(#1{b} = #3{b}) type=differential // { arity: 4 }
               implementation
-                %0:l0[#1]K » %1:l0[#1]K
+                %0:l0[#1{b}]K » %1:l0[#1{b}]K
               Get l0 // { arity: 2 }
               Get l0 // { arity: 2 }
 
@@ -1446,7 +1446,7 @@ query T multiline
 EXPLAIN RAW PLAN FOR SELECT jsonb_object_keys('{"1":2}'::JSONB), jsonb_object_keys('{"3":4}'::JSONB);
 ----
 Project (#5, #6)
-  Map (case when (#1) IS NULL then null else #0 end, case when (#3) IS NULL then null else #2 end)
+  Map (case when (#1) IS NULL then null else #0{jsonb_object_keys} end, case when (#3) IS NULL then null else #2{jsonb_object_keys} end)
     Project (#0, #1, #3..=#5)
       Map (coalesce(#2, #4))
         FullOuterJoin (#2 = #4)

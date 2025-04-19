@@ -19,6 +19,7 @@
 //!    default, can be turned off with `WITH(raw_syntax)`).
 
 use itertools::Itertools;
+use mz_ore::treat_as_equal::TreatAsEqual;
 use std::fmt;
 
 use mz_expr::explain::{HumanizedExplain, HumanizerMode, fmt_text_constant_rows};
@@ -284,18 +285,24 @@ impl fmt::Display for HirScalarExpr {
         use HirRelationExpr::Get;
         use HirScalarExpr::*;
         match self {
-            Column(i) => write!(
+            Column(i, TreatAsEqual(None)) => write!(
                 f,
                 "#{}{}",
                 (0..i.level).map(|_| '^').collect::<String>(),
                 i.column
             ),
-            Parameter(i) => write!(f, "${}", i),
-            Literal(row, _) => write!(f, "{}", row.unpack_first()),
-            CallUnmaterializable(func) => write!(f, "{}()", func),
-            CallUnary { func, expr } => {
+            Column(i, TreatAsEqual(Some(name))) => write!(
+                f,
+                "#{}{}{{{name}}}",
+                (0..i.level).map(|_| '^').collect::<String>(),
+                i.column,
+            ),
+            Parameter(i, _name) => write!(f, "${}", i),
+            Literal(row, _, _name) => write!(f, "{}", row.unpack_first()),
+            CallUnmaterializable(func, _name) => write!(f, "{}()", func),
+            CallUnary { func, expr, .. } => {
                 if let mz_expr::UnaryFunc::Not(_) = *func {
-                    if let CallUnary { func, expr } = expr.as_ref() {
+                    if let CallUnary { func, expr, .. } = expr.as_ref() {
                         if let Some(is) = func.is() {
                             return write!(f, "({}) IS NOT {}", expr, is);
                         }
@@ -307,14 +314,16 @@ impl fmt::Display for HirScalarExpr {
                     write!(f, "{}({})", func, expr)
                 }
             }
-            CallBinary { func, expr1, expr2 } => {
+            CallBinary {
+                func, expr1, expr2, ..
+            } => {
                 if func.is_infix_op() {
                     write!(f, "({} {} {})", expr1, func, expr2)
                 } else {
                     write!(f, "{}({}, {})", func, expr1, expr2)
                 }
             }
-            CallVariadic { func, exprs } => {
+            CallVariadic { func, exprs, .. } => {
                 use mz_expr::VariadicFunc::*;
                 match func {
                     ArrayCreate { .. } => {
@@ -340,10 +349,12 @@ impl fmt::Display for HirScalarExpr {
                     }
                 }
             }
-            If { cond, then, els } => {
+            If {
+                cond, then, els, ..
+            } => {
                 write!(f, "case when {} then {} else {} end", cond, then, els)
             }
-            Windowing(expr) => {
+            Windowing(expr, _name) => {
                 // First, print
                 // - the window function name
                 // - the arguments.
@@ -420,11 +431,11 @@ impl fmt::Display for HirScalarExpr {
 
                 Ok(())
             }
-            Exists(expr) => match expr.as_ref() {
+            Exists(expr, _name) => match expr.as_ref() {
                 Get { id, .. } => write!(f, "exists(Get {})", id), // TODO: optional humanizer
                 _ => write!(f, "exists(???)"),
             },
-            Select(expr) => match expr.as_ref() {
+            Select(expr, _name) => match expr.as_ref() {
                 Get { id, .. } => write!(f, "select(Get {})", id), // TODO: optional humanizer
                 _ => write!(f, "select(???)"),
             },

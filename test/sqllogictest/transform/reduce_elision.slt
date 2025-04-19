@@ -124,7 +124,7 @@ Explained Query:
           Project (#0{f0}..=#2{f0}, #1{f1}) // { arity: 4, keys: "()" }
             Join on=(#1{f1} = #3{f1}) type=differential // { arity: 4, keys: "()" }
               implementation
-                %1:y[#1]UK » %0:x[#1]K
+                %1:y[#1{f1}]UK » %0:x[#1{f1}]K
               ArrangeBy keys=[[#1{f1}]] // { arity: 2, keys: "()" }
                 Filter (#1{f1}) IS NOT NULL // { arity: 2, keys: "()" }
                   ReadStorage materialize.public.x // { arity: 2, keys: "()" }

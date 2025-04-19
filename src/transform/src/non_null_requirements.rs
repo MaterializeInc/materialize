@@ -233,7 +233,7 @@ impl NonNullRequirements {
                     // Also, any non-nullable columns impose constraints on their equivalence class.
                     for equivalence in equivalences {
                         let exists_constraint = equivalence.iter().any(|expr| {
-                            if let MirScalarExpr::Column(c) = expr {
+                            if let MirScalarExpr::Column(c, _) = expr {
                                 let (col, rel) = input_mapper.map_column_to_local(*c);
                                 new_columns[rel].contains(&col)
                                     || !input_types[rel].column_types[col].nullable
@@ -244,7 +244,7 @@ impl NonNullRequirements {
 
                         if exists_constraint {
                             for expr in equivalence.iter() {
-                                if let MirScalarExpr::Column(c) = expr {
+                                if let MirScalarExpr::Column(c, _) = expr {
                                     let (col, rel) = input_mapper.map_column_to_local(*c);
                                     new_columns[rel].insert(col);
                                 }

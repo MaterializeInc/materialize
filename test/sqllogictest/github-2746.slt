@@ -106,7 +106,7 @@ Explained Query:
             delta_stage[1]
               closure
                 project=(#0)
-                filter=(((#2 = 1997-07-06) OR (date_to_timestamp(#1) = (#3 - 7 days))))
+                filter=(((#2{l_receiptdate} = 1997-07-06) OR (date_to_timestamp(#1{l_commitdate}) = (#3{o_orderdate} - 7 days))))
               lookup={ relation=2, key=[#0] }
               stream={ key=[#2], thinning=(#0, #1) }
             delta_stage[0]
@@ -117,7 +117,7 @@ Explained Query:
             delta_stage[1]
               closure
                 project=(#0)
-                filter=(((#3 = 1997-07-06) OR (date_to_timestamp(#2) = (#1 - 7 days))))
+                filter=(((#3{l_receiptdate} = 1997-07-06) OR (date_to_timestamp(#2{l_commitdate}) = (#1{o_orderdate} - 7 days))))
               lookup={ relation=0, key=[] }
               stream={ key=[], thinning=(#0, #1) }
             delta_stage[0]
@@ -128,7 +128,7 @@ Explained Query:
             delta_stage[1]
               closure
                 project=(#0)
-                filter=(((#3 = 1997-07-06) OR (date_to_timestamp(#2) = (#1 - 7 days))))
+                filter=(((#3{l_receiptdate} = 1997-07-06) OR (date_to_timestamp(#2{l_commitdate}) = (#1{o_orderdate} - 7 days))))
               lookup={ relation=0, key=[] }
               stream={ key=[], thinning=(#0, #1) }
             delta_stage[0]
