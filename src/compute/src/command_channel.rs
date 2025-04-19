@@ -115,6 +115,9 @@ pub fn render<A: Allocate>(timely_worker: &mut TimelyWorker<A>) -> (Sender, Rece
 
                     let input: Vec<_> = input_rx.try_iter().collect();
                     for (cmd, epoch) in input {
+                        if matches!(cmd, ComputeCommand::UpdateConfiguration(_)) {
+                            tracing::info!("command channel::source: saw UpdateConfiguration");
+                        }
                         let worker_cmds =
                             split_command(cmd, peers).map(|(idx, cmd)| (idx, cmd, epoch));
                         output.session(&cap).give_iterator(worker_cmds);
@@ -129,6 +132,9 @@ pub fn render<A: Allocate>(timely_worker: &mut TimelyWorker<A>) -> (Sender, Rece
                 move |input| {
                     while let Some((_cap, data)) = input.next() {
                         for (_idx, cmd, epoch) in data.drain(..) {
+                            if matches!(cmd, ComputeCommand::UpdateConfiguration(_)) {
+                                tracing::info!("command channel::sink: saw UpdateConfiguration");
+                            }
                             let _ = output_tx.send((cmd, epoch));
                         }
                     }

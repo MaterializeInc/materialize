@@ -504,8 +504,9 @@ class Scenario:
         for i in range(len(self.thread_pool)):
             # Indicate to every thread to stop working
             self.jobs.put(None)
+
         for thread in self.thread_pool:
-            thread.join()
+            thread.join(timeout=3600)
         self.jobs.join()
 
 

@@ -180,6 +180,8 @@ pub struct ComputeState {
     /// replica can drop diffs associated with timestamps beyond the replica expiration.
     /// The replica will panic if such dataflows are not dropped before the replica has expired.
     pub replica_expiration: Antichain<Timestamp>,
+
+    last_command: Option<ComputeCommand>,
 }
 
 impl ComputeState {
@@ -224,6 +226,7 @@ impl ComputeState {
             server_maintenance_interval: Duration::ZERO,
             init_system_time: mz_ore::now::SYSTEM_TIME(),
             replica_expiration: Antichain::default(),
+            last_command: None,
         }
     }
 
@@ -394,7 +397,118 @@ impl<'a, A: Allocate + 'static> ActiveComputeState<'a, A> {
     pub fn handle_compute_command(&mut self, cmd: ComputeCommand) {
         use ComputeCommand::*;
 
-        self.compute_state.command_history.push(cmd.clone());
+        let cmd2 = mz_ore::panic::catch_unwind_str(|| cmd.clone()).unwrap_or_else(|panic| {
+            error!("allocation error cloning compute command: {panic}");
+
+            let bytes = unsafe {
+                let ptr = &cmd as *const _ as *const u8;
+                std::slice::from_raw_parts(ptr, std::mem::size_of_val(&cmd))
+            };
+            error!("  cmd[raw]={bytes:02x?}");
+
+            if let Some(last) = self.compute_state.last_command.take() {
+                error!("  last={last:?}");
+                let bytes = unsafe {
+                    let ptr = &last as *const _ as *const u8;
+                    std::slice::from_raw_parts(ptr, std::mem::size_of_val(&last))
+                };
+                error!("  last[raw]={bytes:02x?}");
+            }
+
+            match &cmd {
+                CreateTimely { config, epoch } => {
+                    error!("  type=CreateTimely");
+                    error!("  config={config:?}");
+                    error!("  epoch={epoch:?}");
+                }
+                CreateInstance(instance_config) => {
+                    error!("  type=CreateInstance");
+                    error!("  instance_config={instance_config:?}");
+                }
+                InitializationComplete => {
+                    error!("  type=InitializationComplete");
+                }
+                AllowWrites => {
+                    error!("  type=AllowWrites");
+                }
+                UpdateConfiguration(compute_parameters) => {
+                    error!("  type=UpdateConfiguration");
+                    let ComputeParameters {
+                        workload_class,
+                        max_result_size,
+                        tracing,
+                        grpc_client,
+                        dyncfg_updates,
+                    } = compute_parameters;
+                    error!("  workload_class={workload_class:?}");
+                    error!("  max_result_size={max_result_size:?}");
+                    error!("  tracing={tracing:?}");
+                    error!("  grpc_client={grpc_client:?}");
+                    error!("  dyncfg_updates={dyncfg_updates:?}");
+                }
+                CreateDataflow(dataflow_description) => {
+                    error!("  type=CreateDataflow");
+                    let DataflowDescription {
+                        source_imports,
+                        index_imports,
+                        objects_to_build,
+                        index_exports,
+                        sink_exports,
+                        as_of,
+                        until,
+                        initial_storage_as_of,
+                        refresh_schedule,
+                        debug_name,
+                        time_dependence,
+                    } = dataflow_description;
+                    error!("  source_imports={source_imports:?}");
+                    error!("  index_imports={index_imports:?}");
+                    error!("  objects_to_build={objects_to_build:?}");
+                    error!("  index_exports={index_exports:?}");
+                    error!("  sink_exports={sink_exports:?}");
+                    error!("  as_of={as_of:?}");
+                    error!("  until={until:?}");
+                    error!("  initial_storage_as_of={initial_storage_as_of:?}");
+                    error!("  refresh_schedule={refresh_schedule:?}");
+                    error!("  debug_name={debug_name:?}");
+                    error!("  time_dependence={time_dependence:?}");
+                }
+                Schedule(global_id) => {
+                    error!("  type=Schedule");
+                    error!("  global_id={global_id:?}")
+                }
+                AllowCompaction { id, frontier } => {
+                    error!("  type=AllowCompaction");
+                    error!("  id={id:?}");
+                    error!("  frontier={frontier:?}");
+                }
+                Peek(peek) => {
+                    error!("  type=Peek");
+                    let mz_compute_client::protocol::command::Peek {
+                        target,
+                        literal_constraints,
+                        uuid,
+                        timestamp,
+                        finishing,
+                        map_filter_project,
+                        otel_ctx,
+                    } = peek;
+                    error!("  target={target:?}");
+                    error!("  literal_constraints={literal_constraints:?}");
+                    error!("  uuid={uuid:?}");
+                    error!("  timestamp={timestamp:?}");
+                    error!("  finishing={finishing:?}");
+                    error!("  map_filter_project={map_filter_project:?}");
+                    error!("  otel_ctx={otel_ctx:?}");
+                }
+                CancelPeek { uuid } => {
+                    error!("  type=CancelPeek");
+                    error!("  uuid={uuid:?}");
+                }
+            }
+            panic!("abort");
+        });
+        self.compute_state.command_history.push(cmd2);
 
         // Record the command duration, per worker and command kind.
         let timer = self
@@ -403,6 +517,8 @@ impl<'a, A: Allocate + 'static> ActiveComputeState<'a, A> {
             .handle_command_duration_seconds
             .for_command(&cmd)
             .start_timer();
+
+        self.compute_state.last_command = Some(cmd.clone());
 
         match cmd {
             CreateTimely { .. } => panic!("CreateTimely must be captured before"),

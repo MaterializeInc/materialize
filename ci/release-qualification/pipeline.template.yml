@@ -176,7 +176,63 @@ steps:
               composition: feature-benchmark
               args: [--other-tag=common-ancestor, --scale=+1]
 
-      - id: long-parallel-benchmark
+      - id: long-parallel-benchmark-1
+        label: "Long Parallel Benchmark"
+        depends_on: build-x86_64
+        timeout_in_minutes: 1200
+        agents:
+          queue: hetzner-x86-64-dedi-8cpu-32gb
+        plugins:
+          - ./ci/plugins/mzcompose:
+              composition: parallel-benchmark
+              args:
+                - --other-tag
+                - common-ancestor
+                - --load-phase-duration
+                - 1200
+      - id: long-parallel-benchmark-2
+        label: "Long Parallel Benchmark"
+        depends_on: build-x86_64
+        timeout_in_minutes: 1200
+        agents:
+          queue: hetzner-x86-64-dedi-8cpu-32gb
+        plugins:
+          - ./ci/plugins/mzcompose:
+              composition: parallel-benchmark
+              args:
+                - --other-tag
+                - common-ancestor
+                - --load-phase-duration
+                - 1200
+      - id: long-parallel-benchmark-3
+        label: "Long Parallel Benchmark"
+        depends_on: build-x86_64
+        timeout_in_minutes: 1200
+        agents:
+          queue: hetzner-x86-64-dedi-8cpu-32gb
+        plugins:
+          - ./ci/plugins/mzcompose:
+              composition: parallel-benchmark
+              args:
+                - --other-tag
+                - common-ancestor
+                - --load-phase-duration
+                - 1200
+      - id: long-parallel-benchmark-4
+        label: "Long Parallel Benchmark"
+        depends_on: build-x86_64
+        timeout_in_minutes: 1200
+        agents:
+          queue: hetzner-x86-64-dedi-8cpu-32gb
+        plugins:
+          - ./ci/plugins/mzcompose:
+              composition: parallel-benchmark
+              args:
+                - --other-tag
+                - common-ancestor
+                - --load-phase-duration
+                - 1200
+      - id: long-parallel-benchmark-5
         label: "Long Parallel Benchmark"
         depends_on: build-x86_64
         timeout_in_minutes: 1200
