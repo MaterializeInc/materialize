@@ -121,8 +121,6 @@ echo ":" | kcat -b $BROKER -t $TOPIC -Z -K: \
 
 #### Value decoding errors
 
-{{< private-preview />}}
-
 By default, if an error happens while decoding the value of a message for a
 specific key, Materialize sets the source into an error state. You can
 configure the source to continue ingesting data in the presence of value
