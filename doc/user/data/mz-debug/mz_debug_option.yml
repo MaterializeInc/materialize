@@ -1,0 +1,11 @@
+columns:
+  - column: "Option"
+  - column: "Description"
+rows:
+  - Option: "`--dump-system-catalog <boolean>`"
+    Description: |
+
+      <a name="dump-system-catalog"></a> If `true`, dump the system catalog from
+      your Materialize instance.
+
+      Defaults to `true`.
