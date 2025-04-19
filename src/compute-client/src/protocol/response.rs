@@ -659,6 +659,12 @@ mod tests {
 
     use super::*;
 
+    /// Test to ensure the size of the `ComputeResponse` enum doesn't regress.
+    #[mz_ore::test]
+    fn test_compute_response_size() {
+        assert_eq!(std::mem::size_of::<ComputeResponse>(), 120);
+    }
+
     proptest! {
         #![proptest_config(ProptestConfig::with_cases(32))]
 

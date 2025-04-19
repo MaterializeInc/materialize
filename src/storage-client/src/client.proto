@@ -51,18 +51,6 @@ message ProtoRunOneshotIngestion {
   mz_storage_types.oneshot_sources.ProtoOneshotIngestionRequest request = 4;
 }
 
-message ProtoRunOneshotIngestionsCommand {
-  repeated ProtoRunOneshotIngestion ingestions = 1;
-}
-
-message ProtoCancelOneshotIngestionsCommand {
-  repeated mz_proto.ProtoU128 ingestions = 1;
-}
-
-message ProtoCreateSources {
-  repeated ProtoRunIngestionCommand sources = 1;
-}
-
 message ProtoRunSinkCommand {
   reserved 3;
   reserved "update";
@@ -85,8 +73,8 @@ message ProtoStorageCommand {
     google.protobuf.Empty allow_writes = 7;
     ProtoRunSinkCommand run_sink = 4;
     mz_storage_types.parameters.ProtoStorageParameters update_configuration = 5;
-    ProtoRunOneshotIngestionsCommand run_oneshot_ingestions = 10;
-    ProtoCancelOneshotIngestionsCommand cancel_oneshot_ingestions = 11;
+    ProtoRunOneshotIngestion run_oneshot_ingestion = 10;
+    mz_proto.ProtoU128 cancel_oneshot_ingestion = 11;
   }
 }
 

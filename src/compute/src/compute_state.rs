@@ -406,15 +406,15 @@ impl<'a, A: Allocate + 'static> ActiveComputeState<'a, A> {
 
         match cmd {
             CreateTimely { .. } => panic!("CreateTimely must be captured before"),
-            CreateInstance(instance_config) => self.handle_create_instance(instance_config),
+            CreateInstance(instance_config) => self.handle_create_instance(*instance_config),
             InitializationComplete => (),
-            UpdateConfiguration(params) => self.handle_update_configuration(params),
-            CreateDataflow(dataflow) => self.handle_create_dataflow(dataflow),
+            UpdateConfiguration(params) => self.handle_update_configuration(*params),
+            CreateDataflow(dataflow) => self.handle_create_dataflow(*dataflow),
             Schedule(id) => self.handle_schedule(id),
             AllowCompaction { id, frontier } => self.handle_allow_compaction(id, frontier),
             Peek(peek) => {
                 peek.otel_ctx.attach_as_parent();
-                self.handle_peek(peek)
+                self.handle_peek(*peek)
             }
             CancelPeek { uuid } => self.handle_cancel_peek(uuid),
             AllowWrites => {

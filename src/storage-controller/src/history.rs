@@ -113,7 +113,7 @@ impl<T: timely::progress::Timestamp + TotalOrder> CommandHistory<T> {
                 cmd @ CreateTimely { .. } => create_timely_command = Some(cmd),
                 InitializationComplete => initialization_complete = true,
                 AllowWrites => allow_writes = true,
-                UpdateConfiguration(params) => final_configuration.update(params),
+                UpdateConfiguration(params) => final_configuration.update(*params),
                 RunIngestion(ingestion) => {
                     final_ingestions.insert(ingestion.id, ingestion);
                 }
@@ -123,15 +123,11 @@ impl<T: timely::progress::Timestamp + TotalOrder> CommandHistory<T> {
                 AllowCompaction(id, since) => {
                     final_compactions.insert(id, since);
                 }
-                RunOneshotIngestion(oneshots) => {
-                    for oneshot in oneshots {
-                        final_oneshot_ingestions.insert(oneshot.ingestion_id, oneshot);
-                    }
+                RunOneshotIngestion(oneshot) => {
+                    final_oneshot_ingestions.insert(oneshot.ingestion_id, oneshot);
                 }
-                CancelOneshotIngestion { ingestions } => {
-                    for ingestion in ingestions {
-                        final_oneshot_ingestions.remove(&ingestion);
-                    }
+                CancelOneshotIngestion(uuid) => {
+                    final_oneshot_ingestions.remove(&uuid);
                 }
             }
         }
@@ -185,36 +181,28 @@ impl<T: timely::progress::Timestamp + TotalOrder> CommandHistory<T> {
         // `metrics.reset()` here, since otherwise the command history would appear empty for a
         // brief amount of time.
 
-        // Reset reduced count, and carefully update when pushing commands. Note that some commands
-        // appear to be unary, but encode multiple changes in their values, for example
-        // `AllowCompaction`.
-        self.reduced_count = 0;
-
         let count = u64::from(create_timely_command.is_some());
         self.metrics.create_timely_count.set(count);
         if let Some(create_timely_command) = create_timely_command {
-            self.reduced_count += 1;
             self.commands.push(create_timely_command);
         }
 
         let count = u64::from(!final_configuration.all_unset());
         self.metrics.update_configuration_count.set(count);
         if !final_configuration.all_unset() {
-            self.reduced_count += 1;
+            let config = Box::new(final_configuration);
             self.commands
-                .push(StorageCommand::UpdateConfiguration(final_configuration));
+                .push(StorageCommand::UpdateConfiguration(config));
         }
 
         let count = u64::cast_from(run_ingestions.len());
         self.metrics.run_ingestions_count.set(count);
-        self.reduced_count += run_ingestions.len();
         for ingestion in run_ingestions {
             self.commands.push(StorageCommand::RunIngestion(ingestion));
         }
 
         let count = u64::cast_from(run_sinks.len());
         self.metrics.run_ingestions_count.set(count);
-        self.reduced_count += run_sinks.len();
         for sink in run_sinks {
             self.commands.push(StorageCommand::RunSink(sink));
         }
@@ -223,17 +211,14 @@ impl<T: timely::progress::Timestamp + TotalOrder> CommandHistory<T> {
         // CancelOneshotIngestion commands.
         //
         // TODO(cf2): Record metrics on the number of OneshotIngestion commands.
-        if !final_oneshot_ingestions.is_empty() {
-            self.reduced_count += final_oneshot_ingestions.len();
-            let oneshots = final_oneshot_ingestions.into_values().collect();
+        for ingestion in final_oneshot_ingestions.into_values() {
             self.commands
-                .push(StorageCommand::RunOneshotIngestion(oneshots));
+                .push(StorageCommand::RunOneshotIngestion(ingestion));
         }
 
         let count = u64::cast_from(allow_compaction.len());
         self.metrics.allow_compaction_count.set(count);
         for (id, since) in allow_compaction {
-            self.reduced_count += 1;
             self.commands
                 .push(StorageCommand::AllowCompaction(id, since));
         }
@@ -241,16 +226,16 @@ impl<T: timely::progress::Timestamp + TotalOrder> CommandHistory<T> {
         let count = u64::from(initialization_complete);
         self.metrics.initialization_complete_count.set(count);
         if initialization_complete {
-            self.reduced_count += 1;
             self.commands.push(StorageCommand::InitializationComplete);
         }
 
         let count = u64::from(allow_writes);
         self.metrics.allow_writes_count.set(count);
         if allow_writes {
-            self.reduced_count += 1;
             self.commands.push(StorageCommand::AllowWrites);
         }
+
+        self.reduced_count = self.commands.len();
     }
 }
 
@@ -461,10 +446,10 @@ mod tests {
         let mut history = history();
 
         let commands = [
-            StorageCommand::RunIngestion(RunIngestionCommand {
+            StorageCommand::RunIngestion(Box::new(RunIngestionCommand {
                 id: GlobalId::User(1),
                 description: ingestion_description(1, [2], 3),
-            }),
+            })),
             StorageCommand::AllowCompaction(GlobalId::User(1), Antichain::new()),
             StorageCommand::AllowCompaction(GlobalId::User(2), Antichain::new()),
             StorageCommand::AllowCompaction(GlobalId::User(3), Antichain::new()),
@@ -485,10 +470,10 @@ mod tests {
         let mut history = history();
 
         let commands = [
-            StorageCommand::RunIngestion(RunIngestionCommand {
+            StorageCommand::RunIngestion(Box::new(RunIngestionCommand {
                 id: GlobalId::User(1),
                 description: ingestion_description(1, [2], 3),
-            }),
+            })),
             StorageCommand::AllowCompaction(GlobalId::User(1), Antichain::from_elem(1)),
             StorageCommand::AllowCompaction(GlobalId::User(2), Antichain::from_elem(2)),
             StorageCommand::AllowCompaction(GlobalId::User(3), Antichain::from_elem(3)),
@@ -509,10 +494,10 @@ mod tests {
         let mut history = history();
 
         let commands = [
-            StorageCommand::RunIngestion(RunIngestionCommand {
+            StorageCommand::RunIngestion(Box::new(RunIngestionCommand {
                 id: GlobalId::User(1),
                 description: ingestion_description(1, [2], 3),
-            }),
+            })),
             StorageCommand::AllowCompaction(GlobalId::User(2), Antichain::new()),
         ];
 
@@ -531,10 +516,10 @@ mod tests {
         let mut history = history();
 
         let commands = [
-            StorageCommand::RunSink(RunSinkCommand {
+            StorageCommand::RunSink(Box::new(RunSinkCommand {
                 id: GlobalId::User(1),
                 description: sink_description(),
-            }),
+            })),
             StorageCommand::AllowCompaction(GlobalId::User(1), Antichain::new()),
         ];
 
@@ -554,10 +539,10 @@ mod tests {
 
         let sink_desc = sink_description();
         let commands = [
-            StorageCommand::RunSink(RunSinkCommand {
+            StorageCommand::RunSink(Box::new(RunSinkCommand {
                 id: GlobalId::User(1),
                 description: sink_desc.clone(),
-            }),
+            })),
             StorageCommand::AllowCompaction(GlobalId::User(1), Antichain::from_elem(42)),
         ];
 
@@ -573,10 +558,10 @@ mod tests {
             as_of: Antichain::from_elem(42),
             ..sink_desc
         };
-        let expected_commands = [StorageCommand::RunSink(RunSinkCommand {
+        let expected_commands = [StorageCommand::RunSink(Box::new(RunSinkCommand {
             id: GlobalId::User(1),
             description: expected_sink_desc,
-        })];
+        }))];
 
         assert_eq!(commands_after, expected_commands);
     }
