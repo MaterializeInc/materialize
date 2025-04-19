@@ -15,6 +15,7 @@ import json
 import os
 import signal
 import subprocess
+import threading
 import time
 from collections.abc import Sequence
 from pathlib import Path
@@ -35,6 +36,10 @@ SERVICES = [
     Testdrive(),  # overridden below
 ]
 
+TD_CMD = [
+    "--var=default-replica-size=25cc",
+    "--var=default-storage-size=25cc",
+]
 
 COMPATIBLE_TESTDRIVE_FILES = [
     "array.td",
@@ -80,6 +85,7 @@ COMPATIBLE_TESTDRIVE_FILES = [
     "joins.td",
     "jsonb.td",
     "list.td",
+    "load-generator-key-value.td",
     "logging.td",
     "map.td",
     "multijoins.td",
@@ -88,6 +94,7 @@ COMPATIBLE_TESTDRIVE_FILES = [
     "oid.td",
     "orms.td",
     "pg-catalog.td",
+    "quickstart.td",
     "runtime-errors.td",
     "search_path.td",
     "self-test.td",
@@ -95,8 +102,10 @@ COMPATIBLE_TESTDRIVE_FILES = [
     "subquery-scalar-errors.td",
     "system-functions.td",
     "test-skip-if.td",
+    "tpch.td",
     "type_char_quoted.td",
     "version.td",
+    "webhook.td",
 ]
 
 
@@ -116,8 +125,9 @@ def testdrive(no_reset: bool) -> Testdrive:
     return Testdrive(
         materialize_url="postgres://materialize@127.0.0.1:6875/materialize",
         materialize_url_internal="postgres://mz_system:materialize@127.0.0.1:6877/materialize",
-        materialize_use_https=True,
+        materialize_use_https=False,
         no_consistency_checks=True,
+        set_persist_urls=False,
         network_mode="host",
         volume_workdir="../testdrive:/workdir",
         no_reset=no_reset,
@@ -132,24 +142,46 @@ def get_tag(tag: str | None) -> str:
     return tag or f"v{ci_util.get_mz_version()}--pr.g{git.rev_parse('HEAD')}"
 
 
-def mz_debug(env: dict[str, str] | None = None) -> None:
+def build_mz_debug_async(env: dict[str, str] | None = None) -> None:
+    def run():
+        spawn.capture(
+            [
+                "cargo",
+                "build",
+                "--bin",
+                "mz-debug",
+            ],
+            cwd=MZ_ROOT,
+            stderr=subprocess.STDOUT,
+            env=env,
+        )
+
+    threading.Thread(target=run, daemon=True).start()
+
+
+def run_mz_debug(env: dict[str, str] | None = None) -> None:
     print("-- Running mz-debug")
-    run_ignore_error(
-        [
-            "cargo",
-            "run",
-            "--bin",
-            "mz-debug",
-            "--",
-            "self-managed",
-            "--k8s-namespace",
-            "materialize-environment",
-            "--k8s-namespace",
-            "materialize",
-        ],
-        cwd=MZ_ROOT,
-        env=env,
-    )
+    try:
+        # mz-debug (and its compilation) is rather noisy, so ignore the output
+        spawn.capture(
+            [
+                "cargo",
+                "run",
+                "--bin",
+                "mz-debug",
+                "--",
+                "self-managed",
+                "--k8s-namespace",
+                "materialize-environment",
+                "--k8s-namespace",
+                "materialize",
+            ],
+            cwd=MZ_ROOT,
+            stderr=subprocess.STDOUT,
+            env=env,
+        )
+    except:
+        pass
 
 
 class AWS:
@@ -659,6 +691,7 @@ def workflow_aws_temporary(c: Composition, parser: WorkflowArgumentParser) -> No
     path = MZ_ROOT / "test" / "terraform" / "aws-temporary"
     aws = AWS(path)
     try:
+        build_mz_debug_async()
         aws.setup("aws-test", args.setup, tag)
         print("--- Running tests")
         with c.override(testdrive(no_reset=False)):
@@ -684,11 +717,11 @@ def workflow_aws_temporary(c: Composition, parser: WorkflowArgumentParser) -> No
                     ), f"Actual version: {version}, expected to contain {helm_chart_version}"
 
             if args.run_testdrive_files:
-                c.run_testdrive_files(*args.files)
+                c.run_testdrive_files(*TD_CMD, *args.files)
     finally:
         aws.cleanup()
 
-        mz_debug()
+        run_mz_debug()
 
         if args.cleanup:
             aws.destroy()
@@ -728,6 +761,7 @@ def workflow_aws_upgrade(c: Composition, parser: WorkflowArgumentParser) -> None
     path = MZ_ROOT / "test" / "terraform" / "aws-upgrade"
     aws = AWS(path)
     try:
+        build_mz_debug_async()
         aws.setup("aws-upgrade", args.setup, previous_tag)
         aws.upgrade(tag)
         # Try waiting a bit, otherwise connection error, should be handled better
@@ -757,11 +791,11 @@ def workflow_aws_upgrade(c: Composition, parser: WorkflowArgumentParser) -> None
                         f", helm chart: {helm_chart_version})"
                     ), f"Actual version: {version}, expected to contain {helm_chart_version}"
 
-            c.run_testdrive_files(*args.files)
+            c.run_testdrive_files(*TD_CMD, *args.files)
     finally:
         aws.cleanup()
 
-        mz_debug()
+        run_mz_debug()
 
         if args.cleanup:
             aws.destroy()
@@ -935,6 +969,7 @@ def workflow_gcp_temporary(c: Composition, parser: WorkflowArgumentParser) -> No
     os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = str(gcloud_creds_path)
 
     try:
+        build_mz_debug_async()
         spawn.runv(["gcloud", "config", "set", "project", "materialize-ci"])
 
         spawn.runv(
@@ -1283,7 +1318,7 @@ def workflow_gcp_temporary(c: Composition, parser: WorkflowArgumentParser) -> No
             Testdrive(
                 materialize_url="postgres://materialize@127.0.0.1:6875/materialize",
                 materialize_url_internal="postgres://mz_system:materialize@127.0.0.1:6877/materialize",
-                materialize_use_https=True,
+                materialize_use_https=False,
                 no_consistency_checks=True,
                 network_mode="host",
                 volume_workdir="../testdrive:/workdir",
@@ -1323,14 +1358,14 @@ def workflow_gcp_temporary(c: Composition, parser: WorkflowArgumentParser) -> No
                     ), f"Actual version: {version}, expected to contain {helm_chart_version}"
 
             if args.run_testdrive_files:
-                c.run_testdrive_files(*args.files)
+                c.run_testdrive_files(*TD_CMD, *args.files)
     finally:
         if environmentd_port_forward_process:
             os.killpg(os.getpgid(environmentd_port_forward_process.pid), signal.SIGTERM)
         if balancerd_port_forward_process:
             os.killpg(os.getpgid(balancerd_port_forward_process.pid), signal.SIGTERM)
 
-        mz_debug()
+        run_mz_debug()
 
         if args.cleanup:
             print("--- Cleaning up")
@@ -1406,6 +1441,7 @@ def workflow_azure_temporary(c: Composition, parser: WorkflowArgumentParser) -> 
     )
 
     try:
+        build_mz_debug_async()
         if os.getenv("CI"):
             username = os.getenv("AZURE_SERVICE_ACCOUNT_USERNAME")
             password = os.getenv("AZURE_SERVICE_ACCOUNT_PASSWORD")
@@ -1782,7 +1818,7 @@ def workflow_azure_temporary(c: Composition, parser: WorkflowArgumentParser) -> 
             Testdrive(
                 materialize_url="postgres://materialize@127.0.0.1:6875/materialize",
                 materialize_url_internal="postgres://mz_system:materialize@127.0.0.1:6877/materialize",
-                materialize_use_https=True,
+                materialize_use_https=False,
                 no_consistency_checks=True,
                 network_mode="host",
                 volume_workdir="../testdrive:/workdir",
@@ -1822,14 +1858,14 @@ def workflow_azure_temporary(c: Composition, parser: WorkflowArgumentParser) -> 
                     ), f"Actual version: {version}, expected to contain {helm_chart_version}"
 
             if args.run_testdrive_files:
-                c.run_testdrive_files(*args.files)
+                c.run_testdrive_files(*TD_CMD, *args.files)
     finally:
         if environmentd_port_forward_process:
             os.killpg(os.getpgid(environmentd_port_forward_process.pid), signal.SIGTERM)
         if balancerd_port_forward_process:
             os.killpg(os.getpgid(balancerd_port_forward_process.pid), signal.SIGTERM)
 
-        mz_debug(env=venv_env)
+        run_mz_debug(env=venv_env)
 
         if args.cleanup:
             print("--- Cleaning up")
