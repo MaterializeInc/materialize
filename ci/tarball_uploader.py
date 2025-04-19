@@ -91,8 +91,7 @@ class TarballUploader:
         print(f"Tarball size: {size}")
 
         self._upload_tarball(tar_path, platform)
-        if is_latest_version(self.version):
-            self._upload_latest_redirect(platform)
+        self._upload_latest_redirect(platform)
 
 
 def is_latest_version(version: TypedVersionBase) -> bool:

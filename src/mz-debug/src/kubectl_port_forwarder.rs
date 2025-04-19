@@ -23,7 +23,7 @@ use kube::{Api, Client};
 use std::time::Duration;
 
 use mz_ore::retry::{self, RetryResult};
-use tracing::{error, info};
+use tracing::{info, warn};
 
 use crate::SelfManagedDebugMode;
 #[derive(Debug, Clone)]
@@ -93,7 +93,7 @@ impl KubectlPortForwarder {
                                     ),
                                     String::from_utf8_lossy(&output.stderr)
                                 );
-                                error!("{}", retry_err_msg);
+                                warn!("{}", retry_err_msg);
 
                                 return RetryResult::RetryableErr(anyhow::anyhow!(retry_err_msg));
                             }
@@ -113,7 +113,7 @@ impl KubectlPortForwarder {
             })
             .await
         {
-            error!("{}", err);
+            warn!("{}", err);
         }
     }
 }
