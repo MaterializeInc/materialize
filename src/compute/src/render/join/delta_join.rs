@@ -13,8 +13,6 @@
 
 #![allow(clippy::op_ref)]
 
-use std::collections::{BTreeMap, BTreeSet};
-
 use columnar::Columnar;
 use differential_dataflow::IntoOwned;
 use differential_dataflow::consolidation::ConsolidatingContainerBuilder;
@@ -60,56 +58,15 @@ where
             // Collects error streams for the ambient scope.
             let mut inner_errs = Vec::new();
 
-            // Deduplicate the error streams of multiply used arrangements.
-            let mut err_dedup = BTreeSet::new();
-
             // Our plan is to iterate through each input relation, and attempt
             // to find a plan that maximally uses existing keys (better: uses
             // existing arrangements, to which we have access).
             let mut join_results = Vec::new();
 
-            // First let's prepare the input arrangements we will need.
-            // This reduces redundant imports, and simplifies the dataflow structure.
-            // As the arrangements are all shared, it should not dramatically improve
-            // the efficiency, but the dataflow simplification is worth doing.
-            let mut arrangements = BTreeMap::new();
-            for path_plan in join_plan.path_plans.iter() {
-                for stage_plan in path_plan.stage_plans.iter() {
-                    let lookup_idx = stage_plan.lookup_relation;
-                    let lookup_key = stage_plan.lookup_key.clone();
-                    arrangements
-                        .entry((lookup_idx, lookup_key.clone()))
-                        .or_insert_with(|| {
-                            match inputs[lookup_idx]
-                                .arrangement(&lookup_key)
-                                .unwrap_or_else(|| {
-                                    panic!(
-                                        "Arrangement alarmingly absent!: {}, {:?}",
-                                        lookup_idx, lookup_key,
-                                    )
-                                }) {
-                                ArrangementFlavor::Local(oks, errs) => {
-                                    if err_dedup.insert((lookup_idx, lookup_key)) {
-                                        inner_errs.push(
-                                            errs.enter_region(inner)
-                                                .as_collection(|k, _v| k.clone()),
-                                        );
-                                    }
-                                    Ok(oks.enter_region(inner))
-                                }
-                                ArrangementFlavor::Trace(_gid, oks, errs) => {
-                                    if err_dedup.insert((lookup_idx, lookup_key)) {
-                                        inner_errs.push(
-                                            errs.enter_region(inner)
-                                                .as_collection(|k, _v| k.clone()),
-                                        );
-                                    }
-                                    Err(oks.enter_region(inner))
-                                }
-                            }
-                        });
-                }
-            }
+            let inputs_inner = inputs
+                .iter()
+                .map(|cb| cb.enter_region(inner))
+                .collect::<Vec<_>>();
 
             for path_plan in join_plan.path_plans {
                 // Deconstruct the stages of the path plan.
@@ -139,40 +96,51 @@ where
                     // available information to determine the filtering and logic that we can apply, and
                     // introduce that in to the `lookup` logic to cause it to happen in that operator.
 
+                    let bundles = inputs_inner
+                        .iter()
+                        .map(|cb| cb.enter_region(region))
+                        .collect::<Vec<_>>();
+
                     // Collects error streams for the region scope. Concats before leaving.
                     let mut region_errs = Vec::with_capacity(inputs.len());
 
-                    // Ensure this input is rendered, and extract its update stream.
-                    let val = arrangements
-                        .get(&(source_relation, source_key))
-                        .expect("Arrangement promised by the planner is absent!");
-                    let as_of = self.as_of_frontier.clone();
-                    let update_stream = match val {
-                        Ok(local) => {
-                            let arranged = local.enter_region(region);
-                            let (update_stream, err_stream) =
-                                build_update_stream::<_, RowRowAgent<_, _>>(
-                                    arranged,
-                                    as_of,
-                                    source_relation,
-                                    initial_closure,
-                                );
-                            region_errs.push(err_stream);
-                            update_stream
+                    // Form the initial stream of updates that will hydrate the delta path.
+                    let source_key_option = Some(&source_key);
+                    let source_flavor =
+                        source_key_option.map(|k| bundles[source_relation].arrangement(k).unwrap());
+                    let (update_stream, err_stream) = match source_flavor {
+                        Some(ArrangementFlavor::Local(local, errs)) => {
+                            region_errs.push(errs.as_collection(|k, _v| k.clone()));
+                            build_update_stream_trace::<_, RowRowAgent<_, _>>(
+                                local,
+                                self.as_of_frontier.clone(),
+                                source_relation,
+                                initial_closure,
+                            )
                         }
-                        Err(trace) => {
-                            let arranged = trace.enter_region(region);
-                            let (update_stream, err_stream) =
-                                build_update_stream::<_, RowRowEnter<_, _, _>>(
-                                    arranged,
-                                    as_of,
-                                    source_relation,
-                                    initial_closure,
-                                );
-                            region_errs.push(err_stream);
-                            update_stream
+                        Some(ArrangementFlavor::Trace(_gid, trace, errs)) => {
+                            region_errs.push(errs.as_collection(|k, _v| k.clone()));
+                            build_update_stream_trace::<_, RowRowEnter<_, _, _>>(
+                                trace,
+                                self.as_of_frontier.clone(),
+                                source_relation,
+                                initial_closure,
+                            )
+                        }
+                        None => {
+                            let (oks, errs) = bundles[source_relation].collection.clone().unwrap();
+                            region_errs.push(errs);
+                            build_update_stream_stream(
+                                oks,
+                                self.as_of_frontier.clone(),
+                                source_relation,
+                                initial_closure,
+                            )
                         }
                     };
+
+                    region_errs.push(err_stream);
+
                     // Promote `time` to a datum element.
                     //
                     // The `half_join` operator manipulates as "data" a pair `(data, time)`,
@@ -201,55 +169,59 @@ where
                         //
                         // We need to write the logic twice, as there are two types of arrangement
                         // we might have: either dataflow-local or an imported trace.
-                        let (oks, errs) =
-                            match arrangements.get(&(lookup_relation, lookup_key)).unwrap() {
-                                Ok(local) => {
-                                    if source_relation < lookup_relation {
-                                        build_halfjoin::<_, RowRowAgent<_, _>, _>(
-                                            update_stream,
-                                            local.enter_region(region),
-                                            stream_key,
-                                            stream_thinning,
-                                            |t1, t2| t1.le(t2),
-                                            closure,
-                                            self.shutdown_token.clone(),
-                                        )
-                                    } else {
-                                        build_halfjoin::<_, RowRowAgent<_, _>, _>(
-                                            update_stream,
-                                            local.enter_region(region),
-                                            stream_key,
-                                            stream_thinning,
-                                            |t1, t2| t1.lt(t2),
-                                            closure,
-                                            self.shutdown_token.clone(),
-                                        )
-                                    }
+                        let (oks, errs) = match bundles[lookup_relation].arrangement(&lookup_key) {
+                            Some(ArrangementFlavor::Local(local, errs)) => {
+                                region_errs.push(errs.as_collection(|k, _v| k.clone()));
+                                if source_relation < lookup_relation {
+                                    build_halfjoin::<_, RowRowAgent<_, _>, _>(
+                                        update_stream,
+                                        local,
+                                        stream_key,
+                                        stream_thinning,
+                                        |t1, t2| t1.le(t2),
+                                        closure,
+                                        self.shutdown_token.clone(),
+                                    )
+                                } else {
+                                    build_halfjoin::<_, RowRowAgent<_, _>, _>(
+                                        update_stream,
+                                        local,
+                                        stream_key,
+                                        stream_thinning,
+                                        |t1, t2| t1.lt(t2),
+                                        closure,
+                                        self.shutdown_token.clone(),
+                                    )
                                 }
-                                Err(trace) => {
-                                    if source_relation < lookup_relation {
-                                        build_halfjoin::<_, RowRowEnter<_, _, _>, _>(
-                                            update_stream,
-                                            trace.enter_region(region),
-                                            stream_key,
-                                            stream_thinning,
-                                            |t1, t2| t1.le(t2),
-                                            closure,
-                                            self.shutdown_token.clone(),
-                                        )
-                                    } else {
-                                        build_halfjoin::<_, RowRowEnter<_, _, _>, _>(
-                                            update_stream,
-                                            trace.enter_region(region),
-                                            stream_key,
-                                            stream_thinning,
-                                            |t1, t2| t1.lt(t2),
-                                            closure,
-                                            self.shutdown_token.clone(),
-                                        )
-                                    }
+                            }
+                            Some(ArrangementFlavor::Trace(_gid, trace, errs)) => {
+                                region_errs.push(errs.as_collection(|k, _v| k.clone()));
+                                if source_relation < lookup_relation {
+                                    build_halfjoin::<_, RowRowEnter<_, _, _>, _>(
+                                        update_stream,
+                                        trace,
+                                        stream_key,
+                                        stream_thinning,
+                                        |t1, t2| t1.le(t2),
+                                        closure,
+                                        self.shutdown_token.clone(),
+                                    )
+                                } else {
+                                    build_halfjoin::<_, RowRowEnter<_, _, _>, _>(
+                                        update_stream,
+                                        trace,
+                                        stream_key,
+                                        stream_thinning,
+                                        |t1, t2| t1.lt(t2),
+                                        closure,
+                                        self.shutdown_token.clone(),
+                                    )
                                 }
-                            };
+                            }
+                            None => {
+                                panic!("Missing look-up collection");
+                            }
+                        };
                         update_stream = oks;
                         region_errs.push(errs);
                     }
@@ -462,7 +434,7 @@ where
 /// At start-up time only the delta path for the first relation sees updates, since any updates fed to the
 /// other delta paths would be discarded anyway due to the tie-breaking logic that avoids double-counting
 /// updates happening at the same time on different relations.
-fn build_update_stream<G, Tr>(
+fn build_update_stream_trace<G, Tr>(
     trace: Arranged<G, Tr>,
     as_of: Antichain<mz_repr::Timestamp>,
     source_relation: usize,
@@ -557,4 +529,45 @@ where
         ok_stream.as_collection(),
         err_stream.as_collection().map(DataflowError::from),
     )
+}
+
+/// Builds the beginning of the update stream of a delta path.
+///
+/// At start-up time only the delta path for the first relation sees updates, since any updates fed to the
+/// other delta paths would be discarded anyway due to the tie-breaking logic that avoids double-counting
+/// updates happening at the same time on different relations.
+fn build_update_stream_stream<G>(
+    stream: Collection<G, Row, Diff>,
+    as_of: Antichain<mz_repr::Timestamp>,
+    source_relation: usize,
+    initial_closure: JoinClosure,
+) -> (Collection<G, Row, Diff>, Collection<G, DataflowError, Diff>)
+where
+    G: Scope,
+    G::Timestamp: crate::render::RenderTimestamp,
+{
+    // We should only be calling this with the 0th source relation, for the moment.
+    assert_eq!(source_relation, 0);
+
+    let mut inner_as_of = Antichain::new();
+    for event_time in as_of.elements().iter() {
+        inner_as_of.insert(<G::Timestamp>::to_inner(event_time.clone()));
+    }
+
+    let mut datums = DatumVec::new();
+    type CB<C> = ConsolidatingContainerBuilder<C>;
+    let (oks, err) =
+        stream.flat_map_fallible::<CB<_>, CB<_>, _, _, _, _>("UpdateStream", move |row| {
+            let temp_storage = RowArena::new();
+            let binding = SharedRow::get();
+            let mut row_builder = binding.borrow_mut();
+            let mut datums_local = datums.borrow_with(&row);
+
+            initial_closure
+                .apply(&mut datums_local, &temp_storage, &mut row_builder)
+                .map(|row| row.cloned())
+                .transpose()
+        });
+
+    (oks, err.map(DataflowError::from))
 }
