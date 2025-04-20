@@ -27,7 +27,7 @@ matplotlib==3.10.1
 matplotlib-stubs==0.2.0
 networkx==3.4.2
 networkx-stubs==0.0.1
-numpy==1.26.4
+numpy==2.0.2
 pandas==2.2.3
 pandas-stubs==2.2.3.250308
 parameterized==0.9.0
