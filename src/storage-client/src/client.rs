@@ -139,8 +139,8 @@ pub enum StorageCommand<T = mz_repr::Timestamp> {
     ///
     /// Unlike regular ingestions/sources, some other component (e.g. `environmentd`) is
     /// responsible for linking the staged data into a shard.
-    RunOneshotIngestion(Vec<RunOneshotIngestion>),
-    /// `CancelOneshotIngestion` instructs the replica to cancel the identified oneshot ingestions.
+    RunOneshotIngestion(RunOneshotIngestion),
+    /// `CancelOneshotIngestion` instructs the replica to cancel the identified oneshot ingestion.
     ///
     /// It is invalid to send a [`CancelOneshotIngestion`] command that references a oneshot
     /// ingestion that was not created by a corresponding [`RunOneshotIngestion`] command before.
@@ -148,9 +148,7 @@ pub enum StorageCommand<T = mz_repr::Timestamp> {
     ///
     /// [`CancelOneshotIngestion`]: crate::client::StorageCommand::CancelOneshotIngestion
     /// [`RunOneshotIngestion`]: crate::client::StorageCommand::RunOneshotIngestion
-    CancelOneshotIngestion {
-        ingestions: Vec<Uuid>,
-    },
+    CancelOneshotIngestion(Uuid),
 }
 
 impl<T> StorageCommand<T> {
@@ -315,15 +313,11 @@ impl RustType<ProtoStorageCommand> for StorageCommand<mz_repr::Timestamp> {
                 }),
                 StorageCommand::RunIngestion(ingestion) => RunIngestion(ingestion.into_proto()),
                 StorageCommand::RunSink(sink) => RunSink(sink.into_proto()),
-                StorageCommand::RunOneshotIngestion(ingestions) => {
-                    RunOneshotIngestions(ProtoRunOneshotIngestionsCommand {
-                        ingestions: ingestions.iter().map(|cmd| cmd.into_proto()).collect(),
-                    })
+                StorageCommand::RunOneshotIngestion(ingestion) => {
+                    RunOneshotIngestion(ingestion.into_proto())
                 }
-                StorageCommand::CancelOneshotIngestion { ingestions } => {
-                    CancelOneshotIngestions(ProtoCancelOneshotIngestionsCommand {
-                        ingestions: ingestions.iter().map(|uuid| uuid.into_proto()).collect(),
-                    })
+                StorageCommand::CancelOneshotIngestion(uuid) => {
+                    CancelOneshotIngestion(uuid.into_proto())
                 }
             }),
         }
@@ -354,21 +348,11 @@ impl RustType<ProtoStorageCommand> for StorageCommand<mz_repr::Timestamp> {
                 ))
             }
             Some(RunSink(sink)) => Ok(StorageCommand::RunSink(sink.into_rust()?)),
-            Some(RunOneshotIngestions(oneshot)) => {
-                let ingestions = oneshot
-                    .ingestions
-                    .into_iter()
-                    .map(|cmd| cmd.into_rust())
-                    .collect::<Result<_, _>>()?;
-                Ok(StorageCommand::RunOneshotIngestion(ingestions))
+            Some(RunOneshotIngestion(ingestion)) => {
+                Ok(StorageCommand::RunOneshotIngestion(ingestion.into_rust()?))
             }
-            Some(CancelOneshotIngestions(oneshot)) => {
-                let ingestions = oneshot
-                    .ingestions
-                    .into_iter()
-                    .map(|uuid| uuid.into_rust())
-                    .collect::<Result<_, _>>()?;
-                Ok(StorageCommand::CancelOneshotIngestion { ingestions })
+            Some(CancelOneshotIngestion(uuid)) => {
+                Ok(StorageCommand::CancelOneshotIngestion(uuid.into_rust()?))
             }
             None => Err(TryFromProtoError::missing_field(
                 "ProtoStorageCommand::kind",
