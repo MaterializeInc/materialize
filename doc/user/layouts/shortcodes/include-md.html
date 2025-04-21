@@ -1,0 +1,2 @@
+{{- $path := .Get "file" -}}
+{{- readFile $path | markdownify -}}
