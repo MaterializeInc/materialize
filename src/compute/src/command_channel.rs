@@ -157,6 +157,8 @@ fn split_command(
 
     let commands = match command {
         ComputeCommand::CreateDataflow(dataflow) => {
+            let dataflow = *dataflow;
+
             // A list of descriptions of objects for each part to build.
             let mut builds_parts = vec![Vec::new(); parts];
             // Partition each build description among `parts`.
@@ -187,6 +189,7 @@ fn split_command(
                     refresh_schedule: dataflow.refresh_schedule.clone(),
                     time_dependence: dataflow.time_dependence.clone(),
                 })
+                .map(Box::new)
                 .map(ComputeCommand::CreateDataflow);
             Either::Left(commands)
         }

@@ -17,7 +17,7 @@ use std::time::{Duration, Instant};
 
 use mz_build_info::BuildInfo;
 use mz_cluster_client::WallclockLagFn;
-use mz_cluster_client::client::{ClusterStartupEpoch, TimelyConfig};
+use mz_cluster_client::client::ClusterStartupEpoch;
 use mz_compute_types::ComputeInstanceId;
 use mz_compute_types::dataflows::{BuildDesc, DataflowDescription};
 use mz_compute_types::plan::LirId;
@@ -64,9 +64,7 @@ use crate::controller::{
 use crate::logging::LogVariant;
 use crate::metrics::IntCounter;
 use crate::metrics::{InstanceMetrics, ReplicaCollectionMetrics, ReplicaMetrics, UIntGauge};
-use crate::protocol::command::{
-    ComputeCommand, ComputeParameters, InstanceConfig, Peek, PeekTarget,
-};
+use crate::protocol::command::{ComputeCommand, ComputeParameters, Peek, PeekTarget};
 use crate::protocol::history::ComputeCommandHistory;
 use crate::protocol::response::{
     ComputeResponse, CopyToResponse, FrontiersResponse, OperatorHydrationStatus, PeekResponse,
@@ -1010,16 +1008,13 @@ where
 
     async fn run(mut self) {
         self.send(ComputeCommand::CreateTimely {
-            config: TimelyConfig::default(),
+            config: Default::default(),
             epoch: ClusterStartupEpoch::new(self.envd_epoch, 0),
         });
 
         // Send a placeholder instance configuration for the replica task to fill in.
-        let dummy_logging_config = Default::default();
-        self.send(ComputeCommand::CreateInstance(InstanceConfig {
-            logging: dummy_logging_config,
-            expiration_offset: None,
-        }));
+        let dummy_instance_config = Default::default();
+        self.send(ComputeCommand::CreateInstance(dummy_instance_config));
 
         loop {
             tokio::select! {
@@ -1042,7 +1037,8 @@ where
             self.workload_class = workload_class.clone();
         }
 
-        self.send(ComputeCommand::UpdateConfiguration(config_params));
+        let command = ComputeCommand::UpdateConfiguration(Box::new(config_params));
+        self.send(command);
     }
 
     /// Marks the end of any initialization commands.
@@ -1479,7 +1475,8 @@ where
             );
         } else {
             let collections: Vec<_> = augmented_dataflow.export_ids().collect();
-            self.send(ComputeCommand::CreateDataflow(augmented_dataflow));
+            let dataflow = Box::new(augmented_dataflow);
+            self.send(ComputeCommand::CreateDataflow(dataflow));
 
             for id in collections {
                 self.maybe_schedule_collection(id);
@@ -1636,7 +1633,7 @@ where
             },
         );
 
-        self.send(ComputeCommand::Peek(Peek {
+        let peek = Peek {
             literal_constraints,
             uuid,
             timestamp,
@@ -1646,7 +1643,8 @@ where
             // tree to forward it on to the compute worker.
             otel_ctx,
             target: peek_target,
-        }));
+        };
+        self.send(ComputeCommand::Peek(Box::new(peek)));
 
         Ok(())
     }

@@ -24,7 +24,7 @@ mz-controller-types = { path = "../controller-types" }
 mz-dyncfg = { path = "../dyncfg" }
 mz-dyncfgs = { path = "../dyncfgs" }
 mz-kafka-util = { path = "../kafka-util" }
-mz-ore = { path = "../ore", features = ["async", "process", "tracing"] }
+mz-ore = { path = "../ore", features = ["async", "chrono", "process", "tracing"] }
 mz-persist-client = { path = "../persist-client" }
 mz-persist-types = { path = "../persist-types" }
 mz-proto = { path = "../proto", features = ["tokio-postgres"] }
