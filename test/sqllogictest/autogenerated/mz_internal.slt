@@ -221,9 +221,9 @@ SELECT position, name, type FROM objects WHERE schema = 'mz_internal' AND object
 query ITT
 SELECT position, name, type FROM objects WHERE schema = 'mz_internal' AND object = 'mz_compute_operator_hydration_statuses' ORDER BY position
 ----
-1  object_id  text
-2  physical_plan_node_id  uint8
-3  replica_id  text
+1  replica_id  text
+2  object_id  text
+3  physical_plan_node_id  uint8
 4  hydrated  boolean
 
 query ITT
@@ -702,7 +702,6 @@ mz_compute_error_counts_raw_unified
 mz_compute_hydration_statuses
 mz_compute_hydration_times
 mz_compute_operator_hydration_statuses
-mz_compute_operator_hydration_statuses_per_worker
 mz_console_cluster_utilization_overview
 mz_continual_tasks
 mz_frontiers
