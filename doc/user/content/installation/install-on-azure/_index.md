@@ -109,6 +109,10 @@ If you want to use `jq` and do not have `jq` installed, install.
 
 {{< /warning >}}
 
+{{< tabs >}}
+
+{{< tab "Deployed components" >}}
+
 [Materialize on Azure Terraform
 module](https://github.com/MaterializeInc/terraform-azurerm-materialize) for
 deploys a sample infrastructure on Azure with the following components:
@@ -120,6 +124,14 @@ deploys a sample infrastructure on Azure with the following components:
 {{% self-managed/azure-terraform-configs %}}
 
 {{< /tip >}}
+
+{{</ tab >}}
+{{< tab "Releases" >}}
+
+{{< yaml-table data="self_managed/azure_terraform_versions" >}}
+
+{{</ tab >}}
+{{</ tabs >}}
 
 1. Open a Terminal window.
 
@@ -497,5 +509,6 @@ deploys a sample infrastructure on Azure with the following components:
 
 - [Materialize Operator Configuration](/installation/configuration/)
 - [Troubleshooting](/installation/troubleshooting/)
-- [Operational guidelines](/installation/operational-guidelines/)
+- [Deployment guidelines](/installation/install-on-azure/
+  appendix-deployment-guidelines)
 - [Installation](/installation/)

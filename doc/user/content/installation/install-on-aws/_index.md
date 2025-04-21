@@ -68,6 +68,10 @@ documentation](https://helm.sh/docs/intro/install/).
 
 {{< /warning >}}
 
+{{< tabs >}}
+
+{{< tab "Deployed components" >}}
+
 [Materialize on AWS Terraform
 module](https://github.com/MaterializeInc/terraform-aws-materialize/blob/main/README.md)
 deploys a sample infrastructure on AWS (region `us-east-1`) with the following
@@ -78,6 +82,14 @@ components:
 {{< tip >}}
 {{% self-managed/aws-terraform-configs %}}
 {{< /tip >}}
+
+{{</ tab >}}
+{{< tab "Releases" >}}
+
+{{< yaml-table data="self_managed/aws_terraform_versions" >}}
+
+{{</ tab >}}
+{{</ tabs >}}
 
 1. Open a Terminal window.
 

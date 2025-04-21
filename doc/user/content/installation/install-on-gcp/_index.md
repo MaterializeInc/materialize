@@ -190,6 +190,9 @@ If you want to use `jq` and do not have `jq` installed, install.
 
 {{< /warning >}}
 
+{{< tabs >}}
+
+{{< tab "Deployed components" >}}
 [Materialize on GCP Terraform
 module](https://github.com/MaterializeInc/terraform-google-materialize) deploys
 a sample infrastructure on GCP (region `us-central1`) with the following
@@ -200,6 +203,13 @@ components:
 {{< tip >}}
 {{< self-managed/gcp-terraform-configs >}}
 {{< /tip >}}
+{{</ tab >}}
+{{< tab "Releases" >}}
+
+{{< yaml-table data="self_managed/gcp_terraform_versions" >}}
+
+{{</ tab >}}
+{{</ tabs >}}
 
 {{% self-managed/versions/step-clone-google-terraform-repo %}}
 
