@@ -21,7 +21,7 @@ use std::path::PathBuf;
 use std::time::Duration;
 
 use mz_ore::retry::{self, RetryResult};
-use tracing::{error, info};
+use tracing::{info, warn};
 
 use crate::utils::format_base_path;
 use crate::{ContainerDumper, Context};
@@ -67,12 +67,12 @@ impl DockerDumper {
                                 "Docker command failed: {:#}. Retrying...",
                                 String::from_utf8_lossy(&output.stderr)
                             );
-                            error!("{}", err_msg);
+                            warn!("{}", err_msg);
                             RetryResult::RetryableErr(anyhow::anyhow!(err_msg))
                         }
                         Err(err) => {
                             let err_msg = format!("Failed to execute Docker command: {:#}", err);
-                            error!("{}", err_msg);
+                            warn!("{}", err_msg);
                             RetryResult::RetryableErr(anyhow::anyhow!(err_msg))
                         }
                     }

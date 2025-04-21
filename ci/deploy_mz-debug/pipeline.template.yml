@@ -11,12 +11,6 @@
 priority: 30
 
 steps:
-  - id: deploy_mz-debug-version
-    command: bin/ci-builder run stable bin/pyactivate -m ci.deploy_mz-debug.version
-    timeout_in_minutes: 30
-    concurrency: 1
-    concurrency_group: deploy-mz-debug/version
-
   - id: deploy_mz-debug-linux-x86_64
     label: "Deploy mz-debug for Linux x86-64"
     command: bin/ci-builder run stable bin/pyactivate -m ci.deploy_mz-debug.linux
