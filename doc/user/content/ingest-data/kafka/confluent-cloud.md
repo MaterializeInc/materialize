@@ -17,12 +17,6 @@ with the Postgres ones. We should include spill to disk in the guidance then."
 This guide goes through the required steps to connect Materialize to a Confluent
 Cloud Kafka cluster.
 
-{{< annotation type="Kafka transaction markers" >}}
-
-{{< include-md file="shared-content/kafka-transaction-markers.md" >}}
-
-{{</ annotation >}}
-
 {{< tip >}}
 {{< guided-tour-blurb-for-ingest-data >}}
 {{< /tip >}}
