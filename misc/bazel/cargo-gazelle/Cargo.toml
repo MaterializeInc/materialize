@@ -20,7 +20,7 @@ clap = { version = "4.5.23", features = ["derive", "env"] }
 convert_case = "0.7"
 guppy = "0.17.17"
 md-5 = "0.10.6"
-proc-macro2 = "1.0.94"
+proc-macro2 = "1.0.95"
 protobuf-parse = "3.7.2"
 quote = "1.0.40"
 syn = { version = "1.0.107", features = ["extra-traits", "full"] }
