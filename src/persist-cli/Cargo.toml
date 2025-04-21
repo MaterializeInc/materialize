@@ -37,7 +37,7 @@ mz-timestamp-oracle = { path = "../timestamp-oracle" }
 mz-txn-wal = { path = "../txn-wal" }
 num_cpus = "1.16.0"
 num_enum = "0.7.3"
-prometheus = { version = "0.13.4", default-features = false }
+prometheus = { version = "0.14.0", default-features = false }
 serde = { version = "1.0.219", features = ["derive", "rc"] }
 serde_json = "1.0.140"
 timely = "0.20.0"

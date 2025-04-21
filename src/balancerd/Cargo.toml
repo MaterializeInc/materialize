@@ -39,7 +39,7 @@ mz-tracing = { path = "../tracing" }
 mz-pgwire-common = { path = "../pgwire-common" }
 num_cpus = "1.16.0"
 openssl = { version = "0.10.71", features = ["vendored"] }
-prometheus = { version = "0.13.4", default-features = false }
+prometheus = { version = "0.14.0", default-features = false }
 proxy-header = "0.1.2"
 semver = "1.0.26"
 tokio = { version = "1.44.1", default-features = false }

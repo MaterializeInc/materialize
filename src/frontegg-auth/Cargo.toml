@@ -19,7 +19,7 @@ jsonwebtoken = "9.3.1"
 lru = "0.12.3"
 mz-ore = { path = "../ore", features = ["network", "metrics"] }
 mz-repr = { path = "../repr" }
-prometheus = { version = "0.13.4", default-features = false }
+prometheus = { version = "0.14.0", default-features = false }
 reqwest = { version = "0.11.13", features = ["json"] }
 reqwest-middleware = "0.2.2"
 reqwest-retry = "0.2.2"

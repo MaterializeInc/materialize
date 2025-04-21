@@ -36,7 +36,7 @@ mz-storage-operators = { path = "../storage-operators" }
 mz-storage-types = { path = "../storage-types" }
 mz-timely-util = { path = "../timely-util" }
 mz-txn-wal = { path = "../txn-wal" }
-prometheus = { version = "0.13.4", default-features = false }
+prometheus = { version = "0.14.0", default-features = false }
 scopeguard = "1.2.0"
 serde = { version = "1.0.219", features = ["derive"] }
 smallvec = { version = "1.14.0", features = ["serde", "union"] }
