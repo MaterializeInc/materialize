@@ -1,0 +1,42 @@
+columns:
+  - column: "Resource Type"
+  - column: "Files"
+rows:
+  - "Resource Type": "Workloads"
+    "Files": |
+      - `pods/{namespace}/*.yaml`
+      - `logs/{namespace}/{pod}.current.log`
+      - `logs/{namespace}/{pod}.previous.log`
+      - `deployments/{namespace}/*.yaml`
+      - `statefulsets/{namespace}/*.yaml`
+      - `replicasets/{namespace}/*.yaml`
+      - `events/{namespace}/*.yaml`
+      - `materializes/{namespace}/*.yaml`
+
+  - "Resource Type": "Networking"
+    "Files": |
+      - `services/{namespace}/*.yaml`
+      - `networkpolicies/{namespace}/*.yaml`
+      - `certificates/{namespace}/*.yaml`
+
+  - "Resource Type": "Storage"
+    "Files": |
+      - `persistentvolumes/*.yaml`
+      - `persistentvolumeclaims/{namespace}/*.yaml`
+      - `storageclasses/*.yaml`
+
+  - "Resource Type": "Configuration"
+    "Files": |
+      - `roles/{namespace}/*.yaml`
+      - `rolebinding/{namespace}/*.yaml`
+      - `configmaps/{namespace}/*.yaml`
+      - `secrets/{namespace}/*.yaml`
+      - `serviceaccounts/{namespace}/*.yaml`
+
+  - "Resource Type": "Cluster-level"
+    "Files": |
+      - `nodes/*.yaml`
+      - `daemonsets/*.yaml`
+      - `mutatingwebhookconfigurations/{namespace}/*.yaml`
+      - `validatingwebhookconfigurations/{namespace}/*.yaml`
+      - `customresourcedefinitions/*.yaml`
