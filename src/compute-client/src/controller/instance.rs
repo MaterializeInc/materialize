@@ -15,6 +15,7 @@ use std::num::NonZeroI64;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
+use chrono::{DateTime, DurationRound, TimeDelta, Utc};
 use mz_build_info::BuildInfo;
 use mz_cluster_client::WallclockLagFn;
 use mz_cluster_client::client::ClusterStartupEpoch;
@@ -26,7 +27,9 @@ use mz_compute_types::sinks::{
     ComputeSinkConnection, ComputeSinkDesc, ContinualTaskConnection, MaterializedViewSinkConnection,
 };
 use mz_compute_types::sources::SourceInstanceDesc;
-use mz_controller_types::dyncfgs::{ENABLE_WALLCLOCK_LAG_HISTOGRAM_COLLECTION, WALLCLOCK_LAG_RECORDING_INTERVAL};
+use mz_controller_types::dyncfgs::{
+    ENABLE_WALLCLOCK_LAG_HISTOGRAM_COLLECTION, WALLCLOCK_LAG_RECORDING_INTERVAL,
+};
 use mz_dyncfg::ConfigSet;
 use mz_expr::RowSetFinishing;
 use mz_ore::cast::CastFrom;
@@ -293,7 +296,7 @@ pub(super) struct Instance<T: ComputeControllerTimestamp> {
     /// A function that computes the lag between the given time and wallclock time.
     wallclock_lag: WallclockLagFn<T>,
     /// The last time wallclock lag introspection was recorded.
-    wallclock_lag_last_recorded: Instant,
+    wallclock_lag_last_recorded: DateTime<Utc>,
 
     /// Sender for updates to collection read holds.
     ///
@@ -555,41 +558,20 @@ impl<T: ComputeControllerTimestamp> Instance<T> {
     /// This method is invoked by `ComputeController::maintain`, which we expect to be called once
     /// per second during normal operation.
     fn refresh_wallclock_lag(&mut self) {
-        let recording_interval = WALLCLOCK_LAG_RECORDING_INTERVAL.get(&self.dyncfg);
-        let record_introspection =
-            !self.read_only && self.wallclock_lag_last_recorded.elapsed() >= recording_interval;
-        if record_introspection {
-            self.wallclock_lag_last_recorded = Instant::now();
-        }
-
-        let now_ms = (self.now)();
-        let now_dt = mz_ore::now::to_datetime(now_ms);
-        let now_ts: CheckedTimestamp<_> = now_dt.try_into().expect("must fit");
+        // Record lags to persist, if it's time.
+        self.maybe_record_wallclock_lag();
 
         let frontier_lag = |frontier: &Antichain<T>| match frontier.as_option() {
             Some(ts) => (self.wallclock_lag)(ts.clone()),
             None => Duration::ZERO,
         };
 
-        let mut history_updates = Vec::new();
-        for (replica_id, replica) in &mut self.replicas {
-            for (collection_id, collection) in &mut replica.collections {
+        for replica in self.replicas.values_mut() {
+            for collection in replica.collections.values_mut() {
                 let lag = frontier_lag(&collection.write_frontier);
 
                 if let Some(wallclock_lag_max) = &mut collection.wallclock_lag_max {
                     *wallclock_lag_max = std::cmp::max(*wallclock_lag_max, lag);
-
-                    if record_introspection {
-                        let max_lag = std::mem::take(wallclock_lag_max);
-                        let max_lag_us = i64::try_from(max_lag.as_micros()).expect("must fit");
-                        let row = Row::pack_slice(&[
-                            Datum::String(&collection_id.to_string()),
-                            Datum::String(&replica_id.to_string()),
-                            Datum::Interval(Interval::new(0, 0, max_lag_us)),
-                            Datum::TimestampTz(now_ts),
-                        ]);
-                        history_updates.push((row, Diff::ONE));
-                    }
                 }
 
                 if let Some(metrics) = &mut collection.metrics {
@@ -597,22 +579,15 @@ impl<T: ComputeControllerTimestamp> Instance<T> {
                 };
             }
         }
-        if !history_updates.is_empty() {
-            self.deliver_introspection_updates(
-                IntrospectionType::WallclockLagHistory,
-                history_updates,
-            );
-        }
 
+        let now_ms = (self.now)();
         let histogram_period = WallclockLagHistogramPeriod::from_epoch_millis(now_ms, &self.dyncfg);
         let histogram_labels = match &self.workload_class {
             Some(wc) => [("workload_class", wc.clone())].into(),
             None => BTreeMap::new(),
         };
 
-        let mut histogram_updates = Vec::new();
-        let mut row_buf = Row::default();
-        for (collection_id, collection) in &mut self.collections {
+        for collection in self.collections.values_mut() {
             if !ENABLE_WALLCLOCK_LAG_HISTOGRAM_COLLECTION.get(&self.dyncfg) {
                 continue;
             }
@@ -623,22 +598,84 @@ impl<T: ComputeControllerTimestamp> Instance<T> {
 
                 let key = (histogram_period, bucket, histogram_labels.clone());
                 *stash.entry(key).or_default() += Diff::ONE;
+            }
+        }
+    }
 
-                if record_introspection {
-                    for ((period, lag, labels), count) in std::mem::take(stash) {
-                        let mut packer = row_buf.packer();
-                        packer.extend([
-                            Datum::TimestampTz(period.start),
-                            Datum::TimestampTz(period.end),
-                            Datum::String(&collection_id.to_string()),
-                            Datum::UInt64(lag),
-                        ]);
-                        let labels = labels.iter().map(|(k, v)| (*k, Datum::String(v)));
-                        packer.push_dict(labels);
+    /// Produce new wallclock lag introspection updates, provided enough time has passed since the
+    /// last recording.
+    //
+    /// We emit new introspection updates if the system time has passed into a new multiple of the
+    /// recording interval (typically 1 minute) since the last refresh. The storage controller uses
+    /// the same approach, ensuring that both controllers commit their lags at roughly the same
+    /// time, avoiding confusion caused by inconsistencies.
+    fn maybe_record_wallclock_lag(&mut self) {
+        if self.read_only {
+            return;
+        }
 
-                        histogram_updates.push((row_buf.clone(), count));
-                    }
-                }
+        let duration_trunc = |datetime: DateTime<_>, interval| {
+            let td = TimeDelta::from_std(interval).ok()?;
+            datetime.duration_trunc(td).ok()
+        };
+
+        let interval = WALLCLOCK_LAG_RECORDING_INTERVAL.get(&self.dyncfg);
+        let now_dt = mz_ore::now::to_datetime((self.now)());
+        let now_trunc = duration_trunc(now_dt, interval).unwrap_or_else(|| {
+            soft_panic_or_log!("excessive wallclock lag recording interval: {interval:?}");
+            let default = WALLCLOCK_LAG_RECORDING_INTERVAL.default();
+            duration_trunc(now_dt, *default).unwrap()
+        });
+        if now_trunc <= self.wallclock_lag_last_recorded {
+            return;
+        }
+
+        let now_ts: CheckedTimestamp<_> = now_trunc.try_into().expect("must fit");
+
+        let mut history_updates = Vec::new();
+        for (replica_id, replica) in &mut self.replicas {
+            for (collection_id, collection) in &mut replica.collections {
+                let Some(wallclock_lag_max) = &mut collection.wallclock_lag_max else {
+                    continue;
+                };
+
+                let max_lag = std::mem::take(wallclock_lag_max);
+                let max_lag_us = i64::try_from(max_lag.as_micros()).expect("must fit");
+                let row = Row::pack_slice(&[
+                    Datum::String(&collection_id.to_string()),
+                    Datum::String(&replica_id.to_string()),
+                    Datum::Interval(Interval::new(0, 0, max_lag_us)),
+                    Datum::TimestampTz(now_ts),
+                ]);
+                history_updates.push((row, Diff::ONE));
+            }
+        }
+        if !history_updates.is_empty() {
+            self.deliver_introspection_updates(
+                IntrospectionType::WallclockLagHistory,
+                history_updates,
+            );
+        }
+
+        let mut histogram_updates = Vec::new();
+        let mut row_buf = Row::default();
+        for (collection_id, collection) in &mut self.collections {
+            let Some(stash) = &mut collection.wallclock_lag_histogram_stash else {
+                continue;
+            };
+
+            for ((period, lag, labels), count) in std::mem::take(stash) {
+                let mut packer = row_buf.packer();
+                packer.extend([
+                    Datum::TimestampTz(period.start),
+                    Datum::TimestampTz(period.end),
+                    Datum::String(&collection_id.to_string()),
+                    Datum::UInt64(lag),
+                ]);
+                let labels = labels.iter().map(|(k, v)| (*k, Datum::String(v)));
+                packer.push_dict(labels);
+
+                histogram_updates.push((row_buf.clone(), count));
             }
         }
         if !histogram_updates.is_empty() {
@@ -647,6 +684,8 @@ impl<T: ComputeControllerTimestamp> Instance<T> {
                 histogram_updates,
             );
         }
+
+        self.wallclock_lag_last_recorded = now_trunc;
     }
 
     /// Report updates (inserts or retractions) to the identified collection's dependencies.
@@ -959,6 +998,8 @@ where
         let recv_count = metrics.response_recv_count.clone();
         let (replica_tx, replica_rx) = instrumented_unbounded_channel(send_count, recv_count);
 
+        let now_dt = mz_ore::now::to_datetime(now());
+
         Self {
             build_info,
             storage_collections: storage,
@@ -981,7 +1022,7 @@ where
             dyncfg,
             now,
             wallclock_lag,
-            wallclock_lag_last_recorded: Instant::now(),
+            wallclock_lag_last_recorded: now_dt,
             read_hold_tx,
             replica_tx,
             replica_rx,
