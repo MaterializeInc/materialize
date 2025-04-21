@@ -157,6 +157,8 @@ skip = [
     { name = "windows_x86_64_gnu", version = "0.52.6" },
     { name = "windows_x86_64_gnullvm", version = "0.52.6" },
     { name = "windows_x86_64_msvc", version = "0.52.6" },
+    # Used by axum-extra
+    { name = "axum-core", version = "0.4.5" },
 ]
 
 [[bans.deny]]
@@ -232,7 +234,6 @@ wrappers = [
     "bindgen",
     "dynfmt",
     "findshlibs",
-    "jsonpath-rust",
     "launchdarkly-server-sdk",
     "launchdarkly-server-sdk-evaluation",
     "mysql_common",
