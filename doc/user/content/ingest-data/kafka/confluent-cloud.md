@@ -26,7 +26,6 @@ directly move on to [Create an API Key](#create-an-api-key). You can also skip
 step 3 if you already have a Confluent Cloud Kafka cluster up and running, and
 have created a topic that you want to create a source for.
 
-
 The process to connect Materialize to a Confluent Cloud Kafka cluster consists
 of the following steps:
 
