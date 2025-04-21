@@ -29,8 +29,7 @@ use mz_cluster_client::client::ClusterReplicaLocation;
 use mz_cluster_client::metrics::{ControllerMetrics, WallclockLagMetrics};
 use mz_cluster_client::{ReplicaId, WallclockLagFn};
 use mz_controller_types::dyncfgs::{
-    ENABLE_0DT_DEPLOYMENT_SOURCES, ENABLE_WALLCLOCK_LAG_HISTOGRAM_COLLECTION,
-    WALLCLOCK_LAG_HISTOGRAM_REFRESH_INTERVAL, WALLCLOCK_LAG_HISTORY_REFRESH_INTERVAL,
+    ENABLE_0DT_DEPLOYMENT_SOURCES, ENABLE_WALLCLOCK_LAG_HISTOGRAM_COLLECTION, WALLCLOCK_LAG_RECORDING_INTERVAL,
 };
 use mz_ore::collections::CollectionExt;
 use mz_ore::metrics::MetricsRegistry;
@@ -224,10 +223,8 @@ pub struct Controller<T: Timestamp + Lattice + Codec64 + From<EpochMillis> + Tim
     /// A function that computes the lag between the given time and wallclock time.
     #[derivative(Debug = "ignore")]
     wallclock_lag: WallclockLagFn<T>,
-    /// The last time `WallclockLagHistory` introspection was refreshed.
-    wallclock_lag_history_last_refresh: Instant,
-    /// The last time `WallclockLagHistogram` introspection was refreshed.
-    wallclock_lag_histogram_last_refresh: Instant,
+    /// The last time wallclock lag introspection was recorded.
+    wallclock_lag_last_recorded: Instant,
 
     /// Handle to a [StorageCollections].
     storage_collections: Arc<dyn StorageCollections<Timestamp = T> + Send + Sync>,
@@ -2726,8 +2723,7 @@ where
             recorded_frontiers: BTreeMap::new(),
             recorded_replica_frontiers: BTreeMap::new(),
             wallclock_lag,
-            wallclock_lag_history_last_refresh: Instant::now(),
-            wallclock_lag_histogram_last_refresh: Instant::now(),
+            wallclock_lag_last_recorded: Instant::now(),
             storage_collections,
             migrated_storage_collections: BTreeSet::new(),
             maintenance_ticker,
@@ -3506,12 +3502,12 @@ where
     /// This method is invoked by `ComputeController::maintain`, which we expect to be called once
     /// per second during normal operation.
     fn refresh_wallclock_lag(&mut self) {
-        let refresh_history = !self.read_only
-            && self.wallclock_lag_history_last_refresh.elapsed()
-                >= WALLCLOCK_LAG_HISTORY_REFRESH_INTERVAL.get(self.config.config_set());
-        let refresh_histogram = !self.read_only
-            && self.wallclock_lag_histogram_last_refresh.elapsed()
-                >= WALLCLOCK_LAG_HISTOGRAM_REFRESH_INTERVAL.get(self.config.config_set());
+        let recording_interval = WALLCLOCK_LAG_RECORDING_INTERVAL.get(self.config.config_set());
+        let record_introspection =
+            !self.read_only && self.wallclock_lag_last_recorded.elapsed() >= recording_interval;
+        if record_introspection {
+            self.wallclock_lag_last_recorded = Instant::now();
+        }
 
         let now_ms = (self.now)();
         let now_dt = mz_ore::now::to_datetime(now_ms);
@@ -3537,7 +3533,7 @@ where
             let lag = frontier_lag(&frontiers.write_frontier);
             collection.wallclock_lag_max = std::cmp::max(collection.wallclock_lag_max, lag);
 
-            if refresh_history {
+            if record_introspection {
                 let max_lag = std::mem::take(&mut collection.wallclock_lag_max);
                 let max_lag_us = i64::try_from(max_lag.as_micros()).expect("must fit");
                 let row = Row::pack_slice(&[
@@ -3574,7 +3570,7 @@ where
                 let key = (histogram_period, bucket, labels);
                 *stash.entry(key).or_default() += Diff::ONE;
 
-                if refresh_histogram {
+                if record_introspection {
                     for ((period, lag, labels), count) in std::mem::take(stash) {
                         let mut packer = row_buf.packer();
                         packer.extend([
@@ -3597,14 +3593,12 @@ where
                 IntrospectionType::WallclockLagHistory,
                 history_updates,
             );
-            self.wallclock_lag_history_last_refresh = Instant::now();
         }
         if !histogram_updates.is_empty() {
             self.append_introspection_updates(
                 IntrospectionType::WallclockLagHistogram,
                 histogram_updates,
             );
-            self.wallclock_lag_histogram_last_refresh = Instant::now();
         }
     }
 
