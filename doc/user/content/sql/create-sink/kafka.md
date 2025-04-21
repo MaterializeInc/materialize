@@ -512,6 +512,10 @@ Operation type   | Resource type    | Resource name
 DescribeConfigs  | Cluster          | n/a
 Create           | Topic            | The specified `TOPIC` option
 
+## Kafka transaction markers
+
+{{< include-md file="shared-content/kafka-transaction-markers.md" >}}
+
 ## Troubleshooting
 
 ### Upsert key selection
