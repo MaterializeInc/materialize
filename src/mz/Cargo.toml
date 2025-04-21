@@ -26,7 +26,7 @@ open = "3.2.0"
 openssl-probe = "0.1.6"
 hyper = "1.4.1"
 reqwest = { version = "0.12", features = ["blocking", "json", "default-tls", "charset", "http2"], default-features = false }
-rpassword = "7.3.1"
+rpassword = "7.4.0"
 semver = "1.0.26"
 serde = { version = "1.0.219", features = ["derive"] }
 serde-aux = "4.6.0"
