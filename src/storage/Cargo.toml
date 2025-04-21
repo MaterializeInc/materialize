@@ -14,7 +14,7 @@ name = "upsert_open_loop"
 bench = false
 
 [dependencies]
-anyhow = "1.0.97"
+anyhow = "1.0.98"
 async-stream = "0.3.6"
 async-trait = "0.1.88"
 bytes = { version = "1.10.1", features = ["serde"] }
