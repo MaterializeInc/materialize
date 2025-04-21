@@ -149,6 +149,10 @@ message ProtoHollowRollup {
   optional uint64 encoded_size_bytes = 2;
 }
 
+message ProtoActiveRollup {
+    uint64 start_ms = 1;
+}
+
 message ProtoTrace {
   ProtoU64Antichain since = 1;
   repeated ProtoHollowBatch legacy_batches = 2;
@@ -216,6 +220,7 @@ message ProtoRollup {
   uint64 walltime_ms = 15;
   string hostname = 14;
   uint64 last_gc_req = 10;
+  ProtoActiveRollup active_rollup = 19;
   map<uint64, ProtoHollowRollup> rollups = 16;
 
   ProtoTrace trace = 7;

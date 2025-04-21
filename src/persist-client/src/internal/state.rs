@@ -1107,6 +1107,19 @@ pub enum HollowBlobRef<'a, T> {
     Rollup(&'a HollowRollup),
 }
 
+/// A rollup that is currently being computed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Arbitrary, Serialize)]
+pub struct ActiveRollup {
+    /// 0 if no rollup is being computed.
+    pub start_ms: u64,
+}
+
+impl Default for ActiveRollup {
+    fn default() -> Self {
+        Self { start_ms: 0 }
+    }
+}
+
 /// A sentinel for a state transition that was a no-op.
 ///
 /// Critically, this also indicates that the no-op state transition was not
@@ -1125,6 +1138,9 @@ pub struct StateCollections<T> {
 
     // - Invariant: There is a rollup with `seqno <= self.seqno_since`.
     pub(crate) rollups: BTreeMap<SeqNo, HollowRollup>,
+
+    /// The seqno of the rollup that is currently being computed.
+    pub(crate) active_rollup: ActiveRollup,
 
     pub(crate) leased_readers: BTreeMap<LeasedReaderId, LeasedReaderState<T>>,
     pub(crate) critical_readers: BTreeMap<CriticalReaderId, CriticalReaderState<T>>,
@@ -1205,6 +1221,7 @@ where
         let applied = match self.rollups.get(&rollup_seqno) {
             Some(x) => x.key == rollup.key,
             None => {
+                self.clear_active_rollup();
                 self.rollups.insert(rollup_seqno, rollup.to_owned());
                 true
             }
@@ -1239,6 +1256,31 @@ where
         }
 
         Continue(removed)
+    }
+
+    pub fn register_active_rollup(
+        &mut self,
+        start_ms: u64,
+    ) -> ControlFlow<NoOpStateTransition<ActiveRollup>, ActiveRollup> {
+        let active_rollup = ActiveRollup { start_ms };
+        if self.active_rollup.start_ms == 0 {
+            self.active_rollup = active_rollup.clone();
+            Continue(active_rollup)
+        } else {
+            Break(NoOpStateTransition(active_rollup))
+        }
+    }
+
+    pub fn clear_active_rollup(
+        &mut self,
+    ) -> ControlFlow<NoOpStateTransition<ActiveRollup>, ActiveRollup> {
+        let active_rollup = ActiveRollup::default();
+        if self.active_rollup.start_ms != 0 {
+            self.active_rollup = active_rollup.clone();
+            Continue(active_rollup)
+        } else {
+            Break(NoOpStateTransition(active_rollup))
+        }
     }
 
     pub fn register_leased_reader(
@@ -2152,6 +2194,7 @@ where
             collections: StateCollections {
                 last_gc_req: SeqNo::minimum(),
                 rollups: BTreeMap::new(),
+                active_rollup: ActiveRollup::default(),
                 leased_readers: BTreeMap::new(),
                 critical_readers: BTreeMap::new(),
                 writers: BTreeMap::new(),
@@ -2402,7 +2445,15 @@ where
             .ok_or(self.seqno)
     }
 
-    pub fn need_rollup(&self, threshold: usize) -> Option<SeqNo> {
+    pub fn active_rollup(&self) -> Option<ActiveRollup> {
+        if self.collections.active_rollup.start_ms > 0 {
+            Some(self.collections.active_rollup)
+        } else {
+            None
+        }
+    }
+
+    pub fn need_rollup(&self, threshold: usize, now: u64) -> Option<SeqNo> {
         let (latest_rollup_seqno, _) = self.latest_rollup();
 
         // Tombstoned shards require one final rollup. However, because we
@@ -2415,22 +2466,20 @@ where
         }
 
         let seqnos_since_last_rollup = self.seqno.0.saturating_sub(latest_rollup_seqno.0);
-        // every `threshold` seqnos since the latest rollup, assign rollup maintenance.
-        // we avoid assigning rollups to every seqno past the threshold to avoid handles
-        // racing / performing redundant work.
-        if seqnos_since_last_rollup > 0 && seqnos_since_last_rollup % u64::cast_from(threshold) == 0
-        {
+
+        // If sequnos_since..>threshold, and no existing rollup in progress, we need to do it
+        if seqnos_since_last_rollup > u64::cast_from(threshold) && self.active_rollup().is_none() {
             return Some(self.seqno);
         }
 
-        // however, since maintenance is best-effort and could fail, do assign rollup
-        // work to every seqno after a fallback threshold to ensure one is written.
-        if seqnos_since_last_rollup
-            > u64::cast_from(
-                threshold * PersistConfig::DEFAULT_FALLBACK_ROLLUP_THRESHOLD_MULTIPLIER,
-            )
-        {
-            return Some(self.seqno);
+        //TODO(dov): this should be a config option
+        const MS_THRESHOLD: u64 = 5000;
+        // If there is a rollup, great
+        // Except if it pushes some threshold, we can assume the old worker is dead
+        if let Some(active_rollup) = self.active_rollup() {
+            if active_rollup.start_ms + MS_THRESHOLD > now {
+                return Some(self.seqno);
+            }
         }
 
         None
@@ -2488,6 +2537,7 @@ impl<T: Serialize + Timestamp + Lattice> Serialize for State<T> {
                 StateCollections {
                     last_gc_req,
                     rollups,
+                    active_rollup,
                     leased_readers,
                     critical_readers,
                     writers,
@@ -2503,6 +2553,7 @@ impl<T: Serialize + Timestamp + Lattice> Serialize for State<T> {
         let () = s.serialize_field("hostname", hostname)?;
         let () = s.serialize_field("last_gc_req", last_gc_req)?;
         let () = s.serialize_field("rollups", rollups)?;
+        let () = s.serialize_field("active_rollup", active_rollup)?;
         let () = s.serialize_field("leased_readers", leased_readers)?;
         let () = s.serialize_field("critical_readers", critical_readers)?;
         let () = s.serialize_field("writers", writers)?;
@@ -2780,6 +2831,7 @@ pub(crate) mod tests {
                 any::<String>(),
                 any::<SeqNo>(),
                 proptest::collection::btree_map(any::<SeqNo>(), any::<HollowRollup>(), 1..3),
+                any::<ActiveRollup>(),
                 proptest::collection::btree_map(
                     any::<LeasedReaderId>(),
                     any_leased_reader_state::<T>(),
@@ -2801,6 +2853,7 @@ pub(crate) mod tests {
                 hostname,
                 last_gc_req,
                 rollups,
+                active_rollup,
                 leased_readers,
                 critical_readers,
                 writers,
@@ -2815,6 +2868,7 @@ pub(crate) mod tests {
                 collections: StateCollections {
                     last_gc_req,
                     rollups,
+                    active_rollup,
                     leased_readers,
                     critical_readers,
                     writers,

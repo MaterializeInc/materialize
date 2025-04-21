@@ -506,7 +506,13 @@ where
             );
         }
 
-        let write_rollup = new_state.need_rollup(ROLLUP_THRESHOLD.get(cfg));
+        let now = (cfg.now)();
+
+        let write_rollup = new_state.need_rollup(ROLLUP_THRESHOLD.get(cfg), now);
+
+        if write_rollup.is_some() {
+            new_state.collections.register_active_rollup(now);
+        }
 
         // Find out if this command has been selected to perform gc, so
         // that it will fire off a background request to the
