@@ -1,12 +1,11 @@
 ---
-title: "Operational guidelines"
-description: ""
-aliases:
-  - /self-hosted/operational-guidelines/
+title: "Appendix: Azure deployment guidelines"
+description: "Azure environment setup/deployment guidelines"
 menu:
   main:
-    parent: "installation"
-    weight: 80
+    parent: "install-on-azure"
+    identifier: "azure-deployment-guidelines"
+    weight: 40
 ---
 
 ## Recommended instance types
@@ -15,16 +14,6 @@ menu:
 - 1:8 ratio of vCPU to GiB memory (if spill-to-disk is not enabled)
 - 1:16 ratio of vCPU to GiB local instance storage (if spill-to-disk is enabled)
 
-See also the specific cloud provider guidance:
-
-- [AWS Deployment
-  guidelines](/installation/install-on-aws/appendix-deployment-guidelines/#recommended-instance-types)
-
-- [GCP Deployment
-  guidelines](/installation/install-on-gcp/appendix-deployment-guidelines/#recommended-instance-types)
-
-- [Azure Deployment
-  guidelines](/installation/install-on-azure/appendix-deployment-guidelines/#recommended-instance-types)
 
 ## CPU affinity
 
@@ -45,16 +34,7 @@ when operating on datasets larger than main memory as well as allows for a more
 graceful degradation rather than OOMing. Network-attached storage (like EBS
 volumes) can significantly degrade performance and is not supported.
 
-Refer to the specific cloud provider guidelines:
-
-- [AWS Deployment
-  guidelines](/installation/install-on-aws/appendix-deployment-guidelines/)
-
-- [GCP Deployment
-  guidelines](/installation/install-on-gcp/appendix-deployment-guidelines/)
-
-- [Azure Deployment
-  guidelines](/installation/install-on-azure/appendix-deployment-guidelines/)
+*Additional documentation to come*
 
 ## See also
 
