@@ -106,6 +106,23 @@ not suitable for full feature set evaluations or production workloads.
 For questions, discussions, or general technical support, join the [Materialize
 Community on Slack](https://materialize.com/s/chat).
 
+#### `mz-debug`
+
+Materialize provides a [`mz-debug`]command-line debug tool called  that helps collect diagnostic information from your emulator environment. This tool can gather:
+- Docker logs and resource information
+- Snapshots of system catalog tables from your Materialize instance
+
+To debug your emulator instance, you can use the following command:
+
+```console
+mz-debug emulator --docker-container-id <your-container-id>
+```
+
+This debug information can be particularly helpful when troubleshooting issues or when working with the Materialize support team.
+
+For more detailed information about the debug tool, see the [`mz-debug` documentation](/integrations/mz-debug/).
+
+
 ### License and privacy policy
 
 - Use of the Docker image is subject to Materialize's [BSL
