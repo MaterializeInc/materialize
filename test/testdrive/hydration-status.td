@@ -77,6 +77,9 @@ idx      hydrated_test_1 true
 mv       hydrated_test_1 true
 mv_const hydrated_test_1 true
 
+# `mv_const` doesn't show up because the dataflow advanced to the empty
+# frontier and its replica state was cleaned up, including introspection
+# logging.
 > SELECT o.name, r.name, bool_and(h.hydrated)
   FROM mz_internal.mz_compute_operator_hydration_statuses h
   JOIN mz_cluster_replicas r ON (r.id = h.replica_id)
@@ -87,7 +90,6 @@ mv_const hydrated_test_1 true
   GROUP BY o.name, r.name;
 idx      hydrated_test_1 true
 mv       hydrated_test_1 true
-mv_const hydrated_test_1 true
 
 # Test adding new replicas.
 
@@ -121,9 +123,6 @@ mv       hydrated_test_2 true
 mv_const hydrated_test_1 true
 mv_const hydrated_test_2 true
 
-# `mv_const` doesn't show up for the second replica because its output was
-# already fully computed so it wasn't installed on the replica and no operators
-# exist.
 > SELECT o.name, r.name, bool_and(h.hydrated)
   FROM mz_internal.mz_compute_operator_hydration_statuses h
   JOIN mz_cluster_replicas r ON (r.id = h.replica_id)
@@ -136,7 +135,6 @@ idx      hydrated_test_1 true
 idx      hydrated_test_2 true
 mv       hydrated_test_1 true
 mv       hydrated_test_2 true
-mv_const hydrated_test_1 true
 
 # Test dropping replicas.
 
@@ -409,7 +407,6 @@ mv_wmr_stuck hydrated_test_4 false
       o.id NOT LIKE 's%'
   GROUP BY o.name, r.name;
 mv_wmr       hydrated_test_4 true
-mv_wmr_const hydrated_test_4 true
 mv_wmr_stuck hydrated_test_4 false
 
 > DROP MATERIALIZED VIEW mv_wmr
