@@ -30,3 +30,8 @@ rows:
       deployed on subsequent runs after the `cert-manager` is running.
     Version: |
       [v0.3.0+](/installation/appendix-terraforms/#materialize-on-gcp-terraform-module)
+
+  - Component: |
+      OpenEBS and NVMe instance storage to enable spill-to-disk
+    Version: |
+      [v0.3.5+](/installation/appendix-terraforms/#materialize-on-gcp-terraform-module)

@@ -5,14 +5,23 @@ columns:
 rows:
 
 - "Terraform version": |
+    [v0.3.5](https://github.com/MaterializeInc/terraform-google-materialize/releases/)
+
+  "Notable changes": |
+    - By default, deploys OpenEBS and NVMe instance storage to [enable
+    spill-to-disk](https://github.com/MaterializeInc/terraform-google-materialize?tab=readme-ov-file#disk-support-for-materialize-on-gcp).
+    Associated with this change, the default [`gke_config.machine_type`](https://github.com/MaterializeInc/terraform-google-materialize?tab=readme-ov-file#input_gke_config) has
+    changed from `e2-standard-4` to `n2-highmem-8`.
+
+- "Terraform version": |
     [v0.3.4](https://github.com/MaterializeInc/terraform-google-materialize/releases/tag/v0.3.4)
 
   "Notable changes": |
     - Defaults to using Materialize Operator v25.1.7 (via
-    `terraform-helm-materialize` v0.1.12).
+      `terraform-helm-materialize` v0.1.12).
 
       Versions v0.3.0-v0.3.3 defaulted to Materialize Operator v25.1.6 which
-      used an incorrect version of the `orchestratord`).
+      used an incorrect version of the `orchestratord`.
 
 - "Terraform version": |
     [v0.3.1](https://github.com/MaterializeInc/terraform-google-materialize/releases/tag/v0.3.1)
