@@ -26,21 +26,19 @@ not have it installed.
 ## Syntax
 
 ```console
-mz-debug [--dump-system-catalog <boolean>] self-managed [OPTIONS]
+mz-debug self-managed [OPTIONS]
 ```
 
 ## Options
 
-## `mz-debug` option
-
-The following option is available at the `mz-debug` level; i.e., if you decide
-to specify the option, the option comes **before** the `self-managed` keyword.
-
-{{< yaml-table data="mz-debug/mz_debug_option" >}}
-
 ## `mz-debug self-managed` options
 
 {{< yaml-table data="mz-debug/self_managed_options" >}}
+
+## `mz-debug` global options
+
+{{< yaml-table data="mz-debug/mz_debug_option" >}}
+
 
 ## Output
 

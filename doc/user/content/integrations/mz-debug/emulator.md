@@ -21,21 +21,18 @@ menu:
 ## Syntax
 
 ```shell
-mz-debug [--dump-system-catalog <boolean>] emulator [OPTIONS]
+mz-debug emulator [OPTIONS]
 ```
 
 ## Options
 
-### `mz-debug` option
-
-The following option is available at the `mz-debug` level; i.e., if you decide
-to specify the option, the option comes **before** the `emulator` keyword.
-
-{{< yaml-table data="mz-debug/mz_debug_option" >}}
-
 ### `mz-debug emulator` options
 
 {{< yaml-table data="mz-debug/emulator_options" >}}
+
+### `mz-debug` global options
+
+{{< yaml-table data="mz-debug/mz_debug_option" >}}
 
 ## Output
 

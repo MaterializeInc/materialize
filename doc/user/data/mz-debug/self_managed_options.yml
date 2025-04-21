@@ -28,7 +28,7 @@ rows:
   - Option: "`--k8s-dump-secret-values`"
     Description: |
 
-      <a name="k8s-dump-secret-values"></a> If `true`, include secrets in the
+      <a name="k8s-dump-secret-values"></a> If `true`, include unredacted secrets in the
       dump. Use with caution.
 
       Defaults to `false`.
@@ -61,7 +61,7 @@ rows:
     Description: |
 
       <a name="mz-connection-url"></a>The Materialize instance's [PostgreSQL
-      connection URL
+      connection
       URL](https://www.postgresql.org/docs/14/libpq-connect.html#LIBPQ-CONNSTRING).
 
       Defaults to a connection URL constructed from:
