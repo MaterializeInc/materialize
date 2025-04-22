@@ -76,7 +76,6 @@ skip = [
     # There are many external crates that rely on 0.10.5. Upgrading them should
     # be its own PR.
     { name = "itertools", version = "0.10.5" },
-    { name = "itertools", version = "0.12.1" },
 
     # A few crates -> `num_enum_derive` -> `proc-macro-crate` -> `toml_edit v0.19.14`.
     { name = "toml_edit", version = "0.19.14" },
