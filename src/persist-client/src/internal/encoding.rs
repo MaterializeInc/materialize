@@ -948,7 +948,10 @@ impl<T: Timestamp + Lattice + Codec64> RustType<ProtoRollup> for Rollup<T> {
         }
         let collections = StateCollections {
             rollups,
-            active_rollup: x.active_rollup.into_rust_if_some("active_rollup")?,
+            active_rollup: x
+                .active_rollup
+                .into_rust_if_some("active_rollup")
+                .unwrap_or(ActiveRollup::default()),
             last_gc_req: x.last_gc_req.into_rust()?,
             leased_readers,
             critical_readers,

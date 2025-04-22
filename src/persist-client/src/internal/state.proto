@@ -220,7 +220,7 @@ message ProtoRollup {
   uint64 walltime_ms = 15;
   string hostname = 14;
   uint64 last_gc_req = 10;
-  ProtoActiveRollup active_rollup = 19;
+  optional ProtoActiveRollup active_rollup = 19;
   map<uint64, ProtoHollowRollup> rollups = 16;
 
   ProtoTrace trace = 7;
