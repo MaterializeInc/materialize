@@ -76,7 +76,7 @@ uuid = { version = "1.16.0", features = ["serde", "v4"] }
 workspace-hack = { version = "0.0.0", path = "../workspace-hack", optional = true }
 
 [dev-dependencies]
-base64 = "0.13.1"
+base64 = "0.22.1"
 criterion = { version = "0.5.1" }
 insta = { version = "1.42", features = ["json"] }
 mz-persist = { path = "../persist" }
