@@ -5,7 +5,7 @@ columns:
 rows:
 
 - "Terraform version": |
-    [v0.3.5](https://github.com/MaterializeInc/terraform-google-materialize/releases/)
+    [v0.4.0](https://github.com/MaterializeInc/terraform-google-materialize/releases/)
 
   "Notable changes": |
     - By default, deploys OpenEBS and NVMe instance storage to [enable

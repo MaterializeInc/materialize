@@ -75,7 +75,7 @@ when operating on datasets larger than main memory as well as allows for a more
 graceful degradation rather than OOMing. Network-attached storage (like EBS
 volumes) can significantly degrade performance and is not supported.
 
-Starting in v0.3.5 of Materialize on Google Cloud Provider (GCP) Terraform,
+Starting in v0.4.0 of Materialize on Google Cloud Provider (GCP) Terraform,
 disk support (using OpenEBS and NVMe instance storage) is enabled, by default,
 for Materialize. With this change, the Terraform:
 
