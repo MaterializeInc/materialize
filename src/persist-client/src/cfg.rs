@@ -328,6 +328,8 @@ pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
         .add(&crate::internal::machine::NEXT_LISTEN_BATCH_RETRYER_MULTIPLIER)
         .add(&crate::internal::machine::RECORD_COMPACTIONS)
         .add(&crate::internal::state::ROLLUP_THRESHOLD)
+        .add(&crate::internal::state::ROLLUP_USE_ACTIVE_ROLLUP)
+        .add(&crate::internal::state::ROLLUP_FALLBACK_THRESHOLD_MS)
         .add(&crate::operators::STORAGE_SOURCE_DECODE_FUEL)
         .add(&crate::read::READER_LEASE_DURATION)
         .add(&crate::rpc::PUBSUB_CLIENT_ENABLED)
