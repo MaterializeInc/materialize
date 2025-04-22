@@ -27,7 +27,7 @@ hex = "0.4.3"
 http = "1.2.0"
 im = "15.1.0"
 ipnet = "2.11.0"
-itertools = "0.12.1"
+itertools = "0.14.0"
 maplit = "1.0.2"
 mysql_async = { version = "0.35.1", default-features = false, features = [
     "minimal",

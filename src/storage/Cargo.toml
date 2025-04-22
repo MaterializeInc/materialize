@@ -30,7 +30,7 @@ differential-dataflow = "0.14.2"
 fail = { version = "0.5.1", features = ["failpoints"] }
 futures = "0.3.31"
 indexmap = { version = "2.7.1", default-features = false, features = ["std"] }
-itertools = { version = "0.12.1" }
+itertools = { version = "0.14.0" }
 maplit = "1.0.2"
 mysql_async = { version = "0.35.1", default-features = false, features = ["minimal", "binlog"] }
 mysql_common = { version = "0.34.1", default-features = false, features = ["chrono"] }
@@ -97,7 +97,7 @@ clap = { version = "4.5.23", features = ["derive", "env"] }
 humantime = "2.2.0"
 mz-http-util = { path = "../http-util" }
 mz-orchestrator-tracing = { path = "../orchestrator-tracing" }
-itertools = "0.12.1"
+itertools = "0.14.0"
 tempfile = "3.19.1"
 tokio = { version = "1.44.1", features = ["test-util"] }
 

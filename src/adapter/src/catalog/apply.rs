@@ -105,7 +105,7 @@ impl CatalogState {
         let updates = sort_updates(updates);
 
         let mut groups: Vec<Vec<_>> = Vec::new();
-        for (_, updates) in &updates.into_iter().group_by(|update| update.ts) {
+        for (_, updates) in &updates.into_iter().chunk_by(|update| update.ts) {
             groups.push(updates.collect());
         }
         for updates in groups {
@@ -146,7 +146,7 @@ impl CatalogState {
         let mut builtin_table_updates = Vec::with_capacity(updates.len());
         let updates = sort_updates(updates);
 
-        for (_, updates) in &updates.into_iter().group_by(|update| update.ts) {
+        for (_, updates) in &updates.into_iter().chunk_by(|update| update.ts) {
             let mut retractions = InProgressRetractions::default();
             let builtin_table_update = self.apply_updates_inner(
                 updates.collect(),
@@ -1793,7 +1793,7 @@ fn sort_updates(mut updates: Vec<StateUpdate>) -> Vec<StateUpdate> {
     let mut sorted_updates = Vec::with_capacity(updates.len());
 
     updates.sort_by_key(|update| update.ts);
-    for (_, updates) in &updates.into_iter().group_by(|update| update.ts) {
+    for (_, updates) in &updates.into_iter().chunk_by(|update| update.ts) {
         let sorted_ts_updates = sort_updates_inner(updates.collect());
         sorted_updates.extend(sorted_ts_updates);
     }

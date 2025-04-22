@@ -21,7 +21,7 @@ derivative = "2.2.0"
 differential-dataflow = "0.14.2"
 futures = "0.3.31"
 ipnet = "2.11.0"
-itertools = "0.12.1"
+itertools = "0.14.0"
 mz-adapter-types = { path = "../adapter-types" }
 mz-audit-log = { path = "../audit-log" }
 mz-auth = { path = "../auth" }
