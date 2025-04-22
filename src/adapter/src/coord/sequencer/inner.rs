@@ -2724,6 +2724,18 @@ impl Coordinator {
         mut ctx: ExecuteContext,
         plan: plan::InsertPlan,
     ) {
+        // Normally, this would get checked when trying to add "write ops" to
+        // the transaction but we go down diverging paths below, based on
+        // whether the INSERT is only constant values or not.
+        //
+        // For the non-constant case we sequence an implicit read-then-write,
+        // which messes with the transaction ops and would allow an implicit
+        // read-then-write to sneak into a read-only transaction.
+        if !ctx.session_mut().transaction().allows_writes() {
+            ctx.retire(Err(AdapterError::ReadOnlyTransaction));
+            return;
+        }
+
         // The structure of this code originates from a time where
         // `ReadThenWritePlan` was carrying an `MirRelationExpr` instead of an
         // optimized `MirRelationExpr`.

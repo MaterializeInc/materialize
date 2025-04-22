@@ -627,6 +627,62 @@ SELECT INTERVAL '1 day'
 statement ok
 COMMIT
 
+# Verify that different kinds of INSERT INTO ... statements are correctly
+# rejected when a transaction is in read-only mode.
+#
+# At least inserts of non-constant values internally get translated to
+# read-then write statements, which has caused trouble with maintaining the
+# read-only bit in the past.
+
+statement ok
+CREATE TABLE baz(a text)
+
+statement ok
+BEGIN
+
+# A constant value
+statement ok
+INSERT INTO baz VALUES ('hello')
+
+statement ok
+COMMIT
+
+statement ok
+BEGIN
+
+# A non-constant value
+statement ok
+INSERT INTO baz VALUES (now()::text)
+
+statement ok
+COMMIT
+
+statement ok
+BEGIN
+
+statement ok
+SELECT * FROM baz
+
+# A constant value, should be rejected
+statement error transaction in read-only mode
+INSERT INTO baz VALUES ('ciao')
+
+statement ok
+ROLLBACK
+
+statement ok
+BEGIN
+
+statement ok
+SELECT * FROM baz
+
+# A non-constant value, should be rejected as well
+statement error transaction in read-only mode
+INSERT INTO baz VALUES (now()::text)
+
+statement ok
+ROLLBACK
+
 simple conn=mz_system,user=mz_system
 ALTER SYSTEM SET allow_real_time_recency = true
 ----
