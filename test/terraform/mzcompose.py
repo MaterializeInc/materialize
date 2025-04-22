@@ -15,7 +15,6 @@ import json
 import os
 import signal
 import subprocess
-import threading
 import time
 from collections.abc import Sequence
 from pathlib import Path
@@ -140,23 +139,6 @@ def testdrive(no_reset: bool) -> Testdrive:
 
 def get_tag(tag: str | None) -> str:
     return tag or f"v{ci_util.get_mz_version()}--pr.g{git.rev_parse('HEAD')}"
-
-
-def build_mz_debug_async(env: dict[str, str] | None = None) -> None:
-    def run():
-        spawn.capture(
-            [
-                "cargo",
-                "build",
-                "--bin",
-                "mz-debug",
-            ],
-            cwd=MZ_ROOT,
-            stderr=subprocess.STDOUT,
-            env=env,
-        )
-
-    threading.Thread(target=run, daemon=True).start()
 
 
 def run_mz_debug(env: dict[str, str] | None = None) -> None:
@@ -691,7 +673,6 @@ def workflow_aws_temporary(c: Composition, parser: WorkflowArgumentParser) -> No
     path = MZ_ROOT / "test" / "terraform" / "aws-temporary"
     aws = AWS(path)
     try:
-        build_mz_debug_async()
         aws.setup("aws-test", args.setup, tag)
         print("--- Running tests")
         with c.override(testdrive(no_reset=False)):
@@ -761,7 +742,6 @@ def workflow_aws_upgrade(c: Composition, parser: WorkflowArgumentParser) -> None
     path = MZ_ROOT / "test" / "terraform" / "aws-upgrade"
     aws = AWS(path)
     try:
-        build_mz_debug_async()
         aws.setup("aws-upgrade", args.setup, previous_tag)
         aws.upgrade(tag)
         # Try waiting a bit, otherwise connection error, should be handled better
@@ -969,7 +949,6 @@ def workflow_gcp_temporary(c: Composition, parser: WorkflowArgumentParser) -> No
     os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = str(gcloud_creds_path)
 
     try:
-        build_mz_debug_async()
         spawn.runv(["gcloud", "config", "set", "project", "materialize-ci"])
 
         spawn.runv(
@@ -1441,7 +1420,6 @@ def workflow_azure_temporary(c: Composition, parser: WorkflowArgumentParser) -> 
     )
 
     try:
-        build_mz_debug_async()
         if os.getenv("CI"):
             username = os.getenv("AZURE_SERVICE_ACCOUNT_USERNAME")
             password = os.getenv("AZURE_SERVICE_ACCOUNT_PASSWORD")
