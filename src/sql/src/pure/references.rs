@@ -307,7 +307,7 @@ impl<'a> SourceReferenceClient<'a> {
             .iter()
             .map(|reference| {
                 (
-                    reference.namespace().unwrap_or(reference.name()),
+                    reference.namespace().unwrap_or_else(|| reference.name()),
                     reference.name(),
                 )
             })

@@ -105,7 +105,9 @@ impl RelationPartStats<'_> {
             Some(spec) => spec,
             None => ResultSpec::anything(),
         };
-        let json_range = self.col_json(idx, arena).unwrap_or(ResultSpec::anything());
+        let json_range = self
+            .col_json(idx, arena)
+            .unwrap_or_else(ResultSpec::anything);
 
         // If this is not a JSON column or we don't have JSON stats, json_range is
         // [ResultSpec::anything] and this is a noop.

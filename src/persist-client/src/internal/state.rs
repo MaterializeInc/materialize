@@ -1255,7 +1255,8 @@ where
         (LeasedReaderState<T>, SeqNo),
     > {
         let since = if use_critical_since {
-            self.critical_since().unwrap_or(self.trace.since().clone())
+            self.critical_since()
+                .unwrap_or_else(|| self.trace.since().clone())
         } else {
             self.trace.since().clone()
         };

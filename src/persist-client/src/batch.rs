@@ -1283,7 +1283,7 @@ pub(crate) fn validate_truncate_batch<T: Timestamp>(
         // To prove that there is no data to truncate below the lower, require
         // that the lower is <= the rewrite ts.
         for part in batch.parts.iter() {
-            let part_lower_bound = part.ts_rewrite().unwrap_or(batch.desc.lower());
+            let part_lower_bound = part.ts_rewrite().unwrap_or_else(|| batch.desc.lower());
             if !PartialOrder::less_equal(truncate.lower(), part_lower_bound) {
                 return Err(InvalidUsage::InvalidRewrite(format!(
                     "rewritten batch might have data below {:?} at {:?}",

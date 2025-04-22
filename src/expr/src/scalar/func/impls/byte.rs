@@ -69,7 +69,7 @@ sqlfunc!(
     #[sqlname = "bit_count"]
     fn bit_count_bytes<'a>(a: &'a [u8]) -> Result<i64, EvalError> {
         let count: u64 = a.iter().map(|b| u64::cast_from(b.count_ones())).sum();
-        i64::try_from(count).or(Err(EvalError::Int64OutOfRange(count.to_string().into())))
+        i64::try_from(count).or_else(|_| Err(EvalError::Int64OutOfRange(count.to_string().into())))
     }
 );
 
@@ -77,7 +77,7 @@ sqlfunc!(
     #[sqlname = "bit_length"]
     fn bit_length_bytes<'a>(a: &'a [u8]) -> Result<i32, EvalError> {
         let val = a.len() * 8;
-        i32::try_from(val).or(Err(EvalError::Int32OutOfRange(val.to_string().into())))
+        i32::try_from(val).or_else(|_| Err(EvalError::Int32OutOfRange(val.to_string().into())))
     }
 );
 
@@ -85,6 +85,6 @@ sqlfunc!(
     #[sqlname = "octet_length"]
     fn byte_length_bytes<'a>(a: &'a [u8]) -> Result<i32, EvalError> {
         let val = a.len();
-        i32::try_from(val).or(Err(EvalError::Int32OutOfRange(val.to_string().into())))
+        i32::try_from(val).or_else(|_| Err(EvalError::Int32OutOfRange(val.to_string().into())))
     }
 );

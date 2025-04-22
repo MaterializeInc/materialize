@@ -530,9 +530,7 @@ fn enum_vals_from_column_type(s: &str) -> Result<Vec<String>, anyhow::Error> {
     let vals_str = s
         .strip_prefix("enum(")
         .and_then(|s| s.strip_suffix(')'))
-        .ok_or(anyhow::format_err!(
-            "Unable to parse enum column type string"
-        ))?;
+        .ok_or_else(|| anyhow::format_err!("Unable to parse enum column type string"))?;
 
     Ok(ENUM_VAL_REGEX
         .captures_iter(vals_str)

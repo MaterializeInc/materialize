@@ -4613,11 +4613,11 @@ pub fn plan_create_cluster_inner(
         )?;
 
         let replication_factor = if matches!(schedule, ClusterScheduleOptionValue::Manual) {
-            replication_factor.unwrap_or(
+            replication_factor.unwrap_or_else(|| {
                 scx.catalog
                     .system_vars()
-                    .default_cluster_replication_factor(),
-            )
+                    .default_cluster_replication_factor()
+            })
         } else {
             scx.require_feature_flag(&ENABLE_CLUSTER_SCHEDULE_REFRESH)?;
             if replication_factor.is_some() {

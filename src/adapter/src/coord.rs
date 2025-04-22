@@ -3873,7 +3873,7 @@ impl LastMessage {
         self.stmt
             .as_ref()
             .map(|stmt| stmt.to_ast_string_redacted().into())
-            .unwrap_or("<none>".into())
+            .unwrap_or(Cow::Borrowed("<none>"))
     }
 }
 

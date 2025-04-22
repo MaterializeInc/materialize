@@ -178,6 +178,7 @@ WARN_CLIPPY_LINTS = [
     # Helps prevent bugs caused by wrong usage of `const` instead of `static`
     # to define global mutable values.
     "borrow_interior_mutable_const",
+    "or_fun_call",
 ]
 
 MESSAGE_LINT_MISSING = (

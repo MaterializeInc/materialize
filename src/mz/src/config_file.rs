@@ -136,7 +136,11 @@ impl ConfigFile {
         let mut new_profile = toml_edit::Table::new();
 
         self.add_app_password(&mut new_profile, &name, profile.clone())?;
-        new_profile["region"] = value(profile.region.unwrap_or("aws/us-east-1".to_string()));
+        new_profile["region"] = value(
+            profile
+                .region
+                .unwrap_or_else(|| "aws/us-east-1".to_string()),
+        );
 
         if let Some(admin_endpoint) = profile.admin_endpoint {
             new_profile["admin-endpoint"] = value(admin_endpoint);

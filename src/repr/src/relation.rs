@@ -1275,7 +1275,7 @@ impl VersionedRelationDesc {
             .map(|meta| meta.dropped.unwrap_or(meta.added))
             .max()
             // If there aren't any columns we're implicitly the root version.
-            .unwrap_or(RelationVersion::root())
+            .unwrap_or_else(RelationVersion::root)
     }
 
     /// Validates internal contraints of the [`RelationDesc`] are correct.
@@ -1373,7 +1373,7 @@ impl PropRelationDescDiff {
                     .values()
                     .map(|meta| meta.dropped.unwrap_or(meta.added))
                     .max()
-                    .unwrap_or(RelationVersion::root())
+                    .unwrap_or_else(RelationVersion::root)
                     .bump();
                 let Some(metadata) = desc.metadata.values_mut().find(|meta| meta.name == name)
                 else {

@@ -1885,7 +1885,7 @@ impl Coordinator {
                             dropped_in_use_indexes.push(DroppedInUseIndex {
                                 index_name: humanizer
                                     .humanize_id(index.global_id())
-                                    .unwrap_or(id.to_string()),
+                                    .unwrap_or_else(|| id.to_string()),
                                 dependant_objects: dependants,
                             });
                         }
@@ -4497,7 +4497,7 @@ impl Coordinator {
             return Err(AdapterError::PlanError(plan::PlanError::VarError(
                 VarError::InvalidParameterValue {
                     name: NETWORK_POLICY.name(),
-                    invalid_values: vec![policy_name.unwrap_or("<none>".to_string())],
+                    invalid_values: vec![policy_name.unwrap_or_else(|| "<none>".to_string())],
                     reason: "no network policy with such name exists".to_string(),
                 },
             )));

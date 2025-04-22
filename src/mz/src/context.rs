@@ -213,7 +213,7 @@ impl ProfileContext {
             .context
             .region
             .clone()
-            .or(profile.region().map(|r| r.to_string()))
+            .or_else(|| profile.region().map(|r| r.to_string()))
             .ok_or_else(|| panic!("no region configured"))
             .unwrap()
             .to_lowercase();
@@ -249,7 +249,7 @@ impl ProfileContext {
     pub fn get_profile(&self) -> String {
         self.context
             .get_global_profile()
-            .unwrap_or(self.config_file().profile().to_string())
+            .unwrap_or_else(|| self.config_file().profile().to_string())
     }
 }
 

@@ -699,7 +699,7 @@ impl Catalog {
                 unsafe_mode: true,
                 all_features: false,
                 build_info,
-                environment_id: environment_id.unwrap_or(EnvironmentId::for_tests()),
+                environment_id: environment_id.unwrap_or_else(EnvironmentId::for_tests),
                 read_only,
                 now,
                 boot_ts: previous_ts,

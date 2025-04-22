@@ -338,7 +338,7 @@ impl PlanTrace<UsedIndexes> {
         };
         // Either return the `UsedIndexes` wrapped by the found entry or a
         // default `UsedIndexes` instance if such entry was not found.
-        entry.map_or(Default::default(), |e| e.plan)
+        entry.map_or_else(Default::default, |e| e.plan)
     }
 }
 

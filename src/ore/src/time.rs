@@ -76,7 +76,7 @@ impl DurationExt for Duration {
         } else {
             u64::MAX
         };
-        Duration::try_from_secs_f64(x).unwrap_or(Duration::from_secs(bound))
+        Duration::try_from_secs_f64(x).unwrap_or_else(|_| Duration::from_secs(bound))
     }
 }
 

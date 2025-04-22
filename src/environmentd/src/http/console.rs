@@ -36,7 +36,7 @@ pub(crate) struct ConsoleProxyConfig {
 
 impl ConsoleProxyConfig {
     pub(crate) fn new(proxy_url: Option<String>, route_prefix: String) -> Self {
-        let mut url = proxy_url.unwrap_or("https://console.materialize.com".to_string());
+        let mut url = proxy_url.unwrap_or_else(|| "https://console.materialize.com".to_string());
         if let Some(new) = url.strip_suffix('/') {
             url = new.to_string();
         }

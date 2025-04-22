@@ -1672,7 +1672,7 @@ impl CatalogItem {
         version: RelationVersionSelector,
     ) -> Result<Cow<RelationDesc>, SqlCatalogError> {
         self.desc_opt(version)
-            .ok_or(SqlCatalogError::InvalidDependency {
+            .ok_or_else(|| SqlCatalogError::InvalidDependency {
                 name: name.to_string(),
                 typ: self.typ(),
             })
