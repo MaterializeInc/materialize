@@ -49,6 +49,17 @@ or on a cloud provider. Self-managed Materialize requires:
 
 {{</ multilinkbox >}}
 
+See also:
+
+- [AWS Deployment
+  guidelines](/installation/install-on-aws/appendix-deployment-guidelines/#recommended-instance-types)
+
+- [GCP Deployment
+  guidelines](/installation/install-on-gcp/appendix-deployment-guidelines/#recommended-instance-types)
+
+- [Azure Deployment
+  guidelines](/installation/install-on-azure/appendix-deployment-guidelines/#recommended-instance-types)
+
 {{< callout >}}
 {{< self-managed/also-available >}}
 {{</ callout >}}
@@ -57,4 +68,3 @@ or on a cloud provider. Self-managed Materialize requires:
 
 - [Materialize Operator Configuration](/installation/configuration/)
 - [Troubleshooting](/installation/troubleshooting/)
-- [Operational guidelines](/installation/operational-guidelines/)

@@ -509,6 +509,6 @@ deploys a sample infrastructure on Azure with the following components:
 
 - [Materialize Operator Configuration](/installation/configuration/)
 - [Troubleshooting](/installation/troubleshooting/)
-- [Deployment guidelines](/installation/install-on-azure/
+- [Appendix: Azure deployment guidelines](/installation/install-on-azure/
   appendix-deployment-guidelines)
 - [Installation](/installation/)

@@ -41,4 +41,3 @@ To configure the Materialize operator, you can:
 
 - [Installation](/installation/)
 - [Troubleshooting](/installation/troubleshooting/)
-- [Operational guidelines](/installation/operational-guidelines/)

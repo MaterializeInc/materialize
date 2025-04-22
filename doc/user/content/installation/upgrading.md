@@ -167,4 +167,3 @@ kubectl logs -l app.kubernetes.io/name=materialize-operator -n materialize
 - [Configuration](/installation/configuration/)
 - [Installation](/installation/)
 - [Troubleshooting](/installation/troubleshooting/)
-- [Operational guidelines](/installation/operational-guidelines/)
