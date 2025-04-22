@@ -268,7 +268,7 @@ components:
    Upon successful completion, various fields and their values are output:
 
    ```bash
-   Apply complete! Resources: 22 added, 0 changed, 0 destroyed.
+   Apply complete! Resources: 27 added, 0 changed, 0 destroyed.
 
    Outputs:
 
