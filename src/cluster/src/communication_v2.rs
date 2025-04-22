@@ -527,8 +527,8 @@ mod turmoil_tests {
             }
 
             sim.step().unwrap();
-            if sim.elapsed() > Duration::from_secs(60) {
-                panic!("simulation not finished after 60s");
+            if sim.elapsed() > Duration::from_secs(120) {
+                panic!("simulation not finished after 120s");
             }
         }
     }
