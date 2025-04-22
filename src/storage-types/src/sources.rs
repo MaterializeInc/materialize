@@ -2001,6 +2001,7 @@ impl Schema<SourceData> for RelationDesc {
 #[cfg(test)]
 mod tests {
     use arrow::array::{ArrayData, make_comparator};
+    use base64::Engine;
     use bytes::Bytes;
     use mz_expr::EvalError;
     use mz_ore::assert_err;
@@ -2402,7 +2403,6 @@ mod tests {
     #[cfg_attr(miri, ignore)] // too slow
     fn source_proto_serialization_stability() {
         let min_protos = 10;
-        let base64_config = base64::Config::new(base64::CharacterSet::Standard, true);
         let encoded = include_str!("snapshots/source-datas.txt");
 
         // Decode the pre-generated source datas
@@ -2410,8 +2410,12 @@ mod tests {
             .lines()
             .map(|s| {
                 let (desc, data) = s.split_once(',').expect("comma separated data");
-                let desc = base64::decode_config(desc, base64_config).expect("valid base64");
-                let data = base64::decode_config(data, base64_config).expect("valid base64");
+                let desc = base64::engine::general_purpose::STANDARD
+                    .decode(desc)
+                    .expect("valid base64");
+                let data = base64::engine::general_purpose::STANDARD
+                    .decode(data)
+                    .expect("valid base64");
                 (desc, data)
             })
             .map(|(desc, data)| {
@@ -2441,12 +2445,12 @@ mod tests {
         for (desc, data) in decoded {
             buf.clear();
             desc.into_proto().encode(&mut buf).expect("success");
-            base64::encode_config_buf(buf.as_slice(), base64_config, &mut reencoded);
+            base64::engine::general_purpose::STANDARD.encode_string(buf.as_slice(), &mut reencoded);
             reencoded.push(',');
 
             buf.clear();
             data.encode(&mut buf);
-            base64::encode_config_buf(buf.as_slice(), base64_config, &mut reencoded);
+            base64::engine::general_purpose::STANDARD.encode_string(buf.as_slice(), &mut reencoded);
             reencoded.push('\n');
         }
 

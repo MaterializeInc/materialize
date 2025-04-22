@@ -11,6 +11,7 @@ use std::collections::BTreeSet;
 use std::fs;
 use std::io::Write;
 
+use base64::Engine;
 use mz_persist_types::Codec;
 use mz_repr::{RelationDesc, ScalarType};
 use mz_storage_types::sources::SourceData;
@@ -65,7 +66,6 @@ fn test_proto_serialization_stability() {
         );
     }
 
-    let base64_config = base64::Config::new(base64::CharacterSet::Standard, true);
     let relation_desc = RelationDesc::builder()
         .with_column("a", ScalarType::Jsonb.nullable(false))
         .finish();
@@ -75,7 +75,11 @@ fn test_proto_serialization_stability() {
         let encoded_str = std::str::from_utf8(encoded_bytes.as_slice()).expect("valid UTF-8");
         let decoded = encoded_str
             .lines()
-            .map(|s| base64::decode_config(s, base64_config).expect("valid base64"))
+            .map(|s| {
+                base64::engine::general_purpose::STANDARD
+                    .decode(s)
+                    .expect("valid base64")
+            })
             .map(|b| SourceData::decode(&b, &relation_desc).expect("valid proto"))
             .map(StateUpdateKindJson::from)
             .map(|raw| {
@@ -91,7 +95,7 @@ fn test_proto_serialization_stability() {
         for source_data in decoded {
             buf.clear();
             source_data.encode(&mut buf);
-            base64::encode_config_buf(buf.as_slice(), base64_config, &mut reencoded);
+            base64::engine::general_purpose::STANDARD.encode_string(buf.as_slice(), &mut reencoded);
             reencoded.push('\n');
         }
 
@@ -125,8 +129,6 @@ fn generate_missing_encodings() {
         panic!("Have snapshots, but no proto files on disk? {unknown_snapshots:#?}");
     }
 
-    let base64_config = base64::Config::new(base64::CharacterSet::Standard, true);
-
     for to_encode in protos.difference(&snapshots) {
         let mut file = fs::File::options()
             .create_new(true)
@@ -139,11 +141,7 @@ fn generate_missing_encodings() {
             .map(|kind| kind.raw())
             .map(SourceData::from)
             .map(|source_data| source_data.encode_to_vec())
-            .map(|buf| {
-                let mut encoded = String::new();
-                base64::encode_config_buf(buf.as_slice(), base64_config, &mut encoded);
-                encoded
-            });
+            .map(|buf| base64::engine::general_purpose::STANDARD.encode(buf.as_slice()));
         for encoded_data in encoded_datas {
             write!(&mut file, "{encoded_data}\n").expect("unable to write file");
         }

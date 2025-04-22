@@ -20,6 +20,8 @@ use std::sync::atomic::Ordering;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+use base64::Engine;
+use base64::engine::general_purpose::{URL_SAFE, URL_SAFE_NO_PAD};
 use chrono::Utc;
 use headers::Authorization;
 use http_body_util::BodyExt;
@@ -895,10 +897,7 @@ async fn test_auth_base_require_tls_frontegg() {
                     let mut buf = vec![];
                     buf.extend(client_id.as_bytes());
                     buf.extend(secret.as_bytes());
-                    Some(Cow::Owned(format!(
-                        "mzp_{}",
-                        base64::encode_config(buf, base64::URL_SAFE)
-                    )))
+                    Some(Cow::Owned(format!("mzp_{}", URL_SAFE.encode(buf))))
                 },
                 ssl_mode: SslMode::Require,
                 configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
@@ -912,10 +911,7 @@ async fn test_auth_base_require_tls_frontegg() {
                     let mut buf = vec![];
                     buf.extend(client_id.as_bytes());
                     buf.extend(secret.as_bytes());
-                    Some(Cow::Owned(format!(
-                        "mzp_{}",
-                        base64::encode_config(buf, base64::URL_SAFE_NO_PAD)
-                    )))
+                    Some(Cow::Owned(format!("mzp_{}", URL_SAFE_NO_PAD.encode(buf))))
                 },
                 ssl_mode: SslMode::Require,
                 configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
