@@ -420,7 +420,7 @@ impl<T: Timestamp + Codec64> RustType<ProtoStateDiff> for StateDiff<T> {
                         |v| v.into_rust(),
                     )?,
                     ProtoStateField::ActiveRollup => {
-                        field_diff_into_rust::<(), ProtoActiveRollup, _, _, _, _>(
+                        field_diff_into_rust::<(), Option<ProtoActiveRollup>, _, _, _, _>(
                             diff,
                             &mut state_diff.active_rollup,
                             |()| Ok(()),
@@ -855,7 +855,7 @@ impl<T: Timestamp + Lattice + Codec64> RustType<ProtoRollup> for Rollup<T> {
             ts_codec: T::codec_name(),
             diff_codec: self.state.diff_codec.into_proto(),
             last_gc_req: self.state.state.collections.last_gc_req.into_proto(),
-            active_rollup: Some(self.state.state.collections.active_rollup.into_proto()),
+            active_rollup: self.state.state.collections.active_rollup.into_proto(),
             rollups: self
                 .state
                 .state
@@ -946,12 +946,13 @@ impl<T: Timestamp + Lattice + Codec64> RustType<ProtoRollup> for Rollup<T> {
         for (id, x) in x.schemas {
             schemas.insert(id.into_rust()?, x.into_rust()?);
         }
+        let active_rollup = x
+            .active_rollup
+            .map(|rollup| rollup.into_rust())
+            .transpose()?;
         let collections = StateCollections {
             rollups,
-            active_rollup: x
-                .active_rollup
-                .into_rust_if_some("active_rollup")
-                .unwrap_or(ActiveRollup::default()),
+            active_rollup,
             last_gc_req: x.last_gc_req.into_rust()?,
             leased_readers,
             critical_readers,

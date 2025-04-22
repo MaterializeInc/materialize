@@ -150,7 +150,7 @@ message ProtoHollowRollup {
 }
 
 message ProtoActiveRollup {
-    uint64 start_ms = 1;
+  uint64 start_ms = 1;
 }
 
 message ProtoTrace {

@@ -76,7 +76,7 @@ pub struct StateDiff<T> {
     pub(crate) walltime_ms: u64,
     pub(crate) latest_rollup_key: PartialRollupKey,
     pub(crate) rollups: Vec<StateFieldDiff<SeqNo, HollowRollup>>,
-    pub(crate) active_rollup: Vec<StateFieldDiff<(), ActiveRollup>>,
+    pub(crate) active_rollup: Vec<StateFieldDiff<(), Option<ActiveRollup>>>,
     pub(crate) hostname: Vec<StateFieldDiff<(), String>>,
     pub(crate) last_gc_req: Vec<StateFieldDiff<(), SeqNo>>,
     pub(crate) leased_readers: Vec<StateFieldDiff<LeasedReaderId, LeasedReaderState<T>>>,
