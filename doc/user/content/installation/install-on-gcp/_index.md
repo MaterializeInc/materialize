@@ -578,5 +578,5 @@ components:
 
 - [Troubleshooting](/installation/troubleshooting/)
 - [Materialize Operator Configuration](/installation/configuration/)
-- [Operational guidelines](/installation/operational-guidelines/)
+- [Appendix: Google deployment guidelines](/installation/install-on-gcp/appendix-deployment-guidelines/)
 - [Installation](/installation/)

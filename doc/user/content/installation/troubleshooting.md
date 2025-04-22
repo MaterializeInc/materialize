@@ -130,5 +130,4 @@ To increase the cluster's size, you can follow the following steps:
 ## See also
 
 - [Configuration](/installation/configuration/)
-- [Operational guidelines](/installation/operational-guidelines/)
 - [Installation](/installation/)

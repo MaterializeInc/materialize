@@ -44,5 +44,4 @@ reference](https://kubernetes.io/docs/reference/kubectl/quick-reference/).
 
 - [Materialize Operator Configuration](/installation/configuration/)
 - [Troubleshooting](/installation/troubleshooting/)
-- [Operational guidelines](/installation/operational-guidelines/)
 - [Installation](/installation/)
