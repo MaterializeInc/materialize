@@ -105,7 +105,7 @@ portable-atomic = { version = "1.11.0", features = ["require-cas"] }
 postgres = { git = "https://github.com/MaterializeInc/rust-postgres", default-features = false, features = ["with-chrono-0_4"] }
 postgres-types = { git = "https://github.com/MaterializeInc/rust-postgres", default-features = false, features = ["with-chrono-0_4", "with-serde_json-1", "with-uuid-1"] }
 predicates = { version = "3.1.3" }
-proc-macro2 = { version = "1.0.94", features = ["span-locations"] }
+proc-macro2 = { version = "1.0.95", features = ["span-locations"] }
 proptest = { version = "1.6.0" }
 prost = { version = "0.13.5", features = ["no-recursion-limit", "prost-derive"] }
 prost-reflect = { version = "0.15.2", default-features = false, features = ["serde"] }
@@ -132,7 +132,7 @@ socket2 = { version = "0.5.9", default-features = false, features = ["all"] }
 subtle = { version = "2.6.1" }
 syn-dff4ba8e3ae991db = { package = "syn", version = "1.0.107", features = ["extra-traits", "full", "visit", "visit-mut"] }
 syn-f595c2ba2a3f28df = { package = "syn", version = "2.0.98", features = ["extra-traits", "full", "visit", "visit-mut"] }
-sync_wrapper = { version = "1.0.1", default-features = false, features = ["futures"] }
+sync_wrapper = { version = "1.0.2", default-features = false, features = ["futures"] }
 time = { version = "0.3.37", features = ["local-offset", "macros", "quickcheck", "serde-well-known"] }
 timely = { version = "0.20.0" }
 tokio = { version = "1.44.2", features = ["full", "test-util", "tracing"] }
@@ -249,7 +249,7 @@ portable-atomic = { version = "1.11.0", features = ["require-cas"] }
 postgres = { git = "https://github.com/MaterializeInc/rust-postgres", default-features = false, features = ["with-chrono-0_4"] }
 postgres-types = { git = "https://github.com/MaterializeInc/rust-postgres", default-features = false, features = ["with-chrono-0_4", "with-serde_json-1", "with-uuid-1"] }
 predicates = { version = "3.1.3" }
-proc-macro2 = { version = "1.0.94", features = ["span-locations"] }
+proc-macro2 = { version = "1.0.95", features = ["span-locations"] }
 proptest = { version = "1.6.0" }
 proptest-derive = { version = "0.5.1", default-features = false, features = ["boxed_union"] }
 prost = { version = "0.13.5", features = ["no-recursion-limit", "prost-derive"] }
@@ -277,7 +277,7 @@ socket2 = { version = "0.5.9", default-features = false, features = ["all"] }
 subtle = { version = "2.6.1" }
 syn-dff4ba8e3ae991db = { package = "syn", version = "1.0.107", features = ["extra-traits", "full", "visit", "visit-mut"] }
 syn-f595c2ba2a3f28df = { package = "syn", version = "2.0.98", features = ["extra-traits", "full", "visit", "visit-mut"] }
-sync_wrapper = { version = "1.0.1", default-features = false, features = ["futures"] }
+sync_wrapper = { version = "1.0.2", default-features = false, features = ["futures"] }
 time = { version = "0.3.37", features = ["local-offset", "macros", "quickcheck", "serde-well-known"] }
 time-macros = { version = "0.2.19", default-features = false, features = ["formatting", "parsing", "serde"] }
 timely = { version = "0.20.0" }
