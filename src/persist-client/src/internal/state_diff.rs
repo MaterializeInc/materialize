@@ -190,9 +190,9 @@ impl<T: Timestamp + Lattice + Codec64> StateDiff<T> {
         );
         diff_field_single(from_hostname, to_hostname, &mut diffs.hostname);
         diff_field_single(from_last_gc_req, to_last_gc_req, &mut diffs.last_gc_req);
-        diff_field_single_option(
-            from_active_rollup,
-            to_active_rollup,
+        diff_field_sorted_iter(
+            from_active_rollup.iter().map(|r| (&(), r)),
+            to_active_rollup.iter().map(|r| (&(), r)),
             &mut diffs.active_rollup,
         );
         diff_field_sorted_iter(from_rollups.iter(), to_rollups, &mut diffs.rollups);
@@ -532,42 +532,6 @@ fn diff_field_single<T: PartialEq + Clone>(
             key: (),
             val: Update(from.clone(), to.clone()),
         })
-    }
-}
-
-fn diff_field_single_option<T: PartialEq + Clone>(
-    from: &Option<T>,
-    to: &Option<T>,
-    diffs: &mut Vec<StateFieldDiff<(), T>>,
-) {
-    // There are four options here
-    // - From is None, to is None (do nothing)
-    // - From is Some, to is Some (update if the values differ)
-    // - From is Some, to is None (delete)
-    // - From is None, to is Some (insert)
-
-    match (from, to) {
-        (None, None) => {}
-        (Some(from_val), Some(to_val)) => {
-            if from_val != to_val {
-                diffs.push(StateFieldDiff {
-                    key: (),
-                    val: Update(from_val.clone(), to_val.clone()),
-                });
-            }
-        }
-        (Some(from_val), None) => {
-            diffs.push(StateFieldDiff {
-                key: (),
-                val: Delete(from_val.clone()),
-            });
-        }
-        (None, Some(to_val)) => {
-            diffs.push(StateFieldDiff {
-                key: (),
-                val: Insert(to_val.clone()),
-            });
-        }
     }
 }
 

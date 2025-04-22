@@ -11,6 +11,7 @@
       "encoded_size_bytes": null
     }
   },
+  "active_rollup": null,
   "leased_readers": {
     "r5f883b90-55c3-f2d0-c1c1-5d065c1cb8cd": {
       "seqno": 13102791633739080688,

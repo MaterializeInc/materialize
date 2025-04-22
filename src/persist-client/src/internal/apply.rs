@@ -516,7 +516,7 @@ where
             now,
         );
 
-        if write_rollup.is_some() {
+        if write_rollup.is_some() && ROLLUP_USE_ACTIVE_ROLLUP.get(cfg) {
             new_state.collections.active_rollup = Some(ActiveRollup {
                 seqno: state.seqno,
                 start_ms: now,
