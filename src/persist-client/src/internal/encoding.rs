@@ -420,7 +420,7 @@ impl<T: Timestamp + Codec64> RustType<ProtoStateDiff> for StateDiff<T> {
                         |v| v.into_rust(),
                     )?,
                     ProtoStateField::ActiveRollup => {
-                        field_diff_into_rust::<(), Option<ProtoActiveRollup>, _, _, _, _>(
+                        field_diff_into_rust::<(), ProtoActiveRollup, _, _, _, _>(
                             diff,
                             &mut state_diff.active_rollup,
                             |()| Ok(()),
