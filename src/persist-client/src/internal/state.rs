@@ -3648,8 +3648,12 @@ pub(crate) mod tests {
     }
 
     #[mz_ore::test]
-    fn need_rollup() {
+    fn need_rollup_classic() {
         const ROLLUP_THRESHOLD: usize = 3;
+        const ROLLUP_USE_ACTIVE_ROLLUP: bool = false;
+        const ROLLUP_FALLBACK_THRESHOLD_MS: usize = 0;
+        const NOW: u64 = 0;
+
         mz_ore::test::init_logging();
         let mut state = TypedState::<String, String, u64, i64>::new(
             DUMMY_BUILD_INFO.semver_version(),
@@ -3673,29 +3677,63 @@ pub(crate) mod tests {
 
         // shouldn't need a rollup at the seqno of the rollup
         state.seqno = SeqNo(5);
-        assert_none!(state.need_rollup(ROLLUP_THRESHOLD));
+        assert_none!(state.need_rollup(
+            ROLLUP_THRESHOLD,
+            ROLLUP_USE_ACTIVE_ROLLUP,
+            ROLLUP_FALLBACK_THRESHOLD_MS,
+            NOW
+        ));
 
         // shouldn't need a rollup at seqnos less than our threshold
         state.seqno = SeqNo(6);
-        assert_none!(state.need_rollup(ROLLUP_THRESHOLD));
+        assert_none!(state.need_rollup(
+            ROLLUP_THRESHOLD,
+            ROLLUP_USE_ACTIVE_ROLLUP,
+            ROLLUP_FALLBACK_THRESHOLD_MS,
+            NOW
+        ));
         state.seqno = SeqNo(7);
-        assert_none!(state.need_rollup(ROLLUP_THRESHOLD));
+        assert_none!(state.need_rollup(
+            ROLLUP_THRESHOLD,
+            ROLLUP_USE_ACTIVE_ROLLUP,
+            ROLLUP_FALLBACK_THRESHOLD_MS,
+            NOW
+        ));
 
         // hit our threshold! we should need a rollup
         state.seqno = SeqNo(8);
         assert_eq!(
-            state.need_rollup(ROLLUP_THRESHOLD).expect("rollup"),
+            state
+                .need_rollup(
+                    ROLLUP_THRESHOLD,
+                    ROLLUP_USE_ACTIVE_ROLLUP,
+                    ROLLUP_FALLBACK_THRESHOLD_MS,
+                    NOW
+                )
+                .expect("rollup"),
             SeqNo(8)
         );
 
         // but we don't need rollups for every seqno > the threshold
         state.seqno = SeqNo(9);
-        assert_none!(state.need_rollup(ROLLUP_THRESHOLD));
+        assert_none!(state.need_rollup(
+            ROLLUP_THRESHOLD,
+            ROLLUP_USE_ACTIVE_ROLLUP,
+            ROLLUP_FALLBACK_THRESHOLD_MS,
+            NOW
+        ));
 
         // we only need a rollup each `ROLLUP_THRESHOLD` beyond our current seqno
         state.seqno = SeqNo(11);
         assert_eq!(
-            state.need_rollup(ROLLUP_THRESHOLD).expect("rollup"),
+            state
+                .need_rollup(
+                    ROLLUP_THRESHOLD,
+                    ROLLUP_USE_ACTIVE_ROLLUP,
+                    ROLLUP_FALLBACK_THRESHOLD_MS,
+                    NOW
+                )
+                .expect("rollup"),
             SeqNo(11)
         );
 
@@ -3713,10 +3751,22 @@ pub(crate) mod tests {
         );
 
         state.seqno = SeqNo(8);
-        assert_none!(state.need_rollup(ROLLUP_THRESHOLD));
+        assert_none!(state.need_rollup(
+            ROLLUP_THRESHOLD,
+            ROLLUP_USE_ACTIVE_ROLLUP,
+            ROLLUP_FALLBACK_THRESHOLD_MS,
+            NOW
+        ));
         state.seqno = SeqNo(9);
         assert_eq!(
-            state.need_rollup(ROLLUP_THRESHOLD).expect("rollup"),
+            state
+                .need_rollup(
+                    ROLLUP_THRESHOLD,
+                    ROLLUP_USE_ACTIVE_ROLLUP,
+                    ROLLUP_FALLBACK_THRESHOLD_MS,
+                    NOW
+                )
+                .expect("rollup"),
             SeqNo(9)
         );
 
@@ -3727,12 +3777,26 @@ pub(crate) mod tests {
         );
         state.seqno = fallback_seqno;
         assert_eq!(
-            state.need_rollup(ROLLUP_THRESHOLD).expect("rollup"),
+            state
+                .need_rollup(
+                    ROLLUP_THRESHOLD,
+                    ROLLUP_USE_ACTIVE_ROLLUP,
+                    ROLLUP_FALLBACK_THRESHOLD_MS,
+                    NOW
+                )
+                .expect("rollup"),
             fallback_seqno
         );
         state.seqno = fallback_seqno.next();
         assert_eq!(
-            state.need_rollup(ROLLUP_THRESHOLD).expect("rollup"),
+            state
+                .need_rollup(
+                    ROLLUP_THRESHOLD,
+                    ROLLUP_USE_ACTIVE_ROLLUP,
+                    ROLLUP_FALLBACK_THRESHOLD_MS,
+                    NOW
+                )
+                .expect("rollup"),
             fallback_seqno.next()
         );
     }
