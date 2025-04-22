@@ -32,8 +32,9 @@ module](https://github.com/MaterializeInc/terraform-aws-materialize) to:
 
 {{% self-managed/aws-recommended-instances %}}
 
-See [Operational guidelines](/installation/operational-guidelines/) for more
-information.
+See [Appendix: AWS Deployment
+guidelines](/installation/install-on-aws/appendix-deployment-guidelines/) for
+more information.
 
 ## Prerequisites
 
@@ -468,5 +469,6 @@ components:
 
 - [Materialize Operator Configuration](/installation/configuration/)
 - [Troubleshooting](/installation/troubleshooting/)
-- [Operational guidelines](/installation/operational-guidelines/)
+- [Appendix: AWS Deployment
+guidelines](/installation/install-on-aws/appendix-deployment-guidelines/)
 - [Installation](/installation/)

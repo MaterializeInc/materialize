@@ -317,5 +317,4 @@ kind delete cluster
 
 - [Materialize Operator Configuration](/installation/configuration/)
 - [Troubleshooting](/installation/troubleshooting/)
-- [Operational guidelines](/installation/operational-guidelines/)
 - [Installation](/installation/)
