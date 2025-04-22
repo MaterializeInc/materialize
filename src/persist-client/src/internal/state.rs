@@ -1476,7 +1476,6 @@ where
         idempotency_token: &IdempotencyToken,
         debug_info: &HandleDebugState,
         inline_writes_total_max_bytes: usize,
-        record_compactions: bool,
         claim_compaction_percent: usize,
         claim_compaction_min_version: Option<&Version>,
     ) -> ControlFlow<CompareAndAppendBreak<T>, Vec<FueledMergeReq<T>>> {
@@ -1579,7 +1578,7 @@ where
         let all_empty_reqs = merge_reqs
             .iter()
             .all(|req| req.inputs.iter().all(|b| b.batch.is_empty()));
-        if record_compactions && all_empty_reqs && !batch.is_empty() {
+        if all_empty_reqs && !batch.is_empty() {
             let mut reqs_to_take = claim_compaction_percent / 100;
             if (usize::cast_from(idempotency_token.hashed()) % 100)
                 < (claim_compaction_percent % 100)
@@ -1597,15 +1596,13 @@ where
             )
         }
 
-        if record_compactions {
-            for req in &merge_reqs {
-                self.trace.claim_compaction(
-                    req.id,
-                    ActiveCompaction {
-                        start_ms: heartbeat_timestamp_ms,
-                    },
-                )
-            }
+        for req in &merge_reqs {
+            self.trace.claim_compaction(
+                req.id,
+                ActiveCompaction {
+                    start_ms: heartbeat_timestamp_ms,
+                },
+            )
         }
 
         debug_assert_eq!(self.trace.upper(), batch.desc.upper());
@@ -3103,7 +3100,6 @@ pub(crate) mod tests {
                 &IdempotencyToken::new(),
                 &debug_state(),
                 0,
-                true,
                 100,
                 None
             ),
@@ -3124,7 +3120,6 @@ pub(crate) mod tests {
                     &IdempotencyToken::new(),
                     &debug_state(),
                     0,
-                    true,
                     100,
                     None
                 )
@@ -3141,7 +3136,6 @@ pub(crate) mod tests {
                 &IdempotencyToken::new(),
                 &debug_state(),
                 0,
-                true,
                 100,
                 None
             ),
@@ -3161,7 +3155,6 @@ pub(crate) mod tests {
                 &IdempotencyToken::new(),
                 &debug_state(),
                 0,
-                true,
                 100,
                 None
             ),
@@ -3185,7 +3178,6 @@ pub(crate) mod tests {
                     &IdempotencyToken::new(),
                     &debug_state(),
                     0,
-                    true,
                     100,
                     None
                 )
@@ -3235,7 +3227,6 @@ pub(crate) mod tests {
                     &IdempotencyToken::new(),
                     &debug_state(),
                     0,
-                    true,
                     100,
                     None
                 )
@@ -3312,7 +3303,6 @@ pub(crate) mod tests {
                     &IdempotencyToken::new(),
                     &debug_state(),
                     0,
-                    true,
                     100,
                     None
                 )
@@ -3346,7 +3336,6 @@ pub(crate) mod tests {
                     &IdempotencyToken::new(),
                     &debug_state(),
                     0,
-                    true,
                     100,
                     None
                 )
@@ -3412,7 +3401,6 @@ pub(crate) mod tests {
                     &IdempotencyToken::new(),
                     &debug_state(),
                     0,
-                    true,
                     100,
                     None
                 )
@@ -3429,7 +3417,6 @@ pub(crate) mod tests {
                     &IdempotencyToken::new(),
                     &debug_state(),
                     0,
-                    true,
                     100,
                     None
                 )
@@ -3489,7 +3476,6 @@ pub(crate) mod tests {
                     &IdempotencyToken::new(),
                     &debug_state(),
                     0,
-                    true,
                     100,
                     None
                 )
@@ -3515,7 +3501,6 @@ pub(crate) mod tests {
                     &IdempotencyToken::new(),
                     &debug_state(),
                     0,
-                    true,
                     100,
                     None
                 )
@@ -3552,7 +3537,6 @@ pub(crate) mod tests {
             &IdempotencyToken::new(),
             &debug_state(),
             0,
-            true,
             100,
             None,
         );

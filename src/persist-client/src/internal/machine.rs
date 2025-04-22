@@ -76,12 +76,6 @@ impl<K, V, T: Clone, D> Clone for Machine<K, V, T, D> {
     }
 }
 
-pub(crate) const RECORD_COMPACTIONS: Config<bool> = Config::new(
-    "persist_record_compactions",
-    false,
-    "Record compaction requests in persistent spine state.",
-);
-
 pub(crate) const CLAIM_UNCLAIMED_COMPACTIONS: Config<bool> = Config::new(
     "persist_claim_unclaimed_compactions",
     false,
@@ -464,7 +458,6 @@ where
                         idempotency_token,
                         debug_info,
                         INLINE_WRITES_TOTAL_MAX_BYTES.get(cfg),
-                        RECORD_COMPACTIONS.get(cfg),
                         if CLAIM_UNCLAIMED_COMPACTIONS.get(cfg) {
                             CLAIM_COMPACTION_PERCENT.get(cfg)
                         } else {
