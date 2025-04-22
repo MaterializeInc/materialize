@@ -1707,12 +1707,14 @@ impl RustType<ProtoActiveRollup> for ActiveRollup {
     fn into_proto(&self) -> ProtoActiveRollup {
         ProtoActiveRollup {
             start_ms: self.start_ms,
+            seqno: self.seqno.into_proto(),
         }
     }
 
     fn from_proto(proto: ProtoActiveRollup) -> Result<Self, TryFromProtoError> {
         Ok(ActiveRollup {
             start_ms: proto.start_ms,
+            seqno: proto.seqno.into_rust()?,
         })
     }
 }

@@ -1126,14 +1126,8 @@ pub enum HollowBlobRef<'a, T> {
 /// A rollup that is currently being computed.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Arbitrary, Serialize)]
 pub struct ActiveRollup {
-    /// 0 if no rollup is being computed.
+    pub seqno: SeqNo,
     pub start_ms: u64,
-}
-
-impl Default for ActiveRollup {
-    fn default() -> Self {
-        Self { start_ms: 0 }
-    }
 }
 
 /// A sentinel for a state transition that was a no-op.
@@ -1237,7 +1231,7 @@ where
         let applied = match self.rollups.get(&rollup_seqno) {
             Some(x) => x.key == rollup.key,
             None => {
-                self.clear_active_rollup();
+                self.active_rollup = None;
                 self.rollups.insert(rollup_seqno, rollup.to_owned());
                 true
             }
@@ -1272,24 +1266,6 @@ where
         }
 
         Continue(removed)
-    }
-
-    pub fn register_active_rollup(
-        &mut self,
-        start_ms: u64,
-    ) -> ControlFlow<NoOpStateTransition<()>, ActiveRollup> {
-        let active_rollup = ActiveRollup { start_ms };
-        self.active_rollup = Some(active_rollup.clone());
-        Continue(active_rollup)
-    }
-
-    pub fn clear_active_rollup(&mut self) -> ControlFlow<NoOpStateTransition<()>, ActiveRollup> {
-        if self.active_rollup.is_some() {
-            self.active_rollup = None;
-            return Continue(ActiveRollup::default());
-        } else {
-            return Break(NoOpStateTransition(()));
-        }
     }
 
     pub fn register_leased_reader(
@@ -2458,45 +2434,10 @@ where
         self.collections.active_rollup
     }
 
-    // This can be removed once we have migrated to the new active rollup
-    // tracking system.
-    pub fn need_rollup(&self, threshold: usize) -> Option<SeqNo> {
-        let (latest_rollup_seqno, _) = self.latest_rollup();
-
-        // Tombstoned shards require one final rollup. However, because we
-        // write a rollup as of SeqNo X and then link it in using a state
-        // transition (in this case from X to X+1), the minimum number of
-        // live diffs is actually two. Detect when we're in this minimal
-        // two diff state and stop the (otherwise) infinite iteration.
-        if self.collections.is_tombstone() && latest_rollup_seqno.next() < self.seqno {
-            return Some(self.seqno);
-        }
-
-        let seqnos_since_last_rollup = self.seqno.0.saturating_sub(latest_rollup_seqno.0);
-        // every `threshold` seqnos since the latest rollup, assign rollup maintenance.
-        // we avoid assigning rollups to every seqno past the threshold to avoid handles
-        // racing / performing redundant work.
-        if seqnos_since_last_rollup > 0 && seqnos_since_last_rollup % u64::cast_from(threshold) == 0
-        {
-            return Some(self.seqno);
-        }
-
-        // however, since maintenance is best-effort and could fail, do assign rollup
-        // work to every seqno after a fallback threshold to ensure one is written.
-        if seqnos_since_last_rollup
-            > u64::cast_from(
-                threshold * PersistConfig::DEFAULT_FALLBACK_ROLLUP_THRESHOLD_MULTIPLIER,
-            )
-        {
-            return Some(self.seqno);
-        }
-
-        None
-    }
-
-    pub fn need_rollup_with_active(
+    pub fn need_rollup(
         &self,
         threshold: usize,
+        use_active_rollup: bool,
         fallback_threshold_ms: usize,
         now: u64,
     ) -> Option<SeqNo> {
@@ -2513,17 +2454,40 @@ where
 
         let seqnos_since_last_rollup = self.seqno.0.saturating_sub(latest_rollup_seqno.0);
 
-        // If sequnos_since_last_rollup>threshold, and there is no existing rollup in progress,
-        // we should start a new rollup.
-        if seqnos_since_last_rollup > u64::cast_from(threshold) && self.active_rollup().is_none() {
-            return Some(self.seqno);
-        }
+        if use_active_rollup {
+            // If sequnos_since_last_rollup>threshold, and there is no existing rollup in progress,
+            // we should start a new rollup.
+            if seqnos_since_last_rollup > u64::cast_from(threshold)
+                && self.active_rollup().is_none()
+            {
+                return Some(self.seqno);
+            }
 
-        // If we have an active rollup, we need to check if it has been running too long.
-        // If it has, we should start a new rollup.
-        // This is to guard against a worker dying/taking too long/etc.
-        if let Some(active_rollup) = self.active_rollup() {
-            if active_rollup.start_ms + u64::cast_from(fallback_threshold_ms) > now {
+            // If we have an active rollup, we need to check if it has been running too long.
+            // If it has, we should start a new rollup.
+            // This is to guard against a worker dying/taking too long/etc.
+            if let Some(active_rollup) = self.active_rollup() {
+                if active_rollup.start_ms + u64::cast_from(fallback_threshold_ms) > now {
+                    return Some(self.seqno);
+                }
+            }
+        } else {
+            // every `threshold` seqnos since the latest rollup, assign rollup maintenance.
+            // we avoid assigning rollups to every seqno past the threshold to avoid handles
+            // racing / performing redundant work.
+            if seqnos_since_last_rollup > 0
+                && seqnos_since_last_rollup % u64::cast_from(threshold) == 0
+            {
+                return Some(self.seqno);
+            }
+
+            // however, since maintenance is best-effort and could fail, do assign rollup
+            // work to every seqno after a fallback threshold to ensure one is written.
+            if seqnos_since_last_rollup
+                > u64::cast_from(
+                    threshold * PersistConfig::DEFAULT_FALLBACK_ROLLUP_THRESHOLD_MULTIPLIER,
+                )
+            {
                 return Some(self.seqno);
             }
         }

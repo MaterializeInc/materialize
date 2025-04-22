@@ -42,7 +42,7 @@ use crate::rpc::{PUBSUB_PUSH_DIFF_ENABLED, PubSubSender};
 use crate::schema::SchemaCache;
 use crate::{Diagnostics, PersistConfig, ShardId};
 
-use super::state::{ROLLUP_FALLBACK_THRESHOLD_MS, ROLLUP_USE_ACTIVE_ROLLUP};
+use super::state::{ActiveRollup, ROLLUP_FALLBACK_THRESHOLD_MS, ROLLUP_USE_ACTIVE_ROLLUP};
 
 /// An applier of persist commands.
 ///
@@ -508,22 +508,20 @@ where
             );
         }
 
-        let write_rollup = if ROLLUP_USE_ACTIVE_ROLLUP.get(cfg) {
-            let now = (cfg.now)();
-            let write_rollup = new_state.need_rollup_with_active(
-                ROLLUP_THRESHOLD.get(cfg),
-                ROLLUP_FALLBACK_THRESHOLD_MS.get(cfg),
-                now,
-            );
+        let now = (cfg.now)();
+        let write_rollup = new_state.need_rollup(
+            ROLLUP_THRESHOLD.get(cfg),
+            ROLLUP_USE_ACTIVE_ROLLUP.get(cfg),
+            ROLLUP_FALLBACK_THRESHOLD_MS.get(cfg),
+            now,
+        );
 
-            if write_rollup.is_some() {
-                new_state.collections.register_active_rollup(now);
-            }
-
-            write_rollup
-        } else {
-            new_state.need_rollup(ROLLUP_THRESHOLD.get(cfg))
-        };
+        if write_rollup.is_some() {
+            new_state.collections.active_rollup = Some(ActiveRollup {
+                seqno: state.seqno,
+                start_ms: now,
+            });
+        }
 
         // Find out if this command has been selected to perform gc, so
         // that it will fire off a background request to the
