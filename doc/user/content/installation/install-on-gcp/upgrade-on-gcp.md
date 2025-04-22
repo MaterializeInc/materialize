@@ -19,11 +19,23 @@ or the root).
 
 ## Version compatibility
 
+{{< tabs >}}
+
+{{< tab "Helm chart releases" >}}
+
 When upgrading, you need to specify the Materialize Operator version,
 `orchestratord` version, and the `environmentd` versions. The following table
 presents the versions compatibility for the operator and the applications:
 
 {{< yaml-table data="self_managed/self_managed_operator_compatibility" >}}
+
+{{</ tab >}}
+{{< tab "Materialize on GCP Terraform Releases" >}}
+
+{{< yaml-table data="self_managed/gcp_terraform_versions" >}}
+
+{{</ tab >}}
+{{</ tabs >}}
 
 ## Prerequisites
 
