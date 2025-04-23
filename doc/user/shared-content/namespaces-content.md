@@ -11,7 +11,7 @@ exceptions, see [Other objects](#other-objects)).
 |---------------------------| ------------|
 | 1st/Highest level:        |  **Database** |
 | 2nd level:                |  **Schema**   |
-| 3rd level:                | **Table**\|**View**\|**Materialized view**\|**Connection**\|**Source**\|**Sink**\|**Index**\|**Type**\|**Function**\|**Secret** |
+| 3rd level:                | <table><tbody><tr><td><ul><li>**Table**</li><li>**View**</li><li>**Materialized view**</li><li>**Connection**</li></ul></td><td><ul><li>**Source**</li><li>**Sink**</li><li>**Index**</li></ul></td><td><ul><li>**Type**</li><li>**Function**</li><li>**Secret**</li></ul></td></tr></tbody></table>|
 | Lowest level:             | **Column**     |
 
 Each layer in the hierarchy can contain elements from the level immediately
