@@ -49,6 +49,12 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     matching_files = sorted(matching_files)
     print(f"Filter: {args.filter} Files: {matching_files}")
 
+    # Start with a fresh state
+    c.kill("sql-server")
+    c.rm("sql-server")
+    c.kill("materialized")
+    c.rm("materialized")
+
     c.up("materialized", "sql-server")
     seed = random.getrandbits(16)
 
