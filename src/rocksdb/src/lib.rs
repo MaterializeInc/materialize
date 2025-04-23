@@ -656,7 +656,6 @@ fn rocksdb_core_loop<K, V, M, O, IM, F>(
     let mut encoded_batch: Vec<(K, KeyUpdate<Vec<u8>>)> = Vec::new();
 
     let wo = options.as_rocksdb_write_options();
-    let mut fatal_error: Option<Error> = None;
     while let Some(cmd) = cmd_rx.blocking_recv() {
         match cmd {
             Command::Shutdown { done_sender } => {
@@ -855,10 +854,7 @@ fn rocksdb_core_loop<K, V, M, O, IM, F>(
                             }
                             Err(e) => match e.kind() {
                                 ErrorKind::TryAgain => RetryResult::RetryableErr(Error::RocksDB(e)),
-                                _ => {
-                                    fatal_error.replace(Error::RocksDB(e.clone()));
-                                    RetryResult::FatalErr(Error::RocksDB(e))
-                                }
+                                _ => RetryResult::FatalErr(Error::RocksDB(e)),
                             },
                         }
                     });
@@ -872,23 +868,29 @@ fn rocksdb_core_loop<K, V, M, O, IM, F>(
                     }
                 }
 
-                let _ = match retry_result {
+                match retry_result {
                     Ok(()) => {
                         batch.clear();
-                        response_sender.send(Ok((ret, batch)))
+                        let _ = response_sender.send(Ok((ret, batch)));
                     }
-                    Err(e) => response_sender.send(Err(e)),
+                    Err(e) => {
+                        let db_err = match e {
+                            Error::RocksDB(ref inner) => Some(inner.clone()),
+                            _ => None,
+                        };
+                        let _ = response_sender.send(Err(e));
+                        if let Some(db_err) = db_err {
+                            if !matches!(db_err.kind(), ErrorKind::TryAgain) {
+                                tracing::error!(
+                                    "exiting on fatal rocksdb error at {}: {}",
+                                    instance_path.display(),
+                                    db_err.display_with_causes(),
+                                );
+                                break;
+                            }
+                        }
+                    }
                 };
-
-                // TODO(maz): should we also terminate when retries are exhausted?
-                if let Some(fatal_error) = fatal_error {
-                    tracing::error!(
-                        "existing on fatal rocksdb error at {}: {}",
-                        instance_path.display(),
-                        fatal_error.display_with_causes(),
-                    );
-                    break;
-                }
             }
         }
     }
