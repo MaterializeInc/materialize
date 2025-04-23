@@ -12,35 +12,36 @@
     }
   },
   "active_rollup": null,
+  "active_gc": {
+    "seqno": 10059203251867891227,
+    "start_ms": 1878455986978951480
+  },
   "leased_readers": {
-    "r3b9055c3-f2d0-c1c1-5d06-5c1cb8cdf091": {
-      "seqno": 15511270333141132722,
+    "r402ff324-edf2-af06-78e9-d68879c48713": {
+      "seqno": 17771327442621445615,
       "since": {
         "elements": []
       },
-      "last_heartbeat_timestamp_ms": 8662477795737273825,
-      "lease_duration_ms": 15593392123826732429,
+      "last_heartbeat_timestamp_ms": 12867506293496889876,
+      "lease_duration_ms": 7889264083938172321,
       "debug": {
-        "hostname": "�.￡Ᾱ·্=",
-        "purpose": "𜷹rං½𐠞ㄐLȺ/𑴼🡙ߢU 𒐕"
-      }
-    },
-    "ra8c8391c-3bcd-ce8a-71e8-552bc99c6b91": {
-      "seqno": 7138512085361059752,
-      "since": {
-        "elements": [
-          10723427438306209868
-        ]
-      },
-      "last_heartbeat_timestamp_ms": 18414952732835041322,
-      "lease_duration_ms": 10686847298623436696,
-      "debug": {
-        "hostname": "/=:𑌹V¥=Q𑎮\"¥𐕼ખE&𑛆E⁶U𐮄ෆRs*𞹔ቔସ/",
-        "purpose": "ਠ/*𐋤്𝛦ΆÈ{:*n\""
+        "hostname": "𜷹rං½𐠞ㄐLȺ/𑴼🡙ߢU 𒐕",
+        "purpose": "nὥ#.Ꟑ\\𑵑+க𝘱3³=\\Ѩ\"¥𐕼ખE&𑛆E⁶"
       }
     }
   },
   "critical_readers": {
+    "c7896d4e9-d888-2152-76d5-5b6ed3089b0e": {
+      "since": {
+        "elements": []
+      },
+      "opaque": 18124812363366384449,
+      "opaque_codec": "Lh?v𑥃࠭🃳Ⱥត𐋤്𝛦ΆÈ{:*n\"",
+      "debug": {
+        "hostname": "ਏ$\"ງâ'𒀏{&}mL𑊘🟰𞻱𬖟ে",
+        "purpose": "2𞹒🪄ጾ1ૄ:எ&$𖾜{4<𞹙-ಇYઌલs=8*!"
+      }
+    },
     "c89429329-b351-54a3-0cc8-a24eaa7fec9f": {
       "since": {
         "elements": []
@@ -50,17 +51,6 @@
       "debug": {
         "hostname": "h>𑌅u_%NYº`FJ{�ףּ𝔁Ѩ%fե𑌔𞟤𐀼𞸛.�",
         "purpose": "?𑥁Ѩ*Ó:'គE𑍪𑼉"
-      }
-    },
-    "cbfc357bf-f99b-dbf4-f4e5-cd576c53ce5c": {
-      "since": {
-        "elements": []
-      },
-      "opaque": 1046797563000917596,
-      "opaque_codec": "﷏?𒀏{&}mL𑊘🟰𞻱𬖟ে='",
-      "debug": {
-        "hostname": "𐫯&{🄢.p:எ&$𖾜",
-        "purpose": "ౢ𞹙-ಇYઌલs=8*!"
       }
     }
   },

@@ -40,16 +40,17 @@ use crate::error::{CodecMismatch, CodecMismatchT};
 use crate::internal::metrics::Metrics;
 use crate::internal::paths::{PartialBatchKey, PartialRollupKey};
 use crate::internal::state::{
-    ActiveRollup, BatchPart, CriticalReaderState, EncodedSchemas, HandleDebugState, HollowBatch,
-    HollowBatchPart, HollowRollup, HollowRun, HollowRunRef, IdempotencyToken, LeasedReaderState,
-    OpaqueState, ProtoActiveRollup, ProtoCompaction, ProtoCriticalReaderState, ProtoEncodedSchemas,
-    ProtoHandleDebugState, ProtoHollowBatch, ProtoHollowBatchPart, ProtoHollowRollup,
-    ProtoHollowRun, ProtoHollowRunRef, ProtoIdHollowBatch, ProtoIdMerge, ProtoIdSpineBatch,
-    ProtoInlineBatchPart, ProtoInlinedDiffs, ProtoLeasedReaderState, ProtoMerge, ProtoRollup,
-    ProtoRunMeta, ProtoRunOrder, ProtoSpineBatch, ProtoSpineId, ProtoStateDiff, ProtoStateField,
-    ProtoStateFieldDiffType, ProtoStateFieldDiffs, ProtoTrace, ProtoU64Antichain,
-    ProtoU64Description, ProtoVersionedData, ProtoWriterState, RunMeta, RunOrder, RunPart, State,
-    StateCollections, TypedState, WriterState, proto_hollow_batch_part,
+    ActiveGc, ActiveRollup, BatchPart, CriticalReaderState, EncodedSchemas, HandleDebugState,
+    HollowBatch, HollowBatchPart, HollowRollup, HollowRun, HollowRunRef, IdempotencyToken,
+    LeasedReaderState, OpaqueState, ProtoActiveGc, ProtoActiveRollup, ProtoCompaction,
+    ProtoCriticalReaderState, ProtoEncodedSchemas, ProtoHandleDebugState, ProtoHollowBatch,
+    ProtoHollowBatchPart, ProtoHollowRollup, ProtoHollowRun, ProtoHollowRunRef, ProtoIdHollowBatch,
+    ProtoIdMerge, ProtoIdSpineBatch, ProtoInlineBatchPart, ProtoInlinedDiffs,
+    ProtoLeasedReaderState, ProtoMerge, ProtoRollup, ProtoRunMeta, ProtoRunOrder, ProtoSpineBatch,
+    ProtoSpineId, ProtoStateDiff, ProtoStateField, ProtoStateFieldDiffType, ProtoStateFieldDiffs,
+    ProtoTrace, ProtoU64Antichain, ProtoU64Description, ProtoVersionedData, ProtoWriterState,
+    RunMeta, RunOrder, RunPart, State, StateCollections, TypedState, WriterState,
+    proto_hollow_batch_part,
 };
 use crate::internal::state_diff::{
     ProtoStateFieldDiff, ProtoStateFieldDiffsWriter, StateDiff, StateFieldDiff, StateFieldValDiff,
@@ -331,6 +332,7 @@ impl<T: Timestamp + Codec64> RustType<ProtoStateDiff> for StateDiff<T> {
             latest_rollup_key,
             rollups,
             active_rollup,
+            active_gc,
             hostname,
             last_gc_req,
             leased_readers,
@@ -353,6 +355,7 @@ impl<T: Timestamp + Codec64> RustType<ProtoStateDiff> for StateDiff<T> {
         field_diffs_into_proto(ProtoStateField::LastGcReq, last_gc_req, &mut writer);
         field_diffs_into_proto(ProtoStateField::Rollups, rollups, &mut writer);
         field_diffs_into_proto(ProtoStateField::ActiveRollup, active_rollup, &mut writer);
+        field_diffs_into_proto(ProtoStateField::ActiveGc, active_gc, &mut writer);
         field_diffs_into_proto(ProtoStateField::LeasedReaders, leased_readers, &mut writer);
         field_diffs_into_proto(
             ProtoStateField::CriticalReaders,
@@ -419,6 +422,14 @@ impl<T: Timestamp + Codec64> RustType<ProtoStateDiff> for StateDiff<T> {
                         |()| Ok(()),
                         |v| v.into_rust(),
                     )?,
+                    ProtoStateField::ActiveGc => {
+                        field_diff_into_rust::<(), ProtoActiveGc, _, _, _, _>(
+                            diff,
+                            &mut state_diff.active_gc,
+                            |()| Ok(()),
+                            |v| v.into_rust(),
+                        )?
+                    }
                     ProtoStateField::ActiveRollup => {
                         field_diff_into_rust::<(), ProtoActiveRollup, _, _, _, _>(
                             diff,
@@ -856,6 +867,7 @@ impl<T: Timestamp + Lattice + Codec64> RustType<ProtoRollup> for Rollup<T> {
             diff_codec: self.state.diff_codec.into_proto(),
             last_gc_req: self.state.state.collections.last_gc_req.into_proto(),
             active_rollup: self.state.state.collections.active_rollup.into_proto(),
+            active_gc: self.state.state.collections.active_gc.into_proto(),
             rollups: self
                 .state
                 .state
@@ -950,9 +962,11 @@ impl<T: Timestamp + Lattice + Codec64> RustType<ProtoRollup> for Rollup<T> {
             .active_rollup
             .map(|rollup| rollup.into_rust())
             .transpose()?;
+        let active_gc = x.active_gc.map(|gc| gc.into_rust()).transpose()?;
         let collections = StateCollections {
             rollups,
             active_rollup,
+            active_gc,
             last_gc_req: x.last_gc_req.into_rust()?,
             leased_readers,
             critical_readers,
@@ -1713,6 +1727,22 @@ impl RustType<ProtoActiveRollup> for ActiveRollup {
 
     fn from_proto(proto: ProtoActiveRollup) -> Result<Self, TryFromProtoError> {
         Ok(ActiveRollup {
+            start_ms: proto.start_ms,
+            seqno: proto.seqno.into_rust()?,
+        })
+    }
+}
+
+impl RustType<ProtoActiveGc> for ActiveGc {
+    fn into_proto(&self) -> ProtoActiveGc {
+        ProtoActiveGc {
+            start_ms: self.start_ms,
+            seqno: self.seqno.into_proto(),
+        }
+    }
+
+    fn from_proto(proto: ProtoActiveGc) -> Result<Self, TryFromProtoError> {
+        Ok(ActiveGc {
             start_ms: proto.start_ms,
             seqno: proto.seqno.into_rust()?,
         })

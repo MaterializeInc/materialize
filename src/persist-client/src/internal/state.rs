@@ -105,6 +105,22 @@ pub(crate) const ROLLUP_USE_ACTIVE_ROLLUP: Config<bool> = Config::new(
     "Whether to use the new active rollup tracking mechanism.",
 );
 
+/// Determines how long to wait before an active GC is considered
+/// "stuck" and a new GC is started.
+pub(crate) const GC_FALLBACK_THRESHOLD_MS: Config<usize> = Config::new(
+    "persist_gc_fallback_threshold_ms",
+    5000,
+    "The number of milliseconds before a worker claims an already claimed GC.",
+);
+
+/// Feature flag the new active GC tracking mechanism.
+/// We musn't enable this until we are fully deployed on the new version.
+pub(crate) const GC_USE_ACTIVE_GC: Config<bool> = Config::new(
+    "persist_gc_use_active_gc",
+    false,
+    "Whether to use the new active GC tracking mechanism.",
+);
+
 /// A token to disambiguate state commands that could not otherwise be
 /// idempotent.
 #[derive(Arbitrary, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
@@ -1130,6 +1146,13 @@ pub struct ActiveRollup {
     pub start_ms: u64,
 }
 
+/// A garbage collection request that is currently being computed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Arbitrary, Serialize)]
+pub struct ActiveGc {
+    pub seqno: SeqNo,
+    pub start_ms: u64,
+}
+
 /// A sentinel for a state transition that was a no-op.
 ///
 /// Critically, this also indicates that the no-op state transition was not
@@ -1149,8 +1172,10 @@ pub struct StateCollections<T> {
     // - Invariant: There is a rollup with `seqno <= self.seqno_since`.
     pub(crate) rollups: BTreeMap<SeqNo, HollowRollup>,
 
-    /// The seqno of the rollup that is currently being computed.
+    /// The rollup that is currently being computed.
     pub(crate) active_rollup: Option<ActiveRollup>,
+    /// The gc request that is currently being computed.
+    pub(crate) active_gc: Option<ActiveGc>,
 
     pub(crate) leased_readers: BTreeMap<LeasedReaderId, LeasedReaderState<T>>,
     pub(crate) critical_readers: BTreeMap<CriticalReaderId, CriticalReaderState<T>>,
@@ -1249,6 +1274,10 @@ where
         if remove_rollups.is_empty() || self.is_tombstone() {
             return Break(NoOpStateTransition(vec![]));
         }
+
+        //This state transition is called at the end of the GC process, so we
+        //need to unset the `active_gc` field.
+        self.active_gc = None;
 
         let mut removed = vec![];
         for (seqno, key) in remove_rollups {
@@ -2180,6 +2209,7 @@ where
                 last_gc_req: SeqNo::minimum(),
                 rollups: BTreeMap::new(),
                 active_rollup: None,
+                active_gc: None,
                 leased_readers: BTreeMap::new(),
                 critical_readers: BTreeMap::new(),
                 writers: BTreeMap::new(),
@@ -2308,7 +2338,13 @@ where
     // them being executed in the order they are given. But it is expected that
     // gc assignments are best-effort respected. In practice, cmds like
     // register_foo or expire_foo, where it would be awkward, ignore gc.
-    pub fn maybe_gc(&mut self, is_write: bool) -> Option<GcReq> {
+    pub fn maybe_gc(
+        &mut self,
+        is_write: bool,
+        use_active_gc: bool,
+        fallback_threshold_ms: u64,
+        now: u64,
+    ) -> Option<GcReq> {
         // This is an arbitrary-ish threshold that scales with seqno, but never
         // gets particularly big. It probably could be much bigger and certainly
         // could use a tuning pass at some point.
@@ -2330,6 +2366,15 @@ where
         // the final rollup.
         let tombstone_needs_gc = self.collections.is_tombstone();
         let should_gc = should_gc || tombstone_needs_gc;
+        let should_gc = if use_active_gc {
+            should_gc
+                && match self.collections.active_gc {
+                    Some(active) => now.saturating_sub(active.start_ms) > fallback_threshold_ms,
+                    None => true,
+                }
+        } else {
+            should_gc
+        };
         if should_gc {
             self.collections.last_gc_req = new_seqno_since;
             Some(GcReq {
@@ -2549,6 +2594,7 @@ impl<T: Serialize + Timestamp + Lattice> Serialize for State<T> {
                     last_gc_req,
                     rollups,
                     active_rollup,
+                    active_gc,
                     leased_readers,
                     critical_readers,
                     writers,
@@ -2565,6 +2611,7 @@ impl<T: Serialize + Timestamp + Lattice> Serialize for State<T> {
         let () = s.serialize_field("last_gc_req", last_gc_req)?;
         let () = s.serialize_field("rollups", rollups)?;
         let () = s.serialize_field("active_rollup", active_rollup)?;
+        let () = s.serialize_field("active_gc", active_gc)?;
         let () = s.serialize_field("leased_readers", leased_readers)?;
         let () = s.serialize_field("critical_readers", critical_readers)?;
         let () = s.serialize_field("writers", writers)?;
@@ -2834,42 +2881,37 @@ pub(crate) mod tests {
     pub fn any_state<T: Arbitrary + Timestamp + Lattice>(
         num_trace_batches: Range<usize>,
     ) -> impl Strategy<Value = State<T>> {
-        Strategy::prop_map(
-            (
-                any::<ShardId>(),
-                any::<SeqNo>(),
-                any::<u64>(),
-                any::<String>(),
-                any::<SeqNo>(),
-                proptest::collection::btree_map(any::<SeqNo>(), any::<HollowRollup>(), 1..3),
-                proptest::option::of(any::<ActiveRollup>()),
-                proptest::collection::btree_map(
-                    any::<LeasedReaderId>(),
-                    any_leased_reader_state::<T>(),
-                    1..3,
-                ),
-                proptest::collection::btree_map(
-                    any::<CriticalReaderId>(),
-                    any_critical_reader_state::<T>(),
-                    1..3,
-                ),
-                proptest::collection::btree_map(any::<WriterId>(), any_writer_state::<T>(), 0..3),
-                proptest::collection::btree_map(any::<SchemaId>(), any_encoded_schemas(), 0..3),
-                any_trace::<T>(num_trace_batches),
+        let part1 = (
+            any::<ShardId>(),
+            any::<SeqNo>(),
+            any::<u64>(),
+            any::<String>(),
+            any::<SeqNo>(),
+            proptest::collection::btree_map(any::<SeqNo>(), any::<HollowRollup>(), 1..3),
+            proptest::option::of(any::<ActiveRollup>()),
+        );
+
+        let part2 = (
+            proptest::option::of(any::<ActiveGc>()),
+            proptest::collection::btree_map(
+                any::<LeasedReaderId>(),
+                any_leased_reader_state::<T>(),
+                1..3,
             ),
+            proptest::collection::btree_map(
+                any::<CriticalReaderId>(),
+                any_critical_reader_state::<T>(),
+                1..3,
+            ),
+            proptest::collection::btree_map(any::<WriterId>(), any_writer_state::<T>(), 0..3),
+            proptest::collection::btree_map(any::<SchemaId>(), any_encoded_schemas(), 0..3),
+            any_trace::<T>(num_trace_batches),
+        );
+
+        (part1, part2).prop_map(
             |(
-                shard_id,
-                seqno,
-                walltime_ms,
-                hostname,
-                last_gc_req,
-                rollups,
-                active_rollup,
-                leased_readers,
-                critical_readers,
-                writers,
-                schemas,
-                trace,
+                (shard_id, seqno, walltime_ms, hostname, last_gc_req, rollups, active_rollup),
+                (active_gc, leased_readers, critical_readers, writers, schemas, trace),
             )| State {
                 applier_version: semver::Version::new(1, 2, 3),
                 shard_id,
@@ -2880,11 +2922,12 @@ pub(crate) mod tests {
                     last_gc_req,
                     rollups,
                     active_rollup,
+                    active_gc,
                     leased_readers,
                     critical_readers,
                     writers,
-                    trace,
                     schemas,
+                    trace,
                 },
             },
         )
@@ -3589,7 +3632,114 @@ pub(crate) mod tests {
     }
 
     #[mz_ore::test]
-    fn maybe_gc() {
+    fn maybe_gc_active_gc() {
+        const GC_USE_ACTIVE_GC: bool = true;
+        const GC_FALLBACK_THRESHOLD_MS: u64 = 5000;
+        let now_fn = SYSTEM_TIME.clone();
+
+        let mut state = TypedState::<String, String, u64, i64>::new(
+            DUMMY_BUILD_INFO.semver_version(),
+            ShardId::new(),
+            "".to_owned(),
+            0,
+        );
+
+        let now = now_fn();
+        // Empty state doesn't need gc, regardless of is_write.
+        assert_eq!(
+            state.maybe_gc(true, GC_USE_ACTIVE_GC, GC_FALLBACK_THRESHOLD_MS, now),
+            None
+        );
+        assert_eq!(
+            state.maybe_gc(false, GC_USE_ACTIVE_GC, GC_FALLBACK_THRESHOLD_MS, now),
+            None
+        );
+
+        // Artificially advance the seqno so the seqno_since advances past our
+        // internal gc_threshold.
+        state.seqno = SeqNo(100);
+        assert_eq!(state.seqno_since(), SeqNo(100));
+
+        // When a writer is present, non-writes don't gc.
+        let writer_id = WriterId::new();
+        state.collections.compare_and_append(
+            &hollow(1, 2, &["key1"], 1),
+            &writer_id,
+            now,
+            LEASE_DURATION_MS,
+            &IdempotencyToken::new(),
+            &debug_state(),
+            0,
+            true,
+            100,
+            None,
+        );
+        assert_eq!(
+            state.maybe_gc(false, GC_USE_ACTIVE_GC, GC_FALLBACK_THRESHOLD_MS, now),
+            None
+        );
+
+        // A write will gc though.
+        assert_eq!(
+            state.maybe_gc(true, GC_USE_ACTIVE_GC, GC_FALLBACK_THRESHOLD_MS, now),
+            Some(GcReq {
+                shard_id: state.shard_id,
+                new_seqno_since: SeqNo(100)
+            })
+        );
+
+        // But if we write down an active gc, we won't gc.
+        state.collections.active_gc = Some(ActiveGc {
+            seqno: state.seqno,
+            start_ms: now,
+        });
+
+        state.seqno = SeqNo(200);
+        assert_eq!(state.seqno_since(), SeqNo(200));
+
+        assert_eq!(
+            state.maybe_gc(true, GC_USE_ACTIVE_GC, GC_FALLBACK_THRESHOLD_MS, now),
+            None
+        );
+
+        state.seqno = SeqNo(300);
+        assert_eq!(state.seqno_since(), SeqNo(300));
+        // But if we advance the time past the threshold, we will gc.
+        let new_now = now + GC_FALLBACK_THRESHOLD_MS + 1;
+        assert_eq!(
+            state.maybe_gc(true, GC_USE_ACTIVE_GC, GC_FALLBACK_THRESHOLD_MS, new_now),
+            Some(GcReq {
+                shard_id: state.shard_id,
+                new_seqno_since: SeqNo(300)
+            })
+        );
+
+        state.collections.active_gc = None;
+
+        // Artificially advance the seqno (again) so the seqno_since advances
+        // past our internal gc_threshold (again).
+        state.seqno = SeqNo(400);
+        assert_eq!(state.seqno_since(), SeqNo(400));
+
+        let now = now_fn();
+
+        // If there are no writers, even a non-write will gc.
+        let _ = state.collections.expire_writer(&writer_id);
+        assert_eq!(
+            state.maybe_gc(false, GC_USE_ACTIVE_GC, GC_FALLBACK_THRESHOLD_MS, now),
+            Some(GcReq {
+                shard_id: state.shard_id,
+                new_seqno_since: SeqNo(400)
+            })
+        );
+    }
+
+    #[mz_ore::test]
+    fn maybe_gc_classic() {
+        const GC_USE_ACTIVE_GC: bool = false;
+        const GC_FALLBACK_THRESHOLD_MS: u64 = 5000;
+        const NOW_MS: u64 = 0;
+
         let mut state = TypedState::<String, String, u64, i64>::new(
             DUMMY_BUILD_INFO.semver_version(),
             ShardId::new(),
@@ -3598,8 +3748,14 @@ pub(crate) mod tests {
         );
 
         // Empty state doesn't need gc, regardless of is_write.
-        assert_eq!(state.maybe_gc(true), None);
-        assert_eq!(state.maybe_gc(false), None);
+        assert_eq!(
+            state.maybe_gc(true, GC_USE_ACTIVE_GC, GC_FALLBACK_THRESHOLD_MS, NOW_MS),
+            None
+        );
+        assert_eq!(
+            state.maybe_gc(false, GC_USE_ACTIVE_GC, GC_FALLBACK_THRESHOLD_MS, NOW_MS),
+            None
+        );
 
         // Artificially advance the seqno so the seqno_since advances past our
         // internal gc_threshold.
@@ -3621,11 +3777,14 @@ pub(crate) mod tests {
             100,
             None,
         );
-        assert_eq!(state.maybe_gc(false), None);
+        assert_eq!(
+            state.maybe_gc(false, GC_USE_ACTIVE_GC, GC_FALLBACK_THRESHOLD_MS, NOW_MS),
+            None
+        );
 
         // A write will gc though.
         assert_eq!(
-            state.maybe_gc(true),
+            state.maybe_gc(true, GC_USE_ACTIVE_GC, GC_FALLBACK_THRESHOLD_MS, NOW_MS),
             Some(GcReq {
                 shard_id: state.shard_id,
                 new_seqno_since: SeqNo(100)
@@ -3640,7 +3799,7 @@ pub(crate) mod tests {
         // If there are no writers, even a non-write will gc.
         let _ = state.collections.expire_writer(&writer_id);
         assert_eq!(
-            state.maybe_gc(true),
+            state.maybe_gc(false, GC_USE_ACTIVE_GC, GC_FALLBACK_THRESHOLD_MS, NOW_MS),
             Some(GcReq {
                 shard_id: state.shard_id,
                 new_seqno_since: SeqNo(200)

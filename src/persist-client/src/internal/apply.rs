@@ -42,7 +42,10 @@ use crate::rpc::{PUBSUB_PUSH_DIFF_ENABLED, PubSubSender};
 use crate::schema::SchemaCache;
 use crate::{Diagnostics, PersistConfig, ShardId};
 
-use super::state::{ActiveRollup, ROLLUP_FALLBACK_THRESHOLD_MS, ROLLUP_USE_ACTIVE_ROLLUP};
+use super::state::{
+    ActiveGc, ActiveRollup, GC_FALLBACK_THRESHOLD_MS, GC_USE_ACTIVE_GC,
+    ROLLUP_FALLBACK_THRESHOLD_MS, ROLLUP_USE_ACTIVE_ROLLUP,
+};
 
 /// An applier of persist commands.
 ///
@@ -535,7 +538,19 @@ where
         // run though the loop (i.e. no `if let Some` here). When we
         // lose a CaS race, we might discover that the winner got
         // assigned the gc.
-        let garbage_collection = new_state.maybe_gc(is_write);
+        let garbage_collection = new_state.maybe_gc(
+            is_write,
+            GC_USE_ACTIVE_GC.get(cfg),
+            u64::cast_from(GC_FALLBACK_THRESHOLD_MS.get(cfg)),
+            now,
+        );
+
+        if garbage_collection.is_some() && GC_USE_ACTIVE_GC.get(cfg) {
+            new_state.collections.active_gc = Some(ActiveGc {
+                seqno: state.seqno,
+                start_ms: now,
+            });
+        }
 
         // NB: Make sure this is the very last thing before the
         // `try_compare_and_set_current` call. (In particular, it needs

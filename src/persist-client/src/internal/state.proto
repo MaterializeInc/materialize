@@ -154,6 +154,11 @@ message ProtoActiveRollup {
   uint64 start_ms = 2;
 }
 
+message ProtoActiveGC {
+  uint64 seqno = 1;
+  uint64 start_ms = 2;
+}
+
 message ProtoTrace {
   ProtoU64Antichain since = 1;
   repeated ProtoHollowBatch legacy_batches = 2;
@@ -222,6 +227,7 @@ message ProtoRollup {
   string hostname = 14;
   uint64 last_gc_req = 10;
   optional ProtoActiveRollup active_rollup = 19;
+  optional ProtoActiveGC active_gc = 20;
   map<uint64, ProtoHollowRollup> rollups = 16;
 
   ProtoTrace trace = 7;
