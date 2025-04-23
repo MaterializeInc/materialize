@@ -15,6 +15,7 @@ import json
 import os
 import signal
 import subprocess
+import threading
 import time
 from collections.abc import Sequence
 from pathlib import Path
@@ -84,7 +85,8 @@ COMPATIBLE_TESTDRIVE_FILES = [
     "joins.td",
     "jsonb.td",
     "list.td",
-    "load-generator-key-value.td",
+    # Flaky on Azure: https://buildkite.com/materialize/nightly/builds/11906#019661aa-2f41-43e1-b08f-6195c66a7ab9
+    # "load-generator-key-value.td",
     "logging.td",
     "map.td",
     "multijoins.td",
@@ -140,6 +142,25 @@ def testdrive(no_reset: bool) -> Testdrive:
 
 def get_tag(tag: str | None) -> str:
     return tag or f"v{ci_util.get_mz_version()}--pr.g{git.rev_parse('HEAD')}"
+
+
+def build_mz_debug_async(env: dict[str, str] | None = None) -> threading.Thread:
+    def run():
+        spawn.capture(
+            [
+                "cargo",
+                "build",
+                "--bin",
+                "mz-debug",
+            ],
+            cwd=MZ_ROOT,
+            stderr=subprocess.STDOUT,
+            env=env,
+        )
+
+    thread = threading.Thread(target=run)
+    thread.start()
+    return thread
 
 
 def run_mz_debug(env: dict[str, str] | None = None) -> None:
@@ -686,7 +707,10 @@ def workflow_aws_temporary(c: Composition, parser: WorkflowArgumentParser) -> No
     tag = get_tag(args.tag)
     path = MZ_ROOT / "test" / "terraform" / "aws-temporary"
     aws = AWS(path)
+    mz_debug_build_thread: threading.Thread | None = None
     try:
+        if args.run_mz_debug:
+            mz_debug_build_thread = build_mz_debug_async()
         aws.setup("aws-test", args.setup, tag)
         if args.test:
             print("--- Running tests")
@@ -718,6 +742,8 @@ def workflow_aws_temporary(c: Composition, parser: WorkflowArgumentParser) -> No
         aws.cleanup()
 
         if args.run_mz_debug:
+            assert mz_debug_build_thread
+            mz_debug_build_thread.join()
             run_mz_debug()
 
         if args.cleanup:
@@ -775,7 +801,10 @@ def workflow_aws_upgrade(c: Composition, parser: WorkflowArgumentParser) -> None
     tag = get_tag(args.tag)
     path = MZ_ROOT / "test" / "terraform" / "aws-upgrade"
     aws = AWS(path)
+    mz_debug_build_thread: threading.Thread | None = None
     try:
+        if args.run_mz_debug:
+            mz_debug_build_thread = build_mz_debug_async()
         aws.setup("aws-upgrade", args.setup, previous_tag)
         aws.upgrade(tag)
         if args.test:
@@ -812,6 +841,8 @@ def workflow_aws_upgrade(c: Composition, parser: WorkflowArgumentParser) -> None
         aws.cleanup()
 
         if args.run_mz_debug:
+            assert mz_debug_build_thread
+            mz_debug_build_thread.join()
             run_mz_debug()
 
         if args.cleanup:
@@ -997,7 +1028,10 @@ def workflow_gcp_temporary(c: Composition, parser: WorkflowArgumentParser) -> No
         f.write(gcp_service_account_json)
     os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = str(gcloud_creds_path)
 
+    mz_debug_build_thread: threading.Thread | None = None
     try:
+        if args.run_mz_debug:
+            mz_debug_build_thread = build_mz_debug_async()
         spawn.runv(["gcloud", "config", "set", "project", "materialize-ci"])
 
         spawn.runv(
@@ -1398,6 +1432,8 @@ def workflow_gcp_temporary(c: Composition, parser: WorkflowArgumentParser) -> No
             os.killpg(os.getpgid(balancerd_port_forward_process.pid), signal.SIGTERM)
 
         if args.run_mz_debug:
+            assert mz_debug_build_thread
+            mz_debug_build_thread.join()
             run_mz_debug()
 
         if args.cleanup:
@@ -1485,7 +1521,10 @@ def workflow_azure_temporary(c: Composition, parser: WorkflowArgumentParser) -> 
         env=venv_env,
     )
 
+    mz_debug_build_thread: threading.Thread | None = None
     try:
+        if args.run_mz_debug:
+            mz_debug_build_thread = build_mz_debug_async()
         if os.getenv("CI"):
             username = os.getenv("AZURE_SERVICE_ACCOUNT_USERNAME")
             password = os.getenv("AZURE_SERVICE_ACCOUNT_PASSWORD")
@@ -1914,6 +1953,8 @@ def workflow_azure_temporary(c: Composition, parser: WorkflowArgumentParser) -> 
             os.killpg(os.getpgid(balancerd_port_forward_process.pid), signal.SIGTERM)
 
         if args.run_mz_debug:
+            assert mz_debug_build_thread
+            mz_debug_build_thread.join()
             run_mz_debug(env=venv_env)
 
         if args.cleanup:
