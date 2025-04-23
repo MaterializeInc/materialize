@@ -516,11 +516,13 @@ where
             now,
         );
 
-        if write_rollup.is_some() && ROLLUP_USE_ACTIVE_ROLLUP.get(cfg) {
-            new_state.collections.active_rollup = Some(ActiveRollup {
-                seqno: state.seqno,
-                start_ms: now,
-            });
+        if let Some(write_rollup_seqno) = write_rollup {
+            if ROLLUP_USE_ACTIVE_ROLLUP.get(cfg) {
+                new_state.collections.active_rollup = Some(ActiveRollup {
+                    seqno: write_rollup_seqno,
+                    start_ms: now,
+                });
+            }
         }
 
         // Find out if this command has been selected to perform gc, so

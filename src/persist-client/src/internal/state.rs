@@ -2457,18 +2457,19 @@ where
         if use_active_rollup {
             // If sequnos_since_last_rollup>threshold, and there is no existing rollup in progress,
             // we should start a new rollup.
-            if seqnos_since_last_rollup > u64::cast_from(threshold)
-                && self.active_rollup().is_none()
-            {
-                return Some(self.seqno);
-            }
-
-            // If we have an active rollup, we need to check if it has been running too long.
+            // If there is an active rollup, we should check if it has been running too long.
             // If it has, we should start a new rollup.
             // This is to guard against a worker dying/taking too long/etc.
-            if let Some(active_rollup) = self.active_rollup() {
-                if now.checked_sub(active_rollup.start_ms).unwrap_or(0) > fallback_threshold_ms {
-                    return Some(self.seqno);
+            if seqnos_since_last_rollup > u64::cast_from(threshold) {
+                match self.active_rollup() {
+                    Some(active_rollup) => {
+                        if now.saturating_sub(active_rollup.start_ms) > fallback_threshold_ms {
+                            return Some(self.seqno);
+                        }
+                    }
+                    None => {
+                        return Some(self.seqno);
+                    }
                 }
             }
         } else {
