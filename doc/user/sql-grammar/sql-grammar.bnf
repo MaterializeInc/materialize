@@ -74,8 +74,6 @@ array_agg ::=
   'array_agg' '(' values  ( 'ORDER' 'BY' col_ref ( 'ASC' | 'DESC' )? ( 'NULLS LAST' | 'NULLS FIRST' )? ( ',' col_ref ( 'ASC' | 'DESC' )? ( 'NULLS LAST' | 'NULLS FIRST' )? )* )? ')' ('FILTER' '(' 'WHERE' filter_clause ')')?
 as_of ::=
   'AS' 'OF' ( 'AT' 'LEAST' )? timestamp_expression
-begin ::=
-  'BEGIN' ( transaction_mode ( ',' transaction_mode )* )?
 close ::=
   'CLOSE' cursor_name
 col_option ::=
@@ -87,8 +85,6 @@ comment_on ::=
     'INDEX' | 'MATERIALIZED VIEW' | 'NETWORK POLICY' | 'ROLE' | 'SCHEMA' | 'SECRET' | 'SINK' |
     'SOURCE' | 'TABLE' | 'TYPE' | 'VIEW'
   ) object_name 'IS' ( string_literal | 'NULL' )
-commit ::=
-  'COMMIT'
 copy_to_stdout ::=
   'COPY' '(' query ')' 'TO' 'STDOUT'
   ( 'WITH'? '(' field val ( ',' field val )* ')' )?
@@ -410,8 +406,6 @@ revoke_privilege ::=
   'REVOKE' ((privilege (',' privilege)*) | 'ALL' 'PRIVILEGES'? ) 'ON' ( ('TABLE'? | 'TYPE' | 'SECRET' | 'CONNECTION' | 'DATABASE' | 'SCHEMA' | 'CLUSTER') object_name (',' object_name)* | 'SYSTEM' | 'ALL' ('TABLES' | 'TYPES' | 'SECRETS' | 'CONNECTIONS') 'IN' 'SCHEMA' schema_name (',' schema_name)* | 'ALL' ('TABLES' | 'TYPES' | 'SECRETS' | 'CONNECTIONS' | 'SCHEMAS') 'IN' 'DATABASE' database_name (',' database_name)* | 'ALL' ('TABLES' | 'TYPES' | 'SECRETS' | 'CONNECTIONS' | 'DATABASES' | 'SCHEMAS' | 'CLUSTERS') ) 'FROM' 'GROUP'? role_name ( ',' 'GROUP'? role_name )*
 revoke_role ::=
   'REVOKE' role_name ( ',' role_name )* 'FROM' 'GROUP'? member_name ( ',' 'GROUP'? member_name )*
-rollback ::=
-  'ROLLBACK'
 select_stmt ::=
   ( select_with_ctes | select_with_recursive_ctes | simple_select_stmt )
 simple_select_stmt ::=
