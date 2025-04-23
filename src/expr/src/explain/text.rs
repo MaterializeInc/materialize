@@ -266,7 +266,7 @@ impl DisplayText<PlanRenderingContext<'_, MirRelationExpr>> for MirRelationExpr 
         f: &mut fmt::Formatter<'_>,
         ctx: &mut PlanRenderingContext<'_, MirRelationExpr>,
     ) -> fmt::Result {
-        if ctx.config.raw_syntax {
+        if ctx.config.verbose_syntax {
             self.fmt_verbose_syntax(f, ctx)
         } else {
             self.fmt_default_syntax(f, ctx)
@@ -277,11 +277,11 @@ impl DisplayText<PlanRenderingContext<'_, MirRelationExpr>> for MirRelationExpr 
 impl MirRelationExpr {
     fn fmt_default_syntax(
         &self,
-        _f: &mut fmt::Formatter<'_>,
-        _ctx: &mut PlanRenderingContext<'_, MirRelationExpr>,
+        f: &mut fmt::Formatter<'_>,
+        ctx: &mut PlanRenderingContext<'_, MirRelationExpr>,
     ) -> fmt::Result {
-        // TODO(mgree) @@@ finish
-        Ok(())
+        // TODO(mgree) MIR does not support a different default syntax (yet!)
+        self.fmt_verbose_syntax(f, ctx)
     }
 
     fn fmt_verbose_syntax(
