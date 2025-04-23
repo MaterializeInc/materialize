@@ -881,7 +881,7 @@ fn rocksdb_core_loop<K, V, M, O, IM, F>(
                         let _ = response_sender.send(Err(e));
                         if let Some(db_err) = db_err {
                             if !matches!(db_err.kind(), ErrorKind::TryAgain) {
-                                tracing::error!(
+                                tracing::warn!(
                                     "exiting on fatal rocksdb error at {}: {}",
                                     instance_path.display(),
                                     db_err.display_with_causes(),
