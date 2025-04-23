@@ -22,6 +22,7 @@
 //! create a [`SqlServerRowDecoder`] which will be used when running a source
 //! to efficiently decode [`tiberius::Row`]s into [`mz_repr::Row`]s.
 
+use base64::Engine;
 use chrono::SubsecRound;
 use dec::OrderedDecimal;
 use mz_ore::cast::CastFrom;
@@ -741,7 +742,7 @@ impl SqlServerColumnDecodeType {
                 .try_get(name)
                 .map_err(|_| SqlServerDecodeError::invalid_column(name, "bytes-text"))?
                 .map(|val: &[u8]| {
-                    let encoded = base64::encode(val);
+                    let encoded = base64::engine::general_purpose::STANDARD.encode(val);
                     arena.make_datum(|packer| packer.push(Datum::String(&encoded)))
                 }),
             (ScalarType::String, SqlServerColumnDecodeType::Numeric) => data

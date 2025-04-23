@@ -19,6 +19,7 @@ use std::sync::Arc;
 use arrow::array::{Array, ArrayRef, AsArray, BinaryArray, Int64Array};
 use arrow::buffer::OffsetBuffer;
 use arrow::datatypes::{DataType, Int64Type, ToByteSlice};
+use base64::Engine;
 use bytes::{BufMut, Bytes};
 use differential_dataflow::trace::Description;
 use mz_ore::bytes::SegmentedBytes;
@@ -786,7 +787,7 @@ pub fn encode_trace_inline_meta<T: Timestamp + Codec64>(batch: &BlobTraceBatchPa
         format_metadata,
     };
     let inline_encoded = inline.encode_to_vec();
-    base64::encode(inline_encoded)
+    base64::engine::general_purpose::STANDARD.encode(inline_encoded)
 }
 
 /// Decodes the inline metadata for a trace batch from a base64 string.
@@ -794,7 +795,9 @@ pub fn decode_trace_inline_meta(
     inline_base64: Option<&String>,
 ) -> Result<(ProtoBatchFormat, ProtoBatchPartInline), Error> {
     let inline_base64 = inline_base64.ok_or("missing batch metadata")?;
-    let inline_encoded = base64::decode(inline_base64).map_err(|err| err.to_string())?;
+    let inline_encoded = base64::engine::general_purpose::STANDARD
+        .decode(inline_base64)
+        .map_err(|err| err.to_string())?;
     let inline = ProtoBatchPartInline::decode(&*inline_encoded).map_err(|err| err.to_string())?;
     let format = ProtoBatchFormat::try_from(inline.format)
         .map_err(|_| Error::from(format!("unknown format: {}", inline.format)))?;
