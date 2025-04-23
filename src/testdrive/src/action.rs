@@ -776,7 +776,7 @@ impl Run for PosCommand {
                         consistency::skip_consistency_checks(builtin, state)
                     }
                     "check-shard-tombstone" => {
-                        consistency::run_check_shard_tombstoned(builtin, state).await
+                        consistency::run_check_shard_tombstone(builtin, state).await
                     }
                     "fivetran-destination" => {
                         fivetran::run_destination_command(builtin, state).await

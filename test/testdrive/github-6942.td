@@ -8,7 +8,7 @@
 # by the Apache License, Version 2.0.
 
 > DROP CLUSTER IF EXISTS gh_6942_cluster CASCADE;
-> CREATE CLUSTER gh_6942_cluster SIZE '1', REPLICATION FACTOR 1;
+> CREATE CLUSTER gh_6942_cluster SIZE '${arg.default-storage-size}', REPLICATION FACTOR 1;
 
 > CREATE SOURCE auction_house
   IN CLUSTER gh_6942_cluster

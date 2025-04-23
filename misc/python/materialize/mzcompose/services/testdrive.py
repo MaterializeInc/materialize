@@ -64,6 +64,7 @@ class Testdrive(Service):
         stop_grace_period: str = "120s",
         cluster_replica_size: dict[str, dict[str, Any]] | None = None,
         network_mode: str | None = None,
+        set_persist_urls: bool = True,
     ) -> None:
         depends_graph: dict[str, ServiceDependency] = {}
 
@@ -161,27 +162,30 @@ class Testdrive(Service):
                 f"--fivetran-destination-files-path={fivetran_destination_files_path}"
             )
 
-        if external_blob_store:
-            blob_store = "azurite" if blob_store_is_azure else "minio"
-            address = blob_store if external_blob_store == True else external_blob_store
-            persist_blob_url = (
-                azure_blob_uri(address)
-                if blob_store_is_azure
-                else minio_blob_uri(address)
-            )
-            entrypoint.append(f"--persist-blob-url={persist_blob_url}")
-        else:
-            entrypoint.append("--persist-blob-url=file:///mzdata/persist/blob")
+        if set_persist_urls:
+            if external_blob_store:
+                blob_store = "azurite" if blob_store_is_azure else "minio"
+                address = (
+                    blob_store if external_blob_store == True else external_blob_store
+                )
+                persist_blob_url = (
+                    azure_blob_uri(address)
+                    if blob_store_is_azure
+                    else minio_blob_uri(address)
+                )
+                entrypoint.append(f"--persist-blob-url={persist_blob_url}")
+            else:
+                entrypoint.append("--persist-blob-url=file:///mzdata/persist/blob")
 
-        if external_metadata_store:
-            depends_graph[metadata_store] = {"condition": "service_healthy"}
-            entrypoint.append(
-                "--persist-consensus-url=postgres://root@cockroach:26257?options=--search_path=consensus"
-            )
-        else:
-            entrypoint.append(
-                f"--persist-consensus-url=postgres://root@{mz_service}:26257?options=--search_path=consensus"
-            )
+            if external_metadata_store:
+                depends_graph[metadata_store] = {"condition": "service_healthy"}
+                entrypoint.append(
+                    "--persist-consensus-url=postgres://root@cockroach:26257?options=--search_path=consensus"
+                )
+            else:
+                entrypoint.append(
+                    f"--persist-consensus-url=postgres://root@{mz_service}:26257?options=--search_path=consensus"
+                )
 
         entrypoint.extend(entrypoint_extra)
 
