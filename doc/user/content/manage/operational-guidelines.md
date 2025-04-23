@@ -61,10 +61,9 @@ In production,
   and/or serves queries.
 
 - Separate upsert sources from other sources. Upsert sources have higher
-  resource requirements (since, for upsert sources, Materialize maintain each
-  key and associated last value for the key as well as to perform
-  deduplication). As such, if possible, use a separate source cluster for upsert
-  sources.
+  resource requirements (since, for upsert sources, Materialize maintains each
+  key and the key's last value as well as performs deduplication). As such, if
+  possible, use a separate source cluster for upsert sources.
 
 See also [Cluster architecture](#cluster-architecture).
 
@@ -72,7 +71,8 @@ See also [Cluster architecture](#cluster-architecture).
 
 ### Separate sinks from sources
 
-Avoid putting sinks on the same cluster that hosts sources.
+Avoid putting sinks on the same cluster that hosts sources to allow for
+[blue/green deployment](/manage/dbt/development-workflows/#bluegreen-deployments).
 
 See also [Cluster architecture](#cluster-architecture).
 
@@ -81,8 +81,10 @@ See also [Cluster architecture](#cluster-architecture).
 - For upsert sources, snapshotting is a resource-intensive operation that can
   require a significant amount of CPU and memory.
 
-- During hydration, materialized views require memory proportional to both the
-  input and output. When estimating required resources, consider both the
-  hydration cost and the steady-state cost.
+- During hydration (both initial and subsequent rehydrations), materialized
+  views require memory proportional to both the input and output. When
+  estimating required resources, consider both the hydration cost and the
+  steady-state cost.
 
-- During hydration, sinks need to load an entire snapshot of the data in memory.
+- During initial hydration, sinks need to load an entire snapshot of the data in
+  memory.

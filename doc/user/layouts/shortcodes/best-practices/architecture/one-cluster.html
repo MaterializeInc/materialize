@@ -12,8 +12,7 @@ objects, and query serving needs.
 
 - [Blue/green
   deployment](/manage/dbt/development-workflows#bluegreen-deployments) is
-  unsupported as sources (and sinks) would need to be dropped and recreated,
-  putting strain on your upstream system during source recreation.
+  unsupported since sources would need to be dropped and recreated, putting strain on your upstream system during source recreation.
 
   To support blue/green deployments, use a two-cluster architecture by moving
   compute objects to a new cluster (i.e., recreating compute objects in a new cluster).
