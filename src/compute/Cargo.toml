@@ -12,7 +12,7 @@ workspace = true
 [dependencies]
 anyhow = "1.0.98"
 async-stream = "0.3.6"
-bytesize = "1.3.0"
+bytesize = "2.0.1"
 columnar = "0.4.1"
 crossbeam-channel = "0.5.15"
 dec = { version = "0.4.8", features = ["serde"] }

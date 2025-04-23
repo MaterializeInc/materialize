@@ -39,7 +39,7 @@ uuid = { version = "1.16.0" }
 workspace-hack = { version = "0.0.0", path = "../workspace-hack", optional = true }
 
 [dev-dependencies]
-bytesize = "1.3.0"
+bytesize = "2.0.1"
 
 [package.metadata.cargo-udeps.ignore]
 normal = ["workspace-hack"]
