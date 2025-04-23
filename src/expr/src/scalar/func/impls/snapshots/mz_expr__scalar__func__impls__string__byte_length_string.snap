@@ -1,6 +1,6 @@
 ---
 source: src/expr/src/scalar/func/impls/string.rs
-expression: "#[sqlfunc(\n    sqlname = \"octet_length\",\n    preserves_uniqueness = false,\n    inverse = None,\n    is_monotone = false,\n)]\n#[allow(clippy::extra_unused_lifetimes)]\npub fn byte_length_string<'a>(a: &'a str) -> Result<i32, EvalError> {\n    {\n        let length = a.as_bytes().len();\n        i32::try_from(length)\n            .or(Err(EvalError::Int32OutOfRange(length.to_string().into())))\n    }\n}\n"
+expression: "#[sqlfunc(\n    sqlname = \"octet_length\",\n    preserves_uniqueness = false,\n    inverse = None,\n    is_monotone = false,\n)]\n#[allow(clippy::extra_unused_lifetimes)]\npub fn byte_length_string<'a>(a: &'a str) -> Result<i32, EvalError> {\n    {\n        let length = a.as_bytes().len();\n        i32::try_from(length)\n            .or_else(|_| Err(EvalError::Int32OutOfRange(length.to_string().into())))\n    }\n}\n"
 ---
 #[derive(
     proptest_derive::Arbitrary,
@@ -49,6 +49,6 @@ pub fn byte_length_string<'a>(a: &'a str) -> Result<i32, EvalError> {
     {
         let length = a.as_bytes().len();
         i32::try_from(length)
-            .or(Err(EvalError::Int32OutOfRange(length.to_string().into())))
+            .or_else(|_| Err(EvalError::Int32OutOfRange(length.to_string().into())))
     }
 }
