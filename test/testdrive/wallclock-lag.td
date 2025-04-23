@@ -15,8 +15,7 @@
 $ postgres-connect name=mz_system url=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
 
 $ postgres-execute connection=mz_system
-ALTER SYSTEM SET wallclock_lag_history_refresh_interval = '1s'
-ALTER SYSTEM SET wallclock_lag_histogram_refresh_interval = '1s'
+ALTER SYSTEM SET wallclock_lag_recording_interval = '1s'
 
 > CREATE CLUSTER storage SIZE '1'
 > CREATE CLUSTER compute SIZE '1', REPLICATION FACTOR 2

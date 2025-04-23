@@ -5333,6 +5333,7 @@ dependencies = [
  "anyhow",
  "async-trait",
  "bytesize",
+ "chrono",
  "crossbeam-channel",
  "derivative",
  "differential-dataflow",
