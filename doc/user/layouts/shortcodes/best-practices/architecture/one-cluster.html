@@ -8,7 +8,7 @@ objects, and query serving needs.
 
 **Limitations of a single cluster architecture** include:
 
-- Sources, compute, and queries compete for cluster resources.
+- Sources, compute objects, and queries compete for cluster resources.
 
 - [Blue/green
   deployment](/manage/dbt/development-workflows#bluegreen-deployments) is
@@ -16,4 +16,4 @@ objects, and query serving needs.
   putting strain on your upstream system during source recreation.
 
   To support blue/green deployments, use a two-cluster architecture by moving
-  the compute to a new cluster.
+  compute objects to a new cluster (i.e., recreating compute objects in a new cluster).
