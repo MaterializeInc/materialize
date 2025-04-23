@@ -2438,7 +2438,7 @@ where
         &self,
         threshold: usize,
         use_active_rollup: bool,
-        fallback_threshold_ms: usize,
+        fallback_threshold_ms: u64,
         now: u64,
     ) -> Option<SeqNo> {
         let (latest_rollup_seqno, _) = self.latest_rollup();
@@ -2467,7 +2467,7 @@ where
             // If it has, we should start a new rollup.
             // This is to guard against a worker dying/taking too long/etc.
             if let Some(active_rollup) = self.active_rollup() {
-                if active_rollup.start_ms + u64::cast_from(fallback_threshold_ms) > now {
+                if now.checked_sub(active_rollup.start_ms).unwrap_or(0) > fallback_threshold_ms {
                     return Some(self.seqno);
                 }
             }
@@ -3648,10 +3648,160 @@ pub(crate) mod tests {
     }
 
     #[mz_ore::test]
+    fn need_rollup_active_rollup() {
+        const ROLLUP_THRESHOLD: usize = 3;
+        const ROLLUP_USE_ACTIVE_ROLLUP: bool = true;
+        const ROLLUP_FALLBACK_THRESHOLD_MS: u64 = 5000;
+        let now = SYSTEM_TIME.clone();
+
+        mz_ore::test::init_logging();
+        let mut state = TypedState::<String, String, u64, i64>::new(
+            DUMMY_BUILD_INFO.semver_version(),
+            ShardId::new(),
+            "".to_owned(),
+            0,
+        );
+
+        let rollup_seqno = SeqNo(5);
+        let rollup = HollowRollup {
+            key: PartialRollupKey::new(rollup_seqno, &RollupId::new()),
+            encoded_size_bytes: None,
+        };
+
+        assert!(
+            state
+                .collections
+                .add_rollup((rollup_seqno, &rollup))
+                .is_continue()
+        );
+
+        // shouldn't need a rollup at the seqno of the rollup
+        state.seqno = SeqNo(5);
+        assert_none!(state.need_rollup(
+            ROLLUP_THRESHOLD,
+            ROLLUP_USE_ACTIVE_ROLLUP,
+            ROLLUP_FALLBACK_THRESHOLD_MS,
+            now()
+        ));
+
+        // shouldn't need a rollup at seqnos less than our threshold
+        state.seqno = SeqNo(6);
+        assert_none!(state.need_rollup(
+            ROLLUP_THRESHOLD,
+            ROLLUP_USE_ACTIVE_ROLLUP,
+            ROLLUP_FALLBACK_THRESHOLD_MS,
+            now()
+        ));
+        state.seqno = SeqNo(7);
+        assert_none!(state.need_rollup(
+            ROLLUP_THRESHOLD,
+            ROLLUP_USE_ACTIVE_ROLLUP,
+            ROLLUP_FALLBACK_THRESHOLD_MS,
+            now()
+        ));
+        state.seqno = SeqNo(8);
+        assert_none!(state.need_rollup(
+            ROLLUP_THRESHOLD,
+            ROLLUP_USE_ACTIVE_ROLLUP,
+            ROLLUP_FALLBACK_THRESHOLD_MS,
+            now()
+        ));
+
+        let mut current_time = now();
+        // hit our threshold! we should need a rollup
+        state.seqno = SeqNo(9);
+        assert_eq!(
+            state
+                .need_rollup(
+                    ROLLUP_THRESHOLD,
+                    ROLLUP_USE_ACTIVE_ROLLUP,
+                    ROLLUP_FALLBACK_THRESHOLD_MS,
+                    current_time
+                )
+                .expect("rollup"),
+            SeqNo(9)
+        );
+
+        state.collections.active_rollup = Some(ActiveRollup {
+            seqno: SeqNo(9),
+            start_ms: current_time,
+        });
+
+        // There is now an active rollup, so we shouldn't need a rollup.
+        assert_none!(state.need_rollup(
+            ROLLUP_THRESHOLD,
+            ROLLUP_USE_ACTIVE_ROLLUP,
+            ROLLUP_FALLBACK_THRESHOLD_MS,
+            current_time
+        ));
+
+        state.seqno = SeqNo(10);
+        // We still don't need a rollup, even though the seqno is greater than
+        // the rollup threshold.
+        assert_none!(state.need_rollup(
+            ROLLUP_THRESHOLD,
+            ROLLUP_USE_ACTIVE_ROLLUP,
+            ROLLUP_FALLBACK_THRESHOLD_MS,
+            current_time
+        ));
+
+        // But if we wait long enough, we should need a rollup again.
+        current_time += u64::cast_from(ROLLUP_FALLBACK_THRESHOLD_MS) + 1;
+        assert_eq!(
+            state
+                .need_rollup(
+                    ROLLUP_THRESHOLD,
+                    ROLLUP_USE_ACTIVE_ROLLUP,
+                    ROLLUP_FALLBACK_THRESHOLD_MS,
+                    current_time
+                )
+                .expect("rollup"),
+            SeqNo(10)
+        );
+
+        state.seqno = SeqNo(9);
+        // Clear the active rollup and ensure we need a rollup again.
+        state.collections.active_rollup = None;
+        let rollup_seqno = SeqNo(9);
+        let rollup = HollowRollup {
+            key: PartialRollupKey::new(rollup_seqno, &RollupId::new()),
+            encoded_size_bytes: None,
+        };
+        assert!(
+            state
+                .collections
+                .add_rollup((rollup_seqno, &rollup))
+                .is_continue()
+        );
+
+        state.seqno = SeqNo(11);
+        // We shouldn't need a rollup at seqnos less than our threshold
+        assert_none!(state.need_rollup(
+            ROLLUP_THRESHOLD,
+            ROLLUP_USE_ACTIVE_ROLLUP,
+            ROLLUP_FALLBACK_THRESHOLD_MS,
+            current_time
+        ));
+        // hit our threshold! we should need a rollup
+        state.seqno = SeqNo(13);
+        assert_eq!(
+            state
+                .need_rollup(
+                    ROLLUP_THRESHOLD,
+                    ROLLUP_USE_ACTIVE_ROLLUP,
+                    ROLLUP_FALLBACK_THRESHOLD_MS,
+                    current_time
+                )
+                .expect("rollup"),
+            SeqNo(13)
+        );
+    }
+
+    #[mz_ore::test]
     fn need_rollup_classic() {
         const ROLLUP_THRESHOLD: usize = 3;
         const ROLLUP_USE_ACTIVE_ROLLUP: bool = false;
-        const ROLLUP_FALLBACK_THRESHOLD_MS: usize = 0;
+        const ROLLUP_FALLBACK_THRESHOLD_MS: u64 = 0;
         const NOW: u64 = 0;
 
         mz_ore::test::init_logging();

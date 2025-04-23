@@ -512,7 +512,7 @@ where
         let write_rollup = new_state.need_rollup(
             ROLLUP_THRESHOLD.get(cfg),
             ROLLUP_USE_ACTIVE_ROLLUP.get(cfg),
-            ROLLUP_FALLBACK_THRESHOLD_MS.get(cfg),
+            u64::cast_from(ROLLUP_FALLBACK_THRESHOLD_MS.get(cfg)),
             now,
         );
 
