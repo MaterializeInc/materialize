@@ -149,13 +149,13 @@ ci_collapsed_heading ":docker: Purging all existing docker containers and volume
 docker ps --all --quiet | xargs --no-run-if-empty docker rm --force --volumes
 
 if [ "$BUILDKITE_STEP_KEY" = "terraform-aws" ]; then
-  run run aws-temporary --no-setup --no-run-testdrive-files || true
+  run run aws-temporary --no-setup --no-test --no-mz-debug || true
 elif [ "$BUILDKITE_STEP_KEY" = "terraform-aws-upgrade" ]; then
-  run run aws-upgrade --no-setup --no-run-testdrive-files || true
+  run run aws-upgrade --no-setup --no-test --no-mz-debug || true
 elif [ "$BUILDKITE_STEP_KEY" = "terraform-gcp" ]; then
-  run run gcp-temporary --no-setup --no-run-testdrive-files || true
+  run run gcp-temporary --no-setup --no-test --no-mz-debug || true
 elif [ "$BUILDKITE_STEP_KEY" = "terraform-azure" ]; then
-  run run azure-temporary --no-setup --no-run-testdrive-files || true
+  run run azure-temporary --no-setup --no-test --no-mz-debug || true
 fi
 rm -rf ~/.kube # Remove potential state from E2E Terraform tests
 

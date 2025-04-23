@@ -104,7 +104,8 @@ COMPATIBLE_TESTDRIVE_FILES = [
     "tpch.td",
     "type_char_quoted.td",
     "version.td",
-    "webhook.td",
+    # Hangs on GCP in check-shard-tombstone
+    # "webhook.td",
 ]
 
 
@@ -142,7 +143,7 @@ def get_tag(tag: str | None) -> str:
 
 
 def run_mz_debug(env: dict[str, str] | None = None) -> None:
-    print("-- Running mz-debug")
+    print("--- Running mz-debug")
     try:
         # mz-debug (and its compilation) is rather noisy, so ignore the output
         spawn.capture(
@@ -593,6 +594,7 @@ class AWS:
             with conn.cursor() as cur:
                 # Required for some testdrive tests
                 cur.execute("ALTER CLUSTER mz_system SET (REPLICATION FACTOR 2)")
+                cur.execute("ALTER SYSTEM SET enable_create_table_from_source = true")
 
         c.up("testdrive", persistent=True)
         c.testdrive(
@@ -650,10 +652,22 @@ def workflow_aws_temporary(c: Composition, parser: WorkflowArgumentParser) -> No
         help="Destroy the region at the end of the workflow.",
     )
     parser.add_argument(
+        "--test",
+        default=True,
+        action=argparse.BooleanOptionalAction,
+        help="Run the actual test part",
+    )
+    parser.add_argument(
         "--run-testdrive-files",
         default=True,
         action=argparse.BooleanOptionalAction,
         help="Run testdrive files",
+    )
+    parser.add_argument(
+        "--run-mz-debug",
+        default=True,
+        action=argparse.BooleanOptionalAction,
+        help="Run mz-debug",
     )
     parser.add_argument(
         "--tag",
@@ -674,35 +688,37 @@ def workflow_aws_temporary(c: Composition, parser: WorkflowArgumentParser) -> No
     aws = AWS(path)
     try:
         aws.setup("aws-test", args.setup, tag)
-        print("--- Running tests")
-        with c.override(testdrive(no_reset=False)):
-            aws.connect(c)
+        if args.test:
+            print("--- Running tests")
+            with c.override(testdrive(no_reset=False)):
+                aws.connect(c)
 
-            with psycopg.connect(
-                "postgres://materialize@127.0.0.1:6875/materialize"
-            ) as conn:
-                with conn.cursor() as cur:
-                    cur.execute("SELECT 1")
-                    results = cur.fetchall()
-                    assert results == [(1,)], results
-                    cur.execute("SELECT mz_version()")
-                    version = cur.fetchall()[0][0]
-                    assert version.startswith(tag.split("--")[0] + " ")
-                    with open(
-                        MZ_ROOT / "misc" / "helm-charts" / "operator" / "Chart.yaml"
-                    ) as f:
-                        content = yaml.load(f, Loader=yaml.Loader)
-                        helm_chart_version = content["version"]
-                    assert version.endswith(
-                        f", helm chart: {helm_chart_version})"
-                    ), f"Actual version: {version}, expected to contain {helm_chart_version}"
+                with psycopg.connect(
+                    "postgres://materialize@127.0.0.1:6875/materialize"
+                ) as conn:
+                    with conn.cursor() as cur:
+                        cur.execute("SELECT 1")
+                        results = cur.fetchall()
+                        assert results == [(1,)], results
+                        cur.execute("SELECT mz_version()")
+                        version = cur.fetchall()[0][0]
+                        assert version.startswith(tag.split("--")[0] + " ")
+                        with open(
+                            MZ_ROOT / "misc" / "helm-charts" / "operator" / "Chart.yaml"
+                        ) as f:
+                            content = yaml.load(f, Loader=yaml.Loader)
+                            helm_chart_version = content["version"]
+                        assert version.endswith(
+                            f", helm chart: {helm_chart_version})"
+                        ), f"Actual version: {version}, expected to contain {helm_chart_version}"
 
-            if args.run_testdrive_files:
-                c.run_testdrive_files(*TD_CMD, *args.files)
+                if args.run_testdrive_files:
+                    c.run_testdrive_files(*TD_CMD, *args.files)
     finally:
         aws.cleanup()
 
-        run_mz_debug()
+        if args.run_mz_debug:
+            run_mz_debug()
 
         if args.cleanup:
             aws.destroy()
@@ -721,6 +737,24 @@ def workflow_aws_upgrade(c: Composition, parser: WorkflowArgumentParser) -> None
         default=True,
         action=argparse.BooleanOptionalAction,
         help="Destroy the region at the end of the workflow.",
+    )
+    parser.add_argument(
+        "--test",
+        default=True,
+        action=argparse.BooleanOptionalAction,
+        help="Run the actual test part",
+    )
+    parser.add_argument(
+        "--run-testdrive-files",
+        default=True,
+        action=argparse.BooleanOptionalAction,
+        help="Run testdrive files",
+    )
+    parser.add_argument(
+        "--run-mz-debug",
+        default=True,
+        action=argparse.BooleanOptionalAction,
+        help="Run mz-debug",
     )
     parser.add_argument(
         "--tag",
@@ -744,38 +778,41 @@ def workflow_aws_upgrade(c: Composition, parser: WorkflowArgumentParser) -> None
     try:
         aws.setup("aws-upgrade", args.setup, previous_tag)
         aws.upgrade(tag)
-        # Try waiting a bit, otherwise connection error, should be handled better
-        time.sleep(180)
-        print("--- Running tests")
-        with c.override(testdrive(no_reset=False)):
-            aws.connect(c)
+        if args.test:
+            # Try waiting a bit, otherwise connection error, should be handled better
+            time.sleep(180)
+            print("--- Running tests")
+            with c.override(testdrive(no_reset=False)):
+                aws.connect(c)
 
-            with psycopg.connect(
-                "postgres://materialize@127.0.0.1:6875/materialize"
-            ) as conn:
-                with conn.cursor() as cur:
-                    cur.execute("SELECT 1")
-                    results = cur.fetchall()
-                    assert results == [(1,)], results
-                    cur.execute("SELECT mz_version()")
-                    version = cur.fetchall()[0][0]
-                    assert version.startswith(
-                        tag.split("--")[0] + " "
-                    ), f"Version expected to start with {tag.split('--')[0]}, but is actually {version}"
-                    with open(
-                        MZ_ROOT / "misc" / "helm-charts" / "operator" / "Chart.yaml"
-                    ) as f:
-                        content = yaml.load(f, Loader=yaml.Loader)
-                        helm_chart_version = content["version"]
-                    assert version.endswith(
-                        f", helm chart: {helm_chart_version})"
-                    ), f"Actual version: {version}, expected to contain {helm_chart_version}"
+                with psycopg.connect(
+                    "postgres://materialize@127.0.0.1:6875/materialize"
+                ) as conn:
+                    with conn.cursor() as cur:
+                        cur.execute("SELECT 1")
+                        results = cur.fetchall()
+                        assert results == [(1,)], results
+                        cur.execute("SELECT mz_version()")
+                        version = cur.fetchall()[0][0]
+                        assert version.startswith(
+                            tag.split("--")[0] + " "
+                        ), f"Version expected to start with {tag.split('--')[0]}, but is actually {version}"
+                        with open(
+                            MZ_ROOT / "misc" / "helm-charts" / "operator" / "Chart.yaml"
+                        ) as f:
+                            content = yaml.load(f, Loader=yaml.Loader)
+                            helm_chart_version = content["version"]
+                        assert version.endswith(
+                            f", helm chart: {helm_chart_version})"
+                        ), f"Actual version: {version}, expected to contain {helm_chart_version}"
 
-            c.run_testdrive_files(*TD_CMD, *args.files)
+                if args.run_testdrive_files:
+                    c.run_testdrive_files(*TD_CMD, *args.files)
     finally:
         aws.cleanup()
 
-        run_mz_debug()
+        if args.run_mz_debug:
+            run_mz_debug()
 
         if args.cleanup:
             aws.destroy()
@@ -913,10 +950,22 @@ def workflow_gcp_temporary(c: Composition, parser: WorkflowArgumentParser) -> No
         help="Destroy the region at the end of the workflow.",
     )
     parser.add_argument(
+        "--test",
+        default=True,
+        action=argparse.BooleanOptionalAction,
+        help="Run the actual test part",
+    )
+    parser.add_argument(
         "--run-testdrive-files",
         default=True,
         action=argparse.BooleanOptionalAction,
         help="Run testdrive files",
+    )
+    parser.add_argument(
+        "--run-mz-debug",
+        default=True,
+        action=argparse.BooleanOptionalAction,
+        help="Run mz-debug",
     )
     parser.add_argument(
         "--tag",
@@ -1226,125 +1275,130 @@ def workflow_gcp_temporary(c: Composition, parser: WorkflowArgumentParser) -> No
                         print(f"Failed to get logs for {pod_name}")
                 raise ValueError("Never completed")
 
-        print("--- Running tests")
-        environmentd_name = spawn.capture(
-            [
-                "kubectl",
-                "get",
-                "pods",
-                "-l",
-                "app=environmentd",
-                "-n",
-                "materialize-environment",
-                "-o",
-                "jsonpath={.items[*].metadata.name}",
-            ],
-            cwd=path,
-        )
-
-        balancerd_name = spawn.capture(
-            [
-                "kubectl",
-                "get",
-                "pods",
-                "-l",
-                "app=balancerd",
-                "-n",
-                "materialize-environment",
-                "-o",
-                "jsonpath={.items[*].metadata.name}",
-            ],
-            cwd=path,
-        )
-        # error: arguments in resource/name form must have a single resource and name
-        print(f"Got balancerd name: {balancerd_name}")
-
-        environmentd_port_forward_process = subprocess.Popen(
-            [
-                "kubectl",
-                "port-forward",
-                f"pod/{environmentd_name}",
-                "-n",
-                "materialize-environment",
-                "6877:6877",
-                "6878:6878",
-            ],
-            preexec_fn=os.setpgrp,
-        )
-        balancerd_port_forward_process = subprocess.Popen(
-            [
-                "kubectl",
-                "port-forward",
-                f"pod/{balancerd_name}",
-                "-n",
-                "materialize-environment",
-                "6875:6875",
-                "6876:6876",
-            ],
-            preexec_fn=os.setpgrp,
-        )
-        time.sleep(10)
-
-        with psycopg.connect(
-            "postgres://mz_system:materialize@127.0.0.1:6877/materialize",
-            autocommit=True,
-        ) as conn:
-            with conn.cursor() as cur:
-                # Required for some testdrive tests
-                cur.execute("ALTER CLUSTER mz_system SET (REPLICATION FACTOR 2)")
-
-        with c.override(
-            Testdrive(
-                materialize_url="postgres://materialize@127.0.0.1:6875/materialize",
-                materialize_url_internal="postgres://mz_system:materialize@127.0.0.1:6877/materialize",
-                materialize_use_https=False,
-                no_consistency_checks=True,
-                network_mode="host",
-                volume_workdir="../testdrive:/workdir",
-                # For full testdrive support we'll need:
-                # kafka_url=...
-                # schema_registry_url=...
-                # aws_endpoint=...
+        if args.test:
+            print("--- Running tests")
+            environmentd_name = spawn.capture(
+                [
+                    "kubectl",
+                    "get",
+                    "pods",
+                    "-l",
+                    "app=environmentd",
+                    "-n",
+                    "materialize-environment",
+                    "-o",
+                    "jsonpath={.items[*].metadata.name}",
+                ],
+                cwd=path,
             )
-        ):
-            c.up("testdrive", persistent=True)
-            c.testdrive(
-                dedent(
-                    """
-               > SELECT 1
-               1
-            """
-                )
+
+            balancerd_name = spawn.capture(
+                [
+                    "kubectl",
+                    "get",
+                    "pods",
+                    "-l",
+                    "app=balancerd",
+                    "-n",
+                    "materialize-environment",
+                    "-o",
+                    "jsonpath={.items[*].metadata.name}",
+                ],
+                cwd=path,
             )
+            # error: arguments in resource/name form must have a single resource and name
+            print(f"Got balancerd name: {balancerd_name}")
+
+            environmentd_port_forward_process = subprocess.Popen(
+                [
+                    "kubectl",
+                    "port-forward",
+                    f"pod/{environmentd_name}",
+                    "-n",
+                    "materialize-environment",
+                    "6877:6877",
+                    "6878:6878",
+                ],
+                preexec_fn=os.setpgrp,
+            )
+            balancerd_port_forward_process = subprocess.Popen(
+                [
+                    "kubectl",
+                    "port-forward",
+                    f"pod/{balancerd_name}",
+                    "-n",
+                    "materialize-environment",
+                    "6875:6875",
+                    "6876:6876",
+                ],
+                preexec_fn=os.setpgrp,
+            )
+            time.sleep(10)
 
             with psycopg.connect(
-                "postgres://materialize@127.0.0.1:6875/materialize"
+                "postgres://mz_system:materialize@127.0.0.1:6877/materialize",
+                autocommit=True,
             ) as conn:
                 with conn.cursor() as cur:
-                    cur.execute("SELECT 1")
-                    results = cur.fetchall()
-                    assert results == [(1,)], results
-                    cur.execute("SELECT mz_version()")
-                    version = cur.fetchall()[0][0]
-                    assert version.startswith(tag.split("--")[0] + " ")
-                    with open(
-                        MZ_ROOT / "misc" / "helm-charts" / "operator" / "Chart.yaml"
-                    ) as f:
-                        content = yaml.load(f, Loader=yaml.Loader)
-                        helm_chart_version = content["version"]
-                    assert version.endswith(
-                        f", helm chart: {helm_chart_version})"
-                    ), f"Actual version: {version}, expected to contain {helm_chart_version}"
+                    # Required for some testdrive tests
+                    cur.execute("ALTER CLUSTER mz_system SET (REPLICATION FACTOR 2)")
+                    cur.execute(
+                        "ALTER SYSTEM SET enable_create_table_from_source = true"
+                    )
 
-            if args.run_testdrive_files:
-                c.run_testdrive_files(*TD_CMD, *args.files)
+            with c.override(
+                Testdrive(
+                    materialize_url="postgres://materialize@127.0.0.1:6875/materialize",
+                    materialize_url_internal="postgres://mz_system:materialize@127.0.0.1:6877/materialize",
+                    materialize_use_https=False,
+                    no_consistency_checks=True,
+                    network_mode="host",
+                    volume_workdir="../testdrive:/workdir",
+                    # For full testdrive support we'll need:
+                    # kafka_url=...
+                    # schema_registry_url=...
+                    # aws_endpoint=...
+                )
+            ):
+                c.up("testdrive", persistent=True)
+                c.testdrive(
+                    dedent(
+                        """
+                   > SELECT 1
+                   1
+                """
+                    )
+                )
+
+                with psycopg.connect(
+                    "postgres://materialize@127.0.0.1:6875/materialize"
+                ) as conn:
+                    with conn.cursor() as cur:
+                        cur.execute("SELECT 1")
+                        results = cur.fetchall()
+                        assert results == [(1,)], results
+                        cur.execute("SELECT mz_version()")
+                        version = cur.fetchall()[0][0]
+                        assert version.startswith(tag.split("--")[0] + " ")
+                        with open(
+                            MZ_ROOT / "misc" / "helm-charts" / "operator" / "Chart.yaml"
+                        ) as f:
+                            content = yaml.load(f, Loader=yaml.Loader)
+                            helm_chart_version = content["version"]
+                        assert version.endswith(
+                            f", helm chart: {helm_chart_version})"
+                        ), f"Actual version: {version}, expected to contain {helm_chart_version}"
+
+                if args.run_testdrive_files:
+                    c.run_testdrive_files(*TD_CMD, *args.files)
     finally:
         if environmentd_port_forward_process:
             os.killpg(os.getpgid(environmentd_port_forward_process.pid), signal.SIGTERM)
         if balancerd_port_forward_process:
             os.killpg(os.getpgid(balancerd_port_forward_process.pid), signal.SIGTERM)
 
-        run_mz_debug()
+        if args.run_mz_debug:
+            run_mz_debug()
 
         if args.cleanup:
             print("--- Cleaning up")
@@ -1383,10 +1437,22 @@ def workflow_azure_temporary(c: Composition, parser: WorkflowArgumentParser) -> 
         help="Destroy the region at the end of the workflow.",
     )
     parser.add_argument(
+        "--test",
+        default=True,
+        action=argparse.BooleanOptionalAction,
+        help="Run the actual test part",
+    )
+    parser.add_argument(
         "--run-testdrive-files",
         default=True,
         action=argparse.BooleanOptionalAction,
         help="Run testdrive files",
+    )
+    parser.add_argument(
+        "--run-mz-debug",
+        default=True,
+        action=argparse.BooleanOptionalAction,
+        help="Run mz-debug",
     )
     parser.add_argument(
         "--tag",
@@ -1600,7 +1666,7 @@ def workflow_azure_temporary(c: Composition, parser: WorkflowArgumentParser) -> 
                 stdin=yaml.dump(materialize_environment).encode(),
                 env=venv_env,
             )
-            for i in range(60):
+            for i in range(120):
                 try:
                     spawn.runv(
                         [
@@ -1618,7 +1684,7 @@ def workflow_azure_temporary(c: Composition, parser: WorkflowArgumentParser) -> 
                     time.sleep(1)
             else:
                 raise ValueError("Never completed")
-            for i in range(180):
+            for i in range(240):
                 try:
                     spawn.runv(
                         ["kubectl", "get", "pods", "-n", "materialize-environment"],
@@ -1720,130 +1786,135 @@ def workflow_azure_temporary(c: Composition, parser: WorkflowArgumentParser) -> 
                 )
                 raise ValueError("Never completed")
 
-        print("--- Running tests")
-        environmentd_name = spawn.capture(
-            [
-                "kubectl",
-                "get",
-                "pods",
-                "-l",
-                "app=environmentd",
-                "-n",
-                "materialize-environment",
-                "-o",
-                "jsonpath={.items[*].metadata.name}",
-            ],
-            cwd=path,
-            env=venv_env,
-        )
-
-        balancerd_name = spawn.capture(
-            [
-                "kubectl",
-                "get",
-                "pods",
-                "-l",
-                "app=balancerd",
-                "-n",
-                "materialize-environment",
-                "-o",
-                "jsonpath={.items[*].metadata.name}",
-            ],
-            cwd=path,
-            env=venv_env,
-        )
-        # error: arguments in resource/name form must have a single resource and name
-        print(f"Got environmentd name: {environmentd_name}")
-        print(f"Got balancerd name: {balancerd_name}")
-
-        environmentd_port_forward_process = subprocess.Popen(
-            [
-                "kubectl",
-                "port-forward",
-                f"pod/{environmentd_name}",
-                "-n",
-                "materialize-environment",
-                "6877:6877",
-                "6878:6878",
-            ],
-            preexec_fn=os.setpgrp,
-            env=venv_env,
-        )
-        balancerd_port_forward_process = subprocess.Popen(
-            [
-                "kubectl",
-                "port-forward",
-                f"pod/{balancerd_name}",
-                "-n",
-                "materialize-environment",
-                "6875:6875",
-                "6876:6876",
-            ],
-            preexec_fn=os.setpgrp,
-            env=venv_env,
-        )
-        time.sleep(10)
-
-        with psycopg.connect(
-            "postgres://mz_system:materialize@127.0.0.1:6877/materialize",
-            autocommit=True,
-        ) as conn:
-            with conn.cursor() as cur:
-                # Required for some testdrive tests
-                cur.execute("ALTER CLUSTER mz_system SET (REPLICATION FACTOR 2)")
-
-        with c.override(
-            Testdrive(
-                materialize_url="postgres://materialize@127.0.0.1:6875/materialize",
-                materialize_url_internal="postgres://mz_system:materialize@127.0.0.1:6877/materialize",
-                materialize_use_https=False,
-                no_consistency_checks=True,
-                network_mode="host",
-                volume_workdir="../testdrive:/workdir",
-                # For full testdrive support we'll need:
-                # kafka_url=...
-                # schema_registry_url=...
-                # aws_endpoint=...
+        if args.test:
+            print("--- Running tests")
+            environmentd_name = spawn.capture(
+                [
+                    "kubectl",
+                    "get",
+                    "pods",
+                    "-l",
+                    "app=environmentd",
+                    "-n",
+                    "materialize-environment",
+                    "-o",
+                    "jsonpath={.items[*].metadata.name}",
+                ],
+                cwd=path,
+                env=venv_env,
             )
-        ):
-            c.up("testdrive", persistent=True)
-            c.testdrive(
-                dedent(
-                    """
-               > SELECT 1
-               1
-            """
-                )
+
+            balancerd_name = spawn.capture(
+                [
+                    "kubectl",
+                    "get",
+                    "pods",
+                    "-l",
+                    "app=balancerd",
+                    "-n",
+                    "materialize-environment",
+                    "-o",
+                    "jsonpath={.items[*].metadata.name}",
+                ],
+                cwd=path,
+                env=venv_env,
             )
+            # error: arguments in resource/name form must have a single resource and name
+            print(f"Got environmentd name: {environmentd_name}")
+            print(f"Got balancerd name: {balancerd_name}")
+
+            environmentd_port_forward_process = subprocess.Popen(
+                [
+                    "kubectl",
+                    "port-forward",
+                    f"pod/{environmentd_name}",
+                    "-n",
+                    "materialize-environment",
+                    "6877:6877",
+                    "6878:6878",
+                ],
+                preexec_fn=os.setpgrp,
+                env=venv_env,
+            )
+            balancerd_port_forward_process = subprocess.Popen(
+                [
+                    "kubectl",
+                    "port-forward",
+                    f"pod/{balancerd_name}",
+                    "-n",
+                    "materialize-environment",
+                    "6875:6875",
+                    "6876:6876",
+                ],
+                preexec_fn=os.setpgrp,
+                env=venv_env,
+            )
+            time.sleep(10)
 
             with psycopg.connect(
-                "postgres://materialize@127.0.0.1:6875/materialize"
+                "postgres://mz_system:materialize@127.0.0.1:6877/materialize",
+                autocommit=True,
             ) as conn:
                 with conn.cursor() as cur:
-                    cur.execute("SELECT 1")
-                    results = cur.fetchall()
-                    assert results == [(1,)], results
-                    cur.execute("SELECT mz_version()")
-                    version = cur.fetchall()[0][0]
-                    assert version.startswith(tag.split("--")[0] + " ")
-                    with open(
-                        MZ_ROOT / "misc" / "helm-charts" / "operator" / "Chart.yaml"
-                    ) as f:
-                        content = yaml.load(f, Loader=yaml.Loader)
-                        helm_chart_version = content["version"]
-                    assert version.endswith(
-                        f", helm chart: {helm_chart_version})"
-                    ), f"Actual version: {version}, expected to contain {helm_chart_version}"
+                    # Required for some testdrive tests
+                    cur.execute("ALTER CLUSTER mz_system SET (REPLICATION FACTOR 2)")
+                    cur.execute(
+                        "ALTER SYSTEM SET enable_create_table_from_source = true"
+                    )
 
-            if args.run_testdrive_files:
-                c.run_testdrive_files(*TD_CMD, *args.files)
+            with c.override(
+                Testdrive(
+                    materialize_url="postgres://materialize@127.0.0.1:6875/materialize",
+                    materialize_url_internal="postgres://mz_system:materialize@127.0.0.1:6877/materialize",
+                    materialize_use_https=False,
+                    no_consistency_checks=True,
+                    network_mode="host",
+                    volume_workdir="../testdrive:/workdir",
+                    # For full testdrive support we'll need:
+                    # kafka_url=...
+                    # schema_registry_url=...
+                    # aws_endpoint=...
+                )
+            ):
+                c.up("testdrive", persistent=True)
+                c.testdrive(
+                    dedent(
+                        """
+                   > SELECT 1
+                   1
+                """
+                    )
+                )
+
+                with psycopg.connect(
+                    "postgres://materialize@127.0.0.1:6875/materialize"
+                ) as conn:
+                    with conn.cursor() as cur:
+                        cur.execute("SELECT 1")
+                        results = cur.fetchall()
+                        assert results == [(1,)], results
+                        cur.execute("SELECT mz_version()")
+                        version = cur.fetchall()[0][0]
+                        assert version.startswith(tag.split("--")[0] + " ")
+                        with open(
+                            MZ_ROOT / "misc" / "helm-charts" / "operator" / "Chart.yaml"
+                        ) as f:
+                            content = yaml.load(f, Loader=yaml.Loader)
+                            helm_chart_version = content["version"]
+                        assert version.endswith(
+                            f", helm chart: {helm_chart_version})"
+                        ), f"Actual version: {version}, expected to contain {helm_chart_version}"
+
+                if args.run_testdrive_files:
+                    c.run_testdrive_files(*TD_CMD, *args.files)
     finally:
         if environmentd_port_forward_process:
             os.killpg(os.getpgid(environmentd_port_forward_process.pid), signal.SIGTERM)
         if balancerd_port_forward_process:
             os.killpg(os.getpgid(balancerd_port_forward_process.pid), signal.SIGTERM)
 
-        run_mz_debug(env=venv_env)
+        if args.run_mz_debug:
+            run_mz_debug(env=venv_env)
 
         if args.cleanup:
             print("--- Cleaning up")
