@@ -33,7 +33,7 @@ aws-types = "1.3.6"
 azure_identity = { version = "0.21.0" }
 azure_storage = { version = "0.21.0" }
 azure_storage_blobs = { version = "0.21.0" }
-azure_core = "0.21.0"
+azure_core = "0.23.0"
 base64 = "0.22.1"
 bytes = "1.10.1"
 deadpool-postgres = "0.10.3"
