@@ -109,7 +109,7 @@ pub(crate) const ROLLUP_USE_ACTIVE_ROLLUP: Config<bool> = Config::new(
 /// "stuck" and a new GC is started.
 pub(crate) const GC_FALLBACK_THRESHOLD_MS: Config<usize> = Config::new(
     "persist_gc_fallback_threshold_ms",
-    5000,
+    900000,
     "The number of milliseconds before a worker claims an already claimed GC.",
 );
 
