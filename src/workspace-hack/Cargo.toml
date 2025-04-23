@@ -30,8 +30,7 @@ aws-smithy-http = { version = "0.60.10", default-features = false, features = ["
 aws-smithy-runtime = { version = "1.7.1", default-features = false, features = ["client", "connector-hyper-0-14-x"] }
 aws-smithy-runtime-api = { version = "1.7.4", features = ["client", "http-02x", "http-auth", "test-util"] }
 aws-smithy-types = { version = "1.3.0", default-features = false, features = ["byte-stream-poll-next", "http-body-0-4-x", "http-body-1-x", "rt-tokio", "test-util"] }
-axum = { version = "0.7.5", features = ["ws"] }
-axum-core = { version = "0.4.5", default-features = false, features = ["tracing"] }
+axum = { version = "0.8.3", features = ["ws"] }
 bit-set = { version = "0.8.0" }
 bit-vec = { version = "0.8.0" }
 bitflags = { version = "2.4.1", default-features = false, features = ["std"] }
@@ -143,12 +142,11 @@ toml_datetime = { version = "0.6.8", default-features = false, features = ["serd
 toml_edit = { version = "0.22.24", features = ["serde"] }
 tonic = { version = "0.12.3", features = ["gzip"] }
 tower-9fbad63c4bcf4a8f = { package = "tower", version = "0.4.13", features = ["balance", "buffer", "filter", "limit", "load-shed", "retry", "timeout", "util"] }
-tower-d8f496e17d97b5cb = { package = "tower", version = "0.5.2", default-features = false, features = ["buffer", "filter", "util"] }
+tower-d8f496e17d97b5cb = { package = "tower", version = "0.5.2", default-features = false, features = ["buffer", "filter", "log", "make", "util"] }
 tower-http = { version = "0.6.2", features = ["auth", "cors", "map-response-body", "trace", "util"] }
 tracing = { version = "0.1.41", features = ["log"] }
 tracing-core = { version = "0.1.33" }
 tracing-subscriber = { version = "0.3.19", features = ["env-filter", "json"] }
-tungstenite = { version = "0.21.0" }
 uncased = { version = "0.9.10" }
 unicode-bidi = { version = "0.3.18" }
 unicode-normalization = { version = "0.1.24" }
@@ -173,8 +171,7 @@ aws-smithy-http = { version = "0.60.10", default-features = false, features = ["
 aws-smithy-runtime = { version = "1.7.1", default-features = false, features = ["client", "connector-hyper-0-14-x"] }
 aws-smithy-runtime-api = { version = "1.7.4", features = ["client", "http-02x", "http-auth", "test-util"] }
 aws-smithy-types = { version = "1.3.0", default-features = false, features = ["byte-stream-poll-next", "http-body-0-4-x", "http-body-1-x", "rt-tokio", "test-util"] }
-axum = { version = "0.7.5", features = ["ws"] }
-axum-core = { version = "0.4.5", default-features = false, features = ["tracing"] }
+axum = { version = "0.8.3", features = ["ws"] }
 bit-set = { version = "0.8.0" }
 bit-vec = { version = "0.8.0" }
 bitflags = { version = "2.4.1", default-features = false, features = ["std"] }
@@ -289,12 +286,11 @@ toml_datetime = { version = "0.6.8", default-features = false, features = ["serd
 toml_edit = { version = "0.22.24", features = ["serde"] }
 tonic = { version = "0.12.3", features = ["gzip"] }
 tower-9fbad63c4bcf4a8f = { package = "tower", version = "0.4.13", features = ["balance", "buffer", "filter", "limit", "load-shed", "retry", "timeout", "util"] }
-tower-d8f496e17d97b5cb = { package = "tower", version = "0.5.2", default-features = false, features = ["buffer", "filter", "util"] }
+tower-d8f496e17d97b5cb = { package = "tower", version = "0.5.2", default-features = false, features = ["buffer", "filter", "log", "make", "util"] }
 tower-http = { version = "0.6.2", features = ["auth", "cors", "map-response-body", "trace", "util"] }
 tracing = { version = "0.1.41", features = ["log"] }
 tracing-core = { version = "0.1.33" }
 tracing-subscriber = { version = "0.3.19", features = ["env-filter", "json"] }
-tungstenite = { version = "0.21.0" }
 uncased = { version = "0.9.10" }
 unicode-bidi = { version = "0.3.18" }
 unicode-normalization = { version = "0.1.24" }
