@@ -456,7 +456,7 @@ impl Coordinator {
                         None
                     }
                 })
-                .unwrap_or(system_config.default_network_policy_name());
+                .unwrap_or_else(|| system_config.default_network_policy_name());
             let maybe_network_policy = self
                 .catalog()
                 .get_network_policy_by_name(&network_policy_name);
@@ -1449,7 +1449,7 @@ impl Coordinator {
             let body_column = desc
                 .get_by_name(&"body".into())
                 .map(|(_idx, ty)| ty.clone())
-                .ok_or(name.clone())?;
+                .ok_or_else(|| name.clone())?;
             assert!(!body_column.nullable, "webhook body column is nullable!?");
             assert_eq!(body_column.scalar_type, ScalarType::from(body_format));
 

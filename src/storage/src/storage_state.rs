@@ -1321,7 +1321,7 @@ impl StorageState {
                 for id in description.collection_ids() {
                     self.reported_frontiers
                         .entry(id)
-                        .or_insert(Antichain::from_elem(mz_repr::Timestamp::minimum()));
+                        .or_insert_with(|| Antichain::from_elem(mz_repr::Timestamp::minimum()));
                 }
 
                 // This needs to be done by one worker, which will broadcasts a

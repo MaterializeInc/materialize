@@ -1161,7 +1161,7 @@ where
                 source_statistics
                     .source_statistics
                     .entry(id)
-                    .or_insert(StatsState::new(SourceStatisticsUpdate::new(id)));
+                    .or_insert_with(|| StatsState::new(SourceStatisticsUpdate::new(id)));
             }
             for id in new_webhook_statistic_entries {
                 source_statistics.webhook_statistics.entry(id).or_default();
@@ -1169,7 +1169,7 @@ where
             for id in new_sink_statistic_entries {
                 sink_statistics
                     .entry(id)
-                    .or_insert(StatsState::new(SinkStatisticsUpdate::new(id)));
+                    .or_insert_with(|| StatsState::new(SinkStatisticsUpdate::new(id)));
             }
         }
 

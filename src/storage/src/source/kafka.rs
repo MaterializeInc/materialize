@@ -1218,9 +1218,9 @@ fn construct_source_message(
                                 }
                                 None => Ok(Datum::Null),
                             })
-                            .unwrap_or(Err(KafkaHeaderParseError::KeyNotFound {
-                                key: key.clone(),
-                            }));
+                            .unwrap_or_else(|| {
+                                Err(KafkaHeaderParseError::KeyNotFound { key: key.clone() })
+                            });
                         match d {
                             Ok(d) => packer.push(d),
                             //abort with a definite error when the header is not found or cannot be parsed correctly

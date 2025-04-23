@@ -181,8 +181,8 @@ sqlfunc!(
         cx.clear_status();
         let i = cx
             .try_into_i32(a)
-            .or(Err(EvalError::Int16OutOfRange(a.to_string().into())))?;
-        i16::try_from(i).or(Err(EvalError::Int16OutOfRange(i.to_string().into())))
+            .or_else(|_| Err(EvalError::Int16OutOfRange(a.to_string().into())))?;
+        i16::try_from(i).or_else(|_| Err(EvalError::Int16OutOfRange(i.to_string().into())))
     }
 );
 
@@ -196,7 +196,7 @@ sqlfunc!(
         cx.round(&mut a);
         cx.clear_status();
         cx.try_into_i32(a)
-            .or(Err(EvalError::Int32OutOfRange(a.to_string().into())))
+            .or_else(|_| Err(EvalError::Int32OutOfRange(a.to_string().into())))
     }
 );
 
@@ -210,7 +210,7 @@ sqlfunc!(
         cx.round(&mut a);
         cx.clear_status();
         cx.try_into_i64(a)
-            .or(Err(EvalError::Int64OutOfRange(a.to_string().into())))
+            .or_else(|_| Err(EvalError::Int64OutOfRange(a.to_string().into())))
     }
 );
 
@@ -266,8 +266,8 @@ sqlfunc!(
         cx.clear_status();
         let u = cx
             .try_into_u32(a)
-            .or(Err(EvalError::UInt16OutOfRange(a.to_string().into())))?;
-        u16::try_from(u).or(Err(EvalError::UInt16OutOfRange(u.to_string().into())))
+            .or_else(|_| Err(EvalError::UInt16OutOfRange(a.to_string().into())))?;
+        u16::try_from(u).or_else(|_| Err(EvalError::UInt16OutOfRange(u.to_string().into())))
     }
 );
 
@@ -281,7 +281,7 @@ sqlfunc!(
         cx.round(&mut a);
         cx.clear_status();
         cx.try_into_u32(a)
-            .or(Err(EvalError::UInt32OutOfRange(a.to_string().into())))
+            .or_else(|_| Err(EvalError::UInt32OutOfRange(a.to_string().into())))
     }
 );
 
@@ -295,7 +295,7 @@ sqlfunc!(
         cx.round(&mut a);
         cx.clear_status();
         cx.try_into_u64(a)
-            .or(Err(EvalError::UInt64OutOfRange(a.to_string().into())))
+            .or_else(|_| Err(EvalError::UInt64OutOfRange(a.to_string().into())))
     }
 );
 

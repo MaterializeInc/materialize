@@ -53,7 +53,7 @@ pub fn from_json(json: &JsonValue, schema: SchemaNode) -> Result<Value, anyhow::
             let ts = n.as_i64().unwrap();
             Ok(Value::Timestamp(
                 chrono::DateTime::from_timestamp_millis(ts)
-                    .ok_or(anyhow!("timestamp out of bounds"))?
+                    .ok_or_else(|| anyhow!("timestamp out of bounds"))?
                     .naive_utc(),
             ))
         }
@@ -61,7 +61,7 @@ pub fn from_json(json: &JsonValue, schema: SchemaNode) -> Result<Value, anyhow::
             let ts = n.as_i64().unwrap();
             Ok(Value::Timestamp(
                 chrono::DateTime::from_timestamp_micros(ts)
-                    .ok_or(anyhow!("timestamp out of bounds"))?
+                    .ok_or_else(|| anyhow!("timestamp out of bounds"))?
                     .naive_utc(),
             ))
         }

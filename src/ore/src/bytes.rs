@@ -857,7 +857,7 @@ mod tests {
     fn proptest_non_empty_segments() {
         fn test(segments: Vec<Vec<u8>>) {
             // Vec
-            let segment = segments.first().unwrap_or(&Vec::default()).clone();
+            let segment = segments.first().cloned().unwrap_or_default();
             let s = SegmentedBytes::from(segment.clone());
             assert!(s.into_segments().all(|segment| !segment.is_empty()));
 

@@ -112,7 +112,9 @@ fn into_proto_with_type(data: &ArrayData, expected_type: Option<&DataType>) -> P
         children: data
             .child_data()
             .iter()
-            .zip_eq(fields_for_type(expected_type.unwrap_or(data.data_type())))
+            .zip_eq(fields_for_type(
+                expected_type.unwrap_or_else(|| data.data_type()),
+            ))
             .map(|(child, expect)| into_proto_with_type(child, Some(expect.data_type())))
             .collect(),
         nulls: data.nulls().map(|n| n.inner().into_proto()),

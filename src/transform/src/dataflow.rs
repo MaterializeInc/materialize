@@ -482,7 +482,7 @@ fn prune_and_annotate_dataflow_index_imports(
                     typ,
                     ..
                 } => {
-                    source_keys.entry(*global_id).or_insert(
+                    source_keys.entry(*global_id).or_insert_with(|| {
                         typ.keys
                             .iter()
                             .map(|key| {
@@ -492,8 +492,8 @@ fn prune_and_annotate_dataflow_index_imports(
                                     .map(|col_idx| MirScalarExpr::Column(*col_idx))
                                     .collect()
                             })
-                            .collect(),
-                    );
+                            .collect()
+                    });
                 }
                 _ => {}
             });
@@ -1266,7 +1266,7 @@ impl<Notice> DataflowMetainfo<Notice> {
                     // running `prune_and_annotate_dataflow_index_imports` on
                     // the dataflow (this happens at the end of the
                     // `optimize_dataflow` call).
-                    let index_usage_type = entry.unwrap_or(vec![IndexUsageType::Unknown]);
+                    let index_usage_type = entry.unwrap_or_else(|| vec![IndexUsageType::Unknown]);
 
                     (*id, index_usage_type)
                 })

@@ -260,7 +260,7 @@ where
                 .topics()
                 .iter()
                 .find(|t| t.name() == new_topic.name)
-                .ok_or(anyhow!("unable to fetch topic metadata after creation"))?;
+                .ok_or_else(|| anyhow!("unable to fetch topic metadata after creation"))?;
             // If the desired number of partitions is not "use the broker
             // default", wait for the topic to have the correct number of
             // partitions.

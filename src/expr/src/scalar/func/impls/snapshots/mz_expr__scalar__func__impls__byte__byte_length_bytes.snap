@@ -1,6 +1,6 @@
 ---
 source: src/expr/src/scalar/func/impls/byte.rs
-expression: "#[sqlfunc(\n    sqlname = \"octet_length\",\n    preserves_uniqueness = false,\n    inverse = None,\n    is_monotone = false,\n)]\n#[allow(clippy::extra_unused_lifetimes)]\npub fn byte_length_bytes<'a>(a: &'a [u8]) -> Result<i32, EvalError> {\n    {\n        let val = a.len();\n        i32::try_from(val).or(Err(EvalError::Int32OutOfRange(val.to_string().into())))\n    }\n}\n"
+expression: "#[sqlfunc(\n    sqlname = \"octet_length\",\n    preserves_uniqueness = false,\n    inverse = None,\n    is_monotone = false,\n)]\n#[allow(clippy::extra_unused_lifetimes)]\npub fn byte_length_bytes<'a>(a: &'a [u8]) -> Result<i32, EvalError> {\n    {\n        let val = a.len();\n        i32::try_from(val)\n            .or_else(|_| Err(EvalError::Int32OutOfRange(val.to_string().into())))\n    }\n}\n"
 ---
 #[derive(
     proptest_derive::Arbitrary,
@@ -48,6 +48,7 @@ impl std::fmt::Display for ByteLengthBytes {
 pub fn byte_length_bytes<'a>(a: &'a [u8]) -> Result<i32, EvalError> {
     {
         let val = a.len();
-        i32::try_from(val).or(Err(EvalError::Int32OutOfRange(val.to_string().into())))
+        i32::try_from(val)
+            .or_else(|_| Err(EvalError::Int32OutOfRange(val.to_string().into())))
     }
 }

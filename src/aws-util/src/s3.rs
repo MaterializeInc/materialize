@@ -51,7 +51,7 @@ pub async fn list_bucket_path(
             objs.into_iter()
                 .map(|obj| {
                     obj.key
-                        .ok_or(anyhow::anyhow!("key not provided from list_objects_v2"))
+                        .ok_or_else(|| anyhow::anyhow!("key not provided from list_objects_v2"))
                 })
                 .collect::<Result<Vec<String>, _>>()
         })

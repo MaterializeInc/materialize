@@ -1,6 +1,6 @@
 ---
 source: src/expr/src/scalar/func.rs
-expression: "#[sqlfunc(\n    is_monotone = (true, true),\n    output_type = Interval,\n    is_infix_op = true,\n    sqlname = \"-\",\n    propagates_nulls = true\n)]\nfn sub_interval<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {\n    b.unwrap_interval()\n        .checked_neg()\n        .and_then(|b| b.checked_add(&a.unwrap_interval()))\n        .ok_or(EvalError::IntervalOutOfRange(format!(\"{a} - {b}\").into()))\n        .map(Datum::from)\n}\n"
+expression: "#[sqlfunc(\n    is_monotone = \"(true, true)\",\n    output_type = \"Interval\",\n    is_infix_op = true,\n    sqlname = \"-\",\n    propagates_nulls = true\n)]\nfn sub_interval<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {\n    b.unwrap_interval()\n        .checked_neg()\n        .and_then(|b| b.checked_add(&a.unwrap_interval()))\n        .ok_or_else(|| EvalError::IntervalOutOfRange(format!(\"{a} - {b}\").into()))\n        .map(Datum::from)\n}\n"
 ---
 #[derive(
     proptest_derive::Arbitrary,
@@ -68,6 +68,6 @@ fn sub_interval<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> 
     b.unwrap_interval()
         .checked_neg()
         .and_then(|b| b.checked_add(&a.unwrap_interval()))
-        .ok_or(EvalError::IntervalOutOfRange(format!("{a} - {b}").into()))
+        .ok_or_else(|| EvalError::IntervalOutOfRange(format!("{a} - {b}").into()))
         .map(Datum::from)
 }

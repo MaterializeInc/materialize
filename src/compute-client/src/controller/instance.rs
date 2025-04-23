@@ -1776,7 +1776,7 @@ where
                 Antichain::from_iter(
                     new_frontier
                         .iter()
-                        .map(|t| t.step_back().unwrap_or(T::minimum())),
+                        .map(|t| t.step_back().unwrap_or_else(T::minimum)),
                 )
             }
         };
@@ -2164,7 +2164,7 @@ where
             let mut new_capability = Antichain::new();
             for frontier in compute_frontiers.chain(storage_frontiers) {
                 for time in frontier.iter() {
-                    new_capability.insert(time.step_back().unwrap_or(time.clone()));
+                    new_capability.insert(time.step_back().unwrap_or_else(|| time.clone()));
                 }
             }
 

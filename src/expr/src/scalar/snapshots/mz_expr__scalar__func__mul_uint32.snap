@@ -1,6 +1,6 @@
 ---
 source: src/expr/src/scalar/func.rs
-expression: "#[sqlfunc(\n    is_monotone = (true, true),\n    output_type = u32,\n    is_infix_op = true,\n    sqlname = \"*\",\n    propagates_nulls = true\n)]\nfn mul_uint32<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {\n    a.unwrap_uint32()\n        .checked_mul(b.unwrap_uint32())\n        .ok_or(EvalError::UInt32OutOfRange(format!(\"{a} * {b}\").into()))\n        .map(Datum::from)\n}\n"
+expression: "#[sqlfunc(\n    is_monotone = \"(true, true)\",\n    output_type = \"u32\",\n    is_infix_op = true,\n    sqlname = \"*\",\n    propagates_nulls = true\n)]\nfn mul_uint32<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {\n    a.unwrap_uint32()\n        .checked_mul(b.unwrap_uint32())\n        .ok_or_else(|| EvalError::UInt32OutOfRange(format!(\"{a} * {b}\").into()))\n        .map(Datum::from)\n}\n"
 ---
 #[derive(
     proptest_derive::Arbitrary,
@@ -67,6 +67,6 @@ impl std::fmt::Display for MulUint32 {
 fn mul_uint32<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
     a.unwrap_uint32()
         .checked_mul(b.unwrap_uint32())
-        .ok_or(EvalError::UInt32OutOfRange(format!("{a} * {b}").into()))
+        .ok_or_else(|| EvalError::UInt32OutOfRange(format!("{a} * {b}").into()))
         .map(Datum::from)
 }

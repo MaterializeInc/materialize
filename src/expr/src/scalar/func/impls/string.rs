@@ -869,7 +869,8 @@ sqlfunc!(
     #[sqlname = "char_length"]
     fn char_length<'a>(a: &'a str) -> Result<i32, EvalError> {
         let length = a.chars().count();
-        i32::try_from(length).or(Err(EvalError::Int32OutOfRange(length.to_string().into())))
+        i32::try_from(length)
+            .or_else(|_| Err(EvalError::Int32OutOfRange(length.to_string().into())))
     }
 );
 
@@ -877,7 +878,8 @@ sqlfunc!(
     #[sqlname = "bit_length"]
     fn bit_length_string<'a>(a: &'a str) -> Result<i32, EvalError> {
         let length = a.as_bytes().len() * 8;
-        i32::try_from(length).or(Err(EvalError::Int32OutOfRange(length.to_string().into())))
+        i32::try_from(length)
+            .or_else(|_| Err(EvalError::Int32OutOfRange(length.to_string().into())))
     }
 );
 
@@ -885,7 +887,8 @@ sqlfunc!(
     #[sqlname = "octet_length"]
     fn byte_length_string<'a>(a: &'a str) -> Result<i32, EvalError> {
         let length = a.as_bytes().len();
-        i32::try_from(length).or(Err(EvalError::Int32OutOfRange(length.to_string().into())))
+        i32::try_from(length)
+            .or_else(|_| Err(EvalError::Int32OutOfRange(length.to_string().into())))
     }
 );
 

@@ -310,7 +310,7 @@ impl<T: Timestamp + TimestampManipulation + Lattice + Codec64 + Display + Sync>
                         let mut as_of = Antichain::new();
                         for upper in resume_uppers.values() {
                             for t in upper.elements() {
-                                let mut t_prime = t.step_back().unwrap_or(T::minimum());
+                                let mut t_prime = t.step_back().unwrap_or_else(T::minimum);
                                 if !remap_since.is_empty() {
                                     t_prime.advance_by(remap_since.borrow());
                                     as_of.insert(t_prime);

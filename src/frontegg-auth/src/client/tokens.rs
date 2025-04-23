@@ -69,7 +69,7 @@ impl Client {
                 let body = response
                     .text()
                     .await
-                    .unwrap_or("failed to deserialize body".to_string());
+                    .unwrap_or_else(|_| "failed to deserialize body".to_string());
                 tracing::warn!(frontegg_trace_id, body, "request failed");
                 return Err(e.into());
             }

@@ -1,6 +1,6 @@
 ---
 source: src/expr/src/scalar/func.rs
-expression: "#[sqlfunc(\n    is_monotone = (true, true),\n    output_type = Interval,\n    is_infix_op = true,\n    sqlname = \"*\",\n    propagates_nulls = true\n)]\nfn mul_interval<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {\n    a.unwrap_interval()\n        .checked_mul(b.unwrap_float64())\n        .ok_or(EvalError::IntervalOutOfRange(format!(\"{a} * {b}\").into()))\n        .map(Datum::from)\n}\n"
+expression: "#[sqlfunc(\n    is_monotone = \"(true, true)\",\n    output_type = \"Interval\",\n    is_infix_op = true,\n    sqlname = \"*\",\n    propagates_nulls = true\n)]\nfn mul_interval<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {\n    a.unwrap_interval()\n        .checked_mul(b.unwrap_float64())\n        .ok_or_else(|| EvalError::IntervalOutOfRange(format!(\"{a} * {b}\").into()))\n        .map(Datum::from)\n}\n"
 ---
 #[derive(
     proptest_derive::Arbitrary,
@@ -67,6 +67,6 @@ impl std::fmt::Display for MulInterval {
 fn mul_interval<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
     a.unwrap_interval()
         .checked_mul(b.unwrap_float64())
-        .ok_or(EvalError::IntervalOutOfRange(format!("{a} * {b}").into()))
+        .ok_or_else(|| EvalError::IntervalOutOfRange(format!("{a} * {b}").into()))
         .map(Datum::from)
 }
