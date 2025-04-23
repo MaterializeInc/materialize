@@ -326,7 +326,6 @@ pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
         .add(&crate::internal::machine::NEXT_LISTEN_BATCH_RETRYER_FIXED_SLEEP)
         .add(&crate::internal::machine::NEXT_LISTEN_BATCH_RETRYER_INITIAL_BACKOFF)
         .add(&crate::internal::machine::NEXT_LISTEN_BATCH_RETRYER_MULTIPLIER)
-        .add(&crate::internal::machine::RECORD_COMPACTIONS)
         .add(&crate::internal::state::ROLLUP_THRESHOLD)
         .add(&crate::operators::STORAGE_SOURCE_DECODE_FUEL)
         .add(&crate::read::READER_LEASE_DURATION)
