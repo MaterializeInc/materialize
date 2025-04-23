@@ -282,8 +282,8 @@ impl MirScalarExpr {
         MirScalarExpr::Column(column, TreatAsEqual(None))
     }
 
-    pub fn named_column(column: usize, name: Option<Arc<str>>) -> Self {
-        MirScalarExpr::Column(column, TreatAsEqual(name))
+    pub fn named_column(column: usize, name: Arc<str>) -> Self {
+        MirScalarExpr::Column(column, TreatAsEqual(Some(name)))
     }
 
     pub fn literal(res: Result<Datum, EvalError>, typ: ScalarType) -> Self {

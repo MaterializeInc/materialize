@@ -307,7 +307,7 @@ impl Scope {
         Ok(items)
     }
 
-    /// Returns a matching [`ColumnRef`], if one exists.
+    /// Returns a matching [`ColumnRef`] and interned name, if one exists.
     ///
     /// Filters all visible items against the provided `matches` closure, and then matches this
     /// filtered set against the provided `column_name`.
@@ -428,6 +428,8 @@ impl Scope {
             })
     }
 
+    /// Resolves a named column reference in a given scope.
+    /// Returns the interned name for tracking purposes.
     pub fn resolve_table_column<'a>(
         &'a self,
         outer_scopes: &[Scope],

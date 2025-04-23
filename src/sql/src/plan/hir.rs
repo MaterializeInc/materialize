@@ -2967,7 +2967,9 @@ impl HirScalarExpr {
         contains
     }
 
-    /// Constructs a column reference in the current scope.
+    /// Constructs an unnamed column reference in the current scope.
+    /// Use [`HirScalarExpr::named_column`] when a name is known.
+    /// Use [`HirScalarExpr::unnamed_column`] for a [`ColumnRef`].
     pub fn column(index: usize) -> HirScalarExpr {
         HirScalarExpr::Column(
             ColumnRef {
@@ -2978,8 +2980,15 @@ impl HirScalarExpr {
         )
     }
 
-    pub fn named_column(cr: ColumnRef, name: Option<Arc<str>>) -> HirScalarExpr {
-        HirScalarExpr::Column(cr, TreatAsEqual(name))
+    /// Constructs an unnamed column reference.
+    pub fn unnamed_column(cr: ColumnRef) -> HirScalarExpr {
+        HirScalarExpr::Column(cr, TreatAsEqual(None))
+    }
+
+    /// Constructs a named column reference.
+    /// Names are interned by a [`NameManager`].
+    pub fn named_column(cr: ColumnRef, name: Arc<str>) -> HirScalarExpr {
+        HirScalarExpr::Column(cr, TreatAsEqual(Some(name)))
     }
 
     pub fn parameter(n: usize) -> HirScalarExpr {

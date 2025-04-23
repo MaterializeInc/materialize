@@ -2608,9 +2608,6 @@ fn plan_select_from_where(
                 for ord in order_by.iter().take(distinct_exprs.len()) {
                     // The unusual construction of `expr` here is to ensure the
                     // temporary column expression lives long enough.
-                    //
-                    // We then have to make sure we do a `NamelessHirScalarExpr`
-                    // comparison, since this raw column reference has no name information.
                     let mut expr = &HirScalarExpr::column(ord.column);
                     if ord.column >= arity {
                         expr = &map_exprs[ord.column - arity];
@@ -3779,11 +3776,11 @@ fn plan_using_constraint(
             vec![
                 CoercibleScalarExpr::Coerced(HirScalarExpr::named_column(
                     lhs,
-                    Some(Arc::clone(&lhs_name)),
+                    Arc::clone(&lhs_name),
                 )),
                 CoercibleScalarExpr::Coerced(HirScalarExpr::named_column(
                     rhs,
-                    Some(Arc::clone(&rhs_name)),
+                    Arc::clone(&rhs_name),
                 )),
             ],
             None,
@@ -3830,10 +3827,7 @@ fn plan_using_constraint(
             // Should be safe to use either `lhs` or `rhs` here since the column
             // is available in both scopes and must have the same type of the new item.
             // We (arbitrarily) choose the left name.
-            map_exprs.push(HirScalarExpr::named_column(
-                lhs,
-                Some(Arc::clone(&lhs_name)),
-            ));
+            map_exprs.push(HirScalarExpr::named_column(lhs, Arc::clone(&lhs_name)));
         }
 
         join_exprs.push(expr1.call_binary(expr2, BinaryFunc::Eq));
@@ -3880,7 +3874,7 @@ fn plan_expr_inner<'a>(
         // We've already calculated this expression.
         return Ok(HirScalarExpr::named_column(
             i,
-            Some(ecx.qcx.name_manager.borrow_mut().intern_scope_item(item)),
+            ecx.qcx.name_manager.borrow_mut().intern_scope_item(item),
         )
         .into());
     }
@@ -5092,7 +5086,7 @@ fn plan_identifier(ecx: &ExprContext, names: &[Ident]) -> Result<HirScalarExpr, 
             &col_name,
             &mut ecx.qcx.name_manager.borrow_mut(),
         )?;
-        return Ok(HirScalarExpr::named_column(i, Some(i_name)));
+        return Ok(HirScalarExpr::named_column(i, i_name));
     }
 
     // If the name is unqualified, first check if it refers to a column. Track any similar names
@@ -5103,7 +5097,7 @@ fn plan_identifier(ecx: &ExprContext, names: &[Ident]) -> Result<HirScalarExpr, 
         &mut ecx.qcx.name_manager.borrow_mut(),
     ) {
         Ok((i, i_name)) => {
-            return Ok(HirScalarExpr::named_column(i, Some(i_name)));
+            return Ok(HirScalarExpr::named_column(i, i_name));
         }
         Err(PlanError::UnknownColumn { similar, .. }) => similar,
         Err(e) => return Err(e),
@@ -5132,7 +5126,7 @@ fn plan_identifier(ecx: &ExprContext, names: &[Ident]) -> Result<HirScalarExpr, 
         // See: https://github.com/postgres/postgres/blob/22592e10b/src/backend/parser/parse_expr.c#L2519-L2524
         [(column, item)] if item.from_single_column_function => Ok(HirScalarExpr::named_column(
             *column,
-            Some(ecx.qcx.name_manager.borrow_mut().intern_scope_item(item)),
+            ecx.qcx.name_manager.borrow_mut().intern_scope_item(item),
         )),
         // The name refers to a normal table. Return a record containing all the
         // columns of the table.
@@ -5147,7 +5141,7 @@ fn plan_identifier(ecx: &ExprContext, names: &[Ident]) -> Result<HirScalarExpr, 
                     } else {
                         let expr = HirScalarExpr::named_column(
                             column,
-                            Some(ecx.qcx.name_manager.borrow_mut().intern_scope_item(item)),
+                            ecx.qcx.name_manager.borrow_mut().intern_scope_item(item),
                         );
                         let name = item.column_name.clone();
                         Some((expr, name))
@@ -5162,7 +5156,7 @@ fn plan_identifier(ecx: &ExprContext, names: &[Ident]) -> Result<HirScalarExpr, 
             };
             if let Some(has_exists_column) = has_exists_column {
                 Ok(HirScalarExpr::if_then_else(
-                    HirScalarExpr::named_column(has_exists_column, None)
+                    HirScalarExpr::unnamed_column(has_exists_column)
                         .call_unary(UnaryFunc::IsNull(mz_expr::func::IsNull)),
                     HirScalarExpr::literal_null(ecx.scalar_type(&expr)),
                     expr,

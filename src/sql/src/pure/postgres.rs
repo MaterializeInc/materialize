@@ -544,7 +544,7 @@ pub(crate) fn generate_column_casts(
                 level: 0,
                 column: i,
             },
-            Some(Arc::from(column.name.as_str())),
+            Arc::from(column.name.as_str()),
         );
 
         let cast_expr = plan_cast(&cast_ecx, CastContext::Explicit, col_expr, &scalar_type)?;

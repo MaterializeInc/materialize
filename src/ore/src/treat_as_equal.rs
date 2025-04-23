@@ -21,7 +21,7 @@ use std::cmp::Ordering;
 use std::hash::{Hash, Hasher};
 
 /// Behaves like `T`, but has trivial `Hash`, `Eq`, `MzReflect`, and `Ord`
-/// implementations. Does not appear in `Debug` output.
+/// implementations. Does not appear in `Debug` output, but _is_ serialized.
 #[derive(Clone, Default, Derivative)]
 #[derivative(Debug = "transparent")]
 pub struct TreatAsEqual<T>(pub T);
@@ -50,6 +50,8 @@ impl<T> Ord for TreatAsEqual<T> {
     }
 }
 
+// We define the serializer to not bother recording the `TreatAsEqual` newtype
+// constructor to reduce noise.
 impl<T: Serialize> Serialize for TreatAsEqual<T> {
     fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
         self.0.serialize(serializer)
