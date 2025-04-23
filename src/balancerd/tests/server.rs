@@ -185,6 +185,7 @@ async fn test_balancer() {
             None,
             None,
             None,
+            None,
             TracingHandle::disabled(),
             vec![],
         );

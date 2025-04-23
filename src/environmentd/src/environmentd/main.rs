@@ -491,6 +491,10 @@ pub struct Args {
         value_parser = humantime::parse_duration,
     )]
     config_sync_loop_interval: Option<Duration>,
+    /// Path to a JSON file containing system parameter values.
+    /// If specified, this file will be used instead of LaunchDarkly for configuration.
+    #[clap(long, env = "SYSTEM_PARAMETER_FILE", value_name = "PATH")]
+    config_sync_file_path: Option<String>,
     /// A scratch directory that can be used for ephemeral storage.
     //
     // NOTE(jkosh44): this argument is intentionally unused at present. It is
@@ -1139,6 +1143,8 @@ fn run(mut args: Args) -> Result<(), anyhow::Error> {
                     .collect(),
                 config_sync_timeout: args.config_sync_timeout,
                 config_sync_loop_interval: args.config_sync_loop_interval,
+                config_sync_file_path: args.config_sync_file_path,
+
                 // Bootstrap options.
                 environment_id: args.environment_id,
                 bootstrap_role: args.bootstrap_role,
