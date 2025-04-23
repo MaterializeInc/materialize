@@ -213,23 +213,64 @@ fn parse_version_constraint(
             });
         }
     };
-    if line[2..9].to_string() != "version" {
+    let mut begin_version_kw = 2;
+    const MIN_VERSION: i32 = 0;
+    let mut min_version = MIN_VERSION;
+    if line.as_bytes()[2].is_ascii_digit() {
+        let Some(op_pos) = line.find('<') else {
+            return Err(PosError {
+                source: anyhow!("version-constraint: initial number but no '<' following"),
+                pos: Some(pos),
+            });
+        };
+        let min_version_str = line[2..op_pos].to_string();
+        match min_version_str.parse::<i32>() {
+            Ok(mv) => min_version = mv,
+            Err(_) => {
+                return Err(PosError {
+                    source: anyhow!(
+                        "version-constraint: invalid version number {}",
+                        min_version_str
+                    ),
+                    pos: Some(pos),
+                });
+            }
+        };
+
+        if line.as_bytes()[op_pos + 1] == b'=' {
+            begin_version_kw = op_pos + 2;
+        } else {
+            begin_version_kw = op_pos + 1;
+            min_version += 1;
+        }
+    };
+
+    let version_start = begin_version_kw + "version".len();
+    if line[begin_version_kw..version_start].to_string() != "version" {
         return Err(PosError {
             source: anyhow!(
-                "version-constraint: invalid property {}",
-                line[2..closed_brace_pos].to_string()
+                "version-constraint: invalid property {} (found '{}', expected 'version' {begin_version_kw})",
+                line[2..closed_brace_pos].to_string(),
+                line[begin_version_kw..version_start].to_string()
             ),
             pos: Some(pos),
         });
     }
     let remainder = line[closed_brace_pos + 1..].to_string();
     line_reader.push(&remainder);
-    const MIN_VERSION: i32 = 0;
     const MAX_VERSION: i32 = 9999999;
-    let version_pos = if line.as_bytes()[10].is_ascii_digit() {
-        10
+
+    if version_start >= closed_brace_pos && min_version != MIN_VERSION {
+        return Ok(Some(VersionConstraint {
+            min: min_version,
+            max: MAX_VERSION,
+        }));
+    }
+
+    let version_pos = if line.as_bytes()[version_start + 1].is_ascii_digit() {
+        version_start + 1
     } else {
-        11
+        version_start + 2
     };
     let version = match line[version_pos..closed_brace_pos].parse::<i32>() {
         Ok(x) => x,
@@ -244,31 +285,38 @@ fn parse_version_constraint(
         }
     };
 
-    match &line[9..version_pos] {
+    match &line[version_start..version_pos] {
         "=" => Ok(Some(VersionConstraint {
             min: version,
             max: version,
         })),
         "<=" => Ok(Some(VersionConstraint {
-            min: MIN_VERSION,
+            min: min_version,
             max: version,
         })),
         "<" => Ok(Some(VersionConstraint {
-            min: MIN_VERSION,
+            min: min_version,
             max: version - 1,
         })),
-        ">=" => Ok(Some(VersionConstraint {
+        ">=" if min_version == MIN_VERSION => Ok(Some(VersionConstraint {
             min: version,
             max: MAX_VERSION,
         })),
-        ">" => Ok(Some(VersionConstraint {
+        ">" if min_version == MIN_VERSION => Ok(Some(VersionConstraint {
             min: version + 1,
             max: MAX_VERSION,
         })),
+        ">=" | ">" => Err(PosError {
+            source: anyhow!(
+                "version-constraint: found comparison operator {} with a set minimum version {min_version}",
+                line[version_start..version_pos].to_string()
+            ),
+            pos: Some(pos),
+        }),
         _ => Err(PosError {
             source: anyhow!(
                 "version-constraint: unknown comparison operator {}",
-                line[9..version_pos].to_string()
+                line[version_start..version_pos].to_string()
             ),
             pos: Some(pos),
         }),

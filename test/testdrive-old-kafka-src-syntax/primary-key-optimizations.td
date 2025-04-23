@@ -264,7 +264,18 @@ Used Indexes:
 
 Target cluster: quickstart
 
-?[version>=13500] EXPLAIN OPTIMIZED PLAN WITH(no notices) AS VERBOSE TEXT FOR SELECT DISTINCT key1, upper(key2) FROM t1;
+?[version>=14300] EXPLAIN OPTIMIZED PLAN WITH(no notices) AS VERBOSE TEXT FOR SELECT DISTINCT key1, upper(key2) FROM t1;
+Explained Query:
+  Distinct project=[#0, upper(#1{key2})]
+    Project (#0, #1)
+      ReadIndex on=t1 t1_primary_idx=[*** full scan ***]
+
+Used Indexes:
+  - t1_primary_idx (*** full scan ***)
+
+Target cluster: quickstart
+
+?[13500<=version<14300] EXPLAIN OPTIMIZED PLAN WITH(no notices) AS VERBOSE TEXT FOR SELECT DISTINCT key1, upper(key2) FROM t1;
 Explained Query:
   Distinct project=[#0, upper(#1)]
     Project (#0, #1)
@@ -286,7 +297,18 @@ Used Indexes:
 
 Target cluster: quickstart
 
-?[version>=13500] EXPLAIN OPTIMIZED PLAN WITH(no notices) AS VERBOSE TEXT FOR SELECT DISTINCT key1, key2 || 'a' FROM t1;
+?[14300<=version] EXPLAIN OPTIMIZED PLAN WITH(no notices) AS VERBOSE TEXT FOR SELECT DISTINCT key1, key2 || 'a' FROM t1;
+Explained Query:
+  Distinct project=[#0, (#1{key2} || "a")]
+    Project (#0, #1)
+      ReadIndex on=t1 t1_primary_idx=[*** full scan ***]
+
+Used Indexes:
+  - t1_primary_idx (*** full scan ***)
+
+Target cluster: quickstart
+
+?[13500<=version<14300] EXPLAIN OPTIMIZED PLAN WITH(no notices) AS VERBOSE TEXT FOR SELECT DISTINCT key1, key2 || 'a' FROM t1;
 Explained Query:
   Distinct project=[#0, (#1 || "a")]
     Project (#0, #1)
@@ -353,6 +375,29 @@ Used Indexes:
 Target cluster: quickstart
 
 ?[version>=13500] EXPLAIN OPTIMIZED PLAN WITH(no notices) AS VERBOSE TEXT FOR SELECT COUNT(DISTINCT key1) FROM t1;
+Explained Query:
+  With
+    cte l0 =
+      Reduce aggregates=[count(distinct #0{key1})]
+        Project (#0)
+          ReadIndex on=t1 t1_primary_idx=[*** full scan ***]
+  Return
+    Union
+      Get l0
+      Map (0)
+        Union
+          Negate
+            Project ()
+              Get l0
+          Constant
+            - ()
+
+Used Indexes:
+  - t1_primary_idx (*** full scan ***)
+
+Target cluster: quickstart
+
+?[13500<=version<14300] EXPLAIN OPTIMIZED PLAN WITH(no notices) AS VERBOSE TEXT FOR SELECT COUNT(DISTINCT key1) FROM t1;
 Explained Query:
   With
     cte l0 =
@@ -776,7 +821,19 @@ Used Indexes:
 
 Target cluster: quickstart
 
-?[version>=13500] EXPLAIN OPTIMIZED PLAN WITH(no notices) AS VERBOSE TEXT FOR SELECT DISTINCT key1, upper(key2) FROM t1_pkne;
+?[version>=14300] EXPLAIN OPTIMIZED PLAN WITH(no notices) AS VERBOSE TEXT FOR SELECT DISTINCT key1, upper(key2) FROM t1_pkne;
+Explained Query:
+  Distinct project=[#0, upper(#1{key2})] monotonic
+    Project (#0, #1)
+      ReadIndex on=t1_pkne t1_pkne_primary_idx=[*** full scan ***]
+
+Used Indexes:
+  - t1_pkne_primary_idx (*** full scan ***)
+
+Target cluster: quickstart
+
+
+?[13500<=version<14300] EXPLAIN OPTIMIZED PLAN WITH(no notices) AS VERBOSE TEXT FOR SELECT DISTINCT key1, upper(key2) FROM t1_pkne;
 Explained Query:
   Distinct project=[#0, upper(#1)] monotonic
     Project (#0, #1)
@@ -798,7 +855,18 @@ Used Indexes:
 
 Target cluster: quickstart
 
-?[version>=13500] EXPLAIN OPTIMIZED PLAN WITH(no notices) AS VERBOSE TEXT FOR SELECT DISTINCT key1, key2 || 'a' FROM t1_pkne;
+?[version>=14300] EXPLAIN OPTIMIZED PLAN WITH(no notices) AS VERBOSE TEXT FOR SELECT DISTINCT key1, key2 || 'a' FROM t1_pkne;
+Explained Query:
+  Distinct project=[#0, (#1{key2} || "a")] monotonic
+    Project (#0, #1)
+      ReadIndex on=t1_pkne t1_pkne_primary_idx=[*** full scan ***]
+
+Used Indexes:
+  - t1_pkne_primary_idx (*** full scan ***)
+
+Target cluster: quickstart
+
+?[13500<=version<14300] EXPLAIN OPTIMIZED PLAN WITH(no notices) AS VERBOSE TEXT FOR SELECT DISTINCT key1, key2 || 'a' FROM t1_pkne;
 Explained Query:
   Distinct project=[#0, (#1 || "a")] monotonic
     Project (#0, #1)
@@ -864,7 +932,30 @@ Used Indexes:
 
 Target cluster: quickstart
 
-?[version>=13500] EXPLAIN OPTIMIZED PLAN WITH(no notices) AS VERBOSE TEXT FOR SELECT COUNT(DISTINCT key1) FROM t1_pkne;
+?[version>=14300] EXPLAIN OPTIMIZED PLAN WITH(no notices) AS VERBOSE TEXT FOR SELECT COUNT(DISTINCT key1) FROM t1_pkne;
+Explained Query:
+  With
+    cte l0 =
+      Reduce aggregates=[count(distinct #0{key1})] monotonic
+        Project (#0)
+          ReadIndex on=t1_pkne t1_pkne_primary_idx=[*** full scan ***]
+  Return
+    Union
+      Get l0
+      Map (0)
+        Union
+          Negate
+            Project ()
+              Get l0
+          Constant
+            - ()
+
+Used Indexes:
+  - t1_pkne_primary_idx (*** full scan ***)
+
+Target cluster: quickstart
+
+?[13500<=version<14300] EXPLAIN OPTIMIZED PLAN WITH(no notices) AS VERBOSE TEXT FOR SELECT COUNT(DISTINCT key1) FROM t1_pkne;
 Explained Query:
   With
     cte l0 =

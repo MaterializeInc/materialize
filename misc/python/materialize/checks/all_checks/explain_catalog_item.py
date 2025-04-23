@@ -74,7 +74,7 @@ class ExplainCatalogItem(Check):
             Target cluster: quickstart
 
 
-            ?[version>=13500] EXPLAIN OPTIMIZED PLAN AS VERBOSE TEXT FOR MATERIALIZED VIEW explain_mv2;
+            ?[version>=14300] EXPLAIN OPTIMIZED PLAN AS VERBOSE TEXT FOR MATERIALIZED VIEW explain_mv2;
             materialize.public.explain_mv2:
               Filter (#1{y} = 7)
                 ReadStorage materialize.public.explain_item_t2
@@ -85,13 +85,24 @@ class ExplainCatalogItem(Check):
             Target cluster: quickstart
 
 
-            ?[version<13500] EXPLAIN OPTIMIZED PLAN FOR MATERIALIZED VIEW explain_mv2;
+            ?[13500<=version<14300] EXPLAIN OPTIMIZED PLAN AS VERBOSE TEXT FOR MATERIALIZED VIEW explain_mv2;
             materialize.public.explain_mv2:
-              Filter (#1{y} = 7)
+              Filter (#1 = 7)
                 ReadStorage materialize.public.explain_item_t2
 
             Source materialize.public.explain_item_t2
-              filter=((#1{y} = 7))
+              filter=((#1 = 7))
+
+            Target cluster: quickstart
+
+
+            ?[version<13500] EXPLAIN OPTIMIZED PLAN FOR MATERIALIZED VIEW explain_mv2;
+            materialize.public.explain_mv2:
+              Filter (#1 = 7)
+                ReadStorage materialize.public.explain_item_t2
+
+            Source materialize.public.explain_item_t2
+              filter=((#1 = 7))
 
             Target cluster: quickstart
 
