@@ -54,6 +54,16 @@ impl ValidatedLicenseKey {
         }
     }
 
+    // TODO: temporary until we get the rest of the infrastructure in place
+    pub fn disabled() -> Self {
+        Self {
+            max_credit_consumption_rate: 999999.0,
+            allow_credit_consumption_override: true,
+            expiration_behavior: ExpirationBehavior::Warn,
+            expired: false,
+        }
+    }
+
     pub fn max_credit_consumption_rate(&self) -> Option<f64> {
         if self.expired
             && matches!(

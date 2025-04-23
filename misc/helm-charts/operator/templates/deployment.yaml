@@ -49,6 +49,7 @@ spec:
         {{- if .Values.operator.args.enableInternalStatementLogging }}
         - "--enable-internal-statement-logging"
         {{- end }}
+        - "--disable-license-key-checks"
 
         {{/* AWS Configuration */}}
         {{- if eq .Values.operator.cloudProvider.type "aws" }}
