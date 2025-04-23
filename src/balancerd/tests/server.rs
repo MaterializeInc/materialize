@@ -181,6 +181,7 @@ async fn test_balancer() {
             MetricsRegistry::new(),
             ticker,
             None,
+            None,
             Duration::ZERO,
             None,
             None,

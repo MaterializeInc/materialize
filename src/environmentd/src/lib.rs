@@ -16,6 +16,7 @@
 use std::collections::BTreeMap;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::panic::AssertUnwindSafe;
+use std::path::PathBuf;
 use std::pin::Pin;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -25,7 +26,9 @@ use anyhow::{Context, anyhow};
 use derivative::Derivative;
 use futures::FutureExt;
 use ipnet::IpNet;
-use mz_adapter::config::{SystemParameterSyncConfig, system_parameter_sync};
+use mz_adapter::config::{
+    SystemParameterSyncClientConfig, SystemParameterSyncConfig, system_parameter_sync,
+};
 use mz_adapter::webhook::WebhookConcurrencyLimiter;
 use mz_adapter::{AdapterError, load_remote_system_parameters};
 use mz_adapter_types::bootstrap_builtin_cluster_config::BootstrapBuiltinClusterConfig;
@@ -154,6 +157,8 @@ pub struct Config {
     pub config_sync_timeout: Duration,
     /// The interval in seconds at which to synchronize system parameter values.
     pub config_sync_loop_interval: Option<Duration>,
+    /// The path for file based config sync
+    pub config_sync_file_path: Option<PathBuf>,
 
     // === Bootstrap options. ===
     /// The cloud ID of this environment.
@@ -407,19 +412,33 @@ impl Listeners {
 
         let system_param_sync_start = Instant::now();
         info!("startup: envd serve: system parameter sync beginning");
-        // Initialize the system parameter frontend if `launchdarkly_sdk_key` is set.
-        let system_parameter_sync_config = if let Some(ld_sdk_key) = config.launchdarkly_sdk_key {
-            Some(SystemParameterSyncConfig::new(
-                config.environment_id.clone(),
-                &BUILD_INFO,
-                &config.metrics_registry,
-                config.now.clone(),
-                ld_sdk_key,
-                config.launchdarkly_key_map,
-            ))
-        } else {
-            None
-        };
+        // Initialize the system parameter frontend
+        let system_parameter_sync_config =
+            match (config.launchdarkly_sdk_key, config.config_sync_file_path) {
+                (None, None) => None,
+                (None, Some(f)) => Some(SystemParameterSyncConfig::new(
+                    config.environment_id.clone(),
+                    &BUILD_INFO,
+                    &config.metrics_registry,
+                    config.launchdarkly_key_map,
+                    SystemParameterSyncClientConfig::File { path: f },
+                )),
+                (Some(key), None) => Some(SystemParameterSyncConfig::new(
+                    config.environment_id.clone(),
+                    &BUILD_INFO,
+                    &config.metrics_registry,
+                    config.launchdarkly_key_map,
+                    SystemParameterSyncClientConfig::LaunchDarkly {
+                        sdk_key: key,
+                        now_fn: config.now.clone(),
+                    },
+                )),
+
+                (Some(_), Some(_)) => {
+                    panic!("Cannot configure both file and Launchdarkly based config syncing")
+                }
+            };
+
         let remote_system_parameters = load_remote_system_parameters(
             &mut openable_adapter_storage,
             system_parameter_sync_config.clone(),

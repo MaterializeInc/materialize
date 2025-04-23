@@ -4835,6 +4835,7 @@ dependencies = [
  "mz-controller",
  "mz-controller-types",
  "mz-dyncfg",
+ "mz-dyncfg-file",
  "mz-expr",
  "mz-kafka-util",
  "mz-license-keys",
@@ -5068,6 +5069,7 @@ dependencies = [
  "mz-alloc-default",
  "mz-build-info",
  "mz-dyncfg",
+ "mz-dyncfg-file",
  "mz-dyncfg-launchdarkly",
  "mz-environmentd",
  "mz-frontegg-auth",
@@ -5618,6 +5620,21 @@ dependencies = [
  "prost-build",
  "serde",
  "serde_json",
+ "tracing",
+ "workspace-hack",
+]
+
+[[package]]
+name = "mz-dyncfg-file"
+version = "0.0.0"
+dependencies = [
+ "anyhow",
+ "humantime",
+ "mz-dyncfg",
+ "mz-ore",
+ "serde_json",
+ "tempfile",
+ "tokio",
  "tracing",
  "workspace-hack",
 ]

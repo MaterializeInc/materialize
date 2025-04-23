@@ -97,7 +97,7 @@ impl SynchronizedParameters {
     }
 
     /// Try to modify the in-memory entry for `name` in the SystemVars backing
-    /// this [SynchronizedParameters] instace.
+    /// this [SynchronizedParameters] instance.
     ///
     /// This will call `SystemVars::reset` iff `value` is the default for this
     /// `name` and `SystemVars::set` otherwise.
