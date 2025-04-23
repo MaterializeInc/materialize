@@ -545,11 +545,13 @@ where
             now,
         );
 
-        if garbage_collection.is_some() && GC_USE_ACTIVE_GC.get(cfg) {
-            new_state.collections.active_gc = Some(ActiveGc {
-                seqno: state.seqno,
-                start_ms: now,
-            });
+        if let Some(gc) = garbage_collection.as_ref() {
+            if GC_USE_ACTIVE_GC.get(cfg) {
+                new_state.collections.active_gc = Some(ActiveGc {
+                    seqno: gc.new_seqno_since,
+                    start_ms: now,
+                });
+            }
         }
 
         // NB: Make sure this is the very last thing before the
