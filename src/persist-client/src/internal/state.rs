@@ -2357,6 +2357,17 @@ where
             .0
             .saturating_sub(self.collections.last_gc_req.0)
             >= gc_threshold;
+
+        // If we wouldn't otherwise gc, check if we have an active gc. If we do, and
+        // it's been a while since it started, we should gc.
+        let should_gc = if use_active_gc && !should_gc {
+            match self.collections.active_gc {
+                Some(active_gc) => now.saturating_sub(active_gc.start_ms) > fallback_threshold_ms,
+                None => false,
+            }
+        } else {
+            should_gc
+        };
         // Assign GC traffic preferentially to writers, falling back to anyone
         // generating new state versions if there are no writers.
         let should_gc = should_gc && (is_write || self.collections.writers.is_empty());
@@ -2367,6 +2378,9 @@ where
         let tombstone_needs_gc = self.collections.is_tombstone();
         let should_gc = should_gc || tombstone_needs_gc;
         let should_gc = if use_active_gc {
+            // If we have an active gc, we should only gc if the active gc is
+            // sufficiently old. This is to avoid doing more gc work than
+            // necessary.
             should_gc
                 && match self.collections.active_gc {
                     Some(active) => now.saturating_sub(active.start_ms) > fallback_threshold_ms,
@@ -3711,6 +3725,19 @@ pub(crate) mod tests {
             Some(GcReq {
                 shard_id: state.shard_id,
                 new_seqno_since: SeqNo(300)
+            })
+        );
+
+        // Even if the sequence number doesn't pass the threshold, if the
+        // active gc is expired, we will gc.
+
+        state.seqno = SeqNo(301);
+        assert_eq!(state.seqno_since(), SeqNo(301));
+        assert_eq!(
+            state.maybe_gc(true, GC_USE_ACTIVE_GC, GC_FALLBACK_THRESHOLD_MS, new_now),
+            Some(GcReq {
+                shard_id: state.shard_id,
+                new_seqno_since: SeqNo(301)
             })
         );
 
