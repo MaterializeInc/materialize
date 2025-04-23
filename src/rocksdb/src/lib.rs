@@ -343,7 +343,7 @@ where
     /// `metrics` is a set of metric types that this type will keep
     /// up to date. `enc_opts` is the `bincode` options used to
     /// serialize and deserialize the keys and values.
-    pub async fn new<M, O, IM, F>(
+    pub fn new<M, O, IM, F>(
         instance_path: &Path,
         options: InstanceOptions<O, V, F>,
         tuning_config: RocksDBConfig,
@@ -358,55 +358,16 @@ where
     {
         let dynamic_config = tuning_config.dynamic.clone();
         let supports_merges = options.merge_operator.is_some();
-        if options.cleanup_on_new && instance_path.exists() {
-            let instance_path_owned = instance_path.to_owned();
-
-            // We require that cleanup of the DB succeeds. Otherwise, we could open a DB with old,
-            // incorrect data. Because of races with dataflow shutdown, we retry a few times here.
-            // 1s with a 2x backoff is ~30s after 5 tries.
-            //
-            // TODO(guswynn): remove this when we can wait on dataflow cleanup asynchronously in
-            // the controller.
-            let retry = mz_ore::retry::Retry::default()
-                .max_tries(options.cleanup_tries)
-                // Large DB's could take multiple seconds to run.
-                .initial_backoff(std::time::Duration::from_secs(1));
-
-            retry
-                .retry_async_canceling(|_rs| async {
-                    let instance_path_owned = instance_path_owned.clone();
-                    mz_ore::task::spawn_blocking(
-                        || {
-                            format!(
-                                "RocksDB instance at {}: cleanup on creation",
-                                instance_path.display()
-                            )
-                        },
-                        move || {
-                            if let Err(e) =
-                                DB::destroy(&RocksDBOptions::default(), &*instance_path_owned)
-                            {
-                                tracing::warn!(
-                                    "failed to cleanup rocksdb dir on creation {}: {}",
-                                    instance_path_owned.display(),
-                                    e.display_with_causes(),
-                                );
-                                Err(Error::from(e))
-                            } else {
-                                Ok(())
-                            }
-                        },
-                    )
-                    .await?
-                })
-                .await?;
-        }
 
         // The buffer can be small here, as all interactions with it take `&mut self`.
         let (tx, rx): (mpsc::Sender<Command<K, V>>, _) = mpsc::channel(10);
 
         let instance_path = instance_path.to_owned();
-        let (creation_error_tx, creation_error_rx) = oneshot::channel();
+        // RocksDB inititalization and core loop are executed in a separate thread to avoid
+        // blocking and surfacing initialization errors which may result in a panic.
+        // If initialization fails, the thread exits.  The channel rx handle will be dropped,
+        // and any command to RocksDBInstance will fail with Error::RocksDBThreadGoneAway,
+        // resulting in suspend-and-restart.
         std::thread::spawn(move || {
             rocksdb_core_loop(
                 options,
@@ -415,13 +376,8 @@ where
                 rx,
                 shared_metrics,
                 instance_metrics,
-                creation_error_tx,
             )
         });
-
-        if let Ok(creation_error) = creation_error_rx.await {
-            return Err(creation_error);
-        }
 
         Ok(Self {
             tx,
@@ -622,7 +578,6 @@ fn rocksdb_core_loop<K, V, M, O, IM, F>(
     mut cmd_rx: mpsc::Receiver<Command<K, V>>,
     shared_metrics: M,
     instance_metrics: IM,
-    creation_error_tx: oneshot::Sender<Error>,
 ) where
     K: AsRef<[u8]> + Send + Sync + 'static,
     V: Serialize + DeserializeOwned + Send + Sync + 'static,
@@ -631,6 +586,37 @@ fn rocksdb_core_loop<K, V, M, O, IM, F>(
     F: for<'a> Fn(&'a [u8], ValueIterator<'a, O, V>) -> V + Send + Sync + Copy + 'static,
     IM: Deref<Target = RocksDBInstanceMetrics> + Send + 'static,
 {
+    if options.cleanup_on_new && instance_path.exists() {
+        // We require that cleanup of the DB succeeds. Otherwise, we could open a DB with old,
+        // incorrect data. Because of races with dataflow shutdown, we retry a few times here.
+        // 1s with a 2x backoff is ~30s after 5 tries.
+        let retry = mz_ore::retry::Retry::default()
+            .max_tries(options.cleanup_tries)
+            // Large DB's could take multiple seconds to run.
+            .initial_backoff(std::time::Duration::from_secs(1));
+
+        let destroy_result = retry.retry(|_rs| {
+            if let Err(e) = DB::destroy(&RocksDBOptions::default(), &*instance_path) {
+                tracing::warn!(
+                    "failed to cleanup rocksdb dir on creation {}: {}",
+                    instance_path.display(),
+                    e.display_with_causes(),
+                );
+                RetryResult::RetryableErr(Error::from(e))
+            } else {
+                RetryResult::Ok(())
+            }
+        });
+        if let Err(e) = destroy_result {
+            tracing::error!(
+                "retries exhausted trying to cleanup rocksdb dir on creation {}: {}",
+                instance_path.display(),
+                e.display_with_causes(),
+            );
+            return;
+        }
+    }
+
     let retry_max_duration = tuning_config.retry_max_duration;
 
     // Handle to an optional reference of a write buffer manager which
@@ -655,13 +641,13 @@ fn rocksdb_core_loop<K, V, M, O, IM, F>(
         });
 
     let db: DB = match retry_result {
-        Ok(db) => {
-            drop(creation_error_tx);
-            db
-        }
+        Ok(db) => db,
         Err(e) => {
-            // Communicate the error back to `new`.
-            let _ = creation_error_tx.send(e);
+            tracing::error!(
+                "failed to create rocksdb at {}: {}",
+                instance_path.display(),
+                e.display_with_causes(),
+            );
             return;
         }
     };
@@ -670,7 +656,6 @@ fn rocksdb_core_loop<K, V, M, O, IM, F>(
     let mut encoded_batch: Vec<(K, KeyUpdate<Vec<u8>>)> = Vec::new();
 
     let wo = options.as_rocksdb_write_options();
-
     while let Some(cmd) = cmd_rx.blocking_recv() {
         match cmd {
             Command::Shutdown { done_sender } => {
@@ -883,12 +868,28 @@ fn rocksdb_core_loop<K, V, M, O, IM, F>(
                     }
                 }
 
-                let _ = match retry_result {
+                match retry_result {
                     Ok(()) => {
                         batch.clear();
-                        response_sender.send(Ok((ret, batch)))
+                        let _ = response_sender.send(Ok((ret, batch)));
                     }
-                    Err(e) => response_sender.send(Err(e)),
+                    Err(e) => {
+                        let db_err = match e {
+                            Error::RocksDB(ref inner) => Some(inner.clone()),
+                            _ => None,
+                        };
+                        let _ = response_sender.send(Err(e));
+                        if let Some(db_err) = db_err {
+                            if !matches!(db_err.kind(), ErrorKind::TryAgain) {
+                                tracing::warn!(
+                                    "exiting on fatal rocksdb error at {}: {}",
+                                    instance_path.display(),
+                                    db_err.display_with_causes(),
+                                );
+                                break;
+                            }
+                        }
+                    }
                 };
             }
         }
@@ -896,6 +897,7 @@ fn rocksdb_core_loop<K, V, M, O, IM, F>(
     // Gracefully cleanup if the `RocksDBInstance` has gone away.
     db.cancel_all_background_work(true);
     drop(db);
+    tracing::info!("dropped rocksdb at {}", instance_path.display());
 
     // Note that we don't retry, as we already may race here with a source being restarted.
     if let Err(e) = DB::destroy(&RocksDBOptions::default(), &*instance_path) {
