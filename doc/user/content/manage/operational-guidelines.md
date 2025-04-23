@@ -58,7 +58,7 @@ In production,
 
 - If possible, use a dedicated cluster for [sources](/concepts/sources/); i.e.,
   avoid putting sources on the same cluster that hosts compute objects, sinks,
-  serving queries.
+  and/or serves queries.
 
 - Separate upsert sources from other sources. Upsert sources have higher
   resource requirements (since, for upsert sources, Materialize maintain each
@@ -85,4 +85,4 @@ See also [Cluster architecture](#cluster-architecture).
   input and output. When estimating required resources, consider both the
   hydration cost and the steady-state cost.
 
-- During hydration, sinks need to load an entire snpshot of the data in memory.
+- During hydration, sinks need to load an entire snapshot of the data in memory.
