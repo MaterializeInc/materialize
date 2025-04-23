@@ -1018,7 +1018,7 @@ impl HirScalarExpr {
                     cond,
                     then,
                     els,
-                    name: _,
+                    name,
                 } => {
                     // The `If` case is complicated by the fact that we do not want to
                     // apply the `then` or `else` logic to tuples that respectively do
@@ -1112,7 +1112,7 @@ impl HirScalarExpr {
                             Ok::<MirRelationExpr, PlanError>(then_inner.union(else_inner))
                         })?;
 
-                        SS::column(inner_arity)
+                        SS::Column(inner_arity, name)
                     }
                 }
 
@@ -1127,7 +1127,7 @@ impl HirScalarExpr {
 
                 // When the subquery would return 0 rows for some row in the outer query, `subquery.applied_to(get_inner)` will not have any corresponding row.
                 // Use `lookup` if you need to add default values for cases when the subquery returns 0 rows.
-                Exists(expr, _name) => {
+                Exists(expr, name) => {
                     let apply_requires_distinct_outer = true;
                     *inner = apply_existential_subquery(
                         id_gen,
@@ -1138,10 +1138,10 @@ impl HirScalarExpr {
                         apply_requires_distinct_outer,
                         context,
                     )?;
-                    SS::column(inner.arity() - 1)
+                    SS::Column(inner.arity() - 1, name)
                 }
 
-                Select(expr, _name) => {
+                Select(expr, name) => {
                     let apply_requires_distinct_outer = true;
                     *inner = apply_scalar_subquery(
                         id_gen,
@@ -1152,7 +1152,7 @@ impl HirScalarExpr {
                         apply_requires_distinct_outer,
                         context,
                     )?;
-                    SS::column(inner.arity() - 1)
+                    SS::Column(inner.arity() - 1, name)
                 }
                 Windowing(expr, _name) => {
                     let partition_by = expr.partition_by;
