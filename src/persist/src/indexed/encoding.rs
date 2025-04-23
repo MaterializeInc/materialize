@@ -383,6 +383,17 @@ impl BlobTraceUpdates {
         structured
     }
 
+    /// If we have structured data, cast this data as a structured part.
+    pub fn as_part(&self) -> Option<Part> {
+        let ext = self.structured()?.clone();
+        Some(Part {
+            key: ext.key,
+            val: ext.val,
+            time: self.timestamps().clone(),
+            diff: self.diffs().clone(),
+        })
+    }
+
     /// Convert this blob into a structured part, transforming the codec data if necessary.
     pub fn into_part<K: Codec, V: Codec>(
         &mut self,

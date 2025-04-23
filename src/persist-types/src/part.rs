@@ -17,7 +17,7 @@ use arrow::datatypes::ToByteSlice;
 use mz_ore::result::ResultExt;
 
 use crate::Codec64;
-use crate::arrow::ArrayOrd;
+use crate::arrow::{ArrayIdx, ArrayOrd};
 use crate::columnar::{ColumnDecoder, ColumnEncoder, Schema};
 
 /// A structured columnar representation of one blob's worth of data.
@@ -109,6 +109,38 @@ impl Part {
             ((key.clone(), val.clone()), time, diff)
         });
         Ok(iter)
+    }
+
+    /// Convert the key/value columns to `ArrayOrd`.
+    pub fn as_ord(&self) -> PartOrd {
+        PartOrd {
+            key: ArrayOrd::new(&*self.key),
+            val: ArrayOrd::new(&*self.val),
+            time: self.time.clone(),
+            diff: self.diff.clone(),
+        }
+    }
+}
+
+/// A part with the key/value arrays downcast to `ArrayOrd` for convenience.
+#[derive(Debug, Clone)]
+pub struct PartOrd {
+    key: ArrayOrd,
+    val: ArrayOrd,
+    time: Int64Array,
+    diff: Int64Array,
+}
+
+impl PartOrd {
+    /// Iterate over the contents of the part in their un-decoded form.
+    pub fn iter(&self) -> impl Iterator<Item = (ArrayIdx, ArrayIdx, [u8; 8], [u8; 8])> {
+        (0..self.time.len()).map(move |i| {
+            let key = self.key.at(i);
+            let val = self.val.at(i);
+            let time = self.time.value(i).to_le_bytes();
+            let diff = self.diff.value(i).to_le_bytes();
+            (key, val, time, diff)
+        })
     }
 }
 

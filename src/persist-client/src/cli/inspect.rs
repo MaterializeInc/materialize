@@ -11,7 +11,6 @@
 
 use std::collections::btree_map::Entry;
 use std::collections::{BTreeMap, BTreeSet};
-use std::fmt;
 use std::pin::pin;
 use std::str::FromStr;
 use std::sync::{Arc, Mutex};
@@ -318,18 +317,6 @@ struct BatchPartUpdate {
     d: i64,
 }
 
-#[derive(PartialOrd, Ord, PartialEq, Eq)]
-struct PrettyBytes<'a>(&'a [u8]);
-
-impl fmt::Debug for PrettyBytes<'_> {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match std::str::from_utf8(self.0) {
-            Ok(x) => fmt::Debug::fmt(x, f),
-            Err(_) => fmt::Debug::fmt(self.0, f),
-        }
-    }
-}
-
 /// Fetches the updates in a blob batch part
 pub async fn blob_batch_part(
     blob_uri: &SensitiveUrl,
@@ -361,18 +348,18 @@ pub async fn blob_batch_part(
         desc,
         updates: Vec::new(),
     };
-    let records = encoded_part.normalize(&metrics.columnar);
-    for ((k, v), t, d) in records
-        .records()
-        .expect("only implemented for records")
-        .iter()
-    {
+    let records = encoded_part
+        .updates()
+        .as_part()
+        .ok_or_else(|| anyhow!("expected structured data"))?
+        .as_ord();
+    for (k, v, t, d) in records.iter() {
         if out.updates.len() > limit {
             break;
         }
         out.updates.push(BatchPartUpdate {
-            k: format!("{:?}", PrettyBytes(k)),
-            v: format!("{:?}", PrettyBytes(v)),
+            k: k.to_string(),
+            v: v.to_string(),
             t: u64::from_le_bytes(t),
             d: i64::from_le_bytes(d),
         });
@@ -395,7 +382,7 @@ async fn consolidated_size(args: &StateArgs) -> Result<(), anyhow::Error> {
     // This is odd, but advance by the upper to get maximal consolidation.
     let as_of = state.upper().borrow();
 
-    let mut updates = Vec::new();
+    let mut parts = Vec::new();
     for batch in state.collections.trace.batches() {
         let mut part_stream =
             pin!(batch.part_stream(shard_id, &*state_versions.blob, &*state_versions.metrics));
@@ -412,20 +399,35 @@ async fn consolidated_size(args: &StateArgs) -> Result<(), anyhow::Error> {
             )
             .await
             .expect("part exists");
-            let part = encoded_part.normalize(&state_versions.metrics.columnar);
-            for ((k, v), t, d) in part.records().expect("codec records").iter() {
-                let mut t = <u64 as Codec64>::decode(t);
-                t.advance_by(as_of);
-                let d = <i64 as Codec64>::decode(d);
-                updates.push(((k.to_owned(), v.to_owned()), t, d));
-            }
+            let part = encoded_part.updates();
+            let part = part
+                .as_part()
+                .ok_or_else(|| anyhow!("expected structured data"))?
+                .as_ord();
+            parts.push(part);
         }
     }
 
-    let bytes: usize = updates.iter().map(|((k, v), _, _)| k.len() + v.len()).sum();
+    let mut updates = vec![];
+    for part in &parts {
+        for (k, v, t, d) in part.iter() {
+            let mut t = <u64 as Codec64>::decode(t);
+            t.advance_by(as_of);
+            let d = <i64 as Codec64>::decode(d);
+            updates.push(((k, v), t, d));
+        }
+    }
+
+    let bytes: usize = updates
+        .iter()
+        .map(|((k, v), _, _)| k.goodbytes() + v.goodbytes())
+        .sum();
     println!("before: {} updates {} bytes", updates.len(), bytes);
     differential_dataflow::consolidation::consolidate_updates(&mut updates);
-    let bytes: usize = updates.iter().map(|((k, v), _, _)| k.len() + v.len()).sum();
+    let bytes: usize = updates
+        .iter()
+        .map(|((k, v), _, _)| k.goodbytes() + v.goodbytes())
+        .sum();
     println!("after : {} updates {} bytes", updates.len(), bytes);
 
     Ok(())
