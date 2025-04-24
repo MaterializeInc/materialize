@@ -1,0 +1,10 @@
+columns:
+  - column: "Tier"
+rows:
+  - "Tier": |
+      **A dedicated cluster(s)** for [sources](/concepts/sources/).
+  - "Tier": |
+      **A dedicated cluster(s)** for compute (e.g.,
+      [materialized views](/concepts/views/#materialized-views)).
+  - "Tier": |
+      **A dedicated cluster(s)** for serving queries, including [indexes](/concepts/indexes/).
