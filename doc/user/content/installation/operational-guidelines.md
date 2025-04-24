@@ -7,6 +7,7 @@ menu:
   main:
     parent: "installation"
     weight: 80
+    identifier: "sm-operational-guidelines"
 ---
 
 ## Recommended instance types
