@@ -2321,7 +2321,7 @@ mod monoids {
     use serde::{Deserialize, Serialize};
 
     /// A monoid containing a single-datum row.
-    #[derive(Ord, PartialOrd, Eq, PartialEq, Debug, Clone, Serialize, Deserialize, Hash)]
+    #[derive(Ord, PartialOrd, Eq, PartialEq, Debug, Serialize, Deserialize, Hash)]
     pub enum ReductionMonoid {
         Min(Row),
         Max(Row),
@@ -2332,6 +2332,25 @@ mod monoids {
             use ReductionMonoid::*;
             match self {
                 Min(row) | Max(row) => row,
+            }
+        }
+    }
+
+    impl Clone for ReductionMonoid {
+        fn clone(&self) -> Self {
+            use ReductionMonoid::*;
+            match self {
+                Min(row) => Min(row.clone()),
+                Max(row) => Max(row.clone()),
+            }
+        }
+
+        fn clone_from(&mut self, source: &Self) {
+            use ReductionMonoid::*;
+            match (self, source) {
+                (Min(row) | Max(row), Min(source_row) | Max(source_row)) => {
+                    row.clone_from(source_row);
+                }
             }
         }
     }
