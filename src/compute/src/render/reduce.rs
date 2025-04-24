@@ -2358,8 +2358,8 @@ mod monoids {
                 // FIXME(ptravers): not sure what we want to do here we can't overwrite
                 // without having owned access to the Row in dest. I don't see a way to
                 // achieve that without a clone. Is it better to panic or clone? I would lean
-                // clone but for safety but I don't know how likely it is to hit the sad case
-                // in practice.
+                // clone for safety but I don't know how likely it is to hit the sad case
+                // in practice?
                 (dest, src) => soft_panic_or_log!(
                     "Mismatched monoid variants in clone_from! destination: {dest:?} source: {src:?}",
                 ),
