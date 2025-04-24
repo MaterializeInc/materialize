@@ -46,6 +46,7 @@ use tracing::error;
 
 use crate::compute_state::{ComputeState, HydrationEvent};
 use crate::extensions::arrange::{KeyCollection, MzArrange, MzArrangeCore};
+use crate::logging::compute::ComputeEvent;
 use crate::render::errors::ErrorLogger;
 use crate::render::{LinearJoinSpec, RenderTimestamp};
 use crate::row_spine::{DatumSeq, RowRowBuilder};
@@ -92,8 +93,10 @@ where
     ///
     /// `None` if no hydration events should be logged in this context.
     pub(super) hydration_logger: Option<HydrationLogger>,
-    /// The logger, from Timely's logging framework, if logs are enabled.
-    pub(super) compute_logger: Option<crate::logging::compute::Logger>,
+    /// A logger for [`ComputeEvent`]s.
+    ///
+    /// `None` if no compute events should be logged in this context.
+    pub(super) compute_logger: Option<ComputeEventLogger>,
     /// Specification for rendering linear joins.
     pub(super) linear_join_spec: LinearJoinSpec,
     /// The expiration time for dataflows in this context. The output's frontier should never advance
@@ -130,12 +133,16 @@ where
         let (hydration_logger, compute_logger) = if dataflow.is_transient() {
             (None, None)
         } else {
+            let compute_logger = compute_state.compute_logger.clone();
             (
                 Some(HydrationLogger {
                     export_ids: dataflow.export_ids().collect(),
                     tx: compute_state.hydration_tx.clone(),
                 }),
-                compute_state.compute_logger.clone(),
+                compute_logger.map(|logger| ComputeEventLogger {
+                    export_ids: dataflow.export_ids().collect(),
+                    logger,
+                }),
             )
         };
 
@@ -300,6 +307,29 @@ impl HydrationLogger {
                 error!("hydration event receiver dropped unexpectely");
             }
         }
+    }
+}
+
+/// A logger for [`ComputeEvent`]s emitted for a dataflow.
+#[derive(Clone)]
+pub(super) struct ComputeEventLogger {
+    export_ids: Vec<GlobalId>,
+    logger: crate::logging::compute::Logger,
+}
+
+impl ComputeEventLogger {
+    /// Log the given compute events.
+    pub fn log_many<'a, I>(&self, events: I)
+    where
+        I: IntoIterator<Item = &'a ComputeEvent>,
+    {
+        self.logger.log_many(events);
+    }
+
+    /// Log a compute event for each dataflow export.
+    pub fn log_for_exports(&self, f: impl Fn(GlobalId) -> ComputeEvent) {
+        let events: Vec<_> = self.export_ids.iter().map(|id| f(*id)).collect();
+        self.log_many(events.iter());
     }
 }
 

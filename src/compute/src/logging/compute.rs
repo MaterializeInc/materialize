@@ -156,18 +156,12 @@ pub struct Hydration {
     pub export_id: GlobalId,
 }
 
-/// Announce a mapping of an LIR operator to a dataflow operator for a global ID.
+/// Announce a mapping of an LIR operator to a dataflow operator for an export.
 #[derive(Debug, Clone, PartialOrd, PartialEq, Columnar)]
 pub struct LirMapping {
-    /// The `GlobalId` in which the LIR operator is rendered.
-    ///
-    /// NB a single a dataflow may have many `GlobalId`s inside it.
-    /// A separate mapping (using `ComputeEvent::DataflowGlobal`)
-    /// tracks the many-to-one relationship between `GlobalId`s and
-    /// dataflows.
-    pub global_id: GlobalId,
+    /// The ID of the export for which the LIR operator is rendered.
+    pub export_id: GlobalId,
     /// The actual mapping.
-    /// Represented this way to reduce the size of `ComputeEvent`.
     pub mapping: Vec<(LirId, LirMetadata)>,
 }
 
@@ -516,7 +510,7 @@ pub(super) fn construct<S: Scheduler + 'static, G: Scope<Timestamp = Timestamp>>
         let lir_mapping = lir_mapping
             .map(move |(datum, time, diff)| {
                 let row = packer.pack_slice_owned(&[
-                    make_string_datum(GlobalId::into_owned(datum.global_id), &mut scratch1),
+                    make_string_datum(GlobalId::into_owned(datum.export_id), &mut scratch1),
                     Datum::UInt64(<LirId as Columnar>::into_owned(datum.lir_id).into()),
                     Datum::UInt64(u64::cast_from(worker_id)),
                     make_string_datum(datum.operator, &mut scratch2),
@@ -739,7 +733,7 @@ struct ErrorCountDatum {
 
 #[derive(Clone, Columnar)]
 struct LirMappingDatum {
-    global_id: GlobalId,
+    export_id: GlobalId,
     lir_id: LirId,
     operator: String,
     parent_lir_id: Option<LirId>,
@@ -955,7 +949,7 @@ impl<A: Scheduler> DemuxHandler<'_, '_, A> {
                     ) in mappings
                     {
                         let datum = LirMappingDatum {
-                            global_id,
+                            export_id: global_id,
                             lir_id,
                             operator,
                             parent_lir_id,
@@ -1249,14 +1243,14 @@ impl<A: Scheduler> DemuxHandler<'_, '_, A> {
     /// Indicate that a new LIR operator exists; record the dataflow address it maps to.
     fn handle_lir_mapping(
         &mut self,
-        LirMappingReference { global_id, mapping }: <LirMapping as Columnar>::Ref<'_>,
+        LirMappingReference { export_id, mapping }: <LirMapping as Columnar>::Ref<'_>,
     ) {
-        let global_id = Columnar::into_owned(global_id);
+        let export_id = Columnar::into_owned(export_id);
         // record the state (for the later drop)
         let mappings = || mapping.into_iter().map(Columnar::into_owned);
         self.state
             .lir_mapping
-            .entry(global_id)
+            .entry(export_id)
             .and_modify(|existing_mapping| existing_mapping.extend(mappings()))
             .or_insert_with(|| mappings().collect());
 
@@ -1264,7 +1258,7 @@ impl<A: Scheduler> DemuxHandler<'_, '_, A> {
         let ts = self.ts();
         for (lir_id, meta) in mapping.into_iter() {
             let datum = LirMappingDatumReference {
-                global_id,
+                export_id,
                 lir_id,
                 operator: meta.operator,
                 parent_lir_id: meta.parent_lir_id,
