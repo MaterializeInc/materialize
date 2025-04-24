@@ -155,9 +155,7 @@ use crate::arrangement::manager::TraceBundle;
 use crate::compute_state::ComputeState;
 use crate::extensions::arrange::{KeyCollection, MzArrange};
 use crate::extensions::reduce::MzReduce;
-use crate::logging::compute::{
-    ComputeEvent, DataflowGlobal, LirMapping, LirMetadata, LogDataflowErrors,
-};
+use crate::logging::compute::{ComputeEvent, LirMapping, LirMetadata, LogDataflowErrors};
 use crate::render::context::{ArrangementFlavor, Context, ShutdownToken};
 use crate::render::continual_task::ContinualTaskCtx;
 use crate::row_spine::{RowRowBatcher, RowRowBuilder};
@@ -402,16 +400,6 @@ pub fn build_compute_dataflow<A: Allocate>(
                                 .leave_region()
                         },
                     );
-                    let global_id = object.id;
-
-                    context.log_dataflow_global_id(
-                        *bundle
-                            .scope()
-                            .addr()
-                            .first()
-                            .expect("Dataflow root id must exist"),
-                        global_id,
-                    );
                     context.insert_id(Id::Global(object.id), bundle);
                 }
 
@@ -488,15 +476,6 @@ pub fn build_compute_dataflow<A: Allocate>(
                                 .render_plan(object.plan)
                                 .leave_region()
                         },
-                    );
-                    let global_id = object.id;
-                    context.log_dataflow_global_id(
-                        *bundle
-                            .scope()
-                            .addr()
-                            .first()
-                            .expect("Dataflow root id must exist"),
-                        global_id,
                     );
                     context.insert_id(Id::Global(object.id), bundle);
                 }
@@ -1220,15 +1199,6 @@ where
                     &self.config_set,
                 )
             }
-        }
-    }
-
-    fn log_dataflow_global_id(&self, dataflow_index: usize, global_id: GlobalId) {
-        if let Some(logger) = &self.compute_logger {
-            logger.log_many([&ComputeEvent::DataflowGlobal(DataflowGlobal {
-                dataflow_index,
-                global_id,
-            })]);
         }
     }
 
