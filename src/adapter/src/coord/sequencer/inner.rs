@@ -1885,7 +1885,7 @@ impl Coordinator {
                             dropped_in_use_indexes.push(DroppedInUseIndex {
                                 index_name: humanizer
                                     .humanize_id(index.global_id())
-                                    .unwrap_or(id.to_string()),
+                                    .unwrap_or_else(|| id.to_string()),
                                 dependant_objects: dependants,
                             });
                         }
@@ -2724,6 +2724,18 @@ impl Coordinator {
         mut ctx: ExecuteContext,
         plan: plan::InsertPlan,
     ) {
+        // Normally, this would get checked when trying to add "write ops" to
+        // the transaction but we go down diverging paths below, based on
+        // whether the INSERT is only constant values or not.
+        //
+        // For the non-constant case we sequence an implicit read-then-write,
+        // which messes with the transaction ops and would allow an implicit
+        // read-then-write to sneak into a read-only transaction.
+        if !ctx.session_mut().transaction().allows_writes() {
+            ctx.retire(Err(AdapterError::ReadOnlyTransaction));
+            return;
+        }
+
         // The structure of this code originates from a time where
         // `ReadThenWritePlan` was carrying an `MirRelationExpr` instead of an
         // optimized `MirRelationExpr`.
@@ -4497,7 +4509,7 @@ impl Coordinator {
             return Err(AdapterError::PlanError(plan::PlanError::VarError(
                 VarError::InvalidParameterValue {
                     name: NETWORK_POLICY.name(),
-                    invalid_values: vec![policy_name.unwrap_or("<none>".to_string())],
+                    invalid_values: vec![policy_name.unwrap_or_else(|| "<none>".to_string())],
                     reason: "no network policy with such name exists".to_string(),
                 },
             )));

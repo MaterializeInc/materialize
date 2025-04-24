@@ -282,7 +282,7 @@ pub mod v1alpha1 {
                         // isn't an easy way to do arithmetic on it
                         .and_then(|requirements| requirements.get("memory").cloned())
                         // TODO: is there a better default to use here?
-                        .unwrap_or(Quantity("4096Mi".to_string()))
+                        .unwrap_or_else(|| Quantity("4096Mi".to_string()))
                 })
         }
 

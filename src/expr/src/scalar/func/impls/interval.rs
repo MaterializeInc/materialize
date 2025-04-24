@@ -66,7 +66,7 @@ sqlfunc!(
     #[inverse = to_unary!(super::NegInterval)]
     fn neg_interval(i: Interval) -> Result<Interval, EvalError> {
         i.checked_neg()
-            .ok_or(EvalError::IntervalOutOfRange(i.to_string().into()))
+            .ok_or_else(|| EvalError::IntervalOutOfRange(i.to_string().into()))
     }
 );
 

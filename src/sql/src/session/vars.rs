@@ -277,7 +277,7 @@ impl SessionVar {
             .default_value
             .as_ref()
             .map(|v| v.as_ref())
-            .unwrap_or(self.definition.value.value());
+            .unwrap_or_else(|| self.definition.value.value());
         if local {
             self.local_value = Some(value.box_clone());
         } else {
@@ -314,7 +314,7 @@ impl SessionVar {
             .or(self.staged_value.as_deref())
             .or(self.session_value.as_deref())
             .or(self.default_value.as_deref())
-            .unwrap_or(self.definition.value.value())
+            .unwrap_or_else(|| self.definition.value.value())
     }
 
     /// Returns the [`Value`] that is currently stored as the `session_value`.
@@ -965,7 +965,7 @@ impl SystemVar {
         self.persisted_value
             .as_deref()
             .or(self.dynamic_default.as_deref())
-            .unwrap_or(self.definition.default_value())
+            .unwrap_or_else(|| self.definition.default_value())
     }
 
     pub fn value<V: 'static>(&self) -> &V {
@@ -1495,7 +1495,7 @@ impl SystemVars {
                 let default = var
                     .dynamic_default
                     .as_deref()
-                    .unwrap_or(var.definition.default_value());
+                    .unwrap_or_else(|| var.definition.default_value());
                 (name.as_str().to_owned(), default.format())
             })
             .collect()

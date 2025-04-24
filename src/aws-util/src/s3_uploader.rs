@@ -168,9 +168,7 @@ impl S3MultiPartUploader {
             .await?;
         let upload_id = res
             .upload_id()
-            .ok_or(anyhow!(
-                "create_multipart_upload response missing upload id"
-            ))?
+            .ok_or_else(|| anyhow!("create_multipart_upload response missing upload id"))?
             .to_string();
         Ok(S3MultiPartUploader {
             client,

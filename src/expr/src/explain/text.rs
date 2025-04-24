@@ -427,7 +427,7 @@ impl MirRelationExpr {
                         let humanize_unqualified_maybe_deleted = |id: &GlobalId| {
                             ctx.humanizer
                                 .humanize_id_unqualified(*id)
-                                .unwrap_or("[DELETED INDEX]".to_owned())
+                                .unwrap_or_else(|| "[DELETED INDEX]".to_owned())
                         };
                         match persist_or_index {
                             AccessStrategy::UnknownOrLocal => {
@@ -905,7 +905,7 @@ impl MirRelationExpr {
         let humanized_index = ctx
             .humanizer
             .humanize_id_unqualified(*idx_id)
-            .unwrap_or("[DELETED INDEX]".to_owned());
+            .unwrap_or_else(|| "[DELETED INDEX]".to_owned());
         if let Some(constants) = constants {
             write!(
                 f,

@@ -1,6 +1,6 @@
 ---
 source: src/expr/src/scalar/func.rs
-expression: "#[sqlfunc(\n    is_monotone = (true, false),\n    output_type = i32,\n    is_infix_op = true,\n    sqlname = \"/\",\n    propagates_nulls = true\n)]\nfn div_int32<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {\n    let b = b.unwrap_int32();\n    if b == 0 {\n        Err(EvalError::DivisionByZero)\n    } else {\n        a.unwrap_int32()\n            .checked_div(b)\n            .map(Datum::from)\n            .ok_or(EvalError::Int32OutOfRange(format!(\"{a} / {b}\").into()))\n    }\n}\n"
+expression: "#[sqlfunc(\n    is_monotone = \"(true, false)\",\n    output_type = \"i32\",\n    is_infix_op = true,\n    sqlname = \"/\",\n    propagates_nulls = true\n)]\nfn div_int32<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {\n    let b = b.unwrap_int32();\n    if b == 0 {\n        Err(EvalError::DivisionByZero)\n    } else {\n        a.unwrap_int32()\n            .checked_div(b)\n            .map(Datum::from)\n            .ok_or_else(|| EvalError::Int32OutOfRange(format!(\"{a} / {b}\").into()))\n    }\n}\n"
 ---
 #[derive(
     proptest_derive::Arbitrary,
@@ -72,6 +72,6 @@ fn div_int32<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
         a.unwrap_int32()
             .checked_div(b)
             .map(Datum::from)
-            .ok_or(EvalError::Int32OutOfRange(format!("{a} / {b}").into()))
+            .ok_or_else(|| EvalError::Int32OutOfRange(format!("{a} / {b}").into()))
     }
 }

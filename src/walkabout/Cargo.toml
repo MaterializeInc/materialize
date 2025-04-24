@@ -10,8 +10,8 @@ publish = false
 workspace = true
 
 [dependencies]
-anyhow = "1.0.97"
-itertools = "0.12.1"
+anyhow = "1.0.98"
+itertools = "0.14.0"
 mz-ore-build = { path = "../ore-build", default-features = false }
 quote = "1.0.40"
 syn = { version = "1.0.107", features = ["extra-traits", "full", "parsing"] }

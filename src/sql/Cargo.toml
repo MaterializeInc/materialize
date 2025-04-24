@@ -10,9 +10,9 @@ publish = false
 workspace = true
 
 [dependencies]
-anyhow = "1.0.97"
+anyhow = "1.0.98"
 array-concat = "0.5.5"
-aws-sdk-sts = { version = "1.7.0", default-features = false, features = [
+aws-sdk-sts = { version = "1.41.0", default-features = false, features = [
     "rt-tokio",
 ] }
 bitflags = "1.3.2"
@@ -27,7 +27,7 @@ hex = "0.4.3"
 http = "1.2.0"
 im = "15.1.0"
 ipnet = "2.11.0"
-itertools = "0.12.1"
+itertools = "0.14.0"
 maplit = "1.0.2"
 mysql_async = { version = "0.35.1", default-features = false, features = [
     "minimal",
@@ -78,7 +78,7 @@ rdkafka = { version = "0.29.0", features = [
     "libz-static",
     "zstd",
 ] }
-regex = "1.10.6"
+regex = "1.11.1"
 reqwest = "0.11.13"
 serde = { version = "1.0.219", features = ["derive"] }
 serde_json = "1.0.127"

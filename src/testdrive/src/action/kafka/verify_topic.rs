@@ -96,7 +96,7 @@ pub async fn run_verify_topic(
                 .topics()
                 .iter()
                 .find(|t| t.name() == topic)
-                .ok_or(anyhow::anyhow!("topic not found"))?;
+                .ok_or_else(|| anyhow::anyhow!("topic not found"))?;
 
             if let Some(partitions) = partition_count {
                 if topic.partitions().len() != partitions {
@@ -179,7 +179,7 @@ pub async fn run_verify_topic(
                     .await?
                     .iter()
                     .find(|subject| subject == &&schema_subject)
-                    .ok_or(anyhow::anyhow!("schema not found"))
+                    .ok_or_else(|| anyhow::anyhow!("schema not found"))
                     .map(|_| ())
             })
             .await?;

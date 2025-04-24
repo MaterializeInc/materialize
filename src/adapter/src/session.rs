@@ -1160,6 +1160,34 @@ impl<T: TimestampManipulation> TransactionStatus<T> {
         }
     }
 
+    /// Checks whether the current state of this transaction allows writes
+    /// (adding write ops).
+    /// transaction
+    pub fn allows_writes(&self) -> bool {
+        match self {
+            TransactionStatus::Started(Transaction { ops, access, .. })
+            | TransactionStatus::InTransaction(Transaction { ops, access, .. })
+            | TransactionStatus::InTransactionImplicit(Transaction { ops, access, .. }) => {
+                match ops {
+                    TransactionOps::None => access != &Some(TransactionAccessMode::ReadOnly),
+                    TransactionOps::Peeks { determination, .. } => {
+                        // If-and-only-if peeks thus far do not have a timestamp
+                        // (i.e. they are constant), we can switch to a write
+                        // transaction.
+                        !determination.timestamp_context.contains_timestamp()
+                    }
+                    TransactionOps::Subscribe => false,
+                    TransactionOps::Writes(_) => true,
+                    TransactionOps::SingleStatement { .. } => false,
+                    TransactionOps::DDL { .. } => false,
+                }
+            }
+            TransactionStatus::Default | TransactionStatus::Failed(_) => {
+                unreachable!()
+            }
+        }
+    }
+
     /// Adds operations to the current transaction. An error is produced if they cannot be merged
     /// (i.e., a timestamp-dependent read cannot be merged to an insert).
     ///

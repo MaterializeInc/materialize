@@ -26,22 +26,16 @@ pub const ENABLE_0DT_DEPLOYMENT_SOURCES: Config<bool> = Config::new(
     "Whether to enable zero-downtime deployments for sources that support it (experimental).",
 );
 
-pub const WALLCLOCK_LAG_HISTORY_REFRESH_INTERVAL: Config<Duration> = Config::new(
-    "wallclock_lag_history_refresh_interval",
+pub const WALLCLOCK_LAG_RECORDING_INTERVAL: Config<Duration> = Config::new(
+    "wallclock_lag_recording_interval",
     Duration::from_secs(60),
-    "The interval at which to refresh `WallclockLagHistory` introspection.",
+    "The interval at which to record `WallclockLagHistory` introspection.",
 );
 
 pub const ENABLE_WALLCLOCK_LAG_HISTOGRAM_COLLECTION: Config<bool> = Config::new(
     "enable_wallclock_lag_histogram_collection",
     true,
     "Whether to record `WallclockLagHistogram` introspection.",
-);
-
-pub const WALLCLOCK_LAG_HISTOGRAM_REFRESH_INTERVAL: Config<Duration> = Config::new(
-    "wallclock_lag_histogram_refresh_interval",
-    Duration::from_secs(60),
-    "The interval at which to refresh `WallclockLagHistogram` introspection.",
 );
 
 pub const WALLCLOCK_LAG_HISTOGRAM_PERIOD_INTERVAL: Config<Duration> = Config::new(
@@ -79,9 +73,8 @@ pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
     configs
         .add(&CONTROLLER_PAST_GENERATION_REPLICA_CLEANUP_RETRY_INTERVAL)
         .add(&ENABLE_0DT_DEPLOYMENT_SOURCES)
-        .add(&WALLCLOCK_LAG_HISTORY_REFRESH_INTERVAL)
+        .add(&WALLCLOCK_LAG_RECORDING_INTERVAL)
         .add(&ENABLE_WALLCLOCK_LAG_HISTOGRAM_COLLECTION)
-        .add(&WALLCLOCK_LAG_HISTOGRAM_REFRESH_INTERVAL)
         .add(&WALLCLOCK_LAG_HISTOGRAM_PERIOD_INTERVAL)
         .add(&ENABLE_TIMELY_ZERO_COPY)
         .add(&ENABLE_TIMELY_ZERO_COPY_LGALLOC)

@@ -12,12 +12,12 @@ workspace = true
 # NB: This is meant to be a strong, independent abstraction boundary. Please
 # don't leak in dependencies on other Materialize packages.
 [dependencies]
-anyhow = "1.0.97"
+anyhow = "1.0.98"
 arrow = { version = "53.3.0", default-features = false }
 bytes = { version = "1.10.1", features = ["serde"] }
 chrono = { version = "0.4.39", default-features = false, features = ["std"] }
 hex = "0.4.3"
-itertools = "0.12.1"
+itertools = "0.14.0"
 mz-ore = { path = "../ore", features = ["metrics", "test"], default-features = false }
 mz-proto = { path = "../proto", default-features = false }
 parquet = { version = "53.3.0", default-features = false, features = ["arrow"] }

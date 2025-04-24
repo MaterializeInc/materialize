@@ -727,9 +727,11 @@ where
             // Take the join of the handle's since and the provided `since`;
             // this lets materialized views express the since at which their
             // read handles "start."
-            let since = handle
-                .since()
-                .join(since.unwrap_or(&Antichain::from_elem(T::minimum())));
+            let provided_since = match since {
+                Some(since) => since,
+                None => &Antichain::from_elem(T::minimum()),
+            };
+            let since = handle.since().join(provided_since);
 
             let our_epoch = self.envd_epoch;
 
@@ -796,9 +798,11 @@ where
         // Take the join of the handle's since and the provided `since`;
         // this lets materialized views express the since at which their
         // read handles "start."
-        let since = handle
-            .since()
-            .join(since.unwrap_or(&Antichain::from_elem(T::minimum())));
+        let provided_since = match since {
+            Some(since) => since,
+            None => &Antichain::from_elem(T::minimum()),
+        };
+        let since = handle.since().join(provided_since);
 
         handle.downgrade_since(&since).await;
 

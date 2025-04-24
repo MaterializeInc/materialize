@@ -10,7 +10,7 @@ publish = false
 workspace = true
 
 [dependencies]
-anyhow = "1.0.97"
+anyhow = "1.0.98"
 async-stream = "0.3.6"
 async-trait = "0.1.88"
 clap = { version = "4.5.23", features = ["env", "derive"] }
@@ -18,7 +18,7 @@ crossbeam-channel = "0.5.15"
 futures = "0.3.31"
 http = "1.2.0"
 hyper-util = "0.1.11"
-itertools = "0.12.1"
+itertools = "0.14.0"
 mz-aws-secrets-controller = { path = "../aws-secrets-controller", default-features = false }
 mz-build-info = { path = "../build-info", default-features = false }
 mz-proto = { path = "../proto", default-features = false }

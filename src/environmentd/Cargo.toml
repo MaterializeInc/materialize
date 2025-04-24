@@ -12,12 +12,12 @@ publish = false
 workspace = true
 
 [dependencies]
-anyhow = "1.0.97"
+anyhow = "1.0.98"
 askama = { version = "0.12.1", default-features = false, features = ["config", "serde-json"] }
 async-trait = "0.1.88"
 axum = { version = "0.7.5", features = ["ws"] }
 axum-extra = { version = "0.9.3", features = ["typed-header"] }
-base64 = "0.13.1"
+base64 = "0.22.1"
 bytes = "1.10.1"
 bytesize = "1.3.0"
 chrono = { version = "0.4.39", default-features = false, features = ["std"] }
@@ -34,9 +34,9 @@ hyper-tls = "0.6.0"
 hyper-util = "0.1.11"
 include_dir = "0.7.4"
 ipnet = "2.11.0"
-itertools = "0.12.1"
+itertools = "0.14.0"
 jsonwebtoken = "9.3.1"
-libc = "0.2.171"
+libc = "0.2.172"
 mime = "0.3.16"
 mz-alloc = { path = "../alloc" }
 mz-alloc-default = { path = "../alloc-default", optional = true }
@@ -91,7 +91,7 @@ rdkafka-sys = { version = "4.3.0", features = [
     "zstd",
 ] }
 rand = "0.8.5"
-regex = { version = "1.10.6", optional = true }
+regex = { version = "1.11.1", optional = true }
 reqwest = { version = "0.11.13", features = ["json"] }
 rlimit = "0.8.3"
 semver = "1.0.26"
@@ -118,13 +118,13 @@ uuid = "1.16.0"
 workspace-hack = { version = "0.0.0", path = "../workspace-hack", optional = true }
 
 [dev-dependencies]
-assert_cmd = "2.0.16"
+assert_cmd = "2.0.17"
 bytes = "1.10.1"
 datadriven = "0.8.0"
 fallible-iterator = "0.2.0"
 http-body-util = "0.1.3"
 insta = { version = "1.42", features = ["json"] }
-itertools = "0.12.1"
+itertools = "0.14.0"
 jsonwebtoken = "9.3.1"
 mz-environmentd = { path = "../environmentd", features = ["test"] }
 mz-pgrepr = { path = "../pgrepr" }
@@ -150,7 +150,7 @@ timely = "0.20.0"
 tokio-postgres = { version = "0.7.8", features = ["with-chrono-0_4"] }
 
 [build-dependencies]
-anyhow = "1.0.97"
+anyhow = "1.0.98"
 cc = "1.2.19"
 mz-npm = { path = "../npm" }
 

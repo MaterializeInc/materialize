@@ -107,7 +107,7 @@ where
                                 EitherOrBoth::Left((t, before)) => (t, Some(before.clone()), None),
                                 EitherOrBoth::Right((t, after)) => (t, None, Some(after.clone())),
                             })
-                            .group_by(|(t, _before, _after)| *t);
+                            .chunk_by(|(t, _before, _after)| *t);
 
                             // For each timestamp, emit the group of
                             // `DiffPair`s.

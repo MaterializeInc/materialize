@@ -8,12 +8,13 @@
 # by the Apache License, Version 2.0.
 
 $ set-arg-default replicas=1
+$ set-arg-default default-storage-size=1
 
 # Exercises Webhook sources.
 
-> CREATE CLUSTER webhook_cluster REPLICAS (r1 (SIZE '1'));
+> CREATE CLUSTER webhook_cluster REPLICAS (r1 (SIZE '${arg.default-storage-size}'));
 
-> CREATE CLUSTER webhook_compute REPLICAS (r1 (SIZE '1'));
+> CREATE CLUSTER webhook_compute REPLICAS (r1 (SIZE '${arg.default-storage-size}'));
 
 > CREATE SOURCE webhook_text IN CLUSTER webhook_cluster FROM WEBHOOK
   BODY FORMAT TEXT;

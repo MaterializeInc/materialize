@@ -453,7 +453,7 @@ where
         // Ideally, we'd like our audit overhead to be proportional to the actual amount of "real"
         // work we're doing in the source. So: start with a small, constant budget; add to the
         // budget when we do real work; and skip auditing a part if we don't have the budget for it.
-        let mut audit_budget_bytes = BLOB_TARGET_SIZE.get(&cfg).saturating_mul(2);
+        let mut audit_budget_bytes = u64::cast_from(BLOB_TARGET_SIZE.get(&cfg).saturating_mul(2));
 
         // All future updates will be timestamped after this frontier.
         let mut current_frontier = as_of.clone();
@@ -474,28 +474,21 @@ where
                 // TODO: Push more of this logic into LeasedBatchPart like we've
                 // done for project?
                 if STATS_FILTER_ENABLED.get(&cfg) {
-                    let (filter_result, is_inline) = match &part_desc.part {
+                    let filter_result = match &part_desc.part {
                         BatchPart::Hollow(x) => {
                             let should_fetch =
                                 x.stats.as_ref().map_or(FilterResult::Keep, |stats| {
                                     filter_fn(&stats.decode(), current_frontier.borrow())
                                 });
-                            (should_fetch, false)
+                            should_fetch
                         }
-                        BatchPart::Inline { .. } => (FilterResult::Keep, true),
+                        BatchPart::Inline { .. } => FilterResult::Keep,
                     };
+                    // Apply the filter: discard or substitute the part if required.
                     let bytes = u64::cast_from(part_desc.encoded_size_bytes());
                     match filter_result {
                         FilterResult::Keep => {
-                            audit_budget_bytes = audit_budget_bytes
-                                .saturating_add(part_desc.part.encoded_size_bytes());
-                            if is_inline {
-                                metrics.pushdown.parts_inline_count.inc();
-                                metrics.pushdown.parts_inline_bytes.inc_by(bytes);
-                            } else {
-                                metrics.pushdown.parts_fetched_count.inc();
-                                metrics.pushdown.parts_fetched_bytes.inc_by(bytes);
-                            }
+                            audit_budget_bytes = audit_budget_bytes.saturating_add(bytes);
                         }
                         FilterResult::Discard => {
                             metrics.pushdown.parts_filtered_count.inc();
@@ -509,10 +502,8 @@ where
                                 }
                                 BatchPart::Inline { .. } => false,
                             };
-                            if should_audit
-                                && part_desc.part.encoded_size_bytes() < audit_budget_bytes
-                            {
-                                audit_budget_bytes -= part_desc.part.encoded_size_bytes();
+                            if should_audit && bytes < audit_budget_bytes {
+                                audit_budget_bytes -= bytes;
                                 metrics.pushdown.parts_audited_count.inc();
                                 metrics.pushdown.parts_audited_bytes.inc_by(bytes);
                                 part_desc.request_filter_pushdown_audit();
@@ -526,16 +517,16 @@ where
                         }
                         FilterResult::ReplaceWith { key, val } => {
                             part_desc.maybe_optimize(&cfg, key, val);
-                            audit_budget_bytes = audit_budget_bytes
-                                .saturating_add(part_desc.part.encoded_size_bytes());
-                            if is_inline {
-                                metrics.pushdown.parts_inline_count.inc();
-                                metrics.pushdown.parts_inline_bytes.inc_by(bytes);
-                            } else {
-                                metrics.pushdown.parts_fetched_count.inc();
-                                metrics.pushdown.parts_fetched_bytes.inc_by(bytes);
-                            }
+                            audit_budget_bytes = audit_budget_bytes.saturating_add(bytes);
                         }
+                    }
+                    let bytes = u64::cast_from(part_desc.encoded_size_bytes());
+                    if part_desc.part.is_inline() {
+                        metrics.pushdown.parts_inline_count.inc();
+                        metrics.pushdown.parts_inline_bytes.inc_by(bytes);
+                    } else {
+                        metrics.pushdown.parts_fetched_count.inc();
+                        metrics.pushdown.parts_fetched_bytes.inc_by(bytes);
                     }
                 }
 

@@ -15,7 +15,7 @@ bytes = "1.10.1"
 clap = { version = "4.5.23", features = ["derive", "env"] }
 csv-async = { version = "1.2.6", default-features = false, features = ["tokio"] }
 futures = "0.3.31"
-itertools = "0.12.1"
+itertools = "0.14.0"
 mz-ore = { path = "../ore", features = ["cli", "id_gen"], default-features = false }
 mz-pgrepr = { path = "../pgrepr", default-features = false }
 mz-sql-parser = { path = "../sql-parser", default-features = false }

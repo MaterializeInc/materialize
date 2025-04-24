@@ -320,7 +320,7 @@ impl Value for Duration {
 
         let d = f(d
             .checked_mul(m)
-            .ok_or(VarParseError::InvalidParameterValue {
+            .ok_or_else(|| VarParseError::InvalidParameterValue {
                 invalid_values: vec![s.to_string()],
                 reason: "expected value to fit in u64".into(),
             })?);

@@ -271,7 +271,7 @@ impl FenceableToken {
         }
 
         let current_deploy_generation = current_deploy_generation
-            .or(durable_token.as_ref().map(|token| token.deploy_generation))
+            .or_else(|| durable_token.as_ref().map(|token| token.deploy_generation))
             // We cannot initialize a catalog without a deploy generation.
             .ok_or(DurableCatalogError::Uninitialized)?;
         let mut current_epoch = durable_token

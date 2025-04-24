@@ -847,7 +847,7 @@ impl<'a> Interpreter for ColumnSpecs<'a> {
             .unmaterializables
             .get(func)
             .cloned()
-            .unwrap_or(ResultSpec::has_type(&func.output_type(), true));
+            .unwrap_or_else(|| ResultSpec::has_type(&func.output_type(), true));
         ColumnSpec { col_type, range }
     }
 

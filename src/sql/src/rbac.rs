@@ -220,7 +220,7 @@ impl RbacRequirements {
                     catalog
                         .try_get_role(role_id)
                         .map(|role| role.name().to_string())
-                        .unwrap_or(role_id.to_string())
+                        .unwrap_or_else(|| role_id.to_string())
                 })
                 .collect();
             return Err(UnauthorizedError::RoleMembership { role_names });

@@ -10,7 +10,7 @@ publish = false
 workspace = true
 
 [dependencies]
-anyhow = "1.0.97"
+anyhow = "1.0.98"
 arrow = { version = "53.3.0", default-features = false }
 async-compression = { version = "0.4.11", features = ["bzip2", "gzip", "tokio", "xz", "zstd"] }
 async-stream = "0.3.6"
@@ -25,7 +25,7 @@ differential-dataflow = "0.14.2"
 futures = "0.3.31"
 glob = "0.3.2"
 http = "1.2.0"
-itertools = "0.12.1"
+itertools = "0.14.0"
 mz-aws-util = { path = "../aws-util" }
 mz-arrow-util = { path = "../arrow-util" }
 mz-dyncfg = { path = "../dyncfg" }

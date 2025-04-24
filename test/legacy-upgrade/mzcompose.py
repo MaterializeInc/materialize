@@ -29,9 +29,9 @@ from materialize.mzcompose.services.test_certs import TestCerts
 from materialize.mzcompose.services.testdrive import Testdrive
 from materialize.mzcompose.services.zookeeper import Zookeeper
 from materialize.version_list import (
-    LTS_VERSIONS,
     VersionsFromDocs,
     get_all_published_mz_versions,
+    get_lts_versions,
     get_published_minor_mz_versions,
 )
 
@@ -154,7 +154,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         )
         if args.lts_upgrade:
             # Direct upgrade from latest LTS version without any inbetween versions
-            version = LTS_VERSIONS[-1]
+            version = get_lts_versions()[-1]
             priors = [v for v in all_versions if v <= version]
             test_upgrade_from_version(
                 c,
@@ -184,7 +184,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         )
         if args.lts_upgrade:
             # Direct upgrade from latest LTS version without any inbetween versions
-            version = LTS_VERSIONS[-1]
+            version = get_lts_versions()[-1]
             priors = [v for v in all_versions if v <= version]
             test_upgrade_from_version(
                 c,

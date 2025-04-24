@@ -94,12 +94,12 @@ pub async fn run_consistency_checks(state: &State) -> Result<ControlFlow, anyhow
 /// Checks if a shard in Persist has been tombstoned.
 ///
 /// TODO(parkmycar): Run this as part of the consistency checks, instead of as a specific command.
-pub async fn run_check_shard_tombstoned(
+pub async fn run_check_shard_tombstone(
     mut cmd: BuiltinCommand,
     state: &State,
 ) -> Result<ControlFlow, anyhow::Error> {
     let shard_id = cmd.args.string("shard-id")?;
-    check_shard_tombstoned(state, &shard_id).await?;
+    check_shard_tombstone(state, &shard_id).await?;
     Ok(ControlFlow::Continue)
 }
 
@@ -237,8 +237,8 @@ async fn check_catalog_state(state: &State) -> Result<(), anyhow::Error> {
 }
 
 /// Checks if the provided `shard_id` is a tombstone, returning an error if it's not.
-async fn check_shard_tombstoned(state: &State, shard_id: &str) -> Result<(), anyhow::Error> {
-    println!("$ check-shard-tombstoned {shard_id}");
+async fn check_shard_tombstone(state: &State, shard_id: &str) -> Result<(), anyhow::Error> {
+    println!("$ check-shard-tombstone {shard_id}");
 
     let (Some(consensus_uri), Some(blob_uri)) =
         (&state.persist_consensus_url, &state.persist_blob_url)

@@ -153,7 +153,7 @@ pub fn run<T: TimestampManipulation>(
         // `AsOfBounds` are shared between the exports of a dataflow, so looking at just the first
         // export is sufficient.
         let first_export = dataflow.export_ids().next();
-        let as_of = first_export.map_or(Antichain::new(), |id| ctx.best_as_of(id));
+        let as_of = first_export.map_or_else(Antichain::new, |id| ctx.best_as_of(id));
         dataflow.as_of = Some(as_of);
     }
 
@@ -473,7 +473,7 @@ impl<'a, T: TimestampManipulation> Context<'a, T> {
                     frontiers
                         .write_frontier
                         .iter()
-                        .map(|t| t.step_back().unwrap_or(T::minimum())),
+                        .map(|t| t.step_back().unwrap_or_else(T::minimum)),
                 )
             };
 
@@ -757,7 +757,7 @@ fn fixpoint(mut step: impl FnMut(&mut bool)) {
 fn step_back_frontier<T: TimestampManipulation>(frontier: &Antichain<T>) -> Antichain<T> {
     frontier
         .iter()
-        .map(|t| t.step_back().unwrap_or(T::minimum()))
+        .map(|t| t.step_back().unwrap_or_else(T::minimum))
         .collect()
 }
 

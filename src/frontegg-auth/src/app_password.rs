@@ -11,6 +11,12 @@ use std::error::Error;
 use std::fmt;
 use std::str::FromStr;
 
+use base64::Engine;
+use base64::engine::general_purpose::URL_SAFE_NO_PAD;
+use base64::{
+    alphabet,
+    engine::{GeneralPurpose, GeneralPurposeConfig},
+};
 use serde::Deserialize;
 use uuid::Uuid;
 
@@ -47,7 +53,7 @@ impl fmt::Display for AppPassword {
         let mut buf = vec![];
         buf.extend(self.client_id.as_bytes());
         buf.extend(self.secret_key.as_bytes());
-        let encoded = base64::encode_config(buf, base64::URL_SAFE_NO_PAD);
+        let encoded = URL_SAFE_NO_PAD.encode(buf);
         f.write_str(PREFIX)?;
         f.write_str(&encoded)
     }
@@ -61,7 +67,13 @@ impl FromStr for AppPassword {
         if password.len() == 43 || password.len() == 44 {
             // If it's exactly 43 or 44 bytes, assume we have base64-encoded
             // UUID bytes without or with padding, respectively.
-            let buf = base64::decode_config(password, base64::URL_SAFE)
+            let url_safe_engine = GeneralPurpose::new(
+                &alphabet::URL_SAFE,
+                GeneralPurposeConfig::new()
+                    .with_decode_padding_mode(base64::engine::DecodePaddingMode::Indifferent),
+            );
+            let buf = url_safe_engine
+                .decode(password)
                 .map_err(|_| AppPasswordParseError)?;
             let client_id = Uuid::from_slice(&buf[..16]).map_err(|_| AppPasswordParseError)?;
             let secret_key = Uuid::from_slice(&buf[16..]).map_err(|_| AppPasswordParseError)?;

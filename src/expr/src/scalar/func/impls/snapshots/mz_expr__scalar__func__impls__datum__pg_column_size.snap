@@ -1,6 +1,6 @@
 ---
 source: src/expr/src/scalar/func/impls/datum.rs
-expression: "#[sqlfunc(\n    sqlname = stringify!(pg_column_size),\n    preserves_uniqueness = false,\n    inverse = None,\n    is_monotone = false,\n)]\n#[allow(clippy::extra_unused_lifetimes)]\npub fn pg_column_size<'a>(a: Datum<'a>) -> Result<Option<i32>, EvalError> {\n    {\n        match a {\n            Datum::Null => Ok(None),\n            datum => {\n                let sz = mz_repr::datum_size(&datum);\n                i32::try_from(sz)\n                    .map(Some)\n                    .or(Err(EvalError::Int32OutOfRange(sz.to_string().into())))\n            }\n        }\n    }\n}\n"
+expression: "#[sqlfunc(\n    sqlname = stringify!(pg_column_size),\n    preserves_uniqueness = false,\n    inverse = None,\n    is_monotone = false,\n)]\n#[allow(clippy::extra_unused_lifetimes)]\npub fn pg_column_size<'a>(a: Datum<'a>) -> Result<Option<i32>, EvalError> {\n    {\n        match a {\n            Datum::Null => Ok(None),\n            datum => {\n                let sz = mz_repr::datum_size(&datum);\n                i32::try_from(sz)\n                    .map(Some)\n                    .or_else(|_| Err(EvalError::Int32OutOfRange(sz.to_string().into())))\n            }\n        }\n    }\n}\n"
 ---
 #[derive(
     proptest_derive::Arbitrary,
@@ -53,7 +53,7 @@ pub fn pg_column_size<'a>(a: Datum<'a>) -> Result<Option<i32>, EvalError> {
                 let sz = mz_repr::datum_size(&datum);
                 i32::try_from(sz)
                     .map(Some)
-                    .or(Err(EvalError::Int32OutOfRange(sz.to_string().into())))
+                    .or_else(|_| Err(EvalError::Int32OutOfRange(sz.to_string().into())))
             }
         }
     }

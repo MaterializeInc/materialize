@@ -76,7 +76,6 @@ skip = [
     # There are many external crates that rely on 0.10.5. Upgrading them should
     # be its own PR.
     { name = "itertools", version = "0.10.5" },
-    { name = "itertools", version = "0.12.1" },
 
     # A few crates -> `num_enum_derive` -> `proc-macro-crate` -> `toml_edit v0.19.14`.
     { name = "toml_edit", version = "0.19.14" },
@@ -157,6 +156,8 @@ skip = [
     { name = "windows_x86_64_gnu", version = "0.52.6" },
     { name = "windows_x86_64_gnullvm", version = "0.52.6" },
     { name = "windows_x86_64_msvc", version = "0.52.6" },
+    # Used by axum-extra
+    { name = "axum-core", version = "0.4.5" },
 ]
 
 [[bans.deny]]
@@ -232,7 +233,6 @@ wrappers = [
     "bindgen",
     "dynfmt",
     "findshlibs",
-    "jsonpath-rust",
     "launchdarkly-server-sdk",
     "launchdarkly-server-sdk-evaluation",
     "mysql_common",

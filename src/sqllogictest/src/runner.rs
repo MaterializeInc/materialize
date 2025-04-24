@@ -2327,12 +2327,14 @@ fn generate_view_sql(
     // can adjust the (hopefully) small number of tests that eventually
     // challenge us in this particular way.
     let name = UnresolvedItemName(vec![Ident::new_unchecked(format!("v{}", view_uuid))]);
-    let projection = expected_column_names.map_or(
-        num_attributes.map_or(vec![], |n| {
-            (1..=n)
-                .map(|i| Ident::new_unchecked(format!("a{i}")))
-                .collect()
-        }),
+    let projection = expected_column_names.map_or_else(
+        || {
+            num_attributes.map_or(vec![], |n| {
+                (1..=n)
+                    .map(|i| Ident::new_unchecked(format!("a{i}")))
+                    .collect()
+            })
+        },
         |cols| {
             cols.iter()
                 .map(|c| Ident::new_unchecked(c.as_str()))

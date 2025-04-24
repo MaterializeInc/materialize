@@ -1,6 +1,6 @@
 ---
 source: src/expr/src/scalar/func/impls/datum.rs
-expression: "#[sqlfunc(\n    sqlname = stringify!(mz_row_size),\n    preserves_uniqueness = false,\n    inverse = None,\n    is_monotone = false,\n)]\n#[allow(clippy::extra_unused_lifetimes)]\npub fn mz_row_size<'a>(a: DatumList<'a>) -> Result<i32, EvalError> {\n    {\n        let sz = mz_repr::row_size(a.iter());\n        i32::try_from(sz).or(Err(EvalError::Int32OutOfRange(sz.to_string().into())))\n    }\n}\n"
+expression: "#[sqlfunc(\n    sqlname = stringify!(mz_row_size),\n    preserves_uniqueness = false,\n    inverse = None,\n    is_monotone = false,\n)]\n#[allow(clippy::extra_unused_lifetimes)]\npub fn mz_row_size<'a>(a: DatumList<'a>) -> Result<i32, EvalError> {\n    {\n        let sz = mz_repr::row_size(a.iter());\n        i32::try_from(sz)\n            .or_else(|_| Err(EvalError::Int32OutOfRange(sz.to_string().into())))\n    }\n}\n"
 ---
 #[derive(
     proptest_derive::Arbitrary,
@@ -48,6 +48,7 @@ impl std::fmt::Display for MzRowSize {
 pub fn mz_row_size<'a>(a: DatumList<'a>) -> Result<i32, EvalError> {
     {
         let sz = mz_repr::row_size(a.iter());
-        i32::try_from(sz).or(Err(EvalError::Int32OutOfRange(sz.to_string().into())))
+        i32::try_from(sz)
+            .or_else(|_| Err(EvalError::Int32OutOfRange(sz.to_string().into())))
     }
 }

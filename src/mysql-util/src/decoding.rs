@@ -151,13 +151,14 @@ fn pack_val_as_datum(
                             Value::Int(val) => {
                                 // Enum types are provided as 1-indexed integers in the replication
                                 // stream, so we need to find the string value from the enum meta
-                                let enum_val = e.values.get(usize::try_from(val)? - 1).ok_or(
-                                    anyhow::anyhow!(
-                                        "received invalid enum value: {} for column {}",
-                                        val,
-                                        col_desc.name
-                                    ),
-                                )?;
+                                let enum_val =
+                                    e.values.get(usize::try_from(val)? - 1).ok_or_else(|| {
+                                        anyhow::anyhow!(
+                                            "received invalid enum value: {} for column {}",
+                                            val,
+                                            col_desc.name
+                                        )
+                                    })?;
                                 packer.push(Datum::String(enum_val));
                             }
                             _ => Err(anyhow::anyhow!(
@@ -274,7 +275,9 @@ fn pack_val_as_datum(
                     Value::Date(..) => from_value_opt::<chrono::NaiveDateTime>(value)?,
                     // old temporal format from before MySQL 5.6; didn't support fractional seconds
                     Value::Int(val) => chrono::DateTime::from_timestamp(val, 0)
-                        .ok_or(anyhow::anyhow!("received invalid timestamp value: {}", val))?
+                        .ok_or_else(|| {
+                            anyhow::anyhow!("received invalid timestamp value: {}", val)
+                        })?
                         .naive_utc(),
                     Value::Bytes(data) => {
                         let data = std::str::from_utf8(&data)?;

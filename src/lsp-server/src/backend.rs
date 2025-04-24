@@ -431,7 +431,7 @@ impl LanguageServer for Backend {
             let lex_results = lexer::lex(&content.to_string())
                 .map_err(|_| build_error("Error getting lex tokens."))?;
             let offset = position_to_offset(position, content)
-                .ok_or(build_error("Error getting completion offset."))?;
+                .ok_or_else(|| build_error("Error getting completion offset."))?;
 
             let last_keyword = lex_results
                 .iter()

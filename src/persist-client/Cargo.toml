@@ -28,7 +28,7 @@ name = "benches"
 harness = false
 
 [dependencies]
-anyhow = "1.0.97"
+anyhow = "1.0.98"
 arrayvec = "0.7.6"
 arrow = { version = "53.3.0", default-features = false }
 async-stream = "0.3.6"
@@ -40,7 +40,7 @@ futures = "0.3.31"
 futures-util = "0.3"
 h2 = "0.3.13"
 hex = "0.4.3"
-itertools = "0.12.1"
+itertools = "0.14.0"
 mz-build-info = { path = "../build-info" }
 mz-dyncfg = { path = "../dyncfg" }
 mz-ore = { path = "../ore", features = ["bytes", "process", "test", "tracing"] }
@@ -62,7 +62,7 @@ serde_json = "1.0.140"
 timely = "0.20.0"
 thiserror = "2.0.12"
 tokio = { version = "1.44.1", default-features = false, features = ["macros", "sync", "rt", "rt-multi-thread", "time"] }
-tokio-metrics = "0.4.0"
+tokio-metrics = "0.4.1"
 tokio-stream = "0.1.17"
 tonic = "0.12.1"
 tracing = "0.1.37"

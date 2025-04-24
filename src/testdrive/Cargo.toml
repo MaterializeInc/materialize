@@ -10,11 +10,11 @@ publish = false
 workspace = true
 
 [dependencies]
-anyhow = "1.0.97"
+anyhow = "1.0.98"
 async-compression = { version = "0.4.11", features = ["bzip2", "gzip", "tokio", "xz", "zstd"] }
 async-trait = "0.1.88"
 aws-credential-types = { version = "1.2.2", features = ["hardcoded-credentials"] }
-aws-sdk-sts = { version = "1.7.0", default-features = false, features = ["rt-tokio"] }
+aws-sdk-sts = { version = "1.41.0", default-features = false, features = ["rt-tokio"] }
 aws-types = "1.3.6"
 arrow = { version = "53.3.0", default-features = false }
 byteorder = "1.5"
@@ -27,7 +27,7 @@ globset = "0.4.16"
 hex = "0.4.3"
 http = "1.2.0"
 humantime = "2.2.0"
-itertools = "0.12.1"
+itertools = "0.14.0"
 junit-report = "0.8.3"
 maplit = "1.0.2"
 md-5 = "0.10.6"
@@ -57,11 +57,11 @@ parquet = { version = "53.3.0", default-features = false, features = ["arrow"] }
 postgres_array = { version = "0.11.0" }
 postgres-protocol = { version = "0.6.5" }
 prost = { version = "0.13.5", features = ["no-recursion-limit"] }
-prost-reflect = { version = "0.14.7", features = ["serde"] }
+prost-reflect = { version = "0.15.2", features = ["serde"] }
 prost-types = { version = "0.13.5" }
 rand = "0.8.5"
 rdkafka = { version = "0.29.0", features = ["cmake-build", "ssl-vendored", "libz-static", "zstd"] }
-regex = "1.10.6"
+regex = "1.11.1"
 reqwest = { version = "0.11.13", features = ["native-tls-vendored"] }
 semver = "1.0.26"
 serde = "1.0.219"

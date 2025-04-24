@@ -26,7 +26,7 @@ open = "3.2.0"
 openssl-probe = "0.1.6"
 hyper = "1.4.1"
 reqwest = { version = "0.12", features = ["blocking", "json", "default-tls", "charset", "http2"], default-features = false }
-rpassword = "7.3.1"
+rpassword = "7.4.0"
 semver = "1.0.26"
 serde = { version = "1.0.219", features = ["derive"] }
 serde-aux = "4.6.0"
@@ -42,7 +42,7 @@ url = "2.3.1"
 workspace-hack = { version = "0.0.0", path = "../workspace-hack", optional = true }
 
 [dev-dependencies]
-assert_cmd = "2.0.16"
+assert_cmd = "2.0.17"
 
 [target.'cfg(target_os = "macos")'.dependencies]
 security-framework = "2.10.0"

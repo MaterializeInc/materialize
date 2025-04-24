@@ -1870,7 +1870,7 @@ impl MirScalarExpr {
                     // that inner operand occurs.
                     let undistribution_opportunities = all_inner_operands
                         .iter()
-                        .group_by(|(a, _i)| a)
+                        .chunk_by(|(a, _i)| a)
                         .into_iter()
                         .map(|(_a, g)| g.map(|(_a, i)| *i).sorted().dedup().collect_vec())
                         .filter(|g| g.len() > 1)
