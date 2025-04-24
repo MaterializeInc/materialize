@@ -720,7 +720,6 @@ mz_arrangement_heap_capacity_raw             log   <null>    ""
 mz_arrangement_heap_size_raw                 log   <null>    ""
 mz_arrangement_records_raw                   log   <null>    ""
 mz_arrangement_sharing_raw                   log   <null>    ""
-mz_compute_dataflow_global_ids_per_worker     log   <null>    ""
 mz_compute_error_counts_raw                  log   <null>    ""
 mz_compute_exports_per_worker                log   <null>    ""
 mz_compute_frontiers_per_worker              log   <null>    ""
@@ -761,7 +760,6 @@ mz_dataflow_arrangement_sizes ""
 mz_dataflow_channel_operators ""
 mz_dataflow_channel_operators_per_worker ""
 mz_dataflow_channels ""
-mz_dataflow_global_ids ""
 mz_dataflow_operator_dataflows ""
 mz_dataflow_operator_dataflows_per_worker ""
 mz_dataflow_operator_parents ""
@@ -806,7 +804,7 @@ test_table ""
 
 # There is one entry in mz_indexes for each field_number/expression of the index.
 > SELECT COUNT(id) FROM mz_indexes WHERE id LIKE 's%'
-257
+251
 
 # Create a second schema with the same table name as above
 > CREATE SCHEMA tester2

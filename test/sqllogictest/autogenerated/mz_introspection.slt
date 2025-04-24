@@ -127,12 +127,6 @@ SELECT position, name, type FROM objects WHERE schema = 'mz_introspection' AND o
 5  to_operator_address  list
 
 query ITT
-SELECT position, name, type FROM objects WHERE schema = 'mz_introspection' AND object = 'mz_dataflow_global_ids' ORDER BY position
-----
-1  id  uint8
-2  global_id  text
-
-query ITT
 SELECT position, name, type FROM objects WHERE schema = 'mz_introspection' AND object = 'mz_dataflow_operators' ORDER BY position
 ----
 1  id  uint8
@@ -258,7 +252,6 @@ mz_arrangement_sharing_per_worker
 mz_arrangement_sharing_raw
 mz_arrangement_sizes
 mz_arrangement_sizes_per_worker
-mz_compute_dataflow_global_ids_per_worker
 mz_compute_error_counts
 mz_compute_error_counts_per_worker
 mz_compute_error_counts_raw
@@ -280,7 +273,6 @@ mz_dataflow_channel_operators
 mz_dataflow_channel_operators_per_worker
 mz_dataflow_channels
 mz_dataflow_channels_per_worker
-mz_dataflow_global_ids
 mz_dataflow_operator_dataflows
 mz_dataflow_operator_dataflows_per_worker
 mz_dataflow_operator_parents
