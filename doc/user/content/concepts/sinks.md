@@ -21,6 +21,16 @@ change data capture (CDC) producers for the given source or view.
 Currently, Materialize only supports sending sink data to Kafka. See
 the [Kafka sink documentation](/sql/create-sink/kafka) for details.
 
+## Clusters and sinks
+
+Avoid putting sinks on the same cluster that hosts sources.
+
+See also [Operational guidelines](/manage/operational-guidelines/).
+
+## Hydration considerations
+
+During hydration, sinks need to load an entire snpshot of the data in memory.
+
 ## Related pages
 
 - [`CREATE SINK`](/sql/create-sink)
