@@ -260,10 +260,6 @@ static RELATIONS: &[Relation] = &[
         category: RelationCategory::Introspection,
     },
     Relation {
-        name: "mz_dataflow_global_ids",
-        category: RelationCategory::Introspection,
-    },
-    Relation {
         name: "mz_dataflow_operator_dataflows_per_worker",
         category: RelationCategory::Introspection,
     },

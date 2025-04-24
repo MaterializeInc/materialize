@@ -1910,15 +1910,6 @@ pub static MZ_COMPUTE_EXPORTS_PER_WORKER: LazyLock<BuiltinLog> = LazyLock::new(|
     access: vec![PUBLIC_SELECT],
 });
 
-pub static MZ_COMPUTE_DATAFLOW_GLOBAL_IDS_PER_WORKER: LazyLock<BuiltinLog> =
-    LazyLock::new(|| BuiltinLog {
-        name: "mz_compute_dataflow_global_ids_per_worker",
-        schema: MZ_INTROSPECTION_SCHEMA,
-        oid: oid::LOG_MZ_COMPUTE_DATAFLOW_GLOBAL_IDS_PER_WORKER_OID,
-        variant: LogVariant::Compute(ComputeLog::DataflowGlobal),
-        access: vec![PUBLIC_SELECT],
-    });
-
 pub static MZ_COMPUTE_FRONTIERS_PER_WORKER: LazyLock<BuiltinLog> = LazyLock::new(|| BuiltinLog {
     name: "mz_compute_frontiers_per_worker",
     schema: MZ_INTROSPECTION_SCHEMA,
@@ -6022,25 +6013,6 @@ WHERE worker_id = 0",
     access: vec![PUBLIC_SELECT],
 });
 
-pub static MZ_DATAFLOW_GLOBAL_IDS: LazyLock<BuiltinView> = LazyLock::new(|| BuiltinView {
-    name: "mz_dataflow_global_ids",
-    schema: MZ_INTROSPECTION_SCHEMA,
-    oid: oid::VIEW_MZ_DATAFLOW_GLOBAL_IDS_OID,
-    desc: RelationDesc::builder()
-        .with_column("id", ScalarType::UInt64.nullable(false))
-        .with_column("global_id", ScalarType::String.nullable(false))
-        .finish(),
-    column_comments: BTreeMap::from_iter([
-        ("id", "The dataflow ID."),
-        ("global_id", "A global ID associated with that dataflow."),
-    ]),
-    sql: "
-SELECT id, global_id
-FROM mz_introspection.mz_compute_dataflow_global_ids_per_worker
-WHERE worker_id = 0",
-    access: vec![PUBLIC_SELECT],
-});
-
 pub static MZ_MAPPABLE_OBJECTS: LazyLock<BuiltinView> = LazyLock::new(|| {
     BuiltinView {
     name: "mz_mappable_objects",
@@ -6055,11 +6027,13 @@ pub static MZ_MAPPABLE_OBJECTS: LazyLock<BuiltinView> = LazyLock::new(|| {
         ("global_id", "The global ID of the object."),
     ]),
     sql: "
-SELECT SUBSTRING(name FROM 11) AS name, global_id
-FROM mz_introspection.mz_dataflows md JOIN mz_introspection.mz_dataflow_global_ids mdgi USING (id)
+SELECT
+    SUBSTRING(name FROM 11) AS name,
+    export_id AS global_id
+FROM mz_introspection.mz_dataflows md
+JOIN mz_introspection.mz_compute_exports mce ON md.id = mce.dataflow_id
 WHERE name LIKE 'Dataflow: %' AND
-      (global_id IN (SELECT id FROM mz_catalog.mz_indexes UNION SELECT on_id FROM mz_catalog.mz_indexes)
-       OR EXISTS (SELECT 1 FROM mz_catalog.mz_materialized_views mmv WHERE POSITION(mmv.name IN name) <> 0))",
+      export_id IN (SELECT id FROM mz_catalog.mz_indexes UNION SELECT id FROM mz_catalog.mz_materialized_views)",
     access: vec![PUBLIC_SELECT],
 }
 });
@@ -13619,7 +13593,6 @@ pub static BUILTINS_STATIC: LazyLock<Vec<Builtin<NameReference>>> = LazyLock::ne
         Builtin::Log(&MZ_DATAFLOW_ADDRESSES_PER_WORKER),
         Builtin::Log(&MZ_DATAFLOW_OPERATOR_REACHABILITY_RAW),
         Builtin::Log(&MZ_COMPUTE_EXPORTS_PER_WORKER),
-        Builtin::Log(&MZ_COMPUTE_DATAFLOW_GLOBAL_IDS_PER_WORKER),
         Builtin::Log(&MZ_MESSAGE_COUNTS_RECEIVED_RAW),
         Builtin::Log(&MZ_MESSAGE_COUNTS_SENT_RAW),
         Builtin::Log(&MZ_MESSAGE_BATCH_COUNTS_RECEIVED_RAW),
@@ -13716,7 +13689,6 @@ pub static BUILTINS_STATIC: LazyLock<Vec<Builtin<NameReference>>> = LazyLock::ne
         Builtin::View(&MZ_DATAFLOW_ADDRESSES),
         Builtin::View(&MZ_DATAFLOW_CHANNELS),
         Builtin::View(&MZ_DATAFLOW_OPERATORS),
-        Builtin::View(&MZ_DATAFLOW_GLOBAL_IDS),
         Builtin::View(&MZ_MAPPABLE_OBJECTS),
         Builtin::View(&MZ_DATAFLOW_OPERATOR_DATAFLOWS_PER_WORKER),
         Builtin::View(&MZ_DATAFLOW_OPERATOR_DATAFLOWS),

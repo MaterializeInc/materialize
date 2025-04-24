@@ -305,8 +305,6 @@ pub enum ComputeLog {
     HydrationTime,
     /// Mappings from `GlobalId`/`LirId`` pairs to dataflow addresses.
     LirMapping,
-    /// Mappings from dataflows to `GlobalId`s.
-    DataflowGlobal,
 }
 
 impl RustType<ProtoComputeLog> for ComputeLog {
@@ -326,7 +324,6 @@ impl RustType<ProtoComputeLog> for ComputeLog {
                 ComputeLog::ErrorCount => ErrorCount(()),
                 ComputeLog::HydrationTime => HydrationTime(()),
                 ComputeLog::LirMapping => LirMapping(()),
-                ComputeLog::DataflowGlobal => DataflowGlobal(()),
             }),
         }
     }
@@ -346,7 +343,6 @@ impl RustType<ProtoComputeLog> for ComputeLog {
             Some(ErrorCount(())) => Ok(ComputeLog::ErrorCount),
             Some(HydrationTime(())) => Ok(ComputeLog::HydrationTime),
             Some(LirMapping(())) => Ok(ComputeLog::LirMapping),
-            Some(DataflowGlobal(())) => Ok(ComputeLog::DataflowGlobal),
             None => Err(TryFromProtoError::missing_field("ProtoComputeLog::kind")),
         }
     }
@@ -538,13 +534,6 @@ impl LogVariant {
                 .with_column("operator_id_start", ScalarType::UInt64.nullable(false))
                 .with_column("operator_id_end", ScalarType::UInt64.nullable(false))
                 .with_key(vec![0, 1, 2])
-                .finish(),
-
-            LogVariant::Compute(ComputeLog::DataflowGlobal) => RelationDesc::builder()
-                .with_column("id", ScalarType::UInt64.nullable(false))
-                .with_column("worker_id", ScalarType::UInt64.nullable(false))
-                .with_column("global_id", ScalarType::String.nullable(false))
-                .with_key(vec![0, 1])
                 .finish(),
         }
     }
