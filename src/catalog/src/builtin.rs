@@ -6043,7 +6043,7 @@ pub static MZ_LIR_MAPPING: LazyLock<BuiltinView> = LazyLock::new(|| BuiltinView 
     schema: MZ_INTROSPECTION_SCHEMA,
     oid: oid::VIEW_MZ_LIR_MAPPING_OID,
     desc: RelationDesc::builder()
-        .with_column("global_id", ScalarType::String.nullable(false))
+        .with_column("export_id", ScalarType::String.nullable(false))
         .with_column("lir_id", ScalarType::UInt64.nullable(false))
         .with_column("operator", ScalarType::String.nullable(false))
         .with_column("parent_lir_id", ScalarType::UInt64.nullable(true))
@@ -6052,7 +6052,10 @@ pub static MZ_LIR_MAPPING: LazyLock<BuiltinView> = LazyLock::new(|| BuiltinView 
         .with_column("operator_id_end", ScalarType::UInt64.nullable(false))
         .finish(),
     column_comments: BTreeMap::from_iter([
-        ("global_id", "The global ID."),
+        (
+            "export_id",
+            "The ID of the dataflow export. Corresponds to `mz_compute_exports.export_id`.",
+        ),
         ("lir_id", "The LIR node ID."),
         (
             "operator",
@@ -6073,7 +6076,7 @@ pub static MZ_LIR_MAPPING: LazyLock<BuiltinView> = LazyLock::new(|| BuiltinView 
         ),
     ]),
     sql: "
-SELECT global_id, lir_id, operator, parent_lir_id, nesting, operator_id_start, operator_id_end
+SELECT export_id, lir_id, operator, parent_lir_id, nesting, operator_id_start, operator_id_end
 FROM mz_introspection.mz_compute_lir_mapping_per_worker
 WHERE worker_id = 0",
     access: vec![PUBLIC_SELECT],
