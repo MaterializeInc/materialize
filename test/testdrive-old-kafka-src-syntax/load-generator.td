@@ -50,6 +50,39 @@ exact:COUNTER load generators do not support SCALE FACTOR values
   IN CLUSTER ${arg.single-replica-cluster}
   FROM LOAD GENERATOR AUCTION (AS OF 300, UP TO 301);
 
+$ skip-if
+SELECT mz_version_num() < 14300;
+
+# Error if trying to create with subsources
+! CREATE SOURCE g FROM LOAD GENERATOR COUNTER FOR ALL TABLES;
+contains:FOR ALL TABLES is only valid for multi-output sources
+
+! CREATE SOURCE g FROM LOAD GENERATOR CLOCK FOR ALL TABLES;
+contains:FOR ALL TABLES is only valid for multi-output sources
+
+! CREATE SOURCE g FROM LOAD GENERATOR DATUMS FOR ALL TABLES;
+contains:FOR ALL TABLES is only valid for multi-output sources
+
+! CREATE SOURCE g FROM LOAD GENERATOR COUNTER FOR TABLES ("foo");
+regex:.*FOR TABLES.*unsupported
+
+! CREATE SOURCE g FROM LOAD GENERATOR CLOCK FOR TABLES ("foo");
+regex:.*FOR TABLES.*unsupported
+
+! CREATE SOURCE g FROM LOAD GENERATOR DATUMS FOR TABLES ("foo");
+regex:.*FOR TABLES.*unsupported
+
+! CREATE SOURCE g FROM LOAD GENERATOR COUNTER FOR SCHEMAS ("foo");
+regex:.*FOR SCHEMAS.*unsupported
+
+! CREATE SOURCE g FROM LOAD GENERATOR CLOCK FOR SCHEMAS ("foo");
+regex:.*FOR SCHEMAS.*unsupported
+
+! CREATE SOURCE g FROM LOAD GENERATOR DATUMS FOR SCHEMAS ("foo");
+regex:.*FOR SCHEMAS.*unsupported
+
+# skip-end
+
 > CREATE TABLE accounts FROM SOURCE auction_house (REFERENCE accounts);
 > CREATE TABLE auctions FROM SOURCE auction_house (REFERENCE auctions);
 > CREATE TABLE bids FROM SOURCE auction_house (REFERENCE bids);
