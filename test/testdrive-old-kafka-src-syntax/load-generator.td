@@ -55,31 +55,31 @@ SELECT mz_version_num() < 14300;
 
 # Error if trying to create with subsources
 ! CREATE SOURCE g FROM LOAD GENERATOR COUNTER FOR ALL TABLES;
-contains:FOR ALL TABLES
+contains:FOR ALL TABLES is only valid for multi-output sources
 
 ! CREATE SOURCE g FROM LOAD GENERATOR CLOCK FOR ALL TABLES;
-contains:FOR ALL TABLES
+contains:FOR ALL TABLES is only valid for multi-output sources
 
 ! CREATE SOURCE g FROM LOAD GENERATOR DATUMS FOR ALL TABLES;
-contains:FOR ALL TABLES
+contains:FOR ALL TABLES is only valid for multi-output sources
 
 ! CREATE SOURCE g FROM LOAD GENERATOR COUNTER FOR TABLES ("foo");
-contains:FOR TABLES
+regex:.*FOR TABLES.*unsupported
 
 ! CREATE SOURCE g FROM LOAD GENERATOR CLOCK FOR TABLES ("foo");
-contains:FOR TABLES
+regex:.*FOR TABLES.*unsupported
 
 ! CREATE SOURCE g FROM LOAD GENERATOR DATUMS FOR TABLES ("foo");
-contains:FOR TABLES
+regex:.*FOR TABLES.*unsupported
 
 ! CREATE SOURCE g FROM LOAD GENERATOR COUNTER FOR SCHEMAS ("foo");
-contains:FOR SCHEMAS
+regex:.*FOR SCHEMAS.*unsupported
 
 ! CREATE SOURCE g FROM LOAD GENERATOR CLOCK FOR SCHEMAS ("foo");
-contains:FOR SCHEMAS
+regex:.*FOR SCHEMAS.*unsupported
 
 ! CREATE SOURCE g FROM LOAD GENERATOR DATUMS FOR SCHEMAS ("foo");
-contains:FOR SCHEMAS
+regex:.*FOR SCHEMAS.*unsupported
 
 # skip-end
 
