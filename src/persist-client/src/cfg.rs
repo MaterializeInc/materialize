@@ -35,9 +35,12 @@ use crate::internal::state::ROLLUP_THRESHOLD;
 use crate::operators::STORAGE_SOURCE_DECODE_FUEL;
 use crate::read::READER_LEASE_DURATION;
 
+// Ignores the patch version
 const LTS_VERSIONS: &[Version] = &[
     // 25.1
     Version::new(0, 130, 0),
+    // 25.2
+    Version::new(0, 143, 0),
 ];
 
 /// The tunable knobs for persist.
