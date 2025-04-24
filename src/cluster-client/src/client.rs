@@ -160,10 +160,6 @@ pub struct TimelyConfig {
     pub enable_zero_copy_lgalloc: bool,
     /// Optional limit on the number of empty buffers retained by the zero copy allocator.
     pub zero_copy_limit: Option<usize>,
-    /// Whether to enable the new version of `create_sockets`.
-    ///
-    /// This flag exists to facilitate a slow rollout and is expected to be temporary.
-    pub enable_create_sockets_v2: bool,
 }
 
 impl RustType<ProtoTimelyConfig> for TimelyConfig {
@@ -176,7 +172,6 @@ impl RustType<ProtoTimelyConfig> for TimelyConfig {
             enable_zero_copy: self.enable_zero_copy,
             enable_zero_copy_lgalloc: self.enable_zero_copy_lgalloc,
             zero_copy_limit: self.zero_copy_limit.into_proto(),
-            enable_create_sockets_v2: self.enable_create_sockets_v2,
         }
     }
 
@@ -189,7 +184,6 @@ impl RustType<ProtoTimelyConfig> for TimelyConfig {
             enable_zero_copy: proto.enable_zero_copy,
             enable_zero_copy_lgalloc: proto.enable_zero_copy_lgalloc,
             zero_copy_limit: proto.zero_copy_limit.into_rust()?,
-            enable_create_sockets_v2: proto.enable_create_sockets_v2,
         })
     }
 }
