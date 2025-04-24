@@ -150,6 +150,9 @@ pub struct MaterializeControllerArgs {
 
     #[clap(long, default_value = "{}")]
     default_certificate_specs: DefaultCertificateSpecs,
+
+    #[clap(long, hide = true)]
+    disable_license_key_checks: bool,
 }
 
 #[derive(Clone, Deserialize, Default)]
