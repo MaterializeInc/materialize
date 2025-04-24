@@ -89,6 +89,38 @@ pub(crate) const ROLLUP_THRESHOLD: Config<usize> = Config::new(
     "The number of seqnos between rollups.",
 );
 
+/// Determines how long to wait before an active rollup is considered
+/// "stuck" and a new rollup is started.
+pub(crate) const ROLLUP_FALLBACK_THRESHOLD_MS: Config<usize> = Config::new(
+    "persist_rollup_fallback_threshold_ms",
+    5000,
+    "The number of milliseconds before a worker claims an already claimed rollup.",
+);
+
+/// Feature flag the new active rollup tracking mechanism.
+/// We musn't enable this until we are fully deployed on the new version.
+pub(crate) const ROLLUP_USE_ACTIVE_ROLLUP: Config<bool> = Config::new(
+    "persist_rollup_use_active_rollup",
+    false,
+    "Whether to use the new active rollup tracking mechanism.",
+);
+
+/// Determines how long to wait before an active GC is considered
+/// "stuck" and a new GC is started.
+pub(crate) const GC_FALLBACK_THRESHOLD_MS: Config<usize> = Config::new(
+    "persist_gc_fallback_threshold_ms",
+    900000,
+    "The number of milliseconds before a worker claims an already claimed GC.",
+);
+
+/// Feature flag the new active GC tracking mechanism.
+/// We musn't enable this until we are fully deployed on the new version.
+pub(crate) const GC_USE_ACTIVE_GC: Config<bool> = Config::new(
+    "persist_gc_use_active_gc",
+    false,
+    "Whether to use the new active GC tracking mechanism.",
+);
+
 /// A token to disambiguate state commands that could not otherwise be
 /// idempotent.
 #[derive(Arbitrary, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
@@ -1107,6 +1139,20 @@ pub enum HollowBlobRef<'a, T> {
     Rollup(&'a HollowRollup),
 }
 
+/// A rollup that is currently being computed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Arbitrary, Serialize)]
+pub struct ActiveRollup {
+    pub seqno: SeqNo,
+    pub start_ms: u64,
+}
+
+/// A garbage collection request that is currently being computed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Arbitrary, Serialize)]
+pub struct ActiveGc {
+    pub seqno: SeqNo,
+    pub start_ms: u64,
+}
+
 /// A sentinel for a state transition that was a no-op.
 ///
 /// Critically, this also indicates that the no-op state transition was not
@@ -1125,6 +1171,11 @@ pub struct StateCollections<T> {
 
     // - Invariant: There is a rollup with `seqno <= self.seqno_since`.
     pub(crate) rollups: BTreeMap<SeqNo, HollowRollup>,
+
+    /// The rollup that is currently being computed.
+    pub(crate) active_rollup: Option<ActiveRollup>,
+    /// The gc request that is currently being computed.
+    pub(crate) active_gc: Option<ActiveGc>,
 
     pub(crate) leased_readers: BTreeMap<LeasedReaderId, LeasedReaderState<T>>,
     pub(crate) critical_readers: BTreeMap<CriticalReaderId, CriticalReaderState<T>>,
@@ -1205,6 +1256,7 @@ where
         let applied = match self.rollups.get(&rollup_seqno) {
             Some(x) => x.key == rollup.key,
             None => {
+                self.active_rollup = None;
                 self.rollups.insert(rollup_seqno, rollup.to_owned());
                 true
             }
@@ -1222,6 +1274,10 @@ where
         if remove_rollups.is_empty() || self.is_tombstone() {
             return Break(NoOpStateTransition(vec![]));
         }
+
+        //This state transition is called at the end of the GC process, so we
+        //need to unset the `active_gc` field.
+        self.active_gc = None;
 
         let mut removed = vec![];
         for (seqno, key) in remove_rollups {
@@ -2150,6 +2206,8 @@ where
             collections: StateCollections {
                 last_gc_req: SeqNo::minimum(),
                 rollups: BTreeMap::new(),
+                active_rollup: None,
+                active_gc: None,
                 leased_readers: BTreeMap::new(),
                 critical_readers: BTreeMap::new(),
                 writers: BTreeMap::new(),
@@ -2278,7 +2336,13 @@ where
     // them being executed in the order they are given. But it is expected that
     // gc assignments are best-effort respected. In practice, cmds like
     // register_foo or expire_foo, where it would be awkward, ignore gc.
-    pub fn maybe_gc(&mut self, is_write: bool) -> Option<GcReq> {
+    pub fn maybe_gc(
+        &mut self,
+        is_write: bool,
+        use_active_gc: bool,
+        fallback_threshold_ms: u64,
+        now: u64,
+    ) -> Option<GcReq> {
         // This is an arbitrary-ish threshold that scales with seqno, but never
         // gets particularly big. It probably could be much bigger and certainly
         // could use a tuning pass at some point.
@@ -2291,6 +2355,17 @@ where
             .0
             .saturating_sub(self.collections.last_gc_req.0)
             >= gc_threshold;
+
+        // If we wouldn't otherwise gc, check if we have an active gc. If we do, and
+        // it's been a while since it started, we should gc.
+        let should_gc = if use_active_gc && !should_gc {
+            match self.collections.active_gc {
+                Some(active_gc) => now.saturating_sub(active_gc.start_ms) > fallback_threshold_ms,
+                None => false,
+            }
+        } else {
+            should_gc
+        };
         // Assign GC traffic preferentially to writers, falling back to anyone
         // generating new state versions if there are no writers.
         let should_gc = should_gc && (is_write || self.collections.writers.is_empty());
@@ -2300,6 +2375,18 @@ where
         // the final rollup.
         let tombstone_needs_gc = self.collections.is_tombstone();
         let should_gc = should_gc || tombstone_needs_gc;
+        let should_gc = if use_active_gc {
+            // If we have an active gc, we should only gc if the active gc is
+            // sufficiently old. This is to avoid doing more gc work than
+            // necessary.
+            should_gc
+                && match self.collections.active_gc {
+                    Some(active) => now.saturating_sub(active.start_ms) > fallback_threshold_ms,
+                    None => true,
+                }
+        } else {
+            should_gc
+        };
         if should_gc {
             self.collections.last_gc_req = new_seqno_since;
             Some(GcReq {
@@ -2400,7 +2487,17 @@ where
             .ok_or(self.seqno)
     }
 
-    pub fn need_rollup(&self, threshold: usize) -> Option<SeqNo> {
+    pub fn active_rollup(&self) -> Option<ActiveRollup> {
+        self.collections.active_rollup
+    }
+
+    pub fn need_rollup(
+        &self,
+        threshold: usize,
+        use_active_rollup: bool,
+        fallback_threshold_ms: u64,
+        now: u64,
+    ) -> Option<SeqNo> {
         let (latest_rollup_seqno, _) = self.latest_rollup();
 
         // Tombstoned shards require one final rollup. However, because we
@@ -2413,22 +2510,44 @@ where
         }
 
         let seqnos_since_last_rollup = self.seqno.0.saturating_sub(latest_rollup_seqno.0);
-        // every `threshold` seqnos since the latest rollup, assign rollup maintenance.
-        // we avoid assigning rollups to every seqno past the threshold to avoid handles
-        // racing / performing redundant work.
-        if seqnos_since_last_rollup > 0 && seqnos_since_last_rollup % u64::cast_from(threshold) == 0
-        {
-            return Some(self.seqno);
-        }
 
-        // however, since maintenance is best-effort and could fail, do assign rollup
-        // work to every seqno after a fallback threshold to ensure one is written.
-        if seqnos_since_last_rollup
-            > u64::cast_from(
-                threshold * PersistConfig::DEFAULT_FALLBACK_ROLLUP_THRESHOLD_MULTIPLIER,
-            )
-        {
-            return Some(self.seqno);
+        if use_active_rollup {
+            // If sequnos_since_last_rollup>threshold, and there is no existing rollup in progress,
+            // we should start a new rollup.
+            // If there is an active rollup, we should check if it has been running too long.
+            // If it has, we should start a new rollup.
+            // This is to guard against a worker dying/taking too long/etc.
+            if seqnos_since_last_rollup > u64::cast_from(threshold) {
+                match self.active_rollup() {
+                    Some(active_rollup) => {
+                        if now.saturating_sub(active_rollup.start_ms) > fallback_threshold_ms {
+                            return Some(self.seqno);
+                        }
+                    }
+                    None => {
+                        return Some(self.seqno);
+                    }
+                }
+            }
+        } else {
+            // every `threshold` seqnos since the latest rollup, assign rollup maintenance.
+            // we avoid assigning rollups to every seqno past the threshold to avoid handles
+            // racing / performing redundant work.
+            if seqnos_since_last_rollup > 0
+                && seqnos_since_last_rollup % u64::cast_from(threshold) == 0
+            {
+                return Some(self.seqno);
+            }
+
+            // however, since maintenance is best-effort and could fail, do assign rollup
+            // work to every seqno after a fallback threshold to ensure one is written.
+            if seqnos_since_last_rollup
+                > u64::cast_from(
+                    threshold * PersistConfig::DEFAULT_FALLBACK_ROLLUP_THRESHOLD_MULTIPLIER,
+                )
+            {
+                return Some(self.seqno);
+            }
         }
 
         None
@@ -2486,6 +2605,8 @@ impl<T: Serialize + Timestamp + Lattice> Serialize for State<T> {
                 StateCollections {
                     last_gc_req,
                     rollups,
+                    active_rollup,
+                    active_gc,
                     leased_readers,
                     critical_readers,
                     writers,
@@ -2501,6 +2622,8 @@ impl<T: Serialize + Timestamp + Lattice> Serialize for State<T> {
         let () = s.serialize_field("hostname", hostname)?;
         let () = s.serialize_field("last_gc_req", last_gc_req)?;
         let () = s.serialize_field("rollups", rollups)?;
+        let () = s.serialize_field("active_rollup", active_rollup)?;
+        let () = s.serialize_field("active_gc", active_gc)?;
         let () = s.serialize_field("leased_readers", leased_readers)?;
         let () = s.serialize_field("critical_readers", critical_readers)?;
         let () = s.serialize_field("writers", writers)?;
@@ -2770,40 +2893,37 @@ pub(crate) mod tests {
     pub fn any_state<T: Arbitrary + Timestamp + Lattice>(
         num_trace_batches: Range<usize>,
     ) -> impl Strategy<Value = State<T>> {
-        Strategy::prop_map(
-            (
-                any::<ShardId>(),
-                any::<SeqNo>(),
-                any::<u64>(),
-                any::<String>(),
-                any::<SeqNo>(),
-                proptest::collection::btree_map(any::<SeqNo>(), any::<HollowRollup>(), 1..3),
-                proptest::collection::btree_map(
-                    any::<LeasedReaderId>(),
-                    any_leased_reader_state::<T>(),
-                    1..3,
-                ),
-                proptest::collection::btree_map(
-                    any::<CriticalReaderId>(),
-                    any_critical_reader_state::<T>(),
-                    1..3,
-                ),
-                proptest::collection::btree_map(any::<WriterId>(), any_writer_state::<T>(), 0..3),
-                proptest::collection::btree_map(any::<SchemaId>(), any_encoded_schemas(), 0..3),
-                any_trace::<T>(num_trace_batches),
+        let part1 = (
+            any::<ShardId>(),
+            any::<SeqNo>(),
+            any::<u64>(),
+            any::<String>(),
+            any::<SeqNo>(),
+            proptest::collection::btree_map(any::<SeqNo>(), any::<HollowRollup>(), 1..3),
+            proptest::option::of(any::<ActiveRollup>()),
+        );
+
+        let part2 = (
+            proptest::option::of(any::<ActiveGc>()),
+            proptest::collection::btree_map(
+                any::<LeasedReaderId>(),
+                any_leased_reader_state::<T>(),
+                1..3,
             ),
+            proptest::collection::btree_map(
+                any::<CriticalReaderId>(),
+                any_critical_reader_state::<T>(),
+                1..3,
+            ),
+            proptest::collection::btree_map(any::<WriterId>(), any_writer_state::<T>(), 0..3),
+            proptest::collection::btree_map(any::<SchemaId>(), any_encoded_schemas(), 0..3),
+            any_trace::<T>(num_trace_batches),
+        );
+
+        (part1, part2).prop_map(
             |(
-                shard_id,
-                seqno,
-                walltime_ms,
-                hostname,
-                last_gc_req,
-                rollups,
-                leased_readers,
-                critical_readers,
-                writers,
-                schemas,
-                trace,
+                (shard_id, seqno, walltime_ms, hostname, last_gc_req, rollups, active_rollup),
+                (active_gc, leased_readers, critical_readers, writers, schemas, trace),
             )| State {
                 applier_version: semver::Version::new(1, 2, 3),
                 shard_id,
@@ -2813,11 +2933,13 @@ pub(crate) mod tests {
                 collections: StateCollections {
                     last_gc_req,
                     rollups,
+                    active_rollup,
+                    active_gc,
                     leased_readers,
                     critical_readers,
                     writers,
-                    trace,
                     schemas,
+                    trace,
                 },
             },
         )
@@ -3510,7 +3632,126 @@ pub(crate) mod tests {
     }
 
     #[mz_ore::test]
-    fn maybe_gc() {
+    fn maybe_gc_active_gc() {
+        const GC_USE_ACTIVE_GC: bool = true;
+        const GC_FALLBACK_THRESHOLD_MS: u64 = 5000;
+        let now_fn = SYSTEM_TIME.clone();
+
+        let mut state = TypedState::<String, String, u64, i64>::new(
+            DUMMY_BUILD_INFO.semver_version(),
+            ShardId::new(),
+            "".to_owned(),
+            0,
+        );
+
+        let now = now_fn();
+        // Empty state doesn't need gc, regardless of is_write.
+        assert_eq!(
+            state.maybe_gc(true, GC_USE_ACTIVE_GC, GC_FALLBACK_THRESHOLD_MS, now),
+            None
+        );
+        assert_eq!(
+            state.maybe_gc(false, GC_USE_ACTIVE_GC, GC_FALLBACK_THRESHOLD_MS, now),
+            None
+        );
+
+        // Artificially advance the seqno so the seqno_since advances past our
+        // internal gc_threshold.
+        state.seqno = SeqNo(100);
+        assert_eq!(state.seqno_since(), SeqNo(100));
+
+        // When a writer is present, non-writes don't gc.
+        let writer_id = WriterId::new();
+        state.collections.compare_and_append(
+            &hollow(1, 2, &["key1"], 1),
+            &writer_id,
+            now,
+            LEASE_DURATION_MS,
+            &IdempotencyToken::new(),
+            &debug_state(),
+            0,
+            100,
+            None,
+        );
+        assert_eq!(
+            state.maybe_gc(false, GC_USE_ACTIVE_GC, GC_FALLBACK_THRESHOLD_MS, now),
+            None
+        );
+
+        // A write will gc though.
+        assert_eq!(
+            state.maybe_gc(true, GC_USE_ACTIVE_GC, GC_FALLBACK_THRESHOLD_MS, now),
+            Some(GcReq {
+                shard_id: state.shard_id,
+                new_seqno_since: SeqNo(100)
+            })
+        );
+
+        // But if we write down an active gc, we won't gc.
+        state.collections.active_gc = Some(ActiveGc {
+            seqno: state.seqno,
+            start_ms: now,
+        });
+
+        state.seqno = SeqNo(200);
+        assert_eq!(state.seqno_since(), SeqNo(200));
+
+        assert_eq!(
+            state.maybe_gc(true, GC_USE_ACTIVE_GC, GC_FALLBACK_THRESHOLD_MS, now),
+            None
+        );
+
+        state.seqno = SeqNo(300);
+        assert_eq!(state.seqno_since(), SeqNo(300));
+        // But if we advance the time past the threshold, we will gc.
+        let new_now = now + GC_FALLBACK_THRESHOLD_MS + 1;
+        assert_eq!(
+            state.maybe_gc(true, GC_USE_ACTIVE_GC, GC_FALLBACK_THRESHOLD_MS, new_now),
+            Some(GcReq {
+                shard_id: state.shard_id,
+                new_seqno_since: SeqNo(300)
+            })
+        );
+
+        // Even if the sequence number doesn't pass the threshold, if the
+        // active gc is expired, we will gc.
+
+        state.seqno = SeqNo(301);
+        assert_eq!(state.seqno_since(), SeqNo(301));
+        assert_eq!(
+            state.maybe_gc(true, GC_USE_ACTIVE_GC, GC_FALLBACK_THRESHOLD_MS, new_now),
+            Some(GcReq {
+                shard_id: state.shard_id,
+                new_seqno_since: SeqNo(301)
+            })
+        );
+
+        state.collections.active_gc = None;
+
+        // Artificially advance the seqno (again) so the seqno_since advances
+        // past our internal gc_threshold (again).
+        state.seqno = SeqNo(400);
+        assert_eq!(state.seqno_since(), SeqNo(400));
+
+        let now = now_fn();
+
+        // If there are no writers, even a non-write will gc.
+        let _ = state.collections.expire_writer(&writer_id);
+        assert_eq!(
+            state.maybe_gc(false, GC_USE_ACTIVE_GC, GC_FALLBACK_THRESHOLD_MS, now),
+            Some(GcReq {
+                shard_id: state.shard_id,
+                new_seqno_since: SeqNo(400)
+            })
+        );
+    }
+
+    #[mz_ore::test]
+    fn maybe_gc_classic() {
+        const GC_USE_ACTIVE_GC: bool = false;
+        const GC_FALLBACK_THRESHOLD_MS: u64 = 5000;
+        const NOW_MS: u64 = 0;
+
         let mut state = TypedState::<String, String, u64, i64>::new(
             DUMMY_BUILD_INFO.semver_version(),
             ShardId::new(),
@@ -3519,8 +3760,14 @@ pub(crate) mod tests {
         );
 
         // Empty state doesn't need gc, regardless of is_write.
-        assert_eq!(state.maybe_gc(true), None);
-        assert_eq!(state.maybe_gc(false), None);
+        assert_eq!(
+            state.maybe_gc(true, GC_USE_ACTIVE_GC, GC_FALLBACK_THRESHOLD_MS, NOW_MS),
+            None
+        );
+        assert_eq!(
+            state.maybe_gc(false, GC_USE_ACTIVE_GC, GC_FALLBACK_THRESHOLD_MS, NOW_MS),
+            None
+        );
 
         // Artificially advance the seqno so the seqno_since advances past our
         // internal gc_threshold.
@@ -3541,11 +3788,14 @@ pub(crate) mod tests {
             100,
             None,
         );
-        assert_eq!(state.maybe_gc(false), None);
+        assert_eq!(
+            state.maybe_gc(false, GC_USE_ACTIVE_GC, GC_FALLBACK_THRESHOLD_MS, NOW_MS),
+            None
+        );
 
         // A write will gc though.
         assert_eq!(
-            state.maybe_gc(true),
+            state.maybe_gc(true, GC_USE_ACTIVE_GC, GC_FALLBACK_THRESHOLD_MS, NOW_MS),
             Some(GcReq {
                 shard_id: state.shard_id,
                 new_seqno_since: SeqNo(100)
@@ -3560,7 +3810,7 @@ pub(crate) mod tests {
         // If there are no writers, even a non-write will gc.
         let _ = state.collections.expire_writer(&writer_id);
         assert_eq!(
-            state.maybe_gc(true),
+            state.maybe_gc(false, GC_USE_ACTIVE_GC, GC_FALLBACK_THRESHOLD_MS, NOW_MS),
             Some(GcReq {
                 shard_id: state.shard_id,
                 new_seqno_since: SeqNo(200)
@@ -3569,8 +3819,12 @@ pub(crate) mod tests {
     }
 
     #[mz_ore::test]
-    fn need_rollup() {
+    fn need_rollup_active_rollup() {
         const ROLLUP_THRESHOLD: usize = 3;
+        const ROLLUP_USE_ACTIVE_ROLLUP: bool = true;
+        const ROLLUP_FALLBACK_THRESHOLD_MS: u64 = 5000;
+        let now = SYSTEM_TIME.clone();
+
         mz_ore::test::init_logging();
         let mut state = TypedState::<String, String, u64, i64>::new(
             DUMMY_BUILD_INFO.semver_version(),
@@ -3594,29 +3848,213 @@ pub(crate) mod tests {
 
         // shouldn't need a rollup at the seqno of the rollup
         state.seqno = SeqNo(5);
-        assert_none!(state.need_rollup(ROLLUP_THRESHOLD));
+        assert_none!(state.need_rollup(
+            ROLLUP_THRESHOLD,
+            ROLLUP_USE_ACTIVE_ROLLUP,
+            ROLLUP_FALLBACK_THRESHOLD_MS,
+            now()
+        ));
 
         // shouldn't need a rollup at seqnos less than our threshold
         state.seqno = SeqNo(6);
-        assert_none!(state.need_rollup(ROLLUP_THRESHOLD));
+        assert_none!(state.need_rollup(
+            ROLLUP_THRESHOLD,
+            ROLLUP_USE_ACTIVE_ROLLUP,
+            ROLLUP_FALLBACK_THRESHOLD_MS,
+            now()
+        ));
         state.seqno = SeqNo(7);
-        assert_none!(state.need_rollup(ROLLUP_THRESHOLD));
+        assert_none!(state.need_rollup(
+            ROLLUP_THRESHOLD,
+            ROLLUP_USE_ACTIVE_ROLLUP,
+            ROLLUP_FALLBACK_THRESHOLD_MS,
+            now()
+        ));
+        state.seqno = SeqNo(8);
+        assert_none!(state.need_rollup(
+            ROLLUP_THRESHOLD,
+            ROLLUP_USE_ACTIVE_ROLLUP,
+            ROLLUP_FALLBACK_THRESHOLD_MS,
+            now()
+        ));
+
+        let mut current_time = now();
+        // hit our threshold! we should need a rollup
+        state.seqno = SeqNo(9);
+        assert_eq!(
+            state
+                .need_rollup(
+                    ROLLUP_THRESHOLD,
+                    ROLLUP_USE_ACTIVE_ROLLUP,
+                    ROLLUP_FALLBACK_THRESHOLD_MS,
+                    current_time
+                )
+                .expect("rollup"),
+            SeqNo(9)
+        );
+
+        state.collections.active_rollup = Some(ActiveRollup {
+            seqno: SeqNo(9),
+            start_ms: current_time,
+        });
+
+        // There is now an active rollup, so we shouldn't need a rollup.
+        assert_none!(state.need_rollup(
+            ROLLUP_THRESHOLD,
+            ROLLUP_USE_ACTIVE_ROLLUP,
+            ROLLUP_FALLBACK_THRESHOLD_MS,
+            current_time
+        ));
+
+        state.seqno = SeqNo(10);
+        // We still don't need a rollup, even though the seqno is greater than
+        // the rollup threshold.
+        assert_none!(state.need_rollup(
+            ROLLUP_THRESHOLD,
+            ROLLUP_USE_ACTIVE_ROLLUP,
+            ROLLUP_FALLBACK_THRESHOLD_MS,
+            current_time
+        ));
+
+        // But if we wait long enough, we should need a rollup again.
+        current_time += u64::cast_from(ROLLUP_FALLBACK_THRESHOLD_MS) + 1;
+        assert_eq!(
+            state
+                .need_rollup(
+                    ROLLUP_THRESHOLD,
+                    ROLLUP_USE_ACTIVE_ROLLUP,
+                    ROLLUP_FALLBACK_THRESHOLD_MS,
+                    current_time
+                )
+                .expect("rollup"),
+            SeqNo(10)
+        );
+
+        state.seqno = SeqNo(9);
+        // Clear the active rollup and ensure we need a rollup again.
+        state.collections.active_rollup = None;
+        let rollup_seqno = SeqNo(9);
+        let rollup = HollowRollup {
+            key: PartialRollupKey::new(rollup_seqno, &RollupId::new()),
+            encoded_size_bytes: None,
+        };
+        assert!(
+            state
+                .collections
+                .add_rollup((rollup_seqno, &rollup))
+                .is_continue()
+        );
+
+        state.seqno = SeqNo(11);
+        // We shouldn't need a rollup at seqnos less than our threshold
+        assert_none!(state.need_rollup(
+            ROLLUP_THRESHOLD,
+            ROLLUP_USE_ACTIVE_ROLLUP,
+            ROLLUP_FALLBACK_THRESHOLD_MS,
+            current_time
+        ));
+        // hit our threshold! we should need a rollup
+        state.seqno = SeqNo(13);
+        assert_eq!(
+            state
+                .need_rollup(
+                    ROLLUP_THRESHOLD,
+                    ROLLUP_USE_ACTIVE_ROLLUP,
+                    ROLLUP_FALLBACK_THRESHOLD_MS,
+                    current_time
+                )
+                .expect("rollup"),
+            SeqNo(13)
+        );
+    }
+
+    #[mz_ore::test]
+    fn need_rollup_classic() {
+        const ROLLUP_THRESHOLD: usize = 3;
+        const ROLLUP_USE_ACTIVE_ROLLUP: bool = false;
+        const ROLLUP_FALLBACK_THRESHOLD_MS: u64 = 0;
+        const NOW: u64 = 0;
+
+        mz_ore::test::init_logging();
+        let mut state = TypedState::<String, String, u64, i64>::new(
+            DUMMY_BUILD_INFO.semver_version(),
+            ShardId::new(),
+            "".to_owned(),
+            0,
+        );
+
+        let rollup_seqno = SeqNo(5);
+        let rollup = HollowRollup {
+            key: PartialRollupKey::new(rollup_seqno, &RollupId::new()),
+            encoded_size_bytes: None,
+        };
+
+        assert!(
+            state
+                .collections
+                .add_rollup((rollup_seqno, &rollup))
+                .is_continue()
+        );
+
+        // shouldn't need a rollup at the seqno of the rollup
+        state.seqno = SeqNo(5);
+        assert_none!(state.need_rollup(
+            ROLLUP_THRESHOLD,
+            ROLLUP_USE_ACTIVE_ROLLUP,
+            ROLLUP_FALLBACK_THRESHOLD_MS,
+            NOW
+        ));
+
+        // shouldn't need a rollup at seqnos less than our threshold
+        state.seqno = SeqNo(6);
+        assert_none!(state.need_rollup(
+            ROLLUP_THRESHOLD,
+            ROLLUP_USE_ACTIVE_ROLLUP,
+            ROLLUP_FALLBACK_THRESHOLD_MS,
+            NOW
+        ));
+        state.seqno = SeqNo(7);
+        assert_none!(state.need_rollup(
+            ROLLUP_THRESHOLD,
+            ROLLUP_USE_ACTIVE_ROLLUP,
+            ROLLUP_FALLBACK_THRESHOLD_MS,
+            NOW
+        ));
 
         // hit our threshold! we should need a rollup
         state.seqno = SeqNo(8);
         assert_eq!(
-            state.need_rollup(ROLLUP_THRESHOLD).expect("rollup"),
+            state
+                .need_rollup(
+                    ROLLUP_THRESHOLD,
+                    ROLLUP_USE_ACTIVE_ROLLUP,
+                    ROLLUP_FALLBACK_THRESHOLD_MS,
+                    NOW
+                )
+                .expect("rollup"),
             SeqNo(8)
         );
 
         // but we don't need rollups for every seqno > the threshold
         state.seqno = SeqNo(9);
-        assert_none!(state.need_rollup(ROLLUP_THRESHOLD));
+        assert_none!(state.need_rollup(
+            ROLLUP_THRESHOLD,
+            ROLLUP_USE_ACTIVE_ROLLUP,
+            ROLLUP_FALLBACK_THRESHOLD_MS,
+            NOW
+        ));
 
         // we only need a rollup each `ROLLUP_THRESHOLD` beyond our current seqno
         state.seqno = SeqNo(11);
         assert_eq!(
-            state.need_rollup(ROLLUP_THRESHOLD).expect("rollup"),
+            state
+                .need_rollup(
+                    ROLLUP_THRESHOLD,
+                    ROLLUP_USE_ACTIVE_ROLLUP,
+                    ROLLUP_FALLBACK_THRESHOLD_MS,
+                    NOW
+                )
+                .expect("rollup"),
             SeqNo(11)
         );
 
@@ -3634,10 +4072,22 @@ pub(crate) mod tests {
         );
 
         state.seqno = SeqNo(8);
-        assert_none!(state.need_rollup(ROLLUP_THRESHOLD));
+        assert_none!(state.need_rollup(
+            ROLLUP_THRESHOLD,
+            ROLLUP_USE_ACTIVE_ROLLUP,
+            ROLLUP_FALLBACK_THRESHOLD_MS,
+            NOW
+        ));
         state.seqno = SeqNo(9);
         assert_eq!(
-            state.need_rollup(ROLLUP_THRESHOLD).expect("rollup"),
+            state
+                .need_rollup(
+                    ROLLUP_THRESHOLD,
+                    ROLLUP_USE_ACTIVE_ROLLUP,
+                    ROLLUP_FALLBACK_THRESHOLD_MS,
+                    NOW
+                )
+                .expect("rollup"),
             SeqNo(9)
         );
 
@@ -3648,12 +4098,26 @@ pub(crate) mod tests {
         );
         state.seqno = fallback_seqno;
         assert_eq!(
-            state.need_rollup(ROLLUP_THRESHOLD).expect("rollup"),
+            state
+                .need_rollup(
+                    ROLLUP_THRESHOLD,
+                    ROLLUP_USE_ACTIVE_ROLLUP,
+                    ROLLUP_FALLBACK_THRESHOLD_MS,
+                    NOW
+                )
+                .expect("rollup"),
             fallback_seqno
         );
         state.seqno = fallback_seqno.next();
         assert_eq!(
-            state.need_rollup(ROLLUP_THRESHOLD).expect("rollup"),
+            state
+                .need_rollup(
+                    ROLLUP_THRESHOLD,
+                    ROLLUP_USE_ACTIVE_ROLLUP,
+                    ROLLUP_FALLBACK_THRESHOLD_MS,
+                    NOW
+                )
+                .expect("rollup"),
             fallback_seqno.next()
         );
     }

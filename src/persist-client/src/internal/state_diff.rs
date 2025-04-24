@@ -39,6 +39,8 @@ use crate::{Metrics, PersistConfig, ShardId};
 
 use StateFieldValDiff::*;
 
+use super::state::{ActiveGc, ActiveRollup};
+
 #[derive(Clone, Debug)]
 #[cfg_attr(any(test, debug_assertions), derive(PartialEq))]
 pub enum StateFieldValDiff<V> {
@@ -74,6 +76,8 @@ pub struct StateDiff<T> {
     pub(crate) walltime_ms: u64,
     pub(crate) latest_rollup_key: PartialRollupKey,
     pub(crate) rollups: Vec<StateFieldDiff<SeqNo, HollowRollup>>,
+    pub(crate) active_rollup: Vec<StateFieldDiff<(), ActiveRollup>>,
+    pub(crate) active_gc: Vec<StateFieldDiff<(), ActiveGc>>,
     pub(crate) hostname: Vec<StateFieldDiff<(), String>>,
     pub(crate) last_gc_req: Vec<StateFieldDiff<(), SeqNo>>,
     pub(crate) leased_readers: Vec<StateFieldDiff<LeasedReaderId, LeasedReaderState<T>>>,
@@ -102,6 +106,8 @@ impl<T: Timestamp + Codec64> StateDiff<T> {
             walltime_ms,
             latest_rollup_key,
             rollups: Vec::default(),
+            active_rollup: Vec::default(),
+            active_gc: Vec::default(),
             hostname: Vec::default(),
             last_gc_req: Vec::default(),
             leased_readers: Vec::default(),
@@ -148,6 +154,8 @@ impl<T: Timestamp + Lattice + Codec64> StateDiff<T> {
                 StateCollections {
                     last_gc_req: from_last_gc_req,
                     rollups: from_rollups,
+                    active_rollup: from_active_rollup,
+                    active_gc: from_active_gc,
                     leased_readers: from_leased_readers,
                     critical_readers: from_critical_readers,
                     writers: from_writers,
@@ -165,6 +173,8 @@ impl<T: Timestamp + Lattice + Codec64> StateDiff<T> {
                 StateCollections {
                     last_gc_req: to_last_gc_req,
                     rollups: to_rollups,
+                    active_rollup: to_active_rollup,
+                    active_gc: to_active_gc,
                     leased_readers: to_leased_readers,
                     critical_readers: to_critical_readers,
                     writers: to_writers,
@@ -184,6 +194,16 @@ impl<T: Timestamp + Lattice + Codec64> StateDiff<T> {
         );
         diff_field_single(from_hostname, to_hostname, &mut diffs.hostname);
         diff_field_single(from_last_gc_req, to_last_gc_req, &mut diffs.last_gc_req);
+        diff_field_sorted_iter(
+            from_active_rollup.iter().map(|r| (&(), r)),
+            to_active_rollup.iter().map(|r| (&(), r)),
+            &mut diffs.active_rollup,
+        );
+        diff_field_sorted_iter(
+            from_active_gc.iter().map(|g| (&(), g)),
+            to_active_gc.iter().map(|g| (&(), g)),
+            &mut diffs.active_gc,
+        );
         diff_field_sorted_iter(from_rollups.iter(), to_rollups, &mut diffs.rollups);
         diff_field_sorted_iter(
             from_leased_readers.iter(),
@@ -381,6 +401,8 @@ impl<T: Timestamp + Lattice + Codec64> State<T> {
             walltime_ms: diff_walltime_ms,
             latest_rollup_key: _,
             rollups: diff_rollups,
+            active_rollup: diff_active_rollup,
+            active_gc: diff_active_gc,
             hostname: diff_hostname,
             last_gc_req: diff_last_gc_req,
             leased_readers: diff_leased_readers,
@@ -419,6 +441,8 @@ impl<T: Timestamp + Lattice + Codec64> State<T> {
         let StateCollections {
             last_gc_req,
             rollups,
+            active_rollup,
+            active_gc,
             leased_readers,
             critical_readers,
             writers,
@@ -428,6 +452,8 @@ impl<T: Timestamp + Lattice + Codec64> State<T> {
 
         apply_diffs_map("rollups", diff_rollups, rollups)?;
         apply_diffs_single("last_gc_req", diff_last_gc_req, last_gc_req)?;
+        apply_diffs_single_option("active_rollup", diff_active_rollup, active_rollup)?;
+        apply_diffs_single_option("active_gc", diff_active_gc, active_gc)?;
         apply_diffs_map("leased_readers", diff_leased_readers, leased_readers)?;
         apply_diffs_map("critical_readers", diff_critical_readers, critical_readers)?;
         apply_diffs_map("writers", diff_writers, writers)?;
@@ -519,6 +545,51 @@ fn diff_field_single<T: PartialEq + Clone>(
             val: Update(from.clone(), to.clone()),
         })
     }
+}
+
+fn apply_diffs_single_option<X: PartialEq + Debug>(
+    name: &str,
+    diffs: Vec<StateFieldDiff<(), X>>,
+    single: &mut Option<X>,
+) -> Result<(), String> {
+    for diff in diffs {
+        apply_diff_single_option(name, diff, single)?;
+    }
+    Ok(())
+}
+
+fn apply_diff_single_option<X: PartialEq + Debug>(
+    name: &str,
+    diff: StateFieldDiff<(), X>,
+    single: &mut Option<X>,
+) -> Result<(), String> {
+    match diff.val {
+        Update(from, to) => {
+            if single.as_ref() != Some(&from) {
+                return Err(format!(
+                    "{} update didn't match: {:?} vs {:?}",
+                    name, single, &from
+                ));
+            }
+            *single = Some(to)
+        }
+        Insert(to) => {
+            if single.is_some() {
+                return Err(format!("{} insert found existing value", name));
+            }
+            *single = Some(to)
+        }
+        Delete(from) => {
+            if single.as_ref() != Some(&from) {
+                return Err(format!(
+                    "{} delete didn't match: {:?} vs {:?}",
+                    name, single, &from
+                ));
+            }
+            *single = None
+        }
+    }
+    Ok(())
 }
 
 fn apply_diffs_single<X: PartialEq + Debug>(

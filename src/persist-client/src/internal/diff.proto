@@ -30,6 +30,8 @@ enum ProtoStateField {
   HOLLOW_BATCHES = 9;
   SPINE_BATCHES = 10;
   SPINE_MERGES = 11;
+  ACTIVE_ROLLUP = 13;
+  ACTIVE_GC = 14;
 }
 
 enum ProtoStateFieldDiffType {
