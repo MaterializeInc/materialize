@@ -173,7 +173,7 @@ SELECT position, name, type FROM objects WHERE schema = 'mz_introspection' AND o
 query ITT
 SELECT position, name, type FROM objects WHERE schema = 'mz_introspection' AND object = 'mz_lir_mapping' ORDER BY position
 ----
-1  global_id           text
+1  export_id           text
 2  lir_id              uint8
 3  operator            text
 4  parent_lir_id       uint8
