@@ -5,11 +5,14 @@ menu:
     parent: commands
 ---
 
-`ROLLBACK` aborts the current transaction.
+`ROLLBACK` aborts the current [transaction](/sql/begin/#details) and all changes
+in the transaction are discarded.
 
 ## Syntax
 
-{{< diagram "rollback.svg" >}}
+```mzsql
+ROLLBACK;
+```
 
 ## Details
 
