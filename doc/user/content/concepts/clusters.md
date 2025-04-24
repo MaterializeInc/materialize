@@ -151,3 +151,4 @@ hydration cost and the steady-state cost.
 - [`ALTER CLUSTER`](/sql/alter-cluster)
 - [System clusters](/sql/system-clusters)
 - [Usage](/administration/usage/)
+- [Operational guidelines](/manage/operational-guidelines/)
