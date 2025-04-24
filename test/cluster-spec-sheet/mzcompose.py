@@ -59,10 +59,10 @@ class ScenarioRunner:
         self.replica_size = replica_size
 
     def add_result(
-        self, name: str, repetition: int, size_bytes: int, time: float
+        self, category: str, name: str, repetition: int, size_bytes: int, time: float
     ) -> None:
         self.results_file.write(
-            f"{self.scenario},{self.mode},{name},{self.replica_size},{repetition},{size_bytes},{int(time * 1_000)}\n"
+            f"{self.scenario},{self.mode},{category},{name},{self.replica_size},{repetition},{size_bytes},{int(time * 1_000)}\n"
         )
         self.results_file.flush()
 
@@ -72,18 +72,15 @@ class ScenarioRunner:
 
     def measure(
         self,
+        category: str,
         name: str,
         query: list[str],
-        before: list[str] | None = None,
         repetitions: int = 1,
         size_of_index: str | None = None,
     ) -> None:
         print(
             f"Running {name} for {self.replica_size} with {repetitions} repetitions..."
         )
-        if before:
-            for before_query in before:
-                self.run_query(before_query)
         for repetition in range(repetitions):
             start_time = time.time()
             for query_part in query:
@@ -95,7 +92,9 @@ class ScenarioRunner:
                 print(f"Size of index {size_of_index}: {size_bytes}")
             else:
                 size_bytes = None
-            self.add_result(name, repetition, size_bytes, (end_time - start_time))
+            self.add_result(
+                category, name, repetition, size_bytes, (end_time - start_time)
+            )
 
     def size_of_dataflow(self, object: str) -> int | None:
         retries = 10
@@ -161,12 +160,12 @@ class TpccScenario(Scenario):
 
     def run(self, runner: ScenarioRunner) -> None:
         # Create index
+        runner.run_query("DROP INDEX IF EXISTS lineitem_primary_idx CASCADE")
+        runner.run_query("SELECT * FROM t;")
+
         runner.measure(
+            "arrangement_formation",
             "create_index",
-            before=[
-                "DROP INDEX IF EXISTS lineitem_primary_idx CASCADE",
-                "SELECT * FROM t;",
-            ],
             query=[
                 "CREATE DEFAULT INDEX ON lineitem;",
                 "SELECT count(*) > 0 FROM lineitem;",
@@ -181,16 +180,7 @@ class TpccScenario(Scenario):
 
         # Peek against index
         runner.measure(
-            "peek_index_key_slow_path",
-            size_of_index="lineitem_primary_idx",
-            query=[
-                "WITH data AS (SELECT * FROM lineitem WHERE l_orderkey = 123412341234 and l_linenumber = 123) SELECT * FROM data, t;",
-            ],
-            repetitions=10,
-        )
-
-        # Peek against index
-        runner.measure(
+            "peek_serving",
             "peek_index_key_fast_path",
             size_of_index="lineitem_primary_idx",
             query=[
@@ -201,15 +191,7 @@ class TpccScenario(Scenario):
 
         # Peek against index
         runner.measure(
-            "peek_index_non_key_slow_path",
-            size_of_index="lineitem_primary_idx",
-            query=[
-                "WITH data AS (SELECT * FROM lineitem WHERE l_tax = 123) SELECT * FROM data, t;",
-            ],
-        )
-
-        # Peek against index
-        runner.measure(
+            "peek_serving",
             "peek_index_non_key_fast_path",
             size_of_index="lineitem_primary_idx",
             query=[
@@ -218,17 +200,110 @@ class TpccScenario(Scenario):
         )
 
         # Restart index
+        runner.run_query("SELECT count(*) > 0 FROM lineitem;")
+        runner.run_query("ALTER CLUSTER c SET (REPLICATION FACTOR 0);")
         runner.measure(
+            "arrangement_formation",
             "index_restart",
             size_of_index="lineitem_primary_idx",
-            before=[
-                "SELECT count(*) > 0 FROM lineitem;",
-                "ALTER CLUSTER c SET (REPLICATION FACTOR 0);",
-            ],
             query=[
                 "ALTER CLUSTER c SET (REPLICATION FACTOR 1);",
-                "SET cluster = 'c';",
                 "WITH data AS (SELECT * FROM lineitem WHERE l_orderkey = 123412341234 and l_linenumber = 123) SELECT * FROM data, t;",
+            ],
+        )
+
+
+class TpccScenarioMV(Scenario):
+
+    def name(self) -> str:
+        return f"tpcc_mv_sf_{10*self.scale}"
+
+    def materialize_views(self) -> list[str]:
+        return ["lineitem"]
+
+    def setup(self) -> list[str]:
+        return [
+            "DROP SOURCE IF EXISTS lgtpch CASCADE;",
+            "DROP CLUSTER IF EXISTS lg CASCADE;",
+            f"CREATE CLUSTER lg SIZE '{self.replica_size}';",
+            f"CREATE SOURCE lgtpch IN CLUSTER lg FROM LOAD GENERATOR TPCH (SCALE FACTOR {10*self.scale}, TICK INTERVAL 1) FOR ALL TABLES;",
+            "SELECT COUNT(*) > 0 FROM region;",
+        ]
+
+    def drop(self) -> list[str]:
+        return ["DROP CLUSTER lg CASCADE;"]
+
+    def run(self, runner: ScenarioRunner) -> None:
+        # Create index
+        runner.run_query("DROP MATERIALIZED VIEW IF EXISTS mv_lineitem CASCADE")
+        runner.run_query("SELECT * FROM t;")
+        runner.measure(
+            "materialized_view_formation",
+            "create_materialize_view",
+            query=[
+                "CREATE MATERIALIZED VIEW mv_lineitem AS SELECT * FROM lineitem;",
+                "SELECT count(*) > 0 FROM mv_lineitem;",
+            ],
+            size_of_index="mv_lineitem",
+        )
+
+        time.sleep(3)
+
+        index_size = runner.size_of_dataflow("%mv_lineitem")
+        print(f"Dataflow size: {index_size}")
+
+        # Peek against index
+        runner.measure(
+            "peek_serving",
+            "peek_materialized_view_key_slow_path",
+            size_of_index="mv_lineitem",
+            query=[
+                "WITH data AS (SELECT * FROM mv_lineitem WHERE l_orderkey = 123412341234 and l_linenumber = 123) SELECT * FROM data, t;",
+            ],
+            repetitions=10,
+        )
+
+        # Peek against index
+        runner.measure(
+            "peek_serving",
+            "peek_materialized_view_key_fast_path",
+            size_of_index="mv_lineitem",
+            query=[
+                "SELECT * FROM mv_lineitem WHERE l_orderkey = 123412341234 and l_linenumber = 123",
+            ],
+            repetitions=10,
+        )
+
+        # Peek against index
+        runner.measure(
+            "peek_serving",
+            "peek_materialized_view_non_key_slow_path",
+            size_of_index="mv_lineitem",
+            query=[
+                "WITH data AS (SELECT * FROM mv_lineitem WHERE l_tax = 123) SELECT * FROM data, t;",
+            ],
+        )
+
+        # Peek against index
+        runner.measure(
+            "peek_serving",
+            "peek_materialized_view_non_key_fast_path",
+            size_of_index="mv_lineitem",
+            query=[
+                "SELECT * FROM mv_lineitem WHERE l_tax = 123;",
+            ],
+        )
+
+        # Restart index
+        runner.run_query("SELECT count(*) > 0 FROM mv_lineitem;")
+        runner.run_query("ALTER CLUSTER c SET (REPLICATION FACTOR 0);")
+        runner.measure(
+            "materialized_view_formation",
+            "materialized_view_restart",
+            size_of_index="mv_lineitem",
+            query=[
+                "ALTER CLUSTER c SET (REPLICATION FACTOR 1);",
+                "WITH data AS (SELECT * FROM mv_lineitem WHERE l_orderkey = 123412341234 and l_linenumber = 123) SELECT * FROM data, t;",
             ],
         )
 
@@ -353,7 +428,7 @@ class AuctionScenario(Scenario):
                 get_byte(random, 4) * 256 as seller,
                 get_byte(random, 5) as item,
                 -- Have each auction expire after up to 256 minutes.
-                moment + (get_byte(random, 6)::text || ' minutes')::interval as end_time
+                moment + get_byte(random, 6) * '1 minutes'::interval as end_time
             FROM random;
             """,
             """
@@ -383,35 +458,47 @@ class AuctionScenario(Scenario):
                 get_byte(random, 4) * 256 AS buyer,
                 auction_id,
                 get_byte(random, 5)::numeric AS amount,
-                auction_start + (get_byte(random, 6)::text || ' minutes')::interval as bid_time
+                auction_start + get_byte(random, 6) * '1 minutes'::interval as bid_time
             FROM prework;
             """,
         ]
 
     def run(self, runner: ScenarioRunner) -> None:
         # Create index
+        runner.run_query("SELECT * FROM t;")
+        runner.run_query("DROP INDEX IF EXISTS bids_id_idx CASCADE")
         runner.measure(
-            "create_index",
-            size_of_index="bids_primary_idx",
-            before=[
-                "DROP INDEX IF EXISTS bids_primary_idx CASCADE",
-                "SELECT * FROM t;",
-            ],
+            "arrangement_formation",
+            "create_index_primary_key",
+            size_of_index="bids_id_idx",
             query=[
-                "CREATE DEFAULT INDEX ON bids;",
-                "SELECT count(*) > 0 FROM bids;",
+                "CREATE INDEX bids_id_idx ON bids(id);",
+                "SELECT count(*) > 0 FROM bids WHERE id = 123123123;",
+            ],
+        )
+
+        runner.run_query("DROP INDEX IF EXISTS bids_auction_id_idx CASCADE")
+
+        runner.measure(
+            "arrangement_formation",
+            "create_index_foreign_key",
+            size_of_index="bids_id_idx",
+            query=[
+                "CREATE INDEX bids_auction_id_idx ON bids(auction_id);",
+                "SELECT count(*) > 0 FROM bids WHERE auction_id = 123123123;",
             ],
         )
 
         time.sleep(3)
 
-        index_size = runner.size_of_dataflow("%bids_primary_idx")
+        index_size = runner.size_of_dataflow("%bids_id_idx")
         print(f"Index size: {index_size}")
 
         # Peek against index
         runner.measure(
+            "peek_serving",
             "peek_index_key_slow_path",
-            size_of_index="bids_primary_idx",
+            size_of_index="bids_id_idx",
             query=[
                 "WITH data AS (SELECT * FROM bids WHERE id = 123412341234) SELECT * FROM data, t;",
             ],
@@ -420,8 +507,9 @@ class AuctionScenario(Scenario):
 
         # Peek against index
         runner.measure(
+            "peek_serving",
             "peek_index_key_fast_path",
-            size_of_index="bids_primary_idx",
+            size_of_index="bids_id_idx",
             query=[
                 "SELECT * FROM bids WHERE id = 123412341234",
             ],
@@ -430,8 +518,9 @@ class AuctionScenario(Scenario):
 
         # Peek against index
         runner.measure(
+            "peek_serving",
             "peek_index_non_key_slow_path",
-            size_of_index="bids_primary_idx",
+            size_of_index="bids_id_idx",
             query=[
                 "WITH data AS (SELECT * FROM bids WHERE amount = 123123123) SELECT * FROM data, t;",
             ],
@@ -439,24 +528,78 @@ class AuctionScenario(Scenario):
 
         # Peek against index
         runner.measure(
+            "peek_serving",
             "peek_index_non_key_fast_path",
-            size_of_index="bids_primary_idx",
+            size_of_index="bids_id_idx",
             query=[
                 "SELECT * FROM bids WHERE amount = 123123123;",
             ],
         )
 
-        # Restart index
         runner.measure(
-            "index_restart",
-            size_of_index="bids_primary_idx",
-            before=[
-                "SELECT count(*) > 0 FROM bids;",
-            ],
+            "primitive_operators",
+            "bids_max",
+            size_of_index="bids_id_idx",
             query=[
-                "ALTER CLUSTER c SET (REPLICATION FACTOR 0);",
+                "SELECT max(amount) FROM bids;",
+            ],
+        )
+
+        runner.measure(
+            "primitive_operators",
+            "bids_sum",
+            size_of_index="bids_id_idx",
+            query=[
+                "SELECT sum(amount) FROM bids;",
+            ],
+        )
+
+        runner.measure(
+            "composite_operators",
+            "bids_count_max_sum_min",
+            size_of_index="bids_id_idx",
+            query=[
+                """
+                WITH data AS (
+                    SELECT
+                        id, count(amount), max(amount), sum(amount), min(amount)
+                    FROM bids
+                    GROUP BY id
+                )
+                SELECT
+                    sum(data.count), sum(data.max), sum(data.sum), sum(data.min)
+                FROM data;
+                """,
+            ],
+        )
+
+        runner.measure(
+            "primitive_operators",
+            "join",
+            size_of_index="bids_id_idx",
+            query=[
+                "SELECT count(*) FROM bids, auctions WHERE bids.auction_id = auctions.id;",
+            ],
+        )
+
+        runner.measure(
+            "composite_operators",
+            "join_max",
+            size_of_index="bids_id_idx",
+            query=[
+                "SELECT auction_id, item, MAX(amount) FROM bids, auctions WHERE bids.auction_id = auctions.id GROUP BY auction_id, item;",
+            ],
+        )
+
+        # Restart index
+        runner.run_query("ALTER CLUSTER c SET (REPLICATION FACTOR 0);")
+        time.sleep(2)
+        runner.measure(
+            "peek_serving",
+            "index_restart",
+            size_of_index="bids_id_idx",
+            query=[
                 "ALTER CLUSTER c SET (REPLICATION FACTOR 1);",
-                "SET cluster = 'c';",
                 "WITH data AS (SELECT * FROM bids WHERE id = 123412341234) SELECT * FROM data, t;",
             ],
         )
@@ -486,19 +629,26 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     )
 
     with open(f"results_{int(time.time())}.csv", "w") as f:
-        f.write("scenario,mode,test_name,cluster_size,repetition,size_bytes,time_ms\n")
+        f.write(
+            "scenario,mode,category,test_name,cluster_size,repetition,size_bytes,time_ms\n"
+        )
         run_scenario_weak(
             scenario=TpccScenario(1, "100cc"),
             results_file=f,
             connection=connection,
         )
+        # run_scenario_weak(
+        #     scenario=TpccScenarioMV(1, "100cc"),
+        #     results_file=f,
+        #     connection=connection,
+        # )
         run_scenario_weak(
-            scenario=AuctionScenario(5, "100cc"),
+            scenario=AuctionScenario(4, "100cc"),
             results_file=f,
             connection=connection,
         )
         run_scenario_strong(
-            scenario=AuctionScenario(5, "none"),
+            scenario=AuctionScenario(4, "none"),
             results_file=f,
             connection=connection,
         )
@@ -532,7 +682,7 @@ def run_scenario_weak(
         "800cc",
         "1600cc",
         "3200cc",
-    ]:  # , "6400cc", "128C"]:
+    ]:
         # Create a cluster with the specified size
         runner.run_query("DROP CLUSTER IF EXISTS c CASCADE")
         runner.run_query(f"CREATE CLUSTER c SIZE '{replica_size}'")
@@ -561,7 +711,7 @@ def run_scenario_strong(
         ("800cc", 8),
         ("1600cc", 16),
         ("3200cc", 32),
-    ]:  # , "6400cc", "128C"]:
+    ]:
         replica_size = replica_size_scale[0]
         scenario.replica_size = replica_size
         scenario.scale = initial_scale * replica_size_scale[1]
