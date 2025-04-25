@@ -3515,9 +3515,6 @@ where
     /// This method is invoked by `Controller::maintain`, which we expect to be called once per
     /// second during normal operation.
     fn refresh_wallclock_lag(&mut self) {
-        // Record lags to persist, if it's time.
-        self.maybe_record_wallclock_lag();
-
         let now_ms = (self.now)();
         let histogram_period =
             WallclockLagHistogramPeriod::from_epoch_millis(now_ms, self.config.config_set());
@@ -3573,6 +3570,9 @@ where
                 *stash.entry(key).or_default() += Diff::ONE;
             }
         }
+
+        // Record lags to persist, if it's time.
+        self.maybe_record_wallclock_lag();
     }
 
     /// Produce new wallclock lag introspection updates, provided enough time has passed since the
