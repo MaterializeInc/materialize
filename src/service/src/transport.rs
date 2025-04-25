@@ -16,6 +16,9 @@
 //! CTP supports any payload type that implements the serde [`Serialize`] and [`Deserialize`]
 //! traits. Messages are encoded using the [`bincode`] format, compressed, and then sent over the
 //! wire with a length prefix.
+//!
+//! A CTP server only serves a single client at a time. If a new client connects while a connection
+//! is already established, the previous connection is canceled.
 
 use std::convert::Infallible;
 use std::fmt;
@@ -32,6 +35,7 @@ use futures::future;
 use futures::stream::StreamExt;
 use mz_ore::cast::CastInto;
 use mz_ore::netio::{Listener, Stream};
+use mz_ore::task::{JoinHandle, JoinHandleExt};
 use semver::Version;
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
@@ -173,21 +177,31 @@ where
     Out: Payload,
     H: GenericClient<In, Out> + 'static,
 {
+    // Keep a handle to the task serving the current connection so we can abort it when a new
+    // client connects.
+    let mut connection_task: Option<JoinHandle<()>> = None;
+
     let listener = Listener::bind(address).await?;
 
     loop {
         let (stream, _peer) = listener.accept().await?;
 
+        // Abort any existing connection before starting to serve the new one.
+        if let Some(task) = connection_task.take() {
+            task.abort_and_wait().await;
+        }
+
         let handler = handler_fn();
         let version = version.clone();
         let server_fqdn = server_fqdn.map(Into::into);
 
-        mz_ore::task::spawn(|| "ctp::server-connection", async move {
+        let handle = mz_ore::task::spawn(|| "ctp::server-connection", async move {
             let conn = Connection::new(stream, version, server_fqdn, connection_timeout);
 
             let Err(error) = conn.serve(handler).await;
             info!("CTP connection failed: {error}");
         });
+        connection_task = Some(handle);
     }
 }
 
