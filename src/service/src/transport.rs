@@ -19,20 +19,21 @@
 
 use std::convert::Infallible;
 use std::fmt::Debug;
+use std::time::Duration;
 
 use anyhow::{anyhow, bail};
 use async_trait::async_trait;
 use bincode::Options;
 use futures::future;
 use mz_ore::cast::CastInto;
-use mz_ore::netio::{Listener, SocketAddr, Stream};
+use mz_ore::netio::{Listener, SocketAddr, Stream, TimedReader, TimedWriter};
 use mz_ore::task::AbortOnDropHandle;
 use semver::Version;
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use tokio::sync::{mpsc, watch};
-use tracing::{debug, info, trace};
+use tracing::{debug, info, trace, warn};
 
 use crate::client::{GenericClient, Partitionable, Partitioned};
 
@@ -48,12 +49,20 @@ pub struct Client<Out, In> {
 
 impl<Out: Message, In: Message> Client<Out, In> {
     /// Connect to the server at the given address.
-    pub async fn connect(address: &str, version: Version) -> anyhow::Result<Self> {
+    ///
+    /// This call resolves once a connection with the server host was either established, was
+    /// rejected, or timed out.
+    pub async fn connect(
+        address: &str,
+        version: Version,
+        connect_timeout: Duration,
+        idle_timeout: Duration,
+    ) -> anyhow::Result<Self> {
         let dest_host = host_from_address(address);
-        let stream = Stream::connect(address).await?;
+        let stream = mz_ore::future::timeout(connect_timeout, Stream::connect(address)).await?;
         info!(%address, "ctp: connected to server");
 
-        let conn = Connection::start(stream, version, dest_host).await?;
+        let conn = Connection::start(stream, version, dest_host, idle_timeout).await?;
         Ok(Self { conn })
     }
 }
@@ -84,10 +93,12 @@ where
     pub async fn connect_partitioned(
         addresses: Vec<String>,
         version: Version,
+        connect_timeout: Duration,
+        idle_timeout: Duration,
     ) -> anyhow::Result<Partitioned<Self, Out, In>> {
         let connects = addresses
             .iter()
-            .map(|addr| Self::connect(addr, version.clone()));
+            .map(|addr| Self::connect(addr, version.clone(), connect_timeout, idle_timeout));
         let clients = future::try_join_all(connects).await?;
         Ok(Partitioned::new(clients))
     }
@@ -113,6 +124,7 @@ pub async fn serve<In, Out, H>(
     address: SocketAddr,
     version: Version,
     server_fqdn: Option<String>,
+    idle_timeout: Duration,
     handler_fn: impl Fn() -> H,
 ) -> anyhow::Result<()>
 where
@@ -131,8 +143,9 @@ where
         let version = version.clone();
         let server_fqdn = server_fqdn.clone();
 
-        mz_ore::task::spawn(|| "ctp::connection", async {
-            let Err(error) = serve_connection(stream, handler, version, server_fqdn).await;
+        mz_ore::task::spawn(|| "ctp::connection", async move {
+            let Err(error) =
+                serve_connection(stream, handler, version, server_fqdn, idle_timeout).await;
             info!("ctp: connection failed: {error}");
         });
     }
@@ -144,13 +157,14 @@ async fn serve_connection<In, Out, H>(
     mut handler: H,
     version: Version,
     server_fqdn: Option<String>,
+    timeout: Duration,
 ) -> anyhow::Result<Infallible>
 where
     In: Message,
     Out: Message,
     H: GenericClient<In, Out>,
 {
-    let mut conn = Connection::start(stream, version, server_fqdn).await?;
+    let mut conn = Connection::start(stream, version, server_fqdn, timeout).await?;
 
     loop {
         tokio::select! {
@@ -194,13 +208,34 @@ struct Connection<Out, In> {
 }
 
 impl<Out: Message, In: Message> Connection<Out, In> {
+    /// The interval with which keepalives are emitted on idle connections.
+    const KEEPALIVE_INTERVAL: Duration = Duration::from_secs(1);
+    /// The minimum acceptable idle timeout.
+    ///
+    /// We want this to be significantly greater than `KEEPALIVE_INTERVAL`, to avoid connections
+    /// getting canceled unnecessarily.
+    const MIN_TIMEOUT: Duration = Duration::from_secs(2);
+
     /// Start a new connection wrapping the given stream.
     async fn start(
         stream: Stream,
         version: Version,
         server_fqdn: Option<String>,
+        mut timeout: Duration,
     ) -> anyhow::Result<Self> {
-        let (mut reader, mut writer) = stream.split();
+        if timeout < Self::MIN_TIMEOUT {
+            warn!(
+                ?timeout,
+                "ctp: configured timeout is less than minimum timeout",
+            );
+            timeout = Self::MIN_TIMEOUT;
+        }
+
+        let (reader, writer) = stream.split();
+
+        // Apply the timeout to all connection reads and writes.
+        let mut reader = TimedReader::new(reader, timeout);
+        let mut writer = TimedWriter::new(writer, timeout);
 
         handshake(&mut reader, &mut writer, version, server_fqdn).await?;
 
@@ -263,10 +298,24 @@ impl<Out: Message, In: Message> Connection<Out, In> {
         mut msg_rx: mpsc::Receiver<Out>,
         error_tx: watch::Sender<String>,
     ) {
-        while let Some(msg) = msg_rx.recv().await {
-            trace!(?msg, "ctp: sending message");
+        loop {
+            let msg = tokio::select! {
+                // `mpsc::UnboundedReceiver::recv` is cancel safe.
+                msg = msg_rx.recv() => match msg {
+                    Some(msg) => {
+                        trace!(?msg, "ctp: sending message");
+                        Some(msg)
+                    }
+                    None => break,
+                },
+                // `tokio::time::sleep` is cancel safe.
+                _ = tokio::time::sleep(Self::KEEPALIVE_INTERVAL) => {
+                    trace!("ctp: sending keepalive");
+                    None
+                },
+            };
 
-            if let Err(error) = write_message(&mut writer, &msg).await {
+            if let Err(error) = write_message(&mut writer, msg.as_ref()).await {
                 debug!("ctp: send error: {error}");
                 let _ = error_tx.send(error.to_string());
                 break;
@@ -356,7 +405,7 @@ where
         version: version.clone(),
         server_fqdn: server_fqdn.clone(),
     };
-    write_message(&mut writer, &hello).await?;
+    write_message(&mut writer, Some(&hello)).await?;
 
     let peer_magic = reader.read_u64().await?;
     if peer_magic != MAGIC {
@@ -390,16 +439,22 @@ struct Hello {
 }
 
 /// Write a message into the given writer.
-async fn write_message<W, M>(mut writer: W, msg: &M) -> anyhow::Result<()>
+///
+/// The message can be `None`, in which case an empty message is written. This is used to implement
+/// keepalives. At the receiver, empty messages are ignored, but they do reset the read timeout.
+async fn write_message<W, M>(mut writer: W, msg: Option<&M>) -> anyhow::Result<()>
 where
     W: AsyncWrite + Unpin,
     M: Message,
 {
-    let bytes = wire_encode(msg)?;
+    let bytes = match msg {
+        Some(msg) => &*wire_encode(msg)?,
+        None => &[],
+    };
 
     let len = bytes.len().cast_into();
     writer.write_u64(len).await?;
-    writer.write_all(&bytes).await?;
+    writer.write_all(bytes).await?;
 
     Ok(())
 }
@@ -410,7 +465,12 @@ where
     R: AsyncRead + Unpin,
     M: Message,
 {
-    let len = reader.read_u64().await?;
+    // Skip over any empty messages (i.e. keepalives).
+    let mut len = 0;
+    while len == 0 {
+        len = reader.read_u64().await?;
+    }
+
     let mut bytes = vec![0; len.cast_into()];
     reader.read_exact(&mut bytes).await?;
 
