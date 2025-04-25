@@ -271,6 +271,35 @@ class AWS:
                     ["kubectl", "get", "pods", "-n", "materialize"],
                     cwd=self.path,
                 )
+                print("Logging all pods in materialize:")
+                pod_names = (
+                    spawn.capture(
+                        [
+                            "kubectl",
+                            "get",
+                            "pods",
+                            "-n",
+                            "materialize",
+                            "-o",
+                            "name",
+                        ],
+                        cwd=self.path,
+                    )
+                    .strip()
+                    .split("\n")
+                )
+                for pod_name in pod_names:
+                    spawn.runv(
+                        [
+                            "kubectl",
+                            "logs",
+                            "-n",
+                            "materialize",
+                            pod_name,
+                            "--all-containers=true",
+                        ],
+                        cwd=self.path,
+                    )
                 status = spawn.capture(
                     [
                         "kubectl",
@@ -1098,6 +1127,35 @@ def workflow_gcp_temporary(c: Composition, parser: WorkflowArgumentParser) -> No
                         ["kubectl", "get", "pods", "-n", "materialize"],
                         cwd=path,
                     )
+                    print("Logging all pods in materialize:")
+                    pod_names = (
+                        spawn.capture(
+                            [
+                                "kubectl",
+                                "get",
+                                "pods",
+                                "-n",
+                                "materialize",
+                                "-o",
+                                "name",
+                            ],
+                            cwd=path,
+                        )
+                        .strip()
+                        .split("\n")
+                    )
+                    for pod_name in pod_names:
+                        spawn.runv(
+                            [
+                                "kubectl",
+                                "logs",
+                                "-n",
+                                "materialize",
+                                pod_name,
+                                "--all-containers=true",
+                            ],
+                            cwd=path,
+                        )
                     status = spawn.capture(
                         [
                             "kubectl",
@@ -1632,6 +1690,35 @@ def workflow_azure_temporary(c: Composition, parser: WorkflowArgumentParser) -> 
                         cwd=path,
                         env=venv_env,
                     )
+                    print("Logging all pods in materialize:")
+                    pod_names = (
+                        spawn.capture(
+                            [
+                                "kubectl",
+                                "get",
+                                "pods",
+                                "-n",
+                                "materialize",
+                                "-o",
+                                "name",
+                            ],
+                            cwd=path,
+                        )
+                        .strip()
+                        .split("\n")
+                    )
+                    for pod_name in pod_names:
+                        spawn.runv(
+                            [
+                                "kubectl",
+                                "logs",
+                                "-n",
+                                "materialize",
+                                pod_name,
+                                "--all-containers=true",
+                            ],
+                            cwd=path,
+                        )
                     status = spawn.capture(
                         [
                             "kubectl",
