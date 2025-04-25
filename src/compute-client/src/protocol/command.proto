@@ -27,6 +27,7 @@ import "service/src/params.proto";
 import "storage-client/src/client.proto";
 import "storage-types/src/controller.proto";
 import "tracing/src/params.proto";
+import "repr/src/relation_and_scalar.proto";
 
 message ProtoComputeCommand {
   message ProtoCreateTimely {
@@ -71,6 +72,7 @@ message ProtoPeek {
   mz_expr.relation.ProtoRowSetFinishing finishing = 5;
   mz_expr.linear.ProtoSafeMfpPlan map_filter_project = 6;
   map<string, string> otel_ctx = 7;
+  mz_repr.relation_and_scalar.ProtoRelationDesc result_desc = 10;
   oneof target {
     ProtoIndexTarget index = 8;
     ProtoPersistTarget persist = 9;

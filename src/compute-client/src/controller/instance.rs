@@ -41,7 +41,7 @@ use mz_persist_types::PersistLocation;
 use mz_repr::adt::interval::Interval;
 use mz_repr::adt::timestamp::CheckedTimestamp;
 use mz_repr::refresh_schedule::RefreshSchedule;
-use mz_repr::{Datum, Diff, GlobalId, Row};
+use mz_repr::{Datum, Diff, GlobalId, RelationDesc, Row};
 use mz_storage_client::controller::{IntrospectionType, WallclockLagHistogramPeriod};
 use mz_storage_types::read_holds::{self, ReadHold};
 use mz_storage_types::read_policy::ReadPolicy;
@@ -1598,6 +1598,7 @@ where
     pub fn peek(
         &mut self,
         peek_target: PeekTarget,
+        result_desc: RelationDesc,
         literal_constraints: Option<Vec<Row>>,
         uuid: Uuid,
         timestamp: T,
@@ -1649,6 +1650,7 @@ where
             // tree to forward it on to the compute worker.
             otel_ctx,
             target: peek_target,
+            result_desc,
         }));
 
         Ok(())

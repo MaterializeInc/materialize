@@ -18,6 +18,7 @@ use std::num::NonZeroUsize;
 
 use differential_dataflow::consolidation::consolidate;
 use futures::TryFutureExt;
+use itertools::Itertools;
 use mz_adapter_types::compaction::CompactionWindow;
 use mz_adapter_types::connection::ConnectionId;
 use mz_cluster_client::ReplicaId;
@@ -36,10 +37,14 @@ use mz_expr::{
 use mz_ore::cast::CastFrom;
 use mz_ore::str::{StrExt, separated};
 use mz_ore::tracing::OpenTelemetryContext;
+use mz_persist_client::HollowBatch;
 use mz_persist_client::batch::ProtoBatch;
+use mz_proto::IntoRustIfSome;
 use mz_repr::explain::text::DisplayText;
 use mz_repr::explain::{CompactScalars, IndexUsageType, PlanRenderingContext, UsedIndexes};
-use mz_repr::{Diff, GlobalId, IntoRowIterator, RelationType, Row, RowIterator, preserves_order};
+use mz_repr::{
+    Diff, GlobalId, IntoRowIterator, RelationDesc, RelationType, Row, RowIterator, preserves_order,
+};
 use serde::{Deserialize, Serialize};
 use timely::progress::Timestamp;
 use uuid::Uuid;
@@ -517,6 +522,7 @@ impl crate::coord::Coordinator {
         &mut self,
         ctx_extra: &mut ExecuteContextExtra,
         plan: PlannedPeek,
+        relation_desc: RelationDesc,
         finishing: RowSetFinishing,
         compute_instance: ComputeInstanceId,
         target_replica: Option<ReplicaId>,
@@ -717,6 +723,7 @@ impl crate::coord::Coordinator {
             .peek(
                 compute_instance,
                 peek_target,
+                relation_desc,
                 literal_constraints,
                 uuid,
                 timestamp,
@@ -728,29 +735,94 @@ impl crate::coord::Coordinator {
             .unwrap_or_terminate("cannot fail to peek");
         let duration_histogram = self.metrics.row_set_finishing_seconds();
 
-        // Prepare the receiver to return as a response.
-        let rows_rx = rows_rx.map_ok_or_else(
-            |e| PeekResponseUnary::Error(e.to_string()),
-            move |resp| match resp {
+        let rows_stream = async_stream::stream!({
+            let result = rows_rx.await;
+
+            let rows = result.unwrap();
+
+            match rows {
                 PeekResponse::Rows(rows) => {
-                    match finishing.finish(
-                        rows,
-                        max_result_size,
-                        max_returned_query_size,
-                        &duration_histogram,
-                    ) {
-                        Ok((rows, _size_bytes)) => PeekResponseUnary::Rows(Box::new(rows)),
-                        Err(e) => PeekResponseUnary::Error(e),
-                    }
+                    // match finishing.finish(
+                    //     rows,
+                    //     max_result_size,
+                    //     max_returned_query_size,
+                    //     &duration_histogram,
+                    // ) {
+                    //     Ok((rows, _size_bytes)) => PeekResponseUnary::Rows(Box::new(rows)),
+                    //     Err(e) => PeekResponseUnary::Error(e),
+                    // }
                 }
-                PeekResponse::Stashed(response) => PeekResponseUnary::Batches {
-                    // WIP: Make this non-optional!
-                    returned_rows: response.returned_rows.expect("missing rows"),
-                },
-                PeekResponse::Canceled => PeekResponseUnary::Canceled,
-                PeekResponse::Error(e) => PeekResponseUnary::Error(e),
-            },
-        );
+                PeekResponse::Stashed(response) => {
+                    let response_batches = response
+                        .batches
+                        .into_iter()
+                        .map(|b| {
+                            let hollow: HollowBatch<mz_repr::Timestamp> = b
+                                .batch
+                                .into_rust_if_some("ProtoBatch::batch")
+                                .expect("valid transmittable batch");
+
+                            hollow
+                        })
+                        .collect_vec();
+                    tracing::info!(?response_batches, "got row batches!");
+                }
+                PeekResponse::Canceled => {
+                    // PeekResponseUnary::Canceled,
+                }
+                PeekResponse::Error(e) => {
+                    // PeekResponseUnary::Error(e),
+                }
+            }
+
+            // let rows_stream = rows_rx.map_ok_or_else(
+            //     |e| {
+            //         todo!()
+            //         // PeekResponseUnary::Error(e.to_string()),
+            //     },
+            //     move |resp| match resp {
+            //         PeekResponse::Rows(rows) => {
+            //             todo!()
+            //             // match finishing.finish(
+            //             //     rows,
+            //             //     max_result_size,
+            //             //     max_returned_query_size,
+            //             //     &duration_histogram,
+            //             // ) {
+            //             //     Ok((rows, _size_bytes)) => PeekResponseUnary::Rows(Box::new(rows)),
+            //             //     Err(e) => PeekResponseUnary::Error(e),
+            //             // }
+            //         }
+            //         PeekResponse::Stashed(response) => {
+            //             let response_batch = response.returned_rows.clone().map(|b| {
+            //                 let hollow: HollowBatch<mz_repr::Timestamp> = b
+            //                     .batch
+            //                     .into_rust_if_some("ProtoBatch::batch")
+            //                     .expect("valid transmittable batch");
+            //
+            //                 hollow
+            //             });
+            //             tracing::info!(?response_batch, "got row batches!");
+            //
+            //             row_stream
+            //         }
+            //         PeekResponse::Canceled => {
+            //             todo!()
+            //             // PeekResponseUnary::Canceled,
+            //         }
+            //         PeekResponse::Error(e) => {
+            //             todo!()
+            //             // PeekResponseUnary::Error(e),
+            //         }
+            //     },
+            // );
+
+            yield Row::pack_slice(&[
+                mz_repr::Datum::Int32(1),
+                mz_repr::Datum::Int32(2),
+                mz_repr::Datum::String("hello"),
+            ]);
+        });
 
         // If it was created, drop the dataflow once the peek command is sent.
         if let Some(index_id) = drop_dataflow {
@@ -758,10 +830,10 @@ impl crate::coord::Coordinator {
             self.drop_indexes(vec![(compute_instance, index_id)]);
         }
 
-        Ok(crate::ExecuteResponse::SendingRows {
-            future: Box::pin(rows_rx),
-            instance_id: compute_instance,
-            strategy,
+        Ok(crate::ExecuteResponse::SendingRowsStreaming {
+            rows: Box::pin(rows_stream),
+            // instance_id: compute_instance,
+            // strategy,
         })
     }
 

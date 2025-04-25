@@ -357,19 +357,12 @@ where
                                     PeekResponse::Rows(rows)
                                 }
                             }
-                            (PeekResponse::Stashed(mut batches), PeekResponse::Stashed(other)) => {
-                                match (&mut batches.returned_rows, other.returned_rows) {
-                                    (Some(_), Some(_)) => PeekResponse::Error(
-                                        "found more than one returned rows batch".to_string(),
-                                    ),
-                                    (dest @ None, batch @ Some(_)) => {
-                                        *dest = batch;
-                                        PeekResponse::Stashed(batches)
-                                    }
-                                    (Some(_), None) | (None, None) => {
-                                        PeekResponse::Stashed(batches)
-                                    }
-                                }
+                            (
+                                PeekResponse::Stashed(mut batches),
+                                PeekResponse::Stashed(mut other),
+                            ) => {
+                                batches.batches.append(&mut other.batches);
+                                PeekResponse::Stashed(batches)
                             }
                         };
                     }

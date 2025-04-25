@@ -59,7 +59,7 @@ message ProtoFrontiersResponse {
 }
 
 message ProtoStashedPeekResponse {
-  mz_persist_client.batch.ProtoBatch returned_rows = 1;
+  repeated mz_persist_client.batch.ProtoBatch batches = 1;
 }
 
 message ProtoPeekResponse {

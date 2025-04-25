@@ -383,19 +383,19 @@ impl Arbitrary for PeekResponse {
 #[derive(Clone, Debug, PartialEq)]
 pub struct StashedPeekResponse {
     /// Results from a Peek that should be returned to the user.
-    pub returned_rows: Option<ProtoBatch>,
+    pub batches: Vec<ProtoBatch>,
 }
 
 impl RustType<ProtoStashedPeekResponse> for StashedPeekResponse {
     fn into_proto(&self) -> ProtoStashedPeekResponse {
         ProtoStashedPeekResponse {
-            returned_rows: self.returned_rows.clone(),
+            batches: self.batches.clone(),
         }
     }
 
     fn from_proto(proto: ProtoStashedPeekResponse) -> Result<Self, TryFromProtoError> {
         Ok(StashedPeekResponse {
-            returned_rows: proto.returned_rows,
+            batches: proto.batches,
         })
     }
 }

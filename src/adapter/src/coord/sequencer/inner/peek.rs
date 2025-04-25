@@ -21,7 +21,7 @@ use mz_ore::cast::CastFrom;
 use mz_ore::instrument;
 use mz_repr::explain::{ExprHumanizerExt, TransientItem};
 use mz_repr::optimize::{OptimizerFeatures, OverrideFrom};
-use mz_repr::{Datum, GlobalId, RowArena, Timestamp};
+use mz_repr::{Datum, GlobalId, RelationDesc, RowArena, Timestamp};
 use mz_sql::ast::{ExplainStage, Statement};
 use mz_sql::catalog::CatalogCluster;
 // Import `plan` module, but only import select elements to avoid merge conflicts on use statements.
@@ -921,11 +921,16 @@ impl Coordinator {
 
         let max_result_size = self.catalog().system_config().max_result_size();
 
+        // At this stage we don't know the real column names for the result.
+        let result_column_names = (0..typ.arity()).map(|i| format!("peek_{i}"));
+        let result_desc = RelationDesc::new(typ, result_column_names);
+
         // Implement the peek, and capture the response.
         let resp = self
             .implement_peek_plan(
                 ctx.extra_mut(),
                 planned_peek,
+                result_desc,
                 finishing,
                 cluster_id,
                 target_replica,

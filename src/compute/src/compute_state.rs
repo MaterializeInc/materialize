@@ -27,7 +27,7 @@ use mz_compute_client::protocol::command::{
 use mz_compute_client::protocol::history::ComputeCommandHistory;
 use mz_compute_client::protocol::response::{
     ComputeResponse, CopyToResponse, FrontiersResponse, OperatorHydrationStatus, PeekResponse,
-    StatusResponse, SubscribeResponse,
+    StashedPeekResponse, StatusResponse, SubscribeResponse,
 };
 use mz_compute_types::dataflows::DataflowDescription;
 use mz_compute_types::plan::LirId;
@@ -41,14 +41,16 @@ use mz_ore::metrics::UIntGauge;
 use mz_ore::now::EpochMillis;
 use mz_ore::task::AbortOnDropHandle;
 use mz_ore::tracing::{OpenTelemetryContext, TracingHandle};
-use mz_persist_client::Diagnostics;
 use mz_persist_client::cache::PersistClientCache;
 use mz_persist_client::cfg::USE_CRITICAL_SINCE_SNAPSHOT;
 use mz_persist_client::read::ReadHandle;
-use mz_persist_types::PersistLocation;
+use mz_persist_client::{Diagnostics, Schemas};
 use mz_persist_types::codec_impls::UnitSchema;
+use mz_persist_types::{PersistLocation, ShardId};
 use mz_repr::fixed_length::ToDatumIter;
-use mz_repr::{DatumVec, Diff, GlobalId, Row, RowArena, Timestamp};
+use mz_repr::{
+    DatumVec, Diff, GlobalId, IntoRowIterator, RelationDesc, Row, RowArena, RowIterator, Timestamp,
+};
 use mz_storage_operators::stats::StatsCursor;
 use mz_storage_types::StorageDiff;
 use mz_storage_types::controller::CollectionMetadata;
@@ -625,7 +627,7 @@ impl<'a, A: Allocate + 'static> ActiveComputeState<'a, A> {
 
         // Log the receipt of the peek.
         if let Some(logger) = self.compute_state.compute_logger.as_mut() {
-            logger.log(&pending.as_log_event(true));
+            logger.log(&peek_as_log_event(pending.peek(), true));
         }
 
         self.process_peek(&mut Antichain::new(), pending);
@@ -633,7 +635,7 @@ impl<'a, A: Allocate + 'static> ActiveComputeState<'a, A> {
 
     fn handle_cancel_peek(&mut self, uuid: Uuid) {
         if let Some(peek) = self.compute_state.pending_peeks.remove(&uuid) {
-            self.send_peek_response(peek, PeekResponse::Canceled);
+            self.send_peek_response(peek.peek().clone(), PeekResponse::Canceled);
         }
         if let Some(stash_task) = self.compute_state.pending_peek_responses.remove(&uuid) {
             // Explicitly drop the task to abort it.
@@ -902,7 +904,7 @@ impl<'a, A: Allocate + 'static> ActiveComputeState<'a, A> {
                     .peek_stash_persist_location
                     .as_ref()
                     .expect("missing persist location for peek responses"),
-                peek.peek().uuid,
+                peek.peek().clone(),
                 response,
             );
             self.compute_state
@@ -922,6 +924,17 @@ impl<'a, A: Allocate + 'static> ActiveComputeState<'a, A> {
         for (_uuid, peek) in pending_peeks {
             self.process_peek(&mut upper, peek);
         }
+
+        let pending_peeks_response = std::mem::take(&mut self.compute_state.pending_peek_responses);
+        for (uuid, mut peek_response) in pending_peeks_response {
+            if let Ok((response, _duration)) = peek_response.result.try_recv() {
+                self.send_peek_response(peek_response.peek, response);
+            } else {
+                self.compute_state
+                    .pending_peek_responses
+                    .insert(uuid, peek_response);
+            }
+        }
     }
 
     /// Sends a response for this peek's resolution to the coordinator.
@@ -929,11 +942,13 @@ impl<'a, A: Allocate + 'static> ActiveComputeState<'a, A> {
     /// Note that this function takes ownership of the `PendingPeek`, which is
     /// meant to prevent multiple responses to the same peek.
     #[mz_ore::instrument(level = "debug")]
-    fn send_peek_response(&mut self, peek: PendingPeek, response: PeekResponse) {
-        let log_event = peek.as_log_event(false);
+    fn send_peek_response(&mut self, peek: Peek, response: PeekResponse) {
+        tracing::info!(?response, "sending peek response");
+
+        let log_event = peek_as_log_event(&peek, false);
         // Respond with the response.
         self.send_compute_response(ComputeResponse::PeekResponse(
-            peek.peek().uuid,
+            peek.uuid,
             response,
             OpenTelemetryContext::obtain(),
         ));
@@ -1067,21 +1082,20 @@ pub enum PendingPeek {
     Persist(PersistPeek),
 }
 
-impl PendingPeek {
-    /// Produces a corresponding log event.
-    pub fn as_log_event(&self, installed: bool) -> ComputeEvent {
-        let peek = self.peek();
-        let (id, peek_type) = match &peek.target {
-            PeekTarget::Index { id } => (id, logging::compute::PeekType::Index),
-            PeekTarget::Persist { id, .. } => (id, logging::compute::PeekType::Persist),
-        };
-        ComputeEvent::Peek(PeekEvent {
-            peek: logging::compute::Peek::new(*id, peek.timestamp, peek.uuid),
-            peek_type,
-            installed,
-        })
-    }
+/// Produces a corresponding log event.
+pub fn peek_as_log_event(peek: &Peek, installed: bool) -> ComputeEvent {
+    let (id, peek_type) = match &peek.target {
+        PeekTarget::Index { id } => (id, logging::compute::PeekType::Index),
+        PeekTarget::Persist { id, .. } => (id, logging::compute::PeekType::Persist),
+    };
+    ComputeEvent::Peek(PeekEvent {
+        peek: logging::compute::Peek::new(*id, peek.timestamp, peek.uuid),
+        peek_type,
+        installed,
+    })
+}
 
+impl PendingPeek {
     fn index(peek: Peek, mut trace_bundle: TraceBundle) -> Self {
         let empty_frontier = Antichain::new();
         let timestamp_frontier = Antichain::from_elem(peek.timestamp);
@@ -1607,20 +1621,21 @@ impl IndexPeek {
 /// `Clone`, as each `PeekResponseTask` is meant to be dropped after it's
 /// done or no longer needed.
 pub struct StashPeekResponse {
-    /// A background task that's responsible for producing the peek results.
-    /// If we're no longer interested in the results, we abort the task.
-    _abort_handle: AbortOnDropHandle<()>,
+    peek: Peek,
     /// The result of the background task, eventually.
     result: oneshot::Receiver<(PeekResponse, Duration)>,
     /// The `tracing::Span` tracking this peek's operation
     span: tracing::Span,
+    /// A background task that's responsible for producing the peek results.
+    /// If we're no longer interested in the results, we abort the task.
+    _abort_handle: AbortOnDropHandle<()>,
 }
 
 impl StashPeekResponse {
     fn start_upload(
         persist_clients: Arc<PersistClientCache>,
         persist_location: &PersistLocation,
-        peek_uuid: Uuid,
+        peek: Peek,
         peek_response: PeekResponse,
     ) -> Self {
         let (result_tx, result_rx) = oneshot::channel();
@@ -1628,10 +1643,20 @@ impl StashPeekResponse {
         let persist_clients = Arc::clone(&persist_clients);
         let persist_location = persist_location.clone();
 
+        let peek_uuid = peek.uuid;
+        let result_desc = peek.result_desc.clone();
+
         let task_handle = mz_ore::task::spawn(|| "compute::stash_peek_response", async move {
             let start = Instant::now();
 
-            let result = Self::do_upload(&persist_clients, persist_location, peek_response).await;
+            let result = Self::do_upload(
+                &persist_clients,
+                persist_location,
+                peek.uuid,
+                result_desc,
+                peek_response,
+            )
+            .await;
 
             let result = match result {
                 Ok(peek_response) => peek_response,
@@ -1640,21 +1665,24 @@ impl StashPeekResponse {
             match result_tx.send((result, start.elapsed())) {
                 Ok(()) => {}
                 Err((_result, elapsed)) => {
-                    debug!(duration = ?elapsed, "dropping result for cancelled peek {peek_uuid}")
+                    debug!(duration = ?elapsed, "dropping result for cancelled peek {}", peek_uuid)
                 }
             }
         });
 
         Self {
-            _abort_handle: task_handle.abort_on_drop(),
+            peek,
             result: result_rx,
             span: tracing::Span::current(),
+            _abort_handle: task_handle.abort_on_drop(),
         }
     }
 
     async fn do_upload(
         persist_clients: &PersistClientCache,
         persist_location: PersistLocation,
+        peek_uuid: Uuid,
+        result_desc: RelationDesc,
         peek_response: PeekResponse,
     ) -> Result<PeekResponse, String> {
         let client = persist_clients
@@ -1662,19 +1690,46 @@ impl StashPeekResponse {
             .await
             .map_err(|e| e.to_string())?;
 
-        // let mut reader: ReadHandle<SourceData, (), Timestamp, StorageDiff> = client
-        //     .open_leased_reader(
-        //         metadata.data_shard,
-        //         Arc::new(metadata.relation_desc.clone()),
-        //         Arc::new(UnitSchema),
-        //         Diagnostics::from_purpose("persist::peek"),
-        //         USE_CRITICAL_SINCE_SNAPSHOT.get(client.dyncfgs()),
-        //     )
-        //     .await
-        //     .map_err(|e| e.to_string())?;
+        let shard_id = format!("s{}", peek_uuid);
+        let shard_id = ShardId::try_from(shard_id).expect("can parse");
+        let write_schemas: Schemas<Row, ()> = Schemas {
+            id: None,
+            key: Arc::new(result_desc),
+            val: Arc::new(UnitSchema),
+        };
 
-        todo!("actually stash results");
-        // Ok(result)
+        let result_ts = Timestamp::default();
+        let lower = Antichain::from_elem(result_ts);
+        let upper = Antichain::from_elem(result_ts.step_forward());
+        let mut batch_builder = client
+            .batch_builder::<Row, (), Timestamp, i64>(shard_id, write_schemas, lower)
+            .await
+            .expect("invalid usage");
+
+        let rows = match peek_response {
+            PeekResponse::Rows(row_collection) => row_collection,
+            PeekResponse::Stashed(_stashed_peek_response) => todo!(),
+            PeekResponse::Error(_) => todo!(),
+            PeekResponse::Canceled => todo!(),
+        };
+        let row_sorted_view = rows.sorted_view(&[]);
+        let mut row_iter = row_sorted_view.into_row_iter();
+
+        while let Some(row) = row_iter.next() {
+            println!("row: {:?}", row);
+            batch_builder
+                .add(&row.into_owned(), &(), &Timestamp::default(), &1)
+                .await
+                .expect("invalid usage");
+        }
+
+        let batch = batch_builder.finish(upper).await.expect("invalid usage");
+
+        let stashed_response = StashedPeekResponse {
+            batches: vec![batch.into_transmittable_batch()],
+        };
+        let result = PeekResponse::Stashed(stashed_response);
+        Ok(result)
     }
 }
 

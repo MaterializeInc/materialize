@@ -54,7 +54,7 @@ use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::NowFn;
 use mz_ore::tracing::OpenTelemetryContext;
 use mz_persist_types::PersistLocation;
-use mz_repr::{Datum, GlobalId, Row, TimestampManipulation};
+use mz_repr::{Datum, GlobalId, RelationDesc, Row, TimestampManipulation};
 use mz_storage_client::controller::StorageController;
 use mz_storage_types::dyncfgs::ORE_OVERFLOWING_BEHAVIOR;
 use mz_storage_types::read_holds::ReadHold;
@@ -930,6 +930,7 @@ where
         &self,
         instance_id: ComputeInstanceId,
         peek_target: PeekTarget,
+        result_desc: RelationDesc,
         literal_constraints: Option<Vec<Row>>,
         uuid: Uuid,
         timestamp: T,
@@ -964,6 +965,7 @@ where
         instance.call(move |i| {
             i.peek(
                 peek_target,
+                result_desc,
                 literal_constraints,
                 uuid,
                 timestamp,
