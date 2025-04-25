@@ -221,7 +221,7 @@ where
         filter_fn,
         listen_sleep,
         start_signal,
-        error_handler,
+        error_handler.clone(),
     );
     tokens.push(descs_token);
 
@@ -243,6 +243,7 @@ where
         key_schema,
         val_schema,
         is_transient,
+        error_handler,
     );
     completed_fetches_stream.connect_loop(completed_fetches_feedback_handle);
     tokens.push(fetch_token);
@@ -590,6 +591,7 @@ pub(crate) fn shard_source_fetch<K, V, T, D, G>(
     key_schema: Arc<K::Schema>,
     val_schema: Arc<V::Schema>,
     is_transient: bool,
+    error_handler: ErrorHandler,
 ) -> (
     Stream<G, FetchedBlob<K, V, T, D>>,
     Stream<G, Infallible>,
@@ -648,6 +650,25 @@ where
                         .fetch_leased_part(&leased_part)
                         .await
                         .expect("shard_id should match across all workers");
+                    let fetched = match fetched {
+                        Ok(fetched) => fetched,
+                        Err(blob_key) => {
+                            // Ideally, readers should never encounter a missing blob. They place a seqno
+                            // hold as they consume their snapshot/listen, preventing any blobs they need
+                            // from being deleted by garbage collection, and all blob implementations are
+                            // linearizable so there should be no possibility of stale reads.
+                            //
+                            // However, it is possible for a lease to expire given a sustained period of
+                            // downtime, which could allow parts we expect to exist to be deleted...
+                            // at which point our best option is to request a restart.
+                            error_handler
+                                .report_and_stop(anyhow!(
+                                    "batch fetcher could not fetch batch part {}; lost lease?",
+                                    blob_key
+                                ))
+                                .await
+                        }
+                    };
                     {
                         // Do very fine-grained output activation/session
                         // creation to ensure that we don't hold activated
