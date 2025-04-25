@@ -20,7 +20,7 @@ def get_result(response: requests.Response) -> dict[str, Any]:
             f"Redpanda API call failed: {response.status_code} {response.text}"
         )
     result = response.json()
-    print(result)
+    # Don't print result since it can contain access tokens
     return result
 
 
