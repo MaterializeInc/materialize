@@ -30,6 +30,14 @@ spec:
       nodeSelector:
         {{- toYaml .Values.operator.nodeSelector | nindent 8 }}
       {{- end }}
+      {{- if .Values.operator.affinity }}
+      affinity:
+        {{- toYaml .Values.operator.affinity | nindent 8 }}
+      {{- end }}
+      {{- if .Values.operator.tolerations }}
+      tolerations:
+        {{- toYaml .Values.operator.tolerations | nindent 8 }}
+      {{- end }}
       containers:
       - name: {{ .Chart.Name }}
         image: "{{ .Values.operator.image.repository }}:{{ .Values.operator.image.tag }}"
@@ -118,17 +126,57 @@ spec:
         {{- end }}
         {{- end }}
         - "--image-pull-policy={{ kebabcase .Values.operator.image.pullPolicy }}"
+        {{- if .Values.environmentd.nodeSelector }}
         {{- range $key, $value := .Values.environmentd.nodeSelector }}
         - "--environmentd-node-selector={{ $key }}={{ $value }}"
         {{- end }}
+        {{- end }}
+        {{- if .Values.environmentd.affinity }}
+        - '--environmentd-affinity={{ toJson .Values.environmentd.affinity }}'
+        {{- end }}
+        {{- if .Values.environmentd.tolerations }}
+        {{- range $toleration := .Values.environmentd.tolerations }}
+        - '--environmentd-toleration={{ toJson $toleration }}'
+        {{- end }}
+        {{- end }}
+        {{- if .Values.clusterd.nodeSelector }}
         {{- range $key, $value := .Values.clusterd.nodeSelector }}
         - "--clusterd-node-selector={{ $key }}={{ $value }}"
         {{- end }}
+        {{- end }}
+        {{- if .Values.clusterd.affinity }}
+        - '--clusterd-affinity={{ toJson .Values.clusterd.affinity }}'
+        {{- end }}
+        {{- if .Values.clusterd.tolerations }}
+        {{- range $toleration := .Values.clusterd.tolerations }}
+        - '--clusterd-toleration={{ toJson $toleration }}'
+        {{- end }}
+        {{- end }}
+        {{- if .Values.balancerd.nodeSelector }}
         {{- range $key, $value := .Values.balancerd.nodeSelector }}
         - "--balancerd-node-selector={{ $key }}={{ $value }}"
         {{- end }}
+        {{- end }}
+        {{- if .Values.balancerd.affinity }}
+        - '--balancerd-affinity={{ toJson .Values.balancerd.affinity }}'
+        {{- end }}
+        {{- if .Values.balancerd.tolerations }}
+        {{- range $toleration := .Values.balancerd.tolerations }}
+        - '--balancerd-toleration={{ toJson $toleration }}'
+        {{- end }}
+        {{- end }}
+        {{- if .Values.console.nodeSelector }}
         {{- range $key, $value := .Values.console.nodeSelector }}
         - "--console-node-selector={{ $key }}={{ $value }}"
+        {{- end }}
+        {{- end }}
+        {{- if .Values.console.affinity }}
+        - '--console-affinity={{ toJson .Values.console.affinity }}'
+        {{- end }}
+        {{- if .Values.console.tolerations }}
+        {{- range $toleration := .Values.console.tolerations }}
+        - '--console-toleration={{ toJson $toleration }}'
+        {{- end }}
         {{- end }}
         {{- if .Values.storage.storageClass.name }}
         - "--ephemeral-volume-class={{ .Values.storage.storageClass.name }}"

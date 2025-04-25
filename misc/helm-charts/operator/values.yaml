@@ -175,8 +175,12 @@ operator:
       support: 0
       analytics: 0
 
-  # Node selector to use for the operator pod
-  nodeSelector: {}
+  # -- Node selector to use for the operator pod
+  nodeSelector:
+  # -- Affinity to use for the operator pod
+  affinity:
+  # -- Tolerations to use for the operator pod
+  tolerations:
   resources:
     # -- Resources requested by the operator for CPU and memory
     requests:
@@ -194,17 +198,29 @@ operator:
 
 environmentd:
   # -- Node selector to use for environmentd pods spawned by the operator
-  nodeSelector: {}
+  nodeSelector:
+  # -- Affinity to use for environmentd pods spawned by the operator
+  affinity:
+  # -- Tolerations to use for environmentd pods spawned by the operator
+  tolerations:
 
 clusterd:
   # -- Node selector to use for clusterd pods spawned by the operator
-  nodeSelector: {}
+  nodeSelector:
+  # -- Affinity to use for clusterd pods spawned by the operator
+  affinity:
+  # -- Tolerations to use for clusterd pods spawned by the operator
+  tolerations:
 
 balancerd:
   # -- Flag to indicate whether to create balancerd pods for the environments
   enabled: true
   # -- Node selector to use for balancerd pods spawned by the operator
-  nodeSelector: {}
+  nodeSelector:
+  # -- Affinity to use for balancerd pods spawned by the operator
+  affinity:
+  # -- Tolerations to use for balancerd pods spawned by the operator
+  tolerations:
 
 console:
   # -- Flag to indicate whether to create console pods for the environments
@@ -212,7 +228,11 @@ console:
   # -- Override the mapping of environmentd versions to console versions
   imageTagMapOverride: {}
   # -- Node selector to use for console pods spawned by the operator
-  nodeSelector: {}
+  nodeSelector:
+  # -- Affinity to use for console pods spawned by the operator
+  affinity:
+  # -- Tolerations to use for console pods spawned by the operator
+  tolerations:
 
 # RBAC (Role-Based Access Control) settings
 rbac:
