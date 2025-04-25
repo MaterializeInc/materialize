@@ -50,6 +50,12 @@ SHOW TIME ZONE
 ----
 +00:00
 
+# Regression test for #9236 which mis-parsed timezones ending with 'AD' or 'BC'
+query T
+SELECT TIMESTAMP '2020-12-21 18:53:49' AT TIME ZONE 'Asia/Baghdad'
+----
+2020-12-21 15:53:49+00
+
 query T
 SELECT TIMESTAMP '2020-12-21 18:53:49' AT TIME ZONE 'America/New_York'
 ----

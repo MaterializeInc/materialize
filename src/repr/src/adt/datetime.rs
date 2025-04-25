@@ -1874,15 +1874,6 @@ pub enum CalendarEra {
     AD,
 }
 
-impl CalendarEra {
-    fn as_str(&self) -> &'static str {
-        match self {
-            CalendarEra::BC => "BC",
-            CalendarEra::AD => "AD",
-        }
-    }
-}
-
 /// Takes a 'date timezone' 'date time timezone' string and splits it into 'date
 /// {time}' and 'timezone' components then checks for a 'CalenderEra' defaulting
 /// to 'AD'.
@@ -1944,8 +1935,8 @@ fn strip_era_from_timezone(timezone: &str) -> (&str, CalendarEra) {
     let timezone_upper = timezone.to_uppercase();
 
     match (
-        timezone_upper.strip_suffix(BC.as_str()),
-        timezone_upper.strip_suffix(AD.as_str()),
+        timezone_upper.strip_suffix(" BC"), // Space is important to avoid matching timezones.
+        timezone_upper.strip_suffix(" AD"), // Space is important to avoid matching timezones.
     ) {
         (Some(remainder), None) => (&timezone[..remainder.len()], BC),
         (None, Some(remainder)) => (&timezone[..remainder.len()], AD),
