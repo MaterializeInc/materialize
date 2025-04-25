@@ -374,6 +374,8 @@ pub enum ExecuteResponse {
     SendingRowsStreaming {
         #[derivative(Debug = "ignore")]
         rows: Pin<Box<dyn Stream<Item = PeekResponseUnary> + Send + Sync>>,
+        instance_id: ComputeInstanceId,
+        strategy: StatementExecutionStrategy,
     },
     /// The specified variable was set to a new value.
     SetVariable {

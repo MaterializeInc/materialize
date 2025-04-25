@@ -325,7 +325,7 @@ impl Arbitrary for FrontiersResponse {
 pub enum PeekResponse {
     /// Returned rows of a successful peek.
     Rows(RowCollection),
-    /// Results of the peek were stashed in a persist batch.
+    /// Results of the peek were stashed in persist batches.
     Stashed(StashedPeekResponse),
     /// Error of an unsuccessful peek.
     Error(String),
@@ -379,10 +379,11 @@ impl Arbitrary for PeekResponse {
     }
 }
 
-/// Response from a Peek whose results have been stashed into Persist.
+/// Response from a peek whose results have been stashed into persist.
 #[derive(Clone, Debug, PartialEq)]
 pub struct StashedPeekResponse {
-    /// Results from a Peek that should be returned to the user.
+    /// Batches of Rows, must be combined with reponses from other workers and
+    /// consolidated before sending back via a client.
     pub batches: Vec<ProtoBatch>,
 }
 

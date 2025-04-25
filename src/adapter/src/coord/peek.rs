@@ -739,19 +739,25 @@ impl crate::coord::Coordinator {
         let rows_stream = async_stream::stream!({
             let result = rows_rx.await;
 
-            let rows = result.unwrap();
+            let rows = match result {
+                Ok(rows) => rows,
+                Err(e) => {
+                    yield PeekResponseUnary::Error(e.to_string());
+                    return;
+                }
+            };
 
             match rows {
                 PeekResponse::Rows(rows) => {
-                    // match finishing.finish(
-                    //     rows,
-                    //     max_result_size,
-                    //     max_returned_query_size,
-                    //     &duration_histogram,
-                    // ) {
-                    //     Ok((rows, _size_bytes)) => PeekResponseUnary::Rows(Box::new(rows)),
-                    //     Err(e) => PeekResponseUnary::Error(e),
-                    // }
+                    match finishing.finish(
+                        rows,
+                        max_result_size,
+                        max_returned_query_size,
+                        &duration_histogram,
+                    ) {
+                        Ok((rows, _size_bytes)) => yield PeekResponseUnary::Rows(Box::new(rows)),
+                        Err(e) => yield PeekResponseUnary::Error(e),
+                    }
                 }
                 PeekResponse::Stashed(response) => {
                     let response_batches = response
@@ -766,7 +772,7 @@ impl crate::coord::Coordinator {
                             hollow
                         })
                         .collect_vec();
-                    tracing::info!(?response_batches, "got row batches!");
+                    tracing::trace!(?response_batches, "stashed peek response!");
 
                     let as_of = Antichain::from_elem(mz_repr::Timestamp::default());
                     let read_schemas: Schemas<Row, ()> = Schemas {
@@ -809,66 +815,14 @@ impl crate::coord::Coordinator {
                     while let Some(rows_vec) = rx.recv().await {
                         yield PeekResponseUnary::Rows(Box::new(rows_vec.into_row_iter()));
                     }
-
-                    // while let Some(((key, val), ts, diff)) = rows.next() {
-                    //     tracing::info!(?key, ?val, ?ts, ?diff, "row!");
-                    //     let row = key.expect("decoding error");
-                    //     let result = tx.send(row).await;
-                    //     if result.is_err() {
-                    //         tracing::error!("receiver went away");
-                    //         return;
-                    //     }
-                    // }
                 }
                 PeekResponse::Canceled => {
-                    // PeekResponseUnary::Canceled,
+                    yield PeekResponseUnary::Canceled;
                 }
                 PeekResponse::Error(e) => {
-                    // PeekResponseUnary::Error(e),
+                    yield PeekResponseUnary::Error(e);
                 }
             }
-
-            // let rows_stream = rows_rx.map_ok_or_else(
-            //     |e| {
-            //         todo!()
-            //         // PeekResponseUnary::Error(e.to_string()),
-            //     },
-            //     move |resp| match resp {
-            //         PeekResponse::Rows(rows) => {
-            //             todo!()
-            //             // match finishing.finish(
-            //             //     rows,
-            //             //     max_result_size,
-            //             //     max_returned_query_size,
-            //             //     &duration_histogram,
-            //             // ) {
-            //             //     Ok((rows, _size_bytes)) => PeekResponseUnary::Rows(Box::new(rows)),
-            //             //     Err(e) => PeekResponseUnary::Error(e),
-            //             // }
-            //         }
-            //         PeekResponse::Stashed(response) => {
-            //             let response_batch = response.returned_rows.clone().map(|b| {
-            //                 let hollow: HollowBatch<mz_repr::Timestamp> = b
-            //                     .batch
-            //                     .into_rust_if_some("ProtoBatch::batch")
-            //                     .expect("valid transmittable batch");
-            //
-            //                 hollow
-            //             });
-            //             tracing::info!(?response_batch, "got row batches!");
-            //
-            //             row_stream
-            //         }
-            //         PeekResponse::Canceled => {
-            //             todo!()
-            //             // PeekResponseUnary::Canceled,
-            //         }
-            //         PeekResponse::Error(e) => {
-            //             todo!()
-            //             // PeekResponseUnary::Error(e),
-            //         }
-            //     },
-            // );
         });
 
         // If it was created, drop the dataflow once the peek command is sent.
@@ -879,8 +833,8 @@ impl crate::coord::Coordinator {
 
         Ok(crate::ExecuteResponse::SendingRowsStreaming {
             rows: Box::pin(rows_stream),
-            // instance_id: compute_instance,
-            // strategy,
+            instance_id: compute_instance,
+            strategy,
         })
     }
 

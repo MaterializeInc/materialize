@@ -1497,7 +1497,11 @@ async fn execute_stmt<S: ResultSender>(
             &desc.relation_desc.expect("RelationDesc must exist"),
         )
         .into(),
-        ExecuteResponse::SendingRowsStreaming { rows } => todo!(),
+        ExecuteResponse::SendingRowsStreaming {
+            rows,
+            instance_id,
+            strategy,
+        } => todo!(),
         ExecuteResponse::Subscribing {
             rx,
             ctx_extra,

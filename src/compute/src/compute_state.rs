@@ -635,7 +635,7 @@ impl<'a, A: Allocate + 'static> ActiveComputeState<'a, A> {
 
     fn handle_cancel_peek(&mut self, uuid: Uuid) {
         if let Some(peek) = self.compute_state.pending_peeks.remove(&uuid) {
-            self.send_peek_response(peek.peek().clone(), PeekResponse::Canceled);
+            self.send_peek_response(peek.peek(), PeekResponse::Canceled);
         }
         if let Some(stash_task) = self.compute_state.pending_peek_responses.remove(&uuid) {
             // Explicitly drop the task to abort it.
@@ -910,7 +910,7 @@ impl<'a, A: Allocate + 'static> ActiveComputeState<'a, A> {
             self.compute_state
                 .pending_peek_responses
                 .insert(peek.peek().uuid, stash_task);
-            // self.send_peek_response(peek, response)
+            // self.send_peek_response(peek.peek(), response)
         } else {
             let uuid = peek.peek().uuid;
             self.compute_state.pending_peeks.insert(uuid, peek);
@@ -928,7 +928,7 @@ impl<'a, A: Allocate + 'static> ActiveComputeState<'a, A> {
         let pending_peeks_response = std::mem::take(&mut self.compute_state.pending_peek_responses);
         for (uuid, mut peek_response) in pending_peeks_response {
             if let Ok((response, _duration)) = peek_response.result.try_recv() {
-                self.send_peek_response(peek_response.peek, response);
+                self.send_peek_response(&peek_response.peek, response);
             } else {
                 self.compute_state
                     .pending_peek_responses
@@ -942,8 +942,8 @@ impl<'a, A: Allocate + 'static> ActiveComputeState<'a, A> {
     /// Note that this function takes ownership of the `PendingPeek`, which is
     /// meant to prevent multiple responses to the same peek.
     #[mz_ore::instrument(level = "debug")]
-    fn send_peek_response(&mut self, peek: Peek, response: PeekResponse) {
-        tracing::info!(?response, "sending peek response");
+    fn send_peek_response(&mut self, peek: &Peek, response: PeekResponse) {
+        tracing::trace!(?response, "sending peek response");
 
         let log_event = peek_as_log_event(&peek, false);
         // Respond with the response.
@@ -1715,8 +1715,9 @@ impl StashPeekResponse {
         let row_sorted_view = rows.sorted_view(&[]);
         let mut row_iter = row_sorted_view.into_row_iter();
 
+        // WIP: Don't go through a PeekResponse, which forces us to iterate and
+        // clone here.
         while let Some(row) = row_iter.next() {
-            println!("row: {:?}", row);
             batch_builder
                 .add(&row.into_owned(), &(), &Timestamp::default(), &1)
                 .await

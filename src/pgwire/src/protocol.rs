@@ -1518,7 +1518,11 @@ where
                 )
                 .await
             }
-            ExecuteResponse::SendingRowsStreaming { rows } => {
+            ExecuteResponse::SendingRowsStreaming {
+                rows,
+                instance_id,
+                strategy,
+            } => {
                 let row_desc = row_desc
                     .expect("missing row description for ExecuteResponse::SendingRowsStreaming");
 
@@ -1533,8 +1537,8 @@ where
                         Box::new(rows),
                         execute_started,
                         &self.adapter_client,
-                        None,
-                        None,
+                        Some(instance_id),
+                        Some(strategy),
                     )),
                     max_rows,
                     get_response,
