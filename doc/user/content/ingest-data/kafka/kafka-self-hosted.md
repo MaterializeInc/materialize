@@ -27,7 +27,7 @@ self-hosted Kafka cluster.
 
 Before you begin, you must have:
 
-- A Kafka cluster running.
+- A Kafka cluster running Kafka 3.2 or later.
 - A client machine that can interact with your cluster.
 
 ## Configure network security
