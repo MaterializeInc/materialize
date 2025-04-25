@@ -88,6 +88,7 @@ use mz_ore::tracing::TracingHandle;
 use mz_ore::{soft_assert_or_log, soft_panic_or_log};
 use mz_persist_client::batch::ProtoBatch;
 use mz_persist_client::cache::PersistClientCache;
+use mz_persist_client::operators::shard_source::ErrorHandler;
 use mz_repr::{GlobalId, Timestamp};
 use mz_rocksdb::config::SharedWriteBufferManager;
 use mz_storage_client::client::{
@@ -359,6 +360,20 @@ pub struct StorageState {
     /// Interval at which to perform server maintenance tasks. Set to a zero interval to
     /// perform maintenance with every `step_or_park` invocation.
     pub server_maintenance_interval: Duration,
+}
+
+impl StorageState {
+    /// Return an error handler that triggers a suspend and restart of the corresponding storage
+    /// dataflow.
+    pub fn error_handler(&self, context: &'static str, id: GlobalId) -> ErrorHandler {
+        let tx = self.internal_cmd_tx.clone();
+        ErrorHandler::signal(move |e| {
+            tx.send(InternalStorageCommand::SuspendAndRestart {
+                id,
+                reason: format!("{context}: {e:#}"),
+            })
+        })
+    }
 }
 
 /// Extra context for a storage instance.

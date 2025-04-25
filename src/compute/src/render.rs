@@ -130,7 +130,7 @@ use mz_compute_types::plan::render_plan::{
     self, BindStage, LetBind, LetFreePlan, RecBind, RenderPlan,
 };
 use mz_expr::{EvalError, Id};
-use mz_persist_client::operators::shard_source::SnapshotMode;
+use mz_persist_client::operators::shard_source::{ErrorHandler, SnapshotMode};
 use mz_repr::explain::DummyHumanizer;
 use mz_repr::{Datum, Diff, GlobalId, Row, SharedRow};
 use mz_storage_operators::persist_source;
@@ -282,7 +282,7 @@ pub fn build_compute_dataflow<A: Allocate>(
                         mfp.as_mut(),
                         compute_state.dataflow_max_inflight_bytes(),
                         start_signal.clone(),
-                        |error| panic!("compute_import: {error}"),
+                        ErrorHandler::Halt("compute_import"),
                     );
 
                     let mut source_tokens: Vec<Rc<dyn Any>> = vec![Rc::new(token)];
