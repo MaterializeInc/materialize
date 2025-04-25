@@ -18,10 +18,12 @@
 //! wire with a length prefix.
 
 use std::convert::Infallible;
-use std::fmt;
+use std::time::Duration;
+use std::{fmt, io};
 
 use anyhow::{anyhow, bail};
 use async_trait::async_trait;
+use bytes::BytesMut;
 use flate2::Compression;
 use flate2::read::DeflateDecoder;
 use flate2::write::DeflateEncoder;
@@ -34,7 +36,8 @@ use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use tokio::sync::{mpsc, watch};
-use tracing::{info, trace};
+use tokio::time::MissedTickBehavior;
+use tracing::{info, trace, warn};
 
 use crate::client::{GenericClient, Partitionable, Partitioned};
 
@@ -49,12 +52,20 @@ pub struct Client<Out, In> {
 
 impl<Out: Payload, In: Payload> Client<Out, In> {
     /// Connect to the server at the given address.
-    pub async fn connect(address: &str, version: Version) -> anyhow::Result<Self> {
+    ///
+    /// This call resolves once a connection with the server host was either established, was
+    /// rejected, or timed out.
+    pub async fn connect(
+        address: &str,
+        version: Version,
+        connect_timeout: Duration,
+        idle_timeout: Duration,
+    ) -> anyhow::Result<Self> {
         let dest_host = host_from_address(address);
-        let stream = Stream::connect(address).await?;
+        let stream = mz_ore::future::timeout(connect_timeout, Stream::connect(address)).await?;
         info!(%address, "ctp: connected to server");
 
-        let mut conn = Connection::start(stream);
+        let mut conn = Connection::start(stream, idle_timeout);
         conn.handshake(version, dest_host).await?;
 
         Ok(Self { conn })
@@ -87,10 +98,12 @@ where
     pub async fn connect_partitioned(
         addresses: Vec<String>,
         version: Version,
+        connect_timeout: Duration,
+        idle_timeout: Duration,
     ) -> anyhow::Result<Partitioned<Self, Out, In>> {
         let connects = addresses
             .iter()
-            .map(|addr| Self::connect(addr, version.clone()));
+            .map(|addr| Self::connect(addr, version.clone(), connect_timeout, idle_timeout));
         let clients = future::try_join_all(connects).await?;
         Ok(Partitioned::new(clients))
     }
@@ -116,6 +129,7 @@ pub async fn serve<In, Out, H>(
     address: SocketAddr,
     version: Version,
     server_fqdn: Option<String>,
+    idle_timeout: Duration,
     handler_fn: impl Fn() -> H,
 ) -> anyhow::Result<()>
 where
@@ -130,7 +144,7 @@ where
         let (stream, peer) = listener.accept().await?;
         info!(%peer, "ctp: accepted client connection");
 
-        let conn = Connection::start(stream);
+        let conn = Connection::start(stream, idle_timeout);
         let handler = handler_fn();
         let version = version.clone();
         let server_fqdn = server_fqdn.clone();
@@ -181,6 +195,7 @@ where
 ///
 ///  * The send task is responsible for encoding and sending enqueued messages.
 ///  * The recv task is responsible for receiving and decoding messages from the peer.
+///  * The keepalive task periodically emits `Keepalive` messages.
 ///
 /// The separation into tasks provides some performance isolation between the sending and the
 /// receiving half of the connection.
@@ -198,8 +213,24 @@ struct Connection<Out, In> {
 }
 
 impl<Out: Payload, In: Payload> Connection<Out, In> {
+    /// The interval with which `Keepalive` messages are emitted.
+    const KEEPALIVE_INTERVAL: Duration = Duration::from_secs(1);
+    /// The minimum acceptable idle timeout.
+    ///
+    /// We want this to be significantly greater than `KEEPALIVE_INTERVAL`, to avoid connections
+    /// getting cancel unnecessarily.
+    const MIN_TIMEOUT: Duration = Duration::from_secs(2);
+
     /// Start a new connection wrapping the given stream.
-    fn start(stream: Stream) -> Self {
+    fn start(stream: Stream, mut timeout: Duration) -> Self {
+        if timeout < Self::MIN_TIMEOUT {
+            warn!(
+                ?timeout,
+                "ctp: configured timeout is less than minimum timeout",
+            );
+            timeout = Self::MIN_TIMEOUT;
+        }
+
         let (stream_rx, stream_tx) = stream.split();
         let (out_tx, out_rx) = mpsc::channel(1024);
         let (in_tx, in_rx) = mpsc::channel(1024);
@@ -210,18 +241,26 @@ impl<Out: Payload, In: Payload> Connection<Out, In> {
 
         let send_task = mz_ore::task::spawn(
             || "ctp::send",
-            Self::run_send_task(stream_tx, out_rx, error_tx.clone()),
+            Self::run_send_task(stream_tx, out_rx, error_tx.clone(), timeout),
         );
         let recv_task = mz_ore::task::spawn(
             || "ctp::recv",
-            Self::run_recv_task(stream_rx, in_tx, error_tx),
+            Self::run_recv_task(stream_rx, in_tx, error_tx, timeout),
+        );
+        let keepalive_task = mz_ore::task::spawn(
+            || "ctp::keepalive",
+            Self::run_keepalive_task(out_tx.clone()),
         );
 
         Self {
             msg_tx: out_tx,
             msg_rx: in_rx,
             error_rx,
-            _tasks: vec![send_task.abort_on_drop(), recv_task.abort_on_drop()],
+            _tasks: vec![
+                send_task.abort_on_drop(),
+                recv_task.abort_on_drop(),
+                keepalive_task.abort_on_drop(),
+            ],
         }
     }
 
@@ -261,6 +300,7 @@ impl<Out: Payload, In: Payload> Connection<Out, In> {
             // `Connection::recv` is documented to be cancel safe.
             match self.recv().await? {
                 Message::Payload(payload) => break Ok(payload),
+                Message::Keepalive => (),
                 Message::Hello { .. } => bail!("received Hello message after handshake"),
             }
         }
@@ -294,12 +334,15 @@ impl<Out: Payload, In: Payload> Connection<Out, In> {
         })
         .await?;
 
-        let (peer_version, peer_server_fqdn) = match self.recv().await? {
-            Message::Hello {
-                version,
-                server_fqdn,
-            } => (version, server_fqdn),
-            msg => bail!("expected Hello message, got {msg:?}"),
+        let (peer_version, peer_server_fqdn) = loop {
+            match self.recv().await? {
+                Message::Hello {
+                    version,
+                    server_fqdn,
+                } => break (version, server_fqdn),
+                Message::Keepalive => (),
+                msg => bail!("expected Hello message, got {msg:?}"),
+            }
         };
 
         if peer_version != version {
@@ -319,11 +362,12 @@ impl<Out: Payload, In: Payload> Connection<Out, In> {
         mut writer: W,
         mut msg_rx: mpsc::Receiver<Message<Out>>,
         error_tx: watch::Sender<String>,
+        timeout: Duration,
     ) {
         while let Some(msg) = msg_rx.recv().await {
             trace!(?msg, "ctp: sending message");
 
-            let result = Self::write_message(&mut writer, msg).await;
+            let result = Self::write_message(&mut writer, msg, timeout).await;
             if let Err(error) = result {
                 info!("ctp: send error: {error}");
                 let _ = error_tx.send(error.to_string());
@@ -337,9 +381,10 @@ impl<Out: Payload, In: Payload> Connection<Out, In> {
         mut reader: R,
         msg_tx: mpsc::Sender<Message<In>>,
         error_tx: watch::Sender<String>,
+        timeout: Duration,
     ) {
         loop {
-            let result = Self::read_message(&mut reader).await;
+            let result = Self::read_message(&mut reader, timeout).await;
             match result {
                 Ok(msg) => {
                     trace!(?msg, "ctp: received message");
@@ -357,27 +402,61 @@ impl<Out: Payload, In: Payload> Connection<Out, In> {
         }
     }
 
+    async fn run_keepalive_task(tx: mpsc::Sender<Message<Out>>) {
+        let mut interval = tokio::time::interval(Self::KEEPALIVE_INTERVAL);
+        interval.set_missed_tick_behavior(MissedTickBehavior::Skip);
+        interval.reset();
+
+        loop {
+            interval.tick().await;
+            if tx.send(Message::Keepalive).await.is_err() {
+                break;
+            }
+        }
+    }
+
     /// Write a message onto the wire.
     async fn write_message<W: AsyncWrite + Unpin>(
         mut writer: W,
         msg: Message<Out>,
+        timeout: Duration,
     ) -> anyhow::Result<()> {
         let bytes = msg.wire_encode()?;
 
         let len = bytes.len().cast_into();
-        writer.write_u64(len).await?;
-        writer.write_all(&bytes).await?;
+        mz_ore::future::timeout(timeout, writer.write_u64(len)).await?;
+
+        // Rather than using `write_all` we perform a chunked write, to avoid timing out when
+        // sending large messages.
+        let mut bytes = &bytes[..];
+        while !bytes.is_empty() {
+            let n = mz_ore::future::timeout(timeout, writer.write(bytes)).await?;
+            if n == 0 {
+                Err(io::Error::from(io::ErrorKind::WriteZero))?;
+            }
+            bytes = &bytes[n..];
+        }
 
         Ok(())
     }
 
     /// Read a message from the wire.
-    async fn read_message<R: AsyncRead + Unpin>(mut reader: R) -> anyhow::Result<Message<In>> {
-        let len = reader.read_u64().await?;
+    async fn read_message<R: AsyncRead + Unpin>(
+        mut reader: R,
+        timeout: Duration,
+    ) -> anyhow::Result<Message<In>> {
+        let len = mz_ore::future::timeout(timeout, reader.read_u64()).await?;
         let len: usize = len.cast_into();
 
-        let mut bytes = vec![0; len];
-        reader.read_exact(&mut bytes).await?;
+        // Rather than using `recv_exact` we perform a chunked read, to avoid timing out when
+        // receiving large messages.
+        let mut bytes = BytesMut::with_capacity(len);
+        while bytes.len() < len {
+            let n = mz_ore::future::timeout(timeout, reader.read_buf(&mut bytes)).await?;
+            if n == 0 {
+                Err(io::Error::from(io::ErrorKind::UnexpectedEof))?;
+            }
+        }
 
         let msg = Message::wire_decode(&bytes)?;
 
@@ -432,6 +511,11 @@ enum Message<P> {
     },
     /// A massage carrying application payload.
     Payload(P),
+    /// A keepalive message.
+    ///
+    /// On connections that are otherwise idle, each endpoint sends a `Keepalive` every second, to
+    /// ensure the peer's idle timeout doesn't trigger and the connection stays alive.
+    Keepalive,
 }
 
 impl<P: Payload> Message<P> {
