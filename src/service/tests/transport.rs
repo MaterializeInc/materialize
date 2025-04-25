@@ -10,6 +10,7 @@
 //! Tests for the Cluster Transport Protocol.
 
 use std::sync::{Arc, Mutex, Once};
+use std::time::Duration;
 
 use mz_ore::assert_none;
 use mz_ore::retry::Retry;
@@ -18,12 +19,13 @@ use mz_service::transport::{self, ChannelHandler, Payload};
 use rand::SeedableRng;
 use rand::rngs::SmallRng;
 use semver::Version;
-use tokio::sync::mpsc;
+use tokio::sync::{mpsc, oneshot};
 use tracing::info;
 use tracing::level_filters::LevelFilter;
 use tracing_subscriber::fmt::time::FormatTime;
 
 const VERSION: Version = Version::new(1, 2, 3);
+const TIMEOUT: Duration = Duration::from_secs(5);
 
 /// Common setup for turmoil tests.
 fn setup() -> turmoil::Sim<'static> {
@@ -46,9 +48,10 @@ fn setup() -> turmoil::Sim<'static> {
 async fn connect_ctp<Out: Payload, In: Payload>(
     address: &str,
     version: Version,
+    timeout: Duration,
 ) -> transport::Client<Out, In> {
     Retry::default()
-        .retry_async(|_| transport::Client::connect(address, version.clone()))
+        .retry_async(|_| transport::Client::connect(address, version.clone(), timeout, timeout))
         .await
         .expect("retries forever")
 }
@@ -69,6 +72,7 @@ fn test_bidirectional_communication() {
                 "turmoil:0.0.0.0:7777".parse().unwrap(),
                 VERSION,
                 Some("server".into()),
+                TIMEOUT,
                 move || handler.lock().unwrap().take().unwrap(),
             ),
         );
@@ -87,7 +91,7 @@ fn test_bidirectional_communication() {
     });
 
     sim.client("client", async move {
-        let mut client = connect_ctp("turmoil:server:7777", VERSION).await;
+        let mut client = connect_ctp("turmoil:server:7777", VERSION, TIMEOUT).await;
 
         client.send(1).await?;
         client.send(2).await?;
@@ -122,6 +126,7 @@ fn test_server_error() {
                 "turmoil:0.0.0.0:7777".parse().unwrap(),
                 VERSION,
                 Some("server".into()),
+                TIMEOUT,
                 move || handler.lock().unwrap().take().unwrap(),
             ),
         );
@@ -133,7 +138,7 @@ fn test_server_error() {
     });
 
     sim.client("client", async move {
-        let mut client = connect_ctp::<i32, ()>("turmoil:server:7777", VERSION).await;
+        let mut client = connect_ctp::<i32, ()>("turmoil:server:7777", VERSION, TIMEOUT).await;
 
         client.send(1).await?;
 
@@ -173,6 +178,7 @@ fn test_handshake_version_mismatch() {
                 "turmoil:0.0.0.0:7777".parse().unwrap(),
                 SERVER_VERSION,
                 Some("server".into()),
+                TIMEOUT,
                 move || handler.lock().unwrap().take().unwrap(),
             ),
         );
@@ -184,7 +190,8 @@ fn test_handshake_version_mismatch() {
     });
 
     sim.client("client", async move {
-        let mut client = connect_ctp::<i32, ()>("turmoil:server:7777", CLIENT_VERSION).await;
+        let mut client =
+            connect_ctp::<i32, ()>("turmoil:server:7777", CLIENT_VERSION, TIMEOUT).await;
 
         // Handshake failed.
         assert_eq!(
@@ -214,6 +221,7 @@ fn test_handshake_fqdn_mismatch() {
                 "turmoil:0.0.0.0:7777".parse().unwrap(),
                 VERSION,
                 Some("wrong.server".into()),
+                TIMEOUT,
                 move || handler.lock().unwrap().take().unwrap(),
             ),
         );
@@ -225,7 +233,7 @@ fn test_handshake_fqdn_mismatch() {
     });
 
     sim.client("client", async move {
-        let mut client = connect_ctp::<i32, ()>("turmoil:server:7777", VERSION).await;
+        let mut client = connect_ctp::<i32, ()>("turmoil:server:7777", VERSION, TIMEOUT).await;
 
         // Server has disconnected.
         assert_eq!(
@@ -235,6 +243,59 @@ fn test_handshake_fqdn_mismatch() {
 
         Ok(())
     });
+
+    sim.run().unwrap();
+}
+
+#[test] // allow(test-attribute)
+fn test_keepalive_timeout() {
+    let mut sim = setup();
+
+    sim.host("server", move || async {
+        let (in_tx, _in_rx) = mpsc::unbounded_channel::<()>();
+        let (out_tx, out_rx) = mpsc::unbounded_channel::<()>();
+        let handler = ChannelHandler::new(in_tx, out_rx);
+        let handler = Arc::new(Mutex::new(Some(handler)));
+
+        mz_ore::task::spawn(
+            || "serve",
+            transport::serve(
+                "turmoil:0.0.0.0:7777".parse().unwrap(),
+                VERSION,
+                Some("server".into()),
+                TIMEOUT,
+                move || handler.lock().unwrap().take().unwrap(),
+            ),
+        );
+
+        out_tx.send(())?;
+
+        // Wait forever to keep the connection open.
+        futures::future::pending().await
+    });
+
+    let (ready_tx, mut ready_rx) = oneshot::channel();
+
+    sim.client("client", async move {
+        let mut client = connect_ctp::<i32, ()>("turmoil:server:7777", VERSION, TIMEOUT).await;
+
+        client.recv().await?;
+        ready_tx.send(()).unwrap();
+
+        // Connection timed out.
+        assert_eq!(
+            client.recv().await.map_err(|e| e.to_string()),
+            Err("deadline has elapsed".into()),
+        );
+
+        Ok(())
+    });
+
+    // Wait until the client is connected, then introduce a network partition.
+    while ready_rx.try_recv().is_err() {
+        sim.step().unwrap();
+    }
+    sim.partition("client", "server");
 
     sim.run().unwrap();
 }

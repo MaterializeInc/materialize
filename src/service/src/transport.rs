@@ -21,6 +21,7 @@ use std::convert::Infallible;
 use std::fmt;
 use std::marker::PhantomData;
 use std::pin::pin;
+use std::time::Duration;
 
 use anyhow::{anyhow, bail};
 use async_trait::async_trait;
@@ -56,17 +57,25 @@ pub struct Client<Out, In> {
 
 impl<Out: Payload, In: Payload> Client<Out, In> {
     /// Connect to the server at the given address.
-    pub async fn connect(address: &str, version: Version) -> anyhow::Result<Self> {
+    ///
+    /// This call resolves once a connection with the server host was either established, was
+    /// rejected, or timed out.
+    pub async fn connect(
+        address: &str,
+        version: Version,
+        connect_timeout: Duration,
+        keepalive_timeout: Duration,
+    ) -> anyhow::Result<Self> {
         let dest_host = host_from_address(address);
-        let stream = Stream::connect(address).await?;
+        let stream = mz_ore::future::timeout(connect_timeout, Stream::connect(address)).await?;
         info!(%address, "ctp: connected to server");
 
         let (out_tx, out_rx) = mpsc::unbounded_channel();
         let (in_tx, in_rx) = mpsc::unbounded_channel();
         let (error_tx, error_rx) = oneshot::channel();
 
-        mz_ore::task::spawn(|| "ctp::client-connection", async {
-            let conn = Connection::new(stream, version, dest_host);
+        mz_ore::task::spawn(|| "ctp::client-connection", async move {
+            let conn = Connection::new(stream, version, dest_host, keepalive_timeout);
             let handler = ChannelHandler::new(in_tx, out_rx);
 
             let Err(error) = conn.serve(handler).await;
@@ -123,10 +132,12 @@ where
     pub async fn connect_partitioned(
         addresses: Vec<String>,
         version: Version,
+        connect_timeout: Duration,
+        keepalive_timeout: Duration,
     ) -> anyhow::Result<Partitioned<Self, Out, In>> {
         let connects = addresses
             .iter()
-            .map(|addr| Self::connect(addr, version.clone()));
+            .map(|addr| Self::connect(addr, version.clone(), connect_timeout, keepalive_timeout));
         let clients = future::try_join_all(connects).await?;
         Ok(Partitioned::new(clients))
     }
@@ -157,6 +168,7 @@ pub async fn serve<In, Out, H>(
     address: SocketAddr,
     version: Version,
     server_fqdn: Option<String>,
+    keepalive_timeout: Duration,
     handler_fn: impl Fn() -> H,
 ) -> anyhow::Result<()>
 where
@@ -175,8 +187,8 @@ where
         let version = version.clone();
         let server_fqdn = server_fqdn.clone();
 
-        mz_ore::task::spawn(|| "ctp::server-connection", async {
-            let conn = Connection::new(stream, version, server_fqdn);
+        mz_ore::task::spawn(|| "ctp::server-connection", async move {
+            let conn = Connection::new(stream, version, server_fqdn, keepalive_timeout);
 
             let Err(error) = conn.serve(handler).await;
             info!("ctp: connection failed: {error}");
@@ -199,16 +211,24 @@ struct Connection<Out, In> {
     /// Used during the protcol handshake. If both endpoints know a server FQDN, it must match for
     /// the connection to be successfully established.
     server_fqdn: Option<String>,
+    /// The timeout for all network operations.
+    timeout: Duration,
     _payloads: PhantomData<(Out, In)>,
 }
 
 impl<Out: Payload, In: Payload> Connection<Out, In> {
     /// Create a new connection wrapping the given stream.
-    fn new(stream: Stream, version: Version, server_fqdn: Option<String>) -> Self {
+    fn new(
+        stream: Stream,
+        version: Version,
+        server_fqdn: Option<String>,
+        timeout: Duration,
+    ) -> Self {
         Self {
             stream,
             version,
             server_fqdn,
+            timeout,
             _payloads: PhantomData,
         }
     }
@@ -220,13 +240,19 @@ impl<Out: Payload, In: Payload> Connection<Out, In> {
     {
         self.handshake().await?;
 
+        // Send a `Keepalive` message every second on idle connections. We reset the interval every
+        // time we send a message, to avoid sending superfluous keepalives on busy connections.
+        let mut keepalive_interval = tokio::time::interval(Duration::from_secs(1));
+        keepalive_interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+        keepalive_interval.reset();
+
         // `Connection::recv` is not cancel safe, so we can't use it in a `select!` directly.
         // Instead we wrap it into an async stream and select on `Stream::next`, which is cancel
         // safe.
         let (mut stream_rx, mut stream_tx) = self.stream.split();
         let mut inbound = pin!(async_stream::stream! {
             loop {
-                yield Self::recv(&mut stream_rx).await;
+                yield Self::recv(&mut stream_rx, self.timeout).await;
             }
         });
 
@@ -236,12 +262,22 @@ impl<Out: Payload, In: Payload> Connection<Out, In> {
                 // underlying stream, so dropping it will never lose a value.
                 Some(inbound) = inbound.next() => match inbound? {
                     Message::Payload(p) => handler.send(p).await?,
+                    Message::Keepalive => (),
                     Message::Hello { .. } => bail!("received Hello message after handshake"),
                 },
                 // `GenericClient::recv` is documented to be cancel safe.
                 outbound = handler.recv() => match outbound? {
-                    Some(p) => Self::send(&mut stream_tx, Message::Payload(p)).await?,
+                    Some(p) => {
+                        let msg = Message::Payload(p);
+                        Self::send(&mut stream_tx, msg, self.timeout).await?;
+                        keepalive_interval.reset();
+                    }
                     None => bail!("client disconnected"),
+                },
+                // `Interval::tick` is documented to be cancel safe.
+                _ = keepalive_interval.tick() => {
+                    let msg = Message::Keepalive;
+                    Self::send(&mut stream_tx, msg, self.timeout).await?;
                 }
             }
         }
@@ -258,9 +294,9 @@ impl<Out: Payload, In: Payload> Connection<Out, In> {
             version: self.version.clone(),
             server_fqdn: self.server_fqdn.clone(),
         };
-        Self::send(&mut self.stream, hello).await?;
+        Self::send(&mut self.stream, hello, self.timeout).await?;
 
-        let msg = Self::recv(&mut self.stream).await?;
+        let msg = Self::recv(&mut self.stream, self.timeout).await?;
         let Message::Hello {
             version,
             server_fqdn,
@@ -285,23 +321,27 @@ impl<Out: Payload, In: Payload> Connection<Out, In> {
     async fn send<W: AsyncWrite + Unpin>(
         mut writer: W,
         message: Message<Out>,
+        timeout: Duration,
     ) -> anyhow::Result<()> {
         trace!(?message, "ctp: sending message");
 
         let bytes = message.wire_encode()?;
         let len = bytes.len().cast_into();
 
-        writer.write_u64(len).await?;
-        writer.write_all(&bytes).await?;
+        mz_ore::future::timeout(timeout, writer.write_u64(len)).await?;
+        mz_ore::future::timeout(timeout, writer.write_all(&bytes)).await?;
 
         Ok(())
     }
 
     /// Receive a message from the peer.
-    async fn recv<R: AsyncRead + Unpin>(mut reader: R) -> anyhow::Result<Message<In>> {
-        let len = reader.read_u64().await?;
+    async fn recv<R: AsyncRead + Unpin>(
+        mut reader: R,
+        timeout: Duration,
+    ) -> anyhow::Result<Message<In>> {
+        let len = mz_ore::future::timeout(timeout, reader.read_u64()).await?;
         let mut bytes = vec![0; len.cast_into()];
-        reader.read_exact(&mut bytes).await?;
+        mz_ore::future::timeout(timeout, reader.read_exact(&mut bytes)).await?;
 
         let message = Message::wire_decode(&bytes)?;
         trace!(?message, "ctp: received message");
@@ -359,6 +399,11 @@ enum Message<P> {
     },
     /// A massage carrying application payload.
     Payload(P),
+    /// A keepalive message.
+    ///
+    /// On connections that are otherwise idle, each endpoint sends a keepalive every second, to
+    /// ensure the peer's receive timeout doesn't trigger and the connection stays alive.
+    Keepalive,
 }
 
 impl<P: Payload> Message<P> {
