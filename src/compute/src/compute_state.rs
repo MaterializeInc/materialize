@@ -1708,9 +1708,9 @@ impl StashPeekResponse {
 
         let rows = match peek_response {
             PeekResponse::Rows(row_collection) => row_collection,
-            PeekResponse::Stashed(_stashed_peek_response) => todo!(),
-            PeekResponse::Error(_) => todo!(),
-            PeekResponse::Canceled => todo!(),
+            PeekResponse::Stashed(_stashed_peek_response) => unreachable!(),
+            PeekResponse::Error(e) => return Ok(PeekResponse::Error(e)),
+            PeekResponse::Canceled => return Ok(PeekResponse::Canceled),
         };
         let row_sorted_view = rows.sorted_view(&[]);
         let mut row_iter = row_sorted_view.into_row_iter();
