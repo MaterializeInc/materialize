@@ -94,3 +94,18 @@ if [ $CHANGES_MADE -eq 1 ]; then
 else
   echo "No new chart versions to publish"
 fi
+
+i=0
+while (( i < 30 )); do
+  YAML=$(curl -s "https://materializeinc.github.io/materialize/index.yaml")
+  CURRENT_HELM_CHART_VERSION=$(echo "$YAML" | yq '.entries["materialize-operator"][0].version')
+  CURRENT_MZ_VERSION=$(echo "$YAML" | yq '.entries["materialize-operator"][0].appVersion')
+  if [[ "$CURRENT_HELM_CHART_VERSION" == "$CI_HELM_CHART_VERSION" && "$CURRENT_MZ_VERSION" == "$CI_MZ_VERSION" ]]; then
+    echo "Helm Chart $CURRENT_HELM_CHART_VERSION with Materialize $CURRENT_MZ_VERSION has successfully been published"
+    exit 0
+  fi
+  echo "Latest version seems to be Helm Chart $CURRENT_HELM_CHART_VERSION with Materialize $CURRENT_MZ_VERSION"
+  sleep 10
+  ((i += 1))
+done
+exit 1
