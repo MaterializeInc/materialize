@@ -571,9 +571,6 @@ impl<T: ComputeControllerTimestamp> Instance<T> {
     /// This method is invoked by `ComputeController::maintain`, which we expect to be called once
     /// per second during normal operation.
     fn refresh_wallclock_lag(&mut self) {
-        // Record lags to persist, if it's time.
-        self.maybe_record_wallclock_lag();
-
         let frontier_lag = |frontier: &Antichain<T>| match frontier.as_option() {
             Some(ts) => (self.wallclock_lag)(ts.clone()),
             None => Duration::ZERO,
@@ -642,6 +639,9 @@ impl<T: ComputeControllerTimestamp> Instance<T> {
                 };
             }
         }
+
+        // Record lags to persist, if it's time.
+        self.maybe_record_wallclock_lag();
     }
 
     /// Produce new wallclock lag introspection updates, provided enough time has passed since the
