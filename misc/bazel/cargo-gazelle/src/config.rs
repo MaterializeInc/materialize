@@ -327,7 +327,7 @@ impl ToBazelDefinition for ConfigSettingGroup {
     fn format(&self, w: &mut dyn std::fmt::Write) -> Result<(), std::fmt::Error> {
         match self {
             ConfigSettingGroup::XlangLtoEnabled => {
-                write!(w, "@//misc/bazel/platforms:xlang_lto_enabled")?
+                write!(w, "\"@//misc/bazel/platforms:xlang_lto_enabled\"")?
             }
         }
 
