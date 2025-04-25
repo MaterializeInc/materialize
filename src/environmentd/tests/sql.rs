@@ -65,7 +65,7 @@ impl MockHttpServer {
     async fn new() -> MockHttpServer {
         let (conn_tx, conn_rx) = mpsc::unbounded_channel();
         let router = Router::new().route(
-            "/*path",
+            "/{*path}",
             routing::get(|| async move {
                 let (response_tx, response_rx) = oneshot::channel();
                 conn_tx

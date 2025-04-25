@@ -188,7 +188,7 @@ impl HttpServer {
 
         let webhook_router = Router::new()
             .route(
-                "/api/webhook/:database/:schema/:id",
+                "/api/webhook/{:database}/{:schema}/{:id}",
                 routing::post(webhook::handle_webhook),
             )
             .with_state(WebhookState {
@@ -428,7 +428,7 @@ impl InternalHttpServer {
                 routing::get(|| async { Redirect::temporary("/internal-console/") }),
             )
             .route(
-                "/internal-console/*path",
+                "/internal-console/{*path}",
                 routing::get(console::handle_internal_console),
             )
             .route(
@@ -588,88 +588,89 @@ impl AuthedClient {
     }
 }
 
-#[async_trait]
 impl<S> FromRequestParts<S> for AuthedClient
 where
     S: Send + Sync,
 {
     type Rejection = Response;
 
-    async fn from_request_parts(
+    fn from_request_parts(
         req: &mut http::request::Parts,
         state: &S,
-    ) -> Result<Self, Self::Rejection> {
-        #[derive(Debug, Default, Deserialize)]
-        struct Params {
-            #[serde(default)]
-            options: String,
-        }
-        let params: Query<Params> = Query::from_request_parts(req, state)
-            .await
-            .unwrap_or_default();
-
-        let peer_addr = req
-            .extensions
-            .get::<ConnectInfo<SocketAddr>>()
-            .expect("ConnectInfo extension guaranteed to exist")
-            .0
-            .ip();
-
-        let user = req.extensions.get::<AuthedUser>().unwrap();
-        let adapter_client = req
-            .extensions
-            .get::<Delayed<mz_adapter::Client>>()
-            .unwrap()
-            .clone();
-        let adapter_client = adapter_client.await.map_err(|_| {
-            (StatusCode::INTERNAL_SERVER_ERROR, "adapter client missing").into_response()
-        })?;
-        let active_connection_counter = req.extensions.get::<ConnectionCounter>().unwrap();
-        let helm_chart_version = None;
-
-        let options = if params.options.is_empty() {
-            // It's possible 'options' simply wasn't provided, we don't want that to
-            // count as a failure to deserialize
-            BTreeMap::<String, String>::default()
-        } else {
-            match serde_json::from_str(&params.options) {
-                Ok(options) => options,
-                Err(_e) => {
-                    // If we fail to deserialize options, fail the request.
-                    let code = StatusCode::BAD_REQUEST;
-                    let msg = format!("Failed to deserialize {} map", "options".quoted());
-                    return Err((code, msg).into_response());
-                }
+    ) -> impl Future<Output = Result<Self, Self::Rejection>> + Send {
+        Box::pin(async move {
+            #[derive(Debug, Default, Deserialize)]
+            struct Params {
+                #[serde(default)]
+                options: String,
             }
-        };
+            let params: Query<Params> = Query::from_request_parts(req, state)
+                .await
+                .unwrap_or_default();
 
-        let client = AuthedClient::new(
-            &adapter_client,
-            user.clone(),
-            peer_addr,
-            active_connection_counter.clone(),
-            helm_chart_version,
-            |session| {
-                session
-                    .vars_mut()
-                    .set_default(WELCOME_MESSAGE.name(), VarInput::Flat(&false.format()))
-                    .expect("known to exist")
-            },
-            options,
-            SYSTEM_TIME.clone(),
-        )
-        .await
-        .map_err(|e| {
-            let status = match e {
-                AdapterError::UserSessionsDisallowed | AdapterError::NetworkPolicyDenied(_) => {
-                    StatusCode::FORBIDDEN
+            let peer_addr = req
+                .extensions
+                .get::<ConnectInfo<SocketAddr>>()
+                .expect("ConnectInfo extension guaranteed to exist")
+                .0
+                .ip();
+
+            let user = req.extensions.get::<AuthedUser>().unwrap();
+            let adapter_client = req
+                .extensions
+                .get::<Delayed<mz_adapter::Client>>()
+                .unwrap()
+                .clone();
+            let adapter_client = adapter_client.await.map_err(|_| {
+                (StatusCode::INTERNAL_SERVER_ERROR, "adapter client missing").into_response()
+            })?;
+            let active_connection_counter = req.extensions.get::<ConnectionCounter>().unwrap();
+            let helm_chart_version = None;
+
+            let options = if params.options.is_empty() {
+                // It's possible 'options' simply wasn't provided, we don't want that to
+                // count as a failure to deserialize
+                BTreeMap::<String, String>::default()
+            } else {
+                match serde_json::from_str(&params.options) {
+                    Ok(options) => options,
+                    Err(_e) => {
+                        // If we fail to deserialize options, fail the request.
+                        let code = StatusCode::BAD_REQUEST;
+                        let msg = format!("Failed to deserialize {} map", "options".quoted());
+                        return Err((code, msg).into_response());
+                    }
                 }
-                _ => StatusCode::INTERNAL_SERVER_ERROR,
             };
-            (status, Json(SqlError::from(e))).into_response()
-        })?;
 
-        Ok(client)
+            let client = AuthedClient::new(
+                &adapter_client,
+                user.clone(),
+                peer_addr,
+                active_connection_counter.clone(),
+                helm_chart_version,
+                |session| {
+                    session
+                        .vars_mut()
+                        .set_default(WELCOME_MESSAGE.name(), VarInput::Flat(&false.format()))
+                        .expect("known to exist")
+                },
+                options,
+                SYSTEM_TIME.clone(),
+            )
+            .await
+            .map_err(|e| {
+                let status = match e {
+                    AdapterError::UserSessionsDisallowed | AdapterError::NetworkPolicyDenied(_) => {
+                        StatusCode::FORBIDDEN
+                    }
+                    _ => StatusCode::INTERNAL_SERVER_ERROR,
+                };
+                (status, Json(SqlError::from(e))).into_response()
+            })?;
+
+            Ok(client)
+        })
     }
 }
 
@@ -940,7 +941,7 @@ fn base_router(BaseRouterConfig { profiling }: BaseRouterConfig) -> Router {
             "/hierarchical-memory",
             routing::get(memory::handle_hierarchical_memory),
         )
-        .route("/static/*path", routing::get(root::handle_static));
+        .route("/static/{*path}", routing::get(root::handle_static));
 
     if profiling {
         router = router.nest("/prof/", mz_prof_http::router(&BUILD_INFO));

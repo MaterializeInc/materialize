@@ -100,8 +100,6 @@ skip = [
 
     { name = "hyper-timeout", version = "0.4.1" },
 
-    { name = "tokio-tungstenite", version = "0.21.0" },
-
     { name = "tungstenite", version = "0.21.0" },
 
     # `axum 0.7.5` depends on both `sync_wrapper 1.*` and `axum-core 0.4.3`.
@@ -158,6 +156,9 @@ skip = [
     { name = "windows_x86_64_msvc", version = "0.52.6" },
     # Used by axum-extra
     { name = "axum-core", version = "0.4.5" },
+    # Used by tonic
+    { name = "axum", version = "0.7.9" },
+    { name = "matchit", version = "0.7.0" },
 ]
 
 [[bans.deny]]
