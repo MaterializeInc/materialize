@@ -1523,14 +1523,14 @@ where
                     .expect("missing row description for ExecuteResponse::SendingRowsStreaming");
 
                 let span = tracing::debug_span!("sending_rows_streaming");
-                let peek_response_stream =
-                    rows.map(|row| PeekResponseUnary::Rows(Box::new(row.into_row_iter())));
+                // let peek_response_stream =
+                //     rows.map(|row| PeekResponseUnary::Rows(Box::new(row.into_row_iter())));
 
                 self.send_rows(
                     row_desc,
                     portal_name,
                     InProgressRows::new(RecordFirstRowStream::new(
-                        Box::new(peek_response_stream),
+                        Box::new(rows),
                         execute_started,
                         &self.adapter_client,
                         None,
@@ -1961,7 +1961,6 @@ where
                     batch = rows.remaining.recv() => match batch {
                         None => FetchResult::Rows(None),
                         Some(PeekResponseUnary::Rows(rows)) => FetchResult::Rows(Some(rows)),
-                        Some(PeekResponseUnary::Batches { .. }) => FetchResult::Error("unexpected stashed result".to_string()),
                         Some(PeekResponseUnary::Error(err)) => FetchResult::Error(err),
                         Some(PeekResponseUnary::Canceled) => FetchResult::Canceled,
                     },
@@ -2147,19 +2146,6 @@ where
                             ))
                             .await.map(|state| (state, SendRowsEndedReason::Canceled));
                     }
-                    Some(PeekResponseUnary::Batches { .. }) => {
-                         let msg = "unexpected stashed response";
-                         let err = self
-                             .error(ErrorResponse::error(SqlState::INTERNAL_ERROR, msg))
-                             .await
-                             .map(|state| {
-                                 let reason = SendRowsEndedReason::Errored {
-                                     error: msg.to_string(),
-                                 };
-                                 (state, reason)
-                             });
-                         return err
-                     }
                     Some(PeekResponseUnary::Rows(mut rows)) => {
                         count += rows.count();
                         while let Some(row) = rows.next() {

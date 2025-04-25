@@ -987,13 +987,13 @@ pub(crate) struct UnexpiredReadHandleState {
 /// but it's also free to abandon the instance at any time if it eg. only needs a few entries.
 #[derive(Debug)]
 pub struct Cursor<K: Codec, V: Codec, T: Timestamp + Codec64, D: Codec64> {
-    consolidator: CursorConsolidator<K, V, T, D>,
-    _lease: Lease,
-    read_schemas: Schemas<K, V>,
+    pub(crate) consolidator: CursorConsolidator<K, V, T, D>,
+    pub(crate) _lease: Lease,
+    pub(crate) read_schemas: Schemas<K, V>,
 }
 
 #[derive(Debug)]
-enum CursorConsolidator<K: Codec, V: Codec, T: Timestamp + Codec64, D: Codec64> {
+pub(crate) enum CursorConsolidator<K: Codec, V: Codec, T: Timestamp + Codec64, D: Codec64> {
     Structured {
         consolidator: Consolidator<T, D, StructuredSort<K, V, T, D>>,
         max_len: usize,

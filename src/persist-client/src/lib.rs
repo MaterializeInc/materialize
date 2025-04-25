@@ -31,20 +31,26 @@ use mz_persist_types::{Codec, Codec64, Opaque};
 use timely::progress::{Antichain, Timestamp};
 
 use crate::async_runtime::IsolatedRuntime;
-use crate::batch::{BatchBuilder, BatchBuilderConfig, BatchBuilderInternal, BatchParts};
+use crate::batch::{
+    BLOB_TARGET_SIZE, BatchBuilder, BatchBuilderConfig, BatchBuilderInternal, BatchParts,
+};
 use crate::cache::{PersistClientCache, StateCache};
-use crate::cfg::PersistConfig;
+use crate::cfg::{COMPACTION_MEMORY_BOUND_BYTES, PersistConfig};
 use crate::critical::{CriticalReaderId, SinceHandle};
 use crate::error::InvalidUsage;
-use crate::fetch::{BatchFetcher, BatchFetcherConfig};
+use crate::fetch::{BatchFetcher, BatchFetcherConfig, FetchBatchFilter, Lease};
 use crate::internal::compact::{CompactConfig, Compactor};
 use crate::internal::encoding::parse_id;
 use crate::internal::gc::GarbageCollector;
 use crate::internal::machine::{Machine, retry_external};
 use crate::internal::state::RunOrder;
 use crate::internal::state_versions::StateVersions;
+use crate::iter::{Consolidator, StructuredSort};
 use crate::metrics::Metrics;
-use crate::read::{LeasedReaderId, READER_LEASE_DURATION, ReadHandle};
+use crate::read::{
+    Cursor, CursorConsolidator, LazyPartStats, LeasedReaderId, READER_LEASE_DURATION, ReadHandle,
+    Since,
+};
 use crate::rpc::PubSubSender;
 use crate::schema::CaESchema;
 use crate::write::{WriteHandle, WriterId};
@@ -605,6 +611,72 @@ impl PersistClient {
             builder,
             Description::new(lower, Antichain::new(), Antichain::from_elem(T::minimum())),
         ))
+    }
+
+    /// TODO
+    ///
+    /// WIP: Do we want to let callers inject sth like MFP here?
+    /// WIP: This doesn't need async right now, but still might want it in the
+    /// API to have the option in the future?
+    pub async fn read_batches_consolidated<K, V, T, D>(
+        &mut self,
+        shard_id: ShardId,
+        as_of: Antichain<T>,
+        read_schemas: Schemas<K, V>,
+        batches: Vec<HollowBatch<T>>,
+        should_fetch_part: impl for<'a> Fn(Option<&'a LazyPartStats>) -> bool,
+    ) -> Result<Cursor<K, V, T, D>, Since<T>>
+    where
+        K: Debug + Codec,
+        V: Debug + Codec,
+        T: Timestamp + Lattice + Codec64 + Sync,
+        D: Semigroup + Ord + Codec64 + Send + Sync,
+    {
+        let context = format!("{}[as_of={:?}]", shard_id, as_of.elements());
+        let filter = FetchBatchFilter::Snapshot {
+            as_of: as_of.clone(),
+        };
+
+        let shard_metrics = self.metrics.shards.shard(&shard_id, "peek_stash");
+
+        let consolidator = {
+            let mut consolidator = Consolidator::new(
+                context,
+                shard_id,
+                StructuredSort::new(read_schemas.clone()),
+                Arc::clone(&self.blob),
+                Arc::clone(&self.metrics),
+                Arc::clone(&shard_metrics),
+                self.metrics.read.snapshot.clone(),
+                filter,
+                COMPACTION_MEMORY_BOUND_BYTES.get(&self.cfg),
+            );
+            for batch in batches {
+                for (meta, run) in batch.runs() {
+                    consolidator.enqueue_run(
+                        &batch.desc,
+                        meta,
+                        run.into_iter()
+                            .filter(|p| should_fetch_part(p.stats()))
+                            .cloned(),
+                    );
+                }
+            }
+            CursorConsolidator::Structured {
+                consolidator,
+                // This default may end up consolidating more records than previously
+                // for cases like fast-path peeks, where only the first few entries are used.
+                // If this is a noticeable performance impact, thread the max-len in from the caller.
+                max_len: self.cfg.compaction_yield_after_n_updates,
+                max_bytes: BLOB_TARGET_SIZE.get(&self.cfg).max(1),
+            }
+        };
+
+        Ok(Cursor {
+            consolidator,
+            _lease: Lease::default(),
+            read_schemas,
+        })
     }
 
     /// Returns the requested schema, if known at the current state.

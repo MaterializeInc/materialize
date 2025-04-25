@@ -15,9 +15,10 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 use std::num::NonZeroUsize;
+use std::sync::Arc;
 
 use differential_dataflow::consolidation::consolidate;
-use futures::TryFutureExt;
+use futures::{FutureExt, TryFutureExt};
 use itertools::Itertools;
 use mz_adapter_types::compaction::CompactionWindow;
 use mz_adapter_types::connection::ConnectionId;
@@ -37,8 +38,10 @@ use mz_expr::{
 use mz_ore::cast::CastFrom;
 use mz_ore::str::{StrExt, separated};
 use mz_ore::tracing::OpenTelemetryContext;
-use mz_persist_client::HollowBatch;
 use mz_persist_client::batch::ProtoBatch;
+use mz_persist_client::{HollowBatch, Schemas};
+use mz_persist_types::ShardId;
+use mz_persist_types::codec_impls::UnitSchema;
 use mz_proto::IntoRustIfSome;
 use mz_repr::explain::text::DisplayText;
 use mz_repr::explain::{CompactScalars, IndexUsageType, PlanRenderingContext, UsedIndexes};
@@ -46,7 +49,7 @@ use mz_repr::{
     Diff, GlobalId, IntoRowIterator, RelationDesc, RelationType, Row, RowIterator, preserves_order,
 };
 use serde::{Deserialize, Serialize};
-use timely::progress::Timestamp;
+use timely::progress::{Antichain, Timestamp};
 use uuid::Uuid;
 
 use crate::coord::timestamp_selection::TimestampDetermination;
@@ -78,10 +81,6 @@ pub(crate) struct PendingPeek {
 #[derive(Debug)]
 pub enum PeekResponseUnary {
     Rows(Box<dyn RowIterator + Send + Sync>),
-    Batches {
-        /// Rows to be returned to a user.
-        returned_rows: ProtoBatch,
-    },
     Error(String),
     Canceled,
 }
@@ -522,7 +521,7 @@ impl crate::coord::Coordinator {
         &mut self,
         ctx_extra: &mut ExecuteContextExtra,
         plan: PlannedPeek,
-        relation_desc: RelationDesc,
+        result_desc: RelationDesc,
         finishing: RowSetFinishing,
         compute_instance: ComputeInstanceId,
         target_replica: Option<ReplicaId>,
@@ -723,7 +722,7 @@ impl crate::coord::Coordinator {
             .peek(
                 compute_instance,
                 peek_target,
-                relation_desc,
+                result_desc.clone(),
                 literal_constraints,
                 uuid,
                 timestamp,
@@ -734,6 +733,8 @@ impl crate::coord::Coordinator {
             )
             .unwrap_or_terminate("cannot fail to peek");
         let duration_histogram = self.metrics.row_set_finishing_seconds();
+
+        let mut persist_client = self.persist_client.clone();
 
         let rows_stream = async_stream::stream!({
             let result = rows_rx.await;
@@ -766,6 +767,58 @@ impl crate::coord::Coordinator {
                         })
                         .collect_vec();
                     tracing::info!(?response_batches, "got row batches!");
+
+                    let as_of = Antichain::from_elem(mz_repr::Timestamp::default());
+                    let read_schemas: Schemas<Row, ()> = Schemas {
+                        id: None,
+                        key: Arc::new(result_desc),
+                        val: Arc::new(UnitSchema),
+                    };
+
+                    let mut row_cursor = persist_client
+                        .read_batches_consolidated::<_, _, _, i64>(
+                            ShardId::new(),
+                            as_of,
+                            read_schemas,
+                            response_batches,
+                            |_stats| true,
+                        )
+                        .await
+                        .expect("invalid usage");
+
+                    // TODO(aljoscha/parker): These shenanigans are because the
+                    // returned Row Stream needs to implement Sync.
+                    let (tx, mut rx) = tokio::sync::mpsc::channel(1);
+                    mz_ore::task::spawn(|| "TODO", async move {
+                        while let Some(rows) = row_cursor.next().await {
+                            let rows_vec = rows
+                                .flat_map(|((key, _val), _ts, diff)| {
+                                    let row = key.expect("decoding error");
+                                    let diff = usize::try_from(diff).expect("negative diff");
+                                    std::iter::repeat(row).take(diff)
+                                })
+                                .collect_vec();
+                            let result = tx.send(rows_vec).await;
+                            if result.is_err() {
+                                tracing::error!("receiver went away");
+                                return;
+                            }
+                        }
+                    });
+
+                    while let Some(rows_vec) = rx.recv().await {
+                        yield PeekResponseUnary::Rows(Box::new(rows_vec.into_row_iter()));
+                    }
+
+                    // while let Some(((key, val), ts, diff)) = rows.next() {
+                    //     tracing::info!(?key, ?val, ?ts, ?diff, "row!");
+                    //     let row = key.expect("decoding error");
+                    //     let result = tx.send(row).await;
+                    //     if result.is_err() {
+                    //         tracing::error!("receiver went away");
+                    //         return;
+                    //     }
+                    // }
                 }
                 PeekResponse::Canceled => {
                     // PeekResponseUnary::Canceled,
@@ -816,12 +869,6 @@ impl crate::coord::Coordinator {
             //         }
             //     },
             // );
-
-            yield Row::pack_slice(&[
-                mz_repr::Datum::Int32(1),
-                mz_repr::Datum::Int32(2),
-                mz_repr::Datum::String("hello"),
-            ]);
         });
 
         // If it was created, drop the dataflow once the peek command is sent.

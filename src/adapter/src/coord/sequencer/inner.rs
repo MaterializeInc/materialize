@@ -3124,36 +3124,6 @@ impl Coordinator {
                     match tokio::time::timeout(timeout_dur, batch).await {
                         Ok(res) => match res {
                             PeekResponseUnary::Rows(rows) => make_diffs(rows),
-                            PeekResponseUnary::Batches { returned_rows } => {
-                                // WIP: Do we need this?
-                                let _ = ctx.session_mut().take_transaction_timestamp_context();
-
-                                let rows = stashed_rows_handle.consume(returned_rows).await;
-                                let rows_expanded = rows.flat_map(|result| {
-                                    let (row, diff) = result.expect("wrote error?");
-                                    let diff = usize::try_from(diff).expect("TODO");
-                                    futures::stream::repeat(row).take(diff)
-                                });
-
-                                // TODO(parkmycar): These shenanigans are because the
-                                // returned Row Stream needs to implement Sync.
-                                let (tx, rx) = tokio::sync::mpsc::channel(256);
-                                mz_ore::task::spawn(|| "TODO", async move {
-                                    let mut rows_expanded = std::pin::pin!(rows_expanded);
-                                    while let Some(row) = rows_expanded.next().await {
-                                        let result = tx.send(row).await;
-                                        if result.is_err() {
-                                            tracing::error!("receiver went away");
-                                            return;
-                                        }
-                                    }
-                                });
-
-                                ctx.retire(Ok(ExecuteResponse::SendingRowsStreaming {
-                                    rows: Box::pin(ReceiverStream::new(rx)),
-                                }));
-                                return;
-                            }
                             PeekResponseUnary::Canceled => Err(AdapterError::Canceled),
                             PeekResponseUnary::Error(e) => {
                                 Err(AdapterError::Unstructured(anyhow!(e)))
