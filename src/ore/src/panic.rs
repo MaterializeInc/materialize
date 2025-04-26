@@ -95,6 +95,9 @@ pub fn install_enhanced_handler() {
             return;
         }
 
+        // Report the panic to Sentry.
+        sentry_panic::panic_handler(panic_info);
+
         // can't use if cfg!() here because that will require chrono::Utc import
         #[cfg(feature = "chrono")]
         let timestamp = Utc::now().format("%Y-%m-%dT%H:%M:%S%.6fZ  ").to_string();
@@ -196,9 +199,6 @@ pub fn install_enhanced_handler() {
             let mut stderr = unsafe { File::from_raw_fd(2) };
             let _ = stderr.write_all(buf.as_bytes());
         }
-
-        // Report the panic to Sentry.
-        sentry_panic::panic_handler(panic_info);
 
         process::abort();
     }))
