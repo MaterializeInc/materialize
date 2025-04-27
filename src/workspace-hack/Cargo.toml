@@ -71,7 +71,7 @@ hashbrown = { version = "0.15.2" }
 hyper-582f2526e08bb6a0 = { package = "hyper", version = "0.14.27", features = ["client", "http1", "http2", "stream", "tcp"] }
 hyper-dff4ba8e3ae991db = { package = "hyper", version = "1.6.0", features = ["client", "http1", "http2", "server"] }
 hyper-util = { version = "0.1.11", features = ["client-legacy", "server-auto", "service"] }
-insta = { version = "1.42.2", features = ["json"] }
+insta = { version = "1.43.0", features = ["json"] }
 itertools = { version = "0.10.5" }
 k8s-openapi = { version = "0.24.0", default-features = false, features = ["schemars", "v1_30"] }
 kube = { version = "0.98.0", default-features = false, features = ["derive", "openssl-tls", "runtime", "ws"] }
@@ -213,7 +213,7 @@ hashbrown = { version = "0.15.2" }
 hyper-582f2526e08bb6a0 = { package = "hyper", version = "0.14.27", features = ["client", "http1", "http2", "stream", "tcp"] }
 hyper-dff4ba8e3ae991db = { package = "hyper", version = "1.6.0", features = ["client", "http1", "http2", "server"] }
 hyper-util = { version = "0.1.11", features = ["client-legacy", "server-auto", "service"] }
-insta = { version = "1.42.2", features = ["json"] }
+insta = { version = "1.43.0", features = ["json"] }
 itertools = { version = "0.10.5" }
 k8s-openapi = { version = "0.24.0", default-features = false, features = ["schemars", "v1_30"] }
 kube = { version = "0.98.0", default-features = false, features = ["derive", "openssl-tls", "runtime", "ws"] }
