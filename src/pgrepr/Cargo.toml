@@ -12,7 +12,7 @@ workspace = true
 [dependencies]
 byteorder = "1.4.3"
 bytes = "1.10.1"
-chrono = { version = "0.4.39", default-features = false, features = ["std"] }
+chrono = { version = "0.4.40", default-features = false, features = ["std"] }
 dec = "0.4.8"
 mz-ore = { path = "../ore", default-features = false }
 mz-pgrepr-consts = { path = "../pgrepr-consts", default-features = false }

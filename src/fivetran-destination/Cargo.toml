@@ -10,7 +10,7 @@ publish = false
 workspace = true
 
 [dependencies]
-async-compression = { version = "0.4.11", features = ["gzip", "tokio", "zstd"] }
+async-compression = { version = "0.4.23", features = ["gzip", "tokio", "zstd"] }
 bytes = "1.10.1"
 clap = { version = "4.5.23", features = ["derive", "env"] }
 csv-async = { version = "1.2.6", default-features = false, features = ["tokio"] }
