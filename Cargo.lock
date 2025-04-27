@@ -208,7 +208,7 @@ dependencies = [
  "arrow-data",
  "arrow-schema",
  "chrono",
- "half 2.4.1",
+ "half 2.6.0",
  "num",
 ]
 
@@ -223,7 +223,7 @@ dependencies = [
  "arrow-data",
  "arrow-schema",
  "chrono",
- "half 2.4.1",
+ "half 2.6.0",
  "hashbrown 0.15.2",
  "num",
 ]
@@ -235,7 +235,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9e4a9b9b1d6d7117f6138e13bc4dd5daa7f94e671b70e8c9c4dc37b4f5ecfc16"
 dependencies = [
  "bytes",
- "half 2.4.1",
+ "half 2.6.0",
  "num",
 ]
 
@@ -253,7 +253,7 @@ dependencies = [
  "atoi",
  "base64 0.22.1",
  "chrono",
- "half 2.4.1",
+ "half 2.6.0",
  "lexical-core",
  "num",
  "ryu",
@@ -267,7 +267,7 @@ checksum = "e4e75edf21ffd53744a9b8e3ed11101f610e7ceb1a29860432824f1834a1f623"
 dependencies = [
  "arrow-buffer",
  "arrow-schema",
- "half 2.4.1",
+ "half 2.6.0",
  "num",
 ]
 
@@ -296,7 +296,7 @@ dependencies = [
  "arrow-data",
  "arrow-schema",
  "arrow-select",
- "half 2.4.1",
+ "half 2.6.0",
  "num",
 ]
 
@@ -311,7 +311,7 @@ dependencies = [
  "arrow-buffer",
  "arrow-data",
  "arrow-schema",
- "half 2.4.1",
+ "half 2.6.0",
 ]
 
 [[package]]
@@ -3317,9 +3317,9 @@ checksum = "d36fab90f82edc3c747f9d438e06cf0a491055896f2a279638bb5beed6c40177"
 
 [[package]]
 name = "half"
-version = "2.4.1"
+version = "2.6.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6dd08c532ae367adf81c312a4580bc67f1d0fe8bc9c460520283f4c0ff277888"
+checksum = "459196ed295495a68f7d7fe1d84f6c4b7ff0e21fe3017b2f283c6fac3ad803c9"
 dependencies = [
  "cfg-if",
  "crunchy",
@@ -4887,7 +4887,7 @@ dependencies = [
  "arrow",
  "chrono",
  "dec",
- "half 2.4.1",
+ "half 2.6.0",
  "mz-ore",
  "mz-repr",
  "num-traits",
@@ -8437,7 +8437,7 @@ dependencies = [
  "chrono",
  "flate2",
  "futures",
- "half 2.4.1",
+ "half 2.6.0",
  "hashbrown 0.15.2",
  "lz4_flex",
  "num",
@@ -12522,7 +12522,7 @@ dependencies = [
  "futures-util",
  "getrandom 0.2.10",
  "getrandom 0.3.1",
- "half 2.4.1",
+ "half 2.6.0",
  "hashbrown 0.15.2",
  "hyper 0.14.27",
  "hyper 1.6.0",
