@@ -2512,18 +2512,19 @@ checksum = "923dea538cea0aa3025e8685b20d6ee21ef99c4f77e954a30febbaac5ec73a97"
 
 [[package]]
 name = "domain"
-version = "0.9.3"
+version = "0.10.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e853e3f6d4c6e52a4d73a94c1810c66ad71958fbe24934a7119b447f425aed76"
+checksum = "4c84070523f8ba0f9127ff156920f27eb27b302b425efe60bf5f41ec244d1c60"
 dependencies = [
  "bytes",
  "futures-util",
- "libc",
+ "moka",
  "octseq",
  "rand 0.8.5",
  "smallvec",
  "time",
  "tokio",
+ "tracing",
 ]
 
 [[package]]
@@ -4626,9 +4627,12 @@ version = "0.12.10"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a9321642ca94a4282428e6ea4af8cc2ca4eac48ac7a6a4ea8f33f76d0ce70926"
 dependencies = [
+ "async-lock",
  "crossbeam-channel",
  "crossbeam-epoch",
  "crossbeam-utils",
+ "event-listener 5.4.0",
+ "futures-util",
  "loom 0.7.2",
  "parking_lot",
  "portable-atomic",
@@ -8117,9 +8121,9 @@ dependencies = [
 
 [[package]]
 name = "octseq"
-version = "0.3.2"
+version = "0.5.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d92b38a4aabbacf619b8083841713216e7668178422decfe06bbc70643024c5d"
+checksum = "126c3ca37c9c44cec575247f43a3e4374d8927684f129d2beeb0d2cef262fe12"
 dependencies = [
  "bytes",
  "smallvec",
