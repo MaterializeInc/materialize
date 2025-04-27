@@ -161,6 +161,8 @@ skip = [
     { name = "matchit", version = "0.7.0" },
     # Used by kube-core
     { name = "json-patch", version = "3.0.1" },
+    # Used by askama_parser
+    { name = "nom", version = "7.1.3" },
 ]
 
 [[bans.deny]]
