@@ -27,7 +27,7 @@ aws-sdk-sts = { version = "1.41.0", default-features = false, features = ["rt-to
 aws-sigv4 = { version = "1.2.3", features = ["http0-compat", "sign-eventstream"] }
 aws-smithy-async = { version = "1.2.5", default-features = false, features = ["rt-tokio"] }
 aws-smithy-http = { version = "0.60.10", default-features = false, features = ["event-stream"] }
-aws-smithy-runtime = { version = "1.7.1", default-features = false, features = ["client", "connector-hyper-0-14-x"] }
+aws-smithy-runtime = { version = "1.8.1", default-features = false, features = ["client", "connector-hyper-0-14-x"] }
 aws-smithy-runtime-api = { version = "1.7.4", features = ["client", "http-02x", "http-auth", "test-util"] }
 aws-smithy-types = { version = "1.3.0", default-features = false, features = ["byte-stream-poll-next", "http-body-0-4-x", "http-body-1-x", "rt-tokio", "test-util"] }
 axum = { version = "0.8.3", features = ["ws"] }
@@ -168,7 +168,7 @@ aws-sdk-sts = { version = "1.41.0", default-features = false, features = ["rt-to
 aws-sigv4 = { version = "1.2.3", features = ["http0-compat", "sign-eventstream"] }
 aws-smithy-async = { version = "1.2.5", default-features = false, features = ["rt-tokio"] }
 aws-smithy-http = { version = "0.60.10", default-features = false, features = ["event-stream"] }
-aws-smithy-runtime = { version = "1.7.1", default-features = false, features = ["client", "connector-hyper-0-14-x"] }
+aws-smithy-runtime = { version = "1.8.1", default-features = false, features = ["client", "connector-hyper-0-14-x"] }
 aws-smithy-runtime-api = { version = "1.7.4", features = ["client", "http-02x", "http-auth", "test-util"] }
 aws-smithy-types = { version = "1.3.0", default-features = false, features = ["byte-stream-poll-next", "http-body-0-4-x", "http-body-1-x", "rt-tokio", "test-util"] }
 axum = { version = "0.8.3", features = ["ws"] }
