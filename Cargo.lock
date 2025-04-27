@@ -4010,7 +4010,7 @@ dependencies = [
  "libc",
  "mappings",
  "once_cell",
- "pprof_util",
+ "pprof_util 0.6.0",
  "tempfile",
  "tikv-jemalloc-ctl",
  "tokio",
@@ -4599,7 +4599,7 @@ dependencies = [
  "anyhow",
  "libc",
  "once_cell",
- "pprof_util",
+ "pprof_util 0.6.0",
  "tracing",
 ]
 
@@ -6849,7 +6849,7 @@ dependencies = [
  "mz-build-tools",
  "mz-ore",
  "pprof",
- "pprof_util",
+ "pprof_util 0.7.0",
  "prost",
  "prost-build",
  "tikv-jemalloc-ctl",
@@ -6879,7 +6879,7 @@ dependencies = [
  "mz-npm",
  "mz-ore",
  "mz-prof",
- "pprof_util",
+ "pprof_util 0.7.0",
  "serde",
  "tokio",
  "tracing",
@@ -8926,6 +8926,19 @@ name = "pprof_util"
 version = "0.6.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "65c568b3f8c1c37886ae07459b1946249e725c315306b03be5632f84c239f781"
+dependencies = [
+ "anyhow",
+ "flate2",
+ "num",
+ "paste",
+ "prost",
+]
+
+[[package]]
+name = "pprof_util"
+version = "0.7.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9fa015c78eed2130951e22c58d2095849391e73817ab2e74f71b0b9f63dd8416"
 dependencies = [
  "anyhow",
  "flate2",
