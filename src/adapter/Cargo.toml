@@ -59,7 +59,6 @@ mz-pgwire-common = { path = "../pgwire-common" }
 mz-postgres-util = { path = "../postgres-util" }
 mz-proto = { path = "../proto" }
 mz-repr = { path = "../repr", features = ["tracing"] }
-mz-row-stash = { path = "../row-stash" }
 mz-rocksdb-types = { path = "../rocksdb-types" }
 mz-secrets = { path = "../secrets" }
 mz-segment = { path = "../segment" }

@@ -116,7 +116,6 @@ members = [
     "src/workspace-hack",
     "test/metabase/smoketest",
     "test/test-util",
-    "src/row-stash",
 ]
 
 # We make all members of the workspace default members, *except* for a few

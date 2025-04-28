@@ -675,7 +675,6 @@ crates_repository(
         "//:src/repr/Cargo.toml",
         "//:src/rocksdb-types/Cargo.toml",
         "//:src/rocksdb/Cargo.toml",
-        "//:src/row-stash/Cargo.toml",
         "//:src/s3-datagen/Cargo.toml",
         "//:src/secrets/Cargo.toml",
         "//:src/segment/Cargo.toml",
