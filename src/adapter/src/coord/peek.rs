@@ -37,9 +37,8 @@ use mz_expr::{
 use mz_ore::cast::CastFrom;
 use mz_ore::str::{StrExt, separated};
 use mz_ore::tracing::OpenTelemetryContext;
-use mz_persist_client::{HollowBatch, Schemas};
+use mz_persist_client::Schemas;
 use mz_persist_types::codec_impls::UnitSchema;
-use mz_proto::IntoRustIfSome;
 use mz_repr::explain::text::DisplayText;
 use mz_repr::explain::{CompactScalars, IndexUsageType, PlanRenderingContext, UsedIndexes};
 use mz_repr::{Diff, GlobalId, IntoRowIterator, RelationType, Row, RowIterator, preserves_order};
@@ -774,19 +773,16 @@ impl crate::coord::Coordinator {
                     }
                 }
                 PeekResponse::Stashed(response) => {
-                    let response_batches = response
-                        .batches
-                        .into_iter()
-                        .map(|b| {
-                            let hollow: HollowBatch<mz_repr::Timestamp> = b
-                                .batch
-                                .into_rust_if_some("ProtoBatch::batch")
-                                .expect("valid transmittable batch");
+                    let shard_id = response.shard_id;
 
-                            hollow
-                        })
-                        .collect_vec();
-                    tracing::trace!(?response_batches, "stashed peek response!");
+                    let mut batches = Vec::new();
+                    for proto_batch in response.batches.into_iter() {
+                        let batch =
+                            persist_client.batch_from_transmittable_batch(&shard_id, proto_batch);
+
+                        batches.push(batch);
+                    }
+                    tracing::trace!(?batches, "stashed peek response!");
 
                     let as_of = Antichain::from_elem(mz_repr::Timestamp::default());
                     let read_schemas: Schemas<Row, ()> = Schemas {
@@ -800,7 +796,7 @@ impl crate::coord::Coordinator {
                             response.shard_id,
                             as_of,
                             read_schemas,
-                            response_batches,
+                            batches,
                             |_stats| true,
                         )
                         .await
@@ -821,9 +817,12 @@ impl crate::coord::Coordinator {
                             let result = tx.send(rows_vec).await;
                             if result.is_err() {
                                 tracing::error!("receiver went away");
-                                return;
+                                break;
                             }
                         }
+
+                        // WIP: Need to best-effort clean up batches now, after
+                        // yielding them all.
                     });
 
                     if finishing.is_trivial(response.relation_desc.arity()) {

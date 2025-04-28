@@ -28,11 +28,14 @@ use mz_ore::{instrument, soft_assert_or_log};
 use mz_persist::location::{Blob, Consensus, ExternalError};
 use mz_persist_types::schema::SchemaId;
 use mz_persist_types::{Codec, Codec64, Opaque};
+use mz_proto::{IntoRustIfSome, ProtoType};
+use semver::Version;
 use timely::progress::{Antichain, Timestamp};
 
 use crate::async_runtime::IsolatedRuntime;
 use crate::batch::{
-    BLOB_TARGET_SIZE, BatchBuilder, BatchBuilderConfig, BatchBuilderInternal, BatchParts,
+    BATCH_DELETE_ENABLED, BLOB_TARGET_SIZE, Batch, BatchBuilder, BatchBuilderConfig,
+    BatchBuilderInternal, BatchParts, ProtoBatch,
 };
 use crate::cache::{PersistClientCache, StateCache};
 use crate::cfg::{COMPACTION_MEMORY_BOUND_BYTES, PersistConfig};
@@ -579,7 +582,7 @@ impl PersistClient {
                 ),
                 max_runs,
                 Arc::clone(&self.metrics),
-                Arc::clone(&shard_metrics),
+                shard_metrics,
                 shard_id,
                 Arc::clone(&self.blob),
                 Arc::clone(&self.isolated_runtime),
@@ -591,7 +594,7 @@ impl PersistClient {
                 cfg.batch,
                 RunOrder::Unordered,
                 Arc::clone(&self.metrics),
-                Arc::clone(&shard_metrics),
+                shard_metrics,
                 shard_id,
                 Arc::clone(&self.blob),
                 Arc::clone(&self.isolated_runtime),
@@ -613,6 +616,45 @@ impl PersistClient {
         ))
     }
 
+    /// Turns the given [`ProtoBatch`] back into a [`Batch`] which can be used
+    /// to append it to the given shard or to read it via
+    /// [PersistClient::read_batches_unconsolidated]
+    pub fn batch_from_transmittable_batch<K, V, T, D>(
+        &self,
+        shard_id: &ShardId,
+        batch: ProtoBatch,
+    ) -> Batch<K, V, T, D>
+    where
+        K: Debug + Codec,
+        V: Debug + Codec,
+        T: Timestamp + Lattice + Codec64 + Sync,
+        D: Semigroup + Ord + Codec64 + Send + Sync,
+    {
+        let batch_shard_id: ShardId = batch
+            .shard_id
+            .into_rust()
+            .expect("valid transmittable batch");
+        assert_eq!(&batch_shard_id, shard_id);
+
+        let shard_metrics = self.metrics.shards.shard(&shard_id, "peek_stash");
+
+        let ret = Batch {
+            batch_delete_enabled: BATCH_DELETE_ENABLED.get(&self.cfg),
+            metrics: Arc::clone(&self.metrics),
+            shard_metrics,
+            version: Version::parse(&batch.version).expect("valid transmittable batch"),
+            batch: batch
+                .batch
+                .into_rust_if_some("ProtoBatch::batch")
+                .expect("valid transmittable batch"),
+            blob: Arc::clone(&self.blob),
+            _phantom: std::marker::PhantomData,
+        };
+
+        assert_eq!(&ret.shard_id(), shard_id);
+        ret
+    }
+
     /// TODO
     ///
     /// WIP: Do we want to let callers inject sth like MFP here?
@@ -623,7 +665,7 @@ impl PersistClient {
         shard_id: ShardId,
         as_of: Antichain<T>,
         read_schemas: Schemas<K, V>,
-        batches: Vec<HollowBatch<T>>,
+        batches: Vec<Batch<K, V, T, D>>,
         should_fetch_part: impl for<'a> Fn(Option<&'a LazyPartStats>) -> bool,
     ) -> Result<Cursor<K, V, T, D>, Since<T>>
     where
@@ -652,9 +694,9 @@ impl PersistClient {
                 COMPACTION_MEMORY_BOUND_BYTES.get(&self.cfg),
             );
             for batch in batches {
-                for (meta, run) in batch.runs() {
+                for (meta, run) in batch.batch.runs() {
                     consolidator.enqueue_run(
-                        &batch.desc,
+                        &batch.batch.desc,
                         meta,
                         run.into_iter()
                             .filter(|p| should_fetch_part(p.stats()))
