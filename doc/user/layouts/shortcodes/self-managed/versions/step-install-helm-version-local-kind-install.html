@@ -1,4 +1,6 @@
 {{ $operator_version := site.Data.self_managed.latest_versions.operator_helm_chart_version }}
+{{ $orchestratord_version :=
+site.Data.self_managed.latest_versions.orchestratord_version }}
 
 1. Install the Materialize Operator. The operator will be installed in the
    `materialize` namespace.
@@ -8,5 +10,6 @@
        --namespace=materialize --create-namespace \
        --version {{ $operator_version }} \
        --set observability.podMetrics.enabled=true \
-       -f sample-values.yaml
+       -f sample-values.yaml \
+       --set operator.image.tag={{ $orchestratord_version }}
    ```
