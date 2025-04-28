@@ -852,61 +852,6 @@ where
             .expect("cannot serve requested as_of")
     }
 
-    /// Streams the contents of the provided [`ProtoBatch`].
-    ///
-    /// After the stream has completed data behind the [`ProtoBatch`] will be
-    /// deleted.
-    pub async fn consume(
-        &mut self,
-        batch: ProtoBatch,
-    ) -> impl Stream<Item = ((Result<K, String>, Result<V, String>), T, D)> + 'static {
-        // Keep around a clone of the Batch so we can clean it up.
-        let drop_batch = self.batch_from_transmittable_batch(batch.clone());
-
-        let batch = self
-            .batch_from_transmittable_batch(batch)
-            .into_hollow_batch();
-
-        let blob = Arc::clone(&self.blob);
-        let metrics = Arc::clone(&self.metrics);
-        let snapshot_metrics = self.metrics.read.snapshot.clone();
-        let shard_metrics = Arc::clone(&self.machine.applier.shard_metrics);
-        let reader_id = self.reader_id.clone();
-        let schemas = self.read_schemas.clone();
-        let mut schema_cache = self.schema_cache.clone();
-        let persist_cfg = self.cfg.clone();
-
-        let parts: Vec<_> = self
-            .lease_batch_parts(batch, FetchBatchFilter::None)
-            .collect()
-            .await;
-
-        async_stream::stream! {
-            // Stream out all of the data from this Batch.
-            for part in parts {
-                let mut fetched_part = fetch_leased_part(
-                    &persist_cfg,
-                    &part,
-                    blob.as_ref(),
-                    Arc::clone(&metrics),
-                    &snapshot_metrics,
-                    &shard_metrics,
-                    &reader_id,
-                    schemas.clone(),
-                    &mut schema_cache,
-                )
-                .await;
-
-                while let Some(next) = fetched_part.next() {
-                    yield next;
-                }
-            }
-
-            // Delete the data!
-            drop_batch.delete().await;
-        }
-    }
-
     /// Generates a [Self::snapshot], and streams out all of the updates
     /// it contains in bounded memory.
     ///

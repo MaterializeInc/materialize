@@ -255,7 +255,6 @@ pub(crate) enum FetchBatchFilter<T> {
     Compaction {
         since: Antichain<T>,
     },
-    None,
 }
 
 impl<T: Timestamp + Lattice> FetchBatchFilter<T> {
@@ -291,7 +290,6 @@ impl<T: Timestamp + Lattice> FetchBatchFilter<T> {
                 t.advance_by(since.borrow());
                 true
             }
-            FetchBatchFilter::None => true,
         }
     }
 }
@@ -309,7 +307,6 @@ impl<T: Timestamp + Codec64> RustType<ProtoFetchBatchFilter> for FetchBatchFilte
                 })
             }
             FetchBatchFilter::Compaction { .. } => unreachable!("not serialized"),
-            FetchBatchFilter::None => unreachable!("None not serialized"),
         };
         ProtoFetchBatchFilter { kind: Some(kind) }
     }
@@ -578,9 +575,7 @@ where
         assert_eq!(val.len(), 1, "expect a single-row val array");
         let as_of = match &self.filter {
             FetchBatchFilter::Snapshot { as_of } => as_of,
-            FetchBatchFilter::Listen { .. }
-            | FetchBatchFilter::Compaction { .. }
-            | FetchBatchFilter::None => return,
+            FetchBatchFilter::Listen { .. } | FetchBatchFilter::Compaction { .. } => return,
         };
         if !OPTIMIZE_IGNORED_DATA_FETCH.get(cfg) {
             return;
