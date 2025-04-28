@@ -499,5 +499,4 @@ SELECT '0001-12-31 19:03:58AD '::timestamp;
 query T
 SELECT '2020-12-21 18:53:49 Asia/Baghdad'::timestamp
 ----
-2020-12-21 15:53:49+00
-
+2020-12-21 18:53:49
