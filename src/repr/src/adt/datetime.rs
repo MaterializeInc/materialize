@@ -1940,6 +1940,7 @@ fn strip_era_from_timezone(timezone: &str) -> (&str, CalendarEra) {
     let timezone = timezone.trim();
     let timezone_upper = timezone.to_uppercase();
 
+    // Covers cases 1 and 2.
     if timezone.len() < 3 {
         return match (
             timezone_upper.strip_suffix("BC"),
@@ -1953,6 +1954,7 @@ fn strip_era_from_timezone(timezone: &str) -> (&str, CalendarEra) {
         };
     }
 
+    // Covers case 3.
     match (
         timezone_upper.strip_suffix(" BC"),
         timezone_upper.strip_suffix(" AD"),
