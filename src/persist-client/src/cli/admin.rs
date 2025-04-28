@@ -489,7 +489,7 @@ where
                 val: Arc::clone(&val_schema),
             };
 
-            let res = Compactor::<K, V, T, D>::compact(
+            let res = Compactor::<K, V, T, D>::compact_old(
                 CompactConfig::new(&cfg, shard_id),
                 Arc::clone(&blob),
                 Arc::clone(&metrics),
@@ -509,7 +509,10 @@ where
                 start.elapsed(),
             );
             let (apply_res, maintenance) = machine
-                .merge_res(&FueledMergeRes { output: res.output })
+                .merge_res(&FueledMergeRes {
+                    output: res.output,
+                    new_active_compaction: None,
+                })
                 .await;
             if !maintenance.is_empty() {
                 info!("ignoring non-empty requested maintenance: {maintenance:?}")
