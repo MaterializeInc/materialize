@@ -42,11 +42,8 @@ use mz_persist_types::codec_impls::UnitSchema;
 use mz_proto::IntoRustIfSome;
 use mz_repr::explain::text::DisplayText;
 use mz_repr::explain::{CompactScalars, IndexUsageType, PlanRenderingContext, UsedIndexes};
-use mz_repr::{
-    Diff, GlobalId, IntoRowIterator, RelationDesc, RelationType, Row, RowIterator, preserves_order,
-};
+use mz_repr::{Diff, GlobalId, IntoRowIterator, RelationType, Row, RowIterator, preserves_order};
 use serde::{Deserialize, Serialize};
-use serde_json::map;
 use timely::progress::{Antichain, Timestamp};
 use uuid::Uuid;
 
@@ -275,7 +272,10 @@ pub struct PlannedPeek {
     pub plan: PeekPlan,
     pub determination: TimestampDetermination<mz_repr::Timestamp>,
     pub conn_id: ConnectionId,
-    pub intermediate_result_typ: RelationType,
+    /// The [ResultType] _after_ reading out of the "source" and applying any
+    /// [MapFilterProject](mz_repr::MapFilterProject], but _before_ applying a
+    /// [RowSetFinishing].
+    pub intermediate_result_type: RelationType,
     pub source_arity: usize,
     pub source_ids: BTreeSet<GlobalId>,
 }
@@ -530,12 +530,12 @@ impl crate::coord::Coordinator {
             plan: fast_path,
             determination,
             conn_id,
-            intermediate_result_typ,
+            intermediate_result_type,
             source_arity,
             source_ids,
         } = plan;
 
-        tracing::info!(?fast_path, ?intermediate_result_typ, "implement peek");
+        tracing::debug!(?fast_path, ?intermediate_result_type, "implement peek");
 
         // If the dataflow optimizes to a constant expression, we can immediately return the result.
         if let PeekPlan::FastPath(FastPathPlan::Constant(rows, _)) = fast_path {
@@ -616,7 +616,7 @@ impl crate::coord::Coordinator {
                     literal_constraints,
                     timestamp,
                     map_filter_project,
-                    intermediate_result_typ,
+                    intermediate_result_type,
                 ),
                 None,
                 true,
@@ -632,7 +632,7 @@ impl crate::coord::Coordinator {
                     literal_constraint.map(|r| vec![r]),
                     timestamp,
                     map_filter_project,
-                    intermediate_result_typ,
+                    intermediate_result_type,
                 );
                 let metadata = self
                     .controller
@@ -684,8 +684,10 @@ impl crate::coord::Coordinator {
                 );
                 let map_filter_project = mfp_to_safe_plan(map_filter_project)?;
 
+                // We create a new MapFilterProject here, so make so it's
+                // reflected in our intermediate result type.
                 let result_type =
-                    map_filter_project.apply_to_relation_type(&intermediate_result_typ);
+                    map_filter_project.apply_to_relation_type(&intermediate_result_type);
 
                 (
                     (None, timestamp, map_filter_project, result_type),
@@ -789,7 +791,7 @@ impl crate::coord::Coordinator {
                     let as_of = Antichain::from_elem(mz_repr::Timestamp::default());
                     let read_schemas: Schemas<Row, ()> = Schemas {
                         id: None,
-                        key: Arc::new(response.relation_desc),
+                        key: Arc::new(response.relation_desc.clone()),
                         val: Arc::new(UnitSchema),
                     };
 
@@ -824,8 +826,38 @@ impl crate::coord::Coordinator {
                         }
                     });
 
-                    while let Some(rows_vec) = rx.recv().await {
-                        yield PeekResponseUnary::Rows(Box::new(rows_vec.into_row_iter()));
+                    if finishing.is_trivial(response.relation_desc.arity()) {
+                        while let Some(rows_vec) = rx.recv().await {
+                            yield PeekResponseUnary::Rows(Box::new(rows_vec.into_row_iter()));
+                        }
+                    } else {
+                        // WIP: Can't do this for realz, but do for now to see
+                        // if CI passes.
+                        //
+                        // We materialize (pun very much intended) all stashed
+                        // rows in memory and apply the finishing.
+                        let mut rows = Vec::new();
+                        while let Some(mut rows_vec) = rx.recv().await {
+                            rows.append(&mut rows_vec);
+                        }
+
+                        let row_collection = RowCollection::new(
+                            rows.into_iter()
+                                .map(|row| (row, NonZeroUsize::new(1).expect("known to cast")))
+                                .collect_vec(),
+                            &finishing.order_by,
+                        );
+                        match finishing.finish(
+                            row_collection,
+                            max_result_size,
+                            max_returned_query_size,
+                            &duration_histogram,
+                        ) {
+                            Ok((rows, _size_bytes)) => {
+                                yield PeekResponseUnary::Rows(Box::new(rows))
+                            }
+                            Err(e) => yield PeekResponseUnary::Error(e),
+                        }
                     }
                 }
                 PeekResponse::Canceled => {
