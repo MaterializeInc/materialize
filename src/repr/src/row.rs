@@ -144,6 +144,14 @@ impl Row {
         }
     }
 
+    /// Create an empty `Row`.
+    #[inline]
+    pub const fn empty() -> Self {
+        Self {
+            data: CompactBytes::empty(),
+        }
+    }
+
     /// Creates a new row from supplied bytes.
     ///
     /// # Safety
@@ -2807,7 +2815,7 @@ impl Default for RowArena {
     }
 }
 
-/// A thread-local row, which can be borrowed and returned.
+/// A row, which can be borrowed and returned.
 /// # Example
 ///
 /// Use this type instead of creating a new row:
@@ -2826,12 +2834,10 @@ impl Default for RowArena {
 ///
 /// [`SharedRow::get`] panics when trying to obtain multiple references to the shared row.
 #[derive(Debug)]
-pub struct SharedRow(Rc<RefCell<Row>>);
+pub struct SharedRow(RefCell<Row>);
 
 impl SharedRow {
-    thread_local! {
-        static SHARED_ROW: Rc<RefCell<Row>> = Rc::new(RefCell::new(Row::default()));
-    }
+    const SHARED_ROW: RefCell<Row> = RefCell::new(Row::empty());
 
     /// Get the shared row.
     ///
@@ -2841,7 +2847,7 @@ impl SharedRow {
     ///
     /// Panics when the row is already borrowed elsewhere.
     pub fn get() -> Self {
-        let row = Self::SHARED_ROW.with(Rc::clone);
+        let row = Self::SHARED_ROW;
         // Clear row
         row.borrow_mut().packer();
         Self(row)
@@ -2853,7 +2859,7 @@ impl SharedRow {
         I: IntoIterator<Item = D>,
         D: Borrow<Datum<'a>>,
     {
-        let binding = Self::SHARED_ROW.with(Rc::clone);
+        let binding = Self::SHARED_ROW;
         let mut row_builder = binding.borrow_mut();
         let mut row_packer = row_builder.packer();
         row_packer.extend(iter);
