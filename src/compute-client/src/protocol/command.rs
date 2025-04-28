@@ -608,7 +608,9 @@ impl PeekTarget {
 pub struct Peek<T = mz_repr::Timestamp> {
     /// Target-specific metadata.
     pub target: PeekTarget,
-    /// The relation description for the rows returned by this peek.
+    /// The relation description for the rows returned by this peek, before
+    /// applying the [RowSetFinishing] but _after_ applying the given
+    /// `map_filter_project`.
     pub result_desc: RelationDesc,
     /// If `Some`, then look up only the given keys from the collection (instead of a full scan).
     /// The vector is never empty.

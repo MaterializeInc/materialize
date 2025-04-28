@@ -361,6 +361,8 @@ where
                                 PeekResponse::Stashed(mut batches),
                                 PeekResponse::Stashed(mut other),
                             ) => {
+                                assert_eq!(batches.shard_id, other.shard_id);
+                                assert_eq!(batches.relation_desc, other.relation_desc);
                                 batches.batches.append(&mut other.batches);
                                 PeekResponse::Stashed(batches)
                             }

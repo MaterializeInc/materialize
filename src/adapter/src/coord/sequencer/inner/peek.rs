@@ -862,6 +862,7 @@ impl Coordinator {
             plan: peek_plan,
             determination: determination.clone(),
             conn_id: conn_id.clone(),
+            intermediate_result_typ: typ,
             source_arity,
             source_ids,
         };
@@ -921,16 +922,11 @@ impl Coordinator {
 
         let max_result_size = self.catalog().system_config().max_result_size();
 
-        // At this stage we don't know the real column names for the result.
-        let result_column_names = (0..typ.arity()).map(|i| format!("peek_{i}"));
-        let result_desc = RelationDesc::new(typ, result_column_names);
-
         // Implement the peek, and capture the response.
         let resp = self
             .implement_peek_plan(
                 ctx.extra_mut(),
                 planned_peek,
-                result_desc,
                 finishing,
                 cluster_id,
                 target_replica,

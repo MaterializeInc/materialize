@@ -18,7 +18,6 @@ use std::num::NonZeroUsize;
 use std::sync::Arc;
 
 use differential_dataflow::consolidation::consolidate;
-use futures::{FutureExt, TryFutureExt};
 use itertools::Itertools;
 use mz_adapter_types::compaction::CompactionWindow;
 use mz_adapter_types::connection::ConnectionId;
@@ -38,9 +37,7 @@ use mz_expr::{
 use mz_ore::cast::CastFrom;
 use mz_ore::str::{StrExt, separated};
 use mz_ore::tracing::OpenTelemetryContext;
-use mz_persist_client::batch::ProtoBatch;
 use mz_persist_client::{HollowBatch, Schemas};
-use mz_persist_types::ShardId;
 use mz_persist_types::codec_impls::UnitSchema;
 use mz_proto::IntoRustIfSome;
 use mz_repr::explain::text::DisplayText;
@@ -49,6 +46,7 @@ use mz_repr::{
     Diff, GlobalId, IntoRowIterator, RelationDesc, RelationType, Row, RowIterator, preserves_order,
 };
 use serde::{Deserialize, Serialize};
+use serde_json::map;
 use timely::progress::{Antichain, Timestamp};
 use uuid::Uuid;
 
@@ -277,6 +275,7 @@ pub struct PlannedPeek {
     pub plan: PeekPlan,
     pub determination: TimestampDetermination<mz_repr::Timestamp>,
     pub conn_id: ConnectionId,
+    pub intermediate_result_typ: RelationType,
     pub source_arity: usize,
     pub source_ids: BTreeSet<GlobalId>,
 }
@@ -521,7 +520,6 @@ impl crate::coord::Coordinator {
         &mut self,
         ctx_extra: &mut ExecuteContextExtra,
         plan: PlannedPeek,
-        result_desc: RelationDesc,
         finishing: RowSetFinishing,
         compute_instance: ComputeInstanceId,
         target_replica: Option<ReplicaId>,
@@ -532,9 +530,12 @@ impl crate::coord::Coordinator {
             plan: fast_path,
             determination,
             conn_id,
+            intermediate_result_typ,
             source_arity,
             source_ids,
         } = plan;
+
+        tracing::info!(?fast_path, ?intermediate_result_typ, "implement peek");
 
         // If the dataflow optimizes to a constant expression, we can immediately return the result.
         if let PeekPlan::FastPath(FastPathPlan::Constant(rows, _)) = fast_path {
@@ -611,7 +612,12 @@ impl crate::coord::Coordinator {
                 literal_constraints,
                 map_filter_project,
             )) => (
-                (literal_constraints, timestamp, map_filter_project),
+                (
+                    literal_constraints,
+                    timestamp,
+                    map_filter_project,
+                    intermediate_result_typ,
+                ),
                 None,
                 true,
                 PeekTarget::Index { id: idx_id },
@@ -626,6 +632,7 @@ impl crate::coord::Coordinator {
                     literal_constraint.map(|r| vec![r]),
                     timestamp,
                     map_filter_project,
+                    intermediate_result_typ,
                 );
                 let metadata = self
                     .controller
@@ -639,7 +646,7 @@ impl crate::coord::Coordinator {
                     true,
                     PeekTarget::Persist {
                         id: coll_id,
-                        metadata,
+                        metadata: metadata.clone(),
                     },
                     StatementExecutionStrategy::PersistFastPath,
                 )
@@ -676,8 +683,12 @@ impl crate::coord::Coordinator {
                     index_key.len() + index_thinned_arity,
                 );
                 let map_filter_project = mfp_to_safe_plan(map_filter_project)?;
+
+                let result_type =
+                    map_filter_project.apply_to_relation_type(&intermediate_result_typ);
+
                 (
-                    (None, timestamp, map_filter_project),
+                    (None, timestamp, map_filter_project, result_type),
                     Some(index_id),
                     false,
                     PeekTarget::Index { id: index_id },
@@ -715,17 +726,18 @@ impl crate::coord::Coordinator {
             .entry(conn_id)
             .or_default()
             .insert(uuid, compute_instance);
-        let (literal_constraints, timestamp, map_filter_project) = peek_command;
+        let (literal_constraints, timestamp, map_filter_project, intermediate_result_type) =
+            peek_command;
 
         self.controller
             .compute
             .peek(
                 compute_instance,
                 peek_target,
-                result_desc.clone(),
                 literal_constraints,
                 uuid,
                 timestamp,
+                intermediate_result_type,
                 finishing.clone(),
                 map_filter_project,
                 target_replica,
@@ -777,13 +789,13 @@ impl crate::coord::Coordinator {
                     let as_of = Antichain::from_elem(mz_repr::Timestamp::default());
                     let read_schemas: Schemas<Row, ()> = Schemas {
                         id: None,
-                        key: Arc::new(result_desc),
+                        key: Arc::new(response.relation_desc),
                         val: Arc::new(UnitSchema),
                     };
 
                     let mut row_cursor = persist_client
                         .read_batches_consolidated::<_, _, _, i64>(
-                            ShardId::new(),
+                            response.shard_id,
                             as_of,
                             read_schemas,
                             response_batches,

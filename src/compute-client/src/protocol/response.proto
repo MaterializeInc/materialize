@@ -19,6 +19,7 @@ import "persist-client/src/batch.proto";
 import "proto/src/proto.proto";
 import "repr/src/antichain.proto";
 import "repr/src/global_id.proto";
+import "repr/src/relation_and_scalar.proto";
 import "repr/src/row.proto";
 
 message ProtoComputeResponse {
@@ -59,7 +60,9 @@ message ProtoFrontiersResponse {
 }
 
 message ProtoStashedPeekResponse {
-  repeated mz_persist_client.batch.ProtoBatch batches = 1;
+  mz_repr.relation_and_scalar.ProtoRelationDesc relation_desc = 1;
+  string shard_id = 2;
+  repeated mz_persist_client.batch.ProtoBatch batches = 3;
 }
 
 message ProtoPeekResponse {

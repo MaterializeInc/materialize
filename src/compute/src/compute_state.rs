@@ -1644,7 +1644,7 @@ impl StashPeekResponse {
         let persist_location = persist_location.clone();
 
         let peek_uuid = peek.uuid;
-        let result_desc = peek.result_desc.clone();
+        let relation_desc = peek.result_desc.clone();
 
         let task_handle = mz_ore::task::spawn(|| "compute::stash_peek_response", async move {
             let start = Instant::now();
@@ -1653,7 +1653,7 @@ impl StashPeekResponse {
                 &persist_clients,
                 persist_location,
                 peek.uuid,
-                result_desc,
+                relation_desc,
                 peek_response,
             )
             .await;
@@ -1682,7 +1682,7 @@ impl StashPeekResponse {
         persist_clients: &PersistClientCache,
         persist_location: PersistLocation,
         peek_uuid: Uuid,
-        result_desc: RelationDesc,
+        relation_desc: RelationDesc,
         peek_response: PeekResponse,
     ) -> Result<PeekResponse, String> {
         let client = persist_clients
@@ -1694,7 +1694,7 @@ impl StashPeekResponse {
         let shard_id = ShardId::try_from(shard_id).expect("can parse");
         let write_schemas: Schemas<Row, ()> = Schemas {
             id: None,
-            key: Arc::new(result_desc),
+            key: Arc::new(relation_desc.clone()),
             val: Arc::new(UnitSchema),
         };
 
@@ -1718,6 +1718,7 @@ impl StashPeekResponse {
         // WIP: Don't go through a PeekResponse, which forces us to iterate and
         // clone here.
         while let Some(row) = row_iter.next() {
+            // tracing::info!(?row, "row!");
             batch_builder
                 .add(&row.into_owned(), &(), &Timestamp::default(), &1)
                 .await
@@ -1727,6 +1728,8 @@ impl StashPeekResponse {
         let batch = batch_builder.finish(upper).await.expect("invalid usage");
 
         let stashed_response = StashedPeekResponse {
+            relation_desc,
+            shard_id,
             batches: vec![batch.into_transmittable_batch()],
         };
         let result = PeekResponse::Stashed(stashed_response);

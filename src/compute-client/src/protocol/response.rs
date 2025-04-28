@@ -16,8 +16,9 @@ use mz_expr::row::RowCollection;
 use mz_ore::cast::CastFrom;
 use mz_ore::tracing::OpenTelemetryContext;
 use mz_persist_client::batch::ProtoBatch;
+use mz_persist_types::ShardId;
 use mz_proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError, any_uuid};
-use mz_repr::{Diff, GlobalId, Row};
+use mz_repr::{Diff, GlobalId, RelationDesc, Row};
 use mz_timely_util::progress::any_antichain;
 use proptest::prelude::{Arbitrary, any};
 use proptest::strategy::{BoxedStrategy, Just, Strategy, Union};
@@ -382,6 +383,10 @@ impl Arbitrary for PeekResponse {
 /// Response from a peek whose results have been stashed into persist.
 #[derive(Clone, Debug, PartialEq)]
 pub struct StashedPeekResponse {
+    /// [RelationDesc] for the rows in these stashed batches of results.
+    pub relation_desc: RelationDesc,
+    /// The [ShardId] under which result batches have been stashed.
+    pub shard_id: ShardId,
     /// Batches of Rows, must be combined with reponses from other workers and
     /// consolidated before sending back via a client.
     pub batches: Vec<ProtoBatch>,
@@ -390,12 +395,22 @@ pub struct StashedPeekResponse {
 impl RustType<ProtoStashedPeekResponse> for StashedPeekResponse {
     fn into_proto(&self) -> ProtoStashedPeekResponse {
         ProtoStashedPeekResponse {
+            relation_desc: Some(self.relation_desc.into_proto()),
+            shard_id: self.shard_id.into_proto(),
             batches: self.batches.clone(),
         }
     }
 
     fn from_proto(proto: ProtoStashedPeekResponse) -> Result<Self, TryFromProtoError> {
+        let shard_id: ShardId = proto
+            .shard_id
+            .into_rust()
+            .expect("valid transmittable shard_id");
         Ok(StashedPeekResponse {
+            relation_desc: proto
+                .relation_desc
+                .into_rust_if_some("ProtoStashedPeekResponse::relation_desc")?,
+            shard_id,
             batches: proto.batches,
         })
     }
