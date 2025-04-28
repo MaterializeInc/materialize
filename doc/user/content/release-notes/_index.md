@@ -75,6 +75,12 @@ Notes](https://github.com/MaterializeInc/terraform-google-materialize?tab=readme
 for release specific notes.
 
 {{</ tab >}}
+
+{{< tab "terraform-helm-materialize" >}}
+
+{{< yaml-table data="self_managed/terraform_helm_compatibility" >}}
+
+{{</ tab >}}
 {{</ tabs >}}
 
 ### Known Limitations
