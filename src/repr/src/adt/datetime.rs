@@ -1929,12 +1929,12 @@ pub(crate) fn split_timestamp_string(value: &str) -> (&str, &str, CalendarEra) {
     }
 }
 
-/// We support three era formats:
-///  1. "<timestamp><separator><timezone> <era>"
-///  2. "<timestamp> <era>"
-///  3. "<timestamp><era>"
-///
-/// NB(ptravers): pg supports more formats than noted above.
+// We support three era formats:
+//  1. "<timestamp><separator><timezone> <era>"
+//  2. "<timestamp> <era>"
+//  3. "<timestamp><era>"
+//
+// NB(ptravers): pg supports more formats than noted above.
 fn strip_era_from_timezone(timezone: &str) -> (&str, CalendarEra) {
     use CalendarEra::{AD, BC};
     let timezone = timezone.trim();
