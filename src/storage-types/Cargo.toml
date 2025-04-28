@@ -79,7 +79,7 @@ base64 = "0.22.1"
 [dev-dependencies]
 base64 = "0.22.1"
 criterion = { version = "0.5.1" }
-insta = { version = "1.42", features = ["json"] }
+insta = { version = "1.43", features = ["json"] }
 mz-persist = { path = "../persist" }
 rand = "0.8.5"
 
