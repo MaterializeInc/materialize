@@ -6500,7 +6500,7 @@ dependencies = [
  "futures",
  "futures-task",
  "futures-util",
- "h2 0.3.26",
+ "h2 0.4.5",
  "hex",
  "itertools 0.14.0",
  "mz-build-info",
