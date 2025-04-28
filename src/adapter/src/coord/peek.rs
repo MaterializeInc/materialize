@@ -684,13 +684,13 @@ impl crate::coord::Coordinator {
                 );
                 let map_filter_project = mfp_to_safe_plan(map_filter_project)?;
 
-                // We create a new MapFilterProject here, so make so it's
-                // reflected in our intermediate result type.
-                let result_type =
-                    map_filter_project.apply_to_relation_type(&intermediate_result_type);
-
                 (
-                    (None, timestamp, map_filter_project, result_type),
+                    (
+                        None,
+                        timestamp,
+                        map_filter_project,
+                        intermediate_result_type,
+                    ),
                     Some(index_id),
                     false,
                     PeekTarget::Index { id: index_id },
