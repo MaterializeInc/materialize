@@ -47,7 +47,6 @@ use mz_repr::{
     CatalogItemId, Datum, Diff, GlobalId, IntoRowIterator, RelationVersion,
     RelationVersionSelector, Row, RowArena, RowIterator, Timestamp,
 };
-use mz_row_stash::StashedRowHandle;
 use mz_sql::ast::AlterSourceAddSubsourceOption;
 use mz_sql::ast::{CreateSubsourceStatement, MySqlConfigOptionName, UnresolvedItemName};
 use mz_sql::catalog::{
@@ -84,10 +83,10 @@ use mz_sql_parser::ast::{
 };
 use mz_ssh_util::keys::SshKeyPairSet;
 use mz_storage_client::controller::{CollectionDescription, DataSource, ExportDescription};
+use mz_storage_types::AlterCompatible;
 use mz_storage_types::connections::inline::IntoInlineConnection;
 use mz_storage_types::controller::StorageError;
 use mz_storage_types::stats::RelationPartStats;
-use mz_storage_types::{AlterCompatible, StorageDiff};
 use mz_transform::EmptyStatisticsOracle;
 use mz_transform::dataflow::DataflowMetainfo;
 use mz_transform::notice::{OptimizerNoticeApi, OptimizerNoticeKind, RawOptimizerNotice};
@@ -95,7 +94,6 @@ use smallvec::SmallVec;
 use timely::progress::Antichain;
 use timely::progress::Timestamp as TimelyTimestamp;
 use tokio::sync::{oneshot, watch};
-use tokio_stream::wrappers::ReceiverStream;
 use tracing::{Instrument, Span, info, warn};
 
 use crate::catalog::{self, Catalog, ConnCatalog, DropObjectInfo, UpdatePrivilegeVariant};
@@ -3024,10 +3022,6 @@ impl Coordinator {
         let catalog = self.owned_catalog();
         let max_result_size = self.catalog().system_config().max_result_size();
 
-        let organization_id = self.catalog.config().environment_id.organization_id();
-        let mut stashed_rows_handle: StashedRowHandle<Timestamp, StorageDiff> =
-            StashedRowHandle::new(&self.persist_client, organization_id).await;
-
         task::spawn(|| format!("sequence_read_then_write:{id}"), async move {
             let (peek_response, session) = match peek_rx.await {
                 Ok(Response {
@@ -3115,6 +3109,7 @@ impl Coordinator {
                     }
                     Ok(diffs)
                 };
+
             let diffs = match peek_response {
                 ExecuteResponse::SendingRows { future: batch, .. } => {
                     // TODO(jkosh44): This timeout should be removed;
@@ -3145,10 +3140,57 @@ impl Coordinator {
                     }
                 }
                 ExecuteResponse::SendingRowsImmediate { rows } => make_diffs(rows),
+                ExecuteResponse::SendingRowsStreaming {
+                    rows: mut rows_stream,
+                    ..
+                } => {
+                    // WIP: Again, can't do this for realz but for now
+                    // materialize all the rows and make the diffs. We need to
+                    // figure out how we can stream diffs, or do it on clusters
+                    // a la Parker.
+                    //
+                    // For now, we'll probably just error here, because we only
+                    // get streaming rows when the result size is too large.
+
+                    let mut diffs = Vec::new();
+                    let result = loop {
+                        match tokio::time::timeout(timeout_dur, rows_stream.next()).await {
+                            Ok(Some(res)) => match res {
+                                PeekResponseUnary::Rows(new_rows) => {
+                                    match make_diffs(new_rows) {
+                                        Ok(mut new_diffs) => diffs.append(&mut new_diffs),
+                                        Err(e) => break Err(e),
+                                    };
+                                }
+                                PeekResponseUnary::Canceled => break Err(AdapterError::Canceled),
+                                PeekResponseUnary::Error(e) => {
+                                    break Err(AdapterError::Unstructured(anyhow!(e)));
+                                }
+                            },
+                            Ok(None) => break Ok(diffs),
+                            Err(_) => {
+                                // We timed out, so remove the pending peek. This is
+                                // best-effort and doesn't guarantee we won't
+                                // receive a response.
+                                // It is not an error for this timeout to occur after `internal_cmd_rx` has been dropped.
+                                let result = internal_cmd_tx.send(Message::CancelPendingPeeks {
+                                    conn_id: ctx.session().conn_id().clone(),
+                                });
+                                if let Err(e) = result {
+                                    warn!("internal_cmd_rx dropped before we could send: {:?}", e);
+                                }
+                                break Err(AdapterError::StatementTimeout);
+                            }
+                        }
+                    };
+
+                    result
+                }
                 resp => Err(AdapterError::Unstructured(anyhow!(
                     "unexpected peek response: {resp:?}"
                 ))),
             };
+
             let mut returning_rows = Vec::new();
             let mut diff_err: Option<AdapterError> = None;
             if let (false, Ok(diffs)) = (returning.is_empty(), &diffs) {
