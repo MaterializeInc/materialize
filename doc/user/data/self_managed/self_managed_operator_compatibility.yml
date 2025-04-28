@@ -6,6 +6,24 @@ columns:
   - column: "Notes"
 
 rows:
+  - "Materialize Operator": "v25.1.10"
+    "orchestratord version": "v0.142.1"
+    "environmentd version": "v0.130.11"
+    "Release date": "2025-04-24"
+    "Notes": ""
+
+  - "Materialize Operator": "v25.1.9"
+    "orchestratord version": "v0.141.0"
+    "environmentd version": "v0.130.10"
+    "Release date": "2025-04-24"
+    "Notes": ""
+
+  - "Materialize Operator": "v25.1.8"
+    "orchestratord version": "v0.138.0"
+    "environmentd version": "v0.130.9"
+    "Release date": "2025-04-24"
+    "Notes": ""
+
   - "Materialize Operator": "v25.1.7"
     "orchestratord version": "v0.138.0"
     "environmentd version": "v0.130.8"

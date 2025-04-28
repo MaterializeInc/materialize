@@ -344,8 +344,8 @@ components:
    metadata_backend_url = <sensitive>
    nlb_details = [
      "demo" = {
-       "arn" = "arn:aws:elasticloadbalancing:us-east-1:000111222333:loadbalancer/net/demo/aeae3d936afebcfe"
-       "dns_name" = "demo-aeae3d936afebcfe.elb.us-east-1.amazonaws.com"
+       "arn" = "arn:aws:elasticloadbalancing:us-east-1:000111222333:loadbalancer/net/my-demo-dev/aeae3d936afebcfe"
+       "dns_name" = "my-demo-dev-aeae3d936afebcfe.elb.us-east-1.amazonaws.com"
      }
    ]
    oidc_provider_arn = "arn:aws:iam::000111222333:oidc-provider/oidc.eks.us-east-1.amazonaws.com/id/7D14BCA3A7AA896A836782D96A24F958"
