@@ -2348,9 +2348,9 @@ mod monoids {
         fn clone_from(&mut self, source: &Self) {
             use ReductionMonoid::*;
 
-            let mut row = match std::mem::replace(self, Max(Row::default())) {
+            let mut row = std::mem::take(match self {
                 Min(row) | Max(row) => row,
-            };
+            });
 
             let source_row = match source {
                 Min(row) | Max(row) => row,
