@@ -658,9 +658,10 @@ impl PendingWork {
                     } else {
                         let mut emit_time = *self.capability.time();
                         emit_time.0 = time;
-                        // Clone row so we retain our row allocation.
-                        session.give((Ok(row.clone()), emit_time, diff.into()));
-                        row_buf.replace(SourceData(Ok(row)));
+                        // Retain a right-sized allocation to avoid reallocations in the next
+                        // iteration.
+                        row_buf = Some(SourceData(Ok(Row::with_capacity(row.data_len()))));
+                        session.give((Ok(row), emit_time, diff.into()));
                         *work += 1;
                     }
                 }
