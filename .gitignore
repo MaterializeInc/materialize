@@ -39,6 +39,7 @@ services.log
 /temp
 test/scalability/results/**/*.csv
 test/scalability/results/**/*.png
+misc/mcp-server/dist
 misc/wasm/target
 parallel-benchmark.db
 license_key
