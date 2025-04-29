@@ -92,7 +92,7 @@ use bincode::Options;
 use itertools::Itertools;
 use mz_ore::cast::CastFrom;
 use mz_ore::error::ErrorExt;
-use mz_repr::Diff;
+use mz_repr::{Diff, GlobalId};
 use serde::{Serialize, de::DeserializeOwned};
 
 use crate::metrics::upsert::{UpsertMetrics, UpsertSharedMetrics};
@@ -683,7 +683,7 @@ impl<T: Eq, O: Default> StateValue<T, O> {
     /// Afterwards, if we need to retract one of these values, we need to assert that its in this correct state,
     /// then mutate it to its `Value` state, so the `upsert` operator can use it.
     #[allow(clippy::as_conversions)]
-    pub fn ensure_decoded(&mut self, bincode_opts: BincodeOpts) {
+    pub fn ensure_decoded(&mut self, bincode_opts: BincodeOpts, source_id: GlobalId) {
         match self {
             StateValue::Consolidating(consolidating) => {
                 match consolidating.diff_sum.0 {
@@ -691,8 +691,8 @@ impl<T: Eq, O: Default> StateValue<T, O> {
                         let len = usize::try_from(consolidating.len_sum.0)
                             .map_err(|_| {
                                 format!(
-                                    "len_sum can't be made into a usize, state: {}",
-                                    consolidating
+                                    "len_sum can't be made into a usize, state: {}, {}",
+                                    consolidating, source_id,
                                 )
                             })
                             .expect("invalid upsert state");
@@ -701,10 +701,11 @@ impl<T: Eq, O: Default> StateValue<T, O> {
                             .get(..len)
                             .ok_or_else(|| {
                                 format!(
-                                    "value_xor is not the same length ({}) as len ({}), state: {}",
+                                    "value_xor is not the same length ({}) as len ({}), state: {}, {}",
                                     consolidating.value_xor.len(),
                                     len,
-                                    consolidating
+                                    consolidating,
+                                    source_id,
                                 )
                             })
                             .expect("invalid upsert state");
@@ -713,8 +714,9 @@ impl<T: Eq, O: Default> StateValue<T, O> {
                             consolidating.checksum_sum.0,
                             // Hash the value, not the full buffer, which may have extra 0's
                             seahash::hash(value) as i64,
-                            "invalid upsert state: checksum_sum does not match, state: {}",
-                            consolidating
+                            "invalid upsert state: checksum_sum does not match, state: {}, {}",
+                            consolidating,
+                            source_id,
                         );
                         *self = Self::Value(Value::FinalizedValue(
                             bincode_opts.deserialize(value).unwrap(),
@@ -724,30 +726,31 @@ impl<T: Eq, O: Default> StateValue<T, O> {
                     0 => {
                         assert_eq!(
                             consolidating.len_sum.0, 0,
-                            "invalid upsert state: len_sum is non-0, state: {}",
-                            consolidating
+                            "invalid upsert state: len_sum is non-0, state: {}, {}",
+                            consolidating, source_id,
                         );
                         assert_eq!(
                             consolidating.checksum_sum.0, 0,
-                            "invalid upsert state: checksum_sum is non-0, state: {}",
-                            consolidating
+                            "invalid upsert state: checksum_sum is non-0, state: {}, {}",
+                            consolidating, source_id,
                         );
                         assert!(
                             consolidating.value_xor.iter().all(|&x| x == 0),
                             "invalid upsert state: value_xor not all 0s with 0 diff. \
-                            Non-zero positions: {:?}, state: {}",
+                            Non-zero positions: {:?}, state: {}, {}",
                             consolidating
                                 .value_xor
                                 .iter()
                                 .positions(|&x| x != 0)
                                 .collect::<Vec<_>>(),
-                            consolidating
+                            consolidating,
+                            source_id,
                         );
                         *self = Self::Value(Value::Tombstone(Default::default()));
                     }
                     other => panic!(
-                        "invalid upsert state: non 0/1 diff_sum: {}, state: {}",
-                        other, consolidating
+                        "invalid upsert state: non 0/1 diff_sum: {}, state: {}, {}",
+                        other, consolidating, source_id
                     ),
                 }
             }
@@ -1470,7 +1473,7 @@ mod tests {
         s.merge_update(longer_row, Diff::ONE, opts, &mut buf);
 
         // Assert that the `Consolidating` value is fully merged.
-        s.ensure_decoded(opts);
+        s.ensure_decoded(opts, GlobalId::User(1));
     }
 
     // We guard some of our assumptions. Increasing in-memory size of StateValue
@@ -1530,7 +1533,7 @@ mod tests {
         s.merge_update(longer_row.clone(), Diff::ONE, opts, &mut buf);
         s.merge_update(small_row.clone(), Diff::MINUS_ONE, opts, &mut buf);
 
-        s.ensure_decoded(opts);
+        s.ensure_decoded(opts, GlobalId::User(1));
     }
 
     #[mz_ore::test]
@@ -1549,7 +1552,7 @@ mod tests {
         s.merge_update(small_row.clone(), Diff::MINUS_ONE, opts, &mut buf);
         s.merge_update(longer_row.clone(), Diff::ONE, opts, &mut buf);
 
-        s.ensure_decoded(opts);
+        s.ensure_decoded(opts, GlobalId::User(1));
     }
 
     #[mz_ore::test]
@@ -1566,6 +1569,6 @@ mod tests {
         s.merge_update(small_row.clone(), Diff::MINUS_ONE, opts, &mut buf);
         s.merge_update(longer_row.clone(), Diff::ONE, opts, &mut buf);
 
-        s.ensure_decoded(opts);
+        s.ensure_decoded(opts, GlobalId::User(1));
     }
 }

@@ -561,6 +561,7 @@ async fn drain_staged_input<S, G, T, FromTime, E>(
     drain_style: DrainStyle<'_, T>,
     error_emitter: &mut E,
     state: &mut UpsertState<'_, S, T, Option<FromTime>>,
+    source_config: &crate::source::SourceExportCreationConfig,
 ) where
     S: UpsertStateBackend<T, Option<FromTime>>,
     G: Scope,
@@ -632,7 +633,7 @@ async fn drain_staged_input<S, G, T, FromTime, E>(
         let existing_value = &mut command_state.get_mut().value;
 
         if let Some(cs) = existing_value.as_mut() {
-            cs.ensure_decoded(bincode_opts);
+            cs.ensure_decoded(bincode_opts, source_config.id);
         }
 
         // Skip this command if its order key is below the one in the upsert state.
@@ -775,7 +776,7 @@ where
             state().await,
             upsert_shared_metrics,
             &upsert_metrics,
-            source_config.source_statistics,
+            source_config.source_statistics.clone(),
             upsert_config.shrink_upsert_unused_buffers_by_ratio,
         );
         let mut events = vec![];
@@ -931,6 +932,7 @@ where
                             DrainStyle::ToUpper(&upper),
                             &mut error_emitter,
                             &mut state,
+                            &source_config,
                         )
                         .await;
 
@@ -967,6 +969,7 @@ where
                     DrainStyle::AtTime(partial_drain_time),
                     &mut error_emitter,
                     &mut state,
+                    &source_config,
                 )
                 .await;
 
