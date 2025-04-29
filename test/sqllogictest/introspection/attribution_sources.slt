@@ -232,7 +232,7 @@ CREATE MATERIALIZED VIEW w AS
 statement ok
 SELECT mz_unsafe.mz_sleep(8)
 
-query TTI
+query TTI rowsort
 SELECT name, global_id, COUNT(lir_id)
 FROM mz_introspection.mz_mappable_objects LEFT JOIN mz_introspection.mz_lir_mapping
 USING (global_id)

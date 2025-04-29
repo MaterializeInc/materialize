@@ -52,7 +52,7 @@ foo_table  NULL
 statement ok
 COMMENT ON COLUMN a.y IS 'load_bearing';
 
-query TTT
+query TTT rowsort
 SELECT object_type, object_sub_id, comment FROM mz_internal.mz_comments WHERE id NOT LIKE 's%';
 ----
 table  NULL  foo_table
@@ -79,7 +79,7 @@ SHOW TABLES;
 ----
 a foo_table
 
-query TT
+query TT rowsort
 SELECT name, comment FROM (SHOW COLUMNS FROM a);
 ----
 x (empty)
@@ -92,14 +92,14 @@ CREATE TABLE b ( ts timestamptz );
 statement ok
 COMMENT ON COLUMN b.ts IS 'utc_timestamp';
 
-query TTT
+query TTT rowsort
 SELECT object_type, object_sub_id, comment FROM mz_internal.mz_comments WHERE id NOT LIKE 's%';
 ----
 table  NULL  foo_table
 table  2  load_bearing
 table  1  utc_timestamp
 
-query IT
+query IT rowsort
 SELECT objsubid, description FROM pg_description WHERE objoid >= 20000;
 ----
 0  foo_table
@@ -118,7 +118,7 @@ b foo_table
 statement ok
 DROP TABLE a;
 
-query TTT
+query TTT rowsort
 SELECT object_type, object_sub_id, comment FROM mz_internal.mz_comments WHERE id NOT LIKE 's%';
 ----
 table  NULL foo_table
@@ -200,7 +200,7 @@ SELECT name, comment FROM (SHOW VIEWS);
 ----
 c this_is_a_view
 
-query TT
+query TT rowsort
 SELECT name, comment FROM (SHOW COLUMNS FROM c);
 ----
 col_2 (empty)
@@ -212,7 +212,7 @@ SELECT object_type, object_sub_id, comment FROM mz_internal.mz_comments WHERE id
 view  1  this_works
 view  NULL  this_is_a_view
 
-query IT
+query IT rowsort
 SELECT objsubid, description FROM pg_description WHERE objoid >= 20000;
 ----
 1  this_works
@@ -237,7 +237,7 @@ SELECT name, comment FROM (SHOW COLUMNS FROM mv);
 ----
 x comment_mat_view_col
 
-query TTT
+query TTT rowsort
 SELECT object_type, object_sub_id, comment FROM mz_internal.mz_comments WHERE id NOT LIKE 's%';
 ----
 view  1  this_works
@@ -245,7 +245,7 @@ view  NULL  this_is_a_view
 materialized-view  NULL  mat_foo
 materialized-view  1  comment_mat_view_col
 
-query IT
+query IT rowsort
 SELECT objsubid, description FROM pg_description WHERE objoid >= 20000;
 ----
 0  mat_foo
@@ -253,7 +253,7 @@ SELECT objsubid, description FROM pg_description WHERE objoid >= 20000;
 0  this_is_a_view
 1  comment_mat_view_col
 
-query TTT
+query TTT rowsort
 SHOW OBJECTS
 ----
 c  view  this_is_a_view
@@ -298,7 +298,7 @@ CREATE CLUSTER comment_cluster REPLICAS (r1 (SIZE '1'), r2 (SIZE '1'));
 statement ok
 COMMENT ON CLUSTER comment_cluster IS 'careful_now';
 
-query TT
+query TT rowsort
 SELECT name, comment FROM (SHOW CLUSTERS);
 ----
 mz_probe  (empty)
@@ -334,7 +334,7 @@ COMMENT ON SOURCE my_webhook IS 'all_the_data';
 statement ok
 COMMENT ON COLUMN my_webhook.body IS 'json_blob';
 
-query TTT
+query TTT rowsort
 SELECT object_type, object_sub_id, comment FROM mz_internal.mz_comments WHERE id NOT LIKE 's%';
 ----
 source  1  json_blob
@@ -347,7 +347,7 @@ SELECT obj_description((SELECT oid FROM mz_sources WHERE name = 'my_webhook'), '
 ----
 all_the_data  json_blob
 
-query IT
+query IT rowsort
 SELECT objsubid, description FROM pg_description WHERE objoid >= 20000;
 ----
 1  json_blob
@@ -381,7 +381,7 @@ COMMENT ON TYPE custom_map_type IS 'custom_map_type_comment';
 statement error cannot be depended upon
 COMMENT ON COLUMN custom_map_type.key IS 'comment_on_key';
 
-query TT
+query TT rowsort
 SHOW TYPES;
 ----
 custom_map_type  custom_map_type_comment
@@ -403,7 +403,7 @@ COMMENT ON COLUMN custom_map_type.key IS 'comment_on_key';
 statement ok
 COMMENT ON TYPE custom_type IS 'custom_type_comment';
 
-query TTT
+query TTT rowsort
 SELECT object_type, object_sub_id, comment FROM mz_internal.mz_comments WHERE id NOT LIKE 's%';
 ----
 source   1      json_blob
@@ -435,7 +435,7 @@ COMMENT ON COLUMN custom_type.x IS 'custom_type_x_comment';
 statement ok
 COMMENT ON COLUMN custom_type.y IS 'custom_type_y_comment';
 
-query TTT
+query TTT rowsort
 SELECT object_type, object_sub_id, comment FROM mz_internal.mz_comments WHERE id NOT LIKE 's%';
 ----
 source   1      json_blob
@@ -446,7 +446,7 @@ type     NULL   custom_type_comment
 type     1      custom_type_x_comment
 type     2      custom_type_y_comment
 
-query IT
+query IT rowsort
 SELECT objsubid, description FROM pg_description WHERE objoid >= 20000;
 ----
 1 json_blob
@@ -456,7 +456,7 @@ SELECT objsubid, description FROM pg_description WHERE objoid >= 20000;
 1 custom_type_x_comment
 2 custom_type_y_comment
 
-query TTT
+query TTT rowsort
 SHOW OBJECTS
 ----
 custom_type  type  custom_type_comment
@@ -478,7 +478,7 @@ CREATE SECRET my_secret AS 'foobar';
 statement ok
 COMMENT ON SECRET my_secret IS 'supersecret';
 
-query TTT
+query TTT rowsort
 SELECT object_type, object_sub_id, comment FROM mz_internal.mz_comments WHERE id NOT LIKE 's%';
 ----
 secret NULL supersecret
@@ -487,7 +487,7 @@ type     NULL   custom_type_comment
 type     1      custom_type_x_comment
 type     2      custom_type_y_comment
 
-query IT
+query IT rowsort
 SELECT objsubid, description FROM pg_description WHERE objoid >= 20000;
 ----
 0  supercool_list
@@ -591,7 +591,7 @@ COMMENT ON ROLE teacher IS 'foo';
 ----
 COMPLETE 0
 
-query TTT
+query TTT rowsort
 SELECT object_type, object_sub_id, comment FROM mz_internal.mz_comments WHERE id NOT LIKE 's%';
 ----
 role NULL foo

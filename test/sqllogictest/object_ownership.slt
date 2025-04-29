@@ -2534,7 +2534,7 @@ GRANT SELECT ON v TO materialize;
 ----
 COMPLETE 0
 
-query TT
+query TT rowsort
 SELECT name, unnest(privileges)::text FROM mz_views WHERE name = 'v'
 ----
 v  mz_system=r/mz_system
@@ -2640,7 +2640,7 @@ GRANT SELECT ON v TO materialize;
 ----
 COMPLETE 0
 
-query TT
+query TT rowsort
 SELECT name, unnest(privileges)::text FROM mz_views WHERE name = 'v'
 ----
 v  mz_system=r/mz_system
@@ -2671,7 +2671,7 @@ query T
 SELECT name FROM mz_cluster_replicas WHERE name = 'replica1'
 ----
 
-query TT
+query TT rowsort
 SELECT name, unnest(privileges)::text FROM mz_views WHERE name = 'v'
 ----
 v  mz_system=r/mz_system

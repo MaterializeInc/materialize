@@ -102,7 +102,7 @@ quickstart  mz_system=UC/mz_system
 ### The materialize privilege comes from the views created above
 ### The mz_support privilege comes from the `_redacted`
 ### statement logging views.
-query T
+query T rowsort
 SELECT DISTINCT(privilege) FROM item_privileges WHERE type = 'view' OR type = 'materialized view' OR type = 'source'
 ----
 =r/mz_system
@@ -2436,7 +2436,7 @@ GRANT SELECT ON t1 TO joe, other
 ----
 COMPLETE 0
 
-query TT
+query TT rowsort
 SELECT name, privilege FROM item_privileges WHERE name = 't1'
 ----
 t1  joe=r/mz_system
@@ -2448,7 +2448,7 @@ GRANT SELECT, INSERT ON t1 TO test_role, other
 ----
 COMPLETE 0
 
-query TT
+query TT rowsort
 SELECT name, privilege FROM item_privileges WHERE name = 't1'
 ----
 t1  joe=r/mz_system
@@ -2461,7 +2461,7 @@ REVOKE INSERT ON t1 FROM joe, test_role, other
 ----
 COMPLETE 0
 
-query TT
+query TT rowsort
 SELECT name, privilege FROM item_privileges WHERE name = 't1'
 ----
 t1  joe=r/mz_system
@@ -2486,7 +2486,7 @@ GRANT ALL ON t1 TO joe, test_role
 ----
 COMPLETE 0
 
-query TT
+query TT rowsort
 SELECT name, privilege FROM item_privileges WHERE name = 't1'
 ----
 t1  joe=arwd/mz_system
@@ -2518,7 +2518,7 @@ GRANT ALL ON v1 TO joe
 ----
 COMPLETE 0
 
-query TT
+query TT rowsort
 SELECT name, privilege FROM item_privileges WHERE name = 'v1'
 ----
 v1  joe=r/mz_system
@@ -4697,7 +4697,7 @@ COMPLETE 0
 
 ## table_privileges
 
-simple conn=r1,user=r1
+simple conn=r1,user=r1,rowsort
 SELECT * FROM information_schema.table_privileges WHERE grantee != 'PUBLIC'
 ----
 r1,r1,materialize,public,mv,SELECT,NO,YES
@@ -4713,7 +4713,7 @@ SELECT COUNT(*) >= 166 FROM information_schema.table_privileges WHERE grantee = 
 t
 COMPLETE 1
 
-simple conn=mz_system,user=mz_system
+simple conn=mz_system,user=mz_system,rowsort
 SELECT * FROM information_schema.table_privileges WHERE grantee != 'PUBLIC' AND grantee != 'mz_system'
 ----
 r1,r1,materialize,public,mv,SELECT,NO,YES
@@ -4781,7 +4781,7 @@ COMPLETE 1
 
 ## role_table_grants
 
-simple conn=r1,user=r1
+simple conn=r1,user=r1,rowsort
 SELECT * FROM information_schema.role_table_grants
 ----
 r1,r1,materialize,public,mv,SELECT,NO,YES
@@ -4791,7 +4791,7 @@ materialize,r2,materialize,public,s,SELECT,NO,YES
 materialize,r2,materialize,public,v,SELECT,NO,YES
 COMPLETE 5
 
-simple conn=mz_system,user=mz_system
+simple conn=mz_system,user=mz_system,rowsort
 SELECT * FROM information_schema.role_table_grants WHERE grantee != 'PUBLIC' AND grantee != 'mz_system'
 ----
 r1,r1,materialize,public,mv,SELECT,NO,YES

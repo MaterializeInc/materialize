@@ -732,7 +732,7 @@ CREATE CLUSTER REPLICA t1.r123 SIZE '2', BILLED AS 'free'
 ----
 db error: ERROR: cannot modify managed cluster t1
 
-query TTTTT
+query TTTTT rowsort
 SELECT id, name, cluster_id, size, owner_id FROM mz_cluster_replicas WHERE cluster_id LIKE 'u%'
 ----
 u1  r1  u1  2  s1

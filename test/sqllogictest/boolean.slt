@@ -401,7 +401,7 @@ Target cluster: quickstart
 
 EOF
 
-query II
+query II rowsort
 SELECT *
 FROM z
 WHERE CASE WHEN a > b THEN FALSE ELSE TRUE END

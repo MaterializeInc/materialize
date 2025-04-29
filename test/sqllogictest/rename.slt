@@ -245,7 +245,7 @@ INSERT INTO grand_friend.t1 VALUES ('foo'), ('baz');
 statement ok
 CREATE SCHEMA c1;
 
-query TT
+query TT valuesort
 SELECT database_id, name FROM mz_schemas WHERE id LIKE 'u%';
 ----
 u1
@@ -267,7 +267,7 @@ CREATE VIEW c1.keys (aux_key) AS VALUES ('apple'), ('orange'), ('banana');
 statement ok
 CREATE VIEW c1.v1 AS (SELECT y FROM friend_again.v2 JOIN grand_friend.t1 ON materialize.friend_again.v2.y = materialize.grand_friend.t1.keys UNION ALL SELECT aux_key FROM c1.keys, b4.t);
 
-query T
+query T valuesort
 SELECT * FROM c1.v1;
 ----
 foo

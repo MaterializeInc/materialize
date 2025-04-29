@@ -182,7 +182,7 @@ ROLLBACK
 statement ok
 SET max_query_result_size = '8B';
 
-query error db error: ERROR: result exceeds max size of 8 B
+query error db error: ERROR: result exceeds max size of 8B
 SELECT generate_series(1, 1000000)
 
 statement ok

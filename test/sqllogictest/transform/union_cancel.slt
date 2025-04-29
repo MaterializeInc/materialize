@@ -221,7 +221,7 @@ Target cluster: quickstart
 
 EOF
 
-query II
+query II rowsort
 WITH t3_with_key AS (select f1 as key, sum(f2) as nokey from t3 group by f1)
 SELECT a1.* FROM t3_with_key AS a1 LEFT JOIN t3_with_key AS a2 ON (a1.key = a2.key)
 ----
@@ -243,7 +243,7 @@ Target cluster: quickstart
 
 EOF
 
-query II
+query II rowsort
 WITH t3_with_key AS (select f1 as key, sum(f2) as nokey from t3 group by f1)
 SELECT a1.* FROM t3 AS a1 LEFT JOIN t3_with_key AS a2 ON (a1.f1 = a2.key)
 ----
@@ -266,7 +266,7 @@ Target cluster: quickstart
 
 EOF
 
-query II
+query II rowsort
 WITH t3_with_key AS (select f1 as key, sum(f2) as nokey from t3 group by f1)
 SELECT a1.* FROM t3 AS a1 LEFT JOIN t3_with_key AS a2 ON (a1.f1 = a2.key or (a1.f1 is null and a2.key is null));
 ----

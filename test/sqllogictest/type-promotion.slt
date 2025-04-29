@@ -1739,7 +1739,7 @@ Target cluster: quickstart
 
 EOF
 
-query T
+query T rowsort
 (SELECT * FROM t1) UNION ALL (SELECT * FROM t3);
 ----
 ab

@@ -755,7 +755,7 @@ EXPLAIN OPTIMIZED PLAN WITH (humanized expressions) AS VERBOSE TEXT FOR CREATE M
 statement ok
 CREATE MATERIALIZED VIEW mv_on_commit WITH (REFRESH ON COMMIT) AS SELECT * FROM t2;
 
-query III
+query III rowsort
 SELECT 1000*x, 1000*y, 1000*z
 FROM mv_on_commit;
 ----
@@ -823,7 +823,7 @@ CREATE MATERIALIZED VIEW mv_greatest
 WITH (REFRESH AT greatest('1990-01-04 11:00', mz_now()))
 AS SELECT * FROM t2;
 
-query III
+query III rowsort
 SELECT * FROM mv_greatest;
 ----
 NULL  -1  -2
@@ -855,7 +855,7 @@ INSERT INTO t2 VALUES (100, 100, 100);
 # Query it.
 # - The query should block until the first refresh.
 # - The newly inserted stuff should be visible.
-query III
+query III rowsort
 SELECT * FROM mv_no_creation_refresh;
 ----
 NULL  -1  -2
@@ -886,7 +886,7 @@ CREATE MATERIALIZED VIEW mv_aligned_to_past
 WITH (REFRESH EVERY '10000 ms' ALIGNED TO mz_now()::text::int8 - 10*10000 + 3000)
 AS SELECT * FROM t2;
 
-query III
+query III rowsort
 SELECT * FROM mv_aligned_to_past;
 ----
 NULL  -1  -2
@@ -917,7 +917,7 @@ CREATE MATERIALIZED VIEW mv_aligned_to_future
 WITH (REFRESH EVERY '10000 ms' ALIGNED TO mz_now()::text::int8 + 10*10000 + 3000)
 AS SELECT * FROM t2;
 
-query III
+query III rowsort
 SELECT * FROM mv_aligned_to_future;
 ----
 NULL  -1  -2
@@ -977,7 +977,7 @@ WITH (REFRESH AT mz_now()::text::int8 + 2000, REFRESH AT mz_now()::text::int8 + 
 AS SELECT * FROM t2;
 
 # Wait until the first refresh
-query III
+query III rowsort
 SELECT * FROM mv3;
 ----
 NULL  -1  -2
@@ -998,7 +998,7 @@ statement ok
 INSERT INTO t2 VALUES (70, 70, 70);
 
 # We should be able to query the MV after the last refresh, and the newly inserted data shouldn't be visible.
-query III
+query III rowsort
 SELECT * FROM mv3;
 ----
 NULL  -1  -2
@@ -1045,7 +1045,7 @@ statement ok
 CREATE MATERIALIZED VIEW mv7 WITH (REFRESH AT mz_now()::text::int8 + 3000) AS
 SELECT * from mv6;
 
-query I
+query I rowsort
 SELECT * FROM mv7
 ----
 NULL
@@ -1062,7 +1062,7 @@ NULL
 statement ok
 INSERT INTO t2 VALUES (0, 0, 0);
 
-query I
+query I rowsort
 SELECT * FROM mv6
 ----
 NULL
@@ -1084,7 +1084,7 @@ CREATE MATERIALIZED VIEW mv_multiple_refresh_options WITH (
 SELECT DISTINCT 5*x FROM t2;
 
 # Should return quickly due to the creation refresh.
-query I
+query I rowsort
 SELECT * FROM mv_multiple_refresh_options;
 ----
 NULL
@@ -1570,7 +1570,7 @@ c_schedule_hydration_time_estimate  on-refresh  00:16:35
 statement ok
 SELECT mz_unsafe.mz_sleep(4);
 
-query TTTTBT
+query TTTTBT rowsort
 SELECT DISTINCT
   event_type,
   object_type,
@@ -1662,7 +1662,7 @@ SELECT replication_factor FROM mz_catalog.mz_clusters WHERE name = 'c_schedule_6
 1
 
 # The audit events should now have a row that has a non-empty `objects_needing_compaction`.
-query TTTTBT
+query TTTTBT rowsort
 SELECT DISTINCT
   event_type,
   object_type,

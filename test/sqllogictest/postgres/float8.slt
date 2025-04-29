@@ -141,7 +141,7 @@ SELECT f1::text FROM float8_tbl
 1.2345678901234e+200
 1.2345678901234e-200
 
-query T
+query T rowsort
 SELECT f.f1::text FROM float8_tbl f WHERE f.f1 <> '1004.3'
 ----
 0

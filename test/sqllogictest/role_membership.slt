@@ -34,46 +34,46 @@ CREATE ROLE joe
 statement ok
 CREATE ROLE group1
 
-query TTT
+query TTT rowsort
 SELECT * FROM role_members
 ----
 
-query B
+query B rowsort
 SELECT pg_has_role('joe', 'group1', 'USAGE')
 ----
 false
 
-query B
+query B rowsort
 SELECT has_role('joe', 'group1', 'USAGE')
 ----
 false
 
-query B
+query B rowsort
 SELECT pg_has_role((SELECT oid FROM mz_roles WHERE name = 'joe'), 'group1', 'USAGE')
 ----
 false
 
-query B
+query B rowsort
 SELECT has_role((SELECT oid FROM mz_roles WHERE name = 'joe'), 'group1', 'USAGE')
 ----
 false
 
-query B
+query B rowsort
 SELECT pg_has_role('joe', (SELECT oid FROM mz_roles WHERE name = 'group1'), 'USAGE')
 ----
 false
 
-query B
+query B rowsort
 SELECT has_role('joe', (SELECT oid FROM mz_roles WHERE name = 'group1'), 'USAGE')
 ----
 false
 
-query B
+query B rowsort
 SELECT pg_has_role((SELECT oid FROM mz_roles WHERE name = 'joe'), (SELECT oid FROM mz_roles WHERE name = 'group1'), 'USAGE')
 ----
 false
 
-query B
+query B rowsort
 SELECT has_role((SELECT oid FROM mz_roles WHERE name = 'joe'), (SELECT oid FROM mz_roles WHERE name = 'group1'), 'USAGE')
 ----
 false
@@ -81,47 +81,47 @@ false
 statement ok
 GRANT group1 TO joe
 
-query TTT
+query TTT rowsort
 SELECT * FROM role_members
 ----
 group1  joe  mz_system
 
-query B
+query B rowsort
 SELECT pg_has_role('joe', 'group1', 'USAGE')
 ----
 true
 
-query B
+query B rowsort
 SELECT has_role('joe', 'group1', 'USAGE')
 ----
 true
 
-query B
+query B rowsort
 SELECT pg_has_role((SELECT oid FROM mz_roles WHERE name = 'joe'), 'group1', 'USAGE')
 ----
 true
 
-query B
+query B rowsort
 SELECT has_role((SELECT oid FROM mz_roles WHERE name = 'joe'), 'group1', 'USAGE')
 ----
 true
 
-query B
+query B rowsort
 SELECT pg_has_role('joe', (SELECT oid FROM mz_roles WHERE name = 'group1'), 'USAGE')
 ----
 true
 
-query B
+query B rowsort
 SELECT has_role('joe', (SELECT oid FROM mz_roles WHERE name = 'group1'), 'USAGE')
 ----
 true
 
-query B
+query B rowsort
 SELECT pg_has_role((SELECT oid FROM mz_roles WHERE name = 'joe'), (SELECT oid FROM mz_roles WHERE name = 'group1'), 'USAGE')
 ----
 true
 
-query B
+query B rowsort
 SELECT has_role((SELECT oid FROM mz_roles WHERE name = 'joe'), (SELECT oid FROM mz_roles WHERE name = 'group1'), 'USAGE')
 ----
 true
@@ -132,19 +132,19 @@ DROP ROLE group1
 ----
 COMPLETE 0
 
-query TTT
+query TTT rowsort
 SELECT * FROM mz_role_members
 ----
 
 statement ok
 CREATE ROLE group1
 
-query B
+query B rowsort
 SELECT pg_has_role('joe', 'group1', 'USAGE')
 ----
 false
 
-query B
+query B rowsort
 SELECT has_role('joe', 'group1', 'USAGE')
 ----
 false
@@ -152,17 +152,17 @@ false
 statement ok
 GRANT group1 TO joe
 
-query TTT
+query TTT rowsort
 SELECT * FROM role_members
 ----
 group1  joe  mz_system
 
-query B
+query B rowsort
 SELECT pg_has_role('joe', 'group1', 'USAGE')
 ----
 true
 
-query B
+query B rowsort
 SELECT has_role('joe', 'group1', 'USAGE')
 ----
 true
@@ -174,7 +174,7 @@ DROP ROLE joe
 ----
 COMPLETE 0
 
-query TTT
+query TTT rowsort
 SELECT * FROM mz_role_members
 ----
 
@@ -192,38 +192,38 @@ GRANT group2 TO joe
 ----
 COMPLETE 0
 
-query TTT
+query TTT rowsort
 SELECT * FROM role_members
 ----
 group1  joe  mz_system
 group2  joe  mz_system
 
-query B
+query B rowsort
 SELECT pg_has_role('joe', 'group1', 'USAGE')
 ----
 true
 
-query B
+query B rowsort
 SELECT has_role('joe', 'group1', 'USAGE')
 ----
 true
 
-query B
+query B rowsort
 SELECT pg_has_role('joe', 'group2', 'USAGE')
 ----
 true
 
-query B
+query B rowsort
 SELECT has_role('joe', 'group2', 'USAGE')
 ----
 true
 
-query B
+query B rowsort
 SELECT pg_has_role('group1', 'group2', 'USAGE')
 ----
 false
 
-query B
+query B rowsort
 SELECT has_role('group1', 'group2', 'USAGE')
 ----
 false
@@ -231,39 +231,39 @@ false
 statement ok
 GRANT group2 TO group1
 
-query TTT
+query TTT rowsort
 SELECT * FROM role_members
 ----
 group1  joe     mz_system
 group2  joe     mz_system
 group2  group1  mz_system
 
-query B
+query B rowsort
 SELECT pg_has_role('joe', 'group1', 'USAGE')
 ----
 true
 
-query B
+query B rowsort
 SELECT has_role('joe', 'group1', 'USAGE')
 ----
 true
 
-query B
+query B rowsort
 SELECT pg_has_role('joe', 'group2', 'USAGE')
 ----
 true
 
-query B
+query B rowsort
 SELECT has_role('joe', 'group2', 'USAGE')
 ----
 true
 
-query B
+query B rowsort
 SELECT pg_has_role('group1', 'group2', 'USAGE')
 ----
 true
 
-query B
+query B rowsort
 SELECT has_role('group1', 'group2', 'USAGE')
 ----
 true
@@ -274,7 +274,7 @@ GRANT group1 TO joe
 ----
 COMPLETE 0
 
-query TTT
+query TTT rowsort
 SELECT * FROM role_members
 ----
 group1  joe     mz_system
@@ -292,68 +292,68 @@ GRANT joe TO group1
 statement ok
 REVOKE group1 FROM joe
 
-query TTT
+query TTT rowsort
 SELECT * FROM role_members
 ----
 group2  joe     mz_system
 group2  group1  mz_system
 
-query B
+query B rowsort
 SELECT pg_has_role('joe', 'group2', 'USAGE')
 ----
 true
 
-query B
+query B rowsort
 SELECT has_role('joe', 'group2', 'USAGE')
 ----
 true
 
-query B
+query B rowsort
 SELECT pg_has_role('joe', 'group1', 'USAGE')
 ----
 false
 
-query B
+query B rowsort
 SELECT has_role('joe', 'group1', 'USAGE')
 ----
 false
 
-query B
+query B rowsort
 SELECT pg_has_role('group1', 'joe', 'USAGE')
 ----
 false
 
-query B
+query B rowsort
 SELECT has_role('group1', 'joe', 'USAGE')
 ----
 false
 
-query B
+query B rowsort
 SELECT pg_has_role('group1', 'group2', 'USAGE')
 ----
 true
 
-query B
+query B rowsort
 SELECT has_role('group1', 'group2', 'USAGE')
 ----
 true
 
-query B
+query B rowsort
 SELECT pg_has_role('group2', 'joe', 'USAGE')
 ----
 false
 
-query B
+query B rowsort
 SELECT has_role('group2', 'joe', 'USAGE')
 ----
 false
 
-query B
+query B rowsort
 SELECT pg_has_role('group2', 'group1', 'USAGE')
 ----
 false
 
-query B
+query B rowsort
 SELECT has_role('group2', 'group1', 'USAGE')
 ----
 false
@@ -363,7 +363,7 @@ false
 statement ok
 REVOKE group1 FROM joe
 
-query TTT
+query TTT rowsort
 SELECT * FROM role_members
 ----
 group2  joe     mz_system
@@ -374,11 +374,11 @@ group2  group1  mz_system
 statement ok
 DROP ROLE group2
 
-query TTT
+query TTT rowsort
 SELECT * FROM mz_role_members
 ----
 
-query TTT
+query TTT rowsort
 SELECT * FROM role_members
 ----
 
@@ -387,7 +387,7 @@ SELECT * FROM role_members
 statement ok
 DROP ROLE joe
 
-query TTT
+query TTT rowsort
 SELECT * FROM role_members
 ----
 
@@ -429,12 +429,12 @@ statement ok
 DROP ROLE joe
 
 # SHOW ROLES/USERS
-query TT
+query TT rowsort
 show roles
 ----
 materialize (empty)
 
-query TT
+query TT rowsort
 show users
 ----
 materialize (empty)
@@ -456,21 +456,21 @@ CREATE ROLE group3
 statement error unknown role 'bob'
 GRANT group3 TO joe, group1, bob
 
-query TTT
+query TTT rowsort
 SELECT * FROM role_members
 ----
 
 statement error role name "mz_system" is reserved
 GRANT group3 TO joe, group1, mz_system
 
-query TTT
+query TTT rowsort
 SELECT * FROM role_members
 ----
 
 statement ok
 GRANT group3 TO joe, group1
 
-query TTT
+query TTT rowsort
 SELECT * FROM role_members
 ----
 group3  joe     mz_system
@@ -479,7 +479,7 @@ group3  group1  mz_system
 statement error role "joe" is a member of role "group3"
 GRANT joe TO group1, group3
 
-query TTT
+query TTT rowsort
 SELECT * FROM role_members
 ----
 group3  joe     mz_system
@@ -488,7 +488,7 @@ group3  group1  mz_system
 statement ok
 GRANT group3 TO group1, group2
 
-query TTT
+query TTT rowsort
 SELECT * FROM role_members
 ----
 group3  joe     mz_system
@@ -498,7 +498,7 @@ group3  group2  mz_system
 statement error unknown role 'bob'
 REVOKE group3 FROM joe, group1, bob
 
-query TTT
+query TTT rowsort
 SELECT * FROM role_members
 ----
 group3  joe     mz_system
@@ -508,7 +508,7 @@ group3  group2  mz_system
 statement error role name "mz_system" is reserved
 REVOKE group3 FROM joe, group1, mz_system
 
-query TTT
+query TTT rowsort
 SELECT * FROM role_members
 ----
 group3  joe     mz_system
@@ -518,7 +518,7 @@ group3  group2  mz_system
 statement ok
 REVOKE group3 FROM joe, group1
 
-query TTT
+query TTT rowsort
 SELECT * FROM role_members
 ----
 group3  group2  mz_system
@@ -526,7 +526,7 @@ group3  group2  mz_system
 statement ok
 REVOKE group3 FROM joe, group2
 
-query TTT
+query TTT rowsort
 SELECT * FROM role_members
 ----
 
@@ -538,12 +538,12 @@ GRANT group3 TO joe, group1, group2
 statement ok
 GRANT group1 TO joe
 
-query I
+query I rowsort
 SELECT COUNT(*) FROM pg_auth_members
 ----
 4
 
-query TTTB
+query TTTB rowsort
 SELECT role.name, member.name, grantor.name, members.admin_option
 FROM pg_auth_members members
 LEFT JOIN mz_roles role ON members.roleid = role.oid
@@ -573,7 +573,7 @@ CREATE ROLE group2
 statement ok
 GRANT group1, group2 TO joe, mike
 
-query TTTB
+query TTTB rowsort
 SELECT role.name, member.name, grantor.name, members.admin_option
 FROM pg_auth_members members
 LEFT JOIN mz_roles role ON members.roleid = role.oid
@@ -588,7 +588,7 @@ group2  mike    mz_system  false
 statement ok
 REVOKE group1, group2 FROM joe, mike
 
-query TTTB
+query TTTB rowsort
 SELECT role.name, member.name, grantor.name, members.admin_option
 FROM pg_auth_members members
 LEFT JOIN mz_roles role ON members.roleid = role.oid
@@ -638,62 +638,62 @@ GRANT group1 to other;
 ----
 COMPLETE 0
 
-query B
+query B rowsort
 SELECT pg_has_role('joe', 'group2', 'USAGE')
 ----
 true
 
-query B
+query B rowsort
 SELECT has_role('joe', 'group2', 'USAGE')
 ----
 true
 
-query B
+query B rowsort
 SELECT pg_has_role('joe', 'group1', 'USAGE')
 ----
 true
 
-query B
+query B rowsort
 SELECT has_role('joe', 'group1', 'USAGE')
 ----
 true
 
-query B
+query B rowsort
 SELECT pg_has_role('group1', 'joe', 'USAGE')
 ----
 false
 
-query B
+query B rowsort
 SELECT has_role('group1', 'joe', 'USAGE')
 ----
 false
 
-query B
+query B rowsort
 SELECT pg_has_role('group1', 'group2', 'USAGE')
 ----
 true
 
-query B
+query B rowsort
 SELECT has_role('group1', 'group2', 'USAGE')
 ----
 true
 
-query B
+query B rowsort
 SELECT pg_has_role('group2', 'joe', 'USAGE')
 ----
 false
 
-query B
+query B rowsort
 SELECT has_role('group2', 'joe', 'USAGE')
 ----
 false
 
-query B
+query B rowsort
 SELECT pg_has_role('group2', 'group1', 'USAGE')
 ----
 false
 
-query B
+query B rowsort
 SELECT has_role('group2', 'group1', 'USAGE')
 ----
 false
@@ -710,22 +710,22 @@ CREATE ROLE group1;
 ----
 COMPLETE 0
 
-query B
+query B rowsort
 SELECT pg_has_role('group1', 'USAGE')
 ----
 false
 
-query B
+query B rowsort
 SELECT has_role('group1', 'USAGE')
 ----
 false
 
-query B
+query B rowsort
 SELECT pg_has_role('group1', 'MEMBER')
 ----
 false
 
-query B
+query B rowsort
 SELECT has_role('group1', 'MEMBER')
 ----
 false
@@ -735,22 +735,22 @@ GRANT group1 TO materialize
 ----
 COMPLETE 0
 
-query B
+query B rowsort
 SELECT pg_has_role('group1', 'USAGE')
 ----
 true
 
-query B
+query B rowsort
 SELECT has_role('group1', 'USAGE')
 ----
 true
 
-query B
+query B rowsort
 SELECT pg_has_role('group1', 'MEMBER')
 ----
 true
 
-query B
+query B rowsort
 SELECT has_role('group1', 'MEMBER')
 ----
 true
@@ -760,22 +760,22 @@ REVOKE group1 FROM materialize
 ----
 COMPLETE 0
 
-query B
+query B rowsort
 SELECT pg_has_role('group1', 'USAGE')
 ----
 false
 
-query B
+query B rowsort
 SELECT has_role('group1', 'USAGE')
 ----
 false
 
-query B
+query B rowsort
 SELECT pg_has_role('group1', 'MEMBER')
 ----
 false
 
-query B
+query B rowsort
 SELECT has_role('group1', 'MEMBER')
 ----
 false
@@ -789,32 +789,32 @@ COMPLETE 0
 
 ## If any input is NULL then the result is NULL.
 
-query B
+query B rowsort
 SELECT pg_has_role(NULL, 'materialize', 'USAGE')
 ----
 NULL
 
-query B
+query B rowsort
 SELECT has_role(NULL, 'materialize', 'USAGE')
 ----
 NULL
 
-query B
+query B rowsort
 SELECT pg_has_role('materialize', NULL, 'MEMBER')
 ----
 NULL
 
-query B
+query B rowsort
 SELECT has_role('materialize', NULL, 'MEMBER')
 ----
 NULL
 
-query B
+query B rowsort
 SELECT pg_has_role('materialize', 'materialize', NULL)
 ----
 NULL
 
-query B
+query B rowsort
 SELECT has_role('materialize', 'materialize', NULL)
 ----
 NULL
@@ -832,22 +832,22 @@ SELECT pg_has_role('materialize', 'materialize', 'fake privilege')
 
 ## If any of the oid inputs are invalid then the query should be false.
 
-query B
+query B rowsort
 SELECT pg_has_role(((SELECT MAX(oid::int8) FROM mz_roles) + 1)::text::oid, 'materialize', 'MEMBER')
 ----
 false
 
-query B
+query B rowsort
 SELECT has_role(((SELECT MAX(oid::int8) FROM mz_roles) + 1)::text::oid, 'materialize', 'MEMBER')
 ----
 false
 
-query B
+query B rowsort
 SELECT pg_has_role('materialize', ((SELECT MAX(oid::int8) FROM mz_roles) + 1)::text::oid, 'USAGE')
 ----
 false
 
-query B
+query B rowsort
 SELECT has_role('materialize', ((SELECT MAX(oid::int8) FROM mz_roles) + 1)::text::oid, 'USAGE')
 ----
 false
@@ -906,7 +906,7 @@ r2
 r3
 COMPLETE 3
 
-simple conn=mz_system,user=mz_system
+simple conn=mz_system,user=mz_system,rowsort
 SELECT * FROM information_schema.enabled_roles
 ----
 r1

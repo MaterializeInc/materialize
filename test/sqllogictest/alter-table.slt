@@ -429,7 +429,7 @@ ALTER TABLE t2 ADD COLUMN c timestamp;
 statement ok
 COMMENT ON COLUMN t2.c IS 'added later';
 
-query TTIT
+query TTIT rowsort
 SELECT * FROM mz_internal.mz_comments WHERE id = 'u1';
 ----
 u1  table  3  added␠later

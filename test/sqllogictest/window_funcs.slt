@@ -1483,7 +1483,7 @@ FROM (SELECT DISTINCT f1, f2 FROM t) q
 1  2
 3  12
 
-query II
+query II rowsort
 SELECT f1, lag(f1 * f2, f1 - 1) OVER (PARTITION BY f1, f2)
 FROM (SELECT DISTINCT f1, f2 FROM t) q
 ----
@@ -7165,7 +7165,7 @@ Target cluster: quickstart
 
 EOF
 
-query I
+query I rowsort
 SELECT
   lag(x,y,100) OVER (PARTITION BY x ORDER BY y+y)
 FROM t9;
@@ -7180,7 +7180,7 @@ NULL
 100
 100
 
-query I
+query I rowsort
 SELECT
   lead(x,y-2,120) OVER (PARTITION BY x ORDER BY x)
 FROM t9;
@@ -7926,7 +7926,7 @@ QUALIFY row_number() OVER (PARTITION BY x%3 ORDER BY y) = 1;
 5  6
 15  16
 
-query IIII
+query IIII rowsort
 SELECT *, x%3, row_number() OVER (PARTITION BY x%3 ORDER BY y)
 FROM t6
 QUALIFY row_number() OVER (PARTITION BY x%3 ORDER BY y) = 1;

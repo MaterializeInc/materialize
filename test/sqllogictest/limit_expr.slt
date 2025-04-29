@@ -345,7 +345,7 @@ EOF
 
 # A chain of lateral queries with different complex LIMIT expressions.
 # Result:
-query TTT
+query TTT rowsort
 SELECT s.state, c1.name, c2.name FROM
     (SELECT DISTINCT state FROM cities) s,
     LATERAL (SELECT name FROM cities c WHERE state = s.state LIMIT mod(length(s.state), 3)) c1,
@@ -432,7 +432,7 @@ Target cluster: quickstart
 EOF
 
 # Limit NULL produces all results.
-query TT
+query TT rowsort
 SELECT s.state, c.name FROM
     (SELECT DISTINCT state FROM cities) s,
     LATERAL (SELECT name FROM cities c LIMIT NULL) c;

@@ -119,7 +119,7 @@ SELECT substr('hello', 0/0, 3)
 
 # standard tests
 
-query T colnames
+query T colnames,rowsort
 SELECT to_jsonb(strcol) as strcol FROM substrtest
 ----
 strcol

@@ -308,7 +308,7 @@ Target cluster: quickstart
 
 EOF
 
-query II
+query II rowsort
 SELECT (SELECT * FROM t1 WHERE t1.f1 = t2.f1 + 1) , (SELECT * FROM t1 WHERE t1.f1 = t2.f1 + 2) FROM t2
 ----
 NULL NULL
@@ -850,7 +850,7 @@ Target cluster: quickstart
 
 EOF
 
-query II
+query II rowsort
 SELECT
 	(SELECT * FROM t1 WHERE t1.f1 = t2.f1 AND t1.f1 = t3.f1),
 	(SELECT * FROM t1 WHERE t1.f1 = t2.f1 AND t1.f1 = t3.f1)
