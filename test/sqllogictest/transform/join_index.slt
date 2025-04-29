@@ -322,18 +322,18 @@ Target cluster: quickstart
 
 EOF
 
-query III
+mode cockroach
+
+query III rowsort
 select foo.b, bar.b, baz.b
 FROM bar, foo, baz
 where foo.a = bar.a
   and bar.a + 4 = baz.a
 ----
-4
-NULL
-0
-2
-3
-2
+4 NULL 0
+2 3 2
+
+mode standard
 
 # tests that equalities involving multi-input equalities become join conditions.
 
@@ -358,13 +358,15 @@ Target cluster: quickstart
 
 EOF
 
-query II
+mode cockroach
+
+query II rowsort
 select foo.b, bar.b from foo, bar, (select 1 as a) const where foo.a / bar.a = const.a
 ----
-4
-NULL
-2
-3
+4 NULL
+2 3
+
+ mode standard
 
 query T multiline
 EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, arity, join implementations) AS VERBOSE TEXT FOR
@@ -440,18 +442,18 @@ Target cluster: quickstart
 
 EOF
 
-query III
+mode cockroach
+
+query III rowsort
 select foo.b, bar.b, baz.b
 FROM bar, foo, baz
 where foo.a = bar.a
   and bar.a + 4 = baz.a
 ----
-4
-NULL
-0
-2
-3
-2
+4 NULL 0
+2 3 2
+
+mode standard
 
 statement ok
 CREATE TABLE t1 (f1 DOUBLE PRECISION, f2 DOUBLE PRECISION NOT NULL);

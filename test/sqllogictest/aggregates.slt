@@ -71,7 +71,7 @@ SELECT a + 1 FROM t GROUP BY a + 1 HAVING sum(b) = 3
 2
 3
 
-query II
+query II rowsort
 SELECT t1.a, (SELECT t2.a FROM t t2 WHERE t2.b = 2 AND t1.b = t2.b GROUP BY t2.a) FROM t t1;
 ----
 1 NULL

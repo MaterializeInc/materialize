@@ -114,7 +114,7 @@ CREATE CLUSTER foo REPLICAS ( weewoo1 (SIZE = '1') );
 statement ok
 ALTER CLUSTER REPLICA foo.weewoo1 RENAME TO weewoo2;
 
-query TTT
+query TTT rowsort
 SELECT id, previous_name, new_name FROM mz_internal.mz_cluster_replica_name_history WHERE new_name = 'weewoo1' OR new_name = 'weewoo2';
 ----
 u2  NULL  weewoo1

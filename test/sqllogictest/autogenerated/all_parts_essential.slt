@@ -345,7 +345,7 @@ Target cluster: quickstart
 EOF
 
 
-query IIII
+query IIII valuesort
 SELECT l_quantity * l_extendedprice,
        c_nationkey,
        MAX(l_linenumber),
@@ -361,7 +361,8 @@ WHERE c_acctbal <= l_extendedprice
 GROUP BY 1,
          2
 ----
-52 values hashing to 4e4afdc4bb20f0010546172d79444057
+52 values hashing to 01070c9bba39135ea979d3cb794ef48a
+
 
 
 query T multiline
@@ -409,7 +410,7 @@ Target cluster: quickstart
 EOF
 
 
-query II
+query II valuesort
 SELECT o_orderkey,
        l_quantity
 FROM lineitem
@@ -418,7 +419,8 @@ WHERE l_commitDATE >= '1998-03-22'
   AND l_orderkey BETWEEN 59 AND 95 + 5
   OR l_receiptDATE = o_orderdate
 ----
-32 values hashing to ec8074554bd06af7be96411043391bed
+32 values hashing to 0b856148acc0ae8e03776d5d7c2f7521
+
 
 
 query T multiline
@@ -661,7 +663,7 @@ Target cluster: quickstart
 EOF
 
 
-query III
+query III valuesort
 SELECT c_nationkey,
        MAX(l_suppkey),
        MAX(o_orderkey)
@@ -673,7 +675,8 @@ WHERE o_orderkey BETWEEN 117 AND 165 + 124
   AND l_orderkey BETWEEN 62 AND 126 + 154
 GROUP BY 1
 ----
-27 values hashing to 5990c609ef0c343e4cc5c941b12002d1
+27 values hashing to 3b3d73b9b18547300a7b2981ff7f07c8
+
 
 
 

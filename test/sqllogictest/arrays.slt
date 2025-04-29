@@ -1096,7 +1096,7 @@ SELECT array_position(ARRAY[['mon']]::text[], 'mon', null)
 
 # multi-dimensional arrays
 # how else can we handle whitespace terminals in strings?
-query T
+query T rowsort
 SELECT
     concat_ws(
         E'\t',
@@ -1175,7 +1175,7 @@ end
 {{{{b},{b}}},{{{b},{b}}},{{{b},{b}}}}	3	1	2	1	b	end
 
 # Test that whitespace produces same results
-query T
+query T rowsort
 SELECT
     concat_ws(
         E'\t',

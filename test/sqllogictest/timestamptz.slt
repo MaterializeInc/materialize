@@ -7,6 +7,8 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
+mode cockroach
+
 # bin_date
 simple conn=mz_system,user=mz_system
 ALTER SYSTEM SET enable_binary_date_bin = true
@@ -14,71 +16,53 @@ ALTER SYSTEM SET enable_binary_date_bin = true
 COMPLETE 0
 
 # case 1: AD dates, origin < input
-query TTT
+query TTT rowsort
 SELECT
   str,
   "interval",
   date_trunc(str, ts) = date_bin("interval"::interval, ts, timestamptz '2001-01-01') AS equal
 FROM (
   VALUES
-  ('week', '7 d'),
-  ('day', '1 d'),
-  ('hour', '1 h'),
-  ('minute', '1 m'),
-  ('second', '1 s')
+  ('week', '7d'),
+  ('day', '1d'),
+  ('hour', '1h'),
+  ('minute', '1m'),
+  ('second', '1s')
 ) intervals (str, interval),
 (VALUES (timestamptz '2020-02-29 15:44:17.71393+00')) ts (ts);
 ----
-day
-1 d
-true
-hour
-1 h
-true
-week
-7 d
-true
-minute
-1 m
-true
-second
-1 s
-true
+day 1d true
+hour 1h true
+week 7d true
+minute 1m true
+second 1s true
+
 
 # case 3: AD dates, origin > input
-query TTT
+query TTT rowsort
 SELECT
   str,
   "interval",
   date_trunc(str, ts) = date_bin("interval"::interval, ts, timestamptz '2020-03-02') AS equal
 FROM (
   VALUES
-  ('week', '7 d'),
-  ('day', '1 d'),
-  ('hour', '1 h'),
-  ('minute', '1 m'),
-  ('second', '1 s')
+  ('week', '7d'),
+  ('day', '1d'),
+  ('hour', '1h'),
+  ('minute', '1m'),
+  ('second', '1s')
 ) intervals (str, interval),
 (VALUES (timestamptz '2020-02-29 15:44:17.71393+00')) ts (ts);
 ----
-day
-1 d
-true
-hour
-1 h
-true
-week
-7 d
-true
-minute
-1 m
-true
-second
-1 s
-true
+day 1d true
+hour 1h true
+week 7d true
+minute 1m true
+second 1s true
+
 
 # bin timestamps into arbitrary intervals
-query TT
+query TT rowsort
 SELECT
   "interval",
   date_bin("interval"::interval, ts, origin)
@@ -93,16 +77,11 @@ FROM (
 (VALUES (timestamptz '2020-02-11 15:44:17.71393+00')) ts (ts),
 (VALUES (timestamptz '2001-01-01')) origin (origin);
 ----
-15 days
-2020-02-06 00:00:00+00
-2 hours
-2020-02-11 14:00:00+00
-10 seconds
-2020-02-11 15:44:10+00
-15 minutes
-2020-02-11 15:30:00+00
-1 hour 30 minutes
-2020-02-11 15:00:00+00
+15␠days 2020-02-06␠00:00:00+00
+2␠hours 2020-02-11␠14:00:00+00
+10␠seconds 2020-02-11␠15:44:10+00
+15␠minutes 2020-02-11␠15:30:00+00
+1␠hour␠30␠minutes 2020-02-11␠15:00:00+00
 
 # shift bins using the origin parameter:
 query T
@@ -134,7 +113,7 @@ query error source and origin must not differ more than 2\^63 nanoseconds
 SELECT date_bin('1m', timestamptz '2262-04-11 23:47:17+00');
 
 # Test unintuitive day binning
-query TT
+query TT rowsort
 SELECT
     "interval",
     date_bin("interval"::interval, timestamptz '2020-02-27 15:44:17.71393+00', timestamptz '2001-01-01')
@@ -145,27 +124,18 @@ FROM (
     ('7d'), ('8d'), ('9d')
 ) intervals ("interval");
 ----
-1d
-2020-02-27 00:00:00+00
-2d
-2020-02-27 00:00:00+00
-3d
-2020-02-27 00:00:00+00
-4d
-2020-02-27 00:00:00+00
-5d
-2020-02-26 00:00:00+00
-6d
-2020-02-27 00:00:00+00
-7d
-2020-02-24 00:00:00+00
-8d
-2020-02-23 00:00:00+00
-9d
-2020-02-24 00:00:00+00
+1d 2020-02-27␠00:00:00+00
+2d 2020-02-27␠00:00:00+00
+3d 2020-02-27␠00:00:00+00
+4d 2020-02-27␠00:00:00+00
+5d 2020-02-26␠00:00:00+00
+6d 2020-02-27␠00:00:00+00
+7d 2020-02-24␠00:00:00+00
+8d 2020-02-23␠00:00:00+00
+9d 2020-02-24␠00:00:00+00
 
 # Test that binary extension behaves as expected
-query TT
+query TT rowsort
 SELECT
   "interval",
   date_bin("interval"::interval, ts) = date_bin("interval"::interval, ts, timestamptz '1970-01-01') AS equal
@@ -179,16 +149,11 @@ FROM (
 ) intervals (interval),
 (VALUES (timestamptz '2020-02-29 15:44:17.71393+00')) ts (ts);
 ----
-15 days
-true
-2 hours
-true
-10 seconds
-true
-15 minutes
-true
-1 hour 30 minutes
-true
+15␠days true
+2␠hours true
+10␠seconds true
+15␠minutes true
+1␠hour␠30␠minutes true
 
 query error timestamp out of range
 select timezone('1 day'::interval, '1-12-31'::timestamptz+'262141 years'::interval)

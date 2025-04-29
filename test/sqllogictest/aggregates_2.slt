@@ -19,7 +19,7 @@ CREATE TABLE t (
 statement ok
 INSERT INTO t VALUES (1, '10', 'x'), (2, '20', NULL), (3, '30', NULL), (4, '40', 'x'), (5, '50a', 'x'), (5, '50b', 'y'), (5, '50c', 'z');
 
-query TT
+query TT rowsort
 SELECT a, array_agg(b) FROM t GROUP BY a;
 ----
 1  {10}
@@ -29,7 +29,7 @@ SELECT a, array_agg(b) FROM t GROUP BY a;
 5  {50a,50b,50c}
 
 
-query TTT
+query TTT rowsort
 SELECT a, array_agg(b), array_agg(c) FROM t GROUP BY a;
 ----
 2  {20}  {NULL}
@@ -39,7 +39,7 @@ SELECT a, array_agg(b), array_agg(c) FROM t GROUP BY a;
 5  {50a,50b,50c}  {x,y,z}
 
 
-query TTT
+query TTT rowsort
 SELECT a, array_agg(b), string_agg(c, ',') FROM t GROUP BY a;
 ----
 2  {20}  NULL
@@ -49,7 +49,7 @@ SELECT a, array_agg(b), string_agg(c, ',') FROM t GROUP BY a;
 5  {50a,50b,50c}  x,y,z
 
 
-query TTT
+query TTT rowsort
 SELECT a, array_agg(b), string_agg(c, ',' ORDER BY b DESC) FROM t GROUP BY a;
 ----
 2  {20}  NULL
@@ -59,19 +59,19 @@ SELECT a, array_agg(b), string_agg(c, ',' ORDER BY b DESC) FROM t GROUP BY a;
 5  {50a,50b,50c}  z,y,x
 
 
-query TTT
+query TTT rowsort
 SELECT a, array_agg(b), max(c) FROM t WHERE c <> 'x' GROUP BY a;
 ----
 5  {50b,50c}  z
 
 
-query TTT
+query TTT rowsort
 SELECT a, array_agg(b), max(b) FROM t GROUP BY a HAVING count(a) > 1;
 ----
 5  {50a,50b,50c}  50c
 
 
-query TTT
+query TTT rowsort
 SELECT a, min(b), max(b) FROM t GROUP BY a;
 ----
 1  10  10
@@ -81,7 +81,7 @@ SELECT a, min(b), max(b) FROM t GROUP BY a;
 5  50a  50c
 
 
-query TTT
+query TTT rowsort
 SELECT a, array_agg(b ORDER BY b ASC), array_agg(b ORDER BY b DESC) FROM t GROUP BY a;
 ----
 1  {10}  {10}
@@ -91,13 +91,13 @@ SELECT a, array_agg(b ORDER BY b ASC), array_agg(b ORDER BY b DESC) FROM t GROUP
 5  {50a,50b,50c}  {50c,50b,50a}
 
 
-query TTT
+query TTT rowsort
 SELECT array_agg(b ORDER BY b ASC), array_agg(b ORDER BY b DESC), bool_or(b IS NOT NULL) FROM t;
 ----
 {10,20,30,40,50a,50b,50c}  {50c,50b,50a,40,30,20,10}  true
 
 
-query TTT
+query TTT rowsort
 SELECT t1.a, array_agg(t1.c), array_agg(t2.c) FROM t t1 INNER JOIN t t2 ON t1.c = t2.c WHERE t1.c IS NOT NULL GROUP BY t1.a;
 ----
 1  {x,x,x}  {x,x,x}
@@ -105,13 +105,13 @@ SELECT t1.a, array_agg(t1.c), array_agg(t2.c) FROM t t1 INNER JOIN t t2 ON t1.c 
 5  {x,x,x,y,z}  {x,x,x,y,z}
 
 
-query TTTT
+query TTTT rowsort
 SELECT sum(a), jsonb_agg(b), array_agg(b), array_agg(b) FROM t;
 ----
 25  ["10","20","30","40","50a","50b","50c"]  {10,20,30,40,50a,50b,50c}  {10,20,30,40,50a,50b,50c}
 
 
-query TT
+query TT rowsort
 SELECT a, array_agg(b ORDER BY b) FROM t GROUP BY a HAVING array_agg(b ORDER BY b) = array_agg(b ORDER BY b DESC);
 ----
 1  {10}
@@ -120,7 +120,7 @@ SELECT a, array_agg(b ORDER BY b) FROM t GROUP BY a HAVING array_agg(b ORDER BY 
 4  {40}
 
 
-query TTT
+query TTT rowsort
 SELECT a, array_agg(b), array_agg(sha256(b::BYTEA)) FROM t GROUP BY a;
 ----
 1  {10}  {"\\x4a44dc15364204a80fe80e9039455cc1608281820fe2b24f1e5233ade6af1dd5"}
@@ -130,7 +130,7 @@ SELECT a, array_agg(b), array_agg(sha256(b::BYTEA)) FROM t GROUP BY a;
 5  {50a,50b,50c}  {"\\x189a55d80e074ffaacb282b6f9b51dcc1152a4e3f365a09d086347cbddcbb49b","\\xb3aecad3a43c511942fac3629ec9d191ff86961285d711875822721a1b676cd9","\\xb7abe8e9eedafe78353d0d3c6d837e1295b727f2ce3e220b4271b25a3b2e347b"}
 
 
-query TTT
+query TTT rowsort
 SELECT a, array_agg(b), array_agg(CASE WHEN a = 1 THEN 'ooo' ELSE b END) FROM t GROUP BY a;
 ----
 2  {20}  {20}
@@ -140,7 +140,7 @@ SELECT a, array_agg(b), array_agg(CASE WHEN a = 1 THEN 'ooo' ELSE b END) FROM t 
 5  {50a,50b,50c}  {50a,50b,50c}
 
 
-query TTT
+query TTT rowsort
 SELECT a, dense_rank() OVER (ORDER BY a), array_agg(b) FROM t GROUP BY a;
 ----
 1  1  {10}

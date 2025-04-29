@@ -235,7 +235,7 @@ SELECT MAP(SELECT * FROM mlt WHERE t > 'a' ORDER BY y DESC)::text;
 ----
 {b=>8,c=>10}
 
-query T
+query T rowsort
 SELECT MAP(SELECT * FROM mlt WHERE mlt.t > mlt_outer.t)::text
 FROM mlt AS mlt_outer;
 ----
@@ -244,7 +244,7 @@ FROM mlt AS mlt_outer;
 {c=>11}
 {b=>8,c=>11}
 
-query TII
+query TII rowsort
 SELECT list_agg(t)::text, min(y), max(y)
 FROM mlt AS mlt_outer
 GROUP BY MAP(SELECT * FROM mlt WHERE mlt.t < mlt_outer.t);
