@@ -306,7 +306,9 @@ impl Coordinator {
         let mut out = None;
 
         let uuid = match logging {
-            PreparedStatementLoggingInfo::AlreadyLogged { uuid } => *uuid,
+            PreparedStatementLoggingInfo::AlreadyLogged { uuid: _ } => {
+                epoch_to_uuid_v7(&(self.now()))
+            }
             PreparedStatementLoggingInfo::StillToLog {
                 sql,
                 redacted_sql,
