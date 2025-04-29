@@ -755,7 +755,16 @@ where
         let existing_state_cell = &mut command_state.get_mut().value;
 
         if let Some(cs) = existing_state_cell.as_mut() {
-            cs.ensure_decoded(bincode_opts, source_config.id);
+            if let Err(err) = cs.ensure_decoded(bincode_opts) {
+                mz_ore::soft_panic_or_log!(
+                    "invalid upsert state {}, err: {}",
+                    source_config.id,
+                    err
+                );
+                error_emitter
+                    .emit("invalid upsert state".to_string(), err)
+                    .await;
+            }
         }
 
         // Skip this command if its order key is below the one in the upsert state.

@@ -92,7 +92,7 @@ use bincode::Options;
 use itertools::Itertools;
 use mz_ore::cast::CastFrom;
 use mz_ore::error::ErrorExt;
-use mz_repr::{Diff, GlobalId};
+use mz_repr::Diff;
 use serde::{Serialize, de::DeserializeOwned};
 
 use crate::metrics::upsert::{UpsertMetrics, UpsertSharedMetrics};
@@ -683,79 +683,79 @@ impl<T: Eq, O: Default> StateValue<T, O> {
     /// Afterwards, if we need to retract one of these values, we need to assert that its in this correct state,
     /// then mutate it to its `Value` state, so the `upsert` operator can use it.
     #[allow(clippy::as_conversions)]
-    pub fn ensure_decoded(&mut self, bincode_opts: BincodeOpts, source_id: GlobalId) {
+    pub fn ensure_decoded(&mut self, bincode_opts: BincodeOpts) -> Result<(), anyhow::Error> {
         match self {
             StateValue::Consolidating(consolidating) => {
                 match consolidating.diff_sum.0 {
                     1 => {
-                        let len = usize::try_from(consolidating.len_sum.0)
-                            .map_err(|_| {
-                                format!(
-                                    "len_sum can't be made into a usize, state: {}, {}",
-                                    consolidating, source_id,
-                                )
-                            })
-                            .expect("invalid upsert state");
-                        let value = &consolidating
-                            .value_xor
-                            .get(..len)
-                            .ok_or_else(|| {
-                                format!(
-                                    "value_xor is not the same length ({}) as len ({}), state: {}, {}",
-                                    consolidating.value_xor.len(),
-                                    len,
-                                    consolidating,
-                                    source_id,
-                                )
-                            })
-                            .expect("invalid upsert state");
-                        // Truncation is fine (using `as`) as this is just a checksum
-                        assert_eq!(
-                            consolidating.checksum_sum.0,
-                            // Hash the value, not the full buffer, which may have extra 0's
-                            seahash::hash(value) as i64,
-                            "invalid upsert state: checksum_sum does not match, state: {}, {}",
-                            consolidating,
-                            source_id,
-                        );
+                        let len = usize::try_from(consolidating.len_sum.0).map_err(|_| {
+                            anyhow::anyhow!(
+                                "len_sum can't be made into a usize, state: {}",
+                                consolidating,
+                            )
+                        })?;
+                        let value = &consolidating.value_xor.get(..len).ok_or_else(|| {
+                            anyhow::anyhow!(
+                                "value_xor is not the same length ({}) as len ({}), state: {}",
+                                consolidating.value_xor.len(),
+                                len,
+                                consolidating
+                            )
+                        })?;
+                        // Truncation is fine (using `as`) as this is just a checksum.
+                        //
+                        // Hash the value, not the full buffer, which may have extra 0's
+                        if consolidating.checksum_sum.0 != seahash::hash(value) as i64 {
+                            return Err(anyhow::anyhow!(
+                                "invalid upsert state: checksum_sum does not match, state: {}",
+                                consolidating
+                            ));
+                        }
                         *self = Self::Value(Value::FinalizedValue(
                             bincode_opts.deserialize(value).unwrap(),
                             Default::default(),
                         ));
                     }
                     0 => {
-                        assert_eq!(
-                            consolidating.len_sum.0, 0,
-                            "invalid upsert state: len_sum is non-0, state: {}, {}",
-                            consolidating, source_id,
-                        );
-                        assert_eq!(
-                            consolidating.checksum_sum.0, 0,
-                            "invalid upsert state: checksum_sum is non-0, state: {}, {}",
-                            consolidating, source_id,
-                        );
-                        assert!(
-                            consolidating.value_xor.iter().all(|&x| x == 0),
-                            "invalid upsert state: value_xor not all 0s with 0 diff. \
-                            Non-zero positions: {:?}, state: {}, {}",
-                            consolidating
-                                .value_xor
-                                .iter()
-                                .positions(|&x| x != 0)
-                                .collect::<Vec<_>>(),
-                            consolidating,
-                            source_id,
-                        );
+                        if consolidating.len_sum.0 != 0 {
+                            return Err(anyhow::anyhow!(
+                                "invalid upsert state: len_sum is non-0, state: {}",
+                                consolidating
+                            ));
+                        }
+                        if consolidating.checksum_sum.0 != 0 {
+                            return Err(anyhow::anyhow!(
+                                "invalid upsert state: checksum_sum is non-0, state: {}",
+                                consolidating
+                            ));
+                        }
+                        if !consolidating.value_xor.iter().all(|&x| x == 0) {
+                            return Err(anyhow::anyhow!(
+                                "invalid upsert state: value_xor not all 0s with 0 diff. \
+                            Non-zero positions: {:?}, state: {}",
+                                consolidating
+                                    .value_xor
+                                    .iter()
+                                    .positions(|&x| x != 0)
+                                    .collect::<Vec<_>>(),
+                                consolidating
+                            ));
+                        }
                         *self = Self::Value(Value::Tombstone(Default::default()));
                     }
-                    other => panic!(
-                        "invalid upsert state: non 0/1 diff_sum: {}, state: {}, {}",
-                        other, consolidating, source_id
-                    ),
+                    other => {
+                        return Err(anyhow::anyhow!(
+                            "invalid upsert state: non 0/1 diff_sum: {}, state: {}",
+                            other,
+                            consolidating
+                        ));
+                    }
                 }
             }
             _ => {}
         }
+
+        Ok(())
     }
 }
 
@@ -1473,7 +1473,7 @@ mod tests {
         s.merge_update(longer_row, Diff::ONE, opts, &mut buf);
 
         // Assert that the `Consolidating` value is fully merged.
-        s.ensure_decoded(opts, GlobalId::User(1));
+        s.ensure_decoded(opts).unwrap();
     }
 
     // We guard some of our assumptions. Increasing in-memory size of StateValue
@@ -1533,7 +1533,7 @@ mod tests {
         s.merge_update(longer_row.clone(), Diff::ONE, opts, &mut buf);
         s.merge_update(small_row.clone(), Diff::MINUS_ONE, opts, &mut buf);
 
-        s.ensure_decoded(opts, GlobalId::User(1));
+        s.ensure_decoded(opts).unwrap();
     }
 
     #[mz_ore::test]
@@ -1552,7 +1552,7 @@ mod tests {
         s.merge_update(small_row.clone(), Diff::MINUS_ONE, opts, &mut buf);
         s.merge_update(longer_row.clone(), Diff::ONE, opts, &mut buf);
 
-        s.ensure_decoded(opts, GlobalId::User(1));
+        s.ensure_decoded(opts).unwrap();
     }
 
     #[mz_ore::test]
@@ -1569,6 +1569,6 @@ mod tests {
         s.merge_update(small_row.clone(), Diff::MINUS_ONE, opts, &mut buf);
         s.merge_update(longer_row.clone(), Diff::ONE, opts, &mut buf);
 
-        s.ensure_decoded(opts, GlobalId::User(1));
+        s.ensure_decoded(opts).unwrap();
     }
 }
