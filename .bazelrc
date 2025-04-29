@@ -170,6 +170,7 @@ build:release --compilation_mode=opt
 build:release-lto --copt=-flto=thin
 build:release-lto --linkopt=-flto=thin
 build:release-lto --@rules_rust//rust/settings:lto=thin
+build:release-lto --@//misc/bazel/platforms:xlang_lto=True
 
 # Builds from `main` or tagged builds.
 #

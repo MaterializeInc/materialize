@@ -90,7 +90,10 @@ rust_binary(
     lint_config = ":lints",
     proc_macro_deps = [] + all_crate_deps(proc_macro = True),
     rustc_env = {},
-    rustc_flags = ["-Copt-level=3"],
+    rustc_flags = ["-Copt-level=3"] + select({
+        "@//misc/bazel/platforms:xlang_lto_enabled": ["-Clinker-plugin-lto"],
+        "//conditions:default": [],
+    }),
     version = "0.0.0",
     deps = [":cargo_gazelle"] + all_crate_deps(normal = True),
 )

@@ -144,7 +144,10 @@ rust_binary(
     lint_config = ":lints",
     proc_macro_deps = [] + all_crate_deps(proc_macro = True),
     rustc_env = {},
-    rustc_flags = [],
+    rustc_flags = [] + select({
+        "@//misc/bazel/platforms:xlang_lto_enabled": ["-Clinker-plugin-lto"],
+        "//conditions:default": [],
+    }),
     version = "0.3.0",
     deps = [
         ":mz_lsp_server",
