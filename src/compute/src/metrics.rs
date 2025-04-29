@@ -308,7 +308,7 @@ impl WorkerMetrics {
     pub fn record_shared_row_metrics(&self) {
         let binding = SharedRow::get();
         self.shared_row_heap_capacity_bytes
-            .set(u64::cast_from(binding.borrow().byte_capacity()));
+            .set(u64::cast_from(binding.byte_capacity()));
     }
 
     /// Increase the count of maintained collections.

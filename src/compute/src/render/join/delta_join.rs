@@ -276,8 +276,7 @@ where
                                 // Reuseable allocation for unpacking.
                                 let mut datums = DatumVec::new();
                                 move |row| {
-                                    let binding = SharedRow::get();
-                                    let mut row_builder = binding.borrow_mut();
+                                    let mut row_builder = SharedRow::get();
                                     let temp_storage = RowArena::new();
                                     let mut datums_local = datums.borrow_with(&row);
                                     // TODO(mcsherry): re-use `row` allocation.
@@ -353,8 +352,7 @@ where
         move |(row, time)| {
             let temp_storage = RowArena::new();
             let datums_local = datums.borrow_with(&row);
-            let binding = SharedRow::get();
-            let mut row_builder = binding.borrow_mut();
+            let mut row_builder = SharedRow::get();
             row_builder.packer().try_extend(
                 prev_key
                     .iter()
@@ -388,8 +386,7 @@ where
                 // shutting down.
                 shutdown_token.probe()?;
 
-                let binding = SharedRow::get();
-                let mut row_builder = binding.borrow_mut();
+                let mut row_builder = SharedRow::get();
                 let temp_storage = RowArena::new();
 
                 let mut datums_local = datums.borrow();
@@ -435,8 +432,7 @@ where
                 // shutting down.
                 shutdown_token.probe()?;
 
-                let binding = SharedRow::get();
-                let mut row_builder = binding.borrow_mut();
+                let mut row_builder = SharedRow::get();
                 let temp_storage = RowArena::new();
 
                 let mut datums_local = datums.borrow();
@@ -490,8 +486,7 @@ where
                 let mut datums = DatumVec::new();
                 Box::new(move |input, ok_output, err_output| {
                     input.for_each(|time, data| {
-                        let binding = SharedRow::get();
-                        let mut row_builder = binding.borrow_mut();
+                        let mut row_builder = SharedRow::get();
                         let mut ok_session = ok_output.session(&time);
                         let mut err_session = err_output.session(&time);
 

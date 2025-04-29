@@ -821,8 +821,7 @@ pub fn decode_copy_format_csv(
             std::cmp::Ordering::Equal => Ok(()),
         }?;
 
-        let binding = SharedRow::get();
-        let mut row_builder = binding.borrow_mut();
+        let mut row_builder = SharedRow::get();
         let mut row_packer = row_builder.packer();
 
         for (typ, raw_value) in column_types.iter().zip(record.iter()) {

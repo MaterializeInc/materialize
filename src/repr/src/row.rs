@@ -8,13 +8,12 @@
 // by the Apache License, Version 2.0.
 
 use std::borrow::Borrow;
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::cmp::Ordering;
 use std::convert::{TryFrom, TryInto};
 use std::fmt::{self, Debug};
 use std::mem::{size_of, transmute};
 use std::ops::Deref;
-use std::rc::Rc;
 use std::str;
 
 use chrono::{DateTime, Datelike, NaiveDate, NaiveDateTime, NaiveTime, Timelike, Utc};
@@ -141,6 +140,14 @@ impl Row {
     pub fn with_capacity(cap: usize) -> Self {
         Self {
             data: CompactBytes::with_capacity(cap),
+        }
+    }
+
+    /// Create an empty `Row`.
+    #[inline]
+    pub const fn empty() -> Self {
+        Self {
+            data: CompactBytes::empty(),
         }
     }
 
@@ -2814,8 +2821,7 @@ impl Default for RowArena {
 /// ```
 /// use mz_repr::SharedRow;
 ///
-/// let binding = SharedRow::get();
-/// let mut row_builder = binding.borrow_mut();
+/// let mut row_builder = SharedRow::get();
 /// ```
 ///
 /// This allows us to reuse an existing row allocation instead of creating a new one or retaining
@@ -2826,11 +2832,15 @@ impl Default for RowArena {
 ///
 /// [`SharedRow::get`] panics when trying to obtain multiple references to the shared row.
 #[derive(Debug)]
-pub struct SharedRow(Rc<RefCell<Row>>);
+pub struct SharedRow(Row);
 
 impl SharedRow {
     thread_local! {
-        static SHARED_ROW: Rc<RefCell<Row>> = Rc::new(RefCell::new(Row::default()));
+        /// A thread-local slot containing a shared Row that can be temporarily used by a function.
+        /// There can be at most one active user of this Row, which is tracked by the state of the
+        /// `Option<_>` wrapper. When it is `Some(..)`, the row is available for using. When it
+        /// is `None`, it is not, and the constructor will panic if a thread attempts to use it.
+        static SHARED_ROW: Cell<Option<Row>> = const { Cell::new(Some(Row::empty())) }
     }
 
     /// Get the shared row.
@@ -2841,9 +2851,11 @@ impl SharedRow {
     ///
     /// Panics when the row is already borrowed elsewhere.
     pub fn get() -> Self {
-        let row = Self::SHARED_ROW.with(Rc::clone);
+        let mut row = Self::SHARED_ROW
+            .take()
+            .expect("attempted to borrow already borrowed SharedRow");
         // Clear row
-        row.borrow_mut().packer();
+        row.packer();
         Self(row)
     }
 
@@ -2853,33 +2865,32 @@ impl SharedRow {
         I: IntoIterator<Item = D>,
         D: Borrow<Datum<'a>>,
     {
-        let binding = Self::SHARED_ROW.with(Rc::clone);
-        let mut row_builder = binding.borrow_mut();
+        let mut row_builder = Self::get();
         let mut row_packer = row_builder.packer();
         row_packer.extend(iter);
         row_builder.clone()
     }
-
-    /// Calls the provided closure with a [`RowPacker`] writing the shared row.
-    ///
-    /// # Panics
-    ///
-    /// Panics when the row is already borrowed elsewhere.
-    pub fn pack_with<F, R>(&mut self, f: F) -> R
-    where
-        for<'a> F: FnOnce(&'a mut RowPacker<'a>) -> R,
-    {
-        let mut borrow = self.borrow_mut();
-        let mut packer = borrow.packer();
-        (f)(&mut packer)
-    }
 }
 
 impl std::ops::Deref for SharedRow {
-    type Target = RefCell<Row>;
+    type Target = Row;
 
     fn deref(&self) -> &Self::Target {
         &self.0
+    }
+}
+
+impl std::ops::DerefMut for SharedRow {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.0
+    }
+}
+
+impl Drop for SharedRow {
+    fn drop(&mut self) {
+        // Take the Row allocation from this instance and put it back in the thread local slot for
+        // the next user. The Row in `self` is replaced with an empty Row which does not allocate.
+        Self::SHARED_ROW.set(Some(std::mem::take(&mut self.0)))
     }
 }
 

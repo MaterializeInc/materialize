@@ -113,8 +113,7 @@ where
                 input_key.map(|k| (k, None)),
                 max_demand,
                 move |row_datums, time, diff| {
-                    let binding = SharedRow::get();
-                    let mut row_builder = binding.borrow_mut();
+                    let mut row_builder = SharedRow::get();
                     let temp_storage = RowArena::new();
 
                     let mut row_iter = row_datums.drain(..);
@@ -711,8 +710,7 @@ where
 
         // Extract the value we were asked to aggregate over.
         let mut partial = input.map(move |(key, row)| {
-            let binding = SharedRow::get();
-            let mut row_builder = binding.borrow_mut();
+            let mut row_builder = SharedRow::get();
             let value = row.iter().nth(index).unwrap();
             row_builder.packer().push(value);
             (key, row_builder.clone())
@@ -1026,8 +1024,7 @@ where
 
             // Gather the relevant keys with their hashes along with values ordered by aggregation_index.
             let mut stage = input.map(move |(key, row)| {
-                let binding = SharedRow::get();
-                let mut row_builder = binding.borrow_mut();
+                let mut row_builder = SharedRow::get();
                 let mut row_packer = row_builder.packer();
                 let mut row_iter = row.iter();
                 for skip in skips.iter() {
@@ -1303,8 +1300,7 @@ where
                     }
                 }
 
-                let binding = SharedRow::get();
-                let mut row_builder = binding.borrow_mut();
+                let mut row_builder = SharedRow::get();
                 let mut row_packer = row_builder.packer();
 
                 let mut source_iters = source
@@ -1351,8 +1347,7 @@ where
         // Gather the relevant values into a vec of rows ordered by aggregation_index
         let collection = collection
             .map(move |(key, row)| {
-                let binding = SharedRow::get();
-                let mut row_builder = binding.borrow_mut();
+                let mut row_builder = SharedRow::get();
                 let mut values = Vec::with_capacity(skips.len());
                 let mut row_iter = row.iter();
                 for skip in skips.iter() {
@@ -1677,8 +1672,7 @@ fn evaluate_mfp_after<'a, 'b>(
     temp_storage: &'a RowArena,
     key_len: usize,
 ) -> Option<Row> {
-    let binding = SharedRow::get();
-    let mut row_builder = binding.borrow_mut();
+    let mut row_builder = SharedRow::get();
     // Apply MFP if it exists and pack a Row of
     // aggregate values from `datums_local`.
     if let Some(mfp) = mfp_after {

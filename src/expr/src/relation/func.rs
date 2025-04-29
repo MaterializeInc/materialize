@@ -3167,8 +3167,7 @@ fn regexp_matches<'a, 'r: 'a>(
             .map(|m| Datum::from(m.map(|m| m.as_str())))
             .collect::<Vec<_>>();
 
-        let row = SharedRow::get();
-        let mut binding = row.borrow_mut();
+        let mut binding = SharedRow::get();
         let mut packer = binding.packer();
 
         let dimension = ArrayDimension {

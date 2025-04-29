@@ -791,8 +791,7 @@ where
         let until = std::rc::Rc::new(until);
 
         let (stream, errors) = self.flat_map(key_val, max_demand, move |row_datums, time, diff| {
-            let binding = SharedRow::get();
-            let mut row_builder = binding.borrow_mut();
+            let mut row_builder = SharedRow::get();
             let until = std::rc::Rc::clone(&until);
             let temp_storage = RowArena::new();
             let row_iter = row_datums.iter();
