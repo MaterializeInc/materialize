@@ -796,16 +796,28 @@ impl crate::coord::Coordinator {
                             response.shard_id,
                             as_of,
                             read_schemas,
-                            batches,
+                            &batches,
                             |_stats| true,
                         )
                         .await
                         .expect("invalid usage");
 
-                    // TODO(aljoscha/parker): These shenanigans are because the
-                    // returned Row Stream needs to implement Sync.
+                    // NOTE: Using the cursor creates Futures that are not Sync,
+                    // so we can't drive them on the main Coordinator loop.
+                    // Spawning a task has the additional benefit that we get to
+                    // delete batches once we're done.
+                    //
+                    // Batch deletion is best-effort, though, and there are
+                    // multiple known ways in which they can leak, among them:
+                    //
+                    // - ProtoBatch is lost in flight
+                    // - ProtoBatch is lost because when combining PeekResponse
+                    // from workers a cancellation or error "overrides" other
+                    // results, meaning we drop them
+                    // - This task here is not run to completion before it can
+                    // delete all batches
                     let (tx, mut rx) = tokio::sync::mpsc::channel(1);
-                    mz_ore::task::spawn(|| "TODO", async move {
+                    mz_ore::task::spawn(|| "read_peek_batches", async move {
                         while let Some(rows) = row_cursor.next().await {
                             let rows_vec = rows
                                 .flat_map(|((key, _val), _ts, diff)| {
@@ -817,12 +829,18 @@ impl crate::coord::Coordinator {
                             let result = tx.send(rows_vec).await;
                             if result.is_err() {
                                 tracing::error!("receiver went away");
+                                // Don't return but break so we fall out to the
+                                // batch delete logic below.
                                 break;
                             }
                         }
 
                         // WIP: Need to best-effort clean up batches now, after
                         // yielding them all.
+                        tracing::trace!(?response.shard_id, "cleaning up batches of peek result");
+                        for batch in batches {
+                            batch.delete().await;
+                        }
                     });
 
                     if finishing.is_trivial(response.relation_desc.arity()) {

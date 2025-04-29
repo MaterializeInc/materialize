@@ -665,7 +665,7 @@ impl PersistClient {
         shard_id: ShardId,
         as_of: Antichain<T>,
         read_schemas: Schemas<K, V>,
-        batches: Vec<Batch<K, V, T, D>>,
+        batches: &[Batch<K, V, T, D>],
         should_fetch_part: impl for<'a> Fn(Option<&'a LazyPartStats>) -> bool,
     ) -> Result<Cursor<K, V, T, D>, Since<T>>
     where
