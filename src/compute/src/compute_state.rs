@@ -897,7 +897,7 @@ impl<'a, A: Allocate + 'static> ActiveComputeState<'a, A> {
         };
 
         if let Some(response) = response {
-            let _span = span!(parent: peek.span(), Level::DEBUG, "process_peek").entered();
+            let _span = span!(parent: peek.span(), Level::DEBUG, "process_peek_response").entered();
             let stash_task = StashPeekResponse::start_upload(
                 Arc::clone(&self.compute_state.persist_clients),
                 self.compute_state
@@ -927,7 +927,13 @@ impl<'a, A: Allocate + 'static> ActiveComputeState<'a, A> {
 
         let pending_peeks_response = std::mem::take(&mut self.compute_state.pending_peek_responses);
         for (uuid, mut peek_response) in pending_peeks_response {
-            if let Ok((response, _duration)) = peek_response.result.try_recv() {
+            if let Ok((response, duration)) = peek_response.result.try_recv() {
+                let _span =
+                    span!(parent: peek_response.span, Level::DEBUG, "send_peek_response").entered();
+
+                // WIP: Metrics! We want a histogram that logs duration.
+                tracing::debug!(?peek_response.peek, ?duration, "finished stashing peek response in persist");
+
                 self.send_peek_response(&peek_response.peek, response);
             } else {
                 self.compute_state
