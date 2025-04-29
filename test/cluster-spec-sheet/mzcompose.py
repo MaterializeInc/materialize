@@ -632,34 +632,34 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         f.write(
             "scenario,mode,category,test_name,cluster_size,repetition,size_bytes,time_ms\n"
         )
-        run_scenario_weak(
+        run_scenario_strong(
             scenario=TpccScenario(1, "100cc"),
             results_file=f,
             connection=connection,
         )
-        # run_scenario_weak(
-        #     scenario=TpccScenarioMV(1, "100cc"),
-        #     results_file=f,
-        #     connection=connection,
-        # )
-        run_scenario_weak(
-            scenario=AuctionScenario(4, "100cc"),
+        run_scenario_strong(
+            scenario=TpccScenarioMV(1, "100cc"),
             results_file=f,
             connection=connection,
         )
         run_scenario_strong(
+            scenario=AuctionScenario(4, "100cc"),
+            results_file=f,
+            connection=connection,
+        )
+        run_scenario_weak(
             scenario=AuctionScenario(4, "none"),
             results_file=f,
             connection=connection,
         )
 
 
-def run_scenario_weak(
+def run_scenario_strong(
     scenario: Scenario, results_file: Any, connection: pg8000.native.Connection
 ) -> None:
 
     runner = ScenarioRunner(
-        scenario.name(), "weak", connection, results_file, replica_size="None"
+        scenario.name(), "strong", connection, results_file, replica_size="None"
     )
 
     for query in scenario.drop():
@@ -694,7 +694,7 @@ def run_scenario_weak(
         scenario.run(runner)
 
 
-def run_scenario_strong(
+def run_scenario_weak(
     scenario: Scenario, results_file: Any, connection: pg8000.native.Connection
 ) -> None:
 
@@ -716,7 +716,7 @@ def run_scenario_strong(
         scenario.replica_size = replica_size
         scenario.scale = initial_scale * replica_size_scale[1]
         runner = ScenarioRunner(
-            scenario.name(), "strong", connection, results_file, replica_size
+            scenario.name(), "weak", connection, results_file, replica_size
         )
         for query in scenario.drop():
             runner.run_query(dedent(query))
