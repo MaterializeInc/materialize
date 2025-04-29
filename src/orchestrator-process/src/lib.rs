@@ -587,11 +587,55 @@ impl OrchestratorWorker {
                     }
                 }
             };
+
+            // Get disk usage for this process if it has a scratch directory
+            let disk_usage_bytes = {
+                let scratch_dir = self.config.service_scratch_dir(id);
+                if scratch_dir.exists() {
+                    error!(
+                        "scratch dir for {id} is {:?}",
+                        scratch_dir.as_path().to_str()
+                    );
+                    // Run du to get disk usage
+                    if let Ok(output) = std::process::Command::new("du")
+                        .arg("-sb")
+                        .arg(&scratch_dir)
+                        .output()
+                        .inspect_err(|e| warn!("Failed to get disk metrics: {}", e))
+                    {
+                        if output.status.success() {
+                            let stdout = String::from_utf8(output.stdout)?;
+                            if let Some(Ok(size)) =
+                                stdout.split_whitespace().next().map(|s| s.parse::<u64>())
+                            {
+                                Some(size)
+                            } else {
+                                warn!(
+                                    "failed to get disk usage for {id} {:?}: unable to parse metrics",
+                                    scratch_dir.as_path().to_str(),
+                                );
+                                None
+                            }
+                        } else {
+                            warn!(
+                                "failed to get disk usage for {id} {:?}: {}",
+                                scratch_dir.as_path().to_str(),
+                                String::from_utf8_lossy(&output.stderr)
+                            );
+                            None
+                        }
+                    } else {
+                        None
+                    }
+                } else {
+                    None
+                }
+            };
+
             metrics.push(ServiceProcessMetrics {
                 cpu_nano_cores,
                 memory_bytes,
-                // Process orchestrator does not support this right now.
-                disk_usage_bytes: None,
+                disk_usage_bytes,
             });
         }
         Ok(metrics)
