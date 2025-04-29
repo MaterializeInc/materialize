@@ -45,6 +45,12 @@
     )
   {%- endif %}
 
+  {# History retention #}
+  {%- set retain_history = config.get('retain_history') -%}
+  {%- if retain_history -%}
+    with (retain history for '{{ retain_history }}')
+  {%- endif %}
+
   {# Contracts and constraints #}
   {% set contract_config = config.get('contract') %}
   {% if contract_config.enforced %}
