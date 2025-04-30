@@ -156,7 +156,7 @@ class TpccScenario(Scenario):
         ]
 
     def drop(self) -> list[str]:
-        return ["DROP CLUSTER lg CASCADE;"]
+        return ["DROP CLUSTER IF EXISTS lg CASCADE;"]
 
     def run(self, runner: ScenarioRunner) -> None:
         # Create index
@@ -231,7 +231,7 @@ class TpccScenarioMV(Scenario):
         ]
 
     def drop(self) -> list[str]:
-        return ["DROP CLUSTER lg CASCADE;"]
+        return ["DROP CLUSTER IF EXISTS lg CASCADE;"]
 
     def run(self, runner: ScenarioRunner) -> None:
         # Create index
