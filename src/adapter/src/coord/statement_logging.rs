@@ -306,9 +306,7 @@ impl Coordinator {
         let mut out = None;
 
         let uuid = match logging {
-            PreparedStatementLoggingInfo::AlreadyLogged { uuid: _ } => {
-                epoch_to_uuid_v7(&(self.now()))
-            }
+            PreparedStatementLoggingInfo::AlreadyLogged { uuid } => uuid.clone(),
             PreparedStatementLoggingInfo::StillToLog {
                 sql,
                 redacted_sql,
@@ -721,14 +719,14 @@ impl Coordinator {
         }
         let (ps_record, ps_uuid) = self.log_prepared_statement(session, logging)?;
 
+        let now = self.now();
         let uuid = match session.qcell_rw(logging) {
-            PreparedStatementLoggingInfo::AlreadyLogged { uuid } => *uuid,
+            PreparedStatementLoggingInfo::AlreadyLogged { uuid: _ } => epoch_to_uuid_v7(&now),
             PreparedStatementLoggingInfo::StillToLog { prepared_at, .. } => {
                 epoch_to_uuid_v7(prepared_at)
             }
         };
 
-        let now = self.now();
         self.record_statement_lifecycle_event(
             &StatementLoggingId(uuid),
             &StatementLifecycleEvent::ExecutionBegan,
