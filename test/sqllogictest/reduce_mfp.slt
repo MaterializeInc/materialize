@@ -40,7 +40,7 @@ SELECT * FROM mv_fusable_mfp_accumulable;
 1 6
 
 query T multiline
-EXPLAIN PHYSICAL PLAN FOR
+EXPLAIN PHYSICAL PLAN AS VERBOSE TEXT FOR
 MATERIALIZED VIEW mv_fusable_mfp_accumulable;
 ----
 materialize.public.mv_fusable_mfp_accumulable:
@@ -79,7 +79,7 @@ SELECT * FROM mv_complex_mfp_accumulable;
 1 7
 
 query T multiline
-EXPLAIN PHYSICAL PLAN FOR
+EXPLAIN PHYSICAL PLAN AS VERBOSE TEXT FOR
 MATERIALIZED VIEW mv_complex_mfp_accumulable;
 ----
 materialize.public.mv_complex_mfp_accumulable:
