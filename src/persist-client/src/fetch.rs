@@ -1302,6 +1302,10 @@ where
         self.part.desc.since().borrow() == AntichainRef::new(&[T::minimum()])
     }
 
+    pub(crate) fn updates(&self) -> &BlobTraceUpdates {
+        &self.part.updates
+    }
+
     /// Returns the updates with all truncation / timestamp rewriting applied.
     pub(crate) fn normalize(&self, metrics: &ColumnarMetrics) -> BlobTraceUpdates {
         let updates = self.part.updates.clone();
