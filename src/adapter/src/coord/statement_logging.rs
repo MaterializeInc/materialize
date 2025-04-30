@@ -720,13 +720,7 @@ impl Coordinator {
         let (ps_record, ps_uuid) = self.log_prepared_statement(session, logging)?;
 
         let now = self.now();
-        let uuid = match session.qcell_rw(logging) {
-            PreparedStatementLoggingInfo::AlreadyLogged { uuid: _ } => epoch_to_uuid_v7(&now),
-            PreparedStatementLoggingInfo::StillToLog { prepared_at, .. } => {
-                epoch_to_uuid_v7(prepared_at)
-            }
-        };
-
+        let uuid = epoch_to_uuid_v7(&now);
         self.record_statement_lifecycle_event(
             &StatementLoggingId(uuid),
             &StatementLifecycleEvent::ExecutionBegan,
