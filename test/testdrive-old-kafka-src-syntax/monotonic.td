@@ -79,7 +79,7 @@ a min max
 
 $ set-regex match=(.User.:\s\d+|\(u\d+\)) replacement=UID
 
-?[version>=14300] EXPLAIN PHYSICAL PLAN FOR SELECT * FROM v2
+?[version>=14400] EXPLAIN PHYSICAL PLAN FOR SELECT * FROM v2
 Explained Query:
   TopK::MonotonicTopK order_by=[#0 asc nulls_last] limit=3 must_consolidate
     ArrangeBy
@@ -95,7 +95,7 @@ Used Indexes:
 
 Target cluster: quickstart
 
-?[version<14300] EXPLAIN PHYSICAL PLAN FOR SELECT * FROM v2
+?[version<14400] EXPLAIN PHYSICAL PLAN FOR SELECT * FROM v2
 Explained Query:
   TopK::MonotonicTopK order_by=[#0 asc nulls_last] limit=3 must_consolidate
     ArrangeBy
@@ -123,7 +123,7 @@ Target cluster: quickstart
 
 > CREATE VIEW v3 AS SELECT * FROM non_dbz_data_indexed ORDER BY b LIMIT 3
 
-?[version>=14300] EXPLAIN PHYSICAL PLAN FOR SELECT * FROM v3
+?[version>=14400] EXPLAIN PHYSICAL PLAN FOR SELECT * FROM v3
 Explained Query:
   TopK::MonotonicTopK order_by=[#1 asc nulls_last] limit=3 must_consolidate
     ArrangeBy
@@ -139,7 +139,7 @@ Used Indexes:
 
 Target cluster: quickstart
 
-?[version<14300] EXPLAIN PHYSICAL PLAN FOR SELECT * FROM v3
+?[version<14400] EXPLAIN PHYSICAL PLAN FOR SELECT * FROM v3
 Explained Query:
   TopK::MonotonicTopK order_by=[#1 asc nulls_last] limit=3 must_consolidate
     ArrangeBy
@@ -162,7 +162,7 @@ Target cluster: quickstart
 
 > CREATE VIEW v5 AS SELECT * from i4 ORDER BY c LIMIT 2;
 
-?[version>=14300] EXPLAIN PHYSICAL PLAN FOR SELECT * FROM v5;
+?[version>=14400] EXPLAIN PHYSICAL PLAN FOR SELECT * FROM v5;
 Explained Query:
   TopK::MonotonicTopK order_by=[#0 asc nulls_last] limit=2 must_consolidate
     ArrangeBy
@@ -178,7 +178,7 @@ Used Indexes:
 
 Target cluster: quickstart
 
-?[version<14300] EXPLAIN PHYSICAL PLAN FOR SELECT * FROM v5;
+?[version<14400] EXPLAIN PHYSICAL PLAN FOR SELECT * FROM v5;
 Explained Query:
   TopK::MonotonicTopK order_by=[#0 asc nulls_last] limit=2 must_consolidate
     ArrangeBy
@@ -201,7 +201,7 @@ Target cluster: quickstart
 
 > CREATE VIEW v7 AS SELECT * from i6 ORDER BY c LIMIT 2;
 
-?[version>=14300] EXPLAIN PHYSICAL PLAN FOR SELECT * FROM v7;
+?[version>=14400] EXPLAIN PHYSICAL PLAN FOR SELECT * FROM v7;
 Explained Query:
   TopK::MonotonicTopK order_by=[#0 asc nulls_last] limit=2 must_consolidate
     ArrangeBy
@@ -217,7 +217,7 @@ Used Indexes:
 
 Target cluster: quickstart
 
-?[version<14300] EXPLAIN PHYSICAL PLAN FOR SELECT * FROM v7;
+?[version<14400] EXPLAIN PHYSICAL PLAN FOR SELECT * FROM v7;
 Explained Query:
   TopK::MonotonicTopK order_by=[#0 asc nulls_last] limit=2 must_consolidate
     ArrangeBy
@@ -243,7 +243,7 @@ Target cluster: quickstart
 
 # Propagating monotonicity analysis in a complex situation: (i1, i1) -> i8; (i1, i8) -> i9
 
-?[version>=14300] EXPLAIN PHYSICAL PLAN FOR SELECT * FROM v10;
+?[version>=14400] EXPLAIN PHYSICAL PLAN FOR SELECT * FROM v10;
 Explained Query:
   TopK::MonotonicTopK order_by=[#0 asc nulls_last] limit=2 must_consolidate
     ArrangeBy
@@ -259,7 +259,7 @@ Used Indexes:
 
 Target cluster: quickstart
 
-?[version<14300] EXPLAIN PHYSICAL PLAN FOR SELECT * FROM v10;
+?[version<14400] EXPLAIN PHYSICAL PLAN FOR SELECT * FROM v10;
 Explained Query:
   TopK::MonotonicTopK order_by=[#0 asc nulls_last] limit=2 must_consolidate
     ArrangeBy

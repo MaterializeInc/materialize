@@ -19,7 +19,7 @@ ALTER SYSTEM SET enable_load_generator_key_value = true
 > CREATE CLUSTER lg_cluster SIZE '${arg.default-replica-size}'
 
 $ skip-if
-SELECT mz_version_num() < 14300;
+SELECT mz_version_num() < 14400;
 
 # Error if trying to create with subsources
 ! CREATE SOURCE g FROM LOAD GENERATOR KEY VALUE(
