@@ -953,9 +953,9 @@ You can bound the version above and below using the following syntax:
 You can use `<` or `<=` freely. The following are equivalent:
 
 ```
-?[version<14300] SELECT 1;
+?[version>14300] SELECT 1;
 1
-?[14300>version] SELECT 1;
+?[14300<version] SELECT 1;
 1
 ```
 
