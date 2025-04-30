@@ -373,15 +373,14 @@ where
         );
 
         let isolated_runtime = Arc::clone(&machine.isolated_runtime);
-        let machine_clone = machine.clone();
 
         let compact_span = debug_span!("compact::consolidate");
         let res = tokio::time::timeout(
             timeout,
             // Compaction is cpu intensive, so be polite and spawn it on the isolated runtime.
             isolated_runtime
-                .spawn_named(
-                    || "persist::compact::consolidate",
+                .spawn_named(|| "persist::compact::consolidate", {
+                    let machine = machine.clone();
                     Self::compact(
                         CompactConfig::new(&machine.applier.cfg, machine.shard_id()),
                         Arc::clone(&machine.applier.state_versions.blob),
@@ -390,10 +389,10 @@ where
                         Arc::clone(&machine.isolated_runtime),
                         req,
                         compaction_schema,
-                        machine_clone,
+                        machine,
                     )
-                    .instrument(compact_span),
-                )
+                    .instrument(compact_span)
+                })
                 .map_err(|e| anyhow!(e)),
         )
         .await;
@@ -425,8 +424,6 @@ where
         }
     }
 
-    /// Validates the compaction request, and chunks the input batches
-    /// before passing them to [Self::compact_inner].
     pub async fn compact(
         cfg: CompactConfig,
         blob: Arc<dyn Blob>,
@@ -564,30 +561,6 @@ where
         }
 
         Ok(maintenance)
-    }
-
-    pub async fn compact_inner(
-        cfg: Arc<CompactConfig>,
-        req: Arc<CompactReq<T>>,
-        runs: Arc<Vec<(&Description<T>, &RunMeta, &[RunPart<T>])>>,
-        blob: Arc<dyn Blob>,
-        metrics: Arc<Metrics>,
-        shard_metrics: Arc<ShardMetrics>,
-        isolated_runtime: Arc<IsolatedRuntime>,
-        write_schemas: Schemas<K, V>,
-    ) -> Result<HollowBatch<T>, anyhow::Error> {
-        Self::compact_runs(
-            &cfg,
-            &req.shard_id,
-            &req.desc,
-            (&runs).to_vec(),
-            Arc::clone(&blob),
-            Arc::clone(&metrics),
-            Arc::clone(&shard_metrics),
-            Arc::clone(&isolated_runtime),
-            write_schemas,
-        )
-        .await
     }
 
     /// Compacts input batches in bounded memory.

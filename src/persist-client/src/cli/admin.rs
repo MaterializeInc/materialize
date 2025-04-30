@@ -764,7 +764,7 @@ pub async fn dangerous_force_compaction_and_break_pushdown<K, V, T, D>(
                 write.write_schemas.clone(),
             )
             .await;
-            let (res, apply_maintenance) = match res {
+            let apply_maintenance = match res {
                 Ok(x) => x,
                 Err(err) => {
                     warn!(
@@ -778,11 +778,10 @@ pub async fn dangerous_force_compaction_and_break_pushdown<K, V, T, D>(
             };
             machine.applier.metrics.compaction.admin_count.inc();
             info!(
-                "force_compaction {} {} compacted in {:?}: {:?}",
+                "force_compaction {} {} compacted in {:?}",
                 machine.applier.shard_metrics.name,
                 machine.applier.shard_metrics.shard_id,
-                start.elapsed(),
-                res
+                start.elapsed()
             );
             maintenance.merge(apply_maintenance);
         }
