@@ -155,7 +155,7 @@ WHERE a = 2 AND b = 'l2' OR a = 1 + 1 + 1 AND b = 'l3'
 # Physical plan for the above. Should have an LIR ArrangeBy for the constant collection.
 
 query T multiline
-EXPLAIN PHYSICAL PLAN FOR SELECT count(*) FROM t1
+EXPLAIN PHYSICAL PLAN AS VERBOSE TEXT FOR SELECT count(*) FROM t1
 WHERE a = 2 AND b = 'l2' OR a = 1 + 1 + 1 AND b = 'l3'
 ----
 Explained Query:
