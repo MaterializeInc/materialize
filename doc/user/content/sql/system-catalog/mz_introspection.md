@@ -222,19 +222,6 @@ The `mz_dataflow_channel_operators` view associates [dataflow] channels with the
 
 <!-- RELATION_SPEC_UNDOCUMENTED mz_introspection.mz_dataflow_channel_operators_per_worker -->
 
-## `mz_dataflow_global_ids`
-
-The `mz_dataflow_global_ids` view associates [dataflow] ids with global ids (ids of the form `u8` or `t5`).
-
-<!-- RELATION_SPEC mz_introspection.mz_dataflow_global_ids -->
-
-| Field        | Type      | Meaning                                    |
-|------------- | -------   | --------                                   |
-| `id`         | [`uint8`] | The dataflow ID.                           |
-| `global_id`  | [`text`]  | A global ID associated with that dataflow. |
-
-<!-- RELATION_SPEC_UNDOCUMENTED mz_introspection.mz_compute_dataflow_global_ids_per_worker -->
-
 ## `mz_dataflow_operators`
 
 The `mz_dataflow_operators` view describes the [dataflow] operators in the system.
@@ -307,7 +294,7 @@ through a hierarchical scheme for either aggregation or Top K computations.
 
 ## `mz_mappable_objects`
 
-The `mz_mappable_objects` identifies indexes (and their underlying views) and materialized views which can be debugged using the [`mz_lir_mapping`](#mz_lir_mapping) view.
+The `mz_mappable_objects` identifies indexes and materialized views which can be debugged using the [`mz_lir_mapping`](#mz_lir_mapping) view.
 
 <!-- RELATION_SPEC mz_introspection.mz_mappable_objects -->
 | Field        | Type      | Meaning
@@ -319,7 +306,7 @@ See [Which part of my query runs slowly or uses a lot of memory?](/transform-dat
 
 ## `mz_lir_mapping`
 
-The `mz_lir_mapping` view describes the low-level internal representation (LIR) plan that corresponds to global ids of indexes (and their underlying views) and materialized views.
+The `mz_lir_mapping` view describes the low-level internal representation (LIR) plan that corresponds to global ids of indexes and materialized views.
 You can find a list of all debuggable objects in [`mz_mappable_objects`](#mz_mappable_objects).
 LIR is a higher-level representation than dataflows; this view is used for profiling and debugging indices and materialized views.
 Note that LIR is not a stable interface and may change at any time.
@@ -331,7 +318,7 @@ If an LIR node was implemented without any dataflow operators, `operator_id_star
 <!-- RELATION_SPEC mz_introspection.mz_lir_mapping -->
 | Field             | Type      | Meaning
 | ---------         | --------  | -----------
-| global_id         | [`text`]  | The global ID.
+| export_id         | [`text`]  | The ID of the dataflow export. Corresponds to `mz_compute_exports.export_id`.
 | lir_id            | [`uint8`] | The LIR node ID.
 | operator          | [`text`]  | The LIR operator, in the format `OperatorName INPUTS [OPTIONS]`.
 | parent_lir_id     | [`uint8`] | The parent of this LIR node. May be `NULL`.

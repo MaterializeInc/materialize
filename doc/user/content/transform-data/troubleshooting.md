@@ -306,9 +306,7 @@ or consuming excessive memory (e.g., [`mz_introspection.mz_arrangement_sizes`](/
 To show how you can use
 [`mz_introspection.mz_lir_mapping`](/sql/system-catalog/mz_introspection/#mz_lir_mapping)
 to attribute performance characteristics, the attribution examples in this
-section reference the `wins_by_item` index (and the underlying `winning_bids`
-view) from the [quickstart
-guide](/get-started/quickstart/#step-2-create-the-source):
+section reference the `wins_by_item` index from the [quickstart guide](/get-started/quickstart/#step-2-create-the-source):
 
 ```sql
 CREATE SOURCE auction_house
@@ -347,12 +345,12 @@ By joining it with
 we can attribute the time spent in each operator to the higher-level, more
 intelligible LIR operators.
 
-For example, to find out how much time is spent in each operator for the `wins_by_item` index (and the underlying `winning_bids` view), run the following query:
+For example, to find out how much time is spent in each operator for the `wins_by_item` index, run the following query:
 
 ```sql
 SELECT
-    mo.name AS name,
-    mo.global_id AS global_id,
+    mo.name,
+    mo.global_id,
     mlm.lir_id,
     mlm.parent_lir_id,
     REPEAT(' ', mlm.nesting * 2) || mlm.operator AS operator,
@@ -366,8 +364,9 @@ SELECT
         FROM mz_introspection.mz_compute_operator_durations_histogram mcodh
         WHERE mlm.operator_id_start <= mcodh.id AND mcodh.id < mlm.operator_id_end
     ) as count
-    FROM mz_introspection.mz_lir_mapping mlm
-    JOIN mz_introspection.mz_mappable_objects mo ON (mlm.global_id = mo.global_id)
+FROM mz_introspection.mz_lir_mapping mlm
+JOIN mz_introspection.mz_mappable_objects mo ON (mlm.export_id = mo.global_id)
+WHERE mo.name = 'materialize.public.wins_by_item'
 GROUP BY 1, 2, 3, 4, 5, 6, 7
 ORDER BY mo.global_id, lir_id DESC;
 ```
@@ -377,15 +376,8 @@ vary):
 
 {{< yaml-table data="query_attribution_computation_time_output" >}}
 
-- The `duration` column shows that the `TopK` operator is where we spend the
-  bulk of the query's computation time.
-
-- Creating an index on a view starts _two_ dataflows as denoted by the two
-  `global_ids`:
-  - `u148` is the dataflow for the `winning_bids` view (installed when the index
-    is created), and
-  - `u149` is the dataflow for the `wins_by_item` index on `winning_bids` (which
-    arranges the results of the `winning_bids` view by the index key).
+The `duration` column shows that the `TopK` operator is where we spend the
+bulk of the query's computation time.
 
 The LIR operators reported in `mz_lir_mapping.operator` are terser than those in
 `EXPLAIN PHYSICAL PLAN`. Each operator is restricted to a single line of the
@@ -403,10 +395,10 @@ To examine the query in more detail:
 (`SUM(duration_ns)`).
 
 - The query joins with [`mz_introspection.mz_mappable_objects`](/sql/system-catalog/mz_introspection/#mz_mappable_objects) to find
-  the actual name corresponding to the `global_id`.  The `WHERE mo.name IN ...`
-  clause of the query ensures we only see information about this index and view.
-  If you leave this `WHERE` clause out, you will see information on _every_
-  view, materialized view, and index on your current cluster.
+  the actual name corresponding to the `export_id`.  The `WHERE mo.name = ...`
+   clause of the query ensures we only see information about this index.
+   If you leave this `WHERE` clause out, you will see information on _every_
+   materialized view and index on your current cluster.
 
 - The `operator` is indented using [`REPEAT`](/sql/functions/#repeat) and
   `mz_lir_mapping.nesting`. The indenting, combined with ordering by
@@ -421,20 +413,25 @@ If you have not read about [attributing computation time](#attributing-computati
 
 {{< /tip >}}
 
-To find the memory usage of each operator for the index and view, join
+To find the memory usage of each operator for the index, join
 [`mz_introspection.mz_lir_mapping`](/sql/system-catalog/mz_introspection/#mz_lir_mapping)
 with
 [`mz_introspection.mz_arrangement_sizes`](/sql/system-catalog/mz_introspection/#mz_arrangement_sizes):
 
 ```sql
-  SELECT mo.name AS name, mo.global_id AS global_id, lir_id, parent_lir_id, REPEAT(' ', nesting * 2) || operator AS operator,
-         pg_size_pretty(SUM(size)) AS size
-    FROM           mz_introspection.mz_lir_mapping mlm
-         LEFT JOIN mz_introspection.mz_arrangement_sizes mas
-                ON (mlm.operator_id_start <= mas.operator_id AND mas.operator_id < mlm.operator_id_end)
-              JOIN mz_introspection.mz_mappable_objects mo
-                ON (mlm.global_id = mo.global_id)
-   WHERE mo.name IN ('materialize.public.wins_by_item', 'materialize.public.winning_bids')
+SELECT
+    mo.name,
+    mo.global_id,
+    lir_id,
+    parent_lir_id,
+    REPEAT(' ', nesting * 2) || operator AS operator,
+    pg_size_pretty(SUM(size)) AS size
+FROM mz_introspection.mz_lir_mapping mlm
+LEFT JOIN mz_introspection.mz_arrangement_sizes mas
+    ON (mlm.operator_id_start <= mas.operator_id AND mas.operator_id < mlm.operator_id_end)
+JOIN mz_introspection.mz_mappable_objects mo
+    ON (mlm.export_id = mo.global_id)
+WHERE mo.name = 'materialize.public.wins_by_item'
 GROUP BY mo.name, mo.global_id, lir_id, operator, parent_lir_id, nesting
 ORDER BY mo.global_id, lir_id DESC;
 ```
@@ -468,17 +465,25 @@ can attribute this to particular parts of our query using
 [`mz_introspection.mz_lir_mapping`](/sql/system-catalog/mz_introspection/#mz_lir_mapping):
 
 ```sql
-  SELECT mo.name AS name, mo.global_id AS global_id, lir_id, parent_lir_id, REPEAT(' ', nesting * 2) || operator AS operator,
-         levels, to_cut, hint, pg_size_pretty(savings) AS savings
-    FROM           mz_introspection.mz_lir_mapping mlm
-              JOIN mz_introspection.mz_dataflow_global_ids mdgi
-                ON (mlm.global_id = mdgi.global_id)
-         LEFT JOIN mz_introspection.mz_expected_group_size_advice megsa
-                ON (megsa.dataflow_id = mdgi.id AND
-                    mlm.operator_id_start <= megsa.region_id AND megsa.region_id < mlm.operator_id_end)
-              JOIN mz_introspection.mz_mappable_objects mo
-                ON (mlm.global_id = mo.global_id)
-   WHERE mo.name IN ('materialize.public.wins_by_item', 'materialize.public.winning_bids')
+SELECT
+    mo.name,
+    mo.global_id,
+    lir_id,
+    parent_lir_id,
+    REPEAT(' ', nesting * 2) || operator AS operator,
+    levels,
+    to_cut,
+    hint,
+    pg_size_pretty(savings) AS savings
+FROM mz_introspection.mz_lir_mapping mlm
+JOIN mz_introspection.mz_compute_exports mce
+    ON (mlm.export_id = mce.export_id)
+LEFT JOIN mz_introspection.mz_expected_group_size_advice megsa
+    ON (megsa.dataflow_id = mce.dataflow_id AND
+        mlm.operator_id_start <= megsa.region_id AND megsa.region_id < mlm.operator_id_end)
+JOIN mz_introspection.mz_mappable_objects mo
+    ON (mlm.export_id = mo.global_id)
+WHERE mo.name = 'materialize.public.wins_by_item'
 ORDER BY mo.global_id, lir_id DESC;
 ```
 
@@ -534,23 +539,27 @@ You can identify worker skew by comparing a worker's time spent to the
 overall time spent across all workers:
 
 ```sql
- SELECT mo.name AS name, mo.global_id AS global_id, lir_id, REPEAT(' ', 2 * nesting) || operator AS operator,
-        worker_id,
-        ROUND(SUM(elapsed_ns) / SUM(aebi.total_ns), 2) AS ratio,
-        SUM(epw.elapsed_ns) / 1000 * '1 microsecond'::INTERVAL AS elapsed_ns,
-        SUM(aebi.total_ns) / 1000 * '1 microsecond'::INTERVAL AS avg_ns
-   FROM                    mz_introspection.mz_lir_mapping mlm
-        CROSS JOIN LATERAL (  SELECT SUM(elapsed_ns) AS total_ns
-                                FROM mz_introspection.mz_scheduling_elapsed_per_worker mse
-                               WHERE mlm.operator_id_start <= id AND id < mlm.operator_id_end
-                            GROUP BY worker_id) aebi
-        CROSS JOIN LATERAL (  SELECT worker_id, SUM(elapsed_ns) AS elapsed_ns
-                                FROM mz_introspection.mz_scheduling_elapsed_per_worker mse
-                               WHERE mlm.operator_id_start <= id AND id < mlm.operator_id_end
-                            GROUP BY worker_id) epw
-                      JOIN mz_introspection.mz_mappable_objects mo
-                        ON (mlm.global_id = mo.global_id)
-   WHERE mo.name IN ('materialize.public.wins_by_item', 'materialize.public.winning_bids')
+SELECT
+    mo.name,
+    mo.global_id,
+    lir_id,
+    REPEAT(' ', 2 * nesting) || operator AS operator,
+    worker_id,
+    ROUND(SUM(elapsed_ns) / SUM(aebi.total_ns), 2) AS ratio,
+    SUM(epw.elapsed_ns) / 1000 * '1 microsecond'::INTERVAL AS elapsed_ns,
+    SUM(aebi.total_ns) / 1000 * '1 microsecond'::INTERVAL AS avg_ns
+FROM mz_introspection.mz_lir_mapping mlm
+CROSS JOIN LATERAL (SELECT SUM(elapsed_ns) AS total_ns
+                    FROM mz_introspection.mz_scheduling_elapsed_per_worker mse
+                    WHERE mlm.operator_id_start <= id AND id < mlm.operator_id_end
+                    GROUP BY worker_id) aebi
+CROSS JOIN LATERAL (SELECT worker_id, SUM(elapsed_ns) AS elapsed_ns
+                    FROM mz_introspection.mz_scheduling_elapsed_per_worker mse
+                    WHERE mlm.operator_id_start <= id AND id < mlm.operator_id_end
+                    GROUP BY worker_id) epw
+JOIN mz_introspection.mz_mappable_objects mo
+    ON (mlm.export_id = mo.global_id)
+WHERE mo.name = 'materialize.public.wins_by_item'
 GROUP BY mo.name, mo.global_id, lir_id, nesting, operator, worker_id
 ORDER BY mo.global_id, lir_id DESC;
 ```
@@ -579,14 +588,14 @@ starting point, you can build your own attribution queries. When building your o
 
 - `mz_lir_mapping.operator` is not stable and **should not be parsed**.
 
-  - If you want to traverse the LIR tree, use `mz_lir_mapping. parent_lir_id`.
+  - If you want to traverse the LIR tree, use `mz_lir_mapping.parent_lir_id`.
 
   - To request additional metadata that would be useful for us to provide,
     please [contact our team](https://materialize.com/contact/).
 
 - Include `GROUP BY global_id` to avoid mixing `lir_ids` from different
   `global_id`s. Mixing `lir_id`s from different `global_id`s will produce
-  nonsense. `global_id`s will produce nonsense.
+  nonsense.
 
 - Use `REPEAT(' ', 2 * nesting) || operator` and `ORDER BY lir_id DESC` to
   correctly render the LIR tree.
@@ -595,7 +604,7 @@ starting point, you can build your own attribution queries. When building your o
   `mz_lir_mapping.operator_id_end` is exclusive. If they are equal to each
   other, that LIR operator does not correspond to any dataflow operators.
 
-- To only see output for views, materialized views, and indexes you're
+- To only see output for materialized views and indexes you're
   interested in, join with `mz_introspection.mz_mappable_objects` on `global_id` and restrict based on
   `mz_mappable_objects.name`. Otherwise, you will see information on every mappable object installed
   in your current cluster.

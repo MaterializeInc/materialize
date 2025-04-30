@@ -155,9 +155,7 @@ use crate::arrangement::manager::TraceBundle;
 use crate::compute_state::ComputeState;
 use crate::extensions::arrange::{KeyCollection, MzArrange};
 use crate::extensions::reduce::MzReduce;
-use crate::logging::compute::{
-    ComputeEvent, DataflowGlobal, LirMapping, LirMetadata, LogDataflowErrors,
-};
+use crate::logging::compute::{ComputeEvent, LirMapping, LirMetadata, LogDataflowErrors};
 use crate::render::context::{ArrangementFlavor, Context, ShutdownToken};
 use crate::render::continual_task::ContinualTaskCtx;
 use crate::row_spine::{RowRowBatcher, RowRowBuilder};
@@ -398,19 +396,9 @@ pub fn build_compute_dataflow<A: Allocate>(
                             let depends = object.plan.depends();
                             context
                                 .enter_region(region, Some(&depends))
-                                .render_recursive_plan(object.id, 0, object.plan)
+                                .render_recursive_plan(0, object.plan)
                                 .leave_region()
                         },
-                    );
-                    let global_id = object.id;
-
-                    context.log_dataflow_global_id(
-                        *bundle
-                            .scope()
-                            .addr()
-                            .first()
-                            .expect("Dataflow root id must exist"),
-                        global_id,
                     );
                     context.insert_id(Id::Global(object.id), bundle);
                 }
@@ -485,18 +473,9 @@ pub fn build_compute_dataflow<A: Allocate>(
                             let depends = object.plan.depends();
                             context
                                 .enter_region(region, Some(&depends))
-                                .render_plan(object.id, object.plan)
+                                .render_plan(object.plan)
                                 .leave_region()
                         },
-                    );
-                    let global_id = object.id;
-                    context.log_dataflow_global_id(
-                        *bundle
-                            .scope()
-                            .addr()
-                            .first()
-                            .expect("Dataflow root id must exist"),
-                        global_id,
                     );
                     context.insert_id(Id::Global(object.id), bundle);
                 }
@@ -797,12 +776,7 @@ where
     ///
     /// The method requires that all variables conclude with a physical representation that
     /// contains a collection (i.e. a non-arrangement), and it will panic otherwise.
-    pub fn render_recursive_plan(
-        &mut self,
-        object_id: GlobalId,
-        level: usize,
-        plan: RenderPlan,
-    ) -> CollectionBundle<G> {
+    pub fn render_recursive_plan(&mut self, level: usize, plan: RenderPlan) -> CollectionBundle<G> {
         for BindStage { lets, recs } in plan.binds {
             // Render the let bindings in order.
             for LetBind { id, value } in lets {
@@ -812,7 +786,7 @@ where
                         .region_named(&format!("Binding({:?})", id), |region| {
                             let depends = value.depends();
                             self.enter_region(region, Some(&depends))
-                                .render_letfree_plan(object_id, value)
+                                .render_letfree_plan(value)
                                 .leave_region()
                         });
                 self.insert_id(Id::Local(id), bundle);
@@ -842,7 +816,7 @@ where
             }
             // Now render each of the rec bindings.
             for RecBind { id, value, limit } in recs {
-                let bundle = self.render_recursive_plan(object_id, level + 1, value);
+                let bundle = self.render_recursive_plan(level + 1, value);
                 // We need to ensure that the raw collection exists, but do not have enough information
                 // here to cause that to happen.
                 let (oks, mut err) = bundle.collection.clone().unwrap();
@@ -911,7 +885,7 @@ where
             }
         }
 
-        self.render_letfree_plan(object_id, plan.body)
+        self.render_letfree_plan(plan.body)
     }
 }
 
@@ -932,7 +906,7 @@ where
     ///
     /// Panics if the given plan contains any [`RecBind`]s. Recursive plans must be rendered using
     /// `render_recursive_plan` instead.
-    pub fn render_plan(&mut self, object_id: GlobalId, plan: RenderPlan) -> CollectionBundle<G> {
+    pub fn render_plan(&mut self, plan: RenderPlan) -> CollectionBundle<G> {
         for BindStage { lets, recs } in plan.binds {
             assert!(recs.is_empty());
 
@@ -943,7 +917,7 @@ where
                         .region_named(&format!("Binding({:?})", id), |region| {
                             let depends = value.depends();
                             self.enter_region(region, Some(&depends))
-                                .render_letfree_plan(object_id, value)
+                                .render_letfree_plan(value)
                                 .leave_region()
                         });
                 self.insert_id(Id::Local(id), bundle);
@@ -953,17 +927,13 @@ where
         self.scope.clone().region_named("Main Body", |region| {
             let depends = plan.body.depends();
             self.enter_region(region, Some(&depends))
-                .render_letfree_plan(object_id, plan.body)
+                .render_letfree_plan(plan.body)
                 .leave_region()
         })
     }
 
     /// Renders a let-free plan to a differential dataflow, producing the collection of results.
-    fn render_letfree_plan(
-        &mut self,
-        object_id: GlobalId,
-        plan: LetFreePlan,
-    ) -> CollectionBundle<G> {
+    fn render_letfree_plan(&mut self, plan: LetFreePlan) -> CollectionBundle<G> {
         let (mut nodes, root_id, topological_order) = plan.destruct();
 
         // Rendered collections by their `LirId`.
@@ -1015,7 +985,7 @@ where
         }
 
         if let Some(lir_mapping_metadata) = lir_mapping_metadata {
-            self.log_lir_mapping(object_id, lir_mapping_metadata);
+            self.log_lir_mapping(lir_mapping_metadata);
         }
 
         collections
@@ -1232,18 +1202,14 @@ where
         }
     }
 
-    fn log_dataflow_global_id(&self, dataflow_index: usize, global_id: GlobalId) {
+    fn log_lir_mapping(&self, mapping: Vec<(LirId, LirMetadata)>) {
         if let Some(logger) = &self.compute_logger {
-            logger.log(&ComputeEvent::DataflowGlobal(DataflowGlobal {
-                dataflow_index,
-                global_id,
-            }));
-        }
-    }
-
-    fn log_lir_mapping(&self, global_id: GlobalId, mapping: Vec<(LirId, LirMetadata)>) {
-        if let Some(logger) = &self.compute_logger {
-            logger.log(&ComputeEvent::LirMapping(LirMapping { global_id, mapping }));
+            logger.log_for_exports(|export_id| {
+                ComputeEvent::LirMapping(LirMapping {
+                    export_id,
+                    mapping: mapping.clone(),
+                })
+            });
         }
     }
 
