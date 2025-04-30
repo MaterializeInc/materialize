@@ -306,7 +306,7 @@ impl Coordinator {
         let mut out = None;
 
         let uuid = match logging {
-            PreparedStatementLoggingInfo::AlreadyLogged { uuid } => uuid.clone(),
+            PreparedStatementLoggingInfo::AlreadyLogged { uuid } => *uuid,
             PreparedStatementLoggingInfo::StillToLog {
                 sql,
                 redacted_sql,
