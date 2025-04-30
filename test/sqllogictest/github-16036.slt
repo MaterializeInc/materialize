@@ -32,7 +32,7 @@ statement ok
 CREATE VIEW test AS SELECT v1, v2, v3 FROM t1, t2, t3 where t1.k1 = t2.k1 and t1.k2 = t3.k2;
 
 query T multiline
-EXPLAIN PHYSICAL PLAN FOR SELECT * FROM test;
+EXPLAIN PHYSICAL PLAN AS VERBOSE TEXT FOR SELECT * FROM test;
 ----
 Explained Query:
   Join::Delta
