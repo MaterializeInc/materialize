@@ -785,7 +785,7 @@ Explained Query:
       Distinct project=[] // { types: "()" }
         Get l0 // { types: "()" }
   Return // { types: "(boolean, boolean)" }
-    Map (NOT(#0{?column?})) // { types: "(boolean, boolean)" }
+    Map (NOT(#0{"?column?"})) // { types: "(boolean, boolean)" }
       CrossJoin type=differential // { types: "(boolean)" }
         ArrangeBy keys=[[]] // { types: "()" }
           Get l0 // { types: "()" }

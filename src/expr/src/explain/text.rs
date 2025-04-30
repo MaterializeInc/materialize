@@ -1192,11 +1192,7 @@ where
                 M::humanize_ident(*self.expr.0, ident, f)
             }
             // We don't have name inferred for this column.
-            _ => M::humanize_ident(
-                *self.expr.0,
-                Ident::new_unchecked(self.expr.1.to_string()),
-                f,
-            ),
+            _ => M::humanize_ident(*self.expr.0, Ident::new_unchecked(self.expr.1.as_ref()), f),
         }
     }
 }
