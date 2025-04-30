@@ -1,0 +1,103 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+mode cockroach
+
+statement ok
+create table t1(x int, y int);
+
+query T multiline
+EXPLAIN OPTIMIZED PLAN WITH (humanized expressions, column names) AS VERBOSE TEXT FOR
+select sum(x) + 5 as s from t1;
+----
+Explained Query:
+  With
+    cte l0 =
+      Reduce aggregates=[sum(#0{x})] // { column_names: "(sum_x)" }
+        Project (#0{x}) // { column_names: "(x)" }
+          ReadStorage materialize.public.t1 // { column_names: "(x, y)" }
+  Return // { column_names: "(#0)" }
+    Project (#1) // { column_names: "(#0)" }
+      Map ((#0{sum_x} + 5)) // { column_names: "(sum_x, #1)" }
+        Union // { column_names: "(sum_x)" }
+          Get l0 // { column_names: "(sum_x)" }
+          Map (null) // { column_names: "(#0)" }
+            Union // { column_names: "()" }
+              Negate // { column_names: "()" }
+                Project () // { column_names: "()" }
+                  Get l0 // { column_names: "(sum_x)" }
+              Constant // { column_names: "()" }
+                - ()
+
+Source materialize.public.t1
+
+Target cluster: quickstart
+
+EOF
+
+query T multiline
+EXPLAIN OPTIMIZED PLAN WITH (humanized expressions) AS VERBOSE TEXT FOR
+select sum(x) + 5 as s from t1;
+----
+Explained Query:
+  With
+    cte l0 =
+      Reduce aggregates=[sum(#0{x})]
+        Project (#0{x})
+          ReadStorage materialize.public.t1
+  Return
+    Project (#1)
+      Map ((#0{sum_x} + 5))
+        Union
+          Get l0
+          Map (null)
+            Union
+              Negate
+                Project ()
+                  Get l0
+              Constant
+                - ()
+
+Source materialize.public.t1
+
+Target cluster: quickstart
+
+EOF
+
+# NB no humanized expressions means we won't infer any column names
+# but we _will_ get to keep the annotated names (for better or worse)
+
+query T multiline
+EXPLAIN OPTIMIZED PLAN WITH (humanized expressions = false) AS VERBOSE TEXT FOR
+select sum(x) + 5 as s from t1;
+----
+Explained Query:
+  With
+    cte l0 =
+      Reduce aggregates=[sum(#0{x})]
+        Project (#0)
+          ReadStorage materialize.public.t1
+  Return
+    Project (#1)
+      Map ((#0{"?column?"} + 5))
+        Union
+          Get l0
+          Map (null)
+            Union
+              Negate
+                Project ()
+                  Get l0
+              Constant
+                - ()
+
+Source materialize.public.t1
+
+Target cluster: quickstart
+
+EOF

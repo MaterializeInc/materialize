@@ -959,12 +959,14 @@ mod column_names {
     }
 
     impl ColumnName {
-        /// Return `true` iff this the variant is not unknown.
+        /// Return `true` iff the variant has an inferred name.
         pub fn is_known(&self) -> bool {
-            matches!(
-                self,
-                Self::Global(..) | Self::Aggregate(..) | Self::Annotated(..)
-            )
+            match self {
+                Self::Global(..) | Self::Aggregate(..) => true,
+                // We treat annotated columns as unknown because we would rather
+                // override them with inferred names, if we can.
+                Self::Annotated(..) | Self::Unknown => false,
+            }
         }
 
         /// Humanize the column to a [`String`], returns an empty [`String`] for
