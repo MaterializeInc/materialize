@@ -248,6 +248,19 @@ where
     }
 }
 
+impl<'a, M: HumanizerMode> HumanizedExpr<'a, MapFilterProject, M>
+{
+    /// Render an MFP using the the default (concise) syntax.
+    pub fn fmt_default_text<T>(
+        &self,
+        f: &mut fmt::Formatter<'_>,
+        ctx: &mut PlanRenderingContext<'_, T>,
+    ) -> fmt::Result {
+        // TODO(mgree) LIR default output
+        self.fmt_text(f, ctx)
+    }
+}
+
 /// `EXPLAIN ... AS TEXT` support for [`MirRelationExpr`].
 ///
 /// The format adheres to the following conventions:
