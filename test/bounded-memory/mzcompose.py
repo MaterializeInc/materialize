@@ -969,8 +969,8 @@ SCENARIOS = [
                       Union // { cardinality: \"<UNKNOWN>\" }
                         Negate // { cardinality: \"<UNKNOWN>\" }
                           Project (#0) // { cardinality: \"<UNKNOWN>\" }
-                Get l1 // { cardinality: \"<UNKNOWN>\" }
-            Get l0 // { cardinality: \"<UNKNOWN>\" }
+                            Get l1 // { cardinality: \"<UNKNOWN>\" }
+                        Get l0 // { cardinality: \"<UNKNOWN>\" }
               Return // { cardinality: \"<UNKNOWN>\" }
                 Project (#0) // { cardinality: \"<UNKNOWN>\" }
                   Filter ((#1{col0} > 3) OR ((#1{col0} <= 88) AND (#1{col0} > 5) AND ((#1{col0} = 98) OR (#1{col0} >= 30) OR (#6 AND (#2{col1}) IS NULL AND (#3{col3} < 48) AND (#4{col4} < 86.27) AND (#1{col0} <= 45) AND (#2{col1} <= 10.7) AND (#3{col3} > 49) AND (#3{col3} > 66) AND (#4{col4} > 42.2) AND (#1{col0} >= 25) AND (#3{col3} >= 49) AND (#3{col3} >= 77) AND ((#1{col0} = 67) OR (#1{col0} = 81) OR (#1{col0} = 86) OR (#1{col0} = 94) OR (#1{col0} = 97)) AND ((#2{col1} < 20.99) OR (#2{col1} <= 30.14) OR (#1{col0} > 79) OR (#1{col0} >= 89) OR (#3{col3} >= 12) OR ((#3{col3} > 77) AND (#2{col1} >= 74.51)))) OR (#7 AND (#3{col3} <= 88)) OR ((#1{col0} < 68) AND (#1{col0} <= 35)) OR ((#2{col1} <= 17.96) AND (#7 OR ((#4{col4} <= 2.63) AND (#1{col0} > 2) AND (#3{col3} > 8)))) OR ((#4{col4} <= 97.11) AND ((#1{col0} = 11) OR (#1{col0} = 63) OR (#1{col0} = 85) OR (#1{col0} = 87) OR (#1{col0} = 88)))))) // { cardinality: \"<UNKNOWN>\" }
