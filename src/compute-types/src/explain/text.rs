@@ -24,7 +24,7 @@ use std::fmt;
 use std::ops::Deref;
 
 use itertools::{Itertools, izip};
-use mz_expr::explain::{HumanizedExplain, HumanizerMode, fmt_text_constant_rows};
+use mz_expr::explain::{fmt_text_constant_rows, HumanizedExplain, HumanizerMode};
 use mz_expr::{Id, MirScalarExpr};
 use mz_ore::str::{IndentLike, StrExt, separated};
 use mz_repr::explain::text::DisplayText;
@@ -122,7 +122,7 @@ impl Plan {
                     GetPlan::Arrangement(key, Some(val), mfp) => {
                         writeln!(f, "{}Index Lookup on {id}{annotations}", ctx.indent)?;
                         ctx.indent += 1;
-                        mode.expr(mfp, None).fmt_text(f, ctx)?;
+                        mode.expr(mfp, None).fmt_default_text(f, ctx)?;
                         let key = CompactScalars(mode.seq(key, None));
                         let val = mode.expr(val, None);
                         writeln!(f, "{}key={key} val={val}", ctx.indent)?;
@@ -130,14 +130,14 @@ impl Plan {
                     GetPlan::Arrangement(key, None, mfp) => {
                         writeln!(f, "{}Indexed {id}{annotations}", ctx.indent)?;
                         ctx.indent += 1;
-                        mode.expr(mfp, None).fmt_text(f, ctx)?;
+                        mode.expr(mfp, None).fmt_default_text(f, ctx)?;
                         let key = CompactScalars(mode.seq(key, None));
                         writeln!(f, "{}key={key}", ctx.indent)?;
                     }
                     GetPlan::Collection(mfp) => {
                         writeln!(f, "{}Read {id}{annotations}", ctx.indent)?;
                         ctx.indent += 1;
-                        mode.expr(mfp, None).fmt_text(f, ctx)?;
+                        mode.expr(mfp, None).fmt_default_text(f, ctx)?;
                     }
                 }
                 ctx.indent.reset(); // reset the original indent level
@@ -195,7 +195,7 @@ impl Plan {
             } => {
                 writeln!(f, "{}Map/Filter/Project{annotations}", ctx.indent)?;
                 ctx.indented(|ctx| {
-                    mode.expr(mfp, None).fmt_text(f, ctx)?;
+                    mode.expr(mfp, None).fmt_default_text(f, ctx)?;
                     match input_key_val {
                         Some((key, Some(val))) => {
                             let key = CompactScalars(mode.seq(key, None));
@@ -229,7 +229,7 @@ impl Plan {
                 ctx.indented(|ctx| {
                     if !mfp_after.is_identity() {
                         writeln!(f, "{}Post-process Map/Filter/Project", ctx.indent)?;
-                        ctx.indented(|ctx| mode.expr(mfp_after, None).fmt_text(f, ctx))?;
+                        ctx.indented(|ctx| mode.expr(mfp_after, None).fmt_default_text(f, ctx))?;
                     }
                     if let Some(key) = input_key {
                         let key = mode.seq(key, None);
@@ -321,7 +321,7 @@ impl Plan {
                     }
                     if !mfp_after.is_identity() {
                         writeln!(f, "{}Post-process Map/Filter/Project", ctx.indent)?;
-                        ctx.indented(|ctx| mode.expr(mfp_after, None).fmt_text(f, ctx))?;
+                        ctx.indented(|ctx| mode.expr(mfp_after, None).fmt_default_text(f, ctx))?;
                     }
 
                     input.fmt_text(f, ctx)
@@ -449,7 +449,7 @@ impl Plan {
                     }
                     if !input_mfp.is_identity() {
                         writeln!(f, "{}Pre-process Map/Filter/Project", ctx.indent)?;
-                        ctx.indented(|ctx| mode.expr(input_mfp, None).fmt_text(f, ctx))?;
+                        ctx.indented(|ctx| mode.expr(input_mfp, None).fmt_default_text(f, ctx))?;
                     }
                     if !forms.arranged.is_empty() {
                         writeln!(f, "{}Keys:", ctx.indent)?;
@@ -865,6 +865,27 @@ impl DisplayText<PlanRenderingContext<'_, Plan>> for AvailableCollections {
         f: &mut fmt::Formatter<'_>,
         ctx: &mut PlanRenderingContext<'_, Plan>,
     ) -> fmt::Result {
+        if ctx.config.verbose_syntax {
+            self.fmt_verbose_text(f, ctx)
+        } else {
+            self.fmt_default_text(f, ctx)
+        }
+    }
+}
+impl AvailableCollections {
+    fn fmt_default_text(
+        &self,
+        f: &mut fmt::Formatter<'_>,
+        ctx: &mut PlanRenderingContext<'_, Plan>,
+    ) -> fmt::Result {
+        self.fmt_verbose_text(f, ctx)
+    }
+
+    fn fmt_verbose_text(
+        &self,
+        f: &mut fmt::Formatter<'_>,
+        ctx: &mut PlanRenderingContext<'_, Plan>,
+    ) -> fmt::Result {
         // raw field
         let raw = &self.raw;
         writeln!(f, "{}raw={}", ctx.indent, raw)?;
@@ -898,6 +919,27 @@ impl DisplayText<PlanRenderingContext<'_, Plan>> for AvailableCollections {
 
 impl DisplayText<PlanRenderingContext<'_, Plan>> for LinearJoinPlan {
     fn fmt_text(
+        &self,
+        f: &mut fmt::Formatter<'_>,
+        ctx: &mut PlanRenderingContext<'_, Plan>,
+    ) -> fmt::Result {
+        if ctx.config.verbose_syntax {
+            self.fmt_verbose_text(f, ctx)
+        } else {
+            self.fmt_default_text(f, ctx)
+        }
+    }
+}
+impl LinearJoinPlan {
+    fn fmt_default_text(
+        &self,
+        f: &mut fmt::Formatter<'_>,
+        ctx: &mut PlanRenderingContext<'_, Plan>,
+    ) -> fmt::Result {
+        self.fmt_verbose_text(f, ctx)
+    }
+
+    fn fmt_verbose_text(
         &self,
         f: &mut fmt::Formatter<'_>,
         ctx: &mut PlanRenderingContext<'_, Plan>,
@@ -946,6 +988,27 @@ impl DisplayText<PlanRenderingContext<'_, Plan>> for LinearStagePlan {
         f: &mut fmt::Formatter<'_>,
         ctx: &mut PlanRenderingContext<'_, Plan>,
     ) -> fmt::Result {
+        if ctx.config.verbose_syntax {
+            self.fmt_verbose_text(f, ctx)
+        } else {
+            self.fmt_default_text(f, ctx)
+        }
+    }
+}
+impl LinearStagePlan {
+    fn fmt_default_text(
+        &self,
+        f: &mut fmt::Formatter<'_>,
+        ctx: &mut PlanRenderingContext<'_, Plan>,
+    ) -> fmt::Result {
+        self.fmt_verbose_text(f, ctx)
+    }
+
+    fn fmt_verbose_text(
+        &self,
+        f: &mut fmt::Formatter<'_>,
+        ctx: &mut PlanRenderingContext<'_, Plan>,
+    ) -> fmt::Result {
         let mode = HumanizedExplain::new(ctx.config.redacted);
 
         let plan = self;
@@ -982,6 +1045,27 @@ impl DisplayText<PlanRenderingContext<'_, Plan>> for DeltaJoinPlan {
         f: &mut fmt::Formatter<'_>,
         ctx: &mut PlanRenderingContext<'_, Plan>,
     ) -> fmt::Result {
+        if ctx.config.verbose_syntax {
+            self.fmt_verbose_text(f, ctx)
+        } else {
+            self.fmt_default_text(f, ctx)
+        }
+    }
+}
+impl DeltaJoinPlan {
+    fn fmt_default_text(
+        &self,
+        f: &mut fmt::Formatter<'_>,
+        ctx: &mut PlanRenderingContext<'_, Plan>,
+    ) -> fmt::Result {
+        self.fmt_verbose_text(f, ctx)
+    }
+
+    fn fmt_verbose_text(
+        &self,
+        f: &mut fmt::Formatter<'_>,
+        ctx: &mut PlanRenderingContext<'_, Plan>,
+    ) -> fmt::Result {
         for (i, plan) in self.path_plans.iter().enumerate() {
             writeln!(f, "{}plan_path[{}]", ctx.indent, i)?;
             ctx.indented(|ctx| plan.fmt_text(f, ctx))?;
@@ -992,6 +1076,27 @@ impl DisplayText<PlanRenderingContext<'_, Plan>> for DeltaJoinPlan {
 
 impl DisplayText<PlanRenderingContext<'_, Plan>> for DeltaPathPlan {
     fn fmt_text(
+        &self,
+        f: &mut fmt::Formatter<'_>,
+        ctx: &mut PlanRenderingContext<'_, Plan>,
+    ) -> fmt::Result {
+        if ctx.config.verbose_syntax {
+            self.fmt_verbose_text(f, ctx)
+        } else {
+            self.fmt_default_text(f, ctx)
+        }
+    }
+}
+impl DeltaPathPlan {
+    fn fmt_default_text(
+        &self,
+        f: &mut fmt::Formatter<'_>,
+        ctx: &mut PlanRenderingContext<'_, Plan>,
+    ) -> fmt::Result {
+        self.fmt_verbose_text(f, ctx)
+    }
+
+    fn fmt_verbose_text(
         &self,
         f: &mut fmt::Formatter<'_>,
         ctx: &mut PlanRenderingContext<'_, Plan>,
@@ -1028,6 +1133,27 @@ impl DisplayText<PlanRenderingContext<'_, Plan>> for DeltaPathPlan {
 
 impl DisplayText<PlanRenderingContext<'_, Plan>> for DeltaStagePlan {
     fn fmt_text(
+        &self,
+        f: &mut fmt::Formatter<'_>,
+        ctx: &mut PlanRenderingContext<'_, Plan>,
+    ) -> fmt::Result {
+        if ctx.config.verbose_syntax {
+            self.fmt_verbose_text(f, ctx)
+        } else {
+            self.fmt_default_text(f, ctx)
+        }
+    }
+}
+impl DeltaStagePlan {
+    fn fmt_default_text(
+        &self,
+        f: &mut fmt::Formatter<'_>,
+        ctx: &mut PlanRenderingContext<'_, Plan>,
+    ) -> fmt::Result {
+        self.fmt_verbose_text(f, ctx)
+    }
+
+    fn fmt_verbose_text(
         &self,
         f: &mut fmt::Formatter<'_>,
         ctx: &mut PlanRenderingContext<'_, Plan>,
@@ -1069,6 +1195,27 @@ impl DisplayText<PlanRenderingContext<'_, Plan>> for JoinClosure {
         f: &mut fmt::Formatter<'_>,
         ctx: &mut PlanRenderingContext<'_, Plan>,
     ) -> fmt::Result {
+        if ctx.config.verbose_syntax {
+            self.fmt_verbose_text(f, ctx)
+        } else {
+            self.fmt_default_text(f, ctx)
+        }
+    }
+}
+impl JoinClosure {
+    fn fmt_default_text(
+        &self,
+        f: &mut fmt::Formatter<'_>,
+        ctx: &mut PlanRenderingContext<'_, Plan>,
+    ) -> fmt::Result {
+        self.fmt_verbose_text(f, ctx)
+    }
+
+    fn fmt_verbose_text(
+        &self,
+        f: &mut fmt::Formatter<'_>,
+        ctx: &mut PlanRenderingContext<'_, Plan>,
+    ) -> fmt::Result {
         let mode = HumanizedExplain::new(ctx.config.redacted);
         mode.expr(self.before.deref(), None).fmt_text(f, ctx)?;
         if !self.ready_equivalences.is_empty() {
@@ -1086,6 +1233,27 @@ impl DisplayText<PlanRenderingContext<'_, Plan>> for JoinClosure {
 
 impl DisplayText<PlanRenderingContext<'_, Plan>> for AccumulablePlan {
     fn fmt_text(
+        &self,
+        f: &mut fmt::Formatter<'_>,
+        ctx: &mut PlanRenderingContext<'_, Plan>,
+    ) -> fmt::Result {
+        if ctx.config.verbose_syntax {
+            self.fmt_verbose_text(f, ctx)
+        } else {
+            self.fmt_default_text(f, ctx)
+        }
+    }
+}
+impl AccumulablePlan {
+    fn fmt_default_text(
+        &self,
+        f: &mut fmt::Formatter<'_>,
+        ctx: &mut PlanRenderingContext<'_, Plan>,
+    ) -> fmt::Result {
+        self.fmt_verbose_text(f, ctx)
+    }
+
+    fn fmt_verbose_text(
         &self,
         f: &mut fmt::Formatter<'_>,
         ctx: &mut PlanRenderingContext<'_, Plan>,
@@ -1115,6 +1283,27 @@ impl DisplayText<PlanRenderingContext<'_, Plan>> for AccumulablePlan {
 
 impl DisplayText<PlanRenderingContext<'_, Plan>> for HierarchicalPlan {
     fn fmt_text(
+        &self,
+        f: &mut fmt::Formatter<'_>,
+        ctx: &mut PlanRenderingContext<'_, Plan>,
+    ) -> fmt::Result {
+        if ctx.config.verbose_syntax {
+            self.fmt_verbose_text(f, ctx)
+        } else {
+            self.fmt_default_text(f, ctx)
+        }
+    }
+}
+impl HierarchicalPlan {
+    fn fmt_default_text(
+        &self,
+        f: &mut fmt::Formatter<'_>,
+        ctx: &mut PlanRenderingContext<'_, Plan>,
+    ) -> fmt::Result {
+        self.fmt_verbose_text(f, ctx)
+    }
+
+    fn fmt_verbose_text(
         &self,
         f: &mut fmt::Formatter<'_>,
         ctx: &mut PlanRenderingContext<'_, Plan>,
@@ -1152,6 +1341,27 @@ impl DisplayText<PlanRenderingContext<'_, Plan>> for BasicPlan {
         f: &mut fmt::Formatter<'_>,
         ctx: &mut PlanRenderingContext<'_, Plan>,
     ) -> fmt::Result {
+        if ctx.config.verbose_syntax {
+            self.fmt_verbose_text(f, ctx)
+        } else {
+            self.fmt_default_text(f, ctx)
+        }
+    }
+}
+impl BasicPlan {
+    fn fmt_default_text(
+        &self,
+        f: &mut fmt::Formatter<'_>,
+        ctx: &mut PlanRenderingContext<'_, Plan>,
+    ) -> fmt::Result {
+        self.fmt_verbose_text(f, ctx)
+    }
+
+    fn fmt_verbose_text(
+        &self,
+        f: &mut fmt::Formatter<'_>,
+        ctx: &mut PlanRenderingContext<'_, Plan>,
+    ) -> fmt::Result {
         let mode = HumanizedExplain::new(ctx.config.redacted);
         match self {
             BasicPlan::Single(SingleBasicPlan {
@@ -1184,6 +1394,28 @@ impl DisplayText<PlanRenderingContext<'_, Plan>> for BasicPlan {
 
 impl DisplayText<PlanRenderingContext<'_, Plan>> for CollationPlan {
     fn fmt_text(
+        &self,
+        f: &mut fmt::Formatter<'_>,
+        ctx: &mut PlanRenderingContext<'_, Plan>,
+    ) -> fmt::Result {
+        if ctx.config.verbose_syntax {
+            self.fmt_verbose_text(f, ctx)
+        } else {
+            self.fmt_default_text(f, ctx)
+        }
+    }
+}
+
+impl CollationPlan {
+    fn fmt_default_text(
+        &self,
+        f: &mut fmt::Formatter<'_>,
+        ctx: &mut PlanRenderingContext<'_, Plan>,
+    ) -> fmt::Result {
+        self.fmt_verbose_text(f, ctx)
+    }
+
+    fn fmt_verbose_text(
         &self,
         f: &mut fmt::Formatter<'_>,
         ctx: &mut PlanRenderingContext<'_, Plan>,
@@ -1239,6 +1471,28 @@ impl<'a> From<&'a (Vec<MirScalarExpr>, Vec<usize>, Vec<usize>)> for Arrangement<
 
 impl<'a> DisplayText<PlanRenderingContext<'_, Plan>> for Arrangement<'a> {
     fn fmt_text(
+        &self,
+        f: &mut fmt::Formatter<'_>,
+        ctx: &mut PlanRenderingContext<'_, Plan>,
+    ) -> fmt::Result {
+        if ctx.config.verbose_syntax {
+            self.fmt_verbose_text(f, ctx)
+        } else {
+            self.fmt_default_text(f, ctx)
+        }
+    }
+}
+
+impl<'a> Arrangement<'a> {
+    fn fmt_default_text(
+        &self,
+        f: &mut fmt::Formatter<'_>,
+        ctx: &mut PlanRenderingContext<'_, Plan>,
+    ) -> fmt::Result {
+        self.fmt_verbose_text(f, ctx)
+    }
+
+    fn fmt_verbose_text(
         &self,
         f: &mut fmt::Formatter<'_>,
         ctx: &mut PlanRenderingContext<'_, Plan>,
