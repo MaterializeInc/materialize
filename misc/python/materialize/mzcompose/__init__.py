@@ -141,6 +141,9 @@ def get_default_system_parameters(
         "persist_encoding_enable_dictionary": "true",
         "persist_fast_path_limit": "1000",
         "persist_fast_path_order": "true",
+        "persist_gc_use_active_gc": (
+            "true" if version > MzVersion.parse_mz("v0.143.0-dev") else "false"
+        ),
         "persist_inline_writes_single_max_bytes": "4096",
         "persist_inline_writes_total_max_bytes": "1048576",
         "persist_pubsub_client_enabled": "true",
@@ -148,6 +151,9 @@ def get_default_system_parameters(
         "persist_record_compactions": "true",
         "persist_record_schema_id": (
             "true" if version > MzVersion.parse_mz("v0.127.0-dev") else "false"
+        ),
+        "persist_rollup_use_active_rollup": (
+            "true" if version > MzVersion.parse_mz("v0.143.0-dev") else "false"
         ),
         # 16 MiB - large enough to avoid a big perf hit, small enough to get more coverage...
         "persist_blob_target_size": "16777216",
