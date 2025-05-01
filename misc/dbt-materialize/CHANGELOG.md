@@ -1,5 +1,9 @@
 # dbt-materialize Changelog
 
+## Unreleased
+
+* Add support for `retain_history` configuration in materialized views, allowing users to specify how long to retain historical data (e.g. `retain_history: '1hr'`).
+
 ## 1.9.4 - 2025-04-04
 
 * Fix copying default privileges in blue/green deployments when the
