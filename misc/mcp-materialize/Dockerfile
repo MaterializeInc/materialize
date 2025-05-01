@@ -16,4 +16,3 @@ WORKDIR /app/mcp-materialize
 COPY . .
 
 RUN uv sync --dev
-
