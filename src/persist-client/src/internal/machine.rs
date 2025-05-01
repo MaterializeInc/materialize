@@ -1416,6 +1416,7 @@ pub mod datadriven {
     use mz_dyncfg::{ConfigUpdates, ConfigVal};
     use mz_persist::indexed::encoding::BlobTraceBatchPart;
     use mz_persist_types::codec_impls::{StringSchema, UnitSchema};
+    use tokio::sync::mpsc;
 
     use crate::batch::{
         BLOB_TARGET_SIZE, Batch, BatchBuilder, BatchBuilderConfig, BatchBuilderInternal,
@@ -1423,7 +1424,7 @@ pub mod datadriven {
     };
     use crate::cfg::COMPACTION_MEMORY_BOUND_BYTES;
     use crate::fetch::EncodedPart;
-    use crate::internal::compact::{CompactConfig, CompactReq, Compactor};
+    use crate::internal::compact::{CompactConfig, CompactReq, CompactRes, Compactor};
     use crate::internal::datadriven::DirectiveArgs;
     use crate::internal::encoding::Schemas;
     use crate::internal::gc::GcReq;
@@ -1964,6 +1965,37 @@ pub mod datadriven {
         Ok("ok\n".to_string())
     }
 
+    async fn drain_apply(
+        mut rx: mpsc::Receiver<FueledMergeRes<u64>>,
+        desc: Description<u64>,
+    ) -> CompactRes<u64> {
+        let mut all_parts = vec![];
+        let mut all_run_splits = vec![];
+        let mut all_run_meta = vec![];
+        let mut len = 0;
+
+        while let Some(res) = rx.recv().await {
+            let (parts, updates, run_meta, run_splits) = (
+                res.output.parts,
+                res.output.len,
+                res.output.run_meta,
+                res.output.run_splits,
+            );
+            let run_offset = all_parts.len();
+            if !all_parts.is_empty() {
+                all_run_splits.push(run_offset);
+            }
+            all_run_splits.extend(run_splits.iter().map(|r| r + run_offset));
+            all_run_meta.extend(run_meta);
+            all_parts.extend(parts);
+            len += updates;
+        }
+
+        CompactRes {
+            output: HollowBatch::new(desc, all_parts, len, all_run_meta, all_run_splits),
+        }
+    }
+
     pub async fn compact(
         datadriven: &mut MachineState,
         args: DirectiveArgs<'_>,
@@ -1998,7 +2030,10 @@ pub mod datadriven {
             desc: Description::new(lower, upper, since),
             inputs,
         };
-        let res = Compactor::<String, (), u64, i64>::compact(
+        let (tx, rx) = mpsc::channel::<FueledMergeRes<u64>>(1);
+        let req_clone = req.clone();
+
+        let compact_fut = Compactor::<String, (), u64, i64>::compact(
             CompactConfig::new(&cfg, datadriven.shard_id),
             Arc::clone(&datadriven.client.blob),
             Arc::clone(&datadriven.client.metrics),
@@ -2006,10 +2041,13 @@ pub mod datadriven {
             Arc::clone(&datadriven.client.isolated_runtime),
             req,
             SCHEMAS.clone(),
-            None,
-        )
-        .await?;
+            tx,
+        );
+        let apply_fut = drain_apply(rx, req_clone.desc.clone());
 
+        let (compact_res, res) = tokio::join!(compact_fut, apply_fut);
+
+        compact_res?;
         datadriven
             .batches
             .insert(output.to_owned(), res.output.clone());

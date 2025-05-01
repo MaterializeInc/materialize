@@ -391,7 +391,7 @@ where
                             Arc::clone(&machine.isolated_runtime),
                             req,
                             compaction_schema,
-                            Some(tx),
+                            tx,
                         )
                         .instrument(compact_span),
                     );
@@ -483,8 +483,8 @@ where
         isolated_runtime: Arc<IsolatedRuntime>,
         req: CompactReq<T>,
         write_schemas: Schemas<K, V>,
-        mut tx: Option<Sender<FueledMergeRes<T>>>,
-    ) -> Result<CompactRes<T>, anyhow::Error> {
+        tx: Sender<FueledMergeRes<T>>,
+    ) -> Result<(), anyhow::Error> {
         let _ = Self::validate_req(&req)?;
         assert!(cfg.compaction_memory_bound_bytes >= 4 * cfg.batch.blob_target_size);
 
@@ -503,11 +503,6 @@ where
 
         let total_chunked_runs = chunked_runs.len();
         let mut applied = 0;
-
-        let mut all_parts = vec![];
-        let mut all_run_splits = vec![];
-        let mut all_run_meta = vec![];
-        let mut len = 0;
 
         for (runs, run_chunk_max_memory_usage) in chunked_runs {
             metrics.compaction.chunks_compacted.inc();
@@ -576,36 +571,20 @@ where
                 new_active_compaction: active_compaction,
             };
 
-            if let Some(tx) = tx.as_mut() {
-                // Send the compaction result to the machine for processing
-                let _ = tx.send(res).await;
+            // Send the compaction result to the machine for processing
+            let res = tx.send(res).await;
+            if let Err(err) = res {
+                error!(
+                    "Failed to send compaction result to machine: {}",
+                    err.display_with_causes()
+                );
+                return Err(anyhow!(err));
             }
-
-            let run_offset = all_parts.len();
-            if all_parts.len() > 0 {
-                all_run_splits.push(run_offset);
-            }
-            all_run_splits.extend(run_splits.iter().map(|run_start| run_start + run_offset));
-            all_run_meta.extend(run_meta.clone());
-            all_parts.extend(parts.clone());
-            len += updates;
 
             applied += 1;
         }
 
-        Ok(
-            //This is kind of a lie, but we don't have a better way to express this.
-            //We applied these updates in batches but we represent them as a single batch.
-            CompactRes {
-                output: HollowBatch::new(
-                    req.desc.clone(),
-                    all_parts,
-                    len,
-                    all_run_meta,
-                    all_run_splits,
-                ),
-            },
-        )
+        Ok(())
     }
 
     /// Compacts input batches in bounded memory.
