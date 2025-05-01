@@ -51,7 +51,6 @@ use crate::internal::trace::{ApplyMergeResult, FueledMergeRes};
 use crate::iter::{Consolidator, StructuredSort};
 use crate::{Metrics, PersistConfig, ShardId};
 
-use super::machine;
 use super::trace::ActiveCompaction;
 
 /// A request for compaction.
@@ -381,17 +380,22 @@ where
             isolated_runtime
                 .spawn_named(|| "persist::compact::consolidate", {
                     let machine = machine.clone();
-                    Self::compact(
-                        CompactConfig::new(&machine.applier.cfg, machine.shard_id()),
-                        Arc::clone(&machine.applier.state_versions.blob),
-                        Arc::clone(&metrics),
-                        Arc::clone(&machine.applier.shard_metrics),
-                        Arc::clone(&machine.isolated_runtime),
-                        req,
-                        compaction_schema,
-                        machine,
-                    )
-                    .instrument(compact_span)
+                    let (tx, rx) = mpsc::channel(1);
+                    isolated_runtime.spawn_named(
+                        || "persist::compact::work",
+                        Self::compact(
+                            CompactConfig::new(&machine.applier.cfg, machine.shard_id()),
+                            Arc::clone(&machine.applier.state_versions.blob),
+                            Arc::clone(&metrics),
+                            Arc::clone(&machine.applier.shard_metrics),
+                            Arc::clone(&machine.isolated_runtime),
+                            req,
+                            compaction_schema,
+                            Some(tx),
+                        )
+                        .instrument(compact_span),
+                    );
+                    Self::apply(rx, Arc::clone(&metrics), machine)
                 })
                 .map_err(|e| anyhow!(e)),
         )
@@ -411,7 +415,7 @@ where
             .inc_by(start.elapsed().as_secs_f64());
 
         match res {
-            Ok(Ok(res)) => Ok(res),
+            Ok(Ok(maintenance)) => Ok(maintenance),
             Ok(Err(err)) | Err(err) => {
                 metrics.compaction.failed.inc();
                 debug!(
@@ -424,6 +428,53 @@ where
         }
     }
 
+    pub async fn apply(
+        mut rx: mpsc::Receiver<FueledMergeRes<T>>,
+        metrics: Arc<Metrics>,
+        machine: Machine<K, V, T, D>,
+    ) -> Result<RoutineMaintenance, anyhow::Error> {
+        let mut maintenance = RoutineMaintenance::default();
+        while let Some(res) = rx.recv().await {
+            let (apply_merge_result, new_maintenance) = machine.merge_res(&res).await;
+
+            match &apply_merge_result {
+                ApplyMergeResult::AppliedExact => {
+                    metrics.compaction.applied.inc();
+                    metrics.compaction.applied_exact_match.inc();
+                    machine.applier.shard_metrics.compaction_applied.inc();
+                }
+                ApplyMergeResult::AppliedSubset => {
+                    metrics.compaction.applied.inc();
+                    metrics.compaction.applied_subset_match.inc();
+                    machine.applier.shard_metrics.compaction_applied.inc();
+                }
+                ApplyMergeResult::NotAppliedNoMatch
+                | ApplyMergeResult::NotAppliedInvalidSince
+                | ApplyMergeResult::NotAppliedTooManyUpdates => {
+                    if let ApplyMergeResult::NotAppliedTooManyUpdates = &apply_merge_result {
+                        metrics.compaction.not_applied_too_many_updates.inc();
+                    }
+                    metrics.compaction.noop.inc();
+                    let mut part_deletes = PartDeletes::default();
+                    for part in res.output.parts {
+                        part_deletes.add(&part);
+                    }
+                    part_deletes
+                        .delete(
+                            machine.applier.state_versions.blob.as_ref(),
+                            machine.shard_id(),
+                            GC_BLOB_DELETE_CONCURRENCY_LIMIT.get(&machine.applier.cfg),
+                            &*metrics,
+                            &metrics.retries.external.compaction_noop_delete,
+                        )
+                        .await;
+                }
+            }
+            maintenance = std::cmp::max(maintenance, new_maintenance);
+        }
+        Ok(maintenance)
+    }
+
     pub async fn compact(
         cfg: CompactConfig,
         blob: Arc<dyn Blob>,
@@ -432,8 +483,8 @@ where
         isolated_runtime: Arc<IsolatedRuntime>,
         req: CompactReq<T>,
         write_schemas: Schemas<K, V>,
-        machine: Machine<K, V, T, D>,
-    ) -> Result<RoutineMaintenance, anyhow::Error> {
+        mut tx: Option<Sender<FueledMergeRes<T>>>,
+    ) -> Result<CompactRes<T>, anyhow::Error> {
         let _ = Self::validate_req(&req)?;
         assert!(cfg.compaction_memory_bound_bytes >= 4 * cfg.batch.blob_target_size);
 
@@ -456,7 +507,11 @@ where
 
         let total_chunked_runs = chunked_runs.len();
         let mut applied = 0;
-        let mut maintenance = RoutineMaintenance::default();
+
+        let mut all_parts = vec![];
+        let mut all_run_splits = vec![];
+        let mut all_run_meta = vec![];
+        let mut len = 0;
 
         for (runs, run_chunk_max_memory_usage) in chunked_runs {
             metrics.compaction.chunks_compacted.inc();
@@ -511,7 +566,13 @@ where
             };
 
             let res = CompactRes {
-                output: HollowBatch::new(req.desc.clone(), parts, updates, run_meta, run_splits),
+                output: HollowBatch::new(
+                    batch.desc,
+                    parts.clone(),
+                    updates,
+                    run_meta.clone(),
+                    run_splits.clone(),
+                ),
             };
 
             let res = FueledMergeRes {
@@ -519,48 +580,36 @@ where
                 new_active_compaction: active_compaction,
             };
 
-            // Merge the compaction result back into the machine state
-            let (apply_merge_result, new_maintenance) = machine.merge_res(&res).await;
-
-            match &apply_merge_result {
-                ApplyMergeResult::AppliedExact => {
-                    metrics.compaction.applied.inc();
-                    metrics.compaction.applied_exact_match.inc();
-                    machine.applier.shard_metrics.compaction_applied.inc();
-                }
-                ApplyMergeResult::AppliedSubset => {
-                    metrics.compaction.applied.inc();
-                    metrics.compaction.applied_subset_match.inc();
-                    machine.applier.shard_metrics.compaction_applied.inc();
-                }
-                ApplyMergeResult::NotAppliedNoMatch
-                | ApplyMergeResult::NotAppliedInvalidSince
-                | ApplyMergeResult::NotAppliedTooManyUpdates => {
-                    if let ApplyMergeResult::NotAppliedTooManyUpdates = &apply_merge_result {
-                        metrics.compaction.not_applied_too_many_updates.inc();
-                    }
-                    metrics.compaction.noop.inc();
-                    let mut part_deletes = PartDeletes::default();
-                    for part in res.output.parts {
-                        part_deletes.add(&part);
-                    }
-                    part_deletes
-                        .delete(
-                            machine.applier.state_versions.blob.as_ref(),
-                            machine.shard_id(),
-                            GC_BLOB_DELETE_CONCURRENCY_LIMIT.get(&machine.applier.cfg),
-                            &*metrics,
-                            &metrics.retries.external.compaction_noop_delete,
-                        )
-                        .await;
-                }
+            if let Some(tx) = tx.as_mut() {
+                // Send the compaction result to the machine for processing
+                let _ = tx.send(res).await;
             }
 
-            maintenance = std::cmp::max(maintenance, new_maintenance);
+            let run_offset = all_parts.len();
+            if all_parts.len() > 0 {
+                all_run_splits.push(run_offset);
+            }
+            all_run_splits.extend(run_splits.iter().map(|run_start| run_start + run_offset));
+            all_run_meta.extend(run_meta.clone());
+            all_parts.extend(parts.clone());
+            len += updates;
+
             applied += 1;
         }
 
-        Ok(maintenance)
+        Ok(
+            //This is kind of a lie, but we don't have a better way to express this.
+            //We applied these updates in batches but we represent them as a single batch.
+            CompactRes {
+                output: HollowBatch::new(
+                    req.desc.clone(),
+                    all_parts,
+                    len,
+                    all_run_meta,
+                    all_run_splits,
+                ),
+            },
+        )
     }
 
     /// Compacts input batches in bounded memory.

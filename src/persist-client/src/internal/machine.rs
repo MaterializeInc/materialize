@@ -1998,7 +1998,7 @@ pub mod datadriven {
             desc: Description::new(lower, upper, since),
             inputs,
         };
-        let res = Compactor::<String, (), u64, i64>::compact_old(
+        let res = Compactor::<String, (), u64, i64>::compact(
             CompactConfig::new(&cfg, datadriven.shard_id),
             Arc::clone(&datadriven.client.blob),
             Arc::clone(&datadriven.client.metrics),
@@ -2006,6 +2006,7 @@ pub mod datadriven {
             Arc::clone(&datadriven.client.isolated_runtime),
             req,
             SCHEMAS.clone(),
+            None,
         )
         .await?;
 
