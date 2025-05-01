@@ -18,7 +18,7 @@ Self-contained, discoverable services that deliver real-time context instantly.
 Run the server with default settings:
 
 ```bash
-uv run materialize-mcp-server
+uv run mcp-materialize
 ```
 
 ## Configuration

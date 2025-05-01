@@ -78,7 +78,7 @@ def get_lifespan(cfg):
                 conninfo=cfg.dsn,
                 min_size=cfg.pool_min_size,
                 max_size=cfg.pool_max_size,
-                kwargs={"application_name": "materialize_mcp_server"},
+                kwargs={"application_name": "mcp_materialize"},
                 configure=configure,
             ) as pool:
                 try:
@@ -114,7 +114,7 @@ def get_lifespan(cfg):
 
 async def run():
     cfg = load_config()
-    server = Server("materialize_mcp_server", lifespan=get_lifespan(cfg))
+    server = Server("mcp_materialize", lifespan=get_lifespan(cfg))
 
     @server.list_tools()
     async def list_tools() -> list[Tool]:

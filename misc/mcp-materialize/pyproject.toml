@@ -14,7 +14,7 @@
 # limitations under the License.
 
 [project]
-name = "materialize-mcp-server"
+name = "mcp-materialize"
 version = "0.1.0"
 description = "A server that exposes Materialize indexes as tools over the Model Context Protocol (MCP)"
 readme = "README.md"
@@ -35,20 +35,14 @@ dependencies = [
 ]
 
 [project.scripts]
-materialize-mcp-server = "materialize_mcp_server:main"
-
-[project.urls]
-Homepage = "https://github.com/MaterializeInc/materialize-mcp-server"
-Documentation = "https://github.com/MaterializeInc/materialize-mcp-server#readme"
-Repository = "https://github.com/MaterializeInc/materialize-mcp-server.git"
-Issues = "https://github.com/MaterializeInc/materialize-mcp-server/issues"
+mcp-materialize = "mcp_materialize:main"
 
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
-packages = ["materialize_mcp_server"]
+packages = ["mcp_materialize"]
 
 [dependency-groups]
 dev = [
