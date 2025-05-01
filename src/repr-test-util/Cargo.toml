@@ -10,7 +10,7 @@ publish = false
 workspace = true
 
 [dependencies]
-chrono = { version = "0.4.39", default-features = false, features = ["serde", "std"] }
+chrono = { version = "0.4.41", default-features = false, features = ["serde", "std"] }
 mz-lowertest = { path = "../lowertest" }
 mz-ore = { path = "../ore" }
 mz-repr = { path = "../repr" }

@@ -12,7 +12,7 @@ workspace = true
 [dependencies]
 anyhow = "1.0.98"
 askama = { version = "0.12.1", default-features = false, features = ["config", "serde-json"] }
-axum = "0.8.3"
+axum = "0.8.4"
 axum-extra = { version = "0.10.1", features = ["typed-header"] }
 headers = "0.4.0"
 http = "1.2.0"

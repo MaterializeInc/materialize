@@ -11,10 +11,10 @@ workspace = true
 
 [dependencies]
 anyhow = "1.0.98"
-axum = "0.8.3"
+axum = "0.8.4"
 axum-extra = { version = "0.10.1", features = ["typed-header"] }
 base64 = "0.22.1"
-chrono = { version = "0.4.39", default-features = false, features = ["serde"] }
+chrono = { version = "0.4.41", default-features = false, features = ["serde"] }
 clap = { version = "4.5.23", features = ["derive", "env"] }
 hyper = { version = "1.4.1", features = ["http1", "server"] }
 jsonwebtoken = "9.3.1"

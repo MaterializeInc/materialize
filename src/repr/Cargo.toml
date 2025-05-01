@@ -33,8 +33,8 @@ bytes = "1.10.1"
 cfg-if = "1.0.0"
 columnar = "0.4.1"
 columnation = "0.1.0"
-chrono = { version = "0.4.39", default-features = false, features = ["serde", "std"] }
-compact_bytes = "0.1.3"
+chrono = { version = "0.4.41", default-features = false, features = ["serde", "std"] }
+compact_bytes = "0.1.4"
 dec = "0.4.8"
 differential-dataflow = "0.14.2"
 enum-kinds = "0.5.1"
@@ -82,7 +82,7 @@ workspace-hack = { version = "0.0.0", path = "../workspace-hack", optional = tru
 
 [dev-dependencies]
 criterion = { version = "0.5.1" }
-insta = { version = "1.43.0", features = ["json"] }
+insta = { version = "1.43.1", features = ["json"] }
 mz-persist = { path = "../persist" }
 rand = "0.8.5"
 

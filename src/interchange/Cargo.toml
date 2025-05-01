@@ -18,7 +18,7 @@ harness = false
 anyhow = "1.0.98"
 byteorder = "1.4.3"
 bytes = "1.10.1"
-chrono = { version = "0.4.39", default-features = false, features = ["std"] }
+chrono = { version = "0.4.41", default-features = false, features = ["std"] }
 clap = { version = "4.5.23", features = ["derive"] }
 differential-dataflow = "0.14.2"
 itertools = "0.14.0"

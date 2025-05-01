@@ -11,7 +11,7 @@ workspace = true
 
 [dependencies]
 anyhow = "1.0.98"
-chrono = { version = "0.4.39", default-features = false, features = ["std"] }
+chrono = { version = "0.4.41", default-features = false, features = ["std"] }
 mz-kafka-util = { path = "../../src/kafka-util" }
 mz-ore = { path = "../../src/ore", features = ["async"] }
 rand = "0.8.5"
