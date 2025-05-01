@@ -498,12 +498,8 @@ where
             Self::order_runs(&req, cfg.batch.preferred_order, &*blob, &*metrics).await?;
 
         // Split the runs into manageable chunks
-        let chunked_runs = Self::chunk_runs(
-            &ordered_runs,
-            &cfg,
-            &*metrics,
-            cfg.compaction_memory_bound_bytes,
-        );
+        let chunked_runs =
+            Self::chunk_runs(&ordered_runs, &cfg, &*metrics, run_reserved_memory_bytes);
 
         let total_chunked_runs = chunked_runs.len();
         let mut applied = 0;
