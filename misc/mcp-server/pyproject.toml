@@ -27,8 +27,9 @@ dependencies = [
     "fastapi>=0.115.12",
     "mcp>=1.4.1",
     "psycopg-pool>=3.2.6",
-    "psycopg>=3.2.6",
-    "pyyaml>=6.0.2"
+    "psycopg[binary]>=3.2.6",
+    "pyyaml>=6.0.2",
+    "requests>=2.32.3",
 ]
 
 [project.scripts]
@@ -49,10 +50,8 @@ packages = ["materialize_mcp_server"]
 
 [dependency-groups]
 dev = [
-    "docker>=7.1.0",
     "pytest-asyncio>=0.26.0",
     "pytest>=8.3.5",
-    "testcontainers>=4.10.0",
     "hatch>=1.9.4"
 ]
 
