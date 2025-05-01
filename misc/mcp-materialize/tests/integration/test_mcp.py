@@ -49,7 +49,7 @@ async def test_basic_tool(materialize_pool):
         await conn.set_autocommit(True)
         async with conn.cursor() as cur:
             await cur.execute(
-                """CREATE OR REPLACE VIEW tools.my_tool AS 
+                """CREATE OR REPLACE VIEW tools.my_tool AS
                 SELECT 1 AS id, 'hello' AS result;"""
             )
             await cur.execute("CREATE INDEX my_tool_id_idx ON tools.my_tool (id);")
