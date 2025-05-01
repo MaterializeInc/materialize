@@ -169,7 +169,7 @@ Target cluster: quickstart
 
 ? EXPLAIN OPTIMIZED PLAN WITH(no notices) AS VERBOSE TEXT FOR SELECT DISTINCT key1, upper(key2) FROM t1_tbl;
 Explained Query:
-  Distinct project=[#0, upper(#1)]
+  Distinct project=[#0, upper(#1{key2})]
     Project (#0, #1)
       ReadIndex on=t1_tbl t1_tbl_primary_idx=[*** full scan ***]
 
@@ -180,7 +180,7 @@ Target cluster: quickstart
 
 ? EXPLAIN OPTIMIZED PLAN WITH(no notices) AS VERBOSE TEXT FOR SELECT DISTINCT key1, key2 || 'a' FROM t1_tbl;
 Explained Query:
-  Distinct project=[#0, (#1 || "a")]
+  Distinct project=[#0, (#1{key2} || "a")]
     Project (#0, #1)
       ReadIndex on=t1_tbl t1_tbl_primary_idx=[*** full scan ***]
 
@@ -215,7 +215,7 @@ Target cluster: quickstart
 Explained Query:
   With
     cte l0 =
-      Reduce aggregates=[count(distinct #0)]
+      Reduce aggregates=[count(distinct #0{key1})]
         Project (#0)
           ReadIndex on=t1_tbl t1_tbl_primary_idx=[*** full scan ***]
   Return

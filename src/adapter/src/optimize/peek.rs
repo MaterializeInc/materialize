@@ -244,7 +244,7 @@ impl<'s> Optimize<LocalMirPlan<Resolved<'s>>> for Optimizer {
         let key = typ
             .default_key()
             .iter()
-            .map(|k| MirScalarExpr::Column(*k))
+            .map(|k| MirScalarExpr::column(*k))
             .collect();
 
         // The assembled dataflow contains a view and an index of that view.

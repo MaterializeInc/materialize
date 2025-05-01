@@ -33,7 +33,7 @@ Explained Query:
       Project (#0{f1}) // { arity: 1 }
         Join on=(#0{f1} = #1{f1}) type=differential // { arity: 2 }
           implementation
-            %0:l0[#0]K » %1:t2[#0]K
+            %0:l0[#0{f1}]K » %1:t2[#0{f1}]K
           Get l0 // { arity: 1 }
           ArrangeBy keys=[[#0{f1}]] // { arity: 1 }
             Project (#0{f1}) // { arity: 1 }
@@ -49,7 +49,7 @@ Explained Query:
                 Project (#0{f1}) // { arity: 1 }
                   Join on=(#0{f1} = #1{f1}) type=differential // { arity: 2 }
                     implementation
-                      %1[#0]UKA » %0:l0[#0]K
+                      %1[#0]UKA » %0:l0[#0{f1}]K
                     Get l0 // { arity: 1 }
                     ArrangeBy keys=[[#0{f1}]] // { arity: 1 }
                       Distinct project=[#0{f1}] // { arity: 1 }
@@ -83,7 +83,7 @@ Explained Query:
       Project (#0{f1}) // { arity: 1 }
         Join on=(#0{f1} = #1{f1}) type=differential // { arity: 2 }
           implementation
-            %0:t1[#0]K » %1:t2[#0]K
+            %0:t1[#0{f1}]K » %1:t2[#0{f1}]K
           ArrangeBy keys=[[#0{f1}]] // { arity: 1 }
             Project (#0{f1}) // { arity: 1 }
               Filter (#0{f1}) IS NOT NULL // { arity: 2 }
@@ -120,7 +120,7 @@ Explained Query:
       Project (#0{f1}, #1{f2}) // { arity: 2 }
         Join on=(#0{f1} = #2{f1}) type=differential // { arity: 3 }
           implementation
-            %0:l0[#0]K » %1:t2[#0]K
+            %0:l0[#0{f1}]K » %1:t2[#0{f1}]K
           Get l0 // { arity: 2 }
           ArrangeBy keys=[[#0{f1}]] // { arity: 1 }
             Project (#0{f1}) // { arity: 1 }
@@ -134,7 +134,7 @@ Explained Query:
               Project (#0{f1}, #1{f2}) // { arity: 2 }
                 Join on=(#0{f1} = #2{f1}) type=differential // { arity: 3 }
                   implementation
-                    %1[#0]UKA » %0:l0[#0]K
+                    %1[#0]UKA » %0:l0[#0{f1}]K
                   Get l0 // { arity: 2 }
                   ArrangeBy keys=[[#0{f1}]] // { arity: 1 }
                     Distinct project=[#0{f1}] // { arity: 1 }
@@ -176,7 +176,7 @@ Explained Query:
       Project (#0{f1}, #1{f2}) // { arity: 2 }
         Join on=(#0{f1} = #2{f1}) type=differential // { arity: 3 }
           implementation
-            %0:l0[#0]K » %1:t2[#0]K
+            %0:l0[#0{f1}]K » %1:t2[#0{f1}]K
           Get l0 // { arity: 2 }
           ArrangeBy keys=[[#0{f1}]] // { arity: 1 }
             Project (#0{f1}) // { arity: 1 }
@@ -190,7 +190,7 @@ Explained Query:
               Project (#0{f1}, #1{f2}) // { arity: 2 }
                 Join on=(#0{f1} = #2{f1}) type=differential // { arity: 3 }
                   implementation
-                    %1[#0]UKA » %0:l0[#0]K
+                    %1[#0]UKA » %0:l0[#0{f1}]K
                   Get l0 // { arity: 2 }
                   ArrangeBy keys=[[#0{f1}]] // { arity: 1 }
                     Distinct project=[#0{f1}] // { arity: 1 }
@@ -233,7 +233,7 @@ Explained Query:
       Project (#0{f1}, #1{f2}) // { arity: 2 }
         Join on=(#0{f1} = #2{f1}) type=differential // { arity: 3 }
           implementation
-            %0:l0[#0]K » %1:t2[#0]K
+            %0:l0[#0{f1}]K » %1:t2[#0{f1}]K
           Get l0 // { arity: 2 }
           ArrangeBy keys=[[#0{f1}]] // { arity: 1 }
             Project (#0{f1}) // { arity: 1 }
@@ -247,7 +247,7 @@ Explained Query:
               Project (#0{f1}, #1{f2}) // { arity: 2 }
                 Join on=(#0{f1} = #2{f1}) type=differential // { arity: 3 }
                   implementation
-                    %1[#0]UKA » %0:l0[#0]K
+                    %1[#0]UKA » %0:l0[#0{f1}]K
                   Get l0 // { arity: 2 }
                   ArrangeBy keys=[[#0{f1}]] // { arity: 1 }
                     Distinct project=[#0{f1}] // { arity: 1 }
@@ -315,7 +315,7 @@ Explained Query:
       Project (#0{f1}) // { arity: 1 }
         Join on=(#0{f1} = #1{f1}) type=differential // { arity: 2 }
           implementation
-            %0:t1[#0]Kif » %1:t2[#0]Kiif
+            %0:t1[#0{f1}]Kif » %1:t2[#0{f1}]Kiif
           ArrangeBy keys=[[#0{f1}]] // { arity: 1 }
             Project (#0{f1}) // { arity: 1 }
               Filter (#0{f1} >= 0) // { arity: 2 }
@@ -355,7 +355,7 @@ Explained Query:
       Project (#0{f1}) // { arity: 1 }
         Join on=(#0{f1} = #1{f1}) type=differential // { arity: 2 }
           implementation
-            %0:t1[#0]Kif » %1:t2[#0]Kiif
+            %0:t1[#0{f1}]Kif » %1:t2[#0{f1}]Kiif
           ArrangeBy keys=[[#0{f1}]] // { arity: 1 }
             Project (#0{f1}) // { arity: 1 }
               Filter (#0{f1} >= 0) // { arity: 2 }
@@ -401,7 +401,7 @@ Explained Query:
       Project (#0{f1}, #2{f2}) // { arity: 2 }
         Join on=(#0{f1} = #1{f1}) type=differential // { arity: 3 }
           implementation
-            %0:l0[#0]K » %1:t2[#0]K
+            %0:l0[#0{f1}]K » %1:t2[#0{f1}]K
           Get l0 // { arity: 1 }
           ArrangeBy keys=[[#0{f1}]] // { arity: 2 }
             Filter (#0{f1}) IS NOT NULL // { arity: 2 }
@@ -414,7 +414,7 @@ Explained Query:
               Project (#0{f1}) // { arity: 1 }
                 Join on=(#0{f1} = #1{f1}) type=differential // { arity: 2 }
                   implementation
-                    %1[#0]UKA » %0:l0[#0]K
+                    %1[#0]UKA » %0:l0[#0{f1}]K
                   Get l0 // { arity: 1 }
                   ArrangeBy keys=[[#0{f1}]] // { arity: 1 }
                     Distinct project=[#0{f1}] // { arity: 1 }
@@ -457,7 +457,7 @@ Explained Query:
       Project (#0{f1}, #2{f2}) // { arity: 2 }
         Join on=(#0{f1} = #1{f1}) type=differential // { arity: 3 }
           implementation
-            %0:t1[#0]Kif » %1:t2[#0]Kiif
+            %0:t1[#0{f1}]Kif » %1:t2[#0{f1}]Kiif
           ArrangeBy keys=[[#0{f1}]] // { arity: 1 }
             Project (#0{f1}) // { arity: 1 }
               Filter (#0{f1} >= 0) // { arity: 2 }
@@ -497,7 +497,7 @@ Explained Query:
       Project (#0{f1}) // { arity: 1 }
         Join on=(#0{f1} = #1{f1}) type=differential // { arity: 2 }
           implementation
-            %0:t1[#0]Kif » %1:t2[#0]Kiif
+            %0:t1[#0{f1}]Kif » %1:t2[#0{f1}]Kiif
           ArrangeBy keys=[[#0{f1}]] // { arity: 1 }
             Project (#0{f1}) // { arity: 1 }
               Filter (#0{f1} >= 0) // { arity: 2 }
@@ -542,7 +542,7 @@ Explained Query:
       Project (#0{f1}) // { arity: 1 }
         Join on=(#0{f1} = #1{f1}) type=differential // { arity: 2 }
           implementation
-            %0:l0[#0]K » %1:t2[#0]K
+            %0:l0[#0{f1}]K » %1:t2[#0{f1}]K
           Get l0 // { arity: 1 }
           ArrangeBy keys=[[#0{f1}]] // { arity: 1 }
             Project (#0{f1}) // { arity: 1 }
@@ -556,7 +556,7 @@ Explained Query:
               Project (#0{f1}) // { arity: 1 }
                 Join on=(#0{f1} = #1{f1}) type=differential // { arity: 2 }
                   implementation
-                    %1[#0]UKA » %0:l0[#0]K
+                    %1[#0]UKA » %0:l0[#0{f1}]K
                   Get l0 // { arity: 1 }
                   ArrangeBy keys=[[#0{f1}]] // { arity: 1 }
                     Distinct project=[#0{f1}] // { arity: 1 }
@@ -602,7 +602,7 @@ Explained Query:
       Project (#0{f1}, #2{f2}) // { arity: 2 }
         Join on=(#0{f1} = #1{f1}) type=differential // { arity: 3 }
           implementation
-            %0:l0[#0]K » %1:t2[#0]K
+            %0:l0[#0{f1}]K » %1:t2[#0{f1}]K
           Get l0 // { arity: 1 }
           ArrangeBy keys=[[#0{f1}]] // { arity: 2 }
             Filter (#0{f1}) IS NOT NULL // { arity: 2 }
@@ -616,7 +616,7 @@ Explained Query:
               Project (#0{f1}) // { arity: 1 }
                 Join on=(#0{f1} = #1{f1}) type=differential // { arity: 2 }
                   implementation
-                    %1[#0]UKA » %0:l0[#0]K
+                    %1[#0]UKA » %0:l0[#0{f1}]K
                   Get l0 // { arity: 1 }
                   ArrangeBy keys=[[#0{f1}]] // { arity: 1 }
                     Distinct project=[#0{f1}] // { arity: 1 }
@@ -649,7 +649,7 @@ Explained Query:
       Project (#0{f1}, #2{f2}) // { arity: 2 }
         Join on=(#0{f1} = #1{f1}) type=differential // { arity: 3 }
           implementation
-            %0:l0[#0]K » %1:t2[#0]K
+            %0:l0[#0{f1}]K » %1:t2[#0{f1}]K
           Get l0 // { arity: 1 }
           ArrangeBy keys=[[#0{f1}]] // { arity: 2 }
             Filter (#0{f1}) IS NOT NULL // { arity: 2 }
@@ -662,7 +662,7 @@ Explained Query:
               Project (#0{f1}) // { arity: 1 }
                 Join on=(#0{f1} = #1{f1}) type=differential // { arity: 2 }
                   implementation
-                    %1[#0]UKA » %0:l0[#0]K
+                    %1[#0]UKA » %0:l0[#0{f1}]K
                   Get l0 // { arity: 1 }
                   ArrangeBy keys=[[#0{f1}]] // { arity: 1 }
                     Distinct project=[#0{f1}] // { arity: 1 }
@@ -701,7 +701,7 @@ Explained Query:
       Project (#0{f1}, #2{f2}) // { arity: 2 }
         Join on=(#0{f1} = #1{f1}) type=differential // { arity: 3 }
           implementation
-            %0:t1[#0]K » %1:t2[#0]K
+            %0:t1[#0{f1}]K » %1:t2[#0{f1}]K
           ArrangeBy keys=[[#0{f1}]] // { arity: 1 }
             Project (#0{f1}) // { arity: 1 }
               Filter (#0{f1}) IS NOT NULL // { arity: 2 }
@@ -741,7 +741,7 @@ Explained Query:
       Project (#0{f1}, #1{f2}, #3{f2}) // { arity: 3 }
         Join on=(#0{f1} = #2{f1}) type=differential // { arity: 4 }
           implementation
-            %0:t1[#0]K » %1:t2[#0]K
+            %0:t1[#0{f1}]K » %1:t2[#0{f1}]K
           ArrangeBy keys=[[#0{f1}]] // { arity: 2 }
             Filter (#0{f1}) IS NOT NULL // { arity: 2 }
               ReadStorage materialize.public.t1 // { arity: 2 }
@@ -813,7 +813,7 @@ Explained Query:
       Project (#0{f1}, #1{f2}, #3{f2}) // { arity: 3 }
         Join on=(#1{f2} = #2{f1}) type=differential // { arity: 4 }
           implementation
-            %0:l0[#1]K » %1:t2[#0]K
+            %0:l0[#1{f2}]K » %1:t2[#0{f1}]K
           Get l0 // { arity: 2 }
           ArrangeBy keys=[[#0{f1}]] // { arity: 2 }
             Filter (#0{f1}) IS NOT NULL // { arity: 2 }
@@ -826,7 +826,7 @@ Explained Query:
               Project (#0{f1}, #1{f2}) // { arity: 2 }
                 Join on=(#1{f2} = #2{f2}) type=differential // { arity: 3 }
                   implementation
-                    %1[#0]UKA » %0:l0[#1]K
+                    %1[#0]UKA » %0:l0[#1{f2}]K
                   Get l0 // { arity: 2 }
                   ArrangeBy keys=[[#0{f2}]] // { arity: 1 }
                     Distinct project=[#0{f2}] // { arity: 1 }
@@ -869,7 +869,7 @@ Explained Query:
       Project (#0{f1}, #1{f2}, #3{f2}) // { arity: 3 }
         Join on=(#1{f2} = #2{f1}) type=differential // { arity: 4 }
           implementation
-            %0:l0[#1]K » %1:t2[#0]K
+            %0:l0[#1{f2}]K » %1:t2[#0{f1}]K
           Get l0 // { arity: 2 }
           ArrangeBy keys=[[#0{f1}]] // { arity: 2 }
             Filter (#0{f1}) IS NOT NULL // { arity: 2 }
@@ -882,7 +882,7 @@ Explained Query:
               Project (#0{f1}, #1{f2}) // { arity: 2 }
                 Join on=(#1{f2} = #2{f2}) type=differential // { arity: 3 }
                   implementation
-                    %1[#0]UKA » %0:l0[#1]K
+                    %1[#0]UKA » %0:l0[#1{f2}]K
                   Get l0 // { arity: 2 }
                   ArrangeBy keys=[[#0{f2}]] // { arity: 1 }
                     Distinct project=[#0{f2}] // { arity: 1 }
@@ -923,7 +923,7 @@ Explained Query:
       Project (#0{f1}, #3{f2}) // { arity: 2 }
         Join on=(#1{f2} = #2{f1}) type=differential // { arity: 4 }
           implementation
-            %0:t1[#1]K » %1:t2[#0]K
+            %0:t1[#1{f2}]K » %1:t2[#0{f1}]K
           ArrangeBy keys=[[#1{f2}]] // { arity: 2 }
             Filter (#1{f2}) IS NOT NULL // { arity: 2 }
               ReadStorage materialize.public.t1 // { arity: 2 }
@@ -1056,9 +1056,9 @@ Explained Query:
     Project (#2{count}) // { arity: 1 }
       Join on=(#0{f2} = #1{max_f2}) type=delta // { arity: 3 }
         implementation
-          %0:t1 » %1[#0]UK » %2[×]UA
-          %1 » %2[×]UA » %0:t1[#0]K
-          %2 » %1[×]UA » %0:t1[#0]K
+          %0:t1 » %1[#0{agg2}]UK » %2[×]UA
+          %1 » %2[×]UA » %0:t1[#0{f2}]K
+          %2 » %1[×]UA » %0:t1[#0{f2}]K
         ArrangeBy keys=[[#0{f2}]] // { arity: 1 }
           Project (#1{f2}) // { arity: 1 }
             ReadStorage materialize.public.t1 // { arity: 2 }

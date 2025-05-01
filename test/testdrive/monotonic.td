@@ -85,11 +85,11 @@ $ set-regex match=(.User.:\s\d+|\(u\d+\)) replacement=UID
 Explained Query:
   TopK::MonotonicTopK order_by=[#0 asc nulls_last] limit=3 must_consolidate
     ArrangeBy
-      input_key=[#0]
+      input_key=[#0{b}]
       raw=true
       Get::PassArrangements materialize.public.i1
         raw=false
-        arrangements[0]={ key=[#0], permutation=id, thinning=() }
+        arrangements[0]={ key=[#0{b}], permutation=id, thinning=() }
         types=[bigint]
 
 Used Indexes:
@@ -132,11 +132,11 @@ Target cluster: quickstart
 Explained Query:
   TopK::MonotonicTopK order_by=[#0 asc nulls_last] limit=2 must_consolidate
     ArrangeBy
-      input_key=[#0]
+      input_key=[#0{c}]
       raw=true
       Get::PassArrangements materialize.public.i4
         raw=false
-        arrangements[0]={ key=[#0], permutation=id, thinning=() }
+        arrangements[0]={ key=[#0{c}], permutation=id, thinning=() }
         types=[bigint]
 
 Used Indexes:
@@ -155,11 +155,11 @@ Target cluster: quickstart
 Explained Query:
   TopK::MonotonicTopK order_by=[#0 asc nulls_last] limit=2 must_consolidate
     ArrangeBy
-      input_key=[#0]
+      input_key=[#0{c}]
       raw=true
       Get::PassArrangements materialize.public.i6
         raw=false
-        arrangements[0]={ key=[#0], permutation=id, thinning=() }
+        arrangements[0]={ key=[#0{c}], permutation=id, thinning=() }
         types=[bigint]
 
 Used Indexes:
@@ -181,11 +181,11 @@ Target cluster: quickstart
 Explained Query:
   TopK::MonotonicTopK order_by=[#0 asc nulls_last] limit=2 must_consolidate
     ArrangeBy
-      input_key=[#0]
+      input_key=[#0{b}]
       raw=true
       Get::PassArrangements materialize.public.i9
         raw=false
-        arrangements[0]={ key=[#0], permutation=id, thinning=() }
+        arrangements[0]={ key=[#0{b}], permutation=id, thinning=() }
         types=[bigint]
 
 Used Indexes:
@@ -280,17 +280,17 @@ Target cluster: quickstart
 "Dataflow: materialize.public.monotonic_min" "Reduced Fallibly MinsMaxesHierarchical"
 "Dataflow: materialize.public.monotonic_min" "Reduced Fallibly MinsMaxesHierarchical"
 "Dataflow: materialize.public.monotonic_min" "Reduced Fallibly MinsMaxesHierarchical"
-"Dataflow: materialize.public.non_dbz_data_indexed_primary_idx" ArrangeBy[[Column(0)]]
-"Dataflow: materialize.public.non_dbz_data_indexed_primary_idx" ArrangeBy[[Column(0)]]-errors
-"Dataflow: materialize.public.i1_primary_idx" ArrangeBy[[Column(0)]]
-"Dataflow: materialize.public.i1_primary_idx" ArrangeBy[[Column(0)]]-errors
-"Dataflow: materialize.public.i4_primary_idx" ArrangeBy[[Column(0)]]
-"Dataflow: materialize.public.i4_primary_idx" ArrangeBy[[Column(0)]]-errors
-"Dataflow: materialize.public.i6_primary_idx" ArrangeBy[[Column(0)]]
-"Dataflow: materialize.public.i6_primary_idx" ArrangeBy[[Column(0)]]-errors
+"Dataflow: materialize.public.non_dbz_data_indexed_primary_idx" "ArrangeBy[[Column(0)]]"
+"Dataflow: materialize.public.non_dbz_data_indexed_primary_idx" "ArrangeBy[[Column(0)]]-errors"
+"Dataflow: materialize.public.i1_primary_idx" "ArrangeBy[[Column(0)]]"
+"Dataflow: materialize.public.i1_primary_idx" "ArrangeBy[[Column(0)]]-errors"
+"Dataflow: materialize.public.i4_primary_idx" "ArrangeBy[[Column(0)]]"
+"Dataflow: materialize.public.i4_primary_idx" "ArrangeBy[[Column(0)]]-errors"
+"Dataflow: materialize.public.i6_primary_idx" "ArrangeBy[[Column(0)]]"
+"Dataflow: materialize.public.i6_primary_idx" "ArrangeBy[[Column(0)]]-errors"
 "Dataflow: materialize.public.i6_primary_idx" "Arranged TopK input"
 "Dataflow: materialize.public.i6_primary_idx" "Reduced TopK input"
-"Dataflow: materialize.public.i8_primary_idx" ArrangeBy[[Column(0)]]
-"Dataflow: materialize.public.i8_primary_idx" ArrangeBy[[Column(0)]]-errors
-"Dataflow: materialize.public.i9_primary_idx" ArrangeBy[[Column(0)]]
-"Dataflow: materialize.public.i9_primary_idx" ArrangeBy[[Column(0)]]-errors
+"Dataflow: materialize.public.i8_primary_idx" "ArrangeBy[[Column(0)]]"
+"Dataflow: materialize.public.i8_primary_idx" "ArrangeBy[[Column(0)]]-errors"
+"Dataflow: materialize.public.i9_primary_idx" "ArrangeBy[[Column(0)]]"
+"Dataflow: materialize.public.i9_primary_idx" "ArrangeBy[[Column(0)]]-errors"

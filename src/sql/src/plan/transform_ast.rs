@@ -13,6 +13,7 @@
 //! are much easier to perform in SQL. Someday, we'll want our own SQL IR,
 //! but for now we just use the parser's AST directly.
 
+use mz_ore::id_gen::IdGen;
 use mz_ore::stack::{CheckedRecursion, RecursionGuard};
 use mz_repr::namespaces::{MZ_CATALOG_SCHEMA, MZ_UNSAFE_SCHEMA, PG_CATALOG_SCHEMA};
 use mz_sql_parser::ast::visit_mut::{self, VisitMut, VisitMutNode};
@@ -21,7 +22,6 @@ use mz_sql_parser::ast::{
     Query, Select, SelectItem, TableAlias, TableFactor, TableWithJoins, Value, WindowSpec,
 };
 use mz_sql_parser::ident;
-use uuid::Uuid;
 
 use crate::names::{Aug, PartialItemName, ResolvedDataType, ResolvedItemName};
 use crate::normalize;
@@ -553,6 +553,7 @@ impl<'ast> VisitMut<'ast, Aug> for FuncRewriter<'_> {
 struct Desugarer<'a> {
     scx: &'a StatementContext<'a>,
     status: Result<(), PlanError>,
+    id_gen: IdGen,
     recursion_guard: RecursionGuard,
 }
 
@@ -587,6 +588,7 @@ impl<'a> Desugarer<'a> {
         Desugarer {
             scx,
             status: Ok(()),
+            id_gen: Default::default(),
             recursion_guard: RecursionGuard::with_limit(1024), // chosen arbitrarily
         }
     }
@@ -745,14 +747,20 @@ impl<'a> Desugarer<'a> {
             let bindings: Vec<_> = (0..arity)
                 // Note: using unchecked is okay here because we know the value will be less than
                 // our maximum length.
-                .map(|_| Ident::new_unchecked(format!("right_{}", Uuid::new_v4())))
+                .map(|col| {
+                    let unique_id = self.id_gen.allocate_id();
+                    Ident::new_unchecked(format!("right_col{col}_{unique_id}"))
+                })
                 .collect();
 
+            let subquery_unique_id = self.id_gen.allocate_id();
+            // Note: kay to use unchecked here because we know the value will be small enough.
+            let subquery_name = Ident::new_unchecked(format!("subquery{subquery_unique_id}"));
             let select = Select::default()
                 .from(TableWithJoins::subquery(
                     right.take(),
                     TableAlias {
-                        name: ident!("subquery"),
+                        name: subquery_name,
                         columns: bindings.clone(),
                         strict: true,
                     },

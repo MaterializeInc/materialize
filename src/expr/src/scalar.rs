@@ -9,6 +9,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::ops::BitOrAssign;
+use std::sync::Arc;
 use std::{fmt, mem};
 
 use itertools::Itertools;
@@ -18,6 +19,7 @@ use mz_ore::collections::CollectionExt;
 use mz_ore::iter::IteratorExt;
 use mz_ore::stack::RecursionLimitError;
 use mz_ore::str::StrExt;
+use mz_ore::treat_as_equal::TreatAsEqual;
 use mz_ore::vec::swap_remove_multiple;
 use mz_pgrepr::TypeFromOidError;
 use mz_pgtz::timezone::TimezoneSpec;
@@ -48,10 +50,10 @@ pub mod like_pattern;
 
 include!(concat!(env!("OUT_DIR"), "/mz_expr.scalar.rs"));
 
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize, MzReflect)]
+#[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize, MzReflect)]
 pub enum MirScalarExpr {
     /// A column of the input row
-    Column(usize),
+    Column(usize, TreatAsEqual<Option<Arc<str>>>),
     /// A literal value.
     /// (Stored as a row, because we can't own a Datum)
     Literal(Result<Row, EvalError>, ColumnType),
@@ -89,13 +91,42 @@ pub enum MirScalarExpr {
     },
 }
 
+// We need a custom Debug because we don't want to show `None` for name information.
+// Sadly, the `derivative` crate doesn't support this use case.
+impl std::fmt::Debug for MirScalarExpr {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            MirScalarExpr::Column(i, TreatAsEqual(Some(name))) => {
+                write!(f, "Column({i}, {name:?})")
+            }
+            MirScalarExpr::Column(i, TreatAsEqual(None)) => write!(f, "Column({i})"),
+            MirScalarExpr::Literal(lit, typ) => write!(f, "Literal({lit:?}, {typ:?})"),
+            MirScalarExpr::CallUnmaterializable(func) => {
+                write!(f, "CallUnmaterializable({func:?})")
+            }
+            MirScalarExpr::CallUnary { func, expr } => {
+                write!(f, "CallUnary({func:?}, {expr:?})")
+            }
+            MirScalarExpr::CallBinary { func, expr1, expr2 } => {
+                write!(f, "CallBinary({func:?}, {expr1:?}, {expr2:?})")
+            }
+            MirScalarExpr::CallVariadic { func, exprs } => {
+                write!(f, "CallVariadic({func:?}, {exprs:?})")
+            }
+            MirScalarExpr::If { cond, then, els } => {
+                write!(f, "If({cond:?}, {then:?}, {els:?})")
+            }
+        }
+    }
+}
+
 impl Arbitrary for MirScalarExpr {
     type Parameters = ();
     type Strategy = BoxedStrategy<MirScalarExpr>;
 
     fn arbitrary_with(_: Self::Parameters) -> Self::Strategy {
         let leaf = prop::strategy::Union::new(vec![
-            (0..10_usize).prop_map(MirScalarExpr::Column).boxed(),
+            (0..10_usize).prop_map(MirScalarExpr::column).boxed(),
             (arb_datum(), any::<ScalarType>())
                 .prop_map(|(datum, typ)| MirScalarExpr::literal(Ok((&datum).into()), typ))
                 .boxed(),
@@ -145,7 +176,7 @@ impl RustType<ProtoMirScalarExpr> for MirScalarExpr {
         use proto_mir_scalar_expr::Kind::*;
         ProtoMirScalarExpr {
             kind: Some(match self {
-                MirScalarExpr::Column(i) => Column(i.into_proto()),
+                MirScalarExpr::Column(i, _) => Column(i.into_proto()),
                 MirScalarExpr::Literal(lit, typ) => Literal(ProtoLiteral {
                     lit: Some(lit.into_proto()),
                     typ: Some(typ.into_proto()),
@@ -183,7 +214,7 @@ impl RustType<ProtoMirScalarExpr> for MirScalarExpr {
             .kind
             .ok_or_else(|| TryFromProtoError::missing_field("ProtoMirScalarExpr::kind"))?;
         Ok(match kind {
-            Column(i) => MirScalarExpr::Column(usize::from_proto(i)?),
+            Column(i) => MirScalarExpr::column(usize::from_proto(i)?),
             Literal(ProtoLiteral { lit, typ }) => MirScalarExpr::Literal(
                 lit.into_rust_if_some("ProtoLiteral::lit")?,
                 typ.into_rust_if_some("ProtoLiteral::typ")?,
@@ -244,11 +275,15 @@ impl RustType<proto_literal::ProtoLiteralData> for Result<Row, EvalError> {
 
 impl MirScalarExpr {
     pub fn columns(is: &[usize]) -> Vec<MirScalarExpr> {
-        is.iter().map(|i| MirScalarExpr::Column(*i)).collect()
+        is.iter().map(|i| MirScalarExpr::column(*i)).collect()
     }
 
     pub fn column(column: usize) -> Self {
-        MirScalarExpr::Column(column)
+        MirScalarExpr::Column(column, TreatAsEqual(None))
+    }
+
+    pub fn named_column(column: usize, name: Arc<str>) -> Self {
+        MirScalarExpr::Column(column, TreatAsEqual(Some(name)))
     }
 
     pub fn literal(res: Result<Datum, EvalError>, typ: ScalarType) -> Self {
@@ -580,7 +615,7 @@ impl MirScalarExpr {
         F: FnMut(&mut usize),
     {
         self.visit_pre_mut(|e| {
-            if let MirScalarExpr::Column(col) = e {
+            if let MirScalarExpr::Column(col, _) = e {
                 action(col);
             }
         });
@@ -594,7 +629,7 @@ impl MirScalarExpr {
 
     pub fn support_into(&self, support: &mut BTreeSet<usize>) {
         self.visit_pre(|e| {
-            if let MirScalarExpr::Column(i) = e {
+            if let MirScalarExpr::Column(i, _) = e {
                 support.insert(*i);
             }
         });
@@ -663,7 +698,7 @@ impl MirScalarExpr {
     }
 
     pub fn is_column(&self) -> bool {
-        matches!(self, MirScalarExpr::Column(_))
+        matches!(self, MirScalarExpr::Column(_col, _name))
     }
 
     pub fn is_error_if_null(&self) -> bool {
@@ -706,7 +741,7 @@ impl MirScalarExpr {
 
     /// If self is a column, return the column index, otherwise `None`.
     pub fn as_column(&self) -> Option<usize> {
-        if let MirScalarExpr::Column(c) = self {
+        if let MirScalarExpr::Column(c, _) = self {
             Some(*c)
         } else {
             None
@@ -730,7 +765,7 @@ impl MirScalarExpr {
     /// use mz_expr::MirScalarExpr;
     /// use mz_repr::{ColumnType, Datum, ScalarType};
     ///
-    /// let expr_0 = MirScalarExpr::Column(0);
+    /// let expr_0 = MirScalarExpr::column(0);
     /// let expr_t = MirScalarExpr::literal_true();
     /// let expr_f = MirScalarExpr::literal_false();
     ///
@@ -801,7 +836,7 @@ impl MirScalarExpr {
                 },
                 &mut |e| match e {
                     // Evaluate and pull up constants
-                    MirScalarExpr::Column(_)
+                    MirScalarExpr::Column(_, _)
                     | MirScalarExpr::Literal(_, _)
                     | MirScalarExpr::CallUnmaterializable(_) => (),
                     MirScalarExpr::CallUnary { func, expr } => {
@@ -1919,7 +1954,7 @@ impl MirScalarExpr {
     /// Adds any columns that *must* be non-Null for `self` to be non-Null.
     pub fn non_null_requirements(&self, columns: &mut BTreeSet<usize>) {
         match self {
-            MirScalarExpr::Column(col) => {
+            MirScalarExpr::Column(col, _name) => {
                 columns.insert(*col);
             }
             MirScalarExpr::Literal(..) => {}
@@ -1948,7 +1983,7 @@ impl MirScalarExpr {
 
     pub fn typ(&self, column_types: &[ColumnType]) -> ColumnType {
         match self {
-            MirScalarExpr::Column(i) => column_types[*i].clone(),
+            MirScalarExpr::Column(i, _name) => column_types[*i].clone(),
             MirScalarExpr::Literal(_, typ) => typ.clone(),
             MirScalarExpr::CallUnmaterializable(func) => func.output_type(),
             MirScalarExpr::CallUnary { expr, func } => func.output_type(expr.typ(column_types)),
@@ -1972,7 +2007,7 @@ impl MirScalarExpr {
         temp_storage: &'a RowArena,
     ) -> Result<Datum<'a>, EvalError> {
         match self {
-            MirScalarExpr::Column(index) => Ok(datums[*index].clone()),
+            MirScalarExpr::Column(index, _name) => Ok(datums[*index].clone()),
             MirScalarExpr::Literal(res, _column_type) => match res {
                 Ok(row) => Ok(row.unpack_first()),
                 Err(e) => Err(e.clone()),
@@ -2036,7 +2071,7 @@ impl MirScalarExpr {
     pub fn contains_column(&self) -> bool {
         let mut contains = false;
         self.visit_pre(|e| {
-            if let MirScalarExpr::Column(_) = e {
+            if let MirScalarExpr::Column(_col, _name) = e {
                 contains = true;
             }
         });
@@ -2070,7 +2105,7 @@ impl MirScalarExpr {
     /// True iff evaluation could possibly error on non-error input `Datum`.
     pub fn could_error(&self) -> bool {
         match self {
-            MirScalarExpr::Column(_col) => false,
+            MirScalarExpr::Column(_col, _name) => false,
             MirScalarExpr::Literal(row, ..) => row.is_err(),
             MirScalarExpr::CallUnmaterializable(_) => true,
             MirScalarExpr::CallUnary { func, expr } => func.could_error() || expr.could_error(),
@@ -2094,7 +2129,7 @@ impl VisitChildren<Self> for MirScalarExpr {
     {
         use MirScalarExpr::*;
         match self {
-            Column(_) | Literal(_, _) | CallUnmaterializable(_) => (),
+            Column(_, _) | Literal(_, _) | CallUnmaterializable(_) => (),
             CallUnary { expr, .. } => {
                 f(expr);
             }
@@ -2121,7 +2156,7 @@ impl VisitChildren<Self> for MirScalarExpr {
     {
         use MirScalarExpr::*;
         match self {
-            Column(_) | Literal(_, _) | CallUnmaterializable(_) => (),
+            Column(_, _) | Literal(_, _) | CallUnmaterializable(_) => (),
             CallUnary { expr, .. } => {
                 f(expr);
             }
@@ -2149,7 +2184,7 @@ impl VisitChildren<Self> for MirScalarExpr {
     {
         use MirScalarExpr::*;
         match self {
-            Column(_) | Literal(_, _) | CallUnmaterializable(_) => (),
+            Column(_, _) | Literal(_, _) | CallUnmaterializable(_) => (),
             CallUnary { expr, .. } => {
                 f(expr)?;
             }
@@ -2178,7 +2213,7 @@ impl VisitChildren<Self> for MirScalarExpr {
     {
         use MirScalarExpr::*;
         match self {
-            Column(_) | Literal(_, _) | CallUnmaterializable(_) => (),
+            Column(_, _) | Literal(_, _) | CallUnmaterializable(_) => (),
             CallUnary { expr, .. } => {
                 f(expr)?;
             }
@@ -2211,7 +2246,7 @@ impl MirScalarExpr {
 
         use MirScalarExpr::*;
         match self {
-            Column(_) | Literal(_, _) | CallUnmaterializable(_) => (),
+            Column(_, _) | Literal(_, _) | CallUnmaterializable(_) => (),
             CallUnary { expr, .. } => {
                 first = Some(&**expr);
             }
@@ -2245,7 +2280,7 @@ impl MirScalarExpr {
 
         use MirScalarExpr::*;
         match self {
-            Column(_) | Literal(_, _) | CallUnmaterializable(_) => (),
+            Column(_, _) | Literal(_, _) | CallUnmaterializable(_) => (),
             CallUnary { expr, .. } => {
                 first = Some(&mut **expr);
             }
@@ -3256,7 +3291,7 @@ mod tests {
             ScalarType::Int64.nullable(true),
             ScalarType::Int64.nullable(false),
         ];
-        let col = MirScalarExpr::Column;
+        let col = MirScalarExpr::column;
         let err = |e| MirScalarExpr::literal(Err(e), ScalarType::Int64);
         let lit = |i| MirScalarExpr::literal_ok(Datum::Int64(i), ScalarType::Int64);
         let null = || MirScalarExpr::literal_null(ScalarType::Int64);

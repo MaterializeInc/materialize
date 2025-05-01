@@ -938,6 +938,7 @@ mod non_negative {
 
 mod column_names {
     use std::ops::Range;
+    use std::sync::Arc;
 
     use super::Analysis;
     use mz_expr::{AggregateFunc, Id, MirRelationExpr, MirScalarExpr};
@@ -951,14 +952,21 @@ mod column_names {
         Global(GlobalId, usize),
         /// An anonymous expression named after the top-level function name.
         Aggregate(AggregateFunc, Box<ColumnName>),
+        /// A column with a name that has been saved from the original SQL query.
+        Annotated(Arc<str>),
         /// An column with an unknown name.
         Unknown,
     }
 
     impl ColumnName {
-        /// Return `true` iff this the variant is not unknown.
+        /// Return `true` iff the variant has an inferred name.
         pub fn is_known(&self) -> bool {
-            matches!(self, Self::Global(..) | Self::Aggregate(..))
+            match self {
+                Self::Global(..) | Self::Aggregate(..) => true,
+                // We treat annotated columns as unknown because we would rather
+                // override them with inferred names, if we can.
+                Self::Annotated(..) | Self::Unknown => false,
+            }
         }
 
         /// Humanize the column to a [`String`], returns an empty [`String`] for
@@ -975,7 +983,19 @@ mod column_names {
                         format!("{func}_{expr}")
                     }
                 }
+                Self::Annotated(name) => name.to_string(),
                 Self::Unknown => String::new(),
+            }
+        }
+
+        /// Clone this column name if it is known, otherwise try to use the provided
+        /// name if it is available.
+        pub fn cloned_or_annotated(&self, name: &Option<Arc<str>>) -> Self {
+            match self {
+                Self::Global(..) | Self::Aggregate(..) | Self::Annotated(..) => self.clone(),
+                Self::Unknown => name
+                    .as_ref()
+                    .map_or_else(|| Self::Unknown, |name| Self::Annotated(Arc::clone(name))),
             }
         }
     }
@@ -995,7 +1015,7 @@ mod column_names {
         fn extend_with_scalars(column_names: &mut Vec<ColumnName>, scalars: &Vec<MirScalarExpr>) {
             for scalar in scalars {
                 column_names.push(match scalar {
-                    MirScalarExpr::Column(c) => column_names[*c].clone(),
+                    MirScalarExpr::Column(c, name) => column_names[*c].cloned_or_annotated(&name.0),
                     _ => ColumnName::Unknown,
                 });
             }
@@ -1569,7 +1589,7 @@ mod cardinality {
         ) -> OrderedFloat<f64> {
             let index_selectivity = |expr: &MirScalarExpr| -> Option<OrderedFloat<f64>> {
                 match expr {
-                    MirScalarExpr::Column(col) => {
+                    MirScalarExpr::Column(col, _) => {
                         if unique_columns.contains(col) {
                             // TODO(mgree): when we have index cardinality statistics, they should go here when `expr` is a `MirScalarExpr::Column` that's in `unique_columns`
                             None
@@ -1582,7 +1602,7 @@ mod cardinality {
             };
 
             match predicate_expr {
-                MirScalarExpr::Column(_)
+                MirScalarExpr::Column(_, _)
                 | MirScalarExpr::Literal(_, _)
                 | MirScalarExpr::CallUnmaterializable(_) => OrderedFloat(1.0),
                 MirScalarExpr::CallUnary { func, expr } => match func {
@@ -1701,7 +1721,7 @@ mod cardinality {
                 let mut all_unique = true;
 
                 for expr in equiv {
-                    if let MirScalarExpr::Column(col) = expr {
+                    if let MirScalarExpr::Column(col, _) = expr {
                         if let Some(idx) = unique_columns.get(col) {
                             unique_sources.insert(*idx);
                         } else {

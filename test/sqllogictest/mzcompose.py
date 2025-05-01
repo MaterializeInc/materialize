@@ -262,6 +262,7 @@ def compileFastSltConfig() -> SltRunConfig:
         "test/sqllogictest/github-5536.slt",
         "test/sqllogictest/github-5717.slt",
         "test/sqllogictest/github-7585.slt",
+        "test/sqllogictest/github-31878.slt",
         "test/sqllogictest/id.slt",
         "test/sqllogictest/id_reuse.slt",
         "test/sqllogictest/information_schema_columns.slt",

@@ -745,91 +745,91 @@ WITH seeds AS (
 Explained Query:
   With
     cte l0 =
-      Reduce aggregates=[min(coalesce(#1{max}, #0))] // { arity: 1 }
-        Reduce group_by=[#0] aggregates=[max(case when ((#0 < (#2 + #3)) AND (#0 >= #2)) then (#1 + (#0 - #2)) else null end)] // { arity: 2 }
+      Reduce aggregates=[min(coalesce(#1{max}, #0{humidity}))] // { arity: 1 }
+        Reduce group_by=[#0] aggregates=[max(case when ((#0{humidity} < (#2{src_base} + #3{len})) AND (#0{humidity} >= #2{src_base})) then (#1{dst_base} + (#0{humidity} - #2{src_base})) else null end)] // { arity: 2 }
           CrossJoin type=differential // { arity: 4 }
             implementation
               %0[×] » %1[×]
             ArrangeBy keys=[[]] // { arity: 1 }
               Project (#2) // { arity: 1 }
-                Map (coalesce(#1{max}, #0)) // { arity: 3 }
-                  Reduce group_by=[#0] aggregates=[max(case when ((#0 < (#2 + #3)) AND (#0 >= #2)) then (#1 + (#0 - #2)) else null end)] // { arity: 2 }
+                Map (coalesce(#1{max}, #0{temperature})) // { arity: 3 }
+                  Reduce group_by=[#0] aggregates=[max(case when ((#0{temperature} < (#2{src_base} + #3{len})) AND (#0{temperature} >= #2{src_base})) then (#1{dst_base} + (#0{temperature} - #2{src_base})) else null end)] // { arity: 2 }
                     CrossJoin type=differential // { arity: 4 }
                       implementation
                         %0[×] » %1[×]
                       ArrangeBy keys=[[]] // { arity: 1 }
                         Project (#2) // { arity: 1 }
-                          Map (coalesce(#1{max}, #0)) // { arity: 3 }
-                            Reduce group_by=[#0] aggregates=[max(case when ((#0 < (#2 + #3)) AND (#0 >= #2)) then (#1 + (#0 - #2)) else null end)] // { arity: 2 }
+                          Map (coalesce(#1{max}, #0{light})) // { arity: 3 }
+                            Reduce group_by=[#0] aggregates=[max(case when ((#0{light} < (#2{src_base} + #3{len})) AND (#0{light} >= #2{src_base})) then (#1{dst_base} + (#0{light} - #2{src_base})) else null end)] // { arity: 2 }
                               CrossJoin type=differential // { arity: 4 }
                                 implementation
                                   %0[×] » %1[×]
                                 ArrangeBy keys=[[]] // { arity: 1 }
                                   Project (#2) // { arity: 1 }
-                                    Map (coalesce(#1{max}, #0)) // { arity: 3 }
-                                      Reduce group_by=[#0] aggregates=[max(case when ((#0 < (#2 + #3)) AND (#0 >= #2)) then (#1 + (#0 - #2)) else null end)] // { arity: 2 }
+                                    Map (coalesce(#1{max}, #0{water})) // { arity: 3 }
+                                      Reduce group_by=[#0] aggregates=[max(case when ((#0{water} < (#2{src_base} + #3{len})) AND (#0{water} >= #2{src_base})) then (#1{dst_base} + (#0{water} - #2{src_base})) else null end)] // { arity: 2 }
                                         CrossJoin type=differential // { arity: 4 }
                                           implementation
                                             %0[×] » %1[×]
                                           ArrangeBy keys=[[]] // { arity: 1 }
                                             Project (#2) // { arity: 1 }
-                                              Map (coalesce(#1{max}, #0)) // { arity: 3 }
-                                                Reduce group_by=[#0] aggregates=[max(case when ((#0 < (#2 + #3)) AND (#0 >= #2)) then (#1 + (#0 - #2)) else null end)] // { arity: 2 }
+                                              Map (coalesce(#1{max}, #0{fertilizer})) // { arity: 3 }
+                                                Reduce group_by=[#0] aggregates=[max(case when ((#0{fertilizer} < (#2{src_base} + #3{len})) AND (#0{fertilizer} >= #2{src_base})) then (#1{dst_base} + (#0{fertilizer} - #2{src_base})) else null end)] // { arity: 2 }
                                                   CrossJoin type=differential // { arity: 4 }
                                                     implementation
                                                       %0[×] » %1[×]
                                                     ArrangeBy keys=[[]] // { arity: 1 }
                                                       Project (#2) // { arity: 1 }
-                                                        Map (coalesce(#1{max}, #0)) // { arity: 3 }
-                                                          Reduce group_by=[#0] aggregates=[max(case when ((#0 < (#2 + #3)) AND (#0 >= #2)) then (#1 + (#0 - #2)) else null end)] // { arity: 2 }
+                                                        Map (coalesce(#1{max}, #0{soil})) // { arity: 3 }
+                                                          Reduce group_by=[#0] aggregates=[max(case when ((#0{soil} < (#2{src_base} + #3{len})) AND (#0{soil} >= #2{src_base})) then (#1{dst_base} + (#0{soil} - #2{src_base})) else null end)] // { arity: 2 }
                                                             CrossJoin type=differential // { arity: 4 }
                                                               implementation
                                                                 %0[×] » %1[×]
                                                               ArrangeBy keys=[[]] // { arity: 1 }
                                                                 Project (#2) // { arity: 1 }
-                                                                  Map (coalesce(#1{max}, #0)) // { arity: 3 }
-                                                                    Reduce group_by=[#0] aggregates=[max(case when ((#0 < (#2 + #3)) AND (#0 >= #2)) then (#1 + (#0 - #2)) else null end)] // { arity: 2 }
+                                                                  Map (coalesce(#1{max}, #0{seed})) // { arity: 3 }
+                                                                    Reduce group_by=[#0] aggregates=[max(case when ((#0{seed} < (#2{src_base} + #3{len})) AND (#0{seed} >= #2{src_base})) then (#1{dst_base} + (#0{seed} - #2{src_base})) else null end)] // { arity: 2 }
                                                                       CrossJoin type=differential // { arity: 4 }
                                                                         implementation
                                                                           %0[×] » %1[×]
                                                                         ArrangeBy keys=[[]] // { arity: 1 }
                                                                           Project (#2) // { arity: 1 }
-                                                                            Map (text_to_bigint(#1)) // { arity: 3 }
+                                                                            Map (text_to_bigint(#1{unnest})) // { arity: 3 }
                                                                               FlatMap unnest_array(regexp_split_to_array[" ", case_insensitive=false](array_index(regexp_split_to_array[": ", case_insensitive=false](array_index(regexp_split_to_array["\n", case_insensitive=false](#0{input}), 1)), 2))) // { arity: 2 }
                                                                                 ReadStorage materialize.public.input // { arity: 1 }
                                                                         ArrangeBy keys=[[]] // { arity: 3 }
                                                                           Project (#3..=#5) // { arity: 3 }
-                                                                            Map (arraytoarray(regexp_split_to_array[" ", case_insensitive=false](#1)), array_index(#2, 1), array_index(#2, 2), array_index(#2, 3)) // { arity: 6 }
+                                                                            Map (arraytoarray(regexp_split_to_array[" ", case_insensitive=false](#1{unnest})), array_index(#2{line}, 1), array_index(#2{line}, 2), array_index(#2{line}, 3)) // { arity: 6 }
                                                                               FlatMap unnest_array(regexp_split_to_array["\n", case_insensitive=false](array_index(regexp_match["seed-to-soil map:\n([0-9 \n]*?)\n\n", case_insensitive=false](#0{input}), 1))) // { arity: 2 }
                                                                                 ReadStorage materialize.public.input // { arity: 1 }
                                                               ArrangeBy keys=[[]] // { arity: 3 }
                                                                 Project (#3..=#5) // { arity: 3 }
-                                                                  Map (arraytoarray(regexp_split_to_array[" ", case_insensitive=false](#1)), array_index(#2, 1), array_index(#2, 2), array_index(#2, 3)) // { arity: 6 }
+                                                                  Map (arraytoarray(regexp_split_to_array[" ", case_insensitive=false](#1{unnest})), array_index(#2{line}, 1), array_index(#2{line}, 2), array_index(#2{line}, 3)) // { arity: 6 }
                                                                     FlatMap unnest_array(regexp_split_to_array["\n", case_insensitive=false](array_index(regexp_match["soil-to-fertilizer map:\n([0-9 \n]*?)\n\n", case_insensitive=false](#0{input}), 1))) // { arity: 2 }
                                                                       ReadStorage materialize.public.input // { arity: 1 }
                                                     ArrangeBy keys=[[]] // { arity: 3 }
                                                       Project (#3..=#5) // { arity: 3 }
-                                                        Map (arraytoarray(regexp_split_to_array[" ", case_insensitive=false](#1)), array_index(#2, 1), array_index(#2, 2), array_index(#2, 3)) // { arity: 6 }
+                                                        Map (arraytoarray(regexp_split_to_array[" ", case_insensitive=false](#1{unnest})), array_index(#2{line}, 1), array_index(#2{line}, 2), array_index(#2{line}, 3)) // { arity: 6 }
                                                           FlatMap unnest_array(regexp_split_to_array["\n", case_insensitive=false](array_index(regexp_match["fertilizer-to-water map:\n([0-9 \n]*?)\n\n", case_insensitive=false](#0{input}), 1))) // { arity: 2 }
                                                             ReadStorage materialize.public.input // { arity: 1 }
                                           ArrangeBy keys=[[]] // { arity: 3 }
                                             Project (#3..=#5) // { arity: 3 }
-                                              Map (arraytoarray(regexp_split_to_array[" ", case_insensitive=false](#1)), array_index(#2, 1), array_index(#2, 2), array_index(#2, 3)) // { arity: 6 }
+                                              Map (arraytoarray(regexp_split_to_array[" ", case_insensitive=false](#1{unnest})), array_index(#2{line}, 1), array_index(#2{line}, 2), array_index(#2{line}, 3)) // { arity: 6 }
                                                 FlatMap unnest_array(regexp_split_to_array["\n", case_insensitive=false](array_index(regexp_match["water-to-light map:\n([0-9 \n]*?)\n\n", case_insensitive=false](#0{input}), 1))) // { arity: 2 }
                                                   ReadStorage materialize.public.input // { arity: 1 }
                                 ArrangeBy keys=[[]] // { arity: 3 }
                                   Project (#3..=#5) // { arity: 3 }
-                                    Map (arraytoarray(regexp_split_to_array[" ", case_insensitive=false](#1)), array_index(#2, 1), array_index(#2, 2), array_index(#2, 3)) // { arity: 6 }
+                                    Map (arraytoarray(regexp_split_to_array[" ", case_insensitive=false](#1{unnest})), array_index(#2{line}, 1), array_index(#2{line}, 2), array_index(#2{line}, 3)) // { arity: 6 }
                                       FlatMap unnest_array(regexp_split_to_array["\n", case_insensitive=false](array_index(regexp_match["light-to-temperature map:\n([0-9 \n]*?)\n\n", case_insensitive=false](#0{input}), 1))) // { arity: 2 }
                                         ReadStorage materialize.public.input // { arity: 1 }
                       ArrangeBy keys=[[]] // { arity: 3 }
                         Project (#3..=#5) // { arity: 3 }
-                          Map (arraytoarray(regexp_split_to_array[" ", case_insensitive=false](#1)), array_index(#2, 1), array_index(#2, 2), array_index(#2, 3)) // { arity: 6 }
+                          Map (arraytoarray(regexp_split_to_array[" ", case_insensitive=false](#1{unnest})), array_index(#2{line}, 1), array_index(#2{line}, 2), array_index(#2{line}, 3)) // { arity: 6 }
                             FlatMap unnest_array(regexp_split_to_array["\n", case_insensitive=false](array_index(regexp_match["temperature-to-humidity map:\n([0-9 \n]*?)\n\n", case_insensitive=false](#0{input}), 1))) // { arity: 2 }
                               ReadStorage materialize.public.input // { arity: 1 }
             ArrangeBy keys=[[]] // { arity: 3 }
               Project (#3..=#5) // { arity: 3 }
-                Map (arraytoarray(regexp_split_to_array[" ", case_insensitive=false](#1)), array_index(#2, 1), array_index(#2, 2), array_index(#2, 3)) // { arity: 6 }
+                Map (arraytoarray(regexp_split_to_array[" ", case_insensitive=false](#1{unnest})), array_index(#2{line}, 1), array_index(#2{line}, 2), array_index(#2{line}, 3)) // { arity: 6 }
                   FlatMap unnest_array(regexp_split_to_array["\n", case_insensitive=false](array_index(regexp_match["humidity-to-location map:\n([0-9 \n]*)", case_insensitive=false](#0{input}), 1))) // { arity: 2 }
                     ReadStorage materialize.public.input // { arity: 1 }
   Return // { arity: 1 }
@@ -1164,47 +1164,47 @@ Explained Query:
   With
     cte l0 =
       Project (#2, #3) // { arity: 2 }
-        Map (split_string(#1, ":", 1), split_string(#1, ":", 2)) // { arity: 4 }
+        Map (split_string(#1{unnest}, ":", 1), split_string(#1{unnest}, ":", 2)) // { arity: 4 }
           FlatMap unnest_array(regexp_split_to_array["\n\n", case_insensitive=false](#0{input})) // { arity: 2 }
             ReadStorage materialize.public.input // { arity: 1 }
     cte l1 =
       Project (#5..=#9) // { arity: 5 }
         Filter (#3 != "") // { arity: 10 }
-          Map (split_string(#2, " ", 2), split_string(#0, " ", 1), split_string(#4, "-", 1), split_string(#4, "-", 3), text_to_bigint(#3), text_to_bigint(split_string(#2, " ", 1)), text_to_bigint(split_string(#2, " ", 3))) // { arity: 10 }
-            FlatMap unnest_array(regexp_split_to_array["\n", case_insensitive=false](#1)) // { arity: 3 }
-              Filter (#0 != "seeds") // { arity: 2 }
+          Map (split_string(#2{unnest}, " ", 2), split_string(#0{head}, " ", 1), split_string(#4, "-", 1), split_string(#4, "-", 3), text_to_bigint(#3{src_idx}), text_to_bigint(split_string(#2{unnest}, " ", 1)), text_to_bigint(split_string(#2{unnest}, " ", 3))) // { arity: 10 }
+            FlatMap unnest_array(regexp_split_to_array["\n", case_insensitive=false](#1{body})) // { arity: 3 }
+              Filter (#0{head} != "seeds") // { arity: 2 }
                 Get l0 // { arity: 2 }
     cte l2 =
-      ArrangeBy keys=[[#0, #1]] // { arity: 5 }
+      ArrangeBy keys=[[#0{src_name}, #1{dst_name}]] // { arity: 5 }
         Get l1 // { arity: 5 }
     cte l3 =
       Project (#1) // { arity: 1 }
-        Filter (#0 = "seeds") // { arity: 2 }
+        Filter (#0{head} = "seeds") // { arity: 2 }
           Get l0 // { arity: 2 }
     cte l4 =
-      ArrangeBy keys=[[#0]] // { arity: 2 }
-        Distinct project=[#0, #1] // { arity: 2 }
+      ArrangeBy keys=[[#0{src_name}]] // { arity: 2 }
+        Distinct project=[#0{src_name}, #1] // { arity: 2 }
           Project (#0, #1) // { arity: 2 }
             Get l1 // { arity: 5 }
   Return // { arity: 2 }
     With Mutually Recursive
       cte l5 =
         Project (#0..=#2, #5, #6) // { arity: 5 }
-          Filter (#2 >= #5) AND (#2 <= ((#5 + #7) - 1)) // { arity: 8 }
-            Join on=(#0 = #3 AND #1 = #4) type=differential // { arity: 8 }
+          Filter (#2{idx} >= #5{src_idx}) AND (#2{idx} <= ((#5{src_idx} + #7{len}) - 1)) // { arity: 8 }
+            Join on=(#0{src_name} = #3{src_name} AND #1{dst_name} = #4{dst_name}) type=differential // { arity: 8 }
               implementation
-                %0:l7[#0, #1]KK » %1:l2[#0, #1]KK
-              ArrangeBy keys=[[#0, #1]] // { arity: 3 }
+                %0:l7[#0{src_name}, #1{dst_name}]KK » %1:l2[#0{src_name}, #1{dst_name}]KK
+              ArrangeBy keys=[[#0{src_name}, #1{dst_name}]] // { arity: 3 }
                 Get l7 // { arity: 3 }
               Get l2 // { arity: 5 }
       cte l6 =
         Union // { arity: 2 }
           Project (#3, #2) // { arity: 2 }
-            Map (text_to_bigint(#1), "seed") // { arity: 4 }
-              FlatMap unnest_array(regexp_split_to_array[" ", case_insensitive=false](btrim(#0))) // { arity: 2 }
+            Map (text_to_bigint(#1{unnest}), "seed") // { arity: 4 }
+              FlatMap unnest_array(regexp_split_to_array[" ", case_insensitive=false](btrim(#0{body}))) // { arity: 2 }
                 Get l3 // { arity: 1 }
           Project (#0, #4) // { arity: 2 }
-            Map (coalesce((#1 + (#3 - #2)), #1)) // { arity: 5 }
+            Map (coalesce((#1{idx} + (#3{dst_idx} - #2{src_idx})), #1{idx})) // { arity: 5 }
               Union // { arity: 4 }
                 Project (#1..=#4) // { arity: 4 }
                   Get l5 // { arity: 5 }
@@ -1223,33 +1223,33 @@ Explained Query:
                       ArrangeBy keys=[[#0..=#2]] // { arity: 3 }
                         Get l7 // { arity: 3 }
       cte l7 =
-        Project (#0, #3, #1) // { arity: 3 }
-          Join on=(#0 = #2) type=differential // { arity: 4 }
+        Project (#0{name}, #3, #1) // { arity: 3 }
+          Join on=(#0{name} = #2{src_name}) type=differential // { arity: 4 }
             implementation
               %0[#0]K » %1:l4[#0]K
-            ArrangeBy keys=[[#0]] // { arity: 2 }
-              Distinct project=[#0, #1] // { arity: 2 }
+            ArrangeBy keys=[[#0{name}]] // { arity: 2 }
+              Distinct project=[#0{name}, #1] // { arity: 2 }
                 Get l6 // { arity: 2 }
             Get l4 // { arity: 2 }
       cte l8 =
-        Reduce aggregates=[min(#0)] // { arity: 1 }
+        Reduce aggregates=[min(#0{idx})] // { arity: 1 }
           Project (#1) // { arity: 1 }
-            Filter (#0 = "location") // { arity: 2 }
+            Filter (#0{name} = "location") // { arity: 2 }
               Get l6 // { arity: 2 }
       cte l9 =
         Distinct project=[#0..=#2] // { arity: 3 }
           Union // { arity: 3 }
             Project (#6, #4, #5) // { arity: 3 }
-              Map (regexp_split_to_array[" ", case_insensitive=false](btrim(#0)), (2 * #1), text_to_bigint(array_index(#2, integer_to_bigint((#3 - 1)))), (#4 + text_to_bigint(array_index(#2, integer_to_bigint(#3)))), "seed") // { arity: 7 }
-                FlatMap generate_series(1, ((regexp_split_to_array[" ", case_insensitive=false](btrim(#0)) array_length 1) / 2), 1) // { arity: 2 }
+              Map (regexp_split_to_array[" ", case_insensitive=false](btrim(#0{body})), (2 * #1{x}), text_to_bigint(array_index(#2, integer_to_bigint((#3 - 1)))), (#4{"?column?"} + text_to_bigint(array_index(#2, integer_to_bigint(#3)))), "seed") // { arity: 7 }
+                FlatMap generate_series(1, ((regexp_split_to_array[" ", case_insensitive=false](btrim(#0{body})) array_length 1) / 2), 1) // { arity: 2 }
                   Get l3 // { arity: 1 }
             Project (#1, #10, #11) // { arity: 3 }
-              Map ((#8 - #4), (#6 + #9), (#7 + #9)) // { arity: 12 }
+              Map ((#8{entry_dst} - #4{entry_start}), (#6{clipped_start} + #9), (#7{clipped_end} + #9)) // { arity: 12 }
                 Get l11 // { arity: 9 }
             Get l19 // { arity: 3 }
       cte l10 =
         Project (#0..=#2, #4) // { arity: 4 }
-          Join on=(#0 = #3) type=differential // { arity: 5 }
+          Join on=(#0 = #3{src_name}) type=differential // { arity: 5 }
             implementation
               %0:l9[#0]K » %1:l4[#0]K
             ArrangeBy keys=[[#0]] // { arity: 3 }
@@ -1258,11 +1258,11 @@ Explained Query:
       cte l11 =
         Project (#0, #3, #1, #2, #6, #10, #9, #11, #7) // { arity: 9 }
           Filter (#9 < #11) // { arity: 12 }
-            Map (greatest(#1, #6), (#6 + #8), least(#2, #10)) // { arity: 12 }
-              Join on=(#0 = #4 AND #3 = #5) type=differential // { arity: 9 }
+            Map (greatest(#1{start_idx}, #6{src_idx}), (#6{src_idx} + #8{len}), least(#2{end_idx}, #10)) // { arity: 12 }
+              Join on=(#0{src_name} = #4{src_name} AND #3{dst_name} = #5{dst_name}) type=differential // { arity: 9 }
                 implementation
-                  %0:l10[#0, #3]KK » %1:l2[#0, #1]KK
-                ArrangeBy keys=[[#0, #3]] // { arity: 4 }
+                  %0:l10[#0{src_name}, #3{dst_name}]KK » %1:l2[#0{src_name}, #1{dst_name}]KK
+                ArrangeBy keys=[[#0{src_name}, #3{dst_name}]] // { arity: 4 }
                   Get l10 // { arity: 4 }
                 Get l2 // { arity: 5 }
       cte l12 =
@@ -1273,22 +1273,22 @@ Explained Query:
           Project (#0..=#3, #7) // { arity: 5 }
             Get l12 // { arity: 9 }
       cte l14 =
-        Reduce group_by=[#0..=#4] aggregates=[min(#5)] // { arity: 6 }
+        Reduce group_by=[#0..=#4] aggregates=[min(#5{clipped_start})] // { arity: 6 }
           Project (#0..=#4, #9) // { arity: 6 }
-            Filter (#9 >= #4) // { arity: 10 }
-              Join on=(#0 = #5 AND #1 = #6 AND #2 = #7 AND #3 = #8) type=differential // { arity: 10 }
+            Filter (#9{clipped_start} >= #4{clipped_end}) // { arity: 10 }
+              Join on=(#0{src_name} = #5{src_name} AND #1{dst_name} = #6{dst_name} AND #2{start_idx} = #7{start_idx} AND #3{end_idx} = #8{end_idx}) type=differential // { arity: 10 }
                 implementation
-                  %1:l11[#0..=#3]KKKKf » %0:l13[#0..=#3]KKKKf
-                ArrangeBy keys=[[#0..=#3]] // { arity: 5 }
-                  Filter (#2) IS NOT NULL AND (#3) IS NOT NULL // { arity: 5 }
+                  %1:l11[#0{src_name}..=#3{end_idx}]KKKKf » %0:l13[#0{src_name}..=#3{end_idx}]KKKKf
+                ArrangeBy keys=[[#0{src_name}..=#3{end_idx}]] // { arity: 5 }
+                  Filter (#2{start_idx}) IS NOT NULL AND (#3{end_idx}) IS NOT NULL // { arity: 5 }
                     Get l13 // { arity: 5 }
-                ArrangeBy keys=[[#0..=#3]] // { arity: 5 }
+                ArrangeBy keys=[[#0{src_name}..=#3{end_idx}]] // { arity: 5 }
                   Project (#0..=#3, #6) // { arity: 5 }
-                    Filter (#2) IS NOT NULL AND (#6 < #3) // { arity: 9 }
+                    Filter (#2{start_idx}) IS NOT NULL AND (#6{clipped_start} < #3{end_idx}) // { arity: 9 }
                       Get l11 // { arity: 9 }
       cte l15 =
         Project (#0..=#4, #6) // { arity: 6 }
-          Map (coalesce(#5{min}, #3)) // { arity: 7 }
+          Map (coalesce(#5{min}, #3{end_idx})) // { arity: 7 }
             Union // { arity: 6 }
               Get l14 // { arity: 6 }
               Project (#0..=#4, #10) // { arity: 6 }
@@ -1305,24 +1305,24 @@ Explained Query:
                     ArrangeBy keys=[[#0..=#4]] // { arity: 5 }
                       Get l13 // { arity: 5 }
       cte l16 =
-        Reduce group_by=[#0, #3, #1, #2] aggregates=[min(#4)] // { arity: 5 }
+        Reduce group_by=[#0, #3, #1, #2] aggregates=[min(#4{clipped_start})] // { arity: 5 }
           Project (#0..=#3, #8) // { arity: 5 }
-            Join on=(#0 = #4 AND #1 = #6 AND #2 = #7 AND #3 = #5) type=differential // { arity: 9 }
+            Join on=(#0{src_name} = #4{src_name} AND #1{start_idx} = #6{start_idx} AND #2{end_idx} = #7{end_idx} AND #3{dst_name} = #5{dst_name}) type=differential // { arity: 9 }
               implementation
-                %1:l11[#0, #2, #3, #1]KKKKf » %0:l10[#0..=#3]KKKKf
-              ArrangeBy keys=[[#0..=#3]] // { arity: 4 }
-                Filter (#1) IS NOT NULL AND (#2) IS NOT NULL // { arity: 4 }
+                %1:l11[#0{src_name}, #2{start_idx}, #3{end_idx}, #1{dst_name}]KKKKf » %0:l10[#0{src_name}..=#3{dst_name}]KKKKf
+              ArrangeBy keys=[[#0{src_name}..=#3{dst_name}]] // { arity: 4 }
+                Filter (#1{start_idx}) IS NOT NULL AND (#2{end_idx}) IS NOT NULL // { arity: 4 }
                   Get l10 // { arity: 4 }
-              ArrangeBy keys=[[#0, #2, #3, #1]] // { arity: 5 }
+              ArrangeBy keys=[[#0{src_name}, #2{start_idx}, #3{end_idx}, #1{dst_name}]] // { arity: 5 }
                 Project (#0..=#3, #6) // { arity: 5 }
-                  Filter (#6 < #3) AND (#6 >= #2) // { arity: 9 }
+                  Filter (#6{clipped_start} < #3{end_idx}) AND (#6{clipped_start} >= #2{start_idx}) // { arity: 9 }
                     Get l11 // { arity: 9 }
       cte l17 =
         ArrangeBy keys=[[#0..=#3]] // { arity: 4 }
           Get l10 // { arity: 4 }
       cte l18 =
         Project (#0..=#3, #5) // { arity: 5 }
-          Map (coalesce(#4{min}, #3)) // { arity: 6 }
+          Map (coalesce(#4{min}, #3{end_idx})) // { arity: 6 }
             Union // { arity: 5 }
               Get l16 // { arity: 5 }
               Project (#0..=#3, #8) // { arity: 5 }
@@ -1383,9 +1383,9 @@ Explained Query:
     Return // { arity: 2 }
       With
         cte l20 =
-          Reduce aggregates=[min(#0)] // { arity: 1 }
+          Reduce aggregates=[min(#0{start_idx})] // { arity: 1 }
             Project (#1) // { arity: 1 }
-              Filter (#0 = "location") // { arity: 3 }
+              Filter (#0{name} = "location") // { arity: 3 }
                 Get l9 // { arity: 3 }
       Return // { arity: 2 }
         CrossJoin type=differential // { arity: 2 }

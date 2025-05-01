@@ -95,7 +95,7 @@ impl<T> PeekDataflowPlan<T> {
         let key = typ
             .default_key()
             .into_iter()
-            .map(MirScalarExpr::Column)
+            .map(MirScalarExpr::column)
             .collect::<Vec<_>>();
         let (permutation, thinning) = permutation_for_arrangement(&key, arity);
         Self {
@@ -397,7 +397,7 @@ pub fn create_fast_path_plan<T: Timestamp>(
                             if !preserves_order(&col.scalar_type) {
                                 break;
                             }
-                            let col_expr = MirScalarExpr::Column(idx);
+                            let col_expr = MirScalarExpr::column(idx);
 
                             let Some((literal, _)) = filters
                                 .iter()

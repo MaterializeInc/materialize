@@ -322,7 +322,7 @@ Explained Query:
     Union // { non_negative: true }
       Get l0 // { non_negative: true }
       Negate // { non_negative: false }
-        Filter (#0 > 1940) // { non_negative: true }
+        Filter (#0{birth_year} > 1940) // { non_negative: true }
           Get l0 // { non_negative: true }
 
 Source materialize.public.people
@@ -441,7 +441,7 @@ Explained Query:
                     Filter (#0{id} > 1) // { non_negative: true }
                       ReadStorage materialize.public.people // { non_negative: true }
           Project (#0, #2) // { non_negative: true }
-            Map ((#1 || "_iter")) // { non_negative: true }
+            Map ((#1{name} || "_iter")) // { non_negative: true }
               Get l0 // { non_negative: true }
   Return // { non_negative: true }
     Get l0 // { non_negative: true }
@@ -482,11 +482,11 @@ Explained Query:
           Project (#0{id}, #4) // { non_negative: true }
             Map ((#1{name} || "_init")) // { non_negative: true }
               ReadStorage materialize.public.people // { non_negative: true }
-          Distinct project=[#0, (#1 || "_iter")] // { non_negative: true }
+          Distinct project=[#0, (#1{name} || "_iter")] // { non_negative: true }
             Get l1 // { non_negative: true }
           Negate // { non_negative: false }
-            Distinct project=[#0, (#1 || "_iter")] // { non_negative: true }
-              Filter (#0 > 1) // { non_negative: true }
+            Distinct project=[#0, (#1{name} || "_iter")] // { non_negative: true }
+              Filter (#0{id} > 1) // { non_negative: true }
                 Get l1 // { non_negative: true }
     cte l1 =
       Union // { non_negative: true }
@@ -526,10 +526,10 @@ Explained Query:
           Project (#0{id}, #4) // { non_negative: true }
             Map ((#1{name} || "_init")) // { non_negative: true }
               ReadStorage materialize.public.people // { non_negative: true }
-          Distinct project=[#0{id}, (#1 || "_iter")] // { non_negative: true }
+          Distinct project=[#0{id}, (#1{name} || "_iter")] // { non_negative: true }
             Get l0 // { non_negative: true }
           Negate // { non_negative: false }
-            Distinct project=[#0, (#1 || "_iter")] // { non_negative: true }
+            Distinct project=[#0, (#1{name} || "_iter")] // { non_negative: true }
               Filter (#0{id} > 1) // { non_negative: true }
                 Get l0 // { non_negative: true }
   Return // { non_negative: true }

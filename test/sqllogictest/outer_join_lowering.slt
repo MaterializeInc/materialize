@@ -693,7 +693,7 @@ With
     Distinct project=[#12{dim01_d01}] // { arity: 1 }
       Get l3 // { arity: 17 }
   cte l5 =
-    Reduce group_by=[#0{dim01_d01}] aggregates=[any((#0{dim01_d01} = #1))] // { arity: 2 }
+    Reduce group_by=[#0{dim01_d01}] aggregates=[any((#0{dim01_d01} = #1{right_col0_0}))] // { arity: 2 }
       FlatMap unnest_array(strtoarray("{24, 42}")) // { arity: 2 }
         Get l4 // { arity: 1 }
   cte l6 =

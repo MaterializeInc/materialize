@@ -111,16 +111,16 @@ pub fn canonicalize_equivalences<'a, I>(
 /// use mz_expr::canonicalize::canonicalize_equivalence_classes;
 ///
 /// let mut equivalences = vec![
-///     vec![MirScalarExpr::Column(1), MirScalarExpr::Column(4)],
-///     vec![MirScalarExpr::Column(3), MirScalarExpr::Column(5)],
-///     vec![MirScalarExpr::Column(0), MirScalarExpr::Column(3)],
-///     vec![MirScalarExpr::Column(2), MirScalarExpr::Column(2)],
+///     vec![MirScalarExpr::column(1), MirScalarExpr::column(4)],
+///     vec![MirScalarExpr::column(3), MirScalarExpr::column(5)],
+///     vec![MirScalarExpr::column(0), MirScalarExpr::column(3)],
+///     vec![MirScalarExpr::column(2), MirScalarExpr::column(2)],
 /// ];
 /// let expected = vec![
-///     vec![MirScalarExpr::Column(0),
-///         MirScalarExpr::Column(3),
-///         MirScalarExpr::Column(5)],
-///     vec![MirScalarExpr::Column(1), MirScalarExpr::Column(4)],
+///     vec![MirScalarExpr::column(0),
+///         MirScalarExpr::column(3),
+///         MirScalarExpr::column(5)],
+///     vec![MirScalarExpr::column(1), MirScalarExpr::column(4)],
 /// ];
 /// canonicalize_equivalence_classes(&mut equivalences);
 /// assert_eq!(expected, equivalences)

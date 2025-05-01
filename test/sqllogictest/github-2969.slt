@@ -80,7 +80,7 @@ Explained Query:
       Project (#0{f4}..=#2{f6}) // { arity: 3 }
         Join on=(#1{f5} = #3{f5}) type=differential // { arity: 4 }
           implementation
-            %0:table_f4_f5_f6[#1]Kf » %1:table_f5_f6[#0]Kf
+            %0:table_f4_f5_f6[#1]Kf » %1:table_f5_f6[#0{f5}]Kf
           ArrangeBy keys=[[#1{f5}]] // { arity: 3 }
             Filter (#1{f5} = #2{f6}) // { arity: 3 }
               ReadStorage materialize.public.table_f4_f5_f6 // { arity: 3 }

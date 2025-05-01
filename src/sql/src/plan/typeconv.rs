@@ -24,8 +24,7 @@ use mz_repr::{ColumnName, ColumnType, Datum, RelationType, ScalarBaseType, Scala
 use crate::catalog::TypeCategory;
 use crate::plan::error::PlanError;
 use crate::plan::hir::{
-    AbstractColumnType, CoercibleScalarExpr, CoercibleScalarType, ColumnRef, HirScalarExpr,
-    UnaryFunc,
+    AbstractColumnType, CoercibleScalarExpr, CoercibleScalarType, HirScalarExpr, UnaryFunc,
 };
 use crate::plan::query::{ExprContext, QueryContext};
 use crate::plan::scope::Scope;
@@ -934,10 +933,7 @@ pub fn to_jsonb(ecx: &ExprContext, expr: HirScalarExpr) -> HirScalarExpr {
                         .call_unary(UnaryFunc::RecordGet(func::RecordGet(i))),
                 ));
             }
-            HirScalarExpr::CallVariadic {
-                func: VariadicFunc::JsonbBuildObject,
-                exprs,
-            }
+            HirScalarExpr::call_variadic(VariadicFunc::JsonbBuildObject, exprs)
         }
         ref ty @ List {
             ref element_type, ..
@@ -1126,20 +1122,20 @@ pub fn plan_coerce<'a>(
             for (e, coerce_to) in exprs.into_iter().zip(coercions) {
                 out.push(plan_coerce(ecx, e, &coerce_to)?);
             }
-            HirScalarExpr::CallVariadic {
-                func: VariadicFunc::RecordCreate {
+            HirScalarExpr::call_variadic(
+                VariadicFunc::RecordCreate {
                     field_names: (0..arity)
                         .map(|i| ColumnName::from(format!("f{}", i + 1)))
                         .collect(),
                 },
-                exprs: out,
-            }
+                out,
+            )
         }
 
         Parameter(n) => {
             let prev = ecx.param_types().borrow_mut().insert(n, coerce_to.clone());
             assert_none!(prev);
-            HirScalarExpr::Parameter(n)
+            HirScalarExpr::parameter(n)
         }
     })
 }
@@ -1179,10 +1175,7 @@ pub fn plan_hypothetical_cast(
         allow_windows: false,
     };
 
-    let col_expr = HirScalarExpr::Column(ColumnRef {
-        level: 0,
-        column: 0,
-    });
+    let col_expr = HirScalarExpr::column(0);
 
     // Determine the `ScalarExpr` required to cast our column to the target
     // component type.
