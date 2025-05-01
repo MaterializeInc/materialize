@@ -21,7 +21,7 @@ import pytest_asyncio
 from mcp import Tool
 from psycopg_pool import AsyncConnectionPool
 
-from materialize_mcp_server.mz_client import MzClient
+from mcp_materialize.mz_client import MzClient
 
 
 @pytest_asyncio.fixture(scope="function")
