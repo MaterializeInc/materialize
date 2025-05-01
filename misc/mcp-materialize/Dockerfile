@@ -11,7 +11,7 @@ FROM python:3.13-alpine
 
 RUN pip install uv
 
-WORKDIR /app/mcp-server
+WORKDIR /app/mcp-materialize
 
 COPY . .
 
