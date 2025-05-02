@@ -37,7 +37,7 @@ use crate::location::{CaSResult, Consensus, ExternalError, ResultStream, SeqNo, 
 
 pub(crate) const USE_POSTGRES_TUNED_QUERIES: mz_dyncfg::Config<bool> = mz_dyncfg::Config::new(
     "persist_use_postgres_tuned_queries",
-    false,
+    true,
     "Use a set of queries for consensus that have specifically been tuned against
     Postgres to ensure we acquire a minimal number of locks.",
 );
