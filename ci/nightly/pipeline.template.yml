@@ -842,7 +842,7 @@ steps:
               args: [--scenario=RestartEnvironmentdClusterdStorage, --execution-mode=parallel, "--seed=$BUILDKITE_JOB_ID"]
 
       - id: checks-parallel-restart-environmentd-clusterd-storage-postgres-consensus
-        label: "Checks parallel + restart of environmentd & storage clusterd with Postgres for consensus"
+        label: "Checks parallel + restart of environmentd & storage clusterd (:postgres: Consensus)"
         depends_on: build-aarch64
         timeout_in_minutes: 180
         parallelism: 2
@@ -1153,7 +1153,7 @@ steps:
               args: [--node-count=4, --consensus=cockroach, --blob=maelstrom, --time-limit=300, --concurrency=4, --rate=500, --max-txn-length=16, --unreliability=0.1]
 
       - id: persist-maelstrom-multi-node-postgres
-        label: "Long multi-node Maelstrom coverage of persist with :postgres: consensus"
+        label: "Long multi-node Maelstrom coverage of persist with :postgres: Consensus"
         depends_on: build-aarch64
         timeout_in_minutes: 40
         agents:
