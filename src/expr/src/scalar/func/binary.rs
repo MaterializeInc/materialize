@@ -911,6 +911,18 @@ mod test {
         );
 
         check(
+            func::DateBinTimestamp,
+            BF::DateBinTimestamp,
+            &i32_ty,
+            &i32_ty,
+        );
+        check(
+            func::DateBinTimestampTz,
+            BF::DateBinTimestampTz,
+            &i32_ty,
+            &i32_ty,
+        );
+        check(
             func::DatePartIntervalNumeric,
             BF::ExtractInterval,
             &i32_ty,
@@ -918,14 +930,50 @@ mod test {
         );
         check(func::DatePartTimeNumeric, BF::ExtractTime, &i32_ty, &i32_ty);
         check(
+            func::DatePartTimestampTimestampNumeric,
+            BF::ExtractTimestamp,
+            &i32_ty,
+            &i32_ty,
+        );
+        check(
+            func::DatePartTimestampTimestampTzNumeric,
+            BF::ExtractTimestampTz,
+            &i32_ty,
+            &i32_ty,
+        );
+        check(
             func::DatePartIntervalF64,
             BF::DatePartInterval,
             &i32_ty,
             &i32_ty,
         );
         check(func::DatePartTimeF64, BF::DatePartTime, &i32_ty, &i32_ty);
+        check(
+            func::DatePartTimestampTimestampF64,
+            BF::DatePartTimestamp,
+            &i32_ty,
+            &i32_ty,
+        );
+        check(
+            func::DatePartTimestampTimestampTzF64,
+            BF::DatePartTimestampTz,
+            &i32_ty,
+            &i32_ty,
+        );
 
         check(func::ExtractDateUnits, BF::ExtractDate, &i32_ty, &i32_ty);
+        check(
+            func::DateTruncUnitsTimestamp,
+            BF::DateTruncTimestamp,
+            &i32_ty,
+            &i32_ty,
+        );
+        check(
+            func::DateTruncUnitsTimestampTz,
+            BF::DateTruncTimestampTz,
+            &i32_ty,
+            &i32_ty,
+        );
         check(
             func::DateTruncInterval,
             BF::DateTruncInterval,

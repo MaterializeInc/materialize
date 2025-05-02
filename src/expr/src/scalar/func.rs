@@ -2903,6 +2903,72 @@ where
     is_monotone = "(false, false)",
     output_type = "Numeric",
     is_infix_op = false,
+    sqlname = "extractts",
+    propagates_nulls = true
+)]
+fn date_part_timestamp_timestamp_numeric<'a>(
+    units: &str,
+    ts: CheckedTimestamp<NaiveDateTime>,
+) -> Result<Datum<'a>, EvalError> {
+    match units.parse() {
+        Ok(units) => Ok(date_part_timestamp_inner::<_, Numeric>(units, &*ts)?.into()),
+        Err(_) => Err(EvalError::UnknownUnits(units.into())),
+    }
+}
+
+#[sqlfunc(
+    is_monotone = "(false, false)",
+    output_type = "Numeric",
+    is_infix_op = false,
+    sqlname = "extracttstz",
+    propagates_nulls = true
+)]
+fn date_part_timestamp_timestamp_tz_numeric<'a>(
+    units: &str,
+    ts: CheckedTimestamp<DateTime<Utc>>,
+) -> Result<Datum<'a>, EvalError> {
+    match units.parse() {
+        Ok(units) => Ok(date_part_timestamp_inner::<_, Numeric>(units, &*ts)?.into()),
+        Err(_) => Err(EvalError::UnknownUnits(units.into())),
+    }
+}
+
+#[sqlfunc(
+    is_monotone = "(false, false)",
+    is_infix_op = false,
+    sqlname = "date_partts",
+    propagates_nulls = true
+)]
+fn date_part_timestamp_timestamp_f64<'a>(
+    units: &str,
+    ts: CheckedTimestamp<NaiveDateTime>,
+) -> Result<f64, EvalError> {
+    match units.parse() {
+        Ok(units) => Ok(date_part_timestamp_inner::<_, f64>(units, &*ts)?.into()),
+        Err(_) => Err(EvalError::UnknownUnits(units.into())),
+    }
+}
+
+#[sqlfunc(
+    is_monotone = "(false, false)",
+    is_infix_op = false,
+    sqlname = "date_parttstz",
+    propagates_nulls = true
+)]
+fn date_part_timestamp_timestamp_tz_f64<'a>(
+    units: &str,
+    ts: CheckedTimestamp<DateTime<Utc>>,
+) -> Result<f64, EvalError> {
+    match units.parse() {
+        Ok(units) => Ok(date_part_timestamp_inner::<_, f64>(units, &*ts)?.into()),
+        Err(_) => Err(EvalError::UnknownUnits(units.into())),
+    }
+}
+
+#[sqlfunc(
+    is_monotone = "(false, false)",
+    output_type = "Numeric",
+    is_infix_op = false,
     sqlname = "extractd",
     propagates_nulls = true
 )]
@@ -2961,6 +3027,39 @@ where
     Ok(res.try_into()?)
 }
 
+#[sqlfunc(
+    is_monotone = "(true, true)",
+    output_type = "CheckedTimestamp<NaiveDateTime>",
+    is_infix_op = false,
+    sqlname = "bin_unix_epoch_timestamp",
+    propagates_nulls = true
+)]
+fn date_bin_timestamp<'a>(
+    stride: Interval,
+    source: CheckedTimestamp<NaiveDateTime>,
+) -> Result<Datum<'a>, EvalError> {
+    let origin =
+        CheckedTimestamp::from_timestamplike(DateTime::from_timestamp(0, 0).unwrap().naive_utc())
+            .expect("must fit");
+    date_bin(stride, source, origin)
+}
+
+#[sqlfunc(
+    is_monotone = "(true, true)",
+    output_type = "CheckedTimestamp<DateTime<Utc>>",
+    is_infix_op = false,
+    sqlname = "bin_unix_epoch_timestamptz",
+    propagates_nulls = true
+)]
+fn date_bin_timestamp_tz<'a>(
+    stride: Interval,
+    source: CheckedTimestamp<DateTime<Utc>>,
+) -> Result<Datum<'a>, EvalError> {
+    let origin = CheckedTimestamp::from_timestamplike(DateTime::from_timestamp(0, 0).unwrap())
+        .expect("must fit");
+    date_bin(stride, source, origin)
+}
+
 fn date_trunc<'a, T>(a: Datum<'a>, ts: &T) -> Result<Datum<'a>, EvalError>
 where
     T: TimestampLike,
@@ -2968,6 +3067,38 @@ where
     let units = a.unwrap_str();
     match units.parse() {
         Ok(units) => Ok(date_trunc_inner(units, ts)?.try_into()?),
+        Err(_) => Err(EvalError::UnknownUnits(units.into())),
+    }
+}
+
+#[sqlfunc(
+    is_monotone = "(false, false)",
+    is_infix_op = false,
+    sqlname = "date_truncts",
+    propagates_nulls = true
+)]
+fn date_trunc_units_timestamp<'a>(
+    units: &str,
+    ts: CheckedTimestamp<NaiveDateTime>,
+) -> Result<CheckedTimestamp<NaiveDateTime>, EvalError> {
+    match units.parse() {
+        Ok(units) => Ok(date_trunc_inner(units, &*ts)?.try_into()?),
+        Err(_) => Err(EvalError::UnknownUnits(units.into())),
+    }
+}
+
+#[sqlfunc(
+    is_monotone = "(false, false)",
+    is_infix_op = false,
+    sqlname = "date_trunctstz",
+    propagates_nulls = true
+)]
+fn date_trunc_units_timestamp_tz<'a>(
+    units: &str,
+    ts: CheckedTimestamp<DateTime<Utc>>,
+) -> Result<CheckedTimestamp<DateTime<Utc>>, EvalError> {
+    match units.parse() {
+        Ok(units) => Ok(date_trunc_inner(units, &*ts)?.try_into()?),
         Err(_) => Err(EvalError::UnknownUnits(units.into())),
     }
 }
@@ -3944,7 +4075,7 @@ impl BinaryFunc {
                 ScalarType::Float64.nullable(in_nullable)
             }
 
-            DateBinTimestampTz | DateTruncTimestampTz => ScalarType::TimestampTz { precision: None }.nullable(true),
+            DateBinTimestampTz | DateTruncTimestampTz => ScalarType::TimestampTz { precision: None }.nullable(in_nullable),
 
             TimezoneTimestamp | TimezoneIntervalTimestamp => {
                 ScalarType::TimestampTz { precision: None }.nullable(in_nullable)
