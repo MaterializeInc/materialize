@@ -81,7 +81,7 @@ def create_mzs(
                 f"--var=default-storage-size={Materialized.Size.DEFAULT_SIZE}-1",
             ],
             volumes_extra=["secrets:/share/secrets"],
-            metadata_store="cockroach",
+            metadata_store="postgres-metadata" if postgres_consensus else "cockroach",
         )
     ]
 
@@ -160,7 +160,6 @@ class ExecutionMode(Enum):
 
 def setup(c: Composition) -> None:
     c.up("testdrive", persistent=True)
-    c.up(c.metadata_store())
 
     c.up(
         "test-certs",
@@ -257,6 +256,11 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
 
     if features.sql_server_enabled():
         c.up("sql-server")
+
+    if features.postgres_consensus_enabled():
+        c.up("postgres-metadata")
+    else:
+        c.up("cockroach")
 
     checks.sort(key=lambda ch: ch.__name__)
     checks = buildkite.shard_list(checks, lambda ch: ch.__name__)
