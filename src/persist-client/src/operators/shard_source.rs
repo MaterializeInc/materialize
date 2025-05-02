@@ -13,14 +13,15 @@ use std::cell::RefCell;
 use std::collections::BTreeMap;
 use std::collections::hash_map::DefaultHasher;
 use std::convert::Infallible;
-use std::fmt::Debug;
-use std::future::{self, Future};
+use std::fmt::{Debug, Formatter};
+use std::future::Future;
 use std::hash::{Hash, Hasher};
-use std::pin::{Pin, pin};
+use std::pin::pin;
 use std::rc::Rc;
 use std::sync::Arc;
 use std::time::Instant;
 
+use anyhow::anyhow;
 use arrow::array::ArrayRef;
 use differential_dataflow::Hashable;
 use differential_dataflow::difference::Semigroup;
@@ -76,6 +77,55 @@ impl FilterResult {
     }
 }
 
+/// Many dataflows, including the Persist source, encounter errors that are neither data-plane
+/// errors (a la SourceData) nor bugs. This includes:
+/// - lease timeouts: the source has failed to heartbeat, the lease timed out, and our inputs are
+///   GCed away. (But we'd be able to use the compaction output if we restart.)
+/// - external transactions: our Kafka transaction has failed, and we can't re-create it without
+///   re-ingesting a bunch of data we no longer have in memory. (But we could do on restart.)
+///
+/// It would be an error to simply exit from our dataflow operator, since that allows timely
+/// frontiers to advance, which signals progress that we haven't made. So we report the error and
+/// attempt to trigger a restart: either directly (via a `halt!`) or indirectly with a callback.
+#[derive(Clone)]
+pub enum ErrorHandler {
+    /// Halt the process on error.
+    Halt(&'static str),
+    /// Signal an error to a higher-level supervisor.
+    Signal(Rc<dyn Fn(anyhow::Error) + 'static>),
+}
+
+impl Debug for ErrorHandler {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        match self {
+            ErrorHandler::Halt(name) => f.debug_tuple("ErrorHandler::Halt").field(name).finish(),
+            ErrorHandler::Signal(_) => f.write_str("ErrorHandler::Signal"),
+        }
+    }
+}
+
+impl ErrorHandler {
+    /// Returns a new error handler that uses the provided function to signal an error.
+    pub fn signal(signal_fn: impl Fn(anyhow::Error) + 'static) -> Self {
+        Self::Signal(Rc::new(signal_fn))
+    }
+
+    /// Signal an error to an error handler. This function never returns: logically it blocks until
+    /// restart, though that restart might be sooner (if halting) or later (if triggering a dataflow
+    /// restart, for example).
+    pub async fn report_and_stop(&self, error: anyhow::Error) -> ! {
+        match self {
+            ErrorHandler::Halt(name) => {
+                mz_ore::halt!("unhandled error in {name}: {error:#}")
+            }
+            ErrorHandler::Signal(callback) => {
+                let () = callback(error);
+                std::future::pending().await
+            }
+        }
+    }
+}
+
 /// Creates a new source that reads from a persist shard, distributing the work
 /// of reading data to all timely workers.
 ///
@@ -104,7 +154,7 @@ pub fn shard_source<'g, K, V, T, D, DT, G, C>(
     // If Some, an override for the default listen sleep retry parameters.
     listen_sleep: Option<impl Fn() -> RetryParameters + 'static>,
     start_signal: impl Future<Output = ()> + 'static,
-    error_handler: impl FnOnce(String) -> Pin<Box<dyn Future<Output = ()>>> + 'static,
+    error_handler: ErrorHandler,
 ) -> (
     Stream<Child<'g, G, T>, FetchedBlob<K, V, G::Timestamp, D>>,
     Vec<PressOnDropButton>,
@@ -171,7 +221,7 @@ where
         filter_fn,
         listen_sleep,
         start_signal,
-        error_handler,
+        error_handler.clone(),
     );
     tokens.push(descs_token);
 
@@ -193,6 +243,7 @@ where
         key_schema,
         val_schema,
         is_transient,
+        error_handler,
     );
     completed_fetches_stream.connect_loop(completed_fetches_feedback_handle);
     tokens.push(fetch_token);
@@ -257,7 +308,7 @@ pub(crate) fn shard_source_descs<K, V, D, G>(
     // If Some, an override for the default listen sleep retry parameters.
     listen_sleep: Option<impl Fn() -> RetryParameters + 'static>,
     start_signal: impl Future<Output = ()> + 'static,
-    error_handler: impl FnOnce(String) -> Pin<Box<dyn Future<Output = ()>>> + 'static,
+    error_handler: ErrorHandler,
 ) -> (Stream<G, (usize, SerdeLeasedBatchPart)>, PressOnDropButton)
 where
     K: Debug + Codec,
@@ -302,26 +353,6 @@ where
         // Make it explicit that the subscriber is kept alive until we have finished returning parts
         drop(return_listen_handle);
     });
-
-    // This feels a bit clunky but it makes sure that we can't misuse the error
-    // handler below.
-    struct ErrorHandler<H: FnOnce(String) -> Pin<Box<dyn Future<Output = ()>>> + 'static> {
-        inner: H,
-    }
-    impl<H: FnOnce(String) -> Pin<Box<dyn Future<Output = ()>>> + 'static> ErrorHandler<H> {
-        /// Report the error and enforce that we never return.
-        async fn report_and_stop(self, error: String) -> ! {
-            (self.inner)(error).await;
-
-            // We cannot continue, and we cannot shut down. Otherwise downstream
-            // operators might interpret our downgrading/releasing our
-            // capability as a statement of progress.
-            future::pending().await
-        }
-    }
-    let error_handler = ErrorHandler {
-        inner: error_handler,
-    };
 
     let mut builder =
         AsyncOperatorBuilder::new(format!("shard_source_descs({})", name), scope.clone());
@@ -403,7 +434,7 @@ where
                 SnapshotMode::Include => match read.snapshot(as_of.clone()).await {
                     Ok(parts) => parts,
                     Err(e) => error_handler
-                        .report_and_stop(format!(
+                        .report_and_stop(anyhow!(
                             "{name_owned}: {shard_id} cannot serve requested as_of {as_of:?}: {e:?}"
                         ))
                         .await,
@@ -425,7 +456,7 @@ where
             Ok(handle) => listen.insert(handle),
             Err(e) => {
                 error_handler
-                    .report_and_stop(format!(
+                    .report_and_stop(anyhow!(
                         "{name_owned}: {shard_id} cannot serve requested as_of {as_of:?}: {e:?}"
                     ))
                     .await
@@ -560,6 +591,7 @@ pub(crate) fn shard_source_fetch<K, V, T, D, G>(
     key_schema: Arc<K::Schema>,
     val_schema: Arc<V::Schema>,
     is_transient: bool,
+    error_handler: ErrorHandler,
 ) -> (
     Stream<G, FetchedBlob<K, V, T, D>>,
     Stream<G, Infallible>,
@@ -618,6 +650,25 @@ where
                         .fetch_leased_part(&leased_part)
                         .await
                         .expect("shard_id should match across all workers");
+                    let fetched = match fetched {
+                        Ok(fetched) => fetched,
+                        Err(blob_key) => {
+                            // Ideally, readers should never encounter a missing blob. They place a seqno
+                            // hold as they consume their snapshot/listen, preventing any blobs they need
+                            // from being deleted by garbage collection, and all blob implementations are
+                            // linearizable so there should be no possibility of stale reads.
+                            //
+                            // However, it is possible for a lease to expire given a sustained period of
+                            // downtime, which could allow parts we expect to exist to be deleted...
+                            // at which point our best option is to request a restart.
+                            error_handler
+                                .report_and_stop(anyhow!(
+                                    "batch fetcher could not fetch batch part {}; lost lease?",
+                                    blob_key
+                                ))
+                                .await
+                        }
+                    };
                     {
                         // Do very fine-grained output activation/session
                         // creation to ensure that we don't hold activated
@@ -715,7 +766,7 @@ mod tests {
                         FilterResult::keep_all,
                         false.then_some(|| unreachable!()),
                         async {},
-                        |error| panic!("test: {error}"),
+                        ErrorHandler::Halt("test"),
                     );
                     (stream.leave(), tokens)
                 });
@@ -784,7 +835,7 @@ mod tests {
                         FilterResult::keep_all,
                         false.then_some(|| unreachable!()),
                         async {},
-                        |error| panic!("test: {error}"),
+                        ErrorHandler::Halt("test"),
                     );
                     (stream.leave(), tokens)
                 });

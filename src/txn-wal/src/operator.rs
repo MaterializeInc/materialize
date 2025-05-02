@@ -24,7 +24,9 @@ use mz_dyncfg::{Config, ConfigSet, ConfigUpdates};
 use mz_ore::cast::CastFrom;
 use mz_ore::task::JoinHandleExt;
 use mz_persist_client::cfg::{RetryParameters, USE_GLOBAL_TXN_CACHE_SOURCE};
-use mz_persist_client::operators::shard_source::{FilterResult, SnapshotMode, shard_source};
+use mz_persist_client::operators::shard_source::{
+    ErrorHandler, FilterResult, SnapshotMode, shard_source,
+};
 use mz_persist_client::{Diagnostics, PersistClient, ShardId};
 use mz_persist_types::codec_impls::{StringSchema, UnitSchema};
 use mz_persist_types::txn::TxnsCodec;
@@ -659,7 +661,7 @@ impl DataSubscribe {
                     FilterResult::keep_all,
                     false.then_some(|| unreachable!()),
                     async {},
-                    |error| panic!("data_subscribe: {error}"),
+                    ErrorHandler::Halt("data_subscribe"),
                 );
                 (data_stream.leave(), token)
             });

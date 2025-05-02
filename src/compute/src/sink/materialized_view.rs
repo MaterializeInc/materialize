@@ -129,7 +129,7 @@ use mz_ore::cast::CastFrom;
 use mz_persist_client::batch::{Batch, ProtoBatch};
 use mz_persist_client::cache::PersistClientCache;
 use mz_persist_client::metrics::SinkMetrics;
-use mz_persist_client::operators::shard_source::SnapshotMode;
+use mz_persist_client::operators::shard_source::{ErrorHandler, SnapshotMode};
 use mz_persist_client::write::WriteHandle;
 use mz_persist_client::{Diagnostics, PersistClient};
 use mz_persist_types::codec_impls::UnitSchema;
@@ -409,7 +409,7 @@ where
         map_filter_project,
         compute_state.dataflow_max_inflight_bytes(),
         start_signal,
-        |error| panic!("compute_persist_sink: {error}"),
+        ErrorHandler::Halt("compute persist sink"),
     );
 
     let streams = OkErr::new(ok_stream, err_stream);

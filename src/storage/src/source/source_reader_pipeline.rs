@@ -26,7 +26,6 @@
 use std::cell::RefCell;
 use std::collections::{BTreeMap, VecDeque};
 use std::convert::Infallible;
-use std::future;
 use std::hash::{Hash, Hasher};
 use std::rc::Rc;
 use std::sync::Arc;
@@ -37,7 +36,6 @@ use differential_dataflow::{AsCollection, Collection, Hashable};
 use futures::stream::StreamExt;
 use mz_ore::cast::CastFrom;
 use mz_ore::collections::CollectionExt;
-use mz_ore::error::ErrorExt;
 use mz_ore::now::NowFn;
 use mz_persist_client::cache::PersistClientCache;
 use mz_repr::{Diff, GlobalId, RelationDesc, Row};
@@ -71,7 +69,6 @@ use tokio_stream::wrappers::WatchStream;
 use tracing::trace;
 
 use crate::healthcheck::{HealthStatusMessage, HealthStatusUpdate};
-use crate::internal_control::InternalStorageCommand;
 use crate::metrics::StorageMetrics;
 use crate::metrics::source::SourceMetrics;
 use crate::source::probe;
@@ -475,7 +472,7 @@ where
     } = config;
 
     let read_only_rx = storage_state.read_only_rx.clone();
-    let internal_cmd_tx = storage_state.internal_cmd_tx.clone();
+    let error_handler = storage_state.error_handler("remap_operator", id);
 
     let chosen_worker = usize::cast_from(id.hashed() % u64::cast_from(worker_count));
     let active_worker = chosen_worker == worker_id;
@@ -512,20 +509,11 @@ where
         let remap_handle = match remap_handle {
             Ok(handle) => handle,
             Err(e) => {
-                let error = format!(
-                    "Failed to create remap handle for source {}: {}",
-                    name,
-                    e.display_with_causes()
-                );
-                tracing::info!("{}", error);
-                internal_cmd_tx
-                    .send(InternalStorageCommand::SuspendAndRestart { id, reason: error });
-
-                // We cannot continue, and we cannot shut down. Otherwise
-                // downstream operators might interpret our
-                // downgrading/releasing our capability as a statement of
-                // progress.
-                future::pending().await
+                error_handler
+                    .report_and_stop(
+                        e.context(format!("Failed to create remap handle for source {name}")),
+                    )
+                    .await
             }
         };
 

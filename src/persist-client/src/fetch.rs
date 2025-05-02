@@ -153,7 +153,7 @@ where
     pub async fn fetch_leased_part(
         &mut self,
         part: &LeasedBatchPart<T>,
-    ) -> Result<FetchedBlob<K, V, T, D>, InvalidUsage<T>> {
+    ) -> Result<Result<FetchedBlob<K, V, T, D>, BlobKey>, InvalidUsage<T>> {
         if &part.shard_id != &self.shard_id {
             let batch_shard = part.shard_id.clone();
             return Err(InvalidUsage::BatchNotFromThisShard {
@@ -196,18 +196,11 @@ where
                     read_metrics,
                     x,
                 )
-                .await
-                .unwrap_or_else(|blob_key| {
-                    // Ideally, readers should never encounter a missing blob. They place a seqno
-                    // hold as they consume their snapshot/listen, preventing any blobs they need
-                    // from being deleted by garbage collection, and all blob implementations are
-                    // linearizable so there should be no possibility of stale reads.
-                    //
-                    // If we do have a bug and a reader does encounter a missing blob, the state
-                    // cannot be recovered, and our best option is to panic and retry the whole
-                    // process.
-                    panic!("batch fetcher could not fetch batch part: {}", blob_key)
-                });
+                .await;
+                let buf = match buf {
+                    Ok(buf) => buf,
+                    Err(key) => return Ok(Err(key)),
+                };
                 let buf = FetchedBlobBuf::Hollow {
                     buf,
                     part: x.clone(),
@@ -239,7 +232,7 @@ where
             fetch_permit,
             _phantom: PhantomData,
         };
-        Ok(fetched_blob)
+        Ok(Ok(fetched_blob))
     }
 }
 
