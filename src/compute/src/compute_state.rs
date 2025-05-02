@@ -1696,6 +1696,13 @@ impl StashPeekResponse {
             .await
             .map_err(|e| e.to_string())?;
 
+        if relation_desc.typ().columns().is_empty() {
+            panic!(
+                "cannot encode results without columns, got {:?}, rows: {:?}",
+                relation_desc, peek_response
+            );
+        }
+
         let shard_id = format!("s{}", peek_uuid);
         let shard_id = ShardId::try_from(shard_id).expect("can parse");
         let write_schemas: Schemas<Row, ()> = Schemas {
