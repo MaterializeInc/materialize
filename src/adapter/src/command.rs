@@ -186,7 +186,7 @@ pub struct Response<T> {
     pub otel_ctx: OpenTelemetryContext,
 }
 
-pub type RowsFuture = Pin<Box<dyn Future<Output = PeekResponseUnary> + Send>>;
+pub type RowsFuture = Pin<Box<dyn Future<Output = PeekResponseUnary> + Send + Sync>>;
 
 /// The response to [`Client::startup`](crate::Client::startup).
 #[derive(Derivative)]

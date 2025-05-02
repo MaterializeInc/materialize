@@ -25,7 +25,7 @@ use mz_adapter::session::{
 use mz_adapter::statement_logging::{StatementEndedExecutionReason, StatementExecutionStrategy};
 use mz_adapter::{
     AdapterError, AdapterNotice, ExecuteContextExtra, ExecuteResponse, PeekResponseUnary,
-    RowsFuture, verify_datum_desc,
+    verify_datum_desc,
 };
 use mz_auth::password::Password;
 use mz_authenticator::Authenticator;
@@ -55,7 +55,6 @@ use mz_sql::session::vars::{MAX_COPY_FROM_SIZE, Var, VarInput};
 use postgres::error::SqlState;
 use tokio::io::{self, AsyncRead, AsyncWrite};
 use tokio::select;
-use tokio::sync::mpsc::UnboundedReceiver;
 use tokio::time::{self};
 use tokio_stream::wrappers::UnboundedReceiverStream;
 use tracing::{Instrument, debug, debug_span, warn};
@@ -1467,40 +1466,6 @@ where
         self.flush().await
     }
 
-    // Converts a RowsFuture to a stream while also checking for connection close.
-    #[instrument(level = "debug")]
-    async fn row_future_to_stream<'s, 'p>(
-        &'s mut self,
-        parent: &'p tracing::Span,
-        mut rows: RowsFuture,
-    ) -> Result<UnboundedReceiver<PeekResponseUnary>, io::Error>
-    where
-        'p: 's,
-    {
-        // select is safe to use because if close finishes, rows is canceled,
-        // which is the intended behavior.
-        let span = tracing::debug_span!(parent: parent, "row_future_to_stream");
-        async move {
-            loop {
-                tokio::select! {
-                    err = self.conn.wait_closed() => return Err(err),
-                    rows = &mut rows => {
-                        let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
-                        tx.send(rows).expect("send must succeed");
-                        return Ok(rx);
-                    }
-                    notice = self.adapter_client.session().recv_notice() => {
-                        self.send(notice.into_response())
-                            .await?;
-                        self.conn.flush().await?;
-                    }
-                }
-            }
-        }
-        .instrument(span)
-        .await
-    }
-
     #[allow(clippy::too_many_arguments)]
     #[instrument(level = "debug")]
     async fn send_execute_response(
@@ -1566,13 +1531,15 @@ where
                     row_desc.expect("missing row description for ExecuteResponse::SendingRows");
 
                 let span = tracing::debug_span!("sending_rows");
-                let rows = self.row_future_to_stream(&span, rx).await?;
+                // let rows = self.row_future_to_stream(&span, rx).await?;
+
+                let rows = futures::stream::once(rx);
 
                 self.send_rows(
                     row_desc,
                     portal_name,
                     InProgressRows::new(RecordFirstRowStream::new(
-                        Box::new(UnboundedReceiverStream::new(rows)),
+                        Box::new(rows),
                         execute_started,
                         &self.adapter_client,
                         Some(instance_id),
