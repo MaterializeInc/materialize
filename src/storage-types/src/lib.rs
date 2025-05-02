@@ -52,4 +52,4 @@ impl AlterCompatible for mz_repr::GlobalId {}
 impl AlterCompatible for mz_repr::CatalogItemId {}
 
 /// The diff type used by storage.
-pub type StorageDiff = i64;
+pub type StorageDiff = mz_repr::Diff;

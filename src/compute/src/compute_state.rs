@@ -1262,7 +1262,7 @@ impl PersistPeek {
                     }
                 }
 
-                let count: usize = d.try_into().map_err(|_| {
+                let count: usize = d.into_inner().try_into().map_err(|_| {
                     format!(
                         "Invalid data in source, saw retractions ({}) for row that does not exist: {:?}",
                         -d,

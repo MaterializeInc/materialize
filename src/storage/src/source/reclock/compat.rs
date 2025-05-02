@@ -308,11 +308,7 @@ where
         }
 
         let row_updates = updates.into_iter().map(|(from_ts, into_ts, diff)| {
-            (
-                (SourceData(Ok(from_ts.encode_row())), ()),
-                into_ts,
-                diff.into_inner(),
-            )
+            ((SourceData(Ok(from_ts.encode_row())), ()), into_ts, diff)
         });
 
         match self

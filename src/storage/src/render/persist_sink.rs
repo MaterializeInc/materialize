@@ -699,9 +699,7 @@ where
 
                                 let is_value = row.is_ok();
 
-                                builder
-                                    .add(&SourceData(row), &(), &ts, &diff.into_inner())
-                                    .await;
+                                builder.add(&SourceData(row), &(), &ts, &diff).await;
 
                                 source_statistics.inc_updates_staged_by(1);
 

@@ -325,7 +325,11 @@ async fn migrate_builtin_items_0dt(
             if storage_collection_metadata.get(&GlobalId::System(table_key.global_id))
                 == Some(&shard_id)
             {
-                migrated_shard_updates.push(((table_key, shard_id.clone()), upper, -1));
+                migrated_shard_updates.push((
+                    (table_key, shard_id.clone()),
+                    upper,
+                    mz_repr::Diff::MINUS_ONE,
+                ));
             } else {
                 migration_shards_to_finalize.insert((table_key, shard_id));
             }
@@ -345,7 +349,7 @@ async fn migrate_builtin_items_0dt(
                 global_id,
                 build_version: build_version.clone(),
             };
-            migrated_shard_updates.push(((table_key, shard_id), upper, 1));
+            migrated_shard_updates.push(((table_key, shard_id), upper, mz_repr::Diff::ONE));
         }
     }
 
@@ -414,7 +418,9 @@ async fn migrate_builtin_items_0dt(
         if !read_only {
             let updates: Vec<_> = migration_shards_to_finalize
                 .into_iter()
-                .map(|(table_key, shard_id)| ((table_key, shard_id), upper, -1))
+                .map(|(table_key, shard_id)| {
+                    ((table_key, shard_id), upper, mz_repr::Diff::MINUS_ONE)
+                })
                 .collect();
             if !updates.is_empty() {
                 // Ignore any errors, these shards will get cleaned up in the next upgrade.
