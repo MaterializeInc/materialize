@@ -1526,13 +1526,15 @@ where
                     row_desc.expect("missing row description for ExecuteResponse::SendingRows");
 
                 let span = tracing::debug_span!("sending_rows");
-                let rows = self.row_future_to_stream(&span, rx).await?;
+                // let rows = self.row_future_to_stream(&span, rx).await?;
+
+                let rows = futures::stream::once(rx);
 
                 self.send_rows(
                     row_desc,
                     portal_name,
                     InProgressRows::new(RecordFirstRowStream::new(
-                        Box::new(UnboundedReceiverStream::new(rows)),
+                        Box::new(rows),
                         execute_started,
                         &self.adapter_client,
                         Some(instance_id),
