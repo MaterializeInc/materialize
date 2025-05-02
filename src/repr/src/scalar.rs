@@ -2114,6 +2114,27 @@ impl<'a, E> DatumType<'a, E> for Numeric {
     }
 }
 
+impl<'a, E> DatumType<'a, E> for OrderedDecimal<Numeric> {
+    fn nullable() -> bool {
+        false
+    }
+
+    fn fallible() -> bool {
+        false
+    }
+
+    fn try_from_result(res: Result<Datum<'a>, E>) -> Result<Self, Result<Datum<'a>, E>> {
+        match res {
+            Ok(Datum::Numeric(n)) => Ok(n),
+            _ => Err(res),
+        }
+    }
+
+    fn into_result(self, _temp_storage: &'a RowArena) -> Result<Datum<'a>, E> {
+        Ok(Datum::from(self))
+    }
+}
+
 impl AsColumnType for PgLegacyChar {
     fn as_column_type() -> ColumnType {
         ScalarType::PgLegacyChar.nullable(false)
