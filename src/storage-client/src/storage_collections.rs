@@ -3507,7 +3507,7 @@ mod tests {
         let data = (
             (SourceData(Ok(Row::default())), ()),
             mz_repr::Timestamp::from(0),
-            1i64,
+            mz_repr::Diff::ONE,
         );
         let () = write_handle
             .compare_and_append(
@@ -3529,7 +3529,7 @@ mod tests {
         let data = (
             (SourceData(Ok(Row::default())), ()),
             mz_repr::Timestamp::from(1),
-            1i64,
+            mz_repr::Diff::ONE,
         );
         let () = write_handle
             .compare_and_append(

@@ -236,7 +236,7 @@ where
                         let from_ts = FromTime::decode_row(
                             &update.expect("invalid row").0.expect("invalid row"),
                         );
-                        self.pending_batch.push((from_ts, into_ts, diff.into()));
+                        self.pending_batch.push((from_ts, into_ts, diff));
                     }
                 }
             }
@@ -308,11 +308,7 @@ where
         }
 
         let row_updates = updates.into_iter().map(|(from_ts, into_ts, diff)| {
-            (
-                (SourceData(Ok(from_ts.encode_row())), ()),
-                into_ts,
-                diff.into_inner(),
-            )
+            ((SourceData(Ok(from_ts.encode_row())), ()), into_ts, diff)
         });
 
         match self

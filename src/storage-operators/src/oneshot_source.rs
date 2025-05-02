@@ -573,7 +573,7 @@ where
                     Ok(row) => {
                         let data = SourceData(Ok(row));
                         batch_builder
-                            .add(&data, &(), &lower, &1)
+                            .add(&data, &(), &lower, &mz_repr::Diff::ONE)
                             .await
                             .expect("failed to add Row to batch");
                     }
