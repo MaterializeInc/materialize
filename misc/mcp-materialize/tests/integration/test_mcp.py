@@ -19,6 +19,7 @@ import os
 import pytest
 import pytest_asyncio
 from mcp import Tool
+from mcp.types import ToolAnnotations
 from psycopg_pool import AsyncConnectionPool
 
 from mcp_materialize.mz_client import MzClient
@@ -41,9 +42,9 @@ async def materialize_pool():
 
 @pytest.mark.asyncio
 async def test_basic_tool(materialize_pool):
-    client = MzClient(pool=materialize_pool)
-    tools = await client.list_tools()
-    assert len(tools) == 0
+    async with MzClient(pool=materialize_pool) as client:
+        tools = await client.list_tools()
+        assert len(tools) == 0
 
     async with materialize_pool.connection() as conn:
         await conn.set_autocommit(True)
@@ -71,26 +72,27 @@ async def test_basic_tool(materialize_pool):
                 "COMMENT ON VIEW tools.missing_idx IS 'Get result from id';"
             )
 
-    tools = await client.list_tools()
-    assert len(tools) == 1
-    assert tools[0] == Tool(
-        name="my_tool_id_idx",
-        description="Get result from id",
-        inputSchema={
-            "type": "object",
-            "required": ["id"],
-            "properties": {"id": {"type": "number"}},
-        },
-    )
+    async with MzClient(pool=materialize_pool) as client:
+        tools = await client.list_tools()
+        assert len(tools) == 1
+        assert tools[0] == Tool(
+            name="materialize_tools_my_tool_id_idx",
+            description="Get result from id",
+            inputSchema={
+                "type": "object",
+                "required": ["id"],
+                "properties": {"id": {"type": "number"}},
+            },
+            annotations=ToolAnnotations(readOnlyHint=True),
+        )
 
-    result = await client.call_tool("my_tool_id_idx", {"id": 1})
-    assert len(result) == 1
-    assert json.loads(result[0].text) == {"result": "hello"}
+        result = await client.call_tool("materialize_tools_my_tool_id_idx", {"id": 1})
+        assert len(result) == 1
+        assert json.loads(result[0].text) == {"result": "hello"}
 
 
 @pytest.mark.asyncio
 async def test_exists_tool(materialize_pool):
-    client = MzClient(pool=materialize_pool)
     async with materialize_pool.connection() as conn:
         await conn.set_autocommit(True)
         async with conn.cursor() as cur:
@@ -98,18 +100,18 @@ async def test_exists_tool(materialize_pool):
             await cur.execute("CREATE INDEX my_tool_id_idx ON tools.my_tool (id);")
             await cur.execute("COMMENT ON VIEW tools.my_tool IS 'Check if id exists';")
 
-    result = await client.call_tool("my_tool_id_idx", {"id": 1})
-    assert len(result) == 1
-    assert json.loads(result[0].text) == {"exists": True}
+    async with MzClient(pool=materialize_pool) as client:
+        result = await client.call_tool("materialize_tools_my_tool_id_idx", {"id": 1})
+        assert len(result) == 1
+        assert json.loads(result[0].text) == {"exists": True}
 
-    result = await client.call_tool("my_tool_id_idx", {"id": 2})
-    assert len(result) == 1
-    assert json.loads(result[0].text) == {"exists": False}
+        result = await client.call_tool("materialize_tools_my_tool_id_idx", {"id": 2})
+        assert len(result) == 1
+        assert json.loads(result[0].text) == {"exists": False}
 
 
 @pytest.mark.asyncio
 async def test_type_handling_keys(materialize_pool):
-    client = MzClient(pool=materialize_pool)
     async with materialize_pool.connection() as conn:
         await conn.set_autocommit(True)
         async with conn.cursor() as cur:
@@ -142,35 +144,36 @@ async def test_type_handling_keys(materialize_pool):
             await cur.execute("CREATE DEFAULT INDEX all_types_idx ON tools.all_types;")
             await cur.execute("COMMENT ON VIEW tools.all_types IS 'All types';")
 
-    tools = await client.list_tools()
-    assert len(tools) == 1
+    async with MzClient(pool=materialize_pool) as client:
+        tools = await client.list_tools()
+        assert len(tools) == 1
 
-    assert tools[0].name == "all_types_idx"
-    assert tools[0].description == "All types"
-    assert sorted(tools[0].inputSchema["required"]) == sorted(
-        [
-            "bigint_col",
-            "boolean_col",
-            "bytea_col",
-            "char_col",
-            "date_col",
-            "double_col",
-            "integer_col",
-            "jsonb_col",
-            "numeric_col",
-            "real_col",
-            "smallint_col",
-            "text_col",
-            "time_col",
-            "timestamp_col",
-            "timestamptz_col",
-            "uint2_col",
-            "uint4_col",
-            "uint8_col",
-            "uuid_col",
-            "varchar_col",
-        ]
-    )
+        assert tools[0].name == "materialize_tools_all_types_idx"
+        assert tools[0].description == "All types"
+        assert sorted(tools[0].inputSchema["required"]) == sorted(
+            [
+                "bigint_col",
+                "boolean_col",
+                "bytea_col",
+                "char_col",
+                "date_col",
+                "double_col",
+                "integer_col",
+                "jsonb_col",
+                "numeric_col",
+                "real_col",
+                "smallint_col",
+                "text_col",
+                "time_col",
+                "timestamp_col",
+                "timestamptz_col",
+                "uint2_col",
+                "uint4_col",
+                "uint8_col",
+                "uuid_col",
+                "varchar_col",
+            ]
+        )
 
     assert tools[0].inputSchema["properties"] == {
         "bigint_col": {"type": "number"},
@@ -202,7 +205,6 @@ async def test_type_handling_keys(materialize_pool):
 
 @pytest.mark.asyncio
 async def test_type_handling_values(materialize_pool):
-    client = MzClient(pool=materialize_pool)
     async with materialize_pool.connection() as conn:
         await conn.set_autocommit(True)
         async with conn.cursor() as cur:
@@ -236,5 +238,6 @@ async def test_type_handling_values(materialize_pool):
             await cur.execute("CREATE INDEX all_types_idx ON tools.all_types (id);")
             await cur.execute("COMMENT ON VIEW tools.all_types IS 'All types';")
 
-    results = await client.call_tool("all_types_idx", {"id": 1})
-    assert len(results) == 1
+    async with MzClient(pool=materialize_pool) as client:
+        results = await client.call_tool("materialize_tools_all_types_idx", {"id": 1})
+        assert len(results) == 1

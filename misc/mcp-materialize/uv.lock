@@ -44,6 +44,15 @@ wheels = [
 ]
 
 [[package]]
+name = "aiorwlock"
+version = "1.5.0"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/c5/bf/d1ddcd676be027a963b3b01fdf9915daf4590b4dfd03bf1c8c2858aac7e3/aiorwlock-1.5.0.tar.gz", hash = "sha256:b529da24da659bdedcf68faf216595bde00db228c905197ac554773620e7fd2f", size = 7315 }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/fd/4c/072b4097b2d05dbc4739b12a073da27496ca8241dec044c1ebc611eacf25/aiorwlock-1.5.0-py3-none-any.whl", hash = "sha256:0010cd2d2c603eb84bfee1cfd06233a976618dab90ec7108191e936137a8420a", size = 7833 },
+]
+
+[[package]]
 name = "aiosignal"
 version = "1.3.2"
 source = { registry = "https://pypi.org/simple" }
@@ -455,7 +464,7 @@ wheels = [
 
 [[package]]
 name = "mcp"
-version = "1.6.0"
+version = "1.7.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "anyio" },
@@ -463,13 +472,14 @@ dependencies = [
     { name = "httpx-sse" },
     { name = "pydantic" },
     { name = "pydantic-settings" },
+    { name = "python-multipart" },
     { name = "sse-starlette" },
     { name = "starlette" },
-    { name = "uvicorn" },
+    { name = "uvicorn", marker = "sys_platform != 'emscripten'" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/95/d2/f587cb965a56e992634bebc8611c5b579af912b74e04eb9164bd49527d21/mcp-1.6.0.tar.gz", hash = "sha256:d9324876de2c5637369f43161cd71eebfd803df5a95e46225cab8d280e366723", size = 200031 }
+sdist = { url = "https://files.pythonhosted.org/packages/c8/b7/0bf3c75ddedbc744f872c34801b9c6c8930fe1134212c45e25029f0b83df/mcp-1.7.0.tar.gz", hash = "sha256:8b955eddf5fbb09613c4d517956745d932db9f757673200112b336bd8092509f", size = 229504 }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/10/30/20a7f33b0b884a9d14dd3aa94ff1ac9da1479fe2ad66dd9e2736075d2506/mcp-1.6.0-py3-none-any.whl", hash = "sha256:7bd24c6ea042dbec44c754f100984d186620d8b841ec30f1b19eda9b93a634d0", size = 76077 },
+    { url = "https://files.pythonhosted.org/packages/f7/09/943fa9dc1e9751c2e7302205112801d0bb6a12050e21f0945486748f9ff3/mcp-1.7.0-py3-none-any.whl", hash = "sha256:0e874a587f542211f36f87b02c9acd6ad2534976fb2c36ff794d8b2bc0a91915", size = 100192 },
 ]
 
 [[package]]
@@ -478,6 +488,7 @@ version = "0.1.0"
 source = { editable = "." }
 dependencies = [
     { name = "aiohttp" },
+    { name = "aiorwlock" },
     { name = "fastapi" },
     { name = "mcp" },
     { name = "psycopg", extra = ["binary"] },
@@ -496,8 +507,9 @@ dev = [
 [package.metadata]
 requires-dist = [
     { name = "aiohttp", specifier = ">=3.11.18" },
+    { name = "aiorwlock", specifier = ">=1.5.0" },
     { name = "fastapi", specifier = ">=0.115.12" },
-    { name = "mcp", specifier = ">=1.4.1" },
+    { name = "mcp", specifier = ">=1.7.0" },
     { name = "psycopg", extras = ["binary"], specifier = ">=3.2.6" },
     { name = "psycopg-pool", specifier = ">=3.2.6" },
     { name = "pyyaml", specifier = ">=6.0.2" },
@@ -826,6 +838,15 @@ source = { registry = "https://pypi.org/simple" }
 sdist = { url = "https://files.pythonhosted.org/packages/88/2c/7bb1416c5620485aa793f2de31d3df393d3686aa8a8506d11e10e13c5baf/python_dotenv-1.1.0.tar.gz", hash = "sha256:41f90bc6f5f177fb41f53e87666db362025010eb28f60a01c9143bfa33a2b2d5", size = 39920 }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/1e/18/98a99ad95133c6a6e2005fe89faedf294a748bd5dc803008059409ac9b1e/python_dotenv-1.1.0-py3-none-any.whl", hash = "sha256:d7c01d9e2293916c18baf562d95698754b0dbbb5e74d457c45d4f6561fb9d55d", size = 20256 },
+]
+
+[[package]]
+name = "python-multipart"
+version = "0.0.20"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/f3/87/f44d7c9f274c7ee665a29b885ec97089ec5dc034c7f3fafa03da9e39a09e/python_multipart-0.0.20.tar.gz", hash = "sha256:8dd0cab45b8e23064ae09147625994d090fa46f5b0d1e13af944c331a7fa9d13", size = 37158 }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/45/58/38b5afbc1a800eeea951b9285d3912613f2603bdf897a4ab0f4bd7f405fc/python_multipart-0.0.20-py3-none-any.whl", hash = "sha256:8a62d3a8335e06589fe01f2a3e178cdcc632f3fbe0d492ad9ee0ec35aab1f104", size = 24546 },
 ]
 
 [[package]]

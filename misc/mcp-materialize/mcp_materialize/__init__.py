@@ -51,7 +51,7 @@ from psycopg.rows import dict_row
 from psycopg_pool import AsyncConnectionPool
 
 from .config import load_config
-from .mz_client import MissingTool, MzClient
+from .mz_client import MzClient
 
 logger = logging.getLogger("mz_mcp_server")
 logging.basicConfig(
@@ -98,7 +98,8 @@ def get_lifespan(cfg):
                                 meta["role"],
                             )
                     logger.debug("Connection pool initialized successfully")
-                    yield MzClient(pool=pool)
+                    async with MzClient(pool=pool) as client:
+                        yield client
                 except Exception as e:
                     logger.error(f"Failed to initialize connection pool: {str(e)}")
                     raise
@@ -133,12 +134,9 @@ async def run():
             )
             logger.debug(f"Tool '{name}' executed successfully")
             return result
-        except MissingTool:
-            logger.error(f"Tool not found: {name}")
-            await server.request_context.session.send_tool_list_changed()
-            raise
         except Exception as e:
             logger.error(f"Error executing tool '{name}': {str(e)}")
+            await server.request_context.session.send_tool_list_changed()
             raise
 
     options = server.create_initialization_options(
