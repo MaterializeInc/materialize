@@ -197,10 +197,20 @@ impl PostgresConsensusConfig {
     }
 }
 
+/// What flavor of Postgres are we connected to for consensus.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PostgresMode {
+    /// CockroachDB, used in our cloud offering.
+    CockroachDB,
+    /// Vanilla Postgres, the default for our self-hosted offering.
+    Postgres,
+}
+
 /// Implementation of [Consensus] over a Postgres database.
 pub struct PostgresConsensus {
     postgres_client: PostgresClient,
     dyncfg: Arc<ConfigSet>,
+    mode: PostgresMode,
 }
 
 impl std::fmt::Debug for PostgresConsensus {
@@ -226,20 +236,22 @@ impl PostgresConsensus {
 
         let client = postgres_client.get_connection().await?;
 
-        let crdb_mode = match client
+        let mode = match client
             .batch_execute(&format!(
                 "{}; {}{}; {};",
                 create_schema, SCHEMA, CRDB_SCHEMA_OPTIONS, CRDB_CONFIGURE_ZONE,
             ))
             .await
         {
-            Ok(()) => true,
+            Ok(()) => PostgresMode::CockroachDB,
             Err(e) if e.code() == Some(&SqlState::INSUFFICIENT_PRIVILEGE) => {
                 warn!(
                     "unable to ALTER TABLE consensus, this is expected and OK when connecting with a read-only user"
                 );
-                true
+                PostgresMode::CockroachDB
             }
+            // Vanilla Postgres doesn't support the Cockroach zone configuration
+            // that we attempted, so we use that to determine what mode we're in.
             Err(e)
                 if e.code() == Some(&SqlState::INVALID_PARAMETER_VALUE)
                     || e.code() == Some(&SqlState::SYNTAX_ERROR) =>
@@ -248,12 +260,12 @@ impl PostgresConsensus {
                     "unable to initiate consensus with CRDB params, this is expected and OK when running against Postgres: {:?}",
                     e
                 );
-                false
+                PostgresMode::Postgres
             }
             Err(e) => return Err(e.into()),
         };
 
-        if !crdb_mode {
+        if mode != PostgresMode::CockroachDB {
             client
                 .batch_execute(&format!("{}; {};", create_schema, SCHEMA))
                 .await?;
@@ -262,6 +274,7 @@ impl PostgresConsensus {
         Ok(PostgresConsensus {
             postgres_client,
             dyncfg,
+            mode,
         })
     }
 
@@ -399,7 +412,9 @@ impl Consensus for PostgresConsensus {
             WHERE last_seq.sequence_number = $4;
             ";
 
-            let q = if USE_POSTGRES_TUNED_QUERIES.get(&self.dyncfg) {
+            let q = if USE_POSTGRES_TUNED_QUERIES.get(&self.dyncfg)
+                && self.mode == PostgresMode::Postgres
+            {
                 POSTGRES_CAS_QUERY
             } else {
                 CRDB_CAS_QUERY
@@ -503,7 +518,9 @@ impl Consensus for PostgresConsensus {
         WHERE consensus.ctid = to_lock.ctid;
         ";
 
-        let q = if USE_POSTGRES_TUNED_QUERIES.get(&self.dyncfg) {
+        let q = if USE_POSTGRES_TUNED_QUERIES.get(&self.dyncfg)
+            && self.mode == PostgresMode::Postgres
+        {
             POSTGRES_TRUNCATE_QUERY
         } else {
             CRDB_TRUNCATE_QUERY
