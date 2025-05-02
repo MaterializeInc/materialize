@@ -15,7 +15,6 @@ use std::time::Instant;
 use std::{iter, mem};
 
 use byteorder::{ByteOrder, NetworkEndian};
-use futures::StreamExt;
 use futures::future::{BoxFuture, FutureExt, pending};
 use itertools::izip;
 use mz_adapter::client::RecordFirstRowStream;
@@ -39,8 +38,8 @@ use mz_pgwire_common::{
 };
 use mz_repr::user::InternalUserMetadata;
 use mz_repr::{
-    CatalogItemId, ColumnIndex, Datum, IntoRowIterator, RelationDesc, RelationType, RowArena,
-    RowIterator, RowRef, ScalarType,
+    CatalogItemId, ColumnIndex, Datum, RelationDesc, RelationType, RowArena, RowIterator, RowRef,
+    ScalarType,
 };
 use mz_server_core::TlsMode;
 use mz_sql::ast::display::AstDisplay;
@@ -1558,13 +1557,15 @@ where
                     row_desc.expect("missing row description for ExecuteResponse::SendingRows");
 
                 let span = tracing::debug_span!("sending_rows");
-                let rows = self.row_future_to_stream(&span, rx).await?;
+                // let rows = self.row_future_to_stream(&span, rx).await?;
+
+                let rows = futures::stream::once(rx);
 
                 self.send_rows(
                     row_desc,
                     portal_name,
                     InProgressRows::new(RecordFirstRowStream::new(
-                        Box::new(UnboundedReceiverStream::new(rows)),
+                        Box::new(rows),
                         execute_started,
                         &self.adapter_client,
                         Some(instance_id),
