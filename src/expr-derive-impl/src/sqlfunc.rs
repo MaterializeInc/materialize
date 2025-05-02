@@ -32,6 +32,8 @@ pub(crate) struct Modifiers {
     is_infix_op: Option<Expr>,
     /// The output type of the function, if it cannot be inferred. Applies to all functions.
     output_type: Option<syn::Path>,
+    /// The output type of the function as an expression. Applies to binary functions.
+    output_type_expr: Option<Expr>,
     /// Optional expression evaluating to a boolean indicating whether the function could error.
     /// Applies to all functions.
     could_error: Option<Expr>,
@@ -225,6 +227,7 @@ fn unary_func(func: &syn::ItemFn, modifiers: Modifiers) -> darling::Result<Token
         inverse,
         is_infix_op,
         output_type,
+        output_type_expr,
         negate,
         could_error,
         propagates_nulls,
@@ -234,6 +237,11 @@ fn unary_func(func: &syn::ItemFn, modifiers: Modifiers) -> darling::Result<Token
     if is_infix_op.is_some() {
         return Err(darling::Error::unknown_field(
             "is_infix_op not supported for unary functions",
+        ));
+    }
+    if output_type_expr.is_some() {
+        return Err(darling::Error::unknown_field(
+            "output_type_expr not supported for unary functions",
         ));
     }
     if negate.is_some() {
@@ -362,6 +370,7 @@ fn binary_func(
         inverse,
         is_infix_op,
         output_type,
+        output_type_expr,
         negate,
         could_error,
         propagates_nulls,
@@ -376,6 +385,16 @@ fn binary_func(
     if inverse.is_some() {
         return Err(darling::Error::unknown_field(
             "inverse not supported for binary functions",
+        ));
+    }
+    if output_type.is_some() && output_type_expr.is_some() {
+        return Err(darling::Error::unknown_field(
+            "output_type and output_type_expr cannot be used together",
+        ));
+    }
+    if output_type_expr.is_some() && introduces_nulls.is_none() {
+        return Err(darling::Error::unknown_field(
+            "output_type_expr requires introduces_nulls",
         ));
     }
 
@@ -399,17 +418,21 @@ fn binary_func(
         .as_ref()
         .map_or_else(|| quote! { stringify!(#fn_name) }, |name| quote! { #name });
 
-    let (output_type, mut introduces_nulls_fn) = if let Some(output_type) = output_type {
+    let (mut output_type, mut introduces_nulls_fn) = if let Some(output_type) = output_type {
         let introduces_nulls_fn = quote! {
             fn introduces_nulls(&self) -> bool {
                 <#output_type as ::mz_repr::DatumType<'_, ()>>::nullable()
             }
         };
-        let output_type = quote! { <#output_type> };
+        let output_type = quote! { <#output_type>::as_column_type() };
         (output_type, Some(introduces_nulls_fn))
     } else {
-        (quote! { Self::Output }, None)
+        (quote! { Self::Output::as_column_type() }, None)
     };
+
+    if let Some(output_type_expr) = output_type_expr {
+        output_type = quote! { #output_type_expr };
+    }
 
     if let Some(introduces_nulls) = introduces_nulls {
         introduces_nulls_fn = Some(quote! {
@@ -464,7 +487,7 @@ fn binary_func(
 
             fn output_type(&self, input_type_a: mz_repr::ColumnType, input_type_b: mz_repr::ColumnType) -> mz_repr::ColumnType {
                 use mz_repr::AsColumnType;
-                let output = #output_type::as_column_type();
+                let output = #output_type;
                 let propagates_nulls = crate::func::binary::EagerBinaryFunc::propagates_nulls(self);
                 let nullable = output.nullable;
                 // The output is nullable if it is nullable by itself or the input is nullable

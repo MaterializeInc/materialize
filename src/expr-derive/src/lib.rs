@@ -30,9 +30,15 @@
 /// * `is_infix_op`: A boolean indicating whether the function is an infix operator. Applies to
 ///   binary functions only.
 /// * `output_type`: The output type of the function.
+/// * `output_type_expr`: An expression that evaluates to the output type. Applies to binary
+///   functions only. The expression has access to the `input_type_a` and `input_type_b` variables,
+///   and should evaluate to a `ColumnType` value. Requires `introduces_nulls`, and conflicts with
+///   `output_type`.
 /// * `could_error`: A boolean indicating whether the function could error.
 /// * `propagate_nulls`: A boolean indicating whether the function propagates nulls. Applies to
 ///   binary functions only.
+/// * `introduces_nulls`: A boolean indicating whether the function introduces nulls. Applies to
+///   all functions.
 ///
 /// # Limitations
 /// * The input and output types can contain lifetime parameters, as long as they are `'a`.
