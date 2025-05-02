@@ -1178,7 +1178,7 @@ steps:
               composition: persist
               args: [--node-count=4, --consensus=cockroach, --blob=maelstrom, --time-limit=300, --rate=500, --txn-wal]
 
-      - id: txn-wal-maelstrom
+      - id: txn-wal-maelstrom-postgres
         label: "Maelstrom coverage of txn-wal with :postgres: Consensus"
         depends_on: build-aarch64
         timeout_in_minutes: 40
