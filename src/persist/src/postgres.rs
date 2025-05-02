@@ -411,9 +411,7 @@ impl Consensus for PostgresConsensus {
             WHERE last_seq.sequence_number = $4;
             ";
 
-            let q = if USE_POSTGRES_TUNED_QUERIES.get(&self.dyncfg)
-                && self.mode == PostgresMode::Postgres
-            {
+            let q = if USE_POSTGRES_TUNED_QUERIES.get(&self.dyncfg) {
                 POSTGRES_CAS_QUERY
             } else {
                 CRDB_CAS_QUERY
@@ -517,9 +515,7 @@ impl Consensus for PostgresConsensus {
         WHERE consensus.ctid = to_lock.ctid;
         ";
 
-        let q = if USE_POSTGRES_TUNED_QUERIES.get(&self.dyncfg)
-            && self.mode == PostgresMode::Postgres
-        {
+        let q = if USE_POSTGRES_TUNED_QUERIES.get(&self.dyncfg) {
             POSTGRES_TRUNCATE_QUERY
         } else {
             CRDB_TRUNCATE_QUERY
