@@ -19,9 +19,11 @@ from materialize.mzcompose.composition import (
     WorkflowArgumentParser,
 )
 from materialize.mzcompose.services.cockroach import Cockroach
+from materialize.mzcompose.services.postgres import PostgresMetadata
 
 SERVICES = [
     Cockroach(setup_materialize=True),
+    PostgresMetadata(),
     Service(
         "maelstrom-persist",
         {"mzbuild": "maelstrom-persist", "volumes": ["./maelstrom:/store"]},
@@ -48,7 +50,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     parser.add_argument(
         "--consensus",
         type=str,
-        choices=["mem", "cockroach", "maelstrom"],
+        choices=["mem", "cockroach", "maelstrom", "postgres"],
         default="maelstrom",
     )
     parser.add_argument(
@@ -66,7 +68,12 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         consensus_uri = (
             "postgres://root@cockroach:26257?options=--search_path=consensus"
         )
-        c.up(c.metadata_store())
+        c.up("cockroach")
+    elif args.consensus == "postgres":
+        consensus_uri = (
+            "postgres://root@postgres-metadata:26257?options=--search_path=consensus"
+        )
+        c.up("postgres-metadata")
     else:
         # empty consensus uri defaults to Maelstrom consensus implementation
         consensus_uri = ""

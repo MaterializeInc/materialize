@@ -19,6 +19,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use async_trait::async_trait;
 use differential_dataflow::consolidation::consolidate_updates;
+use mz_dyncfg::ConfigUpdates;
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::{NOW_ZERO, SYSTEM_TIME};
 use mz_persist::cfg::{BlobConfig, ConsensusConfig};
@@ -372,6 +373,14 @@ impl Service for TransactorService {
 
         let mut config =
             PersistConfig::new_default_configs(&mz_persist_client::BUILD_INFO, SYSTEM_TIME.clone());
+        {
+            // We only use the Postgres tuned queries when connected to vanilla
+            // Postgres, so we always want to enable them for testing.
+            let mut updates = ConfigUpdates::default();
+            updates.add(&mz_persist::postgres::USE_POSTGRES_TUNED_QUERIES, true);
+            config.apply_from(&updates);
+        }
+
         let metrics_registry = MetricsRegistry::new();
         let metrics = Arc::new(PersistMetrics::new(&config, &metrics_registry));
 

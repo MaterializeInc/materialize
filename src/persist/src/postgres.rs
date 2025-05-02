@@ -35,7 +35,8 @@ use tracing::{info, warn};
 use crate::error::Error;
 use crate::location::{CaSResult, Consensus, ExternalError, ResultStream, SeqNo, VersionedData};
 
-pub(crate) const USE_POSTGRES_TUNED_QUERIES: mz_dyncfg::Config<bool> = mz_dyncfg::Config::new(
+/// Flag to use concensus queries that are tuned for vanilla Postgres.
+pub const USE_POSTGRES_TUNED_QUERIES: mz_dyncfg::Config<bool> = mz_dyncfg::Config::new(
     "persist_use_postgres_tuned_queries",
     false,
     "Use a set of queries for consensus that have specifically been tuned against

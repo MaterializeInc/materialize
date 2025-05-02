@@ -636,7 +636,7 @@ steps:
                 ]
 
       - id: checks-restart-environmentd-clusterd-storage-postgres-consensus
-        label: "Checks + restart of environmentd & storage clusterd (Postgres Consensus)"
+        label: "Checks + restart of environmentd & storage clusterd (:postgres: Consensus)"
         depends_on: build-aarch64
         inputs: [misc/python/materialize/checks]
         timeout_in_minutes: 45

@@ -787,6 +787,23 @@ steps:
                   "--seed=$BUILDKITE_JOB_ID",
                 ]
 
+      - id: checks-parallel-drop-create-default-replica-postgres
+        label: "Checks parallel + DROP/CREATE replica (:postgres: Consensus)"
+        depends_on: build-aarch64
+        timeout_in_minutes: 180
+        parallelism: 2
+        agents:
+          queue: hetzner-aarch64-16cpu-32gb
+        plugins:
+          - ./ci/plugins/mzcompose:
+              composition: platform-checks
+              args:
+                [
+                  --scenario=DropCreateDefaultReplica,
+                  --execution-mode=parallel,
+                  --features=postgres_consensus,
+                  "--seed=$BUILDKITE_JOB_ID",
+                ]
 
       - id: checks-parallel-restart-clusterd-compute
         label: "Checks parallel + restart compute clusterd"
@@ -1124,7 +1141,7 @@ steps:
               args: [--node-count=1, --consensus=mem, --blob=mem, --time-limit=600, --concurrency=4, --rate=500, --max-txn-length=16, --unreliability=0.1]
 
       - id: persist-maelstrom-multi-node
-        label: Long multi-node Maelstrom coverage of persist with postgres consensus
+        label: Long multi-node Maelstrom coverage of persist with CockroachDB consensus
         depends_on: build-aarch64
         timeout_in_minutes: 40
         agents:
@@ -1135,8 +1152,20 @@ steps:
               composition: persist
               args: [--node-count=4, --consensus=cockroach, --blob=maelstrom, --time-limit=300, --concurrency=4, --rate=500, --max-txn-length=16, --unreliability=0.1]
 
+      - id: persist-maelstrom-multi-node-postgres
+        label: "Long multi-node Maelstrom coverage of persist with :postgres: consensus"
+        depends_on: build-aarch64
+        timeout_in_minutes: 40
+        agents:
+          queue: hetzner-aarch64-4cpu-8gb
+        artifact_paths: [test/persist/maelstrom/**/*.log]
+        plugins:
+          - ./ci/plugins/mzcompose:
+              composition: persist
+              args: [--node-count=4, --consensus=postgres, --blob=maelstrom, --time-limit=300, --concurrency=4, --rate=500, --max-txn-length=16, --unreliability=0.1]
+
       - id: txn-wal-maelstrom
-        label: Maelstrom coverage of txn-wal
+        label: Maelstrom coverage of txn-wal with CockroachDB Consensus
         depends_on: build-aarch64
         timeout_in_minutes: 40
         agents:
@@ -1146,6 +1175,18 @@ steps:
           - ./ci/plugins/mzcompose:
               composition: persist
               args: [--node-count=4, --consensus=cockroach, --blob=maelstrom, --time-limit=300, --rate=500, --txn-wal]
+
+      - id: txn-wal-maelstrom
+        label: "Maelstrom coverage of txn-wal with :postgres: Consensus"
+        depends_on: build-aarch64
+        timeout_in_minutes: 40
+        agents:
+          queue: hetzner-aarch64-8cpu-16gb
+        artifact_paths: [test/persist/maelstrom/**/*.log]
+        plugins:
+          - ./ci/plugins/mzcompose:
+              composition: persist
+              args: [--node-count=4, --consensus=postgres, --blob=maelstrom, --time-limit=300, --rate=500, --txn-wal]
 
       - id: persistence-failpoints
         label: Persistence failpoints
