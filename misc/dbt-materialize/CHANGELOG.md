@@ -1,6 +1,6 @@
 # dbt-materialize Changelog
 
-## Unreleased
+## 1.9.5 - 2025-05-01
 
 * Add support for `retain_history` configuration in materialized views, allowing users to specify how long to retain historical data (e.g. `retain_history: '1hr'`).
 
