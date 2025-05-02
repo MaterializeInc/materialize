@@ -399,14 +399,13 @@ impl Consensus for PostgresConsensus {
             /// minimizes possible serialization conflicts.
             static POSTGRES_CAS_QUERY: &str = "
             WITH last_seq AS (
-                SELECT sequence_number
-                FROM materialize1.consensus
+                SELECT sequence_number FROM consensus
                 WHERE shard = $1
                 ORDER BY sequence_number DESC
                 LIMIT 1
                 FOR UPDATE
             )
-            INSERT INTO materialize1.consensus (shard, sequence_number, data)
+            INSERT INTO consensus (shard, sequence_number, data)
             SELECT $1, $2, $3
             FROM last_seq
             WHERE last_seq.sequence_number = $4;

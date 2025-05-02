@@ -824,6 +824,23 @@ steps:
               composition: platform-checks
               args: [--scenario=RestartEnvironmentdClusterdStorage, --execution-mode=parallel, "--seed=$BUILDKITE_JOB_ID"]
 
+      - id: checks-parallel-restart-environmentd-clusterd-storage-postgres-consensus
+        label: "Checks parallel + restart of environmentd & storage clusterd with Postgres for consensus"
+        depends_on: build-aarch64
+        timeout_in_minutes: 180
+        parallelism: 2
+        agents:
+          queue: hetzner-aarch64-16cpu-32gb
+        plugins:
+          - ./ci/plugins/mzcompose:
+              composition: platform-checks
+              args: [
+                --scenario=RestartEnvironmentdClusterdStorage,
+                --execution-mode=parallel,
+                "--seed=$BUILDKITE_JOB_ID",
+                --features=postgres_consensus,
+              ]
+
       - id: checks-parallel-kill-clusterd-storage
         label: "Checks parallel + kill storage clusterd"
         depends_on: build-aarch64
