@@ -126,7 +126,7 @@ impl PostgresClient {
                 Box::pin(async move {
                     debug!("opened new consensus postgres connection");
                     client.batch_execute(
-                        "SET SESSION CHARACTERISTICS AS TRANSACTION ISOLATION LEVEL SERIALIZABLE",
+                        "SET SESSION CHARACTERISTICS AS TRANSACTION ISOLATION LEVEL REPEATABLE READ",
                     ).await.map_err(|e| HookError::Abort(HookErrorCause::Backend(e)))
                 })
             }))
