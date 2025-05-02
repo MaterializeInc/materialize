@@ -1697,10 +1697,13 @@ impl StashPeekResponse {
             .map_err(|e| e.to_string())?;
 
         if relation_desc.typ().columns().is_empty() {
-            panic!(
-                "cannot encode results without columns, got {:?}, rows: {:?}",
-                relation_desc, peek_response
-            );
+            match peek_response {
+                PeekResponse::Rows(row_collection) => {
+                    assert_eq!(row_collection.entries(), 0);
+                    return Ok(PeekResponse::Rows(row_collection));
+                }
+                _ => {}
+            }
         }
 
         let shard_id = format!("s{}", peek_uuid);
