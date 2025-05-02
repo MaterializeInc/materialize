@@ -1412,7 +1412,7 @@ pub mod datadriven {
     use anyhow::anyhow;
     use differential_dataflow::consolidation::consolidate_updates;
     use differential_dataflow::trace::Description;
-    use futures::StreamExt;
+    use futures::{StreamExt, pin_mut};
     use mz_dyncfg::{ConfigUpdates, ConfigVal};
     use mz_persist::indexed::encoding::BlobTraceBatchPart;
     use mz_persist_types::codec_impls::{StringSchema, UnitSchema};
@@ -1965,37 +1965,6 @@ pub mod datadriven {
         Ok("ok\n".to_string())
     }
 
-    async fn drain_apply(
-        mut rx: mpsc::Receiver<FueledMergeRes<u64>>,
-        desc: Description<u64>,
-    ) -> CompactRes<u64> {
-        let mut all_parts = vec![];
-        let mut all_run_splits = vec![];
-        let mut all_run_meta = vec![];
-        let mut len = 0;
-
-        while let Some(res) = rx.recv().await {
-            let (parts, updates, run_meta, run_splits) = (
-                res.output.parts,
-                res.output.len,
-                res.output.run_meta,
-                res.output.run_splits,
-            );
-            let run_offset = all_parts.len();
-            if !all_parts.is_empty() {
-                all_run_splits.push(run_offset);
-            }
-            all_run_splits.extend(run_splits.iter().map(|r| r + run_offset));
-            all_run_meta.extend(run_meta);
-            all_parts.extend(parts);
-            len += updates;
-        }
-
-        CompactRes {
-            output: HollowBatch::new(desc, all_parts, len, all_run_meta, all_run_splits),
-        }
-    }
-
     pub async fn compact(
         datadriven: &mut MachineState,
         args: DirectiveArgs<'_>,
@@ -2030,24 +1999,46 @@ pub mod datadriven {
             desc: Description::new(lower, upper, since),
             inputs,
         };
-        let (tx, rx) = mpsc::channel::<FueledMergeRes<u64>>(1);
-        let req_clone = req.clone();
 
-        let compact_fut = Compactor::<String, (), u64, i64>::compact(
+        let req_clone = req.clone();
+        let compact_fut = Compactor::<String, (), u64, i64>::compact_stream(
             CompactConfig::new(&cfg, datadriven.shard_id),
             Arc::clone(&datadriven.client.blob),
             Arc::clone(&datadriven.client.metrics),
             Arc::clone(&datadriven.machine.applier.shard_metrics),
             Arc::clone(&datadriven.client.isolated_runtime),
-            req,
+            req_clone,
             SCHEMAS.clone(),
-            tx,
-        );
-        let apply_fut = drain_apply(rx, req_clone.desc.clone());
+        )
+        .await;
+        pin_mut!(compact_fut);
 
-        let (compact_res, res) = tokio::join!(compact_fut, apply_fut);
+        let mut all_parts = vec![];
+        let mut all_run_splits = vec![];
+        let mut all_run_meta = vec![];
+        let mut len = 0;
 
-        compact_res?;
+        while let Some(res) = compact_fut.next().await {
+            let res = res?;
+            let (parts, updates, run_meta, run_splits) = (
+                res.output.parts,
+                res.output.len,
+                res.output.run_meta,
+                res.output.run_splits,
+            );
+            let run_offset = all_parts.len();
+            if !all_parts.is_empty() {
+                all_run_splits.push(run_offset);
+            }
+            all_run_splits.extend(run_splits.iter().map(|r| r + run_offset));
+            all_run_meta.extend(run_meta);
+            all_parts.extend(parts);
+            len += updates;
+        }
+        let res = CompactRes {
+            output: HollowBatch::new(req.desc, all_parts, len, all_run_meta, all_run_splits),
+        };
+
         datadriven
             .batches
             .insert(output.to_owned(), res.output.clone());

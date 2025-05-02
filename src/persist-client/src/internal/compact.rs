@@ -19,6 +19,7 @@ use anyhow::anyhow;
 use differential_dataflow::difference::Semigroup;
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::trace::Description;
+use futures::{Stream, pin_mut};
 use futures_util::{StreamExt, TryFutureExt};
 use mz_dyncfg::Config;
 use mz_ore::cast::CastFrom;
@@ -312,7 +313,6 @@ where
     ) -> Result<RoutineMaintenance, anyhow::Error> {
         let metrics = Arc::clone(&machine.applier.metrics);
         metrics.compaction.started.inc();
-        let start = Instant::now();
 
         // pick a timeout for our compaction request proportional to the amount
         // of data that must be read (with a minimum set by PersistConfig)
@@ -378,25 +378,19 @@ where
             timeout,
             // Compaction is cpu intensive, so be polite and spawn it on the isolated runtime.
             isolated_runtime
-                .spawn_named(|| "persist::compact::consolidate", {
-                    let machine = machine.clone();
-                    let (tx, rx) = mpsc::channel(1);
-                    isolated_runtime.spawn_named(
-                        || "persist::compact::work",
-                        Self::compact(
-                            CompactConfig::new(&machine.applier.cfg, machine.shard_id()),
-                            Arc::clone(&machine.applier.state_versions.blob),
-                            Arc::clone(&metrics),
-                            Arc::clone(&machine.applier.shard_metrics),
-                            Arc::clone(&machine.isolated_runtime),
-                            req,
-                            compaction_schema,
-                            tx,
-                        )
-                        .instrument(compact_span),
-                    );
-                    Self::apply(rx, Arc::clone(&metrics), machine)
-                })
+                .spawn_named(
+                    || "persist::compact::consolidate",
+                    Self::compact_stream(
+                        CompactConfig::new(&machine.applier.cfg, machine.shard_id()),
+                        Arc::clone(&machine.applier.state_versions.blob),
+                        Arc::clone(&metrics),
+                        Arc::clone(&machine.applier.shard_metrics),
+                        Arc::clone(&machine.isolated_runtime),
+                        req,
+                        compaction_schema,
+                    )
+                    .instrument(compact_span),
+                )
                 .map_err(|e| anyhow!(e)),
         )
         .await;
@@ -409,14 +403,18 @@ where
             }
         };
 
-        metrics
-            .compaction
-            .seconds
-            .inc_by(start.elapsed().as_secs_f64());
-
+        let mut maintenance = RoutineMaintenance::default();
         match res {
-            Ok(Ok(maintenance)) => Ok(maintenance),
-            Ok(Err(err)) | Err(err) => {
+            Ok(stream) => {
+                pin_mut!(stream);
+                while let Some(res) = stream.next().await {
+                    let res = res.map_err(|e| anyhow!(e))?;
+                    let new_maintenance = Self::apply(res, Arc::clone(&metrics), machine).await?;
+                    maintenance = std::cmp::max(maintenance, new_maintenance);
+                }
+                Ok(maintenance)
+            }
+            Err(err) => {
                 metrics.compaction.failed.inc();
                 debug!(
                     "compaction for {} failed: {}",
@@ -429,53 +427,56 @@ where
     }
 
     pub async fn apply(
-        mut rx: mpsc::Receiver<FueledMergeRes<T>>,
+        res: FueledMergeRes<T>,
         metrics: Arc<Metrics>,
-        machine: Machine<K, V, T, D>,
+        machine: &Machine<K, V, T, D>,
     ) -> Result<RoutineMaintenance, anyhow::Error> {
-        let mut maintenance = RoutineMaintenance::default();
-        while let Some(res) = rx.recv().await {
-            let (apply_merge_result, new_maintenance) = machine.merge_res(&res).await;
+        let (apply_merge_result, maintenance) = machine.merge_res(&res).await;
+        let start = Instant::now();
 
-            match &apply_merge_result {
-                ApplyMergeResult::AppliedExact => {
-                    metrics.compaction.applied.inc();
-                    metrics.compaction.applied_exact_match.inc();
-                    machine.applier.shard_metrics.compaction_applied.inc();
-                }
-                ApplyMergeResult::AppliedSubset => {
-                    metrics.compaction.applied.inc();
-                    metrics.compaction.applied_subset_match.inc();
-                    machine.applier.shard_metrics.compaction_applied.inc();
-                }
-                ApplyMergeResult::NotAppliedNoMatch
-                | ApplyMergeResult::NotAppliedInvalidSince
-                | ApplyMergeResult::NotAppliedTooManyUpdates => {
-                    if let ApplyMergeResult::NotAppliedTooManyUpdates = &apply_merge_result {
-                        metrics.compaction.not_applied_too_many_updates.inc();
-                    }
-                    metrics.compaction.noop.inc();
-                    let mut part_deletes = PartDeletes::default();
-                    for part in res.output.parts {
-                        part_deletes.add(&part);
-                    }
-                    part_deletes
-                        .delete(
-                            machine.applier.state_versions.blob.as_ref(),
-                            machine.shard_id(),
-                            GC_BLOB_DELETE_CONCURRENCY_LIMIT.get(&machine.applier.cfg),
-                            &*metrics,
-                            &metrics.retries.external.compaction_noop_delete,
-                        )
-                        .await;
-                }
+        match &apply_merge_result {
+            ApplyMergeResult::AppliedExact => {
+                metrics.compaction.applied.inc();
+                metrics.compaction.applied_exact_match.inc();
+                machine.applier.shard_metrics.compaction_applied.inc();
             }
-            maintenance = std::cmp::max(maintenance, new_maintenance);
-        }
+            ApplyMergeResult::AppliedSubset => {
+                metrics.compaction.applied.inc();
+                metrics.compaction.applied_subset_match.inc();
+                machine.applier.shard_metrics.compaction_applied.inc();
+            }
+            ApplyMergeResult::NotAppliedNoMatch
+            | ApplyMergeResult::NotAppliedInvalidSince
+            | ApplyMergeResult::NotAppliedTooManyUpdates => {
+                if let ApplyMergeResult::NotAppliedTooManyUpdates = &apply_merge_result {
+                    metrics.compaction.not_applied_too_many_updates.inc();
+                }
+                metrics.compaction.noop.inc();
+                let mut part_deletes = PartDeletes::default();
+                for part in res.output.parts {
+                    part_deletes.add(&part);
+                }
+                part_deletes
+                    .delete(
+                        machine.applier.state_versions.blob.as_ref(),
+                        machine.shard_id(),
+                        GC_BLOB_DELETE_CONCURRENCY_LIMIT.get(&machine.applier.cfg),
+                        &*metrics,
+                        &metrics.retries.external.compaction_noop_delete,
+                    )
+                    .await;
+            }
+        };
+
+        metrics
+            .compaction
+            .seconds
+            .inc_by(start.elapsed().as_secs_f64());
+
         Ok(maintenance)
     }
 
-    pub async fn compact(
+    pub async fn compact_stream(
         cfg: CompactConfig,
         blob: Arc<dyn Blob>,
         metrics: Arc<Metrics>,
@@ -483,108 +484,98 @@ where
         isolated_runtime: Arc<IsolatedRuntime>,
         req: CompactReq<T>,
         write_schemas: Schemas<K, V>,
-        tx: Sender<FueledMergeRes<T>>,
-    ) -> Result<(), anyhow::Error> {
-        let _ = Self::validate_req(&req)?;
-        assert!(cfg.compaction_memory_bound_bytes >= 4 * cfg.batch.blob_target_size);
+    ) -> impl Stream<Item = Result<FueledMergeRes<T>, anyhow::Error>> {
+        async_stream::stream! {
+            let _ = Self::validate_req(&req)?;
+            assert!(cfg.compaction_memory_bound_bytes >= 4 * cfg.batch.blob_target_size);
 
-        // Prepare memory bounds for compaction
-        let in_progress_part_reserved_memory_bytes = 2 * cfg.batch.blob_target_size;
-        let run_reserved_memory_bytes =
-            cfg.compaction_memory_bound_bytes - in_progress_part_reserved_memory_bytes;
+            // Prepare memory bounds for compaction
+            let in_progress_part_reserved_memory_bytes = 2 * cfg.batch.blob_target_size;
+            let run_reserved_memory_bytes =
+                cfg.compaction_memory_bound_bytes - in_progress_part_reserved_memory_bytes;
 
-        // Flatten the input batches into a single list of runs
-        let ordered_runs =
-            Self::order_runs(&req, cfg.batch.preferred_order, &*blob, &*metrics).await?;
+            // Flatten the input batches into a single list of runs
+            let ordered_runs =
+                Self::order_runs(&req, cfg.batch.preferred_order, &*blob, &*metrics).await?;
 
-        // Split the runs into manageable chunks
-        let chunked_runs =
-            Self::chunk_runs(&ordered_runs, &cfg, &*metrics, run_reserved_memory_bytes);
+            // Split the runs into manageable chunks
+            let chunked_runs =
+                Self::chunk_runs(&ordered_runs, &cfg, &*metrics, run_reserved_memory_bytes);
 
-        let total_chunked_runs = chunked_runs.len();
-        let mut applied = 0;
+            let total_chunked_runs = chunked_runs.len();
+            let mut applied = 0;
+            for (runs, run_chunk_max_memory_usage) in chunked_runs {
+                metrics.compaction.chunks_compacted.inc();
+                metrics
+                    .compaction
+                    .runs_compacted
+                    .inc_by(u64::cast_from(runs.len()));
 
-        for (runs, run_chunk_max_memory_usage) in chunked_runs {
-            metrics.compaction.chunks_compacted.inc();
-            metrics
-                .compaction
-                .runs_compacted
-                .inc_by(u64::cast_from(runs.len()));
+                // Adjust parallelism based on how much memory we have left
+                let extra_outstanding_parts = (run_reserved_memory_bytes
+                    .saturating_sub(run_chunk_max_memory_usage))
+                    / cfg.batch.blob_target_size;
 
-            // Adjust parallelism based on how much memory we have left
-            let extra_outstanding_parts = (run_reserved_memory_bytes
-                .saturating_sub(run_chunk_max_memory_usage))
-                / cfg.batch.blob_target_size;
+                let mut run_cfg = cfg.clone();
+                run_cfg.batch.batch_builder_max_outstanding_parts = 1 + extra_outstanding_parts;
 
-            let mut run_cfg = cfg.clone();
-            run_cfg.batch.batch_builder_max_outstanding_parts = 1 + extra_outstanding_parts;
+                let batch = Self::compact_runs(
+                    &run_cfg,
+                    &req.shard_id,
+                    &req.desc,
+                    runs,
+                    Arc::clone(&blob),
+                    Arc::clone(&metrics),
+                    Arc::clone(&shard_metrics),
+                    Arc::clone(&isolated_runtime),
+                    write_schemas.clone(),
+                )
+                .await?;
 
-            let batch = Self::compact_runs(
-                &run_cfg,
-                &req.shard_id,
-                &req.desc,
-                runs,
-                Arc::clone(&blob),
-                Arc::clone(&metrics),
-                Arc::clone(&shard_metrics),
-                Arc::clone(&isolated_runtime),
-                write_schemas.clone(),
-            )
-            .await?;
+                let (parts, run_splits, run_meta, updates) =
+                    (batch.parts, batch.run_splits, batch.run_meta, batch.len);
 
-            let (parts, run_splits, run_meta, updates) =
-                (batch.parts, batch.run_splits, batch.run_meta, batch.len);
-
-            assert!(
-                (updates == 0 && parts.is_empty()) || (updates > 0 && !parts.is_empty()),
-                "updates={}, parts={}",
-                updates,
-                parts.len(),
-            );
-
-            // Skip empty batches unless it's the last one
-            if updates == 0 && applied != total_chunked_runs - 1 {
-                applied += 1;
-                continue;
-            }
-
-            // Set up active compaction metadata
-            let clock = SYSTEM_TIME.clone();
-            let active_compaction = if applied < total_chunked_runs - 1 {
-                Some(ActiveCompaction { start_ms: clock() })
-            } else {
-                None
-            };
-
-            let res = CompactRes {
-                output: HollowBatch::new(
-                    batch.desc,
-                    parts.clone(),
+                assert!(
+                    (updates == 0 && parts.is_empty()) || (updates > 0 && !parts.is_empty()),
+                    "updates={}, parts={}",
                     updates,
-                    run_meta.clone(),
-                    run_splits.clone(),
-                ),
-            };
-
-            let res = FueledMergeRes {
-                output: res.output,
-                new_active_compaction: active_compaction,
-            };
-
-            // Send the compaction result to the machine for processing
-            let res = tx.send(res).await;
-            if let Err(err) = res {
-                error!(
-                    "Failed to send compaction result to machine: {}",
-                    err.display_with_causes()
+                    parts.len(),
                 );
-                return Err(anyhow!(err));
+
+                // Skip empty batches unless it's the last one
+                if updates == 0 && applied != total_chunked_runs - 1 {
+                    applied += 1;
+                    continue;
+                }
+
+                // Set up active compaction metadata
+                let clock = SYSTEM_TIME.clone();
+                let active_compaction = if applied < total_chunked_runs - 1 {
+                    Some(ActiveCompaction { start_ms: clock() })
+                } else {
+                    None
+                };
+
+                let res = CompactRes {
+                    output: HollowBatch::new(
+                        batch.desc,
+                        parts.clone(),
+                        updates,
+                        run_meta.clone(),
+                        run_splits.clone(),
+                    ),
+                };
+
+                let res = FueledMergeRes {
+                    output: res.output,
+                    new_active_compaction: active_compaction,
+                };
+
+                yield Ok(res);
+
+                applied += 1;
             }
-
-            applied += 1;
         }
-
-        Ok(())
     }
 
     /// Compacts input batches in bounded memory.
