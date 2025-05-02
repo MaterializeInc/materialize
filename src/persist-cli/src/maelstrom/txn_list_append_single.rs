@@ -640,6 +640,7 @@ impl Service for TransactorService {
                     consensus_uri,
                     Box::new(config.clone()),
                     metrics.postgres_consensus.clone(),
+                    Arc::clone(&config.configs),
                 )
                 .expect("consensus_uri should be valid");
                 loop {

@@ -22,6 +22,7 @@ use deadpool_postgres::tokio_postgres::Config;
 use deadpool_postgres::tokio_postgres::types::{FromSql, IsNull, ToSql, Type, to_sql_checked};
 use deadpool_postgres::{Object, PoolError};
 use futures_util::StreamExt;
+use mz_dyncfg::ConfigSet;
 use mz_ore::cast::CastFrom;
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::url::SensitiveUrl;
@@ -33,6 +34,13 @@ use tracing::{info, warn};
 
 use crate::error::Error;
 use crate::location::{CaSResult, Consensus, ExternalError, ResultStream, SeqNo, VersionedData};
+
+pub(crate) const USE_POSTGRES_TUNED_QUERIES: mz_dyncfg::Config<bool> = mz_dyncfg::Config::new(
+    "persist_use_postgres_tuned_queries",
+    false,
+    "Use a set of queries for consensus that have specifically been tuned against
+    Postgres to ensure we acquire a minimal number of locks.",
+);
 
 const SCHEMA: &str = "
 CREATE TABLE IF NOT EXISTS consensus (
@@ -101,6 +109,7 @@ pub struct PostgresConsensusConfig {
     url: SensitiveUrl,
     knobs: Arc<dyn PostgresClientKnobs>,
     metrics: PostgresClientMetrics,
+    dyncfg: Arc<ConfigSet>,
 }
 
 impl From<PostgresConsensusConfig> for PostgresClientConfig {
@@ -118,11 +127,13 @@ impl PostgresConsensusConfig {
         url: &SensitiveUrl,
         knobs: Box<dyn PostgresClientKnobs>,
         metrics: PostgresClientMetrics,
+        dyncfg: Arc<ConfigSet>,
     ) -> Result<Self, Error> {
         Ok(PostgresConsensusConfig {
             url: url.clone(),
             knobs: Arc::from(knobs),
             metrics,
+            dyncfg,
         })
     }
 
@@ -175,10 +186,12 @@ impl PostgresConsensusConfig {
             }
         }
 
+        let dyncfg = ConfigSet::default().add(&USE_POSTGRES_TUNED_QUERIES);
         let config = PostgresConsensusConfig::new(
             &url,
             Box::new(TestConsensusKnobs),
             PostgresClientMetrics::new(&MetricsRegistry::new(), "mz_persist"),
+            Arc::new(dyncfg),
         )?;
         Ok(Some(config))
     }
@@ -187,6 +200,7 @@ impl PostgresConsensusConfig {
 /// Implementation of [Consensus] over a Postgres database.
 pub struct PostgresConsensus {
     postgres_client: PostgresClient,
+    dyncfg: Arc<ConfigSet>,
 }
 
 impl std::fmt::Debug for PostgresConsensus {
@@ -207,6 +221,7 @@ impl PostgresConsensus {
             escape_identifier(role),
         );
 
+        let dyncfg = Arc::clone(&config.dyncfg);
         let postgres_client = PostgresClient::open(config.into())?;
 
         let client = postgres_client.get_connection().await?;
@@ -244,7 +259,10 @@ impl PostgresConsensus {
                 .await?;
         }
 
-        Ok(PostgresConsensus { postgres_client })
+        Ok(PostgresConsensus {
+            postgres_client,
+            dyncfg,
+        })
     }
 
     /// Drops and recreates the `consensus` table in Postgres
@@ -348,19 +366,44 @@ impl Consensus for PostgresConsensus {
         }
 
         let result = if let Some(expected) = expected {
-            // This query has been written to execute within a single
-            // network round-trip. The insert performance has been tuned
-            // against CockroachDB, ensuring it goes through the fast-path
-            // 1-phase commit of CRDB. Any changes to this query should
-            // confirm an EXPLAIN ANALYZE (VERBOSE) query plan contains
-            // `auto commit`
-            let q = r#"
+            /// This query has been written to execute within a single
+            /// network round-trip. The insert performance has been tuned
+            /// against CockroachDB, ensuring it goes through the fast-path
+            /// 1-phase commit of CRDB. Any changes to this query should
+            /// confirm an EXPLAIN ANALYZE (VERBOSE) query plan contains
+            /// `auto commit`
+            static CRDB_CAS_QUERY: &str = "
                 INSERT INTO consensus (shard, sequence_number, data)
                 SELECT $1, $2, $3
                 WHERE (SELECT sequence_number FROM consensus
                        WHERE shard = $1
                        ORDER BY sequence_number DESC LIMIT 1) = $4;
-            "#;
+            ";
+
+            /// This query has been written to ensure we only get row level
+            /// locks on the `(shard, seq_no)` we're trying to update. The insert
+            /// performance has been tuned against Postgres 15 to ensure it
+            /// minimizes possible serialization conflicts.
+            static POSTGRES_CAS_QUERY: &str = "
+            WITH last_seq AS (
+                SELECT sequence_number
+                FROM materialize1.consensus
+                WHERE shard = $1
+                ORDER BY sequence_number DESC
+                LIMIT 1
+                FOR UPDATE
+            )
+            INSERT INTO materialize1.consensus (shard, sequence_number, data)
+            SELECT $1, $2, $3
+            FROM last_seq
+            WHERE last_seq.sequence_number = $4;
+            ";
+
+            let q = if USE_POSTGRES_TUNED_QUERIES.get(&self.dyncfg) {
+                POSTGRES_CAS_QUERY
+            } else {
+                CRDB_CAS_QUERY
+            };
             let client = self.get_connection().await?;
             let statement = client.prepare_cached(q).await?;
             client
@@ -424,12 +467,47 @@ impl Consensus for PostgresConsensus {
     }
 
     async fn truncate(&self, key: &str, seqno: SeqNo) -> Result<usize, ExternalError> {
-        let q = "DELETE FROM consensus
-                WHERE shard = $1 AND sequence_number < $2 AND
-                EXISTS(
-                    SELECT * FROM consensus WHERE shard = $1 AND sequence_number >= $2
-                )";
+        static CRDB_TRUNCATE_QUERY: &str = "
+        DELETE FROM consensus
+        WHERE shard = $1 AND sequence_number < $2 AND
+        EXISTS (
+            SELECT * FROM consensus WHERE shard = $1 AND sequence_number >= $2
+        )
+        ";
 
+        /// This query has been specifically tuned to ensure we get the minimal
+        /// number of __row__ locks possible, and that it doesn't conflict with
+        /// concurrently running compare and swap operations that are trying to
+        /// evolve the shard.
+        ///
+        /// It's performance has been benchmarked agaisnt Postgres 15.
+        static POSTGRES_TRUNCATE_QUERY: &str = "
+        WITH newer_exists AS (
+            SELECT * FROM consensus
+            WHERE shard = $1
+                AND sequence_number >= $2
+            ORDER BY sequence_number ASC
+            LIMIT 1
+            FOR UPDATE
+        ),
+        to_lock AS (
+            SELECT ctid FROM consensus
+            WHERE shard = $1
+            AND sequence_number < $2
+            AND EXISTS (SELECT * FROM newer_exists)
+            ORDER BY sequence_number DESC
+            FOR UPDATE
+        )
+        DELETE FROM consensus
+        USING to_lock
+        WHERE consensus.ctid = to_lock.ctid;
+        ";
+
+        let q = if USE_POSTGRES_TUNED_QUERIES.get(&self.dyncfg) {
+            POSTGRES_TRUNCATE_QUERY
+        } else {
+            CRDB_TRUNCATE_QUERY
+        };
         let result = {
             let client = self.get_connection().await?;
             let statement = client.prepare_cached(q).await?;

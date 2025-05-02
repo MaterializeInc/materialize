@@ -36,6 +36,7 @@ pub fn all_dyn_configs(configs: ConfigSet) -> ConfigSet {
         .add(&crate::indexed::columnar::arrow::ENABLE_ARROW_LGALLOC_NONCC_SIZES)
         .add(&crate::s3::ENABLE_S3_LGALLOC_CC_SIZES)
         .add(&crate::s3::ENABLE_S3_LGALLOC_NONCC_SIZES)
+        .add(&crate::postgres::USE_POSTGRES_TUNED_QUERIES)
 }
 
 /// Config for an implementation of [Blob].
@@ -233,10 +234,11 @@ impl ConsensusConfig {
         url: &SensitiveUrl,
         knobs: Box<dyn PostgresClientKnobs>,
         metrics: PostgresClientMetrics,
+        dyncfg: Arc<ConfigSet>,
     ) -> Result<Self, ExternalError> {
         let config = match url.scheme() {
             "postgres" | "postgresql" => Ok(ConsensusConfig::Postgres(
-                PostgresConsensusConfig::new(url, knobs, metrics)?,
+                PostgresConsensusConfig::new(url, knobs, metrics, dyncfg)?,
             )),
             "mem" => {
                 if !cfg!(debug_assertions) {
