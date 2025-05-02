@@ -45,7 +45,7 @@ use crate::fetch::FetchBatchFilter;
 use crate::internal::encoding::Schemas;
 use crate::internal::gc::GarbageCollector;
 use crate::internal::machine::Machine;
-use crate::internal::maintenance::RoutineMaintenance;
+use crate::internal::maintenance::{self, RoutineMaintenance};
 use crate::internal::metrics::ShardMetrics;
 use crate::internal::state::{HollowBatch, RunMeta, RunOrder, RunPart};
 use crate::internal::trace::{ApplyMergeResult, FueledMergeRes};
@@ -313,6 +313,7 @@ where
     ) -> Result<RoutineMaintenance, anyhow::Error> {
         let metrics = Arc::clone(&machine.applier.metrics);
         metrics.compaction.started.inc();
+        let start = Instant::now();
 
         // pick a timeout for our compaction request proportional to the amount
         // of data that must be read (with a minimum set by PersistConfig)
@@ -372,48 +373,59 @@ where
         );
 
         let isolated_runtime = Arc::clone(&machine.isolated_runtime);
+        let machine_clone = machine.clone();
+        let metrics_clone = Arc::clone(&machine.applier.metrics);
 
         let compact_span = debug_span!("compact::consolidate");
-        let res = tokio::time::timeout(
-            timeout,
-            // Compaction is cpu intensive, so be polite and spawn it on the isolated runtime.
+        let res = tokio::time::timeout(timeout, async {
             isolated_runtime
                 .spawn_named(
                     || "persist::compact::consolidate",
-                    Self::compact_stream(
-                        CompactConfig::new(&machine.applier.cfg, machine.shard_id()),
-                        Arc::clone(&machine.applier.state_versions.blob),
-                        Arc::clone(&metrics),
-                        Arc::clone(&machine.applier.shard_metrics),
-                        Arc::clone(&machine.isolated_runtime),
-                        req,
-                        compaction_schema,
-                    )
+                    async move {
+                        let stream = Self::compact_stream(
+                            CompactConfig::new(
+                                &machine_clone.applier.cfg,
+                                machine_clone.shard_id(),
+                            ),
+                            Arc::clone(&machine_clone.applier.state_versions.blob),
+                            Arc::clone(&metrics_clone),
+                            Arc::clone(&machine_clone.applier.shard_metrics),
+                            Arc::clone(&machine_clone.isolated_runtime),
+                            req,
+                            compaction_schema,
+                        );
+
+                        let mut maintenance = RoutineMaintenance::default();
+
+                        pin_mut!(stream);
+                        while let Some(res) = stream.next().await {
+                            let res = res.map_err(|e| anyhow!(e))?;
+                            let new_maintenance =
+                                Self::apply(res, Arc::clone(&metrics_clone), machine_clone.clone())
+                                    .await?;
+                            maintenance = std::cmp::max(maintenance, new_maintenance);
+                        }
+
+                        Ok::<_, anyhow::Error>(maintenance)
+                    }
                     .instrument(compact_span),
                 )
-                .map_err(|e| anyhow!(e)),
-        )
-        .await;
+                .await
+                .map_err(|e| anyhow!("compaction task join failed: {e}"))?
+        })
+        .await
+        .map_err(|e| {
+            metrics.compaction.timed_out.inc();
+            anyhow!("compaction timed out after {:?}: {e}", timeout)
+        })?;
 
-        let res = match res {
-            Ok(res) => res,
-            Err(err) => {
-                metrics.compaction.timed_out.inc();
-                Err(anyhow!(err))
-            }
-        };
+        metrics
+            .compaction
+            .seconds
+            .inc_by(start.elapsed().as_secs_f64());
 
-        let mut maintenance = RoutineMaintenance::default();
         match res {
-            Ok(stream) => {
-                pin_mut!(stream);
-                while let Some(res) = stream.next().await {
-                    let res = res.map_err(|e| anyhow!(e))?;
-                    let new_maintenance = Self::apply(res, Arc::clone(&metrics), machine).await?;
-                    maintenance = std::cmp::max(maintenance, new_maintenance);
-                }
-                Ok(maintenance)
-            }
+            Ok(maintenance) => Ok(maintenance),
             Err(err) => {
                 metrics.compaction.failed.inc();
                 debug!(
@@ -429,10 +441,9 @@ where
     pub async fn apply(
         res: FueledMergeRes<T>,
         metrics: Arc<Metrics>,
-        machine: &Machine<K, V, T, D>,
+        machine: Machine<K, V, T, D>,
     ) -> Result<RoutineMaintenance, anyhow::Error> {
         let (apply_merge_result, maintenance) = machine.merge_res(&res).await;
-        let start = Instant::now();
 
         match &apply_merge_result {
             ApplyMergeResult::AppliedExact => {
@@ -468,15 +479,10 @@ where
             }
         };
 
-        metrics
-            .compaction
-            .seconds
-            .inc_by(start.elapsed().as_secs_f64());
-
         Ok(maintenance)
     }
 
-    pub async fn compact_stream(
+    pub fn compact_stream(
         cfg: CompactConfig,
         blob: Arc<dyn Blob>,
         metrics: Arc<Metrics>,

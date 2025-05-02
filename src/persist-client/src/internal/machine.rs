@@ -2001,7 +2001,7 @@ pub mod datadriven {
         };
 
         let req_clone = req.clone();
-        let compact_fut = Compactor::<String, (), u64, i64>::compact_stream(
+        let stream = Compactor::<String, (), u64, i64>::compact_stream(
             CompactConfig::new(&cfg, datadriven.shard_id),
             Arc::clone(&datadriven.client.blob),
             Arc::clone(&datadriven.client.metrics),
@@ -2009,16 +2009,16 @@ pub mod datadriven {
             Arc::clone(&datadriven.client.isolated_runtime),
             req_clone,
             SCHEMAS.clone(),
-        )
-        .await;
-        pin_mut!(compact_fut);
+        );
+
+        pin_mut!(stream);
 
         let mut all_parts = vec![];
         let mut all_run_splits = vec![];
         let mut all_run_meta = vec![];
         let mut len = 0;
 
-        while let Some(res) = compact_fut.next().await {
+        while let Some(res) = stream.next().await {
             let res = res?;
             let (parts, updates, run_meta, run_splits) = (
                 res.output.parts,
