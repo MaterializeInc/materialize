@@ -802,6 +802,7 @@ steps:
                   --scenario=DropCreateDefaultReplica,
                   --execution-mode=parallel,
                   --features=postgres_consensus,
+                  --system-param=persist_use_postgres_tuned_queries=true,
                   "--seed=$BUILDKITE_JOB_ID",
                 ]
 
@@ -854,8 +855,9 @@ steps:
               args: [
                 --scenario=RestartEnvironmentdClusterdStorage,
                 --execution-mode=parallel,
-                "--seed=$BUILDKITE_JOB_ID",
                 --features=postgres_consensus,
+                --system-param=persist_use_postgres_tuned_queries=true,
+                "--seed=$BUILDKITE_JOB_ID",
               ]
 
       - id: checks-parallel-kill-clusterd-storage
