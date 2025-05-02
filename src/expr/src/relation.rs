@@ -3683,6 +3683,13 @@ impl<L> RowSetFinishing<L> {
             && self.offset == 0
             && self.project.iter().copied().eq(0..arity)
     }
+    /// True if the finishing does not require an ORDER BY or projection.
+    ///
+    /// Technically, projections would be streamable, but we don't want to get
+    /// into the business of projecting rows in that path for now.
+    pub fn is_streamable(&self, arity: usize) -> bool {
+        self.order_by.is_empty() && self.project.iter().copied().eq(0..arity)
+    }
 }
 
 impl RowSetFinishing {

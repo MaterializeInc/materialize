@@ -39,9 +39,12 @@ use mz_ore::str::{StrExt, separated};
 use mz_ore::tracing::OpenTelemetryContext;
 use mz_persist_client::Schemas;
 use mz_persist_types::codec_impls::UnitSchema;
+use mz_repr::bytes::ByteSize;
 use mz_repr::explain::text::DisplayText;
 use mz_repr::explain::{CompactScalars, IndexUsageType, PlanRenderingContext, UsedIndexes};
-use mz_repr::{Diff, GlobalId, IntoRowIterator, RelationType, Row, RowIterator, preserves_order};
+use mz_repr::{
+    Diff, GlobalId, IntoRowIterator, RelationDesc, RelationType, Row, RowIterator, preserves_order,
+};
 use serde::{Deserialize, Serialize};
 use timely::progress::{Antichain, Timestamp};
 use uuid::Uuid;
@@ -843,9 +846,61 @@ impl crate::coord::Coordinator {
                         }
                     });
 
-                    if finishing.is_trivial(response.relation_desc.arity()) {
-                        while let Some(rows_vec) = rx.recv().await {
-                            yield PeekResponseUnary::Rows(Box::new(rows_vec.into_row_iter()));
+                    if finishing.is_streamable(response.relation_desc.arity()) {
+                        // TODO(aljoscha): This while impl is not at all
+                        // optimized or made to look nice yet!
+
+                        tracing::info!("query result is streamable!");
+
+                        let limit = if let Some(limit) = finishing.limit {
+                            let limit = u64::from(limit);
+                            let limit = usize::cast_from(limit);
+                            Some(limit)
+                        } else {
+                            None
+                        };
+                        let mut rows_to_skip = finishing.offset.clone();
+                        let mut num_rows_emitted = 0;
+                        let mut running_query_result_size = 0;
+
+                        while let Some(mut rows_vec) = rx.recv().await {
+                            if rows_vec.len() < rows_to_skip {
+                                rows_to_skip -= rows_vec.len();
+                                continue;
+                            }
+
+                            let mut rows_vec = rows_vec.split_off(rows_to_skip);
+                            rows_to_skip = 0;
+
+                            if let Some(limit) = limit {
+                                if rows_vec.len() + num_rows_emitted > limit {
+                                    rows_vec.truncate(limit - num_rows_emitted);
+                                }
+                            }
+
+                            let rows_size: usize = rows_vec.iter().map(|row| row.data_len()).sum();
+                            running_query_result_size += rows_size;
+
+                            if let Some(max) = max_returned_query_size {
+                                if running_query_result_size > usize::cast_from(max) {
+                                    let max_bytes = ByteSize::b(max);
+                                    yield PeekResponseUnary::Error(format!(
+                                        "result exceeds max size of {max_bytes}"
+                                    ));
+                                    break;
+                                }
+                            }
+
+                            num_rows_emitted += rows_vec.len();
+
+                            let row_iter = rows_vec.into_row_iter();
+                            yield PeekResponseUnary::Rows(Box::new(row_iter));
+
+                            if let Some(limit) = limit {
+                                if num_rows_emitted == limit {
+                                    break;
+                                }
+                            }
                         }
                     } else {
                         // WIP: Can't do this for realz, but do for now to see
