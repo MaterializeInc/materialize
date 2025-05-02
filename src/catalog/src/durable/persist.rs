@@ -1309,7 +1309,7 @@ impl UnopenedPersistCatalogState {
                 .await;
             let write_handle = catalog
                 .persist_client
-                .open_writer::<SourceData, (), Timestamp, i64>(
+                .open_writer::<SourceData, (), Timestamp, StorageDiff>(
                     catalog.write_handle.shard_id(),
                     Arc::new(desc()),
                     Arc::new(UnitSchema::default()),
