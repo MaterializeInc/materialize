@@ -890,3 +890,175 @@ where
 
     min_remaining_time.into_option()
 }
+
+#[cfg(test)]
+mod test {
+    use mz_ore::metrics::MetricsRegistry;
+    use mz_persist_types::ShardId;
+    use mz_repr::{Datum, Timestamp as MzTimestamp};
+    use mz_storage_operators::persist_source::Subtime;
+    use mz_storage_types::sources::SourceEnvelope;
+    use mz_storage_types::sources::envelope::{KeyEnvelope, UpsertEnvelope, UpsertStyle};
+    use timely::dataflow::operators::capture::Extract;
+    use timely::dataflow::operators::{Capture, Input};
+    use timely::progress::Timestamp;
+
+    use crate::metrics::StorageMetrics;
+    use crate::metrics::upsert::UpsertMetricDefs;
+    use crate::source::SourceExportCreationConfig;
+    use crate::statistics::{SourceStatistics, SourceStatisticsMetricDefs};
+    use crate::upsert::memory::InMemoryHashMap;
+
+    use super::*;
+
+    #[mz_ore::test]
+    #[cfg_attr(miri, ignore)]
+    fn gh_9160_repro() {
+        // Helper to wrap timestamps in the appropriate types
+        let new_ts = |ts| (MzTimestamp::new(ts), Subtime::minimum());
+
+        let output_handle = timely::execute_directly(move |worker| {
+            let (mut input_handle, mut persist_handle, output_handle) = worker
+                .dataflow::<MzTimestamp, _, _>(|scope| {
+                    // Enter a subscope since the upsert operator expects to work a backpressure
+                    // enabled scope.
+                    scope.scoped::<(MzTimestamp, Subtime), _, _>("upsert", |scope| {
+                        let (input_handle, input) = scope.new_input();
+                        let (persist_handle, persist_input) = scope.new_input();
+                        let upsert_config = UpsertConfig {
+                            shrink_upsert_unused_buffers_by_ratio: 0,
+                        };
+                        let source_id = GlobalId::User(0);
+                        let metrics_registry = MetricsRegistry::new();
+                        let upsert_metrics_defs =
+                            UpsertMetricDefs::register_with(&metrics_registry);
+                        let upsert_metrics =
+                            UpsertMetrics::new(&upsert_metrics_defs, source_id, 0, None);
+
+                        let metrics_registry = MetricsRegistry::new();
+                        let storage_metrics = StorageMetrics::register_with(&metrics_registry);
+
+                        let metrics_registry = MetricsRegistry::new();
+                        let source_statistics_defs =
+                            SourceStatisticsMetricDefs::register_with(&metrics_registry);
+                        let envelope = SourceEnvelope::Upsert(UpsertEnvelope {
+                            source_arity: 2,
+                            style: UpsertStyle::Default(KeyEnvelope::Flattened),
+                            key_indices: vec![0],
+                        });
+                        let source_statistics = SourceStatistics::new(
+                            source_id,
+                            0,
+                            &source_statistics_defs,
+                            source_id,
+                            &ShardId::new(),
+                            envelope,
+                            Antichain::from_elem(Timestamp::minimum()),
+                        );
+
+                        let source_config = SourceExportCreationConfig {
+                            id: GlobalId::User(0),
+                            worker_id: 0,
+                            metrics: storage_metrics,
+                            source_statistics,
+                        };
+
+                        let (output, _, _, button) = upsert_inner(
+                            &input.as_collection(),
+                            vec![0],
+                            Antichain::from_elem(Timestamp::minimum()),
+                            persist_input.as_collection(),
+                            None,
+                            upsert_metrics,
+                            source_config,
+                            || async { InMemoryHashMap::default() },
+                            upsert_config,
+                            true,
+                            None,
+                        );
+                        std::mem::forget(button);
+
+                        (input_handle, persist_handle, output.inner.capture())
+                    })
+                });
+
+            // We work with a hypothetical schema of (key int, value int).
+
+            // The input will contain records for two keys, 0 and 1.
+            let key0 = UpsertKey::from_key(Ok(&Row::pack_slice(&[Datum::Int64(0)])));
+            let key1 = UpsertKey::from_key(Ok(&Row::pack_slice(&[Datum::Int64(1)])));
+
+            // We will assume that the kafka topic contains the following messages with their
+            // associated reclocked timestamp:
+            //  1. {offset=1, key=0, value=0}    @ mz_time = 0
+            //  2. {offset=2, key=1, value=NULL} @ mz_time = 2  // <- deletion of unrelated key. Causes the operator
+            //                                                  //    to maintain the associated cap to time 2
+            //  3. {offset=3, key=0, value=1}    @ mz_time = 3
+            //  4. {offset=4, key=0, value=2}    @ mz_time = 3  // <- messages 2 and 3 are reclocked to time 3
+            let value1 = Row::pack_slice(&[Datum::Int64(0), Datum::Int64(0)]);
+            let value3 = Row::pack_slice(&[Datum::Int64(0), Datum::Int64(1)]);
+            let value4 = Row::pack_slice(&[Datum::Int64(0), Datum::Int64(2)]);
+            let msg1 = (key0, Some(Ok(value1.clone())), 1);
+            let msg2 = (key1, None, 2);
+            let msg3 = (key0, Some(Ok(value3)), 3);
+            let msg4 = (key0, Some(Ok(value4)), 4);
+
+            // The first message will initialize the upsert state such that key 0 has value 0 and
+            // produce an output update to that effect.
+            input_handle.send((msg1, new_ts(0), Diff::ONE));
+            input_handle.advance_to(new_ts(2));
+            worker.step();
+
+            // We assume this worker succesfully CAAs the update to the shard so we send it back
+            // through the persist_input
+            persist_handle.send((Ok(value1), new_ts(0), Diff::ONE));
+            persist_handle.advance_to(new_ts(1));
+            worker.step();
+
+            // Then, messages 2 and 3 are sent as one batch with capability = 2
+            input_handle.send_batch(&mut vec![
+                (msg2, new_ts(2), Diff::ONE),
+                (msg3, new_ts(3), Diff::ONE),
+            ]);
+            // Advance our capability to 3
+            input_handle.advance_to(new_ts(3));
+            // Message 4 is sent with capability 3
+            input_handle.send_batch(&mut vec![(msg4, new_ts(3), Diff::ONE)]);
+            // Advance our capability to 4
+            input_handle.advance_to(new_ts(4));
+            // We now step the worker so that the pending data is received. This causes the
+            // operator to store internally the following map from capabilities to updates:
+            // cap=2 => [ msg2, msg3 ]
+            // cap=3 => [ msg4 ]
+            worker.step();
+
+            // We now assume that another replica raced us and processed msg1 at time 2, which in
+            // this test is a no-op so the persist frontier advances to time 3 without new data.
+            persist_handle.advance_to(new_ts(3));
+            // We now step this worker again, which will notice that the persist upper is {3} and
+            // wlil attempt to process msg3 and msg4 *separately*, causing it to produce a double
+            // retraction.
+            worker.step();
+
+            output_handle
+        });
+
+        let mut actual_output = output_handle
+            .extract()
+            .into_iter()
+            .flat_map(|(_cap, container)| container)
+            .collect();
+        differential_dataflow::consolidation::consolidate_updates(&mut actual_output);
+
+        // The expected consolidated output contains only updates for key 0 which has the value 0
+        // at timestamp 0 and the value 2 at timestamp 3
+        let value1 = Row::pack_slice(&[Datum::Int64(0), Datum::Int64(0)]);
+        let value4 = Row::pack_slice(&[Datum::Int64(0), Datum::Int64(2)]);
+        let expected_output: Vec<(Result<Row, DataflowError>, _, _)> = vec![
+            (Ok(value1.clone()), new_ts(0), Diff::ONE),
+            (Ok(value1), new_ts(3), Diff::MINUS_ONE),
+            (Ok(value4), new_ts(3), Diff::ONE),
+        ];
+        assert_eq!(actual_output, expected_output);
+    }
+}
