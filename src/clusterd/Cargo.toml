@@ -11,7 +11,7 @@ workspace = true
 
 [dependencies]
 anyhow = "1.0.98"
-axum = "0.8.3"
+axum = "0.8.4"
 clap = { version = "4.5.23", features = ["derive", "env"] }
 fail = { version = "0.5.1", features = ["failpoints"] }
 futures = "0.3.31"

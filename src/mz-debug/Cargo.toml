@@ -11,7 +11,7 @@ workspace = true
 
 [dependencies]
 anyhow = "1.0.98"
-chrono = { version = "0.4.39", default-features = false }
+chrono = { version = "0.4.41", default-features = false }
 clap = { version = "4.5.23", features = ["derive", "env"] }
 csv-async = { version = "1.2.6", default-features = false, features = ["tokio"] }
 futures = "0.3.31"

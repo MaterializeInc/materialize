@@ -15,12 +15,12 @@ workspace = true
 anyhow = "1.0.98"
 askama = { version = "0.12.1", default-features = false, features = ["config", "serde-json"] }
 async-trait = "0.1.88"
-axum = { version = "0.8.3", features = ["ws"] }
+axum = { version = "0.8.4", features = ["ws"] }
 axum-extra = { version = "0.10.1", features = ["typed-header"] }
 base64 = "0.22.1"
 bytes = "1.10.1"
 bytesize = "1.3.0"
-chrono = { version = "0.4.39", default-features = false, features = ["std"] }
+chrono = { version = "0.4.41", default-features = false, features = ["std"] }
 clap = { version = "4.5.23", features = ["wrap_help", "env", "derive"] }
 derivative = "2.2.0"
 fail = { version = "0.5.1", features = ["failpoints"] }
@@ -151,7 +151,7 @@ tokio-postgres = { version = "0.7.8", features = ["with-chrono-0_4"] }
 
 [build-dependencies]
 anyhow = "1.0.98"
-cc = "1.2.19"
+cc = "1.2.21"
 mz-npm = { path = "../npm" }
 
 [features]

@@ -15,7 +15,7 @@ async-trait = "0.1.88"
 bincode = { version = "1.3.3" }
 bytes = { version = "1.10.1", features = ["serde"] }
 bytesize = "1.3.0"
-chrono = { version = "0.4.39", default-features = false, features = ["std"] }
+chrono = { version = "0.4.41", default-features = false, features = ["std"] }
 clap = { version = "4.5.23", features = ["derive"] }
 derivative = "2.2.0"
 differential-dataflow = "0.14.2"

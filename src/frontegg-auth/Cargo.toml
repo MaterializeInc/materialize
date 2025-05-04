@@ -32,7 +32,7 @@ uuid = { version = "1.16.0", features = ["serde"] }
 workspace-hack = { version = "0.0.0", path = "../workspace-hack", optional = true }
 
 [dev-dependencies]
-axum = "0.8.3"
+axum = "0.8.4"
 mz-ore = { path = "../ore", features = ["network", "test"] }
 tokio = { version = "1.44.1", features = ["macros", "rt-multi-thread"] }
 
