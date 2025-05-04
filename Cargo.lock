@@ -2338,13 +2338,15 @@ dependencies = [
 
 [[package]]
 name = "dashmap"
-version = "5.2.0"
+version = "5.5.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4c8858831f7781322e539ea39e72449c46b059638250c14344fec8d0aa6e539c"
+checksum = "978747c1d849a7d2ee5e8adc0159961c48fb7e5db2f06af6723b80123bb53856"
 dependencies = [
  "cfg-if",
- "num_cpus",
- "parking_lot",
+ "hashbrown 0.14.5",
+ "lock_api",
+ "once_cell",
+ "parking_lot_core",
 ]
 
 [[package]]
@@ -11456,7 +11458,7 @@ dependencies = [
  "async-trait",
  "auto_impl",
  "bytes",
- "dashmap 5.2.0",
+ "dashmap 5.5.3",
  "futures",
  "httparse",
  "lsp-types",
@@ -12567,6 +12569,7 @@ dependencies = [
  "getrandom 0.2.10",
  "getrandom 0.3.1",
  "half 2.6.0",
+ "hashbrown 0.14.5",
  "hashbrown 0.15.2",
  "hyper 0.14.27",
  "hyper 1.6.0",
@@ -12597,7 +12600,6 @@ dependencies = [
  "num-traits",
  "openssl",
  "openssl-sys",
- "parking_lot",
  "parquet",
  "pathdiff",
  "percent-encoding",

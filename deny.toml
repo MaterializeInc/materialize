@@ -29,14 +29,6 @@ skip = [
     { name = "ordered-float", version = "4.6.0" },
     # held back by 'ciborium' which is depended on by 'criterion'
     { name = "half", version = "1.6.0" },
-    { name = "windows-sys", version = "0.42.0" },
-    { name = "windows_aarch64_gnullvm", version = "0.42.0" },
-    { name = "windows_aarch64_msvc", version = "0.42.0" },
-    { name = "windows_i686_gnu", version = "0.42.0" },
-    { name = "windows_i686_msvc", version = "0.42.0" },
-    { name = "windows_x86_64_gnullvm", version = "0.42.0" },
-    { name = "windows_x86_64_gnu", version = "0.42.0" },
-    { name = "windows_x86_64_msvc", version = "0.42.0" },
     { name = "windows-targets", version = "0.48.0" },
     { name = "windows-sys", version = "0.48.0" },
     { name = "windows_aarch64_gnullvm", version = "0.48.0" },
@@ -51,11 +43,13 @@ skip = [
     # This is very Unfortunate as we don't actually use these platforms.
     { name = "hermit-abi", version = "0.3.9" },
     { name = "redox_syscall", version = "0.2.10" },
+    { name = "redox_syscall", version = "0.4.1" },
 
     # Will require updating many crates
     { name = "indexmap", version = "1.9.1" },
     # Required by indexmap 1.9.1, which is depended on by many things
     { name = "hashbrown", version = "0.12.3" },
+    { name = "hashbrown", version = "0.14.5" },
 
     # Had to update `tower-http` to `0.4.3` to fix the `base64` duplicate version
     # but this introduced a new dependency on `bitflags 2.3.3` but all the rest of
@@ -162,6 +156,8 @@ skip = [
     { name = "aws-smithy-http", version = "0.60.10" },
     # Used by aws-sdk-s3
     { name = "lru", version = "0.12.5" },
+    # Used by tower-lsp
+    { name = "dashmap", version = "5.5.3" },
 ]
 
 [[bans.deny]]
