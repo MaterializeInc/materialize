@@ -731,7 +731,7 @@ dependencies = [
  "hmac",
  "http 0.2.9",
  "http-body 0.4.5",
- "lru",
+ "lru 0.12.5",
  "once_cell",
  "percent-encoding",
  "regex-lite",
@@ -3383,16 +3383,6 @@ checksum = "8a9ee70c43aaf417c914396645a0fa852624801b24ebb7ae78fe8272889ac888"
 
 [[package]]
 name = "hashbrown"
-version = "0.14.5"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e5274423e17b7c9fc20b6e7e208532f9b19825d82dfd615708b70edd83df41f1"
-dependencies = [
- "ahash",
- "allocator-api2",
-]
-
-[[package]]
-name = "hashbrown"
 version = "0.15.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "bf151400ff0baff5465007dd2f3e717f3fe502074ca563069ce3a6629d07b289"
@@ -4247,7 +4237,7 @@ dependencies = [
  "launchdarkly-server-sdk-evaluation",
  "lazy_static",
  "log",
- "lru",
+ "lru 0.12.5",
  "moka",
  "parking_lot",
  "rand 0.9.0",
@@ -4511,11 +4501,20 @@ dependencies = [
 
 [[package]]
 name = "lru"
-version = "0.12.3"
+version = "0.12.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d3262e75e648fce39813cb56ac41f3c3e3f65217ebf3844d818d1f9398cfb0dc"
+checksum = "234cf4f4a04dc1f57e24b96cc0cd600cf2af460d4161ac5ecdd0af8e1f3b2a38"
 dependencies = [
- "hashbrown 0.14.5",
+ "hashbrown 0.15.2",
+]
+
+[[package]]
+name = "lru"
+version = "0.14.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9f8cc7106155f10bdf99a6f379688f543ad6596a415375b36a59a054ceda1198"
+dependencies = [
+ "hashbrown 0.15.2",
 ]
 
 [[package]]
@@ -4730,7 +4729,7 @@ dependencies = [
  "futures-sink",
  "futures-util",
  "keyed_priority_queue",
- "lru",
+ "lru 0.12.5",
  "mysql_common",
  "native-tls",
  "pem",
@@ -5956,7 +5955,7 @@ dependencies = [
  "derivative",
  "futures",
  "jsonwebtoken",
- "lru",
+ "lru 0.14.0",
  "mz-ore",
  "mz-repr",
  "prometheus",
@@ -12604,7 +12603,7 @@ dependencies = [
  "libz-sys",
  "linux-raw-sys 0.4.14",
  "log",
- "lru",
+ "lru 0.12.5",
  "memchr",
  "mime_guess",
  "minimal-lexical",
