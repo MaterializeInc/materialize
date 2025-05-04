@@ -112,7 +112,7 @@ prost-types = { version = "0.13.5" }
 quote = { version = "1.0.40" }
 rand = { version = "0.8.5", features = ["small_rng"] }
 rand_chacha = { version = "0.3.0" }
-rand_core = { version = "0.6.2", default-features = false, features = ["std"] }
+rand_core = { version = "0.6.4", default-features = false, features = ["std"] }
 rdkafka-sys = { git = "https://github.com/MaterializeInc/rust-rdkafka.git", features = ["cmake-build", "libz-static", "ssl-vendored", "zstd"] }
 regex = { version = "1.11.1" }
 regex-automata = { version = "0.4.9", default-features = false, features = ["dfa", "hybrid", "meta", "nfa", "perf", "unicode"] }
@@ -255,7 +255,7 @@ prost-types = { version = "0.13.5" }
 quote = { version = "1.0.40" }
 rand = { version = "0.8.5", features = ["small_rng"] }
 rand_chacha = { version = "0.3.0" }
-rand_core = { version = "0.6.2", default-features = false, features = ["std"] }
+rand_core = { version = "0.6.4", default-features = false, features = ["std"] }
 rdkafka-sys = { git = "https://github.com/MaterializeInc/rust-rdkafka.git", features = ["cmake-build", "libz-static", "ssl-vendored", "zstd"] }
 regex = { version = "1.11.1" }
 regex-automata = { version = "0.4.9", default-features = false, features = ["dfa", "hybrid", "meta", "nfa", "perf", "unicode"] }
