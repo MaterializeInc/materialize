@@ -63,7 +63,7 @@ types-psutil==7.0.0.20250401
 types-PyMYSQL==1.1.0.20241103
 types-PyYAML==6.0.12.20250402
 types-requests==2.32.0.20250328
-types-setuptools==79.0.0.20250422
+types-setuptools==80.1.0.20250503
 types-toml==0.10.8.20240310
 typing-extensions==4.13.2
 xxhash==3.5.0
