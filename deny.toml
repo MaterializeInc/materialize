@@ -159,6 +159,8 @@ skip = [
     # Used by tonic
     { name = "axum", version = "0.7.9" },
     { name = "matchit", version = "0.7.0" },
+    # Used by kube-core
+    { name = "json-patch", version = "3.0.1" },
 ]
 
 [[bans.deny]]
