@@ -12,7 +12,7 @@ workspace = true
 [dependencies]
 anyhow = "1.0.98"
 openssl = { version = "0.10.71", features = ["vendored"] }
-openssl-sys = { version = "0.9.106", features = ["vendored"] }
+openssl-sys = { version = "0.9.108", features = ["vendored"] }
 postgres-openssl = { version = "0.5.0" }
 thiserror = "2.0.12"
 tokio = { version = "1.44.1", default-features = false, features = ["fs", "macros", "sync", "rt", "rt-multi-thread"] }

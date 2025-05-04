@@ -49,7 +49,7 @@ mz-persist-types = { path = "../persist-types" }
 mz-postgres-client = { path = "../postgres-client" }
 mz-proto = { path = "../proto" }
 openssl = { version = "0.10.71", features = ["vendored"] }
-openssl-sys = { version = "0.9.106", features = ["vendored"] }
+openssl-sys = { version = "0.9.108", features = ["vendored"] }
 parquet = { version = "53.3.0", default-features = false, features = ["arrow", "brotli", "flate2", "snap", "lz4", "zstd"] }
 postgres-openssl = { version = "0.5.0" }
 postgres-protocol = { version = "0.6.5" }
@@ -74,7 +74,7 @@ workspace-hack = { version = "0.0.0", path = "../workspace-hack", optional = tru
 # `asm` feature is enabled since computing SHA256 hashes is taking a
 # significant amount of CPU time when uploading data to S3
 [dependencies.sha2]
-version = "0.10.8"
+version = "0.10.9"
 features = ["asm"]
 
 [dev-dependencies]
