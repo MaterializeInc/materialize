@@ -163,6 +163,8 @@ skip = [
     { name = "json-patch", version = "3.0.1" },
     # Used by askama_parser
     { name = "nom", version = "7.1.3" },
+    # Used by aws-config
+    { name = "aws-smithy-http", version = "0.60.10" },
 ]
 
 [[bans.deny]]
