@@ -56,7 +56,6 @@ skip = [
     { name = "indexmap", version = "1.9.1" },
     # Required by indexmap 1.9.1, which is depended on by many things
     { name = "hashbrown", version = "0.12.3" },
-    { name = "hashbrown", version = "0.14.5" },
 
     # Had to update `tower-http` to `0.4.3` to fix the `base64` duplicate version
     # but this introduced a new dependency on `bitflags 2.3.3` but all the rest of
@@ -159,12 +158,10 @@ skip = [
     # Used by tonic
     { name = "axum", version = "0.7.9" },
     { name = "matchit", version = "0.7.0" },
-    # Used by kube-core
-    { name = "json-patch", version = "3.0.1" },
-    # Used by askama_parser
-    { name = "nom", version = "7.1.3" },
     # Used by aws-config
     { name = "aws-smithy-http", version = "0.60.10" },
+    # Used by aws-sdk-s3
+    { name = "lru", version = "0.12.5" },
 ]
 
 [[bans.deny]]
