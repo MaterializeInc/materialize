@@ -94,7 +94,7 @@ num-bigint = { version = "0.4.6" }
 num-integer = { version = "0.1.46", features = ["i128"] }
 num-traits = { version = "0.2.19", features = ["i128", "libm"] }
 openssl = { version = "0.10.72", features = ["vendored"] }
-openssl-sys = { version = "0.9.107", default-features = false, features = ["vendored"] }
+openssl-sys = { version = "0.9.108", default-features = false, features = ["vendored"] }
 parking_lot = { version = "0.12.3", features = ["send_guard"] }
 parquet = { version = "53.3.0", default-features = false, features = ["arrow", "async", "brotli", "flate2", "lz4", "snap", "zstd"] }
 percent-encoding = { version = "2.3.1" }
@@ -124,7 +124,7 @@ scopeguard = { version = "1.2.0" }
 semver = { version = "1.0.26", features = ["serde"] }
 serde = { version = "1.0.219", features = ["alloc", "derive", "rc"] }
 serde_json = { version = "1.0.140", features = ["alloc", "arbitrary_precision", "float_roundtrip", "preserve_order", "raw_value", "unbounded_depth"] }
-sha2 = { version = "0.10.8", features = ["asm"] }
+sha2 = { version = "0.10.9", features = ["asm"] }
 similar = { version = "2.7.0", features = ["inline", "unicode"] }
 smallvec = { version = "1.14.0", default-features = false, features = ["const_new", "serde", "union"] }
 socket2 = { version = "0.5.9", default-features = false, features = ["all"] }
@@ -139,7 +139,7 @@ tokio-postgres = { git = "https://github.com/MaterializeInc/rust-postgres", feat
 tokio-stream = { version = "0.1.17", features = ["net", "sync"] }
 tokio-util = { version = "0.7.15", features = ["codec", "compat", "io", "time"] }
 toml_datetime = { version = "0.6.9", default-features = false, features = ["serde"] }
-toml_edit = { version = "0.22.24", features = ["serde"] }
+toml_edit = { version = "0.22.26", features = ["serde"] }
 tonic = { version = "0.12.3", features = ["gzip"] }
 tower-9fbad63c4bcf4a8f = { package = "tower", version = "0.4.13", features = ["balance", "buffer", "filter", "limit", "load-shed", "retry", "timeout", "util"] }
 tower-d8f496e17d97b5cb = { package = "tower", version = "0.5.2", default-features = false, features = ["buffer", "filter", "log", "make", "util"] }
@@ -236,7 +236,7 @@ num-bigint = { version = "0.4.6" }
 num-integer = { version = "0.1.46", features = ["i128"] }
 num-traits = { version = "0.2.19", features = ["i128", "libm"] }
 openssl = { version = "0.10.72", features = ["vendored"] }
-openssl-sys = { version = "0.9.107", default-features = false, features = ["vendored"] }
+openssl-sys = { version = "0.9.108", default-features = false, features = ["vendored"] }
 parking_lot = { version = "0.12.3", features = ["send_guard"] }
 parquet = { version = "53.3.0", default-features = false, features = ["arrow", "async", "brotli", "flate2", "lz4", "snap", "zstd"] }
 percent-encoding = { version = "2.3.1" }
@@ -267,7 +267,7 @@ scopeguard = { version = "1.2.0" }
 semver = { version = "1.0.26", features = ["serde"] }
 serde = { version = "1.0.219", features = ["alloc", "derive", "rc"] }
 serde_json = { version = "1.0.140", features = ["alloc", "arbitrary_precision", "float_roundtrip", "preserve_order", "raw_value", "unbounded_depth"] }
-sha2 = { version = "0.10.8", features = ["asm"] }
+sha2 = { version = "0.10.9", features = ["asm"] }
 similar = { version = "2.7.0", features = ["inline", "unicode"] }
 smallvec = { version = "1.14.0", default-features = false, features = ["const_new", "serde", "union"] }
 socket2 = { version = "0.5.9", default-features = false, features = ["all"] }
@@ -283,7 +283,7 @@ tokio-postgres = { git = "https://github.com/MaterializeInc/rust-postgres", feat
 tokio-stream = { version = "0.1.17", features = ["net", "sync"] }
 tokio-util = { version = "0.7.15", features = ["codec", "compat", "io", "time"] }
 toml_datetime = { version = "0.6.9", default-features = false, features = ["serde"] }
-toml_edit = { version = "0.22.24", features = ["serde"] }
+toml_edit = { version = "0.22.26", features = ["serde"] }
 tonic = { version = "0.12.3", features = ["gzip"] }
 tower-9fbad63c4bcf4a8f = { package = "tower", version = "0.4.13", features = ["balance", "buffer", "filter", "limit", "load-shed", "retry", "timeout", "util"] }
 tower-d8f496e17d97b5cb = { package = "tower", version = "0.5.2", default-features = false, features = ["buffer", "filter", "log", "make", "util"] }

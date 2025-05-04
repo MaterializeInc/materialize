@@ -76,7 +76,7 @@ seahash = "4"
 serde = { version = "1.0.219", features = ["derive"] }
 serde_json = { version = "1.0.127" }
 serde_bytes = { version = "0.11.17" }
-sha2 = "0.10.8"
+sha2 = "0.10.9"
 timely = "0.20.0"
 tokio = { version = "1.44.1", features = ["fs", "rt", "sync", "test-util"] }
 tokio-postgres = { version = "0.7.8", features = ["serde"] }

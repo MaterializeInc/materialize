@@ -62,7 +62,7 @@ serde_json = "1.0.140"
 timely = "0.20.0"
 thiserror = "2.0.12"
 tokio = { version = "1.44.1", default-features = false, features = ["macros", "sync", "rt", "rt-multi-thread", "time"] }
-tokio-metrics = "0.4.1"
+tokio-metrics = "0.4.2"
 tokio-stream = "0.1.17"
 tonic = "0.12.1"
 tracing = "0.1.37"
