@@ -1416,7 +1416,6 @@ pub mod datadriven {
     use mz_dyncfg::{ConfigUpdates, ConfigVal};
     use mz_persist::indexed::encoding::BlobTraceBatchPart;
     use mz_persist_types::codec_impls::{StringSchema, UnitSchema};
-    use tokio::sync::mpsc;
 
     use crate::batch::{
         BLOB_TARGET_SIZE, Batch, BatchBuilder, BatchBuilderConfig, BatchBuilderInternal,
