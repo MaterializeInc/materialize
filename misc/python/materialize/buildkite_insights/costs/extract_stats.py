@@ -62,6 +62,7 @@ aws_instance_cost = {
     "m7g.8xlarge": 1.306,
     "m6g.12xlarge": 1.848,
     "m7g.12xlarge": 1.958,
+    "m8g.12xlarge": 2.154,
     "m6i.4xlarge": 0.768,
     "m6i.12xlarge": 2.304,
     "m7i.8xlarge": 1.613,
