@@ -234,7 +234,7 @@ impl Blob for AzureBlob {
         let path = self.get_path(key);
         let blob = self.client.blob_client(path);
 
-        /// Fetch a the body of a single [`GetBlobResponse`].
+        /// Fetch the body of a single [`GetBlobResponse`].
         async fn fetch_chunk(
             response: GetBlobResponse,
             metrics: S3BlobMetrics,
