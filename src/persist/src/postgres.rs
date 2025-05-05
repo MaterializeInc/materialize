@@ -495,7 +495,12 @@ impl Consensus for PostgresConsensus {
         /// concurrently running compare and swap operations that are trying to
         /// evolve the shard.
         ///
-        /// It's performance has been benchmarked agaisnt Postgres 15.
+        /// It's performance has been benchmarked against Postgres 15.
+        ///
+        /// Note: The `ORDER BY` in the newer_exists CTE exists so we obtain a
+        /// row lock on the lowest possible sequence number. This ensures
+        /// minimal conflict between concurrently running truncate and append
+        /// operations.
         static POSTGRES_TRUNCATE_QUERY: &str = "
         WITH newer_exists AS (
             SELECT * FROM consensus
