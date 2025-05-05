@@ -482,6 +482,29 @@ where
         Ok(maintenance)
     }
 
+    /// Compacts input batches in bounded memory.
+    ///
+    /// The memory bound is broken into pieces:
+    ///     1. in-progress work
+    ///     2. fetching parts from runs
+    ///     3. additional in-flight requests to Blob
+    ///
+    /// 1. In-progress work is bounded by 2 * [BatchBuilderConfig::blob_target_size]. This
+    ///    usage is met at two mutually exclusive moments:
+    ///   * When reading in a part, we hold the columnar format in memory while writing its
+    ///     contents into a heap.
+    ///   * When writing a part, we hold a temporary updates buffer while encoding/writing
+    ///     it into a columnar format for Blob.
+    ///
+    /// 2. When compacting runs, only 1 part from each one is held in memory at a time.
+    ///    Compaction will determine an appropriate number of runs to compact together
+    ///    given the memory bound and accounting for the reservation in (1). A minimum
+    ///    of 2 * [BatchBuilderConfig::blob_target_size] of memory is expected, to be
+    ///    able to at least have the capacity to compact two runs together at a time,
+    ///    and more runs will be compacted together if more memory is available.
+    ///
+    /// 3. If there is excess memory after accounting for (1) and (2), we increase the
+    ///    number of outstanding parts we can keep in-flight to Blob.
     pub fn compact_stream(
         cfg: CompactConfig,
         blob: Arc<dyn Blob>,
@@ -493,6 +516,31 @@ where
     ) -> impl Stream<Item = Result<FueledMergeRes<T>, anyhow::Error>> {
         async_stream::stream! {
             let _ = Self::validate_req(&req)?;
+
+            // We introduced a fast-path optimization in https://github.com/MaterializeInc/materialize/pull/15363
+            // but had to revert it due to a very scary bug. Here we count how many of our compaction reqs
+            // could be eligible for the optimization to better understand whether it's worth trying to
+            // reintroduce it.
+            let mut single_nonempty_batch = None;
+            for batch in &req.inputs {
+                if batch.len > 0 {
+                    match single_nonempty_batch {
+                        None => single_nonempty_batch = Some(batch),
+                        Some(_previous_nonempty_batch) => {
+                            single_nonempty_batch = None;
+                            break;
+                        }
+                    }
+                }
+            }
+            if let Some(single_nonempty_batch) = single_nonempty_batch {
+                if single_nonempty_batch.run_splits.len() == 0
+                    && single_nonempty_batch.desc.since() != &Antichain::from_elem(T::minimum())
+                {
+                    metrics.compaction.fast_path_eligible.inc();
+                }
+            }
+
             assert!(cfg.compaction_memory_bound_bytes >= 4 * cfg.batch.blob_target_size);
 
             // Prepare memory bounds for compaction
@@ -582,156 +630,6 @@ where
                 applied += 1;
             }
         }
-    }
-
-    /// Compacts input batches in bounded memory.
-    ///
-    /// The memory bound is broken into pieces:
-    ///     1. in-progress work
-    ///     2. fetching parts from runs
-    ///     3. additional in-flight requests to Blob
-    ///
-    /// 1. In-progress work is bounded by 2 * [BatchBuilderConfig::blob_target_size]. This
-    ///    usage is met at two mutually exclusive moments:
-    ///   * When reading in a part, we hold the columnar format in memory while writing its
-    ///     contents into a heap.
-    ///   * When writing a part, we hold a temporary updates buffer while encoding/writing
-    ///     it into a columnar format for Blob.
-    ///
-    /// 2. When compacting runs, only 1 part from each one is held in memory at a time.
-    ///    Compaction will determine an appropriate number of runs to compact together
-    ///    given the memory bound and accounting for the reservation in (1). A minimum
-    ///    of 2 * [BatchBuilderConfig::blob_target_size] of memory is expected, to be
-    ///    able to at least have the capacity to compact two runs together at a time,
-    ///    and more runs will be compacted together if more memory is available.
-    ///
-    /// 3. If there is excess memory after accounting for (1) and (2), we increase the
-    ///    number of outstanding parts we can keep in-flight to Blob.
-    pub async fn compact_old(
-        cfg: CompactConfig,
-        blob: Arc<dyn Blob>,
-        metrics: Arc<Metrics>,
-        shard_metrics: Arc<ShardMetrics>,
-        isolated_runtime: Arc<IsolatedRuntime>,
-        req: CompactReq<T>,
-        write_schemas: Schemas<K, V>,
-    ) -> Result<CompactRes<T>, anyhow::Error> {
-        let () = Self::validate_req(&req)?;
-
-        // We introduced a fast-path optimization in https://github.com/MaterializeInc/materialize/pull/15363
-        // but had to revert it due to a very scary bug. Here we count how many of our compaction reqs
-        // could be eligible for the optimization to better understand whether it's worth trying to
-        // reintroduce it.
-        let mut single_nonempty_batch = None;
-        for batch in &req.inputs {
-            if batch.len > 0 {
-                match single_nonempty_batch {
-                    None => single_nonempty_batch = Some(batch),
-                    Some(_previous_nonempty_batch) => {
-                        single_nonempty_batch = None;
-                        break;
-                    }
-                }
-            }
-        }
-        if let Some(single_nonempty_batch) = single_nonempty_batch {
-            if single_nonempty_batch.run_splits.len() == 0
-                && single_nonempty_batch.desc.since() != &Antichain::from_elem(T::minimum())
-            {
-                metrics.compaction.fast_path_eligible.inc();
-            }
-        }
-
-        // compaction needs memory enough for at least 2 runs and 2 in-progress parts
-        assert!(cfg.compaction_memory_bound_bytes >= 4 * cfg.batch.blob_target_size);
-        // reserve space for the in-progress part to be held in-mem representation and columnar
-        let in_progress_part_reserved_memory_bytes = 2 * cfg.batch.blob_target_size;
-        // then remaining memory will go towards pulling down as many runs as we can
-        let run_reserved_memory_bytes =
-            cfg.compaction_memory_bound_bytes - in_progress_part_reserved_memory_bytes;
-
-        let mut all_parts = vec![];
-        let mut all_run_splits = vec![];
-        let mut all_run_meta = vec![];
-        let mut len = 0;
-
-        let ordered_runs =
-            Self::order_runs(&req, cfg.batch.preferred_order, &*blob, &*metrics).await?;
-        for (runs, run_chunk_max_memory_usage) in
-            Self::chunk_runs(&ordered_runs, &cfg, &*metrics, run_reserved_memory_bytes)
-        {
-            metrics.compaction.chunks_compacted.inc();
-            metrics
-                .compaction
-                .runs_compacted
-                .inc_by(u64::cast_from(runs.len()));
-
-            // given the runs we actually have in our batch, we might have extra memory
-            // available. we reserved enough space to always have 1 in-progress part in
-            // flight, but if we have excess, we can use it to increase our write parallelism
-            let extra_outstanding_parts = (run_reserved_memory_bytes
-                .saturating_sub(run_chunk_max_memory_usage))
-                / cfg.batch.blob_target_size;
-            let mut run_cfg = cfg.clone();
-            run_cfg.batch.batch_builder_max_outstanding_parts = 1 + extra_outstanding_parts;
-            let batch = Self::compact_runs(
-                &run_cfg,
-                &req.shard_id,
-                &req.desc,
-                runs,
-                Arc::clone(&blob),
-                Arc::clone(&metrics),
-                Arc::clone(&shard_metrics),
-                Arc::clone(&isolated_runtime),
-                write_schemas.clone(),
-            )
-            .await?;
-            let (parts, run_splits, run_meta, updates) =
-                (batch.parts, batch.run_splits, batch.run_meta, batch.len);
-            assert!(
-                (updates == 0 && parts.len() == 0) || (updates > 0 && parts.len() > 0),
-                "updates={}, parts={}",
-                updates,
-                parts.len(),
-            );
-
-            if updates == 0 {
-                continue;
-            }
-            // merge together parts and runs from each compaction round.
-            // parts are appended onto our existing vec, and then we shift
-            // the latest run offsets to account for prior parts.
-            //
-            // e.g. if we currently have 3 parts and 2 runs (including the implicit one from 0):
-            //         parts: [k0, k1, k2]
-            //         runs:  [    1     ]
-            //
-            // and we merge in another result with 2 parts and 2 runs:
-            //         parts: [k3, k4]
-            //         runs:  [    1]
-            //
-            // we our result will contain 5 parts and 4 runs:
-            //         parts: [k0, k1, k2, k3, k4]
-            //         runs:  [    1       3   4 ]
-            let run_offset = all_parts.len();
-            if all_parts.len() > 0 {
-                all_run_splits.push(run_offset);
-            }
-            all_run_splits.extend(run_splits.iter().map(|run_start| run_start + run_offset));
-            all_run_meta.extend(run_meta);
-            all_parts.extend(parts);
-            len += updates;
-        }
-
-        Ok(CompactRes {
-            output: HollowBatch::new(
-                req.desc.clone(),
-                all_parts,
-                len,
-                all_run_meta,
-                all_run_splits,
-            ),
-        })
     }
 
     /// Sorts and groups all runs from the inputs into chunks, each of which has been determined
@@ -1121,7 +1019,7 @@ mod tests {
             key: Arc::new(StringSchema),
             val: Arc::new(StringSchema),
         };
-        let res = Compactor::<String, String, u64, i64>::compact_old(
+        let stream = Compactor::<String, String, u64, i64>::compact_stream(
             CompactConfig::new(&write.cfg, write.shard_id()),
             Arc::clone(&write.blob),
             Arc::clone(&write.metrics),
@@ -1129,9 +1027,41 @@ mod tests {
             Arc::new(IsolatedRuntime::default()),
             req.clone(),
             schemas.clone(),
-        )
-        .await
-        .expect("compaction failed");
+        );
+
+        pin_mut!(stream);
+
+        let mut all_parts = vec![];
+        let mut all_run_splits = vec![];
+        let mut all_run_meta = vec![];
+        let mut len = 0;
+
+        while let Some(res) = stream.next().await {
+            let res = res.expect("compaction failed");
+            let (parts, updates, run_meta, run_splits) = (
+                res.output.parts,
+                res.output.len,
+                res.output.run_meta,
+                res.output.run_splits,
+            );
+            let run_offset = all_parts.len();
+            if !all_parts.is_empty() {
+                all_run_splits.push(run_offset);
+            }
+            all_run_splits.extend(run_splits.iter().map(|r| r + run_offset));
+            all_run_meta.extend(run_meta);
+            all_parts.extend(parts);
+            len += updates;
+        }
+        let res = CompactRes {
+            output: HollowBatch::new(
+                req.desc.clone(),
+                all_parts,
+                len,
+                all_run_meta,
+                all_run_splits,
+            ),
+        };
 
         assert_eq!(res.output.desc, req.desc);
         assert_eq!(res.output.len, 1);
@@ -1198,7 +1128,7 @@ mod tests {
             key: Arc::new(StringSchema),
             val: Arc::new(StringSchema),
         };
-        let res = Compactor::<String, String, Product<u32, u32>, i64>::compact_old(
+        let stream = Compactor::<String, String, Product<u32, u32>, i64>::compact_stream(
             CompactConfig::new(&write.cfg, write.shard_id()),
             Arc::clone(&write.blob),
             Arc::clone(&write.metrics),
@@ -1206,9 +1136,41 @@ mod tests {
             Arc::new(IsolatedRuntime::default()),
             req.clone(),
             schemas.clone(),
-        )
-        .await
-        .expect("compaction failed");
+        );
+
+        pin_mut!(stream);
+
+        let mut all_parts = vec![];
+        let mut all_run_splits = vec![];
+        let mut all_run_meta = vec![];
+        let mut len = 0;
+
+        while let Some(res) = stream.next().await {
+            let res = res.expect("compaction failed");
+            let (parts, updates, run_meta, run_splits) = (
+                res.output.parts,
+                res.output.len,
+                res.output.run_meta,
+                res.output.run_splits,
+            );
+            let run_offset = all_parts.len();
+            if !all_parts.is_empty() {
+                all_run_splits.push(run_offset);
+            }
+            all_run_splits.extend(run_splits.iter().map(|r| r + run_offset));
+            all_run_meta.extend(run_meta);
+            all_parts.extend(parts);
+            len += updates;
+        }
+        let res = CompactRes {
+            output: HollowBatch::new(
+                req.desc.clone(),
+                all_parts,
+                len,
+                all_run_meta,
+                all_run_splits,
+            ),
+        };
 
         assert_eq!(res.output.desc, req.desc);
         assert_eq!(res.output.len, 2);
