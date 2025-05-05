@@ -26,6 +26,7 @@ clap = { version = "4.5.23", features = ["derive", "env"] }
 differential-dataflow = "0.13.3"
 futures = "0.3.25"
 humantime = "2.1.0"
+mz-dyncfg = { path = "../dyncfg" }
 mz-http-util = { path = "../http-util" }
 mz-orchestrator-tracing = { path = "../orchestrator-tracing" }
 mz-ore = { path = "../ore", features = ["bytes_", "network", "tracing_", "test"] }
