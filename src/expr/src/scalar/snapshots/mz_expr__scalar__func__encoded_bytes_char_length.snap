@@ -1,6 +1,6 @@
 ---
 source: src/expr/src/scalar/func.rs
-expression: "#[sqlfunc(\n    is_monotone = (false, false),\n    output_type = i32,\n    is_infix_op = false,\n    sqlname = \"length\",\n    propagates_nulls = true\n)]\nfn encoded_bytes_char_length<'a>(\n    a: Datum<'a>,\n    b: Datum<'a>,\n) -> Result<Datum<'a>, EvalError> {\n    let encoding_name = b.unwrap_str().to_lowercase().replace('_', \"-\").into_boxed_str();\n    let enc = match encoding_from_whatwg_label(&encoding_name) {\n        Some(enc) => enc,\n        None => return Err(EvalError::InvalidEncodingName(encoding_name)),\n    };\n    let decoded_string = match enc.decode(a.unwrap_bytes(), DecoderTrap::Strict) {\n        Ok(s) => s,\n        Err(e) => {\n            return Err(EvalError::InvalidByteSequence {\n                byte_sequence: e.into(),\n                encoding_name,\n            });\n        }\n    };\n    let count = decoded_string.chars().count();\n    match i32::try_from(count) {\n        Ok(l) => Ok(Datum::from(l)),\n        Err(_) => Err(EvalError::Int32OutOfRange(count.to_string().into())),\n    }\n}\n"
+expression: "#[sqlfunc(output_type = \"i32\", sqlname = \"length\", propagates_nulls = true)]\nfn encoded_bytes_char_length<'a>(\n    a: Datum<'a>,\n    b: Datum<'a>,\n) -> Result<Datum<'a>, EvalError> {\n    let encoding_name = b.unwrap_str().to_lowercase().replace('_', \"-\").into_boxed_str();\n    let enc = match encoding_from_whatwg_label(&encoding_name) {\n        Some(enc) => enc,\n        None => return Err(EvalError::InvalidEncodingName(encoding_name)),\n    };\n    let decoded_string = match enc.decode(a.unwrap_bytes(), DecoderTrap::Strict) {\n        Ok(s) => s,\n        Err(e) => {\n            return Err(EvalError::InvalidByteSequence {\n                byte_sequence: e.into(),\n                encoding_name,\n            });\n        }\n    };\n    let count = decoded_string.chars().count();\n    match i32::try_from(count) {\n        Ok(l) => Ok(Datum::from(l)),\n        Err(_) => Err(EvalError::Int32OutOfRange(count.to_string().into())),\n    }\n}\n"
 ---
 #[derive(
     proptest_derive::Arbitrary,
@@ -48,12 +48,6 @@ impl<'a> crate::func::binary::EagerBinaryFunc<'a> for EncodedBytesCharLength {
     }
     fn introduces_nulls(&self) -> bool {
         <i32 as ::mz_repr::DatumType<'_, ()>>::nullable()
-    }
-    fn is_infix_op(&self) -> bool {
-        false
-    }
-    fn is_monotone(&self) -> (bool, bool) {
-        (false, false)
     }
     fn propagates_nulls(&self) -> bool {
         true

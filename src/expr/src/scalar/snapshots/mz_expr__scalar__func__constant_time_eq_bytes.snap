@@ -1,6 +1,6 @@
 ---
 source: src/expr/src/scalar/func.rs
-expression: "#[sqlfunc(\n    is_monotone = \"(false, false)\",\n    output_type = \"bool\",\n    is_infix_op = false,\n    sqlname = \"constant_time_compare_bytes\",\n    propagates_nulls = true\n)]\npub fn constant_time_eq_bytes<'a>(\n    a: Datum<'a>,\n    b: Datum<'a>,\n) -> Result<Datum<'a>, EvalError> {\n    let a_bytes = a.unwrap_bytes();\n    let b_bytes = b.unwrap_bytes();\n    Ok(Datum::from(bool::from(a_bytes.ct_eq(b_bytes))))\n}\n"
+expression: "#[sqlfunc(\n    output_type = \"bool\",\n    sqlname = \"constant_time_compare_bytes\",\n    propagates_nulls = true\n)]\npub fn constant_time_eq_bytes<'a>(\n    a: Datum<'a>,\n    b: Datum<'a>,\n) -> Result<Datum<'a>, EvalError> {\n    let a_bytes = a.unwrap_bytes();\n    let b_bytes = b.unwrap_bytes();\n    Ok(Datum::from(bool::from(a_bytes.ct_eq(b_bytes))))\n}\n"
 ---
 #[derive(
     proptest_derive::Arbitrary,
@@ -48,12 +48,6 @@ impl<'a> crate::func::binary::EagerBinaryFunc<'a> for ConstantTimeEqBytes {
     }
     fn introduces_nulls(&self) -> bool {
         <bool as ::mz_repr::DatumType<'_, ()>>::nullable()
-    }
-    fn is_infix_op(&self) -> bool {
-        false
-    }
-    fn is_monotone(&self) -> (bool, bool) {
-        (false, false)
     }
     fn propagates_nulls(&self) -> bool {
         true

@@ -1,6 +1,6 @@
 ---
 source: src/expr/src/scalar/func.rs
-expression: "#[sqlfunc(\n    is_monotone = \"(false, false)\",\n    output_type = \"bool\",\n    is_infix_op = true,\n    sqlname = \"@>\",\n    propagates_nulls = true\n)]\nfn jsonb_contains_jsonb<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {\n    fn contains(a: Datum, b: Datum, at_top_level: bool) -> bool {\n        match (a, b) {\n            (Datum::JsonNull, Datum::JsonNull) => true,\n            (Datum::False, Datum::False) => true,\n            (Datum::True, Datum::True) => true,\n            (Datum::Numeric(a), Datum::Numeric(b)) => a == b,\n            (Datum::String(a), Datum::String(b)) => a == b,\n            (Datum::List(a), Datum::List(b)) => {\n                b.iter()\n                    .all(|b_elem| a.iter().any(|a_elem| contains(a_elem, b_elem, false)))\n            }\n            (Datum::Map(a), Datum::Map(b)) => {\n                b.iter()\n                    .all(|(b_key, b_val)| {\n                        a.iter()\n                            .any(|(a_key, a_val)| {\n                                (a_key == b_key) && contains(a_val, b_val, false)\n                            })\n                    })\n            }\n            (Datum::List(a), b) => {\n                at_top_level && a.iter().any(|a_elem| contains(a_elem, b, false))\n            }\n            _ => false,\n        }\n    }\n    contains(a, b, true).into()\n}\n"
+expression: "#[sqlfunc(\n    output_type = \"bool\",\n    is_infix_op = true,\n    sqlname = \"@>\",\n    propagates_nulls = true\n)]\nfn jsonb_contains_jsonb<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {\n    fn contains(a: Datum, b: Datum, at_top_level: bool) -> bool {\n        match (a, b) {\n            (Datum::JsonNull, Datum::JsonNull) => true,\n            (Datum::False, Datum::False) => true,\n            (Datum::True, Datum::True) => true,\n            (Datum::Numeric(a), Datum::Numeric(b)) => a == b,\n            (Datum::String(a), Datum::String(b)) => a == b,\n            (Datum::List(a), Datum::List(b)) => {\n                b.iter()\n                    .all(|b_elem| a.iter().any(|a_elem| contains(a_elem, b_elem, false)))\n            }\n            (Datum::Map(a), Datum::Map(b)) => {\n                b.iter()\n                    .all(|(b_key, b_val)| {\n                        a.iter()\n                            .any(|(a_key, a_val)| {\n                                (a_key == b_key) && contains(a_val, b_val, false)\n                            })\n                    })\n            }\n            (Datum::List(a), b) => {\n                at_top_level && a.iter().any(|a_elem| contains(a_elem, b, false))\n            }\n            _ => false,\n        }\n    }\n    contains(a, b, true).into()\n}\n"
 ---
 #[derive(
     proptest_derive::Arbitrary,
@@ -51,9 +51,6 @@ impl<'a> crate::func::binary::EagerBinaryFunc<'a> for JsonbContainsJsonb {
     }
     fn is_infix_op(&self) -> bool {
         true
-    }
-    fn is_monotone(&self) -> (bool, bool) {
-        (false, false)
     }
     fn propagates_nulls(&self) -> bool {
         true

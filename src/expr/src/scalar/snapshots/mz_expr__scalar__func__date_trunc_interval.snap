@@ -1,6 +1,6 @@
 ---
 source: src/expr/src/scalar/func.rs
-expression: "#[sqlfunc(\n    is_monotone = \"(false, false)\",\n    output_type = \"Interval\",\n    is_infix_op = false,\n    sqlname = \"date_trunciv\",\n    propagates_nulls = true\n)]\nfn date_trunc_interval<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {\n    let mut interval = b.unwrap_interval();\n    let units = a.unwrap_str();\n    let dtf = units.parse().map_err(|_| EvalError::UnknownUnits(units.into()))?;\n    interval\n        .truncate_low_fields(dtf, Some(0), RoundBehavior::Truncate)\n        .expect(\n            \"truncate_low_fields should not fail with max_precision 0 and RoundBehavior::Truncate\",\n        );\n    Ok(interval.into())\n}\n"
+expression: "#[sqlfunc(output_type = \"Interval\", sqlname = \"date_trunciv\", propagates_nulls = true)]\nfn date_trunc_interval<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {\n    let mut interval = b.unwrap_interval();\n    let units = a.unwrap_str();\n    let dtf = units.parse().map_err(|_| EvalError::UnknownUnits(units.into()))?;\n    interval\n        .truncate_low_fields(dtf, Some(0), RoundBehavior::Truncate)\n        .expect(\n            \"truncate_low_fields should not fail with max_precision 0 and RoundBehavior::Truncate\",\n        );\n    Ok(interval.into())\n}\n"
 ---
 #[derive(
     proptest_derive::Arbitrary,
@@ -48,12 +48,6 @@ impl<'a> crate::func::binary::EagerBinaryFunc<'a> for DateTruncInterval {
     }
     fn introduces_nulls(&self) -> bool {
         <Interval as ::mz_repr::DatumType<'_, ()>>::nullable()
-    }
-    fn is_infix_op(&self) -> bool {
-        false
-    }
-    fn is_monotone(&self) -> (bool, bool) {
-        (false, false)
     }
     fn propagates_nulls(&self) -> bool {
         true

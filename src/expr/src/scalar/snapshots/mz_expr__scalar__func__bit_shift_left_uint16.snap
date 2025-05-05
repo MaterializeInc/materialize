@@ -1,6 +1,6 @@
 ---
 source: src/expr/src/scalar/func.rs
-expression: "#[sqlfunc(\n    is_monotone = (false, false),\n    output_type = u16,\n    is_infix_op = true,\n    sqlname = \"<<\",\n    propagates_nulls = true\n)]\n#[allow(clippy::as_conversions)]\nfn bit_shift_left_uint16<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {\n    let lhs: u32 = a.unwrap_uint16() as u32;\n    let rhs: u32 = b.unwrap_uint32();\n    Datum::from(lhs.wrapping_shl(rhs) as u16)\n}\n"
+expression: "#[sqlfunc(\n    output_type = \"u16\",\n    is_infix_op = true,\n    sqlname = \"<<\",\n    propagates_nulls = true\n)]\n#[allow(clippy::as_conversions)]\nfn bit_shift_left_uint16<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {\n    let lhs: u32 = a.unwrap_uint16() as u32;\n    let rhs: u32 = b.unwrap_uint32();\n    Datum::from(lhs.wrapping_shl(rhs) as u16)\n}\n"
 ---
 #[derive(
     proptest_derive::Arbitrary,
@@ -51,9 +51,6 @@ impl<'a> crate::func::binary::EagerBinaryFunc<'a> for BitShiftLeftUint16 {
     }
     fn is_infix_op(&self) -> bool {
         true
-    }
-    fn is_monotone(&self) -> (bool, bool) {
-        (false, false)
     }
     fn propagates_nulls(&self) -> bool {
         true

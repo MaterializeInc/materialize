@@ -1,6 +1,6 @@
 ---
 source: src/expr/src/scalar/func.rs
-expression: "#[sqlfunc(\n    is_monotone = \"(false, false)\",\n    output_type = \"f64\",\n    is_infix_op = false,\n    propagates_nulls = true\n)]\nfn power<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {\n    let a = a.unwrap_float64();\n    let b = b.unwrap_float64();\n    if a == 0.0 && b.is_sign_negative() {\n        return Err(EvalError::Undefined(\"zero raised to a negative power\".into()));\n    }\n    if a.is_sign_negative() && b.fract() != 0.0 {\n        return Err(EvalError::ComplexOutOfRange(\"pow\".into()));\n    }\n    let res = a.powf(b);\n    if res.is_infinite() {\n        return Err(EvalError::FloatOverflow);\n    }\n    if res == 0.0 && a != 0.0 {\n        return Err(EvalError::FloatUnderflow);\n    }\n    Ok(Datum::from(res))\n}\n"
+expression: "#[sqlfunc(output_type = \"f64\", propagates_nulls = true)]\nfn power<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {\n    let a = a.unwrap_float64();\n    let b = b.unwrap_float64();\n    if a == 0.0 && b.is_sign_negative() {\n        return Err(EvalError::Undefined(\"zero raised to a negative power\".into()));\n    }\n    if a.is_sign_negative() && b.fract() != 0.0 {\n        return Err(EvalError::ComplexOutOfRange(\"pow\".into()));\n    }\n    let res = a.powf(b);\n    if res.is_infinite() {\n        return Err(EvalError::FloatOverflow);\n    }\n    if res == 0.0 && a != 0.0 {\n        return Err(EvalError::FloatUnderflow);\n    }\n    Ok(Datum::from(res))\n}\n"
 ---
 #[derive(
     proptest_derive::Arbitrary,
@@ -48,12 +48,6 @@ impl<'a> crate::func::binary::EagerBinaryFunc<'a> for Power {
     }
     fn introduces_nulls(&self) -> bool {
         <f64 as ::mz_repr::DatumType<'_, ()>>::nullable()
-    }
-    fn is_infix_op(&self) -> bool {
-        false
-    }
-    fn is_monotone(&self) -> (bool, bool) {
-        (false, false)
     }
     fn propagates_nulls(&self) -> bool {
         true

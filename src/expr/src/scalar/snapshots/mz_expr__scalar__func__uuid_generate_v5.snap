@@ -1,6 +1,6 @@
 ---
 source: src/expr/src/scalar/func.rs
-expression: "#[sqlfunc(\n    is_monotone = \"(false, false)\",\n    output_type = \"uuid::Uuid\",\n    is_infix_op = false,\n    propagates_nulls = true\n)]\nfn uuid_generate_v5<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {\n    let a = a.unwrap_uuid();\n    let b = b.unwrap_str();\n    let res = uuid::Uuid::new_v5(&a, b.as_bytes());\n    Datum::Uuid(res)\n}\n"
+expression: "#[sqlfunc(output_type = \"uuid::Uuid\", propagates_nulls = true)]\nfn uuid_generate_v5<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {\n    let a = a.unwrap_uuid();\n    let b = b.unwrap_str();\n    let res = uuid::Uuid::new_v5(&a, b.as_bytes());\n    Datum::Uuid(res)\n}\n"
 ---
 #[derive(
     proptest_derive::Arbitrary,
@@ -48,12 +48,6 @@ impl<'a> crate::func::binary::EagerBinaryFunc<'a> for UuidGenerateV5 {
     }
     fn introduces_nulls(&self) -> bool {
         <uuid::Uuid as ::mz_repr::DatumType<'_, ()>>::nullable()
-    }
-    fn is_infix_op(&self) -> bool {
-        false
-    }
-    fn is_monotone(&self) -> (bool, bool) {
-        (false, false)
     }
     fn propagates_nulls(&self) -> bool {
         true

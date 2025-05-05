@@ -1,6 +1,6 @@
 ---
 source: src/expr/src/scalar/func.rs
-expression: "#[sqlfunc(\n    is_monotone = (false, false),\n    output_type = u32,\n    is_infix_op = true,\n    sqlname = \"&\",\n    propagates_nulls = true\n)]\nfn bit_and_uint32<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {\n    Datum::from(a.unwrap_uint32() & b.unwrap_uint32())\n}\n"
+expression: "#[sqlfunc(\n    output_type = \"u32\",\n    is_infix_op = true,\n    sqlname = \"&\",\n    propagates_nulls = true\n)]\nfn bit_and_uint32<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {\n    Datum::from(a.unwrap_uint32() & b.unwrap_uint32())\n}\n"
 ---
 #[derive(
     proptest_derive::Arbitrary,
@@ -51,9 +51,6 @@ impl<'a> crate::func::binary::EagerBinaryFunc<'a> for BitAndUint32 {
     }
     fn is_infix_op(&self) -> bool {
         true
-    }
-    fn is_monotone(&self) -> (bool, bool) {
-        (false, false)
     }
     fn propagates_nulls(&self) -> bool {
         true

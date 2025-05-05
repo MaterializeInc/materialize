@@ -1,6 +1,6 @@
 ---
 source: src/expr/src/scalar/func.rs
-expression: "#[sqlfunc(\n    is_monotone = \"(false, false)\",\n    output_type = \"Numeric\",\n    is_infix_op = false,\n    sqlname = \"log\",\n    propagates_nulls = true\n)]\nfn log_base_numeric<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {\n    let mut a = a.unwrap_numeric().0;\n    log_guard_numeric(&a, \"log\")?;\n    let mut b = b.unwrap_numeric().0;\n    log_guard_numeric(&b, \"log\")?;\n    let mut cx = numeric::cx_datum();\n    cx.ln(&mut a);\n    cx.ln(&mut b);\n    cx.div(&mut b, &a);\n    if a.is_zero() {\n        Err(EvalError::DivisionByZero)\n    } else {\n        cx.set_precision(usize::from(numeric::NUMERIC_DATUM_MAX_PRECISION - 1))\n            .expect(\"reducing precision below max always succeeds\");\n        let mut integral_check = b.clone();\n        cx.reduce(&mut integral_check);\n        let mut b = if integral_check.exponent() >= 0 { integral_check } else { b };\n        numeric::munge_numeric(&mut b).unwrap();\n        Ok(Datum::from(b))\n    }\n}\n"
+expression: "#[sqlfunc(output_type = \"Numeric\", sqlname = \"log\", propagates_nulls = true)]\nfn log_base_numeric<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {\n    let mut a = a.unwrap_numeric().0;\n    log_guard_numeric(&a, \"log\")?;\n    let mut b = b.unwrap_numeric().0;\n    log_guard_numeric(&b, \"log\")?;\n    let mut cx = numeric::cx_datum();\n    cx.ln(&mut a);\n    cx.ln(&mut b);\n    cx.div(&mut b, &a);\n    if a.is_zero() {\n        Err(EvalError::DivisionByZero)\n    } else {\n        cx.set_precision(usize::from(numeric::NUMERIC_DATUM_MAX_PRECISION - 1))\n            .expect(\"reducing precision below max always succeeds\");\n        let mut integral_check = b.clone();\n        cx.reduce(&mut integral_check);\n        let mut b = if integral_check.exponent() >= 0 { integral_check } else { b };\n        numeric::munge_numeric(&mut b).unwrap();\n        Ok(Datum::from(b))\n    }\n}\n"
 ---
 #[derive(
     proptest_derive::Arbitrary,
@@ -48,12 +48,6 @@ impl<'a> crate::func::binary::EagerBinaryFunc<'a> for LogBaseNumeric {
     }
     fn introduces_nulls(&self) -> bool {
         <Numeric as ::mz_repr::DatumType<'_, ()>>::nullable()
-    }
-    fn is_infix_op(&self) -> bool {
-        false
-    }
-    fn is_monotone(&self) -> (bool, bool) {
-        (false, false)
     }
     fn propagates_nulls(&self) -> bool {
         true
