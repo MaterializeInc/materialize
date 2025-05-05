@@ -36,9 +36,7 @@ from materialize.mzcompose.services.materialized import Materialized
 from materialize.mzcompose.services.minio import Mc, Minio
 from materialize.mzcompose.services.mysql import MySql
 from materialize.mzcompose.services.persistcli import Persistcli
-from materialize.mzcompose.services.postgres import (
-    Postgres,
-)
+from materialize.mzcompose.services.postgres import Postgres, PostgresMetadata
 from materialize.mzcompose.services.schema_registry import SchemaRegistry
 from materialize.mzcompose.services.sql_server import SqlServer
 from materialize.mzcompose.services.ssh_bastion_host import SshBastionHost
@@ -52,6 +50,7 @@ TESTDRIVE_DEFAULT_TIMEOUT = os.environ.get("PLATFORM_CHECKS_TD_TIMEOUT", "300s")
 
 def create_mzs(
     azurite: bool,
+    postgres_consensus: bool,
     default_replication_factor: int,
     additional_system_parameter_defaults: dict[str, str] | None = None,
 ) -> list[TestdriveService | Materialized]:
@@ -63,7 +62,7 @@ def create_mzs(
             blob_store_is_azure=azurite,
             sanity_restart=False,
             volumes_extra=["secrets:/share/secrets"],
-            metadata_store="cockroach",
+            metadata_store="postgres-metadata" if postgres_consensus else "cockroach",
             additional_system_parameter_defaults=additional_system_parameter_defaults,
             default_replication_factor=default_replication_factor,
         )
@@ -82,16 +81,18 @@ def create_mzs(
                 f"--var=default-storage-size={Materialized.Size.DEFAULT_SIZE}-1",
             ],
             volumes_extra=["secrets:/share/secrets"],
-            metadata_store="cockroach",
+            metadata_store="postgres-metadata" if postgres_consensus else "cockroach",
         )
     ]
 
 
 SERVICES = [
     TestCerts(),
-    # TODO(def-): Switch to CockroachOrPostgres after we have 4 versions
-    # support Postgres as metadata store
     Cockroach(
+        # Workaround for database-issues#5899
+        restart="on-failure:5",
+    ),
+    PostgresMetadata(
         # Workaround for database-issues#5899
         restart="on-failure:5",
     ),
@@ -142,7 +143,7 @@ SERVICES = [
     Clusterd(
         name="clusterd_compute_1"
     ),  # Started by some Scenarios, defined here only for the teardown
-    *create_mzs(azurite=False, default_replication_factor=1),
+    *create_mzs(azurite=False, postgres_consensus=False, default_replication_factor=1),
     Persistcli(),
     SshBastionHost(),
 ]
@@ -159,7 +160,6 @@ class ExecutionMode(Enum):
 
 def setup(c: Composition) -> None:
     c.up("testdrive", persistent=True)
-    c.up(c.metadata_store())
 
     c.up(
         "test-certs",
@@ -226,7 +226,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     parser.add_argument(
         "--features",
         nargs="*",
-        help="A list of features (e.g. azurite, sql_server), to enable.",
+        help="A list of features (e.g. azurite, sql_server, postgres_consensus), to enable.",
     )
 
     parser.add_argument(
@@ -257,6 +257,11 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     if features.sql_server_enabled():
         c.up("sql-server")
 
+    if features.postgres_consensus_enabled():
+        c.up("postgres-metadata")
+    else:
+        c.up("cockroach")
+
     checks.sort(key=lambda ch: ch.__name__)
     checks = buildkite.shard_list(checks, lambda ch: ch.__name__)
     if buildkite.get_parallelism_index() != 0 or buildkite.get_parallelism_count() != 1:
@@ -273,6 +278,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     with c.override(
         *create_mzs(
             features.azurite_enabled(),
+            features.postgres_consensus_enabled(),
             args.default_replication_factor,
             additional_system_parameter_defaults,
         )

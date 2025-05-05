@@ -36,6 +36,7 @@ rust_binary(
     }),
     version = "0.0.0",
     deps = [
+        "//src/dyncfg:mz_dyncfg",
         "//src/http-util:mz_http_util",
         "//src/orchestrator-tracing:mz_orchestrator_tracing",
         "//src/ore:mz_ore",

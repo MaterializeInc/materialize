@@ -8598,6 +8598,7 @@ dependencies = [
  "differential-dataflow",
  "futures",
  "humantime",
+ "mz-dyncfg",
  "mz-http-util",
  "mz-orchestrator-tracing",
  "mz-ore",

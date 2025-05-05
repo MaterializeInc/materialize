@@ -15,6 +15,7 @@
 class Features:
     AZURITE = "azurite"
     SQL_SERVER = "sql_server"
+    POSTGRES_CONSENSUS = "postgres_consensus"
 
     def __init__(self, features):
         self.features = features
@@ -24,3 +25,6 @@ class Features:
 
     def sql_server_enabled(self) -> bool:
         return self.features and self.SQL_SERVER in self.features
+
+    def postgres_consensus_enabled(self) -> bool:
+        return self.features and self.POSTGRES_CONSENSUS in self.features
