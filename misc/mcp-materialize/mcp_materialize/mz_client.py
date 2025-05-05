@@ -35,7 +35,7 @@ logging.basicConfig(
     format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
 )
 
-TOOL_QUERY = base = sql.SQL(
+TOOL_QUERY = base = dedent(
     """
         WITH tools AS (
             SELECT
@@ -194,7 +194,7 @@ class MzClient:
                             """
                         DECLARE c CURSOR FOR
                         SUBSCRIBE (
-                            SELECT count(*)
+                            SELECT count(*) AS eligible_tools
                             FROM mz_objects o
                             JOIN mz_indexes i ON o.id = i.on_id
                             JOIN mz_internal.mz_comments cts ON cts.id = o.id
