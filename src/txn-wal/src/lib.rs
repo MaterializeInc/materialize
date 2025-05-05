@@ -209,7 +209,7 @@ use differential_dataflow::Hashable;
 use differential_dataflow::difference::Semigroup;
 use differential_dataflow::lattice::Lattice;
 use mz_dyncfg::ConfigSet;
-use mz_ore::instrument;
+use mz_ore::{Overflowing, instrument};
 use mz_persist_client::ShardId;
 use mz_persist_client::critical::SinceHandle;
 use mz_persist_client::error::UpperMismatch;
@@ -231,6 +231,10 @@ pub mod txn_cache;
 pub mod txn_read;
 pub mod txn_write;
 pub mod txns;
+
+/// The diff type used by the transactions system. (This could theoretically differ from the diff
+/// type used by the batches in the transactions, though in practice it is the same.)
+pub type TxnDiff = Overflowing<i64>;
 
 mod proto {
     use bytes::Bytes;
@@ -526,7 +530,7 @@ async fn apply_caa<K, V, T, D>(
 
 #[instrument(level = "debug", fields(shard=%txns_since.shard_id(), ts=?new_since_ts))]
 pub(crate) async fn cads<T, O, C>(
-    txns_since: &mut SinceHandle<C::Key, C::Val, T, i64, O>,
+    txns_since: &mut SinceHandle<C::Key, C::Val, T, TxnDiff, O>,
     new_since_ts: T,
 ) where
     T: Timestamp + Lattice + TotalOrder + StepForward + Codec64 + Sync,

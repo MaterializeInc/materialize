@@ -34,8 +34,8 @@ use tokio::sync::{mpsc, oneshot};
 use tracing::{debug, warn};
 use uuid::Uuid;
 
-use crate::TxnsCodecDefault;
 use crate::txn_cache::{TxnsCache, TxnsCacheState};
+use crate::{TxnDiff, TxnsCodecDefault};
 
 /// A token exchangeable for a data shard snapshot.
 ///
@@ -516,7 +516,7 @@ impl<T> Drop for CancelWaitOnDrop<T> {
 #[derive(Debug)]
 enum TxnsReadCmd<T> {
     Updates {
-        entries: Vec<(TxnsEntry, T, i64)>,
+        entries: Vec<(TxnsEntry, T, TxnDiff)>,
         frontier: T,
     },
     DataSnapshot {
@@ -795,11 +795,11 @@ where
 /// when receiving a progress update.
 #[derive(Debug)]
 struct TxnsSubscribeTask<T, C: TxnsCodec = TxnsCodecDefault> {
-    txns_subscribe: Subscribe<C::Key, C::Val, T, i64>,
+    txns_subscribe: Subscribe<C::Key, C::Val, T, TxnDiff>,
 
     /// Staged update that we will consume and forward to the [TxnsReadTask]
     /// when we receive a progress update.
-    buf: Vec<(TxnsEntry, T, i64)>,
+    buf: Vec<(TxnsEntry, T, TxnDiff)>,
 
     /// For sending updates to the main [TxnsReadTask].
     tx: mpsc::UnboundedSender<TxnsReadCmd<T>>,
@@ -836,19 +836,20 @@ where
         tx: mpsc::UnboundedSender<TxnsReadCmd<T>>,
     ) -> (Self, TxnsCacheState<T>) {
         let (txns_key_schema, txns_val_schema) = C::schemas();
-        let txns_read: ReadHandle<<C as TxnsCodec>::Key, <C as TxnsCodec>::Val, T, i64> = client
-            .open_leased_reader(
-                txns_id,
-                Arc::new(txns_key_schema),
-                Arc::new(txns_val_schema),
-                Diagnostics {
-                    shard_name: "txns".to_owned(),
-                    handle_purpose: "read txns".to_owned(),
-                },
-                USE_CRITICAL_SINCE_TXN.get(client.dyncfgs()),
-            )
-            .await
-            .expect("txns schema shouldn't change");
+        let txns_read: ReadHandle<<C as TxnsCodec>::Key, <C as TxnsCodec>::Val, T, TxnDiff> =
+            client
+                .open_leased_reader(
+                    txns_id,
+                    Arc::new(txns_key_schema),
+                    Arc::new(txns_val_schema),
+                    Diagnostics {
+                        shard_name: "txns".to_owned(),
+                        handle_purpose: "read txns".to_owned(),
+                    },
+                    USE_CRITICAL_SINCE_TXN.get(client.dyncfgs()),
+                )
+                .await
+                .expect("txns schema shouldn't change");
         let (state, txns_subscribe) = TxnsCacheState::init::<C>(only_data_id, txns_read).await;
         let subscribe_task = TxnsSubscribeTask {
             txns_subscribe,
