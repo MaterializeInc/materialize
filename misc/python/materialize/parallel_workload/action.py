@@ -1774,7 +1774,7 @@ class CreateWebhookSourceAction(Action):
         result = super().errors_to_ignore(exe)
         if exe.db.scenario in (Scenario.Kill, Scenario.ZeroDowntimeDeploy):
             result.extend(
-                ["cannot create source in cluster with more than one replica"]
+                ["cannot create webhook source in cluster with more than one replica"]
             )
         return result
 
