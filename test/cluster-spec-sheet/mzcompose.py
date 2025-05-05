@@ -165,7 +165,7 @@ class TpccScenario(Scenario):
 
         runner.measure(
             "arrangement_formation",
-            "create_index",
+            "create_index_primary_key",
             query=[
                 "CREATE DEFAULT INDEX ON lineitem;",
                 "SELECT count(*) > 0 FROM lineitem;",
@@ -551,6 +551,15 @@ class AuctionScenario(Scenario):
             size_of_index="bids_id_idx",
             query=[
                 "SELECT sum(amount) FROM bids;",
+            ],
+        )
+
+        runner.measure(
+            "primitive_operators",
+            "bids_count",
+            size_of_index="bids_id_idx",
+            query=[
+                "SELECT count(1) FROM bids;",
             ],
         )
 
