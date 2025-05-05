@@ -9,44 +9,81 @@ menu:
     parent: 'commands'
 ---
 
-`CREATE TABLE` defines a table that is persisted in durable storage and can be
-written to, updated and seamlessly joined with other tables, views or sources.
+`CREATE TABLE` defines a table that is persisted in durable storage. In
+Materialize, you can create:
 
-Tables in Materialize are similar to tables in standard relational databases:
-they consist of rows and columns where the columns are fixed when the table is
-created but rows can be added to at will via [`INSERT`](../insert) statements.
+- User-populated tables. User-populated tables can be written to (i.e.,
+  [`INSERT`]/[`UPDATE`]/[`DELETE`]) by the user.
 
-{{< warning >}}
-At the moment, tables have many [known limitations](#known-limitations). In most
-situations, you should use [sources](/sql/create-source) instead.
-{{< /warning >}}
+- [Source-populated](/concepts/sources/) tables. Source-populated tables cannot
+  be written to by the user; they are populated through data ingestion from a
+  source.
 
-[//]: # "TODO(morsapaes) Bring back When to use a table? once there's more
-clarity around best practices."
+Tables can be joined with other tables, materialized views, and views. Tables in
+Materialize are similar to tables in standard relational databases: they consist
+of rows and columns where the columns are fixed when the table is created.
 
 ## Syntax
 
-{{< diagram "create-table.svg" >}}
+{{< tabs >}}
 
-### `col_option`
+{{< tab "User-populated tables" >}}
 
-{{< diagram "col-option.svg" >}}
+To create a table that users can write to (i.e., perform
+[`INSERT`](/sql/insert/)/[`UPDATE`](/sql/update/)/[`DELETE`](/sql/delete/)
+operations):
 
-### `with_options`
+```mzsql
+CREATE [TEMP|TEMPORARY] TABLE <table_name> (
+  <column_name> <column_type> [NOT NULL][DEFAULT <default_expr>]
+  [, ...]
+)
+[WITH (
+  RETAIN HISTORY [=] FOR <duration>
+)]
+;
+```
 
-{{< diagram "with-options-retain-history.svg" >}}
+{{% yaml-table data="syntax_options/create_table_options_user_populated" %}}
 
-Field | Use
-------|-----
-**TEMP** / **TEMPORARY** | Mark the table as [temporary](#temporary-tables).
-_table&lowbar;name_ | A name for the table.
-_col&lowbar;name_ | The name of the column to be created in the table.
-_col&lowbar;type_ | The data type of the column indicated by _col&lowbar;name_.
-**NOT NULL** | Do not allow the column to contain _NULL_ values. Columns without this constraint can contain _NULL_ values.
-*default_expr* | A default value to use for the column in an [`INSERT`](/sql/insert) statement if an explicit value is not provided. If not specified, `NULL` is assumed.
-_retention_period_ | ***Private preview.** This option has known performance or stability issues and is under active development.* Duration for which Materialize retains historical data, which is useful to implement [durable subscriptions](/transform-data/patterns/durable-subscriptions/#history-retention-period). Accepts positive [interval](/sql/types/interval/) values (e.g. `'1hr'`). Default: `1s`.
+{{</ tab >}}
+
+{{< tab "Source-populated tables (DB source)" >}}
+
+To create a table from a [source](/sql/create-source/), where the source maps to
+an external database system:
+
+{{< note >}}
+
+Users cannot write to source-populated tables; i.e., users cannot perform
+[`INSERT`](/sql/insert/)/[`UPDATE`](/sql/update/)/[`DELETE`](/sql/delete/)
+operations on source-populated tables.
+
+{{</ note >}}
+
+```mzsql
+CREATE TABLE <table_name> FROM SOURCE <source_name> (REFERENCE <ref_object>)
+[WITH (
+    TEXT COLUMNS (<fq_column_name> [, ...])
+  | EXCLUDE COLUMNS (<fq_column_name> [, ...])
+  [, ...]
+)]
+;
+```
+
+{{% yaml-table data="syntax_options/create_table_options_source_populated_db" %}}
+
+{{</ tab >}}
+
+
+{{</ tabs >}}
 
 ## Details
+
+### Table names and column names
+
+Names for tables and column(s) must follow the [naming
+guidelines](/sql/identifiers/#naming-restrictions).
 
 ### Known limitations
 
@@ -104,4 +141,9 @@ The privileges required to execute this statement are:
 ## Related pages
 
 - [`INSERT`](../insert)
+- [`CREATE SOURCE`](/sql/create-source/)
 - [`DROP TABLE`](../drop-table)
+
+[`INSERT`]: /sql/insert/
+[`UPDATE`]: /sql/update/
+[`DELETE`]: /sql/delete/
