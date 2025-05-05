@@ -43,7 +43,9 @@ where
         let (ok_collection, err_collection) =
             input.as_specific_collection(input_key.as_deref(), &self.config_set);
         let stream = ok_collection.inner;
-        let (oks, errs) = stream.unary_fallible(Pipeline, "FlatMapStage", move |_, _| {
+        let scope = input.scope();
+        let (oks, errs) = stream.unary_fallible(Pipeline, "FlatMapStage", move |_, info| {
+            let activator = scope.activator_for(info.address);
             Box::new(move |input, ok_output, err_output| {
                 let mut datums = DatumVec::new();
                 let mut datums_mfp = DatumVec::new();
@@ -51,7 +53,9 @@ where
                 // Buffer for extensions to `input_row`.
                 let mut table_func_output = Vec::new();
 
-                input.for_each(|cap, data| {
+                let mut budget = 1_000_000;
+
+                while let Some((cap, data)) = input.next() {
                     let mut ok_session = ok_output.session_with_builder(&cap);
                     let mut err_session = err_output.session_with_builder(&cap);
 
@@ -94,11 +98,16 @@ where
                                 &until,
                                 &mut ok_session,
                                 &mut err_session,
+                                &mut budget,
                             );
                             table_func_output.clear();
                         }
                     }
-                })
+                    if budget == 0 {
+                        activator.activate();
+                        break;
+                    }
+                }
             })
         });
 
@@ -131,6 +140,7 @@ fn drain_through_mfp<T>(
         ConsolidatingContainerBuilder<Vec<(DataflowError, T, Diff)>>,
         Counter<T, Vec<(DataflowError, T, Diff)>, Tee<T, Vec<(DataflowError, T, Diff)>>>,
     >,
+    budget: &mut usize,
 ) where
     T: crate::render::RenderTimestamp,
     <T as Columnar>::Container: Clone + Send,
@@ -160,6 +170,7 @@ fn drain_through_mfp<T>(
         );
 
         for result in results {
+            *budget = budget.saturating_sub(1);
             match result {
                 Ok((row, event_time, diff)) => {
                     // Copy the whole time, and re-populate event time.
