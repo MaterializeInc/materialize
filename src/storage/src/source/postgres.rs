@@ -333,7 +333,9 @@ pub enum DefiniteError {
     MissingColumn,
     #[error("failed to parse COPY protocol")]
     InvalidCopyInput,
-    #[error("invalid timeline ID from PostgreSQL server. Expected {expected} but got {actual}")]
+    #[error(
+        "unsupported action: database restored from point-in-time backup. Expected timeline ID {expected} but got {actual}"
+    )]
     InvalidTimelineId { expected: u64, actual: u64 },
     #[error(
         "TOASTed value missing from old row. Did you forget to set REPLICA IDENTITY to FULL for your table?"
