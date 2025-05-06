@@ -93,6 +93,9 @@ def upload_to_pypi(path: Path) -> None:
 
 def get_released_versions(name: str) -> set[str]:
     res = requests.get(f"https://pypi.org/pypi/{name}/json")
+    if res.status_code == 404:
+        # First release, no versions exist yet
+        return set()
     res.raise_for_status()
     return set(res.json()["releases"])
 
