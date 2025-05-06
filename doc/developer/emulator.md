@@ -7,9 +7,8 @@ The emulator is a version of materialize used primarily for local testing. User 
 Run the emulator using the following command to allow for local access to the heap dump endpoints for usage with the [debug tool](https://materialize.com/docs/self-managed/v25.1/integrations/mz-debug/).
 
 ```bash
-  docker run \
+  docker run -d \
         --name materialized \
-        --network host \
         -p 6874:6874 \
         -p 6875:6875 \
         -p 6877:6877 \
