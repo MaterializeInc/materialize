@@ -5,6 +5,15 @@ columns:
 rows:
 
 - "Terraform version": |
+    [v0.3.5](https://github.com/MaterializeInc/terraform-azurerm-materialize/releases/tag/v0.3.5)
+  "Notable changes": |
+    - By default, deploys OpenEBS and NVMe instance storage to [enable
+      spill-to-disk](https://github.com/MaterializeInc/terraform-azurerm-materialize?tab=readme-ov-file#disk-support-for-materialize-on-azure).
+
+    - Associated with the OpenEBS and NVMe change, the default instance type for
+      Materialize has been changed from `Standard_E8ps_v6` to `Standard_E4pds_v6`.
+
+- "Terraform version": |
     [v0.3.4](https://github.com/MaterializeInc/terraform-azurerm-materialize/releases/tag/v0.3.4)
   "Notable changes": |
     - Defaults to using Materialize Operator v25.1.7 (via

@@ -10,10 +10,35 @@ menu:
 
 ## Recommended instance types
 
-- ARM-based CPU
-- 1:8 ratio of vCPU to GiB memory (if spill-to-disk is not enabled)
-- 1:16 ratio of vCPU to GiB local instance storage (if spill-to-disk is enabled)
+As a general guideline, we recommend:
 
+- Processor Type: ARM-based CPU
+
+- Sizing: 2:1 disk-to-RAM ratio with spill-to-disk enabled.
+
+### Recommended Azure VM Types with Local NVMe Disks
+
+When operating on Azure in production, we recommend [Epdsv6
+sizes](https://learn.microsoft.com/en-us/azure/virtual-machines/sizes/memory-optimized/epdsv6-series?tabs=sizebasic#sizes-in-series)
+Azure VM Types with Local NVMe Disk:
+
+| VM Size            | vCPUs | Memory  | Ephemeral Disk | Disk-to-RAM Ratio |
+| ------------------ | ----- | ------- | -------------- | ----------------- |
+| Standard_E2pds_v6  | 2     | 16 GiB  | 75 GiB         | ~4.7:1           |
+| Standard_E4pds_v6  | 4     | 32 GiB  | 150 GiB        | ~4.7:1           |
+| Standard_E8pds_v6  | 8     | 64 GiB  | 300 GiB        | ~4.7:1           |
+| Standard_E16pds_v6 | 16    | 128 GiB | 600 GiB        | ~4.7:1           |
+| Standard_E32pds_v6 | 32    | 256 GiB | 1,200 GiB      | ~4.7:1           |
+
+{{< important >}}
+
+These VM types provide **ephemeral** local NVMe SSD disks. Since data is lost
+when the VM is stopped or deleted, they are best suited for **temporary or
+performance-sensitive data** managed by Materialize.
+
+{{</ important >}}
+
+See also [Locally attached NVMe storage](#locally-attached-nvme-storage).
 
 ## CPU affinity
 
@@ -34,10 +59,39 @@ when operating on datasets larger than main memory as well as allows for a more
 graceful degradation rather than OOMing. Network-attached storage (like EBS
 volumes) can significantly degrade performance and is not supported.
 
-*Additional documentation to come*
+Starting in v0.3.5 of Materialize on Azure Terraform, disk support (using
+OpenEBS and NVMe instance storage) is enabled, by default, for Materialize. With
+this change, the Terraform:
+
+- Installs OpenEBS via Helm;
+
+- Configures NVMe instance store volumes using a bootstrap script;
+
+- Creates appropriate storage classes for Materialize.
+
+Associated with this change:
+
+- The following configuration options are available:
+
+  - [`enable_disk_support`]
+  - [`disk_support_config`]
+  - [`disk_setup_image`]
+
+- The default
+[`aks_config.vm_size`](https://github.com/MaterializeInc/terraform-azurerm-materialize?tab=readme-ov-file#input_aks_config)
+has changed from `Standard_E8ps_v6` to `Standard_E4pds_v6`. See [Recommended
+instance types](#recommended-instance-types).
 
 ## See also
 
 - [Configuration](/installation/configuration/)
 - [Installation](/installation/)
 - [Troubleshooting](/installation/troubleshooting/)
+
+[`enable_disk_support`]: https://github.com/MaterializeInc/terraform-azurerm-materialize?tab=readme-ov-file#disk-support-for-materialize-on-azure
+
+[`disk_support_config`]:
+    https://github.com/MaterializeInc/terraform-azurerm-materialize?tab=readme-ov-file#input_disk_support_config
+
+[`disk_setup_image`]:
+    https://github.com/MaterializeInc/terraform-azurerm-materialize?tab=readme-ov-file#input_disk_setup_image
