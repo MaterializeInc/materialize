@@ -15,8 +15,7 @@ menu:
 
 A few types of Materialize collections are durably written to storage: [materialized views](/sql/create-materialized-view/), [tables](/sql/create-table), and [sources](/sql/create-source).
 
-Internally, Materialize stores these durable collections in an [LSM-tree](https://en.wikipedia.org/wiki/Log-structured_merge-tree)-like structure. Each collection is made up of a set of
-**runs** of data, each of which is sorted and then partitioned up into individual **parts**, and those parts are written to object storage and fetched only when necessary to satisfy a query. Materialize will also periodically **compact** the data it stores, to consolidate small parts into larger ones or discard deleted rows.
+Internally, each collection is stored as a set of **runs** of data, each of which is sorted and then partitioned up into individual **parts**, and those parts are written to object storage and fetched only when necessary to satisfy a query. Materialize will also periodically **compact** the data it stores, to consolidate small parts into larger ones or discard deleted rows.
 
 Using the `PARTITION BY` option, you can specify the internal ordering that
 Materialize will use to sort, partition, and store these runs of data.
