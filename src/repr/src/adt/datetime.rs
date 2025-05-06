@@ -1955,12 +1955,15 @@ fn strip_era_from_timezone(timezone: &str) -> (&str, CalendarEra) {
     }
 
     // Covers case 3.
+    //
+    // Safety: upper case and lower case chars for a, b, c, d, and \s
+    // are all 1 byte so suffix is always of length 3 bytes.
     match (
         timezone_upper.strip_suffix(" BC"),
         timezone_upper.strip_suffix(" AD"),
     ) {
-        (Some(remainder), None) => (&timezone[..remainder.len()], BC),
-        (None, Some(remainder)) => (&timezone[..remainder.len()], AD),
+        (Some(_), None) => (&timezone[..timezone.len() - 3], BC),
+        (None, Some(_)) => (&timezone[..timezone.len() - 3], AD),
         _ => (timezone, AD),
     }
 }
