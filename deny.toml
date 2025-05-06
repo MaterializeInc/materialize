@@ -158,6 +158,8 @@ skip = [
     { name = "lru", version = "0.12.5" },
     # Used by tower-lsp
     { name = "dashmap", version = "5.5.3" },
+    # Used by bindgen
+    { name = "itertools", version = "0.12.1" },
 ]
 
 [[bans.deny]]
@@ -293,7 +295,6 @@ allow = [
     "MPL-2.0",
     "Zlib",
     "Unicode-3.0",
-    "Unicode-DFS-2016",
 ]
 # copyleft is denied by default
 private = { ignore = true }
