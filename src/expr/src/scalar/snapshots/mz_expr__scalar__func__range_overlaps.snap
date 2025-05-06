@@ -1,6 +1,6 @@
 ---
 source: src/expr/src/scalar/func.rs
-expression: "#[sqlfunc(\n    is_monotone = \"(false, false)\",\n    output_type = \"bool\",\n    is_infix_op = true,\n    sqlname = \"&&\",\n    propagates_nulls = true\n)]\nfn range_overlaps<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {\n    let l = a.unwrap_range();\n    let r = b.unwrap_range();\n    Datum::from(Range::<Datum<'a>>::overlaps(&l, &r))\n}\n"
+expression: "#[sqlfunc(\n    output_type = \"bool\",\n    is_infix_op = true,\n    sqlname = \"&&\",\n    propagates_nulls = true\n)]\nfn range_overlaps<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {\n    let l = a.unwrap_range();\n    let r = b.unwrap_range();\n    Datum::from(Range::<Datum<'a>>::overlaps(&l, &r))\n}\n"
 ---
 #[derive(
     proptest_derive::Arbitrary,
@@ -51,9 +51,6 @@ impl<'a> crate::func::binary::EagerBinaryFunc<'a> for RangeOverlaps {
     }
     fn is_infix_op(&self) -> bool {
         true
-    }
-    fn is_monotone(&self) -> (bool, bool) {
-        (false, false)
     }
     fn propagates_nulls(&self) -> bool {
         true

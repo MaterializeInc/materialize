@@ -1,6 +1,6 @@
 ---
 source: src/expr/src/scalar/func.rs
-expression: "#[sqlfunc(\n    is_monotone = (false, false),\n    output_type = String,\n    is_infix_op = false,\n    sqlname = \"encode\",\n    propagates_nulls = true\n)]\nfn encode<'a>(\n    bytes: Datum<'a>,\n    format: Datum<'a>,\n    temp_storage: &'a RowArena,\n) -> Result<Datum<'a>, EvalError> {\n    let format = encoding::lookup_format(format.unwrap_str())?;\n    let out = format.encode(bytes.unwrap_bytes());\n    Ok(Datum::from(temp_storage.push_string(out)))\n}\n"
+expression: "#[sqlfunc(output_type = \"String\", sqlname = \"encode\", propagates_nulls = true)]\nfn encode<'a>(\n    bytes: Datum<'a>,\n    format: Datum<'a>,\n    temp_storage: &'a RowArena,\n) -> Result<Datum<'a>, EvalError> {\n    let format = encoding::lookup_format(format.unwrap_str())?;\n    let out = format.encode(bytes.unwrap_bytes());\n    Ok(Datum::from(temp_storage.push_string(out)))\n}\n"
 ---
 #[derive(
     proptest_derive::Arbitrary,
@@ -48,12 +48,6 @@ impl<'a> crate::func::binary::EagerBinaryFunc<'a> for Encode {
     }
     fn introduces_nulls(&self) -> bool {
         <String as ::mz_repr::DatumType<'_, ()>>::nullable()
-    }
-    fn is_infix_op(&self) -> bool {
-        false
-    }
-    fn is_monotone(&self) -> (bool, bool) {
-        (false, false)
     }
     fn propagates_nulls(&self) -> bool {
         true

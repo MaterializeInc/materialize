@@ -481,6 +481,13 @@ mod test {
             nullable: input_nullable,
             scalar_type: ScalarType::Interval,
         };
+        let i32_map_ty = ColumnType {
+            nullable: input_nullable,
+            scalar_type: ScalarType::Map {
+                value_type: Box::new(ScalarType::Int32),
+                custom_id: None,
+            },
+        };
 
         use BinaryFunc as BF;
 
@@ -689,6 +696,115 @@ mod test {
         );
 
         check(
+            func::RangeContainsI32,
+            BF::RangeContainsElem {
+                elem_type: ScalarType::Int32,
+                rev: false,
+            },
+            &i32_ty,
+            &i32_ty,
+        );
+        check(
+            func::RangeContainsI64,
+            BF::RangeContainsElem {
+                elem_type: ScalarType::Int64,
+                rev: false,
+            },
+            &i32_ty,
+            &i32_ty,
+        );
+        check(
+            func::RangeContainsDate,
+            BF::RangeContainsElem {
+                elem_type: ScalarType::Date,
+                rev: false,
+            },
+            &i32_ty,
+            &i32_ty,
+        );
+        check(
+            func::RangeContainsNumeric,
+            BF::RangeContainsElem {
+                elem_type: ScalarType::Numeric { max_scale: None },
+                rev: false,
+            },
+            &i32_ty,
+            &i32_ty,
+        );
+        check(
+            func::RangeContainsTimestamp,
+            BF::RangeContainsElem {
+                elem_type: ScalarType::Timestamp { precision: None },
+                rev: false,
+            },
+            &i32_ty,
+            &i32_ty,
+        );
+        check(
+            func::RangeContainsTimestampTz,
+            BF::RangeContainsElem {
+                elem_type: ScalarType::TimestampTz { precision: None },
+                rev: false,
+            },
+            &i32_ty,
+            &i32_ty,
+        );
+        check(
+            func::RangeContainsI32Rev,
+            BF::RangeContainsElem {
+                elem_type: ScalarType::Int32,
+                rev: true,
+            },
+            &i32_ty,
+            &i32_ty,
+        );
+        check(
+            func::RangeContainsI64Rev,
+            BF::RangeContainsElem {
+                elem_type: ScalarType::Int64,
+                rev: true,
+            },
+            &i32_ty,
+            &i32_ty,
+        );
+        check(
+            func::RangeContainsDateRev,
+            BF::RangeContainsElem {
+                elem_type: ScalarType::Date,
+                rev: true,
+            },
+            &i32_ty,
+            &i32_ty,
+        );
+        check(
+            func::RangeContainsNumericRev,
+            BF::RangeContainsElem {
+                elem_type: ScalarType::Numeric { max_scale: None },
+                rev: true,
+            },
+            &i32_ty,
+            &i32_ty,
+        );
+        check(
+            func::RangeContainsTimestampRev,
+            BF::RangeContainsElem {
+                elem_type: ScalarType::Timestamp { precision: None },
+                rev: true,
+            },
+            &i32_ty,
+            &i32_ty,
+        );
+        check(
+            func::RangeContainsTimestampTzRev,
+            BF::RangeContainsElem {
+                elem_type: ScalarType::TimestampTz { precision: None },
+                rev: true,
+            },
+            &i32_ty,
+            &i32_ty,
+        );
+
+        check(
             func::RangeContainsRange,
             BF::RangeContainsRange { rev: false },
             &i32_ty,
@@ -707,6 +823,15 @@ mod test {
         check(func::RangeOverright, BF::RangeOverright, &i32_ty, &i32_ty);
         check(func::RangeAdjacent, BF::RangeAdjacent, &i32_ty, &i32_ty);
 
+        check(func::RangeUnion, BF::RangeUnion, &i32_ty, &i32_ty);
+        check(
+            func::RangeIntersection,
+            BF::RangeIntersection,
+            &i32_ty,
+            &i32_ty,
+        );
+        check(func::RangeDifference, BF::RangeDifference, &i32_ty, &i32_ty);
+
         check(func::Eq, BF::Eq, &i32_ty, &i32_ty);
         check(func::NotEq, BF::NotEq, &i32_ty, &i32_ty);
         check(func::Lt, BF::Lt, &i32_ty, &i32_ty);
@@ -714,6 +839,23 @@ mod test {
         check(func::Gt, BF::Gt, &i32_ty, &i32_ty);
         check(func::Gte, BF::Gte, &i32_ty, &i32_ty);
 
+        check(
+            func::ToCharTimestampFormat,
+            BF::ToCharTimestamp,
+            &i32_ty,
+            &i32_ty,
+        );
+        check(
+            func::ToCharTimestampTzFormat,
+            BF::ToCharTimestampTz,
+            &i32_ty,
+            &i32_ty,
+        );
+
+        // JsonbGet* have a `stringify` parameter that doesn't work with the sqlfunc macro.
+        // check(func::JsonbGetInt64, BF::JsonbGetInt64, &i32_ty, &i32_ty);
+        // check(func::JsonbGetString, BF::JsonbGetString, &i32_ty, &i32_ty);
+        // check(func::JsonbGetPath, BF::JsonbGetPath, &i32_ty, &i32_ty);
         check(
             func::JsonbContainsString,
             BF::JsonbContainsString,
@@ -734,6 +876,19 @@ mod test {
             &i32_ty,
         );
         check(func::MapContainsMap, BF::MapContainsMap, &i32_ty, &i32_ty);
+        check(func::MapGetValue, BF::MapGetValue, &i32_map_ty, &i32_ty);
+        check(
+            func::ListContainsList,
+            BF::ListContainsList { rev: false },
+            &i32_ty,
+            &i32_ty,
+        );
+        check(
+            func::ListContainsListRev,
+            BF::ListContainsList { rev: true },
+            &i32_ty,
+            &i32_ty,
+        );
 
         check(
             func::JsonbContainsJsonb,
@@ -741,8 +896,84 @@ mod test {
             &i32_ty,
             &i32_ty,
         );
+        check(func::JsonbConcat, BF::JsonbConcat, &i32_ty, &i32_ty);
+        check(
+            func::JsonbDeleteInt64,
+            BF::JsonbDeleteInt64,
+            &i32_ty,
+            &i32_ty,
+        );
+        check(
+            func::JsonbDeleteString,
+            BF::JsonbDeleteString,
+            &i32_ty,
+            &i32_ty,
+        );
+
+        check(
+            func::DateBinTimestamp,
+            BF::DateBinTimestamp,
+            &i32_ty,
+            &i32_ty,
+        );
+        check(
+            func::DateBinTimestampTz,
+            BF::DateBinTimestampTz,
+            &i32_ty,
+            &i32_ty,
+        );
+        check(
+            func::DatePartIntervalNumeric,
+            BF::ExtractInterval,
+            &i32_ty,
+            &i32_ty,
+        );
+        check(func::DatePartTimeNumeric, BF::ExtractTime, &i32_ty, &i32_ty);
+        check(
+            func::DatePartTimestampTimestampNumeric,
+            BF::ExtractTimestamp,
+            &i32_ty,
+            &i32_ty,
+        );
+        check(
+            func::DatePartTimestampTimestampTzNumeric,
+            BF::ExtractTimestampTz,
+            &i32_ty,
+            &i32_ty,
+        );
+        check(
+            func::DatePartIntervalF64,
+            BF::DatePartInterval,
+            &i32_ty,
+            &i32_ty,
+        );
+        check(func::DatePartTimeF64, BF::DatePartTime, &i32_ty, &i32_ty);
+        check(
+            func::DatePartTimestampTimestampF64,
+            BF::DatePartTimestamp,
+            &i32_ty,
+            &i32_ty,
+        );
+        check(
+            func::DatePartTimestampTimestampTzF64,
+            BF::DatePartTimestampTz,
+            &i32_ty,
+            &i32_ty,
+        );
 
         check(func::ExtractDateUnits, BF::ExtractDate, &i32_ty, &i32_ty);
+        check(
+            func::DateTruncUnitsTimestamp,
+            BF::DateTruncTimestamp,
+            &i32_ty,
+            &i32_ty,
+        );
+        check(
+            func::DateTruncUnitsTimestampTz,
+            BF::DateTruncTimestampTz,
+            &i32_ty,
+            &i32_ty,
+        );
         check(
             func::DateTruncInterval,
             BF::DateTruncInterval,
@@ -751,5 +982,45 @@ mod test {
         );
 
         check(func::ArrayLength, BF::ArrayLength, &i32_ty, &i32_ty);
+        check(func::ArrayLower, BF::ArrayLower, &i32_ty, &i32_ty);
+        check(func::ArrayRemove, BF::ArrayRemove, &i32_ty, &i32_ty);
+        check(func::ArrayUpper, BF::ArrayUpper, &i32_ty, &i32_ty);
+        // check(func::ListLength, BF::ListLength, &i32_ty, &i32_ty);
+        check(func::ArrayContains, BF::ArrayContains, &i32_ty, &i32_ty);
+        check(
+            func::ArrayContainsArray,
+            BF::ArrayContainsArray { rev: false },
+            &i32_ty,
+            &i32_ty,
+        );
+        check(
+            func::ArrayContainsArrayRev,
+            BF::ArrayContainsArray { rev: true },
+            &i32_ty,
+            &i32_ty,
+        );
+        check(
+            func::ArrayArrayConcat,
+            BF::ArrayArrayConcat,
+            &i32_ty,
+            &i32_ty,
+        );
+        check(func::ListListConcat, BF::ListListConcat, &i32_ty, &i32_ty);
+        check(
+            func::ListElementConcat,
+            BF::ListElementConcat,
+            &i32_ty,
+            &i32_ty,
+        );
+        check(
+            func::ElementListConcat,
+            BF::ElementListConcat,
+            &i32_ty,
+            &i32_ty,
+        );
+        check(func::ListRemove, BF::ListRemove, &i32_ty, &i32_ty);
+        check(func::DigestString, BF::DigestString, &i32_ty, &i32_ty);
+        check(func::DigestBytes, BF::DigestBytes, &i32_ty, &i32_ty);
+        check(func::MzRenderTypmod, BF::MzRenderTypmod, &i32_ty, &i32_ty);
     }
 }

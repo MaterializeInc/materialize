@@ -1,6 +1,6 @@
 ---
 source: src/expr/src/scalar/func.rs
-expression: "#[sqlfunc(\n    is_monotone = \"(false, false)\",\n    output_type = \"bool\",\n    is_infix_op = true,\n    sqlname = \"@>\",\n    propagates_nulls = true\n)]\nfn map_contains_map<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {\n    let map_a = a.unwrap_map();\n    b.unwrap_map()\n        .iter()\n        .all(|(b_key, b_val)| {\n            map_a.iter().any(|(a_key, a_val)| (a_key == b_key) && (a_val == b_val))\n        })\n        .into()\n}\n"
+expression: "#[sqlfunc(\n    output_type = \"bool\",\n    is_infix_op = true,\n    sqlname = \"@>\",\n    propagates_nulls = true\n)]\nfn map_contains_map<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {\n    let map_a = a.unwrap_map();\n    b.unwrap_map()\n        .iter()\n        .all(|(b_key, b_val)| {\n            map_a.iter().any(|(a_key, a_val)| (a_key == b_key) && (a_val == b_val))\n        })\n        .into()\n}\n"
 ---
 #[derive(
     proptest_derive::Arbitrary,
@@ -51,9 +51,6 @@ impl<'a> crate::func::binary::EagerBinaryFunc<'a> for MapContainsMap {
     }
     fn is_infix_op(&self) -> bool {
         true
-    }
-    fn is_monotone(&self) -> (bool, bool) {
-        (false, false)
     }
     fn propagates_nulls(&self) -> bool {
         true

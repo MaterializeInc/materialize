@@ -1,6 +1,6 @@
 ---
 source: src/expr/src/scalar/func.rs
-expression: "#[sqlfunc(\n    is_monotone = \"(false, false)\",\n    output_type = \"bool\",\n    is_infix_op = true,\n    sqlname = \"?\",\n    propagates_nulls = true\n)]\nfn jsonb_contains_string<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {\n    let k = b.unwrap_str();\n    match a {\n        Datum::List(list) => list.iter().any(|k2| b == k2).into(),\n        Datum::Map(dict) => dict.iter().any(|(k2, _v)| k == k2).into(),\n        Datum::String(string) => (string == k).into(),\n        _ => false.into(),\n    }\n}\n"
+expression: "#[sqlfunc(\n    output_type = \"bool\",\n    is_infix_op = true,\n    sqlname = \"?\",\n    propagates_nulls = true\n)]\nfn jsonb_contains_string<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {\n    let k = b.unwrap_str();\n    match a {\n        Datum::List(list) => list.iter().any(|k2| b == k2).into(),\n        Datum::Map(dict) => dict.iter().any(|(k2, _v)| k == k2).into(),\n        Datum::String(string) => (string == k).into(),\n        _ => false.into(),\n    }\n}\n"
 ---
 #[derive(
     proptest_derive::Arbitrary,
@@ -51,9 +51,6 @@ impl<'a> crate::func::binary::EagerBinaryFunc<'a> for JsonbContainsString {
     }
     fn is_infix_op(&self) -> bool {
         true
-    }
-    fn is_monotone(&self) -> (bool, bool) {
-        (false, false)
     }
     fn propagates_nulls(&self) -> bool {
         true
