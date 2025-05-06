@@ -1412,7 +1412,7 @@ pub mod datadriven {
     use anyhow::anyhow;
     use differential_dataflow::consolidation::consolidate_updates;
     use differential_dataflow::trace::Description;
-    use futures::{StreamExt, pin_mut};
+    use futures::StreamExt;
     use mz_dyncfg::{ConfigUpdates, ConfigVal};
     use mz_persist::indexed::encoding::BlobTraceBatchPart;
     use mz_persist_types::codec_impls::{StringSchema, UnitSchema};
@@ -1423,7 +1423,7 @@ pub mod datadriven {
     };
     use crate::cfg::COMPACTION_MEMORY_BOUND_BYTES;
     use crate::fetch::EncodedPart;
-    use crate::internal::compact::{CompactConfig, CompactReq, CompactRes, Compactor};
+    use crate::internal::compact::{CompactConfig, CompactReq, Compactor};
     use crate::internal::datadriven::DirectiveArgs;
     use crate::internal::encoding::Schemas;
     use crate::internal::gc::GcReq;
@@ -2010,33 +2010,7 @@ pub mod datadriven {
             SCHEMAS.clone(),
         );
 
-        pin_mut!(stream);
-
-        let mut all_parts = vec![];
-        let mut all_run_splits = vec![];
-        let mut all_run_meta = vec![];
-        let mut len = 0;
-
-        while let Some(res) = stream.next().await {
-            let res = res?;
-            let (parts, updates, run_meta, run_splits) = (
-                res.output.parts,
-                res.output.len,
-                res.output.run_meta,
-                res.output.run_splits,
-            );
-            let run_offset = all_parts.len();
-            if !all_parts.is_empty() {
-                all_run_splits.push(run_offset);
-            }
-            all_run_splits.extend(run_splits.iter().map(|r| r + run_offset));
-            all_run_meta.extend(run_meta);
-            all_parts.extend(parts);
-            len += updates;
-        }
-        let res = CompactRes {
-            output: HollowBatch::new(req.desc, all_parts, len, all_run_meta, all_run_splits),
-        };
+        let res = Compactor::<String, (), u64, i64>::compact_all(stream, req.clone()).await?;
 
         datadriven
             .batches

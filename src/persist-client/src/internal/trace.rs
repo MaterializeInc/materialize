@@ -892,8 +892,6 @@ impl<T: Timestamp + Lattice> SpineBatch<T> {
             }
         }
 
-        // [1..5], [5..10], [10..20]
-
         // next, replace parts with the merge res batch if we can
         match (lower, upper) {
             (Some((lower, id_lower)), Some((upper, id_upper))) => {

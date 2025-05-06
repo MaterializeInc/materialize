@@ -39,7 +39,7 @@ use crate::batch::{BatchBuilderConfig, BatchBuilderInternal, BatchParts, PartDel
 use crate::cfg::{
     COMPACTION_HEURISTIC_MIN_INPUTS, COMPACTION_HEURISTIC_MIN_PARTS,
     COMPACTION_HEURISTIC_MIN_UPDATES, COMPACTION_MEMORY_BOUND_BYTES,
-    GC_BLOB_DELETE_CONCURRENCY_LIMIT, MiB,
+    GC_BLOB_DELETE_CONCURRENCY_LIMIT, INCREMENTAL_COMPACTION_DISABLED, MiB,
 };
 use crate::fetch::FetchBatchFilter;
 use crate::internal::encoding::Schemas;
@@ -391,20 +391,34 @@ where
                             Arc::clone(&metrics_clone),
                             Arc::clone(&machine_clone.applier.shard_metrics),
                             Arc::clone(&machine_clone.isolated_runtime),
-                            req,
+                            req.clone(),
                             compaction_schema,
                         );
 
-                        let mut maintenance = RoutineMaintenance::default();
+                        let maintenance =
+                            if INCREMENTAL_COMPACTION_DISABLED.get(&machine_clone.applier.cfg) {
+                                let res = Self::compact_all(stream, req.clone()).await?;
+                                Self::apply(
+                                    FueledMergeRes {
+                                        output: res.output,
+                                        new_active_compaction: None,
+                                    },
+                                    &metrics_clone,
+                                    &machine_clone,
+                                )
+                                .await?
+                            } else {
+                                let mut maintenance = RoutineMaintenance::default();
 
-                        pin_mut!(stream);
-                        while let Some(res) = stream.next().await {
-                            let res = res.map_err(|e| anyhow!(e))?;
-                            let new_maintenance =
-                                Self::apply(res, Arc::clone(&metrics_clone), machine_clone.clone())
-                                    .await?;
-                            maintenance = std::cmp::max(maintenance, new_maintenance);
-                        }
+                                pin_mut!(stream);
+                                while let Some(res) = stream.next().await {
+                                    let res = res?;
+                                    let new_maintenance =
+                                        Self::apply(res, &metrics_clone, &machine_clone).await?;
+                                    maintenance = std::cmp::max(maintenance, new_maintenance);
+                                }
+                                maintenance
+                            };
 
                         Ok::<_, anyhow::Error>(maintenance)
                     }
@@ -440,8 +454,8 @@ where
 
     pub async fn apply(
         res: FueledMergeRes<T>,
-        metrics: Arc<Metrics>,
-        machine: Machine<K, V, T, D>,
+        metrics: &Metrics,
+        machine: &Machine<K, V, T, D>,
     ) -> Result<RoutineMaintenance, anyhow::Error> {
         let (apply_merge_result, maintenance) = machine.merge_res(&res).await;
 
@@ -480,6 +494,45 @@ where
         };
 
         Ok(maintenance)
+    }
+
+    pub async fn compact_all(
+        stream: impl Stream<Item = Result<FueledMergeRes<T>, anyhow::Error>>,
+        req: CompactReq<T>,
+    ) -> Result<CompactRes<T>, anyhow::Error> {
+        pin_mut!(stream);
+
+        let mut all_parts = vec![];
+        let mut all_run_splits = vec![];
+        let mut all_run_meta = vec![];
+        let mut len = 0;
+
+        while let Some(res) = stream.next().await {
+            let res = res?;
+            let (parts, updates, run_meta, run_splits) = (
+                res.output.parts,
+                res.output.len,
+                res.output.run_meta,
+                res.output.run_splits,
+            );
+            let run_offset = all_parts.len();
+            if !all_parts.is_empty() {
+                all_run_splits.push(run_offset);
+            }
+            all_run_splits.extend(run_splits.iter().map(|r| r + run_offset));
+            all_run_meta.extend(run_meta);
+            all_parts.extend(parts);
+            len += updates;
+        }
+        Ok(CompactRes {
+            output: HollowBatch::new(
+                req.desc.clone(),
+                all_parts,
+                len,
+                all_run_meta,
+                all_run_splits,
+            ),
+        })
     }
 
     /// Compacts input batches in bounded memory.
@@ -596,8 +649,7 @@ where
                     parts.len(),
                 );
 
-                // Skip empty batches unless it's the last one
-                if updates == 0 && applied != total_chunked_runs - 1 {
+                if updates == 0 {
                     applied += 1;
                     continue;
                 }
@@ -798,9 +850,6 @@ where
         // of compaction by flushing out the batch, but doing it here based on
         // the config allows BatchBuilder to do its normal pipelining of writes.
         batch_cfg.inline_writes_single_max_bytes = 0;
-
-        //batch -> runs -> parts
-        //hollowbatch -> parts
 
         let parts = BatchParts::new_ordered(
             batch_cfg,
@@ -1029,39 +1078,9 @@ mod tests {
             schemas.clone(),
         );
 
-        pin_mut!(stream);
-
-        let mut all_parts = vec![];
-        let mut all_run_splits = vec![];
-        let mut all_run_meta = vec![];
-        let mut len = 0;
-
-        while let Some(res) = stream.next().await {
-            let res = res.expect("compaction failed");
-            let (parts, updates, run_meta, run_splits) = (
-                res.output.parts,
-                res.output.len,
-                res.output.run_meta,
-                res.output.run_splits,
-            );
-            let run_offset = all_parts.len();
-            if !all_parts.is_empty() {
-                all_run_splits.push(run_offset);
-            }
-            all_run_splits.extend(run_splits.iter().map(|r| r + run_offset));
-            all_run_meta.extend(run_meta);
-            all_parts.extend(parts);
-            len += updates;
-        }
-        let res = CompactRes {
-            output: HollowBatch::new(
-                req.desc.clone(),
-                all_parts,
-                len,
-                all_run_meta,
-                all_run_splits,
-            ),
-        };
+        let res = Compactor::<String, String, u64, i64>::compact_all(stream, req.clone())
+            .await
+            .expect("compaction failed");
 
         assert_eq!(res.output.desc, req.desc);
         assert_eq!(res.output.len, 1);
@@ -1138,39 +1157,10 @@ mod tests {
             schemas.clone(),
         );
 
-        pin_mut!(stream);
-
-        let mut all_parts = vec![];
-        let mut all_run_splits = vec![];
-        let mut all_run_meta = vec![];
-        let mut len = 0;
-
-        while let Some(res) = stream.next().await {
-            let res = res.expect("compaction failed");
-            let (parts, updates, run_meta, run_splits) = (
-                res.output.parts,
-                res.output.len,
-                res.output.run_meta,
-                res.output.run_splits,
-            );
-            let run_offset = all_parts.len();
-            if !all_parts.is_empty() {
-                all_run_splits.push(run_offset);
-            }
-            all_run_splits.extend(run_splits.iter().map(|r| r + run_offset));
-            all_run_meta.extend(run_meta);
-            all_parts.extend(parts);
-            len += updates;
-        }
-        let res = CompactRes {
-            output: HollowBatch::new(
-                req.desc.clone(),
-                all_parts,
-                len,
-                all_run_meta,
-                all_run_splits,
-            ),
-        };
+        let res =
+            Compactor::<String, String, Product<u32, u32>, i64>::compact_all(stream, req.clone())
+                .await
+                .expect("compaction failed");
 
         assert_eq!(res.output.desc, req.desc);
         assert_eq!(res.output.len, 2);
