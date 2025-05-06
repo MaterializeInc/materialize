@@ -19,14 +19,12 @@ use anyhow::Result;
 use k8s_openapi::api::core::v1::Service;
 use kube::api::ListParams;
 use kube::{Api, Client};
+use tokio::io::AsyncBufReadExt;
 
-use std::time::Duration;
-
-use mz_ore::retry::{self, RetryResult};
-use tracing::{info, warn};
+use tracing::info;
 
 use crate::SelfManagedDebugMode;
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct KubectlPortForwarder {
     pub namespace: String,
     pub service_name: String,
@@ -36,89 +34,73 @@ pub struct KubectlPortForwarder {
     pub context: Option<String>,
 }
 
+pub struct PortForwardConnection {
+    // tokio process that's killed on drop
+    pub _port_forward_process: tokio::process::Child,
+}
+
 impl KubectlPortForwarder {
-    /// Port forwards a given k8s service via Kubectl.
-    /// The process will retry if the port-forwarding fails and
-    /// will terminate once the port forwarding reaches the max number of retries.
-    /// We retry since kubectl port-forward is flaky.
-    pub async fn port_forward(&self) {
-        if let Err(err) = retry::Retry::default()
-            .max_duration(Duration::from_secs(60))
-            .retry_async(|retry_state| {
-                let k8s_context = self.context.clone();
-                let namespace = self.namespace.clone();
-                let service_name = self.service_name.clone();
-                let local_address = self.local_address.clone();
-                let local_port = self.local_port;
-                let target_port = self.target_port;
+    /// Spawns a port forwarding process that resolves when
+    /// the port forward is established.
+    pub async fn spawn_port_forward(&self) -> Result<PortForwardConnection, anyhow::Error> {
+        let port_arg_str = format!("{}:{}", &self.local_port, &self.target_port);
+        let service_name_arg_str = format!("services/{}", &self.service_name);
+        let mut args = vec![
+            "port-forward",
+            &service_name_arg_str,
+            &port_arg_str,
+            "-n",
+            &self.namespace,
+            "--address",
+            &self.local_address,
+        ];
+
+        if let Some(k8s_context) = &self.context {
+            args.extend(["--context", k8s_context]);
+        }
+
+        let child = tokio::process::Command::new("kubectl")
+            .args(args)
+            // Silence stdout
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::piped())
+            .kill_on_drop(true)
+            .spawn();
+
+        if let Ok(mut child) = child {
+            if let Some(stderr) = child.stderr.take() {
+                let stderr_reader = tokio::io::BufReader::new(stderr);
+                // Wait until we know port forwarding is established
+                let timeout = tokio::time::timeout(std::time::Duration::from_secs(5), async {
+                    let mut lines = stderr_reader.lines();
+                    while let Ok(Some(line)) = lines.next_line().await {
+                        if line.contains("Forwarding from") {
+                            break;
+                        }
+                    }
+                })
+                .await;
+
+                if timeout.is_err() {
+                    return Err(anyhow::anyhow!("Port forwarding timed out after 5 seconds"));
+                }
 
                 info!(
-                    "Spawning port forwarding process for {} from ports {}:{} -> {}",
-                    service_name, local_address, local_port, target_port
+                    "Port forwarding established for {} from ports {}:{} -> {}",
+                    &self.service_name, &self.local_address, &self.local_port, &self.target_port
                 );
 
-                async move {
-                    let port_arg_str = format!("{}:{}", &local_port, &target_port);
-                    let service_name_arg_str = format!("services/{}", &service_name);
-                    let mut args = vec![
-                        "port-forward",
-                        &service_name_arg_str,
-                        &port_arg_str,
-                        "-n",
-                        &namespace,
-                        "--address",
-                        &local_address,
-                    ];
-
-                    if let Some(k8s_context) = &k8s_context {
-                        args.extend(["--context", k8s_context]);
-                    }
-
-                    match tokio::process::Command::new("kubectl")
-                        .args(args)
-                        // Silence stdout/stderr
-                        .stdout(std::process::Stdio::null())
-                        .stderr(std::process::Stdio::null())
-                        .kill_on_drop(true)
-                        .output()
-                        .await
-                    {
-                        Ok(output) => {
-                            if !output.status.success() {
-                                let retry_err_msg = format!(
-                                    "Failed to port-forward{}: {}",
-                                    retry_state.next_backoff.map_or_else(
-                                        || "".to_string(),
-                                        |d| format!(", retrying in {:?}", d)
-                                    ),
-                                    String::from_utf8_lossy(&output.stderr)
-                                );
-                                warn!("{}", retry_err_msg);
-
-                                return RetryResult::RetryableErr(anyhow::anyhow!(retry_err_msg));
-                            }
-                        }
-                        Err(err) => {
-                            return RetryResult::RetryableErr(anyhow::anyhow!(
-                                "Failed to port-forward: {}",
-                                err
-                            ));
-                        }
-                    }
-                    // The kubectl subprocess's future will only resolve on error, thus the
-                    // code here is unreachable. We return RetryResult::Ok to satisfy
-                    // the type checker.
-                    RetryResult::Ok(())
-                }
-            })
-            .await
-        {
-            warn!("{}", err);
+                return Ok(PortForwardConnection {
+                    _port_forward_process: child,
+                });
+            }
         }
+        Err(anyhow::anyhow!("Failed to spawn port forwarding process"))
     }
 }
 
-pub async fn create_kubectl_port_forwarder(
+/// Creates a port forwarder for the external pg wire port of balancerd.
+pub async fn create_pg_wire_port_forwarder(
     client: &Client,
     args: &SelfManagedDebugMode,
 ) -> Result<KubectlPortForwarder, anyhow::Error> {
