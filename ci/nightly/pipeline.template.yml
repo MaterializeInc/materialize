@@ -787,25 +787,6 @@ steps:
                   "--seed=$BUILDKITE_JOB_ID",
                 ]
 
-      - id: checks-parallel-drop-create-default-replica-postgres
-        label: "Checks parallel + DROP/CREATE replica (:postgres: Consensus)"
-        depends_on: build-aarch64
-        timeout_in_minutes: 180
-        parallelism: 2
-        agents:
-          queue: hetzner-aarch64-16cpu-32gb
-        plugins:
-          - ./ci/plugins/mzcompose:
-              composition: platform-checks
-              args:
-                [
-                  --scenario=DropCreateDefaultReplica,
-                  --execution-mode=parallel,
-                  --features=postgres_consensus,
-                  --system-param=persist_use_postgres_tuned_queries=true,
-                  "--seed=$BUILDKITE_JOB_ID",
-                ]
-
       - id: checks-parallel-restart-clusterd-compute
         label: "Checks parallel + restart compute clusterd"
         depends_on: build-aarch64
@@ -841,24 +822,6 @@ steps:
           - ./ci/plugins/mzcompose:
               composition: platform-checks
               args: [--scenario=RestartEnvironmentdClusterdStorage, --execution-mode=parallel, "--seed=$BUILDKITE_JOB_ID"]
-
-      - id: checks-parallel-restart-environmentd-clusterd-storage-postgres-consensus
-        label: "Checks parallel + restart of environmentd & storage clusterd (:postgres: Consensus)"
-        depends_on: build-aarch64
-        timeout_in_minutes: 180
-        parallelism: 2
-        agents:
-          queue: hetzner-aarch64-16cpu-32gb
-        plugins:
-          - ./ci/plugins/mzcompose:
-              composition: platform-checks
-              args: [
-                --scenario=RestartEnvironmentdClusterdStorage,
-                --execution-mode=parallel,
-                --features=postgres_consensus,
-                --system-param=persist_use_postgres_tuned_queries=true,
-                "--seed=$BUILDKITE_JOB_ID",
-              ]
 
       - id: checks-parallel-kill-clusterd-storage
         label: "Checks parallel + kill storage clusterd"
