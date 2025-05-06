@@ -28,7 +28,7 @@ mz-build-tools = { path = "../build-tools", default-features = false }
 mz-ore = { path = "../ore", features = ["test"] }
 mz-proto = { path = "../proto" }
 proptest = { version = "1.6.0", default-features = false, features = ["std"] }
-similar-asserts = "1.4"
+similar-asserts = "1.7"
 
 [build-dependencies]
 anyhow = "1.0.98"
