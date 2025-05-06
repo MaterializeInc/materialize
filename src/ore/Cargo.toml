@@ -173,7 +173,7 @@ harness = false
 [[bench]]
 name = "bytes"
 harness = false
-required-features = ["bytes", "region", "tracing", "derivative"]
+required-features = ["bytes", "region", "tracing"]
 
 [package.metadata.cargo-udeps.ignore]
 normal = ["workspace-hack"]
