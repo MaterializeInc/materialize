@@ -76,3 +76,4 @@ pyarrow==20.0.0
 minio==7.2.15
 zstandard==0.23.0
 build==1.2.2.post1
+hatchling==1.27.0

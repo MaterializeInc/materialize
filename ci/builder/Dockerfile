@@ -45,6 +45,7 @@ RUN apt-get update --fix-missing && TZ=UTC DEBIAN_FRONTEND=noninteractive apt-ge
     gnupg2 \
     libxml2 \
     python3 \
+    python3.12-venv \
     && rm -rf /var/lib/apt/lists/*
 
 # Install Python dependencies. These are necessary to run some of our base tooling.
