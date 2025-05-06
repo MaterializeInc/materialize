@@ -2383,9 +2383,9 @@ dependencies = [
 
 [[package]]
 name = "dec"
-version = "0.4.9"
+version = "0.4.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a8aed775093963adbd1821f88d7934c839330b05f41c9877bdbc7b385e498b9c"
+checksum = "09ae126ef80702bd514a66279b6dac1e58ff1dbcb12024f7110de95608348fd7"
 dependencies = [
  "decnumber-sys",
  "libc",
