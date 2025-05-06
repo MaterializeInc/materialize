@@ -2,6 +2,6 @@ terraform_gcp_version: v0.4.0
 terraform_azure_version: v0.3.4
 terraform_aws_version: v0.4.3
 terraform_helm_version: v0.1.12
-operator_helm_chart_version: v25.1.10
-orchestratord_version: v0.142.1
-environmentd_version: v0.130.11
+operator_helm_chart_version: v25.1.11
+orchestratord_version: v0.143.0
+environmentd_version: v0.130.12
