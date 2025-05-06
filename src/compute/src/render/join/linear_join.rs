@@ -267,8 +267,7 @@ where
                         // Reuseable allocation for unpacking.
                         let mut datums = DatumVec::new();
                         move |row| {
-                            let binding = SharedRow::get();
-                            let mut row_builder = binding.borrow_mut();
+                            let mut row_builder = SharedRow::get();
                             let temp_storage = RowArena::new();
                             let mut datums_local = datums.borrow_with(&row);
                             // TODO(mcsherry): re-use `row` allocation.
@@ -312,8 +311,7 @@ where
                     // Reuseable allocation for unpacking.
                     let mut datums = DatumVec::new();
                     move |row| {
-                        let binding = SharedRow::get();
-                        let mut row_builder = binding.borrow_mut();
+                        let mut row_builder = SharedRow::get();
                         let temp_storage = RowArena::new();
                         let mut datums_local = datums.borrow_with(&row);
                         // TODO(mcsherry): re-use `row` allocation.
@@ -500,8 +498,7 @@ where
                     &next_input,
                     self.shutdown_token.clone(),
                     move |key, old, new| {
-                        let binding = SharedRow::get();
-                        let mut row_builder = binding.borrow_mut();
+                        let mut row_builder = SharedRow::get();
                         let temp_storage = RowArena::new();
 
                         let mut datums_local = datums.borrow();
@@ -532,8 +529,7 @@ where
                 &next_input,
                 self.shutdown_token.clone(),
                 move |key, old, new| {
-                    let binding = SharedRow::get();
-                    let mut row_builder = binding.borrow_mut();
+                    let mut row_builder = SharedRow::get();
                     let temp_storage = RowArena::new();
 
                     let mut datums_local = datums.borrow();

@@ -555,10 +555,7 @@ impl ColReader {
                 // First read a binary value into a temp row, and later parse that as UUID into our
                 // actual Row Packer.
                 let mut temp_row = SharedRow::get();
-                temp_row
-                    .pack_with(|temp_packer| reader.read(idx, temp_packer))
-                    .context("uuid")?;
-                let temp_row = temp_row.borrow();
+                reader.read(idx, &mut temp_row.packer()).context("uuid")?;
                 let slice = match temp_row.unpack_first() {
                     Datum::Bytes(slice) => slice,
                     Datum::Null => {
@@ -587,10 +584,7 @@ impl ColReader {
                 // First read a string value into a temp row, and later parse that as JSON into our
                 // actual Row Packer.
                 let mut temp_row = SharedRow::get();
-                temp_row
-                    .pack_with(|temp_packer| reader.read(idx, temp_packer))
-                    .context("jsonb")?;
-                let temp_row = temp_row.borrow();
+                reader.read(idx, &mut temp_row.packer()).context("jsonb")?;
                 let value = match temp_row.unpack_first() {
                     Datum::String(value) => value,
                     Datum::Null => {

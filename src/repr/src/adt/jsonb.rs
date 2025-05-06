@@ -111,8 +111,7 @@ impl Jsonb {
     ///
     /// Errors if the slice is not valid JSON.
     pub fn from_slice(buf: &[u8]) -> Result<Jsonb, anyhow::Error> {
-        let binding = SharedRow::get();
-        let mut row_builder = binding.borrow_mut();
+        let mut row_builder = SharedRow::get();
         let mut packer = row_builder.packer();
         JsonbPacker::new(&mut packer).pack_slice(buf)?;
         Ok(Jsonb {

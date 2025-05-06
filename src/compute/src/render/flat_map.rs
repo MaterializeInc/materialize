@@ -136,8 +136,7 @@ fn drain_through_mfp<T>(
     <T as Columnar>::Container: Clone + Send,
 {
     let temp_storage = RowArena::new();
-    let binding = SharedRow::get();
-    let mut row_builder = binding.borrow_mut();
+    let mut row_builder = SharedRow::get();
 
     // This is not cheap, and is meant to be amortized across many `extensions`.
     let mut datums_local = datum_vec.borrow_with(input_row);

@@ -1773,8 +1773,7 @@ impl Pairer {
     /// Splits a datum iterator into a pair of `Row` instances.
     fn split<'a>(&self, datum_iter: impl IntoIterator<Item = Datum<'a>>) -> (Row, Row) {
         let mut datum_iter = datum_iter.into_iter();
-        let binding = SharedRow::get();
-        let mut row_builder = binding.borrow_mut();
+        let mut row_builder = SharedRow::get();
         let first = row_builder.pack_using(datum_iter.by_ref().take(self.split_arity));
         let second = row_builder.pack_using(datum_iter);
         (first, second)
