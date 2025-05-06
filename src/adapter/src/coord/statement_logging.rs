@@ -33,7 +33,7 @@ use tracing::debug;
 use uuid::Uuid;
 
 use crate::coord::{ConnMeta, Coordinator};
-use crate::session::Session;
+use crate::session::{LifecycleTimestamps, Session};
 use crate::statement_logging::{
     SessionHistoryEvent, StatementBeganExecutionRecord, StatementEndedExecutionReason,
     StatementEndedExecutionRecord, StatementLifecycleEvent, StatementPreparedRecord,
@@ -666,6 +666,7 @@ impl Coordinator {
         session: &mut Session,
         params: &Params,
         logging: &Arc<QCell<PreparedStatementLoggingInfo>>,
+        lifecycle_timestamps: Option<LifecycleTimestamps>,
     ) -> Option<StatementLoggingId> {
         let enable_internal_statement_logging = self
             .catalog()
@@ -721,6 +722,20 @@ impl Coordinator {
 
         let now = self.now();
         let execution_uuid = epoch_to_uuid_v7(&now);
+
+        if let Some(lifecycle_timestamps) = lifecycle_timestamps {
+            self.record_statement_lifecycle_event(
+                &StatementLoggingId(execution_uuid),
+                &StatementLifecycleEvent::Received,
+                lifecycle_timestamps.received,
+            );
+            self.record_statement_lifecycle_event(
+                &StatementLoggingId(execution_uuid),
+                &StatementLifecycleEvent::ParsingFinished,
+                lifecycle_timestamps.parsing_finished,
+            );
+        }
+
         self.record_statement_lifecycle_event(
             &StatementLoggingId(execution_uuid),
             &StatementLifecycleEvent::ExecutionBegan,
