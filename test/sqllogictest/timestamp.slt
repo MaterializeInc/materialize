@@ -494,3 +494,14 @@ query T
 SELECT '0001-12-31 19:03:58AD '::timestamp;
 ----
 0001-12-31 19:03:58
+
+# Regression test for #9236 which mis-parsed timezones ending with 'AD' or 'BC'.
+query T
+SELECT '2020-12-21 18:53:49 Asia/Baghdad'::timestamp;
+----
+2020-12-21 18:53:49
+
+# Regression test covering case where a characters lower is 1 byte and upper is 2 bytes.
+# Incorrect failing case is a panic due to splitting a string in the middle of a char.
+query error ERROR: invalid input syntax for type timestamp: Invalid character at offset 19 in 2025-01-01 00:00:00ı: 'ı': "2025-01-01 00:00:00ı AD"
+SELECT '2025-01-01 00:00:00ı AD'::timestamp;

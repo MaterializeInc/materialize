@@ -1874,15 +1874,6 @@ pub enum CalendarEra {
     AD,
 }
 
-impl CalendarEra {
-    fn as_str(&self) -> &'static str {
-        match self {
-            CalendarEra::BC => "BC",
-            CalendarEra::AD => "AD",
-        }
-    }
-}
-
 /// Takes a 'date timezone' 'date time timezone' string and splits it into 'date
 /// {time}' and 'timezone' components then checks for a 'CalenderEra' defaulting
 /// to 'AD'.
@@ -1938,17 +1929,41 @@ pub(crate) fn split_timestamp_string(value: &str) -> (&str, &str, CalendarEra) {
     }
 }
 
+// We support three era formats:
+//  1. "<timestamp><separator><timezone> <era>"
+//  2. "<timestamp> <era>"
+//  3. "<timestamp><era>"
+//
+// NB(ptravers): pg supports more formats than noted above.
 fn strip_era_from_timezone(timezone: &str) -> (&str, CalendarEra) {
     use CalendarEra::{AD, BC};
     let timezone = timezone.trim();
     let timezone_upper = timezone.to_uppercase();
 
+    // Covers cases 1 and 2.
+    if timezone.len() < 3 {
+        return match (
+            timezone_upper.strip_suffix("BC"),
+            timezone_upper.strip_suffix("AD"),
+        ) {
+            (Some(_), None) => ("", BC),
+            (None, Some(_)) => ("", AD),
+            // NB(ptravers): we expect this to fail when we go to check
+            // the timezone is valid in the next step.
+            _ => (timezone, AD),
+        };
+    }
+
+    // Covers case 3.
+    //
+    // Safety: upper case and lower case chars for a, b, c, d, and \s
+    // are all 1 byte so suffix is always of length 3 bytes.
     match (
-        timezone_upper.strip_suffix(BC.as_str()),
-        timezone_upper.strip_suffix(AD.as_str()),
+        timezone_upper.strip_suffix(" BC"),
+        timezone_upper.strip_suffix(" AD"),
     ) {
-        (Some(remainder), None) => (&timezone[..remainder.len()], BC),
-        (None, Some(remainder)) => (&timezone[..remainder.len()], AD),
+        (Some(_), None) => (&timezone[..timezone.len() - 3], BC),
+        (None, Some(_)) => (&timezone[..timezone.len() - 3], AD),
         _ => (timezone, AD),
     }
 }
