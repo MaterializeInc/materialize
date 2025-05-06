@@ -47,12 +47,14 @@ class ScenarioRunner:
     def __init__(
         self,
         scenario: str,
+        scale: int,
         mode: str,
         connection: pg8000.native.Connection,
         results_file: Any,
         replica_size: int,
     ) -> None:
         self.scenario = scenario
+        self.scale = scale
         self.mode = mode
         self.connection = connection
         self.results_file = results_file
@@ -62,12 +64,13 @@ class ScenarioRunner:
         self, category: str, name: str, repetition: int, size_bytes: int, time: float
     ) -> None:
         self.results_file.write(
-            f"{self.scenario},{self.mode},{category},{name},{self.replica_size},{repetition},{size_bytes},{int(time * 1_000)}\n"
+            f"{self.scenario},{self.scale},{self.mode},{category},{name},{self.replica_size},{repetition},{size_bytes},{int(time * 1_000)}\n"
         )
         self.results_file.flush()
 
     def run_query(self, query: str, **params) -> list | None:
-        print(f"> {query} {params}")
+        query = dedent(query)
+        print(f"> {query} {params or ''}")
         return self.connection.run(query, **params)
 
     def measure(
@@ -138,10 +141,10 @@ class Scenario:
         raise NotImplementedError("Subclasses should implement this method")
 
 
-class TpccScenario(Scenario):
+class TpchScenario(Scenario):
 
     def name(self) -> str:
-        return f"tpcc_sf_{10*self.scale}"
+        return f"tpch"
 
     def materialize_views(self) -> list[str]:
         return ["lineitem"]
@@ -213,10 +216,10 @@ class TpccScenario(Scenario):
         )
 
 
-class TpccScenarioMV(Scenario):
+class TpchScenarioMV(Scenario):
 
     def name(self) -> str:
-        return f"tpcc_mv_sf_{10*self.scale}"
+        return f"tpch_mv"
 
     def materialize_views(self) -> list[str]:
         return ["lineitem"]
@@ -310,7 +313,7 @@ class TpccScenarioMV(Scenario):
 
 class AuctionScenario(Scenario):
     def name(self) -> str:
-        return f"auction_{10*self.scale}"
+        return f"auction"
 
     def materialize_views(self) -> list[str]:
         return ["auctions", "bids"]
@@ -524,6 +527,7 @@ class AuctionScenario(Scenario):
             query=[
                 "WITH data AS (SELECT * FROM bids WHERE amount = 123123123) SELECT * FROM data, t;",
             ],
+            repetitions=3,
         )
 
         # Peek against index
@@ -534,8 +538,10 @@ class AuctionScenario(Scenario):
             query=[
                 "SELECT * FROM bids WHERE amount = 123123123;",
             ],
+            repetitions=3,
         )
 
+        # Primitive operators
         runner.measure(
             "primitive_operators",
             "bids_max",
@@ -543,6 +549,19 @@ class AuctionScenario(Scenario):
             query=[
                 "SELECT max(amount) FROM bids;",
             ],
+            repetitions=3,
+        )
+        runner.measure(
+            "primitive_operators",
+            "bids_max_subscribe",
+            size_of_index="bids_id_idx",
+            query=[
+                "BEGIN",
+                "DECLARE c CURSOR FOR SUBSCRIBE (SELECT max(amount) FROM bids);",
+                "FETCH 1 c;",
+                "ROLLBACK;",
+            ],
+            repetitions=3,
         )
 
         runner.measure(
@@ -552,6 +571,19 @@ class AuctionScenario(Scenario):
             query=[
                 "SELECT sum(amount) FROM bids;",
             ],
+            repetitions=3,
+        )
+        runner.measure(
+            "primitive_operators",
+            "bids_sum_subscribe",
+            size_of_index="bids_id_idx",
+            query=[
+                "BEGIN",
+                "DECLARE c CURSOR FOR SUBSCRIBE (SELECT sum(amount) FROM bids);",
+                "FETCH 1 c;",
+                "ROLLBACK;",
+            ],
+            repetitions=3,
         )
 
         runner.measure(
@@ -561,25 +593,41 @@ class AuctionScenario(Scenario):
             query=[
                 "SELECT count(1) FROM bids;",
             ],
+            repetitions=3,
+        )
+        runner.measure(
+            "primitive_operators",
+            "bids_count_subscribe",
+            size_of_index="bids_id_idx",
+            query=[
+                "BEGIN",
+                "DECLARE c CURSOR FOR SUBSCRIBE (SELECT count(1) FROM bids);",
+                "FETCH 1 c;",
+                "ROLLBACK;",
+            ],
+            repetitions=3,
         )
 
         runner.measure(
-            "composite_operators",
-            "bids_count_max_sum_min",
+            "primitive_operators",
+            "bids_basic_list_agg",
             size_of_index="bids_id_idx",
             query=[
-                """
-                WITH data AS (
-                    SELECT
-                        id, count(amount), max(amount), sum(amount), min(amount)
-                    FROM bids
-                    GROUP BY id
-                )
-                SELECT
-                    sum(data.count), sum(data.max), sum(data.sum), sum(data.min)
-                FROM data;
-                """,
+                "SELECT auction_id, list_agg(amount) FROM bids GROUP BY auction_id LIMIT 1;",
             ],
+            repetitions=3,
+        )
+        runner.measure(
+            "primitive_operators",
+            "bids_basic_list_agg_subscribe",
+            size_of_index="bids_id_idx",
+            query=[
+                "BEGIN",
+                "DECLARE c CURSOR FOR SUBSCRIBE (SELECT auction_id, list_agg(amount) FROM bids GROUP BY auction_id);",
+                "FETCH 1 c;",
+                "ROLLBACK;",
+            ],
+            repetitions=3,
         )
 
         runner.measure(
@@ -587,8 +635,48 @@ class AuctionScenario(Scenario):
             "join",
             size_of_index="bids_id_idx",
             query=[
-                "SELECT count(*) FROM bids, auctions WHERE bids.auction_id = auctions.id;",
+                "SELECT * FROM bids, auctions WHERE bids.auction_id = auctions.id LIMIT 0;",
             ],
+            repetitions=3,
+        )
+
+        # Composite operators
+        runner.measure(
+            "composite_operators",
+            "bids_count_max_sum_min",
+            size_of_index="bids_id_idx",
+            query=[
+                """
+                SELECT
+                    id, count(amount), max(amount), sum(amount), min(amount)
+                FROM bids
+                GROUP BY id
+                LIMIT 0;
+                """,
+            ],
+            repetitions=3,
+        )
+        runner.measure(
+            "composite_operators",
+            "bids_count_max_sum_min_subscribe",
+            size_of_index="bids_id_idx",
+            query=[
+                "BEGIN",
+                """
+                DECLARE c CURSOR FOR SUBSCRIBE (
+                    SELECT
+                        id, count(amount), max(amount), sum(amount), min(amount)
+                    FROM bids
+                    GROUP BY id
+                    LIMIT 0
+                )
+                """,
+                "FETCH 1 c;",
+                "ROLLBACK;",
+                """
+                """,
+            ],
+            repetitions=3,
         )
 
         runner.measure(
@@ -598,6 +686,7 @@ class AuctionScenario(Scenario):
             query=[
                 "SELECT auction_id, item, MAX(amount) FROM bids, auctions WHERE bids.auction_id = auctions.id GROUP BY auction_id, item;",
             ],
+            repetitions=3,
         )
 
         # Restart index
@@ -639,15 +728,15 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
 
     with open(f"results_{int(time.time())}.csv", "w") as f:
         f.write(
-            "scenario,mode,category,test_name,cluster_size,repetition,size_bytes,time_ms\n"
+            "scenario,scale,mode,category,test_name,cluster_size,repetition,size_bytes,time_ms\n"
         )
         run_scenario_strong(
-            scenario=TpccScenario(1, "100cc"),
+            scenario=TpchScenario(1, "100cc"),
             results_file=f,
             connection=connection,
         )
         run_scenario_strong(
-            scenario=TpccScenarioMV(1, "100cc"),
+            scenario=TpchScenarioMV(1, "100cc"),
             results_file=f,
             connection=connection,
         )
@@ -668,7 +757,12 @@ def run_scenario_strong(
 ) -> None:
 
     runner = ScenarioRunner(
-        scenario.name(), "strong", connection, results_file, replica_size="None"
+        scenario.name(),
+        scenario.scale,
+        "strong",
+        connection,
+        results_file,
+        replica_size="None",
     )
 
     for query in scenario.drop():
@@ -725,7 +819,12 @@ def run_scenario_weak(
         scenario.replica_size = replica_size
         scenario.scale = initial_scale * replica_size_scale[1]
         runner = ScenarioRunner(
-            scenario.name(), "weak", connection, results_file, replica_size
+            scenario.name(),
+            scenario.scale,
+            "weak",
+            connection,
+            results_file,
+            replica_size,
         )
         for query in scenario.drop():
             runner.run_query(dedent(query))
