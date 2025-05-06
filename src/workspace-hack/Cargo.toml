@@ -141,8 +141,8 @@ tokio-util = { version = "0.7.15", features = ["codec", "compat", "io", "time"] 
 toml_datetime = { version = "0.6.9", default-features = false, features = ["serde"] }
 toml_edit = { version = "0.22.26", features = ["serde"] }
 tonic = { version = "0.12.3", features = ["gzip"] }
-tower-9fbad63c4bcf4a8f = { package = "tower", version = "0.4.13", features = ["balance", "buffer", "filter", "limit", "load-shed", "retry", "timeout", "util"] }
-tower-d8f496e17d97b5cb = { package = "tower", version = "0.5.2", default-features = false, features = ["buffer", "filter", "log", "make", "util"] }
+tower-9fbad63c4bcf4a8f = { package = "tower", version = "0.4.13", default-features = false, features = ["balance", "buffer", "limit", "util"] }
+tower-d8f496e17d97b5cb = { package = "tower", version = "0.5.2", default-features = false, features = ["balance", "buffer", "filter", "limit", "load-shed", "log", "retry", "timeout"] }
 tower-http = { version = "0.6.2", features = ["auth", "cors", "map-response-body", "trace", "util"] }
 tracing = { version = "0.1.41", features = ["log"] }
 tracing-core = { version = "0.1.33" }
@@ -285,8 +285,8 @@ tokio-util = { version = "0.7.15", features = ["codec", "compat", "io", "time"] 
 toml_datetime = { version = "0.6.9", default-features = false, features = ["serde"] }
 toml_edit = { version = "0.22.26", features = ["serde"] }
 tonic = { version = "0.12.3", features = ["gzip"] }
-tower-9fbad63c4bcf4a8f = { package = "tower", version = "0.4.13", features = ["balance", "buffer", "filter", "limit", "load-shed", "retry", "timeout", "util"] }
-tower-d8f496e17d97b5cb = { package = "tower", version = "0.5.2", default-features = false, features = ["buffer", "filter", "log", "make", "util"] }
+tower-9fbad63c4bcf4a8f = { package = "tower", version = "0.4.13", default-features = false, features = ["balance", "buffer", "limit", "util"] }
+tower-d8f496e17d97b5cb = { package = "tower", version = "0.5.2", default-features = false, features = ["balance", "buffer", "filter", "limit", "load-shed", "log", "retry", "timeout"] }
 tower-http = { version = "0.6.2", features = ["auth", "cors", "map-response-body", "trace", "util"] }
 tracing = { version = "0.1.41", features = ["log"] }
 tracing-core = { version = "0.1.33" }
@@ -310,7 +310,6 @@ native-tls = { version = "0.2.14", default-features = false, features = ["vendor
 pathdiff = { version = "0.2.3", default-features = false, features = ["camino"] }
 ring = { version = "0.17.14", features = ["std"] }
 rustix = { version = "0.38.44", features = ["event", "fs", "net", "pipe", "process", "termios", "time"] }
-tower-d8f496e17d97b5cb = { package = "tower", version = "0.5.2", default-features = false, features = ["timeout"] }
 
 [target.x86_64-unknown-linux-gnu.build-dependencies]
 camino = { version = "1.1.9", default-features = false, features = ["serde1"] }
@@ -321,7 +320,6 @@ native-tls = { version = "0.2.14", default-features = false, features = ["vendor
 pathdiff = { version = "0.2.3", default-features = false, features = ["camino"] }
 ring = { version = "0.17.14", features = ["std"] }
 rustix = { version = "0.38.44", features = ["event", "fs", "net", "pipe", "process", "termios", "time"] }
-tower-d8f496e17d97b5cb = { package = "tower", version = "0.5.2", default-features = false, features = ["timeout"] }
 
 [target.x86_64-apple-darwin.dependencies]
 camino = { version = "1.1.9", default-features = false, features = ["serde1"] }
@@ -332,7 +330,6 @@ pathdiff = { version = "0.2.3", default-features = false, features = ["camino"] 
 ring = { version = "0.17.14", features = ["std"] }
 rustix = { version = "0.38.44", features = ["event", "fs", "net", "pipe", "process", "termios", "time"] }
 security-framework = { version = "2.10.0", features = ["alpn"] }
-tower-d8f496e17d97b5cb = { package = "tower", version = "0.5.2", default-features = false, features = ["timeout"] }
 
 [target.x86_64-apple-darwin.build-dependencies]
 camino = { version = "1.1.9", default-features = false, features = ["serde1"] }
@@ -343,6 +340,5 @@ pathdiff = { version = "0.2.3", default-features = false, features = ["camino"] 
 ring = { version = "0.17.14", features = ["std"] }
 rustix = { version = "0.38.44", features = ["event", "fs", "net", "pipe", "process", "termios", "time"] }
 security-framework = { version = "2.10.0", features = ["alpn"] }
-tower-d8f496e17d97b5cb = { package = "tower", version = "0.5.2", default-features = false, features = ["timeout"] }
 
 ### END HAKARI SECTION
