@@ -11,9 +11,6 @@
 //! [`upsert_inner`] for a description of how the operator works and why.
 
 use std::cmp::Reverse;
-// We don't care about the order, but we do want drain().
-#[allow(clippy::disallowed_types)]
-use std::collections::HashMap;
 use std::fmt::Debug;
 use std::sync::Arc;
 
@@ -164,7 +161,8 @@ where
     let upsert_shared_metrics = Arc::clone(&upsert_metrics.shared);
 
     let shutdown_button = builder.build(move |caps| async move {
-        let [mut output_cap, snapshot_cap, health_cap]: [_; 3] = caps.try_into().unwrap();
+        let [output_cap, snapshot_cap, health_cap]: [_; 3] = caps.try_into().unwrap();
+        drop(output_cap);
         let mut snapshot_cap = CapabilitySet::from_elem(snapshot_cap);
 
         // The order key of the `UpsertState` is `Option<FromTime>`, which implements `Default`
@@ -192,9 +190,10 @@ where
         let mut multi_get_scratch = Vec::new();
 
         // For stashing source input while it's not eligible for processing.
-        // We don't care about the order, but we do want drain().
-        #[allow(clippy::disallowed_types)]
-        let mut stash = HashMap::new();
+        let mut stash = vec![];
+        // A capability suitable for emitting any updates based on stash. No capability is held
+        // when the stash is empty.
+        let mut stash_cap: Option<Capability<G::Timestamp>> = None;
         let mut input_upper = Antichain::from_elem(Timestamp::minimum());
         let mut partial_drain_time = None;
 
@@ -342,19 +341,31 @@ where
 
                                 stage_input(
                                     &mut stash,
-                                    cap,
                                     &mut data,
                                     &input_upper,
                                     &resume_upper,
                                 );
+                                if !stash.is_empty() {
+                                    // Update the stashed capability to the minimum
+                                    stash_cap = match stash_cap {
+                                        Some(stash_cap) => {
+                                            if cap.time() < stash_cap.time() {
+                                                Some(cap)
+                                            } else {
+                                                Some(stash_cap)
+                                            }
+                                        }
+                                        None => Some(cap)
+                                    };
+                                }
 
-                                if prevent_snapshot_buffering && output_cap.time() == &event_time {
+                                if prevent_snapshot_buffering && input_upper.as_option() == Some(&event_time) {
                                     tracing::debug!(
                                         worker_id = %source_config.worker_id,
                                         source_id = %source_config.id,
                                         ?event_time,
                                         ?resume_upper,
-                                        ?output_cap,
+                                        ?input_upper,
                                         "allowing partial drain");
                                     partial_drain_time = Some(event_time.clone());
                                 } else {
@@ -364,7 +375,7 @@ where
                                         %prevent_snapshot_buffering,
                                         ?event_time,
                                         ?resume_upper,
-                                        ?output_cap,
+                                        ?input_upper,
                                         "not allowing partial drain");
                                 }
                             }
@@ -392,16 +403,6 @@ where
                                 // it again once we receive data right at the
                                 // frontier again.
                                 partial_drain_time = None;
-
-
-                                if let Some(ts) = upper.as_option() {
-                                    tracing::trace!(
-                                        worker_id = %source_config.worker_id,
-                                        source_id = %source_config.id,
-                                        ?ts,
-                                        "downgrading output capability");
-                                    let _ = output_cap.try_downgrade(ts);
-                                }
                                 input_upper = upper;
                             }
                         }
@@ -432,23 +433,18 @@ where
             // loop. More of our stash can become eligible for draining both
             // when the source-input frontier advances or when the persist
             // frontier advances.
+            if !stash.is_empty() {
+                let cap = stash_cap.as_mut().expect("missing capability for non-empty stash");
 
-            // We can't easily iterate through the cap -> updates mappings and
-            // downgrade the cap at the same time, so we drain them out and
-            // re-insert them into the map at their (possibly downgraded) cap.
-
-
-            let stashed_work = stash.drain().collect_vec();
-            for (mut cap, mut updates) in stashed_work.into_iter() {
                 tracing::trace!(
                     worker_id = %source_config.worker_id,
                     source_id = %source_config.id,
                     ?cap,
-                    ?updates,
+                    ?stash,
                     "stashed updates");
 
                 let mut min_remaining_time = drain_staged_input::<_, G, _, _, _>(
-                    &mut updates,
+                    &mut stash,
                     &mut commands_state,
                     &mut output_updates,
                     &mut multi_get_scratch,
@@ -466,20 +462,14 @@ where
                     "output updates for complete timestamp");
 
                 for (update, ts, diff) in output_updates.drain(..) {
-                    output_handle.give(&cap, (update, ts, diff));
+                    output_handle.give(cap, (update, ts, diff));
                 }
 
-                if !updates.is_empty() {
+                if !stash.is_empty() {
                     let min_remaining_time = min_remaining_time.take().expect("we still have updates left");
                     cap.downgrade(&min_remaining_time);
-
-                    // Stash them back in, being careful because we might have
-                    // to merge them with other updates that we already have for
-                    // that timestamp.
-                    stash.entry(cap)
-                        .and_modify(|existing_updates| existing_updates.append(&mut updates))
-                        .or_insert_with(|| updates);
-
+                } else {
+                    stash_cap = None;
                 }
             }
 
@@ -501,18 +491,18 @@ where
             // the minimum. However, because the frontier only advances on `Progress` updates,
             // the collection always accumulates correctly for all keys.
             if let Some(partial_drain_time) = &partial_drain_time {
+                if !stash.is_empty() {
+                    let cap = stash_cap.as_mut().expect("missing capability for non-empty stash");
 
-                let stashed_work = stash.drain().collect_vec();
-                for (mut cap, mut updates) in stashed_work.into_iter() {
                     tracing::trace!(
                         worker_id = %source_config.worker_id,
                         source_id = %source_config.id,
                         ?cap,
-                        ?updates,
+                        ?stash,
                         "stashed updates");
 
                     let mut min_remaining_time = drain_staged_input::<_, G, _, _, _>(
-                        &mut updates,
+                        &mut stash,
                         &mut commands_state,
                         &mut output_updates,
                         &mut multi_get_scratch,
@@ -533,20 +523,14 @@ where
                         "output updates for partial timestamp");
 
                     for (update, ts, diff) in output_updates.drain(..) {
-                        output_handle.give(&cap, (update, ts, diff));
+                        output_handle.give(cap, (update, ts, diff));
                     }
 
-                    if !updates.is_empty() {
+                    if !stash.is_empty() {
                         let min_remaining_time = min_remaining_time.take().expect("we still have updates left");
                         cap.downgrade(&min_remaining_time);
-
-                        // Stash them back in, being careful because we might have
-                        // to merge them with other updates that we already have for
-                        // that timestamp.
-                        stash.entry(cap)
-                            .and_modify(|existing_updates| existing_updates.append(&mut updates))
-                            .or_insert_with(|| updates);
-
+                    } else {
+                        stash_cap = None;
                     }
                 }
             }
@@ -568,8 +552,7 @@ where
 /// from the input/source timely edge.
 #[allow(clippy::disallowed_types)]
 fn stage_input<T, FromTime>(
-    stash: &mut HashMap<Capability<T>, Vec<(T, UpsertKey, Reverse<FromTime>, Option<UpsertValue>)>>,
-    cap: Capability<T>,
+    stash: &mut Vec<(T, UpsertKey, Reverse<FromTime>, Option<UpsertValue>)>,
     data: &mut Vec<((UpsertKey, Option<UpsertValue>, FromTime), T, Diff)>,
     input_upper: &Antichain<T>,
     resume_upper: &Antichain<T>,
@@ -581,9 +564,7 @@ fn stage_input<T, FromTime>(
         data.retain(|(_, ts, _)| resume_upper.less_equal(ts));
     }
 
-    let stash_for_timestamp = stash.entry(cap).or_default();
-
-    stash_for_timestamp.extend(data.drain(..).map(|((key, value, order), time, diff)| {
+    stash.extend(data.drain(..).map(|((key, value, order), time, diff)| {
         assert!(diff.is_positive(), "invalid upsert input");
         (time, key, Reverse(order), value)
     }));
@@ -609,6 +590,16 @@ enum DrainStyle<'a, T> {
 ///
 /// Returns the minimum observed time across the updates that remain in the
 /// stash or `None` if none are left.
+///
+/// ## Correctness
+///
+/// It is safe to call this function multiple times with the same `persist_upper` provided that the
+/// drain style is `AtTime`, which updates the state such that past actions are remembered and can
+/// be undone in subsequent calls.
+///
+/// It is *not* safe to call this function more than once with the same `persist_upper` and a
+/// `ToUpper` drain style. Doing so causes all calls except the first one to base their work on
+/// stale state, since in this drain style no modifications to the state are made.
 async fn drain_staged_input<S, G, T, FromTime, E>(
     stash: &mut Vec<(T, UpsertKey, Reverse<FromTime>, Option<UpsertValue>)>,
     commands_state: &mut indexmap::IndexMap<UpsertKey, UpsertValueAndSize<T, Option<FromTime>>>,
