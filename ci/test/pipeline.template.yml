@@ -663,23 +663,6 @@ steps:
       - ./ci/plugins/mzcompose:
           composition: source-sink-errors
 
-  - id: feature-benchmark-kafka-only
-    label: "Feature benchmark (Kafka only)"
-    depends_on: build-x86_64
-    timeout_in_minutes: 60
-    plugins:
-      - ./ci/plugins/mzcompose:
-          composition: feature-benchmark
-          args:
-            [
-              --scenario=KafkaUpsertUnique,
-              --other-tag=common-ancestor,
-              --ignore-other-tag-missing,
-            ]
-    coverage: skip
-    agents:
-      queue: hetzner-x86-64-dedi-4cpu-16gb
-
   # Fast tests closer to the end, doesn't matter as much if they have to wait
   # for an agent
   - id: persistence
