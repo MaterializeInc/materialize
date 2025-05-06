@@ -19,7 +19,6 @@ use kube::{Client, Config};
 use mz_build_info::{BuildInfo, build_info};
 use mz_ore::cli::{self, CliConfig};
 use mz_ore::error::ErrorExt;
-use mz_ore::task;
 use tracing::{error, info, warn};
 use tracing_subscriber::EnvFilter;
 use tracing_subscriber::layer::SubscriberExt;
@@ -27,7 +26,7 @@ use tracing_subscriber::util::SubscriberInitExt;
 
 use crate::docker_dumper::DockerDumper;
 use crate::k8s_dumper::K8sDumper;
-use crate::kubectl_port_forwarder::create_kubectl_port_forwarder;
+use crate::kubectl_port_forwarder::create_pg_wire_port_forwarder;
 use crate::utils::{
     create_tracing_log_file, format_base_path, validate_pg_connection_string, zip_debug_folder,
 };
@@ -63,6 +62,8 @@ pub struct SelfManagedDebugMode {
     /// If true, the tool will dump the values of secrets in the Kubernetes cluster.
     #[clap(long, default_value = "false", action = clap::ArgAction::Set)]
     k8s_dump_secret_values: bool,
+    // TODO (debug_tool1): Convert port forwarding variables into a map since we'll be
+    // portforwarding multiple times
     /// If true, the tool will automatically port-forward the external SQL port in the Kubernetes cluster.
     /// If dump_k8s is false however, we will not automatically port-forward.
     #[clap(long, default_value = "true", action = clap::ArgAction::Set)]
@@ -221,8 +222,9 @@ async fn main() {
 
 async fn run(context: Context, args: Args) -> Result<(), anyhow::Error> {
     // Depending on if the user is debugging either a k8s environments or docker environment,
-    // dump the respective system's resources.
-    let container_system_dumper = match &args.debug_mode {
+    // dump the respective system's resources and spin up a port forwarder if auto port forwarding.
+    // We'd like to keep the port forwarder alive until the end of the program.
+    let (container_system_dumper, _pg_wire_port_forward_connection) = match &args.debug_mode {
         DebugMode::SelfManaged(args) => {
             if args.dump_k8s {
                 let client = match create_k8s_client(args.k8s_context.clone()).await {
@@ -232,17 +234,20 @@ async fn run(context: Context, args: Args) -> Result<(), anyhow::Error> {
                         return Err(e);
                     }
                 };
+                let port_forward_connection = if args.auto_port_forward {
+                        let port_forwarder = create_pg_wire_port_forwarder(&client, args).await?;
 
-                if args.auto_port_forward {
-                    let port_forwarder = create_kubectl_port_forwarder(&client, args).await?;
-                    task::spawn(|| "port-forwarding", async move {
-                        port_forwarder.port_forward().await;
-                    });
-                    // There may be a delay between when the port forwarding process starts and when it's ready
-                    // to use. We wait a few seconds to ensure that port forwarding is ready.
-                    tokio::time::sleep(std::time::Duration::from_secs(2)).await;
-                }
-
+                    match port_forwarder.spawn_port_forward().await {
+                        Ok(connection) => Some(connection),
+                        Err(err) => {
+                            warn!("{}", err);
+                            None
+                        }
+                    }
+                } else {
+                    None
+                };
+                // Parker: Return it as a tuple (dumper, port_forwarder)
                 let dumper = ContainerServiceDumper::new_k8s_dumper(
                     &context,
                     client,
@@ -250,9 +255,9 @@ async fn run(context: Context, args: Args) -> Result<(), anyhow::Error> {
                     args.k8s_context.clone(),
                     args.k8s_dump_secret_values,
                 );
-                Some(dumper)
+                (Some(dumper), port_forward_connection)
             } else {
-                None
+                (None, None)
             }
         }
         DebugMode::Emulator(args) => {
@@ -263,9 +268,9 @@ async fn run(context: Context, args: Args) -> Result<(), anyhow::Error> {
                     .expect("docker_container_id is required");
                 let dumper =
                     ContainerServiceDumper::new_docker_dumper(&context, docker_container_id);
-                Some(dumper)
+                (Some(dumper), None)
             } else {
-                None
+                (None, None)
             }
         }
     };
