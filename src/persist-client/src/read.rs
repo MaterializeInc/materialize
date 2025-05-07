@@ -1038,6 +1038,7 @@ where
                 shard_metrics,
                 read_metrics,
                 filter,
+                None,
                 COMPACTION_MEMORY_BOUND_BYTES.get(persist_cfg),
             );
             for batch in batches {
