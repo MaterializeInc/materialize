@@ -10,12 +10,12 @@
 //! Debug tool for self managed environments.
 use std::path::PathBuf;
 use std::process;
-use std::sync::LazyLock;
+use std::sync::{Arc, LazyLock};
 
 use chrono::{DateTime, Utc};
 use clap::Parser;
 use kube::config::KubeConfigOptions;
-use kube::{Client, Config};
+use kube::{Client as KubernetesClient, Config};
 use mz_build_info::{BuildInfo, build_info};
 use mz_ore::cli::{self, CliConfig};
 use mz_ore::error::ErrorExt;
@@ -26,12 +26,13 @@ use tracing_subscriber::util::SubscriberInitExt;
 
 use crate::docker_dumper::DockerDumper;
 use crate::k8s_dumper::K8sDumper;
-use crate::kubectl_port_forwarder::create_pg_wire_port_forwarder;
+use crate::kubectl_port_forwarder::{PortForwardConnection, create_pg_wire_port_forwarder};
 use crate::utils::{
     create_tracing_log_file, format_base_path, validate_pg_connection_string, zip_debug_folder,
 };
 
 mod docker_dumper;
+mod internal_http_dumper;
 mod k8s_dumper;
 mod kubectl_port_forwarder;
 mod system_catalog_dumper;
@@ -42,7 +43,7 @@ static VERSION: LazyLock<String> = LazyLock::new(|| BUILD_INFO.human_version(Non
 static ENV_FILTER: &str = "mz_debug=info";
 
 #[derive(Parser, Debug, Clone)]
-pub struct SelfManagedDebugMode {
+pub struct SelfManagedDebugModeArgs {
     // === Kubernetes options. ===
     /// If true, the tool will dump debug information in Kubernetes cluster such as logs, pod describes, etc.
     #[clap(long, default_value = "true", action = clap::ArgAction::Set)]
@@ -87,18 +88,13 @@ pub struct SelfManagedDebugMode {
 }
 
 #[derive(Parser, Debug, Clone)]
-pub struct EmulatorDebugMode {
+pub struct EmulatorDebugModeArgs {
     /// If true, the tool will dump debug information of the docker container.
     #[clap(long, default_value = "true", action = clap::ArgAction::Set)]
     dump_docker: bool,
     /// The ID of the docker container to dump.
-    #[clap(
-        long,
-        // We require both `require`s because `required_if_eq` doesn't work for default values.
-        required_unless_present = "dump_docker",
-        required_if_eq("dump_docker", "true")
-    )]
-    docker_container_id: Option<String>,
+    #[clap(long)]
+    docker_container_id: String,
     /// The URL of the Materialize SQL connection used to dump the system catalog.
     /// An example URL is `postgres://root@127.0.0.1:6875/materialize?sslmode=disable`.
     // TODO(debug_tool3): Allow users to specify the pgconfig via separate variables
@@ -113,18 +109,18 @@ pub struct EmulatorDebugMode {
 }
 
 #[derive(Parser, Debug, Clone)]
-pub enum DebugMode {
+pub enum DebugModeArgs {
     /// Debug self-managed environments
-    SelfManaged(SelfManagedDebugMode),
+    SelfManaged(SelfManagedDebugModeArgs),
     /// Debug emulator environments
-    Emulator(EmulatorDebugMode),
+    Emulator(EmulatorDebugModeArgs),
 }
 
 #[derive(Parser, Debug, Clone)]
 #[clap(name = "mz-debug", next_line_help = true, version = VERSION.as_str())]
 pub struct Args {
     #[clap(subcommand)]
-    debug_mode: DebugMode,
+    debug_mode_args: DebugModeArgs,
     /// If true, the tool will dump the system catalog in Materialize.
     #[clap(long, default_value = "true", action = clap::ArgAction::Set, global = true)]
     dump_system_catalog: bool,
@@ -141,7 +137,7 @@ pub enum ContainerServiceDumper<'n> {
 impl<'n> ContainerServiceDumper<'n> {
     fn new_k8s_dumper(
         context: &'n Context,
-        client: Client,
+        client: KubernetesClient,
         k8s_namespaces: Vec<String>,
         k8s_context: Option<String>,
         k8s_dump_secret_values: bool,
@@ -168,10 +164,35 @@ impl<'n> ContainerDumper for ContainerServiceDumper<'n> {
         }
     }
 }
+#[derive(Clone)]
+struct SelfManagedContext {
+    dump_k8s: bool,
+    k8s_client: KubernetesClient,
+    k8s_context: Option<String>,
+    k8s_namespaces: Vec<String>,
+    k8s_dump_secret_values: bool,
+
+    _mz_port_forward_process: Arc<Option<PortForwardConnection>>,
+}
+#[derive(Clone)]
+struct EmulatorContext {
+    dump_docker: bool,
+    docker_container_id: String,
+}
+
+#[derive(Clone)]
+enum DebugModeContext {
+    SelfManaged(SelfManagedContext),
+    Emulator(EmulatorContext),
+}
 
 #[derive(Clone)]
 pub struct Context {
     start_time: DateTime<Utc>,
+    debug_mode_context: DebugModeContext,
+
+    mz_connection_url: String,
+    dump_system_catalog: bool,
 }
 
 #[tokio::main]
@@ -208,9 +229,13 @@ async fn main() {
             .try_init();
     }
 
-    let context = Context { start_time };
+    let initialize_then_run = async move {
+        // Preprocess args into contexts
+        let context = initialize_context(args, start_time).await?;
+        run(context).await
+    };
 
-    if let Err(err) = run(context, args).await {
+    if let Err(err) = initialize_then_run.await {
         error!(
             "mz-debug: fatal: {}\nbacktrace: {}",
             err.display_with_causes(),
@@ -220,25 +245,32 @@ async fn main() {
     }
 }
 
-async fn run(context: Context, args: Args) -> Result<(), anyhow::Error> {
-    // Depending on if the user is debugging either a k8s environments or docker environment,
-    // dump the respective system's resources and spin up a port forwarder if auto port forwarding.
-    // We'd like to keep the port forwarder alive until the end of the program.
-    let (container_system_dumper, _pg_wire_port_forward_connection) = match &args.debug_mode {
-        DebugMode::SelfManaged(args) => {
-            if args.dump_k8s {
-                let client = match create_k8s_client(args.k8s_context.clone()).await {
-                    Ok(client) => client,
+async fn initialize_context(
+    args: Args,
+    start_time: DateTime<Utc>,
+) -> Result<Context, anyhow::Error> {
+    let (debug_mode_context, mz_connection_url) = match &args.debug_mode_args {
+        DebugModeArgs::SelfManaged(args) => {
+            let k8s_client = match create_k8s_client(args.k8s_context.clone()).await {
+                Ok(k8s_client) => k8s_client,
                     Err(e) => {
                         error!("Failed to create k8s client: {}", e);
                         return Err(e);
                     }
                 };
-                let port_forward_connection = if args.auto_port_forward {
-                        let port_forwarder = create_pg_wire_port_forwarder(&client, args).await?;
+
+            let _mz_port_forward_process = if args.auto_port_forward {
+                let port_forwarder = create_pg_wire_port_forwarder(
+                    &k8s_client,
+                    &args.k8s_context,
+                    &args.k8s_namespaces,
+                    &args.port_forward_local_address,
+                    args.port_forward_local_port,
+                )
+                .await?;
 
                     match port_forwarder.spawn_port_forward().await {
-                        Ok(connection) => Some(connection),
+                    Ok(process) => Some(process),
                         Err(err) => {
                             warn!("{}", err);
                             None
@@ -247,54 +279,85 @@ async fn run(context: Context, args: Args) -> Result<(), anyhow::Error> {
                 } else {
                     None
                 };
-                // Parker: Return it as a tuple (dumper, port_forwarder)
-                let dumper = ContainerServiceDumper::new_k8s_dumper(
+            let mz_connection_url = kubectl_port_forwarder::create_mz_connection_url(
+                args.port_forward_local_address.clone(),
+                args.port_forward_local_port,
+                args.mz_connection_url.clone(),
+            );
+            (
+                DebugModeContext::SelfManaged(SelfManagedContext {
+                    dump_k8s: args.dump_k8s,
+                    k8s_client,
+                    k8s_context: args.k8s_context.clone(),
+                    k8s_namespaces: args.k8s_namespaces.clone(),
+                    k8s_dump_secret_values: args.k8s_dump_secret_values,
+                    _mz_port_forward_process: Arc::new(_mz_port_forward_process),
+                }),
+                mz_connection_url,
+            )
+        }
+        DebugModeArgs::Emulator(args) => (
+            DebugModeContext::Emulator(EmulatorContext {
+                dump_docker: args.dump_docker,
+                docker_container_id: args.docker_container_id.clone(),
+            }),
+            args.mz_connection_url.clone(),
+        ),
+    };
+
+    Ok(Context {
+        start_time,
+        debug_mode_context,
+        mz_connection_url,
+        dump_system_catalog: args.dump_system_catalog,
+    })
+}
+
+async fn run(context: Context) -> Result<(), anyhow::Error> {
+    // Depending on if the user is debugging either a k8s environments or docker environment,
+    // dump the respective system's resources
+    let container_system_dumper = match &context.debug_mode_context {
+        DebugModeContext::SelfManaged(SelfManagedContext {
+            k8s_client,
+            dump_k8s,
+            k8s_context,
+            k8s_namespaces,
+            k8s_dump_secret_values,
+            ..
+        }) => {
+            if *dump_k8s {
+                Some(ContainerServiceDumper::new_k8s_dumper(
                     &context,
-                    client,
-                    args.k8s_namespaces.clone(),
-                    args.k8s_context.clone(),
-                    args.k8s_dump_secret_values,
-                );
-                (Some(dumper), port_forward_connection)
+                    k8s_client.clone(),
+                    k8s_namespaces.clone(),
+                    k8s_context.clone(),
+                    *k8s_dump_secret_values,
+                ))
             } else {
-                (None, None)
+                None
             }
         }
-        DebugMode::Emulator(args) => {
-            if args.dump_docker {
-                let docker_container_id = args
-                    .docker_container_id
-                    .clone()
-                    .expect("docker_container_id is required");
-                let dumper =
-                    ContainerServiceDumper::new_docker_dumper(&context, docker_container_id);
-                (Some(dumper), None)
+        DebugModeContext::Emulator(EmulatorContext {
+            dump_docker,
+            docker_container_id,
+        }) => {
+            if *dump_docker {
+                Some(ContainerServiceDumper::new_docker_dumper(
+                    &context,
+                    docker_container_id.clone(),
+                ))
             } else {
-                (None, None)
+                None
             }
         }
     };
-
     if let Some(dumper) = container_system_dumper {
         dumper.dump_container_resources().await;
     }
 
-    let connection_url = match &args.debug_mode {
-        DebugMode::SelfManaged(args) => kubectl_port_forwarder::create_mz_connection_url(
-            args.port_forward_local_address.clone(),
-            args.port_forward_local_port,
-            args.mz_connection_url.clone(),
-        ),
-        DebugMode::Emulator(args) => args.mz_connection_url.clone(),
-    };
-    if args.dump_system_catalog {
+    if context.dump_system_catalog {
         // Dump the system catalog.
-        let catalog_dumper = match system_catalog_dumper::SystemCatalogDumper::new(
-            &context,
-            &connection_url,
-        )
-        .await
-        {
+        let catalog_dumper = match system_catalog_dumper::SystemCatalogDumper::new(&context).await {
             Ok(dumper) => Some(dumper),
             Err(e) => {
                 warn!("Failed to dump system catalog: {}", e);
@@ -323,7 +386,7 @@ async fn run(context: Context, args: Args) -> Result<(), anyhow::Error> {
 }
 
 /// Creates a k8s client given a context. If no context is provided, the default context is used.
-async fn create_k8s_client(k8s_context: Option<String>) -> Result<Client, anyhow::Error> {
+async fn create_k8s_client(k8s_context: Option<String>) -> Result<KubernetesClient, anyhow::Error> {
     let kubeconfig_options = KubeConfigOptions {
         context: k8s_context,
         ..Default::default()
@@ -331,7 +394,7 @@ async fn create_k8s_client(k8s_context: Option<String>) -> Result<Client, anyhow
 
     let kubeconfig = Config::from_kubeconfig(&kubeconfig_options).await?;
 
-    let client = Client::try_from(kubeconfig)?;
+    let client = KubernetesClient::try_from(kubeconfig)?;
 
     Ok(client)
 }

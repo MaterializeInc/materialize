@@ -685,10 +685,14 @@ pub async fn query_relation(
 }
 
 impl<'n> SystemCatalogDumper<'n> {
-    pub async fn new(context: &'n Context, connection_string: &str) -> Result<Self, anyhow::Error> {
-        let (pg_client, pg_conn, pg_tls) = create_postgres_connection(connection_string).await?;
+    pub async fn new(context: &'n Context) -> Result<Self, anyhow::Error> {
+        let (pg_client, pg_conn, pg_tls) =
+            create_postgres_connection(&context.mz_connection_url).await?;
 
-        info!("Connected to PostgreSQL server at {}...", connection_string);
+        info!(
+            "Connected to PostgreSQL server at {}",
+            context.mz_connection_url
+        );
 
         let handle = task::spawn(|| "postgres-connection", pg_conn);
 
