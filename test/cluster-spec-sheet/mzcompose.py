@@ -20,8 +20,12 @@ from abc import abstractmethod
 from textwrap import dedent
 from typing import Any
 
-import pg8000
-import pg8000.native
+import psycopg
+
+import pandas as pd
+import matplotlib.pyplot as plt
+from matplotlib.ticker import FuncFormatter, LogLocator
+from materialize import MZ_ROOT
 
 from materialize.mzcompose.composition import (
     Composition,
@@ -49,7 +53,7 @@ class ScenarioRunner:
         scenario: str,
         scale: int,
         mode: str,
-        connection: pg8000.native.Connection,
+        connection: psycopg.Connection,
         results_file: Any,
         replica_size: int,
     ) -> None:
@@ -68,10 +72,17 @@ class ScenarioRunner:
         )
         self.results_file.flush()
 
-    def run_query(self, query: str, **params) -> list | None:
-        query = dedent(query)
+    def run_query(
+        self, query: str, fetch: bool = False, **params
+    ) -> psycopg.rows.Row | None:
+        query = dedent(query).strip()
         print(f"> {query} {params or ''}")
-        return self.connection.run(query, **params)
+        with self.connection.cursor() as cur:
+            cur.execute(query.encode(), params)
+            if fetch:
+                return cur.fetchone()
+            else:
+                return None
 
     def measure(
         self,
@@ -103,11 +114,12 @@ class ScenarioRunner:
         retries = 10
         while retries > 0:
             result = self.run_query(
-                "SELECT size FROM mz_introspection.mz_dataflow_arrangement_sizes WHERE name LIKE :name;",
+                "SELECT size FROM mz_introspection.mz_dataflow_arrangement_sizes WHERE name LIKE %(name)s;",
+                fetch=True,
                 name=object,
             )
             if result:
-                return int(result[0][0])
+                return int(result[0])
             retries -= 1
             if retries > 0:
                 time.sleep(1)
@@ -439,7 +451,7 @@ class AuctionScenario(Scenario):
             CREATE MATERIALIZED VIEW auctions AS
             SELECT auctions_core.id, seller, items.item, end_time
             FROM auctions_core, items
-            WHERE auctions_core.item % 5 = items.id;
+            WHERE auctions_core.item %% 5 = items.id;
             """,
             """
             -- Create and materialize bid data.
@@ -623,7 +635,19 @@ class AuctionScenario(Scenario):
             size_of_index="bids_id_idx",
             query=[
                 "BEGIN",
-                "DECLARE c CURSOR FOR SUBSCRIBE (SELECT auction_id, list_agg(amount) FROM bids GROUP BY auction_id);",
+                # We need to limit the amount of data we retrieve to avoid
+                # stalling the gRPC connection.
+                """
+                DECLARE c CURSOR FOR SUBSCRIBE (
+                    SELECT
+                        auction_id, list_agg(amount)
+                    FROM
+                        bids
+                    GROUP BY
+                        auction_id
+                    HAVING
+                        list_length(list_agg(amount)) + auction_id < 10000
+                );""",
                 "FETCH 1 c;",
                 "ROLLBACK;",
             ],
@@ -684,7 +708,7 @@ class AuctionScenario(Scenario):
             "join_max",
             size_of_index="bids_id_idx",
             query=[
-                "SELECT auction_id, item, MAX(amount) FROM bids, auctions WHERE bids.auction_id = auctions.id GROUP BY auction_id, item;",
+                "SELECT auction_id, item, MAX(amount) FROM bids, auctions WHERE bids.auction_id = auctions.id GROUP BY auction_id, item HAVING auction_id + MAX(amount)::int4 < 1000;",
             ],
             repetitions=3,
         )
@@ -722,29 +746,35 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     parser.parse_args()
 
     assert APP_PASSWORD is not None
-    connection = pg8000.native.Connection(
-        user=USERNAME, password=APP_PASSWORD, host=c.cloud_hostname(), port=6875
+    connection = psycopg.connect(
+        user=USERNAME,
+        password=APP_PASSWORD,
+        host=c.cloud_hostname(),
+        port=6875,
+        dbname="materialize",
+        sslmode="require",
     )
+    connection.autocommit = True
 
     with open(f"results_{int(time.time())}.csv", "w") as f:
         f.write(
             "scenario,scale,mode,category,test_name,cluster_size,repetition,size_bytes,time_ms\n"
         )
-        run_scenario_strong(
-            scenario=TpchScenario(1, "100cc"),
-            results_file=f,
-            connection=connection,
-        )
-        run_scenario_strong(
-            scenario=TpchScenarioMV(1, "100cc"),
-            results_file=f,
-            connection=connection,
-        )
-        run_scenario_strong(
-            scenario=AuctionScenario(4, "100cc"),
-            results_file=f,
-            connection=connection,
-        )
+        # run_scenario_strong(
+        #     scenario=TpchScenario(1, "100cc"),
+        #     results_file=f,
+        #     connection=connection,
+        # )
+        # run_scenario_strong(
+        #     scenario=TpchScenarioMV(1, "100cc"),
+        #     results_file=f,
+        #     connection=connection,
+        # )
+        # run_scenario_strong(
+        #     scenario=AuctionScenario(4, "100cc"),
+        #     results_file=f,
+        #     connection=connection,
+        # )
         run_scenario_weak(
             scenario=AuctionScenario(4, "none"),
             results_file=f,
@@ -753,7 +783,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
 
 
 def run_scenario_strong(
-    scenario: Scenario, results_file: Any, connection: pg8000.native.Connection
+    scenario: Scenario, results_file: Any, connection: psycopg.Connection
 ) -> None:
 
     runner = ScenarioRunner(
@@ -766,14 +796,14 @@ def run_scenario_strong(
     )
 
     for query in scenario.drop():
-        runner.run_query(dedent(query))
+        runner.run_query(dedent(query).strip())
 
     runner.run_query("DROP TABLE IF EXISTS t CASCADE;")
     runner.run_query("CREATE TABLE t (a int);")
     runner.run_query("INSERT INTO t VALUES (1);")
 
     for query in scenario.setup():
-        runner.run_query(dedent(query))
+        runner.run_query(dedent(query).strip())
 
     for name in scenario.materialize_views():
         runner.run_query(f"SELECT COUNT(*) > 0 FROM {name};")
@@ -798,20 +828,20 @@ def run_scenario_strong(
 
 
 def run_scenario_weak(
-    scenario: Scenario, results_file: Any, connection: pg8000.native.Connection
+    scenario: Scenario, results_file: Any, connection: psycopg.Connection
 ) -> None:
 
-    connection.run("DROP TABLE IF EXISTS t CASCADE;")
-    connection.run("CREATE TABLE t (a int);")
-    connection.run("INSERT INTO t VALUES (1);")
+    connection.execute("DROP TABLE IF EXISTS t CASCADE;")
+    connection.execute("CREATE TABLE t (a int);")
+    connection.execute("INSERT INTO t VALUES (1);")
 
     initial_scale = scenario.scale
 
     for replica_size_scale in [
-        ("100cc", 1),
-        ("200cc", 2),
-        ("400cc", 4),
-        ("800cc", 8),
+        # ("100cc", 1),
+        # ("200cc", 2),
+        # ("400cc", 4),
+        # ("800cc", 8),
         ("1600cc", 16),
         ("3200cc", 32),
     ]:
@@ -827,10 +857,10 @@ def run_scenario_weak(
             replica_size,
         )
         for query in scenario.drop():
-            runner.run_query(dedent(query))
+            runner.run_query(dedent(query).strip())
 
         for query in scenario.setup():
-            runner.run_query(dedent(query))
+            runner.run_query(dedent(query).strip())
 
         for name in scenario.materialize_views():
             runner.run_query(f"SELECT COUNT(*) > 0 FROM {name};")
@@ -842,3 +872,128 @@ def run_scenario_weak(
         runner.run_query("SELECT * FROM t;")
 
         scenario.run(runner)
+
+
+def workflow_plot(c: Composition, parser: WorkflowArgumentParser) -> None:
+    """Analyze the results of the workflow."""
+
+    parser.add_argument(
+        "files",
+        nargs="*",
+        help="Destroy the region at the end of the workflow.",
+    )
+
+    args = parser.parse_args()
+
+    for file in args.files:
+        analyze_file(file)
+
+
+def analyze_file(file: str):
+    df = pd.read_csv(file)
+    # Cluster replica size as credits/hour
+    df["credits_per_h"] = df["cluster_size"].str[:-2].astype(int) / 100
+    # Cluster replica size as centi-credits/s
+    df["ccredit_per_s"] = df["credits_per_h"] / 3600 * 100
+    # Number of timely workers
+    df["workers"] = round(df["credits_per_h"] * 1.9375)
+    # Throughput in MiB/s
+    df["throughput_mb_per_s"] = df["size_bytes"] / df["time_ms"] * 1000 / 1024 / 1024
+    # Throughput in MiB/s/worker
+    df["throughput_mb_per_s_worker"] = (
+        df["size_bytes"] / 1024 / 1024 / df["time_ms"] * 1000 / df["workers"]
+    )
+    # Throughput in MiB/credit
+    df["throughput_mb_per_credit"] = (
+        df["size_bytes"] / 1024 / 1024 / df["time_ms"] * 1000 / df["ccredit_per_s"]
+    )
+    # Cost in centi-credits: ccredit/s * s
+    df["credit_time"] = df["ccredit_per_s"] * df["time_ms"] / 1000.0
+
+    base_name = os.path.basename(file).split(".")[0]
+    plot_dir = os.path.join(MZ_ROOT, "test", "cluster-spec-sheet", "plots", base_name)
+    os.makedirs(plot_dir, exist_ok=True)
+
+    # Plot the results
+    df2 = plot_time_ms(
+        df,
+        'category != "peek_serving" and (scenario == "tpch" or scenario == "tpch_mv")',
+        "TPCH create index/MV",
+    )
+    plt.savefig(os.path.join(plot_dir, "tpch_time_ms.png"))
+    df2.to_html(os.path.join(plot_dir, "tpch_time_ms.html"))
+
+    df2 = plot_time_ms(
+        df,
+        'category == "arrangement_formation" and scenario == "auction"',
+        "Auction arrangement formation",
+    )
+    plt.savefig(os.path.join(plot_dir, "auction_arrangement_formation_time_ms.png"))
+    df2.to_html(os.path.join(plot_dir, "auction_arrangement_formation_time_ms.html"))
+
+    df2 = plot_time_ms(
+        df,
+        'category == "primitive_operators" and scenario == "auction"',
+        "Auction primitive operators",
+    )
+    plt.savefig(os.path.join(plot_dir, "auction_primitive_operators_time_ms.png"))
+    df2.to_html(os.path.join(plot_dir, "auction_primitive_operators_time_ms.html"))
+
+
+def plot_time_ms(data: pd.DataFrame, query: str, title: str) -> pd.DataFrame:
+    df2 = (
+        data.query(query)
+        .pivot_table(
+            index=["credits_per_h"],
+            columns=["scenario", "category", "test_name", "mode"],
+            values=["time_ms"],
+            aggfunc="min",
+        )
+        .sort_index(axis=1)
+    )
+    filtered = df2.dropna(axis=1, how="all")
+    ax = filtered.plot(
+        kind="bar",
+        figsize=(12, 6),
+        ylabel="time [ms]",
+        logy=False,
+        title=title,
+    )
+    return filtered
+
+
+def workflow_problems(c: Composition, parser: WorkflowArgumentParser) -> None:
+    """Run the problems workflow."""
+    assert APP_PASSWORD is not None
+    connection = psycopg.connect(
+        user=USERNAME,
+        password=APP_PASSWORD,
+        host=c.cloud_hostname(),
+        port=6875,
+        dbname="materialize",
+        sslmode="require",
+    )
+    connection.autocommit = True
+
+    connection.execute("DROP TABLE IF EXISTS tab CASCADE;")
+    connection.execute("CREATE TABLE tab (auction_id int, amount int);")
+    connection.execute("set cluster = c;")
+    # connection.execute("INSERT INTO tab VALUES (1, 1);")
+    with connection.cursor() as cur:
+        cur.execute("BEGIN")
+        cur.execute(
+            """
+        DECLARE c CURSOR FOR SUBSCRIBE (
+            SELECT
+                auction_id, list_agg(amount)
+            FROM
+                tab
+            GROUP BY
+                auction_id
+            HAVING
+                list_length(list_agg(amount)) + auction_id < 10000
+        );"""
+        )
+        cur.execute("FETCH 1 c;")
+        print(cur.fetchone())
+        cur.execute("ROLLBACK;")
