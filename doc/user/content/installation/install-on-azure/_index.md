@@ -212,7 +212,7 @@ deploys a sample infrastructure on Azure with the following components:
    Upon successful completion, various fields and their values are output:
 
    ```bash
-   Apply complete! Resources: 25 added, 0 changed, 0 destroyed.
+   Apply complete! Resources: 33 added, 0 changed, 0 destroyed.
 
    Outputs:
 
