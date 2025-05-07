@@ -22,14 +22,15 @@ It provides fast, reliable Python environments with dependency resolution that m
 If you don't have uv installed, you can install it first:
 
 ```bash
-$ curl -LsSf https://astral.sh/uv/install.sh | sh
+curl -LsSf https://astral.sh/uv/install.sh | sh
 ```
 
 To install and launch the MCP Server for Materialize:
 
 ```bash
-$ uv pip install mcp-materialize
-$ uv run mcp-materialize
+uv venv
+uv pip install mcp-materialize
+uv run mcp-materialize
 ```
 
 You can configure it using CLI flags or environment variables:
