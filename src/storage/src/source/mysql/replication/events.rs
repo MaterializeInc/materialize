@@ -200,7 +200,22 @@ pub(super) async fn handle_query_event(
         // Detect `CREATE TABLE <tbl>` statements which don't affect existing tables but do
         // signify a complete event (e.g. for the purposes of advancing the GTID)
         (Some("create"), Some("table")) => {
-            is_complete_event = true;
+            // CREATE TABLE ... SELECT will have subsequent `RowEvent`s, to account for this, the statement contains the clause "START TRANSACTION".
+            // https://dev.mysql.com/worklog/task/?id=13355
+
+            let mut peek_stream = query_iter.peekable();
+            let mut ctas = false;
+            while let Some(token) = peek_stream.next() {
+                if token.eq_ignore_ascii_case("start")
+                    && peek_stream
+                        .peek()
+                        .is_some_and(|t| t.eq_ignore_ascii_case("transaction"))
+                {
+                    ctas = true;
+                    break;
+                }
+            }
+            is_complete_event = !ctas;
         }
         _ => {}
     }
