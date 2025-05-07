@@ -34,6 +34,7 @@ use hyper_util::client::legacy::connect::HttpConnector;
 use hyper_util::rt::TokioExecutor;
 use itertools::Itertools;
 use jsonwebtoken::{self, DecodingKey, EncodingKey};
+use mz_auth::password::Password;
 use mz_environmentd::test_util::{self, Ca, make_header, make_pg_tls};
 use mz_environmentd::{WebSocketAuth, WebSocketResponse};
 use mz_frontegg_auth::{
@@ -284,7 +285,7 @@ async fn run_tests<'a>(header: &str, server: &test_util::TestServer, tests: &[Te
                     .authority(&*format!(
                         "{}:{}",
                         Ipv4Addr::LOCALHOST,
-                        server.inner.http_local_addr().port()
+                        server.http_local_addr().port()
                     ))
                     .path_and_query("/api/sql")
                     .build()
@@ -343,7 +344,7 @@ async fn run_tests<'a>(header: &str, server: &test_util::TestServer, tests: &[Te
                     .authority(&*format!(
                         "{}:{}",
                         Ipv4Addr::LOCALHOST,
-                        server.inner.http_local_addr().port()
+                        server.http_local_addr().port()
                     ))
                     .path_and_query("/api/experimental/sql")
                     .build()
@@ -501,7 +502,7 @@ async fn test_auth_expiry() {
 
     let server = test_util::TestHarness::default()
         .with_tls(server_cert, server_key)
-        .with_frontegg(&frontegg_auth)
+        .with_frontegg_auth(&frontegg_auth)
         .with_metrics_registry(metrics_registry)
         .start()
         .await;
@@ -808,7 +809,7 @@ async fn test_auth_base_require_tls_frontegg() {
     // authentication.
     let server = test_util::TestHarness::default()
         .with_tls(server_cert, server_key)
-        .with_frontegg(&frontegg_auth)
+        .with_frontegg_auth(&frontegg_auth)
         .with_metrics_registry(metrics_registry)
         .start()
         .await;
@@ -820,7 +821,7 @@ async fn test_auth_base_require_tls_frontegg() {
             TestCase::Ws {
                 auth: &WebSocketAuth::Basic {
                     user: frontegg_user.to_string(),
-                    password: frontegg_password.to_string(),
+                    password: Password(frontegg_password.to_string()),
                     options: BTreeMap::default(),
                 },
                 configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
@@ -837,7 +838,7 @@ async fn test_auth_base_require_tls_frontegg() {
             TestCase::Ws {
                 auth: &WebSocketAuth::Basic {
                     user: "bad user".to_string(),
-                    password: frontegg_password.to_string(),
+                    password: Password(frontegg_password.to_string()),
                     options: BTreeMap::default(),
                 },
                 configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
@@ -883,7 +884,7 @@ async fn test_auth_base_require_tls_frontegg() {
             TestCase::Ws {
                 auth: &WebSocketAuth::Basic {
                     user: frontegg_user_lowercase.to_string(),
-                    password: frontegg_password.to_string(),
+                    password: Password(frontegg_password.to_string()),
                     options: BTreeMap::default(),
                 },
                 configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
@@ -1172,7 +1173,7 @@ async fn test_auth_base_require_tls_frontegg() {
             TestCase::Ws {
                 auth: &WebSocketAuth::Basic {
                     user: (&*SYSTEM_USER.name).into(),
-                    password: frontegg_system_password.to_string(),
+                    password: Password(frontegg_system_password.to_string()),
                     options: BTreeMap::default(),
                 },
                 configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
@@ -1205,7 +1206,7 @@ async fn test_auth_base_require_tls_frontegg() {
             TestCase::Ws {
                 auth: &WebSocketAuth::Basic {
                     user: (&*SYSTEM_USER.name).into(),
-                    password: frontegg_service_system_user_password.to_string(),
+                    password: Password(frontegg_service_system_user_password.to_string()),
                     options: BTreeMap::default(),
                 },
                 configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
@@ -1239,7 +1240,7 @@ async fn test_auth_base_require_tls_frontegg() {
             TestCase::Ws {
                 auth: &WebSocketAuth::Basic {
                     user: (PUBLIC_ROLE_NAME.as_str()).into(),
-                    password: frontegg_system_password.to_string(),
+                    password: Password(frontegg_system_password.to_string()),
                     options: BTreeMap::default(),
                 },
                 configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
@@ -1670,7 +1671,7 @@ async fn test_auth_admin_non_superuser() {
 
     let server = test_util::TestHarness::default()
         .with_tls(server_cert, server_key)
-        .with_frontegg(&frontegg_auth)
+        .with_frontegg_auth(&frontegg_auth)
         .with_metrics_registry(metrics_registry)
         .start()
         .await;
@@ -1698,7 +1699,7 @@ async fn test_auth_admin_non_superuser() {
             TestCase::Ws {
                 auth: &WebSocketAuth::Basic {
                     user: frontegg_user.to_string(),
-                    password: frontegg_password.to_string(),
+                    password: Password(frontegg_password.to_string()),
                     options: BTreeMap::default(),
                 },
                 configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
@@ -1815,7 +1816,7 @@ async fn test_auth_admin_superuser() {
 
     let server = test_util::TestHarness::default()
         .with_tls(server_cert, server_key)
-        .with_frontegg(&frontegg_auth)
+        .with_frontegg_auth(&frontegg_auth)
         .with_metrics_registry(metrics_registry)
         .start()
         .await;
@@ -1843,7 +1844,7 @@ async fn test_auth_admin_superuser() {
             TestCase::Ws {
                 auth: &WebSocketAuth::Basic {
                     user: admin_frontegg_user.to_string(),
-                    password: admin_frontegg_password.to_string(),
+                    password: Password(admin_frontegg_password.to_string()),
                     options: BTreeMap::default(),
                 },
                 configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
@@ -1958,7 +1959,7 @@ async fn test_auth_admin_superuser_revoked() {
 
     let server = test_util::TestHarness::default()
         .with_tls(server_cert, server_key)
-        .with_frontegg(&frontegg_auth)
+        .with_frontegg_auth(&frontegg_auth)
         .with_metrics_registry(metrics_registry)
         .start()
         .await;
@@ -2090,7 +2091,7 @@ async fn test_auth_deduplication() {
 
     let server = test_util::TestHarness::default()
         .with_tls(server_cert, server_key)
-        .with_frontegg(&frontegg_auth)
+        .with_frontegg_auth(&frontegg_auth)
         .with_metrics_registry(metrics_registry)
         .start()
         .await;
@@ -2266,7 +2267,7 @@ async fn test_refresh_task_metrics() {
             "mz_frontegg_auth=debug,info".to_string(),
         )
         .with_tls(server_cert, server_key)
-        .with_frontegg(&frontegg_auth)
+        .with_frontegg_auth(&frontegg_auth)
         .with_metrics_registry(metrics_registry)
         .start()
         .await;
@@ -2427,7 +2428,7 @@ async fn test_superuser_can_alter_cluster() {
 
     let server = test_util::TestHarness::default()
         .with_tls(server_cert, server_key)
-        .with_frontegg(&frontegg_auth)
+        .with_frontegg_auth(&frontegg_auth)
         .with_metrics_registry(metrics_registry)
         .start()
         .await;
@@ -2554,7 +2555,7 @@ async fn test_refresh_dropped_session() {
             "mz_frontegg_auth=debug,info".to_string(),
         )
         .with_tls(server_cert, server_key)
-        .with_frontegg(&frontegg_auth)
+        .with_frontegg_auth(&frontegg_auth)
         .with_metrics_registry(metrics_registry)
         .start()
         .await;
@@ -2731,7 +2732,7 @@ async fn test_refresh_dropped_session_lru() {
             "mz_frontegg_auth=debug,info".to_string(),
         )
         .with_tls(server_cert, server_key)
-        .with_frontegg(&frontegg_auth)
+        .with_frontegg_auth(&frontegg_auth)
         .with_metrics_registry(metrics_registry)
         .start()
         .await;
@@ -2921,7 +2922,7 @@ async fn test_transient_auth_failures() {
             "mz_frontegg_auth=debug,info".to_string(),
         )
         .with_tls(server_cert, server_key)
-        .with_frontegg(&frontegg_auth)
+        .with_frontegg_auth(&frontegg_auth)
         .with_metrics_registry(metrics_registry)
         .start()
         .await;
@@ -3045,7 +3046,7 @@ async fn test_transient_auth_failure_on_refresh() {
             "mz_frontegg_auth=debug,info".to_string(),
         )
         .with_tls(server_cert, server_key)
-        .with_frontegg(&frontegg_auth)
+        .with_frontegg_auth(&frontegg_auth)
         .with_metrics_registry(metrics_registry)
         .start()
         .await;
@@ -3111,7 +3112,7 @@ async fn test_self_managed_auth() {
             "mz_frontegg_auth=debug,info".to_string(),
         )
         .with_system_parameter_default("enable_self_managed_auth".to_string(), "true".to_string())
-        .with_self_hosted_auth(true)
+        .with_password_auth()
         .with_metrics_registry(metrics_registry)
         .start()
         .await;
@@ -3160,7 +3161,7 @@ async fn test_self_managed_auth_superuser() {
             "mz_frontegg_auth=debug,info".to_string(),
         )
         .with_system_parameter_default("enable_self_managed_auth".to_string(), "true".to_string())
-        .with_self_hosted_auth(true)
+        .with_password_auth()
         .with_metrics_registry(metrics_registry)
         .start()
         .await;
@@ -3209,7 +3210,7 @@ async fn test_self_managed_auth_alter_role() {
             "mz_frontegg_auth=debug,info".to_string(),
         )
         .with_system_parameter_default("enable_self_managed_auth".to_string(), "true".to_string())
-        .with_self_hosted_auth(true)
+        .with_password_auth()
         .with_metrics_registry(metrics_registry)
         .start()
         .await;

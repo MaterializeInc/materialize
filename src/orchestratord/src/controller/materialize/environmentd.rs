@@ -7,18 +7,24 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use std::{collections::BTreeMap, sync::LazyLock, time::Duration};
+use std::{
+    collections::BTreeMap,
+    net::{IpAddr, Ipv4Addr, SocketAddr},
+    sync::LazyLock,
+    time::Duration,
+};
 
 use anyhow::bail;
 use k8s_openapi::{
     api::{
         apps::v1::{StatefulSet, StatefulSetSpec, StatefulSetUpdateStrategy},
         core::v1::{
-            Capabilities, Container, ContainerPort, EnvVar, EnvVarSource, EphemeralVolumeSource,
-            KeyToPath, PersistentVolumeClaimSpec, PersistentVolumeClaimTemplate, Pod,
-            PodSecurityContext, PodSpec, PodTemplateSpec, Probe, SeccompProfile, SecretKeySelector,
-            SecretVolumeSource, SecurityContext, Service, ServiceAccount, ServicePort, ServiceSpec,
-            TCPSocketAction, Toleration, Volume, VolumeMount, VolumeResourceRequirements,
+            Capabilities, ConfigMap, ConfigMapVolumeSource, Container, ContainerPort, EnvVar,
+            EnvVarSource, EphemeralVolumeSource, KeyToPath, PersistentVolumeClaimSpec,
+            PersistentVolumeClaimTemplate, Pod, PodSecurityContext, PodSpec, PodTemplateSpec,
+            Probe, SeccompProfile, SecretKeySelector, SecretVolumeSource, SecurityContext, Service,
+            ServiceAccount, ServicePort, ServiceSpec, TCPSocketAction, Toleration, Volume,
+            VolumeMount, VolumeResourceRequirements,
         },
         networking::v1::{
             IPBlock, NetworkPolicy, NetworkPolicyEgressRule, NetworkPolicyIngressRule,
@@ -30,6 +36,10 @@ use k8s_openapi::{
 };
 use kube::{Api, Client, ResourceExt, api::ObjectMeta, runtime::controller::Action};
 use maplit::btreemap;
+use mz_server_core::listeners::{
+    AllowedRoles, AuthenticatorKind, BaseListenerConfig, HttpListenerConfig, HttpRoutesEnabled,
+    ListenersConfig, SqlListenerConfig,
+};
 use rand::{Rng, thread_rng};
 use reqwest::StatusCode;
 use semver::{BuildMetadata, Prerelease, Version};
@@ -54,6 +64,14 @@ static V140_DEV0: LazyLock<Version> = LazyLock::new(|| Version {
     build: BuildMetadata::new("").expect("empty string is valid buildmetadata"),
 });
 const V143: Version = Version::new(0, 143, 0);
+// TODO bump this version to whatever it ends up being
+static V144_DEV0: LazyLock<Version> = LazyLock::new(|| Version {
+    major: 0,
+    minor: 144,
+    patch: 0,
+    pre: Prerelease::new("dev.0").expect("dev.0 is valid prerelease"),
+    build: BuildMetadata::new("").expect("empty string is valid buildmetadata"),
+});
 
 /// Describes the status of a deployment.
 ///
@@ -84,6 +102,7 @@ pub struct Resources {
     pub persist_pubsub_service: Box<Service>,
     pub environmentd_certificate: Box<Option<Certificate>>,
     pub environmentd_statefulset: Box<StatefulSet>,
+    pub listeners_configmap: Box<ConfigMap>,
 }
 
 impl Resources {
@@ -108,6 +127,7 @@ impl Resources {
         let environmentd_statefulset = Box::new(create_environmentd_statefulset_object(
             config, tracing, mz, generation,
         ));
+        let listeners_configmap = Box::new(create_listeners_configmap(config, mz, generation));
 
         Self {
             generation,
@@ -120,6 +140,7 @@ impl Resources {
             persist_pubsub_service,
             environmentd_certificate,
             environmentd_statefulset,
+            listeners_configmap,
         }
     }
 
@@ -141,6 +162,7 @@ impl Resources {
         let statefulset_api: Api<StatefulSet> = Api::namespaced(client.clone(), namespace);
         let pod_api: Api<Pod> = Api::namespaced(client.clone(), namespace);
         let certificate_api: Api<Certificate> = Api::namespaced(client.clone(), namespace);
+        let configmap_api: Api<ConfigMap> = Api::namespaced(client.clone(), namespace);
 
         for policy in &self.environmentd_network_policies {
             trace!("applying network policy {}", policy.name_unchecked());
@@ -166,6 +188,9 @@ impl Resources {
             trace!("creating new environmentd certificate");
             apply_resource(&certificate_api, certificate).await?;
         }
+
+        trace!("applying listeners configmap");
+        apply_resource(&configmap_api, &*self.listeners_configmap).await?;
 
         trace!("creating new environmentd statefulset");
         apply_resource(&statefulset_api, &*self.environmentd_statefulset).await?;
@@ -885,23 +910,6 @@ fn create_environmentd_statefulset_object(
         .flatten(),
     );
 
-    // Add networking arguments.
-    args.extend([
-        format!("--sql-listen-addr=0.0.0.0:{}", config.environmentd_sql_port),
-        format!(
-            "--http-listen-addr=0.0.0.0:{}",
-            config.environmentd_http_port
-        ),
-        format!(
-            "--internal-sql-listen-addr=0.0.0.0:{}",
-            config.environmentd_internal_sql_port
-        ),
-        format!(
-            "--internal-http-listen-addr=0.0.0.0:{}",
-            config.environmentd_internal_http_port
-        ),
-    ]);
-
     args.extend(
         config
             .environmentd_allowed_origins
@@ -1232,6 +1240,60 @@ fn create_environmentd_statefulset_object(
         });
     }
 
+    // Add networking arguments.
+    if mz.meets_minimum_version(&V144_DEV0) {
+        volume_mounts.push(VolumeMount {
+            name: "listeners-configmap".to_string(),
+            mount_path: "/listeners".to_string(),
+            ..Default::default()
+        });
+        volumes.push(Volume {
+            name: "listeners-configmap".to_string(),
+            config_map: Some(ConfigMapVolumeSource {
+                name: mz.listeners_configmap_name(generation),
+                default_mode: Some(256),
+                optional: Some(false),
+                items: Some(vec![KeyToPath {
+                    key: "listeners.json".to_string(),
+                    path: "listeners.json".to_string(),
+                    ..Default::default()
+                }]),
+            }),
+            ..Default::default()
+        });
+        args.push("--listeners-config-path=/listeners/listeners.json".to_owned());
+        if let Some(external_login_secret_mz_system) = &mz.spec.external_login_secret_mz_system {
+            env.push(EnvVar {
+                name: "MZ_EXTERNAL_LOGIN_PASSWORD_MZ_SYSTEM".to_string(),
+                value_from: Some(EnvVarSource {
+                    secret_key_ref: Some(SecretKeySelector {
+                        name: external_login_secret_mz_system.to_owned(),
+                        key: "password".to_string(),
+                        optional: Some(false),
+                    }),
+                    ..Default::default()
+                }),
+                ..Default::default()
+            })
+        }
+    } else {
+        args.extend([
+            format!("--sql-listen-addr=0.0.0.0:{}", config.environmentd_sql_port),
+            format!(
+                "--http-listen-addr=0.0.0.0:{}",
+                config.environmentd_http_port
+            ),
+            format!(
+                "--internal-sql-listen-addr=0.0.0.0:{}",
+                config.environmentd_internal_sql_port
+            ),
+            format!(
+                "--internal-http-listen-addr=0.0.0.0:{}",
+                config.environmentd_internal_http_port
+            ),
+        ]);
+    }
+
     let container = Container {
         name: "environmentd".to_owned(),
         image: Some(mz.spec.environmentd_image_ref.to_owned()),
@@ -1396,6 +1458,198 @@ fn create_environmentd_statefulset_object(
         },
         spec: Some(statefulset_spec),
         status: None,
+    }
+}
+
+fn create_listeners_configmap(
+    config: &super::MaterializeControllerArgs,
+    mz: &Materialize,
+    generation: u64,
+) -> ConfigMap {
+    let enable_tls = issuer_ref_defined(
+        &config.default_certificate_specs.internal,
+        &mz.spec.internal_certificate_spec,
+    );
+    let authenticator_kind = match (
+        mz.spec
+            .environmentd_extra_args
+            .as_ref()
+            .map(|args| args.iter().any(|arg| arg.starts_with("--frontegg"))),
+        mz.spec.external_login_secret_mz_system.is_some(),
+    ) {
+        (Some(true), _) => AuthenticatorKind::Frontegg,
+        (_, true) => AuthenticatorKind::Password,
+        (_, false) => AuthenticatorKind::None,
+    };
+    let listeners_config = match authenticator_kind {
+        AuthenticatorKind::Frontegg => {
+            serde_json::to_string(&ListenersConfig {
+                sql: btreemap! {
+                    "external".to_owned() => SqlListenerConfig{
+                        // TODO get these ports from constants?
+                        addr: SocketAddr::new(IpAddr::V4(Ipv4Addr::new(0,0,0,0)), 6875),
+                        authenticator_kind: AuthenticatorKind::Frontegg,
+                        allowed_roles: AllowedRoles::Normal,
+                        enable_tls,
+                    },
+                    "internal".to_owned() => SqlListenerConfig{
+                        addr: SocketAddr::new(IpAddr::V4(Ipv4Addr::new(0,0,0,0)), 6877),
+                        authenticator_kind: AuthenticatorKind::None,
+                        // Should this just be Internal?
+                        allowed_roles: AllowedRoles::NormalAndInternal,
+                        enable_tls,
+                    },
+                },
+                http: btreemap! {
+                    "external".to_owned() => HttpListenerConfig{
+                        base: BaseListenerConfig {
+                            addr: SocketAddr::new(IpAddr::V4(Ipv4Addr::new(0,0,0,0)), 6876),
+                            authenticator_kind: AuthenticatorKind::Frontegg,
+                            allowed_roles: AllowedRoles::Normal,
+                            enable_tls,
+                        },
+                        routes: HttpRoutesEnabled{
+                            base: true,
+                            webhook: true,
+                            internal: false,
+                            metrics: false,
+                            profiling: false,
+                        }
+                    },
+                    "internal".to_owned() => HttpListenerConfig{
+                        base: BaseListenerConfig {
+                            addr: SocketAddr::new(IpAddr::V4(Ipv4Addr::new(0,0,0,0)), 6878),
+                            authenticator_kind: AuthenticatorKind::None,
+                            // Should this just be Internal?
+                            allowed_roles: AllowedRoles::NormalAndInternal,
+                            enable_tls,
+                        },
+                        routes: HttpRoutesEnabled{
+                            base: true,
+                            webhook: true,
+                            internal: true,
+                            metrics: true,
+                            profiling: true,
+                        }
+                    },
+                },
+            })
+            .expect("known valid")
+        }
+        AuthenticatorKind::None => {
+            serde_json::to_string(&ListenersConfig {
+                sql: btreemap! {
+                    "external".to_owned() => SqlListenerConfig{
+                        // TODO get these ports from constants?
+                        addr: SocketAddr::new(IpAddr::V4(Ipv4Addr::new(0,0,0,0)), 6875),
+                        authenticator_kind: AuthenticatorKind::None,
+                        allowed_roles: AllowedRoles::Normal,
+                        enable_tls,
+                    },
+                    "internal".to_owned() => SqlListenerConfig{
+                        addr: SocketAddr::new(IpAddr::V4(Ipv4Addr::new(0,0,0,0)), 6877),
+                        authenticator_kind: AuthenticatorKind::None,
+                        // Should this just be Internal?
+                        allowed_roles: AllowedRoles::NormalAndInternal,
+                        enable_tls,
+                    },
+                },
+                http: btreemap! {
+                    "external".to_owned() => HttpListenerConfig{
+                        base: BaseListenerConfig {
+                            addr: SocketAddr::new(IpAddr::V4(Ipv4Addr::new(0,0,0,0)), 6876),
+                            authenticator_kind: AuthenticatorKind::None,
+                            allowed_roles: AllowedRoles::Normal,
+                            enable_tls,
+                        },
+                        routes: HttpRoutesEnabled{
+                            base: true,
+                            webhook: true,
+                            internal: false,
+                            metrics: false,
+                            profiling: false,
+                        }
+                    },
+                    "internal".to_owned() => HttpListenerConfig{
+                        base: BaseListenerConfig {
+                            addr: SocketAddr::new(IpAddr::V4(Ipv4Addr::new(0,0,0,0)), 6878),
+                            authenticator_kind: AuthenticatorKind::None,
+                            // Should this just be Internal?
+                            allowed_roles: AllowedRoles::NormalAndInternal,
+                            enable_tls,
+                        },
+                        routes: HttpRoutesEnabled{
+                            base: true,
+                            webhook: true,
+                            internal: true,
+                            metrics: true,
+                            profiling: true,
+                        }
+                    },
+                },
+            })
+            .expect("known valid")
+        }
+        AuthenticatorKind::Password => {
+            serde_json::to_string(&ListenersConfig {
+                sql: btreemap! {
+                    "external".to_owned() => SqlListenerConfig{
+                        // TODO get these ports from constants?
+                        addr: SocketAddr::new(IpAddr::V4(Ipv4Addr::new(0,0,0,0)), 6875),
+                        authenticator_kind: AuthenticatorKind::Password,
+                        allowed_roles: AllowedRoles::NormalAndInternal,
+                        enable_tls,
+                    },
+                },
+                http: btreemap! {
+                    "external".to_owned() => HttpListenerConfig{
+                        base: BaseListenerConfig {
+                            addr: SocketAddr::new(IpAddr::V4(Ipv4Addr::new(0,0,0,0)), 6876),
+                            authenticator_kind: AuthenticatorKind::Password,
+                            allowed_roles: AllowedRoles::NormalAndInternal,
+                            enable_tls,
+                        },
+                        routes: HttpRoutesEnabled{
+                            base: true,
+                            webhook: true,
+                            internal: true,
+                            metrics: false,
+                            profiling: true,
+                        }
+                    },
+                    "metrics".to_owned() => HttpListenerConfig{
+                        base: BaseListenerConfig {
+                            addr: SocketAddr::new(IpAddr::V4(Ipv4Addr::new(0,0,0,0)), 6878),
+                            authenticator_kind: AuthenticatorKind::None,
+                            // Should this just be Internal?
+                            allowed_roles: AllowedRoles::NormalAndInternal,
+                            enable_tls,
+                        },
+                        routes: HttpRoutesEnabled{
+                            base: false,
+                            webhook: false,
+                            internal: false,
+                            metrics: true,
+                            profiling: false,
+                        }
+                    },
+                },
+            })
+            .expect("known valid")
+        }
+    };
+    ConfigMap {
+        binary_data: None,
+        data: Some(btreemap! {
+            "listeners.json".to_owned() => listeners_config,
+        }),
+        immutable: None,
+        metadata: ObjectMeta {
+            annotations: Some(btreemap! {
+                "materialize.cloud/generation".to_owned() => generation.to_string(),
+            }),
+            ..mz.managed_resource_meta(mz.listeners_configmap_name(generation))
+        },
     }
 }
 

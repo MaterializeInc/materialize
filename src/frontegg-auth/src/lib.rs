@@ -27,7 +27,7 @@ use uuid::Uuid;
 pub use crate::app_password::{AppPassword, AppPasswordParseError};
 
 /// Command line arguments for frontegg.
-#[derive(Debug, Clone, clap::Parser)]
+#[derive(Default, Debug, Clone, clap::Parser)]
 pub struct FronteggCliArgs {
     /// Enables Frontegg authentication for the specified tenant ID.
     #[clap(

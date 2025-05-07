@@ -22,6 +22,7 @@ k8s-openapi = { version = "0.24.0", features = ["v1_30"] }
 kube = { version = "0.98.0", default-features = false, features = ["client", "runtime", "ws"] }
 maplit = "1.0.2"
 mz-alloc = { path = "../alloc", default-features = false }
+mz-authenticator = { path = "../authenticator", default-features = false }
 mz-alloc-default = { path = "../alloc-default", optional = true, default-features = false }
 mz-build-info = { path = "../build-info", default-features = false }
 mz-cloud-provider = { path = "../cloud-provider", default-features = false }
@@ -30,6 +31,7 @@ mz-ore = { path = "../ore", default-features = false, features = ["panic"] }
 mz-orchestrator-kubernetes = { path = "../orchestrator-kubernetes", default-features = false }
 mz-orchestrator-tracing = { path = "../orchestrator-tracing", default-features = false }
 mz-prof-http = { path = "../prof-http", default-features = false }
+mz-server-core = { path = "../server-core", default-features = false }
 prometheus = { version = "0.13.4", default-features = false }
 rand = "0.8.5"
 reqwest = { version = "0.11.13", features = ["json"] }

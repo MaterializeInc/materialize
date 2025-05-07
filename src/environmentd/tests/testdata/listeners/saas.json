@@ -1,0 +1,47 @@
+{
+  "sql": {
+    "external": {
+      "addr": "0.0.0.0:6875",
+      "authenticator_kind": "Frontegg",
+      "allowed_roles": "Normal",
+      "tls_mode": "Require"
+      "enable_tls": true
+    },
+    "internal": {
+      "addr": "0.0.0.0:6877",
+      "authenticator_kind": "None",
+      "allowed_roles": "Internal",
+      "enable_tls": true
+    }
+  },
+  "http": {
+    "external": {
+      "addr": "0.0.0.0:6876",
+      "authenticator_kind": "Frontegg",
+      "allowed_roles": "Normal",
+      "allow_internal_resources": false,
+      "enable_tls": true,
+      "routes": {
+        "base": true,
+        "webhook": true,
+        "internal": false,
+        "metrics": false,
+        "profiling": false
+      }
+    },
+    "internal": {
+      "addr": "0.0.0.0:6878",
+      "authenticator_kind": "None",
+      "allowed_roles": "Internal",
+      "allow_internal_resources": true,
+      "enable_tls": true,
+      "routes": {
+        "base": true,
+        "webhook": true,
+        "internal": true,
+        "metrics": true,
+        "profiling": true
+      }
+    }
+  }
+}

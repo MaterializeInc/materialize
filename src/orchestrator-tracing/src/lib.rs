@@ -311,6 +311,8 @@ impl TracingCliArgs {
                     retention: self.tokio_console_retention,
                 }
             }),
+            #[cfg(not(feature = "tokio-console"))]
+            tokio_console: None,
             sentry: self.sentry_dsn.clone().map(|dsn| SentryConfig {
                 dsn,
                 environment: self.sentry_environment.clone(),

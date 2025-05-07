@@ -1,5 +1,3 @@
-#!/usr/bin/env bash
-
 # Copyright Materialize, Inc. and contributors. All rights reserved.
 #
 # Use of this software is governed by the Business Source License
@@ -9,11 +7,4 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-set -euo pipefail
-
-if environmentd "$@"; then
-    echo "environmentd exited gracefully; sleeping forever" >&2
-    sleep infinity
-else
-    exit $?
-fi
+> GRANT USAGE ON CONNECTION aws_conn TO "anonymous_http_user"

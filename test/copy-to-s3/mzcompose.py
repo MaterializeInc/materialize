@@ -279,34 +279,56 @@ def workflow_http(c: Composition) -> None:
     """Test http endpoint allows COPY TO S3 but not COPY TO STDOUT."""
     c.up("materialized", "minio")
 
-    c.run_testdrive_files("http/setup.td")
+    with c.override(Testdrive(no_reset=True)):
+        c.run_testdrive_files("http/setup.td")
 
-    result = c.exec(
-        "materialized",
-        "curl",
-        "http://localhost:6878/api/sql",
-        "-k",
-        "-s",
-        "--header",
-        "Content-Type: application/json",
-        "--data",
-        "{\"query\": \"COPY (SELECT 1) TO 's3://copytos3/test/http/' WITH (AWS CONNECTION = aws_conn, FORMAT = 'csv');\"}",
-        capture=True,
-    )
-    assert result.returncode == 0
-    assert json.loads(result.stdout)["results"][0]["ok"] == "COPY 1"
+        result = c.exec(
+            "materialized",
+            "curl",
+            "http://localhost:6878/api/sql",
+            "-k",
+            "-s",
+            "--header",
+            "Content-Type: application/json",
+            "--data",
+            "{\"query\": \"COPY (SELECT 1) TO 's3://copytos3/test/http/' WITH (AWS CONNECTION = aws_conn, FORMAT = 'csv');\"}",
+            capture=True,
+        )
+        assert result.returncode == 0
+        assert (
+            json.loads(result.stdout)["results"][0]["error"]["message"]
+            == 'permission denied for CONNECTION "materialize.public.aws_conn"'
+            and json.loads(result.stdout)["results"][0]["error"]["detail"]
+            == "The 'anonymous_http_user' role needs USAGE privileges on CONNECTION \"materialize.public.aws_conn\""
+        )
 
-    result = c.exec(
-        "materialized",
-        "curl",
-        "http://localhost:6878/api/sql",
-        "-k",
-        "-s",
-        "--header",
-        "Content-Type: application/json",
-        "--data",
-        '{"query": "COPY (SELECT 1) TO STDOUT"}',
-        capture=True,
-    )
-    assert result.returncode == 0
-    assert "unsupported via this API" in result.stdout
+        c.run_testdrive_files("http/grant.td")
+        result = c.exec(
+            "materialized",
+            "curl",
+            "http://localhost:6878/api/sql",
+            "-k",
+            "-s",
+            "--header",
+            "Content-Type: application/json",
+            "--data",
+            "{\"query\": \"COPY (SELECT 1) TO 's3://copytos3/test/http/' WITH (AWS CONNECTION = aws_conn, FORMAT = 'csv');\"}",
+            capture=True,
+        )
+        assert result.returncode == 0
+        assert json.loads(result.stdout)["results"][0]["ok"] == "COPY 1"
+
+        result = c.exec(
+            "materialized",
+            "curl",
+            "http://localhost:6878/api/sql",
+            "-k",
+            "-s",
+            "--header",
+            "Content-Type: application/json",
+            "--data",
+            '{"query": "COPY (SELECT 1) TO STDOUT"}',
+            capture=True,
+        )
+        assert result.returncode == 0
+        assert "unsupported via this API" in result.stdout
