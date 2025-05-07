@@ -129,41 +129,6 @@ pub struct Args {
 pub trait ContainerDumper {
     fn dump_container_resources(&self) -> impl std::future::Future<Output = ()>;
 }
-pub enum ContainerServiceDumper<'n> {
-    K8s(K8sDumper<'n>),
-    Docker(DockerDumper),
-}
-
-impl<'n> ContainerServiceDumper<'n> {
-    fn new_k8s_dumper(
-        context: &'n Context,
-        client: KubernetesClient,
-        k8s_namespaces: Vec<String>,
-        k8s_context: Option<String>,
-        k8s_dump_secret_values: bool,
-    ) -> Self {
-        Self::K8s(K8sDumper::new(
-            context,
-            client,
-            k8s_namespaces,
-            k8s_context,
-            k8s_dump_secret_values,
-        ))
-    }
-
-    fn new_docker_dumper(context: &'n Context, docker_container_id: String) -> Self {
-        Self::Docker(DockerDumper::new(context, docker_container_id))
-    }
-}
-
-impl<'n> ContainerDumper for ContainerServiceDumper<'n> {
-    async fn dump_container_resources(&self) {
-        match self {
-            ContainerServiceDumper::K8s(dumper) => dumper.dump_container_resources().await,
-            ContainerServiceDumper::Docker(dumper) => dumper.dump_container_resources().await,
-        }
-    }
-}
 #[derive(Clone)]
 struct SelfManagedContext {
     dump_k8s: bool,
@@ -316,7 +281,7 @@ async fn initialize_context(
 async fn run(context: Context) -> Result<(), anyhow::Error> {
     // Depending on if the user is debugging either a k8s environments or docker environment,
     // dump the respective system's resources
-    let container_system_dumper = match &context.debug_mode_context {
+    match &context.debug_mode_context {
         DebugModeContext::SelfManaged(SelfManagedContext {
             k8s_client,
             dump_k8s,
@@ -326,15 +291,14 @@ async fn run(context: Context) -> Result<(), anyhow::Error> {
             ..
         }) => {
             if *dump_k8s {
-                Some(ContainerServiceDumper::new_k8s_dumper(
+                let dumper = K8sDumper::new(
                     &context,
                     k8s_client.clone(),
                     k8s_namespaces.clone(),
                     k8s_context.clone(),
                     *k8s_dump_secret_values,
-                ))
-            } else {
-                None
+                );
+                dumper.dump_container_resources().await;
             }
         }
         DebugModeContext::Emulator(EmulatorContext {
@@ -342,18 +306,11 @@ async fn run(context: Context) -> Result<(), anyhow::Error> {
             docker_container_id,
         }) => {
             if *dump_docker {
-                Some(ContainerServiceDumper::new_docker_dumper(
-                    &context,
-                    docker_container_id.clone(),
-                ))
-            } else {
-                None
-            }
-        }
-    };
-    if let Some(dumper) = container_system_dumper {
+                let dumper = DockerDumper::new(&context, docker_container_id.clone());
         dumper.dump_container_resources().await;
     }
+        }
+    };
 
     if context.dump_system_catalog {
         // Dump the system catalog.
