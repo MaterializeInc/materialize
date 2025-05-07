@@ -393,6 +393,12 @@ RUN curl -fsSL https://releases.hashicorp.com/terraform/1.9.8/terraform_1.9.8_li
     && chmod +x /usr/local/bin/terraform \
     && rm terraform.zip
 
+RUN curl -fsSL https://github.com/terraform-docs/terraform-docs/releases/download/v0.20.0/terraform-docs-v0.20.0-linux-$ARCH_GO.tar.gz > terraform-docs.tar.gz \
+    && if [ $ARCH_GO = amd64 ]; then echo '34ae01772412bb11474e6718ea62113e38ff5964ee570a98c69fafe3a6dff286 terraform-docs.tar.gz' | sha256sum --check; fi \
+    && if [ $ARCH_GO = arm64 ]; then echo '371b4ed983781d1efdd8f7de06264baac41b1d80927f7fd718c405a303d863a0 terraform-docs.tar.gz' | sha256sum --check; fi \
+    && tar -xzf terraform-docs.tar.gz -C /usr/local/bin terraform-docs \
+    && rm terraform-docs.tar.gz
+
 RUN curl -fsSL https://github.com/mikefarah/yq/releases/download/v4.45.1/yq_linux_$ARCH_GO > yq \
     && if [ $ARCH_GO = amd64 ]; then echo '654d2943ca1d3be2024089eb4f270f4070f491a0610481d128509b2834870049 yq' | sha256sum --check; fi \
     && if [ $ARCH_GO = arm64 ]; then echo 'ceea73d4c86f2e5c91926ee0639157121f5360da42beeb8357783d79c2cc6a1d yq' | sha256sum --check; fi \
