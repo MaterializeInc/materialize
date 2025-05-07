@@ -200,7 +200,7 @@ pub(super) async fn handle_query_event(
         // Detect `CREATE TABLE <tbl>` statements which don't affect existing tables but do
         // signify a complete event (e.g. for the purposes of advancing the GTID)
         (Some("create"), Some("table")) => {
-            // CREATE TABLE ... SELECT will have subsequent `RowEvent`s, to account for this, the statement contains with the clause "START TRANSACTION".
+            // CREATE TABLE ... SELECT will have subsequent `RowEvent`s, to account for this, the statement contains the clause "START TRANSACTION".
             // https://dev.mysql.com/worklog/task/?id=13355
 
             let mut ctas = false;
