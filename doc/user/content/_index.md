@@ -21,6 +21,12 @@ Kubernetes environment.
 
 {{< self-managed/also-available >}}
 
+- [Materialize MCP Server](https://materialize.com/blog/materialize-turns-views-into-tools-for-agents/).
+  The Materialize MCP Server bridges SQL and AI by transforming indexed views into well-typed tools
+  that agents can call directly. It lets you expose your freshest, most complex logic as operational
+  data products automatically and reliably. For more information, see the
+  [Materialize MCP Server](/integrations/llm/) documentation.
+
 {{</ callout >}}
 
 ## Requirements

@@ -27,3 +27,4 @@ available:
 - [Client Libraries](/integrations/client-libraries/)
 - [Connect to Materialize via HTTP](/integrations/http-api/)
 - [Connect to Materialize via WebSocket](/integrations/websocket-api/)
+- [LLM Integrations](/integrations/llm/)
