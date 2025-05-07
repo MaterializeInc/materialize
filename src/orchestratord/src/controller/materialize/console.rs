@@ -315,6 +315,8 @@ ssl_certificate_key /nginx/tls/tls.key;",
                         .map(|selector| (selector.key.clone(), selector.value.clone()))
                         .collect(),
                 ),
+                affinity: config.console_affinity.clone(),
+                tolerations: config.console_tolerations.clone(),
                 scheduler_name: config.scheduler_name.clone(),
                 service_account_name: Some(mz.service_account_name()),
                 volumes,

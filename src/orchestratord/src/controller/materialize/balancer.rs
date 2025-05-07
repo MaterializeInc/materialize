@@ -324,6 +324,8 @@ fn create_balancerd_deployment_object(
                         .map(|selector| (selector.key.clone(), selector.value.clone()))
                         .collect(),
                 ),
+                affinity: config.balancerd_affinity.clone(),
+                tolerations: config.balancerd_tolerations.clone(),
                 security_context: Some(PodSecurityContext {
                     fs_group: Some(999),
                     run_as_user: Some(999),

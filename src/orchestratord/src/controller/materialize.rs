@@ -15,7 +15,10 @@ use std::{
 };
 
 use http::HeaderValue;
-use k8s_openapi::apimachinery::pkg::apis::meta::v1::{Condition, Time};
+use k8s_openapi::{
+    api::core::v1::{Affinity, Toleration},
+    apimachinery::pkg::apis::meta::v1::{Condition, Time},
+};
 use kube::{Api, Client, Resource, ResourceExt, api::PostParams, runtime::controller::Action};
 use serde::Deserialize;
 use tracing::{debug, trace};
@@ -83,12 +86,28 @@ pub struct MaterializeControllerArgs {
     orchestratord_pod_selector_labels: Vec<KeyValueArg<String, String>>,
     #[clap(long)]
     environmentd_node_selector: Vec<KeyValueArg<String, String>>,
+    #[clap(long, value_parser = parse_affinity)]
+    environmentd_affinity: Option<Affinity>,
+    #[clap(long = "environmentd-toleration", value_parser = parse_tolerations)]
+    environmentd_tolerations: Option<Vec<Toleration>>,
     #[clap(long)]
     clusterd_node_selector: Vec<KeyValueArg<String, String>>,
+    #[clap(long, value_parser = parse_affinity)]
+    clusterd_affinity: Option<Affinity>,
+    #[clap(long = "clusterd-toleration", value_parser = parse_tolerations)]
+    clusterd_tolerations: Option<Vec<Toleration>>,
     #[clap(long)]
     balancerd_node_selector: Vec<KeyValueArg<String, String>>,
+    #[clap(long, value_parser = parse_affinity)]
+    balancerd_affinity: Option<Affinity>,
+    #[clap(long = "balancerd-toleration", value_parser = parse_tolerations)]
+    balancerd_tolerations: Option<Vec<Toleration>>,
     #[clap(long)]
     console_node_selector: Vec<KeyValueArg<String, String>>,
+    #[clap(long, value_parser = parse_affinity)]
+    console_affinity: Option<Affinity>,
+    #[clap(long = "console-toleration", value_parser = parse_tolerations)]
+    console_tolerations: Option<Vec<Toleration>>,
     #[clap(long, default_value = "always", value_enum)]
     image_pull_policy: KubernetesImagePullPolicy,
     #[clap(flatten)]
@@ -153,6 +172,14 @@ pub struct MaterializeControllerArgs {
 
     #[clap(long, hide = true)]
     disable_license_key_checks: bool,
+}
+
+fn parse_affinity(s: &str) -> anyhow::Result<Affinity> {
+    Ok(serde_json::from_str(s)?)
+}
+
+fn parse_tolerations(s: &str) -> anyhow::Result<Toleration> {
+    Ok(serde_json::from_str(s)?)
 }
 
 #[derive(Clone, Deserialize, Default)]

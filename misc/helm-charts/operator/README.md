@@ -107,13 +107,21 @@ The following table lists the configurable parameters of the Materialize operato
 
 | Parameter | Description | Default |
 |-----------|-------------|---------|
+| `balancerd.affinity` | Affinity to use for balancerd pods spawned by the operator | ``nil`` |
 | `balancerd.enabled` | Flag to indicate whether to create balancerd pods for the environments | ``true`` |
-| `balancerd.nodeSelector` | Node selector to use for balancerd pods spawned by the operator | ``{}`` |
-| `clusterd.nodeSelector` | Node selector to use for clusterd pods spawned by the operator | ``{}`` |
+| `balancerd.nodeSelector` | Node selector to use for balancerd pods spawned by the operator | ``nil`` |
+| `balancerd.tolerations` | Tolerations to use for balancerd pods spawned by the operator | ``nil`` |
+| `clusterd.affinity` | Affinity to use for clusterd pods spawned by the operator | ``nil`` |
+| `clusterd.nodeSelector` | Node selector to use for clusterd pods spawned by the operator | ``nil`` |
+| `clusterd.tolerations` | Tolerations to use for clusterd pods spawned by the operator | ``nil`` |
+| `console.affinity` | Affinity to use for console pods spawned by the operator | ``nil`` |
 | `console.enabled` | Flag to indicate whether to create console pods for the environments | ``true`` |
 | `console.imageTagMapOverride` | Override the mapping of environmentd versions to console versions | ``{}`` |
-| `console.nodeSelector` | Node selector to use for console pods spawned by the operator | ``{}`` |
-| `environmentd.nodeSelector` | Node selector to use for environmentd pods spawned by the operator | ``{}`` |
+| `console.nodeSelector` | Node selector to use for console pods spawned by the operator | ``nil`` |
+| `console.tolerations` | Tolerations to use for console pods spawned by the operator | ``nil`` |
+| `environmentd.affinity` | Affinity to use for environmentd pods spawned by the operator | ``nil`` |
+| `environmentd.nodeSelector` | Node selector to use for environmentd pods spawned by the operator | ``nil`` |
+| `environmentd.tolerations` | Tolerations to use for environmentd pods spawned by the operator | ``nil`` |
 | `networkPolicies.egress` | egress from Materialize pods to sources and sinks | ``{"cidrs":["0.0.0.0/0"],"enabled":false}`` |
 | `networkPolicies.enabled` | Whether to enable network policies for securing communication between pods | ``false`` |
 | `networkPolicies.ingress` | Whether to enable ingress to the SQL and HTTP interfaces on environmentd or balancerd | ``{"cidrs":["0.0.0.0/0"],"enabled":false}`` |
@@ -121,6 +129,7 @@ The following table lists the configurable parameters of the Materialize operato
 | `observability.enabled` | Whether to enable observability features | ``true`` |
 | `observability.podMetrics.enabled` | Whether to enable the pod metrics scraper which populates the Environment Overview Monitoring tab in the web console (requires metrics-server to be installed) | ``false`` |
 | `observability.prometheus.scrapeAnnotations.enabled` | Whether to annotate pods with common keys used for prometheus scraping. | ``true`` |
+| `operator.affinity` | Affinity to use for the operator pod | ``nil`` |
 | `operator.args.enableInternalStatementLogging` |  | ``true`` |
 | `operator.args.startupLogFilter` | Log filtering settings for startup logs | ``"INFO,mz_orchestratord=TRACE"`` |
 | `operator.cloudProvider.providers.aws.accountID` | When using AWS, accountID is required | ``""`` |
@@ -144,10 +153,11 @@ The following table lists the configurable parameters of the Materialize operato
 | `operator.image.pullPolicy` | Policy for pulling the image: "IfNotPresent" avoids unnecessary re-pulling of images | ``"IfNotPresent"`` |
 | `operator.image.repository` | The Docker repository for the operator image | ``"materialize/orchestratord"`` |
 | `operator.image.tag` | The tag/version of the operator image to be used | ``"v0.143.0"`` |
-| `operator.nodeSelector` |  | ``{}`` |
+| `operator.nodeSelector` | Node selector to use for the operator pod | ``nil`` |
 | `operator.resources.limits` | Resource limits for the operator's CPU and memory | ``{"memory":"512Mi"}`` |
 | `operator.resources.requests` | Resources requested by the operator for CPU and memory | ``{"cpu":"100m","memory":"512Mi"}`` |
 | `operator.secretsController` | Which secrets controller to use for storing secrets. Valid values are 'kubernetes' and 'aws-secrets-manager'. Setting 'aws-secrets-manager' requires a configured AWS cloud provider and IAM role for the environment with Secrets Manager permissions. | ``"kubernetes"`` |
+| `operator.tolerations` | Tolerations to use for the operator pod | ``nil`` |
 | `rbac.create` | Whether to create necessary RBAC roles and bindings | ``true`` |
 | `schedulerName` | Optionally use a non-default kubernetes scheduler. | ``nil`` |
 | `serviceAccount.create` | Whether to create a new service account for the operator | ``true`` |

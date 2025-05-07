@@ -233,6 +233,14 @@ pub struct Args {
     /// orchestrator in the form `KEY=VALUE`.
     #[structopt(long, env = "ORCHESTRATOR_KUBERNETES_SERVICE_NODE_SELECTOR")]
     orchestrator_kubernetes_service_node_selector: Vec<KeyValueArg<String, String>>,
+    /// Affinity to apply to all services created by the Kubernetes
+    /// orchestrator as a JSON string.
+    #[structopt(long, env = "ORCHESTRATOR_KUBERNETES_SERVICE_AFFINITY")]
+    orchestrator_kubernetes_service_affinity: Option<String>,
+    /// Tolerations to apply to all services created by the Kubernetes
+    /// orchestrator as a JSON string.
+    #[structopt(long, env = "ORCHESTRATOR_KUBERNETES_SERVICE_TOLERATIONS")]
+    orchestrator_kubernetes_service_tolerations: Option<String>,
     /// The name of a service account to apply to all services created by the
     /// Kubernetes orchestrator.
     #[structopt(long, env = "ORCHESTRATOR_KUBERNETES_SERVICE_ACCOUNT")]
@@ -842,6 +850,8 @@ fn run(mut args: Args) -> Result<(), anyhow::Error> {
                             .into_iter()
                             .map(|l| (l.key, l.value))
                             .collect(),
+                        service_affinity: args.orchestrator_kubernetes_service_affinity,
+                        service_tolerations: args.orchestrator_kubernetes_service_tolerations,
                         service_account: args.orchestrator_kubernetes_service_account,
                         image_pull_policy: args.orchestrator_kubernetes_image_pull_policy,
                         aws_external_id_prefix: args.aws_external_id_prefix.clone(),

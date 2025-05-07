@@ -54,6 +54,7 @@ static V140_DEV0: LazyLock<Version> = LazyLock::new(|| Version {
     build: BuildMetadata::new("").expect("empty string is valid buildmetadata"),
 });
 const V143: Version = Version::new(0, 143, 0);
+const V144: Version = Version::new(0, 144, 0);
 
 /// Describes the status of a deployment.
 ///
@@ -995,6 +996,20 @@ fn create_environmentd_statefulset_object(
             selector.key, selector.value,
         ));
     }
+    if mz.meets_minimum_version(&V144) {
+        if let Some(affinity) = &config.clusterd_affinity {
+            let affinity = serde_json::to_string(affinity).unwrap();
+            args.push(format!(
+                "--orchestrator-kubernetes-service-affinity={affinity}"
+            ))
+        }
+        if let Some(tolerations) = &config.clusterd_tolerations {
+            let tolerations = serde_json::to_string(tolerations).unwrap();
+            args.push(format!(
+                "--orchestrator-kubernetes-service-tolerations={tolerations}"
+            ))
+        }
+    }
     if let Some(scheduler_name) = &config.scheduler_name {
         args.push(format!(
             "--orchestrator-kubernetes-scheduler-name={}",
@@ -1293,7 +1308,7 @@ fn create_environmentd_statefulset_object(
         );
     }
 
-    let tolerations = Some(vec![
+    let mut tolerations = vec![
         // When the node becomes `NotReady` it indicates there is a problem with the node,
         // By default kubernetes waits 300s (5 minutes) before doing anything in this case,
         // But we want to limit this to 30s for faster recovery
@@ -1311,7 +1326,11 @@ fn create_environmentd_statefulset_object(
             toleration_seconds: Some(30),
             value: None,
         },
-    ]);
+    ];
+    if let Some(user_tolerations) = &config.environmentd_tolerations {
+        tolerations.extend(user_tolerations.iter().cloned());
+    }
+    let tolerations = Some(tolerations);
 
     let pod_template_spec = PodTemplateSpec {
         // not using managed_resource_meta because the pod should be owned
@@ -1330,6 +1349,7 @@ fn create_environmentd_statefulset_object(
                     .map(|selector| (selector.key.clone(), selector.value.clone()))
                     .collect(),
             ),
+            affinity: config.environmentd_affinity.clone(),
             scheduler_name: config.scheduler_name.clone(),
             service_account_name: Some(mz.service_account_name()),
             volumes: Some(volumes),

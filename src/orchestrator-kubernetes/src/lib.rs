@@ -20,6 +20,7 @@ use clap::ValueEnum;
 use cloud_resource_controller::KubernetesResourceReader;
 use futures::TryFutureExt;
 use futures::stream::{BoxStream, StreamExt};
+use k8s_openapi::DeepMerge;
 use k8s_openapi::api::apps::v1::{StatefulSet, StatefulSetSpec};
 use k8s_openapi::api::core::v1::{
     Affinity, Capabilities, Container, ContainerPort, EnvVar, EnvVarSource, EphemeralVolumeSource,
@@ -76,6 +77,10 @@ pub struct KubernetesOrchestratorConfig {
     pub service_labels: BTreeMap<String, String>,
     /// Node selector to install on every service created by the orchestrator.
     pub service_node_selector: BTreeMap<String, String>,
+    /// Affinity to install on every service created by the orchestrator.
+    pub service_affinity: Option<String>,
+    /// Tolerations to install on every service created by the orchestrator.
+    pub service_tolerations: Option<String>,
     /// The service account that each service should run as, if any.
     pub service_account: Option<String>,
     /// The image pull policy to set for services created by the orchestrator.
@@ -895,6 +900,16 @@ impl NamespacedOrchestrator for NamespacedKubernetesOrchestrator {
             None
         };
 
+        let mut affinity = Affinity {
+            pod_anti_affinity: anti_affinity,
+            pod_affinity,
+            node_affinity,
+            ..Default::default()
+        };
+        if let Some(service_affinity) = &self.config.service_affinity {
+            affinity.merge_from(serde_json::from_str(service_affinity)?);
+        }
+
         let container_name = image
             .rsplit_once('/')
             .and_then(|(_, name_version)| name_version.rsplit_once(':'))
@@ -1079,7 +1094,7 @@ impl NamespacedOrchestrator for NamespacedKubernetesOrchestrator {
             None
         };
 
-        let tolerations = Some(vec![
+        let mut tolerations = vec![
             // When the node becomes `NotReady` it indicates there is a problem
             // with the node. By default Kubernetes waits 300s (5 minutes)
             // before descheduling the pod, but we tune this to 30s for faster
@@ -1098,7 +1113,11 @@ impl NamespacedOrchestrator for NamespacedKubernetesOrchestrator {
                 toleration_seconds: Some(NODE_FAILURE_THRESHOLD_SECONDS),
                 value: None,
             },
-        ]);
+        ];
+        if let Some(service_tolerations) = &self.config.service_tolerations {
+            tolerations.extend(serde_json::from_str::<Vec<_>>(service_tolerations)?);
+        }
+        let tolerations = Some(tolerations);
 
         let mut pod_template_spec = PodTemplateSpec {
             metadata: Some(ObjectMeta {
@@ -1144,12 +1163,7 @@ impl NamespacedOrchestrator for NamespacedKubernetesOrchestrator {
                 node_selector: Some(node_selector),
                 scheduler_name: self.config.scheduler_name.clone(),
                 service_account: self.config.service_account.clone(),
-                affinity: Some(Affinity {
-                    pod_anti_affinity: anti_affinity,
-                    pod_affinity,
-                    node_affinity,
-                    ..Default::default()
-                }),
+                affinity: Some(affinity),
                 topology_spread_constraints: topology_spread,
                 tolerations,
                 // Setting a 0s termination grace period has the side effect of
