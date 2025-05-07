@@ -38,8 +38,9 @@ use mz_compute_types::config::ComputeReplicaConfig;
 use mz_controller::clusters::{ReplicaConfig, ReplicaLogging};
 use mz_controller_types::ClusterId;
 use mz_expr::MirScalarExpr;
+use mz_ore::collections::CollectionExt;
 use mz_ore::tracing::OpenTelemetryContext;
-use mz_ore::{instrument, soft_assert_no_log};
+use mz_ore::{assert_none, instrument, soft_assert_no_log};
 use mz_pgrepr::oid::INVALID_OID;
 use mz_repr::adt::mz_acl_item::{MzAclItem, PrivilegeMap};
 use mz_repr::role_id::RoleId;
@@ -1935,6 +1936,55 @@ fn sort_updates_inner(updates: Vec<StateUpdate>) -> Vec<StateUpdate> {
         }
     }
 
+    /// Sort `CONNECTION` items.
+    ///
+    /// `CONNECTION`s can depend on one another, e.g. a `KAFKA CONNECTION` contains
+    /// a list of `BROKERS` and these broker definitions can themselves reference other
+    /// connections. This `BROKERS` list can also be `ALTER`ed and thus it's possible
+    /// for a connection to depend on another with an ID greater than its own.
+    fn sort_connections(connections: &mut Vec<(mz_catalog::durable::Item, Timestamp, StateDiff)>) {
+        let mut topo: BTreeMap<
+            (mz_catalog::durable::Item, Timestamp, StateDiff),
+            BTreeSet<CatalogItemId>,
+        > = BTreeMap::default();
+
+        // Initialize our set of topological sort.
+        for (connection, ts, diff) in connections.drain(..) {
+            let statement = mz_sql::parse::parse(&connection.create_sql)
+                .expect("valid CONNECTION create_sql")
+                .into_element()
+                .ast;
+            let mut dependencies = mz_sql::names::dependencies(&statement)
+                .expect("failed to find dependencies of CONNECTION");
+            // Be defensive and remove any possible self references.
+            dependencies.remove(&connection.id);
+            // Be defensive and ensure we're not clobbering any items.
+            assert_none!(topo.insert((connection, ts, diff), dependencies));
+        }
+
+        // Do a topological sort, pushing back into the provided Vec.
+        let mut num_iterations = 0;
+        while let Some((item, deps)) = topo.pop_first() {
+            // A crude check, but guard against looping forever.
+            num_iterations += 1;
+            if num_iterations > u32::MAX {
+                panic!("infinite loop while sorting connections");
+            }
+
+            if deps.is_empty() {
+                // Remove this item from anything that depends on it.
+                topo.values_mut().for_each(|deps| {
+                    deps.remove(&item.0.id);
+                });
+                // Push it back into our list as "completed".
+                connections.push(item);
+            } else {
+                // Darn, we still have outstanding dependencies, re-add to the list.
+                topo.insert(item, deps);
+            }
+        }
+    }
+
     /// Sort item updates by dependency.
     ///
     /// First we group items into groups that are totally ordered by dependency. For example, when
@@ -1988,7 +2038,6 @@ fn sort_updates_inner(updates: Vec<StateUpdate>) -> Vec<StateUpdate> {
             &mut types,
             &mut funcs,
             &mut secrets,
-            &mut connections,
             &mut sources,
             &mut tables,
             &mut derived_items,
@@ -1997,6 +2046,11 @@ fn sort_updates_inner(updates: Vec<StateUpdate>) -> Vec<StateUpdate> {
         ] {
             group.sort_by_key(|(item, _, _)| item.id);
         }
+
+        // HACK(parkmycar): Connections are special and can depend on one another. Additionally
+        // connections can be `ALTER`ed and thus a `CONNECTION` can depend on another whose ID
+        // is greater than its own.
+        sort_connections(&mut connections);
 
         iter::empty()
             .chain(types)
