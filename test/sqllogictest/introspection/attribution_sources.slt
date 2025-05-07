@@ -59,13 +59,13 @@ SELECT global_id, lir_id, parent_lir_id, REPEAT(' ', nesting * 2) || operator AS
 GROUP BY global_id, lir_id, operator, parent_lir_id, nesting
 ORDER BY global_id, lir_id DESC;
 ----
-u2  5  NULL  Join::Differential␠2␠»␠4
-u2  4  5  ␠␠Arrange␠3
-u2  3  4  ␠␠␠␠Get::Collection␠u1
-u2  2  5  ␠␠Arrange␠1
-u2  1  2  ␠␠␠␠Get::Collection␠u1
-u3  7  NULL  Arrange␠6
-u3  6  7  ␠␠Get::PassArrangements␠u2
+u2  5  NULL  Differential␠Join␠2␠»␠4
+u2  4  5  ␠␠Arrange
+u2  3  4  ␠␠␠␠Read␠u1
+u2  2  5  ␠␠Arrange
+u2  1  2  ␠␠␠␠Read␠u1
+u3  7  NULL  Arrange
+u3  6  7  ␠␠Stream␠u2
 
 # omitting pg_size_pretty(sum(size)) as size
 query TIIT
@@ -76,13 +76,13 @@ SELECT global_id, lir_id, parent_lir_id, repeat(' ', nesting * 2) || operator AS
 GROUP BY global_id, lir_id, operator, parent_lir_id, nesting
 ORDER BY global_id, lir_id DESC;
 ----
-u2  5  NULL  Join::Differential␠2␠»␠4
-u2  4  5  ␠␠Arrange␠3
-u2  3  4  ␠␠␠␠Get::Collection␠u1
-u2  2  5  ␠␠Arrange␠1
-u2  1  2  ␠␠␠␠Get::Collection␠u1
-u3  7  NULL  Arrange␠6
-u3  6  7  ␠␠Get::PassArrangements␠u2
+u2  5  NULL  Differential␠Join␠2␠»␠4
+u2  4  5  ␠␠Arrange
+u2  3  4  ␠␠␠␠Read␠u1
+u2  2  5  ␠␠Arrange
+u2  1  2  ␠␠␠␠Read␠u1
+u3  7  NULL  Arrange
+u3  6  7  ␠␠Stream␠u2
 
 statement ok
 DROP TABLE t CASCADE;
@@ -142,11 +142,11 @@ SELECT global_id, lir_id, parent_lir_id, REPEAT(' ', nesting * 2) || operator AS
 GROUP BY global_id, lir_id, operator, parent_lir_id, nesting
 ORDER BY global_id, lir_id DESC;
 ----
-t44  5  NULL  Join::Differential␠2␠»␠4
-t44  4  5  ␠␠Arrange␠3
-t44  3  4  ␠␠␠␠Get::Collection␠u4
-t44  2  5  ␠␠Arrange␠1
-t44  1  2  ␠␠␠␠Get::Collection␠u4
+t44  5  NULL  Differential␠Join␠2␠»␠4
+t44  4  5  ␠␠Arrange
+t44  3  4  ␠␠␠␠Read␠u4
+t44  2  5  ␠␠Arrange
+t44  1  2  ␠␠␠␠Read␠u4
 
 # omitting pg_size_pretty(sum(size)) as size
 query TIIT
@@ -157,11 +157,11 @@ SELECT global_id, lir_id, parent_lir_id, REPEAT(' ', nesting * 2) || operator AS
 GROUP BY global_id, lir_id, operator, parent_lir_id, nesting
 ORDER BY global_id, lir_id DESC;
 ----
-t44  5  NULL  Join::Differential␠2␠»␠4
-t44  4  5  ␠␠Arrange␠3
-t44  3  4  ␠␠␠␠Get::Collection␠u4
-t44  2  5  ␠␠Arrange␠1
-t44  1  2  ␠␠␠␠Get::Collection␠u4
+t44  5  NULL  Differential␠Join␠2␠»␠4
+t44  4  5  ␠␠Arrange
+t44  3  4  ␠␠␠␠Read␠u4
+t44  2  5  ␠␠Arrange
+t44  1  2  ␠␠␠␠Read␠u4
 
 statement ok
 DROP TABLE u CASCADE;
@@ -204,10 +204,10 @@ SELECT mlm.global_id AS global_id, lir_id, parent_lir_id, REPEAT(' ', nesting * 
              mlm.operator_id_start <= megsa.region_id AND megsa.region_id < mlm.operator_id_end)
 ORDER BY mlm.global_id, lir_id DESC;
 ----
-u7  2  NULL  TopK::Basic␠1  8  7  3808  15.000
-u7  1  2  ␠␠Get::PassArrangements␠u6  NULL  NULL  NULL  NULL
-u8  4  NULL  Arrange␠3  NULL  NULL  NULL  NULL
-u8  3  4  ␠␠Get::PassArrangements␠u7  NULL  NULL  NULL  NULL
+u7  2  NULL  Non-monotonic␠TopK␠1  8  7  3808  15.000
+u7  1  2  ␠␠Stream␠u6  NULL  NULL  NULL  NULL
+u8  4  NULL  Arrange  NULL  NULL  NULL  NULL
+u8  3  4  ␠␠Stream␠u7  NULL  NULL  NULL  NULL
 
 # rebuild everything other stuff, make sure it all shows up as mappable objects
 
