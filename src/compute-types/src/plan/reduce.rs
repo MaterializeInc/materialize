@@ -329,6 +329,14 @@ pub enum HierarchicalPlan {
 }
 
 impl HierarchicalPlan {
+    /// Returns the set of aggregations computed by this plan.
+    pub fn aggr_funcs(&self) -> &[AggregateFunc] {
+        match self {
+            HierarchicalPlan::Monotonic(plan) => &plan.aggr_funcs,
+            HierarchicalPlan::Bucketed(plan) => &plan.aggr_funcs,
+        }
+    }
+
     /// Upgrades from a bucketed plan to a monotonic plan, if necessary,
     /// and sets consolidation requirements.
     pub fn as_monotonic(&mut self, must_consolidate: bool) {
