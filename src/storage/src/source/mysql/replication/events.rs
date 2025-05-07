@@ -205,11 +205,10 @@ pub(super) async fn handle_query_event(
 
             let mut ctas = false;
             while let Some(token) = query_iter.next() {
-                if token.to_ascii_lowercase() == "start"
+                if token.eq_ignore_ascii_case("start")
                     && query_iter
                         .next()
-                        .map(str::to_ascii_lowercase)
-                        .is_some_and(|t| t == "transaction")
+                        .is_some_and(|t| t.eq_ignore_ascii_case("transaction"))
                 {
                     ctas = true;
                     break;
