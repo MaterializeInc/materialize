@@ -52,9 +52,9 @@ steps:
         depends_on: [build-x86_64]
         timeout_in_minutes: 20
         priority: 50
-        if: build.tag != null
+        if: build.tag != null || (build.env("CI_UPLOAD_DEBUG_SYMBOLS") != null && build.env("CI_UPLOAD_DEBUG_SYMBOLS") != "0")
         agents:
-          queue: builder-linux-x86_64
+          queue: linux-x86_64-small
         coverage: skip
 
       - id: rust-build-aarch64
@@ -80,9 +80,9 @@ steps:
         depends_on: [build-aarch64]
         priority: 50
         timeout_in_minutes: 20
-        if: build.tag != null
+        if: build.tag != null || (build.env("CI_UPLOAD_DEBUG_SYMBOLS") != null && build.env("CI_UPLOAD_DEBUG_SYMBOLS") != "0")
         agents:
-          queue: builder-linux-aarch64-mem
+          queue: linux-aarch64-small
         coverage: skip
 
       - id: build-x86_64
