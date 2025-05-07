@@ -91,9 +91,25 @@ if [ $CHANGES_MADE -eq 1 ]; then
   git config user.name "Buildkite"
   git commit -m "helm-charts: publish updated charts"
   git push origin $GITHUB_PAGES_BRANCH
+  cd ..
 else
   echo "No new chart versions to publish"
+  exit 0
 fi
+
+ORCHESTRATORD_VERSION=$(yq -r '.operator.image.tag' misc/helm-charts/operator/values.yaml)
+DOCS_BRANCH=self-managed-docs/$(echo "$CI_HELM_CHART_VERSION" | cut -d. -f1,2)
+git fetch origin "$DOCS_BRANCH"
+git checkout "origin/$DOCS_BRANCH"
+git config user.email "noreply@materialize.com"
+git config user.name "Buildkite"
+VERSIONS_YAML_PATH=doc/user/data/self_managed/latest_versions.yml
+yq -Y -i ".operator_helm_chart_version = \"$CI_HELM_CHART_VERSION\"" $VERSIONS_YAML_PATH
+yq -Y -i ".environmentd_version = \"$CI_MZ_VERSION\"" $VERSIONS_YAML_PATH
+yq -Y -i ".orchestratord_version = \"$ORCHESTRATORD_VERSION\"" $VERSIONS_YAML_PATH
+git add $VERSIONS_YAML_PATH
+git commit -m "docs: Bump to helm-chart $CI_HELM_CHART_VERSION, environmentd $CI_MZ_VERSION, orchestratord $ORCHESTRATORD_VERSION"
+git push "https://materializebot:$GITHUB_TOKEN@github.com/MaterializeInc/materialize.git" "$DOCS_BRANCH"
 
 i=0
 while (( i < 30 )); do
