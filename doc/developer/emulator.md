@@ -1,6 +1,6 @@
 # Emulator
 
-The emulator is a version of materialize used primarily for local testing. User documentation can be found [here](https://materialize.com/docs/get-started/install-materialize-emulator/)
+The emulator is a version of materialize used primarily for local testing. User documentation can be found [here](https://materialize.com/docs/get-started/install-materialize-emulator/).
 
 ## How to profile the emulator
 
