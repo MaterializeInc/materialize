@@ -24,7 +24,7 @@ use std::fmt;
 use std::ops::Deref;
 
 use itertools::{Itertools, izip};
-use mz_expr::explain::{fmt_text_constant_rows, HumanizedExplain, HumanizerMode};
+use mz_expr::explain::{HumanizedExplain, HumanizerMode, fmt_text_constant_rows};
 use mz_expr::{Id, MirScalarExpr};
 use mz_ore::str::{IndentLike, StrExt, separated};
 use mz_repr::explain::text::DisplayText;
@@ -1253,6 +1253,7 @@ impl AccumulablePlan {
         self.fmt_verbose_text(f, ctx)
     }
 
+    #[allow(clippy::needless_pass_by_ref_mut)]
     fn fmt_verbose_text(
         &self,
         f: &mut fmt::Formatter<'_>,
@@ -1303,6 +1304,7 @@ impl HierarchicalPlan {
         self.fmt_verbose_text(f, ctx)
     }
 
+    #[allow(clippy::needless_pass_by_ref_mut)]
     fn fmt_verbose_text(
         &self,
         f: &mut fmt::Formatter<'_>,
@@ -1357,6 +1359,7 @@ impl BasicPlan {
         self.fmt_verbose_text(f, ctx)
     }
 
+    #[allow(clippy::needless_pass_by_ref_mut)]
     fn fmt_verbose_text(
         &self,
         f: &mut fmt::Formatter<'_>,
@@ -1487,7 +1490,7 @@ impl<'a> Arrangement<'a> {
     fn fmt_default_text(
         &self,
         f: &mut fmt::Formatter<'_>,
-        ctx: &mut PlanRenderingContext<'_, Plan>,
+        ctx: &PlanRenderingContext<'_, Plan>,
     ) -> fmt::Result {
         self.fmt_verbose_text(f, ctx)
     }
@@ -1495,7 +1498,7 @@ impl<'a> Arrangement<'a> {
     fn fmt_verbose_text(
         &self,
         f: &mut fmt::Formatter<'_>,
-        ctx: &mut PlanRenderingContext<'_, Plan>,
+        ctx: &PlanRenderingContext<'_, Plan>,
     ) -> fmt::Result {
         let mode = HumanizedExplain::new(ctx.config.redacted);
         // prepare key
