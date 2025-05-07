@@ -83,6 +83,7 @@ pub struct FueledMergeReq<T> {
 #[derive(Debug)]
 pub struct FueledMergeRes<T> {
     pub output: HollowBatch<T>,
+    pub new_active_compaction: Option<ActiveCompaction>,
 }
 
 /// An append-only collection of compactable update batches.
@@ -736,7 +737,7 @@ struct SpineBatch<T> {
 }
 
 impl<T> SpineBatch<T> {
-    fn merged(batch: IdHollowBatch<T>) -> Self
+    fn merged(batch: IdHollowBatch<T>, active_compaction: Option<ActiveCompaction>) -> Self
     where
         T: Clone,
     {
@@ -745,7 +746,7 @@ impl<T> SpineBatch<T> {
             desc: batch.batch.desc.clone(),
             len: batch.batch.len,
             parts: vec![batch],
-            active_compaction: None,
+            active_compaction,
         }
     }
 }
@@ -825,10 +826,13 @@ impl<T: Timestamp + Lattice> SpineBatch<T> {
         upper: Antichain<T>,
         since: Antichain<T>,
     ) -> Self {
-        SpineBatch::merged(IdHollowBatch {
-            id,
-            batch: Arc::new(HollowBatch::empty(Description::new(lower, upper, since))),
-        })
+        SpineBatch::merged(
+            IdHollowBatch {
+                id,
+                batch: Arc::new(HollowBatch::empty(Description::new(lower, upper, since))),
+            },
+            None,
+        )
     }
 
     pub fn begin_merge(
@@ -927,10 +931,13 @@ impl<T: Timestamp + Lattice + Codec64> SpineBatch<T> {
             && res.output.desc.upper() == self.desc().upper();
 
         if exact_match {
-            *self = SpineBatch::merged(IdHollowBatch {
-                id: self.id(),
-                batch: Arc::new(res.output.clone()),
-            });
+            *self = SpineBatch::merged(
+                IdHollowBatch {
+                    id: self.id(),
+                    batch: Arc::new(res.output.clone()),
+                },
+                res.new_active_compaction.clone(),
+            );
             return ApplyMergeResult::AppliedExact;
         }
 
@@ -988,10 +995,13 @@ impl<T: Timestamp + Lattice + Codec64> SpineBatch<T> {
             if res.output.len > self.len() {
                 return ApplyMergeResult::NotAppliedTooManyUpdates;
             }
-            *self = SpineBatch::merged(IdHollowBatch {
-                id: self.id(),
-                batch: Arc::new(res.output.clone()),
-            });
+            *self = SpineBatch::merged(
+                IdHollowBatch {
+                    id: self.id(),
+                    batch: Arc::new(res.output.clone()),
+                },
+                res.new_active_compaction.clone(),
+            );
             return ApplyMergeResult::AppliedExact;
         }
 
@@ -1043,10 +1053,13 @@ impl<T: Timestamp + Lattice + Codec64> SpineBatch<T> {
                 return ApplyMergeResult::NotAppliedTooManyUpdates;
             }
 
-            *self = SpineBatch::merged(IdHollowBatch {
-                id: self.id(),
-                batch: Arc::new(res.output.clone()),
-            });
+            *self = SpineBatch::merged(
+                IdHollowBatch {
+                    id: self.id(),
+                    batch: Arc::new(res.output.clone()),
+                },
+                res.new_active_compaction.clone(),
+            );
             return ApplyMergeResult::AppliedExact;
         }
 
@@ -1392,10 +1405,13 @@ impl<T: Timestamp + Lattice> Spine<T> {
         assert_eq!(batch.desc.lower(), &self.upper);
 
         let id = self.next_id();
-        let batch = SpineBatch::merged(IdHollowBatch {
-            id,
-            batch: Arc::new(batch),
-        });
+        let batch = SpineBatch::merged(
+            IdHollowBatch {
+                id,
+                batch: Arc::new(batch),
+            },
+            None,
+        );
 
         self.upper.clone_from(batch.upper());
 
@@ -1983,6 +1999,7 @@ pub mod datadriven {
     ) -> Result<String, anyhow::Error> {
         let res = FueledMergeRes {
             output: DirectiveArgs::parse_hollow_batch(args.input),
+            new_active_compaction: None,
         };
         match datadriven.trace.apply_merge_res_unchecked(&res) {
             ApplyMergeResult::AppliedExact => Ok("applied exact\n".into()),

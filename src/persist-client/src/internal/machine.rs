@@ -2006,16 +2006,19 @@ pub mod datadriven {
             desc: Description::new(lower, upper, since),
             inputs,
         };
-        let res = Compactor::<String, (), u64, i64>::compact(
+
+        let req_clone = req.clone();
+        let stream = Compactor::<String, (), u64, i64>::compact_stream(
             CompactConfig::new(&cfg, datadriven.shard_id),
             Arc::clone(&datadriven.client.blob),
             Arc::clone(&datadriven.client.metrics),
             Arc::clone(&datadriven.machine.applier.shard_metrics),
             Arc::clone(&datadriven.client.isolated_runtime),
-            req,
+            req_clone,
             SCHEMAS.clone(),
-        )
-        .await?;
+        );
+
+        let res = Compactor::<String, (), u64, i64>::compact_all(stream, req.clone()).await?;
 
         datadriven
             .batches
@@ -2462,7 +2465,10 @@ pub mod datadriven {
             .clone();
         let (merge_res, maintenance) = datadriven
             .machine
-            .merge_res(&FueledMergeRes { output: batch })
+            .merge_res(&FueledMergeRes {
+                output: batch,
+                new_active_compaction: None,
+            })
             .await;
         datadriven.routine.push(maintenance);
         Ok(format!(
