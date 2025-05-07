@@ -38,6 +38,7 @@ USE public;
 CREATE TABLE bar SELECT * FROM foo;
 CREATE TABLE charlie TABLE foo;
 CREATE TABLE moo AS SELECT * FROM (VALUES ROW(1,2,3), ROW(4,5,6)) AS v;
+CREATE TABLE lou(id INTEGER, val INTEGER) partition by hash(id) SELECT * FROM foo;
 
 > SELECT * FROM foo;
 1 11
