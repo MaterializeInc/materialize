@@ -23,7 +23,6 @@ use tokio::io::AsyncBufReadExt;
 
 use tracing::info;
 
-use crate::SelfManagedDebugMode;
 #[derive(Debug)]
 pub struct KubectlPortForwarder {
     pub namespace: String,
@@ -102,9 +101,12 @@ impl KubectlPortForwarder {
 /// Creates a port forwarder for the external pg wire port of balancerd.
 pub async fn create_pg_wire_port_forwarder(
     client: &Client,
-    args: &SelfManagedDebugMode,
+    k8s_context: &Option<String>,
+    k8s_namespaces: &Vec<String>,
+    port_forward_local_address: &String,
+    port_forward_local_port: i32,
 ) -> Result<KubectlPortForwarder, anyhow::Error> {
-    for namespace in &args.k8s_namespaces {
+    for namespace in k8s_namespaces {
         let services: Api<Service> = Api::namespaced(client.clone(), namespace);
         let services = services
             .list(&ListParams::default().labels("materialize.cloud/mz-resource-id"))
@@ -131,12 +133,12 @@ pub async fn create_pg_wire_port_forwarder(
                     // We want to find the external SQL port and not the internal one
                     if port_name.to_lowercase().contains("pgwire") {
                         return Some(KubectlPortForwarder {
-                            context: args.k8s_context.clone(),
+                            context: k8s_context.clone(),
                             namespace: namespace.clone(),
                             service_name: service_name.to_owned(),
                             target_port: port_info.port,
-                            local_address: args.port_forward_local_address.clone(),
-                            local_port: args.port_forward_local_port,
+                            local_address: port_forward_local_address.clone(),
+                            local_port: port_forward_local_port,
                         });
                     }
                 }
