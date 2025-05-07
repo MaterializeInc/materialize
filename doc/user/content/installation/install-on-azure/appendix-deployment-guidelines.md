@@ -32,9 +32,8 @@ Azure VM Types with Local NVMe Disk:
 
 {{< important >}}
 
-These VM types provide **ephemeral** local NVMe SSD disks. Since data is lost
-when the VM is stopped or deleted, they are best suited for **temporary or
-performance-sensitive data** managed by Materialize.
+These VM types provide **ephemeral** local NVMe SSD disks. Data is lost
+when the VM is stopped or deleted.
 
 {{</ important >}}
 
