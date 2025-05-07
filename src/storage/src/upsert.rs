@@ -54,7 +54,7 @@ use types::{
 };
 
 mod autospill;
-mod memory;
+pub mod memory;
 mod rocksdb;
 // TODO(aljoscha): Move next to upsert module, rename to upsert_types.
 pub(crate) mod types;
