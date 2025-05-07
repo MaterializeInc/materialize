@@ -73,6 +73,115 @@ CREATE TABLE <table_name> FROM SOURCE <source_name> (REFERENCE <ref_object>)
 
 {{% yaml-table data="syntax_options/create_table_options_source_populated_db" %}}
 
+<a name="supported-db-source-types" ></a>
+
+{{< tabs >}}
+{{< tab "Supported MySQL types">}}
+
+Materialize natively supports the following MySQL types:
+
+<ul style="column-count: 3">
+<li><code>bigint</code></li>
+<li><code>binary</code></li>
+<li><code>bit</code></li>
+<li><code>blob</code></li>
+<li><code>boolean</code></li>
+<li><code>char</code></li>
+<li><code>date</code></li>
+<li><code>datetime</code></li>
+<li><code>decimal</code></li>
+<li><code>double</code></li>
+<li><code>float</code></li>
+<li><code>int</code></li>
+<li><code>json</code></li>
+<li><code>longblob</code></li>
+<li><code>longtext</code></li>
+<li><code>mediumblob</code></li>
+<li><code>mediumint</code></li>
+<li><code>mediumtext</code></li>
+<li><code>numeric</code></li>
+<li><code>real</code></li>
+<li><code>smallint</code></li>
+<li><code>text</code></li>
+<li><code>time</code></li>
+<li><code>timestamp</code></li>
+<li><code>tinyblob</code></li>
+<li><code>tinyint</code></li>
+<li><code>tinytext</code></li>
+<li><code>varbinary</code></li>
+<li><code>varchar</code></li>
+</ul>
+
+Replicating tables that contain **unsupported data types** is
+possible via the [`TEXT COLUMNS` option](#text-columns) for the
+following types:
+
+<ul style="column-count: 1">
+<li><code>enum</code></li>
+<li><code>year</code></li>
+</ul>
+
+The specified columns will be treated as `text`, and will thus not offer the
+expected MySQL type features. For any unsupported data types not listed above,
+use the [`EXCLUDE COLUMNS`](#exclude-columns) option.
+
+{{</ tab >}}
+
+{{< tab "Supported PostgreSQL types">}}
+Materialize natively supports the following PostgreSQL types (including the
+array type for each of the types):
+
+<ul style="column-count: 3">
+<li><code>bool</code></li>
+<li><code>bpchar</code></li>
+<li><code>bytea</code></li>
+<li><code>char</code></li>
+<li><code>date</code></li>
+<li><code>daterange</code></li>
+<li><code>float4</code></li>
+<li><code>float8</code></li>
+<li><code>int2</code></li>
+<li><code>int2vector</code></li>
+<li><code>int4</code></li>
+<li><code>int4range</code></li>
+<li><code>int8</code></li>
+<li><code>int8range</code></li>
+<li><code>interval</code></li>
+<li><code>json</code></li>
+<li><code>jsonb</code></li>
+<li><code>numeric</code></li>
+<li><code>numrange</code></li>
+<li><code>oid</code></li>
+<li><code>text</code></li>
+<li><code>time</code></li>
+<li><code>timestamp</code></li>
+<li><code>timestamptz</code></li>
+<li><code>tsrange</code></li>
+<li><code>tstzrange</code></li>
+<li><code>uuid</code></li>
+<li><code>varchar</code></li>
+</ul>
+
+Replicating tables that contain **unsupported data types** is possible via the
+[`TEXT COLUMNS` option](#text-columns). When decoded as `text`, the specified
+columns will not have the expected PostgreSQL type features. For example:
+
+* [`enum`]: When decoded as `text`, the resulting `text` values will
+  not observe the implicit ordering of the original PostgreSQL `enum`; instead,
+  Materialize will sort the values as `text`.
+
+* [`money`]: When decoded as `text`, the resulting `text` value
+  cannot be cast back to `numeric` since PostgreSQL adds typical currency
+  formatting to the output.
+
+[`enum`]: https://www.postgresql.org/docs/current/datatype-enum.html
+[`money`]: https://www.postgresql.org/docs/current/datatype-money.html
+
+{{</ tab >}}
+{{</ tabs >}}
+
+See also [Materialize SQL data types](/sql/types/).
+
 {{</ tab >}}
 
 
