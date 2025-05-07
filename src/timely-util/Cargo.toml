@@ -11,7 +11,7 @@ workspace = true
 
 [dependencies]
 ahash = { version = "0.8.11", default-features = false }
-bincode = "1.3.3"
+bincode = "2.0.1"
 bytemuck = "1.22.0"
 columnar = "0.4.1"
 columnation = "0.1.0"
