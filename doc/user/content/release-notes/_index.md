@@ -89,7 +89,7 @@ for release specific notes.
 |-----------------------------------------|-------------|
 | **IAM** <br>Built-in authorization mechanisms. | In progress |
 | **License Compliance** <br>License key support to make it easier to comply with license terms. | In progress |
-| **Spill to disk** <br> Provide Terraform modules to set up  locally-attached NVMe storage to support workloads that are larger than can fit into memory. | <ul><li>AWS: Available in Materialize on AWS Terraform v0.3.1+</li><li>GCP: Available in Materialize on GCP Terraform v0.4.0+</li><li>Azure: vailable in Materialize on Azure Terraform v0.3.5+</li><ul> |
+| **Spill to disk** <br> Provide Terraform modules to set up  locally-attached NVMe storage to support workloads that are larger than can fit into memory. | <ul><li>AWS: Available in Materialize on AWS Terraform v0.3.1+</li><li>GCP: Available in Materialize on GCP Terraform v0.4.0+</li><li>Azure: Available in Materialize on Azure Terraform v0.4.0+</li><ul> |
 | **Ingress from outside cluster** <br> Provide Terraform modules to set up ingress from outside the Kubernetes cluster hosting self-managed Materialize. | <ul><li>AWS: Available in Materialize on AWS Terraform v0.3.0+</li><li>GCP:Available in Materialize on GCP Terraform v0.3.0+</li><li>Azure: Available in Materialize on Azure Terraform v0.3.1+</li><ul> |
 | **AWS Connections** <br> AWS connections require backing cluster that hosts Materialize to be AWS EKS.  | |
 | **EKS/Azure Connections** | |

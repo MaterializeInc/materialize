@@ -40,17 +40,6 @@ performance-sensitive data** managed by Materialize.
 
 See also [Locally attached NVMe storage](#locally-attached-nvme-storage).
 
-## CPU affinity
-
-It is strongly recommended to enable the Kubernetes `static` [CPU management policy](https://kubernetes.io/docs/tasks/administer-cluster/cpu-management-policies/#static-policy).
-This ensures that each worker thread of Materialize is given exclusively access to a vCPU. Our benchmarks have shown this
-to substantially improve the performance of compute-bound workloads.
-
-## TLS
-
-When running with TLS in production, run with certificates from an official
-Certificate Authority (CA) rather than self-signed certificates.
-
 ## Locally-attached NVMe storage
 
 For optimal performance, Materialize requires fast, locally-attached NVMe
@@ -59,7 +48,7 @@ when operating on datasets larger than main memory as well as allows for a more
 graceful degradation rather than OOMing. Network-attached storage (like EBS
 volumes) can significantly degrade performance and is not supported.
 
-Starting in v0.3.5 of Materialize on Azure Terraform, disk support (using
+Starting in v0.4.0 of Materialize on Azure Terraform, disk support (using
 OpenEBS and NVMe instance storage) is enabled, by default, for Materialize. With
 this change, the Terraform:
 
@@ -95,3 +84,14 @@ instance types](#recommended-instance-types).
 
 [`disk_setup_image`]:
     https://github.com/MaterializeInc/terraform-azurerm-materialize?tab=readme-ov-file#input_disk_setup_image
+
+## CPU affinity
+
+It is strongly recommended to enable the Kubernetes `static` [CPU management policy](https://kubernetes.io/docs/tasks/administer-cluster/cpu-management-policies/#static-policy).
+This ensures that each worker thread of Materialize is given exclusively access to a vCPU. Our benchmarks have shown this
+to substantially improve the performance of compute-bound workloads.
+
+## TLS
+
+When running with TLS in production, run with certificates from an official
+Certificate Authority (CA) rather than self-signed certificates.
