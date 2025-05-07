@@ -47,7 +47,7 @@ _col&lowbar;type_ | The data type of the column indicated by _col&lowbar;name_.
 
 | Field                                    | Value               | Description                                                                                                                                                       |
 |------------------------------------------|---------------------| ----------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **PARTITION BY** _columns_               | `(ident [, ident]*)` | ***Private preview.** This option has known performance or stability issues and is under active development.* The key by which Materialize should internally partition this durable collection. See the [partitioning guide](/transform-data/patterns/partition-by/) for restrictions on valid values and other details.
+| **PARTITION BY** _columns_               | `(ident [, ident]*)` | The key by which Materialize should internally partition this durable collection. See the [partitioning guide](/transform-data/patterns/partition-by/) for restrictions on valid values and other details.
 | **RETAIN HISTORY FOR** _retention_period_ | `interval`          | ***Private preview.** This option has known performance or stability issues and is under active development.* Duration for which Materialize retains historical data, which is useful to implement [durable subscriptions](/transform-data/patterns/durable-subscriptions/#history-retention-period). Accepts positive [interval](/sql/types/interval/) values (e.g. `'1hr'`). Default: `1s`.
 
 
