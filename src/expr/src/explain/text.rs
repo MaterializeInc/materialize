@@ -248,8 +248,7 @@ where
     }
 }
 
-impl<'a, M: HumanizerMode> HumanizedExpr<'a, MapFilterProject, M>
-{
+impl<'a, M: HumanizerMode> HumanizedExpr<'a, MapFilterProject, M> {
     /// Render an MFP using the the default (concise) syntax.
     pub fn fmt_default_text<T>(
         &self,
