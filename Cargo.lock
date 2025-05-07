@@ -5009,7 +5009,6 @@ version = "0.1.0"
 dependencies = [
  "mz-adapter",
  "mz-frontegg-auth",
- "mz-server-core",
  "serde",
  "workspace-hack",
 ]

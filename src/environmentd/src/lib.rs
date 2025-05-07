@@ -264,11 +264,13 @@ impl Listener<SqlListenerConfig> {
                 TlsMode::Allow
             },
         });
-        let authenticator = Authenticator::new(
-            self.config.authenticator_kind,
-            frontegg,
-            adapter_client.clone(),
-        );
+        let authenticator = match self.config.authenticator_kind {
+            AuthenticatorKind::Frontegg => Authenticator::Frontegg(
+                frontegg.expect("Frontegg args are required with AuthenticatorKind::Frontegg"),
+            ),
+            AuthenticatorKind::Password => Authenticator::Password(adapter_client.clone()),
+            AuthenticatorKind::None => Authenticator::None,
+        };
 
         task::spawn(|| format!("{}_sql_server", label), {
             let sql_server = mz_pgwire::Server::new(mz_pgwire::Config {
