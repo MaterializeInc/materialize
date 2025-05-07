@@ -17,7 +17,7 @@ use std::time::Duration;
 use anyhow::anyhow;
 use async_trait::async_trait;
 use axum::extract::connect_info::ConnectInfo;
-use axum::extract::ws::{CloseFrame, Message, Utf8Bytes, WebSocket};
+use axum::extract::ws::{CloseFrame, Message, WebSocket};
 use axum::extract::{State, WebSocketUpgrade};
 use axum::response::IntoResponse;
 use axum::{Extension, Json};
@@ -321,7 +321,7 @@ async fn run_ws(state: &WsState, user: Option<AuthedUser>, peer_addr: IpAddr, mu
             let _ = ws
                 .send(Message::Close(Some(CloseFrame {
                     code: CloseCode::Protocol.into(),
-                    reason: Utf8Bytes::from(reason.as_ref()),
+                    reason,
                 })))
                 .await;
             return;
@@ -347,7 +347,7 @@ async fn run_ws(state: &WsState, user: Option<AuthedUser>, peer_addr: IpAddr, mu
     for msg in msgs {
         let _ = ws
             .send(Message::Text(
-                serde_json::to_string(&msg).expect("must serialize").into(),
+                serde_json::to_string(&msg).expect("must serialize"),
             ))
             .await;
     }
@@ -452,7 +452,7 @@ async fn run_ws_request(
 /// Sends a single [`WebSocketResponse`] over the provided [`WebSocket`].
 async fn send_ws_response(ws: &mut WebSocket, resp: WebSocketResponse) -> Result<(), Error> {
     let msg = serde_json::to_string(&resp).unwrap();
-    let msg = Message::Text(msg.into());
+    let msg = Message::Text(msg);
     ws.send(msg).await?;
 
     Ok(())
@@ -1019,7 +1019,7 @@ impl ResultSender for WebSocket {
             tick.tick().await;
             loop {
                 tick.tick().await;
-                if let Err(err) = self.send(Message::Ping(Vec::new().into())).await {
+                if let Err(err) = self.send(Message::Ping(Vec::new())).await {
                     return err.into();
                 }
             }

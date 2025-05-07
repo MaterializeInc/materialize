@@ -2863,10 +2863,7 @@ async fn smoketest_webhook_source() {
     assert_eq!(total_requests_metric.get_counter().get_value(), 100.0);
 
     let path_label = &total_requests_metric.get_label()[0];
-    assert_eq!(
-        path_label.get_value(),
-        "/api/webhook/{:database}/{:schema}/{:id}"
-    );
+    assert_eq!(path_label.get_value(), "/api/webhook/:database/:schema/:id");
 
     let status_label = &total_requests_metric.get_label()[2];
     assert_eq!(status_label.get_value(), "200");
