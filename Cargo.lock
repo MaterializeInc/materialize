@@ -6409,7 +6409,6 @@ dependencies = [
  "maplit",
  "mz-alloc",
  "mz-alloc-default",
- "mz-authenticator",
  "mz-build-info",
  "mz-build-tools",
  "mz-cloud-provider",

@@ -37,7 +37,6 @@ rust_library(
     deps = [
         "//src/alloc:mz_alloc",
         "//src/alloc-default:mz_alloc_default",
-        "//src/authenticator:mz_authenticator",
         "//src/build-info:mz_build_info",
         "//src/cloud-provider:mz_cloud_provider",
         "//src/cloud-resources:mz_cloud_resources",
@@ -78,7 +77,6 @@ rust_test(
     deps = [
         "//src/alloc:mz_alloc",
         "//src/alloc-default:mz_alloc_default",
-        "//src/authenticator:mz_authenticator",
         "//src/build-info:mz_build_info",
         "//src/cloud-provider:mz_cloud_provider",
         "//src/cloud-resources:mz_cloud_resources",
@@ -99,7 +97,6 @@ rust_doc_test(
     deps = [
         "//src/alloc:mz_alloc",
         "//src/alloc-default:mz_alloc_default",
-        "//src/authenticator:mz_authenticator",
         "//src/build-info:mz_build_info",
         "//src/cloud-provider:mz_cloud_provider",
         "//src/cloud-resources:mz_cloud_resources",
@@ -138,7 +135,6 @@ rust_binary(
         ":mz_orchestratord",
         "//src/alloc:mz_alloc",
         "//src/alloc-default:mz_alloc_default",
-        "//src/authenticator:mz_authenticator",
         "//src/build-info:mz_build_info",
         "//src/cloud-provider:mz_cloud_provider",
         "//src/cloud-resources:mz_cloud_resources",
