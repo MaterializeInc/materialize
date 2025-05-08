@@ -836,28 +836,24 @@ async fn auth(
     allowed_roles: AllowedRoles,
 ) -> Result<AuthedUser, AuthError> {
     let (name, external_metadata_rx) = match authenticator {
-        Authenticator::Frontegg(frontegg) => {
-            warn!("frontegg auth");
-            match creds {
-                Some(Credentials::Password { username, password }) => {
-                    let auth_session = frontegg.authenticate(&username, &password.0).await?;
-                    let name = auth_session.user().into();
-                    let external_metadata_rx = Some(auth_session.external_metadata_rx());
-                    (name, external_metadata_rx)
-                }
-                Some(Credentials::Token { token }) => {
-                    let claims = frontegg.validate_access_token(&token, None)?;
-                    let (_, external_metadata_rx) = watch::channel(ExternalUserMetadata {
-                        user_id: claims.user_id,
-                        admin: claims.is_admin,
-                    });
-                    (claims.user, Some(external_metadata_rx))
-                }
-                None => return Err(AuthError::MissingHttpAuthentication),
+        Authenticator::Frontegg(frontegg) => match creds {
+            Some(Credentials::Password { username, password }) => {
+                let auth_session = frontegg.authenticate(&username, &password.0).await?;
+                let name = auth_session.user().into();
+                let external_metadata_rx = Some(auth_session.external_metadata_rx());
+                (name, external_metadata_rx)
             }
-        }
+            Some(Credentials::Token { token }) => {
+                let claims = frontegg.validate_access_token(&token, None)?;
+                let (_, external_metadata_rx) = watch::channel(ExternalUserMetadata {
+                    user_id: claims.user_id,
+                    admin: claims.is_admin,
+                });
+                (claims.user, Some(external_metadata_rx))
+            }
+            None => return Err(AuthError::MissingHttpAuthentication),
+        },
         Authenticator::None => {
-            warn!("no auth");
             // If no authentication, use whatever is in the HTTP auth
             // header (without checking the password), or fall back to the
             // default user.
@@ -869,23 +865,29 @@ async fn auth(
         }
     };
 
-    // TODO move this somewhere it can be shared with PGWIRE
-    let is_internal_user = INTERNAL_USER_NAMES.contains(&name);
-    // this is a superset of internal users
-    let is_reserved_user = mz_adapter::catalog::is_reserved_role_name(name.as_str());
-    let role_allowed = match allowed_roles {
-        AllowedRoles::Normal => !is_reserved_user,
-        AllowedRoles::Internal => is_internal_user,
-        AllowedRoles::NormalAndInternal => !is_reserved_user || is_internal_user,
-    };
-    if !role_allowed {
-        return Err(AuthError::InvalidLogin(name));
-    }
+    check_role_allowed(&name, allowed_roles)?;
 
     Ok(AuthedUser {
         name,
         external_metadata_rx,
     })
+}
+
+// TODO move this somewhere it can be shared with PGWIRE
+fn check_role_allowed(name: &str, allowed_roles: AllowedRoles) -> Result<(), AuthError> {
+    let is_internal_user = INTERNAL_USER_NAMES.contains(name);
+    // this is a superset of internal users
+    let is_reserved_user = mz_adapter::catalog::is_reserved_role_name(name);
+    let role_allowed = match allowed_roles {
+        AllowedRoles::Normal => !is_reserved_user,
+        AllowedRoles::Internal => is_internal_user,
+        AllowedRoles::NormalAndInternal => !is_reserved_user || is_internal_user,
+    };
+    if role_allowed {
+        Ok(())
+    } else {
+        Err(AuthError::InvalidLogin(name.to_owned()))
+    }
 }
 
 /// Default layers that should be applied to all routes, and should get applied to both the
@@ -921,4 +923,62 @@ async fn handle_load_error(error: tower::BoxError) -> impl IntoResponse {
         StatusCode::INTERNAL_SERVER_ERROR,
         Cow::from(format!("Unhandled internal error: {}", error)),
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{AllowedRoles, check_role_allowed};
+
+    #[mz_ore::test]
+    fn test_check_role_allowed() {
+        // Internal user
+        assert!(check_role_allowed("mz_system", AllowedRoles::Internal).is_ok());
+        assert!(check_role_allowed("mz_system", AllowedRoles::NormalAndInternal).is_ok());
+        assert!(check_role_allowed("mz_system", AllowedRoles::Normal).is_err());
+
+        // Internal user
+        assert!(check_role_allowed("mz_support", AllowedRoles::Internal).is_ok());
+        assert!(check_role_allowed("mz_support", AllowedRoles::NormalAndInternal).is_ok());
+        assert!(check_role_allowed("mz_support", AllowedRoles::Normal).is_err());
+
+        // Internal user
+        assert!(check_role_allowed("mz_analytics", AllowedRoles::Internal).is_ok());
+        assert!(check_role_allowed("mz_analytics", AllowedRoles::NormalAndInternal).is_ok());
+        assert!(check_role_allowed("mz_analytics", AllowedRoles::Normal).is_err());
+
+        // Normal user
+        assert!(check_role_allowed("materialize", AllowedRoles::Internal).is_err());
+        assert!(check_role_allowed("materialize", AllowedRoles::NormalAndInternal).is_ok());
+        assert!(check_role_allowed("materialize", AllowedRoles::Normal).is_ok());
+
+        // Normal user
+        assert!(check_role_allowed("anonymous_http_user", AllowedRoles::Internal).is_err());
+        assert!(check_role_allowed("anonymous_http_user", AllowedRoles::NormalAndInternal).is_ok());
+        assert!(check_role_allowed("anonymous_http_user", AllowedRoles::Normal).is_ok());
+
+        // Normal user
+        assert!(check_role_allowed("alex", AllowedRoles::Internal).is_err());
+        assert!(check_role_allowed("alex", AllowedRoles::NormalAndInternal).is_ok());
+        assert!(check_role_allowed("alex", AllowedRoles::Normal).is_ok());
+
+        // Denied by reserved role prefix
+        assert!(check_role_allowed("external_asdf", AllowedRoles::Internal).is_err());
+        assert!(check_role_allowed("external_asdf", AllowedRoles::NormalAndInternal).is_err());
+        assert!(check_role_allowed("external_asdf", AllowedRoles::Normal).is_err());
+
+        // Denied by reserved role prefix
+        assert!(check_role_allowed("pg_somebody", AllowedRoles::Internal).is_err());
+        assert!(check_role_allowed("pg_somebody", AllowedRoles::NormalAndInternal).is_err());
+        assert!(check_role_allowed("pg_somebody", AllowedRoles::Normal).is_err());
+
+        // Denied by reserved role prefix
+        assert!(check_role_allowed("mz_unknown", AllowedRoles::Internal).is_err());
+        assert!(check_role_allowed("mz_unknown", AllowedRoles::NormalAndInternal).is_err());
+        assert!(check_role_allowed("mz_unknown", AllowedRoles::Normal).is_err());
+
+        // Denied by literal PUBLIC
+        assert!(check_role_allowed("PUBLIC", AllowedRoles::Internal).is_err());
+        assert!(check_role_allowed("PUBLIC", AllowedRoles::NormalAndInternal).is_err());
+        assert!(check_role_allowed("PUBLIC", AllowedRoles::Normal).is_err());
+    }
 }
