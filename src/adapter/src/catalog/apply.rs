@@ -38,6 +38,7 @@ use mz_compute_types::config::ComputeReplicaConfig;
 use mz_controller::clusters::{ReplicaConfig, ReplicaLogging};
 use mz_controller_types::ClusterId;
 use mz_expr::MirScalarExpr;
+use mz_ore::cast::CastFrom;
 use mz_ore::collections::CollectionExt;
 use mz_ore::tracing::OpenTelemetryContext;
 use mz_ore::{assert_none, instrument, soft_assert_no_log};
@@ -1947,6 +1948,7 @@ fn sort_updates_inner(updates: Vec<StateUpdate>) -> Vec<StateUpdate> {
             (mz_catalog::durable::Item, Timestamp, StateDiff),
             BTreeSet<CatalogItemId>,
         > = BTreeMap::default();
+        let existing_connections: BTreeSet<_> = connections.iter().map(|item| item.0.id).collect();
 
         // Initialize our set of topological sort.
         for (connection, ts, diff) in connections.drain(..) {
@@ -1958,16 +1960,19 @@ fn sort_updates_inner(updates: Vec<StateUpdate>) -> Vec<StateUpdate> {
                 .expect("failed to find dependencies of CONNECTION");
             // Be defensive and remove any possible self references.
             dependencies.remove(&connection.id);
+            dependencies.retain(|dep| existing_connections.contains(dep));
+
             // Be defensive and ensure we're not clobbering any items.
             assert_none!(topo.insert((connection, ts, diff), dependencies));
         }
+        tracing::info!(?topo, ?existing_connections, "sorting connections");
 
         // Do a topological sort, pushing back into the provided Vec.
-        let mut num_iterations = 0;
+        let mut num_iterations: usize = 0;
         while let Some((item, deps)) = topo.pop_first() {
             // A crude check, but guard against looping forever.
             num_iterations += 1;
-            if num_iterations > u32::MAX {
+            if num_iterations > usize::cast_from(u32::MAX) {
                 panic!("infinite loop while sorting connections");
             }
 
