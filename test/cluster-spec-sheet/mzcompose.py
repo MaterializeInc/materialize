@@ -986,13 +986,14 @@ def plot_time_ms(data: pd.DataFrame, query: str, title: str) -> pd.DataFrame:
         )
         .sort_index(axis=1)
     )
-    filtered = df2.dropna(axis=1, how="all")
+    (level, dropped) = labels_to_drop(df2)
+    filtered = df2.droplevel(level, axis=1).dropna(axis=1, how="all")
     ax = filtered.plot(
         kind="bar",
         figsize=(12, 6),
-        ylabel="time [ms]",
+        ylabel="Time [ms]",
         logy=False,
-        title=title,
+        title=f"{title}\n{dropped}",
     )
     return filtered
 
@@ -1008,12 +1009,24 @@ def plot_credit_time(data: pd.DataFrame, query: str, title: str) -> pd.DataFrame
         )
         .sort_index(axis=1)
     )
-    filtered = df2.dropna(axis=1, how="all")
+    (level, dropped) = labels_to_drop(df2)
+    filtered = df2.droplevel(level, axis=1).dropna(axis=1, how="all")
     ax = filtered.plot(
         kind="bar",
         figsize=(12, 6),
         ylabel="Cost [centi-credits]",
         logy=False,
-        title=title,
+        title=f"{title}\n{dropped}",
     )
     return filtered
+
+
+def labels_to_drop(data: pd.DataFrame) -> (list[str | None], dict[str | None, str]):
+    unique = []
+    dropped = {}
+    for level in range(data.columns.nlevels):
+        labels = data.columns.get_level_values(level)
+        if len(set(labels)) == 1:
+            unique.append(data.columns.names[level])
+            dropped[data.columns.names[level]] = labels[0]
+    return (unique, dropped)
