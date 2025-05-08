@@ -38,7 +38,6 @@ use mz_compute_types::config::ComputeReplicaConfig;
 use mz_controller::clusters::{ReplicaConfig, ReplicaLogging};
 use mz_controller_types::ClusterId;
 use mz_expr::MirScalarExpr;
-use mz_ore::cast::CastFrom;
 use mz_ore::collections::CollectionExt;
 use mz_ore::tracing::OpenTelemetryContext;
 use mz_ore::{assert_none, instrument, soft_assert_no_log};
@@ -1960,6 +1959,8 @@ fn sort_updates_inner(updates: Vec<StateUpdate>) -> Vec<StateUpdate> {
                 .expect("failed to find dependencies of CONNECTION");
             // Be defensive and remove any possible self references.
             dependencies.remove(&connection.id);
+            // It's possible we're applying updates to a connection where the
+            // dependency already exists and thus it's not in `connections`.
             dependencies.retain(|dep| existing_connections.contains(dep));
 
             // Be defensive and ensure we're not clobbering any items.
@@ -1968,24 +1969,34 @@ fn sort_updates_inner(updates: Vec<StateUpdate>) -> Vec<StateUpdate> {
         tracing::info!(?topo, ?existing_connections, "sorting connections");
 
         // Do a topological sort, pushing back into the provided Vec.
-        let mut num_iterations: usize = 0;
-        while let Some((item, deps)) = topo.pop_first() {
-            // A crude check, but guard against looping forever.
-            num_iterations += 1;
-            if num_iterations > usize::cast_from(u32::MAX) {
-                panic!("infinite loop while sorting connections");
+        while !topo.is_empty() {
+            // Get all of the connections with no dependencies.
+            let no_deps: Vec<_> = topo
+                .iter()
+                .filter_map(|(item, deps)| {
+                    if deps.is_empty() {
+                        Some(item.clone())
+                    } else {
+                        None
+                    }
+                })
+                .collect();
+
+            // Cycle in our graph!
+            if no_deps.is_empty() {
+                panic!("programming error, cycle in Connections");
             }
 
-            if deps.is_empty() {
+            // Process all of the items with no dependencies.
+            for item in no_deps {
+                // Remove the item from our topological sort.
+                topo.remove(&item);
                 // Remove this item from anything that depends on it.
                 topo.values_mut().for_each(|deps| {
                     deps.remove(&item.0.id);
                 });
                 // Push it back into our list as "completed".
                 connections.push(item);
-            } else {
-                // Darn, we still have outstanding dependencies, re-add to the list.
-                topo.insert(item, deps);
             }
         }
     }
