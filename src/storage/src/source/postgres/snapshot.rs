@@ -516,16 +516,17 @@ pub(crate) fn render<G: Scope<Timestamp = MzOffset>>(
             }
             *rewind_cap_set = CapabilitySet::new();
 
-            if snapshot_staged < snapshot_total {
-                error!(%id, "timely-{worker_id} snapshot size {snapshot_total} is somehow
-                                 bigger than records staged {snapshot_staged}");
-                snapshot_staged = snapshot_total;
+            let strict_count = config.config.parameters.pg_snapshot_config.collect_strict_count;
+            if strict_count && snapshot_staged != snapshot_total {
+                panic!("timely-{worker_id} size mimatch for snapshot of source {id}. \
+                    expected: {snapshot_total} actual: {snapshot_staged}");
             }
+            // Report the same known and staged records to signify that the snapshot is complete.
             stats_output.give(
                 &stats_cap[0],
                 ProgressStatisticsUpdate::Snapshot {
                     records_known: snapshot_total,
-                    records_staged: snapshot_staged,
+                    records_staged: snapshot_total,
                 },
             );
 
