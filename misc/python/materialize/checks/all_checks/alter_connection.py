@@ -259,6 +259,8 @@ class AlterConnectionDependencyOrder(Check):
                 """
                 ALTER CONNECTION my_kafka_alter_conn SET (BROKER 'localhost:32816' USING SSH TUNNEL other_ssh) WITH (VALIDATE = false);
                 """,
+                """
+                """,
             ]
         ]
 
