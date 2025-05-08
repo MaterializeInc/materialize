@@ -52,6 +52,7 @@ use mz_expr::{
 };
 use mz_ore::assert_none;
 use mz_ore::collections::CollectionExt;
+use mz_ore::error::ErrorExt;
 use mz_ore::id_gen::IdGen;
 use mz_ore::option::FallibleMapExt;
 use mz_ore::stack::{CheckedRecursion, RecursionGuard};
@@ -107,7 +108,7 @@ use crate::session::vars::{self, FeatureFlag};
 pub struct PlannedRootQuery<E> {
     pub expr: E,
     pub desc: RelationDesc,
-    pub finishing: RowSetFinishing<HirScalarExpr>,
+    pub finishing: RowSetFinishing<HirScalarExpr, HirScalarExpr>,
     pub scope: Scope,
 }
 
@@ -463,12 +464,7 @@ pub fn plan_insert_query(
         PlannedRootQuery {
             expr: new_exprs,
             desc,
-            finishing: RowSetFinishing {
-                order_by: vec![],
-                limit: None,
-                offset: 0,
-                project: (0..desc_arity).collect(),
-            },
+            finishing: HirRelationExpr::trivial_row_set_finishing_hir(desc_arity),
             scope,
         }
     };
@@ -1414,7 +1410,12 @@ struct PlannedQuery {
     scope: Scope,
     order_by: Vec<ColumnOrder>,
     limit: Option<HirScalarExpr>,
-    offset: usize,
+    /// `offset` is either
+    /// - an Int64 literal
+    /// - or contains parameters. (If it contains parameters, then after parameter substitution it
+    ///   should also be `is_constant` and reduce to an Int64 literal, but we check this only
+    ///   later.)
+    offset: HirScalarExpr,
     project: Vec<usize>,
     group_size_hints: GroupSizeHints,
 }
@@ -1451,6 +1452,9 @@ fn plan_query_inner(qcx: &mut QueryContext, q: &Query<Aug>) -> Result<PlannedQue
                 let arena = RowArena::new();
                 let limit = limit.lower_uncorrelated()?;
 
+                // TODO: Don't use ? on eval, but instead wrap the error and add the information
+                // that the error happened in a LIMIT clause, so that we have better error msg for
+                // something like `SELECT 5 LIMIT 'aaa'`.
                 match limit.eval(&[], &arena)? {
                     d @ Datum::Int64(v) if v >= 0 => HirScalarExpr::literal(d, ScalarType::Int64),
                     d @ Datum::Null => HirScalarExpr::literal(d, ScalarType::Int64),
@@ -1471,10 +1475,41 @@ fn plan_query_inner(qcx: &mut QueryContext, q: &Query<Aug>) -> Result<PlannedQue
             with_ties: true,
         }) => bail_unsupported!("FETCH ... WITH TIES"),
     };
+
     let offset = match &q.offset {
-        None => 0,
-        Some(Expr::Value(Value::Number(x))) => x.parse()?,
-        _ => sql_bail!("OFFSET must be an integer constant"),
+        None => HirScalarExpr::literal(Datum::Int64(0), ScalarType::Int64),
+        Some(offset) => {
+            let ecx = &ExprContext {
+                qcx,
+                name: "OFFSET",
+                scope: &Scope::empty(),
+                relation_type: &RelationType::empty(),
+                allow_aggregates: false,
+                allow_subqueries: false,
+                allow_parameters: true,
+                allow_windows: false,
+            };
+            let offset = plan_expr(ecx, offset)?;
+            let offset = offset.cast_to(ecx, CastContext::Explicit, &ScalarType::Int64)?;
+
+            let offset = if offset.is_constant() {
+                // Simplify it to a literal or error out. (E.g., the cast inserted above may fail.)
+                let offset_value = offset_into_value(offset)?;
+                HirScalarExpr::literal(Datum::Int64(offset_value), ScalarType::Int64)
+            } else {
+                // The only case when this is allowed to not be a constant is if it contains
+                // parameters. (In which case, we'll later check that it's a constant after
+                // parameter binding.)
+                if !offset.contains_parameters() {
+                    return Err(PlanError::InvalidOffset(format!(
+                        "must be simplifiable to a constant, possibly after parameter binding, got {}",
+                        offset
+                    )));
+                }
+                offset
+            };
+            offset
+        }
     };
 
     let mut planned_query = match &q.body {
@@ -1578,6 +1613,20 @@ fn plan_query_inner(qcx: &mut QueryContext, q: &Query<Aug>) -> Result<PlannedQue
     }
 
     Ok(planned_query)
+}
+
+/// Converts an OFFSET expression into a value.
+pub fn offset_into_value(offset: HirScalarExpr) -> Result<i64, PlanError> {
+    let offset = offset
+        .try_into_literal_int64()
+        .map_err(|err| PlanError::InvalidOffset(err.to_string_with_causes()))?;
+    if offset < 0 {
+        return Err(PlanError::InvalidOffset(format!(
+            "must not be negative, got {}",
+            offset
+        )));
+    }
+    Ok(offset)
 }
 
 generate_extracted_config!(
@@ -1744,7 +1793,12 @@ pub fn plan_nested_query(
         project,
         group_size_hints,
     } = qcx.checked_recur_mut(|qcx| plan_query(qcx, q))?;
-    if limit.is_some() || offset > 0 {
+    if limit.is_some()
+        || !offset
+            .clone()
+            .try_into_literal_int64()
+            .is_ok_and(|offset| offset == 0)
+    {
         expr = HirRelationExpr::top_k(
             expr,
             vec![],
@@ -2647,7 +2701,7 @@ fn plan_select_from_where(
                     distinct_key,
                     order_by.iter().skip(distinct_len).cloned().collect(),
                     Some(HirScalarExpr::literal(Datum::Int64(1), ScalarType::Int64)),
-                    0,
+                    HirScalarExpr::literal(Datum::Int64(0), ScalarType::Int64),
                     group_size_hints.distinct_on_input_group_size,
                 );
             }
@@ -4494,7 +4548,13 @@ where
 
     let mut qcx = ecx.derived_query_context();
     let mut planned_query = plan_query(&mut qcx, query)?;
-    if planned_query.limit.is_some() || planned_query.offset > 0 {
+    if planned_query.limit.is_some()
+        || !planned_query
+            .offset
+            .clone()
+            .try_into_literal_int64()
+            .is_ok_and(|offset| offset == 0)
+    {
         planned_query.expr = HirRelationExpr::top_k(
             planned_query.expr,
             vec![],
@@ -4591,7 +4651,13 @@ fn plan_map_subquery(
 
     let mut qcx = ecx.derived_query_context();
     let mut query = plan_query(&mut qcx, query)?;
-    if query.limit.is_some() || query.offset > 0 {
+    if query.limit.is_some()
+        || !query
+            .offset
+            .clone()
+            .try_into_literal_int64()
+            .is_ok_and(|offset| offset == 0)
+    {
         query.expr = HirRelationExpr::top_k(
             query.expr,
             vec![],

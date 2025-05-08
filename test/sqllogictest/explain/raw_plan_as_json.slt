@@ -839,7 +839,20 @@ SELECT (SELECT v.a FROM v WHERE v.b = t.b LIMIT 1), (SELECT mv.a FROM mv WHERE m
                     null
                   ]
                 },
-                "offset": 0,
+                "offset": {
+                  "Literal": [
+                    {
+                      "data": [
+                        49
+                      ]
+                    },
+                    {
+                      "scalar_type": "Int64",
+                      "nullable": false
+                    },
+                    null
+                  ]
+                },
                 "expected_group_size": null
               }
             },
@@ -925,7 +938,20 @@ SELECT (SELECT v.a FROM v WHERE v.b = t.b LIMIT 1), (SELECT mv.a FROM mv WHERE m
                         null
                       ]
                     },
-                    "offset": 0,
+                    "offset": {
+                      "Literal": [
+                        {
+                          "data": [
+                            49
+                          ]
+                        },
+                        {
+                          "scalar_type": "Int64",
+                          "nullable": false
+                        },
+                        null
+                      ]
+                    },
                     "expected_group_size": null
                   }
                 },

@@ -154,12 +154,12 @@ use crate::plan::{
     CreateConnectionPlan, CreateContinualTaskPlan, CreateDatabasePlan, CreateIndexPlan,
     CreateMaterializedViewPlan, CreateNetworkPolicyPlan, CreateRolePlan, CreateSchemaPlan,
     CreateSecretPlan, CreateSinkPlan, CreateSourcePlan, CreateTablePlan, CreateTypePlan,
-    CreateViewPlan, DataSourceDesc, DropObjectsPlan, DropOwnedPlan, Index, Ingestion,
-    MaterializedView, NetworkPolicyRule, NetworkPolicyRuleAction, NetworkPolicyRuleDirection,
-    Params, Plan, PlanClusterOption, PlanNotice, PolicyAddress, QueryContext, ReplicaConfig,
-    Secret, Sink, Source, Table, TableDataSource, Type, VariableValue, View, WebhookBodyFormat,
-    WebhookHeaderFilters, WebhookHeaders, WebhookValidation, literal, plan_utils, query,
-    transform_ast,
+    CreateViewPlan, DataSourceDesc, DropObjectsPlan, DropOwnedPlan, HirRelationExpr, Index,
+    Ingestion, MaterializedView, NetworkPolicyRule, NetworkPolicyRuleAction,
+    NetworkPolicyRuleDirection, Params, Plan, PlanClusterOption, PlanNotice, PolicyAddress,
+    QueryContext, ReplicaConfig, Secret, Sink, Source, Table, TableDataSource, Type, VariableValue,
+    View, WebhookBodyFormat, WebhookHeaderFilters, WebhookHeaders, WebhookValidation, literal,
+    plan_utils, query, transform_ast,
 };
 use crate::session::vars::{
     self, ENABLE_CLUSTER_SCHEDULE_REFRESH, ENABLE_COLLECTION_PARTITION_BY,
@@ -2512,7 +2512,10 @@ pub fn plan_view(
     // here to help with database-issues#236. However, in the meantime, there might be a better
     // approach to solve database-issues#236:
     // https://github.com/MaterializeInc/database-issues/issues/236#issuecomment-1688293709
-    assert!(finishing.is_trivial(expr.arity()));
+    assert!(HirRelationExpr::is_trivial_row_set_finishing_hir(
+        &finishing,
+        expr.arity()
+    ));
 
     expr.bind_parameters(params)?;
     let dependencies = expr
@@ -2687,7 +2690,10 @@ pub fn plan_create_materialized_view(
         scope: _,
     } = query::plan_root_query(scx, stmt.query, QueryLifetime::MaterializedView)?;
     // We get back a trivial finishing, see comment in `plan_view`.
-    assert!(finishing.is_trivial(expr.arity()));
+    assert!(HirRelationExpr::is_trivial_row_set_finishing_hir(
+        &finishing,
+        expr.arity()
+    ));
 
     expr.bind_parameters(params)?;
 
@@ -3062,7 +3068,10 @@ pub fn plan_create_continual_task(
         } = query::plan_ct_query(&mut qcx, query)?;
         // We get back a trivial finishing because we plan with a "maintained"
         // QueryLifetime, see comment in `plan_view`.
-        assert!(finishing.is_trivial(expr.arity()));
+        assert!(HirRelationExpr::is_trivial_row_set_finishing_hir(
+            &finishing,
+            expr.arity()
+        ));
         expr.bind_parameters(params)?;
         let expr = match desc.as_mut() {
             None => {

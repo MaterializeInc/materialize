@@ -437,7 +437,7 @@ INSERT INTO not_allowed_tests (k, v) VALUES (99, 100) RETURNING sum(v) OVER ();
 query error window functions are not allowed in LIMIT
 SELECT sum(v) FROM not_allowed_tests GROUP BY k LIMIT sum(v) OVER ();
 
-query error OFFSET must be an integer constant
+query error db error: ERROR: window functions are not allowed in OFFSET \(function pg_catalog\.sum\)
 SELECT sum(v) FROM not_allowed_tests GROUP BY k LIMIT 1 OFFSET sum(v) OVER ();
 
 query error window functions are not allowed in VALUES
