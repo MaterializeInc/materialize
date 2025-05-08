@@ -12,7 +12,7 @@ use std::path::PathBuf;
 use std::process;
 use std::sync::{Arc, LazyLock};
 
-use chrono::{DateTime, Utc};
+use chrono::Utc;
 use clap::Parser;
 use kube::config::KubeConfigOptions;
 use kube::{Client as KubernetesClient, Config};
@@ -170,6 +170,7 @@ async fn main() {
     });
 
     let start_time = Utc::now();
+    let base_path = format_base_path(start_time);
 
     // We use tracing_subscriber to display the output of tracing to stdout
     // and log to a file included in the debug zip.
@@ -177,7 +178,7 @@ async fn main() {
         .with_target(false)
         .without_time();
 
-    if let Ok(file) = create_tracing_log_file(start_time) {
+    if let Ok(file) = create_tracing_log_file(base_path.clone()) {
         let file_layer = tracing_subscriber::fmt::layer()
             .with_writer(file)
             .with_ansi(false);
@@ -196,7 +197,7 @@ async fn main() {
 
     let initialize_then_run = async move {
         // Preprocess args into contexts
-        let context = initialize_context(args, start_time).await?;
+        let context = initialize_context(args, base_path).await?;
         run(context).await
     };
 
@@ -210,10 +211,7 @@ async fn main() {
     }
 }
 
-async fn initialize_context(
-    args: Args,
-    start_time: DateTime<Utc>,
-) -> Result<Context, anyhow::Error> {
+async fn initialize_context(args: Args, base_path: PathBuf) -> Result<Context, anyhow::Error> {
     let (debug_mode_context, mz_connection_url) = match &args.debug_mode_args {
         DebugModeArgs::SelfManaged(args) => {
             let k8s_client = match create_k8s_client(args.k8s_context.clone()).await {
@@ -271,7 +269,7 @@ async fn initialize_context(
     };
 
     Ok(Context {
-        start_time,
+        base_path,
         debug_mode_context,
         mz_connection_url,
         dump_system_catalog: args.dump_system_catalog,
@@ -329,11 +327,9 @@ async fn run(context: Context) -> Result<(), anyhow::Error> {
 
     info!("Zipping debug directory");
 
-    let base_path = format_base_path(context.start_time);
+    let zip_file_name = format!("{}.zip", &context.base_path.display());
 
-    let zip_file_name = format!("{}.zip", &base_path.display());
-
-    if let Err(e) = zip_debug_folder(PathBuf::from(&zip_file_name), &base_path) {
+    if let Err(e) = zip_debug_folder(PathBuf::from(&zip_file_name), &context.base_path) {
         warn!("Failed to zip debug directory: {}", e);
     } else {
         info!("Created zip debug at {}", &zip_file_name);

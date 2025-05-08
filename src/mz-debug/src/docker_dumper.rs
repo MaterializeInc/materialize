@@ -23,7 +23,6 @@ use std::time::Duration;
 use mz_ore::retry::{self, RetryResult};
 use tracing::{info, warn};
 
-use crate::utils::format_base_path;
 use crate::{ContainerDumper, Context};
 
 static DOCKER_RESOURCE_DUMP_TIMEOUT: Duration = Duration::from_secs(30);
@@ -36,9 +35,7 @@ pub struct DockerDumper {
 impl DockerDumper {
     pub fn new(context: &Context, container_id: String) -> Self {
         Self {
-            directory_path: format_base_path(context.start_time)
-                .join("docker")
-                .join(&container_id),
+            directory_path: context.base_path.join("docker").join(&container_id),
             container_id,
         }
     }

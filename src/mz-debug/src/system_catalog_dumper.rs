@@ -19,7 +19,6 @@
 //! cleaning up / aborting queries much easier.
 
 use anyhow::{Context as _, Result};
-use chrono::{DateTime, Utc};
 use csv_async::AsyncSerializer;
 use futures::TryStreamExt;
 use mz_tls_util::make_tls;
@@ -42,7 +41,6 @@ use postgres_openssl::{MakeTlsConnector, TlsStream};
 use tracing::{info, warn};
 
 use crate::Context;
-use crate::utils::format_base_path;
 
 #[derive(Debug, Clone)]
 pub enum RelationCategory {
@@ -619,7 +617,7 @@ pub async fn query_column_names(
 
 pub async fn query_relation(
     transaction: &Transaction<'_>,
-    start_time: DateTime<Utc>,
+    base_path: PathBuf,
     relation: &Relation,
     column_names: &Vec<String>,
     cluster_replica: Option<&ClusterReplica>,
@@ -656,14 +654,14 @@ pub async fn query_relation(
 
     match relation_category {
         RelationCategory::Basic => {
-            let file_path = format_file_path(start_time, None);
+            let file_path = format_file_path(base_path, None);
             let file_path_name = file_path.join(relation_name).with_extension("csv");
             tokio::fs::create_dir_all(&file_path).await?;
 
             copy_relation_to_csv(transaction, file_path_name, column_names, relation).await?;
         }
         RelationCategory::Introspection => {
-            let file_path = format_file_path(start_time, cluster_replica);
+            let file_path = format_file_path(base_path, cluster_replica);
             tokio::fs::create_dir_all(&file_path).await?;
 
             let file_path_name = file_path.join(relation_name).with_extension("csv");
@@ -672,7 +670,7 @@ pub async fn query_relation(
         }
         RelationCategory::Retained => {
             // Copy the current state and retained subscribe state
-            let file_path = format_file_path(start_time, None);
+            let file_path = format_file_path(base_path, None);
             let file_path_name = file_path
                 .join(format!("{}_subscribe", relation_name))
                 .with_extension("csv");
@@ -751,7 +749,7 @@ impl<'n> SystemCatalogDumper<'n> {
             cluster_replica.map_or_else(|| "".to_string(), |replica| format!(" in {}", replica))
         );
 
-        let start_time = self.context.start_time;
+        let base_path = self.context.base_path.clone();
         let pg_client = &self.pg_client;
 
         let relation_name = relation.name.to_string();
@@ -760,7 +758,7 @@ impl<'n> SystemCatalogDumper<'n> {
             .max_duration(PG_QUERY_TIMEOUT)
             .initial_backoff(Duration::from_secs(2))
             .retry_async_canceling(|_| {
-                let start_time = start_time.clone();
+                let base_path = base_path.clone();
                 let relation_name = relation.name;
                 let cluster_replica = cluster_replica.clone();
 
@@ -776,7 +774,7 @@ impl<'n> SystemCatalogDumper<'n> {
                         let transaction = pg_client.transaction().await?;
                         query_relation(
                             &transaction,
-                            start_time,
+                            base_path,
                             relation,
                             &column_names,
                             cluster_replica,
@@ -936,8 +934,8 @@ fn format_catalog_dump_error_message(
     )
 }
 
-fn format_file_path(date_time: DateTime<Utc>, cluster_replica: Option<&ClusterReplica>) -> PathBuf {
-    let path = format_base_path(date_time).join("system-catalog");
+fn format_file_path(base_path: PathBuf, cluster_replica: Option<&ClusterReplica>) -> PathBuf {
+    let path = base_path.join("system-catalog");
     if let Some(cluster_replica) = cluster_replica {
         path.join(cluster_replica.cluster_name.as_str())
             .join(cluster_replica.replica_name.as_str())
