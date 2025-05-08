@@ -3405,7 +3405,7 @@ pub enum StateUpdateKind {
 }
 
 /// Valid diffs for catalog state updates.
-#[derive(Debug, Clone, Copy, Eq, PartialEq)]
+#[derive(Debug, Clone, Copy, Eq, PartialEq, Ord, PartialOrd)]
 pub enum StateDiff {
     Retraction,
     Addition,

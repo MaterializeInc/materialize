@@ -2469,3 +2469,47 @@ impl<'ast, 'a> VisitMut<'ast, Aug> for NameSimplifier<'a> {
         }
     }
 }
+
+/// Returns the [`CatalogItemId`] dependencies the provided `node` has.
+///
+/// _DOES NOT_ resolve names, simply does a recursive walk through an object to
+/// find all of the IDs.
+pub fn dependencies<'ast, N>(node: &'ast N) -> Result<BTreeSet<CatalogItemId>, anyhow::Error>
+where
+    N: VisitNode<'ast, Raw>,
+{
+    let mut visitor = IdDependencVisitor::default();
+    node.visit(&mut visitor);
+    match visitor.error {
+        Some(error) => Err(error),
+        None => Ok(visitor.ids),
+    }
+}
+
+#[derive(Debug, Default)]
+struct IdDependencVisitor {
+    ids: BTreeSet<CatalogItemId>,
+    error: Option<anyhow::Error>,
+}
+
+impl<'ast> Visit<'ast, Raw> for IdDependencVisitor {
+    fn visit_item_name(&mut self, node: &'ast <Raw as AstInfo>::ItemName) {
+        // Bail early if we're already in an error state.
+        if self.error.is_some() {
+            return;
+        }
+
+        match node {
+            // Nothing to do! We don't lookup names.
+            RawItemName::Name(_) => (),
+            RawItemName::Id(id, _name, _version) => match id.parse::<CatalogItemId>() {
+                Ok(id) => {
+                    self.ids.insert(id);
+                }
+                Err(e) => {
+                    self.error = Some(e);
+                }
+            },
+        }
+    }
+}
