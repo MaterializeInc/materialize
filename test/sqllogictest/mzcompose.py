@@ -514,6 +514,7 @@ def compileFastSltConfig() -> SltRunConfig:
         # "test/sqllogictest/cockroach/target_names.slt",
         # "test/sqllogictest/cockroach/time.slt",
         "test/sqllogictest/cockroach/timestamp.slt",
+        "test/sqllogictest/timestamp_invalid_structure.slt",
         "test/sqllogictest/cockroach/truncate.slt",
         "test/sqllogictest/cockroach/tuple.slt",
         # "test/sqllogictest/cockroach/typing.slt",
