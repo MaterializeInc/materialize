@@ -605,7 +605,7 @@ def compileSlowSltConfig() -> SltRunConfig:
         "test/sqllogictest/managed_cluster.slt",
         "test/sqllogictest/web-console.slt",
         "test/sqllogictest/show_clusters.slt",
-        "test/sqllogictest/timestamp.slt",
+        "test/sqllogictest/timestamp_invalid_structure.slt",
     }
     tests_no_auto_index_selects = {
         # pg_typeof contains public schema name in views
