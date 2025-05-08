@@ -352,17 +352,15 @@ where
         // structured only Part was written with the schema ID in the _old_ deprecated
         // field. While unexpected, given the ordering of our releases it is safe to
         // use the deprecated schema ID if we have a structured only part.
-        let write = match part.schema_id() {
-            Some(write_id) => Some(write_id),
-            None => {
-                if part.is_structured_only(&schema_cache.applier.metrics.columnar) {
-                    let deprecated_id = part.deprecated_schema_id();
-                    tracing::warn!(?deprecated_id, "falling back to deprecated schema ID");
-                    deprecated_id
-                } else {
-                    None
-                }
+        let write = match (part.schema_id(), part.deprecated_schema_id()) {
+            (Some(write_id), _) => Some(write_id),
+            (None, Some(deprecated_id))
+                if part.is_structured_only(&schema_cache.applier.metrics.columnar) =>
+            {
+                tracing::warn!(?deprecated_id, "falling back to deprecated schema ID");
+                Some(deprecated_id)
             }
+            (None, _) => None,
         };
 
         match (write, read.id) {
