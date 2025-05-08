@@ -1,3 +1,12 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
 # Regression test covering case where a characters lower is 1 byte and upper is 2 bytes.
 # Incorrect failing case is a panic due to splitting a string in the middle of a char.
 query error invalid input syntax for type timestamp: Invalid character at offset 19 in 2025-01-01 00:00:00ı: 'ı': "2025-01-01 00:00:00ı AD"
