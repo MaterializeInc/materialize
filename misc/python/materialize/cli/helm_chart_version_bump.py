@@ -56,7 +56,14 @@ def main() -> int:
     ]
 
     if args.bump_orchestratord_version:
-        orchestratord_version = str(get_all_mz_versions()[0])
+        # There are two cases that bump the version:
+        # 1. Bump to new unreleased dev version: Use the latest released orchestratord version
+        # 2. Bump when releasing a new version: Use the version we are currently releasing
+        orchestratord_version = (
+            str(get_all_mz_versions()[0])
+            if "dev" in args.environmentd_version
+            else args.environmentd_version
+        )
         mods += [
             (
                 MZ_ROOT / "misc" / "helm-charts" / "operator" / "values.yaml",
