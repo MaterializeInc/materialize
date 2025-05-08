@@ -253,7 +253,7 @@ INSERT INTO kv (k, v) VALUES (99, 100) RETURNING sum(v)
 query error aggregate functions are not allowed in LIMIT \(function pg_catalog.sum\)
 SELECT sum(v) FROM kv GROUP BY k LIMIT sum(v)
 
-query error OFFSET must be an integer constant
+query error db error: ERROR: aggregate functions are not allowed in OFFSET \(function pg_catalog\.sum\)
 SELECT sum(v) FROM kv GROUP BY k LIMIT 1 OFFSET sum(v)
 
 query error aggregate functions are not allowed in VALUES

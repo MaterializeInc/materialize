@@ -25,6 +25,7 @@ use std::fmt;
 use mz_expr::explain::{HumanizedExplain, HumanizerMode, fmt_text_constant_rows};
 use mz_expr::virtual_syntax::{AlgExcept, Except};
 use mz_expr::{Id, WindowFrame};
+use mz_ore::error::ErrorExt;
 use mz_ore::str::{IndentLike, separated};
 use mz_repr::Diff;
 use mz_repr::explain::text::DisplayText;
@@ -247,9 +248,25 @@ impl HirRelationExpr {
                 if let Some(limit) = limit {
                     write!(f, " limit={}", limit)?;
                 }
-                if offset > &0 {
-                    write!(f, " offset={}", offset)?
-                }
+                // We only print the offset if it is not trivial, i.e., not 0.
+                let offset_literal = offset.clone().try_into_literal_int64();
+                if !offset_literal.clone().is_ok_and(|offset| offset == 0) {
+                    let offset = if offset.contains_parameters() {
+                        // If we are still before parameter binding, then we can't reduce it to a
+                        // literal, so just print the expression.
+                        // (Untested as of writing this, because we don't have an EXPLAIN that would
+                        // show the plan before parameter binding.)
+                        offset.to_string()
+                    } else {
+                        match offset_literal {
+                            Ok(offset) => offset.to_string(),
+                            // The following is also untested, because we error out in planning
+                            // if reducing the OFFSET results in an error.
+                            Err(err) => err.to_string_with_causes(),
+                        }
+                    };
+                    write!(f, " offset={}", offset)?;
+                };
                 if let Some(expected_group_size) = expected_group_size {
                     write!(f, " exp_group_size={}", expected_group_size)?;
                 }

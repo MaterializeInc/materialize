@@ -742,3 +742,92 @@ Reduce aggregates=[count(distinct true)]
 Target cluster: quickstart
 
 EOF
+
+# OFFSET clause in RowSetFinishing
+query T multiline
+EXPLAIN RAW PLAN AS TEXT FOR
+SELECT a+b
+FROM t
+OFFSET 1;
+----
+Finish offset=1 output=[#0]
+  Project (#2)
+    Map ((#0{a} + #1{b}))
+      Get materialize.public.t
+
+Target cluster: quickstart
+
+EOF
+
+# OFFSET clause in TopK
+query T multiline
+EXPLAIN RAW PLAN AS TEXT FOR
+SELECT a+b, (SELECT a*b FROM t OFFSET 1)
+FROM t;
+----
+Project (#2, #3)
+  With
+    cte [l1 as subquery-1] =
+      Project (#2)
+        TopK offset=1
+          Map ((#0{a} * #1{b}))
+            Get materialize.public.t
+  Return
+    Map ((#0{a} + #1{b}), select(Get l1))
+      Get materialize.public.t
+
+Target cluster: quickstart
+
+EOF
+
+# OFFSET 0 makes the TopK disappear, even if it was an expression that comes out to 0.
+query T multiline
+EXPLAIN RAW PLAN AS TEXT FOR
+SELECT a+b
+FROM t
+OFFSET 0;
+----
+Project (#2)
+  Map ((#0{a} + #1{b}))
+    Get materialize.public.t
+
+Target cluster: quickstart
+
+EOF
+
+query T multiline
+EXPLAIN RAW PLAN AS TEXT FOR
+SELECT a+b
+FROM t
+OFFSET 7-7;
+----
+Project (#2)
+  Map ((#0{a} + #1{b}))
+    Get materialize.public.t
+
+Target cluster: quickstart
+
+EOF
+
+# The OFFSET should _not_ be printed when it is 0.
+query T multiline
+EXPLAIN RAW PLAN AS TEXT FOR
+SELECT a+b
+FROM t
+LIMIT 9
+OFFSET 7-7;
+----
+Finish limit=9 output=[#0]
+  Project (#2)
+    Map ((#0{a} + #1{b}))
+      Get materialize.public.t
+
+Target cluster: quickstart
+
+EOF
+
+query error db error: ERROR: Invalid OFFSET clause: invalid input syntax for type bigint: invalid digit found in string: "aaa"
+EXPLAIN RAW PLAN AS TEXT FOR
+SELECT a+b
+FROM t
+OFFSET 'aaa'::bigint;

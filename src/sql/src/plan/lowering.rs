@@ -892,6 +892,11 @@ impl HirRelationExpr {
                     // Extend the key to contain any new columns.
                     applied_group_key.extend(old_arity..new_arity);
 
+                    let offset = offset
+                        .try_into_literal_int64()
+                        .expect("Should be a Literal by this time")
+                        .try_into()
+                        .expect("Should have checked non-negativity of OFFSET clause already");
                     let mut result = input.top_k(
                         applied_group_key,
                         applied_order_key,
@@ -1637,6 +1642,14 @@ impl HirScalarExpr {
     }
 
     /// Rewrites `self` into a `mz_expr::ScalarExpr`.
+    ///
+    /// Returns an _internal_ error if the expression contains
+    /// - a subquery
+    /// - a column reference to an outer level
+    /// - a parameter
+    /// - a window function call
+    ///
+    /// Should succeed if [`HirScalarExpr::is_constant`] would return true on `self`.
     pub fn lower_uncorrelated(self) -> Result<MirScalarExpr, PlanError> {
         use MirScalarExpr as SS;
 
@@ -1686,7 +1699,10 @@ impl HirScalarExpr {
                 els: Box::new(els.lower_uncorrelated()?),
             },
             Select { .. } | Exists { .. } | Parameter(..) | Column(..) | Windowing(..) => {
-                sql_bail!("unexpected ScalarExpr in uncorrelated plan: {:?}", self);
+                sql_bail!(
+                    "Internal error: unexpected HirScalarExpr in lower_uncorrelated: {:?}",
+                    self
+                );
             }
         })
     }

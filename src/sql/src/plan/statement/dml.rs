@@ -18,6 +18,7 @@ use std::collections::BTreeMap;
 use itertools::Itertools;
 
 use mz_arrow_util::builder::ArrowBuilder;
+use mz_expr::visit::Visit;
 use mz_expr::{MirRelationExpr, RowSetFinishing};
 use mz_ore::num::NonNeg;
 use mz_ore::soft_panic_or_log;
@@ -48,12 +49,12 @@ use crate::ast::{
 use crate::catalog::CatalogItemType;
 use crate::names::{Aug, ResolvedItemName};
 use crate::normalize;
-use crate::plan::query::{ExprContext, QueryLifetime, plan_expr, plan_up_to};
+use crate::plan::query::{ExprContext, QueryLifetime, offset_into_value, plan_expr, plan_up_to};
 use crate::plan::scope::Scope;
 use crate::plan::statement::{StatementContext, StatementDesc, ddl};
 use crate::plan::{
     self, CopyFromFilter, CopyToPlan, CreateSinkPlan, ExplainPushdownPlan, ExplainSinkSchemaPlan,
-    ExplainTimestampPlan, side_effecting_func, transform_ast,
+    ExplainTimestampPlan, HirRelationExpr, HirScalarExpr, side_effecting_func, transform_ast,
 };
 use crate::plan::{
     CopyFormat, CopyFromPlan, ExplainPlanPlan, InsertPlan, MutationKind, Params, Plan, PlanError,
@@ -216,7 +217,24 @@ fn plan_select_inner(
     } = query::plan_root_query(scx, select.query.clone(), QueryLifetime::OneShot)?;
     expr.bind_parameters(params)?;
 
-    // A top-level limit cannot be data dependent so eagerly evaluate it.
+    // OFFSET clauses in `expr` should become constants with the above binding of parameters.
+    // Let's check this and simplify them to literals.
+    expr.try_visit_mut_pre(&mut |expr| {
+        if let HirRelationExpr::TopK { offset, .. } = expr {
+            let offset_value = offset_into_value(offset.take())?;
+            *offset = HirScalarExpr::literal(Datum::Int64(offset_value), ScalarType::Int64);
+        }
+        Ok::<(), PlanError>(())
+    })?;
+    // (We don't need to simplify LIMIT clauses in `expr`, because we can handle non-constant
+    // expressions there. If they happen to be simplifiable to literals, then the optimizer will do
+    // so later.)
+
+    // We need to concretize the `limit` and `offset` of the RowSetFinishing, so that we go from
+    // `RowSetFinishing<HirScalarExpr, HirScalarExpr>` to `RowSetFinishing`.
+    // This involves binding parameters and evaluating each expression to a number.
+    // (This should be possible even for `limit` here, because we are at the top level of a SELECT,
+    // so this `limit` has to be a constant.)
     let limit = match finishing.limit {
         None => None,
         Some(mut limit) => {
@@ -229,10 +247,18 @@ fn plan_select_inner(
                 Datum::Int64(v) if v >= 0 => NonNeg::<i64>::try_from(v).ok(),
                 _ => {
                     soft_panic_or_log!("Valid literal limit must be asserted in `plan_select`");
-                    sql_bail!("LIMIT must be a non negative INT or NULL")
+                    sql_bail!("LIMIT must be a non-negative INT or NULL")
                 }
             }
         }
+    };
+    let offset = {
+        let mut offset = finishing.offset.clone();
+        offset.bind_parameters(params)?;
+        let offset = offset_into_value(offset.take())?;
+        offset
+            .try_into()
+            .expect("checked in offset_into_value that it is not negative")
     };
 
     let plan = SelectPlan {
@@ -240,7 +266,7 @@ fn plan_select_inner(
         when,
         finishing: RowSetFinishing {
             limit,
-            offset: finishing.offset,
+            offset,
             project: finishing.project,
             order_by: finishing.order_by,
         },
@@ -857,7 +883,10 @@ pub fn plan_subscribe(
             // There's no way to apply finishing operations to a `SUBSCRIBE` directly, so the
             // finishing should have already been turned into a `TopK` by
             // `plan_query` / `plan_root_query`, upon seeing the `QueryLifetime::Subscribe`.
-            assert!(query.finishing.is_trivial(query.desc.arity()));
+            assert!(HirRelationExpr::is_trivial_row_set_finishing_hir(
+                &query.finishing,
+                query.desc.arity()
+            ));
             let desc = query.desc.clone();
             (
                 SubscribeFrom::Query {

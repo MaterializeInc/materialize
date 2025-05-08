@@ -1174,3 +1174,409 @@ Used Indexes:
 Target cluster: quickstart
 
 EOF
+
+########################################################################################################################
+# Tests for prepared statement parameters in OFFSET, and for non-trivial expressions in OFFSET.
+# (Non-trivial expressions in OFFSET clauses have to be simplifiable to a literal, possibly after parameter binding.)
+#
+# (LIMIT clauses with prepared statement parameters have tests in `test_bind_params` in `pgwire.rs`.
+# LIMIT clauses with non-trivial expressions, referring to the outer context, have tests in `limit_expr.slt`.)
+########################################################################################################################
+
+statement ok
+PREPARE p1 AS
+SELECT *
+FROM foo
+ORDER BY a, b
+OFFSET $1;
+
+query IT
+EXECUTE p1(0::bigint);
+----
+0  zero
+1  one
+2  two
+
+query IT
+EXECUTE p1(1::bigint);
+----
+1  one
+2  two
+
+query IT
+EXECUTE p1((1+1)::bigint);
+----
+2  two
+
+query error db error: ERROR: Invalid OFFSET clause: Expected an expression that evaluates to a non\-null value, got null
+EXECUTE p1(null::bigint);
+
+query error db error: ERROR: Invalid OFFSET clause: Expected an expression that evaluates to a non\-null value, got null
+PREPARE p_error AS
+SELECT *
+FROM foo
+ORDER BY a, b
+OFFSET null;
+
+# Prepared statement parameter in OFFSET inside a subquery
+statement ok
+PREPARE p2 AS
+SELECT
+  (SELECT sum(a) FROM (
+    SELECT a
+    FROM foo
+    ORDER BY a, b
+    OFFSET $1
+  ))
+FROM foo AS outer_foo
+OFFSET $2;
+
+query I
+EXECUTE p2(0::bigint, 0::bigint);
+----
+3
+3
+3
+
+query I
+EXECUTE p2(2::bigint, 0::bigint);
+----
+2
+2
+2
+
+query I
+EXECUTE p2(0::bigint, 1::bigint);
+----
+3
+3
+
+query I
+EXECUTE p2(2::bigint, 1::bigint);
+----
+2
+2
+
+statement ok
+PREPARE p3 AS
+SELECT *
+FROM foo
+ORDER BY a, b
+OFFSET $1 - 2;
+
+query error db error: ERROR: Invalid OFFSET clause: must not be negative, got \-2
+EXECUTE p3(0);
+
+query II
+EXECUTE p3(2);
+----
+0  0
+1  0
+2  0
+
+query II
+EXECUTE p3(3);
+----
+1  0
+2  0
+
+query error db error: ERROR: mismatched parameter type: expected bigint, got integer
+EXECUTE p1(1);
+
+query error db error: ERROR: mismatched parameter type: expected bigint, got text
+EXECUTE p1('aaa');
+
+query error db error: ERROR: Invalid OFFSET clause: must not be negative, got \-7
+PREPARE p_error AS
+SELECT *
+FROM foo
+ORDER BY a, b
+OFFSET -7;
+
+query error db error: ERROR: Invalid OFFSET clause: must not be negative, got \-2
+PREPARE p_error AS
+SELECT *
+FROM foo
+ORDER BY a, b
+OFFSET 5-7;
+
+query error db error: ERROR: Invalid OFFSET clause: invalid input syntax for type bigint: invalid digit found in string: "aaa"
+PREPARE p_error AS
+SELECT *
+FROM foo
+ORDER BY a, b
+OFFSET 'aaa';
+
+query error db error: ERROR: column "a" does not exist
+PREPARE p_error AS
+SELECT *
+FROM foo
+ORDER BY a, b
+OFFSET a;
+
+# TODO: This error msg is incomplete: it's missing the `integer_to_bigint\(\#\^0\{a\}\)` from the end, which is present
+# in the actual error msg. If we include that, then sqllogictest panics due to a bug in sqllogictest and/or in
+# `regex::escape`.
+query error db error: ERROR: Invalid OFFSET clause: must be simplifiable to a constant, possibly after parameter binding, got
+PREPARE p_error AS
+SELECT
+  (
+    SELECT *
+    FROM foo
+    ORDER BY a, b
+    OFFSET outer_foo.a
+  )
+FROM foo AS outer_foo;
+
+query error db error: ERROR: Expected subselect to return 1 column, got 2 columns
+PREPARE p_error AS
+SELECT
+  (
+    SELECT *
+    FROM foo
+    ORDER BY a, b
+    OFFSET outer_foo.a + $1
+  )
+FROM foo AS outer_foo;
+
+# It would be nice to error this out already in the PREPARE, but we currently error out only when executing this.
+statement ok
+PREPARE p_error_1 AS
+SELECT
+  (
+    SELECT b
+    FROM foo
+    ORDER BY a, b
+    OFFSET outer_foo.a + $1
+  )
+FROM foo AS outer_foo;
+
+# This tests the `plan_select_inner`'s `try_visit_mut_pre` just after binding the parameters of `expr`.
+query error db error: ERROR: Invalid OFFSET clause: Expected a constant expression, got
+EXECUTE p_error_1(7);
+
+query error db error: ERROR: OFFSET does not allow subqueries
+PREPARE p_error AS
+SELECT *
+FROM foo
+ORDER BY b, a
+OFFSET (SELECT 2);
+
+query error db error: ERROR: window functions are not allowed in OFFSET \(function pg_catalog\.lag\)
+PREPARE p_error AS
+SELECT *
+FROM foo
+ORDER BY b, a
+OFFSET lag(5) OVER ();
+
+query error db error: ERROR: window functions are not allowed in OFFSET \(function pg_catalog\.lag\)
+PREPARE p_error AS
+SELECT
+  (
+    SELECT a
+    FROM foo
+    ORDER BY a, b
+    OFFSET lag(5) OVER ()
+  )
+FROM foo AS outer_foo;
+
+# Unmaterializable function calls are not allowed (not deemed a constant by `HirScalarExpr::is_constant`, and then
+# not simplified by `MirScalarExpr::reduce`).
+query error db error: ERROR: Invalid OFFSET clause: must be simplifiable to a constant, possibly after parameter binding, got text_to_bigint\(mz_timestamp_to_text\(mz_now\(\)\)\)
+PREPARE p_error AS
+SELECT *
+FROM foo
+ORDER BY b, a
+OFFSET mz_now()::string::bigint;
+
+# OFFSET with CREATE VIEW
+
+statement ok
+CREATE VIEW v1 AS
+SELECT *
+FROM foo
+ORDER BY b, a
+OFFSET 1;
+
+query T
+SELECT b || a
+FROM v1
+----
+two2
+zero0
+
+query T
+SELECT b || a
+FROM v1
+OFFSET 1
+----
+zero0
+
+query T
+SELECT b || a
+FROM v1
+OFFSET 2 - 1
+----
+zero0
+
+query error db error: ERROR: column "a" does not exist
+CREATE VIEW err AS
+SELECT *
+FROM foo
+ORDER BY b, a
+OFFSET a;
+
+query error db error: ERROR: Invalid OFFSET clause: invalid input syntax for type bigint: invalid digit found in string: "aaaaa"
+CREATE VIEW err AS
+SELECT *
+FROM foo
+ORDER BY b, a
+OFFSET 'aaaaa';
+
+query error db error: ERROR: Invalid OFFSET clause: Expected an expression that evaluates to a non\-null value, got null
+CREATE VIEW err AS
+SELECT *
+FROM foo
+ORDER BY b, a
+OFFSET null;
+
+query error db error: ERROR: Invalid OFFSET clause: must be simplifiable to a constant, possibly after parameter binding, got
+CREATE VIEW err AS
+SELECT *
+FROM foo
+ORDER BY b, a
+OFFSET mz_now()::string::bigint;
+
+statement ok
+CREATE VIEW v2 AS
+SELECT
+  (SELECT sum(a) FROM (
+    (SELECT a
+     FROM foo)
+    UNION
+    (SELECT a+1
+     FROM foo)
+    ORDER BY a, b
+    OFFSET 2
+  )) AS s
+FROM foo AS outer_foo
+OFFSET 1;
+
+query IIR
+SELECT sum(s), count(s), avg(s) FROM v2;
+----
+10  2  5
+
+# OFFSET with CREATE MATERIALIZED VIEW
+
+statement ok
+CREATE MATERIALIZED VIEW mv1 AS
+SELECT *
+FROM foo
+ORDER BY b, a
+OFFSET 1;
+
+query T
+SELECT b || a
+FROM mv1
+----
+two2
+zero0
+
+query T
+SELECT b || a
+FROM mv1
+OFFSET 1
+----
+zero0
+
+query T
+SELECT b || a
+FROM mv1
+OFFSET 2 - 1
+----
+zero0
+
+query error db error: ERROR: column "a" does not exist
+CREATE MATERIALIZED VIEW err AS
+SELECT *
+FROM foo
+ORDER BY b, a
+OFFSET a;
+
+query error db error: ERROR: Invalid OFFSET clause: invalid input syntax for type bigint: invalid digit found in string: "aaaaa"
+CREATE MATERIALIZED VIEW err AS
+SELECT *
+FROM foo
+ORDER BY b, a
+OFFSET 'aaaaa';
+
+query error db error: ERROR: Invalid OFFSET clause: Expected an expression that evaluates to a non\-null value, got null
+CREATE MATERIALIZED VIEW err AS
+SELECT *
+FROM foo
+ORDER BY b, a
+OFFSET null;
+
+query error db error: ERROR: Invalid OFFSET clause: must be simplifiable to a constant, possibly after parameter binding, got
+CREATE MATERIALIZED VIEW err AS
+SELECT *
+FROM foo
+ORDER BY b, a
+OFFSET mz_now()::string::bigint;
+
+statement ok
+CREATE MATERIALIZED VIEW mv2 AS
+SELECT
+  (SELECT sum(a) FROM (
+    (SELECT a
+     FROM foo)
+    UNION
+    (SELECT a+1
+     FROM foo)
+    ORDER BY a, b
+    OFFSET 2
+  )) AS s
+FROM foo AS outer_foo
+OFFSET 1;
+
+query IIR
+SELECT sum(s), count(s), avg(s) FROM mv2;
+----
+10  2  5
+
+# VALUES statement -- OFFSET with parameter
+
+statement ok
+PREPARE p4 AS
+VALUES (0), (1), (2) OFFSET $1
+
+query I
+EXECUTE p4(1::bigint);
+----
+1
+2
+
+statement ok
+PREPARE p5 AS
+VALUES (10), (11), (12) OFFSET $1 - 1
+
+query I
+EXECUTE p5(2);
+----
+11
+12
+
+statement ok
+PREPARE p6 AS
+VALUES (10), (11), (12), ($2), ($3)
+ORDER BY 1 DESC
+OFFSET $1 - 1
+
+query I
+EXECUTE p6(2, 100, 200);
+----
+100
+12
+11
+10

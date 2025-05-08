@@ -3634,14 +3634,18 @@ impl JoinInputCharacteristicsV1 {
 /// keywords), whereas much of the rest of SQL is defined in terms of unordered
 /// multisets. But as it turns out, the same idea can be used to optimize
 /// trivial peeks.
+///
+/// The generic parameters are for accommodating prepared statement parameters in
+/// `limit` and `offset`: the planner can hold these fields as HirScalarExpr long enough to call
+/// `bind_parameters` on them.
 #[derive(Arbitrary, Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct RowSetFinishing<L = NonNeg<i64>> {
+pub struct RowSetFinishing<L = NonNeg<i64>, O = usize> {
     /// Order rows by the given columns.
     pub order_by: Vec<ColumnOrder>,
     /// Include only as many rows (after offset).
     pub limit: Option<L>,
     /// Omit as many rows.
-    pub offset: usize,
+    pub offset: O,
     /// Include only given columns.
     pub project: Vec<usize>,
 }

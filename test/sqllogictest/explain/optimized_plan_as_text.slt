@@ -1760,3 +1760,69 @@ Source materialize.public.t4
 Target cluster: no_replicas
 
 EOF
+
+# OFFSET clause in RowSetFinishing
+query T multiline
+EXPLAIN OPTIMIZED PLAN WITH (humanized expressions) AS VERBOSE TEXT FOR
+SELECT a+b
+FROM t4
+OFFSET 1;
+----
+Explained Query:
+  Finish offset=1 output=[#0]
+    Project (#3)
+      Map ((#0{a} + #1{b}))
+        ReadStorage materialize.public.t4
+
+Source materialize.public.t4
+
+Target cluster: no_replicas
+
+EOF
+
+# OFFSET clause in TopK
+query T multiline
+EXPLAIN
+SELECT a+b, (SELECT a*b FROM t4 OFFSET 1)
+FROM t4;
+----
+Explained Query:
+  With
+    cte l0 =
+      TopK offset=1
+        Project (#3)
+          Map ((#0{a} * #1{b}))
+            ReadStorage materialize.public.t4
+    cte l1 =
+      Union
+        Get l0
+        Map (error("more than one record produced in subquery"))
+          Project ()
+            Filter (#0 > 1)
+              Reduce aggregates=[count(*)]
+                Project ()
+                  Get l0
+  Return
+    Project (#3, #2)
+      Map ((#0{a} + #1{b}))
+        CrossJoin type=differential
+          ArrangeBy keys=[[]]
+            Project (#0, #1)
+              ReadStorage materialize.public.t4
+          ArrangeBy keys=[[]]
+            Union
+              Get l1
+              Map (null)
+                Union
+                  Negate
+                    Distinct project=[]
+                      Project ()
+                        Get l1
+                  Constant
+                    - ()
+
+Source materialize.public.t4
+
+Target cluster: no_replicas
+
+EOF

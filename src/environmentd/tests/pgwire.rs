@@ -100,6 +100,21 @@ fn test_bind_params() {
         assert_eq!(vals, &[1, 2]);
     }
 
+    // Ensure that parameters in a `SELECT .. OFFSET` clause are supported.
+    // See also in `order_by.slt`.
+    {
+        let stmt = client
+            .prepare("SELECT generate_series(1, 5) OFFSET $1")
+            .unwrap();
+        let vals = client
+            .query(&stmt, &[&2_i64])
+            .unwrap()
+            .iter()
+            .map(|r| r.get(0))
+            .collect::<Vec<i32>>();
+        assert_eq!(vals, &[3, 4, 5]);
+    }
+
     // Ensure that parameters in a `VALUES .. LIMIT` clause are supported.
     {
         let stmt = client.prepare("VALUES (1), (2), (3) LIMIT $1").unwrap();
