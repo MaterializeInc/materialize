@@ -305,6 +305,10 @@ impl<'a> Parser<'a> {
                             if !multiline {
                                 vals = vals.into_iter().map(|val| val.replace('⏎', "\n")).collect();
                             }
+
+                            if sort == Sort::Value {
+                                vals.sort();
+                            }
                         }
                         Mode::Cockroach => {
                             let mut rows: Vec<Vec<String>> = vec![];
