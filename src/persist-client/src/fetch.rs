@@ -481,7 +481,7 @@ pub struct LeasedBatchPart<T> {
     pub(crate) part: BatchPart<T>,
     /// The lease that prevents this part from being GCed. Code should ensure that this lease
     /// lives as long as the part is needed.
-    pub(crate) lease: Option<Lease>,
+    pub(crate) lease: Lease,
     pub(crate) filter_pushdown_audit: bool,
 }
 
@@ -498,9 +498,9 @@ where
     /// that can't travel across process boundaries. The caller is responsible for
     /// ensuring that the lease is held for as long as the batch part may be in use:
     /// dropping it too early may cause a fetch to fail.
-    pub(crate) fn into_exchangeable_part(mut self) -> (ExchangeableBatchPart<T>, Option<Lease>) {
+    pub(crate) fn into_exchangeable_part(self) -> (ExchangeableBatchPart<T>, Lease) {
         // If `x` has a lease, we've effectively transferred it to `r`.
-        let lease = self.lease.take();
+        let lease = self.lease.clone();
         let part = ExchangeableBatchPart {
             shard_id: self.shard_id,
             encoded_size_bytes: self.part.encoded_size_bytes(),
