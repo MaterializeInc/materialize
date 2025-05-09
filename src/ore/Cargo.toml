@@ -119,6 +119,7 @@ async = [
     "futures",
     "metrics",
     "openssl",
+    "tokio/tracing",
     "tokio-openssl",
     "tokio",
     "dep:tracing",
@@ -155,12 +156,18 @@ test = ["anyhow", "ctor", "tracing-subscriber", "assert"]
 metrics = ["prometheus", "assert"]
 id_gen = ["hibitset", "rand", "uuid"]
 capture = ["tracing-capture"]
-assert = ["ctor"]
+assert-no-tracing = []
+assert = ["assert-no-tracing", "ctor", "tracing"]
 proptest = ["dep:proptest", "proptest-derive"]
+overflowing = ["assert"]
 
 [[test]]
 name = "future"
-required-features = ["async"]
+required-features = ["async", "panic"]
+
+[[test]]
+name = "panic"
+required-features = ["panic"]
 
 [[test]]
 name = "task"

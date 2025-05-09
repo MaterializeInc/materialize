@@ -26,7 +26,6 @@ rust_library(
     crate_features = [
         "default",
         "mz-alloc-default",
-        "mz-build-tools",
     ],
     data = [],
     lint_config = ":lints",
@@ -61,7 +60,6 @@ rust_test(
     crate_features = [
         "default",
         "mz-alloc-default",
-        "mz-build-tools",
     ],
     data = [],
     env = {},

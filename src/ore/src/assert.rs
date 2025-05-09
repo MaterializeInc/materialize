@@ -79,6 +79,39 @@ pub fn soft_assertions_enabled() -> bool {
     SOFT_ASSERTIONS.load(std::sync::atomic::Ordering::Relaxed)
 }
 
+/// Reports an error message. If the `tracing` feature is enabled, it uses
+/// `tracing::error!` to log the message. Otherwise, it prints the message
+/// to `stderr` using `eprintln!`.
+///
+/// Only intended to be used by macros in this module.
+#[doc(hidden)]
+#[cfg(feature = "tracing")]
+#[macro_export]
+macro_rules! report_error {
+    ($($arg:tt)+) => {{
+        ::tracing::error!($($arg)+);
+    }};
+}
+
+#[doc(hidden)]
+#[cfg(all(not(feature = "tracing"), not(target_arch = "wasm32")))]
+#[macro_export]
+#[deprecated(note = "Enable the `tracing` feature to use this macro.")]
+macro_rules! report_error {
+    ($($arg:tt)+) => {{
+        eprintln!($($arg)+);
+    }};
+}
+
+#[doc(hidden)]
+#[cfg(all(not(feature = "tracing"), target_arch = "wasm32"))]
+#[macro_export]
+macro_rules! report_error {
+    ($($arg:tt)+) => {{
+        eprintln!($($arg)+);
+    }};
+}
+
 /// Asserts that a condition is true if soft assertions are enabled.
 ///
 /// Soft assertions have a small runtime cost even when disabled. See
@@ -126,7 +159,7 @@ macro_rules! soft_assert_or_log {
         if $crate::assert::soft_assertions_enabled() {
             assert!($cond, $($arg)+);
         } else if !$cond {
-            ::tracing::error!($($arg)+)
+            $crate::report_error!($($arg)+)
         }
     }}
 }
@@ -144,7 +177,7 @@ macro_rules! soft_assert_eq_or_log {
             match (&$left, &$right) {
                 (left_val, right_val) => {
                     if !(*left_val == *right_val) {
-                        ::tracing::error!(
+                        $crate::report_error!(
                             "assertion {:?} == {:?} failed",
                             left_val, right_val
                         );
@@ -161,7 +194,7 @@ macro_rules! soft_assert_eq_or_log {
             match (&$left, &$right) {
                 (left, right) => {
                     if !(*left == *right) {
-                        ::tracing::error!(
+                        $crate::report_error!(
                             "assertion {:?} == {:?} failed: {}",
                             left, right, format!($($arg)+)
                         );
@@ -185,7 +218,7 @@ macro_rules! soft_assert_ne_or_log {
             match (&$left, &$right) {
                 (left_val, right_val) => {
                     if *left_val == *right_val {
-                        ::tracing::error!(
+                        $crate::report_error!(
                             "assertion {:?} != {:?} failed",
                             left_val, right_val
                         );
@@ -202,7 +235,7 @@ macro_rules! soft_assert_ne_or_log {
             match (&$left, &$right) {
                 (left_val, right_val) => {
                     if *left_val == *right_val {
-                        ::tracing::error!(
+                        $crate::report_error!(
                             "assertion {:?} != {:?} failed: {}",
                             $left, $right, format!($($arg)+)
                         );
@@ -221,7 +254,7 @@ macro_rules! soft_panic_or_log {
         if $crate::assert::soft_assertions_enabled() {
             panic!($($arg)+);
         } else {
-            ::tracing::error!($($arg)+)
+            $crate::report_error!($($arg)+)
         }
     }}
 }

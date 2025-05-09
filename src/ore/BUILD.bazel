@@ -26,6 +26,7 @@ rust_library(
     crate_features = [
         "anyhow",
         "assert",
+        "assert-no-tracing",
         "async",
         "async-trait",
         "bytemuck",
@@ -57,6 +58,7 @@ rust_library(
         "opentelemetry",
         "opentelemetry-otlp",
         "opentelemetry_sdk",
+        "overflowing",
         "panic",
         "parquet",
         "process",
@@ -113,6 +115,7 @@ rust_test(
     crate_features = [
         "anyhow",
         "assert",
+        "assert-no-tracing",
         "async",
         "async-trait",
         "bytemuck",
@@ -144,6 +147,7 @@ rust_test(
         "opentelemetry",
         "opentelemetry-otlp",
         "opentelemetry_sdk",
+        "overflowing",
         "panic",
         "parquet",
         "process",

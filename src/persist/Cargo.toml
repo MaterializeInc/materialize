@@ -83,7 +83,7 @@ serde_json = "1.0.127"
 tempfile = "3.19.1"
 
 [build-dependencies]
-mz-build-tools = { path = "../build-tools", default-features = false }
+mz-build-tools = { path = "../build-tools", default-features = false, features = ["protobuf-src"] }
 prost-build = "0.13.5"
 
 [features]
