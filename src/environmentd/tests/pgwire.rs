@@ -18,6 +18,7 @@ use bytes::BytesMut;
 use fallible_iterator::FallibleIterator;
 use mz_adapter::session::DEFAULT_DATABASE_NAME;
 use mz_environmentd::test_util::{self, PostgresErrorExt};
+use mz_ore::collections::CollectionExt;
 use mz_ore::retry::Retry;
 use mz_ore::{assert_err, assert_ok};
 use mz_pgrepr::{Numeric, Record};
@@ -127,14 +128,62 @@ fn test_bind_params() {
         assert_eq!(vals, &[1, 2]);
     }
 
-    // A `CREATE` statement with parameters should be rejected.
-    let err = client
-        .query_one("CREATE VIEW v AS SELECT $3", &[])
-        .unwrap_db_error();
-    // TODO(benesch): this should be `UNDEFINED_PARAMETER`, but blocked
-    // on database-issues#1031.
-    assert_eq!(err.message(), "there is no parameter $3");
-    assert_eq!(err.code(), &SqlState::INTERNAL_ERROR);
+    // Some statement types can't have parameters at all.
+    //
+    // TODO: these should be `SqlState::UNDEFINED_PARAMETER`.
+    //
+    // TODO: We should harmonize whether `describe` returns parameters for statement types that
+    // can't have parameters. For example, currently it does return parameters for
+    // EXPLAIN TIMESTAMP,
+    // but it doesn't return parameters for
+    // CREATE VIEW, CREATE MATERIALIZED VIEW.
+    // (It also returns parameters for EXPLAIN SELECT and EXPLAIN FILTER PUSHDOWN, but these are
+    // weird special cases currently, see below.)
+    {
+        let err = client
+            .query_one("CREATE VIEW v AS SELECT $3", &[])
+            .unwrap_db_error();
+        assert_eq!(err.message(), "views cannot have parameters");
+        assert_eq!(err.code(), &SqlState::INTERNAL_ERROR);
+    }
+    {
+        let err = client
+            .query_one("CREATE MATERIALIZED VIEW mv AS SELECT $3", &[])
+            .unwrap_db_error();
+        assert_eq!(err.message(), "materialized views cannot have parameters");
+        assert_eq!(err.code(), &SqlState::INTERNAL_ERROR);
+    }
+    {
+        let err = client
+            // We need to actually supply a parameter here, or we fail inside tokio-postgres,
+            // because then the parameter list returned by `describe` doesn't match the supplied
+            // params.
+            .query_one("EXPLAIN TIMESTAMP FOR SELECT $1::int", &[&42_i32])
+            .unwrap_db_error();
+        assert_eq!(err.message(), "EXPLAIN TIMESTAMP cannot have parameters");
+        assert_eq!(err.code(), &SqlState::INTERNAL_ERROR);
+    }
+    {
+        let err = client
+            .query_one("EXPLAIN CREATE MATERIALIZED VIEW mv AS SELECT $3", &[])
+            .unwrap_db_error();
+        assert_eq!(err.message(), "materialized views cannot have parameters");
+        assert_eq!(err.code(), &SqlState::INTERNAL_ERROR);
+    }
+
+    // Surprisingly, the following are allowed. The weirdness is that it is only allowed through a
+    // pgwire "Extended Query", but not through PREPARE, e.g., `PREPARE EXPLAIN SELECT $1::int`.
+    {
+        client
+            .query_one("EXPLAIN SELECT $1::int", &[&42_i32])
+            .expect_element(|| "expected plan");
+    }
+    {
+        let result = client
+            .query("EXPLAIN FILTER PUSHDOWN FOR SELECT $1::int", &[&42_i32])
+            .unwrap();
+        assert!(result.is_empty());
+    }
 
     // Test that `INSERT` statements support prepared statements.
     {
