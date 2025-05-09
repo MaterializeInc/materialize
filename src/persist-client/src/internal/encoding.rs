@@ -40,16 +40,17 @@ use crate::error::{CodecMismatch, CodecMismatchT};
 use crate::internal::metrics::Metrics;
 use crate::internal::paths::{PartialBatchKey, PartialRollupKey};
 use crate::internal::state::{
-    proto_hollow_batch_part, BatchPart, CriticalReaderState, EncodedSchemas, HandleDebugState,
+    ActiveGc, ActiveRollup, BatchPart, CriticalReaderState, EncodedSchemas, HandleDebugState,
     HollowBatch, HollowBatchPart, HollowRollup, HollowRun, HollowRunRef, IdempotencyToken,
-    LeasedReaderState, OpaqueState, ProtoCompaction, ProtoCriticalReaderState, ProtoEncodedSchemas,
-    ProtoHandleDebugState, ProtoHollowBatch, ProtoHollowBatchPart, ProtoHollowRollup,
-    ProtoHollowRun, ProtoHollowRunRef, ProtoIdHollowBatch, ProtoIdMerge, ProtoIdSpineBatch,
-    ProtoInlineBatchPart, ProtoInlinedDiffs, ProtoLeasedReaderState, ProtoMerge, ProtoRollup,
-    ProtoRunMeta, ProtoRunOrder, ProtoSpineBatch, ProtoSpineId, ProtoStateDiff, ProtoStateField,
-    ProtoStateFieldDiffType, ProtoStateFieldDiffs, ProtoTrace, ProtoU64Antichain,
-    ProtoU64Description, ProtoVersionedData, ProtoWriterState, RunMeta, RunOrder, RunPart, State,
-    StateCollections, TypedState, WriterState,
+    LeasedReaderState, OpaqueState, ProtoActiveGc, ProtoActiveRollup, ProtoCompaction,
+    ProtoCriticalReaderState, ProtoEncodedSchemas, ProtoHandleDebugState, ProtoHollowBatch,
+    ProtoHollowBatchPart, ProtoHollowRollup, ProtoHollowRun, ProtoHollowRunRef, ProtoIdHollowBatch,
+    ProtoIdMerge, ProtoIdSpineBatch, ProtoInlineBatchPart, ProtoInlinedDiffs,
+    ProtoLeasedReaderState, ProtoMerge, ProtoRollup, ProtoRunMeta, ProtoRunOrder, ProtoSpineBatch,
+    ProtoSpineId, ProtoStateDiff, ProtoStateField, ProtoStateFieldDiffType, ProtoStateFieldDiffs,
+    ProtoTrace, ProtoU64Antichain, ProtoU64Description, ProtoVersionedData, ProtoWriterState,
+    RunMeta, RunOrder, RunPart, State, StateCollections, TypedState, WriterState,
+    proto_hollow_batch_part,
 };
 use crate::internal::state_diff::{
     ProtoStateFieldDiff, ProtoStateFieldDiffsWriter, StateDiff, StateFieldDiff, StateFieldValDiff,
@@ -58,7 +59,7 @@ use crate::internal::trace::{
     ActiveCompaction, FlatTrace, SpineId, ThinMerge, ThinSpineBatch, Trace,
 };
 use crate::read::{LeasedReaderId, READER_LEASE_DURATION};
-use crate::{cfg, PersistConfig, ShardId, WriterId};
+use crate::{PersistConfig, ShardId, WriterId, cfg};
 
 #[derive(Debug)]
 pub struct Schemas<K: Codec, V: Codec> {
@@ -330,6 +331,8 @@ impl<T: Timestamp + Codec64> RustType<ProtoStateDiff> for StateDiff<T> {
             walltime_ms,
             latest_rollup_key,
             rollups,
+            active_rollup,
+            active_gc,
             hostname,
             last_gc_req,
             leased_readers,
@@ -351,6 +354,8 @@ impl<T: Timestamp + Codec64> RustType<ProtoStateDiff> for StateDiff<T> {
         field_diffs_into_proto(ProtoStateField::Hostname, hostname, &mut writer);
         field_diffs_into_proto(ProtoStateField::LastGcReq, last_gc_req, &mut writer);
         field_diffs_into_proto(ProtoStateField::Rollups, rollups, &mut writer);
+        field_diffs_into_proto(ProtoStateField::ActiveRollup, active_rollup, &mut writer);
+        field_diffs_into_proto(ProtoStateField::ActiveGc, active_gc, &mut writer);
         field_diffs_into_proto(ProtoStateField::LeasedReaders, leased_readers, &mut writer);
         field_diffs_into_proto(
             ProtoStateField::CriticalReaders,
@@ -417,6 +422,22 @@ impl<T: Timestamp + Codec64> RustType<ProtoStateDiff> for StateDiff<T> {
                         |()| Ok(()),
                         |v| v.into_rust(),
                     )?,
+                    ProtoStateField::ActiveGc => {
+                        field_diff_into_rust::<(), ProtoActiveGc, _, _, _, _>(
+                            diff,
+                            &mut state_diff.active_gc,
+                            |()| Ok(()),
+                            |v| v.into_rust(),
+                        )?
+                    }
+                    ProtoStateField::ActiveRollup => {
+                        field_diff_into_rust::<(), ProtoActiveRollup, _, _, _, _>(
+                            diff,
+                            &mut state_diff.active_rollup,
+                            |()| Ok(()),
+                            |v| v.into_rust(),
+                        )?
+                    }
                     ProtoStateField::Rollups => {
                         field_diff_into_rust::<u64, ProtoHollowRollup, _, _, _, _>(
                             diff,
@@ -845,6 +866,8 @@ impl<T: Timestamp + Lattice + Codec64> RustType<ProtoRollup> for Rollup<T> {
             ts_codec: T::codec_name(),
             diff_codec: self.state.diff_codec.into_proto(),
             last_gc_req: self.state.state.collections.last_gc_req.into_proto(),
+            active_rollup: self.state.state.collections.active_rollup.into_proto(),
+            active_gc: self.state.state.collections.active_gc.into_proto(),
             rollups: self
                 .state
                 .state
@@ -935,8 +958,15 @@ impl<T: Timestamp + Lattice + Codec64> RustType<ProtoRollup> for Rollup<T> {
         for (id, x) in x.schemas {
             schemas.insert(id.into_rust()?, x.into_rust()?);
         }
+        let active_rollup = x
+            .active_rollup
+            .map(|rollup| rollup.into_rust())
+            .transpose()?;
+        let active_gc = x.active_gc.map(|gc| gc.into_rust()).transpose()?;
         let collections = StateCollections {
             rollups,
+            active_rollup,
+            active_gc,
             last_gc_req: x.last_gc_req.into_rust()?,
             leased_readers,
             critical_readers,
@@ -1524,6 +1554,7 @@ impl RustType<proto_hollow_batch_part::Format> for BatchColumnarFormat {
             BatchColumnarFormat::Both(version) => {
                 proto_hollow_batch_part::Format::RowAndColumnar((*version).cast_into())
             }
+            BatchColumnarFormat::Structured => proto_hollow_batch_part::Format::Structured(()),
         }
     }
 
@@ -1533,6 +1564,7 @@ impl RustType<proto_hollow_batch_part::Format> for BatchColumnarFormat {
             proto_hollow_batch_part::Format::RowAndColumnar(version) => {
                 BatchColumnarFormat::Both(version.cast_into())
             }
+            proto_hollow_batch_part::Format::Structured(_) => BatchColumnarFormat::Structured,
         };
         Ok(format)
     }
@@ -1685,6 +1717,38 @@ impl RustType<ProtoHollowRollup> for HollowRollup {
     }
 }
 
+impl RustType<ProtoActiveRollup> for ActiveRollup {
+    fn into_proto(&self) -> ProtoActiveRollup {
+        ProtoActiveRollup {
+            start_ms: self.start_ms,
+            seqno: self.seqno.into_proto(),
+        }
+    }
+
+    fn from_proto(proto: ProtoActiveRollup) -> Result<Self, TryFromProtoError> {
+        Ok(ActiveRollup {
+            start_ms: proto.start_ms,
+            seqno: proto.seqno.into_rust()?,
+        })
+    }
+}
+
+impl RustType<ProtoActiveGc> for ActiveGc {
+    fn into_proto(&self) -> ProtoActiveGc {
+        ProtoActiveGc {
+            start_ms: self.start_ms,
+            seqno: self.seqno.into_proto(),
+        }
+    }
+
+    fn from_proto(proto: ProtoActiveGc) -> Result<Self, TryFromProtoError> {
+        Ok(ActiveGc {
+            start_ms: proto.start_ms,
+            seqno: proto.seqno.into_rust()?,
+        })
+    }
+}
+
 impl<T: Timestamp + Codec64> RustType<ProtoU64Description> for Description<T> {
     fn into_proto(&self) -> ProtoU64Description {
         ProtoU64Description {
@@ -1733,12 +1797,12 @@ mod tests {
     use mz_persist::location::SeqNo;
     use proptest::prelude::*;
 
+    use crate::ShardId;
     use crate::internal::paths::PartialRollupKey;
     use crate::internal::state::tests::any_state;
     use crate::internal::state::{BatchPart, HandleDebugState};
     use crate::internal::state_diff::StateDiff;
     use crate::tests::new_test_client_cache;
-    use crate::ShardId;
 
     use super::*;
 
@@ -1774,8 +1838,8 @@ mod tests {
         // But we can't read it back using v1 because v1 might corrupt it by
         // losing or misinterpreting something written out by a future version
         // of code.
-        let v1_res =
-            mz_ore::panic::catch_unwind(|| UntypedState::<u64>::decode(&v1, bytes.clone()));
+        #[allow(clippy::disallowed_methods)] // not using enhanced panic handler in tests
+        let v1_res = std::panic::catch_unwind(|| UntypedState::<u64>::decode(&v1, bytes.clone()));
         assert_err!(v1_res);
     }
 
@@ -1804,7 +1868,8 @@ mod tests {
         // But we can't read it back using v1 because v1 might corrupt it by
         // losing or misinterpreting something written out by a future version
         // of code.
-        let v1_res = mz_ore::panic::catch_unwind(|| StateDiff::<u64>::decode(&v1, bytes));
+        #[allow(clippy::disallowed_methods)] // not using enhanced panic handler in tests
+        let v1_res = std::panic::catch_unwind(|| StateDiff::<u64>::decode(&v1, bytes));
         assert_err!(v1_res);
     }
 
@@ -2057,6 +2122,152 @@ mod tests {
         }
 
         proptest!(|(state in any_state::<u64>(0..3))| testcase(state));
+    }
+
+    #[mz_ore::test]
+    fn check_data_versions_with_lts_versions() {
+        #[track_caller]
+        fn testcase(code: &str, data: &str, lts_versions: &[Version], expected: Result<(), ()>) {
+            let code = Version::parse(code).unwrap();
+            let data = Version::parse(data).unwrap();
+            let actual = cfg::check_data_version_with_lts_versions(&code, &data, lts_versions)
+                .map_err(|_| ());
+            assert_eq!(actual, expected);
+        }
+
+        let none = [];
+        let one = [Version::new(0, 130, 0)];
+        let two = [Version::new(0, 130, 0), Version::new(0, 140, 0)];
+        let three = [
+            Version::new(0, 130, 0),
+            Version::new(0, 140, 0),
+            Version::new(0, 150, 0),
+        ];
+
+        testcase("0.130.0", "0.128.0", &none, Ok(()));
+        testcase("0.130.0", "0.129.0", &none, Ok(()));
+        testcase("0.130.0", "0.130.0", &none, Ok(()));
+        testcase("0.130.0", "0.130.1", &none, Ok(()));
+        testcase("0.130.1", "0.130.0", &none, Ok(()));
+        testcase("0.130.0", "0.131.0", &none, Ok(()));
+        testcase("0.130.0", "0.132.0", &none, Err(()));
+
+        testcase("0.129.0", "0.127.0", &none, Ok(()));
+        testcase("0.129.0", "0.128.0", &none, Ok(()));
+        testcase("0.129.0", "0.129.0", &none, Ok(()));
+        testcase("0.129.0", "0.129.1", &none, Ok(()));
+        testcase("0.129.1", "0.129.0", &none, Ok(()));
+        testcase("0.129.0", "0.130.0", &none, Ok(()));
+        testcase("0.129.0", "0.131.0", &none, Err(()));
+
+        testcase("0.130.0", "0.128.0", &one, Ok(()));
+        testcase("0.130.0", "0.129.0", &one, Ok(()));
+        testcase("0.130.0", "0.130.0", &one, Ok(()));
+        testcase("0.130.0", "0.130.1", &one, Ok(()));
+        testcase("0.130.1", "0.130.0", &one, Ok(()));
+        testcase("0.130.0", "0.131.0", &one, Ok(()));
+        testcase("0.130.0", "0.132.0", &one, Ok(()));
+
+        testcase("0.129.0", "0.127.0", &one, Ok(()));
+        testcase("0.129.0", "0.128.0", &one, Ok(()));
+        testcase("0.129.0", "0.129.0", &one, Ok(()));
+        testcase("0.129.0", "0.129.1", &one, Ok(()));
+        testcase("0.129.1", "0.129.0", &one, Ok(()));
+        testcase("0.129.0", "0.130.0", &one, Ok(()));
+        testcase("0.129.0", "0.131.0", &one, Err(()));
+
+        testcase("0.131.0", "0.129.0", &one, Ok(()));
+        testcase("0.131.0", "0.130.0", &one, Ok(()));
+        testcase("0.131.0", "0.131.0", &one, Ok(()));
+        testcase("0.131.0", "0.131.1", &one, Ok(()));
+        testcase("0.131.1", "0.131.0", &one, Ok(()));
+        testcase("0.131.0", "0.132.0", &one, Ok(()));
+        testcase("0.131.0", "0.133.0", &one, Err(()));
+
+        testcase("0.130.0", "0.128.0", &two, Ok(()));
+        testcase("0.130.0", "0.129.0", &two, Ok(()));
+        testcase("0.130.0", "0.130.0", &two, Ok(()));
+        testcase("0.130.0", "0.130.1", &two, Ok(()));
+        testcase("0.130.1", "0.130.0", &two, Ok(()));
+        testcase("0.130.0", "0.131.0", &two, Ok(()));
+        testcase("0.130.0", "0.132.0", &two, Ok(()));
+        testcase("0.130.0", "0.135.0", &two, Ok(()));
+        testcase("0.130.0", "0.138.0", &two, Ok(()));
+        testcase("0.130.0", "0.139.0", &two, Ok(()));
+        testcase("0.130.0", "0.140.0", &two, Ok(()));
+        testcase("0.130.9", "0.140.0", &two, Ok(()));
+        testcase("0.130.0", "0.140.1", &two, Ok(()));
+        testcase("0.130.3", "0.140.1", &two, Ok(()));
+        testcase("0.130.3", "0.140.9", &two, Ok(()));
+        testcase("0.130.0", "0.141.0", &two, Err(()));
+        testcase("0.129.0", "0.133.0", &two, Err(()));
+        testcase("0.129.0", "0.140.0", &two, Err(()));
+        testcase("0.131.0", "0.133.0", &two, Err(()));
+        testcase("0.131.0", "0.140.0", &two, Err(()));
+
+        testcase("0.130.0", "0.128.0", &three, Ok(()));
+        testcase("0.130.0", "0.129.0", &three, Ok(()));
+        testcase("0.130.0", "0.130.0", &three, Ok(()));
+        testcase("0.130.0", "0.130.1", &three, Ok(()));
+        testcase("0.130.1", "0.130.0", &three, Ok(()));
+        testcase("0.130.0", "0.131.0", &three, Ok(()));
+        testcase("0.130.0", "0.132.0", &three, Ok(()));
+        testcase("0.130.0", "0.135.0", &three, Ok(()));
+        testcase("0.130.0", "0.138.0", &three, Ok(()));
+        testcase("0.130.0", "0.139.0", &three, Ok(()));
+        testcase("0.130.0", "0.140.0", &three, Ok(()));
+        testcase("0.130.9", "0.140.0", &three, Ok(()));
+        testcase("0.130.0", "0.140.1", &three, Ok(()));
+        testcase("0.130.3", "0.140.1", &three, Ok(()));
+        testcase("0.130.3", "0.140.9", &three, Ok(()));
+        testcase("0.130.0", "0.141.0", &three, Err(()));
+        testcase("0.129.0", "0.133.0", &three, Err(()));
+        testcase("0.129.0", "0.140.0", &three, Err(()));
+        testcase("0.131.0", "0.133.0", &three, Err(()));
+        testcase("0.131.0", "0.140.0", &three, Err(()));
+        testcase("0.130.0", "0.150.0", &three, Err(()));
+
+        testcase("0.140.0", "0.138.0", &three, Ok(()));
+        testcase("0.140.0", "0.139.0", &three, Ok(()));
+        testcase("0.140.0", "0.140.0", &three, Ok(()));
+        testcase("0.140.0", "0.140.1", &three, Ok(()));
+        testcase("0.140.1", "0.140.0", &three, Ok(()));
+        testcase("0.140.0", "0.141.0", &three, Ok(()));
+        testcase("0.140.0", "0.142.0", &three, Ok(()));
+        testcase("0.140.0", "0.145.0", &three, Ok(()));
+        testcase("0.140.0", "0.148.0", &three, Ok(()));
+        testcase("0.140.0", "0.149.0", &three, Ok(()));
+        testcase("0.140.0", "0.150.0", &three, Ok(()));
+        testcase("0.140.9", "0.150.0", &three, Ok(()));
+        testcase("0.140.0", "0.150.1", &three, Ok(()));
+        testcase("0.140.3", "0.150.1", &three, Ok(()));
+        testcase("0.140.3", "0.150.9", &three, Ok(()));
+        testcase("0.140.0", "0.151.0", &three, Err(()));
+        testcase("0.139.0", "0.143.0", &three, Err(()));
+        testcase("0.139.0", "0.150.0", &three, Err(()));
+        testcase("0.141.0", "0.143.0", &three, Err(()));
+        testcase("0.141.0", "0.150.0", &three, Err(()));
+
+        testcase("0.150.0", "0.148.0", &three, Ok(()));
+        testcase("0.150.0", "0.149.0", &three, Ok(()));
+        testcase("0.150.0", "0.150.0", &three, Ok(()));
+        testcase("0.150.0", "0.150.1", &three, Ok(()));
+        testcase("0.150.1", "0.150.0", &three, Ok(()));
+        testcase("0.150.0", "0.151.0", &three, Ok(()));
+        testcase("0.150.0", "0.152.0", &three, Ok(()));
+        testcase("0.150.0", "0.155.0", &three, Ok(()));
+        testcase("0.150.0", "0.158.0", &three, Ok(()));
+        testcase("0.150.0", "0.159.0", &three, Ok(()));
+        testcase("0.150.0", "0.160.0", &three, Ok(()));
+        testcase("0.150.9", "0.160.0", &three, Ok(()));
+        testcase("0.150.0", "0.160.1", &three, Ok(()));
+        testcase("0.150.3", "0.160.1", &three, Ok(()));
+        testcase("0.150.3", "0.160.9", &three, Ok(()));
+        testcase("0.150.0", "0.161.0", &three, Ok(()));
+        testcase("0.149.0", "0.153.0", &three, Err(()));
+        testcase("0.149.0", "0.160.0", &three, Err(()));
+        testcase("0.151.0", "0.153.0", &three, Err(()));
+        testcase("0.151.0", "0.160.0", &three, Err(()));
     }
 
     #[mz_ore::test]

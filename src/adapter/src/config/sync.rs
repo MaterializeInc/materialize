@@ -11,11 +11,11 @@ use std::time::Duration;
 
 use tokio::time;
 
+use crate::Client;
 use crate::config::{
     SynchronizedParameters, SystemParameterBackend, SystemParameterFrontend,
     SystemParameterSyncConfig,
 };
-use crate::Client;
 
 /// Run a loop that periodically pulls system parameters defined in the
 /// LaunchDarkly-backed [SystemParameterFrontend] and pushes modified values to the

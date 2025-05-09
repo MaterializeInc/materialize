@@ -14,4 +14,3 @@ pre-image:
     bin: [ materialized ]
     bazel-bin:
       materialized: "@//src/materialized:materialized"
-    strip: false

@@ -10,10 +10,10 @@
 //! HTTP utilities.
 
 use askama::Template;
-use axum::http::status::StatusCode;
-use axum::http::HeaderValue;
-use axum::response::{Html, IntoResponse};
 use axum::Json;
+use axum::http::HeaderValue;
+use axum::http::status::StatusCode;
+use axum::response::{Html, IntoResponse};
 use axum_extra::TypedHeader;
 use headers::ContentType;
 use mz_ore::metrics::MetricsRegistry;
@@ -38,17 +38,27 @@ where
 /// and two strings representing the (crate-local) paths to the production and development
 /// static files.
 macro_rules! make_handle_static {
-    ($static_dir:expr, $prod_base_path:expr, $dev_base_path:expr) => {
+    (
+        dir_1: $dir_1:expr,
+        $(dir_2: $dir_2:expr,)?
+        prod_base_path: $prod_base_path:expr,
+        dev_base_path: $dev_base_path:expr$(,)?
+    ) => {
         #[allow(clippy::unused_async)]
         pub async fn handle_static(
             path: ::axum::extract::Path<String>,
         ) -> impl ::axum::response::IntoResponse {
             #[cfg(not(feature = "dev-web"))]
-            const STATIC_DIR: ::include_dir::Dir = $static_dir;
+            const DIR_1: ::include_dir::Dir = $dir_1;
+            $(
+                #[cfg(not(feature = "dev-web"))]
+                const DIR_2: ::include_dir::Dir = $dir_2;
+            )?
+
 
             #[cfg(not(feature = "dev-web"))]
             fn get_static_file(path: &str) -> Option<&'static [u8]> {
-                STATIC_DIR.get_file(path).map(|f| f.contents())
+                DIR_1.get_file(path).or_else(|| DIR_2.get_file(path)).map(|f| f.contents())
             }
 
             #[cfg(feature = "dev-web")]
@@ -104,7 +114,7 @@ pub async fn handle_liveness_check() -> impl IntoResponse {
 
 /// Serves metrics from the selected metrics registry variant.
 #[allow(clippy::unused_async)]
-pub async fn handle_prometheus(registry: &MetricsRegistry) -> impl IntoResponse {
+pub async fn handle_prometheus(registry: &MetricsRegistry) -> impl IntoResponse + use<> {
     let mut buffer = Vec::new();
     let encoder = prometheus::TextEncoder::new();
     encoder

@@ -74,6 +74,7 @@ use differential_dataflow::lattice::Lattice;
 use futures::future::BoxFuture;
 use futures::stream::StreamExt;
 use futures::{Future, FutureExt};
+use mz_cluster_client::ReplicaId;
 use mz_dyncfg::ConfigSet;
 use mz_ore::now::{EpochMillis, NowFn};
 use mz_ore::retry::Retry;
@@ -89,17 +90,19 @@ use mz_storage_client::client::{AppendOnlyUpdate, Status, TimestamplessUpdate};
 use mz_storage_client::controller::{IntrospectionType, MonotonicAppender, StorageWriteOp};
 use mz_storage_client::healthcheck::{
     MZ_SINK_STATUS_HISTORY_DESC, MZ_SOURCE_STATUS_HISTORY_DESC, REPLICA_METRICS_HISTORY_DESC,
-    WALLCLOCK_LAG_HISTORY_DESC,
+    WALLCLOCK_GLOBAL_LAG_HISTOGRAM_RAW_DESC, WALLCLOCK_LAG_HISTORY_DESC,
 };
 use mz_storage_client::metrics::StorageControllerMetrics;
 use mz_storage_client::statistics::{SinkStatisticsUpdate, SourceStatisticsUpdate};
 use mz_storage_client::storage_collections::StorageCollections;
+use mz_storage_types::StorageDiff;
 use mz_storage_types::controller::InvalidUpper;
 use mz_storage_types::dyncfgs::{
-    REPLICA_METRICS_HISTORY_RETENTION_INTERVAL, WALLCLOCK_LAG_HISTORY_RETENTION_INTERVAL,
+    REPLICA_METRICS_HISTORY_RETENTION_INTERVAL, WALLCLOCK_GLOBAL_LAG_HISTOGRAM_RETENTION_INTERVAL,
+    WALLCLOCK_LAG_HISTORY_RETENTION_INTERVAL,
 };
 use mz_storage_types::parameters::{
-    StorageParameters, STORAGE_MANAGED_COLLECTIONS_BATCH_DURATION_DEFAULT,
+    STORAGE_MANAGED_COLLECTIONS_BATCH_DURATION_DEFAULT, StorageParameters,
 };
 use mz_storage_types::sources::SourceData;
 use timely::progress::{Antichain, Timestamp};
@@ -108,9 +111,9 @@ use tokio::time::{Duration, Instant};
 use tracing::{debug, error, info};
 
 use crate::{
-    collection_mgmt, privatelink_status_history_desc, replica_status_history_desc,
-    sink_status_history_desc, snapshot_statistics, source_status_history_desc, statistics,
-    StatusHistoryDesc, StatusHistoryRetentionPolicy, StorageError,
+    StatusHistoryDesc, StatusHistoryRetentionPolicy, StorageError, collection_mgmt,
+    privatelink_status_history_desc, replica_status_history_desc, sink_status_history_desc,
+    snapshot_statistics, source_status_history_desc, statistics,
 };
 
 // Default rate at which we advance the uppers of managed collections.
@@ -221,13 +224,14 @@ where
     pub(super) fn register_differential_collection<R>(
         &self,
         id: GlobalId,
-        write_handle: WriteHandle<SourceData, (), T, Diff>,
+        write_handle: WriteHandle<SourceData, (), T, StorageDiff>,
         read_handle_fn: R,
         force_writable: bool,
         introspection_config: DifferentialIntrospectionConfig<T>,
     ) where
-        R: FnMut() -> Pin<Box<dyn Future<Output = ReadHandle<SourceData, (), T, Diff>> + Send>>
-            + Send
+        R: FnMut() -> Pin<
+                Box<dyn Future<Output = ReadHandle<SourceData, (), T, StorageDiff>> + Send>,
+            > + Send
             + Sync
             + 'static,
     {
@@ -275,7 +279,7 @@ where
     pub(super) fn register_append_only_collection(
         &self,
         id: GlobalId,
-        write_handle: WriteHandle<SourceData, (), T, Diff>,
+        write_handle: WriteHandle<SourceData, (), T, StorageDiff>,
         force_writable: bool,
         introspection_config: Option<AppendOnlyIntrospectionConfig<T>>,
     ) {
@@ -355,6 +359,30 @@ where
         Box::pin(futures::future::ready(()))
     }
 
+    /// Returns a sender for writes to the given append-only collection.
+    ///
+    /// # Panics
+    /// - If `id` does not belong to an append-only collections.
+    pub(super) fn append_only_write_sender(&self, id: GlobalId) -> AppendOnlyWriteChannel<T> {
+        let collections = self.append_only_collections.lock().expect("poisoned");
+        match collections.get(&id) {
+            Some((tx, _, _)) => tx.clone(),
+            None => panic!("missing append-only collection: {id}"),
+        }
+    }
+
+    /// Returns a sender for writes to the given differential collection.
+    ///
+    /// # Panics
+    /// - If `id` does not belong to a differential collections.
+    pub(super) fn differential_write_sender(&self, id: GlobalId) -> DifferentialWriteChannel<T> {
+        let collections = self.differential_collections.lock().expect("poisoned");
+        match collections.get(&id) {
+            Some((tx, _, _)) => tx.clone(),
+            None => panic!("missing differential collection: {id}"),
+        }
+    }
+
     /// Appends `updates` to the append-only collection identified by `id`, at
     /// _some_ timestamp. Does not wait for the append to complete.
     ///
@@ -368,16 +396,7 @@ where
         }
 
         if !updates.is_empty() {
-            // Get the update channel in a block to make sure the Mutex lock is scoped.
-            let update_tx = {
-                let guard = self
-                    .append_only_collections
-                    .lock()
-                    .expect("CollectionManager panicked");
-                let (update_tx, _, _) = guard.get(&id).expect("missing append-only collection");
-                update_tx.clone()
-            };
-
+            let update_tx = self.append_only_write_sender(id);
             let (tx, _rx) = oneshot::channel();
             update_tx.send((updates, tx)).expect("rx hung up");
         }
@@ -392,16 +411,7 @@ where
     /// - If the collection closed.
     pub(super) fn differential_write(&self, id: GlobalId, op: StorageWriteOp) {
         if !op.is_empty_append() {
-            // Get the update channel in a block to make sure the Mutex lock is scoped.
-            let update_tx = {
-                let guard = self
-                    .differential_collections
-                    .lock()
-                    .expect("CollectionManager panicked");
-                let (update_tx, _, _) = guard.get(&id).expect("missing differential collection");
-                update_tx.clone()
-            };
-
+            let update_tx = self.differential_write_sender(id);
             let (tx, _rx) = oneshot::channel();
             update_tx.send((op, tx)).expect("rx hung up");
         }
@@ -470,14 +480,14 @@ where
 struct DifferentialWriteTask<T, R>
 where
     T: Timestamp + Lattice + Codec64 + From<EpochMillis> + TimestampManipulation,
-    R: FnMut() -> Pin<Box<dyn Future<Output = ReadHandle<SourceData, (), T, Diff>> + Send>>
+    R: FnMut() -> Pin<Box<dyn Future<Output = ReadHandle<SourceData, (), T, StorageDiff>> + Send>>
         + Send
         + 'static,
 {
     /// The collection that we are writing to.
     id: GlobalId,
 
-    write_handle: WriteHandle<SourceData, (), T, Diff>,
+    write_handle: WriteHandle<SourceData, (), T, StorageDiff>,
 
     /// For getting a [`ReadHandle`] to sync our state to persist contents.
     read_handle_fn: R,
@@ -508,11 +518,11 @@ where
     // We can optimize for a multi-writer case by keeping an open
     // ReadHandle and continually reading updates from persist, updating
     // a desired in place. Similar to the self-correcting persist_sink.
-    desired: Vec<(Row, i64)>,
+    desired: Vec<(Row, Diff)>,
 
     /// Updates that we have to write when next writing to persist. This is
     /// determined by looking at what is desired and what is in persist.
-    to_write: Vec<(Row, i64)>,
+    to_write: Vec<(Row, Diff)>,
 
     /// Current upper of the persist shard. We keep track of this so that we
     /// realize when someone else writes to the shard, in which case we have to
@@ -524,7 +534,7 @@ where
 impl<T, R> DifferentialWriteTask<T, R>
 where
     T: Timestamp + Lattice + Codec64 + From<EpochMillis> + TimestampManipulation,
-    R: FnMut() -> Pin<Box<dyn Future<Output = ReadHandle<SourceData, (), T, Diff>> + Send>>
+    R: FnMut() -> Pin<Box<dyn Future<Output = ReadHandle<SourceData, (), T, StorageDiff>> + Send>>
         + Send
         + Sync
         + 'static,
@@ -533,7 +543,7 @@ where
     /// handles for interacting with it.
     fn spawn(
         id: GlobalId,
-        write_handle: WriteHandle<SourceData, (), T, Diff>,
+        write_handle: WriteHandle<SourceData, (), T, StorageDiff>,
         read_handle_fn: R,
         read_only: bool,
         now: NowFn,
@@ -676,6 +686,7 @@ where
 
             introspection_type @ IntrospectionType::ReplicaMetricsHistory
             | introspection_type @ IntrospectionType::WallclockLagHistory
+            | introspection_type @ IntrospectionType::WallclockLagHistogram
             | introspection_type @ IntrospectionType::PreparedStatementHistory
             | introspection_type @ IntrospectionType::StatementExecutionHistory
             | introspection_type @ IntrospectionType::SessionHistory
@@ -903,7 +914,7 @@ where
                     (
                         (SourceData(Ok(row.clone())), ()),
                         self.current_upper.clone(),
-                        diff.clone(),
+                        diff.into_inner(),
                     )
                 })
                 .collect::<Vec<_>>();
@@ -969,7 +980,10 @@ where
 
                     self.sync_to_persist().await;
 
-                    debug!("Retrying invalid-uppers error while appending to differential collection {}", self.id);
+                    debug!(
+                        "Retrying invalid-uppers error while appending to differential collection {}",
+                        self.id
+                    );
                 }
             }
         }
@@ -998,7 +1012,7 @@ where
                 let mut snapshot = Vec::with_capacity(contents.len());
                 for ((data, _), _, diff) in contents {
                     let row = data.expect("invalid protobuf data").0.unwrap();
-                    snapshot.push((row, -diff));
+                    snapshot.push((row, -Diff::from(diff)));
                 }
                 snapshot
             }
@@ -1032,7 +1046,7 @@ where
 {
     /// The collection that we are writing to.
     id: GlobalId,
-    write_handle: WriteHandle<SourceData, (), T, Diff>,
+    write_handle: WriteHandle<SourceData, (), T, StorageDiff>,
     read_only: bool,
     now: NowFn,
     user_batch_duration_ms: Arc<AtomicU64>,
@@ -1045,7 +1059,7 @@ where
     /// We have to shut down when receiving from this.
     shutdown_rx: oneshot::Receiver<()>,
     /// If this collection deduplicates statuses, this map is used to track the previous status.
-    previous_statuses: Option<BTreeMap<GlobalId, Status>>,
+    previous_statuses: Option<BTreeMap<(GlobalId, Option<ReplicaId>), Status>>,
 }
 
 impl<T> AppendOnlyWriteTask<T>
@@ -1061,7 +1075,7 @@ where
     /// TODO(parkmycar): Maybe add prometheus metrics for each collection?
     fn spawn(
         id: GlobalId,
-        write_handle: WriteHandle<SourceData, (), T, Diff>,
+        write_handle: WriteHandle<SourceData, (), T, StorageDiff>,
         read_only: bool,
         now: NowFn,
         user_batch_duration_ms: Arc<AtomicU64>,
@@ -1070,37 +1084,39 @@ where
         let (tx, rx) = mpsc::unbounded_channel();
         let (shutdown_tx, shutdown_rx) = oneshot::channel();
 
-        let previous_statuses: Option<BTreeMap<GlobalId, Status>> = match introspection_config
-            .as_ref()
-            .map(|config| config.introspection_type)
-        {
-            Some(IntrospectionType::SourceStatusHistory)
-            | Some(IntrospectionType::SinkStatusHistory) => Some(BTreeMap::new()),
+        let previous_statuses: Option<BTreeMap<(GlobalId, Option<ReplicaId>), Status>> =
+            match introspection_config
+                .as_ref()
+                .map(|config| config.introspection_type)
+            {
+                Some(IntrospectionType::SourceStatusHistory)
+                | Some(IntrospectionType::SinkStatusHistory) => Some(BTreeMap::new()),
 
-            Some(IntrospectionType::ReplicaMetricsHistory)
-            | Some(IntrospectionType::WallclockLagHistory)
-            | Some(IntrospectionType::PrivatelinkConnectionStatusHistory)
-            | Some(IntrospectionType::ReplicaStatusHistory)
-            | Some(IntrospectionType::PreparedStatementHistory)
-            | Some(IntrospectionType::StatementExecutionHistory)
-            | Some(IntrospectionType::SessionHistory)
-            | Some(IntrospectionType::StatementLifecycleHistory)
-            | Some(IntrospectionType::SqlText)
-            | None => None,
+                Some(IntrospectionType::ReplicaMetricsHistory)
+                | Some(IntrospectionType::WallclockLagHistory)
+                | Some(IntrospectionType::WallclockLagHistogram)
+                | Some(IntrospectionType::PrivatelinkConnectionStatusHistory)
+                | Some(IntrospectionType::ReplicaStatusHistory)
+                | Some(IntrospectionType::PreparedStatementHistory)
+                | Some(IntrospectionType::StatementExecutionHistory)
+                | Some(IntrospectionType::SessionHistory)
+                | Some(IntrospectionType::StatementLifecycleHistory)
+                | Some(IntrospectionType::SqlText)
+                | None => None,
 
-            Some(introspection_type @ IntrospectionType::ShardMapping)
-            | Some(introspection_type @ IntrospectionType::Frontiers)
-            | Some(introspection_type @ IntrospectionType::ReplicaFrontiers)
-            | Some(introspection_type @ IntrospectionType::StorageSourceStatistics)
-            | Some(introspection_type @ IntrospectionType::StorageSinkStatistics)
-            | Some(introspection_type @ IntrospectionType::ComputeDependencies)
-            | Some(introspection_type @ IntrospectionType::ComputeOperatorHydrationStatus)
-            | Some(introspection_type @ IntrospectionType::ComputeMaterializedViewRefreshes)
-            | Some(introspection_type @ IntrospectionType::ComputeErrorCounts)
-            | Some(introspection_type @ IntrospectionType::ComputeHydrationTimes) => {
-                unreachable!("not append-only collection: {introspection_type:?}")
-            }
-        };
+                Some(introspection_type @ IntrospectionType::ShardMapping)
+                | Some(introspection_type @ IntrospectionType::Frontiers)
+                | Some(introspection_type @ IntrospectionType::ReplicaFrontiers)
+                | Some(introspection_type @ IntrospectionType::StorageSourceStatistics)
+                | Some(introspection_type @ IntrospectionType::StorageSinkStatistics)
+                | Some(introspection_type @ IntrospectionType::ComputeDependencies)
+                | Some(introspection_type @ IntrospectionType::ComputeOperatorHydrationStatus)
+                | Some(introspection_type @ IntrospectionType::ComputeMaterializedViewRefreshes)
+                | Some(introspection_type @ IntrospectionType::ComputeErrorCounts)
+                | Some(introspection_type @ IntrospectionType::ComputeHydrationTimes) => {
+                    unreachable!("not append-only collection: {introspection_type:?}")
+                }
+            };
 
         let mut task = Self {
             id,
@@ -1141,7 +1157,9 @@ where
             return;
         };
         let initial_statuses = match introspection_type {
-            IntrospectionType::ReplicaMetricsHistory | IntrospectionType::WallclockLagHistory => {
+            IntrospectionType::ReplicaMetricsHistory
+            | IntrospectionType::WallclockLagHistory
+            | IntrospectionType::WallclockLagHistogram => {
                 let result = partially_truncate_metrics_history(
                     self.id,
                     introspection_type,
@@ -1420,7 +1438,12 @@ where
                 .filter(|r| match r {
                     AppendOnlyUpdate::Row(_) => true,
                     AppendOnlyUpdate::Status(update) => {
-                        match (previous_statuses.get(&update.id).as_deref(), &update.status) {
+                        match (
+                            previous_statuses
+                                .get(&(update.id, update.replica_id))
+                                .as_deref(),
+                            &update.status,
+                        ) {
                             (None, _) => true,
                             (Some(old), new) => old.superseded_by(*new),
                         }
@@ -1429,7 +1452,9 @@ where
                 .collect();
             previous_statuses.extend(new.iter().filter_map(|update| match update {
                 AppendOnlyUpdate::Row(_) => None,
-                AppendOnlyUpdate::Status(update) => Some((update.id, update.status)),
+                AppendOnlyUpdate::Status(update) => {
+                    Some(((update.id, update.replica_id), update.status))
+                }
             }));
             new
         } else {
@@ -1449,7 +1474,7 @@ where
 async fn partially_truncate_metrics_history<T>(
     id: GlobalId,
     introspection_type: IntrospectionType,
-    write_handle: &mut WriteHandle<SourceData, (), T, Diff>,
+    write_handle: &mut WriteHandle<SourceData, (), T, StorageDiff>,
     config_set: Arc<ConfigSet>,
     now: NowFn,
     storage_collections: Arc<dyn StorageCollections<Timestamp = T> + Send + Sync>,
@@ -1469,6 +1494,13 @@ where
             WALLCLOCK_LAG_HISTORY_RETENTION_INTERVAL.get(&config_set),
             WALLCLOCK_LAG_HISTORY_DESC
                 .get_by_name(&ColumnName::from("occurred_at"))
+                .expect("schema has not changed")
+                .0,
+        ),
+        IntrospectionType::WallclockLagHistogram => (
+            WALLCLOCK_GLOBAL_LAG_HISTOGRAM_RETENTION_INTERVAL.get(&config_set),
+            WALLCLOCK_GLOBAL_LAG_HISTOGRAM_RAW_DESC
+                .get_by_name(&ColumnName::from("period_start"))
                 .expect("schema has not changed")
                 .0,
         ),
@@ -1541,7 +1573,7 @@ where
 pub(crate) async fn partially_truncate_status_history<T, K>(
     id: GlobalId,
     introspection_type: IntrospectionType,
-    write_handle: &mut WriteHandle<SourceData, (), T, Diff>,
+    write_handle: &mut WriteHandle<SourceData, (), T, StorageDiff>,
     status_history_desc: StatusHistoryDesc<K>,
     now: NowFn,
     storage_collections: &Arc<dyn StorageCollections<Timestamp = T> + Send + Sync>,
@@ -1699,7 +1731,7 @@ where
 }
 
 async fn monotonic_append<T: Timestamp + Lattice + Codec64 + TimestampManipulation>(
-    write_handle: &mut WriteHandle<SourceData, (), T, Diff>,
+    write_handle: &mut WriteHandle<SourceData, (), T, StorageDiff>,
     updates: Vec<TimestamplessUpdate>,
     at_least: T,
 ) {
@@ -1726,7 +1758,11 @@ async fn monotonic_append<T: Timestamp + Lattice + Codec64 + TimestampManipulati
         let updates = updates
             .iter()
             .map(|TimestamplessUpdate { row, diff }| {
-                ((SourceData(Ok(row.clone())), ()), lower.clone(), diff)
+                (
+                    (SourceData(Ok(row.clone())), ()),
+                    lower.clone(),
+                    diff.into_inner(),
+                )
             })
             .collect::<Vec<_>>();
         let res = write_handle
@@ -1782,6 +1818,7 @@ mod tests {
             error: Some(error_message.to_string()),
             hints: BTreeSet::from([hint.to_string()]),
             namespaced_errors: Default::default(),
+            replica_id: None,
         });
 
         for (datum, column_type) in row.iter().zip(MZ_SINK_STATUS_HISTORY_DESC.iter_types()) {
@@ -1826,6 +1863,7 @@ mod tests {
             error: Some(error_message.to_string()),
             hints: Default::default(),
             namespaced_errors: Default::default(),
+            replica_id: None,
         });
 
         for (datum, column_type) in row.iter().zip(MZ_SINK_STATUS_HISTORY_DESC.iter_types()) {
@@ -1854,6 +1892,7 @@ mod tests {
             error: None,
             hints: BTreeSet::from([hint.to_string()]),
             namespaced_errors: Default::default(),
+            replica_id: None,
         });
 
         for (datum, column_type) in row.iter().zip(MZ_SINK_STATUS_HISTORY_DESC.iter_types()) {
@@ -1898,6 +1937,7 @@ mod tests {
             error: Some(error_message.to_string()),
             hints: Default::default(),
             namespaced_errors: BTreeMap::from([("thing".to_string(), "error".to_string())]),
+            replica_id: None,
         });
 
         for (datum, column_type) in row.iter().zip(MZ_SINK_STATUS_HISTORY_DESC.iter_types()) {
@@ -1943,6 +1983,7 @@ mod tests {
             error: Some(error_message.to_string()),
             hints: BTreeSet::from([hint.to_string()]),
             namespaced_errors: BTreeMap::from([("thing".to_string(), "error".to_string())]),
+            replica_id: None,
         });
 
         for (datum, column_type) in row.iter().zip(MZ_SINK_STATUS_HISTORY_DESC.iter_types()) {

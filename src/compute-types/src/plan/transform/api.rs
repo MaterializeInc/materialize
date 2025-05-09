@@ -14,8 +14,8 @@ use std::collections::BTreeSet;
 use mz_ore::stack::RecursionLimitError;
 use mz_repr::GlobalId;
 
-use crate::plan::interpret::{BoundedLattice, FoldMut, Interpreter};
 use crate::plan::Plan;
+use crate::plan::interpret::{BoundedLattice, FoldMut, Interpreter};
 
 /// The type of configuration options passed to all [Transform::transform] calls
 /// as an immutable reference.

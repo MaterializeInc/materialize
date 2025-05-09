@@ -36,16 +36,16 @@ use mz_storage_types::parameters::{
 use mz_tracing::{CloneableEnvFilter, SerializableDirective};
 use uncased::UncasedStr;
 
-use crate::session::user::{User, SUPPORT_USER, SYSTEM_USER};
+use crate::session::user::{SUPPORT_USER, SYSTEM_USER, User};
 use crate::session::vars::constraints::{
-    DomainConstraint, ValueConstraint, BYTESIZE_AT_LEAST_1MB, NUMERIC_BOUNDED_0_1_INCLUSIVE,
-    NUMERIC_NON_NEGATIVE,
+    BYTESIZE_AT_LEAST_1MB, DomainConstraint, NUMERIC_BOUNDED_0_1_INCLUSIVE, NUMERIC_NON_NEGATIVE,
+    ValueConstraint,
 };
 use crate::session::vars::errors::VarError;
-use crate::session::vars::polyfill::{lazy_value, value, LazyValueFn};
+use crate::session::vars::polyfill::{LazyValueFn, lazy_value, value};
 use crate::session::vars::value::{
-    ClientEncoding, ClientSeverity, Failpoints, IntervalStyle, IsolationLevel, TimeZone, Value,
-    DEFAULT_DATE_STYLE,
+    ClientEncoding, ClientSeverity, DEFAULT_DATE_STYLE, Failpoints, IntervalStyle, IsolationLevel,
+    TimeZone, Value,
 };
 use crate::session::vars::{FeatureFlag, Var, VarInput, VarParseError};
 use crate::{DEFAULT_SCHEMA, WEBHOOK_CONCURRENCY_LIMIT};
@@ -311,6 +311,13 @@ pub static DATE_STYLE: VarDefinition = VarDefinition::new(
     true,
 );
 
+pub static DEFAULT_CLUSTER_REPLICATION_FACTOR: VarDefinition = VarDefinition::new(
+    "default_cluster_replication_factor",
+    value!(u32; 1),
+    "Default cluster replication factor (Materialize).",
+    true,
+);
+
 pub static EXTRA_FLOAT_DIGITS: VarDefinition = VarDefinition::new(
     "extra_float_digits",
     value!(i32; 3),
@@ -442,10 +449,17 @@ pub static MAX_MYSQL_CONNECTIONS: VarDefinition = VarDefinition::new(
     true,
 );
 
+pub static MAX_SQL_SERVER_CONNECTIONS: VarDefinition = VarDefinition::new(
+    "max_sql_server_connections",
+    value!(u32; 1000),
+    "The maximum number of SQL Server connections in the region, across all schemas (Materialize).",
+    true,
+);
+
 pub static MAX_AWS_PRIVATELINK_CONNECTIONS: VarDefinition = VarDefinition::new(
     "max_aws_privatelink_connections",
     value!(u32; 0),
-     "The maximum number of AWS PrivateLink connections in the region, across all schemas (Materialize).",
+    "The maximum number of AWS PrivateLink connections in the region, across all schemas (Materialize).",
     true,
 );
 
@@ -914,9 +928,7 @@ pub static SENTRY_FILTERS: VarDefinition = VarDefinition::new_lazy(
 pub static WEBHOOKS_SECRETS_CACHING_TTL_SECS: VarDefinition = VarDefinition::new_lazy(
     "webhooks_secrets_caching_ttl_secs",
     lazy_value!(usize; || {
-        usize::cast_from(
-            mz_secrets::cache::DEFAULT_TTL_SECS.load(std::sync::atomic::Ordering::Relaxed),
-        )
+        usize::cast_from(mz_secrets::cache::DEFAULT_TTL_SECS)
     }),
     "Sets the time-to-live for values in the Webhooks secrets cache.",
     false,
@@ -1058,6 +1070,14 @@ pub static MYSQL_SOURCE_SNAPSHOT_LOCK_WAIT_TIMEOUT: VarDefinition = VarDefinitio
     false,
 );
 
+/// Sets the timeout for establishing an authenticated connection to MySQL
+pub static MYSQL_SOURCE_CONNECT_TIMEOUT: VarDefinition = VarDefinition::new(
+    "mysql_source_connect_timeout",
+    value!(Duration; mz_mysql_util::DEFAULT_CONNECT_TIMEOUT),
+    "Sets the timeout for establishing an authenticated connection to MySQL",
+    false,
+);
+
 /// Controls the check interval for connections to SSH bastions via `mz_ssh_util`.
 pub static SSH_CHECK_INTERVAL: VarDefinition = VarDefinition::new(
     "ssh_check_interval",
@@ -1141,15 +1161,6 @@ pub static KAFKA_PROGRESS_RECORD_FETCH_TIMEOUT: VarDefinition = VarDefinition::n
     value!(Option<Duration>; None),
     "Controls the timeout when fetching kafka progress records. \
         Defaults to 60s or the transaction timeout, whichever one is larger.",
-    false,
-);
-
-/// The interval we will fetch metadata from, unless overridden by the source.
-pub static KAFKA_DEFAULT_METADATA_FETCH_INTERVAL: VarDefinition = VarDefinition::new(
-    "kafka_default_metadata_fetch_interval",
-    value!(Duration; mz_kafka_util::client::DEFAULT_METADATA_FETCH_INTERVAL),
-    "The interval we will fetch metadata from, unless overridden by the source. \
-        Defaults to 60s.",
     false,
 );
 
@@ -1294,7 +1305,7 @@ pub static ENABLE_RBAC_CHECKS: VarDefinition = VarDefinition::new(
 
 pub static ENABLE_SESSION_RBAC_CHECKS: VarDefinition = VarDefinition::new(
     "enable_session_rbac_checks",
-    // TODO(jkosh44) Once RBAC is complete, change this to `true`.
+    // TODO(jkosh44) Once RBAC is enabled in all environments, change this to `true`.
     value!(bool; false),
     "User facing session boolean flag indicating whether to apply RBAC checks before \
         executing statements (Materialize).",
@@ -1594,12 +1605,13 @@ pub mod cluster_scheduling {
         false,
     );
 
-    pub static CLUSTER_TOPOLOGY_SPREAD_IGNORE_NON_SINGULAR_SCALE: VarDefinition = VarDefinition::new(
-        "cluster_topology_spread_ignore_non_singular_scale",
-        value!(bool; DEFAULT_TOPOLOGY_SPREAD_IGNORE_NON_SINGULAR_SCALE),
-        "If true, ignore replicas with more than 1 process when adding topology spread constraints (Materialize).",
-        false,
-    );
+    pub static CLUSTER_TOPOLOGY_SPREAD_IGNORE_NON_SINGULAR_SCALE: VarDefinition =
+        VarDefinition::new(
+            "cluster_topology_spread_ignore_non_singular_scale",
+            value!(bool; DEFAULT_TOPOLOGY_SPREAD_IGNORE_NON_SINGULAR_SCALE),
+            "If true, ignore replicas with more than 1 process when adding topology spread constraints (Materialize).",
+            false,
+        );
 
     pub static CLUSTER_TOPOLOGY_SPREAD_MAX_SKEW: VarDefinition = VarDefinition::new(
         "cluster_topology_spread_max_skew",
@@ -2105,12 +2117,6 @@ feature_flags!(
         enable_for_item_parsing: true,
     },
     {
-        name: enable_kafka_sink_partition_by,
-        desc: "Enable the PARTITION BY option for Kafka sinks",
-        default: false,
-        enable_for_item_parsing: true,
-    },
-    {
         name: enable_unlimited_retain_history,
         desc: "Disable limits on RETAIN HISTORY (below 1s default, and 0 disables compaction).",
         default: false,
@@ -2126,11 +2132,11 @@ feature_flags!(
         name: enable_alter_table_add_column,
         desc: "Enable ALTER TABLE ... ADD COLUMN ...",
         default: false,
-        enable_for_item_parsing: true,
+        enable_for_item_parsing: false,
     },
     {
-        name: enable_graceful_cluster_reconfiguration,
-        desc: "Enable graceful reconfiguration for alter cluster",
+        name: enable_zero_downtime_cluster_reconfiguration,
+        desc: "Enable zero-downtime reconfiguration for alter cluster",
         default: false,
         enable_for_item_parsing: false,
     },
@@ -2182,6 +2188,42 @@ feature_flags!(
         default: false,
         enable_for_item_parsing: true,
     },
+    {
+        name: enable_copy_from_remote,
+        desc: "Whether to allow COPY FROM <url>.",
+        default: false,
+        enable_for_item_parsing: false,
+    },
+    {
+        name: enable_join_prioritize_arranged,
+        desc: "Whether join planning should prioritize already-arranged keys over keys with more fields.",
+        default: true,
+        enable_for_item_parsing: false,
+    },
+    {
+        name: enable_sql_server_source,
+        desc: "Creating a SQL SERVER source",
+        default: false,
+        enable_for_item_parsing: false,
+    },
+    {
+        name: enable_projection_pushdown_after_relation_cse,
+        desc: "Run ProjectionPushdown one more time after the last RelationCSE.",
+        default: true,
+        enable_for_item_parsing: false,
+    },
+    {
+        name: enable_less_reduce_in_eqprop,
+        desc: "Run MSE::reduce in EquivalencePropagation only if reduce_expr changed something.",
+        default: true,
+        enable_for_item_parsing: false,
+    },
+    {
+        name: enable_dequadratic_eqprop_map,
+        desc: "Skip the quadratic part of EquivalencePropagation's handling of Map.",
+        default: true,
+        enable_for_item_parsing: false,
+    },
 );
 
 impl From<&super::SystemVars> for OptimizerFeatures {
@@ -2197,6 +2239,11 @@ impl From<&super::SystemVars> for OptimizerFeatures {
             enable_reduce_reduction: vars.enable_reduce_reduction(),
             persist_fast_path_limit: vars.persist_fast_path_limit(),
             reoptimize_imported_views: false,
+            enable_join_prioritize_arranged: vars.enable_join_prioritize_arranged(),
+            enable_projection_pushdown_after_relation_cse: vars
+                .enable_projection_pushdown_after_relation_cse(),
+            enable_less_reduce_in_eqprop: vars.enable_less_reduce_in_eqprop(),
+            enable_dequadratic_eqprop_map: vars.enable_dequadratic_eqprop_map(),
         }
     }
 }

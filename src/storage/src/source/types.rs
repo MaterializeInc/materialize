@@ -18,14 +18,14 @@ use std::fmt::Debug;
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
-use std::task::{ready, Context, Poll};
+use std::task::{Context, Poll, ready};
 
 use differential_dataflow::Collection;
+use differential_dataflow::containers::TimelyStack;
 use mz_repr::{Diff, GlobalId, Row};
 use mz_storage_types::errors::{DataflowError, DecodeError};
 use mz_storage_types::sources::SourceTimestamp;
 use mz_timely_util::builder_async::PressOnDropButton;
-use mz_timely_util::containers::stack::StackWrapper;
 use pin_project::pin_project;
 use serde::{Deserialize, Serialize};
 use timely::dataflow::{Scope, ScopeParent, Stream};
@@ -55,7 +55,7 @@ pub enum ProgressStatisticsUpdate {
 }
 
 pub type StackedCollection<G, T> =
-    Collection<G, T, Diff, StackWrapper<(T, <G as ScopeParent>::Timestamp, Diff)>>;
+    Collection<G, T, Diff, TimelyStack<(T, <G as ScopeParent>::Timestamp, Diff)>>;
 
 /// Describes a source that can render itself in a timely scope.
 pub trait SourceRender {
@@ -76,10 +76,8 @@ pub trait SourceRender {
     /// First, a source must produce a collection that is produced by the rendered dataflow and
     /// must contain *definite*[^1] data for all times beyond the resumption frontier.
     ///
-    /// Second, a source may produce an optional progress stream that will be used to drive
-    /// reclocking. This is useful for sources that can query the highest offsets of the external
-    /// source before reading the data for those offsets. In those cases it is preferable to
-    /// produce this additional stream.
+    /// Second, a source must produce a progress stream that will be used to drive reclocking.
+    /// The frontier of this stream decides for which upstream offsets bindings can be minted.
     ///
     /// Third, a source must produce a stream of health status updates.
     ///
@@ -90,12 +88,12 @@ pub trait SourceRender {
     fn render<G: Scope<Timestamp = Self::Time>>(
         self,
         scope: &mut G,
-        config: RawSourceCreationConfig,
+        config: &RawSourceCreationConfig,
         resume_uppers: impl futures::Stream<Item = Antichain<Self::Time>> + 'static,
         start_signal: impl std::future::Future<Output = ()> + 'static,
     ) -> (
         BTreeMap<GlobalId, StackedCollection<G, Result<SourceMessage, DataflowError>>>,
-        Option<Stream<G, Infallible>>,
+        Stream<G, Infallible>,
         Stream<G, HealthStatusMessage>,
         Stream<G, ProgressStatisticsUpdate>,
         Option<Stream<G, Probe<Self::Time>>>,
@@ -144,9 +142,9 @@ mod columnation {
 
         unsafe fn copy(&mut self, item: &Self::Item) -> Self::Item {
             SourceMessage {
-                key: self.inner.copy(&item.key),
-                value: self.inner.copy(&item.value),
-                metadata: self.inner.copy(&item.metadata),
+                key: unsafe { self.inner.copy(&item.key) },
+                value: unsafe { self.inner.copy(&item.value) },
+                metadata: unsafe { self.inner.copy(&item.metadata) },
             }
         }
 

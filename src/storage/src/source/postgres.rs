@@ -90,10 +90,10 @@ use mz_expr::{EvalError, MirScalarExpr};
 use mz_ore::cast::CastFrom;
 use mz_ore::error::ErrorExt;
 use mz_postgres_util::desc::PostgresTableDesc;
-use mz_postgres_util::{simple_query_opt, Client, PostgresError};
+use mz_postgres_util::{Client, PostgresError, simple_query_opt};
 use mz_repr::{Datum, Diff, GlobalId, Row};
-use mz_sql_parser::ast::display::AstDisplay;
 use mz_sql_parser::ast::Ident;
+use mz_sql_parser::ast::display::AstDisplay;
 use mz_storage_types::errors::{DataflowError, SourceError, SourceErrorDetails};
 use mz_storage_types::sources::postgres::CastType;
 use mz_storage_types::sources::{
@@ -126,12 +126,12 @@ impl SourceRender for PostgresSourceConnection {
     fn render<G: Scope<Timestamp = MzOffset>>(
         self,
         scope: &mut G,
-        config: RawSourceCreationConfig,
+        config: &RawSourceCreationConfig,
         resume_uppers: impl futures::Stream<Item = Antichain<MzOffset>> + 'static,
         _start_signal: impl std::future::Future<Output = ()> + 'static,
     ) -> (
         BTreeMap<GlobalId, StackedCollection<G, Result<SourceMessage, DataflowError>>>,
-        Option<Stream<G, Infallible>>,
+        Stream<G, Infallible>,
         Stream<G, HealthStatusMessage>,
         Stream<G, ProgressStatisticsUpdate>,
         Option<Stream<G, Probe<MzOffset>>>,
@@ -256,7 +256,7 @@ impl SourceRender for PostgresSourceConnection {
 
         (
             data_collections,
-            Some(uppers),
+            uppers,
             health,
             stats_stream,
             probe_stream,
@@ -285,7 +285,9 @@ pub enum ReplicationError {
 pub enum TransientError {
     #[error("replication slot mysteriously missing")]
     MissingReplicationSlot,
-    #[error("slot overcompacted. Requested LSN {requested_lsn} but only LSNs >= {available_lsn} are available")]
+    #[error(
+        "slot overcompacted. Requested LSN {requested_lsn} but only LSNs >= {available_lsn} are available"
+    )]
     OvercompactedReplicationSlot {
         requested_lsn: MzOffset,
         available_lsn: MzOffset,
@@ -331,11 +333,17 @@ pub enum DefiniteError {
     MissingColumn,
     #[error("failed to parse COPY protocol")]
     InvalidCopyInput,
-    #[error("invalid timeline ID from PostgreSQL server. Expected {expected} but got {actual}")]
+    #[error(
+        "unsupported action: database restored from point-in-time backup. Expected timeline ID {expected} but got {actual}"
+    )]
     InvalidTimelineId { expected: u64, actual: u64 },
-    #[error("TOASTed value missing from old row. Did you forget to set REPLICA IDENTITY to FULL for your table?")]
+    #[error(
+        "TOASTed value missing from old row. Did you forget to set REPLICA IDENTITY to FULL for your table?"
+    )]
     MissingToast,
-    #[error("old row missing from replication stream. Did you forget to set REPLICA IDENTITY to FULL for your table?")]
+    #[error(
+        "old row missing from replication stream. Did you forget to set REPLICA IDENTITY to FULL for your table?"
+    )]
     DefaultReplicaIdentity,
     #[error("incompatible schema change: {0}")]
     // TODO: proper error variants for all the expected schema violations
@@ -374,7 +382,7 @@ impl From<DefiniteError> for DataflowError {
 
 async fn ensure_replication_slot(client: &Client, slot: &str) -> Result<(), TransientError> {
     // Note: Using unchecked here is okay because we're using it in a SQL query.
-    let slot = Ident::new_unchecked(slot).to_ast_string();
+    let slot = Ident::new_unchecked(slot).to_ast_string_simple();
     let query = format!("CREATE_REPLICATION_SLOT {slot} LOGICAL \"pgoutput\" NOEXPORT_SNAPSHOT");
     match simple_query_opt(client, &query).await {
         Ok(_) => Ok(()),
@@ -418,7 +426,7 @@ async fn fetch_slot_metadata(
                 return Ok(SlotMetadata {
                     confirmed_flush_lsn: MzOffset::from(lsn),
                     active_pid: row.get("active_pid"),
-                })
+                });
             }
             // It can happen that confirmed_flush_lsn is NULL as the slot initializes
             // This could probably be a `tokio::time::interval`, but its only is called twice,

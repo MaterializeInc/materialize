@@ -165,7 +165,10 @@ SELECT
   'IN SCHEMA {{ to }} '         ||
   'GRANT '  || privilege_type   || ' ' ||
   'ON '     || object_type      || 's ' ||
-  'TO '     || quote_ident(grantee)
+  CASE
+    WHEN grantee = 'PUBLIC' THEN 'TO PUBLIC'
+    ELSE 'TO '     || quote_ident(grantee)
+  END
 FROM mz_internal.mz_show_default_privileges
 WHERE database = current_database() AND schema = {{ dbt.string_literal(from) }}
     AND object_owner <> 'none' AND grantee <> 'none'

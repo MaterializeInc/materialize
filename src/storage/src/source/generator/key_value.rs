@@ -44,13 +44,13 @@ pub fn render<G: Scope<Timestamp = MzOffset>>(
     output_map: BTreeMap<LoadGeneratorOutput, Vec<usize>>,
 ) -> (
     BTreeMap<GlobalId, StackedCollection<G, Result<SourceMessage, DataflowError>>>,
-    Option<Stream<G, Infallible>>,
+    Stream<G, Infallible>,
     Stream<G, HealthStatusMessage>,
     Stream<G, ProgressStatisticsUpdate>,
     Vec<PressOnDropButton>,
 ) {
     let (steady_state_stats_stream, stats_button) =
-        render_statistics_operator(scope, config.clone(), committed_uppers);
+        render_statistics_operator(scope, &config, committed_uppers);
 
     let mut builder = AsyncOperatorBuilder::new(config.name.clone(), scope.clone());
 
@@ -235,7 +235,7 @@ pub fn render<G: Scope<Timestamp = MzOffset>>(
 
     (
         data_collections,
-        Some(progress_stream),
+        progress_stream,
         status,
         stats_stream,
         vec![button.press_on_drop(), stats_button],
@@ -389,7 +389,7 @@ impl TransactionalSnapshotProducer {
                 output_indexes
                     .iter()
                     .repeat_clone(msg)
-                    .map(move |(idx, msg)| ((*idx, msg), MzOffset::from(iter_round), 1))
+                    .map(move |(idx, msg)| ((*idx, msg), MzOffset::from(iter_round), Diff::ONE))
             });
 
         if !finished {
@@ -475,12 +475,12 @@ impl UpdateProducer {
     ) -> (
         u64,
         impl Iterator<
-                Item = (
-                    (usize, Result<SourceMessage, DataflowError>),
-                    MzOffset,
-                    Diff,
-                ),
-            > + 'a,
+            Item = (
+                (usize, Result<SourceMessage, DataflowError>),
+                MzOffset,
+                Diff,
+            ),
+        > + 'a,
     ) {
         let mut rng = create_consistent_rng(self.seed, self.next_offset, self.pi.partition);
 
@@ -504,7 +504,7 @@ impl UpdateProducer {
                 output_indexes
                     .iter()
                     .repeat_clone(msg)
-                    .map(move |(idx, msg)| ((*idx, msg), MzOffset::from(iter_offset), 1))
+                    .map(move |(idx, msg)| ((*idx, msg), MzOffset::from(iter_offset), Diff::ONE))
             });
 
         // Advance to the next offset.
@@ -515,7 +515,7 @@ impl UpdateProducer {
 
 pub fn render_statistics_operator<G: Scope<Timestamp = MzOffset>>(
     scope: &G,
-    config: RawSourceCreationConfig,
+    config: &RawSourceCreationConfig,
     committed_uppers: impl futures::Stream<Item = Antichain<MzOffset>> + 'static,
 ) -> (Stream<G, ProgressStatisticsUpdate>, PressOnDropButton) {
     let id = config.id;
@@ -524,10 +524,10 @@ pub fn render_statistics_operator<G: Scope<Timestamp = MzOffset>>(
 
     let (stats_output, stats_stream) = builder.new_output();
 
+    let offset_worker = config.responsible_for(0);
+
     let button = builder.build(move |caps| async move {
         let [stats_cap]: [_; 1] = caps.try_into().unwrap();
-
-        let offset_worker = config.responsible_for(0);
 
         if !offset_worker {
             // Emit 0, to mark this worker as having started up correctly.

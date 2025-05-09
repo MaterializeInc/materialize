@@ -24,10 +24,10 @@ EXPLAIN PHYSICAL PLAN AS TEXT FOR SELECT a, array_agg(b) FROM t GROUP BY a;
 ----
 Explained Query:
   Reduce::Basic
-    aggr=(0, array_agg[order_by=[]](row(array[#1])))
+    aggr=(0, array_agg[order_by=[]](row(array[#1{b}])))
     val_plan
       project=(#2)
-      map=(row(array[#1]))
+      map=(row(array[#1{b}]))
     key_plan
       project=(#0)
     Get::Collection materialize.public.t
@@ -50,20 +50,20 @@ Explained Query:
       stream={ key=[#0], thinning=(#1) }
     source={ relation=0, key=[#0] }
     Reduce::Basic
-      aggr=(0, array_agg[order_by=[]](row(array[#1])))
+      aggr=(0, array_agg[order_by=[]](row(array[#1{b}])))
       val_plan
         project=(#2)
-        map=(row(array[#1]))
+        map=(row(array[#1{b}]))
       key_plan
         project=(#0)
       Get::Collection materialize.public.t
         project=(#0, #1)
         raw=true
     Reduce::Basic
-      aggr=(0, array_agg[order_by=[]](row(array[#1])))
+      aggr=(0, array_agg[order_by=[]](row(array[#1{c}])))
       val_plan
         project=(#2)
-        map=(row(array[#1]))
+        map=(row(array[#1{c}]))
       key_plan
         project=(#0)
       Get::Collection materialize.public.t
@@ -84,20 +84,20 @@ Explained Query:
       stream={ key=[#0], thinning=(#1) }
     source={ relation=0, key=[#0] }
     Reduce::Basic
-      aggr=(0, array_agg[order_by=[]](row(array[#1])))
+      aggr=(0, array_agg[order_by=[]](row(array[#1{b}])))
       val_plan
         project=(#2)
-        map=(row(array[#1]))
+        map=(row(array[#1{b}]))
       key_plan
         project=(#0)
       Get::Collection materialize.public.t
         project=(#0, #1)
         raw=true
     Reduce::Basic
-      aggr=(0, string_agg[order_by=[]](row(row(#1, ","))))
+      aggr=(0, string_agg[order_by=[]](row(row(#1{c}, ","))))
       val_plan
         project=(#2)
-        map=(row(row(#1, ",")))
+        map=(row(row(#1{c}, ",")))
       key_plan
         project=(#0)
       Get::Collection materialize.public.t
@@ -118,20 +118,20 @@ Explained Query:
       stream={ key=[#0], thinning=(#1) }
     source={ relation=0, key=[#0] }
     Reduce::Basic
-      aggr=(0, array_agg[order_by=[]](row(array[#1])))
+      aggr=(0, array_agg[order_by=[]](row(array[#1{b}])))
       val_plan
         project=(#2)
-        map=(row(array[#1]))
+        map=(row(array[#1{b}]))
       key_plan
         project=(#0)
       Get::Collection materialize.public.t
         project=(#0, #1)
         raw=true
     Reduce::Basic
-      aggr=(0, string_agg[order_by=[#0 desc nulls_first]](row(row(#2, ","), #1)))
+      aggr=(0, string_agg[order_by=[#0 desc nulls_first]](row(row(#2{c}, ","), #1{b})))
       val_plan
         project=(#3)
-        map=(row(row(#2, ","), #1))
+        map=(row(row(#2{c}, ","), #1{b}))
       key_plan
         project=(#0)
       Get::PassArrangements materialize.public.t
@@ -147,6 +147,10 @@ query T multiline
 EXPLAIN PHYSICAL PLAN AS TEXT FOR SELECT a, array_agg(b), max(c) FROM t WHERE c <> 'x' GROUP BY a;
 ----
 Explained Query:
+  With
+    cte l0 =
+      Get::Collection materialize.public.t
+        raw=true
   Return
     Join::Linear
       linear_stage[0]
@@ -168,22 +172,18 @@ Explained Query:
           project=(#0, #2)
           raw=true
       Reduce::Basic
-        aggr=(0, array_agg[order_by=[]](row(array[#1])))
+        aggr=(0, array_agg[order_by=[]](row(array[#1{b}])))
         val_plan
           project=(#2)
-          map=(row(array[#1]))
+          map=(row(array[#1{b}]))
         key_plan
           project=(#0)
         Get::Collection l0
           project=(#0, #1)
           raw=true
-  With
-    cte l0 =
-      Get::Collection materialize.public.t
-        raw=true
 
 Source materialize.public.t
-  filter=((#2 != "x"))
+  filter=((#2{c} != "x"))
 
 Target cluster: quickstart
 
@@ -193,6 +193,10 @@ query T multiline
 EXPLAIN PHYSICAL PLAN AS TEXT FOR SELECT a, array_agg(b), max(b) FROM t GROUP BY a HAVING count(a) > 1;
 ----
 Explained Query:
+  With
+    cte l0 =
+      Get::Collection materialize.public.t
+        raw=true
   Return
     Join::Delta
       plan_path[0]
@@ -204,7 +208,7 @@ Explained Query:
         delta_stage[0]
           closure
             project=(#0, #1)
-            filter=((#2 > 1))
+            filter=((#2{"?column?"} > 1))
           lookup={ relation=1, key=[#0] }
           stream={ key=[#0], thinning=(#1) }
         source={ relation=0, key=[#0] }
@@ -221,7 +225,7 @@ Explained Query:
           stream={ key=[#0], thinning=() }
         initial_closure
           project=(#0)
-          filter=((#1 > 1))
+          filter=((#1{"?column?"} > 1))
         source={ relation=1, key=[#0] }
       plan_path[2]
         delta_stage[1]
@@ -230,7 +234,7 @@ Explained Query:
         delta_stage[0]
           closure
             project=(#0, #1)
-            filter=((#2 > 1))
+            filter=((#2{"?column?"} > 1))
           lookup={ relation=1, key=[#0] }
           stream={ key=[#0], thinning=(#1) }
         source={ relation=2, key=[#0] }
@@ -255,18 +259,14 @@ Explained Query:
           project=(#0)
           raw=true
       Reduce::Basic
-        aggr=(0, array_agg[order_by=[]](row(array[#1])))
+        aggr=(0, array_agg[order_by=[]](row(array[#1{b}])))
         val_plan
           project=(#2)
-          map=(row(array[#1]))
+          map=(row(array[#1{b}]))
         key_plan
           project=(#0)
         Get::PassArrangements l0
           raw=true
-  With
-    cte l0 =
-      Get::Collection materialize.public.t
-        raw=true
 
 Source materialize.public.t
   project=(#0, #1)
@@ -302,6 +302,10 @@ query T multiline
 EXPLAIN PHYSICAL PLAN AS TEXT FOR SELECT a, array_agg(b ORDER BY b ASC), array_agg(b ORDER BY b DESC) FROM t GROUP BY a;
 ----
 Explained Query:
+  With
+    cte l0 =
+      Get::Collection materialize.public.t
+        raw=true
   Return
     Join::Linear
       linear_stage[0]
@@ -309,27 +313,23 @@ Explained Query:
         stream={ key=[#0], thinning=(#1) }
       source={ relation=0, key=[#0] }
       Reduce::Basic
-        aggr=(0, array_agg[order_by=[#0 asc nulls_last]](row(array[#1], #1)))
+        aggr=(0, array_agg[order_by=[#0 asc nulls_last]](row(array[#1{b}], #1{b})))
         val_plan
           project=(#2)
-          map=(row(array[#1], #1))
+          map=(row(array[#1{b}], #1{b}))
         key_plan
           project=(#0)
         Get::PassArrangements l0
           raw=true
       Reduce::Basic
-        aggr=(0, array_agg[order_by=[#0 desc nulls_first]](row(array[#1], #1)))
+        aggr=(0, array_agg[order_by=[#0 desc nulls_first]](row(array[#1{b}], #1{b})))
         val_plan
           project=(#2)
-          map=(row(array[#1], #1))
+          map=(row(array[#1{b}], #1{b}))
         key_plan
           project=(#0)
         Get::PassArrangements l0
           raw=true
-  With
-    cte l0 =
-      Get::Collection materialize.public.t
-        raw=true
 
 Source materialize.public.t
   project=(#0, #1)
@@ -342,25 +342,10 @@ query T multiline
 EXPLAIN PHYSICAL PLAN AS TEXT FOR SELECT array_agg(b ORDER BY b ASC), array_agg(b ORDER BY b DESC), bool_or(b IS NOT NULL) FROM t;
 ----
 Explained Query:
-  Return
-    Mfp
-      project=(#0, #1, #3)
-      map=((#2 > 0))
-      Union
-        Get::Collection l1
-          project=(#1, #2, #0)
-          raw=true
-        Mfp
-          project=(#0..=#2)
-          map=(null, null, null)
-          Union consolidate_output=true
-            Negate
-              Get::Collection l1
-                project=()
-                raw=true
-            Constant
-              - ()
   With
+    cte l0 =
+      Get::Collection materialize.public.t
+        raw=true
     cte l1 =
       Join::Delta
         plan_path[0]
@@ -403,26 +388,41 @@ Explained Query:
             project=()
             raw=true
         Reduce::Basic
-          aggr=(0, array_agg[order_by=[#0 asc nulls_last]](row(array[#0], #0)))
+          aggr=(0, array_agg[order_by=[#0 asc nulls_last]](row(array[#0{b}], #0{b})))
           val_plan
             project=(#1)
-            map=(row(array[#0], #0))
+            map=(row(array[#0{b}], #0{b}))
           key_plan
             project=()
           Get::PassArrangements l0
             raw=true
         Reduce::Basic
-          aggr=(0, array_agg[order_by=[#0 desc nulls_first]](row(array[#0], #0)))
+          aggr=(0, array_agg[order_by=[#0 desc nulls_first]](row(array[#0{b}], #0{b})))
           val_plan
             project=(#1)
-            map=(row(array[#0], #0))
+            map=(row(array[#0{b}], #0{b}))
           key_plan
             project=()
           Get::PassArrangements l0
             raw=true
-    cte l0 =
-      Get::Collection materialize.public.t
-        raw=true
+  Return
+    Mfp
+      project=(#0, #1, #3)
+      map=((#2{"?column?"} > 0))
+      Union
+        Get::Collection l1
+          project=(#1, #2, #0)
+          raw=true
+        Mfp
+          project=(#0..=#2)
+          map=(null, null, null)
+          Union consolidate_output=true
+            Negate
+              Get::Collection l1
+                project=()
+                raw=true
+            Constant
+              - ()
 
 Source materialize.public.t
   project=(#1)
@@ -435,45 +435,45 @@ query T multiline
 EXPLAIN PHYSICAL PLAN AS TEXT FOR SELECT t1.a, array_agg(t1.c), array_agg(t2.c) FROM t t1 INNER JOIN t t2 ON t1.c = t2.c WHERE t1.c IS NOT NULL GROUP BY t1.a;
 ----
 Explained Query:
+  With
+    cte l0 =
+      Get::Collection materialize.public.t
+        raw=true
   Return
     Mfp
       project=(#0, #1, #1)
       input_key=#0
       Reduce::Basic
-        aggr=(0, array_agg[order_by=[]](row(array[#1])))
+        aggr=(0, array_agg[order_by=[]](row(array[#1{c}])))
         val_plan
           project=(#2)
-          map=(row(array[#1]))
+          map=(row(array[#1{c}]))
         key_plan
           project=(#0)
         Join::Linear
           linear_stage[0]
             closure
               project=(#1, #0)
-            lookup={ relation=1, key=[#0] }
-            stream={ key=[#1], thinning=(#0) }
-          source={ relation=0, key=[#1] }
+            lookup={ relation=1, key=[#0{c}] }
+            stream={ key=[#1{c}], thinning=(#0) }
+          source={ relation=0, key=[#1{c}] }
           ArrangeBy
             raw=true
-            arrangements[0]={ key=[#1], permutation={#0: #1, #1: #0}, thinning=(#0) }
+            arrangements[0]={ key=[#1{c}], permutation={#0: #1, #1: #0}, thinning=(#0) }
             types=[integer, text]
-            Get::Collection l0
-              project=(#0, #2)
+            Get::PassArrangements l0
               raw=true
           ArrangeBy
             raw=true
-            arrangements[0]={ key=[#0], permutation=id, thinning=() }
+            arrangements[0]={ key=[#0{c}], permutation=id, thinning=() }
             types=[text]
             Get::Collection l0
-              project=(#2)
+              project=(#1)
               raw=true
-  With
-    cte l0 =
-      Get::Collection materialize.public.t
-        raw=true
 
 Source materialize.public.t
-  filter=((#2) IS NOT NULL)
+  project=(#0, #2)
+  filter=((#2{c}) IS NOT NULL)
 
 Target cluster: quickstart
 
@@ -483,23 +483,11 @@ query T multiline
 EXPLAIN PHYSICAL PLAN AS TEXT FOR SELECT sum(a), jsonb_agg(b), array_agg(b), array_agg(b) FROM t;
 ----
 Explained Query:
-  Return
-    Mfp
-      project=(#0..=#2, #2)
-      Union
-        Get::PassArrangements l1
-          raw=true
-        Mfp
-          project=(#0..=#2)
-          map=(null, null, null)
-          Union consolidate_output=true
-            Negate
-              Get::Collection l1
-                project=()
-                raw=true
-            Constant
-              - ()
   With
+    cte l0 =
+      Get::Collection materialize.public.t
+        project=(#1)
+        raw=true
     cte l1 =
       Join::Delta
         plan_path[0]
@@ -533,7 +521,7 @@ Explained Query:
             stream={ key=[], thinning=(#0) }
           source={ relation=2, key=[] }
         Reduce::Accumulable
-          simple_aggrs[0]=(0, 0, sum(#0))
+          simple_aggrs[0]=(0, 0, sum(#0{a}))
           val_plan=id
           key_plan
             project=()
@@ -541,27 +529,39 @@ Explained Query:
             project=(#0)
             raw=true
         Reduce::Basic
-          aggr=(0, jsonb_agg[order_by=[]](row(jsonbable_to_jsonb(#0))))
+          aggr=(0, jsonb_agg[order_by=[]](row(jsonbable_to_jsonb(#0{b}))))
           val_plan
             project=(#1)
-            map=(row(jsonbable_to_jsonb(#0)))
+            map=(row(jsonbable_to_jsonb(#0{b})))
           key_plan
             project=()
           Get::PassArrangements l0
             raw=true
         Reduce::Basic
-          aggr=(0, array_agg[order_by=[]](row(array[#0])))
+          aggr=(0, array_agg[order_by=[]](row(array[#0{b}])))
           val_plan
             project=(#1)
-            map=(row(array[#0]))
+            map=(row(array[#0{b}]))
           key_plan
             project=()
           Get::PassArrangements l0
             raw=true
-    cte l0 =
-      Get::Collection materialize.public.t
-        project=(#1)
-        raw=true
+  Return
+    Mfp
+      project=(#0..=#2, #2)
+      Union
+        Get::PassArrangements l1
+          raw=true
+        Mfp
+          project=(#0..=#2)
+          map=(null, null, null)
+          Union consolidate_output=true
+            Negate
+              Get::Collection l1
+                project=()
+                raw=true
+            Constant
+              - ()
 
 Source materialize.public.t
   project=(#0, #1)
@@ -574,46 +574,37 @@ query T multiline
 EXPLAIN PHYSICAL PLAN AS TEXT FOR SELECT a, array_agg(b ORDER BY b) FROM t GROUP BY a HAVING array_agg(b ORDER BY b) = array_agg(b ORDER BY b DESC);
 ----
 Explained Query:
-  Return
-    Join::Linear
-      linear_stage[0]
-        lookup={ relation=1, key=[#0, #1] }
-        stream={ key=[#0, #1], thinning=() }
-      source={ relation=0, key=[#0, #1] }
-      ArrangeBy
-        input_key=[#0]
-        raw=false
-        arrangements[0]={ key=[#0], permutation=id, thinning=(#1) }
-        arrangements[1]={ key=[#0, #1], permutation=id, thinning=() }
-        types=[integer, text[]]
-        Reduce::Basic
-          aggr=(0, array_agg[order_by=[#0 asc nulls_last]](row(array[#1], #1)))
-          val_plan
-            project=(#2)
-            map=(row(array[#1], #1))
-          key_plan
-            project=(#0)
-          Get::PassArrangements l0
-            raw=true
-      ArrangeBy
-        input_key=[#0]
-        raw=false
-        arrangements[0]={ key=[#0], permutation=id, thinning=(#1) }
-        arrangements[1]={ key=[#0, #1], permutation=id, thinning=() }
-        types=[integer, text[]]
-        Reduce::Basic
-          aggr=(0, array_agg[order_by=[#0 desc nulls_first]](row(array[#1], #1)))
-          val_plan
-            project=(#2)
-            map=(row(array[#1], #1))
-          key_plan
-            project=(#0)
-          Get::PassArrangements l0
-            raw=true
   With
     cte l0 =
       Get::Collection materialize.public.t
         raw=true
+  Return
+    Join::Linear
+      linear_stage[0]
+        closure
+          project=(#0, #1)
+          ready_equivalences=#2{"?column?"} = #1{"?column?"}
+        lookup={ relation=1, key=[#0] }
+        stream={ key=[#0], thinning=(#1) }
+      source={ relation=0, key=[#0] }
+      Reduce::Basic
+        aggr=(0, array_agg[order_by=[#0 asc nulls_last]](row(array[#1{b}], #1{b})))
+        val_plan
+          project=(#2)
+          map=(row(array[#1{b}], #1{b}))
+        key_plan
+          project=(#0)
+        Get::PassArrangements l0
+          raw=true
+      Reduce::Basic
+        aggr=(0, array_agg[order_by=[#0 desc nulls_first]](row(array[#1{b}], #1{b})))
+        val_plan
+          project=(#2)
+          map=(row(array[#1{b}], #1{b}))
+        key_plan
+          project=(#0)
+        Get::PassArrangements l0
+          raw=true
 
 Source materialize.public.t
   project=(#0, #1)
@@ -627,6 +618,10 @@ EXPLAIN PHYSICAL PLAN AS TEXT FOR SELECT a, array_agg(b), array_agg(sha256(b::BY
 
 ----
 Explained Query:
+  With
+    cte l0 =
+      Get::Collection materialize.public.t
+        raw=true
   Return
     Join::Linear
       linear_stage[0]
@@ -636,27 +631,23 @@ Explained Query:
         stream={ key=[#0], thinning=(#1) }
       source={ relation=0, key=[#0] }
       Reduce::Basic
-        aggr=(0, array_agg[order_by=[]](row(array[digest(text_to_bytea(#1), "sha256")])))
+        aggr=(0, array_agg[order_by=[]](row(array[digest(text_to_bytea(#1{b}), "sha256")])))
         val_plan
           project=(#2)
-          map=(row(array[digest(text_to_bytea(#1), "sha256")]))
+          map=(row(array[digest(text_to_bytea(#1{b}), "sha256")]))
         key_plan
           project=(#0)
         Get::PassArrangements l0
           raw=true
       Reduce::Basic
-        aggr=(0, array_agg[order_by=[]](row(array[#1])))
+        aggr=(0, array_agg[order_by=[]](row(array[#1{b}])))
         val_plan
           project=(#2)
-          map=(row(array[#1]))
+          map=(row(array[#1{b}]))
         key_plan
           project=(#0)
         Get::PassArrangements l0
           raw=true
-  With
-    cte l0 =
-      Get::Collection materialize.public.t
-        raw=true
 
 Source materialize.public.t
   project=(#0, #1)
@@ -670,6 +661,10 @@ query T multiline
 EXPLAIN PHYSICAL PLAN AS TEXT FOR SELECT a, array_agg(b), array_agg(CASE WHEN a = 1 THEN 'ooo' ELSE b END) FROM t GROUP BY a;
 ----
 Explained Query:
+  With
+    cte l0 =
+      Get::Collection materialize.public.t
+        raw=true
   Return
     Join::Linear
       linear_stage[0]
@@ -677,27 +672,23 @@ Explained Query:
         stream={ key=[#0], thinning=(#1) }
       source={ relation=0, key=[#0] }
       Reduce::Basic
-        aggr=(0, array_agg[order_by=[]](row(array[#1])))
+        aggr=(0, array_agg[order_by=[]](row(array[#1{b}])))
         val_plan
           project=(#2)
-          map=(row(array[#1]))
+          map=(row(array[#1{b}]))
         key_plan
           project=(#0)
         Get::PassArrangements l0
           raw=true
       Reduce::Basic
-        aggr=(0, array_agg[order_by=[]](row(array[case when (#0 = 1) then "ooo" else #1 end])))
+        aggr=(0, array_agg[order_by=[]](row(array[case when (#0{a} = 1) then "ooo" else #1{b} end])))
         val_plan
           project=(#2)
-          map=(row(array[case when (#0 = 1) then "ooo" else #1 end]))
+          map=(row(array[case when (#0{a} = 1) then "ooo" else #1{b} end]))
         key_plan
           project=(#0)
         Get::PassArrangements l0
           raw=true
-  With
-    cte l0 =
-      Get::Collection materialize.public.t
-        raw=true
 
 Source materialize.public.t
   project=(#0, #1)
@@ -715,18 +706,18 @@ Explained Query:
     map=(record_get[1](#0), record_get[0](#1), record_get[1](#1), record_get[0](#0))
     input_key=
     Reduce::Basic
-      aggr=(0, dense_rank[order_by=[#0 asc nulls_last]](row(list[row(#0, #1)], #0)), fused_unnest_list=true)
+      aggr=(0, dense_rank[order_by=[#0 asc nulls_last]](row(list[row(#0, #1)], #0{a})), fused_unnest_list=true)
       val_plan
         project=(#2)
-        map=(row(list[row(#0, #1)], #0))
+        map=(row(list[row(#0, #1)], #0{a}))
       key_plan
         project=()
       input_key=#0
       Reduce::Basic
-        aggr=(0, array_agg[order_by=[]](row(array[#1])))
+        aggr=(0, array_agg[order_by=[]](row(array[#1{b}])))
         val_plan
           project=(#2)
-          map=(row(array[#1]))
+          map=(row(array[#1{b}]))
         key_plan
           project=(#0)
         Get::Collection materialize.public.t

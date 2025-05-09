@@ -14,10 +14,7 @@ use std::fmt::Debug;
 use std::sync::Arc;
 
 use mz_compute_types::dataflows::{BuildDesc, DataflowDescription};
-use mz_expr::{
-    AccessStrategy, AggregateExpr, AggregateFunc, Id, MirRelationExpr, OptimizedMirRelationExpr,
-    RowSetFinishing,
-};
+use mz_expr::{AccessStrategy, Id, MirRelationExpr, OptimizedMirRelationExpr, RowSetFinishing};
 use mz_ore::num::NonNeg;
 use mz_repr::explain::ExprHumanizer;
 use mz_repr::{GlobalId, Timestamp};
@@ -29,12 +26,12 @@ use mz_sql::session::metadata::SessionMetadata;
 use mz_transform::EmptyStatisticsOracle;
 use serde::Serialize;
 
+use crate::TimestampContext;
 use crate::catalog::Catalog;
 use crate::coord::peek::{FastPathPlan, PeekPlan};
 use crate::optimize::dataflows::ComputeInstanceSnapshot;
 use crate::optimize::{self, Optimize, OptimizerConfig, OptimizerError};
 use crate::session::SessionMeta;
-use crate::TimestampContext;
 
 /// Information needed to compute PlanInsights.
 #[derive(Debug)]
@@ -216,7 +213,7 @@ fn fast_path_insights(humanizer: &dyn ExprHumanizer, plan: FastPathPlan) -> Plan
         FastPathPlan::PeekExisting(_, id, _, _) => {
             add_import_insights(&mut insights, humanizer, id, ImportType::Compute)
         }
-        FastPathPlan::PeekPersist(id, _) => {
+        FastPathPlan::PeekPersist(id, _, _) => {
             add_import_insights(&mut insights, humanizer, id, ImportType::Storage)
         }
     }
@@ -266,15 +263,7 @@ fn global_insights(
             let [aggregate] = aggregates.as_slice() else {
                 return;
             };
-            let AggregateExpr {
-                func: AggregateFunc::Count,
-                distinct: false,
-                expr,
-            } = aggregate
-            else {
-                return;
-            };
-            if !expr.is_literal_true() {
+            if !aggregate.is_count_asterisk() {
                 return;
             }
             let name = structured_name(humanizer, *id);

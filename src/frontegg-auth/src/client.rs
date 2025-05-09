@@ -9,8 +9,8 @@
 
 use std::time::Duration;
 
-use reqwest_retry::policies::ExponentialBackoff;
 use reqwest_retry::RetryTransientMiddleware;
+use reqwest_retry::policies::ExponentialBackoff;
 
 pub mod tokens;
 

@@ -50,8 +50,8 @@ use mz_ore::soft_assert_eq_or_log;
 use mz_ore::task::AbortOnDropHandle;
 use mz_repr::GlobalId;
 use mz_service::client::GenericClient;
-use timely::progress::Antichain;
 use timely::PartialOrder;
+use timely::progress::Antichain;
 use tokio::sync::mpsc;
 use tracing::debug;
 

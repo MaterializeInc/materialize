@@ -15,8 +15,8 @@ use mz_repr::RelationDesc;
 
 use crate::ast::Ident;
 use crate::normalize;
-use crate::plan::query::SelectOptionExtracted;
 use crate::plan::PlanError;
+use crate::plan::query::SelectOptionExtracted;
 
 /// Renames the columns in `desc` with the names in `column_names` if
 /// `column_names` is non-empty.

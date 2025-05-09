@@ -12,19 +12,21 @@ workspace = true
 [dependencies]
 ahash = { version = "0.8.11", default-features = false }
 bincode = "1.3.3"
+bytemuck = "1.22.0"
+columnar = "0.4.1"
 columnation = "0.1.0"
-differential-dataflow = "0.13.3"
+differential-dataflow = "0.14.2"
 either = "1"
-futures-util = "0.3.25"
-lgalloc = "0.4"
-mz-ore = { path = "../ore", features = ["async", "process", "tracing_", "test"] }
+futures-util = "0.3.31"
+lgalloc = "0.5"
+mz-ore = { path = "../ore", features = ["async", "process", "tracing", "test", "num-traits", "region", "differential-dataflow"] }
 num-traits = "0.2"
 proptest = { version = "1.6.0", default-features = false, features = ["std"] }
-serde = { version = "1.0.152", features = ["derive"] }
-timely = "0.16.0"
-tokio = { version = "1.38.0", features = ["macros", "rt-multi-thread", "time"] }
+serde = { version = "1.0.219", features = ["derive"] }
+timely = "0.20.0"
+tokio = { version = "1.44.1", features = ["macros", "rt-multi-thread", "time"] }
 tracing = "0.1.37"
-uuid = { version = "1.7.0", features = ["serde", "v4"] }
+uuid = { version = "1.16.0", features = ["serde", "v4"] }
 workspace-hack = { version = "0.0.0", path = "../workspace-hack", optional = true }
 
 [features]

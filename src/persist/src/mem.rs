@@ -18,7 +18,7 @@ use std::task::{Context, Poll};
 use anyhow::anyhow;
 use async_trait::async_trait;
 use bytes::Bytes;
-use futures_util::{stream, StreamExt};
+use futures_util::{StreamExt, stream};
 use mz_ore::bytes::SegmentedBytes;
 use mz_ore::cast::CastFrom;
 
@@ -294,9 +294,11 @@ impl Consensus for MemConsensus {
         let () = yield_now().await;
         if let Some(expected) = expected {
             if new.seqno <= expected {
-                return Err(ExternalError::from(
-                        anyhow!("new seqno must be strictly greater than expected. Got new: {:?} expected: {:?}",
-                                 new.seqno, expected)));
+                return Err(ExternalError::from(anyhow!(
+                    "new seqno must be strictly greater than expected. Got new: {:?} expected: {:?}",
+                    new.seqno,
+                    expected
+                )));
             }
         }
 

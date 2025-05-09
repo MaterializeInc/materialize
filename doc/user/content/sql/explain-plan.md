@@ -1,6 +1,6 @@
 ---
 title: "EXPLAIN PLAN"
-description: "`EXPLAIN PLAN` is used to inspect the plans of `SELECT` statements, indexes, and materialized views."
+description: "Reference page for `EXPLAIN PLAN`. `EXPLAIN PLAN` is used to inspect the plans of `SELECT` statements, indexes, and materialized views."
 aliases:
   - /sql/explain/
 menu:
@@ -8,7 +8,11 @@ menu:
     parent: commands
 ---
 
-`EXPLAIN PLAN` displays the plans used for `SELECT` statements, indexes, and materialized views.
+`EXPLAIN PLAN` displays the plans used for:
+
+|                             |                       |
+|-----------------------------|-----------------------|
+| <ul><li>`SELECT` statements </li><li>`CREATE VIEW` statements</li><li>`CREATE INDEX` statements</li><li>`CREATE MATERIALIZED VIEW` statements</li></ul>|<ul><li>Existing views</li><li>Existing indexes</li><li>Existing materialized views</li></ul> |
 
 {{< warning >}}
 `EXPLAIN` is not part of Materialize's stable interface and is not subject to
@@ -18,7 +22,79 @@ change arbitrarily in future versions of Materialize.
 
 ## Syntax
 
-{{< diagram "explain-plan.svg" >}}
+{{< tabs >}}
+{{< tab "FOR SELECT">}}
+```mzsql
+EXPLAIN [ [ RAW | DECORRELATED | [LOCALLY] OPTIMIZED | PHYSICAL ] PLAN
+    [ WITH (<output_modifier> [, <output_modifier> ...])]
+    [ AS TEXT | AS JSON ]
+FOR ]       -- The FOR keyword is required if the PLAN keyword is specified
+    <SELECT ...>
+;
+```
+{{</tab>}}
+{{< tab "FOR CREATE VIEW">}}
+
+```mzsql
+EXPLAIN <RAW | DECORRELATED | LOCALLY OPTIMIZED> PLAN
+    [ WITH (<output_modifier> [, <output_modifier> ...]) ]
+    [ AS TEXT | AS JSON ]
+FOR
+    <CREATE VIEW ...>
+;
+```
+{{</tab>}}
+{{< tab "FOR CREATE INDEX">}}
+```mzsql
+EXPLAIN [ [ OPTIMIZED | PHYSICAL ] PLAN
+    [ WITH (<output_modifier> [, <output_modifier> ...]) ]
+    [ AS TEXT | AS JSON ]
+FOR ]  -- The FOR keyword is required if the PLAN keyword is specified
+    <CREATE INDEX ...>
+;
+```
+{{</tab>}}
+{{< tab "FOR CREATE MATERIALIZED VIEW">}}
+```mzsql
+EXPLAIN [ [ RAW | DECORRELATED | [LOCALLY] OPTIMIZED | PHYSICAL ] PLAN
+    [ WITH (<output_modifier> [, <output_modifier> ...])]
+    [ AS TEXT | AS JSON ]
+FOR ]          -- The FOR keyword is required if the PLAN keyword is specified
+    <CREATE MATERIALIZED VIEW ...>
+;
+```
+{{</tab>}}
+{{< tab "FOR VIEW">}}
+```mzsql
+EXPLAIN <RAW | LOCALLY OPTIMIZED> PLAN
+    [ WITH (<output_modifier> [, <output_modifier> ...])]
+    [ AS TEXT | AS JSON ]
+FOR
+  VIEW <name>
+;
+```
+{{</tab>}}
+{{< tab "FOR INDEX">}}
+```mzsql
+EXPLAIN [ [ OPTIMIZED | PHYSICAL ] PLAN
+      [ WITH (<output_modifier> [, <output_modifier> ...]) ]
+      [ AS TEXT | AS JSON ]
+FOR ]  -- The FOR keyword is required if the PLAN keyword is specified
+  INDEX <name>
+;
+```
+{{</tab>}}
+{{< tab "FOR MATERIALIZED VIEW">}}
+```mzsql
+EXPLAIN [[ RAW | [LOCALLY] OPTIMIZED | PHYSICAL ] PLAN
+    [ WITH (<output_modifier> [, <output_modifier> ...]) ]
+    [ AS TEXT | AS JSON ]
+FOR ] -- The FOR keyword is required if the PLAN keyword is specified
+  MATERIALIZED VIEW <name>
+;
+```
+{{</tab>}}
+{{</tabs>}}
 
 Note that the `FOR` keyword is required if the `PLAN` keyword is present. In other words, the following three statements are equivalent:
 
@@ -30,7 +106,7 @@ EXPLAIN OPTIMIZED PLAN FOR <explainee>;
 
 ### Explained object
 
-The following three objects can be explained.
+The following object types can be explained.
 
 Explained object | Description
 ------|-----
@@ -59,11 +135,11 @@ This stage determines the query optimization stage at which the plan snapshot wi
 
 Plan Stage | Description
 ------|-----
-**RAW PLAN** | Display the raw plan.
-**DECORRELATED PLAN** | Display the decorrelated plan.
+**RAW PLAN** | Display the raw plan; this is closest to the original SQL.
+**DECORRELATED PLAN** | Display the decorrelated but not-yet-optimized plan.
 **LOCALLY OPTIMIZED** | Display the locally optimized plan (before view inlining and access path selection). This is the final stage for regular `CREATE VIEW` optimization.
 **OPTIMIZED PLAN** | _(Default)_ Display the optimized plan.
-**PHYSICAL PLAN** | Display the physical plan.
+**PHYSICAL PLAN** | Display the physical plan; this is close but not identical to the operators shown in [`mz_introspection.mz_lir_mapping`](../../sql/system-catalog/mz_introspection/#mz_lir_mapping).
 
 ### Output modifiers
 
@@ -72,16 +148,16 @@ the information and rendering style of the generated explanation output.
 
 Modifier | Description
 ------|-----
-**arity** | Annotate each subplan with its number of produced columns. This is useful due to the use of offset-based column names.
+**arity** | _(on by default)_ Annotate each subplan with its number of produced columns. This is useful due to the use of offset-based column names.
 **cardinality** | Annotate each subplan with a symbolic estimate of its cardinality.
 **join implementations** | Render details about the [implementation strategy of optimized MIR `Join` nodes](#explain-with-join-implementations).
-**keys** | Annotate each subplan with its unique keys.
+**keys** | Annotates each subplan with a parenthesized list of unique keys. Each unique key is presented as a bracketed list of column identifiers. A list of column identifiers is reported as a unique key when for each setting of those columns to values there is at most one record in the collection. For example, `([0], [1,2])` is a list of two unique keys: column zero is a unique key, and columns 1 and 2 also form a unique key. Materialize only reports the most succinct form of keys, so for example while `[0]` and `[0, 1]` might both be unique keys, the latter is implied by the former and omitted. `()` indicates that the collection does not have any unique keys, while `([])` indicates that the empty projection is a unique key, meaning that the collection consists of 0 or 1 rows.
 **node identifiers** | Annotate each subplan in a `PHYSICAL PLAN` with its node ID.
 **redacted** | Anonymize literals in the output.
 **timing** | Annotate the output with the optimization time.
 **types** | Annotate each subplan with its inferred type.
-**humanized expressions** | Render `EXPLAIN AS TEXT` output with human-readable column references in operator expressions. **Warning**: SQL-level aliasing is not considered when inferring column names, so the plan output might become ambiguous if you use this modifier.
-**filter pushdown** | **Private preview** For each source, include a `pushdown` field that explains which filters [can be pushed down](../../transform-data/patterns/temporal-filters/#temporal-filter-pushdown).
+**humanized expressions** | _(on by default)_ Add human-readable column names to column references. For example, `#0{id}` refers to column 0, whose name is `id`. Note that SQL-level aliasing is not considered when inferring column names, which means that the displayed column names can be ambiguous.
+**filter pushdown** | _(on by default)_ For each source, include a `pushdown` field that explains which filters [can be pushed down to the storage layer](../../transform-data/patterns/temporal-filters/#temporal-filter-pushdown).
 
 Note that most modifiers are currently only supported for the `AS TEXT` output.
 
@@ -132,8 +208,8 @@ In this stage, the planner performs various optimizing rewrites:
 
 In this stage, the planner:
 
-- Maps plan operators to differential dataflow operators.
-- Locates existing arrangements which can be reused.
+- Decides on the exact execution details of each operator, and maps plan operators to differential dataflow operators.
+- Makes the final choices about creating or reusing [arrangements](/get-started/arrangements/#arrangements).
 
 #### From physical plan to dataflow
 
@@ -142,7 +218,7 @@ In the final stage, the planner:
 - Renders an actual dataflow from the physical plan, and
 - Installs the new dataflow into the running system.
 
-No smart logic runs as part of the rendering step, as the physical plan is meant to
+The rendering step does not make any further optimization choices, as the physical plan is meant to
 be a definitive and complete description of the rendered dataflow.
 
 ### Fast path queries
@@ -156,8 +232,11 @@ indicated by an "Explained Query (fast path):" heading before the explained quer
 
 ```text
 Explained Query (fast path):
-  Finish order_by=[#1 asc nulls_last, #0 desc nulls_first] limit=5 output=[#0, #1]
-    ReadExistingIndex materialize.public.t_a_idx
+  Project (#0, #1)
+    ReadIndex on=materialize.public.t1 t1_x_idx=[lookup value=(5)]
+
+Used Indexes:
+  - materialize.public.t1_x_idx (lookup)
 ```
 
 
@@ -181,6 +260,8 @@ Return
     Get l0
     Get l0
 ```
+
+Note that CTEs in optimized plans do not directly correspond to CTEs in your original SQL query: For example, CTEs might disappear due to inlining (i.e., when a CTE is used only once, its definition is copied to that usage site); new CTEs can appear due to the optimizer recognizing that a part of the query appears more than once (aka common subexpression elimination). Also, certain SQL-level concepts, such as outer joins or subqueries, do not have an explicit representation in optimized plans, and are instead expressed as a pattern of operators involving CTEs. CTE names are always `l0`, `l1`, `l2`, ..., and do not correspond to SQL-level CTE names.
 
 <a name="explain-plan-columns"></a>
 
@@ -224,7 +305,7 @@ is **n**ull,
 **i**nequality to a literal,
 any **f**ilter.
 
-A plan can optionally end with a finishing action which can sort, limit and
+A plan can optionally end with a finishing action, which can sort, limit and
 project the result data. This operator is special, as it can only occur at the
 top of the plan. Finishing actions are executed outside the parallel dataflow
 that implements the rest of the plan.
@@ -240,9 +321,27 @@ Below the plan, a "Used indexes" section indicates which indexes will be used by
 
 ### Reference: Plan operators
 
+Materialize offers several output formats for `EXPLAIN` and debugging.
+LIR plans as rendered in
+[`mz_introspection.mz_lir_mapping`](../../sql/system-catalog/mz_introspection/#mz_lir_mapping)
+are deliberately succinct, while the plans in other formats give more
+detail.
+
+The decorrelated and optimized plans from `EXPLAIN DECORRELATED PLAN
+FOR ...`, `EXPLAIN LOCALLY OPTIMIZED PLAN FOR ...`, and `EXPLAIN
+OPTIMIZED PLAN FOR ...` are in a mid-level representation that is
+closer to LIR than SQL. The raw plans from `EXPLAIN RAW PLAN FOR ...`
+are closer to SQL (and therefore less indicative of how the query will
+actually run).
+
 {{< tabs >}}
-{{< tab "In decorrelated and optimized plans" >}}
+
+{{< tab "In decorrelated and optimized plans (default EXPLAIN)" >}}
 {{< explain-plans/operator-table data="explain_plan_operators" planType="optimized" >}}
+{{< /tab >}}
+
+{{< tab "In fully optimized physical (LIR) plans" >}}
+{{< explain-plans/operator-table data="explain_plan_operators" planType="LIR" >}}
 {{< /tab >}}
 
 {{< tab "In raw plans" >}}

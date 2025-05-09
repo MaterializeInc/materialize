@@ -43,14 +43,17 @@ flippers. Specifically, you will:
 
 ## Prerequisite
 
-A Materialize account. If you do not have an account, you can [sign up for a
-free
+To get started with Materialize Cloud, you will need a Materialize account. If
+you do not have an account, you can [sign up for a free
 trial](https://materialize.com/register/?utm_campaign=General&utm_source=documentation).
 
-Alternatively, you can [download the Materialize
-Emulator](/get-started/install-materialize-emulator/) to test locally. However,
-the Materialize Emulator does not provide the full experience of using
-Materialize.
+Alternatively:
+
+- You can [download the Materialize
+Emulator](/get-started/install-materialize-emulator/). However, the Materialize
+Emulator does not provide the full experience of using Materialize.
+
+- You can run against your [Self-managed Materialize](/self-managed/).
 
 ## Step 0. Open the SQL Shell
 
@@ -60,6 +63,9 @@ Materialize.
 
 - If you are using the Materialize Emulator, open the Materialize Console in
   your browser at [http://localhost:6874](http://localhost:6874).
+
+- If you are running against your own [Self-managed
+  Materialize](/self-managed/), open your deployment's Materialize Console.
 
 ## Step 1. Create a schema
 

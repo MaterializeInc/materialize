@@ -887,6 +887,7 @@ pub enum CreateConnectionType {
     Csr,
     Postgres,
     Ssh,
+    SqlServer,
     MySql,
     Yugabyte,
 }
@@ -911,6 +912,9 @@ impl AstDisplay for CreateConnectionType {
             }
             Self::Ssh => {
                 f.write_str("SSH TUNNEL");
+            }
+            Self::SqlServer => {
+                f.write_str("SQL SERVER");
             }
             Self::MySql => {
                 f.write_str("MYSQL");
@@ -1179,6 +1183,64 @@ pub struct MySqlConfigOption<T: AstInfo> {
 impl_display_for_with_option!(MySqlConfigOption);
 impl_display_t!(MySqlConfigOption);
 
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum SqlServerConfigOptionName {
+    /// Hex encoded string of binary serialization of
+    /// `mz_storage_types::sources::sql_server::SqlServerSourceDetails`.
+    Details,
+    /// Columns whose types you want to unconditionally format as text.
+    ///
+    /// NOTE(roshan): This value is kept around to allow round-tripping a
+    /// `CREATE SOURCE` statement while we still allow creating implicit
+    /// subsources from `CREATE SOURCE`, but will be removed once
+    /// fully deprecating that feature and forcing users to use explicit
+    /// `CREATE TABLE .. FROM SOURCE` statements
+    TextColumns,
+    /// Columns you want to exclude.
+    ///
+    /// NOTE(roshan): This value is kept around to allow round-tripping a
+    /// `CREATE SOURCE` statement while we still allow creating implicit
+    /// subsources from `CREATE SOURCE`, but will be removed once
+    /// fully deprecating that feature and forcing users to use explicit
+    /// `CREATE TABLE .. FROM SOURCE` statements
+    ExcludeColumns,
+}
+
+impl AstDisplay for SqlServerConfigOptionName {
+    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
+        f.write_str(match self {
+            SqlServerConfigOptionName::Details => "DETAILS",
+            SqlServerConfigOptionName::TextColumns => "TEXT COLUMNS",
+            SqlServerConfigOptionName::ExcludeColumns => "EXCLUDE COLUMNS",
+        })
+    }
+}
+impl_display!(SqlServerConfigOptionName);
+
+impl WithOptionName for SqlServerConfigOptionName {
+    /// # WARNING
+    ///
+    /// Whenever implementing this trait consider very carefully whether or not
+    /// this value could contain sensitive user data. If you're uncertain, err
+    /// on the conservative side and return `true`.
+    fn redact_value(&self) -> bool {
+        match self {
+            SqlServerConfigOptionName::Details
+            | SqlServerConfigOptionName::TextColumns
+            | SqlServerConfigOptionName::ExcludeColumns => false,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+/// An option in a `{FROM|INTO} CONNECTION ...` statement.
+pub struct SqlServerConfigOption<T: AstInfo> {
+    pub name: SqlServerConfigOptionName,
+    pub value: Option<WithOptionValue<T>>,
+}
+impl_display_for_with_option!(SqlServerConfigOption);
+impl_display_t!(SqlServerConfigOption);
+
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum CreateSourceConnection<T: AstInfo> {
     Kafka {
@@ -1192,6 +1254,10 @@ pub enum CreateSourceConnection<T: AstInfo> {
     Yugabyte {
         connection: T::ItemName,
         options: Vec<PgConfigOption<T>>,
+    },
+    SqlServer {
+        connection: T::ItemName,
+        options: Vec<SqlServerConfigOption<T>>,
     },
     MySql {
         connection: T::ItemName,
@@ -1235,6 +1301,18 @@ impl<T: AstInfo> AstDisplay for CreateSourceConnection<T> {
                 options,
             } => {
                 f.write_str("YUGABYTE CONNECTION ");
+                f.write_node(connection);
+                if !options.is_empty() {
+                    f.write_str(" (");
+                    f.write_node(&display::comma_separated(options));
+                    f.write_str(")");
+                }
+            }
+            CreateSourceConnection::SqlServer {
+                connection,
+                options,
+            } => {
+                f.write_str("SQL SERVER CONNECTION ");
                 f.write_node(connection);
                 if !options.is_empty() {
                     f.write_str(" (");
@@ -1293,6 +1371,24 @@ impl AstDisplay for LoadGenerator {
     }
 }
 impl_display!(LoadGenerator);
+
+impl LoadGenerator {
+    /// Corresponds with the same mapping on the `LoadGenerator` enum defined in
+    /// src/storage-types/src/sources/load_generator.rs, but re-defined here for
+    /// cases where we only have the AST representation. This can be removed once
+    /// the `ast_rewrite_sources_to_tables` migration is removed.
+    pub fn schema_name(&self) -> &'static str {
+        match self {
+            LoadGenerator::Counter => "counter",
+            LoadGenerator::Clock => "clock",
+            LoadGenerator::Marketing => "marketing",
+            LoadGenerator::Auction => "auction",
+            LoadGenerator::Datums => "datums",
+            LoadGenerator::Tpch => "tpch",
+            LoadGenerator::KeyValue => "key_value",
+        }
+    }
+}
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum LoadGeneratorOptionName {

@@ -14,15 +14,15 @@ use std::sync::Arc;
 
 use mz_ore::metrics::DeleteOnDropGauge;
 use prometheus::core::AtomicU64;
-use serde::{de::DeserializeOwned, Serialize};
+use serde::{Serialize, de::DeserializeOwned};
 
+use super::UpsertKey;
 use super::memory::InMemoryHashMap;
 use super::rocksdb::RocksDB;
 use super::types::{
     GetStats, MergeStats, MergeValue, PutStats, PutValue, StateValue, UpsertStateBackend,
     UpsertValueAndSize,
 };
-use super::UpsertKey;
 
 pub enum BackendType<T, O> {
     InMemory(InMemoryHashMap<T, O>),
@@ -32,7 +32,7 @@ pub enum BackendType<T, O> {
 pub struct AutoSpillBackend<T, O, F> {
     backend_type: BackendType<T, O>,
     auto_spill_threshold_bytes: usize,
-    rocksdb_autospill_in_use: Arc<DeleteOnDropGauge<'static, AtomicU64, Vec<String>>>,
+    rocksdb_autospill_in_use: Arc<DeleteOnDropGauge<AtomicU64, Vec<String>>>,
     rocksdb_init_fn: Option<F>,
 }
 
@@ -45,7 +45,7 @@ where
     pub(crate) fn new(
         rocksdb_init_fn: F,
         auto_spill_threshold_bytes: usize,
-        rocksdb_autospill_in_use: Arc<DeleteOnDropGauge<'static, AtomicU64, Vec<String>>>,
+        rocksdb_autospill_in_use: Arc<DeleteOnDropGauge<AtomicU64, Vec<String>>>,
     ) -> Self {
         // Initializing the metric to 0, to reflect in memory hash map is being used
         rocksdb_autospill_in_use.set(0);

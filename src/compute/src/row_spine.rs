@@ -20,15 +20,14 @@ use differential_dataflow::trace::implementations::OffsetList;
 mod spines {
     use std::rc::Rc;
 
+    use differential_dataflow::containers::{Columnation, TimelyStack};
+    use differential_dataflow::trace::implementations::Layout;
+    use differential_dataflow::trace::implementations::Update;
     use differential_dataflow::trace::implementations::ord_neu::{OrdKeyBatch, OrdKeyBuilder};
     use differential_dataflow::trace::implementations::ord_neu::{OrdValBatch, OrdValBuilder};
     use differential_dataflow::trace::implementations::spine_fueled::Spine;
-    use differential_dataflow::trace::implementations::Layout;
-    use differential_dataflow::trace::implementations::Update;
     use differential_dataflow::trace::rc_blanket_impls::RcBuilder;
     use mz_repr::Row;
-    use mz_timely_util::containers::stack::StackWrapper;
-    use timely::container::columnation::{Columnation, TimelyStack};
 
     use crate::row_spine::{DatumContainer, OffsetOptimized};
     use crate::typedefs::{KeyBatcher, KeyValBatcher};
@@ -67,8 +66,8 @@ mod spines {
         type Target = U;
         type KeyContainer = DatumContainer;
         type ValContainer = DatumContainer;
-        type TimeContainer = StackWrapper<U::Time>;
-        type DiffContainer = StackWrapper<U::Diff>;
+        type TimeContainer = TimelyStack<U::Time>;
+        type DiffContainer = TimelyStack<U::Diff>;
         type OffsetContainer = OffsetOptimized;
     }
     impl<U: Update<Key = Row>> Layout for RowValLayout<U>
@@ -79,9 +78,9 @@ mod spines {
     {
         type Target = U;
         type KeyContainer = DatumContainer;
-        type ValContainer = StackWrapper<U::Val>;
-        type TimeContainer = StackWrapper<U::Time>;
-        type DiffContainer = StackWrapper<U::Diff>;
+        type ValContainer = TimelyStack<U::Val>;
+        type TimeContainer = TimelyStack<U::Time>;
+        type DiffContainer = TimelyStack<U::Diff>;
         type OffsetContainer = OffsetOptimized;
     }
     impl<U: Update<Key = Row, Val = ()>> Layout for RowLayout<U>
@@ -91,41 +90,39 @@ mod spines {
     {
         type Target = U;
         type KeyContainer = DatumContainer;
-        type ValContainer = StackWrapper<()>;
-        type TimeContainer = StackWrapper<U::Time>;
-        type DiffContainer = StackWrapper<U::Diff>;
+        type ValContainer = TimelyStack<()>;
+        type TimeContainer = TimelyStack<U::Time>;
+        type DiffContainer = TimelyStack<U::Diff>;
         type OffsetContainer = OffsetOptimized;
     }
 }
 
 /// A `Row`-specialized container using dictionary compression.
 mod container {
-    use differential_dataflow::trace::cursor::IntoOwned;
+
     use std::cmp::Ordering;
 
+    use differential_dataflow::IntoOwned;
     use differential_dataflow::trace::implementations::BatchContainer;
-    use mz_ore::region::Region;
-    use mz_repr::{read_datum, Datum, Row, RowPacker};
     use timely::container::PushInto;
 
-    /// A slice container with four bytes overhead per slice.
+    use mz_repr::{Datum, Row, RowPacker, read_datum};
+
+    use super::bytes_container::BytesContainer;
+
+    /// Container wrapping `BytesContainer` that traffics only in `Row`-formatted bytes.
+    ///
+    /// This type accepts only `Row`-formatted bytes in its `Push` implementation, and
+    /// in return provides a `DatumSeq` view of the bytes which can be decoded as `Datum`s.
     pub struct DatumContainer {
-        batches: Vec<DatumBatch>,
+        bytes: BytesContainer,
     }
 
     impl DatumContainer {
         /// Visit contained allocations to determine their size and capacity.
         #[inline]
-        pub fn heap_size(&self, mut callback: impl FnMut(usize, usize)) {
-            // Calculate heap size for local, stash, and stash entries
-            callback(
-                self.batches.len() * std::mem::size_of::<DatumBatch>(),
-                self.batches.capacity() * std::mem::size_of::<DatumBatch>(),
-            );
-            for batch in self.batches.iter() {
-                batch.offsets.heap_size(&mut callback);
-                callback(batch.storage.len(), batch.storage.capacity());
-            }
+        pub fn heap_size(&self, callback: impl FnMut(usize, usize)) {
+            self.bytes.heap_size(callback)
         }
     }
 
@@ -135,23 +132,13 @@ mod container {
 
         fn with_capacity(size: usize) -> Self {
             Self {
-                batches: vec![DatumBatch::with_capacities(size, size)],
+                bytes: BytesContainer::with_capacity(size),
             }
         }
 
         fn merge_capacity(cont1: &Self, cont2: &Self) -> Self {
-            let mut item_cap = 1;
-            let mut byte_cap = 0;
-            for batch in cont1.batches.iter() {
-                item_cap += batch.offsets.len() - 1;
-                byte_cap += batch.storage.len();
-            }
-            for batch in cont2.batches.iter() {
-                item_cap += batch.offsets.len() - 1;
-                byte_cap += batch.storage.len();
-            }
             Self {
-                batches: vec![DatumBatch::with_capacities(item_cap, byte_cap)],
+                bytes: BytesContainer::merge_capacity(&cont1.bytes, &cont2.bytes),
             }
         }
 
@@ -159,24 +146,14 @@ mod container {
             item
         }
 
-        fn index(&self, mut index: usize) -> Self::ReadItem<'_> {
-            for batch in self.batches.iter() {
-                if index < batch.len() {
-                    return DatumSeq {
-                        bytes: batch.index(index),
-                    };
-                }
-                index -= batch.len();
+        fn index(&self, index: usize) -> Self::ReadItem<'_> {
+            DatumSeq {
+                bytes: self.bytes.index(index),
             }
-            panic!("Index out of bounds");
         }
 
         fn len(&self) -> usize {
-            let mut result = 0;
-            for batch in self.batches.iter() {
-                result += batch.len();
-            }
-            result
+            self.bytes.len()
         }
     }
 
@@ -195,57 +172,7 @@ mod container {
 
     impl PushInto<DatumSeq<'_>> for DatumContainer {
         fn push_into(&mut self, item: DatumSeq<'_>) {
-            if let Some(batch) = self.batches.last_mut() {
-                let success = batch.try_push(item.bytes);
-                if !success {
-                    // double the lengths from `batch`.
-                    let item_cap = 2 * batch.offsets.len();
-                    let byte_cap = std::cmp::max(2 * batch.storage.capacity(), item.bytes.len());
-                    let mut new_batch = DatumBatch::with_capacities(item_cap, byte_cap);
-                    assert!(new_batch.try_push(item.bytes));
-                    self.batches.push(new_batch);
-                }
-            }
-        }
-    }
-
-    /// A batch of slice storage.
-    ///
-    /// The backing storage for this batch will not be resized.
-    pub struct DatumBatch {
-        offsets: crate::row_spine::OffsetOptimized,
-        storage: Region<u8>,
-    }
-
-    impl DatumBatch {
-        /// Either accepts the slice and returns true,
-        /// or does not and returns false.
-        fn try_push(&mut self, slice: &[u8]) -> bool {
-            if self.storage.len() + slice.len() <= self.storage.capacity() {
-                self.storage.extend_from_slice(slice);
-                self.offsets.push(self.storage.len());
-                true
-            } else {
-                false
-            }
-        }
-        fn index(&self, index: usize) -> &[u8] {
-            let lower = self.offsets.index(index);
-            let upper = self.offsets.index(index + 1);
-            &self.storage[lower..upper]
-        }
-        fn len(&self) -> usize {
-            self.offsets.len() - 1
-        }
-
-        fn with_capacities(item_cap: usize, byte_cap: usize) -> Self {
-            // TODO: be wary of `byte_cap` greater than 2^32.
-            let mut offsets = crate::row_spine::OffsetOptimized::with_capacity(item_cap + 1);
-            offsets.push(0);
-            Self {
-                offsets,
-                storage: Region::new_auto(byte_cap.next_power_of_two()),
-            }
+            self.bytes.push_into(item.as_bytes())
         }
     }
 
@@ -254,10 +181,13 @@ mod container {
         bytes: &'a [u8],
     }
 
-    impl DatumSeq<'_> {
+    impl<'a> DatumSeq<'a> {
         pub fn copy_into(&self, row: &mut RowPacker) {
             // SAFETY: `self.bytes` is a correctly formatted row.
             unsafe { row.extend_by_slice_unchecked(self.bytes) }
+        }
+        fn as_bytes(&self) -> &'a [u8] {
+            self.bytes
         }
     }
 
@@ -316,9 +246,7 @@ mod container {
             if self.bytes.is_empty() {
                 None
             } else {
-                let mut offset = 0;
-                let result = unsafe { read_datum(self.bytes, &mut offset) };
-                self.bytes = &self.bytes[offset..];
+                let result = unsafe { read_datum(&mut self.bytes) };
                 Some(result)
             }
         }
@@ -405,6 +333,147 @@ mod container {
                 Datum::String(""),
                 Datum::String("العَرَبِيَّة"),
             ]);
+        }
+    }
+}
+
+mod bytes_container {
+
+    use differential_dataflow::trace::implementations::BatchContainer;
+    use timely::container::PushInto;
+
+    use mz_ore::region::Region;
+
+    /// A slice container with four bytes overhead per slice.
+    pub struct BytesContainer {
+        /// Total length of `batches`, maintained because recomputation is expensive.
+        length: usize,
+        batches: Vec<BytesBatch>,
+    }
+
+    impl BytesContainer {
+        /// Visit contained allocations to determine their size and capacity.
+        #[inline]
+        pub fn heap_size(&self, mut callback: impl FnMut(usize, usize)) {
+            // Calculate heap size for local, stash, and stash entries
+            callback(
+                self.batches.len() * std::mem::size_of::<BytesBatch>(),
+                self.batches.capacity() * std::mem::size_of::<BytesBatch>(),
+            );
+            for batch in self.batches.iter() {
+                batch.offsets.heap_size(&mut callback);
+                callback(batch.storage.len(), batch.storage.capacity());
+            }
+        }
+    }
+
+    impl BatchContainer for BytesContainer {
+        type Owned = Vec<u8>;
+        type ReadItem<'a> = &'a [u8];
+
+        fn with_capacity(size: usize) -> Self {
+            Self {
+                length: 0,
+                batches: vec![BytesBatch::with_capacities(size, size)],
+            }
+        }
+
+        fn merge_capacity(cont1: &Self, cont2: &Self) -> Self {
+            let mut item_cap = 1;
+            let mut byte_cap = 0;
+            for batch in cont1.batches.iter() {
+                item_cap += batch.offsets.len() - 1;
+                byte_cap += batch.storage.len();
+            }
+            for batch in cont2.batches.iter() {
+                item_cap += batch.offsets.len() - 1;
+                byte_cap += batch.storage.len();
+            }
+            Self {
+                length: 0,
+                batches: vec![BytesBatch::with_capacities(item_cap, byte_cap)],
+            }
+        }
+
+        fn reborrow<'b, 'a: 'b>(item: Self::ReadItem<'a>) -> Self::ReadItem<'b> {
+            item
+        }
+
+        fn index(&self, mut index: usize) -> Self::ReadItem<'_> {
+            for batch in self.batches.iter() {
+                if index < batch.len() {
+                    return batch.index(index);
+                }
+                index -= batch.len();
+            }
+            panic!("Index out of bounds");
+        }
+
+        #[inline(always)]
+        fn len(&self) -> usize {
+            self.length
+        }
+    }
+
+    impl PushInto<&[u8]> for BytesContainer {
+        fn push_into(&mut self, item: &[u8]) {
+            self.length += 1;
+            if let Some(batch) = self.batches.last_mut() {
+                let success = batch.try_push(item);
+                if !success {
+                    // double the lengths from `batch`.
+                    let item_cap = 2 * batch.offsets.len();
+                    let byte_cap = std::cmp::max(2 * batch.storage.capacity(), item.len());
+                    let mut new_batch = BytesBatch::with_capacities(item_cap, byte_cap);
+                    assert!(new_batch.try_push(item));
+                    self.batches.push(new_batch);
+                }
+            }
+        }
+    }
+
+    /// A batch of slice storage.
+    ///
+    /// The backing storage for this batch will not be resized.
+    pub struct BytesBatch {
+        offsets: crate::row_spine::OffsetOptimized,
+        storage: Region<u8>,
+        len: usize,
+    }
+
+    impl BytesBatch {
+        /// Either accepts the slice and returns true,
+        /// or does not and returns false.
+        fn try_push(&mut self, slice: &[u8]) -> bool {
+            if self.storage.len() + slice.len() <= self.storage.capacity() {
+                self.storage.extend_from_slice(slice);
+                self.offsets.push(self.storage.len());
+                self.len += 1;
+                true
+            } else {
+                false
+            }
+        }
+        fn index(&self, index: usize) -> &[u8] {
+            let lower = self.offsets.index(index);
+            let upper = self.offsets.index(index + 1);
+            &self.storage[lower..upper]
+        }
+        #[inline(always)]
+        fn len(&self) -> usize {
+            debug_assert_eq!(self.len, self.offsets.len() - 1);
+            self.len
+        }
+
+        fn with_capacities(item_cap: usize, byte_cap: usize) -> Self {
+            // TODO: be wary of `byte_cap` greater than 2^32.
+            let mut offsets = crate::row_spine::OffsetOptimized::with_capacity(item_cap + 1);
+            offsets.push(0);
+            Self {
+                offsets,
+                storage: Region::new_auto(byte_cap.next_power_of_two()),
+                len: 0,
+            }
         }
     }
 }

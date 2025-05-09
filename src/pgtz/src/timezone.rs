@@ -259,7 +259,7 @@ fn tokenize_timezone(value: &str) -> Result<Vec<TimeStrToken>, String> {
                 return Err(format!(
                     "Error tokenizing timezone string ('{}'): invalid character {:?} at offset {}",
                     value, chr, i
-                ))
+                ));
             }
         }
     }
@@ -360,7 +360,7 @@ fn build_timezone_offset_second(
                             return Err(format!(
                                 "Invalid timezone string ({}): invalid value {} at token index {}",
                                 value, val, i
-                            ))
+                            ));
                         }
                         _ => unreachable!("parsed a minute before an hour!"),
                     }
@@ -518,7 +518,10 @@ mod tests {
 
         for test in failure_test_cases.iter() {
             match Timezone::parse(test, TimezoneSpec::Iso) {
-                Ok(t) => panic!("Test passed when expected to fail test case: {} parsed tz offset (seconds): {}", test, t),
+                Ok(t) => panic!(
+                    "Test passed when expected to fail test case: {} parsed tz offset (seconds): {}",
+                    test, t
+                ),
                 Err(e) => println!("{}", e),
             }
         }

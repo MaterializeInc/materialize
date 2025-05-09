@@ -10,22 +10,22 @@ publish = false
 workspace = true
 
 [dependencies]
-anyhow = "1.0.66"
-async-trait = "0.1.83"
+anyhow = "1.0.98"
+async-trait = "0.1.88"
 dec = "0.4.8"
 deadpool-postgres = "0.10.3"
-futures = "0.3.25"
+futures = "0.3.31"
 mz-adapter-types = { path = "../adapter-types" }
-mz-ore = { path = "../ore", features = ["chrono", "async", "tracing_"] }
+mz-ore = { path = "../ore", features = ["chrono", "async", "tracing"] }
 mz-pgrepr = { path = "../pgrepr" }
 mz-postgres-client = { path = "../postgres-client" }
-mz-repr = { path = "../repr", features = ["tracing_"] }
+mz-repr = { path = "../repr", features = ["tracing"] }
 postgres-protocol = { version = "0.6.5" }
 rand = "0.8.5"
-serde = "1.0.152"
-tokio = { version = "1.38.0", features = ["rt", "time"] }
+serde = "1.0.219"
+tokio = { version = "1.44.1", features = ["rt", "time"] }
 tracing = "0.1.37"
-uuid = { version = "1.7.0", features = ["v4"] }
+uuid = { version = "1.16.0", features = ["v4"] }
 workspace-hack = { version = "0.0.0", path = "../workspace-hack", optional = true }
 
 [package.metadata.cargo-udeps.ignore]

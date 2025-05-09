@@ -107,9 +107,7 @@ impl UnreliableHandle {
         let (should_happen, should_timeout) = (self.should_happen(), self.should_timeout());
         trace!(
             "unreliable {} should_happen={} should_timeout={}",
-            name,
-            should_happen,
-            should_timeout,
+            name, should_happen, should_timeout,
         );
         match (should_happen, should_timeout) {
             (true, true) => {

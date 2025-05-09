@@ -15,6 +15,8 @@ from textwrap import dedent
 from materialize.checks.actions import Testdrive
 from materialize.checks.checks import Check, externally_idempotent
 from materialize.checks.common import KAFKA_SCHEMA_WITH_SINGLE_STRING_FIELD
+from materialize.checks.executors import Executor
+from materialize.checks.features import Features
 from materialize.mz_version import MzVersion
 
 
@@ -40,8 +42,9 @@ class AlterConnectionSshChangeBase(Check):
         index: int,
         base_version: MzVersion,
         rng: Random | None,
+        features: Features | None,
     ):
-        super().__init__(base_version, rng)
+        super().__init__(base_version, rng, features)
         self.ssh_change = ssh_change
         self.index = index
 
@@ -201,17 +204,76 @@ class AlterConnectionSshChangeBase(Check):
 
 @externally_idempotent(False)
 class AlterConnectionToSsh(AlterConnectionSshChangeBase):
-    def __init__(self, base_version: MzVersion, rng: Random | None):
-        super().__init__(SshChange.ADD_SSH, 1, base_version, rng)
+    def __init__(
+        self, base_version: MzVersion, rng: Random | None, features: Features | None
+    ):
+        super().__init__(SshChange.ADD_SSH, 1, base_version, rng, features)
 
 
 @externally_idempotent(False)
 class AlterConnectionToNonSsh(AlterConnectionSshChangeBase):
-    def __init__(self, base_version: MzVersion, rng: Random | None):
-        super().__init__(SshChange.DROP_SSH, 2, base_version, rng)
+    def __init__(
+        self, base_version: MzVersion, rng: Random | None, features: Features | None
+    ):
+        super().__init__(SshChange.DROP_SSH, 2, base_version, rng, features)
 
 
 @externally_idempotent(False)
 class AlterConnectionHost(AlterConnectionSshChangeBase):
-    def __init__(self, base_version: MzVersion, rng: Random | None):
-        super().__init__(SshChange.CHANGE_SSH_HOST, 3, base_version, rng)
+    def __init__(
+        self, base_version: MzVersion, rng: Random | None, features: Features | None
+    ):
+        super().__init__(SshChange.CHANGE_SSH_HOST, 3, base_version, rng, features)
+
+
+class AlterConnectionDependencyOrder(Check):
+    """
+    Ensure that ALTER-ing a CONNECTION to reference one with a greater ID, does not panic.
+    """
+
+    def __init__(
+        self,
+        base_version: MzVersion,
+        rng: Random | None,
+        features: Features | None,
+    ):
+        super().__init__(base_version, rng, features)
+
+    def _can_run(self, e: Executor) -> bool:
+        return self.base_version >= MzVersion.parse_mz("v0.144.0-dev")
+
+    def initialize(self) -> Testdrive:
+        return Testdrive(
+            dedent(
+                """
+                > CREATE CONNECTION my_kafka_alter_conn TO KAFKA (BROKER 'localhost:32816') WITH (VALIDATE = false);
+                > CREATE CONNECTION other_ssh TO SSH TUNNEL (host 'foo', user 'bar', port 42) WITH (VALIDATE = false);
+                """
+            )
+        )
+
+    def manipulate(self) -> list[Testdrive]:
+        return [
+            Testdrive(dedent(s))
+            for s in [
+                """
+                > ALTER CONNECTION my_kafka_alter_conn SET (BROKER 'localhost:32816' USING SSH TUNNEL other_ssh) WITH (VALIDATE = false);
+                """,
+                """
+                > CREATE CONNECTION another_kafka_conn TO KAFKA (BROKER 'localhost:32816') WITH (VALIDATE = false);
+                """,
+            ]
+        ]
+
+    def validate(self) -> Testdrive:
+        return Testdrive(
+            dedent(
+                """
+                $ set-from-sql var=other_ssh_id
+                SELECT id FROM mz_connections WHERE name = 'other_ssh';
+
+                > SELECT name FROM mz_connections WHERE create_sql LIKE '%${other_ssh_id}%';
+                my_kafka_alter_conn
+                """
+            )
+        )

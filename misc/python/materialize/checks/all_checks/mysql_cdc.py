@@ -14,6 +14,8 @@ from typing import Any
 
 from materialize.checks.actions import Testdrive
 from materialize.checks.checks import Check, externally_idempotent
+from materialize.checks.executors import Executor
+from materialize.checks.features import Features
 from materialize.mz_version import MzVersion
 from materialize.mzcompose.services.mysql import MySql
 
@@ -213,6 +215,7 @@ class MySqlCdcBase:
             H 200 {self.expects}
 
             # TODO: Figure out the quoting here -- it returns "f4" when done using the SQL shell
+            # (Might have changed again with https://github.com/MaterializeInc/materialize/pull/31933)
             # > SELECT regexp_match(create_sql, 'TEXT COLUMNS = \\((.*?)\\)')[1] FROM (SHOW CREATE SOURCE mysql_source_tableA{self.suffix});
             # "\"f4\""
 
@@ -220,7 +223,17 @@ class MySqlCdcBase:
             > SELECT key FROM (SHOW INDEXES ON mysql_source_tableA{self.suffix});
             {{f1,f2}}
 
-            ? EXPLAIN SELECT DISTINCT f1, f2 FROM mysql_source_tableA{self.suffix};
+            ?[version>=13500] EXPLAIN OPTIMIZED PLAN AS VERBOSE TEXT FOR SELECT DISTINCT f1, f2 FROM mysql_source_tableA{self.suffix};
+            Explained Query (fast path):
+              Project (#0, #1)
+                ReadIndex on=materialize.public.mysql_source_tablea{self.suffix} mysql_source_tablea{self.suffix}_primary_idx=[*** full scan ***]
+
+            Used Indexes:
+              - materialize.public.mysql_source_tablea{self.suffix}_primary_idx (*** full scan ***)
+
+            Target cluster: quickstart
+
+            ?[version<13500] EXPLAIN OPTIMIZED PLAN FOR SELECT DISTINCT f1, f2 FROM mysql_source_tableA{self.suffix};
             Explained Query (fast path):
               Project (#0, #1)
                 ReadIndex on=materialize.public.mysql_source_tablea{self.suffix} mysql_source_tablea{self.suffix}_primary_idx=[*** full scan ***]
@@ -237,14 +250,22 @@ class MySqlCdcBase:
 
 @externally_idempotent(False)
 class MySqlCdc(MySqlCdcBase, Check):
-    def __init__(self, base_version: MzVersion, rng: Random | None) -> None:
-        super().__init__(wait=True, base_version=base_version, rng=rng)
+    def __init__(
+        self, base_version: MzVersion, rng: Random | None, features: Features | None
+    ) -> None:
+        super().__init__(
+            wait=True, base_version=base_version, rng=rng, features=features
+        )
 
 
 @externally_idempotent(False)
 class MySqlCdcNoWait(MySqlCdcBase, Check):
-    def __init__(self, base_version: MzVersion, rng: Random | None) -> None:
-        super().__init__(wait=False, base_version=base_version, rng=rng)
+    def __init__(
+        self, base_version: MzVersion, rng: Random | None, features: Features | None
+    ) -> None:
+        super().__init__(
+            wait=False, base_version=base_version, rng=rng, features=features
+        )
 
 
 @externally_idempotent(False)
@@ -359,6 +380,222 @@ class MySqlCdcMzNow(Check):
                 $ mysql-execute name=mysql
                 INSERT INTO mysql_mz_now_table VALUES (NOW(), 'B3');
                 DELETE FROM mysql_mz_now_table WHERE f2 LIKE '%4%';
+                """
+            )
+        )
+
+
+@externally_idempotent(False)
+class MySqlBitType(Check):
+    def _can_run(self, e: Executor) -> bool:
+        return self.base_version > MzVersion.parse_mz("v0.131.0-dev")
+
+    def initialize(self) -> Testdrive:
+        return Testdrive(
+            dedent(
+                f"""
+                $ mysql-connect name=mysql url=mysql://root@mysql password={MySql.DEFAULT_ROOT_PASSWORD}
+
+                $ mysql-execute name=mysql
+                # create the database if it does not exist yet but do not drop it
+                CREATE DATABASE IF NOT EXISTS public;
+                USE public;
+
+                CREATE USER mysql3 IDENTIFIED BY 'mysql';
+                GRANT REPLICATION SLAVE ON *.* TO mysql3;
+                GRANT ALL ON public.* TO mysql3;
+
+                DROP TABLE IF EXISTS mysql_bit_table;
+
+                CREATE TABLE mysql_bit_table (f1 BIT(11), f2 BIT(1));
+
+                INSERT INTO mysql_bit_table VALUES (8, 0);
+                INSERT INTO mysql_bit_table VALUES (13, 1)
+                INSERT INTO mysql_bit_table VALUES (b'11100000100', b'1');
+                INSERT INTO mysql_bit_table VALUES (b'0000', b'0');
+                INSERT INTO mysql_bit_table VALUES (b'11111111111', b'0');
+
+                > CREATE SECRET mysql_bit_pass AS 'mysql';
+                > CREATE CONNECTION mysql_bit_conn TO MYSQL (
+                    HOST 'mysql',
+                    USER mysql3,
+                    PASSWORD SECRET mysql_bit_pass
+                  )
+
+                > CREATE SOURCE mysql_bit_source
+                  FROM MYSQL CONNECTION mysql_bit_conn;
+                > CREATE TABLE mysql_bit_table FROM SOURCE mysql_bit_source (REFERENCE public.mysql_bit_table);
+
+                # Return all rows
+                > CREATE MATERIALIZED VIEW mysql_bit_view AS
+                  SELECT * FROM mysql_bit_table
+                """
+            )
+        )
+
+    def manipulate(self) -> list[Testdrive]:
+        return [
+            Testdrive(dedent(s))
+            for s in [
+                f"""
+                $ mysql-connect name=mysql url=mysql://root@mysql password={MySql.DEFAULT_ROOT_PASSWORD}
+
+                $ mysql-execute name=mysql
+                USE public;
+                INSERT INTO mysql_bit_table VALUES (20, 1);
+                """,
+                f"""
+                $ mysql-connect name=mysql url=mysql://root@mysql password={MySql.DEFAULT_ROOT_PASSWORD}
+
+                $ mysql-execute name=mysql
+                USE public;
+                INSERT INTO mysql_bit_table VALUES (30, 1);
+                """,
+            ]
+        ]
+
+    def validate(self) -> Testdrive:
+        return Testdrive(
+            dedent(
+                f"""
+                > SELECT * FROM mysql_bit_table;
+                0 0
+                8 0
+                13 1
+                20 1
+                30 1
+                1796 1
+                2047 0
+
+                $ mysql-connect name=mysql url=mysql://root@mysql password={MySql.DEFAULT_ROOT_PASSWORD}
+
+                $ mysql-execute name=mysql
+                USE public;
+                INSERT INTO mysql_bit_table VALUES (40, 1);
+
+                > SELECT * FROM mysql_bit_table;
+                0 0
+                8 0
+                13 1
+                20 1
+                30 1
+                40 1
+                1796 1
+                2047 0
+
+                # Rollback the last INSERTs so that validate() can be called multiple times
+                $ mysql-execute name=mysql
+                DELETE FROM mysql_bit_table WHERE f1 = 40;
+
+                > SELECT * FROM mysql_bit_table;
+                0 0
+                8 0
+                13 1
+                20 1
+                30 1
+                1796 1
+                2047 0
+                """
+            )
+        )
+
+
+@externally_idempotent(False)
+class MySqlInvisibleColumn(Check):
+    def _can_run(self, e: Executor) -> bool:
+        return self.base_version > MzVersion.parse_mz("v0.133.0-dev")
+
+    def initialize(self) -> Testdrive:
+        return Testdrive(
+            dedent(
+                f"""
+                $ mysql-connect name=mysql url=mysql://root@mysql password={MySql.DEFAULT_ROOT_PASSWORD}
+
+                $ mysql-execute name=mysql
+                # create the database if it does not exist yet but do not drop it
+                CREATE DATABASE IF NOT EXISTS public;
+                USE public;
+
+                CREATE USER mysql4 IDENTIFIED BY 'mysql';
+                GRANT REPLICATION SLAVE ON *.* TO mysql4;
+                GRANT ALL ON public.* TO mysql4;
+
+                DROP TABLE IF EXISTS mysql_invisible_table;
+
+                CREATE TABLE mysql_invisible_table (f1 INT, f2 FLOAT INVISIBLE, f3 DATE INVISIBLE, f4 TEXT INVISIBLE);
+
+                INSERT INTO mysql_invisible_table (f1, f2, f3, f4) VALUES (1, 0.1, '2025-01-01', 'one');
+
+                > CREATE SECRET mysql_invisible_pass AS 'mysql';
+                > CREATE CONNECTION mysql_invisible_conn TO MYSQL (
+                    HOST 'mysql',
+                    USER mysql4,
+                    PASSWORD SECRET mysql_invisible_pass
+                  )
+
+                > CREATE SOURCE mysql_invisible_source
+                  FROM MYSQL CONNECTION mysql_invisible_conn;
+                > CREATE TABLE mysql_invisible_table FROM SOURCE mysql_invisible_source (REFERENCE public.mysql_invisible_table);
+
+                # Return all rows
+                > CREATE MATERIALIZED VIEW mysql_invisible_view AS
+                  SELECT * FROM mysql_invisible_table
+                """
+            )
+        )
+
+    def manipulate(self) -> list[Testdrive]:
+        return [
+            Testdrive(dedent(s))
+            for s in [
+                f"""
+                $ mysql-connect name=mysql url=mysql://root@mysql password={MySql.DEFAULT_ROOT_PASSWORD}
+
+                $ mysql-execute name=mysql
+                USE public;
+                INSERT INTO mysql_invisible_table (f1, f2, f3, f4) VALUES (2, 0.2, '2025-02-02', 'two');
+                """,
+                f"""
+                $ mysql-connect name=mysql url=mysql://root@mysql password={MySql.DEFAULT_ROOT_PASSWORD}
+
+                $ mysql-execute name=mysql
+                USE public;
+                INSERT INTO mysql_invisible_table (f1, f2, f3, f4) VALUES (3, 0.3, '2025-03-03', 'three');
+                """,
+            ]
+        ]
+
+    def validate(self) -> Testdrive:
+        return Testdrive(
+            dedent(
+                f"""
+                > SELECT * FROM mysql_invisible_table;
+                1 0.1 2025-01-01 one
+                2 0.2 2025-02-02 two
+                3 0.3 2025-03-03 three
+
+                $ mysql-connect name=mysql url=mysql://root@mysql password={MySql.DEFAULT_ROOT_PASSWORD}
+
+                $ mysql-execute name=mysql
+                USE public;
+                ALTER TABLE mysql_invisible_table ALTER COLUMN f2 SET VISIBLE;
+                INSERT INTO mysql_invisible_table (f1, f2, f3, f4) VALUES (4, 0.4, '2025-04-04', 'four');
+
+                > SELECT * FROM mysql_invisible_table;
+                1 0.1 2025-01-01 one
+                2 0.2 2025-02-02 two
+                3 0.3 2025-03-03 three
+                4 0.4 2025-04-04 four
+
+                # Rollback the last INSERTs so that validate() can be called multiple times
+                $ mysql-execute name=mysql
+                DELETE FROM mysql_invisible_table WHERE f1 = 4;
+                ALTER TABLE mysql_invisible_table ALTER COLUMN f2 SET INVISIBLE;
+
+                > SELECT * FROM mysql_invisible_table;
+                1 0.1 2025-01-01 one
+                2 0.2 2025-02-02 two
+                3 0.3 2025-03-03 three
                 """
             )
         )

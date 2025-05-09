@@ -276,6 +276,9 @@
   - signature: 'btrim(s: str, c: str) -> str'
     description: Trim any character in `c` from both sides of `s`.
 
+  - signature: 'bit_count(b: bytea) -> int'
+    description: Returns the number of bits set in the bit string (aka _popcount_).
+
   - signature: 'bit_length(s: str) -> int'
     description: Number of bits in `s`.
 
@@ -307,6 +310,9 @@
   - signature: 'encode(b: bytea, format: text) -> text'
     description: Encode `b` using the specified textual representation
     url: /sql/functions/encode
+
+  - signature: 'get_bit(b: bytea, n: int) -> int'
+    description: Return the `n`th bit from `b`, where the left-most bit in `b` is at the 0th position.
 
   - signature: 'get_byte(b: bytea, n: int) -> int'
     description: Return the `n`th byte from `b`, where the left-most byte in `b` is at the 0th position.
@@ -393,6 +399,15 @@
 
       See the [rust regex docs](https://docs.rs/regex/latest/regex/struct.Regex.html#method.replace) for more details about replacement.
 
+  - signature: "regexp_matches(haystack: str, needle: str [, flags: str]]) -> str[]"
+    description: |
+      Matches the regular expression `needle` against haystack, returning a
+      string array that contains the value of each capture group specified in
+      `needle`, in order. If `flags` is set to the string `i` matches
+      case-insensitively. If `flags` is set to the string `g` all matches are
+      returned, otherwise only the first match is returned. Without the `g`
+      flag, the behavior is the same as `regexp_match`.
+
   - signature: 'regexp_split_to_array(text: str, pattern: str [, flags: str]]) -> str[]'
     description: |
       Splits `text` by the regular expression `pattern` into an array.
@@ -454,6 +469,25 @@
 
   - signature: 'upper(s: str) -> str'
     description: Convert `s` to uppercase.
+
+  - signature: 'reverse(s: str) -> str'
+    description: Reverse the characters in `s`.
+
+  - signature: 'string_to_array(s: str, delimiter: str [, null_string: str]) -> str[]'
+    description: |
+      Splits the string at occurrences of delimiter and returns a text array of
+      the split segments.
+
+      If `delimiter` is NULL, each character in the string will become a
+      separate element in the array.
+
+      If `delimiter` is an empty string, then the string is treated as a single
+      field.
+
+      If `null_string` is supplied and is not NULL, fields matching that string
+      are replaced by NULL.
+
+      For example: `string_to_array('xx~~yy~~zz', '~~', 'yy')` → `{xx,NULL,zz}`
 
 - type: Scalar
   description: Scalar functions take a list of scalar expressions

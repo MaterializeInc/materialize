@@ -1,11 +1,17 @@
 // Copyright Materialize, Inc. and contributors. All rights reserved.
 //
-// Use of this software is governed by the Business Source License
-// included in the LICENSE file.
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License in the LICENSE file at the
+// root of this repository, or online at
 //
-// As of the Change Date specified in that file, in accordance with
-// the Business Source License, use of this software will be governed
-// by the Apache License, Version 2.0.
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
 //! Traits and types for replaying captured timely dataflow streams.
 //!
@@ -13,19 +19,20 @@
 //! provides the protocol and semantics of the [MzReplay] operator.
 
 use std::any::Any;
+use std::borrow::Cow;
 use std::rc::Rc;
 use std::time::{Duration, Instant};
 use timely::container::ContainerBuilder;
 
+use timely::Container;
 use timely::dataflow::channels::pushers::buffer::{Buffer as PushBuffer, Session};
 use timely::dataflow::channels::pushers::{Counter as PushCounter, Tee};
-use timely::dataflow::operators::capture::event::EventIterator;
 use timely::dataflow::operators::capture::Event;
+use timely::dataflow::operators::capture::event::EventIterator;
 use timely::dataflow::operators::generic::builder_raw::OperatorBuilder;
 use timely::dataflow::{Scope, StreamCore};
 use timely::progress::Timestamp;
 use timely::scheduling::ActivateOnDrop;
-use timely::Container;
 
 use crate::activator::ActivatorTrait;
 
@@ -56,14 +63,14 @@ where
     ) -> (StreamCore<S, CB::Container>, Rc<dyn Any>)
     where
         CB: ContainerBuilder,
-        L: FnMut(Session<T, CB, PushCounter<T, CB::Container, Tee<T, CB::Container>>>, &C)
+        L: FnMut(Session<T, CB, PushCounter<T, CB::Container, Tee<T, CB::Container>>>, Cow<C>)
             + 'static;
 }
 
 impl<T, C, I, A> MzReplay<T, C, A> for I
 where
     T: Timestamp,
-    C: Container,
+    C: Container + Clone,
     I: IntoIterator,
     I::Item: EventIterator<T, C> + 'static,
     A: ActivatorTrait + 'static,
@@ -78,7 +85,7 @@ where
     ) -> (StreamCore<S, CB::Container>, Rc<dyn Any>)
     where
         for<'a> CB: ContainerBuilder,
-        L: FnMut(Session<T, CB, PushCounter<T, CB::Container, Tee<T, CB::Container>>>, &C)
+        L: FnMut(Session<T, CB, PushCounter<T, CB::Container, Tee<T, CB::Container>>>, Cow<C>)
             + 'static,
     {
         let name = format!("Replay {}", name);
@@ -135,13 +142,21 @@ where
             if weak_token.upgrade().is_some() {
                 for event_stream in event_streams.iter_mut() {
                     while let Some(event) = event_stream.next() {
-                        match &event {
-                            Event::Progress(vec) => {
+                        use Cow::*;
+                        match event {
+                            Owned(Event::Progress(vec)) => {
+                                progress.internals[0].extend(vec.iter().cloned());
+                                progress_sofar.extend(vec.into_iter());
+                            }
+                            Owned(Event::Messages(time, data)) => {
+                                logic(output.session_with_builder(&time), Owned(data));
+                            }
+                            Borrowed(Event::Progress(vec)) => {
                                 progress.internals[0].extend(vec.iter().cloned());
                                 progress_sofar.extend(vec.iter().cloned());
                             }
-                            Event::Messages(time, data) => {
-                                logic(output.session_with_builder(time), data);
+                            Borrowed(Event::Messages(time, data)) => {
+                                logic(output.session_with_builder(time), Borrowed(data));
                             }
                         }
                     }

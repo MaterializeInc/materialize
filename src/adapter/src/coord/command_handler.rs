@@ -12,21 +12,23 @@
 
 use differential_dataflow::lattice::Lattice;
 use mz_adapter_types::dyncfgs::ALLOW_USER_SESSIONS;
+use mz_auth::password::Password;
+use mz_repr::namespaces::MZ_INTERNAL_SCHEMA;
 use mz_sql::session::metadata::SessionMetadata;
 use std::collections::{BTreeMap, BTreeSet};
 use std::net::IpAddr;
 use std::sync::Arc;
 
-use futures::future::LocalBoxFuture;
 use futures::FutureExt;
+use futures::future::LocalBoxFuture;
 use mz_adapter_types::connection::{ConnectionId, ConnectionIdType};
-use mz_catalog::memory::objects::{CatalogItem, DataSourceDesc, Source, Table, TableDataSource};
 use mz_catalog::SYSTEM_CONN_ID;
+use mz_catalog::memory::objects::{CatalogItem, DataSourceDesc, Source, Table, TableDataSource};
 use mz_ore::task;
 use mz_ore::tracing::OpenTelemetryContext;
 use mz_ore::{instrument, soft_panic_or_log};
 use mz_repr::role_id::RoleId;
-use mz_repr::{ScalarType, Timestamp};
+use mz_repr::{Diff, ScalarType, Timestamp};
 use mz_sql::ast::{
     AlterConnectionAction, AlterConnectionStatement, AlterSourceAction, AstInfo, ConstantVisitor,
     CopyRelation, CopyStatement, CreateSourceOptionName, Raw, Statement, SubscribeStatement,
@@ -44,7 +46,7 @@ use mz_sql::rbac;
 use mz_sql::rbac::CREATE_ITEM_USAGE;
 use mz_sql::session::user::User;
 use mz_sql::session::vars::{
-    EndTransactionAction, OwnedVarInput, Value, Var, NETWORK_POLICY, STATEMENT_LOGGING_SAMPLE_RATE,
+    EndTransactionAction, NETWORK_POLICY, OwnedVarInput, STATEMENT_LOGGING_SAMPLE_RATE, Value, Var,
 };
 use mz_sql_parser::ast::display::AstDisplay;
 use mz_sql_parser::ast::{
@@ -54,14 +56,14 @@ use mz_sql_parser::ast::{
 use mz_storage_types::sources::Timeline;
 use opentelemetry::trace::TraceContextExt;
 use tokio::sync::{mpsc, oneshot};
-use tracing::{debug_span, info, warn, Instrument};
+use tracing::{Instrument, debug_span, info, warn};
 use tracing_opentelemetry::OpenTelemetrySpanExt;
 
-use crate::command::{CatalogSnapshot, Command, ExecuteResponse, StartupResponse};
+use crate::command::{AuthResponse, CatalogSnapshot, Command, ExecuteResponse, StartupResponse};
 use crate::coord::appends::PendingWriteTxn;
 use crate::coord::{
-    validate_ip_with_policy_rules, ConnMeta, Coordinator, DeferredPlanStatement, Message,
-    PendingTxn, PlanStatement, PlanValidity, PurifiedStatementReady,
+    ConnMeta, Coordinator, DeferredPlanStatement, Message, PendingTxn, PlanStatement, PlanValidity,
+    PurifiedStatementReady, validate_ip_with_policy_rules,
 };
 use crate::error::AdapterError;
 use crate::notice::AdapterNotice;
@@ -70,7 +72,7 @@ use crate::util::{ClientTransmitter, ResultExt};
 use crate::webhook::{
     AppendWebhookResponse, AppendWebhookValidator, WebhookAppender, WebhookAppenderInvalidator,
 };
-use crate::{catalog, metrics, AppendWebhookError, ExecuteContext, TimestampProvider};
+use crate::{AppendWebhookError, ExecuteContext, TimestampProvider, catalog, metrics};
 
 use super::ExecuteContextExtra;
 
@@ -107,6 +109,15 @@ impl Coordinator {
                         notice_tx,
                     )
                     .await;
+                }
+
+                Command::AuthenticatePassword {
+                    tx,
+                    role_name,
+                    password,
+                } => {
+                    self.handle_authenticate_password(tx, role_name, password)
+                        .await;
                 }
 
                 Command::Execute {
@@ -236,6 +247,45 @@ impl Coordinator {
     }
 
     #[mz_ore::instrument(level = "debug")]
+    async fn handle_authenticate_password(
+        &mut self,
+        tx: oneshot::Sender<Result<AuthResponse, AdapterError>>,
+        role_name: String,
+        password: Option<Password>,
+    ) {
+        let Some(password) = password else {
+            // The user did not provide a password.
+            let _ = tx.send(Err(AdapterError::AuthenticationError));
+            return;
+        };
+
+        if let Some(role) = self.catalog().try_get_role_by_name(role_name.as_str()) {
+            if !role.attributes.login.unwrap_or(false) {
+                // The user is not allowed to login.
+                let _ = tx.send(Err(AdapterError::AuthenticationError));
+                return;
+            }
+            if let Some(auth) = self.catalog().try_get_role_auth_by_id(&role.id) {
+                if let Some(hash) = &auth.password_hash {
+                    let _ = match mz_auth::hash::scram256_verify(&password, hash) {
+                        Ok(_) => tx.send(Ok(AuthResponse {
+                            role_id: role.id,
+                            superuser: role.attributes.superuser.unwrap_or(false),
+                        })),
+                        Err(_) => tx.send(Err(AdapterError::AuthenticationError)),
+                    };
+                    return;
+                }
+            }
+            // Authentication failed due to incorrect password or missing password hash.
+            let _ = tx.send(Err(AdapterError::AuthenticationError));
+        } else {
+            // The user does not exist.
+            let _ = tx.send(Err(AdapterError::AuthenticationError));
+        }
+    }
+
+    #[mz_ore::instrument(level = "debug")]
     async fn handle_startup(
         &mut self,
         tx: oneshot::Sender<Result<StartupResponse, AdapterError>>,
@@ -269,19 +319,46 @@ impl Coordinator {
                     authenticated_role: role_id,
                     deferred_lock: None,
                 };
-                let update = self.catalog().state().pack_session_update(&conn, 1);
+                let update = self.catalog().state().pack_session_update(&conn, Diff::ONE);
                 let update = self.catalog().state().resolve_builtin_table_update(update);
                 self.begin_session_for_statement_logging(&conn);
                 self.active_conns.insert(conn_id.clone(), conn);
 
                 // Note: Do NOT await the notify here, we pass this back to
-                // whatever requested the startup to prevent blocking the
-                // Coordinator on a builtin table update.
-                let notify = self.builtin_table_update().defer(vec![update]);
+                // whatever requested the startup to prevent blocking startup
+                // and the Coordinator on a builtin table update.
+                let updates = vec![update];
+                // It's not a hard error if our list is missing a builtin table, but we want to
+                // make sure these two things stay in-sync.
+                if mz_ore::assert::soft_assertions_enabled() {
+                    let required_tables: BTreeSet<_> = super::appends::REQUIRED_BUILTIN_TABLES
+                        .iter()
+                        .map(|table| self.catalog().resolve_builtin_table(*table))
+                        .collect();
+                    let updates_tracked = updates
+                        .iter()
+                        .all(|update| required_tables.contains(&update.id));
+                    let all_mz_internal = super::appends::REQUIRED_BUILTIN_TABLES
+                        .iter()
+                        .all(|table| table.schema == MZ_INTERNAL_SCHEMA);
+                    mz_ore::soft_assert_or_log!(
+                        updates_tracked,
+                        "not tracking all required builtin table updates!"
+                    );
+                    // TODO(parkmycar): When checking if a query depends on these builtin table
+                    // writes we do not check the transitive dependencies of the query, because
+                    // we don't support creating views on mz_internal objects. If one of these
+                    // tables is promoted out of mz_internal then we'll need to add this check.
+                    mz_ore::soft_assert_or_log!(
+                        all_mz_internal,
+                        "not all builtin tables are in mz_internal! need to check transitive depends",
+                    )
+                }
+                let notify = self.builtin_table_update().background(updates);
 
                 let resp = Ok(StartupResponse {
                     role_id,
-                    write_notify: Box::pin(notify),
+                    write_notify: notify,
                     session_defaults,
                     catalog: self.owned_catalog(),
                 });
@@ -379,7 +456,7 @@ impl Coordinator {
                         None
                     }
                 })
-                .unwrap_or(system_config.default_network_policy_name());
+                .unwrap_or_else(|| system_config.default_network_policy_name());
             let maybe_network_policy = self
                 .catalog()
                 .get_network_policy_by_name(&network_policy_name);
@@ -1070,7 +1147,7 @@ impl Coordinator {
     ///
     /// (Note that the chosen timestamp won't be the same timestamp as the system table inserts,
     /// unfortunately.)
-    async fn resolve_mz_now_for_create_materialized_view<'a>(
+    async fn resolve_mz_now_for_create_materialized_view(
         &mut self,
         cmvs: &CreateMaterializedViewStatement<Aug>,
         resolved_ids: &ResolvedIds,
@@ -1239,6 +1316,7 @@ impl Coordinator {
         self.cancel_compute_sinks_for_conn(&conn_id).await;
         self.cancel_cluster_reconfigurations_for_conn(&conn_id)
             .await;
+        self.cancel_pending_copy(&conn_id);
         if let Some((tx, _rx)) = self.staged_cancellation.get_mut(&conn_id) {
             let _ = tx.send(true);
         }
@@ -1273,12 +1351,16 @@ impl Coordinator {
             .dec();
         self.cancel_pending_peeks(conn.conn_id());
         self.cancel_pending_watchsets(&conn_id);
+        self.cancel_pending_copy(&conn_id);
         self.end_session_for_statement_logging(conn.uuid());
 
         // Queue the builtin table update, but do not wait for it to complete. We explicitly do
         // this to prevent blocking the Coordinator in the case that a lot of connections are
         // closed at once, which occurs regularly in some workflows.
-        let update = self.catalog().state().pack_session_update(&conn, -1);
+        let update = self
+            .catalog()
+            .state()
+            .pack_session_update(&conn, Diff::MINUS_ONE);
         let update = self.catalog().state().resolve_builtin_table_update(update);
 
         let _builtin_update_notify = self.builtin_table_update().defer(vec![update]);
@@ -1324,7 +1406,7 @@ impl Coordinator {
                     desc,
                     global_id,
                     ..
-                }) => (data_source, desc, *global_id),
+                }) => (data_source, desc.clone(), *global_id),
                 CatalogItem::Table(
                     table @ Table {
                         desc,
@@ -1335,7 +1417,7 @@ impl Coordinator {
                             },
                         ..
                     },
-                ) => (data_source, desc, table.global_id_writes()),
+                ) => (data_source, desc.latest(), table.global_id_writes()),
                 _ => return Err(name),
             };
 
@@ -1367,7 +1449,7 @@ impl Coordinator {
             let body_column = desc
                 .get_by_name(&"body".into())
                 .map(|(_idx, ty)| ty.clone())
-                .ok_or(name.clone())?;
+                .ok_or_else(|| name.clone())?;
             assert!(!body_column.nullable, "webhook body column is nullable!?");
             assert_eq!(body_column.scalar_type, ScalarType::from(body_format));
 

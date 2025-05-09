@@ -13,15 +13,15 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use differential_dataflow::Data;
+use differential_dataflow::IntoOwned;
 use differential_dataflow::difference::{Abelian, Semigroup};
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::operators::arrange::{Arranged, TraceAgent};
-use differential_dataflow::trace::cursor::IntoOwned;
 use differential_dataflow::trace::{Batch, Builder, Trace, TraceReader};
-use differential_dataflow::Data;
+use timely::Container;
 use timely::container::PushInto;
 use timely::dataflow::Scope;
-use timely::Container;
 
 use crate::extensions::arrange::ArrangementSize;
 

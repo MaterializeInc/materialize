@@ -19,23 +19,29 @@ use std::sync::Arc;
 use futures::future::BoxFuture;
 use futures::{Future, FutureExt};
 use itertools::Itertools;
+use mz_adapter_types::bootstrap_builtin_cluster_config::{
+    ANALYTICS_CLUSTER_DEFAULT_REPLICATION_FACTOR, BootstrapBuiltinClusterConfig,
+    CATALOG_SERVER_CLUSTER_DEFAULT_REPLICATION_FACTOR, PROBE_CLUSTER_DEFAULT_REPLICATION_FACTOR,
+    SUPPORT_CLUSTER_DEFAULT_REPLICATION_FACTOR, SYSTEM_CLUSTER_DEFAULT_REPLICATION_FACTOR,
+};
 use mz_adapter_types::connection::ConnectionId;
 use mz_audit_log::{EventType, FullNameV1, ObjectType, VersionedStorageUsage};
-use mz_build_info::DUMMY_BUILD_INFO;
+use mz_build_info::{BuildInfo, DUMMY_BUILD_INFO};
 use mz_catalog::builtin::{
-    BuiltinCluster, BuiltinLog, BuiltinSource, BuiltinTable, BUILTIN_PREFIXES,
+    BUILTIN_PREFIXES, BuiltinCluster, BuiltinLog, BuiltinSource, BuiltinTable,
     MZ_CATALOG_SERVER_CLUSTER,
 };
 use mz_catalog::config::{BuiltinItemMigrationConfig, ClusterReplicaSizeMap, Config, StateConfig};
 #[cfg(test)]
 use mz_catalog::durable::CatalogError;
 use mz_catalog::durable::{
-    test_bootstrap_args, BootstrapArgs, DurableCatalogState, TestCatalogStateBuilder,
+    BootstrapArgs, DurableCatalogState, TestCatalogStateBuilder, test_bootstrap_args,
 };
 use mz_catalog::expr_cache::{ExpressionCacheHandle, GlobalExpressions, LocalExpressions};
 use mz_catalog::memory::error::{Error, ErrorKind};
 use mz_catalog::memory::objects::{
-    CatalogEntry, CatalogItem, Cluster, ClusterReplica, Database, NetworkPolicy, Role, Schema,
+    CatalogCollectionEntry, CatalogEntry, CatalogItem, Cluster, ClusterReplica, Database,
+    NetworkPolicy, Role, RoleAuth, Schema,
 };
 use mz_compute_types::dataflows::DataflowDescription;
 use mz_controller::clusters::ReplicaLocation;
@@ -62,8 +68,8 @@ use mz_sql::catalog::{
 };
 use mz_sql::names::{
     CommentObjectId, DatabaseId, FullItemName, FullSchemaName, ItemQualifiers, ObjectId,
-    PartialItemName, QualifiedItemName, QualifiedSchemaName, ResolvedDatabaseSpecifier,
-    ResolvedIds, SchemaId, SchemaSpecifier, SystemObjectId, PUBLIC_ROLE_NAME,
+    PUBLIC_ROLE_NAME, PartialItemName, QualifiedItemName, QualifiedSchemaName,
+    ResolvedDatabaseSpecifier, ResolvedIds, SchemaId, SchemaSpecifier, SystemObjectId,
 };
 use mz_sql::plan::{Plan, PlanNotice, StatementDesc};
 use mz_sql::rbac;
@@ -71,22 +77,20 @@ use mz_sql::session::metadata::SessionMetadata;
 use mz_sql::session::user::{MZ_SYSTEM_ROLE_ID, SUPPORT_USER, SYSTEM_USER};
 use mz_sql::session::vars::SystemVars;
 use mz_sql_parser::ast::QualifiedReplica;
-use mz_storage_types::connections::inline::{ConnectionResolver, InlinedConnection};
 use mz_storage_types::connections::ConnectionContext;
+use mz_storage_types::connections::inline::{ConnectionResolver, InlinedConnection};
 use mz_storage_types::read_policy::ReadPolicy;
 use mz_transform::dataflow::DataflowMetainfo;
 use mz_transform::notice::OptimizerNotice;
 use smallvec::SmallVec;
-use tokio::sync::mpsc::UnboundedSender;
 use tokio::sync::MutexGuard;
+use tokio::sync::mpsc::UnboundedSender;
 use tracing::error;
 use uuid::Uuid;
 
 // DO NOT add any more imports from `crate` outside of `crate::catalog`.
 pub use crate::catalog::builtin_table_updates::BuiltinTableUpdate;
-pub use crate::catalog::open::{
-    BuiltinMigrationMetadata, InitializeStateResult, OpenCatalogResult,
-};
+pub use crate::catalog::open::{InitializeStateResult, OpenCatalogResult};
 pub use crate::catalog::state::CatalogState;
 pub use crate::catalog::transact::{
     DropObjectInfo, Op, ReplicaCreateDropReason, TransactionResult,
@@ -586,6 +590,7 @@ impl Catalog {
             storage,
             now,
             environment_id,
+            &DUMMY_BUILD_INFO,
             system_parameter_defaults,
             bootstrap_args,
             None,
@@ -617,6 +622,7 @@ impl Catalog {
             storage,
             now,
             environment_id,
+            &DUMMY_BUILD_INFO,
             system_parameter_defaults,
             bootstrap_args,
             None,
@@ -633,13 +639,18 @@ impl Catalog {
         now: NowFn,
         environment_id: EnvironmentId,
         system_parameter_defaults: BTreeMap<String, String>,
-        version: semver::Version,
+        build_info: &'static BuildInfo,
         bootstrap_args: &BootstrapArgs,
         enable_expression_cache_override: Option<bool>,
     ) -> Result<Catalog, anyhow::Error> {
         let openable_storage = TestCatalogStateBuilder::new(persist_client.clone())
             .with_organization_id(environment_id.organization_id())
-            .with_version(version)
+            .with_version(
+                build_info
+                    .version
+                    .parse()
+                    .expect("build version is parseable"),
+            )
             .build()
             .await?;
         let storage = openable_storage.open_read_only(bootstrap_args).await?;
@@ -648,6 +659,7 @@ impl Catalog {
             storage,
             now,
             Some(environment_id),
+            build_info,
             system_parameter_defaults,
             bootstrap_args,
             enable_expression_cache_override,
@@ -660,6 +672,7 @@ impl Catalog {
         storage: Box<dyn DurableCatalogState>,
         now: NowFn,
         environment_id: Option<EnvironmentId>,
+        build_info: &'static BuildInfo,
         system_parameter_defaults: BTreeMap<String, String>,
         bootstrap_args: &BootstrapArgs,
         enable_expression_cache_override: Option<bool>,
@@ -670,9 +683,10 @@ impl Catalog {
         // debugging/testing.
         let previous_ts = now().into();
         let replica_size = &bootstrap_args.default_cluster_replica_size;
+        let read_only = false;
+
         let OpenCatalogResult {
             catalog,
-            storage_collections_to_drop: _,
             migrated_storage_collections_0dt: _,
             new_builtin_collections: _,
             builtin_table_updates: _,
@@ -684,18 +698,33 @@ impl Catalog {
             state: StateConfig {
                 unsafe_mode: true,
                 all_features: false,
-                build_info: &DUMMY_BUILD_INFO,
-                environment_id: environment_id.unwrap_or(EnvironmentId::for_tests()),
-                read_only: false,
+                build_info,
+                environment_id: environment_id.unwrap_or_else(EnvironmentId::for_tests),
+                read_only,
                 now,
                 boot_ts: previous_ts,
                 skip_migrations: true,
                 cluster_replica_sizes: bootstrap_args.cluster_replica_size_map.clone(),
-                builtin_system_cluster_replica_size: replica_size.clone(),
-                builtin_catalog_server_cluster_replica_size: replica_size.clone(),
-                builtin_probe_cluster_replica_size: replica_size.clone(),
-                builtin_support_cluster_replica_size: replica_size.clone(),
-                builtin_analytics_cluster_replica_size: replica_size.clone(),
+                builtin_system_cluster_config: BootstrapBuiltinClusterConfig {
+                    size: replica_size.clone(),
+                    replication_factor: SYSTEM_CLUSTER_DEFAULT_REPLICATION_FACTOR,
+                },
+                builtin_catalog_server_cluster_config: BootstrapBuiltinClusterConfig {
+                    size: replica_size.clone(),
+                    replication_factor: CATALOG_SERVER_CLUSTER_DEFAULT_REPLICATION_FACTOR,
+                },
+                builtin_probe_cluster_config: BootstrapBuiltinClusterConfig {
+                    size: replica_size.clone(),
+                    replication_factor: PROBE_CLUSTER_DEFAULT_REPLICATION_FACTOR,
+                },
+                builtin_support_cluster_config: BootstrapBuiltinClusterConfig {
+                    size: replica_size.clone(),
+                    replication_factor: SUPPORT_CLUSTER_DEFAULT_REPLICATION_FACTOR,
+                },
+                builtin_analytics_cluster_config: BootstrapBuiltinClusterConfig {
+                    size: replica_size.clone(),
+                    replication_factor: ANALYTICS_CLUSTER_DEFAULT_REPLICATION_FACTOR,
+                },
                 system_parameter_defaults,
                 remote_system_parameters: None,
                 availability_zones: vec![],
@@ -704,7 +733,10 @@ impl Catalog {
                 aws_privatelink_availability_zones: None,
                 http_host_name: None,
                 connection_context: ConnectionContext::for_tests(secrets_reader),
-                builtin_item_migration_config: BuiltinItemMigrationConfig::Legacy,
+                builtin_item_migration_config: BuiltinItemMigrationConfig {
+                    persist_client: persist_client.clone(),
+                    read_only,
+                },
                 persist_client,
                 enable_expression_cache_override,
                 enable_0dt_deployment: true,
@@ -744,6 +776,20 @@ impl Catalog {
         self.storage()
             .await
             .allocate_user_id(commit_ts)
+            .await
+            .maybe_terminate("allocating user ids")
+            .err_into()
+    }
+
+    /// Allocate `amount` many user IDs. See [`DurableCatalogState::allocate_user_ids`].
+    pub async fn allocate_user_ids(
+        &self,
+        amount: u64,
+        commit_ts: mz_repr::Timestamp,
+    ) -> Result<Vec<(CatalogItemId, GlobalId)>, Error> {
+        self.storage()
+            .await
+            .allocate_user_ids(amount, commit_ts)
             .await
             .maybe_terminate("allocating user ids")
             .err_into()
@@ -995,11 +1041,14 @@ impl Catalog {
         self.state.get_entry(id)
     }
 
-    pub fn get_entry_by_global_id(&self, id: &GlobalId) -> &CatalogEntry {
+    pub fn get_entry_by_global_id(&self, id: &GlobalId) -> CatalogCollectionEntry {
         self.state.get_entry_by_global_id(id)
     }
 
-    pub fn get_global_ids(&self, id: &CatalogItemId) -> impl Iterator<Item = GlobalId> + '_ {
+    pub fn get_global_ids<'a>(
+        &'a self,
+        id: &CatalogItemId,
+    ) -> impl Iterator<Item = GlobalId> + use<'a> {
         self.get_entry(id).global_ids()
     }
 
@@ -1063,6 +1112,10 @@ impl Catalog {
 
     pub fn try_get_role_by_name(&self, role_name: &str) -> Option<&Role> {
         self.state.try_get_role_by_name(role_name)
+    }
+
+    pub fn try_get_role_auth_by_id(&self, id: &RoleId) -> Option<&RoleAuth> {
+        self.state.try_get_role_auth_by_id(id)
     }
 
     /// Creates a new schema in the `Catalog` for temporary items
@@ -1447,8 +1500,8 @@ impl Catalog {
                 .iter()
                 .map(|(id, _)| id)
                 .chain(new_global_expressions.iter().map(|(id, _)| id))
-                .filter_map(|id| self.get_entry_by_global_id(id).index())
-                .map(|index| index.on);
+                .map(|id| self.get_entry_by_global_id(id))
+                .filter_map(|entry| entry.index().map(|index| index.on));
             let invalidate_ids = self.invalidate_for_index(ons);
             expr_cache
                 .update(
@@ -1611,11 +1664,11 @@ impl ExprHumanizer for ConnCatalog<'_> {
         Some(self.resolve_full_name(entry.name()).into_parts())
     }
 
-    fn humanize_scalar_type(&self, typ: &ScalarType) -> String {
+    fn humanize_scalar_type(&self, typ: &ScalarType, postgres_compat: bool) -> String {
         use ScalarType::*;
 
         match typ {
-            Array(t) => format!("{}[]", self.humanize_scalar_type(t)),
+            Array(t) => format!("{}[]", self.humanize_scalar_type(t, postgres_compat)),
             List {
                 custom_id: Some(item_id),
                 ..
@@ -1628,12 +1681,15 @@ impl ExprHumanizer for ConnCatalog<'_> {
                 self.minimal_qualification(item.name()).to_string()
             }
             List { element_type, .. } => {
-                format!("{} list", self.humanize_scalar_type(element_type))
+                format!(
+                    "{} list",
+                    self.humanize_scalar_type(element_type, postgres_compat)
+                )
             }
             Map { value_type, .. } => format!(
                 "map[{}=>{}]",
-                self.humanize_scalar_type(&ScalarType::String),
-                self.humanize_scalar_type(value_type)
+                self.humanize_scalar_type(&ScalarType::String, postgres_compat),
+                self.humanize_scalar_type(value_type, postgres_compat)
             ),
             Record {
                 custom_id: Some(item_id),
@@ -1646,10 +1702,22 @@ impl ExprHumanizer for ConnCatalog<'_> {
                 "record({})",
                 fields
                     .iter()
-                    .map(|f| format!("{}: {}", f.0, self.humanize_column_type(&f.1)))
+                    .map(|f| format!(
+                        "{}: {}",
+                        f.0,
+                        self.humanize_column_type(&f.1, postgres_compat)
+                    ))
                     .join(",")
             ),
             PgLegacyChar => "\"char\"".into(),
+            Char { length } if !postgres_compat => match length {
+                None => "char".into(),
+                Some(length) => format!("char({})", length.into_u32()),
+            },
+            VarChar { max_length } if !postgres_compat => match max_length {
+                None => "varchar".into(),
+                Some(length) => format!("varchar({})", length.into_u32()),
+            },
             UInt16 => "uint2".into(),
             UInt32 => "uint4".into(),
             UInt64 => "uint8".into(),
@@ -1685,12 +1753,7 @@ impl ExprHumanizer for ConnCatalog<'_> {
 
         match entry.index() {
             Some(index) => {
-                // TODO(alter_table): Use the correct RelationDesc here.
-                let on_entry = self.state.try_get_entry_by_global_id(&index.on)?;
-                let on_desc = on_entry
-                    .desc(&self.resolve_full_name(on_entry.name()))
-                    .ok()?;
-
+                let on_desc = self.state.try_get_desc_by_global_id(&index.on)?;
                 let mut on_names = on_desc
                     .iter_names()
                     .map(|col_name| col_name.to_string())
@@ -1714,10 +1777,7 @@ impl ExprHumanizer for ConnCatalog<'_> {
                 Some(ix_names) // Return the updated ix_names vector.
             }
             None => {
-                let Ok(desc) = entry.desc(&self.resolve_full_name(entry.name())) else {
-                    return None;
-                };
-
+                let desc = self.state.try_get_desc_by_global_id(&id)?;
                 let column_names = desc
                     .iter_names()
                     .map(|col_name| col_name.to_string())
@@ -1729,8 +1789,7 @@ impl ExprHumanizer for ConnCatalog<'_> {
     }
 
     fn humanize_column(&self, id: GlobalId, column: usize) -> Option<String> {
-        let entry = self.state.try_get_entry_by_global_id(&id)?;
-        let desc = entry.desc(&self.resolve_full_name(entry.name())).ok()?;
+        let desc = self.state.try_get_desc_by_global_id(&id)?;
         Some(desc.get_name(column).to_string())
     }
 
@@ -2271,16 +2330,13 @@ mod tests {
 
     use itertools::Itertools;
     use mz_catalog::memory::objects::CatalogItem;
-    use tokio_postgres::types::Type;
     use tokio_postgres::NoTls;
+    use tokio_postgres::types::Type;
     use uuid::Uuid;
 
-    use mz_catalog::builtin::{
-        Builtin, BuiltinType, UnsafeBuiltinTableFingerprintWhitespace, BUILTINS,
-        UNSAFE_DO_NOT_CALL_THIS_IN_PRODUCTION_BUILTIN_TABLE_FINGERPRINT_WHITESPACE,
-    };
-    use mz_catalog::durable::{test_bootstrap_args, CatalogError, DurableCatalogError, FenceError};
     use mz_catalog::SYSTEM_CONN_ID;
+    use mz_catalog::builtin::{BUILTINS, Builtin, BuiltinType};
+    use mz_catalog::durable::{CatalogError, DurableCatalogError, FenceError, test_bootstrap_args};
     use mz_controller_types::{ClusterId, ReplicaId};
     use mz_expr::MirScalarExpr;
     use mz_ore::now::to_datetime;
@@ -2293,10 +2349,8 @@ mod tests {
         CatalogItemId, Datum, GlobalId, RelationType, RelationVersionSelector, RowArena,
         ScalarType, Timestamp,
     };
-    use mz_sql::catalog::{
-        BuiltinsConfig, CatalogDatabase, CatalogSchema, CatalogType, SessionCatalog,
-    };
-    use mz_sql::func::{Func, FuncImpl, Operation, OP_IMPLS};
+    use mz_sql::catalog::{BuiltinsConfig, CatalogSchema, CatalogType, SessionCatalog};
+    use mz_sql::func::{Func, FuncImpl, OP_IMPLS, Operation};
     use mz_sql::names::{
         self, DatabaseId, ItemQualifiers, ObjectId, PartialItemName, QualifiedItemName,
         ResolvedDatabaseSpecifier, SchemaId, SchemaSpecifier, SystemObjectId,
@@ -2310,7 +2364,7 @@ mod tests {
 
     use crate::catalog::state::LocalExpressionCache;
     use crate::catalog::{Catalog, Op};
-    use crate::optimize::dataflows::{prep_scalar_expr, EvalTime, ExprPrepStyle};
+    use crate::optimize::dataflows::{EvalTime, ExprPrepStyle, prep_scalar_expr};
     use crate::session::Session;
 
     /// System sessions have an empty `search_path` so it's necessary to
@@ -2729,6 +2783,48 @@ mod tests {
         .await;
     }
 
+    #[mz_ore::test(tokio::test)]
+    #[cfg_attr(miri, ignore)] //  unsupported operation: can't call foreign function `TLS_client_method` on OS `linux`
+    async fn verify_builtin_descs() {
+        Catalog::with_debug(|catalog| async move {
+            let conn_catalog = catalog.for_system_session();
+
+            let builtins_cfg = BuiltinsConfig {
+                include_continual_tasks: true,
+            };
+            for builtin in BUILTINS::iter(&builtins_cfg) {
+                let (schema, name, expected_desc) = match builtin {
+                    Builtin::Table(t) => (&t.schema, &t.name, &t.desc),
+                    Builtin::View(v) => (&v.schema, &v.name, &v.desc),
+                    Builtin::Source(s) => (&s.schema, &s.name, &s.desc),
+                    Builtin::Log(_)
+                    | Builtin::Type(_)
+                    | Builtin::Func(_)
+                    | Builtin::ContinualTask(_)
+                    | Builtin::Index(_)
+                    | Builtin::Connection(_) => continue,
+                };
+                let item = conn_catalog
+                    .resolve_item(&PartialItemName {
+                        database: None,
+                        schema: Some(schema.to_string()),
+                        item: name.to_string(),
+                    })
+                    .expect("unable to resolve item")
+                    .at_version(RelationVersionSelector::Latest);
+
+                let full_name = conn_catalog.resolve_full_name(item.name());
+                let actual_desc = item.desc(&full_name).expect("invalid item type");
+                assert_eq!(
+                    &*actual_desc, expected_desc,
+                    "item {schema}.{name} did not match its expected RelationDesc"
+                );
+            }
+            catalog.expire().await;
+        })
+        .await
+    }
+
     // Connect to a running Postgres server and verify that our builtin
     // types and functions match it, in addition to some other things.
     #[mz_ore::test(tokio::test)]
@@ -3081,12 +3177,14 @@ mod tests {
                             assert!(
                                 is_same_type(imp.oid, imp_return_oid, pg_fn.ret_oid),
                                 "funcs with oid {} ({}) don't match return types: {:?} in mz, {:?} in pg",
-                                imp.oid, func.name, imp_return_oid, pg_fn.ret_oid
+                                imp.oid,
+                                func.name,
+                                imp_return_oid,
+                                pg_fn.ret_oid
                             );
 
                             assert_eq!(
-                                imp.return_is_set,
-                                pg_fn.ret_set,
+                                imp.return_is_set, pg_fn.ret_set,
                                 "funcs with oid {} ({}) don't match set-returning value: {:?} in mz, {:?} in pg",
                                 imp.oid, func.name, imp.return_is_set, pg_fn.ret_set
                             );
@@ -3116,10 +3214,7 @@ mod tests {
                     if imp_return_oid != pg_op.oprresult {
                         panic!(
                             "operators with oid {} ({}) don't match return typs: {} in mz, {} in pg",
-                            imp.oid,
-                            op,
-                            imp_return_oid,
-                            pg_op.oprresult
+                            imp.oid, op, imp_return_oid, pg_op.oprresult
                         );
                     }
                 }
@@ -3327,7 +3422,9 @@ mod tests {
                         // is ok, but also catches if the function returned a null
                         // but the MIR type inference said "non-nullable".
                         if !eval_result_datum.is_instance_of(&mir_typ) {
-                            panic!("{call_name}: expected return type of {return_styp:?}, got {eval_result_datum}");
+                            panic!(
+                                "{call_name}: expected return type of {return_styp:?}, got {eval_result_datum}"
+                            );
                         }
                         // Check the consistency of `introduces_nulls` and
                         // `propagates_nulls` with `MirScalarExpr::typ`.
@@ -3338,13 +3435,25 @@ mod tests {
                                 // If the function introduces_nulls, then the return
                                 // type should always be nullable, regardless of
                                 // the nullability of the input types.
-                                assert!(mir_typ.nullable, "fn named `{}` called on args `{:?}` (lowered to `{}`) yielded mir_typ.nullable: {}", name, args, mir, mir_typ.nullable);
+                                assert!(
+                                    mir_typ.nullable,
+                                    "fn named `{}` called on args `{:?}` (lowered to `{}`) yielded mir_typ.nullable: {}",
+                                    name, args, mir, mir_typ.nullable
+                                );
                             } else {
                                 let any_input_null = args.iter().any(|arg| arg.is_null());
                                 if !any_input_null {
-                                    assert!(!mir_typ.nullable, "fn named `{}` called on args `{:?}` (lowered to `{}`) yielded mir_typ.nullable: {}", name, args, mir, mir_typ.nullable);
+                                    assert!(
+                                        !mir_typ.nullable,
+                                        "fn named `{}` called on args `{:?}` (lowered to `{}`) yielded mir_typ.nullable: {}",
+                                        name, args, mir, mir_typ.nullable
+                                    );
                                 } else {
-                                    assert_eq!(mir_typ.nullable, propagates_nulls, "fn named `{}` called on args `{:?}` (lowered to `{}`) yielded mir_typ.nullable: {}", name, args, mir, mir_typ.nullable);
+                                    assert_eq!(
+                                        mir_typ.nullable, propagates_nulls,
+                                        "fn named `{}` called on args `{:?}` (lowered to `{}`) yielded mir_typ.nullable: {}",
+                                        name, args, mir, mir_typ.nullable
+                                    );
                                 }
                             }
                         }
@@ -3357,13 +3466,35 @@ mod tests {
                                 match reduce_result {
                                     Ok(reduce_result_row) => {
                                         let reduce_result_datum = reduce_result_row.unpack_first();
-                                        assert_eq!(reduce_result_datum, eval_result_datum, "eval/reduce datum mismatch: fn named `{}` called on args `{:?}` (lowered to `{}`) evaluated to `{}` with typ `{:?}`, but reduced to `{}` with typ `{:?}`", name, args, mir, eval_result_datum, mir_typ.scalar_type, reduce_result_datum, ctyp.scalar_type);
+                                        assert_eq!(
+                                            reduce_result_datum,
+                                            eval_result_datum,
+                                            "eval/reduce datum mismatch: fn named `{}` called on args `{:?}` (lowered to `{}`) evaluated to `{}` with typ `{:?}`, but reduced to `{}` with typ `{:?}`",
+                                            name,
+                                            args,
+                                            mir,
+                                            eval_result_datum,
+                                            mir_typ.scalar_type,
+                                            reduce_result_datum,
+                                            ctyp.scalar_type
+                                        );
                                         // Let's check that the types also match.
                                         // (We are not checking nullability here,
                                         // because it's ok when we know a more
                                         // precise nullability after actually
                                         // evaluating a function than before.)
-                                        assert_eq!(ctyp.scalar_type, mir_typ.scalar_type, "eval/reduce type mismatch: fn named `{}` called on args `{:?}` (lowered to `{}`) evaluated to `{}` with typ `{:?}`, but reduced to `{}` with typ `{:?}`", name, args, mir, eval_result_datum, mir_typ.scalar_type, reduce_result_datum, ctyp.scalar_type);
+                                        assert_eq!(
+                                            ctyp.scalar_type,
+                                            mir_typ.scalar_type,
+                                            "eval/reduce type mismatch: fn named `{}` called on args `{:?}` (lowered to `{}`) evaluated to `{}` with typ `{:?}`, but reduced to `{}` with typ `{:?}`",
+                                            name,
+                                            args,
+                                            mir,
+                                            eval_result_datum,
+                                            mir_typ.scalar_type,
+                                            reduce_result_datum,
+                                            ctyp.scalar_type
+                                        );
                                     }
                                     Err(..) => {} // It's ok, we might have given invalid args to the function
                                 }
@@ -3513,119 +3644,6 @@ mod tests {
             }
         })
         .await
-    }
-
-    #[mz_ore::test(tokio::test)]
-    #[cfg_attr(miri, ignore)] //  unsupported operation: can't call foreign function `TLS_client_method` on OS `linux`
-    async fn test_builtin_migrations() {
-        let persist_client = PersistClient::new_for_tests().await;
-        let bootstrap_args = test_bootstrap_args();
-        let organization_id = Uuid::new_v4();
-        let mv_name = "mv";
-        let (mz_tables_id, mv_id) = {
-            let mut catalog = Catalog::open_debug_catalog(
-                persist_client.clone(),
-                organization_id.clone(),
-                &bootstrap_args,
-            )
-            .await
-            .expect("unable to open debug catalog");
-
-            // Create a materialized view over `mz_tables`.
-            let database_id = DatabaseId::User(1);
-            let database = catalog.get_database(&database_id);
-            let database_name = database.name();
-            let schemas = database.schemas();
-            let schema = schemas.first().expect("must have at least one schema");
-            let schema_spec = schema.id().clone();
-            let schema_name = &schema.name().schema;
-            let database_spec = ResolvedDatabaseSpecifier::Id(database_id);
-            let id_ts = catalog.storage().await.current_upper().await;
-            let (mv_id, mv_gid) = catalog
-                .allocate_user_id(id_ts)
-                .await
-                .expect("unable to allocate id");
-            let mv = catalog
-                .state()
-                .deserialize_item(
-                    mv_gid,
-                    &format!("CREATE MATERIALIZED VIEW {database_name}.{schema_name}.{mv_name} AS SELECT name FROM mz_tables"),
-                    &BTreeMap::new(),
-                    &mut LocalExpressionCache::Closed,
-                    None,
-                )
-                .expect("unable to deserialize item");
-            let commit_ts = catalog.current_upper().await;
-            catalog
-                .transact(
-                    None,
-                    commit_ts,
-                    None,
-                    vec![Op::CreateItem {
-                        id: mv_id,
-                        name: QualifiedItemName {
-                            qualifiers: ItemQualifiers {
-                                database_spec,
-                                schema_spec,
-                            },
-                            item: mv_name.to_string(),
-                        },
-                        item: mv,
-                        owner_id: MZ_SYSTEM_ROLE_ID,
-                    }],
-                )
-                .await
-                .expect("unable to transact");
-
-            let mz_tables_id = catalog
-                .entries()
-                .find(|entry| &entry.name.item == "mz_tables" && entry.is_table())
-                .expect("mz_tables doesn't exist")
-                .id();
-            let check_mv_id = catalog
-                .entries()
-                .find(|entry| &entry.name.item == mv_name && entry.is_materialized_view())
-                .unwrap_or_else(|| panic!("{mv_name} doesn't exist"))
-                .id();
-            assert_eq!(check_mv_id, mv_id);
-            catalog.expire().await;
-            (mz_tables_id, mv_id)
-        };
-        // Forcibly migrate all tables.
-        {
-            let mut guard =
-                UNSAFE_DO_NOT_CALL_THIS_IN_PRODUCTION_BUILTIN_TABLE_FINGERPRINT_WHITESPACE
-                    .lock()
-                    .expect("lock poisoned");
-            *guard = Some((
-                UnsafeBuiltinTableFingerprintWhitespace::All,
-                "\n".to_string(),
-            ));
-        }
-        {
-            let catalog =
-                Catalog::open_debug_catalog(persist_client, organization_id, &bootstrap_args)
-                    .await
-                    .expect("unable to open debug catalog");
-
-            let new_mz_tables_id = catalog
-                .entries()
-                .find(|entry| &entry.name.item == "mz_tables" && entry.is_table())
-                .expect("mz_tables doesn't exist")
-                .id();
-            // Assert that the table was migrated and got a new ID.
-            assert_ne!(new_mz_tables_id, mz_tables_id);
-
-            let new_mv_id = catalog
-                .entries()
-                .find(|entry| &entry.name.item == mv_name && entry.is_materialized_view())
-                .unwrap_or_else(|| panic!("{mv_name} doesn't exist"))
-                .id();
-            // Assert that the materialized view was migrated and got a new ID.
-            assert_ne!(new_mv_id, mv_id);
-
-            catalog.expire().await;
-        }
     }
 
     #[mz_ore::test(tokio::test)]

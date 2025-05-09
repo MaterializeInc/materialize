@@ -45,8 +45,8 @@ use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::{EpochMillis, NowFn};
 use mz_ore::task::AbortOnDropHandle;
 use mz_ore::tracing::OpenTelemetryContext;
-use mz_persist_client::cache::PersistClientCache;
 use mz_persist_client::PersistLocation;
+use mz_persist_client::cache::PersistClientCache;
 use mz_persist_types::Codec64;
 use mz_proto::RustType;
 use mz_repr::{Datum, GlobalId, Row, TimestampManipulation};
@@ -205,6 +205,14 @@ pub struct Controller<T: ComputeControllerTimestamp = mz_repr::Timestamp> {
 impl<T: ComputeControllerTimestamp> Controller<T> {
     pub fn set_arrangement_exert_proportionality(&mut self, value: u32) {
         self.compute.set_arrangement_exert_proportionality(value);
+    }
+
+    /// Start sinking the compute controller's introspection data into storage.
+    ///
+    /// This method should be called once the introspection collections have been registered with
+    /// the storage controller. It will panic if invoked earlier than that.
+    pub fn start_compute_introspection_sink(&mut self) {
+        self.compute.start_introspection_sink(&*self.storage);
     }
 
     /// Returns the connection context installed in the controller.
@@ -470,7 +478,7 @@ where
     /// Process a pending response from the compute controller. If necessary,
     /// return a higher-level response to our client.
     fn process_compute_response(&mut self) -> Result<Option<ControllerResponse<T>>, anyhow::Error> {
-        let response = self.compute.process(&mut *self.storage);
+        let response = self.compute.process();
 
         let response = response.and_then(|r| match r {
             ComputeControllerResponse::PeekNotification(uuid, peek, otel_ctx) => {
@@ -582,7 +590,7 @@ where
                     m.disk_usage_bytes.into(),
                     Datum::TimestampTz(now_tz),
                 ]);
-                (row.clone(), 1)
+                (row.clone(), mz_repr::Diff::ONE)
             })
             .collect();
 
@@ -643,12 +651,7 @@ where
         }
 
         let now_fn = config.now.clone();
-        let wallclock_lag: WallclockLagFn<_> = Arc::new(move |time: &T| {
-            let now = mz_repr::Timestamp::new(now_fn());
-            let time_ts: mz_repr::Timestamp = time.clone().into();
-            let lag_ts = now.saturating_sub(time_ts);
-            Duration::from(lag_ts)
-        });
+        let wallclock_lag_fn = WallclockLagFn::new(now_fn);
 
         let controller_metrics = ControllerMetrics::new(&config.metrics_registry);
 
@@ -674,7 +677,7 @@ where
             config.persist_location,
             config.persist_clients,
             config.now.clone(),
-            Arc::clone(&wallclock_lag),
+            wallclock_lag_fn.clone(),
             Arc::clone(&txns_metrics),
             envd_epoch,
             read_only,
@@ -695,7 +698,7 @@ where
             &config.metrics_registry,
             controller_metrics,
             config.now.clone(),
-            wallclock_lag,
+            wallclock_lag_fn,
         );
         let (metrics_tx, metrics_rx) = mpsc::unbounded_channel();
 

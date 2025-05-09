@@ -1,0 +1,257 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET enable_new_outer_join_lowering TO false;
+----
+COMPLETE 0
+
+statement ok
+CREATE TABLE accounts(id int, balance int);
+
+# Use `id bigint` instead of `id int` to force differences in planning based on
+# the `enable_new_outer_join_lowering` feature flag value.
+statement ok
+CREATE TABLE account_details(id bigint, address string);
+
+statement ok
+CREATE OR REPLACE VIEW v AS
+SELECT
+  *
+FROM
+  accounts a
+  LEFT JOIN account_details ad USING(id)
+WHERE
+  balance = 100;
+
+mode cockroach
+
+# Must explain the "Locally Optimized Plan".
+query T multiline
+EXPLAIN LOCALLY OPTIMIZED PLAN FOR
+VIEW v;
+----
+With
+  cte l0 =
+    Join on=(#2{id} = integer_to_bigint(#0{id}))
+      Filter (#1{balance} = 100) AND (#0{id}) IS NOT NULL
+        Get materialize.public.accounts
+      Filter (#0{id}) IS NOT NULL
+        Get materialize.public.account_details
+  cte l1 =
+    Filter (#1 = 100)
+      Get materialize.public.accounts
+Return
+  Project (#0, #1, #3)
+    Union
+      Get l0
+      Project (#0, #3..=#5)
+        Map (100, null, null)
+          Join on=(#0 = #1)
+            Union
+              Negate
+                Distinct project=[#0]
+                  Get l0
+              Distinct project=[#0]
+                Get l1
+            Get l1
+
+EOF
+
+# Must explain the "Locally Optimized Plan" (same as above).
+query T multiline
+EXPLAIN LOCALLY OPTIMIZED PLAN FOR
+REPLAN VIEW v;
+----
+With
+  cte l0 =
+    Join on=(#2{id} = integer_to_bigint(#0{id}))
+      Filter (#1{balance} = 100) AND (#0{id}) IS NOT NULL
+        Get materialize.public.accounts
+      Filter (#0{id}) IS NOT NULL
+        Get materialize.public.account_details
+  cte l1 =
+    Filter (#1 = 100)
+      Get materialize.public.accounts
+Return
+  Project (#0, #1, #3)
+    Union
+      Get l0
+      Project (#0, #3..=#5)
+        Map (100, null, null)
+          Join on=(#0 = #1)
+            Union
+              Negate
+                Distinct project=[#0]
+                  Get l0
+              Distinct project=[#0]
+                Get l1
+            Get l1
+
+EOF
+
+# Must explain the "Locally Optimized Plan" after changing the feature flag
+# (same as below).
+query T multiline
+EXPLAIN LOCALLY OPTIMIZED PLAN WITH(ENABLE NEW OUTER JOIN LOWERING = TRUE) FOR
+REPLAN VIEW v;
+----
+With
+  cte l0 =
+    Join on=(#2{id} = integer_to_bigint(#0{id}))
+      Filter (#0{id}) IS NOT NULL
+        Get materialize.public.accounts
+      Filter (#0{id}) IS NOT NULL
+        Get materialize.public.account_details
+Return
+  Project (#0, #1, #3)
+    Union
+      Map (null, null)
+        Union
+          Project (#0, #1)
+            Negate
+              Join on=(#2 = integer_to_bigint(#0{id}))
+                Filter (#1{balance} = 100) AND (#0{id}) IS NOT NULL
+                  Get materialize.public.accounts
+                Distinct project=[#2]
+                  Get l0
+          Filter (#1{balance} = 100)
+            Get materialize.public.accounts
+      Filter (#1{balance} = 100)
+        Get l0
+
+EOF
+
+# Change the feature flag value
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET enable_new_outer_join_lowering TO true;
+----
+COMPLETE 0
+
+# Must be planning with the feature flag turned on.
+statement ok
+CREATE OR REPLACE VIEW v AS
+SELECT
+  *
+FROM
+  accounts a
+  LEFT JOIN account_details ad USING(id)
+WHERE
+  balance = 100;
+
+# Ensure that flag was used during planning.
+query T multiline
+EXPLAIN LOCALLY OPTIMIZED PLAN FOR
+VIEW v;
+----
+With
+  cte l0 =
+    Join on=(#2{id} = integer_to_bigint(#0{id}))
+      Filter (#0{id}) IS NOT NULL
+        Get materialize.public.accounts
+      Filter (#0{id}) IS NOT NULL
+        Get materialize.public.account_details
+Return
+  Project (#0, #1, #3)
+    Union
+      Map (null, null)
+        Union
+          Project (#0, #1)
+            Negate
+              Join on=(#2 = integer_to_bigint(#0{id}))
+                Filter (#1{balance} = 100) AND (#0{id}) IS NOT NULL
+                  Get materialize.public.accounts
+                Distinct project=[#2]
+                  Get l0
+          Filter (#1{balance} = 100)
+            Get materialize.public.accounts
+      Filter (#1{balance} = 100)
+        Get l0
+
+EOF
+
+# Must be re-planning with the feature flag turned off.
+query T multiline
+EXPLAIN LOCALLY OPTIMIZED PLAN WITH(ENABLE NEW OUTER JOIN LOWERING = FALSE) FOR
+REPLAN VIEW v;
+----
+With
+  cte l0 =
+    Join on=(#2{id} = integer_to_bigint(#0{id}))
+      Filter (#1{balance} = 100) AND (#0{id}) IS NOT NULL
+        Get materialize.public.accounts
+      Filter (#0{id}) IS NOT NULL
+        Get materialize.public.account_details
+  cte l1 =
+    Filter (#1 = 100)
+      Get materialize.public.accounts
+Return
+  Project (#0, #1, #3)
+    Union
+      Get l0
+      Project (#0, #3..=#5)
+        Map (100, null, null)
+          Join on=(#0 = #1)
+            Union
+              Negate
+                Distinct project=[#0]
+                  Get l0
+              Distinct project=[#0]
+                Get l1
+            Get l1
+
+EOF
+
+## Constant views
+## (Regression tests for https://github.com/MaterializeInc/database-issues/issues/8985 )
+
+statement ok
+CREATE VIEW v2 AS SELECT 1;
+
+query T multiline
+EXPLAIN LOCALLY OPTIMIZED PLAN FOR
+REPLAN VIEW v2
+----
+Constant
+  - (1)
+
+EOF
+
+query T multiline
+EXPLAIN LOCALLY OPTIMIZED PLAN FOR
+CREATE VIEW v3 AS SELECT 5;
+----
+Constant
+  - (5)
+
+EOF
+
+# LOCALLY OPTIMIZED PLAN FOR constant MV
+query T multiline
+EXPLAIN LOCALLY OPTIMIZED PLAN FOR
+CREATE MATERIALIZED VIEW v3 AS SELECT 5;
+----
+Constant
+  - (5)
+
+Target cluster: quickstart
+
+EOF
+
+# LOCALLY OPTIMIZED PLAN FOR constant peek
+query T multiline
+EXPLAIN LOCALLY OPTIMIZED PLAN FOR
+SELECT 5;
+----
+Constant
+  - (5)
+
+Target cluster: mz_catalog_server
+
+EOF

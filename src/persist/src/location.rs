@@ -16,6 +16,7 @@ use std::time::Instant;
 
 use anyhow::anyhow;
 use async_trait::async_trait;
+use azure_core::StatusCode;
 use bytes::Bytes;
 use futures_util::Stream;
 use mz_ore::bytes::SegmentedBytes;
@@ -268,7 +269,7 @@ impl From<deadpool_postgres::tokio_postgres::Error> for ExternalError {
             None => {
                 return ExternalError::Indeterminate(Indeterminate {
                     inner: anyhow::Error::new(e),
-                })
+                });
             }
         };
         match code {
@@ -282,6 +283,30 @@ impl From<deadpool_postgres::tokio_postgres::Error> for ExternalError {
             _ => ExternalError::Indeterminate(Indeterminate {
                 inner: anyhow::Error::new(e),
             }),
+        }
+    }
+}
+
+impl From<azure_core::Error> for ExternalError {
+    fn from(value: azure_core::Error) -> Self {
+        let definitely_determinate = if let Some(http) = value.as_http_error() {
+            match http.status() {
+                // There are many other status codes that _ought_ to be determinate, according to
+                // the HTTP spec, but this includes only codes that we've observed in practice for now.
+                StatusCode::TooManyRequests => true,
+                _ => false,
+            }
+        } else {
+            false
+        };
+        if definitely_determinate {
+            ExternalError::Determinate(Determinate {
+                inner: anyhow!(value),
+            })
+        } else {
+            ExternalError::Indeterminate(Indeterminate {
+                inner: anyhow!(value),
+            })
         }
     }
 }
@@ -908,7 +933,9 @@ pub mod tests {
             consensus
                 .compare_and_set(&key, Some(state.seqno), invalid_constant_seqno)
                 .await,
-            Err(ExternalError::from(anyhow!("new seqno must be strictly greater than expected. Got new: SeqNo(5) expected: SeqNo(5)")))
+            Err(ExternalError::from(anyhow!(
+                "new seqno must be strictly greater than expected. Got new: SeqNo(5) expected: SeqNo(5)"
+            )))
         );
 
         let invalid_regressing_seqno = VersionedData {
@@ -922,7 +949,9 @@ pub mod tests {
             consensus
                 .compare_and_set(&key, Some(state.seqno), invalid_regressing_seqno)
                 .await,
-            Err(ExternalError::from(anyhow!("new seqno must be strictly greater than expected. Got new: SeqNo(3) expected: SeqNo(5)")))
+            Err(ExternalError::from(anyhow!(
+                "new seqno must be strictly greater than expected. Got new: SeqNo(3) expected: SeqNo(5)"
+            )))
         );
 
         // Can correctly update to a new state if we provide the right expected seqno

@@ -106,7 +106,7 @@ Dictionary page encoding      | Plain
 Dictionary data page encoding | `RLE_DICTIONARY`
 
 If you run into a snag trying to ingest Parquet files produced by Materialize
-into your downstream systems, please [contact our team](https://materialize.com/docs/support/)
+into your downstream systems, please [contact our team](/support/)
 or [open a bug report](https://github.com/MaterializeInc/materialize/discussions/new?category=bug-reports)!
 
 ##### Data types {#copy-to-s3-parquet-data-types}

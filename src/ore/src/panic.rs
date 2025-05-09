@@ -28,6 +28,8 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use std::{env, thread};
 
+#[cfg(feature = "chrono")]
+use chrono::Utc;
 use itertools::Itertools;
 #[cfg(feature = "async")]
 use tokio::task_local;
@@ -52,6 +54,14 @@ task_local! {
 ///
 ///   * Writes to stderr as atomically as possible, to minimize interleaving
 ///     with concurrent log messages.
+///
+///   * Reports panics to Sentry.
+///
+///     Sentry installs its own panic hook by default that reports the panic and
+///     then forwards it to the previous panic hook. We can't use that hook
+///     because it would also report panics that we catch-unwind afterwards.
+///     Instead we are invoking the Sentry integration manually here, after the
+///     catch-unwind check.
 ///
 ///   * Instructs the entire process to abort if any thread panics.
 ///
@@ -84,6 +94,15 @@ pub fn install_enhanced_handler() {
         if catching_unwind || catching_unwind_async {
             return;
         }
+
+        // Report the panic to Sentry.
+        sentry_panic::panic_handler(panic_info);
+
+        // can't use if cfg!() here because that will require chrono::Utc import
+        #[cfg(feature = "chrono")]
+        let timestamp = Utc::now().format("%Y-%m-%dT%H:%M:%S%.6fZ  ").to_string();
+        #[cfg(not(feature = "chrono"))]
+        let timestamp = String::new();
 
         let thread = thread::current();
         let thread_name = thread.name().unwrap_or("<unnamed>");
@@ -139,7 +158,9 @@ pub fn install_enhanced_handler() {
         // may be writing to the stderr stream outside of the Rust runtime.
         //
         // See https://github.com/rust-lang/rust/issues/64413 for details.
-        let buf = format!("thread '{thread_name}' panicked at {location}:\n{msg}\n{backtrace}");
+        let buf = format!(
+            "{timestamp}thread '{thread_name}' panicked at {location}:\n{msg}\n{backtrace}"
+        );
 
         // Ideal path: spawn a thread that attempts to lock the Rust-managed
         // stderr stream and write the panic message there. Acquiring the stderr

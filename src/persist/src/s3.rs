@@ -12,32 +12,32 @@
 use std::cmp;
 use std::fmt::{Debug, Formatter};
 use std::ops::Range;
-use std::sync::atomic::{self, AtomicU64};
 use std::sync::Arc;
+use std::sync::atomic::{self, AtomicU64};
 use std::time::{Duration, Instant};
 
-use anyhow::{anyhow, Context};
+use anyhow::{Context, anyhow};
 use async_trait::async_trait;
 use aws_config::sts::AssumeRoleProvider;
 use aws_config::timeout::TimeoutConfig;
 use aws_credential_types::Credentials;
+use aws_sdk_s3::Client as S3Client;
 use aws_sdk_s3::config::{AsyncSleep, Sleep};
-use aws_sdk_s3::error::SdkError;
+use aws_sdk_s3::error::{ProvideErrorMetadata, SdkError};
 use aws_sdk_s3::primitives::ByteStream;
 use aws_sdk_s3::types::{CompletedMultipartUpload, CompletedPart};
-use aws_sdk_s3::Client as S3Client;
 use aws_types::region::Region;
 use bytes::Bytes;
 use futures_util::stream::FuturesOrdered;
 use futures_util::{FutureExt, StreamExt};
 use mz_dyncfg::{Config, ConfigSet};
-use mz_ore::bytes::{MaybeLgBytes, SegmentedBytes};
+use mz_ore::bytes::SegmentedBytes;
 use mz_ore::cast::CastFrom;
-use mz_ore::lgbytes::{LgBytes, MetricsRegion};
+use mz_ore::lgbytes::MetricsRegion;
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::task::RuntimeExt;
 use tokio::runtime::Handle as AsyncHandle;
-use tracing::{debug, debug_span, trace, trace_span, Instrument};
+use tracing::{Instrument, debug, debug_span, trace, trace_span};
 use uuid::Uuid;
 
 use crate::cfg::BlobKnobs;
@@ -276,8 +276,7 @@ impl S3BlobConfig {
             Arc::new(
                 ConfigSet::default()
                     .add(&ENABLE_S3_LGALLOC_CC_SIZES)
-                    .add(&ENABLE_S3_LGALLOC_NONCC_SIZES)
-                    .add(&ENABLE_ONE_ALLOC_PER_REQUEST),
+                    .add(&ENABLE_S3_LGALLOC_NONCC_SIZES),
             ),
         )
         .await?;
@@ -345,12 +344,6 @@ pub(crate) const ENABLE_S3_LGALLOC_NONCC_SIZES: Config<bool> = Config::new(
     "A feature flag to enable copying fetched s3 data into lgalloc on non-cc sized clusters.",
 );
 
-pub(crate) const ENABLE_ONE_ALLOC_PER_REQUEST: Config<bool> = Config::new(
-    "persist_enable_one_alloc_per_request",
-    true,
-    "An incident flag to disable making only one lgalloc allocation per multi-part request.",
-);
-
 #[async_trait]
 impl Blob for S3Blob {
     async fn get(&self, key: &str) -> Result<Option<SegmentedBytes>, ExternalError> {
@@ -411,7 +404,10 @@ impl Blob for S3Blob {
         let first_part = match object {
             Ok(object) => object,
             Err(SdkError::ServiceError(err)) if err.err().is_no_such_key() => return Ok(None),
-            Err(err) => Err(anyhow!(err).context("s3 get meta err"))?,
+            Err(err) => {
+                self.update_error_metrics("GetObject", &err);
+                Err(anyhow!(err).context("s3 get meta err"))?
+            }
         };
 
         // Get the remaining number of parts
@@ -466,6 +462,7 @@ impl Blob for S3Blob {
                             .part_number(part_num)
                             .send()
                             .await
+                            .inspect_err(|err| self.update_error_metrics("GetObject", err))
                             .context("s3 get meta err")?;
                         min_header_elapsed
                             .observe(header_start.elapsed(), "s3 download part header");
@@ -475,7 +472,7 @@ impl Blob for S3Blob {
 
                 // Request the body.
                 let body_start = Instant::now();
-                let mut body_parts = Vec::new();
+                let mut body_parts: Vec<Bytes> = Vec::new();
 
                 // Get the data into lgalloc at the absolute earliest possible
                 // point without (yet) having to fork the s3 client library.
@@ -485,25 +482,18 @@ impl Blob for S3Blob {
                     ENABLE_S3_LGALLOC_NONCC_SIZES.get(&self.cfg)
                 };
 
-                // Ideally we write all of the copy all of the bytes into a
-                // single allocation, but we retain a CYA fallback case.
-                let enable_one_allocation =
-                    ENABLE_ONE_ALLOC_PER_REQUEST.get(&self.cfg) && enable_s3_lgalloc;
+                // Copy all of the bytes off the network and into a single allocation.
                 let mut buffer = match object.content_length() {
                     Some(len @ 1..) => {
-                        if enable_one_allocation {
-                            let len: u64 = len.try_into().expect("positive integer");
-                            // N.B. `lgalloc` cannot reallocate so we need to make sure the initial
-                            // allocation is large enough to fit then entire blob.
-                            let buf: MetricsRegion<u8> = self
-                                .metrics
-                                .lgbytes
-                                .persist_s3
-                                .new_region(usize::cast_from(len));
-                            Some(buf)
-                        } else {
-                            None
-                        }
+                        let len: u64 = len.try_into().expect("positive integer");
+                        // N.B. `lgalloc` cannot reallocate so we need to make sure the initial
+                        // allocation is large enough to fit then entire blob.
+                        let buf: MetricsRegion<u8> = self
+                            .metrics
+                            .lgbytes
+                            .persist_s3
+                            .new_region(usize::cast_from(len));
+                        Some(buf)
                     }
                     // content-length of 0 isn't necessarily invalid.
                     Some(len @ ..=-1) => {
@@ -521,9 +511,7 @@ impl Blob for S3Blob {
                         Some(buf) => buf.extend_from_slice(&data[..]),
                         // Fallback to spilling into lgalloc is quick as possible.
                         None if enable_s3_lgalloc => {
-                            body_parts.push(MaybeLgBytes::LgBytes(
-                                self.metrics.lgbytes.persist_s3.try_mmap(&data),
-                            ));
+                            body_parts.push(self.metrics.lgbytes.persist_s3.try_mmap_bytes(data));
                         }
                         // If all else false just heap allocate.
                         None => {
@@ -534,7 +522,7 @@ impl Blob for S3Blob {
                             // TODO: Once we've validated the LgBytes path, change
                             // this fallback path to be a heap allocated LgBytes.
                             // Then we can remove the pub from MaybeLgBytes.
-                            body_parts.push(MaybeLgBytes::Bytes(data));
+                            body_parts.push(data);
                         }
                     }
                 }
@@ -544,7 +532,7 @@ impl Blob for S3Blob {
                     // If we're writing into a single buffer we shouldn't have
                     // pushed anything else into our segments.
                     assert!(body_parts.is_empty());
-                    body_parts.push(MaybeLgBytes::LgBytes(LgBytes::from(Arc::new(body))));
+                    body_parts.push(body.into());
                 }
 
                 let body_elapsed = body_start.elapsed();
@@ -560,7 +548,14 @@ impl Blob for S3Blob {
         let mut segments = vec![];
         while let Some(result) = body_futures.next().await {
             // Download failure, we failed to fetch the body from S3.
-            let mut part_body = result.context("s3 get body err")?;
+            let mut part_body = result
+                .inspect_err(|e| {
+                    self.metrics
+                        .error_counts
+                        .with_label_values(&["GetObjectStream", e.to_string().as_str()])
+                        .inc()
+                })
+                .context("s3 get body err")?;
 
             // Collect all of our segments.
             segments.append(&mut part_body);
@@ -597,6 +592,7 @@ impl Blob for S3Blob {
                 .set_continuation_token(continuation_token)
                 .send()
                 .await
+                .inspect_err(|err| self.update_error_metrics("ListObjectsV2", err))
                 .context("list bucket error")?;
             if let Some(contents) = resp.contents {
                 for object in contents.iter() {
@@ -606,7 +602,7 @@ impl Blob for S3Blob {
                                 None => {
                                     return Err(ExternalError::from(anyhow!(
                                         "object missing size: {key}"
-                                    )))
+                                    )));
                                 }
                                 Some(size) => size
                                     .try_into()
@@ -667,7 +663,7 @@ impl Blob for S3Blob {
                 None => {
                     return Err(ExternalError::from(anyhow!(
                         "s3 delete content length was none"
-                    )))
+                    )));
                 }
                 Some(content_length) => {
                     u64::try_from(content_length).expect("file in S3 cannot have negative size")
@@ -675,9 +671,10 @@ impl Blob for S3Blob {
             },
             Err(SdkError::ServiceError(err)) if err.err().is_not_found() => return Ok(None),
             Err(err) => {
+                self.update_error_metrics("HeadObject", &err);
                 return Err(ExternalError::from(
                     anyhow!(err).context("s3 delete head err"),
-                ))
+                ));
             }
         };
         self.metrics.delete_object.inc();
@@ -688,6 +685,7 @@ impl Blob for S3Blob {
             .key(&path)
             .send()
             .await
+            .inspect_err(|err| self.update_error_metrics("DeleteObject", err))
             .context("s3 delete object err")?;
         Ok(Some(usize::cast_from(size_bytes)))
     }
@@ -710,6 +708,7 @@ impl Blob for S3Blob {
                 .max_keys(1)
                 .send()
                 .await
+                .inspect_err(|err| self.update_error_metrics("ListObjectVersions", err))
                 .context("listing object versions during restore")?;
 
             let current_delete = list_res
@@ -732,6 +731,7 @@ impl Blob for S3Blob {
                     .version_id(version)
                     .send()
                     .await
+                    .inspect_err(|err| self.update_error_metrics("DeleteObject", err))
                     .context("deleting a delete marker")?;
                 assert!(
                     deleted.delete_marker().unwrap_or(false),
@@ -772,6 +772,7 @@ impl S3Blob {
             .send()
             .instrument(part_span)
             .await
+            .inspect_err(|err| self.update_error_metrics("PutObject", err))
             .context("set single part")?;
         debug!(
             "s3 PutObject single done {}b / {:?}",
@@ -807,6 +808,7 @@ impl S3Blob {
             .send()
             .instrument(debug_span!("s3set_multi_start"))
             .await
+            .inspect_err(|err| self.update_error_metrics("CreateMultipartUpload", err))
             .context("create_multipart_upload err")?;
         let upload_id = upload_res
             .upload_id()
@@ -863,11 +865,23 @@ impl S3Blob {
         for (part_num, part_fut) in part_futs.into_iter() {
             let (this_part_elapsed, part_res) = part_fut
                 .await
+                .inspect(|_| {
+                    self.metrics
+                        .error_counts
+                        .with_label_values(&["UploadPart", "AsyncSpawnError"])
+                        .inc()
+                })
                 .map_err(|err| anyhow!(err).context("s3 spawn err"))?;
-            let part_res = part_res.context("s3 upload_part err")?;
-            let part_e_tag = part_res
-                .e_tag()
-                .ok_or_else(|| anyhow!("s3 upload part missing e_tag"))?;
+            let part_res = part_res
+                .inspect_err(|err| self.update_error_metrics("UploadPart", err))
+                .context("s3 upload_part err")?;
+            let part_e_tag = part_res.e_tag().ok_or_else(|| {
+                self.metrics
+                    .error_counts
+                    .with_label_values(&["UploadPart", "MissingEtag"])
+                    .inc();
+                anyhow!("s3 upload part missing e_tag")
+            })?;
             parts.push(
                 CompletedPart::builder()
                     .e_tag(part_e_tag)
@@ -908,6 +922,7 @@ impl S3Blob {
             .send()
             .instrument(debug_span!("s3set_multi_complete", num_parts = parts_len))
             .await
+            .inspect_err(|err| self.update_error_metrics("CompleteMultipartUpload", err))
             .context("complete_multipart_upload err")?;
         trace!(
             "s3 complete_multipart_upload took {:?}",
@@ -921,6 +936,48 @@ impl S3Blob {
             parts_len
         );
         Ok(())
+    }
+
+    fn update_error_metrics<E, R>(&self, op: &str, err: &SdkError<E, R>)
+    where
+        E: ProvideErrorMetadata,
+    {
+        let code = match err {
+            SdkError::ServiceError(e) => match e.err().code() {
+                Some(code) => code,
+                None => "UnknownServiceError",
+            },
+            SdkError::DispatchFailure(e) => {
+                if let Some(other_error) = e.as_other() {
+                    match other_error {
+                        aws_config::retry::ErrorKind::TransientError => "TransientError",
+                        aws_config::retry::ErrorKind::ThrottlingError => "ThrottlingError",
+                        aws_config::retry::ErrorKind::ServerError => "ServerError",
+                        aws_config::retry::ErrorKind::ClientError => "ClientError",
+                        _ => "UnknownDispatchFailure",
+                    }
+                } else if e.is_timeout() {
+                    "TimeoutError"
+                } else if e.is_io() {
+                    "IOError"
+                } else if e.is_user() {
+                    "UserError"
+                } else {
+                    "UnknownDispathFailure"
+                }
+            }
+            SdkError::ResponseError(_) => "ResponseError",
+            SdkError::ConstructionFailure(_) => "ConstructionFailure",
+            // There is some overlap with MetricsSleep. MetricsSleep is more granular
+            // but does not contain the operation.
+            SdkError::TimeoutError(_) => "TimeoutError",
+            // an error was added at some point in the future
+            _ => "UnknownSdkError",
+        };
+        self.metrics
+            .error_counts
+            .with_label_values(&[op, code])
+            .inc();
     }
 }
 
@@ -1094,6 +1151,7 @@ mod tests {
     #[mz_ore::test(tokio::test(flavor = "multi_thread"))]
     #[cfg_attr(coverage, ignore)] // https://github.com/MaterializeInc/database-issues/issues/5586
     #[cfg_attr(miri, ignore)] // error: unsupported operation: can't call foreign function `TLS_method` on OS `linux`
+    #[ignore] // TODO: Reenable against minio so it can run locally
     async fn s3_blob() -> Result<(), ExternalError> {
         let config = match S3BlobConfig::new_for_test().await? {
             Some(client) => client,
@@ -1119,8 +1177,7 @@ mod tests {
                     cfg: Arc::new(
                         ConfigSet::default()
                             .add(&ENABLE_S3_LGALLOC_CC_SIZES)
-                            .add(&ENABLE_S3_LGALLOC_NONCC_SIZES)
-                            .add(&ENABLE_ONE_ALLOC_PER_REQUEST),
+                            .add(&ENABLE_S3_LGALLOC_NONCC_SIZES),
                     ),
                     is_cc_active: true,
                 };

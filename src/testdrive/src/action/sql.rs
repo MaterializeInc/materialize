@@ -13,7 +13,7 @@ use std::fmt::{self, Display, Formatter, Write as _};
 use std::io::{self, Write};
 use std::time::SystemTime;
 
-use anyhow::{bail, Context};
+use anyhow::{Context, bail};
 use md5::{Digest, Md5};
 use mz_ore::collections::CollectionExt;
 use mz_ore::retry::Retry;
@@ -65,6 +65,7 @@ pub async fn run_sql(mut cmd: SqlCommand, state: &mut State) -> Result<ControlFl
         | CreateMaterializedView(_)
         | CreateView(_)
         | CreateTable(_)
+        | CreateTableFromSource(_)
         | CreateIndex(_)
         | CreateType(_)
         | CreateRole(_)
@@ -90,18 +91,17 @@ pub async fn run_sql(mut cmd: SqlCommand, state: &mut State) -> Result<ControlFl
     }
     .retry_async_with_state(state, |retry_state, state| async move {
         let should_continue = retry_state.i + 1 < state.max_tries && should_retry;
+        let start = SystemTime::now();
         match try_run_sql(state, query, expected_output, should_continue).await {
             Ok(()) => {
+                let now = SystemTime::now();
+                let epoch = SystemTime::UNIX_EPOCH;
+                let ts = now.duration_since(epoch).unwrap().as_secs_f64();
+                let delay = now.duration_since(start).unwrap().as_secs_f64();
                 if retry_state.i != 0 {
                     println!();
                 }
-                println!(
-                    "rows match; continuing at ts {}",
-                    SystemTime::now()
-                        .duration_since(SystemTime::UNIX_EPOCH)
-                        .unwrap()
-                        .as_secs_f64()
-                );
+                println!("rows match; continuing at ts {ts}, took {delay}s");
                 (state, Ok(()))
             }
             Err(e) => {
@@ -520,7 +520,9 @@ async fn try_run_fail_sql(
 pub fn print_query(query: &str, stmt: Option<&Statement<Raw>>) {
     use Statement::*;
     if let Some(CreateSecret(_)) = stmt {
-        println!("> CREATE SECRET [query truncated on purpose so as to not reveal the secret in the log]");
+        println!(
+            "> CREATE SECRET [query truncated on purpose so as to not reveal the secret in the log]"
+        );
     } else {
         println!("> {}", query)
     }
@@ -576,7 +578,7 @@ pub fn decode_row(
 
     impl fmt::Display for NumericStandardNotation {
         fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-            write!(f, "{}", self.0 .0 .0.to_standard_notation_string())
+            write!(f, "{}", self.0.0.0.to_standard_notation_string())
         }
     }
 

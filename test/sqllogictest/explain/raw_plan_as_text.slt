@@ -50,8 +50,8 @@ EXPLAIN RAW PLAN AS TEXT FOR
 SELECT a + 1, b, 4 FROM mv WHERE a > 0
 ----
 Project (#2, #1, #3)
-  Map ((#0 + 1), 4)
-    Filter (#0 > 0)
+  Map ((#0{a} + 1), 4)
+    Filter (#0{a} > 0)
       Get materialize.public.mv
 
 Target cluster: quickstart
@@ -136,8 +136,8 @@ EXPLAIN RAW PLAN AS TEXT FOR
 SELECT abs(min(a) - max(a)) FROM t
 ----
 Project (#2)
-  Map (abs((#0 - #1)))
-    Reduce aggregates=[min(#0), max(#0)]
+  Map (abs((#0{?column?} - #1{?column?})))
+    Reduce aggregates=[min(#0{a}), max(#0{a})]
       Get materialize.public.t
 
 Target cluster: quickstart
@@ -150,9 +150,9 @@ EXPLAIN RAW PLAN AS TEXT FOR
 SELECT abs(min(a) - max(a)) FROM t GROUP BY b
 ----
 Project (#3)
-  Map (abs((#1 - #2)))
-    Reduce group_by=[#2] aggregates=[min(#0), max(#0)]
-      Map (#1)
+  Map (abs((#1{?column?} - #2{?column?})))
+    Reduce group_by=[#2] aggregates=[min(#0{a}), max(#0{a})]
+      Map (#1{b})
         Get materialize.public.t
 
 Target cluster: quickstart
@@ -164,16 +164,16 @@ query T multiline
 EXPLAIN RAW PLAN AS TEXT FOR
 SELECT * FROM t WHERE EXISTS(SELECT * FROM mv WHERE t.a < mv.a) AND EXISTS(SELECT * FROM mv WHERE t.b > mv.b)
 ----
+With
+  cte [l2 as subquery-2] =
+    Filter (#^1{b} > #1{b})
+      Get materialize.public.mv
+  cte [l1 as subquery-1] =
+    Filter (#^0{a} < #0{a})
+      Get materialize.public.mv
 Return
   Filter (exists(Get l1) AND exists(Get l2))
     Get materialize.public.t
-With
-  cte l1 =
-    Filter (#^0 < #0)
-      Get materialize.public.mv
-  cte l2 =
-    Filter (#^1 > #1)
-      Get materialize.public.mv
 
 Target cluster: quickstart
 
@@ -185,20 +185,20 @@ EXPLAIN RAW PLAN AS TEXT FOR
 SELECT (SELECT v.a FROM v WHERE v.b = t.b LIMIT 1), (SELECT mv.a FROM mv WHERE mv.b = t.b LIMIT 1) FROM t
 ----
 Project (#2, #3)
+  With
+    cte [l2 as subquery-2] =
+      Project (#0)
+        TopK limit=1
+          Filter (#1{b} = #^1{b})
+            Get materialize.public.mv
+    cte [l1 as subquery-1] =
+      Project (#0)
+        TopK limit=1
+          Filter (#1{b} = #^1{b})
+            Get materialize.public.v
   Return
     Map (select(Get l1), select(Get l2))
       Get materialize.public.t
-  With
-    cte l1 =
-      Project (#0)
-        TopK limit=1
-          Filter (#1 = #^1)
-            Get materialize.public.v
-    cte l2 =
-      Project (#0)
-        TopK limit=1
-          Filter (#1 = #^1)
-            Get materialize.public.mv
 
 Target cluster: quickstart
 
@@ -243,7 +243,7 @@ FROM
 WHERE t1.b = t2.b AND t2.b = t3.b
 ----
 Project (#0, #2)
-  Filter ((#1 = #3) AND (#3 = #5))
+  Filter ((#1{b} = #3{b}) AND (#3{b} = #5{b}))
     CrossJoin
       CrossJoin
         Get materialize.public.t
@@ -263,8 +263,8 @@ INNER JOIN t as t2 ON t1.b = t2.b
 INNER JOIN t as t3 ON t2.b = t3.b
 ----
 Project (#0, #2)
-  InnerJoin (#3 = #5)
-    InnerJoin (#1 = #3)
+  InnerJoin (#3{b} = #5{b})
+    InnerJoin (#1{b} = #3{b})
       Get materialize.public.t
       Get materialize.public.t
     Get materialize.public.t
@@ -282,8 +282,8 @@ LEFT JOIN t as t2 ON t1.b = t2.b
 RIGHT JOIN t as t3 ON t2.b = t3.b
 ----
 Project (#0, #2)
-  RightOuterJoin (#3 = #5)
-    LeftOuterJoin (#1 = #3)
+  RightOuterJoin (#3{b} = #5{b})
+    LeftOuterJoin (#1{b} = #3{b})
       Get materialize.public.t
       Get materialize.public.t
     Get materialize.public.t
@@ -298,14 +298,14 @@ EXPLAIN RAW PLAN AS TEXT FOR
 WITH x AS (SELECT t.a * t.b as v from t) SELECT x.v + 5 FROM x
 ----
 Project (#1)
-  Return
-    Map ((#0 + 5))
-      Get l0
   With
-    cte l0 =
+    cte [l0 as x] =
       Project (#2)
-        Map ((#0 * #1))
+        Map ((#0{a} * #1{b}))
           Get materialize.public.t
+  Return
+    Map ((#0{v} + 5))
+      Get l0
 
 Target cluster: quickstart
 
@@ -316,18 +316,18 @@ query T multiline
 EXPLAIN RAW PLAN AS TEXT FOR
 WITH A AS (SELECT 1 AS a), B as (SELECT a as b FROM A WHERE a > 0) SELECT * FROM A, B;
 ----
+With
+  cte [l0 as a] =
+    Map (1)
+      Constant
+        - ()
+  cte [l1 as b] =
+    Filter (#0{a} > 0)
+      Get l0
 Return
   CrossJoin
     Get l0
     Get l1
-With
-  cte l1 =
-    Filter (#0 > 0)
-      Get l0
-  cte l0 =
-    Map (1)
-      Constant
-        - ()
 
 Target cluster: mz_catalog_server
 
@@ -359,20 +359,20 @@ FROM
 CrossJoin
   CrossJoin
     Get materialize.public.t
-    Return
-      Filter (#0 != #^0)
-        Get l0
     With
-      cte l0 =
-        Reduce aggregates=[max((#^0 * #0))]
+      cte [l0 as r2] =
+        Reduce aggregates=[max((#^0{a} * #0{a}))]
           Get materialize.public.t
-  Return
-    Filter ((#0 != #^0) OR ((#0) IS NOT NULL AND (#^0) IS NULL))
-      Get l0
+    Return
+      Filter (#0{m} != #^0{a})
+        Get l0
   With
-    cte l0 =
-      Reduce aggregates=[max((#^0 * #0))]
+    cte [l0 as r4] =
+      Reduce aggregates=[max((#^0{a} * #0{a}))]
         Get materialize.public.t
+  Return
+    Filter ((#0{m} != #^0{a}) OR ((#0{m}) IS NOT NULL AND (#^0{a}) IS NULL))
+      Get l0
 
 Target cluster: quickstart
 
@@ -407,21 +407,21 @@ FROM
 ----
 CrossJoin
   Get materialize.public.t
+  With
+    cte [l0 as r4] =
+      Reduce aggregates=[max((#^0{a} * #0{a}))]
+        Get materialize.public.t
   Return
-    Filter (#^0 != #^0)
+    Filter (#^0{a} != #^0{a})
       CrossJoin
         Get l0
-        Return
-          Filter ((#^^0 = #^0) AND (#0 > 5))
-            Get l1
         With
-          cte l1 =
-            Reduce aggregates=[max((#^^0 * #0))]
+          cte [l1 as r2] =
+            Reduce aggregates=[max((#^^0{a} * #0{a}))]
               Get materialize.public.t
-  With
-    cte l0 =
-      Reduce aggregates=[max((#^0 * #0))]
-        Get materialize.public.t
+        Return
+          Filter ((#^^0{a} = #^0{m}) AND (#0{m} > 5))
+            Get l1
 
 Target cluster: quickstart
 
@@ -444,7 +444,7 @@ statement ok
 CREATE TABLE r(f0 INT, f1 INT, f2 INT, f3 INT, f4 INT, f5 INT, f6 INT, f7 INT, f8 INT, f9 INT, f10 INT, f11 INT, f12 INT, f13 INT, f14 INT, f15 INT, f16 INT);
 
 query T multiline
-EXPLAIN SELECT *
+EXPLAIN OPTIMIZED PLAN WITH (humanized expressions) AS VERBOSE TEXT FOR SELECT *
 FROM r AS r0, r AS r1
 WHERE
   r0.f0=r1.f0 AND
@@ -463,17 +463,17 @@ WHERE
 Explained Query:
   With
     cte l0 =
-      ArrangeBy keys=[[#0, #2..=#4, #6, #8, #9, #11..=#13, #15, #16]]
-        Filter (#0) IS NOT NULL AND (#2) IS NOT NULL AND (#3) IS NOT NULL AND (#4) IS NOT NULL AND (#6) IS NOT NULL AND (#8) IS NOT NULL AND (#9) IS NOT NULL AND (#11) IS NOT NULL AND (#12) IS NOT NULL AND (#13) IS NOT NULL AND (#15) IS NOT NULL AND (#16) IS NOT NULL
+      ArrangeBy keys=[[#0{f0}, #2{f2}..=#4{f4}, #6{f6}, #8{f8}, #9{f9}, #11{f11}..=#13{f13}, #15{f15}, #16{f16}]]
+        Filter (#0{f0}) IS NOT NULL AND (#2{f2}) IS NOT NULL AND (#3{f3}) IS NOT NULL AND (#4{f4}) IS NOT NULL AND (#6{f6}) IS NOT NULL AND (#8{f8}) IS NOT NULL AND (#9{f9}) IS NOT NULL AND (#11{f11}) IS NOT NULL AND (#12{f12}) IS NOT NULL AND (#13{f13}) IS NOT NULL AND (#15{f15}) IS NOT NULL AND (#16{f16}) IS NOT NULL
           ReadStorage materialize.public.r
   Return
-    Project (#0..=#16, #0, #18, #2..=#4, #22, #6, #24, #8, #9, #27, #11..=#13, #31, #15, #16)
-      Join on=(#0 = #17 AND #2 = #19 AND #3 = #20 AND #4 = #21 AND #6 = #23 AND #8 = #25 AND #9 = #26 AND #11 = #28 AND #12 = #29 AND #13 = #30 AND #15 = #32 AND #16 = #33) type=differential
+    Project (#0{f0}..=#16{f16}, #0{f0}, #18{f1}, #2{f2}..=#4{f4}, #22{f5}, #6{f6}, #24{f7}, #8{f8}, #9{f9}, #27{f10}, #11{f11}..=#13{f13}, #31{f14}, #15{f15}, #16{f16})
+      Join on=(#0{f0} = #17{f0} AND #2{f2} = #19{f2} AND #3{f3} = #20{f3} AND #4{f4} = #21{f4} AND #6{f6} = #23{f6} AND #8{f8} = #25{f8} AND #9{f9} = #26{f9} AND #11{f11} = #28{f11} AND #12{f12} = #29{f12} AND #13{f13} = #30{f13} AND #15{f15} = #32{f15} AND #16{f16} = #33{f16}) type=differential
         Get l0
         Get l0
 
 Source materialize.public.r
-  filter=((#0) IS NOT NULL AND (#2) IS NOT NULL AND (#3) IS NOT NULL AND (#4) IS NOT NULL AND (#6) IS NOT NULL AND (#8) IS NOT NULL AND (#9) IS NOT NULL AND (#11) IS NOT NULL AND (#12) IS NOT NULL AND (#13) IS NOT NULL AND (#15) IS NOT NULL AND (#16) IS NOT NULL)
+  filter=((#0{f0}) IS NOT NULL AND (#2{f2}) IS NOT NULL AND (#3{f3}) IS NOT NULL AND (#4{f4}) IS NOT NULL AND (#6{f6}) IS NOT NULL AND (#8{f8}) IS NOT NULL AND (#9{f9}) IS NOT NULL AND (#11{f11}) IS NOT NULL AND (#12{f12}) IS NOT NULL AND (#13{f13}) IS NOT NULL AND (#15{f15}) IS NOT NULL AND (#16{f16}) IS NOT NULL)
 
 Target cluster: quickstart
 
@@ -485,7 +485,7 @@ SELECT lag(b, 3) OVER ()
 FROM t;
 ----
 Project (#2)
-  Map (lag(row(#1, 3, null)) over (order by []))
+  Map (lag(row(#1{b}, 3, null)) over (order by []))
     Get materialize.public.t
 
 Target cluster: quickstart
@@ -498,7 +498,7 @@ SELECT lag(b, 333) RESPECT NULLS OVER ()
 FROM t;
 ----
 Project (#2)
-  Map (lag(row(#1, 333, null)) over (order by []))
+  Map (lag(row(#1{b}, 333, null)) over (order by []))
     Get materialize.public.t
 
 Target cluster: quickstart
@@ -511,7 +511,7 @@ SELECT lag(b, 333) IGNORE NULLS OVER ()
 FROM t;
 ----
 Project (#2)
-  Map (lag(row(#1, 333, null)) ignore nulls over (order by []))
+  Map (lag(row(#1{b}, 333, null)) ignore nulls over (order by []))
     Get materialize.public.t
 
 Target cluster: quickstart
@@ -530,11 +530,11 @@ FROM (
 );
 ----
 Project (#1)
-  Map (row_number() over (order by [#0 desc nulls_first]))
+  Map (row_number() over (order by [#0{r} desc nulls_first]))
     Project (#1)
-      Map (row_number() over (partition by [#0] order by []))
+      Map (row_number() over (partition by [#0{l}] order by []))
         Project (#2)
-          Map (lag(row(#1, 3, null)) over (partition by [(#1 % 2), (#0 % 3)] order by [#0 desc nulls_first, -(#1) asc nulls_last, ((2 * #1) + #0) asc nulls_first]))
+          Map (lag(row(#1{b}, 3, null)) over (partition by [(#1{b} % 2), (#0{a} % 3)] order by [#0{a} desc nulls_first, -(#1{b}) asc nulls_last, ((2 * #1{b}) + #0{a}) asc nulls_first]))
             Get materialize.public.t
 
 Target cluster: quickstart
@@ -549,7 +549,7 @@ SELECT
 FROM t;
 ----
 Project (#2)
-  Map (first_value(#1) over (partition by [(#1 % 6)] order by [(#1 + 33) asc nulls_last]))
+  Map (first_value(#1{b}) over (partition by [(#1{b} % 6)] order by [(#1{b} + 33) asc nulls_last]))
     Get materialize.public.t
 
 Target cluster: quickstart
@@ -563,7 +563,7 @@ SELECT
 FROM t;
 ----
 Project (#2)
-  Map (first_value(#1) over (partition by [(#1 % 6)] order by [(#1 + 33) asc nulls_last] rows between 2 preceding and current row))
+  Map (first_value(#1{b}) over (partition by [(#1{b} % 6)] order by [(#1{b} + 33) asc nulls_last] rows between 2 preceding and current row))
     Get materialize.public.t
 
 Target cluster: quickstart
@@ -577,7 +577,7 @@ SELECT
 FROM t;
 ----
 Project (#2)
-  Map (sum((#1 + 8)) over (partition by [(#1 % 6)] order by [(#1 + 33) desc nulls_first] rows between 2 preceding and 3 following))
+  Map (sum((#1{b} + 8)) over (partition by [(#1{b} % 6)] order by [(#1{b} + 33) desc nulls_first] rows between 2 preceding and 3 following))
     Get materialize.public.t
 
 Target cluster: quickstart
@@ -591,13 +591,8 @@ WITH MUTUALLY RECURSIVE
     bar (a int) as (SELECT a FROM foo)
 SELECT * FROM bar;
 ----
-Return
-  Get l1
 With Mutually Recursive
-  cte l1 =
-    Project (#0)
-      Get l0
-  cte l0 =
+  cte [l0 as foo] =
     Distinct
       Union
         Map (1, 2)
@@ -605,6 +600,11 @@ With Mutually Recursive
             - ()
         Map (7)
           Get l1
+  cte [l1 as bar] =
+    Project (#0)
+      Get l0
+Return
+  Get l1
 
 Target cluster: mz_catalog_server
 
@@ -617,13 +617,8 @@ WITH MUTUALLY RECURSIVE (RECURSION LIMIT = 5)
     bar (a int) as (SELECT a FROM foo)
 SELECT * FROM bar;
 ----
-Return
-  Get l1
 With Mutually Recursive [recursion_limit=5]
-  cte l1 =
-    Project (#0)
-      Get l0
-  cte l0 =
+  cte [l0 as foo] =
     Distinct
       Union
         Map (1, 2)
@@ -631,6 +626,11 @@ With Mutually Recursive [recursion_limit=5]
             - ()
         Map (7)
           Get l1
+  cte [l1 as bar] =
+    Project (#0)
+      Get l0
+Return
+  Get l1
 
 Target cluster: mz_catalog_server
 
@@ -643,13 +643,8 @@ WITH MUTUALLY RECURSIVE (RETURN AT RECURSION LIMIT = 5)
     bar (a int) as (SELECT a FROM foo)
 SELECT * FROM bar;
 ----
-Return
-  Get l1
 With Mutually Recursive [recursion_limit=5, return_at_limit]
-  cte l1 =
-    Project (#0)
-      Get l0
-  cte l0 =
+  cte [l0 as foo] =
     Distinct
       Union
         Map (1, 2)
@@ -657,7 +652,182 @@ With Mutually Recursive [recursion_limit=5, return_at_limit]
             - ()
         Map (7)
           Get l1
+  cte [l1 as bar] =
+    Project (#0)
+      Get l0
+Return
+  Get l1
 
 Target cluster: mz_catalog_server
 
 EOF
+
+statement ok
+CREATE TABLE accounts(id int, balance int);
+
+statement ok
+CREATE TABLE account_details(id bigint, address string);
+
+statement ok
+CREATE OR REPLACE VIEW v AS
+SELECT
+  *
+FROM
+  accounts a
+  LEFT JOIN account_details ad USING(id)
+WHERE
+  balance = 100;
+
+# Must explain the "Raw Plan".
+query T multiline
+EXPLAIN RAW PLAN AS TEXT FOR
+VIEW v;
+----
+Project (#0, #1, #3)
+  Filter (#1{balance} = 100)
+    LeftOuterJoin (integer_to_bigint(#0{id}) = #2{id})
+      Get materialize.public.accounts
+      Get materialize.public.account_details
+
+EOF
+
+statement ok
+CREATE TABLE t5(
+    x int,
+    y int NOT NULL,
+    z int
+);
+
+# `count(*)` is planned as `count(true)`. We take care in EXPLAIN to show `count(true)` as `count(*)` to avoid confusing
+# users.
+query T multiline
+EXPLAIN RAW PLAN AS TEXT FOR
+SELECT count(*)
+FROM t5;
+----
+Reduce aggregates=[count(*)]
+  Get materialize.public.t5
+
+Target cluster: quickstart
+
+EOF
+
+query error DISTINCT \* not supported as function args
+EXPLAIN RAW PLAN AS TEXT FOR
+SELECT count(distinct *)
+FROM t5;
+
+# `count(true)` is currently also printed as `count(*)` in EXPLAIN, which I'd say is fine.
+query T multiline
+EXPLAIN RAW PLAN AS TEXT FOR
+SELECT count(true)
+FROM t5;
+----
+Reduce aggregates=[count(*)]
+  Get materialize.public.t5
+
+Target cluster: quickstart
+
+EOF
+
+# But `count(DISTINCT true)` means an entirely different thing, so EXPLAIN shouldn't conflate it with `count(*)`.
+query T multiline
+EXPLAIN RAW PLAN AS TEXT FOR
+SELECT count(DISTINCT true)
+FROM t5;
+----
+Reduce aggregates=[count(distinct true)]
+  Get materialize.public.t5
+
+Target cluster: quickstart
+
+EOF
+
+# OFFSET clause in RowSetFinishing
+query T multiline
+EXPLAIN RAW PLAN AS TEXT FOR
+SELECT a+b
+FROM t
+OFFSET 1;
+----
+Finish offset=1 output=[#0]
+  Project (#2)
+    Map ((#0{a} + #1{b}))
+      Get materialize.public.t
+
+Target cluster: quickstart
+
+EOF
+
+# OFFSET clause in TopK
+query T multiline
+EXPLAIN RAW PLAN AS TEXT FOR
+SELECT a+b, (SELECT a*b FROM t OFFSET 1)
+FROM t;
+----
+Project (#2, #3)
+  With
+    cte [l1 as subquery-1] =
+      Project (#2)
+        TopK offset=1
+          Map ((#0{a} * #1{b}))
+            Get materialize.public.t
+  Return
+    Map ((#0{a} + #1{b}), select(Get l1))
+      Get materialize.public.t
+
+Target cluster: quickstart
+
+EOF
+
+# OFFSET 0 makes the TopK disappear, even if it was an expression that comes out to 0.
+query T multiline
+EXPLAIN RAW PLAN AS TEXT FOR
+SELECT a+b
+FROM t
+OFFSET 0;
+----
+Project (#2)
+  Map ((#0{a} + #1{b}))
+    Get materialize.public.t
+
+Target cluster: quickstart
+
+EOF
+
+query T multiline
+EXPLAIN RAW PLAN AS TEXT FOR
+SELECT a+b
+FROM t
+OFFSET 7-7;
+----
+Project (#2)
+  Map ((#0{a} + #1{b}))
+    Get materialize.public.t
+
+Target cluster: quickstart
+
+EOF
+
+# The OFFSET should _not_ be printed when it is 0.
+query T multiline
+EXPLAIN RAW PLAN AS TEXT FOR
+SELECT a+b
+FROM t
+LIMIT 9
+OFFSET 7-7;
+----
+Finish limit=9 output=[#0]
+  Project (#2)
+    Map ((#0{a} + #1{b}))
+      Get materialize.public.t
+
+Target cluster: quickstart
+
+EOF
+
+query error db error: ERROR: Invalid OFFSET clause: invalid input syntax for type bigint: invalid digit found in string: "aaa"
+EXPLAIN RAW PLAN AS TEXT FOR
+SELECT a+b
+FROM t
+OFFSET 'aaa'::bigint;

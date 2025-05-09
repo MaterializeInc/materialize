@@ -21,11 +21,18 @@ pub const ENABLE_MZ_JOIN_CORE: Config<bool> = Config::new(
      linear joins.",
 );
 
-/// Whether rendering should use the new MV sink implementation.
-pub const ENABLE_MATERIALIZED_VIEW_SINK_V2: Config<bool> = Config::new(
-    "enable_compute_materialized_view_sink_v2",
+/// Whether rendering should use the new MV sink correction buffer implementation.
+pub const ENABLE_CORRECTION_V2: Config<bool> = Config::new(
+    "enable_compute_correction_v2",
+    false,
+    "Whether compute should use the new MV sink correction buffer implementation.",
+);
+
+/// Whether the MV sink should distribute appends among workers.
+pub const ENABLE_MV_APPEND_SMEARING: Config<bool> = Config::new(
+    "enable_compute_mv_append_smearing",
     true,
-    "Whether compute should use the new MV sink implementation.",
+    "Whether the MV sink should distribute appends among workers.",
 );
 
 /// The yielding behavior with which linear joins should be rendered.
@@ -38,12 +45,8 @@ pub const LINEAR_JOIN_YIELDING: Config<&str> = Config::new(
      work, respectively, rather than falling back to some default.",
 );
 
-/// Enable lgalloc for columnation.
-pub const ENABLE_COLUMNATION_LGALLOC: Config<bool> = Config::new(
-    "enable_columnation_lgalloc",
-    false,
-    "Enable allocating regions from lgalloc.",
-);
+/// Enable lgalloc.
+pub const ENABLE_LGALLOC: Config<bool> = Config::new("enable_lgalloc", true, "Enable lgalloc.");
 
 /// Enable lgalloc's eager memory return/reclamation feature.
 pub const ENABLE_LGALLOC_EAGER_RECLAMATION: Config<bool> = Config::new(
@@ -52,11 +55,46 @@ pub const ENABLE_LGALLOC_EAGER_RECLAMATION: Config<bool> = Config::new(
     "Enable lgalloc's eager return behavior.",
 );
 
-/// Enable the chunked stack implementation.
-pub const ENABLE_CHUNKED_STACK: Config<bool> = Config::new(
-    "enable_compute_chunked_stack",
-    false,
-    "Enable the chunked stack implementation in compute.",
+/// The interval at which the background thread wakes.
+pub const LGALLOC_BACKGROUND_INTERVAL: Config<Duration> = Config::new(
+    "lgalloc_background_interval",
+    Duration::from_secs(1),
+    "Scheduling interval for lgalloc's background worker.",
+);
+
+/// Enable lgalloc's eager memory return/reclamation feature.
+pub const LGALLOC_FILE_GROWTH_DAMPENER: Config<usize> = Config::new(
+    "lgalloc_file_growth_dampener",
+    0,
+    "Lgalloc's file growth dampener parameter.",
+);
+
+/// Enable lgalloc's eager memory return/reclamation feature.
+pub const LGALLOC_LOCAL_BUFFER_BYTES: Config<usize> = Config::new(
+    "lgalloc_local_buffer_bytes",
+    32 << 20,
+    "Lgalloc's local buffer bytes parameter.",
+);
+
+/// The bytes to reclaim (slow path) per size class, for each background thread activation.
+pub const LGALLOC_SLOW_CLEAR_BYTES: Config<usize> = Config::new(
+    "lgalloc_slow_clear_bytes",
+    32 << 20,
+    "Clear byte size per size class for every invocation",
+);
+
+/// Enable lgalloc for columnation.
+pub const ENABLE_COLUMNATION_LGALLOC: Config<bool> = Config::new(
+    "enable_columnation_lgalloc",
+    true,
+    "Enable allocating regions from lgalloc.",
+);
+
+/// Enable lgalloc for columnar.
+pub const ENABLE_COLUMNAR_LGALLOC: Config<bool> = Config::new(
+    "enable_columnar_lgalloc",
+    true,
+    "Enable allocating aligned regions in columnar from lgalloc.",
 );
 
 /// The interval at which the compute server performs maintenance tasks.
@@ -85,18 +123,12 @@ pub const DATAFLOW_MAX_INFLIGHT_BYTES_CC: Config<Option<usize>> = Config::new(
      compute dataflows in cc clusters.",
 );
 
-/// The interval at which the background thread wakes.
-pub const LGALLOC_BACKGROUND_INTERVAL: Config<Duration> = Config::new(
-    "lgalloc_background_interval",
-    Duration::from_secs(1),
-    "Scheduling interval for lgalloc's background worker.",
-);
-
-/// The bytes to reclaim (slow path) per size class, for each background thread activation.
-pub const LGALLOC_SLOW_CLEAR_BYTES: Config<usize> = Config::new(
-    "lgalloc_slow_clear_bytes",
-    32 << 20,
-    "Clear byte size per size class for every invocation",
+/// The term `n` in the growth rate `1 + 1/(n + 1)` for `ConsolidatingVec`.
+/// The smallest value `0` corresponds to the greatest allowed growth, of doubling.
+pub const CONSOLIDATING_VEC_GROWTH_DAMPENER: Config<usize> = Config::new(
+    "consolidating_vec_growth_dampener",
+    0,
+    "Dampener in growth rate for consolidating vector size",
 );
 
 /// The number of dataflows that may hydrate concurrently.
@@ -154,24 +186,67 @@ pub const COMPUTE_REPLICA_EXPIRATION_OFFSET: Config<Duration> = Config::new(
 /// optimization.
 pub const COMPUTE_APPLY_COLUMN_DEMANDS: Config<bool> = Config::new(
     "compute_apply_column_demands",
-    false,
+    true,
     "When enabled, passes applys column demands to the RelationDesc used to read out of Persist.",
+);
+
+/// Whether to render `as_specific_collection` using a fueled flat-map operator.
+pub const ENABLE_COMPUTE_RENDER_FUELED_AS_SPECIFIC_COLLECTION: Config<bool> = Config::new(
+    "enable_compute_render_fueled_as_specific_collection",
+    true,
+    "When enabled, renders `as_specific_collection` using a fueled flat-map operator.",
+);
+
+/// Whether to apply logical backpressure in compute dataflows.
+pub const ENABLE_COMPUTE_LOGICAL_BACKPRESSURE: Config<bool> = Config::new(
+    "enable_compute_logical_backpressure",
+    false,
+    "When enabled, compute dataflows will apply logical backpressure.",
+);
+
+/// Maximal number of capabilities retained by the logical backpressure operator.
+///
+/// Selecting this value is subtle. If it's too small, it'll diminish the effectiveness of the
+/// logical backpressure operators. If it's too big, we can slow down hydration and cause state
+/// in the operator's implementation to build up.
+///
+/// The default value represents a compromise between these two extremes. We retain some metrics
+/// for 30 days, and the metrics update every minute. The default is exactly this number.
+pub const COMPUTE_LOGICAL_BACKPRESSURE_MAX_RETAINED_CAPABILITIES: Config<Option<usize>> =
+    Config::new(
+        "compute_logical_backpressure_max_retained_capabilities",
+        Some(30 * 24 * 60),
+        "The maximum number of capabilities retained by the logical backpressure operator.",
+    );
+
+/// The slack to round observed timestamps up to.
+///
+/// The default corresponds to Mz's default tick interval, but does not need to do so. Ideally,
+/// it is not smaller than the tick interval, but it can be larger.
+pub const COMPUTE_LOGICAL_BACKPRESSURE_INFLIGHT_SLACK: Config<Duration> = Config::new(
+    "compute_logical_backpressure_inflight_slack",
+    Duration::from_secs(1),
+    "Round observed timestamps to slack.",
 );
 
 /// Adds the full set of all compute `Config`s.
 pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
     configs
         .add(&ENABLE_MZ_JOIN_CORE)
-        .add(&ENABLE_MATERIALIZED_VIEW_SINK_V2)
+        .add(&ENABLE_CORRECTION_V2)
+        .add(&ENABLE_MV_APPEND_SMEARING)
         .add(&LINEAR_JOIN_YIELDING)
-        .add(&ENABLE_COLUMNATION_LGALLOC)
+        .add(&ENABLE_LGALLOC)
+        .add(&LGALLOC_BACKGROUND_INTERVAL)
+        .add(&LGALLOC_FILE_GROWTH_DAMPENER)
+        .add(&LGALLOC_LOCAL_BUFFER_BYTES)
+        .add(&LGALLOC_SLOW_CLEAR_BYTES)
         .add(&ENABLE_LGALLOC_EAGER_RECLAMATION)
-        .add(&ENABLE_CHUNKED_STACK)
+        .add(&ENABLE_COLUMNATION_LGALLOC)
+        .add(&ENABLE_COLUMNAR_LGALLOC)
         .add(&COMPUTE_SERVER_MAINTENANCE_INTERVAL)
         .add(&DATAFLOW_MAX_INFLIGHT_BYTES)
         .add(&DATAFLOW_MAX_INFLIGHT_BYTES_CC)
-        .add(&LGALLOC_BACKGROUND_INTERVAL)
-        .add(&LGALLOC_SLOW_CLEAR_BYTES)
         .add(&HYDRATION_CONCURRENCY)
         .add(&COPY_TO_S3_PARQUET_ROW_GROUP_FILE_RATIO)
         .add(&COPY_TO_S3_ARROW_BUILDER_BUFFER_RATIO)
@@ -179,4 +254,9 @@ pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
         .add(&ENABLE_COMPUTE_REPLICA_EXPIRATION)
         .add(&COMPUTE_REPLICA_EXPIRATION_OFFSET)
         .add(&COMPUTE_APPLY_COLUMN_DEMANDS)
+        .add(&CONSOLIDATING_VEC_GROWTH_DAMPENER)
+        .add(&ENABLE_COMPUTE_RENDER_FUELED_AS_SPECIFIC_COLLECTION)
+        .add(&ENABLE_COMPUTE_LOGICAL_BACKPRESSURE)
+        .add(&COMPUTE_LOGICAL_BACKPRESSURE_MAX_RETAINED_CAPABILITIES)
+        .add(&COMPUTE_LOGICAL_BACKPRESSURE_INFLIGHT_SLACK)
 }

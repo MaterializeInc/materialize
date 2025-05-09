@@ -31,7 +31,7 @@ use timely::container::CapacityContainerBuilder;
 use timely::dataflow::operators::core::Partition;
 use timely::dataflow::{Scope, Stream};
 use timely::progress::Antichain;
-use tokio::time::{interval_at, Instant};
+use tokio::time::{Instant, interval_at};
 
 use crate::healthcheck::{HealthStatusMessage, HealthStatusUpdate, StatusNamespace};
 use crate::source::types::{
@@ -136,18 +136,22 @@ impl GeneratorKind {
     fn render<G: Scope<Timestamp = MzOffset>>(
         self,
         scope: &mut G,
-        config: RawSourceCreationConfig,
+        config: &RawSourceCreationConfig,
         committed_uppers: impl futures::Stream<Item = Antichain<MzOffset>> + 'static,
         start_signal: impl std::future::Future<Output = ()> + 'static,
     ) -> (
         BTreeMap<GlobalId, StackedCollection<G, Result<SourceMessage, DataflowError>>>,
-        Option<Stream<G, Infallible>>,
+        Stream<G, Infallible>,
         Stream<G, HealthStatusMessage>,
         Stream<G, ProgressStatisticsUpdate>,
         Vec<PressOnDropButton>,
     ) {
         // figure out which output types from the generator belong to which output indexes
         let mut output_map = BTreeMap::new();
+        // Make sure that there's an entry for the default output, even if there are no exports
+        // that need data output. Certain implementations rely on it (at the time of this comment
+        // that includes the key-value load gen source).
+        output_map.insert(LoadGeneratorOutput::Default, Vec::new());
         for (idx, (_, export)) in config.source_exports.iter().enumerate() {
             let output_type = match &export.details {
                 SourceExportDetails::LoadGenerator(details) => details.output,
@@ -180,7 +184,7 @@ impl GeneratorKind {
             GeneratorKind::KeyValue(kv) => key_value::render(
                 kv,
                 scope,
-                config,
+                config.clone(),
                 committed_uppers,
                 start_signal,
                 output_map,
@@ -197,12 +201,12 @@ impl SourceRender for LoadGeneratorSourceConnection {
     fn render<G: Scope<Timestamp = MzOffset>>(
         self,
         scope: &mut G,
-        config: RawSourceCreationConfig,
+        config: &RawSourceCreationConfig,
         committed_uppers: impl futures::Stream<Item = Antichain<MzOffset>> + 'static,
         start_signal: impl std::future::Future<Output = ()> + 'static,
     ) -> (
         BTreeMap<GlobalId, StackedCollection<G, Result<SourceMessage, DataflowError>>>,
-        Option<Stream<G, Infallible>>,
+        Stream<G, Infallible>,
         Stream<G, HealthStatusMessage>,
         Stream<G, ProgressStatisticsUpdate>,
         Option<Stream<G, Probe<MzOffset>>>,
@@ -227,12 +231,12 @@ fn render_simple_generator<G: Scope<Timestamp = MzOffset>>(
     as_of: MzOffset,
     up_to: MzOffset,
     scope: &G,
-    config: RawSourceCreationConfig,
+    config: &RawSourceCreationConfig,
     committed_uppers: impl futures::Stream<Item = Antichain<MzOffset>> + 'static,
     output_map: BTreeMap<LoadGeneratorOutput, Vec<usize>>,
 ) -> (
     BTreeMap<GlobalId, StackedCollection<G, Result<SourceMessage, DataflowError>>>,
-    Option<Stream<G, Infallible>>,
+    Stream<G, Infallible>,
     Stream<G, HealthStatusMessage>,
     Stream<G, ProgressStatisticsUpdate>,
     Vec<PressOnDropButton>,
@@ -257,18 +261,21 @@ fn render_simple_generator<G: Scope<Timestamp = MzOffset>>(
         data_collections.insert(*id, data_stream.as_collection());
     }
 
+    let (_progress_output, progress_stream) = builder.new_output::<CapacityContainerBuilder<_>>();
     let (health_output, health_stream) = builder.new_output();
     let (stats_output, stats_stream) = builder.new_output();
 
     let busy_signal = Arc::clone(&config.busy_signal);
+    let source_resume_uppers = config.source_resume_uppers.clone();
+    let is_active_worker = config.responsible_for(());
     let button = builder.build(move |caps| {
         SignaledFuture::new(busy_signal, async move {
-            let [mut cap, health_cap, stats_cap]: [_; 3] = caps.try_into().unwrap();
+            let [mut cap, mut progress_cap, health_cap, stats_cap] = caps.try_into().unwrap();
 
             // We only need this until we reported ourselves as Running.
             let mut health_cap = Some(health_cap);
 
-            if !config.responsible_for(()) {
+            if !is_active_worker {
                 // Emit 0, to mark this worker as having started up correctly.
                 stats_output.give(
                     &stats_cap,
@@ -281,8 +288,7 @@ fn render_simple_generator<G: Scope<Timestamp = MzOffset>>(
             }
 
             let resume_upper = Antichain::from_iter(
-                config
-                    .source_resume_uppers
+                source_resume_uppers
                     .values()
                     .flat_map(|f| f.iter().map(MzOffset::decode_row)),
             );
@@ -340,6 +346,11 @@ fn render_simple_generator<G: Scope<Timestamp = MzOffset>>(
                             continue;
                         }
 
+                        // Once we see the load generator start producing data for some offset,
+                        // we report progress beyond that offset, to ensure that a binding can be
+                        // minted for the data and it doesn't accumulate in reclocking.
+                        let _ = progress_cap.try_downgrade(&(offset + 1));
+
                         let outputs = match output_map.get(&output_type) {
                             Some(outputs) => outputs,
                             // We don't have an output index for this output type, so drop it
@@ -388,6 +399,7 @@ fn render_simple_generator<G: Scope<Timestamp = MzOffset>>(
                         }
 
                         cap.downgrade(&offset);
+                        let _ = progress_cap.try_downgrade(&offset);
 
                         // We only sleep if we have surpassed the resume offset so that we can
                         // quickly go over any historical updates that a generator might choose to
@@ -436,7 +448,7 @@ fn render_simple_generator<G: Scope<Timestamp = MzOffset>>(
 
     (
         data_collections,
-        None,
+        progress_stream,
         health_stream,
         stats_stream,
         vec![button.press_on_drop()],

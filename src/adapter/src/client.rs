@@ -21,24 +21,25 @@ use derivative::Derivative;
 use futures::{Stream, StreamExt};
 use itertools::Itertools;
 use mz_adapter_types::connection::{ConnectionId, ConnectionIdType};
+use mz_auth::password::Password;
 use mz_build_info::BuildInfo;
 use mz_compute_types::ComputeInstanceId;
 use mz_ore::channel::OneshotReceiverExt;
 use mz_ore::collections::CollectionExt;
-use mz_ore::id_gen::{org_id_conn_bits, IdAllocator, IdAllocatorInnerBitSet, MAX_ORG_ID};
+use mz_ore::id_gen::{IdAllocator, IdAllocatorInnerBitSet, MAX_ORG_ID, org_id_conn_bits};
 use mz_ore::instrument;
-use mz_ore::now::{to_datetime, EpochMillis, NowFn};
+use mz_ore::now::{EpochMillis, NowFn, to_datetime};
 use mz_ore::result::ResultExt;
 use mz_ore::task::AbortOnDropHandle;
 use mz_ore::thread::JoinOnDropHandle;
 use mz_ore::tracing::OpenTelemetryContext;
-use mz_repr::{CatalogItemId, Row, RowIterator, ScalarType};
+use mz_repr::{CatalogItemId, ColumnIndex, Row, RowIterator, ScalarType};
 use mz_sql::ast::{Raw, Statement};
 use mz_sql::catalog::{EnvironmentId, SessionCatalog};
 use mz_sql::session::hint::ApplicationNameHint;
 use mz_sql::session::metadata::SessionMetadata;
 use mz_sql::session::user::SUPPORT_USER;
-use mz_sql::session::vars::{OwnedVarInput, SystemVars, Var, CLUSTER};
+use mz_sql::session::vars::{CLUSTER, OwnedVarInput, SystemVars, Var};
 use mz_sql_parser::parser::{ParserStatementError, StatementParseResult};
 use prometheus::Histogram;
 use serde_json::json;
@@ -47,7 +48,9 @@ use tracing::error;
 use uuid::Uuid;
 
 use crate::catalog::Catalog;
-use crate::command::{CatalogDump, CatalogSnapshot, Command, ExecuteResponse, Response};
+use crate::command::{
+    AuthResponse, CatalogDump, CatalogSnapshot, Command, ExecuteResponse, Response,
+};
 use crate::coord::{Coordinator, ExecuteContextExtra};
 use crate::error::AdapterError;
 use crate::metrics::Metrics;
@@ -148,6 +151,22 @@ impl Client {
         Session::new(self.build_info, config, self.metrics().session_metrics())
     }
 
+    /// Preforms an authentication check for the given user.
+    pub async fn authenticate(
+        &self,
+        user: &String,
+        password: &Password,
+    ) -> Result<AuthResponse, AdapterError> {
+        let (tx, rx) = oneshot::channel();
+        self.send(Command::AuthenticatePassword {
+            role_name: user.to_string(),
+            password: Some(password.clone()),
+            tx,
+        });
+        let response = rx.await.expect("sender dropped")?;
+        Ok(response)
+    }
+
     /// Upgrades this client to a session client.
     ///
     /// A session is a connection that has successfully negotiated parameters,
@@ -212,11 +231,6 @@ impl Client {
             catalog,
         } = response;
 
-        // Before we do ANYTHING, we need to wait for our BuiltinTable writes to complete. We wait
-        // for the writes here, as opposed to during the Startup command, because we don't want to
-        // block the coordinator on a Builtin Table write.
-        write_notify.await;
-
         let session = client.session();
         session.initialize_role_metadata(role_id);
         let vars_mut = session.vars_mut();
@@ -230,6 +244,15 @@ impl Client {
         session
             .vars_mut()
             .end_transaction(EndTransactionAction::Commit);
+
+        // Stash the future that notifies us of builtin table writes completing, we'll block on
+        // this future before allowing queries from this session against relevant relations.
+        //
+        // Note: We stash the future as opposed to waiting on it here to prevent blocking session
+        // creation on builtin table updates. This improves the latency for session creation and
+        // reduces scheduling load on any dataflows that read from these builtin relations, since
+        // it allows updates to be batched.
+        session.set_builtin_table_updates(write_notify);
 
         let catalog = catalog.for_session(session);
 
@@ -362,6 +385,7 @@ Issue a SQL query to get started. Need help?
             user: SUPPORT_USER.name.clone(),
             client_ip: None,
             external_metadata_rx: None,
+            internal_user_metadata: None,
             helm_chart_version: None,
         });
         let mut session_client = self.startup(session).await?;
@@ -733,7 +757,7 @@ impl SessionClient {
     pub async fn insert_rows(
         &mut self,
         id: CatalogItemId,
-        columns: Vec<usize>,
+        columns: Vec<ColumnIndex>,
         rows: Vec<Row>,
         ctx_extra: ExecuteContextExtra,
     ) -> Result<ExecuteResponse, AdapterError> {
@@ -868,6 +892,7 @@ impl SessionClient {
                 Command::Execute { .. } => typ = Some("execute"),
                 Command::GetWebhook { .. } => typ = Some("webhook"),
                 Command::Startup { .. }
+                | Command::AuthenticatePassword { .. }
                 | Command::CatalogSnapshot { .. }
                 | Command::Commit { .. }
                 | Command::CancelRequest { .. }

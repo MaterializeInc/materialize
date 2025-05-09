@@ -67,12 +67,15 @@ where
 }
 
 /// Describes the context in which to print an AST.
+///
+/// TODO: Currently, only the simple format can be redacted, but, ideally, whether it's redacted and
+///       whether it's stable would be orthogonal settings.
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
 pub enum FormatMode {
     /// Simple is the normal way of printing for human consumption. Identifiers are quoted only if
-    /// necessary and sensative information is redacted.
+    /// necessary and sensitive information is not redacted.
     Simple,
-    /// SimpleRedacted is like Simple, but strips out string and number literals.
+    /// SimpleRedacted is like Simple, but strips out literals, e.g. strings and numbers.
     /// This makes SQL queries be "usage data", rather than "customer data" according to our
     /// data management policy, allowing us to introspect it.
     SimpleRedacted,
@@ -151,23 +154,21 @@ pub trait AstDisplay {
     where
         W: fmt::Write;
 
-    fn to_ast_string(&self) -> String {
-        let mut buf = String::new();
-        let mut f = AstFormatter::new(&mut buf, FormatMode::Simple);
-        self.fmt(&mut f);
-        buf
+    fn to_ast_string_simple(&self) -> String {
+        self.to_ast_string(FormatMode::Simple)
     }
 
     fn to_ast_string_stable(&self) -> String {
-        let mut buf = String::new();
-        let mut f = AstFormatter::new(&mut buf, FormatMode::Stable);
-        self.fmt(&mut f);
-        buf
+        self.to_ast_string(FormatMode::Stable)
     }
 
     fn to_ast_string_redacted(&self) -> String {
+        self.to_ast_string(FormatMode::SimpleRedacted)
+    }
+
+    fn to_ast_string(&self, format_mode: FormatMode) -> String {
         let mut buf = String::new();
-        let mut f = AstFormatter::new(&mut buf, FormatMode::SimpleRedacted);
+        let mut f = AstFormatter::new(&mut buf, format_mode);
         self.fmt(&mut f);
         buf
     }
@@ -318,7 +319,7 @@ impl<'a> AstDisplay for EscapeSingleQuoteString<'a> {
 
 impl<'a> fmt::Display for EscapeSingleQuoteString<'a> {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        f.write_str(&self.to_ast_string())
+        f.write_str(&self.to_ast_string_simple())
     }
 }
 
@@ -338,7 +339,7 @@ impl<'a> AstDisplay for EscapedStringLiteral<'a> {
 
 impl<'a> fmt::Display for EscapedStringLiteral<'a> {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        f.write_str(&self.to_ast_string())
+        f.write_str(&self.to_ast_string_simple())
     }
 }
 

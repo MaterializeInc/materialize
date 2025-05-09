@@ -20,7 +20,7 @@ use k8s_openapi::{
     },
     apimachinery::pkg::{apis::meta::v1::LabelSelector, util::intstr::IntOrString},
 };
-use kube::{api::ObjectMeta, runtime::controller::Action, Api, Client, ResourceExt};
+use kube::{Api, Client, ResourceExt, api::ObjectMeta, runtime::controller::Action};
 use maplit::btreemap;
 use tracing::trace;
 
@@ -32,7 +32,7 @@ use crate::{
     k8s::{apply_resource, get_resource},
 };
 use mz_cloud_resources::crd::{
-    gen::cert_manager::certificates::Certificate, materialize::v1alpha1::Materialize,
+    generated::cert_manager::certificates::Certificate, materialize::v1alpha1::Materialize,
 };
 use mz_ore::instrument;
 
@@ -324,6 +324,8 @@ fn create_balancerd_deployment_object(
                         .map(|selector| (selector.key.clone(), selector.value.clone()))
                         .collect(),
                 ),
+                affinity: config.balancerd_affinity.clone(),
+                tolerations: config.balancerd_tolerations.clone(),
                 security_context: Some(PodSecurityContext {
                     fs_group: Some(999),
                     run_as_user: Some(999),

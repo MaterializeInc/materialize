@@ -19,30 +19,32 @@ use std::sync::Arc;
 use futures::future;
 use itertools::{Either, Itertools};
 use mz_adapter_types::connection::ConnectionId;
+use mz_catalog::SYSTEM_CONN_ID;
 use mz_catalog::builtin::{
-    Builtin, BuiltinLog, BuiltinTable, BuiltinView, BUILTIN_LOG_LOOKUP, BUILTIN_LOOKUP,
+    BUILTIN_LOG_LOOKUP, BUILTIN_LOOKUP, Builtin, BuiltinLog, BuiltinTable, BuiltinView,
 };
 use mz_catalog::durable::objects::{
-    ClusterKey, DatabaseKey, DurableType, ItemKey, NetworkPolicyKey, RoleKey, SchemaKey,
+    ClusterKey, DatabaseKey, DurableType, ItemKey, NetworkPolicyKey, RoleAuthKey, RoleKey,
+    SchemaKey,
 };
-use mz_catalog::durable::{CatalogError, DurableCatalogError, SystemObjectMapping};
+use mz_catalog::durable::{CatalogError, SystemObjectMapping};
 use mz_catalog::memory::error::{Error, ErrorKind};
 use mz_catalog::memory::objects::{
     CatalogEntry, CatalogItem, Cluster, ClusterReplica, DataSourceDesc, Database, Func, Index, Log,
-    NetworkPolicy, Role, Schema, Source, StateDiff, StateUpdate, StateUpdateKind, Table,
+    NetworkPolicy, Role, RoleAuth, Schema, Source, StateDiff, StateUpdate, StateUpdateKind, Table,
     TableDataSource, TemporaryItem, Type, UpdateFrom,
 };
-use mz_catalog::SYSTEM_CONN_ID;
 use mz_compute_types::config::ComputeReplicaConfig;
 use mz_controller::clusters::{ReplicaConfig, ReplicaLogging};
 use mz_controller_types::ClusterId;
 use mz_expr::MirScalarExpr;
+use mz_ore::collections::CollectionExt;
 use mz_ore::tracing::OpenTelemetryContext;
-use mz_ore::{instrument, soft_assert_no_log};
+use mz_ore::{assert_none, instrument, soft_assert_no_log};
 use mz_pgrepr::oid::INVALID_OID;
 use mz_repr::adt::mz_acl_item::{MzAclItem, PrivilegeMap};
 use mz_repr::role_id::RoleId;
-use mz_repr::{CatalogItemId, GlobalId, RelationVersion, Timestamp};
+use mz_repr::{CatalogItemId, Diff, GlobalId, RelationVersion, Timestamp, VersionedRelationDesc};
 use mz_sql::catalog::CatalogError as SqlCatalogError;
 use mz_sql::catalog::{CatalogItem as SqlCatalogItem, CatalogItemType, CatalogSchema, CatalogType};
 use mz_sql::names::{
@@ -54,12 +56,12 @@ use mz_sql::session::vars::{VarError, VarInput};
 use mz_sql::{plan, rbac};
 use mz_sql_parser::ast::Expr;
 use mz_storage_types::sources::Timeline;
-use tracing::{error, info_span, warn, Instrument};
+use tracing::{Instrument, info_span, warn};
 
+use crate::AdapterError;
 use crate::catalog::state::LocalExpressionCache;
 use crate::catalog::{BuiltinTableUpdate, CatalogState};
 use crate::util::index_sql;
-use crate::AdapterError;
 
 /// Maintains the state of retractions while applying catalog state updates for a single timestamp.
 /// [`CatalogState`] maintains denormalized state for certain catalog objects. Updating an object
@@ -75,6 +77,7 @@ use crate::AdapterError;
 #[derive(Debug, Clone, Default)]
 struct InProgressRetractions {
     roles: BTreeMap<RoleKey, Role>,
+    role_auths: BTreeMap<RoleAuthKey, RoleAuth>,
     databases: BTreeMap<DatabaseKey, Database>,
     schemas: BTreeMap<SchemaKey, Schema>,
     clusters: BTreeMap<ClusterKey, Cluster>,
@@ -103,7 +106,7 @@ impl CatalogState {
         let updates = sort_updates(updates);
 
         let mut groups: Vec<Vec<_>> = Vec::new();
-        for (_, updates) in &updates.into_iter().group_by(|update| update.ts) {
+        for (_, updates) in &updates.into_iter().chunk_by(|update| update.ts) {
             groups.push(updates.collect());
         }
         for updates in groups {
@@ -144,7 +147,7 @@ impl CatalogState {
         let mut builtin_table_updates = Vec::with_capacity(updates.len());
         let updates = sort_updates(updates);
 
-        for (_, updates) in &updates.into_iter().group_by(|update| update.ts) {
+        for (_, updates) in &updates.into_iter().chunk_by(|update| update.ts) {
             let mut retractions = InProgressRetractions::default();
             let builtin_table_update = self.apply_updates_inner(
                 updates.collect(),
@@ -214,6 +217,9 @@ impl CatalogState {
             StateUpdateKind::Role(role) => {
                 self.apply_role_update(role, diff, retractions);
             }
+            StateUpdateKind::RoleAuth(role_auth) => {
+                self.apply_role_auth_update(role_auth, diff, retractions);
+            }
             StateUpdateKind::Database(database) => {
                 self.apply_database_update(database, diff, retractions);
             }
@@ -281,6 +287,22 @@ impl CatalogState {
         }
 
         Ok(())
+    }
+
+    #[instrument(level = "debug")]
+    fn apply_role_auth_update(
+        &mut self,
+        role_auth: mz_catalog::durable::RoleAuth,
+        diff: StateDiff,
+        retractions: &mut InProgressRetractions,
+    ) {
+        apply_with_update(
+            &mut self.role_auth_by_id,
+            role_auth,
+            |role_auth| role_auth.role_id,
+            diff,
+            &mut retractions.role_auths,
+        );
     }
 
     #[instrument(level = "debug")]
@@ -472,25 +494,31 @@ impl CatalogState {
 
         match diff {
             StateDiff::Addition => {
-                if let Some(entry) = retractions
+                if let Some(mut entry) = retractions
                     .introspection_source_indexes
                     .remove(&introspection_source_index.item_id)
                 {
-                    // Introspection source indexes can only be updated through the builtin
-                    // migration process, which allocates new IDs for each index.
-                    panic!(
-                        "cannot update introspection source indexes in place, entry: {:?}, durable: {:?}",
-                        entry, introspection_source_index
-                    )
+                    // This should only happen during startup as a result of builtin migrations. We
+                    // create a new index item and replace the old one with it.
+                    let (index_name, index) = self.create_introspection_source_index(
+                        introspection_source_index.cluster_id,
+                        log,
+                        introspection_source_index.index_id,
+                    );
+                    assert_eq!(entry.id, introspection_source_index.item_id);
+                    assert_eq!(entry.oid, introspection_source_index.oid);
+                    assert_eq!(entry.name, index_name);
+                    entry.item = index;
+                    self.insert_entry(entry);
+                } else {
+                    self.insert_introspection_source_index(
+                        introspection_source_index.cluster_id,
+                        log,
+                        introspection_source_index.item_id,
+                        introspection_source_index.index_id,
+                        introspection_source_index.oid,
+                    );
                 }
-
-                self.insert_introspection_source_index(
-                    introspection_source_index.cluster_id,
-                    log,
-                    introspection_source_index.item_id,
-                    introspection_source_index.index_id,
-                    introspection_source_index.oid,
-                );
             }
             StateDiff::Retraction => {
                 let entry = self.drop_item(introspection_source_index.item_id);
@@ -645,7 +673,7 @@ impl CatalogState {
                     name.clone(),
                     CatalogItem::Table(Table {
                         create_sql: None,
-                        desc: table.desc.clone(),
+                        desc: VersionedRelationDesc::new(table.desc.clone()),
                         collections: [(RelationVersion::root(), global_id)].into_iter().collect(),
                         conn_id: None,
                         resolved_ids: ResolvedIds::empty(),
@@ -699,7 +727,10 @@ impl CatalogState {
                         )
                     });
                 let CatalogItem::Index(_) = item else {
-                    panic!("internal error: builtin index {}'s SQL does not begin with \"CREATE INDEX\".", index.name);
+                    panic!(
+                        "internal error: builtin index {}'s SQL does not begin with \"CREATE INDEX\".",
+                        index.name
+                    );
                 };
 
                 self.insert_item(
@@ -841,7 +872,10 @@ impl CatalogState {
                         )
                     });
                 let CatalogItem::ContinualTask(_) = &item else {
-                    panic!("internal error: builtin continual task {}'s SQL does not begin with \"CREATE CONTINUAL TASK\".", ct.name);
+                    panic!(
+                        "internal error: builtin continual task {}'s SQL does not begin with \"CREATE CONTINUAL TASK\".",
+                        ct.name
+                    );
                 };
 
                 self.insert_item(
@@ -878,7 +912,10 @@ impl CatalogState {
                         )
                     });
                 let CatalogItem::Connection(_) = &mut item else {
-                    panic!("internal error: builtin connection {}'s SQL does not begin with \"CREATE CONNECTION\".", connection.name);
+                    panic!(
+                        "internal error: builtin connection {}'s SQL does not begin with \"CREATE CONNECTION\".",
+                        connection.name
+                    );
                 };
 
                 let mut acl_items = vec![rbac::owner_privilege(
@@ -1029,17 +1066,7 @@ impl CatalogState {
                         }
                     }
                 };
-                // We allow sinks to break this invariant due to a know issue with `ALTER SINK`.
-                // https://github.com/MaterializeInc/materialize/pull/28708.
-                if !entry.is_sink() && entry.uses().iter().any(|id| *id > entry.id) {
-                    let msg = format!(
-                        "item cannot depend on items with larger GlobalIds, item: {:?}, dependencies: {:?}",
-                        entry,
-                        entry.uses()
-                    );
-                    error!("internal catalog errr: {msg}");
-                    return Err(CatalogError::Durable(DurableCatalogError::Internal(msg)));
-                }
+
                 self.insert_entry(entry);
             }
             StateDiff::Retraction => {
@@ -1242,15 +1269,17 @@ impl CatalogState {
                 self.pack_source_references_update(&source_references, diff)
             }
             StateUpdateKind::AuditLog(audit_log) => {
-                vec![self
-                    .pack_audit_log_update(&audit_log.event, diff)
-                    .expect("could not pack audit log update")]
+                vec![
+                    self.pack_audit_log_update(&audit_log.event, diff)
+                        .expect("could not pack audit log update"),
+                ]
             }
             StateUpdateKind::NetworkPolicy(policy) => self
                 .pack_network_policy_update(&policy.id, diff)
                 .expect("could not pack audit log update"),
             StateUpdateKind::StorageCollectionMetadata(_)
-            | StateUpdateKind::UnfinalizedShard(_) => Vec::new(),
+            | StateUpdateKind::UnfinalizedShard(_)
+            | StateUpdateKind::RoleAuth(_) => Vec::new(),
         }
     }
 
@@ -1323,7 +1352,7 @@ impl CatalogState {
             // catalog.
             let item_id = entry.id();
             state.insert_entry(entry);
-            builtin_table_updates.extend(state.pack_item_update(item_id, 1));
+            builtin_table_updates.extend(state.pack_item_update(item_id, Diff::ONE));
         }
 
         let mut handles = Vec::new();
@@ -1527,7 +1556,7 @@ impl CatalogState {
         builtin_table_updates.extend(
             item_ids
                 .into_iter()
-                .flat_map(|id| state.pack_item_update(id, 1)),
+                .flat_map(|id| state.pack_item_update(id, Diff::ONE)),
         );
 
         builtin_table_updates
@@ -1684,6 +1713,24 @@ impl CatalogState {
         global_id: GlobalId,
         oid: u32,
     ) {
+        let (index_name, index) =
+            self.create_introspection_source_index(cluster_id, log, global_id);
+        self.insert_item(
+            item_id,
+            oid,
+            index_name,
+            index,
+            MZ_SYSTEM_ROLE_ID,
+            PrivilegeMap::default(),
+        );
+    }
+
+    fn create_introspection_source_index(
+        &self,
+        cluster_id: ClusterId,
+        log: &'static BuiltinLog,
+        global_id: GlobalId,
+    ) -> (QualifiedItemName, CatalogItem) {
         let source_name = FullItemName {
             database: RawDatabaseSpecifier::Ambient,
             schema: log.schema.into(),
@@ -1700,35 +1747,29 @@ impl CatalogState {
         index_name = self.find_available_name(index_name, &SYSTEM_CONN_ID);
         let index_item_name = index_name.item.clone();
         let (log_item_id, log_global_id) = self.resolve_builtin_log(log);
-        self.insert_item(
-            item_id,
-            oid,
-            index_name,
-            CatalogItem::Index(Index {
-                global_id,
-                on: log_global_id,
-                keys: log
-                    .variant
-                    .index_by()
-                    .into_iter()
-                    .map(MirScalarExpr::Column)
-                    .collect(),
-                create_sql: index_sql(
-                    index_item_name,
-                    cluster_id,
-                    source_name,
-                    &log.variant.desc(),
-                    &log.variant.index_by(),
-                ),
-                conn_id: None,
-                resolved_ids: [(log_item_id, log_global_id)].into_iter().collect(),
+        let index = CatalogItem::Index(Index {
+            global_id,
+            on: log_global_id,
+            keys: log
+                .variant
+                .index_by()
+                .into_iter()
+                .map(MirScalarExpr::column)
+                .collect(),
+            create_sql: index_sql(
+                index_item_name,
                 cluster_id,
-                is_retained_metrics_object: false,
-                custom_logical_compaction_window: None,
-            }),
-            MZ_SYSTEM_ROLE_ID,
-            PrivilegeMap::default(),
-        );
+                source_name,
+                &log.variant.desc(),
+                &log.variant.index_by(),
+            ),
+            conn_id: None,
+            resolved_ids: [(log_item_id, log_global_id)].into_iter().collect(),
+            cluster_id,
+            is_retained_metrics_object: false,
+            custom_logical_compaction_window: None,
+        });
+        (index_name, index)
     }
 
     /// Insert system configuration `name` with `value`.
@@ -1753,7 +1794,7 @@ fn sort_updates(mut updates: Vec<StateUpdate>) -> Vec<StateUpdate> {
     let mut sorted_updates = Vec::with_capacity(updates.len());
 
     updates.sort_by_key(|update| update.ts);
-    for (_, updates) in &updates.into_iter().group_by(|update| update.ts) {
+    for (_, updates) in &updates.into_iter().chunk_by(|update| update.ts) {
         let sorted_ts_updates = sort_updates_inner(updates.collect());
         sorted_updates.extend(sorted_ts_updates);
     }
@@ -1796,6 +1837,7 @@ fn sort_updates_inner(updates: Vec<StateUpdate>) -> Vec<StateUpdate> {
         let diff = update.diff.clone();
         match update.kind {
             StateUpdateKind::Role(_)
+            | StateUpdateKind::RoleAuth(_)
             | StateUpdateKind::Database(_)
             | StateUpdateKind::Schema(_)
             | StateUpdateKind::DefaultPrivilege(_)
@@ -1894,42 +1936,215 @@ fn sort_updates_inner(updates: Vec<StateUpdate>) -> Vec<StateUpdate> {
         }
     }
 
-    /// Sort item updates by [`CatalogItemId`].
+    /// Sort `CONNECTION` items.
+    ///
+    /// `CONNECTION`s can depend on one another, e.g. a `KAFKA CONNECTION` contains
+    /// a list of `BROKERS` and these broker definitions can themselves reference other
+    /// connections. This `BROKERS` list can also be `ALTER`ed and thus it's possible
+    /// for a connection to depend on another with an ID greater than its own.
+    fn sort_connections(connections: &mut Vec<(mz_catalog::durable::Item, Timestamp, StateDiff)>) {
+        let mut topo: BTreeMap<
+            (mz_catalog::durable::Item, Timestamp, StateDiff),
+            BTreeSet<CatalogItemId>,
+        > = BTreeMap::default();
+        let existing_connections: BTreeSet<_> = connections.iter().map(|item| item.0.id).collect();
+
+        // Initialize our set of topological sort.
+        tracing::info!(?connections, "sorting connections");
+        for (connection, ts, diff) in connections.drain(..) {
+            let statement = mz_sql::parse::parse(&connection.create_sql)
+                .expect("valid CONNECTION create_sql")
+                .into_element()
+                .ast;
+            let mut dependencies = mz_sql::names::dependencies(&statement)
+                .expect("failed to find dependencies of CONNECTION");
+            // Be defensive and remove any possible self references.
+            dependencies.remove(&connection.id);
+            // It's possible we're applying updates to a connection where the
+            // dependency already exists and thus it's not in `connections`.
+            dependencies.retain(|dep| existing_connections.contains(dep));
+
+            // Be defensive and ensure we're not clobbering any items.
+            assert_none!(topo.insert((connection, ts, diff), dependencies));
+        }
+        tracing::info!(?topo, ?existing_connections, "built topological sort");
+
+        // Do a topological sort, pushing back into the provided Vec.
+        while !topo.is_empty() {
+            // Get all of the connections with no dependencies.
+            let no_deps: Vec<_> = topo
+                .iter()
+                .filter_map(|(item, deps)| {
+                    if deps.is_empty() {
+                        Some(item.clone())
+                    } else {
+                        None
+                    }
+                })
+                .collect();
+
+            // Cycle in our graph!
+            if no_deps.is_empty() {
+                panic!("programming error, cycle in Connections");
+            }
+
+            // Process all of the items with no dependencies.
+            for item in no_deps {
+                // Remove the item from our topological sort.
+                topo.remove(&item);
+                // Remove this item from anything that depends on it.
+                topo.values_mut().for_each(|deps| {
+                    deps.remove(&item.0.id);
+                });
+                // Push it back into our list as "completed".
+                connections.push(item);
+            }
+        }
+    }
+
+    /// Sort item updates by dependency.
+    ///
+    /// First we group items into groups that are totally ordered by dependency. For example, when
+    /// sorting all items by dependency we know that all tables can come after all sources, because
+    /// a source can never depend on a table. Within these groups, the ID order matches the
+    /// dependency order.
+    ///
+    /// It used to be the case that the ID order of ALL items matched the dependency order. However,
+    /// certain migrations shuffled item IDs around s.t. this was no longer true. A much better
+    /// approach would be to investigate each item, discover their exact dependencies, and then
+    /// perform a topological sort. This is non-trivial because we only have the CREATE SQL of each
+    /// item here. Within the SQL the dependent items are sometimes referred to by ID and sometimes
+    /// referred to by name.
+    ///
+    /// The logic of this function should match [`sort_temp_item_updates`].
     fn sort_item_updates(
         item_updates: Vec<(mz_catalog::durable::Item, Timestamp, StateDiff)>,
     ) -> VecDeque<(mz_catalog::durable::Item, Timestamp, StateDiff)> {
-        item_updates
-            .into_iter()
-            // HACK: due to `ALTER SINK`, sinks can appear before the objects they
-            // depend upon. Fortunately, because sinks can never have dependencies
-            // and can never depend upon one another, to fix the topological sort,
-            // we can just always move sinks to the end.
-            .sorted_by_key(|(item, _ts, _diff)| {
-                if item.create_sql.starts_with("CREATE SINK") {
-                    CatalogItemId::User(u64::MAX)
-                } else {
-                    item.id
-                }
-            })
+        // Partition items into groups s.t. each item in one group has a predefined order with all
+        // items in other groups. For example, all sinks are ordered greater than all tables.
+        let mut types = Vec::new();
+        // N.B. Functions can depend on system tables, but not user tables.
+        // TODO(udf): This will change when UDFs are supported.
+        let mut funcs = Vec::new();
+        let mut secrets = Vec::new();
+        let mut connections = Vec::new();
+        let mut sources = Vec::new();
+        let mut tables = Vec::new();
+        let mut derived_items = Vec::new();
+        let mut sinks = Vec::new();
+        let mut continual_tasks = Vec::new();
+
+        for update in item_updates {
+            match update.0.item_type() {
+                CatalogItemType::Type => types.push(update),
+                CatalogItemType::Func => funcs.push(update),
+                CatalogItemType::Secret => secrets.push(update),
+                CatalogItemType::Connection => connections.push(update),
+                CatalogItemType::Source => sources.push(update),
+                CatalogItemType::Table => tables.push(update),
+                CatalogItemType::View
+                | CatalogItemType::MaterializedView
+                | CatalogItemType::Index => derived_items.push(update),
+                CatalogItemType::Sink => sinks.push(update),
+                CatalogItemType::ContinualTask => continual_tasks.push(update),
+            }
+        }
+
+        // Within each group, sort by ID.
+        for group in [
+            &mut types,
+            &mut funcs,
+            &mut secrets,
+            &mut sources,
+            &mut tables,
+            &mut derived_items,
+            &mut sinks,
+            &mut continual_tasks,
+        ] {
+            group.sort_by_key(|(item, _, _)| item.id);
+        }
+
+        // HACK(parkmycar): Connections are special and can depend on one another. Additionally
+        // connections can be `ALTER`ed and thus a `CONNECTION` can depend on another whose ID
+        // is greater than its own.
+        sort_connections(&mut connections);
+
+        iter::empty()
+            .chain(types)
+            .chain(funcs)
+            .chain(secrets)
+            .chain(connections)
+            .chain(sources)
+            .chain(tables)
+            .chain(derived_items)
+            .chain(sinks)
+            .chain(continual_tasks)
             .collect()
     }
+
     let item_retractions = sort_item_updates(item_retractions);
     let item_additions = sort_item_updates(item_additions);
 
-    /// Sort temporary item updates by GlobalId.
+    /// Sort temporary item updates by dependency.
+    ///
+    /// The logic of this function should match [`sort_item_updates`].
     fn sort_temp_item_updates(
         temp_item_updates: Vec<(TemporaryItem, Timestamp, StateDiff)>,
     ) -> VecDeque<(TemporaryItem, Timestamp, StateDiff)> {
-        temp_item_updates
-            .into_iter()
-            // HACK: due to `ALTER SINK`, sinks can appear before the objects they
-            // depend upon. Fortunately, because sinks can never have dependencies
-            // and can never depend upon one another, to fix the topological sort,
-            // we can just always move sinks to the end.
-            .sorted_by_key(|(item, _ts, _diff)| match item.item.typ() {
-                CatalogItemType::Sink => CatalogItemId::User(u64::MAX),
-                _ => item.id,
-            })
+        // Partition items into groups s.t. each item in one group has a predefined order with all
+        // items in other groups. For example, all sinks are ordered greater than all tables.
+        let mut types = Vec::new();
+        // N.B. Functions can depend on system tables, but not user tables.
+        let mut funcs = Vec::new();
+        let mut secrets = Vec::new();
+        let mut connections = Vec::new();
+        let mut sources = Vec::new();
+        let mut tables = Vec::new();
+        let mut derived_items = Vec::new();
+        let mut sinks = Vec::new();
+        let mut continual_tasks = Vec::new();
+
+        for update in temp_item_updates {
+            match update.0.item.typ() {
+                CatalogItemType::Type => types.push(update),
+                CatalogItemType::Func => funcs.push(update),
+                CatalogItemType::Secret => secrets.push(update),
+                CatalogItemType::Connection => connections.push(update),
+                CatalogItemType::Source => sources.push(update),
+                CatalogItemType::Table => tables.push(update),
+                CatalogItemType::View
+                | CatalogItemType::MaterializedView
+                | CatalogItemType::Index => derived_items.push(update),
+                CatalogItemType::Sink => sinks.push(update),
+                CatalogItemType::ContinualTask => continual_tasks.push(update),
+            }
+        }
+
+        // Within each group, sort by ID.
+        for group in [
+            &mut types,
+            &mut funcs,
+            &mut secrets,
+            &mut connections,
+            &mut sources,
+            &mut tables,
+            &mut derived_items,
+            &mut sinks,
+            &mut continual_tasks,
+        ] {
+            group.sort_by_key(|(item, _, _)| item.id);
+        }
+
+        iter::empty()
+            .chain(types)
+            .chain(funcs)
+            .chain(secrets)
+            .chain(connections)
+            .chain(sources)
+            .chain(tables)
+            .chain(derived_items)
+            .chain(sinks)
+            .chain(continual_tasks)
             .collect()
     }
     let temp_item_retractions = sort_temp_item_updates(temp_item_retractions);

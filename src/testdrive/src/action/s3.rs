@@ -7,15 +7,22 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+use std::pin::Pin;
 use std::str;
 use std::thread;
 use std::time::Duration;
 
+use anyhow::Context;
 use anyhow::bail;
 use arrow::util::display::ArrayFormatter;
 use arrow::util::display::FormatOptions;
+use async_compression::tokio::bufread::{BzEncoder, GzipEncoder, XzEncoder, ZstdEncoder};
 use regex::Regex;
+use tokio::io::{AsyncRead, AsyncReadExt};
 
+use crate::action::file::Compression;
+use crate::action::file::build_compression;
+use crate::action::file::build_contents;
 use crate::action::{ControlFlow, State};
 use crate::parser::BuiltinCommand;
 
@@ -176,4 +183,76 @@ fn rows_from_parquet(bytes: bytes::Bytes) -> Vec<String> {
         }
     }
     ret
+}
+
+pub async fn run_upload(
+    mut cmd: BuiltinCommand,
+    state: &State,
+) -> Result<ControlFlow, anyhow::Error> {
+    let key = cmd.args.string("key")?;
+    let bucket = cmd.args.string("bucket")?;
+
+    let compression = build_compression(&mut cmd)?;
+    let content = build_contents(&mut cmd)?;
+
+    let aws_client = mz_aws_util::s3::new_client(&state.aws_config);
+
+    // TODO(parkmycar): Stream data to S3. The ByteStream type from the AWS config is a bit
+    // cumbersome to work with, so for now just stick with this.
+    let mut body = vec![];
+    for line in content {
+        body.extend(&line);
+        body.push(b'\n');
+    }
+
+    let mut reader: Pin<Box<dyn AsyncRead + Send + Sync>> = match compression {
+        Compression::None => Box::pin(&body[..]),
+        Compression::Gzip => Box::pin(GzipEncoder::new(&body[..])),
+        Compression::Bzip2 => Box::pin(BzEncoder::new(&body[..])),
+        Compression::Xz => Box::pin(XzEncoder::new(&body[..])),
+        Compression::Zstd => Box::pin(ZstdEncoder::new(&body[..])),
+    };
+    let mut content = vec![];
+    reader
+        .read_to_end(&mut content)
+        .await
+        .context("compressing")?;
+
+    println!("Uploading file to S3 bucket {bucket}/{key}");
+
+    // Upload the file to S3.
+    aws_client
+        .put_object()
+        .bucket(&bucket)
+        .key(&key)
+        .body(content.into())
+        .send()
+        .await
+        .context("s3 put")?;
+
+    Ok(ControlFlow::Continue)
+}
+
+pub async fn run_set_presigned_url(
+    mut cmd: BuiltinCommand,
+    state: &mut State,
+) -> Result<ControlFlow, anyhow::Error> {
+    let key = cmd.args.string("key")?;
+    let bucket = cmd.args.string("bucket")?;
+    let var_name = cmd.args.string("var-name")?;
+
+    let aws_client = mz_aws_util::s3::new_client(&state.aws_config);
+    let presign_config = mz_aws_util::s3::new_presigned_config();
+    let request = aws_client
+        .get_object()
+        .bucket(&bucket)
+        .key(&key)
+        .presigned(presign_config)
+        .await
+        .context("s3 presign")?;
+
+    println!("Setting '{var_name}' to presigned URL for {bucket}/{key}");
+    state.cmd_vars.insert(var_name, request.uri().to_string());
+
+    Ok(ControlFlow::Continue)
 }

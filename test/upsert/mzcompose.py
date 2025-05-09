@@ -22,6 +22,7 @@ from materialize.mzcompose.composition import Composition, WorkflowArgumentParse
 from materialize.mzcompose.services.clusterd import Clusterd
 from materialize.mzcompose.services.kafka import Kafka
 from materialize.mzcompose.services.materialized import Materialized
+from materialize.mzcompose.services.mz import Mz
 from materialize.mzcompose.services.redpanda import Redpanda
 from materialize.mzcompose.services.schema_registry import SchemaRegistry
 from materialize.mzcompose.services.testdrive import Testdrive
@@ -33,6 +34,7 @@ SERVICES = [
     Zookeeper(),
     Kafka(),
     SchemaRegistry(),
+    Mz(app_password=""),
     Materialized(
         options=[
             "--orchestrator-process-scratch-directory=/scratch",
@@ -44,13 +46,23 @@ SERVICES = [
             "upsert_rocksdb_auto_spill_to_disk": "false",
         },
         environment_extra=materialized_environment_extra,
+        default_replication_factor=2,
     ),
     Testdrive(),
-    Clusterd(
-        name="clusterd1",
-    ),
+    Clusterd(name="clusterd1"),
     Redpanda(),
 ]
+
+# a really small scratch volume, which can result in OOD when using upsert
+VOLUMES = {
+    "tiny_scratch": {
+        "driver_opts": {
+            "device": "tmpfs",
+            "type": "tmpfs",
+            "o": "size=4m",
+        }
+    }
+}
 
 
 def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
@@ -64,11 +76,14 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     if args.compaction_disabled:
         materialized_environment_extra[0] = "MZ_PERSIST_COMPACTION_DISABLED=true"
 
-    for name in c.workflows:
-        if name in ["default", "load-test"]:
-            continue
+    def process(name: str) -> None:
+        if name in ["default", "load-test", "large-scale"]:
+            return
+
         with c.test_case(name):
             c.workflow(name)
+
+    c.test_parts(list(c.workflows.keys()), process)
 
 
 def workflow_testdrive(c: Composition, parser: WorkflowArgumentParser) -> None:
@@ -114,6 +129,7 @@ def workflow_testdrive(c: Composition, parser: WorkflowArgumentParser) -> None:
             "disk_cluster_replicas_default": "true",
         },
         environment_extra=materialized_environment_extra,
+        default_replication_factor=2,
     )
 
     with c.override(testdrive, materialized):
@@ -136,7 +152,8 @@ def workflow_testdrive(c: Composition, parser: WorkflowArgumentParser) -> None:
 
         try:
             junit_report = ci_util.junit_report_filename(c.name)
-            for file in args.files:
+
+            def process(file: str) -> None:
                 c.run_testdrive_files(
                     f"--junit-report={junit_report}",
                     f"--var=replicas={args.replicas}",
@@ -144,7 +161,9 @@ def workflow_testdrive(c: Composition, parser: WorkflowArgumentParser) -> None:
                     f"--var=default-storage-size={materialized.default_storage_size}",
                     file,
                 )
-                c.sanity_restart_mz()
+
+            c.test_parts(args.files, process)
+            c.sanity_restart_mz()
         finally:
             ci_util.upload_junit_report(
                 "testdrive", Path(__file__).parent / junit_report
@@ -185,6 +204,7 @@ def workflow_rehydration(c: Composition) -> None:
                     "storage_shrink_upsert_unused_buffers_by_ratio": "4",
                 },
                 environment_extra=materialized_environment_extra,
+                default_replication_factor=2,
             ),
             Clusterd(
                 name="clusterd1",
@@ -217,6 +237,7 @@ def workflow_rehydration(c: Composition) -> None:
                     "storage_rocksdb_use_merge_operator": "true",
                 },
                 environment_extra=materialized_environment_extra,
+                default_replication_factor=2,
             ),
             Clusterd(
                 name="clusterd1",
@@ -242,6 +263,7 @@ def workflow_rehydration(c: Composition) -> None:
                     "storage_dataflow_delay_sources_past_rehydration": "true",
                 },
                 environment_extra=materialized_environment_extra,
+                default_replication_factor=2,
             ),
             Clusterd(
                 name="clusterd1",
@@ -268,6 +290,71 @@ def workflow_rehydration(c: Composition) -> None:
             c.run_testdrive_files("rehydration/03-after-rehydration.td")
 
         c.run_testdrive_files("rehydration/04-reset.td")
+
+
+def workflow_out_of_disk(c: Composition) -> None:
+    """Test rocksdb OOD"""
+    c.down(destroy_volumes=True)
+
+    dependencies = [
+        "materialized",
+        "zookeeper",
+        "kafka",
+        "schema-registry",
+        "clusterd1",
+    ]
+
+    with c.override(
+        Materialized(
+            options=[
+                "--orchestrator-process-scratch-directory=/scratch",
+            ],
+            additional_system_parameter_defaults={
+                "storage_statistics_collection_interval": "1000",
+                "storage_statistics_interval": "2000",
+                "unsafe_enable_unorchestrated_cluster_replicas": "true",
+                "disk_cluster_replicas_default": "true",
+                "enable_disk_cluster_replicas": "true",
+                "upsert_rocksdb_auto_spill_to_disk": "true",
+                "upsert_rocksdb_auto_spill_threshold_bytes": "250",
+                # Force backpressure to be enabled.
+                "storage_dataflow_max_inflight_bytes": "1",
+                "storage_dataflow_max_inflight_bytes_to_cluster_size_fraction": "0.01",
+                "storage_dataflow_max_inflight_bytes_disk_only": "false",
+                "storage_dataflow_delay_sources_past_rehydration": "true",
+                # Enabling shrinking buffers
+                "upsert_rocksdb_shrink_allocated_buffers_by_ratio": "4",
+                "storage_shrink_upsert_unused_buffers_by_ratio": "4",
+            },
+            environment_extra=materialized_environment_extra,
+        ),
+        Clusterd(
+            name="clusterd1",
+            volumes=[
+                "mzdata:/mzdata",
+                "tmp:/share/tmp",
+                "tiny_scratch:/scratch",
+            ],
+            options=[
+                "--announce-memory-limit=1048376000",  # 1GiB
+            ],
+        ),
+        Testdrive(no_reset=True),
+    ):
+        c.up(*dependencies)
+        c.run_testdrive_files("rocksdb_ood/01-setup.td")
+        c.run_testdrive_files("rocksdb_ood/02-source-setup.td")
+
+        c.kill("materialized")
+        c.kill("clusterd1")
+        c.up("materialized")
+        c.up("clusterd1")
+
+        c.run_testdrive_files("rocksdb_ood/03-after-rehydration.td")
+        # clusterd volumes override is only valid in this scope, cleanup
+        # has to be done before leaving or it will leave behind the tiny
+        # scratch volume
+        c.down(destroy_volumes=True)
 
 
 def workflow_failpoint(c: Composition) -> None:
@@ -344,6 +431,7 @@ def workflow_incident_49(c: Composition) -> None:
                     "storage_dataflow_delay_sources_past_rehydration": "true",
                 },
                 environment_extra=materialized_environment_extra,
+                default_replication_factor=2,
             ),
         ),
         (
@@ -354,6 +442,7 @@ def workflow_incident_49(c: Composition) -> None:
                     "storage_dataflow_delay_sources_past_rehydration": "true",
                 },
                 environment_extra=materialized_environment_extra,
+                default_replication_factor=2,
             ),
         ),
     ]:
@@ -492,6 +581,7 @@ def workflow_autospill(c: Composition) -> None:
                     "unsafe_enable_unorchestrated_cluster_replicas": "true",
                     "storage_dataflow_delay_sources_past_rehydration": "true",
                 },
+                default_replication_factor=2,
             ),
         ),
         (
@@ -509,6 +599,7 @@ def workflow_autospill(c: Composition) -> None:
                     # Enable the RocksDB merge operator
                     "storage_rocksdb_use_merge_operator": "true",
                 },
+                default_replication_factor=2,
             ),
         ),
     ]:
@@ -535,8 +626,6 @@ def workflow_autospill(c: Composition) -> None:
 # This test is there to compare rehydration metrics with different configs.
 # Can be run locally with the command ./mzcompose run load-test
 def workflow_load_test(c: Composition, parser: WorkflowArgumentParser) -> None:
-    from textwrap import dedent
-
     # Following variables can be updated to tweak how much data the kafka
     # topic should be populated with and what should be the upsert state size.
     pad_len = 1024
@@ -564,6 +653,7 @@ def workflow_load_test(c: Composition, parser: WorkflowArgumentParser) -> None:
                 "storage_dataflow_max_inflight_bytes_disk_only": "true",
             },
             environment_extra=materialized_environment_extra,
+            default_replication_factor=2,
         ),
         Clusterd(
             name="clusterd1",
@@ -665,6 +755,7 @@ def workflow_load_test(c: Composition, parser: WorkflowArgumentParser) -> None:
                     ],
                     additional_system_parameter_defaults=mz_configs,
                     environment_extra=materialized_environment_extra,
+                    default_replication_factor=2,
                 ),
             ):
                 c.kill("materialized", "clusterd1")
@@ -698,3 +789,80 @@ def workflow_load_test(c: Composition, parser: WorkflowArgumentParser) -> None:
                     )[0]
                 last_latency = rehydration_latency
                 print(f"Scenario {scenario_name} took {rehydration_latency} ms")
+
+
+def workflow_large_scale(c: Composition, parser: WorkflowArgumentParser) -> None:
+    """
+    The goal is to test a large scale Kafka upsert instance and to make sure that we can successfully ingest data from it quickly.
+    """
+    dependencies = ["materialized", "zookeeper", "kafka", "schema-registry"]
+    c.up(*dependencies)
+    with c.override(
+        Testdrive(no_reset=True, consistent_seed=True),
+    ):
+        c.up("testdrive", persistent=True)
+
+        c.testdrive(
+            dedent(
+                """
+            $ kafka-create-topic topic=topic1
+
+            > CREATE CONNECTION IF NOT EXISTS kafka_conn
+              FOR KAFKA BROKER '${testdrive.kafka-addr}', SECURITY PROTOCOL PLAINTEXT;
+            """
+            )
+        )
+
+        def make_inserts(c: Composition, start: int, batch_num: int):
+            c.testdrive(
+                args=["--no-reset"],
+                input=dedent(
+                    f"""
+                    $ kafka-ingest format=bytes topic=topic1 key-format=bytes key-terminator=: repeat={batch_num}
+                    "${{kafka-ingest.iteration}}":"{'x'*1_000_000}"
+                    """
+                ),
+            )
+
+        num_rows = 100_000  # out of disk with 200_000 rows
+        batch_size = 10_000
+        for i in range(0, num_rows, batch_size):
+            batch_num = min(batch_size, num_rows - i)
+            make_inserts(c, i, batch_num)
+
+        c.testdrive(
+            args=["--no-reset"],
+            input=dedent(
+                f"""
+                > CREATE SOURCE s1
+                  FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-topic1-${{testdrive.seed}}');
+
+                > CREATE TABLE s1_tbl FROM SOURCE s1 (REFERENCE "testdrive-topic1-${{testdrive.seed}}")
+                  KEY FORMAT TEXT VALUE FORMAT TEXT
+                  ENVELOPE UPSERT;
+
+                > SELECT COUNT(*) FROM s1_tbl;
+                {batch_size}
+                """
+            ),
+        )
+
+        c.testdrive(
+            args=["--no-reset"],
+            input=dedent(
+                f"""
+                $ kafka-ingest format=bytes topic=topic1 key-format=bytes key-terminator=:
+                "{batch_size + 1}":"{'x'*1_000_000}"
+                """
+            ),
+        )
+
+        c.testdrive(
+            args=["--no-reset"],
+            input=dedent(
+                f"""
+                > SELECT COUNT(*) FROM s1_tbl;
+                {batch_size + 1}
+                """
+            ),
+        )

@@ -29,7 +29,7 @@ SERVICES = [
     SchemaRegistry(
         kafka_servers=[("kafka1", "9092"), ("kafka2", "9092"), ("kafka3", "9092")]
     ),
-    Materialized(),
+    Materialized(default_replication_factor=2),
     Testdrive(
         entrypoint_extra=[
             "--kafka-option=acks=all",

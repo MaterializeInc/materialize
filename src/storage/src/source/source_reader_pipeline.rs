@@ -36,7 +36,6 @@ use differential_dataflow::{AsCollection, Collection, Hashable};
 use futures::stream::StreamExt;
 use mz_ore::cast::CastFrom;
 use mz_ore::collections::CollectionExt;
-use mz_ore::error::ErrorExt;
 use mz_ore::now::NowFn;
 use mz_persist_client::cache::PersistClientCache;
 use mz_repr::{Diff, GlobalId, RelationDesc, Row};
@@ -53,24 +52,26 @@ use mz_timely_util::capture::PusherCapture;
 use mz_timely_util::reclock::reclock;
 use timely::container::CapacityContainerBuilder;
 use timely::dataflow::channels::pact::Pipeline;
+use timely::dataflow::operators::Concatenate;
 use timely::dataflow::operators::capture::capture::Capture;
 use timely::dataflow::operators::capture::{Event, EventPusher};
 use timely::dataflow::operators::core::Map as _;
 use timely::dataflow::operators::generic::builder_rc::OperatorBuilder as OperatorBuilderRc;
-use timely::dataflow::operators::{Broadcast, CapabilitySet, Concat, Inspect, Leave};
+use timely::dataflow::operators::{Broadcast, CapabilitySet, Inspect, Leave};
 use timely::dataflow::scopes::Child;
 use timely::dataflow::{Scope, Stream};
 use timely::order::TotalOrder;
 use timely::progress::frontier::MutableAntichain;
 use timely::progress::{Antichain, Timestamp};
 use timely::{Container, PartialOrder};
-use tokio::sync::{watch, Semaphore};
+use tokio::sync::{Semaphore, watch};
 use tokio_stream::wrappers::WatchStream;
 use tracing::trace;
 
 use crate::healthcheck::{HealthStatusMessage, HealthStatusUpdate};
-use crate::metrics::source::SourceMetrics;
 use crate::metrics::StorageMetrics;
+use crate::metrics::source::SourceMetrics;
+use crate::source::probe;
 use crate::source::reclock::ReclockOperator;
 use crate::source::types::{Probe, SourceMessage, SourceOutput, SourceRender, StackedCollection};
 use crate::statistics::SourceStatistics;
@@ -170,7 +171,7 @@ pub fn create_raw_source<'g, G: Scope<Timestamp = ()>, C>(
     scope: &mut Child<'g, G, mz_repr::Timestamp>,
     storage_state: &crate::storage_state::StorageState,
     committed_upper: &Stream<Child<'g, G, mz_repr::Timestamp>, ()>,
-    config: RawSourceCreationConfig,
+    config: &RawSourceCreationConfig,
     source_connection: C,
     start_signal: impl std::future::Future<Output = ()> + 'static,
 ) -> (
@@ -223,12 +224,11 @@ where
 
     let mut reclocked_exports = BTreeMap::new();
 
-    let config = config.clone();
     let reclocked_exports2 = &mut reclocked_exports;
     let (health, source_tokens) = scope.parent.scoped("SourceTimeDomain", move |scope| {
         let (exports, source_upper, health_stream, source_tokens) = source_render_operator(
             scope,
-            config.clone(),
+            config,
             source_connection,
             probed_upper_tx,
             committed_upper,
@@ -285,7 +285,7 @@ impl<T: Timestamp> EventPusher<T, Vec<Infallible>> for FrontierCapture<T> {
 /// into the remap shard.
 fn source_render_operator<G, C>(
     scope: &mut G,
-    config: RawSourceCreationConfig,
+    config: &RawSourceCreationConfig,
     source_connection: C,
     probed_upper_tx: watch::Sender<Option<Probe<C::Time>>>,
     resume_uppers: impl futures::Stream<Item = Antichain<C::Time>> + 'static,
@@ -312,7 +312,7 @@ where
     });
 
     let (exports, progress, health, stats, probes, tokens) =
-        source_connection.render(scope, config.clone(), resume_uppers, start_signal);
+        source_connection.render(scope, config, resume_uppers, start_signal);
 
     crate::source::statistics::process_statistics(
         scope.clone(),
@@ -322,38 +322,8 @@ where
         source_statistics.clone(),
     );
 
-    let name = format!("SourceGenericStats({})", source_id);
-    let mut builder = OperatorBuilderRc::new(name, scope.clone());
-
-    let (_, derived_progress) = builder.new_output::<CapacityContainerBuilder<_>>();
-    let (mut health_output, derived_health) = builder.new_output::<CapacityContainerBuilder<_>>();
-
     let mut export_collections = BTreeMap::new();
-    let mut export_handles = vec![];
-    // Loop invariant: The operator contains export_handles.len() inputs and
-    // export_handles.len() + 2 outputs
-    for (id, export) in exports {
-        // This output is not connected to any of the existing inputs.
-        let connection = vec![Antichain::new(); export_handles.len()];
-        let (export_output, new_export) =
-            builder.new_output_connection::<CapacityContainerBuilder<_>>(connection);
 
-        // This input's frontier flow into the progress collection and the corresponding output
-        let mut connection = vec![Antichain::from_elem(Default::default()), Antichain::new()];
-        // No frontier implications for other outputs
-        for _ in 0..export_handles.len() {
-            connection.push(Antichain::new());
-        }
-        // Standard frontier implication for the corresponding output of this input
-        connection.push(Antichain::from_elem(Default::default()));
-        let export_input = builder.new_input_connection(&export.inner, Pipeline, connection);
-        export_handles.push((id, export_input, export_output));
-        let new_export: StackedCollection<G, Result<SourceMessage, DataflowError>> =
-            new_export.as_collection();
-        export_collections.insert(id, new_export);
-    }
-
-    let bytes_read_counter = config.metrics.source_defs.bytes_read.clone();
     let source_metrics = config.metrics.get_source_metrics(config.id, worker_id);
 
     // Compute the overall resume upper to report for the ingestion
@@ -367,27 +337,45 @@ where
         .resume_upper
         .set(mz_persist_client::metrics::encode_ts_metric(&resume_upper));
 
-    builder.build(move |mut caps| {
-        let mut health_cap = Some(caps.remove(1));
-        move |frontiers| {
-            let mut statuses_by_idx = BTreeMap::new();
-            let mut health_output = health_output.activate();
+    let mut health_streams = vec![];
 
-            if frontiers.iter().all(|f| f.is_empty()) {
-                health_cap = None;
-                return;
-            }
-            let health_cap = health_cap.as_mut().unwrap();
+    for (id, export) in exports {
+        let name = format!("SourceGenericStats({})", id);
+        let mut builder = OperatorBuilderRc::new(name, scope.clone());
 
-            for (id, input, output) in export_handles.iter_mut() {
+        let (mut health_output, derived_health) =
+            builder.new_output::<CapacityContainerBuilder<_>>();
+        health_streams.push(derived_health);
+
+        let (mut output, new_export) = builder.new_output::<CapacityContainerBuilder<_>>();
+
+        let mut input = builder.new_input(&export.inner, Pipeline);
+        export_collections.insert(id, new_export.as_collection());
+
+        let bytes_read_counter = config.metrics.source_defs.bytes_read.clone();
+        let source_statistics = source_statistics.clone();
+
+        builder.build(move |mut caps| {
+            let mut health_cap = Some(caps.remove(0));
+
+            move |frontiers| {
+                let mut last_status = None;
+                let mut health_output = health_output.activate();
+
+                if frontiers[0].is_empty() {
+                    health_cap = None;
+                    return;
+                }
+                let health_cap = health_cap.as_mut().unwrap();
+
                 while let Some((cap, data)) = input.next() {
                     for (message, _, _) in data.iter() {
-                        let status = match message {
+                        let status = match &message {
                             Ok(_) => HealthStatusUpdate::running(),
                             // All errors coming into the data stream are definite.
                             // Downstream consumers of this data will preserve this
                             // status.
-                            Err(ref error) => HealthStatusUpdate::stalled(
+                            Err(error) => HealthStatusUpdate::stalled(
                                 error.to_string(),
                                 Some(
                                     "retracting the errored value may resume the source"
@@ -396,15 +384,14 @@ where
                             ),
                         };
 
-                        let statuses: &mut Vec<_> = statuses_by_idx.entry(*id).or_default();
-
                         let status = HealthStatusMessage {
-                            id: Some(*id),
+                            id: Some(id),
                             namespace: C::STATUS_NAMESPACE.clone(),
                             update: status,
                         };
-                        if statuses.last() != Some(&status) {
-                            statuses.push(status);
+                        if last_status.as_ref() != Some(&status) {
+                            last_status = Some(status.clone());
+                            health_output.session(&health_cap).give(status);
                         }
 
                         match message {
@@ -420,20 +407,10 @@ where
                     }
                     let mut output = output.activate();
                     output.session(&cap).give_container(data);
-
-                    for statuses in statuses_by_idx.values_mut() {
-                        if statuses.is_empty() {
-                            continue;
-                        }
-                        health_output.session(&health_cap).give_container(statuses);
-                        statuses.clear()
-                    }
                 }
             }
-        }
-    });
-
-    let progress = progress.unwrap_or(derived_progress);
+        });
+    }
 
     let probe_stream = match probes {
         Some(stream) => stream,
@@ -451,7 +428,7 @@ where
     (
         export_collections,
         progress,
-        health.concat(&derived_health),
+        health.concatenate(health_streams),
         tokens,
     )
 }
@@ -495,6 +472,7 @@ where
     } = config;
 
     let read_only_rx = storage_state.read_only_rx.clone();
+    let error_handler = storage_state.error_handler("remap_operator", id);
 
     let chosen_worker = usize::cast_from(id.hashed() % u64::cast_from(worker_count));
     let active_worker = chosen_worker == worker_id;
@@ -526,14 +504,19 @@ where
             remap_relation_desc,
             remap_collection_id,
         )
-        .await
-        .unwrap_or_else(|e| {
-            panic!(
-                "Failed to create remap handle for source {}: {}",
-                name,
-                e.display_with_causes()
-            )
-        });
+        .await;
+
+        let remap_handle = match remap_handle {
+            Ok(handle) => handle,
+            Err(e) => {
+                error_handler
+                    .report_and_stop(
+                        e.context(format!("Failed to create remap handle for source {name}")),
+                    )
+                    .await
+            }
+        };
+
         let (mut timestamper, mut initial_batch) = ReclockOperator::new(remap_handle).await;
 
         // Emit initial snapshot of the remap_shard, bootstrapping
@@ -665,7 +648,8 @@ where
 
     builder.build(move |_| {
         // Remap bindings beyond the upper
-        let mut accepted_times = Vec::new();
+        use timely::progress::ChangeBatch;
+        let mut accepted_times: ChangeBatch<(G::Timestamp, FromTime)> = ChangeBatch::new();
         // The upper frontier of the bindings
         let mut upper = Antichain::from_elem(Timestamp::minimum());
         // Remap bindings not beyond upper
@@ -677,19 +661,25 @@ where
             while let Some((_, data)) = bindings.next() {
                 accepted_times.extend(data.drain(..).map(|(from, mut into, diff)| {
                     into.advance_by(as_of.borrow());
-                    (from, into, diff)
+                    ((into, from), diff.into_inner())
                 }));
             }
             // Extract ready bindings
             let new_upper = frontiers[0].frontier();
             if PartialOrder::less_than(&upper.borrow(), &new_upper) {
                 upper = new_upper.to_owned();
-
-                accepted_times.sort_unstable_by(|a, b| a.1.cmp(&b.1));
-                // The times are totally ordered so we can binary search to find the prefix that is
-                // not beyond the upper and extract it into a batch.
-                let idx = accepted_times.partition_point(|(_, t, _)| !upper.less_equal(t));
-                ready_times.extend(accepted_times.drain(0..idx));
+                // Drain consolidated accepted times not greater or equal to `upper` into `ready_times`.
+                // Retain accepted times greater or equal to `upper` in
+                let mut pending_times = std::mem::take(&mut accepted_times).into_inner();
+                // These should already be sorted, as part of `.into_inner()`, but sort defensively in case.
+                pending_times.sort_unstable_by(|a, b| a.0.cmp(&b.0));
+                for ((into, from), diff) in pending_times.drain(..) {
+                    if !upper.less_equal(&into) {
+                        ready_times.push_back((from, into, diff));
+                    } else {
+                        accepted_times.update((into, from), diff);
+                    }
+                }
             }
 
             // The received times only accumulate correctly for times beyond the as_of.
@@ -784,9 +774,6 @@ where
     let active_worker = usize::cast_from(source_id.hashed()) % scope.peers();
     let is_active_worker = active_worker == scope.index();
 
-    let mut ticker = tokio::time::interval(interval);
-    ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
-
     let mut op = AsyncOperatorBuilder::new("synthesize_probes".into(), scope);
     let (output, output_stream) = op.new_output();
     let mut input = op.new_input_for(progress, Pipeline, &output);
@@ -797,6 +784,8 @@ where
         }
 
         let [cap] = caps.try_into().expect("one capability per output");
+
+        let mut ticker = probe::Ticker::new(move || interval, now_fn.clone());
 
         let minimum_frontier = Antichain::from_elem(Timestamp::minimum());
         let mut frontier = minimum_frontier.clone();
@@ -811,9 +800,9 @@ where
                 // This makes it so the first remap binding corresponds to the snapshot of the
                 // source, and because the first binding always maps to the minimum *target*
                 // frontier we guarantee that the source will never appear empty.
-                _ = ticker.tick(), if frontier != minimum_frontier => {
+                probe_ts = ticker.tick(), if frontier != minimum_frontier => {
                     let probe = Probe {
-                        probe_ts: now_fn().into(),
+                        probe_ts,
                         upstream_frontier: frontier.clone(),
                     };
                     output.give(&cap, probe);

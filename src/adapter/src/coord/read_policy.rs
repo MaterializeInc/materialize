@@ -317,7 +317,7 @@ impl crate::coord::Coordinator {
         policies.sort_by_key(|&(cluster_id, _, _)| cluster_id);
         for (cluster_id, group) in &policies
             .into_iter()
-            .group_by(|&(cluster_id, _, _)| cluster_id)
+            .chunk_by(|&(cluster_id, _, _)| cluster_id)
         {
             let group = group
                 .flat_map(|(_, item_id, policy)| {

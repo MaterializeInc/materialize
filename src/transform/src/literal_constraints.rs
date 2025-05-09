@@ -21,19 +21,19 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use itertools::Itertools;
+use mz_expr::JoinImplementation::IndexedFilter;
 use mz_expr::canonicalize::canonicalize_predicates;
 use mz_expr::visit::{Visit, VisitChildren};
-use mz_expr::JoinImplementation::IndexedFilter;
 use mz_expr::{BinaryFunc, Id, MapFilterProject, MirRelationExpr, MirScalarExpr, VariadicFunc};
 use mz_ore::collections::CollectionExt;
 use mz_ore::iter::IteratorExt;
 use mz_ore::stack::RecursionLimitError;
 use mz_ore::vec::swap_remove_multiple;
-use mz_repr::{GlobalId, RelationType, Row};
+use mz_repr::{Diff, GlobalId, RelationType, Row};
 
+use crate::TransformCtx;
 use crate::canonicalize_mfp::CanonicalizeMfp;
 use crate::notice::IndexTooWideForLiteralConstraints;
-use crate::TransformCtx;
 
 /// Convert literal constraints into `IndexedFilter` joins.
 #[derive(Debug)]
@@ -146,7 +146,10 @@ impl LiteralConstraints {
 
                     let inp_id = id.clone();
                     let filter_list = MirRelationExpr::Constant {
-                        rows: Ok(possible_vals.iter().map(|val| (val.clone(), 1)).collect()),
+                        rows: Ok(possible_vals
+                            .iter()
+                            .map(|val| (val.clone(), Diff::ONE))
+                            .collect()),
                         typ: mz_repr::RelationType {
                             column_types: key
                                 .iter()
@@ -163,7 +166,7 @@ impl LiteralConstraints {
                             keys: vec![(0..key.len()).collect()],
                         },
                     }
-                    .arrange_by(&[(0..key.len()).map(MirScalarExpr::Column).collect_vec()]);
+                    .arrange_by(&[(0..key.len()).map(MirScalarExpr::column).collect_vec()]);
 
                     if possible_vals.is_empty() {
                         // Even better than what we were hoping for: Found contradicting
@@ -572,14 +575,14 @@ impl LiteralConstraints {
                 } = e
                 {
                     if matches!(**expr1, MirScalarExpr::Literal(..)) {
-                        if let MirScalarExpr::Column(col) = **expr2 {
+                        if let MirScalarExpr::Column(col, _) = **expr2 {
                             if col >= mfp.input_arity {
                                 should_inline[col] = true;
                             }
                         }
                     }
                     if matches!(**expr2, MirScalarExpr::Literal(..)) {
-                        if let MirScalarExpr::Column(col) = **expr1 {
+                        if let MirScalarExpr::Column(col, _) = **expr1 {
                             if col >= mfp.input_arity {
                                 should_inline[col] = true;
                             }

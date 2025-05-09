@@ -18,7 +18,7 @@
 use proc_macro::TokenStream;
 use proc_macro2::TokenStream as TokenStream2;
 use quote::quote;
-use syn::{parse_macro_input, parse_quote, AttributeArgs, ItemFn, Meta, NestedMeta, ReturnType};
+use syn::{AttributeArgs, ItemFn, Meta, NestedMeta, ReturnType, parse_macro_input, parse_quote};
 
 /// Based on <https://github.com/d-e-s-o/test-log>
 /// Copyright (C) 2019-2022 Daniel Mueller <deso@posteo.net>

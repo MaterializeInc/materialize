@@ -12,7 +12,7 @@
 
 use mz_adapter_types::connection::ConnectionId;
 use mz_ore::now::EpochMillis;
-use mz_repr::{GlobalId, ScalarType};
+use mz_repr::{Diff, GlobalId, ScalarType};
 use mz_sql::names::{Aug, ResolvedIds};
 use mz_sql::plan::{Params, StatementDesc};
 use mz_sql::session::metadata::SessionMetadata;
@@ -24,7 +24,7 @@ use crate::coord::appends::BuiltinTableAppendNotify;
 use crate::coord::{Coordinator, Message};
 use crate::session::{Session, TransactionStatus};
 use crate::util::describe;
-use crate::{metrics, AdapterError, ExecuteContext, ExecuteResponse};
+use crate::{AdapterError, ExecuteContext, ExecuteResponse, metrics};
 
 impl Coordinator {
     pub(crate) fn plan_statement(
@@ -252,10 +252,10 @@ impl Coordinator {
 
         let ret_fut = match &active_sink {
             ActiveComputeSink::Subscribe(active_subscribe) => {
-                let update = self
-                    .catalog()
-                    .state()
-                    .pack_subscribe_update(id, active_subscribe, 1);
+                let update =
+                    self.catalog()
+                        .state()
+                        .pack_subscribe_update(id, active_subscribe, Diff::ONE);
                 let update = self.catalog().state().resolve_builtin_table_update(update);
 
                 self.metrics
@@ -299,10 +299,11 @@ impl Coordinator {
 
             match &sink {
                 ActiveComputeSink::Subscribe(active_subscribe) => {
-                    let update =
-                        self.catalog()
-                            .state()
-                            .pack_subscribe_update(id, active_subscribe, -1);
+                    let update = self.catalog().state().pack_subscribe_update(
+                        id,
+                        active_subscribe,
+                        Diff::MINUS_ONE,
+                    );
                     let update = self.catalog().state().resolve_builtin_table_update(update);
                     self.builtin_table_update().blocking(vec![update]).await;
 

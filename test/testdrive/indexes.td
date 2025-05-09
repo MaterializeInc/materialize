@@ -220,7 +220,7 @@ data_view_primary_idx   data_view   <VARIABLE_OUTPUT>   "{b - a,a}"  ""
 > SHOW CREATE INDEX data_view_primary_idx
 name                                     create_sql
 --------------------------------------------------------------------------------------------------------------------------------------
-materialize.public.data_view_primary_idx "CREATE INDEX \"data_view_primary_idx\" IN CLUSTER \"<VARIABLE_OUTPUT>\" ON \"materialize\".\"public\".\"data_view\" (\"b\" - \"a\", \"a\")"
+materialize.public.data_view_primary_idx "CREATE INDEX data_view_primary_idx IN CLUSTER <VARIABLE_OUTPUT> ON materialize.public.data_view (b - a, a);"
 
 > CREATE TABLE foo (
     a int NOT NULL,
@@ -309,6 +309,7 @@ mz_arrangement_batcher_capacity_raw_s2_primary_idx          mz_arrangement_batch
 mz_arrangement_batcher_records_raw_s2_primary_idx           mz_arrangement_batcher_records_raw           mz_catalog_server    {operator_id,worker_id}                     ""
 mz_arrangement_batcher_size_raw_s2_primary_idx              mz_arrangement_batcher_size_raw              mz_catalog_server    {operator_id,worker_id}                     ""
 mz_cluster_deployment_lineage_ind                           mz_cluster_deployment_lineage                mz_catalog_server    {cluster_id}                                ""
+mz_cluster_replica_frontiers_ind                            mz_cluster_replica_frontiers                 mz_catalog_server    {object_id}                                 ""
 mz_cluster_replica_history_ind                              mz_cluster_replica_history                   mz_catalog_server    {dropped_at}                                ""
 mz_cluster_replica_name_history_ind                         mz_cluster_replica_name_history              mz_catalog_server    {id}                                        ""
 mz_cluster_replica_metrics_ind                              mz_cluster_replica_metrics                   mz_catalog_server    {replica_id}                                ""
@@ -325,6 +326,7 @@ mz_compute_dataflow_global_ids_per_worker_s2_primary_idx   mz_compute_dataflow_g
 mz_compute_error_counts_raw_s2_primary_idx                  mz_compute_error_counts_raw                  mz_catalog_server    {export_id,worker_id}                       ""
 mz_compute_exports_per_worker_s2_primary_idx                mz_compute_exports_per_worker                mz_catalog_server    {export_id,worker_id}                       ""
 mz_compute_frontiers_per_worker_s2_primary_idx              mz_compute_frontiers_per_worker              mz_catalog_server    {export_id,worker_id}                       ""
+mz_compute_hydration_times_ind                              mz_compute_hydration_times                   mz_catalog_server    {replica_id}                                ""
 mz_compute_hydration_times_per_worker_s2_primary_idx        mz_compute_hydration_times_per_worker        mz_catalog_server    {export_id,worker_id}                       ""
 mz_compute_import_frontiers_per_worker_s2_primary_idx       mz_compute_import_frontiers_per_worker       mz_catalog_server    {export_id,import_id,worker_id}             ""
 mz_compute_lir_mapping_per_worker_s2_primary_idx            mz_compute_lir_mapping_per_worker            mz_catalog_server    {global_id,lir_id,worker_id}                ""
@@ -335,7 +337,7 @@ mz_continual_tasks_ind                                      mz_continual_tasks  
 mz_databases_ind                                            mz_databases                                 mz_catalog_server    {name}                                      ""
 mz_dataflow_addresses_per_worker_s2_primary_idx             mz_dataflow_addresses_per_worker             mz_catalog_server    {id,worker_id}                              ""
 mz_dataflow_channels_per_worker_s2_primary_idx              mz_dataflow_channels_per_worker              mz_catalog_server    {id,worker_id}                              ""
-mz_dataflow_operator_reachability_raw_s2_primary_idx        mz_dataflow_operator_reachability_raw        mz_catalog_server    {address,port,worker_id,update_type,time}   ""
+mz_dataflow_operator_reachability_raw_s2_primary_idx        mz_dataflow_operator_reachability_raw        mz_catalog_server    {id,worker_id,source,port,update_type,time} ""
 mz_dataflow_operators_per_worker_s2_primary_idx             mz_dataflow_operators_per_worker             mz_catalog_server    {id,worker_id}                              ""
 mz_dataflow_shutdown_durations_histogram_raw_s2_primary_idx mz_dataflow_shutdown_durations_histogram_raw mz_catalog_server    {worker_id,duration_ns}                     ""
 mz_frontiers_ind                                            mz_frontiers                                 mz_catalog_server    {object_id}                                 ""

@@ -73,6 +73,12 @@ pub static SOFT_ASSERTIONS: AtomicBool = {
 #[cfg(any(miri, target_arch = "wasm32"))]
 pub static SOFT_ASSERTIONS: AtomicBool = AtomicBool::new(true);
 
+/// Returns if soft assertions are enabled.
+#[inline(always)]
+pub fn soft_assertions_enabled() -> bool {
+    SOFT_ASSERTIONS.load(std::sync::atomic::Ordering::Relaxed)
+}
+
 /// Asserts that a condition is true if soft assertions are enabled.
 ///
 /// Soft assertions have a small runtime cost even when disabled. See
@@ -80,7 +86,7 @@ pub static SOFT_ASSERTIONS: AtomicBool = AtomicBool::new(true);
 #[macro_export]
 macro_rules! soft_assert_no_log {
     ($cond:expr $(, $($arg:tt)+)?) => {{
-        if $crate::assert::SOFT_ASSERTIONS.load(::std::sync::atomic::Ordering::Relaxed) {
+        if $crate::assert::soft_assertions_enabled() {
             assert!($cond$(, $($arg)+)?);
         }
     }}
@@ -93,7 +99,7 @@ macro_rules! soft_assert_no_log {
 #[macro_export]
 macro_rules! soft_assert_eq_no_log {
     ($cond:expr, $($arg:tt)+) => {{
-        if $crate::assert::SOFT_ASSERTIONS.load(::std::sync::atomic::Ordering::Relaxed) {
+        if $crate::assert::soft_assertions_enabled() {
             assert_eq!($cond, $($arg)+);
         }
     }}
@@ -106,7 +112,7 @@ macro_rules! soft_assert_eq_no_log {
 #[macro_export]
 macro_rules! soft_assert_ne_no_log {
     ($cond:expr, $($arg:tt)+) => {{
-        if $crate::assert::SOFT_ASSERTIONS.load(::std::sync::atomic::Ordering::Relaxed) {
+        if $crate::assert::soft_assertions_enabled() {
             assert_ne!($cond, $($arg)+);
         }
     }}
@@ -117,7 +123,7 @@ macro_rules! soft_assert_ne_no_log {
 #[macro_export]
 macro_rules! soft_assert_or_log {
     ($cond:expr, $($arg:tt)+) => {{
-        if $crate::assert::SOFT_ASSERTIONS.load(::std::sync::atomic::Ordering::Relaxed) {
+        if $crate::assert::soft_assertions_enabled() {
             assert!($cond, $($arg)+);
         } else if !$cond {
             ::tracing::error!($($arg)+)
@@ -131,7 +137,7 @@ macro_rules! soft_assert_or_log {
 #[macro_export]
 macro_rules! soft_assert_eq_or_log {
     ($left:expr, $right:expr) => {{
-        if $crate::assert::SOFT_ASSERTIONS.load(::std::sync::atomic::Ordering::Relaxed) {
+        if $crate::assert::soft_assertions_enabled() {
             assert_eq!($left, $right);
         } else {
             // Borrowed from [`std::assert_eq`].
@@ -148,7 +154,7 @@ macro_rules! soft_assert_eq_or_log {
         }
     }};
     ($left:expr, $right:expr, $($arg:tt)+) => {{
-        if $crate::assert::SOFT_ASSERTIONS.load(::std::sync::atomic::Ordering::Relaxed) {
+        if $crate::assert::soft_assertions_enabled() {
             assert_eq!($left, $right, $($arg)+);
         } else {
             // Borrowed from [`std::assert_eq`].
@@ -172,7 +178,7 @@ macro_rules! soft_assert_eq_or_log {
 #[macro_export]
 macro_rules! soft_assert_ne_or_log {
     ($left:expr, $right:expr) => {{
-        if $crate::assert::SOFT_ASSERTIONS.load(::std::sync::atomic::Ordering::Relaxed) {
+        if $crate::assert::soft_assertions_enabled() {
             assert_ne!($left, $right);
         } else {
             // Borrowed from [`std::assert_ne`].
@@ -189,7 +195,7 @@ macro_rules! soft_assert_ne_or_log {
         }
     }};
     ($left:expr, $right:expr, $($arg:tt)+) => {{
-        if $crate::assert::SOFT_ASSERTIONS.load(::std::sync::atomic::Ordering::Relaxed) {
+        if $crate::assert::soft_assertions_enabled() {
             assert_ne!($left, $right, $($arg)+);
         } else {
             // Borrowed from [`std::assert_ne`].
@@ -212,7 +218,7 @@ macro_rules! soft_assert_ne_or_log {
 #[macro_export]
 macro_rules! soft_panic_or_log {
     ($($arg:tt)+) => {{
-        if $crate::assert::SOFT_ASSERTIONS.load(::std::sync::atomic::Ordering::Relaxed) {
+        if $crate::assert::soft_assertions_enabled() {
             panic!($($arg)+);
         } else {
             ::tracing::error!($($arg)+)
@@ -224,7 +230,7 @@ macro_rules! soft_panic_or_log {
 #[macro_export]
 macro_rules! soft_panic_no_log {
     ($($arg:tt)+) => {{
-        if $crate::assert::SOFT_ASSERTIONS.load(::std::sync::atomic::Ordering::Relaxed) {
+        if $crate::assert::soft_assertions_enabled() {
             panic!($($arg)+);
         }
     }}

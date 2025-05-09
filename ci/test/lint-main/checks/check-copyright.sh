@@ -48,6 +48,7 @@ copyright_files=$(grep -vE \
     -e '^ci/www/public/_redirects$' \
     -e '^ci/test/lint-deps/' \
     -e '^misc/completions/.*' \
+    -e '^misc/mcp-materialize/uv.lock' \
     -e '^misc/python/MANIFEST\.in' \
     -e '^test/chbench/chbench' \
     -e '^src/pgtz/tznames/.*' \
@@ -60,6 +61,11 @@ copyright_files=$(grep -vE \
     -e '^src/catalog/tests/snapshots/.*\.snap' \
     -e '^src/catalog/src/durable/upgrade/snapshots/.*' \
     -e '^src/catalog/src/durable/upgrade/persist/snapshots/.*\.snap' \
+    -e '^src/expr-derive-impl/src/snapshots.*' \
+    -e '^src/expr/src/scalar/func/impls/snapshots/.*' \
+    -e '^src/expr/src/scalar/func/snapshots/.*' \
+    -e '^src/expr/src/scalar/snapshots/.*' \
+    -e '^src/license-keys/src/license_keys/.*\.pub' \
     -e '^src/storage-types/src/snapshots/.*' \
     -e '^src/repr/src/adt/snapshots/.*' \
     -e '^src/environmentd/tests/testdata/timezones/.*\.csv' \

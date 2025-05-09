@@ -61,7 +61,7 @@ impl PathExt for Path {
                 Component::CurDir => (),
 
                 // `..` elements require special handling.
-                Component::ParentDir => match buf.components().last() {
+                Component::ParentDir => match buf.components().next_back() {
                     // `..` at beginning or after another `..` needs to be
                     // retained.
                     None | Some(Component::ParentDir) => buf.push(Component::ParentDir),

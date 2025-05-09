@@ -18,10 +18,11 @@ use anyhow::anyhow;
 use async_stream::try_stream;
 use async_trait::async_trait;
 use bytes::Bytes;
-use deadpool_postgres::tokio_postgres::types::{to_sql_checked, FromSql, IsNull, ToSql, Type};
 use deadpool_postgres::tokio_postgres::Config;
+use deadpool_postgres::tokio_postgres::types::{FromSql, IsNull, ToSql, Type, to_sql_checked};
 use deadpool_postgres::{Object, PoolError};
 use futures_util::StreamExt;
+use mz_dyncfg::ConfigSet;
 use mz_ore::cast::CastFrom;
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::url::SensitiveUrl;
@@ -33,6 +34,14 @@ use tracing::{info, warn};
 
 use crate::error::Error;
 use crate::location::{CaSResult, Consensus, ExternalError, ResultStream, SeqNo, VersionedData};
+
+/// Flag to use concensus queries that are tuned for vanilla Postgres.
+pub const USE_POSTGRES_TUNED_QUERIES: mz_dyncfg::Config<bool> = mz_dyncfg::Config::new(
+    "persist_use_postgres_tuned_queries",
+    false,
+    "Use a set of queries for consensus that have specifically been tuned against
+    Postgres to ensure we acquire a minimal number of locks.",
+);
 
 const SCHEMA: &str = "
 CREATE TABLE IF NOT EXISTS consensus (
@@ -101,6 +110,7 @@ pub struct PostgresConsensusConfig {
     url: SensitiveUrl,
     knobs: Arc<dyn PostgresClientKnobs>,
     metrics: PostgresClientMetrics,
+    dyncfg: Arc<ConfigSet>,
 }
 
 impl From<PostgresConsensusConfig> for PostgresClientConfig {
@@ -118,11 +128,13 @@ impl PostgresConsensusConfig {
         url: &SensitiveUrl,
         knobs: Box<dyn PostgresClientKnobs>,
         metrics: PostgresClientMetrics,
+        dyncfg: Arc<ConfigSet>,
     ) -> Result<Self, Error> {
         Ok(PostgresConsensusConfig {
             url: url.clone(),
             knobs: Arc::from(knobs),
             metrics,
+            dyncfg,
         })
     }
 
@@ -175,18 +187,31 @@ impl PostgresConsensusConfig {
             }
         }
 
+        let dyncfg = ConfigSet::default().add(&USE_POSTGRES_TUNED_QUERIES);
         let config = PostgresConsensusConfig::new(
             &url,
             Box::new(TestConsensusKnobs),
             PostgresClientMetrics::new(&MetricsRegistry::new(), "mz_persist"),
+            Arc::new(dyncfg),
         )?;
         Ok(Some(config))
     }
 }
 
+/// What flavor of Postgres are we connected to for consensus.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PostgresMode {
+    /// CockroachDB, used in our cloud offering.
+    CockroachDB,
+    /// Vanilla Postgres, the default for our self-hosted offering.
+    Postgres,
+}
+
 /// Implementation of [Consensus] over a Postgres database.
 pub struct PostgresConsensus {
     postgres_client: PostgresClient,
+    dyncfg: Arc<ConfigSet>,
+    mode: PostgresMode,
 }
 
 impl std::fmt::Debug for PostgresConsensus {
@@ -207,39 +232,51 @@ impl PostgresConsensus {
             escape_identifier(role),
         );
 
+        let dyncfg = Arc::clone(&config.dyncfg);
         let postgres_client = PostgresClient::open(config.into())?;
 
         let client = postgres_client.get_connection().await?;
 
-        let crdb_mode = match client
+        let mode = match client
             .batch_execute(&format!(
                 "{}; {}{}; {};",
                 create_schema, SCHEMA, CRDB_SCHEMA_OPTIONS, CRDB_CONFIGURE_ZONE,
             ))
             .await
         {
-            Ok(()) => true,
+            Ok(()) => PostgresMode::CockroachDB,
             Err(e) if e.code() == Some(&SqlState::INSUFFICIENT_PRIVILEGE) => {
-                warn!("unable to ALTER TABLE consensus, this is expected and OK when connecting with a read-only user");
-                true
+                warn!(
+                    "unable to ALTER TABLE consensus, this is expected and OK when connecting with a read-only user"
+                );
+                PostgresMode::CockroachDB
             }
+            // Vanilla Postgres doesn't support the Cockroach zone configuration
+            // that we attempted, so we use that to determine what mode we're in.
             Err(e)
                 if e.code() == Some(&SqlState::INVALID_PARAMETER_VALUE)
                     || e.code() == Some(&SqlState::SYNTAX_ERROR) =>
             {
-                info!("unable to initiate consensus with CRDB params, this is expected and OK when running against Postgres: {:?}", e);
-                false
+                info!(
+                    "unable to initiate consensus with CRDB params, this is expected and OK when running against Postgres: {:?}",
+                    e
+                );
+                PostgresMode::Postgres
             }
             Err(e) => return Err(e.into()),
         };
 
-        if !crdb_mode {
+        if mode != PostgresMode::CockroachDB {
             client
                 .batch_execute(&format!("{}; {};", create_schema, SCHEMA))
                 .await?;
         }
 
-        Ok(PostgresConsensus { postgres_client })
+        Ok(PostgresConsensus {
+            postgres_client,
+            dyncfg,
+            mode,
+        })
     }
 
     /// Drops and recreates the `consensus` table in Postgres
@@ -258,14 +295,19 @@ impl PostgresConsensus {
         {
             Ok(()) => true,
             Err(e) if e.code() == Some(&SqlState::INSUFFICIENT_PRIVILEGE) => {
-                warn!("unable to ALTER TABLE consensus, this is expected and OK when connecting with a read-only user");
+                warn!(
+                    "unable to ALTER TABLE consensus, this is expected and OK when connecting with a read-only user"
+                );
                 true
             }
             Err(e)
                 if e.code() == Some(&SqlState::INVALID_PARAMETER_VALUE)
                     || e.code() == Some(&SqlState::SYNTAX_ERROR) =>
             {
-                info!("unable to initiate consensus with CRDB params, this is expected and OK when running against Postgres: {:?}", e);
+                info!(
+                    "unable to initiate consensus with CRDB params, this is expected and OK when running against Postgres: {:?}",
+                    e
+                );
                 false
             }
             Err(e) => return Err(e.into()),
@@ -338,19 +380,45 @@ impl Consensus for PostgresConsensus {
         }
 
         let result = if let Some(expected) = expected {
-            // This query has been written to execute within a single
-            // network round-trip. The insert performance has been tuned
-            // against CockroachDB, ensuring it goes through the fast-path
-            // 1-phase commit of CRDB. Any changes to this query should
-            // confirm an EXPLAIN ANALYZE (VERBOSE) query plan contains
-            // `auto commit`
-            let q = r#"
+            /// This query has been written to execute within a single
+            /// network round-trip. The insert performance has been tuned
+            /// against CockroachDB, ensuring it goes through the fast-path
+            /// 1-phase commit of CRDB. Any changes to this query should
+            /// confirm an EXPLAIN ANALYZE (VERBOSE) query plan contains
+            /// `auto commit`
+            static CRDB_CAS_QUERY: &str = "
                 INSERT INTO consensus (shard, sequence_number, data)
                 SELECT $1, $2, $3
                 WHERE (SELECT sequence_number FROM consensus
                        WHERE shard = $1
                        ORDER BY sequence_number DESC LIMIT 1) = $4;
-            "#;
+            ";
+
+            /// This query has been written to ensure we only get row level
+            /// locks on the `(shard, seq_no)` we're trying to update. The insert
+            /// performance has been tuned against Postgres 15 to ensure it
+            /// minimizes possible serialization conflicts.
+            static POSTGRES_CAS_QUERY: &str = "
+            WITH last_seq AS (
+                SELECT sequence_number FROM consensus
+                WHERE shard = $1
+                ORDER BY sequence_number DESC
+                LIMIT 1
+                FOR UPDATE
+            )
+            INSERT INTO consensus (shard, sequence_number, data)
+            SELECT $1, $2, $3
+            FROM last_seq
+            WHERE last_seq.sequence_number = $4;
+            ";
+
+            let q = if USE_POSTGRES_TUNED_QUERIES.get(&self.dyncfg)
+                && self.mode == PostgresMode::Postgres
+            {
+                POSTGRES_CAS_QUERY
+            } else {
+                CRDB_CAS_QUERY
+            };
             let client = self.get_connection().await?;
             let statement = client.prepare_cached(q).await?;
             client
@@ -414,12 +482,54 @@ impl Consensus for PostgresConsensus {
     }
 
     async fn truncate(&self, key: &str, seqno: SeqNo) -> Result<usize, ExternalError> {
-        let q = "DELETE FROM consensus
-                WHERE shard = $1 AND sequence_number < $2 AND
-                EXISTS(
-                    SELECT * FROM consensus WHERE shard = $1 AND sequence_number >= $2
-                )";
+        static CRDB_TRUNCATE_QUERY: &str = "
+        DELETE FROM consensus
+        WHERE shard = $1 AND sequence_number < $2 AND
+        EXISTS (
+            SELECT * FROM consensus WHERE shard = $1 AND sequence_number >= $2
+        )
+        ";
 
+        /// This query has been specifically tuned to ensure we get the minimal
+        /// number of __row__ locks possible, and that it doesn't conflict with
+        /// concurrently running compare and swap operations that are trying to
+        /// evolve the shard.
+        ///
+        /// It's performance has been benchmarked against Postgres 15.
+        ///
+        /// Note: The `ORDER BY` in the newer_exists CTE exists so we obtain a
+        /// row lock on the lowest possible sequence number. This ensures
+        /// minimal conflict between concurrently running truncate and append
+        /// operations.
+        static POSTGRES_TRUNCATE_QUERY: &str = "
+        WITH newer_exists AS (
+            SELECT * FROM consensus
+            WHERE shard = $1
+                AND sequence_number >= $2
+            ORDER BY sequence_number ASC
+            LIMIT 1
+            FOR UPDATE
+        ),
+        to_lock AS (
+            SELECT ctid FROM consensus
+            WHERE shard = $1
+            AND sequence_number < $2
+            AND EXISTS (SELECT * FROM newer_exists)
+            ORDER BY sequence_number DESC
+            FOR UPDATE
+        )
+        DELETE FROM consensus
+        USING to_lock
+        WHERE consensus.ctid = to_lock.ctid;
+        ";
+
+        let q = if USE_POSTGRES_TUNED_QUERIES.get(&self.dyncfg)
+            && self.mode == PostgresMode::Postgres
+        {
+            POSTGRES_TRUNCATE_QUERY
+        } else {
+            CRDB_TRUNCATE_QUERY
+        };
         let result = {
             let client = self.get_connection().await?;
             let statement = client.prepare_cached(q).await?;

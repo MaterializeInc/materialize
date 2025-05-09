@@ -15,18 +15,21 @@ use std::num::NonZeroI64;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
+use chrono::{DateTime, DurationRound, TimeDelta, Utc};
 use mz_build_info::BuildInfo;
-use mz_cluster_client::client::{ClusterStartupEpoch, TimelyConfig};
 use mz_cluster_client::WallclockLagFn;
+use mz_cluster_client::client::ClusterStartupEpoch;
+use mz_compute_types::ComputeInstanceId;
 use mz_compute_types::dataflows::{BuildDesc, DataflowDescription};
-use mz_compute_types::plan::render_plan::RenderPlan;
 use mz_compute_types::plan::LirId;
+use mz_compute_types::plan::render_plan::RenderPlan;
 use mz_compute_types::sinks::{
     ComputeSinkConnection, ComputeSinkDesc, ContinualTaskConnection, MaterializedViewSinkConnection,
 };
 use mz_compute_types::sources::SourceInstanceDesc;
-use mz_compute_types::ComputeInstanceId;
-use mz_controller_types::dyncfgs::WALLCLOCK_LAG_REFRESH_INTERVAL;
+use mz_controller_types::dyncfgs::{
+    ENABLE_WALLCLOCK_LAG_HISTOGRAM_COLLECTION, WALLCLOCK_LAG_RECORDING_INTERVAL,
+};
 use mz_dyncfg::ConfigSet;
 use mz_expr::RowSetFinishing;
 use mz_ore::cast::CastFrom;
@@ -35,22 +38,23 @@ use mz_ore::now::NowFn;
 use mz_ore::tracing::OpenTelemetryContext;
 use mz_ore::{soft_assert_or_log, soft_panic_or_log};
 use mz_repr::adt::interval::Interval;
+use mz_repr::adt::timestamp::CheckedTimestamp;
 use mz_repr::refresh_schedule::RefreshSchedule;
 use mz_repr::{Datum, Diff, GlobalId, Row};
-use mz_storage_client::controller::IntrospectionType;
+use mz_storage_client::controller::{IntrospectionType, WallclockLagHistogramPeriod};
 use mz_storage_types::read_holds::{self, ReadHold};
 use mz_storage_types::read_policy::ReadPolicy;
 use serde::Serialize;
 use thiserror::Error;
+use timely::PartialOrder;
 use timely::progress::frontier::MutableAntichain;
 use timely::progress::{Antichain, ChangeBatch, Timestamp};
-use timely::PartialOrder;
 use tokio::sync::mpsc::error::SendError;
 use tokio::sync::{mpsc, oneshot};
 use uuid::Uuid;
 
 use crate::controller::error::{
-    CollectionLookupError, CollectionMissing, HydrationCheckBadTarget, ERROR_TARGET_REPLICA_FAILED,
+    CollectionLookupError, CollectionMissing, ERROR_TARGET_REPLICA_FAILED, HydrationCheckBadTarget,
 };
 use crate::controller::replica::{ReplicaClient, ReplicaConfig};
 use crate::controller::{
@@ -60,9 +64,7 @@ use crate::controller::{
 use crate::logging::LogVariant;
 use crate::metrics::IntCounter;
 use crate::metrics::{InstanceMetrics, ReplicaCollectionMetrics, ReplicaMetrics, UIntGauge};
-use crate::protocol::command::{
-    ComputeCommand, ComputeParameters, InstanceConfig, Peek, PeekTarget,
-};
+use crate::protocol::command::{ComputeCommand, ComputeParameters, Peek, PeekTarget};
 use crate::protocol::history::ComputeCommandHistory;
 use crate::protocol::response::{
     ComputeResponse, CopyToResponse, FrontiersResponse, OperatorHydrationStatus, PeekResponse,
@@ -166,7 +168,7 @@ where
         wallclock_lag: WallclockLagFn<T>,
         dyncfg: Arc<ConfigSet>,
         response_tx: mpsc::UnboundedSender<ComputeControllerResponse<T>>,
-        introspection_tx: crossbeam_channel::Sender<IntrospectionUpdates>,
+        introspection_tx: mpsc::UnboundedSender<IntrospectionUpdates>,
     ) -> Self {
         let (command_tx, command_rx) = mpsc::unbounded_channel();
 
@@ -225,6 +227,10 @@ pub(super) struct Instance<T: ComputeControllerTimestamp> {
     /// controlled by it are allowed to affect changes to external systems
     /// (largely persist).
     read_only: bool,
+    /// The workload class of this instance.
+    ///
+    /// This is currently only used to annotate metrics.
+    workload_class: Option<String>,
     /// The replicas of this compute instance.
     replicas: BTreeMap<ReplicaId, ReplicaState<T>>,
     /// Currently installed compute collections.
@@ -275,7 +281,7 @@ pub(super) struct Instance<T: ComputeControllerTimestamp> {
     /// Sender for responses to be delivered.
     response_tx: mpsc::UnboundedSender<ComputeControllerResponse<T>>,
     /// Sender for introspection updates to be recorded.
-    introspection_tx: crossbeam_channel::Sender<IntrospectionUpdates>,
+    introspection_tx: mpsc::UnboundedSender<IntrospectionUpdates>,
     /// A number that increases with each restart of `environmentd`.
     envd_epoch: NonZeroI64,
     /// Numbers that increase with each restart of a replica.
@@ -289,8 +295,8 @@ pub(super) struct Instance<T: ComputeControllerTimestamp> {
     now: NowFn,
     /// A function that computes the lag between the given time and wallclock time.
     wallclock_lag: WallclockLagFn<T>,
-    /// The last time wallclock lag introspection was refreshed.
-    wallclock_lag_last_refresh: Instant,
+    /// The last time wallclock lag introspection was recorded.
+    wallclock_lag_last_recorded: DateTime<Utc>,
 
     /// Sender for updates to collection read holds.
     ///
@@ -392,12 +398,12 @@ impl<T: ComputeControllerTimestamp> Instance<T> {
         }
 
         // Update introspection.
-        self.report_dependency_updates(id, 1);
+        self.report_dependency_updates(id, Diff::ONE);
     }
 
     fn remove_collection(&mut self, id: GlobalId) {
         // Update introspection.
-        self.report_dependency_updates(id, -1);
+        self.report_dependency_updates(id, Diff::MINUS_ONE);
 
         // Remove per-replica collection state.
         for replica in self.replicas.values_mut() {
@@ -518,6 +524,11 @@ impl<T: ComputeControllerTimestamp> Instance<T> {
     fn refresh_state_metrics(&self) {
         let unscheduled_collections_count =
             self.collections.values().filter(|c| !c.scheduled).count();
+        let connected_replica_count = self
+            .replicas
+            .values()
+            .filter(|r| r.client.is_connected())
+            .count();
 
         self.metrics
             .replica_count
@@ -537,43 +548,30 @@ impl<T: ComputeControllerTimestamp> Instance<T> {
         self.metrics
             .copy_to_count
             .set(u64::cast_from(self.copy_tos.len()));
+        self.metrics
+            .connected_replica_count
+            .set(u64::cast_from(connected_replica_count));
     }
 
-    /// Refresh the `WallclockLagHistory` introspection and the `wallclock_lag_*_seconds` metrics
-    /// with the current lag values.
+    /// Refresh the wallclock lag introspection and metrics with the current lag values.
     ///
     /// This method is invoked by `ComputeController::maintain`, which we expect to be called once
     /// per second during normal operation.
     fn refresh_wallclock_lag(&mut self) {
-        let refresh_introspection = !self.read_only
-            && self.wallclock_lag_last_refresh.elapsed()
-                >= WALLCLOCK_LAG_REFRESH_INTERVAL.get(&self.dyncfg);
-        let mut introspection_updates = refresh_introspection.then(Vec::new);
+        // Record lags to persist, if it's time.
+        self.maybe_record_wallclock_lag();
 
-        let now = mz_ore::now::to_datetime((self.now)());
-        let now_tz = now.try_into().expect("must fit");
+        let frontier_lag = |frontier: &Antichain<T>| match frontier.as_option() {
+            Some(ts) => (self.wallclock_lag)(ts.clone()),
+            None => Duration::ZERO,
+        };
 
-        for (replica_id, replica) in &mut self.replicas {
-            for (collection_id, collection) in &mut replica.collections {
-                let lag = match collection.write_frontier.as_option() {
-                    Some(ts) => (self.wallclock_lag)(ts),
-                    None => Duration::ZERO,
-                };
+        for replica in self.replicas.values_mut() {
+            for collection in replica.collections.values_mut() {
+                let lag = frontier_lag(&collection.write_frontier);
 
                 if let Some(wallclock_lag_max) = &mut collection.wallclock_lag_max {
                     *wallclock_lag_max = std::cmp::max(*wallclock_lag_max, lag);
-
-                    if let Some(updates) = &mut introspection_updates {
-                        let max_lag = std::mem::take(wallclock_lag_max);
-                        let max_lag_us = i64::try_from(max_lag.as_micros()).expect("must fit");
-                        let row = Row::pack_slice(&[
-                            Datum::String(&collection_id.to_string()),
-                            Datum::String(&replica_id.to_string()),
-                            Datum::Interval(Interval::new(0, 0, max_lag_us)),
-                            Datum::TimestampTz(now_tz),
-                        ]);
-                        updates.push((row, 1));
-                    }
                 }
 
                 if let Some(metrics) = &mut collection.metrics {
@@ -582,10 +580,112 @@ impl<T: ComputeControllerTimestamp> Instance<T> {
             }
         }
 
-        if let Some(updates) = introspection_updates {
-            self.deliver_introspection_updates(IntrospectionType::WallclockLagHistory, updates);
-            self.wallclock_lag_last_refresh = Instant::now();
+        let now_ms = (self.now)();
+        let histogram_period = WallclockLagHistogramPeriod::from_epoch_millis(now_ms, &self.dyncfg);
+        let histogram_labels = match &self.workload_class {
+            Some(wc) => [("workload_class", wc.clone())].into(),
+            None => BTreeMap::new(),
+        };
+
+        for collection in self.collections.values_mut() {
+            if !ENABLE_WALLCLOCK_LAG_HISTOGRAM_COLLECTION.get(&self.dyncfg) {
+                continue;
+            }
+
+            if let Some(stash) = &mut collection.wallclock_lag_histogram_stash {
+                let lag = collection.shared.lock_write_frontier(|f| frontier_lag(f));
+                let bucket = lag.as_secs().next_power_of_two();
+
+                let key = (histogram_period, bucket, histogram_labels.clone());
+                *stash.entry(key).or_default() += Diff::ONE;
+            }
         }
+    }
+
+    /// Produce new wallclock lag introspection updates, provided enough time has passed since the
+    /// last recording.
+    //
+    /// We emit new introspection updates if the system time has passed into a new multiple of the
+    /// recording interval (typically 1 minute) since the last refresh. The storage controller uses
+    /// the same approach, ensuring that both controllers commit their lags at roughly the same
+    /// time, avoiding confusion caused by inconsistencies.
+    fn maybe_record_wallclock_lag(&mut self) {
+        if self.read_only {
+            return;
+        }
+
+        let duration_trunc = |datetime: DateTime<_>, interval| {
+            let td = TimeDelta::from_std(interval).ok()?;
+            datetime.duration_trunc(td).ok()
+        };
+
+        let interval = WALLCLOCK_LAG_RECORDING_INTERVAL.get(&self.dyncfg);
+        let now_dt = mz_ore::now::to_datetime((self.now)());
+        let now_trunc = duration_trunc(now_dt, interval).unwrap_or_else(|| {
+            soft_panic_or_log!("excessive wallclock lag recording interval: {interval:?}");
+            let default = WALLCLOCK_LAG_RECORDING_INTERVAL.default();
+            duration_trunc(now_dt, *default).unwrap()
+        });
+        if now_trunc <= self.wallclock_lag_last_recorded {
+            return;
+        }
+
+        let now_ts: CheckedTimestamp<_> = now_trunc.try_into().expect("must fit");
+
+        let mut history_updates = Vec::new();
+        for (replica_id, replica) in &mut self.replicas {
+            for (collection_id, collection) in &mut replica.collections {
+                let Some(wallclock_lag_max) = &mut collection.wallclock_lag_max else {
+                    continue;
+                };
+
+                let max_lag = std::mem::take(wallclock_lag_max);
+                let max_lag_us = i64::try_from(max_lag.as_micros()).expect("must fit");
+                let row = Row::pack_slice(&[
+                    Datum::String(&collection_id.to_string()),
+                    Datum::String(&replica_id.to_string()),
+                    Datum::Interval(Interval::new(0, 0, max_lag_us)),
+                    Datum::TimestampTz(now_ts),
+                ]);
+                history_updates.push((row, Diff::ONE));
+            }
+        }
+        if !history_updates.is_empty() {
+            self.deliver_introspection_updates(
+                IntrospectionType::WallclockLagHistory,
+                history_updates,
+            );
+        }
+
+        let mut histogram_updates = Vec::new();
+        let mut row_buf = Row::default();
+        for (collection_id, collection) in &mut self.collections {
+            let Some(stash) = &mut collection.wallclock_lag_histogram_stash else {
+                continue;
+            };
+
+            for ((period, lag, labels), count) in std::mem::take(stash) {
+                let mut packer = row_buf.packer();
+                packer.extend([
+                    Datum::TimestampTz(period.start),
+                    Datum::TimestampTz(period.end),
+                    Datum::String(&collection_id.to_string()),
+                    Datum::UInt64(lag),
+                ]);
+                let labels = labels.iter().map(|(k, v)| (*k, Datum::String(v)));
+                packer.push_dict(labels);
+
+                histogram_updates.push((row_buf.clone(), count));
+            }
+        }
+        if !histogram_updates.is_empty() {
+            self.deliver_introspection_updates(
+                IntrospectionType::WallclockLagHistogram,
+                histogram_updates,
+            );
+        }
+
+        self.wallclock_lag_last_recorded = now_trunc;
     }
 
     /// Report updates (inserts or retractions) to the identified collection's dependencies.
@@ -593,7 +693,7 @@ impl<T: ComputeControllerTimestamp> Instance<T> {
     /// # Panics
     ///
     /// Panics if the identified collection does not exist.
-    fn report_dependency_updates(&self, id: GlobalId, diff: i64) {
+    fn report_dependency_updates(&self, id: GlobalId, diff: Diff) {
         let collection = self.expect_collection(id);
         let dependencies = collection.dependency_ids();
 
@@ -789,6 +889,7 @@ impl<T: ComputeControllerTimestamp> Instance<T> {
             storage_collections: _,
             initialized,
             read_only,
+            workload_class,
             replicas,
             collections,
             log_sources: _,
@@ -805,7 +906,7 @@ impl<T: ComputeControllerTimestamp> Instance<T> {
             dyncfg: _,
             now: _,
             wallclock_lag: _,
-            wallclock_lag_last_refresh,
+            wallclock_lag_last_recorded,
             read_hold_tx: _,
             replica_tx: _,
             replica_rx: _,
@@ -840,11 +941,12 @@ impl<T: ComputeControllerTimestamp> Instance<T> {
             .iter()
             .map(|(id, epoch)| (id.to_string(), epoch))
             .collect();
-        let wallclock_lag_last_refresh = format!("{wallclock_lag_last_refresh:?}");
+        let wallclock_lag_last_recorded = format!("{wallclock_lag_last_recorded:?}");
 
         let map = serde_json::Map::from_iter([
             field("initialized", initialized)?,
             field("read_only", read_only)?,
+            field("workload_class", workload_class)?,
             field("replicas", replicas)?,
             field("collections", collections)?,
             field("peeks", peeks)?,
@@ -852,7 +954,7 @@ impl<T: ComputeControllerTimestamp> Instance<T> {
             field("copy_tos", copy_tos)?,
             field("envd_epoch", envd_epoch)?,
             field("replica_epochs", replica_epochs)?,
-            field("wallclock_lag_last_refresh", wallclock_lag_last_refresh)?,
+            field("wallclock_lag_last_recorded", wallclock_lag_last_recorded)?,
         ]);
         Ok(serde_json::Value::Object(map))
     }
@@ -875,7 +977,7 @@ where
         command_rx: mpsc::UnboundedReceiver<Command<T>>,
         response_tx: mpsc::UnboundedSender<ComputeControllerResponse<T>>,
         read_hold_tx: read_holds::ChangeTx<T>,
-        introspection_tx: crossbeam_channel::Sender<IntrospectionUpdates>,
+        introspection_tx: mpsc::UnboundedSender<IntrospectionUpdates>,
     ) -> Self {
         let mut collections = BTreeMap::new();
         let mut log_sources = BTreeMap::new();
@@ -896,11 +998,14 @@ where
         let recv_count = metrics.response_recv_count.clone();
         let (replica_tx, replica_rx) = instrumented_unbounded_channel(send_count, recv_count);
 
+        let now_dt = mz_ore::now::to_datetime(now());
+
         Self {
             build_info,
             storage_collections: storage,
             initialized: false,
             read_only: true,
+            workload_class: None,
             replicas: Default::default(),
             collections,
             log_sources,
@@ -917,7 +1022,7 @@ where
             dyncfg,
             now,
             wallclock_lag,
-            wallclock_lag_last_refresh: Instant::now(),
+            wallclock_lag_last_recorded: now_dt,
             read_hold_tx,
             replica_tx,
             replica_rx,
@@ -926,16 +1031,13 @@ where
 
     async fn run(mut self) {
         self.send(ComputeCommand::CreateTimely {
-            config: TimelyConfig::default(),
+            config: Default::default(),
             epoch: ClusterStartupEpoch::new(self.envd_epoch, 0),
         });
 
         // Send a placeholder instance configuration for the replica task to fill in.
-        let dummy_logging_config = Default::default();
-        self.send(ComputeCommand::CreateInstance(InstanceConfig {
-            logging: dummy_logging_config,
-            expiration_offset: None,
-        }));
+        let dummy_instance_config = Default::default();
+        self.send(ComputeCommand::CreateInstance(dummy_instance_config));
 
         loop {
             tokio::select! {
@@ -954,7 +1056,12 @@ where
     /// Update instance configuration.
     #[mz_ore::instrument(level = "debug")]
     pub fn update_configuration(&mut self, config_params: ComputeParameters) {
-        self.send(ComputeCommand::UpdateConfiguration(config_params));
+        if let Some(workload_class) = &config_params.workload_class {
+            self.workload_class = workload_class.clone();
+        }
+
+        let command = ComputeCommand::UpdateConfiguration(Box::new(config_params));
+        self.send(command);
     }
 
     /// Marks the end of any initialization commands.
@@ -1068,6 +1175,9 @@ where
 
         // Take this opportunity to clean up the history we should present.
         self.history.reduce();
+
+        // Advance the uppers of source imports
+        self.history.update_source_uppers(&self.storage_collections);
 
         // Replay the commands at the client, creating new dataflow identifiers.
         for command in self.history.iter() {
@@ -1271,7 +1381,12 @@ where
         // Here we augment all imported sources and all exported sinks with the appropriate
         // storage metadata needed by the compute instance.
         let mut source_imports = BTreeMap::new();
-        for (id, (si, monotonic)) in dataflow.source_imports {
+        for (id, (si, monotonic, _upper)) in dataflow.source_imports {
+            let frontiers = self
+                .storage_collections
+                .collection_frontiers(id)
+                .expect("collection exists");
+
             let collection_metadata = self
                 .storage_collections
                 .collection_metadata(id)
@@ -1282,7 +1397,7 @@ where
                 arguments: si.arguments,
                 typ: si.typ.clone(),
             };
-            source_imports.insert(id, (desc, monotonic));
+            source_imports.insert(id, (desc, monotonic, frontiers.write_frontier));
         }
 
         let mut sink_exports = BTreeMap::new();
@@ -1383,7 +1498,8 @@ where
             );
         } else {
             let collections: Vec<_> = augmented_dataflow.export_ids().collect();
-            self.send(ComputeCommand::CreateDataflow(augmented_dataflow));
+            let dataflow = Box::new(augmented_dataflow);
+            self.send(ComputeCommand::CreateDataflow(dataflow));
 
             for id in collections {
                 self.maybe_schedule_collection(id);
@@ -1540,7 +1656,7 @@ where
             },
         );
 
-        self.send(ComputeCommand::Peek(Peek {
+        let peek = Peek {
             literal_constraints,
             uuid,
             timestamp,
@@ -1550,7 +1666,8 @@ where
             // tree to forward it on to the compute worker.
             otel_ctx,
             target: peek_target,
-        }));
+        };
+        self.send(ComputeCommand::Peek(Box::new(peek)));
 
         Ok(())
     }
@@ -1659,7 +1776,7 @@ where
                 Antichain::from_iter(
                     new_frontier
                         .iter()
-                        .map(|t| t.step_back().unwrap_or(T::minimum())),
+                        .map(|t| t.step_back().unwrap_or_else(T::minimum)),
                 )
             }
         };
@@ -2047,7 +2164,7 @@ where
             let mut new_capability = Antichain::new();
             for frontier in compute_frontiers.chain(storage_frontiers) {
                 for time in frontier.iter() {
-                    new_capability.insert(time.step_back().unwrap_or(time.clone()));
+                    new_capability.insert(time.step_back().unwrap_or_else(|| time.clone()));
                 }
             }
 
@@ -2131,6 +2248,23 @@ struct CollectionState<T: ComputeControllerTimestamp> {
 
     /// Introspection state associated with this collection.
     introspection: CollectionIntrospection<T>,
+
+    /// Frontier wallclock lag measurements stashed until the next `WallclockLagHistogram`
+    /// introspection update.
+    ///
+    /// Keys are `(period, lag, labels)` triples, values are counts.
+    ///
+    /// If this is `None`, wallclock lag is not tracked for this collection.
+    wallclock_lag_histogram_stash: Option<
+        BTreeMap<
+            (
+                WallclockLagHistogramPeriod,
+                u64,
+                BTreeMap<&'static str, String>,
+            ),
+            Diff,
+        >,
+    >,
 }
 
 impl<T: ComputeControllerTimestamp> CollectionState<T> {
@@ -2165,6 +2299,14 @@ impl<T: ComputeControllerTimestamp> CollectionState<T> {
             c.update_iter(updates);
         });
 
+        // In an effort to keep the produced wallclock lag introspection data small and
+        // predictable, we disable wallclock lag tracking for transient collections, i.e. slow-path
+        // select indexes and subscribes.
+        let wallclock_lag_histogram_stash = match collection_id.is_transient() {
+            true => None,
+            false => Some(Default::default()),
+        };
+
         Self {
             log_collection: false,
             dropped: false,
@@ -2176,6 +2318,7 @@ impl<T: ComputeControllerTimestamp> CollectionState<T> {
             storage_dependencies,
             compute_dependencies,
             introspection,
+            wallclock_lag_histogram_stash,
         }
     }
 
@@ -2184,7 +2327,7 @@ impl<T: ComputeControllerTimestamp> CollectionState<T> {
         id: GlobalId,
         shared: SharedCollectionState<T>,
         read_hold_tx: read_holds::ChangeTx<T>,
-        introspection_tx: crossbeam_channel::Sender<IntrospectionUpdates>,
+        introspection_tx: mpsc::UnboundedSender<IntrospectionUpdates>,
     ) -> Self {
         let since = Antichain::from_elem(T::minimum());
         let introspection =
@@ -2303,7 +2446,7 @@ struct CollectionIntrospection<T: ComputeControllerTimestamp> {
     /// The ID of the compute collection.
     collection_id: GlobalId,
     /// A channel through which introspection updates are delivered.
-    introspection_tx: crossbeam_channel::Sender<IntrospectionUpdates>,
+    introspection_tx: mpsc::UnboundedSender<IntrospectionUpdates>,
     /// Introspection state for `IntrospectionType::Frontiers`.
     ///
     /// `Some` if the collection does _not_ sink into a storage collection (i.e. is not an MV). If
@@ -2318,7 +2461,7 @@ struct CollectionIntrospection<T: ComputeControllerTimestamp> {
 impl<T: ComputeControllerTimestamp> CollectionIntrospection<T> {
     fn new(
         collection_id: GlobalId,
-        introspection_tx: crossbeam_channel::Sender<IntrospectionUpdates>,
+        introspection_tx: mpsc::UnboundedSender<IntrospectionUpdates>,
         as_of: Antichain<T>,
         storage_sink: bool,
         initial_as_of: Option<Antichain<T>>,
@@ -2356,13 +2499,13 @@ impl<T: ComputeControllerTimestamp> CollectionIntrospection<T> {
     fn report_initial_state(&self) {
         if let Some(frontiers) = &self.frontiers {
             let row = frontiers.row_for_collection(self.collection_id);
-            let updates = vec![(row, 1)];
+            let updates = vec![(row, Diff::ONE)];
             self.send(IntrospectionType::Frontiers, updates);
         }
 
         if let Some(refresh) = &self.refresh {
             let row = refresh.row_for_collection(self.collection_id);
-            let updates = vec![(row, 1)];
+            let updates = vec![(row, Diff::ONE)];
             self.send(IntrospectionType::ComputeMaterializedViewRefreshes, updates);
         }
     }
@@ -2391,7 +2534,7 @@ impl<T: ComputeControllerTimestamp> CollectionIntrospection<T> {
         let retraction = frontiers.row_for_collection(self.collection_id);
         frontiers.update(read_frontier, write_frontier);
         let insertion = frontiers.row_for_collection(self.collection_id);
-        let updates = vec![(retraction, -1), (insertion, 1)];
+        let updates = vec![(retraction, Diff::MINUS_ONE), (insertion, Diff::ONE)];
         self.send(IntrospectionType::Frontiers, updates);
     }
 
@@ -2408,7 +2551,7 @@ impl<T: ComputeControllerTimestamp> CollectionIntrospection<T> {
             return; // no change
         }
 
-        let updates = vec![(retraction, -1), (insertion, 1)];
+        let updates = vec![(retraction, Diff::MINUS_ONE), (insertion, Diff::ONE)];
         self.send(IntrospectionType::ComputeMaterializedViewRefreshes, updates);
     }
 
@@ -2424,14 +2567,14 @@ impl<T: ComputeControllerTimestamp> Drop for CollectionIntrospection<T> {
         // Retract collection frontiers.
         if let Some(frontiers) = &self.frontiers {
             let row = frontiers.row_for_collection(self.collection_id);
-            let updates = vec![(row, -1)];
+            let updates = vec![(row, Diff::MINUS_ONE)];
             self.send(IntrospectionType::Frontiers, updates);
         }
 
         // Retract MV refresh state.
         if let Some(refresh) = &self.refresh {
             let retraction = refresh.row_for_collection(self.collection_id);
-            let updates = vec![(retraction, -1)];
+            let updates = vec![(retraction, Diff::MINUS_ONE)];
             self.send(IntrospectionType::ComputeMaterializedViewRefreshes, updates);
         }
     }
@@ -2622,7 +2765,7 @@ struct ReplicaState<T: ComputeControllerTimestamp> {
     /// Replica metrics.
     metrics: ReplicaMetrics,
     /// A channel through which introspection updates are delivered.
-    introspection_tx: crossbeam_channel::Sender<IntrospectionUpdates>,
+    introspection_tx: mpsc::UnboundedSender<IntrospectionUpdates>,
     /// Per-replica collection state.
     collections: BTreeMap<GlobalId, ReplicaCollectionState<T>>,
     /// The epoch of the replica.
@@ -2635,7 +2778,7 @@ impl<T: ComputeControllerTimestamp> ReplicaState<T> {
         client: ReplicaClient<T>,
         config: ReplicaConfig,
         metrics: ReplicaMetrics,
-        introspection_tx: crossbeam_channel::Sender<IntrospectionUpdates>,
+        introspection_tx: mpsc::UnboundedSender<IntrospectionUpdates>,
         epoch: ClusterStartupEpoch,
     ) -> Self {
         Self {
@@ -2669,22 +2812,6 @@ impl<T: ComputeControllerTimestamp> ReplicaState<T> {
         );
         let mut state =
             ReplicaCollectionState::new(metrics, as_of, introspection, input_read_holds);
-
-        // We need to consider the edge case where the as-of is the empty frontier. Such an as-of
-        // is not useful for indexes, because they wouldn't be readable. For write-only
-        // collections, an empty as-of means that the collection has been fully written and no new
-        // dataflow needs to be created for it. Consequently, no hydration will happen either.
-        //
-        // Based on this, we could set the hydration flag in two ways:
-        //  * `false`, as in "the dataflow was never created"
-        //  * `true`, as in "the dataflow completed immediately"
-        //
-        // Since hydration is often used as a measure of dataflow progress and we don't want to
-        // give the impression that certain dataflows are somehow stuck when they are not, we go
-        // go with the second interpretation here.
-        if state.as_of.is_empty() {
-            state.set_hydrated();
-        }
 
         // In an effort to keep the produced wallclock lag introspection data small and
         // predictable, we disable wallclock lag tracking for transient collections, i.e. slow-path
@@ -2774,12 +2901,8 @@ struct ReplicaCollectionState<T: ComputeControllerTimestamp> {
     ///
     /// If this is `None`, no metrics are collected.
     metrics: Option<ReplicaCollectionMetrics>,
-    /// Time at which this collection was installed.
-    created_at: Instant,
     /// As-of frontier with which this collection was installed on the replica.
     as_of: Antichain<T>,
-    /// Whether the collection is hydrated.
-    hydrated: bool,
     /// Tracks introspection state for this collection.
     introspection: ReplicaCollectionIntrospection<T>,
     /// Read holds on storage inputs to this collection.
@@ -2789,7 +2912,7 @@ struct ReplicaCollectionState<T: ComputeControllerTimestamp> {
     /// compaction of compute inputs is implicitly held back by Timely/DD.
     input_read_holds: Vec<ReadHold<T>>,
 
-    /// Maximum frontier wallclock lag since the last introspection update.
+    /// Maximum frontier wallclock lag since the last `WallclockLagHistory` introspection update.
     ///
     /// If this is `None`, wallclock lag is not tracked for this collection.
     wallclock_lag_max: Option<Duration>,
@@ -2807,9 +2930,7 @@ impl<T: ComputeControllerTimestamp> ReplicaCollectionState<T> {
             input_frontier: as_of.clone(),
             output_frontier: as_of.clone(),
             metrics,
-            created_at: Instant::now(),
             as_of,
-            hydrated: false,
             introspection,
             input_read_holds,
             wallclock_lag_max: Some(Duration::ZERO),
@@ -2818,17 +2939,22 @@ impl<T: ComputeControllerTimestamp> ReplicaCollectionState<T> {
 
     /// Returns whether this collection is hydrated.
     fn hydrated(&self) -> bool {
-        self.hydrated
-    }
-
-    /// Marks the collection as hydrated and updates metrics and introspection accordingly.
-    fn set_hydrated(&mut self) {
-        if let Some(metrics) = &self.metrics {
-            let duration = self.created_at.elapsed().as_secs_f64();
-            metrics.initial_output_duration_seconds.set(duration);
-        }
-
-        self.hydrated = true;
+        // If the observed frontier is greater than the collection's as-of, the collection has
+        // produced some output and is therefore hydrated.
+        //
+        // We need to consider the edge case where the as-of is the empty frontier. Such an as-of
+        // is not useful for indexes, because they wouldn't be readable. For write-only
+        // collections, an empty as-of means that the collection has been fully written and no new
+        // dataflow needs to be created for it. Consequently, no hydration will happen either.
+        //
+        // Based on this, we could respond in two ways:
+        //  * `false`, as in "the dataflow was never created"
+        //  * `true`, as in "the dataflow completed immediately"
+        //
+        // Since hydration is often used as a measure of dataflow progress and we don't want to
+        // give the impression that certain dataflows are somehow stuck when they are not, we go
+        // with the second interpretation here.
+        self.as_of.is_empty() || PartialOrder::less_than(&self.as_of, &self.output_frontier)
     }
 
     /// Updates the replica write frontier of this collection.
@@ -2884,12 +3010,6 @@ impl<T: ComputeControllerTimestamp> ReplicaCollectionState<T> {
         }
 
         self.output_frontier = new_frontier;
-
-        // If the observed frontier is greater than the collection's as-of, the collection has
-        // produced some output and is therefore hydrated now.
-        if !self.hydrated() && PartialOrder::less_than(&self.as_of, &self.output_frontier) {
-            self.set_hydrated();
-        }
     }
 }
 
@@ -2907,7 +3027,7 @@ struct ReplicaCollectionIntrospection<T: ComputeControllerTimestamp> {
     /// The collection's reported replica write frontier.
     write_frontier: Antichain<T>,
     /// A channel through which introspection updates are delivered.
-    introspection_tx: crossbeam_channel::Sender<IntrospectionUpdates>,
+    introspection_tx: mpsc::UnboundedSender<IntrospectionUpdates>,
 }
 
 impl<T: ComputeControllerTimestamp> ReplicaCollectionIntrospection<T> {
@@ -2915,7 +3035,7 @@ impl<T: ComputeControllerTimestamp> ReplicaCollectionIntrospection<T> {
     fn new(
         replica_id: ReplicaId,
         collection_id: GlobalId,
-        introspection_tx: crossbeam_channel::Sender<IntrospectionUpdates>,
+        introspection_tx: mpsc::UnboundedSender<IntrospectionUpdates>,
         as_of: Antichain<T>,
     ) -> Self {
         let self_ = Self {
@@ -2933,7 +3053,7 @@ impl<T: ComputeControllerTimestamp> ReplicaCollectionIntrospection<T> {
     /// Reports the initial introspection state.
     fn report_initial_state(&self) {
         let row = self.write_frontier_row();
-        let updates = vec![(row, 1)];
+        let updates = vec![(row, Diff::ONE)];
         self.send(IntrospectionType::ReplicaFrontiers, updates);
     }
 
@@ -2948,9 +3068,9 @@ impl<T: ComputeControllerTimestamp> ReplicaCollectionIntrospection<T> {
         }
 
         let updates = retraction
-            .map(|r| (r, -1))
+            .map(|r| (r, Diff::MINUS_ONE))
             .into_iter()
-            .chain(insertion.map(|r| (r, 1)))
+            .chain(insertion.map(|r| (r, Diff::ONE)))
             .collect();
         self.send(IntrospectionType::ComputeOperatorHydrationStatus, updates);
     }
@@ -2980,7 +3100,7 @@ impl<T: ComputeControllerTimestamp> ReplicaCollectionIntrospection<T> {
         self.write_frontier.clone_from(write_frontier);
         let insertion = self.write_frontier_row();
 
-        let updates = vec![(retraction, -1), (insertion, 1)];
+        let updates = vec![(retraction, Diff::MINUS_ONE), (insertion, Diff::ONE)];
         self.send(IntrospectionType::ReplicaFrontiers, updates);
     }
 
@@ -3011,7 +3131,7 @@ impl<T: ComputeControllerTimestamp> Drop for ReplicaCollectionIntrospection<T> {
         let updates: Vec<_> = operators
             .into_iter()
             .flat_map(|(lir_id, worker_id)| self.operator_hydration_row(*lir_id, *worker_id))
-            .map(|r| (r, -1))
+            .map(|r| (r, Diff::MINUS_ONE))
             .collect();
         if !updates.is_empty() {
             self.send(IntrospectionType::ComputeOperatorHydrationStatus, updates);
@@ -3019,7 +3139,7 @@ impl<T: ComputeControllerTimestamp> Drop for ReplicaCollectionIntrospection<T> {
 
         // Retract the write frontier.
         let row = self.write_frontier_row();
-        let updates = vec![(row, -1)];
+        let updates = vec![(row, Diff::MINUS_ONE)];
         self.send(IntrospectionType::ReplicaFrontiers, updates);
     }
 }

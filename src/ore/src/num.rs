@@ -16,8 +16,8 @@
 
 //! Number utilities
 
-use num::traits::bounds::UpperBounded;
 use num::Signed;
+use num::traits::bounds::UpperBounded;
 #[cfg(feature = "proptest")]
 use proptest::arbitrary::Arbitrary;
 #[cfg(feature = "proptest")]

@@ -32,6 +32,7 @@ import tarfile
 import time
 from collections import OrderedDict
 from collections.abc import Callable, Iterable, Iterator, Sequence
+from concurrent.futures import ThreadPoolExecutor
 from enum import Enum, auto
 from functools import cache
 from pathlib import Path
@@ -309,8 +310,11 @@ class CargoPreImage(PreImage):
         # Bazel has some rules and additive files that aren't directly
         # associated with a crate, but can change how it's built.
         additive_path = self.rd.root / "misc" / "bazel"
-        additive_files = ["BUILD.bazel", "*.bzl"]
-        inputs |= set(git.expand_globs(additive_path, *additive_files))
+        additive_files = ["*.bazel", "*.bzl"]
+        inputs |= {
+            f"misc/bazel/{path}"
+            for path in git.expand_globs(additive_path, *additive_files)
+        }
 
         return inputs
 
@@ -371,19 +375,10 @@ class CargoBuild(CargoPreImage):
         assert (
             rd.bazel
         ), "Programming error, tried to invoke Bazel when it is not enabled."
+        assert not rd.coverage, "Bazel doesn't support building with coverage."
 
         rustflags = []
-        cflags = []
-
-        if rd.coverage:
-            assert (
-                rd.sanitizer == Sanitizer.none
-            ), "cannot get coverage and run a sanitizer at the same time"
-            rustflags += rustc_flags.coverage
-        elif rd.sanitizer != Sanitizer.none:
-            rustflags += rustc_flags.sanitizer[rd.sanitizer]
-            cflags += rustc_flags.sanitizer_cflags[rd.sanitizer]
-        else:
+        if rd.sanitizer == Sanitizer.none:
             rustflags += ["--cfg=tokio_unstable"]
 
         extra_env = {
@@ -406,6 +401,8 @@ class CargoBuild(CargoPreImage):
 
         # Add extra Bazel config flags.
         bazel_build.extend(rd.bazel_config())
+        # Add flags for the Sanitizer
+        bazel_build.extend(rd.sanitizer.bazel_flags())
 
         return bazel_build
 
@@ -1140,7 +1137,14 @@ class DependencySet:
     def check(self) -> bool:
         """Check all publishable images in this dependency set exist on Docker
         Hub. Don't try to download or build them."""
-        return all(dep.is_published_if_necessary() for dep in self)
+        num_deps = len(list(self))
+        if num_deps == 0:
+            return True
+        with ThreadPoolExecutor(max_workers=num_deps) as executor:
+            results = list(
+                executor.map(lambda dep: dep.is_published_if_necessary(), list(self))
+            )
+        return all(results)
 
     def __iter__(self) -> Iterator[ResolvedImage]:
         return iter(self._dependencies.values())

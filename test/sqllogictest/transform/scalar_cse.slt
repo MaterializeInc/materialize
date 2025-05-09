@@ -13,11 +13,11 @@ statement ok
 CREATE TABLE x (a string, b int not null)
 
 query T multiline
-EXPLAIN WITH(arity, join implementations) SELECT b*b*b, b*b FROM x
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, arity, join implementations) AS VERBOSE TEXT FOR SELECT b*b*b, b*b FROM x
 ----
 Explained Query:
   Project (#3, #2) // { arity: 2 }
-    Map ((#1 * #1), (#2 * #1)) // { arity: 4 }
+    Map ((#1{b} * #1{b}), (#2 * #1{b})) // { arity: 4 }
       ReadStorage materialize.public.x // { arity: 2 }
 
 Source materialize.public.x
@@ -27,11 +27,11 @@ Target cluster: quickstart
 EOF
 
 query T multiline
-EXPLAIN WITH(arity, join implementations) SELECT b*b*b, b*b+1 FROM x
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, arity, join implementations) AS VERBOSE TEXT FOR SELECT b*b*b, b*b+1 FROM x
 ----
 Explained Query:
   Project (#3, #4) // { arity: 2 }
-    Map ((#1 * #1), (#2 * #1), (#2 + 1)) // { arity: 5 }
+    Map ((#1{b} * #1{b}), (#2 * #1{b}), (#2 + 1)) // { arity: 5 }
       ReadStorage materialize.public.x // { arity: 2 }
 
 Source materialize.public.x
@@ -41,7 +41,7 @@ Target cluster: quickstart
 EOF
 
 query T multiline
-EXPLAIN WITH(arity, join implementations) SELECT
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, arity, join implementations) AS VERBOSE TEXT FOR SELECT
     a::json->'Field1',
     a::json->'Field2',
     a::json->'Field3'
@@ -49,7 +49,7 @@ FROM x
 ----
 Explained Query:
   Project (#3..=#5) // { arity: 3 }
-    Map (text_to_jsonb(#0), (#2 -> "Field1"), (#2 -> "Field2"), (#2 -> "Field3")) // { arity: 6 }
+    Map (text_to_jsonb(#0{a}), (#2 -> "Field1"), (#2 -> "Field2"), (#2 -> "Field3")) // { arity: 6 }
       ReadStorage materialize.public.x // { arity: 2 }
 
 Source materialize.public.x
@@ -59,7 +59,7 @@ Target cluster: quickstart
 EOF
 
 query T multiline
-EXPLAIN WITH(arity, join implementations) SELECT
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, arity, join implementations) AS VERBOSE TEXT FOR SELECT
     a::json->'Field1'->'Foo',
     a::json->'Field1'->'Bar',
     a::json->'Field2'->'Baz',
@@ -68,7 +68,7 @@ FROM x
 ----
 Explained Query:
   Project (#4, #5, #7, #8) // { arity: 4 }
-    Map (text_to_jsonb(#0), (#2 -> "Field1"), (#3 -> "Foo"), (#3 -> "Bar"), (#2 -> "Field2"), (#6 -> "Baz"), ((#6 -> "Quux") -> "Zorb")) // { arity: 9 }
+    Map (text_to_jsonb(#0{a}), (#2 -> "Field1"), (#3 -> "Foo"), (#3 -> "Bar"), (#2 -> "Field2"), (#6 -> "Baz"), ((#6 -> "Quux") -> "Zorb")) // { arity: 9 }
       ReadStorage materialize.public.x // { arity: 2 }
 
 Source materialize.public.x
@@ -80,14 +80,14 @@ EOF
 
 # Ensure we don't inline if-guarded expressions
 query T multiline
-EXPLAIN WITH(arity, join implementations) SELECT
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, arity, join implementations) AS VERBOSE TEXT FOR SELECT
     CASE WHEN b = 0 THEN 0 ELSE 1/b END,
     CASE WHEN b != 0 THEN 1/b ELSE 0 END
 FROM x
 ----
 Explained Query:
   Project (#2, #3) // { arity: 2 }
-    Map (case when (#1 = 0) then 0 else (1 / #1) end, case when (#1 != 0) then (1 / #1) else 0 end) // { arity: 4 }
+    Map (case when (#1{b} = 0) then 0 else (1 / #1{b}) end, case when (#1{b} != 0) then (1 / #1{b}) else 0 end) // { arity: 4 }
       ReadStorage materialize.public.x // { arity: 2 }
 
 Source materialize.public.x
@@ -100,7 +100,7 @@ EOF
 
 # Ensure we update columns references in if-guarded expressions
 query T multiline
-EXPLAIN WITH(arity, join implementations) SELECT
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, arity, join implementations) AS VERBOSE TEXT FOR SELECT
     CASE WHEN b = 0 THEN 0 ELSE 1/b END,
     CASE WHEN b != 0 THEN 1/b ELSE 0 END
 FROM
@@ -109,7 +109,7 @@ FROM
 ----
 Explained Query:
   Project (#3, #4) // { arity: 2 }
-    Map ((#1 / 2), case when (#2 = 0) then 0 else (1 / #2) end, case when (#2 != 0) then (1 / #2) else 0 end) // { arity: 5 }
+    Map ((#1{b} / 2), case when (#2{b} = 0) then 0 else (1 / #2) end, case when (#2{b} != 0) then (1 / #2) else 0 end) // { arity: 5 }
       ReadStorage materialize.public.x // { arity: 2 }
 
 Source materialize.public.x
@@ -124,51 +124,51 @@ statement ok
 CREATE TABLE t(x int);
 
 query T multiline
-explain select * from t where 2*x + 2*x > 0
+EXPLAIN OPTIMIZED PLAN WITH (humanized expressions) AS VERBOSE TEXT FOR select * from t where 2*x + 2*x > 0
 ----
 Explained Query:
-  Project (#0)
+  Project (#0{x})
     Filter ((#1 + #1) > 0)
-      Map ((2 * #0))
+      Map ((2 * #0{x}))
         ReadStorage materialize.public.t
 
 Source materialize.public.t
   filter=(((#1 + #1) > 0))
-  map=((2 * #0))
+  map=((2 * #0{x}))
 
 Target cluster: quickstart
 
 EOF
 
 query T multiline
-explain select * from t where 2*x + 2*x + 2*x > 0
+EXPLAIN OPTIMIZED PLAN WITH (humanized expressions) AS VERBOSE TEXT FOR select * from t where 2*x + 2*x + 2*x > 0
 ----
 Explained Query:
-  Project (#0)
+  Project (#0{x})
     Filter (((#1 + #1) + #1) > 0)
-      Map ((2 * #0))
+      Map ((2 * #0{x}))
         ReadStorage materialize.public.t
 
 Source materialize.public.t
   filter=((((#1 + #1) + #1) > 0))
-  map=((2 * #0))
+  map=((2 * #0{x}))
 
 Target cluster: quickstart
 
 EOF
 
 query T multiline
-explain select * from t where 2*x + 5*x + 2*x > 0
+EXPLAIN OPTIMIZED PLAN WITH (humanized expressions) AS VERBOSE TEXT FOR select * from t where 2*x + 5*x + 2*x > 0
 ----
 Explained Query:
-  Project (#0)
-    Filter (((#1 + (5 * #0)) + #1) > 0)
-      Map ((2 * #0))
+  Project (#0{x})
+    Filter (((#1 + (5 * #0{x})) + #1) > 0)
+      Map ((2 * #0{x}))
         ReadStorage materialize.public.t
 
 Source materialize.public.t
-  filter=((((#1 + (5 * #0)) + #1) > 0))
-  map=((2 * #0))
+  filter=((((#1 + (5 * #0{x})) + #1) > 0))
+  map=((2 * #0{x}))
 
 Target cluster: quickstart
 

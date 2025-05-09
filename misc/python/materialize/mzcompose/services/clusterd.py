@@ -23,10 +23,12 @@ class Clusterd(Service):
         environment_id: str | None = None,
         environment_extra: list[str] = [],
         memory: str | None = None,
+        cpu: str | None = None,
         options: list[str] = [],
         restart: str = "no",
         stop_grace_period: str = "120s",
         scratch_directory: str = "/scratch",
+        volumes: list[str] = [],
     ) -> None:
         environment = [
             "CLUSTERD_LOG_FILTER",
@@ -52,15 +54,20 @@ class Clusterd(Service):
         # Depending on the Docker Compose version, this may either work or be
         # ignored with a warning. Unfortunately no portable way of setting the
         # memory limit is known.
-        if memory:
-            config["deploy"] = {"resources": {"limits": {"memory": memory}}}
+        if memory or cpu:
+            limits = {}
+            if memory:
+                limits["memory"] = memory
+            if cpu:
+                limits["cpus"] = cpu
+            config["deploy"] = {"resources": {"limits": limits}}
 
         config.update(
             {
                 "command": options,
                 "ports": [2100, 2101, 6878],
                 "environment": environment,
-                "volumes": DEFAULT_MZ_VOLUMES,
+                "volumes": volumes or DEFAULT_MZ_VOLUMES,
                 "restart": restart,
                 "stop_grace_period": stop_grace_period,
             }

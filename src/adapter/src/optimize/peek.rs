@@ -13,9 +13,9 @@ use std::fmt::Debug;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
+use mz_compute_types::ComputeInstanceId;
 use mz_compute_types::dataflows::IndexDesc;
 use mz_compute_types::plan::Plan;
-use mz_compute_types::ComputeInstanceId;
 use mz_expr::{MirRelationExpr, MirScalarExpr, OptimizedMirRelationExpr, RowSetFinishing};
 use mz_ore::soft_assert_or_log;
 use mz_repr::explain::trace_plan;
@@ -25,22 +25,22 @@ use mz_sql::plan::HirRelationExpr;
 use mz_sql::session::metadata::SessionMetadata;
 use mz_transform::dataflow::DataflowMetainfo;
 use mz_transform::normalize_lets::normalize_lets;
-use mz_transform::typecheck::{empty_context, SharedContext as TypecheckContext};
+use mz_transform::typecheck::{SharedContext as TypecheckContext, empty_context};
 use mz_transform::{StatisticsOracle, TransformCtx};
 use timely::progress::Antichain;
 use tracing::debug_span;
 
+use crate::TimestampContext;
 use crate::catalog::Catalog;
-use crate::coord::peek::{create_fast_path_plan, PeekDataflowPlan, PeekPlan};
+use crate::coord::peek::{PeekDataflowPlan, PeekPlan, create_fast_path_plan};
 use crate::optimize::dataflows::{
-    prep_relation_expr, prep_scalar_expr, ComputeInstanceSnapshot, DataflowBuilder, EvalTime,
-    ExprPrepStyle,
+    ComputeInstanceSnapshot, DataflowBuilder, EvalTime, ExprPrepStyle, prep_relation_expr,
+    prep_scalar_expr,
 };
 use crate::optimize::{
-    optimize_mir_local, trace_plan, MirDataflowDescription, Optimize, OptimizeMode,
-    OptimizerConfig, OptimizerError,
+    MirDataflowDescription, Optimize, OptimizeMode, OptimizerConfig, OptimizerError,
+    optimize_mir_local, trace_plan,
 };
-use crate::TimestampContext;
 
 pub struct Optimizer {
     /// A typechecking context to use throughout the optimizer pipeline.
@@ -244,7 +244,7 @@ impl<'s> Optimize<LocalMirPlan<Resolved<'s>>> for Optimizer {
         let key = typ
             .default_key()
             .iter()
-            .map(|k| MirScalarExpr::Column(*k))
+            .map(|k| MirScalarExpr::column(*k))
             .collect();
 
         // The assembled dataflow contains a view and an index of that view.
@@ -329,6 +329,7 @@ impl<'s> Optimize<LocalMirPlan<Resolved<'s>>> for Optimizer {
             self.select_id,
             Some(&self.finishing),
             self.config.features.persist_fast_path_limit,
+            self.config.persist_fast_path_order,
         ) {
             Ok(maybe_fast_path_plan) => maybe_fast_path_plan.is_some(),
             Err(OptimizerError::UnsafeMfpPlan) => {
@@ -382,6 +383,7 @@ impl<'s> Optimize<LocalMirPlan<Resolved<'s>>> for Optimizer {
             self.select_id,
             Some(&self.finishing),
             self.config.features.persist_fast_path_limit,
+            self.config.persist_fast_path_order,
         )? {
             Some(plan) if !self.config.no_fast_path => {
                 if self.config.mode == OptimizeMode::Explain {

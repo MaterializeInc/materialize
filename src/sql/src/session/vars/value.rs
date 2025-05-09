@@ -23,11 +23,11 @@ use mz_repr::strconv;
 use mz_rocksdb_types::config::{CompactionStyle, CompressionType};
 use mz_sql_parser::ast::{Ident, TransactionIsolationLevel};
 use mz_tracing::{CloneableEnvFilter, SerializableDirective};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use uncased::UncasedStr;
 
-use super::errors::VarParseError;
 use super::VarInput;
+use super::errors::VarParseError;
 
 /// Defines a value that get stored as part of a System or Session variable.
 ///
@@ -314,13 +314,13 @@ impl Value for Duration {
                 return Err(VarParseError::InvalidParameterValue {
                     invalid_values: vec![o.to_string()],
                     reason: "expected us, ms, s, min, h, or d but got {o:?}".to_string(),
-                })
+                });
             }
         };
 
         let d = f(d
             .checked_mul(m)
-            .ok_or(VarParseError::InvalidParameterValue {
+            .ok_or_else(|| VarParseError::InvalidParameterValue {
                 invalid_values: vec![s.to_string()],
                 reason: "expected value to fit in u64".into(),
             })?);
@@ -860,7 +860,7 @@ impl Value for TimeZone {
 }
 
 /// List of valid isolation levels.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub enum IsolationLevel {
     ReadUncommitted,
     ReadCommitted,

@@ -7,7 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use std::{collections::BTreeMap, time::Duration};
+use std::{collections::BTreeMap, sync::LazyLock, time::Duration};
 
 use anyhow::bail;
 use k8s_openapi::{
@@ -15,10 +15,10 @@ use k8s_openapi::{
         apps::v1::{StatefulSet, StatefulSetSpec, StatefulSetUpdateStrategy},
         core::v1::{
             Capabilities, Container, ContainerPort, EnvVar, EnvVarSource, EphemeralVolumeSource,
-            PersistentVolumeClaimSpec, PersistentVolumeClaimTemplate, Pod, PodSecurityContext,
-            PodSpec, PodTemplateSpec, Probe, SeccompProfile, SecretKeySelector, SecretVolumeSource,
-            SecurityContext, Service, ServiceAccount, ServicePort, ServiceSpec, TCPSocketAction,
-            Toleration, Volume, VolumeMount, VolumeResourceRequirements,
+            KeyToPath, PersistentVolumeClaimSpec, PersistentVolumeClaimTemplate, Pod,
+            PodSecurityContext, PodSpec, PodTemplateSpec, Probe, SeccompProfile, SecretKeySelector,
+            SecretVolumeSource, SecurityContext, Service, ServiceAccount, ServicePort, ServiceSpec,
+            TCPSocketAction, Toleration, Volume, VolumeMount, VolumeResourceRequirements,
         },
         networking::v1::{
             IPBlock, NetworkPolicy, NetworkPolicyEgressRule, NetworkPolicyIngressRule,
@@ -28,9 +28,11 @@ use k8s_openapi::{
     },
     apimachinery::pkg::{apis::meta::v1::LabelSelector, util::intstr::IntOrString},
 };
-use kube::{api::ObjectMeta, runtime::controller::Action, Api, Client, ResourceExt};
+use kube::{Api, Client, ResourceExt, api::ObjectMeta, runtime::controller::Action};
 use maplit::btreemap;
-use rand::{thread_rng, Rng};
+use rand::{Rng, thread_rng};
+use reqwest::StatusCode;
+use semver::{BuildMetadata, Prerelease, Version};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use tracing::trace;
@@ -39,10 +41,20 @@ use super::matching_image_from_environmentd_image_ref;
 use crate::controller::materialize::tls::{create_certificate, issuer_ref_defined};
 use crate::k8s::{apply_resource, delete_resource, get_resource};
 use mz_cloud_provider::CloudProvider;
-use mz_cloud_resources::crd::gen::cert_manager::certificates::Certificate;
+use mz_cloud_resources::crd::generated::cert_manager::certificates::Certificate;
 use mz_cloud_resources::crd::materialize::v1alpha1::Materialize;
 use mz_orchestrator_tracing::TracingCliArgs;
 use mz_ore::instrument;
+
+static V140_DEV0: LazyLock<Version> = LazyLock::new(|| Version {
+    major: 0,
+    minor: 140,
+    patch: 0,
+    pre: Prerelease::new("dev.0").expect("dev.0 is valid prerelease"),
+    build: BuildMetadata::new("").expect("empty string is valid buildmetadata"),
+});
+const V143: Version = Version::new(0, 143, 0);
+const V144: Version = Version::new(0, 144, 0);
 
 /// Describes the status of a deployment.
 ///
@@ -118,6 +130,7 @@ impl Resources {
         client: &Client,
         args: &super::MaterializeControllerArgs,
         increment_generation: bool,
+        force_promote: bool,
         namespace: &str,
     ) -> Result<Option<Action>, anyhow::Error> {
         let environmentd_network_policy_api: Api<NetworkPolicy> =
@@ -206,7 +219,19 @@ impl Resources {
             match http_client.get(status_url.clone()).send().await {
                 Ok(response) => {
                     let response: BTreeMap<String, DeploymentStatus> = response.json().await?;
-                    if response["status"] == DeploymentStatus::Initializing {
+                    if force_promote {
+                        trace!("skipping cluster catchup");
+                        let skip_catchup_url = reqwest::Url::parse(&format!(
+                            "http://{}/api/leader/skip-catchup",
+                            environmentd_url
+                        ))
+                        .unwrap();
+                        let response = http_client.post(skip_catchup_url).send().await?;
+                        if response.status() == StatusCode::BAD_REQUEST {
+                            let err: SkipCatchupError = response.json().await?;
+                            bail!("failed to skip catchup: {}", err.message);
+                        }
+                    } else if response["status"] == DeploymentStatus::Initializing {
                         trace!("environmentd is still initializing, retrying...");
                         return Ok(Some(retry_action));
                     } else {
@@ -755,7 +780,7 @@ fn create_environmentd_statefulset_object(
             name: "MZ_METADATA_BACKEND_URL".to_string(),
             value_from: Some(EnvVarSource {
                 secret_key_ref: Some(SecretKeySelector {
-                    name: Some(mz.backend_secret_name()),
+                    name: mz.backend_secret_name(),
                     key: "metadata_backend_url".to_string(),
                     optional: Some(false),
                 }),
@@ -767,7 +792,7 @@ fn create_environmentd_statefulset_object(
             name: "MZ_PERSIST_BLOB_URL".to_string(),
             value_from: Some(EnvVarSource {
                 secret_key_ref: Some(SecretKeySelector {
-                    name: Some(mz.backend_secret_name()),
+                    name: mz.backend_secret_name(),
                     key: "persist_backend_url".to_string(),
                     optional: Some(false),
                 }),
@@ -833,13 +858,29 @@ fn create_environmentd_statefulset_object(
             config
                 .bootstrap_builtin_catalog_server_cluster_replica_size
                 .as_ref()
-                .map(|size| {
-                    format!("--bootstrap-builtin-catalog-server-cluster-replica-size={size}")
-                }),
+                .map(|size| format!("--bootstrap-builtin-catalog-server-cluster-replica-size={size}")),
             config
                 .bootstrap_builtin_analytics_cluster_replica_size
                 .as_ref()
                 .map(|size| format!("--bootstrap-builtin-analytics-cluster-replica-size={size}")),
+            config
+                .bootstrap_builtin_system_cluster_replication_factor
+                .as_ref()
+                .map(|replication_factor| {
+                    format!("--bootstrap-builtin-system-cluster-replication-factor={replication_factor}")
+                }),
+            config
+                .bootstrap_builtin_probe_cluster_replication_factor
+                .as_ref()
+                .map(|replication_factor| format!("--bootstrap-builtin-probe-cluster-replication-factor={replication_factor}")),
+            config
+                .bootstrap_builtin_support_cluster_replication_factor
+                .as_ref()
+                .map(|replication_factor| format!("--bootstrap-builtin-support-cluster-replication-factor={replication_factor}")),
+            config
+                .bootstrap_builtin_analytics_cluster_replication_factor
+                .as_ref()
+                .map(|replication_factor| format!("--bootstrap-builtin-analytics-cluster-replication-factor={replication_factor}")),
         ]
         .into_iter()
         .flatten(),
@@ -893,6 +934,11 @@ fn create_environmentd_statefulset_object(
     if config.enable_internal_statement_logging {
         args.push("--system-parameter-default=enable_internal_statement_logging=true".into());
     }
+
+    if config.disable_statement_logging {
+        args.push("--system-parameter-default=statement_logging_max_sample_rate=0".into());
+    }
+
     if config.disable_authentication {
         args.push("--system-parameter-default=enable_rbac_checks=false".into());
     }
@@ -949,6 +995,20 @@ fn create_environmentd_statefulset_object(
             "--orchestrator-kubernetes-service-node-selector={}={}",
             selector.key, selector.value,
         ));
+    }
+    if mz.meets_minimum_version(&V144) {
+        if let Some(affinity) = &config.clusterd_affinity {
+            let affinity = serde_json::to_string(affinity).unwrap();
+            args.push(format!(
+                "--orchestrator-kubernetes-service-affinity={affinity}"
+            ))
+        }
+        if let Some(tolerations) = &config.clusterd_tolerations {
+            let tolerations = serde_json::to_string(tolerations).unwrap();
+            args.push(format!(
+                "--orchestrator-kubernetes-service-tolerations={tolerations}"
+            ))
+        }
     }
     if let Some(scheduler_name) = &config.scheduler_name {
         args.push(format!(
@@ -1091,6 +1151,10 @@ fn create_environmentd_statefulset_object(
         args.push("--orchestrator-kubernetes-enable-prometheus-scrape-annotations".into());
     }
 
+    if mz.meets_minimum_version(&V143) && config.disable_license_key_checks {
+        args.push("--disable-license-key-checks".into());
+    }
+
     // Add user-specified extra arguments.
     if let Some(extra_args) = &mz.spec.environmentd_extra_args {
         args.extend(extra_args.iter().cloned());
@@ -1155,6 +1219,34 @@ fn create_environmentd_statefulset_object(
         },
     ];
 
+    if mz.meets_minimum_version(&V140_DEV0) {
+        volume_mounts.push(VolumeMount {
+            name: "license-key".to_string(),
+            mount_path: "/license_key".to_string(),
+            ..Default::default()
+        });
+        volumes.push(Volume {
+            name: "license-key".to_string(),
+            secret: Some(SecretVolumeSource {
+                default_mode: Some(256),
+                optional: Some(false),
+                secret_name: Some(mz.backend_secret_name()),
+                items: Some(vec![KeyToPath {
+                    key: "license_key".to_string(),
+                    path: "license_key".to_string(),
+                    ..Default::default()
+                }]),
+                ..Default::default()
+            }),
+            ..Default::default()
+        });
+        env.push(EnvVar {
+            name: "MZ_LICENSE_KEY".to_string(),
+            value: Some("/license_key/license_key".to_string()),
+            ..Default::default()
+        });
+    }
+
     let container = Container {
         name: "environmentd".to_owned(),
         image: Some(mz.spec.environmentd_image_ref.to_owned()),
@@ -1216,7 +1308,7 @@ fn create_environmentd_statefulset_object(
         );
     }
 
-    let tolerations = Some(vec![
+    let mut tolerations = vec![
         // When the node becomes `NotReady` it indicates there is a problem with the node,
         // By default kubernetes waits 300s (5 minutes) before doing anything in this case,
         // But we want to limit this to 30s for faster recovery
@@ -1234,7 +1326,11 @@ fn create_environmentd_statefulset_object(
             toleration_seconds: Some(30),
             value: None,
         },
-    ]);
+    ];
+    if let Some(user_tolerations) = &config.environmentd_tolerations {
+        tolerations.extend(user_tolerations.iter().cloned());
+    }
+    let tolerations = Some(tolerations);
 
     let pod_template_spec = PodTemplateSpec {
         // not using managed_resource_meta because the pod should be owned
@@ -1253,6 +1349,7 @@ fn create_environmentd_statefulset_object(
                     .map(|selector| (selector.key.clone(), selector.value.clone()))
                     .collect(),
             ),
+            affinity: config.environmentd_affinity.clone(),
             scheduler_name: config.scheduler_name.clone(),
             service_account_name: Some(mz.service_account_name()),
             volumes: Some(volumes),
@@ -1332,6 +1429,11 @@ struct BecomeLeaderResponse {
 enum BecomeLeaderResult {
     Success,
     Failure { message: String },
+}
+
+#[derive(Debug, Deserialize, PartialEq, Eq)]
+struct SkipCatchupError {
+    message: String,
 }
 
 fn environmentd_internal_http_address(

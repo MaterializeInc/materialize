@@ -35,8 +35,9 @@ use crate::durable::objects::{AuditLog, Snapshot};
 pub use crate::durable::objects::{
     Cluster, ClusterConfig, ClusterReplica, ClusterVariant, ClusterVariantManaged, Comment,
     Database, DefaultPrivilege, IntrospectionSourceIndex, Item, NetworkPolicy, ReplicaConfig,
-    ReplicaLocation, Role, Schema, SourceReference, SourceReferences, StorageCollectionMetadata,
-    SystemConfiguration, SystemObjectDescription, SystemObjectMapping, UnfinalizedShard,
+    ReplicaLocation, Role, RoleAuth, Schema, SourceReference, SourceReferences,
+    StorageCollectionMetadata, SystemConfiguration, SystemObjectDescription, SystemObjectMapping,
+    UnfinalizedShard,
 };
 pub use crate::durable::persist::shard_id;
 use crate::durable::persist::{Timestamp, UnopenedPersistCatalogState};
@@ -76,6 +77,7 @@ pub const EXPRESSION_CACHE_SHARD_KEY: &str = "expression_cache_shard";
 pub struct BootstrapArgs {
     pub cluster_replica_size_map: ClusterReplicaSizeMap,
     pub default_cluster_replica_size: String,
+    pub default_cluster_replication_factor: u32,
     pub bootstrap_role: Option<String>,
 }
 
@@ -168,6 +170,15 @@ pub trait OpenableDurableCatalogState: Debug + Send {
     /// toggle the flag with LaunchDarkly, but use it in boot before
     /// LaunchDarkly is available.
     async fn get_0dt_deployment_max_wait(&mut self) -> Result<Option<Duration>, CatalogError>;
+
+    /// Get the `with_0dt_deployment_ddl_check_interval` config value of this instance.
+    ///
+    /// This mirrors the `with_0dt_deployment_ddl_check_interval` "system var" so that we can
+    /// toggle the flag with LaunchDarkly, but use it in boot before
+    /// LaunchDarkly is available.
+    async fn get_0dt_deployment_ddl_check_interval(
+        &mut self,
+    ) -> Result<Option<Duration>, CatalogError>;
 
     /// Get the `enable_0dt_deployment_panic_after_timeout` config value of this
     /// instance.
@@ -327,6 +338,24 @@ pub trait DurableCatalogState: ReadOnlyDurableCatalogState {
         Ok(ids)
     }
 
+    /// Allocates and returns `amount` many user [`CatalogItemId`] and [`GlobalId`].
+    ///
+    /// See [`Self::commit_transaction`] for details on `commit_ts`.
+    async fn allocate_user_ids(
+        &mut self,
+        amount: u64,
+        commit_ts: Timestamp,
+    ) -> Result<Vec<(CatalogItemId, GlobalId)>, CatalogError> {
+        let ids = self
+            .allocate_id(USER_ITEM_ALLOC_KEY, amount, commit_ts)
+            .await?;
+        let ids = ids
+            .iter()
+            .map(|id| (CatalogItemId::User(*id), GlobalId::User(*id)))
+            .collect();
+        Ok(ids)
+    }
+
     /// Allocates and returns both a user [`CatalogItemId`] and [`GlobalId`].
     ///
     /// See [`Self::commit_transaction`] for details on `commit_ts`.
@@ -371,7 +400,8 @@ impl AuditLogIterator {
             .into_iter()
             .map(|(kind, ts, diff)| {
                 assert_eq!(
-                    diff, 1,
+                    diff,
+                    Diff::ONE,
                     "audit log is append only: ({kind:?}, {ts:?}, {diff:?})"
                 );
                 assert!(
@@ -500,6 +530,7 @@ pub async fn persist_backed_catalog_state(
 pub fn test_bootstrap_args() -> BootstrapArgs {
     BootstrapArgs {
         default_cluster_replica_size: "1".into(),
+        default_cluster_replication_factor: 1,
         bootstrap_role: None,
         cluster_replica_size_map: ClusterReplicaSizeMap::for_tests(),
     }

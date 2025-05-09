@@ -4,10 +4,8 @@ description: ""
 menu:
   main:
     parent: access-control
-    weight: 15
+    weight: 17
 ---
-
-{{< private-preview />}}
 
 {{< tip >}}
 We recommend using [Terraform](https://registry.terraform.io/providers/MaterializeInc/materialize/latest/docs/resources/network_policy)

@@ -20,6 +20,7 @@ pub enum Rule {
     RustDocTest,
     RustBinary,
     CargoBuildScript,
+    ExtractCargoLints,
     // TODO(parkmycar): Include these rules. The tricky part is they need to
     // get imported from the crates_universe repository that is created.
     // Aliases,
@@ -34,7 +35,7 @@ impl Rule {
             | Rule::RustTest
             | Rule::RustDocTest
             | Rule::RustBinary => Module::Rust,
-            Rule::CargoBuildScript => Module::Cargo,
+            Rule::CargoBuildScript | Rule::ExtractCargoLints => Module::Cargo,
         }
     }
 }
@@ -48,6 +49,7 @@ impl ToBazelDefinition for Rule {
             Rule::RustDocTest => "rust_doc_test",
             Rule::RustBinary => "rust_binary",
             Rule::CargoBuildScript => "cargo_build_script",
+            Rule::ExtractCargoLints => "extract_cargo_lints",
         };
         let s = QuotedString::new(s);
         s.format(writer)

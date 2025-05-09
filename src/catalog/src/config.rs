@@ -9,8 +9,10 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
+use anyhow::bail;
 use bytesize::ByteSize;
 use ipnet::IpNet;
+use mz_adapter_types::bootstrap_builtin_cluster_config::BootstrapBuiltinClusterConfig;
 use mz_build_info::BuildInfo;
 use mz_cloud_resources::AwsExternalIdPrefix;
 use mz_controller::clusters::ReplicaAllocation;
@@ -19,11 +21,14 @@ use mz_ore::cast::CastFrom;
 use mz_ore::metrics::MetricsRegistry;
 use mz_persist_client::PersistClient;
 use mz_repr::CatalogItemId;
+use mz_repr::adt::numeric::Numeric;
 use mz_sql::catalog::CatalogError as SqlCatalogError;
 use mz_sql::catalog::EnvironmentId;
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 
 use crate::durable::{CatalogError, DurableCatalogState};
+
+const GIB: u64 = 1024 * 1024 * 1024;
 
 /// Configures a catalog.
 #[derive(Debug)]
@@ -55,16 +60,16 @@ pub struct StateConfig {
     pub skip_migrations: bool,
     /// Map of strings to corresponding compute replica sizes.
     pub cluster_replica_sizes: ClusterReplicaSizeMap,
-    /// Builtin system cluster replica size.
-    pub builtin_system_cluster_replica_size: String,
-    /// Builtin catalog server cluster replica size.
-    pub builtin_catalog_server_cluster_replica_size: String,
-    /// Builtin probe cluster replica size.
-    pub builtin_probe_cluster_replica_size: String,
-    /// Builtin support cluster replica size.
-    pub builtin_support_cluster_replica_size: String,
-    /// Builtin analytics cluster replica size.
-    pub builtin_analytics_cluster_replica_size: String,
+    /// Builtin system cluster config.
+    pub builtin_system_cluster_config: BootstrapBuiltinClusterConfig,
+    /// Builtin catalog server cluster config.
+    pub builtin_catalog_server_cluster_config: BootstrapBuiltinClusterConfig,
+    /// Builtin probe cluster config.
+    pub builtin_probe_cluster_config: BootstrapBuiltinClusterConfig,
+    /// Builtin support cluster config.
+    pub builtin_support_cluster_config: BootstrapBuiltinClusterConfig,
+    /// Builtin analytics cluster config.
+    pub builtin_analytics_cluster_config: BootstrapBuiltinClusterConfig,
     /// Dynamic defaults for system parameters.
     pub system_parameter_defaults: BTreeMap<String, String>,
     /// An optional map of system parameters pulled from a remote frontend.
@@ -94,19 +99,31 @@ pub struct StateConfig {
 }
 
 #[derive(Debug)]
-pub enum BuiltinItemMigrationConfig {
-    Legacy,
-    ZeroDownTime {
-        persist_client: PersistClient,
-        deploy_generation: u64,
-        read_only: bool,
-    },
+pub struct BuiltinItemMigrationConfig {
+    pub persist_client: PersistClient,
+    pub read_only: bool,
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize)]
+#[derive(Debug, Clone, Serialize)]
 pub struct ClusterReplicaSizeMap(pub BTreeMap<String, ReplicaAllocation>);
 
 impl ClusterReplicaSizeMap {
+    pub fn parse_from_str(s: &str, credit_consumption_from_memory: bool) -> anyhow::Result<Self> {
+        let mut cluster_replica_sizes: BTreeMap<String, ReplicaAllocation> =
+            serde_json::from_str(s)?;
+        if credit_consumption_from_memory {
+            for (name, replica) in cluster_replica_sizes.iter_mut() {
+                let Some(memory_limit) = replica.memory_limit else {
+                    bail!("No memory limit found in cluster definition for {name}");
+                };
+                replica.credits_per_hour = Numeric::from(
+                    (memory_limit.0 * replica.scale * u64::try_from(replica.workers)?).0,
+                ) / Numeric::from(1 * GIB);
+            }
+        }
+        Ok(Self(cluster_replica_sizes))
+    }
+
     /// Iterate all enabled (not disabled) replica allocations, with their name.
     pub fn enabled_allocations(&self) -> impl Iterator<Item = (&String, &ReplicaAllocation)> {
         self.0.iter().filter(|(_, a)| !a.disabled)

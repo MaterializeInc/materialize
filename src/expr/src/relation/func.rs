@@ -12,11 +12,12 @@
 use std::cmp::{max, min};
 use std::iter::Sum;
 use std::ops::Deref;
+use std::str::FromStr;
 use std::{fmt, iter};
 
 use chrono::{DateTime, NaiveDateTime, NaiveTime, Utc};
 use dec::OrderedDecimal;
-use itertools::Itertools;
+use itertools::{Either, Itertools};
 use mz_lowertest::MzReflect;
 use mz_ore::cast::CastFrom;
 
@@ -29,7 +30,9 @@ use mz_repr::adt::interval::Interval;
 use mz_repr::adt::numeric::{self, Numeric, NumericMaxScale};
 use mz_repr::adt::regex::Regex as ReprRegex;
 use mz_repr::adt::timestamp::{CheckedTimestamp, TimestampLike};
-use mz_repr::{ColumnName, ColumnType, Datum, Diff, RelationType, Row, RowArena, ScalarType};
+use mz_repr::{
+    ColumnName, ColumnType, Datum, Diff, RelationType, Row, RowArena, ScalarType, SharedRow,
+};
 use num::{CheckedAdd, Integer, Signed, ToPrimitive};
 use ordered_float::OrderedFloat;
 use proptest::prelude::{Arbitrary, Just};
@@ -37,22 +40,23 @@ use proptest::strategy::{BoxedStrategy, Strategy, Union};
 use proptest_derive::Arbitrary;
 use regex::Regex;
 use serde::{Deserialize, Serialize};
+use smallvec::SmallVec;
 
+use crate::EvalError;
+use crate::WindowFrameBound::{
+    CurrentRow, OffsetFollowing, OffsetPreceding, UnboundedFollowing, UnboundedPreceding,
+};
+use crate::WindowFrameUnits::{Groups, Range, Rows};
 use crate::explain::{HumanizedExpr, HumanizerMode};
 use crate::relation::proto_aggregate_func::{
     self, ProtoColumnOrders, ProtoFusedValueWindowFunc, ProtoFusedWindowAggregate,
 };
 use crate::relation::proto_table_func::ProtoTabletizedScalar;
 use crate::relation::{
-    compare_columns, proto_table_func, ColumnOrder, ProtoAggregateFunc, ProtoTableFunc,
-    WindowFrame, WindowFrameBound, WindowFrameUnits,
+    ColumnOrder, ProtoAggregateFunc, ProtoTableFunc, WindowFrame, WindowFrameBound,
+    WindowFrameUnits, compare_columns, proto_table_func,
 };
 use crate::scalar::func::{add_timestamp_months, jsonb_stringify};
-use crate::EvalError;
-use crate::WindowFrameBound::{
-    CurrentRow, OffsetFollowing, OffsetPreceding, UnboundedFollowing, UnboundedPreceding,
-};
-use crate::WindowFrameUnits::{Groups, Range, Rows};
 
 include!(concat!(env!("OUT_DIR"), "/mz_expr.relation.func.rs"));
 
@@ -381,7 +385,7 @@ where
         length: datums.len(),
     };
     temp_storage.make_datum(|packer| {
-        packer.push_array(&[dims], datums).unwrap();
+        packer.try_push_array(&[dims], datums).unwrap();
     })
 }
 
@@ -2287,7 +2291,7 @@ impl RustType<ProtoAggregateFunc> for AggregateFunc {
                     None => {
                         return Err(TryFromProtoError::MissingField(
                             "ProtoLagLead::lag_lead".into(),
-                        ))
+                        ));
                     }
                 },
                 ignore_nulls: pll.ignore_nulls,
@@ -3092,7 +3096,7 @@ fn jsonb_each<'a>(
         if stringify {
             v = jsonb_stringify(v, temp_storage);
         }
-        (Row::pack_slice(&[Datum::String(k), v]), 1)
+        (Row::pack_slice(&[Datum::String(k), v]), Diff::ONE)
     })
 }
 
@@ -3103,7 +3107,7 @@ fn jsonb_object_keys<'a>(a: Datum<'a>) -> impl Iterator<Item = (Row, Diff)> + 'a
     };
 
     map.iter()
-        .map(move |(k, _)| (Row::pack_slice(&[Datum::String(k)]), 1))
+        .map(move |(k, _)| (Row::pack_slice(&[Datum::String(k)]), Diff::ONE))
 }
 
 fn jsonb_array_elements<'a>(
@@ -3119,7 +3123,7 @@ fn jsonb_array_elements<'a>(
         if stringify {
             e = jsonb_stringify(e, temp_storage);
         }
-        (Row::pack_slice(&[e]), 1)
+        (Row::pack_slice(&[e]), Diff::ONE)
     })
 }
 
@@ -3131,7 +3135,63 @@ fn regexp_extract(a: Datum, r: &AnalyzedRegex) -> Option<(Row, Diff)> {
         .iter()
         .skip(1)
         .map(|m| Datum::from(m.map(|m| m.as_str())));
-    Some((Row::pack(datums), 1))
+    Some((Row::pack(datums), Diff::ONE))
+}
+
+fn regexp_matches<'a, 'r: 'a>(
+    exprs: &[Datum<'a>],
+) -> Result<impl Iterator<Item = (Row, Diff)> + 'a, EvalError> {
+    // There are only two acceptable ways to call this function:
+    // 1. regexp_matches(string, regex)
+    // 2. regexp_matches(string, regex, flag)
+    assert!(exprs.len() == 2 || exprs.len() == 3);
+    let a = exprs[0].unwrap_str();
+    let r = exprs[1].unwrap_str();
+
+    let (regex, opts) = if exprs.len() == 3 {
+        let flag = exprs[2].unwrap_str();
+        let opts = AnalyzedRegexOpts::from_str(flag)?;
+        (AnalyzedRegex::new(r, opts)?, opts)
+    } else {
+        let opts = AnalyzedRegexOpts::default();
+        (AnalyzedRegex::new(r, opts)?, opts)
+    };
+
+    let regex = regex.inner().clone();
+
+    let iter = regex.captures_iter(a).map(move |captures| {
+        let matches = captures
+            .iter()
+            // The first match is the *entire* match, we want the capture groups by themselves.
+            .skip(1)
+            .map(|m| Datum::from(m.map(|m| m.as_str())))
+            .collect::<Vec<_>>();
+
+        let mut binding = SharedRow::get();
+        let mut packer = binding.packer();
+
+        let dimension = ArrayDimension {
+            lower_bound: 1,
+            length: matches.len(),
+        };
+        packer
+            .try_push_array(&[dimension], matches)
+            .expect("generated dimensions above");
+
+        (binding.clone(), Diff::ONE)
+    });
+
+    // This is slightly unfortunate, but we need to collect the captures into a
+    // Vec before we can yield them, because we can't return a iter with a
+    // reference to the local `regex` variable.
+    // We attempt to minimize the cost of this by using a SmallVec.
+    let out = iter.collect::<SmallVec<[_; 3]>>();
+
+    if opts.global {
+        Ok(Either::Left(out.into_iter()))
+    } else {
+        Ok(Either::Right(out.into_iter().take(1)))
+    }
 }
 
 fn generate_series<N>(
@@ -3149,7 +3209,7 @@ where
         ));
     }
     Ok(num::range_step_inclusive(start, stop, step)
-        .map(move |i| (Row::pack_slice(&[Datum::from(i)]), 1)))
+        .map(move |i| (Row::pack_slice(&[Datum::from(i)]), Diff::ONE)))
 }
 
 /// Like
@@ -3215,7 +3275,7 @@ fn generate_series_ts<T: TimestampLike>(
         done: false,
     };
 
-    Ok(trsi.map(move |i| (Row::pack_slice(&[conv(i)]), 1)))
+    Ok(trsi.map(move |i| (Row::pack_slice(&[conv(i)]), Diff::ONE)))
 }
 
 fn generate_subscripts_array(
@@ -3249,19 +3309,19 @@ fn unnest_array<'a>(a: Datum<'a>) -> impl Iterator<Item = (Row, Diff)> + 'a {
     a.unwrap_array()
         .elements()
         .iter()
-        .map(move |e| (Row::pack_slice(&[e]), 1))
+        .map(move |e| (Row::pack_slice(&[e]), Diff::ONE))
 }
 
 fn unnest_list<'a>(a: Datum<'a>) -> impl Iterator<Item = (Row, Diff)> + 'a {
     a.unwrap_list()
         .iter()
-        .map(move |e| (Row::pack_slice(&[e]), 1))
+        .map(move |e| (Row::pack_slice(&[e]), Diff::ONE))
 }
 
 fn unnest_map<'a>(a: Datum<'a>) -> impl Iterator<Item = (Row, Diff)> + 'a {
     a.unwrap_map()
         .iter()
-        .map(move |(k, v)| (Row::pack_slice(&[Datum::from(k), v]), 1))
+        .map(move |(k, v)| (Row::pack_slice(&[Datum::from(k), v]), Diff::ONE))
 }
 
 impl AggregateFunc {
@@ -3460,11 +3520,64 @@ impl RustType<ProtoCaptureGroupDesc> for CaptureGroupDesc {
 }
 
 #[derive(
+    Arbitrary,
+    Clone,
+    Copy,
+    Debug,
+    Eq,
+    PartialEq,
+    Ord,
+    PartialOrd,
+    Serialize,
+    Deserialize,
+    Hash,
+    MzReflect,
+    Default,
+)]
+pub struct AnalyzedRegexOpts {
+    pub case_insensitive: bool,
+    pub global: bool,
+}
+
+impl FromStr for AnalyzedRegexOpts {
+    type Err = EvalError;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        let mut opts = AnalyzedRegexOpts::default();
+        for c in s.chars() {
+            match c {
+                'i' => opts.case_insensitive = true,
+                'g' => opts.global = true,
+                _ => return Err(EvalError::InvalidRegexFlag(c)),
+            }
+        }
+        Ok(opts)
+    }
+}
+
+impl RustType<ProtoAnalyzedRegexOpts> for AnalyzedRegexOpts {
+    fn into_proto(&self) -> ProtoAnalyzedRegexOpts {
+        ProtoAnalyzedRegexOpts {
+            case_insensitive: self.case_insensitive,
+            global: self.global,
+        }
+    }
+
+    fn from_proto(proto: ProtoAnalyzedRegexOpts) -> Result<Self, TryFromProtoError> {
+        Ok(Self {
+            case_insensitive: proto.case_insensitive,
+            global: proto.global,
+        })
+    }
+}
+
+#[derive(
     Arbitrary, Clone, Debug, Eq, PartialEq, Ord, PartialOrd, Serialize, Deserialize, Hash, MzReflect,
 )]
 pub struct AnalyzedRegex(
     #[proptest(strategy = "mz_repr::adt::regex::any_regex()")] ReprRegex,
     Vec<CaptureGroupDesc>,
+    AnalyzedRegexOpts,
 );
 
 impl RustType<ProtoAnalyzedRegex> for AnalyzedRegex {
@@ -3472,6 +3585,7 @@ impl RustType<ProtoAnalyzedRegex> for AnalyzedRegex {
         ProtoAnalyzedRegex {
             regex: Some(self.0.into_proto()),
             groups: self.1.into_proto(),
+            opts: Some(self.2.into_proto()),
         }
     }
 
@@ -3479,13 +3593,14 @@ impl RustType<ProtoAnalyzedRegex> for AnalyzedRegex {
         Ok(AnalyzedRegex(
             proto.regex.into_rust_if_some("ProtoAnalyzedRegex::regex")?,
             proto.groups.into_rust()?,
+            proto.opts.into_rust_if_some("ProtoAnalyzedRegex::opts")?,
         ))
     }
 }
 
 impl AnalyzedRegex {
-    pub fn new(s: &str) -> Result<Self, regex::Error> {
-        let r = ReprRegex::new(s, false)?;
+    pub fn new(s: &str, opts: AnalyzedRegexOpts) -> Result<Self, regex::Error> {
+        let r = ReprRegex::new(s, opts.case_insensitive)?;
         // TODO(benesch): remove potentially dangerous usage of `as`.
         #[allow(clippy::as_conversions)]
         let descs: Vec<_> = r
@@ -3504,7 +3619,7 @@ impl AnalyzedRegex {
                 nullable: true,
             })
             .collect();
-        Ok(Self(r, descs))
+        Ok(Self(r, descs, opts))
     }
     pub fn capture_groups_len(&self) -> usize {
         self.1.len()
@@ -3514,6 +3629,9 @@ impl AnalyzedRegex {
     }
     pub fn inner(&self) -> &Regex {
         &(self.0).regex
+    }
+    pub fn opts(&self) -> &AnalyzedRegexOpts {
+        &self.2
     }
 }
 
@@ -3526,7 +3644,7 @@ pub fn csv_extract(a: Datum, n_cols: usize) -> impl Iterator<Item = (Row, Diff)>
     csv_reader.into_records().filter_map(move |res| match res {
         Ok(sr) if sr.len() == n_cols => {
             row.packer().extend(sr.iter().map(Datum::String));
-            Some((row.clone(), 1))
+            Some((row.clone(), Diff::ONE))
         }
         _ => None,
     })
@@ -3535,14 +3653,16 @@ pub fn csv_extract(a: Datum, n_cols: usize) -> impl Iterator<Item = (Row, Diff)>
 pub fn repeat(a: Datum) -> Option<(Row, Diff)> {
     let n = a.unwrap_int64();
     if n != 0 {
-        Some((Row::default(), n))
+        Some((Row::default(), n.into()))
     } else {
         None
     }
 }
 
 fn wrap<'a>(datums: &'a [Datum<'a>], width: usize) -> impl Iterator<Item = (Row, Diff)> + 'a {
-    datums.chunks(width).map(|chunk| (Row::pack(chunk), 1))
+    datums
+        .chunks(width)
+        .map(|chunk| (Row::pack(chunk), Diff::ONE))
 }
 
 fn acl_explode<'a>(
@@ -3564,7 +3684,7 @@ fn acl_explode<'a>(
                 // GRANT OPTION is not implemented, so we hardcode false.
                 Datum::False,
             ];
-            res.push((Row::pack_slice(&row), 1));
+            res.push((Row::pack_slice(&row), Diff::ONE));
         }
     }
     Ok(res.into_iter())
@@ -3589,7 +3709,7 @@ fn mz_acl_explode<'a>(
                 // GRANT OPTION is not implemented, so we hardcode false.
                 Datum::False,
             ];
-            res.push((Row::pack_slice(&row), 1));
+            res.push((Row::pack_slice(&row), Diff::ONE));
         }
     }
     Ok(res.into_iter())
@@ -3639,6 +3759,7 @@ pub enum TableFunc {
         name: String,
         relation: RelationType,
     },
+    RegexpMatches,
 }
 
 impl RustType<ProtoTableFunc> for TableFunc {
@@ -3673,6 +3794,7 @@ impl RustType<ProtoTableFunc> for TableFunc {
                         relation: Some(relation.into_proto()),
                     })
                 }
+                TableFunc::RegexpMatches => Kind::RegexpMatches(()),
             }),
         }
     }
@@ -3717,6 +3839,7 @@ impl RustType<ProtoTableFunc> for TableFunc {
                     .relation
                     .into_rust_if_some("ProtoTabletizedScalar::relation")?,
             },
+            Kind::RegexpMatches(_) => TableFunc::RegexpMatches,
         })
     }
 }
@@ -3794,8 +3917,9 @@ impl TableFunc {
             TableFunc::Wrap { width, .. } => Ok(Box::new(wrap(datums, *width))),
             TableFunc::TabletizedScalar { .. } => {
                 let r = Row::pack_slice(datums);
-                Ok(Box::new(std::iter::once((r, 1))))
+                Ok(Box::new(std::iter::once((r, Diff::ONE))))
             }
+            TableFunc::RegexpMatches => Ok(Box::new(regexp_matches(datums)?)),
         }
     }
 
@@ -3924,6 +4048,13 @@ impl TableFunc {
             TableFunc::TabletizedScalar { relation, .. } => {
                 return relation.clone();
             }
+            TableFunc::RegexpMatches => {
+                let column_types =
+                    vec![ScalarType::Array(Box::new(ScalarType::String)).nullable(false)];
+                let keys = vec![];
+
+                (column_types, keys)
+            }
         };
 
         if !keys.is_empty() {
@@ -3953,6 +4084,7 @@ impl TableFunc {
             TableFunc::UnnestMap { .. } => 2,
             TableFunc::Wrap { width, .. } => *width,
             TableFunc::TabletizedScalar { relation, .. } => relation.column_types.len(),
+            TableFunc::RegexpMatches => 1,
         }
     }
 
@@ -3973,7 +4105,8 @@ impl TableFunc {
             | TableFunc::Repeat
             | TableFunc::UnnestArray { .. }
             | TableFunc::UnnestList { .. }
-            | TableFunc::UnnestMap { .. } => true,
+            | TableFunc::UnnestMap { .. }
+            | TableFunc::RegexpMatches => true,
             TableFunc::Wrap { .. } => false,
             TableFunc::TabletizedScalar { .. } => false,
         }
@@ -4002,6 +4135,7 @@ impl TableFunc {
             TableFunc::UnnestMap { .. } => true,
             TableFunc::Wrap { .. } => true,
             TableFunc::TabletizedScalar { .. } => true,
+            TableFunc::RegexpMatches => true,
         }
     }
 }
@@ -4027,6 +4161,7 @@ impl fmt::Display for TableFunc {
             TableFunc::UnnestMap { .. } => f.write_str("unnest_map"),
             TableFunc::Wrap { width, .. } => write!(f, "wrap{}", width),
             TableFunc::TabletizedScalar { name, .. } => f.write_str(name),
+            TableFunc::RegexpMatches => write!(f, "regexp_matches(_, _, _)"),
         }
     }
 }

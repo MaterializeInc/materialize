@@ -279,7 +279,7 @@ principal:
     This can take several minutes, and report errors like `Error: Endpoint cannot be
     discovered` while the policies are being updated and the endpoint resources are
     being re-evaluated. If the validation errors persist for longer than 10
-    minutes, double-check the ARNs and service names and [contact our team](https://materialize.com/docs/support/).
+    minutes, double-check the ARNs and service names and [contact our team](/support/).
 
 1. Finally, create a connection to your Redpanda Cloud cluster using the AWS
 Privatelink connection you created earlier:

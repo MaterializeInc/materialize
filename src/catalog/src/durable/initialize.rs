@@ -35,7 +35,7 @@ use mz_sql::catalog::{
     RoleVars, SystemObjectType,
 };
 use mz_sql::names::{
-    DatabaseId, ObjectId, ResolvedDatabaseSpecifier, SchemaId, SchemaSpecifier, PUBLIC_ROLE_NAME,
+    DatabaseId, ObjectId, PUBLIC_ROLE_NAME, ResolvedDatabaseSpecifier, SchemaId, SchemaSpecifier,
 };
 use mz_sql::plan::{NetworkPolicyRule, PolicyAddress};
 use mz_sql::rbac;
@@ -44,13 +44,13 @@ use mz_sql::session::user::{MZ_SUPPORT_ROLE_ID, MZ_SYSTEM_ROLE_ID};
 use crate::builtin::BUILTIN_ROLES;
 use crate::durable::upgrade::CATALOG_VERSION;
 use crate::durable::{
-    BootstrapArgs, CatalogError, ClusterConfig, ClusterVariant, ClusterVariantManaged,
-    DefaultPrivilege, ReplicaConfig, ReplicaLocation, Role, Schema, Transaction,
-    AUDIT_LOG_ID_ALLOC_KEY, BUILTIN_MIGRATION_SHARD_KEY, CATALOG_CONTENT_VERSION_KEY,
-    DATABASE_ID_ALLOC_KEY, EXPRESSION_CACHE_SHARD_KEY, OID_ALLOC_KEY, SCHEMA_ID_ALLOC_KEY,
-    STORAGE_USAGE_ID_ALLOC_KEY, SYSTEM_CLUSTER_ID_ALLOC_KEY, SYSTEM_REPLICA_ID_ALLOC_KEY,
-    USER_CLUSTER_ID_ALLOC_KEY, USER_NETWORK_POLICY_ID_ALLOC_KEY, USER_REPLICA_ID_ALLOC_KEY,
-    USER_ROLE_ID_ALLOC_KEY,
+    AUDIT_LOG_ID_ALLOC_KEY, BUILTIN_MIGRATION_SHARD_KEY, BootstrapArgs,
+    CATALOG_CONTENT_VERSION_KEY, CatalogError, ClusterConfig, ClusterVariant,
+    ClusterVariantManaged, DATABASE_ID_ALLOC_KEY, DefaultPrivilege, EXPRESSION_CACHE_SHARD_KEY,
+    OID_ALLOC_KEY, ReplicaConfig, ReplicaLocation, Role, SCHEMA_ID_ALLOC_KEY,
+    STORAGE_USAGE_ID_ALLOC_KEY, SYSTEM_CLUSTER_ID_ALLOC_KEY, SYSTEM_REPLICA_ID_ALLOC_KEY, Schema,
+    Transaction, USER_CLUSTER_ID_ALLOC_KEY, USER_NETWORK_POLICY_ID_ALLOC_KEY,
+    USER_REPLICA_ID_ALLOC_KEY, USER_ROLE_ID_ALLOC_KEY,
 };
 
 /// The key within the "config" Collection that stores the version of the catalog.
@@ -74,6 +74,15 @@ pub(crate) const ENABLE_0DT_DEPLOYMENT: &str = "enable_0dt_deployment";
 pub(crate) const WITH_0DT_DEPLOYMENT_MAX_WAIT: &str = "with_0dt_deployment_max_wait";
 
 /// The key used within the "config" collection where we store a mirror of the
+/// `with_0dt_deployment_ddl_check_interval` "system var" value. This is
+/// mirrored so that we can toggle the flag with LaunchDarkly, but use it in
+/// boot before LaunchDarkly is available.
+///
+/// NOTE: Weird prefix because we can't start with a `0`.
+pub(crate) const WITH_0DT_DEPLOYMENT_DDL_CHECK_INTERVAL: &str =
+    "with_0dt_deployment_ddl_check_interval";
+
+/// The key used within the "config" collection where we store a mirror of the
 /// `enable_0dt_deployment_panic_after_timeout` "system var" value. This is
 /// mirrored so that we can toggle the flag with LaunchDarkly, but use it in
 /// boot before LaunchDarkly is available.
@@ -87,7 +96,6 @@ const DEFAULT_USER_CLUSTER_ID: ClusterId = ClusterId::User(1);
 const DEFAULT_USER_CLUSTER_NAME: &str = "quickstart";
 
 const DEFAULT_USER_REPLICA_ID: ReplicaId = ReplicaId::User(1);
-const DEFAULT_USER_REPLICA_NAME: &str = "r1";
 
 const MATERIALIZE_DATABASE_ID_VAL: u64 = 1;
 const MATERIALIZE_DATABASE_ID: DatabaseId = DatabaseId::User(MATERIALIZE_DATABASE_ID_VAL);
@@ -105,21 +113,17 @@ const DEFAULT_ALLOCATOR_ID: u64 = 1;
 
 pub const DEFAULT_USER_NETWORK_POLICY_ID: NetworkPolicyId = NetworkPolicyId::User(1);
 pub const DEFAULT_USER_NETWORK_POLICY_NAME: &str = "default";
-pub const DEFAULT_USER_NETWORK_POLICY_RULES: LazyLock<
-    Vec<(
-        &str,
-        mz_sql::plan::NetworkPolicyRuleAction,
-        mz_sql::plan::NetworkPolicyRuleDirection,
-        &str,
-    )>,
-> = LazyLock::new(|| {
-    vec![(
-        "open_ingress",
-        mz_sql::plan::NetworkPolicyRuleAction::Allow,
-        mz_sql::plan::NetworkPolicyRuleDirection::Ingress,
-        "0.0.0.0/0",
-    )]
-});
+pub const DEFAULT_USER_NETWORK_POLICY_RULES: &[(
+    &str,
+    mz_sql::plan::NetworkPolicyRuleAction,
+    mz_sql::plan::NetworkPolicyRuleDirection,
+    &str,
+)] = &[(
+    "open_ingress",
+    mz_sql::plan::NetworkPolicyRuleAction::Allow,
+    mz_sql::plan::NetworkPolicyRuleDirection::Ingress,
+    "0.0.0.0/0",
+)];
 
 static DEFAULT_USER_NETWORK_POLICY_PRIVILEGES: LazyLock<Vec<MzAclItem>> = LazyLock::new(|| {
     vec![rbac::owner_privilege(
@@ -255,7 +259,8 @@ pub(crate) async fn initialize(
         ),
         (
             USER_REPLICA_ID_ALLOC_KEY.to_string(),
-            DEFAULT_USER_REPLICA_ID.inner_id() + 1,
+            DEFAULT_USER_REPLICA_ID.inner_id()
+                + u64::from(options.default_cluster_replication_factor),
         ),
         (
             SYSTEM_REPLICA_ID_ALLOC_KEY.to_string(),
@@ -585,7 +590,6 @@ pub(crate) async fn initialize(
         DEFAULT_USER_NETWORK_POLICY_ID,
         DEFAULT_USER_NETWORK_POLICY_NAME.to_string(),
         DEFAULT_USER_NETWORK_POLICY_RULES
-            .clone()
             .into_iter()
             .map(|(name, action, direction, ip_str)| NetworkPolicyRule {
                 name: name.to_string(),
@@ -663,35 +667,41 @@ pub(crate) async fn initialize(
         ));
     }
 
-    tx.insert_cluster_replica_with_id(
-        DEFAULT_USER_CLUSTER_ID,
-        DEFAULT_USER_REPLICA_ID,
-        DEFAULT_USER_REPLICA_NAME,
-        default_replica_config(options)?,
-        MZ_SYSTEM_ROLE_ID,
-    )?;
-    audit_events.push((
-        mz_audit_log::EventType::Create,
-        mz_audit_log::ObjectType::ClusterReplica,
-        mz_audit_log::EventDetails::CreateClusterReplicaV2(mz_audit_log::CreateClusterReplicaV2 {
-            cluster_id: DEFAULT_USER_CLUSTER_ID.to_string(),
-            cluster_name: DEFAULT_USER_CLUSTER_NAME.to_string(),
-            replica_name: DEFAULT_USER_REPLICA_NAME.to_string(),
-            replica_id: Some(DEFAULT_USER_REPLICA_ID.to_string()),
-            logical_size: options.default_cluster_replica_size.to_string(),
-            disk: {
-                let cluster_size = options.default_cluster_replica_size.to_string();
-                let cluster_allocation = options
-                    .cluster_replica_size_map
-                    .get_allocation_by_name(&cluster_size)?;
-                cluster_allocation.is_cc
-            },
-            billed_as: None,
-            internal: false,
-            reason: CreateOrDropClusterReplicaReasonV1::System,
-            scheduling_policies: None,
-        }),
-    ));
+    for i in 0..options.default_cluster_replication_factor {
+        let replica_id = ReplicaId::User(DEFAULT_USER_REPLICA_ID.inner_id() + u64::from(i));
+        let replica_name = format!("r{}", i + 1);
+        tx.insert_cluster_replica_with_id(
+            DEFAULT_USER_CLUSTER_ID,
+            replica_id,
+            &replica_name,
+            default_replica_config(options)?,
+            MZ_SYSTEM_ROLE_ID,
+        )?;
+        audit_events.push((
+            mz_audit_log::EventType::Create,
+            mz_audit_log::ObjectType::ClusterReplica,
+            mz_audit_log::EventDetails::CreateClusterReplicaV2(
+                mz_audit_log::CreateClusterReplicaV2 {
+                    cluster_id: DEFAULT_USER_CLUSTER_ID.to_string(),
+                    cluster_name: DEFAULT_USER_CLUSTER_NAME.to_string(),
+                    replica_name,
+                    replica_id: Some(replica_id.to_string()),
+                    logical_size: options.default_cluster_replica_size.to_string(),
+                    disk: {
+                        let cluster_size = options.default_cluster_replica_size.to_string();
+                        let cluster_allocation = options
+                            .cluster_replica_size_map
+                            .get_allocation_by_name(&cluster_size)?;
+                        cluster_allocation.is_cc
+                    },
+                    billed_as: None,
+                    internal: false,
+                    reason: CreateOrDropClusterReplicaReasonV1::System,
+                    scheduling_policies: None,
+                },
+            ),
+        ));
+    }
 
     let system_privileges = [MzAclItem {
         grantee: MZ_SYSTEM_ROLE_ID,
@@ -779,7 +789,7 @@ fn default_cluster_config(args: &BootstrapArgs) -> Result<ClusterConfig, Catalog
     Ok(ClusterConfig {
         variant: ClusterVariant::Managed(ClusterVariantManaged {
             size: cluster_size,
-            replication_factor: 1,
+            replication_factor: args.default_cluster_replication_factor,
             availability_zones: vec![],
             logging: ReplicaLogging {
                 log_logging: false,

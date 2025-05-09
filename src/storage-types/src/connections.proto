@@ -131,4 +131,22 @@ message ProtoMySqlConnection {
   string_or_secret.ProtoStringOrSecret tls_root_cert = 6;
   ProtoTlsIdentity tls_identity = 7;
   ProtoTunnel tunnel = 8;
+  aws.ProtoAwsConnectionReference aws_connection = 9;
+}
+
+message ProtoSqlServerConnectionDetails {
+  string host = 1;
+  uint32 port = 2;
+  string database = 3;
+  string_or_secret.ProtoStringOrSecret user = 4;
+  mz_repr.catalog_item_id.ProtoCatalogItemId password = 5;
+  ProtoTunnel tunnel = 6;
+  ProtoSqlServerEncryptionLevel encryption = 7;
+}
+
+enum ProtoSqlServerEncryptionLevel {
+  SQL_SERVER_NONE = 0;
+  SQL_SERVER_LOGIN = 1;
+  SQL_SERVER_PREFERRED = 2;
+  SQL_SERVER_REQUIRED = 3;
 }

@@ -18,7 +18,8 @@
 use std::collections::BTreeMap;
 use std::fmt::Formatter;
 
-use mz_expr::{Id, MirRelationExpr, MirScalarExpr};
+use mz_expr::explain::{HumanizedExplain, HumanizerMode};
+use mz_expr::{AggregateFunc, Id, MirRelationExpr, MirScalarExpr};
 use mz_ore::str::{bracketed, separated};
 use mz_repr::{ColumnType, Datum};
 
@@ -82,7 +83,7 @@ impl Analysis for Equivalences {
                     for (index, common) in common.into_iter().enumerate() {
                         if let Some(datum) = common {
                             equivalences.classes.push(vec![
-                                MirScalarExpr::Column(index),
+                                MirScalarExpr::column(index),
                                 MirScalarExpr::literal_ok(
                                     datum,
                                     typ.column_types[index].scalar_type.clone(),
@@ -151,7 +152,7 @@ impl Analysis for Equivalences {
                     for (pos, expr) in scalars.iter().enumerate() {
                         equivalences
                             .classes
-                            .push(vec![MirScalarExpr::Column(input_arity + pos), expr.clone()]);
+                            .push(vec![MirScalarExpr::column(input_arity + pos), expr.clone()]);
                     }
                 }
                 equivalences
@@ -214,7 +215,7 @@ impl Analysis for Equivalences {
                     for (pos, expr) in group_key.iter().enumerate() {
                         equivalences
                             .classes
-                            .push(vec![MirScalarExpr::Column(input_arity + pos), expr.clone()]);
+                            .push(vec![MirScalarExpr::column(input_arity + pos), expr.clone()]);
                     }
 
                     // Having added classes to `equivalences`, we should minimize the classes to fold the
@@ -338,13 +339,52 @@ pub struct EquivalenceClasses {
     remap: BTreeMap<MirScalarExpr, MirScalarExpr>,
 }
 
+/// Raw printing of [`EquivalenceClasses`] with default expression humanization.
+/// Don't use this in `EXPLAIN`! For redaction, column name support, etc., see
+/// [`HumanizedEquivalenceClasses`].
 impl std::fmt::Display for EquivalenceClasses {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        HumanizedEquivalenceClasses {
+            equivalence_classes: self,
+            cols: None,
+            mode: HumanizedExplain::default(),
+        }
+        .fmt(f)
+    }
+}
+
+/// Wrapper struct for human-readable printing of expressions inside [`EquivalenceClasses`].
+/// (Similar to `HumanizedExpr`. Unfortunately, we can't just use `HumanizedExpr` here, because
+/// we'd need to `impl Display for HumanizedExpr<'a, EquivalenceClasses, M>`, but neither
+/// `Display` nor `HumanizedExpr` is defined in this crate.)
+#[derive(Debug)]
+pub struct HumanizedEquivalenceClasses<'a, M = HumanizedExplain> {
+    /// The [`EquivalenceClasses`] to be humanized.
+    pub equivalence_classes: &'a EquivalenceClasses,
+    /// An optional vector of inferred column names to be used when rendering
+    /// column references in expressions.
+    pub cols: Option<&'a Vec<String>>,
+    /// The rendering mode to use. See `HumanizerMode` for details.
+    pub mode: M,
+}
+
+impl std::fmt::Display for HumanizedEquivalenceClasses<'_> {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         // Only show `classes`.
-        let classes = self
-            .classes
-            .iter()
-            .map(|class| format!("{}", bracketed("[", "]", separated(", ", class))));
+        // (The following hopefully avoids allocating any of the intermediate composite strings.)
+        let classes = self.equivalence_classes.classes.iter().map(|class| {
+            format!(
+                "{}",
+                bracketed(
+                    "[",
+                    "]",
+                    separated(
+                        ", ",
+                        class.iter().map(|expr| self.mode.expr(expr, self.cols))
+                    )
+                )
+            )
+        });
         write!(f, "{}", bracketed("[", "]", separated(", ", classes)))
     }
 }
@@ -356,15 +396,15 @@ impl EquivalenceClasses {
         e1: &MirScalarExpr,
         e2: &MirScalarExpr,
     ) -> std::cmp::Ordering {
-        use std::cmp::Ordering::*;
         use MirScalarExpr::*;
+        use std::cmp::Ordering::*;
         match (e1, e2) {
             (Literal(_, _), Literal(_, _)) => e1.cmp(e2),
             (Literal(_, _), _) => Less,
             (_, Literal(_, _)) => Greater,
-            (Column(_), Column(_)) => e1.cmp(e2),
-            (Column(_), _) => Less,
-            (_, Column(_)) => Greater,
+            (Column(_, _), Column(_, _)) => e1.cmp(e2),
+            (Column(_, _), _) => Less,
+            (_, Column(_, _)) => Greater,
             (x, y) => {
                 // General expressions should be ordered by their size,
                 // to ensure we only simplify expressions by substitution.
@@ -891,8 +931,8 @@ impl EquivalenceClasses {
         // We introduce only the equivalence to the first occurrence, and rely on minimization to collect them.
         for (col1, col2) in dupes {
             self.classes.push(vec![
-                MirScalarExpr::Column(col1),
-                MirScalarExpr::Column(col2),
+                MirScalarExpr::column(col1),
+                MirScalarExpr::column(col2),
             ]);
         }
         self.remap.clear();
@@ -1054,7 +1094,6 @@ impl<T: Clone + Ord> UnionFind<T> for BTreeMap<T, T> {
     }
 }
 
-use mz_expr::AggregateFunc;
 /// True iff the aggregate function returns an input datum.
 fn aggregate_is_input(aggregate: &AggregateFunc) -> bool {
     match aggregate {

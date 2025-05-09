@@ -383,7 +383,7 @@ true
 # Ensure we report the write frontier of the progress subsource
 $ set-regex match=(\s{12}0|\d{13,20}|u\d{1,5}|\(\d+-\d\d-\d\d\s\d\d:\d\d:\d\d\.\d\d\d\)|true|false) replacement=<>
 > EXPLAIN TIMESTAMP FOR SELECT * FROM mz_source_progress
-"                query timestamp: <> <>\n          oracle read timestamp: <> <>\nlargest not in advance of upper: <> <>\n                          upper:[<> <>]\n                          since:[<> <>]\n        can respond immediately: <>\n                       timeline: Some(EpochMilliseconds)\n              session wall time: <> <>\n\nsource materialize.public.mz_source_progress (<>, storage):\n                  read frontier:[<> <>]\n                 write frontier:[<> <>]\n"
+"                query timestamp: <> <>\n          oracle read timestamp: <> <>\nlargest not in advance of upper: <> <>\n                          upper:[<> <>]\n                          since:[<> <>]\n        can respond immediately: <>\n                       timeline: Some(EpochMilliseconds)\n              session wall time: <> <>\n\nsource materialize.public.mz_source_progress (<>, storage):\n                  read frontier:[<> <>]\n                 write frontier:[<> <>]\n\nbinding constraints:\nlower:\n  (IsolationLevel(StrictSerializable)): [<> <>]\n"
 
 $ set-regex match=[0-9]+|_[a-f0-9]+ replacement=<SUPPRESSED>
 
@@ -800,7 +800,10 @@ enum_table              subsource cdc_cluster  ""
 var0
 var1
 
-> SHOW CREATE SOURCE enum_table
+>[version>=14000] SHOW CREATE SOURCE enum_table
+materialize.public.enum_table "CREATE SUBSOURCE materialize.public.enum_table (a pg_catalog.text) OF SOURCE materialize.public.enum_source WITH (EXTERNAL REFERENCE = postgres.public.enum_table, TEXT COLUMNS = (a));"
+
+>[version<14000] SHOW CREATE SOURCE enum_table
 materialize.public.enum_table "CREATE SUBSOURCE \"materialize\".\"public\".\"enum_table\" (\"a\" \"pg_catalog\".\"text\") OF SOURCE \"materialize\".\"public\".\"enum_source\" WITH (EXTERNAL REFERENCE = \"postgres\".\"public\".\"enum_table\", TEXT COLUMNS = (\"a\"))"
 
 # Test that TEXT COLUMN types can change

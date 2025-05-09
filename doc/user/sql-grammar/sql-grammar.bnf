@@ -74,8 +74,6 @@ array_agg ::=
   'array_agg' '(' values  ( 'ORDER' 'BY' col_ref ( 'ASC' | 'DESC' )? ( 'NULLS LAST' | 'NULLS FIRST' )? ( ',' col_ref ( 'ASC' | 'DESC' )? ( 'NULLS LAST' | 'NULLS FIRST' )? )* )? ')' ('FILTER' '(' 'WHERE' filter_clause ')')?
 as_of ::=
   'AS' 'OF' ( 'AT' 'LEAST' )? timestamp_expression
-begin ::=
-  'BEGIN' ( transaction_mode ( ',' transaction_mode )* )?
 close ::=
   'CLOSE' cursor_name
 col_option ::=
@@ -87,8 +85,6 @@ comment_on ::=
     'INDEX' | 'MATERIALIZED VIEW' | 'NETWORK POLICY' | 'ROLE' | 'SCHEMA' | 'SECRET' | 'SINK' |
     'SOURCE' | 'TABLE' | 'TYPE' | 'VIEW'
   ) object_name 'IS' ( string_literal | 'NULL' )
-commit ::=
-  'COMMIT'
 copy_to_stdout ::=
   'COPY' '(' query ')' 'TO' 'STDOUT'
   ( 'WITH'? '(' field val ( ',' field val )* ')' )?
@@ -96,7 +92,7 @@ copy_to_s3 ::=
   'COPY' ( query | object_name ) 'TO' s3_uri
   '(' 'WITH' 'AWS CONNECTION' connection_name ',' 'FORMAT' ( csv | parquet ) ( ',' field val )* ')'
 copy_from ::=
-  'COPY' table_name ('(' column ( ',' column )* ')')? 'FROM' 'STDIN'
+  'COPY' 'INTO'? table_name ('(' column ( ',' column )* ')')? 'FROM' 'STDIN'
   ( 'WITH'? '(' field val ( ',' field val )* ')' )?
 create_cluster ::=
   'CREATE' 'CLUSTER' name (
@@ -238,24 +234,6 @@ create_source_mysql ::=
   )
   ('EXPOSE' 'PROGRESS' 'AS' progress_subsource_name)?
   with_options?
-create_source_webhook ::=
-  'CREATE SOURCE' ('IF NOT EXISTS')? src_name
-  'IN CLUSTER' cluster_name
-  'FROM' 'WEBHOOK'
-  'BODY FORMAT' ('TEXT' | 'JSON' ('ARRAY')? | 'BYTES')
-  (
-    ('INCLUDE HEADER'  header_name 'AS' column_alias ('BYTES')? )? |
-    ('INCLUDE HEADERS' ( '(' ('NOT')? header_name ( ',' ('NOT')? header_name )* ')' )?)?
-  )*
-  ('CHECK'
-    '('
-      ('WITH' '(' ( (webhook_check_option) ( ( ',' webhook_check_option ) )* )? ')' )?
-      check_expression
-    ')'
-  )?
-webhook_body_format ::= 'TEXT' | 'JSON' | 'BYTES'
-webhook_check_option ::=
-  ('BODY' | 'HEADERS' | 'SECRET' secret_name) ('AS' alias)? ('BYTES')?
 create_type ::=
     'CREATE' 'TYPE' type_name 'AS' '(' ((field_name field_type) (',' field_name field_type)*) ')' |
     'CREATE' 'TYPE' type_name 'AS' ( 'LIST' | 'MAP' ) '(' ( property '=' val ) ( ( ',' property '=' val ) )* ')'
@@ -319,21 +297,6 @@ drop_user ::=
     'DROP' 'USER' ('IF EXISTS')? role_name
 execute ::=
   'EXECUTE' name   ('(' (parameter_value) ( ',' parameter_value )* ')')?
-explain_plan ::=
-  'EXPLAIN'
-  ( ( 'RAW' | 'DECORRELATED' | 'LOCALLY'? 'OPTIMIZED' | 'PHYSICAL' )? 'PLAN' )?
-  ( 'WITH (' ( output_modifier (',' output_modifier )* ) ')' )?
-  ( 'AS' ( 'TEXT' | 'JSON' ) )?
-  'FOR'?
-  (
-    select_stmt |
-    create_view |
-    create_index |
-    create_materialized_view |
-    'VIEW' name |
-    'INDEX' name |
-    'MATERIALIZED VIEW' name
-  )
 explain_filter_pushdown ::=
   'EXPLAIN FILTER PUSHDOWN'
   'FOR'
@@ -443,8 +406,6 @@ revoke_privilege ::=
   'REVOKE' ((privilege (',' privilege)*) | 'ALL' 'PRIVILEGES'? ) 'ON' ( ('TABLE'? | 'TYPE' | 'SECRET' | 'CONNECTION' | 'DATABASE' | 'SCHEMA' | 'CLUSTER') object_name (',' object_name)* | 'SYSTEM' | 'ALL' ('TABLES' | 'TYPES' | 'SECRETS' | 'CONNECTIONS') 'IN' 'SCHEMA' schema_name (',' schema_name)* | 'ALL' ('TABLES' | 'TYPES' | 'SECRETS' | 'CONNECTIONS' | 'SCHEMAS') 'IN' 'DATABASE' database_name (',' database_name)* | 'ALL' ('TABLES' | 'TYPES' | 'SECRETS' | 'CONNECTIONS' | 'DATABASES' | 'SCHEMAS' | 'CLUSTERS') ) 'FROM' 'GROUP'? role_name ( ',' 'GROUP'? role_name )*
 revoke_role ::=
   'REVOKE' role_name ( ',' role_name )* 'FROM' 'GROUP'? member_name ( ',' 'GROUP'? member_name )*
-rollback ::=
-  'ROLLBACK'
 select_stmt ::=
   ( select_with_ctes | select_with_recursive_ctes | simple_select_stmt )
 simple_select_stmt ::=

@@ -16,8 +16,8 @@ use mz_persist_client::error::UpperMismatch;
 use mz_repr::Diff;
 use mz_storage_client::util::remap_handle::RemapHandle;
 use timely::order::PartialOrder;
-use timely::progress::frontier::{Antichain, AntichainRef, MutableAntichain};
 use timely::progress::Timestamp;
+use timely::progress::frontier::{Antichain, AntichainRef, MutableAntichain};
 
 pub mod compat;
 
@@ -106,7 +106,7 @@ where
         self.source_upper.update_iter(
             updates
                 .iter()
-                .map(|(src_ts, _dest_ts, diff)| (src_ts.clone(), *diff)),
+                .map(|(src_ts, _dest_ts, diff)| (src_ts.clone(), diff.into_inner())),
         );
 
         ReclockBatch {
@@ -130,7 +130,8 @@ where
 
         while *self.upper == [IntoTime::minimum()]
             || (PartialOrder::less_equal(&self.source_upper.frontier(), &new_from_upper)
-                && PartialOrder::less_than(&self.upper, &new_into_upper))
+                && PartialOrder::less_than(&self.upper, &new_into_upper)
+                && self.upper.less_equal(&binding_ts))
         {
             // If source is closed, close remap shard as well.
             if new_from_upper.is_empty() {
@@ -149,10 +150,10 @@ where
 
             let mut updates = vec![];
             for src_ts in self.source_upper.frontier().iter().cloned() {
-                updates.push((src_ts, binding_ts.clone(), -1));
+                updates.push((src_ts, binding_ts.clone(), Diff::MINUS_ONE));
             }
             for src_ts in new_from_upper.iter().cloned() {
-                updates.push((src_ts, binding_ts.clone(), 1));
+                updates.push((src_ts, binding_ts.clone(), Diff::ONE));
             }
             consolidation::consolidate_updates(&mut updates);
 
@@ -212,6 +213,7 @@ mod tests {
     use mz_persist_types::codec_impls::UnitSchema;
     use mz_repr::{GlobalId, RelationDesc, ScalarType, Timestamp};
     use mz_storage_client::util::remap_handle::RemapHandle;
+    use mz_storage_types::StorageDiff;
     use mz_storage_types::controller::CollectionMetadata;
     use mz_storage_types::sources::kafka::{self, RangeBound as RB};
     use mz_storage_types::sources::{MzOffset, SourceData};
@@ -350,22 +352,22 @@ mod tests {
                 (
                     Partitioned::new_range(RB::NegInfinity, RB::before(0), MzOffset::from(0)),
                     1000.into(),
-                    1,
+                    Diff::ONE,
                 ),
                 (
                     Partitioned::new_range(RB::after(0), RB::PosInfinity, MzOffset::from(0)),
                     1000.into(),
-                    1,
+                    Diff::ONE,
                 ),
                 (
                     Partitioned::new_range(RB::NegInfinity, RB::PosInfinity, MzOffset::from(0)),
                     1000.into(),
-                    -1,
+                    Diff::MINUS_ONE,
                 ),
                 (
                     Partitioned::new_singleton(RB::exact(0), MzOffset::from(4)),
                     1000.into(),
-                    1,
+                    Diff::ONE,
                 ),
             ],
             upper: Antichain::from_elem(Timestamp::from(1001)),
@@ -391,7 +393,7 @@ mod tests {
             .expect("error creating persist client");
 
         let mut remap_read_handle = persist_client
-            .open_critical_since::<SourceData, (), Timestamp, Diff, u64>(
+            .open_critical_since::<SourceData, (), Timestamp, StorageDiff, u64>(
                 remap_shard,
                 PersistClient::CONTROLLER_CRITICAL_SINCE,
                 Diagnostics::from_purpose("test_since_hold"),
@@ -436,27 +438,27 @@ mod tests {
                 (
                     Partitioned::new_range(RB::NegInfinity, RB::before(0), MzOffset::from(0)),
                     1000.into(),
-                    1,
+                    Diff::ONE,
                 ),
                 (
                     Partitioned::new_range(RB::after(0), RB::PosInfinity, MzOffset::from(0)),
                     1000.into(),
-                    1,
+                    Diff::ONE,
                 ),
                 (
                     Partitioned::new_singleton(RB::exact(0), MzOffset::from(3)),
                     1000.into(),
-                    1,
+                    Diff::ONE,
                 ),
                 (
                     Partitioned::new_singleton(RB::exact(0), MzOffset::from(3)),
                     2000.into(),
-                    -1,
+                    Diff::MINUS_ONE,
                 ),
                 (
                     Partitioned::new_singleton(RB::exact(0), MzOffset::from(5)),
                     2000.into(),
-                    1,
+                    Diff::ONE,
                 ),
             ],
             upper: Antichain::from_elem(Timestamp::from(2001)),
@@ -488,22 +490,22 @@ mod tests {
                 (
                     Partitioned::new_range(RB::NegInfinity, RB::before(0), MzOffset::from(0)),
                     1000.into(),
-                    1,
+                    Diff::ONE,
                 ),
                 (
                     Partitioned::new_range(RB::after(0), RB::PosInfinity, MzOffset::from(0)),
                     1000.into(),
-                    1,
+                    Diff::ONE,
                 ),
                 (
                     Partitioned::new_range(RB::NegInfinity, RB::PosInfinity, MzOffset::from(0)),
                     1000.into(),
-                    -1,
+                    Diff::MINUS_ONE,
                 ),
                 (
                     Partitioned::new_singleton(RB::exact(0), MzOffset::from(3)),
                     1000.into(),
-                    1,
+                    Diff::ONE,
                 ),
             ],
             upper: Antichain::from_elem(Timestamp::from(1001)),
@@ -526,12 +528,12 @@ mod tests {
             (
                 Partitioned::new_singleton(RB::exact(0), MzOffset::from(3)),
                 11000.into(),
-                -1,
+                Diff::MINUS_ONE,
             ),
             (
                 Partitioned::new_singleton(RB::exact(0), MzOffset::from(5)),
                 11000.into(),
-                1,
+                Diff::ONE,
             ),
         ]);
         expected_batch.upper = Antichain::from_elem(Timestamp::from(11001));
@@ -601,7 +603,7 @@ mod tests {
             .expect("error creating persist client");
 
         let read_handle = persist_client
-            .open_leased_reader::<SourceData, (), Timestamp, Diff>(
+            .open_leased_reader::<SourceData, (), Timestamp, StorageDiff>(
                 binding_shard,
                 Arc::new(PROGRESS_DESC.clone()),
                 Arc::new(UnitSchema),

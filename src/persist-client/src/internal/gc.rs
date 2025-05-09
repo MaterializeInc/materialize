@@ -17,13 +17,13 @@ use std::time::Instant;
 
 use differential_dataflow::difference::Semigroup;
 use differential_dataflow::lattice::Lattice;
-use futures_util::stream::FuturesUnordered;
 use futures_util::StreamExt;
+use futures_util::stream::FuturesUnordered;
 use prometheus::Counter;
 use timely::progress::Timestamp;
 use tokio::sync::mpsc::UnboundedSender;
-use tokio::sync::{mpsc, oneshot, Semaphore};
-use tracing::{debug, debug_span, warn, Instrument, Span};
+use tokio::sync::{Semaphore, mpsc, oneshot};
+use tracing::{Instrument, Span, debug, debug_span, warn};
 
 use crate::async_runtime::IsolatedRuntime;
 use crate::batch::PartDeletes;
@@ -35,15 +35,15 @@ use mz_ore::soft_assert_or_log;
 use mz_persist::location::{Blob, SeqNo};
 use mz_persist_types::{Codec, Codec64};
 
-use crate::internal::machine::{retry_external, Machine};
+use crate::ShardId;
+use crate::internal::machine::{Machine, retry_external};
 use crate::internal::maintenance::RoutineMaintenance;
 use crate::internal::metrics::{GcStepTimings, RetryMetrics};
 use crate::internal::paths::{BlobKey, PartialBlobKey, PartialRollupKey};
 use crate::internal::state::HollowBlobRef;
 use crate::internal::state_versions::{InspectDiff, StateVersionsIter};
-use crate::ShardId;
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub struct GcReq {
     pub shard_id: ShardId,
     pub new_seqno_since: SeqNo,
@@ -632,9 +632,11 @@ struct GcRollups {
 
 impl GcRollups {
     fn new(rollups_lte_seqno_since: Vec<(SeqNo, PartialRollupKey)>, gc_req: &GcReq) -> Self {
-        assert!(rollups_lte_seqno_since
-            .iter()
-            .all(|(seqno, _rollup)| *seqno <= gc_req.new_seqno_since));
+        assert!(
+            rollups_lte_seqno_since
+                .iter()
+                .all(|(seqno, _rollup)| *seqno <= gc_req.new_seqno_since)
+        );
         let rollup_seqnos = rollups_lte_seqno_since.iter().map(|(x, _)| *x).collect();
         Self {
             rollups_lte_seqno_since,

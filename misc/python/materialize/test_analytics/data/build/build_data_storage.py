@@ -173,3 +173,56 @@ class BuildDataStorage(BaseDataStorage):
         )
 
         self.database_connector.add_update_statements(sql_statements)
+
+    def add_build_job_failure(
+        self,
+        part: str,
+    ) -> None:
+        job_id = buildkite.get_var(BuildkiteEnvVar.BUILDKITE_JOB_ID)
+
+        sql_statements = []
+        sql_statements.append(
+            f"""
+            INSERT INTO build_job_failure
+            (
+                build_job_id,
+                part
+            )
+            VALUES
+            (
+                {as_sanitized_literal(job_id)},
+                {as_sanitized_literal(part)}
+            )
+            """
+        )
+
+        self.database_connector.add_update_statements(sql_statements)
+
+    def get_part_priorities(self, timeout: int) -> dict[str, int]:
+        branch = buildkite.get_var(BuildkiteEnvVar.BUILDKITE_BRANCH)
+        build_step_key = buildkite.get_var(BuildkiteEnvVar.BUILDKITE_STEP_KEY)
+        with self.database_connector.create_cursor() as cur:
+            cur.execute('SET cluster = "test_analytics"')
+            cur.execute(f"SET statement_timeout = '{timeout}s'".encode("utf-8"))
+            # 2 for failures in this PR
+            # 1 for failed recently in CI
+            cur.execute(
+                f"""
+            SELECT part, MAX(prio)
+            FROM (
+                SELECT part, 2 AS prio
+                FROM mv_build_job_failed_on_branch
+                WHERE branch = {as_sanitized_literal(branch)}
+                  AND build_step_key = {as_sanitized_literal(build_step_key)}
+              UNION
+                SELECT part, 1 AS prio
+                FROM mv_build_job_failed
+                WHERE build_step_key = {as_sanitized_literal(build_step_key)}
+            )
+            GROUP BY part;
+            """.encode(
+                    "utf-8"
+                )
+            )
+            results = cur.fetchall()
+            return {part: prio for part, prio in results}

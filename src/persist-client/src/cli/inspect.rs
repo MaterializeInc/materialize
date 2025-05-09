@@ -11,7 +11,6 @@
 
 use std::collections::btree_map::Entry;
 use std::collections::{BTreeMap, BTreeSet};
-use std::fmt;
 use std::pin::pin;
 use std::str::FromStr;
 use std::sync::{Arc, Mutex};
@@ -35,9 +34,9 @@ use serde_json::json;
 
 use crate::async_runtime::IsolatedRuntime;
 use crate::cache::StateCache;
-use crate::cli::args::{make_blob, make_consensus, StateArgs, NO_COMMIT, READ_ALL_BUILD_INFO};
+use crate::cli::args::{NO_COMMIT, READ_ALL_BUILD_INFO, StateArgs, make_blob, make_consensus};
 use crate::error::CodecConcreteType;
-use crate::fetch::{Cursor, EncodedPart};
+use crate::fetch::EncodedPart;
 use crate::internal::encoding::{Rollup, UntypedState};
 use crate::internal::paths::{
     BlobKey, BlobKeyPrefix, PartialBatchKey, PartialBlobKey, PartialRollupKey, WriterKey,
@@ -318,18 +317,6 @@ struct BatchPartUpdate {
     d: i64,
 }
 
-#[derive(PartialOrd, Ord, PartialEq, Eq)]
-struct PrettyBytes<'a>(&'a [u8]);
-
-impl fmt::Debug for PrettyBytes<'_> {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match std::str::from_utf8(self.0) {
-            Ok(x) => fmt::Debug::fmt(x, f),
-            Err(_) => fmt::Debug::fmt(self.0, f),
-        }
-    }
-}
-
 /// Fetches the updates in a blob batch part
 pub async fn blob_batch_part(
     blob_uri: &SensitiveUrl,
@@ -361,15 +348,19 @@ pub async fn blob_batch_part(
         desc,
         updates: Vec::new(),
     };
-    let mut cursor = Cursor::default();
-    while let Some(((k, v, t, d), _)) = cursor.pop(&encoded_part) {
+    let records = encoded_part
+        .updates()
+        .as_part()
+        .ok_or_else(|| anyhow!("expected structured data"))?
+        .as_ord();
+    for (k, v, t, d) in records.iter() {
         if out.updates.len() > limit {
             break;
         }
         out.updates.push(BatchPartUpdate {
-            k: format!("{:?}", PrettyBytes(k)),
-            v: format!("{:?}", PrettyBytes(v)),
-            t,
+            k: k.to_string(),
+            v: v.to_string(),
+            t: u64::from_le_bytes(t),
             d: i64::from_le_bytes(d),
         });
     }
@@ -391,7 +382,7 @@ async fn consolidated_size(args: &StateArgs) -> Result<(), anyhow::Error> {
     // This is odd, but advance by the upper to get maximal consolidation.
     let as_of = state.upper().borrow();
 
-    let mut updates = Vec::new();
+    let mut parts = Vec::new();
     for batch in state.collections.trace.batches() {
         let mut part_stream =
             pin!(batch.part_stream(shard_id, &*state_versions.blob, &*state_versions.metrics));
@@ -408,19 +399,35 @@ async fn consolidated_size(args: &StateArgs) -> Result<(), anyhow::Error> {
             )
             .await
             .expect("part exists");
-            let mut cursor = Cursor::default();
-            while let Some(((k, v, mut t, d), _)) = cursor.pop(&encoded_part) {
-                t.advance_by(as_of);
-                let d = <i64 as Codec64>::decode(d);
-                updates.push(((k.to_owned(), v.to_owned()), t, d));
-            }
+            let part = encoded_part.updates();
+            let part = part
+                .as_part()
+                .ok_or_else(|| anyhow!("expected structured data"))?
+                .as_ord();
+            parts.push(part);
         }
     }
 
-    let bytes: usize = updates.iter().map(|((k, v), _, _)| k.len() + v.len()).sum();
+    let mut updates = vec![];
+    for part in &parts {
+        for (k, v, t, d) in part.iter() {
+            let mut t = <u64 as Codec64>::decode(t);
+            t.advance_by(as_of);
+            let d = <i64 as Codec64>::decode(d);
+            updates.push(((k, v), t, d));
+        }
+    }
+
+    let bytes: usize = updates
+        .iter()
+        .map(|((k, v), _, _)| k.goodbytes() + v.goodbytes())
+        .sum();
     println!("before: {} updates {} bytes", updates.len(), bytes);
     differential_dataflow::consolidation::consolidate_updates(&mut updates);
-    let bytes: usize = updates.iter().map(|((k, v), _, _)| k.len() + v.len()).sum();
+    let bytes: usize = updates
+        .iter()
+        .map(|((k, v), _, _)| k.goodbytes() + v.goodbytes())
+        .sum();
     println!("after : {} updates {} bytes", updates.len(), bytes);
 
     Ok(())
@@ -503,7 +510,9 @@ pub async fn shard_stats(blob_uri: &SensitiveUrl) -> anyhow::Result<()> {
     })
     .await?;
 
-    println!("shard,bytes,parts,runs,batches,empty_batches,longest_run,byte_width,leased_readers,critical_readers,writers");
+    println!(
+        "shard,bytes,parts,runs,batches,empty_batches,longest_run,byte_width,leased_readers,critical_readers,writers"
+    );
     for (shard, (seqno, rollup)) in rollup_keys {
         let rollup_key = PartialRollupKey::new(seqno, &rollup).complete(&shard);
         // Basic stats about the trace.
@@ -544,7 +553,9 @@ pub async fn shard_stats(blob_uri: &SensitiveUrl) -> anyhow::Result<()> {
                 byte_width += largest_part;
             }
         });
-        println!("{shard},{bytes},{parts},{runs},{batches},{empty_batches},{longest_run},{byte_width},{leased_readers},{critical_readers},{writers}");
+        println!(
+            "{shard},{bytes},{parts},{runs},{batches},{empty_batches},{longest_run},{byte_width},{leased_readers},{critical_readers},{writers}"
+        );
     }
 
     Ok(())
@@ -642,7 +653,7 @@ pub async fn blob_usage(args: &StateArgs) -> Result<(), anyhow::Error> {
     let consensus =
         make_consensus(&cfg, &args.consensus_uri, NO_COMMIT, Arc::clone(&metrics)).await?;
     let blob = make_blob(&cfg, &args.blob_uri, NO_COMMIT, Arc::clone(&metrics)).await?;
-    let isolated_runtime = Arc::new(IsolatedRuntime::default());
+    let isolated_runtime = Arc::new(IsolatedRuntime::new(&metrics_registry, None));
     let state_cache = Arc::new(StateCache::new(
         &cfg,
         Arc::clone(&metrics),

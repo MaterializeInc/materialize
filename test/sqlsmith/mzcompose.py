@@ -41,6 +41,7 @@ SERVICES = [
         restart="on-failure",
         memory=f"{TOTAL_MEMORY / len(MZ_SERVERS)}GB",
         use_default_volumes=False,
+        default_replication_factor=2,
     )
     for mz_server in MZ_SERVERS
 ] + [

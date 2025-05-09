@@ -10,6 +10,7 @@
 # by the Apache License, Version 2.0.
 
 load("@crates_io//:defs.bzl", "aliases", "all_crate_deps")
+load("@rules_rust//cargo:defs.bzl", "extract_cargo_lints")
 load("@rules_rust//rust:defs.bzl", "rust_doc_test", "rust_library", "rust_test")
 
 package(default_visibility = ["//visibility:public"])
@@ -25,6 +26,7 @@ rust_library(
     crate_features = ["default"],
     data = [],
     disable_pipelining = True,
+    lint_config = ":lints",
     proc_macro_deps = [] + all_crate_deps(proc_macro = True),
     rustc_env = {},
     rustc_flags = [],
@@ -32,6 +34,7 @@ rust_library(
     deps = [
         "//src/adapter-types:mz_adapter_types",
         "//src/audit-log:mz_audit_log",
+        "//src/auth:mz_auth",
         "//src/build-info:mz_build_info",
         "//src/catalog:mz_catalog",
         "//src/cloud-provider:mz_cloud_provider",
@@ -44,6 +47,8 @@ rust_library(
         "//src/dyncfg:mz_dyncfg",
         "//src/expr:mz_expr",
         "//src/kafka-util:mz_kafka_util",
+        "//src/license-keys:mz_license_keys",
+        "//src/metrics:mz_metrics",
         "//src/mysql-util:mz_mysql_util",
         "//src/orchestrator:mz_orchestrator",
         "//src/ore:mz_ore",
@@ -53,6 +58,7 @@ rust_library(
         "//src/pgrepr:mz_pgrepr",
         "//src/pgwire-common:mz_pgwire_common",
         "//src/postgres-util:mz_postgres_util",
+        "//src/proto:mz_proto",
         "//src/repr:mz_repr",
         "//src/rocksdb-types:mz_rocksdb_types",
         "//src/secrets:mz_secrets",
@@ -88,6 +94,7 @@ rust_test(
     crate_features = ["default"],
     data = [],
     env = {},
+    lint_config = ":lints",
     proc_macro_deps = [] + all_crate_deps(
         proc_macro = True,
         proc_macro_dev = True,
@@ -98,6 +105,7 @@ rust_test(
     deps = [
         "//src/adapter-types:mz_adapter_types",
         "//src/audit-log:mz_audit_log",
+        "//src/auth:mz_auth",
         "//src/build-info:mz_build_info",
         "//src/catalog:mz_catalog",
         "//src/cloud-provider:mz_cloud_provider",
@@ -110,6 +118,8 @@ rust_test(
         "//src/dyncfg:mz_dyncfg",
         "//src/expr:mz_expr",
         "//src/kafka-util:mz_kafka_util",
+        "//src/license-keys:mz_license_keys",
+        "//src/metrics:mz_metrics",
         "//src/mysql-util:mz_mysql_util",
         "//src/orchestrator:mz_orchestrator",
         "//src/ore:mz_ore",
@@ -119,6 +129,7 @@ rust_test(
         "//src/pgrepr:mz_pgrepr",
         "//src/pgwire-common:mz_pgwire_common",
         "//src/postgres-util:mz_postgres_util",
+        "//src/proto:mz_proto",
         "//src/repr:mz_repr",
         "//src/rocksdb-types:mz_rocksdb_types",
         "//src/secrets:mz_secrets",
@@ -144,6 +155,7 @@ rust_doc_test(
     deps = [
         "//src/adapter-types:mz_adapter_types",
         "//src/audit-log:mz_audit_log",
+        "//src/auth:mz_auth",
         "//src/build-info:mz_build_info",
         "//src/catalog:mz_catalog",
         "//src/cloud-provider:mz_cloud_provider",
@@ -156,6 +168,8 @@ rust_doc_test(
         "//src/dyncfg:mz_dyncfg",
         "//src/expr:mz_expr",
         "//src/kafka-util:mz_kafka_util",
+        "//src/license-keys:mz_license_keys",
+        "//src/metrics:mz_metrics",
         "//src/mysql-util:mz_mysql_util",
         "//src/orchestrator:mz_orchestrator",
         "//src/ore:mz_ore",
@@ -165,6 +179,7 @@ rust_doc_test(
         "//src/pgrepr:mz_pgrepr",
         "//src/pgwire-common:mz_pgwire_common",
         "//src/postgres-util:mz_postgres_util",
+        "//src/proto:mz_proto",
         "//src/repr:mz_repr",
         "//src/rocksdb-types:mz_rocksdb_types",
         "//src/secrets:mz_secrets",
@@ -199,6 +214,7 @@ rust_test(
     crate_name = "parameters",
     data = [],
     env = {},
+    lint_config = ":lints",
     proc_macro_deps = [] + all_crate_deps(
         proc_macro = True,
         proc_macro_dev = True,
@@ -210,6 +226,7 @@ rust_test(
         ":mz_adapter",
         "//src/adapter-types:mz_adapter_types",
         "//src/audit-log:mz_audit_log",
+        "//src/auth:mz_auth",
         "//src/build-info:mz_build_info",
         "//src/catalog:mz_catalog",
         "//src/cloud-provider:mz_cloud_provider",
@@ -222,6 +239,8 @@ rust_test(
         "//src/dyncfg:mz_dyncfg",
         "//src/expr:mz_expr",
         "//src/kafka-util:mz_kafka_util",
+        "//src/license-keys:mz_license_keys",
+        "//src/metrics:mz_metrics",
         "//src/mysql-util:mz_mysql_util",
         "//src/orchestrator:mz_orchestrator",
         "//src/ore:mz_ore",
@@ -231,6 +250,7 @@ rust_test(
         "//src/pgrepr:mz_pgrepr",
         "//src/pgwire-common:mz_pgwire_common",
         "//src/postgres-util:mz_postgres_util",
+        "//src/proto:mz_proto",
         "//src/repr:mz_repr",
         "//src/rocksdb-types:mz_rocksdb_types",
         "//src/secrets:mz_secrets",
@@ -265,6 +285,7 @@ rust_test(
     crate_name = "sql",
     data = ["tests/testdata/sql"],
     env = {},
+    lint_config = ":lints",
     proc_macro_deps = [] + all_crate_deps(
         proc_macro = True,
         proc_macro_dev = True,
@@ -276,6 +297,7 @@ rust_test(
         ":mz_adapter",
         "//src/adapter-types:mz_adapter_types",
         "//src/audit-log:mz_audit_log",
+        "//src/auth:mz_auth",
         "//src/build-info:mz_build_info",
         "//src/catalog:mz_catalog",
         "//src/cloud-provider:mz_cloud_provider",
@@ -288,6 +310,8 @@ rust_test(
         "//src/dyncfg:mz_dyncfg",
         "//src/expr:mz_expr",
         "//src/kafka-util:mz_kafka_util",
+        "//src/license-keys:mz_license_keys",
+        "//src/metrics:mz_metrics",
         "//src/mysql-util:mz_mysql_util",
         "//src/orchestrator:mz_orchestrator",
         "//src/ore:mz_ore",
@@ -297,6 +321,7 @@ rust_test(
         "//src/pgrepr:mz_pgrepr",
         "//src/pgwire-common:mz_pgwire_common",
         "//src/postgres-util:mz_postgres_util",
+        "//src/proto:mz_proto",
         "//src/repr:mz_repr",
         "//src/rocksdb-types:mz_rocksdb_types",
         "//src/secrets:mz_secrets",
@@ -331,6 +356,7 @@ rust_test(
     crate_name = "timestamp_selection",
     data = ["tests/testdata/timestamp_selection"],
     env = {},
+    lint_config = ":lints",
     proc_macro_deps = [] + all_crate_deps(
         proc_macro = True,
         proc_macro_dev = True,
@@ -342,6 +368,7 @@ rust_test(
         ":mz_adapter",
         "//src/adapter-types:mz_adapter_types",
         "//src/audit-log:mz_audit_log",
+        "//src/auth:mz_auth",
         "//src/build-info:mz_build_info",
         "//src/catalog:mz_catalog",
         "//src/cloud-provider:mz_cloud_provider",
@@ -354,6 +381,8 @@ rust_test(
         "//src/dyncfg:mz_dyncfg",
         "//src/expr:mz_expr",
         "//src/kafka-util:mz_kafka_util",
+        "//src/license-keys:mz_license_keys",
+        "//src/metrics:mz_metrics",
         "//src/mysql-util:mz_mysql_util",
         "//src/orchestrator:mz_orchestrator",
         "//src/ore:mz_ore",
@@ -363,6 +392,7 @@ rust_test(
         "//src/pgrepr:mz_pgrepr",
         "//src/pgwire-common:mz_pgwire_common",
         "//src/postgres-util:mz_postgres_util",
+        "//src/proto:mz_proto",
         "//src/repr:mz_repr",
         "//src/rocksdb-types:mz_rocksdb_types",
         "//src/secrets:mz_secrets",
@@ -380,4 +410,10 @@ rust_test(
         normal = True,
         normal_dev = True,
     ),
+)
+
+extract_cargo_lints(
+    name = "lints",
+    manifest = "Cargo.toml",
+    workspace = "@//:Cargo.toml",
 )

@@ -8,23 +8,23 @@
 // by the Apache License, Version 2.0.
 
 use std::collections::BTreeMap;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use anyhow::Context;
 use chrono::{DateTime, Utc};
 use derivative::Derivative;
 use mz_ore::cast::CastFrom;
 use mz_repr::{Datum, Diff, Row, RowArena, Timestamp};
-use mz_secrets::cache::CachingSecretsReader;
 use mz_secrets::SecretsReader;
+use mz_secrets::cache::CachingSecretsReader;
 use mz_sql::plan::{WebhookBodyFormat, WebhookHeaders, WebhookValidation, WebhookValidationSecret};
 use mz_storage_client::controller::MonotonicAppender;
 use mz_storage_client::statistics::WebhookStatistics;
 use mz_storage_types::controller::StorageError;
 use tokio::sync::Semaphore;
 
-use crate::optimize::dataflows::{prep_scalar_expr, ExprPrepStyle};
+use crate::optimize::dataflows::{ExprPrepStyle, prep_scalar_expr};
 
 /// Errors returns when attempting to append to a webhook.
 #[derive(thiserror::Error, Debug)]

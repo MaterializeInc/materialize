@@ -90,17 +90,20 @@ use std::sync::Arc;
 
 use differential_dataflow::AsCollection;
 use futures::TryStreamExt;
+use itertools::Itertools;
 use mysql_async::prelude::Queryable;
 use mysql_async::{IsolationLevel, Row as MySqlRow, TxOpts};
-use mz_mysql_util::{pack_mysql_row, query_sys_var, MySqlError, ER_NO_SUCH_TABLE};
+use mz_mysql_util::{
+    ER_NO_SUCH_TABLE, MySqlError, pack_mysql_row, query_sys_var, quote_identifier,
+};
 use mz_ore::cast::CastFrom;
 use mz_ore::future::InTask;
 use mz_ore::iter::IteratorExt;
 use mz_ore::metrics::MetricsFutureExt;
-use mz_repr::Row;
+use mz_repr::{Diff, Row};
 use mz_storage_types::errors::DataflowError;
-use mz_storage_types::sources::mysql::{gtid_set_frontier, GtidPartition};
 use mz_storage_types::sources::MySqlSourceConnection;
+use mz_storage_types::sources::mysql::{GtidPartition, gtid_set_frontier};
 use mz_timely_util::antichain::AntichainExt;
 use mz_timely_util::builder_async::{OperatorBuilder as AsyncOperatorBuilder, PressOnDropButton};
 use mz_timely_util::containers::stack::AccountedStackBuilder;
@@ -111,15 +114,15 @@ use timely::progress::Timestamp;
 use tracing::{error, trace};
 
 use crate::metrics::source::mysql::MySqlSnapshotMetrics;
+use crate::source::RawSourceCreationConfig;
 use crate::source::types::{
     ProgressStatisticsUpdate, SignaledFuture, SourceMessage, StackedCollection,
 };
-use crate::source::RawSourceCreationConfig;
 
 use super::schemas::verify_schemas;
 use super::{
-    return_definite_error, validate_mysql_repl_settings, DefiniteError, MySqlTableName,
-    ReplicationError, RewindRequest, SourceOutputInfo, TransientError,
+    DefiniteError, MySqlTableName, ReplicationError, RewindRequest, SourceOutputInfo,
+    TransientError, return_definite_error, validate_mysql_repl_settings,
 };
 
 /// Renders the snapshot dataflow. See the module documentation for more information.
@@ -170,8 +173,12 @@ pub(crate) fn render<G: Scope<Timestamp = GtidPartition>>(
         builder.build_fallible(move |caps| {
             let busy_signal = Arc::clone(&config.busy_signal);
             Box::pin(SignaledFuture::new(busy_signal, async move {
-                let [data_cap_set, rewind_cap_set, definite_error_cap_set, stats_cap]: &mut [_; 4] =
-                    caps.try_into().unwrap();
+                let [
+                    data_cap_set,
+                    rewind_cap_set,
+                    definite_error_cap_set,
+                    stats_cap,
+                ]: &mut [_; 4] = caps.try_into().unwrap();
 
                 let id = config.id;
                 let worker_id = config.worker_id;
@@ -363,7 +370,7 @@ pub(crate) fn render<G: Scope<Timestamp = GtidPartition>>(
                             (
                                 (output.output_index, Err(err.clone().into())),
                                 GtidPartition::minimum(),
-                                1,
+                                Diff::ONE,
                             ),
                         )
                         .await;
@@ -404,9 +411,8 @@ pub(crate) fn render<G: Scope<Timestamp = GtidPartition>>(
 
                 let mut snapshot_staged = 0;
                 for (table, outputs) in &reader_snapshot_table_info {
-                    let query = format!("SELECT * FROM {}", table);
-                    trace!(%id, "timely-{worker_id} reading snapshot from \
-                                 table '{table}'");
+                    let query = build_snapshot_query(outputs);
+                    trace!(%id, "timely-{worker_id} reading snapshot query='{}'", query);
                     let mut results = tx.exec_stream(query, ()).await?;
                     let mut count = 0;
                     while let Some(row) = results.try_next().await? {
@@ -430,7 +436,11 @@ pub(crate) fn render<G: Scope<Timestamp = GtidPartition>>(
                             raw_handle
                                 .give_fueled(
                                     &data_cap_set[0],
-                                    ((output.output_index, event), GtidPartition::minimum(), 1),
+                                    (
+                                        (output.output_index, event),
+                                        GtidPartition::minimum(),
+                                        Diff::ONE,
+                                    ),
                                 )
                                 .await;
                             count += 1;
@@ -500,7 +510,7 @@ pub(crate) fn render<G: Scope<Timestamp = GtidPartition>>(
 }
 
 /// Fetch the size of the snapshot on this worker.
-async fn fetch_snapshot_size<'a, Q>(
+async fn fetch_snapshot_size<Q>(
     conn: &mut Q,
     tables: Vec<(MySqlTableName, usize)>,
     metrics: MySqlSnapshotMetrics,
@@ -515,6 +525,29 @@ where
         total += stats.count * u64::cast_from(num_outputs);
     }
     Ok(total)
+}
+
+/// Builds the SQL query to be used for creating the snapshot using the first entry in outputs.
+///
+/// Expect `outputs` to contain entries for a single table, and to have at least 1 entry.
+/// Expect that each MySqlTableDesc entry contains all columns described in information_schema.columns.
+#[must_use]
+fn build_snapshot_query(outputs: &[SourceOutputInfo]) -> String {
+    let info = outputs.first().expect("MySQL table info");
+    for output in &outputs[1..] {
+        assert!(
+            info.desc.columns == output.desc.columns,
+            "Mismatch in table descriptions for {}",
+            info.table_name
+        );
+    }
+    let columns = info
+        .desc
+        .columns
+        .iter()
+        .map(|col| quote_identifier(&col.name))
+        .join(", ");
+    format!("SELECT {} FROM {}", columns, info.table_name)
 }
 
 #[derive(Default)]
@@ -540,4 +573,49 @@ where
     stats.count = count_row.ok_or_else(|| anyhow::anyhow!("failed to COUNT(*) {table}"))?;
 
     Ok(stats)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use mz_mysql_util::{MySqlColumnDesc, MySqlTableDesc};
+    use timely::progress::Antichain;
+
+    #[mz_ore::test]
+    fn snapshot_query_duplicate_table() {
+        let schema_name = "myschema".to_string();
+        let table_name = "mytable".to_string();
+        let table = MySqlTableName(schema_name.clone(), table_name.clone());
+        let columns = ["c1", "c2", "c3"]
+            .iter()
+            .map(|col| MySqlColumnDesc {
+                name: col.to_string(),
+                column_type: None,
+                meta: None,
+            })
+            .collect::<Vec<_>>();
+        let desc = MySqlTableDesc {
+            schema_name: schema_name.clone(),
+            name: table_name.clone(),
+            columns,
+            keys: BTreeSet::default(),
+        };
+        let info = SourceOutputInfo {
+            output_index: 1, // ignored
+            table_name: table.clone(),
+            desc,
+            text_columns: vec![],
+            exclude_columns: vec![],
+            initial_gtid_set: Antichain::default(),
+            resume_upper: Antichain::default(),
+        };
+        let query = build_snapshot_query(&[info.clone(), info]);
+        assert_eq!(
+            format!(
+                "SELECT `c1`, `c2`, `c3` FROM `{}`.`{}`",
+                &schema_name, &table_name
+            ),
+            query
+        );
+    }
 }

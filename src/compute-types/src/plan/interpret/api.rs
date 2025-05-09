@@ -19,8 +19,8 @@ use std::fmt::Debug;
 use differential_dataflow::lattice::Lattice;
 use itertools::zip_eq;
 use mz_expr::{
-    EvalError, Id, LetRecLimit, LocalId, MapFilterProject, MirScalarExpr, TableFunc,
-    RECURSION_LIMIT,
+    EvalError, Id, LetRecLimit, LocalId, MapFilterProject, MirScalarExpr, RECURSION_LIMIT,
+    TableFunc,
 };
 use mz_ore::cast::CastFrom;
 use mz_ore::stack::{CheckedRecursion, RecursionGuard, RecursionLimitError};

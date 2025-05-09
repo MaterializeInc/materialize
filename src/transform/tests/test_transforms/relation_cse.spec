@@ -87,7 +87,7 @@ With
       Project (#0, #1)
         Get t0
 ----
-With Mutually Recursive
+With
   cte l0 =
     Project (#0, #1)
       Get t0
@@ -96,36 +96,38 @@ With Mutually Recursive
       Union
         Get l0
         Get l0
-  cte l2 =
-    Filter (#1 > 7)
-      Get l4
-  cte l3 =
-    Filter (#1 > 7)
-      Get l6
-  cte l4 =
-    Distinct project=[#0, #1]
-      Union
-        Get l1
-        Get l2
-        Get l2
-        Get l3
-        Get l3
-  cte l5 =
-    Filter (#1 > 7)
-      Get l4
-  cte l6 =
-    Distinct project=[#0, #1]
-      Union
-        Get l1
-        Get l5
-        Get l5
-        Get l3
-        Get l3
 Return
-  Union
-    Filter (#1 > 7)
-      Get t0
-    Filter (#1 > 7)
-      Get l6
-    Filter (#1 > 7)
-      Get l4
+  With Mutually Recursive
+    cte l2 =
+      Filter (#1 > 7)
+        Get l4
+    cte l3 =
+      Filter (#1 > 7)
+        Get l6
+    cte l4 =
+      Distinct project=[#0, #1]
+        Union
+          Get l1
+          Get l2
+          Get l2
+          Get l3
+          Get l3
+    cte l5 =
+      Filter (#1 > 7)
+        Get l4
+    cte l6 =
+      Distinct project=[#0, #1]
+        Union
+          Get l1
+          Get l5
+          Get l5
+          Get l3
+          Get l3
+  Return
+    Union
+      Filter (#1 > 7)
+        Get t0
+      Filter (#1 > 7)
+        Get l6
+      Filter (#1 > 7)
+        Get l4

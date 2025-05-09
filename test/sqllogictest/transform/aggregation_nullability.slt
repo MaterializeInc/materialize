@@ -20,48 +20,48 @@ INSERT INTO t1 VALUES (1, 2)
 
 # regression test for database-issues#2192: a filter on COUNT aggregation must not trigger the outer to inner join conversion
 query T multiline
-EXPLAIN WITH(arity, join implementations) select t1.f1, count(t2.f1) from t1 LEFT JOIN t2 ON t1.f1 = t2.f1 group by t1.f1 having count(t2.f1) >= 0;
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, arity, join implementations) AS VERBOSE TEXT FOR select t1.f1, count(t2.f1) from t1 LEFT JOIN t2 ON t1.f1 = t2.f1 group by t1.f1 having count(t2.f1) >= 0;
 ----
 Explained Query:
   With
     cte l0 =
-      ArrangeBy keys=[[#0]] // { arity: 1 }
-        Project (#0) // { arity: 1 }
-          Filter (#0) IS NOT NULL // { arity: 2 }
+      ArrangeBy keys=[[#0{f1}]] // { arity: 1 }
+        Project (#0{f1}) // { arity: 1 }
+          Filter (#0{f1}) IS NOT NULL // { arity: 2 }
             ReadStorage materialize.public.t1 // { arity: 2 }
     cte l1 =
-      Project (#0) // { arity: 1 }
-        Join on=(#0 = #1) type=differential // { arity: 2 }
+      Project (#0{f1}) // { arity: 1 }
+        Join on=(#0{f1} = #1{f1}) type=differential // { arity: 2 }
           implementation
-            %0:l0[#0]K » %1:t2[#0]K
+            %0:l0[#0{f1}]K » %1:t2[#0{f1}]K
           Get l0 // { arity: 1 }
-          ArrangeBy keys=[[#0]] // { arity: 1 }
-            Project (#0) // { arity: 1 }
-              Filter (#0) IS NOT NULL // { arity: 2 }
+          ArrangeBy keys=[[#0{f1}]] // { arity: 1 }
+            Project (#0{f1}) // { arity: 1 }
+              Filter (#0{f1}) IS NOT NULL // { arity: 2 }
                 ReadStorage materialize.public.t2 // { arity: 2 }
   Return // { arity: 2 }
-    Filter (#1 >= 0) // { arity: 2 }
-      Reduce group_by=[#0] aggregates=[count(#1)] // { arity: 2 }
+    Filter (#1{count_f1} >= 0) // { arity: 2 }
+      Reduce group_by=[#0{f1}] aggregates=[count(#1{f1})] // { arity: 2 }
         Union // { arity: 2 }
           Map (null) // { arity: 2 }
             Union // { arity: 1 }
               Negate // { arity: 1 }
-                Project (#0) // { arity: 1 }
-                  Join on=(#0 = #1) type=differential // { arity: 2 }
+                Project (#0{f1}) // { arity: 1 }
+                  Join on=(#0{f1} = #1{f1}) type=differential // { arity: 2 }
                     implementation
-                      %1[#0]UKA » %0:l0[#0]K
+                      %1[#0]UKA » %0:l0[#0{f1}]K
                     Get l0 // { arity: 1 }
-                    ArrangeBy keys=[[#0]] // { arity: 1 }
-                      Distinct project=[#0] // { arity: 1 }
+                    ArrangeBy keys=[[#0{f1}]] // { arity: 1 }
+                      Distinct project=[#0{f1}] // { arity: 1 }
                         Get l1 // { arity: 1 }
-              Project (#0) // { arity: 1 }
+              Project (#0{f1}) // { arity: 1 }
                 ReadStorage materialize.public.t1 // { arity: 2 }
-          Project (#0, #0) // { arity: 2 }
+          Project (#0{f1}, #0{f1}) // { arity: 2 }
             Get l1 // { arity: 1 }
 
 Source materialize.public.t1
 Source materialize.public.t2
-  filter=((#0) IS NOT NULL)
+  filter=((#0{f1}) IS NOT NULL)
 
 Target cluster: quickstart
 
@@ -75,28 +75,28 @@ select t1.f1, count(t2.f1) from t1 LEFT JOIN t2 ON t1.f1 = t2.f1 group by t1.f1 
 
 # ... but a filter on any other aggregation should convert a left join into an inner join if its parameter comes from the non-preserving side
 query T multiline
-EXPLAIN WITH(arity, join implementations) select t1.f1, sum(t2.f1) from t1 LEFT JOIN t2 ON t1.f1 = t2.f1 group by t1.f1 having sum(t2.f1) >= 0;
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, arity, join implementations) AS VERBOSE TEXT FOR select t1.f1, sum(t2.f1) from t1 LEFT JOIN t2 ON t1.f1 = t2.f1 group by t1.f1 having sum(t2.f1) >= 0;
 ----
 Explained Query:
-  Filter (#1 >= 0) // { arity: 2 }
-    Reduce group_by=[#0] aggregates=[sum(#0)] // { arity: 2 }
-      Project (#0) // { arity: 1 }
-        Join on=(#0 = #1) type=differential // { arity: 2 }
+  Filter (#1{sum_f1} >= 0) // { arity: 2 }
+    Reduce group_by=[#0{f1}] aggregates=[sum(#0{f1})] // { arity: 2 }
+      Project (#0{f1}) // { arity: 1 }
+        Join on=(#0{f1} = #1{f1}) type=differential // { arity: 2 }
           implementation
-            %0:t1[#0]K » %1:t2[#0]K
-          ArrangeBy keys=[[#0]] // { arity: 1 }
-            Project (#0) // { arity: 1 }
-              Filter (#0) IS NOT NULL // { arity: 2 }
+            %0:t1[#0{f1}]K » %1:t2[#0{f1}]K
+          ArrangeBy keys=[[#0{f1}]] // { arity: 1 }
+            Project (#0{f1}) // { arity: 1 }
+              Filter (#0{f1}) IS NOT NULL // { arity: 2 }
                 ReadStorage materialize.public.t1 // { arity: 2 }
-          ArrangeBy keys=[[#0]] // { arity: 1 }
-            Project (#0) // { arity: 1 }
-              Filter (#0) IS NOT NULL // { arity: 2 }
+          ArrangeBy keys=[[#0{f1}]] // { arity: 1 }
+            Project (#0{f1}) // { arity: 1 }
+              Filter (#0{f1}) IS NOT NULL // { arity: 2 }
                 ReadStorage materialize.public.t2 // { arity: 2 }
 
 Source materialize.public.t1
-  filter=((#0) IS NOT NULL)
+  filter=((#0{f1}) IS NOT NULL)
 Source materialize.public.t2
-  filter=((#0) IS NOT NULL)
+  filter=((#0{f1}) IS NOT NULL)
 
 Target cluster: quickstart
 
@@ -108,170 +108,170 @@ select t1.f1, sum(t2.f1) from t1 LEFT JOIN t2 ON t1.f1 = t2.f1 group by t1.f1 ha
 
 # multiple aggregations
 query T multiline
-EXPLAIN WITH(arity, join implementations) select t1.f1, count(t2.f1), sum(t2.f1), max(t2.f1), min(t2.f1), count(t1.f2), sum(t1.f2), min(t1.f2), max(t1.f2) from t1 LEFT JOIN t2 ON t1.f1 = t2.f1 group by t1.f1;
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, arity, join implementations) AS VERBOSE TEXT FOR select t1.f1, count(t2.f1), sum(t2.f1), max(t2.f1), min(t2.f1), count(t1.f2), sum(t1.f2), min(t1.f2), max(t1.f2) from t1 LEFT JOIN t2 ON t1.f1 = t2.f1 group by t1.f1;
 ----
 Explained Query:
   With
     cte l0 =
-      ArrangeBy keys=[[#0]] // { arity: 2 }
-        Filter (#0) IS NOT NULL // { arity: 2 }
+      ArrangeBy keys=[[#0{f1}]] // { arity: 2 }
+        Filter (#0{f1}) IS NOT NULL // { arity: 2 }
           ReadStorage materialize.public.t1 // { arity: 2 }
     cte l1 =
-      Project (#0, #1) // { arity: 2 }
-        Join on=(#0 = #2) type=differential // { arity: 3 }
+      Project (#0{f1}, #1{f2}) // { arity: 2 }
+        Join on=(#0{f1} = #2{f1}) type=differential // { arity: 3 }
           implementation
-            %0:l0[#0]K » %1:t2[#0]K
+            %0:l0[#0{f1}]K » %1:t2[#0{f1}]K
           Get l0 // { arity: 2 }
-          ArrangeBy keys=[[#0]] // { arity: 1 }
-            Project (#0) // { arity: 1 }
-              Filter (#0) IS NOT NULL // { arity: 2 }
+          ArrangeBy keys=[[#0{f1}]] // { arity: 1 }
+            Project (#0{f1}) // { arity: 1 }
+              Filter (#0{f1}) IS NOT NULL // { arity: 2 }
                 ReadStorage materialize.public.t2 // { arity: 2 }
     cte l2 =
       Union // { arity: 3 }
         Map (null) // { arity: 3 }
           Union // { arity: 2 }
             Negate // { arity: 2 }
-              Project (#0, #1) // { arity: 2 }
-                Join on=(#0 = #2) type=differential // { arity: 3 }
+              Project (#0{f1}, #1{f2}) // { arity: 2 }
+                Join on=(#0{f1} = #2{f1}) type=differential // { arity: 3 }
                   implementation
-                    %1[#0]UKA » %0:l0[#0]K
+                    %1[#0]UKA » %0:l0[#0{f1}]K
                   Get l0 // { arity: 2 }
-                  ArrangeBy keys=[[#0]] // { arity: 1 }
-                    Distinct project=[#0] // { arity: 1 }
-                      Project (#0) // { arity: 1 }
+                  ArrangeBy keys=[[#0{f1}]] // { arity: 1 }
+                    Distinct project=[#0{f1}] // { arity: 1 }
+                      Project (#0{f1}) // { arity: 1 }
                         Get l1 // { arity: 2 }
             ReadStorage materialize.public.t1 // { arity: 2 }
-        Project (#0, #1, #0) // { arity: 3 }
+        Project (#0{f1}, #1{f2}, #0{f1}) // { arity: 3 }
           Get l1 // { arity: 2 }
   Return // { arity: 9 }
-    Project (#0, #6, #7, #1, #2, #8, #9, #3, #4) // { arity: 9 }
-      Join on=(#0 = #5) type=differential // { arity: 10 }
+    Project (#0{f1}, #6{count_f1}, #7{sum_f1}, #1{max_f1}, #2{min_f1}, #8{count_f2}, #9{sum_f2}, #3{min_f2}, #4{max_f2}) // { arity: 9 }
+      Join on=(#0{f1} = #5{f1}) type=differential // { arity: 10 }
         implementation
           %0[#0]UKA » %1[#0]UKA
-        ArrangeBy keys=[[#0]] // { arity: 5 }
-          Reduce group_by=[#0] aggregates=[max(#2), min(#2), min(#1), max(#1)] // { arity: 5 }
+        ArrangeBy keys=[[#0{f1}]] // { arity: 5 }
+          Reduce group_by=[#0{f1}] aggregates=[max(#2{f1}), min(#2{f1}), min(#1{f2}), max(#1{f2})] // { arity: 5 }
             Get l2 // { arity: 3 }
-        ArrangeBy keys=[[#0]] // { arity: 5 }
-          Reduce group_by=[#0] aggregates=[count(#2), sum(#2), count(#1), sum(#1)] // { arity: 5 }
+        ArrangeBy keys=[[#0{f1}]] // { arity: 5 }
+          Reduce group_by=[#0{f1}] aggregates=[count(#2{f1}), sum(#2{f1}), count(#1{f2}), sum(#1{f2})] // { arity: 5 }
             Get l2 // { arity: 3 }
 
 Source materialize.public.t1
 Source materialize.public.t2
-  filter=((#0) IS NOT NULL)
+  filter=((#0{f1}) IS NOT NULL)
 
 Target cluster: quickstart
 
 EOF
 
 query T multiline
-EXPLAIN WITH(arity, join implementations) select t1.f1, count(t2.f1), sum(t2.f1), max(t2.f1), min(t2.f1), count(t1.f2), sum(t1.f2), min(t1.f2), max(t1.f2) from t1 LEFT JOIN t2 ON t1.f1 = t2.f1 group by t1.f1 having sum(t1.f2) >= 0;
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, arity, join implementations) AS VERBOSE TEXT FOR select t1.f1, count(t2.f1), sum(t2.f1), max(t2.f1), min(t2.f1), count(t1.f2), sum(t1.f2), min(t1.f2), max(t1.f2) from t1 LEFT JOIN t2 ON t1.f1 = t2.f1 group by t1.f1 having sum(t1.f2) >= 0;
 ----
 Explained Query:
   With
     cte l0 =
-      ArrangeBy keys=[[#0]] // { arity: 2 }
-        Filter (#0) IS NOT NULL // { arity: 2 }
+      ArrangeBy keys=[[#0{f1}]] // { arity: 2 }
+        Filter (#0{f1}) IS NOT NULL // { arity: 2 }
           ReadStorage materialize.public.t1 // { arity: 2 }
     cte l1 =
-      Project (#0, #1) // { arity: 2 }
-        Join on=(#0 = #2) type=differential // { arity: 3 }
+      Project (#0{f1}, #1{f2}) // { arity: 2 }
+        Join on=(#0{f1} = #2{f1}) type=differential // { arity: 3 }
           implementation
-            %0:l0[#0]K » %1:t2[#0]K
+            %0:l0[#0{f1}]K » %1:t2[#0{f1}]K
           Get l0 // { arity: 2 }
-          ArrangeBy keys=[[#0]] // { arity: 1 }
-            Project (#0) // { arity: 1 }
-              Filter (#0) IS NOT NULL // { arity: 2 }
+          ArrangeBy keys=[[#0{f1}]] // { arity: 1 }
+            Project (#0{f1}) // { arity: 1 }
+              Filter (#0{f1}) IS NOT NULL // { arity: 2 }
                 ReadStorage materialize.public.t2 // { arity: 2 }
     cte l2 =
       Union // { arity: 3 }
         Map (null) // { arity: 3 }
           Union // { arity: 2 }
             Negate // { arity: 2 }
-              Project (#0, #1) // { arity: 2 }
-                Join on=(#0 = #2) type=differential // { arity: 3 }
+              Project (#0{f1}, #1{f2}) // { arity: 2 }
+                Join on=(#0{f1} = #2{f1}) type=differential // { arity: 3 }
                   implementation
-                    %1[#0]UKA » %0:l0[#0]K
+                    %1[#0]UKA » %0:l0[#0{f1}]K
                   Get l0 // { arity: 2 }
-                  ArrangeBy keys=[[#0]] // { arity: 1 }
-                    Distinct project=[#0] // { arity: 1 }
-                      Project (#0) // { arity: 1 }
+                  ArrangeBy keys=[[#0{f1}]] // { arity: 1 }
+                    Distinct project=[#0{f1}] // { arity: 1 }
+                      Project (#0{f1}) // { arity: 1 }
                         Get l1 // { arity: 2 }
             ReadStorage materialize.public.t1 // { arity: 2 }
-        Project (#0, #1, #0) // { arity: 3 }
+        Project (#0{f1}, #1{f2}, #0{f1}) // { arity: 3 }
           Get l1 // { arity: 2 }
   Return // { arity: 9 }
-    Project (#0, #6, #7, #1, #2, #8, #9, #3, #4) // { arity: 9 }
-      Filter (#9 >= 0) // { arity: 10 }
-        Join on=(#0 = #5) type=differential // { arity: 10 }
+    Project (#0{f1}, #6{count_f1}, #7{sum_f1}, #1{max_f1}, #2{min_f1}, #8{count_f2}, #9{sum_f2}, #3{min_f2}, #4{max_f2}) // { arity: 9 }
+      Filter (#9{sum_f2} >= 0) // { arity: 10 }
+        Join on=(#0{f1} = #5{f1}) type=differential // { arity: 10 }
           implementation
             %1[#0]UKAif » %0[#0]UKAif
-          ArrangeBy keys=[[#0]] // { arity: 5 }
-            Reduce group_by=[#0] aggregates=[max(#2), min(#2), min(#1), max(#1)] // { arity: 5 }
+          ArrangeBy keys=[[#0{f1}]] // { arity: 5 }
+            Reduce group_by=[#0{f1}] aggregates=[max(#2{f1}), min(#2{f1}), min(#1{f2}), max(#1{f2})] // { arity: 5 }
               Get l2 // { arity: 3 }
-          ArrangeBy keys=[[#0]] // { arity: 5 }
-            Reduce group_by=[#0] aggregates=[count(#2), sum(#2), count(#1), sum(#1)] // { arity: 5 }
+          ArrangeBy keys=[[#0{f1}]] // { arity: 5 }
+            Reduce group_by=[#0{f1}] aggregates=[count(#2{f1}), sum(#2{f1}), count(#1{f2}), sum(#1{f2})] // { arity: 5 }
               Get l2 // { arity: 3 }
 
 Source materialize.public.t1
 Source materialize.public.t2
-  filter=((#0) IS NOT NULL)
+  filter=((#0{f1}) IS NOT NULL)
 
 Target cluster: quickstart
 
 EOF
 
 query T multiline
-EXPLAIN WITH(arity, join implementations) select t1.f1, count(t2.f1), sum(t2.f1), max(t2.f1), min(t2.f1), count(t1.f2), sum(t1.f2), min(t1.f2), max(t1.f2) from t1 LEFT JOIN t2 ON t1.f1 = t2.f1 group by t1.f1 having sum(t2.f1) >= 0;
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, arity, join implementations) AS VERBOSE TEXT FOR select t1.f1, count(t2.f1), sum(t2.f1), max(t2.f1), min(t2.f1), count(t1.f2), sum(t1.f2), min(t1.f2), max(t1.f2) from t1 LEFT JOIN t2 ON t1.f1 = t2.f1 group by t1.f1 having sum(t2.f1) >= 0;
 ----
 Explained Query:
   With
     cte l0 =
-      ArrangeBy keys=[[#0]] // { arity: 2 }
-        Filter (#0) IS NOT NULL // { arity: 2 }
+      ArrangeBy keys=[[#0{f1}]] // { arity: 2 }
+        Filter (#0{f1}) IS NOT NULL // { arity: 2 }
           ReadStorage materialize.public.t1 // { arity: 2 }
     cte l1 =
-      Project (#0, #1) // { arity: 2 }
-        Join on=(#0 = #2) type=differential // { arity: 3 }
+      Project (#0{f1}, #1{f2}) // { arity: 2 }
+        Join on=(#0{f1} = #2{f1}) type=differential // { arity: 3 }
           implementation
-            %0:l0[#0]K » %1:t2[#0]K
+            %0:l0[#0{f1}]K » %1:t2[#0{f1}]K
           Get l0 // { arity: 2 }
-          ArrangeBy keys=[[#0]] // { arity: 1 }
-            Project (#0) // { arity: 1 }
-              Filter (#0) IS NOT NULL // { arity: 2 }
+          ArrangeBy keys=[[#0{f1}]] // { arity: 1 }
+            Project (#0{f1}) // { arity: 1 }
+              Filter (#0{f1}) IS NOT NULL // { arity: 2 }
                 ReadStorage materialize.public.t2 // { arity: 2 }
     cte l2 =
       Union // { arity: 3 }
         Map (null) // { arity: 3 }
           Union // { arity: 2 }
             Negate // { arity: 2 }
-              Project (#0, #1) // { arity: 2 }
-                Join on=(#0 = #2) type=differential // { arity: 3 }
+              Project (#0{f1}, #1{f2}) // { arity: 2 }
+                Join on=(#0{f1} = #2{f1}) type=differential // { arity: 3 }
                   implementation
-                    %1[#0]UKA » %0:l0[#0]K
+                    %1[#0]UKA » %0:l0[#0{f1}]K
                   Get l0 // { arity: 2 }
-                  ArrangeBy keys=[[#0]] // { arity: 1 }
-                    Distinct project=[#0] // { arity: 1 }
-                      Project (#0) // { arity: 1 }
+                  ArrangeBy keys=[[#0{f1}]] // { arity: 1 }
+                    Distinct project=[#0{f1}] // { arity: 1 }
+                      Project (#0{f1}) // { arity: 1 }
                         Get l1 // { arity: 2 }
             ReadStorage materialize.public.t1 // { arity: 2 }
-        Project (#0, #1, #0) // { arity: 3 }
+        Project (#0{f1}, #1{f2}, #0{f1}) // { arity: 3 }
           Get l1 // { arity: 2 }
   Return // { arity: 9 }
-    Project (#0, #6, #7, #1, #2, #8, #9, #3, #4) // { arity: 9 }
-      Filter (#7 >= 0) // { arity: 10 }
-        Join on=(#0 = #5) type=differential // { arity: 10 }
+    Project (#0{f1}, #6{count_f1}, #7{sum_f1}, #1{max_f1}, #2{min_f1}, #8{count_f2}, #9{sum_f2}, #3{min_f2}, #4{max_f2}) // { arity: 9 }
+      Filter (#7{sum_f1} >= 0) // { arity: 10 }
+        Join on=(#0{f1} = #5{f1}) type=differential // { arity: 10 }
           implementation
             %1[#0]UKAif » %0[#0]UKAif
-          ArrangeBy keys=[[#0]] // { arity: 5 }
-            Reduce group_by=[#0] aggregates=[max(#2), min(#2), min(#1), max(#1)] // { arity: 5 }
+          ArrangeBy keys=[[#0{f1}]] // { arity: 5 }
+            Reduce group_by=[#0{f1}] aggregates=[max(#2{f1}), min(#2{f1}), min(#1{f2}), max(#1{f2})] // { arity: 5 }
               Get l2 // { arity: 3 }
-          ArrangeBy keys=[[#0]] // { arity: 5 }
-            Reduce group_by=[#0] aggregates=[count(#2), sum(#2), count(#1), sum(#1)] // { arity: 5 }
+          ArrangeBy keys=[[#0{f1}]] // { arity: 5 }
+            Reduce group_by=[#0{f1}] aggregates=[count(#2{f1}), sum(#2{f1}), count(#1{f2}), sum(#1{f2})] // { arity: 5 }
               Get l2 // { arity: 3 }
 
 Source materialize.public.t1
 Source materialize.public.t2
-  filter=((#0) IS NOT NULL)
+  filter=((#0{f1}) IS NOT NULL)
 
 Target cluster: quickstart
 
@@ -279,10 +279,10 @@ EOF
 
 # count is never null, predicate removed
 query T multiline
-EXPLAIN WITH(arity, join implementations) select t1.f1, count(t1.f2) from t1 group by t1.f1 having count(t1.f2) is not null;
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, arity, join implementations) AS VERBOSE TEXT FOR select t1.f1, count(t1.f2) from t1 group by t1.f1 having count(t1.f2) is not null;
 ----
 Explained Query:
-  Reduce group_by=[#0] aggregates=[count(#1)] // { arity: 2 }
+  Reduce group_by=[#0{f1}] aggregates=[count(#1{f2})] // { arity: 2 }
     ReadStorage materialize.public.t1 // { arity: 2 }
 
 Source materialize.public.t1
@@ -292,11 +292,11 @@ Target cluster: quickstart
 EOF
 
 query T multiline
-EXPLAIN WITH(arity, join implementations) select t1.f1, sum(t1.f2) from t1 group by t1.f1 having sum(t1.f2) is not null;
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, arity, join implementations) AS VERBOSE TEXT FOR select t1.f1, sum(t1.f2) from t1 group by t1.f1 having sum(t1.f2) is not null;
 ----
 Explained Query:
-  Filter (#1) IS NOT NULL // { arity: 2 }
-    Reduce group_by=[#0] aggregates=[sum(#1)] // { arity: 2 }
+  Filter (#1{sum_f2}) IS NOT NULL // { arity: 2 }
+    Reduce group_by=[#0{f1}] aggregates=[sum(#1{f2})] // { arity: 2 }
       ReadStorage materialize.public.t1 // { arity: 2 }
 
 Source materialize.public.t1
@@ -307,39 +307,39 @@ EOF
 
 # outer-to-inner-join conversion allowed
 query T multiline
-EXPLAIN WITH(arity, join implementations) select t1.f1, sum(t2.f1), max(t2.f1) from t1 LEFT JOIN t2 ON t1.f1 = t2.f1 group by t1.f1 having max(t2.f1) >= 0;
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, arity, join implementations) AS VERBOSE TEXT FOR select t1.f1, sum(t2.f1), max(t2.f1) from t1 LEFT JOIN t2 ON t1.f1 = t2.f1 group by t1.f1 having max(t2.f1) >= 0;
 ----
 Explained Query:
   With
     cte l0 =
-      Project (#0) // { arity: 1 }
-        Join on=(#0 = #1) type=differential // { arity: 2 }
+      Project (#0{f1}) // { arity: 1 }
+        Join on=(#0{f1} = #1{f1}) type=differential // { arity: 2 }
           implementation
-            %0:t1[#0]Kif » %1:t2[#0]Kiif
-          ArrangeBy keys=[[#0]] // { arity: 1 }
-            Project (#0) // { arity: 1 }
-              Filter (#0 >= 0) // { arity: 2 }
+            %0:t1[#0{f1}]Kif » %1:t2[#0{f1}]Kiif
+          ArrangeBy keys=[[#0{f1}]] // { arity: 1 }
+            Project (#0{f1}) // { arity: 1 }
+              Filter (#0{f1} >= 0) // { arity: 2 }
                 ReadStorage materialize.public.t1 // { arity: 2 }
-          ArrangeBy keys=[[#0]] // { arity: 1 }
-            Project (#0) // { arity: 1 }
-              Filter (#0 >= 0) // { arity: 2 }
+          ArrangeBy keys=[[#0{f1}]] // { arity: 1 }
+            Project (#0{f1}) // { arity: 1 }
+              Filter (#0{f1} >= 0) // { arity: 2 }
                 ReadStorage materialize.public.t2 // { arity: 2 }
   Return // { arity: 3 }
-    Project (#0, #3, #1) // { arity: 3 }
-      Join on=(#0 = #2) type=differential // { arity: 4 }
+    Project (#0{f1}, #3{sum_f1}, #1{max_f1}) // { arity: 3 }
+      Join on=(#0{f1} = #2{f1}) type=differential // { arity: 4 }
         implementation
           %0[#0]UKA » %1[#0]UKA
-        ArrangeBy keys=[[#0]] // { arity: 2 }
-          Reduce group_by=[#0] aggregates=[max(#0)] // { arity: 2 }
+        ArrangeBy keys=[[#0{f1}]] // { arity: 2 }
+          Reduce group_by=[#0{f1}] aggregates=[max(#0{f1})] // { arity: 2 }
             Get l0 // { arity: 1 }
-        ArrangeBy keys=[[#0]] // { arity: 2 }
-          Reduce group_by=[#0] aggregates=[sum(#0)] // { arity: 2 }
+        ArrangeBy keys=[[#0{f1}]] // { arity: 2 }
+          Reduce group_by=[#0{f1}] aggregates=[sum(#0{f1})] // { arity: 2 }
             Get l0 // { arity: 1 }
 
 Source materialize.public.t1
-  filter=((#0 >= 0))
+  filter=((#0{f1} >= 0))
 Source materialize.public.t2
-  filter=((#0 >= 0))
+  filter=((#0{f1} >= 0))
 
 Target cluster: quickstart
 
@@ -347,40 +347,40 @@ EOF
 
 # outer-to-inner-join conversion allowed
 query T multiline
-EXPLAIN WITH(arity, join implementations) select t1.f1, sum(t2.f1), max(t2.f1) from t1 LEFT JOIN t2 ON t1.f1 = t2.f1 group by t1.f1 having max(t2.f1) >= 0 and sum(t2.f1) >= 0;
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, arity, join implementations) AS VERBOSE TEXT FOR select t1.f1, sum(t2.f1), max(t2.f1) from t1 LEFT JOIN t2 ON t1.f1 = t2.f1 group by t1.f1 having max(t2.f1) >= 0 and sum(t2.f1) >= 0;
 ----
 Explained Query:
   With
     cte l0 =
-      Project (#0) // { arity: 1 }
-        Join on=(#0 = #1) type=differential // { arity: 2 }
+      Project (#0{f1}) // { arity: 1 }
+        Join on=(#0{f1} = #1{f1}) type=differential // { arity: 2 }
           implementation
-            %0:t1[#0]Kif » %1:t2[#0]Kiif
-          ArrangeBy keys=[[#0]] // { arity: 1 }
-            Project (#0) // { arity: 1 }
-              Filter (#0 >= 0) // { arity: 2 }
+            %0:t1[#0{f1}]Kif » %1:t2[#0{f1}]Kiif
+          ArrangeBy keys=[[#0{f1}]] // { arity: 1 }
+            Project (#0{f1}) // { arity: 1 }
+              Filter (#0{f1} >= 0) // { arity: 2 }
                 ReadStorage materialize.public.t1 // { arity: 2 }
-          ArrangeBy keys=[[#0]] // { arity: 1 }
-            Project (#0) // { arity: 1 }
-              Filter (#0 >= 0) // { arity: 2 }
+          ArrangeBy keys=[[#0{f1}]] // { arity: 1 }
+            Project (#0{f1}) // { arity: 1 }
+              Filter (#0{f1} >= 0) // { arity: 2 }
                 ReadStorage materialize.public.t2 // { arity: 2 }
   Return // { arity: 3 }
-    Project (#0, #3, #1) // { arity: 3 }
-      Filter (#3 >= 0) // { arity: 4 }
-        Join on=(#0 = #2) type=differential // { arity: 4 }
+    Project (#0{f1}, #3{sum_f1}, #1{max_f1}) // { arity: 3 }
+      Filter (#3{sum_f1} >= 0) // { arity: 4 }
+        Join on=(#0{f1} = #2{f1}) type=differential // { arity: 4 }
           implementation
             %1[#0]UKAif » %0[#0]UKAif
-          ArrangeBy keys=[[#0]] // { arity: 2 }
-            Reduce group_by=[#0] aggregates=[max(#0)] // { arity: 2 }
+          ArrangeBy keys=[[#0{f1}]] // { arity: 2 }
+            Reduce group_by=[#0{f1}] aggregates=[max(#0{f1})] // { arity: 2 }
               Get l0 // { arity: 1 }
-          ArrangeBy keys=[[#0]] // { arity: 2 }
-            Reduce group_by=[#0] aggregates=[sum(#0)] // { arity: 2 }
+          ArrangeBy keys=[[#0{f1}]] // { arity: 2 }
+            Reduce group_by=[#0{f1}] aggregates=[sum(#0{f1})] // { arity: 2 }
               Get l0 // { arity: 1 }
 
 Source materialize.public.t1
-  filter=((#0 >= 0))
+  filter=((#0{f1} >= 0))
 Source materialize.public.t2
-  filter=((#0 >= 0))
+  filter=((#0{f1} >= 0))
 
 Target cluster: quickstart
 
@@ -388,60 +388,60 @@ EOF
 
 # outer-to-inner-join conversion allowed, but we fail to detect this case
 query T multiline
-EXPLAIN WITH(arity, join implementations) select t1.f1, sum(t2.f2), max(t2.f1) from t1 LEFT JOIN t2 ON t1.f1 = t2.f1 group by t1.f1 having max(t2.f1) >= 0;
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, arity, join implementations) AS VERBOSE TEXT FOR select t1.f1, sum(t2.f2), max(t2.f1) from t1 LEFT JOIN t2 ON t1.f1 = t2.f1 group by t1.f1 having max(t2.f1) >= 0;
 ----
 Explained Query:
   With
     cte l0 =
-      ArrangeBy keys=[[#0]] // { arity: 1 }
-        Project (#0) // { arity: 1 }
-          Filter (#0) IS NOT NULL // { arity: 2 }
+      ArrangeBy keys=[[#0{f1}]] // { arity: 1 }
+        Project (#0{f1}) // { arity: 1 }
+          Filter (#0{f1}) IS NOT NULL // { arity: 2 }
             ReadStorage materialize.public.t1 // { arity: 2 }
     cte l1 =
-      Project (#0, #2) // { arity: 2 }
-        Join on=(#0 = #1) type=differential // { arity: 3 }
+      Project (#0{f1}, #2{f2}) // { arity: 2 }
+        Join on=(#0{f1} = #1{f1}) type=differential // { arity: 3 }
           implementation
-            %0:l0[#0]K » %1:t2[#0]K
+            %0:l0[#0{f1}]K » %1:t2[#0{f1}]K
           Get l0 // { arity: 1 }
-          ArrangeBy keys=[[#0]] // { arity: 2 }
-            Filter (#0) IS NOT NULL // { arity: 2 }
+          ArrangeBy keys=[[#0{f1}]] // { arity: 2 }
+            Filter (#0{f1}) IS NOT NULL // { arity: 2 }
               ReadStorage materialize.public.t2 // { arity: 2 }
     cte l2 =
       Union // { arity: 3 }
         Map (null, null) // { arity: 3 }
           Union // { arity: 1 }
             Negate // { arity: 1 }
-              Project (#0) // { arity: 1 }
-                Join on=(#0 = #1) type=differential // { arity: 2 }
+              Project (#0{f1}) // { arity: 1 }
+                Join on=(#0{f1} = #1{f1}) type=differential // { arity: 2 }
                   implementation
-                    %1[#0]UKA » %0:l0[#0]K
+                    %1[#0]UKA » %0:l0[#0{f1}]K
                   Get l0 // { arity: 1 }
-                  ArrangeBy keys=[[#0]] // { arity: 1 }
-                    Distinct project=[#0] // { arity: 1 }
-                      Project (#0) // { arity: 1 }
+                  ArrangeBy keys=[[#0{f1}]] // { arity: 1 }
+                    Distinct project=[#0{f1}] // { arity: 1 }
+                      Project (#0{f1}) // { arity: 1 }
                         Get l1 // { arity: 2 }
-            Project (#0) // { arity: 1 }
+            Project (#0{f1}) // { arity: 1 }
               ReadStorage materialize.public.t1 // { arity: 2 }
-        Project (#0, #0, #1) // { arity: 3 }
+        Project (#0{f1}, #0{f1}, #1{f2}) // { arity: 3 }
           Get l1 // { arity: 2 }
   Return // { arity: 3 }
-    Project (#0, #3, #1) // { arity: 3 }
-      Filter (#1 >= 0) // { arity: 4 }
-        Join on=(#0 = #2) type=differential // { arity: 4 }
+    Project (#0{f1}, #3{sum_f2}, #1{max_f1}) // { arity: 3 }
+      Filter (#1{max_f1} >= 0) // { arity: 4 }
+        Join on=(#0{f1} = #2{f1}) type=differential // { arity: 4 }
           implementation
             %0[#0]UKAif » %1[#0]UKAif
-          ArrangeBy keys=[[#0]] // { arity: 2 }
-            Reduce group_by=[#0] aggregates=[max(#1)] // { arity: 2 }
-              Project (#0, #1) // { arity: 2 }
+          ArrangeBy keys=[[#0{f1}]] // { arity: 2 }
+            Reduce group_by=[#0{f1}] aggregates=[max(#1{f1})] // { arity: 2 }
+              Project (#0{f1}, #1{f1}) // { arity: 2 }
                 Get l2 // { arity: 3 }
-          ArrangeBy keys=[[#0]] // { arity: 2 }
-            Reduce group_by=[#0] aggregates=[sum(#1)] // { arity: 2 }
-              Project (#0, #2) // { arity: 2 }
+          ArrangeBy keys=[[#0{f1}]] // { arity: 2 }
+            Reduce group_by=[#0{f1}] aggregates=[sum(#1{f2})] // { arity: 2 }
+              Project (#0{f1}, #2{f2}) // { arity: 2 }
                 Get l2 // { arity: 3 }
 
 Source materialize.public.t1
 Source materialize.public.t2
-  filter=((#0) IS NOT NULL)
+  filter=((#0{f1}) IS NOT NULL)
 
 Target cluster: quickstart
 
@@ -449,39 +449,39 @@ EOF
 
 # outer-to-inner-join conversion allowed
 query T multiline
-EXPLAIN WITH(arity, join implementations) select t1.f1, sum(t2.f1 + t2.f2), max(t2.f1) from t1 LEFT JOIN t2 ON t1.f1 = t2.f1 group by t1.f1 having max(t2.f1) >= 0;
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, arity, join implementations) AS VERBOSE TEXT FOR select t1.f1, sum(t2.f1 + t2.f2), max(t2.f1) from t1 LEFT JOIN t2 ON t1.f1 = t2.f1 group by t1.f1 having max(t2.f1) >= 0;
 ----
 Explained Query:
   With
     cte l0 =
-      Project (#0, #2) // { arity: 2 }
-        Join on=(#0 = #1) type=differential // { arity: 3 }
+      Project (#0{f1}, #2{f2}) // { arity: 2 }
+        Join on=(#0{f1} = #1{f1}) type=differential // { arity: 3 }
           implementation
-            %0:t1[#0]Kif » %1:t2[#0]Kiif
-          ArrangeBy keys=[[#0]] // { arity: 1 }
-            Project (#0) // { arity: 1 }
-              Filter (#0 >= 0) // { arity: 2 }
+            %0:t1[#0{f1}]Kif » %1:t2[#0{f1}]Kiif
+          ArrangeBy keys=[[#0{f1}]] // { arity: 1 }
+            Project (#0{f1}) // { arity: 1 }
+              Filter (#0{f1} >= 0) // { arity: 2 }
                 ReadStorage materialize.public.t1 // { arity: 2 }
-          ArrangeBy keys=[[#0]] // { arity: 2 }
-            Filter (#0 >= 0) // { arity: 2 }
+          ArrangeBy keys=[[#0{f1}]] // { arity: 2 }
+            Filter (#0{f1} >= 0) // { arity: 2 }
               ReadStorage materialize.public.t2 // { arity: 2 }
   Return // { arity: 3 }
-    Project (#0, #3, #1) // { arity: 3 }
-      Join on=(#0 = #2) type=differential // { arity: 4 }
+    Project (#0{f1}, #3{sum}, #1{max_f1}) // { arity: 3 }
+      Join on=(#0{f1} = #2{f1}) type=differential // { arity: 4 }
         implementation
           %0[#0]UKA » %1[#0]UKA
-        ArrangeBy keys=[[#0]] // { arity: 2 }
-          Reduce group_by=[#0] aggregates=[max(#0)] // { arity: 2 }
-            Project (#0) // { arity: 1 }
+        ArrangeBy keys=[[#0{f1}]] // { arity: 2 }
+          Reduce group_by=[#0{f1}] aggregates=[max(#0{f1})] // { arity: 2 }
+            Project (#0{f1}) // { arity: 1 }
               Get l0 // { arity: 2 }
-        ArrangeBy keys=[[#0]] // { arity: 2 }
-          Reduce group_by=[#0] aggregates=[sum((#0 + #1))] // { arity: 2 }
+        ArrangeBy keys=[[#0{f1}]] // { arity: 2 }
+          Reduce group_by=[#0{f1}] aggregates=[sum((#0{f1} + #1{f2}))] // { arity: 2 }
             Get l0 // { arity: 2 }
 
 Source materialize.public.t1
-  filter=((#0 >= 0))
+  filter=((#0{f1} >= 0))
 Source materialize.public.t2
-  filter=((#0 >= 0))
+  filter=((#0{f1} >= 0))
 
 Target cluster: quickstart
 
@@ -489,39 +489,39 @@ EOF
 
 # outer-to-inner-join conversion allowed
 query T multiline
-EXPLAIN WITH(arity, join implementations) select t1.f1, sum(t1.f1 + t2.f1), max(t2.f1) from t1 LEFT JOIN t2 ON t1.f1 = t2.f1 group by t1.f1 having max(t2.f1) >= 0;
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, arity, join implementations) AS VERBOSE TEXT FOR select t1.f1, sum(t1.f1 + t2.f1), max(t2.f1) from t1 LEFT JOIN t2 ON t1.f1 = t2.f1 group by t1.f1 having max(t2.f1) >= 0;
 ----
 Explained Query:
   With
     cte l0 =
-      Project (#0) // { arity: 1 }
-        Join on=(#0 = #1) type=differential // { arity: 2 }
+      Project (#0{f1}) // { arity: 1 }
+        Join on=(#0{f1} = #1{f1}) type=differential // { arity: 2 }
           implementation
-            %0:t1[#0]Kif » %1:t2[#0]Kiif
-          ArrangeBy keys=[[#0]] // { arity: 1 }
-            Project (#0) // { arity: 1 }
-              Filter (#0 >= 0) // { arity: 2 }
+            %0:t1[#0{f1}]Kif » %1:t2[#0{f1}]Kiif
+          ArrangeBy keys=[[#0{f1}]] // { arity: 1 }
+            Project (#0{f1}) // { arity: 1 }
+              Filter (#0{f1} >= 0) // { arity: 2 }
                 ReadStorage materialize.public.t1 // { arity: 2 }
-          ArrangeBy keys=[[#0]] // { arity: 1 }
-            Project (#0) // { arity: 1 }
-              Filter (#0 >= 0) // { arity: 2 }
+          ArrangeBy keys=[[#0{f1}]] // { arity: 1 }
+            Project (#0{f1}) // { arity: 1 }
+              Filter (#0{f1} >= 0) // { arity: 2 }
                 ReadStorage materialize.public.t2 // { arity: 2 }
   Return // { arity: 3 }
-    Project (#0, #3, #1) // { arity: 3 }
-      Join on=(#0 = #2) type=differential // { arity: 4 }
+    Project (#0{f1}, #3{sum}, #1{max_f1}) // { arity: 3 }
+      Join on=(#0{f1} = #2{f1}) type=differential // { arity: 4 }
         implementation
           %0[#0]UKA » %1[#0]UKA
-        ArrangeBy keys=[[#0]] // { arity: 2 }
-          Reduce group_by=[#0] aggregates=[max(#0)] // { arity: 2 }
+        ArrangeBy keys=[[#0{f1}]] // { arity: 2 }
+          Reduce group_by=[#0{f1}] aggregates=[max(#0{f1})] // { arity: 2 }
             Get l0 // { arity: 1 }
-        ArrangeBy keys=[[#0]] // { arity: 2 }
-          Reduce group_by=[#0] aggregates=[sum((#0 + #0))] // { arity: 2 }
+        ArrangeBy keys=[[#0{f1}]] // { arity: 2 }
+          Reduce group_by=[#0{f1}] aggregates=[sum((#0{f1} + #0{f1}))] // { arity: 2 }
             Get l0 // { arity: 1 }
 
 Source materialize.public.t1
-  filter=((#0 >= 0))
+  filter=((#0{f1} >= 0))
 Source materialize.public.t2
-  filter=((#0 >= 0))
+  filter=((#0{f1} >= 0))
 
 Target cluster: quickstart
 
@@ -529,59 +529,59 @@ EOF
 
 # outer-to-inner-join conversion not allowed since that would alter the result of sum(t1.f1)
 query T multiline
-EXPLAIN WITH(arity, join implementations) select t1.f1, sum(t1.f1), max(t2.f1) from t1 LEFT JOIN t2 ON t1.f1 = t2.f1 group by t1.f1 having max(t2.f1) >= 0;
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, arity, join implementations) AS VERBOSE TEXT FOR select t1.f1, sum(t1.f1), max(t2.f1) from t1 LEFT JOIN t2 ON t1.f1 = t2.f1 group by t1.f1 having max(t2.f1) >= 0;
 ----
 Explained Query:
   With
     cte l0 =
-      ArrangeBy keys=[[#0]] // { arity: 1 }
-        Project (#0) // { arity: 1 }
-          Filter (#0) IS NOT NULL // { arity: 2 }
+      ArrangeBy keys=[[#0{f1}]] // { arity: 1 }
+        Project (#0{f1}) // { arity: 1 }
+          Filter (#0{f1}) IS NOT NULL // { arity: 2 }
             ReadStorage materialize.public.t1 // { arity: 2 }
     cte l1 =
-      Project (#0) // { arity: 1 }
-        Join on=(#0 = #1) type=differential // { arity: 2 }
+      Project (#0{f1}) // { arity: 1 }
+        Join on=(#0{f1} = #1{f1}) type=differential // { arity: 2 }
           implementation
-            %0:l0[#0]K » %1:t2[#0]K
+            %0:l0[#0{f1}]K » %1:t2[#0{f1}]K
           Get l0 // { arity: 1 }
-          ArrangeBy keys=[[#0]] // { arity: 1 }
-            Project (#0) // { arity: 1 }
-              Filter (#0) IS NOT NULL // { arity: 2 }
+          ArrangeBy keys=[[#0{f1}]] // { arity: 1 }
+            Project (#0{f1}) // { arity: 1 }
+              Filter (#0{f1}) IS NOT NULL // { arity: 2 }
                 ReadStorage materialize.public.t2 // { arity: 2 }
     cte l2 =
       Union // { arity: 2 }
         Map (null) // { arity: 2 }
           Union // { arity: 1 }
             Negate // { arity: 1 }
-              Project (#0) // { arity: 1 }
-                Join on=(#0 = #1) type=differential // { arity: 2 }
+              Project (#0{f1}) // { arity: 1 }
+                Join on=(#0{f1} = #1{f1}) type=differential // { arity: 2 }
                   implementation
-                    %1[#0]UKA » %0:l0[#0]K
+                    %1[#0]UKA » %0:l0[#0{f1}]K
                   Get l0 // { arity: 1 }
-                  ArrangeBy keys=[[#0]] // { arity: 1 }
-                    Distinct project=[#0] // { arity: 1 }
+                  ArrangeBy keys=[[#0{f1}]] // { arity: 1 }
+                    Distinct project=[#0{f1}] // { arity: 1 }
                       Get l1 // { arity: 1 }
-            Project (#0) // { arity: 1 }
+            Project (#0{f1}) // { arity: 1 }
               ReadStorage materialize.public.t1 // { arity: 2 }
-        Project (#0, #0) // { arity: 2 }
+        Project (#0{f1}, #0{f1}) // { arity: 2 }
           Get l1 // { arity: 1 }
   Return // { arity: 3 }
-    Project (#0, #3, #1) // { arity: 3 }
-      Filter (#1 >= 0) // { arity: 4 }
-        Join on=(#0 = #2) type=differential // { arity: 4 }
+    Project (#0{f1}, #3{sum_f1}, #1{max_f1}) // { arity: 3 }
+      Filter (#1{max_f1} >= 0) // { arity: 4 }
+        Join on=(#0{f1} = #2{f1}) type=differential // { arity: 4 }
           implementation
             %0[#0]UKAif » %1[#0]UKAif
-          ArrangeBy keys=[[#0]] // { arity: 2 }
-            Reduce group_by=[#0] aggregates=[max(#1)] // { arity: 2 }
+          ArrangeBy keys=[[#0{f1}]] // { arity: 2 }
+            Reduce group_by=[#0{f1}] aggregates=[max(#1{f1})] // { arity: 2 }
               Get l2 // { arity: 2 }
-          ArrangeBy keys=[[#0]] // { arity: 2 }
-            Reduce group_by=[#0] aggregates=[sum(#0)] // { arity: 2 }
-              Project (#0) // { arity: 1 }
+          ArrangeBy keys=[[#0{f1}]] // { arity: 2 }
+            Reduce group_by=[#0{f1}] aggregates=[sum(#0{f1})] // { arity: 2 }
+              Project (#0{f1}) // { arity: 1 }
                 Get l2 // { arity: 2 }
 
 Source materialize.public.t1
 Source materialize.public.t2
-  filter=((#0) IS NOT NULL)
+  filter=((#0{f1}) IS NOT NULL)
 
 Target cluster: quickstart
 
@@ -589,46 +589,46 @@ EOF
 
 # outer join to inner join conversion not allowed
 query T multiline
-EXPLAIN WITH(arity, join implementations) select t1.f1, count(t2.f2) from t1 LEFT JOIN t2 ON t1.f1 = t2.f1 group by t1.f1;
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, arity, join implementations) AS VERBOSE TEXT FOR select t1.f1, count(t2.f2) from t1 LEFT JOIN t2 ON t1.f1 = t2.f1 group by t1.f1;
 ----
 Explained Query:
   With
     cte l0 =
-      ArrangeBy keys=[[#0]] // { arity: 1 }
-        Project (#0) // { arity: 1 }
-          Filter (#0) IS NOT NULL // { arity: 2 }
+      ArrangeBy keys=[[#0{f1}]] // { arity: 1 }
+        Project (#0{f1}) // { arity: 1 }
+          Filter (#0{f1}) IS NOT NULL // { arity: 2 }
             ReadStorage materialize.public.t1 // { arity: 2 }
     cte l1 =
-      Project (#0, #2) // { arity: 2 }
-        Join on=(#0 = #1) type=differential // { arity: 3 }
+      Project (#0{f1}, #2{f2}) // { arity: 2 }
+        Join on=(#0{f1} = #1{f1}) type=differential // { arity: 3 }
           implementation
-            %0:l0[#0]K » %1:t2[#0]K
+            %0:l0[#0{f1}]K » %1:t2[#0{f1}]K
           Get l0 // { arity: 1 }
-          ArrangeBy keys=[[#0]] // { arity: 2 }
-            Filter (#0) IS NOT NULL // { arity: 2 }
+          ArrangeBy keys=[[#0{f1}]] // { arity: 2 }
+            Filter (#0{f1}) IS NOT NULL // { arity: 2 }
               ReadStorage materialize.public.t2 // { arity: 2 }
   Return // { arity: 2 }
-    Reduce group_by=[#0] aggregates=[count(#1)] // { arity: 2 }
+    Reduce group_by=[#0{f1}] aggregates=[count(#1{f2})] // { arity: 2 }
       Union // { arity: 2 }
         Map (null) // { arity: 2 }
           Union // { arity: 1 }
             Negate // { arity: 1 }
-              Project (#0) // { arity: 1 }
-                Join on=(#0 = #1) type=differential // { arity: 2 }
+              Project (#0{f1}) // { arity: 1 }
+                Join on=(#0{f1} = #1{f1}) type=differential // { arity: 2 }
                   implementation
-                    %1[#0]UKA » %0:l0[#0]K
+                    %1[#0]UKA » %0:l0[#0{f1}]K
                   Get l0 // { arity: 1 }
-                  ArrangeBy keys=[[#0]] // { arity: 1 }
-                    Distinct project=[#0] // { arity: 1 }
-                      Project (#0) // { arity: 1 }
+                  ArrangeBy keys=[[#0{f1}]] // { arity: 1 }
+                    Distinct project=[#0{f1}] // { arity: 1 }
+                      Project (#0{f1}) // { arity: 1 }
                         Get l1 // { arity: 2 }
-            Project (#0) // { arity: 1 }
+            Project (#0{f1}) // { arity: 1 }
               ReadStorage materialize.public.t1 // { arity: 2 }
         Get l1 // { arity: 2 }
 
 Source materialize.public.t1
 Source materialize.public.t2
-  filter=((#0) IS NOT NULL)
+  filter=((#0{f1}) IS NOT NULL)
 
 Target cluster: quickstart
 
@@ -636,56 +636,56 @@ EOF
 
 # outer join to inner join conversion not allowed
 query T multiline
-EXPLAIN WITH(arity, join implementations) select t1.f1, count(t2.f2), max(t2.f2) from t1 LEFT JOIN t2 ON t1.f1 = t2.f1 group by t1.f1;
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, arity, join implementations) AS VERBOSE TEXT FOR select t1.f1, count(t2.f2), max(t2.f2) from t1 LEFT JOIN t2 ON t1.f1 = t2.f1 group by t1.f1;
 ----
 Explained Query:
   With
     cte l0 =
-      ArrangeBy keys=[[#0]] // { arity: 1 }
-        Project (#0) // { arity: 1 }
-          Filter (#0) IS NOT NULL // { arity: 2 }
+      ArrangeBy keys=[[#0{f1}]] // { arity: 1 }
+        Project (#0{f1}) // { arity: 1 }
+          Filter (#0{f1}) IS NOT NULL // { arity: 2 }
             ReadStorage materialize.public.t1 // { arity: 2 }
     cte l1 =
-      Project (#0, #2) // { arity: 2 }
-        Join on=(#0 = #1) type=differential // { arity: 3 }
+      Project (#0{f1}, #2{f2}) // { arity: 2 }
+        Join on=(#0{f1} = #1{f1}) type=differential // { arity: 3 }
           implementation
-            %0:l0[#0]K » %1:t2[#0]K
+            %0:l0[#0{f1}]K » %1:t2[#0{f1}]K
           Get l0 // { arity: 1 }
-          ArrangeBy keys=[[#0]] // { arity: 2 }
-            Filter (#0) IS NOT NULL // { arity: 2 }
+          ArrangeBy keys=[[#0{f1}]] // { arity: 2 }
+            Filter (#0{f1}) IS NOT NULL // { arity: 2 }
               ReadStorage materialize.public.t2 // { arity: 2 }
     cte l2 =
       Union // { arity: 2 }
         Map (null) // { arity: 2 }
           Union // { arity: 1 }
             Negate // { arity: 1 }
-              Project (#0) // { arity: 1 }
-                Join on=(#0 = #1) type=differential // { arity: 2 }
+              Project (#0{f1}) // { arity: 1 }
+                Join on=(#0{f1} = #1{f1}) type=differential // { arity: 2 }
                   implementation
-                    %1[#0]UKA » %0:l0[#0]K
+                    %1[#0]UKA » %0:l0[#0{f1}]K
                   Get l0 // { arity: 1 }
-                  ArrangeBy keys=[[#0]] // { arity: 1 }
-                    Distinct project=[#0] // { arity: 1 }
-                      Project (#0) // { arity: 1 }
+                  ArrangeBy keys=[[#0{f1}]] // { arity: 1 }
+                    Distinct project=[#0{f1}] // { arity: 1 }
+                      Project (#0{f1}) // { arity: 1 }
                         Get l1 // { arity: 2 }
-            Project (#0) // { arity: 1 }
+            Project (#0{f1}) // { arity: 1 }
               ReadStorage materialize.public.t1 // { arity: 2 }
         Get l1 // { arity: 2 }
   Return // { arity: 3 }
-    Project (#0, #3, #1) // { arity: 3 }
-      Join on=(#0 = #2) type=differential // { arity: 4 }
+    Project (#0{f1}, #3{count_f2}, #1{max_f2}) // { arity: 3 }
+      Join on=(#0{f1} = #2{f1}) type=differential // { arity: 4 }
         implementation
           %0[#0]UKA » %1[#0]UKA
-        ArrangeBy keys=[[#0]] // { arity: 2 }
-          Reduce group_by=[#0] aggregates=[max(#1)] // { arity: 2 }
+        ArrangeBy keys=[[#0{f1}]] // { arity: 2 }
+          Reduce group_by=[#0{f1}] aggregates=[max(#1{f2})] // { arity: 2 }
             Get l2 // { arity: 2 }
-        ArrangeBy keys=[[#0]] // { arity: 2 }
-          Reduce group_by=[#0] aggregates=[count(#1)] // { arity: 2 }
+        ArrangeBy keys=[[#0{f1}]] // { arity: 2 }
+          Reduce group_by=[#0{f1}] aggregates=[count(#1{f2})] // { arity: 2 }
             Get l2 // { arity: 2 }
 
 Source materialize.public.t1
 Source materialize.public.t2
-  filter=((#0) IS NOT NULL)
+  filter=((#0{f1}) IS NOT NULL)
 
 Target cluster: quickstart
 
@@ -693,39 +693,39 @@ EOF
 
 # outer join to inner join conversion allowed
 query T multiline
-EXPLAIN WITH(arity, join implementations) select t1.f1, count(t2.f2), max(t2.f2) from t1 LEFT JOIN t2 ON t1.f1 = t2.f1 group by t1.f1 having max(t2.f2) > 0;
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, arity, join implementations) AS VERBOSE TEXT FOR select t1.f1, count(t2.f2), max(t2.f2) from t1 LEFT JOIN t2 ON t1.f1 = t2.f1 group by t1.f1 having max(t2.f2) > 0;
 ----
 Explained Query:
   With
     cte l0 =
-      Project (#0, #2) // { arity: 2 }
-        Join on=(#0 = #1) type=differential // { arity: 3 }
+      Project (#0{f1}, #2{f2}) // { arity: 2 }
+        Join on=(#0{f1} = #1{f1}) type=differential // { arity: 3 }
           implementation
-            %0:t1[#0]K » %1:t2[#0]K
-          ArrangeBy keys=[[#0]] // { arity: 1 }
-            Project (#0) // { arity: 1 }
-              Filter (#0) IS NOT NULL // { arity: 2 }
+            %0:t1[#0{f1}]K » %1:t2[#0{f1}]K
+          ArrangeBy keys=[[#0{f1}]] // { arity: 1 }
+            Project (#0{f1}) // { arity: 1 }
+              Filter (#0{f1}) IS NOT NULL // { arity: 2 }
                 ReadStorage materialize.public.t1 // { arity: 2 }
-          ArrangeBy keys=[[#0]] // { arity: 2 }
-            Filter (#0) IS NOT NULL // { arity: 2 }
+          ArrangeBy keys=[[#0{f1}]] // { arity: 2 }
+            Filter (#0{f1}) IS NOT NULL // { arity: 2 }
               ReadStorage materialize.public.t2 // { arity: 2 }
   Return // { arity: 3 }
-    Project (#0, #3, #1) // { arity: 3 }
-      Filter (#1 > 0) // { arity: 4 }
-        Join on=(#0 = #2) type=differential // { arity: 4 }
+    Project (#0{f1}, #3{count_f2}, #1{max_f2}) // { arity: 3 }
+      Filter (#1{max_f2} > 0) // { arity: 4 }
+        Join on=(#0{f1} = #2{f1}) type=differential // { arity: 4 }
           implementation
             %0[#0]UKAif » %1[#0]UKAif
-          ArrangeBy keys=[[#0]] // { arity: 2 }
-            Reduce group_by=[#0] aggregates=[max(#1)] // { arity: 2 }
+          ArrangeBy keys=[[#0{f1}]] // { arity: 2 }
+            Reduce group_by=[#0{f1}] aggregates=[max(#1{f2})] // { arity: 2 }
               Get l0 // { arity: 2 }
-          ArrangeBy keys=[[#0]] // { arity: 2 }
-            Reduce group_by=[#0] aggregates=[count(#1)] // { arity: 2 }
+          ArrangeBy keys=[[#0{f1}]] // { arity: 2 }
+            Reduce group_by=[#0{f1}] aggregates=[count(#1{f2})] // { arity: 2 }
               Get l0 // { arity: 2 }
 
 Source materialize.public.t1
-  filter=((#0) IS NOT NULL)
+  filter=((#0{f1}) IS NOT NULL)
 Source materialize.public.t2
-  filter=((#0) IS NOT NULL)
+  filter=((#0{f1}) IS NOT NULL)
 
 Target cluster: quickstart
 
@@ -733,39 +733,39 @@ EOF
 
 # outer join to inner join conversion allowed
 query T multiline
-EXPLAIN WITH(arity, join implementations) select t1.f1, max(t1.f1 + t2.f2), sum(t1.f2 + t2.f2) from t1 LEFT JOIN t2 ON t1.f1 = t2.f1 group by t1.f1 having max(t1.f1 + t2.f2) > 0;
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, arity, join implementations) AS VERBOSE TEXT FOR select t1.f1, max(t1.f1 + t2.f2), sum(t1.f2 + t2.f2) from t1 LEFT JOIN t2 ON t1.f1 = t2.f1 group by t1.f1 having max(t1.f1 + t2.f2) > 0;
 ----
 Explained Query:
   With
     cte l0 =
-      Project (#0, #1, #3) // { arity: 3 }
-        Join on=(#0 = #2) type=differential // { arity: 4 }
+      Project (#0{f1}, #1{f2}, #3{f2}) // { arity: 3 }
+        Join on=(#0{f1} = #2{f1}) type=differential // { arity: 4 }
           implementation
-            %0:t1[#0]K » %1:t2[#0]K
-          ArrangeBy keys=[[#0]] // { arity: 2 }
-            Filter (#0) IS NOT NULL // { arity: 2 }
+            %0:t1[#0{f1}]K » %1:t2[#0{f1}]K
+          ArrangeBy keys=[[#0{f1}]] // { arity: 2 }
+            Filter (#0{f1}) IS NOT NULL // { arity: 2 }
               ReadStorage materialize.public.t1 // { arity: 2 }
-          ArrangeBy keys=[[#0]] // { arity: 2 }
-            Filter (#0) IS NOT NULL // { arity: 2 }
+          ArrangeBy keys=[[#0{f1}]] // { arity: 2 }
+            Filter (#0{f1}) IS NOT NULL // { arity: 2 }
               ReadStorage materialize.public.t2 // { arity: 2 }
   Return // { arity: 3 }
-    Project (#0, #1, #3) // { arity: 3 }
-      Filter (#1 > 0) // { arity: 4 }
-        Join on=(#0 = #2) type=differential // { arity: 4 }
+    Project (#0{f1}, #1{max}, #3{sum}) // { arity: 3 }
+      Filter (#1{max} > 0) // { arity: 4 }
+        Join on=(#0{f1} = #2{f1}) type=differential // { arity: 4 }
           implementation
             %0[#0]UKAif » %1[#0]UKAif
-          ArrangeBy keys=[[#0]] // { arity: 2 }
-            Reduce group_by=[#0] aggregates=[max((#0 + #1))] // { arity: 2 }
-              Project (#0, #2) // { arity: 2 }
+          ArrangeBy keys=[[#0{f1}]] // { arity: 2 }
+            Reduce group_by=[#0{f1}] aggregates=[max((#0{f1} + #1{f2}))] // { arity: 2 }
+              Project (#0{f1}, #2{f2}) // { arity: 2 }
                 Get l0 // { arity: 3 }
-          ArrangeBy keys=[[#0]] // { arity: 2 }
-            Reduce group_by=[#0] aggregates=[sum((#1 + #2))] // { arity: 2 }
+          ArrangeBy keys=[[#0{f1}]] // { arity: 2 }
+            Reduce group_by=[#0{f1}] aggregates=[sum((#1{f2} + #2{f2}))] // { arity: 2 }
               Get l0 // { arity: 3 }
 
 Source materialize.public.t1
-  filter=((#0) IS NOT NULL)
+  filter=((#0{f1}) IS NOT NULL)
 Source materialize.public.t2
-  filter=((#0) IS NOT NULL)
+  filter=((#0{f1}) IS NOT NULL)
 
 Target cluster: quickstart
 
@@ -801,113 +801,113 @@ select t1.f1, count(t1.f2), max(t2.f2) from t1 left join t2 on t1.f2 = t2.f1 gro
 1  3  2
 
 query T multiline
-explain with(arity, join implementations) select t1.f1, count(t1.f2), max(t2.f2) from t1 left join t2 on t1.f2 = t2.f1 group by t1.f1
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, arity, join implementations) AS VERBOSE TEXT FOR select t1.f1, count(t1.f2), max(t2.f2) from t1 left join t2 on t1.f2 = t2.f1 group by t1.f1
 ----
 Explained Query:
   With
     cte l0 =
-      ArrangeBy keys=[[#1]] // { arity: 2 }
-        Filter (#1) IS NOT NULL // { arity: 2 }
+      ArrangeBy keys=[[#1{f2}]] // { arity: 2 }
+        Filter (#1{f2}) IS NOT NULL // { arity: 2 }
           ReadStorage materialize.public.t1 // { arity: 2 }
     cte l1 =
-      Project (#0, #1, #3) // { arity: 3 }
-        Join on=(#1 = #2) type=differential // { arity: 4 }
+      Project (#0{f1}, #1{f2}, #3{f2}) // { arity: 3 }
+        Join on=(#1{f2} = #2{f1}) type=differential // { arity: 4 }
           implementation
-            %0:l0[#1]K » %1:t2[#0]K
+            %0:l0[#1{f2}]K » %1:t2[#0{f1}]K
           Get l0 // { arity: 2 }
-          ArrangeBy keys=[[#0]] // { arity: 2 }
-            Filter (#0) IS NOT NULL // { arity: 2 }
+          ArrangeBy keys=[[#0{f1}]] // { arity: 2 }
+            Filter (#0{f1}) IS NOT NULL // { arity: 2 }
               ReadStorage materialize.public.t2 // { arity: 2 }
     cte l2 =
       Union // { arity: 3 }
         Map (null) // { arity: 3 }
           Union // { arity: 2 }
             Negate // { arity: 2 }
-              Project (#0, #1) // { arity: 2 }
-                Join on=(#1 = #2) type=differential // { arity: 3 }
+              Project (#0{f1}, #1{f2}) // { arity: 2 }
+                Join on=(#1{f2} = #2{f2}) type=differential // { arity: 3 }
                   implementation
-                    %1[#0]UKA » %0:l0[#1]K
+                    %1[#0]UKA » %0:l0[#1{f2}]K
                   Get l0 // { arity: 2 }
-                  ArrangeBy keys=[[#0]] // { arity: 1 }
-                    Distinct project=[#0] // { arity: 1 }
-                      Project (#1) // { arity: 1 }
+                  ArrangeBy keys=[[#0{f2}]] // { arity: 1 }
+                    Distinct project=[#0{f2}] // { arity: 1 }
+                      Project (#1{f2}) // { arity: 1 }
                         Get l1 // { arity: 3 }
             ReadStorage materialize.public.t1 // { arity: 2 }
         Get l1 // { arity: 3 }
   Return // { arity: 3 }
-    Project (#0, #3, #1) // { arity: 3 }
-      Join on=(#0 = #2) type=differential // { arity: 4 }
+    Project (#0{f1}, #3{count_f2}, #1{max_f2}) // { arity: 3 }
+      Join on=(#0{f1} = #2{f1}) type=differential // { arity: 4 }
         implementation
           %0[#0]UKA » %1[#0]UKA
-        ArrangeBy keys=[[#0]] // { arity: 2 }
-          Reduce group_by=[#0] aggregates=[max(#1)] // { arity: 2 }
-            Project (#0, #2) // { arity: 2 }
+        ArrangeBy keys=[[#0{f1}]] // { arity: 2 }
+          Reduce group_by=[#0{f1}] aggregates=[max(#1{f2})] // { arity: 2 }
+            Project (#0{f1}, #2{f2}) // { arity: 2 }
               Get l2 // { arity: 3 }
-        ArrangeBy keys=[[#0]] // { arity: 2 }
-          Reduce group_by=[#0] aggregates=[count(#1)] // { arity: 2 }
-            Project (#0, #1) // { arity: 2 }
+        ArrangeBy keys=[[#0{f1}]] // { arity: 2 }
+          Reduce group_by=[#0{f1}] aggregates=[count(#1{f2})] // { arity: 2 }
+            Project (#0{f1}, #1{f2}) // { arity: 2 }
               Get l2 // { arity: 3 }
 
 Source materialize.public.t1
 Source materialize.public.t2
-  filter=((#0) IS NOT NULL)
+  filter=((#0{f1}) IS NOT NULL)
 
 Target cluster: quickstart
 
 EOF
 
 query T multiline
-explain with(arity, join implementations) select t1.f1, count(t1.f2), max(t2.f2) from t1 left join t2 on t1.f2 = t2.f1 group by t1.f1 having max(t2.f2) > 0
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, arity, join implementations) AS VERBOSE TEXT FOR select t1.f1, count(t1.f2), max(t2.f2) from t1 left join t2 on t1.f2 = t2.f1 group by t1.f1 having max(t2.f2) > 0
 ----
 Explained Query:
   With
     cte l0 =
-      ArrangeBy keys=[[#1]] // { arity: 2 }
-        Filter (#1) IS NOT NULL // { arity: 2 }
+      ArrangeBy keys=[[#1{f2}]] // { arity: 2 }
+        Filter (#1{f2}) IS NOT NULL // { arity: 2 }
           ReadStorage materialize.public.t1 // { arity: 2 }
     cte l1 =
-      Project (#0, #1, #3) // { arity: 3 }
-        Join on=(#1 = #2) type=differential // { arity: 4 }
+      Project (#0{f1}, #1{f2}, #3{f2}) // { arity: 3 }
+        Join on=(#1{f2} = #2{f1}) type=differential // { arity: 4 }
           implementation
-            %0:l0[#1]K » %1:t2[#0]K
+            %0:l0[#1{f2}]K » %1:t2[#0{f1}]K
           Get l0 // { arity: 2 }
-          ArrangeBy keys=[[#0]] // { arity: 2 }
-            Filter (#0) IS NOT NULL // { arity: 2 }
+          ArrangeBy keys=[[#0{f1}]] // { arity: 2 }
+            Filter (#0{f1}) IS NOT NULL // { arity: 2 }
               ReadStorage materialize.public.t2 // { arity: 2 }
     cte l2 =
       Union // { arity: 3 }
         Map (null) // { arity: 3 }
           Union // { arity: 2 }
             Negate // { arity: 2 }
-              Project (#0, #1) // { arity: 2 }
-                Join on=(#1 = #2) type=differential // { arity: 3 }
+              Project (#0{f1}, #1{f2}) // { arity: 2 }
+                Join on=(#1{f2} = #2{f2}) type=differential // { arity: 3 }
                   implementation
-                    %1[#0]UKA » %0:l0[#1]K
+                    %1[#0]UKA » %0:l0[#1{f2}]K
                   Get l0 // { arity: 2 }
-                  ArrangeBy keys=[[#0]] // { arity: 1 }
-                    Distinct project=[#0] // { arity: 1 }
-                      Project (#1) // { arity: 1 }
+                  ArrangeBy keys=[[#0{f2}]] // { arity: 1 }
+                    Distinct project=[#0{f2}] // { arity: 1 }
+                      Project (#1{f2}) // { arity: 1 }
                         Get l1 // { arity: 3 }
             ReadStorage materialize.public.t1 // { arity: 2 }
         Get l1 // { arity: 3 }
   Return // { arity: 3 }
-    Project (#0, #3, #1) // { arity: 3 }
-      Filter (#1 > 0) // { arity: 4 }
-        Join on=(#0 = #2) type=differential // { arity: 4 }
+    Project (#0{f1}, #3{count_f2}, #1{max_f2}) // { arity: 3 }
+      Filter (#1{max_f2} > 0) // { arity: 4 }
+        Join on=(#0{f1} = #2{f1}) type=differential // { arity: 4 }
           implementation
             %0[#0]UKAif » %1[#0]UKAif
-          ArrangeBy keys=[[#0]] // { arity: 2 }
-            Reduce group_by=[#0] aggregates=[max(#1)] // { arity: 2 }
-              Project (#0, #2) // { arity: 2 }
+          ArrangeBy keys=[[#0{f1}]] // { arity: 2 }
+            Reduce group_by=[#0{f1}] aggregates=[max(#1{f2})] // { arity: 2 }
+              Project (#0{f1}, #2{f2}) // { arity: 2 }
                 Get l2 // { arity: 3 }
-          ArrangeBy keys=[[#0]] // { arity: 2 }
-            Reduce group_by=[#0] aggregates=[count(#1)] // { arity: 2 }
-              Project (#0, #1) // { arity: 2 }
+          ArrangeBy keys=[[#0{f1}]] // { arity: 2 }
+            Reduce group_by=[#0{f1}] aggregates=[count(#1{f2})] // { arity: 2 }
+              Project (#0{f1}, #1{f2}) // { arity: 2 }
                 Get l2 // { arity: 3 }
 
 Source materialize.public.t1
 Source materialize.public.t2
-  filter=((#0) IS NOT NULL)
+  filter=((#0{f1}) IS NOT NULL)
 
 Target cluster: quickstart
 
@@ -915,26 +915,26 @@ EOF
 
 # if the count is removed, the outer join can be safely converted into an inner join
 query T multiline
-explain with(arity, join implementations) select t1.f1, max(t2.f2) from t1 left join t2 on t1.f2 = t2.f1 group by t1.f1 having max(t2.f2) > 0
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, arity, join implementations) AS VERBOSE TEXT FOR select t1.f1, max(t2.f2) from t1 left join t2 on t1.f2 = t2.f1 group by t1.f1 having max(t2.f2) > 0
 ----
 Explained Query:
-  Filter (#1 > 0) // { arity: 2 }
-    Reduce group_by=[#0] aggregates=[max(#1)] // { arity: 2 }
-      Project (#0, #3) // { arity: 2 }
-        Join on=(#1 = #2) type=differential // { arity: 4 }
+  Filter (#1{max_f2} > 0) // { arity: 2 }
+    Reduce group_by=[#0{f1}] aggregates=[max(#1{f2})] // { arity: 2 }
+      Project (#0{f1}, #3{f2}) // { arity: 2 }
+        Join on=(#1{f2} = #2{f1}) type=differential // { arity: 4 }
           implementation
-            %0:t1[#1]K » %1:t2[#0]K
-          ArrangeBy keys=[[#1]] // { arity: 2 }
-            Filter (#1) IS NOT NULL // { arity: 2 }
+            %0:t1[#1{f2}]K » %1:t2[#0{f1}]K
+          ArrangeBy keys=[[#1{f2}]] // { arity: 2 }
+            Filter (#1{f2}) IS NOT NULL // { arity: 2 }
               ReadStorage materialize.public.t1 // { arity: 2 }
-          ArrangeBy keys=[[#0]] // { arity: 2 }
-            Filter (#0) IS NOT NULL // { arity: 2 }
+          ArrangeBy keys=[[#0{f1}]] // { arity: 2 }
+            Filter (#0{f1}) IS NOT NULL // { arity: 2 }
               ReadStorage materialize.public.t2 // { arity: 2 }
 
 Source materialize.public.t1
-  filter=((#1) IS NOT NULL)
+  filter=((#1{f2}) IS NOT NULL)
 Source materialize.public.t2
-  filter=((#0) IS NOT NULL)
+  filter=((#0{f1}) IS NOT NULL)
 
 Target cluster: quickstart
 
@@ -951,16 +951,16 @@ statement ok
 insert into t1 values (0), (1)
 
 query T multiline
-EXPLAIN WITH(arity, join implementations) SELECT * FROM (SELECT 123, COUNT(right_table.f1) AS aggregate FROM t1 AS left_table LEFT JOIN t1 AS right_table ON FALSE GROUP BY 1) AS subquery, t1 AS outer_table WHERE outer_table.f1 = subquery.aggregate;
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, arity, join implementations) AS VERBOSE TEXT FOR SELECT * FROM (SELECT 123, COUNT(right_table.f1) AS aggregate FROM t1 AS left_table LEFT JOIN t1 AS right_table ON FALSE GROUP BY 1) AS subquery, t1 AS outer_table WHERE outer_table.f1 = subquery.aggregate;
 ----
 Explained Query:
-  Project (#2, #1, #0) // { arity: 3 }
-    Filter (0 = integer_to_bigint(#0)) // { arity: 3 }
+  Project (#2, #1, #0{f1}) // { arity: 3 }
+    Filter (0 = integer_to_bigint(#0{f1})) // { arity: 3 }
       Map (0, 123) // { arity: 3 }
         ReadStorage materialize.public.t1 // { arity: 1 }
 
 Source materialize.public.t1
-  filter=((0 = integer_to_bigint(#0)))
+  filter=((0 = integer_to_bigint(#0{f1})))
 
 Target cluster: quickstart
 
@@ -1011,7 +1011,7 @@ WHERE t1.f2 = derived.agg2;
 
 # the count aggregation prevents the outer-to-inner join conversion
 query T multiline
-EXPLAIN WITH(arity, join implementations) SELECT derived.agg1 FROM t1
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, arity, join implementations) AS VERBOSE TEXT FOR SELECT derived.agg1 FROM t1
 JOIN (
     SELECT COUNT(*) AS agg1 , MAX(t2.f2) AS agg2
     FROM t2
@@ -1026,45 +1026,45 @@ Explained Query:
         implementation
           %1:t3[×]ef » %0:t2[×]ef
         ArrangeBy keys=[[]] // { arity: 1 }
-          Project (#1) // { arity: 1 }
+          Project (#1{f2}) // { arity: 1 }
             ReadStorage materialize.public.t2 // { arity: 2 }
         ArrangeBy keys=[[]] // { arity: 1 }
-          Project (#0) // { arity: 1 }
-            Filter (#1 = 6) // { arity: 2 }
+          Project (#0{f1}) // { arity: 1 }
+            Filter (#1{f2} = 6) // { arity: 2 }
               ReadStorage materialize.public.t3 // { arity: 2 }
     cte l1 =
       Union // { arity: 1 }
-        Project (#0) // { arity: 1 }
+        Project (#0{f2}) // { arity: 1 }
           Get l0 // { arity: 2 }
         Project (#4) // { arity: 1 }
           Map (null) // { arity: 5 }
-            Join on=(#0 = #2 AND #1 = #3) type=differential // { arity: 4 }
+            Join on=(#0{f1} = #2{f1} AND #1{f2} = #3{f2}) type=differential // { arity: 4 }
               implementation
                 %0[#0, #1]KK » %1:t3[#0, #1]KK
-              ArrangeBy keys=[[#0, #1]] // { arity: 2 }
+              ArrangeBy keys=[[#0{f1}, #1{f2}]] // { arity: 2 }
                 Union // { arity: 2 }
                   Negate // { arity: 2 }
                     Map (6) // { arity: 2 }
-                      Distinct project=[#0] // { arity: 1 }
-                        Project (#1) // { arity: 1 }
+                      Distinct project=[#0{f1}] // { arity: 1 }
+                        Project (#1{f1}) // { arity: 1 }
                           Get l0 // { arity: 2 }
-                  Distinct project=[#0, #1] // { arity: 2 }
+                  Distinct project=[#0{f1}, #1{f2}] // { arity: 2 }
                     ReadStorage materialize.public.t3 // { arity: 2 }
-              ArrangeBy keys=[[#0, #1]] // { arity: 2 }
+              ArrangeBy keys=[[#0{f1}, #1{f2}]] // { arity: 2 }
                 ReadStorage materialize.public.t3 // { arity: 2 }
   Return // { arity: 1 }
-    Project (#2) // { arity: 1 }
-      Join on=(#0 = #1) type=delta // { arity: 3 }
+    Project (#2{count}) // { arity: 1 }
+      Join on=(#0{f2} = #1{max_f2}) type=delta // { arity: 3 }
         implementation
-          %0:t1 » %1[#0]UK » %2[×]UA
-          %1 » %2[×]UA » %0:t1[#0]K
-          %2 » %1[×]UA » %0:t1[#0]K
-        ArrangeBy keys=[[#0]] // { arity: 1 }
-          Project (#1) // { arity: 1 }
+          %0:t1 » %1[#0{agg2}]UK » %2[×]UA
+          %1 » %2[×]UA » %0:t1[#0{f2}]K
+          %2 » %1[×]UA » %0:t1[#0{f2}]K
+        ArrangeBy keys=[[#0{f2}]] // { arity: 1 }
+          Project (#1{f2}) // { arity: 1 }
             ReadStorage materialize.public.t1 // { arity: 2 }
-        ArrangeBy keys=[[], [#0]] // { arity: 1 }
-          Filter (#0) IS NOT NULL // { arity: 1 }
-            Reduce aggregates=[max(#0)] // { arity: 1 }
+        ArrangeBy keys=[[], [#0{max_f2}]] // { arity: 1 }
+          Filter (#0{max_f2}) IS NOT NULL // { arity: 1 }
+            Reduce aggregates=[max(#0{f2})] // { arity: 1 }
               Get l1 // { arity: 1 }
         ArrangeBy keys=[[]] // { arity: 1 }
           Reduce aggregates=[count(*)] // { arity: 1 }
@@ -1102,7 +1102,7 @@ INSERT INTO t2 VALUES (2);
 
 # outer-to-inner join conversion not allowed
 query T multiline
-EXPLAIN WITH(arity, join implementations) SELECT SUM(t1.f1 + t2.f1), SUM(t2.f1 + 0)
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, arity, join implementations) AS VERBOSE TEXT FOR SELECT SUM(t1.f1 + t2.f1), SUM(t2.f1 + 0)
 FROM t2
 LEFT JOIN t1
 ON t1.f1 < t2.f1
@@ -1111,7 +1111,7 @@ HAVING SUM(t1.f1 + t2.f1) > 0;
 Explained Query:
   With
     cte l0 =
-      Filter (#1 < #0) // { arity: 2 }
+      Filter (#1{f1} < #0{f1}) // { arity: 2 }
         CrossJoin type=differential // { arity: 2 }
           implementation
             %0:t2[×] » %1:t1[×]
@@ -1120,24 +1120,24 @@ Explained Query:
           ArrangeBy keys=[[]] // { arity: 1 }
             ReadStorage materialize.public.t1 // { arity: 1 }
   Return // { arity: 2 }
-    Filter (#0 > 0) // { arity: 2 }
-      Reduce aggregates=[sum((#1 + #0)), sum((#0 + 0))] // { arity: 2 }
+    Filter (#0{sum} > 0) // { arity: 2 }
+      Reduce aggregates=[sum((#1{f1} + #0{f1})), sum((#0{f1} + 0))] // { arity: 2 }
         Union // { arity: 2 }
           Get l0 // { arity: 2 }
-          Project (#0, #2) // { arity: 2 }
+          Project (#0{f1}, #2) // { arity: 2 }
             Map (null) // { arity: 3 }
-              Join on=(#0 = #1) type=differential // { arity: 2 }
+              Join on=(#0{f1} = #1{f1}) type=differential // { arity: 2 }
                 implementation
                   %0[#0]K » %1:t2[#0]K
-                ArrangeBy keys=[[#0]] // { arity: 1 }
+                ArrangeBy keys=[[#0{f1}]] // { arity: 1 }
                   Union // { arity: 1 }
                     Negate // { arity: 1 }
-                      Distinct project=[#0] // { arity: 1 }
-                        Project (#0) // { arity: 1 }
+                      Distinct project=[#0{f1}] // { arity: 1 }
+                        Project (#0{f1}) // { arity: 1 }
                           Get l0 // { arity: 2 }
-                    Distinct project=[#0] // { arity: 1 }
+                    Distinct project=[#0{f1}] // { arity: 1 }
                       ReadStorage materialize.public.t2 // { arity: 1 }
-                ArrangeBy keys=[[#0]] // { arity: 1 }
+                ArrangeBy keys=[[#0{f1}]] // { arity: 1 }
                   ReadStorage materialize.public.t2 // { arity: 1 }
 
 Source materialize.public.t1

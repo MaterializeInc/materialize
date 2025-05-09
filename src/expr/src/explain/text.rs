@@ -11,11 +11,11 @@
 
 use std::collections::BTreeMap;
 use std::fmt;
-use std::sync::atomic::Ordering;
+use std::sync::Arc;
 
-use mz_ore::assert::SOFT_ASSERTIONS;
 use mz_ore::soft_assert_eq_or_log;
-use mz_ore::str::{closure_to_display, separated, Indent, IndentLike, StrExt};
+use mz_ore::str::{Indent, IndentLike, StrExt, closure_to_display, separated};
+use mz_ore::treat_as_equal::TreatAsEqual;
 use mz_repr::explain::text::DisplayText;
 use mz_repr::explain::{
     CompactScalars, ExprHumanizer, HumanizedAnalyses, IndexUsageType, Indices,
@@ -429,7 +429,7 @@ impl MirRelationExpr {
                         let humanize_unqualified_maybe_deleted = |id: &GlobalId| {
                             ctx.humanizer
                                 .humanize_id_unqualified(*id)
-                                .unwrap_or("[DELETED INDEX]".to_owned())
+                                .unwrap_or_else(|| "[DELETED INDEX]".to_owned())
                         };
                         match persist_or_index {
                             AccessStrategy::UnknownOrLocal => {
@@ -484,7 +484,7 @@ impl MirRelationExpr {
             Project { outputs, input } => {
                 FmtNode {
                     fmt_root: |f, ctx| {
-                        let outputs = mode.seq(outputs, self.column_names(ctx));
+                        let outputs = mode.seq(outputs, input.column_names(ctx));
                         let outputs = CompactScalars(outputs);
                         write!(f, "{}Project ({})", ctx.indent, outputs)?;
                         self.fmt_analyses(f, ctx)
@@ -496,6 +496,9 @@ impl MirRelationExpr {
             Map { scalars, input } => {
                 FmtNode {
                     fmt_root: |f, ctx: &mut PlanRenderingContext<'_, MirRelationExpr>| {
+                        // Here, it's better to refer to `self.column_names(ctx)` rather than
+                        // `input.column_names(ctx)`, because then we also get humanization for refs
+                        // to cols introduced earlier by the same `Map`.
                         let scalars = mode.seq(scalars, self.column_names(ctx));
                         let scalars = CompactScalars(scalars);
                         write!(f, "{}Map ({})", ctx.indent, scalars)?;
@@ -904,7 +907,7 @@ impl MirRelationExpr {
         let humanized_index = ctx
             .humanizer
             .humanize_id_unqualified(*idx_id)
-            .unwrap_or("[DELETED INDEX]".to_owned());
+            .unwrap_or_else(|| "[DELETED INDEX]".to_owned());
         if let Some(constants) = constants {
             write!(
                 f,
@@ -1055,7 +1058,7 @@ pub trait HumanizerMode: Sized + Clone {
     /// This will produce a [`HumanizerMode`] instance that redacts output in
     /// production deployments, but not in debug builds and in CI.
     fn default() -> Self {
-        let redacted = !SOFT_ASSERTIONS.load(Ordering::Relaxed);
+        let redacted = !mz_ore::assert::soft_assertions_enabled();
         Self::new(redacted)
     }
 
@@ -1094,6 +1097,15 @@ pub trait HumanizerMode: Sized + Clone {
             write!(f, "{}", datum)
         }
     }
+
+    /// Wrap the given `exprs` (with `cols`) into [`HumanizedExpr`] with the current `mode`.
+    fn seq<'i, T>(
+        &self,
+        exprs: &'i [T],
+        cols: Option<&'i Vec<String>>,
+    ) -> impl Iterator<Item = HumanizedExpr<'i, T, Self>> + Clone {
+        exprs.iter().map(move |expr| self.expr(expr, cols))
+    }
 }
 
 /// A [`HumanizerMode`] that is ambiguous but allows us to print valid SQL
@@ -1102,21 +1114,6 @@ pub trait HumanizerMode: Sized + Clone {
 /// The inner parameter is `true` iff literals should be redacted.
 #[derive(Debug, Clone)]
 pub struct HumanizedNotice(bool);
-
-impl HumanizedNotice {
-    // TODO: move to `HumanizerMode` once we start using a Rust version with the
-    // corresponding Rust stabilization issue:
-    //
-    // https://github.com/rust-lang/rust/pull/115822
-    pub fn seq<'i, T>(
-        &self,
-        exprs: &'i [T],
-        cols: Option<&'i Vec<String>>,
-    ) -> impl Iterator<Item = HumanizedExpr<'i, T, Self>> + Clone {
-        let mode = self.clone();
-        exprs.iter().map(move |expr| mode.expr(expr, cols))
-    }
-}
 
 impl HumanizerMode for HumanizedNotice {
     fn new(redacted: bool) -> Self {
@@ -1138,21 +1135,6 @@ impl HumanizerMode for HumanizedNotice {
 /// The inner parameter is `true` iff literals should be redacted.
 #[derive(Debug, Clone)]
 pub struct HumanizedExplain(bool);
-
-impl HumanizedExplain {
-    // TODO: move to `HumanizerMode` once we start using a Rust version with the
-    // corresponding Rust stabilization issue:
-    //
-    // https://github.com/rust-lang/rust/pull/115822
-    pub fn seq<'i, T>(
-        &self,
-        exprs: &'i [T],
-        cols: Option<&'i Vec<String>>,
-    ) -> impl Iterator<Item = HumanizedExpr<'i, T, Self>> + Clone {
-        let mode = self.clone();
-        exprs.iter().map(move |expr| mode.expr(expr, cols))
-    }
-}
 
 impl HumanizerMode for HumanizedExplain {
     fn new(redacted: bool) -> Self {
@@ -1193,6 +1175,28 @@ where
     }
 }
 
+// A column reference with a stored name.
+// We defer to the inferred name, if available.
+impl<'a, M> fmt::Display for HumanizedExpr<'a, (&usize, &Arc<str>), M>
+where
+    M: HumanizerMode,
+{
+    #[inline]
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self.cols {
+            // We have a name inferred for the column indexed by `self.expr`. Write `ident`.
+            Some(cols) if cols.len() > *self.expr.0 && !cols[*self.expr.0].is_empty() => {
+                // Note: using unchecked here is okay since we're directly
+                // converting to a string afterwards.
+                let ident = Ident::new_unchecked(cols[*self.expr.0].clone()); // TODO: try to avoid the `.clone()` here.
+                M::humanize_ident(*self.expr.0, ident, f)
+            }
+            // We don't have name inferred for this column.
+            _ => M::humanize_ident(*self.expr.0, Ident::new_unchecked(self.expr.1.as_ref()), f),
+        }
+    }
+}
+
 impl<'a, M> ScalarOps for HumanizedExpr<'a, MirScalarExpr, M> {
     fn match_col_ref(&self) -> Option<usize> {
         self.expr.match_col_ref()
@@ -1221,9 +1225,13 @@ where
         use MirScalarExpr::*;
 
         match self.expr {
-            Column(i) => {
-                // Delegate to the `HumanizedExpr<'a, _>` implementation.
+            Column(i, TreatAsEqual(None)) => {
+                // Delegate to the `HumanizedExpr<'a, _>` implementation (plain column reference).
                 self.child(i).fmt(f)
+            }
+            Column(i, TreatAsEqual(Some(name))) => {
+                // Delegate to the `HumanizedExpr<'a, _>` implementation (with stored name information)
+                self.child(&(i, name)).fmt(f)
             }
             Literal(row, _) => {
                 // Delegate to the `HumanizedExpr<'a, _>` implementation.
@@ -1317,7 +1325,7 @@ where
 /// Render a literal value represented as a single-element [`Row`] or an
 /// [`EvalError`].
 ///
-/// The default implemntation calls [`HumanizerMode::humanize_datum`] for
+/// The default implementation calls [`HumanizerMode::humanize_datum`] for
 /// the former and handles the error case (including redaction) directly for
 /// the latter.
 impl<'a, M> fmt::Display for HumanizedExpr<'a, Result<Row, EvalError>, M>
@@ -1374,7 +1382,7 @@ pub fn fmt_text_constant_rows<'a, I>(
 where
     I: Iterator<Item = (&'a Row, &'a Diff)>,
 {
-    let mut row_count = 0;
+    let mut row_count = Diff::ZERO;
     let mut first_rows = Vec::with_capacity(20);
     for _ in 0..20 {
         if let Some((row, diff)) = rows.next() {
@@ -1383,7 +1391,7 @@ where
         }
     }
     let rest_of_row_count = rows.map(|(_, diff)| diff.abs()).sum::<Diff>();
-    if rest_of_row_count != 0 {
+    if !rest_of_row_count.is_zero() {
         writeln!(
             f,
             "{}total_rows (diffs absed): {}",
@@ -1407,7 +1415,7 @@ fn write_first_rows(
     let mode = HumanizedExplain::new(redacted);
     for (row, diff) in first_rows {
         let row = mode.expr(*row, None);
-        if **diff == 1 {
+        if **diff == Diff::ONE {
             writeln!(f, "{}- {}", ctx, row)?;
         } else {
             writeln!(f, "{}- ({} x {})", ctx, row, diff)?;

@@ -252,13 +252,27 @@ impl<'a> Parser<'a> {
         static HASH_REGEX: LazyLock<Regex> =
             LazyLock::new(|| Regex::new(r"(\S+) values hashing to (\S+)").unwrap());
         let sql = self.split_at(&QUERY_OUTPUT_REGEX)?;
-        let mut output_str = self
-            .split_at(if multiline {
-                &EOF_REGEX
-            } else {
-                &DOUBLE_LINE_REGEX
-            })?
-            .trim_start();
+        let mut output_str = self.split_at(if multiline {
+            &EOF_REGEX
+        } else {
+            &DOUBLE_LINE_REGEX
+        })?;
+
+        // The `split_at(&QUERY_OUTPUT_REGEX)` stopped at the end of `----`, so `output_str` usually
+        // starts with a newline, which is not actually part of the expected output. Strip off this
+        // newline.
+        output_str = if let Some(output_str_stripped) = regexp_strip_prefix(output_str, &LINE_REGEX)
+        {
+            output_str_stripped
+        } else {
+            // There should always be a newline after `----`, because we have a lint that there is
+            // always a newline at the end of a file. However, we can still get here, when
+            // the expected output is empty, in which case the EOF_REGEX or DOUBLE_LINE_REGEX eats
+            // the newline at the end of the `----`.
+            assert!(output_str.is_empty());
+            output_str
+        };
+
         // We don't want to advance the expected output past the column names so rewriting works,
         // but need to be able to parse past them, so remember the position before possible column
         // names.
@@ -286,30 +300,47 @@ impl<'a> Parser<'a> {
                     Output::Values(vec![])
                 } else {
                     let mut vals: Vec<String> = output_str.lines().map(|s| s.to_owned()).collect();
-                    if let Mode::Cockroach = self.mode {
-                        let mut rows: Vec<Vec<String>> = vec![];
-                        for line in vals {
-                            let cols = split_cols(&line, types.len());
-                            if sort != Sort::No && cols.len() != types.len() {
-                                // We can't check this condition for
-                                // Sort::No, because some tests use strings
-                                // with whitespace that look like extra
-                                // columns. (Note that these tests never
-                                // use any of the sorting options.)
-                                bail!(
-                                    "col len ({}) did not match declared col len ({})",
-                                    cols.len(),
-                                    types.len()
+                    match self.mode {
+                        Mode::Standard => {
+                            if !multiline {
+                                vals = vals.into_iter().map(|val| val.replace('⏎', "\n")).collect();
+                            }
+                        }
+                        Mode::Cockroach => {
+                            let mut rows: Vec<Vec<String>> = vec![];
+                            for line in vals {
+                                let cols = split_cols(&line, types.len());
+                                if sort != Sort::No && cols.len() != types.len() {
+                                    // We can't check this condition for
+                                    // Sort::No, because some tests use strings
+                                    // with whitespace that look like extra
+                                    // columns. (Note that these tests never
+                                    // use any of the sorting options.)
+                                    bail!(
+                                        "col len ({}) did not match declared col len ({})",
+                                        cols.len(),
+                                        types.len()
+                                    );
+                                }
+                                rows.push(
+                                    cols.into_iter()
+                                        .map(|col| {
+                                            let mut col = col.replace('␠', " ");
+                                            if !multiline {
+                                                col = col.replace('⏎', "\n");
+                                            }
+                                            col
+                                        })
+                                        .collect(),
                                 );
                             }
-                            rows.push(cols.into_iter().map(|col| col.replace('␠', " ")).collect());
-                        }
-                        if sort == Sort::Row {
-                            rows.sort();
-                        }
-                        vals = rows.into_iter().flatten().collect();
-                        if sort == Sort::Value {
-                            vals.sort();
+                            if sort == Sort::Row {
+                                rows.sort();
+                            }
+                            vals = rows.into_iter().flatten().collect();
+                            if sort == Sort::Value {
+                                vals.sort();
+                            }
                         }
                     }
                     Output::Values(vals)
@@ -321,6 +352,7 @@ impl<'a> Parser<'a> {
             output: Ok(QueryOutput {
                 types,
                 sort,
+                multiline,
                 label,
                 column_names,
                 mode: self.mode,
@@ -432,5 +464,18 @@ pub(crate) fn split_cols(line: &str, expected_columns: usize) -> Vec<&str> {
         vec![line.trim()]
     } else {
         line.split_whitespace().collect()
+    }
+}
+
+pub fn regexp_strip_prefix<'a>(text: &'a str, regexp: &Regex) -> Option<&'a str> {
+    match regexp.find(text) {
+        Some(found) => {
+            if found.start() == 0 {
+                Some(&text[found.end()..])
+            } else {
+                None
+            }
+        }
+        None => None,
     }
 }

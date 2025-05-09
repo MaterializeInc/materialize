@@ -14,9 +14,10 @@ mz-dyncfg = { path = "../dyncfg" }
 mz-ore = { path = "../ore" }
 mz-repr = { path = "../repr" }
 mz-storage-types = { path = "../storage-types" }
-serde = "1.0.152"
-timely = "0.16.0"
+serde = "1.0.219"
+timely = "0.20.0"
 workspace-hack = { version = "0.0.0", path = "../workspace-hack", optional = true }
+tracing = "0.1.37"
 
 [package.metadata.cargo-udeps.ignore]
 normal = ["workspace-hack"]

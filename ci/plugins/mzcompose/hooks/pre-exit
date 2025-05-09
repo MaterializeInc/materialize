@@ -40,24 +40,26 @@ ps aux > ps-aux.log
 docker ps -a --no-trunc > docker-ps-a.log
 docker stats --all --no-stream > docker-stats.log
 
-echo "Downing docker containers"
-run down --volumes
-
 mv "$HOME"/cores .
 
 if find cores -name 'core.*' | grep -q .; then
     # Best effort attempt to fetch interesting executables to get backtrace of core files
     bin/ci-builder run stable cp /mnt/build/debug/clusterd cores/ || true
     bin/ci-builder run stable cp /mnt/build/debug/environmentd cores/ || true
+    bin/ci-builder run stable cp /mnt/build/debug/materialized cores/ || true
     bin/ci-builder run stable cp /mnt/build/debug/mz-balancerd cores/balancerd || true
     bin/ci-builder run stable cp /mnt/build/debug/sqllogictest cores/ || true
     run cp sqllogictest:/usr/local/bin/sqllogictest cores/ || true
     run cp sqllogictest:/usr/local/bin/clusterd cores/ || true
     run cp materialized:/usr/local/bin/environmentd cores/ || true
     run cp materialized:/usr/local/bin/clusterd cores/ || true
+    run cp materialized:/usr/local/bin/materialized cores/ || true
     run cp balancerd:/usr/local/bin/balancerd cores/ || true
     run cp testdrive:/usr/local/bin/testdrive cores/ || true
 fi
+
+echo "Downing docker containers"
+run down --volumes || true  # Ignore failures, we still want the rest of the cleanup
 
 echo "Finding core files"
 find cores -name 'core.*' | while read -r core; do
@@ -73,7 +75,7 @@ echo "Compressing parallel-workload-queries.log"
 bin/ci-builder run stable zstd --rm parallel-workload-queries.log || true
 
 echo "Uploading log artifacts"
-mapfile -t artifacts < <(printf "run.log\nservices.log\njournalctl-merge.log\nnetstat-ant.log\nnetstat-panelot.log\nps-aux.log\ndocker-ps-a.log\ndocker-inspect.log\n"; find . -name 'junit_*.xml')
+mapfile -t artifacts < <(printf "run.log\nservices.log\njournalctl-merge.log\nnetstat-ant.log\nnetstat-panelot.log\nps-aux.log\ndocker-ps-a.log\ndocker-inspect.log\n"; find . -name 'junit_*.xml'; find mz_debug_* -name '*.log')
 artifacts_str=$(IFS=";"; echo "${artifacts[*]}")
 unset CI_EXTRA_ARGS # We don't want extra args for the annotation
 # Continue even if ci-annotate-errors fails
@@ -84,11 +86,6 @@ CI_ANNOTATE_ERRORS_RESULT=0
 timeout 300 buildkite-agent artifact upload "$artifacts_str" || true
 bin/ci-builder run stable bin/ci-annotate-errors --test-cmd="$(cat test_cmd)" --test-desc="$(cat test_desc)" "${artifacts[@]}" > ci-annotate-errors.log || CI_ANNOTATE_ERRORS_RESULT=$?
 buildkite-agent artifact upload "ci-annotate-errors.log"
-
-if [ ! -s services.log ] && [ "$BUILDKITE_LABEL" != "Maelstrom coverage of persist" ] && [ "$BUILDKITE_LABEL" != "Long single-node Maelstrom coverage of persist" ] && [ "$BUILDKITE_LABEL" != "Maelstrom coverage of txn-wal" ] && [ "$BUILDKITE_LABEL" != "Mz E2E Test" ] && [ "$BUILDKITE_LABEL" != "Output consistency (version for DFR)" ] && [ "$BUILDKITE_LABEL" != "Output consistency (version for CTF)" ] && [ "$BUILDKITE_LABEL" != "QA Canary Environment Base Load" ] && [ "$BUILDKITE_LABEL" != "Parallel Benchmark against QA Canary Environment" ] && [ "$BUILDKITE_LABEL" != "Parallel Benchmark against QA Benchmarking Staging Environment" ] && [ "$BUILDKITE_LABEL" != "Terraform + Helm Chart E2E on AWS" ]; then
-    echo "+++ services.log is empty, failing"
-    exit 1
-fi
 
 export_cov() {
     bin/ci-builder run stable rust-cov export \
@@ -132,16 +129,43 @@ if [ -n "${CI_COVERAGE_ENABLED:-}" ] && [ -z "${BUILDKITE_MZCOMPOSE_PLUGIN_SKIP_
     fi
 fi
 
-if [ "$CI_ANNOTATE_ERRORS_RESULT" -ne 0 ]; then
-  echo "+++ ci-annotate-errors failed, which indicates that an unknown error was found"
-  exit "$CI_ANNOTATE_ERRORS_RESULT"
-fi
-
 ci_unimportant_heading ":docker: Cleaning up after mzcompose"
 
 # docker-compose kill may fail attempting to kill containers
 # that have just exited on their own because of the
 # "shared-fate" mechanism employed by Mz clusters
-run kill || true
-run rm --force -v
-run down --volumes
+sudo systemctl restart docker
+killall -9 clusterd || true # There might be remaining processes from a cargo-test run
+if [ -n "${CI_COVERAGE_ENABLED:-}" ]; then
+  find . -name '*.profraw' -delete # Remove remaining profraw files from coverage runs
+fi
+
+ci_collapsed_heading ":docker: Purging all existing docker containers and volumes, regardless of origin"
+docker ps --all --quiet | xargs --no-run-if-empty docker rm --force --volumes
+
+if [ "$BUILDKITE_STEP_KEY" = "terraform-aws" ]; then
+  run run aws-temporary --no-setup --no-test --no-run-mz-debug || CI_ANNOTATE_ERRORS_RESULT=1
+elif [ "$BUILDKITE_STEP_KEY" = "terraform-aws-upgrade" ]; then
+  run run aws-upgrade --no-setup --no-test --no-run-mz-debug || CI_ANNOTATE_ERRORS_RESULT=1
+elif [ "$BUILDKITE_STEP_KEY" = "terraform-gcp" ]; then
+  run run gcp-temporary --no-setup --no-test --no-run-mz-debug || CI_ANNOTATE_ERRORS_RESULT=1
+elif [ "$BUILDKITE_STEP_KEY" = "terraform-azure" ]; then
+  run run azure-temporary --no-setup --no-test --no-run-mz-debug || CI_ANNOTATE_ERRORS_RESULT=1
+fi
+rm -rf ~/.kube # Remove potential state from E2E Terraform tests
+
+echo "Removing mz-debug files"
+if find mz_debug*; then
+    rm -rf mz_debug*
+fi
+
+if [ ! -s services.log ] && [ "$BUILDKITE_LABEL" != "Maelstrom coverage of persist" ] && [ "$BUILDKITE_LABEL" != "Long single-node Maelstrom coverage of persist" ] && [ "$BUILDKITE_LABEL" != "Maelstrom coverage of txn-wal" ] && [ "$BUILDKITE_LABEL" != "Mz E2E Test" ] && [ "$BUILDKITE_LABEL" != "Output consistency (version for DFR)" ] && [ "$BUILDKITE_LABEL" != "Output consistency (version for CTF)" ] && [ "$BUILDKITE_LABEL" != "QA Canary Environment Base Load" ] && [ "$BUILDKITE_LABEL" != "Parallel Benchmark against QA Canary Environment" ] && [ "$BUILDKITE_LABEL" != "Parallel Benchmark against QA Benchmarking Staging Environment" ] && [[ ! "$BUILDKITE_LABEL" =~ Terraform\ .* ]]; then
+    echo "+++ services.log is empty, failing"
+    exit 1
+fi
+rm -f services.log
+
+if [ "$CI_ANNOTATE_ERRORS_RESULT" -ne 0 ]; then
+  echo "+++ ci-annotate-errors failed, which indicates that an unknown error was found"
+  exit "$CI_ANNOTATE_ERRORS_RESULT"
+fi

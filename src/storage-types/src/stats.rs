@@ -71,7 +71,7 @@ impl RelationPartStats<'_> {
                 Datum::String(strings.upper.as_str()),
             ),
             JsonStats::Numerics(numerics) => {
-                match mz_repr::stats2::decode_numeric(numerics, arena) {
+                match mz_repr::stats::decode_numeric(numerics, arena) {
                     Ok((lower, upper)) => ResultSpec::value_between(lower, upper),
                     Err(err) => {
                         tracing::error!(%err, "failed to decode Json Numeric stats!");
@@ -105,7 +105,9 @@ impl RelationPartStats<'_> {
             Some(spec) => spec,
             None => ResultSpec::anything(),
         };
-        let json_range = self.col_json(idx, arena).unwrap_or(ResultSpec::anything());
+        let json_range = self
+            .col_json(idx, arena)
+            .unwrap_or_else(ResultSpec::anything);
 
         // If this is not a JSON column or we don't have JSON stats, json_range is
         // [ResultSpec::anything] and this is a noop.
@@ -149,7 +151,10 @@ impl RelationPartStats<'_> {
                 (true, Some(_)) => ResultSpec::null(),
                 (col_null, stats_null) => {
                     self.metrics.mismatched_count.inc();
-                    tracing::error!("JSON column nullability mismatch, col {} null: {col_null}, stats: {stats_null:?}", self.name);
+                    tracing::error!(
+                        "JSON column nullability mismatch, col {} null: {col_null}, stats: {stats_null:?}",
+                        self.name
+                    );
                     return None;
                 }
             };
@@ -195,7 +200,7 @@ impl RelationPartStats<'_> {
         };
         let col_stats = ok_stats.cols.get(name.as_str())?;
 
-        let min_max = mz_repr::stats2::col_values(&typ.scalar_type, &col_stats.values, arena);
+        let min_max = mz_repr::stats::col_values(&typ.scalar_type, &col_stats.values, arena);
         let null_count = col_stats.nulls.as_ref().map_or(0, |nulls| nulls.count);
         let total_count = self.len();
 
@@ -219,11 +224,11 @@ mod tests {
     use arrow::array::AsArray;
     use mz_ore::metrics::MetricsRegistry;
     use mz_persist_types::codec_impls::UnitSchema;
-    use mz_persist_types::columnar::{ColumnDecoder, Schema2};
-    use mz_persist_types::part::PartBuilder2;
+    use mz_persist_types::columnar::{ColumnDecoder, Schema};
+    use mz_persist_types::part::PartBuilder;
     use mz_persist_types::stats::PartStats;
-    use mz_repr::{arb_datum_for_column, RelationType};
     use mz_repr::{ColumnType, Datum, RelationDesc, Row, RowArena, ScalarType};
+    use mz_repr::{RelationType, arb_datum_for_column};
     use proptest::prelude::*;
     use proptest::strategy::ValueTree;
 
@@ -235,7 +240,7 @@ mod tests {
             .with_column("col", column_type.clone())
             .finish();
 
-        let mut builder = PartBuilder2::new(&schema, &UnitSchema);
+        let mut builder = PartBuilder::new(&schema, &UnitSchema);
         let mut row = SourceData(Ok(Row::default()));
         for datum in datums {
             row.as_mut().unwrap().packer().push(datum);
@@ -244,7 +249,7 @@ mod tests {
         let part = builder.finish();
 
         let key_col = part.key.as_struct();
-        let decoder = <RelationDesc as Schema2<SourceData>>::decoder(&schema, key_col.clone())
+        let decoder = <RelationDesc as Schema<SourceData>>::decoder(&schema, key_col.clone())
             .expect("success");
         let key_stats = decoder.stats();
 
@@ -295,7 +300,7 @@ mod tests {
     fn all_datums_produce_valid_stats() {
         // A strategy that will return a Vec of Datums for an arbitrary ColumnType.
         let datums = any::<ColumnType>().prop_flat_map(|ty| {
-            prop::collection::vec(arb_datum_for_column(&ty), 0..128)
+            prop::collection::vec(arb_datum_for_column(ty.clone()), 0..128)
                 .prop_map(move |datums| (ty.clone(), datums))
         });
 
@@ -349,6 +354,7 @@ mod tests {
                     .typ()
                     .columns()
                     .iter()
+                    .cloned()
                     .map(arb_datum_for_column)
                     .collect::<Vec<_>>()
                     .prop_map(|datums| Row::pack(datums.iter().map(Datum::from)));
@@ -361,14 +367,14 @@ mod tests {
             let value_tree = strat.new_tree(&mut runner).unwrap();
             let (desc, rows) = value_tree.current();
 
-            let mut builder = PartBuilder2::new(&desc, &UnitSchema);
+            let mut builder = PartBuilder::new(&desc, &UnitSchema);
             for row in &rows {
                 builder.push(&SourceData(Ok(row.clone())), &(), 1u64, 1i64);
             }
             let part = builder.finish();
 
             let key_col = part.key.as_struct();
-            let decoder = <RelationDesc as Schema2<SourceData>>::decoder(&desc, key_col.clone())
+            let decoder = <RelationDesc as Schema<SourceData>>::decoder(&desc, key_col.clone())
                 .expect("success");
             let key_stats = decoder.stats();
 

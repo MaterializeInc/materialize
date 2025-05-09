@@ -30,7 +30,7 @@ use mz_expr::{Id, JoinInputMapper, LocalId, MirRelationExpr, MirScalarExpr, RECU
 use mz_ore::stack::{CheckedRecursion, RecursionGuard};
 use mz_ore::{assert_none, soft_panic_or_log};
 
-use crate::{all, TransformCtx};
+use crate::{TransformCtx, all};
 
 /// Remove redundant collections of distinct elements from joins.
 #[derive(Debug)]
@@ -219,7 +219,7 @@ impl RedundantJoin {
                         // up with the removal of `remove_input_idx`.
                         for expr in bindings.iter_mut() {
                             expr.visit_pre_mut(|e| {
-                                if let MirScalarExpr::Column(c) = e {
+                                if let MirScalarExpr::Column(c, _) = e {
                                     let (_local_col, input_relation) =
                                         old_input_mapper.map_column_to_local(*c);
                                     if input_relation > remove_input_idx {
@@ -235,7 +235,7 @@ impl RedundantJoin {
                         for equivalence in equivalences.iter_mut() {
                             for expr in equivalence.iter_mut() {
                                 expr.visit_mut_post(&mut |e| {
-                                    if let MirScalarExpr::Column(c) = e {
+                                    if let MirScalarExpr::Column(c, _) = e {
                                         let (local_col, input_relation) =
                                             old_input_mapper.map_column_to_local(*c);
                                         if input_relation == remove_input_idx {
@@ -390,7 +390,7 @@ impl RedundantJoin {
                     for prov in result.iter_mut() {
                         let projection = outputs
                             .iter()
-                            .map(|c| prov.dereference(&MirScalarExpr::Column(*c)))
+                            .map(|c| prov.dereference(&MirScalarExpr::column(*c)))
                             .collect_vec();
                         prov.dereferenced_projection = projection;
                     }
@@ -476,7 +476,7 @@ impl ProvInfo {
     /// of the columns of the projected source.
     fn dereference(&self, expr: &MirScalarExpr) -> Option<MirScalarExpr> {
         match expr {
-            MirScalarExpr::Column(c) => {
+            MirScalarExpr::Column(c, _) => {
                 if let Some(expr) = &self.dereferenced_projection[*c] {
                     Some(expr.clone())
                 } else {
@@ -703,7 +703,7 @@ fn try_build_expression_using_other(
     for (other_col, derefed) in other_prov.dereferenced_projection.iter().enumerate() {
         if let Some(derefed) = derefed {
             if derefed == root_expr {
-                return Some(MirScalarExpr::Column(
+                return Some(MirScalarExpr::column(
                     input_mapper.map_column_to_global(other_col, other),
                 ));
             }
@@ -713,7 +713,7 @@ fn try_build_expression_using_other(
     // Otherwise, try to build root_expr's sub-expressions recursively
     // other's projection.
     match root_expr {
-        MirScalarExpr::Column(_) => None,
+        MirScalarExpr::Column(_, _) => None,
         MirScalarExpr::CallUnary { func, expr } => {
             try_build_expression_using_other(expr, other, other_prov, input_mapper).and_then(
                 |expr| {

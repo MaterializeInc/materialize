@@ -47,6 +47,7 @@ def main():
     parser_run = subparsers.add_parser("run")
     parser_run.add_argument("--dev", action="store_true")
     parser_run.add_argument("--namespace", default="materialize")
+    parser_run.add_argument("--values")
     parser_run.set_defaults(func=run)
 
     parser_reset = subparsers.add_parser("reset")
@@ -62,6 +63,7 @@ def main():
     )
     parser_environment.add_argument("--postgres-url", default=DEFAULT_POSTGRES)
     parser_environment.add_argument("--s3-bucket", default=DEFAULT_MINIO)
+    parser_environment.add_argument("--license-key-file", required=True)
     parser_environment.set_defaults(func=environment)
 
     parser_portforward = subparsers.add_parser("port-forward")
@@ -82,18 +84,19 @@ def run(args: argparse.Namespace):
         dev=args.dev,
         cluster=args.kind_cluster_name,
     )
-    subprocess.check_call(
-        [
-            "helm",
-            "install",
-            "orchestratord",
-            "misc/helm-charts/operator",
-            "--atomic",
-            f"--set=operator.image.tag={DEV_IMAGE_TAG}",
-            "--create-namespace",
-            f"--namespace={args.namespace}",
-        ]
-    )
+    helm_args = [
+        "helm",
+        "install",
+        "orchestratord",
+        "misc/helm-charts/operator",
+        "--atomic",
+        f"--set=operator.image.tag={DEV_IMAGE_TAG}",
+        "--create-namespace",
+        f"--namespace={args.namespace}",
+    ]
+    if args.values is not None:
+        helm_args.extend(["--values", args.values])
+    subprocess.check_call(helm_args)
 
 
 def reset(args: argparse.Namespace):
@@ -213,6 +216,9 @@ def environment(args: argparse.Namespace):
         )
     )
 
+    with open(args.license_key_file) as f:
+        license_key = f.read()
+
     secret_name = f"materialize-backend-{environment_id}"
 
     resources = dedent(
@@ -225,6 +231,7 @@ def environment(args: argparse.Namespace):
         stringData:
           metadata_backend_url: {metadata_backend_url}
           persist_backend_url: {persist_backend_url}
+          license_key: {license_key}
         ---
         apiVersion: materialize.cloud/v1alpha1
         kind: Materialize

@@ -155,7 +155,7 @@ so it is executed.""",
         def visit(step: dict[str, Any]) -> None:
             # ASan runs are slower ...
             if "timeout_in_minutes" in step:
-                step["timeout_in_minutes"] *= 3
+                step["timeout_in_minutes"] *= 10
 
             # ... and need more memory:
             if "agents" in step:
@@ -258,14 +258,19 @@ so it is executed.""",
 
     set_parallelism_name(pipeline)
 
-    if test_selection := os.getenv("CI_TEST_SELECTION"):
-        trim_test_selection(pipeline, set(test_selection.split(",")))
+    if test_selection := os.getenv("CI_TEST_IDS"):
+        trim_test_selection_id(pipeline, {int(i) for i in test_selection.split(",")})
+    elif test_selection := os.getenv("CI_TEST_SELECTION"):
+        trim_test_selection_name(pipeline, set(test_selection.split(",")))
 
     check_depends_on(pipeline, args.pipeline)
 
     add_version_to_preflight_tests(pipeline)
 
     trim_builds(pipeline, args.coverage, args.sanitizer, args.bazel_remote_cache)
+    add_cargo_test_dependency(
+        pipeline, args.coverage, args.sanitizer, args.bazel_remote_cache
+    )
 
     # Remove the Materialize-specific keys from the configuration that are
     # only used to inform how to trim the pipeline and for coverage runs.
@@ -317,6 +322,7 @@ def prioritize_pipeline(pipeline: Any, priority: int) -> None:
 
     tag = os.environ["BUILDKITE_TAG"]
     branch = os.getenv("BUILDKITE_BRANCH")
+    build_author = os.getenv("BUILDKITE_BUILD_AUTHOR")
     # use the base priority of the entire pipeline
     priority += pipeline.get("priority", 0)
 
@@ -327,6 +333,10 @@ def prioritize_pipeline(pipeline: Any, priority: int) -> None:
     # main branch is less time sensitive than results on PRs
     if branch == "main":
         priority -= 50
+
+    # Dependabot is less urgent than manual PRs
+    if build_author == "Dependabot":
+        priority -= 40
 
     def visit(config: Any) -> None:
         # Increase priority for larger Hetzner-based tests so that they get
@@ -366,7 +376,7 @@ def switch_jobs_to_aws(pipeline: Any, priority: int) -> None:
         if branch == "main" or priority < 0:
             return
 
-        # Consider Hetzner to be overloaded when at least 400 jobs exist with priority >= 0
+        # Consider Hetzner to be overloaded when at least 600 jobs exist with priority >= 0
         try:
             builds = generic_api.get_multiple(
                 "builds",
@@ -397,7 +407,7 @@ def switch_jobs_to_aws(pipeline: Any, priority: int) -> None:
                             continue
                         num_jobs += 1
             print(f"Number of high-priority jobs on Hetzner: {num_jobs}")
-            if num_jobs < 400:
+            if num_jobs < 600:
                 return
         except Exception:
             print("switch_jobs_to_aws failed, ignoring:")
@@ -418,13 +428,13 @@ def switch_jobs_to_aws(pipeline: Any, priority: int) -> None:
                 "hetzner-x86-64-2cpu-4gb",
                 "hetzner-x86-64-dedi-2cpu-8gb",
             ):
-                config["agents"]["queue"] = "linux-x86-64-small"
+                config["agents"]["queue"] = "linux-x86_64-small"
             if agent in ("hetzner-x86-64-8cpu-16gb", "hetzner-x86-64-dedi-4cpu-16gb"):
-                config["agents"]["queue"] = "linux-x86-64"
+                config["agents"]["queue"] = "linux-x86_64"
             if agent in ("hetzner-x86-64-16cpu-32gb", "hetzner-x86-64-dedi-8cpu-32gb"):
-                config["agents"]["queue"] = "linux-x86-64-medium"
+                config["agents"]["queue"] = "linux-x86_64-medium"
             if agent == "hetzner-x86-64-dedi-16cpu-64gb":
-                config["agents"]["queue"] = "linux-x86-64-large"
+                config["agents"]["queue"] = "linux-x86_64-large"
             if agent in (
                 "hetzner-x86-64-dedi-32cpu-128gb",
                 "hetzner-x86-64-dedi-48cpu-192gb",
@@ -553,7 +563,30 @@ def add_version_to_preflight_tests(pipeline: Any) -> None:
             step["build"]["branch"] = str(version)
 
 
-def trim_test_selection(pipeline: Any, steps_to_run: set[str]) -> None:
+def trim_test_selection_id(pipeline: Any, step_ids_to_run: set[int]) -> None:
+    for i, step in enumerate(steps(pipeline)):
+        ident = step.get("id") or step.get("command")
+        if (
+            (i not in step_ids_to_run or len(step_ids_to_run) == 0)
+            and "prompt" not in step
+            and "wait" not in step
+            and "group" not in step
+            and ident
+            not in (
+                "coverage-pr-analyze",
+                "analyze",
+                "build-x86_64",
+                "build-aarch64",
+                "rust-build-x86_64",
+                "rust-build-aarch64",
+                "build-wasm",
+            )
+            and not step.get("async")
+        ):
+            step["skip"] = True
+
+
+def trim_test_selection_name(pipeline: Any, steps_to_run: set[str]) -> None:
     for step in steps(pipeline):
         ident = step.get("id") or step.get("command")
         if (
@@ -702,6 +735,34 @@ def trim_tests_pipeline(
         or ("group" in step and step["steps"])
         or step.get("id") in needed
     ]
+
+
+def add_cargo_test_dependency(
+    pipeline: Any,
+    coverage: bool,
+    sanitizer: Sanitizer,
+    bazel_remote_cache: str,
+) -> None:
+    """Cargo Test normally doesn't have to wait for the build to complete, but it requires a few images (ubuntu-base, postgres), which are rarely changed. So only add a dependency when those images are not on Dockerhub yet."""
+    repo = mzbuild.Repository(
+        Path("."),
+        arch=Arch.X86_64,
+        coverage=coverage,
+        sanitizer=sanitizer,
+        bazel=True,
+        bazel_remote_cache=bazel_remote_cache,
+    )
+    composition = Composition(repo, name="cargo-test")
+    deps = composition.dependencies
+    if deps.check():
+        # We already have the dependencies available, no need to add a build dependency
+        return
+
+    for step in steps(pipeline):
+        if step.get("id") == "cargo-test":
+            step["depends_on"] = "build-x86_64"
+        if step.get("id") == "miri-test":
+            step["depends_on"] = "build-aarch64"
 
 
 def trim_builds(

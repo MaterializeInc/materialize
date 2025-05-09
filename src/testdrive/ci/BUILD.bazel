@@ -22,12 +22,12 @@ pkg_tar(
 
 pkg_files(
     name = "protobuf_bin",
-    srcs = ["@protobuf//:protoc"],
+    srcs = ["@com_google_protobuf//:protoc"],
     prefix = "/protobuf-bin",
 )
 
 pkg_files(
     name = "protobuf_include",
-    srcs = ["@protobuf//:well_known_type_protos"],
+    srcs = ["@com_google_protobuf//:well_known_type_protos"],
     prefix = "/protobuf-include/google/protobuf",
 )

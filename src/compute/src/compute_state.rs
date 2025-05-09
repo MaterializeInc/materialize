@@ -7,18 +7,19 @@
 
 use std::any::Any;
 use std::cell::RefCell;
+use std::cmp::Ordering;
 use std::collections::{BTreeMap, BTreeSet};
 use std::num::NonZeroUsize;
 use std::ops::DerefMut;
 use std::rc::Rc;
-use std::sync::{mpsc, Arc};
+use std::sync::{Arc, mpsc};
 use std::time::{Duration, Instant};
 
 use bytesize::ByteSize;
-use differential_dataflow::lattice::Lattice;
-use differential_dataflow::trace::cursor::IntoOwned;
-use differential_dataflow::trace::{Cursor, TraceReader};
 use differential_dataflow::Hashable;
+use differential_dataflow::IntoOwned;
+use differential_dataflow::lattice::Lattice;
+use differential_dataflow::trace::{Cursor, TraceReader};
 use mz_compute_client::logging::LoggingConfig;
 use mz_compute_client::protocol::command::{
     ComputeCommand, ComputeParameters, InstanceConfig, Peek, PeekTarget,
@@ -29,25 +30,28 @@ use mz_compute_client::protocol::response::{
     StatusResponse, SubscribeResponse,
 };
 use mz_compute_types::dataflows::DataflowDescription;
-use mz_compute_types::plan::render_plan::RenderPlan;
 use mz_compute_types::plan::LirId;
+use mz_compute_types::plan::render_plan::RenderPlan;
 use mz_dyncfg::ConfigSet;
-use mz_expr::row::RowCollection;
 use mz_expr::SafeMfpPlan;
+use mz_expr::row::RowCollection;
 use mz_ore::cast::CastFrom;
+use mz_ore::collections::CollectionExt;
 use mz_ore::metrics::UIntGauge;
 use mz_ore::now::EpochMillis;
 use mz_ore::task::AbortOnDropHandle;
 use mz_ore::tracing::{OpenTelemetryContext, TracingHandle};
+use mz_persist_client::Diagnostics;
 use mz_persist_client::cache::PersistClientCache;
 use mz_persist_client::cfg::USE_CRITICAL_SINCE_SNAPSHOT;
 use mz_persist_client::read::ReadHandle;
-use mz_persist_client::Diagnostics;
 use mz_persist_types::codec_impls::UnitSchema;
 use mz_repr::fixed_length::ToDatumIter;
 use mz_repr::{DatumVec, Diff, GlobalId, Row, RowArena, Timestamp};
 use mz_storage_operators::stats::StatsCursor;
+use mz_storage_types::StorageDiff;
 use mz_storage_types::controller::CollectionMetadata;
+use mz_storage_types::dyncfgs::ORE_OVERFLOWING_BEHAVIOR;
 use mz_storage_types::sources::SourceData;
 use mz_storage_types::time_dependence::TimeDependence;
 use mz_txn_wal::operator::TxnsContext;
@@ -59,14 +63,14 @@ use timely::progress::frontier::Antichain;
 use timely::scheduling::Scheduler;
 use timely::worker::Worker as TimelyWorker;
 use tokio::sync::{oneshot, watch};
-use tracing::{debug, error, info, span, warn, Level};
+use tracing::{Level, debug, error, info, span, warn};
 use uuid::Uuid;
 
-use crate::arrangement::manager::{SpecializedTraceHandle, TraceBundle, TraceManager};
+use crate::arrangement::manager::{TraceBundle, TraceManager};
 use crate::logging;
 use crate::logging::compute::{CollectionLogging, ComputeEvent, PeekEvent};
-use crate::metrics::ComputeMetrics;
-use crate::metrics::WorkerMetrics;
+use crate::logging::initialize::LoggingTraces;
+use crate::metrics::{CollectionMetrics, WorkerMetrics};
 use crate::render::{LinearJoinSpec, StartSignal};
 use crate::server::{ComputeInstanceContext, ResponseSender};
 
@@ -113,10 +117,8 @@ pub struct ComputeState {
     max_result_size: u64,
     /// Specification for rendering linear joins.
     pub linear_join_spec: LinearJoinSpec,
-    /// Metrics for this replica.
-    pub metrics: ComputeMetrics,
-    /// Metrics for this replica, specific to a worker.
-    pub worker_metrics: WorkerMetrics,
+    /// Metrics for this worker.
+    pub metrics: WorkerMetrics,
     /// A process-global handle to tracing configuration.
     tracing_handle: Arc<TracingHandle>,
     /// Other configuration for compute
@@ -132,7 +134,9 @@ pub struct ComputeState {
     /// point in the stream of compute commands. Storing per-worker configuration ensures that
     /// because each worker's configuration is only updated once that worker observes the
     /// respective `UpdateConfiguration` command.
-    pub worker_config: ConfigSet,
+    ///
+    /// Reference-counted to avoid cloning for `Context`.
+    pub worker_config: Rc<ConfigSet>,
 
     /// Receiver of operator hydration events.
     pub hydration_rx: mpsc::Receiver<HydrationEvent>,
@@ -181,22 +185,19 @@ pub struct ComputeState {
 impl ComputeState {
     /// Construct a new `ComputeState`.
     pub fn new(
-        worker_id: usize,
         persist_clients: Arc<PersistClientCache>,
         txns_ctx: TxnsContext,
-        metrics: ComputeMetrics,
+        metrics: WorkerMetrics,
         tracing_handle: Arc<TracingHandle>,
         context: ComputeInstanceContext,
     ) -> Self {
-        let traces = TraceManager::new(metrics.for_traces(worker_id));
-        let command_history = ComputeCommandHistory::new(metrics.for_history(worker_id));
+        let traces = TraceManager::new(metrics.clone());
+        let command_history = ComputeCommandHistory::new(metrics.for_history());
         let (hydration_tx, hydration_rx) = mpsc::channel();
 
         // We always initialize as read_only=true. Only when we're explicitly
         // allowed do we switch to doing writes.
         let (read_only_tx, read_only_rx) = watch::channel(true);
-
-        let worker_metrics = WorkerMetrics::from(&metrics, worker_id);
 
         Self {
             collections: Default::default(),
@@ -212,10 +213,9 @@ impl ComputeState {
             max_result_size: u64::MAX,
             linear_join_spec: Default::default(),
             metrics,
-            worker_metrics,
             tracing_handle,
             context,
-            worker_config: mz_dyncfgs::all_dyncfgs(),
+            worker_config: mz_dyncfgs::all_dyncfgs().into(),
             hydration_rx,
             hydration_tx,
             suspended_collections: Default::default(),
@@ -225,18 +225,6 @@ impl ComputeState {
             init_system_time: mz_ore::now::SYSTEM_TIME(),
             replica_expiration: Antichain::default(),
         }
-    }
-
-    /// Return whether a collection with the given ID exists.
-    pub fn collection_exists(&self, id: GlobalId) -> bool {
-        self.collections.contains_key(&id)
-    }
-
-    /// Return a reference to the identified collection.
-    ///
-    /// Panics if the collection doesn't exist.
-    pub fn expect_collection(&self, id: GlobalId) -> &CollectionState {
-        self.collections.get(&id).expect("collection must exist")
     }
 
     /// Return a mutable reference to the identified collection.
@@ -275,14 +263,21 @@ impl ComputeState {
 
         self.linear_join_spec = LinearJoinSpec::from_config(config);
 
-        if ENABLE_COLUMNATION_LGALLOC.get(config) {
+        if ENABLE_LGALLOC.get(config) {
             if let Some(path) = &self.context.scratch_directory {
-                let eager_return = ENABLE_LGALLOC_EAGER_RECLAMATION.get(config);
-                let interval = LGALLOC_BACKGROUND_INTERVAL.get(config);
                 let clear_bytes = LGALLOC_SLOW_CLEAR_BYTES.get(config);
+                let eager_return = ENABLE_LGALLOC_EAGER_RECLAMATION.get(config);
+                let file_growth_dampener = LGALLOC_FILE_GROWTH_DAMPENER.get(config);
+                let interval = LGALLOC_BACKGROUND_INTERVAL.get(config);
+                let local_buffer_bytes = LGALLOC_LOCAL_BUFFER_BYTES.get(config);
                 info!(
                     ?path,
-                    eager_return, backgrund_interval=?interval, clear_bytes, "enabling lgalloc"
+                    backgrund_interval=?interval,
+                    clear_bytes,
+                    eager_return,
+                    file_growth_dampener,
+                    local_buffer_bytes,
+                    "enabling lgalloc"
                 );
                 let background_worker_config = lgalloc::BackgroundWorkerConfig {
                     interval,
@@ -293,7 +288,9 @@ impl ComputeState {
                         .enable()
                         .with_path(path.clone())
                         .with_background_config(background_worker_config)
-                        .eager_return(eager_return),
+                        .eager_return(eager_return)
+                        .file_growth_dampener(file_growth_dampener)
+                        .local_buffer_bytes(local_buffer_bytes),
                 );
             } else {
                 debug!("not enabling lgalloc, scratch directory not specified");
@@ -303,13 +300,28 @@ impl ComputeState {
             lgalloc::lgalloc_set_config(lgalloc::LgAlloc::new().disable());
         }
 
-        let chunked_stack = ENABLE_CHUNKED_STACK.get(config);
-        info!("using chunked stack: {chunked_stack}");
-        mz_timely_util::containers::stack::use_chunked_stack(chunked_stack);
+        mz_ore::region::ENABLE_LGALLOC_REGION.store(
+            ENABLE_COLUMNATION_LGALLOC.get(config),
+            std::sync::atomic::Ordering::Relaxed,
+        );
+
+        let enable_columnar_lgalloc = ENABLE_COLUMNAR_LGALLOC.get(config);
+        mz_timely_util::containers::set_enable_columnar_lgalloc(enable_columnar_lgalloc);
 
         // Remember the maintenance interval locally to avoid reading it from the config set on
         // every server iteration.
         self.server_maintenance_interval = COMPUTE_SERVER_MAINTENANCE_INTERVAL.get(config);
+
+        let overflowing_behavior = ORE_OVERFLOWING_BEHAVIOR.get(config);
+        match overflowing_behavior.parse() {
+            Ok(behavior) => mz_ore::overflowing::set_behavior(behavior),
+            Err(err) => {
+                error!(
+                    err,
+                    overflowing_behavior, "Invalid value for ore_overflowing_behavior"
+                );
+            }
+        }
     }
 
     /// Apply the provided replica expiration `offset` by converting it to a frontier relative to
@@ -335,7 +347,7 @@ impl ComputeState {
             self.replica_expiration = Antichain::from_elem(replica_expiration);
 
             // Record the replica expiration in the metrics.
-            self.worker_metrics
+            self.metrics
                 .replica_expiration_timestamp_seconds
                 .set(replica_expiration.into());
         }
@@ -387,22 +399,22 @@ impl<'a, A: Allocate + 'static> ActiveComputeState<'a, A> {
         // Record the command duration, per worker and command kind.
         let timer = self
             .compute_state
-            .worker_metrics
+            .metrics
             .handle_command_duration_seconds
             .for_command(&cmd)
             .start_timer();
 
         match cmd {
             CreateTimely { .. } => panic!("CreateTimely must be captured before"),
-            CreateInstance(instance_config) => self.handle_create_instance(instance_config),
+            CreateInstance(instance_config) => self.handle_create_instance(*instance_config),
             InitializationComplete => (),
-            UpdateConfiguration(params) => self.handle_update_configuration(params),
-            CreateDataflow(dataflow) => self.handle_create_dataflow(dataflow),
+            UpdateConfiguration(params) => self.handle_update_configuration(*params),
+            CreateDataflow(dataflow) => self.handle_create_dataflow(*dataflow),
             Schedule(id) => self.handle_schedule(id),
             AllowCompaction { id, frontier } => self.handle_allow_compaction(id, frontier),
             Peek(peek) => {
                 peek.otel_ctx.attach_as_parent();
-                self.handle_peek(peek)
+                self.handle_peek(*peek)
             }
             CancelPeek { uuid } => self.handle_cancel_peek(uuid),
             AllowWrites => {
@@ -452,6 +464,11 @@ impl<'a, A: Allocate + 'static> ActiveComputeState<'a, A> {
             .persist_clients
             .cfg()
             .apply_from(&dyncfg_updates);
+
+        // Note: We're only updating mz_metrics from the compute state here, but not from the
+        // equivalent storage state. This is because they're running on the same process and
+        // share the metrics.
+        mz_metrics::update_dyncfg(&dyncfg_updates);
 
         self.compute_state.apply_worker_config();
     }
@@ -512,7 +529,8 @@ impl<'a, A: Allocate + 'static> ActiveComputeState<'a, A> {
         // Initialize compute and logging state for each object.
         for object_id in dataflow.export_ids() {
             let is_subscribe_or_copy = subscribe_copy_ids.contains(&object_id);
-            let mut collection = CollectionState::new(is_subscribe_or_copy, as_of.clone());
+            let metrics = self.compute_state.metrics.for_collection(object_id);
+            let mut collection = CollectionState::new(is_subscribe_or_copy, as_of.clone(), metrics);
 
             if let Some(logger) = self.compute_state.compute_logger.clone() {
                 let logging = CollectionLogging::new(
@@ -597,7 +615,7 @@ impl<'a, A: Allocate + 'static> ActiveComputeState<'a, A> {
 
         // Log the receipt of the peek.
         if let Some(logger) = self.compute_state.compute_logger.as_mut() {
-            logger.log(pending.as_log_event(true));
+            logger.log(&pending.as_log_event(true));
         }
 
         self.process_peek(&mut Antichain::new(), pending);
@@ -651,10 +669,14 @@ impl<'a, A: Allocate + 'static> ActiveComputeState<'a, A> {
             panic!("dataflow server has already initialized logging");
         }
 
-        let (logger, traces) = logging::initialize(self.timely_worker, &config);
+        let LoggingTraces {
+            traces,
+            dataflow_index,
+            compute_logger: logger,
+        } = logging::initialize(self.timely_worker, &config);
 
         let mut log_index_ids = config.index_logs;
-        for (log, (trace, dataflow_index)) in traces {
+        for (log, trace) in traces {
             // Install trace as maintained index.
             let id = log_index_ids
                 .remove(&log)
@@ -664,7 +686,8 @@ impl<'a, A: Allocate + 'static> ActiveComputeState<'a, A> {
             // Initialize compute and logging state for the logging index.
             let is_subscribe_or_copy = false;
             let as_of = Antichain::from_elem(Timestamp::MIN);
-            let mut collection = CollectionState::new(is_subscribe_or_copy, as_of);
+            let metrics = self.compute_state.metrics.for_collection(id);
+            let mut collection = CollectionState::new(is_subscribe_or_copy, as_of, metrics);
 
             let logging =
                 CollectionLogging::new(id, logger.clone(), dataflow_index, std::iter::empty());
@@ -836,7 +859,7 @@ impl<'a, A: Allocate + 'static> ActiveComputeState<'a, A> {
             let expiration = Duration::from_millis(<u64>::from(expiration)).as_secs_f64();
             let remaining = expiration - now;
             self.compute_state
-                .worker_metrics
+                .metrics
                 .replica_expiration_remaining_seconds
                 .set(remaining)
         }
@@ -891,7 +914,7 @@ impl<'a, A: Allocate + 'static> ActiveComputeState<'a, A> {
 
         // Log responding to the peek request.
         if let Some(logger) = self.compute_state.compute_logger.as_mut() {
-            logger.log(log_event);
+            logger.log(&log_event);
         }
     }
 
@@ -1082,6 +1105,12 @@ impl PendingPeek {
             + peek.finishing.offset;
         let order_by = peek.finishing.order_by.clone();
 
+        // Persist peeks can include at most one literal constraint.
+        let literal_constraint = peek
+            .literal_constraints
+            .clone()
+            .map(|rows| rows.into_element());
+
         let task_handle = mz_ore::task::spawn(|| "persist::peek", async move {
             let start = Instant::now();
             let result = if active_worker {
@@ -1089,6 +1118,7 @@ impl PendingPeek {
                     &persist_clients,
                     metadata,
                     timestamp,
+                    literal_constraint,
                     mfp_plan,
                     max_result_size,
                     max_results_needed,
@@ -1157,6 +1187,7 @@ impl PersistPeek {
         persist_clients: &PersistClientCache,
         metadata: CollectionMetadata,
         as_of: Timestamp,
+        literal_constraint: Option<Row>,
         mfp_plan: SafeMfpPlan,
         max_result_size: usize,
         mut limit_remaining: usize,
@@ -1166,7 +1197,7 @@ impl PersistPeek {
             .await
             .map_err(|e| e.to_string())?;
 
-        let mut reader: ReadHandle<SourceData, (), Timestamp, Diff> = client
+        let mut reader: ReadHandle<SourceData, (), Timestamp, StorageDiff> = client
             .open_leased_reader(
                 metadata.data_shard,
                 Arc::new(metadata.relation_desc.clone()),
@@ -1195,6 +1226,7 @@ impl PersistPeek {
             &mut reader,
             txns_read.as_mut(),
             metrics,
+            &mfp_plan,
             &metadata.relation_desc,
             Antichain::from_elem(as_of),
         )
@@ -1210,16 +1242,30 @@ impl PersistPeek {
         let arena = RowArena::new();
         let mut total_size = 0usize;
 
-        while limit_remaining > 0 {
+        let literal_len = match &literal_constraint {
+            None => 0,
+            Some(row) => row.iter().count(),
+        };
+
+        'collect: while limit_remaining > 0 {
             let Some(batch) = cursor.next().await else {
                 break;
             };
             for (data, _, d) in batch {
                 let row = data.map_err(|e| e.to_string())?;
+
+                if let Some(literal) = &literal_constraint {
+                    match row.iter().take(literal_len).cmp(literal.iter()) {
+                        Ordering::Less => continue,
+                        Ordering::Equal => {}
+                        Ordering::Greater => break 'collect,
+                    }
+                }
+
                 let count: usize = d.try_into().map_err(|_| {
                     format!(
                         "Invalid data in source, saw retractions ({}) for row that does not exist: {:?}",
-                        d * -1,
+                        -d,
                         row,
                     )
                 })?;
@@ -1229,6 +1275,7 @@ impl PersistPeek {
                 let mut datum_local = datum_vec.borrow_with(&row);
                 let eval_result = mfp_plan
                     .evaluate_into(&mut datum_local, &arena, &mut row_builder)
+                    .map(|row| row.cloned())
                     .map_err(|e| e.to_string())?;
                 if let Some(row) = eval_result {
                     total_size = total_size
@@ -1315,41 +1362,26 @@ impl IndexPeek {
         // find first.
         let (mut cursor, storage) = self.trace_bundle.errs_mut().cursor();
         while cursor.key_valid(&storage) {
-            let mut copies = 0;
+            let mut copies = Diff::ZERO;
             cursor.map_times(&storage, |time, diff| {
                 if time.less_equal(&self.peek.timestamp) {
                     copies += diff;
                 }
             });
-            if copies < 0 {
+            if copies.is_negative() {
                 return Err(format!(
                     "Invalid data in source errors, saw retractions ({}) for row that does not exist: {}",
-                    copies * -1,
+                    -copies,
                     cursor.key(&storage),
                 ));
             }
-            if copies > 0 {
+            if copies.is_positive() {
                 return Err(cursor.key(&storage).to_string());
             }
             cursor.step_key(&storage);
         }
 
-        self.dispatch_collect_ok_finished_data(max_result_size)
-    }
-
-    /// Dispatches peek finishing of data in the ok stream according to
-    /// arrangement key-value types.
-    fn dispatch_collect_ok_finished_data(
-        &mut self,
-        max_result_size: u64,
-    ) -> Result<Vec<(Row, NonZeroUsize)>, String> {
-        let peek = &mut self.peek;
-        let oks = self.trace_bundle.oks_mut();
-        match oks {
-            SpecializedTraceHandle::RowRow(oks_handle) => {
-                Self::collect_ok_finished_data(peek, oks_handle, max_result_size)
-            }
-        }
+        Self::collect_ok_finished_data(&mut self.peek, self.trace_bundle.oks_mut(), max_result_size)
     }
 
     /// Collects data for a known-complete peek from the ok stream.
@@ -1456,22 +1488,22 @@ impl IndexPeek {
                 if let Some(result) = peek
                     .map_filter_project
                     .evaluate_into(&mut borrow, &arena, &mut row_builder)
+                    .map(|row| row.cloned())
                     .map_err_to_string_with_causes()?
                 {
-                    let mut copies = 0;
+                    let mut copies = Diff::ZERO;
                     cursor.map_times(&storage, |time, diff| {
                         if time.less_equal(&peek.timestamp) {
                             copies += diff;
                         }
                     });
-                    let copies: usize = if copies < 0 {
+                    let copies: usize = if copies.is_negative() {
                         return Err(format!(
                             "Invalid data in source, saw retractions ({}) for row that does not exist: {:?}",
-                            copies * -1,
-                            &*borrow,
+                            -copies, &*borrow,
                         ));
                     } else {
-                        copies.try_into().unwrap()
+                        copies.into_inner().try_into().unwrap()
                     };
                     // if copies > 0 ... otherwise skip
                     if let Some(copies) = NonZeroUsize::new(copies) {
@@ -1644,10 +1676,16 @@ pub struct CollectionState {
     pub compute_probe: Option<probe::Handle<Timestamp>>,
     /// Logging state maintained for this collection.
     logging: Option<CollectionLogging>,
+    /// Metrics tracked for this collection.
+    metrics: CollectionMetrics,
 }
 
 impl CollectionState {
-    fn new(is_subscribe_or_copy: bool, as_of: Antichain<Timestamp>) -> Self {
+    fn new(
+        is_subscribe_or_copy: bool,
+        as_of: Antichain<Timestamp>,
+        metrics: CollectionMetrics,
+    ) -> Self {
         Self {
             reported_frontiers: ReportedFrontiers::new(),
             is_subscribe_or_copy,
@@ -1657,6 +1695,7 @@ impl CollectionState {
             input_probes: Default::default(),
             compute_probe: None,
             logging: None,
+            metrics,
         }
     }
 
@@ -1708,6 +1747,7 @@ impl CollectionState {
             if let Some(logging) = &mut self.logging {
                 logging.set_hydrated();
             }
+            self.metrics.record_collection_hydrated();
         }
     }
 

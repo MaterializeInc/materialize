@@ -18,6 +18,7 @@ message ProtoCopyFormatParams {
     ProtoCopyTextFormatParams text = 1;
     ProtoCopyCsvFormatParams csv = 2;
     google.protobuf.Empty binary = 3;
+    ProtoCopyParquetFormatParams parquet = 4;
   }
 }
 
@@ -33,3 +34,5 @@ message ProtoCopyCsvFormatParams {
   bool header = 4;
   string null = 5;
 }
+
+message ProtoCopyParquetFormatParams {}

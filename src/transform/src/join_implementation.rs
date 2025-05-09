@@ -18,8 +18,8 @@
 
 use std::collections::BTreeMap;
 
-use mz_expr::visit::{Visit, VisitChildren};
 use mz_expr::JoinImplementation::{Differential, IndexedFilter, Unimplemented};
+use mz_expr::visit::{Visit, VisitChildren};
 use mz_expr::{
     FilterCharacteristics, Id, JoinInputCharacteristics, JoinInputMapper, MapFilterProject,
     MirRelationExpr, MirScalarExpr, RECURSION_LIMIT,
@@ -105,7 +105,7 @@ impl JoinImplementation {
                     MirRelationExpr::Reduce { group_key, .. } => {
                         indexes.add_local(
                             *id,
-                            (0..group_key.len()).map(MirScalarExpr::Column).collect(),
+                            (0..group_key.len()).map(MirScalarExpr::column).collect(),
                         );
                     }
                     _ => {}
@@ -311,7 +311,7 @@ impl JoinImplementation {
                     MirRelationExpr::Reduce { group_key, .. } => {
                         // The first `group_key.len()` columns form an arrangement key.
                         available_arrangements[index]
-                            .push((0..group_key.len()).map(MirScalarExpr::Column).collect());
+                            .push((0..group_key.len()).map(MirScalarExpr::column).collect());
                     }
                     MirRelationExpr::Join {
                         implementation: IndexedFilter(id, ..),
@@ -381,6 +381,7 @@ impl JoinImplementation {
                     &unique_keys,
                     &cardinalities,
                     &filters,
+                    features,
                 ) {
                     tracing::debug!(plan = ?delta_query_plan, "replacing differential join with delta join");
                     *relation = delta_query_plan;
@@ -399,6 +400,7 @@ impl JoinImplementation {
                 &unique_keys,
                 &cardinalities,
                 &filters,
+                features,
             )
             .expect("Failed to produce a differential join plan");
 
@@ -463,6 +465,7 @@ impl JoinImplementation {
                 &unique_keys,
                 &cardinalities,
                 &filters,
+                features,
             ) {
                 // If delta plan's inputs need no new arrangements, pick the delta plan.
                 Ok((delta_query_plan, 0)) => {
@@ -504,7 +507,8 @@ impl JoinImplementation {
                         soft_assert_or_log!(
                             matches!(old_implementation, Differential(..)),
                             "implemented plan in second run of join implementation should be differential \
-                             if the delta plan is not viable")
+                             if the delta plan is not viable"
+                        )
                     }
                 }
                 // If we can't plan a delta join, plan a differential join.
@@ -577,6 +581,7 @@ mod delta_queries {
     use mz_expr::{
         FilterCharacteristics, JoinImplementation, JoinInputMapper, MirRelationExpr, MirScalarExpr,
     };
+    use mz_repr::optimize::OptimizerFeatures;
 
     use crate::TransformError;
 
@@ -591,6 +596,7 @@ mod delta_queries {
         unique_keys: &[Vec<Vec<usize>>],
         cardinalities: &[Option<usize>],
         filters: &[FilterCharacteristics],
+        optimizer_features: &OptimizerFeatures,
     ) -> Result<(MirRelationExpr, usize), TransformError> {
         let mut new_join = join.clone();
 
@@ -608,23 +614,23 @@ mod delta_queries {
                 cardinalities,
                 filters,
                 input_mapper,
+                optimizer_features.enable_join_prioritize_arranged,
             )?;
 
             // Count new arrangements.
-            let new_arrangements: usize =
-                orders
-                    .iter()
-                    .flat_map(|o| {
-                        o.iter().skip(1).filter_map(|(c, key, input)| {
-                            if c.arranged {
-                                None
-                            } else {
-                                Some((input, key))
-                            }
-                        })
+            let new_arrangements: usize = orders
+                .iter()
+                .flat_map(|o| {
+                    o.iter().skip(1).filter_map(|(c, key, input)| {
+                        if c.arranged() {
+                            None
+                        } else {
+                            Some((input, key))
+                        }
                     })
-                    .collect::<BTreeSet<_>>()
-                    .len();
+                })
+                .collect::<BTreeSet<_>>()
+                .len();
 
             // Convert the order information into specific (input, key, characteristics) information.
             let mut orders = orders
@@ -666,9 +672,10 @@ mod differential {
 
     use mz_expr::{JoinImplementation, JoinInputMapper, MirRelationExpr, MirScalarExpr};
     use mz_ore::soft_assert_eq_or_log;
+    use mz_repr::optimize::OptimizerFeatures;
 
-    use crate::join_implementation::{FilterCharacteristics, JoinInputCharacteristics};
     use crate::TransformError;
+    use crate::join_implementation::FilterCharacteristics;
 
     /// Creates a linear differential plan, and any predicates that need to be lifted.
     /// It also returns the number of new arrangements necessary for this plan.
@@ -679,6 +686,7 @@ mod differential {
         unique_keys: &[Vec<Vec<usize>>],
         cardinalities: &[Option<usize>],
         filters: &[FilterCharacteristics],
+        optimizer_features: &OptimizerFeatures,
     ) -> Result<(MirRelationExpr, usize), TransformError> {
         let mut new_join = join.clone();
 
@@ -704,6 +712,7 @@ mod differential {
                 cardinalities,
                 filters,
                 input_mapper,
+                optimizer_features.enable_join_prioritize_arranged,
             )?;
 
             // Count new arrangements.
@@ -714,7 +723,7 @@ mod differential {
                 .map(|o| {
                     o.iter()
                         .filter_map(|(c, key, input)| {
-                            if c.arranged {
+                            if c.arranged() {
                                 None
                             } else {
                                 Some((*input, key.clone()))
@@ -732,9 +741,9 @@ mod differential {
             // any input before. For examples, see chbench.slt Query 02 and 11.
             orders.iter_mut().for_each(|order| {
                 let mut sum = FilterCharacteristics::none();
-                for (JoinInputCharacteristics { filters, .. }, _, _) in order {
-                    *filters |= sum;
-                    sum = filters.clone();
+                for (jic, _, _) in order {
+                    *jic.filters() |= sum;
+                    sum = jic.filters().clone();
                 }
             });
 
@@ -916,6 +925,20 @@ fn implement_arrangements<'a>(
     )
 }
 
+/// This function continues the surgery that `implement_arrangements` started.
+///
+/// (In theory, this function could be merged into `implement_arrangements`, but it would be a bit
+/// painful, because we need to access the join's `implementation` after `implement_arrangements`,
+/// which would be somewhat convoluted after what `install_lifted_mfp` does.)
+///
+/// The given MFP should be the merged MFP from all the lifted inputs MFPs.
+///
+/// `install_lifted_mfp` mutates the given join expression as follows:
+/// - Puts the given MFP on top of the Join.
+/// - Attends to `equivalences`, which was invalidated by `implement_arrangements` if it refers to a
+///   column that was permuted or created by the given MFP.
+/// - Canonicalizes scalar expressions in maps and filters with respect to the join equivalences.
+///   See inline comment for more details.
 fn install_lifted_mfp(
     new_join: &mut MirRelationExpr,
     mfp: MapFilterProject,
@@ -929,18 +952,20 @@ fn install_lifted_mfp(
                     expr.permute(&project);
                     // if column references refer to mapped expressions that have been
                     // lifted, replace the column reference with the mapped expression.
-                    #[allow(deprecated)]
-                    expr.visit_mut_pre_post(
-                        &mut |e| {
-                            if let MirScalarExpr::Column(c) = e {
-                                if *c >= mfp.input_arity {
-                                    *e = map[*c - mfp.input_arity].clone();
-                                }
+                    expr.visit_mut_pre(&mut |e| {
+                        // This has to be a loop! This is because it can happen that the new
+                        // expression is again a column reference, in which case the visitor
+                        // wouldn't be called on it again. (The visitation continues with the
+                        // children of the new expression, but won't visit the new expression
+                        // itself again.)
+                        while let MirScalarExpr::Column(c, _) = e {
+                            if *c >= mfp.input_arity {
+                                *e = map[*c - mfp.input_arity].clone();
+                            } else {
+                                break;
                             }
-                            None
-                        },
-                        &mut |_| {},
-                    )?;
+                        }
+                    })?;
                 }
             }
             // Canonicalize scalar expressions in maps and filters with respect to the join
@@ -992,6 +1017,7 @@ fn optimize_orders(
     cardinalities: &[Option<usize>],     // cardinalities of input relations
     filters: &[FilterCharacteristics],   // filter characteristics per input
     input_mapper: &JoinInputMapper,      // join helper
+    enable_join_prioritize_arranged: bool,
 ) -> Result<Vec<Vec<(JoinInputCharacteristics, Vec<MirScalarExpr>, usize)>>, TransformError> {
     let mut orderer = Orderer::new(
         equivalences,
@@ -1000,6 +1026,7 @@ fn optimize_orders(
         cardinalities,
         filters,
         input_mapper,
+        enable_join_prioritize_arranged,
     );
     (0..available.len())
         .map(move |i| orderer.optimize_order_for(i))
@@ -1024,6 +1051,8 @@ struct Orderer<'a> {
     arrangement_active: Vec<Vec<usize>>,
     priority_queue:
         std::collections::BinaryHeap<(JoinInputCharacteristics, Vec<MirScalarExpr>, usize)>,
+
+    enable_join_prioritize_arranged: bool,
 }
 
 impl<'a> Orderer<'a> {
@@ -1034,6 +1063,7 @@ impl<'a> Orderer<'a> {
         cardinalities: &'a [Option<usize>],
         filters: &'a [FilterCharacteristics],
         input_mapper: &'a JoinInputMapper,
+        enable_join_prioritize_arranged: bool,
     ) -> Self {
         let inputs = arrangements.len();
         // A map from inputs to the equivalence classes in which they are referenced.
@@ -1051,7 +1081,7 @@ impl<'a> Orderer<'a> {
             for key in keys.iter() {
                 unique_arrangement[input].push(unique_keys[input].iter().any(|cols| {
                     cols.iter()
-                        .all(|c| key.contains(&MirScalarExpr::Column(*c)))
+                        .all(|c| key.contains(&MirScalarExpr::column(*c)))
                 }));
             }
         }
@@ -1078,6 +1108,7 @@ impl<'a> Orderer<'a> {
             equivalences_active,
             arrangement_active,
             priority_queue,
+            enable_join_prioritize_arranged,
         }
     }
 
@@ -1114,6 +1145,7 @@ impl<'a> Orderer<'a> {
                         cardinality,
                         self.filters[input].clone(),
                         input,
+                        self.enable_join_prioritize_arranged,
                     ),
                     vec![],
                     input,
@@ -1127,6 +1159,7 @@ impl<'a> Orderer<'a> {
                         cardinality,
                         self.filters[input].clone(),
                         input,
+                        self.enable_join_prioritize_arranged,
                     ),
                     vec![],
                     input,
@@ -1162,6 +1195,7 @@ impl<'a> Orderer<'a> {
                 self.cardinalities[start],
                 self.filters[start].clone(),
                 start,
+                self.enable_join_prioritize_arranged,
             ),
             vec![],
             start,
@@ -1184,7 +1218,7 @@ impl<'a> Orderer<'a> {
                 let cardinality = self.cardinalities[start];
                 let is_unique = self.unique_keys[start].iter().any(|cols| {
                     cols.iter()
-                        .all(|c| candidate_start_key.contains(&MirScalarExpr::Column(*c)))
+                        .all(|c| candidate_start_key.contains(&MirScalarExpr::column(*c)))
                 });
                 let arranged = self.arrangements[start]
                     .iter()
@@ -1198,6 +1232,7 @@ impl<'a> Orderer<'a> {
                         cardinality,
                         self.filters[start].clone(),
                         start,
+                        self.enable_join_prioritize_arranged,
                     ),
                     candidate_start_key,
                     start,
@@ -1288,6 +1323,7 @@ impl<'a> Orderer<'a> {
                                                     self.cardinalities[rel],
                                                     self.filters[rel].clone(),
                                                     rel,
+                                                    self.enable_join_prioritize_arranged,
                                                 ),
                                                 key.clone(),
                                                 rel,
@@ -1299,7 +1335,7 @@ impl<'a> Orderer<'a> {
                                 // does the relation we're joining on have a unique key wrt what's already bound?
                                 let is_unique = self.unique_keys[rel].iter().any(|cols| {
                                     cols.iter().all(|c| {
-                                        self.bound[rel].contains(&MirScalarExpr::Column(*c))
+                                        self.bound[rel].contains(&MirScalarExpr::column(*c))
                                     })
                                 });
                                 self.priority_queue.push((
@@ -1310,6 +1346,7 @@ impl<'a> Orderer<'a> {
                                         self.cardinalities[rel],
                                         self.filters[rel].clone(),
                                         rel,
+                                        self.enable_join_prioritize_arranged,
                                     ),
                                     self.bound[rel].clone(),
                                     rel,

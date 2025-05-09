@@ -13,8 +13,10 @@ use std::io;
 use bytes::BytesMut;
 use csv::{ByteRecord, ReaderBuilder};
 use mz_proto::{ProtoType, RustType, TryFromProtoError};
-use mz_repr::{ColumnType, Datum, RelationDesc, RelationType, Row, RowArena, RowRef, ScalarType};
-use proptest::prelude::{any, Arbitrary, Just};
+use mz_repr::{
+    ColumnType, Datum, RelationDesc, RelationType, Row, RowArena, RowRef, ScalarType, SharedRow,
+};
+use proptest::prelude::{Arbitrary, Just, any};
 use proptest::strategy::{BoxedStrategy, Strategy, Union};
 use serde::Deserialize;
 use serde::Serialize;
@@ -436,6 +438,7 @@ pub enum CopyFormatParams<'a> {
     Text(CopyTextFormatParams<'a>),
     Csv(CopyCsvFormatParams<'a>),
     Binary,
+    Parquet,
 }
 
 impl RustType<ProtoCopyFormatParams> for CopyFormatParams<'static> {
@@ -446,6 +449,7 @@ impl RustType<ProtoCopyFormatParams> for CopyFormatParams<'static> {
                 Self::Text(f) => Kind::Text(f.into_proto()),
                 Self::Csv(f) => Kind::Csv(f.into_proto()),
                 Self::Binary => Kind::Binary(()),
+                Self::Parquet => Kind::Parquet(ProtoCopyParquetFormatParams::default()),
             }),
         }
     }
@@ -456,6 +460,7 @@ impl RustType<ProtoCopyFormatParams> for CopyFormatParams<'static> {
             Some(Kind::Text(f)) => Ok(Self::Text(f.into_rust()?)),
             Some(Kind::Csv(f)) => Ok(Self::Csv(f.into_rust()?)),
             Some(Kind::Binary(())) => Ok(Self::Binary),
+            Some(Kind::Parquet(ProtoCopyParquetFormatParams {})) => Ok(Self::Parquet),
             None => Err(TryFromProtoError::missing_field(
                 "ProtoCopyFormatParams::kind",
             )),
@@ -482,6 +487,7 @@ impl CopyFormatParams<'static> {
             &CopyFormatParams::Text(_) => "txt",
             &CopyFormatParams::Csv(_) => "csv",
             &CopyFormatParams::Binary => "bin",
+            &CopyFormatParams::Parquet => "parquet",
         }
     }
 
@@ -490,6 +496,7 @@ impl CopyFormatParams<'static> {
             CopyFormatParams::Text(_) => false,
             CopyFormatParams::Csv(params) => params.header,
             CopyFormatParams::Binary => false,
+            CopyFormatParams::Parquet => false,
         }
     }
 }
@@ -507,6 +514,10 @@ pub fn decode_copy_format<'a>(
             io::ErrorKind::Unsupported,
             "cannot decode as binary format",
         )),
+        CopyFormatParams::Parquet => {
+            // TODO(cf2): Support Parquet over STDIN.
+            Err(io::Error::new(io::ErrorKind::Unsupported, "parquet format"))
+        }
     }
 }
 
@@ -521,6 +532,10 @@ pub fn encode_copy_format<'a>(
         CopyFormatParams::Text(params) => encode_copy_row_text(params, row, typ, out),
         CopyFormatParams::Csv(params) => encode_copy_row_csv(params, row, typ, out),
         CopyFormatParams::Binary => encode_copy_row_binary(row, typ, out),
+        CopyFormatParams::Parquet => {
+            // TODO(cf2): Support Parquet over STDIN.
+            Err(io::Error::new(io::ErrorKind::Unsupported, "parquet format"))
+        }
     }
 }
 
@@ -545,6 +560,10 @@ pub fn encode_copy_format_header<'a>(
                 desc.arity()
             ]);
             encode_copy_row_csv(params, &header_row, &typ, out)
+        }
+        CopyFormatParams::Parquet => {
+            // TODO(cf2): Support Parquet over STDIN.
+            Err(io::Error::new(io::ErrorKind::Unsupported, "parquet format"))
         }
     }
 }
@@ -638,6 +657,18 @@ pub struct CopyCsvFormatParams<'a> {
     pub escape: u8,
     pub header: bool,
     pub null: Cow<'a, str>,
+}
+
+impl<'a> CopyCsvFormatParams<'a> {
+    pub fn to_owned(&self) -> CopyCsvFormatParams<'static> {
+        CopyCsvFormatParams {
+            delimiter: self.delimiter,
+            quote: self.quote,
+            escape: self.escape,
+            header: self.header,
+            null: Cow::Owned(self.null.to_string()),
+        }
+    }
 }
 
 impl RustType<ProtoCopyCsvFormatParams> for CopyCsvFormatParams<'static> {
@@ -790,15 +821,22 @@ pub fn decode_copy_format_csv(
             std::cmp::Ordering::Equal => Ok(()),
         }?;
 
-        let mut row = Vec::new();
-        let buf = RowArena::new();
+        let mut row_builder = SharedRow::get();
+        let mut row_packer = row_builder.packer();
 
         for (typ, raw_value) in column_types.iter().zip(record.iter()) {
             if raw_value == null_as_bytes {
-                row.push(Datum::Null);
+                row_packer.push(Datum::Null);
             } else {
-                match mz_pgrepr::Value::decode_text(typ, raw_value) {
-                    Ok(value) => row.push(value.into_datum(&buf, typ)),
+                let s = match std::str::from_utf8(raw_value) {
+                    Ok(s) => s,
+                    Err(err) => {
+                        let msg = format!("invalid utf8 data in column: {}", err);
+                        return Err(io::Error::new(io::ErrorKind::InvalidData, msg));
+                    }
+                };
+                match mz_pgrepr::Value::decode_text_into_row(typ, s, &mut row_packer) {
+                    Ok(()) => {}
                     Err(err) => {
                         let msg = format!("unable to decode column: {}", err);
                         return Err(io::Error::new(io::ErrorKind::InvalidData, msg));
@@ -806,7 +844,7 @@ pub fn decode_copy_format_csv(
                 }
             }
         }
-        rows.push(Row::pack(row));
+        rows.push(row_builder.clone());
     }
 
     Ok(rows)
@@ -839,10 +877,12 @@ mod tests {
             .expect_column_delimiter()
             .expect("expected column delimiter");
         // null value
-        assert!(parser
-            .consume_raw_value()
-            .expect("unexpected error")
-            .is_none());
+        assert!(
+            parser
+                .consume_raw_value()
+                .expect("unexpected error")
+                .is_none()
+        );
         parser
             .expect_column_delimiter()
             .expect("expected column delimiter");

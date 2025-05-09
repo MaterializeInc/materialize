@@ -14,7 +14,7 @@ use mz_repr::{ColumnType, Datum, Row, RowArena, ScalarType};
 use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
 
-use crate::scalar::func::{stringify_datum, LazyUnaryFunc};
+use crate::scalar::func::{LazyUnaryFunc, stringify_datum};
 use crate::{EvalError, MirScalarExpr};
 
 #[derive(

@@ -22,15 +22,15 @@ statement ok
 CREATE VIEW foo3 as select b from foo2 where b = 6;
 
 query T multiline
-EXPLAIN WITH(arity, join implementations) SELECT * from foo3
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, arity, join implementations) AS VERBOSE TEXT FOR SELECT * from foo3
 ----
 Explained Query:
-  Project (#1) // { arity: 1 }
-    Filter (#0 = 5) AND (#1 = 6) // { arity: 2 }
+  Project (#1{b}) // { arity: 1 }
+    Filter (#0{a} = 5) AND (#1{b} = 6) // { arity: 2 }
       ReadStorage materialize.public.foo // { arity: 2 }
 
 Source materialize.public.foo
-  filter=((#0 = 5) AND (#1 = 6))
+  filter=((#0{a} = 5) AND (#1{b} = 6))
 
 Target cluster: quickstart
 
@@ -40,10 +40,10 @@ statement ok
 CREATE DEFAULT INDEX ON foo2
 
 query T multiline
-EXPLAIN WITH(arity, join implementations) SELECT * from foo3
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, arity, join implementations) AS VERBOSE TEXT FOR SELECT * from foo3
 ----
 Explained Query (fast path):
-  Project (#0)
+  Project (#0{b})
     ReadIndex on=materialize.public.foo2 foo2_primary_idx=[lookup value=(6)]
 
 Used Indexes:

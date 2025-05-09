@@ -56,6 +56,7 @@ message ProtoHollowBatchPart {
   oneof format {
     google.protobuf.Empty row = 7;
     uint64 row_and_columnar = 8;
+    google.protobuf.Empty structured = 13;
   }
   optional uint64 schema_id = 12;
 
@@ -148,6 +149,16 @@ message ProtoHollowRollup {
   optional uint64 encoded_size_bytes = 2;
 }
 
+message ProtoActiveRollup {
+  uint64 seqno = 1;
+  uint64 start_ms = 2;
+}
+
+message ProtoActiveGC {
+  uint64 seqno = 1;
+  uint64 start_ms = 2;
+}
+
 message ProtoTrace {
   ProtoU64Antichain since = 1;
   repeated ProtoHollowBatch legacy_batches = 2;
@@ -215,6 +226,8 @@ message ProtoRollup {
   uint64 walltime_ms = 15;
   string hostname = 14;
   uint64 last_gc_req = 10;
+  optional ProtoActiveRollup active_rollup = 19;
+  optional ProtoActiveGC active_gc = 20;
   map<uint64, ProtoHollowRollup> rollups = 16;
 
   ProtoTrace trace = 7;

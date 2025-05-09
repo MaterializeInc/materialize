@@ -7,6 +7,9 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
+$ skip-if
+SELECT mz_version_num() < 13300;
+
 $ set-sql-timeout duration=1s
 $ set-max-tries max-tries=20
 
@@ -33,17 +36,23 @@ CREATE TABLE t1 (f1 INT, f2 INT INVISIBLE, f3 INT INVISIBLE);
 INSERT INTO t1 (f1, f2, f3) VALUES (10, 20, 30);
 INSERT INTO t1 VALUES (11);
 
-# TODO: database-issues#7782 (invisible columns not supported)
-# > CREATE SOURCE mz_source
-#   FROM MYSQL CONNECTION mysql_conn
-#   FOR ALL TABLES;
-#
-# > SELECT * FROM t1;
-# 10
-# 11
-#
-# $ mysql-execute name=mysql
-# ALTER TABLE t1 ALTER COLUMN f2 SET VISIBLE;
-#
-# ! SELECT * FROM t1;
-# contains:incompatible schema change
+> CREATE SOURCE mz_source
+  FROM MYSQL CONNECTION mysql_conn
+  FOR ALL TABLES;
+
+> SELECT * FROM t1;
+10 20 30
+11 <null> <null>
+
+$ mysql-execute name=mysql
+ALTER TABLE t1 ALTER COLUMN f2 SET VISIBLE;
+
+> SELECT * FROM t1;
+10 20 30
+11 <null> <null>
+
+$ mysql-execute name=mysql
+ALTER TABLE t1 DROP COLUMN f2;
+
+! SELECT * FROM t1;
+contains:incompatible schema change

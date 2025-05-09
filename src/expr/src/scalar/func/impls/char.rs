@@ -10,7 +10,7 @@
 use std::fmt;
 
 use mz_lowertest::MzReflect;
-use mz_repr::adt::char::{format_str_pad, Char, CharLength};
+use mz_repr::adt::char::{Char, CharLength, format_str_pad};
 use mz_repr::{ColumnType, ScalarType};
 use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};

@@ -173,7 +173,7 @@ class KafkaFormats(Check):
     def validate(self) -> Testdrive:
         return Testdrive(
             dedent(
-                """
+                r"""
                 > SELECT COUNT(*) FROM format_bytes1
                 3
 
@@ -217,10 +217,13 @@ class KafkaFormats(Check):
                 key2A key2B value2A value2B
                 key3A key3B value3A value3B
 
-                $ set-regex match=testdrive-format-bytes-\\d+ replacement=<TOPIC>
+                $ set-regex match=testdrive-format-bytes-\d+ replacement=<TOPIC>
 
-                > SHOW CREATE SOURCE format_bytes1_src;
-                materialize.public.format_bytes1_src "CREATE SOURCE \\"materialize\\".\\"public\\".\\"format_bytes1_src\\" IN CLUSTER \\"kafka_formats\\" FROM KAFKA CONNECTION \\"materialize\\".\\"public\\".\\"kafka_conn\\" (TOPIC = '<TOPIC>') EXPOSE PROGRESS AS \\"materialize\\".\\"public\\".\\"format_bytes1_src_progress\\""
+                >[version>=14000] SHOW CREATE SOURCE format_bytes1_src;
+                materialize.public.format_bytes1_src "CREATE SOURCE materialize.public.format_bytes1_src\nIN CLUSTER kafka_formats\nFROM KAFKA CONNECTION materialize.public.kafka_conn (TOPIC = '<TOPIC>')\nEXPOSE PROGRESS AS materialize.public.format_bytes1_src_progress;"
+
+                >[version<14000] SHOW CREATE SOURCE format_bytes1_src;
+                materialize.public.format_bytes1_src "CREATE SOURCE \"materialize\".\"public\".\"format_bytes1_src\" IN CLUSTER \"kafka_formats\" FROM KAFKA CONNECTION \"materialize\".\"public\".\"kafka_conn\" (TOPIC = '<TOPIC>') EXPOSE PROGRESS AS \"materialize\".\"public\".\"format_bytes1_src_progress\""
                 """
             )
         )

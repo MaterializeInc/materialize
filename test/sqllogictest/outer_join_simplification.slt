@@ -39,24 +39,24 @@ create materialized view quux as select distinct on (c) c, x from quux_raw where
 # Demonstrate core semijoin idempotence simplification: semijoin removal.
 # The resulting plan should have 1 join with 2 inputs and no distinct operators.
 query T multiline
-explain select * from (with keys as (
+EXPLAIN OPTIMIZED PLAN WITH (humanized expressions) AS VERBOSE TEXT FOR select * from (with keys as (
     select distinct foo.a from foo, bar where foo.a = bar.a
 )
 select * from foo, keys where foo.a = keys.a)
 ----
 Explained Query:
-  Project (#0..=#2, #0)
-    Join on=(#0 = #3) type=differential
-      ArrangeBy keys=[[#0]]
+  Project (#0{a}..=#2{u}, #0{a})
+    Join on=(#0{a} = #3{a}) type=differential
+      ArrangeBy keys=[[#0{a}]]
         ReadStorage materialize.public.foo
-      ArrangeBy keys=[[#0]]
-        Project (#0)
-          Filter (#0) IS NOT NULL
+      ArrangeBy keys=[[#0{a}]]
+        Project (#0{a})
+          Filter (#0{a}) IS NOT NULL
             ReadStorage materialize.public.bar
 
 Source materialize.public.foo
 Source materialize.public.bar
-  filter=((#0) IS NOT NULL)
+  filter=((#0{a}) IS NOT NULL)
 
 Target cluster: quickstart
 
@@ -64,35 +64,35 @@ EOF
 
 # Ensure LEFT JOIN is planned with only one join.
 query T multiline
-explain
+EXPLAIN OPTIMIZED PLAN WITH (humanized expressions) AS VERBOSE TEXT FOR
 select * from
 foo_raw left join bar on foo_raw.a = bar.a;
 ----
 Explained Query:
   With
     cte l0 =
-      Project (#0..=#2, #4)
-        Join on=(#0 = #3) type=differential
-          ArrangeBy keys=[[#0]]
-            Filter (#0) IS NOT NULL
+      Project (#0{a}..=#2{u}, #4{v})
+        Join on=(#0{a} = #3{a}) type=differential
+          ArrangeBy keys=[[#0{a}]]
+            Filter (#0{a}) IS NOT NULL
               ReadStorage materialize.public.foo_raw
-          ArrangeBy keys=[[#0]]
-            Filter (#0) IS NOT NULL
+          ArrangeBy keys=[[#0{a}]]
+            Filter (#0{a}) IS NOT NULL
               ReadStorage materialize.public.bar
   Return
     Union
       Map (null, null)
         Union
           Negate
-            Project (#0..=#2)
+            Project (#0{a}..=#2{u})
               Get l0
           ReadStorage materialize.public.foo_raw
-      Project (#0..=#2, #0, #3)
+      Project (#0{a}..=#2{u}, #0{a}, #3{v})
         Get l0
 
 Source materialize.public.foo_raw
 Source materialize.public.bar
-  filter=((#0) IS NOT NULL)
+  filter=((#0{a}) IS NOT NULL)
 
 Target cluster: quickstart
 
@@ -101,41 +101,41 @@ EOF
 # RIGHT JOIN should be planned with only one join.
 # At the moment, we do not see the join symmetry.
 query T multiline
-explain
+EXPLAIN OPTIMIZED PLAN WITH (humanized expressions) AS VERBOSE TEXT FOR
 select * from
 bar right join foo_raw on foo_raw.a = bar.a;
 ----
 Explained Query:
   With
     cte l0 =
-      ArrangeBy keys=[[#0]]
-        Filter (#0) IS NOT NULL
+      ArrangeBy keys=[[#0{a}]]
+        Filter (#0{a}) IS NOT NULL
           ReadStorage materialize.public.foo_raw
     cte l1 =
-      Filter (#0) IS NOT NULL
+      Filter (#0{a}) IS NOT NULL
         ReadStorage materialize.public.bar
   Return
     Union
-      Project (#3, #4, #0..=#2)
+      Project (#3, #4, #0{a}..=#2{u})
         Map (null, null)
           Union
             Negate
-              Project (#0..=#2)
-                Join on=(#0 = #3) type=differential
+              Project (#0{a}..=#2{u})
+                Join on=(#0{a} = #3{a}) type=differential
                   Get l0
-                  ArrangeBy keys=[[#0]]
-                    Project (#0)
+                  ArrangeBy keys=[[#0{a}]]
+                    Project (#0{a})
                       Get l1
             ReadStorage materialize.public.foo_raw
-      Project (#0, #1, #0, #3, #4)
-        Join on=(#0 = #2) type=differential
-          ArrangeBy keys=[[#0]]
+      Project (#0{a}, #1{v}, #0{a}, #3{b}, #4{u})
+        Join on=(#0{a} = #2{a}) type=differential
+          ArrangeBy keys=[[#0{a}]]
             Get l1
           Get l0
 
 Source materialize.public.foo_raw
 Source materialize.public.bar
-  filter=((#0) IS NOT NULL)
+  filter=((#0{a}) IS NOT NULL)
 
 Target cluster: quickstart
 
@@ -143,34 +143,34 @@ EOF
 
 # Ensure that multiple left joins still produce one join operator each.
 query T multiline
-explain
+EXPLAIN OPTIMIZED PLAN WITH (humanized expressions) AS VERBOSE TEXT FOR
 select * from
 foo left join bar on foo.a = bar.a
     left join baz on foo.b = baz.b
     left join quux on baz.c = quux.c;
 ----
 Explained Query:
-  Project (#0..=#2, #14, #15, #17..=#19, #21, #22)
-    Map ((#5) IS NULL, case when #13 then null else #0 end, case when #13 then null else #4 end, (#9) IS NULL, case when #16 then null else #1 end, case when #16 then null else #7 end, case when #16 then null else #8 end, (#12) IS NULL, case when #20 then null else #10 end, case when #20 then null else #11 end)
-      Join on=(#0 = #3 AND #1 = #6 AND #10 = case when (#9) IS NULL then null else #7 end) type=delta
-        ArrangeBy keys=[[#0], [#1]]
+  Project (#0{a}..=#2{u}, #14, #15, #17..=#19, #21, #22)
+    Map ((#5) IS NULL, case when #13 then null else #0{a} end, case when #13 then null else #4{v} end, (#9) IS NULL, case when #16 then null else #1{b} end, case when #16 then null else #7{c} end, case when #16 then null else #8{w} end, (#12) IS NULL, case when #20 then null else #10{c} end, case when #20 then null else #11{x} end)
+      Join on=(#0{a} = #3{a} AND #1{b} = #6{b} AND #10{c} = case when (#9) IS NULL then null else #7{c} end) type=delta
+        ArrangeBy keys=[[#0{a}], [#1{b}]]
           ReadStorage materialize.public.foo
-        ArrangeBy keys=[[#0]]
+        ArrangeBy keys=[[#0{a}]]
           Union
-            Filter (#0) IS NOT NULL
+            Filter (#0{a}) IS NOT NULL
               Map (true)
                 ReadStorage materialize.public.bar
             Map (null, null)
               Threshold
                 Union
                   Negate
-                    Project (#0)
-                      Filter (#0) IS NOT NULL
+                    Project (#0{a})
+                      Filter (#0{a}) IS NOT NULL
                         ReadStorage materialize.public.bar
-                  Distinct project=[#0]
-                    Project (#0)
+                  Distinct project=[#0{a}]
+                    Project (#0{a})
                       ReadStorage materialize.public.foo
-        ArrangeBy keys=[[#0], [case when (#3) IS NULL then null else #1 end]]
+        ArrangeBy keys=[[#0{b}], [case when (#3) IS NULL then null else #1{c} end]]
           Union
             Map (true)
               ReadStorage materialize.public.baz
@@ -178,12 +178,12 @@ Explained Query:
               Threshold
                 Union
                   Negate
-                    Project (#0)
+                    Project (#0{b})
                       ReadStorage materialize.public.baz
-                  Distinct project=[#0]
-                    Project (#1)
+                  Distinct project=[#0{b}]
+                    Project (#1{b})
                       ReadStorage materialize.public.foo
-        ArrangeBy keys=[[#0]]
+        ArrangeBy keys=[[#0{c}]]
           Union
             Map (true)
               ReadStorage materialize.public.quux
@@ -191,18 +191,18 @@ Explained Query:
               Threshold
                 Union
                   Negate
-                    Project (#0)
+                    Project (#0{c})
                       ReadStorage materialize.public.quux
-                  Distinct project=[#0]
+                  Distinct project=[#0{c}]
                     Union
-                      Project (#1)
+                      Project (#1{c})
                         ReadStorage materialize.public.baz
                       Constant
                         - (null)
 
 Source materialize.public.foo
 Source materialize.public.bar
-  filter=((#0) IS NOT NULL)
+  filter=((#0{a}) IS NOT NULL)
 Source materialize.public.baz
 Source materialize.public.quux
 
@@ -213,7 +213,7 @@ EOF
 # Record how we do not yet fully optimize projections in left join stacks.
 # This plan appears to require further projection pushdown to cancel the last join.
 query T multiline
-explain
+EXPLAIN OPTIMIZED PLAN WITH (humanized expressions) AS VERBOSE TEXT FOR
 select count(*) from
 foo left join bar on foo.a = bar.a
     left join baz on foo.b = baz.b
@@ -222,53 +222,53 @@ foo left join bar on foo.a = bar.a
 Explained Query:
   With
     cte l0 =
-      Project (#0)
-        Filter (#0) IS NOT NULL
+      Project (#0{a})
+        Filter (#0{a}) IS NOT NULL
           ReadStorage materialize.public.bar
     cte l1 =
-      Project (#0)
+      Project (#0{c})
         ReadStorage materialize.public.quux
     cte l2 =
       Reduce aggregates=[count(*)]
         Project ()
-          Join on=(#0 = #2 AND #1 = #3 AND #6 = case when (#5) IS NULL then null else #4 end) type=delta
-            ArrangeBy keys=[[#0], [#1]]
-              Project (#0, #1)
+          Join on=(#0{a} = #2{a} AND #1{b} = #3{b} AND #6{c} = case when (#5) IS NULL then null else #4{c} end) type=delta
+            ArrangeBy keys=[[#0{a}], [#1{b}]]
+              Project (#0{a}, #1{b})
                 ReadStorage materialize.public.foo
-            ArrangeBy keys=[[#0]]
+            ArrangeBy keys=[[#0{a}]]
               Union
                 Get l0
                 Threshold
                   Union
                     Negate
                       Get l0
-                    Distinct project=[#0]
-                      Project (#0)
+                    Distinct project=[#0{a}]
+                      Project (#0{a})
                         ReadStorage materialize.public.foo
-            ArrangeBy keys=[[#0], [case when (#2) IS NULL then null else #1 end]]
+            ArrangeBy keys=[[#0{b}], [case when (#2) IS NULL then null else #1{c} end]]
               Union
-                Project (#0, #1, #3)
+                Project (#0{b}, #1{c}, #3)
                   Map (true)
                     ReadStorage materialize.public.baz
                 Map (null, null)
                   Threshold
                     Union
                       Negate
-                        Project (#0)
+                        Project (#0{b})
                           ReadStorage materialize.public.baz
-                      Distinct project=[#0]
-                        Project (#1)
+                      Distinct project=[#0{b}]
+                        Project (#1{b})
                           ReadStorage materialize.public.foo
-            ArrangeBy keys=[[#0]]
+            ArrangeBy keys=[[#0{c}]]
               Union
                 Get l1
                 Threshold
                   Union
                     Negate
                       Get l1
-                    Distinct project=[#0]
+                    Distinct project=[#0{c}]
                       Union
-                        Project (#1)
+                        Project (#1{c})
                           ReadStorage materialize.public.baz
                         Constant
                           - (null)
@@ -285,7 +285,7 @@ Explained Query:
 
 Source materialize.public.foo
 Source materialize.public.bar
-  filter=((#0) IS NOT NULL)
+  filter=((#0{a}) IS NOT NULL)
 Source materialize.public.baz
 Source materialize.public.quux
 
@@ -295,20 +295,20 @@ EOF
 
 # Record how we can push filters through left joins to their source.
 query T multiline
-explain
+EXPLAIN OPTIMIZED PLAN WITH (humanized expressions) AS VERBOSE TEXT FOR
 select * from
 foo left join baz on foo.b = baz.b
     left join quux on baz.c = quux.c
 where foo.a = 7;
 ----
 Explained Query:
-  Project (#0..=#2, #11..=#13, #15, #16)
-    Map ((#6) IS NULL, case when #10 then null else #1 end, case when #10 then null else #4 end, case when #10 then null else #5 end, (#9) IS NULL, case when #14 then null else #7 end, case when #14 then null else #8 end)
-      Join on=(#1 = #3 AND #7 = case when (#6) IS NULL then null else #4 end) type=delta
-        ArrangeBy keys=[[#1]]
-          Filter (#0 = 7)
+  Project (#0{a}..=#2{u}, #11..=#13, #15, #16)
+    Map ((#6) IS NULL, case when #10 then null else #1{b} end, case when #10 then null else #4{c} end, case when #10 then null else #5{w} end, (#9) IS NULL, case when #14 then null else #7{c} end, case when #14 then null else #8{x} end)
+      Join on=(#1{b} = #3{b} AND #7{c} = case when (#6) IS NULL then null else #4{c} end) type=delta
+        ArrangeBy keys=[[#1{b}]]
+          Filter (#0{a} = 7)
             ReadStorage materialize.public.foo
-        ArrangeBy keys=[[#0], [case when (#3) IS NULL then null else #1 end]]
+        ArrangeBy keys=[[#0{b}], [case when (#3) IS NULL then null else #1{c} end]]
           Union
             Map (true)
               ReadStorage materialize.public.baz
@@ -316,12 +316,12 @@ Explained Query:
               Threshold
                 Union
                   Negate
-                    Project (#0)
+                    Project (#0{b})
                       ReadStorage materialize.public.baz
-                  Distinct project=[#0]
-                    Project (#1)
+                  Distinct project=[#0{b}]
+                    Project (#1{b})
                       ReadStorage materialize.public.foo
-        ArrangeBy keys=[[#0]]
+        ArrangeBy keys=[[#0{c}]]
           Union
             Map (true)
               ReadStorage materialize.public.quux
@@ -329,11 +329,11 @@ Explained Query:
               Threshold
                 Union
                   Negate
-                    Project (#0)
+                    Project (#0{c})
                       ReadStorage materialize.public.quux
-                  Distinct project=[#0]
+                  Distinct project=[#0{c}]
                     Union
-                      Project (#1)
+                      Project (#1{c})
                         ReadStorage materialize.public.baz
                       Constant
                         - (null)
@@ -353,7 +353,7 @@ EOF
 # collect info about ids inside a LetRec.
 # The resulting plan should have 1 join with 2 inputs.
 query T multiline
-explain
+EXPLAIN OPTIMIZED PLAN WITH (humanized expressions) AS VERBOSE TEXT FOR
 with mutually recursive
   c0(a int4, b int8, u text, key int4) as (
     select * from (
@@ -370,15 +370,15 @@ select * from c0;
 Explained Query:
   With Mutually Recursive
     cte l0 =
-      Distinct project=[#0..=#3]
+      Distinct project=[#0{a}..=#3{a}]
         Union
-          Project (#0..=#2, #0)
-            Join on=(#0 = #3) type=differential
-              ArrangeBy keys=[[#0]]
+          Project (#0{a}..=#2{u}, #0{a})
+            Join on=(#0{a} = #3{a}) type=differential
+              ArrangeBy keys=[[#0{a}]]
                 ReadStorage materialize.public.foo
-              ArrangeBy keys=[[#0]]
-                Project (#0)
-                  Filter (#0) IS NOT NULL
+              ArrangeBy keys=[[#0{a}]]
+                Project (#0{a})
+                  Filter (#0{a}) IS NOT NULL
                     ReadStorage materialize.public.bar
           Get l0
   Return
@@ -386,7 +386,7 @@ Explained Query:
 
 Source materialize.public.foo
 Source materialize.public.bar
-  filter=((#0) IS NOT NULL)
+  filter=((#0{a}) IS NOT NULL)
 
 Target cluster: quickstart
 
@@ -428,7 +428,7 @@ EOF
 # The resulting plan should have 1 join with 2 inputs.
 # With materialize#27389 this stopped testing a thing; see issue database-issues#8294.
 query T multiline
-explain
+EXPLAIN OPTIMIZED PLAN WITH (humanized expressions) AS VERBOSE TEXT FOR
 with mutually recursive
   c0(a int4, b int8, u text, key int4) as (
     select * from (
@@ -454,7 +454,7 @@ EOF
 # The resulting plan should have 1 join with 2 inputs.
 # With materialize#27389 this stopped testing a thing; see issue database-issues#8294.
 query T multiline
-explain
+EXPLAIN OPTIMIZED PLAN WITH (humanized expressions) AS VERBOSE TEXT FOR
 with mutually recursive
   keys(a int4) as (
     select distinct c0.a from c0, bar where c0.a = bar.a
@@ -479,7 +479,7 @@ EOF
 # The resulting plan should have 1 join with 2 inputs.
 # With materialize#27389 this stopped testing a thing; see issue database-issues#8294.
 query T multiline
-explain
+EXPLAIN OPTIMIZED PLAN WITH (humanized expressions) AS VERBOSE TEXT FOR
 with mutually recursive
   bar2(a int4, v text) as (
     select * from bar
@@ -540,7 +540,7 @@ EOF
 # is now being referenced from the body.
 # With materialize#27389 this stopped testing a thing; see issue database-issues#8294.
 query T multiline
-explain
+EXPLAIN OPTIMIZED PLAN WITH (humanized expressions) AS VERBOSE TEXT FOR
 with mutually recursive
   bar2(a int4, v text) as (
     select * from bar
@@ -562,7 +562,7 @@ union all
 select a, -2, 'keys', a from keys;
 ----
 Explained Query:
-  Project (#0, #2, #1, #0)
+  Project (#0{a}, #2, #1{v}, #0{a})
     Map (-1)
       ReadStorage materialize.public.bar
 
@@ -576,7 +576,7 @@ EOF
 # Here, SemijoinIdempotence relies on the keys introduced by the `select distinct on` being propagated through the
 # recursive Get.
 query T multiline
-explain with(keys)
+EXPLAIN OPTIMIZED PLAN WITH(keys, humanized expressions) AS VERBOSE TEXT FOR
 with mutually recursive
   c0(a int4, b int8, u text, a2 int4, v2 text) as (
     select distinct on (1) * from (
@@ -591,28 +591,28 @@ select * from c0
 Explained Query:
   With Mutually Recursive
     cte l0 =
-      Project (#0..=#2, #4) // { keys: "()" }
-        Join on=(#0 = #3) type=differential // { keys: "()" }
-          ArrangeBy keys=[[#0]] // { keys: "()" }
-            Filter (#0) IS NOT NULL // { keys: "()" }
+      Project (#0{a}..=#2{u}, #4) // { keys: "()" }
+        Join on=(#0{a} = #3) type=differential // { keys: "()" }
+          ArrangeBy keys=[[#0{a}]] // { keys: "()" }
+            Filter (#0{a}) IS NOT NULL // { keys: "()" }
               ReadStorage materialize.public.foo_raw // { keys: "()" }
           ArrangeBy keys=[[#0]] // { keys: "([0])" }
             Project (#0, #2) // { keys: "([0])" }
-              Filter (#0) IS NOT NULL // { keys: "([0])" }
+              Filter (#0{a}) IS NOT NULL // { keys: "([0])" }
                 Get l1 // { keys: "([0])" }
     cte l1 =
-      TopK group_by=[#0] limit=1 // { keys: "([0])" }
-        Distinct project=[#0..=#4] // { keys: "([0, 1, 2, 3, 4])" }
+      TopK group_by=[#0{a}] limit=1 // { keys: "([0])" }
+        Distinct project=[#0{a}..=#4{u}] // { keys: "([0, 1, 2, 3, 4])" }
           Union // { keys: "()" }
             Map (null, null) // { keys: "()" }
               Union // { keys: "()" }
                 Negate // { keys: "()" }
-                  Project (#0..=#2) // { keys: "()" }
+                  Project (#0{a}..=#2{u}) // { keys: "()" }
                     Get l0 // { keys: "()" }
                 ReadStorage materialize.public.foo_raw // { keys: "()" }
-            Project (#0..=#2, #0, #3) // { keys: "()" }
+            Project (#0{a}..=#2{u}, #0{a}, #3) // { keys: "()" }
               Get l0 // { keys: "()" }
-            Project (#0..=#2, #0, #2) // { keys: "()" }
+            Project (#0{a}..=#2{u}, #0{a}, #2{u}) // { keys: "()" }
               ReadStorage materialize.public.foo_raw // { keys: "()" }
   Return // { keys: "([0])" }
     Get l1 // { keys: "([0])" }
@@ -627,7 +627,7 @@ EOF
 # Similar to the previous test, but the recursive Get is at the other input. This means that the input that should have
 # a known key is the static one, for which we don't need to go propagate a key through a recursive Get.
 query T multiline
-explain
+EXPLAIN OPTIMIZED PLAN WITH (humanized expressions) AS VERBOSE TEXT FOR
 with mutually recursive
   c0(a int4, b int8, u text, a_bar int4, v_bar text) as (
     (
@@ -642,35 +642,35 @@ select * from c0
 Explained Query:
   With Mutually Recursive
     cte l0 =
-      Project (#0..=#2, #4)
-        Join on=(#0 = #3) type=differential
-          ArrangeBy keys=[[#0]]
+      Project (#0..=#2, #4{v})
+        Join on=(#0{a} = #3{a}) type=differential
+          ArrangeBy keys=[[#0{a}]]
             Project (#0..=#2)
-              Filter (#0) IS NOT NULL
+              Filter (#0{a}) IS NOT NULL
                 Get l1
-          ArrangeBy keys=[[#0]]
-            Filter (#0) IS NOT NULL
+          ArrangeBy keys=[[#0{a}]]
+            Filter (#0{a}) IS NOT NULL
               ReadStorage materialize.public.bar
     cte l1 =
-      Distinct project=[#0..=#4]
+      Distinct project=[#0{a}..=#4{v}]
         Union
           Map (null, null)
             Union
               Negate
                 Project (#0..=#2)
                   Get l0
-              Project (#0..=#2)
+              Project (#0{a}..=#2{u})
                 Get l1
-          Project (#0..=#2, #0, #3)
+          Project (#0..=#2, #0, #3{v})
             Get l0
-          Project (#0..=#2, #0, #2)
+          Project (#0{a}..=#2{u}, #0{a}, #2{u})
             ReadStorage materialize.public.foo_raw
   Return
     Get l1
 
 Source materialize.public.foo_raw
 Source materialize.public.bar
-  filter=((#0) IS NOT NULL)
+  filter=((#0{a}) IS NOT NULL)
 
 Target cluster: quickstart
 
@@ -679,7 +679,7 @@ EOF
 # Ensure LEFT JOIN inside WMR is planned with only one join.
 # A variation of the previous one.
 query T multiline
-explain
+EXPLAIN OPTIMIZED PLAN WITH (humanized expressions) AS VERBOSE TEXT FOR
 with mutually recursive
   c0(a int4, b int8, u text, a_bar int4, v_bar text) as (
     (
@@ -692,34 +692,36 @@ with mutually recursive
 select * from c0
 ----
 Explained Query:
-  With Mutually Recursive
+  With
     cte l0 =
-      Project (#0..=#2, #4)
-        Join on=(#0 = #3) type=differential
-          ArrangeBy keys=[[#0]]
-            Filter (#0) IS NOT NULL
+      Project (#0{a}..=#2{u}, #4{v})
+        Join on=(#0{a} = #3{a}) type=differential
+          ArrangeBy keys=[[#0{a}]]
+            Filter (#0{a}) IS NOT NULL
               ReadStorage materialize.public.foo_raw
-          ArrangeBy keys=[[#0]]
-            Filter (#0) IS NOT NULL
+          ArrangeBy keys=[[#0{a}]]
+            Filter (#0{a}) IS NOT NULL
               ReadStorage materialize.public.bar
-    cte l1 =
-      Distinct project=[#0..=#4]
-        Union
-          Map (null, null)
-            Union
-              Negate
-                Project (#0..=#2)
-                  Get l0
-              ReadStorage materialize.public.foo_raw
-          Project (#0..=#2, #0, #3)
-            Get l0
-          Get l1
   Return
-    Get l1
+    With Mutually Recursive
+      cte l1 =
+        Distinct project=[#0{a}..=#4{v}]
+          Union
+            Map (null, null)
+              Union
+                Negate
+                  Project (#0{a}..=#2{u})
+                    Get l0
+                ReadStorage materialize.public.foo_raw
+            Project (#0{a}..=#2{u}, #0{a}, #3{v})
+              Get l0
+            Get l1
+    Return
+      Get l1
 
 Source materialize.public.foo_raw
 Source materialize.public.bar
-  filter=((#0) IS NOT NULL)
+  filter=((#0{a}) IS NOT NULL)
 
 Target cluster: quickstart
 
@@ -727,7 +729,7 @@ EOF
 
 # Ensure that multiple left joins inside a WMR still produce one join operator each.
 query T multiline
-explain
+EXPLAIN OPTIMIZED PLAN WITH (humanized expressions) AS VERBOSE TEXT FOR
 with mutually recursive
   c0(a int4, b int8, u text) as (
     (
@@ -745,62 +747,62 @@ Explained Query:
   With Mutually Recursive
     cte l0 =
       Union
-        Project (#0, #1)
+        Project (#0{a}, #1{b})
           Get l1
         Constant
           - (null, null)
     cte l1 =
-      Distinct project=[#0..=#2]
+      Distinct project=[#0{a}..=#2{u}]
         Union
           Project (#11..=#13)
-            Map ((#7) IS NULL, (#0 + case when (#4) IS NULL then null else #0 end), (#1 + case when #10 then null else #1 end), (#2 || smallint_to_text((case when #10 then null else #6 end + case when (#9) IS NULL then null else #8 end))))
-              Join on=(#0 = #3 AND #1 = #5 AND #8 = case when (#7) IS NULL then null else #6 end) type=delta
-                ArrangeBy keys=[[#0], [#1]]
+            Map ((#7) IS NULL, (#0{a} + case when (#4) IS NULL then null else #0 end), (#1{b} + case when #10 then null else #1 end), (#2{u} || smallint_to_text((case when #10 then null else #6{c} end + case when (#9) IS NULL then null else #8{c} end))))
+              Join on=(#0 = #3{a} AND #1 = #5{b} AND #8{c} = case when (#7) IS NULL then null else #6{c} end) type=delta
+                ArrangeBy keys=[[#0{a}], [#1{b}]]
                   Get l1
-                ArrangeBy keys=[[#0]]
+                ArrangeBy keys=[[#0{a}]]
                   Union
-                    Project (#0, #2)
-                      Filter (#0) IS NOT NULL
+                    Project (#0{a}, #2)
+                      Filter (#0{a}) IS NOT NULL
                         Map (true)
                           ReadStorage materialize.public.bar
                     Map (null)
                       Threshold
                         Union
                           Negate
-                            Project (#0)
-                              Filter (#0) IS NOT NULL
+                            Project (#0{a})
+                              Filter (#0{a}) IS NOT NULL
                                 ReadStorage materialize.public.bar
                           Distinct project=[#0]
                             Project (#0)
                               Get l0
-                ArrangeBy keys=[[#0], [case when (#2) IS NULL then null else #1 end]]
+                ArrangeBy keys=[[#0{b}], [case when (#2) IS NULL then null else #1{c} end]]
                   Union
-                    Project (#0, #1, #3)
+                    Project (#0{b}, #1{c}, #3)
                       Map (true)
                         ReadStorage materialize.public.baz
                     Map (null, null)
                       Threshold
                         Union
                           Negate
-                            Project (#0)
+                            Project (#0{b})
                               ReadStorage materialize.public.baz
                           Distinct project=[#0]
                             Project (#1)
                               Get l0
-                ArrangeBy keys=[[#0]]
+                ArrangeBy keys=[[#0{c}]]
                   Union
-                    Project (#0, #2)
+                    Project (#0{c}, #2)
                       Map (true)
                         ReadStorage materialize.public.quux
                     Map (null)
                       Threshold
                         Union
                           Negate
-                            Project (#0)
+                            Project (#0{c})
                               ReadStorage materialize.public.quux
-                          Distinct project=[#0]
+                          Distinct project=[#0{c}]
                             Union
-                              Project (#1)
+                              Project (#1{c})
                                 ReadStorage materialize.public.baz
                               Constant
                                 - (null)
@@ -810,7 +812,7 @@ Explained Query:
 
 Source materialize.public.foo
 Source materialize.public.bar
-  filter=((#0) IS NOT NULL)
+  filter=((#0{a}) IS NOT NULL)
 Source materialize.public.baz
 Source materialize.public.quux
 
@@ -822,7 +824,7 @@ EOF
 # The plan currently has one join, but maybe that could be optimized out too: the join with baz is currently present,
 # because baz.c is used in the condition of the join with quux. However, the join with quux is optimized out.
 query T multiline
-explain with(arity)
+EXPLAIN OPTIMIZED PLAN WITH(arity, humanized expressions) AS VERBOSE TEXT FOR
 with mutually recursive
   c0(a int4, b int8, u text) as (
     (
@@ -837,65 +839,67 @@ with mutually recursive
 select * from c0;
 ----
 Explained Query:
-  With Mutually Recursive
+  With
     cte l0 =
-      Project (#0) // { arity: 1 }
-        Filter (#0) IS NOT NULL // { arity: 2 }
+      Project (#0{a}) // { arity: 1 }
+        Filter (#0{a}) IS NOT NULL // { arity: 2 }
           ReadStorage materialize.public.bar // { arity: 2 }
     cte l1 =
-      Project (#0) // { arity: 1 }
+      Project (#0{c}) // { arity: 1 }
         ReadStorage materialize.public.quux // { arity: 2 }
-    cte l2 =
-      Distinct project=[#0..=#2] // { arity: 3 }
-        Union // { arity: 3 }
-          Project (#0..=#2) // { arity: 3 }
-            Join on=(#0 = #3 AND #1 = #4 AND #7 = case when (#6) IS NULL then null else #5 end) type=delta // { arity: 8 }
-              ArrangeBy keys=[[#0], [#1]] // { arity: 3 }
-                Get l2 // { arity: 3 }
-              ArrangeBy keys=[[#0]] // { arity: 1 }
-                Union // { arity: 1 }
-                  Get l0 // { arity: 1 }
-                  Threshold // { arity: 1 }
-                    Union // { arity: 1 }
-                      Negate // { arity: 1 }
-                        Get l0 // { arity: 1 }
-                      Distinct project=[#0] // { arity: 1 }
-                        Project (#0) // { arity: 1 }
-                          Get l2 // { arity: 3 }
-              ArrangeBy keys=[[#0], [case when (#2) IS NULL then null else #1 end]] // { arity: 3 }
-                Union // { arity: 3 }
-                  Project (#0, #1, #3) // { arity: 3 }
-                    Map (true) // { arity: 4 }
-                      ReadStorage materialize.public.baz // { arity: 3 }
-                  Map (null, null) // { arity: 3 }
+  Return // { arity: 3 }
+    With Mutually Recursive
+      cte l2 =
+        Distinct project=[#0{a}..=#2{u}] // { arity: 3 }
+          Union // { arity: 3 }
+            Project (#0..=#2) // { arity: 3 }
+              Join on=(#0 = #3{a} AND #1 = #4{b} AND #7{c} = case when (#6) IS NULL then null else #5{c} end) type=delta // { arity: 8 }
+                ArrangeBy keys=[[#0{a}], [#1{b}]] // { arity: 3 }
+                  Get l2 // { arity: 3 }
+                ArrangeBy keys=[[#0{a}]] // { arity: 1 }
+                  Union // { arity: 1 }
+                    Get l0 // { arity: 1 }
                     Threshold // { arity: 1 }
                       Union // { arity: 1 }
                         Negate // { arity: 1 }
-                          Project (#0) // { arity: 1 }
-                            ReadStorage materialize.public.baz // { arity: 3 }
+                          Get l0 // { arity: 1 }
                         Distinct project=[#0] // { arity: 1 }
-                          Project (#1) // { arity: 1 }
+                          Project (#0{a}) // { arity: 1 }
                             Get l2 // { arity: 3 }
-              ArrangeBy keys=[[#0]] // { arity: 1 }
-                Union // { arity: 1 }
-                  Get l1 // { arity: 1 }
-                  Threshold // { arity: 1 }
-                    Union // { arity: 1 }
-                      Negate // { arity: 1 }
-                        Get l1 // { arity: 1 }
-                      Distinct project=[#0] // { arity: 1 }
+                ArrangeBy keys=[[#0{b}], [case when (#2) IS NULL then null else #1{c} end]] // { arity: 3 }
+                  Union // { arity: 3 }
+                    Project (#0{b}, #1{c}, #3) // { arity: 3 }
+                      Map (true) // { arity: 4 }
+                        ReadStorage materialize.public.baz // { arity: 3 }
+                    Map (null, null) // { arity: 3 }
+                      Threshold // { arity: 1 }
                         Union // { arity: 1 }
-                          Project (#1) // { arity: 1 }
-                            ReadStorage materialize.public.baz // { arity: 3 }
-                          Constant // { arity: 1 }
-                            - (null)
-          ReadStorage materialize.public.foo // { arity: 3 }
-  Return // { arity: 3 }
-    Get l2 // { arity: 3 }
+                          Negate // { arity: 1 }
+                            Project (#0{b}) // { arity: 1 }
+                              ReadStorage materialize.public.baz // { arity: 3 }
+                          Distinct project=[#0] // { arity: 1 }
+                            Project (#1{b}) // { arity: 1 }
+                              Get l2 // { arity: 3 }
+                ArrangeBy keys=[[#0{c}]] // { arity: 1 }
+                  Union // { arity: 1 }
+                    Get l1 // { arity: 1 }
+                    Threshold // { arity: 1 }
+                      Union // { arity: 1 }
+                        Negate // { arity: 1 }
+                          Get l1 // { arity: 1 }
+                        Distinct project=[#0{c}] // { arity: 1 }
+                          Union // { arity: 1 }
+                            Project (#1{c}) // { arity: 1 }
+                              ReadStorage materialize.public.baz // { arity: 3 }
+                            Constant // { arity: 1 }
+                              - (null)
+            ReadStorage materialize.public.foo // { arity: 3 }
+    Return // { arity: 3 }
+      Get l2 // { arity: 3 }
 
 Source materialize.public.foo
 Source materialize.public.bar
-  filter=((#0) IS NOT NULL)
+  filter=((#0{a}) IS NOT NULL)
 Source materialize.public.baz
 Source materialize.public.quux
 

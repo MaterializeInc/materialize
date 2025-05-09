@@ -10,23 +10,25 @@ publish = false
 workspace = true
 
 [dependencies]
-anyhow = "1.0.66"
-async-stream = "0.3.3"
-bytesize = "1.1.0"
-crossbeam-channel = "0.5.8"
+anyhow = "1.0.98"
+async-stream = "0.3.6"
+bytesize = "1.3.0"
+columnar = "0.4.1"
+crossbeam-channel = "0.5.15"
 dec = { version = "0.4.8", features = ["serde"] }
-differential-dataflow = "0.13.3"
-differential-dogs3 = "0.1.3"
-futures = "0.3.25"
-itertools = "0.12.1"
-lgalloc = "0.4"
+differential-dataflow = "0.14.2"
+differential-dogs3 = "0.1.10"
+futures = "0.3.31"
+itertools = "0.14.0"
+lgalloc = "0.5"
 mz-cluster = { path = "../cluster" }
 mz-compute-client = { path = "../compute-client" }
 mz-compute-types = { path = "../compute-types" }
 mz-dyncfg = { path = "../dyncfg" }
 mz-dyncfgs = { path = "../dyncfgs" }
 mz-expr = { path = "../expr" }
-mz-ore = { path = "../ore", features = ["async", "flatcontainer", "process", "tracing_"] }
+mz-metrics = { path = "../metrics" }
+mz-ore = { path = "../ore", features = ["async", "process", "tracing", "columnar", "differential-dataflow", "region"] }
 mz-persist-client = { path = "../persist-client" }
 mz-persist-types = { path = "../persist-types" }
 mz-repr = { path = "../repr" }
@@ -34,21 +36,26 @@ mz-storage-operators = { path = "../storage-operators" }
 mz-storage-types = { path = "../storage-types" }
 mz-timely-util = { path = "../timely-util" }
 mz-txn-wal = { path = "../txn-wal" }
-prometheus = { version = "0.13.3", default-features = false }
-scopeguard = "1.1.0"
-serde = { version = "1.0.152", features = ["derive"] }
-smallvec = { version = "1.10.0", features = ["serde", "union"] }
-timely = "0.16.0"
-tokio = { version = "1.38.0", features = ["fs", "rt", "sync", "net"] }
+prometheus = { version = "0.13.4", default-features = false }
+scopeguard = "1.2.0"
+serde = { version = "1.0.219", features = ["derive"] }
+smallvec = { version = "1.15.0", features = ["serde", "union"] }
+timely = "0.20.0"
+tokio = { version = "1.44.1", features = ["fs", "rt", "sync", "net"] }
 tracing = "0.1.37"
-uuid = { version = "1.7.0", features = ["serde", "v4"] }
+uuid = { version = "1.16.0", features = ["serde", "v4"] }
 workspace-hack = { version = "0.0.0", path = "../workspace-hack", optional = true }
 
 [target.'cfg(not(target_os = "macos"))'.dependencies]
-core_affinity = "0.8.0"
+core_affinity = "0.8.3"
 
 [package.metadata.cargo-udeps.ignore]
 normal = ["workspace-hack"]
 
 [features]
 default = ["workspace-hack"]
+
+# This crate is relatively fast to compile and enabling optimizations greatly
+# speeds up test execution.
+[package.metadata.cargo-gazelle.lib]
+rustc_flags = ["-Copt-level=3"]

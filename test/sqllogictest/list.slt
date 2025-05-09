@@ -2609,10 +2609,10 @@ statement ok
 INSERT INTO t3 VALUES (11, 12, 13, 14, 15, 16, 17, 18, 11, 12, list[82, 83])
 
 query T multiline
-EXPLAIN WITH(arity, join implementations) SELECT LIST[f1, f2, f3, f4, f5][3] from m3
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, arity, join implementations) AS VERBOSE TEXT FOR SELECT LIST[f1, f2, f3, f4, f5][3] from m3
 ----
 Explained Query (fast path):
-  Project (#2)
+  Project (#2{f3})
     ReadIndex on=materialize.public.m3 m3_primary_idx=[*** full scan ***]
 
 Used Indexes:
@@ -2631,10 +2631,10 @@ SELECT LIST[f1, f2, f3, f4, f5][3] from m3
 # Reducing multidimensional ListIndex when all indexes are literals
 
 query T multiline
-EXPLAIN WITH(arity, join implementations) SELECT LIST[[f1, f2], [f3, f4]][2][1] from m3
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, arity, join implementations) AS VERBOSE TEXT FOR SELECT LIST[[f1, f2], [f3, f4]][2][1] from m3
 ----
 Explained Query (fast path):
-  Project (#2)
+  Project (#2{f3})
     ReadIndex on=materialize.public.m3 m3_primary_idx=[*** full scan ***]
 
 Used Indexes:
@@ -2651,10 +2651,10 @@ SELECT LIST[[f1, f2], [f3, f4]][2][1] from m3
 13
 
 query T multiline
-EXPLAIN WITH(arity, join implementations) SELECT LIST[[[f1, f2], [f3, f4]], [[f5, f6], [f7, f8]]] [2][1][2] from m3
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, arity, join implementations) AS VERBOSE TEXT FOR SELECT LIST[[[f1, f2], [f3, f4]], [[f5, f6], [f7, f8]]] [2][1][2] from m3
 ----
 Explained Query (fast path):
-  Project (#5)
+  Project (#5{f6})
     ReadIndex on=materialize.public.m3 m3_primary_idx=[*** full scan ***]
 
 Used Indexes:
@@ -2673,11 +2673,11 @@ SELECT LIST[[[f1, f2], [f3, f4]], [[f5, f6], [f7, f8]]] [2][1][2] from m3
 # Reducing multidimensional ListIndex when some of the indexes are not literals, and therefore can't be removed
 
 query T multiline
-EXPLAIN WITH(arity, join implementations) SELECT LIST[[[f1, f2], [f7, f8, f3, f4]], [[f5, f6], [f7, f8]]] [n][m][n] from m3
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, arity, join implementations) AS VERBOSE TEXT FOR SELECT LIST[[[f1, f2], [f7, f8, f3, f4]], [[f5, f6], [f7, f8]]] [n][m][n] from m3
 ----
 Explained Query (fast path):
   Project (#12)
-    Map (integer_to_bigint(#8), list_index(list[list[list[#0, #1], list[#6, #7, #2, #3]], list[list[#4, #5], list[#6, #7]]], #11, integer_to_bigint(#9), #11))
+    Map (integer_to_bigint(#8{n}), list_index(list[list[list[#0{f1}, #1{f2}], list[#6{f7}, #7{f8}, #2{f3}, #3{f4}]], list[list[#4{f5}, #5{f6}], list[#6{f7}, #7{f8}]]], #11, integer_to_bigint(#9{m}), #11))
       ReadIndex on=materialize.public.m3 m3_primary_idx=[*** full scan ***]
 
 Used Indexes:
@@ -2694,11 +2694,11 @@ SELECT LIST[[[f1, f2], [f7, f8, f3, f4]], [[f5, f6], [f7, f8]]] [n][m][n] from m
 NULL
 
 query T multiline
-EXPLAIN WITH(arity, join implementations) SELECT LIST[[[f1, f2], [f3, f4]], [[f5, f6], [f7, f8]]] [n][m][1] from m3
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, arity, join implementations) AS VERBOSE TEXT FOR SELECT LIST[[[f1, f2], [f3, f4]], [[f5, f6], [f7, f8]]] [n][m][1] from m3
 ----
 Explained Query (fast path):
   Project (#11)
-    Map (list_index(list[list[#0, #2], list[#4, #6]], integer_to_bigint(#8), integer_to_bigint(#9)))
+    Map (list_index(list[list[#0{f1}, #2{f3}], list[#4{f5}, #6{f7}]], integer_to_bigint(#8{n}), integer_to_bigint(#9{m})))
       ReadIndex on=materialize.public.m3 m3_primary_idx=[*** full scan ***]
 
 Used Indexes:
@@ -2715,11 +2715,11 @@ SELECT LIST[[[f1, f2], [f3, f4]], [[f5, f6], [f7, f8]]] [n][m][1] from m3
 NULL
 
 query T multiline
-EXPLAIN WITH(arity, join implementations) SELECT LIST[[[f1, f2], [f3, f4]], [[f5, f6], [f7, f8]]] [n][2][m] from m3
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, arity, join implementations) AS VERBOSE TEXT FOR SELECT LIST[[[f1, f2], [f3, f4]], [[f5, f6], [f7, f8]]] [n][2][m] from m3
 ----
 Explained Query (fast path):
   Project (#11)
-    Map (list_index(list[list[#2, #3], list[#6, #7]], integer_to_bigint(#8), integer_to_bigint(#9)))
+    Map (list_index(list[list[#2{f3}, #3{f4}], list[#6{f7}, #7{f8}]], integer_to_bigint(#8{n}), integer_to_bigint(#9{m})))
       ReadIndex on=materialize.public.m3 m3_primary_idx=[*** full scan ***]
 
 Used Indexes:
@@ -2736,11 +2736,11 @@ SELECT LIST[[[f1, f2], [f3, f4]], [[f5, f6], [f7, f8]]] [n][2][m] from m3
 NULL
 
 query T multiline
-EXPLAIN WITH(arity, join implementations) SELECT LIST[[[f1, f2], [f3, f4]], [[f5, f6], [f7, f8]]] [1][n][m] from m3
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, arity, join implementations) AS VERBOSE TEXT FOR SELECT LIST[[[f1, f2], [f3, f4]], [[f5, f6], [f7, f8]]] [1][n][m] from m3
 ----
 Explained Query (fast path):
   Project (#11)
-    Map (list_index(list[list[#0, #1], list[#2, #3]], integer_to_bigint(#8), integer_to_bigint(#9)))
+    Map (list_index(list[list[#0{f1}, #1{f2}], list[#2{f3}, #3{f4}]], integer_to_bigint(#8{n}), integer_to_bigint(#9{m})))
       ReadIndex on=materialize.public.m3 m3_primary_idx=[*** full scan ***]
 
 Used Indexes:
@@ -2757,11 +2757,11 @@ SELECT LIST[[[f1, f2], [f3, f4]], [[f5, f6], [f7, f8]]] [1][n][m] from m3
 NULL
 
 query T multiline
-EXPLAIN WITH(arity, join implementations) SELECT LIST[[[f1, f2], [f3, f4]], [[f5, f6], [f7, f8]]] [2][1][n] from m3
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, arity, join implementations) AS VERBOSE TEXT FOR SELECT LIST[[[f1, f2], [f3, f4]], [[f5, f6], [f7, f8]]] [2][1][n] from m3
 ----
 Explained Query (fast path):
   Project (#11)
-    Map (list_index(list[#4, #5], integer_to_bigint(#8)))
+    Map (list_index(list[#4{f5}, #5{f6}], integer_to_bigint(#8{n})))
       ReadIndex on=materialize.public.m3 m3_primary_idx=[*** full scan ***]
 
 Used Indexes:
@@ -2778,11 +2778,11 @@ SELECT LIST[[[f1, f2], [f3, f4]], [[f5, f6], [f7, f8]]] [2][1][n] from m3
 NULL
 
 query T multiline
-EXPLAIN WITH(arity, join implementations) SELECT LIST[[[f1, f2], [f3, f4]], [[f5, f6], [f7, f8]]] [2][n][2] from m3
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, arity, join implementations) AS VERBOSE TEXT FOR SELECT LIST[[[f1, f2], [f3, f4]], [[f5, f6], [f7, f8]]] [2][n][2] from m3
 ----
 Explained Query (fast path):
   Project (#11)
-    Map (list_index(list[#5, #7], integer_to_bigint(#8)))
+    Map (list_index(list[#5{f6}, #7{f8}], integer_to_bigint(#8{n})))
       ReadIndex on=materialize.public.m3 m3_primary_idx=[*** full scan ***]
 
 Used Indexes:
@@ -2799,11 +2799,11 @@ SELECT LIST[[[f1, f2], [f3, f4]], [[f5, f6], [f7, f8]]] [2][n][2] from m3
 NULL
 
 query T multiline
-EXPLAIN WITH(arity, join implementations) SELECT LIST[[[f1, f2], [f3, f4]], [[f5, f6], [f7, f8]]] [n][2][2] from m3
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, arity, join implementations) AS VERBOSE TEXT FOR SELECT LIST[[[f1, f2], [f3, f4]], [[f5, f6], [f7, f8]]] [n][2][2] from m3
 ----
 Explained Query (fast path):
   Project (#11)
-    Map (list_index(list[#3, #7], integer_to_bigint(#8)))
+    Map (list_index(list[#3{f4}, #7{f8}], integer_to_bigint(#8{n})))
       ReadIndex on=materialize.public.m3 m3_primary_idx=[*** full scan ***]
 
 Used Indexes:
@@ -2822,7 +2822,7 @@ NULL
 # Reducing ListIndex when a literal index is out of bounds
 
 query T multiline
-EXPLAIN WITH(arity, join implementations) SELECT LIST[f1, f2, f3, f4, f5][6] from m3
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, arity, join implementations) AS VERBOSE TEXT FOR SELECT LIST[f1, f2, f3, f4, f5][6] from m3
 ----
 Explained Query (fast path):
   Project (#11)
@@ -2837,7 +2837,7 @@ Target cluster: quickstart
 EOF
 
 query T multiline
-EXPLAIN WITH(arity, join implementations) SELECT LIST[f1, f2, f3, f4, f5][0] from m3
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, arity, join implementations) AS VERBOSE TEXT FOR SELECT LIST[f1, f2, f3, f4, f5][0] from m3
 ----
 Explained Query (fast path):
   Project (#11)
@@ -2852,7 +2852,7 @@ Target cluster: quickstart
 EOF
 
 query T multiline
-EXPLAIN WITH(arity, join implementations) SELECT LIST[f1, f2, f3, f4, f5][-1] from m3
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, arity, join implementations) AS VERBOSE TEXT FOR SELECT LIST[f1, f2, f3, f4, f5][-1] from m3
 ----
 Explained Query (fast path):
   Project (#11)
@@ -2876,7 +2876,7 @@ NULL
 # Also, one of the indexes is `1+1`, which must be evaluated to make it a literal, and then the reduction can take place.
 
 query T multiline
-EXPLAIN WITH(arity, join implementations) SELECT LIST[[[f1, f2], [f3, f4]], [l, [f7, f8]]] [1+1][-1][2] from m3;
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, arity, join implementations) AS VERBOSE TEXT FOR SELECT LIST[[[f1, f2], [f3, f4]], [l, [f7, f8]]] [1+1][-1][2] from m3;
 ----
 Explained Query (fast path):
   Project (#11)
@@ -2894,7 +2894,7 @@ EOF
 # but has a NULL instead of a ListCreate.
 
 query T multiline
-EXPLAIN WITH(arity, join implementations) SELECT LIST[[[f1, f2], [f3, f4]], [NULL, [f7, f8]]] [1+1][1][2] from m3
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, arity, join implementations) AS VERBOSE TEXT FOR SELECT LIST[[[f1, f2], [f3, f4]], [NULL, [f7, f8]]] [1+1][1][2] from m3
 ----
 Explained Query (fast path):
   Project (#11)
@@ -2912,11 +2912,11 @@ EOF
 # but has a column reference instead of a ListCreate.
 
 query T multiline
-EXPLAIN WITH(arity, join implementations) SELECT LIST[[[f1, f2], [f3, f4]], [l, [f7, f8]]] [1+1][1][2] from m3
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, arity, join implementations) AS VERBOSE TEXT FOR SELECT LIST[[[f1, f2], [f3, f4]], [l, [f7, f8]]] [1+1][1][2] from m3
 ----
 Explained Query (fast path):
   Project (#11)
-    Map (list_index(#10, 2))
+    Map (list_index(#10{l}, 2))
       ReadIndex on=materialize.public.m3 m3_primary_idx=[*** full scan ***]
 
 Used Indexes:
@@ -2936,16 +2936,16 @@ SELECT LIST[[[f1, f2], [f3, f4]], [l, [f7, f8]]] [1+1][1][2] from m3
 # already took place.
 
 query T multiline
-EXPLAIN WITH(arity, join implementations) SELECT row_number() over () from (select f1 from m3 limit 1)
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, arity, join implementations) AS VERBOSE TEXT FOR SELECT row_number() over () from (select f1 from m3 limit 1)
 ----
 Explained Query:
   Project (#2) // { arity: 1 }
     Map (record_get[0](#1)) // { arity: 3 }
       FlatMap unnest_list(#0) // { arity: 2 }
         Project (#1) // { arity: 1 }
-          Map (list[row(1, row(#0))]) // { arity: 2 }
+          Map (list[row(1, row(#0{f1}))]) // { arity: 2 }
             TopK limit=1 // { arity: 1 }
-              Project (#0) // { arity: 1 }
+              Project (#0{f1}) // { arity: 1 }
                 ReadIndex on=m3 m3_primary_idx=[*** full scan ***] // { arity: 11 }
 
 Used Indexes:
@@ -3027,3 +3027,13 @@ query T
 SELECT LIST[1,3,7,NULL] @> LIST[1,3,7,NULL] AS contains;
 ----
 false
+
+# Make sure we can index into a CAST-ed list.
+
+statement ok
+CREATE TABLE jsons (payload jsonb, random_index int, random_id uuid);
+
+statement ok
+CREATE MATERIALIZED VIEW json_mv AS (
+    SELECT * FROM jsons WHERE random_id = CAST(payload->>'my_field' AS uuid list)[random_index]
+)

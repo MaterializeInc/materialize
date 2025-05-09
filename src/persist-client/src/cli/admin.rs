@@ -18,7 +18,8 @@ use std::time::{Duration, Instant};
 use anyhow::{anyhow, bail};
 use differential_dataflow::difference::Semigroup;
 use differential_dataflow::lattice::Lattice;
-use futures_util::{stream, StreamExt, TryStreamExt};
+use futures::pin_mut;
+use futures_util::{StreamExt, TryStreamExt, stream};
 use mz_dyncfg::{Config, ConfigSet};
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::SYSTEM_TIME;
@@ -33,18 +34,19 @@ use tracing::{info, warn};
 
 use crate::async_runtime::IsolatedRuntime;
 use crate::cache::StateCache;
-use crate::cfg::{all_dyncfgs, COMPACTION_MEMORY_BOUND_BYTES};
-use crate::cli::args::{make_blob, make_consensus, StateArgs, StoreArgs};
+use crate::cfg::{COMPACTION_MEMORY_BOUND_BYTES, all_dyncfgs};
+use crate::cli::args::{StateArgs, StoreArgs, make_blob, make_consensus};
 use crate::cli::inspect::FAKE_OPAQUE_CODEC;
-use crate::internal::compact::{CompactConfig, CompactReq, Compactor};
+use crate::internal::compact::{CompactConfig, CompactReq, CompactRes, Compactor};
 use crate::internal::encoding::Schemas;
 use crate::internal::gc::{GarbageCollector, GcReq};
 use crate::internal::machine::Machine;
+use crate::internal::state::HollowBatch;
 use crate::internal::trace::FueledMergeRes;
 use crate::rpc::{NoopPubSubSender, PubSubSender};
 use crate::write::{WriteHandle, WriterId};
 use crate::{
-    Diagnostics, Metrics, PersistClient, PersistConfig, ShardId, StateVersions, BUILD_INFO,
+    BUILD_INFO, Diagnostics, Metrics, PersistClient, PersistConfig, ShardId, StateVersions,
 };
 
 /// Commands for read-write administration of persist state
@@ -223,7 +225,7 @@ pub async fn run(command: AdminArgs) -> Result<(), anyhow::Error> {
             .await?;
 
             if force_downgrade_upper {
-                let isolated_runtime = Arc::new(IsolatedRuntime::default());
+                let isolated_runtime = Arc::new(IsolatedRuntime::new(&metrics_registry, None));
                 let pubsub_sender: Arc<dyn PubSubSender> = Arc::new(NoopPubSubSender);
                 let shared_states = Arc::new(StateCache::new(
                     &cfg,
@@ -489,16 +491,44 @@ where
                 val: Arc::clone(&val_schema),
             };
 
-            let res = Compactor::<K, V, T, D>::compact(
+            let stream = Compactor::<K, V, T, D>::compact_stream(
                 CompactConfig::new(&cfg, shard_id),
                 Arc::clone(&blob),
                 Arc::clone(&metrics),
                 Arc::clone(&machine.applier.shard_metrics),
                 Arc::new(IsolatedRuntime::default()),
-                req,
+                req.clone(),
                 schemas,
-            )
-            .await?;
+            );
+            pin_mut!(stream);
+
+            let mut all_parts = vec![];
+            let mut all_run_splits = vec![];
+            let mut all_run_meta = vec![];
+            let mut len = 0;
+
+            while let Some(res) = stream.next().await {
+                let res = res?;
+                let (parts, updates, run_meta, run_splits) = (
+                    res.output.parts,
+                    res.output.len,
+                    res.output.run_meta,
+                    res.output.run_splits,
+                );
+                let run_offset = all_parts.len();
+                if !all_parts.is_empty() {
+                    all_run_splits.push(run_offset);
+                }
+                all_run_splits.extend(run_splits.iter().map(|r| r + run_offset));
+                all_run_meta.extend(run_meta);
+                all_parts.extend(parts);
+                len += updates;
+            }
+
+            let res = CompactRes {
+                output: HollowBatch::new(req.desc, all_parts, len, all_run_meta, all_run_splits),
+            };
+
             metrics.compaction.admin_count.inc();
             info!(
                 "attempt {} req {}: compacted into {} parts {} bytes in {:?}",
@@ -509,7 +539,10 @@ where
                 start.elapsed(),
             );
             let (apply_res, maintenance) = machine
-                .merge_res(&FueledMergeRes { output: res.output })
+                .merge_res(&FueledMergeRes {
+                    output: res.output,
+                    new_active_compaction: None,
+                })
                 .await;
             if !maintenance.is_empty() {
                 info!("ignoring non-empty requested maintenance: {maintenance:?}")
@@ -615,7 +648,11 @@ where
         };
         if !safe_version_change {
             // We could add a flag to override this check, if that comes up.
-            return Err(anyhow!("version of this tool {} does not match version of state {} when --commit is {commit}. bailing so we don't corrupt anything", cfg.build_version, state.applier_version));
+            return Err(anyhow!(
+                "version of this tool {} does not match version of state {} when --commit is {commit}. bailing so we don't corrupt anything",
+                cfg.build_version,
+                state.applier_version
+            ));
         }
         break;
     }
@@ -735,12 +772,16 @@ pub async fn dangerous_force_compaction_and_break_pushdown<K, V, T, D>(
         let (reqs, mut maintenance) = machine.spine_exert(fuel).await;
         for req in reqs {
             info!(
-                "dangerous_force_compaction_and_break_pushdown {} {} compacting {} batches in {} parts totaling {} bytes: lower={:?} upper={:?} since={:?}",
+                "force_compaction {} {} compacting {} batches in {} parts totaling {} bytes: lower={:?} upper={:?} since={:?}",
                 machine.applier.shard_metrics.name,
                 machine.applier.shard_metrics.shard_id,
                 req.inputs.len(),
                 req.inputs.iter().flat_map(|x| &x.parts).count(),
-                req.inputs.iter().flat_map(|x| &x.parts).map(|x| x.encoded_size_bytes()).sum::<usize>(),
+                req.inputs
+                    .iter()
+                    .flat_map(|x| &x.parts)
+                    .map(|x| x.encoded_size_bytes())
+                    .sum::<usize>(),
                 req.desc.lower().elements(),
                 req.desc.upper().elements(),
                 req.desc.since().elements(),
@@ -753,11 +794,11 @@ pub async fn dangerous_force_compaction_and_break_pushdown<K, V, T, D>(
                 write.write_schemas.clone(),
             )
             .await;
-            let (res, apply_maintenance) = match res {
+            let apply_maintenance = match res {
                 Ok(x) => x,
                 Err(err) => {
                     warn!(
-                        "dangerous_force_compaction_and_break_pushdown {} {} errored in compaction: {:?}",
+                        "force_compaction {} {} errored in compaction: {:?}",
                         machine.applier.shard_metrics.name,
                         machine.applier.shard_metrics.shard_id,
                         err
@@ -767,11 +808,10 @@ pub async fn dangerous_force_compaction_and_break_pushdown<K, V, T, D>(
             };
             machine.applier.metrics.compaction.admin_count.inc();
             info!(
-                "dangerous_force_compaction_and_break_pushdown {} {} compacted in {:?}: {:?}",
+                "force_compaction {} {} compacted in {:?}",
                 machine.applier.shard_metrics.name,
                 machine.applier.shard_metrics.shard_id,
-                start.elapsed(),
-                res
+                start.elapsed()
             );
             maintenance.merge(apply_maintenance);
         }
@@ -787,7 +827,7 @@ pub async fn dangerous_force_compaction_and_break_pushdown<K, V, T, D>(
         let num_batches = machine.applier.all_batches().len();
         if num_batches < 2 {
             info!(
-                "dangerous_force_compaction_and_break_pushdown {} {} exiting with {} batches",
+                "force_compaction {} {} exiting with {} batches",
                 machine.applier.shard_metrics.name,
                 machine.applier.shard_metrics.shard_id,
                 num_batches

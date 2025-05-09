@@ -19,7 +19,7 @@ use mz_repr::refresh_schedule::RefreshSchedule;
 use mz_repr::{GlobalId, RelationType};
 use mz_storage_types::controller::CollectionMetadata;
 use mz_storage_types::time_dependence::TimeDependence;
-use proptest::prelude::{any, Arbitrary};
+use proptest::prelude::{Arbitrary, any};
 use proptest::strategy::{BoxedStrategy, Strategy};
 use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
@@ -28,8 +28,8 @@ use timely::progress::Antichain;
 use crate::dataflows::proto_dataflow_description::{
     ProtoIndexExport, ProtoIndexImport, ProtoSinkExport, ProtoSourceImport,
 };
-use crate::plan::render_plan::RenderPlan;
 use crate::plan::Plan;
+use crate::plan::render_plan::RenderPlan;
 use crate::sinks::{ComputeSinkConnection, ComputeSinkDesc};
 use crate::sources::{SourceInstanceArguments, SourceInstanceDesc};
 
@@ -39,7 +39,7 @@ include!(concat!(env!("OUT_DIR"), "/mz_compute_types.dataflows.rs"));
 #[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
 pub struct DataflowDescription<P, S: 'static = (), T = mz_repr::Timestamp> {
     /// Sources instantiations made available to the dataflow pair with monotonicity information.
-    pub source_imports: BTreeMap<GlobalId, (SourceInstanceDesc<S>, bool)>,
+    pub source_imports: BTreeMap<GlobalId, (SourceInstanceDesc<S>, bool, Antichain<T>)>,
     /// Indexes made available to the dataflow.
     /// (id of index, import)
     pub index_imports: BTreeMap<GlobalId, IndexImport>,
@@ -185,6 +185,7 @@ impl<T> DataflowDescription<OptimizedMirRelationExpr, (), T> {
                     typ,
                 },
                 monotonic,
+                Antichain::new(),
             ),
         );
     }
@@ -228,7 +229,7 @@ impl<T> DataflowDescription<OptimizedMirRelationExpr, (), T> {
 
     /// The number of columns associated with an identifier in the dataflow.
     pub fn arity_of(&self, id: &GlobalId) -> usize {
-        for (source_id, (source, _monotonic)) in self.source_imports.iter() {
+        for (source_id, (source, _monotonic, _upper)) in self.source_imports.iter() {
             if source_id == id {
                 return source.typ.arity();
             }
@@ -255,7 +256,7 @@ impl<T> DataflowDescription<OptimizedMirRelationExpr, (), T> {
         for BuildDesc { plan, .. } in &mut self.objects_to_build {
             r(plan)?;
         }
-        for (source_instance_desc, _) in self.source_imports.values_mut() {
+        for (source_instance_desc, _, _upper) in self.source_imports.values_mut() {
             let Some(mfp) = source_instance_desc.arguments.operators.as_mut() else {
                 continue;
             };
@@ -514,9 +515,9 @@ where
     /// Returns a `DataflowDescription` that has the same structure as `self` and can be
     /// structurally compared to other `DataflowDescription`s.
     ///
-    /// For now this method performs a single normalization only: It replaces transient `GlobalId`s
+    /// The function normalizes several properties. It replaces transient `GlobalId`s
     /// that are only used internally (i.e. not imported nor exported) with consecutive IDs
-    /// starting from `t1`.
+    /// starting from `t1`. It replaces the source import's `upper` by a dummy value.
     fn as_comparable(&self) -> Self {
         let external_ids: BTreeSet<_> = self.import_ids().chain(self.export_ids()).collect();
 
@@ -533,6 +534,11 @@ where
                 id
             }
         };
+
+        let mut source_imports = self.source_imports.clone();
+        for (_source, _monotonic, upper) in source_imports.values_mut() {
+            *upper = Antichain::new();
+        }
 
         let mut objects_to_build = self.objects_to_build.clone();
         for object in &mut objects_to_build {
@@ -551,7 +557,7 @@ where
         }
 
         DataflowDescription {
-            source_imports: self.source_imports.clone(),
+            source_imports,
             index_imports: self.index_imports.clone(),
             objects_to_build,
             index_exports,
@@ -607,29 +613,54 @@ impl RustType<ProtoDataflowDescription> for DataflowDescription<RenderPlan, Coll
     }
 }
 
-impl ProtoMapEntry<GlobalId, (SourceInstanceDesc<CollectionMetadata>, bool)> for ProtoSourceImport {
+impl
+    ProtoMapEntry<
+        GlobalId,
+        (
+            SourceInstanceDesc<CollectionMetadata>,
+            bool,
+            Antichain<mz_repr::Timestamp>,
+        ),
+    > for ProtoSourceImport
+{
     fn from_rust<'a>(
         entry: (
             &'a GlobalId,
-            &'a (SourceInstanceDesc<CollectionMetadata>, bool),
+            &'a (
+                SourceInstanceDesc<CollectionMetadata>,
+                bool,
+                Antichain<mz_repr::Timestamp>,
+            ),
         ),
     ) -> Self {
         ProtoSourceImport {
             id: Some(entry.0.into_proto()),
-            source_instance_desc: Some(entry.1 .0.into_proto()),
-            monotonic: entry.1 .1.into_proto(),
+            source_instance_desc: Some((entry.1).0.into_proto()),
+            monotonic: (entry.1).1.into_proto(),
+            upper: Some((entry.1).2.into_proto()),
         }
     }
 
     fn into_rust(
         self,
-    ) -> Result<(GlobalId, (SourceInstanceDesc<CollectionMetadata>, bool)), TryFromProtoError> {
+    ) -> Result<
+        (
+            GlobalId,
+            (
+                SourceInstanceDesc<CollectionMetadata>,
+                bool,
+                Antichain<mz_repr::Timestamp>,
+            ),
+        ),
+        TryFromProtoError,
+    > {
         Ok((
             self.id.into_rust_if_some("ProtoSourceImport::id")?,
             (
                 self.source_instance_desc
                     .into_rust_if_some("ProtoSourceImport::source_instance_desc")?,
                 self.monotonic.into_rust()?,
+                self.upper.into_rust_if_some("ProtoSourceImport::upper")?,
             ),
         ))
     }
@@ -740,7 +771,7 @@ impl Arbitrary for DataflowDescription<Plan, (), mz_repr::Timestamp> {
 }
 
 fn any_dataflow_description<P, S, T>(
-    any_source_import: impl Strategy<Value = (GlobalId, (SourceInstanceDesc<S>, bool))>,
+    any_source_import: impl Strategy<Value = (GlobalId, (SourceInstanceDesc<S>, bool, Antichain<T>))>,
 ) -> impl Strategy<Value = DataflowDescription<P, S, T>>
 where
     P: Arbitrary,
@@ -812,16 +843,35 @@ where
         )
 }
 
-fn any_source_import_collection_metadata(
-) -> impl Strategy<Value = (GlobalId, (SourceInstanceDesc<CollectionMetadata>, bool))> {
+fn any_source_import_collection_metadata() -> impl Strategy<
+    Value = (
+        GlobalId,
+        (
+            SourceInstanceDesc<CollectionMetadata>,
+            bool,
+            Antichain<mz_repr::Timestamp>,
+        ),
+    ),
+> {
     (
         any::<GlobalId>(),
-        any::<(SourceInstanceDesc<CollectionMetadata>, bool)>(),
+        any::<(SourceInstanceDesc<CollectionMetadata>, bool)>().prop_map(
+            |(source_instance_desc, monotonic)| (source_instance_desc, monotonic, Antichain::new()),
+        ),
     )
 }
 
-fn any_source_import() -> impl Strategy<Value = (GlobalId, (SourceInstanceDesc<()>, bool))> {
-    (any::<GlobalId>(), any::<(SourceInstanceDesc<()>, bool)>())
+fn any_source_import() -> impl Strategy<
+    Value = (
+        GlobalId,
+        (SourceInstanceDesc<()>, bool, Antichain<mz_repr::Timestamp>),
+    ),
+> {
+    (any::<GlobalId>(), any::<(SourceInstanceDesc<()>, bool)>()).prop_map(
+        |(id, (source_instance_desc, monotonic))| {
+            (id, (source_instance_desc, monotonic, Antichain::new()))
+        },
+    )
 }
 
 proptest::prop_compose! {

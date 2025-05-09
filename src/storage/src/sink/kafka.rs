@@ -73,12 +73,18 @@
 use std::cell::RefCell;
 use std::cmp::Ordering;
 use std::collections::BTreeMap;
+use std::future::Future;
 use std::rc::Rc;
 use std::sync::atomic::AtomicU64;
-use std::sync::Arc;
+use std::sync::{Arc, Weak};
 use std::time::Duration;
 
-use anyhow::{anyhow, bail, Context};
+use crate::healthcheck::{HealthStatusMessage, HealthStatusUpdate, StatusNamespace};
+use crate::metrics::sink::kafka::KafkaSinkMetrics;
+use crate::render::sinks::SinkRender;
+use crate::statistics::SinkStatistics;
+use crate::storage_state::StorageState;
+use anyhow::{Context, anyhow, bail};
 use differential_dataflow::{AsCollection, Collection, Hashable};
 use futures::StreamExt;
 use maplit::btreemap;
@@ -88,9 +94,10 @@ use mz_interchange::encode::Encode;
 use mz_interchange::envelopes::dbz_format;
 use mz_interchange::json::JsonEncoder;
 use mz_interchange::text_binary::{BinaryEncoder, TextEncoder};
+use mz_kafka_util::admin::EnsureTopicConfig;
 use mz_kafka_util::client::{
-    GetPartitionsError, MzClientContext, TimeoutConfig, TunnelingClientContext,
-    DEFAULT_FETCH_METADATA_TIMEOUT,
+    DEFAULT_FETCH_METADATA_TIMEOUT, GetPartitionsError, MzClientContext, TimeoutConfig,
+    TunnelingClientContext,
 };
 use mz_ore::cast::CastFrom;
 use mz_ore::collections::CollectionExt;
@@ -98,40 +105,41 @@ use mz_ore::error::ErrorExt;
 use mz_ore::future::InTask;
 use mz_ore::task::{self, AbortOnDropHandle};
 use mz_ore::vec::VecExt;
+use mz_persist_client::Diagnostics;
+use mz_persist_client::write::WriteHandle;
+use mz_persist_types::codec_impls::UnitSchema;
 use mz_repr::{Datum, DatumVec, Diff, GlobalId, Row, RowArena, Timestamp};
 use mz_storage_client::sink::progress_key::ProgressKey;
+use mz_storage_types::StorageDiff;
 use mz_storage_types::configuration::StorageConfiguration;
-use mz_storage_types::dyncfgs::KAFKA_BUFFERED_EVENT_RESIZE_THRESHOLD_ELEMENTS;
+use mz_storage_types::controller::CollectionMetadata;
+use mz_storage_types::dyncfgs::{
+    KAFKA_BUFFERED_EVENT_RESIZE_THRESHOLD_ELEMENTS, SINK_ENSURE_TOPIC_CONFIG, SINK_PROGRESS_SEARCH,
+};
 use mz_storage_types::errors::{ContextCreationError, ContextCreationErrorExt, DataflowError};
 use mz_storage_types::sinks::{
-    KafkaSinkConnection, KafkaSinkFormatType, MetadataFilled, SinkEnvelope, SinkPartitionStrategy,
-    StorageSinkDesc,
+    KafkaSinkConnection, KafkaSinkFormatType, SinkEnvelope, StorageSinkDesc,
 };
+use mz_storage_types::sources::SourceData;
 use mz_timely_util::antichain::AntichainExt;
 use mz_timely_util::builder_async::{
     Event, OperatorBuilder as AsyncOperatorBuilder, PressOnDropButton,
 };
-use rdkafka::consumer::{BaseConsumer, Consumer};
+use rdkafka::consumer::{BaseConsumer, Consumer, ConsumerContext};
 use rdkafka::error::KafkaError;
 use rdkafka::message::{Header, OwnedHeaders, ToBytes};
 use rdkafka::producer::{BaseRecord, Producer, ThreadedProducer};
 use rdkafka::types::RDKafkaErrorCode;
 use rdkafka::{Message, Offset, Statistics, TopicPartitionList};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
+use timely::PartialOrder;
 use timely::dataflow::channels::pact::{Exchange, Pipeline};
 use timely::dataflow::operators::{CapabilitySet, Concatenate, Map, ToStream};
 use timely::dataflow::{Scope, Stream};
 use timely::progress::{Antichain, Timestamp as _};
-use timely::PartialOrder;
 use tokio::sync::watch;
 use tokio::time::{self, MissedTickBehavior};
-use tracing::{error, info, warn};
-
-use crate::healthcheck::{HealthStatusMessage, HealthStatusUpdate, StatusNamespace};
-use crate::metrics::sink::kafka::KafkaSinkMetrics;
-use crate::render::sinks::SinkRender;
-use crate::statistics::SinkStatistics;
-use crate::storage_state::StorageState;
+use tracing::{debug, error, info, warn};
 
 impl<G: Scope<Timestamp = Timestamp>> SinkRender<G> for KafkaSinkConnection {
     fn get_key_indices(&self) -> Option<&[usize]> {
@@ -147,7 +155,7 @@ impl<G: Scope<Timestamp = Timestamp>> SinkRender<G> for KafkaSinkConnection {
     fn render_sink(
         &self,
         storage_state: &mut StorageState,
-        sink: &StorageSinkDesc<MetadataFilled, Timestamp>,
+        sink: &StorageSinkDesc<CollectionMetadata, Timestamp>,
         sink_id: GlobalId,
         input: Collection<G, (Option<Row>, DiffPair<Row>), Diff>,
         // TODO(benesch): errors should stream out through the sink,
@@ -155,6 +163,23 @@ impl<G: Scope<Timestamp = Timestamp>> SinkRender<G> for KafkaSinkConnection {
         _err_collection: Collection<G, DataflowError, Diff>,
     ) -> (Stream<G, HealthStatusMessage>, Vec<PressOnDropButton>) {
         let mut scope = input.scope();
+
+        let write_handle = {
+            let persist = Arc::clone(&storage_state.persist_clients);
+            let shard_meta = sink.to_storage_metadata.clone();
+            async move {
+                let client = persist.open(shard_meta.persist_location).await?;
+                let handle = client
+                    .open_writer(
+                        shard_meta.data_shard,
+                        Arc::new(shard_meta.relation_desc),
+                        Arc::new(UnitSchema),
+                        Diagnostics::from_purpose("sink handle"),
+                    )
+                    .await?;
+                Ok(handle)
+            }
+        };
 
         let write_frontier = Rc::new(RefCell::new(Antichain::from_elem(Timestamp::minimum())));
         storage_state
@@ -181,11 +206,11 @@ impl<G: Scope<Timestamp = Timestamp>> SinkRender<G> for KafkaSinkConnection {
             &encoded,
             sink_id,
             self.clone(),
-            sink.partition_strategy.clone(),
             storage_state.storage_configuration.clone(),
             sink,
             metrics,
             statistics,
+            write_handle,
             write_frontier,
         );
 
@@ -213,8 +238,6 @@ struct TransactionalProducer {
     progress_key: ProgressKey,
     /// The version of this sink, used to fence out previous versions from writing.
     sink_version: u64,
-    /// The strategy to partition the data with.
-    partition_strategy: SinkPartitionStrategy,
     /// The number of partitions in the target topic.
     partition_count: Arc<AtomicU64>,
     /// A task to periodically refresh the partition count.
@@ -242,7 +265,6 @@ impl TransactionalProducer {
     async fn new(
         sink_id: GlobalId,
         connection: &KafkaSinkConnection,
-        partition_strategy: SinkPartitionStrategy,
         storage_configuration: &StorageConfiguration,
         metrics: Arc<KafkaSinkMetrics>,
         statistics: SinkStatistics,
@@ -331,7 +353,6 @@ impl TransactionalProducer {
         let producer = Self {
             task_name,
             data_topic: connection.topic.clone(),
-            partition_strategy,
             partition_count,
             _partition_count_task: partition_count_task.abort_on_drop(),
             progress_topic: connection
@@ -379,6 +400,7 @@ impl TransactionalProducer {
                     storage_configuration,
                     &connection.topic,
                     &connection.topic_options,
+                    EnsureTopicConfig::Skip,
                 )
                 .await?;
                 Antichain::from_elem(Timestamp::minimum())
@@ -429,7 +451,7 @@ impl TransactionalProducer {
         time: Timestamp,
         diff: Diff,
     ) -> Result<(), KafkaError> {
-        assert_eq!(diff, 1, "invalid sink update");
+        assert_eq!(diff, Diff::ONE, "invalid sink update");
 
         let mut headers = OwnedHeaders::new().insert(Header {
             key: "materialize-timestamp",
@@ -451,15 +473,10 @@ impl TransactionalProducer {
             });
         }
 
-        let partition = match self.partition_strategy {
-            SinkPartitionStrategy::V0 => None,
-            SinkPartitionStrategy::V1 => {
-                let pc = self
-                    .partition_count
-                    .load(std::sync::atomic::Ordering::SeqCst);
-                Some(i32::try_from(message.hash % pc).unwrap())
-            }
-        };
+        let pc = self
+            .partition_count
+            .load(std::sync::atomic::Ordering::SeqCst);
+        let partition = Some(i32::try_from(message.hash % pc).unwrap());
 
         let record = BaseRecord {
             topic: &self.data_topic,
@@ -613,11 +630,13 @@ fn sink_collection<G: Scope<Timestamp = Timestamp>>(
     input: &Collection<G, KafkaMessage, Diff>,
     sink_id: GlobalId,
     connection: KafkaSinkConnection,
-    partition_strategy: SinkPartitionStrategy,
     storage_configuration: StorageConfiguration,
-    sink: &StorageSinkDesc<MetadataFilled, Timestamp>,
+    sink: &StorageSinkDesc<CollectionMetadata, Timestamp>,
     metrics: KafkaSinkMetrics,
     statistics: SinkStatistics,
+    write_handle: impl Future<
+        Output = anyhow::Result<WriteHandle<SourceData, (), Timestamp, StorageDiff>>,
+    > + 'static,
     write_frontier: Rc<RefCell<Antichain<Timestamp>>>,
 ) -> (Stream<G, HealthStatusMessage>, PressOnDropButton) {
     let scope = input.scope();
@@ -644,12 +663,13 @@ fn sink_collection<G: Scope<Timestamp = Timestamp>>(
                 ContextCreationError::Other(anyhow::anyhow!("synthetic error"))
             ));
 
+            let mut write_handle = write_handle.await?;
+
             let metrics = Arc::new(metrics);
 
             let (mut producer, resume_upper) = TransactionalProducer::new(
                 sink_id,
                 &connection,
-                partition_strategy,
                 &storage_configuration,
                 Arc::clone(&metrics),
                 statistics,
@@ -771,9 +791,31 @@ fn sink_collection<G: Scope<Timestamp = Timestamp>>(
                             producer.send(&message, time, diff)?;
                         }
 
-                        info!("{name}: committing transaction for {}", progress.pretty());
+                        debug!("{name}: committing transaction for {}", progress.pretty());
                         producer.commit_transaction(progress.clone()).await?;
                         transaction_begun = false;
+                        let mut expect_upper = write_handle.shared_upper();
+                        loop {
+                            if PartialOrder::less_equal(&progress, &expect_upper) {
+                                // The frontier has already been advanced as far as necessary.
+                                break;
+                            }
+                            // TODO(sinks): include the high water mark in the output topic for
+                            // the messages we've published, if and when we allow reads to the sink
+                            // directly, to allow monitoring the progress of the sink in terms of
+                            // the output system.
+                            const EMPTY: &[((SourceData, ()), Timestamp, StorageDiff)] = &[];
+                            match write_handle
+                                .compare_and_append(EMPTY, expect_upper, progress.clone())
+                                .await
+                                .expect("valid usage")
+                            {
+                                Ok(()) => break,
+                                Err(mismatch) => {
+                                    expect_upper = mismatch.current;
+                                }
+                            }
+                        }
                         write_frontier.borrow_mut().clone_from(&progress);
                         match progress.into_option() {
                             Some(new_upper) => upper = new_upper,
@@ -889,11 +931,25 @@ async fn determine_sink_progress(
     let ctx = Arc::clone(progress_client_read_committed.client().context());
 
     // Ensure the progress topic exists.
+    let ensure_topic_config =
+        match &*SINK_ENSURE_TOPIC_CONFIG.get(storage_configuration.config_set()) {
+            "skip" => EnsureTopicConfig::Skip,
+            "check" => EnsureTopicConfig::Check,
+            "alter" => EnsureTopicConfig::Alter,
+            _ => {
+                tracing::warn!(
+                    topic = progress_topic,
+                    "unexpected value for ensure-topic-config; skipping checks"
+                );
+                EnsureTopicConfig::Skip
+            }
+        };
     mz_storage_client::sink::ensure_kafka_topic(
         connection,
         storage_configuration,
         &progress_topic,
         progress_topic_options,
+        ensure_topic_config,
     )
     .await
     .add_context("error registering kafka progress topic for sink")?;
@@ -907,6 +963,7 @@ async fn determine_sink_progress(
     let parent_token = Arc::new(());
     let child_token = Arc::downgrade(&parent_token);
     let task_name = format!("get_latest_ts:{sink_id}");
+    let sink_progress_search = SINK_PROGRESS_SEARCH.get(storage_configuration.config_set());
     let result = task::spawn_blocking(|| task_name, move || {
         let progress_topic = progress_topic.as_ref();
         // Ensure the progress topic has exactly one partition. Kafka only
@@ -982,141 +1039,185 @@ async fn determine_sink_progress(
                 )
             })?;
 
-        // Seek to the beginning of the progress topic.
-        let mut tps = TopicPartitionList::new();
-        tps.add_partition(progress_topic, partition);
-        tps.set_partition_offset(progress_topic, partition, Offset::Beginning)?;
-        progress_client_read_committed
-            .assign(&tps)
-            .with_context(|| {
-                format!(
-                    "Error seeking in progress topic {}:{}",
-                    progress_topic, partition
-                )
-            })?;
-
-        // Helper to get the progress consumer's current position.
-        let get_position = || {
-            if child_token.strong_count() == 0 {
-                bail!("operation cancelled");
-            }
-            let position = progress_client_read_committed
-                .position()?
-                .find_partition(progress_topic, partition)
-                .ok_or_else(|| {
-                    anyhow!(
-                        "No position info found for progress topic {}",
-                        progress_topic
-                    )
-                })?
-                .offset();
-            let position = match position {
-                Offset::Offset(position) => position,
-                // An invalid offset indicates the consumer has not yet read a
-                // message. Since we assigned the consumer to the beginning of
-                // the topic, it's safe to return the low water mark here, which
-                // indicates the position before the first possible message.
-                //
-                // Note that it's important to return the low water mark and not
-                // the minimum possible offset (i.e., zero) in order to break
-                // out of the loop if the topic is empty but the low water mark
-                // is greater than zero.
-                Offset::Invalid => lo,
-                _ => bail!(
-                    "Consumer::position returned offset of wrong type: {:?}",
-                    position
-                ),
-            };
-            // Record the outstanding number of progress records that remain to be processed
-            let outstanding = u64::try_from(std::cmp::max(0, hi - position)).unwrap();
-            metrics.outstanding_progress_records.set(outstanding);
-            Ok(position)
-        };
-
-        info!("fetching latest progress record for {progress_key}, lo/hi: {lo}/{hi}");
-
-        // Read messages until the consumer is positioned at or beyond the high
-        // water mark.
-        //
-        // We use `read_committed` isolation to ensure we don't see progress
-        // records for transactions that did not commit. This means we have to
-        // wait for the LSO to progress to the high water mark `hi`, which means
-        // waiting for any open transactions for other sinks using the same
-        // progress topic to complete. We set a short transaction timeout (10s)
-        // to ensure we never need to wait more than 10s.
-        //
-        // Note that the stall time on the progress topic is not a function of
-        // transaction size. We've designed our transactions so that the
-        // progress record is always written last, after all the data has been
-        // written, and so the window of time in which the progress topic has an
-        // open transaction is quite small. The only vulnerability is if another
-        // sink using the same progress topic crashes in that small window
-        // between writing the progress record and committing the transaction,
-        // in which case we have to wait out the transaction timeout.
-        //
-        // Important invariant: we only exit this loop successfully (i.e., not
-        // returning an error) if we have positive proof of a position at or
-        // beyond the high water mark. To make this invariant easy to check, do
-        // not use `break` in the body of the loop.
-        let mut last_progress: Option<ProgressRecord> = None;
-        loop {
-            let current_position = get_position()?;
-
-            if current_position >= hi {
-                // consumer is at or beyond the high water mark and has read enough messages
-                break;
-            }
-
-            let message = match progress_client_read_committed.poll(progress_record_fetch_timeout) {
-                Some(Ok(message)) => message,
-                Some(Err(KafkaError::PartitionEOF(_))) => {
-                    // No message, but the consumer's position may have advanced
-                    // past a transaction control message that positions us at
-                    // or beyond the high water mark. Go around the loop again
-                    // to check.
-                    continue;
-                }
-                Some(Err(e)) => bail!("failed to fetch progress message {e}"),
-                None => {
-                    bail!(
-                        "timed out while waiting to reach high water mark of non-empty \
-                        topic {progress_topic}:{partition}, lo/hi: {lo}/{hi}, current position: {current_position}"
-                    );
-                }
-            };
-
-            if message.key() != Some(progress_key.to_bytes()) {
-                // This is a progress message for a different sink.
-                continue;
-            }
-
-            metrics.consumed_progress_records.inc();
-
-            let Some(payload) = message.payload() else {
-                continue
-            };
-            let progress = parse_progress_record(payload)?;
-
-            match last_progress {
-                Some(last_progress) if !PartialOrder::less_equal(&last_progress.frontier, &progress.frontier) => {
-                    bail!(
-                        "upper regressed in topic {progress_topic}:{partition} from {:?} to {:?}",
-                        &last_progress.frontier,
-                        &progress.frontier,
-                    );
-                }
-                _ => last_progress = Some(progress),
+        // This topic might be long, but the desired offset will usually be right near the end.
+        // Instead of always scanning through the entire topic, we scan through exponentially-growing
+        // suffixes of it. (Because writes are ordered, the largest progress record in any suffix,
+        // if present, is the global max.) If we find it in one of our suffixes, we've saved at least
+        // an order of magnitude of work; if we don't, we've added at most a constant factor.
+        let mut start_indices = vec![lo];
+        if sink_progress_search {
+            let mut lookback = hi.saturating_sub(lo) / 10;
+            while lookback >= 20_000 {
+                start_indices.push(hi - lookback);
+                lookback /= 10;
             }
         }
-
-        // If we get here, we are assured that we've read all messages up to
-        // the high water mark, and therefore `last_timestamp` contains the
-        // most recent timestamp for the sink under consideration.
-        Ok(last_progress)
+        for lo in start_indices.into_iter().rev() {
+            if let Some(found) = progress_search(
+                &progress_client_read_committed,
+                progress_record_fetch_timeout,
+                progress_topic,
+                partition,
+                lo,
+                hi,
+                progress_key.clone(),
+                Weak::clone(&child_token),
+                Arc::clone(&metrics)
+            )? {
+                return Ok(Some(found));
+            }
+        }
+        Ok(None)
     }).await.unwrap().check_ssh_status(&ctx);
     // Express interest to the computation until after we've received its result
     drop(parent_token);
     result
+}
+
+fn progress_search<C: ConsumerContext + 'static>(
+    progress_client_read_committed: &BaseConsumer<C>,
+    progress_record_fetch_timeout: Duration,
+    progress_topic: &str,
+    partition: i32,
+    lo: i64,
+    hi: i64,
+    progress_key: ProgressKey,
+    child_token: Weak<()>,
+    metrics: Arc<KafkaSinkMetrics>,
+) -> anyhow::Result<Option<ProgressRecord>> {
+    // Seek to the beginning of the given range in the progress topic.
+    let mut tps = TopicPartitionList::new();
+    tps.add_partition(progress_topic, partition);
+    tps.set_partition_offset(progress_topic, partition, Offset::Offset(lo))?;
+    progress_client_read_committed
+        .assign(&tps)
+        .with_context(|| {
+            format!(
+                "Error seeking in progress topic {}:{}",
+                progress_topic, partition
+            )
+        })?;
+
+    // Helper to get the progress consumer's current position.
+    let get_position = || {
+        if child_token.strong_count() == 0 {
+            bail!("operation cancelled");
+        }
+        let position = progress_client_read_committed
+            .position()?
+            .find_partition(progress_topic, partition)
+            .ok_or_else(|| {
+                anyhow!(
+                    "No position info found for progress topic {}",
+                    progress_topic
+                )
+            })?
+            .offset();
+        let position = match position {
+            Offset::Offset(position) => position,
+            // An invalid offset indicates the consumer has not yet read a
+            // message. Since we assigned the consumer to the beginning of
+            // the topic, it's safe to return the low water mark here, which
+            // indicates the position before the first possible message.
+            //
+            // Note that it's important to return the low water mark and not
+            // the minimum possible offset (i.e., zero) in order to break
+            // out of the loop if the topic is empty but the low water mark
+            // is greater than zero.
+            Offset::Invalid => lo,
+            _ => bail!(
+                "Consumer::position returned offset of wrong type: {:?}",
+                position
+            ),
+        };
+        // Record the outstanding number of progress records that remain to be processed
+        let outstanding = u64::try_from(std::cmp::max(0, hi - position)).unwrap();
+        metrics.outstanding_progress_records.set(outstanding);
+        Ok(position)
+    };
+
+    info!("fetching latest progress record for {progress_key}, lo/hi: {lo}/{hi}");
+
+    // Read messages until the consumer is positioned at or beyond the high
+    // water mark.
+    //
+    // We use `read_committed` isolation to ensure we don't see progress
+    // records for transactions that did not commit. This means we have to
+    // wait for the LSO to progress to the high water mark `hi`, which means
+    // waiting for any open transactions for other sinks using the same
+    // progress topic to complete. We set a short transaction timeout (10s)
+    // to ensure we never need to wait more than 10s.
+    //
+    // Note that the stall time on the progress topic is not a function of
+    // transaction size. We've designed our transactions so that the
+    // progress record is always written last, after all the data has been
+    // written, and so the window of time in which the progress topic has an
+    // open transaction is quite small. The only vulnerability is if another
+    // sink using the same progress topic crashes in that small window
+    // between writing the progress record and committing the transaction,
+    // in which case we have to wait out the transaction timeout.
+    //
+    // Important invariant: we only exit this loop successfully (i.e., not
+    // returning an error) if we have positive proof of a position at or
+    // beyond the high water mark. To make this invariant easy to check, do
+    // not use `break` in the body of the loop.
+    let mut last_progress: Option<ProgressRecord> = None;
+    loop {
+        let current_position = get_position()?;
+
+        if current_position >= hi {
+            // consumer is at or beyond the high water mark and has read enough messages
+            break;
+        }
+
+        let message = match progress_client_read_committed.poll(progress_record_fetch_timeout) {
+            Some(Ok(message)) => message,
+            Some(Err(KafkaError::PartitionEOF(_))) => {
+                // No message, but the consumer's position may have advanced
+                // past a transaction control message that positions us at
+                // or beyond the high water mark. Go around the loop again
+                // to check.
+                continue;
+            }
+            Some(Err(e)) => bail!("failed to fetch progress message {e}"),
+            None => {
+                bail!(
+                    "timed out while waiting to reach high water mark of non-empty \
+                        topic {progress_topic}:{partition}, lo/hi: {lo}/{hi}, current position: {current_position}"
+                );
+            }
+        };
+
+        if message.key() != Some(progress_key.to_bytes()) {
+            // This is a progress message for a different sink.
+            continue;
+        }
+
+        metrics.consumed_progress_records.inc();
+
+        let Some(payload) = message.payload() else {
+            continue;
+        };
+        let progress = parse_progress_record(payload)?;
+
+        match last_progress {
+            Some(last_progress)
+                if !PartialOrder::less_equal(&last_progress.frontier, &progress.frontier) =>
+            {
+                bail!(
+                    "upper regressed in topic {progress_topic}:{partition} from {:?} to {:?}",
+                    &last_progress.frontier,
+                    &progress.frontier,
+                );
+            }
+            _ => last_progress = Some(progress),
+        }
+    }
+
+    // If we get here, we are assured that we've read all messages up to
+    // the high water mark, and therefore `last_timestamp` contains the
+    // most recent timestamp for the sink under consideration.
+    Ok(last_progress)
 }
 
 /// This is the legacy struct that used to be emitted as part of a transactional produce and

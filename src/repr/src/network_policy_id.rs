@@ -10,7 +10,7 @@
 use std::fmt;
 use std::str::FromStr;
 
-use anyhow::{anyhow, Error};
+use anyhow::{Error, anyhow};
 use columnation::{Columnation, CopyRegion};
 use mz_lowertest::MzReflect;
 use proptest_derive::Arbitrary;

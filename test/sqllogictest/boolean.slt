@@ -252,7 +252,7 @@ CREATE TABLE x (a int, u int, j jsonb, b bool)
 
 # Ensure the NOT gets pushed into the binary operation.
 query T multiline
-EXPLAIN WITH(arity, join implementations) SELECT
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, arity, join implementations) AS VERBOSE TEXT FOR SELECT
   NOT(a = u),
   NOT(a != u),
   NOT(a < u),
@@ -265,8 +265,8 @@ EXPLAIN WITH(arity, join implementations) SELECT
 FROM x
 ----
 Explained Query:
-  Project (#4..=#9, #3, #10) // { arity: 8 }
-    Map ((#0 != #1), (#0 = #1), (#0 >= #1), (#0 <= #1), (#0 < #1), (#0 > #1), NOT((#2 @> {}))) // { arity: 11 }
+  Project (#4..=#9, #3{b}, #10) // { arity: 8 }
+    Map ((#0{a} != #1{u}), (#0{a} = #1{u}), (#0{a} >= #1{u}), (#0{a} <= #1{u}), (#0{a} < #1{u}), (#0{a} > #1{u}), NOT((#2{j} @> {}))) // { arity: 11 }
       ReadStorage materialize.public.x // { arity: 4 }
 
 Source materialize.public.x
@@ -280,12 +280,12 @@ CREATE TABLE y (a boolean, b bool)
 
 # Bypass if statements with identical branches
 query T multiline
-EXPLAIN WITH(arity, join implementations) SELECT
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, arity, join implementations) AS VERBOSE TEXT FOR SELECT
   CASE WHEN b THEN a ELSE a END
 FROM y
 ----
 Explained Query:
-  Project (#0) // { arity: 1 }
+  Project (#0{a}) // { arity: 1 }
     ReadStorage materialize.public.y // { arity: 2 }
 
 Source materialize.public.y
@@ -296,13 +296,13 @@ EOF
 
 # Bypass if statements with identical branches
 query T multiline
-EXPLAIN WITH(arity, join implementations) SELECT
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, arity, join implementations) AS VERBOSE TEXT FOR SELECT
   CASE WHEN b THEN NULL ELSE true END
 FROM y
 ----
 Explained Query:
   Project (#2) // { arity: 1 }
-    Map ((null OR NOT(#1) OR (#1) IS NULL)) // { arity: 3 }
+    Map ((null OR NOT(#1{b}) OR (#1{b}) IS NULL)) // { arity: 3 }
       ReadStorage materialize.public.y // { arity: 2 }
 
 Source materialize.public.y
@@ -314,13 +314,13 @@ EOF
 
 # Bypass if statements with identical branches
 query T multiline
-EXPLAIN WITH(arity, join implementations) SELECT
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, arity, join implementations) AS VERBOSE TEXT FOR SELECT
   CASE WHEN b THEN NULL ELSE false END
 FROM y
 ----
 Explained Query:
   Project (#2) // { arity: 1 }
-    Map ((#1 AND null AND (#1) IS NOT NULL)) // { arity: 3 }
+    Map ((#1{b} AND null AND (#1{b}) IS NOT NULL)) // { arity: 3 }
       ReadStorage materialize.public.y // { arity: 2 }
 
 Source materialize.public.y
@@ -331,13 +331,13 @@ EOF
 
 
 query T multiline
-EXPLAIN WITH(arity, join implementations) SELECT
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, arity, join implementations) AS VERBOSE TEXT FOR SELECT
   CASE WHEN b THEN true ELSE NULL END
 FROM y
 ----
 Explained Query:
   Project (#2) // { arity: 1 }
-    Map ((null OR (#1 AND (#1) IS NOT NULL))) // { arity: 3 }
+    Map ((null OR (#1{b} AND (#1{b}) IS NOT NULL))) // { arity: 3 }
       ReadStorage materialize.public.y // { arity: 2 }
 
 Source materialize.public.y
@@ -348,13 +348,13 @@ EOF
 
 
 query T multiline
-EXPLAIN WITH(arity, join implementations) SELECT
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, arity, join implementations) AS VERBOSE TEXT FOR SELECT
   CASE WHEN b THEN false ELSE NULL END
 FROM y
 ----
 Explained Query:
   Project (#2) // { arity: 1 }
-    Map ((null AND (NOT(#1) OR (#1) IS NULL))) // { arity: 3 }
+    Map ((null AND (NOT(#1{b}) OR (#1{b}) IS NULL))) // { arity: 3 }
       ReadStorage materialize.public.y // { arity: 2 }
 
 Source materialize.public.y
@@ -364,13 +364,13 @@ Target cluster: quickstart
 EOF
 
 query T multiline
-EXPLAIN WITH(arity, join implementations) SELECT
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, arity, join implementations) AS VERBOSE TEXT FOR SELECT
   CASE WHEN b THEN false ELSE TRUE END
 FROM y
 ----
 Explained Query:
   Project (#2) // { arity: 1 }
-    Map ((NOT(#1) OR (#1) IS NULL)) // { arity: 3 }
+    Map ((NOT(#1{b}) OR (#1{b}) IS NULL)) // { arity: 3 }
       ReadStorage materialize.public.y // { arity: 2 }
 
 Source materialize.public.y
@@ -386,16 +386,16 @@ statement ok
 insert into z values (null, null), (1, null), (null, 2), (1, 2), (2, 1)
 
 query T multiline
-EXPLAIN WITH(arity, join implementations) SELECT *
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, arity, join implementations) AS VERBOSE TEXT FOR SELECT *
 FROM z
 WHERE CASE WHEN a > b THEN FALSE ELSE TRUE END
 ----
 Explained Query:
-  Filter ((#0) IS NULL OR (#1) IS NULL OR (#0 <= #1)) // { arity: 2 }
+  Filter ((#0{a}) IS NULL OR (#1{b}) IS NULL OR (#0{a} <= #1{b})) // { arity: 2 }
     ReadStorage materialize.public.z // { arity: 2 }
 
 Source materialize.public.z
-  filter=(((#0) IS NULL OR (#1) IS NULL OR (#0 <= #1)))
+  filter=(((#0{a}) IS NULL OR (#1{b}) IS NULL OR (#0{a} <= #1{b})))
 
 Target cluster: quickstart
 

@@ -10,11 +10,11 @@
 use std::time::Duration;
 
 use kube::{
-    api::{DeleteParams, Patch, PatchParams},
     Api, Client, CustomResourceExt, Resource, ResourceExt,
+    api::{DeleteParams, Patch, PatchParams},
 };
-use mz_cloud_resources::crd::{self, register_versioned_crds, VersionedCrd};
-use serde::{de::DeserializeOwned, Serialize};
+use mz_cloud_resources::crd::{self, VersionedCrd, register_versioned_crds};
+use serde::{Serialize, de::DeserializeOwned};
 use tracing::info;
 
 const FIELD_MANAGER: &str = "orchestratord.materialize.cloud";

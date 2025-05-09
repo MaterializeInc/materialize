@@ -627,6 +627,62 @@ SELECT INTERVAL '1 day'
 statement ok
 COMMIT
 
+# Verify that different kinds of INSERT INTO ... statements are correctly
+# rejected when a transaction is in read-only mode.
+#
+# At least inserts of non-constant values internally get translated to
+# read-then write statements, which has caused trouble with maintaining the
+# read-only bit in the past.
+
+statement ok
+CREATE TABLE baz(a text)
+
+statement ok
+BEGIN
+
+# A constant value
+statement ok
+INSERT INTO baz VALUES ('hello')
+
+statement ok
+COMMIT
+
+statement ok
+BEGIN
+
+# A non-constant value
+statement ok
+INSERT INTO baz VALUES (now()::text)
+
+statement ok
+COMMIT
+
+statement ok
+BEGIN
+
+statement ok
+SELECT * FROM baz
+
+# A constant value, should be rejected
+statement error transaction in read-only mode
+INSERT INTO baz VALUES ('ciao')
+
+statement ok
+ROLLBACK
+
+statement ok
+BEGIN
+
+statement ok
+SELECT * FROM baz
+
+# A non-constant value, should be rejected as well
+statement error transaction in read-only mode
+INSERT INTO baz VALUES (now()::text)
+
+statement ok
+ROLLBACK
+
 simple conn=mz_system,user=mz_system
 ALTER SYSTEM SET allow_real_time_recency = true
 ----
@@ -915,7 +971,7 @@ statement ok
 SHOW VIEWS
 
 query T multiline
-EXPLAIN SELECT *, generate_series(1, 100) FROM mz_views
+EXPLAIN OPTIMIZED PLAN WITH (humanized expressions) AS VERBOSE TEXT FOR SELECT *, generate_series(1, 100) FROM mz_views
 ----
 Explained Query:
   CrossJoin type=differential
@@ -973,48 +1029,48 @@ statement ok
 SELECT * FROM t, mz_views
 
 query T multiline
-EXPLAIN SHOW VIEWS
+EXPLAIN OPTIMIZED PLAN WITH (humanized expressions) AS VERBOSE TEXT FOR SHOW VIEWS
 ----
 Explained Query:
   With
     cte l0 =
-      Project (#0..=#2, #4)
-        Join on=(#0 = #3) type=differential
-          ArrangeBy keys=[[#0]]
-            Project (#0, #2, #3)
+      Project (#0{id}..=#2{name}, #4{comment})
+        Join on=(#0{id} = #3{id}) type=differential
+          ArrangeBy keys=[[#0{id}]]
+            Project (#0{id}, #2{schema_id}, #3{name})
               ReadStorage mz_catalog.mz_views
-          ArrangeBy keys=[[#0]]
-            Project (#0, #3)
-              Filter (#2) IS NULL AND (#1 = "view")
+          ArrangeBy keys=[[#0{id}]]
+            Project (#0{id}, #3{comment})
+              Filter (#2{object_sub_id}) IS NULL AND (#1{object_type} = "view")
                 ReadStorage mz_internal.mz_comments
     cte l1 =
-      Filter (#2 = "u3")
-        ReadStorage mz_catalog.mz_views
+      Project (#0{id}, #3{name})
+        Filter (#2{schema_id} = "u3")
+          ReadStorage mz_catalog.mz_views
   Return
-    Project (#0, #2)
-      Map (coalesce(#1, ""))
+    Project (#0{name}, #2)
+      Map (coalesce(#1{comment}, ""))
         Union
           Map (null)
             Union
               Negate
-                Project (#1)
-                  Join on=(#0 = #2) type=differential
-                    ArrangeBy keys=[[#0]]
-                      Project (#0, #3)
-                        Get l1
-                    ArrangeBy keys=[[#0]]
-                      Distinct project=[#0]
-                        Project (#0)
+                Project (#1{name})
+                  Join on=(#0{id} = #2{id}) type=differential
+                    ArrangeBy keys=[[#0{id}]]
+                      Get l1
+                    ArrangeBy keys=[[#0{id}]]
+                      Distinct project=[#0{id}]
+                        Project (#0{id})
                           Get l0
-              Project (#3)
+              Project (#1{name})
                 Get l1
-          Project (#2, #3)
-            Filter (#1 = "u3")
+          Project (#2{name}, #3{comment})
+            Filter (#1{schema_id} = "u3")
               Get l0
 
 Source mz_catalog.mz_views
 Source mz_internal.mz_comments
-  filter=((#1 = "view") AND (#2) IS NULL)
+  filter=((#1{object_type} = "view") AND (#2{object_sub_id}) IS NULL)
 
 Target cluster: quickstart
 
@@ -1286,14 +1342,14 @@ SELECT name FROM mz_columns WHERE name = 'foobar';
 query TTTT
 SHOW COLUMNS IN mz_columns
 ----
-id  false  text  (empty)
-name  false  text  (empty)
-position  false  uint8  (empty)
-nullable  false  boolean  (empty)
-type  false  text  (empty)
-default  true  text  (empty)
-type_oid  false  oid  (empty)
-type_mod  false  integer  (empty)
+id       false  text    The␠unique␠ID␠of␠the␠table,␠source,␠or␠view␠containing␠the␠column.
+name     false  text    The␠name␠of␠the␠column.
+position false  uint8   The␠1-indexed␠position␠of␠the␠column␠in␠its␠containing␠table,␠source,␠or␠view.
+nullable false  boolean Can␠the␠column␠contain␠a␠`NULL`␠value?
+type     false  text    The␠data␠type␠of␠the␠column.
+default  true   text    The␠default␠expression␠of␠the␠column.
+type_oid false  oid     The␠OID␠of␠the␠type␠of␠the␠column␠(references␠`mz_types`).
+type_mod false  integer The␠packed␠type␠identifier␠of␠the␠column.
 
 statement ok
 COMMIT;

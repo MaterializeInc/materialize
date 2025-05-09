@@ -36,7 +36,7 @@ Entries in this view may be cleared on restart (e.g., during Materialize mainten
 {{< /warning >}}
 
 The `mz_recent_activity_log` view contains a log of the SQL statements
-that have been issued to Materialize in the last three days, along
+that have been issued to Materialize in the last 24 hours, along
 with various metadata about them.
 
 Entries in this log may be sampled. The sampling rate is controlled by
@@ -54,7 +54,7 @@ granted the [`mz_monitor` role](/manage/access-control/manage-roles#builtin-role
 |----------------------------|------------------------------|-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
 | `execution_id`             | [`uuid`]                     | An ID that is unique for each executed statement.                                                                                                                                                                                                                             |
 | `sample_rate`              | [`double precision`]         | The actual rate at which the statement was sampled.                                                                                                                                                                                                                           |
-| `cluster_id`               | [`text`]                     | The ID of the cluster the statement execution was directed to. Corresponds to [mz_clusters.id](https://materialize.com/docs/sql/system-catalog/mz_catalog/#mz_clusters).                                                                                                      |
+| `cluster_id`               | [`text`]                     | The ID of the cluster the statement execution was directed to. Corresponds to [mz_clusters.id](/sql/system-catalog/mz_catalog/#mz_clusters).                                                                                                      |
 | `application_name`         | [`text`]                     | The value of the `application_name` configuration parameter at execution time.                                                                                                                                                                                                |
 | `cluster_name`             | [`text`]                     | The name of the cluster with ID `cluster_id` at execution time.                                                                                                                                                                                                               |
 | `database_name`            | [`text`]                     | The value of the `database` configuration parameter at execution time.                                                                                                                                                                                                        |
@@ -78,7 +78,7 @@ granted the [`mz_monitor` role](/manage/access-control/manage-roles#builtin-role
 | `session_id`               | [`uuid`]                     | An ID that is unique for each session. Corresponds to [mz_sessions.id](#mz_sessions). |
 | `prepared_at`              | [`timestamp with time zone`] | The time at which the statement was prepared.                                                                                                                                                                                                                                 |
 | `statement_type`           | [`text`]                     | The _type_ of the statement, e.g. `select` for a `SELECT` query, or `NULL` if the statement was empty.                                                                                                                                                                        |
-| `throttled_count`          | [`uint8`]                    | The number of statements that were dropped due to throttling before the current one was seen. If you have a very high volume of queries and need to log them without throttling, [contact our team](https://materialize.com/docs/support/).                                   |
+| `throttled_count`          | [`uint8`]                    | The number of statements that were dropped due to throttling before the current one was seen. If you have a very high volume of queries and need to log them without throttling, [contact our team](/support/).                                   |
 | `initial_application_name` | [`text`]                     | The initial value of `application_name` at the beginning of the session.                                                                                                                                                                                                      |
 | `authenticated_user`       | [`text`]                     | The name of the user for which the session was established.                                                                                                                                                                                                                   |
 | `sql`                      | [`text`]                     | The SQL text of the statement.                                                                                                                                                                                                                                                |
@@ -446,10 +446,10 @@ deploying the changes to production.
 <!-- RELATION_SPEC mz_internal.mz_index_advice -->
 | Field                    | Type        | Meaning  |
 | ------------------------ | ----------- | -------- |
-| `object_id`              | [`text`]    | The ID of the object. Corresponds to [mz_objects.id](https://materialize.com/docs/sql/system-catalog/mz_catalog/#mz_objects). |
+| `object_id`              | [`text`]    | The ID of the object. Corresponds to [mz_objects.id](/sql/system-catalog/mz_catalog/#mz_objects). |
 | `hint`                   | [`text`]    | A suggestion to either change the object (e.g. create an index, turn a materialized view into an indexed view) or keep the object unchanged. |
 | `details`                | [`text`]    | Additional details on why the `hint` was proposed based on the dependencies of the object. |
-| `referenced_object_ids`  | [`list`]    | The IDs of objects referenced by `details`. Corresponds to [mz_objects.id](https://materialize.com/docs/sql/system-catalog/mz_catalog/#mz_objects). |
+| `referenced_object_ids`  | [`list`]    | The IDs of objects referenced by `details`. Corresponds to [mz_objects.id](/sql/system-catalog/mz_catalog/#mz_objects). |
 
 ## `mz_materialization_dependencies`
 
@@ -653,6 +653,18 @@ subsource or table and the corresponding upstream MySQL table being ingested.
 | ------------------- | ---------------- | --------                                                                                                       |
 | `id`                | [`text`]         | The ID of the subsource or table. Corresponds to [`mz_catalog.mz_sources.id`](../mz_catalog#mz_sources) or [`mz_catalog.mz_tables.id`](../mz_catalog#mz_tables).                   |
 | `schema_name`       | [`text`]         | The schema ([or, database](https://dev.mysql.com/doc/refman/8.0/en/glossary.html#glos_schema)) of the upstream table being ingested. |
+| `table_name`        | [`text`]         | The name of the upstream table being ingested. |
+
+## `mz_sql_server_source_tables`
+
+The `mz_sql_server_source_tables` table contains the mapping between each Materialize
+subsource or table and the corresponding upstream SQL Server table being ingested.
+
+<!-- RELATION_SPEC mz_internal.mz_sql_server_source_tables -->
+| Field               | Type             | Meaning                                                                                                        |
+| ------------------- | ---------------- | --------                                                                                                       |
+| `id`                | [`text`]         | The ID of the subsource or table. Corresponds to [`mz_catalog.mz_sources.id`](../mz_catalog#mz_sources) or [`mz_catalog.mz_tables.id`](../mz_catalog#mz_tables).                   |
+| `schema_name`       | [`text`]         | The schema of the upstream table being ingested. |
 | `table_name`        | [`text`]         | The name of the upstream table being ingested. |
 
 ## `mz_kafka_source_tables`
@@ -1048,6 +1060,7 @@ messages and additional metadata helpful for debugging.
 | `status`       | [`text`]                        | The status of the sink: one of `created`, `starting`, `running`, `stalled`, `failed`, or `dropped`.              |
 | `error`        | [`text`]                        | If the sink is in an error state, the error message.                                                             |
 | `details`      | [`jsonb`]                       | Additional metadata provided by the sink. In case of error, may contain a `hint` field with helpful suggestions. |
+| `replica_id`   | [`text`]                        | The ID of the replica that an instance of a sink is running on.                                                  |
 
 <!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_source_statistics_raw -->
 
@@ -1150,7 +1163,7 @@ debugging.
 | `name`                   | [`text`]                        | The name of the source.                                                                                            |
 | `type`                   | [`text`]                        | The type of the source.                                                                                            |
 | `last_status_change_at`  | [`timestamp with time zone`]    | Wall-clock timestamp of the source status change.                                                                  |
-| `status`                 | [`text`]                        | The status of the source: one of `created`, `starting`, `running`, `stalled`, `failed`, or `dropped`.              |
+| `status`                 | [`text`]                        | The status of the source: one of `created`, `starting`, `running`, `paused`, `stalled`, `failed`, or `dropped`.    |
 | `error`                  | [`text`]                        | If the source is in an error state, the error message.                                                             |
 | `details`                | [`jsonb`]                       | Additional metadata provided by the source. In case of error, may contain a `hint` field with helpful suggestions. |
 
@@ -1165,9 +1178,10 @@ messages and additional metadata helpful for debugging.
 | -------------- | ------------------------------- | --------                                                                                                           |
 | `occurred_at`  | [`timestamp with time zone`]    | Wall-clock timestamp of the source status change.                                                                  |
 | `source_id`    | [`text`]                        | The ID of the source. Corresponds to [`mz_catalog.mz_sources.id`](../mz_catalog#mz_sources).                       |
-| `status`       | [`text`]                        | The status of the source: one of `created`, `starting`, `running`, `stalled`, `failed`, or `dropped`.              |
+| `status`       | [`text`]                        | The status of the source: one of `created`, `starting`, `running`, `paused`, `stalled`, `failed`, or `dropped`.    |
 | `error`        | [`text`]                        | If the source is in an error state, the error message.                                                             |
 | `details`      | [`jsonb`]                       | Additional metadata provided by the source. In case of error, may contain a `hint` field with helpful suggestions. |
+| `replica_id`   | [`text`]                        | The ID of the replica that an instance of a source is running on.                                                  |
 
 <!--
 ## `mz_statement_execution_history`
@@ -1222,6 +1236,17 @@ operations in the system.
 | `created_at`             | [`timestamp with time zone`] | The time at which the subscription was created.                                                                            |
 | `referenced_object_ids`  | [`text list`]                | The IDs of objects referenced by the subscription. Corresponds to [`mz_objects.id`](../mz_catalog/#mz_objects)             |
 
+## `mz_wallclock_global_lag`
+
+The `mz_wallclock_global_lag` view contains the most recently recorded wallclock lag
+for each table, source, index, materialized view, and sink in the system.
+
+<!-- RELATION_SPEC mz_internal.mz_wallclock_global_lag -->
+| Field         | Type         | Meaning
+| --------------| -------------| --------
+| `object_id`   | [`text`]     | The ID of the table, source, materialized view, index, or sink. Corresponds to [`mz_objects.id`](../mz_catalog/#mz_objects).
+| `lag`         | [`interval`] | The amount of time the object's write frontier lags behind wallclock time.
+
 ## `mz_wallclock_lag_history`
 
 The `mz_wallclock_lag_history` table records the historical wallclock lag,
@@ -1238,6 +1263,8 @@ for each table, source, index, materialized view, and sink in the system.
 
 <!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_wallclock_global_lag_history -->
 <!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_wallclock_global_lag_recent_history -->
+<!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_wallclock_global_lag_histogram -->
+<!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_wallclock_global_lag_histogram_raw -->
 
 ## `mz_webhook_sources`
 

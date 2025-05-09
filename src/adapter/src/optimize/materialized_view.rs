@@ -39,18 +39,18 @@ use mz_repr::refresh_schedule::RefreshSchedule;
 use mz_repr::{ColumnName, GlobalId, RelationDesc};
 use mz_sql::optimizer_metrics::OptimizerMetrics;
 use mz_sql::plan::HirRelationExpr;
+use mz_transform::TransformCtx;
 use mz_transform::dataflow::DataflowMetainfo;
 use mz_transform::normalize_lets::normalize_lets;
-use mz_transform::typecheck::{empty_context, SharedContext as TypecheckContext};
-use mz_transform::TransformCtx;
+use mz_transform::typecheck::{SharedContext as TypecheckContext, empty_context};
 use timely::progress::Antichain;
 
 use crate::optimize::dataflows::{
-    prep_relation_expr, prep_scalar_expr, ComputeInstanceSnapshot, DataflowBuilder, ExprPrepStyle,
+    ComputeInstanceSnapshot, DataflowBuilder, ExprPrepStyle, prep_relation_expr, prep_scalar_expr,
 };
 use crate::optimize::{
-    optimize_mir_local, trace_plan, LirDataflowDescription, MirDataflowDescription, Optimize,
-    OptimizeMode, OptimizerCatalog, OptimizerConfig, OptimizerError,
+    LirDataflowDescription, MirDataflowDescription, Optimize, OptimizeMode, OptimizerCatalog,
+    OptimizerConfig, OptimizerError, optimize_mir_local, trace_plan,
 };
 
 pub struct Optimizer {
@@ -290,7 +290,7 @@ impl Optimize<LocalMirPlan> for Optimizer {
         );
         // Apply source monotonicity overrides.
         for id in self.force_source_non_monotonic.iter() {
-            if let Some((_desc, monotonic)) = df_desc.source_imports.get_mut(id) {
+            if let Some((_desc, monotonic, _upper)) = df_desc.source_imports.get_mut(id) {
                 *monotonic = false;
             }
         }

@@ -11,17 +11,15 @@
 
 use differential_dataflow::consolidation::ConsolidatingContainerBuilder;
 use mz_dyncfg::ConfigSet;
-use mz_persist_client::project::{error_free, ProjectionPushdown};
 use std::convert::Infallible;
 use std::fmt::Debug;
 use std::future::Future;
 use std::hash::Hash;
-use std::pin::Pin;
 use std::sync::Arc;
 use std::time::Instant;
 
 use differential_dataflow::lattice::Lattice;
-use futures::{future::Either, StreamExt};
+use futures::{StreamExt, future::Either};
 use mz_expr::{ColumnSpecs, Interpreter, MfpPlan, ResultSpec, UnmaterializableFunc};
 use mz_ore::cast::CastFrom;
 use mz_ore::collections::CollectionExt;
@@ -30,10 +28,14 @@ use mz_persist_client::cache::PersistClientCache;
 use mz_persist_client::cfg::{PersistConfig, RetryParameters};
 use mz_persist_client::fetch::{FetchedBlob, FetchedPart};
 use mz_persist_client::fetch::{SerdeLeasedBatchPart, ShardSourcePart};
-use mz_persist_client::operators::shard_source::{shard_source, SnapshotMode};
+use mz_persist_client::operators::shard_source::{
+    ErrorHandler, FilterResult, SnapshotMode, shard_source,
+};
+use mz_persist_types::Codec64;
 use mz_persist_types::codec_impls::UnitSchema;
-use mz_persist_types::{Codec, Codec64};
+use mz_persist_types::columnar::{ColumnEncoder, Schema};
 use mz_repr::{Datum, DatumVec, Diff, GlobalId, RelationDesc, Row, RowArena, Timestamp};
+use mz_storage_types::StorageDiff;
 use mz_storage_types::controller::{CollectionMetadata, TxnsCodecRow};
 use mz_storage_types::errors::DataflowError;
 use mz_storage_types::sources::SourceData;
@@ -42,24 +44,24 @@ use mz_timely_util::builder_async::{
     Event, OperatorBuilder as AsyncOperatorBuilder, PressOnDropButton,
 };
 use mz_timely_util::probe::ProbeNotify;
-use mz_txn_wal::operator::{txns_progress, TxnsContext};
+use mz_txn_wal::operator::{TxnsContext, txns_progress};
 use serde::{Deserialize, Serialize};
+use timely::PartialOrder;
 use timely::communication::Push;
-use timely::dataflow::channels::pact::Pipeline;
+use timely::dataflow::ScopeParent;
 use timely::dataflow::channels::Message;
-use timely::dataflow::operators::generic::builder_rc::OperatorBuilder;
+use timely::dataflow::channels::pact::Pipeline;
 use timely::dataflow::operators::generic::OutputHandleCore;
+use timely::dataflow::operators::generic::builder_rc::OperatorBuilder;
 use timely::dataflow::operators::{Capability, Leave, OkErr};
 use timely::dataflow::operators::{CapabilitySet, ConnectLoop, Feedback};
 use timely::dataflow::scopes::Child;
-use timely::dataflow::ScopeParent;
 use timely::dataflow::{Scope, Stream};
 use timely::order::TotalOrder;
-use timely::progress::timestamp::PathSummary;
 use timely::progress::Antichain;
 use timely::progress::Timestamp as TimelyTimestamp;
+use timely::progress::timestamp::PathSummary;
 use timely::scheduling::Activator;
-use timely::PartialOrder;
 use tokio::sync::mpsc::UnboundedSender;
 use tracing::trace;
 
@@ -148,7 +150,7 @@ pub fn persist_source<G>(
     map_filter_project: Option<&mut MfpPlan>,
     max_inflight_bytes: Option<usize>,
     start_signal: impl Future<Output = ()> + 'static,
-    error_handler: impl FnOnce(String) -> Pin<Box<dyn Future<Output = ()>>> + 'static,
+    error_handler: ErrorHandler,
 ) -> (
     Stream<G, (Row, Timestamp, Diff)>,
     Stream<G, (DataflowError, Timestamp, Diff)>,
@@ -285,7 +287,7 @@ pub fn persist_source_core<'g, G>(
     // If Some, an override for the default listen sleep retry parameters.
     listen_sleep: Option<impl Fn() -> RetryParameters + 'static>,
     start_signal: impl Future<Output = ()> + 'static,
-    error_handler: impl FnOnce(String) -> Pin<Box<dyn Future<Output = ()>>> + 'static,
+    error_handler: ErrorHandler,
 ) -> (
     Stream<
         RefinedScope<'g, G>,
@@ -302,18 +304,6 @@ where
 {
     let cfg = persist_clients.cfg().clone();
     let name = source_id.to_string();
-    let ignores_data = map_filter_project
-        .as_ref()
-        .map_or(false, |x| x.ignores_input());
-    let project = if ignores_data {
-        ProjectionPushdown::IgnoreAllNonErr {
-            err_col_name: "err",
-            key_bytes: SourceData(Ok(Row::default())).encode_to_vec(),
-            val_bytes: ().encode_to_vec(),
-        }
-    } else {
-        ProjectionPushdown::FetchAll
-    };
     let filter_plan = map_filter_project.as_ref().map(|p| (*p).clone());
 
     // N.B. `read_schema` may be a subset of the total columns for this shard.
@@ -364,13 +354,13 @@ where
             let Some(lower) = frontier.as_option().copied() else {
                 // If the frontier has advanced to the empty antichain,
                 // we'll never emit any rows from any part.
-                return false;
+                return FilterResult::Discard;
             };
 
             if lower > upper {
                 // The frontier timestamp is larger than the until of the dataflow:
                 // anything from this part will necessarily be filtered out.
-                return false;
+                return FilterResult::Discard;
             }
 
             let time_range =
@@ -378,34 +368,30 @@ where
             if let Some(plan) = &filter_plan {
                 let metrics = &metrics.pushdown.part_stats;
                 let stats = RelationPartStats::new(&filter_name, metrics, &read_desc, stats);
-                filter_may_match(&read_desc, time_range, stats, plan)
+                filter_result(&read_desc, time_range, stats, plan)
             } else {
-                true
+                FilterResult::Keep
             }
         },
         listen_sleep,
         start_signal,
         error_handler,
-        project,
     );
     let rows = decode_and_mfp(cfg, &fetched, &name, until, map_filter_project);
     (rows, token)
 }
 
-fn filter_may_match(
+fn filter_result(
     relation_desc: &RelationDesc,
     time_range: ResultSpec,
     stats: RelationPartStats,
     plan: &MfpPlan,
-) -> bool {
+) -> FilterResult {
     let arena = RowArena::new();
     let mut ranges = ColumnSpecs::new(relation_desc.typ(), &arena);
     ranges.push_unmaterializable(UnmaterializableFunc::MzNow, time_range);
 
-    if stats.err_count().into_iter().any(|count| count > 0) {
-        // If the error collection is nonempty, we always keep the part.
-        return true;
-    }
+    let may_error = stats.err_count().map_or(true, |count| count > 0);
 
     // N.B. We may have pushed down column "demands" into Persist, so this
     // relation desc may have a different set of columns than the stats.
@@ -414,12 +400,35 @@ fn filter_may_match(
         ranges.push_column(pos, result_spec);
     }
     let result = ranges.mfp_plan_filter(plan).range;
-    result.may_contain(Datum::True) || result.may_fail()
+    let may_error = may_error || result.may_fail();
+    let may_keep = result.may_contain(Datum::True);
+    let may_skip = result.may_contain(Datum::False) || result.may_contain(Datum::Null);
+    if relation_desc.len() == 0 && !may_error && !may_skip {
+        let Ok(mut key) = <RelationDesc as Schema<SourceData>>::encoder(relation_desc) else {
+            return FilterResult::Keep;
+        };
+        key.append(&SourceData(Ok(Row::default())));
+        let key = key.finish();
+        let Ok(mut val) = <UnitSchema as Schema<()>>::encoder(&UnitSchema) else {
+            return FilterResult::Keep;
+        };
+        val.append(&());
+        let val = val.finish();
+
+        FilterResult::ReplaceWith {
+            key: Arc::new(key),
+            val: Arc::new(val),
+        }
+    } else if may_error || may_keep {
+        FilterResult::Keep
+    } else {
+        FilterResult::Discard
+    }
 }
 
 pub fn decode_and_mfp<G>(
     cfg: PersistConfig,
-    fetched: &Stream<G, FetchedBlob<SourceData, (), Timestamp, Diff>>,
+    fetched: &Stream<G, FetchedBlob<SourceData, (), Timestamp, StorageDiff>>,
     name: &str,
     until: Antichain<Timestamp>,
     mut map_filter_project: Option<&mut MfpPlan>,
@@ -468,7 +477,6 @@ where
             // loading the atomics.
             let yield_fuel = cfg.storage_source_decode_fuel();
             let yield_fn = |_, work| work >= yield_fuel;
-            let optimize_ignored_data_decode = cfg.optimize_ignored_data_decode();
 
             let mut work = 0;
             let start_time = Instant::now();
@@ -477,7 +485,6 @@ where
                 let done = pending_work.front_mut().unwrap().do_work(
                     &mut work,
                     &name,
-                    optimize_ignored_data_decode,
                     start_time,
                     yield_fn,
                     &until,
@@ -508,10 +515,9 @@ struct PendingWork {
 }
 
 enum PendingPart {
-    Unparsed(FetchedBlob<SourceData, (), Timestamp, Diff>),
+    Unparsed(FetchedBlob<SourceData, (), Timestamp, StorageDiff>),
     Parsed {
-        part: ShardSourcePart<SourceData, (), Timestamp, Diff>,
-        error_free: bool,
+        part: ShardSourcePart<SourceData, (), Timestamp, StorageDiff>,
     },
 }
 
@@ -522,18 +528,14 @@ impl PendingPart {
     /// Also returns a bool, which is true if the part is known (from pushdown
     /// stats) to be free of `SourceData(Err(_))`s. It will be false if the part
     /// is known to contain errors or if it's unknown.
-    fn part_mut(&mut self) -> (&mut FetchedPart<SourceData, (), Timestamp, Diff>, bool) {
+    fn part_mut(&mut self) -> &mut FetchedPart<SourceData, (), Timestamp, StorageDiff> {
         match self {
             PendingPart::Unparsed(x) => {
-                let error_free = error_free(x.stats(), "err").unwrap_or(false);
-                *self = PendingPart::Parsed {
-                    part: x.parse(),
-                    error_free,
-                };
+                *self = PendingPart::Parsed { part: x.parse() };
                 // Won't recurse any further.
                 self.part_mut()
             }
-            PendingPart::Parsed { part, error_free } => (&mut part.part, *error_free),
+            PendingPart::Parsed { part } => &mut part.part,
         }
     }
 }
@@ -545,7 +547,6 @@ impl PendingWork {
         &mut self,
         work: &mut usize,
         name: &str,
-        optimize_ignored_data_decode: bool,
         start_time: Instant,
         yield_fn: YFn,
         until: &Antichain<Timestamp>,
@@ -579,16 +580,11 @@ impl PendingWork {
         YFn: Fn(Instant, usize) -> bool,
     {
         let mut session = output.session_with_builder(&self.capability);
-        let (fetched_part, part_is_error_free) = self.part.part_mut();
+        let fetched_part = self.part.part_mut();
         let is_filter_pushdown_audit = fetched_part.is_filter_pushdown_audit();
         let mut row_buf = None;
-        let row_override = map_filter_project
-            .as_ref()
-            .map(|p| optimize_ignored_data_decode && part_is_error_free && p.ignores_input())
-            .unwrap_or(false)
-            .then(|| (SourceData(Ok(Row::default())), ()));
         while let Some(((key, val), time, diff)) =
-            fetched_part.next_with_storage(&mut row_buf, &mut None, row_override.clone())
+            fetched_part.next_with_storage(&mut row_buf, &mut None)
         {
             if until.less_equal(&time) {
                 continue;
@@ -609,7 +605,7 @@ impl PendingWork {
                             &mut datums_local,
                             &arena,
                             time,
-                            diff,
+                            diff.into(),
                             |time| !until.less_equal(time),
                             row_builder,
                         ) {
@@ -663,14 +659,16 @@ impl PendingWork {
                     } else {
                         let mut emit_time = *self.capability.time();
                         emit_time.0 = time;
-                        session.give((Ok(row), emit_time, diff));
+                        // Clone row so we retain our row allocation.
+                        session.give((Ok(row.clone()), emit_time, diff.into()));
+                        row_buf.replace(SourceData(Ok(row)));
                         *work += 1;
                     }
                 }
                 (Ok(SourceData(Err(err))), Ok(())) => {
                     let mut emit_time = *self.capability.time();
                     emit_time.0 = time;
-                    session.give((Err(err), emit_time, diff));
+                    session.give((Err(err), emit_time, diff.into()));
                     *work += 1;
                 }
                 // TODO(petrosagg): error handling
@@ -971,9 +969,7 @@ where
                     });
                 trace!(
                     "returning {} parts with {} bytes, frontier: {:?}",
-                    retired_count,
-                    retired_size,
-                    flow_control_frontier,
+                    retired_count, retired_size, flow_control_frontier,
                 );
 
                 if let Some(metrics) = &metrics {

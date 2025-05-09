@@ -15,14 +15,14 @@ use std::time::Duration;
 use mz_ore::now::NowFn;
 use mz_proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
 use mz_repr::adt::numeric::NumericMaxScale;
-use mz_repr::{CatalogItemId, GlobalId, RelationDesc, Row, ScalarType};
+use mz_repr::{CatalogItemId, Diff, GlobalId, RelationDesc, Row, ScalarType};
 use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
 
+use crate::AlterCompatible;
 use crate::sources::AlterError;
 use crate::sources::{MzOffset, SourceConnection};
-use crate::AlterCompatible;
 
 use super::SourceExportDetails;
 
@@ -167,6 +167,10 @@ impl SourceConnection for LoadGeneratorSourceConnection {
     fn supports_read_only(&self) -> bool {
         true
     }
+
+    fn prefers_single_replica(&self) -> bool {
+        false
+    }
 }
 
 impl crate::AlterCompatible for LoadGeneratorSourceConnection {}
@@ -196,6 +200,8 @@ pub enum LoadGenerator {
 pub const LOAD_GENERATOR_DATABASE_NAME: &str = "mz_load_generators";
 
 impl LoadGenerator {
+    /// Must be kept in-sync with the same mapping on the `LoadGenerator` enum defined in
+    /// src/sql-parser/src/ast/defs/ddl.rs.
     pub fn schema_name(&self) -> &'static str {
         match self {
             LoadGenerator::Counter { .. } => "counter",
@@ -711,7 +717,7 @@ impl RustType<ProtoLoadGeneratorOutput> for LoadGeneratorOutput {
             None => {
                 return Err(TryFromProtoError::missing_field(
                     "ProtoLoadGeneratorOutput::kind",
-                ))
+                ));
             }
         })
     }
@@ -760,7 +766,7 @@ pub trait Generator {
         now: NowFn,
         seed: Option<u64>,
         resume_offset: MzOffset,
-    ) -> Box<dyn Iterator<Item = (LoadGeneratorOutput, Event<Option<MzOffset>, (Row, i64)>)>>;
+    ) -> Box<dyn Iterator<Item = (LoadGeneratorOutput, Event<Option<MzOffset>, (Row, Diff)>)>>;
 }
 
 impl RustType<ProtoLoadGeneratorSourceConnection> for LoadGeneratorSourceConnection {

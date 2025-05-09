@@ -1,11 +1,17 @@
 // Copyright Materialize, Inc. and contributors. All rights reserved.
 //
-// Use of this software is governed by the Business Source License
-// included in the LICENSE file.
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License in the LICENSE file at the
+// root of this repository, or online at
 //
-// As of the Change Date specified in that file, in accordance with
-// the Business Source License, use of this software will be governed
-// by the Apache License, Version 2.0.
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
 //! Types to build async operators with general shapes.
 
@@ -14,18 +20,18 @@ use std::collections::VecDeque;
 use std::future::Future;
 use std::pin::Pin;
 use std::rc::Rc;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
-use std::task::{ready, Context, Poll, Waker};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::task::{Context, Poll, Waker, ready};
 
-use futures_util::task::ArcWake;
+use differential_dataflow::containers::{Columnation, TimelyStack};
 use futures_util::Stream;
+use futures_util::task::ArcWake;
 use timely::communication::{Pull, Push};
-use timely::container::columnation::Columnation;
 use timely::container::{CapacityContainerBuilder, ContainerBuilder, PushInto};
+use timely::dataflow::channels::Message;
 use timely::dataflow::channels::pact::ParallelizationContract;
 use timely::dataflow::channels::pushers::Tee;
-use timely::dataflow::channels::Message;
 use timely::dataflow::operators::generic::builder_rc::OperatorBuilder as OperatorBuilderRc;
 use timely::dataflow::operators::generic::{
     InputHandleCore, OperatorInfo, OutputHandleCore, OutputWrapper,
@@ -36,7 +42,7 @@ use timely::progress::{Antichain, Timestamp};
 use timely::scheduling::{Activator, SyncActivator};
 use timely::{Bincode, Container, PartialOrder};
 
-use crate::containers::stack::{AccountedStackBuilder, StackWrapper};
+use crate::containers::stack::AccountedStackBuilder;
 
 /// Builds async operators with generic shape.
 pub struct OperatorBuilder<G: Scope> {
@@ -285,11 +291,11 @@ where
 }
 
 impl<T, D, P>
-    AsyncOutputHandle<T, AccountedStackBuilder<CapacityContainerBuilder<StackWrapper<D>>>, P>
+    AsyncOutputHandle<T, AccountedStackBuilder<CapacityContainerBuilder<TimelyStack<D>>>, P>
 where
     D: timely::Data + Columnation,
     T: Timestamp,
-    P: Push<Message<T, StackWrapper<D>>>,
+    P: Push<Message<T, TimelyStack<D>>>,
 {
     pub const MAX_OUTSTANDING_BYTES: usize = 128 * 1024 * 1024;
 
@@ -297,7 +303,7 @@ where
     /// yield back to timely after [Self::MAX_OUTSTANDING_BYTES] have been produced.
     pub async fn give_fueled<D2>(&self, cap: &Capability<T>, data: D2)
     where
-        StackWrapper<D>: PushInto<D2>,
+        TimelyStack<D>: PushInto<D2>,
     {
         let should_yield = {
             let mut handle = self.handle.borrow_mut();
@@ -497,9 +503,11 @@ impl<G: Scope> OperatorBuilder<G> {
             .push(Antichain::from_elem(G::Timestamp::minimum()));
 
         let outputs = self.builder.shape().outputs();
-        let handle = self
-            .builder
-            .new_input_connection(stream, pact, connection.describe(outputs));
+        let handle = self.builder.new_input_connection(
+            stream,
+            pact,
+            connection.describe(outputs).into_iter().enumerate(),
+        );
 
         let waker = Default::default();
         let queue = Default::default();
@@ -527,8 +535,7 @@ impl<G: Scope> OperatorBuilder<G> {
     ) {
         let index = self.builder.shape().outputs();
 
-        let connection = vec![Antichain::new(); self.builder.shape().inputs()];
-        let (wrapper, stream) = self.builder.new_output_connection(connection);
+        let (wrapper, stream) = self.builder.new_output_connection([]);
 
         let handle = AsyncOutputHandle::new(wrapper, index);
 
@@ -775,10 +782,10 @@ impl Drop for PressOnDropButton {
 #[cfg(test)]
 mod test {
     use futures_util::StreamExt;
+    use timely::WorkerConfig;
     use timely::dataflow::channels::pact::Pipeline;
     use timely::dataflow::operators::capture::Extract;
     use timely::dataflow::operators::{Capture, ToStream};
-    use timely::WorkerConfig;
 
     use super::*;
 

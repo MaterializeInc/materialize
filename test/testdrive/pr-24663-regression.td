@@ -126,7 +126,7 @@ $ kafka-ingest format=avro topic=dbz-no-before key-format=avro key-schema=${keys
   WHERE t.name IN ('dbz_no_before_tbl')
   GROUP BY t.name
   ORDER BY t.name
-true ${arg.leaves-tombstones} 0
+true false 0
 
 
 $ kafka-ingest format=avro topic=dbz-no-before key-format=avro key-schema=${keyschema} schema=${schema} timestamp=1
@@ -165,4 +165,4 @@ $ kafka-ingest format=avro topic=dbz-no-before key-format=avro key-schema=${keys
   WHERE t.name IN ('dbz_no_before_tbl')
   GROUP BY t.name
   ORDER BY t.name
-true ${arg.leaves-tombstones} 0
+true false 0

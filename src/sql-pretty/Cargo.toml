@@ -11,8 +11,8 @@ workspace = true
 
 [dependencies]
 mz-sql-parser = { path = "../sql-parser", default-features = false }
-pretty = "0.12.3"
-thiserror = "1.0.37"
+pretty = "0.12.4"
+thiserror = "2.0.12"
 workspace-hack = { version = "0.0.0", path = "../workspace-hack", optional = true }
 
 [dev-dependencies]

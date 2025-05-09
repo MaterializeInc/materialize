@@ -42,8 +42,8 @@ use std::sync::Arc;
 use std::{concat, stringify};
 
 use enum_kinds::EnumKind;
-use mz_repr::explain::ExprHumanizer;
 use mz_repr::GlobalId;
+use mz_repr::explain::ExprHumanizer;
 use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
 

@@ -11,8 +11,8 @@
 
 //! The tunable knobs for persist.
 
-use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
+use std::sync::atomic::AtomicBool;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use mz_build_info::BuildInfo;
@@ -33,8 +33,12 @@ use crate::internal::machine::{
 };
 use crate::internal::state::ROLLUP_THRESHOLD;
 use crate::operators::STORAGE_SOURCE_DECODE_FUEL;
-use crate::project::OPTIMIZE_IGNORED_DATA_DECODE;
 use crate::read::READER_LEASE_DURATION;
+
+const LTS_VERSIONS: &[Version] = &[
+    // 25.1
+    Version::new(0, 130, 0),
+];
 
 /// The tunable knobs for persist.
 ///
@@ -120,32 +124,11 @@ pub struct PersistConfig {
     /// In Compactor::compact_and_apply_background, how many updates to encode or
     /// decode before voluntarily yielding the task.
     pub compaction_yield_after_n_updates: usize,
-    /// The maximum size of the connection pool to Postgres/CRDB when performing
-    /// consensus reads and writes.
-    pub consensus_connection_pool_max_size: usize,
-    /// The maximum time to wait when attempting to obtain a connection from the pool.
-    pub consensus_connection_pool_max_wait: Option<Duration>,
     /// Length of time after a writer's last operation after which the writer
     /// may be expired.
     pub writer_lease_duration: Duration,
     /// Length of time between critical handles' calls to downgrade since
     pub critical_downgrade_interval: Duration,
-    /// Timeout per connection attempt to Persist PubSub service.
-    pub pubsub_connect_attempt_timeout: Duration,
-    /// Timeout per request attempt to Persist PubSub service.
-    pub pubsub_request_timeout: Duration,
-    /// Maximum backoff when retrying connection establishment to Persist PubSub service.
-    pub pubsub_connect_max_backoff: Duration,
-    /// Size of channel used to buffer send messages to PubSub service.
-    pub pubsub_client_sender_channel_size: usize,
-    /// Size of channel used to buffer received messages from PubSub service.
-    pub pubsub_client_receiver_channel_size: usize,
-    /// Size of channel used per connection to buffer broadcasted messages from PubSub server.
-    pub pubsub_server_connection_channel_size: usize,
-    /// Size of channel used by the state cache to broadcast shard state references.
-    pub pubsub_state_cache_shard_ref_channel_size: usize,
-    /// Backoff after an established connection to Persist PubSub service fails.
-    pub pubsub_reconnect_backoff: Duration,
     /// Number of worker threads to create for the [`crate::IsolatedRuntime`], defaults to the
     /// number of threads.
     pub isolated_runtime_worker_threads: usize,
@@ -187,18 +170,8 @@ impl PersistConfig {
             compaction_concurrency_limit: 5,
             compaction_queue_size: 20,
             compaction_yield_after_n_updates: 100_000,
-            consensus_connection_pool_max_size: 50,
-            consensus_connection_pool_max_wait: Some(Duration::from_secs(60)),
             writer_lease_duration: 60 * Duration::from_secs(60),
             critical_downgrade_interval: Duration::from_secs(30),
-            pubsub_connect_attempt_timeout: Duration::from_secs(5),
-            pubsub_request_timeout: Duration::from_secs(5),
-            pubsub_connect_max_backoff: Duration::from_secs(60),
-            pubsub_client_sender_channel_size: 25,
-            pubsub_client_receiver_channel_size: 25,
-            pubsub_server_connection_channel_size: 25,
-            pubsub_state_cache_shard_ref_channel_size: 25,
-            pubsub_reconnect_backoff: Duration::from_secs(5),
             isolated_runtime_worker_threads: num_cpus::get(),
             // TODO: This doesn't work with the process orchestrator. Instead,
             // separate --log-prefix into --service-name and --enable-log-prefix
@@ -245,12 +218,6 @@ impl PersistConfig {
     /// operator before yielding.
     pub fn storage_source_decode_fuel(&self) -> usize {
         STORAGE_SOURCE_DECODE_FUEL.get(self)
-    }
-
-    /// CYA to allow opt-out of a performance optimization to skip decoding
-    /// ignored data.
-    pub fn optimize_ignored_data_decode(&self) -> bool {
-        OPTIMIZE_IGNORED_DATA_DECODE.get(self)
     }
 
     /// Overrides the value for "persist_reader_lease_duration".
@@ -308,19 +275,20 @@ pub(crate) const MiB: usize = 1024 * 1024;
 pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
     mz_persist::cfg::all_dyn_configs(configs)
         .add(&crate::batch::BATCH_DELETE_ENABLED)
-        .add(&crate::batch::BATCH_COLUMNAR_FORMAT)
         .add(&crate::batch::BLOB_TARGET_SIZE)
-        .add(&crate::batch::BUILDER_STRUCTURED)
         .add(&crate::batch::INLINE_WRITES_TOTAL_MAX_BYTES)
         .add(&crate::batch::INLINE_WRITES_SINGLE_MAX_BYTES)
         .add(&crate::batch::ENCODING_ENABLE_DICTIONARY)
         .add(&crate::batch::ENCODING_COMPRESSION_FORMAT)
-        .add(&crate::batch::RECORD_SCHEMA_ID)
-        .add(&crate::batch::STRUCTURED_ORDER)
-        .add(&crate::batch::STRUCTURED_ORDER_UNTIL_SHARD)
         .add(&crate::batch::STRUCTURED_KEY_LOWER_LEN)
         .add(&crate::batch::MAX_RUN_LEN)
         .add(&crate::batch::MAX_RUNS)
+        .add(&BLOB_OPERATION_TIMEOUT)
+        .add(&BLOB_OPERATION_ATTEMPT_TIMEOUT)
+        .add(&BLOB_CONNECT_TIMEOUT)
+        .add(&BLOB_READ_TIMEOUT)
+        .add(&crate::cfg::CONSENSUS_CONNECTION_POOL_MAX_SIZE)
+        .add(&crate::cfg::CONSENSUS_CONNECTION_POOL_MAX_WAIT)
         .add(&crate::cfg::CONSENSUS_CONNECTION_POOL_TTL_STAGGER)
         .add(&crate::cfg::CONSENSUS_CONNECTION_POOL_TTL)
         .add(&crate::cfg::CRDB_CONNECT_TIMEOUT)
@@ -336,6 +304,7 @@ pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
         .add(&COMPACTION_HEURISTIC_MIN_UPDATES)
         .add(&COMPACTION_MEMORY_BOUND_BYTES)
         .add(&GC_BLOB_DELETE_CONCURRENCY_LIMIT)
+        .add(&INCREMENTAL_COMPACTION_DISABLED)
         .add(&STATE_VERSIONS_RECENT_LIVE_DIFFS_LIMIT)
         .add(&USAGE_STATE_FETCH_CONCURRENCY_LIMIT)
         .add(&crate::cli::admin::CATALOG_FORCE_COMPACTION_FUEL)
@@ -344,7 +313,10 @@ pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
         .add(&crate::cli::admin::EXPRESSION_CACHE_FORCE_COMPACTION_WAIT)
         .add(&crate::fetch::FETCH_SEMAPHORE_COST_ADJUSTMENT)
         .add(&crate::fetch::FETCH_SEMAPHORE_PERMIT_ADJUSTMENT)
+        .add(&crate::fetch::OPTIMIZE_IGNORED_DATA_FETCH)
         .add(&crate::internal::cache::BLOB_CACHE_MEM_LIMIT_BYTES)
+        .add(&crate::internal::cache::BLOB_CACHE_SCALE_WITH_THREADS)
+        .add(&crate::internal::cache::BLOB_CACHE_SCALE_FACTOR_BYTES)
         .add(&crate::internal::compact::COMPACTION_MINIMUM_TIMEOUT)
         .add(&crate::internal::compact::COMPACTION_USE_MOST_RECENT_SCHEMA)
         .add(&crate::internal::compact::COMPACTION_CHECK_PROCESS_FLAG)
@@ -355,16 +327,24 @@ pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
         .add(&crate::internal::machine::NEXT_LISTEN_BATCH_RETRYER_FIXED_SLEEP)
         .add(&crate::internal::machine::NEXT_LISTEN_BATCH_RETRYER_INITIAL_BACKOFF)
         .add(&crate::internal::machine::NEXT_LISTEN_BATCH_RETRYER_MULTIPLIER)
-        .add(&crate::internal::machine::RECORD_COMPACTIONS)
         .add(&crate::internal::state::ROLLUP_THRESHOLD)
-        .add(&crate::internal::state::WRITE_DIFFS_SUM)
+        .add(&crate::internal::state::ROLLUP_USE_ACTIVE_ROLLUP)
+        .add(&crate::internal::state::GC_FALLBACK_THRESHOLD_MS)
+        .add(&crate::internal::state::GC_USE_ACTIVE_GC)
+        .add(&crate::internal::state::ROLLUP_FALLBACK_THRESHOLD_MS)
         .add(&crate::operators::STORAGE_SOURCE_DECODE_FUEL)
-        .add(&crate::project::OPTIMIZE_IGNORED_DATA_DECODE)
-        .add(&crate::project::OPTIMIZE_IGNORED_DATA_FETCH)
         .add(&crate::read::READER_LEASE_DURATION)
         .add(&crate::rpc::PUBSUB_CLIENT_ENABLED)
         .add(&crate::rpc::PUBSUB_PUSH_DIFF_ENABLED)
         .add(&crate::rpc::PUBSUB_SAME_PROCESS_DELEGATE_ENABLED)
+        .add(&crate::rpc::PUBSUB_CONNECT_ATTEMPT_TIMEOUT)
+        .add(&crate::rpc::PUBSUB_REQUEST_TIMEOUT)
+        .add(&crate::rpc::PUBSUB_CONNECT_MAX_BACKOFF)
+        .add(&crate::rpc::PUBSUB_CLIENT_SENDER_CHANNEL_SIZE)
+        .add(&crate::rpc::PUBSUB_CLIENT_RECEIVER_CHANNEL_SIZE)
+        .add(&crate::rpc::PUBSUB_SERVER_CONNECTION_CHANNEL_SIZE)
+        .add(&crate::rpc::PUBSUB_STATE_CACHE_SHARD_REF_CHANNEL_SIZE)
+        .add(&crate::rpc::PUBSUB_RECONNECT_BACKOFF)
         .add(&crate::stats::STATS_AUDIT_PERCENT)
         .add(&crate::stats::STATS_BUDGET_BYTES)
         .add(&crate::stats::STATS_COLLECTION_ENABLED)
@@ -373,6 +353,7 @@ pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
         .add(&crate::stats::STATS_UNTRIMMABLE_COLUMNS_PREFIX)
         .add(&crate::stats::STATS_UNTRIMMABLE_COLUMNS_SUFFIX)
         .add(&crate::fetch::PART_DECODE_FORMAT)
+        .add(&crate::write::COMBINE_INLINE_WRITES)
 }
 
 impl PersistConfig {
@@ -382,6 +363,25 @@ impl PersistConfig {
         self.set_config(&STATE_VERSIONS_RECENT_LIVE_DIFFS_LIMIT, val);
     }
 }
+
+/// Sets the maximum size of the connection pool that is used by consensus.
+///
+/// Requires a restart of the process to take effect.
+pub const CONSENSUS_CONNECTION_POOL_MAX_SIZE: Config<usize> = Config::new(
+    "persist_consensus_connection_pool_max_size",
+    50,
+    "The maximum size the connection pool to Postgres/CRDB will grow to.",
+);
+
+/// Sets the maximum amount of time we'll wait to acquire a connection from
+/// the connection pool.
+///
+/// Requires a restart of the process to take effect.
+const CONSENSUS_CONNECTION_POOL_MAX_WAIT: Config<Duration> = Config::new(
+    "persist_consensus_connection_pool_max_wait",
+    Duration::from_secs(60),
+    "The amount of time we'll wait for a connection to become available.",
+);
 
 /// The minimum TTL of a connection to Postgres/CRDB before it is proactively
 /// terminated. Connections are routinely culled to balance load against the
@@ -515,6 +515,15 @@ pub const GC_BLOB_DELETE_CONCURRENCY_LIMIT: Config<usize> = Config::new(
     "Limit the number of concurrent deletes GC can perform to this threshold.",
 );
 
+/// Whether to disable incremental compaction. This is a break-glass flag
+/// that can be toggled in case incremental compaction is causing issues
+/// for CRDB.
+pub const INCREMENTAL_COMPACTION_DISABLED: Config<bool> = Config::new(
+    "persist_incremental_compaction_disabled",
+    false,
+    "Disable incremental compaction.",
+);
+
 /// The # of diffs to initially scan when fetching the latest consensus state, to
 /// determine which requests go down the fast vs slow path. Should be large enough
 /// to fetch all live diffs in the steady-state, and small enough to query Consensus
@@ -539,11 +548,11 @@ pub const USAGE_STATE_FETCH_CONCURRENCY_LIMIT: Config<usize> = Config::new(
 
 impl PostgresClientKnobs for PersistConfig {
     fn connection_pool_max_size(&self) -> usize {
-        self.consensus_connection_pool_max_size
+        CONSENSUS_CONNECTION_POOL_MAX_SIZE.get(self)
     }
 
     fn connection_pool_max_wait(&self) -> Option<Duration> {
-        self.consensus_connection_pool_max_wait
+        Some(CONSENSUS_CONNECTION_POOL_MAX_WAIT.get(self))
     }
 
     fn connection_pool_ttl(&self) -> Duration {
@@ -586,27 +595,54 @@ impl RetryParameters {
     }
 }
 
-// TODO: Replace with dynamic values when PersistConfig is integrated with LD
+pub(crate) const BLOB_OPERATION_TIMEOUT: Config<Duration> = Config::new(
+    "persist_blob_operation_timeout",
+    Duration::from_secs(180),
+    "Maximum time allowed for a network call, including retry attempts.",
+);
+
+pub(crate) const BLOB_OPERATION_ATTEMPT_TIMEOUT: Config<Duration> = Config::new(
+    "persist_blob_operation_attempt_timeout",
+    Duration::from_secs(90),
+    "Maximum time allowed for a single network call.",
+);
+
+pub(crate) const BLOB_CONNECT_TIMEOUT: Config<Duration> = Config::new(
+    "persist_blob_connect_timeout",
+    Duration::from_secs(7),
+    "Maximum time to wait for a socket connection to be made.",
+);
+
+pub(crate) const BLOB_READ_TIMEOUT: Config<Duration> = Config::new(
+    "persist_blob_read_timeout",
+    Duration::from_secs(10),
+    "Maximum time to wait to read the first byte of a response, including connection time.",
+);
+
 impl BlobKnobs for PersistConfig {
     fn operation_timeout(&self) -> Duration {
-        Duration::from_secs(180)
+        BLOB_OPERATION_TIMEOUT.get(self)
     }
 
     fn operation_attempt_timeout(&self) -> Duration {
-        Duration::from_secs(90)
+        BLOB_OPERATION_ATTEMPT_TIMEOUT.get(self)
     }
 
     fn connect_timeout(&self) -> Duration {
-        Duration::from_secs(7)
+        BLOB_CONNECT_TIMEOUT.get(self)
     }
 
     fn read_timeout(&self) -> Duration {
-        Duration::from_secs(10)
+        BLOB_READ_TIMEOUT.get(self)
     }
 
     fn is_cc_active(&self) -> bool {
         self.is_cc_active
     }
+}
+
+pub fn check_data_version(code_version: &Version, data_version: &Version) -> Result<(), String> {
+    check_data_version_with_lts_versions(code_version, data_version, LTS_VERSIONS)
 }
 
 // If persist gets some encoded ProtoState from the future (e.g. two versions of
@@ -633,7 +669,44 @@ impl BlobKnobs for PersistConfig {
 // data we read is going to be because we fetched it using a pointer stored in
 // some persist state. If we can handle the state, we can handle the blobs it
 // references, too.
-pub fn check_data_version(code_version: &Version, data_version: &Version) -> Result<(), String> {
+pub(crate) fn check_data_version_with_lts_versions(
+    code_version: &Version,
+    data_version: &Version,
+    lts_versions: &[Version],
+) -> Result<(), String> {
+    // Allow upgrades specifically between consecutive LTS releases.
+    let base_code_version = Version {
+        patch: 0,
+        ..code_version.clone()
+    };
+    let base_data_version = Version {
+        patch: 0,
+        ..data_version.clone()
+    };
+    if data_version >= code_version {
+        for window in lts_versions.windows(2) {
+            if base_code_version == window[0] && base_data_version <= window[1] {
+                return Ok(());
+            }
+        }
+
+        if let Some(last) = lts_versions.last() {
+            if base_code_version == *last
+                // kind of arbitrary, but just ensure we don't accidentally
+                // upgrade too far (the previous check should ensure that a
+                // new version won't take over from a too-old previous
+                // version, but we want to make sure the other side also
+                // doesn't get confused)
+                && base_data_version
+                    .minor
+                    .saturating_sub(base_code_version.minor)
+                    < 40
+            {
+                return Ok(());
+            }
+        }
+    }
+
     // Allow one minor version of forward compatibility. We could avoid the
     // clone with some nested comparisons of the semver fields, but this code
     // isn't particularly performance sensitive and I find this impl easier to

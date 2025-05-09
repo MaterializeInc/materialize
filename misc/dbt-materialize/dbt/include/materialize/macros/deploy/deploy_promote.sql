@@ -224,14 +224,11 @@
         {%- endif %}
     {% endset %}
 
-    {% call statement('tag_schemas', fetch_result=True, auto_begin=False) -%}
-    BEGIN;
-
     {% for schema in schemas %}
         {{ log("Tagging schema: " ~ schema, info=True) }}
-        COMMENT ON SCHEMA {{ adapter.quote(schema) }} IS {{ dbt.string_literal(schema_comment) }};
+        {% set comment_sql %}
+            COMMENT ON SCHEMA {{ adapter.quote(schema) }} IS {{ dbt.string_literal(schema_comment) }}
+        {% endset %}
+        {% do run_query(comment_sql) %}
     {% endfor %}
-
-    COMMIT;
-    {%- endcall %}
 {% endmacro %}

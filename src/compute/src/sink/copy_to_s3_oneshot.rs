@@ -11,7 +11,7 @@ use std::any::Any;
 use std::cell::RefCell;
 use std::rc::Rc;
 
-use differential_dataflow::{AsCollection, Collection, Hashable};
+use differential_dataflow::{Collection, Hashable};
 use mz_compute_client::protocol::response::CopyToResponse;
 use mz_compute_types::dyncfgs::{
     COPY_TO_S3_ARROW_BUILDER_BUFFER_RATIO, COPY_TO_S3_MULTIPART_PART_SIZE_BYTES,
@@ -22,13 +22,14 @@ use mz_repr::{Diff, GlobalId, Row, Timestamp};
 use mz_storage_types::controller::CollectionMetadata;
 use mz_storage_types::errors::DataflowError;
 use mz_timely_util::operator::consolidate_pact;
+use mz_timely_util::probe::{Handle, ProbeNotify};
+use timely::dataflow::Scope;
 use timely::dataflow::channels::pact::{Exchange, Pipeline};
 use timely::dataflow::operators::Operator;
-use timely::dataflow::Scope;
 use timely::progress::Antichain;
 
-use crate::render::sinks::SinkRender;
 use crate::render::StartSignal;
+use crate::render::sinks::SinkRender;
 use crate::typedefs::KeyBatcher;
 
 impl<G> SinkRender<G> for CopyToS3OneshotSinkConnection
@@ -45,6 +46,7 @@ where
         sinked_collection: Collection<G, Row, Diff>,
         err_collection: Collection<G, DataflowError, Diff>,
         _ct_times: Option<Collection<G, (), Diff>>,
+        output_probe: &Handle<Timestamp>,
     ) -> Option<Rc<dyn Any>> {
         // Set up a callback to communicate the result of the copy-to operation to the controller.
         let mut response_protocol = ResponseProtocol {
@@ -62,34 +64,24 @@ where
         // files based on the user provided `MAX_FILE_SIZE`.
         let batch_count = self.output_batch_count;
 
-        // This relies on an assumption the output order after the Exchange is deterministic, which
-        // is necessary to ensure the files written from each compute replica are identical.
-        // While this is not technically guaranteed, the current implementation uses a FIFO channel.
-        // In the storage copy_to operator we assert the ordering of rows to detect any regressions.
-        let input = consolidate_pact::<KeyBatcher<_, _, _>, _, _, _, _>(
-            &sinked_collection
-                .map(move |row| {
-                    let batch = row.hashed() % batch_count;
-                    ((row, batch), ())
-                })
-                .inner,
-            Exchange::new(move |(((_, batch), _), _, _)| *batch),
+        // We exchange the data according to batch, but we don't want to send the batch ID to the
+        // sink. The sink can re-compute the batch ID from the data.
+        let input = consolidate_pact::<KeyBatcher<_, _, _>, _, _>(
+            &sinked_collection.map(move |row| (row, ())).inner,
+            Exchange::new(move |((row, ()), _, _): &((Row, _), _, _)| row.hashed() % batch_count),
             "Consolidated COPY TO S3 input",
         )
-        .as_collection();
+        .probe_notify_with(vec![output_probe.clone()]);
 
         // We need to consolidate the error collection to ensure we don't act on retracted errors.
-        let error = consolidate_pact::<KeyBatcher<_, _, _>, _, _, _, _>(
-            &err_collection
-                .map(move |row| {
-                    let batch = row.hashed() % batch_count;
-                    ((row, batch), ())
-                })
-                .inner,
-            Exchange::new(move |(((_, batch), _), _, _)| *batch),
+        let error = consolidate_pact::<KeyBatcher<_, _, _>, _, _>(
+            &err_collection.map(move |err| (err, ())).inner,
+            Exchange::new(move |((err, _), _, _): &((DataflowError, _), _, _)| {
+                err.hashed() % batch_count
+            }),
             "Consolidated COPY TO S3 errors",
-        )
-        .container::<Vec<_>>();
+        );
+
         // We can only propagate the one error back to the client, so filter the error
         // collection to the first error that is before the sink 'up_to' to avoid
         // sending the full error collection to the next operator. We ensure we find the
@@ -102,7 +94,14 @@ where
                     while let Some((time, data)) = input.next() {
                         if !up_to.less_equal(time.time()) && !received_one {
                             received_one = true;
-                            output.session(&time).give_iterator(data.drain(..1));
+                            output.session(&time).give_iterator(
+                                data.iter()
+                                    .flatten()
+                                    .flat_map(|chunk| chunk.iter().cloned())
+                                    .next()
+                                    .map(|((err, ()), time, diff)| (err, time, diff))
+                                    .into_iter(),
+                            );
                         }
                     }
                 }
@@ -128,6 +127,7 @@ where
             self.connection_id,
             params,
             result_callback,
+            self.output_batch_count,
         );
 
         Some(token)

@@ -29,7 +29,7 @@ T = TypeVar("T")
 say = ui.speaker("C> ")
 
 
-DEFAULT_CONFLUENT_PLATFORM_VERSION = "7.7.0"
+DEFAULT_CONFLUENT_PLATFORM_VERSION = "7.9.0"
 
 DEFAULT_MZ_VOLUMES = [
     "mzdata:/mzdata",
@@ -49,11 +49,16 @@ ADDITIONAL_BENCHMARKING_SYSTEM_PARAMETERS = {
     # performance in benchmarks, see for example FastPathLimit scenario: 55%
     # more memory, 5% faster
     "persist_blob_cache_mem_limit_bytes": "1048576",
+    # This would increase the memory usage of many tests, making it harder to
+    # tell small memory increase regressions
+    "persist_blob_cache_scale_with_threads": "false",
 }
 
 
 def get_default_system_parameters(
-    version: MzVersion | None = None, zero_downtime: bool = False
+    version: MzVersion | None = None,
+    zero_downtime: bool = False,
+    force_source_table_syntax: bool = False,
 ) -> dict[str, str]:
     """For upgrade tests we only want parameters set when all environmentd /
     clusterd processes have reached a specific version (or higher)
@@ -65,7 +70,6 @@ def get_default_system_parameters(
     return {
         # -----
         # Unsafe functions
-        "enable_unsafe_functions": "true",
         "unsafe_enable_unsafe_functions": "true",
         # -----
         # To reduce CRDB load as we are struggling with it in CI (values based on load test environment):
@@ -76,7 +80,6 @@ def get_default_system_parameters(
         # Persist internals changes: advance coverage
         "persist_enable_arrow_lgalloc_noncc_sizes": "true",
         "persist_enable_s3_lgalloc_noncc_sizes": "true",
-        "persist_enable_one_alloc_per_request": "true",
         # -----
         # Others (ordered by name)
         "allow_real_time_recency": "true",
@@ -89,11 +92,12 @@ def get_default_system_parameters(
         "enable_0dt_deployment": "true" if zero_downtime else "false",
         "enable_0dt_deployment_panic_after_timeout": "true",
         "enable_0dt_deployment_sources": (
-            "true" if version >= MzVersion.parse_mz("v0.125.0-dev") else "false"
+            "true" if version >= MzVersion.parse_mz("v0.132.0-dev") else "false"
         ),
         "enable_alter_swap": "true",
         "enable_columnation_lgalloc": "true",
-        "enable_compute_chunked_stack": "true",
+        "enable_compute_correction_v2": "true",
+        "enable_compute_logical_backpressure": "true",
         "enable_connection_validation_syntax": "true",
         "enable_continual_task_builtins": (
             "true" if version > MzVersion.parse_mz("v0.127.0-dev") else "false"
@@ -111,50 +115,63 @@ def get_default_system_parameters(
         "enable_kafka_sink_partition_by": "true",
         "enable_logical_compaction_window": "true",
         "enable_multi_worker_storage_persist_sink": "true",
+        "enable_multi_replica_sources": "true",
         "enable_rbac_checks": "true",
         "enable_reduce_mfp_fusion": "true",
         "enable_refresh_every_mvs": "true",
         "enable_cluster_schedule_refresh": "true",
         "enable_statement_lifecycle_logging": "true",
-        "enable_table_keys": "true",
         "unsafe_enable_table_keys": "true",
         "enable_variadic_left_join_lowering": "true",
         "enable_worker_core_affinity": "true",
         "kafka_default_metadata_fetch_interval": "1s",
         "mysql_offset_known_interval": "1s",
-        "persist_record_schema_id": (
-            "true" if version > MzVersion.parse_mz("v0.127.0-dev") else "false"
+        "force_source_table_syntax": "true" if force_source_table_syntax else "false",
+        "ore_overflowing_behavior": "panic",
+        "persist_batch_columnar_format": (
+            "structured" if version > MzVersion.parse_mz("v0.135.0-dev") else "both_v2"
         ),
-        "persist_batch_columnar_format": "both_v2",
         "persist_batch_delete_enabled": "true",
         "persist_batch_structured_order": "true",
+        "persist_batch_builder_structured": "true",
         "persist_batch_structured_key_lower_len": "256",
         "persist_batch_max_run_len": "4",
         "persist_catalog_force_compaction_fuel": "1024",
         "persist_catalog_force_compaction_wait": "1s",
+        "persist_encoding_enable_dictionary": "true",
         "persist_fast_path_limit": "1000",
+        "persist_fast_path_order": "true",
+        "persist_gc_use_active_gc": (
+            "true" if version > MzVersion.parse_mz("v0.143.0-dev") else "false"
+        ),
         "persist_inline_writes_single_max_bytes": "4096",
         "persist_inline_writes_total_max_bytes": "1048576",
         "persist_pubsub_client_enabled": "true",
         "persist_pubsub_push_diff_enabled": "true",
         "persist_record_compactions": "true",
+        "persist_record_schema_id": (
+            "true" if version > MzVersion.parse_mz("v0.127.0-dev") else "false"
+        ),
+        "persist_rollup_use_active_rollup": (
+            "true" if version > MzVersion.parse_mz("v0.143.0-dev") else "false"
+        ),
         # 16 MiB - large enough to avoid a big perf hit, small enough to get more coverage...
         "persist_blob_target_size": "16777216",
         "persist_stats_audit_percent": "100",
         "persist_use_critical_since_catalog": "true",
         "persist_use_critical_since_snapshot": "false" if zero_downtime else "true",
         "persist_use_critical_since_source": "false" if zero_downtime else "true",
-        "persist_part_decode_format": "row_with_validate",
+        "persist_part_decode_format": "arrow",
+        "persist_blob_cache_scale_with_threads": "true",
         "pg_offset_known_interval": "1s",
         "statement_logging_default_sample_rate": "0.01",
         "statement_logging_max_sample_rate": "0.01",
+        "storage_reclock_to_latest": "true",
         "storage_source_decode_fuel": "100000",
         "storage_statistics_collection_interval": "1000",
         "storage_statistics_interval": "2000",
         "storage_use_continual_feedback_upsert": "true",
-        "storage_use_reclock_v2": "true",
-        "storage_reclock_to_latest": "true",
-        "with_0dt_deployment_max_wait": "900s",
+        "with_0dt_deployment_max_wait": "1800s",
         # End of list (ordered by name)
     }
 
@@ -261,7 +278,7 @@ def cluster_replica_size_map() -> dict[str, dict[str, Any]]:
         workers: int,
         scale: int,
         disabled: bool = False,
-        is_cc: bool = False,
+        is_cc: bool = True,
         memory_limit: str | None = None,
     ) -> dict[str, Any]:
         return {
@@ -271,7 +288,7 @@ def cluster_replica_size_map() -> dict[str, dict[str, Any]]:
             "disabled": disabled,
             "disk_limit": None,
             "is_cc": is_cc,
-            "memory_limit": memory_limit,
+            "memory_limit": memory_limit or "4Gi",
             "scale": scale,
             "workers": workers,
             # "selectors": {},
@@ -281,8 +298,10 @@ def cluster_replica_size_map() -> dict[str, dict[str, Any]]:
         bootstrap_cluster_replica_size(): replica_size(1, 1),
         "2-4": replica_size(4, 2),
         "free": replica_size(0, 0, disabled=True),
-        "1cc": replica_size(1, 1, is_cc=True),
-        "1C": replica_size(1, 1, is_cc=True),
+        "1cc": replica_size(1, 1),
+        "1C": replica_size(1, 1),
+        "1-no-disk": replica_size(1, 1, is_cc=False),
+        "2-no-disk": replica_size(2, 1, is_cc=False),
     }
 
     for i in range(0, 6):

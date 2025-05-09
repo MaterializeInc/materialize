@@ -7,7 +7,10 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+use std::time::Duration;
+
 use mz_ore::metrics::MetricVecExt;
+use mz_ore::retry::{Retry, RetryResult};
 use mz_rocksdb::config::SharedWriteBufferManager;
 use mz_rocksdb::{
     InstanceOptions, KeyUpdate, RocksDBConfig, RocksDBInstance, RocksDBInstanceMetrics,
@@ -16,6 +19,9 @@ use mz_rocksdb::{
 use mz_rocksdb_types::RocksDBTuningParameters;
 use prometheus::{HistogramOpts, HistogramVec, IntCounterVec, Opts};
 use rocksdb::DB;
+
+// Same type as mz_rocksdb::Diff, but it's private.
+type Diff = mz_ore::Overflowing<i64>;
 
 fn shared_metrics_for_tests() -> Result<Box<RocksDBSharedMetrics>, anyhow::Error> {
     let fake_hist_vec =
@@ -60,8 +66,7 @@ async fn basic() -> Result<(), anyhow::Error> {
         RocksDBConfig::new(Default::default(), None),
         shared_metrics_for_tests()?,
         instance_metrics_for_tests()?,
-    )
-    .await?;
+    )?;
 
     let mut ret = vec![Default::default(); 1];
     instance
@@ -158,8 +163,7 @@ async fn associative_merge_operator_test() -> Result<(), anyhow::Error> {
         RocksDBConfig::new(Default::default(), None),
         shared_metrics_for_tests()?,
         instance_metrics_for_tests()?,
-    )
-    .await?;
+    )?;
 
     let mut rolling_sum = 0;
     let key = "a".to_string();
@@ -174,7 +178,7 @@ async fn associative_merge_operator_test() -> Result<(), anyhow::Error> {
             .multi_update(
                 merges
                     .into_iter()
-                    .map(|v| (key.clone(), KeyUpdate::Merge(v), Some(1))),
+                    .map(|v| (key.clone(), KeyUpdate::Merge(v), Some(Diff::ONE))),
             )
             .await?;
     }
@@ -201,7 +205,7 @@ async fn associative_merge_operator_test() -> Result<(), anyhow::Error> {
             .multi_update(
                 merges
                     .into_iter()
-                    .map(|v| (key.clone(), KeyUpdate::Merge(v), Some(1))),
+                    .map(|v| (key.clone(), KeyUpdate::Merge(v), Some(Diff::ONE))),
             )
             .await?;
 
@@ -234,7 +238,7 @@ async fn associative_merge_operator_test() -> Result<(), anyhow::Error> {
             .multi_update(
                 merges
                     .into_iter()
-                    .map(|v| (key.clone(), KeyUpdate::Merge(v), Some(1))),
+                    .map(|v| (key.clone(), KeyUpdate::Merge(v), Some(Diff::ONE))),
             )
             .await?;
 
@@ -275,32 +279,31 @@ async fn update_operation_stats_test() -> Result<(), anyhow::Error> {
         RocksDBConfig::new(Default::default(), None),
         shared_metrics_for_tests()?,
         instance_metrics_for_tests()?,
-    )
-    .await?;
+    )?;
 
     let stats = instance
         .multi_update(vec![
             (
                 "two".to_string(),
                 KeyUpdate::Put("twov1".to_string()),
-                Some(1),
+                Some(Diff::ONE),
             ),
             (
                 "two".to_string(),
                 KeyUpdate::Put("twov1".to_string()),
-                Some(-1),
+                Some(Diff::MINUS_ONE),
             ),
             (
                 "two".to_string(),
                 KeyUpdate::Put("twov2".to_string()),
-                Some(1),
+                Some(Diff::ONE),
             ),
         ])
         .await?;
     assert_eq!(stats.processed_updates, 3);
     assert_eq!(
-        i64::try_from(stats.size_written).unwrap(),
-        3 * stats.size_diff.unwrap()
+        Diff::try_from(stats.size_written).unwrap(),
+        Diff::from(3) * stats.size_diff.unwrap()
     );
 
     instance.close().await?;
@@ -335,10 +338,19 @@ async fn shared_write_buffer_manager() -> Result<(), anyhow::Error> {
         rocksdb_config.clone(),
         shared_metrics_for_tests()?,
         instance_metrics_for_tests()?,
-    )
-    .await?;
+    )?;
 
-    assert!(shared_write_buffer_manager.get().is_some());
+    let retry = Retry::default()
+        .max_tries(5)
+        .initial_backoff(Duration::from_millis(100));
+    let res = retry.retry(|_| {
+        if shared_write_buffer_manager.get().is_some() {
+            RetryResult::Ok(())
+        } else {
+            RetryResult::RetryableErr(())
+        }
+    });
+    assert!(res.is_ok());
     {
         // Arc will be dropped by the end of this scope
         let buf = shared_write_buffer_manager.get().unwrap();
@@ -361,8 +373,7 @@ async fn shared_write_buffer_manager() -> Result<(), anyhow::Error> {
         rocksdb_config.clone(),
         shared_metrics_for_tests()?,
         instance_metrics_for_tests()?,
-    )
-    .await?;
+    )?;
 
     instance1.close().await?;
     // The shared write buffer manager should still have a reference
@@ -390,10 +401,19 @@ async fn shared_write_buffer_manager() -> Result<(), anyhow::Error> {
         rocksdb_config,
         shared_metrics_for_tests()?,
         instance_metrics_for_tests()?,
-    )
-    .await?;
+    )?;
 
-    assert!(shared_write_buffer_manager.get().is_some());
+    let retry = Retry::default()
+        .max_tries(5)
+        .initial_backoff(Duration::from_millis(100));
+    let res = retry.retry(|_| {
+        if shared_write_buffer_manager.get().is_some() {
+            RetryResult::Ok(())
+        } else {
+            RetryResult::RetryableErr(())
+        }
+    });
+    assert!(res.is_ok());
     {
         let buf = shared_write_buffer_manager.get().unwrap();
         assert!(buf.enabled());

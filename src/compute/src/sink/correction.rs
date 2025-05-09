@@ -14,17 +14,94 @@ use std::collections::BTreeMap;
 use std::ops::{AddAssign, Bound, RangeBounds, SubAssign};
 
 use differential_dataflow::consolidation::{consolidate, consolidate_updates};
-use differential_dataflow::Data;
 use itertools::Itertools;
+use mz_compute_types::dyncfgs::{CONSOLIDATING_VEC_GROWTH_DAMPENER, ENABLE_CORRECTION_V2};
+use mz_dyncfg::ConfigSet;
 use mz_ore::iter::IteratorExt;
 use mz_persist_client::metrics::{SinkMetrics, SinkWorkerMetrics, UpdateDelta};
 use mz_repr::{Diff, Timestamp};
-use timely::progress::Antichain;
 use timely::PartialOrder;
+use timely::progress::Antichain;
+
+use crate::sink::correction_v2::{CorrectionV2, Data};
+
+/// A data structure suitable for storing updates in a self-correcting persist sink.
+///
+/// Selects one of two correction buffer implementations. `V1` is the original simple
+/// implementation that stores updates in non-spillable memory. `V2` improves on `V1` by supporting
+/// spill-to-disk but is less battle-tested so for now we want to keep the option of reverting to
+/// `V1` in a pinch. The plan is to remove `V1` eventually.
+pub(super) enum Correction<D: Data> {
+    V1(CorrectionV1<D>),
+    V2(CorrectionV2<D>),
+}
+
+impl<D: Data> Correction<D> {
+    /// Construct a new `Correction` instance.
+    pub fn new(
+        metrics: SinkMetrics,
+        worker_metrics: SinkWorkerMetrics,
+        config: &ConfigSet,
+    ) -> Self {
+        if ENABLE_CORRECTION_V2.get(config) {
+            Self::V2(CorrectionV2::new(metrics, worker_metrics))
+        } else {
+            let growth_dampener = CONSOLIDATING_VEC_GROWTH_DAMPENER.get(config);
+            Self::V1(CorrectionV1::new(metrics, worker_metrics, growth_dampener))
+        }
+    }
+
+    /// Insert a batch of updates.
+    pub fn insert(&mut self, updates: &mut Vec<(D, Timestamp, Diff)>) {
+        match self {
+            Self::V1(c) => c.insert(updates),
+            Self::V2(c) => c.insert(updates),
+        }
+    }
+
+    /// Insert a batch of updates, after negating their diffs.
+    pub fn insert_negated(&mut self, updates: &mut Vec<(D, Timestamp, Diff)>) {
+        match self {
+            Self::V1(c) => c.insert_negated(updates),
+            Self::V2(c) => c.insert_negated(updates),
+        }
+    }
+
+    /// Consolidate and return updates before the given `upper`.
+    pub fn updates_before(
+        &mut self,
+        upper: &Antichain<Timestamp>,
+    ) -> Box<dyn Iterator<Item = (D, Timestamp, Diff)> + '_> {
+        match self {
+            Self::V1(c) => Box::new(c.updates_before(upper)),
+            Self::V2(c) => Box::new(c.updates_before(upper)),
+        }
+    }
+
+    /// Advance the since frontier.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the given `since` is less than the current since frontier.
+    pub fn advance_since(&mut self, since: Antichain<Timestamp>) {
+        match self {
+            Self::V1(c) => c.advance_since(since),
+            Self::V2(c) => c.advance_since(since),
+        }
+    }
+
+    /// Consolidate all updates at the current `since`.
+    pub fn consolidate_at_since(&mut self) {
+        match self {
+            Self::V1(c) => c.consolidate_at_since(),
+            Self::V2(c) => c.consolidate_at_since(),
+        }
+    }
+}
 
 /// A collection holding `persist_sink` updates.
 ///
-/// The `Correction` data structure is purpose-built for the `persist_sink::write_batches`
+/// The `CorrectionV1` data structure is purpose-built for the `persist_sink::write_batches`
 /// operator:
 ///
 ///  * It stores updates by time, to enable efficient separation between updates that should
@@ -33,7 +110,7 @@ use timely::PartialOrder;
 ///    are removed by inserting them again, with negated diffs. Stored updates are continuously
 ///    consolidated to give them opportunity to cancel each other out.
 ///  * It provides an interface for advancing all contained updates to a given frontier.
-pub(super) struct Correction<D> {
+pub(super) struct CorrectionV1<D> {
     /// Stashed updates by time.
     updates: BTreeMap<Timestamp, ConsolidatingVec<D>>,
     /// Frontier to which all update times are advanced.
@@ -47,17 +124,24 @@ pub(super) struct Correction<D> {
     metrics: SinkMetrics,
     /// Per-worker persist sink metrics.
     worker_metrics: SinkWorkerMetrics,
+    /// Configuration for `ConsolidatingVec` driving the growth rate down from doubling.
+    growth_dampener: usize,
 }
 
-impl<D> Correction<D> {
-    /// Construct a new `Correction` instance.
-    pub fn new(metrics: SinkMetrics, worker_metrics: SinkWorkerMetrics) -> Self {
+impl<D> CorrectionV1<D> {
+    /// Construct a new `CorrectionV1` instance.
+    pub fn new(
+        metrics: SinkMetrics,
+        worker_metrics: SinkWorkerMetrics,
+        growth_dampener: usize,
+    ) -> Self {
         Self {
             updates: Default::default(),
             since: Antichain::from_elem(Timestamp::MIN),
             total_size: Default::default(),
             metrics,
             worker_metrics,
+            growth_dampener,
         }
     }
 
@@ -75,28 +159,29 @@ impl<D> Correction<D> {
     }
 }
 
-impl<D: Data> Correction<D> {
+impl<D: Data> CorrectionV1<D> {
     /// Insert a batch of updates.
-    pub fn insert(&mut self, mut updates: Vec<(D, Timestamp, Diff)>) {
+    pub fn insert(&mut self, updates: &mut Vec<(D, Timestamp, Diff)>) {
         let Some(since_ts) = self.since.as_option() else {
             // If the since frontier is empty, discard all updates.
             return;
         };
 
-        for (_, time, _) in &mut updates {
+        for (_, time, _) in &mut *updates {
             *time = std::cmp::max(*time, *since_ts);
         }
         self.insert_inner(updates);
     }
 
     /// Insert a batch of updates, after negating their diffs.
-    pub fn insert_negated(&mut self, mut updates: Vec<(D, Timestamp, Diff)>) {
+    pub fn insert_negated(&mut self, updates: &mut Vec<(D, Timestamp, Diff)>) {
         let Some(since_ts) = self.since.as_option() else {
             // If the since frontier is empty, discard all updates.
+            updates.clear();
             return;
         };
 
-        for (_, time, diff) in &mut updates {
+        for (_, time, diff) in &mut *updates {
             *time = std::cmp::max(*time, *since_ts);
             *diff = -*diff;
         }
@@ -106,12 +191,12 @@ impl<D: Data> Correction<D> {
     /// Insert a batch of updates.
     ///
     /// The given `updates` must all have been advanced by `self.since`.
-    fn insert_inner(&mut self, mut updates: Vec<(D, Timestamp, Diff)>) {
-        consolidate_updates(&mut updates);
+    fn insert_inner(&mut self, updates: &mut Vec<(D, Timestamp, Diff)>) {
+        consolidate_updates(updates);
         updates.sort_unstable_by_key(|(_, time, _)| *time);
 
         let mut new_size = self.total_size;
-        let mut updates = updates.into_iter().peekable();
+        let mut updates = updates.drain(..).peekable();
         while let Some(&(_, time, _)) = updates.peek() {
             debug_assert!(
                 self.since.less_equal(&time),
@@ -125,7 +210,8 @@ impl<D: Data> Correction<D> {
             use std::collections::btree_map::Entry;
             match self.updates.entry(time) {
                 Entry::Vacant(entry) => {
-                    let vec: ConsolidatingVec<_> = data.collect();
+                    let mut vec: ConsolidatingVec<_> = data.collect();
+                    vec.growth_dampener = self.growth_dampener;
                     new_size += (vec.len(), vec.capacity());
                     entry.insert(vec);
                 }
@@ -146,11 +232,11 @@ impl<D: Data> Correction<D> {
     /// # Panics
     ///
     /// Panics if `lower` is not less than or equal to `upper`.
-    pub fn updates_within(
-        &mut self,
+    pub fn updates_within<'a>(
+        &'a mut self,
         lower: &Antichain<Timestamp>,
         upper: &Antichain<Timestamp>,
-    ) -> impl Iterator<Item = (D, Timestamp, Diff)> + ExactSizeIterator + '_ {
+    ) -> impl Iterator<Item = (D, Timestamp, Diff)> + ExactSizeIterator + use<'a, D> {
         assert!(PartialOrder::less_equal(lower, upper));
 
         let start = match lower.as_option() {
@@ -171,10 +257,10 @@ impl<D: Data> Correction<D> {
     }
 
     /// Consolidate and return updates before the given `upper`.
-    pub fn updates_before(
-        &mut self,
+    pub fn updates_before<'a>(
+        &'a mut self,
         upper: &Antichain<Timestamp>,
-    ) -> impl Iterator<Item = (D, Timestamp, Diff)> + ExactSizeIterator + '_ {
+    ) -> impl Iterator<Item = (D, Timestamp, Diff)> + ExactSizeIterator + use<'a, D> {
         let lower = Antichain::from_elem(Timestamp::MIN);
         self.updates_within(&lower, upper)
     }
@@ -266,17 +352,24 @@ impl<D: Data> Correction<D> {
     }
 }
 
-impl<D> Drop for Correction<D> {
+impl<D> Drop for CorrectionV1<D> {
     fn drop(&mut self) {
         self.update_metrics(Default::default());
     }
 }
 
 /// Helper type for convenient tracking of length and capacity together.
-#[derive(Clone, Copy, Default)]
-struct LengthAndCapacity {
-    length: usize,
-    capacity: usize,
+#[derive(Clone, Copy, Debug, Default)]
+pub(super) struct LengthAndCapacity {
+    pub length: usize,
+    pub capacity: usize,
+}
+
+impl AddAssign<Self> for LengthAndCapacity {
+    fn add_assign(&mut self, size: Self) {
+        self.length += size.length;
+        self.capacity += size.capacity;
+    }
 }
 
 impl AddAssign<(usize, usize)> for LengthAndCapacity {
@@ -304,13 +397,21 @@ pub(crate) struct ConsolidatingVec<D> {
     /// A lower bound for how small we'll shrink the Vec's capacity. NB: The cap
     /// might start smaller than this.
     min_capacity: usize,
+    /// Dampener in the growth rate. 0 corresponds to doubling and in general `n` to `1+1/(n+1)`.
+    ///
+    /// If consolidation didn't free enough space, at least a linear amount, increase the capacity
+    /// Setting this to 0 results in doubling whenever the list is at least half full.
+    /// Larger numbers result in more conservative approaches that use more CPU, but less memory.
+    growth_dampener: usize,
 }
 
 impl<D: Ord> ConsolidatingVec<D> {
-    pub fn with_min_capacity(min_capacity: usize) -> Self {
+    /// Creates a new instance from the necessary configuration arguments.
+    pub fn new(min_capacity: usize, growth_dampener: usize) -> Self {
         ConsolidatingVec {
             data: Vec::new(),
             min_capacity,
+            growth_dampener,
         }
     }
 
@@ -326,21 +427,27 @@ impl<D: Ord> ConsolidatingVec<D> {
 
     /// Pushes `item` into the vector.
     ///
-    /// If the vector does not have sufficient capacity, we try to consolidate and/or double its
-    /// capacity.
+    /// If the vector does not have sufficient capacity, we'll first consolidate and then increase
+    /// its capacity if the consolidated results still occupy a significant fraction of the vector.
     ///
     /// The worst-case cost of this function is O(n log n) in the number of items the vector stores,
-    /// but amortizes to O(1).
+    /// but amortizes to O(log n).
     pub fn push(&mut self, item: (D, Diff)) {
         let capacity = self.data.capacity();
         if self.data.len() == capacity {
             // The vector is full. First, consolidate to try to recover some space.
             self.consolidate();
 
-            // If consolidation didn't free at least half the available capacity, double the
-            // capacity. This ensures we won't consolidate over and over again with small gains.
-            if self.data.len() > capacity / 2 {
-                self.data.reserve(capacity);
+            // We may need more capacity if our current capacity is within `1+1/(n+1)` of the length.
+            // This corresponds to `cap < len + len/(n+1)`, which is the logic we use.
+            let length = self.data.len();
+            let dampener = self.growth_dampener;
+            if capacity < length + length / (dampener + 1) {
+                // We would like to increase the capacity by a factor of `1+1/(n+1)`, which involves
+                // determining the target capacity, and then reserving an amount that achieves this
+                // while working around the existing length.
+                let new_cap = capacity + capacity / (dampener + 1);
+                self.data.reserve_exact(new_cap - length);
             }
         }
 
@@ -352,7 +459,7 @@ impl<D: Ord> ConsolidatingVec<D> {
         consolidate(&mut self.data);
 
         // We may have the opportunity to reclaim allocated memory.
-        // Given that `push` will double the capacity when the vector is more than half full, and
+        // Given that `push` will at most double the capacity when the vector is more than half full, and
         // we want to avoid entering into a resizing cycle, we choose to only shrink if the
         // vector's length is less than one fourth of its capacity.
         if self.data.len() < self.data.capacity() / 4 {
@@ -388,6 +495,7 @@ impl<D> FromIterator<(D, Diff)> for ConsolidatingVec<D> {
         Self {
             data: Vec::from_iter(iter),
             min_capacity: 0,
+            growth_dampener: 0,
         }
     }
 }

@@ -43,7 +43,7 @@ fn main() {
         .extern_path(".mz_tracing", "::mz_tracing")
         .extern_path(".mz_service", "::mz_service")
         .extern_path(".mz_storage_types", "::mz_storage_types")
-        .compile_with_config(
+        .compile_protos_with_config(
             config,
             &[
                 "storage-client/src/client.proto",

@@ -37,7 +37,9 @@ use ipnet::IpNet;
 use maplit::btreeset;
 use mz_adapter_types::compaction::CompactionWindow;
 use mz_controller_types::{ClusterId, ReplicaId};
-use mz_expr::{CollectionPlan, ColumnOrder, MirRelationExpr, MirScalarExpr, RowSetFinishing};
+use mz_expr::{
+    CollectionPlan, ColumnOrder, MapFilterProject, MirRelationExpr, MirScalarExpr, RowSetFinishing,
+};
 use mz_ore::now::{self, NOW_ZERO};
 use mz_pgcopy::CopyFormatParams;
 use mz_repr::adt::mz_acl_item::{AclMode, MzAclItem};
@@ -47,24 +49,23 @@ use mz_repr::optimize::OptimizerFeatureOverrides;
 use mz_repr::refresh_schedule::RefreshSchedule;
 use mz_repr::role_id::RoleId;
 use mz_repr::{
-    CatalogItemId, ColumnName, Diff, GlobalId, RelationDesc, Row, ScalarType, Timestamp,
+    CatalogItemId, ColumnIndex, ColumnName, ColumnType, Diff, GlobalId, RelationDesc, Row,
+    ScalarType, Timestamp, VersionedRelationDesc,
 };
 use mz_sql_parser::ast::{
     AlterSourceAddSubsourceOption, ClusterAlterOptionValue, ConnectionOptionName, QualifiedReplica,
-    SelectStatement, TransactionIsolationLevel, TransactionMode, UnresolvedItemName, Value,
-    WithOptionValue,
+    RawDataType, SelectStatement, TransactionIsolationLevel, TransactionMode, UnresolvedItemName,
+    Value, WithOptionValue,
 };
 use mz_ssh_util::keys::SshKeyPair;
 use mz_storage_types::connections::aws::AwsConnection;
 use mz_storage_types::connections::inline::ReferencedConnection;
 use mz_storage_types::connections::{
     AwsPrivatelinkConnection, CsrConnection, KafkaConnection, MySqlConnection, PostgresConnection,
-    SshConnection,
+    SqlServerConnectionDetails, SshConnection,
 };
 use mz_storage_types::instances::StorageInstanceId;
-use mz_storage_types::sinks::{
-    S3SinkFormat, SinkEnvelope, SinkPartitionStrategy, StorageSinkConnection,
-};
+use mz_storage_types::sinks::{S3SinkFormat, SinkEnvelope, StorageSinkConnection};
 use mz_storage_types::sources::{
     SourceDesc, SourceExportDataConfig, SourceExportDetails, Timeline,
 };
@@ -81,12 +82,12 @@ use crate::catalog::{
 };
 use crate::names::{
     Aug, CommentObjectId, DependencyIds, FullItemName, ObjectId, QualifiedItemName,
-    ResolvedDataType, ResolvedDatabaseSpecifier, ResolvedIds, SchemaSpecifier, SystemObjectId,
+    ResolvedDatabaseSpecifier, ResolvedIds, SchemaSpecifier, SystemObjectId,
 };
 
 pub(crate) mod error;
 pub(crate) mod explain;
-pub(crate) mod expr;
+pub(crate) mod hir;
 pub(crate) mod literal;
 pub(crate) mod lowering;
 pub(crate) mod notice;
@@ -96,7 +97,7 @@ pub(crate) mod scope;
 pub(crate) mod side_effecting_func;
 pub(crate) mod statement;
 pub(crate) mod transform_ast;
-pub(crate) mod transform_expr;
+pub(crate) mod transform_hir;
 pub(crate) mod typeconv;
 pub(crate) mod with_options;
 
@@ -105,7 +106,7 @@ use crate::plan::statement::ddl::ClusterAlterUntilReadyOptionExtracted;
 use crate::plan::with_options::OptionalDuration;
 pub use error::PlanError;
 pub use explain::normalize_subqueries;
-pub use expr::{
+pub use hir::{
     AggregateExpr, CoercibleScalarExpr, Hir, HirRelationExpr, HirScalarExpr, JoinKind,
     WindowExprType,
 };
@@ -116,11 +117,11 @@ pub use scope::Scope;
 pub use side_effecting_func::SideEffectingFunc;
 pub use statement::ddl::{
     AlterSourceAddSubsourceOptionExtracted, MySqlConfigOptionExtracted, PgConfigOptionExtracted,
-    PlannedAlterRoleOption, PlannedRoleVariable,
+    PlannedAlterRoleOption, PlannedRoleVariable, SqlServerConfigOptionExtracted,
 };
 pub use statement::{
-    describe, plan, plan_copy_from, resolve_cluster_for_materialized_view, StatementClassification,
-    StatementContext, StatementDesc,
+    StatementClassification, StatementContext, StatementDesc, describe, plan, plan_copy_from,
+    resolve_cluster_for_materialized_view,
 };
 
 use self::statement::ddl::ClusterAlterOptionExtracted;
@@ -931,9 +932,47 @@ pub struct ShowColumnsPlan {
 
 #[derive(Debug)]
 pub struct CopyFromPlan {
+    /// Table we're copying into.
     pub id: CatalogItemId,
-    pub columns: Vec<usize>,
+    /// Source we're copying data from.
+    pub source: CopyFromSource,
+    /// How input columns map to those on the destination table.
+    ///
+    /// TODO(cf2): Remove this field in favor of the mfp.
+    pub columns: Vec<ColumnIndex>,
+    /// [`RelationDesc`] describing the input data.
+    pub source_desc: RelationDesc,
+    /// Changes the shape of the input data to match the destination table.
+    pub mfp: MapFilterProject,
+    /// Format specific params for copying the input data.
     pub params: CopyFormatParams<'static>,
+    /// Filter for the source files we're copying from, e.g. an S3 prefix.
+    pub filter: Option<CopyFromFilter>,
+}
+
+#[derive(Debug)]
+pub enum CopyFromSource {
+    /// Copying from a file local to the user, transmitted via pgwire.
+    Stdin,
+    /// A remote resource, e.g. HTTP file.
+    ///
+    /// The contained [`HirScalarExpr`] evaluates to the Url for the remote resource.
+    Url(HirScalarExpr),
+    /// A file in an S3 bucket.
+    AwsS3 {
+        /// Expression that evaluates to the file we want to copy.
+        uri: HirScalarExpr,
+        /// Details for how we connect to AWS S3.
+        connection: AwsConnection,
+        /// ID of the connection object.
+        connection_id: CatalogItemId,
+    },
+}
+
+#[derive(Debug)]
+pub enum CopyFromFilter {
+    Files(Vec<String>),
+    Pattern(String),
 }
 
 #[derive(Debug, Clone)]
@@ -1269,7 +1308,8 @@ pub struct AlterOwnerPlan {
 pub struct AlterTablePlan {
     pub relation_id: CatalogItemId,
     pub column_name: ColumnName,
-    pub column_type: ResolvedDataType,
+    pub column_type: ColumnType,
+    pub raw_sql_type: RawDataType,
 }
 
 #[derive(Debug)]
@@ -1409,7 +1449,7 @@ pub enum TableDataSource {
 #[derive(Clone, Debug)]
 pub struct Table {
     pub create_sql: String,
-    pub desc: RelationDesc,
+    pub desc: VersionedRelationDesc,
     pub temporary: bool,
     pub compaction_window: Option<CompactionWindow>,
     pub data_source: TableDataSource,
@@ -1573,6 +1613,7 @@ pub enum ConnectionDetails {
     Aws(AwsConnection),
     AwsPrivatelink(AwsPrivatelinkConnection),
     MySql(MySqlConnection<ReferencedConnection>),
+    SqlServer(SqlServerConnectionDetails<ReferencedConnection>),
 }
 
 impl ConnectionDetails {
@@ -1594,6 +1635,9 @@ impl ConnectionDetails {
             }
             ConnectionDetails::MySql(c) => {
                 mz_storage_types::connections::Connection::MySql(c.clone())
+            }
+            ConnectionDetails::SqlServer(c) => {
+                mz_storage_types::connections::Connection::SqlServer(c.clone())
             }
         }
     }
@@ -1720,7 +1764,6 @@ pub struct Sink {
     pub from: GlobalId,
     /// Type of connection to the external service we sink into.
     pub connection: StorageSinkConnection<ReferencedConnection>,
-    pub partition_strategy: SinkPartitionStrategy,
     // TODO(guswynn): this probably should just be in the `connection`.
     pub envelope: SinkEnvelope,
     pub version: u64,
@@ -1800,6 +1843,17 @@ impl QueryWhen {
         match self {
             QueryWhen::AtTimestamp(t) | QueryWhen::AtLeastTimestamp(t) => Some(t.clone()),
             QueryWhen::Immediately | QueryWhen::FreshestTableWrite => None,
+        }
+    }
+    /// Returns whether the candidate's upper bound is constrained.
+    /// This is only true for `AtTimestamp` since it is the only variant that
+    /// specifies a timestamp.
+    pub fn constrains_upper(&self) -> bool {
+        match self {
+            QueryWhen::AtTimestamp(_) => true,
+            QueryWhen::AtLeastTimestamp(_)
+            | QueryWhen::Immediately
+            | QueryWhen::FreshestTableWrite => false,
         }
     }
     /// Returns whether the candidate must be advanced to the since.
@@ -1949,6 +2003,9 @@ impl TryFrom<&str> for OnTimeoutAction {
 impl AlterClusterPlanStrategy {
     pub fn is_none(&self) -> bool {
         matches!(self, Self::None)
+    }
+    pub fn is_some(&self) -> bool {
+        !matches!(self, Self::None)
     }
 }
 

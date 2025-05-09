@@ -75,17 +75,21 @@ impl OptimizerMetrics {
                     (
                         k,
                         v.into_iter()
-                            .map(|duration| duration.as_nanos())
+                            .map(|duration| duration.as_micros())
                             .collect::<Vec<_>>(),
                     )
                 })
                 .collect::<Vec<_>>();
             tracing::warn!(
-                object_type = object_type,
-                transform_times = serde_json::to_string(&transform_times)
-                    .unwrap_or_else(|_| format!("{:?}", transform_times)),
                 duration = format!("{}ms", duration.as_millis()),
-                "optimizer took more than 500ms"
+                threshold = format!(
+                    "{}ms",
+                    self.e2e_optimization_time_seconds_log_threshold.as_millis()
+                ),
+                object_type = object_type,
+                transform_times_μs = serde_json::to_string(&transform_times)
+                    .unwrap_or_else(|_| format!("{:?}", transform_times)),
+                "slow optimization",
             );
         }
     }

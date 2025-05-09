@@ -17,7 +17,7 @@ use mz_ore::cast::CastFrom;
 use mz_ore::error::ErrorExt;
 use mz_repr::adt::date::Date;
 use mz_repr::adt::jsonb::JsonbPacker;
-use mz_repr::adt::numeric::{get_precision, get_scale, Numeric, NUMERIC_DATUM_MAX_PRECISION};
+use mz_repr::adt::numeric::{NUMERIC_DATUM_MAX_PRECISION, Numeric, get_precision, get_scale};
 use mz_repr::adt::timestamp::CheckedTimestamp;
 use mz_repr::{Datum, Row, RowPacker, ScalarType};
 
@@ -95,7 +95,35 @@ fn pack_val_as_datum(
             ScalarType::Int16 => packer.push(Datum::from(from_value_opt::<i16>(value)?)),
             ScalarType::UInt32 => packer.push(Datum::from(from_value_opt::<u32>(value)?)),
             ScalarType::Int32 => packer.push(Datum::from(from_value_opt::<i32>(value)?)),
-            ScalarType::UInt64 => packer.push(Datum::from(from_value_opt::<u64>(value)?)),
+            ScalarType::UInt64 => {
+                if let Some(MySqlColumnMeta::Bit(precision)) = &col_desc.meta {
+                    let mut value = from_value_opt::<Vec<u8>>(value)?;
+
+                    // Ensure we have the correct number of bytes.
+                    let precision_bytes = (precision + 7) / 8;
+                    if value.len() != usize::cast_from(precision_bytes) {
+                        return Err(anyhow::anyhow!("'bit' column out of range!"));
+                    }
+                    // Be defensive and prune any bits that come over the wire and are
+                    // greater than our precision.
+                    let bit_index = precision % 8;
+                    if bit_index != 0 {
+                        let mask = !(u8::MAX << bit_index);
+                        if value.len() > 0 {
+                            value[0] &= mask;
+                        }
+                    }
+
+                    // Based on experimentation the value coming across the wire is
+                    // encoded in big-endian.
+                    let mut buf = [0u8; 8];
+                    buf[(8 - value.len())..].copy_from_slice(value.as_slice());
+                    let value = u64::from_be_bytes(buf);
+                    packer.push(Datum::from(value))
+                } else {
+                    packer.push(Datum::from(from_value_opt::<u64>(value)?))
+                }
+            }
             ScalarType::Int64 => packer.push(Datum::from(from_value_opt::<i64>(value)?)),
             ScalarType::Float32 => packer.push(Datum::from(from_value_opt::<f32>(value)?)),
             ScalarType::Float64 => packer.push(Datum::from(from_value_opt::<f64>(value)?)),
@@ -123,13 +151,14 @@ fn pack_val_as_datum(
                             Value::Int(val) => {
                                 // Enum types are provided as 1-indexed integers in the replication
                                 // stream, so we need to find the string value from the enum meta
-                                let enum_val = e.values.get(usize::try_from(val)? - 1).ok_or(
-                                    anyhow::anyhow!(
-                                        "received invalid enum value: {} for column {}",
-                                        val,
-                                        col_desc.name
-                                    ),
-                                )?;
+                                let enum_val =
+                                    e.values.get(usize::try_from(val)? - 1).ok_or_else(|| {
+                                        anyhow::anyhow!(
+                                            "received invalid enum value: {} for column {}",
+                                            val,
+                                            col_desc.name
+                                        )
+                                    })?;
                                 packer.push(Datum::String(enum_val));
                             }
                             _ => Err(anyhow::anyhow!(
@@ -198,6 +227,7 @@ fn pack_val_as_datum(
                             ))?;
                         }
                     }
+                    Some(MySqlColumnMeta::Bit(_)) => unreachable!("parsed as a u64"),
                     None => {
                         packer.push(Datum::String(&from_value_opt::<String>(value)?));
                     }
@@ -245,7 +275,9 @@ fn pack_val_as_datum(
                     Value::Date(..) => from_value_opt::<chrono::NaiveDateTime>(value)?,
                     // old temporal format from before MySQL 5.6; didn't support fractional seconds
                     Value::Int(val) => chrono::DateTime::from_timestamp(val, 0)
-                        .ok_or(anyhow::anyhow!("received invalid timestamp value: {}", val))?
+                        .ok_or_else(|| {
+                            anyhow::anyhow!("received invalid timestamp value: {}", val)
+                        })?
                         .naive_utc(),
                     Value::Bytes(data) => {
                         let data = std::str::from_utf8(&data)?;

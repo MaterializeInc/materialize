@@ -15,9 +15,10 @@ use std::collections::{BTreeMap, BTreeSet};
 use mz_ore::cast::CastFrom;
 use mz_ore::metrics::UIntGauge;
 use mz_ore::{assert_none, soft_assert_or_log};
-use timely::progress::Antichain;
 use timely::PartialOrder;
+use timely::progress::Antichain;
 
+use crate::controller::StorageCollections;
 use crate::metrics::HistoryMetrics;
 use crate::protocol::command::{ComputeCommand, ComputeParameters};
 
@@ -117,7 +118,7 @@ where
                     initialization_complete = true;
                 }
                 ComputeCommand::UpdateConfiguration(params) => {
-                    final_configuration.update(params);
+                    final_configuration.update(*params);
                 }
                 ComputeCommand::CreateDataflow(dataflow) => {
                     created_dataflows.push(dataflow);
@@ -204,8 +205,9 @@ where
         let count = u64::from(!final_configuration.all_unset());
         command_counts.update_configuration.borrow().set(count);
         if !final_configuration.all_unset() {
+            let config = Box::new(final_configuration);
             self.commands
-                .push(ComputeCommand::UpdateConfiguration(final_configuration));
+                .push(ComputeCommand::UpdateConfiguration(config));
         }
 
         let count = u64::cast_from(created_dataflows.len());
@@ -264,6 +266,25 @@ where
             }
             !is_peek
         });
+    }
+
+    /// Update the source import uppers to reflect the current state of the imported collections.
+    ///
+    /// This method should be called after compacting the history to make sure that the dataflow
+    /// descriptions do not mention storage collections that don't exist anymore. Its main
+    /// purpose is to advance the uppers when connecting a new replica.
+    pub fn update_source_uppers(&mut self, storage_collections: &StorageCollections<T>) {
+        for command in &mut self.commands {
+            if let ComputeCommand::CreateDataflow(dataflow) = command {
+                for (id, (_, _, upper)) in dataflow.source_imports.iter_mut() {
+                    let frontiers = storage_collections
+                        .collection_frontiers(*id)
+                        .expect("collection exists");
+
+                    *upper = frontiers.write_frontier;
+                }
+            }
+        }
     }
 
     /// Iterate through the contained commands.

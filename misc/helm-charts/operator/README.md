@@ -1,6 +1,6 @@
 # Materialize Kubernetes Operator Helm Chart
 
-![Version: v25.1.0-beta.1](https://img.shields.io/badge/Version-v25.1.0--beta.1-informational?style=flat-square) ![Type: application](https://img.shields.io/badge/Type-application-informational?style=flat-square) ![AppVersion: v0.131.0-dev.0](https://img.shields.io/badge/AppVersion-v0.131.0--dev.0-informational?style=flat-square)
+![Version: v25.2.0-beta.1](https://img.shields.io/badge/Version-v25.2.0--beta.1-informational?style=flat-square) ![Type: application](https://img.shields.io/badge/Type-application-informational?style=flat-square) ![AppVersion: v0.145.0-dev.0](https://img.shields.io/badge/AppVersion-v0.145.0--dev.0-informational?style=flat-square)
 
 Materialize Kubernetes Operator Helm Chart
 
@@ -107,8 +107,21 @@ The following table lists the configurable parameters of the Materialize operato
 
 | Parameter | Description | Default |
 |-----------|-------------|---------|
-| `clusterd.nodeSelector` | Node selector to use for clusterd pods spawned by the operator | ``{}`` |
-| `environmentd.nodeSelector` | Node selector to use for environmentd pods spawned by the operator | ``{}`` |
+| `balancerd.affinity` | Affinity to use for balancerd pods spawned by the operator | ``nil`` |
+| `balancerd.enabled` | Flag to indicate whether to create balancerd pods for the environments | ``true`` |
+| `balancerd.nodeSelector` | Node selector to use for balancerd pods spawned by the operator | ``nil`` |
+| `balancerd.tolerations` | Tolerations to use for balancerd pods spawned by the operator | ``nil`` |
+| `clusterd.affinity` | Affinity to use for clusterd pods spawned by the operator | ``nil`` |
+| `clusterd.nodeSelector` | Node selector to use for clusterd pods spawned by the operator | ``nil`` |
+| `clusterd.tolerations` | Tolerations to use for clusterd pods spawned by the operator | ``nil`` |
+| `console.affinity` | Affinity to use for console pods spawned by the operator | ``nil`` |
+| `console.enabled` | Flag to indicate whether to create console pods for the environments | ``true`` |
+| `console.imageTagMapOverride` | Override the mapping of environmentd versions to console versions | ``{}`` |
+| `console.nodeSelector` | Node selector to use for console pods spawned by the operator | ``nil`` |
+| `console.tolerations` | Tolerations to use for console pods spawned by the operator | ``nil`` |
+| `environmentd.affinity` | Affinity to use for environmentd pods spawned by the operator | ``nil`` |
+| `environmentd.nodeSelector` | Node selector to use for environmentd pods spawned by the operator | ``nil`` |
+| `environmentd.tolerations` | Tolerations to use for environmentd pods spawned by the operator | ``nil`` |
 | `networkPolicies.egress` | egress from Materialize pods to sources and sinks | ``{"cidrs":["0.0.0.0/0"],"enabled":false}`` |
 | `networkPolicies.enabled` | Whether to enable network policies for securing communication between pods | ``false`` |
 | `networkPolicies.ingress` | Whether to enable ingress to the SQL and HTTP interfaces on environmentd or balancerd | ``{"cidrs":["0.0.0.0/0"],"enabled":false}`` |
@@ -116,6 +129,7 @@ The following table lists the configurable parameters of the Materialize operato
 | `observability.enabled` | Whether to enable observability features | ``true`` |
 | `observability.podMetrics.enabled` | Whether to enable the pod metrics scraper which populates the Environment Overview Monitoring tab in the web console (requires metrics-server to be installed) | ``false`` |
 | `observability.prometheus.scrapeAnnotations.enabled` | Whether to annotate pods with common keys used for prometheus scraping. | ``true`` |
+| `operator.affinity` | Affinity to use for the operator pod | ``nil`` |
 | `operator.args.enableInternalStatementLogging` |  | ``true`` |
 | `operator.args.startupLogFilter` | Log filtering settings for startup logs | ``"INFO,mz_orchestratord=TRACE"`` |
 | `operator.cloudProvider.providers.aws.accountID` | When using AWS, accountID is required | ``""`` |
@@ -125,23 +139,25 @@ The following table lists the configurable parameters of the Materialize operato
 | `operator.cloudProvider.providers.gcp` | GCP Configuration (placeholder for future use) | ``{"enabled":false}`` |
 | `operator.cloudProvider.region` | Common cloud provider settings | ``"kind"`` |
 | `operator.cloudProvider.type` | Specifies cloud provider. Valid values are 'aws', 'gcp', 'azure' , 'generic', or 'local' | ``"local"`` |
+| `operator.clusters.defaultReplicationFactor.analytics` |  | ``0`` |
+| `operator.clusters.defaultReplicationFactor.probe` |  | ``0`` |
+| `operator.clusters.defaultReplicationFactor.support` |  | ``0`` |
+| `operator.clusters.defaultReplicationFactor.system` |  | ``0`` |
 | `operator.clusters.defaultSizes.analytics` |  | ``"25cc"`` |
-| `operator.clusters.defaultSizes.catalogServer` |  | ``"50cc"`` |
+| `operator.clusters.defaultSizes.catalogServer` |  | ``"25cc"`` |
 | `operator.clusters.defaultSizes.default` |  | ``"25cc"`` |
 | `operator.clusters.defaultSizes.probe` |  | ``"mz_probe"`` |
 | `operator.clusters.defaultSizes.support` |  | ``"25cc"`` |
 | `operator.clusters.defaultSizes.system` |  | ``"25cc"`` |
 | `operator.features.authentication` | Whether to enable environmentd rbac checks TODO: this is not yet supported in the helm chart | ``false`` |
-| `operator.features.consoleImageTagMapOverride` | Override the mapping of environmentd versions to console versions | ``{}`` |
-| `operator.features.createBalancers` | Flag to indicate whether to create balancerd pods for the environments | ``true`` |
-| `operator.features.createConsole` | Flag to indicate whether to create console pods for the environments | ``true`` |
 | `operator.image.pullPolicy` | Policy for pulling the image: "IfNotPresent" avoids unnecessary re-pulling of images | ``"IfNotPresent"`` |
 | `operator.image.repository` | The Docker repository for the operator image | ``"materialize/orchestratord"`` |
-| `operator.image.tag` | The tag/version of the operator image to be used | ``"v0.131.0-dev.0"`` |
-| `operator.nodeSelector` |  | ``{}`` |
+| `operator.image.tag` | The tag/version of the operator image to be used | ``"v0.144.0"`` |
+| `operator.nodeSelector` | Node selector to use for the operator pod | ``nil`` |
 | `operator.resources.limits` | Resource limits for the operator's CPU and memory | ``{"memory":"512Mi"}`` |
 | `operator.resources.requests` | Resources requested by the operator for CPU and memory | ``{"cpu":"100m","memory":"512Mi"}`` |
 | `operator.secretsController` | Which secrets controller to use for storing secrets. Valid values are 'kubernetes' and 'aws-secrets-manager'. Setting 'aws-secrets-manager' requires a configured AWS cloud provider and IAM role for the environment with Secrets Manager permissions. | ``"kubernetes"`` |
+| `operator.tolerations` | Tolerations to use for the operator pod | ``nil`` |
 | `rbac.create` | Whether to create necessary RBAC roles and bindings | ``true`` |
 | `schedulerName` | Optionally use a non-default kubernetes scheduler. | ``nil`` |
 | `serviceAccount.create` | Whether to create a new service account for the operator | ``true`` |
@@ -162,7 +178,7 @@ Specify each parameter using the `--set key=value[,key=value]` argument to `helm
 
 ```shell
 helm install my-materialize-operator \
-  --set operator.image.tag=v0.131.0-dev.0 \
+  --set operator.image.tag=v0.145.0-dev.0 \
   materialize/materialize-operator
 ```
 
@@ -197,7 +213,7 @@ metadata:
   name: 12345678-1234-1234-1234-123456789012
   namespace: materialize-environment
 spec:
-  environmentdImageRef: materialize/environmentd:v0.131.0-dev.0
+  environmentdImageRef: materialize/environmentd:v0.145.0-dev.0
   backendSecretName: materialize-backend
   environmentdResourceRequirements:
     limits:
@@ -280,11 +296,11 @@ Or check the `Chart.yaml` file in the `misc/helm-charts/operator` directory:
 apiVersion: v2
 name: materialize-operator
 # ...
-version: v25.1.0-beta.1
-appVersion: v0.125.2  # Use this version for your Materialize instances
+version: v25.2.0-beta-1
+appVersion: v0.130.3  # Use this version for your Materialize instances
 ```
 
-Use the `appVersion` (`v0.125.2` in this case) when updating your Materialize instances to ensure compatibility.
+Use the `appVersion` (`v0.130.3` in this case) when updating your Materialize instances to ensure compatibility.
 
 #### Using `kubectl` patch
 
@@ -295,7 +311,7 @@ For standard upgrades such as image updates:
 kubectl patch materialize <instance-name> \
   -n <materialize-instance-namespace> \
   --type='merge' \
-  -p "{\"spec\": {\"environmentdImageRef\": \"materialize/environmentd:v0.125.2\"}}"
+  -p "{\"spec\": {\"environmentdImageRef\": \"materialize/environmentd:v0.130.3\"}}"
 
 # Then trigger the rollout with a new UUID
 kubectl patch materialize <instance-name> \
@@ -310,7 +326,7 @@ You can combine both operations in a single command if preferred:
 kubectl patch materialize 12345678-1234-1234-1234-123456789012 \
   -n materialize-environment \
   --type='merge' \
-  -p "{\"spec\": {\"environmentdImageRef\": \"materialize/environmentd:v0.125.2\", \"requestRollout\": \"$(uuidgen)\"}}"
+  -p "{\"spec\": {\"environmentdImageRef\": \"materialize/environmentd:v0.130.3\", \"requestRollout\": \"$(uuidgen)\"}}"
 ```
 
 #### Using YAML Definition
@@ -324,7 +340,7 @@ metadata:
   name: 12345678-1234-1234-1234-123456789012
   namespace: materialize-environment
 spec:
-  environmentdImageRef: materialize/environmentd:v0.125.2 # Update version as needed
+  environmentdImageRef: materialize/environmentd:v0.130.3 # Update version as needed
   requestRollout: 22222222-2222-2222-2222-222222222222    # Generate new UUID
   forceRollout: 33333333-3333-3333-3333-333333333333      # Optional: for forced rollouts
   inPlaceRollout: false                                   # When false, performs a rolling upgrade rather than in-place

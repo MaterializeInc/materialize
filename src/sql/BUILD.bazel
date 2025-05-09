@@ -10,6 +10,7 @@
 # by the Apache License, Version 2.0.
 
 load("@crates_io//:defs.bzl", "aliases", "all_crate_deps")
+load("@rules_rust//cargo:defs.bzl", "extract_cargo_lints")
 load("@rules_rust//rust:defs.bzl", "rust_doc_test", "rust_library", "rust_test")
 
 package(default_visibility = ["//visibility:public"])
@@ -24,6 +25,7 @@ rust_library(
     compile_data = [],
     crate_features = ["default"],
     data = [],
+    lint_config = ":lints",
     proc_macro_deps = [] + all_crate_deps(proc_macro = True),
     rustc_env = {},
     rustc_flags = [],
@@ -32,6 +34,7 @@ rust_library(
         "//src/adapter-types:mz_adapter_types",
         "//src/arrow-util:mz_arrow_util",
         "//src/audit-log:mz_audit_log",
+        "//src/auth:mz_auth",
         "//src/build-info:mz_build_info",
         "//src/ccsr:mz_ccsr",
         "//src/cloud-provider:mz_cloud_provider",
@@ -56,6 +59,8 @@ rust_library(
         "//src/secrets:mz_secrets",
         "//src/sql-lexer:mz_sql_lexer",
         "//src/sql-parser:mz_sql_parser",
+        "//src/sql-pretty:mz_sql_pretty",
+        "//src/sql-server-util:mz_sql_server_util",
         "//src/ssh-util:mz_ssh_util",
         "//src/storage-types:mz_storage_types",
         "//src/tracing:mz_tracing",
@@ -82,6 +87,7 @@ rust_test(
     crate_features = ["default"],
     data = [],
     env = {},
+    lint_config = ":lints",
     proc_macro_deps = [] + all_crate_deps(
         proc_macro = True,
         proc_macro_dev = True,
@@ -93,6 +99,7 @@ rust_test(
         "//src/adapter-types:mz_adapter_types",
         "//src/arrow-util:mz_arrow_util",
         "//src/audit-log:mz_audit_log",
+        "//src/auth:mz_auth",
         "//src/build-info:mz_build_info",
         "//src/ccsr:mz_ccsr",
         "//src/cloud-provider:mz_cloud_provider",
@@ -118,6 +125,8 @@ rust_test(
         "//src/secrets:mz_secrets",
         "//src/sql-lexer:mz_sql_lexer",
         "//src/sql-parser:mz_sql_parser",
+        "//src/sql-pretty:mz_sql_pretty",
+        "//src/sql-server-util:mz_sql_server_util",
         "//src/ssh-util:mz_ssh_util",
         "//src/storage-types:mz_storage_types",
         "//src/tracing:mz_tracing",
@@ -135,6 +144,7 @@ rust_doc_test(
         "//src/adapter-types:mz_adapter_types",
         "//src/arrow-util:mz_arrow_util",
         "//src/audit-log:mz_audit_log",
+        "//src/auth:mz_auth",
         "//src/build-info:mz_build_info",
         "//src/ccsr:mz_ccsr",
         "//src/cloud-provider:mz_cloud_provider",
@@ -160,6 +170,8 @@ rust_doc_test(
         "//src/secrets:mz_secrets",
         "//src/sql-lexer:mz_sql_lexer",
         "//src/sql-parser:mz_sql_parser",
+        "//src/sql-pretty:mz_sql_pretty",
+        "//src/sql-server-util:mz_sql_server_util",
         "//src/ssh-util:mz_ssh_util",
         "//src/storage-types:mz_storage_types",
         "//src/tracing:mz_tracing",
@@ -168,4 +180,10 @@ rust_doc_test(
         normal = True,
         normal_dev = True,
     ),
+)
+
+extract_cargo_lints(
+    name = "lints",
+    manifest = "Cargo.toml",
+    workspace = "@//:Cargo.toml",
 )

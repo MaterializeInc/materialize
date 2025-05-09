@@ -26,17 +26,17 @@ use itertools::Itertools;
 use kafka::KafkaSourceExportDetails;
 use load_generator::{LoadGeneratorOutput, LoadGeneratorSourceExportDetails};
 use mz_ore::assert_none;
-use mz_persist_types::arrow::ArrayOrd;
-use mz_persist_types::columnar::{ColumnDecoder, ColumnEncoder, Schema2};
-use mz_persist_types::stats::{
-    ColumnNullStats, ColumnStatKinds, ColumnarStats, PrimitiveStats, StructStats,
-};
-use mz_persist_types::stats2::ColumnarStatsBuilder;
 use mz_persist_types::Codec;
+use mz_persist_types::arrow::ArrayOrd;
+use mz_persist_types::columnar::{ColumnDecoder, ColumnEncoder, Schema};
+use mz_persist_types::stats::{
+    ColumnNullStats, ColumnStatKinds, ColumnarStats, ColumnarStatsBuilder, PrimitiveStats,
+    StructStats,
+};
 use mz_proto::{IntoRustIfSome, ProtoMapEntry, ProtoType, RustType, TryFromProtoError};
 use mz_repr::{
-    arb_row_for_relation, CatalogItemId, Datum, GlobalId, ProtoRelationDesc, ProtoRow,
-    RelationDesc, Row, RowColumnarDecoder, RowColumnarEncoder,
+    CatalogItemId, Datum, GlobalId, ProtoRelationDesc, ProtoRow, RelationDesc, Row,
+    RowColumnarDecoder, RowColumnarEncoder, arb_row_for_relation,
 };
 use mz_sql_parser::ast::{Ident, IdentError, UnresolvedItemName};
 use proptest::prelude::any;
@@ -48,6 +48,7 @@ use timely::order::{PartialOrder, TotalOrder};
 use timely::progress::timestamp::Refines;
 use timely::progress::{PathSummary, Timestamp};
 
+use crate::AlterCompatible;
 use crate::connections::inline::{
     ConnectionAccess, ConnectionResolver, InlinedConnection, IntoInlineConnection,
     ReferencedConnection,
@@ -56,7 +57,7 @@ use crate::controller::{AlterError, CollectionMetadata};
 use crate::errors::{DataflowError, ProtoDataflowError};
 use crate::instances::StorageInstanceId;
 use crate::sources::proto_ingestion_description::{ProtoSourceExport, ProtoSourceImport};
-use crate::AlterCompatible;
+use crate::sources::sql_server::SqlServerSourceExportDetails;
 
 pub mod encoding;
 pub mod envelope;
@@ -64,12 +65,14 @@ pub mod kafka;
 pub mod load_generator;
 pub mod mysql;
 pub mod postgres;
+pub mod sql_server;
 
 pub use crate::sources::envelope::SourceEnvelope;
 pub use crate::sources::kafka::KafkaSourceConnection;
 pub use crate::sources::load_generator::LoadGeneratorSourceConnection;
 pub use crate::sources::mysql::{MySqlSourceConnection, MySqlSourceExportDetails};
 pub use crate::sources::postgres::{PostgresSourceConnection, PostgresSourceExportDetails};
+pub use crate::sources::sql_server::{SqlServerSource, SqlServerSourceExtras};
 
 include!(concat!(env!("OUT_DIR"), "/mz_storage_types.sources.rs"));
 
@@ -648,6 +651,9 @@ pub trait SourceConnection: Debug + Clone + PartialEq + AlterCompatible {
 
     /// Whether the source type supports read only mode.
     fn supports_read_only(&self) -> bool;
+
+    /// Whether the source type prefers to run on only one replica of a multi-replica cluster.
+    fn prefers_single_replica(&self) -> bool;
 }
 
 #[derive(Arbitrary, Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -675,7 +681,7 @@ impl RustType<ProtoCompression> for Compression {
             None => {
                 return Err(TryFromProtoError::MissingField(
                     "ProtoCompression::kind".into(),
-                ))
+                ));
             }
         })
     }
@@ -766,13 +772,15 @@ impl<C: ConnectionAccess> SourceExportDataConfig<C> {
             SourceEnvelope::Upsert(_) | SourceEnvelope::CdcV2 => false,
             SourceEnvelope::None(_) => {
                 match connection {
-                    // Postgres can produce retractions (deletes)
+                    // Postgres can produce retractions (deletes).
                     GenericSourceConnection::Postgres(_) => false,
-                    // MySQL can produce retractions (deletes)
+                    // MySQL can produce retractions (deletes).
                     GenericSourceConnection::MySql(_) => false,
-                    // Loadgen
+                    // SQL Server can produce retractions (deletes).
+                    GenericSourceConnection::SqlServer(_) => false,
+                    // Whether or not a Loadgen source can produce retractions varies.
                     GenericSourceConnection::LoadGenerator(g) => g.load_generator.is_monotonic(),
-                    // Kafka exports with `None` envelope are append-only
+                    // Kafka exports with `None` envelope are append-only.
                     GenericSourceConnection::Kafka(_) => true,
                 }
             }
@@ -789,7 +797,8 @@ pub struct SourceDesc<C: ConnectionAccess = InlinedConnection> {
     /// primary collection for this source.
     /// TODO(database-issues#8620): This will be removed once sources no longer export
     /// to primary collections and only export to explicit SourceExports (tables).
-    pub primary_export: Option<SourceExportDataConfig<C>>,
+    pub primary_export: SourceExportDataConfig<C>,
+    pub primary_export_details: SourceExportDetails,
 }
 
 impl<R: ConnectionResolver> IntoInlineConnection<SourceDesc, R>
@@ -799,12 +808,14 @@ impl<R: ConnectionResolver> IntoInlineConnection<SourceDesc, R>
         let SourceDesc {
             connection,
             primary_export,
+            primary_export_details,
             timestamp_interval,
         } = self;
 
         SourceDesc {
             connection: connection.into_inline_connection(&r),
-            primary_export: primary_export.map(|e| e.into_inline_connection(r)),
+            primary_export: primary_export.into_inline_connection(r),
+            primary_export_details,
             timestamp_interval,
         }
     }
@@ -814,7 +825,8 @@ impl RustType<ProtoSourceDesc> for SourceDesc {
     fn into_proto(&self) -> ProtoSourceDesc {
         ProtoSourceDesc {
             connection: Some(self.connection.into_proto()),
-            primary_export: self.primary_export.as_ref().map(|e| e.into_proto()),
+            primary_export: Some(self.primary_export.into_proto()),
+            primary_export_details: Some(self.primary_export_details.into_proto()),
             timestamp_interval: Some(self.timestamp_interval.into_proto()),
         }
     }
@@ -824,7 +836,12 @@ impl RustType<ProtoSourceDesc> for SourceDesc {
             connection: proto
                 .connection
                 .into_rust_if_some("ProtoSourceDesc::connection")?,
-            primary_export: proto.primary_export.into_rust()?,
+            primary_export: proto
+                .primary_export
+                .into_rust_if_some("ProtoSourceDesc::primary_export")?,
+            primary_export_details: proto
+                .primary_export_details
+                .into_rust_if_some("ProtoSourceDesc::primary_export_details")?,
             timestamp_interval: proto
                 .timestamp_interval
                 .into_rust_if_some("ProtoSourceDesc::timestamp_interval")?,
@@ -843,6 +860,7 @@ impl<C: ConnectionAccess> AlterCompatible for SourceDesc<C> {
         let Self {
             connection,
             primary_export,
+            primary_export_details,
             timestamp_interval,
         } = &self;
 
@@ -852,6 +870,10 @@ impl<C: ConnectionAccess> AlterCompatible for SourceDesc<C> {
                 "connection",
             ),
             (primary_export == &other.primary_export, "primary_export"),
+            (
+                primary_export_details == &other.primary_export_details,
+                "primary_export_details",
+            ),
             (
                 timestamp_interval == &other.timestamp_interval,
                 "timestamp_interval",
@@ -878,12 +900,12 @@ impl SourceDesc<InlinedConnection> {
     /// Returns the SourceExport details for the primary export.
     /// TODO(database-issues#8620): This will be removed once sources no longer export
     /// to primary collections and only export to explicit SourceExports (tables).
-    pub fn primary_source_export(&self) -> Option<SourceExport<(), InlinedConnection>> {
-        self.primary_export.clone().map(|data_config| SourceExport {
+    pub fn primary_source_export(&self) -> SourceExport<(), InlinedConnection> {
+        SourceExport {
             storage_metadata: (),
-            details: self.connection.primary_export_details(),
-            data_config,
-        })
+            details: self.primary_export_details.clone(),
+            data_config: self.primary_export.clone(),
+        }
     }
 }
 
@@ -892,6 +914,7 @@ pub enum GenericSourceConnection<C: ConnectionAccess = InlinedConnection> {
     Kafka(KafkaSourceConnection<C>),
     Postgres(PostgresSourceConnection<C>),
     MySql(MySqlSourceConnection<C>),
+    SqlServer(SqlServerSource<C>),
     LoadGenerator(LoadGeneratorSourceConnection),
 }
 
@@ -910,6 +933,12 @@ impl<C: ConnectionAccess> From<PostgresSourceConnection<C>> for GenericSourceCon
 impl<C: ConnectionAccess> From<MySqlSourceConnection<C>> for GenericSourceConnection<C> {
     fn from(conn: MySqlSourceConnection<C>) -> Self {
         Self::MySql(conn)
+    }
+}
+
+impl<C: ConnectionAccess> From<SqlServerSource<C>> for GenericSourceConnection<C> {
+    fn from(conn: SqlServerSource<C>) -> Self {
+        Self::SqlServer(conn)
     }
 }
 
@@ -933,6 +962,9 @@ impl<R: ConnectionResolver> IntoInlineConnection<GenericSourceConnection, R>
             GenericSourceConnection::MySql(mysql) => {
                 GenericSourceConnection::MySql(mysql.into_inline_connection(r))
             }
+            GenericSourceConnection::SqlServer(sql_server) => {
+                GenericSourceConnection::SqlServer(sql_server.into_inline_connection(r))
+            }
             GenericSourceConnection::LoadGenerator(lg) => {
                 GenericSourceConnection::LoadGenerator(lg)
             }
@@ -946,6 +978,7 @@ impl<C: ConnectionAccess> SourceConnection for GenericSourceConnection<C> {
             Self::Kafka(conn) => conn.name(),
             Self::Postgres(conn) => conn.name(),
             Self::MySql(conn) => conn.name(),
+            Self::SqlServer(conn) => conn.name(),
             Self::LoadGenerator(conn) => conn.name(),
         }
     }
@@ -955,6 +988,7 @@ impl<C: ConnectionAccess> SourceConnection for GenericSourceConnection<C> {
             Self::Kafka(conn) => conn.external_reference(),
             Self::Postgres(conn) => conn.external_reference(),
             Self::MySql(conn) => conn.external_reference(),
+            Self::SqlServer(conn) => conn.external_reference(),
             Self::LoadGenerator(conn) => conn.external_reference(),
         }
     }
@@ -964,6 +998,7 @@ impl<C: ConnectionAccess> SourceConnection for GenericSourceConnection<C> {
             Self::Kafka(conn) => conn.default_key_desc(),
             Self::Postgres(conn) => conn.default_key_desc(),
             Self::MySql(conn) => conn.default_key_desc(),
+            Self::SqlServer(conn) => conn.default_key_desc(),
             Self::LoadGenerator(conn) => conn.default_key_desc(),
         }
     }
@@ -973,6 +1008,7 @@ impl<C: ConnectionAccess> SourceConnection for GenericSourceConnection<C> {
             Self::Kafka(conn) => conn.default_value_desc(),
             Self::Postgres(conn) => conn.default_value_desc(),
             Self::MySql(conn) => conn.default_value_desc(),
+            Self::SqlServer(conn) => conn.default_value_desc(),
             Self::LoadGenerator(conn) => conn.default_value_desc(),
         }
     }
@@ -982,6 +1018,7 @@ impl<C: ConnectionAccess> SourceConnection for GenericSourceConnection<C> {
             Self::Kafka(conn) => conn.timestamp_desc(),
             Self::Postgres(conn) => conn.timestamp_desc(),
             Self::MySql(conn) => conn.timestamp_desc(),
+            Self::SqlServer(conn) => conn.timestamp_desc(),
             Self::LoadGenerator(conn) => conn.timestamp_desc(),
         }
     }
@@ -991,6 +1028,7 @@ impl<C: ConnectionAccess> SourceConnection for GenericSourceConnection<C> {
             Self::Kafka(conn) => conn.connection_id(),
             Self::Postgres(conn) => conn.connection_id(),
             Self::MySql(conn) => conn.connection_id(),
+            Self::SqlServer(conn) => conn.connection_id(),
             Self::LoadGenerator(conn) => conn.connection_id(),
         }
     }
@@ -1000,6 +1038,7 @@ impl<C: ConnectionAccess> SourceConnection for GenericSourceConnection<C> {
             Self::Kafka(conn) => conn.primary_export_details(),
             Self::Postgres(conn) => conn.primary_export_details(),
             Self::MySql(conn) => conn.primary_export_details(),
+            Self::SqlServer(conn) => conn.primary_export_details(),
             Self::LoadGenerator(conn) => conn.primary_export_details(),
         }
     }
@@ -1009,11 +1048,21 @@ impl<C: ConnectionAccess> SourceConnection for GenericSourceConnection<C> {
             GenericSourceConnection::Kafka(conn) => conn.supports_read_only(),
             GenericSourceConnection::Postgres(conn) => conn.supports_read_only(),
             GenericSourceConnection::MySql(conn) => conn.supports_read_only(),
+            GenericSourceConnection::SqlServer(conn) => conn.supports_read_only(),
             GenericSourceConnection::LoadGenerator(conn) => conn.supports_read_only(),
         }
     }
-}
 
+    fn prefers_single_replica(&self) -> bool {
+        match self {
+            GenericSourceConnection::Kafka(conn) => conn.prefers_single_replica(),
+            GenericSourceConnection::Postgres(conn) => conn.prefers_single_replica(),
+            GenericSourceConnection::MySql(conn) => conn.prefers_single_replica(),
+            GenericSourceConnection::SqlServer(conn) => conn.prefers_single_replica(),
+            GenericSourceConnection::LoadGenerator(conn) => conn.prefers_single_replica(),
+        }
+    }
+}
 impl<C: ConnectionAccess> crate::AlterCompatible for GenericSourceConnection<C> {
     fn alter_compatible(&self, id: GlobalId, other: &Self) -> Result<(), AlterError> {
         if self == other {
@@ -1023,6 +1072,7 @@ impl<C: ConnectionAccess> crate::AlterCompatible for GenericSourceConnection<C> 
             (Self::Kafka(conn), Self::Kafka(other)) => conn.alter_compatible(id, other),
             (Self::Postgres(conn), Self::Postgres(other)) => conn.alter_compatible(id, other),
             (Self::MySql(conn), Self::MySql(other)) => conn.alter_compatible(id, other),
+            (Self::SqlServer(conn), Self::SqlServer(other)) => conn.alter_compatible(id, other),
             (Self::LoadGenerator(conn), Self::LoadGenerator(other)) => {
                 conn.alter_compatible(id, other)
             }
@@ -1051,6 +1101,9 @@ impl RustType<ProtoSourceConnection> for GenericSourceConnection<InlinedConnecti
                     Kind::Postgres(postgres.into_proto())
                 }
                 GenericSourceConnection::MySql(mysql) => Kind::Mysql(mysql.into_proto()),
+                GenericSourceConnection::SqlServer(sql_server) => {
+                    Kind::SqlServer(sql_server.into_proto())
+                }
                 GenericSourceConnection::LoadGenerator(loadgen) => {
                     Kind::Loadgen(loadgen.into_proto())
                 }
@@ -1067,6 +1120,9 @@ impl RustType<ProtoSourceConnection> for GenericSourceConnection<InlinedConnecti
             Kind::Kafka(kafka) => GenericSourceConnection::Kafka(kafka.into_rust()?),
             Kind::Postgres(postgres) => GenericSourceConnection::Postgres(postgres.into_rust()?),
             Kind::Mysql(mysql) => GenericSourceConnection::MySql(mysql.into_rust()?),
+            Kind::SqlServer(sql_server) => {
+                GenericSourceConnection::SqlServer(sql_server.into_rust()?)
+            }
             Kind::Loadgen(loadgen) => GenericSourceConnection::LoadGenerator(loadgen.into_rust()?),
         })
     }
@@ -1082,6 +1138,7 @@ pub enum SourceExportDetails {
     Kafka(KafkaSourceExportDetails),
     Postgres(PostgresSourceExportDetails),
     MySql(MySqlSourceExportDetails),
+    SqlServer(SqlServerSourceExportDetails),
     LoadGenerator(LoadGeneratorSourceExportDetails),
 }
 
@@ -1122,6 +1179,9 @@ impl RustType<ProtoSourceExportDetails> for SourceExportDetails {
                     Some(Kind::Postgres(details.into_proto()))
                 }
                 SourceExportDetails::MySql(details) => Some(Kind::Mysql(details.into_proto())),
+                SourceExportDetails::SqlServer(details) => {
+                    Some(Kind::SqlServer(details.into_proto()))
+                }
                 SourceExportDetails::LoadGenerator(details) => {
                     Some(Kind::Loadgen(details.into_proto()))
                 }
@@ -1136,6 +1196,7 @@ impl RustType<ProtoSourceExportDetails> for SourceExportDetails {
             Some(Kind::Kafka(details)) => SourceExportDetails::Kafka(details.into_rust()?),
             Some(Kind::Postgres(details)) => SourceExportDetails::Postgres(details.into_rust()?),
             Some(Kind::Mysql(details)) => SourceExportDetails::MySql(details.into_rust()?),
+            Some(Kind::SqlServer(details)) => SourceExportDetails::SqlServer(details.into_rust()?),
             Some(Kind::Loadgen(details)) => {
                 SourceExportDetails::LoadGenerator(details.into_rust()?)
             }
@@ -1155,6 +1216,10 @@ pub enum SourceExportStatementDetails {
     MySql {
         table: mz_mysql_util::MySqlTableDesc,
         initial_gtid_set: String,
+    },
+    SqlServer {
+        table: mz_sql_server_util::desc::SqlServerTableDesc,
+        capture_instance: Arc<str>,
     },
     LoadGenerator {
         output: LoadGeneratorOutput,
@@ -1180,6 +1245,17 @@ impl RustType<ProtoSourceExportStatementDetails> for SourceExportStatementDetail
                     mysql::ProtoMySqlSourceExportStatementDetails {
                         table: Some(table.into_proto()),
                         initial_gtid_set: initial_gtid_set.clone(),
+                    },
+                )),
+            },
+            SourceExportStatementDetails::SqlServer {
+                table,
+                capture_instance,
+            } => ProtoSourceExportStatementDetails {
+                kind: Some(proto_source_export_statement_details::Kind::SqlServer(
+                    sql_server::ProtoSqlServerSourceExportStatementDetails {
+                        table: Some(table.into_proto()),
+                        capture_instance: capture_instance.to_string(),
                     },
                 )),
             },
@@ -1215,6 +1291,12 @@ impl RustType<ProtoSourceExportStatementDetails> for SourceExportStatementDetail
 
                 initial_gtid_set: details.initial_gtid_set,
             },
+            Some(Kind::SqlServer(details)) => SourceExportStatementDetails::SqlServer {
+                table: details
+                    .table
+                    .into_rust_if_some("ProtoSqlServerSourceExportStatementDetails::table")?,
+                capture_instance: details.capture_instance.into(),
+            },
             Some(Kind::Loadgen(details)) => SourceExportStatementDetails::LoadGenerator {
                 output: details
                     .output
@@ -1224,7 +1306,7 @@ impl RustType<ProtoSourceExportStatementDetails> for SourceExportStatementDetail
             None => {
                 return Err(TryFromProtoError::missing_field(
                     "ProtoSourceExportStatementDetails::kind",
-                ))
+                ));
             }
         })
     }
@@ -1347,7 +1429,9 @@ impl Codec for SourceData {
 }
 
 /// Given a [`RelationDesc`] returns an arbitrary [`SourceData`].
-pub fn arb_source_data_for_relation_desc(desc: &RelationDesc) -> impl Strategy<Value = SourceData> {
+pub fn arb_source_data_for_relation_desc(
+    desc: &RelationDesc,
+) -> impl Strategy<Value = SourceData> + use<> {
     let row_strat = arb_row_for_relation(desc).no_shrink();
 
     proptest::strategy::Union::new_weighted(vec![
@@ -1393,6 +1477,16 @@ impl ExternalCatalogReference for mz_postgres_util::desc::PostgresTableDesc {
 
     fn item_name(&self) -> &str {
         &self.name
+    }
+}
+
+impl ExternalCatalogReference for &mz_sql_server_util::desc::SqlServerTableDesc {
+    fn schema_name(&self) -> &str {
+        &*self.schema_name
+    }
+
+    fn item_name(&self) -> &str {
+        &*self.name
     }
 }
 
@@ -1888,7 +1982,7 @@ impl ColumnEncoder<SourceData> for SourceDataColumnarEncoder {
     }
 }
 
-impl Schema2<SourceData> for RelationDesc {
+impl Schema<SourceData> for RelationDesc {
     type ArrowColumn = StructArray;
     type Statistics = StructStats;
 
@@ -1906,7 +2000,8 @@ impl Schema2<SourceData> for RelationDesc {
 
 #[cfg(test)]
 mod tests {
-    use arrow::array::{make_comparator, ArrayData};
+    use arrow::array::{ArrayData, make_comparator};
+    use base64::Engine;
     use bytes::Bytes;
     use mz_expr::EvalError;
     use mz_ore::assert_err;
@@ -1914,11 +2009,11 @@ mod tests {
     use mz_persist::indexed::columnar::arrow::{realloc_any, realloc_array};
     use mz_persist::metrics::ColumnarMetrics;
     use mz_persist_types::parquet::EncodingConfig;
-    use mz_persist_types::schema::{backward_compatible, Migration};
+    use mz_persist_types::schema::{Migration, backward_compatible};
     use mz_persist_types::stats::{PartStats, PartStatsMetrics};
     use mz_repr::{
-        arb_relation_desc_diff, arb_relation_desc_projection, ColumnIndex, DatumVec,
-        PropRelationDescDiff, ProtoRelationDesc, RelationDescBuilder, RowArena, ScalarType,
+        ColumnIndex, DatumVec, PropRelationDescDiff, ProtoRelationDesc, RelationDescBuilder,
+        RowArena, ScalarType, arb_relation_desc_diff, arb_relation_desc_projection,
     };
     use proptest::prelude::*;
     use proptest::strategy::{Union, ValueTree};
@@ -1948,7 +2043,7 @@ mod tests {
         config: &EncodingConfig,
     ) {
         let metrics = ColumnarMetrics::disconnected();
-        let mut encoder = <RelationDesc as Schema2<SourceData>>::encoder(desc).unwrap();
+        let mut encoder = <RelationDesc as Schema<SourceData>>::encoder(desc).unwrap();
         for data in &datas {
             encoder.append(data);
         }
@@ -2003,14 +2098,13 @@ mod tests {
             .clone();
 
         // Try generating stats for the data, just to make sure we don't panic.
-        let stats = <RelationDesc as Schema2<SourceData>>::decoder_any(desc, &rnd_col)
+        let stats = <RelationDesc as Schema<SourceData>>::decoder_any(desc, &rnd_col)
             .expect("valid decoder")
             .stats();
 
         // Read back all of our data and assert it roundtrips.
         let mut rnd_data = SourceData(Ok(Row::default()));
-        let decoder =
-            <RelationDesc as Schema2<SourceData>>::decoder(desc, rnd_col.clone()).unwrap();
+        let decoder = <RelationDesc as Schema<SourceData>>::decoder(desc, rnd_col.clone()).unwrap();
         for (idx, og_data) in datas.iter().enumerate() {
             decoder.decode(idx, &mut rnd_data);
             assert_eq!(og_data, &rnd_data);
@@ -2027,7 +2121,7 @@ mod tests {
         };
         let mut datum_vec = DatumVec::new();
         let arena = RowArena::default();
-        let decoder = <RelationDesc as Schema2<SourceData>>::decoder(read_desc, rnd_col).unwrap();
+        let decoder = <RelationDesc as Schema<SourceData>>::decoder(read_desc, rnd_col).unwrap();
 
         for (idx, og_data) in datas.iter().enumerate() {
             decoder.decode(idx, &mut rnd_data);
@@ -2136,9 +2230,9 @@ mod tests {
             .all(|(i, j)| cmp(i, j).is_le())
     }
 
-    fn get_data_type(schema: &impl Schema2<SourceData>) -> arrow::datatypes::DataType {
+    fn get_data_type(schema: &impl Schema<SourceData>) -> arrow::datatypes::DataType {
         use mz_persist_types::columnar::ColumnEncoder;
-        let array = Schema2::encoder(schema).expect("valid schema").finish();
+        let array = Schema::encoder(schema).expect("valid schema").finish();
         Array::data_type(&array).clone()
     }
 
@@ -2149,12 +2243,12 @@ mod tests {
         migration: Migration,
         datas: &[SourceData],
     ) {
-        let mut encoder = Schema2::<SourceData>::encoder(old).expect("valid schema");
+        let mut encoder = Schema::<SourceData>::encoder(old).expect("valid schema");
         for data in datas {
             encoder.append(data);
         }
         let old = encoder.finish();
-        let new = Schema2::<SourceData>::encoder(new)
+        let new = Schema::<SourceData>::encoder(new)
             .expect("valid schema")
             .finish();
         let old: Arc<dyn Array> = Arc::new(old);
@@ -2277,13 +2371,13 @@ mod tests {
         fn test_case(desc: RelationDesc, datas: Vec<SourceData>) {
             let half = datas.len() / 2;
 
-            let mut encoder_a = <RelationDesc as Schema2<SourceData>>::encoder(&desc).unwrap();
+            let mut encoder_a = <RelationDesc as Schema<SourceData>>::encoder(&desc).unwrap();
             for data in &datas[..half] {
                 encoder_a.append(data);
             }
             let col_a = encoder_a.finish();
 
-            let mut encoder_b = <RelationDesc as Schema2<SourceData>>::encoder(&desc).unwrap();
+            let mut encoder_b = <RelationDesc as Schema<SourceData>>::encoder(&desc).unwrap();
             for data in &datas[half..] {
                 encoder_b.append(data);
             }
@@ -2309,7 +2403,6 @@ mod tests {
     #[cfg_attr(miri, ignore)] // too slow
     fn source_proto_serialization_stability() {
         let min_protos = 10;
-        let base64_config = base64::Config::new(base64::CharacterSet::Standard, true);
         let encoded = include_str!("snapshots/source-datas.txt");
 
         // Decode the pre-generated source datas
@@ -2317,8 +2410,12 @@ mod tests {
             .lines()
             .map(|s| {
                 let (desc, data) = s.split_once(',').expect("comma separated data");
-                let desc = base64::decode_config(desc, base64_config).expect("valid base64");
-                let data = base64::decode_config(data, base64_config).expect("valid base64");
+                let desc = base64::engine::general_purpose::STANDARD
+                    .decode(desc)
+                    .expect("valid base64");
+                let data = base64::engine::general_purpose::STANDARD
+                    .decode(data)
+                    .expect("valid base64");
                 (desc, data)
             })
             .map(|(desc, data)| {
@@ -2348,12 +2445,12 @@ mod tests {
         for (desc, data) in decoded {
             buf.clear();
             desc.into_proto().encode(&mut buf).expect("success");
-            base64::encode_config_buf(buf.as_slice(), base64_config, &mut reencoded);
+            base64::engine::general_purpose::STANDARD.encode_string(buf.as_slice(), &mut reencoded);
             reencoded.push(',');
 
             buf.clear();
             data.encode(&mut buf);
-            base64::encode_config_buf(buf.as_slice(), base64_config, &mut reencoded);
+            base64::engine::general_purpose::STANDARD.encode_string(buf.as_slice(), &mut reencoded);
             reencoded.push('\n');
         }
 

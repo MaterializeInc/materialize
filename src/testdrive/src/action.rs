@@ -15,7 +15,7 @@ use std::sync::LazyLock;
 use std::time::Duration;
 use std::{env, fs};
 
-use anyhow::{anyhow, bail, Context};
+use anyhow::{Context, anyhow, bail};
 use async_trait::async_trait;
 use aws_credential_types::provider::ProvideCredentials;
 use aws_types::SdkConfig;
@@ -26,7 +26,7 @@ use mz_adapter::session::Session;
 use mz_build_info::BuildInfo;
 use mz_catalog::config::ClusterReplicaSizeMap;
 use mz_catalog::durable::BootstrapArgs;
-use mz_kafka_util::client::{create_new_client_config_simple, MzClientContext};
+use mz_kafka_util::client::{MzClientContext, create_new_client_config_simple};
 use mz_ore::error::ErrorExt;
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::SYSTEM_TIME;
@@ -40,8 +40,8 @@ use mz_persist_client::{PersistClient, PersistLocation};
 use mz_sql::catalog::EnvironmentId;
 use mz_tls_util::make_tls;
 use rand::Rng;
-use rdkafka::producer::Producer;
 use rdkafka::ClientConfig;
+use rdkafka::producer::Producer;
 use regex::{Captures, Regex};
 use semver::Version;
 use tokio_postgres::error::{DbError, SqlState};
@@ -50,7 +50,7 @@ use url::Url;
 
 use crate::error::PosError;
 use crate::parser::{
-    validate_ident, Command, PosCommand, SqlExpectedError, SqlOutput, VersionConstraint,
+    Command, PosCommand, SqlExpectedError, SqlOutput, VersionConstraint, validate_ident,
 };
 use crate::util;
 use crate::util::postgres::postgres_client;
@@ -241,8 +241,7 @@ pub struct State {
     // === Database driver state. ===
     mysql_clients: BTreeMap<String, mysql_async::Conn>,
     postgres_clients: BTreeMap<String, tokio_postgres::Client>,
-    sql_server_clients:
-        BTreeMap<String, tiberius::Client<tokio_util::compat::Compat<tokio::net::TcpStream>>>,
+    sql_server_clients: BTreeMap<String, mz_sql_server_util::Client>,
 
     // === Fivetran state. ===
     fivetran_destination_url: String,
@@ -359,7 +358,7 @@ impl State {
     pub async fn with_catalog_copy<F, T>(
         &self,
         system_parameter_defaults: BTreeMap<String, String>,
-        version: semver::Version,
+        build_info: &'static BuildInfo,
         bootstrap_args: &BootstrapArgs,
         enable_expression_cache_override: Option<bool>,
         f: F,
@@ -395,7 +394,7 @@ impl State {
                 SYSTEM_TIME.clone(),
                 self.materialize.environment_id.clone(),
                 system_parameter_defaults,
-                version,
+                build_info,
                 bootstrap_args,
                 enable_expression_cache_override,
             )
@@ -777,7 +776,7 @@ impl Run for PosCommand {
                         consistency::skip_consistency_checks(builtin, state)
                     }
                     "check-shard-tombstone" => {
-                        consistency::run_check_shard_tombstoned(builtin, state).await
+                        consistency::run_check_shard_tombstone(builtin, state).await
                     }
                     "fivetran-destination" => {
                         fivetran::run_destination_command(builtin, state).await
@@ -806,6 +805,8 @@ impl Run for PosCommand {
                     "psql-execute" => psql::run_execute(builtin, state).await,
                     "s3-verify-data" => s3::run_verify_data(builtin, state).await,
                     "s3-verify-keys" => s3::run_verify_keys(builtin, state).await,
+                    "s3-file-upload" => s3::run_upload(builtin, state).await,
+                    "s3-set-presigned-url" => s3::run_set_presigned_url(builtin, state).await,
                     "schema-registry-publish" => schema_registry::run_publish(builtin, state).await,
                     "schema-registry-verify" => schema_registry::run_verify(builtin, state).await,
                     "schema-registry-wait" => schema_registry::run_wait(builtin, state).await,
@@ -917,7 +918,7 @@ fn substitute_vars(
 pub async fn create_state(
     config: &Config,
 ) -> Result<(State, impl Future<Output = Result<(), anyhow::Error>>), anyhow::Error> {
-    let seed = config.seed.unwrap_or_else(|| rand::thread_rng().gen());
+    let seed = config.seed.unwrap_or_else(|| rand::thread_rng().r#gen());
 
     let (_tempfile, temp_path) = match &config.temp_dir {
         Some(temp_dir) => {
@@ -1134,6 +1135,7 @@ async fn create_materialize_state(
     let bootstrap_args = BootstrapArgs {
         cluster_replica_size_map: config.materialize_cluster_replica_sizes.clone(),
         default_cluster_replica_size: "ABC".to_string(),
+        default_cluster_replication_factor: 1,
         bootstrap_role: None,
     };
 

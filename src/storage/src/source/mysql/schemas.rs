@@ -10,7 +10,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use mysql_async::prelude::Queryable;
-use mz_mysql_util::{schema_info, MySqlError, SchemaRequest};
+use mz_mysql_util::{MySqlError, SchemaRequest, schema_info};
 
 use super::{DefiniteError, MySqlTableName, SourceOutputInfo};
 

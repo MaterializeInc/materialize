@@ -18,13 +18,13 @@ import time
 from materialize import buildkite
 from materialize.data_ingest.executor import (
     KafkaExecutor,
-    KafkaRoundtripExecutor,
     MySqlExecutor,
 )
 from materialize.data_ingest.workload import *  # noqa: F401 F403
 from materialize.data_ingest.workload import WORKLOADS, execute_workload
 from materialize.mzcompose import get_default_system_parameters
 from materialize.mzcompose.composition import Composition, WorkflowArgumentParser
+from materialize.mzcompose.services.azure import Azurite
 from materialize.mzcompose.services.clusterd import Clusterd
 from materialize.mzcompose.services.kafka import Kafka
 from materialize.mzcompose.services.materialized import Materialized
@@ -53,24 +53,10 @@ SERVICES = [
     SchemaRegistry(),
     CockroachOrPostgresMetadata(),
     Minio(setup_materialize=True),
-    # Fixed port so that we keep the same port after restarting Mz in disruptions
-    Materialized(
-        ports=["16875:6875"],
-        external_minio=True,
-        external_metadata_store=True,
-        system_parameter_defaults=get_default_system_parameters(zero_downtime=True),
-        additional_system_parameter_defaults={"unsafe_enable_table_keys": "true"},
-        sanity_restart=False,
-    ),
-    Materialized(
-        name="materialized2",
-        ports=["26875:6875"],
-        external_minio=True,
-        external_metadata_store=True,
-        system_parameter_defaults=get_default_system_parameters(zero_downtime=True),
-        additional_system_parameter_defaults={"unsafe_enable_table_keys": "true"},
-        sanity_restart=False,
-    ),
+    Azurite(),
+    # Overridden below
+    Materialized(),
+    Materialized(name="materialized2"),
     Clusterd(name="clusterd1", scratch_directory="/mzdata/source_data"),
 ]
 
@@ -90,6 +76,10 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         action="append",
         help="Workload(s) to run.",
     )
+    parser.add_argument(
+        "--azurite", action="store_true", help="Use Azurite as blob store instead of S3"
+    )
+    parser.add_argument("--replicas", type=int, default=2, help="use multiple replicas")
 
     args = parser.parse_args()
 
@@ -116,40 +106,91 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         "mysql",
     )
 
-    executor_classes = [MySqlExecutor, KafkaRoundtripExecutor, KafkaExecutor]
+    # TODO: Reenable when database-issues#8657 is fixed
+    # executor_classes = [MySqlExecutor, KafkaRoundtripExecutor, KafkaExecutor]
+    executor_classes = [MySqlExecutor, KafkaExecutor]
 
-    c.up(*services)
-    conn = c.sql_connection()
-    conn.autocommit = True
-    with conn.cursor() as cur:
-        cur.execute(
-            """CREATE CONNECTION IF NOT EXISTS kafka_conn
-               FOR KAFKA BROKER 'kafka:9092', SECURITY PROTOCOL PLAINTEXT"""
-        )
-        cur.execute(
-            """CREATE CONNECTION IF NOT EXISTS csr_conn
-               FOR CONFLUENT SCHEMA REGISTRY
-               URL 'http://schema-registry:8081'"""
-        )
-    conn.autocommit = False
-    conn.close()
+    with c.override(
+        # Fixed port so that we keep the same port after restarting Mz in disruptions
+        Materialized(
+            ports=["16875:6875", "16877:6877"],
+            external_blob_store=True,
+            blob_store_is_azure=args.azurite,
+            external_metadata_store=True,
+            system_parameter_defaults=get_default_system_parameters(zero_downtime=True),
+            additional_system_parameter_defaults={"unsafe_enable_table_keys": "true"},
+            sanity_restart=False,
+        ),
+        Materialized(
+            name="materialized2",
+            ports=["26875:6875", "26877:6877"],
+            external_blob_store=True,
+            blob_store_is_azure=args.azurite,
+            external_metadata_store=True,
+            system_parameter_defaults=get_default_system_parameters(zero_downtime=True),
+            additional_system_parameter_defaults={"unsafe_enable_table_keys": "true"},
+            sanity_restart=False,
+        ),
+    ):
+        c.up(*services)
 
-    ports = {s: c.default_port(s) for s in services}
-    ports["materialized2"] = 26875
-    mz_service = "materialized"
-    deploy_generation = 0
+        if args.replicas > 1:
+            c.sql(
+                "ALTER SYSTEM SET max_replicas_per_cluster = 32",
+                user="mz_system",
+                port=6877,
+            )
+            c.sql("DROP CLUSTER quickstart CASCADE", user="mz_system", port=6877)
+            replica_names = [f"r{replica_id}" for replica_id in range(0, args.replicas)]
+            replica_string = ",".join(
+                f"{replica_name} (SIZE '4')" for replica_name in replica_names
+            )
+            c.sql(
+                f"CREATE CLUSTER quickstart REPLICAS ({replica_string})",
+                user="mz_system",
+                port=6877,
+            )
+            c.sql(
+                "GRANT ALL PRIVILEGES ON CLUSTER quickstart TO materialize",
+                user="mz_system",
+                port=6877,
+            )
 
-    for i, workload_class in enumerate(workloads):
-        random.seed(args.seed)
-        print(f"--- Testing workload {workload_class.__name__}")
-        workload = workload_class(c, mz_service, deploy_generation)
-        execute_workload(
-            executor_classes,
-            workload,
-            i,
-            ports,
-            args.runtime,
-            args.verbose,
+        c.sql(
+            "CREATE CLUSTER singlereplica SIZE = '4', REPLICATION FACTOR = 1",
         )
-        mz_service = workload.mz_service
-        deploy_generation = workload.deploy_generation
+
+        conn = c.sql_connection()
+        conn.autocommit = True
+        with conn.cursor() as cur:
+            cur.execute(
+                """CREATE CONNECTION IF NOT EXISTS kafka_conn
+                   FOR KAFKA BROKER 'kafka:9092', SECURITY PROTOCOL PLAINTEXT"""
+            )
+            cur.execute(
+                """CREATE CONNECTION IF NOT EXISTS csr_conn
+                   FOR CONFLUENT SCHEMA REGISTRY
+                   URL 'http://schema-registry:8081'"""
+            )
+        conn.autocommit = False
+        conn.close()
+
+        ports = {s: c.default_port(s) for s in services}
+        ports["materialized2"] = 26875
+        mz_service = "materialized"
+        deploy_generation = 0
+
+        for i, workload_class in enumerate(workloads):
+            random.seed(args.seed)
+            print(f"--- Testing workload {workload_class.__name__}")
+            workload = workload_class(args.azurite, c, mz_service, deploy_generation)
+            execute_workload(
+                executor_classes,
+                workload,
+                i,
+                ports,
+                args.runtime,
+                args.verbose,
+            )
+            mz_service = workload.mz_service
+            deploy_generation = workload.deploy_generation

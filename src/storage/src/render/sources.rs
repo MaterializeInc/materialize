@@ -15,7 +15,7 @@ use std::collections::BTreeMap;
 use std::iter;
 use std::sync::Arc;
 
-use differential_dataflow::{collection, AsCollection, Collection};
+use differential_dataflow::{AsCollection, Collection, collection};
 use mz_ore::cast::CastLossy;
 use mz_persist_client::operators::shard_source::SnapshotMode;
 use mz_repr::{Datum, Diff, GlobalId, Row, RowPacker};
@@ -34,10 +34,10 @@ use mz_timely_util::operator::CollectionExt;
 use mz_timely_util::order::refine_antichain;
 use serde::{Deserialize, Serialize};
 use timely::container::CapacityContainerBuilder;
+use timely::dataflow::Stream;
 use timely::dataflow::operators::generic::operator::empty;
 use timely::dataflow::operators::{Concat, ConnectLoop, Feedback, Leave, Map, OkErr};
 use timely::dataflow::scopes::{Child, Scope};
-use timely::dataflow::Stream;
 use timely::progress::{Antichain, Timestamp};
 
 use crate::decode::{render_decode_cdcv2, render_decode_delimited};
@@ -106,7 +106,7 @@ where
         scope,
         storage_state,
         resume_stream,
-        base_source_config.clone(),
+        &base_source_config,
         connection,
         start_signal,
     );
@@ -133,10 +133,10 @@ where
             export_id,
             ok_stream,
             data_config,
-            description.clone(),
+            &description,
             error_collections,
             storage_state,
-            base_source_config.clone(),
+            &base_source_config,
             starter.clone(),
         );
         needed_tokens.extend(extra_tokens);
@@ -155,10 +155,10 @@ fn render_source_stream<G, FromTime>(
     export_id: GlobalId,
     ok_source: Collection<G, SourceOutput<FromTime>, Diff>,
     data_config: SourceExportDataConfig,
-    description: IngestionDescription<CollectionMetadata>,
+    description: &IngestionDescription<CollectionMetadata>,
     mut error_collections: Vec<Collection<G, DataflowError, Diff>>,
     storage_state: &crate::storage_state::StorageState,
-    base_source_config: RawSourceCreationConfig,
+    base_source_config: &RawSourceCreationConfig,
     rehydrated_token: impl std::any::Any + 'static,
 ) -> (
     Collection<G, Row, Diff>,
@@ -179,6 +179,7 @@ where
         connection: _,
         timestamp_interval: _,
         primary_export: _,
+        primary_export_details: _,
     } = description.desc;
 
     let (decoded_stream, decode_health) = match encoding {
@@ -279,11 +280,12 @@ where
                                 (None, None, None)
                             };
 
-                        let grace_period = dyncfgs::CLUSTER_SHUTDOWN_GRACE_PERIOD
-                            .get(storage_state.storage_configuration.config_set());
                         let storage_metadata = description.source_exports[&export_id]
                             .storage_metadata
                             .clone();
+
+                        let error_handler =
+                            storage_state.error_handler("upsert_rehydration", export_id);
 
                         let (stream, tok) = persist_source::persist_source_core(
                             scope,
@@ -298,12 +300,7 @@ where
                             flow_control,
                             false.then_some(|| unreachable!()),
                             async {},
-                            move |error| {
-                                Box::pin(async move {
-                                    tokio::time::sleep(grace_period).await;
-                                    panic!("upsert_rehydration: {error}")
-                                })
-                            },
+                            error_handler,
                         );
                         (
                             stream.as_collection(),
@@ -352,7 +349,7 @@ where
                     {
                         crate::upsert::rehydration_finished(
                             scope.clone(),
-                            &base_source_config,
+                            base_source_config,
                             rehydrated_token,
                             refine_antichain(&resume_upper),
                             &snapshot_progress,

@@ -24,7 +24,7 @@ ALTER SYSTEM SET min_timestamp_interval = '100ms'
 # Remove references to internal table identifiers and "materialize.public" strings
 $ set-regex match=(\s\(u\d+\)|materialize\.public\.) replacement=
 
-? EXPLAIN SELECT (SELECT 'a' LIMIT 1);
+? EXPLAIN OPTIMIZED PLAN AS VERBOSE TEXT FOR SELECT (SELECT 'a' LIMIT 1);
 Explained Query (fast path):
   Constant
     - ("a")
@@ -377,9 +377,9 @@ $ kafka-ingest format=avro topic=top1 schema=${schema} timestamp=5
 "Dataflow: order_by_limit" "Reduced TopK input"
 "Dataflow: order_by_limit" "Reduced TopK input"
 "Dataflow: order_by_limit" "Reduced TopK input"
-"Dataflow: group_by_in_top_1" ArrangeBy[[Column(0)]]
-"Dataflow: group_by_in_top_1" ArrangeBy[[Column(0)]]
-"Dataflow: group_by_in_top_1" ArrangeBy[[Column(0)]]
+"Dataflow: group_by_in_top_1" "ArrangeBy[[Column(0)]]"
+"Dataflow: group_by_in_top_1" "ArrangeBy[[Column(0)]]"
+"Dataflow: group_by_in_top_1" "ArrangeBy[[Column(0)]]"
 "Dataflow: group_by_in_top_1" "Arranged DistinctBy"
 "Dataflow: group_by_in_top_1" "Arranged DistinctBy"
 "Dataflow: group_by_in_top_1" DistinctBy
@@ -389,9 +389,9 @@ $ kafka-ingest format=avro topic=top1 schema=${schema} timestamp=5
 "Dataflow: group_by_limit" "Arranged DistinctBy"
 "Dataflow: group_by_limit" DistinctBy
 "Dataflow: group_by_limit" DistinctByErrorCheck
-"Dataflow: group_by_order_by_in_top_1" ArrangeBy[[Column(0)]]
-"Dataflow: group_by_order_by_in_top_1" ArrangeBy[[Column(0)]]
-"Dataflow: group_by_order_by_in_top_1" ArrangeBy[[Column(0)]]
+"Dataflow: group_by_order_by_in_top_1" "ArrangeBy[[Column(0)]]"
+"Dataflow: group_by_order_by_in_top_1" "ArrangeBy[[Column(0)]]"
+"Dataflow: group_by_order_by_in_top_1" "ArrangeBy[[Column(0)]]"
 "Dataflow: group_by_order_by_in_top_1" "Arranged DistinctBy"
 "Dataflow: group_by_order_by_in_top_1" DistinctBy
 "Dataflow: group_by_order_by_in_top_1" DistinctByErrorCheck

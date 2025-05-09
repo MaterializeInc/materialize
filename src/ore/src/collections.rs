@@ -15,9 +15,9 @@
 
 //! Collection utilities.
 
+use std::collections::BTreeMap;
 use std::collections::btree_map::Entry as BEntry;
 use std::collections::hash_map::Entry as HEntry;
-use std::collections::BTreeMap;
 use std::fmt::{Debug, Display};
 
 mod hash;

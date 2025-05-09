@@ -30,7 +30,7 @@ use std::time::UNIX_EPOCH;
 use tokio::net::UnixStream;
 use tokio::select;
 use tokio::sync::mpsc::{self, UnboundedSender};
-use tokio::sync::{oneshot, Mutex};
+use tokio::sync::{Mutex, oneshot};
 use tokio_stream::wrappers::UnboundedReceiverStream;
 use tonic::body::BoxBody;
 use tonic::codegen::InterceptedService;
@@ -123,6 +123,7 @@ where
                     }))
                     .await?
             }
+            SocketAddrType::Turmoil => unimplemented!(),
         };
         let service = InterceptedService::new(channel, VersionAttachInterceptor::new(version));
         let mut client = BidiProtoClient::new(service, G::URL, metrics);
@@ -271,7 +272,7 @@ where
         host: Option<String>,
         client_builder: F,
         service_builder: Fs,
-    ) -> impl Future<Output = Result<(), anyhow::Error>>
+    ) -> impl Future<Output = Result<(), anyhow::Error>> + use<S, Fs, F, G>
     where
         S: Service<
                 http::Request<BoxBody>,
@@ -454,7 +455,7 @@ impl GrpcServerMetrics {
 
 #[derive(Debug)]
 struct PerGrpcServerMetrics {
-    last_command_received: DeleteOnDropGauge<'static, AtomicU64, Vec<&'static str>>,
+    last_command_received: DeleteOnDropGauge<AtomicU64, Vec<&'static str>>,
 }
 
 const VERSION_HEADER_KEY: &str = "x-mz-version";

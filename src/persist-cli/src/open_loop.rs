@@ -30,9 +30,9 @@ use mz_persist_client::rpc::PubSubClientConnection;
 use mz_persist_client::{PersistLocation, ShardId};
 use prometheus::Encoder;
 use tokio::net::TcpListener;
-use tokio::sync::mpsc::error::SendError;
 use tokio::sync::Barrier;
-use tracing::{debug, error, info, info_span, trace, Instrument};
+use tokio::sync::mpsc::error::SendError;
+use tracing::{Instrument, debug, error, info, info_span, trace};
 
 use crate::open_loop::api::{BenchmarkReader, BenchmarkWriter};
 
@@ -183,8 +183,14 @@ where
 
     let benchmark_description = format!(
         "num-readers={} num-writers={} runtime={:?} num_records_total={} records-per-second={} record-size-bytes={} batch-size={}",
-        args.num_readers, args.num_writers, args.runtime, num_records_total, args.records_per_second,
-        args.record_size_bytes, args.batch_size);
+        args.num_readers,
+        args.num_writers,
+        args.runtime,
+        num_records_total,
+        args.records_per_second,
+        args.record_size_bytes,
+        args.batch_size
+    );
 
     info!("starting benchmark: {}", benchmark_description);
     let mut generator_handles: Vec<JoinHandle<Result<String, anyhow::Error>>> = vec![];
@@ -488,11 +494,11 @@ mod raw_persist_benchmark {
     use mz_persist::indexed::columnar::ColumnarRecords;
     use mz_persist_client::read::{Listen, ListenEvent};
     use mz_persist_client::{Diagnostics, PersistClient, ShardId};
-    use mz_persist_types::codec_impls::VecU8Schema;
     use mz_persist_types::Codec64;
+    use mz_persist_types::codec_impls::VecU8Schema;
     use timely::progress::Antichain;
     use tokio::sync::mpsc::Sender;
-    use tracing::{info_span, Instrument};
+    use tracing::{Instrument, info_span};
 
     use crate::open_loop::api::{BenchmarkReader, BenchmarkWriter};
 

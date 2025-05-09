@@ -9,6 +9,6 @@
 
 MZFROM test-certs as certs
 
-FROM mysql:8.4.0
+FROM mysql:8.0.42
 
 ENV MYSQL_ROOT_PASSWORD=p@ssw0rd

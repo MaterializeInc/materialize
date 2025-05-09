@@ -87,8 +87,8 @@ use std::collections::{BTreeMap, BTreeSet};
 use itertools::Itertools;
 use mz_expr::visit::{Visit, VisitChildren};
 use mz_expr::{
-    func, AggregateFunc, Id, JoinInputMapper, LocalId, MirRelationExpr, MirScalarExpr,
-    VariadicFunc, RECURSION_LIMIT,
+    AggregateFunc, Id, JoinInputMapper, LocalId, MirRelationExpr, MirScalarExpr, RECURSION_LIMIT,
+    VariadicFunc, func,
 };
 use mz_ore::soft_assert_eq_no_log;
 use mz_ore::stack::{CheckedRecursion, RecursionGuard, RecursionLimitError};
@@ -308,7 +308,7 @@ impl PredicatePushdown {
                                     let mut supported = true;
                                     let mut new_predicate = predicate.clone();
                                     new_predicate.visit_pre(|e| {
-                                        if let MirScalarExpr::Column(c) = e {
+                                        if let MirScalarExpr::Column(c, _) = e {
                                             if *c >= group_key.len() {
                                                 supported = false;
                                             }
@@ -316,12 +316,12 @@ impl PredicatePushdown {
                                     });
                                     if supported {
                                         new_predicate.visit_mut_post(&mut |e| {
-                                            if let MirScalarExpr::Column(i) = e {
+                                            if let MirScalarExpr::Column(i, _) = e {
                                                 *e = group_key[*i].clone();
                                             }
                                         })?;
                                         push_down.push(new_predicate);
-                                    } else if let MirScalarExpr::Column(col) = &predicate {
+                                    } else if let MirScalarExpr::Column(col, _) = &predicate {
                                         if *col == group_key.len()
                                             && aggregates.len() == 1
                                             && aggregates[0].func == AggregateFunc::Any
@@ -684,13 +684,14 @@ impl PredicatePushdown {
                                     .iter()
                                     .enumerate()
                                     .filter_map(|(pos, expr)| {
-                                        if let MirScalarExpr::Column(col_pos) = &expr {
+                                        if let MirScalarExpr::Column(col_pos, _) = &expr {
                                             let local_col =
                                                 input_mapper.map_column_to_local(*col_pos);
                                             if input == local_col.1 {
+                                                // TODO(mgree) !!! is it safe to propagate the name here?
                                                 return Some((
                                                     Some(pos),
-                                                    MirScalarExpr::Column(local_col.0),
+                                                    MirScalarExpr::column(local_col.0),
                                                 ));
                                             } else {
                                                 return None;
@@ -967,7 +968,7 @@ impl PredicatePushdown {
 
             // Seed with `map_exprs` support in `expr`.
             expr.visit_pre(|e| {
-                if let MirScalarExpr::Column(c) = e {
+                if let MirScalarExpr::Column(c, _) = e {
                     if *c >= input_arity {
                         support.insert(*c);
                     }
@@ -983,7 +984,7 @@ impl PredicatePushdown {
                 // Drain the `buffer` and update `support` and `workset`.
                 for c in buffer.drain(..) {
                     map_exprs[c - input_arity].visit_pre(|e| {
-                        if let MirScalarExpr::Column(c) = e {
+                        if let MirScalarExpr::Column(c, _) = e {
                             if *c >= input_arity {
                                 if support.insert(*c) {
                                     workset.push(*c);
@@ -1005,7 +1006,7 @@ impl PredicatePushdown {
             let mut new_size = 0;
             new_expr.visit_mut_post(&mut |expr| {
                 new_size += 1;
-                if let MirScalarExpr::Column(c) = expr {
+                if let MirScalarExpr::Column(c, _) = expr {
                     if *c >= input_arity && new_size <= size_limit {
                         // (inlined[c] is safe, because we proceed in column order, and we break out
                         // of the loop when we stop inserting into memo.)
@@ -1031,7 +1032,7 @@ impl PredicatePushdown {
             let mut new_size = 0;
             new_expr.visit_mut_post(&mut |expr| {
                 new_size += 1;
-                if let MirScalarExpr::Column(c) = expr {
+                if let MirScalarExpr::Column(c, _) = expr {
                     if *c >= input_arity && new_size <= size_limit {
                         // (inlined[c] is safe because of the outer if condition.)
                         let (m_expr, m_size): &(MirScalarExpr, _) = &inlined[c];

@@ -17,12 +17,14 @@ use itertools::Itertools;
 use mz_adapter_types::compaction::CompactionWindow;
 use mz_adapter_types::connection::ConnectionId;
 use mz_adapter_types::dyncfgs::{
-    ENABLE_0DT_DEPLOYMENT, ENABLE_0DT_DEPLOYMENT_PANIC_AFTER_TIMEOUT, WITH_0DT_DEPLOYMENT_MAX_WAIT,
+    ENABLE_0DT_DEPLOYMENT, ENABLE_0DT_DEPLOYMENT_PANIC_AFTER_TIMEOUT,
+    WITH_0DT_DEPLOYMENT_DDL_CHECK_INTERVAL, WITH_0DT_DEPLOYMENT_MAX_WAIT,
 };
 use mz_audit_log::{
     CreateOrDropClusterReplicaReasonV1, EventDetails, EventType, IdFullNameV1, IdNameV1,
     ObjectType, SchedulingDecisionsWithReasonsV2, VersionedEvent, VersionedStorageUsage,
 };
+use mz_catalog::SYSTEM_CONN_ID;
 use mz_catalog::builtin::BuiltinLog;
 use mz_catalog::durable::{NetworkPolicy, Transaction};
 use mz_catalog::memory::error::{AmbiguousRename, Error, ErrorKind};
@@ -30,16 +32,17 @@ use mz_catalog::memory::objects::{
     CatalogItem, ClusterConfig, DataSourceDesc, SourceReferences, StateDiff, StateUpdate,
     StateUpdateKind, TemporaryItem,
 };
-use mz_catalog::SYSTEM_CONN_ID;
 use mz_controller::clusters::{ManagedReplicaLocation, ReplicaConfig, ReplicaLocation};
 use mz_controller_types::{ClusterId, ReplicaId};
 use mz_ore::collections::HashSet;
 use mz_ore::instrument;
 use mz_ore::now::EpochMillis;
-use mz_repr::adt::mz_acl_item::{merge_mz_acl_items, AclMode, MzAclItem, PrivilegeMap};
+use mz_persist_types::ShardId;
+use mz_repr::adt::mz_acl_item::{AclMode, MzAclItem, PrivilegeMap, merge_mz_acl_items};
 use mz_repr::network_policy_id::NetworkPolicyId;
 use mz_repr::role_id::RoleId;
-use mz_repr::{strconv, CatalogItemId, GlobalId};
+use mz_repr::{CatalogItemId, ColumnName, ColumnType, Diff, GlobalId, strconv};
+use mz_sql::ast::RawDataType;
 use mz_sql::catalog::{
     CatalogDatabase, CatalogError as SqlCatalogError, CatalogItem as SqlCatalogItem, CatalogRole,
     CatalogSchema, DefaultPrivilegeAclItem, DefaultPrivilegeObject, RoleAttributes, RoleMembership,
@@ -53,21 +56,21 @@ use mz_sql::plan::{NetworkPolicyRule, PlanError};
 use mz_sql::session::user::{MZ_SUPPORT_ROLE_ID, MZ_SYSTEM_ROLE_ID};
 use mz_sql::session::vars::OwnedVarInput;
 use mz_sql::session::vars::{Value as VarValue, VarInput};
-use mz_sql::{rbac, DEFAULT_SCHEMA};
+use mz_sql::{DEFAULT_SCHEMA, rbac};
 use mz_sql_parser::ast::{QualifiedReplica, Value};
 use mz_storage_client::storage_collections::StorageCollections;
 use tracing::{info, trace};
 
+use crate::AdapterError;
 use crate::catalog::{
+    BuiltinTableUpdate, Catalog, CatalogState, UpdatePrivilegeVariant,
     catalog_type_to_audit_object_type, comment_id_to_audit_object_type, is_reserved_name,
     is_reserved_role_name, object_type_to_audit_object_type,
-    system_object_type_to_audit_object_type, BuiltinTableUpdate, Catalog, CatalogState,
-    UpdatePrivilegeVariant,
+    system_object_type_to_audit_object_type,
 };
-use crate::coord::cluster_scheduling::SchedulingDecision;
 use crate::coord::ConnMeta;
+use crate::coord::cluster_scheduling::SchedulingDecision;
 use crate::util::ResultExt;
-use crate::AdapterError;
 
 #[derive(Debug, Clone)]
 pub enum Op {
@@ -87,6 +90,13 @@ pub enum Op {
         rules: Vec<NetworkPolicyRule>,
         name: String,
         owner_id: RoleId,
+    },
+    AlterAddColumn {
+        id: CatalogItemId,
+        new_global_id: GlobalId,
+        name: ColumnName,
+        typ: ColumnType,
+        sql: RawDataType,
     },
     CreateDatabase {
         name: String,
@@ -452,7 +462,7 @@ impl Catalog {
             self.state().pack_optimizer_notices(
                 &mut builtin_table_updates,
                 dropped_notices.iter(),
-                -1,
+                Diff::MINUS_ONE,
             );
         }
 
@@ -495,6 +505,7 @@ impl Catalog {
 
         let mut storage_collections_to_create = BTreeSet::new();
         let mut storage_collections_to_drop = BTreeSet::new();
+        let mut storage_collections_to_register = BTreeMap::new();
 
         for op in ops {
             let (weird_builtin_table_update, temporary_item_updates) = Self::transact_op(
@@ -507,6 +518,7 @@ impl Catalog {
                 state,
                 &mut storage_collections_to_create,
                 &mut storage_collections_to_drop,
+                &mut storage_collections_to_register,
             )
             .await?;
 
@@ -551,6 +563,7 @@ impl Catalog {
                     tx,
                     storage_collections_to_create,
                     storage_collections_to_drop,
+                    storage_collections_to_register,
                 )
                 .await?;
             }
@@ -588,6 +601,7 @@ impl Catalog {
         state: &CatalogState,
         storage_collections_to_create: &mut BTreeSet<GlobalId>,
         storage_collections_to_drop: &mut BTreeSet<GlobalId>,
+        storage_collections_to_register: &mut BTreeMap<GlobalId, ShardId>,
     ) -> Result<(Option<BuiltinTableUpdate>, Vec<(TemporaryItem, StateDiff)>), AdapterError> {
         let mut weird_builtin_table_update = None;
         let mut temporary_item_updates = Vec::new();
@@ -701,6 +715,30 @@ impl Catalog {
                 )?;
 
                 info!("update network policy {name} ({id})");
+            }
+            Op::AlterAddColumn {
+                id,
+                new_global_id,
+                name,
+                typ,
+                sql,
+            } => {
+                let mut new_entry = state.get_entry(&id).clone();
+                let version = new_entry.item.add_column(name, typ, sql)?;
+                // All versions of a table share the same shard, so it shouldn't matter what
+                // GlobalId we use here.
+                let shard_id = state
+                    .storage_metadata()
+                    .get_collection_shard(new_entry.latest_global_id())?;
+
+                // TODO(alter_table): Support adding columns to sources.
+                let CatalogItem::Table(table) = &mut new_entry.item else {
+                    return Err(AdapterError::Unsupported("adding columns to non-Table"));
+                };
+                table.collections.insert(version, new_global_id);
+
+                tx.update_item(id, new_entry.into())?;
+                storage_collections_to_register.insert(new_global_id, shard_id);
             }
             Op::CreateDatabase { name, owner_id } => {
                 let database_owner_privileges = vec![rbac::owner_privilege(
@@ -1020,8 +1058,10 @@ impl Catalog {
                     CatalogItem::ContinualTask(ct) => {
                         storage_collections_to_create.insert(ct.global_id());
                     }
+                    CatalogItem::Sink(sink) => {
+                        storage_collections_to_create.insert(sink.global_id());
+                    }
                     CatalogItem::Log(_)
-                    | CatalogItem::Sink(_)
                     | CatalogItem::View(_)
                     | CatalogItem::Index(_)
                     | CatalogItem::Type(_)
@@ -2231,6 +2271,13 @@ impl Catalog {
                         Duration::parse(VarInput::Flat(&parsed_value))
                             .expect("parsing succeeded above");
                     tx.set_0dt_deployment_max_wait(with_0dt_deployment_max_wait)?;
+                } else if name == WITH_0DT_DEPLOYMENT_DDL_CHECK_INTERVAL.name() {
+                    let with_0dt_deployment_ddl_check_interval =
+                        Duration::parse(VarInput::Flat(&parsed_value))
+                            .expect("parsing succeeded above");
+                    tx.set_0dt_deployment_ddl_check_interval(
+                        with_0dt_deployment_ddl_check_interval,
+                    )?;
                 } else if name == ENABLE_0DT_DEPLOYMENT_PANIC_AFTER_TIMEOUT.name() {
                     let panic_after_timeout =
                         strconv::parse_bool(&parsed_value).expect("parsing succeeded above");
@@ -2260,6 +2307,8 @@ impl Catalog {
                     tx.reset_enable_0dt_deployment()?;
                 } else if name == WITH_0DT_DEPLOYMENT_MAX_WAIT.name() {
                     tx.reset_0dt_deployment_max_wait()?;
+                } else if name == WITH_0DT_DEPLOYMENT_DDL_CHECK_INTERVAL.name() {
+                    tx.reset_0dt_deployment_ddl_check_interval()?;
                 }
 
                 CatalogState::add_to_audit_log(
@@ -2277,6 +2326,7 @@ impl Catalog {
                 tx.clear_system_configs();
                 tx.reset_enable_0dt_deployment()?;
                 tx.reset_0dt_deployment_max_wait()?;
+                tx.reset_0dt_deployment_ddl_check_interval()?;
 
                 CatalogState::add_to_audit_log(
                     &state.system_configuration,
@@ -2297,7 +2347,7 @@ impl Catalog {
                 let id = tx.allocate_storage_usage_ids()?;
                 let metric =
                     VersionedStorageUsage::new(id, object_id, size_bytes, collection_timestamp);
-                let builtin_table_update = state.pack_storage_usage_update(metric, 1);
+                let builtin_table_update = state.pack_storage_usage_update(metric, Diff::ONE);
                 let builtin_table_update = state.resolve_builtin_table_update(builtin_table_update);
                 weird_builtin_table_update = Some(builtin_table_update);
             }

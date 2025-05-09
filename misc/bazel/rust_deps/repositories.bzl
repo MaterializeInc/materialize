@@ -25,8 +25,8 @@ load("@rules_rust//crate_universe:defs.bzl", "crate", "crates_repository")
 def rust_repositories():
     """Download third-party Rust repositories and their dependencies."""
 
-    CXX_VERSION = "1.0.109"
-    CXXBRIDGE_CMD_INTEGRITY = "sha256-2TYASH1CnIvwE+6WcZr05i6AmsV/xMrCTxfPWORSYAk="
+    CXX_VERSION = "1.0.153"
+    CXXBRIDGE_CMD_INTEGRITY = "sha256-fLxBkzdnlV0EwqkBUYBgKbk99f2LaCuiKpZ0MzR0gKk="
     maybe(
         http_archive,
         name = "cxxbridge-cmd",
@@ -51,6 +51,16 @@ def rust_repositories():
             "x86_64-apple-darwin",
             "wasm32-unknown-unknown",
         ],
+        generator_sha256s = {
+            "aarch64-apple-darwin": "c38c9c0efc11fcf9c32b9e0f4f4849df7c823f207c7f5ba5f6ab1e0e2167693d",
+            "aarch64-unknown-linux-gnu": "5bdc9a10ec5f17f5140a81ce7cb0c0ce6e82d4d862d3ce3a301ea23f72f20630",
+            "x86_64-unknown-linux-gnu": "abcd8212d64ea4c0f5e856af663c05ebeb2800a02c251f6eb62061f4e8ca1735",
+        },
+        generator_urls = {
+            "aarch64-apple-darwin": "https://github.com/MaterializeInc/rules_rust/releases/download/mz-0.59.3/cargo-bazel-aarch64-apple-darwin",
+            "aarch64-unknown-linux-gnu": "https://github.com/MaterializeInc/rules_rust/releases/download/mz-0.59.3/cargo-bazel-aarch64-unknown-linux-gnu",
+            "x86_64-unknown-linux-gnu": "https://github.com/MaterializeInc/rules_rust/releases/download/mz-0.59.3/cargo-bazel-x86_64-unknown-linux-gnu",
+        },
         isolated = False,
         # Only used if developing rules_rust.
         # generator = "@cargo_bazel_bootstrap//:cargo-bazel",

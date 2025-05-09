@@ -57,13 +57,15 @@ use std::io;
 use std::rc::Rc;
 
 use differential_dataflow::AsCollection;
+use differential_dataflow::containers::TimelyStack;
 use itertools::Itertools;
+use mz_mysql_util::quote_identifier;
 use mz_ore::cast::CastFrom;
 use mz_repr::Diff;
 use mz_repr::GlobalId;
 use mz_storage_types::errors::{DataflowError, SourceError};
 use mz_storage_types::sources::SourceExport;
-use mz_timely_util::containers::stack::{AccountedStackBuilder, StackWrapper};
+use mz_timely_util::containers::stack::AccountedStackBuilder;
 use serde::{Deserialize, Serialize};
 use timely::container::CapacityContainerBuilder;
 use timely::dataflow::channels::pushers::Tee;
@@ -74,12 +76,12 @@ use timely::progress::Antichain;
 use uuid::Uuid;
 
 use mz_mysql_util::{
-    ensure_full_row_binlog_format, ensure_gtid_consistency, ensure_replication_commit_order,
-    MySqlError, MySqlTableDesc,
+    MySqlError, MySqlTableDesc, ensure_full_row_binlog_format, ensure_gtid_consistency,
+    ensure_replication_commit_order,
 };
 use mz_ore::error::ErrorExt;
 use mz_storage_types::errors::SourceErrorDetails;
-use mz_storage_types::sources::mysql::{gtid_set_frontier, GtidPartition, GtidState};
+use mz_storage_types::sources::mysql::{GtidPartition, GtidState, gtid_set_frontier};
 use mz_storage_types::sources::{MySqlSourceConnection, SourceExportDetails, SourceTimestamp};
 use mz_timely_util::builder_async::{AsyncOutputHandle, PressOnDropButton};
 use mz_timely_util::order::Extrema;
@@ -104,12 +106,12 @@ impl SourceRender for MySqlSourceConnection {
     fn render<G: Scope<Timestamp = GtidPartition>>(
         self,
         scope: &mut G,
-        config: RawSourceCreationConfig,
+        config: &RawSourceCreationConfig,
         resume_uppers: impl futures::Stream<Item = Antichain<GtidPartition>> + 'static,
         _start_signal: impl std::future::Future<Output = ()> + 'static,
     ) -> (
         BTreeMap<GlobalId, StackedCollection<G, Result<SourceMessage, DataflowError>>>,
-        Option<Stream<G, Infallible>>,
+        Stream<G, Infallible>,
         Stream<G, HealthStatusMessage>,
         Stream<G, ProgressStatisticsUpdate>,
         Option<Stream<G, Probe<GtidPartition>>>,
@@ -231,7 +233,7 @@ impl SourceRender for MySqlSourceConnection {
 
         (
             data_collections,
-            Some(uppers),
+            uppers,
             health,
             stats_stream,
             Some(probe_stream),
@@ -338,7 +340,12 @@ impl MySqlTableName {
 
 impl fmt::Display for MySqlTableName {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "`{}`.`{}`", self.0, self.1)
+        write!(
+            f,
+            "{}.{}",
+            quote_identifier(&self.0),
+            quote_identifier(&self.1)
+        )
     }
 }
 
@@ -359,8 +366,8 @@ pub(crate) struct RewindRequest {
 
 type StackedAsyncOutputHandle<T, D> = AsyncOutputHandle<
     T,
-    AccountedStackBuilder<CapacityContainerBuilder<StackWrapper<(D, T, Diff)>>>,
-    Tee<T, StackWrapper<(D, T, Diff)>>,
+    AccountedStackBuilder<CapacityContainerBuilder<TimelyStack<(D, T, Diff)>>>,
+    Tee<T, TimelyStack<(D, T, Diff)>>,
 >;
 
 async fn return_definite_error(
@@ -382,7 +389,7 @@ async fn return_definite_error(
         let update = (
             (*output_index, Err(err.clone().into())),
             GtidPartition::new_range(Uuid::minimum(), Uuid::maximum(), GtidState::MAX),
-            1,
+            Diff::ONE,
         );
         data_handle.give_fueled(&data_cap_set[0], update).await;
     }

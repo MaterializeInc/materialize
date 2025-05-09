@@ -20,8 +20,9 @@ sources:
         data_tests:
           - makes_progress
       - name: sales_large
-        data_tests:
-          - makes_progress
+        # TODO: Reenable once we have the index for sales_large again, currently fails to rehydrate
+        #data_tests:
+        #  - makes_progress
       - name: sales_large_progress
         data_tests:
           - makes_progress

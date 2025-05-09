@@ -2136,3 +2136,56 @@ query T
 SELECT '{}'::JSONB #> '{-9223372036854775808}';
 ----
 NULL
+
+## Regression test for https://github.com/MaterializeInc/database-issues/issues/9182
+
+statement ok
+CREATE TABLE t3(x int, y text, z bool);
+
+# Give inputs with different types to `to_jsonb` in different branches. In this case, the optimization where we pull out
+# `to_jsonb` from the CASE should not happen.
+
+query T multiline
+EXPLAIN
+SELECT
+  CASE x
+    WHEN 1 THEN to_jsonb(x)
+    WHEN 2 THEN to_jsonb(y)
+    WHEN 3 THEN to_jsonb(z)
+    ELSE to_jsonb(x+x)
+  END
+FROM t3;
+----
+Explained Query:
+  Project (#3)
+    Map (case when (#0{x} = 1) then jsonbable_to_jsonb(integer_to_numeric(#0{x})) else case when (#0{x} = 2) then jsonbable_to_jsonb(#1{y}) else case when (#0{x} = 3) then jsonbable_to_jsonb(#2{z}) else jsonbable_to_jsonb(integer_to_numeric((#0{x} + #0{x}))) end end end)
+      ReadStorage materialize.public.t3
+
+Source materialize.public.t3
+
+Target cluster: quickstart
+
+EOF
+
+# Check that we are still doing the optimization when the types do match.
+query T multiline
+EXPLAIN
+SELECT
+  CASE x
+    WHEN 1 THEN to_jsonb(1*x)
+    WHEN 2 THEN to_jsonb(2*x)
+    WHEN 3 THEN to_jsonb(3*x)
+    ELSE to_jsonb(x+x)
+  END
+FROM t3;
+----
+Explained Query:
+  Project (#3)
+    Map (jsonbable_to_jsonb(integer_to_numeric(case when (#0{x} = 1) then (1 * #0{x}) else case when (#0{x} = 2) then (2 * #0{x}) else case when (#0{x} = 3) then (3 * #0{x}) else (#0{x} + #0{x}) end end end)))
+      ReadStorage materialize.public.t3
+
+Source materialize.public.t3
+
+Target cluster: quickstart
+
+EOF

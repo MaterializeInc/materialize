@@ -15,8 +15,11 @@ use std::{
 };
 
 use http::HeaderValue;
-use k8s_openapi::apimachinery::pkg::apis::meta::v1::{Condition, Time};
-use kube::{api::PostParams, runtime::controller::Action, Api, Client, Resource, ResourceExt};
+use k8s_openapi::{
+    api::core::v1::{Affinity, Toleration},
+    apimachinery::pkg::apis::meta::v1::{Condition, Time},
+};
+use kube::{Api, Client, Resource, ResourceExt, api::PostParams, runtime::controller::Action};
 use serde::Deserialize;
 use tracing::{debug, trace};
 
@@ -76,17 +79,35 @@ pub struct MaterializeControllerArgs {
     enable_security_context: bool,
     #[clap(long)]
     enable_internal_statement_logging: bool,
+    #[clap(long, default_value = "false")]
+    disable_statement_logging: bool,
 
     #[clap(long)]
     orchestratord_pod_selector_labels: Vec<KeyValueArg<String, String>>,
     #[clap(long)]
     environmentd_node_selector: Vec<KeyValueArg<String, String>>,
+    #[clap(long, value_parser = parse_affinity)]
+    environmentd_affinity: Option<Affinity>,
+    #[clap(long = "environmentd-toleration", value_parser = parse_tolerations)]
+    environmentd_tolerations: Option<Vec<Toleration>>,
     #[clap(long)]
     clusterd_node_selector: Vec<KeyValueArg<String, String>>,
+    #[clap(long, value_parser = parse_affinity)]
+    clusterd_affinity: Option<Affinity>,
+    #[clap(long = "clusterd-toleration", value_parser = parse_tolerations)]
+    clusterd_tolerations: Option<Vec<Toleration>>,
     #[clap(long)]
     balancerd_node_selector: Vec<KeyValueArg<String, String>>,
+    #[clap(long, value_parser = parse_affinity)]
+    balancerd_affinity: Option<Affinity>,
+    #[clap(long = "balancerd-toleration", value_parser = parse_tolerations)]
+    balancerd_tolerations: Option<Vec<Toleration>>,
     #[clap(long)]
     console_node_selector: Vec<KeyValueArg<String, String>>,
+    #[clap(long, value_parser = parse_affinity)]
+    console_affinity: Option<Affinity>,
+    #[clap(long = "console-toleration", value_parser = parse_tolerations)]
+    console_tolerations: Option<Vec<Toleration>>,
     #[clap(long, default_value = "always", value_enum)]
     image_pull_policy: KubernetesImagePullPolicy,
     #[clap(flatten)]
@@ -106,6 +127,14 @@ pub struct MaterializeControllerArgs {
     bootstrap_builtin_catalog_server_cluster_replica_size: Option<String>,
     #[clap(long)]
     bootstrap_builtin_analytics_cluster_replica_size: Option<String>,
+    #[clap(long)]
+    bootstrap_builtin_system_cluster_replication_factor: Option<u32>,
+    #[clap(long)]
+    bootstrap_builtin_probe_cluster_replication_factor: Option<u32>,
+    #[clap(long)]
+    bootstrap_builtin_support_cluster_replication_factor: Option<u32>,
+    #[clap(long)]
+    bootstrap_builtin_analytics_cluster_replication_factor: Option<u32>,
 
     #[clap(
         long,
@@ -140,6 +169,17 @@ pub struct MaterializeControllerArgs {
 
     #[clap(long, default_value = "{}")]
     default_certificate_specs: DefaultCertificateSpecs,
+
+    #[clap(long, hide = true)]
+    disable_license_key_checks: bool,
+}
+
+fn parse_affinity(s: &str) -> anyhow::Result<Affinity> {
+    Ok(serde_json::from_str(s)?)
+}
+
+fn parse_tolerations(s: &str) -> anyhow::Result<Toleration> {
+    Ok(serde_json::from_str(s)?)
 }
 
 #[derive(Clone, Deserialize, Default)]
@@ -382,7 +422,13 @@ impl k8s_controller::Context for Context {
 
                 trace!("applying environment resources");
                 match resources
-                    .apply(&client, &self.config, increment_generation, &mz.namespace())
+                    .apply(
+                        &client,
+                        &self.config,
+                        increment_generation,
+                        mz.should_force_promote(),
+                        &mz.namespace(),
+                    )
                     .await
                 {
                     Ok(Some(action)) => {

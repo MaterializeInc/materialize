@@ -11,9 +11,11 @@ Tests the mz command line tool against a real Cloud instance
 """
 
 import argparse
+import json
 import os
 import signal
 import subprocess
+import threading
 import time
 from collections.abc import Sequence
 from pathlib import Path
@@ -29,25 +31,88 @@ from materialize.mzcompose.composition import (
     WorkflowArgumentParser,
 )
 from materialize.mzcompose.services.testdrive import Testdrive
+from materialize.version_list import get_lts_versions
 
 SERVICES = [
-    Testdrive(),  # Overridden below
+    Testdrive(),  # overridden below
+]
+
+TD_CMD = [
+    "--var=default-replica-size=25cc",
+    "--var=default-storage-size=25cc",
+]
+
+COMPATIBLE_TESTDRIVE_FILES = [
+    "array.td",
+    "cancel-subscribe.td",
+    "char-varchar-distinct.td",
+    "char-varchar-joins.td",
+    "char-varchar-multibyte.td",
+    "constants.td",
+    "coordinator-multiplicities.td",
+    "create-views.td",
+    "date_func.td",
+    "decimal-distinct.td",
+    "decimal-join.td",
+    "decimal-order.td",
+    "decimal-overflow.td",
+    "decimal-sum.td",
+    "decimal-zero.td",
+    "delete-using.td",
+    "drop.td",
+    "duplicate-table-names.td",
+    "failpoints.td",
+    "fetch-tail-as-of.td",
+    "fetch-tail-large-diff.td",
+    "fetch-tail-limit-timeout.td",
+    "fetch-tail-timestamp-zero.td",
+    "fetch-timeout.td",
+    "float_sum.td",
+    "get-started.td",
+    "github-11563.td",
+    "github-1947.td",
+    "github-3281.td",
+    "github-5502.td",
+    "github-5774.td",
+    "github-5873.td",
+    "github-5983.td",
+    "github-5984.td",
+    "github-6335.td",
+    "github-6744.td",
+    "github-6950.td",
+    "github-7171.td",
+    "github-7191.td",
+    "github-795.td",
+    "joins.td",
+    "jsonb.td",
+    "list.td",
+    # Flaky on Azure: https://buildkite.com/materialize/nightly/builds/11906#019661aa-2f41-43e1-b08f-6195c66a7ab9
+    # "load-generator-key-value.td",
+    "logging.td",
+    "map.td",
+    "multijoins.td",
+    "numeric-sum.td",
+    "numeric.td",
+    "oid.td",
+    "orms.td",
+    "pg-catalog.td",
+    "quickstart.td",
+    "runtime-errors.td",
+    "search_path.td",
+    "self-test.td",
+    "string.td",
+    "subquery-scalar-errors.td",
+    "system-functions.td",
+    "test-skip-if.td",
+    "tpch.td",
+    "type_char_quoted.td",
+    "version.td",
+    # Hangs on GCP in check-shard-tombstone
+    # "webhook.td",
 ]
 
 
-def run_ignore_error(
-    args: Sequence[Path | str],
-    cwd: Path | None = None,
-    stdin: None | int | IO[bytes] | bytes = None,
-):
-    try:
-        spawn.runv(args, cwd=cwd, stdin=stdin)
-    except subprocess.CalledProcessError:
-        pass
-
-
-def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
-    """To run locally use `aws sso login` first."""
+def add_arguments_temporary_test(parser: WorkflowArgumentParser) -> None:
     parser.add_argument(
         "--setup",
         default=True,
@@ -61,6 +126,24 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         help="Destroy the region at the end of the workflow.",
     )
     parser.add_argument(
+        "--test",
+        default=True,
+        action=argparse.BooleanOptionalAction,
+        help="Run the actual test part",
+    )
+    parser.add_argument(
+        "--run-testdrive-files",
+        default=True,
+        action=argparse.BooleanOptionalAction,
+        help="Run testdrive files",
+    )
+    parser.add_argument(
+        "--run-mz-debug",
+        default=True,
+        action=argparse.BooleanOptionalAction,
+        help="Run mz-debug",
+    )
+    parser.add_argument(
         "--tag",
         type=str,
         help="Custom version tag to use",
@@ -68,195 +151,116 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     parser.add_argument(
         "files",
         nargs="*",
-        default=[
-            "array.td",
-            "cancel-subscribe.td",
-            "char-varchar-distinct.td",
-            "char-varchar-joins.td",
-            "char-varchar-multibyte.td",
-            "constants.td",
-            "coordinator-multiplicities.td",
-            "create-views.td",
-            "date_func.td",
-            "decimal-distinct.td",
-            "decimal-join.td",
-            "decimal-order.td",
-            "decimal-overflow.td",
-            "decimal-sum.td",
-            "decimal-zero.td",
-            "delete-using.td",
-            "drop.td",
-            "duplicate-table-names.td",
-            "failpoints.td",
-            "fetch-tail-as-of.td",
-            "fetch-tail-large-diff.td",
-            "fetch-tail-limit-timeout.td",
-            "fetch-tail-timestamp-zero.td",
-            "fetch-timeout.td",
-            "float_sum.td",
-            "get-started.td",
-            "github-11563.td",
-            "github-1947.td",
-            "github-3281.td",
-            "github-5502.td",
-            "github-5774.td",
-            "github-5873.td",
-            "github-5983.td",
-            "github-5984.td",
-            "github-6335.td",
-            "github-6744.td",
-            "github-6950.td",
-            "github-7171.td",
-            "github-7191.td",
-            "github-795.td",
-            "joins.td",
-            "jsonb.td",
-            "list.td",
-            "logging.td",
-            "map.td",
-            "multijoins.td",
-            "numeric-sum.td",
-            "numeric.td",
-            "oid.td",
-            "orms.td",
-            "pg-catalog.td",
-            "runtime-errors.td",
-            "search_path.td",
-            "self-test.td",
-            "string.td",
-            "subquery-scalar-errors.td",
-            "system-functions.td",
-            "test-skip-if.td",
-            "type_char_quoted.td",
-            "version.td",
-        ],
+        default=COMPATIBLE_TESTDRIVE_FILES,
         help="run against the specified files",
     )
 
-    args = parser.parse_args()
 
-    tag = args.tag or f"v{ci_util.get_mz_version()}--pr.g{git.rev_parse('HEAD')}"
-    materialize_environment = None
-    environmentd_port_forward_process = None
-    balancerd_port_forward_process = None
-
-    path = MZ_ROOT / "test" / "terraform" / "aws"
+def run_ignore_error(
+    args: Sequence[Path | str],
+    cwd: Path | None = None,
+    stdin: None | int | IO[bytes] | bytes = None,
+    env: dict[str, str] | None = None,
+):
     try:
-        if args.setup:
-            print("--- Setup")
-            spawn.runv(["terraform", "init"], cwd=path)
-            spawn.runv(["terraform", "validate"], cwd=path)
-            spawn.runv(["terraform", "plan"], cwd=path)
-            spawn.runv(["terraform", "apply", "-auto-approve"], cwd=path)
+        spawn.runv(args, cwd=cwd, stdin=stdin, env=env)
+    except subprocess.CalledProcessError:
+        pass
 
-            metadata_backend_url = spawn.capture(
-                ["terraform", "output", "-raw", "metadata_backend_url"], cwd=path
-            ).strip()
-            persist_backend_url = spawn.capture(
-                ["terraform", "output", "-raw", "persist_backend_url"], cwd=path
-            ).strip()
-            materialize_s3_role_arn = spawn.capture(
-                ["terraform", "output", "-raw", "materialize_s3_role_arn"], cwd=path
-            ).strip()
 
-            spawn.runv(
-                [
-                    "aws",
-                    "eks",
-                    "update-kubeconfig",
-                    "--name",
-                    "terraform-aws-test-cluster",
-                    "--region",
-                    "us-east-1",
-                ]
-            )
+def testdrive(no_reset: bool) -> Testdrive:
+    return Testdrive(
+        materialize_url="postgres://materialize@127.0.0.1:6875/materialize",
+        materialize_url_internal="postgres://mz_system:materialize@127.0.0.1:6877/materialize",
+        materialize_use_https=False,
+        no_consistency_checks=True,
+        set_persist_urls=False,
+        network_mode="host",
+        volume_workdir="../testdrive:/workdir",
+        no_reset=no_reset,
+        # For full testdrive support we'll need:
+        # kafka_url=...
+        # schema_registry_url=...
+        # aws_endpoint=...
+    )
 
-            spawn.runv(["kubectl", "get", "nodes"])
-            # Not working yet?
-            # spawn.runv(
-            #     ["helm", "repo", "add", "openebs", "https://openebs.github.io/openebs"]
-            # )
-            # spawn.runv(["helm", "repo", "update"])
-            # spawn.runv(
-            #     [
-            #         "helm",
-            #         "install",
-            #         "openebs",
-            #         "--namespace",
-            #         "openebs",
-            #         "openebs/openebs",
-            #         "--set",
-            #         "engines.replicated.mayastor.enabled=false",
-            #         "--create-namespace",
-            #     ]
-            # )
-            # spawn.runv(
-            #     ["kubectl", "get", "pods", "-n", "openebs", "-l", "role=openebs-lvm"]
-            # )
 
-            aws_account_id = spawn.capture(
-                [
-                    "aws",
-                    "sts",
-                    "get-caller-identity",
-                    "--query",
-                    "Account",
-                    "--output",
-                    "text",
-                ]
-            ).strip()
-            public_ip_address = spawn.capture(
-                ["curl", "http://checkip.amazonaws.com"]
-            ).strip()
+def get_tag(tag: str | None) -> str:
+    return tag or f"v{ci_util.get_mz_version()}--pr.g{git.rev_parse('HEAD')}"
 
-            materialize_values = {
-                "operator": {
-                    "image": {"tag": tag},
-                    "cloudProvider": {
-                        "type": "aws",
-                        "region": "us-east-1",
-                        "providers": {
-                            "aws": {
-                                "enabled": True,
-                                "accountID": aws_account_id,
-                                "iam": {
-                                    "roles": {"environment": materialize_s3_role_arn}
-                                },
-                            }
-                        },
-                    },
-                },
-                "rbac": {"enabled": False},
-                "networkPolicies": {
-                    "enabled": True,
-                    "egress": {"enabled": True, "cidrs": ["0.0.0.0/0"]},
-                    "ingress": {"enabled": True, "cidrs": [f"{public_ip_address}/24"]},
-                    "internal": {"enabled": True},
-                },
-            }
 
-            spawn.runv(
-                [
-                    "helm",
-                    "install",
-                    "materialize-operator",
-                    "misc/helm-charts/operator",
-                    "--namespace",
-                    "materialize",
-                    "--create-namespace",
-                    "-f",
-                    "-",
-                ],
-                cwd=MZ_ROOT,
-                stdin=yaml.dump(materialize_values).encode(),
-            )
-            for i in range(60):
-                try:
-                    spawn.runv(
-                        ["kubectl", "get", "pods", "-n", "materialize"],
-                        cwd=path,
-                    )
-                    status = spawn.capture(
+def build_mz_debug_async(env: dict[str, str] | None = None) -> threading.Thread:
+    def run():
+        spawn.capture(
+            [
+                "cargo",
+                "build",
+                "--bin",
+                "mz-debug",
+            ],
+            cwd=MZ_ROOT,
+            stderr=subprocess.STDOUT,
+            env=env,
+        )
+
+    thread = threading.Thread(target=run)
+    thread.start()
+    return thread
+
+
+def run_mz_debug(env: dict[str, str] | None = None) -> None:
+    print("--- Running mz-debug")
+    try:
+        # mz-debug (and its compilation) is rather noisy, so ignore the output
+        spawn.capture(
+            [
+                "cargo",
+                "run",
+                "--bin",
+                "mz-debug",
+                "--",
+                "self-managed",
+                "--k8s-namespace",
+                "materialize-environment",
+                "--k8s-namespace",
+                "materialize",
+            ],
+            cwd=MZ_ROOT,
+            stderr=subprocess.STDOUT,
+            env=env,
+        )
+    except:
+        pass
+
+
+class State:
+    materialize_environment: dict | None
+    path: Path
+    environmentd_port_forward_process: subprocess.Popen[bytes] | None
+    balancerd_port_forward_process: subprocess.Popen[bytes] | None
+
+    def __init__(self, path: Path):
+        self.materialize_environment = None
+        self.path = path
+        self.environmentd_port_forward_process = None
+        self.balancerd_port_forward_process = None
+
+    def kubectl_setup(
+        self, tag: str, metadata_backend_url: str, persist_backend_url: str
+    ) -> None:
+        self.metadata_backend_url = metadata_backend_url
+        self.persist_backend_url = persist_backend_url
+        spawn.runv(["kubectl", "get", "nodes"])
+
+        for i in range(60):
+            try:
+                spawn.runv(
+                    ["kubectl", "get", "pods", "-n", "materialize"],
+                    cwd=self.path,
+                )
+                print("Logging all pods in materialize:")
+                pod_names = (
+                    spawn.capture(
                         [
                             "kubectl",
                             "get",
@@ -264,145 +268,266 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
                             "-n",
                             "materialize",
                             "-o",
-                            "jsonpath={.items[0].status.phase}",
+                            "name",
                         ],
-                        cwd=path,
+                        cwd=self.path,
                     )
-                    if status == "Running":
-                        break
-                except subprocess.CalledProcessError:
-                    time.sleep(1)
-            else:
-                raise ValueError("Never completed")
-
-            spawn.runv(["kubectl", "create", "namespace", "materialize-environment"])
-
-            materialize_backend_secret = {
-                "apiVersion": "v1",
-                "kind": "Secret",
-                "metadata": {
-                    "name": "materialize-backend",
-                    "namespace": "materialize-environment",
-                },
-                "stringData": {
-                    "metadata_backend_url": metadata_backend_url,
-                    "persist_backend_url": persist_backend_url,
-                },
-            }
-
-            spawn.runv(
-                ["kubectl", "apply", "-f", "-"],
-                cwd=path,
-                stdin=yaml.dump(materialize_backend_secret).encode(),
-            )
-
-            materialize_environment = {
-                "apiVersion": "materialize.cloud/v1alpha1",
-                "kind": "Materialize",
-                "metadata": {
-                    "name": "12345678-1234-1234-1234-123456789012",
-                    "namespace": "materialize-environment",
-                },
-                "spec": {
-                    "environmentdImageRef": f"materialize/environmentd:{tag}",
-                    "environmentdResourceRequirements": {
-                        "limits": {"memory": "4Gi"},
-                        "requests": {"cpu": "2", "memory": "4Gi"},
-                    },
-                    "balancerdResourceRequirements": {
-                        "limits": {"memory": "256Mi"},
-                        "requests": {"cpu": "100m", "memory": "256Mi"},
-                    },
-                    "backendSecretName": "materialize-backend",
-                },
-            }
-
-            spawn.runv(
-                ["kubectl", "apply", "-f", "-"],
-                cwd=path,
-                stdin=yaml.dump(materialize_environment).encode(),
-            )
-            for i in range(60):
-                try:
+                    .strip()
+                    .split("\n")
+                )
+                for pod_name in pod_names:
                     spawn.runv(
                         [
                             "kubectl",
-                            "get",
-                            "materializes",
+                            "logs",
                             "-n",
-                            "materialize-environment",
+                            "materialize",
+                            pod_name,
+                            "--all-containers=true",
                         ],
-                        cwd=path,
+                        cwd=self.path,
                     )
+                status = spawn.capture(
+                    [
+                        "kubectl",
+                        "get",
+                        "pods",
+                        "-n",
+                        "materialize",
+                        "-o",
+                        "jsonpath={.items[0].status.phase}",
+                    ],
+                    cwd=self.path,
+                )
+                if status == "Running":
                     break
-                except subprocess.CalledProcessError:
-                    time.sleep(1)
-            else:
-                raise ValueError("Never completed")
-            for i in range(180):
-                try:
-                    spawn.runv(
-                        ["kubectl", "get", "pods", "-n", "materialize-environment"],
-                        cwd=path,
-                    )
-                    status = spawn.capture(
-                        [
-                            "kubectl",
-                            "get",
-                            "pods",
-                            "-l",
-                            "app=environmentd",
-                            "-n",
-                            "materialize-environment",
-                            "-o",
-                            "jsonpath={.items[0].status.phase}",
-                        ],
-                        cwd=path,
-                    )
-                    if status == "Running":
-                        break
-                except subprocess.CalledProcessError:
-                    time.sleep(1)
-            else:
-                raise ValueError("Never completed")
-
-            # Can take a while for balancerd to come up
-            for i in range(240):
-                try:
-                    status = spawn.capture(
-                        [
-                            "kubectl",
-                            "get",
-                            "pods",
-                            "-l",
-                            "app=balancerd",
-                            "-n",
-                            "materialize-environment",
-                            "-o",
-                            "jsonpath={.items[0].status.phase}",
-                        ],
-                        cwd=path,
-                    )
-                    if status == "Running":
-                        break
-                except subprocess.CalledProcessError:
-                    time.sleep(1)
-            else:
-                raise ValueError("Never completed")
+            except subprocess.CalledProcessError:
+                time.sleep(1)
         else:
+            raise ValueError("Never completed")
+
+        spawn.runv(["kubectl", "create", "namespace", "materialize-environment"])
+
+        materialize_backend_secret = {
+            "apiVersion": "v1",
+            "kind": "Secret",
+            "metadata": {
+                "name": "materialize-backend",
+                "namespace": "materialize-environment",
+            },
+            "stringData": {
+                "metadata_backend_url": self.metadata_backend_url,
+                "persist_backend_url": self.persist_backend_url,
+                "license_key": os.getenv("MZ_CI_LICENSE_KEY"),
+            },
+        }
+
+        spawn.runv(
+            ["kubectl", "apply", "-f", "-"],
+            cwd=self.path,
+            stdin=yaml.dump(materialize_backend_secret).encode(),
+        )
+
+        self.materialize_environment = {
+            "apiVersion": "materialize.cloud/v1alpha1",
+            "kind": "Materialize",
+            "metadata": {
+                "name": "12345678-1234-1234-1234-123456789012",
+                "namespace": "materialize-environment",
+            },
+            "spec": {
+                "environmentdImageRef": f"materialize/environmentd:{tag}",
+                "environmentdResourceRequirements": {
+                    "limits": {"memory": "4Gi"},
+                    "requests": {"cpu": "2", "memory": "4Gi"},
+                },
+                "balancerdResourceRequirements": {
+                    "limits": {"memory": "256Mi"},
+                    "requests": {"cpu": "100m", "memory": "256Mi"},
+                },
+                "backendSecretName": "materialize-backend",
+            },
+        }
+
+        spawn.runv(
+            ["kubectl", "apply", "-f", "-"],
+            cwd=self.path,
+            stdin=yaml.dump(self.materialize_environment).encode(),
+        )
+        for i in range(60):
+            try:
+                spawn.runv(
+                    [
+                        "kubectl",
+                        "get",
+                        "materializes",
+                        "-n",
+                        "materialize-environment",
+                    ],
+                    cwd=self.path,
+                )
+                break
+            except subprocess.CalledProcessError:
+                time.sleep(1)
+        else:
+            raise ValueError("Never completed")
+        for i in range(240):
+            try:
+                spawn.runv(
+                    ["kubectl", "get", "pods", "-n", "materialize-environment"],
+                    cwd=self.path,
+                )
+                status = spawn.capture(
+                    [
+                        "kubectl",
+                        "get",
+                        "pods",
+                        "-l",
+                        "app=environmentd",
+                        "-n",
+                        "materialize-environment",
+                        "-o",
+                        "jsonpath={.items[0].status.phase}",
+                    ],
+                    cwd=self.path,
+                )
+                if status == "Running":
+                    break
+            except subprocess.CalledProcessError:
+                time.sleep(1)
+        else:
+            print("Getting all pods:")
             spawn.runv(
                 [
-                    "aws",
-                    "eks",
-                    "update-kubeconfig",
-                    "--name",
-                    "terraform-aws-test-cluster",
-                    "--region",
-                    "us-east-1",
-                ]
+                    "kubectl",
+                    "get",
+                    "pods",
+                    "-n",
+                    "materialize-environment",
+                ],
+                cwd=self.path,
+            )
+            print("Describing all pods in materialize-environment:")
+            spawn.runv(
+                [
+                    "kubectl",
+                    "describe",
+                    "pods",
+                    "-n",
+                    "materialize-environment",
+                ],
+                cwd=self.path,
+            )
+            raise ValueError("Never completed")
+
+        # Can take a while for balancerd to come up
+        for i in range(300):
+            try:
+                status = spawn.capture(
+                    [
+                        "kubectl",
+                        "get",
+                        "pods",
+                        "-l",
+                        "app=balancerd",
+                        "-n",
+                        "materialize-environment",
+                        "-o",
+                        "jsonpath={.items[0].status.phase}",
+                    ],
+                    cwd=self.path,
+                )
+                if status == "Running":
+                    break
+            except subprocess.CalledProcessError:
+                time.sleep(1)
+        else:
+            print("Getting all pods:")
+            spawn.runv(
+                [
+                    "kubectl",
+                    "get",
+                    "pods",
+                    "-n",
+                    "materialize-environment",
+                ],
+                cwd=self.path,
+            )
+            print("Describing all pods in materialize-environment:")
+            spawn.runv(
+                [
+                    "kubectl",
+                    "describe",
+                    "pods",
+                    "-n",
+                    "materialize-environment",
+                ],
+                cwd=self.path,
+            )
+            raise ValueError("Never completed")
+
+    def cleanup(self) -> None:
+        if self.environmentd_port_forward_process:
+            os.killpg(
+                os.getpgid(self.environmentd_port_forward_process.pid), signal.SIGTERM
+            )
+        if self.balancerd_port_forward_process:
+            os.killpg(
+                os.getpgid(self.balancerd_port_forward_process.pid), signal.SIGTERM
             )
 
+    def destroy(self, env=None) -> None:
+        print("--- Destroying")
+        if self.materialize_environment:
+            run_ignore_error(
+                ["kubectl", "delete", "-f", "-"],
+                cwd=self.path,
+                stdin=yaml.dump(self.materialize_environment).encode(),
+            )
+        run_ignore_error(
+            [
+                "kubectl",
+                "delete",
+                "materialize.materialize.cloud/12345678-1234-1234-1234-123456789012",
+                "-n" "materialize-environment",
+            ]
+        )
+        run_ignore_error(["kubectl", "delete", "namespace", "materialize-environment"])
+        run_ignore_error(["kubectl", "delete", "namespace", "materialize"])
+        spawn.runv(["terraform", "destroy", "-auto-approve"], cwd=self.path, env=env)
+
+    def test(
+        self, c: Composition, tag: str, run_testdrive_files: bool, files: list[str]
+    ) -> None:
         print("--- Running tests")
+        self.connect(c)
+        time.sleep(10)
+
+        with psycopg.connect(
+            "postgres://materialize@127.0.0.1:6875/materialize"
+        ) as conn:
+            with conn.cursor() as cur:
+                cur.execute("SELECT 1")
+                results = cur.fetchall()
+                assert results == [(1,)], results
+                cur.execute("SELECT mz_version()")
+                version = cur.fetchall()[0][0]
+                assert version.startswith(tag.split("--")[0] + " ")
+                with open(
+                    MZ_ROOT / "misc" / "helm-charts" / "operator" / "Chart.yaml"
+                ) as f:
+                    content = yaml.load(f, Loader=yaml.Loader)
+                    helm_chart_version = content["version"]
+                assert version.endswith(
+                    f", helm chart: {helm_chart_version})"
+                ), f"Actual version: {version}, expected to contain {helm_chart_version}"
+
+        if run_testdrive_files:
+            with c.override(testdrive(no_reset=False)):
+                c.up("testdrive", persistent=True)
+                c.run_testdrive_files(*TD_CMD, *files)
+
+    def connect(self, c: Composition) -> None:
         environmentd_name = spawn.capture(
             [
                 "kubectl",
@@ -415,7 +540,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
                 "-o",
                 "jsonpath={.items[*].metadata.name}",
             ],
-            cwd=path,
+            cwd=self.path,
         )
 
         balancerd_name = spawn.capture(
@@ -430,12 +555,12 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
                 "-o",
                 "jsonpath={.items[*].metadata.name}",
             ],
-            cwd=path,
+            cwd=self.path,
         )
         # error: arguments in resource/name form must have a single resource and name
         print(f"Got balancerd name: {balancerd_name}")
 
-        environmentd_port_forward_process = subprocess.Popen(
+        self.environmentd_port_forward_process = subprocess.Popen(
             [
                 "kubectl",
                 "port-forward",
@@ -447,7 +572,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
             ],
             preexec_fn=os.setpgrp,
         )
-        balancerd_port_forward_process = subprocess.Popen(
+        self.balancerd_port_forward_process = subprocess.Popen(
             [
                 "kubectl",
                 "port-forward",
@@ -461,20 +586,16 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         )
         time.sleep(10)
 
-        with c.override(
-            Testdrive(
-                materialize_url="postgres://materialize@127.0.0.1:6875/materialize",
-                materialize_url_internal="postgres://mz_system:materialize@127.0.0.1:6877/materialize",
-                materialize_use_https=True,
-                no_consistency_checks=True,
-                network_mode="host",
-                volume_workdir="../testdrive:/workdir",
-                # For full testdrive support we'll need:
-                # kafka_url=...
-                # schema_registry_url=...
-                # aws_endpoint=...
-            )
-        ):
+        with psycopg.connect(
+            "postgres://mz_system:materialize@127.0.0.1:6877/materialize",
+            autocommit=True,
+        ) as conn:
+            with conn.cursor() as cur:
+                # Required for some testdrive tests
+                cur.execute("ALTER CLUSTER mz_system SET (REPLICATION FACTOR 2)")
+                cur.execute("ALTER SYSTEM SET enable_create_table_from_source = true")
+
+        with c.override(testdrive(no_reset=False)):
             c.up("testdrive", persistent=True)
             c.testdrive(
                 dedent(
@@ -485,6 +606,220 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
                 )
             )
 
+
+class AWS(State):
+    def setup(
+        self,
+        prefix: str,
+        setup: bool,
+        tag: str,
+    ) -> None:
+        if not setup:
+            spawn.runv(
+                [
+                    "aws",
+                    "eks",
+                    "update-kubeconfig",
+                    "--name",
+                    f"{prefix}-dev-eks",
+                    "--region",
+                    "us-east-1",
+                ]
+            )
+            return
+
+        vars = [
+            "-var",
+            "operator_version=v25.2.0-beta.1",
+        ]
+        if not tag:
+            vars += [
+                "-var",
+                f"orchestratord_version={get_tag(tag)}",
+            ]
+
+        print("--- Setup")
+        spawn.runv(
+            ["helm", "package", "../../../misc/helm-charts/operator/"], cwd=self.path
+        )
+        spawn.runv(["terraform", "init"], cwd=self.path)
+        spawn.runv(["terraform", "validate"], cwd=self.path)
+        spawn.runv(["terraform", "plan", *vars], cwd=self.path)
+        try:
+            spawn.runv(["terraform", "apply", "-auto-approve", *vars], cwd=self.path)
+        except:
+            # Sometimes fails for unknown reason, so just retry:
+            # > Error: namespaces is forbidden: User "arn:aws:sts::400121260767:assumed-role/ci/ci" cannot create resource "namespaces" in API group "" at the cluster scope
+            spawn.runv(["terraform", "apply", "-auto-approve", *vars], cwd=self.path)
+
+        spawn.runv(
+            [
+                "aws",
+                "eks",
+                "update-kubeconfig",
+                "--name",
+                f"{prefix}-dev-eks",
+                "--region",
+                "us-east-1",
+            ]
+        )
+
+        metadata_backend_url = spawn.capture(
+            ["terraform", "output", "-raw", "metadata_backend_url"], cwd=self.path
+        ).strip()
+        persist_backend_url = spawn.capture(
+            ["terraform", "output", "-raw", "persist_backend_url"], cwd=self.path
+        ).strip()
+        self.kubectl_setup(tag, metadata_backend_url, persist_backend_url)
+
+    def upgrade(self, tag: str) -> None:
+        print("--- Upgrading")
+        # Following https://materialize.com/docs/self-managed/v25.1/installation/install-on-aws/upgrade-on-aws/
+        self.materialize_environment = {
+            "apiVersion": "materialize.cloud/v1alpha1",
+            "kind": "Materialize",
+            "metadata": {
+                "name": "12345678-1234-1234-1234-123456789012",
+                "namespace": "materialize-environment",
+            },
+            "spec": {
+                "inPlaceRollout": True,
+                "requestRollout": "12345678-9012-3456-7890-123456789013",
+                "environmentdImageRef": f"materialize/environmentd:{tag}",
+                "environmentdResourceRequirements": {
+                    "limits": {"memory": "4Gi"},
+                    "requests": {"cpu": "2", "memory": "4Gi"},
+                },
+                "balancerdResourceRequirements": {
+                    "limits": {"memory": "256Mi"},
+                    "requests": {"cpu": "100m", "memory": "256Mi"},
+                },
+                "backendSecretName": "materialize-backend",
+            },
+        }
+
+        spawn.runv(
+            ["kubectl", "apply", "-f", "-"],
+            cwd=self.path,
+            stdin=yaml.dump(self.materialize_environment).encode(),
+        )
+        for i in range(60):
+            try:
+                spawn.runv(
+                    [
+                        "kubectl",
+                        "get",
+                        "materializes",
+                        "-n",
+                        "materialize-environment",
+                    ],
+                    cwd=self.path,
+                )
+                break
+            except subprocess.CalledProcessError:
+                time.sleep(1)
+        else:
+            raise ValueError("Never completed")
+        for i in range(240):
+            try:
+                spawn.runv(
+                    ["kubectl", "get", "pods", "-n", "materialize-environment"],
+                    cwd=self.path,
+                )
+                status = spawn.capture(
+                    [
+                        "kubectl",
+                        "get",
+                        "pods",
+                        "-l",
+                        "app=environmentd",
+                        "-n",
+                        "materialize-environment",
+                        "-o",
+                        "jsonpath={.items[0].status.phase}",
+                    ],
+                    cwd=self.path,
+                )
+                if status == "Running":
+                    break
+            except subprocess.CalledProcessError:
+                time.sleep(1)
+        else:
+            raise ValueError("Never completed")
+
+        # Can take a while for balancerd to come up
+        for i in range(300):
+            try:
+                status = spawn.capture(
+                    [
+                        "kubectl",
+                        "get",
+                        "pods",
+                        "-l",
+                        "app=balancerd",
+                        "-n",
+                        "materialize-environment",
+                        "-o",
+                        "jsonpath={.items[0].status.phase}",
+                    ],
+                    cwd=self.path,
+                )
+                if status == "Running":
+                    break
+            except subprocess.CalledProcessError:
+                time.sleep(1)
+        else:
+            raise ValueError("Never completed")
+
+
+def workflow_aws_temporary(c: Composition, parser: WorkflowArgumentParser) -> None:
+    """To run locally use `aws sso login` first."""
+    add_arguments_temporary_test(parser)
+    args = parser.parse_args()
+
+    tag = get_tag(args.tag)
+    path = MZ_ROOT / "test" / "terraform" / "aws-temporary"
+    aws = AWS(path)
+    mz_debug_build_thread: threading.Thread | None = None
+    try:
+        if args.run_mz_debug:
+            mz_debug_build_thread = build_mz_debug_async()
+        aws.setup("aws-test", args.setup, tag)
+        if args.test:
+            aws.test(c, tag, args.run_testdrive_files, args.files)
+    finally:
+        aws.cleanup()
+
+        if args.run_mz_debug:
+            assert mz_debug_build_thread
+            mz_debug_build_thread.join()
+            run_mz_debug()
+
+        if args.cleanup:
+            aws.destroy()
+
+
+def workflow_aws_upgrade(c: Composition, parser: WorkflowArgumentParser) -> None:
+    """To run locally use `aws sso login` first."""
+    add_arguments_temporary_test(parser)
+    args = parser.parse_args()
+
+    previous_tag = get_lts_versions()[-1]
+    tag = get_tag(args.tag)
+    path = MZ_ROOT / "test" / "terraform" / "aws-upgrade"
+    aws = AWS(path)
+    mz_debug_build_thread: threading.Thread | None = None
+    try:
+        if args.run_mz_debug:
+            mz_debug_build_thread = build_mz_debug_async()
+        aws.setup("aws-upgrade", args.setup, str(previous_tag))
+        aws.upgrade(tag)
+        if args.test:
+            # Try waiting a bit, otherwise connection error, should be handled better
+            time.sleep(180)
+            print("--- Running tests")
+            aws.connect(c)
+
             with psycopg.connect(
                 "postgres://materialize@127.0.0.1:6875/materialize"
             ) as conn:
@@ -494,43 +829,376 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
                     assert results == [(1,)], results
                     cur.execute("SELECT mz_version()")
                     version = cur.fetchall()[0][0]
-                    assert version.startswith(tag.split("--")[0] + " ")
+                    assert version.startswith(
+                        tag.split("--")[0] + " "
+                    ), f"Version expected to start with {tag.split('--')[0]}, but is actually {version}"
                     with open(
                         MZ_ROOT / "misc" / "helm-charts" / "operator" / "Chart.yaml"
                     ) as f:
                         content = yaml.load(f, Loader=yaml.Loader)
                         helm_chart_version = content["version"]
-                    assert version.endswith(f", helm chart: {helm_chart_version})")
+                    assert version.endswith(
+                        f", helm chart: {helm_chart_version})"
+                    ), f"Actual version: {version}, expected to contain {helm_chart_version}"
 
-            c.run_testdrive_files(*args.files)
+            if args.run_testdrive_files:
+                with c.override(testdrive(no_reset=False)):
+                    c.up("testdrive", persistent=True)
+                    c.run_testdrive_files(*TD_CMD, *args.files)
     finally:
-        if environmentd_port_forward_process:
-            os.killpg(os.getpgid(environmentd_port_forward_process.pid), signal.SIGTERM)
-        if balancerd_port_forward_process:
-            os.killpg(os.getpgid(balancerd_port_forward_process.pid), signal.SIGTERM)
+        aws.cleanup()
+
+        if args.run_mz_debug:
+            assert mz_debug_build_thread
+            mz_debug_build_thread.join()
+            run_mz_debug()
 
         if args.cleanup:
-            print("--- Cleaning up")
-            if materialize_environment:
-                run_ignore_error(
-                    ["kubectl", "delete", "-f", "-"],
-                    cwd=path,
-                    stdin=yaml.dump(materialize_environment).encode(),
+            aws.destroy()
+
+
+PATH_AWS_PERSISTENT = MZ_ROOT / "test" / "terraform" / "aws-persistent"
+PREFIX_AWS_PERSISTENT = "aws-persistent"
+
+
+def workflow_aws_persistent_setup(
+    c: Composition, parser: WorkflowArgumentParser
+) -> None:
+    """Setup the AWS persistent Terraform and Helm Chart"""
+    parser.add_argument(
+        "--tag",
+        type=str,
+        help="Custom version tag to use",
+    )
+
+    args = parser.parse_args()
+
+    tag = get_tag(args.tag)
+    aws = AWS(PATH_AWS_PERSISTENT)
+    try:
+        aws.setup(PREFIX_AWS_PERSISTENT, True, tag)
+        with c.override(testdrive(no_reset=True)):
+            aws.connect(c)
+            c.testdrive(
+                dedent(
+                    """
+               > CREATE SOURCE counter FROM LOAD GENERATOR COUNTER
+               > CREATE TABLE table (c INT)
+               > CREATE MATERIALIZED VIEW mv AS SELECT count(*) FROM table
+            """
                 )
-            run_ignore_error(
-                [
-                    "kubectl",
-                    "delete",
-                    "materialize.materialize.cloud/12345678-1234-1234-1234-123456789012",
-                    "-n" "materialize-environment",
-                ]
             )
-            run_ignore_error(
-                ["kubectl", "delete", "namespace", "materialize-environment"]
+    finally:
+        aws.cleanup()
+
+
+def workflow_aws_persistent_test(
+    c: Composition, parser: WorkflowArgumentParser
+) -> None:
+    """Run a test workload against the AWS persistent setup"""
+    parser.add_argument(
+        "--tag",
+        type=str,
+        help="Custom version tag to use",
+    )
+
+    parser.add_argument("--runtime", default=600, type=int, help="Runtime in seconds")
+
+    args = parser.parse_args()
+
+    start_time = time.time()
+
+    tag = get_tag(args.tag)
+    aws = AWS(PATH_AWS_PERSISTENT)
+    try:
+        aws.setup(PREFIX_AWS_PERSISTENT, False, tag)
+        with c.override(testdrive(no_reset=True)):
+            aws.connect(c)
+
+            count = 1
+
+            c.testdrive(
+                dedent(
+                    """
+               > DELETE FROM table
+                """
+                )
             )
-            run_ignore_error(
-                ["helm", "uninstall", "materialize-operator"],
+
+            while time.time() - start_time < args.runtime:
+                c.testdrive(
+                    dedent(
+                        f"""
+                   > SELECT 1
+                   1
+
+                   > INSERT INTO table VALUES ({count})
+
+                   > SELECT count(*) FROM table
+                   {count}
+
+                   > SELECT * FROM mv
+                   {count}
+
+                   > DROP VIEW IF EXISTS temp
+
+                   > CREATE VIEW temp AS SELECT * FROM mv
+
+                   > SELECT * FROM temp
+                   {count}
+                """
+                    )
+                )
+
+                count += 1
+
+                with psycopg.connect(
+                    "postgres://materialize@127.0.0.1:6875/materialize", autocommit=True
+                ) as conn:
+                    with conn.cursor() as cur:
+                        cur.execute("SELECT max(counter) FROM counter")
+                        old_max = cur.fetchall()[0][0]
+                    time.sleep(5)
+                    with conn.cursor() as cur:
+                        cur.execute("SELECT max(counter) FROM counter")
+                        new_max = cur.fetchall()[0][0]
+                assert new_max > old_max, f"{new_max} should be greater than {old_max}"
+    finally:
+        aws.cleanup()
+
+
+def workflow_aws_persistent_destroy(
+    c: Composition, parser: WorkflowArgumentParser
+) -> None:
+    """Setup the AWS persistent Terraform and Helm Chart"""
+    aws = AWS(PATH_AWS_PERSISTENT)
+    aws.destroy()
+
+
+def workflow_gcp_temporary(c: Composition, parser: WorkflowArgumentParser) -> None:
+    add_arguments_temporary_test(parser)
+    args = parser.parse_args()
+
+    tag = get_tag(args.tag)
+    path = MZ_ROOT / "test" / "terraform" / "gcp-temporary"
+    state = State(path)
+
+    gcp_service_account_json = os.getenv("GCP_SERVICE_ACCOUNT_JSON")
+    assert (
+        gcp_service_account_json
+    ), "GCP_SERVICE_ACCOUNT_JSON environment variable has to be set"
+    gcloud_creds_path = path / "gcp.json"
+    with open(gcloud_creds_path, "w") as f:
+        f.write(gcp_service_account_json)
+    os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = str(gcloud_creds_path)
+
+    mz_debug_build_thread: threading.Thread | None = None
+    try:
+        if args.run_mz_debug:
+            mz_debug_build_thread = build_mz_debug_async()
+        spawn.runv(["gcloud", "config", "set", "project", "materialize-ci"])
+
+        spawn.runv(
+            [
+                "gcloud",
+                "auth",
+                "activate-service-account",
+                f"--key-file={gcloud_creds_path}",
+            ],
+        )
+
+        vars = [
+            "-var",
+            "operator_version=v25.2.0-beta.1",
+        ]
+        if not tag:
+            vars += [
+                "-var",
+                f"orchestratord_version={get_tag(tag)}",
+            ]
+
+        if args.setup:
+            print("--- Setup")
+            spawn.runv(
+                ["helm", "package", "../../../misc/helm-charts/operator/"],
                 cwd=path,
             )
-            run_ignore_error(["kubectl", "delete", "namespace", "materialize"])
-            spawn.runv(["terraform", "destroy", "-auto-approve"], cwd=path)
+            spawn.runv(["terraform", "init"], cwd=path)
+            spawn.runv(["terraform", "validate"], cwd=path)
+            spawn.runv(["terraform", "plan"], cwd=path)
+            spawn.runv(["terraform", "apply", "-auto-approve", *vars], cwd=path)
+
+        gke_cluster = json.loads(
+            spawn.capture(
+                ["terraform", "output", "-json", "gke_cluster"], cwd=path
+            ).strip()
+        )
+        connection_strings = json.loads(
+            spawn.capture(
+                ["terraform", "output", "-json", "connection_strings"], cwd=path
+            ).strip()
+        )
+
+        spawn.runv(
+            [
+                "gcloud",
+                "container",
+                "clusters",
+                "get-credentials",
+                gke_cluster["name"],
+                "--region",
+                gke_cluster["location"],
+                "--project",
+                "materialize-ci",
+            ]
+        )
+
+        if args.setup:
+            print("--- Setup")
+            state.kubectl_setup(
+                tag,
+                connection_strings["metadata_backend_url"],
+                connection_strings["persist_backend_url"],
+            )
+
+        if args.test:
+            state.test(c, tag, args.run_testdrive_files, args.files)
+    finally:
+        state.cleanup()
+
+        if args.run_mz_debug:
+            assert mz_debug_build_thread
+            mz_debug_build_thread.join()
+            run_mz_debug()
+
+        if args.cleanup:
+            state.destroy()
+
+
+def workflow_azure_temporary(c: Composition, parser: WorkflowArgumentParser) -> None:
+    add_arguments_temporary_test(parser)
+    args = parser.parse_args()
+
+    tag = get_tag(args.tag)
+    path = MZ_ROOT / "test" / "terraform" / "azure-temporary"
+    state = State(path)
+
+    spawn.runv(["bin/ci-builder", "run", "stable", "uv", "venv", str(path / "venv")])
+    venv_env = os.environ.copy()
+    venv_env["PATH"] = f"{path/'venv'/'bin'}:{os.getenv('PATH')}"
+    venv_env["VIRTUAL_ENV"] = str(path / "venv")
+    spawn.runv(
+        ["uv", "pip", "install", "-r", "requirements.txt", "--prerelease=allow"],
+        cwd=path,
+        env=venv_env,
+    )
+
+    mz_debug_build_thread: threading.Thread | None = None
+    try:
+        if args.run_mz_debug:
+            mz_debug_build_thread = build_mz_debug_async()
+        if os.getenv("CI"):
+            username = os.getenv("AZURE_SERVICE_ACCOUNT_USERNAME")
+            password = os.getenv("AZURE_SERVICE_ACCOUNT_PASSWORD")
+            tenant = os.getenv("AZURE_SERVICE_ACCOUNT_TENANT")
+            assert username, "AZURE_SERVICE_ACCOUNT_USERNAME has to be set"
+            assert password, "AZURE_SERVICE_ACCOUNT_PASSWORD has to be set"
+            assert tenant, "AZURE_SERVICE_ACOUNT_TENANT has to be set"
+            spawn.runv(
+                [
+                    "az",
+                    "login",
+                    "--service-principal",
+                    "--username",
+                    username,
+                    "--password",
+                    password,
+                    "--tenant",
+                    tenant,
+                ],
+                env=venv_env,
+            )
+
+        vars = [
+            "-var",
+            "operator_version=v25.2.0-beta.1",
+        ]
+        if not tag:
+            vars += [
+                "-var",
+                f"orchestratord_version={get_tag(tag)}",
+            ]
+
+        if args.setup:
+            spawn.runv(
+                ["helm", "package", "../../../misc/helm-charts/operator/"],
+                cwd=path,
+            )
+            spawn.runv(["terraform", "init"], cwd=path, env=venv_env)
+            spawn.runv(["terraform", "validate"], cwd=path, env=venv_env)
+            spawn.runv(["terraform", "plan"], cwd=path, env=venv_env)
+            try:
+                spawn.runv(
+                    ["terraform", "apply", "-auto-approve", *vars],
+                    cwd=path,
+                    env=venv_env,
+                )
+            except:
+                print("terraform apply failed, retrying")
+                spawn.runv(
+                    ["terraform", "apply", "-auto-approve", *vars],
+                    cwd=path,
+                    env=venv_env,
+                )
+
+        aks_cluster = json.loads(
+            spawn.capture(
+                ["terraform", "output", "-json", "aks_cluster"], cwd=path, env=venv_env
+            ).strip()
+        )
+        connection_strings = json.loads(
+            spawn.capture(
+                ["terraform", "output", "-json", "connection_strings"],
+                cwd=path,
+                env=venv_env,
+            ).strip()
+        )
+        resource_group_name = spawn.capture(
+            ["terraform", "output", "-raw", "resource_group_name"],
+            cwd=path,
+            env=venv_env,
+        ).strip()
+
+        spawn.runv(
+            [
+                "az",
+                "aks",
+                "get-credentials",
+                "--overwrite-existing",
+                "--resource-group",
+                resource_group_name,
+                "--name",
+                aks_cluster["name"],
+            ],
+            env=venv_env,
+        )
+
+        if args.setup:
+            state.kubectl_setup(
+                tag,
+                connection_strings["metadata_backend_url"],
+                connection_strings["persist_backend_url"],
+            )
+
+        if args.test:
+            state.test(c, tag, args.run_testdrive_files, args.files)
+    finally:
+        state.cleanup()
+
+        if args.run_mz_debug:
+            assert mz_debug_build_thread
+            mz_debug_build_thread.join()
+            run_mz_debug(env=venv_env)
+
+        if args.cleanup:
+            state.destroy(env=venv_env)

@@ -258,9 +258,11 @@ impl UpsertMetricDefs {
             }
         }
         let shared_metrics = Arc::new(UpsertSharedMetrics::new(self, *source_id));
-        assert!(shared
-            .insert(source_id.clone(), Arc::downgrade(&shared_metrics))
-            .is_none());
+        assert!(
+            shared
+                .insert(source_id.clone(), Arc::downgrade(&shared_metrics))
+                .is_none()
+        );
         shared_metrics
     }
 
@@ -291,9 +293,11 @@ impl UpsertMetricDefs {
         };
 
         let rocksdb_metrics = Arc::new(rocksdb_metrics);
-        assert!(rocksdb
-            .insert(source_id.clone(), Arc::downgrade(&rocksdb_metrics))
-            .is_none());
+        assert!(
+            rocksdb
+                .insert(source_id.clone(), Arc::downgrade(&rocksdb_metrics))
+                .is_none()
+        );
         rocksdb_metrics
     }
 }
@@ -301,9 +305,9 @@ impl UpsertMetricDefs {
 /// Metrics for upsert source shared across workers.
 #[derive(Debug)]
 pub(crate) struct UpsertSharedMetrics {
-    pub(crate) merge_snapshot_latency: DeleteOnDropHistogram<'static, Vec<String>>,
-    pub(crate) multi_get_latency: DeleteOnDropHistogram<'static, Vec<String>>,
-    pub(crate) multi_put_latency: DeleteOnDropHistogram<'static, Vec<String>>,
+    pub(crate) merge_snapshot_latency: DeleteOnDropHistogram<Vec<String>>,
+    pub(crate) multi_get_latency: DeleteOnDropHistogram<Vec<String>>,
+    pub(crate) multi_put_latency: DeleteOnDropHistogram<Vec<String>>,
 }
 
 impl UpsertSharedMetrics {
@@ -362,21 +366,21 @@ impl UpsertBackpressureMetricDefs {
 
 /// Metrics for the `upsert` operator.
 pub struct UpsertMetrics {
-    pub(crate) rehydration_latency: DeleteOnDropGauge<'static, AtomicF64, Vec<String>>,
-    pub(crate) rehydration_total: DeleteOnDropGauge<'static, AtomicU64, Vec<String>>,
-    pub(crate) rehydration_updates: DeleteOnDropGauge<'static, AtomicU64, Vec<String>>,
-    pub(crate) rocksdb_autospill_in_use: Arc<DeleteOnDropGauge<'static, AtomicU64, Vec<String>>>,
+    pub(crate) rehydration_latency: DeleteOnDropGauge<AtomicF64, Vec<String>>,
+    pub(crate) rehydration_total: DeleteOnDropGauge<AtomicU64, Vec<String>>,
+    pub(crate) rehydration_updates: DeleteOnDropGauge<AtomicU64, Vec<String>>,
+    pub(crate) rocksdb_autospill_in_use: Arc<DeleteOnDropGauge<AtomicU64, Vec<String>>>,
 
-    pub(crate) merge_snapshot_updates: DeleteOnDropCounter<'static, AtomicU64, Vec<String>>,
-    pub(crate) merge_snapshot_inserts: DeleteOnDropCounter<'static, AtomicU64, Vec<String>>,
-    pub(crate) merge_snapshot_deletes: DeleteOnDropCounter<'static, AtomicU64, Vec<String>>,
-    pub(crate) upsert_inserts: DeleteOnDropCounter<'static, AtomicU64, Vec<String>>,
-    pub(crate) upsert_updates: DeleteOnDropCounter<'static, AtomicU64, Vec<String>>,
-    pub(crate) upsert_deletes: DeleteOnDropCounter<'static, AtomicU64, Vec<String>>,
-    pub(crate) multi_get_size: DeleteOnDropCounter<'static, AtomicU64, Vec<String>>,
-    pub(crate) multi_get_result_bytes: DeleteOnDropCounter<'static, AtomicU64, Vec<String>>,
-    pub(crate) multi_get_result_count: DeleteOnDropCounter<'static, AtomicU64, Vec<String>>,
-    pub(crate) multi_put_size: DeleteOnDropCounter<'static, AtomicU64, Vec<String>>,
+    pub(crate) merge_snapshot_updates: DeleteOnDropCounter<AtomicU64, Vec<String>>,
+    pub(crate) merge_snapshot_inserts: DeleteOnDropCounter<AtomicU64, Vec<String>>,
+    pub(crate) merge_snapshot_deletes: DeleteOnDropCounter<AtomicU64, Vec<String>>,
+    pub(crate) upsert_inserts: DeleteOnDropCounter<AtomicU64, Vec<String>>,
+    pub(crate) upsert_updates: DeleteOnDropCounter<AtomicU64, Vec<String>>,
+    pub(crate) upsert_deletes: DeleteOnDropCounter<AtomicU64, Vec<String>>,
+    pub(crate) multi_get_size: DeleteOnDropCounter<AtomicU64, Vec<String>>,
+    pub(crate) multi_get_result_bytes: DeleteOnDropCounter<AtomicU64, Vec<String>>,
+    pub(crate) multi_get_result_count: DeleteOnDropCounter<AtomicU64, Vec<String>>,
+    pub(crate) multi_put_size: DeleteOnDropCounter<AtomicU64, Vec<String>>,
 
     pub(crate) shared: Arc<UpsertSharedMetrics>,
     pub(crate) rocksdb_shared: Arc<mz_rocksdb::RocksDBSharedMetrics>,

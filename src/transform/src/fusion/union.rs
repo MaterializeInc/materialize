@@ -9,8 +9,8 @@
 
 //! Fuses multiple `Union` operators into one.
 
-use mz_expr::visit::Visit;
 use mz_expr::MirRelationExpr;
+use mz_expr::visit::Visit;
 
 /// Fuses multiple `Union` operators into one.
 #[derive(Debug)]

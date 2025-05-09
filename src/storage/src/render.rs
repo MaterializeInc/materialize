@@ -205,12 +205,13 @@ use mz_ore::error::ErrorExt;
 use mz_repr::{GlobalId, Row};
 use mz_storage_types::controller::CollectionMetadata;
 use mz_storage_types::dyncfgs;
-use mz_storage_types::sinks::{MetadataFilled, StorageSinkDesc};
+use mz_storage_types::oneshot_sources::{OneshotIngestionDescription, OneshotIngestionRequest};
+use mz_storage_types::sinks::StorageSinkDesc;
 use mz_storage_types::sources::{GenericSourceConnection, IngestionDescription, SourceConnection};
 use mz_timely_util::antichain::AntichainExt;
 use timely::communication::Allocate;
-use timely::dataflow::operators::{Concatenate, ConnectLoop, Feedback, Leave, Map};
 use timely::dataflow::Scope;
+use timely::dataflow::operators::{Concatenate, ConnectLoop, Feedback, Leave, Map};
 use timely::progress::Antichain;
 use timely::worker::Worker as TimelyWorker;
 use tokio::sync::Semaphore;
@@ -325,6 +326,15 @@ pub fn build_ingestion_dataflow<A: Allocate>(
                     storage_state,
                     base_source_config,
                 ),
+                GenericSourceConnection::SqlServer(c) => crate::render::sources::render_source(
+                    mz_scope,
+                    &debug_name,
+                    c,
+                    description.clone(),
+                    &feedback,
+                    storage_state,
+                    base_source_config,
+                ),
                 GenericSourceConnection::LoadGenerator(c) => crate::render::sources::render_source(
                     mz_scope,
                     &debug_name,
@@ -400,8 +410,8 @@ pub fn build_ingestion_dataflow<A: Allocate>(
                 "source",
                 &health_stream,
                 crate::healthcheck::DefaultWriter {
-                    command_tx: Rc::clone(&storage_state.internal_cmd_tx),
-                    updates: Rc::clone(&storage_state.object_status_updates),
+                    command_tx: storage_state.internal_cmd_tx.clone(),
+                    updates: Rc::clone(&storage_state.shared_status_updates),
                 },
                 storage_state
                     .storage_configuration
@@ -424,7 +434,7 @@ pub fn build_export_dataflow<A: Allocate>(
     timely_worker: &mut TimelyWorker<A>,
     storage_state: &mut StorageState,
     id: GlobalId,
-    description: StorageSinkDesc<MetadataFilled, mz_repr::Timestamp>,
+    description: StorageSinkDesc<CollectionMetadata, mz_repr::Timestamp>,
 ) {
     let worker_logging = timely_worker.log_register().get("timely").map(Into::into);
     let debug_name = id.to_string();
@@ -455,8 +465,8 @@ pub fn build_export_dataflow<A: Allocate>(
                 "sink",
                 &health_stream,
                 crate::healthcheck::DefaultWriter {
-                    command_tx: Rc::clone(&storage_state.internal_cmd_tx),
-                    updates: Rc::clone(&storage_state.object_status_updates),
+                    command_tx: storage_state.internal_cmd_tx.clone(),
+                    updates: Rc::clone(&storage_state.shared_status_updates),
                 },
                 storage_state
                     .storage_configuration
@@ -470,4 +480,46 @@ pub fn build_export_dataflow<A: Allocate>(
             storage_state.sink_tokens.insert(id, tokens);
         })
     });
+}
+
+pub(crate) fn build_oneshot_ingestion_dataflow<A: Allocate>(
+    timely_worker: &mut TimelyWorker<A>,
+    storage_state: &mut StorageState,
+    ingestion_id: uuid::Uuid,
+    collection_id: GlobalId,
+    collection_meta: CollectionMetadata,
+    description: OneshotIngestionRequest,
+) {
+    let (results_tx, results_rx) = tokio::sync::mpsc::unbounded_channel();
+    let callback = move |result| {
+        // TODO(cf3): Do we care if the receiver has gone away?
+        //
+        // Persist is working on cleaning up leaked blobs, we could also use `OneshotReceiverExt`
+        // here, but that might run into the infamous async-Drop problem.
+        let _ = results_tx.send(result);
+    };
+    let connection_context = storage_state
+        .storage_configuration
+        .connection_context
+        .clone();
+
+    let tokens = timely_worker.dataflow(|scope| {
+        mz_storage_operators::oneshot_source::render(
+            scope.clone(),
+            Arc::clone(&storage_state.persist_clients),
+            connection_context,
+            collection_id,
+            collection_meta,
+            description,
+            callback,
+        )
+    });
+    let ingestion_description = OneshotIngestionDescription {
+        tokens,
+        results: results_rx,
+    };
+
+    storage_state
+        .oneshot_ingestions
+        .insert(ingestion_id, ingestion_description);
 }

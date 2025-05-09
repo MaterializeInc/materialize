@@ -23,13 +23,13 @@
 //!     is beneficial to use this operator if the number of retractions is expected to be small, and
 //!     if a potential downstream operator does not expect its input to be arranged.
 
-use mz_expr::{permutation_for_arrangement, MirScalarExpr};
+use mz_expr::{MirScalarExpr, permutation_for_arrangement};
 use mz_proto::{ProtoType, RustType, TryFromProtoError};
 use mz_repr::ColumnType;
 use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
 
-use crate::plan::{any_arranged_thin, AvailableCollections};
+use crate::plan::{AvailableCollections, any_arranged_thin};
 
 include!(concat!(
     env!("OUT_DIR"),
@@ -126,7 +126,7 @@ impl ThresholdPlan {
         // Arrange the input by all columns in order.
         let mut all_columns = Vec::new();
         for column in 0..arity {
-            all_columns.push(mz_expr::MirScalarExpr::Column(column));
+            all_columns.push(mz_expr::MirScalarExpr::column(column));
         }
         let (permutation, thinning) = permutation_for_arrangement(&all_columns, arity);
         let ensure_arrangement = (all_columns, permutation, thinning);

@@ -10,13 +10,13 @@ publish = false
 workspace = true
 
 [dependencies]
-anyhow = "1.0.44"
-chrono = { version = "0.4.35", default-features = false, features = ["std"] }
+anyhow = "1.0.98"
+chrono = { version = "0.4.39", default-features = false, features = ["std"] }
 reqwest = { version = "0.11.4", features = ["json"] }
-serde = { version = "1.0.130", features = ["derive"] }
+serde = { version = "1.0.219", features = ["derive"] }
 url = "2.2.2"
-thiserror = "1.0.37"
-tokio = "1.38.0"
+thiserror = "2.0.12"
+tokio = "1.44.1"
 mz-frontegg-client = { path = "../frontegg-client" }
 mz-frontegg-auth = { path = "../frontegg-auth" }
 workspace-hack = { version = "0.0.0", path = "../workspace-hack", optional = true }

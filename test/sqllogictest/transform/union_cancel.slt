@@ -33,7 +33,7 @@ statement ok
 INSERT INTO t3 VALUES (4, 5), (5, 5), (5, 5), (null, null)
 
 query T multiline
-EXPLAIN WITH(arity, join implementations) SELECT * FROM t1
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, arity, join implementations) AS VERBOSE TEXT FOR SELECT * FROM t1
 ----
 Explained Query:
   ReadStorage materialize.public.t1 // { arity: 2 }
@@ -52,7 +52,7 @@ SELECT * FROM t1
 4 5
 
 query T multiline
-EXPLAIN WITH(arity, join implementations) SELECT a1.* FROM t1 AS a1 LEFT JOIN t1 AS a2 ON (a1.key = a2.key)
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, arity, join implementations) AS VERBOSE TEXT FOR SELECT a1.* FROM t1 AS a1 LEFT JOIN t1 AS a2 ON (a1.key = a2.key)
 ----
 Explained Query:
   ReadStorage materialize.public.t1 // { arity: 2 }
@@ -71,15 +71,15 @@ SELECT a1.* FROM t1 AS a1 LEFT JOIN t1 AS a2 ON (a1.key = a2.key)
 4 5
 
 query T multiline
-EXPLAIN WITH(arity, join implementations) SELECT * FROM t1 AS a1 LEFT JOIN t1 AS a2 ON (a1.key = a2.key) WHERE a1.nokey = 1
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, arity, join implementations) AS VERBOSE TEXT FOR SELECT * FROM t1 AS a1 LEFT JOIN t1 AS a2 ON (a1.key = a2.key) WHERE a1.nokey = 1
 ----
 Explained Query:
-  Project (#0, #1, #0, #1) // { arity: 4 }
-    Filter (#1 = 1) // { arity: 2 }
+  Project (#0{key}, #1{nokey}, #0{key}, #1{nokey}) // { arity: 4 }
+    Filter (#1{nokey} = 1) // { arity: 2 }
       ReadStorage materialize.public.t1 // { arity: 2 }
 
 Source materialize.public.t1
-  filter=((#1 = 1))
+  filter=((#1{nokey} = 1))
 
 Target cluster: quickstart
 
@@ -91,7 +91,7 @@ SELECT * FROM t1 AS a1 LEFT JOIN t1 AS a2 ON (a1.key = a2.key) WHERE a1.nokey = 
 1  1  1  1
 
 query T multiline
-EXPLAIN WITH(arity, join implementations) SELECT * FROM t1 EXCEPT ALL SELECT * FROM t1
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, arity, join implementations) AS VERBOSE TEXT FOR SELECT * FROM t1 EXCEPT ALL SELECT * FROM t1
 ----
 Explained Query (fast path):
   Constant <empty>
@@ -106,7 +106,7 @@ SELECT * FROM t1 EXCEPT ALL SELECT * FROM t1
 
 
 query T multiline
-EXPLAIN WITH(arity, join implementations) SELECT * FROM t1 UNION ALL SELECT * FROM t1 EXCEPT ALL SELECT * FROM t1
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, arity, join implementations) AS VERBOSE TEXT FOR SELECT * FROM t1 UNION ALL SELECT * FROM t1 EXCEPT ALL SELECT * FROM t1
 ----
 Explained Query:
   ReadStorage materialize.public.t1 // { arity: 2 }
@@ -125,7 +125,7 @@ SELECT * FROM t1 UNION ALL SELECT * FROM t1 EXCEPT ALL SELECT * FROM t1
 4  5
 
 query T multiline
-EXPLAIN WITH(arity, join implementations) SELECT * FROM t1 EXCEPT ALL SELECT * FROM t1 UNION ALL SELECT * FROM t1
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, arity, join implementations) AS VERBOSE TEXT FOR SELECT * FROM t1 EXCEPT ALL SELECT * FROM t1 UNION ALL SELECT * FROM t1
 ----
 Explained Query:
   ReadStorage materialize.public.t1 // { arity: 2 }
@@ -144,7 +144,7 @@ SELECT * FROM t1 EXCEPT ALL SELECT * FROM t1 UNION ALL SELECT * FROM t1
 4  5
 
 query T multiline
-EXPLAIN WITH(arity, join implementations) SELECT * FROM t1 UNION ALL SELECT * FROM t2 EXCEPT ALL SELECT * FROM t1
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, arity, join implementations) AS VERBOSE TEXT FOR SELECT * FROM t1 UNION ALL SELECT * FROM t2 EXCEPT ALL SELECT * FROM t1
 ----
 Explained Query:
   ReadStorage materialize.public.t2 // { arity: 2 }
@@ -162,7 +162,7 @@ SELECT * FROM t1 UNION ALL SELECT * FROM t2 EXCEPT ALL SELECT * FROM t1
 5 5
 
 query T multiline
-EXPLAIN WITH(arity, join implementations) SELECT * FROM t2 UNION ALL SELECT * FROM t1 EXCEPT ALL SELECT * FROM t1
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, arity, join implementations) AS VERBOSE TEXT FOR SELECT * FROM t2 UNION ALL SELECT * FROM t1 EXCEPT ALL SELECT * FROM t1
 ----
 Explained Query:
   ReadStorage materialize.public.t2 // { arity: 2 }
@@ -180,7 +180,7 @@ SELECT * FROM t2 UNION ALL SELECT * FROM t1 EXCEPT ALL SELECT * FROM t1
 5 5
 
 query T multiline
-EXPLAIN WITH(arity, join implementations) SELECT * FROM t2 EXCEPT ALL SELECT * FROM t1 UNION ALL SELECT * FROM t1
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, arity, join implementations) AS VERBOSE TEXT FOR SELECT * FROM t2 EXCEPT ALL SELECT * FROM t1 UNION ALL SELECT * FROM t1
 ----
 Explained Query:
   Union // { arity: 2 }
@@ -207,12 +207,12 @@ SELECT * FROM t2 EXCEPT ALL SELECT * FROM t1 UNION ALL SELECT * FROM t1
 5  5
 
 query T multiline
-EXPLAIN WITH(arity, join implementations)
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, arity, join implementations) AS VERBOSE TEXT FOR
 WITH t3_with_key AS (select f1 as key, sum(f2) as nokey from t3 group by f1)
 SELECT a1.* FROM t3_with_key AS a1 LEFT JOIN t3_with_key AS a2 ON (a1.key = a2.key)
 ----
 Explained Query:
-  Reduce group_by=[#0] aggregates=[sum(#1)] // { arity: 2 }
+  Reduce group_by=[#0{f1}] aggregates=[sum(#1{f2})] // { arity: 2 }
     ReadStorage materialize.public.t3 // { arity: 2 }
 
 Source materialize.public.t3
@@ -230,7 +230,7 @@ NULL NULL
 5  10
 
 query T multiline
-EXPLAIN WITH(arity, join implementations)
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, arity, join implementations) AS VERBOSE TEXT FOR
 WITH t3_with_key AS (select f1 as key, sum(f2) as nokey from t3 group by f1)
 SELECT a1.* FROM t3 AS a1 LEFT JOIN t3_with_key AS a2 ON (a1.f1 = a2.key);
 ----
@@ -253,7 +253,7 @@ NULL NULL
 5 5
 
 query T multiline
-EXPLAIN WITH(arity, join implementations)
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, arity, join implementations) AS VERBOSE TEXT FOR
 WITH t3_with_key AS (select f1 as key, sum(f2) as nokey from t3 group by f1)
 SELECT a1.* FROM t3 AS a1 LEFT JOIN t3_with_key AS a2 ON (a1.f1 = a2.key or (a1.f1 is null and a2.key is null));
 ----
@@ -280,7 +280,7 @@ CREATE TABLE init(n int, m int, s string);
 
 # Union branch cancellation should happen inside WMR.
 query T multiline
-EXPLAIN
+EXPLAIN OPTIMIZED PLAN WITH (humanized expressions) AS VERBOSE TEXT FOR
 WITH MUTUALLY RECURSIVE
   c0(n int) AS (
     (SELECT n FROM init)
@@ -305,12 +305,12 @@ Explained Query:
   With Mutually Recursive
     cte l0 =
       Union
-        Project (#0)
+        Project (#0{n})
           ReadStorage materialize.public.init
         Get l2
     cte l1 =
       Project (#1)
-        Map ((#0 + #0))
+        Map ((#0{n} + #0{n}))
           Get l0
     cte l2 =
       Union

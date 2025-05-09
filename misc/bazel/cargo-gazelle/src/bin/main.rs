@@ -7,17 +7,20 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+use std::fmt;
 use std::io::{Read, Write};
 use std::path::Path;
 use std::sync::Arc;
 
 use anyhow::Context;
+use cargo_gazelle::BazelBuildFile;
 use cargo_gazelle::args::Args;
 use cargo_gazelle::config::{CrateConfig, GlobalConfig};
 use cargo_gazelle::context::CrateContext;
 use cargo_gazelle::header::BazelHeader;
-use cargo_gazelle::targets::{CargoBuildScript, RustBinary, RustLibrary, RustTarget, RustTest};
-use cargo_gazelle::BazelBuildFile;
+use cargo_gazelle::targets::{
+    CargoBuildScript, ExtractCargoLints, RustBinary, RustLibrary, RustTarget, RustTest,
+};
 use cargo_toml::Manifest;
 use clap::Parser;
 use guppy::graph::{BuildTargetId, PackageMetadata};
@@ -167,7 +170,11 @@ fn generage_build_bazel<'a>(
     let crate_config = CrateConfig::new(package);
     tracing::debug!(?crate_config, "found config");
     if crate_config.skip_generating() {
-        tracing::info!(path = ?package.manifest_path(), "skipping, because crate config");
+        let msg = format!(
+            "skipping generation of '{}' because `skip_generating = True` was set",
+            package.manifest_path()
+        );
+        log_info(msg);
         return Ok(None);
     }
 
@@ -181,18 +188,17 @@ fn generage_build_bazel<'a>(
 
     let build_script = CargoBuildScript::generate(config, &crate_context, &crate_config, package)?;
     let library = RustLibrary::generate(config, package, &crate_config, build_script.as_ref())?;
-
     let integration_tests: Vec<_> = package
         .build_targets()
         .filter(|target| matches!(target.id(), BuildTargetId::Test(_)))
         .map(|target| RustTest::integration(config, package, &crate_config, &target))
         .collect::<Result<_, _>>()?;
-
     let binaries: Vec<_> = package
         .build_targets()
         .filter(|target| matches!(target.id(), BuildTargetId::Binary(_)))
         .map(|target| RustBinary::generate(config, package, &crate_config, &target))
         .collect::<Result<_, _>>()?;
+    let lints = ExtractCargoLints::generate();
 
     #[allow(clippy::as_conversions)]
     let targets: Vec<Box<dyn RustTarget>> = [Box::new(library) as Box<dyn RustTarget>]
@@ -213,6 +219,7 @@ fn generage_build_bazel<'a>(
                 .map(|t| Box::new(t) as Box<dyn RustTarget>),
         )
         .chain(additive_content.map(|t| Box::new(t) as Box<dyn RustTarget>))
+        .chain(std::iter::once(lints).map(|t| Box::new(t) as Box<dyn RustTarget>))
         .collect();
 
     Ok(Some(BazelBuildFile {
@@ -237,4 +244,11 @@ fn hash_file(file: &Path) -> Result<Option<Vec<u8>>, anyhow::Error> {
     let file_hash = file_hasher.finalize();
 
     Ok(Some(file_hash.to_vec()))
+}
+
+/// Prints to stderr an info line that will _always_ get shown to the user.
+fn log_info(s: impl fmt::Display) {
+    static YELLOW_START: &str = "\x1b[94m";
+    static RESET: &str = "\x1b[0m";
+    eprintln!("{YELLOW_START}info:{RESET} {s}");
 }

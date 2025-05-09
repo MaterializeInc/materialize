@@ -10,9 +10,9 @@ publish = false
 workspace = true
 
 [dependencies]
-anyhow = "1.0.66"
-chrono = { version = "0.4.35", default-features = false, features = ["std"] }
-futures = "0.3.25"
+anyhow = "1.0.98"
+chrono = { version = "0.4.39", default-features = false, features = ["std"] }
+futures = "0.3.31"
 mz-build-info = { path = "../build-info" }
 mz-cluster-client = { path = "../cluster-client" }
 mz-compute-client = { path = "../compute-client" }
@@ -29,17 +29,17 @@ mz-storage-client = { path = "../storage-client" }
 mz-storage-controller = { path = "../storage-controller" }
 mz-storage-types = { path = "../storage-types" }
 mz-txn-wal = { path = "../txn-wal" }
-regex = "1.7.0"
-serde = { version = "1.0.152", features = ["derive"] }
-serde_json = "1.0.125"
-timely = "0.16.0"
-tokio = "1.38.0"
+regex = "1.11.1"
+serde = { version = "1.0.219", features = ["derive"] }
+serde_json = "1.0.140"
+timely = "0.20.0"
+tokio = "1.44.1"
 tracing = "0.1.37"
-uuid = { version = "1.7.0" }
+uuid = { version = "1.16.0" }
 workspace-hack = { version = "0.0.0", path = "../workspace-hack", optional = true }
 
 [dev-dependencies]
-bytesize = "1.1.0"
+bytesize = "1.3.0"
 
 [package.metadata.cargo-udeps.ignore]
 normal = ["workspace-hack"]

@@ -15,7 +15,7 @@ use mz_ore::cast::CastFrom;
 use mz_ore::result::ResultExt;
 use mz_ore::str::separated;
 use mz_repr::explain::{DummyHumanizer, ExprHumanizer};
-use mz_repr::{ColumnType, GlobalId, RelationType, Row, ScalarType};
+use mz_repr::{ColumnType, Diff, GlobalId, RelationType, Row, ScalarType};
 use mz_repr_test_util::*;
 use proc_macro2::TokenTree;
 use serde::{Deserialize, Serialize};
@@ -182,8 +182,8 @@ impl ExprHumanizer for TestCatalog {
         self.humanize_id_unqualified(id).map(|name| vec![name])
     }
 
-    fn humanize_scalar_type(&self, ty: &ScalarType) -> String {
-        DummyHumanizer.humanize_scalar_type(ty)
+    fn humanize_scalar_type(&self, ty: &ScalarType, postgres_compat: bool) -> String {
+        DummyHumanizer.humanize_scalar_type(ty, postgres_compat)
     }
 
     fn column_names_for_id(&self, _id: GlobalId) -> Option<Vec<String>> {
@@ -217,7 +217,7 @@ pub struct MirScalarExprDeserializeContext;
 impl MirScalarExprDeserializeContext {
     fn build_column(&self, token: Option<TokenTree>) -> Result<MirScalarExpr, String> {
         if let Some(TokenTree::Literal(literal)) = token {
-            return Ok(MirScalarExpr::Column(
+            return Ok(MirScalarExpr::column(
                 literal
                     .to_string()
                     .parse::<usize>()
@@ -239,7 +239,7 @@ impl MirScalarExprDeserializeContext {
         I: Iterator<Item = TokenTree>,
     {
         match &first_arg {
-            TokenTree::Ident(i) if i.to_string().to_ascii_lowercase() == "ok" => {
+            TokenTree::Ident(i) if i.to_string().eq_ignore_ascii_case("ok") => {
                 // literal definition is mandatory after OK token
                 let first_arg = if let Some(first_arg) = rest_of_stream.next() {
                     first_arg
@@ -251,7 +251,7 @@ impl MirScalarExprDeserializeContext {
                     _ => Err(format!("expected literal after Ident: `{}`", i)),
                 }
             }
-            TokenTree::Ident(i) if i.to_string().to_ascii_lowercase() == "err" => {
+            TokenTree::Ident(i) if i.to_string().eq_ignore_ascii_case("err") => {
                 let error = deserialize_generic(rest_of_stream, "EvalError")?;
                 let typ: Option<ScalarType> =
                     deserialize_optional_generic(rest_of_stream, "ScalarType")?;
@@ -321,7 +321,12 @@ impl TestDeserializeContext for MirScalarExprDeserializeContext {
             assert_eq!(map.len(), 1);
             for (variant, data) in map.iter() {
                 match &variant[..] {
-                    "Column" => return Some(format!("#{}", data.as_u64().unwrap())),
+                    "Column" => {
+                        return Some(format!(
+                            "#{}",
+                            data.as_array().unwrap()[0].as_u64().unwrap()
+                        ));
+                    }
                     "Literal" => {
                         let column_type: ColumnType =
                             serde_json::from_value(data.as_array().unwrap()[1].clone()).unwrap();
@@ -433,7 +438,7 @@ impl<'a> MirRelationExprDeserializeContext<'a> {
                             .zip(&typ.column_types)
                             .map(|(dat, col_typ)| (&dat[..], &col_typ.scalar_type)),
                     )?;
-                    rows.push((row, 1));
+                    rows.push((row, Diff::ONE));
                 }
             }
             invalid => return Err(format!("invalid rows spec for constant `{}`", invalid)),
@@ -578,13 +583,13 @@ impl<'a> TestDeserializeContext for MirRelationExprDeserializeContext<'a> {
                         if punct.as_char() == '#' {
                             match rest_of_stream.next() {
                                 Some(TokenTree::Literal(literal)) => {
-                                    return Ok(Some(literal.to_string()))
+                                    return Ok(Some(literal.to_string()));
                                 }
                                 invalid => {
                                     return Err(format!(
                                         "invalid column value {:?}",
                                         invalid.map(|token_tree| format!("`{}`", token_tree))
-                                    ))
+                                    ));
                                 }
                             }
                         }

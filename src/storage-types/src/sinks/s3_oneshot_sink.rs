@@ -15,8 +15,8 @@ use mz_ore::future::InTask;
 use mz_repr::{CatalogItemId, GlobalId};
 use tracing::{debug, info};
 
-use crate::connections::aws::AwsConnection;
 use crate::connections::ConnectionContext;
+use crate::connections::aws::AwsConnection;
 use crate::sinks::S3UploadInfo;
 
 /// Performs preflight checks for a copy to operation.

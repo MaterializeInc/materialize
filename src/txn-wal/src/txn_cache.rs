@@ -33,9 +33,9 @@ use timely::order::TotalOrder;
 use timely::progress::{Antichain, Timestamp};
 use tracing::debug;
 
+use crate::TxnsCodecDefault;
 use crate::metrics::Metrics;
 use crate::txn_read::{DataListenNext, DataRemapEntry, DataSnapshot, DataSubscribe};
-use crate::TxnsCodecDefault;
 
 /// A cache of the txn shard contents, optimized for various in-memory
 /// operations.
@@ -560,7 +560,13 @@ impl<T: Timestamp + Lattice + TotalOrder + StepForward + Codec64 + Sync> TxnsCac
             let times = self.datas.get_mut(&data_id).expect("data is initialized");
             // Sanity check that shard is registered.
             assert_eq!(times.last_reg().forget_ts, None);
-            times.writes.push_back(ts);
+
+            // Only add the timestamp if it's not already in the deque. We don't
+            // track all writes in this but track at what timestamps we have
+            // _any_ writes.
+            if times.writes.back() != Some(&ts) {
+                times.writes.push_back(ts);
+            }
         } else if diff == -1 {
             debug!(
                 "cache learned {:.9} applied t={:?} b={}",
@@ -1118,10 +1124,10 @@ pub(crate) enum Unapplied<'a> {
 
 #[cfg(test)]
 mod tests {
+    use DataListenNext::*;
     use mz_ore::assert_err;
     use mz_persist_client::PersistClient;
     use mz_persist_types::codec_impls::{ShardIdSchema, VecU8Schema};
-    use DataListenNext::*;
 
     use crate::operator::DataSubscribe;
     use crate::tests::reader;
@@ -1219,7 +1225,9 @@ mod tests {
 
         // empty
         assert_eq!(c.progress_exclusive, 0);
-        assert_err!(mz_ore::panic::catch_unwind(|| c.data_snapshot(d0, 0)));
+        #[allow(clippy::disallowed_methods)] // not using enhanced panic handler in tests
+        let result = std::panic::catch_unwind(|| c.data_snapshot(d0, 0));
+        assert_err!(result);
         assert_eq!(c.data_listen_next(&d0, &0), WaitForTxnsProgress);
 
         // ts 0 (never registered)
@@ -1486,7 +1494,9 @@ mod tests {
         let mut c = TxnsCacheState::new(ShardId::new(), 10, None);
         c.progress_exclusive = 20;
 
-        assert_err!(mz_ore::panic::catch_unwind(|| c.data_listen_next(&d0, &0)));
+        #[allow(clippy::disallowed_methods)] // not using enhanced panic handler in tests
+        let result = std::panic::catch_unwind(|| c.data_listen_next(&d0, &0));
+        assert_err!(result);
 
         let ds = c.data_snapshot(d0, 0);
         assert_eq!(

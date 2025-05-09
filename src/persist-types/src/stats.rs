@@ -14,6 +14,10 @@
 use std::fmt::Debug;
 
 use anyhow::Context;
+use arrow::array::{
+    BinaryArray, BooleanArray, Float32Array, Float64Array, Int8Array, Int16Array, Int32Array,
+    Int64Array, StringArray, UInt8Array, UInt16Array, UInt32Array, UInt64Array,
+};
 use mz_ore::cast::CastFrom;
 use mz_ore::metrics::{IntCounter, MetricsRegistry};
 use mz_ore::{assert_none, metric};
@@ -23,8 +27,8 @@ use proptest::strategy::{Strategy, Union};
 use proptest_derive::Arbitrary;
 use prost::Message;
 
-use crate::columnar::{ColumnDecoder, Schema2};
-use crate::part::Part2;
+use crate::columnar::{ColumnDecoder, Schema};
+use crate::part::Part;
 use crate::stats::bytes::any_bytes_stats;
 use crate::stats::primitive::any_primitive_stats;
 
@@ -36,7 +40,8 @@ pub mod structured;
 pub use bytes::{AtomicBytesStats, BytesStats, FixedSizeBytesStats, FixedSizeBytesStatsKind};
 pub use json::{JsonMapElementStats, JsonStats};
 pub use primitive::{
-    truncate_bytes, PrimitiveStats, PrimitiveStatsVariants, TruncateBound, TRUNCATE_LEN,
+    PrimitiveStats, PrimitiveStatsVariants, TRUNCATE_LEN, TruncateBound, truncate_bytes,
+    truncate_string,
 };
 pub use structured::StructStats;
 
@@ -313,6 +318,17 @@ pub trait ColumnStats: DynStats {
     fn none_count(&self) -> usize;
 }
 
+/// A type that can incrementally collect stats from a sequence of values.
+pub trait ColumnarStatsBuilder<T>: Debug + DynStats {
+    /// Type of [`arrow`] column these statistics can be derived from.
+    type ArrowColumn: arrow::array::Array + 'static;
+
+    /// Derive statistics from a column of data.
+    fn from_column(col: &Self::ArrowColumn) -> Self
+    where
+        Self: Sized;
+}
+
 /// Type that can be used to represent some [`ColumnStats`].
 ///
 /// This is a separate trait than [`ColumnStats`] because its implementations
@@ -341,10 +357,10 @@ pub trait TrimStats: Message {
     fn trim(&mut self);
 }
 
-/// Aggregate statistics about data contained in a [Part2].
+/// Aggregate statistics about data contained in a [Part].
 #[derive(Arbitrary, Debug)]
 pub struct PartStats {
-    /// Aggregate statistics about key data contained in a [Part2].
+    /// Aggregate statistics about key data contained in a [Part].
     pub key: StructStats,
 }
 
@@ -356,10 +372,10 @@ impl serde::Serialize for PartStats {
 }
 
 impl PartStats {
-    /// Calculates and returns stats for the given [`Part2`].
-    pub fn new<T, K>(part: &Part2, desc: &K) -> Result<Self, anyhow::Error>
+    /// Calculates and returns stats for the given [`Part`].
+    pub fn new<T, K>(part: &Part, desc: &K) -> Result<Self, anyhow::Error>
     where
-        K: Schema2<T, Statistics = StructStats>,
+        K: Schema<T, Statistics = StructStats>,
     {
         let decoder = K::decoder_any(desc, &part.key).context("decoder_any")?;
         let stats = decoder.stats();
@@ -464,6 +480,86 @@ impl RustType<()> for NoneStats {
 
     fn from_proto(_proto: ()) -> Result<Self, TryFromProtoError> {
         Ok(NoneStats)
+    }
+}
+
+/// We collect stats for all primitive types in exactly the same way. This
+/// macro de-duplicates some of that logic.
+///
+/// Note: If at any point someone finds this macro too complex, they should
+/// feel free to refactor it away!
+macro_rules! primitive_stats {
+    ($native:ty, $arrow_col:ty, $min_fn:path, $max_fn:path) => {
+        impl ColumnarStatsBuilder<$native> for PrimitiveStats<$native> {
+            type ArrowColumn = $arrow_col;
+
+            fn from_column(col: &Self::ArrowColumn) -> Self
+            where
+                Self: Sized,
+            {
+                let lower = $min_fn(col).unwrap_or_default();
+                let upper = $max_fn(col).unwrap_or_default();
+
+                PrimitiveStats { lower, upper }
+            }
+        }
+    };
+}
+
+primitive_stats!(
+    bool,
+    BooleanArray,
+    arrow::compute::min_boolean,
+    arrow::compute::max_boolean
+);
+primitive_stats!(u8, UInt8Array, arrow::compute::min, arrow::compute::max);
+primitive_stats!(u16, UInt16Array, arrow::compute::min, arrow::compute::max);
+primitive_stats!(u32, UInt32Array, arrow::compute::min, arrow::compute::max);
+primitive_stats!(u64, UInt64Array, arrow::compute::min, arrow::compute::max);
+primitive_stats!(i8, Int8Array, arrow::compute::min, arrow::compute::max);
+primitive_stats!(i16, Int16Array, arrow::compute::min, arrow::compute::max);
+primitive_stats!(i32, Int32Array, arrow::compute::min, arrow::compute::max);
+primitive_stats!(i64, Int64Array, arrow::compute::min, arrow::compute::max);
+primitive_stats!(f32, Float32Array, arrow::compute::min, arrow::compute::max);
+primitive_stats!(f64, Float64Array, arrow::compute::min, arrow::compute::max);
+
+impl ColumnarStatsBuilder<&str> for PrimitiveStats<String> {
+    type ArrowColumn = StringArray;
+    fn from_column(col: &Self::ArrowColumn) -> Self
+    where
+        Self: Sized,
+    {
+        let lower = arrow::compute::min_string(col).unwrap_or_default();
+        let lower = truncate_string(lower, TRUNCATE_LEN, TruncateBound::Lower)
+            .expect("lower bound should always truncate");
+        let upper = arrow::compute::max_string(col).unwrap_or_default();
+        let upper = truncate_string(upper, TRUNCATE_LEN, TruncateBound::Upper)
+            // NB: The cost+trim stuff will remove the column entirely if
+            // it's still too big (also this should be extremely rare in
+            // practice).
+            .unwrap_or_else(|| upper.to_owned());
+
+        PrimitiveStats { lower, upper }
+    }
+}
+
+impl ColumnarStatsBuilder<&[u8]> for PrimitiveStats<Vec<u8>> {
+    type ArrowColumn = BinaryArray;
+    fn from_column(col: &Self::ArrowColumn) -> Self
+    where
+        Self: Sized,
+    {
+        let lower = arrow::compute::min_binary(col).unwrap_or_default();
+        let lower = truncate_bytes(lower, TRUNCATE_LEN, TruncateBound::Lower)
+            .expect("lower bound should always truncate");
+        let upper = arrow::compute::max_binary(col).unwrap_or_default();
+        let upper = truncate_bytes(upper, TRUNCATE_LEN, TruncateBound::Upper)
+            // NB: The cost+trim stuff will remove the column entirely if
+            // it's still too big (also this should be extremely rare in
+            // practice).
+            .unwrap_or_else(|| upper.to_owned());
+
+        PrimitiveStats { lower, upper }
     }
 }
 

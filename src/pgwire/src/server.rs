@@ -15,16 +15,16 @@ use std::str::FromStr;
 use anyhow::Context;
 use async_trait::async_trait;
 use mz_frontegg_auth::Authenticator as FronteggAuthentication;
+use mz_ore::now::{SYSTEM_TIME, epoch_to_uuid_v7};
 use mz_pgwire_common::{
-    decode_startup, Conn, ConnectionCounter, FrontendStartupMessage, ACCEPT_SSL_ENCRYPTION,
-    CONN_UUID_KEY, MZ_FORWARDED_FOR_KEY, REJECT_ENCRYPTION,
+    ACCEPT_SSL_ENCRYPTION, CONN_UUID_KEY, Conn, ConnectionCounter, FrontendStartupMessage,
+    MZ_FORWARDED_FOR_KEY, REJECT_ENCRYPTION, decode_startup,
 };
 use mz_server_core::{Connection, ConnectionHandler, ReloadingTlsConfig};
 use openssl::ssl::Ssl;
 use tokio::io::AsyncWriteExt;
 use tokio_openssl::SslStream;
 use tracing::{debug, error, trace};
-use uuid::Uuid;
 
 use crate::codec::FramedConn;
 use crate::metrics::{Metrics, MetricsConfig};
@@ -48,6 +48,8 @@ pub struct Config {
     /// a valid Frontegg API token as a password to authenticate. Otherwise,
     /// password authentication is disabled.
     pub frontegg: Option<FronteggAuthentication>,
+    /// Whether to use self-hosted authentication.
+    pub use_self_hosted_auth: bool,
     /// The registry entries that the pgwire server uses to report metrics.
     pub metrics: MetricsConfig,
     /// Whether this is an internal server that permits access to restricted
@@ -68,6 +70,7 @@ pub struct Server {
     internal: bool,
     active_connection_counter: ConnectionCounter,
     helm_chart_version: Option<String>,
+    use_self_hosted_auth: bool,
 }
 
 #[async_trait]
@@ -89,6 +92,7 @@ impl Server {
             tls: config.tls,
             adapter_client: config.adapter_client,
             frontegg: config.frontegg,
+            use_self_hosted_auth: config.use_self_hosted_auth,
             metrics: Metrics::new(config.metrics, config.label),
             internal: config.internal,
             active_connection_counter: config.active_connection_counter,
@@ -103,6 +107,7 @@ impl Server {
     ) -> impl Future<Output = Result<(), anyhow::Error>> + 'static + Send {
         let adapter_client = self.adapter_client.clone();
         let frontegg = self.frontegg.clone();
+        let use_self_hosted_auth = self.use_self_hosted_auth;
         let tls = self.tls.clone();
         let internal = self.internal;
         let metrics = self.metrics.clone();
@@ -141,7 +146,10 @@ impl Server {
                                     .remove(CONN_UUID_KEY)
                                     .and_then(|uuid| uuid.parse().inspect_err(|e| error!("pgwire connection with invalid conn UUID: {e}")).ok());
                                 let conn_uuid_forwarded = conn_uuid.is_some();
-                                let conn_uuid = conn_uuid.unwrap_or_else(Uuid::new_v4);
+                                // FIXME(ptravers): we should be able to inject the clock when instantiating the `Server`
+                                // but as of writing there's no great way, I can see, to harmonize the lifetimes of the return type
+                                // and &self which must house `NowFn`.
+                                let conn_uuid = conn_uuid.unwrap_or_else(|| epoch_to_uuid_v7(&(SYSTEM_TIME.clone())()));
                                 conn_uuid_handle.set(conn_uuid);
                                 debug!(conn_uuid = %conn_uuid_handle.display(), conn_uuid_forwarded, "starting new pgwire connection in adapter");
 
@@ -176,6 +184,7 @@ impl Server {
                                     version,
                                     params,
                                     frontegg: frontegg.as_ref(),
+                                    use_self_hosted_auth,
                                     internal,
                                     active_connection_counter,
                                     helm_chart_version,

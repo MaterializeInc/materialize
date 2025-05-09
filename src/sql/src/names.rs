@@ -22,8 +22,9 @@ use mz_ore::cast::CastFrom;
 use mz_ore::str::StrExt;
 use mz_repr::network_policy_id::NetworkPolicyId;
 use mz_repr::role_id::RoleId;
-use mz_repr::{CatalogItemId, GlobalId};
+use mz_repr::{CatalogItemId, GlobalId, RelationVersion};
 use mz_repr::{ColumnName, RelationVersionSelector};
+use mz_sql_parser::ast::visit_mut::VisitMutNode;
 use mz_sql_parser::ast::{CreateContinualTaskStatement, Expr, RawNetworkPolicyName, Version};
 use mz_sql_parser::ident;
 use proptest_derive::Arbitrary;
@@ -490,10 +491,12 @@ impl AstDisplay for ResolvedItemName {
                 f.write_str(".");
                 f.write_node(&Ident::new_unchecked(&full_name.item));
 
-                if let RelationVersionSelector::Specific(version) = version {
-                    let version: Version = (*version).into();
-                    f.write_str(" VERSION ");
-                    f.write_node(&version);
+                if *print_id {
+                    if let RelationVersionSelector::Specific(version) = version {
+                        let version: Version = (*version).into();
+                        f.write_str(" VERSION ");
+                        f.write_node(&version);
+                    }
                 }
 
                 if *print_id {
@@ -521,7 +524,7 @@ impl AstDisplay for ResolvedItemName {
 
 impl std::fmt::Display for ResolvedItemName {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-        f.write_str(self.to_ast_string().as_str())
+        f.write_str(self.to_ast_string_simple().as_str())
     }
 }
 
@@ -544,7 +547,7 @@ impl AstDisplay for ResolvedColumnReference {
 
 impl std::fmt::Display for ResolvedColumnReference {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-        f.write_str(self.to_ast_string().as_str())
+        f.write_str(self.to_ast_string_simple().as_str())
     }
 }
 
@@ -791,7 +794,7 @@ impl ResolvedDataType {
 
 impl fmt::Display for ResolvedDataType {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        f.write_str(self.to_ast_string().as_str())
+        f.write_str(self.to_ast_string_simple().as_str())
     }
 }
 
@@ -1455,18 +1458,26 @@ impl<'a> NameResolver<'a> {
                     .entry(item.id())
                     .or_default()
                     .insert(item.global_id());
-
                 let print_id = !matches!(
                     item.item_type(),
                     CatalogItemType::Func | CatalogItemType::Type
                 );
+                let alter_table_enabled =
+                    self.catalog.system_vars().enable_alter_table_add_column();
+                let version = match item.latest_version() {
+                    // Only track the version of referenced object if the feature is enabled.
+                    Some(v) if item.id().is_user() && alter_table_enabled => {
+                        RelationVersionSelector::Specific(v)
+                    }
+                    _ => RelationVersionSelector::Latest,
+                };
+
                 ResolvedItemName::Item {
                     id: item.id(),
                     qualifiers: item.name().qualifiers.clone(),
                     full_name: self.catalog.resolve_full_name(item.name()),
                     print_id,
-                    // TODO(alter_table): Specify an actual version here.
-                    version: RelationVersionSelector::Latest,
+                    version,
                 }
             }
             Err(mut e) => {
@@ -1506,7 +1517,7 @@ impl<'a> NameResolver<'a> {
         &mut self,
         id: String,
         raw_name: UnresolvedItemName,
-        _version: Option<Version>,
+        version: Option<Version>,
     ) -> ResolvedItemName {
         let id: CatalogItemId = match id.parse() {
             Ok(id) => id,
@@ -1526,9 +1537,35 @@ impl<'a> NameResolver<'a> {
                 return ResolvedItemName::Error;
             }
         };
-
-        // TODO(alter_table): Use the actual version here.
-        let item = item.at_version(RelationVersionSelector::Latest);
+        let alter_table_enabled = self.catalog.system_vars().enable_alter_table_add_column();
+        let version = match version {
+            // If there isn't a version specified, and this item supports versioning, track the
+            // latest.
+            None => match item.latest_version() {
+                // Only track the version of the referenced object, if the feature is enabled.
+                Some(v) if alter_table_enabled => RelationVersionSelector::Specific(v),
+                _ => RelationVersionSelector::Latest,
+            },
+            // Note: Return the specific version if one is specified, even if the feature is off.
+            Some(v) => {
+                let specified_version = RelationVersion::from(v);
+                match item.latest_version() {
+                    Some(latest) if latest >= specified_version => {
+                        RelationVersionSelector::Specific(specified_version)
+                    }
+                    _ => {
+                        if self.status.is_ok() {
+                            self.status = Err(PlanError::InvalidVersion {
+                                name: item.name().item.clone(),
+                                version: v.to_string(),
+                            })
+                        }
+                        return ResolvedItemName::Error;
+                    }
+                }
+            }
+        };
+        let item = item.at_version(version);
         self.ids
             .entry(item.id())
             .or_default()
@@ -1548,8 +1585,7 @@ impl<'a> NameResolver<'a> {
             qualifiers: item.name().qualifiers.clone(),
             full_name,
             print_id: true,
-            // TODO(alter_table): Use the actual version here.
-            version: RelationVersionSelector::Latest,
+            version,
         }
     }
 }
@@ -2351,6 +2387,44 @@ where
     ResolvedIds::new(visitor.ids)
 }
 
+#[derive(Debug)]
+pub struct ItemDependencyModifier<'a> {
+    pub modified: bool,
+    pub id_map: &'a BTreeMap<CatalogItemId, CatalogItemId>,
+}
+
+impl<'ast, 'a> VisitMut<'ast, Raw> for ItemDependencyModifier<'a> {
+    fn visit_item_name_mut(&mut self, item_name: &mut RawItemName) {
+        if let RawItemName::Id(id, _, _) = item_name {
+            let parsed_id = id.parse::<CatalogItemId>().unwrap();
+            if let Some(new_id) = self.id_map.get(&parsed_id) {
+                *id = new_id.to_string();
+                self.modified = true;
+            }
+        }
+    }
+}
+
+/// Updates any references in the provided AST node that are keys in `id_map`.
+/// If an id is found it will be updated to the value of the key in `id_map`.
+/// This assumes the names of the reference(s) are unmodified (e.g. each pair of
+/// ids refer to an item of the same name, whose id has changed).
+pub fn modify_dependency_item_ids<'ast, N>(
+    node: &'ast mut N,
+    id_map: &BTreeMap<CatalogItemId, CatalogItemId>,
+) -> bool
+where
+    N: VisitMutNode<'ast, Raw>,
+{
+    let mut modifier = ItemDependencyModifier {
+        id_map,
+        modified: false,
+    };
+    node.visit_mut(&mut modifier);
+
+    modifier.modified
+}
+
 // Used when displaying a view's source for human creation. If the name
 // specified is the same as the name in the catalog, we don't use the ID format.
 #[derive(Debug)]
@@ -2392,6 +2466,50 @@ impl<'ast, 'a> VisitMut<'ast, Aug> for NameSimplifier<'a> {
             if catalog_full_name == *full_name {
                 *print_id = false;
             }
+        }
+    }
+}
+
+/// Returns the [`CatalogItemId`] dependencies the provided `node` has.
+///
+/// _DOES NOT_ resolve names, simply does a recursive walk through an object to
+/// find all of the IDs.
+pub fn dependencies<'ast, N>(node: &'ast N) -> Result<BTreeSet<CatalogItemId>, anyhow::Error>
+where
+    N: VisitNode<'ast, Raw>,
+{
+    let mut visitor = IdDependencVisitor::default();
+    node.visit(&mut visitor);
+    match visitor.error {
+        Some(error) => Err(error),
+        None => Ok(visitor.ids),
+    }
+}
+
+#[derive(Debug, Default)]
+struct IdDependencVisitor {
+    ids: BTreeSet<CatalogItemId>,
+    error: Option<anyhow::Error>,
+}
+
+impl<'ast> Visit<'ast, Raw> for IdDependencVisitor {
+    fn visit_item_name(&mut self, node: &'ast <Raw as AstInfo>::ItemName) {
+        // Bail early if we're already in an error state.
+        if self.error.is_some() {
+            return;
+        }
+
+        match node {
+            // Nothing to do! We don't lookup names.
+            RawItemName::Name(_) => (),
+            RawItemName::Id(id, _name, _version) => match id.parse::<CatalogItemId>() {
+                Ok(id) => {
+                    self.ids.insert(id);
+                }
+                Err(e) => {
+                    self.error = Some(e);
+                }
+            },
         }
     }
 }

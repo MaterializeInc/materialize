@@ -17,10 +17,12 @@ import requests
 from materialize.mzcompose.composition import Composition
 from materialize.mzcompose.services.clusterd import Clusterd
 from materialize.mzcompose.services.materialized import Materialized
+from materialize.mzcompose.services.mz import Mz
 
 SENTRY_DSN = os.getenv("BUILDKITE_SENTRY_DSN")
 
 SERVICES = [
+    Mz(app_password=""),
     Materialized(
         options=[
             "--opentelemetry-endpoint=whatever:7777",
@@ -33,10 +35,14 @@ SERVICES = [
 
 
 def workflow_default(c: Composition) -> None:
-    for name in c.workflows:
-        if name != "default":
-            with c.test_case(name):
-                c.workflow(name)
+    def process(name: str) -> None:
+        if name == "default":
+            return
+
+        with c.test_case(name):
+            c.workflow(name)
+
+    c.test_parts(list(c.workflows.keys()), process)
 
 
 def workflow_with_everything(c: Composition) -> None:

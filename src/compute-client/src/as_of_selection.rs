@@ -89,9 +89,9 @@ use mz_repr::{GlobalId, TimestampManipulation};
 use mz_storage_client::storage_collections::StorageCollections;
 use mz_storage_types::read_holds::ReadHold;
 use mz_storage_types::read_policy::ReadPolicy;
-use timely::progress::{Antichain, Timestamp};
 use timely::PartialOrder;
-use tracing::{info, warn};
+use timely::progress::{Antichain, Timestamp};
+use tracing::info;
 
 /// Runs as-of selection for the given dataflows.
 ///
@@ -153,7 +153,7 @@ pub fn run<T: TimestampManipulation>(
         // `AsOfBounds` are shared between the exports of a dataflow, so looking at just the first
         // export is sufficient.
         let first_export = dataflow.export_ids().next();
-        let as_of = first_export.map_or(Antichain::new(), |id| ctx.best_as_of(id));
+        let as_of = first_export.map_or_else(Antichain::new, |id| ctx.best_as_of(id));
         dataflow.as_of = Some(as_of);
     }
 
@@ -395,7 +395,7 @@ impl<'a, T: TimestampManipulation> Context<'a, T> {
                         );
                     }
                     ConstraintType::Soft => {
-                        warn!(%id, %bounds, ?constraint, "failed to apply soft as-of constraint");
+                        info!(%id, %bounds, ?constraint, "failed to apply soft as-of constraint");
                     }
                 }
                 changed
@@ -473,7 +473,7 @@ impl<'a, T: TimestampManipulation> Context<'a, T> {
                     frontiers
                         .write_frontier
                         .iter()
-                        .map(|t| t.step_back().unwrap_or(T::minimum())),
+                        .map(|t| t.step_back().unwrap_or_else(T::minimum)),
                 )
             };
 
@@ -757,7 +757,7 @@ fn fixpoint(mut step: impl FnMut(&mut bool)) {
 fn step_back_frontier<T: TimestampManipulation>(frontier: &Antichain<T>) -> Antichain<T> {
     frontier
         .iter()
-        .map(|t| t.step_back().unwrap_or(T::minimum()))
+        .map(|t| t.step_back().unwrap_or_else(T::minimum))
         .collect()
 }
 
@@ -768,6 +768,7 @@ mod tests {
     use async_trait::async_trait;
     use differential_dataflow::lattice::Lattice;
     use futures::future::BoxFuture;
+    use futures::stream::BoxStream;
     use mz_compute_types::dataflows::{IndexDesc, IndexImport};
     use mz_compute_types::sinks::ComputeSinkConnection;
     use mz_compute_types::sinks::ComputeSinkDesc;
@@ -775,18 +776,19 @@ mod tests {
     use mz_compute_types::sources::SourceInstanceArguments;
     use mz_compute_types::sources::SourceInstanceDesc;
     use mz_persist_client::stats::{SnapshotPartsStats, SnapshotStats};
-    use mz_persist_types::Codec64;
+    use mz_persist_types::{Codec64, ShardId};
     use mz_repr::Timestamp;
-    use mz_repr::{Diff, RelationType};
-    use mz_repr::{RelationDesc, Row};
+    use mz_repr::{RelationDesc, RelationType, RelationVersion, Row};
+    use mz_storage_client::client::TimestamplessUpdateBuilder;
     use mz_storage_client::controller::{CollectionDescription, StorageMetadata, StorageTxn};
     use mz_storage_client::storage_collections::{CollectionFrontiers, SnapshotCursor};
+    use mz_storage_types::StorageDiff;
     use mz_storage_types::connections::inline::InlinedConnection;
     use mz_storage_types::controller::{CollectionMetadata, StorageError};
     use mz_storage_types::parameters::StorageParameters;
     use mz_storage_types::read_holds::ReadHoldError;
-    use mz_storage_types::sources::SourceExportDataConfig;
     use mz_storage_types::sources::{GenericSourceConnection, SourceDesc};
+    use mz_storage_types::sources::{SourceData, SourceExportDataConfig};
     use mz_storage_types::time_dependence::{TimeDependence, TimeDependenceError};
     use timely::progress::Timestamp as TimelyTimestamp;
 
@@ -813,7 +815,6 @@ mod tests {
             &self,
             _txn: &mut (dyn StorageTxn<Self::Timestamp> + Send),
             _init_ids: BTreeSet<GlobalId>,
-            _drop_ids: BTreeSet<GlobalId>,
         ) -> Result<(), StorageError<Self::Timestamp>> {
             unimplemented!()
         }
@@ -879,7 +880,8 @@ mod tests {
             &self,
             _id: GlobalId,
             _as_of: Self::Timestamp,
-        ) -> BoxFuture<'static, Result<Vec<(Row, Diff)>, StorageError<Self::Timestamp>>> {
+        ) -> BoxFuture<'static, Result<Vec<(Row, StorageDiff)>, StorageError<Self::Timestamp>>>
+        {
             unimplemented!()
         }
 
@@ -890,13 +892,48 @@ mod tests {
             unimplemented!()
         }
 
-        async fn snapshot_cursor(
-            &mut self,
+        fn snapshot_cursor(
+            &self,
             _id: GlobalId,
             _as_of: Self::Timestamp,
-        ) -> Result<SnapshotCursor<Self::Timestamp>, StorageError<Self::Timestamp>>
+        ) -> BoxFuture<
+            'static,
+            Result<SnapshotCursor<Self::Timestamp>, StorageError<Self::Timestamp>>,
+        >
         where
             Self::Timestamp: TimelyTimestamp + Lattice + Codec64,
+        {
+            unimplemented!()
+        }
+
+        fn snapshot_and_stream(
+            &self,
+            _id: GlobalId,
+            _as_of: Self::Timestamp,
+        ) -> BoxFuture<
+            'static,
+            Result<
+                BoxStream<'static, (SourceData, Self::Timestamp, StorageDiff)>,
+                StorageError<Self::Timestamp>,
+            >,
+        > {
+            unimplemented!()
+        }
+
+        /// Create a [`TimestamplessUpdateBuilder`] that can be used to stage
+        /// updates for the provided [`GlobalId`].
+        fn create_update_builder(
+            &self,
+            _id: GlobalId,
+        ) -> BoxFuture<
+            'static,
+            Result<
+                TimestamplessUpdateBuilder<SourceData, (), Self::Timestamp, StorageDiff>,
+                StorageError<Self::Timestamp>,
+            >,
+        >
+        where
+            Self::Timestamp: Lattice + Codec64,
         {
             unimplemented!()
         }
@@ -906,6 +943,7 @@ mod tests {
             _txn: &mut (dyn StorageTxn<Self::Timestamp> + Send),
             _ids_to_add: BTreeSet<GlobalId>,
             _ids_to_drop: BTreeSet<GlobalId>,
+            _ids_to_register: BTreeMap<GlobalId, ShardId>,
         ) -> Result<(), StorageError<Self::Timestamp>> {
             unimplemented!()
         }
@@ -942,10 +980,12 @@ mod tests {
             unimplemented!()
         }
 
-        fn alter_table_desc(
+        async fn alter_table_desc(
             &self,
-            _table_id: GlobalId,
+            _existing_collection: GlobalId,
+            _new_collection: GlobalId,
             _new_desc: RelationDesc,
+            _expected_version: RelationVersion,
         ) -> Result<(), StorageError<Self::Timestamp>> {
             unimplemented!()
         }
@@ -1003,7 +1043,7 @@ mod tests {
                     storage_metadata: Default::default(),
                     typ: RelationType::empty(),
                 };
-                (id, (desc, Default::default()))
+                (id, (desc, Default::default(), Default::default()))
             })
             .collect();
         let index_imports = input_ids

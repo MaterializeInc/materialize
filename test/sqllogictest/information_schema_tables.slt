@@ -685,6 +685,10 @@ mz_source_statuses
 VIEW
 materialize
 mz_internal
+mz_sql_server_source_tables
+BASE TABLE
+materialize
+mz_internal
 mz_sql_text
 SOURCE
 materialize
@@ -719,6 +723,18 @@ materialize
 mz_internal
 mz_type_pg_metadata
 BASE TABLE
+materialize
+mz_internal
+mz_wallclock_global_lag
+VIEW
+materialize
+mz_internal
+mz_wallclock_global_lag_histogram
+VIEW
+materialize
+mz_internal
+mz_wallclock_global_lag_histogram_raw
+SOURCE
 materialize
 mz_internal
 mz_wallclock_global_lag_history
@@ -982,6 +998,10 @@ VIEW
 materialize
 mz_introspection
 mz_lir_mapping
+VIEW
+materialize
+mz_introspection
+mz_mappable_objects
 VIEW
 materialize
 mz_introspection

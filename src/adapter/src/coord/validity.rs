@@ -15,8 +15,8 @@ use mz_repr::CatalogItemId;
 use mz_sql::rbac::UnauthorizedError;
 use mz_sql::session::user::RoleMetadata;
 
-use crate::catalog::Catalog;
 use crate::AdapterError;
+use crate::catalog::Catalog;
 
 // The inner fields of PlanValidity are not pub to prevent callers from using them in SQL logic.
 // Callers are responsible for tracking their own needed IDs explicitly and not using
@@ -184,11 +184,11 @@ mod tests {
     use mz_sql::session::metadata::SessionMetadata;
     use uuid::Uuid;
 
+    use crate::AdapterError;
     use crate::catalog::{Catalog, Op};
     use crate::coord::validity::PlanValidity;
     use crate::metrics::Metrics;
     use crate::session::{Session, SessionConfig};
-    use crate::AdapterError;
 
     #[mz_ore::test(tokio::test)]
     #[cfg_attr(miri, ignore)] // unsupported operation: returning ready events from epoll_wait is not yet implemented
@@ -223,6 +223,7 @@ mod tests {
                     user,
                     client_ip: None,
                     external_metadata_rx: None,
+                    internal_user_metadata: None,
                     helm_chart_version: None,
                 },
                 metrics.session_metrics(),

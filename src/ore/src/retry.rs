@@ -58,7 +58,7 @@ use std::pin::Pin;
 use std::task::{Context, Poll};
 use std::{cmp, thread};
 
-use futures::{ready, Stream, StreamExt};
+use futures::{Stream, StreamExt, ready};
 use pin_project::pin_project;
 use tokio::io::{AsyncRead, ReadBuf};
 use tokio::time::error::Elapsed;
@@ -469,7 +469,7 @@ where
                         return Poll::Ready(Err(this
                             .error
                             .take()
-                            .expect("retry produces at least one element")))
+                            .expect("retry produces at least one element")));
                     }
                     Some(state) => {
                         this.state
@@ -963,11 +963,7 @@ mod tests {
             #[allow(clippy::unused_async)]
             async fn try_inc(&mut self) -> Result<i64, ()> {
                 self.i += 1;
-                if self.i > 10 {
-                    Ok(self.i)
-                } else {
-                    Err(())
-                }
+                if self.i > 10 { Ok(self.i) } else { Err(()) }
             }
         }
 

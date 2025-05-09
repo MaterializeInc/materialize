@@ -7,8 +7,8 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use mysql_async::prelude::Queryable;
 use mysql_async::Conn;
+use mysql_async::prelude::Queryable;
 
 use crate::MySqlError;
 

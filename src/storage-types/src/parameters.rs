@@ -493,9 +493,6 @@ impl RustType<ProtoKafkaTimeouts> for mz_kafka_util::client::TimeoutConfig {
             ),
             fetch_metadata_timeout: Some(self.fetch_metadata_timeout.into_proto()),
             progress_record_fetch_timeout: Some(self.progress_record_fetch_timeout.into_proto()),
-            default_metadata_fetch_interval: Some(
-                self.default_metadata_fetch_interval.into_proto(),
-            ),
         }
     }
 
@@ -519,11 +516,6 @@ impl RustType<ProtoKafkaTimeouts> for mz_kafka_util::client::TimeoutConfig {
             progress_record_fetch_timeout: proto
                 .progress_record_fetch_timeout
                 .into_rust_if_some("ProtoKafkaSourceTcpTimeouts::progress_record_fetch_timeout")?,
-            default_metadata_fetch_interval: proto
-                .default_metadata_fetch_interval
-                .into_rust_if_some(
-                    "ProtoKafkaSourceTcpTimeouts::default_metadata_fetch_interval",
-                )?,
         })
     }
 }
@@ -534,6 +526,7 @@ impl RustType<ProtoMySqlSourceTimeouts> for mz_mysql_util::TimeoutConfig {
             tcp_keepalive: self.tcp_keepalive.into_proto(),
             snapshot_max_execution_time: self.snapshot_max_execution_time.into_proto(),
             snapshot_lock_wait_timeout: self.snapshot_lock_wait_timeout.into_proto(),
+            connect_timeout: self.connect_timeout.into_proto(),
         }
     }
 
@@ -542,6 +535,7 @@ impl RustType<ProtoMySqlSourceTimeouts> for mz_mysql_util::TimeoutConfig {
             tcp_keepalive: proto.tcp_keepalive.into_rust()?,
             snapshot_max_execution_time: proto.snapshot_max_execution_time.into_rust()?,
             snapshot_lock_wait_timeout: proto.snapshot_lock_wait_timeout.into_rust()?,
+            connect_timeout: proto.connect_timeout.into_rust()?,
         })
     }
 }

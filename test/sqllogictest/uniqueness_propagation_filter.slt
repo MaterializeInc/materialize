@@ -31,11 +31,11 @@ CREATE DEFAULT INDEX ON v1
 #
 
 query T multiline
-EXPLAIN WITH(arity, join implementations) SELECT DISTINCT f1, f2 FROM v1 WHERE f1 = f3;
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, arity, join implementations) AS VERBOSE TEXT FOR SELECT DISTINCT f1, f2 FROM v1 WHERE f1 = f3;
 ----
 Explained Query (fast path):
-  Project (#0, #1)
-    Filter (#0 = #2)
+  Project (#0{f1}, #1{f2})
+    Filter (#0{f1} = #2{f3})
       ReadIndex on=materialize.public.v1 v1_primary_idx=[*** full scan ***]
 
 Used Indexes:
@@ -46,11 +46,11 @@ Target cluster: quickstart
 EOF
 
 query T multiline
-EXPLAIN WITH(arity, join implementations) SELECT f1, f2 FROM v1 WHERE f1 = f3 GROUP BY f1, f2;
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, arity, join implementations) AS VERBOSE TEXT FOR SELECT f1, f2 FROM v1 WHERE f1 = f3 GROUP BY f1, f2;
 ----
 Explained Query (fast path):
-  Project (#0, #1)
-    Filter (#0 = #2)
+  Project (#0{f1}, #1{f2})
+    Filter (#0{f1} = #2{f3})
       ReadIndex on=materialize.public.v1 v1_primary_idx=[*** full scan ***]
 
 Used Indexes:
@@ -61,11 +61,11 @@ Target cluster: quickstart
 EOF
 
 query T multiline
-EXPLAIN WITH(arity, join implementations) SELECT DISTINCT f1, f3 FROM v1 WHERE f1 = f2;
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, arity, join implementations) AS VERBOSE TEXT FOR SELECT DISTINCT f1, f3 FROM v1 WHERE f1 = f2;
 ----
 Explained Query (fast path):
-  Project (#0, #2)
-    Filter (#0 = #1)
+  Project (#0{f1}, #2{f3})
+    Filter (#0{f1} = #1{f2})
       ReadIndex on=materialize.public.v1 v1_primary_idx=[*** full scan ***]
 
 Used Indexes:
@@ -76,11 +76,11 @@ Target cluster: quickstart
 EOF
 
 query T multiline
-EXPLAIN WITH(arity, join implementations) SELECT DISTINCT f2, f3 FROM v1 WHERE f1 = f2;
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, arity, join implementations) AS VERBOSE TEXT FOR SELECT DISTINCT f2, f3 FROM v1 WHERE f1 = f2;
 ----
 Explained Query (fast path):
-  Project (#1, #2)
-    Filter (#0 = #1)
+  Project (#1{f2}, #2{f3})
+    Filter (#0{f1} = #1{f2})
       ReadIndex on=materialize.public.v1 v1_primary_idx=[*** full scan ***]
 
 Used Indexes:
@@ -91,11 +91,11 @@ Target cluster: quickstart
 EOF
 
 query T multiline
-EXPLAIN WITH(arity, join implementations) SELECT DISTINCT f1 FROM v1 WHERE f1 = f2 AND f1 = f3;
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, arity, join implementations) AS VERBOSE TEXT FOR SELECT DISTINCT f1 FROM v1 WHERE f1 = f2 AND f1 = f3;
 ----
 Explained Query (fast path):
-  Project (#0)
-    Filter (#0 = #1) AND (#0 = #2)
+  Project (#0{f1})
+    Filter (#0{f1} = #1{f2}) AND (#0{f1} = #2{f3})
       ReadIndex on=materialize.public.v1 v1_primary_idx=[*** full scan ***]
 
 Used Indexes:
@@ -106,11 +106,11 @@ Target cluster: quickstart
 EOF
 
 query T multiline
-EXPLAIN WITH(arity, join implementations) SELECT DISTINCT f1, f3 FROM v1 WHERE f1 = f2 AND f1 = f3;
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, arity, join implementations) AS VERBOSE TEXT FOR SELECT DISTINCT f1, f3 FROM v1 WHERE f1 = f2 AND f1 = f3;
 ----
 Explained Query (fast path):
-  Project (#0, #2)
-    Filter (#0 = #1) AND (#0 = #2)
+  Project (#0{f1}, #2{f3})
+    Filter (#0{f1} = #1{f2}) AND (#0{f1} = #2{f3})
       ReadIndex on=materialize.public.v1 v1_primary_idx=[*** full scan ***]
 
 Used Indexes:
@@ -121,11 +121,11 @@ Target cluster: quickstart
 EOF
 
 query T multiline
-EXPLAIN WITH(arity, join implementations) SELECT DISTINCT f2, f3 FROM v1 WHERE f1 = f2 AND f1 = f3;
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, arity, join implementations) AS VERBOSE TEXT FOR SELECT DISTINCT f2, f3 FROM v1 WHERE f1 = f2 AND f1 = f3;
 ----
 Explained Query (fast path):
-  Project (#1, #2)
-    Filter (#0 = #1) AND (#0 = #2)
+  Project (#1{f2}, #2{f3})
+    Filter (#0{f1} = #1{f2}) AND (#0{f1} = #2{f3})
       ReadIndex on=materialize.public.v1 v1_primary_idx=[*** full scan ***]
 
 Used Indexes:
@@ -136,11 +136,11 @@ Target cluster: quickstart
 EOF
 
 query T multiline
-EXPLAIN WITH(arity, join implementations) SELECT DISTINCT f2, f3 FROM v1 WHERE f1 = f2 AND f2 = f3;
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, arity, join implementations) AS VERBOSE TEXT FOR SELECT DISTINCT f2, f3 FROM v1 WHERE f1 = f2 AND f2 = f3;
 ----
 Explained Query (fast path):
-  Project (#1, #2)
-    Filter (#0 = #1) AND (#1 = #2)
+  Project (#1{f2}, #2{f3})
+    Filter (#0{f1} = #1{f2}) AND (#1{f2} = #2{f3})
       ReadIndex on=materialize.public.v1 v1_primary_idx=[*** full scan ***]
 
 Used Indexes:
@@ -155,12 +155,12 @@ EOF
 #
 
 query T multiline
-EXPLAIN WITH(arity, join implementations) SELECT DISTINCT f1 FROM v1 WHERE f1 = f3;
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, arity, join implementations) AS VERBOSE TEXT FOR SELECT DISTINCT f1 FROM v1 WHERE f1 = f3;
 ----
 Explained Query:
-  Distinct project=[#0] // { arity: 1 }
-    Project (#0) // { arity: 1 }
-      Filter (#0 = #2) // { arity: 3 }
+  Distinct project=[#0{f1}] // { arity: 1 }
+    Project (#0{f1}) // { arity: 1 }
+      Filter (#0{f1} = #2{f3}) // { arity: 3 }
         ReadIndex on=v1 v1_primary_idx=[*** full scan ***] // { arity: 3 }
 
 Used Indexes:
@@ -171,12 +171,12 @@ Target cluster: quickstart
 EOF
 
 query T multiline
-EXPLAIN WITH(arity, join implementations) SELECT DISTINCT f1, f2 FROM v1 WHERE f1 + 1 = f3;
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, arity, join implementations) AS VERBOSE TEXT FOR SELECT DISTINCT f1, f2 FROM v1 WHERE f1 + 1 = f3;
 ----
 Explained Query:
-  Distinct project=[#0, #1] // { arity: 2 }
-    Project (#0, #1) // { arity: 2 }
-      Filter (#2 = (#0 + 1)) // { arity: 3 }
+  Distinct project=[#0{f1}, #1{f2}] // { arity: 2 }
+    Project (#0{f1}, #1{f2}) // { arity: 2 }
+      Filter (#2{f3} = (#0{f1} + 1)) // { arity: 3 }
         ReadIndex on=v1 v1_primary_idx=[*** full scan ***] // { arity: 3 }
 
 Used Indexes:
@@ -187,12 +187,12 @@ Target cluster: quickstart
 EOF
 
 query T multiline
-EXPLAIN WITH(arity, join implementations) SELECT DISTINCT f1, f2 FROM v1 WHERE f1 > f3;
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, arity, join implementations) AS VERBOSE TEXT FOR SELECT DISTINCT f1, f2 FROM v1 WHERE f1 > f3;
 ----
 Explained Query:
-  Distinct project=[#0, #1] // { arity: 2 }
-    Project (#0, #1) // { arity: 2 }
-      Filter (#0 > #2) // { arity: 3 }
+  Distinct project=[#0{f1}, #1{f2}] // { arity: 2 }
+    Project (#0{f1}, #1{f2}) // { arity: 2 }
+      Filter (#0{f1} > #2{f3}) // { arity: 3 }
         ReadIndex on=v1 v1_primary_idx=[*** full scan ***] // { arity: 3 }
 
 Used Indexes:
@@ -203,12 +203,12 @@ Target cluster: quickstart
 EOF
 
 query T multiline
-EXPLAIN WITH(arity, join implementations) SELECT DISTINCT f1 + 1, f2 FROM v1 WHERE f1 = f3;
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, arity, join implementations) AS VERBOSE TEXT FOR SELECT DISTINCT f1 + 1, f2 FROM v1 WHERE f1 = f3;
 ----
 Explained Query:
-  Distinct project=[(#0 + 1), #1] // { arity: 2 }
-    Project (#0, #1) // { arity: 2 }
-      Filter (#0 = #2) // { arity: 3 }
+  Distinct project=[(#0{f1} + 1), #1{f2}] // { arity: 2 }
+    Project (#0{f1}, #1{f2}) // { arity: 2 }
+      Filter (#0{f1} = #2{f3}) // { arity: 3 }
         ReadIndex on=v1 v1_primary_idx=[*** full scan ***] // { arity: 3 }
 
 Used Indexes:
@@ -219,12 +219,12 @@ Target cluster: quickstart
 EOF
 
 query T multiline
-EXPLAIN WITH(arity, join implementations) SELECT DISTINCT f2, f3 FROM v1 WHERE f1 = f2 OR f1 = f3;
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, arity, join implementations) AS VERBOSE TEXT FOR SELECT DISTINCT f2, f3 FROM v1 WHERE f1 = f2 OR f1 = f3;
 ----
 Explained Query:
-  Distinct project=[#0, #1] // { arity: 2 }
-    Project (#1, #2) // { arity: 2 }
-      Filter ((#0 = #1) OR (#0 = #2)) // { arity: 3 }
+  Distinct project=[#0{f2}, #1{f3}] // { arity: 2 }
+    Project (#1{f2}, #2{f3}) // { arity: 2 }
+      Filter ((#0{f1} = #1{f2}) OR (#0{f1} = #2{f3})) // { arity: 3 }
         ReadIndex on=v1 v1_primary_idx=[*** full scan ***] // { arity: 3 }
 
 Used Indexes:
@@ -235,12 +235,12 @@ Target cluster: quickstart
 EOF
 
 query T multiline
-EXPLAIN WITH(arity, join implementations) SELECT DISTINCT f1 + 1 , f2 FROM v1 WHERE f1 + 1 = f3;
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, arity, join implementations) AS VERBOSE TEXT FOR SELECT DISTINCT f1 + 1 , f2 FROM v1 WHERE f1 + 1 = f3;
 ----
 Explained Query:
-  Distinct project=[#1, #0] // { arity: 2 }
-    Project (#1, #2) // { arity: 2 }
-      Filter (#2 = (#0 + 1)) // { arity: 3 }
+  Distinct project=[#1{f3}, #0{f2}] // { arity: 2 }
+    Project (#1{f2}, #2{f3}) // { arity: 2 }
+      Filter (#2{f3} = (#0{f1} + 1)) // { arity: 3 }
         ReadIndex on=v1 v1_primary_idx=[*** full scan ***] // { arity: 3 }
 
 Used Indexes:
@@ -251,12 +251,12 @@ Target cluster: quickstart
 EOF
 
 query T multiline
-EXPLAIN WITH(arity, join implementations) SELECT DISTINCT f1 FROM v1 WHERE f1 = f3;
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, arity, join implementations) AS VERBOSE TEXT FOR SELECT DISTINCT f1 FROM v1 WHERE f1 = f3;
 ----
 Explained Query:
-  Distinct project=[#0] // { arity: 1 }
-    Project (#0) // { arity: 1 }
-      Filter (#0 = #2) // { arity: 3 }
+  Distinct project=[#0{f1}] // { arity: 1 }
+    Project (#0{f1}) // { arity: 1 }
+      Filter (#0{f1} = #2{f3}) // { arity: 3 }
         ReadIndex on=v1 v1_primary_idx=[*** full scan ***] // { arity: 3 }
 
 Used Indexes:
@@ -274,59 +274,59 @@ statement ok
 CREATE TABLE t2 (f1 INTEGER, f2 INTEGER, f3 INTEGER, f4 INTEGER, PRIMARY KEY (f1, f2));
 
 query T multiline
-EXPLAIN WITH(arity, join implementations) SELECT DISTINCT f1, f3 FROM t2 WHERE f2 = f3;
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, arity, join implementations) AS VERBOSE TEXT FOR SELECT DISTINCT f1, f3 FROM t2 WHERE f2 = f3;
 ----
 Explained Query:
-  Project (#0, #2) // { arity: 2 }
-    Filter (#1 = #2) // { arity: 4 }
+  Project (#0{f1}, #2{f3}) // { arity: 2 }
+    Filter (#1{f2} = #2{f3}) // { arity: 4 }
       ReadStorage materialize.public.t2 // { arity: 4 }
 
 Source materialize.public.t2
-  filter=((#1 = #2))
+  filter=((#1{f2} = #2{f3}))
 
 Target cluster: quickstart
 
 EOF
 
 query T multiline
-EXPLAIN WITH(arity, join implementations) SELECT DISTINCT f3 FROM t2 WHERE f1 = f2 AND f2 = f3;
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, arity, join implementations) AS VERBOSE TEXT FOR SELECT DISTINCT f3 FROM t2 WHERE f1 = f2 AND f2 = f3;
 ----
 Explained Query:
-  Project (#2) // { arity: 1 }
-    Filter (#0 = #1) AND (#1 = #2) // { arity: 4 }
+  Project (#2{f3}) // { arity: 1 }
+    Filter (#0{f1} = #1{f2}) AND (#1{f2} = #2{f3}) // { arity: 4 }
       ReadStorage materialize.public.t2 // { arity: 4 }
 
 Source materialize.public.t2
-  filter=((#0 = #1) AND (#1 = #2))
+  filter=((#0{f1} = #1{f2}) AND (#1{f2} = #2{f3}))
 
 Target cluster: quickstart
 
 EOF
 
 query T multiline
-EXPLAIN WITH(arity, join implementations) SELECT DISTINCT f2 FROM t2 WHERE f1 = f3 AND f3 = f2;
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, arity, join implementations) AS VERBOSE TEXT FOR SELECT DISTINCT f2 FROM t2 WHERE f1 = f3 AND f3 = f2;
 ----
 Explained Query:
-  Project (#1) // { arity: 1 }
-    Filter (#0 = #2) AND (#1 = #2) // { arity: 4 }
+  Project (#1{f2}) // { arity: 1 }
+    Filter (#0{f1} = #2{f3}) AND (#1{f2} = #2{f3}) // { arity: 4 }
       ReadStorage materialize.public.t2 // { arity: 4 }
 
 Source materialize.public.t2
-  filter=((#0 = #2) AND (#1 = #2))
+  filter=((#0{f1} = #2{f3}) AND (#1{f2} = #2{f3}))
 
 Target cluster: quickstart
 
 EOF
 
 query T multiline
-EXPLAIN WITH(arity, join implementations) SELECT DISTINCT f1, f2, f3, f4 FROM t2 WHERE f1 = f3 AND f2 = f4;
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, arity, join implementations) AS VERBOSE TEXT FOR SELECT DISTINCT f1, f2, f3, f4 FROM t2 WHERE f1 = f3 AND f2 = f4;
 ----
 Explained Query:
-  Filter (#0 = #2) AND (#1 = #3) // { arity: 4 }
+  Filter (#0{f1} = #2{f3}) AND (#1{f2} = #3{f4}) // { arity: 4 }
     ReadStorage materialize.public.t2 // { arity: 4 }
 
 Source materialize.public.t2
-  filter=((#0 = #2) AND (#1 = #3))
+  filter=((#0{f1} = #2{f3}) AND (#1{f2} = #3{f4}))
 
 Target cluster: quickstart
 
@@ -334,15 +334,15 @@ EOF
 
 
 query T multiline
-EXPLAIN WITH(arity, join implementations) SELECT DISTINCT f3, f4 FROM t2 WHERE f1 = f3 AND f2 = f4;
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, arity, join implementations) AS VERBOSE TEXT FOR SELECT DISTINCT f3, f4 FROM t2 WHERE f1 = f3 AND f2 = f4;
 ----
 Explained Query:
-  Project (#2, #3) // { arity: 2 }
-    Filter (#0 = #2) AND (#1 = #3) // { arity: 4 }
+  Project (#2{f3}, #3{f4}) // { arity: 2 }
+    Filter (#0{f1} = #2{f3}) AND (#1{f2} = #3{f4}) // { arity: 4 }
       ReadStorage materialize.public.t2 // { arity: 4 }
 
 Source materialize.public.t2
-  filter=((#0 = #2) AND (#1 = #3))
+  filter=((#0{f1} = #2{f3}) AND (#1{f2} = #3{f4}))
 
 Target cluster: quickstart
 
@@ -353,64 +353,64 @@ EOF
 #
 
 query T multiline
-EXPLAIN WITH(arity, join implementations) SELECT DISTINCT f2, f3 FROM t2 WHERE f3 = f4;
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, arity, join implementations) AS VERBOSE TEXT FOR SELECT DISTINCT f2, f3 FROM t2 WHERE f3 = f4;
 ----
 Explained Query:
-  Distinct project=[#0, #1] // { arity: 2 }
-    Project (#1, #2) // { arity: 2 }
-      Filter (#2 = #3) // { arity: 4 }
+  Distinct project=[#0{f2}, #1{f3}] // { arity: 2 }
+    Project (#1{f2}, #2{f3}) // { arity: 2 }
+      Filter (#2{f3} = #3{f4}) // { arity: 4 }
         ReadStorage materialize.public.t2 // { arity: 4 }
 
 Source materialize.public.t2
-  filter=((#2 = #3))
+  filter=((#2{f3} = #3{f4}))
 
 Target cluster: quickstart
 
 EOF
 
 query T multiline
-EXPLAIN WITH(arity, join implementations) SELECT DISTINCT f2 FROM t2 WHERE f1 = f3;
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, arity, join implementations) AS VERBOSE TEXT FOR SELECT DISTINCT f2 FROM t2 WHERE f1 = f3;
 ----
 Explained Query:
-  Distinct project=[#0] // { arity: 1 }
-    Project (#1) // { arity: 1 }
-      Filter (#0 = #2) // { arity: 4 }
+  Distinct project=[#0{f2}] // { arity: 1 }
+    Project (#1{f2}) // { arity: 1 }
+      Filter (#0{f1} = #2{f3}) // { arity: 4 }
         ReadStorage materialize.public.t2 // { arity: 4 }
 
 Source materialize.public.t2
-  filter=((#0 = #2))
+  filter=((#0{f1} = #2{f3}))
 
 Target cluster: quickstart
 
 EOF
 
 query T multiline
-EXPLAIN WITH(arity, join implementations) SELECT DISTINCT f3, f4 FROM t2 WHERE f1 = f3;
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, arity, join implementations) AS VERBOSE TEXT FOR SELECT DISTINCT f3, f4 FROM t2 WHERE f1 = f3;
 ----
 Explained Query:
-  Distinct project=[#0, #1] // { arity: 2 }
-    Project (#2, #3) // { arity: 2 }
-      Filter (#0 = #2) // { arity: 4 }
+  Distinct project=[#0{f3}, #1{f4}] // { arity: 2 }
+    Project (#2{f3}, #3{f4}) // { arity: 2 }
+      Filter (#0{f1} = #2{f3}) // { arity: 4 }
         ReadStorage materialize.public.t2 // { arity: 4 }
 
 Source materialize.public.t2
-  filter=((#0 = #2))
+  filter=((#0{f1} = #2{f3}))
 
 Target cluster: quickstart
 
 EOF
 
 query T multiline
-EXPLAIN WITH(arity, join implementations) SELECT DISTINCT f3 FROM t2 WHERE f1 = f2;
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, arity, join implementations) AS VERBOSE TEXT FOR SELECT DISTINCT f3 FROM t2 WHERE f1 = f2;
 ----
 Explained Query:
-  Distinct project=[#0] // { arity: 1 }
-    Project (#2) // { arity: 1 }
-      Filter (#0 = #1) // { arity: 4 }
+  Distinct project=[#0{f3}] // { arity: 1 }
+    Project (#2{f3}) // { arity: 1 }
+      Filter (#0{f1} = #1{f2}) // { arity: 4 }
         ReadStorage materialize.public.t2 // { arity: 4 }
 
 Source materialize.public.t2
-  filter=((#0 = #1))
+  filter=((#0{f1} = #1{f2}))
 
 Target cluster: quickstart
 

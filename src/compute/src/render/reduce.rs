@@ -15,18 +15,19 @@ use std::collections::BTreeMap;
 use std::sync::LazyLock;
 
 use dec::OrderedDecimal;
+use differential_dataflow::IntoOwned;
 use differential_dataflow::collection::AsCollection;
 use differential_dataflow::consolidation::ConsolidatingContainerBuilder;
+use differential_dataflow::containers::{Columnation, CopyRegion};
 use differential_dataflow::difference::{IsZero, Multiply, Semigroup};
 use differential_dataflow::hashable::Hashable;
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::operators::arrange::{Arranged, TraceAgent};
-use differential_dataflow::trace::cursor::IntoOwned;
-use differential_dataflow::trace::{Batch, Batcher, Builder, Trace, TraceReader};
+use differential_dataflow::trace::{Batch, Builder, Trace, TraceReader};
 use differential_dataflow::{Collection, Diff as _};
 use mz_compute_types::plan::reduce::{
-    reduction_type, AccumulablePlan, BasicPlan, BucketedPlan, HierarchicalPlan, KeyValPlan,
-    MonotonicPlan, ReducePlan, ReductionType, SingleBasicPlan,
+    AccumulablePlan, BasicPlan, BucketedPlan, HierarchicalPlan, KeyValPlan, MonotonicPlan,
+    ReducePlan, ReductionType, SingleBasicPlan, reduction_type,
 };
 use mz_expr::{
     AggregateExpr, AggregateFunc, EvalError, MapFilterProject, MirScalarExpr, SafeMfpPlan,
@@ -37,26 +38,25 @@ use mz_repr::{Datum, DatumList, DatumVec, Diff, Row, RowArena, SharedRow};
 use mz_storage_types::errors::DataflowError;
 use mz_timely_util::operator::CollectionExt;
 use serde::{Deserialize, Serialize};
-use timely::container::columnation::{Columnation, CopyRegion};
+use timely::Container;
 use timely::container::{CapacityContainerBuilder, PushInto};
 use timely::dataflow::Scope;
-use timely::progress::timestamp::Refines;
 use timely::progress::Timestamp;
-use timely::Container;
+use timely::progress::timestamp::Refines;
 use tracing::warn;
 
 use crate::extensions::arrange::{ArrangementSize, KeyCollection, MzArrange};
 use crate::extensions::reduce::{MzReduce, ReduceExt};
-use crate::render::context::{CollectionBundle, Context, MzArrangement};
+use crate::render::context::{CollectionBundle, Context};
 use crate::render::errors::MaybeValidatingRow;
-use crate::render::reduce::monoids::{get_monoid, ReductionMonoid};
+use crate::render::reduce::monoids::{ReductionMonoid, get_monoid};
 use crate::render::{ArrangementFlavor, Pairer};
 use crate::row_spine::{
     DatumSeq, RowBatcher, RowBuilder, RowRowBatcher, RowRowBuilder, RowValBatcher, RowValBuilder,
 };
 use crate::typedefs::{
-    ErrBatcher, ErrBuilder, KeyBatcher, RowErrBuilder, RowErrSpine, RowRowArrangement, RowRowSpine,
-    RowSpine, RowValSpine,
+    ErrBatcher, ErrBuilder, KeyBatcher, RowErrBuilder, RowErrSpine, RowRowAgent, RowRowArrangement,
+    RowRowSpine, RowSpine, RowValSpine,
 };
 
 impl<G, T> Context<G, T>
@@ -90,77 +90,72 @@ where
             } = key_val_plan;
             let key_arity = key_plan.projection.len();
             let mut datums = DatumVec::new();
-            let (key_val_input, err_input): (
-                timely::dataflow::Stream<_, (Result<(Row, Row), DataflowError>, _, _)>,
-                _,
-            ) = input
-                .enter_region(inner)
-                .flat_map(input_key.map(|k| (k, None)), || {
-                    // Determine the columns we'll need from the row.
-                    let mut demand = Vec::new();
-                    demand.extend(key_plan.demand());
-                    demand.extend(val_plan.demand());
-                    demand.sort();
-                    demand.dedup();
-                    // remap column references to the subset we use.
-                    let mut demand_map = BTreeMap::new();
-                    for column in demand.iter() {
-                        demand_map.insert(*column, demand_map.len());
-                    }
-                    let demand_map_len = demand_map.len();
-                    key_plan.permute_fn(|c| demand_map[&c], demand_map_len);
-                    val_plan.permute_fn(|c| demand_map[&c], demand_map_len);
-                    let skips = mz_compute_types::plan::reduce::convert_indexes_to_skips(demand);
-                    move |row_datums, time, diff| {
-                        let binding = SharedRow::get();
-                        let mut row_builder = binding.borrow_mut();
-                        let temp_storage = RowArena::new();
 
-                        let mut row_iter = row_datums.drain(..);
-                        let mut datums_local = datums.borrow();
-                        // Unpack only the demanded columns.
-                        for skip in skips.iter() {
-                            datums_local.push(row_iter.nth(*skip).unwrap());
+            // Determine the columns we'll need from the row.
+            let mut demand = Vec::new();
+            demand.extend(key_plan.demand());
+            demand.extend(val_plan.demand());
+            demand.sort();
+            demand.dedup();
+
+            // remap column references to the subset we use.
+            let mut demand_map = BTreeMap::new();
+            for column in demand.iter() {
+                demand_map.insert(*column, demand_map.len());
+            }
+            let demand_map_len = demand_map.len();
+            key_plan.permute_fn(|c| demand_map[&c], demand_map_len);
+            val_plan.permute_fn(|c| demand_map[&c], demand_map_len);
+            let max_demand = demand.iter().max().map(|x| *x + 1).unwrap_or(0);
+            let skips = mz_compute_types::plan::reduce::convert_indexes_to_skips(demand);
+
+            let (key_val_input, err_input) = input.enter_region(inner).flat_map(
+                input_key.map(|k| (k, None)),
+                max_demand,
+                move |row_datums, time, diff| {
+                    let mut row_builder = SharedRow::get();
+                    let temp_storage = RowArena::new();
+
+                    let mut row_iter = row_datums.drain(..);
+                    let mut datums_local = datums.borrow();
+                    // Unpack only the demanded columns.
+                    for skip in skips.iter() {
+                        datums_local.push(row_iter.nth(*skip).unwrap());
+                    }
+
+                    // Evaluate the key expressions.
+                    let key =
+                        key_plan.evaluate_into(&mut datums_local, &temp_storage, &mut row_builder);
+                    let key = match key {
+                        Err(e) => {
+                            return Some((Err(DataflowError::from(e)), time.clone(), diff.clone()));
                         }
+                        Ok(Some(key)) => key.clone(),
+                        Ok(None) => panic!("Row expected as no predicate was used"),
+                    };
 
-                        // Evaluate the key expressions.
-                        let key = match key_plan.evaluate_into(
-                            &mut datums_local,
-                            &temp_storage,
-                            &mut row_builder,
-                        ) {
-                            Err(e) => {
-                                return Some((
-                                    Err(DataflowError::from(e)),
-                                    time.clone(),
-                                    diff.clone(),
-                                ))
-                            }
-                            Ok(key) => key.expect("Row expected as no predicate was used"),
-                        };
-                        // Evaluate the value expressions.
-                        // The prior evaluation may have left additional columns we should delete.
-                        datums_local.truncate(skips.len());
-                        let val = match val_plan.evaluate_iter(&mut datums_local, &temp_storage) {
-                            Err(e) => {
-                                return Some((
-                                    Err(DataflowError::from(e)),
-                                    time.clone(),
-                                    diff.clone(),
-                                ))
-                            }
-                            Ok(val) => val.expect("Row expected as no predicate was used"),
-                        };
-                        row_builder.packer().extend(val);
-                        let row = row_builder.clone();
-                        Some((Ok((key, row)), time.clone(), diff.clone()))
-                    }
-                });
+                    // Evaluate the value expressions.
+                    // The prior evaluation may have left additional columns we should delete.
+                    datums_local.truncate(skips.len());
+                    let val =
+                        val_plan.evaluate_into(&mut datums_local, &temp_storage, &mut row_builder);
+                    let val = match val {
+                        Err(e) => {
+                            return Some((Err(DataflowError::from(e)), time.clone(), diff.clone()));
+                        }
+                        Ok(Some(val)) => val.clone(),
+                        Ok(None) => panic!("Row expected as no predicate was used"),
+                    };
+
+                    Some((Ok((key, val)), time.clone(), diff.clone()))
+                },
+            );
 
             // Demux out the potential errors from key and value selector evaluation.
+            type CB<T> = ConsolidatingContainerBuilder<T>;
             let (ok, mut err) = key_val_input
                 .as_collection()
-                .flat_map_fallible::<ConsolidatingContainerBuilder<_>, ConsolidatingContainerBuilder<_>, _, _, _, _>("OkErrDemux", Some);
+                .flat_map_fallible::<CB<_>, CB<_>, _, _, _, _>("OkErrDemux", Some);
 
             err = err.concat(&err_input);
 
@@ -206,7 +201,7 @@ where
         errors: &mut Vec<Collection<S, DataflowError, Diff>>,
         key_arity: usize,
         mfp_after: Option<SafeMfpPlan>,
-    ) -> MzArrangement<S>
+    ) -> Arranged<S, RowRowAgent<S::Timestamp, Diff>>
     where
         S: Scope<Timestamp = G::Timestamp>,
     {
@@ -216,7 +211,7 @@ where
             // If we have no aggregations or just a single type of reduction, we
             // can go ahead and render them directly.
             ReducePlan::Distinct => {
-                let (arranged_output, errs) = self.dispatch_build_distinct(collection, mfp_after);
+                let (arranged_output, errs) = self.build_distinct(collection, mfp_after);
                 errors.push(errs);
                 arranged_output
             }
@@ -224,17 +219,17 @@ where
                 let (arranged_output, errs) =
                     self.build_accumulable(collection, expr, key_arity, mfp_after);
                 errors.push(errs);
-                MzArrangement::RowRow(arranged_output)
+                arranged_output
             }
             ReducePlan::Hierarchical(HierarchicalPlan::Monotonic(expr)) => {
                 let (output, errs) = self.build_monotonic(collection, expr, mfp_after);
                 errors.push(errs);
-                MzArrangement::RowRow(output)
+                output
             }
             ReducePlan::Hierarchical(HierarchicalPlan::Bucketed(expr)) => {
                 let (output, errs) = self.build_bucketed(collection, expr, key_arity, mfp_after);
                 errors.push(errs);
-                MzArrangement::RowRow(output)
+                output
             }
             ReducePlan::Basic(BasicPlan::Single(SingleBasicPlan {
                 index,
@@ -257,13 +252,13 @@ where
                 if validating {
                     errors.push(errs.expect("validation should have occurred as it was requested"));
                 }
-                MzArrangement::RowRow(output)
+                output
             }
             ReducePlan::Basic(BasicPlan::Multiple(aggrs)) => {
                 let (output, errs) =
                     self.build_basic_aggregates(collection, aggrs, key_arity, mfp_after);
                 errors.push(errs);
-                MzArrangement::RowRow(output)
+                output
             }
             // Otherwise, we need to render something different for each type of
             // reduction, and then stitch them together.
@@ -282,15 +277,13 @@ where
                     let r#type = ReductionType::try_from(&plan)
                         .expect("only representable reduction types were used above");
 
-                    let arrangement = match self.render_reduce_plan_inner(
+                    let arrangement = self.render_reduce_plan_inner(
                         plan,
                         collection.clone(),
                         errors,
                         key_arity,
                         None,
-                    ) {
-                        MzArrangement::RowRow(arranged) => arranged,
-                    };
+                    );
                     to_collate.push((r#type, arrangement));
                 }
 
@@ -302,7 +295,7 @@ where
                     mfp_after,
                 );
                 errors.push(errs);
-                MzArrangement::RowRow(oks)
+                oks
             }
         };
         arrangement
@@ -429,7 +422,7 @@ where
                                 &temp_storage,
                                 key_len,
                             ) {
-                                output.push((row, 1));
+                                output.push((row, Diff::ONE));
                             }
                         }
                     }
@@ -448,7 +441,7 @@ where
                                 requested = input.len(),
                             ),
                         );
-                        output.push((EvalError::Internal(message.into()).into(), 1));
+                        output.push((EvalError::Internal(message.into()).into(), Diff::ONE));
                         return;
                     }
 
@@ -483,7 +476,7 @@ where
                             // This situation is not expected, so we log an error if it occurs.
                             let message = "Missing value for key in ReduceCollation";
                             error_logger.log(message, &format!("typ={typ:?}, key={key:?}"));
-                            output.push((EvalError::Internal(message.into()).into(), 1));
+                            output.push((EvalError::Internal(message.into()).into(), Diff::ONE));
                             return;
                         }
                     }
@@ -494,70 +487,33 @@ where
                     {
                         let message = "Rows too large for key in ReduceCollation";
                         error_logger.log(message, &format!("key={key:?}"));
-                        output.push((EvalError::Internal(message.into()).into(), 1));
+                        output.push((EvalError::Internal(message.into()).into(), Diff::ONE));
                     }
 
                     // Finally, if `mfp_after` can produce errors, then we should also report
                     // these here.
                     let Some(mfp) = &mfp_after2 else { return };
-                    if let Result::Err(e) = mfp.evaluate_inner(&mut datums_local, &temp_storage) {
-                        output.push((e.into(), 1));
+                    if let Err(e) = mfp.evaluate_inner(&mut datums_local, &temp_storage) {
+                        output.push((e.into(), Diff::ONE));
                     }
                 },
             );
         (oks, errs.as_collection(|_, v| v.clone()))
     }
 
-    fn dispatch_build_distinct<S>(
-        &self,
-        collection: Collection<S, (Row, Row), Diff>,
-        mfp_after: Option<SafeMfpPlan>,
-    ) -> (MzArrangement<S>, Collection<S, DataflowError, Diff>)
-    where
-        S: Scope<Timestamp = G::Timestamp>,
-    {
-        let (arrangement, errs) = self
-            .build_distinct::<RowRowBatcher<_, _>, RowRowBuilder<_, _,>, RowRowSpine<_, _>, RowErrBuilder<_,_>, RowErrSpine<_, _>, _>(collection, "", mfp_after);
-        (MzArrangement::RowRow(arrangement), errs)
-    }
-
     /// Build the dataflow to compute the set of distinct keys.
-    fn build_distinct<Ba1, Bu1, T1, Bu2, T2, S>(
+    fn build_distinct<S>(
         &self,
         collection: Collection<S, (Row, Row), Diff>,
-        tag: &str,
         mfp_after: Option<SafeMfpPlan>,
     ) -> (
-        Arranged<S, TraceAgent<T1>>,
+        Arranged<S, TraceAgent<RowRowSpine<S::Timestamp, Diff>>>,
         Collection<S, DataflowError, Diff>,
     )
     where
         S: Scope<Timestamp = G::Timestamp>,
-        for<'a> T1: Trace<Val<'a> = DatumSeq<'a>, Time = G::Timestamp, Diff = Diff> + 'static,
-        for<'a> T1::Key<'a>: IntoOwned<'a, Owned = Row>,
-        T1::Batch: Batch,
-        Ba1: Batcher<Input = Vec<((Row, Row), G::Timestamp, Diff)>, Time = G::Timestamp> + 'static,
-        Ba1::Output: Container + PushInto<((Row, Row), T1::Time, T1::Diff)>,
-        Bu1: Builder<Time = G::Timestamp, Input = Ba1::Output, Output = T1::Batch>,
-        for<'a> T1::Key<'a>: std::fmt::Debug + ToDatumIter,
-        Arranged<S, TraceAgent<T1>>: ArrangementSize,
-        T2: for<'a> Trace<
-                Key<'a> = T1::Key<'a>,
-                Val<'a> = &'a DataflowError,
-                Time = G::Timestamp,
-                Diff = Diff,
-            > + 'static,
-        T2::Batch: Batch,
-        Bu2: Builder<Time = G::Timestamp, Output = T2::Batch>,
-        Bu2::Input: Container + PushInto<((Row, DataflowError), T2::Time, T2::Diff)>,
-        Arranged<S, TraceAgent<T2>>: ArrangementSize,
     {
         let error_logger = self.error_logger();
-
-        let (input_name, output_name) = (
-            format!("Arranged DistinctBy{}", tag),
-            format!("DistinctBy{}", tag),
-        );
 
         // Allocations for the two closures.
         let mut datums1 = DatumVec::new();
@@ -566,9 +522,9 @@ where
         let mfp_after2 = mfp_after.filter(|mfp| mfp.could_error());
 
         let (output, errors) = collection
-            .mz_arrange::<Ba1, Bu1, T1>(&input_name)
-            .reduce_pair::<_, Row, Row, Bu1, T1, _, _, Bu2, T2>(
-                &output_name,
+            .mz_arrange::<RowRowBatcher<_, _>, RowRowBuilder<_, _,>, RowRowSpine<_, _>>("Arranged DistinctBy")
+            .reduce_pair::<_, _, _, RowRowBuilder<_, _,>, RowRowSpine<_, _>, _, _, RowErrBuilder<_,_>, RowErrSpine<_, _>>(
+                "DistinctBy",
                 "DistinctByErrorCheck",
                 move |key, _input, output| {
                     let temp_storage = RowArena::new();
@@ -587,7 +543,7 @@ where
                         // We're pushing a unit value here because the key is implicitly added by the
                         // arrangement, and the permutation logic takes care of using the key part of the
                         // output.
-                        output.push((Row::default(), 1));
+                        output.push((Row::default(), Diff::ONE));
                     }
                 },
                 move |key, input: &[(_, Diff)], output: &mut Vec<(DataflowError, _)>| {
@@ -597,7 +553,7 @@ where
                         }
                         let message = "Non-positive multiplicity in DistinctBy";
                         error_logger.log(message, &format!("row={key:?}, count={count}"));
-                        output.push((EvalError::Internal(message.into()).into(), 1));
+                        output.push((EvalError::Internal(message.into()).into(), Diff::ONE));
                         return;
                     }
                     // If `mfp_after` can error, then evaluate it here.
@@ -607,8 +563,8 @@ where
                     let mut datums_local = datums2.borrow();
                     datums_local.extend(datum_iter);
 
-                    if let Result::Err(e) = mfp.evaluate_inner(&mut datums_local, &temp_storage) {
-                        output.push((e.into(), 1));
+                    if let Err(e) = mfp.evaluate_inner(&mut datums_local, &temp_storage) {
+                        output.push((e.into(), Diff::ONE));
                     }
                 },
             );
@@ -689,7 +645,7 @@ where
                     if let Some(row) =
                         evaluate_mfp_after(&mfp_after1, &mut datums_local, &temp_storage, key_len)
                     {
-                        output.push((row, 1));
+                        output.push((row, Diff::ONE));
                     }
                 }
             },
@@ -715,9 +671,8 @@ where
                             datums_local.push(row.unpack_first());
                         }
 
-                        if let Result::Err(e) = mfp.evaluate_inner(&mut datums_local, &temp_storage)
-                        {
-                            output.push((e.into(), 1));
+                        if let Err(e) = mfp.evaluate_inner(&mut datums_local, &temp_storage) {
+                            output.push((e.into(), Diff::ONE));
                         }
                     },
                 )
@@ -755,8 +710,7 @@ where
 
         // Extract the value we were asked to aggregate over.
         let mut partial = input.map(move |(key, row)| {
-            let binding = SharedRow::get();
-            let mut row_builder = binding.borrow_mut();
+            let mut row_builder = SharedRow::get();
             let value = row.iter().nth(index).unwrap();
             row_builder.packer().push(value);
             (key, row_builder.clone())
@@ -815,7 +769,7 @@ where
                     let iter = source.iter().flat_map(|(v, w)| {
                         // Note that in the non-positive case, this is wrong, but harmless because
                         // our other reduction will produce an error.
-                        let count = usize::try_from(*w).unwrap_or(0);
+                        let count = usize::try_from(w.into_inner()).unwrap_or(0);
                         std::iter::repeat(v.to_datum_iter().next().unwrap()).take(count)
                     });
 
@@ -836,7 +790,7 @@ where
                     if let Some(row) =
                         evaluate_mfp_after(&mfp_after1, &mut datums_local, &temp_storage, key_len)
                     {
-                        target.push((row, 1));
+                        target.push((row, Diff::ONE));
                     }
                 }
             })
@@ -845,7 +799,7 @@ where
                 move |key, source, target| {
                     // This part is the same as in the `!fused_unnest_list` if branch above.
                     let iter = source.iter().flat_map(|(v, w)| {
-                        let count = usize::try_from(*w).unwrap_or(0);
+                        let count = usize::try_from(w.into_inner()).unwrap_or(0);
                         std::iter::repeat(v.to_datum_iter().next().unwrap()).take(count)
                     });
 
@@ -868,7 +822,7 @@ where
                             &temp_storage,
                             key_len,
                         ) {
-                            target.push((row, 1));
+                            target.push((row, Diff::ONE));
                         }
                     }
                 }
@@ -900,15 +854,15 @@ where
                                     let message = "Non-positive accumulation in ReduceInaccumulable";
                                     error_logger
                                         .log(message, &format!("value={value:?}, count={count}"));
-                                    target.push((EvalError::Internal(message.into()).into(), 1));
+                                    target.push((EvalError::Internal(message.into()).into(), Diff::ONE));
                                     return;
                                 }
                             }
 
                             // We know that `mfp_after` can error if it exists, so try to evaluate it here.
                             let Some(mfp) = &mfp_after2 else { return };
-                            let iter = source.iter().flat_map(|(mut v, w)| {
-                                let count = usize::try_from(*w).unwrap_or(0);
+                            let iter = source.iter().flat_map(|&(mut v, ref w)| {
+                                let count = usize::try_from(w.into_inner()).unwrap_or(0);
                                 // This would ideally use `to_datum_iter` but we cannot as it needs to
                                 // borrow `v` and only presents datums with that lifetime, not any longer.
                                 std::iter::repeat(v.next().unwrap()).take(count)
@@ -926,7 +880,7 @@ where
                             );
                             if let Err(e) = mfp.evaluate_inner(&mut datums_local, &temp_storage)
                             {
-                                target.push((e.into(), 1));
+                                target.push((e.into(), Diff::ONE));
                             }
                         },
                     )
@@ -943,8 +897,8 @@ where
                     .mz_reduce_abelian::<_, _, _, RowErrBuilder<_, _>, RowErrSpine<_, _>>(
                         &format!("{name} Error Check"),
                         move |key, source, target| {
-                            let iter = source.iter().flat_map(|(mut v, w)| {
-                                let count = usize::try_from(*w).unwrap_or(0);
+                            let iter = source.iter().flat_map(|&(mut v, ref w)| {
+                                let count = usize::try_from(w.into_inner()).unwrap_or(0);
                                 // This would ideally use `to_datum_iter` but we cannot as it needs to
                                 // borrow `v` and only presents datums with that lifetime, not any longer.
                                 std::iter::repeat(v.next().unwrap()).take(count)
@@ -966,7 +920,7 @@ where
                                 // above), so try to evaluate it here.
                                 if let Err(e) = mfp.evaluate_inner(&mut datums_local, &temp_storage)
                                 {
-                                    target.push((e.into(), 1));
+                                    target.push((e.into(), Diff::ONE));
                                 }
                             }
                         },
@@ -1022,11 +976,11 @@ where
 
                         let message = "Non-positive accumulation in ReduceInaccumulable DISTINCT";
                         error_logger.log(message, &format!("value={value:?}, count={count}"));
-                        t.push((err(message.to_string()), 1));
+                        t.push((err(message.to_string()), Diff::ONE));
                         return;
                     }
                 }
-                t.push((V::ok(()), 1))
+                t.push((V::ok(()), Diff::ONE))
             })
     }
 
@@ -1070,8 +1024,7 @@ where
 
             // Gather the relevant keys with their hashes along with values ordered by aggregation_index.
             let mut stage = input.map(move |(key, row)| {
-                let binding = SharedRow::get();
-                let mut row_builder = binding.borrow_mut();
+                let mut row_builder = SharedRow::get();
                 let mut row_packer = row_builder.packer();
                 let mut row_iter = row.iter();
                 for skip in skips.iter() {
@@ -1159,7 +1112,10 @@ where
                                     let message = "Non-positive accumulation in ReduceMinsMaxes";
                                     error_logger
                                         .log(message, &format!("val={val:?}, count={count}"));
-                                    target.push((EvalError::Internal(message.into()).into(), 1));
+                                    target.push((
+                                        EvalError::Internal(message.into()).into(),
+                                        Diff::ONE,
+                                    ));
                                     return;
                                 }
                             }
@@ -1183,7 +1139,7 @@ where
                             if let Result::Err(e) =
                                 mfp.evaluate_inner(&mut datums_local, &temp_storage)
                             {
-                                target.push((e.into(), 1));
+                                target.push((e.into(), Diff::ONE));
                             }
                         },
                     )
@@ -1221,7 +1177,7 @@ where
                             &temp_storage,
                             key_len,
                         ) {
-                            target.push((row, 1));
+                            target.push((row, Diff::ONE));
                         }
                     },
                 )
@@ -1339,13 +1295,12 @@ where
                         );
                         // After complaining, output an error here so that we can eventually
                         // report it in an error stream.
-                        target.push((err(key.into_owned()), -1));
+                        target.push((err(key.into_owned()), Diff::MINUS_ONE));
                         return;
                     }
                 }
 
-                let binding = SharedRow::get();
-                let mut row_builder = binding.borrow_mut();
+                let mut row_builder = SharedRow::get();
                 let mut row_packer = row_builder.packer();
 
                 let mut source_iters = source
@@ -1363,7 +1318,7 @@ where
                 // of the multiplicity of the final result in the input, we only want to have one copy
                 // in the output.
                 target.reserve(source.len().saturating_add(1));
-                target.push((V::ok(row_builder.clone()), -1));
+                target.push((V::ok(row_builder.clone()), Diff::MINUS_ONE));
                 target.extend(source.iter().map(|(values, cnt)| {
                     let mut cnt = *cnt;
                     cnt.negate();
@@ -1392,8 +1347,7 @@ where
         // Gather the relevant values into a vec of rows ordered by aggregation_index
         let collection = collection
             .map(move |(key, row)| {
-                let binding = SharedRow::get();
-                let mut row_builder = binding.borrow_mut();
+                let mut row_builder = SharedRow::get();
                 let mut values = Vec::with_capacity(skips.len());
                 let mut row_iter = row.iter();
                 for skip in skips.iter() {
@@ -1417,7 +1371,7 @@ where
                 &format!("data={data:?}, diff={diff}"),
             );
             let m = "tried to build a monotonic reduction on non-monotonic input".into();
-            (EvalError::Internal(m).into(), 1)
+            (EvalError::Internal(m).into(), Diff::ONE)
         });
         // We can place our rows directly into the diff field, and
         // only keep the relevant one corresponding to evaluating our
@@ -1460,7 +1414,7 @@ where
                     if let Some(row) =
                         evaluate_mfp_after(&mfp_after1, &mut datums_local, &temp_storage, key_len)
                     {
-                        output.push((row, 1));
+                        output.push((row, Diff::ONE));
                     }
                 }
             },
@@ -1485,7 +1439,7 @@ where
                         }
                         if let Result::Err(e) = mfp.evaluate_inner(&mut datums_local, &temp_storage)
                         {
-                            output.push((e.into(), 1));
+                            output.push((e.into(), Diff::ONE));
                         }
                     },
                 )
@@ -1545,7 +1499,7 @@ where
                 .iter()
                 .map(|f| accumulable_zero(&f.func))
                 .collect(),
-            0,
+            Diff::ZERO,
         );
 
         let mut to_aggregate = Vec::new();
@@ -1568,7 +1522,7 @@ where
                         }
                         let datum = datum.1;
                         diffs.0[*accumulable_index] = datum_to_accumulator(&aggr.func, datum);
-                        diffs.1 = 1;
+                        diffs.1 = Diff::ONE;
                     }
                     ((key, ()), diffs)
                 }
@@ -1589,7 +1543,7 @@ where
                 )
                 .mz_reduce_abelian::<_, _, _, RowBuilder<_, _>, RowSpine<_, _>>(
                     "Reduced Accumulable Distinct [val: empty]",
-                    move |_k, _s, t| t.push(((), 1)),
+                    move |_k, _s, t| t.push(((), Diff::ONE)),
                 )
                 .as_collection(move |key_val_iter, _| pairer.split(key_val_iter))
                 .explode_one({
@@ -1598,7 +1552,7 @@ where
                         let datum = row.iter().next().unwrap();
                         let mut diffs = zero_diffs.clone();
                         diffs.0[accumulable_index] = datum_to_accumulator(&aggr.func, datum);
-                        diffs.1 = 1;
+                        diffs.1 = Diff::ONE;
                         ((key, ()), diffs)
                     }
                 });
@@ -1645,7 +1599,7 @@ where
                             &temp_storage,
                             key_len,
                         ) {
-                            output.push((row, 1));
+                            output.push((row, Diff::ONE));
                         }
                     }
                 },
@@ -1654,7 +1608,7 @@ where
                     for (aggr, accum) in err_full_aggrs.iter().zip(accums) {
                         // We first test here if inputs without net-positive records are present,
                         // producing an error to the logs and to the query output if that is the case.
-                        if total == 0 && !accum.is_zero() {
+                        if total == Diff::ZERO && !accum.is_zero() {
                             error_logger.log(
                                 "Net-zero records with non-zero accumulation in ReduceAccumulable",
                                 &format!("aggr={aggr:?}, accum={accum:?}"),
@@ -1664,7 +1618,7 @@ where
                                 "Invalid data in source, saw net-zero records for key {key} \
                                  with non-zero accumulation in accumulable aggregate"
                             );
-                            output.push((EvalError::Internal(message.into()).into(), 1));
+                            output.push((EvalError::Internal(message.into()).into(), Diff::ONE));
                         }
                         match (&aggr.func, &accum) {
                             (AggregateFunc::SumUInt16, Accum::SimpleNumber { accum, .. })
@@ -1680,7 +1634,7 @@ where
                                         "Invalid data in source, saw negative accumulation with \
                                          unsigned type for key {key}"
                                     );
-                                    output.push((EvalError::Internal(message.into()).into(), 1));
+                                    output.push((EvalError::Internal(message.into()).into(), Diff::ONE));
                                 }
                             }
                             _ => (), // no more errors to check for at this point!
@@ -1698,7 +1652,7 @@ where
                     }
 
                     if let Result::Err(e) = mfp.evaluate_inner(&mut datums_local, &temp_storage) {
-                        output.push((e.into(), 1));
+                        output.push((e.into(), Diff::ONE));
                     }
                 },
             );
@@ -1718,8 +1672,7 @@ fn evaluate_mfp_after<'a, 'b>(
     temp_storage: &'a RowArena,
     key_len: usize,
 ) -> Option<Row> {
-    let binding = SharedRow::get();
-    let mut row_builder = binding.borrow_mut();
+    let mut row_builder = SharedRow::get();
     // Apply MFP if it exists and pack a Row of
     // aggregate values from `datums_local`.
     if let Some(mfp) = mfp_after {
@@ -1740,26 +1693,26 @@ fn evaluate_mfp_after<'a, 'b>(
 fn accumulable_zero(aggr_func: &AggregateFunc) -> Accum {
     match aggr_func {
         AggregateFunc::Any | AggregateFunc::All => Accum::Bool {
-            trues: 0,
-            falses: 0,
+            trues: Diff::ZERO,
+            falses: Diff::ZERO,
         },
         AggregateFunc::SumFloat32 | AggregateFunc::SumFloat64 => Accum::Float {
-            accum: 0,
-            pos_infs: 0,
-            neg_infs: 0,
-            nans: 0,
-            non_nulls: 0,
+            accum: AccumCount::ZERO,
+            pos_infs: Diff::ZERO,
+            neg_infs: Diff::ZERO,
+            nans: Diff::ZERO,
+            non_nulls: Diff::ZERO,
         },
         AggregateFunc::SumNumeric => Accum::Numeric {
             accum: OrderedDecimal(NumericAgg::zero()),
-            pos_infs: 0,
-            neg_infs: 0,
-            nans: 0,
-            non_nulls: 0,
+            pos_infs: Diff::ZERO,
+            neg_infs: Diff::ZERO,
+            nans: Diff::ZERO,
+            non_nulls: Diff::ZERO,
         },
         _ => Accum::SimpleNumber {
-            accum: 0,
-            non_nulls: 0,
+            accum: AccumCount::ZERO,
+            non_nulls: Diff::ZERO,
         },
     }
 }
@@ -1769,28 +1722,32 @@ static FLOAT_SCALE: LazyLock<f64> = LazyLock::new(|| f64::from(1 << 24));
 fn datum_to_accumulator(aggregate_func: &AggregateFunc, datum: Datum) -> Accum {
     match aggregate_func {
         AggregateFunc::Count => Accum::SimpleNumber {
-            accum: 0, // unused for AggregateFunc::Count
-            non_nulls: if datum.is_null() { 0 } else { 1 },
+            accum: AccumCount::ZERO, // unused for AggregateFunc::Count
+            non_nulls: if datum.is_null() {
+                Diff::ZERO
+            } else {
+                Diff::ONE
+            },
         },
         AggregateFunc::Any | AggregateFunc::All => match datum {
             Datum::True => Accum::Bool {
-                trues: 1,
-                falses: 0,
+                trues: Diff::ONE,
+                falses: Diff::ZERO,
             },
             Datum::Null => Accum::Bool {
-                trues: 0,
-                falses: 0,
+                trues: Diff::ZERO,
+                falses: Diff::ZERO,
             },
             Datum::False => Accum::Bool {
-                trues: 0,
-                falses: 1,
+                trues: Diff::ZERO,
+                falses: Diff::ONE,
             },
             x => panic!("Invalid argument to AggregateFunc::Any: {x:?}"),
         },
         AggregateFunc::Dummy => match datum {
             Datum::Dummy => Accum::SimpleNumber {
-                accum: 0,
-                non_nulls: 0,
+                accum: AccumCount::ZERO,
+                non_nulls: Diff::ZERO,
             },
             x => panic!("Invalid argument to AggregateFunc::Dummy: {x:?}"),
         },
@@ -1809,15 +1766,13 @@ fn datum_to_accumulator(aggregate_func: &AggregateFunc, datum: Datum) -> Accum {
 
             // Map the floating point value onto a fixed precision domain
             // All special values should map to zero, since they are tracked separately
-            let accum = if nans > 0 || pos_infs > 0 || neg_infs > 0 {
-                0
+            let accum = if nans.is_positive() || pos_infs.is_positive() || neg_infs.is_positive() {
+                AccumCount::ZERO
             } else {
                 // This operation will truncate to i128::MAX if out of range.
                 // TODO(benesch): rewrite to avoid `as`.
                 #[allow(clippy::as_conversions)]
-                {
-                    (n * *FLOAT_SCALE) as i128
-                }
+                { (n * *FLOAT_SCALE) as i128 }.into()
             };
 
             Accum::Float {
@@ -1832,17 +1787,17 @@ fn datum_to_accumulator(aggregate_func: &AggregateFunc, datum: Datum) -> Accum {
             Datum::Numeric(n) => {
                 let (accum, pos_infs, neg_infs, nans) = if n.0.is_infinite() {
                     if n.0.is_negative() {
-                        (NumericAgg::zero(), 0, 1, 0)
+                        (NumericAgg::zero(), Diff::ZERO, Diff::ONE, Diff::ZERO)
                     } else {
-                        (NumericAgg::zero(), 1, 0, 0)
+                        (NumericAgg::zero(), Diff::ONE, Diff::ZERO, Diff::ZERO)
                     }
                 } else if n.0.is_nan() {
-                    (NumericAgg::zero(), 0, 0, 1)
+                    (NumericAgg::zero(), Diff::ZERO, Diff::ZERO, Diff::ONE)
                 } else {
                     // Take a narrow decimal (datum) into a wide decimal
                     // (aggregator).
                     let mut cx_agg = numeric::cx_agg();
-                    (cx_agg.to_width(n.0), 0, 0, 0)
+                    (cx_agg.to_width(n.0), Diff::ZERO, Diff::ZERO, Diff::ZERO)
                 };
 
                 Accum::Numeric {
@@ -1850,15 +1805,15 @@ fn datum_to_accumulator(aggregate_func: &AggregateFunc, datum: Datum) -> Accum {
                     pos_infs,
                     neg_infs,
                     nans,
-                    non_nulls: 1,
+                    non_nulls: Diff::ONE,
                 }
             }
             Datum::Null => Accum::Numeric {
                 accum: OrderedDecimal(NumericAgg::zero()),
-                pos_infs: 0,
-                neg_infs: 0,
-                nans: 0,
-                non_nulls: 0,
+                pos_infs: Diff::ZERO,
+                neg_infs: Diff::ZERO,
+                nans: Diff::ZERO,
+                non_nulls: Diff::ZERO,
             },
             x => panic!("Invalid argument to AggregateFunc::SumNumeric: {x:?}"),
         },
@@ -1868,36 +1823,36 @@ fn datum_to_accumulator(aggregate_func: &AggregateFunc, datum: Datum) -> Accum {
             // accumulated.
             match datum {
                 Datum::Int16(i) => Accum::SimpleNumber {
-                    accum: i128::from(i),
-                    non_nulls: 1,
+                    accum: i.into(),
+                    non_nulls: Diff::ONE,
                 },
                 Datum::Int32(i) => Accum::SimpleNumber {
-                    accum: i128::from(i),
-                    non_nulls: 1,
+                    accum: i.into(),
+                    non_nulls: Diff::ONE,
                 },
                 Datum::Int64(i) => Accum::SimpleNumber {
-                    accum: i128::from(i),
-                    non_nulls: 1,
+                    accum: i.into(),
+                    non_nulls: Diff::ONE,
                 },
                 Datum::UInt16(u) => Accum::SimpleNumber {
-                    accum: i128::from(u),
-                    non_nulls: 1,
+                    accum: u.into(),
+                    non_nulls: Diff::ONE,
                 },
                 Datum::UInt32(u) => Accum::SimpleNumber {
-                    accum: i128::from(u),
-                    non_nulls: 1,
+                    accum: u.into(),
+                    non_nulls: Diff::ONE,
                 },
                 Datum::UInt64(u) => Accum::SimpleNumber {
-                    accum: i128::from(u),
-                    non_nulls: 1,
+                    accum: u.into(),
+                    non_nulls: Diff::ONE,
                 },
                 Datum::MzTimestamp(t) => Accum::SimpleNumber {
-                    accum: i128::from(u64::from(t)),
-                    non_nulls: 1,
+                    accum: u64::from(t).into(),
+                    non_nulls: Diff::ONE,
                 },
                 Datum::Null => Accum::SimpleNumber {
-                    accum: 0,
-                    non_nulls: 0,
+                    accum: AccumCount::ZERO,
+                    non_nulls: Diff::ZERO,
                 },
                 x => panic!("Accumulating non-integer data: {x:?}"),
             }
@@ -1909,16 +1864,16 @@ fn finalize_accum<'a>(aggr_func: &'a AggregateFunc, accum: &'a Accum, total: Dif
     // The finished value depends on the aggregation function in a variety of ways.
     // For all aggregates but count, if only null values were
     // accumulated, then the output is null.
-    if total > 0 && accum.is_zero() && *aggr_func != AggregateFunc::Count {
+    if total.is_positive() && accum.is_zero() && *aggr_func != AggregateFunc::Count {
         Datum::Null
     } else {
         match (&aggr_func, &accum) {
             (AggregateFunc::Count, Accum::SimpleNumber { non_nulls, .. }) => {
-                Datum::Int64(*non_nulls)
+                Datum::Int64(non_nulls.into_inner())
             }
             (AggregateFunc::All, Accum::Bool { falses, trues }) => {
                 // If any false, else if all true, else must be no false and some nulls.
-                if *falses > 0 {
+                if falses.is_positive() {
                     Datum::False
                 } else if *trues == total {
                     Datum::True
@@ -1928,7 +1883,7 @@ fn finalize_accum<'a>(aggr_func: &'a AggregateFunc, accum: &'a Accum, total: Dif
             }
             (AggregateFunc::Any, Accum::Bool { falses, trues }) => {
                 // If any true, else if all false, else must be no true and some nulls.
-                if *trues > 0 {
+                if trues.is_positive() {
                     Datum::True
                 } else if *falses == total {
                     Datum::False
@@ -1945,7 +1900,7 @@ fn finalize_accum<'a>(aggr_func: &'a AggregateFunc, accum: &'a Accum, total: Dif
                 // TODO(benesch): are we guaranteed to have less than 2^32 summands?
                 // If so, rewrite to avoid `as`.
                 #[allow(clippy::as_conversions)]
-                Datum::Int64(*accum as i64)
+                Datum::Int64(accum.into_inner() as i64)
             }
             (AggregateFunc::SumInt64, Accum::SimpleNumber { accum, .. }) => Datum::from(*accum),
             (AggregateFunc::SumUInt16, Accum::SimpleNumber { accum, .. })
@@ -1957,7 +1912,7 @@ fn finalize_accum<'a>(aggr_func: &'a AggregateFunc, accum: &'a Accum, total: Dif
                     // signed types.
                     // TODO(vmarcos): remove potentially dangerous usage of `as`.
                     #[allow(clippy::as_conversions)]
-                    Datum::UInt64(*accum as u64)
+                    Datum::UInt64(accum.into_inner() as u64)
                 } else {
                     // Note that we return a value here, but an error in the other
                     // operator of the reduce_pair. Therefore, we expect that this
@@ -1985,19 +1940,19 @@ fn finalize_accum<'a>(aggr_func: &'a AggregateFunc, accum: &'a Accum, total: Dif
                     non_nulls: _,
                 },
             ) => {
-                if *nans > 0 || (*pos_infs > 0 && *neg_infs > 0) {
+                if nans.is_positive() || (pos_infs.is_positive() && neg_infs.is_positive()) {
                     // NaNs are NaNs and cases where we've seen a
                     // mixture of positive and negative infinities.
                     Datum::from(f32::NAN)
-                } else if *pos_infs > 0 {
+                } else if pos_infs.is_positive() {
                     Datum::from(f32::INFINITY)
-                } else if *neg_infs > 0 {
+                } else if neg_infs.is_positive() {
                     Datum::from(f32::NEG_INFINITY)
                 } else {
                     // TODO(benesch): remove potentially dangerous usage of `as`.
                     #[allow(clippy::as_conversions)]
                     {
-                        Datum::from(((*accum as f64) / *FLOAT_SCALE) as f32)
+                        Datum::from(((accum.into_inner() as f64) / *FLOAT_SCALE) as f32)
                     }
                 }
             }
@@ -2011,19 +1966,19 @@ fn finalize_accum<'a>(aggr_func: &'a AggregateFunc, accum: &'a Accum, total: Dif
                     non_nulls: _,
                 },
             ) => {
-                if *nans > 0 || (*pos_infs > 0 && *neg_infs > 0) {
+                if nans.is_positive() || (pos_infs.is_positive() && neg_infs.is_positive()) {
                     // NaNs are NaNs and cases where we've seen a
                     // mixture of positive and negative infinities.
                     Datum::from(f64::NAN)
-                } else if *pos_infs > 0 {
+                } else if pos_infs.is_positive() {
                     Datum::from(f64::INFINITY)
-                } else if *neg_infs > 0 {
+                } else if neg_infs.is_positive() {
                     Datum::from(f64::NEG_INFINITY)
                 } else {
                     // TODO(benesch): remove potentially dangerous usage of `as`.
                     #[allow(clippy::as_conversions)]
                     {
-                        Datum::from((*accum as f64) / *FLOAT_SCALE)
+                        Datum::from((accum.into_inner() as f64) / *FLOAT_SCALE)
                     }
                 }
             }
@@ -2046,9 +2001,9 @@ fn finalize_accum<'a>(aggr_func: &'a AggregateFunc, accum: &'a Accum, total: Dif
                 // the amount of overflow, making it invertible.
                 let inf_d = d.is_infinite();
                 let neg_d = d.is_negative();
-                let pos_inf = *pos_infs > 0 || (inf_d && !neg_d);
-                let neg_inf = *neg_infs > 0 || (inf_d && neg_d);
-                if *nans > 0 || (pos_inf && neg_inf) {
+                let pos_inf = pos_infs.is_positive() || (inf_d && !neg_d);
+                let neg_inf = neg_infs.is_positive() || (inf_d && neg_d);
+                if nans.is_positive() || (pos_inf && neg_inf) {
                     // NaNs are NaNs and cases where we've seen a
                     // mixture of positive and negative infinities.
                     Datum::from(Numeric::nan())
@@ -2070,6 +2025,9 @@ fn finalize_accum<'a>(aggr_func: &'a AggregateFunc, accum: &'a Accum, total: Dif
         }
     }
 }
+
+/// The type for accumulator counting. Set to [`Overflowing<u128>`](mz_ore::Overflowing).
+type AccumCount = mz_ore::Overflowing<i128>;
 
 /// Accumulates values for the various types of accumulable aggregations.
 ///
@@ -2093,7 +2051,7 @@ enum Accum {
     /// Accumulates simple numeric values.
     SimpleNumber {
         /// The accumulation of all non-NULL values observed.
-        accum: i128,
+        accum: AccumCount,
         /// The number of non-NULL values observed.
         non_nulls: Diff,
     },
@@ -2101,7 +2059,7 @@ enum Accum {
     Float {
         /// Accumulates non-special float values, mapped to a fixed precision i128 domain to
         /// preserve associativity and commutativity
-        accum: i128,
+        accum: AccumCount,
         /// Counts +inf
         pos_infs: Diff,
         /// Counts -inf
@@ -2275,7 +2233,7 @@ impl Multiply<Diff> for Accum {
                 falses: falses * factor,
             },
             Accum::SimpleNumber { accum, non_nulls } => Accum::SimpleNumber {
-                accum: accum * i128::from(factor),
+                accum: accum * AccumCount::from(factor),
                 non_nulls: non_nulls * factor,
             },
             Accum::Float {
@@ -2285,10 +2243,12 @@ impl Multiply<Diff> for Accum {
                 nans,
                 non_nulls,
             } => Accum::Float {
-                accum: accum.checked_mul(i128::from(factor)).unwrap_or_else(|| {
-                    warn!("Float accumulator overflow. Incorrect results possible");
-                    accum.wrapping_mul(i128::from(factor))
-                }),
+                accum: accum
+                    .checked_mul(AccumCount::from(factor))
+                    .unwrap_or_else(|| {
+                        warn!("Float accumulator overflow. Incorrect results possible");
+                        accum.wrapping_mul(AccumCount::from(factor))
+                    }),
                 pos_infs: pos_infs * factor,
                 neg_infs: neg_infs * factor,
                 nans: nans * factor,
@@ -2302,7 +2262,7 @@ impl Multiply<Diff> for Accum {
                 non_nulls,
             } => {
                 let mut cx = numeric::cx_agg();
-                let mut f = NumericAgg::from(factor);
+                let mut f = NumericAgg::from(factor.into_inner());
                 // Unlike `plus_equals`, not necessary to reduce after this operation because `f` will
                 // always be an integer, i.e. we are never increasing the
                 // values' scale.
@@ -2347,15 +2307,15 @@ mod monoids {
     // add a new enum variant here), because other code (e.g., `HierarchicalOneByOneAggr`)
     // assumes this.
 
+    use differential_dataflow::containers::{Columnation, Region};
     use differential_dataflow::difference::{IsZero, Multiply, Semigroup};
     use mz_expr::AggregateFunc;
     use mz_ore::soft_panic_or_log;
     use mz_repr::{Datum, Diff, Row};
     use serde::{Deserialize, Serialize};
-    use timely::container::columnation::{Columnation, Region};
 
     /// A monoid containing a single-datum row.
-    #[derive(Ord, PartialOrd, Eq, PartialEq, Debug, Clone, Serialize, Deserialize, Hash)]
+    #[derive(Ord, PartialOrd, Eq, PartialEq, Debug, Serialize, Deserialize, Hash)]
     pub enum ReductionMonoid {
         Min(Row),
         Max(Row),
@@ -2366,6 +2326,35 @@ mod monoids {
             use ReductionMonoid::*;
             match self {
                 Min(row) | Max(row) => row,
+            }
+        }
+    }
+
+    impl Clone for ReductionMonoid {
+        fn clone(&self) -> Self {
+            use ReductionMonoid::*;
+            match self {
+                Min(row) => Min(row.clone()),
+                Max(row) => Max(row.clone()),
+            }
+        }
+
+        fn clone_from(&mut self, source: &Self) {
+            use ReductionMonoid::*;
+
+            let mut row = std::mem::take(match self {
+                Min(row) | Max(row) => row,
+            });
+
+            let source_row = match source {
+                Min(row) | Max(row) => row,
+            };
+
+            row.clone_from(source_row);
+
+            match source {
+                Min(_) => *self = Min(row),
+                Max(_) => *self = Max(row),
             }
         }
     }
@@ -2454,8 +2443,8 @@ mod monoids {
         unsafe fn copy(&mut self, item: &Self::Item) -> Self::Item {
             use ReductionMonoid::*;
             match item {
-                Min(row) => Min(self.inner.copy(row)),
-                Max(row) => Max(self.inner.copy(row)),
+                Min(row) => Min(unsafe { self.inner.copy(row) }),
+                Max(row) => Max(unsafe { self.inner.copy(row) }),
             }
         }
 
@@ -2612,14 +2601,14 @@ mod window_agg_helpers {
             AccumulableOneByOneAggr {
                 aggr_func: aggr_func.clone(),
                 accum: accumulable_zero(aggr_func),
-                total: 0,
+                total: Diff::ZERO,
             }
         }
 
         fn give(&mut self, d: &Datum) {
             self.accum
                 .plus_equals(&datum_to_accumulator(&self.aggr_func, d.clone()));
-            self.total += 1;
+            self.total += Diff::ONE;
         }
 
         fn get_current_aggregate<'a>(&self, temp_storage: &'a RowArena) -> Datum<'a> {

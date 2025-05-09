@@ -12,13 +12,13 @@ use std::fmt;
 use mz_lowertest::MzReflect;
 use mz_repr::adt::jsonb::{Jsonb, JsonbRef};
 use mz_repr::adt::numeric::{self, Numeric, NumericMaxScale};
-use mz_repr::{strconv, ColumnType, Datum, Row, RowPacker, ScalarType};
+use mz_repr::{ColumnType, Datum, Row, RowPacker, ScalarType, strconv};
 use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
 
-use crate::scalar::func::impls::numeric::*;
-use crate::scalar::func::EagerUnaryFunc;
 use crate::EvalError;
+use crate::scalar::func::EagerUnaryFunc;
+use crate::scalar::func::impls::numeric::*;
 
 sqlfunc!(
     #[sqlname = "jsonb_to_text"]

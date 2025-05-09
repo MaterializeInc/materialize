@@ -118,6 +118,14 @@ optimizer_feature_flags!({
     reoptimize_imported_views: bool,
     // See the feature flag of the same name.
     enable_reduce_reduction: bool,
+    // See the feature flag of the same name.
+    enable_join_prioritize_arranged: bool,
+    // See the feature flag of the same name.
+    enable_projection_pushdown_after_relation_cse: bool,
+    // See the feature flag of the same name.
+    enable_less_reduce_in_eqprop: bool,
+    // See the feature flag of the same name.
+    enable_dequadratic_eqprop_map: bool,
 });
 
 /// A trait used to implement layered config construction.

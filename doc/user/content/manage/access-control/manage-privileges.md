@@ -11,7 +11,7 @@ This page outlines how to assign and manage role privileges.
 
 ## Grant privileges
 
-To grant privileges to a role, use the [`GRANT PRIVILEGE`](https://materialize.com/docs/sql/grant-privilege/) statement with the
+To grant privileges to a role, use the [`GRANT PRIVILEGE`](/sql/grant-privilege/) statement with the
 object you want to grant privileges to:
 
 ```mzsql
@@ -56,7 +56,7 @@ GRANT CREATE ON <schema_name> to <role_name>;
 
 ## Revoke privileges
 
-To remove privileges from a role, use the [`REVOKE`](https://materialize.com/docs/sql/revoke-privilege/) statement:
+To remove privileges from a role, use the [`REVOKE`](/sql/revoke-privilege/) statement:
 
 ```mzsql
 REVOKE USAGE ON <OBJECT_TYPE> <object_name> FROM <role_name>;

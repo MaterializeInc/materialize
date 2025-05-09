@@ -9,7 +9,4 @@
 
 $ postgres-connect name=mz_system url=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
 
-$[version<=8500] postgres-execute connection=mz_system
-ALTER SYSTEM SET enable_role_vars = true;
-
 > ALTER ROLE materialize SET application_name TO foo_bar_baz;

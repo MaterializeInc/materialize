@@ -10,6 +10,7 @@
 # by the Apache License, Version 2.0.
 
 load("@crates_io//:defs.bzl", "aliases", "all_crate_deps")
+load("@rules_rust//cargo:defs.bzl", "extract_cargo_lints")
 load("@rules_rust//rust:defs.bzl", "rust_binary", "rust_doc_test", "rust_library", "rust_test")
 
 package(default_visibility = ["//visibility:public"])
@@ -28,10 +29,11 @@ rust_library(
         "mz-build-tools",
     ],
     data = [],
+    lint_config = ":lints",
     proc_macro_deps = [] + all_crate_deps(proc_macro = True),
     rustc_env = {},
     rustc_flags = [],
-    version = "0.131.0-dev.0",
+    version = "0.145.0-dev.0",
     deps = [
         "//src/alloc:mz_alloc",
         "//src/alloc-default:mz_alloc_default",
@@ -63,13 +65,14 @@ rust_test(
     ],
     data = [],
     env = {},
+    lint_config = ":lints",
     proc_macro_deps = [] + all_crate_deps(
         proc_macro = True,
         proc_macro_dev = True,
     ),
     rustc_env = {},
     rustc_flags = [],
-    version = "0.131.0-dev.0",
+    version = "0.145.0-dev.0",
     deps = [
         "//src/alloc:mz_alloc",
         "//src/alloc-default:mz_alloc_default",
@@ -117,10 +120,14 @@ rust_binary(
     data = [],
     env = {},
     features = [],
+    lint_config = ":lints",
     proc_macro_deps = [] + all_crate_deps(proc_macro = True),
     rustc_env = {},
-    rustc_flags = [],
-    version = "0.131.0-dev.0",
+    rustc_flags = [] + select({
+        "@//misc/bazel/platforms:xlang_lto_enabled": ["-Clinker-plugin-lto"],
+        "//conditions:default": [],
+    }),
+    version = "0.145.0-dev.0",
     deps = [
         ":mz_orchestratord",
         "//src/alloc:mz_alloc",
@@ -133,4 +140,10 @@ rust_binary(
         "//src/ore:mz_ore",
         "//src/prof-http:mz_prof_http",
     ] + all_crate_deps(normal = True),
+)
+
+extract_cargo_lints(
+    name = "lints",
+    manifest = "Cargo.toml",
+    workspace = "@//:Cargo.toml",
 )

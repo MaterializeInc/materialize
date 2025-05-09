@@ -10,33 +10,38 @@
 //! Metrics for the storage controller components
 
 use std::sync::Arc;
+use std::time::Duration;
 
-use mz_cluster_client::metrics::{ControllerMetrics, WallclockLagMetrics};
 use mz_cluster_client::ReplicaId;
+use mz_cluster_client::metrics::{ControllerMetrics, WallclockLagMetrics};
 use mz_ore::cast::{CastFrom, TryCastFrom};
 use mz_ore::metric;
 use mz_ore::metrics::{
-    DeleteOnDropCounter, DeleteOnDropGauge, DeleteOnDropHistogram, IntCounterVec, MetricVecExt,
-    MetricsRegistry, UIntGaugeVec,
+    CounterVec, DeleteOnDropCounter, DeleteOnDropGauge, DeleteOnDropHistogram, IntCounterVec,
+    MetricVecExt, MetricsRegistry, UIntGaugeVec,
 };
 use mz_ore::stats::HISTOGRAM_BYTE_BUCKETS;
 use mz_repr::GlobalId;
 use mz_service::codec::StatsCollector;
 use mz_storage_types::instances::StorageInstanceId;
-use prometheus::core::AtomicU64;
+use prometheus::core::{AtomicF64, AtomicU64};
 
 use crate::client::{ProtoStorageCommand, ProtoStorageResponse};
 
-pub type UIntGauge = DeleteOnDropGauge<'static, AtomicU64, Vec<String>>;
+pub type UIntGauge = DeleteOnDropGauge<AtomicU64, Vec<String>>;
 
 /// Storage controller metrics
 #[derive(Debug, Clone)]
 pub struct StorageControllerMetrics {
     messages_sent_bytes: prometheus::HistogramVec,
     messages_received_bytes: prometheus::HistogramVec,
-    startup_prepared_statements_kept: prometheus::IntGauge,
     regressed_offset_known: IntCounterVec,
     history_command_count: UIntGaugeVec,
+
+    // replica connections
+    connected_replica_count: UIntGaugeVec,
+    replica_connects_total: IntCounterVec,
+    replica_connect_wait_time_seconds_total: CounterVec,
 
     /// Metrics shared with the compute controller.
     shared: ControllerMetrics,
@@ -57,10 +62,6 @@ impl StorageControllerMetrics {
                 var_labels: ["instance_id", "replica_id"],
                 buckets: HISTOGRAM_BYTE_BUCKETS.to_vec()
             )),
-            startup_prepared_statements_kept: metrics_registry.register(metric!(
-                name: "mz_storage_startup_prepared_statements_kept",
-                help: "number of prepared statements kept on startup",
-            )),
             regressed_offset_known: metrics_registry.register(metric!(
                 name: "mz_storage_regressed_offset_known",
                 help: "number of regressed offset_known stats for this id",
@@ -71,6 +72,21 @@ impl StorageControllerMetrics {
                 help: "The number of commands in the controller's command history.",
                 var_labels: ["instance_id", "command_type"],
             )),
+            connected_replica_count: metrics_registry.register(metric!(
+                name: "mz_storage_controller_connected_replica_count",
+                help: "The number of replicas successfully connected to the storage controller.",
+                var_labels: ["instance_id"],
+            )),
+            replica_connects_total: metrics_registry.register(metric!(
+                name: "mz_storage_controller_replica_connects_total",
+                help: "The total number of replica (re-)connections made by the storage controller.",
+                var_labels: ["instance_id", "replica_id"],
+            )),
+            replica_connect_wait_time_seconds_total: metrics_registry.register(metric!(
+                name: "mz_storage_controller_replica_connect_wait_time_seconds_total",
+                help: "The total time the storage controller spent waiting for replica (re-)connection.",
+                var_labels: ["instance_id", "replica_id"],
+            )),
 
             shared,
         }
@@ -79,7 +95,7 @@ impl StorageControllerMetrics {
     pub fn regressed_offset_known(
         &self,
         id: mz_repr::GlobalId,
-    ) -> DeleteOnDropCounter<'static, prometheus::core::AtomicU64, Vec<String>> {
+    ) -> DeleteOnDropCounter<prometheus::core::AtomicU64, Vec<String>> {
         self.regressed_offset_known
             .get_delete_on_drop_metric(vec![id.to_string()])
     }
@@ -94,15 +110,15 @@ impl StorageControllerMetrics {
     }
 
     pub fn for_instance(&self, id: StorageInstanceId) -> InstanceMetrics {
+        let connected_replica_count = self
+            .connected_replica_count
+            .get_delete_on_drop_metric(vec![id.to_string()]);
+
         InstanceMetrics {
             instance_id: id,
             metrics: self.clone(),
+            connected_replica_count,
         }
-    }
-
-    pub fn set_startup_prepared_statements_kept(&self, n: u64) {
-        let n: i64 = n.try_into().expect("realistic number");
-        self.startup_prepared_statements_kept.set(n);
     }
 }
 
@@ -110,6 +126,8 @@ impl StorageControllerMetrics {
 pub struct InstanceMetrics {
     instance_id: StorageInstanceId,
     metrics: StorageControllerMetrics,
+    /// Gauge tracking the number of connected replicas.
+    pub connected_replica_count: UIntGauge,
 }
 
 impl InstanceMetrics {
@@ -124,6 +142,14 @@ impl InstanceMetrics {
                 messages_received_bytes: self
                     .metrics
                     .messages_received_bytes
+                    .get_delete_on_drop_metric(labels.clone()),
+                replica_connects_total: self
+                    .metrics
+                    .replica_connects_total
+                    .get_delete_on_drop_metric(labels.clone()),
+                replica_connect_wait_time_seconds_total: self
+                    .metrics
+                    .replica_connect_wait_time_seconds_total
                     .get_delete_on_drop_metric(labels),
             }),
         }
@@ -151,14 +177,32 @@ impl InstanceMetrics {
 
 #[derive(Debug)]
 struct ReplicaMetricsInner {
-    messages_sent_bytes: DeleteOnDropHistogram<'static, Vec<String>>,
-    messages_received_bytes: DeleteOnDropHistogram<'static, Vec<String>>,
+    messages_sent_bytes: DeleteOnDropHistogram<Vec<String>>,
+    messages_received_bytes: DeleteOnDropHistogram<Vec<String>>,
+    /// Counter tracking the total number of (re-)connects.
+    replica_connects_total: DeleteOnDropCounter<AtomicU64, Vec<String>>,
+    /// Counter tracking the total time spent waiting for (re-)connects.
+    replica_connect_wait_time_seconds_total: DeleteOnDropCounter<AtomicF64, Vec<String>>,
 }
 
 /// Per-instance metrics
 #[derive(Debug, Clone)]
 pub struct ReplicaMetrics {
     inner: Arc<ReplicaMetricsInner>,
+}
+
+impl ReplicaMetrics {
+    /// Observe a successful replica connection.
+    pub fn observe_connect(&self) {
+        self.inner.replica_connects_total.inc();
+    }
+
+    /// Observe time spent waiting for a replica connection.
+    pub fn observe_connect_time(&self, wait_time: Duration) {
+        self.inner
+            .replica_connect_wait_time_seconds_total
+            .inc_by(wait_time.as_secs_f64());
+    }
 }
 
 /// Make [`ReplicaMetrics`] pluggable into the gRPC connection.
@@ -189,9 +233,9 @@ impl StatsCollector<ProtoStorageCommand, ProtoStorageResponse> for ReplicaMetric
 pub struct HistoryMetrics {
     /// Number of `CreateTimely` commands.
     pub create_timely_count: UIntGauge,
-    /// Number of `RunIngestions` commands.
+    /// Number of `RunIngestion` commands.
     pub run_ingestions_count: UIntGauge,
-    /// Number of `RunSinks` commands.
+    /// Number of `RunSink` commands.
     pub run_sinks_count: UIntGauge,
     /// Number of `AllowCompaction` commands.
     pub allow_compaction_count: UIntGauge,

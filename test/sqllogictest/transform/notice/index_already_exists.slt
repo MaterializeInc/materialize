@@ -41,7 +41,7 @@ CREATE INDEX t_idx1 ON t(a + 7);
 
 # EXPLAIN CREATE INDEX for an identical index that emits the optimizer notice.
 query T multiline
-EXPLAIN WITH(humanized expressions) CREATE INDEX t_idx2 ON t(a + 7);
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions) AS VERBOSE TEXT FOR CREATE INDEX t_idx2 ON t(a + 7);
 ----
 materialize.notices.t_idx2:
   ArrangeBy keys=[[(#0{a} + 7)]]
@@ -64,7 +64,7 @@ CREATE INDEX t_idx2 ON t(a + 7);
 
 # Verify that the notice is shown in EXPLAIN.
 query T multiline
-EXPLAIN WITH(humanized expressions) INDEX t_idx2;
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions) AS VERBOSE TEXT FOR INDEX t_idx2;
 ----
 materialize.notices.t_idx2:
   ArrangeBy keys=[[(#0{a} + 7)]]
@@ -121,7 +121,7 @@ CREATE INDEX t_idx3 ON t(a + 7);
 
 # Verify that the notice is shown in EXPLAIN.
 query T multiline
-EXPLAIN WITH(humanized expressions) INDEX t_idx3;
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions) AS VERBOSE TEXT FOR INDEX t_idx3;
 ----
 materialize.notices.t_idx3:
   ArrangeBy keys=[[(#0{a} + 7)]]
@@ -165,7 +165,7 @@ DROP INDEX t_idx1;
 
 # Verify that the notice is no longer shown in EXPLAIN.
 query T multiline
-EXPLAIN WITH(humanized expressions) INDEX t_idx3;
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions) AS VERBOSE TEXT FOR INDEX t_idx3;
 ----
 materialize.notices.t_idx3:
   ArrangeBy keys=[[(#0{a} + 7)]]

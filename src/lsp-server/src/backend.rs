@@ -20,12 +20,14 @@ use ::serde::Deserialize;
 use mz_ore::collections::HashMap;
 use mz_sql_lexer::keywords::Keyword;
 use mz_sql_lexer::lexer::{self, Token};
-use mz_sql_parser::ast::{statement_kind_label_value, Raw, Statement};
+use mz_sql_parser::ast::display::FormatMode;
+use mz_sql_parser::ast::{Raw, Statement, statement_kind_label_value};
 use mz_sql_parser::parser::parse_statements;
+use mz_sql_pretty::PrettyConfig;
 use regex::Regex;
 use ropey::Rope;
 use serde::Serialize;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use tokio::sync::Mutex;
 use tower_lsp::jsonrpc::{Error, ErrorCode, Result};
 use tower_lsp::lsp_types::*;
@@ -36,7 +38,7 @@ use crate::{PKG_NAME, PKG_VERSION};
 /// Default formatting width to use in the [LanguageServer::formatting] implementation.
 pub const DEFAULT_FORMATTING_WIDTH: usize = 100;
 
-/// This is a re-implemention of [mz_sql_parser::parser::StatementParseResult]
+/// This is a re-implementation of [mz_sql_parser::parser::StatementParseResult]
 /// but replacing the sql code with a rope.
 #[derive(Debug)]
 pub struct ParseResult {
@@ -429,7 +431,7 @@ impl LanguageServer for Backend {
             let lex_results = lexer::lex(&content.to_string())
                 .map_err(|_| build_error("Error getting lex tokens."))?;
             let offset = position_to_offset(position, content)
-                .ok_or(build_error("Error getting completion offset."))?;
+                .ok_or_else(|| build_error("Error getting completion offset."))?;
 
             let last_keyword = lex_results
                 .iter()
@@ -448,7 +450,7 @@ impl LanguageServer for Backend {
                         None
                     }
                 })
-                .last();
+                .next_back();
 
             if let Some(keyword) = last_keyword {
                 return match keyword {
@@ -483,7 +485,15 @@ impl LanguageServer for Backend {
             let pretty = parse_result
                 .asts
                 .iter()
-                .map(|ast| mz_sql_pretty::to_pretty(ast, *width))
+                .map(|ast| {
+                    mz_sql_pretty::to_pretty(
+                        ast,
+                        PrettyConfig {
+                            width: *width,
+                            format_mode: FormatMode::Simple,
+                        },
+                    )
+                })
                 .collect::<Vec<String>>()
                 .join("\n");
             let rope = &parse_result.rope;

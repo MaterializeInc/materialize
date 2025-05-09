@@ -13,6 +13,8 @@ use std::time::Duration;
 
 use mz_dyncfg::{Config, ConfigSet};
 
+use crate::timestamp_selection::ConstraintBasedTimestampSelection;
+
 pub const ALLOW_USER_SESSIONS: Config<bool> = Config::new(
     "allow_user_sessions",
     true,
@@ -30,6 +32,12 @@ pub const WITH_0DT_DEPLOYMENT_MAX_WAIT: Config<Duration> = Config::new(
     "with_0dt_deployment_max_wait",
     Duration::from_secs(60 * 60),
     "How long to wait at most for clusters to be hydrated, when doing a zero-downtime deployment.",
+);
+
+pub const WITH_0DT_DEPLOYMENT_DDL_CHECK_INTERVAL: Config<Duration> = Config::new(
+    "with_0dt_deployment_ddl_check_interval",
+    Duration::from_secs(5 * 60),
+    "How often to check for DDL changes during zero-downtime deployment.",
 );
 
 pub const ENABLE_0DT_DEPLOYMENT_PANIC_AFTER_TIMEOUT: Config<bool> = Config::new(
@@ -89,14 +97,6 @@ pub const PLAN_INSIGHTS_NOTICE_FAST_PATH_CLUSTERS_OPTIMIZE_DURATION: Config<Dura
     "Enable plan insights fast path clusters calculation if the optimize step took less than this duration.",
 );
 
-/// Whether the default sink partitioning strategy for an environment should be 'v1'. When set to
-/// false the strategy defaults to 'v0'.
-pub const DEFAULT_SINK_PARTITION_STRATEGY: Config<&str> = Config::new(
-    "default_sink_partition_strategy",
-    "v0",
-    "The default sink partitioning strategy for an environment. It defaults to 'v0'.",
-);
-
 /// Whether to create system builtin continual tasks on boot.
 pub const ENABLE_CONTINUAL_TASK_BUILTINS: Config<bool> = Config::new(
     "enable_continual_task_builtins",
@@ -111,12 +111,39 @@ pub const ENABLE_EXPRESSION_CACHE: Config<bool> = Config::new(
     "Use a cache to store optimized expressions to help speed up start times.",
 );
 
+/// Whether we allow sources in multi-replica clusters.
+pub const ENABLE_MULTI_REPLICA_SOURCES: Config<bool> = Config::new(
+    "enable_multi_replica_sources",
+    false,
+    "Enable multi-replica sources.",
+);
+
+/// Whether to enable self-managed authentication.
+pub const ENABLE_SELF_MANAGED_AUTH: Config<bool> = Config::new(
+    "enable_self_managed_auth",
+    false,
+    "Enable self-managed authentication.",
+);
+
+pub const CONSTRAINT_BASED_TIMESTAMP_SELECTION: Config<&'static str> = Config::new(
+    "constraint_based_timestamp_selection",
+    ConstraintBasedTimestampSelection::const_default().as_str(),
+    "Whether to use the constraint-based timestamp selection, one of: enabled, disabled, verify",
+);
+
+pub const PERSIST_FAST_PATH_ORDER: Config<bool> = Config::new(
+    "persist_fast_path_order",
+    false,
+    "If set, send queries with a compatible literal constraint or ordering clause down the Persist fast path.",
+);
+
 /// Adds the full set of all compute `Config`s.
 pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
     configs
         .add(&ALLOW_USER_SESSIONS)
         .add(&ENABLE_0DT_DEPLOYMENT)
         .add(&WITH_0DT_DEPLOYMENT_MAX_WAIT)
+        .add(&WITH_0DT_DEPLOYMENT_DDL_CHECK_INTERVAL)
         .add(&ENABLE_0DT_DEPLOYMENT_PANIC_AFTER_TIMEOUT)
         .add(&WITH_0DT_DEPLOYMENT_CAUGHT_UP_CHECK_INTERVAL)
         .add(&ENABLE_0DT_CAUGHT_UP_CHECK)
@@ -125,7 +152,10 @@ pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
         .add(&ENABLE_STATEMENT_LIFECYCLE_LOGGING)
         .add(&ENABLE_INTROSPECTION_SUBSCRIBES)
         .add(&PLAN_INSIGHTS_NOTICE_FAST_PATH_CLUSTERS_OPTIMIZE_DURATION)
-        .add(&DEFAULT_SINK_PARTITION_STRATEGY)
         .add(&ENABLE_CONTINUAL_TASK_BUILTINS)
         .add(&ENABLE_EXPRESSION_CACHE)
+        .add(&ENABLE_MULTI_REPLICA_SOURCES)
+        .add(&ENABLE_SELF_MANAGED_AUTH)
+        .add(&CONSTRAINT_BASED_TIMESTAMP_SELECTION)
+        .add(&PERSIST_FAST_PATH_ORDER)
 }

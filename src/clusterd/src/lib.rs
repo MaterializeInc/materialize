@@ -17,7 +17,7 @@ use axum::routing;
 use fail::FailScenario;
 use futures::future;
 use hyper_util::rt::TokioIo;
-use mz_build_info::{build_info, BuildInfo};
+use mz_build_info::{BuildInfo, build_info};
 use mz_cloud_resources::AwsExternalIdPrefix;
 use mz_compute::server::ComputeInstanceContext;
 use mz_compute_client::service::proto_compute_server::ProtoComputeServer;
@@ -25,7 +25,7 @@ use mz_http_util::DynamicFilterTarget;
 use mz_orchestrator_tracing::{StaticTracingConfig, TracingCliArgs};
 use mz_ore::cli::{self, CliConfig};
 use mz_ore::error::ErrorExt;
-use mz_ore::metrics::MetricsRegistry;
+use mz_ore::metrics::{MetricsRegistry, register_runtime_metrics};
 use mz_ore::netio::{Listener, SocketAddr};
 use mz_ore::now::SYSTEM_TIME;
 use mz_persist_client::cache::PersistClientCache;
@@ -38,6 +38,7 @@ use mz_storage::storage_state::StorageInstanceContext;
 use mz_storage_client::client::proto_storage_server::ProtoStorageServer;
 use mz_storage_types::connections::ConnectionContext;
 use mz_txn_wal::operator::TxnsContext;
+use tokio::runtime::Handle;
 use tower::Service;
 use tracing::{error, info};
 
@@ -141,15 +142,31 @@ struct Args {
     worker_core_affinity: bool,
 }
 
-#[tokio::main]
-pub async fn main() {
+pub fn main() {
     mz_ore::panic::install_enhanced_handler();
 
     let args = cli::parse_args(CliConfig {
         env_prefix: Some("CLUSTERD_"),
         enable_version_flag: true,
     });
-    if let Err(err) = run(args).await {
+
+    let ncpus_useful = usize::max(1, std::cmp::min(num_cpus::get(), num_cpus::get_physical()));
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(ncpus_useful)
+        // The default thread name exceeds the Linux limit on thread name
+        // length, so pick something shorter. The maximum length is 16 including
+        // a \0 terminator. This gives us four decimals, which should be enough
+        // for most existing computers.
+        .thread_name_fn(|| {
+            use std::sync::atomic::{AtomicUsize, Ordering};
+            static ATOMIC_ID: AtomicUsize = AtomicUsize::new(0);
+            let id = ATOMIC_ID.fetch_add(1, Ordering::Relaxed);
+            format!("tokio:work-{}", id)
+        })
+        .enable_all()
+        .build()
+        .unwrap();
+    if let Err(err) = runtime.block_on(run(args)) {
         panic!("clusterd: fatal: {}", err.display_with_causes());
     }
 }
@@ -168,6 +185,7 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
         .await?;
 
     let tracing_handle = Arc::new(tracing_handle);
+    register_runtime_metrics("main", Handle::current().metrics(), &metrics_registry);
 
     // Keep this _after_ the mz_ore::tracing::configure call so that its panic
     // hook runs _before_ the one that sends things to sentry.
@@ -178,7 +196,7 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
     emit_boot_diagnostics!(&BUILD_INFO);
 
     mz_alloc::register_metrics_into(&metrics_registry).await;
-    mz_metrics::register_metrics_into(&metrics_registry).await;
+    mz_metrics::register_metrics_into(&metrics_registry, mz_dyncfgs::all_dyncfgs()).await;
 
     let secrets_reader = args
         .secrets
@@ -302,13 +320,11 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
     let grpc_server_metrics = GrpcServerMetrics::register_with(&metrics_registry);
 
     // Start storage server.
-    let (_storage_server, storage_client) = mz_storage::serve(
-        mz_cluster::server::ClusterConfig {
-            metrics_registry: metrics_registry.clone(),
-            persist_clients: Arc::clone(&persist_clients),
-            txns_ctx: txns_ctx.clone(),
-            tracing_handle: Arc::clone(&tracing_handle),
-        },
+    let storage_client_builder = mz_storage::serve(
+        &metrics_registry,
+        Arc::clone(&persist_clients),
+        txns_ctx.clone(),
+        Arc::clone(&tracing_handle),
         SYSTEM_TIME.clone(),
         connection_context.clone(),
         StorageInstanceContext::new(args.scratch_directory.clone(), args.announce_memory_limit)?,
@@ -324,19 +340,17 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
             args.storage_controller_listen_addr,
             BUILD_INFO.semver_version(),
             grpc_host.clone(),
-            storage_client,
+            storage_client_builder,
             |svc| ProtoStorageServer::new(svc).max_decoding_message_size(MAX_GRPC_MESSAGE_SIZE),
         ),
     );
 
     // Start compute server.
-    let (_compute_server, compute_client) = mz_compute::server::serve(
-        mz_cluster::server::ClusterConfig {
-            metrics_registry,
-            persist_clients,
-            txns_ctx,
-            tracing_handle,
-        },
+    let compute_client_builder = mz_compute::server::serve(
+        &metrics_registry,
+        persist_clients,
+        txns_ctx,
+        tracing_handle,
         ComputeInstanceContext {
             scratch_directory: args.scratch_directory,
             worker_core_affinity: args.worker_core_affinity,
@@ -354,7 +368,7 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
             args.compute_controller_listen_addr,
             BUILD_INFO.semver_version(),
             grpc_host,
-            compute_client,
+            compute_client_builder,
             |svc| ProtoComputeServer::new(svc).max_decoding_message_size(MAX_GRPC_MESSAGE_SIZE),
         ),
     );

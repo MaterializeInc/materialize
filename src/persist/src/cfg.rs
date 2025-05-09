@@ -18,9 +18,10 @@ use mz_dyncfg::ConfigSet;
 use mz_ore::url::SensitiveUrl;
 use tracing::warn;
 
-use mz_postgres_client::metrics::PostgresClientMetrics;
 use mz_postgres_client::PostgresClientKnobs;
+use mz_postgres_client::metrics::PostgresClientMetrics;
 
+use crate::azure::{AzureBlob, AzureBlobConfig};
 use crate::file::{FileBlob, FileBlobConfig};
 use crate::location::{Blob, Consensus, Determinate, ExternalError};
 use crate::mem::{MemBlob, MemBlobConfig, MemConsensus};
@@ -35,7 +36,7 @@ pub fn all_dyn_configs(configs: ConfigSet) -> ConfigSet {
         .add(&crate::indexed::columnar::arrow::ENABLE_ARROW_LGALLOC_NONCC_SIZES)
         .add(&crate::s3::ENABLE_S3_LGALLOC_CC_SIZES)
         .add(&crate::s3::ENABLE_S3_LGALLOC_NONCC_SIZES)
-        .add(&crate::s3::ENABLE_ONE_ALLOC_PER_REQUEST)
+        .add(&crate::postgres::USE_POSTGRES_TUNED_QUERIES)
 }
 
 /// Config for an implementation of [Blob].
@@ -48,6 +49,8 @@ pub enum BlobConfig {
     /// Config for [MemBlob], only available in testing to prevent
     /// footguns.
     Mem(bool),
+    /// Config for [AzureBlob].
+    Azure(AzureBlobConfig),
 }
 
 /// Configuration knobs for [Blob].
@@ -70,6 +73,7 @@ impl BlobConfig {
         match self {
             BlobConfig::File(config) => Ok(Arc::new(FileBlob::open(config).await?)),
             BlobConfig::S3(config) => Ok(Arc::new(S3Blob::open(config).await?)),
+            BlobConfig::Azure(config) => Ok(Arc::new(AzureBlob::open(config).await?)),
             BlobConfig::Mem(tombstone) => {
                 Ok(Arc::new(MemBlob::open(MemBlobConfig::new(tombstone))))
             }
@@ -148,6 +152,40 @@ impl BlobConfig {
                 query_params.clear();
                 Ok(BlobConfig::Mem(tombstone))
             }
+            "http" | "https" => match url
+                .host()
+                .ok_or_else(|| anyhow!("missing protocol: {}", &url.as_str()))?
+                .to_string()
+                .split_once('.')
+            {
+                // The Azurite emulator always uses the well-known account name devstoreaccount1
+                Some((account, root))
+                    if account == "devstoreaccount1" || root == "blob.core.windows.net" =>
+                {
+                    if let Some(container) = url
+                        .path_segments()
+                        .expect("azure blob storage container")
+                        .next()
+                    {
+                        query_params.clear();
+                        Ok(BlobConfig::Azure(AzureBlobConfig::new(
+                            account.to_string(),
+                            container.to_string(),
+                            // Azure doesn't support prefixes in the way S3 does.
+                            // This is always empty, but we leave the field for
+                            // compatibility with our existing test suite.
+                            "".to_string(),
+                            metrics,
+                            url.clone().into_redacted(),
+                            knobs,
+                            cfg,
+                        )?))
+                    } else {
+                        Err(anyhow!("unknown persist blob scheme: {}", url.as_str()))
+                    }
+                }
+                _ => Err(anyhow!("unknown persist blob scheme: {}", url.as_str())),
+            },
             p => Err(anyhow!(
                 "unknown persist blob scheme {}: {}",
                 p,
@@ -196,10 +234,11 @@ impl ConsensusConfig {
         url: &SensitiveUrl,
         knobs: Box<dyn PostgresClientKnobs>,
         metrics: PostgresClientMetrics,
+        dyncfg: Arc<ConfigSet>,
     ) -> Result<Self, ExternalError> {
         let config = match url.scheme() {
             "postgres" | "postgresql" => Ok(ConsensusConfig::Postgres(
-                PostgresConsensusConfig::new(url, knobs, metrics)?,
+                PostgresConsensusConfig::new(url, knobs, metrics, dyncfg)?,
             )),
             "mem" => {
                 if !cfg!(debug_assertions) {

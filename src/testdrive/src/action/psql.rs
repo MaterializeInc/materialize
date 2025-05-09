@@ -7,7 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use anyhow::{bail, Context};
+use anyhow::{Context, bail};
 use mz_ore::option::OptionExt;
 use tokio::process::Command;
 

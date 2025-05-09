@@ -63,7 +63,7 @@ INSERT INTO band_members VALUES
 
 # Simple case: EXCEPT ALL with a const literal constraint.
 query T multiline
-EXPLAIN OPTIMIZED PLAN WITH(non negative) FOR
+EXPLAIN OPTIMIZED PLAN WITH(non negative, humanized expressions) AS VERBOSE TEXT FOR
 (
     SELECT id FROM people
 )
@@ -74,11 +74,11 @@ EXCEPT
 ----
 Explained Query:
   Union // { non_negative: true }
-    Project (#0) // { non_negative: true }
+    Project (#0{id}) // { non_negative: true }
       ReadStorage materialize.public.people // { non_negative: true }
     Negate // { non_negative: false }
-      Project (#0) // { non_negative: true }
-        Filter (#0 = 5) // { non_negative: true }
+      Project (#0{id}) // { non_negative: true }
+        Filter (#0{id} = 5) // { non_negative: true }
           ReadStorage materialize.public.people // { non_negative: true }
 
 Source materialize.public.people
@@ -89,7 +89,7 @@ EOF
 
 # Simple case: EXCEPT ALL with an IS NOT NULL filter.
 query T multiline
-EXPLAIN OPTIMIZED PLAN WITH(non negative) FOR
+EXPLAIN OPTIMIZED PLAN WITH(non negative, humanized expressions) AS VERBOSE TEXT FOR
 (
     SELECT id FROM people
 )
@@ -100,11 +100,11 @@ EXCEPT ALL
 ----
 Explained Query:
   Union // { non_negative: true }
-    Project (#0) // { non_negative: true }
+    Project (#0{id}) // { non_negative: true }
       ReadStorage materialize.public.people // { non_negative: true }
     Negate // { non_negative: false }
-      Project (#0) // { non_negative: true }
-        Filter (#3) IS NOT NULL // { non_negative: true }
+      Project (#0{id}) // { non_negative: true }
+        Filter (#3{died}) IS NOT NULL // { non_negative: true }
           ReadStorage materialize.public.people // { non_negative: true }
 
 Source materialize.public.people
@@ -115,20 +115,20 @@ EOF
 
 # Simple case: EXCEPT.
 query T multiline
-EXPLAIN OPTIMIZED PLAN WITH(non negative) FOR
+EXPLAIN OPTIMIZED PLAN WITH(non negative, humanized expressions) AS VERBOSE TEXT FOR
 SELECT name FROM people
 EXCEPT
 SELECT name FROM people WHERE id > 1
 ----
 Explained Query:
   Union // { non_negative: true }
-    Distinct project=[#0] // { non_negative: true }
-      Project (#1) // { non_negative: true }
+    Distinct project=[#0{name}] // { non_negative: true }
+      Project (#1{name}) // { non_negative: true }
         ReadStorage materialize.public.people // { non_negative: true }
     Negate // { non_negative: false }
-      Distinct project=[#0] // { non_negative: true }
-        Project (#1) // { non_negative: true }
-          Filter (#0 > 1) // { non_negative: true }
+      Distinct project=[#0{name}] // { non_negative: true }
+        Project (#1{name}) // { non_negative: true }
+          Filter (#0{id} > 1) // { non_negative: true }
             ReadStorage materialize.public.people // { non_negative: true }
 
 Source materialize.public.people
@@ -140,7 +140,7 @@ EOF
 # Negative example: EXCEPT ALL that should not be confused for an EXCEPT
 # the two inputs have a Reduce *with aggregates*.
 query T multiline
-EXPLAIN OPTIMIZED PLAN WITH(non negative) FOR
+EXPLAIN OPTIMIZED PLAN WITH(non negative, humanized expressions) AS VERBOSE TEXT FOR
 SELECT MAX(id) FROM people GROUP BY name
 EXCEPT ALL
 SELECT MAX(id) FROM (SELECT * FROM people WHERE id > 1) GROUP BY name
@@ -148,15 +148,15 @@ SELECT MAX(id) FROM (SELECT * FROM people WHERE id > 1) GROUP BY name
 Explained Query:
   Threshold // { non_negative: true }
     Union // { non_negative: false }
-      Project (#1) // { non_negative: true }
-        Reduce group_by=[#1] aggregates=[max(#0)] // { non_negative: true }
-          Project (#0, #1) // { non_negative: true }
+      Project (#1{max_id}) // { non_negative: true }
+        Reduce group_by=[#1{name}] aggregates=[max(#0{id})] // { non_negative: true }
+          Project (#0{id}, #1{name}) // { non_negative: true }
             ReadStorage materialize.public.people // { non_negative: true }
       Negate // { non_negative: false }
-        Project (#1) // { non_negative: true }
-          Reduce group_by=[#1] aggregates=[max(#0)] // { non_negative: true }
-            Project (#0, #1) // { non_negative: true }
-              Filter (#0 > 1) // { non_negative: true }
+        Project (#1{max_id}) // { non_negative: true }
+          Reduce group_by=[#1{name}] aggregates=[max(#0{id})] // { non_negative: true }
+            Project (#0{id}, #1{name}) // { non_negative: true }
+              Filter (#0{id} > 1) // { non_negative: true }
                 ReadStorage materialize.public.people // { non_negative: true }
 
 Source materialize.public.people
@@ -168,7 +168,7 @@ EOF
 # Complex example: EXCEPT ALL.
 # Here ThresholdElision can only match in after some prior simplifications
 query T multiline
-EXPLAIN OPTIMIZED PLAN WITH(non negative) FOR
+EXPLAIN OPTIMIZED PLAN WITH(non negative, humanized expressions) AS VERBOSE TEXT FOR
 (
     SELECT
         id, name
@@ -191,13 +191,13 @@ EXCEPT ALL
 Explained Query:
   With
     cte l0 =
-      Project (#0, #1) // { non_negative: true }
+      Project (#0{id}, #1{name}) // { non_negative: true }
         ReadStorage materialize.public.people // { non_negative: true }
   Return // { non_negative: true }
     Union // { non_negative: true }
       Get l0 // { non_negative: true }
       Negate // { non_negative: false }
-        TopK group_by=[#0] limit=1 // { non_negative: true }
+        TopK group_by=[#0{id}] limit=1 // { non_negative: true }
           Get l0 // { non_negative: true }
 
 Source materialize.public.people
@@ -209,7 +209,7 @@ EOF
 # Complex example: EXCEPT.
 # Here ThresholdElision can only match in after some prior simplifications
 query T multiline
-EXPLAIN OPTIMIZED PLAN WITH(non negative) FOR
+EXPLAIN OPTIMIZED PLAN WITH(non negative, humanized expressions) AS VERBOSE TEXT FOR
 (
     SELECT
         id, name
@@ -232,13 +232,13 @@ EXCEPT
 Explained Query:
   With
     cte l0 =
-      Project (#0, #1) // { non_negative: true }
+      Project (#0{id}, #1{name}) // { non_negative: true }
         ReadStorage materialize.public.people // { non_negative: true }
   Return // { non_negative: true }
     Union // { non_negative: true }
       Get l0 // { non_negative: true }
       Negate // { non_negative: false }
-        TopK group_by=[#0] limit=1 // { non_negative: true }
+        TopK group_by=[#0{id}] limit=1 // { non_negative: true }
           Get l0 // { non_negative: true }
 
 Source materialize.public.people
@@ -249,7 +249,7 @@ EOF
 
 # Complex example: CTE with a join.
 query T multiline
-EXPLAIN OPTIMIZED PLAN WITH(non negative) FOR
+EXPLAIN OPTIMIZED PLAN WITH(non negative, humanized expressions) AS VERBOSE TEXT FOR
 WITH cte AS (SELECT people.id FROM people, bands)
 SELECT * FROM cte EXCEPT ALL SELECT * FROM cte where id > 5;
 ----
@@ -258,7 +258,7 @@ Explained Query:
     cte l0 =
       CrossJoin type=differential // { non_negative: true }
         ArrangeBy keys=[[]] // { non_negative: true }
-          Project (#0) // { non_negative: true }
+          Project (#0{id}) // { non_negative: true }
             ReadStorage materialize.public.people // { non_negative: true }
         ArrangeBy keys=[[]] // { non_negative: true }
           Project () // { non_negative: true }
@@ -267,7 +267,7 @@ Explained Query:
     Union // { non_negative: true }
       Get l0 // { non_negative: true }
       Negate // { non_negative: false }
-        Filter (#0 > 5) // { non_negative: true }
+        Filter (#0{id} > 5) // { non_negative: true }
           Get l0 // { non_negative: true }
 
 Source materialize.public.bands
@@ -279,21 +279,21 @@ EOF
 
 # Complex example: CTE with a DISTINCT.
 query T multiline
-EXPLAIN OPTIMIZED PLAN WITH(non negative) FOR
+EXPLAIN OPTIMIZED PLAN WITH(non negative, humanized expressions) AS VERBOSE TEXT FOR
 WITH cte AS (SELECT DISTINCT name FROM people)
 SELECT * FROM cte EXCEPT ALL SELECT * FROM cte WHERE name LIKE 'J%'
 ----
 Explained Query:
   With
     cte l0 =
-      Distinct project=[#0] // { non_negative: true }
-        Project (#1) // { non_negative: true }
+      Distinct project=[#0{name}] // { non_negative: true }
+        Project (#1{name}) // { non_negative: true }
           ReadStorage materialize.public.people // { non_negative: true }
   Return // { non_negative: true }
     Union // { non_negative: true }
       Get l0 // { non_negative: true }
       Negate // { non_negative: false }
-        Filter like["J%"](#0) // { non_negative: true }
+        Filter like["J%"](#0{name}) // { non_negative: true }
           Get l0 // { non_negative: true }
 
 Source materialize.public.people
@@ -304,7 +304,7 @@ EOF
 
 # Complex example: CTE with a GROUP BY.
 query T multiline
-EXPLAIN OPTIMIZED PLAN WITH(non negative) FOR
+EXPLAIN OPTIMIZED PLAN WITH(non negative, humanized expressions) AS VERBOSE TEXT FOR
 WITH a(birth_year, no_people_born) AS (
     SELECT EXTRACT(year from born), COUNT(*)
     FROM people
@@ -315,14 +315,14 @@ SELECT * FROM a EXCEPT (SELECT * FROM a WHERE birth_year > 1940);
 Explained Query:
   With
     cte l0 =
-      Reduce group_by=[extract_year_d(#0)] aggregates=[count(*)] // { non_negative: true }
-        Project (#2) // { non_negative: true }
+      Reduce group_by=[extract_year_d(#0{born})] aggregates=[count(*)] // { non_negative: true }
+        Project (#2{born}) // { non_negative: true }
           ReadStorage materialize.public.people // { non_negative: true }
   Return // { non_negative: true }
     Union // { non_negative: true }
       Get l0 // { non_negative: true }
       Negate // { non_negative: false }
-        Filter (#0 > 1940) // { non_negative: true }
+        Filter (#0{birth_year} > 1940) // { non_negative: true }
           Get l0 // { non_negative: true }
 
 Source materialize.public.people
@@ -339,7 +339,7 @@ EOF
 # (1) and (3) because the non negative value inferred for cte1
 # prior to the rewrite is maintained for downstream rewrites.
 query T multiline
-EXPLAIN OPTIMIZED PLAN WITH(non negative) FOR
+EXPLAIN OPTIMIZED PLAN WITH(non negative, humanized expressions) AS VERBOSE TEXT FOR
 WITH cte1 AS (
     SELECT * FROM people
     EXCEPT ALL
@@ -354,17 +354,17 @@ SELECT * FROM cte2 WHERE name LIKE 'P%';
 Explained Query:
   With
     cte l0 =
-      Distinct project=[#0..=#3] // { non_negative: true }
+      Distinct project=[#0{id}..=#3{died}] // { non_negative: true }
         Union // { non_negative: true }
           ReadStorage materialize.public.people // { non_negative: true }
           Negate // { non_negative: false }
-            Filter like["J%"](#1) // { non_negative: true }
+            Filter like["J%"](#1{name}) // { non_negative: true }
               ReadStorage materialize.public.people // { non_negative: true }
   Return // { non_negative: true }
     Union // { non_negative: true }
       Get l0 // { non_negative: true }
       Negate // { non_negative: false }
-        Filter like["P%"](#1) // { non_negative: true }
+        Filter like["P%"](#1{name}) // { non_negative: true }
           Get l0 // { non_negative: true }
 
 Source materialize.public.people
@@ -375,7 +375,7 @@ EOF
 
 # Complex example (unsupported): A - (σ(p)(A) ⊎ σ(q)(A)).
 query T multiline
-EXPLAIN OPTIMIZED PLAN WITH(non negative) FOR
+EXPLAIN OPTIMIZED PLAN WITH(non negative, humanized expressions) AS VERBOSE TEXT FOR
 SELECT name FROM people
 EXCEPT ALL
 (
@@ -387,15 +387,15 @@ EXCEPT ALL
 Explained Query:
   Threshold // { non_negative: true }
     Union // { non_negative: false }
-      Project (#1) // { non_negative: true }
+      Project (#1{name}) // { non_negative: true }
         ReadStorage materialize.public.people // { non_negative: true }
       Negate // { non_negative: false }
-        Project (#1) // { non_negative: true }
-          Filter (#0 = 1) // { non_negative: true }
+        Project (#1{name}) // { non_negative: true }
+          Filter (#0{id} = 1) // { non_negative: true }
             ReadStorage materialize.public.people // { non_negative: true }
       Negate // { non_negative: false }
-        Project (#1) // { non_negative: true }
-          Filter (#0 = 2) // { non_negative: true }
+        Project (#1{name}) // { non_negative: true }
+          Filter (#0{id} = 2) // { non_negative: true }
             ReadStorage materialize.public.people // { non_negative: true }
 
 Source materialize.public.people
@@ -410,7 +410,7 @@ EOF
 # WMR -- Threshold in the loop-invariant part
 # The "Very basic" implementation from database-issues#5344 should handle this.
 query T multiline
-EXPLAIN OPTIMIZED PLAN WITH(non negative) FOR
+EXPLAIN OPTIMIZED PLAN WITH(non negative, humanized expressions) AS VERBOSE TEXT FOR
 WITH MUTUALLY RECURSIVE
   c0(id int, name text) as (
     SELECT id, name FROM people
@@ -429,19 +429,19 @@ SELECT * FROM c1
 Explained Query:
   With Mutually Recursive
     cte l0 =
-      Distinct project=[#0, #1] // { non_negative: true }
+      Distinct project=[#0{id}, #1] // { non_negative: true }
         Union // { non_negative: true }
-          Project (#0, #2) // { non_negative: true }
-            Map ((#1 || "_init")) // { non_negative: true }
+          Project (#0{id}, #2) // { non_negative: true }
+            Map ((#1{name} || "_init")) // { non_negative: true }
               Union // { non_negative: true }
-                Project (#0, #1) // { non_negative: true }
+                Project (#0{id}, #1{name}) // { non_negative: true }
                   ReadStorage materialize.public.people // { non_negative: true }
                 Negate // { non_negative: false }
-                  Project (#0, #1) // { non_negative: true }
-                    Filter (#0 > 1) // { non_negative: true }
+                  Project (#0{id}, #1{name}) // { non_negative: true }
+                    Filter (#0{id} > 1) // { non_negative: true }
                       ReadStorage materialize.public.people // { non_negative: true }
           Project (#0, #2) // { non_negative: true }
-            Map ((#1 || "_iter")) // { non_negative: true }
+            Map ((#1{name} || "_iter")) // { non_negative: true }
               Get l0 // { non_negative: true }
   Return // { non_negative: true }
     Get l0 // { non_negative: true }
@@ -456,7 +456,7 @@ EOF
 # the first one is obviously non-negative.
 # The "Basic" implementation from database-issues#5344 should handle this.
 query T multiline
-EXPLAIN OPTIMIZED PLAN WITH(non negative) FOR
+EXPLAIN OPTIMIZED PLAN WITH(non negative, humanized expressions) AS VERBOSE TEXT FOR
 WITH MUTUALLY RECURSIVE
   c1(id int, name text) as (
     (SELECT id, name || '_init' FROM people)
@@ -477,22 +477,22 @@ SELECT * FROM c1
 Explained Query:
   With Mutually Recursive
     cte l0 =
-      Distinct project=[#0, #1] // { non_negative: true }
+      Distinct project=[#0{id}, #1] // { non_negative: true }
         Union // { non_negative: false }
-          Project (#0, #4) // { non_negative: true }
-            Map ((#1 || "_init")) // { non_negative: true }
+          Project (#0{id}, #4) // { non_negative: true }
+            Map ((#1{name} || "_init")) // { non_negative: true }
               ReadStorage materialize.public.people // { non_negative: true }
-          Distinct project=[#0, (#1 || "_iter")] // { non_negative: true }
+          Distinct project=[#0, (#1{name} || "_iter")] // { non_negative: true }
             Get l1 // { non_negative: true }
           Negate // { non_negative: false }
-            Distinct project=[#0, (#1 || "_iter")] // { non_negative: true }
-              Filter (#0 > 1) // { non_negative: true }
+            Distinct project=[#0, (#1{name} || "_iter")] // { non_negative: true }
+              Filter (#0{id} > 1) // { non_negative: true }
                 Get l1 // { non_negative: true }
     cte l1 =
       Union // { non_negative: true }
         Get l0 // { non_negative: true }
         Negate // { non_negative: false }
-          Filter (#0 > 2) // { non_negative: true }
+          Filter (#0{id} > 2) // { non_negative: true }
             Get l0 // { non_negative: true }
   Return // { non_negative: true }
     Get l0 // { non_negative: true }
@@ -505,7 +505,7 @@ EOF
 
 # WMR -- Threshold inside the cycle.
 query T multiline
-EXPLAIN OPTIMIZED PLAN WITH(non negative) FOR
+EXPLAIN OPTIMIZED PLAN WITH(non negative, humanized expressions) AS VERBOSE TEXT FOR
 WITH MUTUALLY RECURSIVE
   c0(id int, name text) as (
     (SELECT id, name || '_init' FROM people)
@@ -521,16 +521,16 @@ SELECT * FROM c0
 Explained Query:
   With Mutually Recursive
     cte l0 =
-      Distinct project=[#0, #1] // { non_negative: true }
+      Distinct project=[#0{id}, #1] // { non_negative: true }
         Union // { non_negative: false }
-          Project (#0, #4) // { non_negative: true }
-            Map ((#1 || "_init")) // { non_negative: true }
+          Project (#0{id}, #4) // { non_negative: true }
+            Map ((#1{name} || "_init")) // { non_negative: true }
               ReadStorage materialize.public.people // { non_negative: true }
-          Distinct project=[#0, (#1 || "_iter")] // { non_negative: true }
+          Distinct project=[#0{id}, (#1{name} || "_iter")] // { non_negative: true }
             Get l0 // { non_negative: true }
           Negate // { non_negative: false }
-            Distinct project=[#0, (#1 || "_iter")] // { non_negative: true }
-              Filter (#0 > 1) // { non_negative: true }
+            Distinct project=[#0, (#1{name} || "_iter")] // { non_negative: true }
+              Filter (#0{id} > 1) // { non_negative: true }
                 Get l0 // { non_negative: true }
   Return // { non_negative: true }
     Get l0 // { non_negative: true }
@@ -547,19 +547,19 @@ CREATE TABLE t1 (f1 INTEGER, f2 INTEGER);
 # Literal filter, which would be made unrecognizable by
 # ColumnKnowledge, LiteralLifting, EquivalencePropagation.
 query T multiline
-EXPLAIN OPTIMIZED PLAN WITH(non negative) FOR
+EXPLAIN OPTIMIZED PLAN WITH(non negative, humanized expressions) AS VERBOSE TEXT FOR
 SELECT f1 FROM t1 EXCEPT SELECT f1 FROM t1 WHERE f1 = 5;
 ----
 Explained Query:
   Union // { non_negative: false }
-    Distinct project=[#0] // { non_negative: true }
-      Project (#0) // { non_negative: true }
+    Distinct project=[#0{f1}] // { non_negative: true }
+      Project (#0{f1}) // { non_negative: true }
         ReadStorage materialize.public.t1 // { non_negative: true }
     Negate // { non_negative: false }
       Map (5) // { non_negative: true }
         Distinct project=[] // { non_negative: true }
           Project () // { non_negative: true }
-            Filter (#0 = 5) // { non_negative: true }
+            Filter (#0{f1} = 5) // { non_negative: true }
               ReadStorage materialize.public.t1 // { non_negative: true }
 
 Source materialize.public.t1

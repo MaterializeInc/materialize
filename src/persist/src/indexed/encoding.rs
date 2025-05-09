@@ -13,17 +13,25 @@
 // Ditto for Log* and the Log. The others are used internally in these top-level
 // structs.
 
-use arrow::array::{Array, ArrayRef, BinaryArray, Int64Array};
+use std::fmt::{self, Debug};
+use std::sync::Arc;
+
+use arrow::array::{Array, ArrayRef, AsArray, BinaryArray, Int64Array};
 use arrow::buffer::OffsetBuffer;
-use arrow::datatypes::{DataType, ToByteSlice};
+use arrow::datatypes::{DataType, Int64Type, ToByteSlice};
+use base64::Engine;
 use bytes::{BufMut, Bytes};
 use differential_dataflow::trace::Description;
 use mz_ore::bytes::SegmentedBytes;
 use mz_ore::cast::CastFrom;
 use mz_ore::collections::CollectionExt;
 use mz_ore::soft_panic_or_log;
-use mz_persist_types::columnar::{codec_to_schema2, data_type, schema2_to_codec};
+use mz_persist_types::arrow::{ArrayBound, ArrayOrd};
+use mz_persist_types::columnar::{
+    ColumnEncoder, Schema, codec_to_schema, data_type, schema_to_codec,
+};
 use mz_persist_types::parquet::EncodingConfig;
+use mz_persist_types::part::Part;
 use mz_persist_types::schema::backward_compatible;
 use mz_persist_types::{Codec, Codec64};
 use mz_proto::{RustType, TryFromProtoError};
@@ -32,15 +40,13 @@ use proptest::prelude::*;
 use proptest::strategy::{BoxedStrategy, Just};
 use prost::Message;
 use serde::Serialize;
-use std::fmt::{self, Debug};
-use std::sync::Arc;
-use timely::progress::{Antichain, Timestamp};
 use timely::PartialOrder;
+use timely::progress::{Antichain, Timestamp};
 use tracing::error;
 
 use crate::error::Error;
-use crate::gen::persist::proto_batch_part_inline::FormatMetadata as ProtoFormatMetadata;
-use crate::gen::persist::{
+use crate::generated::persist::proto_batch_part_inline::FormatMetadata as ProtoFormatMetadata;
+use crate::generated::persist::{
     ProtoBatchFormat, ProtoBatchPartInline, ProtoColumnarRecords, ProtoU64Antichain,
     ProtoU64Description,
 };
@@ -60,6 +66,9 @@ pub enum BatchColumnarFormat {
     /// with a schema of `(k, k_c, v, v_c, t, d)`, where `k` are the serialized bytes and `k_c` is
     /// nested columnar data.
     Both(usize),
+    /// Rows are encoded to a columnar struct. The batch is written down as Parquet
+    /// with a schema of `(t, d, k_s, v_s)`, where `k_s` is nested columnar data.
+    Structured,
 }
 
 impl BatchColumnarFormat {
@@ -75,6 +84,7 @@ impl BatchColumnarFormat {
             "row" => BatchColumnarFormat::Row,
             "both" => BatchColumnarFormat::Both(0),
             "both_v2" => BatchColumnarFormat::Both(2),
+            "structured" => BatchColumnarFormat::Structured,
             x => {
                 let default = BatchColumnarFormat::default();
                 soft_panic_or_log!("Invalid batch columnar type: {x}, falling back to {default}");
@@ -100,6 +110,7 @@ impl BatchColumnarFormat {
             // The V0 format has been deprecated and we ignore its structured columns.
             BatchColumnarFormat::Both(0 | 1) => false,
             BatchColumnarFormat::Both(_) => true,
+            BatchColumnarFormat::Structured => true,
         }
     }
 }
@@ -213,6 +224,18 @@ pub enum BlobTraceUpdates {
 }
 
 impl BlobTraceUpdates {
+    /// Convert from a [Part].
+    pub fn from_part(part: Part) -> Self {
+        Self::Structured {
+            key_values: ColumnarRecordsStructuredExt {
+                key: part.key,
+                val: part.val,
+            },
+            timestamps: part.time,
+            diffs: part.diff,
+        }
+    }
+
     /// The number of updates.
     pub fn len(&self) -> usize {
         match self {
@@ -292,9 +315,8 @@ impl BlobTraceUpdates {
                 timestamps,
                 diffs,
             } => {
-                let key = schema2_to_codec::<K>(key_schema, &*key_values.key).expect("valid keys");
-                let val =
-                    schema2_to_codec::<V>(val_schema, &*key_values.val).expect("valid values");
+                let key = schema_to_codec::<K>(key_schema, &*key_values.key).expect("valid keys");
+                let val = schema_to_codec::<V>(val_schema, &*key_values.val).expect("valid values");
                 let records = ColumnarRecords::new(key, val, timestamps.clone(), diffs.clone());
 
                 *self = BlobTraceUpdates::Both(records, key_values.clone());
@@ -314,8 +336,8 @@ impl BlobTraceUpdates {
     ) -> &ColumnarRecordsStructuredExt {
         let structured = match self {
             BlobTraceUpdates::Row(records) => {
-                let key = codec_to_schema2::<K>(key_schema, records.keys()).expect("valid keys");
-                let val = codec_to_schema2::<V>(val_schema, records.vals()).expect("valid values");
+                let key = codec_to_schema::<K>(key_schema, records.keys()).expect("valid keys");
+                let val = codec_to_schema::<V>(val_schema, records.vals()).expect("valid values");
 
                 *self = BlobTraceUpdates::Both(
                     records.clone(),
@@ -361,7 +383,38 @@ impl BlobTraceUpdates {
         structured
     }
 
+    /// If we have structured data, cast this data as a structured part.
+    pub fn as_part(&self) -> Option<Part> {
+        let ext = self.structured()?.clone();
+        Some(Part {
+            key: ext.key,
+            val: ext.val,
+            time: self.timestamps().clone(),
+            diff: self.diffs().clone(),
+        })
+    }
+
+    /// Convert this blob into a structured part, transforming the codec data if necessary.
+    pub fn into_part<K: Codec, V: Codec>(
+        &mut self,
+        key_schema: &K::Schema,
+        val_schema: &V::Schema,
+    ) -> Part {
+        let ext = self
+            .get_or_make_structured::<K, V>(key_schema, val_schema)
+            .clone();
+        Part {
+            key: ext.key,
+            val: ext.val,
+            time: self.timestamps().clone(),
+            diff: self.diffs().clone(),
+        }
+    }
+
     /// Concatenate the given records together, column-by-column.
+    ///
+    /// If `ensure_codec` is true, then we'll ensure the returned [`BlobTraceUpdates`] includes
+    /// [`Codec`] data, re-encoding structured data if necessary.
     pub fn concat<K: Codec, V: Codec>(
         mut updates: Vec<BlobTraceUpdates>,
         key_schema: &K::Schema,
@@ -369,31 +422,56 @@ impl BlobTraceUpdates {
         metrics: &ColumnarMetrics,
     ) -> anyhow::Result<BlobTraceUpdates> {
         match updates.len() {
-            0 => return Ok(BlobTraceUpdates::Row(ColumnarRecords::default())),
+            0 => {
+                return Ok(BlobTraceUpdates::Structured {
+                    key_values: ColumnarRecordsStructuredExt {
+                        key: Arc::new(key_schema.encoder().expect("valid schema").finish()),
+                        val: Arc::new(val_schema.encoder().expect("valid schema").finish()),
+                    },
+                    timestamps: Int64Array::from_iter_values(vec![]),
+                    diffs: Int64Array::from_iter_values(vec![]),
+                });
+            }
             1 => return Ok(updates.into_iter().into_element()),
             _ => {}
         }
 
-        // TODO: skip this when we no longer require codec data.
-        let columnar: Vec<_> = updates
-            .iter_mut()
-            .map(|u| u.get_or_make_codec::<K, V>(key_schema, val_schema).clone())
-            .collect();
-        let records = ColumnarRecords::concat(&columnar, metrics);
-
-        let mut keys = Vec::with_capacity(records.len());
-        let mut vals = Vec::with_capacity(records.len());
+        // Always get or make our structured format.
+        let mut keys = Vec::with_capacity(updates.len());
+        let mut vals = Vec::with_capacity(updates.len());
         for updates in &mut updates {
             let structured = updates.get_or_make_structured::<K, V>(key_schema, val_schema);
             keys.push(structured.key.as_ref());
             vals.push(structured.val.as_ref());
         }
-        let ext = ColumnarRecordsStructuredExt {
+        let key_values = ColumnarRecordsStructuredExt {
             key: ::arrow::compute::concat(&keys)?,
             val: ::arrow::compute::concat(&vals)?,
         };
 
-        let out = Self::Both(records, ext);
+        // If necessary, ensure we have `Codec` data, which internally includes
+        // timestamps and diffs, otherwise get the timestamps and diffs separately.
+        let mut timestamps: Vec<&dyn Array> = Vec::with_capacity(updates.len());
+        let mut diffs: Vec<&dyn Array> = Vec::with_capacity(updates.len());
+
+        for update in &updates {
+            timestamps.push(update.timestamps());
+            diffs.push(update.diffs());
+        }
+        let timestamps = ::arrow::compute::concat(&timestamps)?
+            .as_primitive_opt::<Int64Type>()
+            .ok_or_else(|| anyhow::anyhow!("timestamps changed Array type"))?
+            .clone();
+        let diffs = ::arrow::compute::concat(&diffs)?
+            .as_primitive_opt::<Int64Type>()
+            .ok_or_else(|| anyhow::anyhow!("diffs changed Array type"))?
+            .clone();
+
+        let out = Self::Structured {
+            key_values,
+            timestamps,
+            diffs,
+        };
         metrics
             .arrow
             .concat_bytes
@@ -406,29 +484,51 @@ impl BlobTraceUpdates {
         lgbytes: &ColumnarMetrics,
         proto: ProtoColumnarRecords,
     ) -> Result<Self, TryFromProtoError> {
-        let binary_array = |data: Bytes, offsets: Vec<i32>| match BinaryArray::try_new(
-            OffsetBuffer::new(offsets.into()),
-            ::arrow::buffer::Buffer::from_bytes(data.into()),
-            None,
-        ) {
-            Ok(data) => Ok(realloc_array(&data, lgbytes)),
-            Err(e) => Err(TryFromProtoError::InvalidFieldError(format!(
-                "Unable to decode binary array from repeated proto fields: {e:?}"
-            ))),
+        let binary_array = |data: Bytes, offsets: Vec<i32>| {
+            if offsets.is_empty() && proto.len > 0 {
+                return Ok(None);
+            };
+            match BinaryArray::try_new(
+                OffsetBuffer::new(offsets.into()),
+                ::arrow::buffer::Buffer::from_bytes(data.into()),
+                None,
+            ) {
+                Ok(data) => Ok(Some(realloc_array(&data, lgbytes))),
+                Err(e) => Err(TryFromProtoError::InvalidFieldError(format!(
+                    "Unable to decode binary array from repeated proto fields: {e:?}"
+                ))),
+            }
         };
 
-        let ret = ColumnarRecords::new(
-            binary_array(proto.key_data, proto.key_offsets)?,
-            binary_array(proto.val_data, proto.val_offsets)?,
-            realloc_array(&proto.timestamps.into(), lgbytes),
-            realloc_array(&proto.diffs.into(), lgbytes),
-        );
+        let codec_key = binary_array(proto.key_data, proto.key_offsets)?;
+        let codec_val = binary_array(proto.val_data, proto.val_offsets)?;
+
+        let timestamps = realloc_array(&proto.timestamps.into(), lgbytes);
+        let diffs = realloc_array(&proto.diffs.into(), lgbytes);
         let ext =
             ColumnarRecordsStructuredExt::from_proto(proto.key_structured, proto.val_structured)?;
 
-        let updates = match ext {
-            None => Self::Row(ret),
-            Some(ext) => Self::Both(ret, ext),
+        let updates = match (codec_key, codec_val, ext) {
+            (Some(codec_key), Some(codec_val), Some(ext)) => BlobTraceUpdates::Both(
+                ColumnarRecords::new(codec_key, codec_val, timestamps, diffs),
+                ext,
+            ),
+            (Some(codec_key), Some(codec_val), None) => BlobTraceUpdates::Row(
+                ColumnarRecords::new(codec_key, codec_val, timestamps, diffs),
+            ),
+            (None, None, Some(ext)) => BlobTraceUpdates::Structured {
+                key_values: ext,
+                timestamps,
+                diffs,
+            },
+            (k, v, ext) => {
+                return Err(TryFromProtoError::InvalidPersistState(format!(
+                    "unexpected mix of key/value columns: k={:?}, v={}, ext={}",
+                    k.is_some(),
+                    v.is_some(),
+                    ext.is_some(),
+                )));
+            }
         };
 
         Ok(updates)
@@ -465,29 +565,18 @@ impl BlobTraceUpdates {
 
     /// Convert these updates into the specified batch format, re-encoding or discarding key-value
     /// data as necessary.
-    pub fn as_format<K: Codec, V: Codec>(
+    pub fn as_structured<K: Codec, V: Codec>(
         &self,
-        format: BatchColumnarFormat,
         key_schema: &K::Schema,
         val_schema: &V::Schema,
     ) -> Self {
-        match format {
-            BatchColumnarFormat::Row => {
-                let mut this = self.clone();
-                Self::Row(
-                    this.get_or_make_codec::<K, V>(key_schema, val_schema)
-                        .clone(),
-                )
-            }
-            BatchColumnarFormat::Both(_) => {
-                let mut this = self.clone();
-                Self::Both(
-                    this.get_or_make_codec::<K, V>(key_schema, val_schema)
-                        .clone(),
-                    this.get_or_make_structured::<K, V>(key_schema, val_schema)
-                        .clone(),
-                )
-            }
+        let mut this = self.clone();
+        Self::Structured {
+            key_values: this
+                .get_or_make_structured::<K, V>(key_schema, val_schema)
+                .clone(),
+            timestamps: this.timestamps().clone(),
+            diffs: this.diffs().clone(),
         }
     }
 }
@@ -628,6 +717,16 @@ impl<T: Timestamp + Codec64> BlobTraceBatchPart<T> {
             .and_then(|r| r.keys().iter().flatten().min())
             .unwrap_or(&[])
     }
+
+    /// Scans the part and returns a lower bound on the contained keys.
+    pub fn structured_key_lower(&self) -> Option<ArrayBound> {
+        self.updates.structured().and_then(|r| {
+            let ord = ArrayOrd::new(&r.key);
+            (0..r.key.len())
+                .min_by_key(|i| ord.at(*i))
+                .map(|i| ArrayBound::new(Arc::clone(&r.key), i))
+        })
+    }
 }
 
 impl<T: Timestamp + Codec64> From<ProtoU64Description> for Description<T> {
@@ -686,9 +785,9 @@ pub fn encode_trace_inline_meta<T: Timestamp + Codec64>(batch: &BlobTraceBatchPa
             let metadata = ProtoFormatMetadata::StructuredMigration(2);
             (ProtoBatchFormat::ParquetStructured, Some(metadata))
         }
-
         BlobTraceUpdates::Structured { .. } => {
-            unimplemented!("codec data should exist before reaching parquet encoding")
+            let metadata = ProtoFormatMetadata::StructuredMigration(3);
+            (ProtoBatchFormat::ParquetStructured, Some(metadata))
         }
     };
 
@@ -699,7 +798,7 @@ pub fn encode_trace_inline_meta<T: Timestamp + Codec64>(batch: &BlobTraceBatchPa
         format_metadata,
     };
     let inline_encoded = inline.encode_to_vec();
-    base64::encode(inline_encoded)
+    base64::engine::general_purpose::STANDARD.encode(inline_encoded)
 }
 
 /// Decodes the inline metadata for a trace batch from a base64 string.
@@ -707,7 +806,9 @@ pub fn decode_trace_inline_meta(
     inline_base64: Option<&String>,
 ) -> Result<(ProtoBatchFormat, ProtoBatchPartInline), Error> {
     let inline_base64 = inline_base64.ok_or("missing batch metadata")?;
-    let inline_encoded = base64::decode(inline_base64).map_err(|err| err.to_string())?;
+    let inline_encoded = base64::engine::general_purpose::STANDARD
+        .decode(inline_base64)
+        .map_err(|err| err.to_string())?;
     let inline = ProtoBatchPartInline::decode(&*inline_encoded).map_err(|err| err.to_string())?;
     let format = ProtoBatchFormat::try_from(inline.format)
         .map_err(|_| Error::from(format!("unknown format: {}", inline.format)))?;
@@ -817,7 +918,12 @@ mod tests {
             index: 0,
             updates: columnar_records(vec![update_with_key(0, "0")]),
         };
-        assert_eq!(b.validate(), Err(Error::from("timestamp 0 is less than the batch lower: Description { lower: Antichain { elements: [1] }, upper: Antichain { elements: [2] }, since: Antichain { elements: [0] } }")));
+        assert_eq!(
+            b.validate(),
+            Err(Error::from(
+                "timestamp 0 is less than the batch lower: Description { lower: Antichain { elements: [1] }, upper: Antichain { elements: [2] }, since: Antichain { elements: [0] } }"
+            ))
+        );
 
         // Update "after" desc
         let b = BlobTraceBatchPart {
@@ -825,7 +931,12 @@ mod tests {
             index: 0,
             updates: columnar_records(vec![update_with_key(2, "0")]),
         };
-        assert_eq!(b.validate(), Err(Error::from("timestamp 2 is greater than or equal to the batch upper: Description { lower: Antichain { elements: [1] }, upper: Antichain { elements: [2] }, since: Antichain { elements: [0] } }")));
+        assert_eq!(
+            b.validate(),
+            Err(Error::from(
+                "timestamp 2 is greater than or equal to the batch upper: Description { lower: Antichain { elements: [1] }, upper: Antichain { elements: [2] }, since: Antichain { elements: [0] } }"
+            ))
+        );
 
         // Normal case: update "after" desc and within since
         let b = BlobTraceBatchPart {
@@ -871,7 +982,8 @@ mod tests {
 
         // Empty interval
         let b = batch_meta(0, 0);
-        assert_eq!(b.validate(),
+        assert_eq!(
+            b.validate(),
             Err(Error::from(
                 "invalid desc: Description { lower: Antichain { elements: [0] }, upper: Antichain { elements: [0] }, since: Antichain { elements: [0] } }"
             )),
@@ -879,7 +991,8 @@ mod tests {
 
         // Invalid interval
         let b = batch_meta(2, 0);
-        assert_eq!(b.validate(),
+        assert_eq!(
+            b.validate(),
             Err(Error::from(
                 "invalid desc: Description { lower: Antichain { elements: [2] }, upper: Antichain { elements: [0] }, since: Antichain { elements: [0] } }"
             )),
@@ -951,7 +1064,12 @@ mod tests {
             level: 0,
             size_bytes,
         };
-        assert_eq!(batch_meta.validate_data(blob.as_ref(), &metrics).await, Err(Error::from("invalid trace batch part desc expected Description { lower: Antichain { elements: [1] }, upper: Antichain { elements: [3] }, since: Antichain { elements: [0] } } got Description { lower: Antichain { elements: [0] }, upper: Antichain { elements: [3] }, since: Antichain { elements: [0] } }")));
+        assert_eq!(
+            batch_meta.validate_data(blob.as_ref(), &metrics).await,
+            Err(Error::from(
+                "invalid trace batch part desc expected Description { lower: Antichain { elements: [1] }, upper: Antichain { elements: [3] }, since: Antichain { elements: [0] } } got Description { lower: Antichain { elements: [0] }, upper: Antichain { elements: [3] }, since: Antichain { elements: [0] } }"
+            ))
+        );
         // Key with no corresponding batch part
         let batch_meta = TraceBatchMeta {
             keys: vec!["b0".into(), "b1".into(), "b2".into()],

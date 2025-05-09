@@ -19,23 +19,25 @@ harness = false
 
 [dependencies]
 aho-corasick = "1.1.3"
-anyhow = "1.0.66"
-bytes = "1.3.0"
-bytesize = "1.1.0"
-chrono = { version = "0.4.35", default-features = false, features = ["std"] }
+anyhow = "1.0.98"
+bytes = "1.10.1"
+bytesize = "1.3.0"
+chrono = { version = "0.4.39", default-features = false, features = ["std"] }
 chrono-tz = { version = "0.8.1", features = ["serde", "case-insensitive"] }
 crc32fast = "1.4.2"
-csv = "1.1.6"
+csv = "1.3.1"
+differential-dataflow = "0.14.2"
 dec = "0.4.8"
 derivative = "2.2.0"
 encoding = "0.2.0"
-enum-iterator = "1.2.0"
+enum-iterator = "2.1.0"
 fallible-iterator = "0.2.0"
 hex = "0.4.3"
 hmac = "0.12.1"
-itertools = "0.12.1"
-md-5 = "0.10.5"
+itertools = "0.14.0"
+md-5 = "0.10.6"
 murmur2 = "0.1.0"
+mz-expr-derive = { path = "../expr-derive", features = ["test"] }
 mz-lowertest = { path = "../lowertest" }
 mz-ore = { path = "../ore", features = ["network", "proptest", "id_gen"] }
 mz-persist-types = { path = "../persist-types" }
@@ -46,38 +48,42 @@ mz-regexp = { path = "../regexp" }
 mz-repr = { path = "../repr" }
 mz-sql-parser = { path = "../sql-parser" }
 mz-sql-pretty = { path = "../sql-pretty" }
-num = "0.4.0"
-num_enum = "0.5.7"
-ordered-float = { version = "4.2.0", features = ["serde"] }
+num = "0.4.3"
+num_enum = "0.7.3"
+ordered-float = { version = "5.0.0", features = ["serde"] }
 paste = "1.0.11"
-prost = { version = "0.13.2", features = ["no-recursion-limit"] }
-regex = "1.7.0"
-regex-syntax = "0.8.3"
+prost = { version = "0.13.5", features = ["no-recursion-limit"] }
+regex = "1.11.1"
+regex-syntax = "0.8.5"
 seahash = "4.1.0"
-serde = { version = "1.0.152", features = ["derive"] }
-serde_json = "1.0.125"
-sha1 = "0.10.5"
-sha2 = "0.10.6"
-subtle = "2.4.1"
-timely = "0.16.0"
+serde = { version = "1.0.219", features = ["derive"] }
+serde_json = "1.0.127"
+sha1 = "0.10.6"
+sha2 = "0.10.9"
+subtle = "2.6.1"
+timely = "0.20.0"
 tracing = "0.1.37"
 uncased = "0.9.7"
-uuid = { version = "1.7.0", features = ["v5"] }
+uuid = { version = "1.16.0", features = ["v5"] }
 proptest = { version = "1.6.0", default-features = false, features = ["std"] }
 proptest-derive = { version = "0.5.1", features = ["boxed_union"] }
 workspace-hack = { version = "0.0.0", path = "../workspace-hack", optional = true }
+smallvec = { version = "1.15.0" }
 
 [dev-dependencies]
 criterion = { version = "0.5.1" }
 datadriven = "0.8.0"
+insta = "1.43"
+mz-expr-derive-impl = { path = "../expr-derive-impl", features = ["test"] }
 mz-expr-test-util = { path = "../expr-test-util" }
 mz-ore = { path = "../ore" }
-proc-macro2 = "1.0.60"
+proc-macro2 = "1.0.95"
+quote = "1"
 rand = "0.8.5"
 
 [build-dependencies]
 mz-build-tools = { path = "../build-tools", default-features = false }
-prost-build = "0.13.2"
+prost-build = "0.13.5"
 
 [features]
 default = ["mz-build-tools/default", "workspace-hack"]

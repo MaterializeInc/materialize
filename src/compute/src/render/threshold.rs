@@ -11,26 +11,24 @@
 //!
 //! Consult [ThresholdPlan] documentation for details.
 
+use differential_dataflow::Data;
+use differential_dataflow::IntoOwned;
+use differential_dataflow::containers::Columnation;
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::operators::arrange::{Arranged, TraceAgent};
-use differential_dataflow::trace::cursor::IntoOwned;
 use differential_dataflow::trace::{Batch, Builder, Trace, TraceReader};
-use differential_dataflow::Data;
 use mz_compute_types::plan::threshold::{BasicThresholdPlan, ThresholdPlan};
 use mz_expr::MirScalarExpr;
 use mz_repr::Diff;
-use timely::container::columnation::Columnation;
+use timely::Container;
 use timely::container::PushInto;
 use timely::dataflow::Scope;
-use timely::progress::timestamp::Refines;
 use timely::progress::Timestamp;
-use timely::Container;
+use timely::progress::timestamp::Refines;
 
 use crate::extensions::arrange::{ArrangementSize, KeyCollection, MzArrange};
 use crate::extensions::reduce::MzReduce;
-use crate::render::context::{
-    ArrangementFlavor, CollectionBundle, Context, MzArrangement, MzArrangementImport,
-};
+use crate::render::context::{ArrangementFlavor, CollectionBundle, Context};
 use crate::row_spine::RowRowBuilder;
 use crate::typedefs::{ErrBatcher, ErrBuilder};
 
@@ -69,48 +67,6 @@ where
     })
 }
 
-/// Dispatches according to existing type-specialization to an appropriate threshold computation
-/// resulting in another type-specialized arrangement.
-fn dispatch_threshold_arrangement_local<G, L>(
-    oks: &MzArrangement<G>,
-    name: &str,
-    logic: L,
-) -> MzArrangement<G>
-where
-    G: Scope,
-    G::Timestamp: Lattice + Columnation,
-    L: Fn(&Diff) -> bool + 'static,
-{
-    match oks {
-        MzArrangement::RowRow(inner) => {
-            let oks =
-                threshold_arrangement::<_, _, _, _, RowRowBuilder<_, _>, _, _>(inner, name, logic);
-            MzArrangement::RowRow(oks)
-        }
-    }
-}
-
-/// Dispatches threshold computation for a trace, similarly to `dispatch_threshold_arrangement_local`.
-fn dispatch_threshold_arrangement_trace<G, T, L>(
-    oks: &MzArrangementImport<G, T>,
-    name: &str,
-    logic: L,
-) -> MzArrangement<G>
-where
-    G: Scope,
-    T: Timestamp + Lattice + Columnation,
-    G::Timestamp: Lattice + Refines<T> + Columnation,
-    L: Fn(&Diff) -> bool + 'static,
-{
-    match oks {
-        MzArrangementImport::RowRow(inner) => {
-            let oks =
-                threshold_arrangement::<_, _, _, _, RowRowBuilder<_, _>, _, _>(inner, name, logic);
-            MzArrangement::RowRow(oks)
-        }
-    }
-}
-
 /// Build a dataflow to threshold the input data.
 ///
 /// This implementation maintains rows in the output, i.e. all rows that have a count greater than
@@ -129,13 +85,19 @@ where
         .expect("Arrangement ensured to exist");
     match arrangement {
         ArrangementFlavor::Local(oks, errs) => {
-            let oks =
-                dispatch_threshold_arrangement_local(&oks, "Threshold local", |count| *count > 0);
+            let oks = threshold_arrangement::<_, _, _, _, RowRowBuilder<_, _>, _, _>(
+                &oks,
+                "Threshold local",
+                |count| count.is_positive(),
+            );
             CollectionBundle::from_expressions(key, ArrangementFlavor::Local(oks, errs))
         }
         ArrangementFlavor::Trace(_, oks, errs) => {
-            let oks =
-                dispatch_threshold_arrangement_trace(&oks, "Threshold trace", |count| *count > 0);
+            let oks = threshold_arrangement::<_, _, _, _, RowRowBuilder<_, _>, _, _>(
+                &oks,
+                "Threshold trace",
+                |count| count.is_positive(),
+            );
             let errs: KeyCollection<_, _, _> = errs.as_collection(|k, _| k.clone()).into();
             let errs = errs
                 .mz_arrange::<ErrBatcher<_, _>, ErrBuilder<_, _>, _>("Arrange threshold basic err");

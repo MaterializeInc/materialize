@@ -1,11 +1,17 @@
 // Copyright Materialize, Inc. and contributors. All rights reserved.
 //
-// Use of this software is governed by the Business Source License
-// included in the LICENSE file.
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License in the LICENSE file at the
+// root of this repository, or online at
 //
-// As of the Change Date specified in that file, in accordance with
-// the Business Source License, use of this software will be governed
-// by the Apache License, Version 2.0.
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
 //! Common operator transformations on timely streams and differential collections.
 
@@ -15,21 +21,21 @@ use std::marker::PhantomData;
 use std::rc::Weak;
 
 use differential_dataflow::consolidation::ConsolidatingContainerBuilder;
+use differential_dataflow::containers::{Columnation, TimelyStack};
 use differential_dataflow::difference::{Multiply, Semigroup};
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::logging::DifferentialEventBuilder;
 use differential_dataflow::trace::{Batcher, Builder, Description};
 use differential_dataflow::{AsCollection, Collection, Hashable};
-use timely::container::columnation::{Columnation, TimelyStack};
-use timely::container::{ContainerBuilder, PushInto, SizableContainer};
+use timely::container::{ContainerBuilder, PushInto};
+use timely::dataflow::channels::ContainerBytes;
 use timely::dataflow::channels::pact::{Exchange, ParallelizationContract, Pipeline};
 use timely::dataflow::channels::pushers::Tee;
-use timely::dataflow::channels::ContainerBytes;
+use timely::dataflow::operators::Capability;
 use timely::dataflow::operators::generic::builder_rc::OperatorBuilder as OperatorBuilderRc;
 use timely::dataflow::operators::generic::operator::{self, Operator};
 use timely::dataflow::operators::generic::{InputHandleCore, OperatorInfo, OutputHandleCore};
-use timely::dataflow::operators::Capability;
-use timely::dataflow::{Scope, StreamCore};
+use timely::dataflow::{Scope, Stream, StreamCore};
 use timely::progress::{Antichain, Timestamp};
 use timely::{Container, Data, PartialOrder};
 
@@ -229,12 +235,13 @@ where
         &self,
         name: &str,
         logic: L,
-    ) -> (Collection<G, D2, R>, Collection<G, E, R>)
+    ) -> (
+        Collection<G, D2, R, DCB::Container>,
+        Collection<G, E, R, ECB::Container>,
+    )
     where
-        DCB: ContainerBuilder<Container = Vec<(D2, G::Timestamp, R)>>
-            + PushInto<(D2, G::Timestamp, R)>,
-        ECB: ContainerBuilder<Container = Vec<(E, G::Timestamp, R)>>
-            + PushInto<(E, G::Timestamp, R)>,
+        DCB: ContainerBuilder + PushInto<(D2, G::Timestamp, R)>,
+        ECB: ContainerBuilder + PushInto<(E, G::Timestamp, R)>,
         D2: Data,
         E: Data,
         I: IntoIterator<Item = Result<D2, E>>,
@@ -573,12 +580,13 @@ where
         &self,
         name: &str,
         mut logic: L,
-    ) -> (Collection<G, D2, R>, Collection<G, E, R>)
+    ) -> (
+        Collection<G, D2, R, DCB::Container>,
+        Collection<G, E, R, ECB::Container>,
+    )
     where
-        DCB: ContainerBuilder<Container = Vec<(D2, G::Timestamp, R)>>
-            + PushInto<(D2, G::Timestamp, R)>,
-        ECB: ContainerBuilder<Container = Vec<(E, G::Timestamp, R)>>
-            + PushInto<(E, G::Timestamp, R)>,
+        DCB: ContainerBuilder + PushInto<(D2, G::Timestamp, R)>,
+        ECB: ContainerBuilder + PushInto<(E, G::Timestamp, R)>,
         D2: Data,
         E: Data,
         I: IntoIterator<Item = Result<D2, E>>,
@@ -706,10 +714,20 @@ where
                 data.hash(&mut h);
                 h.finish()
             });
-            // Access to `arrange_core` is OK because we specify the trace and don't hold on to it.
-            consolidate_pact::<Ba, _, _, _, _>(&self.map(|k| (k, ())).inner, exchange, name)
+            consolidate_pact::<Ba, _, _>(&self.map(|k| (k, ())).inner, exchange, name)
+                .unary(Pipeline, "unpack consolidated", |_, _| {
+                    |input, output| {
+                        input.for_each(|time, data| {
+                            let mut session = output.session(&time);
+                            for ((k, ()), t, d) in
+                                data.iter().flatten().flat_map(|chunk| chunk.iter())
+                            {
+                                session.give((k.clone(), t.clone(), d.clone()))
+                            }
+                        })
+                    }
+                })
                 .as_collection()
-                .map(|(k, ())| k)
         } else {
             self
         }
@@ -729,9 +747,19 @@ where
         let exchange =
             Exchange::new(move |update: &((D1, ()), G::Timestamp, R)| (update.0).0.hashed());
 
-        consolidate_pact::<Ba, _, _, _, _>(&self.map(|k| (k, ())).inner, exchange, name)
+        consolidate_pact::<Ba, _, _>(&self.map(|k| (k, ())).inner, exchange, name)
+            .unary(Pipeline, &format!("Unpack {name}"), |_, _| {
+                |input, output| {
+                    input.for_each(|time, data| {
+                        let mut session = output.session(&time);
+                        for ((k, ()), t, d) in data.iter().flatten().flat_map(|chunk| chunk.iter())
+                        {
+                            session.give((k.clone(), t.clone(), d.clone()))
+                        }
+                    })
+                }
+            })
             .as_collection()
-            .map(|(k, ())| k)
     }
 }
 
@@ -770,22 +798,21 @@ where
 
 /// Aggregates the weights of equal records into at most one record.
 ///
-/// The data are accumulated in place, each held back until their timestamp has completed.
+/// Produces a stream of chains of records, partitioned according to `pact`. The
+/// data is sorted according to `Ba`. For each timestamp, it produces at most one chain.
 ///
-/// This serves as a low-level building-block for more user-friendly functions.
-pub fn consolidate_pact<B, P, G, CI, CO>(
-    stream: &StreamCore<G, CI>,
+/// The data are accumulated in place, each held back until their timestamp has completed.
+pub fn consolidate_pact<Ba, P, G>(
+    stream: &StreamCore<G, Ba::Input>,
     pact: P,
     name: &str,
-) -> StreamCore<G, CO>
+) -> Stream<G, Vec<Ba::Output>>
 where
     G: Scope,
-    B: Batcher<Input = CI, Time = G::Timestamp> + 'static,
-    B::Output: Container,
-    for<'a> CO: PushInto<<B::Output as Container>::Item<'a>>,
-    P: ParallelizationContract<G::Timestamp, CI>,
-    CI: Container + Data,
-    CO: SizableContainer + Data,
+    Ba: Batcher<Time = G::Timestamp> + 'static,
+    Ba::Input: Container + Clone + 'static,
+    Ba::Output: Container + Clone,
+    P: ParallelizationContract<G::Timestamp, Ba::Input>,
 {
     stream.unary_frontier(pact, name, |_cap, info| {
         // Acquire a logger for arrange events.
@@ -797,7 +824,7 @@ where
                 .map(Into::into)
         };
 
-        let mut batcher = B::new(logger, info.global_id);
+        let mut batcher = Ba::new(logger, info.global_id);
         // Capabilities for the lower envelope of updates in `batcher`.
         let mut capabilities = Antichain::<Capability<G::Timestamp>>::new();
         let mut prev_frontier = Antichain::from_elem(G::Timestamp::minimum());
@@ -834,10 +861,8 @@ where
                             let mut session = output.session(&capabilities.elements()[index]);
                             // Extract updates not in advance of `upper`.
                             let output =
-                                batcher.seal::<ConsolidateBuilder<_, B::Output, CO>>(upper.clone());
-                            for mut batch in output {
-                                session.give_container(&mut batch);
-                            }
+                                batcher.seal::<ConsolidateBuilder<_, Ba::Output>>(upper.clone());
+                            session.give(output);
                         }
                     }
 
@@ -870,25 +895,21 @@ where
 }
 
 /// A builder that wraps a session for direct output to a stream.
-struct ConsolidateBuilder<T, I, O> {
-    buffer: Vec<O>,
+struct ConsolidateBuilder<T, I> {
     _marker: PhantomData<(T, I)>,
 }
 
-impl<T, I, O> Builder for ConsolidateBuilder<T, I, O>
+impl<T, I> Builder for ConsolidateBuilder<T, I>
 where
     T: Timestamp,
     I: Container,
-    O: SizableContainer,
-    for<'a> O: PushInto<I::Item<'a>>,
 {
     type Input = I;
     type Time = T;
-    type Output = Vec<O>;
+    type Output = Vec<I>;
 
     fn new() -> Self {
         Self {
-            buffer: Vec::default(),
             _marker: PhantomData,
         }
     }
@@ -897,35 +918,15 @@ where
         Self::new()
     }
 
-    fn push(&mut self, chunk: &mut Self::Input) {
-        // TODO(mh): This is less efficient than it could be because it extracts each item
-        // individually and then pushes it. However, it is not a regression over the previous
-        // implementation. In the future, we want to either clone many elements in one go,
-        // or ensure that `Vec<Input>` == `Output`, which would avoid looking at the container
-        // contents at all.
-        'element: for element in chunk.drain() {
-            if let Some(last) = self.buffer.last_mut() {
-                if !last.at_capacity() {
-                    last.push_into(element);
-                    continue 'element;
-                }
-            }
-            let mut new = O::default();
-            new.ensure_capacity(&mut None);
-            new.push_into(element);
-            self.buffer.push(new);
-        }
+    fn push(&mut self, _chunk: &mut Self::Input) {
+        unimplemented!("ConsolidateBuilder::push")
     }
 
     fn done(self, _: Description<Self::Time>) -> Self::Output {
-        self.buffer
+        unimplemented!("ConsolidateBuilder::done")
     }
 
-    fn seal(chain: &mut Vec<Self::Input>, description: Description<Self::Time>) -> Self::Output {
-        let mut builder = Self::new();
-        for mut input in chain.drain(..) {
-            builder.push(&mut input);
-        }
-        builder.done(description)
+    fn seal(chain: &mut Vec<Self::Input>, _description: Description<Self::Time>) -> Self::Output {
+        std::mem::take(chain)
     }
 }

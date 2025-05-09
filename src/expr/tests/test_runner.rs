@@ -12,7 +12,7 @@ mod test {
     use mz_expr::canonicalize::{canonicalize_equivalences, canonicalize_predicates};
     use mz_expr::{ColumnSpecs, Interpreter, MapFilterProject, MirScalarExpr};
     use mz_expr_test_util::*;
-    use mz_lowertest::{deserialize, deserialize_optional, tokenize, MzReflect};
+    use mz_lowertest::{MzReflect, deserialize, deserialize_optional, tokenize};
     use mz_ore::result::ResultExt;
     use mz_ore::str::separated;
     use mz_repr::{ColumnType, RelationType, RowArena};

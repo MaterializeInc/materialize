@@ -29,6 +29,8 @@ use crate::durable::{
     ClusterConfig, ClusterVariant, ClusterVariantManaged, ReplicaConfig, ReplicaLocation,
 };
 
+use super::{RoleAuthKey, RoleAuthValue};
+
 pub mod proto {
     pub use mz_catalog_protos::objects::*;
 }
@@ -617,6 +619,40 @@ impl RustType<proto::RoleValue> for RoleValue {
                 .into_rust_if_some("RoleValue::membership")?,
             vars: proto.vars.into_rust_if_some("RoleValue::vars")?,
             oid: proto.oid,
+        })
+    }
+}
+
+impl RustType<proto::RoleAuthKey> for RoleAuthKey {
+    fn into_proto(&self) -> proto::RoleAuthKey {
+        proto::RoleAuthKey {
+            id: Some(self.role_id.into_proto()),
+        }
+    }
+
+    fn from_proto(proto: proto::RoleAuthKey) -> Result<Self, TryFromProtoError> {
+        Ok(RoleAuthKey {
+            role_id: proto.id.into_rust_if_some("RoleAuthKey::id")?,
+        })
+    }
+}
+
+impl RustType<proto::RoleAuthValue> for RoleAuthValue {
+    fn into_proto(&self) -> proto::RoleAuthValue {
+        proto::RoleAuthValue {
+            password_hash: self.password_hash.clone(),
+            updated_at: Some(proto::EpochMillis {
+                millis: self.updated_at,
+            }),
+        }
+    }
+
+    fn from_proto(proto: proto::RoleAuthValue) -> Result<Self, TryFromProtoError> {
+        Ok(RoleAuthValue {
+            password_hash: proto.password_hash,
+            updated_at: proto
+                .updated_at
+                .into_rust_if_some("RoleAuthValue::updated_at")?,
         })
     }
 }

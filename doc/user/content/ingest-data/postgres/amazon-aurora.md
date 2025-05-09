@@ -11,7 +11,7 @@ menu:
 ---
 
 This page shows you how to stream data from [Amazon Aurora for PostgreSQL](https://aws.amazon.com/rds/aurora/)
-to Materialize using the[PostgreSQL source](/sql/create-source/postgres/).
+to Materialize using the [PostgreSQL source](/sql/create-source/postgres/).
 
 {{< tip >}}
 {{< guided-tour-blurb-for-ingest-data >}}
@@ -20,6 +20,15 @@ to Materialize using the[PostgreSQL source](/sql/create-source/postgres/).
 ## Before you begin
 
 {{% postgres-direct/before-you-begin %}}
+
+{{< warning >}}
+There is a known issue with Aurora PostgreSQL 16.1 that can cause logical replication to fail with the following error:
+- `postgres: sql client error: db error: ERROR: could not map filenumber "base/16402/3147867235" to relation OID`
+
+This is due to a bug in Aurora's implementation of logical replication in PostgreSQL 16.1, where the system fails to correctly fetch relation metadata from the catalogs. If you encounter these errors, you should upgrade your Aurora PostgreSQL instance to a newer minor version (16.2 or later).
+
+For more information, see [this AWS discussion](https://repost.aws/questions/QU4RXUrLNQS_2oSwV34pmwww/error-could-not-map-filenumber-after-aurora-upgrade-to-16-1).
+{{</ warning >}}
 
 ## A. Configure Amazon Aurora
 
@@ -56,17 +65,18 @@ to connect:
     configure your database's security group to allow connections from a set of
     static Materialize IP addresses.
 
-- **Use AWS PrivateLink** or **Use an SSH tunnel:** If your database is running
-    in a private network, you can use either [AWS PrivateLink](https://aws.amazon.com/privatelink/)
-    or an SSH tunnel to connect Materialize to the database.
+- **Use AWS PrivateLink**: If your database is running in a private network, you
+    can use [AWS PrivateLink](/ingest-data/network-security/privatelink/) to
+    connect Materialize to the database. For details, see [AWS PrivateLink](/ingest-data/network-security/privatelink/).
 
-Select the option that works best for you.
+- **Use an SSH tunnel:** If your database is running in a private network, you
+    can use an SSH tunnel to connect Materialize to the database.
 
 {{< tabs >}}
 
 {{< tab "Allow Materialize IPs">}}
 
-1. In the [Materialize console's SQL Shell](https://console.materialize.com/) or your preferred SQL
+1. In the [SQL Shell](https://console.materialize.com/) or your preferred SQL
    client connected to Materialize, find the static egress IP addresses for the
    Materialize region you are running in:
 
@@ -244,7 +254,7 @@ configuration of resources for an SSH tunnel. For more details, see the
 If you are prototyping and already have a cluster to host your PostgreSQL
 source (e.g. `quickstart`), **you can skip this step**. For production
 scenarios, we recommend separating your workloads into multiple clusters for
-[resource isolation](https://materialize.com/docs/sql/create-cluster/#resource-isolation).
+[resource isolation](/sql/create-cluster/#resource-isolation).
 {{< /note >}}
 
 
@@ -323,7 +333,7 @@ start by selecting the relevant option.
 
 {{< tab "Use AWS PrivateLink">}}
 
-1. In the [Materialize console's SQL Shell](https://console.materialize.com/),
+1. In the [SQL Shell](https://console.materialize.com/),
    or your preferred SQL client connected to Materialize, use the [`CREATE
    CONNECTION`](/sql/create-connection/#aws-privatelink) command to create an
    AWS PrivateLink connection:
@@ -331,7 +341,7 @@ start by selecting the relevant option.
     ```mzsql
     CREATE CONNECTION privatelink_svc TO AWS PRIVATELINK (
       SERVICE NAME 'com.amazonaws.vpce.us-east-1.vpce-svc-0356210a8a432d9e9',
-      AVAILABILITY ZONES ('use1-az1', 'use1-az2', 'use1-az3')
+      AVAILABILITY ZONES ('use1-az1', 'use1-az2', 'use1-az4')
     );
     ```
 
@@ -428,7 +438,7 @@ details for Materialize to use:
 
 {{< tab "Use an SSH tunnel">}}
 
-1. In the [Materialize console's SQL Shell](https://console.materialize.com/),
+1. In the [SQL Shell](https://console.materialize.com/),
    or your preferred SQL client connected to Materialize, use the [`CREATE
    CONNECTION`](/sql/create-connection/#ssh-tunnel) command to create an SSH
    tunnel connection:

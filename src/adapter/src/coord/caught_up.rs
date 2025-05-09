@@ -22,8 +22,8 @@ use mz_catalog::builtin::MZ_CLUSTER_REPLICA_FRONTIERS;
 use mz_catalog::memory::objects::Cluster;
 use mz_ore::channel::trigger::Trigger;
 use mz_repr::{GlobalId, Timestamp};
-use timely::progress::{Antichain, Timestamp as _};
 use timely::PartialOrder;
+use timely::progress::{Antichain, Timestamp as _};
 
 use crate::coord::Coordinator;
 
@@ -245,7 +245,6 @@ impl Coordinator {
             .controller
             .storage
             .active_ingestions(cluster.id)
-            .iter()
             .copied()
             .filter(|id| !id.is_transient() && !exclude_collections.contains(id))
             .map(|id| {
@@ -296,7 +295,11 @@ impl Coordinator {
             let beyond_all_hope = live_write_frontier_plus_cutoff.less_equal(&now);
 
             if beyond_all_hope {
-                tracing::info!(?live_write_frontier, ?now, "live write frontier of collection {id} is too far behind 'now', ignoring for caught-up checks");
+                tracing::info!(
+                    ?live_write_frontier,
+                    ?now,
+                    "live write frontier of collection {id} is too far behind 'now', ignoring for caught-up checks"
+                );
                 continue;
             }
 

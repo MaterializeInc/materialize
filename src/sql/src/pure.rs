@@ -12,13 +12,13 @@
 //! See the [crate-level documentation](crate) for details.
 
 use std::collections::{BTreeMap, BTreeSet};
+use std::fmt;
 use std::iter;
 use std::path::Path;
 use std::sync::Arc;
 
 use anyhow::anyhow;
 use itertools::Itertools;
-use mz_adapter_types::dyncfgs;
 use mz_ccsr::{Client, GetByIdError, GetBySubjectError, Schema as CcsrSchema};
 use mz_controller_types::ClusterId;
 use mz_kafka_util::client::MzClientContext;
@@ -32,23 +32,25 @@ use mz_postgres_util::desc::PostgresTableDesc;
 use mz_postgres_util::replication::WalLevel;
 use mz_postgres_util::tunnel::PostgresFlavor;
 use mz_proto::RustType;
-use mz_repr::{strconv, CatalogItemId, RelationDesc, RelationVersionSelector, Timestamp};
+use mz_repr::{CatalogItemId, RelationDesc, RelationVersionSelector, Timestamp, strconv};
 use mz_sql_parser::ast::display::AstDisplay;
-use mz_sql_parser::ast::visit::{visit_function, Visit};
-use mz_sql_parser::ast::visit_mut::{visit_expr_mut, VisitMut};
+use mz_sql_parser::ast::visit::{Visit, visit_function};
+use mz_sql_parser::ast::visit_mut::{VisitMut, visit_expr_mut};
 use mz_sql_parser::ast::{
     AlterSourceAction, AlterSourceAddSubsourceOptionName, AlterSourceStatement, AvroDocOn,
-    ColumnName, CreateMaterializedViewStatement, CreateSinkConnection, CreateSinkOption,
-    CreateSinkOptionName, CreateSinkStatement, CreateSubsourceOption, CreateSubsourceOptionName,
+    ColumnName, CreateMaterializedViewStatement, CreateSinkConnection, CreateSinkOptionName,
+    CreateSinkStatement, CreateSubsourceOption, CreateSubsourceOptionName,
     CreateTableFromSourceStatement, CsrConfigOption, CsrConfigOptionName, CsrConnection,
     CsrSeedAvro, CsrSeedProtobuf, CsrSeedProtobufSchema, DeferredItemName, DocOnIdentifier,
     DocOnSchema, Expr, Function, FunctionArgs, Ident, KafkaSourceConfigOption,
     KafkaSourceConfigOptionName, LoadGenerator, LoadGeneratorOption, LoadGeneratorOptionName,
     MaterializedViewOption, MaterializedViewOptionName, MySqlConfigOption, MySqlConfigOptionName,
     PgConfigOption, PgConfigOptionName, RawItemName, ReaderSchemaSelectionStrategy,
-    RefreshAtOptionValue, RefreshEveryOptionValue, RefreshOptionValue, SourceEnvelope, Statement,
-    TableFromSourceColumns, TableFromSourceOption, TableFromSourceOptionName, UnresolvedItemName,
+    RefreshAtOptionValue, RefreshEveryOptionValue, RefreshOptionValue, SourceEnvelope,
+    SqlServerConfigOption, SqlServerConfigOptionName, Statement, TableFromSourceColumns,
+    TableFromSourceOption, TableFromSourceOptionName, UnresolvedItemName,
 };
+use mz_sql_server_util::desc::SqlServerTableDesc;
 use mz_storage_types::configuration::StorageConfiguration;
 use mz_storage_types::connections::inline::IntoInlineConnection;
 use mz_storage_types::connections::{Connection, PostgresConnection};
@@ -58,11 +60,11 @@ use mz_storage_types::sources::mysql::MySqlSourceDetails;
 use mz_storage_types::sources::postgres::PostgresSourcePublicationDetails;
 use mz_storage_types::sources::{
     GenericSourceConnection, PostgresSourceConnection, SourceConnection, SourceDesc,
-    SourceExportStatementDetails,
+    SourceExportStatementDetails, SqlServerSourceExtras,
 };
 use prost::Message;
-use protobuf_native::compiler::{SourceTreeDescriptorDatabase, VirtualSourceTree};
 use protobuf_native::MessageLite;
+use protobuf_native::compiler::{SourceTreeDescriptorDatabase, VirtualSourceTree};
 use rdkafka::admin::AdminClient;
 use references::{RetrievedSourceReferences, SourceReferenceClient};
 use uuid::Uuid;
@@ -81,6 +83,8 @@ use crate::names::{
 use crate::plan::error::PlanError;
 use crate::plan::statement::ddl::load_generator_ast_to_generator;
 use crate::plan::{SourceReferences, StatementContext};
+use crate::pure::error::SqlServerSourcePurificationError;
+use crate::session::vars::ENABLE_SQL_SERVER_SOURCE;
 use crate::{kafka_util, normalize};
 
 use self::error::{
@@ -89,14 +93,26 @@ use self::error::{
 };
 
 pub(crate) mod error;
+mod references;
+
 pub mod mysql;
 pub mod postgres;
-mod references;
+pub mod sql_server;
 
 pub(crate) struct RequestedSourceExport<T> {
     external_reference: UnresolvedItemName,
     name: UnresolvedItemName,
     meta: T,
+}
+
+impl<T: fmt::Debug> fmt::Debug for RequestedSourceExport<T> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("RequestedSourceExport")
+            .field("external_reference", &self.external_reference)
+            .field("name", &self.name)
+            .field("meta", &self.meta)
+            .finish()
+    }
 }
 
 impl<T> RequestedSourceExport<T> {
@@ -239,6 +255,12 @@ pub enum PurifiedExportDetails {
     Postgres {
         table: PostgresTableDesc,
         text_columns: Option<Vec<Ident>>,
+    },
+    SqlServer {
+        table: SqlServerTableDesc,
+        text_columns: Option<Vec<Ident>>,
+        excl_columns: Option<Vec<Ident>>,
+        capture_instance: Arc<str>,
     },
     Kafka {},
     LoadGenerator {
@@ -440,16 +462,9 @@ async fn purify_create_sink(
     {
         sql_bail!(
             "CREATE SINK...WITH ({}..) is not allowed",
-            op.name.to_ast_string(),
+            op.name.to_ast_string_simple(),
         )
     }
-
-    let default_strategy =
-        dyncfgs::DEFAULT_SINK_PARTITION_STRATEGY.get(catalog.system_vars().dyncfgs());
-    with_options.push(CreateSinkOption {
-        name: CreateSinkOptionName::PartitionStrategy,
-        value: Some(WithOptionValue::Value(Value::String(default_strategy))),
-    });
 
     match &connection {
         CreateSinkConnection::Kafka {
@@ -583,6 +598,7 @@ where
 
 /// Defines whether purification should enforce that at least one valid source
 /// reference is provided on the provided statement.
+#[derive(Debug, Copy, Clone, PartialEq, Eq)]
 pub(crate) enum SourceReferencePolicy {
     /// Don't allow source references to be provided. This is used for
     /// enforcing that `CREATE SOURCE` statements don't create subsources.
@@ -624,6 +640,9 @@ async fn purify_create_source(
         }
         CreateSourceConnection::Postgres { .. } | CreateSourceConnection::Yugabyte { .. } => {
             &mz_storage_types::sources::postgres::PG_PROGRESS_DESC
+        }
+        CreateSourceConnection::SqlServer { .. } => {
+            &mz_storage_types::sources::sql_server::SQL_SERVER_PROGRESS_DESC
         }
         CreateSourceConnection::MySql { .. } => {
             &mz_storage_types::sources::mysql::MYSQL_PROGRESS_DESC
@@ -917,6 +936,126 @@ async fn purify_create_source(
                 )))),
             })
         }
+        CreateSourceConnection::SqlServer {
+            connection,
+            options,
+        } => {
+            scx.require_feature_flag(&ENABLE_SQL_SERVER_SOURCE)?;
+
+            // Connect to the upstream SQL Server instance so we can validate
+            // we're compatible with CDC.
+            let connection_item = scx.get_item_by_resolved_name(connection)?;
+            let connection = match connection_item.connection()? {
+                Connection::SqlServer(connection) => {
+                    connection.clone().into_inline_connection(&catalog)
+                }
+                _ => Err(SqlServerSourcePurificationError::NotSqlServerConnection(
+                    scx.catalog.resolve_full_name(connection_item.name()),
+                ))?,
+            };
+            let crate::plan::statement::ddl::SqlServerConfigOptionExtracted {
+                details,
+                text_columns,
+                exclude_columns,
+                seen: _,
+            } = options.clone().try_into()?;
+
+            if details.is_some() {
+                Err(SqlServerSourcePurificationError::UserSpecifiedDetails)?;
+            }
+
+            let config = connection
+                .resolve_config(
+                    &storage_configuration.connection_context.secrets_reader,
+                    storage_configuration,
+                    InTask::No,
+                )
+                .await?;
+            let mut client = mz_sql_server_util::Client::connect(config).await?;
+
+            // Ensure the upstream SQL Server instance is configured to allow CDC.
+            //
+            // Run all of the checks necessary and collect the errors to provide the best
+            // guidance as to which system settings need to be enabled.
+            let mut replication_errors = vec![];
+            for error in [
+                mz_sql_server_util::inspect::ensure_database_cdc_enabled(&mut client).await,
+                mz_sql_server_util::inspect::ensure_snapshot_isolation_enabled(&mut client).await,
+            ] {
+                match error {
+                    Err(mz_sql_server_util::SqlServerError::InvalidSystemSetting {
+                        name,
+                        expected,
+                        actual,
+                    }) => replication_errors.push((name, expected, actual)),
+                    Err(other) => Err(other)?,
+                    Ok(()) => (),
+                }
+            }
+            if !replication_errors.is_empty() {
+                Err(SqlServerSourcePurificationError::ReplicationSettingsError(
+                    replication_errors,
+                ))?;
+            }
+
+            // We've validated that CDC is configured for the system, now let's
+            // purify the individual exports (i.e. subsources).
+            let database: Arc<str> = connection.database.into();
+            let reference_client = SourceReferenceClient::SqlServer {
+                client: &mut client,
+                database: Arc::clone(&database),
+            };
+            retrieved_source_references = reference_client.get_source_references().await?;
+            tracing::debug!(?retrieved_source_references, "got source references");
+
+            let purified_source_exports = sql_server::purify_source_exports(
+                &*database,
+                &mut client,
+                &retrieved_source_references,
+                external_references,
+                &text_columns,
+                &exclude_columns,
+                source_name,
+                &reference_policy,
+            )
+            .await?;
+
+            let sql_server::PurifiedSourceExports {
+                source_exports,
+                normalized_text_columns,
+                normalized_excl_columns,
+            } = purified_source_exports;
+
+            // Update our set of requested source exports.
+            requested_subsource_map.extend(source_exports);
+
+            // Reset the 'DETAILS' to ensure they're empty, we don't use them
+            // in the SQL Server source.
+            let details = SqlServerSourceExtras {};
+            options.retain(|SqlServerConfigOption { name, .. }| {
+                name != &SqlServerConfigOptionName::Details
+            });
+            options.push(SqlServerConfigOption {
+                name: SqlServerConfigOptionName::Details,
+                value: Some(WithOptionValue::Value(Value::String(hex::encode(
+                    details.into_proto().encode_to_vec(),
+                )))),
+            });
+
+            // Update our 'TEXT' and 'EXCLUDE' column options with the purified and normalized set.
+            if let Some(text_cols_option) = options
+                .iter_mut()
+                .find(|option| option.name == SqlServerConfigOptionName::TextColumns)
+            {
+                text_cols_option.value = Some(WithOptionValue::Sequence(normalized_text_columns));
+            }
+            if let Some(excl_cols_option) = options
+                .iter_mut()
+                .find(|option| option.name == SqlServerConfigOptionName::ExcludeColumns)
+            {
+                excl_cols_option.value = Some(WithOptionValue::Sequence(normalized_excl_columns));
+            }
+        }
         CreateSourceConnection::MySql {
             connection,
             options,
@@ -1054,13 +1193,14 @@ async fn purify_create_source(
             // Filter to the references that need to be created as 'subsources', which
             // doesn't include the default output for single-output sources.
             // TODO(database-issues#8620): Remove once subsources are removed
-            let subsource_references = retrieved_source_references
-                .all_references()
-                .iter()
-                .filter(|r| {
-                    r.load_generator_output().expect("is loadgen") != &LoadGeneratorOutput::Default
-                })
-                .collect::<Vec<_>>();
+            let multi_output_sources =
+                retrieved_source_references
+                    .all_references()
+                    .iter()
+                    .any(|r| {
+                        r.load_generator_output().expect("is loadgen")
+                            != &LoadGeneratorOutput::Default
+                    });
 
             match external_references {
                 Some(requested)
@@ -1068,6 +1208,17 @@ async fn purify_create_source(
                 {
                     Err(PlanError::UseTablesForSources(requested.to_string()))?
                 }
+                Some(requested) if !multi_output_sources => match requested {
+                    ExternalReferences::SubsetTables(_) => {
+                        Err(LoadGeneratorSourcePurificationError::ForTables)?
+                    }
+                    ExternalReferences::SubsetSchemas(_) => {
+                        Err(LoadGeneratorSourcePurificationError::ForSchemas)?
+                    }
+                    ExternalReferences::All => {
+                        Err(LoadGeneratorSourcePurificationError::ForAllTables)?
+                    }
+                },
                 Some(requested) => {
                     let requested_exports = retrieved_source_references
                         .requested_source_exports(Some(requested), source_name)?;
@@ -1093,8 +1244,8 @@ async fn purify_create_source(
                     }
                 }
                 None => {
-                    if matches!(reference_policy, SourceReferencePolicy::Required)
-                        && !subsource_references.is_empty()
+                    if multi_output_sources
+                        && matches!(reference_policy, SourceReferencePolicy::Required)
                     {
                         Err(LoadGeneratorSourcePurificationError::MultiOutputRequiresForAllTables)?
                     }
@@ -1300,6 +1451,7 @@ async fn purify_alter_source_add_subsources(
             ..
         }) => {}
         GenericSourceConnection::MySql(_) => {}
+        GenericSourceConnection::SqlServer(_) => {}
         _ => sql_bail!(
             "source {} does not support ALTER SOURCE.",
             partial_source_name
@@ -1446,6 +1598,62 @@ async fn purify_alter_source_add_subsources(
                     Some(WithOptionValue::Sequence(normalized_exclude_columns));
             }
         }
+        GenericSourceConnection::SqlServer(sql_server_source) => {
+            // Open a connection to the upstream SQL Server instance.
+            let sql_server_connection = &sql_server_source.connection;
+            let config = sql_server_connection
+                .resolve_config(
+                    &storage_configuration.connection_context.secrets_reader,
+                    storage_configuration,
+                    InTask::No,
+                )
+                .await?;
+            let mut client = mz_sql_server_util::Client::connect(config).await?;
+
+            // Query the upstream SQL Server instance for available tables to replicate.
+            let database = sql_server_connection.database.clone().into();
+            let source_references = SourceReferenceClient::SqlServer {
+                client: &mut client,
+                database: Arc::clone(&database),
+            }
+            .get_source_references()
+            .await?;
+            let requested_references = Some(ExternalReferences::SubsetTables(external_references));
+
+            let result = sql_server::purify_source_exports(
+                &*database,
+                &mut client,
+                &source_references,
+                &requested_references,
+                &text_columns,
+                &exclude_columns,
+                &unresolved_source_name,
+                &SourceReferencePolicy::Required,
+            )
+            .await;
+            let sql_server::PurifiedSourceExports {
+                source_exports,
+                normalized_text_columns,
+                normalized_excl_columns,
+            } = result?;
+
+            // Add the new exports to our subsource map.
+            requested_subsource_map.extend(source_exports);
+
+            // Update options on the CREATE SOURCE statement with the purified details.
+            if let Some(text_cols_option) = options
+                .iter_mut()
+                .find(|option| option.name == AlterSourceAddSubsourceOptionName::TextColumns)
+            {
+                text_cols_option.value = Some(WithOptionValue::Sequence(normalized_text_columns));
+            }
+            if let Some(ignore_cols_option) = options
+                .iter_mut()
+                .find(|option| option.name == AlterSourceAddSubsourceOptionName::ExcludeColumns)
+            {
+                ignore_cols_option.value = Some(WithOptionValue::Sequence(normalized_excl_columns));
+            }
+        }
         _ => unreachable!(),
     };
 
@@ -1509,6 +1717,27 @@ async fn purify_alter_source_refresh_references(
                 include_system_schemas: false,
             };
             reference_client.get_source_references().await?
+        }
+        GenericSourceConnection::SqlServer(sql_server_source) => {
+            // Open a connection to the upstream SQL Server instance.
+            let sql_server_connection = &sql_server_source.connection;
+            let config = sql_server_connection
+                .resolve_config(
+                    &storage_configuration.connection_context.secrets_reader,
+                    storage_configuration,
+                    InTask::No,
+                )
+                .await?;
+            let mut client = mz_sql_server_util::Client::connect(config).await?;
+
+            // Query the upstream SQL Server instance for available tables to replicate.
+            let source_references = SourceReferenceClient::SqlServer {
+                client: &mut client,
+                database: sql_server_connection.database.clone().into(),
+            }
+            .get_source_references()
+            .await?;
+            source_references
         }
         GenericSourceConnection::LoadGenerator(load_gen_connection) => {
             let reference_client = SourceReferenceClient::LoadGenerator {
@@ -1738,6 +1967,13 @@ async fn purify_create_table_from_source(
             let (_, purified_export) = source_exports.into_iter().next().unwrap();
             purified_export
         }
+        GenericSourceConnection::SqlServer(_sql_server_source) => {
+            // TODO(sql_server2): Support CREATE TABLE ... FROM SOURCE.
+            return Err(PlanError::Unsupported {
+                feature: "CREATE TABLE ... FROM SQL SERVER SOURCE".to_string(),
+                discussion_no: None,
+            });
+        }
         GenericSourceConnection::LoadGenerator(load_gen_connection) => {
             let reference_client = SourceReferenceClient::LoadGenerator {
                 generator: &load_gen_connection.load_generator,
@@ -1899,6 +2135,13 @@ async fn purify_create_table_from_source(
                 )))),
             })
         }
+        PurifiedExportDetails::SqlServer { .. } => {
+            // TODO(sql_server2): Support CREATE TABLE ... FROM SOURCE.
+            return Err(PlanError::Unsupported {
+                feature: "CREATE TABLE ... FROM SQL SERVER SOURCE".to_string(),
+                discussion_no: None,
+            });
+        }
         PurifiedExportDetails::LoadGenerator { .. } => {
             let (desc, output) = match purified_export.details {
                 PurifiedExportDetails::LoadGenerator { table, output } => (table, output),
@@ -2048,6 +2291,13 @@ pub fn generate_subsource_statements(
         }
         PurifiedExportDetails::MySql { .. } => {
             crate::pure::mysql::generate_create_subsource_statements(scx, source_name, subsources)?
+        }
+        PurifiedExportDetails::SqlServer { .. } => {
+            crate::pure::sql_server::generate_create_subsource_statements(
+                scx,
+                source_name,
+                subsources,
+            )?
         }
         PurifiedExportDetails::LoadGenerator { .. } => {
             let mut subsource_stmts = Vec::with_capacity(subsources.len());

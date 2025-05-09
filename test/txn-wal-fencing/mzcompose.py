@@ -12,6 +12,7 @@ Introduce a second Mz instance while a concurrent workload is running for the
 purpose of exercising fencing.
 """
 
+import argparse
 import random
 import time
 from concurrent import futures
@@ -19,7 +20,8 @@ from dataclasses import dataclass
 from enum import Enum
 
 from materialize import buildkite
-from materialize.mzcompose.composition import Composition
+from materialize.mzcompose.composition import Composition, WorkflowArgumentParser
+from materialize.mzcompose.services.azure import Azurite
 from materialize.mzcompose.services.materialized import Materialized
 from materialize.mzcompose.services.minio import Minio
 from materialize.mzcompose.services.postgres import CockroachOrPostgresMetadata
@@ -87,6 +89,7 @@ WORKLOADS = [
 
 SERVICES = [
     Minio(setup_materialize=True),
+    Azurite(),
     CockroachOrPostgresMetadata(),
     # Overriden below
     Materialized(name="mz_first"),
@@ -94,14 +97,19 @@ SERVICES = [
 ]
 
 
-def workflow_default(c: Composition) -> None:
+def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
+    parser.add_argument(
+        "--azurite", action="store_true", help="Use Azurite as blob store instead of S3"
+    )
+    args = parser.parse_args()
+
     workloads = buildkite.shard_list(WORKLOADS, lambda w: w.name)
     print(
         f"Workloads in shard with index {buildkite.get_parallelism_index()}: {[w.name for w in workloads]}"
     )
 
     for workload in workloads:
-        run_workload(c, workload)
+        run_workload(c, workload, args)
 
 
 def execute_operation(
@@ -161,12 +169,12 @@ def execute_operation(
         )
 
 
-def run_workload(c: Composition, workload: Workload) -> None:
+def run_workload(c: Composition, workload: Workload, args: argparse.Namespace) -> None:
     print(f"+++ Running workload {workload.name} ...")
     c.silent = True
 
     c.down(destroy_volumes=True)
-    c.up("minio", c.metadata_store())
+    c.up(c.metadata_store())
 
     mzs = {
         "mz_first": workload.txn_wal_first,
@@ -178,7 +186,8 @@ def run_workload(c: Composition, workload: Workload) -> None:
             Materialized(
                 name=mz_name,
                 external_metadata_store=True,
-                external_minio=True,
+                external_blob_store=True,
+                blob_store_is_azure=args.azurite,
                 sanity_restart=False,
             )
             for mz_name in mzs

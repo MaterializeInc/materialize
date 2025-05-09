@@ -38,11 +38,11 @@ use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize, Serializer};
 use thiserror::Error;
 
+use crate::Datum;
 use crate::adt::datetime::DateTimePart;
 use crate::adt::interval::Interval;
 use crate::adt::numeric::DecimalLike;
 use crate::scalar::{arb_naive_date_time, arb_utc_date_time};
-use crate::Datum;
 
 include!(concat!(env!("OUT_DIR"), "/mz_repr.adt.timestamp.rs"));
 
@@ -544,11 +544,7 @@ impl TimestampLike for chrono::DateTime<chrono::Utc> {
     }
 
     fn timezone_name(&self, caps: bool) -> &'static str {
-        if caps {
-            "UTC"
-        } else {
-            "utc"
-        }
+        if caps { "UTC" } else { "utc" }
     }
 
     fn checked_add_signed(self, rhs: Duration) -> Option<Self> {
@@ -813,7 +809,7 @@ impl<T: TimestampLike> CheckedTimestamp<T> {
         let round_to_micros = 10_i64.pow(power.into());
 
         let mut original = self.date_time();
-        let nanoseconds = original.timestamp_subsec_nanos();
+        let nanoseconds = original.and_utc().timestamp_subsec_nanos();
         // truncating to microseconds does not round it up
         // i.e. 123456789 will be truncated to 123456
         original = original.truncate_microseconds();
@@ -1133,7 +1129,8 @@ mod test {
 
     #[mz_ore::test]
     fn test_precision_edge_cases() {
-        let result = mz_ore::panic::catch_unwind(|| {
+        #[allow(clippy::disallowed_methods)] // not using enhanced panic handler in tests
+        let result = std::panic::catch_unwind(|| {
             let date = CheckedTimestamp::try_from(
                 DateTime::from_timestamp_micros(123456).unwrap().naive_utc(),
             )

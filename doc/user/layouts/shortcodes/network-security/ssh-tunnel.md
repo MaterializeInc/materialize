@@ -1,7 +1,7 @@
-Materialize can connect to data sources like Kafka, Confluent, and PostgreSQL with a
-secure SSH bastion host. In this guide, you will create an SSH tunnel
-connection, configure your Materialize authentication settings, and create a
-source connection.
+Materialize can connect to a Kafka broker, a Confluent Schema Registry server, a
+PostgreSQL database, or a MySQL database through an SSH tunnel connection. In
+this guide, you will create an SSH tunnel connection, configure your
+Materialize authentication settings, and create a source connection.
 
 ## Before you begin
 

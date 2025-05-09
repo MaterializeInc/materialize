@@ -14,10 +14,10 @@ statement ok
 INSERT INTO t1 values (1, 2)
 
 query T multiline
-EXPLAIN WITH(arity, join implementations) SELECT (record).f2 FROM (SELECT ROW(a, a) AS record FROM t1);
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, arity, join implementations) AS VERBOSE TEXT FOR SELECT (record).f2 FROM (SELECT ROW(a, a) AS record FROM t1);
 ----
 Explained Query:
-  Project (#0) // { arity: 1 }
+  Project (#0{a}) // { arity: 1 }
     ReadStorage materialize.public.t1 // { arity: 2 }
 
 Source materialize.public.t1
@@ -27,11 +27,11 @@ Target cluster: quickstart
 EOF
 
 query T multiline
-EXPLAIN WITH(arity, join implementations) SELECT record, (record).f2 FROM (SELECT ROW(a, a) AS record FROM t1);
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, arity, join implementations) AS VERBOSE TEXT FOR SELECT record, (record).f2 FROM (SELECT ROW(a, a) AS record FROM t1);
 ----
 Explained Query:
-  Project (#2, #0) // { arity: 2 }
-    Map (row(#0, #0)) // { arity: 3 }
+  Project (#2, #3) // { arity: 2 }
+    Map (row(#0{a}, #0{a}), record_get[1](#2{record})) // { arity: 4 }
       ReadStorage materialize.public.t1 // { arity: 2 }
 
 Source materialize.public.t1
@@ -41,10 +41,10 @@ Target cluster: quickstart
 EOF
 
 query T multiline
-EXPLAIN WITH(arity, join implementations) SELECT (COALESCE(record, ROW(NULL, NULL))).f2 FROM (SELECT ROW(a, a) AS record FROM t1)
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, arity, join implementations) AS VERBOSE TEXT FOR SELECT (COALESCE(record, ROW(NULL, NULL))).f2 FROM (SELECT ROW(a, a) AS record FROM t1)
 ----
 Explained Query:
-  Project (#0) // { arity: 1 }
+  Project (#0{a}) // { arity: 1 }
     ReadStorage materialize.public.t1 // { arity: 2 }
 
 Source materialize.public.t1
@@ -68,14 +68,14 @@ SELECT abc FROM (VALUES (1, 2, (3,4), ROW(5, 6, 7))) as abc;
 # reduce() doesn't recognize the pattern anymore.
 
 query T multiline
-EXPLAIN WITH(arity, join implementations) SELECT * FROM t1 WHERE (t1.a, t1.b) IN ((1,2))
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, arity, join implementations) AS VERBOSE TEXT FOR SELECT * FROM t1 WHERE (t1.a, t1.b) IN ((1,2))
 ----
 Explained Query:
-  Filter (#0 = 1) AND (#1 = 2) // { arity: 2 }
+  Filter (#0{a} = 1) AND (#1{b} = 2) // { arity: 2 }
     ReadStorage materialize.public.t1 // { arity: 2 }
 
 Source materialize.public.t1
-  filter=((#0 = 1) AND (#1 = 2))
+  filter=((#0{a} = 1) AND (#1{b} = 2))
 
 Target cluster: quickstart
 

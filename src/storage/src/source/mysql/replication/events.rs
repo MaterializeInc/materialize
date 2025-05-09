@@ -9,9 +9,9 @@
 
 use maplit::btreemap;
 use mysql_common::binlog::events::{QueryEvent, RowsEventData};
-use mz_mysql_util::{pack_mysql_row, MySqlError};
+use mz_mysql_util::{MySqlError, pack_mysql_row};
 use mz_ore::iter::IteratorExt;
-use mz_repr::Row;
+use mz_repr::{Diff, Row};
 use mz_storage_types::errors::DataflowError;
 use mz_storage_types::sources::mysql::GtidPartition;
 use timely::progress::Timestamp;
@@ -103,7 +103,7 @@ pub(super) async fn handle_query_event(
                             (
                                 (err_output.output_index, Err(err.into())),
                                 new_gtid.clone(),
-                                1,
+                                Diff::ONE,
                             ),
                         )
                         .await;
@@ -144,7 +144,7 @@ pub(super) async fn handle_query_event(
                         (
                             (dropped_output.output_index, Err(err.into())),
                             new_gtid.clone(),
-                            1,
+                            Diff::ONE,
                         ),
                     )
                     .await;
@@ -183,7 +183,7 @@ pub(super) async fn handle_query_event(
                                         ))),
                                     ),
                                     new_gtid.clone(),
-                                    1,
+                                    Diff::ONE,
                                 ),
                             )
                             .await;
@@ -196,6 +196,26 @@ pub(super) async fn handle_query_event(
         // storage engines
         (Some("commit"), None) => {
             is_complete_event = true;
+        }
+        // Detect `CREATE TABLE <tbl>` statements which don't affect existing tables but do
+        // signify a complete event (e.g. for the purposes of advancing the GTID)
+        (Some("create"), Some("table")) => {
+            // CREATE TABLE ... SELECT will have subsequent `RowEvent`s, to account for this, the statement contains the clause "START TRANSACTION".
+            // https://dev.mysql.com/worklog/task/?id=13355
+
+            let mut peek_stream = query_iter.peekable();
+            let mut ctas = false;
+            while let Some(token) = peek_stream.next() {
+                if token.eq_ignore_ascii_case("start")
+                    && peek_stream
+                        .peek()
+                        .is_some_and(|t| t.eq_ignore_ascii_case("transaction"))
+                {
+                    ctas = true;
+                    break;
+                }
+            }
+            is_complete_event = !ctas;
         }
         _ => {}
     }
@@ -274,7 +294,10 @@ pub(super) async fn handle_rows_event(
             }
         }
 
-        let updates = [before_row.map(|r| (r, -1)), after_row.map(|r| (r, 1))];
+        let updates = [
+            before_row.map(|r| (r, Diff::MINUS_ONE)),
+            after_row.map(|r| (r, Diff::ONE)),
+        ];
         for (binlog_row, diff) in updates.into_iter().flatten() {
             let row = mysql_async::Row::try_from(binlog_row)?;
             for (output, row_val) in outputs.iter().repeat_clone(row) {
@@ -301,7 +324,7 @@ pub(super) async fn handle_rows_event(
                         event_buffer.push((data.clone(), GtidPartition::minimum(), -diff));
                     }
                 }
-                if diff > 0 {
+                if diff.is_positive() {
                     additions += 1;
                 } else {
                     retractions += 1;
@@ -321,7 +344,7 @@ pub(super) async fn handle_rows_event(
 
     if !event_buffer.is_empty() {
         for d in event_buffer.drain(..) {
-            let (rewind_data_cap, _) = ctx.rewinds.get(&d.0 .0).unwrap();
+            let (rewind_data_cap, _) = ctx.rewinds.get(&d.0.0).unwrap();
             ctx.data_output.give_fueled(rewind_data_cap, d).await;
         }
     }

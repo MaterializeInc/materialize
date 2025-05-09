@@ -28,15 +28,15 @@ statement ok
 INSERT INTO bar (a, d, e) VALUES (-45, 'our', 3.14), (5, 'still', -0.0), (-3, 'is', -1.0)
 
 query T multiline
-explain with(arity, join implementations) select b, c from foo where a = 5
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, arity, join implementations) AS VERBOSE TEXT FOR select b, c from foo where a = 5
 ----
 Explained Query:
-  Project (#1, #2) // { arity: 2 }
-    Filter (#0 = 5) // { arity: 3 }
+  Project (#1{b}, #2{c}) // { arity: 2 }
+    Filter (#0{a} = 5) // { arity: 3 }
       ReadStorage materialize.public.foo // { arity: 3 }
 
 Source materialize.public.foo
-  filter=((#0 = 5))
+  filter=((#0{a} = 5))
 
 Target cluster: quickstart
 
@@ -51,15 +51,15 @@ this
 # Test that a query that joins to a (select literal) gets planned as a filter
 # and not a join.
 query T multiline
-explain with(arity, join implementations) select b, c from foo, (select 5 as a) const where foo.a = const.a
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, arity, join implementations) AS VERBOSE TEXT FOR select b, c from foo, (select 5 as a) const where foo.a = const.a
 ----
 Explained Query:
-  Project (#1, #2) // { arity: 2 }
-    Filter (#0 = 5) // { arity: 3 }
+  Project (#1{b}, #2{c}) // { arity: 2 }
+    Filter (#0{a} = 5) // { arity: 3 }
       ReadStorage materialize.public.foo // { arity: 3 }
 
 Source materialize.public.foo
-  filter=((#0 = 5))
+  filter=((#0{a} = 5))
 
 Target cluster: quickstart
 
@@ -74,23 +74,23 @@ this
 # Test that equality with a literal predicate gets pushed down to both inputs
 # even when one of the join constraints is an expression as opposed to a column reference.
 query T multiline
-explain with(arity, join implementations) select * from foo, bar where foo.a = abs(bar.a) and foo.a = 3
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, arity, join implementations) AS VERBOSE TEXT FOR select * from foo, bar where foo.a = abs(bar.a) and foo.a = 3
 ----
 Explained Query:
   CrossJoin type=differential // { arity: 6 }
     implementation
       %0:foo[×]ef » %1:bar[×]ef
     ArrangeBy keys=[[]] // { arity: 3 }
-      Filter (#0 = 3) // { arity: 3 }
+      Filter (#0{a} = 3) // { arity: 3 }
         ReadStorage materialize.public.foo // { arity: 3 }
     ArrangeBy keys=[[]] // { arity: 3 }
-      Filter (3 = abs(#0)) // { arity: 3 }
+      Filter (3 = abs(#0{a})) // { arity: 3 }
         ReadStorage materialize.public.bar // { arity: 3 }
 
 Source materialize.public.foo
-  filter=((#0 = 3))
+  filter=((#0{a} = 3))
 Source materialize.public.bar
-  filter=((3 = abs(#0)))
+  filter=((3 = abs(#0{a})))
 
 Target cluster: quickstart
 
@@ -110,10 +110,10 @@ statement ok
 create index foo_idx on foo(a);
 
 query T multiline
-explain with(arity, join implementations) select b, c from foo where a = 5
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, arity, join implementations) AS VERBOSE TEXT FOR select b, c from foo where a = 5
 ----
 Explained Query (fast path):
-  Project (#1, #2)
+  Project (#1{b}, #2{c})
     ReadIndex on=materialize.public.foo foo_idx=[lookup value=(5)]
 
 Used Indexes:
@@ -130,11 +130,11 @@ this
 -4.4
 
 query T multiline
-explain with(arity, join implementations) select b, c from foo where a = 5 and b = 'this'
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, arity, join implementations) AS VERBOSE TEXT FOR select b, c from foo where a = 5 and b = 'this'
 ----
 Explained Query (fast path):
-  Project (#1, #2)
-    Filter ("this" = varchar_to_text(#1))
+  Project (#1{b}, #2{c})
+    Filter ("this" = varchar_to_text(#1{b}))
       ReadIndex on=materialize.public.foo foo_idx=[lookup value=(5)]
 
 Used Indexes:
@@ -157,10 +157,10 @@ statement ok
 create index foo_idx3 on foo(b);
 
 query T multiline
-explain with(arity, join implementations) select b, c from foo where a = 5 and b = 'this'
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, arity, join implementations) AS VERBOSE TEXT FOR select b, c from foo where a = 5 and b = 'this'
 ----
 Explained Query (fast path):
-  Project (#0, #2)
+  Project (#0{b}, #2{c})
     ReadIndex on=materialize.public.foo foo_idx2=[lookup value=("this", 5)]
 
 Used Indexes:
@@ -174,16 +174,16 @@ statement ok
 create index bar_idx on bar(a)
 
 query T multiline
-explain with(arity, join implementations) select foo.a, b, c, d, e from foo, bar where foo.a = bar.a and b = 'this'
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, arity, join implementations) AS VERBOSE TEXT FOR select foo.a, b, c, d, e from foo, bar where foo.a = bar.a and b = 'this'
 ----
 Explained Query:
-  Project (#0..=#2, #5, #6) // { arity: 5 }
-    Join on=(#0 = #4) type=differential // { arity: 7 }
+  Project (#0{a}..=#2{c}, #5{d}, #6{e}) // { arity: 5 }
+    Join on=(#0{a} = #4{a}) type=differential // { arity: 7 }
       implementation
-        %0:foo[#0]KAe » %1:bar[#0]KAe
-      ArrangeBy keys=[[#0]] // { arity: 4 }
+        %0:foo[#0{a}]KAe » %1:bar[#0{a}]KAe
+      ArrangeBy keys=[[#0{a}]] // { arity: 4 }
         ReadIndex on=materialize.public.foo foo_idx3=[lookup value=("this")] // { arity: 4 }
-      ArrangeBy keys=[[#0]] // { arity: 3 }
+      ArrangeBy keys=[[#0{a}]] // { arity: 3 }
         ReadIndex on=bar bar_idx=[differential join] // { arity: 3 }
 
 Used Indexes:

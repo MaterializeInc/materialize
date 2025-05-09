@@ -10,27 +10,27 @@ publish = false
 workspace = true
 
 [dependencies]
-anyhow = { version = "1.0.66", features = ["backtrace"] }
+anyhow = "1.0.98"
 axum = "0.7.5"
 axum-extra = { version = "0.9.3", features = ["typed-header"] }
-base64 = "0.22.0"
-chrono = { version = "0.4.35", default-features = false, features = ["serde"] }
+base64 = "0.22.1"
+chrono = { version = "0.4.39", default-features = false, features = ["serde"] }
 clap = { version = "4.5.23", features = ["derive", "env"] }
 hyper = { version = "1.4.1", features = ["http1", "server"] }
-jsonwebtoken = "9.2.0"
+jsonwebtoken = "9.3.1"
 mz-frontegg-auth = { path = "../frontegg-auth" }
 mz-ore = { path = "../ore", default-features = false, features = ["cli"] }
-serde = { version = "1.0.152", features = ["derive"] }
-serde_json = "1.0.125"
-tokio = { version = "1.38.0", default-features = false }
+serde = { version = "1.0.219", features = ["derive"] }
+serde_json = "1.0.127"
+tokio = { version = "1.44.1", default-features = false }
 tracing = "0.1.37"
-tracing-subscriber = "0.3.16"
-uuid = "1.2.2"
+tracing-subscriber = "0.3.19"
+uuid = "1.16.0"
 workspace-hack = { version = "0.0.0", path = "../workspace-hack", optional = true }
 
 [dev-dependencies]
 reqwest = { version = "0.11.13", features = ["json"] }
-openssl = { version = "0.10.48", features = ["vendored"] }
+openssl = { version = "0.10.71", features = ["vendored"] }
 
 [package.metadata.cargo-udeps.ignore]
 normal = ["workspace-hack"]

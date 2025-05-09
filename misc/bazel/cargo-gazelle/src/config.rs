@@ -13,6 +13,7 @@ use std::collections::BTreeMap;
 use guppy::graph::PackageMetadata;
 use std::sync::LazyLock;
 
+use crate::ToBazelDefinition;
 use crate::targets::{AdditiveContent, RustTestSize};
 
 const KEY_NAME: &str = "cargo-gazelle";
@@ -313,5 +314,23 @@ impl CommonConfig {
 
     pub fn rustc_env(&self) -> &BTreeMap<String, String> {
         &self.rustc_env
+    }
+}
+
+/// Values that are mirrored in `/misc/bazel/platforms/BUILD.bazel`.
+#[derive(Debug, Copy, Clone)]
+pub enum ConfigSettingGroup {
+    XlangLtoEnabled,
+}
+
+impl ToBazelDefinition for ConfigSettingGroup {
+    fn format(&self, w: &mut dyn std::fmt::Write) -> Result<(), std::fmt::Error> {
+        match self {
+            ConfigSettingGroup::XlangLtoEnabled => {
+                write!(w, "\"@//misc/bazel/platforms:xlang_lto_enabled\"")?
+            }
+        }
+
+        Ok(())
     }
 }

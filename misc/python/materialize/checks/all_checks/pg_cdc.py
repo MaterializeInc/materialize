@@ -14,6 +14,7 @@ from typing import Any
 
 from materialize.checks.actions import Testdrive
 from materialize.checks.checks import Check, externally_idempotent
+from materialize.checks.features import Features
 from materialize.mz_version import MzVersion
 
 
@@ -219,7 +220,17 @@ class PgCdcBase:
             > SELECT key FROM (SHOW INDEXES ON postgres_source_tableA{self.suffix});
             {{f1,f2}}
 
-            ? EXPLAIN SELECT DISTINCT f1, f2 FROM postgres_source_tableA{self.suffix};
+            ?[version>=13500] EXPLAIN OPTIMIZED PLAN AS VERBOSE TEXT FOR SELECT DISTINCT f1, f2 FROM postgres_source_tableA{self.suffix};
+            Explained Query (fast path):
+              Project (#0, #1)
+                ReadIndex on=materialize.public.postgres_source_tablea{self.suffix} postgres_source_tablea{self.suffix}_primary_idx=[*** full scan ***]
+
+            Used Indexes:
+              - materialize.public.postgres_source_tablea{self.suffix}_primary_idx (*** full scan ***)
+
+            Target cluster: quickstart
+
+            ?[version<13500] EXPLAIN OPTIMIZED PLAN FOR SELECT DISTINCT f1, f2 FROM postgres_source_tableA{self.suffix};
             Explained Query (fast path):
               Project (#0, #1)
                 ReadIndex on=materialize.public.postgres_source_tablea{self.suffix} postgres_source_tablea{self.suffix}_primary_idx=[*** full scan ***]
@@ -236,14 +247,22 @@ class PgCdcBase:
 
 @externally_idempotent(False)
 class PgCdc(PgCdcBase, Check):
-    def __init__(self, base_version: MzVersion, rng: Random | None) -> None:
-        super().__init__(wait=True, base_version=base_version, rng=rng)
+    def __init__(
+        self, base_version: MzVersion, rng: Random | None, features: Features | None
+    ) -> None:
+        super().__init__(
+            wait=True, base_version=base_version, rng=rng, features=features
+        )
 
 
 @externally_idempotent(False)
 class PgCdcNoWait(PgCdcBase, Check):
-    def __init__(self, base_version: MzVersion, rng: Random | None) -> None:
-        super().__init__(wait=False, base_version=base_version, rng=rng)
+    def __init__(
+        self, base_version: MzVersion, rng: Random | None, features: Features | None
+    ) -> None:
+        super().__init__(
+            wait=False, base_version=base_version, rng=rng, features=features
+        )
 
 
 @externally_idempotent(False)

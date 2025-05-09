@@ -13,15 +13,15 @@ use std::collections::BTreeMap;
 use std::fmt::Formatter;
 use std::time::Duration;
 
-use mz_ore::str::{separated, Indent, IndentLike};
-use mz_repr::explain::text::DisplayText;
+use mz_ore::str::{Indent, IndentLike, separated};
+use mz_repr::GlobalId;
 use mz_repr::explain::ExplainError::LinearChainsPlusRecursive;
+use mz_repr::explain::text::DisplayText;
 use mz_repr::explain::{
     AnnotatedPlan, Explain, ExplainConfig, ExplainError, ExprHumanizer, ScalarOps,
     UnsupportedFormat, UsedIndexes,
 };
 use mz_repr::optimize::OptimizerFeatures;
-use mz_repr::GlobalId;
 
 use crate::interpret::{Interpreter, MfpEval, Trace};
 use crate::visit::Visit;
@@ -30,7 +30,7 @@ use crate::{
 };
 
 pub use crate::explain::text::{
-    fmt_text_constant_rows, HumanizedExplain, HumanizedExpr, HumanizedNotice, HumanizerMode,
+    HumanizedExplain, HumanizedExpr, HumanizedNotice, HumanizerMode, fmt_text_constant_rows,
 };
 
 mod json;
@@ -177,11 +177,20 @@ impl<'a> Explain<'a> for MirRelationExpr {
 
     type Text = ExplainSinglePlan<'a, MirRelationExpr>;
 
+    type VerboseText = ExplainSinglePlan<'a, MirRelationExpr>;
+
     type Json = ExplainSinglePlan<'a, MirRelationExpr>;
 
     type Dot = UnsupportedFormat;
 
     fn explain_text(&'a mut self, context: &'a Self::Context) -> Result<Self::Text, ExplainError> {
+        self.as_explain_single_plan(context)
+    }
+
+    fn explain_verbose_text(
+        &'a mut self,
+        context: &'a Self::Context,
+    ) -> Result<Self::VerboseText, ExplainError> {
         self.as_explain_single_plan(context)
     }
 
@@ -277,7 +286,7 @@ pub fn enforce_linear_chains(expr: &mut MirRelationExpr) -> Result<(), ExplainEr
 
 // Create an [`Iterator`] for [`LocalId`] values that are guaranteed to be
 // fresh within the scope of the given [`MirRelationExpr`].
-fn id_gen(expr: &MirRelationExpr) -> impl Iterator<Item = LocalId> {
+fn id_gen(expr: &MirRelationExpr) -> impl Iterator<Item = LocalId> + use<> {
     let mut max_id = 0_u64;
 
     expr.visit_pre(|expr| {
@@ -293,14 +302,14 @@ fn id_gen(expr: &MirRelationExpr) -> impl Iterator<Item = LocalId> {
 impl ScalarOps for MirScalarExpr {
     fn match_col_ref(&self) -> Option<usize> {
         match self {
-            MirScalarExpr::Column(c) => Some(*c),
+            MirScalarExpr::Column(c, _name) => Some(*c),
             _ => None,
         }
     }
 
     fn references(&self, column: usize) -> bool {
         match self {
-            MirScalarExpr::Column(c) => *c == column,
+            MirScalarExpr::Column(c, _name) => *c == column,
             _ => false,
         }
     }

@@ -369,15 +369,19 @@ CREATE MATERIALIZED VIEW mv AS SELECT 1
 query TT colnames
 SHOW CREATE MATERIALIZED VIEW mv
 ----
-name                  create_sql
-materialize.public.mv CREATE␠MATERIALIZED␠VIEW␠"materialize"."public"."mv"␠IN␠CLUSTER␠"quickstart"␠WITH␠(REFRESH␠=␠ON␠COMMIT)␠AS␠SELECT␠1
+name create_sql
+materialize.public.mv  CREATE␠MATERIALIZED␠VIEW␠materialize.public.mv⏎␠␠␠␠IN␠CLUSTER␠quickstart⏎␠␠␠␠WITH␠(REFRESH␠=␠ON␠COMMIT)⏎␠␠␠␠AS␠SELECT␠1;
 
 # Test: SHOW CREATE MATERIALIZED VIEW as mz_support
 
-simple conn=mz_catalog_server,user=mz_support
-SHOW CREATE MATERIALIZED VIEW mv
+simple multiline,conn=mz_catalog_server,user=mz_support
+SELECT create_sql FROM (SHOW CREATE MATERIALIZED VIEW mv);
 ----
-materialize.public.mv,CREATE MATERIALIZED VIEW "materialize"."public"."mv" IN CLUSTER "quickstart" WITH (REFRESH = ON COMMIT) AS SELECT 1
+CREATE MATERIALIZED VIEW materialize.public.mv
+    IN CLUSTER quickstart
+    WITH (REFRESH = ON COMMIT)
+    AS SELECT 1;
+EOF
 COMPLETE 1
 
 # Test: SHOW MATERIALIZED VIEWS
@@ -746,7 +750,7 @@ CREATE MATERIALIZED VIEW mv_bad WITH (REFRESH EVERY '213503982001' days) AS SELE
 
 # This tests that we don't forget to purify EXPLAIN CREATE MATERIALIZED VIEW
 statement ok
-EXPLAIN CREATE MATERIALIZED VIEW mv_explain WITH (REFRESH EVERY '2 seconds') AS SELECT * FROM t2;
+EXPLAIN OPTIMIZED PLAN WITH (humanized expressions) AS VERBOSE TEXT FOR CREATE MATERIALIZED VIEW mv_explain WITH (REFRESH EVERY '2 seconds') AS SELECT * FROM t2;
 
 statement ok
 CREATE MATERIALIZED VIEW mv_on_commit WITH (REFRESH ON COMMIT) AS SELECT * FROM t2;
@@ -1027,7 +1031,7 @@ CREATE MATERIALIZED VIEW mv5 WITH (REFRESH AT mz_now()::text::int8 + 1000000) AS
 SELECT x+y+z from t2;
 
 statement ok
-EXPLAIN SELECT * FROM mv5;
+EXPLAIN OPTIMIZED PLAN WITH (humanized expressions) AS VERBOSE TEXT FOR SELECT * FROM mv5;
 
 statement ok
 EXPLAIN TIMESTAMP FOR SELECT * FROM mv5;
@@ -1793,3 +1797,15 @@ simple conn=mz_system,user=mz_system
 ALTER SYSTEM SET enable_explain_pushdown = false
 ----
 COMPLETE 0
+
+query T multiline
+SELECT regexp_replace(create_sql, 'AT \d+', 'XXX', 'g') FROM (SHOW CREATE MATERIALIZED VIEW mvi3);
+----
+CREATE MATERIALIZED VIEW materialize.public.mvi3
+    IN CLUSTER quickstart
+    WITH (
+        REFRESH = XXX::mz_catalog.mz_timestamp,
+        REFRESH = XXX::mz_catalog.mz_timestamp::pg_catalog.text::pg_catalog.int8 + 2000
+    )
+    AS SELECT DISTINCT 5 * x FROM materialize.public.t3;
+EOF

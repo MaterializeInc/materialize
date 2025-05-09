@@ -6,16 +6,59 @@ updates:
     interval: weekly
     day: sunday
     time: "22:00"
-  open-pull-requests-limit: 10
+  open-pull-requests-limit: 50
   labels: [A-dependencies]
+  groups:
+    simple1:
+      applies-to: version-updates
+      update-types:
+        - patch
+      patterns:
+        - "a*"
+        - "b*"
+        - "c*"
+        - "d*"
+        - "e*"
+        - "f*"
+        - "g*"
+        - "h*"
+        - "i*"
+        - "j*"
+        - "k*"
+        - "l*"
+        - "m*"
+    simple2:
+      applies-to: version-updates
+      update-types:
+        - patch
+      patterns:
+        - "n*"
+        - "o*"
+        - "p*"
+        - "q*"
+        - "r*"
+        - "s*"
+        - "t*"
+        - "u*"
+        - "v*"
+        - "w*"
+        - "x*"
+        - "y*"
+        - "z*"
 - package-ecosystem: cargo
   directory: /misc/wasm
   schedule:
     interval: weekly
     day: sunday
     time: "22:00"
-  open-pull-requests-limit: 10
+  open-pull-requests-limit: 50
   labels: [A-dependencies]
+  groups:
+    simple:
+      applies-to: version-updates
+      update-types:
+        - minor
+        - patch
 - package-ecosystem: pip
   directory: /misc/dbt-materialize
   schedule:
@@ -24,27 +67,51 @@ updates:
     # dbt drops.
     interval: daily
   labels: [A-dependencies]
+  groups:
+    simple:
+      applies-to: version-updates
+      update-types:
+        - minor
+        - patch
 - package-ecosystem: docker
   directory: /misc/images/ubuntu-base
   schedule:
     interval: weekly
     day: sunday
     time: "22:00"
-  open-pull-requests-limit: 10
+  open-pull-requests-limit: 50
   labels: [A-dependencies]
+  groups:
+    simple:
+      applies-to: version-updates
+      update-types:
+        - minor
+        - patch
 - package-ecosystem: docker
   directory: /ci/builder
   schedule:
     interval: weekly
     day: sunday
     time: "22:00"
-  open-pull-requests-limit: 10
+  open-pull-requests-limit: 50
   labels: [A-dependencies]
+  groups:
+    simple:
+      applies-to: version-updates
+      update-types:
+        - minor
+        - patch
 - package-ecosystem: pip
   directory: /ci/builder
   schedule:
     interval: weekly
     day: sunday
     time: "22:00"
-  open-pull-requests-limit: 10
+  open-pull-requests-limit: 50
   labels: [A-dependencies]
+  groups:
+    simple:
+      applies-to: version-updates
+      update-types:
+        - minor
+        - patch

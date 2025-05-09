@@ -77,7 +77,8 @@ SELECT * FROM part1;
 146
 
 query T multiline
-EXPLAIN WITH MUTUALLY RECURSIVE
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, arity, join implementations) AS VERBOSE TEXT FOR
+WITH MUTUALLY RECURSIVE
 
     lines(r INT, line TEXT) AS (
         SELECT r, regexp_split_to_array(input, '\n')[r] as block
@@ -127,95 +128,101 @@ EXPLAIN WITH MUTUALLY RECURSIVE
 SELECT * FROM part1;
 ----
 Explained Query:
-  With Mutually Recursive
+  With
     cte l0 =
-      Project (#1, #2)
-        Map (array_index(regexp_split_to_array["\n", case_insensitive=false](#0), integer_to_bigint(#1)))
-          FlatMap generate_series(1, (regexp_split_to_array["\n", case_insensitive=false](#0) array_length 1), 1)
-            ReadStorage materialize.public.input
+      Project (#1, #2) // { arity: 2 }
+        Map (array_index(regexp_split_to_array["\n", case_insensitive=false](#0{input}), integer_to_bigint(#1{r}))) // { arity: 3 }
+          FlatMap generate_series(1, (regexp_split_to_array["\n", case_insensitive=false](#0{input}) array_length 1), 1) // { arity: 2 }
+            ReadStorage materialize.public.input // { arity: 1 }
     cte l1 =
-      Project (#0, #2, #3)
-        Map (substr(#1, #2, 1))
-          FlatMap generate_series(1, char_length(#1), 1)
-            Get l0
+      Reduce aggregates=[max(#0{r})] // { arity: 1 }
+        Project (#0) // { arity: 1 }
+          Get l0 // { arity: 2 }
     cte l2 =
-      Threshold
-        Union
-          Threshold
-            Union
-              Threshold
-                Union
-                  Get l2
-                  Project (#2, #1, #3)
-                    Map ((#0 - 1), "O")
-                      Get l4
-                  Negate
-                    Project (#2, #1, #3)
-                      Map ((#0 - 1), ".")
-                        Get l4
-              Map (".")
-                Get l4
-              Negate
-                Map ("O")
-                  Get l4
-          Get l1
-          Negate
-            Get l8
-    cte l3 =
-      Filter (#2 = "O")
-        Get l2
-    cte l4 =
-      Project (#0, #1)
-        Join on=(#0 = (#2 + 1) AND #1 = #3) type=differential
-          ArrangeBy keys=[[#1, #0]]
-            Project (#0, #1)
-              Get l3
-          ArrangeBy keys=[[#1, (#0 + 1)]]
-            Project (#0, #1)
-              Filter (#2 = ".")
-                Get l2
-    cte l5 =
-      Reduce aggregates=[max(#0)]
-        Project (#0)
-          Get l0
-    cte l6 =
-      Union
-        Get l5
-        Map (null)
-          Union
-            Negate
-              Project ()
-                Get l5
-            Constant
+      Union // { arity: 1 }
+        Get l1 // { arity: 1 }
+        Map (null) // { arity: 1 }
+          Union // { arity: 0 }
+            Negate // { arity: 0 }
+              Project () // { arity: 0 }
+                Get l1 // { arity: 1 }
+            Constant // { arity: 0 }
               - ()
-    cte l7 =
-      Reduce aggregates=[sum(((1 + #1) - #0))]
-        CrossJoin type=differential
-          ArrangeBy keys=[[]]
-            Project (#0)
-              Get l3
-          ArrangeBy keys=[[]]
-            Union
-              Get l6
-              Map (null)
-                Union
-                  Negate
-                    Project ()
-                      Get l6
-                  Constant
-                    - ()
-    cte l8 =
-      Get l1
-  Return
-    Union
-      Get l7
-      Map (null)
-        Union
-          Negate
-            Project ()
-              Get l7
-          Constant
-            - ()
+    cte l3 =
+      Project (#0, #2, #3) // { arity: 3 }
+        Map (substr(#1{line}, #2{c}, 1)) // { arity: 4 }
+          FlatMap generate_series(1, char_length(#1{line}), 1) // { arity: 3 }
+            Get l0 // { arity: 2 }
+  Return // { arity: 1 }
+    With Mutually Recursive
+      cte l4 =
+        Threshold // { arity: 3 }
+          Union // { arity: 3 }
+            Threshold // { arity: 3 }
+              Union // { arity: 3 }
+                Threshold // { arity: 3 }
+                  Union // { arity: 3 }
+                    Get l4 // { arity: 3 }
+                    Project (#2, #1, #3) // { arity: 3 }
+                      Map ((#0{r} - 1), "O") // { arity: 4 }
+                        Get l6 // { arity: 2 }
+                    Negate // { arity: 3 }
+                      Project (#2, #1, #3) // { arity: 3 }
+                        Map ((#0{r} - 1), ".") // { arity: 4 }
+                          Get l6 // { arity: 2 }
+                Map (".") // { arity: 3 }
+                  Get l6 // { arity: 2 }
+                Negate // { arity: 3 }
+                  Map ("O") // { arity: 3 }
+                    Get l6 // { arity: 2 }
+            Get l3 // { arity: 3 }
+            Negate // { arity: 3 }
+              Get l8 // { arity: 3 }
+      cte l5 =
+        Project (#0, #1) // { arity: 2 }
+          Filter (#2{symbol} = "O") // { arity: 3 }
+            Get l4 // { arity: 3 }
+      cte l6 =
+        Project (#0, #1) // { arity: 2 }
+          Join on=(#0{r} = (#2{r} + 1) AND #1{c} = #3{c}) type=differential // { arity: 4 }
+            implementation
+              %0:l5[#1{c}, #0{r}]KKef » %1:l4[#1{c}, (#0{r} + 1)]KKef
+            ArrangeBy keys=[[#1{c}, #0{r}]] // { arity: 2 }
+              Get l5 // { arity: 2 }
+            ArrangeBy keys=[[#1{c}, (#0{r} + 1)]] // { arity: 2 }
+              Project (#0, #1) // { arity: 2 }
+                Filter (#2{symbol} = ".") // { arity: 3 }
+                  Get l4 // { arity: 3 }
+      cte l7 =
+        Reduce aggregates=[sum(((1 + #1{max}) - #0{r}))] // { arity: 1 }
+          CrossJoin type=differential // { arity: 2 }
+            implementation
+              %1[×]U » %0:l5[×]ef
+            ArrangeBy keys=[[]] // { arity: 1 }
+              Project (#0) // { arity: 1 }
+                Get l5 // { arity: 2 }
+            ArrangeBy keys=[[]] // { arity: 1 }
+              Union // { arity: 1 }
+                Get l2 // { arity: 1 }
+                Map (null) // { arity: 1 }
+                  Union // { arity: 0 }
+                    Negate // { arity: 0 }
+                      Project () // { arity: 0 }
+                        Get l2 // { arity: 1 }
+                    Constant // { arity: 0 }
+                      - ()
+      cte l8 =
+        Get l3 // { arity: 3 }
+    Return // { arity: 1 }
+      Union // { arity: 1 }
+        Get l7 // { arity: 1 }
+        Map (null) // { arity: 1 }
+          Union // { arity: 0 }
+            Negate // { arity: 0 }
+              Project () // { arity: 0 }
+                Get l7 // { arity: 1 }
+            Constant // { arity: 0 }
+              - ()
 
 Source materialize.public.input
 
@@ -397,7 +404,8 @@ SELECT * FROM part2;
 105
 
 query T multiline
-EXPLAIN WITH MUTUALLY RECURSIVE (RETURN AT RECURSION LIMIT 142)
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, arity, join implementations) AS VERBOSE TEXT FOR
+WITH MUTUALLY RECURSIVE (RETURN AT RECURSION LIMIT 142)
 
     lines(r INT, line TEXT) AS (
         SELECT r, regexp_split_to_array(input, '\n')[r] as block
@@ -568,227 +576,239 @@ EXPLAIN WITH MUTUALLY RECURSIVE (RETURN AT RECURSION LIMIT 142)
 SELECT * FROM part2;
 ----
 Explained Query:
-  With Mutually Recursive
+  With
     cte l0 =
-      Project (#1, #2)
-        Map (array_index(regexp_split_to_array["\n", case_insensitive=false](#0), integer_to_bigint(#1)))
-          FlatMap generate_series(1, (regexp_split_to_array["\n", case_insensitive=false](#0) array_length 1), 1)
-            ReadStorage materialize.public.input
+      Project (#1, #2) // { arity: 2 }
+        Map (array_index(regexp_split_to_array["\n", case_insensitive=false](#0{input}), integer_to_bigint(#1{r}))) // { arity: 3 }
+          FlatMap generate_series(1, (regexp_split_to_array["\n", case_insensitive=false](#0{input}) array_length 1), 1) // { arity: 2 }
+            ReadStorage materialize.public.input // { arity: 1 }
     cte l1 =
-      Project (#0, #2, #3)
-        Map (substr(#1, #2, 1))
-          FlatMap generate_series(1, char_length(#1), 1)
-            Get l0
-    cte [recursion_limit=142, return_at_limit] l2 =
-      Threshold
-        Union
-          Get l18
-          Get l1
-          Negate
-            Get l22
-    cte l6 =
-      With Mutually Recursive
-        cte l3 =
-          Threshold
-            Union
-              Threshold
-                Union
-                  Threshold
-                    Union
-                      Get l3
-                      Project (#2, #1, #3)
-                        Map ((#0 - 1), "O")
-                          Get l4
-                      Negate
-                        Project (#2, #1, #3)
-                          Map ((#0 - 1), ".")
-                            Get l4
-                  Map (".")
-                    Get l4
-                  Negate
-                    Map ("O")
-                      Get l4
-              Get l2
-              Negate
-                Get l5
-        cte l4 =
-          Project (#0, #1)
-            Join on=(#0 = (#2 + 1) AND #1 = #3) type=differential
-              ArrangeBy keys=[[#1, #0]]
-                Project (#0, #1)
-                  Filter (#2 = "O")
-                    Get l3
-              ArrangeBy keys=[[#1, (#0 + 1)]]
-                Project (#0, #1)
-                  Filter (#2 = ".")
-                    Get l3
-        cte l5 =
-          Get l2
-      Return
-        Get l3
-    cte l10 =
-      With Mutually Recursive
-        cte l7 =
-          Threshold
-            Union
-              Threshold
-                Union
-                  Threshold
-                    Union
-                      Get l7
-                      Project (#0, #2, #3)
-                        Map ((#1 - 1), "O")
-                          Get l8
-                      Negate
-                        Project (#0, #2, #3)
-                          Map ((#1 - 1), ".")
-                            Get l8
-                  Map (".")
-                    Get l8
-                  Negate
-                    Map ("O")
-                      Get l8
-              Get l6
-              Negate
-                Get l9
-        cte l8 =
-          Project (#0, #1)
-            Join on=(#0 = #2 AND #1 = (#3 + 1)) type=differential
-              ArrangeBy keys=[[#0, #1]]
-                Project (#0, #1)
-                  Filter (#2 = "O")
-                    Get l7
-              ArrangeBy keys=[[#0, (#1 + 1)]]
-                Project (#0, #1)
-                  Filter (#2 = ".")
-                    Get l7
-        cte l9 =
-          Get l6
-      Return
-        Get l7
-    cte l14 =
-      With Mutually Recursive
-        cte l11 =
-          Threshold
-            Union
-              Threshold
-                Union
-                  Threshold
-                    Union
-                      Get l11
-                      Project (#2, #1, #3)
-                        Map ((#0 + 1), "O")
-                          Get l12
-                      Negate
-                        Project (#2, #1, #3)
-                          Map ((#0 + 1), ".")
-                            Get l12
-                  Map (".")
-                    Get l12
-                  Negate
-                    Map ("O")
-                      Get l12
-              Get l10
-              Negate
-                Get l13
-        cte l12 =
-          Project (#0, #1)
-            Join on=(#0 = (#2 - 1) AND #1 = #3) type=differential
-              ArrangeBy keys=[[#1, #0]]
-                Project (#0, #1)
-                  Filter (#2 = "O")
-                    Get l11
-              ArrangeBy keys=[[#1, (#0 - 1)]]
-                Project (#0, #1)
-                  Filter (#2 = ".")
-                    Get l11
-        cte l13 =
-          Get l10
-      Return
-        Get l11
-    cte [recursion_limit=142, return_at_limit] l18 =
-      With Mutually Recursive
-        cte l15 =
-          Threshold
-            Union
-              Threshold
-                Union
-                  Threshold
-                    Union
-                      Get l15
-                      Project (#0, #2, #3)
-                        Map ((#1 + 1), "O")
-                          Get l16
-                      Negate
-                        Project (#0, #2, #3)
-                          Map ((#1 + 1), ".")
-                            Get l16
-                  Map (".")
-                    Get l16
-                  Negate
-                    Map ("O")
-                      Get l16
-              Get l14
-              Negate
-                Get l17
-        cte l16 =
-          Project (#0, #1)
-            Join on=(#0 = #2 AND #1 = (#3 - 1)) type=differential
-              ArrangeBy keys=[[#0, #1]]
-                Project (#0, #1)
-                  Filter (#2 = "O")
-                    Get l15
-              ArrangeBy keys=[[#0, (#1 - 1)]]
-                Project (#0, #1)
-                  Filter (#2 = ".")
-                    Get l15
-        cte l17 =
-          Get l14
-      Return
-        Get l15
-    cte l19 =
-      Reduce aggregates=[max(#0)]
-        Project (#0)
-          Get l0
-    cte l20 =
-      Union
-        Get l19
-        Map (null)
-          Union
-            Negate
-              Project ()
-                Get l19
-            Constant
+      Reduce aggregates=[max(#0{r})] // { arity: 1 }
+        Project (#0) // { arity: 1 }
+          Get l0 // { arity: 2 }
+    cte l2 =
+      Union // { arity: 1 }
+        Get l1 // { arity: 1 }
+        Map (null) // { arity: 1 }
+          Union // { arity: 0 }
+            Negate // { arity: 0 }
+              Project () // { arity: 0 }
+                Get l1 // { arity: 1 }
+            Constant // { arity: 0 }
               - ()
-    cte l21 =
-      Reduce aggregates=[sum(((1 + #1) - #0))]
-        CrossJoin type=differential
-          ArrangeBy keys=[[]]
-            Project (#0)
-              Filter (#2 = "O")
-                Get l18
-          ArrangeBy keys=[[]]
-            Union
-              Get l20
-              Map (null)
-                Union
-                  Negate
-                    Project ()
-                      Get l20
-                  Constant
-                    - ()
-    cte [recursion_limit=142, return_at_limit] l22 =
-      Get l1
-  Return
-    Union
-      Get l21
-      Map (null)
-        Union
-          Negate
-            Project ()
-              Get l21
-          Constant
-            - ()
+    cte l3 =
+      Project (#0, #2, #3) // { arity: 3 }
+        Map (substr(#1{line}, #2{c}, 1)) // { arity: 4 }
+          FlatMap generate_series(1, char_length(#1{line}), 1) // { arity: 3 }
+            Get l0 // { arity: 2 }
+  Return // { arity: 1 }
+    With Mutually Recursive
+      cte [recursion_limit=142, return_at_limit] l4 =
+        Threshold // { arity: 3 }
+          Union // { arity: 3 }
+            Get l20 // { arity: 3 }
+            Get l3 // { arity: 3 }
+            Negate // { arity: 3 }
+              Get l22 // { arity: 3 }
+      cte l8 =
+        With Mutually Recursive
+          cte l5 =
+            Threshold // { arity: 3 }
+              Union // { arity: 3 }
+                Threshold // { arity: 3 }
+                  Union // { arity: 3 }
+                    Threshold // { arity: 3 }
+                      Union // { arity: 3 }
+                        Get l5 // { arity: 3 }
+                        Project (#2, #1, #3) // { arity: 3 }
+                          Map ((#0{r} - 1), "O") // { arity: 4 }
+                            Get l6 // { arity: 2 }
+                        Negate // { arity: 3 }
+                          Project (#2, #1, #3) // { arity: 3 }
+                            Map ((#0{r} - 1), ".") // { arity: 4 }
+                              Get l6 // { arity: 2 }
+                    Map (".") // { arity: 3 }
+                      Get l6 // { arity: 2 }
+                    Negate // { arity: 3 }
+                      Map ("O") // { arity: 3 }
+                        Get l6 // { arity: 2 }
+                Get l4 // { arity: 3 }
+                Negate // { arity: 3 }
+                  Get l7 // { arity: 3 }
+          cte l6 =
+            Project (#0, #1) // { arity: 2 }
+              Join on=(#0{r} = (#2{r} + 1) AND #1{c} = #3{c}) type=differential // { arity: 4 }
+                implementation
+                  %0:l5[#1{c}, #0{r}]KKef » %1:l5[#1{c}, (#0{r} + 1)]KKef
+                ArrangeBy keys=[[#1{c}, #0{r}]] // { arity: 2 }
+                  Project (#0, #1) // { arity: 2 }
+                    Filter (#2{symbol} = "O") // { arity: 3 }
+                      Get l5 // { arity: 3 }
+                ArrangeBy keys=[[#1{c}, (#0{r} + 1)]] // { arity: 2 }
+                  Project (#0, #1) // { arity: 2 }
+                    Filter (#2{symbol} = ".") // { arity: 3 }
+                      Get l5 // { arity: 3 }
+          cte l7 =
+            Get l4 // { arity: 3 }
+        Return // { arity: 3 }
+          Get l5 // { arity: 3 }
+      cte l12 =
+        With Mutually Recursive
+          cte l9 =
+            Threshold // { arity: 3 }
+              Union // { arity: 3 }
+                Threshold // { arity: 3 }
+                  Union // { arity: 3 }
+                    Threshold // { arity: 3 }
+                      Union // { arity: 3 }
+                        Get l9 // { arity: 3 }
+                        Project (#0, #2, #3) // { arity: 3 }
+                          Map ((#1{c} - 1), "O") // { arity: 4 }
+                            Get l10 // { arity: 2 }
+                        Negate // { arity: 3 }
+                          Project (#0, #2, #3) // { arity: 3 }
+                            Map ((#1{c} - 1), ".") // { arity: 4 }
+                              Get l10 // { arity: 2 }
+                    Map (".") // { arity: 3 }
+                      Get l10 // { arity: 2 }
+                    Negate // { arity: 3 }
+                      Map ("O") // { arity: 3 }
+                        Get l10 // { arity: 2 }
+                Get l8 // { arity: 3 }
+                Negate // { arity: 3 }
+                  Get l11 // { arity: 3 }
+          cte l10 =
+            Project (#0, #1) // { arity: 2 }
+              Join on=(#0{r} = #2{r} AND #1{c} = (#3{c} + 1)) type=differential // { arity: 4 }
+                implementation
+                  %0:l9[#0{r}, #1{c}]KKef » %1:l9[#0{r}, (#1{c} + 1)]KKef
+                ArrangeBy keys=[[#0{r}, #1{c}]] // { arity: 2 }
+                  Project (#0, #1) // { arity: 2 }
+                    Filter (#2{symbol} = "O") // { arity: 3 }
+                      Get l9 // { arity: 3 }
+                ArrangeBy keys=[[#0{r}, (#1{c} + 1)]] // { arity: 2 }
+                  Project (#0, #1) // { arity: 2 }
+                    Filter (#2{symbol} = ".") // { arity: 3 }
+                      Get l9 // { arity: 3 }
+          cte l11 =
+            Get l8 // { arity: 3 }
+        Return // { arity: 3 }
+          Get l9 // { arity: 3 }
+      cte l16 =
+        With Mutually Recursive
+          cte l13 =
+            Threshold // { arity: 3 }
+              Union // { arity: 3 }
+                Threshold // { arity: 3 }
+                  Union // { arity: 3 }
+                    Threshold // { arity: 3 }
+                      Union // { arity: 3 }
+                        Get l13 // { arity: 3 }
+                        Project (#2, #1, #3) // { arity: 3 }
+                          Map ((#0{r} + 1), "O") // { arity: 4 }
+                            Get l14 // { arity: 2 }
+                        Negate // { arity: 3 }
+                          Project (#2, #1, #3) // { arity: 3 }
+                            Map ((#0{r} + 1), ".") // { arity: 4 }
+                              Get l14 // { arity: 2 }
+                    Map (".") // { arity: 3 }
+                      Get l14 // { arity: 2 }
+                    Negate // { arity: 3 }
+                      Map ("O") // { arity: 3 }
+                        Get l14 // { arity: 2 }
+                Get l12 // { arity: 3 }
+                Negate // { arity: 3 }
+                  Get l15 // { arity: 3 }
+          cte l14 =
+            Project (#0, #1) // { arity: 2 }
+              Join on=(#0{r} = (#2{r} - 1) AND #1{c} = #3{c}) type=differential // { arity: 4 }
+                implementation
+                  %0:l13[#1{c}, #0{r}]KKef » %1:l13[#1{c}, (#0{r} - 1)]KKef
+                ArrangeBy keys=[[#1{c}, #0{r}]] // { arity: 2 }
+                  Project (#0, #1) // { arity: 2 }
+                    Filter (#2{symbol} = "O") // { arity: 3 }
+                      Get l13 // { arity: 3 }
+                ArrangeBy keys=[[#1{c}, (#0{r} - 1)]] // { arity: 2 }
+                  Project (#0, #1) // { arity: 2 }
+                    Filter (#2{symbol} = ".") // { arity: 3 }
+                      Get l13 // { arity: 3 }
+          cte l15 =
+            Get l12 // { arity: 3 }
+        Return // { arity: 3 }
+          Get l13 // { arity: 3 }
+      cte [recursion_limit=142, return_at_limit] l20 =
+        With Mutually Recursive
+          cte l17 =
+            Threshold // { arity: 3 }
+              Union // { arity: 3 }
+                Threshold // { arity: 3 }
+                  Union // { arity: 3 }
+                    Threshold // { arity: 3 }
+                      Union // { arity: 3 }
+                        Get l17 // { arity: 3 }
+                        Project (#0, #2, #3) // { arity: 3 }
+                          Map ((#1{c} + 1), "O") // { arity: 4 }
+                            Get l18 // { arity: 2 }
+                        Negate // { arity: 3 }
+                          Project (#0, #2, #3) // { arity: 3 }
+                            Map ((#1{c} + 1), ".") // { arity: 4 }
+                              Get l18 // { arity: 2 }
+                    Map (".") // { arity: 3 }
+                      Get l18 // { arity: 2 }
+                    Negate // { arity: 3 }
+                      Map ("O") // { arity: 3 }
+                        Get l18 // { arity: 2 }
+                Get l16 // { arity: 3 }
+                Negate // { arity: 3 }
+                  Get l19 // { arity: 3 }
+          cte l18 =
+            Project (#0, #1) // { arity: 2 }
+              Join on=(#0{r} = #2{r} AND #1{c} = (#3{c} - 1)) type=differential // { arity: 4 }
+                implementation
+                  %0:l17[#0{r}, #1{c}]KKef » %1:l17[#0{r}, (#1{c} - 1)]KKef
+                ArrangeBy keys=[[#0{r}, #1{c}]] // { arity: 2 }
+                  Project (#0, #1) // { arity: 2 }
+                    Filter (#2{symbol} = "O") // { arity: 3 }
+                      Get l17 // { arity: 3 }
+                ArrangeBy keys=[[#0{r}, (#1{c} - 1)]] // { arity: 2 }
+                  Project (#0, #1) // { arity: 2 }
+                    Filter (#2{symbol} = ".") // { arity: 3 }
+                      Get l17 // { arity: 3 }
+          cte l19 =
+            Get l16 // { arity: 3 }
+        Return // { arity: 3 }
+          Get l17 // { arity: 3 }
+      cte l21 =
+        Reduce aggregates=[sum(((1 + #1{max}) - #0{r}))] // { arity: 1 }
+          CrossJoin type=differential // { arity: 2 }
+            implementation
+              %1[×]U » %0:l20[×]ef
+            ArrangeBy keys=[[]] // { arity: 1 }
+              Project (#0) // { arity: 1 }
+                Filter (#2{symbol} = "O") // { arity: 3 }
+                  Get l20 // { arity: 3 }
+            ArrangeBy keys=[[]] // { arity: 1 }
+              Union // { arity: 1 }
+                Get l2 // { arity: 1 }
+                Map (null) // { arity: 1 }
+                  Union // { arity: 0 }
+                    Negate // { arity: 0 }
+                      Project () // { arity: 0 }
+                        Get l2 // { arity: 1 }
+                    Constant // { arity: 0 }
+                      - ()
+      cte [recursion_limit=142, return_at_limit] l22 =
+        Get l3 // { arity: 3 }
+    Return // { arity: 1 }
+      Union // { arity: 1 }
+        Get l21 // { arity: 1 }
+        Map (null) // { arity: 1 }
+          Union // { arity: 0 }
+            Negate // { arity: 0 }
+              Project () // { arity: 0 }
+                Get l21 // { arity: 1 }
+            Constant // { arity: 0 }
+              - ()
 
 Source materialize.public.input
 

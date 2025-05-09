@@ -154,7 +154,7 @@ impl RustType<ProtoDurableCollectionMetadata> for DurableCollectionMetadata {
 pub enum StorageError<T> {
     /// The source identifier was re-created after having been dropped,
     /// or installed with a different description.
-    SourceIdReused(GlobalId),
+    CollectionIdReused(GlobalId),
     /// The sink identifier was re-created after having been dropped, or
     /// installed with a different description.
     SinkIdReused(GlobalId),
@@ -228,7 +228,7 @@ pub enum StorageError<T> {
 impl<T: Debug + Display + 'static> Error for StorageError<T> {
     fn source(&self) -> Option<&(dyn Error + 'static)> {
         match self {
-            Self::SourceIdReused(_) => None,
+            Self::CollectionIdReused(_) => None,
             Self::SinkIdReused(_) => None,
             Self::IdentifierMissing(_) => None,
             Self::IdentifierInvalid(_) => None,
@@ -260,7 +260,7 @@ impl<T: fmt::Display + 'static> fmt::Display for StorageError<T> {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         f.write_str("storage error: ")?;
         match self {
-            Self::SourceIdReused(id) => write!(
+            Self::CollectionIdReused(id) => write!(
                 f,
                 "source identifier was re-created after having been dropped: {id}"
             ),
@@ -324,7 +324,10 @@ impl<T: fmt::Display + 'static> fmt::Display for StorageError<T> {
                 shard_id,
                 ..
             } => {
-                write!(f, "persist raced when trying to evolve the schema of a shard: {global_id}, {shard_id}")
+                write!(
+                    f,
+                    "persist raced when trying to evolve the schema of a shard: {global_id}, {shard_id}"
+                )
             }
             Self::PersistInvalidSchemaEvolve {
                 global_id,
@@ -347,7 +350,10 @@ impl<T: fmt::Display + 'static> fmt::Display for StorageError<T> {
                 reference
             ),
             Self::RtrTimeout(_) => {
-                write!(f, "timed out before ingesting the source's visible frontier when real-time-recency query issued")
+                write!(
+                    f,
+                    "timed out before ingesting the source's visible frontier when real-time-recency query issued"
+                )
             }
             Self::RtrDropFailure(_) => write!(
                 f,

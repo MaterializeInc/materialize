@@ -299,6 +299,19 @@ impl<T: ConfigType> ConfigValHandle<T> {
     pub fn get(&self) -> T {
         T::from_val(self.val.load())
     }
+
+    /// Return a new handle that returns the constant value provided,
+    /// generally for testing.
+    pub fn disconnected<X>(value: X) -> Self
+    where
+        X: ConfigDefault<ConfigType = T>,
+    {
+        let config_val: ConfigVal = value.into_config_type().into();
+        Self {
+            val: config_val.into(),
+            _type: Default::default(),
+        }
+    }
 }
 
 /// A type-erased configuration value for when set of different types are stored
@@ -476,7 +489,7 @@ mod impls {
     use mz_proto::{ProtoType, RustType, TryFromProtoError};
 
     use crate::{
-        proto_config_val, ConfigDefault, ConfigSet, ConfigType, ConfigVal, ProtoOptionU64,
+        ConfigDefault, ConfigSet, ConfigType, ConfigVal, ProtoOptionU64, proto_config_val,
     };
 
     impl ConfigType for bool {
@@ -682,7 +695,7 @@ mod impls {
                 None => {
                     return Err(TryFromProtoError::unknown_enum_variant(
                         "ProtoConfigVal::Val",
-                    ))
+                    ));
                 }
             };
             Ok(val)

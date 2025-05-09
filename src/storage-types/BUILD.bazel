@@ -10,7 +10,7 @@
 # by the Apache License, Version 2.0.
 
 load("@crates_io//:defs.bzl", "aliases", "all_crate_deps")
-load("@rules_rust//cargo:defs.bzl", "cargo_build_script")
+load("@rules_rust//cargo:defs.bzl", "cargo_build_script", "extract_cargo_lints")
 load("@rules_rust//rust:defs.bzl", "rust_doc_test", "rust_library", "rust_test")
 
 package(default_visibility = ["//visibility:public"])
@@ -25,6 +25,7 @@ rust_library(
     compile_data = [],
     crate_features = ["default"],
     data = [],
+    lint_config = ":lints",
     proc_macro_deps = [] + all_crate_deps(proc_macro = True),
     rustc_env = {},
     rustc_flags = [],
@@ -49,6 +50,7 @@ rust_library(
         "//src/secrets:mz_secrets",
         "//src/service:mz_service",
         "//src/sql-parser:mz_sql_parser",
+        "//src/sql-server-util:mz_sql_server_util",
         "//src/ssh-util:mz_ssh_util",
         "//src/timely-util:mz_timely_util",
         "//src/tls-util:mz_tls_util",
@@ -75,6 +77,7 @@ rust_test(
     crate_features = ["default"],
     data = [] + glob(["src/snapshots/**"]),
     env = {"INSTA_WORKSPACE_ROOT": "."},
+    lint_config = ":lints",
     proc_macro_deps = [] + all_crate_deps(
         proc_macro = True,
         proc_macro_dev = True,
@@ -102,6 +105,7 @@ rust_test(
         "//src/secrets:mz_secrets",
         "//src/service:mz_service",
         "//src/sql-parser:mz_sql_parser",
+        "//src/sql-server-util:mz_sql_server_util",
         "//src/ssh-util:mz_ssh_util",
         "//src/timely-util:mz_timely_util",
         "//src/tls-util:mz_tls_util",
@@ -135,6 +139,7 @@ rust_doc_test(
         "//src/secrets:mz_secrets",
         "//src/service:mz_service",
         "//src/sql-parser:mz_sql_parser",
+        "//src/sql-server-util:mz_sql_server_util",
         "//src/ssh-util:mz_ssh_util",
         "//src/timely-util:mz_timely_util",
         "//src/tls-util:mz_tls_util",
@@ -155,6 +160,7 @@ filegroup(
         "src/controller.proto",
         "src/errors.proto",
         "src/instances.proto",
+        "src/oneshot_sources.proto",
         "src/parameters.proto",
         "src/sinks.proto",
         "src/sources.proto",
@@ -164,6 +170,7 @@ filegroup(
         "src/sources/load_generator.proto",
         "src/sources/mysql.proto",
         "src/sources/postgres.proto",
+        "src/sources/sql_server.proto",
         "src/time_dependence.proto",
         "//src/dyncfg:all_protos",
         "//src/expr:all_protos",
@@ -174,6 +181,7 @@ filegroup(
         "//src/repr:all_protos",
         "//src/rocksdb-types:all_protos",
         "//src/service:all_protos",
+        "//src/sql-server-util:all_protos",
         "//src/tracing:all_protos",
     ],
 )
@@ -188,4 +196,10 @@ cargo_build_script(
     rustc_env = {},
     rustc_flags = [],
     deps = ["//src/build-tools:mz_build_tools"] + all_crate_deps(build = True),
+)
+
+extract_cargo_lints(
+    name = "lints",
+    manifest = "Cargo.toml",
+    workspace = "@//:Cargo.toml",
 )

@@ -21,10 +21,10 @@ use mz_environmentd::test_util::{self, PostgresErrorExt};
 use mz_ore::retry::Retry;
 use mz_ore::{assert_err, assert_ok};
 use mz_pgrepr::{Numeric, Record};
+use postgres::SimpleQueryMessage;
 use postgres::binary_copy::BinaryCopyOutIter;
 use postgres::error::SqlState;
 use postgres::types::Type;
-use postgres::SimpleQueryMessage;
 use postgres_array::{Array, Dimension};
 use tokio::sync::mpsc;
 
@@ -44,14 +44,19 @@ fn test_bind_params() {
         ),
     }
 
-    assert!(client
-        .query_one("SELECT ROW(1, 2) = ROW(1, $1)", &[&2_i32])
-        .unwrap()
-        .get::<_, bool>(0));
+    assert!(
+        client
+            .query_one("SELECT ROW(1, 2) = ROW(1, $1)", &[&2_i32])
+            .unwrap()
+            .get::<_, bool>(0)
+    );
 
     // Just ensure it does not panic (see database-issues#871).
     client
-        .query("EXPLAIN PLAN FOR SELECT $1::int", &[&42_i32])
+        .query(
+            "EXPLAIN OPTIMIZED PLAN AS VERBOSE TEXT FOR SELECT $1::int",
+            &[&42_i32],
+        )
         .unwrap();
 
     // Ensure that a type hint provided by the client is respected.
@@ -73,7 +78,7 @@ fn test_bind_params() {
     // Ensure that the fractional component of a decimal is not lost.
     {
         let mut num = Numeric::from(mz_repr::adt::numeric::Numeric::from(123));
-        num.0 .0.set_exponent(-2);
+        num.0.0.set_exponent(-2);
         let stmt = client
             .prepare_typed("SELECT $1 + 2.34", &[Type::NUMERIC])
             .unwrap();
@@ -93,6 +98,21 @@ fn test_bind_params() {
             .map(|r| r.get(0))
             .collect::<Vec<i32>>();
         assert_eq!(vals, &[1, 2]);
+    }
+
+    // Ensure that parameters in a `SELECT .. OFFSET` clause are supported.
+    // See also in `order_by.slt`.
+    {
+        let stmt = client
+            .prepare("SELECT generate_series(1, 5) OFFSET $1")
+            .unwrap();
+        let vals = client
+            .query(&stmt, &[&2_i64])
+            .unwrap()
+            .iter()
+            .map(|r| r.get(0))
+            .collect::<Vec<i32>>();
+        assert_eq!(vals, &[3, 4, 5]);
     }
 
     // Ensure that parameters in a `VALUES .. LIMIT` clause are supported.

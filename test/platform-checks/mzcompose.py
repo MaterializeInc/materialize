@@ -20,14 +20,15 @@ from materialize import buildkite
 from materialize.checks.all_checks import *  # noqa: F401 F403
 from materialize.checks.checks import Check
 from materialize.checks.executors import MzcomposeExecutor, MzcomposeExecutorParallel
+from materialize.checks.features import Features
 from materialize.checks.scenarios import *  # noqa: F401 F403
 from materialize.checks.scenarios import Scenario, SystemVarChange
 from materialize.checks.scenarios_backup_restore import *  # noqa: F401 F403
 from materialize.checks.scenarios_upgrade import *  # noqa: F401 F403
 from materialize.checks.scenarios_zero_downtime import *  # noqa: F401 F403
 from materialize.mzcompose.composition import Composition, WorkflowArgumentParser
+from materialize.mzcompose.services.azure import Azurite
 from materialize.mzcompose.services.clusterd import Clusterd
-from materialize.mzcompose.services.cockroach import Cockroach
 from materialize.mzcompose.services.debezium import Debezium
 from materialize.mzcompose.services.kafka import Kafka
 from materialize.mzcompose.services.materialized import Materialized
@@ -35,9 +36,11 @@ from materialize.mzcompose.services.minio import Mc, Minio
 from materialize.mzcompose.services.mysql import MySql
 from materialize.mzcompose.services.persistcli import Persistcli
 from materialize.mzcompose.services.postgres import (
+    CockroachOrPostgresMetadata,
     Postgres,
 )
 from materialize.mzcompose.services.schema_registry import SchemaRegistry
+from materialize.mzcompose.services.sql_server import SqlServer
 from materialize.mzcompose.services.ssh_bastion_host import SshBastionHost
 from materialize.mzcompose.services.test_certs import TestCerts
 from materialize.mzcompose.services.testdrive import Testdrive as TestdriveService
@@ -48,34 +51,52 @@ TESTDRIVE_DEFAULT_TIMEOUT = os.environ.get("PLATFORM_CHECKS_TD_TIMEOUT", "300s")
 
 
 def create_mzs(
-    additional_system_parameter_defaults: dict[str, str] | None = None
-) -> list[Materialized]:
+    azurite: bool,
+    default_replication_factor: int,
+    additional_system_parameter_defaults: dict[str, str] | None = None,
+) -> list[TestdriveService | Materialized]:
     return [
         Materialized(
             name=mz_name,
             external_metadata_store=True,
-            external_minio=True,
+            external_blob_store=True,
+            blob_store_is_azure=azurite,
             sanity_restart=False,
             volumes_extra=["secrets:/share/secrets"],
-            metadata_store="cockroach",
             additional_system_parameter_defaults=additional_system_parameter_defaults,
+            default_replication_factor=default_replication_factor,
         )
         for mz_name in ["materialized", "mz_1", "mz_2", "mz_3", "mz_4", "mz_5"]
+    ] + [
+        TestdriveService(
+            default_timeout=TESTDRIVE_DEFAULT_TIMEOUT,
+            materialize_params={"statement_timeout": f"'{TESTDRIVE_DEFAULT_TIMEOUT}'"},
+            external_blob_store=True,
+            blob_store_is_azure=azurite,
+            no_reset=True,
+            seed=1,
+            entrypoint_extra=[
+                "--var=replicas=1",
+                f"--var=default-replica-size={Materialized.Size.DEFAULT_SIZE}-{Materialized.Size.DEFAULT_SIZE}",
+                f"--var=default-storage-size={Materialized.Size.DEFAULT_SIZE}-1",
+            ],
+            volumes_extra=["secrets:/share/secrets"],
+        )
     ]
 
 
 SERVICES = [
     TestCerts(),
-    # TODO(def-): Switch to CockroachOrPostgres after we have 4 versions
-    # support Postgres as metadata store
-    Cockroach(
+    CockroachOrPostgresMetadata(
         # Workaround for database-issues#5899
         restart="on-failure:5",
     ),
     Minio(setup_materialize=True, additional_directories=["copytos3"]),
+    Azurite(),
     Mc(),
     Postgres(),
     MySql(),
+    SqlServer(),
     Zookeeper(),
     Kafka(
         auto_create_topics=True,
@@ -117,20 +138,7 @@ SERVICES = [
     Clusterd(
         name="clusterd_compute_1"
     ),  # Started by some Scenarios, defined here only for the teardown
-    *create_mzs(),
-    TestdriveService(
-        default_timeout=TESTDRIVE_DEFAULT_TIMEOUT,
-        materialize_params={"statement_timeout": f"'{TESTDRIVE_DEFAULT_TIMEOUT}'"},
-        no_reset=True,
-        seed=1,
-        entrypoint_extra=[
-            "--var=replicas=1",
-            f"--var=default-replica-size={Materialized.Size.DEFAULT_SIZE}-{Materialized.Size.DEFAULT_SIZE}",
-            f"--var=default-storage-size={Materialized.Size.DEFAULT_SIZE}-1",
-        ],
-        volumes_extra=["secrets:/share/secrets"],
-        metadata_store="cockroach",
-    ),
+    *create_mzs(azurite=False, default_replication_factor=1),
     Persistcli(),
     SshBastionHost(),
 ]
@@ -147,7 +155,6 @@ class ExecutionMode(Enum):
 
 def setup(c: Composition) -> None:
     c.up("testdrive", persistent=True)
-    c.up(c.metadata_store())
 
     c.up(
         "test-certs",
@@ -157,7 +164,6 @@ def setup(c: Composition) -> None:
         "postgres",
         "mysql",
         "debezium",
-        "minio",
         "ssh-bastion-host",
     )
 
@@ -212,7 +218,21 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         help="System parameters to set in Materialize, i.e. what you would set with `ALTER SYSTEM SET`",
     )
 
+    parser.add_argument(
+        "--features",
+        nargs="*",
+        help="A list of features (e.g. azurite, sql_server), to enable.",
+    )
+
+    parser.add_argument(
+        "--default-replication-factor",
+        type=int,
+        default=2,
+        help="Default replication factor for clusters",
+    )
+
     args = parser.parse_args()
+    features = Features(args.features)
 
     if args.scenario:
         assert args.scenario in globals(), f"scenario {args.scenario} does not exist"
@@ -229,6 +249,9 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     else:
         checks = list(all_subclasses(Check))
 
+    if features.sql_server_enabled():
+        c.up("sql-server")
+
     checks.sort(key=lambda ch: ch.__name__)
     checks = buildkite.shard_list(checks, lambda ch: ch.__name__)
     if buildkite.get_parallelism_index() != 0 or buildkite.get_parallelism_count() != 1:
@@ -242,7 +265,13 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         assert len(x) == 2, f"--system-param '{val}' should be the format <key>=<val>"
         additional_system_parameter_defaults[x[0]] = x[1]
 
-    with c.override(*create_mzs(additional_system_parameter_defaults)):
+    with c.override(
+        *create_mzs(
+            features.azurite_enabled(),
+            args.default_replication_factor,
+            additional_system_parameter_defaults,
+        )
+    ):
         executor = MzcomposeExecutor(composition=c)
         for scenario_class in scenarios:
             assert issubclass(
@@ -263,7 +292,10 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
             if execution_mode in [ExecutionMode.SEQUENTIAL, ExecutionMode.PARALLEL]:
                 setup(c)
                 scenario = scenario_class(
-                    checks=checks, executor=executor, seed=args.seed
+                    checks=checks,
+                    executor=executor,
+                    features=features,
+                    seed=args.seed,
                 )
                 scenario.run()
                 teardown(c)
@@ -277,7 +309,10 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
                     )
                     setup(c)
                     scenario = scenario_class(
-                        checks=[check], executor=executor, seed=args.seed
+                        checks=[check],
+                        executor=executor,
+                        features=features,
+                        seed=args.seed,
                     )
                     scenario.run()
                     teardown(c)

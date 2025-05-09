@@ -10,21 +10,26 @@ publish = false
 workspace = true
 
 [dependencies]
-anyhow = "1.0.66"
-async-trait = "0.1.83"
-crossbeam-channel = "0.5.8"
-differential-dataflow = "0.13.3"
-futures = "0.3.25"
+anyhow = "1.0.98"
+async-trait = "0.1.88"
+crossbeam-channel = "0.5.15"
+differential-dataflow = "0.14.2"
+futures = "0.3.31"
+lgalloc = "0.5.0"
 mz-cluster-client = { path = "../cluster-client" }
-mz-ore = { path = "../ore", features = ["async", "process", "tracing_"] }
-mz-persist-client = { path = "../persist-client" }
+mz-ore = { path = "../ore", features = ["async", "process", "tracing"] }
 mz-service = { path = "../service" }
-mz-txn-wal = { path = "../txn-wal" }
-regex = "1.7.0"
-timely = "0.16.0"
-tokio = { version = "1.38.0", features = ["fs", "rt", "sync", "net"] }
+rand = "0.8.5"
+regex = "1.11.1"
+timely = "0.20.0"
+tokio = { version = "1.44.1", features = ["fs", "rt", "sync", "net"] }
 tracing = "0.1.37"
 workspace-hack = { version = "0.0.0", path = "../workspace-hack", optional = true }
+
+[dev-dependencies]
+mz-ore = { path = "../ore", features = ["turmoil"] }
+tracing-subscriber = "0.3.19"
+turmoil = "0.6.6"
 
 [package.metadata.cargo-udeps.ignore]
 # only used on linux

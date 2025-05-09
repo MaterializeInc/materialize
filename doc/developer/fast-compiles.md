@@ -43,7 +43,7 @@ you don't use a Debian-based distribution.
 To tell Rust to use mold, set the following environment variable:
 
 ```shell
-export RUSTFLAGS="-C link-arg=-fuse-ld=mold"
+export RUSTFLAGS="-C link-arg=-fuse-ld=mold --cfg tokio_unstable"
 ```
 
 Alternatively, you can configure the linker through a
@@ -61,7 +61,7 @@ rustflags = ["-C", "link-arg=-fuse-ld=mold"]
 The fastest known way to compile is with mold and disabling debug info:
 
 ```shell
-export RUSTFLAGS="-C link-arg=-fuse-ld=mold -C debuginfo=0"
+export RUSTFLAGS="-C link-arg=-fuse-ld=mold -C debuginfo=0 --cfg tokio_unstable"
 ```
 
 Ideally, set that in your `~/.bashrc` or equivalent so that it applies

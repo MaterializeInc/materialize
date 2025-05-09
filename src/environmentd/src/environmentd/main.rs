@@ -15,29 +15,36 @@
 use std::ffi::CStr;
 use std::net::{IpAddr, SocketAddr};
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::sync::LazyLock;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::{Duration, Instant};
 use std::{cmp, env, iter, thread};
 
-use anyhow::{bail, Context};
+use anyhow::{Context, bail};
 use clap::{ArgAction, Parser, ValueEnum};
 use fail::FailScenario;
 use http::header::HeaderValue;
 use ipnet::IpNet;
 use itertools::Itertools;
 use mz_adapter::ResultExt;
+use mz_adapter_types::bootstrap_builtin_cluster_config::{
+    ANALYTICS_CLUSTER_DEFAULT_REPLICATION_FACTOR, BootstrapBuiltinClusterConfig,
+    CATALOG_SERVER_CLUSTER_DEFAULT_REPLICATION_FACTOR, DEFAULT_REPLICATION_FACTOR,
+    PROBE_CLUSTER_DEFAULT_REPLICATION_FACTOR, SUPPORT_CLUSTER_DEFAULT_REPLICATION_FACTOR,
+    SYSTEM_CLUSTER_DEFAULT_REPLICATION_FACTOR,
+};
 use mz_aws_secrets_controller::AwsSecretsController;
 use mz_build_info::BuildInfo;
 use mz_catalog::builtin::{
-    UnsafeBuiltinTableFingerprintWhitespace,
     UNSAFE_DO_NOT_CALL_THIS_IN_PRODUCTION_BUILTIN_TABLE_FINGERPRINT_WHITESPACE,
+    UnsafeBuiltinTableFingerprintWhitespace,
 };
 use mz_catalog::config::ClusterReplicaSizeMap;
 use mz_cloud_resources::{AwsExternalIdPrefix, CloudResourceController};
 use mz_controller::ControllerConfig;
 use mz_frontegg_auth::{Authenticator, FronteggCliArgs};
+use mz_license_keys::{ExpirationBehavior, ValidatedLicenseKey};
 use mz_orchestrator::Orchestrator;
 use mz_orchestrator_kubernetes::{
     KubernetesImagePullPolicy, KubernetesOrchestrator, KubernetesOrchestratorConfig,
@@ -49,16 +56,16 @@ use mz_orchestrator_tracing::{StaticTracingConfig, TracingCliArgs, TracingOrches
 use mz_ore::cli::{self, CliConfig, KeyValueArg};
 use mz_ore::error::ErrorExt;
 use mz_ore::metric;
-use mz_ore::metrics::MetricsRegistry;
+use mz_ore::metrics::{MetricsRegistry, register_runtime_metrics};
 use mz_ore::now::SYSTEM_TIME;
 use mz_ore::task::RuntimeExt;
 use mz_ore::url::SensitiveUrl;
+use mz_persist_client::PersistLocation;
 use mz_persist_client::cache::PersistClientCache;
 use mz_persist_client::cfg::PersistConfig;
 use mz_persist_client::rpc::{
     MetricsSameProcessPubSubSender, PersistGrpcPubSubServer, PubSubClientConnection, PubSubSender,
 };
-use mz_persist_client::PersistLocation;
 use mz_secrets::SecretsController;
 use mz_server_core::TlsCliArgs;
 use mz_service::emit_boot_diagnostics;
@@ -67,12 +74,12 @@ use mz_sql::catalog::EnvironmentId;
 use mz_storage_types::connections::ConnectionContext;
 use opentelemetry::trace::TraceContextExt;
 use prometheus::IntGauge;
-use tracing::{error, info, info_span, Instrument};
+use tracing::{Instrument, error, info, info_span, warn};
 use tracing_opentelemetry::OpenTelemetrySpanExt;
 use url::Url;
 
 use crate::environmentd::sys;
-use crate::{CatalogConfig, Listeners, ListenersConfig, BUILD_INFO};
+use crate::{BUILD_INFO, CatalogConfig, Listeners, ListenersConfig};
 
 static VERSION: LazyLock<String> = LazyLock::new(|| BUILD_INFO.human_version(None));
 static LONG_VERSION: LazyLock<String> = LazyLock::new(|| {
@@ -203,7 +210,14 @@ pub struct Args {
     /// Frontegg arguments.
     #[clap(flatten)]
     frontegg: FronteggCliArgs,
-
+    // TODO(auth): we probably want to consolidate all these auth options
+    // into something cleaner.
+    /// Self hosted auth
+    #[clap(long, env = "ENABLE_SELF_HOSTED_AUTH")]
+    enable_self_hosted_auth: bool,
+    /// Self hosted auth over internal port
+    #[clap(long, env = "ENABLE_SELF_HOSTED_AUTH_INTERNAL")]
+    enable_self_hosted_auth_internal: bool,
     // === Orchestrator options. ===
     /// The service orchestrator implementation to use.
     #[structopt(long, value_enum, env = "ORCHESTRATOR")]
@@ -219,6 +233,14 @@ pub struct Args {
     /// orchestrator in the form `KEY=VALUE`.
     #[structopt(long, env = "ORCHESTRATOR_KUBERNETES_SERVICE_NODE_SELECTOR")]
     orchestrator_kubernetes_service_node_selector: Vec<KeyValueArg<String, String>>,
+    /// Affinity to apply to all services created by the Kubernetes
+    /// orchestrator as a JSON string.
+    #[structopt(long, env = "ORCHESTRATOR_KUBERNETES_SERVICE_AFFINITY")]
+    orchestrator_kubernetes_service_affinity: Option<String>,
+    /// Tolerations to apply to all services created by the Kubernetes
+    /// orchestrator as a JSON string.
+    #[structopt(long, env = "ORCHESTRATOR_KUBERNETES_SERVICE_TOLERATIONS")]
+    orchestrator_kubernetes_service_tolerations: Option<String>,
     /// The name of a service account to apply to all services created by the
     /// Kubernetes orchestrator.
     #[structopt(long, env = "ORCHESTRATOR_KUBERNETES_SERVICE_ACCOUNT")]
@@ -544,6 +566,53 @@ pub struct Args {
         default_value = "1"
     )]
     bootstrap_builtin_analytics_cluster_replica_size: String,
+    #[clap(
+        long,
+        env = "BOOTSTRAP_DEFAULT_CLUSTER_REPLICATION_FACTOR",
+        default_value = DEFAULT_REPLICATION_FACTOR.to_string(),
+        value_parser = clap::value_parser!(u32).range(0..=2)
+    )]
+    bootstrap_default_cluster_replication_factor: u32,
+    /// The replication factor of the builtin system cluster replicas if bootstrapping.
+    #[clap(
+        long,
+        env = "BOOTSTRAP_BUILTIN_SYSTEM_CLUSTER_REPLICATION_FACTOR",
+        default_value = SYSTEM_CLUSTER_DEFAULT_REPLICATION_FACTOR.to_string(),
+        value_parser = clap::value_parser!(u32).range(0..=2)
+    )]
+    bootstrap_builtin_system_cluster_replication_factor: u32,
+    /// The replication factor of the builtin catalog server cluster replicas if bootstrapping.
+    #[clap(
+        long,
+        env = "BOOTSTRAP_BUILTIN_CATALOG_SERVER_CLUSTER_REPLICATION_FACTOR",
+        default_value = CATALOG_SERVER_CLUSTER_DEFAULT_REPLICATION_FACTOR.to_string(),
+        value_parser = clap::value_parser!(u32).range(0..=2)
+    )]
+    bootstrap_builtin_catalog_server_cluster_replication_factor: u32,
+    /// The replication factor of the builtin probe cluster replicas if bootstrapping.
+    #[clap(
+        long,
+        env = "BOOTSTRAP_BUILTIN_PROBE_CLUSTER_REPLICATION_FACTOR",
+        default_value = PROBE_CLUSTER_DEFAULT_REPLICATION_FACTOR.to_string(),
+        value_parser = clap::value_parser!(u32).range(0..=2)
+    )]
+    bootstrap_builtin_probe_cluster_replication_factor: u32,
+    /// The replication factor of the builtin support cluster replicas if bootstrapping.
+    #[clap(
+        long,
+        env = "BOOTSTRAP_BUILTIN_SUPPORT_CLUSTER_REPLICATION_FACTOR",
+        default_value = SUPPORT_CLUSTER_DEFAULT_REPLICATION_FACTOR.to_string(),
+        value_parser = clap::value_parser!(u32).range(0..=2)
+    )]
+    bootstrap_builtin_support_cluster_replication_factor: u32,
+    /// The replication factor of the builtin analytics cluster replicas if bootstrapping.
+    #[clap(
+        long,
+        env = "BOOTSTRAP_BUILTIN_ANALYTICS_CLUSTER_REPLICATION_FACTOR",
+        default_value = ANALYTICS_CLUSTER_DEFAULT_REPLICATION_FACTOR.to_string(),
+        value_parser = clap::value_parser!(u32).range(0..=2)
+    )]
+    bootstrap_builtin_analytics_cluster_replication_factor: u32,
     /// An list of NAME=VALUE pairs used to override static defaults
     /// for system parameters.
     #[clap(
@@ -553,6 +622,12 @@ pub struct Args {
         value_delimiter = ';'
     )]
     system_parameter_default: Vec<KeyValueArg<String, String>>,
+    /// File containing a valid Materialize license key.
+    #[clap(long, env = "LICENSE_KEY")]
+    license_key: Option<String>,
+    // TODO: temporary until we get the rest of the infrastructure in place
+    #[clap(long, hide = true)]
+    disable_license_key_checks: bool,
 
     // === AWS options. ===
     /// The AWS account ID, which will be used to generate ARNs for
@@ -636,6 +711,34 @@ fn run(mut args: Args) -> Result<(), anyhow::Error> {
     sys::enable_sigusr2_coverage_dump()?;
     sys::enable_termination_signal_cleanup()?;
 
+    let license_key = if args.disable_license_key_checks {
+        ValidatedLicenseKey::disabled()
+    } else if let Some(license_key_file) = args.license_key {
+        let license_key_text = std::fs::read_to_string(&license_key_file)
+            .context("failed to open license key file")?;
+        let license_key = mz_license_keys::validate(
+            license_key_text.trim(),
+            &args.environment_id.organization_id().to_string(),
+        )
+        .context("failed to validate license key file")?;
+        if license_key.expired {
+            let message = format!(
+                "The license key provided at {license_key_file} is expired! Please contact Materialize for assistance."
+            );
+            match license_key.expiration_behavior {
+                ExpirationBehavior::Warn | ExpirationBehavior::DisableClusterCreation => {
+                    warn!("{message}");
+                }
+                ExpirationBehavior::Disable => bail!("{message}"),
+            }
+        }
+        license_key
+    } else if matches!(args.orchestrator, OrchestratorKind::Kubernetes) {
+        bail!("--license-key is required when running in Kubernetes");
+    } else {
+        ValidatedLicenseKey::default()
+    };
+
     // Configure testing options.
     if let Some(fingerprint_whitespace) = args.unsafe_builtin_table_fingerprint_whitespace {
         assert!(args.unsafe_mode);
@@ -655,7 +758,7 @@ fn run(mut args: Args) -> Result<(), anyhow::Error> {
             // length, so pick something shorter.
             .thread_name_fn(|| {
                 static ATOMIC_ID: AtomicUsize = AtomicUsize::new(0);
-                let id = ATOMIC_ID.fetch_add(1, Ordering::SeqCst);
+                let id = ATOMIC_ID.fetch_add(1, Ordering::Relaxed);
                 format!("tokio:work-{}", id)
             })
             .enable_all()
@@ -679,6 +782,7 @@ fn run(mut args: Args) -> Result<(), anyhow::Error> {
         },
         metrics_registry.clone(),
     ))?;
+    register_runtime_metrics("main", runtime.metrics(), &metrics_registry);
 
     let span = tracing::info_span!("environmentd::run").entered();
 
@@ -688,7 +792,10 @@ fn run(mut args: Args) -> Result<(), anyhow::Error> {
     let metrics = Metrics::register_into(&metrics_registry, BUILD_INFO);
 
     runtime.block_on(mz_alloc::register_metrics_into(&metrics_registry));
-    runtime.block_on(mz_metrics::rusage::register_metrics_into(&metrics_registry));
+    runtime.block_on(mz_metrics::register_metrics_into(
+        &metrics_registry,
+        mz_dyncfgs::all_dyncfgs(),
+    ));
 
     // Initialize fail crate for failpoint support
     let _failpoint_scenario = FailScenario::setup();
@@ -743,6 +850,8 @@ fn run(mut args: Args) -> Result<(), anyhow::Error> {
                             .into_iter()
                             .map(|l| (l.key, l.value))
                             .collect(),
+                        service_affinity: args.orchestrator_kubernetes_service_affinity,
+                        service_tolerations: args.orchestrator_kubernetes_service_tolerations,
                         service_account: args.orchestrator_kubernetes_service_account,
                         image_pull_policy: args.orchestrator_kubernetes_image_pull_policy,
                         aws_external_id_prefix: args.aws_external_id_prefix.clone(),
@@ -836,18 +945,16 @@ fn run(mut args: Args) -> Result<(), anyhow::Error> {
                 SecretsControllerKind::Kubernetes => bail!(
                     "SecretsControllerKind::Kubernetes is not compatible with Orchestrator::Process."
                 ),
-                SecretsControllerKind::AwsSecretsManager => {
-                    Arc::new(
-                        runtime.block_on(AwsSecretsController::new(
-                            &aws_secrets_controller_prefix(&args.environment_id),
-                            &aws_secrets_controller_key_alias(&args.environment_id),
-                            args.aws_secrets_controller_tags
-                                .into_iter()
-                                .map(|tag| (tag.key, tag.value))
-                                .collect(),
-                        )),
-                    )
-                }
+                SecretsControllerKind::AwsSecretsManager => Arc::new(
+                    runtime.block_on(AwsSecretsController::new(
+                        &aws_secrets_controller_prefix(&args.environment_id),
+                        &aws_secrets_controller_key_alias(&args.environment_id),
+                        args.aws_secrets_controller_tags
+                            .into_iter()
+                            .map(|tag| (tag.key, tag.value))
+                            .collect(),
+                    )),
+                ),
                 SecretsControllerKind::LocalFile => {
                     let sc = Arc::clone(&orchestrator);
                     let sc: Arc<dyn SecretsController> = sc;
@@ -977,8 +1084,11 @@ fn run(mut args: Args) -> Result<(), anyhow::Error> {
         },
     };
 
-    let cluster_replica_sizes: ClusterReplicaSizeMap =
-        serde_json::from_str(&args.cluster_replica_sizes).context("parsing replica size map")?;
+    let cluster_replica_sizes = ClusterReplicaSizeMap::parse_from_str(
+        &args.cluster_replica_sizes,
+        !license_key.allow_credit_consumption_override,
+    )
+    .context("parsing replica size map")?;
 
     emit_boot_diagnostics!(&BUILD_INFO);
     sys::adjust_rlimits();
@@ -1015,6 +1125,8 @@ fn run(mut args: Args) -> Result<(), anyhow::Error> {
                 egress_addresses: args.announce_egress_address,
                 http_host_name: args.http_host_name,
                 internal_console_redirect_url: args.internal_console_redirect_url,
+                self_hosted_auth: args.enable_self_hosted_auth,
+                self_hosted_auth_internal: args.enable_self_hosted_auth_internal,
                 // Controller options.
                 controller,
                 secrets_controller,
@@ -1041,22 +1153,36 @@ fn run(mut args: Args) -> Result<(), anyhow::Error> {
                 environment_id: args.environment_id,
                 bootstrap_role: args.bootstrap_role,
                 bootstrap_default_cluster_replica_size: args.bootstrap_default_cluster_replica_size,
-                bootstrap_builtin_system_cluster_replica_size: args
-                    .bootstrap_builtin_system_cluster_replica_size,
-                bootstrap_builtin_catalog_server_cluster_replica_size: args
-                    .bootstrap_builtin_catalog_server_cluster_replica_size,
-                bootstrap_builtin_probe_cluster_replica_size: args
-                    .bootstrap_builtin_probe_cluster_replica_size,
-                bootstrap_builtin_support_cluster_replica_size: args
-                    .bootstrap_builtin_support_cluster_replica_size,
-                bootstrap_builtin_analytics_cluster_replica_size: args
-                    .bootstrap_builtin_analytics_cluster_replica_size,
+                bootstrap_default_cluster_replication_factor: args
+                    .bootstrap_default_cluster_replication_factor,
+                bootstrap_builtin_system_cluster_config: BootstrapBuiltinClusterConfig {
+                    size: args.bootstrap_builtin_system_cluster_replica_size,
+                    replication_factor: args.bootstrap_builtin_system_cluster_replication_factor,
+                },
+                bootstrap_builtin_catalog_server_cluster_config: BootstrapBuiltinClusterConfig {
+                    size: args.bootstrap_builtin_catalog_server_cluster_replica_size,
+                    replication_factor: args
+                        .bootstrap_builtin_catalog_server_cluster_replication_factor,
+                },
+                bootstrap_builtin_probe_cluster_config: BootstrapBuiltinClusterConfig {
+                    size: args.bootstrap_builtin_probe_cluster_replica_size,
+                    replication_factor: args.bootstrap_builtin_probe_cluster_replication_factor,
+                },
+                bootstrap_builtin_support_cluster_config: BootstrapBuiltinClusterConfig {
+                    size: args.bootstrap_builtin_support_cluster_replica_size,
+                    replication_factor: args.bootstrap_builtin_support_cluster_replication_factor,
+                },
+                bootstrap_builtin_analytics_cluster_config: BootstrapBuiltinClusterConfig {
+                    size: args.bootstrap_builtin_analytics_cluster_replica_size,
+                    replication_factor: args.bootstrap_builtin_analytics_cluster_replication_factor,
+                },
                 system_parameter_defaults: args
                     .system_parameter_default
                     .into_iter()
                     .map(|kv| (kv.key, kv.value))
                     .collect(),
                 helm_chart_version: args.helm_chart_version.clone(),
+                license_key,
                 // AWS options.
                 aws_account_id: args.aws_account_id,
                 aws_privatelink_availability_zones: args.aws_privatelink_availability_zones,

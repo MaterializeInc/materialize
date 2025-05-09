@@ -379,7 +379,6 @@ Arrange ReduceMinsMaxes
 Arrange ReduceMinsMaxes
 Arrange ReduceMinsMaxes
 Arrange recursive err
-Arrange recursive err
 ArrangeAccumulable [val: empty]
 ArrangeBy[[Column(0)]]
 ArrangeBy[[Column(0)]]
@@ -407,7 +406,6 @@ Arranged MinsMaxesHierarchical input
 Arranged MinsMaxesHierarchical input
 Arranged MinsMaxesHierarchical input
 Arranged MinsMaxesHierarchical input
-Distinct recursive err
 Distinct recursive err
 DistinctBy
 DistinctByErrorCheck
@@ -868,8 +866,8 @@ Arrange ReduceMinsMaxes
 ArrangeAccumulable [val: empty]
 ArrangeAccumulable [val: empty]
 ArrangeAccumulable [val: empty]
-ArrangeBy[[CallBinary { func: ModInt64, expr1: Column(0), expr2: Literal(Ok(Row{[Int64(2)]}), ColumnType { scalar_type: Int64, nullable: false }) }]]
-ArrangeBy[[CallUnary { func: CastInt32ToInt64(CastInt32ToInt64), expr: Column(0) }]]
+ArrangeBy[[CallBinary(ModInt64, Column(0), Literal(Ok(Row{[Int64(2)]}), ColumnType { scalar_type: Int64, nullable: false }))]]
+ArrangeBy[[CallUnary(CastInt32ToInt64(CastInt32ToInt64), Column(0))]]
 ArrangeBy[[Column(0)]]
 ArrangeBy[[Column(0)]]
 ArrangeBy[[Column(0)]]
@@ -954,8 +952,8 @@ SELECT mz_unsafe.mz_sleep(4)
 query T
 SELECT mdo.name FROM mz_introspection.mz_arrangement_sharing mash JOIN mz_introspection.mz_dataflow_operators mdo ON mash.operator_id = mdo.id ORDER BY mdo.name;
 ----
-ArrangeBy[[CallUnary { func: CastStringToVarChar(CastStringToVarChar { length: None, fail_on_len: false }), expr: Column(1) }, CallUnary { func: CastInt64ToString(CastInt64ToString), expr: Column(0) }]]
-ArrangeBy[[CallUnary { func: CastStringToVarChar(CastStringToVarChar { length: None, fail_on_len: false }), expr: Column(1) }, CallUnary { func: CastInt64ToString(CastInt64ToString), expr: Column(0) }]]-errors
+ArrangeBy[[CallUnary(CastStringToVarChar(CastStringToVarChar { length: None, fail_on_len: false }), Column(1)), CallUnary(CastInt64ToString(CastInt64ToString), Column(0))]]
+ArrangeBy[[CallUnary(CastStringToVarChar(CastStringToVarChar { length: None, fail_on_len: false }), Column(1)), CallUnary(CastInt64ToString(CastInt64ToString), Column(0))]]-errors
 ArrangeBy[[Column(0), Column(1)]]
 ArrangeBy[[Column(0), Column(1)]]-errors
 
@@ -980,19 +978,19 @@ WHERE mdod.dataflow_name NOT LIKE '%introspection-subscribe%'
 GROUP BY mdod.name
 ORDER BY mdod.name;
 ----
-AccumulableErrorCheck  9
+AccumulableErrorCheck  10
 Arrange␠ReduceMinsMaxes  3
 Arrange␠export␠iterative  2
 Arrange␠export␠iterative␠err  2
-Arrange␠recursive␠err  4
-ArrangeAccumulable␠[val:␠empty]  9
-ArrangeBy[[CallBinary␠{␠func:␠JsonbGetString␠{␠stringify:␠true␠},␠expr1:␠Column(1),␠expr2:␠Literal(Ok(Row{[String("id")]}),␠ColumnType␠{␠scalar_type:␠String,␠nullable:␠false␠})␠}]]  2
-ArrangeBy[[CallBinary␠{␠func:␠JsonbGetString␠{␠stringify:␠true␠},␠expr1:␠Column(2),␠expr2:␠Literal(Ok(Row{[String("id")]}),␠ColumnType␠{␠scalar_type:␠String,␠nullable:␠false␠})␠}]]  1
-ArrangeBy[[CallVariadic␠{␠func:␠Coalesce,␠exprs:␠[Column(2),␠Column(3)]␠}]]  2
-ArrangeBy[[Column(0),␠CallUnary␠{␠func:␠CastInt32ToNumeric(CastInt32ToNumeric(None)),␠expr:␠Column(1)␠}]]  1
-ArrangeBy[[Column(0),␠CallUnary␠{␠func:␠CastUint64ToNumeric(CastUint64ToNumeric(None)),␠expr:␠Column(2)␠}]]  1
-ArrangeBy[[Column(0),␠CallUnary␠{␠func:␠Lower(Lower),␠expr:␠Column(1)␠}]]  1
-ArrangeBy[[Column(0),␠CallUnary␠{␠func:␠Lower(Lower),␠expr:␠Column(2)␠}]]  1
+Arrange␠recursive␠err  3
+ArrangeAccumulable␠[val:␠empty]  10
+ArrangeBy[[CallBinary(JsonbGetStringStringify,␠Column(1),␠Literal(Ok(Row{[String("id")]}),␠ColumnType␠{␠scalar_type:␠String,␠nullable:␠false␠}))]]  2
+ArrangeBy[[CallBinary(JsonbGetStringStringify,␠Column(2),␠Literal(Ok(Row{[String("id")]}),␠ColumnType␠{␠scalar_type:␠String,␠nullable:␠false␠}))]]  1
+ArrangeBy[[CallVariadic(Coalesce,␠[Column(2),␠Column(3)])]]  2
+ArrangeBy[[Column(0),␠CallUnary(CastInt32ToNumeric(CastInt32ToNumeric(None)),␠Column(1))]]  1
+ArrangeBy[[Column(0),␠CallUnary(CastUint64ToNumeric(CastUint64ToNumeric(None)),␠Column(2))]]  1
+ArrangeBy[[Column(0),␠CallUnary(Lower(Lower),␠Column(1))]]  1
+ArrangeBy[[Column(0),␠CallUnary(Lower(Lower),␠Column(2))]]  1
 ArrangeBy[[Column(0),␠Column(1),␠Column(2),␠Column(3),␠Column(4),␠Column(5),␠Column(6),␠Column(7),␠Column(8),␠Column(9),␠Column(10),␠Column(11),␠Column(12),␠Column(13),␠Column(14),␠Column(15),␠Column(16),␠Column(17),␠Column(18),␠Column(19),␠Column(20),␠Column(21),␠Column(22),␠Column(23),␠Column(24),␠Column(25),␠Column(26),␠Column(27)]]  2
 ArrangeBy[[Column(0),␠Column(1),␠Column(2),␠Column(3),␠Column(4),␠Column(5),␠Column(6),␠Column(7),␠Column(8),␠Column(9),␠Column(10),␠Column(11),␠Column(12),␠Column(13)]]  1
 ArrangeBy[[Column(0),␠Column(1),␠Column(2),␠Column(3),␠Column(4),␠Column(5),␠Column(6),␠Column(7),␠Column(8),␠Column(9),␠Column(10),␠Column(11),␠Column(12),␠Column(13)]]-errors  1
@@ -1004,12 +1002,12 @@ ArrangeBy[[Column(0),␠Column(1)]]  2
 ArrangeBy[[Column(0),␠Column(2)]]  4
 ArrangeBy[[Column(0),␠Column(3)]]  4
 ArrangeBy[[Column(0),␠Column(4)]]  1
-ArrangeBy[[Column(0)]]  152
-ArrangeBy[[Column(0)]]-errors  42
+ArrangeBy[[Column(0)]]  155
+ArrangeBy[[Column(0)]]-errors  44
 ArrangeBy[[Column(1),␠Column(0)]]  1
 ArrangeBy[[Column(1),␠Column(2)]]  2
 ArrangeBy[[Column(1),␠Column(3)]]  1
-ArrangeBy[[Column(1)]]  25
+ArrangeBy[[Column(1)]]  26
 ArrangeBy[[Column(1)]]-errors  7
 ArrangeBy[[Column(13)]]  1
 ArrangeBy[[Column(15)]]  1
@@ -1030,17 +1028,17 @@ ArrangeBy[[]]  11
 Arranged␠DistinctBy  47
 Arranged␠MinsMaxesHierarchical␠input  14
 Arranged␠ReduceInaccumulable  3
-Arranged␠TopK␠input  68
-Distinct␠recursive␠err  4
+Arranged␠TopK␠input  92
+Distinct␠recursive␠err  3
 DistinctBy  47
 DistinctByErrorCheck  47
-ReduceAccumulable  9
+ReduceAccumulable  10
 ReduceInaccumulable  3
 ReduceInaccumulable␠Error␠Check  3
 ReduceMinsMaxes  3
 ReduceMinsMaxes␠Error␠Check  1
 Reduced␠Fallibly␠MinsMaxesHierarchical  14
-Reduced␠TopK␠input  68
+Reduced␠TopK␠input  92
 Threshold␠local  10
 
 statement ok

@@ -36,9 +36,9 @@ cc_library(
         ":io-bridge/include",
         ":lib-bridge/include",
         "@com_google_absl//absl/strings",
+        "@com_google_protobuf//src/google/protobuf/compiler:code_generator",
+        "@com_google_protobuf//src/google/protobuf/compiler:importer",
         "@crates_io__cxx-1.0.122//:cxx_cc",
-        "@protobuf//src/google/protobuf/compiler:code_generator",
-        "@protobuf//src/google/protobuf/compiler:importer",
     ],
 )
 

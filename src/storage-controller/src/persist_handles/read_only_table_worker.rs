@@ -17,16 +17,17 @@ use differential_dataflow::lattice::Lattice;
 use futures::FutureExt;
 use mz_persist_client::write::WriteHandle;
 use mz_persist_types::Codec64;
-use mz_repr::{Diff, GlobalId, TimestampManipulation};
-use mz_storage_client::client::Update;
+use mz_repr::{GlobalId, TimestampManipulation};
+use mz_storage_client::client::{TableData, Update};
+use mz_storage_types::StorageDiff;
 use mz_storage_types::controller::InvalidUpper;
 use mz_storage_types::sources::SourceData;
-use timely::progress::{Antichain, Timestamp};
 use timely::PartialOrder;
+use timely::progress::{Antichain, Timestamp};
 use tracing::Span;
 
-use crate::persist_handles::{append_work, PersistTableWriteCmd};
 use crate::StorageError;
+use crate::persist_handles::{PersistTableWriteCmd, append_work};
 
 /// Handles table updates in read only mode.
 ///
@@ -50,11 +51,12 @@ pub(crate) async fn read_only_mode_table_worker<
     T: Timestamp + Lattice + Codec64 + TimestampManipulation,
 >(
     mut rx: tokio::sync::mpsc::UnboundedReceiver<(Span, PersistTableWriteCmd<T>)>,
-    txns_handle: WriteHandle<SourceData, (), T, Diff>,
+    txns_handle: WriteHandle<SourceData, (), T, StorageDiff>,
 ) {
-    let mut write_handles = BTreeMap::<GlobalId, WriteHandle<SourceData, (), T, Diff>>::new();
+    let mut write_handles =
+        BTreeMap::<GlobalId, WriteHandle<SourceData, (), T, StorageDiff>>::new();
 
-    let gen_upper_future = |mut handle: WriteHandle<SourceData, (), T, i64>| {
+    let gen_upper_future = |mut handle: WriteHandle<SourceData, (), T, StorageDiff>| {
         let fut = async move {
             let current_upper = handle.shared_upper();
             handle.wait_for_upper_past(&current_upper).await;
@@ -114,7 +116,7 @@ pub(crate) async fn read_only_mode_table_worker<
 
 /// Handles the given commands.
 async fn handle_commands<T>(
-    write_handles: &mut BTreeMap<GlobalId, WriteHandle<SourceData, (), T, Diff>>,
+    write_handles: &mut BTreeMap<GlobalId, WriteHandle<SourceData, (), T, StorageDiff>>,
     mut commands: VecDeque<(Span, PersistTableWriteCmd<T>)>,
 ) -> ControlFlow<String>
 where
@@ -142,13 +144,15 @@ where
                 let _ = tx.send(());
             }
             PersistTableWriteCmd::Update {
-                table_id,
+                existing_collection,
+                new_collection,
                 handle,
                 forget_ts: _,
                 register_ts: _,
                 tx,
             } => {
-                write_handles.insert(table_id, handle).expect(
+                write_handles.remove(&existing_collection);
+                write_handles.insert(new_collection, handle).expect(
                     "PersistTableWriteCmd::Update only valid for updating extant write handles",
                 );
                 // We don't care if our waiter has gone away.
@@ -198,10 +202,22 @@ where
                         // than nothing.
                         old_span.follows_from(span.id());
                     }
-                    let updates_with_ts = updates_no_ts.into_iter().map(|x| Update {
-                        row: x.row,
-                        timestamp: write_ts.clone(),
-                        diff: x.diff,
+                    let updates_with_ts = updates_no_ts.into_iter().flat_map(|x| match x {
+                        TableData::Rows(rows) => {
+                            let iter = rows.into_iter().map(|(row, diff)| Update {
+                                row,
+                                timestamp: write_ts.clone(),
+                                diff,
+                            });
+                            itertools::Either::Left(iter)
+                        }
+                        TableData::Batches(_) => {
+                            // TODO(cf1): Handle Batches of updates in ReadOnlyTableWorker.
+                            mz_ore::soft_panic_or_log!(
+                                "handle Batches of updates in the ReadOnlyTableWorker"
+                            );
+                            itertools::Either::Right(std::iter::empty())
+                        }
                     });
                     updates.extend(updates_with_ts);
                     old_new_upper.join_assign(&Antichain::from_elem(advance_to.clone()));
@@ -245,7 +261,7 @@ where
 /// Advances the upper of all registered tables (which are only the migrated
 /// builtin tables) to the given `upper`.
 async fn advance_uppers<T>(
-    write_handles: &mut BTreeMap<GlobalId, WriteHandle<SourceData, (), T, Diff>>,
+    write_handles: &mut BTreeMap<GlobalId, WriteHandle<SourceData, (), T, StorageDiff>>,
     upper: Antichain<T>,
 ) where
     T: Timestamp + Lattice + Codec64 + TimestampManipulation,

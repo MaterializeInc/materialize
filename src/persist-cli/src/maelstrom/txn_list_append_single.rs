@@ -17,6 +17,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use async_trait::async_trait;
 use differential_dataflow::consolidation::consolidate_updates;
 use differential_dataflow::lattice::Lattice;
+use mz_dyncfg::ConfigUpdates;
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::SYSTEM_TIME;
 use mz_persist::cfg::{BlobConfig, ConsensusConfig};
@@ -31,19 +32,19 @@ use mz_persist_client::read::{Listen, ListenEvent};
 use mz_persist_client::rpc::PubSubClientConnection;
 use mz_persist_client::write::WriteHandle;
 use mz_persist_client::{Diagnostics, PersistClient, ShardId};
+use timely::PartialOrder;
 use timely::order::TotalOrder;
 use timely::progress::{Antichain, Timestamp};
-use timely::PartialOrder;
 use tokio::sync::Mutex;
 use tracing::{debug, info, trace};
 
+use crate::maelstrom::Args;
 use crate::maelstrom::api::{Body, ErrorCode, MaelstromError, NodeId, ReqTxnOp, ResTxnOp};
 use crate::maelstrom::node::{Handle, Service};
 use crate::maelstrom::services::{CachingBlob, MaelstromBlob, MaelstromConsensus};
 use crate::maelstrom::txn_list_append_single::codec_impls::{
     MaelstromKeySchema, MaelstromValSchema,
 };
-use crate::maelstrom::Args;
 
 /// Key of the persist shard used by [Transactor]
 #[derive(Debug, Clone, Default, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -277,7 +278,6 @@ impl Transactor {
             let mut updates = match updates_res {
                 Ok(x) => x,
                 Err(since) => {
-                    let recent_upper = self.write.fetch_recent_upper().await;
                     // Because we artificially share the same CriticalReaderId
                     // between nodes, it doesn't quite act like a capability.
                     // Prod doesn't have this issue, because a new one will
@@ -294,15 +294,10 @@ impl Transactor {
                         snap_ts,
                         since.0.as_option()
                     );
+                    self.advance_since().await?;
+
+                    let recent_upper = self.write.fetch_recent_upper().await;
                     self.read_ts = Self::extract_ts(recent_upper)? - 1;
-                    self.since = self
-                        .client
-                        .open_critical_since(
-                            self.shard_id,
-                            PersistClient::CONTROLLER_CRITICAL_SINCE,
-                            Diagnostics::from_purpose("maelstrom since"),
-                        )
-                        .await?;
                     continue;
                 }
             };
@@ -311,7 +306,6 @@ impl Transactor {
             let listen = match listen_res {
                 Ok(x) => x,
                 Err(since) => {
-                    let recent_upper = self.write.fetch_recent_upper().await;
                     // Because we artificially share the same CriticalReaderId
                     // between nodes, it doesn't quite act like a capability.
                     // Prod doesn't have this issue, because a new one will
@@ -328,30 +322,27 @@ impl Transactor {
                         snap_ts,
                         since.0.as_option(),
                     );
+                    self.advance_since().await?;
+                    let recent_upper = self.write.fetch_recent_upper().await;
                     self.read_ts = Self::extract_ts(recent_upper)? - 1;
-                    self.since = self
-                        .client
-                        .open_critical_since(
-                            self.shard_id,
-                            PersistClient::CONTROLLER_CRITICAL_SINCE,
-                            Diagnostics::from_purpose("maelstrom since"),
-                        )
-                        .await?;
+                    assert!(
+                        PartialOrder::less_than(self.since.since(), recent_upper),
+                        "invariant: since {:?} should be held behind the recent upper {:?}",
+                        &**self.since.since(),
+                        &**recent_upper
+                    );
                     continue;
                 }
             };
 
             trace!(
                 "read updates from snapshot as_of {}: {:?}",
-                snap_ts,
-                updates
+                snap_ts, updates
             );
             let listen_updates = Self::listen_through(listen, &as_of).await?;
             trace!(
                 "read updates from listener as_of {} through {}: {:?}",
-                snap_ts,
-                self.read_ts,
-                listen_updates
+                snap_ts, self.read_ts, listen_updates
             );
             updates.extend(listen_updates);
 
@@ -537,19 +528,17 @@ impl Transactor {
                 .await;
             match res {
                 Some(Ok(latest_since)) => {
-                    // Success! If we weren't the last one to update since, but
-                    // only then, it might have advanced past our read_ts, so
+                    // Success! Another process might have advanced past our read_ts, so
                     // forward read_ts to since_ts.
-                    if expected_token != self.cads_token {
-                        let since_ts = Self::extract_ts(&latest_since)?;
-                        if since_ts > self.read_ts {
-                            info!(
-                                "since was last updated by {}, forwarding our read_ts from {} to {}",
-                                expected_token, self.read_ts, since_ts
-                            );
-                            self.read_ts = since_ts;
-                        }
+                    let since_ts = Self::extract_ts(&latest_since)?;
+                    if since_ts > self.read_ts {
+                        info!(
+                            "since was last updated by {}, forwarding our read_ts from {} to {}",
+                            expected_token, self.read_ts, since_ts
+                        );
+                        self.read_ts = since_ts;
                     }
+
                     return Ok(());
                 }
                 Some(Err(actual_token)) => {
@@ -608,6 +597,14 @@ impl Service for TransactorService {
 
         let mut config =
             PersistConfig::new_default_configs(&mz_persist_client::BUILD_INFO, SYSTEM_TIME.clone());
+        {
+            // We only use the Postgres tuned queries when connected to vanilla
+            // Postgres, so we always want to enable them for testing.
+            let mut updates = ConfigUpdates::default();
+            updates.add(&mz_persist::postgres::USE_POSTGRES_TUNED_QUERIES, true);
+            config.apply_from(&updates);
+        }
+
         let metrics = Arc::new(Metrics::new(&config, &MetricsRegistry::new()));
 
         // Construct requested Blob.
@@ -652,6 +649,7 @@ impl Service for TransactorService {
                     consensus_uri,
                     Box::new(config.clone()),
                     metrics.postgres_consensus.clone(),
+                    Arc::clone(&config.configs),
                 )
                 .expect("consensus_uri should be valid");
                 loop {
@@ -719,12 +717,12 @@ mod codec_impls {
     use arrow::array::{BinaryArray, BinaryBuilder, UInt64Array, UInt64Builder};
     use arrow::datatypes::ToByteSlice;
     use bytes::Bytes;
+    use mz_persist_types::Codec;
     use mz_persist_types::codec_impls::{
         SimpleColumnarData, SimpleColumnarDecoder, SimpleColumnarEncoder,
     };
-    use mz_persist_types::columnar::Schema2;
+    use mz_persist_types::columnar::Schema;
     use mz_persist_types::stats::NoneStats;
-    use mz_persist_types::Codec;
 
     use crate::maelstrom::txn_list_append_single::{MaelstromKey, MaelstromVal};
 
@@ -783,7 +781,7 @@ mod codec_impls {
     #[derive(Debug, PartialEq)]
     pub struct MaelstromKeySchema;
 
-    impl Schema2<MaelstromKey> for MaelstromKeySchema {
+    impl Schema<MaelstromKey> for MaelstromKeySchema {
         type ArrowColumn = UInt64Array;
         type Statistics = NoneStats;
 
@@ -855,7 +853,7 @@ mod codec_impls {
     #[derive(Debug, PartialEq)]
     pub struct MaelstromValSchema;
 
-    impl Schema2<MaelstromVal> for MaelstromValSchema {
+    impl Schema<MaelstromVal> for MaelstromValSchema {
         type ArrowColumn = BinaryArray;
         type Statistics = NoneStats;
 

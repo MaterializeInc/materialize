@@ -53,7 +53,7 @@ SELECT
 FROM v_using_constant_folding;
 
 query T multiline
-EXPLAIN
+EXPLAIN OPTIMIZED PLAN WITH (humanized expressions) AS VERBOSE TEXT FOR
 SELECT
  real1, real1 + 1, real1 - 1,
  real1 + 0, double1 + 0, numeric1 + 0,

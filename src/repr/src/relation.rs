@@ -14,8 +14,10 @@ use std::{fmt, vec};
 use anyhow::bail;
 use itertools::Itertools;
 use mz_lowertest::MzReflect;
+use mz_ore::cast::CastFrom;
 use mz_ore::str::StrExt;
 use mz_ore::{assert_none, assert_ok};
+use mz_persist_types::schema::SchemaId;
 use mz_proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
 use proptest::prelude::*;
 use proptest::strategy::{Strategy, Union};
@@ -28,7 +30,7 @@ pub use crate::relation_and_scalar::{
     ProtoColumnMetadata, ProtoColumnName, ProtoColumnType, ProtoRelationDesc, ProtoRelationType,
     ProtoRelationVersion,
 };
-use crate::{arb_datum_for_column, Datum, Row, ScalarType};
+use crate::{Datum, Row, ScalarType, arb_datum_for_column};
 
 /// The type of a [`Datum`].
 ///
@@ -426,6 +428,18 @@ impl RelationVersion {
     /// Should __only__ be used for serialization.
     pub fn from_raw(val: u64) -> RelationVersion {
         RelationVersion(val)
+    }
+}
+
+impl From<RelationVersion> for SchemaId {
+    fn from(value: RelationVersion) -> Self {
+        SchemaId(usize::cast_from(value.0))
+    }
+}
+
+impl From<mz_sql_parser::ast::Version> for RelationVersion {
+    fn from(value: mz_sql_parser::ast::Version) -> Self {
+        RelationVersion(value.into_inner())
     }
 }
 
@@ -971,11 +985,12 @@ impl IntoIterator for RelationDesc {
 }
 
 /// Returns a [`Strategy`] that yields arbitrary [`Row`]s for the provided [`RelationDesc`].
-pub fn arb_row_for_relation(desc: &RelationDesc) -> impl Strategy<Value = Row> {
+pub fn arb_row_for_relation(desc: &RelationDesc) -> impl Strategy<Value = Row> + use<> {
     let datums: Vec<_> = desc
         .typ()
         .columns()
         .iter()
+        .cloned()
         .map(arb_datum_for_column)
         .collect();
     datums.prop_map(|x| Row::pack(x.iter().map(Datum::from)))
@@ -1260,7 +1275,7 @@ impl VersionedRelationDesc {
             .map(|meta| meta.dropped.unwrap_or(meta.added))
             .max()
             // If there aren't any columns we're implicitly the root version.
-            .unwrap_or(RelationVersion::root())
+            .unwrap_or_else(RelationVersion::root)
     }
 
     /// Validates internal contraints of the [`RelationDesc`] are correct.
@@ -1358,7 +1373,7 @@ impl PropRelationDescDiff {
                     .values()
                     .map(|meta| meta.dropped.unwrap_or(meta.added))
                     .max()
-                    .unwrap_or(RelationVersion::root())
+                    .unwrap_or_else(RelationVersion::root)
                     .bump();
                 let Some(metadata) = desc.metadata.values_mut().find(|meta| meta.name == name)
                 else {
@@ -1397,7 +1412,7 @@ impl PropRelationDescDiff {
 /// Generates a set of [`PropRelationDescDiff`]s based on some source [`RelationDesc`].
 pub fn arb_relation_desc_diff(
     source: &RelationDesc,
-) -> impl Strategy<Value = Vec<PropRelationDescDiff>> {
+) -> impl Strategy<Value = Vec<PropRelationDescDiff>> + use<> {
     let source = Rc::new(source.clone());
     let num_source_columns = source.typ.columns().len();
 

@@ -16,7 +16,7 @@ use mz_dyncfg::ConfigSet;
 use mz_ore::lgbytes::{LgBytesMetrics, LgBytesOpMetrics};
 use mz_ore::metric;
 use mz_ore::metrics::{Counter, IntCounter, MetricsRegistry};
-use prometheus::{CounterVec, IntCounterVec};
+use prometheus::IntCounterVec;
 
 /// Metrics specific to S3Blob's internal workings.
 #[derive(Debug, Clone)]
@@ -34,6 +34,7 @@ pub struct S3BlobMetrics {
     pub(crate) delete_head: IntCounter,
     pub(crate) delete_object: IntCounter,
     pub(crate) list_objects: IntCounter,
+    pub(crate) error_counts: IntCounterVec,
 
     /// Metrics for all usages of LgBytes. Exposed as public for convenience in
     /// persist boot, we'll have to pull this out and do the plumbing
@@ -48,6 +49,11 @@ impl S3BlobMetrics {
             name: "mz_persist_s3_operations",
             help: "number of raw s3 calls on behalf of Blob interface methods",
             var_labels: ["op"],
+        ));
+        let errors: IntCounterVec = registry.register(metric!(
+            name: "mz_persist_s3_errors",
+            help: "errors",
+            var_labels: ["op", "code"],
         ));
         Self {
             operation_timeouts: registry.register(metric!(
@@ -75,6 +81,7 @@ impl S3BlobMetrics {
             delete_head: operations.with_label_values(&["delete_head"]),
             delete_object: operations.with_label_values(&["delete_object"]),
             list_objects: operations.with_label_values(&["list_objects"]),
+            error_counts: errors,
             lgbytes: LgBytesMetrics::new(registry),
         }
     }
@@ -98,11 +105,6 @@ impl ArrowMetrics {
             help: "number of rows we've run the specified op on in our structured columnar format",
             var_labels: ["op", "column", "result"],
         ));
-        let op_seconds: CounterVec = registry.register(metric!(
-            name: "mz_persist_columnar_op_seconds",
-            help: "numer of seconds we've spent running the specified op on our structured columnar format",
-            var_labels: ["op", "column"],
-        ));
 
         let part_build_seconds: Counter = registry.register(metric!(
             name: "mz_persist_columnar_part_build_seconds",
@@ -118,8 +120,8 @@ impl ArrowMetrics {
         ));
 
         ArrowMetrics {
-            key: ArrowColumnMetrics::new(&op_count, &op_seconds, "key"),
-            val: ArrowColumnMetrics::new(&op_count, &op_seconds, "val"),
+            key: ArrowColumnMetrics::new(&op_count, "key"),
+            val: ArrowColumnMetrics::new(&op_count, "val"),
             part_build_seconds,
             part_build_count,
             concat_bytes,
@@ -152,32 +154,16 @@ impl ArrowMetrics {
 /// Metrics for a top-level [`arrow`] column in our structured representation.
 #[derive(Debug, Clone)]
 pub struct ArrowColumnMetrics {
-    decoding_count: IntCounter,
-    decoding_seconds: Counter,
     correct_count: IntCounter,
     invalid_count: IntCounter,
 }
 
 impl ArrowColumnMetrics {
-    fn new(count: &IntCounterVec, duration: &CounterVec, col: &'static str) -> Self {
+    fn new(count: &IntCounterVec, col: &'static str) -> Self {
         ArrowColumnMetrics {
-            decoding_count: count.with_label_values(&["decode", col, "success"]),
-            decoding_seconds: duration.with_label_values(&["decode", col]),
             correct_count: count.with_label_values(&["validation", col, "correct"]),
             invalid_count: count.with_label_values(&["validation", col, "invalid"]),
         }
-    }
-
-    /// Measure and report how long decoding takes.
-    pub fn measure_decoding<R, F: FnOnce() -> R>(&self, decode: F) -> R {
-        let start = Instant::now();
-        let result = decode();
-        let duration = start.elapsed();
-
-        self.decoding_count.inc();
-        self.decoding_seconds.inc_by(duration.as_secs_f64());
-
-        result
     }
 
     /// Measure and report statistics for validation.

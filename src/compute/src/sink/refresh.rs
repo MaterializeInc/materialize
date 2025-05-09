@@ -12,10 +12,9 @@ use differential_dataflow::{AsCollection, Collection, Data};
 use mz_ore::soft_panic_or_log;
 use mz_repr::refresh_schedule::RefreshSchedule;
 use mz_repr::{Diff, Timestamp};
+use timely::dataflow::Scope;
 use timely::dataflow::channels::pact::Pipeline;
 use timely::dataflow::operators::generic::builder_rc::OperatorBuilder;
-use timely::dataflow::Scope;
-use timely::progress::Antichain;
 
 /// This is for REFRESH options on materialized views. It adds an operator that rounds up the
 /// timestamps of data and frontiers to the time of the next refresh. See
@@ -36,7 +35,7 @@ where
     // time, we'll round it up to the next refresh time.
     let mut builder = OperatorBuilder::new("apply_refresh".to_string(), coll.scope());
     let (mut output_buf, output_stream) = builder.new_output::<ConsolidatingContainerBuilder<_>>();
-    let mut input = builder.new_input_connection(&coll.inner, Pipeline, vec![Antichain::new()]);
+    let mut input = builder.new_input_connection(&coll.inner, Pipeline, []);
     builder.build(move |capabilities| {
         // This capability directly controls this operator's output frontier (because we have
         // disconnected the input above). We wrap it in an Option so we can drop it to advance to

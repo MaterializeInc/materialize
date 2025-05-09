@@ -16,8 +16,8 @@ use std::sync::Arc;
 
 use differential_dataflow::hashable::Hashable;
 use differential_dataflow::{AsCollection, Collection};
-use futures::future::FutureExt;
 use futures::StreamExt;
+use futures::future::FutureExt;
 use indexmap::map::Entry;
 use itertools::Itertools;
 use mz_ore::error::ErrorExt;
@@ -49,12 +49,12 @@ use crate::upsert_continual_feedback;
 use autospill::AutoSpillBackend;
 use memory::InMemoryHashMap;
 use types::{
-    consolidating_merge_function, upsert_bincode_opts, BincodeOpts, StateValue, UpsertState,
-    UpsertStateBackend, Value,
+    BincodeOpts, StateValue, UpsertState, UpsertStateBackend, Value, consolidating_merge_function,
+    upsert_bincode_opts,
 };
 
 mod autospill;
-mod memory;
+pub mod memory;
 mod rocksdb;
 // TODO(aljoscha): Move next to upsert module, rename to upsert_types.
 pub(crate) mod types;
@@ -321,7 +321,6 @@ where
                     rocksdb_shared_metrics,
                     rocksdb_instance_metrics,
                 )
-                .await
                 .unwrap(),
             )
         };
@@ -397,7 +396,7 @@ fn upsert_operator<G: Scope, FromTime, F, Fut, US>(
     source_config: crate::source::SourceExportCreationConfig,
     state: F,
     upsert_config: UpsertConfig,
-    storage_configuration: &StorageConfiguration,
+    _storage_configuration: &StorageConfiguration,
     prevent_snapshot_buffering: bool,
     snapshot_buffering_max: Option<usize>,
 ) -> (
@@ -414,8 +413,10 @@ where
     US: UpsertStateBackend<G::Timestamp, Option<FromTime>>,
     FromTime: Debug + timely::ExchangeData + Ord + Sync,
 {
-    let use_continual_feedback_upsert =
-        dyncfgs::STORAGE_USE_CONTINUAL_FEEDBACK_UPSERT.get(storage_configuration.config_set());
+    // Hard-coded to true because classic UPSERT cannot be used safely with
+    // concurrent ingestions, which we need for both 0dt upgrades and
+    // multi-replica ingestions.
+    let use_continual_feedback_upsert = true;
 
     tracing::info!(id = %source_config.id, %use_continual_feedback_upsert, "upsert operator implementation");
 
@@ -474,7 +475,7 @@ where
             move |input, output| {
                 while let Some((cap, data)) = input.next() {
                     assert!(
-                        data.iter().all(|(_, _, diff)| *diff > 0),
+                        data.iter().all(|(_, _, diff)| diff.is_positive()),
                         "invalid upsert input"
                     );
                     updates.append(data);
@@ -527,7 +528,7 @@ fn stage_input<T, FromTime>(
     }
 
     stash.extend(data.drain(..).map(|((key, value, order), time, diff)| {
-        assert!(diff > 0, "invalid upsert input");
+        assert!(diff.is_positive(), "invalid upsert input");
         (time, key, Reverse(order), value)
     }));
 
@@ -560,6 +561,7 @@ async fn drain_staged_input<S, G, T, FromTime, E>(
     drain_style: DrainStyle<'_, T>,
     error_emitter: &mut E,
     state: &mut UpsertState<'_, S, T, Option<FromTime>>,
+    source_config: &crate::source::SourceExportCreationConfig,
 ) where
     S: UpsertStateBackend<T, Option<FromTime>>,
     G: Scope,
@@ -631,7 +633,7 @@ async fn drain_staged_input<S, G, T, FromTime, E>(
         let existing_value = &mut command_state.get_mut().value;
 
         if let Some(cs) = existing_value.as_mut() {
-            cs.ensure_decoded(bincode_opts);
+            cs.ensure_decoded(bincode_opts, source_config.id);
         }
 
         // Skip this command if its order key is below the one in the upsert state.
@@ -653,15 +655,15 @@ async fn drain_staged_input<S, G, T, FromTime, E>(
                     Some(from_time.0.clone()),
                 )) {
                     if let Value::FinalizedValue(old_value, _) = old_value.into_decoded() {
-                        output_updates.push((old_value, ts.clone(), -1));
+                        output_updates.push((old_value, ts.clone(), Diff::MINUS_ONE));
                     }
                 }
-                output_updates.push((value, ts, 1));
+                output_updates.push((value, ts, Diff::ONE));
             }
             None => {
                 if let Some(old_value) = existing_value.take() {
                     if let Value::FinalizedValue(old_value, _) = old_value.into_decoded() {
-                        output_updates.push((old_value, ts, -1));
+                        output_updates.push((old_value, ts, Diff::MINUS_ONE));
                     }
                 }
 
@@ -774,7 +776,7 @@ where
             state().await,
             upsert_shared_metrics,
             &upsert_metrics,
-            source_config.source_statistics,
+            source_config.source_statistics.clone(),
             upsert_config.shrink_upsert_unused_buffers_by_ratio,
         );
         let mut events = vec![];
@@ -930,6 +932,7 @@ where
                             DrainStyle::ToUpper(&upper),
                             &mut error_emitter,
                             &mut state,
+                            &source_config,
                         )
                         .await;
 
@@ -966,6 +969,7 @@ where
                     DrainStyle::AtTime(partial_drain_time),
                     &mut error_emitter,
                     &mut state,
+                    &source_config,
                 )
                 .await;
 

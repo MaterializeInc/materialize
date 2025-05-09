@@ -199,7 +199,9 @@ fn main() -> anyhow::Result<()> {
 /// A (hopefully) helpful error message that describes what to do when the hashes differ.
 fn error_message(og_hash: String, hash: String, filename: String) -> String {
     let title = "Hashes changed for the persisted protobuf files!";
-    let body1 = format!("If you changed '{filename}' without first making a snapshot, then you need to copy '{filename}' and rename it with a suffix like '_vX.proto'.");
+    let body1 = format!(
+        "If you changed '{filename}' without first making a snapshot, then you need to copy '{filename}' and rename it with a suffix like '_vX.proto'."
+    );
     let body2 = format!(
         "Otherwise you can update the hash for '{filename}' in '{PROTO_HASHES}' to be '{hash}'."
     );

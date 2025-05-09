@@ -13,9 +13,8 @@ menu:
 ---
 
 Materialize is **wire-compatible** with PostgreSQL, which means it integrates
-with many SQL clients that support PostgreSQL (see [Tools and Integrations](/integrations/#sql-clients)).
-In this guide, we’ll cover how to connect to your Materialize region using
-common SQL clients.
+with many SQL clients that support PostgreSQL. In this guide, we’ll cover how to
+connect to your Materialize region using some common SQL clients.
 
 ## Connection parameters
 
@@ -71,10 +70,22 @@ psql \
 
 ### DataGrip
 
-{{< note >}}
-As we work on extending the coverage of `pg_catalog` in Materialize,
-some DataGrip features might not work as expected.
-{{< /note >}}
+{{< tip >}}
+
+Integration with DataGrip/WebStorm is currently limited. Certain features --
+such as the schema explorer, database introspection, and various metadata panels
+-- may not work as expected with Materialize because they rely on
+PostgreSQL-specific queries that use unsupported system functions (e.g.,
+`age()`) and system columns (e.g., `xmin`).
+
+As an alternative, you can [use the JDBC metadata
+introspector](https://www.jetbrains.com/help/datagrip/cannot-find-a-database-object-in-the-database-tree-view.html#temporarily-enable-introspection-with-jdbc-metadata).
+To use the JDBC metadata instrospector, from your data source properties, in the
+**Advanced** tab, select **Introspect using JDBC Metadata** from the **Expert
+options** list. For more information, see the [DataGrip
+documentation](https://www.jetbrains.com/help/datagrip/cannot-find-a-database-object-in-the-database-tree-view.html#temporarily-enable-introspection-with-jdbc-metadata).
+
+{{< /tip >}}
 
 To connect to Materialize using [DataGrip](https://www.jetbrains.com/help/datagrip/connecting-to-a-database.html),
 follow the documentation to [create a connection](https://www.jetbrains.com/help/datagrip/connecting-to-a-database.html)
@@ -82,6 +93,9 @@ and use the **PostgreSQL database driver** with the credentials provided in the
 Materialize console.
 
 <img width="1131" alt="DataGrip Materialize Connection Details" src="https://user-images.githubusercontent.com/21223421/218108169-302c8597-35a9-4dce-b16d-050f49538b9e.png">
+
+[use the JDBC metadata
+introspector]:
 
 ### DBeaver
 

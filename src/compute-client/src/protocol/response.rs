@@ -15,10 +15,10 @@ use mz_compute_types::plan::LirId;
 use mz_expr::row::RowCollection;
 use mz_ore::cast::CastFrom;
 use mz_ore::tracing::OpenTelemetryContext;
-use mz_proto::{any_uuid, IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
+use mz_proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError, any_uuid};
 use mz_repr::{Diff, GlobalId, Row};
 use mz_timely_util::progress::any_antichain;
-use proptest::prelude::{any, Arbitrary};
+use proptest::prelude::{Arbitrary, any};
 use proptest::strategy::{BoxedStrategy, Just, Strategy, Union};
 use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
@@ -515,7 +515,7 @@ impl RustType<ProtoSubscribeBatch> for SubscribeBatch<mz_repr::Timestamp> {
                             .map(|(t, r, d)| ProtoUpdate {
                                 timestamp: t.into(),
                                 row: Some(r.into_proto()),
-                                diff: *d,
+                                diff: d.into_proto(),
                             })
                             .collect();
 
@@ -549,7 +549,7 @@ impl RustType<ProtoSubscribeBatch> for SubscribeBatch<mz_repr::Timestamp> {
                         Ok((
                             update.timestamp.into(),
                             update.row.into_rust_if_some("ProtoUpdate::row")?,
-                            update.diff,
+                            update.diff.into(),
                         ))
                     })
                     .collect::<Result<Vec<_>, TryFromProtoError>>()?),
@@ -658,6 +658,12 @@ mod tests {
     use proptest::proptest;
 
     use super::*;
+
+    /// Test to ensure the size of the `ComputeResponse` enum doesn't regress.
+    #[mz_ore::test]
+    fn test_compute_response_size() {
+        assert_eq!(std::mem::size_of::<ComputeResponse>(), 120);
+    }
 
     proptest! {
         #![proptest_config(ProptestConfig::with_cases(32))]

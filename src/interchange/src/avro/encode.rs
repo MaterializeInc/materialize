@@ -15,17 +15,17 @@ use anyhow::Ok;
 use byteorder::{NetworkEndian, WriteBytesExt};
 use chrono::Timelike;
 use itertools::Itertools;
-use mz_avro::types::{DecimalValue, ToAvro, Value};
 use mz_avro::Schema;
+use mz_avro::types::{DecimalValue, ToAvro, Value};
 use mz_ore::cast::CastFrom;
 use mz_repr::adt::jsonb::JsonbRef;
 use mz_repr::adt::numeric::{self, NUMERIC_AGG_MAX_PRECISION, NUMERIC_DATUM_MAX_PRECISION};
 use mz_repr::{CatalogItemId, ColumnName, ColumnType, Datum, RelationDesc, Row, ScalarType};
 use serde_json::json;
 
-use crate::encode::{column_names_and_types, Encode, TypedDatum};
+use crate::encode::{Encode, TypedDatum, column_names_and_types};
 use crate::envelopes::{self, DBZ_ROW_TYPE_ID, ENVELOPE_CUSTOM_NAMES};
-use crate::json::{build_row_schema_json, SchemaOptions};
+use crate::json::{SchemaOptions, build_row_schema_json};
 
 // TODO(rkhaitan): this schema intentionally omits the data_collections field
 // that is typically present in Debezium transaction metadata topics. See

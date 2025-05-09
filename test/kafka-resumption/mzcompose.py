@@ -19,6 +19,7 @@ from materialize.mzcompose.composition import Composition, WorkflowArgumentParse
 from materialize.mzcompose.services.clusterd import Clusterd
 from materialize.mzcompose.services.kafka import Kafka
 from materialize.mzcompose.services.materialized import Materialized
+from materialize.mzcompose.services.mz import Mz
 from materialize.mzcompose.services.redpanda import Redpanda
 from materialize.mzcompose.services.schema_registry import SchemaRegistry
 from materialize.mzcompose.services.testdrive import Testdrive
@@ -30,7 +31,8 @@ SERVICES = [
     Kafka(),
     SchemaRegistry(),
     Redpanda(),
-    Materialized(),
+    Mz(app_password=""),
+    Materialized(default_replication_factor=2),
     Clusterd(),
     Toxiproxy(),
     Testdrive(default_timeout="120s"),
@@ -52,11 +54,13 @@ def get_kafka_services(redpanda: bool) -> list[str]:
 
 
 def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
-    for name in c.workflows:
+    def process(name: str) -> None:
         if name == "default":
-            continue
+            return
         with c.test_case(name):
             c.workflow(name, *parser.args)
+
+    c.test_parts(list(c.workflows.keys()), process)
 
 
 #
@@ -101,7 +105,8 @@ def workflow_sink_kafka_restart(c: Composition, parser: WorkflowArgumentParser) 
     # producer ID are properly aborted after a broker restart.
     with c.override(
         Materialized(
-            environment_extra=["FAILPOINTS=kafka_sink_commit_transaction=sleep(5000)"]
+            environment_extra=["FAILPOINTS=kafka_sink_commit_transaction=sleep(5000)"],
+            default_replication_factor=2,
         )
     ):
         c.up(*(["materialized"] + get_kafka_services(args.redpanda)))

@@ -116,14 +116,17 @@ SELECT oid, name FROM mz_objects WHERE id LIKE 's%' AND oid < 20000 ORDER BY oid
 89  version
 200  float4in
 214  float8in
+376  string_to_array
 383  array_cat
 384  array_to_string
+394  string_to_array
 395  array_to_string
 460  int8in
 700  float4
 701  float8
 720  octet_length
 721  get_byte
+723  get_bit
 745  current_user
 746  session_user
 750  array_in
@@ -471,6 +474,8 @@ SELECT oid, name FROM mz_objects WHERE id LIKE 's%' AND oid < 20000 ORDER BY oid
 2726  stddev_pop
 2727  stddev_pop
 2728  stddev_pop
+2763  regexp_matches
+2764  regexp_matches
 2765  regexp_split_to_table
 2766  regexp_split_to_table
 2767  regexp_split_to_array
@@ -486,6 +491,7 @@ SELECT oid, name FROM mz_objects WHERE id LIKE 's%' AND oid < 20000 ORDER BY oid
 3059  concat_ws
 3060  left
 3061  right
+3062  reverse
 3100  row_number
 3101  rank
 3102  dense_rank
@@ -586,6 +592,7 @@ SELECT oid, name FROM mz_objects WHERE id LIKE 's%' AND oid < 20000 ORDER BY oid
 5090  anycompatiblearray_recv
 5092  anycompatiblenonarray_in
 5094  anycompatiblerange_in
+6163  bit_count
 6177  date_bin
 6178  date_bin
 6199  extract
@@ -1155,3 +1162,10 @@ SELECT oid, name FROM mz_objects WHERE id LIKE 's%' AND oid < 20000 ORDER BY oid
 17047  mz_dataflow_global_ids
 17049  mz_cluster_deployment_lineage
 17050  mz_cluster_deployment_lineage_ind
+17051  mz_cluster_replica_frontiers_ind
+17052  mz_compute_hydration_times_ind
+17053  mz_mappable_objects
+17054  mz_wallclock_global_lag
+17055  mz_wallclock_global_lag_histogram_raw
+17056  mz_wallclock_global_lag_histogram
+17057  mz_sql_server_source_tables

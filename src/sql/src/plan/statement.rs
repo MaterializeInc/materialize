@@ -15,7 +15,9 @@ use std::cell::RefCell;
 use std::collections::{BTreeMap, BTreeSet};
 
 use mz_repr::namespaces::is_system_schema;
-use mz_repr::{CatalogItemId, ColumnType, RelationDesc, RelationVersionSelector, ScalarType};
+use mz_repr::{
+    CatalogItemId, ColumnIndex, ColumnType, RelationDesc, RelationVersionSelector, ScalarType,
+};
 use mz_sql_parser::ast::{
     ColumnDef, ColumnName, ConnectionDefaultAwsPrivatelink, CreateMaterializedViewStatement,
     RawItemName, ShowStatement, StatementKind, TableConstraint, UnresolvedDatabaseName,
@@ -37,7 +39,7 @@ use crate::names::{
 };
 use crate::normalize;
 use crate::plan::error::PlanError;
-use crate::plan::{query, with_options, Params, Plan, PlanContext, PlanKind};
+use crate::plan::{Params, Plan, PlanContext, PlanKind, query, with_options};
 use crate::session::vars::FeatureFlag;
 
 mod acl;
@@ -437,7 +439,7 @@ pub fn plan_copy_from(
     pcx: &PlanContext,
     catalog: &dyn SessionCatalog,
     id: CatalogItemId,
-    columns: Vec<usize>,
+    columns: Vec<ColumnIndex>,
     rows: Vec<mz_repr::Row>,
 ) -> Result<super::HirRelationExpr, PlanError> {
     query::plan_copy_from_rows(pcx, catalog, id, columns, rows)
@@ -540,7 +542,9 @@ impl<'a> StatementContext<'a> {
                     match self.catalog.active_database_name() {
                         Some(name) => (RawDatabaseSpecifier::Name(name.to_string()), schema),
                         None => {
-                            sql_bail!("no database specified for non-system schema and no active database")
+                            sql_bail!(
+                                "no database specified for non-system schema and no active database"
+                            )
                         }
                     }
                 }
@@ -730,7 +734,7 @@ impl<'a> StatementContext<'a> {
     pub fn get_item_by_resolved_name(
         &self,
         name: &ResolvedItemName,
-    ) -> Result<Box<dyn CatalogCollectionItem>, PlanError> {
+    ) -> Result<Box<dyn CatalogCollectionItem + '_>, PlanError> {
         match name {
             ResolvedItemName::Item { id, version, .. } => {
                 Ok(self.get_item(id).at_version(*version))
@@ -744,7 +748,7 @@ impl<'a> StatementContext<'a> {
     pub fn get_column_by_resolved_name(
         &self,
         name: &ColumnName<Aug>,
-    ) -> Result<(Box<dyn CatalogCollectionItem>, usize), PlanError> {
+    ) -> Result<(Box<dyn CatalogCollectionItem + '_>, usize), PlanError> {
         match (&name.relation, &name.column) {
             (
                 ResolvedItemName::Item { id, version, .. },
@@ -844,12 +848,16 @@ impl<'a> StatementContext<'a> {
         Ok(out)
     }
 
-    pub fn humanize_scalar_type(&self, typ: &ScalarType) -> String {
-        self.catalog.humanize_scalar_type(typ)
+    /// The returned String is more detailed when the `postgres_compat` flag is not set. However,
+    /// the flag should be set in, e.g., the implementation of the `pg_typeof` function.
+    pub fn humanize_scalar_type(&self, typ: &ScalarType, postgres_compat: bool) -> String {
+        self.catalog.humanize_scalar_type(typ, postgres_compat)
     }
 
-    pub fn humanize_column_type(&self, typ: &ColumnType) -> String {
-        self.catalog.humanize_column_type(typ)
+    /// The returned String is more detailed when the `postgres_compat` flag is not set. However,
+    /// the flag should be set in, e.g., the implementation of the `pg_typeof` function.
+    pub fn humanize_column_type(&self, typ: &ColumnType, postgres_compat: bool) -> String {
+        self.catalog.humanize_column_type(typ, postgres_compat)
     }
 
     pub(crate) fn build_tunnel_definition(
@@ -927,7 +935,9 @@ impl<'a> StatementContext<'a> {
                 if !null_cols.contains(col_idx) {
                     // Note that alternatively we could support NULL values in keys with `NULLS NOT
                     // DISTINCT` semantics, which treats `NULL` as a distinct value.
-                    sql_bail!("[internal error] key columns must be NOT NULL when generating table constraints");
+                    sql_bail!(
+                        "[internal error] key columns must be NOT NULL when generating table constraints"
+                    );
                 }
                 col_names.push(columns[*col_idx].name.clone());
             }

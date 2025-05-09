@@ -75,7 +75,7 @@ impl<T: Transmittable + std::fmt::Debug> ClientTransmitter<T> {
         // Guarantee that the value sent is of an allowed type.
         soft_assert_no_log!(
             match (&result, self.allowed.take()) {
-                (Ok(ref t), Some(allowed)) => allowed.contains(&t.to_allowed()),
+                (Ok(t), Some(allowed)) => allowed.contains(&t.to_allowed()),
                 _ => true,
             },
             "tried to send disallowed value {result:?} through ClientTransmitter; \
@@ -373,7 +373,7 @@ impl<T> ShouldTerminateGracefully for StorageError<T> {
             | StorageError::ReadBeforeSince(_)
             | StorageError::InvalidUppers(_)
             | StorageError::InvalidUsage(_)
-            | StorageError::SourceIdReused(_)
+            | StorageError::CollectionIdReused(_)
             | StorageError::SinkIdReused(_)
             | StorageError::IdentifierMissing(_)
             | StorageError::IdentifierInvalid(_)

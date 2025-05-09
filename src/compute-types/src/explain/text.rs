@@ -23,10 +23,10 @@
 use std::fmt;
 use std::ops::Deref;
 
-use itertools::{izip, Itertools};
-use mz_expr::explain::{fmt_text_constant_rows, HumanizedExplain, HumanizerMode};
+use itertools::{Itertools, izip};
+use mz_expr::explain::{HumanizedExplain, HumanizerMode, fmt_text_constant_rows};
 use mz_expr::{Id, MirScalarExpr};
-use mz_ore::str::{separated, IndentLike, StrExt};
+use mz_ore::str::{IndentLike, StrExt, separated};
 use mz_repr::explain::text::DisplayText;
 use mz_repr::explain::{
     CompactScalarSeq, CompactScalars, ExplainConfig, Indices, PlanRenderingContext,
@@ -141,16 +141,16 @@ impl DisplayText<PlanRenderingContext<'_, Plan>> for Plan {
                     head = body.as_ref();
                 }
 
-                writeln!(f, "{}Return{}", ctx.indent, annotations)?;
-                ctx.indented(|ctx| head.fmt_text(f, ctx))?;
                 writeln!(f, "{}With", ctx.indent)?;
                 ctx.indented(|ctx| {
-                    for (id, value) in bindings.iter().rev() {
+                    for (id, value) in bindings.iter() {
                         writeln!(f, "{}cte {} =", ctx.indent, *id)?;
                         ctx.indented(|ctx| value.fmt_text(f, ctx))?;
                     }
                     Ok(())
                 })?;
+                writeln!(f, "{}Return{}", ctx.indent, annotations)?;
+                ctx.indented(|ctx| head.fmt_text(f, ctx))?;
             }
             LetRec {
                 ids,
@@ -161,11 +161,9 @@ impl DisplayText<PlanRenderingContext<'_, Plan>> for Plan {
                 let bindings = izip!(ids.iter(), values, limits).collect_vec();
                 let head = body.as_ref();
 
-                writeln!(f, "{}Return{}", ctx.indent, annotations)?;
-                ctx.indented(|ctx| head.fmt_text(f, ctx))?;
                 writeln!(f, "{}With Mutually Recursive", ctx.indent)?;
                 ctx.indented(|ctx| {
-                    for (id, value, limit) in bindings.iter().rev() {
+                    for (id, value, limit) in bindings.iter() {
                         if let Some(limit) = limit {
                             writeln!(f, "{}cte {} {} =", ctx.indent, limit, *id)?;
                         } else {
@@ -175,6 +173,8 @@ impl DisplayText<PlanRenderingContext<'_, Plan>> for Plan {
                     }
                     Ok(())
                 })?;
+                writeln!(f, "{}Return{}", ctx.indent, annotations)?;
+                ctx.indented(|ctx| head.fmt_text(f, ctx))?;
             }
             Mfp {
                 input,
@@ -458,7 +458,9 @@ impl DisplayText<PlanRenderingContext<'_, Plan>> for AvailableCollections {
                     "{}",
                     separated(
                         ", ",
-                        types.iter().map(|c| ctx.humanizer.humanize_column_type(c))
+                        types
+                            .iter()
+                            .map(|c| ctx.humanizer.humanize_column_type(c, false))
                     )
                 )?;
                 writeln!(f, "]")?;

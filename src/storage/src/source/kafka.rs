@@ -7,8 +7,8 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use std::collections::btree_map::Entry;
 use std::collections::BTreeMap;
+use std::collections::btree_map::Entry;
 use std::convert::Infallible;
 use std::str::{self};
 use std::sync::{Arc, Mutex};
@@ -22,7 +22,7 @@ use futures::StreamExt;
 use itertools::Itertools;
 use maplit::btreemap;
 use mz_kafka_util::client::{
-    get_partitions, GetPartitionsError, MzClientContext, PartitionId, TunnelingClientContext,
+    GetPartitionsError, MzClientContext, PartitionId, TunnelingClientContext, get_partitions,
 };
 use mz_ore::assert_none;
 use mz_ore::cast::CastFrom;
@@ -30,8 +30,9 @@ use mz_ore::error::ErrorExt;
 use mz_ore::future::InTask;
 use mz_ore::iter::IteratorExt;
 use mz_repr::adt::timestamp::CheckedTimestamp;
-use mz_repr::{adt::jsonb::Jsonb, Datum, Diff, GlobalId, Row};
+use mz_repr::{Datum, Diff, GlobalId, Row, adt::jsonb::Jsonb};
 use mz_ssh_util::tunnel::SshTunnelStatus;
+use mz_storage_types::dyncfgs::KAFKA_METADATA_FETCH_INTERVAL;
 use mz_storage_types::errors::{
     ContextCreationError, DataflowError, SourceError, SourceErrorDetails,
 };
@@ -53,6 +54,7 @@ use rdkafka::statistics::Statistics;
 use rdkafka::topic_partition_list::Offset;
 use rdkafka::{ClientContext, Message, TopicPartitionList};
 use serde::{Deserialize, Serialize};
+use timely::PartialOrder;
 use timely::container::CapacityContainerBuilder;
 use timely::dataflow::channels::pact::Pipeline;
 use timely::dataflow::operators::core::Partition;
@@ -60,8 +62,7 @@ use timely::dataflow::operators::{Broadcast, Capability};
 use timely::dataflow::{Scope, Stream};
 use timely::progress::Antichain;
 use timely::progress::Timestamp;
-use timely::PartialOrder;
-use tokio::sync::{mpsc, Notify};
+use tokio::sync::{Notify, mpsc};
 use tracing::{error, info, trace};
 
 use crate::healthcheck::{HealthStatusMessage, HealthStatusUpdate, StatusNamespace};
@@ -69,7 +70,7 @@ use crate::metrics::source::kafka::KafkaSourceMetrics;
 use crate::source::types::{
     Probe, ProgressStatisticsUpdate, SignaledFuture, SourceRender, StackedCollection,
 };
-use crate::source::{RawSourceCreationConfig, SourceMessage};
+use crate::source::{RawSourceCreationConfig, SourceMessage, probe};
 
 #[derive(Clone, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 struct HealthStatus {
@@ -182,12 +183,12 @@ impl SourceRender for KafkaSourceConnection {
     fn render<G: Scope<Timestamp = KafkaTimestamp>>(
         self,
         scope: &mut G,
-        config: RawSourceCreationConfig,
+        config: &RawSourceCreationConfig,
         resume_uppers: impl futures::Stream<Item = Antichain<KafkaTimestamp>> + 'static,
         start_signal: impl std::future::Future<Output = ()> + 'static,
     ) -> (
         BTreeMap<GlobalId, StackedCollection<G, Result<SourceMessage, DataflowError>>>,
-        Option<Stream<G, Infallible>>,
+        Stream<G, Infallible>,
         Stream<G, HealthStatusMessage>,
         Stream<G, ProgressStatisticsUpdate>,
         Option<Stream<G, Probe<KafkaTimestamp>>>,
@@ -223,7 +224,7 @@ impl SourceRender for KafkaSourceConnection {
 
         (
             data_collections,
-            Some(progress),
+            progress,
             health,
             stats,
             Some(probes),
@@ -687,7 +688,7 @@ fn render_reader<G: Scope<Timestamp = KafkaTimestamp>>(
                             outputs.iter().map(|o| o.output_index).repeat_clone(error)
                         {
                             data_output
-                                .give_fueled(&data_cap, ((output, error), time, 1))
+                                .give_fueled(&data_cap, ((output, error), time, Diff::ONE))
                                 .await;
                         }
 
@@ -987,6 +988,14 @@ impl KafkaResumeUpperProcessor {
 impl KafkaSourceReader {
     /// Ensures that a partition queue for `pid` exists.
     fn ensure_partition(&mut self, pid: PartitionId) {
+        if self.last_offsets.is_empty() {
+            tracing::info!(
+                source_id = %self.id,
+                worker_id = %self.worker_id,
+                "kafka source does not have any outputs, not creating partition queue");
+
+            return;
+        }
         for last_offsets in self.last_offsets.values() {
             // early exit if we've already inserted this partition
             if last_offsets.contains_key(&pid) {
@@ -1108,11 +1117,12 @@ impl KafkaSourceReader {
 
         // Given the explicit consumer to partition assignment, we should never receive a message
         // for a partition for which we have no metadata
-        assert!(self
-            .last_offsets
-            .get(output_index)
-            .unwrap()
-            .contains_key(&partition));
+        assert!(
+            self.last_offsets
+                .get(output_index)
+                .unwrap()
+                .contains_key(&partition)
+        );
 
         let last_offset_ref = self
             .last_offsets
@@ -1144,7 +1154,7 @@ impl KafkaSourceReader {
             *last_offset_ref = offset_as_i64;
 
             let ts = Partitioned::new_singleton(RangeBound::exact(partition), offset);
-            Some((message, ts, 1))
+            Some((message, ts, Diff::ONE))
         }
     }
 }
@@ -1208,9 +1218,9 @@ fn construct_source_message(
                                 }
                                 None => Ok(Datum::Null),
                             })
-                            .unwrap_or(Err(KafkaHeaderParseError::KeyNotFound {
-                                key: key.clone(),
-                            }));
+                            .unwrap_or_else(|| {
+                                Err(KafkaHeaderParseError::KeyNotFound { key: key.clone() })
+                            });
                         match d {
                             Ok(d) => packer.push(d),
                             //abort with a definite error when the header is not found or cannot be parsed correctly
@@ -1397,7 +1407,9 @@ mod tests {
                         let _payload =
                             std::str::from_utf8(msg.payload().expect("missing payload"))?;
                         if partition_queue_count > 0 {
-                            anyhow::bail!("Got message from common queue after we internally switched to partition queue.");
+                            anyhow::bail!(
+                                "Got message from common queue after we internally switched to partition queue."
+                            );
                         }
 
                         common_queue_count += 1;
@@ -1509,7 +1521,9 @@ impl MetadataUpdate {
 pub enum KafkaHeaderParseError {
     #[error("A header with key '{key}' was not found in the message headers")]
     KeyNotFound { key: String },
-    #[error("Found ill-formed byte sequence in header '{key}' that cannot be decoded as valid utf-8 (original bytes: {raw:x?})")]
+    #[error(
+        "Found ill-formed byte sequence in header '{key}' that cannot be decoded as valid utf-8 (original bytes: {raw:x?})"
+    )]
     Utf8Error { key: String, raw: Vec<u8> },
 }
 
@@ -1606,18 +1620,8 @@ fn render_metadata_fetcher<G: Scope<Timestamp = KafkaTimestamp>>(
             }
         };
 
-        // We want a fairly low ceiling on our polling frequency, since we rely
-        // on this heartbeat to determine the health of our Kafka connection.
-        let poll_interval = topic_metadata_refresh_interval.min(
-            config
-                .config
-                .parameters
-                .kafka_timeout_config
-                .default_metadata_fetch_interval,
-        );
-
         let (tx, mut rx) = mpsc::unbounded_channel();
-        spawn_metadata_thread(config, consumer, topic, poll_interval, tx);
+        spawn_metadata_thread(config, consumer, topic, tx);
 
         let mut prev_upstream_frontier = resume_upper;
 
@@ -1633,7 +1637,7 @@ fn render_metadata_fetcher<G: Scope<Timestamp = KafkaTimestamp>>(
                 // Unfortunately this is not possible without something like KIP-516.
                 //
                 // The best we can do is check whether the upstream frontier regressed. This tells
-                // us thet the topic was recreated and now contains fewer offsets and/or fewer
+                // us that the topic was recreated and now contains fewer offsets and/or fewer
                 // partitions. Note that we are not able to detect topic recreation if neither of
                 // the two are true.
                 if !PartialOrder::less_equal(&prev_upstream_frontier, &upstream_frontier) {
@@ -1665,21 +1669,26 @@ fn spawn_metadata_thread<C: ConsumerContext>(
     config: RawSourceCreationConfig,
     consumer: BaseConsumer<TunnelingClientContext<C>>,
     topic: String,
-    poll_interval: Duration,
     tx: mpsc::UnboundedSender<(mz_repr::Timestamp, MetadataUpdate)>,
 ) {
+    // Linux thread names are limited to 15 characters. Use a truncated ID to fit the name.
     thread::Builder::new()
-        .name(format!("kafka-metadata-{}", config.id))
+        .name(format!("kfk-mtdt-{}", config.id))
         .spawn(move || {
             trace!(
                 source_id = config.id.to_string(),
                 worker_id = config.worker_id,
                 num_workers = config.worker_count,
-                poll_interval =? poll_interval,
                 "kafka metadata thread: starting..."
             );
+
+            let mut ticker = probe::Ticker::new(
+                || KAFKA_METADATA_FETCH_INTERVAL.get(config.config.config_set()),
+                config.now_fn,
+            );
+
             loop {
-                let probe_ts = (config.now_fn)().into();
+                let probe_ts = ticker.tick_blocking();
                 let result = fetch_partition_info(
                     &consumer,
                     &topic,
@@ -1737,8 +1746,6 @@ fn spawn_metadata_thread<C: ConsumerContext>(
                 if tx.send((probe_ts, update)).is_err() {
                     break;
                 }
-
-                thread::park_timeout(poll_interval);
             }
 
             info!(

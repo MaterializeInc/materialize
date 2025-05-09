@@ -440,8 +440,6 @@ For more details, see [the Kafka documentation](https://kafka.apache.org/documen
 
 ### Partitioning
 
-{{< private-preview />}}
-
 By default, Materialize assigns a partition to each message using the following
 strategy:
 
@@ -513,6 +511,10 @@ Operation type   | Resource type    | Resource name
 -----------------|------------------|--------------
 DescribeConfigs  | Cluster          | n/a
 Create           | Topic            | The specified `TOPIC` option
+
+## Kafka transaction markers
+
+{{< include-md file="shared-content/kafka-transaction-markers.md" >}}
 
 ## Troubleshooting
 

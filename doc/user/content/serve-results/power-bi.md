@@ -31,6 +31,10 @@ Database password      | App-specific password.
 
 ![Connect using the credentials provided in the Materialize console](https://github-production-user-asset-6210df.s3.amazonaws.com/21223421/266625944-de7dfdc6-7a94-4e87-ac0a-01e104512ffe.png)
 
+## Configure a custom cluster
+
+{{% alter-cluster/configure-cluster %}}
+
 ## Troubleshooting
 
 Errors like the following indicate that there is a problem with the connection settings:

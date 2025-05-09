@@ -16,8 +16,8 @@ mod tests {
     use std::sync::LazyLock;
 
     use mz_lsp_server::backend::{
-        Completions, ExecuteCommandParseResponse, ExecuteCommandParseStatement,
-        DEFAULT_FORMATTING_WIDTH,
+        Completions, DEFAULT_FORMATTING_WIDTH, ExecuteCommandParseResponse,
+        ExecuteCommandParseStatement,
     };
     use mz_lsp_server::{PKG_NAME, PKG_VERSION};
     use mz_ore::collections::HashMap;
@@ -27,7 +27,7 @@ mod tests {
     use tokio::sync::Mutex;
     use tower_lsp::jsonrpc::Error;
     use tower_lsp::lsp_types::*;
-    use tower_lsp::{lsp_types::InitializeResult, LspService, Server};
+    use tower_lsp::{LspService, Server, lsp_types::InitializeResult};
 
     /// This structure defines the message received from the
     /// [Backend](mz_lsp::backend::Backend).
@@ -51,9 +51,9 @@ mod tests {
     }
 
     /// The file path used during the tests is where the SQL code resides.
-    const FILE_PATH: LazyLock<PathBuf> = LazyLock::new(|| temp_dir().join("foo.sql"));
+    static FILE_PATH: LazyLock<PathBuf> = LazyLock::new(|| temp_dir().join("foo.sql"));
     /// The SQL code written inside [FILE_PATH].
-    const FILE_SQL_CONTENT: LazyLock<String> =
+    static FILE_SQL_CONTENT: LazyLock<String> =
         LazyLock::new(|| "SELECT \t\t\t200, 200;".to_string());
 
     /// Tests the different capabilities of [Backend](mz_lsp::backend::Backend)

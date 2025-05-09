@@ -20,8 +20,9 @@ use aws_types::region::Region;
 use clap::ArgAction;
 use globset::GlobBuilder;
 use itertools::Itertools;
-use mz_build_info::{build_info, BuildInfo};
+use mz_build_info::{BuildInfo, build_info};
 use mz_catalog::config::ClusterReplicaSizeMap;
+use mz_license_keys::ValidatedLicenseKey;
 use mz_ore::cli::{self, CliConfig};
 use mz_ore::path::PathExt;
 use mz_ore::url::SensitiveUrl;
@@ -29,6 +30,7 @@ use mz_testdrive::{CatalogConfig, Config, ConsistencyCheckLevel};
 use rand::rngs::StdRng;
 use rand::seq::SliceRandom;
 use rand::{Rng, SeedableRng};
+#[allow(deprecated)] // fails with libraries still using old time lib
 use time::Instant;
 use tracing::info;
 use tracing_subscriber::filter::EnvFilter;
@@ -278,6 +280,9 @@ struct Args {
     /// A map from size name to resource allocations for cluster replicas.
     #[clap(long, env = "CLUSTER_REPLICA_SIZES")]
     cluster_replica_sizes: String,
+
+    #[clap(long, env = "MZ_CI_LICENSE_KEY")]
+    license_key: Option<String>,
 }
 
 #[tokio::main]
@@ -367,9 +372,18 @@ async fn main() {
         arg_vars.insert(name.to_string(), val.to_string());
     }
 
-    let cluster_replica_sizes: ClusterReplicaSizeMap =
-        serde_json::from_str(&args.cluster_replica_sizes)
-            .unwrap_or_else(|e| die!("testdrive: failed to parse replica size map: {}", e));
+    let license_key = if let Some(license_key_text) = args.license_key {
+        mz_license_keys::validate(license_key_text.trim(), "00000000-0000-0000-000000000000")
+            .unwrap_or_else(|e| die!("testdrive: failed to validate license key: {}", e))
+    } else {
+        ValidatedLicenseKey::default()
+    };
+
+    let cluster_replica_sizes = ClusterReplicaSizeMap::parse_from_str(
+        &args.cluster_replica_sizes,
+        !license_key.allow_credit_consumption_override,
+    )
+    .unwrap_or_else(|e| die!("testdrive: failed to parse replica size map: {}", e));
 
     let materialize_catalog_config = if args.validate_catalog_store {
         Some(CatalogConfig {
@@ -487,7 +501,7 @@ async fn main() {
     }
 
     if args.shuffle_tests {
-        let seed = args.seed.unwrap_or_else(|| rand::thread_rng().gen());
+        let seed = args.seed.unwrap_or_else(|| rand::thread_rng().r#gen());
         let mut rng = StdRng::seed_from_u64(seed.into());
         files.shuffle(&mut rng);
     }
@@ -503,6 +517,7 @@ async fn main() {
     };
 
     for file in files.into_iter().take(args.max_tests) {
+        #[allow(deprecated)] // fails with libraries still using old time lib
         let start_time = Instant::now();
         let res = if file == Path::new("-") {
             if args.rewrite_results {

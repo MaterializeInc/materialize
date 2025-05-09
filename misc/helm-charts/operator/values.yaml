@@ -13,7 +13,7 @@ operator:
     # -- The Docker repository for the operator image
     repository: materialize/orchestratord
     # -- The tag/version of the operator image to be used
-    tag: v0.131.0-dev.0
+    tag: v0.144.0
     # -- Policy for pulling the image: "IfNotPresent" avoids unnecessary re-pulling of images
     pullPolicy: IfNotPresent
 
@@ -24,12 +24,6 @@ operator:
     enableInternalStatementLogging: true
 
   features:
-    # -- Flag to indicate whether to create balancerd pods for the environments
-    createBalancers: true
-    # -- Flag to indicate whether to create console pods for the environments
-    createConsole: true
-    # -- Override the mapping of environmentd versions to console versions
-    consoleImageTagMapOverride: {}
     # -- Whether to enable environmentd rbac checks
     # TODO: this is not yet supported in the helm chart
     authentication: false
@@ -168,40 +162,25 @@ operator:
         credits_per_hour: "64"
         disk_limit: "962560MiB"
         memory_limit: "481280MiB"
-      128C:
-        workers: 62
-        scale: 4
-        cpu_exclusive: true
-        cpu_limit: 62
-        credits_per_hour: "128"
-        disk_limit: "962560MiB"
-        memory_limit: "481280MiB"
-      256C:
-        workers: 62
-        scale: 8
-        cpu_exclusive: true
-        cpu_limit: 62
-        credits_per_hour: "256"
-        disk_limit: "962560MiB"
-        memory_limit: "481280MiB"
-      512C:
-        workers: 62
-        scale: 16
-        cpu_exclusive: true
-        cpu_limit: 62
-        credits_per_hour: "512"
-        disk_limit: "962560MiB"
-        memory_limit: "481280MiB"
     defaultSizes:
       default: 25cc
       system: 25cc
       probe: mz_probe
       support: 25cc
-      catalogServer: 50cc
+      catalogServer: 25cc
       analytics: 25cc
+    defaultReplicationFactor:
+      system: 0
+      probe: 0
+      support: 0
+      analytics: 0
 
-  # Node selector to use for the operator pod
-  nodeSelector: {}
+  # -- Node selector to use for the operator pod
+  nodeSelector:
+  # -- Affinity to use for the operator pod
+  affinity:
+  # -- Tolerations to use for the operator pod
+  tolerations:
   resources:
     # -- Resources requested by the operator for CPU and memory
     requests:
@@ -219,11 +198,41 @@ operator:
 
 environmentd:
   # -- Node selector to use for environmentd pods spawned by the operator
-  nodeSelector: {}
+  nodeSelector:
+  # -- Affinity to use for environmentd pods spawned by the operator
+  affinity:
+  # -- Tolerations to use for environmentd pods spawned by the operator
+  tolerations:
 
 clusterd:
   # -- Node selector to use for clusterd pods spawned by the operator
-  nodeSelector: {}
+  nodeSelector:
+  # -- Affinity to use for clusterd pods spawned by the operator
+  affinity:
+  # -- Tolerations to use for clusterd pods spawned by the operator
+  tolerations:
+
+balancerd:
+  # -- Flag to indicate whether to create balancerd pods for the environments
+  enabled: true
+  # -- Node selector to use for balancerd pods spawned by the operator
+  nodeSelector:
+  # -- Affinity to use for balancerd pods spawned by the operator
+  affinity:
+  # -- Tolerations to use for balancerd pods spawned by the operator
+  tolerations:
+
+console:
+  # -- Flag to indicate whether to create console pods for the environments
+  enabled: true
+  # -- Override the mapping of environmentd versions to console versions
+  imageTagMapOverride: {}
+  # -- Node selector to use for console pods spawned by the operator
+  nodeSelector:
+  # -- Affinity to use for console pods spawned by the operator
+  affinity:
+  # -- Tolerations to use for console pods spawned by the operator
+  tolerations:
 
 # RBAC (Role-Based Access Control) settings
 rbac:

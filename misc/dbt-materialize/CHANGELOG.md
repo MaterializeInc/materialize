@@ -1,8 +1,29 @@
 # dbt-materialize Changelog
 
+## 1.9.5 - 2025-05-01
+
+* Add support for `retain_history` configuration in materialized views, allowing users to specify how long to retain historical data (e.g. `retain_history: '1hr'`).
+
+## 1.9.4 - 2025-04-04
+
+* Fix copying default privileges in blue/green deployments when the
+  grantee is `PUBLIC`.
+
+## 1.9.3 - 2025-01-22
+
+* Fix a bug in the `truncate_relation_sql` macro where specifying a cluster for
+  seeds wasn't respecting custom cluster naming logic from user-defined
+  `generate_cluster_name` macros.
+
+## 1.9.2 - 2025-01-21
+
+* Fix schema tagging to work with current transaction limitations.
+
 ## 1.9.1 - 2025-01-17
 
-* Fix a bug in the `deploy_init` macro where source cluster validation wasn't respecting custom cluster naming logic from user-defined `generate_cluster_name` macros.
+* Fix a bug in the `deploy_init` macro where source cluster validation wasn't
+  respecting custom cluster naming logic from user-defined
+  `generate_cluster_name` macros.
 
 ## 1.9.0 - 2024-12-17
 
@@ -75,7 +96,10 @@
 
 ## 1.8.3 - 2024-07-19
 
-* Enable cross-database references ([#27686](https://github.com/MaterializeInc/materialize/pull/27686)). Although cross-database references are not supported in `dbt-postgres`, databases in Materialize are purely used for namespacing, and therefore do not present the same constraint.
+* Enable cross-database references ([#27686](https://github.com/MaterializeInc/materialize/pull/27686)).
+  Although cross-database references are not supported in `dbt-postgres`,
+  databases in Materialize are purely used for namespacing, and therefore do not
+  present the same constraint.
 
 * Add the `create_cluster` and `drop_cluster` macros, which allow managing the
   creation and deletion of clusters in workflows requiring transient

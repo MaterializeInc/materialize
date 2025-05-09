@@ -36,9 +36,10 @@ from materialize.mzcompose.services.materialized import (
 )
 from materialize.mzcompose.services.minio import minio_blob_uri
 from materialize.parallel_workload.database import (
+    DATA_TYPES,
     DB,
-    MAX_CLUSTER_REPLICAS,
     MAX_CLUSTERS,
+    MAX_COLUMNS,
     MAX_DBS,
     MAX_INDEXES,
     MAX_KAFKA_SINKS,
@@ -53,6 +54,7 @@ from materialize.parallel_workload.database import (
     MAX_WEBHOOK_SOURCES,
     Cluster,
     ClusterReplica,
+    Column,
     Database,
     DBObject,
     Index,
@@ -714,6 +716,37 @@ class RenameTableAction(Action):
         return True
 
 
+class AlterTableAddColumnAction(Action):
+    def run(self, exe: Executor) -> bool:
+        with exe.db.lock:
+            if not exe.db.tables:
+                return False
+            if exe.db.flags.get("enable_alter_table_add_column", "FALSE") != "TRUE":
+                return False
+            table = self.rng.choice(exe.db.tables)
+        with table.lock:
+            # Allow adding more a few more columns than the max for additional coverage.
+            if len(table.columns) >= MAX_COLUMNS + 3:
+                return False
+
+            # TODO(alter_table): Support adding non-nullable columns with a default value.
+            new_column = Column(
+                self.rng, len(table.columns), self.rng.choice(DATA_TYPES), table
+            )
+            new_column.raw_name = f"{new_column.raw_name}-altered"
+            new_column.nullable = True
+            new_column.default = None
+
+            try:
+                exe.execute(
+                    f"ALTER TABLE {str(table)} ADD COLUMN {new_column.create()}"
+                )
+            except:
+                raise
+            table.columns.append(new_column)
+        return True
+
+
 class RenameViewAction(Action):
     def run(self, exe: Executor) -> bool:
         if exe.db.scenario != Scenario.Rename:
@@ -789,19 +822,24 @@ class AlterKafkaSinkFromAction(Action):
                     if len(o.columns) == 1
                     and o.columns[0].data_type == old_object.columns[0].data_type
                 ]
+            elif sink.format in ["FORMAT JSON"]:
+                # We should be able to format all data types as JSON, and they have no
+                # particular backwards-compatiblility requirements.
+                objs = [o for o in exe.db.db_objects_without_views()]
             else:
-                # multi column formats require at least as many columns as before
-                # columns also have to be of the same type, see database-issues#8385
-                objs = [
-                    o
-                    for o in exe.db.db_objects_without_views()
-                    # Webhook sources can include all headers, then we don't know the exact columns
-                    if not isinstance(old_object, WebhookSource)
-                    and not isinstance(o, WebhookSource)
-                    and len(o.columns) >= len(old_object.columns)
-                    and [c.data_type for c in o.columns[: len(old_object.columns)]]
-                    == [c.data_type for c in old_object.columns]
-                ]
+                # Avro schema migration checking can be quite strict, and we need to be not only
+                # compatible with the latest object's schema but all previous schemas.
+                # Only allow a conservative case for now: where all types and names match.
+                objs = []
+                old_cols = {c.name(True): c.data_type for c in old_object.columns}
+                for o in exe.db.db_objects_without_views():
+                    if isinstance(old_object, WebhookSource):
+                        continue
+                    if isinstance(o, WebhookSource):
+                        continue
+                    new_cols = {c.name(True): c.data_type for c in o.columns}
+                    if old_cols == new_cols:
+                        objs.append(o)
             if not objs:
                 return False
             sink.base_object = self.rng.choice(objs)
@@ -1008,18 +1046,10 @@ class FlipFlagsAction(Action):
         self.flags_with_values["persist_optimize_ignored_data_fetch"] = (
             BOOLEAN_FLAG_VALUES
         )
-        self.flags_with_values["persist_optimize_ignored_data_decode"] = (
-            BOOLEAN_FLAG_VALUES
-        )
-        self.flags_with_values["persist_write_diffs_sum"] = BOOLEAN_FLAG_VALUES
         self.flags_with_values["enable_variadic_left_join_lowering"] = (
             BOOLEAN_FLAG_VALUES
         )
         self.flags_with_values["enable_eager_delta_joins"] = BOOLEAN_FLAG_VALUES
-        self.flags_with_values["persist_batch_columnar_format"] = ["row", "both_v2"]
-        self.flags_with_values["persist_record_schema_id"] = BOOLEAN_FLAG_VALUES
-        self.flags_with_values["persist_batch_structured_order"] = BOOLEAN_FLAG_VALUES
-        self.flags_with_values["persist_batch_builder_structured"] = BOOLEAN_FLAG_VALUES
         self.flags_with_values["persist_batch_structured_key_lower_len"] = [
             "0",
             "1",
@@ -1042,6 +1072,7 @@ class FlipFlagsAction(Action):
             BOOLEAN_FLAG_VALUES
         )
         self.flags_with_values["compute_apply_column_demands"] = BOOLEAN_FLAG_VALUES
+        self.flags_with_values["enable_alter_table_add_column"] = BOOLEAN_FLAG_VALUES
 
     def run(self, exe: Executor) -> bool:
         flag_name = self.rng.choice(list(self.flags_with_values.keys()))
@@ -1059,6 +1090,7 @@ class FlipFlagsAction(Action):
         try:
             conn = self.create_system_connection(exe)
             self.flip_flag(conn, flag_name, flag_value)
+            exe.db.flags[flag_name] = flag_value
             return True
         except OperationalError:
             if conn is not None:
@@ -1316,13 +1348,6 @@ class SetClusterAction(Action):
 
 
 class CreateClusterReplicaAction(Action):
-    def errors_to_ignore(self, exe: Executor) -> list[str]:
-        result = [
-            "cannot create more than one replica of a cluster containing sources or sinks",
-        ] + super().errors_to_ignore(exe)
-
-        return result
-
     def run(self, exe: Executor) -> bool:
         with exe.db.lock:
             # Keep cluster 0 with 1 replica for sources/sinks
@@ -1330,8 +1355,6 @@ class CreateClusterReplicaAction(Action):
             if not unmanaged_clusters:
                 return False
             cluster = self.rng.choice(unmanaged_clusters)
-            if len(cluster.replicas) >= MAX_CLUSTER_REPLICAS:
-                return False
             cluster.replica_id += 1
         with cluster.lock:
             if cluster not in exe.db.clusters or not cluster.managed:
@@ -1594,12 +1617,14 @@ class KillAction(Action):
         self,
         rng: random.Random,
         composition: Composition | None,
+        azurite: bool,
         sanity_restart: bool,
         system_param_fn: Callable[[dict[str, str]], dict[str, str]] = lambda x: x,
     ):
         super().__init__(rng, composition)
         self.system_param_fn = system_param_fn
         self.system_parameters = {}
+        self.azurite = azurite
         self.sanity_restart = sanity_restart
 
     def run(self, exe: Executor) -> bool:
@@ -1609,12 +1634,15 @@ class KillAction(Action):
         with self.composition.override(
             Materialized(
                 restart="on-failure",
-                external_minio="toxiproxy",
+                # TODO: Retry with toxiproxy on azurite
+                external_blob_store=True,
+                blob_store_is_azure=self.azurite,
                 external_metadata_store="toxiproxy",
                 ports=["6975:6875", "6976:6876", "6977:6877"],
                 sanity_restart=self.sanity_restart,
                 additional_system_parameter_defaults=self.system_parameters,
                 metadata_store="cockroach",
+                default_replication_factor=2,
             )
         ):
             self.composition.up("materialized", detach=True)
@@ -1627,9 +1655,11 @@ class ZeroDowntimeDeployAction(Action):
         self,
         rng: random.Random,
         composition: Composition | None,
+        azurite: bool,
         sanity_restart: bool,
     ):
         super().__init__(rng, composition)
+        self.azurite = azurite
         self.sanity_restart = sanity_restart
         self.deploy_generation = 0
 
@@ -1650,7 +1680,9 @@ class ZeroDowntimeDeployAction(Action):
         with self.composition.override(
             Materialized(
                 name=mz_service,
-                external_minio="toxiproxy",
+                # TODO: Retry with toxiproxy on azurite
+                external_blob_store=True,
+                blob_store_is_azure=self.azurite,
                 external_metadata_store="toxiproxy",
                 ports=ports,
                 sanity_restart=self.sanity_restart,
@@ -1661,6 +1693,7 @@ class ZeroDowntimeDeployAction(Action):
                 restart="on-failure",
                 healthcheck=LEADER_STATUS_HEALTHCHECK,
                 metadata_store="cockroach",
+                default_replication_factor=2,
             ),
         ):
             self.composition.up(mz_service, detach=True)
@@ -1741,7 +1774,7 @@ class CreateWebhookSourceAction(Action):
         result = super().errors_to_ignore(exe)
         if exe.db.scenario in (Scenario.Kill, Scenario.ZeroDowntimeDeploy):
             result.extend(
-                ["cannot create source in cluster with more than one replica"]
+                ["cannot create webhook source in cluster with more than one replica"]
             )
         return result
 
@@ -1751,10 +1784,7 @@ class CreateWebhookSourceAction(Action):
                 return False
             webhook_source_id = exe.db.webhook_source_id
             exe.db.webhook_source_id += 1
-            potential_clusters = [c for c in exe.db.clusters if len(c.replicas) == 1]
-            if not potential_clusters:
-                return False
-            cluster = self.rng.choice(potential_clusters)
+            cluster = self.rng.choice(exe.db.clusters)
             schema = self.rng.choice(exe.db.schemas)
         with schema.lock, cluster.lock:
             if schema not in exe.db.schemas:
@@ -1791,29 +1821,18 @@ class DropWebhookSourceAction(Action):
 
 
 class CreateKafkaSourceAction(Action):
-    def errors_to_ignore(self, exe: Executor) -> list[str]:
-        result = super().errors_to_ignore(exe)
-        if exe.db.scenario in (Scenario.Kill, Scenario.ZeroDowntimeDeploy):
-            result.extend(
-                ["cannot create source in cluster with more than one replica"]
-            )
-        return result
-
     def run(self, exe: Executor) -> bool:
         with exe.db.lock:
             if len(exe.db.kafka_sources) >= MAX_KAFKA_SOURCES:
                 return False
             source_id = exe.db.kafka_source_id
             exe.db.kafka_source_id += 1
-            potential_clusters = [c for c in exe.db.clusters if len(c.replicas) == 1]
-            if not potential_clusters:
-                return False
-            cluster = self.rng.choice(potential_clusters)
+            cluster = self.rng.choice(exe.db.clusters)
             schema = self.rng.choice(exe.db.schemas)
         with schema.lock, cluster.lock:
             if schema not in exe.db.schemas:
                 return False
-            if cluster not in exe.db.clusters or len(cluster.replicas) != 1:
+            if cluster not in exe.db.clusters:
                 return False
 
             try:
@@ -1859,16 +1878,8 @@ class DropKafkaSourceAction(Action):
 
 
 class CreateMySqlSourceAction(Action):
-    def errors_to_ignore(self, exe: Executor) -> list[str]:
-        result = super().errors_to_ignore(exe)
-        if exe.db.scenario in (Scenario.Kill, Scenario.ZeroDowntimeDeploy):
-            result.extend(
-                ["cannot create source in cluster with more than one replica"]
-            )
-        return result
-
     def run(self, exe: Executor) -> bool:
-        # TODO: Reenable when database-issues#6881 is fixed
+        # See database-issues#6881, not expected to work
         if exe.db.scenario == Scenario.BackupRestore:
             return False
 
@@ -1877,15 +1888,12 @@ class CreateMySqlSourceAction(Action):
                 return False
             source_id = exe.db.mysql_source_id
             exe.db.mysql_source_id += 1
-            potential_clusters = [c for c in exe.db.clusters if len(c.replicas) == 1]
-            if not potential_clusters:
-                return False
             schema = self.rng.choice(exe.db.schemas)
-            cluster = self.rng.choice(potential_clusters)
+            cluster = self.rng.choice(exe.db.clusters)
         with schema.lock, cluster.lock:
             if schema not in exe.db.schemas:
                 return False
-            if cluster not in exe.db.clusters or len(cluster.replicas) != 1:
+            if cluster not in exe.db.clusters:
                 return False
 
             try:
@@ -1931,16 +1939,8 @@ class DropMySqlSourceAction(Action):
 
 
 class CreatePostgresSourceAction(Action):
-    def errors_to_ignore(self, exe: Executor) -> list[str]:
-        result = super().errors_to_ignore(exe)
-        if exe.db.scenario in (Scenario.Kill, Scenario.ZeroDowntimeDeploy):
-            result.extend(
-                ["cannot create source in cluster with more than one replica"]
-            )
-        return result
-
     def run(self, exe: Executor) -> bool:
-        # TODO: Reenable when database-issues#6881 is fixed
+        # See database-issues#6881, not expected to work
         if exe.db.scenario == Scenario.BackupRestore:
             return False
 
@@ -1949,15 +1949,12 @@ class CreatePostgresSourceAction(Action):
                 return False
             source_id = exe.db.postgres_source_id
             exe.db.postgres_source_id += 1
-            potential_clusters = [c for c in exe.db.clusters if len(c.replicas) == 1]
-            if not potential_clusters:
-                return False
             schema = self.rng.choice(exe.db.schemas)
-            cluster = self.rng.choice(potential_clusters)
+            cluster = self.rng.choice(exe.db.clusters)
         with schema.lock, cluster.lock:
             if schema not in exe.db.schemas:
                 return False
-            if cluster not in exe.db.clusters or len(cluster.replicas) != 1:
+            if cluster not in exe.db.clusters:
                 return False
 
             try:
@@ -2005,8 +2002,6 @@ class DropPostgresSourceAction(Action):
 class CreateKafkaSinkAction(Action):
     def errors_to_ignore(self, exe: Executor) -> list[str]:
         return [
-            # Another replica can be created in parallel
-            "cannot create sink in cluster with more than one replica",
             "BYTES format with non-encodable type",
         ] + super().errors_to_ignore(exe)
 
@@ -2016,15 +2011,12 @@ class CreateKafkaSinkAction(Action):
                 return False
             sink_id = exe.db.kafka_sink_id
             exe.db.kafka_sink_id += 1
-            potential_clusters = [c for c in exe.db.clusters if len(c.replicas) == 1]
-            if not potential_clusters:
-                return False
-            cluster = self.rng.choice(potential_clusters)
+            cluster = self.rng.choice(exe.db.clusters)
             schema = self.rng.choice(exe.db.schemas)
         with schema.lock, cluster.lock:
             if schema not in exe.db.schemas:
                 return False
-            if cluster not in exe.db.clusters or len(cluster.replicas) != 1:
+            if cluster not in exe.db.clusters:
                 return False
 
             sink = KafkaSink(
@@ -2252,8 +2244,9 @@ ddl_action_list = ActionList(
         (RenameSinkAction, 10),
         (SwapSchemaAction, 10),
         (FlipFlagsAction, 2),
-        # TODO: Reenable when database-issues#8445 is fixed
-        # (AlterKafkaSinkFromAction, 8),
+        # TODO: Reenable when database-issues#8813 is fixed.
+        # (AlterTableAddColumnAction, 10),
+        (AlterKafkaSinkFromAction, 8),
         # (TransactionIsolationAction, 1),
     ],
     autocommit=True,

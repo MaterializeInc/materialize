@@ -20,13 +20,21 @@ use std::time::Duration;
 use std::{env, fs, iter};
 
 use anyhow::anyhow;
-use futures::future::{BoxFuture, LocalBoxFuture};
 use futures::Future;
+use futures::future::{BoxFuture, LocalBoxFuture};
 use headers::{Header, HeaderMapExt};
 use hyper::http::header::HeaderMap;
 use mz_adapter::TimestampExplanation;
+use mz_adapter_types::bootstrap_builtin_cluster_config::{
+    ANALYTICS_CLUSTER_DEFAULT_REPLICATION_FACTOR, BootstrapBuiltinClusterConfig,
+    CATALOG_SERVER_CLUSTER_DEFAULT_REPLICATION_FACTOR, PROBE_CLUSTER_DEFAULT_REPLICATION_FACTOR,
+    SUPPORT_CLUSTER_DEFAULT_REPLICATION_FACTOR, SYSTEM_CLUSTER_DEFAULT_REPLICATION_FACTOR,
+};
+
 use mz_catalog::config::ClusterReplicaSizeMap;
 use mz_controller::ControllerConfig;
+use mz_dyncfg::ConfigUpdates;
+use mz_license_keys::ValidatedLicenseKey;
 use mz_orchestrator_process::{ProcessOrchestrator, ProcessOrchestratorConfig};
 use mz_orchestrator_tracing::{TracingCliArgs, TracingOrchestrator};
 use mz_ore::metrics::MetricsRegistry;
@@ -37,10 +45,10 @@ use mz_ore::tracing::{
     OpenTelemetryConfig, StderrLogConfig, StderrLogFormat, TracingConfig, TracingGuard,
     TracingHandle,
 };
-use mz_persist_client::cache::PersistClientCache;
-use mz_persist_client::cfg::PersistConfig;
-use mz_persist_client::rpc::PersistGrpcPubSubServer;
 use mz_persist_client::PersistLocation;
+use mz_persist_client::cache::PersistClientCache;
+use mz_persist_client::cfg::{CONSENSUS_CONNECTION_POOL_MAX_SIZE, PersistConfig};
+use mz_persist_client::rpc::PersistGrpcPubSubServer;
 use mz_secrets::SecretsController;
 use mz_server_core::{ReloadTrigger, TlsCertConfig};
 use mz_sql::catalog::EnvironmentId;
@@ -54,7 +62,7 @@ use openssl::pkey::{PKey, Private};
 use openssl::rsa::Rsa;
 use openssl::ssl::{SslConnector, SslConnectorBuilder, SslMethod, SslOptions};
 use openssl::x509::extension::{BasicConstraints, SubjectAlternativeName};
-use openssl::x509::{X509Name, X509NameBuilder, X509};
+use openssl::x509::{X509, X509Name, X509NameBuilder};
 use postgres::error::DbError;
 use postgres::tls::{MakeTlsConnect, TlsConnect};
 use postgres::types::{FromSql, Type};
@@ -85,6 +93,8 @@ pub struct TestHarness {
     data_directory: Option<PathBuf>,
     tls: Option<TlsCertConfig>,
     frontegg: Option<FronteggAuthentication>,
+    self_hosted_auth: bool,
+    self_hosted_auth_internal: bool,
     unsafe_mode: bool,
     workers: usize,
     now: NowFn,
@@ -92,11 +102,13 @@ pub struct TestHarness {
     storage_usage_collection_interval: Duration,
     storage_usage_retention_period: Option<Duration>,
     default_cluster_replica_size: String,
-    builtin_system_cluster_replica_size: String,
-    builtin_catalog_server_cluster_replica_size: String,
-    builtin_probe_cluster_replica_size: String,
-    builtin_support_cluster_replica_size: String,
-    builtin_analytics_cluster_replica_size: String,
+    default_cluster_replication_factor: u32,
+    builtin_system_cluster_config: BootstrapBuiltinClusterConfig,
+    builtin_catalog_server_cluster_config: BootstrapBuiltinClusterConfig,
+    builtin_probe_cluster_config: BootstrapBuiltinClusterConfig,
+    builtin_support_cluster_config: BootstrapBuiltinClusterConfig,
+    builtin_analytics_cluster_config: BootstrapBuiltinClusterConfig,
+
     propagate_crashes: bool,
     enable_tracing: bool,
     // This is currently unrelated to enable_tracing, and is used only to disable orchestrator
@@ -118,6 +130,8 @@ impl Default for TestHarness {
             data_directory: None,
             tls: None,
             frontegg: None,
+            self_hosted_auth: false,
+            self_hosted_auth_internal: false,
             unsafe_mode: false,
             workers: 1,
             now: SYSTEM_TIME.clone(),
@@ -125,11 +139,27 @@ impl Default for TestHarness {
             storage_usage_collection_interval: Duration::from_secs(3600),
             storage_usage_retention_period: None,
             default_cluster_replica_size: "1".to_string(),
-            builtin_system_cluster_replica_size: "1".to_string(),
-            builtin_catalog_server_cluster_replica_size: "1".to_string(),
-            builtin_probe_cluster_replica_size: "1".to_string(),
-            builtin_support_cluster_replica_size: "1".to_string(),
-            builtin_analytics_cluster_replica_size: "1".to_string(),
+            default_cluster_replication_factor: 1,
+            builtin_system_cluster_config: BootstrapBuiltinClusterConfig {
+                size: "1".to_string(),
+                replication_factor: SYSTEM_CLUSTER_DEFAULT_REPLICATION_FACTOR,
+            },
+            builtin_catalog_server_cluster_config: BootstrapBuiltinClusterConfig {
+                size: "1".to_string(),
+                replication_factor: CATALOG_SERVER_CLUSTER_DEFAULT_REPLICATION_FACTOR,
+            },
+            builtin_probe_cluster_config: BootstrapBuiltinClusterConfig {
+                size: "1".to_string(),
+                replication_factor: PROBE_CLUSTER_DEFAULT_REPLICATION_FACTOR,
+            },
+            builtin_support_cluster_config: BootstrapBuiltinClusterConfig {
+                size: "1".to_string(),
+                replication_factor: SUPPORT_CLUSTER_DEFAULT_REPLICATION_FACTOR,
+            },
+            builtin_analytics_cluster_config: BootstrapBuiltinClusterConfig {
+                size: "1".to_string(),
+                replication_factor: ANALYTICS_CLUSTER_DEFAULT_REPLICATION_FACTOR,
+            },
             propagate_crashes: false,
             enable_tracing: false,
             bootstrap_role: Some("materialize".into()),
@@ -221,6 +251,16 @@ impl TestHarness {
         self
     }
 
+    pub fn with_self_hosted_auth(mut self, self_hosted_auth: bool) -> Self {
+        self.self_hosted_auth = self_hosted_auth;
+        self
+    }
+
+    pub fn with_self_hosted_auth_internal(mut self, self_hosted_auth_internal: bool) -> Self {
+        self.self_hosted_auth_internal = self_hosted_auth_internal;
+        self
+    }
+
     pub fn with_now(mut self, now: NowFn) -> Self {
         self.now = now;
         self
@@ -254,14 +294,24 @@ impl TestHarness {
         mut self,
         builtin_system_cluster_replica_size: String,
     ) -> Self {
-        self.builtin_system_cluster_replica_size = builtin_system_cluster_replica_size;
+        self.builtin_system_cluster_config.size = builtin_system_cluster_replica_size;
         self
     }
+
+    pub fn with_builtin_system_cluster_replication_factor(
+        mut self,
+        builtin_system_cluster_replication_factor: u32,
+    ) -> Self {
+        self.builtin_system_cluster_config.replication_factor =
+            builtin_system_cluster_replication_factor;
+        self
+    }
+
     pub fn with_builtin_catalog_server_cluster_replica_size(
         mut self,
         builtin_catalog_server_cluster_replica_size: String,
     ) -> Self {
-        self.builtin_catalog_server_cluster_replica_size =
+        self.builtin_catalog_server_cluster_config.size =
             builtin_catalog_server_cluster_replica_size;
         self
     }
@@ -393,15 +443,16 @@ impl Listeners {
         // Messing with the clock causes persist to expire leases, causing hangs and
         // panics. Is it possible/desirable to put this back somehow?
         let persist_now = SYSTEM_TIME.clone();
-        let mut persist_cfg = PersistConfig::new(
-            &crate::BUILD_INFO,
-            persist_now.clone(),
-            mz_dyncfgs::all_dyncfgs(),
-        );
-        persist_cfg.build_version = config.code_version;
+        let dyncfgs = mz_dyncfgs::all_dyncfgs();
+
+        let mut updates = ConfigUpdates::default();
         // Tune down the number of connections to make this all work a little easier
         // with local postgres.
-        persist_cfg.consensus_connection_pool_max_size = 1;
+        updates.add(&CONSENSUS_CONNECTION_POOL_MAX_SIZE, 1);
+        updates.apply(&dyncfgs);
+
+        let mut persist_cfg = PersistConfig::new(&crate::BUILD_INFO, persist_now.clone(), dyncfgs);
+        persist_cfg.build_version = config.code_version;
         // Stress persist more by writing rollups frequently
         persist_cfg.set_rollup_threshold(5);
 
@@ -503,6 +554,8 @@ impl Listeners {
                 cloud_resource_controller: None,
                 tls: config.tls,
                 frontegg: config.frontegg,
+                self_hosted_auth: config.self_hosted_auth,
+                self_hosted_auth_internal: config.self_hosted_auth_internal,
                 unsafe_mode: config.unsafe_mode,
                 all_features: false,
                 metrics_registry: metrics_registry.clone(),
@@ -511,16 +564,14 @@ impl Listeners {
                 cors_allowed_origin: AllowOrigin::list([]),
                 cluster_replica_sizes: ClusterReplicaSizeMap::for_tests(),
                 bootstrap_default_cluster_replica_size: config.default_cluster_replica_size,
-                bootstrap_builtin_system_cluster_replica_size: config
-                    .builtin_system_cluster_replica_size,
-                bootstrap_builtin_catalog_server_cluster_replica_size: config
-                    .builtin_catalog_server_cluster_replica_size,
-                bootstrap_builtin_probe_cluster_replica_size: config
-                    .builtin_probe_cluster_replica_size,
-                bootstrap_builtin_support_cluster_replica_size: config
-                    .builtin_support_cluster_replica_size,
-                bootstrap_builtin_analytics_cluster_replica_size: config
-                    .builtin_analytics_cluster_replica_size,
+                bootstrap_default_cluster_replication_factor: config
+                    .default_cluster_replication_factor,
+                bootstrap_builtin_system_cluster_config: config.builtin_system_cluster_config,
+                bootstrap_builtin_catalog_server_cluster_config: config
+                    .builtin_catalog_server_cluster_config,
+                bootstrap_builtin_probe_cluster_config: config.builtin_probe_cluster_config,
+                bootstrap_builtin_support_cluster_config: config.builtin_support_cluster_config,
+                bootstrap_builtin_analytics_cluster_config: config.builtin_analytics_cluster_config,
                 system_parameter_defaults: config.system_parameter_defaults,
                 availability_zones: Default::default(),
                 tracing_handle,
@@ -540,6 +591,7 @@ impl Listeners {
                 internal_console_redirect_url: config.internal_console_redirect_url,
                 tls_reload_certs,
                 helm_chart_version: None,
+                license_key: ValidatedLicenseKey::for_tests(),
             })
             .await?;
 
@@ -954,7 +1006,7 @@ pub struct MzTimestamp(pub u64);
 impl<'a> FromSql<'a> for MzTimestamp {
     fn from_sql(ty: &Type, raw: &'a [u8]) -> Result<MzTimestamp, Box<dyn Error + Sync + Send>> {
         let n = mz_pgrepr::Numeric::from_sql(ty, raw)?;
-        Ok(MzTimestamp(u64::try_from(n.0 .0)?))
+        Ok(MzTimestamp(u64::try_from(n.0.0)?))
     }
 
     fn accepts(ty: &Type) -> bool {
@@ -1272,7 +1324,7 @@ pub fn auth_with_ws_impl(
             Message::Ping(_) => continue,
             Message::Close(None) => return Err(anyhow!("ws closed after auth")),
             Message::Close(Some(close_frame)) => {
-                return Err(anyhow!("ws closed after auth").context(close_frame))
+                return Err(anyhow!("ws closed after auth").context(close_frame));
             }
             _ => panic!("unexpected response: {:?}", resp),
         }

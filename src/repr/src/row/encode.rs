@@ -17,12 +17,12 @@ use std::sync::Arc;
 
 use anyhow::anyhow;
 use arrow::array::{
-    make_array, Array, ArrayBuilder, ArrayRef, BinaryArray, BinaryBuilder, BooleanArray,
-    BooleanBufferBuilder, BooleanBuilder, FixedSizeBinaryArray, FixedSizeBinaryBuilder,
-    Float32Array, Float32Builder, Float64Array, Float64Builder, Int16Array, Int16Builder,
-    Int32Array, Int32Builder, Int64Array, Int64Builder, ListArray, ListBuilder, MapArray,
-    StringArray, StringBuilder, StructArray, UInt16Array, UInt16Builder, UInt32Array,
-    UInt32Builder, UInt64Array, UInt64Builder, UInt8Array, UInt8Builder,
+    Array, ArrayBuilder, ArrayRef, BinaryArray, BinaryBuilder, BooleanArray, BooleanBufferBuilder,
+    BooleanBuilder, FixedSizeBinaryArray, FixedSizeBinaryBuilder, Float32Array, Float32Builder,
+    Float64Array, Float64Builder, Int16Array, Int16Builder, Int32Array, Int32Builder, Int64Array,
+    Int64Builder, ListArray, ListBuilder, MapArray, StringArray, StringBuilder, StructArray,
+    UInt8Array, UInt8Builder, UInt16Array, UInt16Builder, UInt32Array, UInt32Builder, UInt64Array,
+    UInt64Builder, make_array,
 };
 use arrow::buffer::{BooleanBuffer, Buffer, NullBuffer, OffsetBuffer, ScalarBuffer};
 use arrow::datatypes::{DataType, Field, Fields, ToByteSlice};
@@ -32,14 +32,13 @@ use dec::{Context, Decimal, OrderedDecimal};
 use itertools::{EitherOrBoth, Itertools};
 use mz_ore::assert_none;
 use mz_ore::cast::CastFrom;
-use mz_persist_types::arrow::ArrayOrd;
-use mz_persist_types::columnar::{ColumnDecoder, ColumnEncoder, FixedSizeCodec, Schema2};
-use mz_persist_types::stats::{
-    ColumnNullStats, ColumnStatKinds, ColumnarStats, FixedSizeBytesStatsKind, OptionStats,
-    PrimitiveStats, StructStats,
-};
-use mz_persist_types::stats2::ColumnarStatsBuilder;
 use mz_persist_types::Codec;
+use mz_persist_types::arrow::ArrayOrd;
+use mz_persist_types::columnar::{ColumnDecoder, ColumnEncoder, FixedSizeCodec, Schema};
+use mz_persist_types::stats::{
+    ColumnNullStats, ColumnStatKinds, ColumnarStats, ColumnarStatsBuilder, FixedSizeBytesStatsKind,
+    OptionStats, PrimitiveStats, StructStats,
+};
 use mz_proto::chrono::ProtoNaiveTime;
 use mz_proto::{ProtoType, RustType, TryFromProtoError};
 use prost::Message;
@@ -60,7 +59,7 @@ use crate::row::{
     ProtoArray, ProtoArrayDimension, ProtoDatum, ProtoDatumOther, ProtoDict, ProtoDictElement,
     ProtoNumeric, ProtoRange, ProtoRangeInner, ProtoRow,
 };
-use crate::stats2::{fixed_stats_from_column, numeric_stats_from_column, stats_for_json};
+use crate::stats::{fixed_stats_from_column, numeric_stats_from_column, stats_for_json};
 use crate::{Datum, ProtoRelationDesc, RelationDesc, Row, RowPacker, ScalarType, Timestamp};
 
 // TODO(parkmycar): Benchmark the difference between `FixedSizeBinaryArray` and `BinaryArray`.
@@ -96,7 +95,6 @@ pub fn preserves_order(scalar_type: &ScalarType) -> bool {
         | ScalarType::UInt16
         | ScalarType::UInt32
         | ScalarType::UInt64
-        | ScalarType::Numeric { .. }
         | ScalarType::Date
         | ScalarType::Time
         | ScalarType::Timestamp { .. }
@@ -115,6 +113,9 @@ pub fn preserves_order(scalar_type: &ScalarType) -> bool {
         // Our floating-point encoding preserves order generally, but differs when comparing
         // -0 and 0. Opt these out for now.
         ScalarType::Float32 | ScalarType::Float64 => false,
+        // Numeric is sensitive to similar ordering issues as floating point numbers, and requires
+        // some special handling we don't have yet.
+        ScalarType::Numeric { .. } => false,
         // For all other types: either the encoding is known to not preserve ordering, or we
         // don't yet care to make strong guarantees one way or the other.
         ScalarType::PgLegacyChar
@@ -1256,7 +1257,7 @@ impl DatumColumnDecoder {
     }
 }
 
-impl Schema2<Row> for RelationDesc {
+impl Schema<Row> for RelationDesc {
     type ArrowColumn = arrow::array::StructArray;
     type Statistics = OptionStats<StructStats>;
 
@@ -2039,7 +2040,7 @@ impl RowPacker<'_> {
                     // We plan to remove the `Dummy` variant soon (materialize#17099). To prepare for that, we
                     // emit a log to Sentry here, to notify us of any instances that might have
                     // been made durable.
-                    #[cfg(feature = "tracing_")]
+                    #[cfg(feature = "tracing")]
                     tracing::error!("protobuf decoding found Dummy datum");
                     self.push(Datum::Dummy);
                 }
@@ -2106,12 +2107,12 @@ impl RowPacker<'_> {
                     })
                     .collect::<Vec<_>>();
                 match x.elements.as_ref() {
-                    None => self.push_array(&dims, [].iter()),
+                    None => self.try_push_array(&dims, [].iter()),
                     Some(elements) => {
                         // TODO: Could we avoid this Row alloc if we made a
                         // push_array_with?
                         let elements_row = Row::try_from(elements)?;
-                        self.push_array(&dims, elements_row.iter())
+                        self.try_push_array(&dims, elements_row.iter())
                     }
                 }
                 .map_err(|err| err.to_string())?
@@ -2212,7 +2213,7 @@ impl RustType<ProtoRow> for Row {
 mod tests {
     use std::collections::BTreeSet;
 
-    use arrow::array::{make_array, ArrayData};
+    use arrow::array::{ArrayData, make_array};
     use arrow::compute::SortOptions;
     use arrow::datatypes::ArrowNativeType;
     use arrow::row::SortField;
@@ -2221,9 +2222,9 @@ mod tests {
     use mz_ore::collections::CollectionExt;
     use mz_persist::indexed::columnar::arrow::realloc_array;
     use mz_persist::metrics::ColumnarMetrics;
-    use mz_persist_types::arrow::{ArrayBound, ArrayOrd};
-    use mz_persist_types::columnar::{codec_to_schema2, schema2_to_codec};
     use mz_persist_types::Codec;
+    use mz_persist_types::arrow::{ArrayBound, ArrayOrd};
+    use mz_persist_types::columnar::{codec_to_schema, schema_to_codec};
     use mz_proto::{ProtoType, RustType};
     use proptest::prelude::*;
     use proptest::strategy::Strategy;
@@ -2236,7 +2237,7 @@ mod tests {
     use crate::adt::timestamp::CheckedTimestamp;
     use crate::fixed_length::ToDatumIter;
     use crate::relation::arb_relation_desc;
-    use crate::{arb_datum_for_column, arb_row_for_relation, ColumnName, ColumnType, RowArena};
+    use crate::{ColumnName, ColumnType, RowArena, arb_datum_for_column, arb_row_for_relation};
     use crate::{Datum, RelationDesc, Row, ScalarType};
 
     #[track_caller]
@@ -2252,7 +2253,7 @@ mod tests {
 
     #[track_caller]
     fn roundtrip_rows(desc: &RelationDesc, rows: Vec<Row>, metrics: &ColumnarMetrics) {
-        let mut encoder = <RelationDesc as Schema2<Row>>::encoder(desc).unwrap();
+        let mut encoder = <RelationDesc as Schema<Row>>::encoder(desc).unwrap();
         for row in &rows {
             encoder.append(row);
         }
@@ -2275,7 +2276,7 @@ mod tests {
             assert_eq!(&col, col_dyn);
         }
 
-        let decoder = <RelationDesc as Schema2<Row>>::decoder(desc, col.clone()).unwrap();
+        let decoder = <RelationDesc as Schema<Row>>::decoder(desc, col.clone()).unwrap();
         let stats = decoder.stats();
 
         // Collect all of our lower and upper bounds.
@@ -2285,7 +2286,7 @@ mod tests {
             .map(|(name, ty)| {
                 let col_stats = stats.cols.get(name.as_str()).unwrap();
                 let lower_upper =
-                    crate::stats2::col_values(&ty.scalar_type, &col_stats.values, &arena);
+                    crate::stats::col_values(&ty.scalar_type, &col_stats.values, &arena);
                 let null_count = col_stats.nulls.map_or(0, |n| n.count);
 
                 (lower_upper, null_count)
@@ -2340,8 +2341,8 @@ mod tests {
         }
 
         // Validate that we can convert losslessly to codec and back
-        let codec = schema2_to_codec::<Row>(desc, &col).unwrap();
-        let col2 = codec_to_schema2::<Row>(desc, &codec).unwrap();
+        let codec = schema_to_codec::<Row>(desc, &col).unwrap();
+        let col2 = codec_to_schema::<Row>(desc, &codec).unwrap();
         assert_eq!(col2.as_ref(), &col);
 
         // Validate that we only generate supported array types
@@ -2376,7 +2377,7 @@ mod tests {
             .iter()
             .take_while(|(_, c)| preserves_order(&c.scalar_type))
             .count();
-        let decoder = <RelationDesc as Schema2<Row>>::decoder_any(desc, ord_col.as_ref()).unwrap();
+        let decoder = <RelationDesc as Schema<Row>>::decoder_any(desc, ord_col.as_ref()).unwrap();
         let rows = (0..ord_col.len()).map(|i| {
             let mut row = Row::default();
             decoder.decode(i, &mut row);
@@ -2425,7 +2426,7 @@ mod tests {
     #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `decContextDefault` on OS `linux`
     fn proptest_datums() {
         let strat = any::<ColumnType>().prop_flat_map(|ty| {
-            proptest::collection::vec(arb_datum_for_column(&ty), 0..16)
+            proptest::collection::vec(arb_datum_for_column(ty.clone()), 0..16)
                 .prop_map(move |d| (ty.clone(), d))
         });
         let metrics = ColumnarMetrics::disconnected();
@@ -2452,7 +2453,7 @@ mod tests {
     #[mz_ore::test]
     fn empty_relation_desc_returns_error() {
         let empty_desc = RelationDesc::empty();
-        let result = <RelationDesc as Schema2<Row>>::encoder(&empty_desc);
+        let result = <RelationDesc as Schema<Row>>::encoder(&empty_desc);
         assert_err!(result);
     }
 
@@ -2463,7 +2464,7 @@ mod tests {
         let metrics = ColumnarMetrics::disconnected();
 
         packer
-            .push_array(
+            .try_push_array(
                 &[ArrayDimension {
                     lower_bound: 0,
                     length: 3,
@@ -2503,7 +2504,7 @@ mod tests {
                 .nullable(true),
             )
             .finish();
-        let mut encoder = <RelationDesc as Schema2<Row>>::encoder(&desc).unwrap();
+        let mut encoder = <RelationDesc as Schema<Row>>::encoder(&desc).unwrap();
 
         let mut og_row = Row::default();
         {
@@ -2528,7 +2529,7 @@ mod tests {
         encoder.append(&og_row_2);
         let col = encoder.finish();
 
-        let decoder = <RelationDesc as Schema2<Row>>::decoder(&desc, col).unwrap();
+        let decoder = <RelationDesc as Schema<Row>>::decoder(&desc, col).unwrap();
 
         let mut rnd_row = Row::default();
         decoder.decode(0, &mut rnd_row);
@@ -2554,7 +2555,7 @@ mod tests {
                 .nullable(false),
             )
             .finish();
-        let mut encoder = <RelationDesc as Schema2<Row>>::encoder(&desc).unwrap();
+        let mut encoder = <RelationDesc as Schema<Row>>::encoder(&desc).unwrap();
 
         let mut og_row = Row::default();
         {
@@ -2569,7 +2570,7 @@ mod tests {
         encoder.append(&og_row);
         let col = encoder.finish();
 
-        let decoder = <RelationDesc as Schema2<Row>>::decoder(&desc, col).unwrap();
+        let decoder = <RelationDesc as Schema<Row>>::decoder(&desc, col).unwrap();
         let mut rnd_row = Row::default();
         decoder.decode(0, &mut rnd_row);
 
@@ -2600,7 +2601,7 @@ mod tests {
                 .nullable(true),
             )
             .finish();
-        let mut encoder = <RelationDesc as Schema2<Row>>::encoder(&desc).unwrap();
+        let mut encoder = <RelationDesc as Schema<Row>>::encoder(&desc).unwrap();
 
         let mut og_row = Row::default();
         {
@@ -2617,7 +2618,7 @@ mod tests {
         encoder.append(&null_row);
         let col = encoder.finish();
 
-        let decoder = <RelationDesc as Schema2<Row>>::decoder(&desc, col).unwrap();
+        let decoder = <RelationDesc as Schema<Row>>::decoder(&desc, col).unwrap();
         let mut rnd_row = Row::default();
 
         decoder.decode(0, &mut rnd_row);
@@ -2682,7 +2683,7 @@ mod tests {
             Datum::Null,
         ]);
         packer
-            .push_array(
+            .try_push_array(
                 &[ArrayDimension {
                     lower_bound: 2,
                     length: 2,
@@ -2729,7 +2730,7 @@ mod tests {
             .with_column("b", ScalarType::String.nullable(true))
             .with_column("c", ScalarType::Bool.nullable(true))
             .finish();
-        let mut encoder = <RelationDesc as Schema2<Row>>::encoder(&desc).unwrap();
+        let mut encoder = <RelationDesc as Schema<Row>>::encoder(&desc).unwrap();
 
         let mut og_row = Row::default();
         {
@@ -2752,7 +2753,7 @@ mod tests {
 
         let projected_desc = desc.apply_demand(&BTreeSet::from([0, 2]));
 
-        let decoder = <RelationDesc as Schema2<Row>>::decoder(&projected_desc, col).unwrap();
+        let decoder = <RelationDesc as Schema<Row>>::decoder(&projected_desc, col).unwrap();
 
         let mut rnd_row = Row::default();
         decoder.decode(0, &mut rnd_row);

@@ -133,8 +133,7 @@ class TestNullabilityAssertions:
             fetch="one",
         )
         assert (
-            'ASSERT NOT NULL = "a", ASSERT NOT NULL = "b"'
-            in nullability_assertions_ddl[1]
+            "ASSERT NOT NULL = a, ASSERT NOT NULL = b" in nullability_assertions_ddl[1]
         )
 
 

@@ -14,9 +14,9 @@ use mz_catalog::durable::debug::{CollectionTrace, ConfigCollection, SettingColle
 use mz_catalog::durable::initialize::USER_VERSION_KEY;
 use mz_catalog::durable::objects::serialization::proto;
 use mz_catalog::durable::{
-    test_bootstrap_args, CatalogError, DurableCatalogError, DurableCatalogState, Epoch, FenceError,
-    TestCatalogStateBuilder, BUILTIN_MIGRATION_SHARD_KEY, CATALOG_VERSION,
-    EXPRESSION_CACHE_SHARD_KEY,
+    BUILTIN_MIGRATION_SHARD_KEY, CATALOG_VERSION, CatalogError, DurableCatalogError,
+    DurableCatalogState, EXPRESSION_CACHE_SHARD_KEY, Epoch, FenceError, TestCatalogStateBuilder,
+    test_bootstrap_args,
 };
 use mz_ore::now::{NOW_ZERO, SYSTEM_TIME};
 use mz_ore::{assert_none, assert_ok};
@@ -92,6 +92,7 @@ impl Debug for StableTrace<'_> {
             items,
             network_policies,
             roles,
+            role_auth,
             schemas,
             settings,
             source_references,
@@ -134,6 +135,7 @@ impl Debug for StableTrace<'_> {
             .field("items", items)
             .field("network_policies", network_policies)
             .field("roles", roles)
+            .field("role_auth", role_auth)
             .field("schemas", schemas)
             .field("settings", &settings)
             .field("source_references", source_references)
@@ -155,7 +157,7 @@ async fn test_persist_debug() {
     test_debug(state_builder).await;
 }
 
-async fn test_debug<'a>(state_builder: TestCatalogStateBuilder) {
+async fn test_debug(state_builder: TestCatalogStateBuilder) {
     let state_builder = state_builder.with_default_deploy_generation();
     let mut openable_state1 = state_builder.clone().unwrap_build().await;
     // Check initial empty trace.
@@ -196,7 +198,7 @@ async fn test_debug<'a>(state_builder: TestCatalogStateBuilder) {
         assert_eq!(user_version_key.key, USER_VERSION_KEY);
         assert_eq!(user_version_value.value, CATALOG_VERSION);
         assert_eq!(user_version_ts, &expected_ts);
-        assert_eq!(user_version_diff, &1);
+        assert_eq!(*user_version_diff, Diff::ONE);
 
         let (
             (builtin_migration_shard_key, builtin_migration_shard_value),
@@ -209,7 +211,7 @@ async fn test_debug<'a>(state_builder: TestCatalogStateBuilder) {
         );
         let _shard_id: ShardId = builtin_migration_shard_value.value.parse().unwrap();
         assert_eq!(builtin_migration_shard_ts, &expected_ts);
-        assert_eq!(builtin_migration_shard_diff, &1);
+        assert_eq!(*builtin_migration_shard_diff, Diff::ONE);
 
         let (
             (expression_cache_shard_key, expression_cache_shard_value),
@@ -219,7 +221,7 @@ async fn test_debug<'a>(state_builder: TestCatalogStateBuilder) {
         assert_eq!(expression_cache_shard_key.name, EXPRESSION_CACHE_SHARD_KEY);
         let _shard_id: ShardId = expression_cache_shard_value.value.parse().unwrap();
         assert_eq!(expression_cache_shard_ts, &expected_ts);
-        assert_eq!(expression_cache_shard_diff, &1);
+        assert_eq!(*expression_cache_shard_diff, Diff::ONE);
 
         insta::assert_debug_snapshot!("opened_trace".to_string(), test_trace);
     }
@@ -271,7 +273,7 @@ async fn test_debug<'a>(state_builder: TestCatalogStateBuilder) {
             value: "initial".to_string(),
         },
     );
-    assert_eq!(diff, 1);
+    assert_eq!(diff, Diff::ONE);
 
     // Check modifying an existing value via `edit`.
     let prev = debug_state
@@ -312,7 +314,7 @@ async fn test_debug<'a>(state_builder: TestCatalogStateBuilder) {
             value: "final".to_string(),
         },
     );
-    assert_eq!(diff, 1);
+    assert_eq!(diff, Diff::ONE);
 
     // Check deleting a value via `delete`.
     debug_state
@@ -340,7 +342,7 @@ async fn test_persist_debug_edit_fencing() {
     test_debug_edit_fencing(state_builder).await;
 }
 
-async fn test_debug_edit_fencing<'a>(state_builder: TestCatalogStateBuilder) {
+async fn test_debug_edit_fencing(state_builder: TestCatalogStateBuilder) {
     let mut state = state_builder
         .clone()
         .with_default_deploy_generation()
@@ -435,7 +437,7 @@ async fn test_persist_debug_delete_fencing() {
     test_debug_delete_fencing(state_builder).await;
 }
 
-async fn test_debug_delete_fencing<'a>(state_builder: TestCatalogStateBuilder) {
+async fn test_debug_delete_fencing(state_builder: TestCatalogStateBuilder) {
     let mut state = state_builder
         .clone()
         .with_default_deploy_generation()

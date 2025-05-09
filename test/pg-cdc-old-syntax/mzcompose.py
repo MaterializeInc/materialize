@@ -17,14 +17,25 @@ import time
 import pg8000
 from pg8000 import Connection
 
-from materialize import buildkite
+from materialize import MZ_ROOT, buildkite
 from materialize.mzcompose.composition import Composition, WorkflowArgumentParser
 from materialize.mzcompose.service import Service, ServiceConfig
 from materialize.mzcompose.services.materialized import Materialized
-from materialize.mzcompose.services.postgres import Postgres
+from materialize.mzcompose.services.minio import Minio
+from materialize.mzcompose.services.mz import Mz
+from materialize.mzcompose.services.postgres import (
+    METADATA_STORE,
+    CockroachOrPostgresMetadata,
+    Postgres,
+)
 from materialize.mzcompose.services.test_certs import TestCerts
 from materialize.mzcompose.services.testdrive import Testdrive
 from materialize.mzcompose.services.toxiproxy import Toxiproxy
+from materialize.source_table_migration import (
+    get_new_image_for_source_table_migration_test,
+    get_old_image_for_source_table_migration_test,
+    verify_sources_after_source_table_migration,
+)
 
 # Set the max slot WAL keep size to 10MB
 DEFAULT_PG_EXTRA_COMMAND = ["-c", "max_slot_wal_keep_size=10"]
@@ -83,13 +94,18 @@ def create_postgres(
 
 
 SERVICES = [
+    Mz(app_password=""),
     Materialized(
         volumes_extra=["secrets:/share/secrets"],
         additional_system_parameter_defaults={
             "log_filter": "mz_storage::source::postgres=trace,debug,info,warn,error"
         },
+        external_blob_store=True,
+        default_replication_factor=2,
     ),
     Testdrive(),
+    CockroachOrPostgresMetadata(),
+    Minio(setup_materialize=True),
     TestCerts(),
     Toxiproxy(),
     create_postgres(pg_version=None),
@@ -290,7 +306,9 @@ def workflow_cdc(c: Composition, parser: WorkflowArgumentParser) -> None:
 
     matching_files = []
     for filter in args.filter:
-        matching_files.extend(glob.glob(filter, root_dir="test/pg-cdc-old-syntax"))
+        matching_files.extend(
+            glob.glob(filter, root_dir=MZ_ROOT / "test" / "pg-cdc-old-syntax")
+        )
     sharded_files: list[str] = sorted(
         buildkite.shard_list(matching_files, lambda file: file)
     )
@@ -308,38 +326,33 @@ def workflow_cdc(c: Composition, parser: WorkflowArgumentParser) -> None:
 
     with c.override(create_postgres(pg_version=pg_version)):
         c.up("materialized", "test-certs", "postgres")
-        c.run_testdrive_files(
-            f"--var=ssl-ca={ssl_ca}",
-            f"--var=ssl-cert={ssl_cert}",
-            f"--var=ssl-key={ssl_key}",
-            f"--var=ssl-wrong-cert={ssl_wrong_cert}",
-            f"--var=ssl-wrong-key={ssl_wrong_key}",
-            f"--var=default-replica-size={Materialized.Size.DEFAULT_SIZE}-{Materialized.Size.DEFAULT_SIZE}",
-            f"--var=default-storage-size={Materialized.Size.DEFAULT_SIZE}-1",
-            *sharded_files,
+        c.test_parts(
+            sharded_files,
+            lambda file: c.run_testdrive_files(
+                f"--var=ssl-ca={ssl_ca}",
+                f"--var=ssl-cert={ssl_cert}",
+                f"--var=ssl-key={ssl_key}",
+                f"--var=ssl-wrong-cert={ssl_wrong_cert}",
+                f"--var=ssl-wrong-key={ssl_wrong_key}",
+                f"--var=default-replica-size={Materialized.Size.DEFAULT_SIZE}-{Materialized.Size.DEFAULT_SIZE}",
+                f"--var=default-storage-size={Materialized.Size.DEFAULT_SIZE}-1",
+                file,
+            ),
         )
 
 
 def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
-    workflows_with_internal_sharding = ["cdc"]
-    sharded_workflows = workflows_with_internal_sharding + buildkite.shard_list(
-        [w for w in c.workflows if w not in workflows_with_internal_sharding],
-        lambda w: w,
-    )
-    print(
-        f"Workflows in shard with index {buildkite.get_parallelism_index()}: {sharded_workflows}"
-    )
-    for name in sharded_workflows:
-        if name == "default":
-            continue
+    def process(name: str) -> None:
+        if name in ("default", "migration"):
+            return
 
         # TODO: Flaky, reenable when database-issues#7611 is fixed
         if name == "statuses":
-            continue
+            return
 
         # TODO: Flaky, reenable when database-issues#8447 is fixed
         if name == "silent-connection-drop":
-            continue
+            return
 
         c.kill("postgres")
         c.rm("postgres")
@@ -348,3 +361,106 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
 
         with c.test_case(name):
             c.workflow(name, *parser.args)
+
+    workflows_with_internal_sharding = ["cdc"]
+    sharded_workflows = workflows_with_internal_sharding + buildkite.shard_list(
+        [
+            w
+            for w in c.workflows
+            if w not in workflows_with_internal_sharding and w != "migration"
+        ],
+        lambda w: w,
+    )
+    print(
+        f"Workflows in shard with index {buildkite.get_parallelism_index()}: {sharded_workflows}"
+    )
+    c.test_parts(sharded_workflows, process)
+
+
+def workflow_migration(c: Composition, parser: WorkflowArgumentParser) -> None:
+    parser.add_argument(
+        "filter",
+        nargs="*",
+        default=["*.td"],
+        help="limit to only the files matching filter",
+    )
+    args = parser.parse_args()
+
+    matching_files = []
+    for filter in args.filter:
+        matching_files.extend(
+            glob.glob(filter, root_dir=MZ_ROOT / "test" / "pg-cdc-old-syntax")
+        )
+    sharded_files: list[str] = sorted(
+        buildkite.shard_list(matching_files, lambda file: file)
+    )
+    print(f"Files: {sharded_files}")
+
+    ssl_ca = c.run("test-certs", "cat", "/secrets/ca.crt", capture=True).stdout
+    ssl_cert = c.run("test-certs", "cat", "/secrets/certuser.crt", capture=True).stdout
+    ssl_key = c.run("test-certs", "cat", "/secrets/certuser.key", capture=True).stdout
+    ssl_wrong_cert = c.run(
+        "test-certs", "cat", "/secrets/postgres.crt", capture=True
+    ).stdout
+    ssl_wrong_key = c.run(
+        "test-certs", "cat", "/secrets/postgres.key", capture=True
+    ).stdout
+
+    pg_version = get_targeted_pg_version(parser)
+
+    for file in sharded_files:
+        mz_old = Materialized(
+            name="materialized",
+            image=get_old_image_for_source_table_migration_test(),
+            volumes_extra=["secrets:/share/secrets"],
+            external_metadata_store=True,
+            external_blob_store=True,
+            additional_system_parameter_defaults={
+                "log_filter": "mz_storage::source::postgres=trace,debug,info,warn,error"
+            },
+            default_replication_factor=2,
+        )
+
+        mz_new = Materialized(
+            name="materialized",
+            image=get_new_image_for_source_table_migration_test(),
+            volumes_extra=["secrets:/share/secrets"],
+            external_metadata_store=True,
+            external_blob_store=True,
+            additional_system_parameter_defaults={
+                "log_filter": "mz_storage::source::postgres=trace,debug,info,warn,error",
+                "force_source_table_syntax": "true",
+            },
+            default_replication_factor=2,
+        )
+        with c.override(mz_old, create_postgres(pg_version=pg_version)):
+            c.up("materialized", "test-certs", "postgres")
+
+            print(f"Running {file} with mz_old")
+
+            c.run_testdrive_files(
+                f"--var=ssl-ca={ssl_ca}",
+                f"--var=ssl-cert={ssl_cert}",
+                f"--var=ssl-key={ssl_key}",
+                f"--var=ssl-wrong-cert={ssl_wrong_cert}",
+                f"--var=ssl-wrong-key={ssl_wrong_key}",
+                f"--var=default-replica-size={Materialized.Size.DEFAULT_SIZE}-{Materialized.Size.DEFAULT_SIZE}",
+                f"--var=default-storage-size={Materialized.Size.DEFAULT_SIZE}-1",
+                "--no-reset",
+                file,
+            )
+            c.kill("materialized", wait=True)
+
+            with c.override(mz_new):
+                c.up("materialized")
+
+                print("Running mz_new")
+                verify_sources_after_source_table_migration(c, file)
+
+                c.kill("materialized", wait=True)
+                c.kill("postgres", wait=True)
+                c.kill(METADATA_STORE, wait=True)
+                c.rm("materialized")
+                c.rm(METADATA_STORE)
+                c.rm("postgres")
+                c.rm_volumes("mzdata")

@@ -10,16 +10,14 @@
 //! Implementation of the persist state machine.
 
 use std::fmt::Debug;
-use std::future::Future;
 use std::ops::ControlFlow::{self, Continue};
 use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime};
 
 use differential_dataflow::difference::Semigroup;
 use differential_dataflow::lattice::Lattice;
-use futures::future::BoxFuture;
-use futures::stream::{FuturesUnordered, StreamExt};
 use futures::FutureExt;
+use futures::future::{self, BoxFuture};
 use mz_dyncfg::{Config, ConfigSet};
 use mz_ore::assert_none;
 use mz_ore::cast::CastFrom;
@@ -32,9 +30,9 @@ use mz_persist::retry::Retry;
 use mz_persist_types::schema::SchemaId;
 use mz_persist_types::{Codec, Codec64, Opaque};
 use semver::Version;
-use timely::progress::{Antichain, Timestamp};
 use timely::PartialOrder;
-use tracing::{debug, info, trace_span, warn, Instrument};
+use timely::progress::{Antichain, Timestamp};
+use tracing::{Instrument, debug, info, trace_span, warn};
 
 use crate::async_runtime::IsolatedRuntime;
 use crate::batch::INLINE_WRITES_TOTAL_MAX_BYTES;
@@ -77,12 +75,6 @@ impl<K, V, T: Clone, D> Clone for Machine<K, V, T, D> {
         }
     }
 }
-
-pub(crate) const RECORD_COMPACTIONS: Config<bool> = Config::new(
-    "persist_record_compactions",
-    false,
-    "Record compaction requests in persistent spine state.",
-);
 
 pub(crate) const CLAIM_UNCLAIMED_COMPACTIONS: Config<bool> = Config::new(
     "persist_claim_unclaimed_compactions",
@@ -258,7 +250,7 @@ where
         let metrics = Arc::clone(&self.applier.metrics);
         let (_seqno, state, maintenance) = self
             .apply_unbatched_idempotent_cmd(&metrics.cmds.register, |_seqno, _cfg, state| {
-                state.register_schema::<K, V>(key_schema, val_schema, &metrics.schema)
+                state.register_schema::<K, V>(key_schema, val_schema)
             })
             .await;
         (state, maintenance)
@@ -312,13 +304,13 @@ where
                 .await;
             match res {
                 CompareAndAppendRes::Success(seqno, maintenance) => {
-                    return CompareAndAppendRes::Success(seqno, maintenance)
+                    return CompareAndAppendRes::Success(seqno, maintenance);
                 }
                 CompareAndAppendRes::InvalidUsage(x) => {
-                    return CompareAndAppendRes::InvalidUsage(x)
+                    return CompareAndAppendRes::InvalidUsage(x);
                 }
                 CompareAndAppendRes::InlineBackpressure => {
-                    return CompareAndAppendRes::InlineBackpressure
+                    return CompareAndAppendRes::InlineBackpressure;
                 }
                 CompareAndAppendRes::UpperMismatch(seqno, _current_upper) => {
                     // If the state machine thinks that the shard upper is not
@@ -466,7 +458,6 @@ where
                         idempotency_token,
                         debug_info,
                         INLINE_WRITES_TOTAL_MAX_BYTES.get(cfg),
-                        RECORD_COMPACTIONS.get(cfg),
                         if CLAIM_UNCLAIMED_COMPACTIONS.get(cfg) {
                             CLAIM_COMPACTION_PERCENT.get(cfg)
                         } else {
@@ -589,11 +580,16 @@ where
                     //
                     // NB: This is intentionally not a halt! because it's quite
                     // unexpected.
-                    panic!(concat!(
-                        "cannot distinguish compare_and_append success or failure ",
-                        "caa_lower={:?} caa_upper={:?} writer_upper={:?} shard_upper={:?} err={:?}"),
-                        batch.desc.lower().elements(), batch.desc.upper().elements(),
-                        writer_upper.elements(), shard_upper.elements(), indeterminate,
+                    panic!(
+                        concat!(
+                            "cannot distinguish compare_and_append success or failure ",
+                            "caa_lower={:?} caa_upper={:?} writer_upper={:?} shard_upper={:?} err={:?}"
+                        ),
+                        batch.desc.lower().elements(),
+                        batch.desc.upper().elements(),
+                        writer_upper.elements(),
+                        shard_upper.elements(),
+                        indeterminate,
                     );
                 }
             };
@@ -807,7 +803,7 @@ where
             let err = match res {
                 Ok((_seqno, Ok(()), maintenance)) => return Ok((true, maintenance)),
                 Ok((_seqno, Err(NoOpStateTransition(())), maintenance)) => {
-                    return Ok((false, maintenance))
+                    return Ok((false, maintenance));
                 }
                 Err(err) => err,
             };
@@ -850,7 +846,7 @@ where
             Ok(x) => return Ok(x),
             Err(SnapshotErr::AsOfNotYetAvailable(seqno, Upper(upper))) => (seqno, upper),
             Err(SnapshotErr::AsOfHistoricalDistinctionsLost(Since(since))) => {
-                return Err(Since(since))
+                return Err(Since(since));
             }
         };
 
@@ -869,21 +865,18 @@ where
             Watch(&'a mut StateWatch<K, V, T, D>),
             Sleep(MetricsRetryStream),
         }
-        let mut wakes = FuturesUnordered::<
-            std::pin::Pin<Box<dyn Future<Output = Wake<K, V, T, D>> + Send + Sync>>,
-        >::new();
-        wakes.push(Box::pin(
+        let mut watch_fut = std::pin::pin!(
             watch
                 .wait_for_seqno_ge(seqno.next())
                 .map(Wake::Watch)
                 .instrument(trace_span!("snapshot::watch")),
-        ));
-        wakes.push(Box::pin(
+        );
+        let mut sleep_fut = std::pin::pin!(
             sleeps
                 .sleep()
                 .map(Wake::Sleep)
                 .instrument(trace_span!("snapshot::sleep")),
-        ));
+        );
 
         // To reduce log spam, we log "not yet available" only once at info if
         // it passes a certain threshold. Then, if it did one info log, we log
@@ -914,8 +907,10 @@ where
                 );
             }
 
-            assert_eq!(wakes.len(), 2);
-            let wake = wakes.next().await.expect("wakes should be non-empty");
+            let wake = match future::select(watch_fut.as_mut(), sleep_fut.as_mut()).await {
+                future::Either::Left((wake, _)) => wake,
+                future::Either::Right((wake, _)) => wake,
+            };
             // Note that we don't need to fetch in the Watch case, because the
             // Watch wakeup is a signal that the shared state has already been
             // updated.
@@ -944,17 +939,19 @@ where
                     (seqno, upper)
                 }
                 Err(SnapshotErr::AsOfHistoricalDistinctionsLost(Since(since))) => {
-                    return Err(Since(since))
+                    return Err(Since(since));
                 }
             };
 
             match wake {
-                Wake::Watch(watch) => wakes.push(Box::pin(
-                    watch
-                        .wait_for_seqno_ge(seqno.next())
-                        .map(Wake::Watch)
-                        .instrument(trace_span!("snapshot::watch")),
-                )),
+                Wake::Watch(watch) => {
+                    watch_fut.set(
+                        watch
+                            .wait_for_seqno_ge(seqno.next())
+                            .map(Wake::Watch)
+                            .instrument(trace_span!("snapshot::watch")),
+                    );
+                }
                 Wake::Sleep(sleeps) => {
                     debug!(
                         "snapshot {} {} sleeping for {:?}",
@@ -962,12 +959,12 @@ where
                         self.shard_id(),
                         sleeps.next_sleep()
                     );
-                    wakes.push(Box::pin(
+                    sleep_fut.set(
                         sleeps
                             .sleep()
                             .map(Wake::Sleep)
                             .instrument(trace_span!("snapshot::sleep")),
-                    ));
+                    );
                 }
             }
         }
@@ -1016,25 +1013,24 @@ where
             Watch(&'a mut StateWatch<K, V, T, D>),
             Sleep(MetricsRetryStream),
         }
-        let mut wakes = FuturesUnordered::<
-            std::pin::Pin<Box<dyn Future<Output = Wake<K, V, T, D>> + Send + Sync>>,
-        >::new();
-        wakes.push(Box::pin(
+        let mut watch_fut = std::pin::pin!(
             watch
                 .wait_for_seqno_ge(seqno.next())
                 .map(Wake::Watch)
-                .instrument(trace_span!("snapshot::watch")),
-        ));
-        wakes.push(Box::pin(
+                .instrument(trace_span!("snapshot::watch"))
+        );
+        let mut sleep_fut = std::pin::pin!(
             sleeps
                 .sleep()
                 .map(Wake::Sleep)
-                .instrument(trace_span!("snapshot::sleep")),
-        ));
+                .instrument(trace_span!("snapshot::sleep"))
+        );
 
         loop {
-            assert_eq!(wakes.len(), 2);
-            let wake = wakes.next().await.expect("wakes should be non-empty");
+            let wake = match future::select(watch_fut.as_mut(), sleep_fut.as_mut()).await {
+                future::Either::Left((wake, _)) => wake,
+                future::Either::Right((wake, _)) => wake,
+            };
             // Note that we don't need to fetch in the Watch case, because the
             // Watch wakeup is a signal that the shared state has already been
             // updated.
@@ -1061,24 +1057,17 @@ where
                 Err(seqno) => seqno,
             };
 
-            // There might be some holdup in the next batch being
-            // produced. Perhaps we've quiesced a table or maybe a
-            // dataflow is taking a long time to start up because it has
-            // to read a lot of data. Heartbeat ourself so we don't
-            // accidentally lose our lease while we wait for things to
-            // resume.
-            // self.maybe_heartbeat_reader().await;
-
             // Wait a bit and try again. Intentionally don't ever log
             // this at info level.
             match wake {
-                Wake::Watch(watch) => wakes.push(Box::pin(
-                    async move {
-                        watch.wait_for_seqno_ge(seqno.next()).await;
-                        Wake::Watch(watch)
-                    }
-                    .instrument(trace_span!("snapshot::watch")),
-                )),
+                Wake::Watch(watch) => {
+                    watch_fut.set(
+                        watch
+                            .wait_for_seqno_ge(seqno.next())
+                            .map(Wake::Watch)
+                            .instrument(trace_span!("snapshot::watch")),
+                    );
+                }
                 Wake::Sleep(sleeps) => {
                     debug!(
                         "{:?}: {} {} next_listen_batch didn't find new data, retrying in {:?}",
@@ -1087,12 +1076,12 @@ where
                         self.shard_id(),
                         sleeps.next_sleep()
                     );
-                    wakes.push(Box::pin(
+                    sleep_fut.set(
                         sleeps
                             .sleep()
                             .map(Wake::Sleep)
                             .instrument(trace_span!("snapshot::sleep")),
-                    ));
+                    );
                 }
             }
         }
@@ -1128,9 +1117,19 @@ where
                 },
                 Err(err) => {
                     if retry.attempt() >= INFO_MIN_ATTEMPTS {
-                        info!("apply_unbatched_idempotent_cmd {} received an indeterminate error, retrying in {:?}: {}", cmd.name, retry.next_sleep(), err);
+                        info!(
+                            "apply_unbatched_idempotent_cmd {} received an indeterminate error, retrying in {:?}: {}",
+                            cmd.name,
+                            retry.next_sleep(),
+                            err
+                        );
                     } else {
-                        debug!("apply_unbatched_idempotent_cmd {} received an indeterminate error, retrying in {:?}: {}", cmd.name, retry.next_sleep(), err);
+                        debug!(
+                            "apply_unbatched_idempotent_cmd {} received an indeterminate error, retrying in {:?}: {}",
+                            cmd.name,
+                            retry.next_sleep(),
+                            err
+                        );
                     }
                     retry = retry.sleep().await;
                     continue;
@@ -1408,21 +1407,22 @@ where
 pub mod datadriven {
     use std::collections::BTreeMap;
     use std::pin::pin;
-    use std::sync::Arc;
+    use std::sync::{Arc, LazyLock};
 
     use anyhow::anyhow;
     use differential_dataflow::consolidation::consolidate_updates;
     use differential_dataflow::trace::Description;
+    use futures::StreamExt;
     use mz_dyncfg::{ConfigUpdates, ConfigVal};
     use mz_persist::indexed::encoding::BlobTraceBatchPart;
     use mz_persist_types::codec_impls::{StringSchema, UnitSchema};
 
     use crate::batch::{
-        validate_truncate_batch, Batch, BatchBuilder, BatchBuilderConfig, BatchBuilderInternal,
-        BatchParts, BLOB_TARGET_SIZE, BUILDER_STRUCTURED, STRUCTURED_ORDER,
+        BLOB_TARGET_SIZE, Batch, BatchBuilder, BatchBuilderConfig, BatchBuilderInternal,
+        BatchParts, validate_truncate_batch,
     };
     use crate::cfg::COMPACTION_MEMORY_BOUND_BYTES;
-    use crate::fetch::{Cursor, EncodedPart};
+    use crate::fetch::EncodedPart;
     use crate::internal::compact::{CompactConfig, CompactReq, Compactor};
     use crate::internal::datadriven::DirectiveArgs;
     use crate::internal::encoding::Schemas;
@@ -1433,9 +1433,16 @@ pub mod datadriven {
     use crate::read::{Listen, ListenEvent, READER_LEASE_DURATION};
     use crate::rpc::NoopPubSubSender;
     use crate::tests::new_test_client;
+    use crate::write::COMBINE_INLINE_WRITES;
     use crate::{GarbageCollector, PersistClient};
 
     use super::*;
+
+    static SCHEMAS: LazyLock<Schemas<String, ()>> = LazyLock::new(|| Schemas {
+        id: Some(SchemaId(0)),
+        key: Arc::new(StringSchema),
+        val: Arc::new(UnitSchema),
+    });
 
     /// Shared state for a single [crate::internal::machine] [datadriven::TestFile].
     #[derive(Debug)]
@@ -1463,10 +1470,7 @@ pub mod datadriven {
             // Our structured compaction code uses slightly different estimates
             // for array size than the old path, which can affect the results of
             // some compaction tests.
-            client
-                .cfg
-                .set_config(&STRUCTURED_ORDER, *STRUCTURED_ORDER.default());
-            client.cfg.set_config(&BUILDER_STRUCTURED, true);
+            client.cfg.set_config(&COMBINE_INLINE_WRITES, false);
             let state_versions = Arc::new(StateVersions::new(
                 client.cfg.clone(),
                 Arc::clone(&client.consensus),
@@ -1763,11 +1767,6 @@ pub mod datadriven {
         if let Some(target_size) = target_size {
             cfg.blob_target_size = target_size;
         };
-        let schemas = Schemas {
-            id: None,
-            key: Arc::new(StringSchema),
-            val: Arc::new(UnitSchema),
-        };
         if consolidate {
             consolidate_updates(&mut updates);
         }
@@ -1790,16 +1789,12 @@ pub mod datadriven {
             cfg.clone(),
             parts,
             Arc::clone(&datadriven.client.metrics),
-            schemas.clone(),
+            SCHEMAS.clone(),
             Arc::clone(&datadriven.client.blob),
             datadriven.shard_id.clone(),
             datadriven.client.cfg.build_version.clone(),
         );
-        let mut builder = BatchBuilder::new(
-            builder,
-            Description::new(lower, upper.clone(), since),
-            Arc::clone(&datadriven.client.metrics),
-        );
+        let mut builder = BatchBuilder::new(builder, Description::new(lower, upper.clone(), since));
         for ((k, ()), t, d) in updates {
             builder.add(&k, &(), &t, &d).await.expect("invalid batch");
         }
@@ -1812,7 +1807,7 @@ pub mod datadriven {
                     &cfg,
                     &datadriven.client.metrics.user,
                     &datadriven.client.isolated_runtime,
-                    &schemas,
+                    &SCHEMAS,
                 )
                 .await;
         }
@@ -1843,27 +1838,34 @@ pub mod datadriven {
         let batch = datadriven.batches.get(input).expect("unknown batch");
 
         let mut s = String::new();
-        let mut stream = pin!(batch
-            .part_stream(
-                datadriven.shard_id,
-                &*datadriven.state_versions.blob,
-                &*datadriven.state_versions.metrics
-            )
-            .enumerate());
+        let mut stream = pin!(
+            batch
+                .part_stream(
+                    datadriven.shard_id,
+                    &*datadriven.state_versions.blob,
+                    &*datadriven.state_versions.metrics
+                )
+                .enumerate()
+        );
         while let Some((idx, part)) = stream.next().await {
             let part = &*part?;
             write!(s, "<part {idx}>\n");
-            let key_lower = match part {
-                BatchPart::Hollow(x) => x.key_lower.clone(),
+
+            let lower = match part {
                 BatchPart::Inline { updates, .. } => {
                     let updates: BlobTraceBatchPart<u64> =
-                        updates.decode(&datadriven.client.metrics.columnar).unwrap();
-                    updates.key_lower().to_vec()
+                        updates.decode(&datadriven.client.metrics.columnar)?;
+                    updates.structured_key_lower()
                 }
+                other => other.structured_key_lower(),
             };
-            if stats == Some("lower") && !key_lower.is_empty() {
-                writeln!(s, "<key lower={}>", std::str::from_utf8(&key_lower)?)
+
+            if let Some(lower) = lower {
+                if stats == Some("lower") {
+                    writeln!(s, "<key lower={}>", lower.get())
+                }
             }
+
             match part {
                 BatchPart::Hollow(part) => {
                     let blob_batch = datadriven
@@ -1894,10 +1896,15 @@ pub mod datadriven {
             )
             .await
             .expect("invalid batch part");
-            let mut cursor = Cursor::default();
-            while let Some(((k, _v, t, d), _)) = cursor.pop(&part) {
-                let (k, d) = (String::decode(k, &StringSchema).unwrap(), i64::decode(d));
-                write!(s, "{k} {t} {d}\n");
+            let part = part
+                .normalize(&datadriven.client.metrics.columnar)
+                .into_part::<String, ()>(&*SCHEMAS.key, &*SCHEMAS.val);
+
+            for ((k, _v), t, d) in part
+                .decode_iter::<_, _, u64, i64>(&*SCHEMAS.key, &*SCHEMAS.val)
+                .expect("valid schemas")
+            {
+                writeln!(s, "{k} {t} {d}");
             }
         }
         if !s.is_empty() {
@@ -1991,21 +1998,19 @@ pub mod datadriven {
             desc: Description::new(lower, upper, since),
             inputs,
         };
-        let schemas = Schemas {
-            id: None,
-            key: Arc::new(StringSchema),
-            val: Arc::new(UnitSchema),
-        };
-        let res = Compactor::<String, (), u64, i64>::compact(
+
+        let req_clone = req.clone();
+        let stream = Compactor::<String, (), u64, i64>::compact_stream(
             CompactConfig::new(&cfg, datadriven.shard_id),
             Arc::clone(&datadriven.client.blob),
             Arc::clone(&datadriven.client.metrics),
             Arc::clone(&datadriven.machine.applier.shard_metrics),
             Arc::clone(&datadriven.client.isolated_runtime),
-            req,
-            schemas,
-        )
-        .await?;
+            req_clone,
+            SCHEMAS.clone(),
+        );
+
+        let res = Compactor::<String, (), u64, i64>::compact_all(stream, req.clone()).await?;
 
         datadriven
             .batches
@@ -2126,13 +2131,16 @@ pub mod datadriven {
             );
             for (run, (_meta, parts)) in batch.runs().enumerate() {
                 writeln!(result, "<run {run}>");
-                let mut stream = pin!(futures::stream::iter(parts)
-                    .flat_map(|part| part.part_stream(
-                        datadriven.shard_id,
-                        &*datadriven.state_versions.blob,
-                        &*datadriven.state_versions.metrics
-                    ))
-                    .enumerate());
+                let mut stream = pin!(
+                    futures::stream::iter(parts)
+                        .flat_map(|part| part.part_stream(
+                            datadriven.shard_id,
+                            &*datadriven.state_versions.blob,
+                            &*datadriven.state_versions.metrics
+                        ))
+                        .enumerate()
+                );
+
                 while let Some((idx, part)) = stream.next().await {
                     let part = &*part?;
                     writeln!(result, "<part {idx}>");
@@ -2148,16 +2156,18 @@ pub mod datadriven {
                     )
                     .await
                     .expect("invalid batch part");
+                    let part = part
+                        .normalize(&datadriven.client.metrics.columnar)
+                        .into_part::<String, ()>(&*SCHEMAS.key, &*SCHEMAS.val);
 
                     let mut updates = Vec::new();
-                    let mut cursor = Cursor::default();
-                    while let Some(((k, _v, mut t, d), _)) = cursor.pop(&part) {
+
+                    for ((k, _v), mut t, d) in part
+                        .decode_iter::<_, _, u64, i64>(&*SCHEMAS.key, &*SCHEMAS.val)
+                        .expect("valid schemas")
+                    {
                         t.advance_by(as_of.borrow());
-                        updates.push((
-                            String::decode(k, &StringSchema).unwrap(),
-                            t,
-                            i64::decode(d),
-                        ));
+                        updates.push((k, t, d));
                     }
 
                     consolidate_updates(&mut updates);
@@ -2382,6 +2392,13 @@ pub mod datadriven {
             .clone();
         let token = args.optional("token").unwrap_or_else(IdempotencyToken::new);
         let now = (datadriven.client.cfg.now)();
+
+        let (id, maintenance) = datadriven
+            .machine
+            .register_schema(&*SCHEMAS.key, &*SCHEMAS.val)
+            .await;
+        assert_eq!(id, SCHEMAS.id);
+        datadriven.routine.push(maintenance);
         let maintenance = loop {
             let indeterminate = args
                 .optional::<String>("prev_indeterminate")
@@ -2400,21 +2417,16 @@ pub mod datadriven {
             match res {
                 CompareAndAppendRes::Success(_, x) => break x,
                 CompareAndAppendRes::UpperMismatch(_seqno, upper) => {
-                    return Err(anyhow!("{:?}", Upper(upper)))
+                    return Err(anyhow!("{:?}", Upper(upper)));
                 }
                 CompareAndAppendRes::InlineBackpressure => {
                     let mut b = datadriven.to_batch(batch.clone());
                     let cfg = BatchBuilderConfig::new(&datadriven.client.cfg, datadriven.shard_id);
-                    let schemas = Schemas::<String, ()> {
-                        id: None,
-                        key: Arc::new(StringSchema),
-                        val: Arc::new(UnitSchema),
-                    };
                     b.flush_to_blob(
                         &cfg,
                         &datadriven.client.metrics.user,
                         &datadriven.client.isolated_runtime,
-                        &schemas,
+                        &*SCHEMAS,
                     )
                     .await;
                     batch = b.into_hollow_batch();
@@ -2445,7 +2457,10 @@ pub mod datadriven {
             .clone();
         let (merge_res, maintenance) = datadriven
             .machine
-            .merge_res(&FueledMergeRes { output: batch })
+            .merge_res(&FueledMergeRes {
+                output: batch,
+                new_active_compaction: None,
+            })
             .await;
         datadriven.routine.push(maintenance);
         Ok(format!(
@@ -2486,12 +2501,12 @@ pub mod tests {
     use mz_persist::location::SeqNo;
     use timely::progress::Antichain;
 
+    use crate::ShardId;
     use crate::batch::BatchBuilderConfig;
     use crate::cache::StateCache;
     use crate::internal::gc::{GarbageCollector, GcReq};
     use crate::internal::state::{HandleDebugState, ROLLUP_THRESHOLD};
     use crate::tests::new_test_client;
-    use crate::ShardId;
 
     #[mz_persist_proc::test(tokio::test(flavor = "multi_thread"))]
     #[cfg_attr(miri, ignore)] // error: unsupported operation: integer-to-pointer casts and `ptr::from_exposed_addr` are not supported with `-Zmiri-strict-provenance`

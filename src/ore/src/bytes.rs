@@ -23,15 +23,16 @@
 //!
 
 #[cfg(feature = "parquet")]
-use std::io::{Read, Seek};
+use std::io::Seek;
 
-use bytes::{Buf, Bytes};
+use bytes::{Buf, BufMut, Bytes, BytesMut};
 use internal::SegmentedReader;
+#[cfg(feature = "parquet")]
+use parquet::errors::ParquetError;
 use smallvec::SmallVec;
 
 #[cfg(feature = "parquet")]
 use crate::cast::CastFrom;
-use crate::lgbytes::LgBytes;
 
 /// A cheaply clonable collection of possibly non-contiguous bytes.
 ///
@@ -48,7 +49,7 @@ use crate::lgbytes::LgBytes;
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct SegmentedBytes<const N: usize = 1> {
     /// Collection of non-contiguous segments, each segment is guaranteed to be non-empty.
-    segments: SmallVec<[(MaybeLgBytes, Padding); N]>,
+    segments: SmallVec<[(Bytes, Padding); N]>,
     /// Pre-computed length of all the segments.
     len: usize,
 }
@@ -59,83 +60,6 @@ type Padding = usize;
 
 /// Default value used for [`Padding`].
 const PADDING_DEFAULT: usize = 0;
-
-/// A [Bytes] or an [LgBytes].
-///
-/// TODO: Once we've validated the persist s3 usage of LgBytes, change the CYA
-/// fallback path to be a heap allocated LgBytes. Then we can make this not pub.
-#[derive(Clone, Debug)]
-pub enum MaybeLgBytes {
-    /// A [Bytes], always heap allocated, untracked by metrics.
-    Bytes(Bytes),
-    /// An [LgBytes], possibly heap allocated, but always tracked by metrics.
-    LgBytes(LgBytes),
-}
-
-impl PartialEq for MaybeLgBytes {
-    fn eq(&self, other: &Self) -> bool {
-        self.as_ref() == other.as_ref()
-    }
-}
-
-impl Eq for MaybeLgBytes {}
-
-impl AsRef<[u8]> for MaybeLgBytes {
-    fn as_ref(&self) -> &[u8] {
-        match self {
-            MaybeLgBytes::Bytes(x) => x.as_ref(),
-            MaybeLgBytes::LgBytes(x) => x.as_ref(),
-        }
-    }
-}
-
-impl From<Bytes> for MaybeLgBytes {
-    #[inline]
-    fn from(value: Bytes) -> Self {
-        MaybeLgBytes::Bytes(value)
-    }
-}
-
-impl MaybeLgBytes {
-    /// Returns the number of bytes contained in this `MaybeLgBytes`.
-    pub fn len(&self) -> usize {
-        match self {
-            MaybeLgBytes::Bytes(x) => x.len(),
-            MaybeLgBytes::LgBytes(x) => x.len(),
-        }
-    }
-
-    /// Returns true if the `MaybeLgBytes` has a length of 0.
-    pub fn is_empty(&self) -> bool {
-        match self {
-            MaybeLgBytes::Bytes(x) => x.is_empty(),
-            MaybeLgBytes::LgBytes(x) => x.is_empty(),
-        }
-    }
-}
-
-impl Buf for MaybeLgBytes {
-    fn remaining(&self) -> usize {
-        match self {
-            MaybeLgBytes::Bytes(x) => x.remaining(),
-            MaybeLgBytes::LgBytes(x) => x.remaining(),
-        }
-    }
-
-    fn chunk(&self) -> &[u8] {
-        match self {
-            MaybeLgBytes::Bytes(x) => x.chunk(),
-            MaybeLgBytes::LgBytes(x) => x.chunk(),
-        }
-    }
-
-    fn advance(&mut self, cnt: usize) {
-        match self {
-            MaybeLgBytes::Bytes(x) => x.advance(cnt),
-            MaybeLgBytes::LgBytes(x) => x.advance(cnt),
-        }
-    }
-}
 
 impl Default for SegmentedBytes {
     fn default() -> Self {
@@ -179,7 +103,7 @@ impl<const N: usize> SegmentedBytes<N> {
 
     /// Consumes `self` returning an [`Iterator`] over all of the non-contiguous segments
     /// that make up this buffer.
-    pub fn into_segments(self) -> impl Iterator<Item = MaybeLgBytes> {
+    pub fn into_segments(self) -> impl Iterator<Item = Bytes> {
         self.segments.into_iter().map(|(bytes, _len)| bytes)
     }
 
@@ -188,12 +112,12 @@ impl<const N: usize> SegmentedBytes<N> {
         self.copy_to_bytes(self.remaining()).into()
     }
 
-    /// Extends the buffer by one more segment of [`MaybeLgBytes`].
+    /// Extends the buffer by one more segment of [`Bytes`].
     ///
-    /// If the provided [`MaybeLgBytes`] is empty, we skip appending it.
+    /// If the provided [`Bytes`] is empty, we skip appending it.
     #[inline]
-    pub fn push<B: Into<MaybeLgBytes>>(&mut self, b: B) {
-        let b: MaybeLgBytes = b.into();
+    pub fn push<B: Into<Bytes>>(&mut self, b: B) {
+        let b: Bytes = b.into();
         if !b.is_empty() {
             self.len += b.len();
             self.segments.push((b, PADDING_DEFAULT));
@@ -245,6 +169,25 @@ impl<const N: usize> Buf for SegmentedBytes<N> {
             }
         }
     }
+
+    fn copy_to_bytes(&mut self, len: usize) -> Bytes {
+        // If possible, use the zero-copy implementation on individual segments.
+        if let Some((seg, _len)) = self.segments.first_mut() {
+            if len <= seg.len() {
+                self.len -= len;
+                return seg.copy_to_bytes(len);
+            }
+        }
+        // Otherwise, fall back to a generic implementation.
+        assert!(
+            len <= self.len(),
+            "tried to copy {len} bytes with {} remaining",
+            self.len()
+        );
+        let mut out = BytesMut::with_capacity(len);
+        out.put(self.take(len));
+        out.freeze()
+    }
 }
 
 #[cfg(feature = "parquet")]
@@ -265,29 +208,28 @@ impl parquet::file::reader::ChunkReader for SegmentedBytes {
     }
 
     fn get_bytes(&self, start: u64, length: usize) -> parquet::errors::Result<Bytes> {
-        let mut reader = self.clone().reader();
-        reader.seek(std::io::SeekFrom::Start(start))?;
-
-        // TODO(parkmycar): Make this possible to achieve zero-copy.
-        //
-        // It's currently non-trivial to do this because LgBytes is not easily reference counted.
-        let mut buf = vec![0; length];
-        reader.read_exact(&mut buf)?;
-
-        Ok(Bytes::from(buf))
+        let start = usize::cast_from(start);
+        let mut buf = self.clone();
+        if start > buf.remaining() {
+            return Err(ParquetError::EOF(format!(
+                "seeking {start} bytes ahead, but only {} remaining",
+                buf.remaining()
+            )));
+        }
+        buf.advance(start);
+        if length > buf.remaining() {
+            return Err(ParquetError::EOF(format!(
+                "copying {length} bytes, but only {} remaining",
+                buf.remaining()
+            )));
+        }
+        let bytes = buf.copy_to_bytes(length);
+        Ok(bytes)
     }
 }
 
 impl From<Bytes> for SegmentedBytes {
     fn from(value: Bytes) -> Self {
-        let mut s = SegmentedBytes::default();
-        s.push(value);
-        s
-    }
-}
-
-impl From<MaybeLgBytes> for SegmentedBytes {
-    fn from(value: MaybeLgBytes) -> Self {
         let mut s = SegmentedBytes::default();
         s.push(value);
         s
@@ -301,8 +243,8 @@ impl From<Vec<u8>> for SegmentedBytes {
     }
 }
 
-impl From<Vec<MaybeLgBytes>> for SegmentedBytes {
-    fn from(value: Vec<MaybeLgBytes>) -> Self {
+impl From<Vec<Bytes>> for SegmentedBytes {
+    fn from(value: Vec<Bytes>) -> Self {
         let mut s = SegmentedBytes::with_capacity(value.len());
         for segment in value {
             s.push(segment);
@@ -332,13 +274,13 @@ mod internal {
 
     use smallvec::SmallVec;
 
-    use crate::bytes::{MaybeLgBytes, SegmentedBytes};
+    use crate::bytes::{Bytes, SegmentedBytes};
     use crate::cast::CastFrom;
 
     /// Provides efficient reading and seeking across a collection of segmented bytes.
     #[derive(Debug)]
     pub struct SegmentedReader<const N: usize = 1> {
-        segments: SmallVec<[(MaybeLgBytes, usize); N]>,
+        segments: SmallVec<[(Bytes, usize); N]>,
         /// Total length of all segments.
         len: usize,
         // Overall byte position we're currently pointing at.
@@ -398,10 +340,7 @@ mod internal {
             // How many bytes we'll read.
             let len = core::cmp::min(remaining_len, buf.len());
             // Copy bytes from the current segment into the buffer.
-            let segment_buf = match segment {
-                MaybeLgBytes::Bytes(x) => x.as_ref(),
-                MaybeLgBytes::LgBytes(x) => x.as_ref(),
-            };
+            let segment_buf = &segment[..];
             buf[..len].copy_from_slice(&segment_buf[segment_pos..segment_pos + len]);
 
             // Advance our pointers.
@@ -477,7 +416,6 @@ mod tests {
     use proptest::prelude::*;
 
     use super::SegmentedBytes;
-    use crate::bytes::MaybeLgBytes;
     use crate::cast::CastFrom;
 
     #[crate::test]
@@ -811,9 +749,15 @@ mod tests {
 
             // Cap num_bytes at the size of contiguous.
             let num_bytes = contiguous.len() % num_bytes;
+            let remaining = contiguous.len() - num_bytes;
 
             let copied_c = contiguous.copy_to_bytes(num_bytes);
             let copied_s = segmented.copy_to_bytes(num_bytes);
+
+            assert_eq!(copied_c, copied_s);
+
+            let copied_c = contiguous.copy_to_bytes(remaining);
+            let copied_s = segmented.copy_to_bytes(remaining);
 
             assert_eq!(copied_c, copied_s);
         }
@@ -913,17 +857,12 @@ mod tests {
     fn proptest_non_empty_segments() {
         fn test(segments: Vec<Vec<u8>>) {
             // Vec
-            let segment = segments.first().unwrap_or(&Vec::default()).clone();
+            let segment = segments.first().cloned().unwrap_or_default();
             let s = SegmentedBytes::from(segment.clone());
             assert!(s.into_segments().all(|segment| !segment.is_empty()));
 
             // Bytes
             let bytes = Bytes::from(segment.clone());
-            let s = SegmentedBytes::from(bytes);
-            assert!(s.into_segments().all(|segment| !segment.is_empty()));
-
-            // MaybeLgBytes
-            let bytes = MaybeLgBytes::Bytes(Bytes::from(segment.clone()));
             let s = SegmentedBytes::from(bytes);
             assert!(s.into_segments().all(|segment| !segment.is_empty()));
 
@@ -940,11 +879,8 @@ mod tests {
             let s: SegmentedBytes = segments.clone().into_iter().map(Bytes::from).collect();
             assert!(s.into_segments().all(|segment| !segment.is_empty()));
 
-            // Vec<MaybeLgBytes>
-            let segments: Vec<_> = segments
-                .into_iter()
-                .map(|s| MaybeLgBytes::Bytes(Bytes::from(s)))
-                .collect();
+            // Vec<Bytes>
+            let segments: Vec<_> = segments.into_iter().map(Bytes::from).collect();
             let s = SegmentedBytes::from(segments);
             assert!(s.into_segments().all(|segment| !segment.is_empty()));
         }

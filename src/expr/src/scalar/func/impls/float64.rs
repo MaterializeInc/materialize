@@ -14,12 +14,12 @@ use mz_lowertest::MzReflect;
 use mz_ore::cast::TryCastFrom;
 use mz_repr::adt::numeric::{self, Numeric, NumericMaxScale};
 use mz_repr::adt::timestamp::CheckedTimestamp;
-use mz_repr::{strconv, ColumnType, ScalarType};
+use mz_repr::{ColumnType, ScalarType, strconv};
 use serde::{Deserialize, Serialize};
 
-use crate::scalar::func::EagerUnaryFunc;
-use crate::scalar::DomainLimit;
 use crate::EvalError;
+use crate::scalar::DomainLimit;
+use crate::scalar::func::EagerUnaryFunc;
 
 sqlfunc!(
     #[sqlname = "-"]

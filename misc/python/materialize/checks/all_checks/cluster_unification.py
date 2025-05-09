@@ -15,8 +15,10 @@ class UnifiedCluster(Check):
     def initialize(self) -> Testdrive:
         return Testdrive(
             """
-            > CREATE CLUSTER shared_cluster_compute_first SIZE '1', REPLICATION FACTOR 1;
-            > CREATE CLUSTER shared_cluster_storage_first SIZE '1', REPLICATION FACTOR 1;
+            >[version>=13800] CREATE CLUSTER shared_cluster_compute_first SIZE '1', REPLICATION FACTOR 2;
+            >[version<13800] CREATE CLUSTER shared_cluster_compute_first SIZE '1', REPLICATION FACTOR 1;
+            >[version>=13800] CREATE CLUSTER shared_cluster_storage_first SIZE '1', REPLICATION FACTOR 2;
+            >[version<13800] CREATE CLUSTER shared_cluster_storage_first SIZE '1', REPLICATION FACTOR 1;
             """
         )
 
@@ -87,12 +89,6 @@ class UnifiedCluster(Check):
 
             ! DROP CLUSTER shared_cluster_storage_first;
             contains: cannot drop cluster "shared_cluster_storage_first" because other objects depend on it
-
-            ! ALTER CLUSTER shared_cluster_compute_first SET (REPLICATION FACTOR 2);
-            contains: cannot create more than one replica of a cluster containing sources or sinks
-
-            ! ALTER CLUSTER shared_cluster_storage_first SET (REPLICATION FACTOR 2);
-            contains: cannot create more than one replica of a cluster containing sources or sinks
 
             """
         )

@@ -32,24 +32,30 @@ Before you begin, you must have:
 
 ## Creating a connection
 
-There are various ways to configure your Kafka network to allow Materialize to connect:
+There are various ways to configure your Kafka network to allow Materialize to
+connect:
 
-- **Use AWS PrivateLink**: If your Kafka cluster is running on AWS, you can use AWS PrivateLink to connect Materialize to the cluster.
+- **Allow Materialize IPs:** If your Kafka cluster is publicly accessible, you
+    can configure your firewall to allow connections from a set of static
+    Materialize IP addresses.
 
-- **Use an SSH tunnel**: If your Kafka cluster is running in a private network, you can use an SSH tunnel to connect Materialize to the cluster.
+- **Use AWS PrivateLink**: If your Kafka cluster is running in a private network, you
+    can use [AWS PrivateLink](/ingest-data/network-security/privatelink/) to
+    connect Materialize to the cluster. For details, see [AWS PrivateLink](/ingest-data/network-security/privatelink/).
 
-- **Allow Materialize IPs**: If your Kafka cluster is publicly accessible, you can configure your firewall to allow connections from a set of static Materialize IP addresses.
-
-Select the option that works best for you.
+- **Use an SSH tunnel:** If your Kafka cluster is running in a private network, you
+    can use an SSH tunnel to connect Materialize to the cluster.
 
 {{< tabs tabID="1" >}}
 
-{{< tab "Privatelink">}}
+{{< tab "PrivateLink">}}
 
 {{< note >}}
-Materialize provides Terraform modules for both [Amazon MSK clusters](https://github.com/MaterializeInc/terraform-aws-msk-privatelink) and [self-managed Kafka clusters](https://github.com/MaterializeInc/terraform-aws-kafka-privatelink) which can be used to create the target groups for each Kafka broker (step 1), the network load balancer (step 2),
-the TCP listeners (step 3) and the VPC endpoint service (step 5).
-{{< /note >}}
+Materialize provides a Terraform module that automates the creation and
+configuration of AWS resources for a PrivateLink connection. For more details,
+see the Terraform module repositories for [Amazon MSK](https://github.com/MaterializeInc/terraform-aws-msk-privatelink)
+and [self-managed Kafka clusters](https://github.com/MaterializeInc/terraform-aws-kafka-privatelink).
+{{</ note >}}
 
 {{% network-security/privatelink-kafka %}}
 

@@ -20,8 +20,8 @@ use maplit::{btreemap, btreeset};
 use mz_adapter_types::compaction::SINCE_GRANULARITY;
 use mz_adapter_types::connection::ConnectionId;
 use mz_audit_log::VersionedEvent;
-use mz_catalog::memory::objects::{CatalogItem, Connection, DataSourceDesc, Sink};
 use mz_catalog::SYSTEM_CONN_ID;
+use mz_catalog::memory::objects::{CatalogItem, Connection, DataSourceDesc, Sink};
 use mz_compute_client::protocol::response::PeekResponse;
 use mz_controller::clusters::ReplicaLocation;
 use mz_controller_types::{ClusterId, ReplicaId};
@@ -34,25 +34,26 @@ use mz_ore::str::StrExt;
 use mz_ore::task;
 use mz_postgres_util::tunnel::PostgresFlavor;
 use mz_repr::adt::numeric::Numeric;
-use mz_repr::{CatalogItemId, GlobalId, Timestamp};
+use mz_repr::{CatalogItemId, Diff, GlobalId, Timestamp};
 use mz_sql::catalog::{CatalogCluster, CatalogClusterReplica, CatalogSchema};
 use mz_sql::names::ResolvedDatabaseSpecifier;
 use mz_sql::plan::ConnectionDetails;
 use mz_sql::session::metadata::SessionMetadata;
 use mz_sql::session::vars::{
-    self, SystemVars, Var, MAX_AWS_PRIVATELINK_CONNECTIONS, MAX_CLUSTERS, MAX_CONTINUAL_TASKS,
+    self, MAX_AWS_PRIVATELINK_CONNECTIONS, MAX_CLUSTERS, MAX_CONTINUAL_TASKS,
     MAX_CREDIT_CONSUMPTION_RATE, MAX_DATABASES, MAX_KAFKA_CONNECTIONS, MAX_MATERIALIZED_VIEWS,
     MAX_MYSQL_CONNECTIONS, MAX_NETWORK_POLICIES, MAX_OBJECTS_PER_SCHEMA, MAX_POSTGRES_CONNECTIONS,
     MAX_REPLICAS_PER_CLUSTER, MAX_ROLES, MAX_SCHEMAS_PER_DATABASE, MAX_SECRETS, MAX_SINKS,
-    MAX_SOURCES, MAX_TABLES,
+    MAX_SOURCES, MAX_SQL_SERVER_CONNECTIONS, MAX_TABLES, SystemVars, Var,
 };
-use mz_storage_client::controller::ExportDescription;
-use mz_storage_types::connections::inline::IntoInlineConnection;
+use mz_storage_client::controller::{CollectionDescription, DataSource, ExportDescription};
 use mz_storage_types::connections::PostgresConnection;
+use mz_storage_types::connections::inline::IntoInlineConnection;
 use mz_storage_types::read_policy::ReadPolicy;
 use mz_storage_types::sources::GenericSourceConnection;
+use mz_storage_types::sources::kafka::KAFKA_PROGRESS_DESC;
 use serde_json::json;
-use tracing::{event, info_span, warn, Instrument, Level};
+use tracing::{Instrument, Level, event, info_span, warn};
 
 use crate::active_compute_sink::{ActiveComputeSink, ActiveComputeSinkRetireReason};
 use crate::catalog::{DropObjectInfo, Op, ReplicaCreateDropReason, TransactionResult};
@@ -63,7 +64,7 @@ use crate::session::{Session, Transaction, TransactionOps};
 use crate::statement_logging::StatementEndedExecutionReason;
 use crate::telemetry::{EventDetails, SegmentClientExt};
 use crate::util::ResultExt;
-use crate::{catalog, flags, AdapterError, TimestampProvider};
+use crate::{AdapterError, TimestampProvider, catalog, flags};
 
 impl Coordinator {
     /// Same as [`Self::catalog_transact_conn`] but takes a [`Session`].
@@ -206,8 +207,10 @@ impl Coordinator {
         let mut cluster_replicas_to_drop = vec![];
         let mut compute_sinks_to_drop = BTreeMap::new();
         let mut peeks_to_drop = vec![];
+        let mut copies_to_drop = vec![];
         let mut clusters_to_create = vec![];
         let mut cluster_replicas_to_create = vec![];
+        let mut update_metrics_config = false;
         let mut update_tracing_config = false;
         let mut update_compute_config = false;
         let mut update_storage_config = false;
@@ -307,6 +310,11 @@ impl Coordinator {
                 }
                 catalog::Op::ResetSystemConfiguration { name }
                 | catalog::Op::UpdateSystemConfiguration { name, .. } => {
+                    update_metrics_config |= self
+                        .catalog
+                        .state()
+                        .system_config()
+                        .is_metrics_config_var(name);
                     update_tracing_config |= vars::is_tracing_var(name);
                     update_compute_config |= self
                         .catalog
@@ -453,6 +461,18 @@ impl Coordinator {
             }
         }
 
+        // Clean up any pending `COPY` statements that rely on dropped relations or clusters.
+        for (conn_id, pending_copy) in &self.active_copies {
+            let dropping_table = table_gids_to_drop
+                .iter()
+                .any(|(item_id, _gid)| pending_copy.table_id == *item_id);
+            let dropping_cluster = clusters_to_drop.contains(&pending_copy.cluster_id);
+
+            if dropping_table || dropping_cluster {
+                copies_to_drop.push(conn_id.clone());
+            }
+        }
+
         let storage_ids_to_drop = sources_to_drop
             .iter()
             .map(|(_, gid)| *gid)
@@ -541,7 +561,7 @@ impl Coordinator {
                     *replica_id,
                     process_id,
                     &status,
-                    -1,
+                    Diff::MINUS_ONE,
                 );
                 let builtin_table_update = catalog
                     .state()
@@ -553,9 +573,12 @@ impl Coordinator {
             let cluster_statuses = cluster_replica_statuses.remove_cluster_statuses(cluster_id);
             for (replica_id, replica_statuses) in cluster_statuses {
                 for (process_id, status) in replica_statuses {
-                    let builtin_table_update = catalog
-                        .state()
-                        .pack_cluster_replica_status_update(replica_id, process_id, &status, -1);
+                    let builtin_table_update = catalog.state().pack_cluster_replica_status_update(
+                        replica_id,
+                        process_id,
+                        &status,
+                        Diff::MINUS_ONE,
+                    );
                     let builtin_table_update = catalog
                         .state()
                         .resolve_builtin_table_update(builtin_table_update);
@@ -573,7 +596,7 @@ impl Coordinator {
                         *replica_id,
                         *process_id,
                         status,
-                        1,
+                        Diff::ONE,
                     );
                     let builtin_table_update = catalog
                         .state()
@@ -601,7 +624,7 @@ impl Coordinator {
                     replica_id,
                     *process_id,
                     status,
-                    1,
+                    Diff::ONE,
                 );
                 let builtin_table_update = catalog
                     .state()
@@ -663,6 +686,11 @@ impl Coordinator {
                             pending_peek.ctx_extra,
                         );
                     }
+                }
+            }
+            if !copies_to_drop.is_empty() {
+                for conn_id in copies_to_drop {
+                    self.cancel_pending_copy(&conn_id);
                 }
             }
             if !indexes_to_drop.is_empty() {
@@ -768,6 +796,9 @@ impl Coordinator {
                 }
             });
 
+            if update_metrics_config {
+                mz_metrics::update_dyncfg(&self.catalog().system_config().dyncfg_updates());
+            }
             if update_compute_config {
                 self.update_compute_config();
             }
@@ -839,17 +870,19 @@ impl Coordinator {
         {
             let mut updates = vec![];
             if let Some(metrics) = metrics {
-                let retractions = self
-                    .catalog()
-                    .state()
-                    .pack_replica_metric_updates(replica_id, &metrics, -1);
+                let retractions = self.catalog().state().pack_replica_metric_updates(
+                    replica_id,
+                    &metrics,
+                    Diff::MINUS_ONE,
+                );
                 let retractions = self
                     .catalog()
                     .state()
                     .resolve_builtin_table_updates(retractions);
                 updates.extend(retractions);
             }
-            self.builtin_table_update().background(updates);
+            // We don't care about when the write finishes.
+            let _notify = self.builtin_table_update().background(updates);
         }
 
         self.drop_introspection_subscribes(replica_id);
@@ -1056,9 +1089,10 @@ impl Coordinator {
     }
 
     pub(crate) fn drop_storage_sinks(&mut self, sink_gids: Vec<GlobalId>) {
+        let storage_metadata = self.catalog.state().storage_metadata();
         self.controller
             .storage
-            .drop_sinks(sink_gids)
+            .drop_sinks(storage_metadata, sink_gids)
             .unwrap_or_terminate("cannot fail to drop sinks");
     }
 
@@ -1289,11 +1323,6 @@ impl Coordinator {
         // Validate `sink.from` is in fact a storage collection
         self.controller.storage.check_exists(sink.from)?;
 
-        let status_id = self
-            .catalog()
-            .resolve_builtin_storage_collection(&mz_catalog::builtin::MZ_SINK_STATUS_HISTORY);
-        let status_id = Some(self.catalog().get_entry(&status_id).latest_global_id());
-
         // The AsOf is used to determine at what time to snapshot reading from
         // the persist collection.  This is primarily relevant when we do _not_
         // want to include the snapshot in the sink.
@@ -1323,31 +1352,41 @@ impl Coordinator {
                     storage_sink_from_entry.name(),
                     storage_sink_from_entry.conn_id(),
                 ))
-                .expect("indexes can only be built on items with descs")
+                .expect("sinks can only be built on items with descs")
                 .into_owned(),
             connection: sink
                 .connection
                 .clone()
                 .into_inline_connection(self.catalog().state()),
-            partition_strategy: sink.partition_strategy.clone(),
             envelope: sink.envelope,
             as_of,
             with_snapshot: sink.with_snapshot,
             version: sink.version,
-            status_id,
             from_storage_metadata: (),
+            to_storage_metadata: (),
         };
 
-        let res = self
-            .controller
-            .storage
-            .create_exports(vec![(
-                id,
-                ExportDescription {
+        let collection_desc = CollectionDescription {
+            // TODO(sinks): make generic once we have more than one sink type.
+            desc: KAFKA_PROGRESS_DESC.clone(),
+            data_source: DataSource::Sink {
+                desc: ExportDescription {
                     sink: storage_sink_desc,
                     instance_id: sink.cluster_id,
                 },
-            )])
+            },
+            since: None,
+            status_collection_id: None,
+            timeline: None,
+        };
+        let collections = vec![(id, collection_desc)];
+
+        // Create the collections.
+        let storage_metadata = self.catalog.state().storage_metadata();
+        let res = self
+            .controller
+            .storage
+            .create_collections(storage_metadata, None, collections)
             .await;
 
         // Drop read holds after the export has been created, at which point
@@ -1367,6 +1406,7 @@ impl Coordinator {
         let mut new_kafka_connections = 0;
         let mut new_postgres_connections = 0;
         let mut new_mysql_connections = 0;
+        let mut new_sql_server_connections = 0;
         let mut new_aws_privatelink_connections = 0;
         let mut new_tables = 0;
         let mut new_sources = 0;
@@ -1434,6 +1474,7 @@ impl Coordinator {
                             ConnectionDetails::Kafka(_) => new_kafka_connections += 1,
                             ConnectionDetails::Postgres(_) => new_postgres_connections += 1,
                             ConnectionDetails::MySql(_) => new_mysql_connections += 1,
+                            ConnectionDetails::SqlServer(_) => new_sql_server_connections += 1,
                             ConnectionDetails::AwsPrivatelink(_) => {
                                 new_aws_privatelink_connections += 1
                             }
@@ -1579,6 +1620,7 @@ impl Coordinator {
                 Op::AlterRole { .. }
                 | Op::AlterRetainHistory { .. }
                 | Op::AlterNetworkPolicy { .. }
+                | Op::AlterAddColumn { .. }
                 | Op::UpdatePrivilege { .. }
                 | Op::UpdateDefaultPrivilege { .. }
                 | Op::GrantRole { .. }
@@ -1603,6 +1645,7 @@ impl Coordinator {
         let mut current_aws_privatelink_connections = 0;
         let mut current_postgres_connections = 0;
         let mut current_mysql_connections = 0;
+        let mut current_sql_server_connections = 0;
         let mut current_kafka_connections = 0;
         for c in self.catalog().user_connections() {
             let connection = c
@@ -1613,6 +1656,7 @@ impl Coordinator {
                 ConnectionDetails::AwsPrivatelink(_) => current_aws_privatelink_connections += 1,
                 ConnectionDetails::Postgres(_) => current_postgres_connections += 1,
                 ConnectionDetails::MySql(_) => current_mysql_connections += 1,
+                ConnectionDetails::SqlServer(_) => current_sql_server_connections += 1,
                 ConnectionDetails::Kafka(_) => current_kafka_connections += 1,
                 ConnectionDetails::Csr(_)
                 | ConnectionDetails::Ssh { .. }
@@ -1639,6 +1683,13 @@ impl Coordinator {
             SystemVars::max_mysql_connections,
             "MySQL Connection",
             MAX_MYSQL_CONNECTIONS.name(),
+        )?;
+        self.validate_resource_limit(
+            current_sql_server_connections,
+            new_sql_server_connections,
+            SystemVars::max_sql_server_connections,
+            "SQL Server Connection",
+            MAX_SQL_SERVER_CONNECTIONS.name(),
         )?;
         self.validate_resource_limit(
             current_aws_privatelink_connections,
@@ -1731,7 +1782,11 @@ impl Coordinator {
         self.validate_resource_limit_numeric(
             current_credit_consumption_rate,
             new_credit_consumption_rate,
-            SystemVars::max_credit_consumption_rate,
+            |system_vars| {
+                self.license_key
+                    .max_credit_consumption_rate()
+                    .map_or_else(|| system_vars.max_credit_consumption_rate(), Numeric::from)
+            },
             "cluster replica",
             MAX_CREDIT_CONSUMPTION_RATE.name(),
         )?;

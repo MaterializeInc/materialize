@@ -43,9 +43,15 @@ use fallible_iterator::FallibleIterator;
 use futures::sink::SinkExt;
 use itertools::Itertools;
 use md5::{Digest, Md5};
+use mz_adapter_types::bootstrap_builtin_cluster_config::{
+    ANALYTICS_CLUSTER_DEFAULT_REPLICATION_FACTOR, BootstrapBuiltinClusterConfig,
+    CATALOG_SERVER_CLUSTER_DEFAULT_REPLICATION_FACTOR, PROBE_CLUSTER_DEFAULT_REPLICATION_FACTOR,
+    SUPPORT_CLUSTER_DEFAULT_REPLICATION_FACTOR, SYSTEM_CLUSTER_DEFAULT_REPLICATION_FACTOR,
+};
 use mz_catalog::config::ClusterReplicaSizeMap;
 use mz_controller::ControllerConfig;
 use mz_environmentd::CatalogConfig;
+use mz_license_keys::ValidatedLicenseKey;
 use mz_orchestrator_process::{ProcessOrchestrator, ProcessOrchestratorConfig};
 use mz_orchestrator_tracing::{TracingCliArgs, TracingOrchestrator};
 use mz_ore::cast::{CastFrom, ReinterpretCast};
@@ -58,17 +64,17 @@ use mz_ore::task;
 use mz_ore::thread::{JoinHandleExt, JoinOnDropHandle};
 use mz_ore::tracing::TracingHandle;
 use mz_ore::url::SensitiveUrl;
+use mz_persist_client::PersistLocation;
 use mz_persist_client::cache::PersistClientCache;
 use mz_persist_client::cfg::PersistConfig;
 use mz_persist_client::rpc::{
     MetricsSameProcessPubSubSender, PersistGrpcPubSubServer, PubSubClientConnection, PubSubSender,
 };
-use mz_persist_client::PersistLocation;
-use mz_pgrepr::{oid, Interval, Jsonb, Numeric, UInt2, UInt4, UInt8, Value};
+use mz_pgrepr::{Interval, Jsonb, Numeric, UInt2, UInt4, UInt8, Value, oid};
+use mz_repr::ColumnName;
 use mz_repr::adt::date::Date;
 use mz_repr::adt::mz_acl_item::{AclItem, MzAclItem};
 use mz_repr::adt::numeric;
-use mz_repr::ColumnName;
 use mz_secrets::SecretsController;
 use mz_sql::ast::{Expr, Raw, Statement};
 use mz_sql::catalog::EnvironmentId;
@@ -92,8 +98,8 @@ use tokio_postgres::{NoTls, Row, SimpleQueryMessage};
 use tokio_stream::wrappers::TcpListenerStream;
 use tower_http::cors::AllowOrigin;
 use tracing::{error, info};
-use uuid::fmt::Simple;
 use uuid::Uuid;
+use uuid::fmt::Simple;
 
 use crate::ast::{Location, Mode, Output, QueryOutput, Record, Sort, Type};
 use crate::util;
@@ -656,7 +662,7 @@ fn format_datum(d: Slt, typ: &Type, mode: Mode, col: usize) -> String {
         (Type::Integer, Value::Text(_)) => "0".to_string(),
         (Type::Integer, Value::Bool(b)) => i8::from(b).to_string(),
         (Type::Integer, Value::Numeric(d)) => {
-            let mut d = d.0 .0.clone();
+            let mut d = d.0.0.clone();
             let mut cx = numeric::cx_datum();
             // Truncate the decimal to match sqlite.
             if mode == Mode::Standard {
@@ -680,14 +686,14 @@ fn format_datum(d: Slt, typ: &Type, mode: Mode, col: usize) -> String {
         },
         (Type::Real, Value::Numeric(d)) => match mode {
             Mode::Standard => {
-                let mut d = d.0 .0.clone();
+                let mut d = d.0.0.clone();
                 if d.exponent() < -3 {
                     numeric::rescale(&mut d, 3).unwrap();
                 }
                 numeric::munge_numeric(&mut d).unwrap();
                 d.to_standard_notation_string()
             }
-            Mode::Cockroach => d.0 .0.to_standard_notation_string(),
+            Mode::Cockroach => d.0.0.to_standard_notation_string(),
         },
 
         (Type::Text, Value::Text(s)) => {
@@ -709,7 +715,7 @@ fn format_datum(d: Slt, typ: &Type, mode: Mode, col: usize) -> String {
             Ok(s) => s.to_string(),
             Err(_) => format!("{:?}", b),
         },
-        (Type::Text, Value::Numeric(d)) => d.0 .0.to_standard_notation_string(),
+        (Type::Text, Value::Numeric(d)) => d.0.0.to_standard_notation_string(),
         // Everything else gets normal text encoding. This correctly handles things
         // like arrays, tuples, and strings that need to be quoted.
         (Type::Text, d) => {
@@ -844,36 +850,6 @@ impl<'a> Runner<'a> {
             inner
                 .system_client
                 .batch_execute("CREATE CLUSTER quickstart REPLICAS ()")
-                .await?;
-        }
-        let mut needs_default_replica = true;
-        for row in inner
-            .system_client
-            .query(
-                "SELECT name, size FROM mz_cluster_replicas
-                 WHERE cluster_id = (SELECT id FROM mz_clusters WHERE name = 'quickstart')",
-                &[],
-            )
-            .await?
-        {
-            let name: &str = row.get("name");
-            let size: &str = row.get("size");
-            if name == "r1" && size == self.config.replicas.to_string() {
-                needs_default_replica = false;
-            } else {
-                inner
-                    .system_client
-                    .batch_execute(&format!("DROP CLUSTER REPLICA quickstart.{}", name))
-                    .await?;
-            }
-        }
-        if needs_default_replica {
-            inner
-                .system_client
-                .batch_execute(&format!(
-                    "CREATE CLUSTER REPLICA quickstart.r1 SIZE '{}'",
-                    self.config.replicas
-                ))
                 .await?;
         }
 
@@ -1066,6 +1042,8 @@ impl<'a> RunnerInner<'a> {
             cloud_resource_controller: None,
             tls: None,
             frontegg: None,
+            self_hosted_auth: false,
+            self_hosted_auth_internal: false,
             cors_allowed_origin: AllowOrigin::list([]),
             unsafe_mode: true,
             all_features: false,
@@ -1074,11 +1052,27 @@ impl<'a> RunnerInner<'a> {
             environment_id,
             cluster_replica_sizes: ClusterReplicaSizeMap::for_tests(),
             bootstrap_default_cluster_replica_size: config.replicas.to_string(),
-            bootstrap_builtin_system_cluster_replica_size: config.replicas.to_string(),
-            bootstrap_builtin_catalog_server_cluster_replica_size: config.replicas.to_string(),
-            bootstrap_builtin_probe_cluster_replica_size: config.replicas.to_string(),
-            bootstrap_builtin_support_cluster_replica_size: config.replicas.to_string(),
-            bootstrap_builtin_analytics_cluster_replica_size: config.replicas.to_string(),
+            bootstrap_default_cluster_replication_factor: 1,
+            bootstrap_builtin_system_cluster_config: BootstrapBuiltinClusterConfig {
+                replication_factor: SYSTEM_CLUSTER_DEFAULT_REPLICATION_FACTOR,
+                size: config.replicas.to_string(),
+            },
+            bootstrap_builtin_catalog_server_cluster_config: BootstrapBuiltinClusterConfig {
+                replication_factor: CATALOG_SERVER_CLUSTER_DEFAULT_REPLICATION_FACTOR,
+                size: config.replicas.to_string(),
+            },
+            bootstrap_builtin_probe_cluster_config: BootstrapBuiltinClusterConfig {
+                replication_factor: PROBE_CLUSTER_DEFAULT_REPLICATION_FACTOR,
+                size: config.replicas.to_string(),
+            },
+            bootstrap_builtin_support_cluster_config: BootstrapBuiltinClusterConfig {
+                replication_factor: SUPPORT_CLUSTER_DEFAULT_REPLICATION_FACTOR,
+                size: config.replicas.to_string(),
+            },
+            bootstrap_builtin_analytics_cluster_config: BootstrapBuiltinClusterConfig {
+                replication_factor: ANALYTICS_CLUSTER_DEFAULT_REPLICATION_FACTOR,
+                size: config.replicas.to_string(),
+            },
             system_parameter_defaults: {
                 let mut params = BTreeMap::new();
                 params.insert(
@@ -1106,6 +1100,7 @@ impl<'a> RunnerInner<'a> {
             internal_console_redirect_url: None,
             tls_reload_certs: mz_server_core::cert_reload_never_reload(),
             helm_chart_version: None,
+            license_key: ValidatedLicenseKey::for_tests(),
         };
         // We need to run the server on its own Tokio runtime, which in turn
         // requires its own thread, so that we can wait for any tasks spawned
@@ -1981,6 +1976,7 @@ pub async fn rewrite_file(runner: &mut Runner<'_>, filename: &Path) -> Result<()
         types: &Vec<Type>,
         column_names: Option<&Vec<ColumnName>>,
         actual_output: &Vec<String>,
+        multiline: bool,
     ) {
         buf.append_header(input, expected_output, column_names);
 
@@ -1993,20 +1989,46 @@ pub async fn rewrite_file(runner: &mut Runner<'_>, filename: &Path) -> Result<()
                         buf.append("\n");
                     }
 
-                    if row.len() <= 1 {
-                        buf.append(&row.iter().join("  "));
+                    if row.len() == 0 {
+                        // nothing to do
+                    } else if row.len() == 1 {
+                        // If there is only one column, then there is no need for space
+                        // substitution, so we only do newline substitution.
+                        if multiline {
+                            buf.append(&row[0]);
+                        } else {
+                            buf.append(&row[0].replace('\n', "⏎"))
+                        }
                     } else {
-                        buf.append(&row.iter().map(|col| col.replace(' ', "␠")).join("  "));
+                        // Substitute spaces with ␠ to avoid mistaking the spaces in the result
+                        // values with spaces that separate columns.
+                        buf.append(
+                            &row.iter()
+                                .map(|col| {
+                                    let mut col = col.replace(' ', "␠");
+                                    if !multiline {
+                                        col = col.replace('\n', "⏎");
+                                    }
+                                    col
+                                })
+                                .join("  "),
+                        );
                     }
                 }
                 // In standard mode, output each value on its own line,
                 // and ignore row boundaries.
+                // No need to substitute spaces, because every value (not row) is on a separate
+                // line. But we do need to substitute newlines.
                 Mode::Standard => {
                     for (j, col) in row.iter().enumerate() {
                         if i != 0 || j != 0 {
                             buf.append("\n");
                         }
-                        buf.append(col);
+                        buf.append(&if multiline {
+                            col.clone()
+                        } else {
+                            col.replace('\n', "⏎")
+                        });
                     }
                 }
             }
@@ -2028,6 +2050,7 @@ pub async fn rewrite_file(runner: &mut Runner<'_>, filename: &Path) -> Result<()
                             output_str: expected_output,
                             types,
                             column_names,
+                            multiline,
                             ..
                         }),
                     ..
@@ -2045,6 +2068,7 @@ pub async fn rewrite_file(runner: &mut Runner<'_>, filename: &Path) -> Result<()
                     types,
                     column_names.as_ref(),
                     actual_output,
+                    *multiline,
                 );
             }
             (
@@ -2055,6 +2079,7 @@ pub async fn rewrite_file(runner: &mut Runner<'_>, filename: &Path) -> Result<()
                             output: Output::Values(_),
                             output_str: expected_output,
                             types,
+                            multiline,
                             ..
                         }),
                     ..
@@ -2073,6 +2098,7 @@ pub async fn rewrite_file(runner: &mut Runner<'_>, filename: &Path) -> Result<()
                     types,
                     Some(actual_column_names),
                     actual_output,
+                    *multiline,
                 );
             }
             (
@@ -2211,7 +2237,7 @@ impl<'a> RewriteBuffer<'a> {
         self.append(
             &names
                 .iter()
-                .map(|name| name.as_str().replace('␠', " "))
+                .map(|name| name.as_str().replace(' ', "␠"))
                 .collect::<Vec<_>>()
                 .join(" "),
         );
@@ -2301,12 +2327,14 @@ fn generate_view_sql(
     // can adjust the (hopefully) small number of tests that eventually
     // challenge us in this particular way.
     let name = UnresolvedItemName(vec![Ident::new_unchecked(format!("v{}", view_uuid))]);
-    let projection = expected_column_names.map_or(
-        num_attributes.map_or(vec![], |n| {
-            (1..=n)
-                .map(|i| Ident::new_unchecked(format!("a{i}")))
-                .collect()
-        }),
+    let projection = expected_column_names.map_or_else(
+        || {
+            num_attributes.map_or(vec![], |n| {
+                (1..=n)
+                    .map(|i| Ident::new_unchecked(format!("a{i}")))
+                    .collect()
+            })
+        },
         |cols| {
             cols.iter()
                 .map(|c| Ident::new_unchecked(c.as_str()))

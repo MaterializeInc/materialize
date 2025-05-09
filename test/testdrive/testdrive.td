@@ -45,11 +45,11 @@ row 2
 
 $ set-regex match=u\d+ replacement=UID
 
-? EXPLAIN SELECT * FROM t1 AS a1, t1 AS a2 WHERE a1.f1 IS NOT NULL;
+? EXPLAIN OPTIMIZED PLAN AS VERBOSE TEXT FOR SELECT * FROM t1 AS a1, t1 AS a2 WHERE a1.f1 IS NOT NULL;
 Explained Query:
   CrossJoin type=differential
     ArrangeBy keys=[[]]
-      Filter (#0) IS NOT NULL
+      Filter (#0{f1}) IS NOT NULL
         ReadStorage materialize.public.t1
     ArrangeBy keys=[[]]
       ReadStorage materialize.public.t1

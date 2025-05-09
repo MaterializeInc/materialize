@@ -11,9 +11,9 @@ use std::collections::BTreeMap;
 use std::iter;
 use std::sync::LazyLock;
 
+use differential_dataflow::IntoOwned;
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::operators::arrange::Arranged;
-use differential_dataflow::trace::cursor::IntoOwned;
 use differential_dataflow::trace::{Batch, BatchReader, Cursor, TraceReader};
 use differential_dataflow::{AsCollection, Collection};
 use itertools::{EitherOrBoth, Itertools};
@@ -72,7 +72,7 @@ where
                                         v.clone(),
                                         usize::cast_from(diff.unsigned_abs()),
                                     );
-                                    if diff < 0 {
+                                    if diff < Diff::ZERO {
                                         befores.push(update);
                                     } else {
                                         afters.push(update);
@@ -107,7 +107,7 @@ where
                                 EitherOrBoth::Left((t, before)) => (t, Some(before.clone()), None),
                                 EitherOrBoth::Right((t, after)) => (t, None, Some(after.clone())),
                             })
-                            .group_by(|(t, _before, _after)| *t);
+                            .chunk_by(|(t, _before, _after)| *t);
 
                             // For each timestamp, emit the group of
                             // `DiffPair`s.
@@ -115,7 +115,7 @@ where
                                 let group = group
                                     .map(|(_t, before, after)| DiffPair { before, after })
                                     .collect();
-                                session.give(((k.clone(), group), t, 1));
+                                session.give(((k.clone(), group), t, Diff::ONE));
                             }
 
                             cursor.step_key(&batch);

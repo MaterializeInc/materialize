@@ -15,6 +15,8 @@ from collections.abc import Callable
 from pathlib import Path
 
 import frontmatter
+import requests
+import yaml
 
 from materialize import build_context, buildkite, docker, git
 from materialize.docker import (
@@ -26,6 +28,18 @@ from materialize.git import get_version_tags
 from materialize.mz_version import MzVersion
 
 MZ_ROOT = Path(os.environ["MZ_ROOT"])
+
+
+def get_lts_versions() -> list[MzVersion]:
+    result = set()
+    for entry in yaml.safe_load(
+        requests.get("https://materializeinc.github.io/materialize/index.yaml").text
+    )["entries"]["materialize-operator"]:
+        version = MzVersion.parse_mz(entry["appVersion"])
+        if not version.prerelease:
+            result.add(version)
+    return sorted(result)
+
 
 # not released on Docker
 INVALID_VERSIONS = {

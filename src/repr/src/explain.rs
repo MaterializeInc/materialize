@@ -37,31 +37,30 @@ use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 use std::fmt::{Display, Formatter};
-use std::sync::atomic::Ordering;
 
-use mz_ore::assert::SOFT_ASSERTIONS;
 use mz_ore::stack::RecursionLimitError;
-use mz_ore::str::{bracketed, separated, Indent};
+use mz_ore::str::{Indent, bracketed, separated};
 
-use crate::explain::dot::{dot_string, DisplayDot};
-use crate::explain::json::{json_string, DisplayJson};
-use crate::explain::text::{text_string, DisplayText};
+use crate::explain::dot::{DisplayDot, dot_string};
+use crate::explain::json::{DisplayJson, json_string};
+use crate::explain::text::{DisplayText, text_string};
 use crate::optimize::OptimizerFeatureOverrides;
 use crate::{ColumnType, GlobalId, ScalarType};
 
 pub mod dot;
 pub mod json;
 pub mod text;
-#[cfg(feature = "tracing_")]
+#[cfg(feature = "tracing")]
 pub mod tracing;
 
-#[cfg(feature = "tracing_")]
+#[cfg(feature = "tracing")]
 pub use crate::explain::tracing::trace_plan;
 
 /// Possible output formats for an explanation.
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]
 pub enum ExplainFormat {
     Text,
+    VerboseText,
     Json,
     Dot,
 }
@@ -70,6 +69,7 @@ impl fmt::Display for ExplainFormat {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             ExplainFormat::Text => f.write_str("TEXT"),
+            ExplainFormat::VerboseText => f.write_str("VERBOSE TEXT"),
             ExplainFormat::Json => f.write_str("JSON"),
             ExplainFormat::Dot => f.write_str("DOT"),
         }
@@ -208,7 +208,7 @@ impl Default for ExplainConfig {
     fn default() -> Self {
         Self {
             // Don't redact in debug builds and in CI.
-            redacted: !SOFT_ASSERTIONS.load(Ordering::Relaxed),
+            redacted: !mz_ore::assert::soft_assertions_enabled(),
             arity: false,
             cardinality: false,
             column_names: false,
@@ -276,6 +276,10 @@ pub trait Explain<'a>: 'a {
     type Text: DisplayText;
 
     /// The explanation type produced by a successful
+    /// [`Explain::explain_verbose_text`] call.
+    type VerboseText: DisplayText;
+
+    /// The explanation type produced by a successful
     /// [`Explain::explain_json`] call.
     type Json: DisplayJson;
 
@@ -304,6 +308,9 @@ pub trait Explain<'a>: 'a {
     ) -> Result<String, ExplainError> {
         match format {
             ExplainFormat::Text => self.explain_text(context).map(|e| text_string(&e)),
+            ExplainFormat::VerboseText => {
+                self.explain_verbose_text(context).map(|e| text_string(&e))
+            }
             ExplainFormat::Json => self.explain_json(context).map(|e| json_string(&e)),
             ExplainFormat::Dot => self.explain_dot(context).map(|e| dot_string(&e)),
         }
@@ -325,12 +332,31 @@ pub trait Explain<'a>: 'a {
         Err(ExplainError::UnsupportedFormat(ExplainFormat::Text))
     }
 
+    /// Construct a [`Result::Ok`] of the [`Explain::VerboseText`] format
+    /// from the config and the context.
+    ///
+    /// # Errors
+    ///
+    /// If the [`ExplainFormat::VerboseText`] is not supported, the implementation
+    /// should return an [`ExplainError::UnsupportedFormat`].
+    ///
+    /// If an [`ExplainConfig`] parameter cannot be honored, the
+    /// implementation should silently ignore this parameter and
+    /// proceed without returning a [`Result::Err`].
+    #[allow(unused_variables)]
+    fn explain_verbose_text(
+        &'a mut self,
+        context: &'a Self::Context,
+    ) -> Result<Self::VerboseText, ExplainError> {
+        Err(ExplainError::UnsupportedFormat(ExplainFormat::VerboseText))
+    }
+
     /// Construct a [`Result::Ok`] of the [`Explain::Json`] format
     /// from the config and the context.
     ///
     /// # Errors
     ///
-    /// If the [`ExplainFormat::Text`] is not supported, the implementation
+    /// If the [`ExplainFormat::Json`] is not supported, the implementation
     /// should return an [`ExplainError::UnsupportedFormat`].
     ///
     /// If an [`ExplainConfig`] parameter cannot be honored, the
@@ -438,13 +464,19 @@ pub trait ExprHumanizer: fmt::Debug {
     fn humanize_id_parts(&self, id: GlobalId) -> Option<Vec<String>>;
 
     /// Returns a human-readable name for the specified scalar type.
-    fn humanize_scalar_type(&self, ty: &ScalarType) -> String;
+    /// Used in, e.g., EXPLAIN and error msgs, in which case exact Postgres compatibility is less
+    /// important than showing as much detail as possible. Also used in `pg_typeof`, where Postgres
+    /// compatibility is more important.
+    fn humanize_scalar_type(&self, ty: &ScalarType, postgres_compat: bool) -> String;
 
     /// Returns a human-readable name for the specified column type.
-    fn humanize_column_type(&self, typ: &ColumnType) -> String {
+    /// Used in, e.g., EXPLAIN and error msgs, in which case exact Postgres compatibility is less
+    /// important than showing as much detail as possible. Also used in `pg_typeof`, where Postgres
+    /// compatibility is more important.
+    fn humanize_column_type(&self, typ: &ColumnType, postgres_compat: bool) -> String {
         format!(
             "{}{}",
-            self.humanize_scalar_type(&typ.scalar_type),
+            self.humanize_scalar_type(&typ.scalar_type, postgres_compat),
             if typ.nullable { "?" } else { "" }
         )
     }
@@ -505,8 +537,8 @@ impl<'a> ExprHumanizer for ExprHumanizerExt<'a> {
         }
     }
 
-    fn humanize_scalar_type(&self, ty: &ScalarType) -> String {
-        self.inner.humanize_scalar_type(ty)
+    fn humanize_scalar_type(&self, ty: &ScalarType, postgres_compat: bool) -> String {
+        self.inner.humanize_scalar_type(ty, postgres_compat)
     }
 
     fn column_names_for_id(&self, id: GlobalId) -> Option<Vec<String>> {
@@ -572,7 +604,7 @@ impl ExprHumanizer for DummyHumanizer {
         None
     }
 
-    fn humanize_scalar_type(&self, ty: &ScalarType) -> String {
+    fn humanize_scalar_type(&self, ty: &ScalarType, _postgres_compat: bool) -> String {
         // The debug implementation is better than nothing.
         format!("{:?}", ty)
     }
@@ -683,7 +715,7 @@ impl<'a> Display for HumanizedAnalyses<'a> {
                 Some(types) => {
                     let types = types
                         .into_iter()
-                        .map(|c| self.humanizer.humanize_column_type(c))
+                        .map(|c| self.humanizer.humanize_column_type(c, false))
                         .collect::<Vec<_>>();
 
                     bracketed("(", ")", separated(", ", types)).to_string()
@@ -911,14 +943,15 @@ mod tests {
 
     impl<'a> Explain<'a> for TestExpr {
         type Context = ExplainContext<'a>;
-        type Text = TestExplanation<'a>;
+        type Text = UnsupportedFormat;
+        type VerboseText = TestExplanation<'a>;
         type Json = UnsupportedFormat;
         type Dot = UnsupportedFormat;
 
-        fn explain_text(
+        fn explain_verbose_text(
             &'a mut self,
             context: &'a Self::Context,
-        ) -> Result<Self::Text, ExplainError> {
+        ) -> Result<Self::VerboseText, ExplainError> {
             Ok(TestExplanation {
                 expr: self,
                 context,
@@ -932,7 +965,7 @@ mod tests {
     ) -> Result<String, ExplainError> {
         let mut expr = TestExpr { lhs: 1, rhs: 2 };
 
-        let format = ExplainFormat::Text;
+        let format = ExplainFormat::VerboseText;
         let config = &ExplainConfig {
             redacted: false,
             arity: false,

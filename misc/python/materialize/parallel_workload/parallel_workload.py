@@ -67,7 +67,9 @@ def run(
     scenario: Scenario,
     num_threads: int | None,
     naughty_identifiers: bool,
+    replicas: int,
     composition: Composition | None,
+    azurite: bool,
     sanity_restart: bool,
 ) -> None:
     num_threads = num_threads or os.cpu_count() or 10
@@ -75,7 +77,7 @@ def run(
     rng = random.Random(random.randrange(SEED_RANGE))
 
     print(
-        f"+++ Running with: --seed={seed} --threads={num_threads} --runtime={runtime} --complexity={complexity.value} --scenario={scenario.value} {'--naughty-identifiers ' if naughty_identifiers else ''} (--host={host})"
+        f"+++ Running with: --seed={seed} --threads={num_threads} --runtime={runtime} --complexity={complexity.value} --scenario={scenario.value} {'--naughty-identifiers ' if naughty_identifiers else ''} --replicas={replicas} (--host={host})"
     )
     initialize_logging()
 
@@ -94,31 +96,32 @@ def run(
     with system_conn.cursor() as system_cur:
         system_exe = Executor(rng, system_cur, None, database)
         system_exe.execute(
-            f"ALTER SYSTEM SET max_schemas_per_database = {MAX_SCHEMAS * 20 + num_threads}"
+            f"ALTER SYSTEM SET max_schemas_per_database = {MAX_SCHEMAS * 40 + num_threads}"
         )
         # The presence of ALTER TABLE RENAME can cause the total number of tables to exceed MAX_TABLES
         system_exe.execute(
-            f"ALTER SYSTEM SET max_tables = {MAX_TABLES * 20 + num_threads}"
+            f"ALTER SYSTEM SET max_tables = {MAX_TABLES * 40 + num_threads}"
         )
         system_exe.execute(
-            f"ALTER SYSTEM SET max_materialized_views = {MAX_VIEWS * 20 + num_threads}"
+            f"ALTER SYSTEM SET max_materialized_views = {MAX_VIEWS * 40 + num_threads}"
         )
         system_exe.execute(
-            f"ALTER SYSTEM SET max_sources = {(MAX_WEBHOOK_SOURCES + MAX_KAFKA_SOURCES + MAX_POSTGRES_SOURCES) * 20 + num_threads}"
+            f"ALTER SYSTEM SET max_sources = {(MAX_WEBHOOK_SOURCES + MAX_KAFKA_SOURCES + MAX_POSTGRES_SOURCES) * 40 + num_threads}"
         )
         system_exe.execute(
-            f"ALTER SYSTEM SET max_sinks = {MAX_KAFKA_SINKS * 20 + num_threads}"
+            f"ALTER SYSTEM SET max_sinks = {MAX_KAFKA_SINKS * 40 + num_threads}"
         )
         system_exe.execute(
-            f"ALTER SYSTEM SET max_roles = {MAX_ROLES * 20 + num_threads}"
+            f"ALTER SYSTEM SET max_roles = {MAX_ROLES * 40 + num_threads}"
         )
         system_exe.execute(
-            f"ALTER SYSTEM SET max_clusters = {MAX_CLUSTERS * 20 + num_threads}"
+            f"ALTER SYSTEM SET max_clusters = {MAX_CLUSTERS * 40 + num_threads}"
         )
         system_exe.execute(
-            f"ALTER SYSTEM SET max_replicas_per_cluster = {MAX_CLUSTER_REPLICAS * 20 + num_threads}"
+            f"ALTER SYSTEM SET max_replicas_per_cluster = {MAX_CLUSTER_REPLICAS * 40 + num_threads}"
         )
         system_exe.execute("ALTER SYSTEM SET max_secrets = 1000000")
+        system_exe.execute("ALTER SYSTEM SET idle_in_transaction_session_timeout = 0")
         # Most queries should not fail because of privileges
         for object_type in [
             "TABLES",
@@ -132,6 +135,17 @@ def run(
             system_exe.execute(
                 f"ALTER DEFAULT PRIVILEGES FOR ALL ROLES GRANT ALL PRIVILEGES ON {object_type} TO PUBLIC"
             )
+
+        if replicas > 1:
+            system_exe.execute("DROP CLUSTER quickstart CASCADE")
+            replica_names = [f"r{replica_id}" for replica_id in range(0, replicas)]
+            replica_string = ",".join(
+                f"{replica_name} (SIZE '4')" for replica_name in replica_names
+            )
+            system_exe.execute(
+                f"CREATE CLUSTER quickstart REPLICAS ({replica_string})",
+            )
+
         system_conn.close()
         conn = psycopg.connect(
             host=host,
@@ -222,7 +236,7 @@ def run(
         assert composition, "Kill scenario only works in mzcompose"
         worker = Worker(
             worker_rng,
-            [KillAction(worker_rng, composition, sanity_restart)],
+            [KillAction(worker_rng, composition, azurite, sanity_restart)],
             [1],
             end_time,
             autocommit=False,
@@ -246,6 +260,7 @@ def run(
                 ZeroDowntimeDeployAction(
                     worker_rng,
                     composition,
+                    azurite,
                     sanity_restart,
                 )
             ],
@@ -474,6 +489,10 @@ def parse_common_args(parser: argparse.ArgumentParser) -> None:
         action="store_true",
         help="Whether to initialize expensive parts like SQLsmith, sources, sinks (for fast local testing, reduces coverage)",
     )
+    parser.add_argument(
+        "--azurite", action="store_true", help="Use Azurite as blob store instead of S3"
+    )
+    parser.add_argument("--replicas", type=int, default=2, help="use multiple replicas")
 
 
 def main() -> int:
@@ -524,7 +543,9 @@ def main() -> int:
         Scenario(args.scenario),
         args.threads,
         args.naughty_identifiers,
+        args.replicas,
         composition=None,  # only works in mzcompose
+        azurite=args.azurite,
         sanity_restart=False,  # only works in mzcompose
     )
     return 0

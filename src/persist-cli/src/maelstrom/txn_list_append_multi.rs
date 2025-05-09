@@ -19,6 +19,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use async_trait::async_trait;
 use differential_dataflow::consolidation::consolidate_updates;
+use mz_dyncfg::ConfigUpdates;
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::{NOW_ZERO, SYSTEM_TIME};
 use mz_persist::cfg::{BlobConfig, ConsensusConfig};
@@ -32,10 +33,10 @@ use mz_persist_client::read::ReadHandle;
 use mz_persist_client::rpc::PubSubClientConnection;
 use mz_persist_client::{Diagnostics, PersistClient, ShardId};
 use mz_persist_types::codec_impls::{StringSchema, UnitSchema};
+use mz_timestamp_oracle::TimestampOracle;
 use mz_timestamp_oracle::postgres_oracle::{
     PostgresTimestampOracle, PostgresTimestampOracleConfig,
 };
-use mz_timestamp_oracle::TimestampOracle;
 use mz_txn_wal::metrics::Metrics as TxnMetrics;
 use mz_txn_wal::operator::DataSubscribeTask;
 use mz_txn_wal::txns::{Tidy, TxnsHandle};
@@ -43,12 +44,12 @@ use timely::progress::Timestamp;
 use tokio::sync::Mutex;
 use tracing::{debug, info};
 
+use crate::maelstrom::Args;
 use crate::maelstrom::api::{Body, MaelstromError, NodeId, ReqTxnOp, ResTxnOp};
 use crate::maelstrom::node::{Handle, Service};
 use crate::maelstrom::services::{
     CachingBlob, MaelstromBlob, MaelstromConsensus, MemTimestampOracle,
 };
-use crate::maelstrom::Args;
 
 #[derive(Debug)]
 pub struct Transactor {
@@ -372,6 +373,14 @@ impl Service for TransactorService {
 
         let mut config =
             PersistConfig::new_default_configs(&mz_persist_client::BUILD_INFO, SYSTEM_TIME.clone());
+        {
+            // We only use the Postgres tuned queries when connected to vanilla
+            // Postgres, so we always want to enable them for testing.
+            let mut updates = ConfigUpdates::default();
+            updates.add(&mz_persist::postgres::USE_POSTGRES_TUNED_QUERIES, true);
+            config.apply_from(&updates);
+        }
+
         let metrics_registry = MetricsRegistry::new();
         let metrics = Arc::new(PersistMetrics::new(&config, &metrics_registry));
 
@@ -417,6 +426,7 @@ impl Service for TransactorService {
                     consensus_uri,
                     Box::new(config.clone()),
                     metrics.postgres_consensus.clone(),
+                    Arc::clone(&config.configs),
                 )
                 .expect("consensus_uri should be valid");
                 loop {

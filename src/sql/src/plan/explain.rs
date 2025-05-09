@@ -9,12 +9,14 @@
 
 //! `EXPLAIN` support for structures defined in this crate.
 
+use std::panic::AssertUnwindSafe;
+
 use mz_expr::explain::{ExplainContext, ExplainSinglePlan};
 use mz_expr::visit::{Visit, VisitChildren};
 use mz_expr::{Id, LocalId};
 use mz_ore::stack::RecursionLimitError;
-use mz_repr::explain::{AnnotatedPlan, Explain, ExplainError, ScalarOps, UnsupportedFormat};
 use mz_repr::RelationType;
+use mz_repr::explain::{AnnotatedPlan, Explain, ExplainError, ScalarOps, UnsupportedFormat};
 
 use crate::plan::{HirRelationExpr, HirScalarExpr};
 
@@ -25,11 +27,20 @@ impl<'a> Explain<'a> for HirRelationExpr {
 
     type Text = ExplainSinglePlan<'a, HirRelationExpr>;
 
+    type VerboseText = ExplainSinglePlan<'a, HirRelationExpr>;
+
     type Json = ExplainSinglePlan<'a, HirRelationExpr>;
 
     type Dot = UnsupportedFormat;
 
     fn explain_text(&'a mut self, context: &'a Self::Context) -> Result<Self::Text, ExplainError> {
+        self.as_explain_single_plan(context)
+    }
+
+    fn explain_verbose_text(
+        &'a mut self,
+        context: &'a Self::Context,
+    ) -> Result<Self::VerboseText, ExplainError> {
         self.as_explain_single_plan(context)
     }
 
@@ -44,9 +55,20 @@ impl<'a> HirRelationExpr {
         context: &'a ExplainContext<'a>,
     ) -> Result<ExplainSinglePlan<'a, HirRelationExpr>, ExplainError> {
         // unless raw plans are explicitly requested
-        // ensure that all nested subqueries are wrapped in Let blocks
+        // ensure that all nested subqueries are wrapped in Let blocks by calling
+        // `normalize_subqueries`
         if !context.config.raw_plans {
-            normalize_subqueries(self)?;
+            mz_ore::panic::catch_unwind_str(AssertUnwindSafe(|| {
+                normalize_subqueries(self).map_err(|e| e.into())
+            }))
+            .unwrap_or_else(|panic| {
+                // A panic during optimization is always a bug; log an error so we learn about it.
+                // TODO(teskje): collect and log a backtrace from the panic site
+                tracing::error!("caught a panic during `normalize_subqueries`: {panic}");
+
+                let msg = format!("unexpected panic during `normalize_subqueries`: {panic}");
+                Err(ExplainError::UnknownError(msg))
+            })?
         }
 
         // TODO: use config values to infer requested
@@ -91,7 +113,7 @@ pub fn normalize_subqueries<'a>(expr: &'a mut HirRelationExpr) -> Result<(), Rec
             use HirRelationExpr::Get;
             use HirScalarExpr::{Exists, Select};
             expr.visit_mut_post(&mut |expr: &mut HirScalarExpr| match expr {
-                Exists(expr) | Select(expr) => match expr.as_mut() {
+                Exists(expr, _) | Select(expr, _) => match expr.as_mut() {
                     Get { .. } => (),
                     expr => {
                         // generate fresh local id
@@ -141,7 +163,9 @@ pub fn normalize_subqueries<'a>(expr: &'a mut HirRelationExpr) -> Result<(), Rec
 
 // Create an [`Iterator`] for [`LocalId`] values that are guaranteed to be
 // fresh within the scope of the given [`HirRelationExpr`].
-fn id_gen(expr: &HirRelationExpr) -> Result<impl Iterator<Item = LocalId>, RecursionLimitError> {
+fn id_gen(
+    expr: &HirRelationExpr,
+) -> Result<impl Iterator<Item = LocalId> + use<>, RecursionLimitError> {
     let mut max_id = 0_u64;
 
     expr.visit_pre(&mut |expr| {
@@ -157,14 +181,14 @@ fn id_gen(expr: &HirRelationExpr) -> Result<impl Iterator<Item = LocalId>, Recur
 impl ScalarOps for HirScalarExpr {
     fn match_col_ref(&self) -> Option<usize> {
         match self {
-            HirScalarExpr::Column(c) if c.level == 0 => Some(c.column),
+            HirScalarExpr::Column(c, _name) if c.level == 0 => Some(c.column),
             _ => None,
         }
     }
 
     fn references(&self, column: usize) -> bool {
         match self {
-            HirScalarExpr::Column(c) => c.column == column && c.level == 0,
+            HirScalarExpr::Column(c, _name) => c.column == column && c.level == 0,
             _ => false,
         }
     }

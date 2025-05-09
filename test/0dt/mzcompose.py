@@ -29,6 +29,7 @@ from materialize.mzcompose.services.materialized import (
     Materialized,
 )
 from materialize.mzcompose.services.mysql import MySql
+from materialize.mzcompose.services.mz import Mz
 from materialize.mzcompose.services.postgres import (
     CockroachOrPostgresMetadata,
     Postgres,
@@ -49,12 +50,14 @@ SERVICES = [
     Kafka(),
     SchemaRegistry(),
     CockroachOrPostgresMetadata(),
+    Mz(app_password=""),
     Materialized(
         name="mz_old",
         sanity_restart=False,
         deploy_generation=0,
         system_parameter_defaults=SYSTEM_PARAMETER_DEFAULTS,
         external_metadata_store=True,
+        default_replication_factor=2,
     ),
     Materialized(
         name="mz_new",
@@ -63,6 +66,7 @@ SERVICES = [
         system_parameter_defaults=SYSTEM_PARAMETER_DEFAULTS,
         restart="on-failure",
         external_metadata_store=True,
+        default_replication_factor=2,
     ),
     Testdrive(
         materialize_url="postgres://materialize@mz_old:6875",
@@ -77,13 +81,16 @@ SERVICES = [
 
 
 def workflow_default(c: Composition) -> None:
-    for name in buildkite.shard_list(
-        list(c.workflows.keys()), lambda workflow: workflow
-    ):
+    def process(name: str) -> None:
         if name == "default":
-            continue
+            return
         with c.test_case(name):
             c.workflow(name)
+
+    workflows = buildkite.shard_list(
+        list(c.workflows.keys()), lambda workflow: workflow
+    )
+    c.test_parts(workflows, process)
 
 
 def workflow_read_only(c: Composition) -> None:
@@ -100,6 +107,8 @@ def workflow_read_only(c: Composition) -> None:
         CREATE CLUSTER cluster SIZE '2-1';
         GRANT ALL ON CLUSTER cluster TO materialize;
         ALTER SYSTEM SET cluster = cluster;
+        CREATE CLUSTER cluster_singlereplica SIZE '1', REPLICATION FACTOR 1;
+        GRANT ALL ON CLUSTER cluster_singlereplica TO materialize;
     """,
         service="mz_old",
         port=6877,
@@ -207,7 +216,7 @@ def workflow_read_only(c: Composition) -> None:
         <null> <null> 1 2
 
         > CREATE SOURCE webhook_source
-          IN CLUSTER cluster
+          IN CLUSTER cluster_singlereplica
           FROM WEBHOOK BODY FORMAT TEXT
 
         $ webhook-append database=materialize schema=public name=webhook_source
@@ -226,6 +235,7 @@ def workflow_read_only(c: Composition) -> None:
             deploy_generation=1,
             external_metadata_store=True,
             system_parameter_defaults=SYSTEM_PARAMETER_DEFAULTS,
+            default_replication_factor=2,
         )
     ):
         c.up("mz_old")
@@ -274,7 +284,7 @@ def workflow_read_only(c: Composition) -> None:
             $ set-regex match=(s\\d+|\\d{{13}}|[ ]{{12}}0|u\\d{{1,3}}|\\(\\d+-\\d\\d-\\d\\d\\s\\d\\d:\\d\\d:\\d\\d\\.\\d\\d\\d\\)) replacement=<>
 
             > EXPLAIN TIMESTAMP FOR SELECT * FROM mv;
-            "                query timestamp: <> <>\\nlargest not in advance of upper: <> <>\\n                          upper:[<> <>]\\n                          since:[<> <>]\\n        can respond immediately: true\\n                       timeline: Some(EpochMilliseconds)\\n              session wall time: <> <>\\n\\nsource materialize.public.mv (<>, storage):\\n                  read frontier:[<> <>]\\n                 write frontier:[<> <>]\\n"
+            "                query timestamp: <> <>\\nlargest not in advance of upper: <> <>\\n                          upper:[<> <>]\\n                          since:[<> <>]\\n        can respond immediately: true\\n                       timeline: Some(EpochMilliseconds)\\n              session wall time: <> <>\\n\\nsource materialize.public.mv (<>, storage):\\n                  read frontier:[<> <>]\\n                 write frontier:[<> <>]\\n\\nbinding constraints:\\nlower:\\n  (StorageInput([User(6)])): [<> <>]\\n"
 
             > SELECT * FROM kafka_source_tbl
             key1A key1B value1A value1B
@@ -305,6 +315,7 @@ def workflow_read_only(c: Composition) -> None:
             deploy_generation=1,
             system_parameter_defaults=SYSTEM_PARAMETER_DEFAULTS,
             external_metadata_store=True,
+            default_replication_factor=2,
         )
     ):
         c.up("mz_old")
@@ -388,6 +399,8 @@ def workflow_basic(c: Composition) -> None:
         CREATE CLUSTER cluster SIZE '2-1';
         GRANT ALL ON CLUSTER cluster TO materialize;
         ALTER SYSTEM SET cluster = cluster;
+        CREATE CLUSTER cluster_singlereplica SIZE '1', REPLICATION FACTOR 1;
+        GRANT ALL ON CLUSTER cluster_singlereplica TO materialize;
     """,
         service="mz_old",
         port=6877,
@@ -495,7 +508,7 @@ def workflow_basic(c: Composition) -> None:
         <null> <null> 1 2
 
         > CREATE SOURCE webhook_source
-          IN CLUSTER cluster
+          IN CLUSTER cluster_singlereplica
           FROM WEBHOOK BODY FORMAT TEXT
 
         $ webhook-append database=materialize schema=public name=webhook_source
@@ -575,7 +588,7 @@ def workflow_basic(c: Composition) -> None:
             $ set-regex match=(s\\d+|\\d{{13}}|[ ]{{12}}0|u\\d{{1,3}}|\\(\\d+-\\d\\d-\\d\\d\\s\\d\\d:\\d\\d:\\d\\d\\.\\d\\d\\d\\)) replacement=<>
 
             > EXPLAIN TIMESTAMP FOR SELECT * FROM mv;
-            "                query timestamp: <> <>\\nlargest not in advance of upper: <> <>\\n                          upper:[<> <>]\\n                          since:[<> <>]\\n        can respond immediately: true\\n                       timeline: Some(EpochMilliseconds)\\n              session wall time: <> <>\\n\\nsource materialize.public.mv (<>, storage):\\n                  read frontier:[<> <>]\\n                 write frontier:[<> <>]\\n"
+            "                query timestamp: <> <>\\nlargest not in advance of upper: <> <>\\n                          upper:[<> <>]\\n                          since:[<> <>]\\n        can respond immediately: true\\n                       timeline: Some(EpochMilliseconds)\\n              session wall time: <> <>\\n\\nsource materialize.public.mv (<>, storage):\\n                  read frontier:[<> <>]\\n                 write frontier:[<> <>]\\n\\nbinding constraints:\\nlower:\\n  (StorageInput([User(6)])): [<> <>]\\n"
 
             > SELECT * FROM kafka_source_tbl
             key1A key1B value1A value1B
@@ -646,7 +659,7 @@ def workflow_basic(c: Composition) -> None:
         $ set-regex match=(s\\d+|\\d{{13}}|[ ]{{12}}0|u\\d{{1,3}}|\\(\\d+-\\d\\d-\\d\\d\\s\\d\\d:\\d\\d:\\d\\d\\.\\d\\d\\d\\)) replacement=<>
 
         > EXPLAIN TIMESTAMP FOR SELECT * FROM mv;
-        "                query timestamp: <> <>\\nlargest not in advance of upper: <> <>\\n                          upper:[<> <>]\\n                          since:[<> <>]\\n        can respond immediately: true\\n                       timeline: Some(EpochMilliseconds)\\n              session wall time: <> <>\\n\\nsource materialize.public.mv (<>, storage):\\n                  read frontier:[<> <>]\\n                 write frontier:[<> <>]\\n"
+        "                query timestamp: <> <>\\nlargest not in advance of upper: <> <>\\n                          upper:[<> <>]\\n                          since:[<> <>]\\n        can respond immediately: true\\n                       timeline: Some(EpochMilliseconds)\\n              session wall time: <> <>\\n\\nsource materialize.public.mv (<>, storage):\\n                  read frontier:[<> <>]\\n                 write frontier:[<> <>]\\n\\nbinding constraints:\\nlower:\\n  (StorageInput([User(6)])): [<> <>]\\n"
 
         > SELECT * FROM kafka_source_tbl
         key1A key1B value1A value1B
@@ -886,6 +899,8 @@ def workflow_kafka_source_rehydration(c: Composition) -> None:
         CREATE CLUSTER cluster SIZE '1';
         GRANT ALL ON CLUSTER cluster TO materialize;
         ALTER SYSTEM SET cluster = cluster;
+        CREATE CLUSTER cluster_singlereplica SIZE '1', REPLICATION FACTOR 1;
+        GRANT ALL ON CLUSTER cluster_singlereplica TO materialize;
     """,
         service="mz_old",
         port=6877,
@@ -943,6 +958,7 @@ def workflow_kafka_source_rehydration(c: Composition) -> None:
             system_parameter_defaults=SYSTEM_PARAMETER_DEFAULTS,
             restart="on-failure",
             external_metadata_store=True,
+            default_replication_factor=2,
         )
     ):
         c.up("mz_new")
@@ -957,6 +973,14 @@ def workflow_kafka_source_rehydration(c: Composition) -> None:
         )
         elapsed = time.time() - start_time
         print(f"promotion took {elapsed} seconds")
+
+        start_time = time.time()
+        result = c.sql_query("SELECT 1", service="mz_new")
+        elapsed = time.time() - start_time
+        print(f"bootstrapping (checked via SELECT 1) took {elapsed} seconds")
+        duration = time.time() - start_time
+        assert result[0][0] == 1, f"Wrong result: {result}"
+
         start_time = time.time()
         result = c.sql_query("SELECT * FROM kafka_source_cnt", service="mz_new")
         elapsed = time.time() - start_time
@@ -964,7 +988,7 @@ def workflow_kafka_source_rehydration(c: Composition) -> None:
         duration = time.time() - start_time
         assert result[0][0] == count * repeats, f"Wrong result: {result}"
         assert (
-            duration < 4
+            duration < 2
         ), f"Took {duration}s to SELECT on Kafka source after 0dt upgrade, is it hydrated?"
 
 
@@ -985,6 +1009,8 @@ def workflow_pg_source_rehydration(c: Composition) -> None:
         CREATE CLUSTER cluster SIZE '1';
         GRANT ALL ON CLUSTER cluster TO materialize;
         ALTER SYSTEM SET cluster = cluster;
+        CREATE CLUSTER cluster_singlereplica SIZE '1', REPLICATION FACTOR 1;
+        GRANT ALL ON CLUSTER cluster_singlereplica TO materialize;
     """,
         service="mz_old",
         port=6877,
@@ -1057,6 +1083,7 @@ def workflow_pg_source_rehydration(c: Composition) -> None:
             system_parameter_defaults=SYSTEM_PARAMETER_DEFAULTS,
             restart="on-failure",
             external_metadata_store=True,
+            default_replication_factor=2,
         )
     ):
         c.up("mz_new")
@@ -1099,6 +1126,8 @@ def workflow_mysql_source_rehydration(c: Composition) -> None:
         CREATE CLUSTER cluster SIZE '1';
         GRANT ALL ON CLUSTER cluster TO materialize;
         ALTER SYSTEM SET cluster = cluster;
+        CREATE CLUSTER cluster_singlereplica SIZE '1', REPLICATION FACTOR 1;
+        GRANT ALL ON CLUSTER cluster_singlereplica TO materialize;
     """,
         service="mz_old",
         port=6877,
@@ -1172,6 +1201,7 @@ def workflow_mysql_source_rehydration(c: Composition) -> None:
             system_parameter_defaults=SYSTEM_PARAMETER_DEFAULTS,
             restart="on-failure",
             external_metadata_store=True,
+            default_replication_factor=2,
         )
     ):
         c.up("mz_new")
@@ -1195,6 +1225,117 @@ def workflow_mysql_source_rehydration(c: Composition) -> None:
         assert (
             duration < 4
         ), f"Took {duration}s to SELECT on MySQL source after 0dt upgrade, is it hydrated?"
+
+
+def workflow_kafka_source_failpoint(c: Composition) -> None:
+    """Verify that source status updates of the newly deployed environment take
+    precedent over older source status updates when promoted.
+
+    The original Materialized instance (mz_old) is started with a failpoint
+    that simulates a failure during state multi-put. After creating a Kafka
+    source, we promote a new deployment (mz_new) and verify that the source
+    status in mz_source_statuses is marked as 'running', indicating that the
+    source has rehydrated correctly despite the injected failure."""
+    c.down(destroy_volumes=True)
+    # Start the required services.
+    c.up("zookeeper", "kafka", "schema-registry")
+    c.up("testdrive", persistent=True)
+
+    # Start the original Materialized instance with the failpoint enabled.
+    with c.override(
+        Materialized(
+            name="mz_old",
+            sanity_restart=False,
+            deploy_generation=0,
+            system_parameter_defaults=SYSTEM_PARAMETER_DEFAULTS,
+            external_metadata_store=True,
+            environment_extra=["FAILPOINTS=fail_state_multi_put=return"],
+            default_replication_factor=2,
+        )
+    ):
+        c.up("mz_old")
+
+        # Make sure cluster is owned by the system so it doesn't get dropped
+        # between testdrive runs.
+        c.sql(
+            dedent(
+                """
+                DROP CLUSTER IF EXISTS cluster CASCADE;
+                CREATE CLUSTER cluster SIZE '1';
+                GRANT ALL ON CLUSTER cluster TO materialize;
+                ALTER SYSTEM SET cluster = cluster;
+                CREATE CLUSTER cluster_singlereplica SIZE '1', REPLICATION FACTOR 1;
+                GRANT ALL ON CLUSTER cluster_singlereplica TO materialize;
+                """
+            ),
+            service="mz_old",
+            port=6877,
+            user="mz_system",
+        )
+
+        c.testdrive(
+            dedent(
+                """
+                > SET CLUSTER = cluster;
+                > CREATE CONNECTION IF NOT EXISTS kafka_conn FOR KAFKA BROKER '${testdrive.kafka-addr}', SECURITY PROTOCOL = 'PLAINTEXT';
+
+                $ kafka-create-topic topic=kafka-fp
+                $ kafka-ingest format=bytes key-format=bytes key-terminator=: topic=kafka-fp
+                keyA,keyA:valA,valA
+
+                > CREATE SOURCE kafka_source_fp
+                  IN CLUSTER cluster
+                  FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-kafka-fp-${testdrive.seed}');
+
+                > CREATE TABLE kafka_source_tbl (key1, key2, value1, value2)
+                  FROM SOURCE kafka_source_fp (REFERENCE "testdrive-kafka-fp-${testdrive.seed}")
+                  KEY FORMAT CSV WITH 2 COLUMNS DELIMITED BY ','
+                  VALUE FORMAT CSV WITH 2 COLUMNS DELIMITED BY ','
+                  ENVELOPE UPSERT;
+
+                > SELECT status FROM mz_internal.mz_source_statuses WHERE name = 'kafka_source_fp';
+                stalled
+                """
+            )
+        )
+
+    with c.override(
+        Materialized(
+            name="mz_new",
+            sanity_restart=False,
+            deploy_generation=1,
+            system_parameter_defaults=SYSTEM_PARAMETER_DEFAULTS,
+            restart="on-failure",
+            external_metadata_store=True,
+            default_replication_factor=2,
+        ),
+        Testdrive(
+            materialize_url="postgres://materialize@mz_new:6875",
+            materialize_url_internal="postgres://materialize@mz_new:6877",
+            mz_service="mz_new",
+            materialize_params={"cluster": "cluster"},
+            no_reset=True,
+            seed=1,
+            default_timeout=DEFAULT_TIMEOUT,
+        ),
+    ):
+        c.up("mz_new")
+        c.await_mz_deployment_status(DeploymentStatus.READY_TO_PROMOTE, "mz_new")
+        c.promote_mz("mz_new")
+
+        c.await_mz_deployment_status(
+            DeploymentStatus.IS_LEADER, "mz_new", sleep_time=None
+        )
+
+        # Verify that the Kafka source's status is marked as "running" in mz_source_statuses.
+        c.testdrive(
+            dedent(
+                """
+                > SELECT status FROM mz_internal.mz_source_statuses WHERE name = 'kafka_source_fp';
+                running
+                """
+            )
+        )
 
 
 def fetch_reconciliation_metrics(c: Composition, process: str) -> tuple[int, int]:
@@ -1267,6 +1408,7 @@ def workflow_builtin_item_migrations(c: Composition) -> None:
             external_metadata_store=True,
             force_migrations="all",
             healthcheck=LEADER_STATUS_HEALTHCHECK,
+            default_replication_factor=2,
         ),
     ):
         c.up("mz_new")
@@ -1396,7 +1538,7 @@ def workflow_upsert_sources(c: Composition) -> None:
     c.down(destroy_volumes=True)
     c.up("zookeeper", "kafka", "schema-registry", "postgres", "mysql", "mz_old")
     c.up("testdrive", persistent=True)
-    num_threads = 100
+    num_threads = 50
 
     c.sql(
         f"""
@@ -1404,6 +1546,8 @@ def workflow_upsert_sources(c: Composition) -> None:
         CREATE CLUSTER cluster SIZE '2-1';
         GRANT ALL ON CLUSTER cluster TO materialize;
         ALTER SYSTEM SET cluster = cluster;
+        CREATE CLUSTER cluster_singlereplica SIZE '1', REPLICATION FACTOR 1;
+        GRANT ALL ON CLUSTER cluster_singlereplica TO materialize;
         ALTER SYSTEM SET max_sources = {num_threads * 2};
         ALTER SYSTEM SET max_materialized_views = {num_threads * 2};
     """,
@@ -1423,7 +1567,7 @@ def workflow_upsert_sources(c: Composition) -> None:
         )
     )
 
-    end_time = datetime.now() + timedelta(seconds=300)
+    end_time = datetime.now() + timedelta(seconds=200)
     mz1 = "mz_old"
     mz2 = "mz_new"
 
@@ -1478,6 +1622,7 @@ def workflow_upsert_sources(c: Composition) -> None:
                 system_parameter_defaults=SYSTEM_PARAMETER_DEFAULTS,
                 restart="on-failure",
                 external_metadata_store=True,
+                default_replication_factor=2,
             ),
             Testdrive(
                 materialize_url=f"postgres://materialize@{mz1}:6875",
@@ -1500,3 +1645,508 @@ def workflow_upsert_sources(c: Composition) -> None:
 
     for thread in threads:
         thread.join()
+
+
+def workflow_ddl(c: Composition) -> None:
+    """Verify basic 0dt deployment flow with DDLs running during the 0dt deployment."""
+    c.down(destroy_volumes=True)
+    c.up("zookeeper", "kafka", "schema-registry", "postgres", "mysql", "mz_old")
+    c.up("testdrive", persistent=True)
+
+    # Make sure cluster is owned by the system so it doesn't get dropped
+    # between testdrive runs.
+    c.sql(
+        """
+        DROP CLUSTER IF EXISTS cluster CASCADE;
+        CREATE CLUSTER cluster SIZE '2-1';
+        GRANT ALL ON CLUSTER cluster TO materialize;
+        ALTER SYSTEM SET cluster = cluster;
+        CREATE CLUSTER cluster_singlereplica SIZE '1', REPLICATION FACTOR 1;
+        GRANT ALL ON CLUSTER cluster_singlereplica TO materialize;
+    """,
+        service="mz_old",
+        port=6877,
+        user="mz_system",
+    )
+
+    # Inserts should be reflected when writes are allowed.
+    c.testdrive(
+        dedent(
+            f"""
+        > SET CLUSTER = cluster;
+        > CREATE TABLE t (a int, b int);
+
+        > CREATE CONNECTION IF NOT EXISTS kafka_conn FOR KAFKA BROKER '${{testdrive.kafka-addr}}', SECURITY PROTOCOL = 'PLAINTEXT';
+        > CREATE CONNECTION IF NOT EXISTS csr_conn FOR CONFLUENT SCHEMA REGISTRY URL '${{testdrive.schema-registry-url}}';
+        > CREATE SINK kafka_sink
+          IN CLUSTER cluster
+          FROM t
+          INTO KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-kafka-sink-${{testdrive.seed}}')
+          FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
+          ENVELOPE DEBEZIUM;
+
+        > INSERT INTO t VALUES (1, 2);
+        > CREATE INDEX t_idx ON t (a, b);
+        > CREATE MATERIALIZED VIEW mv AS SELECT sum(a) FROM t;
+        > SET TRANSACTION_ISOLATION TO 'SERIALIZABLE';
+        > SELECT * FROM mv;
+        1
+        > SELECT max(b) FROM t;
+        2
+
+        $ kafka-create-topic topic=kafka
+        $ kafka-ingest format=bytes key-format=bytes key-terminator=: topic=kafka
+        key1A,key1B:value1A,value1B
+        > CREATE SOURCE kafka_source
+          IN CLUSTER cluster
+          FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-kafka-${{testdrive.seed}}');
+
+        > CREATE TABLE kafka_source_tbl (key1, key2, value1, value2)
+          FROM SOURCE kafka_source (REFERENCE "testdrive-kafka-${{testdrive.seed}}")
+          KEY FORMAT CSV WITH 2 COLUMNS DELIMITED BY ','
+          VALUE FORMAT CSV WITH 2 COLUMNS DELIMITED BY ','
+          ENVELOPE UPSERT;
+        > SELECT * FROM kafka_source_tbl
+        key1A key1B value1A value1B
+
+        $ postgres-execute connection=postgres://postgres:postgres@postgres
+        CREATE USER postgres1 WITH SUPERUSER PASSWORD 'postgres';
+        ALTER USER postgres1 WITH replication;
+        DROP PUBLICATION IF EXISTS postgres_source;
+        DROP TABLE IF EXISTS postgres_source_table;
+        CREATE TABLE postgres_source_table (f1 TEXT, f2 INTEGER);
+        ALTER TABLE postgres_source_table REPLICA IDENTITY FULL;
+        INSERT INTO postgres_source_table SELECT 'A', 0;
+        CREATE PUBLICATION postgres_source FOR ALL TABLES;
+
+        > CREATE SECRET pgpass AS 'postgres';
+        > CREATE CONNECTION pg FOR POSTGRES
+          HOST 'postgres',
+          DATABASE postgres,
+          USER postgres1,
+          PASSWORD SECRET pgpass;
+        > CREATE SOURCE postgres_source
+          IN CLUSTER cluster
+          FROM POSTGRES CONNECTION pg
+          (PUBLICATION 'postgres_source');
+        > CREATE TABLE postgres_source_table FROM SOURCE postgres_source (REFERENCE postgres_source_table)
+        > SELECT * FROM postgres_source_table;
+        A 0
+
+        $ mysql-connect name=mysql url=mysql://root@mysql password={MySql.DEFAULT_ROOT_PASSWORD}
+        $ mysql-execute name=mysql
+        # create the database if it does not exist yet but do not drop it
+        CREATE DATABASE IF NOT EXISTS public;
+        USE public;
+        CREATE USER mysql1 IDENTIFIED BY 'mysql';
+        GRANT REPLICATION SLAVE ON *.* TO mysql1;
+        GRANT ALL ON public.* TO mysql1;
+        CREATE TABLE mysql_source_table (f1 VARCHAR(32), f2 INTEGER);
+        INSERT INTO mysql_source_table VALUES ('A', 0);
+
+        > CREATE SECRET mysqlpass AS 'mysql';
+        > CREATE CONNECTION mysql TO MYSQL (
+          HOST 'mysql',
+          USER mysql1,
+          PASSWORD SECRET mysqlpass);
+        > CREATE SOURCE mysql_source1
+          IN CLUSTER cluster
+          FROM MYSQL CONNECTION mysql;
+        > CREATE TABLE mysql_source_table FROM SOURCE mysql_source1 (REFERENCE public.mysql_source_table);
+        > SELECT * FROM mysql_source_table;
+        A 0
+
+        $ kafka-verify-topic sink=materialize.public.kafka_sink
+
+        > CREATE SOURCE kafka_sink_source
+          IN CLUSTER cluster
+          FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-kafka-sink-${{testdrive.seed}}')
+
+        > CREATE TABLE kafka_sink_source_tbl FROM SOURCE kafka_sink_source (REFERENCE "testdrive-kafka-sink-${{testdrive.seed}}")
+          FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
+          ENVELOPE NONE
+
+        > SELECT (before).a, (before).b, (after).a, (after).b FROM kafka_sink_source_tbl
+        <null> <null> 1 2
+
+        > CREATE SOURCE webhook_source
+          IN CLUSTER cluster_singlereplica
+          FROM WEBHOOK BODY FORMAT TEXT
+
+        $ webhook-append database=materialize schema=public name=webhook_source
+        AAA
+        > SELECT * FROM webhook_source
+        AAA
+
+        $ set-max-tries max-tries=1
+        $ set-regex match=\\d{{13,20}} replacement=<TIMESTAMP>
+        > BEGIN
+        > DECLARE c CURSOR FOR SUBSCRIBE (SELECT a FROM t);
+        > FETCH ALL c WITH (timeout='5s');
+        <TIMESTAMP> 1 1
+        > COMMIT
+        """
+        )
+    )
+
+    # Start new Materialize in a new deploy generation, which will cause
+    # Materialize to boot in read-only mode.
+    c.up("mz_new")
+
+    # Verify against new Materialize that it is in read-only mode
+    with c.override(
+        Testdrive(
+            materialize_url="postgres://materialize@mz_new:6875",
+            materialize_url_internal="postgres://materialize@mz_new:6877",
+            mz_service="mz_new",
+            materialize_params={"cluster": "cluster"},
+            no_reset=True,
+            seed=1,
+            default_timeout=DEFAULT_TIMEOUT,
+        )
+    ):
+        c.up("testdrive", persistent=True)
+        c.testdrive(
+            dedent(
+                f"""
+            $ webhook-append database=materialize schema=public name=webhook_source status=500
+            BBB
+
+            $ kafka-ingest format=bytes key-format=bytes key-terminator=: topic=kafka
+            key2A,key2B:value2A,value2B
+
+            $ postgres-execute connection=postgres://postgres:postgres@postgres
+            INSERT INTO postgres_source_table VALUES ('B', 1);
+
+            $ mysql-connect name=mysql url=mysql://root@mysql password={MySql.DEFAULT_ROOT_PASSWORD}
+            $ mysql-execute name=mysql
+            USE public;
+            INSERT INTO mysql_source_table VALUES ('B', 1);
+
+            > SET CLUSTER = cluster;
+            > SELECT 1
+            1
+            ! INSERT INTO t VALUES (3, 4);
+            contains: cannot write in read-only mode
+            > SET TRANSACTION_ISOLATION TO 'SERIALIZABLE';
+            > SELECT * FROM mv;
+            1
+            # TODO: Currently hangs
+            # > SELECT max(b) FROM t;
+            # 2
+            > SELECT mz_unsafe.mz_sleep(5)
+            <null>
+            ! INSERT INTO t VALUES (5, 6);
+            contains: cannot write in read-only mode
+            > SELECT * FROM mv;
+            1
+            ! DROP INDEX t_idx
+            contains: cannot write in read-only mode
+            ! CREATE INDEX t_idx2 ON t (a, b)
+            contains: cannot write in read-only mode
+            ! CREATE MATERIALIZED VIEW mv2 AS SELECT sum(a) FROM t;
+            contains: cannot write in read-only mode
+
+            $ set-regex match=(s\\d+|\\d{{13}}|[ ]{{12}}0|u\\d{{1,3}}|\\(\\d+-\\d\\d-\\d\\d\\s\\d\\d:\\d\\d:\\d\\d\\.\\d\\d\\d\\)) replacement=<>
+
+            > EXPLAIN TIMESTAMP FOR SELECT * FROM mv;
+            "                query timestamp: <> <>\\nlargest not in advance of upper: <> <>\\n                          upper:[<> <>]\\n                          since:[<> <>]\\n        can respond immediately: true\\n                       timeline: Some(EpochMilliseconds)\\n              session wall time: <> <>\\n\\nsource materialize.public.mv (<>, storage):\\n                  read frontier:[<> <>]\\n                 write frontier:[<> <>]\\n\\nbinding constraints:\\nlower:\\n  (StorageInput([User(6)])): [<> <>]\\n"
+
+            > SELECT * FROM kafka_source_tbl
+            key1A key1B value1A value1B
+            key2A key2B value2A value2B
+            > SELECT * FROM postgres_source_table
+            A 0
+            B 1
+            > SELECT * FROM mysql_source_table;
+            A 0
+            B 1
+            > SELECT (before).a, (before).b, (after).a, (after).b FROM kafka_sink_source_tbl
+            <null> <null> 1 2
+
+            > SELECT * FROM webhook_source
+            AAA
+
+            $ set-max-tries max-tries=1
+            $ set-regex match=\\d{{13,20}} replacement=<TIMESTAMP>
+            > BEGIN
+            ! DECLARE c CURSOR FOR SUBSCRIBE (SELECT a FROM t);
+            contains: cannot write in read-only mode
+            > ROLLBACK
+            # Actual subscribes without a declare still work though
+            > SUBSCRIBE (WITH a(x) AS (SELECT 'a') SELECT generate_series(1, 2), x FROM a)
+            <TIMESTAMP> 1 1 a
+            <TIMESTAMP> 1 2 a
+            """
+            )
+        )
+
+    # Run DDLs against the old Materialize, which should restart the new one
+    c.up("testdrive", persistent=True)
+    c.testdrive(
+        dedent(
+            f"""
+        > CREATE TABLE t1 (a INT);
+
+        $ webhook-append database=materialize schema=public name=webhook_source
+        CCC
+
+        $ kafka-ingest format=bytes key-format=bytes key-terminator=: topic=kafka
+        key3A,key3B:value3A,value3B
+
+        $ postgres-execute connection=postgres://postgres:postgres@postgres
+        INSERT INTO postgres_source_table VALUES ('C', 2);
+
+        $ mysql-connect name=mysql url=mysql://root@mysql password={MySql.DEFAULT_ROOT_PASSWORD}
+        $ mysql-execute name=mysql
+        USE public;
+        INSERT INTO mysql_source_table VALUES ('C', 2);
+
+        > CREATE TABLE t2 (a INT);
+
+        > SET CLUSTER = cluster;
+        > SELECT 1
+        1
+        > INSERT INTO t VALUES (3, 4);
+        > SET TRANSACTION_ISOLATION TO 'SERIALIZABLE';
+        > SELECT * FROM mv;
+        4
+        > SELECT max(b) FROM t;
+        4
+        > SELECT mz_unsafe.mz_sleep(5)
+        <null>
+        > INSERT INTO t VALUES (5, 6);
+        > SELECT * FROM mv;
+        9
+        > DROP INDEX t_idx
+        > CREATE INDEX t_idx2 ON t (a, b)
+        > CREATE MATERIALIZED VIEW mv2 AS SELECT sum(a) FROM t;
+
+        $ set-regex match=(s\\d+|\\d{{13}}|[ ]{{12}}0|u\\d{{1,3}}|\\(\\d+-\\d\\d-\\d\\d\\s\\d\\d:\\d\\d:\\d\\d\\.\\d\\d\\d\\)) replacement=<>
+
+        > EXPLAIN TIMESTAMP FOR SELECT * FROM mv;
+        "                query timestamp: <> <>\\nlargest not in advance of upper: <> <>\\n                          upper:[<> <>]\\n                          since:[<> <>]\\n        can respond immediately: true\\n                       timeline: Some(EpochMilliseconds)\\n              session wall time: <> <>\\n\\nsource materialize.public.mv (<>, storage):\\n                  read frontier:[<> <>]\\n                 write frontier:[<> <>]\\n\\nbinding constraints:\\nlower:\\n  (StorageInput([User(6)])): [<> <>]\\n"
+
+        > SELECT * FROM kafka_source_tbl
+        key1A key1B value1A value1B
+        key2A key2B value2A value2B
+        key3A key3B value3A value3B
+        > SELECT * FROM postgres_source_table
+        A 0
+        B 1
+        C 2
+        > SELECT * FROM mysql_source_table;
+        A 0
+        B 1
+        C 2
+        > SELECT (before).a, (before).b, (after).a, (after).b FROM kafka_sink_source_tbl
+        <null> <null> 1 2
+        <null> <null> 3 4
+        <null> <null> 5 6
+        > SELECT * FROM webhook_source
+        AAA
+        CCC
+
+        > CREATE TABLE t3 (a INT);
+
+        $ set-max-tries max-tries=1
+        $ set-regex match=\\d{{13,20}} replacement=<TIMESTAMP>
+        > BEGIN
+        > DECLARE c CURSOR FOR SUBSCRIBE (SELECT a FROM t);
+        > FETCH ALL c WITH (timeout='5s');
+        <TIMESTAMP> 1 1
+        <TIMESTAMP> 1 3
+        <TIMESTAMP> 1 5
+        > COMMIT
+
+        > CREATE TABLE t4 (a INT);
+        """
+        )
+    )
+
+    with c.override(
+        Testdrive(
+            materialize_url="postgres://materialize@mz_new:6875",
+            materialize_url_internal="postgres://materialize@mz_new:6877",
+            mz_service="mz_new",
+            materialize_params={"cluster": "cluster"},
+            no_reset=True,
+            seed=1,
+            default_timeout=DEFAULT_TIMEOUT,
+        )
+    ):
+        c.up("testdrive", persistent=True)
+        c.testdrive(
+            dedent(
+                """
+            $ webhook-append database=materialize schema=public name=webhook_source status=500
+            DDD
+
+            > SET CLUSTER = cluster;
+            > SELECT 1
+            1
+            ! INSERT INTO t VALUES (3, 4);
+            contains: cannot write in read-only mode
+            > SET TRANSACTION_ISOLATION TO 'SERIALIZABLE';
+            > SELECT * FROM mv;
+            9
+            > SELECT max(b) FROM t;
+            6
+            > SELECT * FROM mv;
+            9
+            > SELECT * FROM kafka_source_tbl
+            key1A key1B value1A value1B
+            key2A key2B value2A value2B
+            key3A key3B value3A value3B
+            > SELECT * FROM postgres_source_table
+            A 0
+            B 1
+            C 2
+            > SELECT * FROM mysql_source_table;
+            A 0
+            B 1
+            C 2
+            > SELECT (before).a, (before).b, (after).a, (after).b FROM kafka_sink_source_tbl
+            <null> <null> 1 2
+            <null> <null> 3 4
+            <null> <null> 5 6
+            > SELECT * FROM webhook_source
+            AAA
+            CCC
+
+            $ set-max-tries max-tries=1
+            $ set-regex match=\\d{13,20} replacement=<TIMESTAMP>
+            > BEGIN
+            ! DECLARE c CURSOR FOR SUBSCRIBE (SELECT a FROM t);
+            contains: cannot write in read-only mode
+            > ROLLBACK
+            # Actual subscribes without a declare still work though
+            > SUBSCRIBE (WITH a(x) AS (SELECT 'a') SELECT generate_series(1, 2), x FROM a)
+            <TIMESTAMP> 1 1 a
+            <TIMESTAMP> 1 2 a
+            """
+            )
+        )
+
+        c.await_mz_deployment_status(DeploymentStatus.READY_TO_PROMOTE, "mz_new")
+        c.promote_mz("mz_new")
+
+        # Give some time for Mz to restart after promotion
+        for i in range(10):
+            try:
+                c.sql("SELECT 1", service="mz_old")
+            except OperationalError as e:
+                assert (
+                    "server closed the connection unexpectedly" in str(e)
+                    or "Can't create a connection to host" in str(e)
+                    or "Connection refused" in str(e)
+                ), f"Unexpected error: {e}"
+            except CommandFailureCausedUIError as e:
+                # service "mz_old" is not running
+                assert "running docker compose failed" in str(
+                    e
+                ), f"Unexpected error: {e}"
+                break
+            time.sleep(1)
+        else:
+            raise RuntimeError("mz_old didn't stop running within 10 seconds")
+
+        for i in range(10):
+            try:
+                c.sql("SELECT 1", service="mz_new")
+                break
+            except CommandFailureCausedUIError:
+                pass
+            except OperationalError:
+                pass
+            time.sleep(1)
+        else:
+            raise RuntimeError("mz_new didn't come up within 10 seconds")
+
+        c.await_mz_deployment_status(DeploymentStatus.IS_LEADER, "mz_new")
+
+        c.testdrive(
+            dedent(
+                f"""
+            $ webhook-append database=materialize schema=public name=webhook_source
+            EEE
+            > SET CLUSTER = cluster;
+            > SET TRANSACTION_ISOLATION TO 'SERIALIZABLE';
+            > CREATE MATERIALIZED VIEW mv3 AS SELECT sum(a) FROM t;
+            > SELECT * FROM mv;
+            9
+            > SELECT * FROM mv2;
+            9
+            > SELECT * FROM mv3;
+            9
+            > SELECT max(b) FROM t;
+            6
+            > INSERT INTO t VALUES (7, 8);
+            > SELECT * FROM mv;
+            16
+            > SELECT * FROM mv2;
+            16
+            > SELECT max(b) FROM t;
+            8
+            > SELECT * FROM kafka_source_tbl
+            key1A key1B value1A value1B
+            key2A key2B value2A value2B
+            key3A key3B value3A value3B
+            > SELECT * FROM postgres_source_table
+            A 0
+            B 1
+            C 2
+            > SELECT * FROM mysql_source_table;
+            A 0
+            B 1
+            C 2
+
+            $ kafka-ingest format=bytes key-format=bytes key-terminator=: topic=kafka
+            key4A,key4B:value4A,value4B
+
+            $ postgres-execute connection=postgres://postgres:postgres@postgres
+            INSERT INTO postgres_source_table VALUES ('D', 3);
+
+            $ mysql-connect name=mysql url=mysql://root@mysql password={MySql.DEFAULT_ROOT_PASSWORD}
+            $ mysql-execute name=mysql
+            USE public;
+            INSERT INTO mysql_source_table VALUES ('D', 3);
+
+            > SELECT * FROM kafka_source_tbl
+            key1A key1B value1A value1B
+            key2A key2B value2A value2B
+            key3A key3B value3A value3B
+            key4A key4B value4A value4B
+            > SELECT * FROM postgres_source_table
+            A 0
+            B 1
+            C 2
+            D 3
+            > SELECT * FROM mysql_source_table;
+            A 0
+            B 1
+            C 2
+            D 3
+            > SELECT (before).a, (before).b, (after).a, (after).b FROM kafka_sink_source_tbl
+            <null> <null> 1 2
+            <null> <null> 3 4
+            <null> <null> 5 6
+            <null> <null> 7 8
+            > SELECT * FROM webhook_source
+            AAA
+            CCC
+            EEE
+
+            $ set-max-tries max-tries=1
+            $ set-regex match=\\d{{13,20}} replacement=<TIMESTAMP>
+            > BEGIN
+            > DECLARE c CURSOR FOR SUBSCRIBE (SELECT a FROM t);
+            > FETCH ALL c WITH (timeout='5s');
+            <TIMESTAMP> 1 1
+            <TIMESTAMP> 1 3
+            <TIMESTAMP> 1 5
+            <TIMESTAMP> 1 7
+            > COMMIT
+            """
+            )
+        )

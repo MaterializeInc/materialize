@@ -21,8 +21,8 @@ use axum::extract::ws::{CloseFrame, Message, WebSocket};
 use axum::extract::{State, WebSocketUpgrade};
 use axum::response::IntoResponse;
 use axum::{Extension, Json};
-use futures::future::BoxFuture;
 use futures::Future;
+use futures::future::BoxFuture;
 
 use http::StatusCode;
 use itertools::izip;
@@ -30,8 +30,8 @@ use mz_adapter::client::RecordFirstRowStream;
 use mz_adapter::session::{EndTransactionAction, TransactionStatus};
 use mz_adapter::statement_logging::{StatementEndedExecutionReason, StatementExecutionStrategy};
 use mz_adapter::{
-    verify_datum_desc, AdapterError, AdapterNotice, ExecuteContextExtra, ExecuteResponse,
-    ExecuteResponseKind, PeekResponseUnary, SessionClient,
+    AdapterError, AdapterNotice, ExecuteContextExtra, ExecuteResponse, ExecuteResponseKind,
+    PeekResponseUnary, SessionClient, verify_datum_desc,
 };
 use mz_catalog::memory::objects::{Cluster, ClusterReplica};
 use mz_interchange::encode::TypedDatum;
@@ -45,8 +45,8 @@ use mz_sql::ast::{CopyDirection, CopyStatement, CopyTarget, Raw, Statement, Stat
 use mz_sql::parse::StatementParseResult;
 use mz_sql::plan::Plan;
 use mz_sql::session::metadata::SessionMetadata;
-use prometheus::core::{AtomicF64, GenericGaugeVec};
 use prometheus::Opts;
+use prometheus::core::{AtomicF64, GenericGaugeVec};
 use serde::{Deserialize, Serialize};
 use tokio::{select, time};
 use tokio_postgres::error::SqlState;
@@ -55,7 +55,7 @@ use tracing::{debug, error, info};
 use tungstenite::protocol::frame::coding::CloseCode;
 
 use crate::http::prometheus::PrometheusSqlQuery;
-use crate::http::{init_ws, AuthedClient, AuthedUser, WsState, MAX_REQUEST_SIZE};
+use crate::http::{AuthedClient, AuthedUser, MAX_REQUEST_SIZE, WsState, init_ws};
 
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
@@ -128,7 +128,12 @@ async fn execute_promsql_query(
     let result = match res.results.as_slice() {
         // Each query issued is preceded by several SET commands
         // to make sure it is routed to the right cluster replica.
-        [SqlResult::Ok { .. }, SqlResult::Ok { .. }, SqlResult::Ok { .. }, result] => result,
+        [
+            SqlResult::Ok { .. },
+            SqlResult::Ok { .. },
+            SqlResult::Ok { .. },
+            result,
+        ] => result,
         // Transient errors are fine, like if the cluster or replica
         // was dropped before the promsql query was executed. We
         // should not see errors in the steady state.
@@ -964,14 +969,14 @@ impl ResultSender for WebSocket {
                                     Error::Unstructured(anyhow!(error.clone())).into(),
                                 )],
                                 Some((StatementEndedExecutionReason::Errored { error }, ctx_extra)),
-                            )
+                            );
                         }
                         Some(PeekResponseUnary::Canceled) => {
                             break (
                                 true,
                                 vec![WebSocketResponse::Error(AdapterError::Canceled.into())],
                                 Some((StatementEndedExecutionReason::Canceled, ctx_extra)),
-                            )
+                            );
                         }
                         None => {
                             break (
@@ -987,7 +992,7 @@ impl ResultSender for WebSocket {
                                     },
                                     ctx_extra,
                                 )),
-                            )
+                            );
                         }
                     }
                 }
@@ -1067,7 +1072,8 @@ async fn execute_stmt_group<S: ResultSender>(
 ) -> Result<Result<(), ()>, Error> {
     let num_stmts = stmt_group.len();
     for (stmt, sql, params) in stmt_group {
-        assert!(num_stmts <= 1 || params.is_empty(),
+        assert!(
+            num_stmts <= 1 || params.is_empty(),
             "statement groups contain more than 1 statement iff Simple request, which does not support parameters"
         );
 
@@ -1141,16 +1147,20 @@ async fn execute_request<S: ResultSender>(
         // Special-case `COPY TO` statements that are not `COPY ... TO STDOUT`, since
         // StatementKind::Copy links to several `ExecuteResponseKind`s that are not supported,
         // but this specific statement should be allowed.
-        let is_valid_copy_to = matches!(
+        let is_valid_copy = matches!(
             stmt,
             Statement::Copy(CopyStatement {
                 direction: CopyDirection::To,
                 target: CopyTarget::Expr(_),
                 ..
+            }) | Statement::Copy(CopyStatement {
+                direction: CopyDirection::From,
+                target: CopyTarget::Expr(_),
+                ..
             })
         );
 
-        if !is_valid_copy_to
+        if !is_valid_copy
             && execute_responses.iter().any(|execute_response| {
                 // Returns true if a statement or execute response are unsupported.
                 match execute_response {
@@ -1169,7 +1179,7 @@ async fn execute_request<S: ResultSender>(
                 }
             })
         {
-            return Err(Error::Unsupported(stmt.to_ast_string()));
+            return Err(Error::Unsupported(stmt.to_ast_string_simple()));
         }
         Ok(())
     }
@@ -1280,7 +1290,7 @@ async fn execute_stmt<S: ResultSender>(
         let message = anyhow!(
             "request supplied {actual} parameters, \
                         but {statement} requires {expected}",
-            statement = stmt.to_ast_string(),
+            statement = stmt.to_ast_string_simple(),
             actual = raw_params.len(),
             expected = param_types.len()
         );

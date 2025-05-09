@@ -20,6 +20,7 @@ import requests
 
 from materialize.mzcompose.composition import Composition, WorkflowArgumentParser
 from materialize.mzcompose.service import Service
+from materialize.mzcompose.services.azure import Azurite
 from materialize.mzcompose.services.cockroach import Cockroach
 from materialize.mzcompose.services.kafka import Kafka
 from materialize.mzcompose.services.materialized import Materialized
@@ -48,9 +49,10 @@ SERVICES = [
     ),
     SchemaRegistry(),
     Minio(setup_materialize=True, additional_directories=["copytos3"]),
+    Azurite(),
     Mc(),
-    Materialized(),
-    Materialized(name="materialized2"),
+    Materialized(default_replication_factor=2),
+    Materialized(name="materialized2", default_replication_factor=2),
     Service("sqlsmith", {"mzbuild": "sqlsmith"}),
     Service(
         name="persistcli",
@@ -72,6 +74,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         "zookeeper",
         "kafka",
         "schema-registry",
+        # Still required for backups/s3 testing even when we use Azurite as blob store
         "minio",
         "materialized",
     ]
@@ -83,16 +86,20 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
 
     with c.override(
         Materialized(
-            external_minio="toxiproxy",
+            # TODO: Retry with toxiproxy on azurite
+            external_blob_store=True,
+            blob_store_is_azure=args.azurite,
             external_metadata_store="toxiproxy",
             ports=["6975:6875", "6976:6876", "6977:6877"],
             sanity_restart=sanity_restart,
             metadata_store="cockroach",
+            default_replication_factor=2,
         ),
         Toxiproxy(seed=random.randrange(2**63)),
     ):
         toxiproxy_start(c)
         c.up(*service_names)
+
         c.up("mc", persistent=True)
         c.exec(
             "mc",
@@ -123,7 +130,9 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
             scenario,
             args.threads,
             args.naughty_identifiers,
+            args.replicas,
             c,
+            args.azurite,
             sanity_restart,
         )
         # Don't wait for potentially hanging threads that we are ignoring
@@ -162,6 +171,16 @@ def toxiproxy_start(c: Composition) -> None:
     )
     assert r.status_code == 201, r
     r = requests.post(
+        f"http://localhost:{port}/proxies",
+        json={
+            "name": "azurite",
+            "listen": "0.0.0.0:10000",
+            "upstream": "azurite:10000",
+            "enabled": True,
+        },
+    )
+    assert r.status_code == 201, r
+    r = requests.post(
         f"http://localhost:{port}/proxies/cockroach/toxics",
         json={
             "name": "cockroach",
@@ -174,6 +193,15 @@ def toxiproxy_start(c: Composition) -> None:
         f"http://localhost:{port}/proxies/minio/toxics",
         json={
             "name": "minio",
+            "type": "latency",
+            "attributes": {"latency": 0, "jitter": 100},
+        },
+    )
+    assert r.status_code == 200, r
+    r = requests.post(
+        f"http://localhost:{port}/proxies/minio/toxics",
+        json={
+            "name": "azurite",
             "type": "latency",
             "attributes": {"latency": 0, "jitter": 100},
         },

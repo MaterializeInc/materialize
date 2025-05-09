@@ -81,13 +81,13 @@ TX  San_Antonio
 mode standard
 
 query T multiline
-EXPLAIN WITH(arity, join implementations) SELECT state, name FROM
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, arity, join implementations) AS VERBOSE TEXT FOR SELECT state, name FROM
     (SELECT DISTINCT state FROM cities) grp,
     LATERAL (SELECT name, pop FROM cities WHERE state = grp.state ORDER BY pop DESC LIMIT 3)
 ----
 Explained Query:
-  Project (#1, #0) // { arity: 2 }
-    TopK group_by=[#1] order_by=[#2 desc nulls_first] limit=3 // { arity: 3 }
+  Project (#1{state}, #0{name}) // { arity: 2 }
+    TopK group_by=[#1{state}] order_by=[#2{pop} desc nulls_first] limit=3 // { arity: 3 }
       ReadStorage materialize.public.cities // { arity: 3 }
 
 Source materialize.public.cities
@@ -97,28 +97,28 @@ Target cluster: quickstart
 EOF
 
 query T multiline
-EXPLAIN WITH(arity, join implementations) SELECT state, name FROM
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, arity, join implementations) AS VERBOSE TEXT FOR SELECT state, name FROM
     (SELECT DISTINCT state FROM cities) grp
     LEFT JOIN LATERAL (SELECT name, pop FROM cities  where cities.state = grp.state ORDER BY pop DESC LIMIT 3) ON true
 ----
 Explained Query:
   With
     cte l0 =
-      Project (#0, #1) // { arity: 2 }
-        TopK group_by=[#1] order_by=[#2 desc nulls_first] limit=3 // { arity: 3 }
+      Project (#0{name}, #1{state}) // { arity: 2 }
+        TopK group_by=[#1{state}] order_by=[#2{pop} desc nulls_first] limit=3 // { arity: 3 }
           ReadStorage materialize.public.cities // { arity: 3 }
   Return // { arity: 2 }
     Union // { arity: 2 }
-      Project (#1, #0) // { arity: 2 }
+      Project (#1{state}, #0{name}) // { arity: 2 }
         Get l0 // { arity: 2 }
       Map (null) // { arity: 2 }
         Union // { arity: 1 }
           Negate // { arity: 1 }
-            Distinct project=[#0] // { arity: 1 }
-              Project (#1) // { arity: 1 }
+            Distinct project=[#0{state}] // { arity: 1 }
+              Project (#1{state}) // { arity: 1 }
                 Get l0 // { arity: 2 }
-          Distinct project=[#0] // { arity: 1 }
-            Project (#1) // { arity: 1 }
+          Distinct project=[#0{state}] // { arity: 1 }
+            Project (#1{state}) // { arity: 1 }
               ReadStorage materialize.public.cities // { arity: 3 }
 
 Source materialize.public.cities
@@ -129,7 +129,7 @@ EOF
 
 # Test that LIMIT 0 is optimized out
 query T multiline
-EXPLAIN WITH(arity, join implementations) SELECT state, COUNT(*) FROM (
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, arity, join implementations) AS VERBOSE TEXT FOR SELECT state, COUNT(*) FROM (
     SELECT state, name FROM
         (SELECT DISTINCT state FROM cities) grp,
         LATERAL (SELECT name, pop FROM cities WHERE state = grp.state ORDER BY pop DESC LIMIT 0)
@@ -146,7 +146,7 @@ EOF
 
 # Test that LIMIT 1 results in a unique key
 query T multiline
-EXPLAIN WITH(arity, join implementations) SELECT state, COUNT(*) FROM (
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, arity, join implementations) AS VERBOSE TEXT FOR SELECT state, COUNT(*) FROM (
     SELECT state, name FROM
         (SELECT DISTINCT state FROM cities) grp,
         LATERAL (SELECT name, pop FROM cities WHERE state = grp.state ORDER BY pop DESC LIMIT 1)
@@ -154,10 +154,10 @@ EXPLAIN WITH(arity, join implementations) SELECT state, COUNT(*) FROM (
     GROUP BY state
 ----
 Explained Query:
-  Project (#0, #2) // { arity: 2 }
+  Project (#0{state}, #2) // { arity: 2 }
     Map (1) // { arity: 3 }
-      TopK group_by=[#0] order_by=[#1 desc nulls_first] limit=1 // { arity: 2 }
-        Project (#1, #2) // { arity: 2 }
+      TopK group_by=[#0{state}] order_by=[#1{pop} desc nulls_first] limit=1 // { arity: 2 }
+        Project (#1{state}, #2{pop}) // { arity: 2 }
           ReadStorage materialize.public.cities // { arity: 3 }
 
 Source materialize.public.cities
@@ -167,15 +167,15 @@ Target cluster: quickstart
 EOF
 
 query T multiline
-EXPLAIN WITH(arity, join implementations) SELECT state, name FROM
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, arity, join implementations) AS VERBOSE TEXT FOR SELECT state, name FROM
     (SELECT DISTINCT state FROM cities) grp,
     LATERAL (SELECT name FROM cities WHERE state = grp.state
              OPTIONS (LIMIT INPUT GROUP SIZE = 1)
              ORDER BY pop DESC NULLS LAST LIMIT 3)
 ----
 Explained Query:
-  Project (#1, #0) // { arity: 2 }
-    TopK group_by=[#1] order_by=[#2 desc nulls_last] limit=3 exp_group_size=1 // { arity: 3 }
+  Project (#1{state}, #0{name}) // { arity: 2 }
+    TopK group_by=[#1{state}] order_by=[#2{pop} desc nulls_last] limit=3 exp_group_size=1 // { arity: 3 }
       ReadStorage materialize.public.cities // { arity: 3 }
 
 Source materialize.public.cities

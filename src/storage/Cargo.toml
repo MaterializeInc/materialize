@@ -14,35 +14,36 @@ name = "upsert_open_loop"
 bench = false
 
 [dependencies]
-anyhow = "1.0.66"
-async-stream = "0.3.3"
-async-trait = "0.1.83"
-bytes = { version = "1.3.0", features = ["serde"] }
-bytesize = "1.1.0"
+anyhow = "1.0.98"
+async-stream = "0.3.6"
+async-trait = "0.1.88"
+bytes = { version = "1.10.1", features = ["serde"] }
+bytesize = "1.3.0"
 bincode = "1"
-chrono = { version = "0.4.35", default-features = false, features = ["std"] }
+chrono = { version = "0.4.39", default-features = false, features = ["std"] }
 clap = { version = "4.5.23", features = ["derive", "env"] }
 columnation = "0.1.0"
-crossbeam-channel = "0.5.8"
-csv-core = { version = "0.1.10" }
+crossbeam-channel = "0.5.15"
+csv-core = { version = "0.1.12" }
 dec = "0.4.8"
-differential-dataflow = "0.13.3"
+differential-dataflow = "0.14.2"
 fail = { version = "0.5.1", features = ["failpoints"] }
-futures = "0.3.25"
-indexmap = { version = "2.0.0", default-features = false, features = ["std"] }
-itertools = { version = "0.12.1" }
+futures = "0.3.31"
+indexmap = { version = "2.9.0", default-features = false, features = ["std"] }
+itertools = { version = "0.14.0" }
 maplit = "1.0.2"
-mysql_async = { version = "0.34.1", default-features = false, features = ["minimal", "binlog"] }
-mysql_common = { version = "0.32.4", default-features = false, features = ["chrono"] }
+mysql_async = { version = "0.35.1", default-features = false, features = ["minimal", "binlog"] }
+mysql_common = { version = "0.34.1", default-features = false, features = ["chrono"] }
 mz-build-info = { path = "../build-info" }
 mz-ccsr = { path = "../ccsr" }
+mz-dyncfg = { path = "../dyncfg" }
 mz-dyncfgs = { path = "../dyncfgs" }
 mz-expr = { path = "../expr" }
 mz-cluster = { path = "../cluster" }
 mz-interchange = { path = "../interchange" }
 mz-kafka-util = { path = "../kafka-util" }
 mz-mysql-util = { path = "../mysql-util" }
-mz-ore = { path = "../ore", features = ["async", "tracing_", "chrono", "metrics"] }
+mz-ore = { path = "../ore", features = ["async", "tracing", "chrono", "metrics", "columnation"] }
 mz-persist = { path = "../persist" }
 mz-persist-client = { path = "../persist-client" }
 mz-persist-types = { path = "../persist-types" }
@@ -50,18 +51,18 @@ mz-pgcopy = { path = "../pgcopy" }
 mz-postgres-util = { path = "../postgres-util" }
 mz-repr = { path = "../repr" }
 mz-rocksdb = { path = "../rocksdb" }
-mz-service = { path = "../service" }
 mz-sql-parser = { path = "../sql-parser" }
+mz-sql-server-util = { path = "../sql-server-util" }
 mz-ssh-util = { path = "../ssh-util" }
 mz-storage-client = { path = "../storage-client" }
 mz-storage-operators = { path = "../storage-operators" }
 mz-storage-types = { path = "../storage-types" }
 mz-timely-util = { path = "../timely-util" }
 mz-txn-wal = { path = "../txn-wal" }
-pin-project = "1.0.12"
+pin-project = "1.1.10"
 postgres-replication = { version = "0.6.7" }
-prometheus = { version = "0.13.3", default-features = false }
-prost = { version = "0.13.2", features = ["no-recursion-limit"] }
+prometheus = { version = "0.13.4", default-features = false }
+prost = { version = "0.13.5", features = ["no-recursion-limit"] }
 rand = "0.8.5"
 rdkafka = { version = "0.29.0", features = [
     "cmake-build",
@@ -69,36 +70,36 @@ rdkafka = { version = "0.29.0", features = [
     "libz-static",
     "zstd",
 ] }
-regex = { version = "1.7.0" }
+regex = { version = "1.11.1" }
 rocksdb = { version = "0.22.0", default-features = false, features = ["snappy", "zstd", "lz4"] }
 seahash = "4"
-serde = { version = "1.0.152", features = ["derive"] }
-serde_json = { version = "1.0.125" }
-serde_bytes = { version = "0.11.14" }
-sha2 = "0.10.6"
-timely = "0.16.0"
-tokio = { version = "1.38.0", features = ["fs", "rt", "sync", "test-util"] }
+serde = { version = "1.0.219", features = ["derive"] }
+serde_json = { version = "1.0.127" }
+serde_bytes = { version = "0.11.17" }
+sha2 = "0.10.9"
+timely = "0.20.0"
+tokio = { version = "1.44.1", features = ["fs", "rt", "sync", "test-util"] }
 tokio-postgres = { version = "0.7.8", features = ["serde"] }
-tokio-stream = "0.1.11"
-tokio-util = { version = "0.7.4", features = ["io"] }
+tokio-stream = "0.1.17"
+tokio-util = { version = "0.7.15", features = ["io"] }
 tracing = "0.1.37"
-thiserror = { version = "1.0.37" }
-uuid = { version = "1.7.0", features = ["serde", "v4"] }
+thiserror = { version = "2.0.12" }
+uuid = { version = "1.16.0", features = ["serde", "v4"] }
 workspace-hack = { version = "0.0.0", path = "../workspace-hack", optional = true }
 
 [build-dependencies]
 mz-build-tools = { path = "../build-tools", default-features = false }
 
 [dev-dependencies]
-async-trait = "0.1.83"
+async-trait = "0.1.88"
 axum = "0.7.5"
 clap = { version = "4.5.23", features = ["derive", "env"] }
-humantime = "2.1.0"
+humantime = "2.2.0"
 mz-http-util = { path = "../http-util" }
 mz-orchestrator-tracing = { path = "../orchestrator-tracing" }
-itertools = "0.12.1"
-tempfile = "3.14.0"
-tokio = { version = "1.38.0", features = ["test-util"] }
+itertools = "0.14.0"
+tempfile = "3.19.1"
+tokio = { version = "1.44.1", features = ["test-util"] }
 
 [features]
 default = ["mz-build-tools/default", "workspace-hack"]

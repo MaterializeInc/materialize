@@ -10,6 +10,7 @@
 # by the Apache License, Version 2.0.
 
 load("@crates_io//:defs.bzl", "aliases", "all_crate_deps")
+load("@rules_rust//cargo:defs.bzl", "extract_cargo_lints")
 load("@rules_rust//rust:defs.bzl", "rust_binary")
 
 package(default_visibility = ["//visibility:public"])
@@ -26,11 +27,16 @@ rust_binary(
     data = [],
     env = {},
     features = [],
+    lint_config = ":lints",
     proc_macro_deps = [] + all_crate_deps(proc_macro = True),
     rustc_env = {},
-    rustc_flags = [],
+    rustc_flags = [] + select({
+        "@//misc/bazel/platforms:xlang_lto_enabled": ["-Clinker-plugin-lto"],
+        "//conditions:default": [],
+    }),
     version = "0.0.0",
     deps = [
+        "//src/dyncfg:mz_dyncfg",
         "//src/http-util:mz_http_util",
         "//src/orchestrator-tracing:mz_orchestrator_tracing",
         "//src/ore:mz_ore",
@@ -41,4 +47,10 @@ rust_binary(
         "//src/timestamp-oracle:mz_timestamp_oracle",
         "//src/txn-wal:mz_txn_wal",
     ] + all_crate_deps(normal = True),
+)
+
+extract_cargo_lints(
+    name = "lints",
+    manifest = "Cargo.toml",
+    workspace = "@//:Cargo.toml",
 )

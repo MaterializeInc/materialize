@@ -19,16 +19,16 @@ mod message;
 mod severity;
 
 pub use codec::{
-    decode_startup, input_err, parse_frame_len, CodecError, Cursor, DecodeState, Pgbuf,
-    ACCEPT_SSL_ENCRYPTION, MAX_REQUEST_SIZE, REJECT_ENCRYPTION,
+    ACCEPT_SSL_ENCRYPTION, CodecError, Cursor, DecodeState, MAX_REQUEST_SIZE, Pgbuf,
+    REJECT_ENCRYPTION, decode_startup, input_err, parse_frame_len,
 };
 pub use conn::{
-    Conn, ConnectionCounter, ConnectionError, ConnectionHandle, UserMetadata, CONN_UUID_KEY,
-    MZ_FORWARDED_FOR_KEY,
+    CONN_UUID_KEY, Conn, ConnectionCounter, ConnectionError, ConnectionHandle,
+    MZ_FORWARDED_FOR_KEY, UserMetadata,
 };
 pub use format::Format;
 pub use message::{
-    ErrorResponse, FrontendMessage, FrontendStartupMessage, VERSIONS, VERSION_3, VERSION_CANCEL,
-    VERSION_GSSENC, VERSION_SSL,
+    ErrorResponse, FrontendMessage, FrontendStartupMessage, VERSION_3, VERSION_CANCEL,
+    VERSION_GSSENC, VERSION_SSL, VERSIONS,
 };
 pub use severity::Severity;

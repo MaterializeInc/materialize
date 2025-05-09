@@ -61,6 +61,7 @@ class StartMz(MzcomposeAction):
         self.restart = restart
         self.force_migrations = force_migrations
         self.publish = publish
+        self.scenario = scenario
 
     def execute(self, e: Executor) -> None:
         c = e.mzcompose_composition()
@@ -72,7 +73,8 @@ class StartMz(MzcomposeAction):
             name=self.mz_service,
             image=image,
             external_metadata_store=True,
-            external_minio=True,
+            external_blob_store=True,
+            blob_store_is_azure=self.scenario.features.azurite_enabled(),
             environment_extra=self.environment_extra,
             system_parameter_defaults=self.system_parameter_defaults,
             additional_system_parameter_defaults=self.additional_system_parameter_defaults,
@@ -84,7 +86,7 @@ class StartMz(MzcomposeAction):
             restart=self.restart,
             force_migrations=self.force_migrations,
             publish=self.publish,
-            metadata_store="cockroach",
+            default_replication_factor=2,
         )
 
         # Don't fail since we are careful to explicitly kill and collect logs

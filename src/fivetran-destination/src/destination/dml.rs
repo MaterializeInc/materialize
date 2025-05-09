@@ -21,14 +21,13 @@ use prost::bytes::{BufMut, BytesMut};
 use sha2::{Digest, Sha256};
 use tokio::fs::File;
 use tokio::io::{AsyncRead, AsyncReadExt, BufReader};
-use tokio_postgres::types::{to_sql_checked, Format, IsNull, ToSql, Type};
+use tokio_postgres::types::{Format, IsNull, ToSql, Type, to_sql_checked};
 
 use crate::crypto::AsyncAesDecrypter;
 use crate::destination::{
-    config, ColumnMetadata, FIVETRAN_SYSTEM_COLUMN_DELETE, FIVETRAN_SYSTEM_COLUMN_SYNCED,
+    ColumnMetadata, FIVETRAN_SYSTEM_COLUMN_DELETE, FIVETRAN_SYSTEM_COLUMN_SYNCED, config,
 };
 use crate::error::{Context, OpError, OpErrorKind};
-use crate::fivetran_sdk::write_batch_request::FileParams;
 use crate::fivetran_sdk::{Compression, Encryption, Table, TruncateRequest, WriteBatchRequest};
 use crate::utils::{self, AsyncCsvReaderTableAdapter};
 
@@ -101,22 +100,22 @@ pub async fn handle_write_batch(request: WriteBatchRequest) -> Result<(), OpErro
         return Err(err.into());
     }
 
-    let FileParams::Csv(csv_file_params) = request
+    let file_params = request
         .file_params
         .ok_or(OpErrorKind::FieldMissing("file_params"))?;
 
     let file_config = FileConfig {
-        compression: match csv_file_params.compression() {
+        compression: match file_params.compression() {
             Compression::Off => FileCompression::None,
             Compression::Zstd => FileCompression::Zstd,
             Compression::Gzip => FileCompression::Gzip,
         },
-        aes_encryption_keys: match csv_file_params.encryption() {
+        aes_encryption_keys: match file_params.encryption() {
             Encryption::None => None,
             Encryption::Aes => Some(request.keys),
         },
-        null_string: csv_file_params.null_string,
-        unmodified_string: csv_file_params.unmodified_string,
+        null_string: file_params.null_string,
+        unmodified_string: file_params.unmodified_string,
     };
 
     let (dbname, client) = config::connect(request.configuration).await?;
@@ -556,13 +555,13 @@ async fn get_scratch_table<'a>(
                 .columns
                 .iter()
                 .enumerate()
-                .map(|(pos, col)| (&col.name, (col.r#type, &col.decimal, pos)))
+                .map(|(pos, col)| (&col.name, (col.r#type, &col.params, pos)))
                 .collect();
             let scratch_columns: BTreeMap<_, _> = scratch
                 .columns
                 .iter()
                 .enumerate()
-                .map(|(pos, col)| (&col.name, (col.r#type, &col.decimal, pos)))
+                .map(|(pos, col)| (&col.name, (col.r#type, &col.params, pos)))
                 .collect();
 
             if table_columns != scratch_columns {

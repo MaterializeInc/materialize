@@ -16,8 +16,8 @@ use std::sync::{Arc, Mutex};
 use itertools::Itertools;
 use mz_expr::explain::{HumanizedExplain, HumanizerMode};
 use mz_expr::{
-    non_nullable_columns, AggregateExpr, ColumnOrder, Id, JoinImplementation, LocalId,
-    MirRelationExpr, MirScalarExpr, RECURSION_LIMIT,
+    AggregateExpr, ColumnOrder, Id, JoinImplementation, LocalId, MirRelationExpr, MirScalarExpr,
+    RECURSION_LIMIT, non_nullable_columns,
 };
 use mz_ore::stack::{CheckedRecursion, RecursionGuard, RecursionLimitError};
 use mz_repr::explain::{DummyHumanizer, ExprHumanizer};
@@ -1097,7 +1097,7 @@ impl Typecheck {
         use MirScalarExpr::*;
 
         self.checked_recur(|tc| match expr {
-            Column(i) => match column_types.get(*i) {
+            Column(i, _) => match column_types.get(*i) {
                 Some(ty) => Ok(ty.clone()),
                 None => Err(TypeError::NoSuchColumn {
                     source,
@@ -1259,7 +1259,9 @@ impl crate::Transform for Typecheck {
                         got,
                         expected: expected.clone(),
                         diffs,
-                        message: format!("a global id {id}'s type changed (was `expected` which should be a subtype of `got`) "),
+                        message: format!(
+                            "a global id {id}'s type changed (was `expected` which should be a subtype of `got`) "
+                        ),
                     };
 
                     type_error!(severity, "TYPE ERROR IN KNOWN GLOBAL ID {id}:\n{err}");
@@ -1305,7 +1307,7 @@ where
 
     let mut it = cols.iter().peekable();
     while let Some(col) = it.next() {
-        s.push_str(&humanizer.humanize_column_type(col));
+        s.push_str(&humanizer.humanize_column_type(col, false));
 
         if it.peek().is_some() {
             s.push_str(", ");
@@ -1359,14 +1361,14 @@ impl ColumnTypeDifference {
 
         match self {
             NotSubtype { sub, sup } => {
-                let sub = h.humanize_scalar_type(sub);
-                let sup = h.humanize_scalar_type(sup);
+                let sub = h.humanize_scalar_type(sub, false);
+                let sup = h.humanize_scalar_type(sup, false);
 
                 writeln!(f, "{sub} is a not a subtype of {sup}")
             }
             Nullability { sub, sup } => {
-                let sub = h.humanize_column_type(sub);
-                let sup = h.humanize_column_type(sup);
+                let sub = h.humanize_column_type(sub, false);
+                let sup = h.humanize_column_type(sup, false);
 
                 writeln!(f, "{sub} is nullable but {sup} is not")
             }
@@ -1481,8 +1483,8 @@ impl<'a> TypeError<'a> {
                 diffs,
                 message,
             } => {
-                let got = humanizer.humanize_column_type(got);
-                let expected = humanizer.humanize_column_type(expected);
+                let got = humanizer.humanize_column_type(got, false);
+                let expected = humanizer.humanize_column_type(expected, false);
                 writeln!(
                     f,
                     "mismatched column types: {message}\n      got {got}\nexpected {expected}"
@@ -1573,7 +1575,8 @@ impl<'a> TypeError<'a> {
 
                 writeln!(
                     f,
-                    "TopK ordering {order} references invalid column {col}\nthere {are} {num_cols} column{s}: {input_type}")?
+                    "TopK ordering {order} references invalid column {col}\nthere {are} {num_cols} column{s}: {input_type}"
+                )?
             }
             BadLetRecBindings { source: _ } => {
                 writeln!(f, "LetRec ids and definitions don't line up")?

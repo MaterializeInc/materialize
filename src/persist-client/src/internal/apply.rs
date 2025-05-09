@@ -31,16 +31,21 @@ use crate::internal::maintenance::RoutineMaintenance;
 use crate::internal::metrics::{CmdMetrics, Metrics, ShardMetrics};
 use crate::internal::paths::{PartialRollupKey, RollupId};
 use crate::internal::state::{
-    EncodedSchemas, ExpiryMetrics, HollowBatch, Since, SnapshotErr, StateCollections, TypedState,
-    Upper, ROLLUP_THRESHOLD,
+    EncodedSchemas, ExpiryMetrics, HollowBatch, ROLLUP_THRESHOLD, Since, SnapshotErr,
+    StateCollections, TypedState, Upper,
 };
 use crate::internal::state_diff::StateDiff;
 use crate::internal::state_versions::{EncodedRollup, StateVersions};
 use crate::internal::trace::FueledMergeReq;
 use crate::internal::watch::StateWatch;
-use crate::rpc::{PubSubSender, PUBSUB_PUSH_DIFF_ENABLED};
+use crate::rpc::{PUBSUB_PUSH_DIFF_ENABLED, PubSubSender};
 use crate::schema::SchemaCache;
 use crate::{Diagnostics, PersistConfig, ShardId};
+
+use super::state::{
+    ActiveGc, ActiveRollup, GC_FALLBACK_THRESHOLD_MS, GC_USE_ACTIVE_GC,
+    ROLLUP_FALLBACK_THRESHOLD_MS, ROLLUP_USE_ACTIVE_ROLLUP,
+};
 
 /// An applier of persist commands.
 ///
@@ -403,7 +408,7 @@ where
                     seqno,
                     err,
                     RoutineMaintenance::default(),
-                ))
+                ));
             }
         };
 
@@ -506,7 +511,22 @@ where
             );
         }
 
-        let write_rollup = new_state.need_rollup(ROLLUP_THRESHOLD.get(cfg));
+        let now = (cfg.now)();
+        let write_rollup = new_state.need_rollup(
+            ROLLUP_THRESHOLD.get(cfg),
+            ROLLUP_USE_ACTIVE_ROLLUP.get(cfg),
+            u64::cast_from(ROLLUP_FALLBACK_THRESHOLD_MS.get(cfg)),
+            now,
+        );
+
+        if let Some(write_rollup_seqno) = write_rollup {
+            if ROLLUP_USE_ACTIVE_ROLLUP.get(cfg) {
+                new_state.collections.active_rollup = Some(ActiveRollup {
+                    seqno: write_rollup_seqno,
+                    start_ms: now,
+                });
+            }
+        }
 
         // Find out if this command has been selected to perform gc, so
         // that it will fire off a background request to the
@@ -518,7 +538,21 @@ where
         // run though the loop (i.e. no `if let Some` here). When we
         // lose a CaS race, we might discover that the winner got
         // assigned the gc.
-        let garbage_collection = new_state.maybe_gc(is_write);
+        let garbage_collection = new_state.maybe_gc(
+            is_write,
+            GC_USE_ACTIVE_GC.get(cfg),
+            u64::cast_from(GC_FALLBACK_THRESHOLD_MS.get(cfg)),
+            now,
+        );
+
+        if let Some(gc) = garbage_collection.as_ref() {
+            if GC_USE_ACTIVE_GC.get(cfg) {
+                new_state.collections.active_gc = Some(ActiveGc {
+                    seqno: gc.new_seqno_since,
+                    start_ms: now,
+                });
+            }
+        }
 
         // NB: Make sure this is the very last thing before the
         // `try_compare_and_set_current` call. (In particular, it needs

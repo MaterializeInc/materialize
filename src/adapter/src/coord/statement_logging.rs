@@ -12,7 +12,7 @@ use std::sync::Arc;
 
 use bytes::BytesMut;
 use mz_controller_types::ClusterId;
-use mz_ore::now::{to_datetime, NowFn};
+use mz_ore::now::{NowFn, epoch_to_uuid_v7, to_datetime};
 use mz_ore::task::spawn;
 use mz_ore::{cast::CastFrom, cast::CastInto, now::EpochMillis};
 use mz_repr::adt::array::ArrayDimension;
@@ -22,7 +22,7 @@ use mz_sql::ast::display::AstDisplay;
 use mz_sql::ast::{AstInfo, Statement};
 use mz_sql::plan::Params;
 use mz_sql::session::metadata::SessionMetadata;
-use mz_sql_parser::ast::{statement_kind_label_value, StatementKind};
+use mz_sql_parser::ast::{StatementKind, statement_kind_label_value};
 use mz_storage_client::controller::IntrospectionType;
 use qcell::QCell;
 use rand::SeedableRng;
@@ -226,7 +226,7 @@ impl Coordinator {
     pub(crate) fn drain_statement_log(&mut self) {
         let session_updates = std::mem::take(&mut self.statement_logging.pending_session_events)
             .into_iter()
-            .map(|update| (update, 1))
+            .map(|update| (update, Diff::ONE))
             .collect();
         let (prepared_statement_updates, sql_text_updates) =
             std::mem::take(&mut self.statement_logging.pending_prepared_statement_events)
@@ -235,7 +235,9 @@ impl Coordinator {
                     |PreparedStatementEvent {
                          prepared_statement,
                          sql_text,
-                     }| ((prepared_statement, 1), (sql_text, 1)),
+                     }| {
+                        ((prepared_statement, Diff::ONE), (sql_text, Diff::ONE))
+                    },
                 )
                 .unzip::<_, _, Vec<_>, Vec<_>>();
         let statement_execution_updates =
@@ -243,7 +245,7 @@ impl Coordinator {
         let statement_lifecycle_updates =
             std::mem::take(&mut self.statement_logging.pending_statement_lifecycle_events)
                 .into_iter()
-                .map(|update| (update, 1))
+                .map(|update| (update, Diff::ONE))
                 .collect();
 
         use IntrospectionType::*;
@@ -319,7 +321,7 @@ impl Coordinator {
                     *accounted,
                     "accounting for logging should be done in `begin_statement_execution`"
                 );
-                let uuid = Uuid::new_v4();
+                let uuid = epoch_to_uuid_v7(prepared_at);
                 let sql = std::mem::take(sql);
                 let redacted_sql = std::mem::take(redacted_sql);
                 let sql_hash: [u8; 32] = Sha256::digest(sql.as_bytes()).into();
@@ -467,7 +469,7 @@ impl Coordinator {
             },
         ]);
         packer
-            .push_array(
+            .try_push_array(
                 &[ArrayDimension {
                     lower_bound: 1,
                     length: params.len(),
@@ -601,7 +603,7 @@ impl Coordinator {
     ) -> [(Row, Diff); 2] {
         let retraction = Self::pack_statement_began_execution_update(began_record);
         let new = Self::pack_full_statement_execution_update(began_record, ended_record);
-        [(retraction, -1), (new, 1)]
+        [(retraction, Diff::MINUS_ONE), (new, Diff::ONE)]
     }
 
     /// Mutate a statement execution record via the given function `f`.
@@ -618,12 +620,12 @@ impl Coordinator {
         let retraction = Self::pack_statement_began_execution_update(record);
         self.statement_logging
             .pending_statement_execution_events
-            .push((retraction, -1));
+            .push((retraction, Diff::MINUS_ONE));
         f(record);
         let update = Self::pack_statement_began_execution_update(record);
         self.statement_logging
             .pending_statement_execution_events
-            .push((update, 1));
+            .push((update, Diff::ONE));
     }
 
     /// Set the `cluster_id` for a statement, once it's known.
@@ -717,10 +719,10 @@ impl Coordinator {
         }
         let (ps_record, ps_uuid) = self.log_prepared_statement(session, logging)?;
 
-        let ev_id = Uuid::new_v4();
         let now = self.now();
+        let uuid = epoch_to_uuid_v7(&now);
         self.record_statement_lifecycle_event(
-            &StatementLoggingId(ev_id),
+            &StatementLoggingId(uuid),
             &StatementLifecycleEvent::ExecutionBegan,
             now,
         );
@@ -736,7 +738,7 @@ impl Coordinator {
             })
             .collect();
         let record = StatementBeganExecutionRecord {
-            id: ev_id,
+            id: uuid,
             prepared_statement_id: ps_uuid,
             sample_rate,
             params,
@@ -770,10 +772,8 @@ impl Coordinator {
         let mseh_update = Self::pack_statement_began_execution_update(&record);
         self.statement_logging
             .pending_statement_execution_events
-            .push((mseh_update, 1));
-        self.statement_logging
-            .executions_begun
-            .insert(ev_id, record);
+            .push((mseh_update, Diff::ONE));
+        self.statement_logging.executions_begun.insert(uuid, record);
         if let Some((ps_record, ps_update)) = ps_record {
             self.statement_logging
                 .pending_prepared_statement_events
@@ -789,7 +789,7 @@ impl Coordinator {
                     .push(sh_update);
             }
         }
-        Some(StatementLoggingId(ev_id))
+        Some(StatementLoggingId(uuid))
     }
 
     /// Record a new connection event

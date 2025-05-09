@@ -64,6 +64,18 @@ impl BuildInfo {
             .expect("build version is not valid semver")
     }
 
+    /// The same as [`Self::semver_version`], but includes build metadata in the returned version,
+    /// if build metadata is available on the compiled platform.
+    #[cfg(feature = "semver")]
+    pub fn semver_version_build(&self) -> Option<semver::Version> {
+        let build_id = buildid::build_id()?;
+        let build_id = hex::encode(build_id);
+        let version = format!("{}+{}", self.version, build_id)
+            .parse()
+            .expect("build version is not valid semver");
+        Some(version)
+    }
+
     /// Returns the version as an integer along the lines of Pg's server_version_num
     #[cfg(feature = "semver")]
     pub fn version_num(&self) -> i32 {
@@ -76,6 +88,11 @@ impl BuildInfo {
             semver.major, semver.minor, semver.patch
         );
         ver_string.parse::<i32>().unwrap()
+    }
+
+    /// Returns whether the version is a development version
+    pub fn is_dev(&self) -> bool {
+        self.version.contains("dev")
     }
 }
 

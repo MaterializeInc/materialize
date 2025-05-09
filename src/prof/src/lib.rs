@@ -19,8 +19,8 @@ use std::io::Write;
 use std::sync::atomic::AtomicBool;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use flate2::write::GzEncoder;
 use flate2::Compression;
+use flate2::write::GzEncoder;
 use mz_ore::cast::{CastFrom, TryCastFrom};
 use pprof_util::{StackProfile, WeightedStack};
 use prost::Message;

@@ -10,6 +10,7 @@
 # by the Apache License, Version 2.0.
 
 load("@crates_io//:defs.bzl", "aliases", "all_crate_deps")
+load("@rules_rust//cargo:defs.bzl", "extract_cargo_lints")
 load("@rules_rust//rust:defs.bzl", "rust_doc_test", "rust_library", "rust_test")
 
 package(default_visibility = ["//visibility:public"])
@@ -24,6 +25,7 @@ rust_library(
     compile_data = [],
     crate_features = ["default"],
     data = [],
+    lint_config = ":lints",
     proc_macro_deps = [] + all_crate_deps(proc_macro = True),
     rustc_env = {},
     rustc_flags = [],
@@ -33,6 +35,7 @@ rust_library(
         "//src/compute-types:mz_compute_types",
         "//src/controller-types:mz_controller_types",
         "//src/dyncfg:mz_dyncfg",
+        "//src/metrics:mz_metrics",
         "//src/persist-client:mz_persist_client",
         "//src/storage-types:mz_storage_types",
         "//src/txn-wal:mz_txn_wal",
@@ -58,6 +61,7 @@ rust_test(
     crate_features = ["default"],
     data = [],
     env = {},
+    lint_config = ":lints",
     proc_macro_deps = [] + all_crate_deps(
         proc_macro = True,
         proc_macro_dev = True,
@@ -70,6 +74,7 @@ rust_test(
         "//src/compute-types:mz_compute_types",
         "//src/controller-types:mz_controller_types",
         "//src/dyncfg:mz_dyncfg",
+        "//src/metrics:mz_metrics",
         "//src/persist-client:mz_persist_client",
         "//src/storage-types:mz_storage_types",
         "//src/txn-wal:mz_txn_wal",
@@ -87,6 +92,7 @@ rust_doc_test(
         "//src/compute-types:mz_compute_types",
         "//src/controller-types:mz_controller_types",
         "//src/dyncfg:mz_dyncfg",
+        "//src/metrics:mz_metrics",
         "//src/persist-client:mz_persist_client",
         "//src/storage-types:mz_storage_types",
         "//src/txn-wal:mz_txn_wal",
@@ -94,4 +100,10 @@ rust_doc_test(
         normal = True,
         normal_dev = True,
     ),
+)
+
+extract_cargo_lints(
+    name = "lints",
+    manifest = "Cargo.toml",
+    workspace = "@//:Cargo.toml",
 )

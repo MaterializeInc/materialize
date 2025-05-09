@@ -11,10 +11,10 @@ use std::future::{Future, IntoFuture};
 use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4};
 
 use axum::{
+    Router,
     extract::Query,
     response::{Html, IntoResponse, Response},
     routing::get,
-    Router,
 };
 use mz_frontegg_auth::AppPassword;
 use serde::Deserialize;

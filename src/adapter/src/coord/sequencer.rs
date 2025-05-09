@@ -12,8 +12,8 @@
 
 //! Logic for executing a planned SQL query.
 
-use futures::future::LocalBoxFuture;
 use futures::FutureExt;
+use futures::future::LocalBoxFuture;
 use inner::return_if_err;
 use mz_expr::row::RowCollection;
 use mz_expr::{MirRelationExpr, RowSetFinishing};
@@ -22,27 +22,31 @@ use mz_repr::{CatalogItemId, Diff, GlobalId};
 use mz_sql::catalog::CatalogError;
 use mz_sql::names::ResolvedIds;
 use mz_sql::plan::{
-    self, AbortTransactionPlan, CommitTransactionPlan, CreateRolePlan, CreateSourcePlanBundle,
-    FetchPlan, MutationKind, Params, Plan, PlanKind, RaisePlan,
+    self, AbortTransactionPlan, CommitTransactionPlan, CopyFromSource, CreateRolePlan,
+    CreateSourcePlanBundle, FetchPlan, MutationKind, Params, Plan, PlanKind, RaisePlan,
 };
 use mz_sql::rbac;
 use mz_sql::session::metadata::SessionMetadata;
 use mz_sql_parser::ast::{Raw, Statement};
+use mz_storage_client::client::TableData;
 use mz_storage_types::connections::inline::IntoInlineConnection;
+use std::collections::BTreeSet;
 use std::sync::Arc;
 use tokio::sync::oneshot;
-use tracing::{event, Instrument, Level, Span};
+use tracing::{Instrument, Level, Span, event};
 
+use crate::ExecuteContext;
 use crate::catalog::Catalog;
 use crate::command::{Command, ExecuteResponse, Response};
+use crate::coord::appends::{DeferredOp, DeferredPlan};
+use crate::coord::validity::PlanValidity;
 use crate::coord::{
-    catalog_serving, Coordinator, DeferredPlanStatement, Message, PlanStatement, TargetCluster,
+    Coordinator, DeferredPlanStatement, Message, PlanStatement, TargetCluster, catalog_serving,
 };
 use crate::error::AdapterError;
 use crate::notice::AdapterNotice;
 use crate::session::{EndTransactionAction, Session, TransactionOps, TransactionStatus, WriteOp};
 use crate::util::ClientTransmitter;
-use crate::ExecuteContext;
 
 // DO NOT make this visible in any way, i.e. do not add any version of
 // `pub` to this mod. The inner `sequence_X` methods are hidden in this
@@ -80,6 +84,39 @@ impl Coordinator {
                 ctx.retire(Err(AdapterError::ReadOnly));
                 return;
             }
+
+            // Check if we're still waiting for any of the builtin table appends from when we
+            // started the Session to complete.
+            if let Some((dependencies, wait_future)) =
+                super::appends::waiting_on_startup_appends(self.catalog(), ctx.session_mut(), &plan)
+            {
+                let conn_id = ctx.session().conn_id();
+                tracing::debug!(%conn_id, "deferring plan for startup appends");
+
+                let role_metadata = ctx.session().role_metadata().clone();
+                let validity = PlanValidity::new(
+                    self.catalog.transient_revision(),
+                    dependencies,
+                    None,
+                    None,
+                    role_metadata,
+                );
+                let deferred_plan = DeferredPlan {
+                    ctx,
+                    plan,
+                    validity,
+                    requires_locks: BTreeSet::default(),
+                };
+                // Defer op accepts an optional write lock, but there aren't any writes occurring
+                // here, since the map to `None`.
+                let acquire_future = wait_future.map(|()| None);
+
+                self.defer_op(acquire_future, DeferredOp::Plan(deferred_plan));
+
+                // Return early because our op is deferred on waiting for the builtin writes to
+                // complete.
+                return;
+            };
 
             // Scope the borrow of the Catalog because we need to mutate the Coordinator state below.
             let target_cluster = match ctx.session().transaction().cluster() {
@@ -359,18 +396,23 @@ impl Coordinator {
                     self.sequence_peek(ctx, show_columns_plan.select_plan, target_cluster, max)
                         .await;
                 }
-                Plan::CopyFrom(plan) => {
-                    let (tx, _, session, ctx_extra) = ctx.into_parts();
-                    tx.send(
-                        Ok(ExecuteResponse::CopyFrom {
-                            id: plan.id,
-                            columns: plan.columns,
-                            params: plan.params,
-                            ctx_extra,
-                        }),
-                        session,
-                    );
-                }
+                Plan::CopyFrom(plan) => match plan.source {
+                    CopyFromSource::Stdin => {
+                        let (tx, _, session, ctx_extra) = ctx.into_parts();
+                        tx.send(
+                            Ok(ExecuteResponse::CopyFrom {
+                                id: plan.id,
+                                columns: plan.columns,
+                                params: plan.params,
+                                ctx_extra,
+                            }),
+                            session,
+                        );
+                    }
+                    CopyFromSource::Url(_) | CopyFromSource::AwsS3 { .. } => {
+                        self.sequence_copy_from(ctx, plan, target_cluster).await;
+                    }
+                },
                 Plan::ExplainPlan(plan) => {
                     self.sequence_explain_plan(ctx, plan, target_cluster).await;
                 }
@@ -744,14 +786,16 @@ impl Coordinator {
         // Insert can be queued, so we need to re-verify the id exists.
         let desc = match catalog.try_get_entry(&id) {
             Some(table) => {
-                table.desc(&catalog.resolve_full_name(table.name(), Some(session.conn_id())))?
+                let full_name = catalog.resolve_full_name(table.name(), Some(session.conn_id()));
+                // Inserts always happen at the latest version of a table.
+                table.desc_latest(&full_name)?
             }
             None => {
                 return Err(AdapterError::Catalog(mz_catalog::memory::error::Error {
                     kind: mz_catalog::memory::error::ErrorKind::Sql(CatalogError::UnknownItem(
                         id.to_string(),
                     )),
-                }))
+                }));
             }
         };
 
@@ -790,7 +834,7 @@ impl Coordinator {
             // If all diffs are positive, the number of affected rows is just the
             // sum of all unconsolidated diffs.
             for (_, diff) in plan.updates.iter() {
-                if *diff < 0 {
+                if diff.is_negative() {
                     all_positive_diffs = false;
                     break;
                 }
@@ -804,7 +848,7 @@ impl Coordinator {
                 // affected rows.
                 differential_dataflow::consolidation::consolidate(&mut plan.updates);
 
-                affected_rows = 0;
+                affected_rows = Diff::ZERO;
                 // With retractions, the number of affected rows is not the number
                 // of rows we see, but the sum of the absolute value of their diffs,
                 // e.g. if one row is retracted and another is added, the total
@@ -814,7 +858,7 @@ impl Coordinator {
                 }
             }
 
-            usize::try_from(affected_rows).expect("positive isize must fit")
+            usize::try_from(affected_rows.into_inner()).expect("positive Diff must fit")
         };
         event!(
             Level::TRACE,
@@ -827,7 +871,7 @@ impl Coordinator {
 
         session.add_transaction_ops(TransactionOps::Writes(vec![WriteOp {
             id: plan.id,
-            rows: plan.updates,
+            rows: TableData::Rows(plan.updates),
         }]))?;
         if !plan.returning.is_empty() {
             let finishing = RowSetFinishing {

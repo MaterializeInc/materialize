@@ -12,7 +12,7 @@
 use std::num::NonZeroI64;
 
 use mz_proto::{ProtoType, RustType, TryFromProtoError};
-use proptest::prelude::{any, Arbitrary};
+use proptest::prelude::{Arbitrary, any};
 use proptest::strategy::{BoxedStrategy, Strategy};
 use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
@@ -154,6 +154,16 @@ pub struct TimelyConfig {
     /// The higher the proportionality value, the more eagerly arrangement batches are merged. A
     /// value of `0` (or `1`) disables eager merging.
     pub arrangement_exert_proportionality: u32,
+    /// Whether to use the zero copy allocator.
+    pub enable_zero_copy: bool,
+    /// Whether to use lgalloc to back the zero copy allocator.
+    pub enable_zero_copy_lgalloc: bool,
+    /// Optional limit on the number of empty buffers retained by the zero copy allocator.
+    pub zero_copy_limit: Option<usize>,
+    /// Whether to enable the new version of `create_sockets`.
+    ///
+    /// This flag exists to facilitate a slow rollout and is expected to be temporary.
+    pub enable_create_sockets_v2: bool,
 }
 
 impl RustType<ProtoTimelyConfig> for TimelyConfig {
@@ -163,6 +173,10 @@ impl RustType<ProtoTimelyConfig> for TimelyConfig {
             addresses: self.addresses.into_proto(),
             process: self.process.into_proto(),
             arrangement_exert_proportionality: self.arrangement_exert_proportionality,
+            enable_zero_copy: self.enable_zero_copy,
+            enable_zero_copy_lgalloc: self.enable_zero_copy_lgalloc,
+            zero_copy_limit: self.zero_copy_limit.into_proto(),
+            enable_create_sockets_v2: self.enable_create_sockets_v2,
         }
     }
 
@@ -172,6 +186,10 @@ impl RustType<ProtoTimelyConfig> for TimelyConfig {
             workers: proto.workers.into_rust()?,
             addresses: proto.addresses.into_rust()?,
             arrangement_exert_proportionality: proto.arrangement_exert_proportionality,
+            enable_zero_copy: proto.enable_zero_copy,
+            enable_zero_copy_lgalloc: proto.enable_zero_copy_lgalloc,
+            zero_copy_limit: proto.zero_copy_limit.into_rust()?,
+            enable_create_sockets_v2: proto.enable_create_sockets_v2,
         })
     }
 }

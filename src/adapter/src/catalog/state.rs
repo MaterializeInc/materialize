@@ -22,18 +22,19 @@ use mz_adapter_types::compaction::CompactionWindow;
 use mz_adapter_types::connection::ConnectionId;
 use mz_audit_log::{EventDetails, EventType, ObjectType, VersionedEvent};
 use mz_build_info::DUMMY_BUILD_INFO;
+use mz_catalog::SYSTEM_CONN_ID;
 use mz_catalog::builtin::{
-    Builtin, BuiltinCluster, BuiltinLog, BuiltinSource, BuiltinTable, BuiltinType, BUILTINS,
+    BUILTINS, Builtin, BuiltinCluster, BuiltinLog, BuiltinSource, BuiltinTable, BuiltinType,
 };
 use mz_catalog::config::{AwsPrincipalContext, ClusterReplicaSizeMap};
 use mz_catalog::expr_cache::LocalExpressions;
 use mz_catalog::memory::error::{Error, ErrorKind};
 use mz_catalog::memory::objects::{
-    CatalogEntry, CatalogItem, Cluster, ClusterReplica, CommentsMap, Connection, DataSourceDesc,
-    Database, DefaultPrivileges, Index, MaterializedView, NetworkPolicy, Role, Schema, Secret,
-    Sink, Source, SourceReferences, Table, TableDataSource, Type, View,
+    CatalogCollectionEntry, CatalogEntry, CatalogItem, Cluster, ClusterReplica, CommentsMap,
+    Connection, DataSourceDesc, Database, DefaultPrivileges, Index, MaterializedView,
+    NetworkPolicy, Role, RoleAuth, Schema, Secret, Sink, Source, SourceReferences, Table,
+    TableDataSource, Type, View,
 };
-use mz_catalog::SYSTEM_CONN_ID;
 use mz_controller::clusters::{
     ManagedReplicaAvailabilityZones, ManagedReplicaLocation, ReplicaAllocation, ReplicaLocation,
     UnmanagedReplicaLocation,
@@ -54,7 +55,7 @@ use mz_repr::namespaces::{
 use mz_repr::network_policy_id::NetworkPolicyId;
 use mz_repr::optimize::OptimizerFeatures;
 use mz_repr::role_id::RoleId;
-use mz_repr::{CatalogItemId, GlobalId, RelationDesc, RelationVersion};
+use mz_repr::{CatalogItemId, GlobalId, RelationDesc, RelationVersion, RelationVersionSelector};
 use mz_secrets::InMemorySecretsController;
 use mz_sql::ast::Ident;
 use mz_sql::catalog::{BuiltinsConfig, CatalogConfig, EnvironmentId};
@@ -77,24 +78,24 @@ use mz_sql::plan::{
 use mz_sql::rbac;
 use mz_sql::session::metadata::SessionMetadata;
 use mz_sql::session::user::MZ_SYSTEM_ROLE_ID;
-use mz_sql::session::vars::{SystemVars, Var, VarInput, DEFAULT_DATABASE_NAME};
+use mz_sql::session::vars::{DEFAULT_DATABASE_NAME, SystemVars, Var, VarInput};
 use mz_sql_parser::ast::QualifiedReplica;
 use mz_storage_client::controller::StorageMetadata;
+use mz_storage_types::connections::ConnectionContext;
 use mz_storage_types::connections::inline::{
     ConnectionResolver, InlinedConnection, IntoInlineConnection,
 };
-use mz_storage_types::connections::ConnectionContext;
 use serde::Serialize;
 use timely::progress::Antichain;
 use tokio::sync::mpsc;
 use tracing::{debug, warn};
 
 // DO NOT add any more imports from `crate` outside of `crate::catalog`.
+use crate::AdapterError;
 use crate::catalog::{Catalog, ConnCatalog};
 use crate::coord::ConnMeta;
 use crate::optimize::{self, Optimize, OptimizerCatalog};
 use crate::session::Session;
-use crate::AdapterError;
 
 /// The in-memory representation of the Catalog. This struct is not directly used to persist
 /// metadata to persistent storage. For persistent metadata see
@@ -128,6 +129,8 @@ pub struct CatalogState {
     pub(super) network_policies_by_name: BTreeMap<String, NetworkPolicyId>,
     #[serde(serialize_with = "mz_ore::serde::map_key_to_string")]
     pub(super) network_policies_by_id: BTreeMap<NetworkPolicyId, NetworkPolicy>,
+    #[serde(serialize_with = "mz_ore::serde::map_key_to_string")]
+    pub(super) role_auth_by_id: BTreeMap<RoleId, RoleAuth>,
 
     #[serde(skip)]
     pub(super) system_configuration: SystemVars,
@@ -276,6 +279,7 @@ impl CatalogState {
             roles_by_name: Default::default(),
             roles_by_id: Default::default(),
             network_policies_by_id: Default::default(),
+            role_auth_by_id: Default::default(),
             config: CatalogConfig {
                 start_time: Default::default(),
                 start_instant: Instant::now(),
@@ -715,12 +719,25 @@ impl CatalogState {
             .unwrap_or_else(|| panic!("catalog out of sync, missing id {id:?}"))
     }
 
-    pub fn get_entry_by_global_id(&self, id: &GlobalId) -> &CatalogEntry {
+    pub fn get_entry_by_global_id(&self, id: &GlobalId) -> CatalogCollectionEntry {
         let item_id = self
             .entry_by_global_id
             .get(id)
             .unwrap_or_else(|| panic!("catalog out of sync, missing id {id:?}"));
-        self.get_entry(item_id)
+
+        let entry = self.get_entry(item_id).clone();
+        let version = match entry.item() {
+            CatalogItem::Table(table) => {
+                let (version, _) = table
+                    .collections
+                    .iter()
+                    .find(|(_verison, gid)| *gid == id)
+                    .expect("version to exist");
+                RelationVersionSelector::Specific(*version)
+            }
+            _ => RelationVersionSelector::Latest,
+        };
+        CatalogCollectionEntry { entry, version }
     }
 
     pub fn get_entries(&self) -> impl Iterator<Item = (&CatalogItemId, &CatalogEntry)> + '_ {
@@ -747,7 +764,9 @@ impl CatalogState {
             if let Some(global_id) = schema.types.get(name) {
                 match res {
                     None => res = Some(self.get_entry(global_id)),
-                    Some(_) => panic!("only call get_system_type on objects uniquely identifiable in one system schema"),
+                    Some(_) => panic!(
+                        "only call get_system_type on objects uniquely identifiable in one system schema"
+                    ),
                 }
             }
         }
@@ -808,6 +827,18 @@ impl CatalogState {
         self.try_get_entry(item_id)
     }
 
+    /// Returns the [`RelationDesc`] for a [`GlobalId`], if the provided [`GlobalId`] refers to an
+    /// object that returns rows.
+    pub fn try_get_desc_by_global_id(&self, id: &GlobalId) -> Option<Cow<RelationDesc>> {
+        let entry = self.try_get_entry_by_global_id(id)?;
+        let desc = match entry.item() {
+            CatalogItem::Table(table) => Cow::Owned(table.desc_for(id)),
+            // TODO(alter_table): Support schema evolution on sources.
+            other => other.desc_opt(RelationVersionSelector::Latest)?,
+        };
+        Some(desc)
+    }
+
     pub(crate) fn get_cluster(&self, cluster_id: ClusterId) -> &Cluster {
         self.try_get_cluster(cluster_id)
             .unwrap_or_else(|| panic!("unknown cluster {cluster_id}"))
@@ -833,6 +864,10 @@ impl CatalogState {
         self.roles_by_name
             .get(role_name)
             .map(|id| &self.roles_by_id[id])
+    }
+
+    pub(super) fn try_get_role_auth_by_id(&self, id: &RoleId) -> Option<&RoleAuth> {
+        self.role_auth_by_id.get(id)
     }
 
     pub(super) fn try_get_network_policy_by_name(
@@ -1041,9 +1076,11 @@ impl CatalogState {
 
         let item = match plan {
             Plan::CreateTable(CreateTablePlan { table, .. }) => {
-                // TODO(alter_table): Support versioning tables.
-                assert_eq!(extra_versions.len(), 0);
-                let collections = [(RelationVersion::root(), global_id)].into_iter().collect();
+                let collections = extra_versions
+                    .iter()
+                    .map(|(version, gid)| (*version, *gid))
+                    .chain([(RelationVersion::root(), global_id)].into_iter())
+                    .collect();
 
                 CatalogItem::Table(Table {
                     create_sql: Some(table.create_sql),
@@ -1097,7 +1134,7 @@ impl CatalogState {
                                         "unsupported data source for table"
                                     )),
                                     cached_expr,
-                                ))
+                                ));
                             }
                         },
                     },
@@ -1122,7 +1159,7 @@ impl CatalogState {
                                             "ingestion-based sources must have cluster specified"
                                         )),
                                         cached_expr,
-                                    ))
+                                    ));
                                 }
                             },
                         }
@@ -1328,7 +1365,6 @@ impl CatalogState {
                 global_id,
                 from: sink.from,
                 connection: sink.connection,
-                partition_strategy: sink.partition_strategy,
                 envelope: sink.envelope,
                 version: sink.version,
                 with_snapshot,
@@ -1376,7 +1412,7 @@ impl CatalogState {
                     })
                     .into(),
                     cached_expr,
-                ))
+                ));
             }
         };
 
@@ -2610,12 +2646,13 @@ impl ConnectionResolver for CatalogState {
             Aws(conn) => Aws(conn),
             AwsPrivatelink(conn) => AwsPrivatelink(conn),
             MySql(conn) => MySql(conn.into_inline_connection(self)),
+            SqlServer(conn) => SqlServer(conn.into_inline_connection(self)),
         }
     }
 }
 
 impl OptimizerCatalog for CatalogState {
-    fn get_entry(&self, id: &GlobalId) -> &CatalogEntry {
+    fn get_entry(&self, id: &GlobalId) -> CatalogCollectionEntry {
         CatalogState::get_entry_by_global_id(self, id)
     }
     fn get_entry_by_item_id(&self, id: &CatalogItemId) -> &CatalogEntry {
@@ -2638,7 +2675,7 @@ impl OptimizerCatalog for CatalogState {
 }
 
 impl OptimizerCatalog for Catalog {
-    fn get_entry(&self, id: &GlobalId) -> &CatalogEntry {
+    fn get_entry(&self, id: &GlobalId) -> CatalogCollectionEntry {
         self.state.get_entry_by_global_id(id)
     }
 

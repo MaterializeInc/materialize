@@ -16,8 +16,9 @@ use std::sync::Arc;
 use differential_dataflow::difference::Semigroup;
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::trace::Description;
-use futures::stream::FuturesUnordered;
 use futures::StreamExt;
+use futures::stream::FuturesUnordered;
+use mz_dyncfg::Config;
 use mz_ore::instrument;
 use mz_ore::task::RuntimeExt;
 use mz_persist::location::Blob;
@@ -27,24 +28,32 @@ use mz_proto::{IntoRustIfSome, ProtoType};
 use proptest_derive::Arbitrary;
 use semver::Version;
 use serde::{Deserialize, Serialize};
-use timely::progress::{Antichain, Timestamp};
 use timely::PartialOrder;
+use timely::progress::{Antichain, Timestamp};
 use tokio::runtime::Handle;
-use tracing::{debug_span, info, warn, Instrument};
+use tracing::{Instrument, debug_span, info, warn};
 use uuid::Uuid;
 
 use crate::batch::{
-    validate_truncate_batch, Added, Batch, BatchBuilder, BatchBuilderConfig, BatchBuilderInternal,
-    BatchParts, ProtoBatch, BATCH_DELETE_ENABLED,
+    Added, BATCH_DELETE_ENABLED, Batch, BatchBuilder, BatchBuilderConfig, BatchBuilderInternal,
+    BatchParts, ProtoBatch, validate_truncate_batch,
 };
 use crate::error::{InvalidUsage, UpperMismatch};
+use crate::fetch::{EncodedPart, FetchBatchFilter, FetchedPart, PartDecodeFormat};
 use crate::internal::compact::{CompactConfig, Compactor};
-use crate::internal::encoding::{check_data_version, Schemas};
+use crate::internal::encoding::{Schemas, check_data_version};
 use crate::internal::machine::{CompareAndAppendRes, ExpireFn, Machine};
 use crate::internal::metrics::Metrics;
-use crate::internal::state::{HandleDebugState, HollowBatch, RunOrder};
+use crate::internal::state::{BatchPart, HandleDebugState, HollowBatch, RunOrder, RunPart};
 use crate::read::ReadHandle;
-use crate::{parse_id, GarbageCollector, IsolatedRuntime, PersistConfig, ShardId};
+use crate::schema::PartMigration;
+use crate::{GarbageCollector, IsolatedRuntime, PersistConfig, ShardId, parse_id};
+
+pub(crate) const COMBINE_INLINE_WRITES: Config<bool> = Config::new(
+    "persist_write_combine_inline_writes",
+    true,
+    "If set, re-encode inline writes if they don't fit into the batch metadata limits.",
+);
 
 /// An opaque identifier for a writer of a persist durable TVC (aka shard).
 #[derive(Arbitrary, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
@@ -479,34 +488,136 @@ where
         let desc = Description::new(lower, upper, since);
 
         let mut received_inline_backpressure = false;
+        // Every hollow part must belong to some batch, so we can clean it up when the batch is dropped...
+        // but if we need to merge all our inline parts to a single run in S3, it's not correct to
+        // associate that with any of our individual input batches.
+        // At first, we'll try and put all the inline parts we receive into state... but if we
+        // get backpressured, we retry with this builder set to `Some`, put all our inline data into
+        // it, and ensure it's flushed out to S3 before including it in the batch.
+        let mut inline_batch_builder: Option<(_, BatchBuilder<K, V, T, D>)> = None;
         let maintenance = loop {
             let any_batch_rewrite = batches
                 .iter()
                 .any(|x| x.batch.parts.iter().any(|x| x.ts_rewrite().is_some()));
             let (mut parts, mut num_updates, mut run_splits, mut run_metas) =
                 (vec![], 0, vec![], vec![]);
+            let mut key_storage = None;
+            let mut val_storage = None;
             for batch in batches.iter() {
                 let () = validate_truncate_batch(&batch.batch, &desc, any_batch_rewrite)?;
                 for (run_meta, run) in batch.batch.runs() {
-                    if run.is_empty() {
+                    let start_index = parts.len();
+                    for part in run {
+                        if let (
+                            RunPart::Single(
+                                batch_part @ BatchPart::Inline {
+                                    updates,
+                                    ts_rewrite,
+                                    schema_id: _,
+                                    deprecated_schema_id: _,
+                                },
+                            ),
+                            Some((schema_cache, builder)),
+                        ) = (part, &mut inline_batch_builder)
+                        {
+                            let schema_migration = PartMigration::new(
+                                batch_part,
+                                self.write_schemas.clone(),
+                                schema_cache,
+                            )
+                            .await
+                            .expect("schemas for inline user part");
+
+                            let encoded_part = EncodedPart::from_inline(
+                                &*self.metrics,
+                                self.metrics.read.compaction.clone(),
+                                desc.clone(),
+                                updates,
+                                ts_rewrite.as_ref(),
+                            );
+                            let mut fetched_part = FetchedPart::new(
+                                Arc::clone(&self.metrics),
+                                encoded_part,
+                                schema_migration,
+                                FetchBatchFilter::Compaction {
+                                    since: desc.since().clone(),
+                                },
+                                false,
+                                PartDecodeFormat::Arrow,
+                                None,
+                            );
+
+                            while let Some(((k, v), t, d)) =
+                                fetched_part.next_with_storage(&mut key_storage, &mut val_storage)
+                            {
+                                builder
+                                    .add(
+                                        &k.expect("decoded just-encoded key data"),
+                                        &v.expect("decoded just-encoded val data"),
+                                        &t,
+                                        &d,
+                                    )
+                                    .await
+                                    .expect("re-encoding just-decoded data");
+                            }
+                        } else {
+                            parts.push(part.clone())
+                        }
+                    }
+
+                    let end_index = parts.len();
+
+                    if start_index == end_index {
                         continue;
                     }
+
                     // Mark the boundary if this is not the first run in the batch.
+                    if start_index != 0 {
+                        run_splits.push(start_index);
+                    }
+                    run_metas.push(run_meta.clone());
+                }
+                num_updates += batch.batch.len;
+            }
+
+            let mut flushed_inline_batch = if let Some((_, builder)) = inline_batch_builder.take() {
+                let mut finished = builder
+                    .finish(desc.upper().clone())
+                    .await
+                    .expect("invalid usage");
+                let cfg = BatchBuilderConfig::new(&self.cfg, self.shard_id());
+                finished
+                    .flush_to_blob(
+                        &cfg,
+                        &self.metrics.inline.backpressure,
+                        &self.isolated_runtime,
+                        &self.write_schemas,
+                    )
+                    .await;
+                Some(finished)
+            } else {
+                None
+            };
+
+            if let Some(batch) = &flushed_inline_batch {
+                for (run_meta, run) in batch.batch.runs() {
+                    assert!(run.len() > 0);
                     let start_index = parts.len();
                     if start_index != 0 {
                         run_splits.push(start_index);
                     }
                     run_metas.push(run_meta.clone());
-                    parts.extend_from_slice(run);
+                    parts.extend(run.iter().cloned())
                 }
-                num_updates += batch.batch.len;
             }
 
+            let combined_batch =
+                HollowBatch::new(desc.clone(), parts, num_updates, run_metas, run_splits);
             let heartbeat_timestamp = (self.cfg.now)();
             let res = self
                 .machine
                 .compare_and_append(
-                    &HollowBatch::new(desc.clone(), parts, num_updates, run_metas, run_splits),
+                    &combined_batch,
                     &self.writer_id,
                     &self.debug_state,
                     heartbeat_timestamp,
@@ -519,10 +630,21 @@ where
                     for batch in batches.iter_mut() {
                         batch.mark_consumed();
                     }
+                    if let Some(batch) = &mut flushed_inline_batch {
+                        batch.mark_consumed();
+                    }
                     break maintenance;
                 }
-                CompareAndAppendRes::InvalidUsage(invalid_usage) => return Err(invalid_usage),
+                CompareAndAppendRes::InvalidUsage(invalid_usage) => {
+                    if let Some(batch) = flushed_inline_batch.take() {
+                        batch.delete().await;
+                    }
+                    return Err(invalid_usage);
+                }
                 CompareAndAppendRes::UpperMismatch(_seqno, current_upper) => {
+                    if let Some(batch) = flushed_inline_batch.take() {
+                        batch.delete().await;
+                    }
                     // We tried to to a compare_and_append with the wrong expected upper, that
                     // won't work. Update the cached upper to the current upper.
                     self.upper.clone_from(&current_upper);
@@ -536,6 +658,13 @@ where
                     // too much in state. Flush it out to s3 and try again.
                     assert_eq!(received_inline_backpressure, false);
                     received_inline_backpressure = true;
+                    if COMBINE_INLINE_WRITES.get(&self.cfg) {
+                        inline_batch_builder = Some((
+                            self.machine.applier.schema_cache(),
+                            self.builder(desc.lower().clone()),
+                        ));
+                        continue;
+                    }
 
                     let cfg = BatchBuilderConfig::new(&self.cfg, self.shard_id());
                     // We could have a large number of inline parts (imagine the
@@ -649,7 +778,6 @@ where
         BatchBuilder::new(
             builder,
             Description::new(lower, Antichain::new(), Antichain::from_elem(T::minimum())),
-            Arc::clone(&self.metrics),
         )
     }
 
@@ -812,7 +940,10 @@ impl<K: Codec, V: Codec, T, D> Drop for WriteHandle<K, V, T, D> {
         let handle = match Handle::try_current() {
             Ok(x) => x,
             Err(_) => {
-                warn!("WriteHandle {} dropped without being explicitly expired, falling back to lease timeout", self.writer_id);
+                warn!(
+                    "WriteHandle {} dropped without being explicitly expired, falling back to lease timeout",
+                    self.writer_id
+                );
                 return;
             }
         };

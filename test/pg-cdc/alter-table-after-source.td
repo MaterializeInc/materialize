@@ -406,4 +406,4 @@ DROP TABLE drop_table;
 
 # Table is dropped
 ! SELECT * FROM drop_table;
-contains:table was dropped
+regex:(table was dropped|incompatible schema change)

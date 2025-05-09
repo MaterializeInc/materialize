@@ -64,7 +64,7 @@ ALTER TABLE table_a REPLICA IDENTITY FULL;
 INSERT INTO table_a VALUES (9, 'nine');
 
 ! SELECT * FROM table_a;
-contains:table was dropped
+regex:(table was dropped|incompatible schema change)
 
 # We are not aware that the new table_a is different
 ! CREATE TABLE table_a FROM SOURCE mz_source (REFERENCE table_a);
@@ -139,10 +139,10 @@ table_g               ""
 $ set-regex match="DETAILS = '[a-f0-9]+'" replacement=<DETAILS>
 
 > SHOW CREATE SOURCE mz_source;
-materialize.public.mz_source "CREATE SOURCE \"materialize\".\"public\".\"mz_source\" IN CLUSTER \"quickstart\" FROM POSTGRES CONNECTION \"materialize\".\"public\".\"pg\" (PUBLICATION = 'mz_source') EXPOSE PROGRESS AS \"materialize\".\"public\".\"mz_source_progress\""
+materialize.public.mz_source "CREATE SOURCE materialize.public.mz_source\nIN CLUSTER quickstart\nFROM POSTGRES CONNECTION materialize.public.pg (PUBLICATION = 'mz_source')\nEXPOSE PROGRESS AS materialize.public.mz_source_progress;"
 
 > SHOW CREATE TABLE table_a;
-materialize.public.table_a "CREATE TABLE \"materialize\".\"public\".\"table_a\" (\"pk\" \"pg_catalog\".\"int4\" NOT NULL, \"f2\" \"pg_catalog\".\"text\", CONSTRAINT \"table_a_pkey\" PRIMARY KEY (\"pk\")) FROM SOURCE \"materialize\".\"public\".\"mz_source\" (REFERENCE = \"postgres\".\"public\".\"table_a\") WITH (<DETAILS>)"
+materialize.public.table_a "CREATE TABLE materialize.public.table_a (pk pg_catalog.int4 NOT NULL, f2 pg_catalog.text, CONSTRAINT table_a_pkey PRIMARY KEY (pk)) FROM SOURCE materialize.public.mz_source (REFERENCE = postgres.public.table_a) WITH (<DETAILS>);"
 
 #
 # State checking
@@ -332,7 +332,7 @@ INSERT INTO table_a VALUES (4, 'four', 4);
 3 three 1
 4 four 4
 
-? EXPLAIN SELECT * FROM table_a WHERE f3 IS NULL;
+? EXPLAIN OPTIMIZED PLAN AS VERBOSE TEXT FOR SELECT * FROM table_a WHERE f3 IS NULL;
 Explained Query (fast path):
   Constant <empty>
 
@@ -349,7 +349,7 @@ contains: invalid TEXT COLUMNS option value: unexpected multiple references to p
 2 var1
 
 > SELECT regexp_match(create_sql, 'TEXT COLUMNS = \((.*?)\)')[1] FROM (SHOW CREATE TABLE table_f);
-"\"f2\""
+f2
 
 # Drop a table that's in the publication, which shuffles the tables' output
 # indexes, then add a table to the publication and ensure it can be added.
@@ -366,7 +366,7 @@ INSERT INTO table_f VALUES (3, 'var1');
 > CREATE TABLE table_i FROM SOURCE mz_source (REFERENCE table_i) WITH (TEXT COLUMNS [f2]);
 
 > SELECT regexp_match(create_sql, 'TEXT COLUMNS = \((.*?)\)')[1] FROM (SHOW CREATE TABLE table_i);
-"\"f2\""
+f2
 
 > SELECT * FROM table_f
 1 var0
@@ -393,7 +393,7 @@ contains: invalid TEXT COLUMNS option value: column "table_e.xyz" does not exist
 > CREATE TABLE t_f FROM SOURCE mz_source_wo_init_text_cols (REFERENCE table_f) WITH (TEXT COLUMNS [f2]);
 
 > SELECT regexp_match(create_sql, 'TEXT COLUMNS = \((.*?)\)')[1] FROM (SHOW CREATE TABLE t_f);
-"\"f2\""
+f2
 
 # add a table after having created the source
 $ postgres-execute connection=postgres://postgres:postgres@postgres

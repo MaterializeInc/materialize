@@ -19,12 +19,6 @@
   FORMAT JSON
   ENVELOPE DEBEZIUM
 
-> CREATE TABLE expected_compression_implicit_create_sql (sql text)
->[version<11200] INSERT INTO expected_compression_implicit_create_sql
-  VALUES ('CREATE SINK "materialize"."public"."compression_implicit" IN CLUSTER "quickstart" FROM "materialize"."public"."kafka_sink_from" INTO KAFKA CONNECTION "materialize"."public"."kafka_conn" (TOPIC = ''kafka-sink'', COMPRESSION TYPE = ''none'') FORMAT JSON ENVELOPE DEBEZIUM WITH (PARTITION STRATEGY = ''v0'')')
->[version>=11200] INSERT INTO expected_compression_implicit_create_sql
-  VALUES ('CREATE SINK "materialize"."public"."compression_implicit" IN CLUSTER "quickstart" FROM "materialize"."public"."kafka_sink_from" INTO KAFKA CONNECTION "materialize"."public"."kafka_conn" (TOPIC = ''kafka-sink'') FORMAT JSON ENVELOPE DEBEZIUM WITH (PARTITION STRATEGY = ''v0'')')
-
 > CREATE SINK compression_none_explicit FROM kafka_sink_from
   INTO KAFKA CONNECTION kafka_conn (TOPIC 'kafka-sink', COMPRESSION TYPE = 'none')
   FORMAT JSON

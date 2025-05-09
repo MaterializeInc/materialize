@@ -72,7 +72,7 @@ pub fn datadriven_testcase(tc: &datadriven::TestCase) -> String {
         match parser::parse_statements(input) {
             Ok(s) => {
                 let stmt = s.into_element().ast;
-                for printed in [stmt.to_ast_string(), stmt.to_ast_string_stable()] {
+                for printed in [stmt.to_ast_string_simple(), stmt.to_ast_string_stable()] {
                     let mut parsed = match parser::parse_statements(&printed) {
                         Ok(parsed) => parsed.into_element().ast,
                         Err(err) => panic!("reparse failed: {}: {}\n", stmt, err),
@@ -94,6 +94,17 @@ pub fn datadriven_testcase(tc: &datadriven::TestCase) -> String {
                         );
                     }
                 }
+
+                // Also check that the redacted version of the statement can be reparsed. This is
+                // important so that we are still able to pretty-print redacted statements, which
+                // helps during debugging.
+                let redacted = stmt.to_ast_string_redacted();
+                let res = parser::parse_statements(&redacted);
+                assert!(
+                    res.is_ok(),
+                    "redacted statement could not be reparsed: {res:?}\noriginal:\n{stmt}\nredacted:\n{redacted}"
+                );
+
                 if tc.args.contains_key("roundtrip") {
                     format!("{}\n", stmt)
                 } else {
@@ -110,7 +121,7 @@ pub fn datadriven_testcase(tc: &datadriven::TestCase) -> String {
         let input = tc.input.trim();
         match parser::parse_expr(input) {
             Ok(s) => {
-                for printed in [s.to_ast_string(), s.to_ast_string_stable()] {
+                for printed in [s.to_ast_string_simple(), s.to_ast_string_stable()] {
                     match parser::parse_expr(&printed) {
                         Ok(parsed) => {
                             // TODO: We always coerce the double colon operator into a Cast expr instead
@@ -123,9 +134,9 @@ pub fn datadriven_testcase(tc: &datadriven::TestCase) -> String {
                             if !matches!(parsed, Expr::Cast { .. }) {
                                 if parsed != s {
                                     panic!(
-                                  "reparse comparison failed: {input} != {s}\n{:?}\n!=\n{:?}\n{printed}\n",
-                                  s, parsed
-                              );
+                                        "reparse comparison failed: {input} != {s}\n{:?}\n!=\n{:?}\n{printed}\n",
+                                        s, parsed
+                                    );
                                 }
                             }
                         }

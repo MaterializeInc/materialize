@@ -16,6 +16,7 @@ use std::fmt;
 use std::num::{NonZeroU64, TryFromIntError};
 use std::sync::Arc;
 
+use mz_ore::Overflowing;
 use mz_ore::cast::CastFrom;
 use mz_ore::num::{NonNeg, NonNegError};
 use num::Signed;
@@ -295,6 +296,18 @@ impl RustType<u64> for Option<NonZeroU64> {
 
     fn from_proto(proto: u64) -> Result<Self, TryFromProtoError> {
         Ok(NonZeroU64::new(proto)) // 0 is correctly mapped to None
+    }
+}
+
+impl RustType<i64> for Overflowing<i64> {
+    #[inline(always)]
+    fn into_proto(&self) -> i64 {
+        self.into_inner()
+    }
+
+    #[inline(always)]
+    fn from_proto(proto: i64) -> Result<Self, TryFromProtoError> {
+        Ok(proto.into())
     }
 }
 

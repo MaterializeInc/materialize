@@ -10,7 +10,7 @@
 # by the Apache License, Version 2.0.
 
 load("@crates_io//:defs.bzl", "aliases", "all_crate_deps")
-load("@rules_rust//cargo:defs.bzl", "cargo_build_script")
+load("@rules_rust//cargo:defs.bzl", "cargo_build_script", "extract_cargo_lints")
 load("@rules_rust//rust:defs.bzl", "rust_doc_test", "rust_library", "rust_test")
 
 package(default_visibility = ["//visibility:public"])
@@ -25,6 +25,7 @@ rust_library(
     compile_data = [],
     crate_features = ["default"],
     data = [],
+    lint_config = ":lints",
     proc_macro_deps = [] + all_crate_deps(proc_macro = True),
     rustc_env = {},
     rustc_flags = [],
@@ -33,6 +34,8 @@ rust_library(
         ":mz_storage_client_build_script",
         "//src/ccsr:mz_ccsr",
         "//src/cluster-client:mz_cluster_client",
+        "//src/controller-types:mz_controller_types",
+        "//src/dyncfg:mz_dyncfg",
         "//src/dyncfgs:mz_dyncfgs",
         "//src/kafka-util:mz_kafka_util",
         "//src/ore:mz_ore",
@@ -67,6 +70,7 @@ rust_test(
     crate_features = ["default"],
     data = [],
     env = {},
+    lint_config = ":lints",
     proc_macro_deps = [] + all_crate_deps(
         proc_macro = True,
         proc_macro_dev = True,
@@ -78,6 +82,7 @@ rust_test(
         "//src/build-info:mz_build_info",
         "//src/ccsr:mz_ccsr",
         "//src/cluster-client:mz_cluster_client",
+        "//src/controller-types:mz_controller_types",
         "//src/dyncfg:mz_dyncfg",
         "//src/dyncfgs:mz_dyncfgs",
         "//src/kafka-util:mz_kafka_util",
@@ -105,6 +110,7 @@ rust_doc_test(
         "//src/build-info:mz_build_info",
         "//src/ccsr:mz_ccsr",
         "//src/cluster-client:mz_cluster_client",
+        "//src/controller-types:mz_controller_types",
         "//src/dyncfg:mz_dyncfg",
         "//src/dyncfgs:mz_dyncfgs",
         "//src/kafka-util:mz_kafka_util",
@@ -131,6 +137,7 @@ filegroup(
         "src/client.proto",
         "src/statistics.proto",
         "//src/cluster-client:all_protos",
+        "//src/persist-client:all_protos",
         "//src/proto:all_protos",
         "//src/repr:all_protos",
         "//src/storage-types:all_protos",
@@ -147,4 +154,10 @@ cargo_build_script(
     rustc_env = {},
     rustc_flags = [],
     deps = ["//src/build-tools:mz_build_tools"] + all_crate_deps(build = True),
+)
+
+extract_cargo_lints(
+    name = "lints",
+    manifest = "Cargo.toml",
+    workspace = "@//:Cargo.toml",
 )

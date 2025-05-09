@@ -15,9 +15,9 @@ use mz_catalog::durable::initialize::USER_VERSION_KEY;
 use mz_catalog::durable::objects::serialization::proto;
 use mz_catalog::durable::objects::{DurableType, Snapshot};
 use mz_catalog::durable::{
-    test_bootstrap_args, CatalogError, Database, DurableCatalogError, DurableCatalogState, Epoch,
-    FenceError, Schema, TestCatalogStateBuilder, BUILTIN_MIGRATION_SHARD_KEY, CATALOG_VERSION,
-    EXPRESSION_CACHE_SHARD_KEY,
+    BUILTIN_MIGRATION_SHARD_KEY, CATALOG_VERSION, CatalogError, Database, DurableCatalogError,
+    DurableCatalogState, EXPRESSION_CACHE_SHARD_KEY, Epoch, FenceError, Schema,
+    TestCatalogStateBuilder, test_bootstrap_args,
 };
 use mz_ore::cast::usize_to_u64;
 use mz_ore::collections::HashSet;
@@ -73,6 +73,7 @@ impl Debug for StableSnapshot<'_> {
             databases,
             schemas,
             roles,
+            role_auth,
             items,
             comments,
             clusters,
@@ -100,6 +101,7 @@ impl Debug for StableSnapshot<'_> {
             .field("databases", databases)
             .field("schemas", schemas)
             .field("roles", roles)
+            .field("role_auth", role_auth)
             .field("items", items)
             .field("comments", comments)
             .field("clusters", clusters)

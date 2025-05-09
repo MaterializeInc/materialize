@@ -63,7 +63,8 @@ COMPLETE 0
 simple conn=regress_role_limited_admin,user=regress_role_limited_admin
 CREATE ROLE regress_nosuch_superuser SUPERUSER;
 ----
-db error: ERROR: SUPERUSER attribute is not supported, for more information consult the documentation at https://materialize.com/docs/sql/create-role/#details
+db error: ERROR: permission denied to create superuser role
+DETAIL: You must be a superuser to create superuser role
 
 simple conn=regress_role_limited_admin,user=regress_role_limited_admin
 CREATE ROLE regress_nosuch_createdb CREATEDB;
@@ -141,12 +142,13 @@ DETAIL: Use system privileges instead.
 simple conn=regress_role_admin,user=regress_role_admin
 ALTER ROLE regress_createdb SUPERUSER;
 ----
-db error: ERROR: SUPERUSER attribute is not supported, for more information consult the documentation at https://materialize.com/docs/sql/create-role/#details
+db error: ERROR: permission denied to alter superuser role
+DETAIL: You must be a superuser to alter superuser role
 
 simple conn=regress_role_admin,user=regress_role_admin
 ALTER ROLE regress_createdb NOSUPERUSER;
 ----
-db error: ERROR: SUPERUSER attribute is not supported, for more information consult the documentation at https://materialize.com/docs/sql/create-role/#details
+db error: ERROR: SUPERUSER, PASSWORD, and LOGIN attributes is not supported in this environment. For more information consult the documentation at https://materialize.com/docs/sql/create-role/#details
 
 simple conn=regress_role_admin,user=regress_role_admin
 CREATE ROLE regress_createrole;
@@ -163,10 +165,15 @@ CREATE ROLE regress_connection_limit CONNECTION LIMIT 5;
 ----
 db error: ERROR: Expected end of statement, found CONNECTION
 
+# You might think to yourself "why is creating a role with PASSWORD NULL
+# allowed? Especially when self hosted auth isn't enabled?"
+# The answer is unsatisfying: it's a legacy behavior from Postgres.
+# Creating a role with a null password is the same as not specifying a password at all.
+# So, uh, sure...
 simple conn=regress_role_admin,user=regress_role_admin
 CREATE ROLE regress_password_null PASSWORD NULL;
 ----
-db error: ERROR: Expected end of statement, found PASSWORD
+COMPLETE 0
 
 simple conn=regress_role_admin,user=regress_role_admin
 CREATE ROLE regress_noiseword SYSID 12345;
@@ -231,9 +238,62 @@ db error: ERROR: Expected end of statement, found identifier "noreplication"
 simple conn=regress_role_admin,user=regress_role_admin
 CREATE ROLE regress_noiseword LOGIN;
 ----
-db error: ERROR: LOGIN attribute is not supported, for more information consult the documentation at https://materialize.com/docs/sql/create-role/#details
+db error: ERROR: SUPERUSER, PASSWORD, and LOGIN attributes is not supported in this environment. For more information consult the documentation at https://materialize.com/docs/sql/create-role/#details
 
 simple conn=regress_role_admin,user=regress_role_admin
 CREATE ROLE regress_noiseword NOLOGIN;
 ----
-db error: ERROR: LOGIN attribute is not supported, for more information consult the documentation at https://materialize.com/docs/sql/create-role/#details
+db error: ERROR: SUPERUSER, PASSWORD, and LOGIN attributes is not supported in this environment. For more information consult the documentation at https://materialize.com/docs/sql/create-role/#details
+
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET enable_self_managed_auth = true
+----
+COMPLETE 0
+
+simple conn=regress_role_admin,user=regress_role_admin
+CREATE ROLE password_role WITH PASSWORD 'password';
+----
+COMPLETE 0
+
+simple conn=regress_role_admin,user=regress_role_admin
+CREATE ROLE login_password_role WITH LOGIN PASSWORD 'password';
+----
+COMPLETE 0
+
+simple conn=regress_role_admin,user=regress_role_admin
+ALTER ROLE password_role WITH PASSWORD 'new_password';
+----
+db error: ERROR: permission denied to alter password of role
+DETAIL: You must be a superuser to alter password of role
+
+simple conn=regress_role_admin,user=regress_role_admin
+ALTER ROLE regress_role_admin WITH PASSWORD 'new_password';
+----
+COMPLETE 0
+
+simple conn=regress_role_admin,user=regress_role_admin
+ALTER ROLE password_role WITH PASSWORD NULL;
+----
+COMPLETE 0
+
+simple conn=regress_role_admin,user=regress_role_admin
+ALTER ROLE password_role WITH PASSWORD 123;
+----
+db error: ERROR: Expected literal string, found number "123"
+
+simple conn=regress_role_admin,user=regress_role_admin
+CREATE ROLE superuser_login_password_role WITH SUPERUSER LOGIN PASSWORD 'password';
+----
+db error: ERROR: permission denied to create superuser role
+DETAIL: You must be a superuser to create superuser role
+
+simple conn=regress_role_admin,user=regress_role_admin
+ALTER ROLE password_role WITH SUPERUSER;
+----
+db error: ERROR: permission denied to alter superuser role
+DETAIL: You must be a superuser to alter superuser role
+
+simple conn=regress_role_admin,user=regress_role_admin
+DROP ROLE password_role;
+----
+COMPLETE 0

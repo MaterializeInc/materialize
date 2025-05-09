@@ -54,32 +54,39 @@ After adding the labels, verify that they were successfully applied by running t
 kubectl get nodes --show-labels
 ```
 
-## Metrics service
+## (Optional) Metrics service
 
-The metrics service is required for the `environmentd` pod to function correctly.
+Materialize does not require the Kubernetes metrics service to function. However, if `observability.enabled: true` and `observability.podMetrics.enabled: true` are set in the Helm values file, `environmentd` would expect a running metrics service. Without it, and with `observability` disabled, Materialize will still operate, but metrics will not be available in the web console.
 
+For more information, see the [Metrics Server documentation](https://github.com/kubernetes-sigs/metrics-server/blob/master/README.md). To install the metrics server, follow these steps:
+
+First, add the metrics-server Helm repository:
+
+```bash
+helm repo add metrics-server https://kubernetes-sigs.github.io/metrics-server/
+helm repo update
 ```
-kubectl apply -f https://github.com/kubernetes-sigs/metrics-server/releases/latest/download/components.yaml
+
+Install the metrics server with TLS disabled and proper address types configured:
+
+```bash
+helm install metrics-server metrics-server/metrics-server \
+  --namespace kube-system \
+  --set args="{--kubelet-insecure-tls,--kubelet-preferred-address-types=InternalIP\,Hostname\,ExternalIP}"
 ```
 
-If you get TLS errors, you can disable TLS by editing the `metrics-server` deployment:
-
-```sh
-kubectl edit deployment metrics-server -n kube-system
-```
-
-Then, look for the args section in the deployment and add the following:
-
-```yml
-    args:
-    - --kubelet-insecure-tls
-    - --kubelet-preferred-address-types=InternalIP,Hostname,ExternalIP
-```
+As this is a local testing environment, we are disabling TLS for the metrics server to avoid issues with the `environmentd` pod. This is not recommended for production environments.
 
 Get the metrics server pod status:
 
-```sh
-kubectl get pods -n kube-system | grep metrics-server
+```bash
+kubectl get pods -n kube-system -l app.kubernetes.io/instance=metrics-server
+```
+
+Later on, if you need to uninstall the metrics server, run:
+
+```bash
+helm uninstall metrics-server -n kube-system
 ```
 
 ## (Optional) Test data ingestion with Redpanda and Datagen

@@ -16,7 +16,7 @@ workspace = true
 mz-sql-lexer = { path = "../../../../src/sql-lexer", default-features = false }
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
-wasm-bindgen = "0.2.93"
+wasm-bindgen = "0.2.100"
 lol_alloc = "0.4.1"
 
 [package.metadata.wasm-pack.profile.release]

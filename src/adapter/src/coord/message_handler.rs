@@ -10,29 +10,29 @@
 //! Logic for processing [`Coordinator`] messages. The [`Coordinator`] receives
 //! messages from various sources (ex: controller, clients, background tasks, etc).
 
-use std::collections::{btree_map, BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, btree_map};
 use std::time::{Duration, Instant};
 
 use futures::FutureExt;
 use maplit::btreemap;
 use mz_catalog::memory::objects::ClusterReplicaProcessStatus;
-use mz_controller::clusters::{ClusterEvent, ClusterStatus};
 use mz_controller::ControllerResponse;
+use mz_controller::clusters::{ClusterEvent, ClusterStatus};
 use mz_ore::instrument;
 use mz_ore::now::EpochMillis;
 use mz_ore::option::OptionExt;
 use mz_ore::tracing::OpenTelemetryContext;
 use mz_ore::{soft_assert_or_log, task};
 use mz_persist_client::usage::ShardsUsageReferenced;
-use mz_repr::{Datum, Row};
+use mz_repr::{Datum, Diff, Row};
 use mz_sql::ast::Statement;
 use mz_sql::pure::PurifiedStatement;
 use mz_storage_client::controller::IntrospectionType;
 use mz_storage_types::controller::CollectionMetadata;
 use opentelemetry::trace::TraceContextExt;
-use rand::{rngs, Rng, SeedableRng};
+use rand::{Rng, SeedableRng, rngs};
 use serde_json::json;
-use tracing::{event, info_span, warn, Instrument, Level};
+use tracing::{Instrument, Level, event, info_span, warn};
 use tracing_opentelemetry::OpenTelemetrySpanExt;
 
 use crate::active_compute_sink::{ActiveComputeSink, ActiveComputeSinkRetireReason};
@@ -112,6 +112,13 @@ impl Coordinator {
             Message::LinearizeReads => {
                 self.message_linearize_reads().boxed_local().await;
             }
+            Message::StagedBatches {
+                conn_id,
+                table_id,
+                batches,
+            } => {
+                self.commit_staged_batches(conn_id, table_id, batches);
+            }
             Message::StorageUsageSchedule => {
                 self.schedule_storage_usage_collection().boxed_local().await;
             }
@@ -181,7 +188,7 @@ impl Coordinator {
                                 mz_storage_client::controller::IntrospectionType::PrivatelinkConnectionStatusHistory,
                                 events
                                     .into_iter()
-                                    .map(|e| (mz_repr::Row::from(e), 1))
+                                    .map(|e| (mz_repr::Row::from(e), Diff::ONE))
                                     .collect(),
                             );
                 }
@@ -412,14 +419,17 @@ impl Coordinator {
                 let old = std::mem::replace(m, Some(new.clone()));
                 if old.as_ref() != Some(&new) {
                     let retractions = old.map(|old| {
-                        self.catalog()
-                            .state()
-                            .pack_replica_metric_updates(replica_id, &old, -1)
+                        self.catalog().state().pack_replica_metric_updates(
+                            replica_id,
+                            &old,
+                            Diff::MINUS_ONE,
+                        )
                     });
-                    let insertions = self
-                        .catalog()
-                        .state()
-                        .pack_replica_metric_updates(replica_id, &new, 1);
+                    let insertions = self.catalog().state().pack_replica_metric_updates(
+                        replica_id,
+                        &new,
+                        Diff::ONE,
+                    );
                     let updates = if let Some(retractions) = retractions {
                         retractions
                             .into_iter()
@@ -432,7 +442,8 @@ impl Coordinator {
                         .catalog()
                         .state()
                         .resolve_builtin_table_updates(updates);
-                    self.builtin_table_update().background(updates);
+                    // We don't care about when the write finishes.
+                    let _notify = self.builtin_table_update().background(updates);
                 }
             }
             ControllerResponse::WatchSetFinished(ws_ids) => {
@@ -713,7 +724,7 @@ impl Coordinator {
                 ]);
                 self.controller.storage.append_introspection_updates(
                     IntrospectionType::ReplicaStatusHistory,
-                    vec![(row, 1)],
+                    vec![(row, Diff::ONE)],
                 );
             }
 
@@ -727,7 +738,7 @@ impl Coordinator {
                     event.replica_id,
                     event.process_id,
                     old_process_status,
-                    -1,
+                    Diff::MINUS_ONE,
                 );
             let builtin_table_retraction = self
                 .catalog()
@@ -742,7 +753,7 @@ impl Coordinator {
                 event.replica_id,
                 event.process_id,
                 &new_process_status,
-                1,
+                Diff::ONE,
             );
             let builtin_table_addition = self
                 .catalog()
@@ -756,13 +767,8 @@ impl Coordinator {
             );
 
             let builtin_table_updates = vec![builtin_table_retraction, builtin_table_addition];
-
-            self.builtin_table_update()
-                .execute(builtin_table_updates)
-                .await
-                .0
-                .instrument(info_span!("coord::message_cluster_event::table_updates"))
-                .await;
+            // Returns a Future that completes when the Builtin Table write is completed.
+            let builtin_table_completion = self.builtin_table_update().defer(builtin_table_updates);
 
             let cluster = self.catalog().get_cluster(event.cluster_id);
             let replica = cluster.replica(event.replica_id).expect("Replica exists");
@@ -771,12 +777,24 @@ impl Coordinator {
                 .get_cluster_replica_status(event.cluster_id, event.replica_id);
 
             if old_replica_status != new_replica_status {
-                self.broadcast_notice(AdapterNotice::ClusterReplicaStatusChanged {
+                let notifier = self.broadcast_notice_tx();
+                let notice = AdapterNotice::ClusterReplicaStatusChanged {
                     cluster: cluster.name.clone(),
                     replica: replica.name.clone(),
                     status: new_replica_status,
                     time: event.time,
-                });
+                };
+                // In a separate task, so we don't block the Coordinator, wait for the builtin
+                // table update to complete, and then notify active sessions.
+                mz_ore::task::spawn(
+                    || format!("cluster_event-{}-{}", event.cluster_id, event.replica_id),
+                    async move {
+                        // Wait for the builtin table updates to complete.
+                        builtin_table_completion.await;
+                        // Notify all sessions that were active at the time the cluster status changed.
+                        (notifier)(notice)
+                    },
+                );
             }
         }
     }

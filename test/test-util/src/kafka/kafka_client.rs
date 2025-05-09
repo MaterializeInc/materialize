@@ -12,11 +12,11 @@
 use std::time::Duration;
 
 use anyhow::Context;
+use mz_kafka_util::admin::EnsureTopicConfig;
+use mz_kafka_util::client::{MzClientContext, create_new_client_config_simple};
 use rdkafka::admin::{AdminClient, AdminOptions, NewTopic, TopicReplication};
 use rdkafka::error::KafkaError;
 use rdkafka::producer::{DeliveryFuture, FutureProducer, FutureRecord};
-
-use mz_kafka_util::client::{create_new_client_config_simple, MzClientContext};
 
 pub struct KafkaClient {
     producer: FutureProducer<MzClientContext>,
@@ -66,7 +66,7 @@ impl KafkaClient {
             topic = topic.set(key, val);
         }
 
-        mz_kafka_util::admin::ensure_topic(&client, &admin_opts, &topic)
+        mz_kafka_util::admin::ensure_topic(&client, &admin_opts, &topic, EnsureTopicConfig::Check)
             .await
             .context(format!("creating Kafka topic: {}", topic_name))?;
 

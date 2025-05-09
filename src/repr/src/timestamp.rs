@@ -11,6 +11,7 @@ use std::convert::TryFrom;
 use std::num::TryFromIntError;
 use std::time::Duration;
 
+use columnar::Columnar;
 use dec::TryFromDecimalError;
 use mz_proto::{RustType, TryFromProtoError};
 use proptest_derive::Arbitrary;
@@ -34,7 +35,9 @@ include!(concat!(env!("OUT_DIR"), "/mz_repr.timestamp.rs"));
     Hash,
     Default,
     Arbitrary,
+    Columnar,
 )]
+#[columnar(derive(PartialEq, Eq, PartialOrd, Ord))]
 pub struct Timestamp {
     /// note no `pub`.
     internal: u64,
@@ -467,16 +470,10 @@ impl columnation::Columnation for Timestamp {
     type InnerRegion = columnation::CopyRegion<Timestamp>;
 }
 
-mod flatcontainer {
-    use flatcontainer::{IntoOwned, MirrorRegion};
-    use mz_ore::flatcontainer::MzRegionPreference;
+mod differential {
+    use differential_dataflow::IntoOwned;
 
     use crate::Timestamp;
-
-    impl MzRegionPreference for Timestamp {
-        type Owned = Self;
-        type Region = MirrorRegion<Timestamp>;
-    }
 
     impl<'a> IntoOwned<'a> for Timestamp {
         type Owned = Self;

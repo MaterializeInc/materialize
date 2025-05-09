@@ -14,6 +14,7 @@
 use std::collections::btree_map::Entry;
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Debug;
+use std::future::Future;
 use std::mem;
 use std::net::IpAddr;
 use std::sync::Arc;
@@ -24,24 +25,25 @@ use itertools::Itertools;
 use mz_adapter_types::connection::ConnectionId;
 use mz_build_info::{BuildInfo, DUMMY_BUILD_INFO};
 use mz_controller_types::ClusterId;
-use mz_ore::metrics::MetricsRegistry;
+use mz_ore::metrics::{MetricsFutureExt, MetricsRegistry};
 use mz_ore::now::{EpochMillis, NowFn};
 use mz_pgwire_common::Format;
 use mz_repr::role_id::RoleId;
-use mz_repr::user::ExternalUserMetadata;
-use mz_repr::{CatalogItemId, Datum, Diff, Row, RowIterator, ScalarType, TimestampManipulation};
+use mz_repr::user::{ExternalUserMetadata, InternalUserMetadata};
+use mz_repr::{CatalogItemId, Datum, Row, RowIterator, ScalarType, TimestampManipulation};
 use mz_sql::ast::{AstInfo, Raw, Statement, TransactionAccessMode};
 use mz_sql::plan::{Params, PlanContext, QueryWhen, StatementDesc};
 use mz_sql::session::metadata::SessionMetadata;
 use mz_sql::session::user::{
-    RoleMetadata, User, INTERNAL_USER_NAME_TO_DEFAULT_CLUSTER, SYSTEM_USER,
+    INTERNAL_USER_NAME_TO_DEFAULT_CLUSTER, RoleMetadata, SYSTEM_USER, User,
 };
 use mz_sql::session::vars::IsolationLevel;
 pub use mz_sql::session::vars::{
-    EndTransactionAction, SessionVars, Var, DEFAULT_DATABASE_NAME, SERVER_MAJOR_VERSION,
-    SERVER_MINOR_VERSION, SERVER_PATCH_VERSION,
+    DEFAULT_DATABASE_NAME, EndTransactionAction, SERVER_MAJOR_VERSION, SERVER_MINOR_VERSION,
+    SERVER_PATCH_VERSION, SessionVars, Var,
 };
 use mz_sql_parser::ast::TransactionIsolationLevel;
+use mz_storage_client::client::TableData;
 use mz_storage_types::sources::Timeline;
 use qcell::{QCell, QCellOwner};
 use rand::Rng;
@@ -49,16 +51,17 @@ use tokio::sync::mpsc::{self, UnboundedReceiver, UnboundedSender};
 use tokio::sync::watch;
 use uuid::Uuid;
 
+use crate::AdapterNotice;
 use crate::catalog::CatalogState;
 use crate::client::RecordFirstRowStream;
+use crate::coord::ExplainContext;
+use crate::coord::appends::BuiltinTableAppendNotify;
 use crate::coord::in_memory_oracle::InMemoryTimestampOracle;
 use crate::coord::peek::PeekResponseUnary;
 use crate::coord::statement_logging::PreparedStatementLoggingInfo;
 use crate::coord::timestamp_selection::{TimestampContext, TimestampDetermination};
-use crate::coord::ExplainContext;
 use crate::error::AdapterError;
 use crate::metrics::{Metrics, SessionMetrics};
-use crate::AdapterNotice;
 
 const DUMMY_CONNECTION_ID: ConnectionId = ConnectionId::Static(0);
 
@@ -78,6 +81,9 @@ where
     transaction: TransactionStatus<T>,
     pcx: Option<PlanContext>,
     metrics: SessionMetrics,
+    #[derivative(Debug = "ignore")]
+    builtin_updates: Option<BuiltinTableAppendNotify>,
+
     /// The role metadata of the current session.
     ///
     /// Invariant: role_metadata must be `Some` after the user has
@@ -198,6 +204,8 @@ pub struct SessionConfig {
     /// An optional receiver that the session will periodically check for
     /// updates to a user's external metadata.
     pub external_metadata_rx: Option<watch::Receiver<ExternalUserMetadata>>,
+    /// The metadata of the user associated with the session.
+    pub internal_user_metadata: Option<InternalUserMetadata>,
     /// Helm chart version
     pub helm_chart_version: Option<String>,
 }
@@ -281,6 +289,7 @@ impl<T: TimestampManipulation> Session<T> {
                 user: SYSTEM_USER.name.clone(),
                 client_ip: None,
                 external_metadata_rx: None,
+                internal_user_metadata: None,
                 helm_chart_version: None,
             },
             metrics,
@@ -297,6 +306,7 @@ impl<T: TimestampManipulation> Session<T> {
             user,
             client_ip,
             mut external_metadata_rx,
+            internal_user_metadata,
             helm_chart_version,
         }: SessionConfig,
         metrics: SessionMetrics,
@@ -305,6 +315,7 @@ impl<T: TimestampManipulation> Session<T> {
         let default_cluster = INTERNAL_USER_NAME_TO_DEFAULT_CLUSTER.get(&user);
         let user = User {
             name: user,
+            internal_metadata: internal_user_metadata,
             external_metadata: external_metadata_rx
                 .as_mut()
                 .map(|rx| rx.borrow_and_update().clone()),
@@ -319,6 +330,7 @@ impl<T: TimestampManipulation> Session<T> {
             transaction: TransactionStatus::Default,
             pcx: None,
             metrics,
+            builtin_updates: None,
             prepared_statements: BTreeMap::new(),
             portals: BTreeMap::new(),
             role_metadata: None,
@@ -327,7 +339,7 @@ impl<T: TimestampManipulation> Session<T> {
             notices_tx,
             notices_rx,
             next_transaction_id: 0,
-            secret_key: rand::thread_rng().gen(),
+            secret_key: rand::thread_rng().r#gen(),
             external_metadata_rx,
             qcell_owner: QCellOwner::new(),
             session_oracles: BTreeMap::new(),
@@ -708,7 +720,7 @@ impl<T: TimestampManipulation> Session<T> {
                     datums: Row::pack(params.iter().map(|(d, _t)| d)),
                     types: params.into_iter().map(|(_d, t)| t).collect(),
                 },
-                result_formats: result_formats.into_iter().map(Into::into).collect(),
+                result_formats,
                 state: PortalState::NotStarted,
                 logging,
             },
@@ -864,6 +876,29 @@ impl<T: TimestampManipulation> Session<T> {
     /// Returns the [`SessionMetrics`] instance associated with this [`Session`].
     pub fn metrics(&self) -> &SessionMetrics {
         &self.metrics
+    }
+
+    /// Sets the `BuiltinTableAppendNotify` for this session.
+    pub fn set_builtin_table_updates(&mut self, fut: BuiltinTableAppendNotify) {
+        let prev = self.builtin_updates.replace(fut);
+        mz_ore::soft_assert_or_log!(prev.is_none(), "replacing old builtin table notify");
+    }
+
+    /// Takes the stashed `BuiltinTableAppendNotify`, if one exists, and returns a [`Future`] that
+    /// waits for the writes to complete.
+    pub fn clear_builtin_table_updates(&mut self) -> Option<impl Future<Output = ()> + 'static> {
+        if let Some(fut) = self.builtin_updates.take() {
+            // Record how long we blocked for, if we blocked at all.
+            let histogram = self
+                .metrics()
+                .session_startup_table_writes_seconds()
+                .clone();
+            Some(async move {
+                fut.wall_time().observe(histogram).await;
+            })
+        } else {
+            None
+        }
     }
 }
 
@@ -1125,6 +1160,34 @@ impl<T: TimestampManipulation> TransactionStatus<T> {
         }
     }
 
+    /// Checks whether the current state of this transaction allows writes
+    /// (adding write ops).
+    /// transaction
+    pub fn allows_writes(&self) -> bool {
+        match self {
+            TransactionStatus::Started(Transaction { ops, access, .. })
+            | TransactionStatus::InTransaction(Transaction { ops, access, .. })
+            | TransactionStatus::InTransactionImplicit(Transaction { ops, access, .. }) => {
+                match ops {
+                    TransactionOps::None => access != &Some(TransactionAccessMode::ReadOnly),
+                    TransactionOps::Peeks { determination, .. } => {
+                        // If-and-only-if peeks thus far do not have a timestamp
+                        // (i.e. they are constant), we can switch to a write
+                        // transaction.
+                        !determination.timestamp_context.contains_timestamp()
+                    }
+                    TransactionOps::Subscribe => false,
+                    TransactionOps::Writes(_) => true,
+                    TransactionOps::SingleStatement { .. } => false,
+                    TransactionOps::DDL { .. } => false,
+                }
+            }
+            TransactionStatus::Default | TransactionStatus::Failed(_) => {
+                unreachable!()
+            }
+        }
+    }
+
     /// Adds operations to the current transaction. An error is produced if they cannot be merged
     /// (i.e., a timestamp-dependent read cannot be merged to an insert).
     ///
@@ -1206,7 +1269,7 @@ impl<T: TimestampManipulation> TransactionStatus<T> {
                         _ => return Err(AdapterError::ReadOnlyTransaction),
                     },
                     TransactionOps::Subscribe => {
-                        return Err(AdapterError::SubscribeOnlyTransaction)
+                        return Err(AdapterError::SubscribeOnlyTransaction);
                     }
                     TransactionOps::Writes(txn_writes) => match add_ops {
                         TransactionOps::Writes(mut add_writes) => {
@@ -1224,7 +1287,7 @@ impl<T: TimestampManipulation> TransactionStatus<T> {
                         }
                     },
                     TransactionOps::SingleStatement { .. } => {
-                        return Err(AdapterError::SingleStatementTransaction)
+                        return Err(AdapterError::SingleStatementTransaction);
                     }
                     TransactionOps::DDL {
                         ops: og_ops,
@@ -1447,7 +1510,7 @@ pub struct WriteOp {
     /// The target table.
     pub id: CatalogItemId,
     /// The data rows.
-    pub rows: Vec<(Row, Diff)>,
+    pub rows: TableData,
 }
 
 /// Whether a transaction requires linearization.

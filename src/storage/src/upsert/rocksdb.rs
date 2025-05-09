@@ -10,13 +10,13 @@
 //! An `UpsertStateBackend` that stores values in RocksDB.
 
 use mz_rocksdb::{KeyUpdate, RocksDBInstance};
-use serde::{de::DeserializeOwned, Serialize};
+use serde::{Serialize, de::DeserializeOwned};
 
+use super::UpsertKey;
 use super::types::{
     GetStats, MergeStats, MergeValue, PutStats, PutValue, StateValue, UpsertStateBackend,
     UpsertValueAndSize, ValueMetadata,
 };
-use super::UpsertKey;
 
 /// A `UpsertStateBackend` implementation backed by RocksDB.
 /// This is currently untested, and simply compiles.
@@ -85,7 +85,7 @@ where
         m_stats.written_merge_operands += stats.processed_updates;
         m_stats.size_written += stats.size_written;
         if let Some(diff) = stats.size_diff {
-            m_stats.size_diff += diff;
+            m_stats.size_diff += diff.into_inner();
         }
         Ok(m_stats)
     }

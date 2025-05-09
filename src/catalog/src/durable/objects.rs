@@ -48,8 +48,8 @@ use mz_sql::plan::{ClusterSchedule, NetworkPolicyRule};
 use proptest_derive::Arbitrary;
 
 use crate::builtin::RUNTIME_ALTERABLE_FINGERPRINT_SENTINEL;
-use crate::durable::objects::serialization::proto;
 use crate::durable::Epoch;
+use crate::durable::objects::serialization::proto;
 
 // Structs used to pass information to outside modules.
 
@@ -206,6 +206,44 @@ impl DurableType for Role {
 
     fn key(&self) -> Self::Key {
         RoleKey { id: self.id }
+    }
+}
+
+#[derive(Debug, Clone, Ord, PartialOrd, PartialEq, Eq)]
+pub struct RoleAuth {
+    pub role_id: RoleId,
+    pub password_hash: Option<String>,
+    pub updated_at: u64,
+}
+
+impl DurableType for RoleAuth {
+    type Key = RoleAuthKey;
+    type Value = RoleAuthValue;
+
+    fn into_key_value(self) -> (Self::Key, Self::Value) {
+        (
+            RoleAuthKey {
+                role_id: self.role_id,
+            },
+            RoleAuthValue {
+                password_hash: self.password_hash,
+                updated_at: self.updated_at,
+            },
+        )
+    }
+
+    fn from_key_value(key: Self::Key, value: Self::Value) -> Self {
+        Self {
+            role_id: key.role_id,
+            password_hash: value.password_hash,
+            updated_at: value.updated_at,
+        }
+    }
+
+    fn key(&self) -> Self::Key {
+        RoleAuthKey {
+            role_id: self.role_id,
+        }
     }
 }
 
@@ -507,6 +545,12 @@ pub struct Item {
     pub owner_id: RoleId,
     pub privileges: Vec<MzAclItem>,
     pub extra_versions: BTreeMap<RelationVersion, GlobalId>,
+}
+
+impl Item {
+    pub fn item_type(&self) -> CatalogItemType {
+        item_type(&self.create_sql)
+    }
 }
 
 impl DurableType for Item {
@@ -1106,6 +1150,7 @@ pub struct Snapshot {
     pub databases: BTreeMap<proto::DatabaseKey, proto::DatabaseValue>,
     pub schemas: BTreeMap<proto::SchemaKey, proto::SchemaValue>,
     pub roles: BTreeMap<proto::RoleKey, proto::RoleValue>,
+    pub role_auth: BTreeMap<proto::RoleAuthKey, proto::RoleAuthValue>,
     pub items: BTreeMap<proto::ItemKey, proto::ItemValue>,
     pub comments: BTreeMap<proto::CommentKey, proto::CommentValue>,
     pub clusters: BTreeMap<proto::ClusterKey, proto::ClusterValue>,
@@ -1289,32 +1334,36 @@ pub struct ItemValue {
 }
 
 impl ItemValue {
-    pub(crate) fn item_type(&self) -> CatalogItemType {
-        // NOTE(benesch): the implementation of this method is hideous, but is
-        // there a better alternative? Storing the object type alongside the
-        // `create_sql` would introduce the possibility of skew.
-        let mut tokens = self.create_sql.split_whitespace();
-        assert_eq!(tokens.next(), Some("CREATE"));
-        match tokens.next() {
-            Some("TABLE") => CatalogItemType::Table,
-            Some("SOURCE") | Some("SUBSOURCE") => CatalogItemType::Source,
-            Some("SINK") => CatalogItemType::Sink,
-            Some("VIEW") => CatalogItemType::View,
-            Some("MATERIALIZED") => {
-                assert_eq!(tokens.next(), Some("VIEW"));
-                CatalogItemType::MaterializedView
-            }
-            Some("CONTINUAL") => {
-                assert_eq!(tokens.next(), Some("TASK"));
-                CatalogItemType::ContinualTask
-            }
-            Some("INDEX") => CatalogItemType::Index,
-            Some("TYPE") => CatalogItemType::Type,
-            Some("FUNCTION") => CatalogItemType::Func,
-            Some("SECRET") => CatalogItemType::Secret,
-            Some("CONNECTION") => CatalogItemType::Connection,
-            _ => panic!("unexpected create sql: {}", self.create_sql),
+    pub fn item_type(&self) -> CatalogItemType {
+        item_type(&self.create_sql)
+    }
+}
+
+fn item_type(create_sql: &str) -> CatalogItemType {
+    // NOTE(benesch): the implementation of this method is hideous, but is
+    // there a better alternative? Storing the object type alongside the
+    // `create_sql` would introduce the possibility of skew.
+    let mut tokens = create_sql.split_whitespace();
+    assert_eq!(tokens.next(), Some("CREATE"));
+    match tokens.next() {
+        Some("TABLE") => CatalogItemType::Table,
+        Some("SOURCE") | Some("SUBSOURCE") => CatalogItemType::Source,
+        Some("SINK") => CatalogItemType::Sink,
+        Some("VIEW") => CatalogItemType::View,
+        Some("MATERIALIZED") => {
+            assert_eq!(tokens.next(), Some("VIEW"));
+            CatalogItemType::MaterializedView
         }
+        Some("CONTINUAL") => {
+            assert_eq!(tokens.next(), Some("TASK"));
+            CatalogItemType::ContinualTask
+        }
+        Some("INDEX") => CatalogItemType::Index,
+        Some("TYPE") => CatalogItemType::Type,
+        Some("FUNCTION") => CatalogItemType::Func,
+        Some("SECRET") => CatalogItemType::Secret,
+        Some("CONNECTION") => CatalogItemType::Connection,
+        _ => panic!("unexpected create sql: {}", create_sql),
     }
 }
 
@@ -1431,6 +1480,20 @@ pub struct SystemPrivilegesKey {
 #[derive(Debug, Clone, PartialOrd, PartialEq, Eq, Ord, Hash)]
 pub struct SystemPrivilegesValue {
     pub(crate) acl_mode: AclMode,
+}
+
+#[derive(Debug, Clone, PartialOrd, PartialEq, Eq, Ord, Hash)]
+pub struct RoleAuthKey {
+    // TODO(auth): Depending on what the future holds, here is where
+    // we might also want to key by a `version` field.
+    // That way we can store password versions or what have you.
+    pub(crate) role_id: RoleId,
+}
+
+#[derive(Debug, Clone, PartialOrd, PartialEq, Eq, Ord, Hash)]
+pub struct RoleAuthValue {
+    pub(crate) password_hash: Option<String>,
+    pub(crate) updated_at: u64,
 }
 
 #[cfg(test)]

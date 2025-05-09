@@ -112,6 +112,7 @@ pub static MZ_SOURCE_STATUS_HISTORY_DESC: LazyLock<RelationDesc> = LazyLock::new
         .with_column("status", ScalarType::String.nullable(false))
         .with_column("error", ScalarType::String.nullable(true))
         .with_column("details", ScalarType::Jsonb.nullable(true))
+        .with_column("replica_id", ScalarType::String.nullable(true))
         .finish()
 });
 
@@ -125,6 +126,7 @@ pub static MZ_SINK_STATUS_HISTORY_DESC: LazyLock<RelationDesc> = LazyLock::new(|
         .with_column("status", ScalarType::String.nullable(false))
         .with_column("error", ScalarType::String.nullable(true))
         .with_column("details", ScalarType::Jsonb.nullable(true))
+        .with_column("replica_id", ScalarType::String.nullable(true))
         .finish()
 });
 
@@ -176,5 +178,21 @@ pub static WALLCLOCK_LAG_HISTORY_DESC: LazyLock<RelationDesc> = LazyLock::new(||
             "occurred_at",
             ScalarType::TimestampTz { precision: None }.nullable(false),
         )
+        .finish()
+});
+
+pub static WALLCLOCK_GLOBAL_LAG_HISTOGRAM_RAW_DESC: LazyLock<RelationDesc> = LazyLock::new(|| {
+    RelationDesc::builder()
+        .with_column(
+            "period_start",
+            ScalarType::TimestampTz { precision: None }.nullable(false),
+        )
+        .with_column(
+            "period_end",
+            ScalarType::TimestampTz { precision: None }.nullable(false),
+        )
+        .with_column("object_id", ScalarType::String.nullable(false))
+        .with_column("lag_seconds", ScalarType::UInt64.nullable(false))
+        .with_column("labels", ScalarType::Jsonb.nullable(false))
         .finish()
 });

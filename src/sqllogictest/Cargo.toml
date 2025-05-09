@@ -10,22 +10,24 @@ publish = false
 workspace = true
 
 [dependencies]
-anyhow = "1.0.66"
-bytes = "1.3.0"
-chrono = { version = "0.4.35", default-features = false, features = ["std"] }
+anyhow = "1.0.98"
+bytes = "1.10.1"
+chrono = { version = "0.4.39", default-features = false, features = ["std"] }
 clap = { version = "4.5.23", features = ["derive"] }
 dec = "0.4.8"
 fallible-iterator = "0.2.0"
-futures = "0.3.25"
-itertools = "0.12.1"
+futures = "0.3.31"
+itertools = "0.14.0"
 junit-report = "0.8.3"
-md-5 = "0.10.5"
+md-5 = "0.10.6"
+mz-adapter-types = { path = "../adapter-types" }
 mz-build-info = { path = "../build-info" }
 mz-catalog = { path = "../catalog" }
 mz-controller = { path = "../controller" }
 mz-dyncfgs = { path = "../dyncfgs" }
 mz-environmentd = { path = "../environmentd", default-features = false }
-mz-ore = { path = "../ore", features = ["async", "tracing_"] }
+mz-license-keys = { path = "../license-keys" }
+mz-ore = { path = "../ore", features = ["async", "panic", "tracing"] }
 mz-orchestrator = { path = "../orchestrator" }
 mz-orchestrator-process = { path = "../orchestrator-process" }
 mz-orchestrator-tracing = { path = "../orchestrator-tracing" }
@@ -40,23 +42,23 @@ mz-sql-parser = { path = "../sql-parser" }
 mz-storage-types = { path = "../storage-types" }
 mz-tracing = { path = "../tracing" }
 postgres-protocol = { version = "0.6.5" }
-regex = "1.7.0"
+regex = "1.11.1"
 reqwest = { version = "0.11.13", features = ["json"] }
 shell-words = "1.1.0"
-serde_json = "1.0.125"
-tempfile = "3.14.0"
+serde_json = "1.0.127"
+tempfile = "3.19.1"
 time = "0.3.17"
 tracing = "0.1.37"
-tokio = "1.38.0"
+tokio = "1.44.1"
 tokio-postgres = { version = "0.7.8", features = [
-  "with-chrono-0_4",
-  "with-uuid-1",
-  "with-serde_json-1",
+    "with-chrono-0_4",
+    "with-uuid-1",
+    "with-serde_json-1",
 ] }
-tokio-stream = { version = "0.1.11", features = ["net"] }
-tower-http = { version = "0.5.2", features = ["cors"] }
-uuid = "1.2.2"
-walkdir = "2.3.2"
+tokio-stream = { version = "0.1.17", features = ["net"] }
+tower-http = { version = "0.6.2", features = ["cors"] }
+uuid = "1.16.0"
+walkdir = "2.5.0"
 workspace-hack = { version = "0.0.0", path = "../workspace-hack", optional = true }
 
 [package.metadata.cargo-udeps.ignore]

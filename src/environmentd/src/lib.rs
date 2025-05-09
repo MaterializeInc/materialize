@@ -21,21 +21,24 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 use std::{env, io};
 
-use anyhow::{anyhow, Context};
+use anyhow::{Context, anyhow};
 use derivative::Derivative;
 use ipnet::IpNet;
-use mz_adapter::config::{system_parameter_sync, SystemParameterSyncConfig};
+use mz_adapter::config::{SystemParameterSyncConfig, system_parameter_sync};
 use mz_adapter::webhook::WebhookConcurrencyLimiter;
-use mz_adapter::{load_remote_system_parameters, AdapterError};
+use mz_adapter::{AdapterError, load_remote_system_parameters};
+use mz_adapter_types::bootstrap_builtin_cluster_config::BootstrapBuiltinClusterConfig;
 use mz_adapter_types::dyncfgs::{
-    ENABLE_0DT_DEPLOYMENT, ENABLE_0DT_DEPLOYMENT_PANIC_AFTER_TIMEOUT, WITH_0DT_DEPLOYMENT_MAX_WAIT,
+    ENABLE_0DT_DEPLOYMENT, ENABLE_0DT_DEPLOYMENT_PANIC_AFTER_TIMEOUT,
+    WITH_0DT_DEPLOYMENT_DDL_CHECK_INTERVAL, WITH_0DT_DEPLOYMENT_MAX_WAIT,
 };
-use mz_build_info::{build_info, BuildInfo};
+use mz_build_info::{BuildInfo, build_info};
 use mz_catalog::config::ClusterReplicaSizeMap;
 use mz_catalog::durable::BootstrapArgs;
 use mz_cloud_resources::CloudResourceController;
 use mz_controller::ControllerConfig;
 use mz_frontegg_auth::Authenticator as FronteggAuthentication;
+use mz_license_keys::ValidatedLicenseKey;
 use mz_ore::future::OreFutureExt;
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::NowFn;
@@ -52,7 +55,7 @@ use mz_sql::catalog::EnvironmentId;
 use mz_sql::session::vars::{Value, VarInput};
 use tokio::sync::oneshot;
 use tower_http::cors::AllowOrigin;
-use tracing::{info, info_span, Instrument};
+use tracing::{Instrument, info, info_span};
 
 use crate::deployment::preflight::{PreflightInput, PreflightOutput};
 use crate::deployment::state::DeploymentState;
@@ -104,6 +107,10 @@ pub struct Config {
     /// The URL of the Materialize console to proxy from the /internal-console
     /// endpoint on the internal HTTP server.
     pub internal_console_redirect_url: Option<String>,
+    /// Whether to enable self hosted auth
+    pub self_hosted_auth: bool,
+    /// Whether to enable self hosted auth on the internal pg port
+    pub self_hosted_auth_internal: bool,
 
     // === Controller options. ===
     /// Storage and compute controller configuration.
@@ -152,21 +159,25 @@ pub struct Config {
     pub bootstrap_role: Option<String>,
     /// The size of the default cluster replica if bootstrapping.
     pub bootstrap_default_cluster_replica_size: String,
-    /// The size of the builtin system cluster replicas if bootstrapping.
-    pub bootstrap_builtin_system_cluster_replica_size: String,
-    /// The size of the builtin catalog server cluster replicas if bootstrapping.
-    pub bootstrap_builtin_catalog_server_cluster_replica_size: String,
-    /// The size of the builtin probe cluster replicas if bootstrapping.
-    pub bootstrap_builtin_probe_cluster_replica_size: String,
-    /// The size of the builtin support cluster replicas if bootstrapping.
-    pub bootstrap_builtin_support_cluster_replica_size: String,
-    /// The size of the builtin analytics cluster replicas if bootstrapping.
-    pub bootstrap_builtin_analytics_cluster_replica_size: String,
+    /// The default number of replicas if bootstrapping.
+    pub bootstrap_default_cluster_replication_factor: u32,
+    /// The config of the builtin system cluster replicas if bootstrapping.
+    pub bootstrap_builtin_system_cluster_config: BootstrapBuiltinClusterConfig,
+    /// The config of the builtin catalog server cluster replicas if bootstrapping.
+    pub bootstrap_builtin_catalog_server_cluster_config: BootstrapBuiltinClusterConfig,
+    /// The config of the builtin probe cluster replicas if bootstrapping.
+    pub bootstrap_builtin_probe_cluster_config: BootstrapBuiltinClusterConfig,
+    /// The config of the builtin support cluster replicas if bootstrapping.
+    pub bootstrap_builtin_support_cluster_config: BootstrapBuiltinClusterConfig,
+    /// The config of the builtin analytics cluster replicas if bootstrapping.
+    pub bootstrap_builtin_analytics_cluster_config: BootstrapBuiltinClusterConfig,
     /// Values to set for system parameters, if those system parameters have not
     /// already been set by the system user.
     pub system_parameter_defaults: BTreeMap<String, String>,
     /// Helm chart version
     pub helm_chart_version: Option<String>,
+    /// Configuration managed by license keys
+    pub license_key: ValidatedLicenseKey,
 
     // === AWS options. ===
     /// The AWS account ID, which will be used to generate ARNs for
@@ -384,7 +395,7 @@ impl Listeners {
 
         // Determine whether we should perform a 0dt deployment.
         let enable_0dt_deployment = {
-            let default = config
+            let cli_default = config
                 .system_parameter_defaults
                 .get(ENABLE_0DT_DEPLOYMENT.name())
                 .map(|x| {
@@ -397,23 +408,25 @@ impl Listeners {
                     })
                 })
                 .transpose()?;
+            let compiled_default = ENABLE_0DT_DEPLOYMENT.default().clone();
             let ld = get_ld_value("enable_0dt_deployment", &remote_system_parameters, |x| {
                 strconv::parse_bool(x).map_err(|x| x.to_string())
             })?;
             let catalog = openable_adapter_storage.get_enable_0dt_deployment().await?;
-            let computed = ld.or(catalog).or(default).unwrap_or(false);
+            let computed = ld.or(catalog).or(cli_default).unwrap_or(compiled_default);
             info!(
                 %computed,
                 ?ld,
                 ?catalog,
-                ?default,
+                ?cli_default,
+                ?compiled_default,
                 "determined value for enable_0dt_deployment system parameter",
             );
             computed
         };
         // Determine the maximum wait time when doing a 0dt deployment.
         let with_0dt_deployment_max_wait = {
-            let default = config
+            let cli_default = config
                 .system_parameter_defaults
                 .get(WITH_0DT_DEPLOYMENT_MAX_WAIT.name())
                 .map(|x| {
@@ -426,6 +439,7 @@ impl Listeners {
                     })
                 })
                 .transpose()?;
+            let compiled_default = WITH_0DT_DEPLOYMENT_MAX_WAIT.default().clone();
             let ld = get_ld_value(
                 WITH_0DT_DEPLOYMENT_MAX_WAIT.name(),
                 &remote_system_parameters,
@@ -443,24 +457,68 @@ impl Listeners {
             let catalog = openable_adapter_storage
                 .get_0dt_deployment_max_wait()
                 .await?;
-            let computed = ld
-                .or(catalog)
-                .or(default)
-                .unwrap_or(WITH_0DT_DEPLOYMENT_MAX_WAIT.default().clone());
+            let computed = ld.or(catalog).or(cli_default).unwrap_or(compiled_default);
             info!(
                 ?computed,
                 ?ld,
                 ?catalog,
-                ?default,
+                ?cli_default,
+                ?compiled_default,
                 "determined value for {} system parameter",
                 WITH_0DT_DEPLOYMENT_MAX_WAIT.name()
             );
             computed
         };
+        // Determine the DDL check interval when doing a 0dt deployment.
+        let with_0dt_deployment_ddl_check_interval = {
+            let cli_default = config
+                .system_parameter_defaults
+                .get(WITH_0DT_DEPLOYMENT_DDL_CHECK_INTERVAL.name())
+                .map(|x| {
+                    Duration::parse(VarInput::Flat(x)).map_err(|err| {
+                        anyhow!(
+                            "failed to parse default for {}: {:?}",
+                            WITH_0DT_DEPLOYMENT_DDL_CHECK_INTERVAL.name(),
+                            err
+                        )
+                    })
+                })
+                .transpose()?;
+            let compiled_default = WITH_0DT_DEPLOYMENT_DDL_CHECK_INTERVAL.default().clone();
+            let ld = get_ld_value(
+                WITH_0DT_DEPLOYMENT_DDL_CHECK_INTERVAL.name(),
+                &remote_system_parameters,
+                |x| {
+                    Duration::parse(VarInput::Flat(x)).map_err(|err| {
+                        format!(
+                            "failed to parse LD value {} for {}: {:?}",
+                            x,
+                            WITH_0DT_DEPLOYMENT_DDL_CHECK_INTERVAL.name(),
+                            err
+                        )
+                    })
+                },
+            )?;
+            let catalog = openable_adapter_storage
+                .get_0dt_deployment_ddl_check_interval()
+                .await?;
+            let computed = ld.or(catalog).or(cli_default).unwrap_or(compiled_default);
+            info!(
+                ?computed,
+                ?ld,
+                ?catalog,
+                ?cli_default,
+                ?compiled_default,
+                "determined value for {} system parameter",
+                WITH_0DT_DEPLOYMENT_DDL_CHECK_INTERVAL.name()
+            );
+            computed
+        };
+
         // Determine whether we should panic if we reach the maximum wait time
         // without the preflight checks succeeding.
         let enable_0dt_deployment_panic_after_timeout = {
-            let default = config
+            let cli_default = config
                 .system_parameter_defaults
                 .get(ENABLE_0DT_DEPLOYMENT_PANIC_AFTER_TIMEOUT.name())
                 .map(|x| {
@@ -473,6 +531,7 @@ impl Listeners {
                     })
                 })
                 .transpose()?;
+            let compiled_default = ENABLE_0DT_DEPLOYMENT_PANIC_AFTER_TIMEOUT.default().clone();
             let ld = get_ld_value(
                 "enable_0dt_deployment_panic_after_timeout",
                 &remote_system_parameters,
@@ -481,19 +540,17 @@ impl Listeners {
             let catalog = openable_adapter_storage
                 .get_enable_0dt_deployment_panic_after_timeout()
                 .await?;
-            let computed = ld.or(catalog).or(default).unwrap_or(false);
+            let computed = ld.or(catalog).or(cli_default).unwrap_or(compiled_default);
             info!(
                 %computed,
                 ?ld,
                 ?catalog,
-                ?default,
+                ?cli_default,
+                ?compiled_default,
                 "determined value for enable_0dt_deployment_panic_after_timeout system parameter",
             );
             computed
         };
-
-        // TODO(aljoscha): We have to do the same dance for
-        // `0dt_deployment_max_wait`, and pass it to the preflight check.
 
         // Perform preflight checks.
         //
@@ -502,6 +559,7 @@ impl Listeners {
         let mut caught_up_trigger = None;
         let bootstrap_args = BootstrapArgs {
             default_cluster_replica_size: config.bootstrap_default_cluster_replica_size.clone(),
+            default_cluster_replication_factor: config.bootstrap_default_cluster_replication_factor,
             bootstrap_role: config.bootstrap_role.clone(),
             cluster_replica_size_map: config.cluster_replica_sizes.clone(),
         };
@@ -516,6 +574,7 @@ impl Listeners {
             caught_up_max_wait: with_0dt_deployment_max_wait,
             panic_after_timeout: enable_0dt_deployment_panic_after_timeout,
             bootstrap_args,
+            ddl_check_interval: with_0dt_deployment_ddl_check_interval,
         };
         if enable_0dt_deployment {
             PreflightOutput {
@@ -538,6 +597,7 @@ impl Listeners {
 
         let bootstrap_args = BootstrapArgs {
             default_cluster_replica_size: config.bootstrap_default_cluster_replica_size.clone(),
+            default_cluster_replication_factor: config.bootstrap_default_cluster_replication_factor,
             bootstrap_role: config.bootstrap_role,
             cluster_replica_size_map: config.cluster_replica_sizes.clone(),
         };
@@ -630,15 +690,12 @@ impl Listeners {
             secrets_controller: config.secrets_controller,
             cloud_resource_controller: config.cloud_resource_controller,
             cluster_replica_sizes: config.cluster_replica_sizes,
-            builtin_system_cluster_replica_size: config
-                .bootstrap_builtin_system_cluster_replica_size,
-            builtin_catalog_server_cluster_replica_size: config
-                .bootstrap_builtin_catalog_server_cluster_replica_size,
-            builtin_probe_cluster_replica_size: config.bootstrap_builtin_probe_cluster_replica_size,
-            builtin_support_cluster_replica_size: config
-                .bootstrap_builtin_support_cluster_replica_size,
-            builtin_analytics_cluster_replica_size: config
-                .bootstrap_builtin_analytics_cluster_replica_size,
+            builtin_system_cluster_config: config.bootstrap_builtin_system_cluster_config,
+            builtin_catalog_server_cluster_config: config
+                .bootstrap_builtin_catalog_server_cluster_config,
+            builtin_probe_cluster_config: config.bootstrap_builtin_probe_cluster_config,
+            builtin_support_cluster_config: config.bootstrap_builtin_support_cluster_config,
+            builtin_analytics_cluster_config: config.bootstrap_builtin_analytics_cluster_config,
             availability_zones: config.availability_zones,
             system_parameter_defaults: config.system_parameter_defaults,
             storage_usage_client,
@@ -656,6 +713,7 @@ impl Listeners {
             enable_0dt_deployment,
             caught_up_trigger,
             helm_chart_version: config.helm_chart_version.clone(),
+            license_key: config.license_key,
         })
         .instrument(info_span!("adapter::serve"))
         .await?;
@@ -681,6 +739,7 @@ impl Listeners {
                 tls: pgwire_tls.clone(),
                 adapter_client: adapter_client.clone(),
                 frontegg: config.frontegg.clone(),
+                use_self_hosted_auth: config.self_hosted_auth,
                 metrics: metrics.clone(),
                 internal: false,
                 active_connection_counter: active_connection_counter.clone(),
@@ -711,6 +770,7 @@ impl Listeners {
                 }),
                 adapter_client: adapter_client.clone(),
                 frontegg: None,
+                use_self_hosted_auth: config.self_hosted_auth_internal,
                 metrics: metrics.clone(),
                 internal: true,
                 active_connection_counter: active_connection_counter.clone(),

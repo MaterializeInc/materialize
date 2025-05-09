@@ -7,10 +7,14 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-FROM ubuntu:noble-20241015
+FROM ubuntu:noble-20250404
 
 # Ensure any Rust binaries that crash print a backtrace.
 ENV RUST_BACKTRACE=1
+# Disable backtrace collection in Rust libraries, such as `anyhow`. Collecting
+# backtraces at runtime can be expensive and is known to cause deadlocks
+# (database-issues#9159).
+ENV RUST_LIB_BACKTRACE=0
 
 RUN sed -i -e 's#http://archive\.ubuntu\.com#http://us-east-1.ec2.archive.ubuntu.com#' \
            -e 's#http://security\.ubuntu\.com#http://us-east-1.ec2.archive.ubuntu.com#' \

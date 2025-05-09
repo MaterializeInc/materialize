@@ -340,49 +340,49 @@ SHOW CREATE CONNECTION "FOO"
 ----
 SHOW CREATE CONNECTION "FOO"
 =>
-Show(ShowCreateConnection(ShowCreateConnectionStatement { connection_name: Name(UnresolvedItemName([Ident("FOO")])) }))
+Show(ShowCreateConnection(ShowCreateConnectionStatement { connection_name: Name(UnresolvedItemName([Ident("FOO")])), redacted: false }))
 
 parse-statement
 SHOW CREATE TABLE "FOO"
 ----
 SHOW CREATE TABLE "FOO"
 =>
-Show(ShowCreateTable(ShowCreateTableStatement { table_name: Name(UnresolvedItemName([Ident("FOO")])) }))
+Show(ShowCreateTable(ShowCreateTableStatement { table_name: Name(UnresolvedItemName([Ident("FOO")])), redacted: false }))
 
 parse-statement
 SHOW CREATE VIEW foo
 ----
 SHOW CREATE VIEW foo
 =>
-Show(ShowCreateView(ShowCreateViewStatement { view_name: Name(UnresolvedItemName([Ident("foo")])) }))
+Show(ShowCreateView(ShowCreateViewStatement { view_name: Name(UnresolvedItemName([Ident("foo")])), redacted: false }))
 
 parse-statement
 SHOW CREATE MATERIALIZED VIEW foo
 ----
 SHOW CREATE MATERIALIZED VIEW foo
 =>
-Show(ShowCreateMaterializedView(ShowCreateMaterializedViewStatement { materialized_view_name: Name(UnresolvedItemName([Ident("foo")])) }))
+Show(ShowCreateMaterializedView(ShowCreateMaterializedViewStatement { materialized_view_name: Name(UnresolvedItemName([Ident("foo")])), redacted: false }))
 
 parse-statement
 SHOW CREATE SINK foo
 ----
 SHOW CREATE SINK foo
 =>
-Show(ShowCreateSink(ShowCreateSinkStatement { sink_name: Name(UnresolvedItemName([Ident("foo")])) }))
+Show(ShowCreateSink(ShowCreateSinkStatement { sink_name: Name(UnresolvedItemName([Ident("foo")])), redacted: false }))
 
 parse-statement
 SHOW CREATE INDEX foo
 ----
 SHOW CREATE INDEX foo
 =>
-Show(ShowCreateIndex(ShowCreateIndexStatement { index_name: Name(UnresolvedItemName([Ident("foo")])) }))
+Show(ShowCreateIndex(ShowCreateIndexStatement { index_name: Name(UnresolvedItemName([Ident("foo")])), redacted: false }))
 
 parse-statement
 SHOW CREATE SOURCE foo
 ----
 SHOW CREATE SOURCE foo
 =>
-Show(ShowCreateSource(ShowCreateSourceStatement { source_name: Name(UnresolvedItemName([Ident("foo")])) }))
+Show(ShowCreateSource(ShowCreateSourceStatement { source_name: Name(UnresolvedItemName([Ident("foo")])), redacted: false }))
 
 parse-statement
 SHOW CREATE CLUSTER foo
@@ -805,3 +805,178 @@ SHOW ROLE MEMBERSHIP FOR joe
 SHOW ROLE MEMBERSHIP FOR joe
 =>
 Show(ShowObjects(ShowObjectsStatement { object_type: RoleMembership { role: Some(Ident("joe")) }, from: None, filter: None }))
+
+parse-statement
+SHOW REDACTED CREATE VIEW foo
+----
+SHOW REDACTED CREATE VIEW foo
+=>
+Show(ShowCreateView(ShowCreateViewStatement { view_name: Name(UnresolvedItemName([Ident("foo")])), redacted: true }))
+
+parse-statement
+SHOW REDACTED CREATE MATERIALIZED VIEW foo
+----
+SHOW REDACTED CREATE MATERIALIZED VIEW foo
+=>
+Show(ShowCreateMaterializedView(ShowCreateMaterializedViewStatement { materialized_view_name: Name(UnresolvedItemName([Ident("foo")])), redacted: true }))
+
+parse-statement
+SHOW REDACTED CREATE SOURCE foo
+----
+SHOW REDACTED CREATE SOURCE foo
+=>
+Show(ShowCreateSource(ShowCreateSourceStatement { source_name: Name(UnresolvedItemName([Ident("foo")])), redacted: true }))
+
+parse-statement
+SHOW REDACTED CREATE TABLE foo
+----
+SHOW REDACTED CREATE TABLE foo
+=>
+Show(ShowCreateTable(ShowCreateTableStatement { table_name: Name(UnresolvedItemName([Ident("foo")])), redacted: true }))
+
+parse-statement
+SHOW REDACTED CREATE SINK foo
+----
+SHOW REDACTED CREATE SINK foo
+=>
+Show(ShowCreateSink(ShowCreateSinkStatement { sink_name: Name(UnresolvedItemName([Ident("foo")])), redacted: true }))
+
+parse-statement
+SHOW REDACTED CREATE INDEX foo
+----
+SHOW REDACTED CREATE INDEX foo
+=>
+Show(ShowCreateIndex(ShowCreateIndexStatement { index_name: Name(UnresolvedItemName([Ident("foo")])), redacted: true }))
+
+parse-statement
+SHOW REDACTED CREATE CONNECTION foo
+----
+SHOW REDACTED CREATE CONNECTION foo
+=>
+Show(ShowCreateConnection(ShowCreateConnectionStatement { connection_name: Name(UnresolvedItemName([Ident("foo")])), redacted: true }))
+
+parse-statement
+SHOW REDACTED COLUMNS foo
+----
+error: SHOW REDACTED is only supported for SHOW REDACTED CREATE ...
+SHOW REDACTED COLUMNS foo
+              ^
+
+parse-statement
+SHOW REDACTED OBJECTS
+----
+error: SHOW REDACTED is only supported for SHOW REDACTED CREATE ...
+SHOW REDACTED OBJECTS
+              ^
+
+parse-statement
+SHOW REDACTED VIEWS
+----
+error: SHOW REDACTED is only supported for SHOW REDACTED CREATE ...
+SHOW REDACTED VIEWS
+              ^
+
+parse-statement
+SHOW REDACTED MATERIALIZED VIEWS
+----
+error: SHOW REDACTED is only supported for SHOW REDACTED CREATE ...
+SHOW REDACTED MATERIALIZED VIEWS
+              ^
+
+parse-statement
+SHOW REDACTED CLUSTER
+----
+error: SHOW REDACTED is only supported for SHOW REDACTED CREATE ...
+SHOW REDACTED CLUSTER
+              ^
+
+parse-statement
+SHOW REDACTED PRIVILEGES
+----
+error: SHOW REDACTED is only supported for SHOW REDACTED CREATE ...
+SHOW REDACTED PRIVILEGES
+              ^
+
+parse-statement
+SHOW REDACTED DEFAULT PRIVILEGES
+----
+error: SHOW REDACTED is only supported for SHOW REDACTED CREATE ...
+SHOW REDACTED DEFAULT PRIVILEGES
+              ^
+
+parse-statement
+SHOW REDACTED ROLE MEMBERSHIP
+----
+error: SHOW REDACTED is only supported for SHOW REDACTED CREATE ...
+SHOW REDACTED ROLE MEMBERSHIP
+              ^
+
+parse-statement
+SHOW REDACTED CREATE CLUSTER
+----
+error: SHOW REDACTED CREATE CLUSTER is not supported
+SHOW REDACTED CREATE CLUSTER
+                     ^
+
+parse-statement
+SHOW REDACTED TRANSACTION ISOLATION LEVEL
+----
+error: SHOW REDACTED is only supported for SHOW REDACTED CREATE ...
+SHOW REDACTED TRANSACTION ISOLATION LEVEL
+              ^
+
+parse-statement
+SHOW REDACTED TIME ZONE
+----
+error: SHOW REDACTED is only supported for SHOW REDACTED CREATE ...
+SHOW REDACTED TIME ZONE
+              ^
+
+parse-statement
+SHOW REDACTED foo
+----
+error: SHOW REDACTED is only supported for SHOW REDACTED CREATE ...
+SHOW REDACTED foo
+              ^
+
+parse-statement
+SHOW
+----
+error: Expected identifier, found EOF
+SHOW
+    ^
+
+parse-statement
+SHOW REDACTED
+----
+error: SHOW REDACTED is only supported for SHOW REDACTED CREATE ...
+SHOW REDACTED
+             ^
+
+parse-statement
+SHOW CREATE VIEW REDACTED v
+----
+error: Expected end of statement, found identifier "v"
+SHOW CREATE VIEW REDACTED v
+                          ^
+
+parse-statement
+SHOW VIEW
+----
+SHOW view
+=>
+Show(ShowVariable(ShowVariableStatement { variable: Ident("view") }))
+
+parse-statement
+SHOW REDACTED MATERIALIZED mv1
+----
+error: SHOW REDACTED is only supported for SHOW REDACTED CREATE ...
+SHOW REDACTED MATERIALIZED mv1
+              ^
+
+parse-statement
+SHOW REDACTED MATERIALIZED
+----
+error: SHOW REDACTED is only supported for SHOW REDACTED CREATE ...
+SHOW REDACTED MATERIALIZED
+              ^

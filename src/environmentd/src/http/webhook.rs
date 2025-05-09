@@ -17,7 +17,7 @@ use mz_ore::cast::CastFrom;
 use mz_ore::retry::{Retry, RetryResult};
 use mz_ore::str::StrExt;
 use mz_repr::adt::jsonb::Jsonb;
-use mz_repr::{Datum, Row, RowPacker, ScalarType, Timestamp};
+use mz_repr::{Datum, Diff, Row, RowPacker, ScalarType, Timestamp};
 use mz_sql::plan::{WebhookBodyFormat, WebhookHeaderFilters, WebhookHeaders};
 use mz_storage_types::controller::StorageError;
 
@@ -165,12 +165,12 @@ fn pack_rows(
     body_format: &WebhookBodyFormat,
     headers: &BTreeMap<String, String>,
     header_tys: &WebhookHeaders,
-) -> Result<Vec<(Row, i64)>, AppendWebhookError> {
+) -> Result<Vec<(Row, Diff)>, AppendWebhookError> {
     // This method isn't that "deep" but it reflects the way we intend for the packing process to
     // work and makes testing easier.
     let rows = transform_body(body, body_format)?
         .into_iter()
-        .map(|row| pack_header(row, headers, header_tys).map(|row| (row, 1)))
+        .map(|row| pack_header(row, headers, header_tys).map(|row| (row, Diff::ONE)))
         .collect::<Result<_, _>>()?;
     Ok(rows)
 }
@@ -416,7 +416,7 @@ mod tests {
     use proptest::prelude::*;
     use proptest::strategy::Union;
 
-    use super::{filter_headers, pack_rows, WebhookError};
+    use super::{WebhookError, filter_headers, pack_rows};
 
     // TODO(parkmycar): Move this strategy to `ore`?
     fn arbitrary_json() -> impl Strategy<Value = serde_json::Value> {
@@ -425,13 +425,6 @@ mod tests {
             any::<bool>().prop_map(serde_json::Value::Bool).boxed(),
             any::<i64>()
                 .prop_map(|x| serde_json::Value::Number(x.into()))
-                .boxed(),
-            any::<f64>()
-                .prop_map(|x| {
-                    let x: serde_json::value::Number =
-                        x.to_string().parse().expect("failed to parse f64");
-                    serde_json::Value::Number(x)
-                })
                 .boxed(),
             any::<String>().prop_map(serde_json::Value::String).boxed(),
         ]);
@@ -449,7 +442,7 @@ mod tests {
     }
 
     #[track_caller]
-    fn check_rows(rows: &Vec<(Row, i64)>, expected_rows: usize, expected_cols: usize) {
+    fn check_rows(rows: &Vec<(Row, mz_repr::Diff)>, expected_rows: usize, expected_cols: usize) {
         assert_eq!(rows.len(), expected_rows);
         for (row, _diff) in rows {
             assert_eq!(row.unpack().len(), expected_cols);

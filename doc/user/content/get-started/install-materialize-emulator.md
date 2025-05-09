@@ -11,33 +11,27 @@ menu:
 
 The Materialize Emulator is an all-in-one Docker image available on Docker Hub
 for testing and evaluation purposes. The Materialize Emulator is not
-representative of Materialize's performance and full feature set. To evaluate
-Materialize for production scenarios, sign up for a [free trial
-account](https://materialize.com/register/?utm_campaign=General&utm_source=documentation)
-or [schedule a demo](https://materialize.com/demo/?utm_campaign=General&utm_source=documentation).
+representative of Materialize's performance and full feature set.
 
-{{< warning >}}
+{{< important >}}
 
-The Materialize Emulator is for <redb> testing/evaluation purposes only. It is
-not suitable for production deployments</redb>.
+The Materialize Emulator is <redb> not suitable for production workloads.</redb>.
 
-{{</ warning >}}
+{{</ important >}}
 
-### Materialize Emulator vs Materialize
+### Materialize Emulator
 
-|                               | Materialize Emulator                                       | Materialize                                                            |
-|-------------------------------|----------------------------------------------------|------------------------------------------------------------------------|
-|         | <i>The fastest option for prototyping or internal testing with Materialize.</i> | <i>Cloud-hosted SaaS solution for critical operational workloads.</i>|
-| **Production deployments**  | ❌ Not suitable due to performance and [license limitations](#license-and-privacy-policy). | ✅ |
-| **Performance**             | ❌ Limited. Services are bundled in a single container. | ✅ High. Services are scaled across many machines.|
-| **Dedicated support**       | ❌ | ✅ |
-| **Sample data**  | ✅ Quickstart data source. | ✅ Quickstart data source. |
-| **Data sources**  | ✅ Connect using configuration SQL. | ✅ Connect using a streamlined GUI. |
-| **Version upgrades**                 | ✅ Manual, with no data persistence.| ✅ Automated, with data persistence. |
-| **Use case isolation**               | ❌ | ✅ |
-| **Fault tolerance**                  | ❌ | ✅ |
-| **Horizontal scalability**           | ❌ | ✅ |
-| **GUI (Materialize Console)**      | ✅ | ✅ |
+Materialize Emulator is the easiest way to get started with Materialize, but is
+not suitable for full feature set evaluations or production workloads.
+
+| Materialize Emulator              | Details    |
+|-----------------------------------|------------|
+| **What is it**                    | A single Docker container version of Materialize. |
+| **Best For**                       | Prototyping and CI jobs. |
+| **Known Limitations**     | Not indicative of true Materialize performance. <br>Services are bundled in a single container. <br>No fault tolerance. <br>No data persistence. <br>No support for version upgrades. |
+| **Evaluation Experience**          | Download from Docker Hub. |
+| **Support**                        | [Materialize Community Slack channel](https://materialize.com/s/chat).|
+| **License/legal arrangement**      | [BSL/Materialize's privacy policy](#license-and-privacy-policy) |
 
 ### Prerequisites
 
@@ -101,14 +95,33 @@ not suitable for production deployments</redb>.
 
 - Join the [Materialize Community on Slack](https://materialize.com/s/chat).
 
-- To more fully evaluate Materialize and its features, sign up for a [free trial
-  account](https://materialize.com/register/?utm_campaign=General&utm_source=documentation)
-  or [schedule a demo](https://materialize.com/demo/?utm_campaign=General&utm_source=documentation).
+- To fully evaluate Materialize Cloud, sign up for a [free trial Materialize
+  Cloud
+  account](https://materialize.com/register/?utm_campaign=General&utm_source=documentation).
+  The full experience of Materialize is also available as a self-managed
+  offering. See [Self-managed Materialize](/self-managed/).
 
 ### Technical Support
 
 For questions, discussions, or general technical support, join the [Materialize
 Community on Slack](https://materialize.com/s/chat).
+
+#### `mz-debug`
+
+Materialize provides a [`mz-debug`]command-line debug tool called  that helps collect diagnostic information from your emulator environment. This tool can gather:
+- Docker logs and resource information
+- Snapshots of system catalog tables from your Materialize instance
+
+To debug your emulator instance, you can use the following command:
+
+```console
+mz-debug emulator --docker-container-id <your-container-id>
+```
+
+This debug information can be particularly helpful when troubleshooting issues or when working with the Materialize support team.
+
+For more detailed information about the debug tool, see the [`mz-debug` documentation](/integrations/mz-debug/).
+
 
 ### License and privacy policy
 
@@ -117,6 +130,26 @@ Community on Slack](https://materialize.com/s/chat).
 
 - By downloading the Docker image, you are agreeing to Materialize's
   [privacy policy](https://materialize.com/privacy-policy/).
+
+#### Materialize Self-Managed Community Edition or the Materialize Emulator Privacy FAQ
+
+When you use the Materialize Self-Managed Community Edition or the Materialize Emulator, we may collect the following information from the machine that runs the Materialize Self-Managed Community Edition or the Materialize Emulator software:
+
+- The IP address of the machine running Materialize.
+
+- If available, the cloud provider and region of the machine running
+  Materialize.
+
+- Usage data about your use of the product such as the types or quantity of
+  commands you run, the number of clusters or indexes you are running, and
+  similar feature usage information.
+
+The collection of this data is subject to the [Materialize Privacy Policy](https://materialize.com/privacy-policy/).
+
+Please note that if you visit our website or otherwise engage with us outside of
+downloading the Materialize Self-Managed Community Edition or the Materialize
+Emulator, we may collect additional information about you as further described
+in our [Privacy Policy](https://materialize.com/privacy-policy/).
 
 <style>
 red { color: #d33902 }

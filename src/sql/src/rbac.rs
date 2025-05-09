@@ -16,9 +16,9 @@ use maplit::btreeset;
 use mz_controller_types::ClusterId;
 use mz_expr::CollectionPlan;
 use mz_ore::str::StrExt;
+use mz_repr::CatalogItemId;
 use mz_repr::adt::mz_acl_item::{AclMode, MzAclItem};
 use mz_repr::role_id::RoleId;
-use mz_repr::CatalogItemId;
 use mz_sql_parser::ast::{Ident, QualifiedReplica};
 use tracing::debug;
 
@@ -220,7 +220,7 @@ impl RbacRequirements {
                     catalog
                         .try_get_role(role_id)
                         .map(|role| role.name().to_string())
-                        .unwrap_or(role_id.to_string())
+                        .unwrap_or_else(|| role_id.to_string())
                 })
                 .collect();
             return Err(UnauthorizedError::RoleMembership { role_names });
@@ -427,12 +427,21 @@ fn generate_rbac_requirements(
         }
         Plan::CreateRole(plan::CreateRolePlan {
             name: _,
-            attributes: _,
-        }) => RbacRequirements {
-            privileges: vec![(SystemObjectId::System, AclMode::CREATE_ROLE, role_id)],
-            item_usage: &CREATE_ITEM_USAGE,
-            ..Default::default()
-        },
+            attributes,
+        }) => {
+            if attributes.superuser.unwrap_or(false) {
+                RbacRequirements {
+                    superuser_action: Some("create superuser role".to_string()),
+                    ..Default::default()
+                }
+            } else {
+                RbacRequirements {
+                    privileges: vec![(SystemObjectId::System, AclMode::CREATE_ROLE, role_id)],
+                    item_usage: &CREATE_ITEM_USAGE,
+                    ..Default::default()
+                }
+            }
+        }
         Plan::CreateNetworkPolicy(plan::CreateNetworkPolicyPlan { .. }) => RbacRequirements {
             privileges: vec![(
                 SystemObjectId::System,
@@ -838,8 +847,12 @@ fn generate_rbac_requirements(
         }
         Plan::CopyFrom(plan::CopyFromPlan {
             id,
+            source: _,
             columns: _,
+            source_desc: _,
+            mfp: _,
             params: _,
+            filter: _,
         }) => RbacRequirements {
             privileges: vec![
                 (
@@ -1161,6 +1174,30 @@ fn generate_rbac_requirements(
             name: _,
             option,
         }) => match option {
+            // Only superusers can alter the superuserness of a role.
+            plan::PlannedAlterRoleOption::Attributes(attributes)
+                if attributes.superuser.unwrap_or(false) =>
+            {
+                RbacRequirements {
+                    superuser_action: Some("alter superuser role".to_string()),
+                    ..Default::default()
+                }
+            }
+            // Roles are allowed to change their own password.
+            plan::PlannedAlterRoleOption::Attributes(attributes)
+                if attributes.password.is_some() && role_id == *id =>
+            {
+                RbacRequirements::default()
+            }
+            // But no one elses...
+            plan::PlannedAlterRoleOption::Attributes(attributes)
+                if attributes.password.is_some() =>
+            {
+                RbacRequirements {
+                    superuser_action: Some("alter password of role".to_string()),
+                    ..Default::default()
+                }
+            }
             // Roles are allowed to change their own variables.
             plan::PlannedAlterRoleOption::Variable(_) if role_id == *id => {
                 RbacRequirements::default()

@@ -31,6 +31,7 @@ from materialize.mzcompose.services.zookeeper import Zookeeper
 from materialize.version_list import (
     VersionsFromDocs,
     get_all_published_mz_versions,
+    get_lts_versions,
     get_published_minor_mz_versions,
 )
 
@@ -80,6 +81,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         help="from what source to fetch the versions",
     )
     parser.add_argument("--ignore-missing-version", action="store_true")
+    parser.add_argument("--lts-upgrade", action="store_true")
     args = parser.parse_args()
 
     parallelism_index = buildkite.get_parallelism_index()
@@ -116,21 +118,83 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         else:
             if parallelism_count == 1 or parallelism_index == 0:
                 test_upgrade_from_version(
-                    c, f"{version}", priors, filter=args.filter, zero_downtime=True
+                    c,
+                    f"{version}",
+                    priors,
+                    filter=args.filter,
+                    zero_downtime=True,
+                    force_source_table_syntax=False,
                 )
             if parallelism_count == 1 or parallelism_index == 1:
                 test_upgrade_from_version(
-                    c, f"{version}", priors, filter=args.filter, zero_downtime=False
+                    c,
+                    f"{version}",
+                    priors,
+                    filter=args.filter,
+                    zero_downtime=False,
+                    force_source_table_syntax=False,
+                )
+                test_upgrade_from_version(
+                    c,
+                    f"{version}",
+                    priors,
+                    filter=args.filter,
+                    zero_downtime=False,
+                    force_source_table_syntax=True,
                 )
 
     if parallelism_count == 1 or parallelism_index == 0:
         test_upgrade_from_version(
-            c, "current_source", priors=[], filter=args.filter, zero_downtime=True
+            c,
+            "current_source",
+            priors=[],
+            filter=args.filter,
+            zero_downtime=True,
+            force_source_table_syntax=False,
         )
+        if args.lts_upgrade:
+            # Direct upgrade from latest LTS version without any inbetween versions
+            version = get_lts_versions()[-1]
+            priors = [v for v in all_versions if v <= version]
+            test_upgrade_from_version(
+                c,
+                f"{version}",
+                priors,
+                filter=args.filter,
+                zero_downtime=False,
+                force_source_table_syntax=True,
+                lts_upgrade=True,
+            )
     if parallelism_count == 1 or parallelism_index == 1:
         test_upgrade_from_version(
-            c, "current_source", priors=[], filter=args.filter, zero_downtime=False
+            c,
+            "current_source",
+            priors=[],
+            filter=args.filter,
+            zero_downtime=False,
+            force_source_table_syntax=False,
         )
+        test_upgrade_from_version(
+            c,
+            "current_source",
+            priors=[],
+            filter=args.filter,
+            zero_downtime=False,
+            force_source_table_syntax=True,
+        )
+        if args.lts_upgrade:
+            # Direct upgrade from latest LTS version without any inbetween versions
+            version = get_lts_versions()[-1]
+            priors = [v for v in all_versions if v <= version]
+            test_upgrade_from_version(
+                c,
+                f"{version}",
+                priors,
+                filter=args.filter,
+                zero_downtime=False,
+                force_source_table_syntax=False,
+                lts_upgrade=True,
+            )
 
 
 def get_all_and_latest_two_minor_mz_versions(
@@ -152,14 +216,13 @@ def test_upgrade_from_version(
     priors: list[MzVersion],
     filter: str,
     zero_downtime: bool,
+    force_source_table_syntax: bool,
+    lts_upgrade: bool = False,
 ) -> None:
     print(
         f"+++ Testing {'0dt upgrade' if zero_downtime else 'regular upgrade'} from Materialize {from_version} to current_source."
     )
 
-    system_parameter_defaults = get_default_system_parameters(
-        zero_downtime=zero_downtime
-    )
     deploy_generation = 0
 
     # If we are testing vX.Y.Z, the glob should include all patch versions 0 to Z
@@ -188,13 +251,18 @@ def test_upgrade_from_version(
     mz_service = "materialized"
 
     if from_version != "current_source":
+        version = MzVersion.parse_mz(from_version)
+        system_parameter_defaults = get_default_system_parameters(
+            version=version,
+            zero_downtime=zero_downtime,
+        )
         mz_from = Materialized(
             name=mz_service,
             image=f"materialize/materialized:{from_version}",
             options=[
                 opt
                 for start_version, opt in mz_options.items()
-                if MzVersion.parse_mz(from_version) >= start_version
+                if version >= start_version
             ],
             volumes_extra=["secrets:/share/secrets"],
             external_metadata_store=True,
@@ -207,6 +275,10 @@ def test_upgrade_from_version(
         with c.override(mz_from):
             c.up(mz_service)
     else:
+        system_parameter_defaults = get_default_system_parameters(
+            version=MzVersion.parse_cargo(),
+            zero_downtime=zero_downtime,
+        )
         mz_from = Materialized(
             name=mz_service,
             options=list(mz_options.values()),
@@ -241,13 +313,18 @@ def test_upgrade_from_version(
         c.kill(mz_service)
         c.rm(mz_service, "testdrive")
 
-    if from_version != "current_source":
+    if from_version != "current_source" and not lts_upgrade:
         # We can't skip in-between minor versions anymore, so go through all of them
         for version in get_published_minor_mz_versions(newest_first=False):
             if version <= from_version:
                 continue
             if version >= MzVersion.parse_cargo():
                 continue
+
+            system_parameter_defaults = get_default_system_parameters(
+                version=version,
+                zero_downtime=zero_downtime,
+            )
 
             print(
                 f"'{'0dt-' if zero_downtime else ''}Upgrading to in-between version {version}"
@@ -288,6 +365,13 @@ def test_upgrade_from_version(
                     c.rm(mz_service)
 
     print(f"{'0dt-' if zero_downtime else ''}Upgrading to final version")
+    system_parameter_defaults = get_default_system_parameters(
+        zero_downtime=zero_downtime,
+        # We can only force the syntax on the final version so that the migration to convert
+        # sources to the new model can be applied without preventing sources from being
+        # created in the old syntax on the older version.
+        force_source_table_syntax=force_source_table_syntax,
+    )
     mz_to = Materialized(
         name=mz_service,
         options=list(mz_options.values()),

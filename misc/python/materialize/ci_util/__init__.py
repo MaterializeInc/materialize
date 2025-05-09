@@ -48,7 +48,6 @@ def upload_junit_report(suite: str, junit_report: Path) -> None:
     """
     if not buildkite.is_in_buildkite():
         return
-    ui.section(f"Uploading report for suite {suite!r} to Buildkite Test Analytics")
     suite = suite.upper().replace("-", "_")
     token = os.getenv(f"BUILDKITE_TEST_ANALYTICS_API_KEY_{suite}")
     if not token:

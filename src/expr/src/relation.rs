@@ -9,7 +9,7 @@
 
 #![warn(missing_docs)]
 
-use std::cmp::{max, Ordering};
+use std::cmp::{Ordering, max};
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 use std::fmt::{Display, Formatter};
@@ -18,6 +18,7 @@ use std::num::NonZeroU64;
 use std::time::Instant;
 
 use bytesize::ByteSize;
+use differential_dataflow::containers::{Columnation, CopyRegion};
 use itertools::Itertools;
 use mz_lowertest::MzReflect;
 use mz_ore::cast::CastFrom;
@@ -38,20 +39,19 @@ use mz_repr::{
     ColumnName, ColumnType, Datum, Diff, GlobalId, IntoRowIterator, RelationType, Row, RowIterator,
     ScalarType,
 };
-use proptest::prelude::{any, Arbitrary, BoxedStrategy};
+use proptest::prelude::{Arbitrary, BoxedStrategy, any};
 use proptest::strategy::{Strategy, Union};
 use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
-use timely::container::columnation::{Columnation, CopyRegion};
 
+use crate::Id::Local;
 use crate::explain::{HumanizedExpr, HumanizerMode};
 use crate::relation::func::{AggregateFunc, LagLeadType, TableFunc};
 use crate::row::{RowCollection, SortedRowCollectionIter};
 use crate::visit::{Visit, VisitChildren};
-use crate::Id::Local;
 use crate::{
-    func as scalar_func, EvalError, FilterCharacteristics, Id, LocalId, MirScalarExpr, UnaryFunc,
-    VariadicFunc,
+    EvalError, FilterCharacteristics, Id, LocalId, MirScalarExpr, UnaryFunc, VariadicFunc,
+    func as scalar_func,
 };
 
 pub mod canonicalize;
@@ -682,7 +682,7 @@ impl MirRelationExpr {
                     let col_inds = equivalence
                         .iter()
                         .filter_map(|expr| match expr {
-                            MirScalarExpr::Column(col) => Some(*col),
+                            MirScalarExpr::Column(col, _name) => Some(*col),
                             _ => None,
                         })
                         .collect_vec();
@@ -769,7 +769,7 @@ impl MirRelationExpr {
                     for (i, datum) in row.iter().enumerate() {
                         if datum != Datum::Dummy {
                             if let Some(unique_vals) = &mut unique_values_per_col[i] {
-                                let is_dupe = *diff != 1 || !unique_vals.insert(datum);
+                                let is_dupe = *diff != Diff::ONE || !unique_vals.insert(datum);
                                 if is_dupe {
                                     unique_values_per_col[i] = None;
                                 }
@@ -777,7 +777,7 @@ impl MirRelationExpr {
                         }
                     }
                 }
-                if rows.len() == 0 || (rows.len() == 1 && rows[0].1 == 1) {
+                if rows.len() == 0 || (rows.len() == 1 && rows[0].1 == Diff::ONE) {
                     vec![vec![]]
                 } else {
                     // XXX - Multi-column keys are not detected.
@@ -838,7 +838,7 @@ impl MirRelationExpr {
                                     None
                                 }
                             }
-                            MirScalarExpr::Column(c) => Some(*c),
+                            MirScalarExpr::Column(c, _name) => Some(*c),
                             _ => None,
                         }
                     }
@@ -905,12 +905,12 @@ impl MirRelationExpr {
                             expr2,
                         } = expr
                         {
-                            if let MirScalarExpr::Column(c) = &**expr1 {
+                            if let MirScalarExpr::Column(c, _name) = &**expr1 {
                                 if expr2.is_literal_ok() {
                                     cols_equal_to_literal.insert(c);
                                 }
                             }
-                            if let MirScalarExpr::Column(c) = &**expr2 {
+                            if let MirScalarExpr::Column(c, _name) = &**expr2 {
                                 if expr1.is_literal_ok() {
                                     cols_equal_to_literal.insert(c);
                                 }
@@ -1024,7 +1024,7 @@ impl MirRelationExpr {
                 for key_set in input_keys.next().unwrap() {
                     if key_set
                         .iter()
-                        .all(|k| group_key.contains(&MirScalarExpr::Column(*k)))
+                        .all(|k| group_key.contains(&MirScalarExpr::column(*k)))
                     {
                         result.push(
                             key_set
@@ -1032,7 +1032,7 @@ impl MirRelationExpr {
                                 .map(|i| {
                                     group_key
                                         .iter()
-                                        .position(|k| k == &MirScalarExpr::Column(*i))
+                                        .position(|k| k == &MirScalarExpr::column(*i))
                                         .unwrap()
                                 })
                                 .collect::<Vec<_>>(),
@@ -1259,7 +1259,7 @@ impl MirRelationExpr {
     /// Constructs a constant collection from specific rows and schema, where
     /// each row will have a multiplicity of one.
     pub fn constant(rows: Vec<Vec<Datum>>, typ: RelationType) -> Self {
-        let rows = rows.into_iter().map(|row| (row, 1)).collect();
+        let rows = rows.into_iter().map(|row| (row, Diff::ONE)).collect();
         MirRelationExpr::constant_diff(rows, typ)
     }
 
@@ -1318,7 +1318,7 @@ impl MirRelationExpr {
     /// Checks if `self` is the single element collection with no columns.
     pub fn is_constant_singleton(&self) -> bool {
         if let Some((Ok(rows), typ)) = self.as_const() {
-            rows.len() == 1 && typ.column_types.len() == 0 && rows[0].1 == 1
+            rows.len() == 1 && typ.column_types.len() == 0 && rows[0].1 == Diff::ONE
         } else {
             false
         }
@@ -1485,7 +1485,7 @@ impl MirRelationExpr {
             .into_iter()
             .map(|vs| {
                 vs.into_iter()
-                    .map(|(r, c)| input_mapper.map_expr_to_global(MirScalarExpr::Column(c), r))
+                    .map(|(r, c)| input_mapper.map_expr_to_global(MirScalarExpr::column(c), r))
                     .collect::<Vec<_>>()
             })
             .collect::<Vec<_>>();
@@ -1521,7 +1521,7 @@ impl MirRelationExpr {
     ) -> Self {
         MirRelationExpr::Reduce {
             input: Box::new(self),
-            group_key: group_key.into_iter().map(MirScalarExpr::Column).collect(),
+            group_key: group_key.into_iter().map(MirScalarExpr::column).collect(),
             aggregates,
             monotonic: false,
             expected_group_size,
@@ -1702,12 +1702,13 @@ impl MirRelationExpr {
     /// the correct type.
     pub fn take_safely(&mut self, typ: Option<RelationType>) -> MirRelationExpr {
         if let Some(typ) = &typ {
-            soft_assert_no_log!(self
-                .typ()
-                .column_types
-                .iter()
-                .zip_eq(typ.column_types.iter())
-                .all(|(t1, t2)| t1.scalar_type.base_eq(&t2.scalar_type)));
+            soft_assert_no_log!(
+                self.typ()
+                    .column_types
+                    .iter()
+                    .zip_eq(typ.column_types.iter())
+                    .all(|(t1, t2)| t1.scalar_type.base_eq(&t2.scalar_type))
+            );
         }
         let mut typ = typ.unwrap_or_else(|| self.typ());
         typ.keys = vec![vec![]];
@@ -2148,7 +2149,7 @@ impl MirRelationExpr {
             use MirScalarExpr::*;
             if let Err(_) = self.try_visit_scalars::<_, RecursionLimitError>(&mut |scalar| {
                 result |= match scalar {
-                    Column(_) | Literal(_, _) | CallUnmaterializable(_) | If { .. } => false,
+                    Column(_, _) | Literal(_, _) | CallUnmaterializable(_) | If { .. } => false,
                     // Function calls are considered expensive
                     CallUnary { .. } | CallBinary { .. } | CallVariadic { .. } => true,
                 };
@@ -2375,7 +2376,7 @@ pub fn non_nullable_columns(predicates: &[MirScalarExpr]) -> BTreeSet<usize> {
                 expr,
             } = &**expr
             {
-                if let MirScalarExpr::Column(c) = &**expr {
+                if let MirScalarExpr::Column(c, _name) = &**expr {
                     nonnull_required_columns.insert(*c);
                 }
             }
@@ -2761,10 +2762,11 @@ impl AggregateExpr {
             // JsonbAgg takes _anything_ as input, but must output a Jsonb array.
             AggregateFunc::JsonbAgg { .. } => MirScalarExpr::CallVariadic {
                 func: VariadicFunc::JsonbBuildArray,
-                exprs: vec![self
-                    .expr
-                    .clone()
-                    .call_unary(UnaryFunc::RecordGet(scalar_func::RecordGet(0)))],
+                exprs: vec![
+                    self.expr
+                        .clone()
+                        .call_unary(UnaryFunc::RecordGet(scalar_func::RecordGet(0))),
+                ],
             },
 
             // JsonbAgg takes _anything_ as input, but must output a Jsonb object.
@@ -3336,22 +3338,10 @@ impl AggregateExpr {
     /// COUNT(*) to COUNT(true), making it indistinguishable from
     /// literal COUNT(true), but we prefer to consider this as the
     /// former.
+    ///
+    /// (HIR has the same `is_count_asterisk`.)
     pub fn is_count_asterisk(&self) -> bool {
-        match self {
-            AggregateExpr {
-                func: AggregateFunc::Count,
-                expr:
-                    MirScalarExpr::Literal(
-                        Ok(row),
-                        mz_repr::ColumnType {
-                            scalar_type: mz_repr::ScalarType::Bool,
-                            nullable: false,
-                        },
-                    ),
-                ..
-            } => row.unpack_first() == mz_repr::Datum::True,
-            _ => false,
-        }
+        self.func == AggregateFunc::Count && self.expr.is_literal_true() && !self.distinct
     }
 }
 
@@ -3435,13 +3425,154 @@ impl JoinImplementation {
 ///
 /// A candidate is described by a collection and a key, and may have various liabilities.
 /// Primarily, the candidate may risk substantial inflation of records, which is something
-/// that concerns us greatly. Additionally the candidate may be unarranged, and we would
+/// that concerns us greatly. Additionally, the candidate may be unarranged, and we would
 /// prefer candidates that do not require additional memory. Finally, we prefer lower id
-/// collections in the interest of consistent tie-breaking.
+/// collections in the interest of consistent tie-breaking. For more characteristics, see
+/// comments on individual fields.
+///
+/// This has more than one version. `new` instantiates the appropriate version based on a
+/// feature flag.
 #[derive(
     Eq, PartialEq, Ord, PartialOrd, Debug, Clone, Serialize, Deserialize, Hash, MzReflect, Arbitrary,
 )]
-pub struct JoinInputCharacteristics {
+pub enum JoinInputCharacteristics {
+    /// Old version, with `enable_join_prioritize_arranged` turned off.
+    V1(JoinInputCharacteristicsV1),
+    /// Newer version, with `enable_join_prioritize_arranged` turned on.
+    V2(JoinInputCharacteristicsV2),
+}
+
+impl JoinInputCharacteristics {
+    /// Creates a new instance with the given characteristics.
+    pub fn new(
+        unique_key: bool,
+        key_length: usize,
+        arranged: bool,
+        cardinality: Option<usize>,
+        filters: FilterCharacteristics,
+        input: usize,
+        enable_join_prioritize_arranged: bool,
+    ) -> Self {
+        if enable_join_prioritize_arranged {
+            Self::V2(JoinInputCharacteristicsV2::new(
+                unique_key,
+                key_length,
+                arranged,
+                cardinality,
+                filters,
+                input,
+            ))
+        } else {
+            Self::V1(JoinInputCharacteristicsV1::new(
+                unique_key,
+                key_length,
+                arranged,
+                cardinality,
+                filters,
+                input,
+            ))
+        }
+    }
+
+    /// Turns the instance into a String to be printed in EXPLAIN.
+    pub fn explain(&self) -> String {
+        match self {
+            Self::V1(jic) => jic.explain(),
+            Self::V2(jic) => jic.explain(),
+        }
+    }
+
+    /// Whether the join input described by `self` is arranged.
+    pub fn arranged(&self) -> bool {
+        match self {
+            Self::V1(jic) => jic.arranged,
+            Self::V2(jic) => jic.arranged,
+        }
+    }
+
+    /// Returns the `FilterCharacteristics` for the join input described by `self`.
+    pub fn filters(&mut self) -> &mut FilterCharacteristics {
+        match self {
+            Self::V1(jic) => &mut jic.filters,
+            Self::V2(jic) => &mut jic.filters,
+        }
+    }
+}
+
+/// Newer version of `JoinInputCharacteristics`, with `enable_join_prioritize_arranged` turned on.
+#[derive(
+    Eq, PartialEq, Ord, PartialOrd, Debug, Clone, Serialize, Deserialize, Hash, MzReflect, Arbitrary,
+)]
+pub struct JoinInputCharacteristicsV2 {
+    /// An excellent indication that record count will not increase.
+    pub unique_key: bool,
+    /// Cross joins are bad.
+    /// (`key_length > 0` also implies that it is not a cross join. However, we need to note cross
+    /// joins in a separate field, because not being a cross join is more important than `arranged`,
+    /// but otherwise `key_length` is less important than `arranged`.)
+    pub not_cross: bool,
+    /// Indicates that there will be no additional in-memory footprint.
+    pub arranged: bool,
+    /// A weaker signal that record count will not increase.
+    pub key_length: usize,
+    /// Estimated cardinality (lower is better)
+    pub cardinality: Option<std::cmp::Reverse<usize>>,
+    /// Characteristics of the filter that is applied at this input.
+    pub filters: FilterCharacteristics,
+    /// We want to prefer input earlier in the input list, for stability of ordering.
+    pub input: std::cmp::Reverse<usize>,
+}
+
+impl JoinInputCharacteristicsV2 {
+    /// Creates a new instance with the given characteristics.
+    pub fn new(
+        unique_key: bool,
+        key_length: usize,
+        arranged: bool,
+        cardinality: Option<usize>,
+        filters: FilterCharacteristics,
+        input: usize,
+    ) -> Self {
+        Self {
+            unique_key,
+            not_cross: key_length > 0,
+            arranged,
+            key_length,
+            cardinality: cardinality.map(std::cmp::Reverse),
+            filters,
+            input: std::cmp::Reverse(input),
+        }
+    }
+
+    /// Turns the instance into a String to be printed in EXPLAIN.
+    pub fn explain(&self) -> String {
+        let mut e = "".to_owned();
+        if self.unique_key {
+            e.push_str("U");
+        }
+        // Don't need to print `not_cross`, because that is visible in the printed key.
+        // if !self.not_cross {
+        //     e.push_str("C");
+        // }
+        for _ in 0..self.key_length {
+            e.push_str("K");
+        }
+        if self.arranged {
+            e.push_str("A");
+        }
+        if let Some(std::cmp::Reverse(cardinality)) = self.cardinality {
+            e.push_str(&format!("|{cardinality}|"));
+        }
+        e.push_str(&self.filters.explain());
+        e
+    }
+}
+
+/// Old version of `JoinInputCharacteristics`, with `enable_join_prioritize_arranged` turned off.
+#[derive(
+    Eq, PartialEq, Ord, PartialOrd, Debug, Clone, Serialize, Deserialize, Hash, MzReflect, Arbitrary,
+)]
+pub struct JoinInputCharacteristicsV1 {
     /// An excellent indication that record count will not increase.
     pub unique_key: bool,
     /// A weaker signal that record count will not increase.
@@ -3456,7 +3587,7 @@ pub struct JoinInputCharacteristics {
     pub input: std::cmp::Reverse<usize>,
 }
 
-impl JoinInputCharacteristics {
+impl JoinInputCharacteristicsV1 {
     /// Creates a new instance with the given characteristics.
     pub fn new(
         unique_key: bool,
@@ -3503,14 +3634,18 @@ impl JoinInputCharacteristics {
 /// keywords), whereas much of the rest of SQL is defined in terms of unordered
 /// multisets. But as it turns out, the same idea can be used to optimize
 /// trivial peeks.
+///
+/// The generic parameters are for accommodating prepared statement parameters in
+/// `limit` and `offset`: the planner can hold these fields as HirScalarExpr long enough to call
+/// `bind_parameters` on them.
 #[derive(Arbitrary, Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct RowSetFinishing<L = NonNeg<i64>> {
+pub struct RowSetFinishing<L = NonNeg<i64>, O = usize> {
     /// Order rows by the given columns.
     pub order_by: Vec<ColumnOrder>,
     /// Include only as many rows (after offset).
     pub limit: Option<L>,
     /// Omit as many rows.
-    pub offset: usize,
+    pub offset: O,
     /// Include only given columns.
     pub project: Vec<usize>,
 }
@@ -3824,7 +3959,7 @@ impl RustType<proto_window_frame::ProtoWindowFrameUnits> for WindowFrameUnits {
             None => {
                 return Err(TryFromProtoError::missing_field(
                     "ProtoWindowFrameUnits::kind",
-                ))
+                ));
             }
         })
     }
@@ -3887,7 +4022,7 @@ impl RustType<proto_window_frame::ProtoWindowFrameBound> for WindowFrameBound {
             None => {
                 return Err(TryFromProtoError::missing_field(
                     "ProtoWindowFrameBound::kind",
-                ))
+                ));
             }
         })
     }

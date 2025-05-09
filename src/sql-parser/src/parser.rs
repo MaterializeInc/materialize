@@ -24,6 +24,8 @@ use std::collections::BTreeMap;
 use std::error::Error;
 use std::fmt;
 
+use IsLateral::*;
+use IsOptional::*;
 use bytesize::ByteSize;
 use itertools::Itertools;
 use mz_ore::cast::CastFrom;
@@ -34,8 +36,6 @@ use mz_sql_lexer::keywords::*;
 use mz_sql_lexer::lexer::{self, IdentString, LexerError, PosToken, Token};
 use serde::{Deserialize, Serialize};
 use tracing::{debug, warn};
-use IsLateral::*;
-use IsOptional::*;
 
 use crate::ast::display::AstDisplay;
 use crate::ast::*;
@@ -611,7 +611,7 @@ impl<'a> Parser<'a> {
                         Err(_) => {
                             return Err(
                                 self.error(self.peek_prev_pos(), format!("invalid number {}", n))
-                            )
+                            );
                         }
                     };
                     if n != 0.0 {
@@ -888,10 +888,40 @@ impl<'a> Parser<'a> {
         self.expect_keyword(AS)?;
         let data_type = self.parse_data_type()?;
         self.expect_token(&Token::RParen)?;
-        Ok(Expr::Cast {
-            expr: Box::new(expr),
-            data_type,
-        })
+        // We are potentially rewriting an expression like
+        //     CAST(<expr> OP <expr> AS <type>)
+        // to
+        //     <expr> OP <expr>::<type>
+        // (because we print Expr::Cast always as a Postgres-style cast, i.e. `::`)
+        // which could incorrectly change the meaning of the expression
+        // as the `::` binds tightly. To be safe, we wrap the inner
+        // expression in parentheses
+        //    (<expr> OP <expr>)::<type>
+        // unless the inner expression is of a kind that we know is
+        // safe to follow with a `::` without wrapping.
+        if !matches!(
+            expr,
+            Expr::Nested(_)
+                | Expr::Value(_)
+                | Expr::Cast { .. }
+                | Expr::Function { .. }
+                | Expr::Identifier { .. }
+                | Expr::Collate { .. }
+                | Expr::HomogenizingFunction { .. }
+                | Expr::NullIf { .. }
+                | Expr::Subquery { .. }
+                | Expr::Parameter(..)
+        ) {
+            Ok(Expr::Cast {
+                expr: Box::new(Expr::Nested(Box::new(expr))),
+                data_type,
+            })
+        } else {
+            Ok(Expr::Cast {
+                expr: Box::new(expr),
+                data_type,
+            })
+        }
     }
 
     /// Parse a SQL EXISTS expression e.g. `WHERE EXISTS(SELECT ...)`.
@@ -1299,10 +1329,21 @@ impl<'a> Parser<'a> {
             self.expect_token(&Token::RBracket)?;
         }
 
-        Ok(Expr::Subscript {
-            expr: Box::new(expr),
-            positions,
-        })
+        // If the expression that is being cast can end with a type name, then let's parenthesize
+        // it. Otherwise, the `[...]` would melt into the type name (making it an array type).
+        // Specifically, the only expressions whose printing can end with a type name are casts, so
+        // check for that.
+        if matches!(expr, Expr::Cast { .. }) {
+            Ok(Expr::Subscript {
+                expr: Box::new(Expr::Nested(Box::new(expr))),
+                positions,
+            })
+        } else {
+            Ok(Expr::Subscript {
+                expr: Box::new(expr),
+                positions,
+            })
+        }
     }
 
     // Parse calls to substring(), which can take the form:
@@ -2322,7 +2363,7 @@ impl<'a> Parser<'a> {
             _ => unreachable!(),
         };
         let connection_type = match self
-            .expect_one_of_keywords(&[AWS, KAFKA, CONFLUENT, POSTGRES, SSH, MYSQL, YUGABYTE])?
+            .expect_one_of_keywords(&[AWS, KAFKA, CONFLUENT, POSTGRES, SSH, SQL, MYSQL, YUGABYTE])?
         {
             AWS => {
                 if self.parse_keyword(PRIVATELINK) {
@@ -2340,6 +2381,10 @@ impl<'a> Parser<'a> {
             SSH => {
                 self.expect_keyword(TUNNEL)?;
                 CreateConnectionType::Ssh
+            }
+            SQL => {
+                self.expect_keyword(SERVER)?;
+                CreateConnectionType::SqlServer
             }
             MYSQL => CreateConnectionType::MySql,
             YUGABYTE => CreateConnectionType::Yugabyte,
@@ -2542,7 +2587,7 @@ impl<'a> Parser<'a> {
                             self.peek_prev_pos(),
                             "unexpected keyword {}",
                             other
-                        )
+                        );
                     }
                 }
             }
@@ -3193,12 +3238,12 @@ impl<'a> Parser<'a> {
     /// Parse the name of a CREATE SINK optional parameter
     fn parse_create_sink_option_name(&mut self) -> Result<CreateSinkOptionName, ParserError> {
         let name = match self.expect_one_of_keywords(&[PARTITION, SNAPSHOT, VERSION])? {
+            SNAPSHOT => CreateSinkOptionName::Snapshot,
+            VERSION => CreateSinkOptionName::Version,
             PARTITION => {
                 self.expect_keyword(STRATEGY)?;
                 CreateSinkOptionName::PartitionStrategy
             }
-            SNAPSHOT => CreateSinkOptionName::Snapshot,
-            VERSION => CreateSinkOptionName::Version,
             _ => unreachable!(),
         };
         Ok(name)
@@ -3215,7 +3260,7 @@ impl<'a> Parser<'a> {
     fn parse_create_source_connection(
         &mut self,
     ) -> Result<CreateSourceConnection<Raw>, ParserError> {
-        match self.expect_one_of_keywords(&[KAFKA, POSTGRES, MYSQL, LOAD, YUGABYTE])? {
+        match self.expect_one_of_keywords(&[KAFKA, POSTGRES, SQL, MYSQL, LOAD, YUGABYTE])? {
             POSTGRES => {
                 self.expect_keyword(CONNECTION)?;
                 let connection = self.parse_raw_name()?;
@@ -3246,6 +3291,24 @@ impl<'a> Parser<'a> {
                 };
 
                 Ok(CreateSourceConnection::Yugabyte {
+                    connection,
+                    options,
+                })
+            }
+            SQL => {
+                self.expect_keywords(&[SERVER, CONNECTION])?;
+                let connection = self.parse_raw_name()?;
+
+                let options = if self.consume_token(&Token::LParen) {
+                    let options =
+                        self.parse_comma_separated(Parser::parse_sql_server_connection_option)?;
+                    self.expect_token(&Token::RParen)?;
+                    options
+                } else {
+                    vec![]
+                };
+
+                Ok(CreateSourceConnection::SqlServer {
                     connection,
                     options,
                 })
@@ -3396,6 +3459,60 @@ impl<'a> Parser<'a> {
 
                 Ok(MySqlConfigOption {
                     name: MySqlConfigOptionName::ExcludeColumns,
+                    value,
+                })
+            }
+            _ => unreachable!(),
+        }
+    }
+
+    fn parse_sql_server_connection_option(
+        &mut self,
+    ) -> Result<SqlServerConfigOption<Raw>, ParserError> {
+        match self.expect_one_of_keywords(&[DETAILS, TEXT, EXCLUDE])? {
+            DETAILS => Ok(SqlServerConfigOption {
+                name: SqlServerConfigOptionName::Details,
+                value: self.parse_optional_option_value()?,
+            }),
+            TEXT => {
+                self.expect_keyword(COLUMNS)?;
+
+                let _ = self.consume_token(&Token::Eq);
+
+                let value = self
+                    .parse_option_sequence(Parser::parse_item_name)?
+                    .map(|inner| {
+                        WithOptionValue::Sequence(
+                            inner
+                                .into_iter()
+                                .map(WithOptionValue::UnresolvedItemName)
+                                .collect_vec(),
+                        )
+                    });
+
+                Ok(SqlServerConfigOption {
+                    name: SqlServerConfigOptionName::TextColumns,
+                    value,
+                })
+            }
+            EXCLUDE => {
+                self.expect_keyword(COLUMNS)?;
+
+                let _ = self.consume_token(&Token::Eq);
+
+                let value = self
+                    .parse_option_sequence(Parser::parse_item_name)?
+                    .map(|inner| {
+                        WithOptionValue::Sequence(
+                            inner
+                                .into_iter()
+                                .map(WithOptionValue::UnresolvedItemName)
+                                .collect_vec(),
+                        )
+                    });
+
+                Ok(SqlServerConfigOption {
+                    name: SqlServerConfigOptionName::ExcludeColumns,
                     value,
                 })
             }
@@ -3635,7 +3752,7 @@ impl<'a> Parser<'a> {
                     self,
                     self.peek_prev_pos(),
                     "CREATE CONTINUAL TASK with options in both new and legacy locations"
-                )
+                );
             }
         };
 
@@ -4064,11 +4181,11 @@ impl<'a> Parser<'a> {
         self.expect_keyword(ROLE)?;
         let name = self.parse_identifier()?;
         let _ = self.parse_keyword(WITH);
-        let options = self.parse_role_attributes();
+        let options = self.parse_role_attributes()?;
         Ok(Statement::CreateRole(CreateRoleStatement { name, options }))
     }
 
-    fn parse_role_attributes(&mut self) -> Vec<RoleAttribute> {
+    fn parse_role_attributes(&mut self) -> Result<Vec<RoleAttribute>, ParserError> {
         let mut options = vec![];
         loop {
             match self.parse_one_of_keywords(&[
@@ -4084,6 +4201,7 @@ impl<'a> Parser<'a> {
                 NOCREATEDB,
                 CREATEROLE,
                 NOCREATEROLE,
+                PASSWORD,
             ]) {
                 None => break,
                 Some(SUPERUSER) => options.push(RoleAttribute::SuperUser),
@@ -4098,10 +4216,18 @@ impl<'a> Parser<'a> {
                 Some(NOCREATEDB) => options.push(RoleAttribute::NoCreateDB),
                 Some(CREATEROLE) => options.push(RoleAttribute::CreateRole),
                 Some(NOCREATEROLE) => options.push(RoleAttribute::NoCreateRole),
+                Some(PASSWORD) => {
+                    if self.parse_keyword(NULL) {
+                        options.push(RoleAttribute::Password(None));
+                        continue;
+                    }
+                    let password = self.parse_literal_string()?;
+                    options.push(RoleAttribute::Password(Some(password)));
+                }
                 Some(_) => unreachable!(),
             }
         }
-        options
+        Ok(options)
     }
 
     fn parse_create_secret(&mut self) -> Result<Statement<Raw>, ParserError> {
@@ -6038,7 +6164,7 @@ impl<'a> Parser<'a> {
             }
             Some(WITH) | None => {
                 let _ = self.parse_keyword(WITH);
-                let attrs = self.parse_role_attributes();
+                let attrs = self.parse_role_attributes()?;
                 AlterRoleOption::Attributes(attrs)
             }
             Some(k) => unreachable!("unmatched keyword: {k}"),
@@ -6325,7 +6451,7 @@ impl<'a> Parser<'a> {
                 Statement::Subscribe(stmt) => CopyRelation::Subscribe(stmt),
                 _ => {
                     return parser_err!(self, self.peek_prev_pos(), "unsupported query in COPY")
-                        .map_parser_err(StatementKind::Copy)
+                        .map_parser_err(StatementKind::Copy);
                 }
             }
         } else {
@@ -6350,9 +6476,12 @@ impl<'a> Parser<'a> {
                     )
                     .map_no_statement_parser_err();
                 }
-                self.expect_keyword(STDIN)
-                    .map_parser_err(StatementKind::Copy)?;
-                (CopyDirection::From, CopyTarget::Stdin)
+                if self.parse_keyword(STDIN) {
+                    (CopyDirection::From, CopyTarget::Stdin)
+                } else {
+                    let url_expr = self.parse_expr().map_parser_err(StatementKind::Copy)?;
+                    (CopyDirection::From, CopyTarget::Expr(url_expr))
+                }
             }
             TO => {
                 // We only support the INTO keyword for 'COPY FROM'.
@@ -6400,9 +6529,9 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_copy_option(&mut self) -> Result<CopyOption<Raw>, ParserError> {
-        let name = match self
-            .expect_one_of_keywords(&[FORMAT, DELIMITER, NULL, ESCAPE, QUOTE, HEADER, AWS, MAX])?
-        {
+        let name = match self.expect_one_of_keywords(&[
+            FORMAT, DELIMITER, NULL, ESCAPE, QUOTE, HEADER, AWS, MAX, FILES, PATTERN,
+        ])? {
             FORMAT => CopyOptionName::Format,
             DELIMITER => CopyOptionName::Delimiter,
             NULL => CopyOptionName::Null,
@@ -6420,6 +6549,8 @@ impl<'a> Parser<'a> {
                 self.expect_keywords(&[FILE, SIZE])?;
                 CopyOptionName::MaxFileSize
             }
+            FILES => CopyOptionName::Files,
+            PATTERN => CopyOptionName::Pattern,
             _ => unreachable!(),
         };
         Ok(CopyOption {
@@ -6646,7 +6777,7 @@ impl<'a> Parser<'a> {
                         return Err(self.error(
                             self.peek_prev_pos(),
                             "precision for type float must be within ([1-53])".into(),
-                        ))
+                        ));
                     }
                     v if v < 25 => other(ident!("float4")),
                     _ => other(ident!("float8")),
@@ -7635,6 +7766,14 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_show(&mut self) -> Result<ShowStatement<Raw>, ParserError> {
+        let redacted = self.parse_keyword(REDACTED);
+        if redacted && !self.peek_keyword(CREATE) {
+            return parser_err!(
+                self,
+                self.peek_pos(),
+                "SHOW REDACTED is only supported for SHOW REDACTED CREATE ..."
+            );
+        }
         if self.parse_one_of_keywords(&[COLUMNS, FIELDS]).is_some() {
             self.parse_show_columns()
         } else if self.parse_keyword(OBJECTS) {
@@ -7744,7 +7883,7 @@ impl<'a> Parser<'a> {
                         self,
                         self.peek_prev_pos(),
                         format!("Unsupported SHOW on {object_type}")
-                    )
+                    );
                 }
             };
             Ok(ShowStatement::ShowObjects(ShowObjectsStatement {
@@ -7775,36 +7914,50 @@ impl<'a> Parser<'a> {
         } else if self.parse_keywords(&[CREATE, VIEW]) {
             Ok(ShowStatement::ShowCreateView(ShowCreateViewStatement {
                 view_name: self.parse_raw_name()?,
+                redacted,
             }))
         } else if self.parse_keywords(&[CREATE, MATERIALIZED, VIEW]) {
             Ok(ShowStatement::ShowCreateMaterializedView(
                 ShowCreateMaterializedViewStatement {
                     materialized_view_name: self.parse_raw_name()?,
+                    redacted,
                 },
             ))
         } else if self.parse_keywords(&[CREATE, SOURCE]) {
             Ok(ShowStatement::ShowCreateSource(ShowCreateSourceStatement {
                 source_name: self.parse_raw_name()?,
+                redacted,
             }))
         } else if self.parse_keywords(&[CREATE, TABLE]) {
             Ok(ShowStatement::ShowCreateTable(ShowCreateTableStatement {
                 table_name: self.parse_raw_name()?,
+                redacted,
             }))
         } else if self.parse_keywords(&[CREATE, SINK]) {
             Ok(ShowStatement::ShowCreateSink(ShowCreateSinkStatement {
                 sink_name: self.parse_raw_name()?,
+                redacted,
             }))
         } else if self.parse_keywords(&[CREATE, INDEX]) {
             Ok(ShowStatement::ShowCreateIndex(ShowCreateIndexStatement {
                 index_name: self.parse_raw_name()?,
+                redacted,
             }))
         } else if self.parse_keywords(&[CREATE, CONNECTION]) {
             Ok(ShowStatement::ShowCreateConnection(
                 ShowCreateConnectionStatement {
                     connection_name: self.parse_raw_name()?,
+                    redacted,
                 },
             ))
         } else if self.parse_keywords(&[CREATE, CLUSTER]) {
+            if redacted {
+                return parser_err!(
+                    self,
+                    self.peek_prev_pos(),
+                    "SHOW REDACTED CREATE CLUSTER is not supported"
+                );
+            }
             Ok(ShowStatement::ShowCreateCluster(
                 ShowCreateClusterStatement {
                     cluster_name: RawClusterName::Unresolved(self.parse_identifier()?),
@@ -7937,7 +8090,7 @@ impl<'a> Parser<'a> {
                             self.peek_pos(),
                             "LEFT, RIGHT, or FULL",
                             self.peek_token(),
-                        )
+                        );
                     }
                     None if natural => {
                         return self.expected(
@@ -8621,10 +8774,14 @@ impl<'a> Parser<'a> {
         };
 
         let format = if self.parse_keyword(AS) {
-            match self.parse_one_of_keywords(&[TEXT, JSON, DOT]) {
+            match self.parse_one_of_keywords(&[TEXT, JSON, DOT, VERBOSE]) {
                 Some(TEXT) => Some(ExplainFormat::Text),
                 Some(JSON) => Some(ExplainFormat::Json),
                 Some(DOT) => Some(ExplainFormat::Dot),
+                Some(VERBOSE) => {
+                    self.expect_keyword(TEXT)?;
+                    Some(ExplainFormat::VerboseText)
+                }
                 None => return Err(ParserError::new(self.index, "expected a format")),
                 _ => unreachable!(),
             }
@@ -9051,10 +9208,12 @@ impl<'a> Parser<'a> {
             | ObjectType::Source
             | ObjectType::ContinualTask => {
                 parser_err!(
-                            self,
-                            self.peek_prev_pos(),
-                            format!("For object type {object_type}, you must specify 'TABLE' or omit the object type")
-                        )
+                    self,
+                    self.peek_prev_pos(),
+                    format!(
+                        "For object type {object_type}, you must specify 'TABLE' or omit the object type"
+                    )
+                )
             }
             ObjectType::Sink
             | ObjectType::Index

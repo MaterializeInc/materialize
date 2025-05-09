@@ -60,6 +60,8 @@ pub mod webhook;
 
 pub use crate::client::{Client, Handle, SessionClient};
 pub use crate::command::{ExecuteResponse, ExecuteResponseKind, RowsFuture, StartupResponse};
+pub use crate::coord::ExecuteContext;
+pub use crate::coord::ExecuteContextExtra;
 pub use crate::coord::id_bundle::CollectionIdBundle;
 pub use crate::coord::peek::PeekResponseUnary;
 pub use crate::coord::read_policy::ReadHolds;
@@ -67,12 +69,10 @@ pub use crate::coord::timeline::TimelineContext;
 pub use crate::coord::timestamp_selection::{
     TimestampContext, TimestampExplanation, TimestampProvider,
 };
-pub use crate::coord::ExecuteContext;
-pub use crate::coord::ExecuteContextExtra;
-pub use crate::coord::{load_remote_system_parameters, serve, Config};
+pub use crate::coord::{Config, load_remote_system_parameters, serve};
 pub use crate::error::AdapterError;
 pub use crate::notice::AdapterNotice;
-pub use crate::util::{verify_datum_desc, ResultExt};
+pub use crate::util::{ResultExt, verify_datum_desc};
 pub use crate::webhook::{
     AppendWebhookError, AppendWebhookResponse, AppendWebhookValidator, WebhookAppenderCache,
 };

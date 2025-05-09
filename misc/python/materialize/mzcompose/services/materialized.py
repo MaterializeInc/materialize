@@ -9,6 +9,9 @@
 
 
 import json
+import os
+import shutil
+import tempfile
 from enum import Enum
 from typing import Any
 
@@ -27,6 +30,7 @@ from materialize.mzcompose.service import (
     ServiceConfig,
     ServiceDependency,
 )
+from materialize.mzcompose.services.azure import azure_blob_uri
 from materialize.mzcompose.services.minio import minio_blob_uri
 from materialize.mzcompose.services.postgres import METADATA_STORE
 
@@ -63,13 +67,15 @@ class Materialized(Service):
         volumes_extra: list[str] = [],
         depends_on: list[str] = [],
         memory: str | None = None,
+        cpu: str | None = None,
         options: list[str] = [],
         persist_blob_url: str | None = None,
         default_size: int | str = Size.DEFAULT_SIZE,
         environment_id: str | None = None,
         propagate_crashes: bool = True,
         external_metadata_store: str | bool = False,
-        external_minio: str | bool = False,
+        external_blob_store: str | bool = False,
+        blob_store_is_azure: bool = False,
         unsafe_mode: bool = True,
         restart: str | None = None,
         use_default_volumes: bool = True,
@@ -88,6 +94,7 @@ class Materialized(Service):
         metadata_store: str = METADATA_STORE,
         cluster_replica_size: dict[str, dict[str, Any]] | None = None,
         bootstrap_replica_size: str | None = None,
+        default_replication_factor: int = 1,
     ) -> None:
         if name is None:
             name = "materialized"
@@ -132,6 +139,11 @@ class Materialized(Service):
             f"MZ_BOOTSTRAP_BUILTIN_SUPPORT_CLUSTER_REPLICA_SIZE={bootstrap_replica_size}",
             f"MZ_BOOTSTRAP_BUILTIN_CATALOG_SERVER_CLUSTER_REPLICA_SIZE={bootstrap_replica_size}",
             f"MZ_BOOTSTRAP_BUILTIN_ANALYTICS_CLUSTER_REPLICA_SIZE={bootstrap_replica_size}",
+            # Note(SangJunBak): mz_system and mz_probe have no replicas by default in materialized
+            # but we re-enable them here since many of our tests rely on them.
+            f"MZ_BOOTSTRAP_BUILTIN_SYSTEM_CLUSTER_REPLICATION_FACTOR={default_replication_factor}",
+            f"MZ_BOOTSTRAP_BUILTIN_PROBE_CLUSTER_REPLICATION_FACTOR={default_replication_factor}",
+            f"MZ_BOOTSTRAP_DEFAULT_CLUSTER_REPLICATION_FACTOR={default_replication_factor}",
             *environment_extra,
             *DEFAULT_CRDB_ENVIRONMENT,
         ]
@@ -149,6 +161,9 @@ class Materialized(Service):
                 system_parameter_version or image_version
             )
 
+        system_parameter_defaults["default_cluster_replication_factor"] = str(
+            default_replication_factor
+        )
         if additional_system_parameter_defaults is not None:
             system_parameter_defaults.update(additional_system_parameter_defaults)
 
@@ -169,10 +184,15 @@ class Materialized(Service):
             environment_id = DEFAULT_MZ_ENVIRONMENT_ID
         command += [f"--environment-id={environment_id}"]
 
-        if external_minio:
-            depends_graph["minio"] = {"condition": "service_healthy"}
-            address = "minio" if external_minio == True else external_minio
-            persist_blob_url = minio_blob_uri(address)
+        if external_blob_store:
+            blob_store = "azurite" if blob_store_is_azure else "minio"
+            depends_graph[blob_store] = {"condition": "service_healthy"}
+            address = blob_store if external_blob_store == True else external_blob_store
+            persist_blob_url = (
+                azure_blob_uri(address)
+                if blob_store_is_azure
+                else minio_blob_uri(address)
+            )
 
         if persist_blob_url:
             command.append(f"--persist-blob-url={persist_blob_url}")
@@ -261,8 +281,13 @@ class Materialized(Service):
         # Depending on the Docker Compose version, this may either work or be
         # ignored with a warning. Unfortunately no portable way of setting the
         # memory limit is known.
-        if memory:
-            config["deploy"] = {"resources": {"limits": {"memory": memory}}}
+        if memory or cpu:
+            limits = {}
+            if memory:
+                limits["memory"] = memory
+            if cpu:
+                limits["cpus"] = cpu
+            config["deploy"] = {"resources": {"limits": limits}}
 
         if sanity_restart:
             # Workaround for https://github.com/docker/compose/issues/11133
@@ -272,6 +297,22 @@ class Materialized(Service):
             config["platform"] = platform
 
         volumes = []
+
+        if image_version is None or image_version >= "v0.140.0-dev":
+            if "MZ_CI_LICENSE_KEY" in os.environ:
+                # We have to take care to write the license_key file atomically
+                # so that it is always valid, even if multiple Materialized
+                # objects are created concurrently.
+                with tempfile.NamedTemporaryFile("w", delete=False) as tmp_file:
+                    tmp_path = tmp_file.name
+                    tmp_file.write(os.environ["MZ_CI_LICENSE_KEY"])
+                os.chmod(tmp_path, 0o644)
+                shutil.move(tmp_path, "license_key")
+
+                environment += ["MZ_LICENSE_KEY=/license_key/license_key"]
+
+                volumes += [f"{os.getcwd()}/license_key:/license_key/license_key"]
+
         if use_default_volumes:
             volumes += DEFAULT_MZ_VOLUMES
         volumes += volumes_extra

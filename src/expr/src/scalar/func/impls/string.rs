@@ -16,7 +16,7 @@ use mz_lowertest::MzReflect;
 use mz_ore::cast::CastFrom;
 use mz_ore::result::ResultExt;
 use mz_ore::str::StrExt;
-use mz_repr::adt::char::{format_str_trim, Char};
+use mz_repr::adt::char::{Char, format_str_trim};
 use mz_repr::adt::date::Date;
 use mz_repr::adt::interval::Interval;
 use mz_repr::adt::jsonb::Jsonb;
@@ -26,16 +26,16 @@ use mz_repr::adt::regex::Regex;
 use mz_repr::adt::system::{Oid, PgLegacyChar};
 use mz_repr::adt::timestamp::{CheckedTimestamp, TimestampPrecision};
 use mz_repr::adt::varchar::{VarChar, VarCharMaxLength};
-use mz_repr::{strconv, ColumnType, Datum, RowArena, ScalarType};
+use mz_repr::{ColumnType, Datum, RowArena, ScalarType, strconv};
 use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use crate::func::regexp_match_static;
 use crate::scalar::func::{
-    array_create_scalar, regexp_split_to_array_re, EagerUnaryFunc, LazyUnaryFunc,
+    EagerUnaryFunc, LazyUnaryFunc, array_create_scalar, regexp_split_to_array_re,
 };
-use crate::{like_pattern, EvalError, MirScalarExpr, UnaryFunc};
+use crate::{EvalError, MirScalarExpr, UnaryFunc, like_pattern};
 
 sqlfunc!(
     #[sqlname = "text_to_boolean"]
@@ -150,6 +150,13 @@ sqlfunc!(
     #[inverse = to_unary!(super::CastUint64ToString)]
     fn cast_string_to_uint64(a: &'a str) -> Result<u64, EvalError> {
         strconv::parse_uint64(a).err_into()
+    }
+);
+
+sqlfunc!(
+    #[sqlname = "reverse"]
+    fn reverse<'a>(a: &'a str) -> String {
+        a.chars().rev().collect()
     }
 );
 
@@ -333,7 +340,7 @@ impl LazyUnaryFunc for CastStringToArray {
             },
         )?;
 
-        Ok(temp_storage.try_make_datum(|packer| packer.push_array(&dims, datums))?)
+        Ok(temp_storage.try_make_datum(|packer| packer.try_push_array(&dims, datums))?)
     }
 
     /// The output ColumnType of this function
@@ -579,7 +586,17 @@ impl<'a> EagerUnaryFunc<'a> for CastStringToChar {
 
 impl fmt::Display for CastStringToChar {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        f.write_str("text_to_char")
+        match self.length {
+            Some(length) => {
+                write!(
+                    f,
+                    "text_to_char[len={}, fail_on_len={}]",
+                    length.into_u32(),
+                    self.fail_on_len
+                )
+            }
+            None => f.write_str("text_to_char[len=unbounded]"),
+        }
     }
 }
 
@@ -707,7 +724,17 @@ impl<'a> EagerUnaryFunc<'a> for CastStringToVarChar {
 
 impl fmt::Display for CastStringToVarChar {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        f.write_str("text_to_varchar")
+        match self.length {
+            Some(length) => {
+                write!(
+                    f,
+                    "text_to_varchar[len={}, fail_on_len={}]",
+                    length.into_u32(),
+                    self.fail_on_len
+                )
+            }
+            None => f.write_str("text_to_varchar[len=unbounded]"),
+        }
     }
 }
 
@@ -715,7 +742,7 @@ impl fmt::Display for CastStringToVarChar {
 // position akin to array parsing.
 static INT2VECTOR_CAST_EXPR: LazyLock<MirScalarExpr> = LazyLock::new(|| MirScalarExpr::CallUnary {
     func: UnaryFunc::CastStringToInt16(CastStringToInt16),
-    expr: Box::new(MirScalarExpr::Column(0)),
+    expr: Box::new(MirScalarExpr::column(0)),
 });
 
 #[derive(
@@ -842,7 +869,8 @@ sqlfunc!(
     #[sqlname = "char_length"]
     fn char_length<'a>(a: &'a str) -> Result<i32, EvalError> {
         let length = a.chars().count();
-        i32::try_from(length).or(Err(EvalError::Int32OutOfRange(length.to_string().into())))
+        i32::try_from(length)
+            .or_else(|_| Err(EvalError::Int32OutOfRange(length.to_string().into())))
     }
 );
 
@@ -850,7 +878,8 @@ sqlfunc!(
     #[sqlname = "bit_length"]
     fn bit_length_string<'a>(a: &'a str) -> Result<i32, EvalError> {
         let length = a.as_bytes().len() * 8;
-        i32::try_from(length).or(Err(EvalError::Int32OutOfRange(length.to_string().into())))
+        i32::try_from(length)
+            .or_else(|_| Err(EvalError::Int32OutOfRange(length.to_string().into())))
     }
 );
 
@@ -858,7 +887,8 @@ sqlfunc!(
     #[sqlname = "octet_length"]
     fn byte_length_string<'a>(a: &'a str) -> Result<i32, EvalError> {
         let length = a.as_bytes().len();
-        i32::try_from(length).or(Err(EvalError::Int32OutOfRange(length.to_string().into())))
+        i32::try_from(length)
+            .or_else(|_| Err(EvalError::Int32OutOfRange(length.to_string().into())))
     }
 );
 

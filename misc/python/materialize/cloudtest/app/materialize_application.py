@@ -22,6 +22,7 @@ from materialize.cloudtest.k8s.api.k8s_resource import K8sResource
 from materialize.cloudtest.k8s.cockroach import cockroach_resources
 from materialize.cloudtest.k8s.debezium import debezium_resources
 from materialize.cloudtest.k8s.environmentd import (
+    EnvironmentdSecret,
     EnvironmentdService,
     EnvironmentdStatefulSet,
     MaterializedAliasService,
@@ -50,6 +51,7 @@ class MaterializeApplication(CloudtestApplicationBase):
         apply_node_selectors: bool = False,
     ) -> None:
         self.tag = tag
+        self.secret = EnvironmentdSecret()
         self.environmentd = EnvironmentdService()
         self.materialized_alias = MaterializedAliasService()
         self.testdrive = TestdrivePod(
@@ -79,6 +81,7 @@ class MaterializeApplication(CloudtestApplicationBase):
             Minio(apply_node_selectors=self.apply_node_selectors),
             VpcEndpointsClusterRole(),
             AdminRoleBinding(),
+            self.secret,
             EnvironmentdStatefulSet(
                 release_mode=self.release_mode,
                 tag=self.tag,
@@ -101,7 +104,7 @@ class MaterializeApplication(CloudtestApplicationBase):
             "-f",
             os.path.join(
                 os.path.abspath(self.mz_root),
-                "src/cloud-resources/src/crd/gen/vpcendpoints.json",
+                "src/cloud-resources/src/crd/generated/vpcendpoints.json",
             ),
         )
 

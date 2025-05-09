@@ -17,7 +17,7 @@ tests:
       of: Deployment
   - equal:
       path: spec.template.spec.containers[0].image
-      value: materialize/orchestratord:v0.131.0-dev.0
+      value: materialize/orchestratord:v0.144.0
   - equal:
       path: spec.template.spec.containers[0].imagePullPolicy
       value: IfNotPresent
@@ -64,10 +64,10 @@ tests:
     storage.storageClass.name: ""
   asserts:
   - matchRegex:
-      path: spec.template.spec.containers[0].args[12]      # Index of the environmentd-cluster-replica-sizes argument
+      path: spec.template.spec.containers[0].args[14]      # Index of the environmentd-cluster-replica-sizes argument
       pattern: disk_limit":"0"
   - matchRegex:
-      path: spec.template.spec.containers[0].args[12]
+      path: spec.template.spec.containers[0].args[14]
       pattern: is_cc":true
 
 - it: should have a cluster with disk limit to 1552MiB when storage class is configured
@@ -75,10 +75,10 @@ tests:
     storage.storageClass.name: "my-storage-class"
   asserts:
   - matchRegex:
-      path: spec.template.spec.containers[0].args[12]
+      path: spec.template.spec.containers[0].args[14]
       pattern: disk_limit":"1552MiB"
   - matchRegex:
-      path: spec.template.spec.containers[0].args[12]
+      path: spec.template.spec.containers[0].args[14]
       pattern: is_cc":true
 
 - it: should configure for AWS provider correctly
@@ -127,7 +127,7 @@ tests:
   # Feature Flag Tests
 - it: should enable balancer creation when configured
   set:
-    operator.features.createBalancers: true
+    balancerd.enabled: true
   asserts:
   - contains:
       path: spec.template.spec.containers[0].args
@@ -135,7 +135,7 @@ tests:
 
 - it: should not enable balancer creation when disabled
   set:
-    operator.features.createBalancers: false
+    balancerd.enabled: false
   asserts:
   - notContains:
       path: spec.template.spec.containers[0].args
@@ -143,7 +143,7 @@ tests:
 
 - it: should enable console creation when configured
   set:
-    operator.features.createConsole: true
+    console.enabled: true
   asserts:
   - contains:
       path: spec.template.spec.containers[0].args
@@ -151,7 +151,7 @@ tests:
 
 - it: should configure console image tag map override correctly
   set:
-    operator.features.consoleImageTagMapOverride:
+    console.imageTagMapOverride:
       "v0.125.0": "25.1.0"
       "v0.126.0": "25.2.0"
   asserts:

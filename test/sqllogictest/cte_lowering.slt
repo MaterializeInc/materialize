@@ -30,14 +30,14 @@ WITH t AS (SELECT * FROM y WHERE a < 3)
   SELECT * FROM t NATURAL JOIN t a;
 ----
 Project (#0)
-  Return
-    InnerJoin (#0 = #1)
-      Get l0
-      Get l0
   With
-    cte l0 =
-      Filter (#0 < 3)
+    cte [l0 as t] =
+      Filter (#0{a} < 3)
         Get materialize.public.y
+  Return
+    InnerJoin (#0{a} = #1{a})
+      Get l0
+      Get l0
 
 Target cluster: quickstart
 
@@ -49,13 +49,13 @@ EXPLAIN RAW PLAN FOR
 WITH t AS (SELECT * FROM y WHERE a < 3)
   SELECT * FROM y WHERE (select a from t) < a;
 ----
-Return
-  Filter (select(Get l0) < #0)
-    Get materialize.public.y
 With
-  cte l0 =
-    Filter (#0 < 3)
+  cte [l0 as t] =
+    Filter (#0{a} < 3)
       Get materialize.public.y
+Return
+  Filter (select(Get l0) < #0{a})
+    Get materialize.public.y
 
 Target cluster: quickstart
 
@@ -69,14 +69,14 @@ WITH t AS (SELECT * FROM y WHERE a < 3)
 ----
 With
   cte l0 =
-    Filter (#0 < 3) // { arity: 1 }
+    Filter (#0{a} < 3) // { arity: 1 }
       CrossJoin // { arity: 1 }
         Constant // { arity: 0 }
           - ()
         Get materialize.public.y // { arity: 1 }
 Return // { arity: 1 }
   Project (#0) // { arity: 1 }
-    Filter (#0 = #1) // { arity: 2 }
+    Filter (#0{a} = #1{a}) // { arity: 2 }
       Project (#0, #1) // { arity: 2 }
         CrossJoin // { arity: 2 }
           Get l0 // { arity: 1 }
@@ -104,8 +104,8 @@ With
     Distinct project=[#0] // { arity: 1 }
       Get l0 // { arity: 1 }
   cte l2 =
-    Reduce group_by=[#0] aggregates=[max(#1)] // { arity: 2 }
-      Filter (#1 < #0) // { arity: 2 }
+    Reduce group_by=[#0] aggregates=[max(#1{a})] // { arity: 2 }
+      Filter (#1{a} < #0{a}) // { arity: 2 }
         CrossJoin // { arity: 2 }
           Get l1 // { arity: 1 }
           Get materialize.public.y // { arity: 1 }
@@ -163,8 +163,8 @@ With
     Distinct project=[#0] // { arity: 1 }
       Get l0 // { arity: 1 }
   cte l2 =
-    Reduce group_by=[#0] aggregates=[max(#1)] // { arity: 2 }
-      Filter (#1 < #0) // { arity: 2 }
+    Reduce group_by=[#0] aggregates=[max(#1{a})] // { arity: 2 }
+      Filter (#1{a} < #0{a}) // { arity: 2 }
         CrossJoin // { arity: 2 }
           Get l1 // { arity: 1 }
           Get materialize.public.y // { arity: 1 }
@@ -254,8 +254,8 @@ With
     Distinct project=[#0] // { arity: 1 }
       Get l0 // { arity: 1 }
   cte l2 =
-    Reduce group_by=[#0] aggregates=[max(#1)] // { arity: 2 }
-      Filter (#1 < #0) // { arity: 2 }
+    Reduce group_by=[#0] aggregates=[max(#1{a})] // { arity: 2 }
+      Filter (#1{a} < #0{a}) // { arity: 2 }
         CrossJoin // { arity: 2 }
           Get l1 // { arity: 1 }
           Get materialize.public.y // { arity: 1 }
@@ -278,7 +278,7 @@ Return // { arity: 3 }
   Project (#0, #2, #3) // { arity: 3 }
     Join on=(#0 = #1) // { arity: 4 }
       Get l0 // { arity: 1 }
-      Filter (#1 = #2) // { arity: 3 }
+      Filter (#1{m} = #2{m}) // { arity: 3 }
         Project (#0, #1, #3) // { arity: 3 }
           Join on=(#0 = #2) // { arity: 4 }
             Get l3 // { arity: 2 }
@@ -325,8 +325,8 @@ With
     Distinct project=[#0] // { arity: 1 }
       Get l0 // { arity: 1 }
   cte l2 =
-    Reduce group_by=[#0] aggregates=[max(#1)] // { arity: 2 }
-      Filter (#1 < #0) // { arity: 2 }
+    Reduce group_by=[#0] aggregates=[max(#1{a})] // { arity: 2 }
+      Filter (#1{a} < #0{a}) // { arity: 2 }
         CrossJoin // { arity: 2 }
           Get l1 // { arity: 1 }
           Get materialize.public.y // { arity: 1 }
@@ -436,8 +436,8 @@ With
     Distinct project=[#0] // { arity: 1 }
       Get l0 // { arity: 1 }
   cte l2 =
-    Reduce group_by=[#0] aggregates=[max(#1)] // { arity: 2 }
-      Filter (#1 < #0) // { arity: 2 }
+    Reduce group_by=[#0] aggregates=[max(#1{a})] // { arity: 2 }
+      Filter (#1{a} < #0{a}) // { arity: 2 }
         CrossJoin // { arity: 2 }
           Get l1 // { arity: 1 }
           Get materialize.public.y // { arity: 1 }
@@ -487,7 +487,7 @@ Return // { arity: 3 }
         Join on=(#1 = #2) // { arity: 4 }
           Get l3 // { arity: 2 }
           Project (#0, #2) // { arity: 2 }
-            Map (#0) // { arity: 3 }
+            Map (#0{a}) // { arity: 3 }
               Project (#0, #1) // { arity: 2 }
                 Filter (#2 > 0) // { arity: 3 }
                   Project (#0, #1, #3) // { arity: 3 }
@@ -527,45 +527,45 @@ FROM (WITH e(e) AS (SELECT b FROM b)
                              < (SELECT max(x) FROM x))
 ----
 Project (#1)
-  Return
-    Map (select(Get l8))
-      Return
-        Filter (select(Get l6) < select(Get l7))
-          Get l3
-      With
-        cte l6 =
-          Return
-            Reduce aggregates=[min(#0)]
-              Get l4
-          With
-            cte l4 =
-              Get l3
-        cte l7 =
-          Reduce aggregates=[max(#0)]
-            Get l2
-        cte l3 =
-          Get l1
   With
-    cte l8 =
+    cte [l0 as a] =
+      Get materialize.public.y
+    cte [l1 as b] =
+      Get materialize.public.y
+    cte [l2 as x] =
+      Get l1
+    cte [l8 as subquery-8] =
+      With
+        cte [l3 as c] =
+          Get materialize.public.y
+        cte [l5 as subquery-5] =
+          With
+            cte [l4 as d] =
+              Get l3
+          Return
+            Reduce aggregates=[max(#0{d})]
+              Get l4
       Return
         Filter (select(Get l5) > 1)
           Get l3
+  Return
+    Map (select(Get l8))
       With
-        cte l5 =
-          Return
-            Reduce aggregates=[max(#0)]
-              Get l4
+        cte [l3 as e] =
+          Get l1
+        cte [l7 as subquery-7] =
+          Reduce aggregates=[max(#0{x})]
+            Get l2
+        cte [l6 as subquery-6] =
           With
-            cte l4 =
+            cte [l4 as f] =
               Get l3
-        cte l3 =
-          Get materialize.public.y
-    cte l2 =
-      Get l1
-    cte l1 =
-      Get materialize.public.y
-    cte l0 =
-      Get materialize.public.y
+          Return
+            Reduce aggregates=[min(#0{f})]
+              Get l4
+      Return
+        Filter (select(Get l6) < select(Get l7))
+          Get l3
 
 Target cluster: quickstart
 
@@ -576,13 +576,13 @@ query T multiline
 EXPLAIN RAW PLAN FOR
 WITH a(a) AS (SELECT a FROM y) SELECT * FROM (WITH a(a) AS (SELECT a FROM a) SELECT a FROM a);
 ----
+With
+  cte [l0 as a] =
+    Get materialize.public.y
+  cte [l1 as a] =
+    Get l0
 Return
   Get l1
-With
-  cte l1 =
-    Get l0
-  cte l0 =
-    Get materialize.public.y
 
 Target cluster: quickstart
 

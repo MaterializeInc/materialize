@@ -40,6 +40,7 @@ from materialize.mzcompose.services.kafka import Kafka
 from materialize.mzcompose.services.localstack import Localstack
 from materialize.mzcompose.services.materialized import Materialized
 from materialize.mzcompose.services.minio import Minio
+from materialize.mzcompose.services.mz import Mz
 from materialize.mzcompose.services.postgres import (
     CockroachOrPostgresMetadata,
     Postgres,
@@ -60,6 +61,8 @@ SERVICES = [
     Clusterd(name="clusterd2"),
     Clusterd(name="clusterd3"),
     Clusterd(name="clusterd4"),
+    Mz(app_password=""),
+    Minio(),
     Materialized(
         # We use mz_panic() in some test scenarios, so environmentd must stay up.
         propagate_crashes=False,
@@ -82,9 +85,7 @@ SERVICES = [
 
 
 def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
-    for name in buildkite.shard_list(
-        list(c.workflows.keys()), lambda workflow: workflow
-    ):
+    def process(name: str) -> None:
         # incident-70 requires more memory, runs in separate CI step
         # concurrent-connections is too flaky
         if name in (
@@ -92,9 +93,12 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
             "test-incident-70",
             "test-concurrent-connections",
         ):
-            continue
+            return
         with c.test_case(name):
             c.workflow(name)
+
+    files = buildkite.shard_list(list(c.workflows.keys()), lambda workflow: workflow)
+    c.test_parts(files, process)
 
 
 def workflow_test_smoke(c: Composition, parser: WorkflowArgumentParser) -> None:
@@ -859,17 +863,6 @@ def workflow_test_github_5087(c: Composition) -> None:
                   ) AS base (data2, data4, data8, diff),
                   repeat_row(diff)
               );
-              CREATE MATERIALIZED VIEW constant_wrapped_sums AS
-              SELECT SUM(data2) AS sum2, SUM(data4) AS sum4, SUM(data8) AS sum8
-              FROM (
-                  SELECT * FROM (
-                      VALUES (2::uint2, 2::uint4, 2::uint8, 9223372036854775807),
-                        (1::uint2, 1::uint4, 1::uint8, 1),
-                        (1::uint2, 1::uint4, 1::uint8, 1),
-                        (1::uint2, 1::uint4, 1::uint8, 1)
-                  ) AS base (data2, data4, data8, diff),
-                  repeat_row(diff)
-              );
             """
         )
         c.testdrive(
@@ -927,31 +920,29 @@ def workflow_test_github_5087(c: Composition) -> None:
             # Test wraparound behaviors
             > INSERT INTO base VALUES (1, 1, 1, -1);
 
-            > INSERT INTO base VALUES (2, 2, 2, 9223372036854775807);
+            >[version<14000] INSERT INTO base VALUES (2, 2, 2, 9223372036854775807);
 
-            > SELECT sum(data2) FROM data;
+            >[version<14000] SELECT sum(data2) FROM data;
             18446744073709551614
 
-            > SELECT sum(data4) FROM data;
+            >[version<14000] SELECT sum(data4) FROM data;
             18446744073709551614
 
-            > SELECT sum(data8) FROM data;
+            >[version<14000] SELECT sum(data8) FROM data;
             18446744073709551614
 
             > INSERT INTO base VALUES (1, 1, 1, 1), (1, 1, 1, 1), (1, 1, 1, 1);
 
-            # Constant-folding behavior matches for now the rendered behavior
-            # wrt. wraparound; this can be revisited as part of database-issues#5172.
-            > SELECT * FROM constant_wrapped_sums;
-            1 1 18446744073709551617
-
-            > SELECT SUM(data2) FROM data;
+            # This causes a panic starting with v0.140.0, but not before.
+            >[version<14000] SELECT SUM(data2) FROM data;
             1
 
-            > SELECT SUM(data4) FROM data;
+            # This causes a panic starting with v0.140.0, but not before.
+            >[version<14000] SELECT SUM(data4) FROM data;
             1
 
-            > SELECT SUM(data8) FROM data;
+            # This causes a panic starting with v0.140.0, but not before.
+            >[version<14000] SELECT SUM(data8) FROM data;
             18446744073709551617
             """
             )
@@ -2459,6 +2450,10 @@ class Metrics:
         assert len(values) == 1
         return values[0]
 
+    def get_summed_value(self, metric_name: str) -> float:
+        metrics = self.with_name(metric_name)
+        return sum(metrics.values())
+
     def get_command_count(self, metric: str, command_type: str) -> float:
         metrics = self.with_name(metric)
         values = [
@@ -2480,9 +2475,14 @@ class Metrics:
             "mz_compute_replica_history_command_count", command_type
         )
 
-    def get_controller_history_command_count(self, command_type: str) -> float:
+    def get_compute_controller_history_command_count(self, command_type: str) -> float:
         return self.get_command_count(
             "mz_compute_controller_history_command_count", command_type
+        )
+
+    def get_storage_controller_history_command_count(self, command_type: str) -> float:
+        return self.get_command_count(
+            "mz_storage_controller_history_command_count", command_type
         )
 
     def get_commands_total(self, command_type: str) -> float:
@@ -2507,8 +2507,8 @@ class Metrics:
         assert len(values) == 1
         return values[0]
 
-    def get_initial_output_duration(self, collection_id: str) -> float | None:
-        metrics = self.with_name("mz_dataflow_initial_output_duration_seconds")
+    def get_wallclock_lag_count(self, collection_id: str) -> float | None:
+        metrics = self.with_name("mz_dataflow_wallclock_lag_seconds_count")
         values = [
             v for k, v in metrics.items() if f'collection_id="{collection_id}"' in k
         ]
@@ -2524,6 +2524,16 @@ class Metrics:
     def get_last_command_received(self, server_name: str) -> float:
         metrics = self.with_name("mz_grpc_server_last_command_received")
         values = [v for k, v in metrics.items() if server_name in k]
+        assert len(values) == 1
+        return values[0]
+
+    def get_compute_collection_count(self, type_: str, hydrated: str) -> float:
+        metrics = self.with_name("mz_compute_collection_count")
+        values = [
+            v
+            for k, v in metrics.items()
+            if f'type="{type_}"' in k and f'hydrated="{hydrated}"' in k
+        ]
         assert len(values) == 1
         return values[0]
 
@@ -2632,9 +2642,32 @@ def workflow_test_replica_metrics(c: Composition) -> None:
         mv_correction_max_cap_per_worker > 0
     ), f"unexpected persist sink max correction capacity per worker: {mv_correction_max_cap_per_worker}"
 
-    # Can take a few seconds, don't request the metrics too quickly
-    time.sleep(2)
     assert metrics.get_last_command_received("compute") >= before_connection_time
+
+    count = metrics.get_compute_collection_count("log", "0")
+    assert count == 0, "unexpected number of unhydrated log collections"
+    count = metrics.get_compute_collection_count("log", "1")
+    assert count > 0, "unexpected number of hydrated log collections"
+    count = metrics.get_compute_collection_count("user", "0")
+    assert count == 0, "unexpected number of unhydrated user collections"
+    count = metrics.get_compute_collection_count("user", "1")
+    assert count == 2, "unexpected number of hydrated user collections"
+
+    # Check that collection metrics update when collections are dropped.
+    c.sql(
+        """
+        DROP INDEX idx;
+        DROP MATERIALIZED VIEW mv;
+        """
+    )
+
+    time.sleep(2)
+    metrics = fetch_metrics()
+
+    count = metrics.get_compute_collection_count("user", "0")
+    assert count == 0, "unexpected number of unhydrated user collections"
+    count = metrics.get_compute_collection_count("user", "1")
+    assert count == 0, "unexpected number of hydrated user collections"
 
 
 def workflow_test_compute_controller_metrics(c: Composition) -> None:
@@ -2749,21 +2782,25 @@ def workflow_test_compute_controller_metrics(c: Composition) -> None:
     assert count == 0, f"got {count}"
 
     # mz_compute_controller_history_command_count
-    count = metrics.get_controller_history_command_count("create_timely")
+    count = metrics.get_compute_controller_history_command_count("create_timely")
     assert count == 1, f"got {count}"
-    count = metrics.get_controller_history_command_count("create_instance")
+    count = metrics.get_compute_controller_history_command_count("create_instance")
     assert count == 1, f"got {count}"
-    count = metrics.get_controller_history_command_count("allow_compaction")
+    count = metrics.get_compute_controller_history_command_count("allow_compaction")
     assert count > 0, f"got {count}"
-    count = metrics.get_controller_history_command_count("create_dataflow")
+    count = metrics.get_compute_controller_history_command_count("create_dataflow")
     assert count > 0, f"got {count}"
-    count = metrics.get_controller_history_command_count("peek")
+    count = metrics.get_compute_controller_history_command_count("peek")
     assert count <= 2, f"got {count}"
-    count = metrics.get_controller_history_command_count("cancel_peek")
+    count = metrics.get_compute_controller_history_command_count("cancel_peek")
     assert count <= 2, f"got {count}"
-    count = metrics.get_controller_history_command_count("initialization_complete")
+    count = metrics.get_compute_controller_history_command_count(
+        "initialization_complete"
+    )
     assert count == 1, f"got {count}"
-    count = metrics.get_controller_history_command_count("update_configuration")
+    count = metrics.get_compute_controller_history_command_count("update_configuration")
+    assert count == 1, f"got {count}"
+    count = metrics.get_compute_controller_history_command_count("allow_writes")
     assert count == 1, f"got {count}"
 
     count = metrics.get_value("mz_compute_controller_history_dataflow_count")
@@ -2777,11 +2814,20 @@ def workflow_test_compute_controller_metrics(c: Composition) -> None:
     count = metrics.get_peeks_total("canceled")
     assert count == 0, f"got {count}"
 
-    # mz_dataflow_initial_output_duration_seconds
-    duration = metrics.get_initial_output_duration(index_id)
-    assert duration, f"got {duration}"
-    duration = metrics.get_initial_output_duration(mv_id)
-    assert duration, f"got {duration}"
+    count = metrics.get_value("mz_compute_controller_connected_replica_count")
+    assert count == 1, f"got {count}"
+    count = metrics.get_value("mz_compute_controller_replica_connects_total")
+    assert count == 1, f"got {count}"
+    duration = metrics.get_value(
+        "mz_compute_controller_replica_connect_wait_time_seconds_total"
+    )
+    assert duration > 0, f"got {duration}"
+
+    # mz_dataflow_wallclock_lag_seconds_count
+    count = metrics.get_wallclock_lag_count(index_id)
+    assert count, f"got {count}"
+    count = metrics.get_wallclock_lag_count(mv_id)
+    assert count, f"got {count}"
 
     # Drop the dataflows.
     c.sql(
@@ -2793,13 +2839,12 @@ def workflow_test_compute_controller_metrics(c: Composition) -> None:
 
     # Wait for the controller to asynchronously drop the dataflows and update
     # metrics. We can inspect the controller's view of things in
-    # `mz_compute_hydration_statuses`, which is updated at the same time as
-    # these metrics are.
+    # `mz_frontiers`, which is updated at the same time as these metrics are.
     c.testdrive(
         input=dedent(
             """
             > SELECT *
-              FROM mz_internal.mz_compute_hydration_statuses
+              FROM mz_internal.mz_frontiers
               WHERE object_id LIKE 'u%'
             """
         )
@@ -2807,8 +2852,149 @@ def workflow_test_compute_controller_metrics(c: Composition) -> None:
 
     # Check that the per-collection metrics have been cleaned up.
     metrics = fetch_metrics()
-    assert metrics.get_initial_output_duration(index_id) is None
-    assert metrics.get_initial_output_duration(mv_id) is None
+    assert metrics.get_wallclock_lag_count(index_id) is None
+    assert metrics.get_wallclock_lag_count(mv_id) is None
+
+
+def workflow_test_storage_controller_metrics(c: Composition) -> None:
+    """Test metrics exposed by the storage controller."""
+
+    c.down(destroy_volumes=True)
+    c.up("materialized", "kafka", "schema-registry")
+    c.up("testdrive", persistent=True)
+
+    def fetch_metrics() -> Metrics:
+        resp = c.exec(
+            "materialized", "curl", "localhost:6878/metrics", capture=True
+        ).stdout
+        return Metrics(resp)
+
+    # Set up a cluster with a couple storage objects.
+    c.testdrive(
+        dedent(
+            """
+            $ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
+            ALTER SYSTEM SET enable_alter_table_add_column = true
+
+            > CREATE CLUSTER test SIZE '1'
+            > SET cluster = test
+
+            > CREATE TABLE t (a int)
+            > INSERT INTO t VALUES (1)
+
+            > CREATE TABLE t_alter (a int)
+            > INSERT INTO t_alter VALUES (1)
+            > ALTER TABLE t_alter ADD COLUMN b int
+
+            > CREATE MATERIALIZED VIEW mv AS SELECT * FROM t
+
+            > CREATE SOURCE src FROM LOAD GENERATOR COUNTER
+
+            > CREATE CONNECTION kafka_conn
+                TO KAFKA (BROKER '${testdrive.kafka-addr}', SECURITY PROTOCOL PLAINTEXT)
+            > CREATE CONNECTION csr_conn
+                TO CONFLUENT SCHEMA REGISTRY (URL '${testdrive.schema-registry-url}')
+            > CREATE SINK snk FROM t
+                INTO KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-snk-${testdrive.seed}')
+                FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
+                ENVELOPE DEBEZIUM
+
+            > SELECT count(*) > 0 FROM t
+            true
+            > SELECT count(*) > 0 FROM t_alter
+            true
+            > SELECT count(*) > 0 FROM mv
+            true
+            > SELECT count(*) > 0 FROM src
+            true
+            """
+        )
+    )
+
+    table1_id = c.sql_query("SELECT id FROM mz_tables WHERE name = 't'")[0][0]
+    table2_id = c.sql_query("SELECT id FROM mz_tables WHERE name = 't_alter'")[0][0]
+    mv_id = c.sql_query("SELECT id FROM mz_materialized_views WHERE name = 'mv'")[0][0]
+    source_id = c.sql_query("SELECT id FROM mz_sources WHERE name = 'src'")[0][0]
+    sink_id = c.sql_query("SELECT id FROM mz_sinks WHERE name = 'snk'")[0][0]
+
+    # Wait a bit to let the controller refresh its metrics.
+    time.sleep(2)
+
+    # Check that expected metrics exist and have sensible values.
+    metrics = fetch_metrics()
+    metrics_u2 = metrics.for_instance("u2")
+    metrics_ux = metrics.for_instance("")
+
+    count = metrics_u2.get_summed_value("mz_storage_messages_sent_bytes")
+    assert count > 0, f"got {count}"
+    count = metrics_u2.get_summed_value("mz_storage_messages_received_bytes")
+    assert count > 0, f"got {count}"
+
+    # mz_compute_controller_history_command_count
+    count = metrics_u2.get_storage_controller_history_command_count("create_timely")
+    assert count == 1, f"got {count}"
+    count = metrics_u2.get_storage_controller_history_command_count("allow_compaction")
+    assert count > 0, f"got {count}"
+    count = metrics_u2.get_storage_controller_history_command_count("run_ingestions")
+    assert count == 1, f"got {count}"
+    count = metrics_u2.get_storage_controller_history_command_count("run_sinks")
+    assert count == 1, f"got {count}"
+    count = metrics_u2.get_storage_controller_history_command_count(
+        "initialization_complete"
+    )
+    assert count == 1, f"got {count}"
+    count = metrics_u2.get_storage_controller_history_command_count(
+        "update_configuration"
+    )
+    assert count == 1, f"got {count}"
+    count = metrics_u2.get_storage_controller_history_command_count("allow_writes")
+    assert count == 1, f"got {count}"
+
+    count = metrics_u2.get_value("mz_compute_controller_connected_replica_count")
+    assert count == 1, f"got {count}"
+    count = metrics_u2.get_value("mz_compute_controller_replica_connects_total")
+    assert count == 1, f"got {count}"
+    duration = metrics_u2.get_value(
+        "mz_compute_controller_replica_connect_wait_time_seconds_total"
+    )
+    assert duration > 0, f"got {duration}"
+
+    # mz_dataflow_wallclock_lag_seconds_count
+    count = metrics_ux.get_wallclock_lag_count(table1_id)
+    assert count, f"got {count}"
+    count = metrics_ux.get_wallclock_lag_count(table2_id)
+    assert count, f"got {count}"
+    count = metrics_ux.get_wallclock_lag_count(mv_id)
+    assert count, f"got {count}"
+    count = metrics_u2.get_wallclock_lag_count(source_id)
+    assert count, f"got {count}"
+    count = metrics_u2.get_wallclock_lag_count(sink_id)
+    assert count, f"got {count}"
+
+    # Drop the storage objects.
+    c.sql(
+        """
+        DROP sink snk;
+        DROP SOURCE src;
+        DROP MATERIALIZED VIEW mv;
+        DROP TABLE t;
+        DROP TABLE t_alter;
+        """
+    )
+
+    # Wait a bit to let the controller refresh its metrics.
+    time.sleep(2)
+
+    # Check that the per-collection metrics have been cleaned up.
+    metrics = fetch_metrics()
+    metrics_u2 = metrics.for_instance("u2")
+    metrics_ux = metrics.for_instance("")
+
+    assert metrics_ux.get_wallclock_lag_count(table1_id) is None
+    assert metrics_ux.get_wallclock_lag_count(table2_id) is None
+    assert metrics_ux.get_wallclock_lag_count(mv_id) is None
+    assert metrics_u2.get_wallclock_lag_count(source_id) is None
+    assert metrics_u2.get_wallclock_lag_count(sink_id) is None
 
 
 def workflow_test_optimizer_metrics(c: Composition) -> None:
@@ -2929,7 +3115,19 @@ def workflow_test_metrics_retention_across_restart(c: Composition) -> None:
     ), f"index sinces did not match {index_since1} vs {index_since2})"
 
 
-RE_WORKLOAD_CLASS_LABEL = re.compile(r'workload_class="(?P<value>\w+)"')
+def find_proxy_port(logs: str, cluster_id: str, port_name: str) -> int | None:
+    """Extract a proxy port from the given logs."""
+
+    RE_PROXY_LINE = re.compile(
+        rf".*INFO mz_orchestrator_process: cluster-{cluster_id}-replica-.*:"
+        rf" {port_name} tcp proxy listening on 0.0.0.0:(?P<port>\d+)"
+    )
+
+    for line in logs.splitlines():
+        if match := RE_PROXY_LINE.match(line):
+            return int(match.group("port"))
+
+    return None
 
 
 def workflow_test_workload_class_in_metrics(c: Composition) -> None:
@@ -2938,9 +3136,24 @@ def workflow_test_workload_class_in_metrics(c: Composition) -> None:
     exposed by envd and clusterd.
     """
 
+    RE_WORKLOAD_CLASS_LABEL = re.compile(r'workload_class="(?P<value>\w+)"')
+
     c.down(destroy_volumes=True)
     c.up("materialized")
-    c.up("clusterd1")
+
+    # Create a cluster and wait for it to come up.
+    c.sql(
+        """
+        CREATE CLUSTER test SIZE '1';
+        SET cluster = test;
+        SELECT * FROM mz_introspection.mz_dataflow_operators;
+        """
+    )
+
+    # Find the internal-http port of the test cluster.
+    cluster_id = c.sql_query("SELECT id FROM mz_clusters WHERE name = 'test'")[0][0]
+    logs = c.invoke("logs", "materialized", capture=True).stdout
+    clusterd_port = find_proxy_port(logs, cluster_id, "internal-http")
 
     def check_workload_class(expected: str | None):
         """
@@ -2955,7 +3168,7 @@ def workflow_test_workload_class_in_metrics(c: Composition) -> None:
             "materialized", "curl", "localhost:6878/metrics", capture=True
         ).stdout
         clusterd_metrics = c.exec(
-            "clusterd1", "curl", "localhost:6878/metrics", capture=True
+            "materialized", "curl", f"localhost:{clusterd_port}/metrics", capture=True
         ).stdout
 
         envd_classes = {
@@ -2979,21 +3192,6 @@ def workflow_test_workload_class_in_metrics(c: Composition) -> None:
             assert clusterd_classes == {
                 expected
             }, f"clusterd: expected workload class '{expected}', found {clusterd_classes}"
-
-    c.sql(
-        """
-        ALTER SYSTEM SET unsafe_enable_unorchestrated_cluster_replicas = true;
-        CREATE CLUSTER test REPLICAS (r1 (
-            STORAGECTL ADDRESSES ['clusterd1:2100'],
-            STORAGE ADDRESSES ['clusterd1:2103'],
-            COMPUTECTL ADDRESSES ['clusterd1:2101'],
-            COMPUTE ADDRESSES ['clusterd1:2102'],
-            WORKERS 1
-        ));
-        """,
-        port=6877,
-        user="mz_system",
-    )
 
     check_workload_class(None)
 
@@ -3189,7 +3387,7 @@ def workflow_test_incident_70(c: Composition) -> None:
     with c.override(
         Materialized(
             external_metadata_store=True,
-            external_minio=True,
+            external_blob_store=True,
             sanity_restart=False,
         ),
         Minio(setup_materialize=True),
@@ -3687,9 +3885,11 @@ def check_read_frontier_not_stuck(c: Composition, object_name: str):
         result = c.sql_query(query)
 
     before = int(result[0][0])
-    time.sleep(2)
+    time.sleep(3)
     after = int(c.sql_query(query)[0][0])
-    assert before < after, f"read frontier of {object_name} is stuck"
+    assert (
+        before < after
+    ), f"read frontier of {object_name} is stuck, {before} >= {after}"
 
 
 def workflow_test_refresh_mv_restart(
@@ -3860,7 +4060,7 @@ def workflow_test_refresh_mv_restart(
 
         after_restart = dedent(
             """
-            > ALTER CLUSTER cluster_b SET (REPLICATION FACTOR 1);
+            > ALTER CLUSTER cluster_b SET (REPLICATION FACTOR 2);
 
             > SET TRANSACTION_ISOLATION TO 'STRICT SERIALIZABLE';
 
@@ -4036,7 +4236,7 @@ def workflow_test_refresh_mv_restart(
         c.testdrive(
             input=dedent(
                 """
-                > ALTER CLUSTER cluster_defgh SET (REPLICATION FACTOR 1);
+                > ALTER CLUSTER cluster_defgh SET (REPLICATION FACTOR 2);
 
                 > CREATE CLUSTER serving SIZE '1';
 
@@ -4739,38 +4939,57 @@ def workflow_test_unified_introspection_during_replica_disconnect(c: Composition
         )
 
 
-def workflow_test_graceful_reconfigure(
+def workflow_test_zero_downtime_reconfigure(
     c: Composition, parser: WorkflowArgumentParser
 ) -> None:
     """
-    Tests gracefully reconfiguring a managed cluster
+    Tests reconfiguring a managed cluster with zero downtime
     """
     c.down(destroy_volumes=True)
     with c.override(
         Testdrive(no_reset=True),
     ):
         c.up("testdrive", persistent=True)
-        c.up("materialized")
-        c.up("clusterd1")
-        c.sql(
-            """
-            ALTER SYSTEM SET enable_graceful_cluster_reconfiguration = true;
+        c.up("materialized", "clusterd1", "zookeeper", "kafka", "schema-registry")
+        c.testdrive(
+            dedent(
+                """
+            $ kafka-create-topic topic=graceful-reconfig
 
+            $ kafka-ingest topic=graceful-reconfig format=bytes key-format=bytes key-terminator=: repeat=1000
+            key${kafka-ingest.iteration}:value${kafka-ingest.iteration}
+
+            $ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
+            ALTER SYSTEM SET enable_zero_downtime_cluster_reconfiguration = true;
             DROP CLUSTER IF EXISTS cluster1 CASCADE;
             DROP TABLE IF EXISTS t CASCADE;
-
             CREATE CLUSTER cluster1 ( SIZE = '1');
-
-            SET CLUSTER = cluster1;
-
-            -- now let's give it another go with user-defined objects
-            CREATE TABLE t (a int);
-            CREATE DEFAULT INDEX ON t;
-            INSERT INTO t VALUES (42);
             GRANT ALL ON CLUSTER cluster1 TO materialize;
-            """,
-            port=6877,
-            user="mz_system",
+
+            > SET CLUSTER = cluster1;
+
+            > CREATE TABLE t (a int);
+            > CREATE DEFAULT INDEX ON t;
+            > INSERT INTO t VALUES (42);
+
+            > CREATE CONNECTION kafka_conn
+              TO KAFKA (BROKER '${testdrive.kafka-addr}', SECURITY PROTOCOL PLAINTEXT)
+
+            > CREATE CONNECTION csr_conn TO CONFLUENT SCHEMA REGISTRY (
+                URL '${testdrive.schema-registry-url}'
+              )
+
+            > CREATE SOURCE kafka_src
+              IN CLUSTER cluster1
+              FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-graceful-reconfig-${testdrive.seed}')
+
+            > CREATE TABLE kafka_tbl
+              FROM SOURCE kafka_src (REFERENCE "testdrive-graceful-reconfig-${testdrive.seed}")
+              KEY FORMAT TEXT
+              VALUE FORMAT TEXT
+              ENVELOPE UPSERT
+            """
+            ),
         )
         replicas = c.sql_query(
             """
@@ -4796,7 +5015,7 @@ def workflow_test_graceful_reconfigure(
             len(replicas) == 0
         ), f"Cluster should only have no pending replica prior to alter, found {replicas}"
 
-        def gracefully_alter():
+        def zero_downtime_alter():
             try:
                 c.sql(
                     """
@@ -4810,7 +5029,7 @@ def workflow_test_graceful_reconfigure(
                 pass
 
         # Run a reconfigure
-        thread = Thread(target=gracefully_alter)
+        thread = Thread(target=zero_downtime_alter)
         thread.start()
         time.sleep(3)
 
@@ -4864,7 +5083,7 @@ def workflow_test_graceful_reconfigure(
         )
         c.sql(
             """
-            ALTER SYSTEM RESET enable_graceful_cluster_reconfiguration;
+            ALTER SYSTEM RESET enable_zero_downtime_cluster_reconfiguration;
             """,
             port=6877,
             user="mz_system",
@@ -5128,12 +5347,12 @@ def workflow_test_constant_sink(c: Composition) -> None:
                 > SELECT write_frontier
                   FROM mz_internal.mz_frontiers
                   JOIN mz_sinks ON id = object_id
-                  WHERE name = 'snk'
+                  WHERE name = 'snk' AND write_frontier IS NOT NULL
 
                 > SELECT status
                   FROM mz_internal.mz_sink_statuses
                   WHERE name = 'snk'
-                dropped
+                running
                 """
             )
         )
@@ -5147,12 +5366,12 @@ def workflow_test_constant_sink(c: Composition) -> None:
                 > SELECT write_frontier
                   FROM mz_internal.mz_frontiers
                   JOIN mz_sinks ON id = object_id
-                  WHERE name = 'snk'
+                  WHERE name = 'snk' AND write_frontier IS NOT NULL
 
                 > SELECT status
                   FROM mz_internal.mz_sink_statuses
                   WHERE name = 'snk'
-                dropped
+                running
                 """
             )
         )

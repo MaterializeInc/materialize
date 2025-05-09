@@ -24,9 +24,9 @@ use mz_ore::cast::{CastFrom, CastLossy};
 use mz_ore::instrument;
 use mz_ore::metric;
 use mz_ore::metrics::{
-    raw, ComputedGauge, ComputedIntGauge, ComputedUIntGauge, Counter, DeleteOnDropCounter,
+    ComputedGauge, ComputedIntGauge, ComputedUIntGauge, Counter, DeleteOnDropCounter,
     DeleteOnDropGauge, IntCounter, MakeCollector, MetricVecExt, MetricsRegistry, UIntGauge,
-    UIntGaugeVec,
+    UIntGaugeVec, raw,
 };
 use mz_ore::stats::histogram_seconds_buckets;
 use mz_persist::location::{
@@ -41,7 +41,7 @@ use prometheus::proto::MetricFamily;
 use prometheus::{CounterVec, Gauge, GaugeVec, Histogram, HistogramVec, IntCounterVec};
 use timely::progress::Antichain;
 use tokio_metrics::TaskMonitor;
-use tracing::{debug, info, info_span, Instrument};
+use tracing::{Instrument, debug, info, info_span};
 
 use crate::fetch::{FETCH_SEMAPHORE_COST_ADJUSTMENT, FETCH_SEMAPHORE_PERMIT_ADJUSTMENT};
 use crate::internal::paths::BlobKey;
@@ -1553,9 +1553,11 @@ impl ShardsMetrics {
             }
         }
         let shard = Arc::new(ShardMetrics::new(shard_id, name, self));
-        assert!(shards
-            .insert(shard_id.clone(), Arc::downgrade(&shard))
-            .is_none());
+        assert!(
+            shards
+                .insert(shard_id.clone(), Arc::downgrade(&shard))
+                .is_none()
+        );
         shard
     }
 
@@ -1582,52 +1584,49 @@ impl ShardsMetrics {
 pub struct ShardMetrics {
     pub shard_id: ShardId,
     pub name: String,
-    pub since: DeleteOnDropGauge<'static, AtomicI64, Vec<String>>,
-    pub upper: DeleteOnDropGauge<'static, AtomicI64, Vec<String>>,
-    pub largest_batch_size: DeleteOnDropGauge<'static, AtomicU64, Vec<String>>,
-    pub latest_rollup_size: DeleteOnDropGauge<'static, AtomicU64, Vec<String>>,
-    pub encoded_diff_size: DeleteOnDropCounter<'static, AtomicU64, Vec<String>>,
-    pub hollow_batch_count: DeleteOnDropGauge<'static, AtomicU64, Vec<String>>,
-    pub spine_batch_count: DeleteOnDropGauge<'static, AtomicU64, Vec<String>>,
-    pub batch_part_count: DeleteOnDropGauge<'static, AtomicU64, Vec<String>>,
+    pub since: DeleteOnDropGauge<AtomicI64, Vec<String>>,
+    pub upper: DeleteOnDropGauge<AtomicI64, Vec<String>>,
+    pub largest_batch_size: DeleteOnDropGauge<AtomicU64, Vec<String>>,
+    pub latest_rollup_size: DeleteOnDropGauge<AtomicU64, Vec<String>>,
+    pub encoded_diff_size: DeleteOnDropCounter<AtomicU64, Vec<String>>,
+    pub hollow_batch_count: DeleteOnDropGauge<AtomicU64, Vec<String>>,
+    pub spine_batch_count: DeleteOnDropGauge<AtomicU64, Vec<String>>,
+    pub batch_part_count: DeleteOnDropGauge<AtomicU64, Vec<String>>,
     batch_part_version_count: mz_ore::metrics::UIntGaugeVec,
     batch_part_version_bytes: mz_ore::metrics::UIntGaugeVec,
     batch_part_version_map: Mutex<BTreeMap<String, BatchPartVersionMetrics>>,
-    pub update_count: DeleteOnDropGauge<'static, AtomicU64, Vec<String>>,
-    pub rollup_count: DeleteOnDropGauge<'static, AtomicU64, Vec<String>>,
-    pub seqnos_held: DeleteOnDropGauge<'static, AtomicU64, Vec<String>>,
-    pub seqnos_since_last_rollup: DeleteOnDropGauge<'static, AtomicU64, Vec<String>>,
-    pub gc_seqno_held_parts: DeleteOnDropGauge<'static, AtomicU64, Vec<String>>,
-    pub gc_live_diffs: DeleteOnDropGauge<'static, AtomicU64, Vec<String>>,
-    pub usage_current_state_batches_bytes: DeleteOnDropGauge<'static, AtomicU64, Vec<String>>,
-    pub usage_current_state_rollups_bytes: DeleteOnDropGauge<'static, AtomicU64, Vec<String>>,
-    pub usage_referenced_not_current_state_bytes:
-        DeleteOnDropGauge<'static, AtomicU64, Vec<String>>,
-    pub usage_not_leaked_not_referenced_bytes: DeleteOnDropGauge<'static, AtomicU64, Vec<String>>,
-    pub usage_leaked_bytes: DeleteOnDropGauge<'static, AtomicU64, Vec<String>>,
-    pub gc_finished: DeleteOnDropCounter<'static, AtomicU64, Vec<String>>,
-    pub compaction_applied: DeleteOnDropCounter<'static, AtomicU64, Vec<String>>,
-    pub cmd_succeeded: DeleteOnDropCounter<'static, AtomicU64, Vec<String>>,
-    pub pubsub_push_diff_applied: DeleteOnDropCounter<'static, AtomicU64, Vec<String>>,
-    pub pubsub_push_diff_not_applied_stale: DeleteOnDropCounter<'static, AtomicU64, Vec<String>>,
-    pub pubsub_push_diff_not_applied_out_of_order:
-        DeleteOnDropCounter<'static, AtomicU64, Vec<String>>,
-    pub blob_gets: DeleteOnDropCounter<'static, AtomicU64, Vec<String>>,
-    pub blob_sets: DeleteOnDropCounter<'static, AtomicU64, Vec<String>>,
-    pub live_writers: DeleteOnDropGauge<'static, AtomicU64, Vec<String>>,
-    pub unconsolidated_snapshot: DeleteOnDropCounter<'static, AtomicU64, Vec<String>>,
-    pub backpressure_emitted_bytes: Arc<DeleteOnDropCounter<'static, AtomicU64, Vec<String>>>,
-    pub backpressure_last_backpressured_bytes:
-        Arc<DeleteOnDropGauge<'static, AtomicU64, Vec<String>>>,
-    pub backpressure_retired_bytes: Arc<DeleteOnDropCounter<'static, AtomicU64, Vec<String>>>,
-    pub rewrite_part_count: DeleteOnDropGauge<'static, AtomicU64, Vec<String>>,
-    pub inline_part_count: DeleteOnDropGauge<'static, AtomicU64, Vec<String>>,
-    pub inline_part_bytes: DeleteOnDropGauge<'static, AtomicU64, Vec<String>>,
-    pub compact_batches: DeleteOnDropGauge<'static, AtomicU64, Vec<String>>,
-    pub compacting_batches: DeleteOnDropGauge<'static, AtomicU64, Vec<String>>,
-    pub noncompact_batches: DeleteOnDropGauge<'static, AtomicU64, Vec<String>>,
-    pub schema_registry_version_count: DeleteOnDropGauge<'static, AtomicU64, Vec<String>>,
-    pub inline_backpressure_count: DeleteOnDropCounter<'static, AtomicU64, Vec<String>>,
+    pub update_count: DeleteOnDropGauge<AtomicU64, Vec<String>>,
+    pub rollup_count: DeleteOnDropGauge<AtomicU64, Vec<String>>,
+    pub seqnos_held: DeleteOnDropGauge<AtomicU64, Vec<String>>,
+    pub seqnos_since_last_rollup: DeleteOnDropGauge<AtomicU64, Vec<String>>,
+    pub gc_seqno_held_parts: DeleteOnDropGauge<AtomicU64, Vec<String>>,
+    pub gc_live_diffs: DeleteOnDropGauge<AtomicU64, Vec<String>>,
+    pub usage_current_state_batches_bytes: DeleteOnDropGauge<AtomicU64, Vec<String>>,
+    pub usage_current_state_rollups_bytes: DeleteOnDropGauge<AtomicU64, Vec<String>>,
+    pub usage_referenced_not_current_state_bytes: DeleteOnDropGauge<AtomicU64, Vec<String>>,
+    pub usage_not_leaked_not_referenced_bytes: DeleteOnDropGauge<AtomicU64, Vec<String>>,
+    pub usage_leaked_bytes: DeleteOnDropGauge<AtomicU64, Vec<String>>,
+    pub gc_finished: DeleteOnDropCounter<AtomicU64, Vec<String>>,
+    pub compaction_applied: DeleteOnDropCounter<AtomicU64, Vec<String>>,
+    pub cmd_succeeded: DeleteOnDropCounter<AtomicU64, Vec<String>>,
+    pub pubsub_push_diff_applied: DeleteOnDropCounter<AtomicU64, Vec<String>>,
+    pub pubsub_push_diff_not_applied_stale: DeleteOnDropCounter<AtomicU64, Vec<String>>,
+    pub pubsub_push_diff_not_applied_out_of_order: DeleteOnDropCounter<AtomicU64, Vec<String>>,
+    pub blob_gets: DeleteOnDropCounter<AtomicU64, Vec<String>>,
+    pub blob_sets: DeleteOnDropCounter<AtomicU64, Vec<String>>,
+    pub live_writers: DeleteOnDropGauge<AtomicU64, Vec<String>>,
+    pub unconsolidated_snapshot: DeleteOnDropCounter<AtomicU64, Vec<String>>,
+    pub backpressure_emitted_bytes: Arc<DeleteOnDropCounter<AtomicU64, Vec<String>>>,
+    pub backpressure_last_backpressured_bytes: Arc<DeleteOnDropGauge<AtomicU64, Vec<String>>>,
+    pub backpressure_retired_bytes: Arc<DeleteOnDropCounter<AtomicU64, Vec<String>>>,
+    pub rewrite_part_count: DeleteOnDropGauge<AtomicU64, Vec<String>>,
+    pub inline_part_count: DeleteOnDropGauge<AtomicU64, Vec<String>>,
+    pub inline_part_bytes: DeleteOnDropGauge<AtomicU64, Vec<String>>,
+    pub compact_batches: DeleteOnDropGauge<AtomicU64, Vec<String>>,
+    pub compacting_batches: DeleteOnDropGauge<AtomicU64, Vec<String>>,
+    pub noncompact_batches: DeleteOnDropGauge<AtomicU64, Vec<String>>,
+    pub schema_registry_version_count: DeleteOnDropGauge<AtomicU64, Vec<String>>,
+    pub inline_backpressure_count: DeleteOnDropCounter<AtomicU64, Vec<String>>,
 }
 
 impl ShardMetrics {
@@ -1828,8 +1827,8 @@ impl ShardMetrics {
 
 #[derive(Debug)]
 pub struct BatchPartVersionMetrics {
-    pub batch_part_version_count: DeleteOnDropGauge<'static, AtomicU64, Vec<String>>,
-    pub batch_part_version_bytes: DeleteOnDropGauge<'static, AtomicU64, Vec<String>>,
+    pub batch_part_version_count: DeleteOnDropGauge<AtomicU64, Vec<String>>,
+    pub batch_part_version_bytes: DeleteOnDropGauge<AtomicU64, Vec<String>>,
 }
 
 /// Metrics recorded by audits of persist usage
@@ -3133,7 +3132,6 @@ pub struct SchemaMetrics {
     pub(crate) migration_new_count: IntCounter,
     pub(crate) migration_new_seconds: Counter,
     pub(crate) migration_migrate_seconds: Counter,
-    pub(crate) one_time_migration_more_nullable: IntCounter,
 }
 
 impl SchemaMetrics {
@@ -3204,10 +3202,6 @@ impl SchemaMetrics {
             migration_migrate_seconds: registry.register(metric!(
                 name: "mz_persist_schema_migration_migrate_seconds",
                 help: "seconds spent applying migration logic",
-            )),
-            one_time_migration_more_nullable: registry.register(metric!(
-                name: "mz_persist_one_time_migration_more_nullable",
-                help: "count of running the onetime more nullable migration",
             )),
         }
     }

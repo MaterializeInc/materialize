@@ -17,8 +17,8 @@ use std::collections::BTreeMap;
 
 use itertools::Itertools;
 
-use mz_adapter_types::dyncfgs::DEFAULT_SINK_PARTITION_STRATEGY;
 use mz_arrow_util::builder::ArrowBuilder;
+use mz_expr::visit::Visit;
 use mz_expr::{MirRelationExpr, RowSetFinishing};
 use mz_ore::num::NonNeg;
 use mz_ore::soft_panic_or_log;
@@ -29,15 +29,14 @@ use mz_repr::explain::{ExplainConfig, ExplainFormat};
 use mz_repr::optimize::OptimizerFeatureOverrides;
 use mz_repr::{CatalogItemId, Datum, RelationDesc, ScalarType};
 use mz_sql_parser::ast::{
-    CreateSinkOption, CreateSinkOptionName, CteBlock, ExplainPlanOption, ExplainPlanOptionName,
-    ExplainPushdownStatement, ExplainSinkSchemaFor, ExplainSinkSchemaStatement,
-    ExplainTimestampStatement, Expr, IfExistsBehavior, OrderByExpr, SetExpr, SubscribeOutput,
-    UnresolvedItemName, Value, WithOptionValue,
+    CteBlock, ExplainPlanOption, ExplainPlanOptionName, ExplainPushdownStatement,
+    ExplainSinkSchemaFor, ExplainSinkSchemaStatement, ExplainTimestampStatement, Expr,
+    IfExistsBehavior, OrderByExpr, SetExpr, SubscribeOutput, UnresolvedItemName,
 };
 use mz_sql_parser::ident;
 use mz_storage_types::sinks::{
-    KafkaSinkConnection, KafkaSinkFormat, KafkaSinkFormatType, S3SinkFormat, StorageSinkConnection,
-    MAX_S3_SINK_FILE_SIZE, MIN_S3_SINK_FILE_SIZE,
+    KafkaSinkConnection, KafkaSinkFormat, KafkaSinkFormatType, MAX_S3_SINK_FILE_SIZE,
+    MIN_S3_SINK_FILE_SIZE, S3SinkFormat, StorageSinkConnection,
 };
 
 use crate::ast::display::AstDisplay;
@@ -50,19 +49,19 @@ use crate::ast::{
 use crate::catalog::CatalogItemType;
 use crate::names::{Aug, ResolvedItemName};
 use crate::normalize;
-use crate::plan::query::{plan_expr, plan_up_to, ExprContext, QueryLifetime};
+use crate::plan::query::{ExprContext, QueryLifetime, offset_into_value, plan_expr, plan_up_to};
 use crate::plan::scope::Scope;
-use crate::plan::statement::{ddl, StatementContext, StatementDesc};
-use crate::plan::with_options;
+use crate::plan::statement::{StatementContext, StatementDesc, ddl};
 use crate::plan::{
-    self, side_effecting_func, transform_ast, CopyToPlan, CreateSinkPlan, ExplainPushdownPlan,
-    ExplainSinkSchemaPlan, ExplainTimestampPlan,
+    self, CopyFromFilter, CopyToPlan, CreateSinkPlan, ExplainPushdownPlan, ExplainSinkSchemaPlan,
+    ExplainTimestampPlan, HirRelationExpr, HirScalarExpr, side_effecting_func, transform_ast,
 };
 use crate::plan::{
-    query, CopyFormat, CopyFromPlan, ExplainPlanPlan, InsertPlan, MutationKind, Params, Plan,
-    PlanError, QueryContext, ReadThenWritePlan, SelectPlan, SubscribeFrom, SubscribePlan,
+    CopyFormat, CopyFromPlan, ExplainPlanPlan, InsertPlan, MutationKind, Params, Plan, PlanError,
+    QueryContext, ReadThenWritePlan, SelectPlan, SubscribeFrom, SubscribePlan, query,
 };
-use crate::session::vars;
+use crate::plan::{CopyFromSource, with_options};
+use crate::session::vars::{self, ENABLE_COPY_FROM_REMOTE};
 
 // TODO(benesch): currently, describing a `SELECT` or `INSERT` query
 // plans the whole query to determine its shape and parameter types,
@@ -218,7 +217,24 @@ fn plan_select_inner(
     } = query::plan_root_query(scx, select.query.clone(), QueryLifetime::OneShot)?;
     expr.bind_parameters(params)?;
 
-    // A top-level limit cannot be data dependent so eagerly evaluate it.
+    // OFFSET clauses in `expr` should become constants with the above binding of parameters.
+    // Let's check this and simplify them to literals.
+    expr.try_visit_mut_pre(&mut |expr| {
+        if let HirRelationExpr::TopK { offset, .. } = expr {
+            let offset_value = offset_into_value(offset.take())?;
+            *offset = HirScalarExpr::literal(Datum::Int64(offset_value), ScalarType::Int64);
+        }
+        Ok::<(), PlanError>(())
+    })?;
+    // (We don't need to simplify LIMIT clauses in `expr`, because we can handle non-constant
+    // expressions there. If they happen to be simplifiable to literals, then the optimizer will do
+    // so later.)
+
+    // We need to concretize the `limit` and `offset` of the RowSetFinishing, so that we go from
+    // `RowSetFinishing<HirScalarExpr, HirScalarExpr>` to `RowSetFinishing`.
+    // This involves binding parameters and evaluating each expression to a number.
+    // (This should be possible even for `limit` here, because we are at the top level of a SELECT,
+    // so this `limit` has to be a constant.)
     let limit = match finishing.limit {
         None => None,
         Some(mut limit) => {
@@ -231,10 +247,18 @@ fn plan_select_inner(
                 Datum::Int64(v) if v >= 0 => NonNeg::<i64>::try_from(v).ok(),
                 _ => {
                     soft_panic_or_log!("Valid literal limit must be asserted in `plan_select`");
-                    sql_bail!("LIMIT must be a non negative INT or NULL")
+                    sql_bail!("LIMIT must be a non-negative INT or NULL")
                 }
             }
         }
+    };
+    let offset = {
+        let mut offset = finishing.offset.clone();
+        offset.bind_parameters(params)?;
+        let offset = offset_into_value(offset.take())?;
+        offset
+            .try_into()
+            .expect("checked in offset_into_value that it is not negative")
     };
 
     let plan = SelectPlan {
@@ -242,7 +266,7 @@ fn plan_select_inner(
         when,
         finishing: RowSetFinishing {
             limit,
-            offset: finishing.offset,
+            offset,
             project: finishing.project,
             order_by: finishing.order_by,
         },
@@ -377,16 +401,19 @@ generate_extracted_config!(
     (EnableNewOuterJoinLowering, Option<bool>, Default(None)),
     (EnableEagerDeltaJoins, Option<bool>, Default(None)),
     (EnableVariadicLeftJoinLowering, Option<bool>, Default(None)),
-    (EnableLetrecFixpointAnalysis, Option<bool>, Default(None))
+    (EnableLetrecFixpointAnalysis, Option<bool>, Default(None)),
+    (EnableJoinPrioritizeArranged, Option<bool>, Default(None)),
+    (
+        EnableProjectionPushdownAfterRelationCse,
+        Option<bool>,
+        Default(None)
+    )
 );
 
 impl TryFrom<ExplainPlanOptionExtracted> for ExplainConfig {
     type Error = PlanError;
 
     fn try_from(mut v: ExplainPlanOptionExtracted) -> Result<Self, Self::Error> {
-        use mz_ore::assert::SOFT_ASSERTIONS;
-        use std::sync::atomic::Ordering;
-
         // If `WITH(raw)` is specified, ensure that the config will be as
         // representative for the original plan as possible.
         if v.raw {
@@ -396,7 +423,7 @@ impl TryFrom<ExplainPlanOptionExtracted> for ExplainConfig {
 
         // Certain config should default to be enabled in release builds running on
         // staging or prod (where SOFT_ASSERTIONS are turned off).
-        let enable_on_prod = !SOFT_ASSERTIONS.load(Ordering::Relaxed);
+        let enable_on_prod = !mz_ore::assert::soft_assertions_enabled();
 
         Ok(ExplainConfig {
             arity: v.arity.unwrap_or(enable_on_prod),
@@ -430,6 +457,11 @@ impl TryFrom<ExplainPlanOptionExtracted> for ExplainConfig {
                 persist_fast_path_limit: Default::default(),
                 reoptimize_imported_views: v.reoptimize_imported_views,
                 enable_reduce_reduction: Default::default(),
+                enable_join_prioritize_arranged: v.enable_join_prioritize_arranged,
+                enable_projection_pushdown_after_relation_cse: v
+                    .enable_projection_pushdown_after_relation_cse,
+                enable_less_reduce_in_eqprop: Default::default(),
+                enable_dequadratic_eqprop_map: Default::default(),
             },
         })
     }
@@ -560,6 +592,7 @@ pub fn plan_explain_plan(
 ) -> Result<Plan, PlanError> {
     let format = match explain.format() {
         mz_sql_parser::ast::ExplainFormat::Text => ExplainFormat::Text,
+        mz_sql_parser::ast::ExplainFormat::VerboseText => ExplainFormat::VerboseText,
         mz_sql_parser::ast::ExplainFormat::Json => ExplainFormat::Json,
         mz_sql_parser::ast::ExplainFormat::Dot => ExplainFormat::Dot,
     };
@@ -611,11 +644,6 @@ pub fn plan_explain_schema(
         *statement.from.item_id(),
         &mut statement.format,
     )?;
-    let default_strategy = DEFAULT_SINK_PARTITION_STRATEGY.get(scx.catalog.system_vars().dyncfgs());
-    statement.with_options.push(CreateSinkOption {
-        name: CreateSinkOptionName::PartitionStrategy,
-        value: Some(WithOptionValue::Value(Value::String(default_strategy))),
-    });
 
     match ddl::plan_create_sink(scx, statement)? {
         Plan::CreateSink(CreateSinkPlan { sink, .. }) => match sink.connection {
@@ -672,6 +700,7 @@ pub fn plan_explain_timestamp(
 ) -> Result<Plan, PlanError> {
     let format = match explain.format() {
         mz_sql_parser::ast::ExplainFormat::Text => ExplainFormat::Text,
+        mz_sql_parser::ast::ExplainFormat::VerboseText => ExplainFormat::VerboseText,
         mz_sql_parser::ast::ExplainFormat::Json => ExplainFormat::Json,
         mz_sql_parser::ast::ExplainFormat::Dot => ExplainFormat::Dot,
     };
@@ -854,7 +883,10 @@ pub fn plan_subscribe(
             // There's no way to apply finishing operations to a `SUBSCRIBE` directly, so the
             // finishing should have already been turned into a `TopK` by
             // `plan_query` / `plan_root_query`, upon seeing the `QueryLifetime::Subscribe`.
-            assert!(query.finishing.is_trivial(query.desc.arity()));
+            assert!(HirRelationExpr::is_trivial_row_set_finishing_hir(
+                &query.finishing,
+                query.desc.arity()
+            ));
             let desc = query.desc.clone();
             (
                 SubscribeFrom::Query {
@@ -988,7 +1020,7 @@ pub fn describe_copy_from_table(
     table_name: <Aug as AstInfo>::ItemName,
     columns: Vec<Ident>,
 ) -> Result<StatementDesc, PlanError> {
-    let (_, desc, _) = query::plan_copy_from(scx, table_name, columns)?;
+    let (_, desc, _, _) = query::plan_copy_from(scx, table_name, columns)?;
     Ok(StatementDesc::new(Some(desc)))
 }
 
@@ -997,7 +1029,7 @@ pub fn describe_copy_item(
     object_name: <Aug as AstInfo>::ItemName,
     columns: Vec<Ident>,
 ) -> Result<StatementDesc, PlanError> {
-    let (_, desc, _) = query::plan_copy_item(scx, object_name, columns)?;
+    let (_, desc, _, _) = query::plan_copy_item(scx, object_name, columns)?;
     Ok(StatementDesc::new(Some(desc)))
 }
 
@@ -1109,6 +1141,7 @@ fn plan_copy_to_expr(
 
 fn plan_copy_from(
     scx: &StatementContext,
+    target: &CopyTarget<Aug>,
     table_name: ResolvedItemName,
     columns: Vec<Ident>,
     format: CopyFormat,
@@ -1120,6 +1153,49 @@ fn plan_copy_from(
             None => Ok(()),
         }
     }
+
+    let source = match target {
+        CopyTarget::Stdin => CopyFromSource::Stdin,
+        CopyTarget::Expr(from) => {
+            scx.require_feature_flag(&ENABLE_COPY_FROM_REMOTE)?;
+
+            // Converting the expr to an HirScalarExpr
+            let mut from_expr = from.clone();
+            transform_ast::transform(scx, &mut from_expr)?;
+            let relation_type = RelationDesc::empty();
+            let ecx = &ExprContext {
+                qcx: &QueryContext::root(scx, QueryLifetime::OneShot),
+                name: "COPY FROM target",
+                scope: &Scope::empty(),
+                relation_type: relation_type.typ(),
+                allow_aggregates: false,
+                allow_subqueries: false,
+                allow_parameters: false,
+                allow_windows: false,
+            };
+            let from = plan_expr(ecx, &from_expr)?.type_as(ecx, &ScalarType::String)?;
+
+            match options.aws_connection {
+                Some(conn_id) => {
+                    let conn_id = CatalogItemId::from(conn_id);
+
+                    // Validate the connection type is one we expect.
+                    let connection = match scx.get_item(&conn_id).connection()? {
+                        mz_storage_types::connections::Connection::Aws(conn) => conn,
+                        _ => sql_bail!("only AWS CONNECTION is supported in COPY ... FROM"),
+                    };
+
+                    CopyFromSource::AwsS3 {
+                        uri: from,
+                        connection,
+                        connection_id: conn_id,
+                    }
+                }
+                None => CopyFromSource::Url(from),
+            }
+        }
+        CopyTarget::Stdout => bail_never_supported!("COPY FROM {} not supported", target),
+    };
 
     let params = match format {
         CopyFormat::Text => {
@@ -1150,14 +1226,34 @@ fn plan_copy_from(
             )
         }
         CopyFormat::Binary => bail_unsupported!("FORMAT BINARY"),
-        CopyFormat::Parquet => bail_unsupported!("FORMAT PARQUET"),
+        CopyFormat::Parquet => CopyFormatParams::Parquet,
     };
 
-    let (id, _, columns) = query::plan_copy_from(scx, table_name, columns)?;
+    let filter = match (options.files, options.pattern) {
+        (Some(_), Some(_)) => bail_unsupported!("must specify one of FILES or PATTERN"),
+        (Some(files), None) => Some(CopyFromFilter::Files(files)),
+        (None, Some(pattern)) => Some(CopyFromFilter::Pattern(pattern)),
+        (None, None) => None,
+    };
+
+    if filter.is_some() && matches!(source, CopyFromSource::Stdin) {
+        bail_unsupported!("COPY FROM ... WITH (FILES ...) only supported from a URL")
+    }
+
+    let (id, source_desc, columns, maybe_mfp) = query::plan_copy_from(scx, table_name, columns)?;
+
+    let Some(mfp) = maybe_mfp else {
+        sql_bail!("[internal error] COPY FROM ... expects an MFP to be produced");
+    };
+
     Ok(Plan::CopyFrom(CopyFromPlan {
         id,
+        source,
         columns,
+        source_desc,
+        mfp,
         params,
+        filter,
     }))
 }
 
@@ -1178,7 +1274,9 @@ generate_extracted_config!(
     (Quote, String),
     (Header, bool),
     (AwsConnection, with_options::Object),
-    (MaxFileSize, ByteSize, Default(ByteSize::mb(256)))
+    (MaxFileSize, ByteSize, Default(ByteSize::mb(256))),
+    (Files, Vec<String>),
+    (Pattern, String)
 );
 
 pub fn plan_copy(
@@ -1232,9 +1330,10 @@ pub fn plan_copy(
                 )?),
             }
         }
-        (CopyDirection::From, CopyTarget::Stdin) => match relation {
+        (CopyDirection::From, target) => match relation {
             CopyRelation::Named { name, columns } => plan_copy_from(
                 scx,
+                target,
                 name,
                 columns,
                 format.unwrap_or(CopyFormat::Text),
@@ -1260,7 +1359,9 @@ pub fn plan_copy(
                 CopyRelation::Named { name, columns } => {
                     if !columns.is_empty() {
                         // TODO(mouli): Add support for this
-                        sql_bail!("specifying columns for COPY <table_name> TO commands not yet supported; use COPY (SELECT...) TO ... instead");
+                        sql_bail!(
+                            "specifying columns for COPY <table_name> TO commands not yet supported; use COPY (SELECT...) TO ... instead"
+                        );
                     }
                     // Generate a synthetic SELECT query that just gets the table
                     let query = Query {

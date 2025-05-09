@@ -873,12 +873,22 @@ impl ParsedDateTime {
     /// # Arguments
     ///
     /// * `value` is a SQL-formatted TIMESTAMP string.
-    pub fn build_parsed_datetime_timestamp(value: &str) -> Result<ParsedDateTime, String> {
+    pub fn build_parsed_datetime_timestamp(
+        value: &str,
+        era: CalendarEra,
+    ) -> Result<ParsedDateTime, String> {
         let mut pdt = ParsedDateTime::default();
 
         let mut ts_actual = tokenize_time_str(value)?;
 
         fill_pdt_date(&mut pdt, &mut ts_actual)?;
+
+        if let CalendarEra::BC = era {
+            pdt.year = pdt.year.map(|mut y| {
+                y.unit = -y.unit;
+                y
+            });
+        }
 
         if let Some(TimeStrToken::DateTimeDelimiter) = ts_actual.front() {
             ts_actual.pop_front();
@@ -1138,7 +1148,7 @@ fn fill_pdt_date(
 
     // Check for one number that represents YYYYMMDDD.
     match actual.front() {
-        Some(Num(mut val, digits)) if 6 <= *digits && *digits <= 8 => {
+        Some(&Num(mut val, ref digits)) if 6 <= *digits && *digits <= 8 => {
             let unit = i64::try_from(val % 100)
                 .expect("modulo between u64 and constant 100 should fit signed 64-bit integer");
             pdt.day = Some(DateTimeFieldValue::new(unit, 0));
@@ -1273,7 +1283,7 @@ fn fill_pdt_interval_sql(
             return Err(format!(
                 "Cannot specify {} field for SQL standard-style interval parts",
                 leading_field
-            ))
+            ));
         }
     }
 
@@ -1315,7 +1325,7 @@ fn fill_pdt_interval_sql(
             return Err(format!(
                 "Cannot specify {} field for SQL standard-style interval parts",
                 leading_field
-            ))
+            ));
         }
     }
 
@@ -1407,11 +1417,9 @@ fn fill_pdt_from_tokens<'a, E: IntoIterator<Item = &'a TimeStrToken>>(
             (TimeUnit(f), TimeUnit(_)) => {
                 if unit_buf.is_some() && *f != current_field {
                     return Err(format!(
-                            "Invalid syntax at offset {}: provided TimeUnit({}) but expected TimeUnit({})",
-                            i,
-                            f,
-                            current_field
-                        ));
+                        "Invalid syntax at offset {}: provided TimeUnit({}) but expected TimeUnit({})",
+                        i, f, current_field
+                    ));
                 }
             }
             // If we got a DateTimeUnits, attempt to convert it to a TimeUnit.
@@ -1426,11 +1434,9 @@ fn fill_pdt_from_tokens<'a, E: IntoIterator<Item = &'a TimeStrToken>>(
                 };
                 if unit_buf.is_some() && f != current_field {
                     return Err(format!(
-                            "Invalid syntax at offset {}: provided DateTimeUnit({}) but expected TimeUnit({})",
-                            u,
-                            f,
-                            current_field
-                        ));
+                        "Invalid syntax at offset {}: provided DateTimeUnit({}) but expected TimeUnit({})",
+                        u, f, current_field
+                    ));
                 }
             }
             (Dot, Dot) => {}
@@ -1438,7 +1444,7 @@ fn fill_pdt_from_tokens<'a, E: IntoIterator<Item = &'a TimeStrToken>>(
                 Some(_) => {
                     return Err(
                         "Invalid syntax; parts must be separated by '-', ':', or ' '".to_string(),
-                    )
+                    );
                 }
                 None => {
                     // create signed copy of *val
@@ -1506,7 +1512,7 @@ fn fill_pdt_from_tokens<'a, E: IntoIterator<Item = &'a TimeStrToken>>(
             (provided, expected) => {
                 return Err(format!(
                     "Invalid syntax at offset {i}: provided {provided:?} but expected {expected:?}",
-                ))
+                ));
             }
         }
         i += 1;
@@ -1638,7 +1644,7 @@ fn expected_dur_like_tokens(from: DateTimeField) -> Result<&'static [TimeStrToke
             return Err(format!(
                 "expected_dur_like_tokens can only be called with HOUR, MINUTE, SECOND; got {}",
                 from
-            ))
+            ));
         }
     };
 
@@ -1849,7 +1855,7 @@ pub(crate) fn tokenize_time_str(value: &str) -> Result<VecDeque<TimeStrToken>, S
                 return Err(format!(
                     "Invalid character at offset {} in {}: {:?}",
                     i, value, chr
-                ))
+                ));
             }
         }
     }
@@ -1862,17 +1868,27 @@ pub(crate) fn tokenize_time_str(value: &str) -> Result<VecDeque<TimeStrToken>, S
     Ok(toks)
 }
 
+#[derive(Debug, PartialEq, Eq)]
+pub enum CalendarEra {
+    BC,
+    AD,
+}
+
 /// Takes a 'date timezone' 'date time timezone' string and splits it into 'date
-/// {time}' and 'timezone' components
-pub(crate) fn split_timestamp_string(value: &str) -> (&str, &str) {
+/// {time}' and 'timezone' components then checks for a 'CalenderEra' defaulting
+/// to 'AD'.
+pub(crate) fn split_timestamp_string(value: &str) -> (&str, &str, CalendarEra) {
     // First we need to see if the string contains " +" or " -" because
     // timestamps can come in a format YYYY-MM-DD {+|-}<tz> (where the timezone
     // string can have colons)
     let cut = value.find(" +").or_else(|| value.find(" -"));
 
     if let Some(cut) = cut {
-        let (first, second) = value.split_at(cut);
-        return (first.trim(), second.trim());
+        let (datetime, timezone) = value.split_at(cut);
+
+        let (timezone, era) = strip_era_from_timezone(timezone);
+
+        return (datetime.trim(), timezone.trim(), era);
     }
 
     // If we have a hh:mm:dd component, we need to go past that to see if we can
@@ -1886,23 +1902,69 @@ pub(crate) fn split_timestamp_string(value: &str) -> (&str, &str) {
                 .find(|c: char| (c == '-') || (c == '+') || (c == ' ') || c.is_ascii_alphabetic());
 
             if let Some(tz) = tz {
-                let (first, second) = value.split_at(colon + tz);
-                return (first.trim(), second.trim());
+                let (datetime, timezone) = value.split_at(colon + tz);
+
+                let (timezone, era) = strip_era_from_timezone(timezone);
+
+                return (datetime.trim(), timezone.trim(), era);
             }
         }
-        (value.trim(), "")
+
+        (value.trim(), "", CalendarEra::AD)
     } else {
         // We don't have a time, so the only formats available are YYY-mm-dd<tz>
         // or YYYY-MM-dd <tz> Numeric offset timezones need to be separated from
-        // the ymd by a space
+        // the ymd by a space.
         let cut = value.find(|c: char| c.is_ascii_alphabetic());
 
         if let Some(cut) = cut {
-            let (first, second) = value.split_at(cut);
-            return (first.trim(), second.trim());
+            let (datetime, timezone) = value.split_at(cut);
+
+            let (timezone, era) = strip_era_from_timezone(timezone);
+
+            return (datetime.trim(), timezone.trim(), era);
         }
 
-        (value.trim(), "")
+        (value.trim(), "", CalendarEra::AD)
+    }
+}
+
+// We support three era formats:
+//  1. "<timestamp><separator><timezone> <era>"
+//  2. "<timestamp> <era>"
+//  3. "<timestamp><era>"
+//
+// NB(ptravers): pg supports more formats than noted above.
+fn strip_era_from_timezone(timezone: &str) -> (&str, CalendarEra) {
+    use CalendarEra::{AD, BC};
+    let timezone = timezone.trim();
+    let timezone_upper = timezone.to_uppercase();
+
+    // Covers cases 1 and 2.
+    if timezone.len() < 3 {
+        return match (
+            timezone_upper.strip_suffix("BC"),
+            timezone_upper.strip_suffix("AD"),
+        ) {
+            (Some(_), None) => ("", BC),
+            (None, Some(_)) => ("", AD),
+            // NB(ptravers): we expect this to fail when we go to check
+            // the timezone is valid in the next step.
+            _ => (timezone, AD),
+        };
+    }
+
+    // Covers case 3.
+    //
+    // Safety: upper case and lower case chars for a, b, c, d, and \s
+    // are all 1 byte so suffix is always of length 3 bytes.
+    match (
+        timezone_upper.strip_suffix(" BC"),
+        timezone_upper.strip_suffix(" AD"),
+    ) {
+        (Some(_), None) => (&timezone[..timezone.len() - 3], BC),
+        (None, Some(_)) => (&timezone[..timezone.len() - 3], AD),
+        _ => (timezone, AD),
     }
 }
 
@@ -2814,7 +2876,7 @@ mod tests {
 
         fn run_test_build_parsed_datetime_timestamp(test: &str, res: ParsedDateTime) {
             assert_eq!(
-                ParsedDateTime::build_parsed_datetime_timestamp(test).unwrap(),
+                ParsedDateTime::build_parsed_datetime_timestamp(test, CalendarEra::AD).unwrap(),
                 res
             );
         }
@@ -3336,72 +3398,24 @@ mod tests {
     fn test_build_parsed_datetime_interval_errors() {
         use DateTimeField::*;
         let test_cases = [
-            (
-                "1 year 2 years",
-                Second,
-                "YEAR field set twice",
-            ),
-            (
-                "1-2 3-4",
-                Second,
-                "YEAR or MONTH field set twice",
-            ),
-            (
-                "1-2 3 year",
-                Second,
-                "YEAR field set twice",
-            ),
-            (
-                "1-2 3",
-                Month,
-                "MONTH field set twice",
-            ),
-            (
-                "1-2 3:4 5",
-                Second,
-                "SECOND field set twice",
-            ),
-            (
-                "1:2:3.4 5-6 7",
-                Year,
-                "YEAR field set twice",
-            ),
-            (
-                "-:::::1.27",
-                Second,
-                "have unprocessed tokens 1.270000000",
-            ),
+            ("1 year 2 years", Second, "YEAR field set twice"),
+            ("1-2 3-4", Second, "YEAR or MONTH field set twice"),
+            ("1-2 3 year", Second, "YEAR field set twice"),
+            ("1-2 3", Month, "MONTH field set twice"),
+            ("1-2 3:4 5", Second, "SECOND field set twice"),
+            ("1:2:3.4 5-6 7", Year, "YEAR field set twice"),
+            ("-:::::1.27", Second, "have unprocessed tokens 1.270000000"),
             (
                 "-1 ::.27",
                 Second,
                 "Cannot determine format of all parts. Add explicit time components, e.g. \
                 INTERVAL '1 day' or INTERVAL '1' DAY",
             ),
-            (
-                "1:2:3.4.5",
-                Second,
-                "have unprocessed tokens .500000000",
-            ),
-            (
-                "1+2:3.4",
-                Second,
-                "Cannot determine format of all parts",
-            ),
-            (
-                "1x2:3.4",
-                Second,
-                "unknown units x",
-            ),
-            (
-                "0 foo",
-                Second,
-                "unknown units foo",
-            ),
-            (
-                "1-2 3:4 5 second",
-                Second,
-                "SECOND field set twice",
-            ),
+            ("1:2:3.4.5", Second, "have unprocessed tokens .500000000"),
+            ("1+2:3.4", Second, "Cannot determine format of all parts"),
+            ("1x2:3.4", Second, "unknown units x"),
+            ("0 foo", Second, "unknown units foo"),
+            ("1-2 3:4 5 second", Second, "SECOND field set twice"),
             (
                 "1-2 5 second 3:4",
                 Second,
@@ -3459,10 +3473,7 @@ mod tests {
                 Err(e) => assert_eq!(e.to_string(), test.2),
                 Ok(pdt) => panic!(
                     "Test INTERVAL '{}' {} passed when expected to fail with {}, generated ParsedDateTime {:?}",
-                    test.0,
-                    test.1,
-                    test.2,
-                    pdt,
+                    test.0, test.1, test.2, pdt,
                 ),
             }
         }
@@ -3549,10 +3560,11 @@ mod tests {
         ];
 
         for test in test_cases.iter() {
-            let (ts, tz) = split_timestamp_string(test.0);
+            let (ts, tz, era) = split_timestamp_string(test.0);
 
             assert_eq!(ts, test.1);
             assert_eq!(tz, test.2);
+            assert_eq!(era, CalendarEra::AD);
         }
     }
 

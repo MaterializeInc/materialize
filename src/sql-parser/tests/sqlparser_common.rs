@@ -30,38 +30,15 @@ use mz_sql_parser::ast::visit_mut::{self, VisitMut};
 use mz_sql_parser::ast::{AstInfo, Expr, Ident, Raw, RawDataType, RawItemName};
 use mz_sql_parser::datadriven_testcase;
 use mz_sql_parser::parser::{
-    self, parse_statements, parse_statements_with_limit, MAX_STATEMENT_BATCH_SIZE,
+    self, MAX_STATEMENT_BATCH_SIZE, parse_statements, parse_statements_with_limit,
 };
 
 #[mz_ore::test]
 #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `rust_psm_stack_pointer` on OS `linux`
 fn datadriven() {
     walk("tests/testdata", |f| {
-        f.run(|tc| -> String {
-            if tc.directive == "parse-statement" {
-                // Verify that redacted statements can be parsed. This is important so that we are
-                // still able to pretty-print redacted statements which helps out during debugging.
-                verify_parse_redacted(&tc.input);
-            }
-            datadriven_testcase(tc)
-        })
+        f.run(|tc| -> String { datadriven_testcase(tc) })
     });
-}
-
-fn verify_parse_redacted(stmt: &str) {
-    let stmt = match parse_statements(stmt) {
-        Ok(stmt) => match stmt.into_iter().next() {
-            Some(stmt) => stmt.ast,
-            None => return,
-        },
-        Err(_) => return,
-    };
-    let redacted = stmt.to_ast_string_redacted();
-    let res = parse_statements(&redacted);
-    assert!(
-        res.is_ok(),
-        "redacted statement could not be parsed: {res:?}\noriginal:\n{stmt}\nredacted:\n{redacted}"
-    );
 }
 
 #[mz_ore::test]

@@ -28,6 +28,24 @@ def get_ancestor_overrides_for_performance_regressions(
 
     min_ancestor_mz_version_per_commit = dict()
 
+    if scenario_class_name in ("CrossJoin", "AccumulateReductions"):
+        # PR#31501 (Remove ChunkedStack and related) increases latency for inserts
+        min_ancestor_mz_version_per_commit[
+            "e91f9d5e47f5dddf1d5d1a3afa3c27907bdbb0a7"
+        ] = MzVersion.parse_mz("v0.134.0")
+
+    if scenario_class_name == "ManySmallInserts":
+        # PR#31309 ([adapter] don't block on builtin table write in Session creation) increases latency for inserts
+        min_ancestor_mz_version_per_commit[
+            "e8c42c65afb7acd55eb7e530a92c89a9165f2e33"
+        ] = MzVersion.parse_mz("v0.133.0")
+
+    if scenario_class_name == "SwapSchema":
+        # PR#30883 (Columnar in logging dataflows) increases Mz memory usage
+        min_ancestor_mz_version_per_commit[
+            "a077232ffcb76ef7498da7637fbc9e80aa88765c"
+        ] = MzVersion.parse_mz("v0.131.0")
+
     if scenario_class_name == "FastPathOrderByLimit":
         # PR#30872 (rust: Upgrade to 1.83.0) increases wallclock
         min_ancestor_mz_version_per_commit[
@@ -182,6 +200,8 @@ _MIN_ANCESTOR_MZ_VERSION_PER_COMMIT_TO_ACCOUNT_FOR_SCALABILITY_REGRESSIONS: dict
     str, MzVersion
 ] = {
     # insert newer commits at the top
+    # PR#31309 ([adapter] don't block on builtin table write in Session creation) increases latency for inserts
+    "e8c42c65afb7acd55eb7e530a92c89a9165f2e33": MzVersion.parse_mz("v0.133.0"),
     # PR#30238 (adapter: Remove the global write lock) introduces regressions against v0.123.0
     "98678454a334a470ceea46b126586c7e60a0d8a5": MzVersion.parse_mz("v0.124.0"),
     # PR#28307 (Render regions for object build and let bindings) introduces regressions against v0.112.0

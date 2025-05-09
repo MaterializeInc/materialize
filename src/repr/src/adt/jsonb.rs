@@ -85,7 +85,7 @@ use serde::ser::{Serialize, SerializeMap, SerializeSeq, SerializeStruct, Seriali
 
 use crate::adt::jsonb::vec_stack::VecStack;
 use crate::adt::numeric::Numeric;
-use crate::{strconv, Datum, Row, RowPacker, SharedRow};
+use crate::{Datum, Row, RowPacker, SharedRow, strconv};
 
 /// An owned JSON value backed by a [`Row`].
 ///
@@ -111,8 +111,7 @@ impl Jsonb {
     ///
     /// Errors if the slice is not valid JSON.
     pub fn from_slice(buf: &[u8]) -> Result<Jsonb, anyhow::Error> {
-        let binding = SharedRow::get();
-        let mut row_builder = binding.borrow_mut();
+        let mut row_builder = SharedRow::get();
         let mut packer = row_builder.packer();
         JsonbPacker::new(&mut packer).pack_slice(buf)?;
         Ok(Jsonb {

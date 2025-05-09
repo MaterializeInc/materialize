@@ -31,14 +31,14 @@ use axum::extract::ws::{Message, WebSocket};
 use axum::extract::{ConnectInfo, DefaultBodyLimit, FromRequestParts, Query, Request, State};
 use axum::middleware::{self, Next};
 use axum::response::{IntoResponse, Redirect, Response};
-use axum::{routing, Extension, Json, Router};
+use axum::{Extension, Json, Router, routing};
 use futures::future::{FutureExt, Shared, TryFutureExt};
 use headers::authorization::{Authorization, Basic, Bearer};
 use headers::{HeaderMapExt, HeaderName};
 use http::header::{AUTHORIZATION, CONTENT_TYPE};
 use http::{Method, StatusCode};
-use hyper_openssl::client::legacy::MaybeHttpsStream;
 use hyper_openssl::SslStream;
+use hyper_openssl::client::legacy::MaybeHttpsStream;
 use hyper_util::rt::TokioIo;
 use mz_adapter::session::{Session, SessionConfig};
 use mz_adapter::{AdapterError, AdapterNotice, Client, SessionClient, WebhookAppenderCache};
@@ -46,6 +46,7 @@ use mz_frontegg_auth::{Authenticator as FronteggAuthentication, Error as Fronteg
 use mz_http_util::DynamicFilterTarget;
 use mz_ore::cast::u64_to_usize;
 use mz_ore::metrics::MetricsRegistry;
+use mz_ore::now::{NowFn, SYSTEM_TIME, epoch_to_uuid_v7};
 use mz_ore::str::StrExt;
 use mz_pgwire_common::{ConnectionCounter, ConnectionHandle};
 use mz_repr::user::ExternalUserMetadata;
@@ -66,11 +67,10 @@ use tower::limit::GlobalConcurrencyLimitLayer;
 use tower::{Service, ServiceBuilder};
 use tower_http::cors::{AllowOrigin, Any, CorsLayer};
 use tracing::{error, warn};
-use uuid::Uuid;
 
+use crate::BUILD_INFO;
 use crate::deployment::state::DeploymentStateHandle;
 use crate::http::sql::SqlError;
-use crate::BUILD_INFO;
 
 mod catalog;
 mod console;
@@ -482,8 +482,8 @@ async fn internal_http_auth(mut req: Request, next: Next) -> impl IntoResponse {
         Ok(name @ (SUPPORT_USER_NAME | SYSTEM_USER_NAME)) => name.to_string(),
         _ => {
             return Err(AuthError::MismatchedUser(format!(
-            "user specified in x-materialize-user must be {SUPPORT_USER_NAME} or {SYSTEM_USER_NAME}"
-        )));
+                "user specified in x-materialize-user must be {SUPPORT_USER_NAME} or {SYSTEM_USER_NAME}"
+            )));
         }
     };
     req.extensions_mut().insert(AuthedUser {
@@ -547,6 +547,7 @@ impl AuthedClient {
         helm_chart_version: Option<String>,
         session_config: F,
         options: BTreeMap<String, String>,
+        now: NowFn,
     ) -> Result<Self, AdapterError>
     where
         F: FnOnce(&mut Session),
@@ -554,10 +555,12 @@ impl AuthedClient {
         let conn_id = adapter_client.new_conn_id()?;
         let mut session = adapter_client.new_session(SessionConfig {
             conn_id,
-            uuid: Uuid::new_v4(),
+            uuid: epoch_to_uuid_v7(&(now)()),
             user: user.name,
             client_ip: Some(peer_addr),
             external_metadata_rx: user.external_metadata_rx,
+            //TODO(dov): Add support for internal user metadata when we support auth here
+            internal_user_metadata: None,
             helm_chart_version,
         });
         let connection_guard = active_connection_counter.allocate_connection(session.user())?;
@@ -653,6 +656,7 @@ where
                     .expect("known to exist")
             },
             options,
+            SYSTEM_TIME.clone(),
         )
         .await
         .map_err(|e| {
@@ -708,7 +712,7 @@ async fn http_auth(
     next: Next,
     tls_mode: TlsMode,
     frontegg: Option<&FronteggAuthentication>,
-) -> impl IntoResponse {
+) -> impl IntoResponse + use<> {
     // First, extract the username from the certificate, validating that the
     // connection matches the TLS configuration along the way.
     let conn_protocol = req.extensions().get::<ConnProtocol>().unwrap();
@@ -844,6 +848,7 @@ async fn init_ws(
         helm_chart_version.clone(),
         |_session| (),
         options,
+        SYSTEM_TIME.clone(),
     )
     .await?;
 
@@ -899,7 +904,7 @@ async fn auth(
                 (claims.user, Some(external_metadata_rx))
             }
             Credentials::DefaultUser | Credentials::User(_) => {
-                return Err(AuthError::MissingHttpAuthentication)
+                return Err(AuthError::MissingHttpAuthentication);
             }
         },
     };

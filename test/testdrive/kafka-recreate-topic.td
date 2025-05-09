@@ -121,6 +121,29 @@ $ kafka-create-topic topic=good-topic
   FORMAT TEXT
   ENVELOPE NONE
 
+# After suspending the cluster (by scaling the replication factor to 0), the
+# latest state is paused for sources that previously reported as stalled.
+# Because their last state _is_ in fact paused. Errored sources don't restart,
+# so they will not go through the source lifecycle on restarting the replica,
+# so they remain paused.
+
+# Before suspending the cluster, we see the errors in the status collection.
+# For source0 and source1, we already went through a couple suspension cycles,
+# so they already report as paused. With source2 online, we didn't yet do a
+# suspend-restart cycle.
+
+> SELECT name, status, error FROM mz_internal.mz_source_statuses WHERE type != 'progress'
+name            status    error
+-------------------------------
+good_source     running   <null>
+good_source_tbl running   <null>
+source0         paused    <null>
+source0_tbl     paused    <null>
+source1         paused    <null>
+source1_tbl     paused    <null>
+source2         stalled   "kafka: Source error: source must be dropped and recreated due to failure: topic was recreated"
+source2_tbl     stalled   "kafka: Source error: source must be dropped and recreated due to failure: topic was recreated"
+
 > ALTER CLUSTER to_recreate SET (REPLICATION FACTOR 0)
 > ALTER CLUSTER to_recreate SET (REPLICATION FACTOR 1)
 
@@ -132,17 +155,19 @@ text
 ----
 1
 
+# After another suspend-restart cycle, source2 also reports as paused.
+
 > SELECT name, status, error FROM mz_internal.mz_source_statuses WHERE type != 'progress'
 name            status    error
 -------------------------------
 good_source     running   <null>
 good_source_tbl running   <null>
 source0         paused    <null>
-source0_tbl     stalled   "kafka: Source error: source must be dropped and recreated due to failure: topic was deleted"
+source0_tbl     paused    <null>
 source1         paused    <null>
-source1_tbl     stalled   "kafka: Source error: source must be dropped and recreated due to failure: topic was recreated"
+source1_tbl     paused    <null>
 source2         paused    <null>
-source2_tbl     stalled   "kafka: Source error: source must be dropped and recreated due to failure: topic was recreated"
+source2_tbl     paused    <null>
 
 # Testdrive expects all sources to end in a healthy state, so manufacture that
 # by dropping sources.

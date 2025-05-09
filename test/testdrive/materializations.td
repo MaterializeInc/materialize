@@ -85,7 +85,7 @@ data_view  ""
 > SHOW CREATE MATERIALIZED VIEW test1
 name                      create_sql
 -----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
-materialize.public.test1  "CREATE MATERIALIZED VIEW \"materialize\".\"public\".\"test1\" IN CLUSTER \"quickstart\" WITH (REFRESH = ON COMMIT) AS SELECT \"b\", \"pg_catalog\".\"sum\"(\"a\") FROM \"materialize\".\"public\".\"data_tbl\" GROUP BY \"b\""
+materialize.public.test1  "CREATE MATERIALIZED VIEW materialize.public.test1\n    IN CLUSTER quickstart\n    WITH (REFRESH = ON COMMIT)\n    AS SELECT b, pg_catalog.sum(a) FROM materialize.public.data_tbl GROUP BY b;"
 
 # Materialized view can be built on a not-materialized view.
 > CREATE MATERIALIZED VIEW test2 AS
@@ -174,7 +174,7 @@ contains:test5 is a view, which cannot be exported as a sink
 
 $ set-regex match=(\s\(u\d+\)) replacement=
 
-? EXPLAIN SELECT * FROM test5;
+? EXPLAIN OPTIMIZED PLAN AS VERBOSE TEXT FOR SELECT * FROM test5;
 Explained Query (fast path):
   ReadIndex on=materialize.public.test5 test5_primary_idx=[*** full scan ***]
 
@@ -202,7 +202,7 @@ contains:catalog item 'materialize.public.idx1' is an index and so cannot be dep
 # unmaterialize the view.
 > DROP INDEX test5_primary_idx
 
-? EXPLAIN SELECT * FROM test5
+? EXPLAIN OPTIMIZED PLAN AS VERBOSE TEXT FOR SELECT * FROM test5
 Explained Query (fast path):
   Project (#1, #0)
     ReadIndex on=materialize.public.test5 idx1=[*** full scan ***]
@@ -505,12 +505,12 @@ c    d
 "Dataflow: materialize.public.test6" "Reduced Fallibly MinsMaxesHierarchical"
 "Dataflow: materialize.public.test6" "Reduced Fallibly MinsMaxesHierarchical"
 "Dataflow: materialize.public.test6" "Reduced Fallibly MinsMaxesHierarchical"
-"Dataflow: materialize.public.data_view_idx" ArrangeBy[[Column(0)]]
-"Dataflow: materialize.public.data_view_idx" ArrangeBy[[Column(0)]]-errors
+"Dataflow: materialize.public.data_view_idx" "ArrangeBy[[Column(0)]]"
+"Dataflow: materialize.public.data_view_idx" "ArrangeBy[[Column(0)]]-errors"
 "Dataflow: materialize.public.data_view_primary_idx" "ArrangeBy[[Column(0), Column(1)]]"
 "Dataflow: materialize.public.data_view_primary_idx" "ArrangeBy[[Column(0), Column(1)]]-errors"
-"Dataflow: materialize.public.mat_data_idx3" ArrangeBy[[Column(1)]]
-"Dataflow: materialize.public.mat_data_idx3" ArrangeBy[[Column(1)]]-errors
+"Dataflow: materialize.public.mat_data_idx3" "ArrangeBy[[Column(1)]]"
+"Dataflow: materialize.public.mat_data_idx3" "ArrangeBy[[Column(1)]]-errors"
 "Dataflow: materialize.public.test1" AccumulableErrorCheck
 "Dataflow: materialize.public.test1" "ArrangeAccumulable [val: empty]"
 "Dataflow: materialize.public.test1" ReduceAccumulable

@@ -1,0 +1,24 @@
+---
+source: src/expr/src/scalar/func/impls/int64.rs
+expression: info
+---
+Info {
+    output_type_nullable: ColumnType {
+        scalar_type: Oid,
+        nullable: true,
+    },
+    output_type_nonnullable: ColumnType {
+        scalar_type: Oid,
+        nullable: false,
+    },
+    preserves_uniqueness: true,
+    inverse: Some(
+        CastOidToInt64(
+            CastOidToInt64,
+        ),
+    ),
+    is_monotone: false,
+    propagates_nulls: true,
+    introduces_nulls: false,
+    could_error: true,
+}

@@ -75,7 +75,9 @@ pub enum ErrorKind {
     TypeRename(String),
     #[error("cannot rename schemas in the ambient database: {}", .0.quoted())]
     AmbientSchemaRename(String),
-    #[error("cannot migrate from catalog version {last_seen_version} to version {this_version} (earlier versions might still work): {cause}")]
+    #[error(
+        "cannot migrate from catalog version {last_seen_version} to version {this_version} (earlier versions might still work): {cause}"
+    )]
     FailedMigration {
         last_seen_version: String,
         this_version: &'static str,

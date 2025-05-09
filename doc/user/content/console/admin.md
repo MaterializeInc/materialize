@@ -17,14 +17,25 @@ The **Admin** section contains the following screens:
 
 | Feature | Description |
 |---------|-------------|
-| **App Passwords** | Manage client credentials to allow your applications and services to connect to Materialize. |
+| **App Passwords** | View or delete client credentials that allow your applications and services to connect to Materialize. |
 | **Billing** | Access detailed usage and billing information as well as your invoices. <br>**Available for administrators only.** |
 
 ### App Passwords
 
 ![Image of the Client Passwords](/images/console/console-passwords.png "Client passwords")
 
-The [**Connect**](/console/connect/) button provides details needed to connect to Materialize.
+The **App Passwords** screen displays the various [client credentials
+created](/console/create-new/#create-new-app-password) to allow your
+applications and services to connect to Materialize.
+
+- The [**Connect**](/console/connect/) button provides details needed to connect
+to Materialize.
+
+- The **trash can** button deletes the password.
+
+See also [+Create New > App
+Password](/console/create-new/#create-new-app-password) for steps to create a
+new app password.
 
 ### Billing page
 

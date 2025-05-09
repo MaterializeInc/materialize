@@ -15,10 +15,10 @@ use proptest::prelude::*;
 use proptest::strategy::{Strategy, Union};
 use serde_json::json;
 
-use crate::stats::primitive::{any_primitive_stats, PrimitiveStats};
+use crate::stats::primitive::{PrimitiveStats, any_primitive_stats};
 use crate::stats::{
-    proto_json_stats, DynStats, ProtoJsonMapElementStats, ProtoJsonMapStats, ProtoJsonStats,
-    TrimStats,
+    DynStats, ProtoJsonMapElementStats, ProtoJsonMapStats, ProtoJsonStats, TrimStats,
+    proto_json_stats,
 };
 
 // Aggregate statistics about a column of Json elements.
@@ -242,10 +242,12 @@ mod tests {
 
                 // Assert force keep columns were kept.
                 if let Some(required) = required {
-                    assert!(stats
-                        .elements
-                        .iter()
-                        .any(|element| element.name == required));
+                    assert!(
+                        stats
+                            .elements
+                            .iter()
+                            .any(|element| element.name == required)
+                    );
                 } else {
                     assert!(cost_after <= budget);
                 }

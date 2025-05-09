@@ -8,13 +8,13 @@ aliases:
 [Striim](https://www.striim.com/) is a real-time data integration platform that
 offers a variety of connectors for databases, messaging systems, and other data
 sources. This guide walks through the steps to ingest Striim Change Data
-Capture (CDC) into Materialize using the [Kafka source](https://materialize.com/docs/sql/create-source/kafka/).
+Capture (CDC) into Materialize using the [Kafka source](/sql/create-source/kafka/).
 
 ## Before you begin
 
 {{< note >}}
 We are in touch with the Striim team to build a direct CDC connector
-to Materialize. If you're interested in this integration, please [contact our team](https://materialize.com/docs/support/)!
+to Materialize. If you're interested in this integration, please [contact our team](/support/)!
 {{</ note >}}
 
 As is, integrating Striim Cloud with Materialize requires using a message broker
@@ -87,7 +87,7 @@ cluster. Next, you'll configure Materialize to consume this data.
 If you are prototyping and already have a cluster to host your Kafka source
 (e.g. `quickstart`), you don't need to create a new cluster. For production
 scenarios, we recommend separating your workloads into multiple clusters for
-[resource isolation](https://materialize.com/docs/sql/create-cluster/#resource-isolation).
+[resource isolation](/sql/create-cluster/#resource-isolation).
 {{< /note >}}
 
 1. In the [SQL Shell](https://console.materialize.com/), or your preferred SQL

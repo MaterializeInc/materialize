@@ -26,8 +26,8 @@
 #[cfg(feature = "assert")]
 pub mod assert;
 pub mod bits;
-#[cfg_attr(nightly_doc_features, doc(cfg(feature = "bytes_")))]
-#[cfg(feature = "bytes_")]
+#[cfg_attr(nightly_doc_features, doc(cfg(feature = "bytes")))]
+#[cfg(feature = "bytes")]
 pub mod bytes;
 pub mod cast;
 #[cfg_attr(nightly_doc_features, doc(cfg(feature = "async")))]
@@ -39,8 +39,6 @@ pub mod cli;
 pub mod collections;
 pub mod env;
 pub mod error;
-#[cfg(feature = "flatcontainer")]
-pub mod flatcontainer;
 pub mod fmt;
 #[cfg_attr(nightly_doc_features, doc(cfg(feature = "async")))]
 #[cfg(feature = "async")]
@@ -54,9 +52,9 @@ pub mod iter;
 pub mod lex;
 #[cfg_attr(
     nightly_doc_features,
-    doc(cfg(all(feature = "bytes_", feature = "region")))
+    doc(cfg(all(feature = "bytes", feature = "region")))
 )]
-#[cfg(all(feature = "bytes_", feature = "region", feature = "tracing_"))]
+#[cfg(all(feature = "bytes", feature = "region", feature = "tracing"))]
 pub mod lgbytes;
 #[cfg_attr(nightly_doc_features, doc(cfg(feature = "metrics")))]
 #[cfg(feature = "metrics")]
@@ -67,7 +65,9 @@ pub mod netio;
 pub mod now;
 pub mod num;
 pub mod option;
+pub mod overflowing;
 #[cfg(not(target_family = "wasm"))]
+#[cfg(feature = "panic")]
 pub mod panic;
 pub mod path;
 pub mod permutations;
@@ -94,16 +94,23 @@ pub mod task;
 pub mod test;
 pub mod thread;
 pub mod time;
-#[cfg_attr(nightly_doc_features, doc(cfg(feature = "tracing_")))]
-#[cfg(feature = "tracing_")]
+#[cfg_attr(nightly_doc_features, doc(cfg(feature = "tracing")))]
+#[cfg(feature = "tracing")]
 pub mod tracing;
+pub mod treat_as_equal;
 pub mod url;
 pub mod vec;
 
 pub use mz_ore_proc::{instrument, static_list, test};
 
+pub use overflowing::Overflowing;
+
 #[doc(hidden)]
 pub mod __private {
-    #[cfg(feature = "tracing_")]
+    #[cfg(feature = "tracing")]
     pub use tracing;
 }
+
+// Epoch: 1
+//
+// Bump this whenever we need to change the hash of a build without changing any code.

@@ -7,7 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use criterion::{criterion_group, criterion_main, Criterion};
+use criterion::{Criterion, criterion_group, criterion_main};
 use mz_ore::id_gen::{IdAllocator, IdAllocatorInner, IdAllocatorInnerBitSet};
 
 fn bench_id_gen(c: &mut Criterion) {

@@ -196,21 +196,23 @@ With
     Map (null::bigint)
       Get t0
 ----
-With Mutually Recursive
+With
   cte l0 =
     Map (null)
       Get t0
-  cte l1 =
-    Union
-      Get l0
-      Get l0
-      Get l1
 Return
-  With
-    cte l2 =
-      Filter (#0 > 0)
+  With Mutually Recursive
+    cte l1 =
+      Union
+        Get l0
+        Get l0
         Get l1
   Return
-    Union
-      Get l2
-      Get l2
+    With
+      cte l2 =
+        Filter (#0 > 0)
+          Get l1
+    Return
+      Union
+        Get l2
+        Get l2

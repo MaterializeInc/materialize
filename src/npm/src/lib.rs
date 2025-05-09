@@ -64,7 +64,7 @@ use std::fs;
 use std::io::Read;
 use std::path::{Path, PathBuf};
 
-use anyhow::{bail, Context};
+use anyhow::{Context, bail};
 use flate2::read::GzDecoder;
 use hex_literal::hex;
 use sha2::{Digest, Sha256};
@@ -196,7 +196,7 @@ impl NpmPackage {
     }
 }
 
-pub fn ensure() -> Result<(), anyhow::Error> {
+pub fn ensure(out_dir: Option<PathBuf>) -> Result<(), anyhow::Error> {
     println!("ensuring all npm packages are up-to-date...");
 
     let client = reqwest::blocking::Client::new();
@@ -211,7 +211,7 @@ pub fn ensure() -> Result<(), anyhow::Error> {
         let url = format!(
             "https://registry.npmjs.org/{}/-/{}-{}.tgz",
             pkg.name,
-            pkg.name.split('/').last().unwrap(),
+            pkg.name.split('/').next_back().unwrap(),
             pkg.version,
         );
         let res = client
@@ -273,9 +273,22 @@ expected: {}
     for dir in &[CSS_VENDOR, JS_PROD_VENDOR, JS_DEV_VENDOR] {
         for entry in WalkDir::new(dir) {
             let entry = entry?;
-            if entry.file_type().is_file() && !known_paths.contains(entry.path()) {
-                println!("removing stray vendor file {}", entry.path().display());
-                fs::remove_file(entry.path())?;
+            if entry.file_type().is_file() {
+                if !known_paths.contains(entry.path()) {
+                    println!("removing stray vendor file {}", entry.path().display());
+                    fs::remove_file(entry.path())?;
+                } else if let Some(out_dir) = &out_dir {
+                    let dst_path = out_dir.join(entry.path());
+                    println!(
+                        "copying path to OUT_DIR, src {}, dst {}",
+                        entry.path().display(),
+                        dst_path.display(),
+                    );
+                    if let Some(parent) = dst_path.parent() {
+                        fs::create_dir_all(parent)?;
+                    }
+                    fs::copy(entry.path(), dst_path)?;
+                }
             }
         }
     }

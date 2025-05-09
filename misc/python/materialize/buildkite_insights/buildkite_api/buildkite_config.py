@@ -14,6 +14,7 @@ MZ_PIPELINES = [
     "deploy",
     "deploy-mz-lsp-server",
     "deploy-mz",
+    "deploy-mz-debug",
     "deploy-website",
     "license",
     "nightly",

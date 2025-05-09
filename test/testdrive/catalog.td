@@ -385,7 +385,7 @@ v1          view        ""
 v2          view        ""
 
 > SELECT create_sql FROM (SHOW CREATE TABLE tbl)
-"CREATE TABLE \"d\".\"public\".\"tbl\" (\"a\" \"pg_catalog\".\"int4\", \"b\" \"pg_catalog\".\"text\")"
+"CREATE TABLE d.public.tbl (a pg_catalog.int4, b pg_catalog.text);"
 
 ! SHOW COLUMNS FROM pass_secret
 contains:d.public.pass_secret is a secret and so does not have columns
@@ -589,6 +589,7 @@ mz_sql_text                                  source  <null>     ""
 mz_statement_execution_history               source  <null>     ""
 mz_statement_lifecycle_history               source  <null>     ""
 mz_storage_shards                            source  <null>     ""
+mz_wallclock_global_lag_histogram_raw        source  <null>     ""
 mz_wallclock_lag_history                     source  <null>     ""
 
 > SHOW TABLES FROM mz_internal
@@ -616,6 +617,7 @@ mz_postgres_sources                      ""
 mz_postgres_source_tables                ""
 mz_sessions                              ""
 mz_source_references                     ""
+mz_sql_server_source_tables              ""
 mz_storage_usage_by_shard                ""
 mz_subscriptions                         ""
 mz_type_pg_metadata                      ""
@@ -693,6 +695,8 @@ mz_source_statuses                       ""
 mz_sql_text_redacted                     ""
 mz_aws_privatelink_connection_statuses   ""
 mz_statement_execution_history_redacted  ""
+mz_wallclock_global_lag                  ""
+mz_wallclock_global_lag_histogram        ""
 mz_wallclock_global_lag_history          ""
 mz_wallclock_global_lag_recent_history   ""
 pg_class_all_databases                   ""
@@ -771,6 +775,7 @@ mz_dataflows ""
 mz_dataflows_per_worker ""
 mz_expected_group_size_advice ""
 mz_lir_mapping ""
+mz_mappable_objects ""
 mz_message_counts ""
 mz_message_counts_per_worker ""
 mz_peek_durations_histogram ""
@@ -797,11 +802,11 @@ test_table ""
 
 # `SHOW TABLES` and `mz_tables` should agree.
 > SELECT COUNT(*) FROM mz_tables WHERE id LIKE 's%'
-61
+62
 
 # There is one entry in mz_indexes for each field_number/expression of the index.
 > SELECT COUNT(id) FROM mz_indexes WHERE id LIKE 's%'
-255
+257
 
 # Create a second schema with the same table name as above
 > CREATE SCHEMA tester2

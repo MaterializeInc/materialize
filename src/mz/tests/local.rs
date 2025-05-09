@@ -11,11 +11,12 @@
 mod tests {
     use std::{fs, path::PathBuf, time::Duration};
 
-    use assert_cmd::{assert::Assert, Command};
+    use assert_cmd::{Command, assert::Assert};
     use mz::ui::OptionalStr;
     use mz_frontegg_auth::AppPassword;
     use serde::{Deserialize, Serialize};
-    use tabled::{Style, Table, Tabled};
+    use tabled::settings::Style;
+    use tabled::{Table, Tabled};
     use uuid::Uuid;
 
     fn get_config_path() -> PathBuf {
@@ -137,7 +138,10 @@ mod tests {
             .failure();
 
         let output = output_to_string(assert);
-        assert!(output.trim() == "The profile name 'default' already exists. You can either use 'mz profile init -f' to replace it or 'mz profile init --profile <PROFILE>' to choose another name.");
+        assert!(
+            output.trim()
+                == "The profile name 'default' already exists. You can either use 'mz profile init -f' to replace it or 'mz profile init --profile <PROFILE>' to choose another name."
+        );
 
         let assert = cmd()
             .arg("profile")
@@ -150,7 +154,10 @@ mod tests {
             .failure();
 
         let output = output_to_string(assert);
-        assert!(output.trim() == "The profile name 'alternative' already exists. You can either use 'mz profile init -f' to replace it or 'mz profile init --profile <PROFILE>' to choose another name.");
+        assert!(
+            output.trim()
+                == "The profile name 'alternative' already exists. You can either use 'mz profile init -f' to replace it or 'mz profile init --profile <PROFILE>' to choose another name."
+        );
 
         // Asert `mz profile config get region --profile alternative`
         let binding = cmd()

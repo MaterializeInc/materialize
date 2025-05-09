@@ -16,7 +16,7 @@ use std::ops::BitOrAssign;
 use std::str::FromStr;
 
 use crate::adt::system::Oid;
-use anyhow::{anyhow, Error};
+use anyhow::{Error, anyhow};
 use bitflags::bitflags;
 use columnation::{Columnation, CopyRegion};
 use mz_ore::soft_assert_no_log;
@@ -835,7 +835,7 @@ pub fn merge_mz_acl_items(
         .fold(BTreeMap::new(), |mut accum, mz_acl_item| {
             let item = accum
                 .entry((mz_acl_item.grantee, mz_acl_item.grantor))
-                .or_insert(MzAclItem::empty(mz_acl_item.grantee, mz_acl_item.grantor));
+                .or_insert_with(|| MzAclItem::empty(mz_acl_item.grantee, mz_acl_item.grantor));
             item.acl_mode |= mz_acl_item.acl_mode;
             accum
         })

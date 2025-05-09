@@ -9,20 +9,24 @@ weight: 1
 
 # Materialize documentation
 
-Materialize is the Cloud Operational Data Store that lets you use SQL to
-transform, deliver, and act on fast-changing data.
+Materialize is a real-time data integration platform that enables you to use SQL
+to transform, deliver, and act on fast changing data.
 
 {{< callout >}}
 
 ## What's new!
 
-- [Materialize Emulator](/get-started/install-materialize-emulator/). The
-Materialize Emulator is an all-in-one Docker image available on Docker Hub,
-offering the fastest way to get hands-on experience with Materialize in a local
-environment. For more information, see [Materialize
-Emulator](/get-started/install-materialize-emulator/).
+- [Self-managed Materialize](/self-managed/). With Self-managed Materialize, you
+  can deploy and operate Materialize in your Kubernetes environment.
+  Self-managed Materialize is available in both Enterprise and Community
+  editions. For more information, see the [Self-managed
+  Materialize](/self-managed/) documentation.
 
-- [Changelog](https://materialize.com/changelog/)
+- [Materialize MCP Server](https://materialize.com/blog/materialize-turns-views-into-tools-for-agents/).
+  The Materialize MCP Server bridges SQL and AI by transforming indexed views into well-typed tools
+  that agents can call directly. It lets you expose your freshest, most complex logic as operational
+  data products automatically and reliably. For more information, see the
+  [Materialize MCP Server](/integrations/llm/) documentation.
 
 {{</ callout >}}
 
@@ -34,7 +38,9 @@ primary_text="Get Started">}}
 
 1. Sign up for a [free trial
    account](https://materialize.com/register/?utm_campaign=General&utm_source=documentation)
-   or [download the Materialize Emulator Docker image](/get-started/install-materialize-emulator/).
+   on Materialize Cloud. Alternatively, both the [Materialize Emulator Docker
+   image](/get-started/install-materialize-emulator/) and the [Self-managed
+   Materialize](/self-managed/) are also available.
 2. Follow the quickstart guide to learn the basics.
 3. Connect your own data sources and start building.
 
@@ -69,4 +75,8 @@ primary_text="Get Started">}}
 
 ## Learn more
 
--   Check out the [**Materialize blog**](https://www.materialize.com/blog/) for the latest updates and Materialize deep-dives.
+- To find out about new features and improvements, see also the
+  [Changelog](https://materialize.com/changelog/).
+
+- Check out the [**Materialize blog**](https://www.materialize.com/blog/) for
+  the latest updates and Materialize deep-dives.

@@ -34,6 +34,7 @@ use std::collections::BTreeMap;
 use timely::progress::Antichain;
 use tracing::Span;
 
+use crate::ReadHolds;
 use crate::command::ExecuteResponse;
 use crate::coord::sequencer::inner::return_if_err;
 use crate::coord::{
@@ -49,8 +50,7 @@ use crate::optimize::dataflows::dataflow_import_id_bundle;
 use crate::optimize::{self, Optimize};
 use crate::session::Session;
 use crate::util::ResultExt;
-use crate::ReadHolds;
-use crate::{catalog, AdapterNotice, CollectionIdBundle, ExecuteContext, TimestampProvider};
+use crate::{AdapterNotice, CollectionIdBundle, ExecuteContext, TimestampProvider, catalog};
 
 impl Staged for CreateMaterializedViewStage {
     type Ctx = ExecuteContext;
@@ -611,7 +611,12 @@ impl Coordinator {
         // `bootstrap_storage_collections`.
         if let Some(storage_as_of_ts) = storage_as_of.as_option() {
             let stmt = mz_sql::parse::parse(&create_sql)
-                .expect("create_sql is valid")
+                .map_err(|_| {
+                    AdapterError::internal(
+                        "create materialized view",
+                        "original SQL should roundtrip",
+                    )
+                })?
                 .into_element()
                 .ast;
             let ast::Statement::CreateMaterializedView(mut stmt) = stmt else {
@@ -924,7 +929,9 @@ impl Coordinator {
             read_holds,
             plan.source_imports
                 .into_iter()
-                .filter_map(|(id, (source, _))| source.arguments.operators.map(|mfp| (id, mfp))),
+                .filter_map(|(id, (source, _, _upper))| {
+                    source.arguments.operators.map(|mfp| (id, mfp))
+                }),
         )
         .await
     }

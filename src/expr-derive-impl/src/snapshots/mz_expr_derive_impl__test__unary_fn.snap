@@ -1,0 +1,40 @@
+---
+source: src/expr-derive-impl/src/lib.rs
+expression: "#[sqlfunc()]\nfn unary_fn<'a>(a: Datum<'a>) -> bool {\n    unimplemented!()\n}\n"
+---
+#[derive(
+    proptest_derive::Arbitrary,
+    Ord,
+    PartialOrd,
+    Clone,
+    Debug,
+    Eq,
+    PartialEq,
+    serde::Serialize,
+    serde::Deserialize,
+    Hash,
+    mz_lowertest::MzReflect
+)]
+pub struct UnaryFn;
+impl<'a> crate::func::EagerUnaryFunc<'a> for UnaryFn {
+    type Input = Datum<'a>;
+    type Output = bool;
+    fn call(&self, a: Self::Input) -> Self::Output {
+        unary_fn(a)
+    }
+    fn output_type(&self, input_type: mz_repr::ColumnType) -> mz_repr::ColumnType {
+        use mz_repr::AsColumnType;
+        let output = Self::Output::as_column_type();
+        let propagates_nulls = crate::func::EagerUnaryFunc::propagates_nulls(self);
+        let nullable = output.nullable;
+        output.nullable(nullable || (propagates_nulls && input_type.nullable))
+    }
+}
+impl std::fmt::Display for UnaryFn {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        f.write_str(stringify!(unary_fn))
+    }
+}
+fn unary_fn<'a>(a: Datum<'a>) -> bool {
+    unimplemented!()
+}

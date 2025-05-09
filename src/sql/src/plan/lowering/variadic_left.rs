@@ -10,10 +10,11 @@
 use itertools::Itertools;
 use mz_expr::{MirRelationExpr, MirScalarExpr};
 use mz_ore::soft_assert_eq_or_log;
+use mz_repr::Diff;
 
-use crate::plan::expr::{HirRelationExpr, HirScalarExpr};
-use crate::plan::lowering::{ColumnMap, Context, CteMap};
 use crate::plan::PlanError;
+use crate::plan::hir::{HirRelationExpr, HirScalarExpr};
+use crate::plan::lowering::{ColumnMap, Context, CteMap};
 
 /// Attempt to render a stack of left joins as an inner join against "enriched" right relations.
 ///
@@ -239,7 +240,7 @@ pub(crate) fn attempt_left_join_magic(
                         mz_repr::Row::pack(
                             std::iter::repeat(mz_repr::Datum::Null).take(left_typ.arity()),
                         ),
-                        1,
+                        Diff::ONE,
                     )]),
                     typ: left_typ,
                 },
@@ -341,11 +342,11 @@ pub(crate) fn attempt_left_join_magic(
                 .map(
                     (oa + ba..oa + ba + ra)
                         .map(|col| MirScalarExpr::If {
-                            cond: Box::new(MirScalarExpr::Column(oa + ba + ra).call_is_null()),
+                            cond: Box::new(MirScalarExpr::column(oa + ba + ra).call_is_null()),
                             then: Box::new(MirScalarExpr::literal_null(
                                 rt[col - (oa + ba)].scalar_type.clone(),
                             )),
-                            els: Box::new(MirScalarExpr::Column(col)),
+                            els: Box::new(MirScalarExpr::column(col)),
                         })
                         .collect(),
                 )
@@ -409,7 +410,8 @@ fn decompose_equations(predicate: &MirScalarExpr) -> Option<Vec<(usize, usize)>>
                 expr1,
                 expr2,
             } => {
-                if let (MirScalarExpr::Column(c1), MirScalarExpr::Column(c2)) = (&**expr1, &**expr2)
+                if let (MirScalarExpr::Column(c1, _name1), MirScalarExpr::Column(c2, _name2)) =
+                    (&**expr1, &**expr2)
                 {
                     if c1 < c2 {
                         equations.push((*c1, *c2));
@@ -449,14 +451,14 @@ fn recompose_equations(pairs: Vec<(usize, usize)>) -> Vec<MirScalarExpr> {
             exprs: vec![
                 MirScalarExpr::CallBinary {
                     func: BinaryFunc::Eq,
-                    expr1: Box::new(MirScalarExpr::Column(*x)),
-                    expr2: Box::new(MirScalarExpr::Column(*y)),
+                    expr1: Box::new(MirScalarExpr::column(*x)),
+                    expr2: Box::new(MirScalarExpr::column(*y)),
                 },
                 MirScalarExpr::CallVariadic {
                     func: VariadicFunc::And,
                     exprs: vec![
-                        MirScalarExpr::Column(*x).call_is_null(),
-                        MirScalarExpr::Column(*y).call_is_null(),
+                        MirScalarExpr::column(*x).call_is_null(),
+                        MirScalarExpr::column(*y).call_is_null(),
                     ],
                 },
             ],

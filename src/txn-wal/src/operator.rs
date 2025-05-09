@@ -13,19 +13,20 @@ use std::any::Any;
 use std::fmt::Debug;
 use std::future::Future;
 use std::sync::mpsc::TryRecvError;
-use std::sync::{mpsc, Arc};
+use std::sync::{Arc, mpsc};
 use std::time::Duration;
 
+use differential_dataflow::Hashable;
 use differential_dataflow::difference::Semigroup;
 use differential_dataflow::lattice::Lattice;
-use differential_dataflow::Hashable;
 use futures::StreamExt;
 use mz_dyncfg::{Config, ConfigSet, ConfigUpdates};
 use mz_ore::cast::CastFrom;
 use mz_ore::task::JoinHandleExt;
 use mz_persist_client::cfg::{RetryParameters, USE_GLOBAL_TXN_CACHE_SOURCE};
-use mz_persist_client::operators::shard_source::{shard_source, SnapshotMode};
-use mz_persist_client::project::ProjectionPushdown;
+use mz_persist_client::operators::shard_source::{
+    ErrorHandler, FilterResult, SnapshotMode, shard_source,
+};
 use mz_persist_client::{Diagnostics, PersistClient, ShardId};
 use mz_persist_types::codec_impls::{StringSchema, UnitSchema};
 use mz_persist_types::txn::TxnsCodec;
@@ -45,9 +46,9 @@ use timely::worker::Worker;
 use timely::{Data, PartialOrder, WorkerConfig};
 use tracing::debug;
 
+use crate::TxnsCodecDefault;
 use crate::txn_cache::TxnsCache;
 use crate::txn_read::{DataListenNext, DataRemapEntry, TxnsRead};
-use crate::TxnsCodecDefault;
 
 /// An operator for translating physical data shard frontiers into logical ones.
 ///
@@ -646,7 +647,7 @@ impl DataSubscribe {
         let (data, txns, capture, tokens) = worker.dataflow::<u64, _, _>(|scope| {
             let (data_stream, shard_source_token) = scope.scoped::<u64, _, _>("hybrid", |scope| {
                 let client = client.clone();
-                let (data_stream, token) = shard_source::<String, (), u64, i64, _, _, _, _>(
+                let (data_stream, token) = shard_source::<String, (), u64, i64, _, _, _>(
                     scope,
                     name,
                     move || std::future::ready(client.clone()),
@@ -657,11 +658,10 @@ impl DataSubscribe {
                     false.then_some(|_, _: &_, _| unreachable!()),
                     Arc::new(StringSchema),
                     Arc::new(UnitSchema),
-                    |_, _| true,
+                    FilterResult::keep_all,
                     false.then_some(|| unreachable!()),
                     async {},
-                    |error| panic!("data_subscribe: {error}"),
-                    ProjectionPushdown::FetchAll,
+                    ErrorHandler::Halt("data_subscribe"),
                 );
                 (data_stream.leave(), token)
             });

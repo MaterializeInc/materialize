@@ -1,7 +1,6 @@
 ---
 source: src/catalog/tests/debug.rs
 expression: test_trace
-snapshot_kind: text
 ---
 Trace {
     audit_log: CollectionTrace {
@@ -39,7 +38,9 @@ Trace {
                     (),
                 ),
                 2,
-                1,
+                Overflowing(
+                    1,
+                ),
             ),
             (
                 (
@@ -74,7 +75,9 @@ Trace {
                     (),
                 ),
                 2,
-                1,
+                Overflowing(
+                    1,
+                ),
             ),
             (
                 (
@@ -109,7 +112,9 @@ Trace {
                     (),
                 ),
                 2,
-                1,
+                Overflowing(
+                    1,
+                ),
             ),
             (
                 (
@@ -144,7 +149,9 @@ Trace {
                     (),
                 ),
                 2,
-                1,
+                Overflowing(
+                    1,
+                ),
             ),
             (
                 (
@@ -176,7 +183,9 @@ Trace {
                     (),
                 ),
                 2,
-                1,
+                Overflowing(
+                    1,
+                ),
             ),
             (
                 (
@@ -210,7 +219,9 @@ Trace {
                     (),
                 ),
                 2,
-                1,
+                Overflowing(
+                    1,
+                ),
             ),
             (
                 (
@@ -247,7 +258,9 @@ Trace {
                     (),
                 ),
                 2,
-                1,
+                Overflowing(
+                    1,
+                ),
             ),
             (
                 (
@@ -279,7 +292,9 @@ Trace {
                     (),
                 ),
                 2,
-                1,
+                Overflowing(
+                    1,
+                ),
             ),
             (
                 (
@@ -311,7 +326,9 @@ Trace {
                     (),
                 ),
                 2,
-                1,
+                Overflowing(
+                    1,
+                ),
             ),
             (
                 (
@@ -345,7 +362,9 @@ Trace {
                     (),
                 ),
                 2,
-                1,
+                Overflowing(
+                    1,
+                ),
             ),
             (
                 (
@@ -397,7 +416,9 @@ Trace {
                     (),
                 ),
                 2,
-                1,
+                Overflowing(
+                    1,
+                ),
             ),
             (
                 (
@@ -431,7 +452,9 @@ Trace {
                     (),
                 ),
                 2,
-                1,
+                Overflowing(
+                    1,
+                ),
             ),
         ],
     },
@@ -577,7 +600,9 @@ Trace {
                     },
                 ),
                 2,
-                1,
+                Overflowing(
+                    1,
+                ),
             ),
         ],
     },
@@ -649,7 +674,9 @@ Trace {
                     },
                 ),
                 2,
-                1,
+                Overflowing(
+                    1,
+                ),
             ),
         ],
     },
@@ -668,7 +695,9 @@ Trace {
                     },
                 ),
                 2,
-                1,
+                Overflowing(
+                    1,
+                ),
             ),
         ],
     },
@@ -779,7 +808,9 @@ Trace {
                     },
                 ),
                 2,
-                1,
+                Overflowing(
+                    1,
+                ),
             ),
         ],
     },
@@ -819,7 +850,9 @@ Trace {
                     },
                 ),
                 2,
-                1,
+                Overflowing(
+                    1,
+                ),
             ),
             (
                 (
@@ -855,7 +888,9 @@ Trace {
                     },
                 ),
                 2,
-                1,
+                Overflowing(
+                    1,
+                ),
             ),
             (
                 (
@@ -891,7 +926,9 @@ Trace {
                     },
                 ),
                 2,
-                1,
+                Overflowing(
+                    1,
+                ),
             ),
             (
                 (
@@ -927,7 +964,9 @@ Trace {
                     },
                 ),
                 2,
-                1,
+                Overflowing(
+                    1,
+                ),
             ),
         ],
     },
@@ -943,7 +982,9 @@ Trace {
                     },
                 ),
                 2,
-                1,
+                Overflowing(
+                    1,
+                ),
             ),
             (
                 (
@@ -955,7 +996,9 @@ Trace {
                     },
                 ),
                 2,
-                1,
+                Overflowing(
+                    1,
+                ),
             ),
             (
                 (
@@ -967,7 +1010,9 @@ Trace {
                     },
                 ),
                 2,
-                1,
+                Overflowing(
+                    1,
+                ),
             ),
             (
                 (
@@ -979,7 +1024,9 @@ Trace {
                     },
                 ),
                 2,
-                1,
+                Overflowing(
+                    1,
+                ),
             ),
             (
                 (
@@ -991,7 +1038,9 @@ Trace {
                     },
                 ),
                 2,
-                1,
+                Overflowing(
+                    1,
+                ),
             ),
             (
                 (
@@ -1003,7 +1052,9 @@ Trace {
                     },
                 ),
                 2,
-                1,
+                Overflowing(
+                    1,
+                ),
             ),
             (
                 (
@@ -1015,7 +1066,9 @@ Trace {
                     },
                 ),
                 2,
-                1,
+                Overflowing(
+                    1,
+                ),
             ),
             (
                 (
@@ -1027,7 +1080,9 @@ Trace {
                     },
                 ),
                 2,
-                1,
+                Overflowing(
+                    1,
+                ),
             ),
             (
                 (
@@ -1039,7 +1094,9 @@ Trace {
                     },
                 ),
                 2,
-                1,
+                Overflowing(
+                    1,
+                ),
             ),
             (
                 (
@@ -1051,7 +1108,9 @@ Trace {
                     },
                 ),
                 2,
-                1,
+                Overflowing(
+                    1,
+                ),
             ),
             (
                 (
@@ -1063,7 +1122,9 @@ Trace {
                     },
                 ),
                 2,
-                1,
+                Overflowing(
+                    1,
+                ),
             ),
             (
                 (
@@ -1075,7 +1136,9 @@ Trace {
                     },
                 ),
                 2,
-                1,
+                Overflowing(
+                    1,
+                ),
             ),
             (
                 (
@@ -1087,7 +1150,9 @@ Trace {
                     },
                 ),
                 2,
-                1,
+                Overflowing(
+                    1,
+                ),
             ),
         ],
     },
@@ -1167,7 +1232,9 @@ Trace {
                     },
                 ),
                 2,
-                1,
+                Overflowing(
+                    1,
+                ),
             ),
         ],
     },
@@ -1191,6 +1258,8 @@ Trace {
                         attributes: Some(
                             RoleAttributes {
                                 inherit: true,
+                                superuser: None,
+                                login: None,
                             },
                         ),
                         membership: Some(
@@ -1207,7 +1276,9 @@ Trace {
                     },
                 ),
                 2,
-                1,
+                Overflowing(
+                    1,
+                ),
             ),
             (
                 (
@@ -1227,6 +1298,8 @@ Trace {
                         attributes: Some(
                             RoleAttributes {
                                 inherit: true,
+                                superuser: None,
+                                login: None,
                             },
                         ),
                         membership: Some(
@@ -1243,7 +1316,9 @@ Trace {
                     },
                 ),
                 2,
-                1,
+                Overflowing(
+                    1,
+                ),
             ),
             (
                 (
@@ -1263,6 +1338,8 @@ Trace {
                         attributes: Some(
                             RoleAttributes {
                                 inherit: true,
+                                superuser: None,
+                                login: None,
                             },
                         ),
                         membership: Some(
@@ -1279,7 +1356,9 @@ Trace {
                     },
                 ),
                 2,
-                1,
+                Overflowing(
+                    1,
+                ),
             ),
             (
                 (
@@ -1299,6 +1378,8 @@ Trace {
                         attributes: Some(
                             RoleAttributes {
                                 inherit: true,
+                                superuser: None,
+                                login: None,
                             },
                         ),
                         membership: Some(
@@ -1315,7 +1396,9 @@ Trace {
                     },
                 ),
                 2,
-                1,
+                Overflowing(
+                    1,
+                ),
             ),
             (
                 (
@@ -1335,6 +1418,8 @@ Trace {
                         attributes: Some(
                             RoleAttributes {
                                 inherit: true,
+                                superuser: None,
+                                login: None,
                             },
                         ),
                         membership: Some(
@@ -1351,7 +1436,9 @@ Trace {
                     },
                 ),
                 2,
-                1,
+                Overflowing(
+                    1,
+                ),
             ),
             (
                 (
@@ -1371,6 +1458,8 @@ Trace {
                         attributes: Some(
                             RoleAttributes {
                                 inherit: true,
+                                superuser: None,
+                                login: None,
                             },
                         ),
                         membership: Some(
@@ -1387,9 +1476,14 @@ Trace {
                     },
                 ),
                 2,
-                1,
+                Overflowing(
+                    1,
+                ),
             ),
         ],
+    },
+    role_auth: CollectionTrace {
+        values: [],
     },
     schemas: CollectionTrace {
         values: [
@@ -1499,7 +1593,9 @@ Trace {
                     },
                 ),
                 2,
-                1,
+                Overflowing(
+                    1,
+                ),
             ),
             (
                 (
@@ -1607,7 +1703,9 @@ Trace {
                     },
                 ),
                 2,
-                1,
+                Overflowing(
+                    1,
+                ),
             ),
             (
                 (
@@ -1715,7 +1813,9 @@ Trace {
                     },
                 ),
                 2,
-                1,
+                Overflowing(
+                    1,
+                ),
             ),
             (
                 (
@@ -1823,7 +1923,9 @@ Trace {
                     },
                 ),
                 2,
-                1,
+                Overflowing(
+                    1,
+                ),
             ),
             (
                 (
@@ -1931,7 +2033,9 @@ Trace {
                     },
                 ),
                 2,
-                1,
+                Overflowing(
+                    1,
+                ),
             ),
             (
                 (
@@ -2039,7 +2143,9 @@ Trace {
                     },
                 ),
                 2,
-                1,
+                Overflowing(
+                    1,
+                ),
             ),
             (
                 (
@@ -2147,7 +2253,9 @@ Trace {
                     },
                 ),
                 2,
-                1,
+                Overflowing(
+                    1,
+                ),
             ),
             (
                 (
@@ -2263,7 +2371,9 @@ Trace {
                     },
                 ),
                 2,
-                1,
+                Overflowing(
+                    1,
+                ),
             ),
         ],
     },
@@ -2279,7 +2389,9 @@ Trace {
                     },
                 ),
                 2,
-                1,
+                Overflowing(
+                    1,
+                ),
             ),
         ],
     },
@@ -2325,7 +2437,9 @@ Trace {
                     },
                 ),
                 2,
-                1,
+                Overflowing(
+                    1,
+                ),
             ),
         ],
     },

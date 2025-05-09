@@ -28,26 +28,29 @@ REDPANDA_VERSIONS = [
     "v23.1.21",
     "v23.2.29",
     "v23.3.21",
-    "v24.1.18",
-    "v24.2.12",
+    "v24.1.19",
+    "v24.2.22",
+    "v24.3.11",
     REDPANDA_VERSION,
     "latest",
 ]
 
 CONFLUENT_PLATFORM_VERSIONS = [
     "7.0.16",
-    "7.1.14",
-    "7.2.12",
-    "7.3.10",
-    "7.4.7",
-    "7.5.6",
-    "7.6.3",
+    "7.1.16",
+    "7.2.14",
+    "7.3.12",
+    "7.4.9",
+    "7.5.8",
+    "7.6.5",
+    "7.7.3",
+    "7.8.2",
     DEFAULT_CONFLUENT_PLATFORM_VERSION,
     "latest",
 ]
 
 SERVICES = [
-    Materialized(),
+    Materialized(default_replication_factor=2),
     # Occasional timeouts in CI with 60s timeout
     Testdrive(
         volumes_extra=["../testdrive:/workdir/testdrive"], default_timeout="120s"
@@ -63,7 +66,6 @@ SERVICES = [
 TD_CMD = [
     f"--var=default-replica-size={Materialized.Size.DEFAULT_SIZE}-{Materialized.Size.DEFAULT_SIZE}",
     f"--var=default-storage-size={Materialized.Size.DEFAULT_SIZE}-1",
-    "--var=single-replica-cluster=quickstart",
     *[f"testdrive/{td}" for td in ["kafka-sinks.td", "kafka-upsert-sources.td"]],
 ]
 

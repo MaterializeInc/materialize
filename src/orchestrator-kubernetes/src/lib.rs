@@ -13,13 +13,14 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 use std::{env, fmt};
 
-use anyhow::{anyhow, Context};
+use anyhow::{Context, anyhow};
 use async_trait::async_trait;
 use chrono::Utc;
 use clap::ValueEnum;
 use cloud_resource_controller::KubernetesResourceReader;
-use futures::stream::{BoxStream, StreamExt};
 use futures::TryFutureExt;
+use futures::stream::{BoxStream, StreamExt};
+use k8s_openapi::DeepMerge;
 use k8s_openapi::api::apps::v1::{StatefulSet, StatefulSetSpec};
 use k8s_openapi::api::core::v1::{
     Affinity, Capabilities, Container, ContainerPort, EnvVar, EnvVarSource, EphemeralVolumeSource,
@@ -35,18 +36,18 @@ use k8s_openapi::apimachinery::pkg::api::resource::Quantity;
 use k8s_openapi::apimachinery::pkg::apis::meta::v1::{
     LabelSelector, LabelSelectorRequirement, OwnerReference,
 };
+use kube::ResourceExt;
 use kube::api::{Api, DeleteParams, ObjectMeta, Patch, PatchParams};
 use kube::client::Client;
 use kube::error::Error as K8sError;
-use kube::runtime::{watcher, WatchStreamExt};
-use kube::ResourceExt;
+use kube::runtime::{WatchStreamExt, watcher};
 use maplit::btreemap;
-use mz_cloud_resources::crd::vpc_endpoint::v1::VpcEndpoint;
 use mz_cloud_resources::AwsExternalIdPrefix;
+use mz_cloud_resources::crd::vpc_endpoint::v1::VpcEndpoint;
 use mz_orchestrator::{
-    scheduling_config::*, DiskLimit, LabelSelectionLogic, LabelSelector as MzLabelSelector,
-    NamespacedOrchestrator, OfflineReason, Orchestrator, Service, ServiceConfig, ServiceEvent,
-    ServiceProcessMetrics, ServiceStatus,
+    DiskLimit, LabelSelectionLogic, LabelSelector as MzLabelSelector, NamespacedOrchestrator,
+    OfflineReason, Orchestrator, Service, ServiceConfig, ServiceEvent, ServiceProcessMetrics,
+    ServiceStatus, scheduling_config::*,
 };
 use mz_ore::retry::Retry;
 use mz_ore::task::AbortOnDropHandle;
@@ -76,6 +77,10 @@ pub struct KubernetesOrchestratorConfig {
     pub service_labels: BTreeMap<String, String>,
     /// Node selector to install on every service created by the orchestrator.
     pub service_node_selector: BTreeMap<String, String>,
+    /// Affinity to install on every service created by the orchestrator.
+    pub service_affinity: Option<String>,
+    /// Tolerations to install on every service created by the orchestrator.
+    pub service_tolerations: Option<String>,
     /// The service account that each service should run as, if any.
     pub service_account: Option<String>,
     /// The image pull policy to set for services created by the orchestrator.
@@ -475,7 +480,7 @@ impl ScaledQuantity {
             }
         } else {
             for _ in 0..exponent {
-                result = result.checked_mul(2)?;
+                result = result.checked_mul(base)?;
             }
         }
         Some(result)
@@ -895,12 +900,21 @@ impl NamespacedOrchestrator for NamespacedKubernetesOrchestrator {
             None
         };
 
+        let mut affinity = Affinity {
+            pod_anti_affinity: anti_affinity,
+            pod_affinity,
+            node_affinity,
+            ..Default::default()
+        };
+        if let Some(service_affinity) = &self.config.service_affinity {
+            affinity.merge_from(serde_json::from_str(service_affinity)?);
+        }
+
         let container_name = image
-            .splitn(2, '/')
-            .skip(1)
-            .next()
-            .and_then(|name_version| name_version.splitn(2, ':').next())
+            .rsplit_once('/')
+            .and_then(|(_, name_version)| name_version.rsplit_once(':'))
             .context("`image` is not ORG/NAME:VERSION")?
+            .0
             .to_string();
 
         let container_security_context = if scheduling_config.security_context_enabled {
@@ -1080,7 +1094,7 @@ impl NamespacedOrchestrator for NamespacedKubernetesOrchestrator {
             None
         };
 
-        let tolerations = Some(vec![
+        let mut tolerations = vec![
             // When the node becomes `NotReady` it indicates there is a problem
             // with the node. By default Kubernetes waits 300s (5 minutes)
             // before descheduling the pod, but we tune this to 30s for faster
@@ -1099,7 +1113,11 @@ impl NamespacedOrchestrator for NamespacedKubernetesOrchestrator {
                 toleration_seconds: Some(NODE_FAILURE_THRESHOLD_SECONDS),
                 value: None,
             },
-        ]);
+        ];
+        if let Some(service_tolerations) = &self.config.service_tolerations {
+            tolerations.extend(serde_json::from_str::<Vec<_>>(service_tolerations)?);
+        }
+        let tolerations = Some(tolerations);
 
         let mut pod_template_spec = PodTemplateSpec {
             metadata: Some(ObjectMeta {
@@ -1145,12 +1163,7 @@ impl NamespacedOrchestrator for NamespacedKubernetesOrchestrator {
                 node_selector: Some(node_selector),
                 scheduler_name: self.config.scheduler_name.clone(),
                 service_account: self.config.service_account.clone(),
-                affinity: Some(Affinity {
-                    pod_anti_affinity: anti_affinity,
-                    pod_affinity,
-                    node_affinity,
-                    ..Default::default()
-                }),
+                affinity: Some(affinity),
                 topology_spread_constraints: topology_spread,
                 tolerations,
                 // Setting a 0s termination grace period has the side effect of
@@ -1262,7 +1275,7 @@ impl NamespacedOrchestrator for NamespacedKubernetesOrchestrator {
 
     fn watch_services(&self) -> BoxStream<'static, Result<ServiceEvent, anyhow::Error>> {
         fn into_service_event(pod: Pod) -> Result<ServiceEvent, anyhow::Error> {
-            let process_id = pod.name_any().split('-').last().unwrap().parse()?;
+            let process_id = pod.name_any().split('-').next_back().unwrap().parse()?;
             let service_id_label = "environmentd.materialize.cloud/service-id";
             let service_id = pod
                 .labels()
@@ -1504,7 +1517,9 @@ impl OrchestratorWorker {
                     let disk_capacity = match disk_capacity {
                         Some(Ok(disk_capacity)) => Some(disk_capacity),
                         Some(Err(e)) if !matches!(&e, K8sError::Api(e) if e.code == 404) => {
-                            warn!("Failed to fetch `kubelet_volume_stats_capacity_bytes` for {name}: {e}");
+                            warn!(
+                                "Failed to fetch `kubelet_volume_stats_capacity_bytes` for {name}: {e}"
+                            );
                             None
                         }
                         _ => None,
@@ -1779,5 +1794,56 @@ impl Service for KubernetesService {
             .iter()
             .map(|host| format!("{host}:{port}"))
             .collect()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[mz_ore::test]
+    fn k8s_quantity_base10_large() {
+        let cases = &[
+            ("42", 42),
+            ("42k", 42000),
+            ("42M", 42000000),
+            ("42G", 42000000000),
+            ("42T", 42000000000000),
+            ("42P", 42000000000000000),
+        ];
+
+        for (input, expected) in cases {
+            let quantity = parse_k8s_quantity(input).unwrap();
+            let number = quantity.try_to_integer(0, true).unwrap();
+            assert_eq!(number, *expected, "input={input}, quantity={quantity:?}");
+        }
+    }
+
+    #[mz_ore::test]
+    fn k8s_quantity_base10_small() {
+        let cases = &[("42n", 42), ("42u", 42000), ("42m", 42000000)];
+
+        for (input, expected) in cases {
+            let quantity = parse_k8s_quantity(input).unwrap();
+            let number = quantity.try_to_integer(-9, true).unwrap();
+            assert_eq!(number, *expected, "input={input}, quantity={quantity:?}");
+        }
+    }
+
+    #[mz_ore::test]
+    fn k8s_quantity_base2() {
+        let cases = &[
+            ("42Ki", 42 << 10),
+            ("42Mi", 42 << 20),
+            ("42Gi", 42 << 30),
+            ("42Ti", 42 << 40),
+            ("42Pi", 42 << 50),
+        ];
+
+        for (input, expected) in cases {
+            let quantity = parse_k8s_quantity(input).unwrap();
+            let number = quantity.try_to_integer(0, false).unwrap();
+            assert_eq!(number, *expected, "input={input}, quantity={quantity:?}");
+        }
     }
 }

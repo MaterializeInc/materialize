@@ -30,11 +30,14 @@ use mz_repr::optimize::OptimizerFeatureOverrides;
 use mz_repr::refresh_schedule::RefreshSchedule;
 use mz_repr::role_id::RoleId;
 use mz_repr::{
-    CatalogItemId, Diff, GlobalId, RelationDesc, RelationVersion, RelationVersionSelector,
-    Timestamp,
+    CatalogItemId, ColumnName, ColumnType, Diff, GlobalId, RelationDesc, RelationVersion,
+    RelationVersionSelector, Timestamp, VersionedRelationDesc,
 };
 use mz_sql::ast::display::AstDisplay;
-use mz_sql::ast::{Expr, Raw, Statement, UnresolvedItemName, Value, WithOptionValue};
+use mz_sql::ast::{
+    ColumnDef, ColumnOption, ColumnOptionDef, ColumnVersioned, Expr, Raw, RawDataType, Statement,
+    UnresolvedItemName, Value, WithOptionValue,
+};
 use mz_sql::catalog::{
     CatalogClusterReplica, CatalogError as SqlCatalogError, CatalogItem as SqlCatalogItem,
     CatalogItemType as SqlCatalogItemType, CatalogItemType, CatalogSchema, CatalogTypeDetails,
@@ -55,7 +58,7 @@ use mz_sql::rbac;
 use mz_sql::session::vars::OwnedVarInput;
 use mz_storage_client::controller::IntrospectionType;
 use mz_storage_types::connections::inline::ReferencedConnection;
-use mz_storage_types::sinks::{SinkEnvelope, SinkPartitionStrategy, StorageSinkConnection};
+use mz_storage_types::sinks::{SinkEnvelope, StorageSinkConnection};
 use mz_storage_types::sources::{
     GenericSourceConnection, SourceConnection, SourceDesc, SourceEnvelope, SourceExportDataConfig,
     SourceExportDetails, Timeline,
@@ -286,6 +289,46 @@ impl UpdateFrom<durable::Role> for Role {
         self.attributes = attributes;
         self.membership = membership;
         self.vars = vars;
+    }
+}
+
+#[derive(Debug, Serialize, Clone, PartialEq, Eq)]
+pub struct RoleAuth {
+    pub role_id: RoleId,
+    pub password_hash: Option<String>,
+    pub updated_at: u64,
+}
+
+impl From<RoleAuth> for durable::RoleAuth {
+    fn from(role_auth: RoleAuth) -> durable::RoleAuth {
+        durable::RoleAuth {
+            role_id: role_auth.role_id,
+            password_hash: role_auth.password_hash,
+            updated_at: role_auth.updated_at,
+        }
+    }
+}
+
+impl From<durable::RoleAuth> for RoleAuth {
+    fn from(
+        durable::RoleAuth {
+            role_id,
+            password_hash,
+            updated_at,
+        }: durable::RoleAuth,
+    ) -> RoleAuth {
+        RoleAuth {
+            role_id,
+            password_hash,
+            updated_at,
+        }
+    }
+}
+
+impl UpdateFrom<durable::RoleAuth> for RoleAuth {
+    fn update_from(&mut self, from: durable::RoleAuth) {
+        self.role_id = from.role_id;
+        self.password_hash = from.password_hash;
     }
 }
 
@@ -627,15 +670,23 @@ pub struct CatalogEntry {
 /// tasks with a single catalog item.
 #[derive(Clone, Debug)]
 pub struct CatalogCollectionEntry {
-    entry: CatalogEntry,
-    #[allow(dead_code)]
-    version: RelationVersionSelector,
+    pub entry: CatalogEntry,
+    pub version: RelationVersionSelector,
+}
+
+impl CatalogCollectionEntry {
+    pub fn desc(&self, name: &FullItemName) -> Result<Cow<RelationDesc>, SqlCatalogError> {
+        self.item().desc(name, self.version)
+    }
+
+    pub fn desc_opt(&self) -> Option<Cow<RelationDesc>> {
+        self.item().desc_opt(self.version)
+    }
 }
 
 impl mz_sql::catalog::CatalogCollectionItem for CatalogCollectionEntry {
     fn desc(&self, name: &FullItemName) -> Result<Cow<RelationDesc>, SqlCatalogError> {
-        // TODO(alter_table): Versioned Relation Desc
-        self.entry.desc(name)
+        CatalogCollectionEntry::desc(self, name)
     }
 
     fn global_id(&self) -> GlobalId {
@@ -666,6 +717,14 @@ impl mz_sql::catalog::CatalogCollectionItem for CatalogCollectionEntry {
                     .clone(),
             },
         }
+    }
+}
+
+impl Deref for CatalogCollectionEntry {
+    type Target = CatalogEntry;
+
+    fn deref(&self) -> &CatalogEntry {
+        &self.entry
     }
 }
 
@@ -778,7 +837,14 @@ impl mz_sql::catalog::CatalogItem for CatalogCollectionEntry {
         &self,
         version: RelationVersionSelector,
     ) -> Box<dyn mz_sql::catalog::CatalogCollectionItem> {
-        self.entry.at_version(version)
+        Box::new(CatalogCollectionEntry {
+            entry: self.entry.clone(),
+            version,
+        })
+    }
+
+    fn latest_version(&self) -> Option<RelationVersion> {
+        self.entry.latest_version()
     }
 }
 
@@ -819,8 +885,8 @@ impl From<CatalogEntry> for durable::Item {
 pub struct Table {
     /// Parse-able SQL that defines this table.
     pub create_sql: Option<String>,
-    /// [`RelationDesc`] of this table, derived from the `create_sql`.
-    pub desc: RelationDesc,
+    /// [`VersionedRelationDesc`] of this table, derived from the `create_sql`.
+    pub desc: VersionedRelationDesc,
     /// Versions of this table, and the [`GlobalId`]s that refer to them.
     #[serde(serialize_with = "mz_ore::serde::map_key_to_string")]
     pub collections: BTreeMap<RelationVersion, GlobalId>,
@@ -865,12 +931,26 @@ impl Table {
     }
 
     /// Returns all of the collections and their [`RelationDesc`]s associated with this [`Table`].
-    pub fn collection_descs(&self) -> impl Iterator<Item = (GlobalId, RelationDesc)> + '_ {
-        // TODO(alter_table): Support multiple versions of the table.
-        assert_eq!(self.collections.len(), 1);
-        self.collections
-            .values()
-            .map(|gid| (*gid, self.desc.clone()))
+    pub fn collection_descs(
+        &self,
+    ) -> impl Iterator<Item = (GlobalId, RelationVersion, RelationDesc)> + '_ {
+        self.collections.iter().map(|(version, gid)| {
+            let desc = self
+                .desc
+                .at_version(RelationVersionSelector::Specific(*version));
+            (*gid, *version, desc)
+        })
+    }
+
+    /// Returns the [`RelationDesc`] for a specific [`GlobalId`].
+    pub fn desc_for(&self, id: &GlobalId) -> RelationDesc {
+        let (version, _gid) = self
+            .collections
+            .iter()
+            .find(|(_version, gid)| *gid == id)
+            .expect("GlobalId to exist");
+        self.desc
+            .at_version(RelationVersionSelector::Specific(*version))
     }
 }
 
@@ -932,13 +1012,10 @@ impl DataSourceDesc {
     pub fn formats(&self) -> (Option<&str>, Option<&str>) {
         match &self {
             DataSourceDesc::Ingestion { ingestion_desc, .. } => {
-                match &ingestion_desc.desc.primary_export {
-                    Some(export) => match export.encoding.as_ref() {
-                        Some(encoding) => match &encoding.key {
-                            Some(key) => (Some(key.type_()), Some(encoding.value.type_())),
-                            None => (None, Some(encoding.value.type_())),
-                        },
-                        None => (None, None),
+                match &ingestion_desc.desc.primary_export.encoding.as_ref() {
+                    Some(encoding) => match &encoding.key {
+                        Some(key) => (Some(key.type_()), Some(encoding.value.type_())),
+                        None => (None, Some(encoding.value.type_())),
                     },
                     None => (None, None),
                 }
@@ -990,11 +1067,9 @@ impl DataSourceDesc {
             // `SourceEnvelope` itself, but that one feels more like an internal
             // thing and adapter should own how we represent envelopes as a
             // string? It would not be hard to convince me otherwise, though.
-            DataSourceDesc::Ingestion { ingestion_desc, .. } => ingestion_desc
-                .desc
-                .primary_export
-                .as_ref()
-                .map(|export| envelope_string(&export.envelope)),
+            DataSourceDesc::Ingestion { ingestion_desc, .. } => Some(envelope_string(
+                &ingestion_desc.desc.primary_export.envelope,
+            )),
             DataSourceDesc::IngestionExport { data_config, .. } => {
                 Some(envelope_string(&data_config.envelope))
             }
@@ -1155,7 +1230,9 @@ impl Source {
                     // These multi-output sources do not use their primary
                     // source's data shard, so we don't include it in accounting
                     // for users.
-                    GenericSourceConnection::Postgres(_) | GenericSourceConnection::MySql(_) => 0,
+                    GenericSourceConnection::Postgres(_)
+                    | GenericSourceConnection::MySql(_)
+                    | GenericSourceConnection::SqlServer(_) => 0,
                     GenericSourceConnection::LoadGenerator(lg) => {
                         // TODO: make this a method on the load generator.
                         if lg.load_generator.views().is_empty() {
@@ -1210,8 +1287,6 @@ pub struct Sink {
     ///
     /// TODO(guswynn): this probably should just be in the `connection`.
     pub envelope: SinkEnvelope,
-    /// Strategy used to partition rows.
-    pub partition_strategy: SinkPartitionStrategy,
     /// Emit an initial snapshot into the sink.
     pub with_snapshot: bool,
     /// Used to fence other writes into this sink as we evolve the upstream materialized view.
@@ -1274,7 +1349,7 @@ pub struct View {
     pub global_id: GlobalId,
     /// Unoptimized high-level expression from parsing the `create_sql`.
     pub raw_expr: Arc<HirRelationExpr>,
-    /// Optimized mid-level expression from optimizing the `raw_expr`.
+    /// Optimized mid-level expression from (locally) optimizing the `raw_expr`.
     pub optimized_expr: Arc<OptimizedMirRelationExpr>,
     /// Columns of this view.
     pub desc: RelationDesc,
@@ -1579,9 +1654,9 @@ impl CatalogItem {
             CatalogItem::Table(_)
             | CatalogItem::Source(_)
             | CatalogItem::MaterializedView(_)
+            | CatalogItem::Sink(_)
             | CatalogItem::ContinualTask(_) => true,
             CatalogItem::Log(_)
-            | CatalogItem::Sink(_)
             | CatalogItem::View(_)
             | CatalogItem::Index(_)
             | CatalogItem::Type(_)
@@ -1591,18 +1666,23 @@ impl CatalogItem {
         }
     }
 
-    pub fn desc(&self, name: &FullItemName) -> Result<Cow<RelationDesc>, SqlCatalogError> {
-        self.desc_opt().ok_or(SqlCatalogError::InvalidDependency {
-            name: name.to_string(),
-            typ: self.typ(),
-        })
+    pub fn desc(
+        &self,
+        name: &FullItemName,
+        version: RelationVersionSelector,
+    ) -> Result<Cow<RelationDesc>, SqlCatalogError> {
+        self.desc_opt(version)
+            .ok_or_else(|| SqlCatalogError::InvalidDependency {
+                name: name.to_string(),
+                typ: self.typ(),
+            })
     }
 
-    pub fn desc_opt(&self) -> Option<Cow<RelationDesc>> {
+    pub fn desc_opt(&self, version: RelationVersionSelector) -> Option<Cow<RelationDesc>> {
         match &self {
             CatalogItem::Source(src) => Some(Cow::Borrowed(&src.desc)),
             CatalogItem::Log(log) => Some(Cow::Owned(log.variant.desc())),
-            CatalogItem::Table(tbl) => Some(Cow::Borrowed(&tbl.desc)),
+            CatalogItem::Table(tbl) => Some(Cow::Owned(tbl.desc.at_version(version))),
             CatalogItem::View(view) => Some(Cow::Borrowed(&view.desc)),
             CatalogItem::MaterializedView(mview) => Some(Cow::Borrowed(&mview.desc)),
             CatalogItem::Type(typ) => typ.desc.as_ref().map(Cow::Borrowed),
@@ -1893,7 +1973,7 @@ impl CatalogItem {
         value: Option<Value>,
         window: CompactionWindow,
     ) -> Result<Option<WithOptionValue<Raw>>, ()> {
-        let update = |ast: &mut Statement<Raw>| {
+        let update = |mut ast: &mut Statement<Raw>| {
             // Each statement type has unique option types. This macro handles them commonly.
             macro_rules! update_retain_history {
                 ( $stmt:ident, $opt:ident, $name:ident ) => {{
@@ -1925,17 +2005,17 @@ impl CatalogItem {
                     }
                 }};
             }
-            let previous = match ast {
-                Statement::CreateTable(ref mut stmt) => {
+            let previous = match &mut ast {
+                Statement::CreateTable(stmt) => {
                     update_retain_history!(stmt, TableOption, TableOptionName)
                 }
-                Statement::CreateIndex(ref mut stmt) => {
+                Statement::CreateIndex(stmt) => {
                     update_retain_history!(stmt, IndexOption, IndexOptionName)
                 }
-                Statement::CreateSource(ref mut stmt) => {
+                Statement::CreateSource(stmt) => {
                     update_retain_history!(stmt, CreateSourceOption, CreateSourceOptionName)
                 }
-                Statement::CreateMaterializedView(ref mut stmt) => {
+                Statement::CreateMaterializedView(stmt) => {
                     update_retain_history!(stmt, MaterializedViewOption, MaterializedViewOptionName)
                 }
                 _ => {
@@ -1951,6 +2031,46 @@ impl CatalogItem {
             .expect("item must have compaction window");
         *cw = Some(window);
         Ok(res)
+    }
+
+    pub fn add_column(
+        &mut self,
+        name: ColumnName,
+        typ: ColumnType,
+        sql: RawDataType,
+    ) -> Result<RelationVersion, PlanError> {
+        let CatalogItem::Table(table) = self else {
+            return Err(PlanError::Unsupported {
+                feature: "adding columns to a non-Table".to_string(),
+                discussion_no: None,
+            });
+        };
+        let next_version = table.desc.add_column(name.clone(), typ);
+
+        let update = |mut ast: &mut Statement<Raw>| match &mut ast {
+            Statement::CreateTable(stmt) => {
+                let version = ColumnOptionDef {
+                    name: None,
+                    option: ColumnOption::Versioned {
+                        action: ColumnVersioned::Added,
+                        version: next_version.into(),
+                    },
+                };
+                let column = ColumnDef {
+                    name: name.into(),
+                    data_type: sql,
+                    collation: None,
+                    options: vec![version],
+                };
+                stmt.columns.push(column);
+                Ok(())
+            }
+            _ => Err(()),
+        };
+
+        self.update_sql(update)
+            .map_err(|()| PlanError::Unstructured("expected CREATE TABLE statement".to_string()))?;
+        Ok(next_version)
     }
 
     /// Updates the create_sql field of this item. Returns an error if this is a builtin item,
@@ -2220,21 +2340,23 @@ impl CatalogItem {
 }
 
 impl CatalogEntry {
-    /// Like [`CatalogEntry::desc_opt`], but returns an error if the catalog
-    /// entry is not of a type that has a description.
-    pub fn desc(&self, name: &FullItemName) -> Result<Cow<RelationDesc>, SqlCatalogError> {
-        self.item.desc(name)
+    /// Reports the latest [`RelationDesc`] of the rows produced by this [`CatalogEntry`],
+    /// returning an error if this [`CatalogEntry`] does not produce rows.
+    ///
+    /// If you need to get the [`RelationDesc`] for a specific version, see [`CatalogItem::desc`].
+    pub fn desc_latest(&self, name: &FullItemName) -> Result<Cow<RelationDesc>, SqlCatalogError> {
+        self.item.desc(name, RelationVersionSelector::Latest)
     }
 
-    /// Reports the description of the rows produced by this catalog entry, if
-    /// this catalog entry produces rows.
-    pub fn desc_opt(&self) -> Option<Cow<RelationDesc>> {
-        self.item.desc_opt()
+    /// Reports the latest [`RelationDesc`] of the rows produced by this [`CatalogEntry`], if it
+    /// produces rows.
+    pub fn desc_opt_latest(&self) -> Option<Cow<RelationDesc>> {
+        self.item.desc_opt(RelationVersionSelector::Latest)
     }
 
     /// Reports if the item has columns.
     pub fn has_columns(&self) -> bool {
-        self.item.desc_opt().is_some()
+        self.desc_opt_latest().is_some()
     }
 
     /// Returns the [`mz_sql::func::Func`] associated with this `CatalogEntry`.
@@ -3239,6 +3361,10 @@ impl mz_sql::catalog::CatalogItem for CatalogEntry {
             version,
         })
     }
+
+    fn latest_version(&self) -> Option<RelationVersion> {
+        self.table().map(|t| t.desc.latest_version())
+    }
 }
 
 /// A single update to the catalog state.
@@ -3255,6 +3381,7 @@ pub struct StateUpdate {
 #[derive(Debug, Clone)]
 pub enum StateUpdateKind {
     Role(durable::objects::Role),
+    RoleAuth(durable::objects::RoleAuth),
     Database(durable::objects::Database),
     Schema(durable::objects::Schema),
     DefaultPrivilege(durable::objects::DefaultPrivilege),
@@ -3278,7 +3405,7 @@ pub enum StateUpdateKind {
 }
 
 /// Valid diffs for catalog state updates.
-#[derive(Debug, Clone, Copy, Eq, PartialEq)]
+#[derive(Debug, Clone, Copy, Eq, PartialEq, Ord, PartialOrd)]
 pub enum StateDiff {
     Retraction,
     Addition,
@@ -3287,8 +3414,8 @@ pub enum StateDiff {
 impl From<StateDiff> for Diff {
     fn from(diff: StateDiff) -> Self {
         match diff {
-            StateDiff::Retraction => -1,
-            StateDiff::Addition => 1,
+            StateDiff::Retraction => Diff::MINUS_ONE,
+            StateDiff::Addition => Diff::ONE,
         }
     }
 }
@@ -3297,8 +3424,8 @@ impl TryFrom<Diff> for StateDiff {
 
     fn try_from(diff: Diff) -> Result<Self, Self::Error> {
         match diff {
-            -1 => Ok(Self::Retraction),
-            1 => Ok(Self::Addition),
+            Diff::MINUS_ONE => Ok(Self::Retraction),
+            Diff::ONE => Ok(Self::Addition),
             diff => Err(format!("invalid diff {diff}")),
         }
     }
@@ -3332,6 +3459,7 @@ impl From<CatalogEntry> for TemporaryItem {
 #[derive(Debug, Clone, Ord, PartialOrd, Eq, PartialEq)]
 pub enum BootstrapStateUpdateKind {
     Role(durable::objects::Role),
+    RoleAuth(durable::objects::RoleAuth),
     Database(durable::objects::Database),
     Schema(durable::objects::Schema),
     DefaultPrivilege(durable::objects::DefaultPrivilege),
@@ -3355,6 +3483,7 @@ impl From<BootstrapStateUpdateKind> for StateUpdateKind {
     fn from(value: BootstrapStateUpdateKind) -> Self {
         match value {
             BootstrapStateUpdateKind::Role(kind) => StateUpdateKind::Role(kind),
+            BootstrapStateUpdateKind::RoleAuth(kind) => StateUpdateKind::RoleAuth(kind),
             BootstrapStateUpdateKind::Database(kind) => StateUpdateKind::Database(kind),
             BootstrapStateUpdateKind::Schema(kind) => StateUpdateKind::Schema(kind),
             BootstrapStateUpdateKind::DefaultPrivilege(kind) => {
@@ -3397,6 +3526,7 @@ impl TryFrom<StateUpdateKind> for BootstrapStateUpdateKind {
     fn try_from(value: StateUpdateKind) -> Result<Self, Self::Error> {
         match value {
             StateUpdateKind::Role(kind) => Ok(BootstrapStateUpdateKind::Role(kind)),
+            StateUpdateKind::RoleAuth(kind) => Ok(BootstrapStateUpdateKind::RoleAuth(kind)),
             StateUpdateKind::Database(kind) => Ok(BootstrapStateUpdateKind::Database(kind)),
             StateUpdateKind::Schema(kind) => Ok(BootstrapStateUpdateKind::Schema(kind)),
             StateUpdateKind::DefaultPrivilege(kind) => {

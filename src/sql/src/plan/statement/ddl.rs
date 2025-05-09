@@ -19,7 +19,9 @@ use std::time::Duration;
 
 use itertools::{Either, Itertools};
 use mz_adapter_types::compaction::{CompactionWindow, DEFAULT_LOGICAL_COMPACTION_WINDOW_DURATION};
-use mz_controller_types::{ClusterId, ReplicaId, DEFAULT_REPLICA_LOGGING_INTERVAL};
+use mz_adapter_types::dyncfgs::ENABLE_MULTI_REPLICA_SOURCES;
+use mz_auth::password::Password;
+use mz_controller_types::{ClusterId, DEFAULT_REPLICA_LOGGING_INTERVAL, ReplicaId};
 use mz_expr::{CollectionPlan, UnmaterializableFunc};
 use mz_interchange::avro::{AvroSchemaGenerator, DocTarget};
 use mz_ore::cast::{CastFrom, TryCastFrom};
@@ -37,8 +39,9 @@ use mz_repr::optimize::OptimizerFeatureOverrides;
 use mz_repr::refresh_schedule::{RefreshEvery, RefreshSchedule};
 use mz_repr::role_id::RoleId;
 use mz_repr::{
-    preserves_order, strconv, CatalogItemId, ColumnName, ColumnType, RelationDesc, RelationType,
-    RelationVersionSelector, ScalarType, Timestamp,
+    CatalogItemId, ColumnName, ColumnType, RelationDesc, RelationType, RelationVersion,
+    RelationVersionSelector, ScalarType, Timestamp, VersionedRelationDesc, preserves_order,
+    strconv,
 };
 use mz_sql_parser::ast::{
     self, AlterClusterAction, AlterClusterStatement, AlterConnectionAction, AlterConnectionOption,
@@ -74,10 +77,10 @@ use mz_sql_parser::ast::{
     PgConfigOption, PgConfigOptionName, ProtobufSchema, QualifiedReplica, RefreshAtOptionValue,
     RefreshEveryOptionValue, RefreshOptionValue, ReplicaDefinition, ReplicaOption,
     ReplicaOptionName, RoleAttribute, SetRoleVar, SourceErrorPolicy, SourceIncludeMetadata,
-    Statement, TableConstraint, TableFromSourceColumns, TableFromSourceOption,
-    TableFromSourceOptionName, TableOption, TableOptionName, UnresolvedDatabaseName,
-    UnresolvedItemName, UnresolvedObjectName, UnresolvedSchemaName, Value, ViewDefinition,
-    WithOptionValue,
+    SqlServerConfigOption, SqlServerConfigOptionName, Statement, TableConstraint,
+    TableFromSourceColumns, TableFromSourceOption, TableFromSourceOptionName, TableOption,
+    TableOptionName, UnresolvedDatabaseName, UnresolvedItemName, UnresolvedObjectName,
+    UnresolvedSchemaName, Value, ViewDefinition, WithOptionValue,
 };
 use mz_sql_parser::ident;
 use mz_sql_parser::parser::StatementParseResult;
@@ -85,21 +88,21 @@ use mz_storage_types::connections::inline::{ConnectionAccess, ReferencedConnecti
 use mz_storage_types::connections::{Connection, KafkaTopicOptions};
 use mz_storage_types::sinks::{
     KafkaIdStyle, KafkaSinkConnection, KafkaSinkFormat, KafkaSinkFormatType, SinkEnvelope,
-    SinkPartitionStrategy, StorageSinkConnection,
+    StorageSinkConnection,
 };
 use mz_storage_types::sources::encoding::{
-    included_column_desc, AvroEncoding, ColumnSpec, CsvEncoding, DataEncoding, ProtobufEncoding,
-    RegexEncoding, SourceDataEncoding,
+    AvroEncoding, ColumnSpec, CsvEncoding, DataEncoding, ProtobufEncoding, RegexEncoding,
+    SourceDataEncoding, included_column_desc,
 };
 use mz_storage_types::sources::envelope::{
     KeyEnvelope, NoneEnvelope, SourceEnvelope, UnplannedSourceEnvelope, UpsertStyle,
 };
 use mz_storage_types::sources::kafka::{
-    kafka_metadata_columns_desc, KafkaMetadataKind, KafkaSourceConnection, KafkaSourceExportDetails,
+    KafkaMetadataKind, KafkaSourceConnection, KafkaSourceExportDetails, kafka_metadata_columns_desc,
 };
 use mz_storage_types::sources::load_generator::{
-    KeyValueLoadGenerator, LoadGenerator, LoadGeneratorSourceConnection,
-    LoadGeneratorSourceExportDetails, LOAD_GENERATOR_KEY_VALUE_OFFSET_DEFAULT,
+    KeyValueLoadGenerator, LOAD_GENERATOR_KEY_VALUE_OFFSET_DEFAULT, LoadGenerator,
+    LoadGeneratorSourceConnection, LoadGeneratorSourceExportDetails,
 };
 use mz_storage_types::sources::mysql::{
     MySqlSourceConnection, MySqlSourceDetails, ProtoMySqlSourceDetails,
@@ -108,10 +111,12 @@ use mz_storage_types::sources::postgres::{
     PostgresSourceConnection, PostgresSourcePublicationDetails,
     ProtoPostgresSourcePublicationDetails,
 };
+use mz_storage_types::sources::sql_server::SqlServerSourceExportDetails;
 use mz_storage_types::sources::{
     GenericSourceConnection, MySqlSourceExportDetails, PostgresSourceExportDetails,
     ProtoSourceExportStatementDetails, SourceConnection, SourceDesc, SourceExportDataConfig,
-    SourceExportDetails, SourceExportStatementDetails, Timeline,
+    SourceExportDetails, SourceExportStatementDetails, SqlServerSource, SqlServerSourceExtras,
+    Timeline,
 };
 use prost::Message;
 
@@ -129,37 +134,36 @@ use crate::names::{
 use crate::normalize::{self, ident};
 use crate::plan::error::PlanError;
 use crate::plan::query::{
-    cast_relation, plan_expr, scalar_type_from_catalog, scalar_type_from_sql, CteDesc, ExprContext,
-    QueryLifetime,
+    CteDesc, ExprContext, QueryLifetime, cast_relation, plan_expr, scalar_type_from_catalog,
+    scalar_type_from_sql,
 };
 use crate::plan::scope::Scope;
 use crate::plan::statement::ddl::connection::{INALTERABLE_OPTIONS, MUTUALLY_EXCLUSIVE_SETS};
-use crate::plan::statement::{scl, StatementContext, StatementDesc};
+use crate::plan::statement::{StatementContext, StatementDesc, scl};
 use crate::plan::typeconv::CastContext;
 use crate::plan::with_options::{OptionalDuration, OptionalString, TryFromValue};
 use crate::plan::{
-    literal, plan_utils, query, transform_ast, AlterClusterPlan, AlterClusterPlanStrategy,
-    AlterClusterRenamePlan, AlterClusterReplicaRenamePlan, AlterClusterSwapPlan,
-    AlterConnectionPlan, AlterItemRenamePlan, AlterNetworkPolicyPlan, AlterNoopPlan,
-    AlterOptionParameter, AlterRetainHistoryPlan, AlterRolePlan, AlterSchemaRenamePlan,
-    AlterSchemaSwapPlan, AlterSecretPlan, AlterSetClusterPlan, AlterSinkPlan,
-    AlterSystemResetAllPlan, AlterSystemResetPlan, AlterSystemSetPlan, AlterTablePlan,
-    ClusterSchedule, CommentPlan, ComputeReplicaConfig, ComputeReplicaIntrospectionConfig,
-    ConnectionDetails, CreateClusterManagedPlan, CreateClusterPlan, CreateClusterReplicaPlan,
-    CreateClusterUnmanagedPlan, CreateClusterVariant, CreateConnectionPlan,
-    CreateContinualTaskPlan, CreateDatabasePlan, CreateIndexPlan, CreateMaterializedViewPlan,
-    CreateNetworkPolicyPlan, CreateRolePlan, CreateSchemaPlan, CreateSecretPlan, CreateSinkPlan,
-    CreateSourcePlan, CreateTablePlan, CreateTypePlan, CreateViewPlan, DataSourceDesc,
-    DropObjectsPlan, DropOwnedPlan, Index, Ingestion, MaterializedView, NetworkPolicyRule,
-    NetworkPolicyRuleAction, NetworkPolicyRuleDirection, Params, Plan, PlanClusterOption,
-    PlanNotice, PolicyAddress, QueryContext, ReplicaConfig, Secret, Sink, Source, Table,
-    TableDataSource, Type, VariableValue, View, WebhookBodyFormat, WebhookHeaderFilters,
-    WebhookHeaders, WebhookValidation,
+    AlterClusterPlan, AlterClusterPlanStrategy, AlterClusterRenamePlan,
+    AlterClusterReplicaRenamePlan, AlterClusterSwapPlan, AlterConnectionPlan, AlterItemRenamePlan,
+    AlterNetworkPolicyPlan, AlterNoopPlan, AlterOptionParameter, AlterRetainHistoryPlan,
+    AlterRolePlan, AlterSchemaRenamePlan, AlterSchemaSwapPlan, AlterSecretPlan,
+    AlterSetClusterPlan, AlterSinkPlan, AlterSystemResetAllPlan, AlterSystemResetPlan,
+    AlterSystemSetPlan, AlterTablePlan, ClusterSchedule, CommentPlan, ComputeReplicaConfig,
+    ComputeReplicaIntrospectionConfig, ConnectionDetails, CreateClusterManagedPlan,
+    CreateClusterPlan, CreateClusterReplicaPlan, CreateClusterUnmanagedPlan, CreateClusterVariant,
+    CreateConnectionPlan, CreateContinualTaskPlan, CreateDatabasePlan, CreateIndexPlan,
+    CreateMaterializedViewPlan, CreateNetworkPolicyPlan, CreateRolePlan, CreateSchemaPlan,
+    CreateSecretPlan, CreateSinkPlan, CreateSourcePlan, CreateTablePlan, CreateTypePlan,
+    CreateViewPlan, DataSourceDesc, DropObjectsPlan, DropOwnedPlan, HirRelationExpr, Index,
+    Ingestion, MaterializedView, NetworkPolicyRule, NetworkPolicyRuleAction,
+    NetworkPolicyRuleDirection, Params, Plan, PlanClusterOption, PlanNotice, PolicyAddress,
+    QueryContext, ReplicaConfig, Secret, Sink, Source, Table, TableDataSource, Type, VariableValue,
+    View, WebhookBodyFormat, WebhookHeaderFilters, WebhookHeaders, WebhookValidation, literal,
+    plan_utils, query, transform_ast,
 };
 use crate::session::vars::{
     self, ENABLE_CLUSTER_SCHEDULE_REFRESH, ENABLE_COLLECTION_PARTITION_BY,
-    ENABLE_CREATE_TABLE_FROM_SOURCE, ENABLE_KAFKA_SINK_HEADERS, ENABLE_KAFKA_SINK_PARTITION_BY,
-    ENABLE_REFRESH_EVERY_MVS,
+    ENABLE_CREATE_TABLE_FROM_SOURCE, ENABLE_KAFKA_SINK_HEADERS, ENABLE_REFRESH_EVERY_MVS,
 };
 use crate::{names, parse};
 
@@ -171,7 +175,7 @@ mod connection;
 // more strict.
 const MAX_NUM_COLUMNS: usize = 256;
 
-const MANAGED_REPLICA_PATTERN: std::sync::LazyLock<regex::Regex> =
+static MANAGED_REPLICA_PATTERN: std::sync::LazyLock<regex::Regex> =
     std::sync::LazyLock::new(|| regex::Regex::new(r"^r(\d)+$").unwrap());
 
 /// Given a relation desc and a column list, checks that:
@@ -183,7 +187,9 @@ fn check_partition_by(desc: &RelationDesc, partition_by: Vec<Ident>) -> Result<(
     {
         let partition_name = normalize::column_name(partition_name);
         if *desc_name != partition_name {
-            sql_bail!("PARTITION BY columns should be a prefix of the relation's columns (expected {desc_name} at index {idx}, got {partition_name})");
+            sql_bail!(
+                "PARTITION BY columns should be a prefix of the relation's columns (expected {desc_name} at index {idx}, got {partition_name})"
+            );
         }
         if !preserves_order(&desc_type.scalar_type) {
             sql_bail!("PARTITION BY column {partition_name} has unsupported type");
@@ -273,6 +279,16 @@ pub fn plan_create_table(
 
     let names: Vec<_> = columns
         .iter()
+        .filter(|c| {
+            // This set of `names` is used to create the initial RelationDesc.
+            // Columns that have been added at later versions of the table will
+            // get added further below.
+            let is_versioned = c
+                .options
+                .iter()
+                .any(|o| matches!(o.option, ColumnOption::Versioned { .. }));
+            !is_versioned
+        })
         .map(|c| normalize::column_name(c.name.clone()))
         .collect();
 
@@ -284,6 +300,7 @@ pub fn plan_create_table(
     // and NOT NULL constraints.
     let mut column_types = Vec::with_capacity(columns.len());
     let mut defaults = Vec::with_capacity(columns.len());
+    let mut changes = BTreeMap::new();
     let mut keys = Vec::new();
 
     for (i, c) in columns.into_iter().enumerate() {
@@ -291,6 +308,7 @@ pub fn plan_create_table(
         let ty = query::scalar_type_from_sql(scx, aug_data_type)?;
         let mut nullable = true;
         let mut default = Expr::null();
+        let mut versioned = false;
         for option in &c.options {
             match &option.option {
                 ColumnOption::NotNull => nullable = false,
@@ -308,12 +326,25 @@ pub fn plan_create_table(
                         nullable = false;
                     }
                 }
+                ColumnOption::Versioned { action, version } => {
+                    let version = RelationVersion::from(*version);
+                    versioned = true;
+
+                    let name = normalize::column_name(c.name.clone());
+                    let typ = ty.clone().nullable(nullable);
+
+                    changes.insert(version, (action.clone(), name, typ));
+                }
                 other => {
                     bail_unsupported!(format!("CREATE TABLE with column constraint: {}", other))
                 }
             }
         }
-        column_types.push(ty.nullable(nullable));
+        // TODO(alter_table): This assumes all versioned columns are at the
+        // end. This will no longer be true when we support dropping columns.
+        if !versioned {
+            column_types.push(ty.nullable(nullable));
+        }
         defaults.push(default);
     }
 
@@ -410,10 +441,26 @@ pub fn plan_create_table(
     }
 
     let desc = RelationDesc::new(typ, names);
+    let mut desc = VersionedRelationDesc::new(desc);
+    for (version, (_action, name, typ)) in changes.into_iter() {
+        let new_version = desc.add_column(name, typ);
+        if version != new_version {
+            return Err(PlanError::InvalidTable {
+                name: full_name.item,
+            });
+        }
+    }
 
     let create_sql = normalize::create_statement(scx, Statement::CreateTable(stmt.clone()))?;
 
-    let options = plan_table_options(scx, &desc, with_options.clone())?;
+    // Table options should only consider the original columns, since those
+    // were the only ones in scope when the table was created.
+    //
+    // TODO(alter_table): Will need to reconsider this when we support ALTERing
+    // the PARTITION BY columns.
+    let original_desc = desc.at_version(RelationVersionSelector::Specific(RelationVersion::root()));
+    let options = plan_table_options(scx, &original_desc, with_options.clone())?;
+
     let compaction_window = options.iter().find_map(|o| {
         #[allow(irrefutable_let_patterns)]
         if let crate::plan::TableOption::RetainHistory(lcw) = o {
@@ -485,6 +532,13 @@ generate_extracted_config!(
     (ExcludeColumns, Vec::<UnresolvedItemName>, Default(vec![]))
 );
 
+generate_extracted_config!(
+    SqlServerConfigOption,
+    (Details, String),
+    (TextColumns, Vec::<UnresolvedItemName>, Default(vec![])),
+    (ExcludeColumns, Vec::<UnresolvedItemName>, Default(vec![]))
+);
+
 pub fn plan_create_webhook_source(
     scx: &StatementContext,
     mut stmt: CreateWebhookSourceStatement<Aug>,
@@ -495,7 +549,10 @@ pub fn plan_create_webhook_source(
 
     // We will rewrite the cluster if one is not provided, so we must use the `in_cluster` value
     // we plan to normalize when we canonicalize the create statement.
-    let in_cluster = source_sink_cluster_config(scx, "source", &mut stmt.in_cluster)?;
+    let in_cluster = source_sink_cluster_config(scx, &mut stmt.in_cluster)?;
+    if in_cluster.replica_ids().len() > 1 {
+        sql_bail!("cannot create webhook source in cluster with more than one replica")
+    }
     let create_sql =
         normalize::create_statement(scx, Statement::CreateWebhookSource(stmt.clone()))?;
 
@@ -536,7 +593,7 @@ pub fn plan_create_webhook_source(
             return Err(PlanError::Unsupported {
                 feature: format!("{ty} is not a valid BODY FORMAT for a WEBHOOK source"),
                 discussion_no: None,
-            })
+            });
         }
     };
 
@@ -634,7 +691,7 @@ pub fn plan_create_webhook_source(
             validate_using,
             body_format,
             headers,
-            cluster_id: Some(in_cluster),
+            cluster_id: Some(in_cluster.id()),
         };
         let data_source = TableDataSource::DataSource {
             desc: data_source,
@@ -645,7 +702,7 @@ pub fn plan_create_webhook_source(
             if_not_exists,
             table: Table {
                 create_sql,
-                desc,
+                desc: VersionedRelationDesc::new(desc),
                 temporary: false,
                 compaction_window: None,
                 data_source,
@@ -669,7 +726,7 @@ pub fn plan_create_webhook_source(
             },
             if_not_exists,
             timeline,
-            in_cluster: Some(in_cluster),
+            in_cluster: Some(in_cluster.id()),
         })
     };
 
@@ -907,6 +964,30 @@ pub fn plan_create_source(
 
             connection
         }
+        CreateSourceConnection::SqlServer {
+            connection,
+            options: _,
+        } => {
+            let connection_item = scx.get_item_by_resolved_name(connection)?;
+            match connection_item.connection()? {
+                Connection::SqlServer(connection) => connection,
+                _ => sql_bail!(
+                    "{} is not a SQL Server connection",
+                    scx.catalog.resolve_full_name(connection_item.name())
+                ),
+            };
+            // TODO(sql_server2): Handle SQL Server connection options.
+
+            let extras = SqlServerSourceExtras {};
+            let connection =
+                GenericSourceConnection::<ReferencedConnection>::from(SqlServerSource {
+                    catalog_id: connection_item.id(),
+                    connection: connection_item.id(),
+                    extras,
+                });
+
+            connection
+        }
         CreateSourceConnection::MySql {
             connection,
             options,
@@ -1063,18 +1144,33 @@ pub fn plan_create_source(
         None => scx.catalog.config().timestamp_interval,
     };
 
+    let (primary_export, primary_export_details) = if force_source_table_syntax {
+        (
+            SourceExportDataConfig {
+                encoding: None,
+                envelope: SourceEnvelope::None(NoneEnvelope {
+                    key_envelope: KeyEnvelope::None,
+                    key_arity: 0,
+                }),
+            },
+            SourceExportDetails::None,
+        )
+    } else {
+        (
+            SourceExportDataConfig {
+                encoding,
+                envelope: envelope.clone(),
+            },
+            external_connection.primary_export_details(),
+        )
+    };
     let source_desc = SourceDesc::<ReferencedConnection> {
         connection: external_connection,
         // We only define primary-export details for this source if we are still supporting
         // the legacy source syntax. Otherwise, we will not output to the primary collection.
         // TODO(database-issues#8620): Remove this field once the new syntax is enabled everywhere
-        primary_export: match force_source_table_syntax {
-            false => Some(SourceExportDataConfig {
-                encoding,
-                envelope: envelope.clone(),
-            }),
-            true => None,
-        },
+        primary_export,
+        primary_export_details,
         timestamp_interval,
     };
 
@@ -1116,7 +1212,7 @@ pub fn plan_create_source(
     // We will rewrite the cluster if one is not provided, so we must use the
     // `in_cluster` value we plan to normalize when we canonicalize the create
     // statement.
-    let in_cluster = source_sink_cluster_config(scx, "source", &mut stmt.in_cluster)?;
+    let in_cluster = source_sink_cluster_config(scx, &mut stmt.in_cluster)?;
 
     let create_sql = normalize::create_statement(scx, Statement::CreateSource(stmt))?;
 
@@ -1144,7 +1240,7 @@ pub fn plan_create_source(
         source,
         if_not_exists,
         timeline,
-        in_cluster: Some(in_cluster),
+        in_cluster: Some(in_cluster.id()),
     }))
 }
 
@@ -1526,6 +1622,18 @@ pub fn plan_create_subsource(
                     .map(|c| c.into_string())
                     .collect(),
             }),
+            SourceExportStatementDetails::SqlServer {
+                table,
+                capture_instance,
+            } => SourceExportDetails::SqlServer(SqlServerSourceExportDetails {
+                capture_instance,
+                table,
+                text_columns: text_columns.into_iter().map(|c| c.into_string()).collect(),
+                exclude_columns: exclude_columns
+                    .into_iter()
+                    .map(|c| c.into_string())
+                    .collect(),
+            }),
             SourceExportStatementDetails::LoadGenerator { output } => {
                 SourceExportDetails::LoadGenerator(LoadGeneratorSourceExportDetails { output })
             }
@@ -1660,6 +1768,18 @@ pub fn plan_create_table_from_source(
         } => SourceExportDetails::MySql(MySqlSourceExportDetails {
             table,
             initial_gtid_set,
+            text_columns: text_columns.into_iter().map(|c| c.into_string()).collect(),
+            exclude_columns: exclude_columns
+                .into_iter()
+                .map(|c| c.into_string())
+                .collect(),
+        }),
+        SourceExportStatementDetails::SqlServer {
+            table,
+            capture_instance,
+        } => SourceExportDetails::SqlServer(SqlServerSourceExportDetails {
+            table,
+            capture_instance,
             text_columns: text_columns.into_iter().map(|c| c.into_string()).collect(),
             exclude_columns: exclude_columns
                 .into_iter()
@@ -1813,7 +1933,7 @@ pub fn plan_create_table_from_source(
 
     let table = Table {
         create_sql,
-        desc,
+        desc: VersionedRelationDesc::new(desc),
         temporary: false,
         compaction_window: None,
         data_source: TableDataSource::DataSource {
@@ -2085,11 +2205,10 @@ fn get_encoding(
 /// If `in_cluster` is `None` we will update it to refer to the default cluster.
 /// Because of this, do not normalize/canonicalize the create SQL statement
 /// until after calling this function.
-fn source_sink_cluster_config(
-    scx: &StatementContext,
-    ty: &'static str,
+fn source_sink_cluster_config<'a, 'ctx>(
+    scx: &'a StatementContext<'ctx>,
     in_cluster: &mut Option<ResolvedClusterName>,
-) -> Result<ClusterId, PlanError> {
+) -> Result<&'a dyn CatalogCluster<'ctx>, PlanError> {
     let cluster = match in_cluster {
         None => {
             let cluster = scx.catalog.resolve_cluster(None)?;
@@ -2102,11 +2221,7 @@ fn source_sink_cluster_config(
         Some(in_cluster) => scx.catalog.get_cluster(in_cluster.id),
     };
 
-    if cluster.replica_ids().len() > 1 {
-        sql_bail!("cannot create {ty} in cluster with more than one replica")
-    }
-
-    Ok(cluster.id())
+    Ok(cluster)
 }
 
 generate_extracted_config!(AvroSchemaOption, (ConfluentWireFormat, bool, Default(true)));
@@ -2397,7 +2512,10 @@ pub fn plan_view(
     // here to help with database-issues#236. However, in the meantime, there might be a better
     // approach to solve database-issues#236:
     // https://github.com/MaterializeInc/database-issues/issues/236#issuecomment-1688293709
-    assert!(finishing.is_trivial(expr.arity()));
+    assert!(HirRelationExpr::is_trivial_row_set_finishing_hir(
+        &finishing,
+        expr.arity()
+    ));
 
     expr.bind_parameters(params)?;
     let dependencies = expr
@@ -2572,7 +2690,10 @@ pub fn plan_create_materialized_view(
         scope: _,
     } = query::plan_root_query(scx, stmt.query, QueryLifetime::MaterializedView)?;
     // We get back a trivial finishing, see comment in `plan_view`.
-    assert!(finishing.is_trivial(expr.arity()));
+    assert!(HirRelationExpr::is_trivial_row_set_finishing_hir(
+        &finishing,
+        expr.arity()
+    ));
 
     expr.bind_parameters(params)?;
 
@@ -2947,7 +3068,10 @@ pub fn plan_create_continual_task(
         } = query::plan_ct_query(&mut qcx, query)?;
         // We get back a trivial finishing because we plan with a "maintained"
         // QueryLifetime, see comment in `plan_view`.
-        assert!(finishing.is_trivial(expr.arity()));
+        assert!(HirRelationExpr::is_trivial_row_set_finishing_hir(
+            &finishing,
+            expr.arity()
+        ));
         expr.bind_parameters(params)?;
         let expr = match desc.as_mut() {
             None => {
@@ -2978,8 +3102,8 @@ pub fn plan_create_continual_task(
                         "statement {}: column {} is of type {} but expression is of type {}",
                         idx,
                         desc.get_name(e.column).as_str().quoted(),
-                        qcx.humanize_scalar_type(&e.target_type),
-                        qcx.humanize_scalar_type(&e.source_type),
+                        qcx.humanize_scalar_type(&e.target_type, false),
+                        qcx.humanize_scalar_type(&e.source_type, false),
                     )
                 })?;
 
@@ -3341,7 +3465,7 @@ fn plan_sink(
     let CreateSinkOptionExtracted {
         snapshot,
         version,
-        partition_strategy,
+        partition_strategy: _,
         seen: _,
     } = with_options.try_into()?;
 
@@ -3350,32 +3474,10 @@ fn plan_sink(
     // VERSION defaults to 0
     let version = version.unwrap_or(0);
 
-    let has_partition_by = matches!(
-        connection_builder,
-        StorageSinkConnection::Kafka(KafkaSinkConnection {
-            partition_by: Some(_),
-            ..
-        })
-    );
-
-    let partition_strategy = match partition_strategy.as_deref() {
-        // If someone sets the `PARTITION BY` option, we need to force upgrade
-        // to partition strategy v1, even if the region's default partition
-        // strategy is still v0, so that the partition hash is taken into
-        // account. There are no backwards compatibility concerns here because
-        // anything that uses `PARTITION BY` by definition does not depend on
-        // the legacy partitioning scheme.
-        Some("v0") if has_partition_by => SinkPartitionStrategy::V1,
-        Some("v0") => SinkPartitionStrategy::V0,
-        Some("v1") => SinkPartitionStrategy::V1,
-        Some(strategy) => sql_bail!("{strategy} is not a valid partition strategy"),
-        None => unreachable!("partitioning strategy must be set during purification"),
-    };
-
     // We will rewrite the cluster if one is not provided, so we must use the
     // `in_cluster` value we plan to normalize when we canonicalize the create
     // statement.
-    let in_cluster = source_sink_cluster_config(scx, "sink", &mut stmt.in_cluster)?;
+    let in_cluster = source_sink_cluster_config(scx, &mut stmt.in_cluster)?;
     let create_sql = normalize::create_statement(scx, Statement::CreateSink(stmt))?;
 
     Ok(Plan::CreateSink(CreateSinkPlan {
@@ -3384,13 +3486,12 @@ fn plan_sink(
             create_sql,
             from: from.global_id(),
             connection: connection_builder,
-            partition_strategy,
             envelope,
             version,
         },
         with_snapshot,
         if_not_exists,
-        in_cluster,
+        in_cluster: in_cluster.id(),
     }))
 }
 
@@ -3442,9 +3543,9 @@ impl std::convert::TryFrom<Vec<CsrConfigOption<Aug>>> for CsrConfigOptionExtract
                 }));
             }
             let option_name = option.name.clone();
-            let option_name_str = option_name.to_ast_string();
+            let option_name_str = option_name.to_ast_string_simple();
             let better_error = |e: PlanError| PlanError::InvalidOptionValue {
-                option_name: option_name.to_ast_string(),
+                option_name: option_name.to_ast_string_simple(),
                 err: e.into(),
             };
             let to_compatibility_level = |val: Option<WithOptionValue<Aug>>| {
@@ -3647,7 +3748,9 @@ fn kafka_sink_builder(
             && (extracted_options.avro_key_fullname.is_some()
                 ^ extracted_options.avro_value_fullname.is_some())
         {
-            sql_bail!("Must specify both AVRO KEY FULLNAME and AVRO VALUE FULLNAME when specifying generated schema names");
+            sql_bail!(
+                "Must specify both AVRO KEY FULLNAME and AVRO VALUE FULLNAME when specifying generated schema names"
+            );
         }
 
         Ok((csr_connection, extracted_options))
@@ -3713,8 +3816,6 @@ fn kafka_sink_builder(
 
     let partition_by = match &partition_by {
         Some(partition_by) => {
-            scx.require_feature_flag(&ENABLE_KAFKA_SINK_PARTITION_BY)?;
-
             let mut scope = Scope::from_source(None, value_desc.iter_names());
 
             match envelope {
@@ -3881,10 +3982,13 @@ pub fn plan_create_index(
             let index_name_col_suffix = keys
                 .iter()
                 .map(|k| match k {
-                    mz_expr::MirScalarExpr::Column(i) => match on_desc.get_unambiguous_name(*i) {
-                        Some(col_name) => col_name.to_string(),
-                        None => format!("{}", i + 1),
-                    },
+                    mz_expr::MirScalarExpr::Column(i, name) => {
+                        match (on_desc.get_unambiguous_name(*i), &name.0) {
+                            (Some(col_name), _) => col_name.to_string(),
+                            (None, Some(name)) => name.to_string(),
+                            (None, None) => format!("{}", i + 1),
+                        }
+                    }
                     _ => "expr".to_string(),
                 })
                 .join("_");
@@ -4098,22 +4202,29 @@ pub enum PlannedAlterRoleOption {
     Variable(PlannedRoleVariable),
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct PlannedRoleAttributes {
     pub inherit: Option<bool>,
+    pub password: Option<Password>,
+    /// `nopassword` is set to true if the password is from the parser is None.
+    /// This is semantically different than not supplying a password at all,
+    /// to allow for unsetting a password.
+    pub nopassword: Option<bool>,
+    pub superuser: Option<bool>,
+    pub login: Option<bool>,
 }
 
 fn plan_role_attributes(options: Vec<RoleAttribute>) -> Result<PlannedRoleAttributes, PlanError> {
-    let mut planned_attributes = PlannedRoleAttributes { inherit: None };
+    let mut planned_attributes = PlannedRoleAttributes {
+        inherit: None,
+        password: None,
+        superuser: None,
+        login: None,
+        nopassword: None,
+    };
 
     for option in options {
         match option {
-            RoleAttribute::Login | RoleAttribute::NoLogin => {
-                bail_never_supported!("LOGIN attribute", "sql/create-role/#details");
-            }
-            RoleAttribute::SuperUser | RoleAttribute::NoSuperUser => {
-                bail_never_supported!("SUPERUSER attribute", "sql/create-role/#details");
-            }
             RoleAttribute::Inherit | RoleAttribute::NoInherit
                 if planned_attributes.inherit.is_some() =>
             {
@@ -4140,9 +4251,43 @@ fn plan_role_attributes(options: Vec<RoleAttribute>) -> Result<PlannedRoleAttrib
                     "Use system privileges instead."
                 );
             }
+            RoleAttribute::Password(_) if planned_attributes.password.is_some() => {
+                sql_bail!("conflicting or redundant options");
+            }
 
             RoleAttribute::Inherit => planned_attributes.inherit = Some(true),
             RoleAttribute::NoInherit => planned_attributes.inherit = Some(false),
+            RoleAttribute::Password(password) => {
+                if let Some(password) = password {
+                    planned_attributes.password = Some(password.into());
+                } else {
+                    planned_attributes.nopassword = Some(true);
+                }
+            }
+            RoleAttribute::SuperUser => {
+                if planned_attributes.superuser == Some(false) {
+                    sql_bail!("conflicting or redundant options");
+                }
+                planned_attributes.superuser = Some(true);
+            }
+            RoleAttribute::NoSuperUser => {
+                if planned_attributes.superuser == Some(true) {
+                    sql_bail!("conflicting or redundant options");
+                }
+                planned_attributes.superuser = Some(false);
+            }
+            RoleAttribute::Login => {
+                if planned_attributes.login == Some(false) {
+                    sql_bail!("conflicting or redundant options");
+                }
+                planned_attributes.login = Some(true);
+            }
+            RoleAttribute::NoLogin => {
+                if planned_attributes.login == Some(true) {
+                    sql_bail!("conflicting or redundant options");
+                }
+                planned_attributes.login = Some(false);
+            }
         }
     }
     if planned_attributes.inherit == Some(false) {
@@ -4359,7 +4504,13 @@ generate_extracted_config!(
     (EnableEagerDeltaJoins, Option<bool>, Default(None)),
     (EnableNewOuterJoinLowering, Option<bool>, Default(None)),
     (EnableVariadicLeftJoinLowering, Option<bool>, Default(None)),
-    (EnableLetrecFixpointAnalysis, Option<bool>, Default(None))
+    (EnableLetrecFixpointAnalysis, Option<bool>, Default(None)),
+    (EnableJoinPrioritizeArranged, Option<bool>, Default(None)),
+    (
+        EnableProjectionPushdownAfterRelationCse,
+        Option<bool>,
+        Default(None)
+    )
 );
 
 /// Convert a [`CreateClusterStatement`] into a [`Plan`].
@@ -4386,8 +4537,8 @@ pub fn plan_create_cluster(
             Statement::CreateCluster(stmt) => stmt,
             stmt => {
                 return Err(PlanError::Replan(format!(
-                "replan does not match: plan={plan:?}, create_sql={create_sql:?}, stmt={stmt:?}"
-            )))
+                    "replan does not match: plan={plan:?}, create_sql={create_sql:?}, stmt={stmt:?}"
+                )));
             }
         };
         let replan =
@@ -4455,7 +4606,9 @@ pub fn plan_create_cluster_inner(
         // always enable disk.
         if scx.catalog.is_cluster_size_cc(&size) {
             if disk_in == Some(false) {
-                sql_bail!("DISK option disabled is not supported for non-legacy cluster sizes because disk is always enabled");
+                sql_bail!(
+                    "DISK option disabled is not supported for non-legacy cluster sizes because disk is always enabled"
+                );
             }
             disk_default = true;
         }
@@ -4472,11 +4625,17 @@ pub fn plan_create_cluster_inner(
         )?;
 
         let replication_factor = if matches!(schedule, ClusterScheduleOptionValue::Manual) {
-            replication_factor.unwrap_or(1)
+            replication_factor.unwrap_or_else(|| {
+                scx.catalog
+                    .system_vars()
+                    .default_cluster_replication_factor()
+            })
         } else {
             scx.require_feature_flag(&ENABLE_CLUSTER_SCHEDULE_REFRESH)?;
             if replication_factor.is_some() {
-                sql_bail!("REPLICATION FACTOR cannot be given together with any SCHEDULE other than MANUAL");
+                sql_bail!(
+                    "REPLICATION FACTOR cannot be given together with any SCHEDULE other than MANUAL"
+                );
             }
             // If we have a non-trivial schedule, then let's not have any replicas initially,
             // to avoid quickly going back and forth if the schedule doesn't want a replica
@@ -4496,6 +4655,8 @@ pub fn plan_create_cluster_inner(
             enable_new_outer_join_lowering,
             enable_variadic_left_join_lowering,
             enable_letrec_fixpoint_analysis,
+            enable_join_prioritize_arranged,
+            enable_projection_pushdown_after_relation_cse,
             seen: _,
         } = ClusterFeatureExtracted::try_from(features)?;
         let optimizer_feature_overrides = OptimizerFeatureOverrides {
@@ -4504,6 +4665,8 @@ pub fn plan_create_cluster_inner(
             enable_new_outer_join_lowering,
             enable_variadic_left_join_lowering,
             enable_letrec_fixpoint_analysis,
+            enable_join_prioritize_arranged,
+            enable_projection_pushdown_after_relation_cse,
             ..Default::default()
         };
 
@@ -4599,7 +4762,12 @@ pub fn unplan_create_cluster(
                 enable_variadic_left_join_lowering,
                 enable_letrec_fixpoint_analysis,
                 enable_reduce_reduction: _,
+                enable_join_prioritize_arranged,
+                enable_projection_pushdown_after_relation_cse,
+                enable_less_reduce_in_eqprop: _,
+                enable_dequadratic_eqprop_map: _,
             } = optimizer_feature_overrides;
+            // The ones from above that don't occur below are not wired up to cluster features.
             let features_extracted = ClusterFeatureExtracted {
                 // Seen is ignored when unplanning.
                 seen: Default::default(),
@@ -4608,6 +4776,8 @@ pub fn unplan_create_cluster(
                 enable_new_outer_join_lowering,
                 enable_variadic_left_join_lowering,
                 enable_letrec_fixpoint_analysis,
+                enable_join_prioritize_arranged,
+                enable_projection_pushdown_after_relation_cse,
             };
             let features = features_extracted.into_values(scx.catalog);
             let availability_zones = if availability_zones.is_empty() {
@@ -4729,7 +4899,9 @@ fn plan_replica_config(
             // simply always enable disk.
             if scx.catalog.is_cluster_size_cc(&size) {
                 if disk_in.is_some() {
-                    sql_bail!("DISK option not supported for non-legacy cluster sizes because disk is always enabled");
+                    sql_bail!(
+                        "DISK option not supported for non-legacy cluster sizes because disk is always enabled"
+                    );
                 }
                 disk = true;
             }
@@ -4930,7 +5102,7 @@ pub fn plan_create_cluster_replica(
         .catalog
         .resolve_cluster(Some(&normalize::ident(of_cluster)))?;
     let current_replica_count = cluster.replica_ids().iter().count();
-    if contains_storage_objects(scx, cluster) && current_replica_count > 0 {
+    if contains_single_replica_objects(scx, cluster) && current_replica_count > 0 {
         let internal_replica_count = cluster.replicas().iter().filter(|r| r.internal()).count();
         return Err(PlanError::CreateReplicaFailStorageObjects {
             current_replica_count,
@@ -5141,7 +5313,7 @@ pub fn plan_drop_objects(
         match id {
             Some(id) => referenced_ids.push(id),
             None => scx.catalog.add_notice(PlanNotice::ObjectDoesNotExist {
-                name: name.to_ast_string(),
+                name: name.to_ast_string_simple(),
                 object_type,
             }),
         }
@@ -5202,7 +5374,9 @@ fn plan_drop_role(
                         let member_role = scx.catalog.get_role(member_id);
                         sql_bail!(
                             "cannot drop role {}: still depended up by membership of role {} in role {}",
-                            name.as_str(), role.name(), member_role.name()
+                            name.as_str(),
+                            role.name(),
+                            member_role.name()
                         );
                     }
                 }
@@ -5255,15 +5429,22 @@ fn plan_drop_network_policy(
     }
 }
 
-/// Returns `true` if the cluster has any storage object. Return `false` if the cluster has no
-/// objects.
-fn contains_storage_objects(scx: &StatementContext, cluster: &dyn CatalogCluster) -> bool {
-    cluster.bound_objects().iter().any(|id| {
-        matches!(
-            scx.catalog.get_item(id).item_type(),
-            CatalogItemType::Source | CatalogItemType::Sink
-        )
-    })
+/// Returns `true` if the cluster has any object that requires a single replica.
+/// Returns `false` if the cluster has no objects.
+fn contains_single_replica_objects(scx: &StatementContext, cluster: &dyn CatalogCluster) -> bool {
+    // If this feature is enabled then all objects support multiple-replicas
+    if ENABLE_MULTI_REPLICA_SOURCES.get(scx.catalog.system_vars().dyncfgs()) {
+        false
+    } else {
+        // Othewise we check for the existence of sources or sinks
+        cluster.bound_objects().iter().any(|id| {
+            let item = scx.catalog.get_item(id);
+            matches!(
+                item.item_type(),
+                CatalogItemType::Sink | CatalogItemType::Source
+            )
+        })
+    }
 }
 
 fn plan_drop_cluster_replica(
@@ -5781,7 +5962,7 @@ pub fn plan_alter_cluster(
         Some(entry) => entry,
         None => {
             scx.catalog.add_notice(PlanNotice::ObjectDoesNotExist {
-                name: name.to_ast_string(),
+                name: name.to_ast_string_simple(),
                 object_type: ObjectType::Cluster,
             });
 
@@ -5829,7 +6010,7 @@ pub fn plan_alter_cluster(
                         AlterClusterPlanStrategy::None => {}
                         _ => {
                             scx.require_feature_flag(
-                                &crate::session::vars::ENABLE_GRACEFUL_CLUSTER_RECONFIGURATION,
+                                &crate::session::vars::ENABLE_ZERO_DOWNTIME_CLUSTER_RECONFIGURATION,
                             )?;
                         }
                     }
@@ -5847,11 +6028,15 @@ pub fn plan_alter_cluster(
                         if schedule.is_some()
                             && !matches!(schedule, Some(ClusterScheduleOptionValue::Manual))
                         {
-                            sql_bail!("REPLICATION FACTOR cannot be given together with any SCHEDULE other than MANUAL");
+                            sql_bail!(
+                                "REPLICATION FACTOR cannot be given together with any SCHEDULE other than MANUAL"
+                            );
                         }
                         if let Some(current_schedule) = cluster.schedule() {
                             if !matches!(current_schedule, ClusterSchedule::Manual) {
-                                sql_bail!("REPLICATION FACTOR cannot be set if the cluster SCHEDULE is anything other than MANUAL");
+                                sql_bail!(
+                                    "REPLICATION FACTOR cannot be set if the cluster SCHEDULE is anything other than MANUAL"
+                                );
                             }
                         }
 
@@ -5862,8 +6047,23 @@ pub fn plan_alter_cluster(
 
                         // Total number of replicas running is internal replicas
                         // + replication factor.
-                        if contains_storage_objects(scx, cluster) && hypothetical_replica_count > 1
+                        if contains_single_replica_objects(scx, cluster)
+                            && hypothetical_replica_count > 1
                         {
+                            return Err(PlanError::CreateReplicaFailStorageObjects {
+                                current_replica_count: cluster.replica_ids().iter().count(),
+                                internal_replica_count,
+                                hypothetical_replica_count,
+                            });
+                        }
+                    } else if alter_strategy.is_some() {
+                        // AlterClusterPlanStrategies that are not None will standup pending replicas of the new configuration
+                        // and violate the single replica for sources constraint. If there are any storage objects (sources or sinks) we should
+                        // just fail.
+                        let internal_replica_count =
+                            cluster.replicas().iter().filter(|r| r.internal()).count();
+                        let hypothetical_replica_count = internal_replica_count * 2;
+                        if contains_single_replica_objects(scx, cluster) {
                             return Err(PlanError::CreateReplicaFailStorageObjects {
                                 current_replica_count: cluster.replica_ids().iter().count(),
                                 internal_replica_count,
@@ -5897,7 +6097,9 @@ pub fn plan_alter_cluster(
                     if schedule.is_some()
                         && !matches!(schedule, Some(ClusterScheduleOptionValue::Manual))
                     {
-                        sql_bail!("cluster schedules other than MANUAL are not supported for unmanaged clusters");
+                        sql_bail!(
+                            "cluster schedules other than MANUAL are not supported for unmanaged clusters"
+                        );
                     }
                     if let Some(current_schedule) = cluster.schedule() {
                         if !matches!(current_schedule, ClusterSchedule::Manual)
@@ -5936,7 +6138,9 @@ pub fn plan_alter_cluster(
                 // entirely and simply always enable disk.
                 if scx.catalog.is_cluster_size_cc(size) {
                     if disk.is_some() {
-                        sql_bail!("DISK option not supported for modern cluster sizes because disk is always enabled");
+                        sql_bail!(
+                            "DISK option not supported for modern cluster sizes because disk is always enabled"
+                        );
                     } else {
                         options.disk = AlterOptionParameter::Set(true);
                     }
@@ -5965,7 +6169,9 @@ pub fn plan_alter_cluster(
                     cluster.managed_size().expect("cluster known to be managed")
                 });
                 if scx.catalog.is_cluster_size_cc(size) {
-                    sql_bail!("DISK option not supported for modern cluster sizes because disk is always enabled");
+                    sql_bail!(
+                        "DISK option not supported for modern cluster sizes because disk is always enabled"
+                    );
                 }
 
                 if disk {
@@ -6072,7 +6278,7 @@ pub fn plan_alter_item_set_cluster(
         }
         None => {
             scx.catalog.add_notice(PlanNotice::ObjectDoesNotExist {
-                name: name.to_ast_string(),
+                name: name.to_ast_string_simple(),
                 object_type,
             });
 
@@ -6134,7 +6340,7 @@ pub fn plan_alter_schema_rename(
     let Some((db_spec, schema_spec)) = resolve_schema(scx, name.clone(), if_exists)? else {
         let object_type = ObjectType::Schema;
         scx.catalog.add_notice(PlanNotice::ObjectDoesNotExist {
-            name: name.to_ast_string(),
+            name: name.to_ast_string_simple(),
             object_type,
         });
         return Ok(Plan::AlterNoop(AlterNoopPlan { object_type }));
@@ -6265,7 +6471,7 @@ pub fn plan_alter_item_rename(
         }
         None => {
             scx.catalog.add_notice(PlanNotice::ObjectDoesNotExist {
-                name: name.to_ast_string(),
+                name: name.to_ast_string_simple(),
                 object_type,
             });
 
@@ -6289,7 +6495,7 @@ pub fn plan_alter_cluster_rename(
         })),
         None => {
             scx.catalog.add_notice(PlanNotice::ObjectDoesNotExist {
-                name: name.to_ast_string(),
+                name: name.to_ast_string_simple(),
                 object_type,
             });
 
@@ -6356,7 +6562,7 @@ pub fn plan_alter_cluster_replica_rename(
         }
         None => {
             scx.catalog.add_notice(PlanNotice::ObjectDoesNotExist {
-                name: name.to_ast_string(),
+                name: name.to_ast_string_simple(),
                 object_type,
             });
 
@@ -6501,7 +6707,7 @@ fn alter_retain_history(
         }
         None => {
             scx.catalog.add_notice(PlanNotice::ObjectDoesNotExist {
-                name: name.to_ast_string(),
+                name: name.to_ast_string_simple(),
                 object_type,
             });
 
@@ -6592,7 +6798,10 @@ pub fn plan_alter_connection(
         if !with_options.is_empty() {
             sql_bail!(
                 "ALTER CONNECTION...ROTATE KEYS does not support WITH ({})",
-                with_options.iter().map(|o| o.to_ast_string()).join(", ")
+                with_options
+                    .iter()
+                    .map(|o| o.to_ast_string_simple())
+                    .join(", ")
             );
         }
 
@@ -6632,6 +6841,7 @@ pub fn plan_alter_connection(
         Connection::Postgres(_) => CreateConnectionType::Postgres,
         Connection::Ssh(_) => CreateConnectionType::Ssh,
         Connection::MySql(_) => CreateConnectionType::MySql,
+        Connection::SqlServer(_) => CreateConnectionType::SqlServer,
     };
 
     // Collect all options irrespective of action taken on them.
@@ -6866,7 +7076,7 @@ pub fn plan_alter_source(
             // planned directly.
             sql_bail!(
                 "Cannot modify the {} of a SOURCE.",
-                option.name.to_ast_string()
+                option.name.to_ast_string_simple()
             );
         }
         AlterSourceAction::ResetOptions(reset) => {
@@ -6884,7 +7094,10 @@ pub fn plan_alter_source(
                     None,
                 );
             }
-            sql_bail!("Cannot modify the {} of a SOURCE.", option.to_ast_string());
+            sql_bail!(
+                "Cannot modify the {} of a SOURCE.",
+                option.to_ast_string_simple()
+            );
         }
         AlterSourceAction::DropSubsources { .. } => {
             sql_bail!("ALTER SOURCE...DROP SUBSOURCE no longer supported; use DROP SOURCE")
@@ -7007,7 +7220,7 @@ pub fn plan_alter_table_add_column(
             }
             None => {
                 scx.catalog.add_notice(PlanNotice::ObjectDoesNotExist {
-                    name: name.to_ast_string(),
+                    name: name.to_ast_string_simple(),
                     object_type,
                 });
                 return Ok(Plan::AlterNoop(AlterNoopPlan { object_type }));
@@ -7030,10 +7243,17 @@ pub fn plan_alter_table_add_column(
         }
     }
 
+    let scalar_type = scalar_type_from_sql(scx, &data_type)?;
+    // TODO(alter_table): Support non-nullable columns with default values.
+    let column_type = scalar_type.nullable(true);
+    // "unresolve" our data type so we can later update the persisted create_sql.
+    let raw_sql_type = mz_sql_parser::parser::parse_data_type(&data_type.to_ast_string_stable())?;
+
     Ok(Plan::AlterTableAddColumn(AlterTablePlan {
         relation_id,
         column_name,
-        column_type: data_type,
+        column_type,
+        raw_sql_type,
     }))
 }
 

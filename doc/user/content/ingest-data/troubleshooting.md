@@ -38,27 +38,31 @@ SELECT * FROM mz_internal.mz_source_statuses
 WHERE name = <SOURCE_NAME>;
 ```
 
-If your source reports a status of `stalled` or `failed`, you likely have a
-configuration issue. The returned `error` field will provide more details.
 
-If your source reports a status of `starting` for more than a few minutes,
-[reach out to our team](http://materialize.com/convert-account/) for support.
-
-If your source reports a status of `running`, but you are not receiving data
-when you query the source, the source may still be ingesting its initial
-snapshot. See [Has my source ingested its initial snapshot?](#has-my-source-ingested-its-initial-snapshot).
+| Status        | Description/recommendation                                                                                                                                             |
+|---------------|---------------------------------------------------------------------------------------------------------------------------------------------------------|
+| `paused`      | Source is running on a cluster with 0 replicas. To resolve this, [increase the replication factor](/sql/alter-cluster/#replication-factor-1) of the cluster.                                                                                                          |
+| `stalled` | You likely have a configuration issue. The returned `error` field will provide more details.                                                     |
+| `failed` | You likely have a configuration issue. The returned `error` field will provide more details.                                                     |
+| `starting`    | If this status persists for more than a few minutes, [reach out to our team](http://materialize.com/convert-account/) for support.      |
+| `running`     | If your source is in a `running` state but you are not receiving data when you query the source, the source may still be ingesting its initial snapshot. See [Has my source ingested its initial snapshot?](#has-my-source-ingested-its-initial-snapshot). |
 
 ## Has my source ingested its initial snapshot?
 
-When you create a source, Materialize takes a snapshot of any existing data in
-the upstream external system and ingests that snapshotted data before it starts
-ingesting new data. To ensure correct and consistent results, this snapshot is
-committed atomically at a specific timestamp. Because of that, you will not be
-able to query your source (or, queries will return no data) until Materialize
-has finished ingesting the initial snapshot.
+[//]: # "This page as a whole (as well as some of our other troubleshooting
+    pages) can undergo a rewrite since the page is a bit of troubleshooting/faq.
+    That is, the troubleshooting might relate to 'why is my query not returning'
+    and the answer is check if the source is still snapshotting.  For now, just
+    tweaking the changes made for this PR and will address how to rework this
+    page in the future."
+
+While a source is [snapshotting](/ingest-data/#snapshotting), the source (and the associated subsources)
+cannot serve queries. That is, queries issued to the snapshotting source (and
+its subsources) will return after the snapshotting completes (unless the user
+breaks out of the query).
 
 Snapshotting can take between a few minutes to several hours, depending on the
-size of your dataset and the [size of your ingestion cluster](https://materialize.com/docs/sql/create-cluster/#disk-enabled-sizes).
+size of your dataset and the [size of your ingestion cluster](/sql/create-cluster/#size).
 
 To determine whether your source has completed ingesting the initial snapshot,
 you can query the [`mz_source_statistics`](/sql/system-catalog/mz_internal/#mz_source_statistics)

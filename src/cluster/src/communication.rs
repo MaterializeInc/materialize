@@ -7,6 +7,12 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+//! Note: This module contains a fallback version of the socket connection protocol. The new
+//! version lives in `communication_v2` and is used by default. The old version can still be
+//! selected through the `enable_create_sockets_v2` dyncfg.
+//!
+//! ----------------------------------------------------------------------------
+//!
 //! Code to spin up communication mesh for a cluster replica.
 //!
 //! The startup protocol is as follows:
@@ -39,32 +45,55 @@ use std::fmt::Display;
 use std::sync::Arc;
 use std::time::Duration;
 
-use anyhow::Context;
+use anyhow::{Context, bail};
 use futures::stream::FuturesUnordered;
 use futures::{FutureExt, StreamExt};
 use mz_cluster_client::client::ClusterStartupEpoch;
 use mz_ore::cast::CastFrom;
 use mz_ore::netio::{Listener, Stream};
+use timely::communication::allocator::zero_copy::allocator::TcpBuilder;
+use timely::communication::allocator::zero_copy::bytes_slab::BytesRefill;
 use timely::communication::allocator::zero_copy::initialize::initialize_networking_from_sockets;
-use timely::communication::allocator::GenericBuilder;
+use timely::communication::allocator::{GenericBuilder, PeerBuilder};
 use tracing::{debug, info, warn};
 
+use crate::communication_v2::create_sockets as create_sockets_v2;
+
 /// Creates communication mesh from cluster config
-pub async fn initialize_networking(
+pub async fn initialize_networking<P>(
     workers: usize,
     process: usize,
     addresses: Vec<String>,
     epoch: ClusterStartupEpoch,
-) -> Result<(Vec<GenericBuilder>, Box<dyn Any + Send>), anyhow::Error> {
-    info!(
-        process = process,
-        ?addresses,
-        "initializing network for timely instance, with {} processes for epoch number {epoch}",
-        addresses.len()
-    );
-    let sockets = create_sockets(addresses, u64::cast_from(process), epoch)
-        .await
-        .context("failed to set up timely sockets")?;
+    refill: BytesRefill,
+    builder_fn: impl Fn(TcpBuilder<P::Peer>) -> GenericBuilder,
+    use_create_sockets_v2: bool,
+) -> Result<(Vec<GenericBuilder>, Box<dyn Any + Send>), anyhow::Error>
+where
+    P: PeerBuilder,
+{
+    let sockets = if use_create_sockets_v2 {
+        info!(
+            process,
+            ?addresses,
+            "initializing network for timely instance",
+        );
+        loop {
+            match create_sockets_v2(process, &addresses).await {
+                Ok(sockets) => break sockets,
+                Err(error) if error.is_fatal() => bail!("failed to set up Timely sockets: {error}"),
+                Err(error) => info!("creating sockets failed: {error}; retrying"),
+            }
+        }
+    } else {
+        info!(
+            process, ?addresses, %epoch,
+            "initializing network for timely instance (legacy protocol)",
+        );
+        create_sockets(addresses, u64::cast_from(process), epoch)
+            .await
+            .context("failed to set up timely sockets")?
+    };
 
     if sockets
         .iter()
@@ -77,7 +106,7 @@ pub async fn initialize_networking(
             .collect::<Result<Vec<_>, _>>()
             .map_err(anyhow::Error::from)
             .context("failed to get standard sockets from tokio sockets")?;
-        initialize_networking_inner(sockets, process, workers)
+        initialize_networking_inner::<_, P, _>(sockets, process, workers, refill, builder_fn)
     } else if sockets
         .iter()
         .filter_map(|s| s.as_ref())
@@ -89,19 +118,23 @@ pub async fn initialize_networking(
             .collect::<Result<Vec<_>, _>>()
             .map_err(anyhow::Error::from)
             .context("failed to get standard sockets from tokio sockets")?;
-        initialize_networking_inner(sockets, process, workers)
+        initialize_networking_inner::<_, P, _>(sockets, process, workers, refill, builder_fn)
     } else {
         anyhow::bail!("cannot mix TCP and Unix streams");
     }
 }
 
-fn initialize_networking_inner<S>(
+fn initialize_networking_inner<S, P, PF>(
     sockets: Vec<Option<S>>,
     process: usize,
     workers: usize,
+    refill: BytesRefill,
+    builder_fn: PF,
 ) -> Result<(Vec<GenericBuilder>, Box<dyn Any + Send>), anyhow::Error>
 where
     S: timely::communication::allocator::zero_copy::stream::Stream + 'static,
+    P: PeerBuilder,
+    PF: Fn(TcpBuilder<P::Peer>) -> GenericBuilder,
 {
     for s in &sockets {
         if let Some(s) = s {
@@ -110,13 +143,16 @@ where
         }
     }
 
-    match initialize_networking_from_sockets(sockets, process, workers, Arc::new(|_| None)) {
+    match initialize_networking_from_sockets::<_, P>(
+        sockets,
+        process,
+        workers,
+        refill,
+        Arc::new(|_| None),
+    ) {
         Ok((stuff, guard)) => {
             info!(process = process, "successfully initialized network");
-            Ok((
-                stuff.into_iter().map(GenericBuilder::ZeroCopy).collect(),
-                Box::new(guard),
-            ))
+            Ok((stuff.into_iter().map(builder_fn).collect(), Box::new(guard)))
         }
         Err(err) => {
             warn!(process, "failed to initialize network: {err}");
@@ -175,60 +211,26 @@ async fn create_sockets(
         }
     };
 
-    struct ConnectionEstablished {
-        peer_index: u64,
-        stream: Stream,
-    }
-
     let mut futs = FuturesUnordered::new();
     for i in 0..my_index {
         let address = addresses[usize::cast_from(i)].clone();
         futs.push(
-            async move {
-                start_connection(address, my_index, my_epoch)
-                    .await
-                    .map(move |stream| ConnectionEstablished {
-                        peer_index: i,
-                        stream,
-                    })
-            }
-            .boxed(),
+            start_connection(address, my_index, my_epoch)
+                .map(move |res| (res.map(move |stream| (stream, i)))),
         );
     }
 
-    futs.push({
-        let f = async {
-            await_connection(&listener, my_index, my_epoch)
-                .await
-                .map(|(stream, peer_index)| ConnectionEstablished { peer_index, stream })
-        }
-        .boxed();
-        f
-    });
+    let mut listener_fut = std::pin::pin!(await_connection(&listener, my_index, my_epoch));
 
     while results.iter().filter(|maybe| maybe.is_some()).count() != n_peers {
-        let ConnectionEstablished { peer_index, stream } = futs
-            .next()
-            .await
-            .expect("we should always at least have a listener task")?;
-
-        let from_listener = match my_index.cmp(&peer_index) {
-            Ordering::Less => true,
-            Ordering::Equal => panic!("someone claimed to be us"),
-            Ordering::Greater => false,
-        };
-
-        if from_listener {
-            futs.push({
-                let f = async {
-                    await_connection(&listener, my_index, my_epoch)
-                        .await
-                        .map(|(stream, peer_index)| ConnectionEstablished { peer_index, stream })
-                }
-                .boxed();
-                f
-            });
-        }
+        let (stream, peer_index) = tokio::select! {
+            Some(res) = futs.next() => res,
+            res = listener_fut.as_mut() => {
+                listener_fut.set(await_connection(&listener, my_index, my_epoch));
+                res
+            }
+        }?;
+        assert_ne!(my_index, peer_index, "someone claimed to be us");
 
         let old = std::mem::replace(&mut results[usize::cast_from(peer_index)], Some(stream));
         if old.is_some() {

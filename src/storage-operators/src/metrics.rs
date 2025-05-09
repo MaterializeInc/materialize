@@ -18,10 +18,10 @@ use prometheus::core::AtomicU64;
 #[derive(Debug, Clone)]
 pub struct BackpressureMetrics {
     /// A counter with the number of emitted bytes.
-    pub emitted_bytes: Arc<DeleteOnDropCounter<'static, AtomicU64, Vec<String>>>,
+    pub emitted_bytes: Arc<DeleteOnDropCounter<AtomicU64, Vec<String>>>,
     /// The last count of bytes we are waiting to be retired in the operator. This cannot
     /// be directly compared to `retired_bytes`, but CAN indicate that backpressure is happening.
-    pub last_backpressured_bytes: Arc<DeleteOnDropGauge<'static, AtomicU64, Vec<String>>>,
+    pub last_backpressured_bytes: Arc<DeleteOnDropGauge<AtomicU64, Vec<String>>>,
     /// A counter with the number of bytes retired by downstream processing.
-    pub retired_bytes: Arc<DeleteOnDropCounter<'static, AtomicU64, Vec<String>>>,
+    pub retired_bytes: Arc<DeleteOnDropCounter<AtomicU64, Vec<String>>>,
 }

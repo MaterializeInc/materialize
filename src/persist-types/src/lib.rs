@@ -23,7 +23,7 @@ use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-use crate::columnar::Schema2;
+use crate::columnar::Schema;
 
 pub mod arrow;
 pub mod codec_impls;
@@ -32,7 +32,6 @@ pub mod parquet;
 pub mod part;
 pub mod schema;
 pub mod stats;
-pub mod stats2;
 pub mod timestamp;
 pub mod txn;
 
@@ -44,7 +43,7 @@ pub trait Codec: Default + Sized + PartialEq + 'static {
     /// This is a separate type because Row is not self-describing. For Row, you
     /// need a RelationDesc to determine the types of any columns that are
     /// Datum::Null.
-    type Schema: Schema2<Self> + PartialEq;
+    type Schema: Schema<Self> + PartialEq;
 
     /// Name of the codec.
     ///
@@ -86,7 +85,7 @@ pub trait Codec: Default + Sized + PartialEq + 'static {
 
     /// A type used with [Self::decode_from] for allocation reuse. Set to `()`
     /// if unnecessary.
-    type Storage: Default;
+    type Storage: Default + Send + Sync;
     /// An alternate form of [Self::decode] which enables amortizing allocs.
     ///
     /// First, instead of returning `Self`, it takes `&mut Self` as a parameter,

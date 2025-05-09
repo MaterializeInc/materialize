@@ -101,7 +101,7 @@ For a full rundown of selection logic options, check the [dbt documentation](htt
 
 {{< note >}}
 The `dbt show` command uses a `LIMIT` clause under the hood, which has
-[known performance limitations](https://materialize.com/docs/transform-data/troubleshooting/#result-filtering)
+[known performance limitations](/transform-data/troubleshooting/#result-filtering)
 in Materialize.
 {{</ note >}}
 
@@ -295,6 +295,15 @@ For development environments with no downtime considerations, you might prefer
 to use the [slim deployment pattern](#slim-deployments) instead for quicker
 iteration and reduced CI costs.
 
+#### RBAC permissions requirements
+
+When using blue/green deployments with [role-based access control (RBAC)](/manage/access-control/#role-based-access-control-rbac), ensure that the role executing the deployment operations has sufficient privileges on the target objects:
+
+* The role must have ownership privileges on the schemas being deployed
+* The role must have ownership privileges on the clusters being deployed
+
+These permissions are required because the blue/green deployment process needs to create, modify, and swap resources during the deployment lifecycle.
+
 #### Configuration and initialization
 
 {{< warning >}}
@@ -350,6 +359,19 @@ These environments are later swapped transparently.
     the original schema or cluster specified for each model scoped for
     deployment, which transparently handles running that subset of models
     against the deployment environment.
+
+    {{< callout >}}
+  If you encounter an error like `String 'deploy:' is not valid YAML`, you
+  might need to use an alternative syntax depending on your terminal environment.
+  Different terminals handle quotes differently, so try:
+
+  ```bash
+  dbt run --vars "{\"deploy\": true}"
+  ```
+
+  This alternative syntax is compatible with Windows terminals, PowerShell, or
+  PyCharm Terminal.
+    {{</ callout >}}
 
 #### Validation
 

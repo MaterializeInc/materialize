@@ -112,11 +112,10 @@ table_e               subsource
 table_f               subsource
 table_g               subsource
 
-# Show all tablestodo this should be splittable
-> SELECT regexp_match(create_sql, 'FOR TABLES \((.+?)\) EXPOSE')[1] FROM (SHOW CREATE SOURCE mz_source);
-"\"public\".\"table_a\" AS \"materialize\".\"public\".\"table_a\", \"public\".\"table_b\" AS \"materialize\".\"public\".\"table_b\", \"public\".\"table_c\" AS \"materialize\".\"public\".\"table_c\", \"public\".\"table_d\" AS \"materialize\".\"public\".\"table_d\", \"public\".\"table_e\" AS \"materialize\".\"public\".\"table_e\", \"public\".\"table_f\" AS \"materialize\".\"public\".\"table_f\", \"public\".\"table_g\" AS \"materialize\".\"public\".\"table_g\""
+>[version>=14000] SELECT regexp_match(create_sql, 'TEXT COLUMNS = \((.*?)\)')[1] FROM (SHOW CREATE SOURCE mz_source);
+public.table_f.f2
 
-> SELECT regexp_match(create_sql, 'TEXT COLUMNS = \((.*?)\)')[1] FROM (SHOW CREATE SOURCE mz_source);
+>[version<14000] SELECT regexp_match(create_sql, 'TEXT COLUMNS = \((.*?)\)')[1] FROM (SHOW CREATE SOURCE mz_source);
 "\"public\".\"table_f\".\"f2\""
 
 #
@@ -207,10 +206,6 @@ contains:cannot drop source "table_e": still depended upon by materialized view 
 > SHOW SUBSOURCES ON mz_source
 mz_source_progress    progress
 table_g               subsource
-
-# Show that all table definitions have been updated
-> SELECT regexp_match(create_sql, 'FOR TABLES \((.+?)\) EXPOSE') FROM (SHOW CREATE SOURCE mz_source);
-"{\"public\".\"table_g\" AS \"materialize\".\"public\".\"table_g\"}"
 
 > SHOW MATERIALIZED VIEWS
 
@@ -324,7 +319,10 @@ INSERT INTO table_a VALUES (5, 'five', 5);
 4 four 1
 5 five 5
 
-> EXPLAIN SELECT * FROM table_a WHERE f3 IS NULL;
+>[version>=13500] EXPLAIN OPTIMIZED PLAN AS VERBOSE TEXT FOR SELECT * FROM table_a WHERE f3 IS NULL;
+"Explained Query (fast path):\n  Constant <empty>\n\nTarget cluster: quickstart\n"
+
+>[version<13500] EXPLAIN OPTIMIZED PLAN FOR SELECT * FROM table_a WHERE f3 IS NULL;
 "Explained Query (fast path):\n  Constant <empty>\n\nTarget cluster: quickstart\n"
 
 #
@@ -339,10 +337,16 @@ contains: invalid TEXT COLUMNS option value: unexpected multiple references to p
 1 var0
 2 var1
 
-> SELECT regexp_match(create_sql, 'TEXT COLUMNS = \((.*?)\)')[1] FROM (SHOW CREATE SOURCE mz_source);
+>[version>=14000] SELECT regexp_match(create_sql, 'TEXT COLUMNS = \((.*?)\)')[1] FROM (SHOW CREATE SOURCE mz_source);
+public.table_f.f2
+
+>[version<14000] SELECT regexp_match(create_sql, 'TEXT COLUMNS = \((.*?)\)')[1] FROM (SHOW CREATE SOURCE mz_source);
 "\"public\".\"table_f\".\"f2\""
 
-> SELECT regexp_match(create_sql, 'TEXT COLUMNS = \((.*?)\)')[1] FROM (SHOW CREATE SOURCE table_f);
+>[version>=14000] SELECT regexp_match(create_sql, 'TEXT COLUMNS = \((.*?)\)')[1] FROM (SHOW CREATE SOURCE table_f);
+"f2"
+
+>[version<14000] SELECT regexp_match(create_sql, 'TEXT COLUMNS = \((.*?)\)')[1] FROM (SHOW CREATE SOURCE table_f);
 "\"f2\""
 
 # Drop a table, which shuffles the tables' output indexes, then add a table and ensure it can be added.
@@ -356,10 +360,16 @@ INSERT INTO table_f VALUES (3, 'var1');
 
 > ALTER SOURCE mz_source ADD SUBSOURCE public.table_i WITH (TEXT COLUMNS [public.table_i.f2]);
 
-> SELECT regexp_match(create_sql, 'TEXT COLUMNS = \((.*?)\)')[1] FROM (SHOW CREATE SOURCE mz_source);
+>[version>=14000] SELECT regexp_match(create_sql, 'TEXT COLUMNS = \((.*?)\)')[1] FROM (SHOW CREATE SOURCE mz_source);
+"public.table_f.f2, public.table_i.f2"
+
+>[version<14000] SELECT regexp_match(create_sql, 'TEXT COLUMNS = \((.*?)\)')[1] FROM (SHOW CREATE SOURCE mz_source);
 "\"public\".\"table_f\".\"f2\", \"public\".\"table_i\".\"f2\""
 
-> SELECT regexp_match(create_sql, 'TEXT COLUMNS = \((.*?)\)')[1] FROM (SHOW CREATE SOURCE table_i);
+>[version>=14000] SELECT regexp_match(create_sql, 'TEXT COLUMNS = \((.*?)\)')[1] FROM (SHOW CREATE SOURCE table_i);
+f2
+
+>[version<14000] SELECT regexp_match(create_sql, 'TEXT COLUMNS = \((.*?)\)')[1] FROM (SHOW CREATE SOURCE table_i);
 "\"f2\""
 
 > SELECT * FROM table_f
@@ -390,9 +400,11 @@ detail:the following columns are referenced but not added: public.table_f.f2
 
 > ALTER SOURCE mz_source_wo_init_text_cols ADD SUBSOURCE public.table_f AS t_f WITH (TEXT COLUMNS [public.table_f.f2]);
 
-> SELECT regexp_match(create_sql, 'TEXT COLUMNS = \((.*?)\)')[1] FROM (SHOW CREATE SOURCE mz_source_wo_init_text_cols);
-"\"public\".\"table_f\".\"f2\""
+>[version>=14000] SELECT regexp_match(create_sql, 'TEXT COLUMNS = \((.*?)\)')[1] FROM (SHOW CREATE SOURCE mz_source_wo_init_text_cols);
+"public.table_f.f2"
 
+>[version<14000] SELECT regexp_match(create_sql, 'TEXT COLUMNS = \((.*?)\)')[1] FROM (SHOW CREATE SOURCE mz_source_wo_init_text_cols);
+"\"public\".\"table_f\".\"f2\""
 
 #
 # Can add tables with exclude columns
@@ -407,15 +419,24 @@ contains: invalid EXCLUDE COLUMNS option value: unexpected multiple references t
 2
 3
 
-> SELECT regexp_match(create_sql, 'EXCLUDE COLUMNS = \((.*?)\)')[1] FROM (SHOW CREATE SOURCE mz_source);
+>[version>=14000] SELECT regexp_match(create_sql, 'EXCLUDE COLUMNS = \((.*?)\)')[1] FROM (SHOW CREATE SOURCE mz_source);
+"public.table_f.f2"
+
+>[version<14000] SELECT regexp_match(create_sql, 'EXCLUDE COLUMNS = \((.*?)\)')[1] FROM (SHOW CREATE SOURCE mz_source);
 "\"public\".\"table_f\".\"f2\""
 
 > ALTER SOURCE mz_source ADD SUBSOURCE public.table_i WITH (EXCLUDE COLUMNS [public.table_i.f2]);
 
-> SELECT regexp_match(create_sql, 'EXCLUDE COLUMNS = \((.*?)\)')[1] FROM (SHOW CREATE SOURCE mz_source);
+>[version>=14000] SELECT regexp_match(create_sql, 'EXCLUDE COLUMNS = \((.*?)\)')[1] FROM (SHOW CREATE SOURCE mz_source);
+"public.table_f.f2, public.table_i.f2"
+
+>[version<14000] SELECT regexp_match(create_sql, 'EXCLUDE COLUMNS = \((.*?)\)')[1] FROM (SHOW CREATE SOURCE mz_source);
 "\"public\".\"table_f\".\"f2\", \"public\".\"table_i\".\"f2\""
 
-> SELECT regexp_match(create_sql, 'EXCLUDE COLUMNS = \((.*?)\)')[1] FROM (SHOW CREATE SOURCE table_i);
+>[version>=14000] SELECT regexp_match(create_sql, 'EXCLUDE COLUMNS = \((.*?)\)')[1] FROM (SHOW CREATE SOURCE table_i);
+f2
+
+>[version<14000] SELECT regexp_match(create_sql, 'EXCLUDE COLUMNS = \((.*?)\)')[1] FROM (SHOW CREATE SOURCE table_i);
 "\"f2\""
 
 > SELECT * FROM table_i
@@ -445,7 +466,10 @@ detail:the following columns are referenced but not added: public.table_f.f2
 
 > ALTER SOURCE mz_source_wo_init_exclude_cols ADD SUBSOURCE public.table_f AS t_f2 WITH (EXCLUDE COLUMNS [public.table_f.f2]);
 
-> SELECT regexp_match(create_sql, 'EXCLUDE COLUMNS = \((.*?)\)')[1] FROM (SHOW CREATE SOURCE mz_source_wo_init_exclude_cols);
+>[version>=14000] SELECT regexp_match(create_sql, 'EXCLUDE COLUMNS = \((.*?)\)')[1] FROM (SHOW CREATE SOURCE mz_source_wo_init_exclude_cols);
+"public.table_f.f2"
+
+>[version<14000] SELECT regexp_match(create_sql, 'EXCLUDE COLUMNS = \((.*?)\)')[1] FROM (SHOW CREATE SOURCE mz_source_wo_init_exclude_cols);
 "\"public\".\"table_f\".\"f2\""
 
 # Add a table after having created the source

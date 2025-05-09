@@ -11,25 +11,28 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::sync::LazyLock;
 
 use mz_repr::role_id::RoleId;
-use mz_repr::user::ExternalUserMetadata;
+use mz_repr::user::{ExternalUserMetadata, InternalUserMetadata};
 use serde::Serialize;
 
 pub const SYSTEM_USER_NAME: &str = "mz_system";
 pub static SYSTEM_USER: LazyLock<User> = LazyLock::new(|| User {
     name: SYSTEM_USER_NAME.into(),
     external_metadata: None,
+    internal_metadata: None,
 });
 
 pub const SUPPORT_USER_NAME: &str = "mz_support";
 pub static SUPPORT_USER: LazyLock<User> = LazyLock::new(|| User {
     name: SUPPORT_USER_NAME.into(),
     external_metadata: None,
+    internal_metadata: None,
 });
 
 pub const ANALYTICS_USER_NAME: &str = "mz_analytics";
 pub static ANALYTICS_USER: LazyLock<User> = LazyLock::new(|| User {
     name: ANALYTICS_USER_NAME.into(),
     external_metadata: None,
+    internal_metadata: None,
 });
 
 pub static INTERNAL_USER_NAMES: LazyLock<BTreeSet<String>> = LazyLock::new(|| {
@@ -54,6 +57,7 @@ pub static INTERNAL_USER_NAME_TO_DEFAULT_CLUSTER: LazyLock<BTreeMap<String, Stri
 pub static HTTP_DEFAULT_USER: LazyLock<User> = LazyLock::new(|| User {
     name: "anonymous_http_user".into(),
     external_metadata: None,
+    internal_metadata: None,
 });
 
 /// Identifies a user.
@@ -63,6 +67,7 @@ pub struct User {
     pub name: String,
     /// Metadata about this user in an external system.
     pub external_metadata: Option<ExternalUserMetadata>,
+    pub internal_metadata: Option<InternalUserMetadata>,
 }
 
 impl From<&User> for mz_pgwire_common::UserMetadata {
@@ -95,6 +100,14 @@ impl User {
             .unwrap_or(false)
     }
 
+    pub fn is_internal_admin(&self) -> bool {
+        self.internal_metadata
+            .as_ref()
+            .map(|metadata| metadata.superuser)
+            .clone()
+            .unwrap_or(false)
+    }
+
     /// Returns whether this user is a superuser.
     pub fn is_superuser(&self) -> bool {
         matches!(self.kind(), UserKind::Superuser)
@@ -112,7 +125,7 @@ impl User {
 
     /// Returns the kind of user this is.
     pub fn kind(&self) -> UserKind {
-        if self.is_external_admin() || self.is_system_user() {
+        if self.is_external_admin() || self.is_system_user() || self.is_internal_admin() {
             UserKind::Superuser
         } else {
             UserKind::Regular

@@ -7,25 +7,27 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+use columnar::Columnar;
 use differential_dataflow::consolidation::ConsolidatingContainerBuilder;
 use mz_expr::MfpPlan;
 use mz_expr::{MapFilterProject, MirScalarExpr, TableFunc};
 use mz_repr::{DatumVec, RowArena, SharedRow};
 use mz_repr::{Diff, Row, Timestamp};
 use mz_timely_util::operator::StreamExt;
+use timely::dataflow::Scope;
 use timely::dataflow::channels::pact::Pipeline;
 use timely::dataflow::channels::pushers::buffer::Session;
 use timely::dataflow::channels::pushers::{Counter, Tee};
-use timely::dataflow::Scope;
 use timely::progress::Antichain;
 
-use crate::render::context::{CollectionBundle, Context};
 use crate::render::DataflowError;
+use crate::render::context::{CollectionBundle, Context};
 
 impl<G> Context<G>
 where
     G: Scope,
     G::Timestamp: crate::render::RenderTimestamp,
+    <G::Timestamp as Columnar>::Container: Clone + Send,
 {
     /// Applies a `TableFunc` to every row, followed by an `mfp`.
     pub fn render_flat_map(
@@ -38,7 +40,8 @@ where
     ) -> CollectionBundle<G> {
         let until = self.until.clone();
         let mfp_plan = mfp.into_plan().expect("MapFilterProject planning failed");
-        let (ok_collection, err_collection) = input.as_specific_collection(input_key.as_deref());
+        let (ok_collection, err_collection) =
+            input.as_specific_collection(input_key.as_deref(), &self.config_set);
         let stream = ok_collection.inner;
         let (oks, errs) = stream.unary_fallible(Pipeline, "FlatMapStage", move |_, _| {
             Box::new(move |input, ok_output, err_output| {
@@ -130,10 +133,10 @@ fn drain_through_mfp<T>(
     >,
 ) where
     T: crate::render::RenderTimestamp,
+    <T as Columnar>::Container: Clone + Send,
 {
     let temp_storage = RowArena::new();
-    let binding = SharedRow::get();
-    let mut row_builder = binding.borrow_mut();
+    let mut row_builder = SharedRow::get();
 
     // This is not cheap, and is meant to be amortized across many `extensions`.
     let mut datums_local = datum_vec.borrow_with(input_row);
@@ -150,7 +153,7 @@ fn drain_through_mfp<T>(
             &mut datums_local,
             &temp_storage,
             event_time,
-            diff * *input_diff,
+            *diff * *input_diff,
             |time| !until.less_equal(time),
             &mut row_builder,
         );

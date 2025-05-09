@@ -38,10 +38,10 @@ GRANT CREATE, USAGE ON SCHEMA public TO materialize
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE NONE
 
-# The value is {"f1": 123}.
+# The value is {"f1": 123}, schema_id = 0x1000000 (16777216) - that should be far beyond what the previous tests create
 # We encode it manually to avoid publishing it.
 $ kafka-ingest format=bytes topic=resolution-no-publish-writer timestamp=1
-\\x00\x00\x00\x00\x01\xf6\x01
+\\x00\x01\x00\x00\x00\xf6\x01
 
-! SELECT * FROM resolution_no_publish_writer;
-contains:to resolve
+SELECT status FROM mz_internal.mz_source_statuses WHERE source = 'resolution_no_publish_writer';
+stalled

@@ -10,10 +10,11 @@
 //! Postgres utilities for SQL purification.
 
 use std::collections::{BTreeMap, BTreeSet};
+use std::sync::Arc;
 
 use mz_expr::MirScalarExpr;
-use mz_postgres_util::desc::PostgresTableDesc;
 use mz_postgres_util::Config;
+use mz_postgres_util::desc::PostgresTableDesc;
 use mz_proto::RustType;
 use mz_repr::{ColumnType, RelationType, ScalarType};
 use mz_sql_parser::ast::display::AstDisplay;
@@ -21,16 +22,16 @@ use mz_sql_parser::ast::{
     ColumnDef, CreateSubsourceOption, CreateSubsourceOptionName, CreateSubsourceStatement,
     ExternalReferences, Ident, TableConstraint, UnresolvedItemName, Value, WithOptionValue,
 };
-use mz_storage_types::sources::postgres::CastType;
 use mz_storage_types::sources::SourceExportStatementDetails;
+use mz_storage_types::sources::postgres::CastType;
 use prost::Message;
-use tokio_postgres::types::Oid;
 use tokio_postgres::Client;
+use tokio_postgres::types::Oid;
 
 use crate::names::{Aug, ResolvedItemName};
 use crate::normalize;
-use crate::plan::expr::ColumnRef;
-use crate::plan::typeconv::{plan_cast, CastContext};
+use crate::plan::hir::ColumnRef;
+use crate::plan::typeconv::{CastContext, plan_cast};
 use crate::plan::{
     ExprContext, HirScalarExpr, PlanError, QueryContext, QueryLifetime, Scope, StatementContext,
 };
@@ -244,7 +245,7 @@ pub(super) fn generate_source_export_statement_values(
                     let mut full_name = purified_export.external_reference.0.clone();
                     full_name.push(name);
                     unsupported_cols.push((
-                        UnresolvedItemName(full_name).to_ast_string(),
+                        UnresolvedItemName(full_name).to_ast_string_simple(),
                         mz_repr::adt::system::Oid(c.type_oid),
                     ));
                     continue;
@@ -374,7 +375,10 @@ pub(super) async fn purify_source_exports(
     if requested_exports.is_empty() {
         sql_bail!(
             "[internal error]: Postgres reference {} did not match any tables",
-            requested_references.as_ref().unwrap().to_ast_string()
+            requested_references
+                .as_ref()
+                .unwrap()
+                .to_ast_string_simple()
         );
     }
 
@@ -429,11 +433,7 @@ pub(super) async fn purify_source_exports(
                 .iter()
                 .find_map(|reference| {
                     let desc = reference.postgres_desc().expect("is postgres");
-                    if desc.oid == *id {
-                        Some(desc)
-                    } else {
-                        None
-                    }
+                    if desc.oid == *id { Some(desc) } else { None }
                 })
                 .expect("validated when generating text columns");
 
@@ -515,9 +515,9 @@ pub(crate) fn generate_column_casts(
                 Err(_) => {
                     table_cast.push((
                         CastType::Natural,
-                        HirScalarExpr::CallVariadic {
-                            func: mz_expr::VariadicFunc::ErrorIfNull,
-                            exprs: vec![
+                        HirScalarExpr::call_variadic(
+                            mz_expr::VariadicFunc::ErrorIfNull,
+                            vec![
                                 HirScalarExpr::literal_null(ScalarType::String),
                                 HirScalarExpr::literal(
                                     mz_repr::Datum::from(
@@ -527,7 +527,7 @@ pub(crate) fn generate_column_casts(
                                     ScalarType::String,
                                 ),
                             ],
-                        }
+                        )
                         .lower_uncorrelated()
                         .expect("no correlation"),
                     ));
@@ -539,10 +539,13 @@ pub(crate) fn generate_column_casts(
         let data_type = scx.resolve_type(ty)?;
         let scalar_type = crate::plan::query::scalar_type_from_sql(scx, &data_type)?;
 
-        let col_expr = HirScalarExpr::Column(ColumnRef {
-            level: 0,
-            column: i,
-        });
+        let col_expr = HirScalarExpr::named_column(
+            ColumnRef {
+                level: 0,
+                column: i,
+            },
+            Arc::from(column.name.as_str()),
+        );
 
         let cast_expr = plan_cast(&cast_ecx, CastContext::Explicit, col_expr, &scalar_type)?;
 
@@ -554,9 +557,7 @@ pub(crate) fn generate_column_casts(
             // constraint changes and we want to error subsource if
             // e.g. the constraint is dropped and we don't notice
             // it.
-            HirScalarExpr::CallVariadic {
-                            func: mz_expr::VariadicFunc::ErrorIfNull,
-                            exprs: vec![
+            HirScalarExpr::call_variadic(mz_expr::VariadicFunc::ErrorIfNull, vec![
                                 cast_expr,
                                 HirScalarExpr::literal(
                                     mz_repr::Datum::from(
@@ -570,7 +571,7 @@ pub(crate) fn generate_column_casts(
                                     ScalarType::String,
                                 ),
                             ],
-                        }
+                            )
         };
 
         // We expect only reg* types to encounter this issue. Users
@@ -586,7 +587,7 @@ pub(crate) fn generate_column_casts(
 
             PlanError::TableContainsUningestableTypes {
                 name: table.name.to_string(),
-                type_: scx.humanize_scalar_type(&scalar_type),
+                type_: scx.humanize_scalar_type(&scalar_type, false),
                 column: column.name.to_string(),
             }
         })?;

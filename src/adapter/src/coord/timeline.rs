@@ -12,8 +12,6 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 use std::sync::Arc;
-use std::sync::LazyLock;
-use std::time::Duration;
 
 use chrono::{DateTime, Utc};
 use futures::Future;
@@ -24,7 +22,7 @@ use mz_compute_types::ComputeInstanceId;
 use mz_expr::CollectionPlan;
 use mz_ore::collections::CollectionExt;
 use mz_ore::instrument;
-use mz_ore::now::{to_datetime, EpochMillis, NowFn};
+use mz_ore::now::{EpochMillis, NowFn, to_datetime};
 use mz_ore::vec::VecExt;
 use mz_repr::{CatalogItemId, GlobalId, Timestamp};
 use mz_sql::names::{ResolvedDatabaseSpecifier, SchemaSpecifier};
@@ -35,13 +33,13 @@ use mz_timestamp_oracle::postgres_oracle::{
 };
 use mz_timestamp_oracle::{self, TimestampOracle, WriteTimestamp};
 use timely::progress::Timestamp as TimelyTimestamp;
-use tracing::{debug, error, info, Instrument};
+use tracing::{Instrument, debug, error, info};
 
+use crate::AdapterError;
+use crate::coord::Coordinator;
 use crate::coord::id_bundle::CollectionIdBundle;
 use crate::coord::read_policy::ReadHolds;
 use crate::coord::timestamp_selection::TimestampProvider;
-use crate::coord::Coordinator;
-use crate::AdapterError;
 
 /// An enum describing whether or not a query belongs to a timeline and whether the query can be
 /// affected by the timestamp at which it executes.
@@ -543,7 +541,7 @@ impl Coordinator {
     pub fn partition_ids_by_timeline_context(
         &self,
         id_bundle: &CollectionIdBundle,
-    ) -> impl Iterator<Item = (TimelineContext, CollectionIdBundle)> {
+    ) -> impl Iterator<Item = (TimelineContext, CollectionIdBundle)> + use<> {
         let mut res: BTreeMap<TimelineContext, CollectionIdBundle> = BTreeMap::new();
 
         for gid in &id_bundle.storage_ids {
@@ -678,7 +676,7 @@ impl Coordinator {
         {
             // Timeline::EpochMilliseconds is advanced in group commits and doesn't need to be
             // manually advanced here.
-            if timeline != Timeline::EpochMilliseconds {
+            if timeline != Timeline::EpochMilliseconds && !self.read_only_controllers {
                 // For non realtime sources, we define now as the largest timestamp, not in
                 // advance of any object's upper. This is the largest timestamp that is closed
                 // to writes.
@@ -711,16 +709,8 @@ impl Coordinator {
 /// Convenience function for calculating the current upper bound that we want to
 /// prevent the global timestamp from exceeding.
 fn upper_bound(now: &mz_repr::Timestamp) -> mz_repr::Timestamp {
-    const TIMESTAMP_INTERVAL: LazyLock<mz_repr::Timestamp> = LazyLock::new(|| {
-        Duration::from_secs(5)
-            .as_millis()
-            .try_into()
-            .expect("5 seconds can fit into `Timestamp`")
-    });
-
+    const TIMESTAMP_INTERVAL_MS: u64 = 5000;
     const TIMESTAMP_INTERVAL_UPPER_BOUND: u64 = 2;
 
-    now.saturating_add(
-        TIMESTAMP_INTERVAL.saturating_mul(Timestamp::from(TIMESTAMP_INTERVAL_UPPER_BOUND)),
-    )
+    now.saturating_add(TIMESTAMP_INTERVAL_MS * TIMESTAMP_INTERVAL_UPPER_BOUND)
 }

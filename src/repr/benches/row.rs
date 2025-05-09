@@ -11,13 +11,13 @@ use std::cmp::Ordering;
 use std::hint::black_box;
 
 use arrow::array::StructArray;
-use criterion::{criterion_group, criterion_main, Bencher, Criterion, Throughput};
+use criterion::{Bencher, Criterion, Throughput, criterion_group, criterion_main};
 use mz_persist::indexed::columnar::{ColumnarRecords, ColumnarRecordsBuilder};
 use mz_persist::metrics::ColumnarMetrics;
-use mz_persist_types::codec_impls::UnitSchema;
-use mz_persist_types::columnar::{ColumnDecoder, Schema2};
-use mz_persist_types::part::{Part2, PartBuilder2};
 use mz_persist_types::Codec;
+use mz_persist_types::codec_impls::UnitSchema;
+use mz_persist_types::columnar::{ColumnDecoder, Schema};
+use mz_persist_types::part::{Part, PartBuilder};
 use mz_repr::adt::date::Date;
 use mz_repr::adt::numeric::Numeric;
 use mz_repr::{ColumnType, Datum, ProtoRow, RelationDesc, Row, ScalarType};
@@ -115,24 +115,24 @@ pub fn bench_sort(c: &mut Criterion) {
     let int_rows = (0..num_rows)
         .map(|_| {
             vec![
-                Datum::Int32(rng.gen()),
-                Datum::Int32(rng.gen()),
-                Datum::Int32(rng.gen()),
-                Datum::Int32(rng.gen()),
-                Datum::Int32(rng.gen()),
-                Datum::Int32(rng.gen()),
+                Datum::Int32(rng.r#gen()),
+                Datum::Int32(rng.r#gen()),
+                Datum::Int32(rng.r#gen()),
+                Datum::Int32(rng.r#gen()),
+                Datum::Int32(rng.r#gen()),
+                Datum::Int32(rng.r#gen()),
             ]
         })
         .collect::<Vec<_>>();
     let numeric_rows = (0..num_rows)
         .map(|_| {
             vec![
-                Datum::Numeric(rng.gen::<i32>().into()),
-                Datum::Numeric(rng.gen::<i32>().into()),
-                Datum::Numeric(rng.gen::<i32>().into()),
-                Datum::Numeric(rng.gen::<i32>().into()),
-                Datum::Numeric(rng.gen::<i32>().into()),
-                Datum::Numeric(rng.gen::<i32>().into()),
+                Datum::Numeric(rng.r#gen::<i32>().into()),
+                Datum::Numeric(rng.r#gen::<i32>().into()),
+                Datum::Numeric(rng.r#gen::<i32>().into()),
+                Datum::Numeric(rng.r#gen::<i32>().into()),
+                Datum::Numeric(rng.r#gen::<i32>().into()),
+                Datum::Numeric(rng.r#gen::<i32>().into()),
             ]
         })
         .collect::<Vec<_>>();
@@ -140,7 +140,7 @@ pub fn bench_sort(c: &mut Criterion) {
     let mut rng = seeded_rng();
     let byte_data = (0..num_rows)
         .map(|_| {
-            let i: i32 = rng.gen();
+            let i: i32 = rng.r#gen();
             format!("{} and then {} and then {}", i, i + 1, i + 2).into_bytes()
         })
         .collect::<Vec<_>>();
@@ -197,12 +197,12 @@ pub fn bench_pack(c: &mut Criterion) {
     let int_rows = (0..num_rows)
         .map(|_| {
             vec![
-                Datum::Int32(rng.gen()),
-                Datum::Int32(rng.gen()),
-                Datum::Int32(rng.gen()),
-                Datum::Int32(rng.gen()),
-                Datum::Int32(rng.gen()),
-                Datum::Int32(rng.gen()),
+                Datum::Int32(rng.r#gen()),
+                Datum::Int32(rng.r#gen()),
+                Datum::Int32(rng.r#gen()),
+                Datum::Int32(rng.r#gen()),
+                Datum::Int32(rng.r#gen()),
+                Datum::Int32(rng.r#gen()),
             ]
         })
         .collect::<Vec<_>>();
@@ -210,7 +210,7 @@ pub fn bench_pack(c: &mut Criterion) {
     let mut rng = seeded_rng();
     let byte_data = (0..num_rows)
         .map(|_| {
-            let i: i32 = rng.gen();
+            let i: i32 = rng.r#gen();
             format!("{} and then {} and then {}", i, i + 1, i + 2).into_bytes()
         })
         .collect::<Vec<_>>();
@@ -234,9 +234,9 @@ fn bench_filter(c: &mut Criterion) {
         .map(|_| {
             vec![
                 Datum::Date(random_date()),
-                Datum::Int32(rng.gen()),
-                Datum::Int32(rng.gen()),
-                Datum::Int32(rng.gen()),
+                Datum::Int32(rng.r#gen()),
+                Datum::Int32(rng.r#gen()),
+                Datum::Int32(rng.r#gen()),
             ]
         })
         .collect::<Vec<_>>();
@@ -271,8 +271,8 @@ fn decode_legacy(part: &ColumnarRecords, schema: &RelationDesc) -> Row {
     row
 }
 
-fn encode_structured2(schema: &RelationDesc, rows: &[Row]) -> Part2 {
-    let mut builder = PartBuilder2::new(schema, &UnitSchema);
+fn encode_structured2(schema: &RelationDesc, rows: &[Row]) -> Part {
+    let mut builder = PartBuilder::new(schema, &UnitSchema);
     for row in rows.iter() {
         builder.push(row, &(), 1u64, 1i64);
     }
@@ -286,12 +286,12 @@ fn bench_roundtrip(c: &mut Criterion) {
         .map(|_| {
             let str_len = rng.gen_range(0..10);
             Row::pack(vec![
-                Datum::from(rng.gen::<bool>()),
-                Datum::from(rng.gen::<Option<bool>>()),
+                Datum::from(rng.r#gen::<bool>()),
+                Datum::from(rng.r#gen::<Option<bool>>()),
                 Datum::from(Alphanumeric.sample_string(&mut rng, str_len).as_str()),
                 Datum::from(
                     Some(Alphanumeric.sample_string(&mut rng, str_len).as_str())
-                        .filter(|_| rng.gen::<bool>()),
+                        .filter(|_| rng.r#gen::<bool>()),
                 ),
             ])
         })
@@ -331,7 +331,7 @@ fn bench_roundtrip(c: &mut Criterion) {
         b.iter(|| std::hint::black_box(encode_legacy(&rows)));
     });
     c.bench_function("roundtrip_encode_structured2", |b| {
-        let mut builder = PartBuilder2::new(&schema, &UnitSchema);
+        let mut builder = PartBuilder::new(&schema, &UnitSchema);
         b.iter(|| {
             for row in rows.iter() {
                 builder.push(row, &(), 1u64, 1i64);
@@ -352,7 +352,7 @@ fn bench_roundtrip(c: &mut Criterion) {
             .downcast_ref::<StructArray>()
             .expect("struct array");
         let decoder =
-            <RelationDesc as Schema2<Row>>::decoder(&schema, col.clone()).expect("success");
+            <RelationDesc as Schema<Row>>::decoder(&schema, col.clone()).expect("success");
         let mut row = Row::default();
 
         b.iter(|| {
@@ -427,7 +427,7 @@ fn bench_json(c: &mut Criterion) {
         let schema =
             RelationDesc::from_names_and_types(vec![("a", ScalarType::Jsonb.nullable(false))]);
         b.iter(|| {
-            let mut builder = PartBuilder2::new(&schema, &UnitSchema);
+            let mut builder = PartBuilder::new(&schema, &UnitSchema);
             for _ in 0..NUM_ROWS {
                 std::hint::black_box(&mut builder).push(&row, &(), 1u64, 1i64);
             }
@@ -439,7 +439,7 @@ fn bench_json(c: &mut Criterion) {
     group.bench_function("decode/structured2", |b| {
         let schema =
             RelationDesc::from_names_and_types(vec![("a", ScalarType::Jsonb.nullable(false))]);
-        let mut builder = PartBuilder2::new(&schema, &UnitSchema);
+        let mut builder = PartBuilder::new(&schema, &UnitSchema);
         builder.push(&row, &(), 1u64, 1i64);
         let part = builder.finish();
 
@@ -449,7 +449,7 @@ fn bench_json(c: &mut Criterion) {
             .downcast_ref::<StructArray>()
             .expect("struct array");
         let decoder =
-            <RelationDesc as Schema2<Row>>::decoder(&schema, col.clone()).expect("success");
+            <RelationDesc as Schema<Row>>::decoder(&schema, col.clone()).expect("success");
         let mut row = Row::default();
 
         b.iter(|| {
@@ -475,7 +475,7 @@ fn bench_string(c: &mut Criterion) {
         let schema =
             RelationDesc::from_names_and_types(vec![("a", ScalarType::String.nullable(false))]);
         b.iter(|| {
-            let mut builder = PartBuilder2::new(&schema, &UnitSchema);
+            let mut builder = PartBuilder::new(&schema, &UnitSchema);
             for _ in 0..NUM_ROWS {
                 std::hint::black_box(&mut builder).push(&row, &(), 1u64, 1i64);
             }
@@ -487,7 +487,7 @@ fn bench_string(c: &mut Criterion) {
     group.bench_function("decode/structured2", |b| {
         let schema =
             RelationDesc::from_names_and_types(vec![("a", ScalarType::String.nullable(false))]);
-        let mut builder = PartBuilder2::new(&schema, &UnitSchema);
+        let mut builder = PartBuilder::new(&schema, &UnitSchema);
         builder.push(&row, &(), 1u64, 1i64);
         let part = builder.finish();
 
@@ -497,7 +497,7 @@ fn bench_string(c: &mut Criterion) {
             .downcast_ref::<StructArray>()
             .expect("struct array");
         let decoder =
-            <RelationDesc as Schema2<Row>>::decoder(&schema, col.clone()).expect("success");
+            <RelationDesc as Schema<Row>>::decoder(&schema, col.clone()).expect("success");
         let mut row = Row::default();
 
         b.iter(|| {

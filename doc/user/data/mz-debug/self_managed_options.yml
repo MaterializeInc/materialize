@@ -1,0 +1,75 @@
+columns:
+  - column: "Option"
+  - column: "Description"
+rows:
+  - Option: "`--dump-k8s`"
+    Description: |
+
+      <a name="dump-k8s"></a>
+      If `true`, dump debug information from the Kubernetes cluster.
+
+      Defaults to `true`.
+
+  - Option: "`--k8s-namespace <NAMESPACE>`"
+    Description: |
+
+      <a name="k8s-namespace"></a> The namespaces to dump. Specify multiple
+      times to dump multiple namespaces.
+
+      Required if [`--dump-k8s`](#dump-k8s) is true.
+
+  - Option: "`--k8s-context <CONTEXT>`"
+    Description: |
+
+      <a name="k8s-context"></a> The Kubernetes context to use.
+
+      Defaults to the `KUBERNETES_CONTEXT` environment variable.
+
+  - Option: "`--k8s-dump-secret-values`"
+    Description: |
+
+      <a name="k8s-dump-secret-values"></a> If `true`, include unredacted secrets in the
+      dump. Use with caution.
+
+      Defaults to `false`.
+
+  - Option: "`--auto-port-forward`"
+    Description: |
+
+      <a name="auto-port-forward"></a>If `true`, automatically port-forward the
+      external SQL port.
+
+      Defaults to `true`.
+
+  - Option: "`--port-forward-local-address <IP address>`"
+    Description: |
+
+      <a name="port-forward-local-address"></a> The address to listen on for
+      port-forwarding.
+
+      Defaults to `127.0.0.1`.
+
+  - Option: "`--port-forward-local-port <PORT>`"
+    Description: |
+
+      <a name="port-forward-local-port"></a> The port to listen on for
+      port-forwarding.
+
+      Defaults to `6875`.
+
+  - Option: "`--mz-connection-url <URL>`"
+    Description: |
+
+      <a name="mz-connection-url"></a>The Materialize instance's [PostgreSQL
+      connection
+      URL](https://www.postgresql.org/docs/14/libpq-connect.html#LIBPQ-CONNSTRING).
+
+      Defaults to a connection URL constructed from:
+
+      [`--port-forward-local-address`](#port-forward-local-address) and
+      [`--port-forward-local-port`](#port-forward-local-port) values.
+
+  - Option: "`-h`, `--help`"
+    Description: |
+
+      <a name="help"></a> Print help information.

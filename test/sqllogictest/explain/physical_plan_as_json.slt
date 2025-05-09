@@ -201,7 +201,10 @@ SELECT * FROM t
                 [
                   [
                     {
-                      "Column": 0
+                      "Column": [
+                        0,
+                        "a"
+                      ]
                     }
                   ],
                   [
@@ -298,7 +301,10 @@ SELECT a + b, 1 FROM t
                 [
                   [
                     {
-                      "Column": 0
+                      "Column": [
+                        0,
+                        "a"
+                      ]
                     }
                   ],
                   [
@@ -325,7 +331,10 @@ SELECT a + b, 1 FROM t
               "Arrangement": [
                 [
                   {
-                    "Column": 0
+                    "Column": [
+                      0,
+                      "a"
+                    ]
                   }
                 ],
                 null,
@@ -335,10 +344,16 @@ SELECT a + b, 1 FROM t
                       "CallBinary": {
                         "func": "AddInt32",
                         "expr1": {
-                          "Column": 0
+                          "Column": [
+                            0,
+                            "a"
+                          ]
                         },
                         "expr2": {
-                          "Column": 1
+                          "Column": [
+                            1,
+                            "b"
+                          ]
                         }
                       }
                     },
@@ -427,10 +442,16 @@ SELECT c + d, 1 FROM u
             "CallBinary": {
               "func": "AddInt32",
               "expr1": {
-                "Column": 0
+                "Column": [
+                  0,
+                  "c"
+                ]
               },
               "expr2": {
-                "Column": 1
+                "Column": [
+                  1,
+                  "d"
+                ]
               }
             }
           },
@@ -495,7 +516,10 @@ SELECT * FROM ov
                             [
                               [
                                 {
-                                  "Column": 0
+                                  "Column": [
+                                    0,
+                                    "a"
+                                  ]
                                 }
                               ],
                               [
@@ -529,7 +553,10 @@ SELECT * FROM ov
                   },
                   "input_key": [
                     {
-                      "Column": 0
+                      "Column": [
+                        0,
+                        "a"
+                      ]
                     }
                   ],
                   "input_mfp": {
@@ -625,7 +652,10 @@ SELECT a FROM t EXCEPT ALL SELECT b FROM mv
                                     [
                                       [
                                         {
-                                          "Column": 0
+                                          "Column": [
+                                            0,
+                                            "a"
+                                          ]
                                         }
                                       ],
                                       [
@@ -652,7 +682,10 @@ SELECT a FROM t EXCEPT ALL SELECT b FROM mv
                                   "Arrangement": [
                                     [
                                       {
-                                        "Column": 0
+                                        "Column": [
+                                          0,
+                                          "a"
+                                        ]
                                       }
                                     ],
                                     null,
@@ -714,7 +747,10 @@ SELECT a FROM t EXCEPT ALL SELECT b FROM mv
                       [
                         [
                           {
-                            "Column": 0
+                            "Column": [
+                              0,
+                              null
+                            ]
                           }
                         ],
                         [
@@ -747,7 +783,10 @@ SELECT a FROM t EXCEPT ALL SELECT b FROM mv
                 "ensure_arrangement": [
                   [
                     {
-                      "Column": 0
+                      "Column": [
+                        0,
+                        null
+                      ]
                     }
                   ],
                   [
@@ -811,7 +850,10 @@ SELECT * FROM ov
                             [
                               [
                                 {
-                                  "Column": 0
+                                  "Column": [
+                                    0,
+                                    "a"
+                                  ]
                                 }
                               ],
                               [
@@ -845,7 +887,10 @@ SELECT * FROM ov
                   },
                   "input_key": [
                     {
-                      "Column": 0
+                      "Column": [
+                        0,
+                        "a"
+                      ]
                     }
                   ],
                   "input_mfp": {
@@ -947,7 +992,10 @@ WITH cte(x) as (SELECT a FROM t EXCEPT ALL SELECT b FROM mv)
                                           [
                                             [
                                               {
-                                                "Column": 0
+                                                "Column": [
+                                                  0,
+                                                  "a"
+                                                ]
                                               }
                                             ],
                                             [
@@ -974,7 +1022,10 @@ WITH cte(x) as (SELECT a FROM t EXCEPT ALL SELECT b FROM mv)
                                         "Arrangement": [
                                           [
                                             {
-                                              "Column": 0
+                                              "Column": [
+                                                0,
+                                                "a"
+                                              ]
                                             }
                                           ],
                                           null,
@@ -1036,7 +1087,10 @@ WITH cte(x) as (SELECT a FROM t EXCEPT ALL SELECT b FROM mv)
                             [
                               [
                                 {
-                                  "Column": 0
+                                  "Column": [
+                                    0,
+                                    null
+                                  ]
                                 }
                               ],
                               [
@@ -1069,7 +1123,10 @@ WITH cte(x) as (SELECT a FROM t EXCEPT ALL SELECT b FROM mv)
                       "ensure_arrangement": [
                         [
                           {
-                            "Column": 0
+                            "Column": [
+                              0,
+                              null
+                            ]
                           }
                         ],
                         [
@@ -1100,7 +1157,10 @@ WITH cte(x) as (SELECT a FROM t EXCEPT ALL SELECT b FROM mv)
                               [
                                 [
                                   {
-                                    "Column": 0
+                                    "Column": [
+                                      0,
+                                      null
+                                    ]
                                   }
                                 ],
                                 [
@@ -1120,7 +1180,10 @@ WITH cte(x) as (SELECT a FROM t EXCEPT ALL SELECT b FROM mv)
                             "Arrangement": [
                               [
                                 {
-                                  "Column": 0
+                                  "Column": [
+                                    0,
+                                    null
+                                  ]
                                 }
                               ],
                               null,
@@ -1130,7 +1193,10 @@ WITH cte(x) as (SELECT a FROM t EXCEPT ALL SELECT b FROM mv)
                                     "CallBinary": {
                                       "func": "AddInt32",
                                       "expr1": {
-                                        "Column": 0
+                                        "Column": [
+                                          0,
+                                          "x"
+                                        ]
                                       },
                                       "expr2": {
                                         "Literal": [
@@ -1175,7 +1241,10 @@ WITH cte(x) as (SELECT a FROM t EXCEPT ALL SELECT b FROM mv)
                               [
                                 [
                                   {
-                                    "Column": 0
+                                    "Column": [
+                                      0,
+                                      null
+                                    ]
                                   }
                                 ],
                                 [
@@ -1195,7 +1264,10 @@ WITH cte(x) as (SELECT a FROM t EXCEPT ALL SELECT b FROM mv)
                             "Arrangement": [
                               [
                                 {
-                                  "Column": 0
+                                  "Column": [
+                                    0,
+                                    null
+                                  ]
                                 }
                               ],
                               null,
@@ -1205,7 +1277,10 @@ WITH cte(x) as (SELECT a FROM t EXCEPT ALL SELECT b FROM mv)
                                     "CallBinary": {
                                       "func": "SubInt32",
                                       "expr1": {
-                                        "Column": 0
+                                        "Column": [
+                                          0,
+                                          "x"
+                                        ]
                                       },
                                       "expr2": {
                                         "Literal": [
@@ -1312,7 +1387,10 @@ SELECT x * 5 FROM cte WHERE x = 5
                                                   [
                                                     [
                                                       {
-                                                        "Column": 0
+                                                        "Column": [
+                                                          0,
+                                                          "a"
+                                                        ]
                                                       }
                                                     ],
                                                     [
@@ -1370,7 +1448,10 @@ SELECT x * 5 FROM cte WHERE x = 5
                                                   [
                                                     [
                                                       {
-                                                        "Column": 0
+                                                        "Column": [
+                                                          0,
+                                                          null
+                                                        ]
                                                       }
                                                     ],
                                                     [
@@ -1404,7 +1485,10 @@ SELECT x * 5 FROM cte WHERE x = 5
                                           "source_relation": 1,
                                           "source_key": [
                                             {
-                                              "Column": 0
+                                              "Column": [
+                                                0,
+                                                null
+                                              ]
                                             }
                                           ],
                                           "initial_closure": null,
@@ -1413,13 +1497,19 @@ SELECT x * 5 FROM cte WHERE x = 5
                                               "lookup_relation": 0,
                                               "stream_key": [
                                                 {
-                                                  "Column": 0
+                                                  "Column": [
+                                                    0,
+                                                    null
+                                                  ]
                                                 }
                                               ],
                                               "stream_thinning": [],
                                               "lookup_key": [
                                                 {
-                                                  "Column": 0
+                                                  "Column": [
+                                                    0,
+                                                    "a"
+                                                  ]
                                                 }
                                               ],
                                               "closure": {
@@ -1488,7 +1578,10 @@ SELECT x * 5 FROM cte WHERE x = 5
                             [
                               [
                                 {
-                                  "Column": 0
+                                  "Column": [
+                                    0,
+                                    null
+                                  ]
                                 }
                               ],
                               [
@@ -1521,7 +1614,10 @@ SELECT x * 5 FROM cte WHERE x = 5
                       "ensure_arrangement": [
                         [
                           {
-                            "Column": 0
+                            "Column": [
+                              0,
+                              null
+                            ]
                           }
                         ],
                         [
@@ -1562,7 +1658,10 @@ SELECT x * 5 FROM cte WHERE x = 5
             "input_key_val": [
               [
                 {
-                  "Column": 0
+                  "Column": [
+                    0,
+                    null
+                  ]
                 }
               ],
               null
@@ -1586,7 +1685,10 @@ SELECT x * 5 FROM cte WHERE x = 5
               "CallBinary": {
                 "func": "Eq",
                 "expr1": {
-                  "Column": 1
+                  "Column": [
+                    1,
+                    "x"
+                  ]
                 },
                 "expr2": {
                   "Literal": [
@@ -1646,7 +1748,10 @@ SELECT generate_series(a, b) from t
                       [
                         [
                           {
-                            "Column": 0
+                            "Column": [
+                              0,
+                              "a"
+                            ]
                           }
                         ],
                         [
@@ -1676,10 +1781,16 @@ SELECT generate_series(a, b) from t
             "func": "GenerateSeriesInt32",
             "exprs": [
               {
-                "Column": 0
+                "Column": [
+                  0,
+                  "a"
+                ]
               },
               {
-                "Column": 1
+                "Column": [
+                  1,
+                  "b"
+                ]
               },
               {
                 "Literal": [
@@ -1708,7 +1819,10 @@ SELECT generate_series(a, b) from t
             },
             "input_key": [
               {
-                "Column": 0
+                "Column": [
+                  0,
+                  "a"
+                ]
               }
             ]
           }
@@ -1748,7 +1862,10 @@ SELECT DISTINCT a, b FROM t
                       [
                         [
                           {
-                            "Column": 0
+                            "Column": [
+                              0,
+                              "a"
+                            ]
                           }
                         ],
                         [
@@ -1799,7 +1916,10 @@ SELECT DISTINCT a, b FROM t
             "plan": "Distinct",
             "input_key": [
               {
-                "Column": 0
+                "Column": [
+                  0,
+                  "a"
+                ]
               }
             ],
             "mfp_after": {
@@ -1853,7 +1973,10 @@ GROUP BY a
                       [
                         [
                           {
-                            "Column": 0
+                            "Column": [
+                              0,
+                              "a"
+                            ]
                           }
                         ],
                         [
@@ -1909,14 +2032,20 @@ GROUP BY a
                   {
                     "func": "SumInt32",
                     "expr": {
-                      "Column": 1
+                      "Column": [
+                        1,
+                        "b"
+                      ]
                     },
                     "distinct": false
                   },
                   {
                     "func": "Count",
                     "expr": {
-                      "Column": 1
+                      "Column": [
+                        1,
+                        "b"
+                      ]
                     },
                     "distinct": true
                   }
@@ -1928,7 +2057,10 @@ GROUP BY a
                     {
                       "func": "SumInt32",
                       "expr": {
-                        "Column": 1
+                        "Column": [
+                          1,
+                          "b"
+                        ]
                       },
                       "distinct": false
                     }
@@ -1941,7 +2073,10 @@ GROUP BY a
                     {
                       "func": "Count",
                       "expr": {
-                        "Column": 1
+                        "Column": [
+                          1,
+                          "b"
+                        ]
                       },
                       "distinct": true
                     }
@@ -1951,7 +2086,10 @@ GROUP BY a
             },
             "input_key": [
               {
-                "Column": 0
+                "Column": [
+                  0,
+                  "a"
+                ]
               }
             ],
             "mfp_after": {
@@ -2009,7 +2147,10 @@ FROM t
                             [
                               [
                                 {
-                                  "Column": 0
+                                  "Column": [
+                                    0,
+                                    "a"
+                                  ]
                                 }
                               ],
                               [
@@ -2036,7 +2177,10 @@ FROM t
                           "Arrangement": [
                             [
                               {
-                                "Column": 0
+                                "Column": [
+                                  0,
+                                  "a"
+                                ]
                               }
                             ],
                             null,
@@ -2080,14 +2224,20 @@ FROM t
                         {
                           "func": "SumInt32",
                           "expr": {
-                            "Column": 0
+                            "Column": [
+                              0,
+                              "b"
+                            ]
                           },
                           "distinct": false
                         },
                         {
                           "func": "Count",
                           "expr": {
-                            "Column": 0
+                            "Column": [
+                              0,
+                              "b"
+                            ]
                           },
                           "distinct": true
                         }
@@ -2099,7 +2249,10 @@ FROM t
                           {
                             "func": "SumInt32",
                             "expr": {
-                              "Column": 0
+                              "Column": [
+                                0,
+                                "b"
+                              ]
                             },
                             "distinct": false
                           }
@@ -2112,7 +2265,10 @@ FROM t
                           {
                             "func": "Count",
                             "expr": {
-                              "Column": 0
+                              "Column": [
+                                0,
+                                "b"
+                              ]
                             },
                             "distinct": true
                           }
@@ -2352,7 +2508,10 @@ SELECT * FROM hierarchical_group_by
                       [
                         [
                           {
-                            "Column": 0
+                            "Column": [
+                              0,
+                              "a"
+                            ]
                           }
                         ],
                         [
@@ -2419,7 +2578,10 @@ SELECT * FROM hierarchical_group_by
             },
             "input_key": [
               {
-                "Column": 0
+                "Column": [
+                  0,
+                  "a"
+                ]
               }
             ],
             "mfp_after": {
@@ -2474,7 +2636,10 @@ MATERIALIZED VIEW hierarchical_global_mv
                             [
                               [
                                 {
-                                  "Column": 0
+                                  "Column": [
+                                    0,
+                                    "a"
+                                  ]
                                 }
                               ],
                               [
@@ -2501,7 +2666,10 @@ MATERIALIZED VIEW hierarchical_global_mv
                           "Arrangement": [
                             [
                               {
-                                "Column": 0
+                                "Column": [
+                                  0,
+                                  "a"
+                                ]
                               }
                             ],
                             null,
@@ -2799,7 +2967,10 @@ SELECT * FROM hierarchical_global
                             [
                               [
                                 {
-                                  "Column": 0
+                                  "Column": [
+                                    0,
+                                    "a"
+                                  ]
                                 }
                               ],
                               [
@@ -2826,7 +2997,10 @@ SELECT * FROM hierarchical_global
                           "Arrangement": [
                             [
                               {
-                                "Column": 0
+                                "Column": [
+                                  0,
+                                  "a"
+                                ]
                               }
                             ],
                             null,
@@ -3121,7 +3295,10 @@ GROUP BY a
                               [
                                 [
                                   {
-                                    "Column": 0
+                                    "Column": [
+                                      0,
+                                      "a"
+                                    ]
                                   }
                                 ],
                                 [
@@ -3192,7 +3369,10 @@ GROUP BY a
                                                   "CastInt32ToString": null
                                                 },
                                                 "expr": {
-                                                  "Column": 1
+                                                  "Column": [
+                                                    1,
+                                                    "b"
+                                                  ]
                                                 }
                                               }
                                             },
@@ -3287,7 +3467,10 @@ GROUP BY a
                                                   "CastInt32ToString": null
                                                 },
                                                 "expr": {
-                                                  "Column": 1
+                                                  "Column": [
+                                                    1,
+                                                    "b"
+                                                  ]
                                                 }
                                               }
                                             },
@@ -3341,7 +3524,10 @@ GROUP BY a
                     },
                     "input_key": [
                       {
-                        "Column": 0
+                        "Column": [
+                          0,
+                          "a"
+                        ]
                       }
                     ],
                     "mfp_after": {
@@ -3375,7 +3561,10 @@ GROUP BY a
                               [
                                 [
                                   {
-                                    "Column": 0
+                                    "Column": [
+                                      0,
+                                      "a"
+                                    ]
                                   }
                                 ],
                                 [
@@ -3446,7 +3635,10 @@ GROUP BY a
                                                   "CastInt32ToString": null
                                                 },
                                                 "expr": {
-                                                  "Column": 1
+                                                  "Column": [
+                                                    1,
+                                                    "b"
+                                                  ]
                                                 }
                                               }
                                             },
@@ -3541,7 +3733,10 @@ GROUP BY a
                                                   "CastInt32ToString": null
                                                 },
                                                 "expr": {
-                                                  "Column": 1
+                                                  "Column": [
+                                                    1,
+                                                    "b"
+                                                  ]
                                                 }
                                               }
                                             },
@@ -3595,7 +3790,10 @@ GROUP BY a
                     },
                     "input_key": [
                       {
-                        "Column": 0
+                        "Column": [
+                          0,
+                          "a"
+                        ]
                       }
                     ],
                     "mfp_after": {
@@ -3616,7 +3814,10 @@ GROUP BY a
                 "source_relation": 0,
                 "source_key": [
                   {
-                    "Column": 0
+                    "Column": [
+                      0,
+                      null
+                    ]
                   }
                 ],
                 "initial_closure": null,
@@ -3625,7 +3826,10 @@ GROUP BY a
                     "lookup_relation": 1,
                     "stream_key": [
                       {
-                        "Column": 0
+                        "Column": [
+                          0,
+                          null
+                        ]
                       }
                     ],
                     "stream_thinning": [
@@ -3633,7 +3837,10 @@ GROUP BY a
                     ],
                     "lookup_key": [
                       {
-                        "Column": 0
+                        "Column": [
+                          0,
+                          null
+                        ]
                       }
                     ],
                     "closure": {
@@ -3697,7 +3904,10 @@ FROM t
                       [
                         [
                           {
-                            "Column": 0
+                            "Column": [
+                              0,
+                              "a"
+                            ]
                           }
                         ],
                         [
@@ -3724,7 +3934,10 @@ FROM t
                     "Arrangement": [
                       [
                         {
-                          "Column": 0
+                          "Column": [
+                            0,
+                            "a"
+                          ]
                         }
                       ],
                       null,
@@ -3813,7 +4026,10 @@ FROM t
                                                               "CastInt32ToString": null
                                                             },
                                                             "expr": {
-                                                              "Column": 0
+                                                              "Column": [
+                                                                0,
+                                                                "b"
+                                                              ]
                                                             }
                                                           }
                                                         },
@@ -3908,7 +4124,10 @@ FROM t
                                                               "CastInt32ToString": null
                                                             },
                                                             "expr": {
-                                                              "Column": 0
+                                                              "Column": [
+                                                                0,
+                                                                "b"
+                                                              ]
                                                             }
                                                           }
                                                         },
@@ -4034,7 +4253,10 @@ FROM t
                                                               "CastInt32ToString": null
                                                             },
                                                             "expr": {
-                                                              "Column": 0
+                                                              "Column": [
+                                                                0,
+                                                                "b"
+                                                              ]
                                                             }
                                                           }
                                                         },
@@ -4129,7 +4351,10 @@ FROM t
                                                               "CastInt32ToString": null
                                                             },
                                                             "expr": {
-                                                              "Column": 0
+                                                              "Column": [
+                                                                0,
+                                                                "b"
+                                                              ]
                                                             }
                                                           }
                                                         },
@@ -4406,7 +4631,10 @@ MATERIALIZED VIEW collated_group_by_mv
                               [
                                 [
                                   {
-                                    "Column": 0
+                                    "Column": [
+                                      0,
+                                      "a"
+                                    ]
                                   }
                                 ],
                                 [
@@ -4481,7 +4709,10 @@ MATERIALIZED VIEW collated_group_by_mv
                     },
                     "input_key": [
                       {
-                        "Column": 0
+                        "Column": [
+                          0,
+                          "a"
+                        ]
                       }
                     ],
                     "mfp_after": {
@@ -4516,7 +4747,10 @@ MATERIALIZED VIEW collated_group_by_mv
                               [
                                 [
                                   {
-                                    "Column": 0
+                                    "Column": [
+                                      0,
+                                      "a"
+                                    ]
                                   }
                                 ],
                                 [
@@ -4572,14 +4806,20 @@ MATERIALIZED VIEW collated_group_by_mv
                           {
                             "func": "Count",
                             "expr": {
-                              "Column": 1
+                              "Column": [
+                                1,
+                                "b"
+                              ]
                             },
                             "distinct": true
                           },
                           {
                             "func": "SumInt32",
                             "expr": {
-                              "Column": 1
+                              "Column": [
+                                1,
+                                "b"
+                              ]
                             },
                             "distinct": false
                           }
@@ -4591,7 +4831,10 @@ MATERIALIZED VIEW collated_group_by_mv
                             {
                               "func": "SumInt32",
                               "expr": {
-                                "Column": 1
+                                "Column": [
+                                  1,
+                                  "b"
+                                ]
                               },
                               "distinct": false
                             }
@@ -4604,7 +4847,10 @@ MATERIALIZED VIEW collated_group_by_mv
                             {
                               "func": "Count",
                               "expr": {
-                                "Column": 1
+                                "Column": [
+                                  1,
+                                  "b"
+                                ]
                               },
                               "distinct": true
                             }
@@ -4614,7 +4860,10 @@ MATERIALIZED VIEW collated_group_by_mv
                     },
                     "input_key": [
                       {
-                        "Column": 0
+                        "Column": [
+                          0,
+                          "a"
+                        ]
                       }
                     ],
                     "mfp_after": {
@@ -4649,7 +4898,10 @@ MATERIALIZED VIEW collated_group_by_mv
                               [
                                 [
                                   {
-                                    "Column": 0
+                                    "Column": [
+                                      0,
+                                      "a"
+                                    ]
                                   }
                                 ],
                                 [
@@ -4720,7 +4972,10 @@ MATERIALIZED VIEW collated_group_by_mv
                                                   "CastInt32ToString": null
                                                 },
                                                 "expr": {
-                                                  "Column": 1
+                                                  "Column": [
+                                                    1,
+                                                    "b"
+                                                  ]
                                                 }
                                               }
                                             },
@@ -4815,7 +5070,10 @@ MATERIALIZED VIEW collated_group_by_mv
                                                   "CastInt32ToString": null
                                                 },
                                                 "expr": {
-                                                  "Column": 1
+                                                  "Column": [
+                                                    1,
+                                                    "b"
+                                                  ]
                                                 }
                                               }
                                             },
@@ -4869,7 +5127,10 @@ MATERIALIZED VIEW collated_group_by_mv
                     },
                     "input_key": [
                       {
-                        "Column": 0
+                        "Column": [
+                          0,
+                          "a"
+                        ]
                       }
                     ],
                     "mfp_after": {
@@ -4903,7 +5164,10 @@ MATERIALIZED VIEW collated_group_by_mv
                               [
                                 [
                                   {
-                                    "Column": 0
+                                    "Column": [
+                                      0,
+                                      "a"
+                                    ]
                                   }
                                 ],
                                 [
@@ -4974,7 +5238,10 @@ MATERIALIZED VIEW collated_group_by_mv
                                                   "CastInt32ToString": null
                                                 },
                                                 "expr": {
-                                                  "Column": 1
+                                                  "Column": [
+                                                    1,
+                                                    "b"
+                                                  ]
                                                 }
                                               }
                                             },
@@ -5069,7 +5336,10 @@ MATERIALIZED VIEW collated_group_by_mv
                                                   "CastInt32ToString": null
                                                 },
                                                 "expr": {
-                                                  "Column": 1
+                                                  "Column": [
+                                                    1,
+                                                    "b"
+                                                  ]
                                                 }
                                               }
                                             },
@@ -5123,7 +5393,10 @@ MATERIALIZED VIEW collated_group_by_mv
                     },
                     "input_key": [
                       {
-                        "Column": 0
+                        "Column": [
+                          0,
+                          "a"
+                        ]
                       }
                     ],
                     "mfp_after": {
@@ -5146,7 +5419,10 @@ MATERIALIZED VIEW collated_group_by_mv
                     "source_relation": 0,
                     "source_key": [
                       {
-                        "Column": 0
+                        "Column": [
+                          0,
+                          null
+                        ]
                       }
                     ],
                     "initial_closure": {
@@ -5169,7 +5445,10 @@ MATERIALIZED VIEW collated_group_by_mv
                         "lookup_relation": 1,
                         "stream_key": [
                           {
-                            "Column": 0
+                            "Column": [
+                              0,
+                              null
+                            ]
                           }
                         ],
                         "stream_thinning": [
@@ -5178,7 +5457,10 @@ MATERIALIZED VIEW collated_group_by_mv
                         ],
                         "lookup_key": [
                           {
-                            "Column": 0
+                            "Column": [
+                              0,
+                              null
+                            ]
                           }
                         ],
                         "closure": {
@@ -5203,7 +5485,10 @@ MATERIALIZED VIEW collated_group_by_mv
                         "lookup_relation": 2,
                         "stream_key": [
                           {
-                            "Column": 0
+                            "Column": [
+                              0,
+                              null
+                            ]
                           }
                         ],
                         "stream_thinning": [
@@ -5214,7 +5499,10 @@ MATERIALIZED VIEW collated_group_by_mv
                         ],
                         "lookup_key": [
                           {
-                            "Column": 0
+                            "Column": [
+                              0,
+                              null
+                            ]
                           }
                         ],
                         "closure": {
@@ -5240,7 +5528,10 @@ MATERIALIZED VIEW collated_group_by_mv
                         "lookup_relation": 3,
                         "stream_key": [
                           {
-                            "Column": 0
+                            "Column": [
+                              0,
+                              null
+                            ]
                           }
                         ],
                         "stream_thinning": [
@@ -5252,7 +5543,10 @@ MATERIALIZED VIEW collated_group_by_mv
                         ],
                         "lookup_key": [
                           {
-                            "Column": 0
+                            "Column": [
+                              0,
+                              null
+                            ]
                           }
                         ],
                         "closure": {
@@ -5282,7 +5576,10 @@ MATERIALIZED VIEW collated_group_by_mv
                     "source_relation": 1,
                     "source_key": [
                       {
-                        "Column": 0
+                        "Column": [
+                          0,
+                          null
+                        ]
                       }
                     ],
                     "initial_closure": {
@@ -5305,7 +5602,10 @@ MATERIALIZED VIEW collated_group_by_mv
                         "lookup_relation": 0,
                         "stream_key": [
                           {
-                            "Column": 0
+                            "Column": [
+                              0,
+                              null
+                            ]
                           }
                         ],
                         "stream_thinning": [
@@ -5314,7 +5614,10 @@ MATERIALIZED VIEW collated_group_by_mv
                         ],
                         "lookup_key": [
                           {
-                            "Column": 0
+                            "Column": [
+                              0,
+                              null
+                            ]
                           }
                         ],
                         "closure": {
@@ -5340,7 +5643,10 @@ MATERIALIZED VIEW collated_group_by_mv
                         "lookup_relation": 2,
                         "stream_key": [
                           {
-                            "Column": 3
+                            "Column": [
+                              3,
+                              null
+                            ]
                           }
                         ],
                         "stream_thinning": [
@@ -5352,7 +5658,10 @@ MATERIALIZED VIEW collated_group_by_mv
                         ],
                         "lookup_key": [
                           {
-                            "Column": 0
+                            "Column": [
+                              0,
+                              null
+                            ]
                           }
                         ],
                         "closure": {
@@ -5379,7 +5688,10 @@ MATERIALIZED VIEW collated_group_by_mv
                         "lookup_relation": 3,
                         "stream_key": [
                           {
-                            "Column": 3
+                            "Column": [
+                              3,
+                              null
+                            ]
                           }
                         ],
                         "stream_thinning": [
@@ -5392,7 +5704,10 @@ MATERIALIZED VIEW collated_group_by_mv
                         ],
                         "lookup_key": [
                           {
-                            "Column": 0
+                            "Column": [
+                              0,
+                              null
+                            ]
                           }
                         ],
                         "closure": {
@@ -5422,7 +5737,10 @@ MATERIALIZED VIEW collated_group_by_mv
                     "source_relation": 2,
                     "source_key": [
                       {
-                        "Column": 0
+                        "Column": [
+                          0,
+                          null
+                        ]
                       }
                     ],
                     "initial_closure": {
@@ -5444,7 +5762,10 @@ MATERIALIZED VIEW collated_group_by_mv
                         "lookup_relation": 0,
                         "stream_key": [
                           {
-                            "Column": 0
+                            "Column": [
+                              0,
+                              null
+                            ]
                           }
                         ],
                         "stream_thinning": [
@@ -5452,7 +5773,10 @@ MATERIALIZED VIEW collated_group_by_mv
                         ],
                         "lookup_key": [
                           {
-                            "Column": 0
+                            "Column": [
+                              0,
+                              null
+                            ]
                           }
                         ],
                         "closure": {
@@ -5477,7 +5801,10 @@ MATERIALIZED VIEW collated_group_by_mv
                         "lookup_relation": 1,
                         "stream_key": [
                           {
-                            "Column": 3
+                            "Column": [
+                              3,
+                              null
+                            ]
                           }
                         ],
                         "stream_thinning": [
@@ -5488,7 +5815,10 @@ MATERIALIZED VIEW collated_group_by_mv
                         ],
                         "lookup_key": [
                           {
-                            "Column": 0
+                            "Column": [
+                              0,
+                              null
+                            ]
                           }
                         ],
                         "closure": {
@@ -5515,7 +5845,10 @@ MATERIALIZED VIEW collated_group_by_mv
                         "lookup_relation": 3,
                         "stream_key": [
                           {
-                            "Column": 5
+                            "Column": [
+                              5,
+                              null
+                            ]
                           }
                         ],
                         "stream_thinning": [
@@ -5528,7 +5861,10 @@ MATERIALIZED VIEW collated_group_by_mv
                         ],
                         "lookup_key": [
                           {
-                            "Column": 0
+                            "Column": [
+                              0,
+                              null
+                            ]
                           }
                         ],
                         "closure": {
@@ -5558,7 +5894,10 @@ MATERIALIZED VIEW collated_group_by_mv
                     "source_relation": 3,
                     "source_key": [
                       {
-                        "Column": 0
+                        "Column": [
+                          0,
+                          null
+                        ]
                       }
                     ],
                     "initial_closure": {
@@ -5580,7 +5919,10 @@ MATERIALIZED VIEW collated_group_by_mv
                         "lookup_relation": 0,
                         "stream_key": [
                           {
-                            "Column": 0
+                            "Column": [
+                              0,
+                              null
+                            ]
                           }
                         ],
                         "stream_thinning": [
@@ -5588,7 +5930,10 @@ MATERIALIZED VIEW collated_group_by_mv
                         ],
                         "lookup_key": [
                           {
-                            "Column": 0
+                            "Column": [
+                              0,
+                              null
+                            ]
                           }
                         ],
                         "closure": {
@@ -5613,7 +5958,10 @@ MATERIALIZED VIEW collated_group_by_mv
                         "lookup_relation": 1,
                         "stream_key": [
                           {
-                            "Column": 3
+                            "Column": [
+                              3,
+                              null
+                            ]
                           }
                         ],
                         "stream_thinning": [
@@ -5624,7 +5972,10 @@ MATERIALIZED VIEW collated_group_by_mv
                         ],
                         "lookup_key": [
                           {
-                            "Column": 0
+                            "Column": [
+                              0,
+                              null
+                            ]
                           }
                         ],
                         "closure": {
@@ -5651,7 +6002,10 @@ MATERIALIZED VIEW collated_group_by_mv
                         "lookup_relation": 2,
                         "stream_key": [
                           {
-                            "Column": 5
+                            "Column": [
+                              5,
+                              null
+                            ]
                           }
                         ],
                         "stream_thinning": [
@@ -5664,7 +6018,10 @@ MATERIALIZED VIEW collated_group_by_mv
                         ],
                         "lookup_key": [
                           {
-                            "Column": 0
+                            "Column": [
+                              0,
+                              null
+                            ]
                           }
                         ],
                         "closure": {
@@ -5735,7 +6092,10 @@ SELECT * FROM collated_group_by
                               [
                                 [
                                   {
-                                    "Column": 0
+                                    "Column": [
+                                      0,
+                                      "a"
+                                    ]
                                   }
                                 ],
                                 [
@@ -5802,7 +6162,10 @@ SELECT * FROM collated_group_by
                     },
                     "input_key": [
                       {
-                        "Column": 0
+                        "Column": [
+                          0,
+                          "a"
+                        ]
                       }
                     ],
                     "mfp_after": {
@@ -5837,7 +6200,10 @@ SELECT * FROM collated_group_by
                               [
                                 [
                                   {
-                                    "Column": 0
+                                    "Column": [
+                                      0,
+                                      "a"
+                                    ]
                                   }
                                 ],
                                 [
@@ -5893,14 +6259,20 @@ SELECT * FROM collated_group_by
                           {
                             "func": "Count",
                             "expr": {
-                              "Column": 1
+                              "Column": [
+                                1,
+                                "b"
+                              ]
                             },
                             "distinct": true
                           },
                           {
                             "func": "SumInt32",
                             "expr": {
-                              "Column": 1
+                              "Column": [
+                                1,
+                                "b"
+                              ]
                             },
                             "distinct": false
                           }
@@ -5912,7 +6284,10 @@ SELECT * FROM collated_group_by
                             {
                               "func": "SumInt32",
                               "expr": {
-                                "Column": 1
+                                "Column": [
+                                  1,
+                                  "b"
+                                ]
                               },
                               "distinct": false
                             }
@@ -5925,7 +6300,10 @@ SELECT * FROM collated_group_by
                             {
                               "func": "Count",
                               "expr": {
-                                "Column": 1
+                                "Column": [
+                                  1,
+                                  "b"
+                                ]
                               },
                               "distinct": true
                             }
@@ -5935,7 +6313,10 @@ SELECT * FROM collated_group_by
                     },
                     "input_key": [
                       {
-                        "Column": 0
+                        "Column": [
+                          0,
+                          "a"
+                        ]
                       }
                     ],
                     "mfp_after": {
@@ -5970,7 +6351,10 @@ SELECT * FROM collated_group_by
                               [
                                 [
                                   {
-                                    "Column": 0
+                                    "Column": [
+                                      0,
+                                      "a"
+                                    ]
                                   }
                                 ],
                                 [
@@ -6041,7 +6425,10 @@ SELECT * FROM collated_group_by
                                                   "CastInt32ToString": null
                                                 },
                                                 "expr": {
-                                                  "Column": 1
+                                                  "Column": [
+                                                    1,
+                                                    "b"
+                                                  ]
                                                 }
                                               }
                                             },
@@ -6136,7 +6523,10 @@ SELECT * FROM collated_group_by
                                                   "CastInt32ToString": null
                                                 },
                                                 "expr": {
-                                                  "Column": 1
+                                                  "Column": [
+                                                    1,
+                                                    "b"
+                                                  ]
                                                 }
                                               }
                                             },
@@ -6190,7 +6580,10 @@ SELECT * FROM collated_group_by
                     },
                     "input_key": [
                       {
-                        "Column": 0
+                        "Column": [
+                          0,
+                          "a"
+                        ]
                       }
                     ],
                     "mfp_after": {
@@ -6224,7 +6617,10 @@ SELECT * FROM collated_group_by
                               [
                                 [
                                   {
-                                    "Column": 0
+                                    "Column": [
+                                      0,
+                                      "a"
+                                    ]
                                   }
                                 ],
                                 [
@@ -6295,7 +6691,10 @@ SELECT * FROM collated_group_by
                                                   "CastInt32ToString": null
                                                 },
                                                 "expr": {
-                                                  "Column": 1
+                                                  "Column": [
+                                                    1,
+                                                    "b"
+                                                  ]
                                                 }
                                               }
                                             },
@@ -6390,7 +6789,10 @@ SELECT * FROM collated_group_by
                                                   "CastInt32ToString": null
                                                 },
                                                 "expr": {
-                                                  "Column": 1
+                                                  "Column": [
+                                                    1,
+                                                    "b"
+                                                  ]
                                                 }
                                               }
                                             },
@@ -6444,7 +6846,10 @@ SELECT * FROM collated_group_by
                     },
                     "input_key": [
                       {
-                        "Column": 0
+                        "Column": [
+                          0,
+                          "a"
+                        ]
                       }
                     ],
                     "mfp_after": {
@@ -6467,7 +6872,10 @@ SELECT * FROM collated_group_by
                     "source_relation": 0,
                     "source_key": [
                       {
-                        "Column": 0
+                        "Column": [
+                          0,
+                          null
+                        ]
                       }
                     ],
                     "initial_closure": {
@@ -6490,7 +6898,10 @@ SELECT * FROM collated_group_by
                         "lookup_relation": 1,
                         "stream_key": [
                           {
-                            "Column": 0
+                            "Column": [
+                              0,
+                              null
+                            ]
                           }
                         ],
                         "stream_thinning": [
@@ -6499,7 +6910,10 @@ SELECT * FROM collated_group_by
                         ],
                         "lookup_key": [
                           {
-                            "Column": 0
+                            "Column": [
+                              0,
+                              null
+                            ]
                           }
                         ],
                         "closure": {
@@ -6524,7 +6938,10 @@ SELECT * FROM collated_group_by
                         "lookup_relation": 2,
                         "stream_key": [
                           {
-                            "Column": 0
+                            "Column": [
+                              0,
+                              null
+                            ]
                           }
                         ],
                         "stream_thinning": [
@@ -6535,7 +6952,10 @@ SELECT * FROM collated_group_by
                         ],
                         "lookup_key": [
                           {
-                            "Column": 0
+                            "Column": [
+                              0,
+                              null
+                            ]
                           }
                         ],
                         "closure": {
@@ -6561,7 +6981,10 @@ SELECT * FROM collated_group_by
                         "lookup_relation": 3,
                         "stream_key": [
                           {
-                            "Column": 0
+                            "Column": [
+                              0,
+                              null
+                            ]
                           }
                         ],
                         "stream_thinning": [
@@ -6573,7 +6996,10 @@ SELECT * FROM collated_group_by
                         ],
                         "lookup_key": [
                           {
-                            "Column": 0
+                            "Column": [
+                              0,
+                              null
+                            ]
                           }
                         ],
                         "closure": {
@@ -6603,7 +7029,10 @@ SELECT * FROM collated_group_by
                     "source_relation": 1,
                     "source_key": [
                       {
-                        "Column": 0
+                        "Column": [
+                          0,
+                          null
+                        ]
                       }
                     ],
                     "initial_closure": {
@@ -6626,7 +7055,10 @@ SELECT * FROM collated_group_by
                         "lookup_relation": 0,
                         "stream_key": [
                           {
-                            "Column": 0
+                            "Column": [
+                              0,
+                              null
+                            ]
                           }
                         ],
                         "stream_thinning": [
@@ -6635,7 +7067,10 @@ SELECT * FROM collated_group_by
                         ],
                         "lookup_key": [
                           {
-                            "Column": 0
+                            "Column": [
+                              0,
+                              null
+                            ]
                           }
                         ],
                         "closure": {
@@ -6661,7 +7096,10 @@ SELECT * FROM collated_group_by
                         "lookup_relation": 2,
                         "stream_key": [
                           {
-                            "Column": 3
+                            "Column": [
+                              3,
+                              null
+                            ]
                           }
                         ],
                         "stream_thinning": [
@@ -6673,7 +7111,10 @@ SELECT * FROM collated_group_by
                         ],
                         "lookup_key": [
                           {
-                            "Column": 0
+                            "Column": [
+                              0,
+                              null
+                            ]
                           }
                         ],
                         "closure": {
@@ -6700,7 +7141,10 @@ SELECT * FROM collated_group_by
                         "lookup_relation": 3,
                         "stream_key": [
                           {
-                            "Column": 3
+                            "Column": [
+                              3,
+                              null
+                            ]
                           }
                         ],
                         "stream_thinning": [
@@ -6713,7 +7157,10 @@ SELECT * FROM collated_group_by
                         ],
                         "lookup_key": [
                           {
-                            "Column": 0
+                            "Column": [
+                              0,
+                              null
+                            ]
                           }
                         ],
                         "closure": {
@@ -6743,7 +7190,10 @@ SELECT * FROM collated_group_by
                     "source_relation": 2,
                     "source_key": [
                       {
-                        "Column": 0
+                        "Column": [
+                          0,
+                          null
+                        ]
                       }
                     ],
                     "initial_closure": {
@@ -6765,7 +7215,10 @@ SELECT * FROM collated_group_by
                         "lookup_relation": 0,
                         "stream_key": [
                           {
-                            "Column": 0
+                            "Column": [
+                              0,
+                              null
+                            ]
                           }
                         ],
                         "stream_thinning": [
@@ -6773,7 +7226,10 @@ SELECT * FROM collated_group_by
                         ],
                         "lookup_key": [
                           {
-                            "Column": 0
+                            "Column": [
+                              0,
+                              null
+                            ]
                           }
                         ],
                         "closure": {
@@ -6798,7 +7254,10 @@ SELECT * FROM collated_group_by
                         "lookup_relation": 1,
                         "stream_key": [
                           {
-                            "Column": 3
+                            "Column": [
+                              3,
+                              null
+                            ]
                           }
                         ],
                         "stream_thinning": [
@@ -6809,7 +7268,10 @@ SELECT * FROM collated_group_by
                         ],
                         "lookup_key": [
                           {
-                            "Column": 0
+                            "Column": [
+                              0,
+                              null
+                            ]
                           }
                         ],
                         "closure": {
@@ -6836,7 +7298,10 @@ SELECT * FROM collated_group_by
                         "lookup_relation": 3,
                         "stream_key": [
                           {
-                            "Column": 5
+                            "Column": [
+                              5,
+                              null
+                            ]
                           }
                         ],
                         "stream_thinning": [
@@ -6849,7 +7314,10 @@ SELECT * FROM collated_group_by
                         ],
                         "lookup_key": [
                           {
-                            "Column": 0
+                            "Column": [
+                              0,
+                              null
+                            ]
                           }
                         ],
                         "closure": {
@@ -6879,7 +7347,10 @@ SELECT * FROM collated_group_by
                     "source_relation": 3,
                     "source_key": [
                       {
-                        "Column": 0
+                        "Column": [
+                          0,
+                          null
+                        ]
                       }
                     ],
                     "initial_closure": {
@@ -6901,7 +7372,10 @@ SELECT * FROM collated_group_by
                         "lookup_relation": 0,
                         "stream_key": [
                           {
-                            "Column": 0
+                            "Column": [
+                              0,
+                              null
+                            ]
                           }
                         ],
                         "stream_thinning": [
@@ -6909,7 +7383,10 @@ SELECT * FROM collated_group_by
                         ],
                         "lookup_key": [
                           {
-                            "Column": 0
+                            "Column": [
+                              0,
+                              null
+                            ]
                           }
                         ],
                         "closure": {
@@ -6934,7 +7411,10 @@ SELECT * FROM collated_group_by
                         "lookup_relation": 1,
                         "stream_key": [
                           {
-                            "Column": 3
+                            "Column": [
+                              3,
+                              null
+                            ]
                           }
                         ],
                         "stream_thinning": [
@@ -6945,7 +7425,10 @@ SELECT * FROM collated_group_by
                         ],
                         "lookup_key": [
                           {
-                            "Column": 0
+                            "Column": [
+                              0,
+                              null
+                            ]
                           }
                         ],
                         "closure": {
@@ -6972,7 +7455,10 @@ SELECT * FROM collated_group_by
                         "lookup_relation": 2,
                         "stream_key": [
                           {
-                            "Column": 5
+                            "Column": [
+                              5,
+                              null
+                            ]
                           }
                         ],
                         "stream_thinning": [
@@ -6985,7 +7471,10 @@ SELECT * FROM collated_group_by
                         ],
                         "lookup_key": [
                           {
-                            "Column": 0
+                            "Column": [
+                              0,
+                              null
+                            ]
                           }
                         ],
                         "closure": {
@@ -7052,7 +7541,10 @@ MATERIALIZED VIEW collated_global_mv
                       [
                         [
                           {
-                            "Column": 0
+                            "Column": [
+                              0,
+                              "a"
+                            ]
                           }
                         ],
                         [
@@ -7079,7 +7571,10 @@ MATERIALIZED VIEW collated_global_mv
                     "Arrangement": [
                       [
                         {
-                          "Column": 0
+                          "Column": [
+                            0,
+                            "a"
+                          ]
                         }
                       ],
                       null,
@@ -7230,14 +7725,20 @@ MATERIALIZED VIEW collated_global_mv
                                       {
                                         "func": "Count",
                                         "expr": {
-                                          "Column": 0
+                                          "Column": [
+                                            0,
+                                            "b"
+                                          ]
                                         },
                                         "distinct": true
                                       },
                                       {
                                         "func": "SumInt32",
                                         "expr": {
-                                          "Column": 0
+                                          "Column": [
+                                            0,
+                                            "b"
+                                          ]
                                         },
                                         "distinct": false
                                       }
@@ -7249,7 +7750,10 @@ MATERIALIZED VIEW collated_global_mv
                                         {
                                           "func": "SumInt32",
                                           "expr": {
-                                            "Column": 0
+                                            "Column": [
+                                              0,
+                                              "b"
+                                            ]
                                           },
                                           "distinct": false
                                         }
@@ -7262,7 +7766,10 @@ MATERIALIZED VIEW collated_global_mv
                                         {
                                           "func": "Count",
                                           "expr": {
-                                            "Column": 0
+                                            "Column": [
+                                              0,
+                                              "b"
+                                            ]
                                           },
                                           "distinct": true
                                         }
@@ -7345,7 +7852,10 @@ MATERIALIZED VIEW collated_global_mv
                                                               "CastInt32ToString": null
                                                             },
                                                             "expr": {
-                                                              "Column": 0
+                                                              "Column": [
+                                                                0,
+                                                                "b"
+                                                              ]
                                                             }
                                                           }
                                                         },
@@ -7440,7 +7950,10 @@ MATERIALIZED VIEW collated_global_mv
                                                               "CastInt32ToString": null
                                                             },
                                                             "expr": {
-                                                              "Column": 0
+                                                              "Column": [
+                                                                0,
+                                                                "b"
+                                                              ]
                                                             }
                                                           }
                                                         },
@@ -7566,7 +8079,10 @@ MATERIALIZED VIEW collated_global_mv
                                                               "CastInt32ToString": null
                                                             },
                                                             "expr": {
-                                                              "Column": 0
+                                                              "Column": [
+                                                                0,
+                                                                "b"
+                                                              ]
                                                             }
                                                           }
                                                         },
@@ -7661,7 +8177,10 @@ MATERIALIZED VIEW collated_global_mv
                                                               "CastInt32ToString": null
                                                             },
                                                             "expr": {
-                                                              "Column": 0
+                                                              "Column": [
+                                                                0,
+                                                                "b"
+                                                              ]
                                                             }
                                                           }
                                                         },
@@ -8394,7 +8913,10 @@ SELECT * FROM collated_global
                       [
                         [
                           {
-                            "Column": 0
+                            "Column": [
+                              0,
+                              "a"
+                            ]
                           }
                         ],
                         [
@@ -8421,7 +8943,10 @@ SELECT * FROM collated_global
                     "Arrangement": [
                       [
                         {
-                          "Column": 0
+                          "Column": [
+                            0,
+                            "a"
+                          ]
                         }
                       ],
                       null,
@@ -8564,14 +9089,20 @@ SELECT * FROM collated_global
                                       {
                                         "func": "Count",
                                         "expr": {
-                                          "Column": 0
+                                          "Column": [
+                                            0,
+                                            "b"
+                                          ]
                                         },
                                         "distinct": true
                                       },
                                       {
                                         "func": "SumInt32",
                                         "expr": {
-                                          "Column": 0
+                                          "Column": [
+                                            0,
+                                            "b"
+                                          ]
                                         },
                                         "distinct": false
                                       }
@@ -8583,7 +9114,10 @@ SELECT * FROM collated_global
                                         {
                                           "func": "SumInt32",
                                           "expr": {
-                                            "Column": 0
+                                            "Column": [
+                                              0,
+                                              "b"
+                                            ]
                                           },
                                           "distinct": false
                                         }
@@ -8596,7 +9130,10 @@ SELECT * FROM collated_global
                                         {
                                           "func": "Count",
                                           "expr": {
-                                            "Column": 0
+                                            "Column": [
+                                              0,
+                                              "b"
+                                            ]
                                           },
                                           "distinct": true
                                         }
@@ -8679,7 +9216,10 @@ SELECT * FROM collated_global
                                                               "CastInt32ToString": null
                                                             },
                                                             "expr": {
-                                                              "Column": 0
+                                                              "Column": [
+                                                                0,
+                                                                "b"
+                                                              ]
                                                             }
                                                           }
                                                         },
@@ -8774,7 +9314,10 @@ SELECT * FROM collated_global
                                                               "CastInt32ToString": null
                                                             },
                                                             "expr": {
-                                                              "Column": 0
+                                                              "Column": [
+                                                                0,
+                                                                "b"
+                                                              ]
                                                             }
                                                           }
                                                         },
@@ -8900,7 +9443,10 @@ SELECT * FROM collated_global
                                                               "CastInt32ToString": null
                                                             },
                                                             "expr": {
-                                                              "Column": 0
+                                                              "Column": [
+                                                                0,
+                                                                "b"
+                                                              ]
                                                             }
                                                           }
                                                         },
@@ -8995,7 +9541,10 @@ SELECT * FROM collated_global
                                                               "CastInt32ToString": null
                                                             },
                                                             "expr": {
-                                                              "Column": 0
+                                                              "Column": [
+                                                                0,
+                                                                "b"
+                                                              ]
                                                             }
                                                           }
                                                         },
@@ -9730,7 +10279,10 @@ WHERE a = c AND d = e AND b + d > 42
                         [
                           [
                             {
-                              "Column": 0
+                              "Column": [
+                                0,
+                                "a"
+                              ]
                             }
                           ],
                           [
@@ -9795,7 +10347,10 @@ WHERE a = c AND d = e AND b + d > 42
                         [
                           [
                             {
-                              "Column": 0
+                              "Column": [
+                                0,
+                                "c"
+                              ]
                             }
                           ],
                           [
@@ -9809,7 +10364,10 @@ WHERE a = c AND d = e AND b + d > 42
                         [
                           [
                             {
-                              "Column": 1
+                              "Column": [
+                                1,
+                                "d"
+                              ]
                             }
                           ],
                           [
@@ -9882,7 +10440,10 @@ WHERE a = c AND d = e AND b + d > 42
                         [
                           [
                             {
-                              "Column": 0
+                              "Column": [
+                                0,
+                                "e"
+                              ]
                             }
                           ],
                           [
@@ -9918,7 +10479,10 @@ WHERE a = c AND d = e AND b + d > 42
                     "source_relation": 0,
                     "source_key": [
                       {
-                        "Column": 0
+                        "Column": [
+                          0,
+                          "a"
+                        ]
                       }
                     ],
                     "initial_closure": {
@@ -9940,7 +10504,10 @@ WHERE a = c AND d = e AND b + d > 42
                         "lookup_relation": 1,
                         "stream_key": [
                           {
-                            "Column": 0
+                            "Column": [
+                              0,
+                              "a"
+                            ]
                           }
                         ],
                         "stream_thinning": [
@@ -9948,7 +10515,10 @@ WHERE a = c AND d = e AND b + d > 42
                         ],
                         "lookup_key": [
                           {
-                            "Column": 0
+                            "Column": [
+                              0,
+                              "c"
+                            ]
                           }
                         ],
                         "closure": {
@@ -9960,10 +10530,16 @@ WHERE a = c AND d = e AND b + d > 42
                                   "CallBinary": {
                                     "func": "AddInt32",
                                     "expr1": {
-                                      "Column": 1
+                                      "Column": [
+                                        1,
+                                        "b"
+                                      ]
                                     },
                                     "expr2": {
-                                      "Column": 2
+                                      "Column": [
+                                        2,
+                                        "d"
+                                      ]
                                     }
                                   }
                                 },
@@ -9971,10 +10547,16 @@ WHERE a = c AND d = e AND b + d > 42
                                   "CallBinary": {
                                     "func": "AddInt32",
                                     "expr1": {
-                                      "Column": 0
+                                      "Column": [
+                                        0,
+                                        "a"
+                                      ]
                                     },
                                     "expr2": {
-                                      "Column": 2
+                                      "Column": [
+                                        2,
+                                        "d"
+                                      ]
                                     }
                                   }
                                 }
@@ -9986,7 +10568,10 @@ WHERE a = c AND d = e AND b + d > 42
                                     "CallBinary": {
                                       "func": "Gt",
                                       "expr1": {
-                                        "Column": 3
+                                        "Column": [
+                                          3,
+                                          null
+                                        ]
                                       },
                                       "expr2": {
                                         "Literal": [
@@ -10022,7 +10607,10 @@ WHERE a = c AND d = e AND b + d > 42
                         "lookup_relation": 2,
                         "stream_key": [
                           {
-                            "Column": 0
+                            "Column": [
+                              0,
+                              "d"
+                            ]
                           }
                         ],
                         "stream_thinning": [
@@ -10031,7 +10619,10 @@ WHERE a = c AND d = e AND b + d > 42
                         ],
                         "lookup_key": [
                           {
-                            "Column": 0
+                            "Column": [
+                              0,
+                              "e"
+                            ]
                           }
                         ],
                         "closure": {
@@ -10070,7 +10661,10 @@ WHERE a = c AND d = e AND b + d > 42
                     "source_relation": 1,
                     "source_key": [
                       {
-                        "Column": 0
+                        "Column": [
+                          0,
+                          "c"
+                        ]
                       }
                     ],
                     "initial_closure": {
@@ -10092,7 +10686,10 @@ WHERE a = c AND d = e AND b + d > 42
                         "lookup_relation": 0,
                         "stream_key": [
                           {
-                            "Column": 0
+                            "Column": [
+                              0,
+                              "c"
+                            ]
                           }
                         ],
                         "stream_thinning": [
@@ -10100,7 +10697,10 @@ WHERE a = c AND d = e AND b + d > 42
                         ],
                         "lookup_key": [
                           {
-                            "Column": 0
+                            "Column": [
+                              0,
+                              "a"
+                            ]
                           }
                         ],
                         "closure": {
@@ -10112,10 +10712,16 @@ WHERE a = c AND d = e AND b + d > 42
                                   "CallBinary": {
                                     "func": "AddInt32",
                                     "expr1": {
-                                      "Column": 2
+                                      "Column": [
+                                        2,
+                                        "b"
+                                      ]
                                     },
                                     "expr2": {
-                                      "Column": 1
+                                      "Column": [
+                                        1,
+                                        "d"
+                                      ]
                                     }
                                   }
                                 },
@@ -10123,10 +10729,16 @@ WHERE a = c AND d = e AND b + d > 42
                                   "CallBinary": {
                                     "func": "AddInt32",
                                     "expr1": {
-                                      "Column": 0
+                                      "Column": [
+                                        0,
+                                        "a"
+                                      ]
                                     },
                                     "expr2": {
-                                      "Column": 1
+                                      "Column": [
+                                        1,
+                                        "d"
+                                      ]
                                     }
                                   }
                                 }
@@ -10138,7 +10750,10 @@ WHERE a = c AND d = e AND b + d > 42
                                     "CallBinary": {
                                       "func": "Gt",
                                       "expr1": {
-                                        "Column": 3
+                                        "Column": [
+                                          3,
+                                          null
+                                        ]
                                       },
                                       "expr2": {
                                         "Literal": [
@@ -10174,7 +10789,10 @@ WHERE a = c AND d = e AND b + d > 42
                         "lookup_relation": 2,
                         "stream_key": [
                           {
-                            "Column": 0
+                            "Column": [
+                              0,
+                              "d"
+                            ]
                           }
                         ],
                         "stream_thinning": [
@@ -10183,7 +10801,10 @@ WHERE a = c AND d = e AND b + d > 42
                         ],
                         "lookup_key": [
                           {
-                            "Column": 0
+                            "Column": [
+                              0,
+                              "e"
+                            ]
                           }
                         ],
                         "closure": {
@@ -10222,7 +10843,10 @@ WHERE a = c AND d = e AND b + d > 42
                     "source_relation": 2,
                     "source_key": [
                       {
-                        "Column": 0
+                        "Column": [
+                          0,
+                          "e"
+                        ]
                       }
                     ],
                     "initial_closure": {
@@ -10243,13 +10867,19 @@ WHERE a = c AND d = e AND b + d > 42
                         "lookup_relation": 1,
                         "stream_key": [
                           {
-                            "Column": 0
+                            "Column": [
+                              0,
+                              "e"
+                            ]
                           }
                         ],
                         "stream_thinning": [],
                         "lookup_key": [
                           {
-                            "Column": 1
+                            "Column": [
+                              1,
+                              "d"
+                            ]
                           }
                         ],
                         "closure": {
@@ -10271,7 +10901,10 @@ WHERE a = c AND d = e AND b + d > 42
                         "lookup_relation": 0,
                         "stream_key": [
                           {
-                            "Column": 0
+                            "Column": [
+                              0,
+                              "c"
+                            ]
                           }
                         ],
                         "stream_thinning": [
@@ -10279,7 +10912,10 @@ WHERE a = c AND d = e AND b + d > 42
                         ],
                         "lookup_key": [
                           {
-                            "Column": 0
+                            "Column": [
+                              0,
+                              "a"
+                            ]
                           }
                         ],
                         "closure": {
@@ -10291,10 +10927,16 @@ WHERE a = c AND d = e AND b + d > 42
                                   "CallBinary": {
                                     "func": "AddInt32",
                                     "expr1": {
-                                      "Column": 2
+                                      "Column": [
+                                        2,
+                                        "b"
+                                      ]
                                     },
                                     "expr2": {
-                                      "Column": 1
+                                      "Column": [
+                                        1,
+                                        "d"
+                                      ]
                                     }
                                   }
                                 },
@@ -10302,10 +10944,16 @@ WHERE a = c AND d = e AND b + d > 42
                                   "CallBinary": {
                                     "func": "AddInt32",
                                     "expr1": {
-                                      "Column": 0
+                                      "Column": [
+                                        0,
+                                        "a"
+                                      ]
                                     },
                                     "expr2": {
-                                      "Column": 1
+                                      "Column": [
+                                        1,
+                                        "d"
+                                      ]
                                     }
                                   }
                                 }
@@ -10317,7 +10965,10 @@ WHERE a = c AND d = e AND b + d > 42
                                     "CallBinary": {
                                       "func": "Gt",
                                       "expr1": {
-                                        "Column": 3
+                                        "Column": [
+                                          3,
+                                          null
+                                        ]
                                       },
                                       "expr2": {
                                         "Literal": [
@@ -10394,7 +11045,10 @@ WHERE a = c AND d = e AND b + d > 42
                       "IsNull": null
                     },
                     "expr": {
-                      "Column": 0
+                      "Column": [
+                        0,
+                        "c"
+                      ]
                     }
                   }
                 }
@@ -10414,7 +11068,10 @@ WHERE a = c AND d = e AND b + d > 42
                       "IsNull": null
                     },
                     "expr": {
-                      "Column": 1
+                      "Column": [
+                        1,
+                        "d"
+                      ]
                     }
                   }
                 }
@@ -10449,7 +11106,10 @@ WHERE a = c AND d = e AND b + d > 42
                       "IsNull": null
                     },
                     "expr": {
-                      "Column": 0
+                      "Column": [
+                        0,
+                        "e"
+                      ]
                     }
                   }
                 }
@@ -10490,7 +11150,7 @@ WHERE a = c AND d = e AND f = a
     {
       "id": "Explained Query",
       "plan": {
-        "lir_id": 6,
+        "lir_id": 4,
         "node": {
           "Join": {
             "inputs": [
@@ -10509,7 +11169,10 @@ WHERE a = c AND d = e AND f = a
                         [
                           [
                             {
-                              "Column": 0
+                              "Column": [
+                                0,
+                                "a"
+                              ]
                             }
                           ],
                           [
@@ -10537,117 +11200,24 @@ WHERE a = c AND d = e AND f = a
                 }
               },
               {
-                "lir_id": 3,
+                "lir_id": 2,
                 "node": {
-                  "ArrangeBy": {
-                    "input": {
-                      "lir_id": 2,
-                      "node": {
-                        "Get": {
-                          "id": {
-                            "Global": {
-                              "User": 2
-                            }
-                          },
-                          "keys": {
-                            "raw": false,
-                            "arranged": [
-                              [
-                                [
-                                  {
-                                    "Column": 0
-                                  }
-                                ],
-                                [
-                                  0,
-                                  1
-                                ],
-                                [
-                                  1
-                                ]
-                              ]
-                            ],
-                            "types": [
-                              {
-                                "scalar_type": "Int32",
-                                "nullable": true
-                              },
-                              {
-                                "scalar_type": "Int32",
-                                "nullable": true
-                              }
-                            ]
-                          },
-                          "plan": {
-                            "Arrangement": [
-                              [
-                                {
-                                  "Column": 0
-                                }
-                              ],
-                              null,
-                              {
-                                "expressions": [],
-                                "predicates": [
-                                  [
-                                    1,
-                                    {
-                                      "CallUnary": {
-                                        "func": {
-                                          "Not": null
-                                        },
-                                        "expr": {
-                                          "CallUnary": {
-                                            "func": {
-                                              "IsNull": null
-                                            },
-                                            "expr": {
-                                              "Column": 0
-                                            }
-                                          }
-                                        }
-                                      }
-                                    }
-                                  ],
-                                  [
-                                    2,
-                                    {
-                                      "CallUnary": {
-                                        "func": {
-                                          "Not": null
-                                        },
-                                        "expr": {
-                                          "CallUnary": {
-                                            "func": {
-                                              "IsNull": null
-                                            },
-                                            "expr": {
-                                              "Column": 1
-                                            }
-                                          }
-                                        }
-                                      }
-                                    }
-                                  ]
-                                ],
-                                "projection": [
-                                  0,
-                                  1
-                                ],
-                                "input_arity": 2
-                              }
-                            ]
-                          }
-                        }
+                  "Get": {
+                    "id": {
+                      "Global": {
+                        "User": 2
                       }
                     },
-                    "forms": {
-                      "raw": true,
+                    "keys": {
+                      "raw": false,
                       "arranged": [
                         [
                           [
                             {
-                              "Column": 0
+                              "Column": [
+                                0,
+                                "c"
+                              ]
                             }
                           ],
                           [
@@ -10661,188 +11231,78 @@ WHERE a = c AND d = e AND f = a
                         [
                           [
                             {
-                              "Column": 0
-                            },
-                            {
-                              "Column": 1
+                              "Column": [
+                                1,
+                                "d"
+                              ]
                             }
                           ],
                           [
-                            0,
-                            1
+                            1,
+                            0
                           ],
-                          []
+                          [
+                            0
+                          ]
                         ]
                       ],
                       "types": [
                         {
                           "scalar_type": "Int32",
-                          "nullable": false
+                          "nullable": true
                         },
                         {
                           "scalar_type": "Int32",
-                          "nullable": false
+                          "nullable": true
                         }
                       ]
                     },
-                    "input_key": null,
-                    "input_mfp": {
-                      "expressions": [],
-                      "predicates": [],
-                      "projection": [
-                        0,
-                        1
-                      ],
-                      "input_arity": 2
-                    }
+                    "plan": "PassArrangements"
                   }
                 }
               },
               {
-                "lir_id": 5,
+                "lir_id": 3,
                 "node": {
-                  "ArrangeBy": {
-                    "input": {
-                      "lir_id": 4,
-                      "node": {
-                        "Get": {
-                          "id": {
-                            "Global": {
-                              "User": 3
-                            }
-                          },
-                          "keys": {
-                            "raw": false,
-                            "arranged": [
-                              [
-                                [
-                                  {
-                                    "Column": 0
-                                  }
-                                ],
-                                [
-                                  0,
-                                  1
-                                ],
-                                [
-                                  1
-                                ]
-                              ]
-                            ],
-                            "types": [
-                              {
-                                "scalar_type": "Int32",
-                                "nullable": true
-                              },
-                              {
-                                "scalar_type": "Int32",
-                                "nullable": true
-                              }
-                            ]
-                          },
-                          "plan": {
-                            "Arrangement": [
-                              [
-                                {
-                                  "Column": 0
-                                }
-                              ],
-                              null,
-                              {
-                                "expressions": [],
-                                "predicates": [
-                                  [
-                                    1,
-                                    {
-                                      "CallUnary": {
-                                        "func": {
-                                          "Not": null
-                                        },
-                                        "expr": {
-                                          "CallUnary": {
-                                            "func": {
-                                              "IsNull": null
-                                            },
-                                            "expr": {
-                                              "Column": 0
-                                            }
-                                          }
-                                        }
-                                      }
-                                    }
-                                  ],
-                                  [
-                                    2,
-                                    {
-                                      "CallUnary": {
-                                        "func": {
-                                          "Not": null
-                                        },
-                                        "expr": {
-                                          "CallUnary": {
-                                            "func": {
-                                              "IsNull": null
-                                            },
-                                            "expr": {
-                                              "Column": 1
-                                            }
-                                          }
-                                        }
-                                      }
-                                    }
-                                  ]
-                                ],
-                                "projection": [
-                                  0,
-                                  1
-                                ],
-                                "input_arity": 2
-                              }
-                            ]
-                          }
-                        }
+                  "Get": {
+                    "id": {
+                      "Global": {
+                        "User": 3
                       }
                     },
-                    "forms": {
-                      "raw": true,
+                    "keys": {
+                      "raw": false,
                       "arranged": [
                         [
                           [
                             {
-                              "Column": 0
-                            },
-                            {
-                              "Column": 1
+                              "Column": [
+                                0,
+                                "e"
+                              ]
                             }
                           ],
                           [
                             0,
                             1
                           ],
-                          []
+                          [
+                            1
+                          ]
                         ]
                       ],
                       "types": [
                         {
                           "scalar_type": "Int32",
-                          "nullable": false
+                          "nullable": true
                         },
                         {
                           "scalar_type": "Int32",
-                          "nullable": false
+                          "nullable": true
                         }
                       ]
                     },
-                    "input_key": null,
-                    "input_mfp": {
-                      "expressions": [],
-                      "predicates": [],
-                      "projection": [
-                        0,
-                        1
-                      ],
-                      "input_arity": 2
-                    }
+                    "plan": "PassArrangements"
                   }
                 }
               }
@@ -10854,7 +11314,10 @@ WHERE a = c AND d = e AND f = a
                     "source_relation": 0,
                     "source_key": [
                       {
-                        "Column": 0
+                        "Column": [
+                          0,
+                          "a"
+                        ]
                       }
                     ],
                     "initial_closure": {
@@ -10862,7 +11325,31 @@ WHERE a = c AND d = e AND f = a
                       "before": {
                         "mfp": {
                           "expressions": [],
-                          "predicates": [],
+                          "predicates": [
+                            [
+                              1,
+                              {
+                                "CallUnary": {
+                                  "func": {
+                                    "Not": null
+                                  },
+                                  "expr": {
+                                    "CallUnary": {
+                                      "func": {
+                                        "IsNull": null
+                                      },
+                                      "expr": {
+                                        "Column": [
+                                          0,
+                                          "a"
+                                        ]
+                                      }
+                                    }
+                                  }
+                                }
+                              }
+                            ]
+                          ],
                           "projection": [
                             0,
                             1
@@ -10876,7 +11363,10 @@ WHERE a = c AND d = e AND f = a
                         "lookup_relation": 1,
                         "stream_key": [
                           {
-                            "Column": 0
+                            "Column": [
+                              0,
+                              "a"
+                            ]
                           }
                         ],
                         "stream_thinning": [
@@ -10884,7 +11374,10 @@ WHERE a = c AND d = e AND f = a
                         ],
                         "lookup_key": [
                           {
-                            "Column": 0
+                            "Column": [
+                              0,
+                              "c"
+                            ]
                           }
                         ],
                         "closure": {
@@ -10892,7 +11385,31 @@ WHERE a = c AND d = e AND f = a
                           "before": {
                             "mfp": {
                               "expressions": [],
-                              "predicates": [],
+                              "predicates": [
+                                [
+                                  3,
+                                  {
+                                    "CallUnary": {
+                                      "func": {
+                                        "Not": null
+                                      },
+                                      "expr": {
+                                        "CallUnary": {
+                                          "func": {
+                                            "IsNull": null
+                                          },
+                                          "expr": {
+                                            "Column": [
+                                              2,
+                                              "d"
+                                            ]
+                                          }
+                                        }
+                                      }
+                                    }
+                                  }
+                                ]
+                              ],
                               "projection": [
                                 0,
                                 1,
@@ -10907,25 +11424,41 @@ WHERE a = c AND d = e AND f = a
                         "lookup_relation": 2,
                         "stream_key": [
                           {
-                            "Column": 2
-                          },
-                          {
-                            "Column": 0
+                            "Column": [
+                              2,
+                              "d"
+                            ]
                           }
                         ],
                         "stream_thinning": [
+                          0,
                           1
                         ],
                         "lookup_key": [
                           {
-                            "Column": 0
-                          },
-                          {
-                            "Column": 1
+                            "Column": [
+                              0,
+                              "e"
+                            ]
                           }
                         ],
                         "closure": {
-                          "ready_equivalences": [],
+                          "ready_equivalences": [
+                            [
+                              {
+                                "Column": [
+                                  3,
+                                  "f"
+                                ]
+                              },
+                              {
+                                "Column": [
+                                  1,
+                                  "a"
+                                ]
+                              }
+                            ]
+                          ],
                           "before": {
                             "mfp": {
                               "expressions": [],
@@ -10935,7 +11468,7 @@ WHERE a = c AND d = e AND f = a
                                 2,
                                 0
                               ],
-                              "input_arity": 3
+                              "input_arity": 4
                             }
                           }
                         }
@@ -10964,7 +11497,10 @@ WHERE a = c AND d = e AND f = a
                     "source_relation": 1,
                     "source_key": [
                       {
-                        "Column": 0
+                        "Column": [
+                          0,
+                          "c"
+                        ]
                       }
                     ],
                     "initial_closure": {
@@ -10972,7 +11508,31 @@ WHERE a = c AND d = e AND f = a
                       "before": {
                         "mfp": {
                           "expressions": [],
-                          "predicates": [],
+                          "predicates": [
+                            [
+                              2,
+                              {
+                                "CallUnary": {
+                                  "func": {
+                                    "Not": null
+                                  },
+                                  "expr": {
+                                    "CallUnary": {
+                                      "func": {
+                                        "IsNull": null
+                                      },
+                                      "expr": {
+                                        "Column": [
+                                          1,
+                                          "d"
+                                        ]
+                                      }
+                                    }
+                                  }
+                                }
+                              }
+                            ]
+                          ],
                           "projection": [
                             0,
                             1
@@ -10983,44 +11543,13 @@ WHERE a = c AND d = e AND f = a
                     },
                     "stage_plans": [
                       {
-                        "lookup_relation": 2,
-                        "stream_key": [
-                          {
-                            "Column": 1
-                          },
-                          {
-                            "Column": 0
-                          }
-                        ],
-                        "stream_thinning": [],
-                        "lookup_key": [
-                          {
-                            "Column": 0
-                          },
-                          {
-                            "Column": 1
-                          }
-                        ],
-                        "closure": {
-                          "ready_equivalences": [],
-                          "before": {
-                            "mfp": {
-                              "expressions": [],
-                              "predicates": [],
-                              "projection": [
-                                1,
-                                0
-                              ],
-                              "input_arity": 2
-                            }
-                          }
-                        }
-                      },
-                      {
                         "lookup_relation": 0,
                         "stream_key": [
                           {
-                            "Column": 0
+                            "Column": [
+                              0,
+                              "c"
+                            ]
                           }
                         ],
                         "stream_thinning": [
@@ -11028,7 +11557,10 @@ WHERE a = c AND d = e AND f = a
                         ],
                         "lookup_key": [
                           {
-                            "Column": 0
+                            "Column": [
+                              0,
+                              "a"
+                            ]
                           }
                         ],
                         "closure": {
@@ -11036,13 +11568,92 @@ WHERE a = c AND d = e AND f = a
                           "before": {
                             "mfp": {
                               "expressions": [],
-                              "predicates": [],
+                              "predicates": [
+                                [
+                                  1,
+                                  {
+                                    "CallUnary": {
+                                      "func": {
+                                        "Not": null
+                                      },
+                                      "expr": {
+                                        "CallUnary": {
+                                          "func": {
+                                            "IsNull": null
+                                          },
+                                          "expr": {
+                                            "Column": [
+                                              0,
+                                              "a"
+                                            ]
+                                          }
+                                        }
+                                      }
+                                    }
+                                  }
+                                ]
+                              ],
                               "projection": [
                                 0,
                                 2,
+                                0,
                                 1
                               ],
                               "input_arity": 3
+                            }
+                          }
+                        }
+                      },
+                      {
+                        "lookup_relation": 2,
+                        "stream_key": [
+                          {
+                            "Column": [
+                              3,
+                              "d"
+                            ]
+                          }
+                        ],
+                        "stream_thinning": [
+                          0,
+                          1,
+                          2
+                        ],
+                        "lookup_key": [
+                          {
+                            "Column": [
+                              0,
+                              "e"
+                            ]
+                          }
+                        ],
+                        "closure": {
+                          "ready_equivalences": [
+                            [
+                              {
+                                "Column": [
+                                  4,
+                                  "f"
+                                ]
+                              },
+                              {
+                                "Column": [
+                                  3,
+                                  "c"
+                                ]
+                              }
+                            ]
+                          ],
+                          "before": {
+                            "mfp": {
+                              "expressions": [],
+                              "predicates": [],
+                              "projection": [
+                                1,
+                                2,
+                                0
+                              ],
+                              "input_arity": 5
                             }
                           }
                         }
@@ -11071,10 +11682,10 @@ WHERE a = c AND d = e AND f = a
                     "source_relation": 2,
                     "source_key": [
                       {
-                        "Column": 0
-                      },
-                      {
-                        "Column": 1
+                        "Column": [
+                          0,
+                          "e"
+                        ]
                       }
                     ],
                     "initial_closure": {
@@ -11093,44 +11704,13 @@ WHERE a = c AND d = e AND f = a
                     },
                     "stage_plans": [
                       {
-                        "lookup_relation": 1,
-                        "stream_key": [
-                          {
-                            "Column": 1
-                          },
-                          {
-                            "Column": 0
-                          }
-                        ],
-                        "stream_thinning": [],
-                        "lookup_key": [
-                          {
-                            "Column": 0
-                          },
-                          {
-                            "Column": 1
-                          }
-                        ],
-                        "closure": {
-                          "ready_equivalences": [],
-                          "before": {
-                            "mfp": {
-                              "expressions": [],
-                              "predicates": [],
-                              "projection": [
-                                1,
-                                0
-                              ],
-                              "input_arity": 2
-                            }
-                          }
-                        }
-                      },
-                      {
                         "lookup_relation": 0,
                         "stream_key": [
                           {
-                            "Column": 1
+                            "Column": [
+                              1,
+                              "f"
+                            ]
                           }
                         ],
                         "stream_thinning": [
@@ -11138,7 +11718,10 @@ WHERE a = c AND d = e AND f = a
                         ],
                         "lookup_key": [
                           {
-                            "Column": 0
+                            "Column": [
+                              0,
+                              "a"
+                            ]
                           }
                         ],
                         "closure": {
@@ -11146,13 +11729,116 @@ WHERE a = c AND d = e AND f = a
                           "before": {
                             "mfp": {
                               "expressions": [],
-                              "predicates": [],
+                              "predicates": [
+                                [
+                                  1,
+                                  {
+                                    "CallUnary": {
+                                      "func": {
+                                        "Not": null
+                                      },
+                                      "expr": {
+                                        "CallUnary": {
+                                          "func": {
+                                            "IsNull": null
+                                          },
+                                          "expr": {
+                                            "Column": [
+                                              0,
+                                              "a"
+                                            ]
+                                          }
+                                        }
+                                      }
+                                    }
+                                  }
+                                ]
+                              ],
                               "projection": [
                                 0,
                                 2,
-                                1
+                                1,
+                                0
                               ],
                               "input_arity": 3
+                            }
+                          }
+                        }
+                      },
+                      {
+                        "lookup_relation": 1,
+                        "stream_key": [
+                          {
+                            "Column": [
+                              2,
+                              "e"
+                            ]
+                          }
+                        ],
+                        "stream_thinning": [
+                          0,
+                          1,
+                          3
+                        ],
+                        "lookup_key": [
+                          {
+                            "Column": [
+                              1,
+                              "d"
+                            ]
+                          }
+                        ],
+                        "closure": {
+                          "ready_equivalences": [
+                            [
+                              {
+                                "Column": [
+                                  3,
+                                  "f"
+                                ]
+                              },
+                              {
+                                "Column": [
+                                  4,
+                                  "c"
+                                ]
+                              }
+                            ]
+                          ],
+                          "before": {
+                            "mfp": {
+                              "expressions": [],
+                              "predicates": [
+                                [
+                                  1,
+                                  {
+                                    "CallUnary": {
+                                      "func": {
+                                        "Not": null
+                                      },
+                                      "expr": {
+                                        "CallUnary": {
+                                          "func": {
+                                            "IsNull": null
+                                          },
+                                          "expr": {
+                                            "Column": [
+                                              0,
+                                              "d"
+                                            ]
+                                          }
+                                        }
+                                      }
+                                    }
+                                  }
+                                ]
+                              ],
+                              "projection": [
+                                1,
+                                2,
+                                0
+                              ],
+                              "input_arity": 5
                             }
                           }
                         }
@@ -11220,7 +11906,10 @@ WHERE a = c and a = e
                         [
                           [
                             {
-                              "Column": 0
+                              "Column": [
+                                0,
+                                "a"
+                              ]
                             }
                           ],
                           [
@@ -11262,7 +11951,10 @@ WHERE a = c and a = e
                         [
                           [
                             {
-                              "Column": 0
+                              "Column": [
+                                0,
+                                "c"
+                              ]
                             }
                           ],
                           [
@@ -11304,7 +11996,10 @@ WHERE a = c and a = e
                         [
                           [
                             {
-                              "Column": 0
+                              "Column": [
+                                0,
+                                "e"
+                              ]
                             }
                           ],
                           [
@@ -11339,7 +12034,10 @@ WHERE a = c and a = e
                     "source_relation": 0,
                     "source_key": [
                       {
-                        "Column": 0
+                        "Column": [
+                          0,
+                          "a"
+                        ]
                       }
                     ],
                     "initial_closure": {
@@ -11361,7 +12059,10 @@ WHERE a = c and a = e
                                         "IsNull": null
                                       },
                                       "expr": {
-                                        "Column": 0
+                                        "Column": [
+                                          0,
+                                          "a"
+                                        ]
                                       }
                                     }
                                   }
@@ -11382,7 +12083,10 @@ WHERE a = c and a = e
                         "lookup_relation": 1,
                         "stream_key": [
                           {
-                            "Column": 0
+                            "Column": [
+                              0,
+                              "a"
+                            ]
                           }
                         ],
                         "stream_thinning": [
@@ -11390,7 +12094,10 @@ WHERE a = c and a = e
                         ],
                         "lookup_key": [
                           {
-                            "Column": 0
+                            "Column": [
+                              0,
+                              "c"
+                            ]
                           }
                         ],
                         "closure": {
@@ -11413,7 +12120,10 @@ WHERE a = c and a = e
                         "lookup_relation": 2,
                         "stream_key": [
                           {
-                            "Column": 0
+                            "Column": [
+                              0,
+                              "a"
+                            ]
                           }
                         ],
                         "stream_thinning": [
@@ -11422,7 +12132,10 @@ WHERE a = c and a = e
                         ],
                         "lookup_key": [
                           {
-                            "Column": 0
+                            "Column": [
+                              0,
+                              "e"
+                            ]
                           }
                         ],
                         "closure": {
@@ -11466,7 +12179,10 @@ WHERE a = c and a = e
                     "source_relation": 1,
                     "source_key": [
                       {
-                        "Column": 0
+                        "Column": [
+                          0,
+                          "c"
+                        ]
                       }
                     ],
                     "initial_closure": {
@@ -11488,7 +12204,10 @@ WHERE a = c and a = e
                         "lookup_relation": 0,
                         "stream_key": [
                           {
-                            "Column": 0
+                            "Column": [
+                              0,
+                              "c"
+                            ]
                           }
                         ],
                         "stream_thinning": [
@@ -11496,7 +12215,10 @@ WHERE a = c and a = e
                         ],
                         "lookup_key": [
                           {
-                            "Column": 0
+                            "Column": [
+                              0,
+                              "a"
+                            ]
                           }
                         ],
                         "closure": {
@@ -11518,7 +12240,10 @@ WHERE a = c and a = e
                                             "IsNull": null
                                           },
                                           "expr": {
-                                            "Column": 0
+                                            "Column": [
+                                              0,
+                                              "a"
+                                            ]
                                           }
                                         }
                                       }
@@ -11541,7 +12266,10 @@ WHERE a = c and a = e
                         "lookup_relation": 2,
                         "stream_key": [
                           {
-                            "Column": 2
+                            "Column": [
+                              2,
+                              "c"
+                            ]
                           }
                         ],
                         "stream_thinning": [
@@ -11551,7 +12279,10 @@ WHERE a = c and a = e
                         ],
                         "lookup_key": [
                           {
-                            "Column": 0
+                            "Column": [
+                              0,
+                              "e"
+                            ]
                           }
                         ],
                         "closure": {
@@ -11595,7 +12326,10 @@ WHERE a = c and a = e
                     "source_relation": 2,
                     "source_key": [
                       {
-                        "Column": 0
+                        "Column": [
+                          0,
+                          "e"
+                        ]
                       }
                     ],
                     "initial_closure": {
@@ -11617,7 +12351,10 @@ WHERE a = c and a = e
                         "lookup_relation": 0,
                         "stream_key": [
                           {
-                            "Column": 0
+                            "Column": [
+                              0,
+                              "e"
+                            ]
                           }
                         ],
                         "stream_thinning": [
@@ -11625,7 +12362,10 @@ WHERE a = c and a = e
                         ],
                         "lookup_key": [
                           {
-                            "Column": 0
+                            "Column": [
+                              0,
+                              "a"
+                            ]
                           }
                         ],
                         "closure": {
@@ -11647,7 +12387,10 @@ WHERE a = c and a = e
                                             "IsNull": null
                                           },
                                           "expr": {
-                                            "Column": 0
+                                            "Column": [
+                                              0,
+                                              "a"
+                                            ]
                                           }
                                         }
                                       }
@@ -11670,7 +12413,10 @@ WHERE a = c and a = e
                         "lookup_relation": 1,
                         "stream_key": [
                           {
-                            "Column": 2
+                            "Column": [
+                              2,
+                              "e"
+                            ]
                           }
                         ],
                         "stream_thinning": [
@@ -11680,7 +12426,10 @@ WHERE a = c and a = e
                         ],
                         "lookup_key": [
                           {
-                            "Column": 0
+                            "Column": [
+                              0,
+                              "c"
+                            ]
                           }
                         ],
                         "closure": {

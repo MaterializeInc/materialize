@@ -19,12 +19,15 @@
 //!    default, can be turned off with `WITH(raw_syntax)`).
 
 use itertools::Itertools;
+use mz_ore::treat_as_equal::TreatAsEqual;
 use std::fmt;
 
-use mz_expr::explain::{fmt_text_constant_rows, HumanizedExplain, HumanizerMode};
+use mz_expr::explain::{HumanizedExplain, HumanizerMode, fmt_text_constant_rows};
 use mz_expr::virtual_syntax::{AlgExcept, Except};
 use mz_expr::{Id, WindowFrame};
-use mz_ore::str::{separated, IndentLike};
+use mz_ore::error::ErrorExt;
+use mz_ore::str::{IndentLike, separated};
+use mz_repr::Diff;
 use mz_repr::explain::text::DisplayText;
 use mz_repr::explain::{CompactScalarSeq, Indices, PlanRenderingContext};
 
@@ -85,7 +88,7 @@ impl HirRelationExpr {
                     ctx.indented(|ctx| {
                         fmt_text_constant_rows(
                             f,
-                            rows.iter().map(|row| (row, &1)),
+                            rows.iter().map(|row| (row, &Diff::ONE)),
                             &mut ctx.indent,
                             ctx.config.redacted,
                         )
@@ -95,59 +98,59 @@ impl HirRelationExpr {
                 }
             }
             Let {
-                name: _,
+                name,
                 id,
                 value,
                 body,
             } => {
-                let mut bindings = vec![(id, value.as_ref())];
+                let mut bindings = vec![(id, name, value.as_ref())];
                 let mut head = body.as_ref();
 
                 // Render Let-blocks nested in the body an outer Let-block in one step
                 // with a flattened list of bindings
                 while let Let {
-                    name: _,
+                    name,
                     id,
                     value,
                     body,
                 } = head
                 {
-                    bindings.push((id, value.as_ref()));
+                    bindings.push((id, name, value.as_ref()));
                     head = body.as_ref();
                 }
 
-                writeln!(f, "{}Return", ctx.indent)?;
-                ctx.indented(|ctx| head.fmt_text(f, ctx))?;
                 writeln!(f, "{}With", ctx.indent)?;
                 ctx.indented(|ctx| {
-                    for (id, value) in bindings.iter().rev() {
+                    for (id, name, value) in bindings.iter() {
                         // TODO: print the name and not the id
-                        writeln!(f, "{}cte {} =", ctx.indent, *id)?;
+                        writeln!(f, "{}cte [{} as {}] =", ctx.indent, *id, *name)?;
                         ctx.indented(|ctx| value.fmt_text(f, ctx))?;
                     }
                     Ok(())
                 })?;
+                writeln!(f, "{}Return", ctx.indent)?;
+                ctx.indented(|ctx| head.fmt_text(f, ctx))?;
             }
             LetRec {
                 limit,
                 bindings,
                 body,
             } => {
-                writeln!(f, "{}Return", ctx.indent)?;
-                ctx.indented(|ctx| body.fmt_text(f, ctx))?;
                 write!(f, "{}With Mutually Recursive", ctx.indent)?;
                 if let Some(limit) = limit {
                     write!(f, " {}", limit)?;
                 }
                 writeln!(f)?;
                 ctx.indented(|ctx| {
-                    for (_name, id, value, _type) in bindings.iter().rev() {
+                    for (name, id, value, _type) in bindings.iter() {
                         // TODO: print the name and not the id
-                        writeln!(f, "{}cte {} =", ctx.indent, *id)?;
+                        writeln!(f, "{}cte [{} as {}] =", ctx.indent, *id, *name)?;
                         ctx.indented(|ctx| value.fmt_text(f, ctx))?;
                     }
                     Ok(())
                 })?;
+                writeln!(f, "{}Return", ctx.indent)?;
+                ctx.indented(|ctx| body.fmt_text(f, ctx))?;
             }
             Get { id, .. } => match id {
                 Id::Local(id) => {
@@ -245,9 +248,25 @@ impl HirRelationExpr {
                 if let Some(limit) = limit {
                     write!(f, " limit={}", limit)?;
                 }
-                if offset > &0 {
-                    write!(f, " offset={}", offset)?
-                }
+                // We only print the offset if it is not trivial, i.e., not 0.
+                let offset_literal = offset.clone().try_into_literal_int64();
+                if !offset_literal.clone().is_ok_and(|offset| offset == 0) {
+                    let offset = if offset.contains_parameters() {
+                        // If we are still before parameter binding, then we can't reduce it to a
+                        // literal, so just print the expression.
+                        // (Untested as of writing this, because we don't have an EXPLAIN that would
+                        // show the plan before parameter binding.)
+                        offset.to_string()
+                    } else {
+                        match offset_literal {
+                            Ok(offset) => offset.to_string(),
+                            // The following is also untested, because we error out in planning
+                            // if reducing the OFFSET results in an error.
+                            Err(err) => err.to_string_with_causes(),
+                        }
+                    };
+                    write!(f, " offset={}", offset)?;
+                };
                 if let Some(expected_group_size) = expected_group_size {
                     write!(f, " exp_group_size={}", expected_group_size)?;
                 }
@@ -283,18 +302,24 @@ impl fmt::Display for HirScalarExpr {
         use HirRelationExpr::Get;
         use HirScalarExpr::*;
         match self {
-            Column(i) => write!(
+            Column(i, TreatAsEqual(None)) => write!(
                 f,
                 "#{}{}",
                 (0..i.level).map(|_| '^').collect::<String>(),
                 i.column
             ),
-            Parameter(i) => write!(f, "${}", i),
-            Literal(row, _) => write!(f, "{}", row.unpack_first()),
-            CallUnmaterializable(func) => write!(f, "{}()", func),
-            CallUnary { func, expr } => {
+            Column(i, TreatAsEqual(Some(name))) => write!(
+                f,
+                "#{}{}{{{name}}}",
+                (0..i.level).map(|_| '^').collect::<String>(),
+                i.column,
+            ),
+            Parameter(i, _name) => write!(f, "${}", i),
+            Literal(row, _, _name) => write!(f, "{}", row.unpack_first()),
+            CallUnmaterializable(func, _name) => write!(f, "{}()", func),
+            CallUnary { func, expr, .. } => {
                 if let mz_expr::UnaryFunc::Not(_) = *func {
-                    if let CallUnary { func, expr } = expr.as_ref() {
+                    if let CallUnary { func, expr, .. } = expr.as_ref() {
                         if let Some(is) = func.is() {
                             return write!(f, "({}) IS NOT {}", expr, is);
                         }
@@ -306,14 +331,16 @@ impl fmt::Display for HirScalarExpr {
                     write!(f, "{}({})", func, expr)
                 }
             }
-            CallBinary { func, expr1, expr2 } => {
+            CallBinary {
+                func, expr1, expr2, ..
+            } => {
                 if func.is_infix_op() {
                     write!(f, "({} {} {})", expr1, func, expr2)
                 } else {
                     write!(f, "{}({}, {})", func, expr1, expr2)
                 }
             }
-            CallVariadic { func, exprs } => {
+            CallVariadic { func, exprs, .. } => {
                 use mz_expr::VariadicFunc::*;
                 match func {
                     ArrayCreate { .. } => {
@@ -339,10 +366,12 @@ impl fmt::Display for HirScalarExpr {
                     }
                 }
             }
-            If { cond, then, els } => {
+            If {
+                cond, then, els, ..
+            } => {
                 write!(f, "case when {} then {} else {} end", cond, then, els)
             }
-            Windowing(expr) => {
+            Windowing(expr, _name) => {
                 // First, print
                 // - the window function name
                 // - the arguments.
@@ -374,10 +403,12 @@ impl fmt::Display for HirScalarExpr {
                 // We assume that the `column_order.column`s refer to each of the expressions in
                 // `expr.order_by` in order. This is a consequence of how `plan_function_order_by`
                 // works.
-                assert!(column_orders
-                    .iter()
-                    .enumerate()
-                    .all(|(i, column_order)| i == column_order.column));
+                assert!(
+                    column_orders
+                        .iter()
+                        .enumerate()
+                        .all(|(i, column_order)| i == column_order.column)
+                );
                 let order_by = column_orders
                     .iter()
                     .zip_eq(expr.order_by.iter())
@@ -417,11 +448,11 @@ impl fmt::Display for HirScalarExpr {
 
                 Ok(())
             }
-            Exists(expr) => match expr.as_ref() {
+            Exists(expr, _name) => match expr.as_ref() {
                 Get { id, .. } => write!(f, "exists(Get {})", id), // TODO: optional humanizer
                 _ => write!(f, "exists(???)"),
             },
-            Select(expr) => match expr.as_ref() {
+            Select(expr, _name) => match expr.as_ref() {
                 Get { id, .. } => write!(f, "select(Get {})", id), // TODO: optional humanizer
                 _ => write!(f, "select(???)"),
             },

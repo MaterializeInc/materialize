@@ -22,7 +22,7 @@ class FivetranDestinationTester(Service):
             f"GRPC_HOSTNAME={destination_host}",
             *environment_extra,
         ]
-        command = [f"--port={destination_port}"]
+        command = [f"--port={destination_port}", "--tester-type=destination"]
         super().__init__(
             name="fivetran-destination-tester",
             config={

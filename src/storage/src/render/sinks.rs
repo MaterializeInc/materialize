@@ -9,7 +9,6 @@
 
 //! Logic related to the creation of dataflow sinks.
 
-use std::rc::Rc;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -23,8 +22,9 @@ use mz_interchange::envelopes::combine_at_timestamp;
 use mz_persist_client::operators::shard_source::SnapshotMode;
 use mz_repr::{Datum, Diff, GlobalId, Row, Timestamp};
 use mz_storage_operators::persist_source;
+use mz_storage_types::controller::CollectionMetadata;
 use mz_storage_types::errors::DataflowError;
-use mz_storage_types::sinks::{MetadataFilled, StorageSinkConnection, StorageSinkDesc};
+use mz_storage_types::sinks::{StorageSinkConnection, StorageSinkDesc};
 use mz_timely_util::builder_async::PressOnDropButton;
 use timely::dataflow::operators::Leave;
 use timely::dataflow::scopes::Child;
@@ -32,7 +32,6 @@ use timely::dataflow::{Scope, Stream};
 use tracing::warn;
 
 use crate::healthcheck::HealthStatusMessage;
-use crate::internal_control::InternalStorageCommand;
 use crate::storage_state::StorageState;
 
 /// _Renders_ complete _differential_ [`Collection`]s
@@ -42,7 +41,7 @@ pub(crate) fn render_sink<'g, G: Scope<Timestamp = ()>>(
     scope: &mut Child<'g, G, mz_repr::Timestamp>,
     storage_state: &mut StorageState,
     sink_id: GlobalId,
-    sink: &StorageSinkDesc<MetadataFilled, mz_repr::Timestamp>,
+    sink: &StorageSinkDesc<CollectionMetadata, mz_repr::Timestamp>,
 ) -> (Stream<G, HealthStatusMessage>, Vec<PressOnDropButton>) {
     let sink_render = get_sink_render_for(&sink.connection);
 
@@ -54,7 +53,7 @@ pub(crate) fn render_sink<'g, G: Scope<Timestamp = ()>>(
         SnapshotMode::Exclude
     };
 
-    let command_tx = Rc::clone(&storage_state.internal_cmd_tx);
+    let error_handler = storage_state.error_handler("storage_sink", sink_id);
 
     let (ok_collection, err_collection, persist_tokens) = persist_source::persist_source(
         scope,
@@ -70,17 +69,7 @@ pub(crate) fn render_sink<'g, G: Scope<Timestamp = ()>>(
         None,
         None,
         async {},
-        move |error| {
-            Box::pin(async move {
-                let error = format!("storage_sink: {error}");
-                tracing::info!("{error}");
-                let mut command_tx = command_tx.borrow_mut();
-                command_tx.broadcast(InternalStorageCommand::SuspendAndRestart {
-                    id: sink_id,
-                    reason: error,
-                });
-            })
-        },
+        error_handler,
     );
     tokens.extend(persist_tokens);
 
@@ -104,7 +93,7 @@ pub(crate) fn render_sink<'g, G: Scope<Timestamp = ()>>(
 /// `DiffPair`s.
 fn zip_into_diff_pairs<G>(
     sink_id: GlobalId,
-    sink: &StorageSinkDesc<MetadataFilled, mz_repr::Timestamp>,
+    sink: &StorageSinkDesc<CollectionMetadata, mz_repr::Timestamp>,
     sink_render: &dyn SinkRender<G>,
     collection: Collection<G, Row, Diff>,
 ) -> Collection<G, (Option<Row>, DiffPair<Row>), Diff>
@@ -211,7 +200,7 @@ where
     fn render_sink(
         &self,
         storage_state: &mut StorageState,
-        sink: &StorageSinkDesc<MetadataFilled, Timestamp>,
+        sink: &StorageSinkDesc<CollectionMetadata, Timestamp>,
         sink_id: GlobalId,
         sinked_collection: Collection<G, (Option<Row>, DiffPair<Row>), Diff>,
         err_collection: Collection<G, DataflowError, Diff>,

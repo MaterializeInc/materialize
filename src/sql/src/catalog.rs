@@ -21,6 +21,7 @@ use std::sync::LazyLock;
 use std::time::{Duration, Instant};
 
 use chrono::{DateTime, Utc};
+use mz_auth::password::Password;
 use mz_build_info::BuildInfo;
 use mz_cloud_provider::{CloudProvider, InvalidCloudProviderError};
 use mz_controller_types::{ClusterId, ReplicaId};
@@ -31,7 +32,9 @@ use mz_repr::adt::mz_acl_item::{AclMode, MzAclItem, PrivilegeMap};
 use mz_repr::explain::ExprHumanizer;
 use mz_repr::network_policy_id::NetworkPolicyId;
 use mz_repr::role_id::RoleId;
-use mz_repr::{CatalogItemId, ColumnName, GlobalId, RelationDesc, RelationVersionSelector};
+use mz_repr::{
+    CatalogItemId, ColumnName, GlobalId, RelationDesc, RelationVersion, RelationVersionSelector,
+};
 use mz_sql_parser::ast::{Expr, QualifiedReplica, UnresolvedItemName};
 use mz_storage_types::connections::inline::{ConnectionResolver, ReferencedConnection};
 use mz_storage_types::connections::{Connection, ConnectionContext};
@@ -47,9 +50,9 @@ use crate::names::{
     QualifiedItemName, QualifiedSchemaName, ResolvedDatabaseSpecifier, ResolvedIds, SchemaId,
     SchemaSpecifier, SystemObjectId,
 };
-use crate::plan::statement::ddl::PlannedRoleAttributes;
 use crate::plan::statement::StatementDesc;
-use crate::plan::{query, ClusterSchedule, CreateClusterPlan, PlanError, PlanNotice};
+use crate::plan::statement::ddl::PlannedRoleAttributes;
+use crate::plan::{ClusterSchedule, CreateClusterPlan, PlanError, PlanNotice, query};
 use crate::session::vars::{OwnedVarInput, SystemVars};
 
 /// A catalog keeps track of SQL objects and session state available to the
@@ -77,8 +80,8 @@ use crate::session::vars::{OwnedVarInput, SystemVars};
 ///   * Session management, such as managing variables' states and adding
 ///     notices to the session.
 ///
-/// [`list_databases`]: Catalog::list_databases
-/// [`get_item`]: Catalog::resolve_item
+/// [`get_databases`]: SessionCatalog::get_databases
+/// [`get_item`]: SessionCatalog::get_item
 /// [`resolve_item`]: SessionCatalog::resolve_item
 pub trait SessionCatalog: fmt::Debug + ExprHumanizer + Send + Sync + ConnectionResolver {
     /// Returns the id of the role that is issuing the query.
@@ -259,7 +262,10 @@ pub trait SessionCatalog: fmt::Debug + ExprHumanizer + Send + Sync + ConnectionR
     /// exist.
     ///
     /// Note: A single Catalog Item can have multiple [`GlobalId`]s associated with it.
-    fn try_get_item_by_global_id(&self, id: &GlobalId) -> Option<Box<dyn CatalogCollectionItem>>;
+    fn try_get_item_by_global_id<'a>(
+        &'a self,
+        id: &GlobalId,
+    ) -> Option<Box<dyn CatalogCollectionItem + 'a>>;
 
     /// Gets an item by its ID.
     ///
@@ -271,7 +277,7 @@ pub trait SessionCatalog: fmt::Debug + ExprHumanizer + Send + Sync + ConnectionR
     /// Panics if `id` does not specify a valid item.
     ///
     /// Note: A single Catalog Item can have multiple [`GlobalId`]s associated with it.
-    fn get_item_by_global_id(&self, id: &GlobalId) -> Box<dyn CatalogCollectionItem>;
+    fn get_item_by_global_id<'a>(&'a self, id: &GlobalId) -> Box<dyn CatalogCollectionItem + 'a>;
 
     /// Gets all items.
     fn get_items(&self) -> Vec<&dyn CatalogItem>;
@@ -480,6 +486,12 @@ pub trait CatalogSchema {
 pub struct RoleAttributes {
     /// Indicates whether the role has inheritance of privileges.
     pub inherit: bool,
+    /// The raw password of the role. This is for self managed auth, not cloud.
+    pub password: Option<Password>,
+    /// Whether or not this user is a superuser.
+    pub superuser: Option<bool>,
+    /// Whether this role is login
+    pub login: Option<bool>,
     // Force use of constructor.
     _private: (),
 }
@@ -489,11 +501,14 @@ impl RoleAttributes {
     pub const fn new() -> RoleAttributes {
         RoleAttributes {
             inherit: true,
+            password: None,
+            superuser: None,
+            login: None,
             _private: (),
         }
     }
 
-    /// Adds all attributes.
+    /// Adds all attributes except password.
     pub const fn with_all(mut self) -> RoleAttributes {
         self.inherit = true;
         self
@@ -503,13 +518,40 @@ impl RoleAttributes {
     pub const fn is_inherit(&self) -> bool {
         self.inherit
     }
+
+    /// Returns whether or not the role has a password.
+    pub const fn has_password(&self) -> bool {
+        self.password.is_some()
+    }
+
+    /// Returns self without the password.
+    pub fn without_password(self) -> RoleAttributes {
+        RoleAttributes {
+            inherit: self.inherit,
+            password: None,
+            superuser: self.superuser,
+            login: self.login,
+            _private: (),
+        }
+    }
 }
 
 impl From<PlannedRoleAttributes> for RoleAttributes {
-    fn from(PlannedRoleAttributes { inherit }: PlannedRoleAttributes) -> RoleAttributes {
+    fn from(
+        PlannedRoleAttributes {
+            inherit,
+            password,
+            superuser,
+            login,
+            ..
+        }: PlannedRoleAttributes,
+    ) -> RoleAttributes {
         let default_attributes = RoleAttributes::new();
         RoleAttributes {
             inherit: inherit.unwrap_or(default_attributes.inherit),
+            password,
+            superuser,
+            login,
             _private: (),
         }
     }
@@ -719,6 +761,9 @@ pub trait CatalogItem {
     /// Returns the [`CatalogCollectionItem`] for a specific version of this
     /// [`CatalogItem`].
     fn at_version(&self, version: RelationVersionSelector) -> Box<dyn CatalogCollectionItem>;
+
+    /// The latest version of this item, if it's version-able.
+    fn latest_version(&self) -> Option<RelationVersion>;
 }
 
 /// An item in a [`SessionCatalog`] and the specific "collection"/pTVC that it
@@ -1282,11 +1327,17 @@ impl fmt::Display for CatalogError {
             Self::SchemaAlreadyExists(name) => write!(f, "schema '{name}' already exists"),
             Self::UnknownRole(name) => write!(f, "unknown role '{}'", name),
             Self::RoleAlreadyExists(name) => write!(f, "role '{name}' already exists"),
-            Self::NetworkPolicyAlreadyExists(name) => write!(f, "network policy '{name}' already exists"),
+            Self::NetworkPolicyAlreadyExists(name) => {
+                write!(f, "network policy '{name}' already exists")
+            }
             Self::UnknownCluster(name) => write!(f, "unknown cluster '{}'", name),
             Self::UnknownNetworkPolicy(name) => write!(f, "unknown network policy '{}'", name),
-            Self::UnexpectedBuiltinCluster(name) => write!(f, "Unexpected builtin cluster '{}'", name),
-            Self::UnexpectedBuiltinClusterType(name) => write!(f, "Unexpected builtin cluster type'{}'", name),
+            Self::UnexpectedBuiltinCluster(name) => {
+                write!(f, "Unexpected builtin cluster '{}'", name)
+            }
+            Self::UnexpectedBuiltinClusterType(name) => {
+                write!(f, "Unexpected builtin cluster type'{}'", name)
+            }
             Self::ClusterAlreadyExists(name) => write!(f, "cluster '{name}' already exists"),
             Self::UnknownClusterReplica(name) => {
                 write!(f, "unknown cluster replica '{}'", name)
@@ -1294,9 +1345,14 @@ impl fmt::Display for CatalogError {
             Self::UnknownClusterReplicaSize(name) => {
                 write!(f, "unknown cluster replica size '{}'", name)
             }
-            Self::DuplicateReplica(replica_name, cluster_name) => write!(f, "cannot create multiple replicas named '{replica_name}' on cluster '{cluster_name}'"),
+            Self::DuplicateReplica(replica_name, cluster_name) => write!(
+                f,
+                "cannot create multiple replicas named '{replica_name}' on cluster '{cluster_name}'"
+            ),
             Self::UnknownItem(name) => write!(f, "unknown catalog item '{}'", name),
-            Self::ItemAlreadyExists(_gid, name) => write!(f, "catalog item '{name}' already exists"),
+            Self::ItemAlreadyExists(_gid, name) => {
+                write!(f, "catalog item '{name}' already exists")
+            }
             Self::UnexpectedType {
                 name,
                 actual_type,
@@ -1318,9 +1374,13 @@ impl fmt::Display for CatalogError {
             Self::IdExhaustion => write!(f, "id counter overflows i64"),
             Self::OidExhaustion => write!(f, "oid counter overflows u32"),
             Self::TimelineAlreadyExists(name) => write!(f, "timeline '{name}' already exists"),
-            Self::IdAllocatorAlreadyExists(name) => write!(f, "ID allocator '{name}' already exists"),
+            Self::IdAllocatorAlreadyExists(name) => {
+                write!(f, "ID allocator '{name}' already exists")
+            }
             Self::ConfigAlreadyExists(key) => write!(f, "config '{key}' already exists"),
-            Self::FailedBuiltinSchemaMigration(objects) => write!(f, "failed to migrate schema of builtin objects: {objects}"),
+            Self::FailedBuiltinSchemaMigration(objects) => {
+                write!(f, "failed to migrate schema of builtin objects: {objects}")
+            }
             Self::StorageCollectionMetadataAlreadyExists(key) => {
                 write!(f, "storage metadata for '{key}' already exists")
             }

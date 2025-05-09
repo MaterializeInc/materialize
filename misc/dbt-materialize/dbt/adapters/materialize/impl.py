@@ -104,6 +104,7 @@ class MaterializeRefreshIntervalConfig(dbtClassMixin):
 class MaterializeConfig(AdapterConfig):
     cluster: Optional[str] = None
     refresh_interval: Optional[MaterializeRefreshIntervalConfig] = None
+    retain_history: Optional[str] = None
 
 
 class MaterializeAdapter(PostgresAdapter, SQLAdapter):

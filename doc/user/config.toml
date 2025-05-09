@@ -7,8 +7,8 @@ disableKinds = ['taxonomy']
 
 [params]
 repo = "//github.com/MaterializeInc/materialize"
-bannerMessage = "Need to run Materialize in your own private or public cloud? Get early access to **self-managed Materialize**!"
-bannerLink = "https://materialize.com/blog/self-managed/?utm_medium=docs-banner&utm_source=documentation&utm_campaign=FY25_Blogs&sf_campaign=701TR00000NoNFXYA3&utm_term=&utm_content="
+bannerMessage = ""
+bannerLink = ""
 
 [frontmatter]
 publishDate = ["publishDate"]
@@ -25,11 +25,6 @@ weight = 5
 #
 # Connect sources
 #
-
-[[menu.main]]
-identifier = "ingest-data"
-name = "Ingest data"
-weight = 11
 
 [[menu.main]]
 name = "SQL Server"
@@ -169,26 +164,6 @@ parent = 'commands'
 url = '/sql/create-sink'
 
 #
-# Tools and integrations
-#
-
-[[menu.main]]
-identifier = "integrations"
-name = "Tools and integrations"
-weight = 25
-
-[[menu.main]]
-identifier = "cli-reference"
-name = "Command reference"
-parent = "cli"
-
-[[menu.main]]
-identifier = "client-libraries"
-name = "SQL drivers"
-parent = "integrations"
-weight = 15
-
-#
 # Releases
 #
 
@@ -196,6 +171,13 @@ weight = 15
 identifier = "releases-previews"
 name = "Releases"
 weight = 65
+
+[[menu.main]]
+identifier = "changelogs"
+name = "Changelog ↗️"
+parent = "releases-previews"
+weight = 20
+url = "https://materialize.com/changelog/"
 
 #
 # About

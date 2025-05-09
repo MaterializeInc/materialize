@@ -22,35 +22,34 @@ use differential_dataflow::difference::Semigroup;
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::trace::Description;
 use futures::Stream;
-use futures_util::{stream, StreamExt};
-use itertools::Either;
+use futures_util::{StreamExt, stream};
 use mz_dyncfg::Config;
 use mz_ore::instrument;
 use mz_ore::now::EpochMillis;
 use mz_ore::task::{AbortOnDropHandle, JoinHandle, RuntimeExt};
 use mz_persist::location::{Blob, SeqNo};
-use mz_persist_types::columnar::{ColumnDecoder, Schema2};
+use mz_persist_types::columnar::{ColumnDecoder, Schema};
 use mz_persist_types::{Codec, Codec64};
 use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
-use timely::progress::{Antichain, Timestamp};
 use timely::PartialOrder;
+use timely::progress::{Antichain, Timestamp};
 use tokio::runtime::Handle;
-use tracing::{debug_span, warn, Instrument};
+use tracing::{Instrument, debug_span, warn};
 use uuid::Uuid;
 
-use crate::batch::{BLOB_TARGET_SIZE, STRUCTURED_ORDER, STRUCTURED_ORDER_UNTIL_SHARD};
-use crate::cfg::{RetryParameters, COMPACTION_MEMORY_BOUND_BYTES};
-use crate::fetch::{fetch_leased_part, FetchBatchFilter, FetchedPart, Lease, LeasedBatchPart};
+use crate::batch::BLOB_TARGET_SIZE;
+use crate::cfg::{COMPACTION_MEMORY_BOUND_BYTES, RetryParameters};
+use crate::fetch::{FetchBatchFilter, FetchedPart, Lease, LeasedBatchPart, fetch_leased_part};
 use crate::internal::encoding::Schemas;
 use crate::internal::machine::{ExpireFn, Machine};
 use crate::internal::metrics::Metrics;
 use crate::internal::state::{BatchPart, HollowBatch};
 use crate::internal::watch::StateWatch;
-use crate::iter::{CodecSort, Consolidator, StructuredSort};
+use crate::iter::{Consolidator, StructuredSort};
 use crate::schema::SchemaCache;
 use crate::stats::{SnapshotPartStats, SnapshotPartsStats, SnapshotStats};
-use crate::{parse_id, GarbageCollector, PersistConfig, ShardId};
+use crate::{GarbageCollector, PersistConfig, ShardId, parse_id};
 
 pub use crate::internal::encoding::LazyPartStats;
 pub use crate::internal::state::Since;
@@ -626,7 +625,7 @@ where
                     self.leased_seqnos.keys().take(10).collect::<Vec<_>>(),
                     // The Debug impl of backtrace is less aesthetic, but will put the trace
                     // on a single line and play more nicely with our Honeycomb quota
-                    Backtrace::capture(),
+                    Backtrace::force_capture(),
                 );
             }
         }
@@ -798,65 +797,14 @@ where
     /// A rate-limited version of [Self::downgrade_since].
     ///
     /// This is an internally rate limited helper, designed to allow users to
-    /// call it as frequently as they like. Call this [Self::downgrade_since],
-    /// or Self::maybe_heartbeat_reader on some interval that is "frequent"
-    /// compared to PersistConfig::FAKE_READ_LEASE_DURATION.
-    ///
-    /// This is communicating actual progress information, so is given
-    /// preferential treatment compared to Self::maybe_heartbeat_reader.
+    /// call it as frequently as they like. Call this or [Self::downgrade_since],
+    /// on some interval that is "frequent" compared to the read lease duration.
     pub async fn maybe_downgrade_since(&mut self, new_since: &Antichain<T>) {
-        // NB: min_elapsed is intentionally smaller than the one in
-        // maybe_heartbeat_reader (this is the preferential treatment mentioned
-        // above).
         let min_elapsed = READER_LEASE_DURATION.get(&self.cfg) / 4;
         let elapsed_since_last_heartbeat =
             Duration::from_millis((self.cfg.now)().saturating_sub(self.last_heartbeat));
         if elapsed_since_last_heartbeat >= min_elapsed {
             self.downgrade_since(new_since).await;
-        }
-    }
-
-    /// Heartbeats the read lease if necessary.
-    ///
-    /// This is an internally rate limited helper, designed to allow users to
-    /// call it as frequently as they like. Call this [Self::downgrade_since],
-    /// or [Self::maybe_downgrade_since] on some interval that is "frequent"
-    /// compared to PersistConfig::FAKE_READ_LEASE_DURATION.
-    #[allow(dead_code)]
-    pub(crate) async fn maybe_heartbeat_reader(&mut self) {
-        let min_elapsed = READER_LEASE_DURATION.get(&self.cfg) / 2;
-        let heartbeat_ts = (self.cfg.now)();
-        let elapsed_since_last_heartbeat =
-            Duration::from_millis(heartbeat_ts.saturating_sub(self.last_heartbeat));
-        if elapsed_since_last_heartbeat >= min_elapsed {
-            if elapsed_since_last_heartbeat > READER_LEASE_DURATION.get(&self.machine.applier.cfg) {
-                warn!(
-                    "reader ({}) of shard ({}) went {}s between heartbeats",
-                    self.reader_id,
-                    self.machine.shard_id(),
-                    elapsed_since_last_heartbeat.as_secs_f64()
-                );
-            }
-
-            let (_, existed, maintenance) = self
-                .machine
-                .heartbeat_leased_reader(&self.reader_id, heartbeat_ts)
-                .await;
-            if !existed && !self.machine.applier.is_finalized() {
-                // It's probably surprising to the caller that the shard
-                // becoming a tombstone expired this reader. Possibly the right
-                // thing to do here is pass up a bool to the caller indicating
-                // whether the LeasedReaderId it's trying to heartbeat has been
-                // expired, but that happening on a tombstone vs not is very
-                // different. As a medium-term compromise, pretend we did the
-                // heartbeat here.
-                panic!(
-                    "LeasedReaderId({}) was expired due to inactivity. Did the machine go to sleep?",
-                    self.reader_id
-                )
-            }
-            self.last_heartbeat = heartbeat_ts;
-            maintenance.start_performing(&self.machine, &self.gc);
         }
     }
 
@@ -924,9 +872,6 @@ pub struct Cursor<K: Codec, V: Codec, T: Timestamp + Codec64, D: Codec64> {
 
 #[derive(Debug)]
 enum CursorConsolidator<K: Codec, V: Codec, T: Timestamp + Codec64, D: Codec64> {
-    Codec {
-        consolidator: Consolidator<T, D, CodecSort<K, V, T, D>>,
-    },
     Structured {
         consolidator: Consolidator<T, D, StructuredSort<K, V, T, D>>,
         max_len: usize,
@@ -951,48 +896,31 @@ where
                 max_len,
                 max_bytes,
             } => {
-                let mut iter = consolidator
+                let part = consolidator
                     .next_chunk(*max_len, *max_bytes)
                     .await
                     .expect("fetching a leased part")?;
-                let structured = iter.get_or_make_structured::<K, V>(
-                    self.read_schemas.key.as_ref(),
-                    self.read_schemas.val.as_ref(),
-                );
                 let key_decoder = self
                     .read_schemas
                     .key
-                    .decoder_any(structured.key.as_ref())
+                    .decoder_any(part.key.as_ref())
                     .expect("ok");
                 let val_decoder = self
                     .read_schemas
                     .val
-                    .decoder_any(structured.val.as_ref())
+                    .decoder_any(part.val.as_ref())
                     .expect("ok");
-                let iter = (0..iter.len()).map(move |i| {
+                let iter = (0..part.len()).map(move |i| {
                     let mut k = K::default();
                     let mut v = V::default();
                     key_decoder.decode(i, &mut k);
                     val_decoder.decode(i, &mut v);
-                    let t = T::decode(iter.timestamps().value(i).to_le_bytes());
-                    let d = D::decode(iter.diffs().value(i).to_le_bytes());
+                    let t = T::decode(part.time.value(i).to_le_bytes());
+                    let d = D::decode(part.diff.value(i).to_le_bytes());
                     ((Ok(k), Ok(v)), t, d)
                 });
 
-                Some(Either::Left(iter))
-            }
-            CursorConsolidator::Codec { consolidator } => {
-                let iter = consolidator
-                    .next()
-                    .await
-                    .expect("fetching a leased part")?
-                    .map(|((k, v), t, d)| {
-                        let key = K::decode(k, &self.read_schemas.key);
-                        let val = V::decode(v, &self.read_schemas.val);
-                        ((key, val), t, d)
-                    });
-
-                Some(Either::Right(iter))
+                Some(iter)
             }
         }
     }
@@ -1063,10 +991,7 @@ where
         };
         let lease = self.lease_seqno();
 
-        let structured_order = STRUCTURED_ORDER.get(&self.cfg) && {
-            self.shard_id().to_string() < STRUCTURED_ORDER_UNTIL_SHARD.get(&self.cfg)
-        };
-        let consolidator = if structured_order {
+        let consolidator = {
             let mut consolidator = Consolidator::new(
                 context,
                 self.shard_id(),
@@ -1097,30 +1022,6 @@ where
                 max_len: self.cfg.compaction_yield_after_n_updates,
                 max_bytes: BLOB_TARGET_SIZE.get(&self.cfg).max(1),
             }
-        } else {
-            let mut consolidator = Consolidator::new(
-                context,
-                self.shard_id(),
-                CodecSort::new(self.read_schemas.clone()),
-                Arc::clone(&self.blob),
-                Arc::clone(&self.metrics),
-                Arc::clone(&self.machine.applier.shard_metrics),
-                self.metrics.read.snapshot.clone(),
-                filter,
-                COMPACTION_MEMORY_BOUND_BYTES.get(&self.cfg),
-            );
-            for batch in batches {
-                for (meta, run) in batch.runs() {
-                    consolidator.enqueue_run(
-                        &batch.desc,
-                        meta,
-                        run.into_iter()
-                            .filter(|p| should_fetch_part(p.stats()))
-                            .cloned(),
-                    );
-                }
-            }
-            CursorConsolidator::Codec { consolidator }
         };
 
         Ok(Cursor {
@@ -1207,7 +1108,10 @@ where
     pub async fn snapshot_and_stream(
         &mut self,
         as_of: Antichain<T>,
-    ) -> Result<impl Stream<Item = ((Result<K, String>, Result<V, String>), T, D)>, Since<T>> {
+    ) -> Result<
+        impl Stream<Item = ((Result<K, String>, Result<V, String>), T, D)> + use<K, V, T, D>,
+        Since<T>,
+    > {
         let snap = self.snapshot(as_of).await?;
 
         let blob = Arc::clone(&self.blob);
@@ -1281,7 +1185,10 @@ impl<K: Codec, V: Codec, T, D> Drop for ReadHandle<K, V, T, D> {
         let handle = match Handle::try_current() {
             Ok(x) => x,
             Err(_) => {
-                warn!("ReadHandle {} dropped without being explicitly expired, falling back to lease timeout", self.reader_id);
+                warn!(
+                    "ReadHandle {} dropped without being explicitly expired, falling back to lease timeout",
+                    self.reader_id
+                );
                 return;
             }
         };

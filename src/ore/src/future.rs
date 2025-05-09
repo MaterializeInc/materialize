@@ -28,14 +28,13 @@ use std::pin::Pin;
 use std::task::{Context, Poll};
 
 use async_trait::async_trait;
+use futures::Stream;
 use futures::future::{CatchUnwind, FutureExt};
 use futures::sink::Sink;
-use futures::Stream;
 use pin_project::pin_project;
 use tokio::task::futures::TaskLocalFuture;
 use tokio::time::{self, Duration, Instant};
 
-use crate::panic::CATCHING_UNWIND_ASYNC;
 use crate::task::{self, JoinHandleExt};
 
 /// Whether or not to run the future in `run_in_task_if` in a task.
@@ -93,6 +92,7 @@ pub trait OreFutureExt {
     /// [`panic::install_enhanced_handler`] has been called.
     ///
     /// [`panic::install_enhanced_handler`]: crate::panic::install_enhanced_handler
+    #[cfg(feature = "panic")]
     fn ore_catch_unwind(self) -> OreCatchUnwind<Self>
     where
         Self: Sized + UnwindSafe;
@@ -143,10 +143,13 @@ where
         }
     }
 
+    #[cfg(feature = "panic")]
     fn ore_catch_unwind(self) -> OreCatchUnwind<Self>
     where
         Self: UnwindSafe,
     {
+        use crate::panic::CATCHING_UNWIND_ASYNC;
+
         OreCatchUnwind {
             #[allow(clippy::disallowed_methods)]
             inner: CATCHING_UNWIND_ASYNC.scope(true, FutureExt::catch_unwind(self)),

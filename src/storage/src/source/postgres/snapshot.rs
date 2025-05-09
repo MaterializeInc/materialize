@@ -145,9 +145,9 @@ use futures::{StreamExt as _, TryStreamExt};
 use mz_ore::cast::CastFrom;
 use mz_ore::future::InTask;
 use mz_postgres_util::tunnel::PostgresFlavor;
-use mz_postgres_util::{simple_query_opt, Client, PostgresError};
-use mz_repr::{Datum, DatumVec, Row};
-use mz_sql_parser::ast::{display::AstDisplay, Ident};
+use mz_postgres_util::{Client, PostgresError, simple_query_opt};
+use mz_repr::{Datum, DatumVec, Diff, Row};
+use mz_sql_parser::ast::{Ident, display::AstDisplay};
 use mz_storage_types::errors::DataflowError;
 use mz_storage_types::sources::{MzOffset, PostgresSourceConnection};
 use mz_timely_util::builder_async::{
@@ -165,14 +165,14 @@ use tokio_postgres::types::{Oid, PgLsn};
 use tracing::{error, trace};
 
 use crate::metrics::source::postgres::PgSnapshotMetrics;
+use crate::source::RawSourceCreationConfig;
 use crate::source::postgres::replication::RewindRequest;
 use crate::source::postgres::{
-    verify_schema, DefiniteError, ReplicationError, SourceOutputInfo, TransientError,
+    DefiniteError, ReplicationError, SourceOutputInfo, TransientError, verify_schema,
 };
 use crate::source::types::{
     ProgressStatisticsUpdate, SignaledFuture, SourceMessage, StackedCollection,
 };
-use crate::source::RawSourceCreationConfig;
 
 /// Renders the snapshot dataflow. See the module documentation for more information.
 pub(crate) fn render<G: Scope<Timestamp = MzOffset>>(
@@ -359,7 +359,7 @@ pub(crate) fn render<G: Scope<Timestamp = MzOffset>>(
                         &config.config.connection_context.ssh_tunnel_manager,
                     )
                     .await?;
-                match mz_postgres_util::publication_info(&schema_client, &connection.publication)
+                match mz_postgres_util::publication_info(&schema_client, &connection.publication, Some(&reader_table_info.keys().copied().collect::<Vec<_>>()))
                     .await
                 {
                     // If the replication stream cannot be obtained in a definite way there is
@@ -378,7 +378,7 @@ pub(crate) fn render<G: Scope<Timestamp = MzOffset>>(
                                 let update = (
                                     (*oid, *output_index, Err(err.clone().into())),
                                     MzOffset::from(u64::MAX),
-                                    1,
+                                    Diff::ONE,
                                 );
                                 raw_handle.give_fueled(&data_cap_set[0], update).await;
                             }
@@ -395,8 +395,6 @@ pub(crate) fn render<G: Scope<Timestamp = MzOffset>>(
                 }
             };
 
-            let upstream_info = upstream_info.into_iter().map(|t| (t.oid, t)).collect();
-
             let worker_tables = reader_table_info
                 .iter()
                 .map(|(_, outputs)| {
@@ -406,8 +404,8 @@ pub(crate) fn render<G: Scope<Timestamp = MzOffset>>(
                     (
                         format!(
                             "{}.{}",
-                            Ident::new_unchecked(desc.namespace.clone()).to_ast_string(),
-                            Ident::new_unchecked(desc.name.clone()).to_ast_string()
+                            Ident::new_unchecked(desc.namespace.clone()).to_ast_string_simple(),
+                            Ident::new_unchecked(desc.name.clone()).to_ast_string_simple()
                         ),
                         desc.oid.clone(),
                         outputs.len(),
@@ -448,7 +446,7 @@ pub(crate) fn render<G: Scope<Timestamp = MzOffset>>(
                                     (
                                         (oid, *output_index, Err(err.into())),
                                         MzOffset::minimum(),
-                                        1,
+                                       Diff::ONE,
                                     ),
                                 )
                                 .await;
@@ -475,12 +473,12 @@ pub(crate) fn render<G: Scope<Timestamp = MzOffset>>(
                 // emulate's PG's rules for name formatting.
                 let query = format!(
                     "COPY {}.{} TO STDOUT (FORMAT TEXT, DELIMITER '\t')",
-                    Ident::new_unchecked(namespace).to_ast_string(),
-                    Ident::new_unchecked(table).to_ast_string(),
+                    Ident::new_unchecked(namespace).to_ast_string_simple(),
+                    Ident::new_unchecked(table).to_ast_string_simple(),
                 );
                 let mut stream = pin!(client.copy_out_simple(&query).await?);
 
-                let mut update = ((oid, 0, Ok(vec![])), MzOffset::minimum(), 1);
+                let mut update = ((oid, 0, Ok(vec![])), MzOffset::minimum(), Diff::ONE);
                 while let Some(bytes) = stream.try_next().await? {
                     let data = update.0 .2.as_mut().unwrap();
                     data.clear();
@@ -559,11 +557,12 @@ pub(crate) fn render<G: Scope<Timestamp = MzOffset>>(
     let mut final_row = Row::default();
     let mut datum_vec = DatumVec::new();
     let snapshot_updates = raw_data
+        .map::<Vec<_>, _, _>(Clone::clone)
         .distribute()
         .map(move |((oid, output_index, event), time, diff)| {
             let output = &table_info
-                .get(oid)
-                .and_then(|outputs| outputs.get(output_index))
+                .get(&oid)
+                .and_then(|outputs| outputs.get(&output_index))
                 .expect("table_info contains all outputs");
 
             let event = event
@@ -580,7 +579,7 @@ pub(crate) fn render<G: Scope<Timestamp = MzOffset>>(
                     })
                 });
 
-            ((*output_index, event), *time, *diff)
+            ((output_index, event), time, diff)
         })
         .as_collection();
 
@@ -624,14 +623,14 @@ async fn export_snapshot_inner(
         .await?;
 
     // Note: Using unchecked here is okay because we're using it in a SQL query.
-    let slot = Ident::new_unchecked(slot).to_ast_string();
+    let slot = Ident::new_unchecked(slot).to_ast_string_simple();
     let temporary_str = if temporary { " TEMPORARY" } else { "" };
     let query =
         format!("CREATE_REPLICATION_SLOT {slot}{temporary_str} LOGICAL \"pgoutput\" USE_SNAPSHOT");
     let row = match simple_query_opt(client, &query).await {
         Ok(row) => Ok(row.unwrap()),
         Err(PostgresError::Postgres(err)) if err.code() == Some(&SqlState::DUPLICATE_OBJECT) => {
-            return Err(TransientError::ReplicationSlotAlreadyExists)
+            return Err(TransientError::ReplicationSlotAlreadyExists);
         }
         Err(err) => Err(err),
     }?;

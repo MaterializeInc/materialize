@@ -202,7 +202,7 @@ The Materialize provider uses [connection resource blocks](https://registry.terr
 Materialize to communicate with the PrivateLink endpoint. After you deploy the
 module, you can create a new Materialize connection with the AWS resource
 information. The configuration below is an example of the Materialize provider,
-performing the same necessary steps as the [`CREATE CONNECTION`](https://materialize.com/docs/sql/create-connection/#aws-privatelink) statement in SQL:
+performing the same necessary steps as the [`CREATE CONNECTION`](/sql/create-connection/#aws-privatelink) statement in SQL:
 
 
 ```hcl
@@ -244,7 +244,7 @@ After using the module, you can configure the [`materialize_connection_ssh_tunne
 resource with the module output, allowing Materialize an end-to-end connection
 to your source. The provider will configure the same Materialize objects as the
 [`CREATE
-CONNECTION`](https://materialize.com/docs/sql/create-connection/#ssh-tunnel)
+CONNECTION`](/sql/create-connection/#ssh-tunnel)
 statement.
 
 
@@ -259,7 +259,7 @@ After you run the module, you
 can create a secret, connection, and source with the Materialize
 provider for an end-to-end connection to this instance as a new source. The
 Materialize provider will create these objects just like the [`CREATE
-SECRET`](https://materialize.com/docs/sql/create-secret/), [`CREATE CONNECTION`](https://materialize.com/docs/sql/create-connection/#postgresql), and [`CREATE SOURCE`](https://materialize.com/docs/sql/create-source/postgres/) statements in SQL. The
+SECRET`](/sql/create-secret/), [`CREATE CONNECTION`](/sql/create-connection/#postgresql), and [`CREATE SOURCE`](/sql/create-source/postgres/) statements in SQL. The
 secret, connection, and source resources would be similar to the example
 Terraform configuration below with output from the module:
 

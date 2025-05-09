@@ -14,7 +14,9 @@ all crates inherit their lints from the workspace."""
 
 import argparse
 import json
+import os
 import subprocess
+import tempfile
 from pathlib import Path
 
 import toml
@@ -90,7 +92,9 @@ WARN_CLIPPY_LINTS = [
     "todo",
     # Wildcard dependencies are, by definition, incorrect. It is impossible
     # to be compatible with all future breaking changes in a crate.
-    "wildcard_dependencies",
+    #
+    # TODO(parkmycar): Re-enable this lint when it's supported in Bazel.
+    # "wildcard_dependencies",
     # Zero-prefixed literals may be incorrectly interpreted as octal literals.
     "zero_prefixed_literal",
     # Purely redundant tokens.
@@ -113,7 +117,7 @@ WARN_CLIPPY_LINTS = [
     "builtin_type_shadow",
     "duplicate_underscore_argument",
     # Purely redundant tokens; very likely to be confusing.
-    "double_neg",
+    "double_negations",
     # Purely redundant tokens; code is misleading.
     "unnecessary_mut_passed",
     # Purely redundant tokens; probably a mistake.
@@ -171,6 +175,10 @@ WARN_CLIPPY_LINTS = [
     # We consistently don't use `mod.rs` files.
     "mod_module_files",
     "needless_pass_by_ref_mut",
+    # Helps prevent bugs caused by wrong usage of `const` instead of `static`
+    # to define global mutable values.
+    "borrow_interior_mutable_const",
+    "or_fun_call",
 ]
 
 MESSAGE_LINT_MISSING = (
@@ -220,12 +228,29 @@ def main() -> None:
             # Overwrite existing lint configuration block.
             start = contents.index(lint_config[1]) - 2
             end = contents.index(lint_config[-1])
-            contents[start : end + 1] = lint_config
+            new_contents = contents[:start] + lint_config + contents[end + 1 :]
         except ValueError:
             # No existing lint configuration block. Add a new one to the end
             # of the file.
-            contents.extend(lint_config)
-        workspace_cargo_toml.write_text("".join(contents))
+            new_contents = contents + lint_config
+        # Only write file if the content changed.
+        if "".join(new_contents) != "".join(contents):
+            tmp_file_path = None
+            try:
+                # Overwrite the file atomically so that there is never a half-written file.
+                with tempfile.NamedTemporaryFile(
+                    "w", delete=False, dir=workspace_root, encoding="utf-8"
+                ) as tmp_file:
+                    tmp_file.write("".join(new_contents))
+                    tmp_file_path = tmp_file.name
+                os.replace(tmp_file_path, workspace_cargo_toml)
+            except:
+                if tmp_file_path:
+                    try:
+                        os.remove(tmp_file_path)
+                    except:
+                        pass
+                raise
 
         # Make sure all of the crates in the workspace inherit their lints.
         metadata = json.loads(

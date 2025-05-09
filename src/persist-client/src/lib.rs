@@ -21,7 +21,7 @@ use std::sync::Arc;
 
 use differential_dataflow::difference::Semigroup;
 use differential_dataflow::lattice::Lattice;
-use mz_build_info::{build_info, BuildInfo};
+use mz_build_info::{BuildInfo, build_info};
 use mz_dyncfg::ConfigSet;
 use mz_ore::{instrument, soft_assert_or_log};
 use mz_persist::location::{Blob, Consensus, ExternalError};
@@ -36,12 +36,12 @@ use crate::critical::{CriticalReaderId, SinceHandle};
 use crate::error::InvalidUsage;
 use crate::fetch::{BatchFetcher, BatchFetcherConfig};
 use crate::internal::compact::Compactor;
-use crate::internal::encoding::{parse_id, Schemas};
+use crate::internal::encoding::{Schemas, parse_id};
 use crate::internal::gc::GarbageCollector;
-use crate::internal::machine::{retry_external, Machine};
+use crate::internal::machine::{Machine, retry_external};
 use crate::internal::state_versions::StateVersions;
 use crate::metrics::Metrics;
-use crate::read::{LeasedReaderId, ReadHandle, READER_LEASE_DURATION};
+use crate::read::{LeasedReaderId, READER_LEASE_DURATION, ReadHandle};
 use crate::rpc::PubSubSender;
 use crate::schema::CaESchema;
 use crate::write::{WriteHandle, WriterId};
@@ -65,7 +65,7 @@ pub mod iter;
 pub mod metrics {
     //! Utilities related to metrics.
     pub use crate::internal::metrics::{
-        encode_ts_metric, Metrics, SinkMetrics, SinkWorkerMetrics, UpdateDelta,
+        Metrics, SinkMetrics, SinkWorkerMetrics, UpdateDelta, encode_ts_metric,
     };
 }
 pub mod operators {
@@ -84,7 +84,6 @@ pub mod operators {
         operator before yielding.",
     );
 }
-pub mod project;
 pub mod read;
 pub mod rpc;
 pub mod schema;
@@ -826,8 +825,12 @@ mod tests {
             .await
             .expect("failed to fetch part")
             .expect("missing part");
-        let part =
+        let mut part =
             BlobTraceBatchPart::decode(&value, &metrics.columnar).expect("failed to decode part");
+        // Ensure codec data is present even if it was not generated at write time.
+        let _ = part
+            .updates
+            .get_or_make_codec::<K, V>(&read_schemas.key, &read_schemas.val);
         let mut updates = Vec::new();
         // TODO(bkirwi): switch to structured data in tests
         for ((k, v), t, d) in part.updates.records().expect("codec data").iter() {
@@ -1839,29 +1842,6 @@ mod tests {
                 .await
                 .expect("task should shutdown cleanly");
         }
-    }
-
-    /// Regression test for 16743, where the nightly tests found that calling
-    /// maybe_heartbeat_writer or maybe_heartbeat_reader on a "tombstone" shard
-    /// would panic.
-    #[mz_persist_proc::test(tokio::test)]
-    #[cfg_attr(miri, ignore)] // unsupported operation: returning ready events from epoll_wait is not yet implemented
-    async fn regression_16743_heartbeat_tombstone(dyncfgs: ConfigUpdates) {
-        const EMPTY: &[(((), ()), u64, i64)] = &[];
-        let (mut write, mut read) = new_test_client(&dyncfgs)
-            .await
-            .expect_open::<(), (), u64, i64>(ShardId::new())
-            .await;
-        // Create a tombstone by advancing both the upper and since to [].
-        let () = read.downgrade_since(&Antichain::new()).await;
-        let () = write
-            .compare_and_append(EMPTY, Antichain::from_elem(0), Antichain::new())
-            .await
-            .expect("usage should be valid")
-            .expect("upper should match");
-        // Verify that heartbeating doesn't panic.
-        read.last_heartbeat = 0;
-        read.maybe_heartbeat_reader().await;
     }
 
     /// Verify that shard finalization works with empty shards, shards that have

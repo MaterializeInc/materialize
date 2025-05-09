@@ -53,7 +53,7 @@ class PeekPersist(Check):
             3
 
             # TODO(bkirwi): revisit this when persist peeks have stabilized
-            # ? EXPLAIN SELECT * FROM peek_persist LIMIT 100
+            # ? EXPLAIN OPTIMIZED PLAN AS VERBOSE TEXT FOR SELECT * FROM peek_persist LIMIT 100
             # Explained Query (fast path):
             #   Finish limit=100 output=[#0]
             #     PeekPersist materialize.public.peek_persist

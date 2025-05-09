@@ -15,15 +15,15 @@ use std::sync::Arc;
 
 use derivative::Derivative;
 use enum_kinds::EnumKind;
-use futures::future::BoxFuture;
 use mz_adapter_types::connection::{ConnectionId, ConnectionIdType};
+use mz_auth::password::Password;
 use mz_compute_types::ComputeInstanceId;
 use mz_ore::collections::CollectionExt;
 use mz_ore::soft_assert_no_log;
 use mz_ore::tracing::OpenTelemetryContext;
 use mz_pgcopy::CopyFormatParams;
 use mz_repr::role_id::RoleId;
-use mz_repr::{CatalogItemId, RowIterator};
+use mz_repr::{CatalogItemId, ColumnIndex, RowIterator};
 use mz_sql::ast::{FetchDirection, Raw, Statement};
 use mz_sql::catalog::ObjectType;
 use mz_sql::plan::{ExecuteTimeout, Plan, PlanKind};
@@ -34,9 +34,10 @@ use tokio::sync::{mpsc, oneshot};
 use uuid::Uuid;
 
 use crate::catalog::Catalog;
+use crate::coord::ExecuteContextExtra;
+use crate::coord::appends::BuiltinTableAppendNotify;
 use crate::coord::consistency::CoordinatorInconsistencies;
 use crate::coord::peek::PeekResponseUnary;
-use crate::coord::ExecuteContextExtra;
 use crate::error::AdapterError;
 use crate::session::{EndTransactionAction, RowBatchStream, Session};
 use crate::statement_logging::{StatementEndedExecutionReason, StatementExecutionStrategy};
@@ -64,6 +65,12 @@ pub enum Command {
         uuid: Uuid,
         application_name: String,
         notice_tx: mpsc::UnboundedSender<AdapterNotice>,
+    },
+
+    AuthenticatePassword {
+        tx: oneshot::Sender<Result<AuthResponse, AdapterError>>,
+        role_name: String,
+        password: Option<Password>,
     },
 
     Execute {
@@ -140,6 +147,7 @@ impl Command {
             Command::Execute { session, .. } | Command::Commit { session, .. } => Some(session),
             Command::CancelRequest { .. }
             | Command::Startup { .. }
+            | Command::AuthenticatePassword { .. }
             | Command::CatalogSnapshot { .. }
             | Command::PrivilegedCancelRequest { .. }
             | Command::GetWebhook { .. }
@@ -157,6 +165,7 @@ impl Command {
             Command::Execute { session, .. } | Command::Commit { session, .. } => Some(session),
             Command::CancelRequest { .. }
             | Command::Startup { .. }
+            | Command::AuthenticatePassword { .. }
             | Command::CatalogSnapshot { .. }
             | Command::PrivilegedCancelRequest { .. }
             | Command::GetWebhook { .. }
@@ -187,10 +196,20 @@ pub struct StartupResponse {
     pub role_id: RoleId,
     /// A future that completes when all necessary Builtin Table writes have completed.
     #[derivative(Debug = "ignore")]
-    pub write_notify: BoxFuture<'static, ()>,
+    pub write_notify: BuiltinTableAppendNotify,
     /// Map of (name, VarInput::Flat) tuples of session default variables that should be set.
     pub session_defaults: BTreeMap<String, OwnedVarInput>,
     pub catalog: Arc<Catalog>,
+}
+
+/// The response to [`Client::authenticate`](crate::Client::authenticate).
+#[derive(Derivative)]
+#[derivative(Debug)]
+pub struct AuthResponse {
+    /// RoleId for the user.
+    pub role_id: RoleId,
+    /// If the user is a superuser.
+    pub superuser: bool,
 }
 
 // Facile implementation for `StartupResponse`, which does not use the `allowed`
@@ -256,7 +275,7 @@ pub enum ExecuteResponse {
     },
     CopyFrom {
         id: CatalogItemId,
-        columns: Vec<usize>,
+        columns: Vec<ColumnIndex>,
         params: CopyFormatParams<'static>,
         ctx_extra: ExecuteContextExtra,
     },
@@ -598,7 +617,7 @@ impl ExecuteResponse {
                 &[AlteredSystemConfiguration]
             }
             Close => &[ClosedCursor],
-            PlanKind::CopyFrom => &[ExecuteResponseKind::CopyFrom],
+            PlanKind::CopyFrom => &[ExecuteResponseKind::CopyFrom, ExecuteResponseKind::Copied],
             PlanKind::CopyTo => &[ExecuteResponseKind::Copied],
             PlanKind::Comment => &[ExecuteResponseKind::Comment],
             CommitTransaction => &[TransactionCommitted, TransactionRolledBack],

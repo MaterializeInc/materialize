@@ -23,6 +23,7 @@
 
 use std::collections::BTreeMap;
 use std::error::Error;
+use std::panic::AssertUnwindSafe;
 use std::sync::Arc;
 use std::{fmt, iter};
 
@@ -30,8 +31,8 @@ use mz_expr::{MirRelationExpr, MirScalarExpr};
 use mz_ore::id_gen::IdGen;
 use mz_ore::stack::RecursionLimitError;
 use mz_ore::{soft_assert_or_log, soft_panic_or_log};
-use mz_repr::optimize::OptimizerFeatures;
 use mz_repr::GlobalId;
+use mz_repr::optimize::OptimizerFeatures;
 use mz_sql::optimizer_metrics::OptimizerMetrics;
 use tracing::error;
 
@@ -191,6 +192,16 @@ impl<'a> TransformCtx<'a> {
     fn reset_global_id(&mut self) {
         self.global_id = None;
     }
+
+    /// Updates `last_hash` with the hash of the given MIR plan for the id `self.global_id`.
+    /// Returns the hash.
+    fn update_last_hash(&mut self, plan: &MirRelationExpr) -> u64 {
+        let hash = plan.hash_to_u64();
+        if let Some(id) = self.global_id {
+            self.last_hash.insert(id, hash);
+        }
+        hash
+    }
 }
 
 /// Types capable of transforming relation expressions.
@@ -215,10 +226,7 @@ pub trait Transform: fmt::Debug {
         let res = self.actually_perform_transform(relation, args);
         let duration = start.elapsed();
 
-        let hash_after = relation.hash_to_u64();
-        if let Some(id) = args.global_id {
-            args.last_hash.insert(id, hash_after);
-        }
+        let hash_after = args.update_last_hash(relation);
         if let Some(metrics) = args.metrics {
             let transform_name = self.name();
             metrics.observe_transform_time(transform_name, duration);
@@ -284,6 +292,50 @@ impl Error for TransformError {}
 impl From<RecursionLimitError> for TransformError {
     fn from(error: RecursionLimitError) -> Self {
         TransformError::Internal(error.to_string())
+    }
+}
+
+/// Implemented by error types that sometimes want to indicate that an error should cause a panic
+/// even in a `catch_unwind` context. Useful for implementing `mz_unsafe.mz_panic('forced panic')`.
+pub trait MaybeShouldPanic {
+    /// Whether the error means that we want a panic. If yes, then returns the error msg.
+    fn should_panic(&self) -> Option<String>;
+}
+
+impl MaybeShouldPanic for TransformError {
+    fn should_panic(&self) -> Option<String> {
+        match self {
+            TransformError::CallerShouldPanic(msg) => Some(msg.to_string()),
+            _ => None,
+        }
+    }
+}
+
+/// Catch panics in the given optimization, and demote them to [`TransformError::Internal`] error.
+///
+/// Additionally, if the result of the optimization is an error (not a panic) that indicates we
+/// should panic, then panic.
+pub fn catch_unwind_optimize<Opt, To, E>(optimization: Opt) -> Result<To, E>
+where
+    Opt: FnOnce() -> Result<To, E>,
+    E: From<TransformError> + MaybeShouldPanic,
+{
+    match mz_ore::panic::catch_unwind_str(AssertUnwindSafe(optimization)) {
+        Ok(Err(e)) if e.should_panic().is_some() => {
+            // Promote a `CallerShouldPanic` error from the result to a proper panic. This is
+            // needed in order to ensure that `mz_unsafe.mz_panic('forced panic')` calls still
+            // panic the caller.
+            panic!("{}", e.should_panic().expect("checked above"));
+        }
+        Ok(result) => result.map_err(|e| e),
+        Err(panic) => {
+            // A panic during optimization is always a bug; log an error so we learn about it.
+            // TODO(teskje): collect and log a backtrace from the panic site
+            tracing::error!("caught a panic during query optimization: {panic}");
+
+            let msg = format!("unexpected panic during query optimization: {panic}");
+            Err(TransformError::Internal(msg).into())
+        }
     }
 }
 
@@ -435,7 +487,7 @@ impl Transform for Fixpoint {
                             // relevant issues, see
                             // https://github.com/MaterializeInc/database-issues/issues/8197#issuecomment-2200172227
                             mz_repr::explain::trace_plan(relation);
-                            soft_panic_or_log!(
+                            error!(
                                 "Fixpoint `{}` detected a loop of length {} after {} iterations",
                                 self.name,
                                 i - seen_i,
@@ -443,6 +495,7 @@ impl Transform for Fixpoint {
                             );
                             return Ok(());
                         }
+                        ctx.update_last_hash(&again);
                         self.apply_transforms(
                             &mut again,
                             ctx,
@@ -530,9 +583,12 @@ macro_rules! transforms {
         // do nothing
     };
     ($($transforms:tt)*) => {{
-        let mut __buf = Vec::<Box<dyn Transform>>::new();
-        transforms!(@op fill __buf with $($transforms)*);
-        __buf
+        #[allow(clippy::vec_init_then_push)]
+        {
+            let mut __buf = Vec::<Box<dyn Transform>>::new();
+            transforms!(@op fill __buf with $($transforms)*);
+            __buf
+        }
     }};
 }
 
@@ -737,7 +793,7 @@ impl Optimizer {
     /// rendering.
     pub fn physical_optimizer(ctx: &mut TransformCtx) -> Self {
         // Implementation transformations
-        let transforms: Vec<Box<dyn Transform>> = vec![
+        let transforms: Vec<Box<dyn Transform>> = transforms![
             Box::new(
                 Typecheck::new(ctx.typecheck())
                     .disallow_new_globals()
@@ -791,6 +847,14 @@ impl Optimizer {
             Box::new(CanonicalizeMfp),
             // Identifies common relation subexpressions.
             Box::new(cse::relation_cse::RelationCSE::new(false)),
+            // `RelationCSE` can create new points of interest for `ProjectionPushdown`: If an MFP
+            // is cut in half by `RelationCSE`, then we'd like to push projections behind the new
+            // Get as much as possible. This is because a fork in the plan involves copying the
+            // data. (But we need `ProjectionPushdown` to skip joins, because it can't deal with
+            // filled in JoinImplementations.)
+            Box::new(ProjectionPushdown::skip_joins()); if ctx.features.enable_projection_pushdown_after_relation_cse,
+            // Plans look nicer if we tidy MFPs again after ProjectionPushdown.
+            Box::new(CanonicalizeMfp); if ctx.features.enable_projection_pushdown_after_relation_cse,
             // Do a last run of constant folding. Importantly, this also runs `NormalizeLets`!
             // We need `NormalizeLets` at the end of the MIR pipeline for various reasons:
             // - The rendering expects some invariants about Let/LetRecs.
@@ -945,9 +1009,7 @@ impl Optimizer {
         relation: &mut MirRelationExpr,
         args: &mut TransformCtx,
     ) -> Result<(), TransformError> {
-        if let Some(id) = args.global_id {
-            args.last_hash.insert(id, relation.hash_to_u64());
-        }
+        args.update_last_hash(relation);
 
         for transform in self.transforms.iter() {
             transform.transform(relation, args)?;

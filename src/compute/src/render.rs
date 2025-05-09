@@ -110,41 +110,46 @@ use std::rc::{Rc, Weak};
 use std::sync::Arc;
 use std::task::Poll;
 
+use columnar::Columnar;
+use differential_dataflow::IntoOwned;
+use differential_dataflow::containers::Columnation;
 use differential_dataflow::dynamic::pointstamp::PointStamp;
 use differential_dataflow::lattice::Lattice;
-use differential_dataflow::operators::arrange::Arranged;
-use differential_dataflow::trace::cursor::IntoOwned;
+use differential_dataflow::operators::arrange::{Arranged, ShutdownButton};
 use differential_dataflow::trace::TraceReader;
 use differential_dataflow::{AsCollection, Collection, Data};
-use futures::channel::oneshot;
 use futures::FutureExt;
+use futures::channel::oneshot;
 use mz_compute_types::dataflows::{DataflowDescription, IndexDesc};
-use mz_compute_types::dyncfgs::COMPUTE_APPLY_COLUMN_DEMANDS;
+use mz_compute_types::dyncfgs::{
+    COMPUTE_APPLY_COLUMN_DEMANDS, COMPUTE_LOGICAL_BACKPRESSURE_INFLIGHT_SLACK,
+    COMPUTE_LOGICAL_BACKPRESSURE_MAX_RETAINED_CAPABILITIES, ENABLE_COMPUTE_LOGICAL_BACKPRESSURE,
+};
+use mz_compute_types::plan::LirId;
 use mz_compute_types::plan::render_plan::{
     self, BindStage, LetBind, LetFreePlan, RecBind, RenderPlan,
 };
-use mz_compute_types::plan::LirId;
 use mz_expr::{EvalError, Id};
-use mz_persist_client::operators::shard_source::SnapshotMode;
+use mz_persist_client::operators::shard_source::{ErrorHandler, SnapshotMode};
 use mz_repr::explain::DummyHumanizer;
-use mz_repr::{Datum, GlobalId, Row, SharedRow};
+use mz_repr::{Datum, Diff, GlobalId, Row, SharedRow};
 use mz_storage_operators::persist_source;
 use mz_storage_types::controller::CollectionMetadata;
 use mz_storage_types::errors::DataflowError;
 use mz_timely_util::operator::{CollectionExt, StreamExt};
+use mz_timely_util::probe::{Handle as MzProbeHandle, ProbeNotify};
+use timely::PartialOrder;
 use timely::communication::Allocate;
-use timely::container::columnation::Columnation;
 use timely::dataflow::channels::pact::Pipeline;
 use timely::dataflow::operators::to_stream::ToStream;
-use timely::dataflow::operators::{probe, BranchWhen, Operator, Probe};
+use timely::dataflow::operators::{BranchWhen, Capability, Operator, Probe, probe};
 use timely::dataflow::scopes::Child;
-use timely::dataflow::{Scope, Stream};
+use timely::dataflow::{Scope, Stream, StreamCore};
 use timely::order::Product;
 use timely::progress::timestamp::Refines;
 use timely::progress::{Antichain, Timestamp};
 use timely::scheduling::ActivateOnDrop;
 use timely::worker::Worker as TimelyWorker;
-use timely::PartialOrder;
 
 use crate::arrangement::manager::TraceBundle;
 use crate::compute_state::ComputeState;
@@ -153,9 +158,7 @@ use crate::extensions::reduce::MzReduce;
 use crate::logging::compute::{
     ComputeEvent, DataflowGlobal, LirMapping, LirMetadata, LogDataflowErrors,
 };
-use crate::render::context::{
-    ArrangementFlavor, Context, MzArrangement, MzArrangementImport, ShutdownToken,
-};
+use crate::render::context::{ArrangementFlavor, Context, ShutdownToken};
 use crate::render::continual_task::ContinualTaskCtx;
 use crate::row_spine::{RowRowBatcher, RowRowBuilder};
 use crate::typedefs::{ErrBatcher, ErrBuilder, ErrSpine, KeyBatcher};
@@ -209,6 +212,8 @@ pub fn build_compute_dataflow<A: Allocate>(
     let worker_logging = timely_worker.log_register().get("timely").map(Into::into);
     let apply_demands = COMPUTE_APPLY_COLUMN_DEMANDS.get(&compute_state.worker_config);
 
+    // If you change the format here to something other than "Dataflow: {name}",
+    // you should also update MZ_MAPPABLE_OBJECTS in `src/catalog/src/builtin.rs`
     let name = format!("Dataflow: {}", &dataflow.debug_name);
     let input_name = format!("InputRegion: {}", &dataflow.debug_name);
     let build_name = format!("BuildRegion: {}", &dataflow.debug_name);
@@ -223,10 +228,12 @@ pub fn build_compute_dataflow<A: Allocate>(
         // so that other similar uses (e.g. with iterative scopes) do not require weird
         // alternate type signatures.
         let mut imported_sources = Vec::new();
-        let mut tokens = BTreeMap::new();
+        let mut tokens: BTreeMap<_, Rc<dyn Any>> = BTreeMap::new();
+        let output_probe = MzProbeHandle::default();
+
         scope.clone().region_named(&input_name, |region| {
             // Import declared sources into the rendering context.
-            for (source_id, (source, _monotonic)) in dataflow.source_imports.iter() {
+            for (source_id, (source, _monotonic, upper)) in dataflow.source_imports.iter() {
                 region.region_named(&format!("Source({:?})", source_id), |inner| {
                     let mut read_schema = None;
                     let mut mfp = source.arguments.operators.clone().map(|mut ops| {
@@ -275,8 +282,10 @@ pub fn build_compute_dataflow<A: Allocate>(
                         mfp.as_mut(),
                         compute_state.dataflow_max_inflight_bytes(),
                         start_signal.clone(),
-                        |error| panic!("compute_import: {error}"),
+                        ErrorHandler::Halt("compute_import"),
                     );
+
+                    let mut source_tokens: Vec<Rc<dyn Any>> = vec![Rc::new(token)];
 
                     // If `mfp` is non-identity, we need to apply what remains.
                     // For the moment, assert that it is either trivial or `None`.
@@ -287,6 +296,27 @@ pub fn build_compute_dataflow<A: Allocate>(
                     // `as_of`.
                     if let Some(as_of) = suppress_early_progress_as_of {
                         ok_stream = suppress_early_progress(ok_stream, as_of);
+                    }
+
+                    if ENABLE_COMPUTE_LOGICAL_BACKPRESSURE.get(&compute_state.worker_config) {
+                        // Apply logical backpressure to the source.
+                        let limit = COMPUTE_LOGICAL_BACKPRESSURE_MAX_RETAINED_CAPABILITIES
+                            .get(&compute_state.worker_config);
+                        let slack = COMPUTE_LOGICAL_BACKPRESSURE_INFLIGHT_SLACK
+                            .get(&compute_state.worker_config)
+                            .as_millis()
+                            .try_into()
+                            .expect("must fit");
+
+                        let (token, stream) = ok_stream.limit_progress(
+                            output_probe.clone(),
+                            slack,
+                            limit,
+                            upper.clone(),
+                            name.clone(),
+                        );
+                        ok_stream = stream;
+                        source_tokens.push(token);
                     }
 
                     // Attach a probe reporting the input frontier.
@@ -317,8 +347,7 @@ pub fn build_compute_dataflow<A: Allocate>(
                     imported_sources.push((mz_expr::Id::Global(*source_id), (oks, errs)));
 
                     // Associate returned tokens with the source identifier.
-                    let token: Rc<dyn Any> = Rc::new(token);
-                    tokens.insert(*source_id, token);
+                    tokens.insert(*source_id, Rc::new(source_tokens));
                 });
             }
         });
@@ -394,6 +423,7 @@ pub fn build_compute_dataflow<A: Allocate>(
                         dependencies,
                         idx_id,
                         &idx,
+                        &output_probe,
                     );
                 }
 
@@ -407,6 +437,7 @@ pub fn build_compute_dataflow<A: Allocate>(
                         &sink,
                         start_signal.clone(),
                         ct_ctx.input_times(&context.scope.parent),
+                        &output_probe,
                     );
                 }
             });
@@ -472,7 +503,14 @@ pub fn build_compute_dataflow<A: Allocate>(
 
                 // Export declared indexes.
                 for (idx_id, dependencies, idx) in indexes {
-                    context.export_index(compute_state, &tokens, dependencies, idx_id, &idx);
+                    context.export_index(
+                        compute_state,
+                        &tokens,
+                        dependencies,
+                        idx_id,
+                        &idx,
+                        &output_probe,
+                    );
                 }
 
                 // Export declared sinks.
@@ -485,6 +523,7 @@ pub fn build_compute_dataflow<A: Allocate>(
                         &sink,
                         start_signal.clone(),
                         ct_ctx.input_times(&context.scope.parent),
+                        &output_probe,
                     );
                 }
             });
@@ -498,6 +537,7 @@ impl<'g, G, T> Context<Child<'g, G, T>>
 where
     G: Scope<Timestamp = mz_repr::Timestamp>,
     T: Refines<G::Timestamp> + RenderTimestamp,
+    <T as Columnar>::Container: Clone + Send,
 {
     pub(crate) fn import_index(
         &mut self,
@@ -515,28 +555,29 @@ where
             );
 
             let token = traces.to_drop().clone();
-            // Import the specialized trace handle as a specialized arrangement import.
-            //
-            // Note that we incorporate probe setup as part of this process, since a specialized
-            // arrangement import requires us to enter a scope, but we can only enter after the
-            // probe is attached.
-            let (ok_arranged, ok_button) = traces.oks_mut().import_frontier(
-                &self.scope,
+
+            let (mut oks, ok_button) = traces.oks_mut().import_frontier_core(
+                &self.scope.parent,
                 &format!("Index({}, {:?})", idx.on_id, idx.key),
                 self.as_of_frontier.clone(),
                 self.until.clone(),
-                input_probe,
             );
+
+            oks.stream = oks.stream.probe_with(&input_probe);
+
             let (err_arranged, err_button) = traces.errs_mut().import_frontier_core(
                 &self.scope.parent,
                 &format!("ErrIndex({}, {:?})", idx.on_id, idx.key),
                 self.as_of_frontier.clone(),
                 self.until.clone(),
             );
-            let err_arranged = err_arranged.enter(&self.scope);
 
-            let ok_arranged = ok_arranged.with_start_signal(start_signal.clone());
-            let err_arranged = err_arranged.with_start_signal(start_signal);
+            let ok_arranged = oks
+                .enter(&self.scope)
+                .with_start_signal(start_signal.clone());
+            let err_arranged = err_arranged
+                .enter(&self.scope)
+                .with_start_signal(start_signal);
 
             self.update_id(
                 Id::Global(idx.on_id),
@@ -571,6 +612,7 @@ where
         dependency_ids: BTreeSet<GlobalId>,
         idx_id: GlobalId,
         idx: &IndexDesc,
+        output_probe: &MzProbeHandle<G::Timestamp>,
     ) {
         // put together tokens that belong to the export
         let mut needed_tokens = Vec::new();
@@ -593,7 +635,7 @@ where
                 if let Some(&expiration) = self.dataflow_expiration.as_option() {
                     let token = Rc::new(());
                     let shutdown_token = Rc::downgrade(&token);
-                    oks.expire_arrangement_at(
+                    oks.stream = oks.stream.expire_stream_at(
                         &format!("{}_export_index_oks", self.debug_name),
                         expiration,
                         Weak::clone(&shutdown_token),
@@ -606,8 +648,7 @@ where
                     needed_tokens.push(token);
                 }
 
-                // Obtain a specialized handle matching the specialized arrangement.
-                let oks_trace = oks.trace_handle();
+                oks.stream = oks.stream.probe_notify_with(vec![output_probe.clone()]);
 
                 // Attach logging of dataflow errors.
                 if let Some(logger) = compute_state.compute_logger.clone() {
@@ -616,7 +657,7 @@ where
 
                 compute_state.traces.set(
                     idx_id,
-                    TraceBundle::new(oks_trace, errs.trace).with_drop(needed_tokens),
+                    TraceBundle::new(oks.trace, errs.trace).with_drop(needed_tokens),
                 );
             }
             Some(ArrangementFlavor::Trace(gid, _, _)) => {
@@ -647,6 +688,7 @@ impl<'g, G, T> Context<Child<'g, G, T>>
 where
     G: Scope<Timestamp = mz_repr::Timestamp>,
     T: RenderTimestamp,
+    <T as Columnar>::Container: Clone + Send,
 {
     pub(crate) fn export_index_iterative(
         &self,
@@ -655,6 +697,7 @@ where
         dependency_ids: BTreeSet<GlobalId>,
         idx_id: GlobalId,
         idx: &IndexDesc,
+        output_probe: &MzProbeHandle<G::Timestamp>,
     ) {
         // put together tokens that belong to the export
         let mut needed_tokens = Vec::new();
@@ -672,7 +715,12 @@ where
 
         match bundle.arrangement(&idx.key) {
             Some(ArrangementFlavor::Local(oks, errs)) => {
-                let mut oks = self.dispatch_rearrange_iterative(oks, "Arrange export iterative");
+                let mut oks = oks
+                    .as_collection(|k, v| (k.into_owned(), v.into_owned()))
+                    .leave()
+                    .mz_arrange::<RowRowBatcher<_, _>, RowRowBuilder<_, _>, _>(
+                        "Arrange export iterative",
+                    );
 
                 let mut errs = errs
                     .as_collection(|k, v| (k.clone(), v.clone()))
@@ -686,7 +734,7 @@ where
                 if let Some(&expiration) = self.dataflow_expiration.as_option() {
                     let token = Rc::new(());
                     let shutdown_token = Rc::downgrade(&token);
-                    oks.expire_arrangement_at(
+                    oks.stream = oks.stream.expire_stream_at(
                         &format!("{}_export_index_iterative_oks", self.debug_name),
                         expiration,
                         Weak::clone(&shutdown_token),
@@ -699,7 +747,7 @@ where
                     needed_tokens.push(token);
                 }
 
-                let oks_trace = oks.trace_handle();
+                oks.stream = oks.stream.probe_notify_with(vec![output_probe.clone()]);
 
                 // Attach logging of dataflow errors.
                 if let Some(logger) = compute_state.compute_logger.clone() {
@@ -708,7 +756,7 @@ where
 
                 compute_state.traces.set(
                     idx_id,
-                    TraceBundle::new(oks_trace, errs.trace).with_drop(needed_tokens),
+                    TraceBundle::new(oks.trace, errs.trace).with_drop(needed_tokens),
                 );
             }
             Some(ArrangementFlavor::Trace(gid, _, _)) => {
@@ -730,24 +778,6 @@ where
                 );
             }
         };
-    }
-
-    /// Dispatches the rearranging of an arrangement coming from an iterative scope
-    /// according to specialized key-value arrangement types.
-    fn dispatch_rearrange_iterative(
-        &self,
-        oks: MzArrangement<Child<'g, G, T>>,
-        name: &str,
-    ) -> MzArrangement<G> {
-        match oks {
-            MzArrangement::RowRow(inner) => {
-                let oks = inner
-                    .as_collection(|k, v| (k.into_owned(), v.into_owned()))
-                    .leave()
-                    .mz_arrange::<RowRowBatcher<_, _>, RowRowBuilder<_, _>, _>(name);
-                MzArrangement::RowRow(oks)
-            }
-        }
     }
 }
 
@@ -859,7 +889,7 @@ where
                     )
                     .mz_reduce_abelian::<_, _, _, ErrBuilder<_, _>, ErrSpine<_, _>>(
                         "Distinct recursive err",
-                        move |_k, _s, t| t.push(((), 1)),
+                        move |_k, _s, t| t.push(((), Diff::ONE)),
                     )
                     .as_collection(|k, _| k.clone());
                 if let Some(token) = &self.shutdown_token.get_inner() {
@@ -889,6 +919,8 @@ impl<G> Context<G>
 where
     G: Scope,
     G::Timestamp: RenderTimestamp,
+    <G::Timestamp as Columnar>::Container: Clone + Send,
+    for<'a> <G::Timestamp as Columnar>::Ref<'a>: Ord + Copy,
 {
     /// Renders a non-recursive plan to a differential dataflow, producing the collection of
     /// results.
@@ -956,7 +988,7 @@ where
             // ActiveComputeState can't have a catalog reference, so we'll need to capture the names
             // in some other structure and have that structure impl ExprHumanizer
             let metadata = if should_compute_lir_metadata {
-                let operator: Box<str> = node.expr.humanize(&DummyHumanizer).into();
+                let operator = node.expr.humanize(&DummyHumanizer);
                 let operator_id_start = self.scope.peek_identifier();
                 Some((operator, operator_id_start))
             } else {
@@ -983,8 +1015,7 @@ where
         }
 
         if let Some(lir_mapping_metadata) = lir_mapping_metadata {
-            let mapping: Box<[(LirId, LirMetadata)]> = lir_mapping_metadata.into();
-            self.log_lir_mapping(object_id, mapping);
+            self.log_lir_mapping(object_id, lir_mapping_metadata);
         }
 
         collections
@@ -1048,7 +1079,7 @@ where
                         (
                             DataflowError::from(e),
                             <G::Timestamp as Refines<mz_repr::Timestamp>>::to_inner(error_time),
-                            1,
+                            Diff::ONE,
                         )
                     })
                     .to_stream(&mut self.scope)
@@ -1065,10 +1096,11 @@ where
                 match plan {
                     mz_compute_types::plan::GetPlan::PassArrangements => {
                         // Assert that each of `keys` are present in `collection`.
-                        assert!(keys
-                            .arranged
-                            .iter()
-                            .all(|(key, _, _)| collection.arranged.contains_key(key)));
+                        assert!(
+                            keys.arranged
+                                .iter()
+                                .all(|(key, _, _)| collection.arranged.contains_key(key))
+                        );
                         assert!(keys.raw <= collection.collection.is_some());
                         // Retain only those keys we want to import.
                         collection.arranged.retain(|key, _value| {
@@ -1081,12 +1113,17 @@ where
                             mfp,
                             Some((key, row)),
                             self.until.clone(),
+                            &self.config_set,
                         );
                         CollectionBundle::from_collections(oks, errs)
                     }
                     mz_compute_types::plan::GetPlan::Collection(mfp) => {
-                        let (oks, errs) =
-                            collection.as_collection_core(mfp, None, self.until.clone());
+                        let (oks, errs) = collection.as_collection_core(
+                            mfp,
+                            None,
+                            self.until.clone(),
+                            &self.config_set,
+                        );
                         CollectionBundle::from_collections(oks, errs)
                     }
                 }
@@ -1101,8 +1138,12 @@ where
                 if mfp.is_identity() {
                     input
                 } else {
-                    let (oks, errs) =
-                        input.as_collection_core(mfp, input_key_val, self.until.clone());
+                    let (oks, errs) = input.as_collection_core(
+                        mfp,
+                        input_key_val,
+                        self.until.clone(),
+                        &self.config_set,
+                    );
                     CollectionBundle::from_collections(oks, errs)
                 }
             }
@@ -1144,7 +1185,7 @@ where
             }
             Negate { input } => {
                 let input = expect_input(input);
-                let (oks, errs) = input.as_specific_collection(None);
+                let (oks, errs) = input.as_specific_collection(None, &self.config_set);
                 CollectionBundle::from_collections(oks.negate(), errs)
             }
             Threshold {
@@ -1161,7 +1202,8 @@ where
                 let mut oks = Vec::new();
                 let mut errs = Vec::new();
                 for input in inputs.into_iter() {
-                    let (os, es) = expect_input(input).as_specific_collection(None);
+                    let (os, es) =
+                        expect_input(input).as_specific_collection(None, &self.config_set);
                     oks.push(os);
                     errs.push(es);
                 }
@@ -1179,23 +1221,29 @@ where
                 input_mfp,
             } => {
                 let input = expect_input(input);
-                input.ensure_collections(keys, input_key, input_mfp, self.until.clone())
+                input.ensure_collections(
+                    keys,
+                    input_key,
+                    input_mfp,
+                    self.until.clone(),
+                    &self.config_set,
+                )
             }
         }
     }
 
     fn log_dataflow_global_id(&self, dataflow_index: usize, global_id: GlobalId) {
         if let Some(logger) = &self.compute_logger {
-            logger.log(ComputeEvent::DataflowGlobal(DataflowGlobal {
+            logger.log(&ComputeEvent::DataflowGlobal(DataflowGlobal {
                 dataflow_index,
                 global_id,
             }));
         }
     }
 
-    fn log_lir_mapping(&self, global_id: GlobalId, mapping: Box<[(LirId, LirMetadata)]>) {
+    fn log_lir_mapping(&self, global_id: GlobalId, mapping: Vec<(LirId, LirMetadata)>) {
         if let Some(logger) = &self.compute_logger {
-            logger.log(ComputeEvent::LirMapping(LirMapping { global_id, mapping }));
+            logger.log(&ComputeEvent::LirMapping(LirMapping { global_id, mapping }));
         }
     }
 
@@ -1222,14 +1270,12 @@ where
         match bundle.arranged.values_mut().next() {
             Some(arrangement) => {
                 use ArrangementFlavor::*;
-                use MzArrangement as A;
-                use MzArrangementImport as AI;
 
                 match arrangement {
-                    Local(A::RowRow(a), _) => {
+                    Local(a, _) => {
                         a.stream = self.log_operator_hydration_inner(&a.stream, lir_id);
                     }
-                    Trace(_, AI::RowRow(a), _) => {
+                    Trace(_, a, _) => {
                         a.stream = self.log_operator_hydration_inner(&a.stream, lir_id);
                     }
                 }
@@ -1294,7 +1340,11 @@ where
 
 #[allow(dead_code)] // Some of the methods on this trait are unused, but useful to have.
 /// A timestamp type that can be used for operations within MZ's dataflow layer.
-pub trait RenderTimestamp: Timestamp + Lattice + Refines<mz_repr::Timestamp> + Columnation {
+pub trait RenderTimestamp:
+    Timestamp + Lattice + Refines<mz_repr::Timestamp> + Columnation + Columnar
+where
+    <Self as Columnar>::Container: Clone + Send,
+{
     /// The system timestamp component of the timestamp.
     ///
     /// This is useful for manipulating the system time, as when delaying
@@ -1426,24 +1476,11 @@ pub(crate) trait WithStartSignal {
     fn with_start_signal(self, signal: StartSignal) -> Self;
 }
 
-impl<S> WithStartSignal for MzArrangementImport<S>
-where
-    S: Scope,
-    S::Timestamp: RenderTimestamp,
-{
-    fn with_start_signal(self, signal: StartSignal) -> Self {
-        match self {
-            MzArrangementImport::RowRow(arr) => {
-                MzArrangementImport::RowRow(arr.with_start_signal(signal))
-            }
-        }
-    }
-}
-
 impl<S, Tr> WithStartSignal for Arranged<S, Tr>
 where
     S: Scope,
     S::Timestamp: RenderTimestamp,
+    <S::Timestamp as Columnar>::Container: Clone + Send,
     Tr: TraceReader + Clone,
 {
     fn with_start_signal(self, signal: StartSignal) -> Self {
@@ -1542,6 +1579,175 @@ where
     })
 }
 
+/// Extension trait for [`StreamCore`] to selectively limit progress.
+trait LimitProgress<T: Timestamp> {
+    /// Limit the progress of the stream until its frontier reaches the given `upper` bound. Expects
+    /// the implementation to observe times in data, and release capabilities based on the probe's
+    /// frontier, after applying `slack` to round up timestamps.
+    ///
+    /// The implementation of this operator is subtle to avoid regressions in the rest of the
+    /// system. Specifically joins hold back compaction on the other side of the join, so we need to
+    /// make sure we release capabilities as soon as possible. This is why we only limit progress
+    /// for times before the `upper`, which is the time until which the source can distinguish
+    /// updates at the time of rendering. Once we make progress to the `upper`, we need to release
+    /// our capability.
+    ///
+    /// This isn't perfect, and can result in regressions if on of the inputs lags behind. We could
+    /// consider using the join of the uppers, i.e, use lower bound upper of all available inputs.
+    ///
+    /// Once the input frontier reaches `[]`, the implementation must release any capability to
+    /// allow downstream operators to release resources.
+    ///
+    /// The implementation should limit the number of pending times to `limit` if it is `Some` to
+    /// avoid unbounded memory usage.
+    ///
+    /// * `handle` is a probe installed on the dataflow's outputs as late as possible, but before
+    ///   any timestamp rounding happens (c.f., `REFRESH EVERY` materialized views).
+    /// * `slack_ms` is the number of milliseconds to round up timestamps to.
+    /// * `name` is a human-readable name for the operator.
+    /// * `limit` is the maximum number of pending times to keep around.
+    /// * `upper` is the upper bound of the stream's frontier until which the implementation can
+    ///   retain a capability.
+    ///
+    /// Returns a shutdown button and the stream with the progress limiting applied.
+    fn limit_progress(
+        &self,
+        handle: MzProbeHandle<T>,
+        slack_ms: u64,
+        limit: Option<usize>,
+        upper: Antichain<T>,
+        name: String,
+    ) -> (Rc<dyn Any>, Self);
+}
+
+// TODO: We could make this generic over a `T` that can be converted to and from a u64 millisecond
+// number.
+impl<G, D, R> LimitProgress<mz_repr::Timestamp> for StreamCore<G, Vec<(D, mz_repr::Timestamp, R)>>
+where
+    G: Scope<Timestamp = mz_repr::Timestamp>,
+    D: timely::Data,
+    R: timely::Data,
+{
+    fn limit_progress(
+        &self,
+        handle: MzProbeHandle<mz_repr::Timestamp>,
+        slack_ms: u64,
+        limit: Option<usize>,
+        upper: Antichain<mz_repr::Timestamp>,
+        name: String,
+    ) -> (Rc<dyn Any>, Self) {
+        let mut button = None;
+
+        let stream =
+            self.unary_frontier(Pipeline, &format!("LimitProgress({name})"), |_cap, info| {
+                // Times that we've observed on our input.
+                let mut pending_times: BTreeSet<G::Timestamp> = BTreeSet::new();
+                // Capability for the lower bound of `pending_times`, if any.
+                let mut retained_cap: Option<Capability<G::Timestamp>> = None;
+
+                let activator = self.scope().activator_for(info.address);
+                handle.activate(activator.clone());
+
+                let shutdown = Rc::new(());
+                button = Some(ShutdownButton::new(
+                    Rc::new(RefCell::new(Some(Rc::clone(&shutdown)))),
+                    activator,
+                ));
+                let shutdown = Rc::downgrade(&shutdown);
+
+                move |input, output| {
+                    // We've been shut down, release all resources and consume inputs.
+                    if shutdown.strong_count() == 0 {
+                        retained_cap = None;
+                        pending_times.clear();
+                        while let Some(_) = input.next() {}
+                        return;
+                    }
+
+                    while let Some((cap, data)) = input.next() {
+                        for time in data
+                            .iter()
+                            .flat_map(|(_, time, _)| u64::from(time).checked_add(slack_ms))
+                        {
+                            let rounded_time =
+                                (time / slack_ms).saturating_add(1).saturating_mul(slack_ms);
+                            if !upper.less_than(&rounded_time.into()) {
+                                pending_times.insert(rounded_time.into());
+                            }
+                        }
+                        output.session(&cap).give_container(data);
+                        if retained_cap.as_ref().is_none_or(|c| {
+                            !c.time().less_than(cap.time()) && !upper.less_than(cap.time())
+                        }) {
+                            retained_cap = Some(cap.retain());
+                        }
+                    }
+
+                    handle.with_frontier(|f| {
+                        while pending_times
+                            .first()
+                            .map_or(false, |retained_time| !f.less_than(&retained_time))
+                        {
+                            let _ = pending_times.pop_first();
+                        }
+                    });
+
+                    while limit.map_or(false, |limit| pending_times.len() > limit) {
+                        let _ = pending_times.pop_first();
+                    }
+
+                    match (retained_cap.as_mut(), pending_times.first()) {
+                        (Some(cap), Some(first)) => cap.downgrade(first),
+                        (_, None) => retained_cap = None,
+                        _ => {}
+                    }
+
+                    if input.frontier.is_empty() {
+                        retained_cap = None;
+                        pending_times.clear();
+                    }
+
+                    if !pending_times.is_empty() {
+                        tracing::debug!(
+                            name,
+                            info.global_id,
+                            pending_times = %PendingTimesDisplay(pending_times.iter().cloned()),
+                            frontier = ?input.frontier.frontier().get(0),
+                            probe = ?handle.with_frontier(|f| f.get(0).cloned()),
+                            ?upper,
+                            "pending times",
+                        );
+                    }
+                }
+            });
+        (Rc::new(button.unwrap().press_on_drop()), stream)
+    }
+}
+
+/// A formatter for an iterator of timestamps that displays the first element, and subsequently
+/// the difference between timestamps.
+struct PendingTimesDisplay<T>(T);
+
+impl<T> std::fmt::Display for PendingTimesDisplay<T>
+where
+    T: IntoIterator<Item = mz_repr::Timestamp> + Clone,
+{
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let mut iter = self.0.clone().into_iter();
+        write!(f, "[")?;
+        if let Some(first) = iter.next() {
+            write!(f, "{}", first)?;
+            let mut last = u64::from(first);
+            for time in iter {
+                write!(f, ", +{}", u64::from(time) - last)?;
+                last = u64::from(time);
+            }
+        }
+        write!(f, "]")?;
+        Ok(())
+    }
+}
+
 /// Helper to merge pairs of datum iterators into a row or split a datum iterator
 /// into two rows, given the arity of the first component.
 #[derive(Clone, Copy, Debug)]
@@ -1567,8 +1773,7 @@ impl Pairer {
     /// Splits a datum iterator into a pair of `Row` instances.
     fn split<'a>(&self, datum_iter: impl IntoIterator<Item = Datum<'a>>) -> (Row, Row) {
         let mut datum_iter = datum_iter.into_iter();
-        let binding = SharedRow::get();
-        let mut row_builder = binding.borrow_mut();
+        let mut row_builder = SharedRow::get();
         let first = row_builder.pack_using(datum_iter.by_ref().take(self.split_arity));
         let second = row_builder.pack_using(datum_iter);
         (first, second)

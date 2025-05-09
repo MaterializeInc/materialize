@@ -1,0 +1,72 @@
+---
+source: src/expr/src/scalar/func.rs
+expression: "#[sqlfunc(\n    output_type = \"bool\",\n    is_infix_op = true,\n    sqlname = \"@>\",\n    propagates_nulls = true,\n    introduces_nulls = false\n)]\nfn array_contains_array<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {\n    let a = a.unwrap_array().elements();\n    let b = b.unwrap_array().elements();\n    if b.iter().contains(&Datum::Null) {\n        Datum::False\n    } else {\n        b.iter().all(|item_b| a.iter().any(|item_a| item_a == item_b)).into()\n    }\n}\n"
+---
+#[derive(
+    proptest_derive::Arbitrary,
+    Ord,
+    PartialOrd,
+    Clone,
+    Debug,
+    Eq,
+    PartialEq,
+    serde::Serialize,
+    serde::Deserialize,
+    Hash,
+    mz_lowertest::MzReflect
+)]
+pub struct ArrayContainsArray;
+impl<'a> crate::func::binary::EagerBinaryFunc<'a> for ArrayContainsArray {
+    type Input1 = Datum<'a>;
+    type Input2 = Datum<'a>;
+    type Output = Datum<'a>;
+    fn call(
+        &self,
+        a: Self::Input1,
+        b: Self::Input2,
+        temp_storage: &'a mz_repr::RowArena,
+    ) -> Self::Output {
+        array_contains_array(a, b)
+    }
+    fn output_type(
+        &self,
+        input_type_a: mz_repr::ColumnType,
+        input_type_b: mz_repr::ColumnType,
+    ) -> mz_repr::ColumnType {
+        use mz_repr::AsColumnType;
+        let output = <bool>::as_column_type();
+        let propagates_nulls = crate::func::binary::EagerBinaryFunc::propagates_nulls(
+            self,
+        );
+        let nullable = output.nullable;
+        output
+            .nullable(
+                nullable
+                    || (propagates_nulls
+                        && (input_type_a.nullable || input_type_b.nullable)),
+            )
+    }
+    fn introduces_nulls(&self) -> bool {
+        false
+    }
+    fn is_infix_op(&self) -> bool {
+        true
+    }
+    fn propagates_nulls(&self) -> bool {
+        true
+    }
+}
+impl std::fmt::Display for ArrayContainsArray {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        f.write_str("@>")
+    }
+}
+fn array_contains_array<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
+    let a = a.unwrap_array().elements();
+    let b = b.unwrap_array().elements();
+    if b.iter().contains(&Datum::Null) {
+        Datum::False
+    } else {
+        b.iter().all(|item_b| a.iter().any(|item_a| item_a == item_b)).into()
+    }
+}

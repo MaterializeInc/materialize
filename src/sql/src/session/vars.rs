@@ -277,7 +277,7 @@ impl SessionVar {
             .default_value
             .as_ref()
             .map(|v| v.as_ref())
-            .unwrap_or(self.definition.value.value());
+            .unwrap_or_else(|| self.definition.value.value());
         if local {
             self.local_value = Some(value.box_clone());
         } else {
@@ -314,7 +314,7 @@ impl SessionVar {
             .or(self.staged_value.as_deref())
             .or(self.session_value.as_deref())
             .or(self.default_value.as_deref())
-            .unwrap_or(self.definition.value.value())
+            .unwrap_or_else(|| self.definition.value.value())
     }
 
     /// Returns the [`Value`] that is currently stored as the `session_value`.
@@ -419,7 +419,7 @@ impl SessionVars {
             &WELCOME_MESSAGE,
         ]
         .into_iter()
-        .chain(SystemVars::SESSION_VARS.iter().map(|(_name, var)| *var))
+        .chain(SESSION_SYSTEM_VARS.iter().map(|(_name, var)| *var))
         .map(|var| (var.name, SessionVar::new(var.clone())))
         .collect();
 
@@ -478,6 +478,7 @@ impl SessionVars {
             // size of a cluster, what indexes are present, etc.
             &CLUSTER,
             &CLUSTER_REPLICA,
+            &DEFAULT_CLUSTER_REPLICATION_FACTOR,
             &DATABASE,
             &SEARCH_PATH,
         ]
@@ -964,7 +965,7 @@ impl SystemVar {
         self.persisted_value
             .as_deref()
             .or(self.dynamic_default.as_deref())
-            .unwrap_or(self.definition.default_value())
+            .unwrap_or_else(|| self.definition.default_value())
     }
 
     pub fn value<V: 'static>(&self) -> &V {
@@ -1070,42 +1071,12 @@ impl Default for SystemVars {
 }
 
 impl SystemVars {
-    /// Set of [`SystemVar`]s that can also get set at a per-Session level.
-    ///
-    /// TODO(parkmycar): Instead of a separate list, make this a field on VarDefinition.
-    const SESSION_VARS: LazyLock<BTreeMap<&'static UncasedStr, &'static VarDefinition>> =
-        LazyLock::new(|| {
-            [
-                &APPLICATION_NAME,
-                &CLIENT_ENCODING,
-                &CLIENT_MIN_MESSAGES,
-                &CLUSTER,
-                &CLUSTER_REPLICA,
-                &CURRENT_OBJECT_MISSING_WARNINGS,
-                &DATABASE,
-                &DATE_STYLE,
-                &EXTRA_FLOAT_DIGITS,
-                &INTEGER_DATETIMES,
-                &INTERVAL_STYLE,
-                &REAL_TIME_RECENCY_TIMEOUT,
-                &SEARCH_PATH,
-                &STANDARD_CONFORMING_STRINGS,
-                &STATEMENT_TIMEOUT,
-                &IDLE_IN_TRANSACTION_SESSION_TIMEOUT,
-                &TIMEZONE,
-                &TRANSACTION_ISOLATION,
-                &MAX_QUERY_RESULT_SIZE,
-            ]
-            .into_iter()
-            .map(|var| (UncasedStr::new(var.name()), var))
-            .collect()
-        });
-
     pub fn new() -> Self {
         let system_vars = vec![
             &MAX_KAFKA_CONNECTIONS,
             &MAX_POSTGRES_CONNECTIONS,
             &MAX_MYSQL_CONNECTIONS,
+            &MAX_SQL_SERVER_CONNECTIONS,
             &MAX_AWS_PRIVATELINK_CONNECTIONS,
             &MAX_TABLES,
             &MAX_SOURCES,
@@ -1169,6 +1140,7 @@ impl SystemVars {
             &MYSQL_SOURCE_TCP_KEEPALIVE,
             &MYSQL_SOURCE_SNAPSHOT_MAX_EXECUTION_TIME,
             &MYSQL_SOURCE_SNAPSHOT_LOCK_WAIT_TIMEOUT,
+            &MYSQL_SOURCE_CONNECT_TIMEOUT,
             &SSH_CHECK_INTERVAL,
             &SSH_CONNECT_TIMEOUT,
             &SSH_KEEPALIVES_IDLE,
@@ -1178,7 +1150,6 @@ impl SystemVars {
             &KAFKA_SOCKET_CONNECTION_SETUP_TIMEOUT,
             &KAFKA_FETCH_METADATA_TIMEOUT,
             &KAFKA_PROGRESS_RECORD_FETCH_TIMEOUT,
-            &KAFKA_DEFAULT_METADATA_FETCH_INTERVAL,
             &ENABLE_LAUNCHDARKLY,
             &MAX_CONNECTIONS,
             &NETWORK_POLICY,
@@ -1273,7 +1244,7 @@ impl SystemVars {
             // Include all of our feature flags.
             .chain(definitions::FEATURE_FLAGS.iter().copied())
             // Include the subset of Session variables we allow system defaults for.
-            .chain(Self::SESSION_VARS.values().copied())
+            .chain(SESSION_SYSTEM_VARS.values().copied())
             .cloned()
             // Include Persist configs.
             .chain(dyncfg_vars)
@@ -1341,7 +1312,7 @@ impl SystemVars {
         self.vars
             .values()
             .map(|v| v.as_var())
-            .filter(|v| !Self::SESSION_VARS.contains_key(UncasedStr::new(v.name())))
+            .filter(|v| !SESSION_SYSTEM_VARS.contains_key(UncasedStr::new(v.name())))
     }
 
     /// Returns an iterator over the configuration parameters and their current
@@ -1356,12 +1327,12 @@ impl SystemVars {
         self.vars
             .values()
             .map(|v| v.as_var())
-            .filter(|v| Self::SESSION_VARS.contains_key(UncasedStr::new(v.name())))
+            .filter(|v| SESSION_SYSTEM_VARS.contains_key(UncasedStr::new(v.name())))
     }
 
     /// Returns whether or not this parameter can be modified by a superuser.
     pub fn user_modifiable(&self, name: &str) -> bool {
-        Self::SESSION_VARS.contains_key(UncasedStr::new(name))
+        SESSION_SYSTEM_VARS.contains_key(UncasedStr::new(name))
             || name == ENABLE_RBAC_CHECKS.name()
             || name == NETWORK_POLICY.name()
     }
@@ -1524,7 +1495,7 @@ impl SystemVars {
                 let default = var
                     .dynamic_default
                     .as_deref()
-                    .unwrap_or(var.definition.default_value());
+                    .unwrap_or_else(|| var.definition.default_value());
                 (name.as_str().to_owned(), default.format())
             })
             .collect()
@@ -1575,6 +1546,11 @@ impl SystemVars {
     /// Returns the value of the `max_mysql_connections` configuration parameter.
     pub fn max_mysql_connections(&self) -> u32 {
         *self.expect_value(&MAX_MYSQL_CONNECTIONS)
+    }
+
+    /// Returns the value of the `max_sql_server_connections` configuration parameter.
+    pub fn max_sql_server_connections(&self) -> u32 {
+        *self.expect_value(&MAX_SQL_SERVER_CONNECTIONS)
     }
 
     /// Returns the value of the `max_aws_privatelink_connections` configuration parameter.
@@ -1673,6 +1649,11 @@ impl SystemVars {
             .into_iter()
             .map(|s| s.as_str().into())
             .collect()
+    }
+
+    /// Returns the value of the `default_cluster_replication_factor` configuration parameter.
+    pub fn default_cluster_replication_factor(&self) -> u32 {
+        *self.expect_value::<u32>(&DEFAULT_CLUSTER_REPLICATION_FACTOR)
     }
 
     /// Returns the `disk_cluster_replicas_default` configuration parameter.
@@ -1828,6 +1809,11 @@ impl SystemVars {
         *self.expect_value(&MYSQL_SOURCE_SNAPSHOT_LOCK_WAIT_TIMEOUT)
     }
 
+    /// Returns the `mysql_source_connect_timeout` configuration parameter.
+    pub fn mysql_source_connect_timeout(&self) -> Duration {
+        *self.expect_value(&MYSQL_SOURCE_CONNECT_TIMEOUT)
+    }
+
     /// Returns the `ssh_check_interval` configuration parameter.
     pub fn ssh_check_interval(&self) -> Duration {
         *self.expect_value(&SSH_CHECK_INTERVAL)
@@ -1871,11 +1857,6 @@ impl SystemVars {
     /// Returns the `kafka_progress_record_fetch_timeout` configuration parameter.
     pub fn kafka_progress_record_fetch_timeout(&self) -> Option<Duration> {
         *self.expect_value(&KAFKA_PROGRESS_RECORD_FETCH_TIMEOUT)
-    }
-
-    /// Returns the `kafka_default_metadata_fetch_interval` configuration parameter.
-    pub fn kafka_default_metadata_fetch_interval(&self) -> Duration {
-        *self.expect_value(&KAFKA_DEFAULT_METADATA_FETCH_INTERVAL)
     }
 
     /// Returns the `crdb_connect_timeout` configuration parameter.
@@ -2223,6 +2204,11 @@ impl SystemVars {
         name == MAX_RESULT_SIZE.name() || self.is_dyncfg_var(name) || is_tracing_var(name)
     }
 
+    /// Returns whether the named variable is a metrics configuration parameter
+    pub fn is_metrics_config_var(&self, name: &str) -> bool {
+        self.is_dyncfg_var(name)
+    }
+
     /// Returns whether the named variable is a storage configuration parameter.
     pub fn is_storage_config_var(&self, name: &str) -> bool {
         name == PG_SOURCE_CONNECT_TIMEOUT.name()
@@ -2239,6 +2225,7 @@ impl SystemVars {
             || name == MYSQL_SOURCE_TCP_KEEPALIVE.name()
             || name == MYSQL_SOURCE_SNAPSHOT_MAX_EXECUTION_TIME.name()
             || name == MYSQL_SOURCE_SNAPSHOT_LOCK_WAIT_TIMEOUT.name()
+            || name == MYSQL_SOURCE_CONNECT_TIMEOUT.name()
             || name == ENABLE_STORAGE_SHARD_FINALIZATION.name()
             || name == SSH_CHECK_INTERVAL.name()
             || name == SSH_CONNECT_TIMEOUT.name()
@@ -2249,7 +2236,6 @@ impl SystemVars {
             || name == KAFKA_SOCKET_CONNECTION_SETUP_TIMEOUT.name()
             || name == KAFKA_FETCH_METADATA_TIMEOUT.name()
             || name == KAFKA_PROGRESS_RECORD_FETCH_TIMEOUT.name()
-            || name == KAFKA_DEFAULT_METADATA_FETCH_INTERVAL.name()
             || name == STORAGE_DATAFLOW_MAX_INFLIGHT_BYTES.name()
             || name == STORAGE_DATAFLOW_MAX_INFLIGHT_BYTES_TO_CLUSTER_SIZE_FRACTION.name()
             || name == STORAGE_DATAFLOW_MAX_INFLIGHT_BYTES_DISK_ONLY.name()
@@ -2326,6 +2312,38 @@ pub fn is_cluster_scheduling_var(name: &str) -> bool {
 pub fn is_http_config_var(name: &str) -> bool {
     name == WEBHOOK_CONCURRENT_REQUEST_LIMIT.name()
 }
+
+/// Set of [`SystemVar`]s that can also get set at a per-Session level.
+///
+/// TODO(parkmycar): Instead of a separate list, make this a field on VarDefinition.
+static SESSION_SYSTEM_VARS: LazyLock<BTreeMap<&'static UncasedStr, &'static VarDefinition>> =
+    LazyLock::new(|| {
+        [
+            &APPLICATION_NAME,
+            &CLIENT_ENCODING,
+            &CLIENT_MIN_MESSAGES,
+            &CLUSTER,
+            &CLUSTER_REPLICA,
+            &DEFAULT_CLUSTER_REPLICATION_FACTOR,
+            &CURRENT_OBJECT_MISSING_WARNINGS,
+            &DATABASE,
+            &DATE_STYLE,
+            &EXTRA_FLOAT_DIGITS,
+            &INTEGER_DATETIMES,
+            &INTERVAL_STYLE,
+            &REAL_TIME_RECENCY_TIMEOUT,
+            &SEARCH_PATH,
+            &STANDARD_CONFORMING_STRINGS,
+            &STATEMENT_TIMEOUT,
+            &IDLE_IN_TRANSACTION_SESSION_TIMEOUT,
+            &TIMEZONE,
+            &TRANSACTION_ISOLATION,
+            &MAX_QUERY_RESULT_SIZE,
+        ]
+        .into_iter()
+        .map(|var| (UncasedStr::new(var.name()), var))
+        .collect()
+    });
 
 // Provides a wrapper to express that a particular `ServerVar` is meant to be used as a feature
 /// flag.

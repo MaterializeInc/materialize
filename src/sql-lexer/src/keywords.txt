@@ -29,6 +29,7 @@ Add
 Added
 Address
 Addresses
+After
 Aggregate
 Aggregation
 Aligned
@@ -39,6 +40,7 @@ And
 Any
 Arity
 Arn
+Arranged
 Arrangement
 Array
 As
@@ -65,6 +67,7 @@ Broker
 Brokers
 By
 Bytes
+Capture
 Cardinality
 Cascade
 Case
@@ -110,6 +113,7 @@ Createnetworkpolicy
 Createrole
 Creation
 Cross
+Cse
 Csv
 Current
 Cursor
@@ -174,6 +178,7 @@ Features
 Fetch
 Fields
 File
+Files
 Filter
 First
 Fixpoint
@@ -223,6 +228,7 @@ Input
 Insert
 Insights
 Inspect
+Instance
 Int
 Integer
 Internal
@@ -320,6 +326,7 @@ Partition
 Partitions
 Password
 Path
+Pattern
 Physical
 Plan
 Plans
@@ -333,9 +340,11 @@ Precision
 Prefix
 Prepare
 Primary
+Prioritize
 Privatelink
 Privileges
 Progress
+Projection
 Protobuf
 Protocol
 Public
@@ -362,6 +371,7 @@ Refresh
 Regex
 Region
 Registry
+Relation
 Rename
 Reoptimize
 Repeatable
@@ -400,6 +410,7 @@ Seed
 Select
 Sequences
 Serializable
+Server
 Service
 Session
 Set
@@ -413,6 +424,7 @@ Snapshot
 Some
 Source
 Sources
+Sql
 Ssh
 Ssl
 Start
@@ -485,6 +497,7 @@ Values
 Varchar
 Variadic
 Varying
+Verbose
 Version
 View
 Views

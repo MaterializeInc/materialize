@@ -17,15 +17,14 @@ use std::sync::LazyLock;
 use dynfmt::{Format, SimpleCurlyFormat};
 use itertools::Itertools;
 use mz_expr::func::{CastArrayToJsonb, CastListToJsonb};
-use mz_expr::{func, VariadicFunc};
+use mz_expr::{VariadicFunc, func};
 use mz_ore::assert_none;
 use mz_repr::{ColumnName, ColumnType, Datum, RelationType, ScalarBaseType, ScalarType};
 
 use crate::catalog::TypeCategory;
 use crate::plan::error::PlanError;
-use crate::plan::expr::{
-    AbstractColumnType, CoercibleScalarExpr, CoercibleScalarType, ColumnRef, HirScalarExpr,
-    UnaryFunc,
+use crate::plan::hir::{
+    AbstractColumnType, CoercibleScalarExpr, CoercibleScalarType, HirScalarExpr, UnaryFunc,
 };
 use crate::plan::query::{ExprContext, QueryContext};
 use crate::plan::scope::Scope;
@@ -934,10 +933,7 @@ pub fn to_jsonb(ecx: &ExprContext, expr: HirScalarExpr) -> HirScalarExpr {
                         .call_unary(UnaryFunc::RecordGet(func::RecordGet(i))),
                 ));
             }
-            HirScalarExpr::CallVariadic {
-                func: VariadicFunc::JsonbBuildObject,
-                exprs,
-            }
+            HirScalarExpr::call_variadic(VariadicFunc::JsonbBuildObject, exprs)
         }
         ref ty @ List {
             ref element_type, ..
@@ -1070,8 +1066,8 @@ pub fn guess_best_common_type(
             sql_bail!(
                 "{} types {} and {} cannot be matched",
                 ecx.name,
-                ecx.humanize_scalar_type(candidate),
-                ecx.humanize_scalar_type(typ),
+                ecx.humanize_scalar_type(candidate, false),
+                ecx.humanize_scalar_type(typ, false),
             );
         };
 
@@ -1126,20 +1122,20 @@ pub fn plan_coerce<'a>(
             for (e, coerce_to) in exprs.into_iter().zip(coercions) {
                 out.push(plan_coerce(ecx, e, &coerce_to)?);
             }
-            HirScalarExpr::CallVariadic {
-                func: VariadicFunc::RecordCreate {
+            HirScalarExpr::call_variadic(
+                VariadicFunc::RecordCreate {
                     field_names: (0..arity)
                         .map(|i| ColumnName::from(format!("f{}", i + 1)))
                         .collect(),
                 },
-                exprs: out,
-            }
+                out,
+            )
         }
 
         Parameter(n) => {
             let prev = ecx.param_types().borrow_mut().insert(n, coerce_to.clone());
             assert_none!(prev);
-            HirScalarExpr::Parameter(n)
+            HirScalarExpr::parameter(n)
         }
     })
 }
@@ -1179,10 +1175,7 @@ pub fn plan_hypothetical_cast(
         allow_windows: false,
     };
 
-    let col_expr = HirScalarExpr::Column(ColumnRef {
-        level: 0,
-        column: 0,
-    });
+    let col_expr = HirScalarExpr::column(0);
 
     // Determine the `ScalarExpr` required to cast our column to the target
     // component type.
@@ -1217,8 +1210,8 @@ pub fn plan_cast(
         None => Err(PlanError::InvalidCast {
             name: ecx.name.into(),
             ccx,
-            from: ecx.humanize_scalar_type(from),
-            to: ecx.humanize_scalar_type(to),
+            from: ecx.humanize_scalar_type(from, false),
+            to: ecx.humanize_scalar_type(to, false),
         }),
     };
 

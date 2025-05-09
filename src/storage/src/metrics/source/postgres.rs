@@ -90,7 +90,7 @@ pub(crate) struct PgSnapshotMetrics {
     // This has to be shared between tokio tasks and the replication operator, as the collection
     // of these metrics happens once in those tasks, which do not live long enough to keep them
     // alive.
-    gauges: Arc<Mutex<Vec<DeleteOnDropGauge<'static, AtomicF64, Vec<String>>>>>,
+    gauges: Arc<Mutex<Vec<DeleteOnDropGauge<AtomicF64, Vec<String>>>>>,
     defs: PgSourceMetricDefs,
 }
 
@@ -116,14 +116,14 @@ impl PgSnapshotMetrics {
 
 /// Metrics for Postgres sources.
 pub(crate) struct PgSourceMetrics {
-    pub(crate) inserts: DeleteOnDropCounter<'static, AtomicU64, Vec<String>>,
-    pub(crate) updates: DeleteOnDropCounter<'static, AtomicU64, Vec<String>>,
-    pub(crate) deletes: DeleteOnDropCounter<'static, AtomicU64, Vec<String>>,
-    pub(crate) ignored: DeleteOnDropCounter<'static, AtomicU64, Vec<String>>,
-    pub(crate) total: DeleteOnDropCounter<'static, AtomicU64, Vec<String>>,
-    pub(crate) transactions: DeleteOnDropCounter<'static, AtomicU64, Vec<String>>,
-    pub(crate) tables: DeleteOnDropGauge<'static, AtomicU64, Vec<String>>,
-    pub(crate) lsn: DeleteOnDropGauge<'static, AtomicU64, Vec<String>>,
+    pub(crate) inserts: DeleteOnDropCounter<AtomicU64, Vec<String>>,
+    pub(crate) updates: DeleteOnDropCounter<AtomicU64, Vec<String>>,
+    pub(crate) deletes: DeleteOnDropCounter<AtomicU64, Vec<String>>,
+    pub(crate) ignored: DeleteOnDropCounter<AtomicU64, Vec<String>>,
+    pub(crate) total: DeleteOnDropCounter<AtomicU64, Vec<String>>,
+    pub(crate) transactions: DeleteOnDropCounter<AtomicU64, Vec<String>>,
+    pub(crate) tables: DeleteOnDropGauge<AtomicU64, Vec<String>>,
+    pub(crate) lsn: DeleteOnDropGauge<AtomicU64, Vec<String>>,
 
     pub(crate) snapshot_metrics: PgSnapshotMetrics,
 }

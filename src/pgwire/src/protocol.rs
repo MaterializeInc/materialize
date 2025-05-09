@@ -15,7 +15,7 @@ use std::time::Instant;
 use std::{iter, mem};
 
 use byteorder::{ByteOrder, NetworkEndian};
-use futures::future::{pending, BoxFuture, FutureExt};
+use futures::future::{BoxFuture, FutureExt, pending};
 use itertools::izip;
 use mz_adapter::client::RecordFirstRowStream;
 use mz_adapter::session::{
@@ -23,9 +23,10 @@ use mz_adapter::session::{
 };
 use mz_adapter::statement_logging::{StatementEndedExecutionReason, StatementExecutionStrategy};
 use mz_adapter::{
-    verify_datum_desc, AdapterError, AdapterNotice, ExecuteContextExtra, ExecuteResponse,
-    PeekResponseUnary, RowsFuture,
+    AdapterError, AdapterNotice, ExecuteContextExtra, ExecuteResponse, PeekResponseUnary,
+    RowsFuture, verify_datum_desc,
 };
+use mz_auth::password::Password;
 use mz_frontegg_auth::Authenticator as FronteggAuthentication;
 use mz_ore::cast::CastFrom;
 use mz_ore::netio::AsyncReady;
@@ -33,10 +34,12 @@ use mz_ore::str::StrExt;
 use mz_ore::{assert_none, assert_ok, instrument};
 use mz_pgcopy::{CopyCsvFormatParams, CopyFormatParams, CopyTextFormatParams};
 use mz_pgwire_common::{
-    ConnectionCounter, ErrorResponse, Format, FrontendMessage, Severity, VERSIONS, VERSION_3,
+    ConnectionCounter, ErrorResponse, Format, FrontendMessage, Severity, VERSION_3, VERSIONS,
 };
+use mz_repr::user::InternalUserMetadata;
 use mz_repr::{
-    CatalogItemId, Datum, RelationDesc, RelationType, RowArena, RowIterator, RowRef, ScalarType,
+    CatalogItemId, ColumnIndex, Datum, RelationDesc, RelationType, RowArena, RowIterator, RowRef,
+    ScalarType,
 };
 use mz_server_core::TlsMode;
 use mz_sql::ast::display::AstDisplay;
@@ -45,14 +48,14 @@ use mz_sql::parse::StatementParseResult;
 use mz_sql::plan::{CopyFormat, ExecuteTimeout, StatementDesc};
 use mz_sql::session::metadata::SessionMetadata;
 use mz_sql::session::user::INTERNAL_USER_NAMES;
-use mz_sql::session::vars::{Var, VarInput, MAX_COPY_FROM_SIZE};
+use mz_sql::session::vars::{MAX_COPY_FROM_SIZE, Var, VarInput};
 use postgres::error::SqlState;
 use tokio::io::{self, AsyncRead, AsyncWrite};
 use tokio::select;
 use tokio::sync::mpsc::UnboundedReceiver;
 use tokio::time::{self};
 use tokio_stream::wrappers::UnboundedReceiverStream;
-use tracing::{debug, debug_span, warn, Instrument};
+use tracing::{Instrument, debug, debug_span, warn};
 use uuid::Uuid;
 
 use crate::codec::FramedConn;
@@ -94,6 +97,8 @@ pub struct RunParams<'a, A> {
     pub params: BTreeMap<String, String>,
     /// Frontegg authentication.
     pub frontegg: Option<&'a FronteggAuthentication>,
+    /// Whether to use self hosted auth.
+    pub use_self_hosted_auth: bool,
     /// Whether this is an internal server that permits access to restricted
     /// system resources.
     pub internal: bool,
@@ -122,6 +127,7 @@ pub async fn run<'a, A>(
         version,
         mut params,
         frontegg,
+        use_self_hosted_auth,
         internal,
         active_connection_counter,
         helm_chart_version,
@@ -175,7 +181,7 @@ where
                         SqlState::INVALID_AUTHORIZATION_SPECIFICATION,
                         "expected Password message",
                     ))
-                    .await
+                    .await;
             }
         };
 
@@ -195,6 +201,7 @@ where
                     user: auth_session.user().into(),
                     client_ip: conn.peer_addr().clone(),
                     external_metadata_rx: Some(auth_session.external_metadata_rx()),
+                    internal_user_metadata: None,
                     helm_chart_version,
                 });
                 let expired = async move { auth_session.expired().await };
@@ -210,6 +217,47 @@ where
                     .await;
             }
         }
+    } else if use_self_hosted_auth {
+        conn.send(BackendMessage::AuthenticationCleartextPassword)
+            .await?;
+        conn.flush().await?;
+        let password = match conn.recv().await? {
+            Some(FrontendMessage::Password { password }) => Password(password),
+            _ => {
+                return conn
+                    .send(ErrorResponse::fatal(
+                        SqlState::INVALID_AUTHORIZATION_SPECIFICATION,
+                        "expected Password message",
+                    ))
+                    .await;
+            }
+        };
+        let auth_response = match adapter_client.authenticate(&user, &password).await {
+            Ok(resp) => resp,
+            Err(err) => {
+                warn!(?err, "pgwire connection failed authentication");
+                return conn
+                    .send(ErrorResponse::fatal(
+                        SqlState::INVALID_PASSWORD,
+                        "invalid password",
+                    ))
+                    .await;
+            }
+        };
+        let session = adapter_client.new_session(SessionConfig {
+            conn_id: conn.conn_id().clone(),
+            uuid: conn_uuid,
+            user,
+            client_ip: conn.peer_addr().clone(),
+            external_metadata_rx: None,
+            internal_user_metadata: Some(InternalUserMetadata {
+                superuser: auth_response.superuser,
+            }),
+            helm_chart_version,
+        });
+        // No frontegg check, so auth session lasts indefinitely.
+        let auth_session = pending().right_future();
+        (session, auth_session)
     } else {
         let session = adapter_client.new_session(SessionConfig {
             conn_id: conn.conn_id().clone(),
@@ -217,6 +265,7 @@ where
             user,
             client_ip: conn.peer_addr().clone(),
             external_metadata_rx: None,
+            internal_user_metadata: None,
             helm_chart_version,
         });
         // No frontegg check, so auth session lasts indefinitely.
@@ -767,7 +816,7 @@ where
                                 SqlState::INVALID_PARAMETER_VALUE,
                                 err.to_string(),
                             ))
-                            .await
+                            .await;
                     }
                 },
                 Err(_) if oid == 0 => param_types.push(None),
@@ -882,7 +931,7 @@ where
             Err(msg) => {
                 return self
                     .error(ErrorResponse::error(SqlState::PROTOCOL_VIOLATION, msg))
-                    .await
+                    .await;
             }
         };
         if aborted_txn && !is_txn_exit_stmt(stmt.stmt()) {
@@ -919,7 +968,7 @@ where
             Err(msg) => {
                 return self
                     .error(ErrorResponse::error(SqlState::PROTOCOL_VIOLATION, msg))
-                    .await
+                    .await;
             }
         };
 
@@ -2114,7 +2163,7 @@ where
     async fn copy_from(
         &mut self,
         id: CatalogItemId,
-        columns: Vec<usize>,
+        columns: Vec<ColumnIndex>,
         params: CopyFormatParams<'_>,
         row_desc: RelationDesc,
         mut ctx_extra: ExecuteContextExtra,
@@ -2150,7 +2199,7 @@ where
     async fn copy_from_inner(
         &mut self,
         id: CatalogItemId,
-        columns: Vec<usize>,
+        columns: Vec<ColumnIndex>,
         params: CopyFormatParams<'_>,
         row_desc: RelationDesc,
         ctx_extra: &mut ExecuteContextExtra,

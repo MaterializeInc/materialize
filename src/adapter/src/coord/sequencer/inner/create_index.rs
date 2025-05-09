@@ -33,7 +33,7 @@ use crate::explain::optimizer_trace::OptimizerTrace;
 use crate::optimize::dataflows::dataflow_import_id_bundle;
 use crate::optimize::{self, Optimize};
 use crate::session::Session;
-use crate::{catalog, AdapterNotice, ExecuteContext, TimestampProvider};
+use crate::{AdapterNotice, ExecuteContext, TimestampProvider, catalog};
 
 impl Staged for CreateIndexStage {
     type Ctx = ExecuteContext;

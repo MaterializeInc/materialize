@@ -66,7 +66,7 @@ This includes:
 ### Account management
 
 Tenant accounts and account permissions are set by the customer using native
-[access control](https://materialize.com/docs/manage/access-control/) features.
+[access control](/manage/access-control/) features.
 2FA, SSO, and password requirements are configurable and highly recommended.
 
 ### Data accuracy

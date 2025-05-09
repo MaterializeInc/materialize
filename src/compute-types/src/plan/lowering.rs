@@ -13,12 +13,12 @@ use std::collections::BTreeMap;
 
 use mz_expr::JoinImplementation::{DeltaQuery, Differential, IndexedFilter, Unimplemented};
 use mz_expr::{
-    permutation_for_arrangement, AggregateExpr, Id, JoinInputMapper, MapFilterProject,
-    MirRelationExpr, MirScalarExpr, OptimizedMirRelationExpr, TableFunc,
+    AggregateExpr, Id, JoinInputMapper, MapFilterProject, MirRelationExpr, MirScalarExpr,
+    OptimizedMirRelationExpr, TableFunc, permutation_for_arrangement,
 };
 use mz_ore::{assert_none, soft_assert_eq_or_log, soft_panic_or_log};
-use mz_repr::optimize::OptimizerFeatures;
 use mz_repr::GlobalId;
+use mz_repr::optimize::OptimizerFeatures;
 use timely::progress::Timestamp;
 
 use crate::dataflows::{BuildDesc, DataflowDescription, IndexImport};
@@ -43,7 +43,7 @@ impl Context {
     pub fn new(debug_name: String, features: &OptimizerFeatures) -> Self {
         Self {
             arrangements: Default::default(),
-            next_lir_id: LirId(std::num::NonZero::<u64>::MIN),
+            next_lir_id: LirId(1),
             debug_info: LirDebugInfo {
                 debug_name,
                 id: GlobalId::Transient(0),
@@ -575,7 +575,7 @@ impl Context {
                         // All columns of the constant input will be part of the arrangement key.
                         let source_arrangement = (
                             (0..key.len())
-                                .map(MirScalarExpr::Column)
+                                .map(MirScalarExpr::column)
                                 .collect::<Vec<_>>(),
                             (0..key.len()).collect::<Vec<_>>(),
                             Vec::<usize>::new(),

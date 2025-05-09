@@ -18,13 +18,13 @@ use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
 use std::sync::LazyLock;
 
+use crate::AlterCompatible;
 use crate::connections::inline::{
     ConnectionAccess, ConnectionResolver, InlinedConnection, IntoInlineConnection,
     ReferencedConnection,
 };
 use crate::controller::AlterError;
 use crate::sources::{MzOffset, SourceConnection};
-use crate::AlterCompatible;
 
 use super::SourceExportDetails;
 
@@ -130,6 +130,10 @@ impl<C: ConnectionAccess> SourceConnection for PostgresSourceConnection<C> {
     fn supports_read_only(&self) -> bool {
         false
     }
+
+    fn prefers_single_replica(&self) -> bool {
+        true
+    }
 }
 
 impl<C: ConnectionAccess> AlterCompatible for PostgresSourceConnection<C> {
@@ -203,7 +207,7 @@ impl RustType<ProtoCastType> for CastType {
             None => {
                 return Err(TryFromProtoError::missing_field(
                     "ProtoWindowFrameUnits::kind",
-                ))
+                ));
             }
         })
     }

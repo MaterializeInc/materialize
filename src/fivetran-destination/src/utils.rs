@@ -12,10 +12,11 @@ use std::pin::Pin;
 use std::task::{Context, Poll};
 
 use crate::error::{OpError, OpErrorKind};
-use crate::fivetran_sdk::{DataType, DecimalParams, Table};
+use crate::fivetran_sdk::data_type_params::Params;
+use crate::fivetran_sdk::{DataType, DataTypeParams, DecimalParams, Table};
 
 use csv_async::ByteRecord;
-use futures::{ready, Sink, Stream, StreamExt};
+use futures::{Sink, Stream, StreamExt, ready};
 use mz_pgrepr::Type;
 use tokio::io::AsyncRead;
 
@@ -50,6 +51,7 @@ pub fn to_materialize_type(ty: DataType) -> Result<&'static str, OpError> {
         DataType::Decimal => Ok("numeric"),
         DataType::Float => Ok("real"),
         DataType::Double => Ok("double precision"),
+        DataType::NaiveTime => Ok("time"),
         DataType::NaiveDate => Ok("date"),
         DataType::NaiveDatetime => Ok("timestamp"),
         DataType::UtcDatetime => Ok("timestamptz"),
@@ -64,7 +66,7 @@ pub fn to_materialize_type(ty: DataType) -> Result<&'static str, OpError> {
 }
 
 /// Converts a Postgres data type, to one supported by the Fivetran SDK.
-pub fn to_fivetran_type(ty: Type) -> Result<(DataType, Option<DecimalParams>), OpError> {
+pub fn to_fivetran_type(ty: Type) -> Result<(DataType, Option<DataTypeParams>), OpError> {
     match ty {
         Type::Bool => Ok((DataType::Boolean, None)),
         Type::Int2 => Ok((DataType::Short, None)),
@@ -86,7 +88,9 @@ pub fn to_fivetran_type(ty: Type) -> Result<(DataType, Option<DecimalParams>), O
                             constraints.max_scale()
                         ))
                     })?;
-                    Some(DecimalParams { precision, scale })
+                    Some(DataTypeParams {
+                        params: Some(Params::Decimal(DecimalParams { precision, scale })),
+                    })
                 }
             };
             Ok((DataType::Decimal, params))
@@ -94,6 +98,7 @@ pub fn to_fivetran_type(ty: Type) -> Result<(DataType, Option<DecimalParams>), O
         Type::Float4 => Ok((DataType::Float, None)),
         Type::Float8 => Ok((DataType::Double, None)),
         Type::Date => Ok((DataType::NaiveDate, None)),
+        Type::Time { precision: _ } => Ok((DataType::NaiveTime, None)),
         Type::Timestamp { precision: _ } => Ok((DataType::NaiveDatetime, None)),
         Type::TimestampTz { precision: _ } => Ok((DataType::UtcDatetime, None)),
         Type::Bytea => Ok((DataType::Binary, None)),
@@ -264,11 +269,12 @@ impl<'a> tokio::io::AsyncWrite for CopyIntoAsyncWrite<'a> {
         cx: &mut Context<'_>,
         buf: &[u8],
     ) -> Poll<Result<usize, std::io::Error>> {
-        ready!(self
-            .inner
-            .as_mut()
-            .poll_ready(cx)
-            .map_err(std::io::Error::other))?;
+        ready!(
+            self.inner
+                .as_mut()
+                .poll_ready(cx)
+                .map_err(std::io::Error::other)
+        )?;
 
         let len = buf.len();
         let buf = bytes::Bytes::from(buf.to_vec());
@@ -320,19 +326,19 @@ mod tests {
                     name: "city".to_string(),
                     r#type: DataType::String.into(),
                     primary_key: true,
-                    decimal: None,
+                    params: None,
                 },
                 Column {
                     name: "country".to_string(),
                     r#type: DataType::String.into(),
                     primary_key: false,
-                    decimal: None,
+                    params: None,
                 },
                 Column {
                     name: "pop".to_string(),
                     r#type: DataType::Int.into(),
                     primary_key: false,
-                    decimal: None,
+                    params: None,
                 },
             ],
         };
@@ -367,13 +373,13 @@ mod tests {
                     name: "city".to_string(),
                     r#type: DataType::String.into(),
                     primary_key: true,
-                    decimal: None,
+                    params: None,
                 },
                 Column {
                     name: "country".to_string(),
                     r#type: DataType::String.into(),
                     primary_key: false,
-                    decimal: None,
+                    params: None,
                 },
             ],
         };
@@ -392,13 +398,13 @@ mod tests {
                             name: "city",
                             r#type: String,
                             primary_key: true,
-                            decimal: None,
+                            params: None,
                         },
                         Column {
                             name: "country",
                             r#type: String,
                             primary_key: false,
-                            decimal: None,
+                            params: None,
                         },
                     ],
                 },
@@ -419,13 +425,13 @@ mod tests {
                     name: "city".to_string(),
                     r#type: DataType::String.into(),
                     primary_key: true,
-                    decimal: None,
+                    params: None,
                 },
                 Column {
                     name: "country".to_string(),
                     r#type: DataType::String.into(),
                     primary_key: false,
-                    decimal: None,
+                    params: None,
                 },
             ],
         };
@@ -444,13 +450,13 @@ mod tests {
                             name: "city",
                             r#type: String,
                             primary_key: true,
-                            decimal: None,
+                            params: None,
                         },
                         Column {
                             name: "country",
                             r#type: String,
                             primary_key: false,
-                            decimal: None,
+                            params: None,
                         },
                     ],
                 },
@@ -473,25 +479,25 @@ mod tests {
                     name: "a".to_string(),
                     r#type: DataType::Boolean.into(),
                     primary_key: true,
-                    decimal: None,
+                    params: None,
                 },
                 Column {
                     name: " ".to_string(),
                     r#type: DataType::Float.into(),
                     primary_key: true,
-                    decimal: None,
+                    params: None,
                 },
                 Column {
                     name: " a".to_string(),
                     r#type: DataType::String.into(),
                     primary_key: true,
-                    decimal: None,
+                    params: None,
                 },
                 Column {
                     name: "  a".to_string(),
                     r#type: DataType::Int.into(),
                     primary_key: false,
-                    decimal: None,
+                    params: None,
                 },
             ],
         };

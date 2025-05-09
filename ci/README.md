@@ -67,7 +67,7 @@ This makes from-scratch compilation on a fresh agent *much* faster.
 ## macOS agent
 
 We run two macOS agents on Buildkite, via [MacStadium], to produce our macOS
-binaries. These agents are manually configured. Ask Nikhil for access if you
+binaries. These agents are manually configured. Ask @testing for access if you
 need it.
 
 The basic configuration is as follows:

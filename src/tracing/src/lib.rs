@@ -11,7 +11,7 @@
 
 use proptest::arbitrary::Arbitrary;
 use proptest::prelude::{BoxedStrategy, Strategy};
-use serde::{de, Deserialize, Serializer};
+use serde::{Deserialize, Serializer, de};
 use std::fmt::Formatter;
 use std::str::FromStr;
 use tracing_subscriber::EnvFilter;

@@ -71,6 +71,13 @@ pub const WALLCLOCK_LAG_HISTORY_RETENTION_INTERVAL: Config<Duration> = Config::n
     "The interval of time to keep when truncating the wallclock lag history.",
 );
 
+/// The interval of time to keep when truncating the wallclock lag histogram.
+pub const WALLCLOCK_GLOBAL_LAG_HISTOGRAM_RETENTION_INTERVAL: Config<Duration> = Config::new(
+    "wallclock_global_lag_histogram_retention_interval",
+    Duration::from_secs(60 * 60 * 24 * 30), // 30 days
+    "The interval of time to keep when truncating the wallclock lag histogram.",
+);
+
 // Kafka
 
 /// Rules for enriching the `client.id` property of Kafka clients with
@@ -96,6 +103,13 @@ pub const KAFKA_POLL_MAX_WAIT: Config<Duration> = Config::new(
     Duration::from_secs(1),
     "The maximum time we will wait before re-polling rdkafka to see if new partitions/data are \
     available.",
+);
+
+/// Interval to fetch topic partition metadata.
+pub static KAFKA_METADATA_FETCH_INTERVAL: Config<Duration> = Config::new(
+    "kafka_default_metadata_fetch_interval",
+    Duration::from_secs(60),
+    "Interval to fetch topic partition metadata.",
 );
 
 pub const KAFKA_DEFAULT_AWS_PRIVATELINK_ENDPOINT_IDENTIFICATION_ALGORITHM: Config<&'static str> =
@@ -220,19 +234,56 @@ pub const STORAGE_SUSPEND_AND_RESTART_DELAY: Config<Duration> = Config::new(
     "Delay interval when reconnecting to a source / sink after halt.",
 );
 
+/// If true, skip fetching the snapshot in the sink once the frontier has advanced.
+pub const STORAGE_SINK_SNAPSHOT_FRONTIER: Config<bool> = Config::new(
+    "storage_sink_snapshot_frontier",
+    true,
+    "If true, skip fetching the snapshot in the sink once the frontier has advanced.",
+);
+
 /// Whether to mint reclock bindings based on the latest probed frontier or the currently ingested
 /// frontier.
 pub const STORAGE_RECLOCK_TO_LATEST: Config<bool> = Config::new(
     "storage_reclock_to_latest",
     false,
-    "Whether to mint reclock bindings based on the latest probed offset or the latest ingested offset."
+    "Whether to mint reclock bindings based on the latest probed offset or the latest ingested offset.",
 );
 
 /// Whether to use the new continual feedback upsert operator.
 pub const STORAGE_USE_CONTINUAL_FEEDBACK_UPSERT: Config<bool> = Config::new(
     "storage_use_continual_feedback_upsert",
-    false,
+    true,
     "Whether to use the new continual feedback upsert operator.",
+);
+
+/// The interval at which the storage server performs maintenance tasks.
+pub const STORAGE_SERVER_MAINTENANCE_INTERVAL: Config<Duration> = Config::new(
+    "storage_server_maintenance_interval",
+    Duration::from_millis(10),
+    "The interval at which the storage server performs maintenance tasks. Zero enables maintenance on every iteration.",
+);
+
+/// If set, iteratively search the progress topic for a progress record with increasing lookback.
+pub const SINK_PROGRESS_SEARCH: Config<bool> = Config::new(
+    "storage_sink_progress_search",
+    true,
+    "If set, iteratively search the progress topic for a progress record with increasing lookback.",
+);
+
+/// Configure how to behave when trying to create an existing topic with specified configs.
+pub const SINK_ENSURE_TOPIC_CONFIG: Config<&'static str> = Config::new(
+    "storage_sink_ensure_topic_config",
+    "skip",
+    "If `skip`, don't check the config of existing topics; if `check`, fetch the config and \
+    warn if it does not match the expected configs; if `alter`, attempt to change the upstream to \
+    match the expected configs.",
+);
+
+/// Configure mz-ore overflowing type behavior.
+pub const ORE_OVERFLOWING_BEHAVIOR: Config<&'static str> = Config::new(
+    "ore_overflowing_behavior",
+    "ignore",
+    "Overflow behavior for Overflowing types. One of 'ignore', 'panic', 'soft_panic'.",
 );
 
 /// Adds the full set of all storage `Config`s.
@@ -240,25 +291,38 @@ pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
     configs
         .add(&CLUSTER_SHUTDOWN_GRACE_PERIOD)
         .add(&DELAY_SOURCES_PAST_REHYDRATION)
-        .add(&SUSPENDABLE_SOURCES)
-        .add(&STORAGE_DOWNGRADE_SINCE_DURING_FINALIZATION)
-        .add(&REPLICA_METRICS_HISTORY_RETENTION_INTERVAL)
-        .add(&WALLCLOCK_LAG_HISTORY_RETENTION_INTERVAL)
-        .add(&KAFKA_CLIENT_ID_ENRICHMENT_RULES)
-        .add(&KAFKA_POLL_MAX_WAIT)
-        .add(&KAFKA_DEFAULT_AWS_PRIVATELINK_ENDPOINT_IDENTIFICATION_ALGORITHM)
+        .add(&ENFORCE_EXTERNAL_ADDRESSES)
         .add(&KAFKA_BUFFERED_EVENT_RESIZE_THRESHOLD_ELEMENTS)
-        .add(&MYSQL_REPLICATION_HEARTBEAT_INTERVAL)
+        .add(&KAFKA_CLIENT_ID_ENRICHMENT_RULES)
+        .add(&KAFKA_DEFAULT_AWS_PRIVATELINK_ENDPOINT_IDENTIFICATION_ALGORITHM)
+        .add(&KAFKA_METADATA_FETCH_INTERVAL)
+        .add(&KAFKA_POLL_MAX_WAIT)
         .add(&MYSQL_OFFSET_KNOWN_INTERVAL)
+        .add(&MYSQL_REPLICATION_HEARTBEAT_INTERVAL)
+        .add(&ORE_OVERFLOWING_BEHAVIOR)
         .add(&PG_FETCH_SLOT_RESUME_LSN_INTERVAL)
         .add(&PG_OFFSET_KNOWN_INTERVAL)
         .add(&PG_SCHEMA_VALIDATION_INTERVAL)
-        .add(&ENFORCE_EXTERNAL_ADDRESSES)
-        .add(&STORAGE_UPSERT_PREVENT_SNAPSHOT_BUFFERING)
-        .add(&STORAGE_ROCKSDB_USE_MERGE_OPERATOR)
-        .add(&STORAGE_UPSERT_MAX_SNAPSHOT_BATCH_BUFFERING)
-        .add(&STORAGE_ROCKSDB_CLEANUP_TRIES)
-        .add(&STORAGE_SUSPEND_AND_RESTART_DELAY)
+        .add(&REPLICA_METRICS_HISTORY_RETENTION_INTERVAL)
+        .add(&SINK_ENSURE_TOPIC_CONFIG)
+        .add(&SINK_PROGRESS_SEARCH)
+        .add(&STORAGE_DOWNGRADE_SINCE_DURING_FINALIZATION)
         .add(&STORAGE_RECLOCK_TO_LATEST)
+        .add(&STORAGE_ROCKSDB_CLEANUP_TRIES)
+        .add(&STORAGE_ROCKSDB_USE_MERGE_OPERATOR)
+        .add(&STORAGE_SERVER_MAINTENANCE_INTERVAL)
+        .add(&STORAGE_SINK_SNAPSHOT_FRONTIER)
+        .add(&STORAGE_SUSPEND_AND_RESTART_DELAY)
+        .add(&STORAGE_UPSERT_MAX_SNAPSHOT_BATCH_BUFFERING)
+        .add(&STORAGE_UPSERT_PREVENT_SNAPSHOT_BUFFERING)
         .add(&STORAGE_USE_CONTINUAL_FEEDBACK_UPSERT)
+        .add(&SUSPENDABLE_SOURCES)
+        .add(&WALLCLOCK_GLOBAL_LAG_HISTOGRAM_RETENTION_INTERVAL)
+        .add(&WALLCLOCK_LAG_HISTORY_RETENTION_INTERVAL)
+        .add(&crate::sources::sql_server::CDC_POLL_INTERVAL)
+        .add(&crate::sources::sql_server::CDC_CLEANUP_CHANGE_TABLE)
+        .add(&crate::sources::sql_server::CDC_CLEANUP_CHANGE_TABLE_MAX_DELETES)
+        .add(&crate::sources::sql_server::SNAPSHOT_MAX_LSN_WAIT)
+        .add(&crate::sources::sql_server::SNAPSHOT_PROGRESS_REPORT_INTERVAL)
+        .add(&crate::sources::sql_server::OFFSET_KNOWN_INTERVAL)
 }

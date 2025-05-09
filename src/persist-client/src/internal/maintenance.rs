@@ -17,8 +17,8 @@ use std::sync::Arc;
 
 use differential_dataflow::difference::Semigroup;
 use differential_dataflow::lattice::Lattice;
-use futures_util::future::BoxFuture;
 use futures_util::FutureExt;
+use futures_util::future::BoxFuture;
 use mz_persist::location::SeqNo;
 use mz_persist_types::{Codec, Codec64};
 use timely::progress::Timestamp;
@@ -38,7 +38,7 @@ use crate::{Compactor, GarbageCollector, Machine};
 /// Operations that run regularly once a handle is registered, such
 /// as heartbeats, are expected to always perform maintenance.
 #[must_use]
-#[derive(Debug, Default, PartialEq)]
+#[derive(Debug, Default, PartialEq, Eq, PartialOrd, Ord)]
 pub struct RoutineMaintenance {
     pub(crate) garbage_collection: Option<GcReq>,
     pub(crate) write_rollup: Option<SeqNo>,

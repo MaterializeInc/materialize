@@ -19,30 +19,32 @@ use mz_expr::EvalError;
 use mz_mysql_util::MySqlError;
 use mz_ore::error::ErrorExt;
 use mz_ore::stack::RecursionLimitError;
-use mz_ore::str::{separated, StrExt};
+use mz_ore::str::{StrExt, separated};
 use mz_postgres_util::PostgresError;
 use mz_repr::adt::char::InvalidCharLengthError;
 use mz_repr::adt::mz_acl_item::AclMode;
 use mz_repr::adt::numeric::InvalidNumericMaxScaleError;
 use mz_repr::adt::timestamp::InvalidTimestampPrecisionError;
 use mz_repr::adt::varchar::InvalidVarCharMaxLengthError;
-use mz_repr::{strconv, CatalogItemId, ColumnName};
+use mz_repr::{CatalogItemId, ColumnName, strconv};
 use mz_sql_parser::ast::display::AstDisplay;
 use mz_sql_parser::ast::{IdentError, UnresolvedItemName};
 use mz_sql_parser::parser::{ParserError, ParserStatementError};
+use mz_sql_server_util::SqlServerError;
 use mz_storage_types::sources::ExternalReferenceResolutionError;
 
 use crate::catalog::{
     CatalogError, CatalogItemType, ErrorMessageObjectDescription, SystemObjectType,
 };
 use crate::names::{PartialItemName, ResolvedItemName};
+use crate::plan::ObjectType;
 use crate::plan::plan_utils::JoinSide;
 use crate::plan::scope::ScopeItem;
 use crate::plan::typeconv::CastContext;
-use crate::plan::ObjectType;
 use crate::pure::error::{
     CsrPurificationError, KafkaSinkPurificationError, KafkaSourcePurificationError,
     LoadGeneratorSourcePurificationError, MySqlSourcePurificationError, PgSourcePurificationError,
+    SqlServerSourcePurificationError,
 };
 use crate::session::vars::VarError;
 
@@ -132,6 +134,13 @@ pub enum PlanError {
         from: String,
         to: String,
     },
+    InvalidTable {
+        name: String,
+    },
+    InvalidVersion {
+        name: String,
+        version: String,
+    },
     MangedReplicaName(String),
     ParserStatement(ParserStatementError),
     Parser(ParserError),
@@ -155,6 +164,9 @@ pub enum PlanError {
     },
     MySqlConnectionErr {
         cause: Arc<MySqlError>,
+    },
+    SqlServerConnectionErr {
+        cause: Arc<SqlServerError>,
     },
     SubsourceNameConflict {
         name: UnresolvedItemName,
@@ -239,6 +251,7 @@ pub enum PlanError {
     LoadGeneratorSourcePurification(LoadGeneratorSourcePurificationError),
     CsrPurification(CsrPurificationError),
     MySqlSourcePurification(MySqlSourcePurificationError),
+    SqlServerSourcePurificationError(SqlServerSourcePurificationError),
     UseTablesForSources(String),
     MissingName(CatalogItemType),
     InvalidRefreshAt,
@@ -272,6 +285,9 @@ pub enum PlanError {
     Replan(String),
     NetworkPolicyLockoutError,
     NetworkPolicyInUse,
+    // Expected a constant expression that evaluates without an error to a non-null value.
+    ConstantExpressionSimplificationFailed(String),
+    InvalidOffset(String),
     // TODO(benesch): eventually all errors should be structured.
     Unstructured(String),
 }
@@ -320,6 +336,7 @@ impl PlanError {
             Self::InternalFunctionCall => Some("This function is for the internal use of the database system and cannot be called directly.".into()),
             Self::PgSourcePurification(e) => e.detail(),
             Self::MySqlSourcePurification(e) => e.detail(),
+            Self::SqlServerSourcePurificationError(e) => e.detail(),
             Self::KafkaSourcePurification(e) => e.detail(),
             Self::LoadGeneratorSourcePurification(e) => e.detail(),
             Self::CsrPurification(e) => e.detail(),
@@ -428,6 +445,8 @@ impl PlanError {
             Self::Catalog(e) => e.hint(),
             Self::VarError(e) => e.hint(),
             Self::PgSourcePurification(e) => e.hint(),
+            Self::MySqlSourcePurification(e) => e.hint(),
+            Self::SqlServerSourcePurificationError(e) => e.hint(),
             Self::KafkaSourcePurification(e) => e.hint(),
             Self::LoadGeneratorSourcePurification(e) => e.hint(),
             Self::CsrPurification(e) => e.hint(),
@@ -593,6 +612,12 @@ impl fmt::Display for PlanError {
                     },
                 )
             }
+            Self::InvalidTable { name } => {
+                write!(f, "invalid table definition for {}", name.quoted())
+            },
+            Self::InvalidVersion { name, version } => {
+                write!(f, "invalid version {} for {}", version.quoted(), name.quoted())
+            },
             Self::DropViewOnMaterializedView(name)
             | Self::AlterViewOnMaterializedView(name)
             | Self::ShowCreateViewOnMaterializedView(name)
@@ -605,6 +630,9 @@ impl fmt::Display for PlanError {
             }
             Self::MySqlConnectionErr { cause } => {
                 write!(f, "failed to connect to MySQL database: {}", cause)
+            }
+            Self::SqlServerConnectionErr { cause } => {
+                write!(f, "failed to connect to SQL Server database: {}", cause)
             }
             Self::SubsourceNameConflict {
                 name , upstream_references: _,
@@ -637,7 +665,7 @@ impl fmt::Display for PlanError {
                 write!(f, "cannot drop {object_type} {object_name}{reason}")
             }
             Self::InvalidOptionValue { option_name, err } => write!(f, "invalid {} option value: {}", option_name, err),
-            Self::UnexpectedDuplicateReference { name } => write!(f, "unexpected multiple references to {}", name.to_ast_string()),
+            Self::UnexpectedDuplicateReference { name } => write!(f, "unexpected multiple references to {}", name.to_ast_string_simple()),
             Self::RecursiveTypeMismatch(name, declared, inferred) => {
                 let declared = separated(", ", declared);
                 let inferred = separated(", ", inferred);
@@ -719,6 +747,7 @@ impl fmt::Display for PlanError {
             Self::KafkaSinkPurification(e) => write!(f, "KAFKA sink validation: {}", e),
             Self::CsrPurification(e) => write!(f, "CONFLUENT SCHEMA REGISTRY validation: {}", e),
             Self::MySqlSourcePurification(e) => write!(f, "MYSQL source validation: {}", e),
+            Self::SqlServerSourcePurificationError(e) => write!(f, "SQL SERVER source validation: {}", e),
             Self::UseTablesForSources(command) => write!(f, "{command} not supported; use CREATE TABLE .. FROM SOURCE instead"),
             Self::MangedReplicaName(name) => {
                 write!(f, "{name} is reserved for replicas of managed clusters")
@@ -775,6 +804,8 @@ impl fmt::Display for PlanError {
             Self::UntilReadyTimeoutRequired => {
                 write!(f, "TIMEOUT=<duration> option is required for ALTER CLUSTER ... WITH (WAIT UNTIL READY ( ... ))")
             },
+            Self::ConstantExpressionSimplificationFailed(e) => write!(f, "{}", e),
+            Self::InvalidOffset(e) => write!(f, "Invalid OFFSET clause: {}", e),
         }
     }
 }
@@ -872,6 +903,12 @@ impl From<MySqlError> for PlanError {
     }
 }
 
+impl From<SqlServerError> for PlanError {
+    fn from(e: SqlServerError) -> PlanError {
+        PlanError::SqlServerConnectionErr { cause: Arc::new(e) }
+    }
+}
+
 impl From<VarError> for PlanError {
     fn from(e: VarError) -> Self {
         PlanError::VarError(e)
@@ -911,6 +948,12 @@ impl From<LoadGeneratorSourcePurificationError> for PlanError {
 impl From<MySqlSourcePurificationError> for PlanError {
     fn from(e: MySqlSourcePurificationError) -> Self {
         PlanError::MySqlSourcePurification(e)
+    }
+}
+
+impl From<SqlServerSourcePurificationError> for PlanError {
+    fn from(e: SqlServerSourcePurificationError) -> Self {
+        PlanError::SqlServerSourcePurificationError(e)
     }
 }
 

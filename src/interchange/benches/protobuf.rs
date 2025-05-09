@@ -7,14 +7,14 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use criterion::{black_box, Criterion, Throughput};
+use criterion::{Criterion, Throughput, black_box};
 use mz_interchange::protobuf::{DecodedDescriptors, Decoder};
 use mz_ore::cast::CastFrom;
 use prost::Message;
 
-use self::gen::benchmark::{Connector, Record, Value};
+use self::generated::benchmark::{Connector, Record, Value};
 
-mod gen {
+mod generated {
     include!(concat!(env!("OUT_DIR"), "/benchproto.rs"));
 }
 

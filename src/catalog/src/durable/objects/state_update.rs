@@ -38,9 +38,10 @@ use std::sync::LazyLock;
 
 use mz_ore::collections::HashSet;
 use mz_proto::{ProtoType, RustType, TryFromProtoError};
+use mz_repr::Diff;
 use mz_repr::adt::jsonb::Jsonb;
 use mz_repr::adt::numeric::{Dec, Numeric};
-use mz_repr::Diff;
+use mz_storage_types::StorageDiff;
 use mz_storage_types::sources::SourceData;
 use proptest_derive::Arbitrary;
 use tracing::error;
@@ -62,15 +63,15 @@ pub trait IntoStateUpdateKindJson:
     fn try_from(raw: StateUpdateKindJson) -> Result<Self, Self::Error>;
 }
 impl<
-        T: Into<StateUpdateKindJson>
-            + TryFrom<StateUpdateKindJson>
-            + PartialEq
-            + Eq
-            + PartialOrd
-            + Ord
-            + Debug
-            + Clone,
-    > IntoStateUpdateKindJson for T
+    T: Into<StateUpdateKindJson>
+        + TryFrom<StateUpdateKindJson>
+        + PartialEq
+        + Eq
+        + PartialOrd
+        + Ord
+        + Debug
+        + Clone,
+> IntoStateUpdateKindJson for T
 where
     T::Error: Debug,
 {
@@ -136,6 +137,7 @@ impl StateUpdate {
             items,
             comments,
             roles,
+            role_auth,
             clusters,
             cluster_replicas,
             network_policies,
@@ -159,6 +161,7 @@ impl StateUpdate {
         let items = from_batch(items, StateUpdateKind::Item);
         let comments = from_batch(comments, StateUpdateKind::Comment);
         let roles = from_batch(roles, StateUpdateKind::Role);
+        let role_auth = from_batch(role_auth, StateUpdateKind::RoleAuth);
         let clusters = from_batch(clusters, StateUpdateKind::Cluster);
         let cluster_replicas = from_batch(cluster_replicas, StateUpdateKind::ClusterReplica);
         let network_policies = from_batch(network_policies, StateUpdateKind::NetworkPolicy);
@@ -189,6 +192,7 @@ impl StateUpdate {
             .chain(items)
             .chain(comments)
             .chain(roles)
+            .chain(role_auth)
             .chain(clusters)
             .chain(cluster_replicas)
             .chain(network_policies)
@@ -230,6 +234,7 @@ pub enum StateUpdateKind {
     Item(proto::ItemKey, proto::ItemValue),
     NetworkPolicy(proto::NetworkPolicyKey, proto::NetworkPolicyValue),
     Role(proto::RoleKey, proto::RoleValue),
+    RoleAuth(proto::RoleAuthKey, proto::RoleAuthValue),
     Schema(proto::SchemaKey, proto::SchemaValue),
     Setting(proto::SettingKey, proto::SettingValue),
     SourceReferences(proto::SourceReferencesKey, proto::SourceReferencesValue),
@@ -265,6 +270,7 @@ impl StateUpdateKind {
             StateUpdateKind::Item(_, _) => Some(CollectionType::Item),
             StateUpdateKind::NetworkPolicy(_, _) => Some(CollectionType::NetworkPolicy),
             StateUpdateKind::Role(_, _) => Some(CollectionType::Role),
+            StateUpdateKind::RoleAuth(_, _) => Some(CollectionType::RoleAuth),
             StateUpdateKind::Schema(_, _) => Some(CollectionType::Schema),
             StateUpdateKind::Setting(_, _) => Some(CollectionType::Setting),
             StateUpdateKind::SourceReferences(_, _) => Some(CollectionType::SourceReferences),
@@ -391,7 +397,7 @@ impl StateUpdateKindJson {
 type PersistStateUpdate = (
     (Result<SourceData, String>, Result<(), String>),
     Timestamp,
-    i64,
+    StorageDiff,
 );
 
 impl TryFrom<&StateUpdate<StateUpdateKind>> for Option<memory::objects::StateUpdate> {
@@ -471,6 +477,10 @@ impl TryFrom<&StateUpdateKind> for Option<memory::objects::StateUpdateKind> {
             StateUpdateKind::Role(key, value) => {
                 let role = into_durable(key, value)?;
                 Some(memory::objects::StateUpdateKind::Role(role))
+            }
+            StateUpdateKind::RoleAuth(key, value) => {
+                let role_auth = into_durable(key, value)?;
+                Some(memory::objects::StateUpdateKind::RoleAuth(role_auth))
             }
             StateUpdateKind::Schema(key, value) => {
                 let schema = into_durable(key, value)?;
@@ -659,6 +669,12 @@ impl RustType<proto::StateUpdateKind> for StateUpdateKind {
                 }
                 StateUpdateKind::Role(key, value) => {
                     proto::state_update_kind::Kind::Role(proto::state_update_kind::Role {
+                        key: Some(key),
+                        value: Some(value),
+                    })
+                }
+                StateUpdateKind::RoleAuth(key, value) => {
+                    proto::state_update_kind::Kind::RoleAuth(proto::state_update_kind::RoleAuth {
                         key: Some(key),
                         value: Some(value),
                     })
@@ -869,6 +885,17 @@ impl RustType<proto::StateUpdateKind> for StateUpdateKind {
                         TryFromProtoError::missing_field("state_update_kind::Role::value")
                     })?,
                 ),
+                proto::state_update_kind::Kind::RoleAuth(proto::state_update_kind::RoleAuth {
+                    key,
+                    value,
+                }) => StateUpdateKind::RoleAuth(
+                    key.ok_or_else(|| {
+                        TryFromProtoError::missing_field("state_update_kind::RoleAuth::key")
+                    })?,
+                    value.ok_or_else(|| {
+                        TryFromProtoError::missing_field("state_update_kind::RoleAuth::value")
+                    })?,
+                ),
                 proto::state_update_kind::Kind::Schema(proto::state_update_kind::Schema {
                     key,
                     value,
@@ -998,7 +1025,7 @@ impl From<PersistStateUpdate> for StateUpdate<StateUpdateKindJson> {
         StateUpdate {
             kind: StateUpdateKindJson::from(key),
             ts,
-            diff,
+            diff: diff.into(),
         }
     }
 }
@@ -1024,10 +1051,10 @@ mod tests {
     use mz_storage_types::sources::SourceData;
     use proptest::prelude::*;
 
+    use crate::durable::Epoch;
+    use crate::durable::objects::FenceToken;
     use crate::durable::objects::serialization::proto;
     use crate::durable::objects::state_update::{StateUpdateKind, StateUpdateKindJson};
-    use crate::durable::objects::FenceToken;
-    use crate::durable::Epoch;
 
     #[mz_ore::test]
     #[cfg_attr(miri, ignore)]

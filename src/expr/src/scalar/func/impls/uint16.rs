@@ -11,11 +11,11 @@ use std::fmt;
 
 use mz_lowertest::MzReflect;
 use mz_repr::adt::numeric::{self, Numeric, NumericMaxScale};
-use mz_repr::{strconv, ColumnType, ScalarType};
+use mz_repr::{ColumnType, ScalarType, strconv};
 use serde::{Deserialize, Serialize};
 
-use crate::scalar::func::EagerUnaryFunc;
 use crate::EvalError;
+use crate::scalar::func::EagerUnaryFunc;
 
 sqlfunc!(
     #[sqlname = "~"]
@@ -72,7 +72,7 @@ sqlfunc!(
     #[inverse = to_unary!(super::CastInt16ToUint16)]
     #[is_monotone = true]
     fn cast_uint16_to_int16(a: u16) -> Result<i16, EvalError> {
-        i16::try_from(a).or(Err(EvalError::Int16OutOfRange(a.to_string().into())))
+        i16::try_from(a).or_else(|_| Err(EvalError::Int16OutOfRange(a.to_string().into())))
     }
 );
 

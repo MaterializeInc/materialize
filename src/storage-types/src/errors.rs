@@ -394,8 +394,8 @@ impl Error for DataflowError {}
 
 mod boxed_str {
 
-    use timely::container::columnation::Region;
-    use timely::container::columnation::StableRegion;
+    use differential_dataflow::containers::Region;
+    use differential_dataflow::containers::StableRegion;
 
     /// Region allocation for `String` data.
     ///
@@ -447,11 +447,11 @@ mod boxed_str {
 mod columnation {
     use std::iter::once;
 
+    use differential_dataflow::containers::{Columnation, Region, StableRegion};
     use mz_expr::EvalError;
+    use mz_repr::Row;
     use mz_repr::adt::range::InvalidRangeError;
     use mz_repr::strconv::ParseError;
-    use mz_repr::Row;
-    use timely::container::columnation::{Columnation, Region, StableRegion};
 
     use crate::errors::boxed_str::BoxStrStack;
     use crate::errors::{
@@ -907,8 +907,8 @@ mod columnation {
 
     #[cfg(test)]
     mod tests {
+        use differential_dataflow::containers::TimelyStack;
         use proptest::prelude::*;
-        use timely::container::columnation::TimelyStack;
 
         use super::*;
 
@@ -1022,7 +1022,7 @@ pub enum ContextCreationError {
 pub trait ContextCreationErrorExt<T> {
     /// Override the error case with an ssh error from `cx`, if there is one.
     fn check_ssh_status<C>(self, cx: &TunnelingClientContext<C>)
-        -> Result<T, ContextCreationError>;
+    -> Result<T, ContextCreationError>;
     /// Add context to the errors within the variants of `ContextCreationError`, without
     /// altering the `Ssh` variant.
     fn add_context(self, msg: &'static str) -> Result<T, ContextCreationError>;

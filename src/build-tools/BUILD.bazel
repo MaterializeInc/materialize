@@ -10,6 +10,7 @@
 # by the Apache License, Version 2.0.
 
 load("@crates_io//:defs.bzl", "aliases", "all_crate_deps")
+load("@rules_rust//cargo:defs.bzl", "extract_cargo_lints")
 load("@rules_rust//rust:defs.bzl", "rust_doc_test", "rust_library", "rust_test")
 
 package(default_visibility = ["//visibility:public"])
@@ -27,9 +28,10 @@ rust_library(
         "bazel",
     ],
     data = [
-        "@protobuf//:protoc",
-        "@protobuf//:well_known_type_protos",
+        "@com_google_protobuf//:protoc",
+        "@com_google_protobuf//:well_known_type_protos",
     ],
+    lint_config = ":lints",
     proc_macro_deps = [] + all_crate_deps(proc_macro = True),
     rustc_env = {},
     rustc_flags = ["--cfg=bazel"],
@@ -59,6 +61,7 @@ rust_test(
     ],
     data = [],
     env = {},
+    lint_config = ":lints",
     proc_macro_deps = [] + all_crate_deps(
         proc_macro = True,
         proc_macro_dev = True,
@@ -70,4 +73,10 @@ rust_test(
         normal = True,
         normal_dev = True,
     ),
+)
+
+extract_cargo_lints(
+    name = "lints",
+    manifest = "Cargo.toml",
+    workspace = "@//:Cargo.toml",
 )

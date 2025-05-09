@@ -8,12 +8,13 @@
 # by the Apache License, Version 2.0.
 
 $ set-arg-default replicas=1
+$ set-arg-default default-storage-size=1
 
 # Exercises Webhook sources.
 
-> CREATE CLUSTER webhook_cluster REPLICAS (r1 (SIZE '1'));
+> CREATE CLUSTER webhook_cluster REPLICAS (r1 (SIZE '${arg.default-storage-size}'));
 
-> CREATE CLUSTER webhook_compute REPLICAS (r1 (SIZE '1'));
+> CREATE CLUSTER webhook_compute REPLICAS (r1 (SIZE '${arg.default-storage-size}'));
 
 > CREATE SOURCE webhook_text IN CLUSTER webhook_cluster FROM WEBHOOK
   BODY FORMAT TEXT;
@@ -24,7 +25,7 @@ name   nullable  type  comment
 body   false     text  ""
 
 > SHOW CREATE SOURCE webhook_text;
-materialize.public.webhook_text "CREATE SOURCE \"materialize\".\"public\".\"webhook_text\" IN CLUSTER \"webhook_cluster\" FROM WEBHOOK BODY FORMAT TEXT"
+materialize.public.webhook_text "CREATE SOURCE materialize.public.webhook_text IN CLUSTER webhook_cluster FROM WEBHOOK BODY FORMAT TEXT;"
 
 > SELECT name, type FROM mz_objects WHERE name = 'webhook_text';
 webhook_text source
@@ -556,7 +557,7 @@ aaa_1
 aaa_1
 
 > SHOW CREATE TABLE webhook_as_table;
-materialize.public.webhook_as_table "CREATE TABLE \"materialize\".\"public\".\"webhook_as_table\" FROM WEBHOOK BODY FORMAT TEXT"
+materialize.public.webhook_as_table "CREATE TABLE materialize.public.webhook_as_table FROM WEBHOOK BODY FORMAT TEXT;"
 
 > SHOW COLUMNS FROM webhook_as_table;
 name   nullable  type  comment

@@ -42,6 +42,7 @@ pub struct Metrics {
     pub check_scheduling_policies_seconds: HistogramVec,
     pub handle_scheduling_decisions_seconds: HistogramVec,
     pub row_set_finishing_seconds: HistogramVec,
+    pub session_startup_table_writes_seconds: HistogramVec,
 }
 
 impl Metrics {
@@ -75,12 +76,12 @@ impl Metrics {
             determine_timestamp: registry.register(metric!(
                 name: "mz_determine_timestamp",
                 help: "The total number of calls to determine_timestamp.",
-                var_labels:["respond_immediately", "isolation_level", "compute_instance"],
+                var_labels:["respond_immediately", "isolation_level", "compute_instance", "determination_method"],
             )),
             timestamp_difference_for_strict_serializable_ms: registry.register(metric!(
                 name: "mz_timestamp_difference_for_strict_serializable_ms",
                 help: "Difference in timestamp in milliseconds for running in strict serializable vs serializable isolation level.",
-                var_labels:["compute_instance"],
+                var_labels:["compute_instance", "determination_method"],
                 buckets: histogram_milliseconds_buckets(1., 8000.),
             )),
             commands: registry.register(metric!(
@@ -174,6 +175,11 @@ impl Metrics {
                 help: "The time it takes to run RowSetFinishing::finish.",
                 buckets: histogram_seconds_buckets(0.000_128, 16.0),
             )),
+            session_startup_table_writes_seconds: registry.register(metric!(
+                name: "mz_session_startup_table_writes_seconds",
+                help: "If we had to wait for builtin table writes before processing a query, how long did we wait for.",
+                buckets: histogram_seconds_buckets(0.000_008, 4.0),
+            )),
         }
     }
 
@@ -184,6 +190,9 @@ impl Metrics {
     pub(crate) fn session_metrics(&self) -> SessionMetrics {
         SessionMetrics {
             row_set_finishing_seconds: self.row_set_finishing_seconds(),
+            session_startup_table_writes_seconds: self
+                .session_startup_table_writes_seconds
+                .with_label_values(&[]),
         }
     }
 }
@@ -192,11 +201,16 @@ impl Metrics {
 #[derive(Debug, Clone)]
 pub struct SessionMetrics {
     row_set_finishing_seconds: Histogram,
+    session_startup_table_writes_seconds: Histogram,
 }
 
 impl SessionMetrics {
     pub(crate) fn row_set_finishing_seconds(&self) -> &Histogram {
         &self.row_set_finishing_seconds
+    }
+
+    pub(crate) fn session_startup_table_writes_seconds(&self) -> &Histogram {
+        &self.session_startup_table_writes_seconds
     }
 }
 

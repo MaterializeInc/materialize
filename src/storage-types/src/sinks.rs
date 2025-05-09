@@ -15,24 +15,23 @@ use std::time::Duration;
 
 use mz_dyncfg::ConfigSet;
 use mz_expr::MirScalarExpr;
-use mz_persist_types::ShardId;
 use mz_pgcopy::CopyFormatParams;
 use mz_proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
 use mz_repr::bytes::ByteSize;
 use mz_repr::{CatalogItemId, GlobalId, RelationDesc};
-use proptest::prelude::{any, Arbitrary, BoxedStrategy, Strategy};
+use proptest::prelude::{Arbitrary, BoxedStrategy, Strategy, any};
 use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
-use timely::progress::frontier::Antichain;
 use timely::PartialOrder;
+use timely::progress::frontier::Antichain;
 
+use crate::AlterCompatible;
 use crate::connections::inline::{
     ConnectionAccess, ConnectionResolver, InlinedConnection, IntoInlineConnection,
     ReferencedConnection,
 };
 use crate::connections::{ConnectionContext, KafkaConnection, KafkaTopicOptions};
 use crate::controller::{AlterError, CollectionMetadata};
-use crate::AlterCompatible;
 
 include!(concat!(env!("OUT_DIR"), "/mz_storage_types.sinks.rs"));
 
@@ -40,21 +39,20 @@ pub mod s3_oneshot_sink;
 
 /// A sink for updates to a relational collection.
 #[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
-pub struct StorageSinkDesc<S: StorageSinkDescFillState, T = mz_repr::Timestamp> {
+pub struct StorageSinkDesc<S, T = mz_repr::Timestamp> {
     pub from: GlobalId,
     pub from_desc: RelationDesc,
     pub connection: StorageSinkConnection,
-    pub partition_strategy: SinkPartitionStrategy,
     pub with_snapshot: bool,
     pub version: u64,
     pub envelope: SinkEnvelope,
     pub as_of: Antichain<T>,
-    pub status_id: Option<<S as StorageSinkDescFillState>::StatusId>,
-    pub from_storage_metadata: <S as StorageSinkDescFillState>::StorageMetadata,
+    pub from_storage_metadata: S,
+    pub to_storage_metadata: S,
 }
 
-impl<S: Debug + StorageSinkDescFillState + PartialEq, T: Debug + PartialEq + PartialOrder>
-    AlterCompatible for StorageSinkDesc<S, T>
+impl<S: Debug + PartialEq, T: Debug + PartialEq + PartialOrder> AlterCompatible
+    for StorageSinkDesc<S, T>
 {
     /// Determines if `self` is compatible with another `StorageSinkDesc`, in
     /// such a way that it is possible to turn `self` into `other` through a
@@ -77,12 +75,11 @@ impl<S: Debug + StorageSinkDescFillState + PartialEq, T: Debug + PartialEq + Par
             connection,
             envelope,
             version: _,
-            // The as of of the descriptions may differ.
+            // The as-of of the descriptions may differ.
             as_of: _,
-            status_id,
             from_storage_metadata,
-            partition_strategy,
             with_snapshot,
+            to_storage_metadata,
         } = self;
 
         let compatibility_checks = [
@@ -93,15 +90,16 @@ impl<S: Debug + StorageSinkDescFillState + PartialEq, T: Debug + PartialEq + Par
                 "connection",
             ),
             (envelope == &other.envelope, "envelope"),
-            (status_id == &other.status_id, "status_id"),
-            (with_snapshot == &other.with_snapshot, "with_snapshot"),
-            (
-                partition_strategy == &other.partition_strategy,
-                "partition_strategy",
-            ),
+            // This can legally change from true to false once the snapshot has been
+            // written out.
+            (*with_snapshot || !other.with_snapshot, "with_snapshot"),
             (
                 from_storage_metadata == &other.from_storage_metadata,
                 "from_storage_metadata",
+            ),
+            (
+                to_storage_metadata == &other.to_storage_metadata,
+                "to_storage_metadata",
             ),
         ];
 
@@ -121,26 +119,7 @@ impl<S: Debug + StorageSinkDescFillState + PartialEq, T: Debug + PartialEq + Par
     }
 }
 
-pub trait StorageSinkDescFillState {
-    type StatusId: Debug + Clone + Serialize + for<'a> Deserialize<'a> + Eq + PartialEq;
-    type StorageMetadata: Debug + Clone + Serialize + for<'a> Deserialize<'a> + Eq + PartialEq;
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
-pub struct MetadataUnfilled;
-impl StorageSinkDescFillState for MetadataUnfilled {
-    type StatusId = GlobalId;
-    type StorageMetadata = ();
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
-pub struct MetadataFilled;
-impl StorageSinkDescFillState for MetadataFilled {
-    type StatusId = ShardId;
-    type StorageMetadata = CollectionMetadata;
-}
-
-impl Arbitrary for StorageSinkDesc<MetadataFilled, mz_repr::Timestamp> {
+impl Arbitrary for StorageSinkDesc<CollectionMetadata, mz_repr::Timestamp> {
     type Strategy = BoxedStrategy<Self>;
     type Parameters = ();
 
@@ -151,11 +130,10 @@ impl Arbitrary for StorageSinkDesc<MetadataFilled, mz_repr::Timestamp> {
             any::<StorageSinkConnection>(),
             any::<SinkEnvelope>(),
             any::<Option<mz_repr::Timestamp>>(),
-            any::<Option<ShardId>>(),
             any::<CollectionMetadata>(),
-            any::<SinkPartitionStrategy>(),
             any::<bool>(),
             any::<u64>(),
+            any::<CollectionMetadata>(),
         )
             .prop_map(
                 |(
@@ -164,11 +142,10 @@ impl Arbitrary for StorageSinkDesc<MetadataFilled, mz_repr::Timestamp> {
                     connection,
                     envelope,
                     as_of,
-                    status_id,
                     from_storage_metadata,
-                    partition_strategy,
                     with_snapshot,
                     version,
+                    to_storage_metadata,
                 )| {
                     StorageSinkDesc {
                         from,
@@ -177,18 +154,20 @@ impl Arbitrary for StorageSinkDesc<MetadataFilled, mz_repr::Timestamp> {
                         envelope,
                         version,
                         as_of: Antichain::from_iter(as_of),
-                        status_id,
                         from_storage_metadata,
-                        partition_strategy,
                         with_snapshot,
+                        to_storage_metadata,
                     }
                 },
             )
+            .prop_filter("identical source and sink", |desc| {
+                desc.from_storage_metadata != desc.to_storage_metadata
+            })
             .boxed()
     }
 }
 
-impl RustType<ProtoStorageSinkDesc> for StorageSinkDesc<MetadataFilled, mz_repr::Timestamp> {
+impl RustType<ProtoStorageSinkDesc> for StorageSinkDesc<CollectionMetadata, mz_repr::Timestamp> {
     fn into_proto(&self) -> ProtoStorageSinkDesc {
         ProtoStorageSinkDesc {
             connection: Some(self.connection.into_proto()),
@@ -196,9 +175,8 @@ impl RustType<ProtoStorageSinkDesc> for StorageSinkDesc<MetadataFilled, mz_repr:
             from_desc: Some(self.from_desc.into_proto()),
             envelope: Some(self.envelope.into_proto()),
             as_of: Some(self.as_of.into_proto()),
-            status_id: self.status_id.into_proto(),
             from_storage_metadata: Some(self.from_storage_metadata.into_proto()),
-            partition_strategy: Some(self.partition_strategy.into_proto()),
+            to_storage_metadata: Some(self.to_storage_metadata.into_proto()),
             with_snapshot: self.with_snapshot,
             version: self.version,
         }
@@ -219,15 +197,14 @@ impl RustType<ProtoStorageSinkDesc> for StorageSinkDesc<MetadataFilled, mz_repr:
             as_of: proto
                 .as_of
                 .into_rust_if_some("ProtoStorageSinkDesc::as_of")?,
-            status_id: proto.status_id.into_rust()?,
             from_storage_metadata: proto
                 .from_storage_metadata
                 .into_rust_if_some("ProtoStorageSinkDesc::from_storage_metadata")?,
-            partition_strategy: proto
-                .partition_strategy
-                .into_rust_if_some("ProtoStorageSinkDesc::partition_strategy")?,
             with_snapshot: proto.with_snapshot,
             version: proto.version,
+            to_storage_metadata: proto
+                .to_storage_metadata
+                .into_rust_if_some("ProtoStorageSinkDesc::to_storage_metadata")?,
         })
     }
 }
@@ -257,39 +234,6 @@ impl RustType<ProtoSinkEnvelope> for SinkEnvelope {
         Ok(match kind {
             Kind::Debezium(()) => SinkEnvelope::Debezium,
             Kind::Upsert(()) => SinkEnvelope::Upsert,
-        })
-    }
-}
-
-#[derive(Arbitrary, Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-pub enum SinkPartitionStrategy {
-    /// A partition strategy based on the raw encoded bytes of each row.
-    V0,
-    /// A partition strategy that maintains the property row1 = row2 => partition(row1) =
-    /// partition(row2) even when the encoding of each row changes (e.g due to a new avro schema id
-    /// being recorded in the data).
-    V1,
-}
-
-impl RustType<ProtoSinkPartitionStrategy> for SinkPartitionStrategy {
-    fn into_proto(&self) -> ProtoSinkPartitionStrategy {
-        use proto_sink_partition_strategy::Kind;
-        ProtoSinkPartitionStrategy {
-            kind: Some(match self {
-                SinkPartitionStrategy::V0 => Kind::V0(()),
-                SinkPartitionStrategy::V1 => Kind::V1(()),
-            }),
-        }
-    }
-
-    fn from_proto(proto: ProtoSinkPartitionStrategy) -> Result<Self, TryFromProtoError> {
-        use proto_sink_partition_strategy::Kind;
-        let kind = proto
-            .kind
-            .ok_or_else(|| TryFromProtoError::missing_field("ProtoSinkPartitionStrategy::kind"))?;
-        Ok(match kind {
-            Kind::V0(()) => SinkPartitionStrategy::V0,
-            Kind::V1(()) => SinkPartitionStrategy::V1,
         })
     }
 }
@@ -735,7 +679,7 @@ impl RustType<ProtoKafkaSinkConnectionV2> for KafkaSinkConnection {
                 None => {
                     return Err(TryFromProtoError::missing_field(
                         "ProtoKafkaSinkConnectionV2::compression_type",
-                    ))
+                    ));
                 }
             },
             progress_group_id: proto

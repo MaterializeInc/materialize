@@ -10,7 +10,7 @@
 //! Fivetran destination for Materialize.
 
 use mz_fivetran_destination::logging::FivetranLoggingFormat;
-use mz_fivetran_destination::{DestinationServer, MaterializeDestination};
+use mz_fivetran_destination::{DestinationConnectorServer, MaterializeDestination};
 use mz_ore::cli::{self, CliConfig};
 use mz_ore::error::ErrorExt;
 use socket2::{Domain, Protocol, Socket, Type};
@@ -61,6 +61,8 @@ async fn run(Args { port }: Args) -> Result<(), Box<dyn std::error::Error>> {
     let socket = Socket::new(Domain::IPV6, Type::STREAM, Some(Protocol::TCP))?;
     // Disable Nagle's algorithm, maybe not needed but seems decent to start.
     socket.set_nodelay(true)?;
+    // Now required; see https://github.com/tokio-rs/tokio/issues/7172
+    socket.set_nonblocking(true)?;
     // OpenBSD disables dual-stack, if we need to support OpenBSD we'll have to explicitly create
     // two sockets.
     //
@@ -75,7 +77,7 @@ async fn run(Args { port }: Args) -> Result<(), Box<dyn std::error::Error>> {
     let tcp_listener: std::net::TcpListener = socket.into();
     let tcp_listener = TcpListenerStream::new(TcpListener::from_std(tcp_listener)?);
 
-    let destination = DestinationServer::new(MaterializeDestination)
+    let destination = DestinationConnectorServer::new(MaterializeDestination)
         .accept_compressed(CompressionEncoding::Gzip)
         .send_compressed(CompressionEncoding::Gzip);
     Server::builder()

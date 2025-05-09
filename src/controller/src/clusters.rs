@@ -34,8 +34,8 @@ use mz_orchestrator::{
 use mz_ore::halt;
 use mz_ore::instrument;
 use mz_ore::task::{self, AbortOnDropHandle};
-use mz_repr::adt::numeric::Numeric;
 use mz_repr::GlobalId;
+use mz_repr::adt::numeric::Numeric;
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 use tokio::time;
@@ -364,6 +364,8 @@ where
         id: ClusterId,
         workload_class: Option<String>,
     ) -> Result<(), anyhow::Error> {
+        self.storage
+            .update_instance_workload_class(id, workload_class.clone());
         self.compute
             .update_instance_workload_class(id, workload_class)?;
         Ok(())

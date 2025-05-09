@@ -21,6 +21,8 @@
 //!   corresponds most closely to what is returned from querying our dataflows
 
 #![warn(missing_debug_implementations)]
+// TODO(parkmycar): Remove this allow.
+#![allow(unsafe_op_in_unsafe_fn)]
 
 mod datum_vec;
 mod diff;
@@ -42,7 +44,6 @@ pub mod optimize;
 pub mod refresh_schedule;
 pub mod role_id;
 pub mod stats;
-pub mod stats2;
 pub mod strconv;
 pub mod timestamp;
 pub mod url;
@@ -53,20 +54,20 @@ pub use crate::datum_vec::{DatumVec, DatumVecBorrow};
 pub use crate::diff::Diff;
 pub use crate::global_id::GlobalId;
 pub use crate::relation::{
-    arb_relation_desc_diff, arb_relation_desc_projection, arb_row_for_relation, ColumnIndex,
-    ColumnName, ColumnType, NotNullViolation, PropRelationDescDiff, ProtoColumnName,
+    ColumnIndex, ColumnName, ColumnType, NotNullViolation, PropRelationDescDiff, ProtoColumnName,
     ProtoColumnType, ProtoRelationDesc, ProtoRelationType, RelationDesc, RelationDescBuilder,
     RelationType, RelationVersion, RelationVersionSelector, VersionedRelationDesc,
+    arb_relation_desc_diff, arb_relation_desc_projection, arb_row_for_relation,
 };
-pub use crate::row::encode::{preserves_order, RowColumnarDecoder, RowColumnarEncoder};
+pub use crate::row::encode::{RowColumnarDecoder, RowColumnarEncoder, preserves_order};
 pub use crate::row::iter::{IntoRowIterator, RowIterator};
 pub use crate::row::{
-    datum_list_size, datum_size, datums_size, read_datum, row_size, DatumList, DatumMap,
-    ProtoNumeric, ProtoRow, Row, RowArena, RowPacker, RowRef, SharedRow,
+    DatumList, DatumMap, ProtoNumeric, ProtoRow, Row, RowArena, RowPacker, RowRef, SharedRow,
+    datum_list_size, datum_size, datums_size, read_datum, row_size,
 };
 pub use crate::scalar::{
-    arb_datum, arb_datum_for_column, arb_datum_for_scalar, arb_range_type, ArrayRustType,
-    AsColumnType, Datum, DatumType, PropArray, PropDatum, PropDict, PropList, ProtoScalarType,
-    ScalarBaseType, ScalarType,
+    ArrayRustType, AsColumnType, Datum, DatumType, PropArray, PropDatum, PropDict, PropList,
+    ProtoScalarType, ScalarBaseType, ScalarType, arb_datum, arb_datum_for_column,
+    arb_datum_for_scalar, arb_range_type,
 };
 pub use crate::timestamp::{Timestamp, TimestampManipulation};

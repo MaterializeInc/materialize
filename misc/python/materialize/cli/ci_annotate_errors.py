@@ -76,6 +76,7 @@ ERROR_RE = re.compile(
     | was\ provided\ more\ than\ once,\ but\ cannot\ be\ used\ multiple\ times
     | (^|\ )fatal: # used in frontegg-mock
     | [Oo]ut\ [Oo]f\ [Mm]emory
+    | memory\ allocation\ of\ [0-9]+\ bytes\ failed
     | cannot\ migrate\ from\ catalog
     | halting\ process: # Rust unwrap
     | fatal\ runtime\ error: # stack overflow
@@ -87,8 +88,6 @@ ERROR_RE = re.compile(
     | environmentd\ .*\ unrecognized\ configuration\ parameter
     | cannot\ load\ unknown\ system\ parameter\ from\ catalog\ storage
     | SUMMARY:\ .*Sanitizer
-    | Fixpoint\ .*\ detected\ a\ loop\ of\ length\ .*\ after\ .*\ iterations
-    | Fixpoint\ .*\ failed\ to\ reach\ a\ fixed\ point,\ or\ cycle\ of\ length\ at\ most
     | primary\ source\ \w+\ seemingly\ dropped\ before\ subsource
     # Only notifying on unexpected failures. INT, TRAP, BUS, FPE, SEGV, PIPE
     | \ ANOM_ABEND\ .*\ sig=(2|5|7|8|11|13)
@@ -101,6 +100,8 @@ ERROR_RE = re.compile(
     | (FAIL|TIMEOUT)\s+\[\s*\d+\.\d+s\]
     # parallel-workload
     | worker_.*\ still\ running: [\s\S]* Threads\ have\ not\ stopped\ within\ 5\ minutes,\ exiting\ hard
+    # source-table migration
+    | source-table-migration\ issue
     )
     .* $
     """,
@@ -110,10 +111,10 @@ ERROR_RE = re.compile(
 # Panics are multiline and our log lines of multiple services are interleaved,
 # making them complex to handle in regular expressions, thus handle them
 # separately.
-# Example 1: launchdarkly-materialized-1  | thread 'coordinator' panicked at [...]
-# Example 2: [pod/environmentd-0/environmentd] thread 'coordinator' panicked at [...]
+# Example 1: launchdarkly-materialized-1  | 2025-02-08T16:40:57.296144Z  thread 'coordinator' panicked at [...]
+# Example 2: [pod/environmentd-0/environmentd] 2025-02-08T16:40:57.296144Z  thread 'coordinator' panicked at [...]
 PANIC_IN_SERVICE_START_RE = re.compile(
-    rb"^(\[)?(?P<service>[^ ]*)(\s*\||\]) thread '.*' panicked at "
+    rb"^(\[)?(?P<service>[^ ]*)(\s*\||\]) \d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{6}Z  thread '.*' panicked at "
 )
 # Example 1: launchdarkly-materialized-1  | global timestamp must always go up
 # Example 2: [pod/environmentd-0/environmentd] Unknown collection identifier u2082
@@ -161,8 +162,11 @@ IGNORE_RE = re.compile(
     # For 0dt upgrades
     | halting\ process:\ (unable\ to\ confirm\ leadership|fenced\ out\ old\ deployment;\ rebooting\ as\ leader|this\ deployment\ has\ been\ fenced\ out)
     | zippy-materialized.* \| .* halting\ process:\ Server\ started\ with\ requested\ generation
+    | there\ have\ been\ DDL\ that\ we\ need\ to\ react\ to;\ rebooting\ in\ read-only\ mode
     # Don't care for ssh problems
     | fatal:\ userauth_pubkey
+    # Expected in Terraform tests if something else failed during the setup
+    | mz-debug:\ fatal:\ failed\ to\ read\ kubeconfig
     # Fences without incrementing deploy generation
     | txn-wal-fencing-mz_first-.* \| .* unable\ to\ confirm\ leadership
     | txn-wal-fencing-mz_first-.* \| .* fenced\ by\ envd
@@ -172,6 +176,7 @@ IGNORE_RE = re.compile(
     | \ ANOM_ABEND\ .*\ exe="/usr/bin/qemu
     # This can happen in "K8s recovery: envd on failing node", but the test still succeeds, old environmentd will just be crashed, see database-issues#8749
     | \[pod/environmentd-0/environmentd\]\ .*\ (unable\ to\ confirm\ leadership|fenced\ out\ old\ deployment;\ rebooting\ as\ leader|this\ deployment\ has\ been\ fenced\ out)
+    | cannot\ load\ unknown\ system\ parameter
     )
     """,
     re.VERBOSE | re.MULTILINE,

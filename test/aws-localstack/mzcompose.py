@@ -25,6 +25,7 @@ from materialize.mzcompose.composition import (
 )
 from materialize.mzcompose.services.localstack import Localstack
 from materialize.mzcompose.services.materialized import Materialized
+from materialize.mzcompose.services.mz import Mz
 from materialize.mzcompose.services.testdrive import Testdrive
 
 ENVIRONMENT_NAME = f"environment-{DEFAULT_ORG_ID}-{DEFAULT_ORDINAL}"
@@ -43,6 +44,7 @@ AWS_ENDPOINT_URL_MZ = "http://localstack:4566"
 
 SERVICES = [
     Localstack(),
+    Mz(app_password=""),
     Materialized(
         depends_on=["localstack"],
         environment_extra=[
@@ -66,9 +68,12 @@ SERVICES = [
 
 
 def workflow_default(c: Composition) -> None:
-    for name in ["secrets-manager", "aws-connection", "copy-to-s3"]:
+    def process(name: str) -> None:
         with c.test_case(name):
             c.workflow(name)
+
+    workflows = ["secrets-manager", "aws-connection", "copy-to-s3"]
+    c.test_parts(workflows, process)
 
 
 def workflow_secrets_manager(c: Composition) -> None:

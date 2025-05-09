@@ -14,20 +14,18 @@ use std::fmt::Debug;
 use std::sync::{Arc, RwLock};
 use std::time::Instant;
 
-use anyhow::Context;
-use arrow::datatypes::DataType;
 use differential_dataflow::difference::Semigroup;
 use differential_dataflow::lattice::Lattice;
 use mz_ore::cast::CastFrom;
 use mz_persist_types::columnar::data_type;
-use mz_persist_types::schema::{backward_compatible, Migration, SchemaId};
+use mz_persist_types::schema::{Migration, SchemaId, backward_compatible};
 use mz_persist_types::{Codec, Codec64};
 use timely::progress::Timestamp;
 
 use crate::internal::apply::Applier;
 use crate::internal::encoding::Schemas;
 use crate::internal::metrics::{SchemaCacheMetrics, SchemaMetrics};
-use crate::internal::state::EncodedSchemas;
+use crate::internal::state::{BatchPart, EncodedSchemas};
 
 /// The result returned by [crate::PersistClient::compare_and_evolve_schema].
 #[derive(Debug)]
@@ -301,12 +299,11 @@ impl MigrationCacheMap {
 pub(crate) enum PartMigration<K: Codec, V: Codec> {
     /// No-op!
     SameSchema { both: Schemas<K, V> },
-    /// This part predates writing down schema ids, so we have to decode and
-    /// potentially migrate it to the target schema via the legacy Codec path.
-    Codec { read: Schemas<K, V> },
+    /// We don't have a schema id for write schema.
+    Schemaless { read: Schemas<K, V> },
     /// We have both write and read schemas, and they don't match.
     Either {
-        _write: Schemas<K, V>,
+        write: Schemas<K, V>,
         read: Schemas<K, V>,
         key_migration: Arc<Migration>,
         val_migration: Arc<Migration>,
@@ -317,14 +314,14 @@ impl<K: Codec, V: Codec> Clone for PartMigration<K, V> {
     fn clone(&self) -> Self {
         match self {
             Self::SameSchema { both } => Self::SameSchema { both: both.clone() },
-            Self::Codec { read } => Self::Codec { read: read.clone() },
+            Self::Schemaless { read } => Self::Schemaless { read: read.clone() },
             Self::Either {
-                _write,
+                write,
                 read,
                 key_migration,
                 val_migration,
             } => Self::Either {
-                _write: _write.clone(),
+                write: write.clone(),
                 read: read.clone(),
                 key_migration: Arc::clone(key_migration),
                 val_migration: Arc::clone(val_migration),
@@ -339,7 +336,7 @@ where
     V: Debug + Codec,
 {
     pub(crate) async fn new<T, D>(
-        write: Option<SchemaId>,
+        part: &BatchPart<T>,
         read: Schemas<K, V>,
         schema_cache: &mut SchemaCache<K, V, T, D>,
     ) -> Result<Self, Schemas<K, V>>
@@ -347,8 +344,27 @@ where
         T: Timestamp + Lattice + Codec64 + Sync,
         D: Semigroup + Codec64,
     {
+        // At one point in time during our structured data migration, we deprecated the
+        // already written schema IDs because we made all columns at the Arrow/Parquet
+        // level nullable, thus changing the schema parts were written with.
+        //
+        // _After_ this deprecation, we've observed at least one instance where a
+        // structured only Part was written with the schema ID in the _old_ deprecated
+        // field. While unexpected, given the ordering of our releases it is safe to
+        // use the deprecated schema ID if we have a structured only part.
+        let write = match (part.schema_id(), part.deprecated_schema_id()) {
+            (Some(write_id), _) => Some(write_id),
+            (None, Some(deprecated_id))
+                if part.is_structured_only(&schema_cache.applier.metrics.columnar) =>
+            {
+                tracing::warn!(?deprecated_id, "falling back to deprecated schema ID");
+                Some(deprecated_id)
+            }
+            (None, _) => None,
+        };
+
         match (write, read.id) {
-            (None, _) => Ok(PartMigration::Codec { read }),
+            (None, _) => Ok(PartMigration::Schemaless { read }),
             (Some(w), Some(r)) if w == r => Ok(PartMigration::SameSchema { both: read }),
             (Some(w), _) => {
                 let write = schema_cache
@@ -384,7 +400,7 @@ where
                     .inc_by(start.elapsed().as_secs_f64());
 
                 Ok(PartMigration::Either {
-                    _write: write,
+                    write,
                     read,
                     key_migration,
                     val_migration,
@@ -398,94 +414,8 @@ impl<K: Codec, V: Codec> PartMigration<K, V> {
     pub(crate) fn codec_read(&self) -> &Schemas<K, V> {
         match self {
             PartMigration::SameSchema { both } => both,
-            PartMigration::Codec { read } => read,
+            PartMigration::Schemaless { read } => read,
             PartMigration::Either { read, .. } => read,
-        }
-    }
-}
-
-/// Returns if `new` is at least as nullable as `old`.
-///
-/// Errors if `new` is less nullable than `old`, or `old` and `new` are different types or have
-/// different nested fields.
-pub(crate) fn is_atleast_as_nullable(old: &DataType, new: &DataType) -> Result<(), anyhow::Error> {
-    fn check(old: &arrow::datatypes::Field, new: &arrow::datatypes::Field) -> bool {
-        old.is_nullable() == new.is_nullable() || !old.is_nullable() && new.is_nullable()
-    }
-
-    match (old, new) {
-        (DataType::Null, DataType::Null)
-        | (DataType::Boolean, DataType::Boolean)
-        | (DataType::Int8, DataType::Int8)
-        | (DataType::Int16, DataType::Int16)
-        | (DataType::Int32, DataType::Int32)
-        | (DataType::Int64, DataType::Int64)
-        | (DataType::UInt8, DataType::UInt8)
-        | (DataType::UInt16, DataType::UInt16)
-        | (DataType::UInt32, DataType::UInt32)
-        | (DataType::UInt64, DataType::UInt64)
-        | (DataType::Float16, DataType::Float16)
-        | (DataType::Float32, DataType::Float32)
-        | (DataType::Float64, DataType::Float64)
-        | (DataType::Binary, DataType::Binary)
-        | (DataType::Utf8, DataType::Utf8) => Ok(()),
-        (DataType::FixedSizeBinary(old_size), DataType::FixedSizeBinary(new_size))
-            if old_size == new_size =>
-        {
-            Ok(())
-        }
-        (DataType::List(old_field), DataType::List(new_field))
-        | (DataType::Map(old_field, _), DataType::Map(new_field, _))
-        // Note: We previously represented Maps as arrow::DataType::Map, but have since switched to
-        // using List-of-Structs since it's the same thing but better supported.
-        //
-        // See: <https://github.com/MaterializeInc/materialize/pull/28912>
-        | (DataType::Map(old_field, _), DataType::List(new_field)) => {
-            if !check(old_field, new_field) {
-                anyhow::bail!("'{}' is now less nullable", old_field.name());
-            }
-            // Recurse into our children and bail early if one fails.
-            let child_result = is_atleast_as_nullable(old_field.data_type(), new_field.data_type())
-                .with_context(|| format!("'{}'", old_field.name()));
-            if let Err(e) = child_result {
-                return Err(e);
-            }
-            Ok(())
-        }
-        (DataType::Struct(old_fields), DataType::Struct(new_fields)) => {
-            if old_fields.len() != new_fields.len() {
-                anyhow::bail!(
-                    "wrong number of fields, old: {}, new: {}",
-                    old_fields.len(),
-                    new_fields.len()
-                )
-            }
-
-            // Note: This nested loop approach is O(n^2), but we expect the number of fields to be
-            // relatively small, and it avoid allocations, so we consciously use this approach.
-            for new_field in new_fields {
-                let old_field = old_fields
-                    .iter()
-                    .find(|old| old.name() == new_field.name())
-                    .ok_or_else(|| anyhow::anyhow!("missing field '{}'", new_field.name()))?;
-
-                if !check(old_field, new_field) {
-                    anyhow::bail!("'{}' is now less nullable", old_field.name());
-                }
-
-                // Recurse into our children and bail early if one fails.
-                let child_result =
-                    is_atleast_as_nullable(old_field.data_type(), new_field.data_type())
-                        .with_context(|| format!("'{}'", old_field.name()));
-                if let Err(e) = child_result {
-                    return Err(e);
-                }
-            }
-
-            Ok(())
-        }
-        (old, new) => {
-            anyhow::bail!("found unsupported or mismatched datatypes! old: {old:?}, new: {new:?}")
         }
     }
 }
@@ -493,25 +423,23 @@ pub(crate) fn is_atleast_as_nullable(old: &DataType, new: &DataType) -> Result<(
 #[cfg(test)]
 mod tests {
     use arrow::array::{
-        as_string_array, Array, ArrayBuilder, StringArray, StringBuilder, StructArray,
+        Array, ArrayBuilder, StringArray, StringBuilder, StructArray, as_string_array,
     };
-    use arrow::datatypes::{DataType, Field, Fields};
+    use arrow::datatypes::{DataType, Field};
     use bytes::BufMut;
     use futures::StreamExt;
     use mz_dyncfg::ConfigUpdates;
-    use mz_ore::error::ErrorExt;
-    use mz_ore::{assert_contains, assert_err, assert_ok};
+    use mz_persist_types::ShardId;
     use mz_persist_types::arrow::ArrayOrd;
     use mz_persist_types::codec_impls::UnitSchema;
-    use mz_persist_types::columnar::{ColumnDecoder, ColumnEncoder, Schema2};
+    use mz_persist_types::columnar::{ColumnDecoder, ColumnEncoder, Schema};
     use mz_persist_types::stats::{NoneStats, StructStats};
-    use mz_persist_types::ShardId;
     use timely::progress::Antichain;
 
+    use crate::Diagnostics;
     use crate::cli::admin::info_log_non_zero_metrics;
     use crate::read::ReadHandle;
     use crate::tests::new_test_client;
-    use crate::Diagnostics;
 
     use super::*;
 
@@ -575,7 +503,7 @@ mod tests {
     #[derive(Debug, Clone, Default, PartialEq)]
     struct StringsSchema(Vec<bool>);
 
-    impl Schema2<Strings> for StringsSchema {
+    impl Schema<Strings> for StringsSchema {
         type ArrowColumn = StructArray;
         type Statistics = NoneStats;
         type Decoder = StringsDecoder;
@@ -857,190 +785,5 @@ mod tests {
         if false {
             info_log_non_zero_metrics(&client.metrics.registry.gather());
         }
-    }
-
-    #[mz_ore::test]
-    fn test_as_nullable() {
-        assert_ok!(is_atleast_as_nullable(&DataType::UInt8, &DataType::UInt8));
-        assert_err!(is_atleast_as_nullable(&DataType::UInt8, &DataType::Utf8));
-
-        let old_type = DataType::Struct(arrow::datatypes::Fields::from(vec![
-            Field::new("a", DataType::Utf8, true),
-            Field::new("b", DataType::Boolean, false),
-        ]));
-        assert_ok!(is_atleast_as_nullable(&old_type, &old_type));
-
-        let more_nullable_type = DataType::Struct(arrow::datatypes::Fields::from(vec![
-            Field::new("a", DataType::Utf8, true),
-            Field::new("b", DataType::Boolean, true),
-        ]));
-        assert_ok!(is_atleast_as_nullable(&old_type, &more_nullable_type));
-
-        let less_nullable_type = DataType::Struct(arrow::datatypes::Fields::from(vec![
-            Field::new("a", DataType::Utf8, false),
-            Field::new("b", DataType::Boolean, false),
-        ]));
-        assert_err!(is_atleast_as_nullable(&old_type, &less_nullable_type));
-
-        let different_fields = DataType::Struct(arrow::datatypes::Fields::from(vec![
-            Field::new("foobar", DataType::Utf8, true),
-            Field::new("b", DataType::Boolean, true),
-        ]));
-        assert_err!(is_atleast_as_nullable(&old_type, &different_fields));
-
-        let different_number_of_fields = DataType::Struct(arrow::datatypes::Fields::from(vec![
-            Field::new("a", DataType::Utf8, true),
-            Field::new("b", DataType::Boolean, true),
-            Field::new("c", DataType::UInt64, true),
-        ]));
-        assert_err!(is_atleast_as_nullable(
-            &old_type,
-            &different_number_of_fields
-        ));
-
-        let out_of_order_fields = DataType::Struct(arrow::datatypes::Fields::from(vec![
-            Field::new("b", DataType::Boolean, false),
-            Field::new("a", DataType::Utf8, true),
-        ]));
-        assert_ok!(is_atleast_as_nullable(&old_type, &out_of_order_fields));
-    }
-
-    #[mz_ore::test]
-    fn test_as_nullable_deeply_nested() {
-        let old_type = DataType::Struct(Fields::from(vec![
-            Field::new(
-                "k",
-                DataType::Struct(Fields::from(vec![
-                    Field::new("event_type", DataType::Utf8, false),
-                    Field::new(
-                        "details",
-                        DataType::Struct(Fields::from(vec![
-                            Field::new("name", DataType::Utf8, false),
-                            Field::new("new_user", DataType::Boolean, false),
-                            Field::new("plan", DataType::Utf8, true),
-                        ])),
-                        false,
-                    ),
-                    Field::new("event_ts", DataType::UInt64, true),
-                ])),
-                true,
-            ),
-            Field::new("v", DataType::Boolean, false),
-            Field::new("t", DataType::UInt64, false),
-            Field::new("d", DataType::Int64, false),
-        ]));
-        assert_ok!(is_atleast_as_nullable(&old_type, &old_type));
-
-        let more_nullable_type = DataType::Struct(Fields::from(vec![
-            Field::new(
-                "k",
-                DataType::Struct(Fields::from(vec![
-                    Field::new("event_type", DataType::Utf8, false),
-                    Field::new(
-                        "details",
-                        DataType::Struct(Fields::from(vec![
-                            Field::new("name", DataType::Utf8, false),
-                            // More nullable than old_type.
-                            Field::new("new_user", DataType::Boolean, true),
-                            Field::new("plan", DataType::Utf8, true),
-                        ])),
-                        false,
-                    ),
-                    Field::new("event_ts", DataType::UInt64, true),
-                ])),
-                true,
-            ),
-            Field::new("v", DataType::Boolean, false),
-            Field::new("t", DataType::UInt64, false),
-            Field::new("d", DataType::Int64, false),
-        ]));
-        assert_ok!(is_atleast_as_nullable(&old_type, &more_nullable_type));
-
-        let less_nullable_type = DataType::Struct(Fields::from(vec![
-            Field::new(
-                "k",
-                DataType::Struct(Fields::from(vec![
-                    Field::new("event_type", DataType::Utf8, false),
-                    Field::new(
-                        "details",
-                        DataType::Struct(Fields::from(vec![
-                            Field::new("name", DataType::Utf8, false),
-                            Field::new("new_user", DataType::Boolean, false),
-                            // Less nullable than old type.
-                            Field::new("plan", DataType::Utf8, false),
-                        ])),
-                        false,
-                    ),
-                    Field::new("event_ts", DataType::UInt64, true),
-                ])),
-                true,
-            ),
-            Field::new("v", DataType::Boolean, false),
-            Field::new("t", DataType::UInt64, false),
-            Field::new("d", DataType::Int64, false),
-        ]));
-        let result = is_atleast_as_nullable(&old_type, &less_nullable_type);
-        assert_err!(result);
-        assert_contains!(
-            result.unwrap_err().to_string_with_causes(),
-            "'k': 'details': 'plan' is now less nullable"
-        );
-    }
-
-    #[mz_ore::test]
-    fn test_map_to_list_backwards_compatible() {
-        let map_type = DataType::Map(
-            Arc::new(Field::new(
-                "map_entries",
-                DataType::Struct(Fields::from(vec![
-                    Field::new("key", DataType::Utf8, false),
-                    Field::new("val", DataType::Utf8, true),
-                ])),
-                false,
-            )),
-            true,
-        );
-        let list_type = DataType::List(Arc::new(Field::new(
-            "map_entries",
-            DataType::Struct(Fields::from(vec![
-                Field::new("key", DataType::Utf8, false),
-                Field::new("val", DataType::Utf8, true),
-            ])),
-            false,
-        )));
-        assert_ok!(is_atleast_as_nullable(&map_type, &list_type));
-
-        let map_type_less_nullable = DataType::Map(
-            Arc::new(Field::new(
-                "map_entries",
-                DataType::Struct(Fields::from(vec![
-                    Field::new("key", DataType::Utf8, false),
-                    Field::new("val", DataType::Utf8, false),
-                ])),
-                false,
-            )),
-            true,
-        );
-        assert_ok!(is_atleast_as_nullable(&map_type_less_nullable, &list_type));
-
-        let list_type_less_nullable = DataType::List(Arc::new(Field::new(
-            "map_entries",
-            DataType::Struct(Fields::from(vec![
-                Field::new("key", DataType::Utf8, false),
-                Field::new("val", DataType::Utf8, false),
-            ])),
-            false,
-        )));
-        let result = is_atleast_as_nullable(&map_type, &list_type_less_nullable);
-        assert_err!(result);
-        assert_contains!(
-            result.unwrap_err().to_string_with_causes(),
-            "'map_entries': 'val' is now less nullable"
-        );
-
-        assert_ok!(is_atleast_as_nullable(
-            &map_type_less_nullable,
-            &list_type_less_nullable
-        ));
     }
 }

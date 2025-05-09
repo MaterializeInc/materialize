@@ -19,9 +19,9 @@ use dec::{Context as DecimalContext, OrderedDecimal};
 use mz_ore::now::NowFn;
 use mz_repr::adt::date::Date;
 use mz_repr::adt::numeric::{self, DecimalLike, Numeric};
-use mz_repr::{Datum, Row};
-use mz_storage_types::sources::load_generator::{Event, Generator, LoadGeneratorOutput, TpchView};
+use mz_repr::{Datum, Diff, Row};
 use mz_storage_types::sources::MzOffset;
+use mz_storage_types::sources::load_generator::{Event, Generator, LoadGeneratorOutput, TpchView};
 use rand::distributions::{Alphanumeric, DistString};
 use rand::rngs::StdRng;
 use rand::seq::SliceRandom;
@@ -43,7 +43,7 @@ impl Generator for Tpch {
         _: NowFn,
         seed: Option<u64>,
         _resume_offset: MzOffset,
-    ) -> Box<(dyn Iterator<Item = (LoadGeneratorOutput, Event<Option<MzOffset>, (Row, i64)>)>)>
+    ) -> Box<(dyn Iterator<Item = (LoadGeneratorOutput, Event<Option<MzOffset>, (Row, Diff)>)>)>
     {
         let mut rng = StdRng::seed_from_u64(seed.unwrap_or_default());
         let mut ctx = Context {
@@ -128,7 +128,7 @@ impl Generator for Tpch {
                             ]);
                             pending.push_back((
                                 TpchView::Partsupp,
-                                Event::Message(MzOffset::from(offset), (row.clone(), 1)),
+                                Event::Message(MzOffset::from(offset), (row.clone(), Diff::ONE)),
                             ));
                         }
                         row.packer().extend([
@@ -159,12 +159,12 @@ impl Generator for Tpch {
                         row.clone()
                     }
                     TpchView::Orders => {
-                        let seed = rng.gen();
+                        let seed = rng.r#gen();
                         let (order, lineitems) = ctx.order_row(seed, key);
                         for row in lineitems {
                             pending.push_back((
                                 TpchView::Lineitem,
-                                Event::Message(MzOffset::from(offset), (row, 1)),
+                                Event::Message(MzOffset::from(offset), (row, Diff::ONE)),
                             ));
                         }
                         if !ctx.tpch.tick.is_zero() {
@@ -193,7 +193,10 @@ impl Generator for Tpch {
                     _ => unreachable!("{output:?}"),
                 };
 
-                pending.push_back((output, Event::Message(MzOffset::from(offset), (row, 1))));
+                pending.push_back((
+                    output,
+                    Event::Message(MzOffset::from(offset), (row, Diff::ONE)),
+                ));
                 if rows.peek().is_none() {
                     offset += 1;
                     pending.push_back((output, Event::Progress(Some(MzOffset::from(offset)))));
@@ -211,24 +214,24 @@ impl Generator for Tpch {
                 for row in old_lineitems {
                     pending.push_back((
                         TpchView::Lineitem,
-                        Event::Message(MzOffset::from(offset), (row, -1)),
+                        Event::Message(MzOffset::from(offset), (row, Diff::MINUS_ONE)),
                     ));
                 }
-                let new_seed = rng.gen();
+                let new_seed = rng.r#gen();
                 let (new_order, new_lineitems) = ctx.order_row(new_seed, key);
                 for row in new_lineitems {
                     pending.push_back((
                         TpchView::Lineitem,
-                        Event::Message(MzOffset::from(offset), (row, 1)),
+                        Event::Message(MzOffset::from(offset), (row, Diff::ONE)),
                     ));
                 }
                 pending.push_back((
                     TpchView::Orders,
-                    Event::Message(MzOffset::from(offset), (old_order, -1)),
+                    Event::Message(MzOffset::from(offset), (old_order, Diff::MINUS_ONE)),
                 ));
                 pending.push_back((
                     TpchView::Orders,
-                    Event::Message(MzOffset::from(offset), (new_order, 1)),
+                    Event::Message(MzOffset::from(offset), (new_order, Diff::ONE)),
                 ));
                 offset += 1;
                 pending.push_back((

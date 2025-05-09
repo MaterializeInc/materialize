@@ -29,8 +29,8 @@ use std::collections::BTreeMap;
 use std::io;
 use std::io::IsTerminal;
 use std::str::FromStr;
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::LazyLock;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 
@@ -43,24 +43,23 @@ use hyper_util::client::legacy::connect::HttpConnector;
 use opentelemetry::global::Error;
 use opentelemetry::propagation::{Extractor, Injector};
 use opentelemetry::trace::TracerProvider;
-use opentelemetry::{global, KeyValue};
+use opentelemetry::{KeyValue, global};
 use opentelemetry_sdk::propagation::TraceContextPropagator;
-use opentelemetry_sdk::{trace, Resource};
+use opentelemetry_sdk::{Resource, trace};
 use prometheus::IntCounter;
-use sentry::integrations::debug_images::DebugImagesIntegration;
 use tonic::metadata::MetadataMap;
 use tonic::transport::Endpoint;
-use tracing::{warn, Event, Level, Span, Subscriber};
+use tracing::{Event, Level, Span, Subscriber, warn};
 #[cfg(feature = "capture")]
 use tracing_capture::{CaptureLayer, SharedStorage};
 use tracing_opentelemetry::OpenTelemetrySpanExt;
 use tracing_subscriber::filter::Directive;
-use tracing_subscriber::fmt::format::{format, Writer};
+use tracing_subscriber::fmt::format::{Writer, format};
 use tracing_subscriber::fmt::{self, FmtContext, FormatEvent, FormatFields};
 use tracing_subscriber::layer::{Layer, SubscriberExt};
 use tracing_subscriber::registry::LookupSpan;
 use tracing_subscriber::util::SubscriberInitExt;
-use tracing_subscriber::{reload, EnvFilter, Registry};
+use tracing_subscriber::{EnvFilter, Registry, reload};
 
 use crate::metric;
 use crate::metrics::MetricsRegistry;
@@ -519,6 +518,7 @@ where
                 let path = addr.as_pathname().unwrap().as_ref();
                 builder.server_addr(path)
             }
+            SocketAddr::Turmoil(_) => unimplemented!(),
         };
         Some(builder.spawn())
     } else {
@@ -533,7 +533,6 @@ where
                     attach_stacktrace: true,
                     release: Some(format!("materialize@{0}", config.build_version).into()),
                     environment: sentry_config.environment.map(Into::into),
-                    integrations: vec![Arc::new(DebugImagesIntegration::new())],
                     ..Default::default()
                 },
             ));
@@ -618,6 +617,7 @@ where
         let endpoint = match console_config.listen_addr {
             SocketAddr::Inet(addr) => format!("http://{addr}"),
             SocketAddr::Unix(addr) => format!("file://localhost{addr}"),
+            SocketAddr::Turmoil(_) => unimplemented!(),
         };
         tracing::info!("starting tokio console on {endpoint}");
     }

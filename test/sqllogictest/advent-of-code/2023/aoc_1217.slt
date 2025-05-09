@@ -127,7 +127,8 @@ SELECT * FROM part1, part2;
 156  190
 
 query T multiline
-EXPLAIN WITH MUTUALLY RECURSIVE
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, arity, join implementations) AS VERBOSE TEXT FOR
+WITH MUTUALLY RECURSIVE
 
     lines(r INT, line TEXT) AS (
         SELECT r, regexp_split_to_array(input, '\n')[r] as block
@@ -223,130 +224,150 @@ EXPLAIN WITH MUTUALLY RECURSIVE
 SELECT * FROM part1, part2;
 ----
 Explained Query:
-  With Mutually Recursive
+  With
     cte l0 =
-      Project (#0, #2, #3)
-        Map (text_to_integer(substr(#1, #2, 1)))
-          FlatMap generate_series(1, char_length(#1), 1)
-            Project (#1, #2)
-              Map (array_index(regexp_split_to_array["\n", case_insensitive=false](#0), integer_to_bigint(#1)))
-                FlatMap generate_series(1, (regexp_split_to_array["\n", case_insensitive=false](#0) array_length 1), 1)
-                  ReadStorage materialize.public.input
+      Project (#0, #2, #3) // { arity: 3 }
+        Map (text_to_integer(substr(#1{line}, #2{c}, 1))) // { arity: 4 }
+          FlatMap generate_series(1, char_length(#1{line}), 1) // { arity: 3 }
+            Project (#1, #2) // { arity: 2 }
+              Map (array_index(regexp_split_to_array["\n", case_insensitive=false](#0{input}), integer_to_bigint(#1{r}))) // { arity: 3 }
+                FlatMap generate_series(1, (regexp_split_to_array["\n", case_insensitive=false](#0{input}) array_length 1), 1) // { arity: 2 }
+                  ReadStorage materialize.public.input // { arity: 1 }
     cte l1 =
-      ArrangeBy keys=[[#0, #1]]
-        Get l0
-    cte l2 =
-      Project (#0..=#3, #5)
-        Get l3
-    cte l3 =
-      Reduce group_by=[#0..=#4] aggregates=[min(#5)]
-        Union
-          Project (#6, #7, #2, #3, #9, #10)
-            Map ((#4 + 1), (#5 + #8))
-              Join on=(#6 = (#0 + #2) AND #7 = (#1 + #3)) type=differential
-                ArrangeBy keys=[[(#0 + #2), (#1 + #3)]]
-                  Filter (#4 < 3)
-                    Get l3
-                Get l1
-          Project (#5, #6, #3, #2, #9, #8)
-            Map ((#4 + #7), 1)
-              Join on=(#5 = (#0 + #3) AND #6 = (#1 + #2)) type=differential
-                ArrangeBy keys=[[(#0 + #3), (#1 + #2)]]
-                  Get l2
-                Get l1
-          Project (#5, #6, #8, #9, #11, #10)
-            Map (-(#3), -(#2), (#4 + #7), 1)
-              Join on=(#5 = (#0 - #3) AND #6 = (#1 - #2)) type=differential
-                ArrangeBy keys=[[(#0 - #3), (#1 - #2)]]
-                  Get l2
-                Get l1
-          Constant
-            - (1, 1, 0, 1, 0, 0)
-            - (1, 1, 1, 0, 0, 0)
-    cte l4 =
-      Reduce aggregates=[min(#0)]
-        Project (#2)
-          Join on=(#0 = #3 AND #1 = #4) type=differential
-            ArrangeBy keys=[[#0, #1]]
-              Project (#0, #1, #5)
-                Get l3
-            ArrangeBy keys=[[]]
-              Reduce aggregates=[max(#0)]
-                Project (#0)
-                  Get l0
-            ArrangeBy keys=[[]]
-              Reduce aggregates=[max(#0)]
-                Project (#1)
-                  Get l0
-    cte l5 =
-      Project (#0..=#3, #5)
-        Filter (#4 >= 4)
-          Get l6
-    cte l6 =
-      Reduce group_by=[#0..=#4] aggregates=[min(#5)]
-        Union
-          Project (#6, #7, #2, #3, #9, #10)
-            Map ((#4 + 1), (#5 + #8))
-              Join on=(#6 = (#0 + #2) AND #7 = (#1 + #3)) type=differential
-                ArrangeBy keys=[[(#0 + #2), (#1 + #3)]]
-                  Filter (#4 < 10)
-                    Get l6
-                Get l1
-          Project (#5, #6, #3, #2, #9, #8)
-            Map ((#4 + #7), 1)
-              Join on=(#5 = (#0 + #3) AND #6 = (#1 + #2)) type=differential
-                ArrangeBy keys=[[(#0 + #3), (#1 + #2)]]
-                  Get l5
-                Get l1
-          Project (#5, #6, #8, #9, #11, #10)
-            Map (-(#3), -(#2), (#4 + #7), 1)
-              Join on=(#5 = (#0 - #3) AND #6 = (#1 - #2)) type=differential
-                ArrangeBy keys=[[(#0 - #3), (#1 - #2)]]
-                  Get l5
-                Get l1
-          Constant
-            - (1, 1, 0, 1, 0, 0)
-            - (1, 1, 1, 0, 0, 0)
-  Return
-    With
-      cte l7 =
-        Reduce aggregates=[min(#0)]
-          Project (#2)
-            Join on=(#0 = #3 AND #1 = #4) type=differential
-              ArrangeBy keys=[[#0, #1]]
-                Project (#0, #1, #5)
-                  Filter (#4 >= 4)
-                    Get l6
-              ArrangeBy keys=[[]]
-                Reduce aggregates=[max(#0)]
-                  Project (#0)
-                    Get l0
-              ArrangeBy keys=[[]]
-                Reduce aggregates=[max(#0)]
-                  Project (#1)
-                    Get l0
-    Return
-      CrossJoin type=differential
-        ArrangeBy keys=[[]]
-          Union
-            Get l4
-            Map (null)
-              Union
-                Negate
-                  Project ()
-                    Get l4
-                Constant
-                  - ()
-        ArrangeBy keys=[[]]
-          Union
-            Get l7
-            Map (null)
-              Union
-                Negate
-                  Project ()
-                    Get l7
-                Constant
-                  - ()
+      ArrangeBy keys=[[#0{r}, #1{c}]] // { arity: 3 }
+        Get l0 // { arity: 3 }
+  Return // { arity: 2 }
+    With Mutually Recursive
+      cte l2 =
+        Project (#0..=#3, #5{min}) // { arity: 5 }
+          Get l3 // { arity: 6 }
+      cte l3 =
+        Reduce group_by=[#0..=#4] aggregates=[min(#5{cost})] // { arity: 6 }
+          Union // { arity: 6 }
+            Project (#6, #7, #2, #3, #9, #10) // { arity: 6 }
+              Map ((#4{steps} + 1), (#5{cost} + #8{cost})) // { arity: 11 }
+                Join on=(#6{r} = (#0{r} + #2{dr}) AND #7{c} = (#1{c} + #3{dc})) type=differential // { arity: 9 }
+                  implementation
+                    %0:l3[(#0{r} + #2{dr}), (#1{c} + #3{dc})]KKif » %1:l1[#0{r}, #1{c}]KKif
+                  ArrangeBy keys=[[(#0{r} + #2{dr}), (#1{c} + #3{dc})]] // { arity: 6 }
+                    Filter (#4{steps} < 3) // { arity: 6 }
+                      Get l3 // { arity: 6 }
+                  Get l1 // { arity: 3 }
+            Project (#5, #6, #3, #2, #9, #8) // { arity: 6 }
+              Map ((#4{cost} + #7{cost}), 1) // { arity: 10 }
+                Join on=(#5{r} = (#0{r} + #3{dc}) AND #6{c} = (#1{c} + #2{dr})) type=differential // { arity: 8 }
+                  implementation
+                    %0:l2[(#0{r} + #3{dc}), (#1{c} + #2{dr})]KK » %1:l1[#0{r}, #1{c}]KK
+                  ArrangeBy keys=[[(#0{r} + #3{dc}), (#1{c} + #2{dr})]] // { arity: 5 }
+                    Get l2 // { arity: 5 }
+                  Get l1 // { arity: 3 }
+            Project (#5, #6, #8, #9, #11, #10) // { arity: 6 }
+              Map (-(#3{dc}), -(#2{dr}), (#4{cost} + #7{cost}), 1) // { arity: 12 }
+                Join on=(#5{r} = (#0{r} - #3{dc}) AND #6{c} = (#1{c} - #2{dr})) type=differential // { arity: 8 }
+                  implementation
+                    %0:l2[(#0{r} - #3{dc}), (#1{c} - #2{dr})]KK » %1:l1[#0{r}, #1{c}]KK
+                  ArrangeBy keys=[[(#0{r} - #3{dc}), (#1{c} - #2{dr})]] // { arity: 5 }
+                    Get l2 // { arity: 5 }
+                  Get l1 // { arity: 3 }
+            Constant // { arity: 6 }
+              - (1, 1, 0, 1, 0, 0)
+              - (1, 1, 1, 0, 0, 0)
+      cte l4 =
+        Reduce aggregates=[min(#0{min})] // { arity: 1 }
+          Project (#2{min}) // { arity: 1 }
+            Join on=(#0{r} = #3{max} AND #1{c} = #4{max}) type=differential // { arity: 5 }
+              implementation
+                %1[×]UA » %2[×]UA » %0:l3[#0{r}, #1{c}]KK
+              ArrangeBy keys=[[#0{r}, #1{c}]] // { arity: 3 }
+                Project (#0, #1, #5{min}) // { arity: 3 }
+                  Get l3 // { arity: 6 }
+              ArrangeBy keys=[[]] // { arity: 1 }
+                Reduce aggregates=[max(#0{r})] // { arity: 1 }
+                  Project (#0) // { arity: 1 }
+                    Get l0 // { arity: 3 }
+              ArrangeBy keys=[[]] // { arity: 1 }
+                Reduce aggregates=[max(#0{c})] // { arity: 1 }
+                  Project (#1) // { arity: 1 }
+                    Get l0 // { arity: 3 }
+      cte l5 =
+        Project (#0..=#3, #5{min}) // { arity: 5 }
+          Filter (#4{steps} >= 4) // { arity: 6 }
+            Get l6 // { arity: 6 }
+      cte l6 =
+        Reduce group_by=[#0..=#4] aggregates=[min(#5{cost})] // { arity: 6 }
+          Union // { arity: 6 }
+            Project (#6, #7, #2, #3, #9, #10) // { arity: 6 }
+              Map ((#4{steps} + 1), (#5{cost} + #8{cost})) // { arity: 11 }
+                Join on=(#6{r} = (#0{r} + #2{dr}) AND #7{c} = (#1{c} + #3{dc})) type=differential // { arity: 9 }
+                  implementation
+                    %0:l6[(#0{r} + #2{dr}), (#1{c} + #3{dc})]KKif » %1:l1[#0{r}, #1{c}]KKif
+                  ArrangeBy keys=[[(#0{r} + #2{dr}), (#1{c} + #3{dc})]] // { arity: 6 }
+                    Filter (#4{steps} < 10) // { arity: 6 }
+                      Get l6 // { arity: 6 }
+                  Get l1 // { arity: 3 }
+            Project (#5, #6, #3, #2, #9, #8) // { arity: 6 }
+              Map ((#4{cost} + #7{cost}), 1) // { arity: 10 }
+                Join on=(#5{r} = (#0{r} + #3{dc}) AND #6{c} = (#1{c} + #2{dr})) type=differential // { arity: 8 }
+                  implementation
+                    %0:l5[(#0{r} + #3{dc}), (#1{c} + #2{dr})]KKif » %1:l1[#0{r}, #1{c}]KKif
+                  ArrangeBy keys=[[(#0{r} + #3{dc}), (#1{c} + #2{dr})]] // { arity: 5 }
+                    Get l5 // { arity: 5 }
+                  Get l1 // { arity: 3 }
+            Project (#5, #6, #8, #9, #11, #10) // { arity: 6 }
+              Map (-(#3{dc}), -(#2{dr}), (#4{cost} + #7{cost}), 1) // { arity: 12 }
+                Join on=(#5{r} = (#0{r} - #3{dc}) AND #6{c} = (#1{c} - #2{dr})) type=differential // { arity: 8 }
+                  implementation
+                    %0:l5[(#0{r} - #3{dc}), (#1{c} - #2{dr})]KKif » %1:l1[#0{r}, #1{c}]KKif
+                  ArrangeBy keys=[[(#0{r} - #3{dc}), (#1{c} - #2{dr})]] // { arity: 5 }
+                    Get l5 // { arity: 5 }
+                  Get l1 // { arity: 3 }
+            Constant // { arity: 6 }
+              - (1, 1, 0, 1, 0, 0)
+              - (1, 1, 1, 0, 0, 0)
+    Return // { arity: 2 }
+      With
+        cte l7 =
+          Reduce aggregates=[min(#0{min})] // { arity: 1 }
+            Project (#2{min}) // { arity: 1 }
+              Join on=(#0{r} = #3{max} AND #1{c} = #4{max}) type=differential // { arity: 5 }
+                implementation
+                  %1[×]UA » %2[×]UA » %0:l6[#0{r}, #1{c}]KKif
+                ArrangeBy keys=[[#0{r}, #1{c}]] // { arity: 3 }
+                  Project (#0, #1, #5{min}) // { arity: 3 }
+                    Filter (#4{steps} >= 4) // { arity: 6 }
+                      Get l6 // { arity: 6 }
+                ArrangeBy keys=[[]] // { arity: 1 }
+                  Reduce aggregates=[max(#0{r})] // { arity: 1 }
+                    Project (#0) // { arity: 1 }
+                      Get l0 // { arity: 3 }
+                ArrangeBy keys=[[]] // { arity: 1 }
+                  Reduce aggregates=[max(#0{c})] // { arity: 1 }
+                    Project (#1) // { arity: 1 }
+                      Get l0 // { arity: 3 }
+      Return // { arity: 2 }
+        CrossJoin type=differential // { arity: 2 }
+          implementation
+            %0[×]U » %1[×]U
+          ArrangeBy keys=[[]] // { arity: 1 }
+            Union // { arity: 1 }
+              Get l4 // { arity: 1 }
+              Map (null) // { arity: 1 }
+                Union // { arity: 0 }
+                  Negate // { arity: 0 }
+                    Project () // { arity: 0 }
+                      Get l4 // { arity: 1 }
+                  Constant // { arity: 0 }
+                    - ()
+          ArrangeBy keys=[[]] // { arity: 1 }
+            Union // { arity: 1 }
+              Get l7 // { arity: 1 }
+              Map (null) // { arity: 1 }
+                Union // { arity: 0 }
+                  Negate // { arity: 0 }
+                    Project () // { arity: 0 }
+                      Get l7 // { arity: 1 }
+                  Constant // { arity: 0 }
+                    - ()
 
 Source materialize.public.input
 

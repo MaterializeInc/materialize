@@ -13,18 +13,20 @@
 //! `SHOW CREATE TABLE` and `SHOW VIEWS`. Note that `SHOW <var>` is considered
 //! an SCL statement.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Write;
 
 use mz_ore::assert_none;
 use mz_ore::collections::CollectionExt;
 use mz_repr::{CatalogItemId, Datum, RelationDesc, Row, ScalarType};
-use mz_sql_parser::ast::display::AstDisplay;
+use mz_sql_parser::ast::display::{AstDisplay, FormatMode};
 use mz_sql_parser::ast::{
     CreateSubsourceOptionName, ExternalReferenceExport, ExternalReferences, ObjectType,
     ShowCreateClusterStatement, ShowCreateConnectionStatement, ShowCreateMaterializedViewStatement,
-    ShowObjectType, SystemObjectType, UnresolvedItemName, WithOptionValue,
+    ShowObjectType, SqlServerConfigOptionName, SystemObjectType, UnresolvedItemName,
+    WithOptionValue,
 };
+use mz_sql_pretty::PrettyConfig;
 use query::QueryContext;
 
 use crate::ast::visit_mut::VisitMut;
@@ -41,9 +43,9 @@ use crate::names::{
 use crate::parse;
 use crate::plan::scope::Scope;
 use crate::plan::statement::ddl::unplan_create_cluster;
-use crate::plan::statement::{dml, StatementContext, StatementDesc};
+use crate::plan::statement::{StatementContext, StatementDesc, dml};
 use crate::plan::{
-    query, transform_ast, HirRelationExpr, Params, Plan, PlanError, ShowColumnsPlan, ShowCreatePlan,
+    HirRelationExpr, Params, Plan, PlanError, ShowColumnsPlan, ShowCreatePlan, query, transform_ast,
 };
 
 pub fn describe_show_create_view(
@@ -60,9 +62,12 @@ pub fn describe_show_create_view(
 
 pub fn plan_show_create_view(
     scx: &StatementContext,
-    ShowCreateViewStatement { view_name }: ShowCreateViewStatement<Aug>,
+    ShowCreateViewStatement {
+        view_name,
+        redacted,
+    }: ShowCreateViewStatement<Aug>,
 ) -> Result<ShowCreatePlan, PlanError> {
-    plan_show_create_item(scx, &view_name, CatalogItemType::View)
+    plan_show_create_item(scx, &view_name, CatalogItemType::View, redacted)
 }
 
 pub fn describe_show_create_materialized_view(
@@ -81,12 +86,14 @@ pub fn plan_show_create_materialized_view(
     scx: &StatementContext,
     ShowCreateMaterializedViewStatement {
         materialized_view_name,
+        redacted,
     }: ShowCreateMaterializedViewStatement<Aug>,
 ) -> Result<ShowCreatePlan, PlanError> {
     plan_show_create_item(
         scx,
         &materialized_view_name,
         CatalogItemType::MaterializedView,
+        redacted,
     )
 }
 
@@ -106,6 +113,7 @@ fn plan_show_create_item(
     scx: &StatementContext,
     name: &ResolvedItemName,
     expect_type: CatalogItemType,
+    redacted: bool,
 ) -> Result<ShowCreatePlan, PlanError> {
     let item = scx.get_item_by_resolved_name(name)?;
     let name = name.full_name_str();
@@ -124,7 +132,8 @@ fn plan_show_create_item(
     if item.item_type() != expect_type {
         sql_bail!("{name} is not a {expect_type}");
     }
-    let create_sql = humanize_sql_for_show_create(scx.catalog, item.id(), item.create_sql())?;
+    let create_sql =
+        humanize_sql_for_show_create(scx.catalog, item.id(), item.create_sql(), redacted)?;
     Ok(ShowCreatePlan {
         id: ObjectId::Item(item.id()),
         row: Row::pack_slice(&[Datum::String(&name), Datum::String(&create_sql)]),
@@ -133,9 +142,12 @@ fn plan_show_create_item(
 
 pub fn plan_show_create_table(
     scx: &StatementContext,
-    ShowCreateTableStatement { table_name }: ShowCreateTableStatement<Aug>,
+    ShowCreateTableStatement {
+        table_name,
+        redacted,
+    }: ShowCreateTableStatement<Aug>,
 ) -> Result<ShowCreatePlan, PlanError> {
-    plan_show_create_item(scx, &table_name, CatalogItemType::Table)
+    plan_show_create_item(scx, &table_name, CatalogItemType::Table, redacted)
 }
 
 pub fn describe_show_create_source(
@@ -152,9 +164,12 @@ pub fn describe_show_create_source(
 
 pub fn plan_show_create_source(
     scx: &StatementContext,
-    ShowCreateSourceStatement { source_name }: ShowCreateSourceStatement<Aug>,
+    ShowCreateSourceStatement {
+        source_name,
+        redacted,
+    }: ShowCreateSourceStatement<Aug>,
 ) -> Result<ShowCreatePlan, PlanError> {
-    plan_show_create_item(scx, &source_name, CatalogItemType::Source)
+    plan_show_create_item(scx, &source_name, CatalogItemType::Source, redacted)
 }
 
 pub fn describe_show_create_sink(
@@ -171,9 +186,12 @@ pub fn describe_show_create_sink(
 
 pub fn plan_show_create_sink(
     scx: &StatementContext,
-    ShowCreateSinkStatement { sink_name }: ShowCreateSinkStatement<Aug>,
+    ShowCreateSinkStatement {
+        sink_name,
+        redacted,
+    }: ShowCreateSinkStatement<Aug>,
 ) -> Result<ShowCreatePlan, PlanError> {
-    plan_show_create_item(scx, &sink_name, CatalogItemType::Sink)
+    plan_show_create_item(scx, &sink_name, CatalogItemType::Sink, redacted)
 }
 
 pub fn describe_show_create_index(
@@ -190,9 +208,12 @@ pub fn describe_show_create_index(
 
 pub fn plan_show_create_index(
     scx: &StatementContext,
-    ShowCreateIndexStatement { index_name }: ShowCreateIndexStatement<Aug>,
+    ShowCreateIndexStatement {
+        index_name,
+        redacted,
+    }: ShowCreateIndexStatement<Aug>,
 ) -> Result<ShowCreatePlan, PlanError> {
-    plan_show_create_item(scx, &index_name, CatalogItemType::Index)
+    plan_show_create_item(scx, &index_name, CatalogItemType::Index, redacted)
 }
 
 pub fn describe_show_create_connection(
@@ -236,9 +257,12 @@ pub fn describe_show_create_cluster(
 
 pub fn plan_show_create_connection(
     scx: &StatementContext,
-    ShowCreateConnectionStatement { connection_name }: ShowCreateConnectionStatement<Aug>,
+    ShowCreateConnectionStatement {
+        connection_name,
+        redacted,
+    }: ShowCreateConnectionStatement<Aug>,
 ) -> Result<ShowCreatePlan, PlanError> {
-    plan_show_create_item(scx, &connection_name, CatalogItemType::Connection)
+    plan_show_create_item(scx, &connection_name, CatalogItemType::Connection, redacted)
 }
 
 pub fn show_databases<'a>(
@@ -999,6 +1023,7 @@ fn humanize_sql_for_show_create(
     catalog: &dyn SessionCatalog,
     id: CatalogItemId,
     sql: &str,
+    redacted: bool,
 ) -> Result<String, PlanError> {
     use mz_sql_parser::ast::{CreateSourceConnection, MySqlConfigOptionName, PgConfigOptionName};
 
@@ -1019,7 +1044,7 @@ fn humanize_sql_for_show_create(
         //
         // For instance, `DROP SOURCE` statements can leave dangling references
         // to subsources that must be filtered out here, that, due to catalog
-        // transaction limitations, can only be be cleaned up when a top-level
+        // transaction limitations, can only be cleaned up when a top-level
         // source is altered.
         Statement::CreateSource(stmt) => {
             // Collect all current subsource references.
@@ -1053,7 +1078,7 @@ fn humanize_sql_for_show_create(
                             // COLUMNS` values that refer to the table it
                             // ingests, which we'll handle below.
                             PgConfigOptionName::TextColumns => {}
-                            // Drop details, which does not rountrip.
+                            // Drop details, which does not roundtrip.
                             PgConfigOptionName::Details => return false,
                             _ => return true,
                         };
@@ -1078,6 +1103,56 @@ fn humanize_sql_for_show_create(
                         }
                     });
                 }
+                CreateSourceConnection::SqlServer { options, .. } => {
+                    // TODO(sql_server2): TEXT and EXCLUDE columns are represented by
+                    // `schema.table.column` whereas our external table references are
+                    // `database.schema.table`. We handle the mismatch here but should
+                    // probably fully qualify our TEXT and EXCLUDE column references.
+                    let adjusted_references: BTreeSet<_> = curr_references
+                        .keys()
+                        .map(|name| {
+                            if name.0.len() == 3 {
+                                // Strip the database component of the name.
+                                let adjusted_name = name.0[1..].to_vec();
+                                UnresolvedItemName(adjusted_name)
+                            } else {
+                                name.clone()
+                            }
+                        })
+                        .collect();
+
+                    options.retain_mut(|o| {
+                        match o.name {
+                            // Dropping a subsource does not remove any `TEXT COLUMNS`
+                            // values that refer to the table it ingests, which we'll
+                            // handle below.
+                            SqlServerConfigOptionName::TextColumns
+                            | SqlServerConfigOptionName::ExcludeColumns => {}
+                            // Drop details, which does not roundtrip.
+                            SqlServerConfigOptionName::Details => return false,
+                        };
+
+                        match &mut o.value {
+                            Some(WithOptionValue::Sequence(seq_unresolved_item_names)) => {
+                                seq_unresolved_item_names.retain(|v| match v {
+                                    WithOptionValue::UnresolvedItemName(n) => {
+                                        let mut name = n.clone();
+                                        // Remove column reference.
+                                        name.0.truncate(2);
+                                        adjusted_references.contains(&name)
+                                    }
+                                    _ => unreachable!(
+                                        "TEXT COLUMNS + EXCLUDE COLUMNS must be sequence of unresolved item names"
+                                    ),
+                                });
+                                !seq_unresolved_item_names.is_empty()
+                            }
+                            _ => unreachable!(
+                                "TEXT COLUMNS + EXCLUDE COLUMNS must be sequence of unresolved item names"
+                            ),
+                        }
+                    });
+                }
                 CreateSourceConnection::MySql { options, .. } => {
                     options.retain_mut(|o| {
                         match o.name {
@@ -1086,7 +1161,7 @@ fn humanize_sql_for_show_create(
                             // ingests, which we'll handle below.
                             MySqlConfigOptionName::TextColumns
                             | MySqlConfigOptionName::ExcludeColumns => {}
-                            // Drop details, which does not rountrip.
+                            // Drop details, which does not roundtrip.
                             MySqlConfigOptionName::Details => return false,
                         };
 
@@ -1142,7 +1217,7 @@ fn humanize_sql_for_show_create(
                 match o.name {
                     CreateSubsourceOptionName::TextColumns => true,
                     CreateSubsourceOptionName::ExcludeColumns => true,
-                    // Drop details, which does not rountrip.
+                    // Drop details, which does not roundtrip.
                     CreateSubsourceOptionName::Details => false,
                     CreateSubsourceOptionName::ExternalReference => true,
                     CreateSubsourceOptionName::Progress => true,
@@ -1153,5 +1228,15 @@ fn humanize_sql_for_show_create(
         _ => (),
     }
 
-    Ok(resolved.to_ast_string_stable())
+    Ok(mz_sql_pretty::to_pretty(
+        &resolved,
+        PrettyConfig {
+            width: mz_sql_pretty::DEFAULT_WIDTH,
+            format_mode: if redacted {
+                FormatMode::SimpleRedacted
+            } else {
+                FormatMode::Simple
+            },
+        },
+    ))
 }

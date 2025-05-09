@@ -18,6 +18,7 @@ from materialize.checks.actions import (
 )
 from materialize.checks.checks import Check
 from materialize.checks.executors import Executor
+from materialize.checks.features import Features
 from materialize.checks.mzcompose_actions import (
     MzcomposeAction,
     PromoteMz,
@@ -257,10 +258,14 @@ class ZeroDowntimeUpgradeEntireMzFourVersions(Scenario):
     """Test 0dt upgrade from X-4 -> X-3 -> X-2 -> X-1 -> X"""
 
     def __init__(
-        self, checks: list[type[Check]], executor: Executor, seed: str | None = None
+        self,
+        checks: list[type[Check]],
+        executor: Executor,
+        features: Features,
+        seed: str | None = None,
     ):
         self.minor_versions = get_minor_versions()
-        super().__init__(checks, executor, seed)
+        super().__init__(checks, executor, features, seed)
 
     def base_version(self) -> MzVersion:
         return self.minor_versions[3]

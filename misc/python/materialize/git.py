@@ -350,9 +350,12 @@ def create_branch(name: str) -> None:
     spawn.runv(["git", "checkout", "-b", name])
 
 
-def checkout(rev: str) -> None:
+def checkout(rev: str, path: str | None = None) -> None:
     """Git checkout the rev"""
-    spawn.runv(["git", "checkout", rev])
+    cmd = ["git", "checkout", rev]
+    if path:
+        cmd.extend(["--", path])
+    spawn.runv(cmd)
 
 
 def add_file(file: str) -> None:

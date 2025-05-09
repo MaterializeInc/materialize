@@ -24,8 +24,8 @@ use mz_expr::{
 };
 use mz_ore::stack::{CheckedRecursion, RecursionGuard, RecursionLimitError};
 use mz_ore::{assert_none, soft_assert_eq_or_log, soft_assert_or_log, soft_panic_or_log};
-use mz_repr::explain::{DeltaJoinIndexUsageType, IndexUsageType, UsedIndexes};
 use mz_repr::GlobalId;
+use mz_repr::explain::{DeltaJoinIndexUsageType, IndexUsageType, UsedIndexes};
 use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
 
@@ -358,7 +358,7 @@ fn optimize_dataflow_filters(dataflow: &mut DataflowDesc) -> Result<(), Transfor
     )?;
 
     // Push predicate information into the SourceDesc.
-    for (source_id, (source, _monotonic)) in dataflow.source_imports.iter_mut() {
+    for (source_id, (source, _monotonic, _upper)) in dataflow.source_imports.iter_mut() {
         if let Some(list) = predicates.remove(&Id::Global(*source_id)) {
             if !list.is_empty() {
                 // Canonicalize the order of predicates, for stable plans.
@@ -417,7 +417,7 @@ pub fn optimize_dataflow_monotonic(
     ctx: &mut TransformCtx,
 ) -> Result<(), TransformError> {
     let mut monotonic_ids = BTreeSet::new();
-    for (source_id, (_source, is_monotonic)) in dataflow.source_imports.iter() {
+    for (source_id, (_source, is_monotonic, _upper)) in dataflow.source_imports.iter() {
         if *is_monotonic {
             monotonic_ids.insert(source_id.clone());
         }
@@ -482,18 +482,18 @@ fn prune_and_annotate_dataflow_index_imports(
                     typ,
                     ..
                 } => {
-                    source_keys.entry(*global_id).or_insert(
+                    source_keys.entry(*global_id).or_insert_with(|| {
                         typ.keys
                             .iter()
                             .map(|key| {
                                 key.iter()
                                     // Convert the Vec<usize> key to Vec<MirScalarExpr>, so that
                                     // later we can more easily compare index keys to these keys.
-                                    .map(|col_idx| MirScalarExpr::Column(*col_idx))
+                                    .map(|col_idx| MirScalarExpr::column(*col_idx))
                                     .collect()
                             })
-                            .collect(),
-                    );
+                            .collect()
+                    });
                 }
                 _ => {}
             });
@@ -562,7 +562,9 @@ fn prune_and_annotate_dataflow_index_imports(
                 // `objects_to_build` that will have a Get of the object that the index is on (see
                 // `DataflowDescription::export_index`). Therefore, we should have already requested
                 // an index usage when seeing that Get in `CollectIndexRequests`.
-                soft_panic_or_log!("We are seeing an index export on an id that's not mentioned in `objects_to_build`");
+                soft_panic_or_log!(
+                    "We are seeing an index export on an id that's not mentioned in `objects_to_build`"
+                );
                 requested_idxs.push((
                     idx_id,
                     arbitrary_index_key.to_owned(),
@@ -676,11 +678,13 @@ id: {}, key: {:?}",
     ) in dataflow.index_imports.iter_mut()
     {
         // A sanity check that we are not importing an index that we are also exporting.
-        assert!(!dataflow
-            .index_exports
-            .iter()
-            .map(|(exported_index_id, _)| exported_index_id)
-            .any(|exported_index_id| exported_index_id == index_id));
+        assert!(
+            !dataflow
+                .index_exports
+                .iter()
+                .map(|(exported_index_id, _)| exported_index_id)
+                .any(|exported_index_id| exported_index_id == index_id)
+        );
 
         let mut new_usage_types = Vec::new();
         // Let's see whether something has requested an index on this object that this imported
@@ -1262,7 +1266,7 @@ impl<Notice> DataflowMetainfo<Notice> {
                     // running `prune_and_annotate_dataflow_index_imports` on
                     // the dataflow (this happens at the end of the
                     // `optimize_dataflow` call).
-                    let index_usage_type = entry.unwrap_or(vec![IndexUsageType::Unknown]);
+                    let index_usage_type = entry.unwrap_or_else(|| vec![IndexUsageType::Unknown]);
 
                     (*id, index_usage_type)
                 })

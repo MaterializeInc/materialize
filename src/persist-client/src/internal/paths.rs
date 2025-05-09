@@ -122,7 +122,7 @@ pub struct PartialBatchKey(pub(crate) String);
 fn split_batch_key(key: &str) -> Result<(WriterKey, PartId), String> {
     let (writer_key, part_id) = key
         .split_once('/')
-        .ok_or("partial batch key should contain a /".to_owned())?;
+        .ok_or_else(|| "partial batch key should contain a /".to_owned())?;
 
     let writer_key = WriterKey::from_str(writer_key)?;
     let part_id = PartId::from_str(part_id)?;
@@ -250,16 +250,19 @@ impl Deref for BlobKey {
 impl BlobKey {
     pub fn parse_ids(key: &str) -> Result<(ShardId, PartialBlobKey), String> {
         let err = || {
-            format!("invalid blob key format. expected either <shard_id>/<writer_id>/<part_id> or <shard_id>/<seqno>/<rollup_id>. got: {}", key)
+            format!(
+                "invalid blob key format. expected either <shard_id>/<writer_id>/<part_id> or <shard_id>/<seqno>/<rollup_id>. got: {}",
+                key
+            )
         };
-        let (shard, blob) = key.split_once('/').ok_or(err())?;
+        let (shard, blob) = key.split_once('/').ok_or_else(err)?;
         let shard_id = ShardId::from_str(shard)?;
 
         let blob_key = if blob.starts_with('w') | blob.starts_with('n') {
             let (writer, part) = split_batch_key(blob)?;
             PartialBlobKey::Batch(writer, part)
         } else {
-            let (seqno, rollup) = blob.split_once('/').ok_or(err())?;
+            let (seqno, rollup) = blob.split_once('/').ok_or_else(err)?;
             PartialBlobKey::Rollup(SeqNo::from_str(seqno)?, RollupId::from_str(rollup)?)
         };
         Ok((shard_id, blob_key))

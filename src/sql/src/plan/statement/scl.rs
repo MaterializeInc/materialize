@@ -26,9 +26,9 @@ use crate::ast::{
 use crate::names::{self, Aug};
 use crate::plan::statement::{StatementContext, StatementDesc};
 use crate::plan::{
-    describe, query, ClosePlan, DeallocatePlan, DeclarePlan, ExecutePlan, ExecuteTimeout,
-    FetchPlan, InspectShardPlan, Params, Plan, PlanError, PreparePlan, ResetVariablePlan,
-    SetVariablePlan, ShowVariablePlan, VariableValue,
+    ClosePlan, DeallocatePlan, DeclarePlan, ExecutePlan, ExecuteTimeout, FetchPlan,
+    InspectShardPlan, Params, Plan, PlanError, PreparePlan, ResetVariablePlan, SetVariablePlan,
+    ShowVariablePlan, VariableValue, describe, query,
 };
 use crate::session::vars;
 use crate::session::vars::{IsolationLevel, SCHEMA_ALIAS, TRANSACTION_ISOLATION_VAR_NAME};
@@ -151,7 +151,8 @@ pub fn plan_inspect_shard(
     // Always inspect the shard at the latest GlobalId.
     let gid = scx
         .catalog
-        .get_item(&id)
+        .try_get_item(&id)
+        .ok_or_else(|| sql_err!("item doesn't exist"))?
         .at_version(RelationVersionSelector::Latest)
         .global_id();
     Ok(Plan::InspectShard(InspectShardPlan { id: gid }))

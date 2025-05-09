@@ -156,9 +156,9 @@ SID   batch_received    7           bigint
   ORDER BY position
 id      name        position    type
 --------------------------------------
-SID   address     1           list
-SID   port        2           uint8
-SID   worker_id   3           uint8
+SID   id          1           uint8
+SID   worker_id   2           uint8
+SID   port        3           uint8
 SID   update_type 4           text
 SID   time        5           mz_timestamp
 SID   count       6           bigint

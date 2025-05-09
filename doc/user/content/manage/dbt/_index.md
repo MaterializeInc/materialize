@@ -24,7 +24,7 @@ data transformation ("the T in ELT"). It combines the accessibility of SQL with
 software engineering best practices, allowing you to not only build reliable
 data pipelines, but also document, test and version-control them.
 
-In this guide, we’ll cover how to use dbt and Materialize to transform streaming
+In this guide, we'll cover how to use dbt and Materialize to transform streaming
 data in real time — from model building to continuous testing.
 
 ## Setup
@@ -544,6 +544,49 @@ SELECT ...;
 Materialized views configured with a refresh strategy are **not incrementally
 maintained** and must recompute their results from scratch on every refresh.
 
+##### Using retain history
+
+{{< tip >}}
+For guidance and best practices on how to use retain history in Materialize,
+see [Retain history](/transform-data/patterns/durable-subscriptions/#set-history-retention-period).
+{{</ tip >}}
+
+To configure how long historical data is retained in a materialized view, use the
+`retain_history` configuration. This is useful for maintaining a window of
+historical data for time-based queries or for compliance requirements.
+
+**Filename:** models/materialized_view_history.sql
+```mzsql
+{{ config(
+    materialized='materialized_view',
+    retain_history='1hr'
+) }}
+
+SELECT
+    col_a,
+    count(*) as count
+FROM {{ ref('view_a') }}
+GROUP BY col_a
+```
+
+The model above will be compiled to the following SQL statement:
+
+```mzsql
+CREATE MATERIALIZED VIEW database.schema.materialized_view_history
+WITH (RETAIN HISTORY FOR '1hr')
+AS
+SELECT
+    col_a,
+    count(*) as count
+FROM database.schema.view_a
+GROUP BY col_a;
+```
+
+You can specify the retention period using common time units like:
+- `'1hr'` for one hour
+- `'1d'` for one day
+- `'1w'` for one week
+
 ### Sinks
 
 In Materialize, a [sink](/sql/create-sink) describes an **external** system you
@@ -687,7 +730,7 @@ changes.
 
 Setting the `contract` configuration to `enforced: true` requires you to specify
 a `name` and `data_type` for every column in your models. If there is a
-mismatch between the defined contract and the model you’re trying to run, dbt
+mismatch between the defined contract and the model you're trying to run, dbt
 will fail during compilation! Optionally, you can also configure column-level
 [constraints](#constraints).
 
@@ -887,8 +930,8 @@ trigger **real-time alerts** downstream.
     ```
 
 With continuous testing in place, you can then build alerts off of the test
-materialized views using any common PostgreSQL-compatible [client library](/integrations/#client-libraries-and-orms)
-and [`SUBSCRIBE`](/sql/subscribe/)(see the [Python cheatsheet](/integrations/python/#stream)
+materialized views using any common PostgreSQL-compatible [client library](/integrations/client-libraries/)
+and [`SUBSCRIBE`](/sql/subscribe/)(see the [Python cheatsheet](/integrations/client-libraries/python/#stream)
 for a reference implementation).
 
 ### Generate documentation

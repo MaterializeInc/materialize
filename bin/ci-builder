@@ -16,7 +16,7 @@
 
 set -euo pipefail
 
-NIGHTLY_RUST_DATE=2024-12-02
+NIGHTLY_RUST_DATE=2025-04-02
 
 cd "$(dirname "$0")/.."
 
@@ -188,11 +188,16 @@ case "$cmd" in
             --env COMMON_ANCESTOR_OVERRIDE
             --env CONFLUENT_CLOUD_DEVEX_KAFKA_PASSWORD
             --env CONFLUENT_CLOUD_DEVEX_KAFKA_USERNAME
+            --env AZURE_SERVICE_ACCOUNT_USERNAME
+            --env AZURE_SERVICE_ACCOUNT_PASSWORD
+            --env AZURE_SERVICE_ACCOUNT_TENANT
+            --env GCP_SERVICE_ACCOUNT_JSON
             --env GITHUB_TOKEN
             --env GPG_KEY
             --env LAUNCHDARKLY_API_TOKEN
             --env LAUNCHDARKLY_SDK_KEY
             --env NIGHTLY_CANARY_APP_PASSWORD
+            --env MZ_CI_LICENSE_KEY
             --env MZ_CLI_APP_PASSWORD
             --env MZ_SOFT_ASSERTIONS
             --env NO_COLOR

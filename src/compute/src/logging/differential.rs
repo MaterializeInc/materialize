@@ -18,59 +18,64 @@ use differential_dataflow::consolidation::ConsolidatingContainerBuilder;
 use differential_dataflow::logging::{
     BatchEvent, BatcherEvent, DifferentialEvent, DropEvent, MergeEvent, TraceShare,
 };
-use differential_dataflow::AsCollection;
 use mz_ore::cast::CastFrom;
 use mz_repr::{Datum, Diff, Timestamp};
-use mz_timely_util::operator::consolidate_pact;
+use mz_timely_util::containers::{
+    Col2ValBatcher, ColumnBuilder, ProvidedBuilder, columnar_exchange,
+};
 use mz_timely_util::replay::MzReplay;
-use timely::communication::Allocate;
-use timely::container::CapacityContainerBuilder;
-use timely::dataflow::channels::pact::Pipeline;
+use timely::dataflow::channels::pact::{ExchangeCore, Pipeline};
 use timely::dataflow::channels::pushers::buffer::Session;
 use timely::dataflow::channels::pushers::{Counter, Tee};
 use timely::dataflow::operators::generic::builder_rc::OperatorBuilder;
-use timely::dataflow::operators::Filter;
-use timely::dataflow::Stream;
+use timely::dataflow::{Scope, Stream};
 
-use crate::extensions::arrange::MzArrange;
+use crate::extensions::arrange::MzArrangeCore;
 use crate::logging::compute::{ArrangementHeapSizeOperatorDrop, ComputeEvent};
 use crate::logging::{
-    DifferentialLog, EventQueue, LogCollection, LogVariant, PermutedRowPacker, SharedLoggingState,
+    DifferentialLog, EventQueue, LogCollection, LogVariant, SharedLoggingState,
+    consolidate_and_pack,
 };
-use crate::row_spine::{RowRowBatcher, RowRowBuilder};
+use crate::row_spine::RowRowBuilder;
 use crate::typedefs::{KeyBatcher, RowRowSpine};
 
-/// Constructs the logging dataflow for differential logs.
+/// The return type of [`construct`].
+pub(super) struct Return {
+    /// Collections to export.
+    pub collections: BTreeMap<LogVariant, LogCollection>,
+}
+
+/// Constructs the logging dataflow fragment for differential logs.
 ///
 /// Params
-/// * `worker`: The Timely worker hosting the log analysis dataflow.
+/// * `scope`: The Timely scope hosting the log analysis dataflow.
 /// * `config`: Logging configuration
 /// * `event_queue`: The source to read log events from.
-pub(super) fn construct<A: Allocate>(
-    worker: &mut timely::worker::Worker<A>,
+/// * `shared_state`: Shared state across all logging dataflow fragments.
+pub(super) fn construct<G: Scope<Timestamp = Timestamp>>(
+    mut scope: G,
     config: &mz_compute_client::logging::LoggingConfig,
     event_queue: EventQueue<Vec<(Duration, DifferentialEvent)>>,
     shared_state: Rc<RefCell<SharedLoggingState>>,
-) -> BTreeMap<LogVariant, LogCollection> {
+) -> Return {
     let logging_interval_ms = std::cmp::max(1, config.interval.as_millis());
-    let worker_id = worker.index();
-    let dataflow_index = worker.next_dataflow_index();
 
-    worker.dataflow_named("Dataflow: differential logging", move |scope| {
-        let (mut logs, token) = Some(event_queue.link)
-            .mz_replay::<_, CapacityContainerBuilder<_>, _>(
+    scope.scoped("differential logging", move |scope| {
+        let enable_logging = config.enable_logging;
+        let (logs, token) = event_queue.links
+            .mz_replay::<_, ProvidedBuilder<_>, _>(
                 scope,
                 "differential logs",
                 config.interval,
                 event_queue.activator,
-                |mut session, data| session.give_iterator(data.iter()),
+                move |mut session, mut data|{
+                    // If logging is disabled, we still need to install the indexes, but we can leave them
+                    // empty. We do so by immediately filtering all logs events.
+                    if enable_logging {
+                        session.give_container(data.to_mut())
+                    }
+                }
             );
-
-        // If logging is disabled, we still need to install the indexes, but we can leave them
-        // empty. We do so by immediately filtering all logs events.
-        if !config.enable_logging {
-            logs = logs.filter(|_| false);
-        }
 
         // Build a demux operator that splits the replayed event stream up into the separate
         // logging streams.
@@ -121,36 +126,31 @@ pub(super) fn construct<A: Allocate>(
             }
         });
 
-        let stream_to_collection = |input: Stream<_, ((usize, ()), Timestamp, Diff)>, log, name| {
-            let packer = PermutedRowPacker::new(log);
-            consolidate_pact::<KeyBatcher<_, _, _>, _, _, _, _>(
-                &input,
-                Pipeline,
-                &format!("Consolidate Differential {name}"),
+        // We're lucky and the differential logs all have the same stream format, so just implement
+        // the call once.
+        let stream_to_collection = |input: &Stream<_, ((usize, ()), Timestamp, Diff)>, log| {
+            let worker_id = scope.index();
+            consolidate_and_pack::<_, KeyBatcher<_, _, _>, ColumnBuilder<_>, _, _>(
+                input,
+                log,
+                move |((op, ()), time, diff), packer, session| {
+                    let data = packer.pack_slice(&[
+                        Datum::UInt64(u64::cast_from(*op)),
+                        Datum::UInt64(u64::cast_from(worker_id)),
+                    ]);
+                    session.give((data, *time, *diff))
+                },
             )
-            .as_collection()
-            .map(move |(op, ())| {
-                packer.pack_slice(&[
-                    Datum::UInt64(u64::cast_from(op)),
-                    Datum::UInt64(u64::cast_from(worker_id)),
-                ])
-            })
         };
 
         // Encode the contents of each logging stream into its expected `Row` format.
-        let arrangement_batches = stream_to_collection(batches, ArrangementBatches, "batches");
-        let arrangement_records = stream_to_collection(records, ArrangementRecords, "records");
-        let sharing = stream_to_collection(sharing, Sharing, "sharing");
-        let batcher_records =
-            stream_to_collection(batcher_records, BatcherRecords, "batcher records");
-        let batcher_size = stream_to_collection(batcher_size, BatcherSize, "batcher size");
-        let batcher_capacity =
-            stream_to_collection(batcher_capacity, BatcherCapacity, "batcher capacity");
-        let batcher_allocations = stream_to_collection(
-            batcher_allocations,
-            BatcherAllocations,
-            "batcher allocations",
-        );
+        let arrangement_batches = stream_to_collection(&batches, ArrangementBatches);
+        let arrangement_records = stream_to_collection(&records, ArrangementRecords);
+        let sharing = stream_to_collection(&sharing, Sharing);
+        let batcher_records = stream_to_collection(&batcher_records, BatcherRecords);
+        let batcher_size = stream_to_collection(&batcher_size, BatcherSize);
+        let batcher_capacity = stream_to_collection(&batcher_capacity, BatcherCapacity);
+        let batcher_allocations = stream_to_collection(&batcher_allocations, BatcherAllocations);
 
         use DifferentialLog::*;
         let logs = [
@@ -164,25 +164,25 @@ pub(super) fn construct<A: Allocate>(
         ];
 
         // Build the output arrangements.
-        let mut result = BTreeMap::new();
+        let mut collections = BTreeMap::new();
         for (variant, collection) in logs {
             let variant = LogVariant::Differential(variant);
             if config.index_logs.contains_key(&variant) {
                 let trace = collection
-                    .mz_arrange::<RowRowBatcher<_, _>, RowRowBuilder<_, _>, RowRowSpine<_, _>>(
+                    .mz_arrange_core::<_, Col2ValBatcher<_, _, _, _>, RowRowBuilder<_, _>, RowRowSpine<_, _>>(
+                        ExchangeCore::<ColumnBuilder<_>, _>::new_core(columnar_exchange::<mz_repr::Row, mz_repr::Row, Timestamp, mz_repr::Diff>),
                         &format!("Arrange {variant:?}"),
                     )
                     .trace;
                 let collection = LogCollection {
                     trace,
                     token: Rc::clone(&token),
-                    dataflow_index,
                 };
-                result.insert(variant, collection);
+                collections.insert(variant, collection);
             }
         }
 
-        result
+        Return { collections, }
     })
 }
 
@@ -250,7 +250,7 @@ impl DemuxHandler<'_, '_> {
     fn handle_batch(&mut self, event: BatchEvent) {
         let ts = self.ts();
         let operator_id = event.operator;
-        self.output.batches.give(((operator_id, ()), ts, 1));
+        self.output.batches.give(((operator_id, ()), ts, Diff::ONE));
 
         let diff = Diff::try_from(event.length).expect("must fit");
         self.output.records.give(((operator_id, ()), ts, diff));
@@ -262,11 +262,13 @@ impl DemuxHandler<'_, '_> {
 
         let ts = self.ts();
         let operator_id = event.operator;
-        self.output.batches.give(((operator_id, ()), ts, -1));
+        self.output
+            .batches
+            .give(((operator_id, ()), ts, Diff::MINUS_ONE));
 
         let diff = Diff::try_from(done).expect("must fit")
             - Diff::try_from(event.length1 + event.length2).expect("must fit");
-        if diff != 0 {
+        if diff != Diff::ZERO {
             self.output.records.give(((operator_id, ()), ts, diff));
         }
         self.notify_arrangement_size(operator_id);
@@ -275,10 +277,12 @@ impl DemuxHandler<'_, '_> {
     fn handle_drop(&mut self, event: DropEvent) {
         let ts = self.ts();
         let operator_id = event.operator;
-        self.output.batches.give(((operator_id, ()), ts, -1));
+        self.output
+            .batches
+            .give(((operator_id, ()), ts, Diff::MINUS_ONE));
 
         let diff = -Diff::try_from(event.length).expect("must fit");
-        if diff != 0 {
+        if diff != Diff::ZERO {
             self.output.records.give(((operator_id, ()), ts, diff));
         }
         self.notify_arrangement_size(operator_id);
@@ -288,20 +292,21 @@ impl DemuxHandler<'_, '_> {
         let ts = self.ts();
         let operator_id = event.operator;
         let diff = Diff::cast_from(event.diff);
-        debug_assert_ne!(diff, 0);
+        debug_assert_ne!(diff, Diff::ZERO);
         self.output.sharing.give(((operator_id, ()), ts, diff));
 
-        if let Some(logger) = &mut self.shared_state.compute_logger {
-            let sharing = self.state.sharing.entry(operator_id).or_default();
-            *sharing = (i64::try_from(*sharing).expect("must fit") + diff)
-                .try_into()
-                .expect("under/overflow");
-            if *sharing == 0 {
-                self.state.sharing.remove(&operator_id);
-                logger.log(ComputeEvent::ArrangementHeapSizeOperatorDrop(
+        let sharing = self.state.sharing.entry(operator_id).or_default();
+        *sharing = (Diff::try_from(*sharing).expect("must fit") + diff)
+            .into_inner()
+            .try_into()
+            .expect("under/overflow");
+        if *sharing == 0 {
+            self.state.sharing.remove(&operator_id);
+            self.shared_state.compute_logger.as_ref().map(|logger| {
+                logger.log(&ComputeEvent::ArrangementHeapSizeOperatorDrop(
                     ArrangementHeapSizeOperatorDrop { operator_id },
-                ));
-            }
+                ))
+            });
         }
     }
 

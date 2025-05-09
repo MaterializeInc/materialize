@@ -65,6 +65,34 @@ goofus,gallant
   FORMAT CSV WITH 2 COLUMNS
   INCLUDE OFFSET
 
+> SELECT * FROM metrics_test_source_tbl
+jack   jill    0
+goofus gallant 1
+
+# The `CREATE TABLE ... FROM SOURCE` command caused a recreation of the source
+# dataflow, during which we might have lost the statistics about committed
+# updates from the snapshot. Ingest some more data to ensure we see some
+# `updates_committed`.
+$ kafka-ingest topic=metrics-test format=bytes
+calvin,hobbes
+
+> SELECT
+      s.name,
+      bool_and(u.snapshot_committed),
+      SUM(u.messages_received) >= 4,
+      SUM(u.updates_staged) > 0,
+      SUM(u.updates_committed) > 0,
+      SUM(u.bytes_received) > 0,
+      bool_and(u.rehydration_latency IS NOT NULL)
+  FROM mz_sources s
+  JOIN mz_internal.mz_source_statistics_raw u ON s.id = u.id
+  WHERE s.name IN ('metrics_test_source')
+  GROUP BY s.name
+  ORDER BY s.name
+metrics_test_source true true true true true true
+
+> DROP SOURCE metrics_test_source CASCADE
+
 > CREATE SOURCE upsert
   IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC
@@ -98,23 +126,6 @@ mammalmore    moosemoose   2
 > CREATE TABLE bids FROM SOURCE auction_house_in_source_statistics_td (REFERENCE bids);
 > CREATE TABLE organizations FROM SOURCE auction_house_in_source_statistics_td (REFERENCE organizations);
 > CREATE TABLE users FROM SOURCE auction_house_in_source_statistics_td (REFERENCE users);
-
-> SELECT
-      s.name,
-      bool_and(u.snapshot_committed),
-      SUM(u.messages_received) >= 4,
-      SUM(u.updates_staged) > 0,
-      SUM(u.updates_committed) > 0,
-      SUM(u.bytes_received) > 0,
-      bool_and(u.rehydration_latency IS NOT NULL)
-  FROM mz_sources s
-  JOIN mz_internal.mz_source_statistics_raw u ON s.id = u.id
-  WHERE s.name IN ('metrics_test_source')
-  GROUP BY s.name
-  ORDER BY s.name
-metrics_test_source true true true true true true
-
-> DROP SOURCE metrics_test_source CASCADE
 
 # Note that only the base-source has `messages_received`, but the sub-sources have `messages_committed`.
 # Committed will usually, for auction sources, add up to received, but we don't test this (right now) because of

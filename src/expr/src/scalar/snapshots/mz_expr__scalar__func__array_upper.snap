@@ -1,0 +1,85 @@
+---
+source: src/expr/src/scalar/func.rs
+expression: "#[sqlfunc(\n    output_type = \"Option<i32>\",\n    is_infix_op = true,\n    sqlname = \"array_upper\",\n    propagates_nulls = true,\n    introduces_nulls = true\n)]\n#[allow(clippy::as_conversions)]\nfn array_upper<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {\n    let i = b.unwrap_int64();\n    if i < 1 {\n        return Ok(Datum::Null);\n    }\n    Ok(\n        match a.unwrap_array().dims().into_iter().nth(i as usize - 1) {\n            Some(dim) => {\n                Datum::Int32(\n                    dim\n                        .length\n                        .try_into()\n                        .map_err(|_| EvalError::Int32OutOfRange(\n                            dim.length.to_string().into(),\n                        ))?,\n                )\n            }\n            None => Datum::Null,\n        },\n    )\n}\n"
+---
+#[derive(
+    proptest_derive::Arbitrary,
+    Ord,
+    PartialOrd,
+    Clone,
+    Debug,
+    Eq,
+    PartialEq,
+    serde::Serialize,
+    serde::Deserialize,
+    Hash,
+    mz_lowertest::MzReflect
+)]
+pub struct ArrayUpper;
+impl<'a> crate::func::binary::EagerBinaryFunc<'a> for ArrayUpper {
+    type Input1 = Datum<'a>;
+    type Input2 = Datum<'a>;
+    type Output = Result<Datum<'a>, EvalError>;
+    fn call(
+        &self,
+        a: Self::Input1,
+        b: Self::Input2,
+        temp_storage: &'a mz_repr::RowArena,
+    ) -> Self::Output {
+        array_upper(a, b)
+    }
+    fn output_type(
+        &self,
+        input_type_a: mz_repr::ColumnType,
+        input_type_b: mz_repr::ColumnType,
+    ) -> mz_repr::ColumnType {
+        use mz_repr::AsColumnType;
+        let output = <Option<i32>>::as_column_type();
+        let propagates_nulls = crate::func::binary::EagerBinaryFunc::propagates_nulls(
+            self,
+        );
+        let nullable = output.nullable;
+        output
+            .nullable(
+                nullable
+                    || (propagates_nulls
+                        && (input_type_a.nullable || input_type_b.nullable)),
+            )
+    }
+    fn introduces_nulls(&self) -> bool {
+        true
+    }
+    fn is_infix_op(&self) -> bool {
+        true
+    }
+    fn propagates_nulls(&self) -> bool {
+        true
+    }
+}
+impl std::fmt::Display for ArrayUpper {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        f.write_str("array_upper")
+    }
+}
+#[allow(clippy::as_conversions)]
+fn array_upper<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
+    let i = b.unwrap_int64();
+    if i < 1 {
+        return Ok(Datum::Null);
+    }
+    Ok(
+        match a.unwrap_array().dims().into_iter().nth(i as usize - 1) {
+            Some(dim) => {
+                Datum::Int32(
+                    dim
+                        .length
+                        .try_into()
+                        .map_err(|_| EvalError::Int32OutOfRange(
+                            dim.length.to_string().into(),
+                        ))?,
+                )
+            }
+            None => Datum::Null,
+        },
+    )
+}

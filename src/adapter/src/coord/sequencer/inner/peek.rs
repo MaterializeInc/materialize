@@ -53,7 +53,7 @@ use crate::error::AdapterError;
 use crate::explain::insights::PlanInsightsContext;
 use crate::explain::optimizer_trace::OptimizerTrace;
 use crate::notice::AdapterNotice;
-use crate::optimize::dataflows::{prep_scalar_expr, EvalTime, ExprPrepStyle};
+use crate::optimize::dataflows::{EvalTime, ExprPrepStyle, prep_scalar_expr};
 use crate::optimize::{self, Optimize};
 use crate::session::{RequireLinearization, Session, TransactionOps, TransactionStatus};
 use crate::statement_logging::StatementLifecycleEvent;
@@ -327,7 +327,7 @@ impl Coordinator {
                         return Err(AdapterError::NoClusterReplicasAvailable {
                             name: cluster.name.clone(),
                             is_managed: cluster.is_managed(),
-                        })
+                        });
                     }
                 };
                 copy_to_ctx.output_batch_count = Some(max_worker_count);
@@ -590,9 +590,10 @@ impl Coordinator {
                         }
                     };
 
-                    let optimization_finished_at = (now)();
+                    let pipeline_result = pipeline();
+                    let optimization_finished_at = now();
 
-                    let stage = match pipeline() {
+                    let stage = match pipeline_result {
                         Ok(Either::Left(global_lir_plan)) => {
                             let optimizer = optimizer.unwrap_left();
                         // Enable fast path cluster calculation for slow path plans.
@@ -674,7 +675,7 @@ impl Coordinator {
                                             .desc
                                             .source_imports
                                             .into_iter()
-                                            .filter_map(|(id, (desc, _))| {
+                                            .filter_map(|(id, (desc, _, _upper))| {
                                                 desc.arguments.operators.map(|mfp| (id, mfp))
                                             })
                                             .collect(),

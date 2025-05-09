@@ -22,7 +22,7 @@
 use proc_macro::TokenStream;
 use proc_macro2::TokenStream as TokenStream2;
 use quote::quote;
-use syn::{parse_macro_input, ItemFn, ReturnType};
+use syn::{ItemFn, ReturnType, parse_macro_input};
 
 /// Persist wrapper around the `test` macro.
 ///
@@ -91,31 +91,12 @@ fn test_impl(attr: TokenStream, item: TokenStream) -> TokenStream {
                 {
                     // Enable new compaction tracking / claiming
                     let mut x = ::mz_dyncfg::ConfigUpdates::default();
-                    x.add_dynamic("persist_record_compactions", ::mz_dyncfg::ConfigVal::Bool(true));
                     x.add_dynamic("persist_claim_unclaimed_compactions", ::mz_dyncfg::ConfigVal::Bool(true));
                     x
                 },
                 {
                     let mut x = ::mz_dyncfg::ConfigUpdates::default();
                     x.add_dynamic("persist_record_schema_id", ::mz_dyncfg::ConfigVal::Bool(true));
-                    x
-                },
-                {
-                    let mut x = ::mz_dyncfg::ConfigUpdates::default();
-                    x.add_dynamic("persist_batch_columnar_format", ::mz_dyncfg::ConfigVal::String("both_v2".into()));
-                    x.add_dynamic("persist_part_decode_format", ::mz_dyncfg::ConfigVal::String("arrow".into()));
-                    x
-                },
-                {
-                    let mut x = ::mz_dyncfg::ConfigUpdates::default();
-                    x.add_dynamic("persist_batch_columnar_format", ::mz_dyncfg::ConfigVal::String("both_v2".into()));
-                    x
-                },
-                {
-                    let mut x = ::mz_dyncfg::ConfigUpdates::default();
-                    x.add_dynamic("persist_batch_columnar_format", ::mz_dyncfg::ConfigVal::String("both_v2".into()));
-                    x.add_dynamic("persist_batch_structured_key_lower_len", ::mz_dyncfg::ConfigVal::Usize(256));
-                    x.add_dynamic("persist_batch_structured_order", ::mz_dyncfg::ConfigVal::Bool(true));
                     x
                 },
                 {

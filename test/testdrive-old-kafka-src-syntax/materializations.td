@@ -80,11 +80,6 @@ sum   false   numeric  ""
 > SHOW VIEWS LIKE '%data%'
 data_view  ""
 
-> SHOW CREATE MATERIALIZED VIEW test1
-name                      create_sql
------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
-materialize.public.test1  "CREATE MATERIALIZED VIEW \"materialize\".\"public\".\"test1\" IN CLUSTER \"quickstart\" WITH (REFRESH = ON COMMIT) AS SELECT \"b\", \"pg_catalog\".\"sum\"(\"a\") FROM \"materialize\".\"public\".\"data\" GROUP BY \"b\""
-
 # Materialized view can be built on a not-materialized view.
 > CREATE MATERIALIZED VIEW test2 AS
   SELECT b, 1 + sum(a + 1) FROM data_view GROUP BY b
@@ -172,7 +167,16 @@ contains:test5 is a view, which cannot be exported as a sink
 
 $ set-regex match=(\s\(u\d+\)) replacement=
 
-? EXPLAIN SELECT * FROM test5;
+?[version>=13500] EXPLAIN OPTIMIZED PLAN AS VERBOSE TEXT FOR SELECT * FROM test5;
+Explained Query (fast path):
+  ReadIndex on=materialize.public.test5 test5_primary_idx=[*** full scan ***]
+
+Used Indexes:
+  - materialize.public.test5_primary_idx (*** full scan ***)
+
+Target cluster: quickstart
+
+?[version<13500] EXPLAIN OPTIMIZED PLAN FOR SELECT * FROM test5;
 Explained Query (fast path):
   ReadIndex on=materialize.public.test5 test5_primary_idx=[*** full scan ***]
 
@@ -200,7 +204,17 @@ contains:catalog item 'materialize.public.idx1' is an index and so cannot be dep
 # unmaterialize the view.
 > DROP INDEX test5_primary_idx
 
-? EXPLAIN SELECT * FROM test5
+?[version>=13500] EXPLAIN OPTIMIZED PLAN AS VERBOSE TEXT FOR SELECT * FROM test5
+Explained Query (fast path):
+  Project (#1, #0)
+    ReadIndex on=materialize.public.test5 idx1=[*** full scan ***]
+
+Used Indexes:
+  - materialize.public.idx1 (*** full scan ***)
+
+Target cluster: quickstart
+
+?[version<13500] EXPLAIN OPTIMIZED PLAN FOR SELECT * FROM test5
 Explained Query (fast path):
   Project (#1, #0)
     ReadIndex on=materialize.public.test5 idx1=[*** full scan ***]
@@ -464,7 +478,34 @@ c    d
 # in memory consumptions and should be understood before adapting the values.
 > SET cluster_replica = r1
 
-> SELECT mdod.dataflow_name, mdod.name
+>[version>=13800] SELECT mdod.dataflow_name, mdod.name
+  FROM mz_introspection.mz_arrangement_sharing mash
+  JOIN mz_introspection.mz_dataflow_operator_dataflows mdod ON mash.operator_id = mdod.id
+  JOIN mz_introspection.mz_compute_exports USING (dataflow_id)
+  WHERE export_id LIKE 'u%'
+"Dataflow: materialize.public.data_view_idx" "ArrangeBy[[Column(0)]]"
+"Dataflow: materialize.public.data_view_idx" "ArrangeBy[[Column(0)]]-errors"
+"Dataflow: materialize.public.data_view_primary_idx" "ArrangeBy[[Column(0), Column(1)]]"
+"Dataflow: materialize.public.data_view_primary_idx" "ArrangeBy[[Column(0), Column(1)]]-errors"
+"Dataflow: materialize.public.mat_data_idx3" "ArrangeBy[[Column(1)]]"
+"Dataflow: materialize.public.mat_data_idx3" "ArrangeBy[[Column(1)]]-errors"
+"Dataflow: materialize.public.mat_data_primary_idx" "ArrangeBy[[Column(0), Column(1)]]"
+"Dataflow: materialize.public.mat_data_primary_idx" "ArrangeBy[[Column(0), Column(1)]]-errors"
+"Dataflow: materialize.public.test1" AccumulableErrorCheck
+"Dataflow: materialize.public.test1" "ArrangeAccumulable [val: empty]"
+"Dataflow: materialize.public.test1" ReduceAccumulable
+"Dataflow: materialize.public.test2" AccumulableErrorCheck
+"Dataflow: materialize.public.test2" "ArrangeAccumulable [val: empty]"
+"Dataflow: materialize.public.test2" ReduceAccumulable
+"Dataflow: materialize.public.test4" "ArrangeMonotonic [val: empty]"
+"Dataflow: materialize.public.test4" ReduceMonotonic
+"Dataflow: materialize.public.test6" "ArrangeMonotonic [val: empty]"
+"Dataflow: materialize.public.test6" ReduceMonotonic
+"Dataflow: materialize.public.test7" AccumulableErrorCheck
+"Dataflow: materialize.public.test7" "ArrangeAccumulable [val: empty]"
+"Dataflow: materialize.public.test7" ReduceAccumulable
+
+>[version<13800] SELECT mdod.dataflow_name, mdod.name
   FROM mz_introspection.mz_arrangement_sharing mash
   JOIN mz_introspection.mz_dataflow_operator_dataflows mdod ON mash.operator_id = mdod.id
   JOIN mz_introspection.mz_compute_exports USING (dataflow_id)

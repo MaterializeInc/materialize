@@ -92,7 +92,7 @@ class Redpanda:
                 "resource_group_id": self.resource_group_id,
                 "network_id": self.network_id,
                 "region": "us-east-1",
-                "throughput_tier": "tier-1-aws-v2-arm",
+                "throughput_tier": "tier-1-aws-v3-arm",
                 "type": "TYPE_DEDICATED",
                 "zones": ["use1-az2"],
                 "aws_private_link": {
@@ -243,7 +243,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
 
     args = parser.parse_args()
 
-    globs = list(
+    files = list(
         itertools.chain.from_iterable(
             [
                 glob.glob(file_glob, root_dir=MZ_ROOT / "test" / "cloud-canary")
@@ -275,15 +275,18 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         # Takes about 40 min to spin up
         redpanda = (
             Redpanda(c, cleanup=args.cleanup)
-            if any(["redpanda" in filename for filename in globs])
+            if any(["redpanda" in filename for filename in files])
             else None
         )
 
         try:
             print("Running .td files ...")
             td(c, text="> CREATE CLUSTER canary_sources SIZE '25cc'")
-            for filename in globs:
+
+            def process(filename: str) -> None:
                 td(c, filename, redpanda=redpanda)
+
+            c.test_parts(files, process)
             test_failed = False
         finally:
             if args.cleanup and redpanda is not None:

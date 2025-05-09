@@ -16,7 +16,7 @@ statement ok
 CREATE TABLE t2 (f1 DOUBLE PRECISION, f2 DOUBLE PRECISION NOT NULL);
 
 query T multiline
-EXPLAIN WITH(arity, join implementations) SELECT FROM ( SELECT FROM t2 a1 RIGHT JOIN t2 ON a1.f1 IS NULL WHERE TRUE AND a1.f1 = a1.f2 )
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, arity, join implementations) AS VERBOSE TEXT FOR SELECT FROM ( SELECT FROM t2 a1 RIGHT JOIN t2 ON a1.f1 IS NULL WHERE TRUE AND a1.f1 = a1.f2 )
 ----
 Explained Query (fast path):
   Constant <empty>
@@ -27,22 +27,22 @@ EOF
 
 # TODO missing !isnull(#0) in %1
 query T multiline
-EXPLAIN WITH(arity, join implementations) SELECT FROM t1, t2 WHERE t1.f2 + t2.f1 = t1.f1 AND t2.f1 IS NOT NULL
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, arity, join implementations) AS VERBOSE TEXT FOR SELECT FROM t1, t2 WHERE t1.f2 + t2.f1 = t1.f1 AND t2.f1 IS NOT NULL
 ----
 Explained Query:
   Project () // { arity: 0 }
-    Join on=(#0 = (#1 + #2)) type=differential // { arity: 3 }
+    Join on=(#0{f1} = (#1{f2} + #2{f1})) type=differential // { arity: 3 }
       implementation
         %0:t1[×] » %1:t2[×]
       ArrangeBy keys=[[]] // { arity: 2 }
-        Filter (#0) IS NOT NULL // { arity: 2 }
+        Filter (#0{f1}) IS NOT NULL // { arity: 2 }
           ReadStorage materialize.public.t1 // { arity: 2 }
       ArrangeBy keys=[[]] // { arity: 1 }
-        Project (#0) // { arity: 1 }
+        Project (#0{f1}) // { arity: 1 }
           ReadStorage materialize.public.t2 // { arity: 2 }
 
 Source materialize.public.t1
-  filter=((#0) IS NOT NULL)
+  filter=((#0{f1}) IS NOT NULL)
 Source materialize.public.t2
 
 Target cluster: quickstart
@@ -50,20 +50,20 @@ Target cluster: quickstart
 EOF
 
 query T multiline
-EXPLAIN WITH(arity, join implementations) SELECT FROM t1 WHERE f2 IN ( SELECT agg1 FROM ( SELECT COUNT ( TRUE ) agg1 FROM t2 a1 JOIN ( SELECT a2.f2 FROM t1 LEFT JOIN t1 a2 ON TRUE ) a2 ON TRUE WHERE  a2.f2 IS NOT NULL AND a2.f2 > a1.f2 ) )
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, arity, join implementations) AS VERBOSE TEXT FOR SELECT FROM t1 WHERE f2 IN ( SELECT agg1 FROM ( SELECT COUNT ( TRUE ) agg1 FROM t2 a1 JOIN ( SELECT a2.f2 FROM t1 LEFT JOIN t1 a2 ON TRUE ) a2 ON TRUE WHERE  a2.f2 IS NOT NULL AND a2.f2 > a1.f2 ) )
 ----
 Explained Query:
   With
     cte l0 =
-      Project (#1) // { arity: 1 }
+      Project (#1{f2}) // { arity: 1 }
         ReadStorage materialize.public.t1 // { arity: 2 }
     cte l1 =
-      Distinct project=[#0] // { arity: 1 }
+      Distinct project=[#0{f2}] // { arity: 1 }
         Get l0 // { arity: 1 }
     cte l2 =
-      Reduce group_by=[#0] aggregates=[count(*)] // { arity: 2 }
-        Project (#0) // { arity: 1 }
-          Filter (#2 > #1) // { arity: 3 }
+      Reduce group_by=[#0{f2}] aggregates=[count(*)] // { arity: 2 }
+        Project (#0{f2}) // { arity: 1 }
+          Filter (#2{f2} > #1{f2}) // { arity: 3 }
             CrossJoin type=delta // { arity: 3 }
               implementation
                 %0:l1 » %1:t2[×] » %2:t1[×] » %3:l0[×]
@@ -73,7 +73,7 @@ Explained Query:
               ArrangeBy keys=[[]] // { arity: 1 }
                 Get l1 // { arity: 1 }
               ArrangeBy keys=[[]] // { arity: 1 }
-                Project (#1) // { arity: 1 }
+                Project (#1{f2}) // { arity: 1 }
                   ReadStorage materialize.public.t2 // { arity: 2 }
               ArrangeBy keys=[[]] // { arity: 0 }
                 Project () // { arity: 0 }
@@ -82,22 +82,22 @@ Explained Query:
                 Get l0 // { arity: 1 }
   Return // { arity: 0 }
     Project () // { arity: 0 }
-      Join on=(#0 = #1) type=differential // { arity: 2 }
+      Join on=(#0{f2} = #1{f2}) type=differential // { arity: 2 }
         implementation
           %1[#0]UKA » %0:l0[#0]K
-        ArrangeBy keys=[[#0]] // { arity: 1 }
+        ArrangeBy keys=[[#0{f2}]] // { arity: 1 }
           Get l0 // { arity: 1 }
-        ArrangeBy keys=[[#0]] // { arity: 1 }
-          Distinct project=[#0] // { arity: 1 }
+        ArrangeBy keys=[[#0{f2}]] // { arity: 1 }
+          Distinct project=[#0{f2}] // { arity: 1 }
             Union // { arity: 1 }
-              Project (#0) // { arity: 1 }
-                Filter (#0 = bigint_to_double(#1)) // { arity: 2 }
+              Project (#0{f2}) // { arity: 1 }
+                Filter (#0{f2} = bigint_to_double(#1{count})) // { arity: 2 }
                   Get l2 // { arity: 2 }
               Negate // { arity: 1 }
-                Project (#0) // { arity: 1 }
-                  Filter (#0 = 0) // { arity: 2 }
+                Project (#0{f2}) // { arity: 1 }
+                  Filter (#0{f2} = 0) // { arity: 2 }
                     Get l2 // { arity: 2 }
-              Filter (#0 = 0) // { arity: 1 }
+              Filter (#0{f2} = 0) // { arity: 1 }
                 Get l1 // { arity: 1 }
 
 Source materialize.public.t1

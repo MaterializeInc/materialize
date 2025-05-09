@@ -171,20 +171,21 @@
 //!     * _Proof: By <1>5 and <1>10_
 
 use std::cmp::{Ordering, Reverse};
-use std::collections::binary_heap::{BinaryHeap, PeekMut};
 use std::collections::VecDeque;
+use std::collections::binary_heap::{BinaryHeap, PeekMut};
 use std::iter::FromIterator;
 
 use differential_dataflow::difference::Semigroup;
 use differential_dataflow::lattice::Lattice;
-use differential_dataflow::{consolidation, AsCollection, Collection, ExchangeData};
+use differential_dataflow::{AsCollection, Collection, ExchangeData, consolidation};
+use mz_ore::Overflowing;
 use mz_ore::collections::CollectionExt;
 use timely::communication::{Pull, Push};
+use timely::dataflow::Scope;
 use timely::dataflow::channels::pact::Pipeline;
+use timely::dataflow::operators::CapabilitySet;
 use timely::dataflow::operators::capture::Event;
 use timely::dataflow::operators::generic::builder_rc::OperatorBuilder;
-use timely::dataflow::operators::CapabilitySet;
-use timely::dataflow::Scope;
 use timely::order::{PartialOrder, TotalOrder};
 use timely::progress::frontier::{AntichainRef, MutableAntichain};
 use timely::progress::{Antichain, Timestamp};
@@ -197,7 +198,7 @@ use timely::progress::{Antichain, Timestamp};
 /// used with timely's capture facilities to connect a collection from a foreign scope to this
 /// operator.
 pub fn reclock<G, D, FromTime, IntoTime, R>(
-    remap_collection: &Collection<G, FromTime, i64>,
+    remap_collection: &Collection<G, FromTime, Overflowing<i64>>,
     as_of: Antichain<G::Timestamp>,
 ) -> (
     Box<dyn Push<Event<FromTime, Vec<(D, FromTime, R)>>>>,
@@ -238,7 +239,7 @@ where
         // complicated API to traverse it. This is left for future work if the naive trace
         // maintenance implemented in this operator becomes problematic.
         let mut remap_upper = Antichain::from_elem(IntoTime::minimum());
-        let mut remap_since = as_of;
+        let mut remap_since = as_of.clone();
         let mut remap_trace = Vec::new();
 
         // A stash of source updates for which we don't know the corresponding binding yet.
@@ -248,6 +249,10 @@ where
 
         let mut binding_buffer = Vec::new();
         let mut interesting_times = Vec::new();
+
+        // Accumulation buffer for `remap_input` updates.
+        use timely::progress::ChangeBatch;
+        let mut remap_accum_buffer: ChangeBatch<(IntoTime, FromTime)> = ChangeBatch::new();
 
         // The operator drains `remap_input` and organizes new bindings that are not beyond
         // `remap_input`'s frontier into the time ordered `remap_trace`.
@@ -268,8 +273,18 @@ where
             let mut session = output.session(cap);
 
             // STEP 1. Accept new bindings into `pending_remap`.
+            // Advance all `into` times by `as_of`, and consolidate all updates at that frontier.
             while let Some((_, data)) = remap_input.next() {
-                for (from, into, diff) in data.drain(..) {
+                for (from, mut into, diff) in data.drain(..) {
+                    into.advance_by(as_of.borrow());
+                    remap_accum_buffer.update((into, from), diff.into_inner());
+                }
+            }
+            // Drain consolidated bindings into the `pending_remap` heap.
+            // Only do this once any of the `remap_input` frontier has passed `as_of`.
+            // For as long as the input frontier is less-equal `as_of`, we have no finalized times.
+            if !PartialOrder::less_equal(&frontiers[0].frontier(), &as_of.borrow()) {
+                for ((into, from), diff) in remap_accum_buffer.drain() {
                     pending_remap.push(Reverse((into, from, diff)));
                 }
             }
@@ -278,7 +293,7 @@ where
             let prev_remap_upper =
                 std::mem::replace(&mut remap_upper, frontiers[0].frontier().to_owned());
             while let Some(update) = pending_remap.peek_mut() {
-                if !remap_upper.less_equal(&update.0 .0) {
+                if !remap_upper.less_equal(&update.0.0) {
                     let Reverse((into, from, diff)) = PeekMut::pop(update);
                     remap_trace.push((from, into, diff));
                 } else {
@@ -531,14 +546,18 @@ impl<D, T: Timestamp, R> FromIterator<(D, T, R)> for ChainBatch<D, T, R> {
 
 #[cfg(test)]
 mod test {
+    use std::sync::atomic::AtomicUsize;
     use std::sync::mpsc::{Receiver, TryRecvError};
 
     use differential_dataflow::consolidation;
     use differential_dataflow::input::{Input, InputSession};
+    use serde::{Deserialize, Serialize};
     use timely::communication::allocator::Thread;
     use timely::dataflow::operators::capture::{Event, Extract};
     use timely::dataflow::operators::unordered_input::UnorderedHandle;
     use timely::dataflow::operators::{ActivateCapability, Capture, UnorderedInput};
+    use timely::progress::PathSummary;
+    use timely::progress::timestamp::Refines;
     use timely::worker::Worker;
 
     use crate::capture::PusherCapture;
@@ -546,14 +565,15 @@ mod test {
 
     use super::*;
 
+    type Diff = Overflowing<i64>;
     type FromTime = Partitioned<u64, u64>;
     type IntoTime = u64;
-    type BindingHandle = InputSession<IntoTime, FromTime, i64>;
-    type DataHandle<D> = (
-        UnorderedHandle<FromTime, (D, FromTime, i64)>,
+    type BindingHandle<FromTime> = InputSession<IntoTime, FromTime, Diff>;
+    type DataHandle<D, FromTime> = (
+        UnorderedHandle<FromTime, (D, FromTime, Diff)>,
         ActivateCapability<FromTime>,
     );
-    type ReclockedStream<D> = Receiver<Event<IntoTime, Vec<(D, IntoTime, i64)>>>;
+    type ReclockedStream<D> = Receiver<Event<IntoTime, Vec<(D, IntoTime, Diff)>>>;
 
     /// A helper function that sets up a dataflow program to test the reclocking operator. Each
     /// test provides a test logic closure which accepts four arguments:
@@ -562,10 +582,16 @@ mod test {
     /// * A `BindingHandle` that allows the test to manipulate the remap bindings
     /// * A `DataHandle` that allows the test to submit the data to be reclocked
     /// * A `ReclockedStream` that allows observing the result of the reclocking process
-    fn harness<D, F, R>(as_of: Antichain<IntoTime>, test_logic: F) -> R
+    fn harness<FromTime, D, F, R>(as_of: Antichain<IntoTime>, test_logic: F) -> R
     where
+        FromTime: Timestamp + Refines<()>,
         D: ExchangeData,
-        F: FnOnce(&mut Worker<Thread>, BindingHandle, DataHandle<D>, ReclockedStream<D>) -> R
+        F: FnOnce(
+                &mut Worker<Thread>,
+                BindingHandle<FromTime>,
+                DataHandle<D, FromTime>,
+                ReclockedStream<D>,
+            ) -> R
             + Send
             + Sync
             + 'static,
@@ -606,16 +632,16 @@ mod test {
     #[mz_ore::test]
     fn basic_reclocking() {
         let as_of = Antichain::from_elem(IntoTime::minimum());
-        harness(
+        harness::<FromTime, _, _, _>(
             as_of,
             |worker, bindings, (mut data, data_cap), reclocked| {
                 // Reclock everything at the minimum IntoTime
                 bindings.close();
                 data.session(data_cap)
-                    .give(('a', Partitioned::minimum(), 1));
+                    .give(('a', Partitioned::minimum(), Diff::ONE));
                 step(worker);
                 let extracted = reclocked.extract();
-                let expected = vec![(0, vec![('a', 0, 1)])];
+                let expected = vec![(0, vec![('a', 0, Diff::ONE)])];
                 assert_eq!(extracted, expected);
             },
         )
@@ -648,18 +674,18 @@ mod test {
             as_of,
             |worker, mut bindings, (mut data, data_cap), reclocked| {
                 // Reclock offsets 1 and 3 to timestamp 1000
-                bindings.update_at(Partitioned::minimum(), 0, 1);
-                bindings.update_at(Partitioned::minimum(), 1000, -1);
+                bindings.update_at(Partitioned::minimum(), 0, Diff::ONE);
+                bindings.update_at(Partitioned::minimum(), 1000, Diff::MINUS_ONE);
                 for time in partitioned_frontier([(0, 4)]) {
-                    bindings.update_at(time, 1000, 1);
+                    bindings.update_at(time, 1000, Diff::ONE);
                 }
                 bindings.advance_to(1001);
                 bindings.flush();
                 data.session(data_cap.clone()).give_iterator(
                     vec![
-                        (1, Partitioned::new_singleton(0, 1), 1),
-                        (1, Partitioned::new_singleton(0, 1), 1),
-                        (3, Partitioned::new_singleton(0, 3), 1),
+                        (1, Partitioned::new_singleton(0, 1), Diff::ONE),
+                        (1, Partitioned::new_singleton(0, 1), Diff::ONE),
+                        (3, Partitioned::new_singleton(0, 3), Diff::ONE),
                     ]
                     .into_iter(),
                 );
@@ -669,7 +695,11 @@ mod test {
                     reclocked.try_recv(),
                     Ok(Event::Messages(
                         0u64,
-                        vec![(1, 1000, 1), (1, 1000, 1), (3, 1000, 1)]
+                        vec![
+                            (1, 1000, Diff::ONE),
+                            (1, 1000, Diff::ONE),
+                            (3, 1000, Diff::ONE)
+                        ]
                     ))
                 );
                 assert_eq!(
@@ -680,15 +710,18 @@ mod test {
                 // Reclock more messages for offsets 3 to the same timestamp
                 data.session(data_cap.clone()).give_iterator(
                     vec![
-                        (3, Partitioned::new_singleton(0, 3), 1),
-                        (3, Partitioned::new_singleton(0, 3), 1),
+                        (3, Partitioned::new_singleton(0, 3), Diff::ONE),
+                        (3, Partitioned::new_singleton(0, 3), Diff::ONE),
                     ]
                     .into_iter(),
                 );
                 step(worker);
                 assert_eq!(
                     reclocked.try_recv(),
-                    Ok(Event::Messages(1000u64, vec![(3, 1000, 1), (3, 1000, 1)]))
+                    Ok(Event::Messages(
+                        1000u64,
+                        vec![(3, 1000, Diff::ONE), (3, 1000, Diff::ONE)]
+                    ))
                 );
 
                 // Drop the capability which should advance the reclocked frontier to 1001.
@@ -705,12 +738,12 @@ mod test {
     #[mz_ore::test]
     fn test_reclock_frontier() {
         let as_of = Antichain::from_elem(IntoTime::minimum());
-        harness::<(), _, _>(
+        harness::<_, (), _, _>(
             as_of,
             |worker, mut bindings, (_data, data_cap), reclocked| {
                 // Initialize the bindings such that the minimum IntoTime contains the minimum FromTime
                 // frontier.
-                bindings.update_at(Partitioned::minimum(), 0, 1);
+                bindings.update_at(Partitioned::minimum(), 0, Diff::ONE);
                 bindings.advance_to(1);
                 bindings.flush();
                 step(worker);
@@ -720,13 +753,13 @@ mod test {
                 );
 
                 // Mint a couple of bindings for multiple partitions
-                bindings.update_at(Partitioned::minimum(), 1000, -1);
+                bindings.update_at(Partitioned::minimum(), 1000, Diff::MINUS_ONE);
                 for time in partitioned_frontier([(1, 10)]) {
-                    bindings.update_at(time.clone(), 1000, 1);
-                    bindings.update_at(time, 2000, -1);
+                    bindings.update_at(time.clone(), 1000, Diff::ONE);
+                    bindings.update_at(time, 2000, Diff::MINUS_ONE);
                 }
                 for time in partitioned_frontier([(1, 10), (2, 10)]) {
-                    bindings.update_at(time, 2000, 1);
+                    bindings.update_at(time, 2000, Diff::ONE);
                 }
                 bindings.advance_to(2001);
                 bindings.flush();
@@ -783,7 +816,7 @@ mod test {
             |worker, mut bindings, (mut data, data_cap), reclocked| {
                 // Initialize the bindings such that the minimum IntoTime contains the minimum FromTime
                 // frontier.
-                bindings.update_at(Partitioned::minimum(), 0, 1);
+                bindings.update_at(Partitioned::minimum(), 0, Diff::ONE);
 
                 // Setup more precise capabilities for the rest of the test
                 let mut part0_cap = data_cap.delayed(&Partitioned::new_singleton(0, 0));
@@ -793,22 +826,25 @@ mod test {
                 // Reclock offsets 1 and 2 to timestamp 1000
                 data.session(part0_cap.clone()).give_iterator(
                     vec![
-                        (1, Partitioned::new_singleton(0, 1), 1),
-                        (2, Partitioned::new_singleton(0, 2), 1),
+                        (1, Partitioned::new_singleton(0, 1), Diff::ONE),
+                        (2, Partitioned::new_singleton(0, 2), Diff::ONE),
                     ]
                     .into_iter(),
                 );
 
                 part0_cap.downgrade(&Partitioned::new_singleton(0, 3));
-                bindings.update_at(Partitioned::minimum(), 1000, -1);
-                bindings.update_at(part0_cap.time().clone(), 1000, 1);
-                bindings.update_at(rest_cap.time().clone(), 1000, 1);
+                bindings.update_at(Partitioned::minimum(), 1000, Diff::MINUS_ONE);
+                bindings.update_at(part0_cap.time().clone(), 1000, Diff::ONE);
+                bindings.update_at(rest_cap.time().clone(), 1000, Diff::ONE);
                 bindings.advance_to(1001);
                 bindings.flush();
                 step(worker);
                 assert_eq!(
                     reclocked.try_recv(),
-                    Ok(Event::Messages(0, vec![(1, 1000, 1), (2, 1000, 1)]))
+                    Ok(Event::Messages(
+                        0,
+                        vec![(1, 1000, Diff::ONE), (2, 1000, Diff::ONE)]
+                    ))
                 );
                 assert_eq!(
                     reclocked.try_recv(),
@@ -822,15 +858,15 @@ mod test {
                 // Reclock offsets 3 and 4 to timestamp 2000
                 data.session(part0_cap.clone()).give_iterator(
                     vec![
-                        (3, Partitioned::new_singleton(0, 3), 1),
-                        (3, Partitioned::new_singleton(0, 3), 1),
-                        (4, Partitioned::new_singleton(0, 4), 1),
+                        (3, Partitioned::new_singleton(0, 3), Diff::ONE),
+                        (3, Partitioned::new_singleton(0, 3), Diff::ONE),
+                        (4, Partitioned::new_singleton(0, 4), Diff::ONE),
                     ]
                     .into_iter(),
                 );
-                bindings.update_at(part0_cap.time().clone(), 2000, -1);
+                bindings.update_at(part0_cap.time().clone(), 2000, Diff::MINUS_ONE);
                 part0_cap.downgrade(&Partitioned::new_singleton(0, 5));
-                bindings.update_at(part0_cap.time().clone(), 2000, 1);
+                bindings.update_at(part0_cap.time().clone(), 2000, Diff::ONE);
                 bindings.advance_to(2001);
                 bindings.flush();
                 step(worker);
@@ -838,7 +874,11 @@ mod test {
                     reclocked.try_recv(),
                     Ok(Event::Messages(
                         1001,
-                        vec![(3, 2000, 1), (3, 2000, 1), (4, 2000, 1)]
+                        vec![
+                            (3, 2000, Diff::ONE),
+                            (3, 2000, Diff::ONE),
+                            (4, 2000, Diff::ONE)
+                        ]
                     ))
                 );
                 assert_eq!(
@@ -861,25 +901,25 @@ mod test {
             |worker, mut bindings, (mut data, data_cap), reclocked| {
                 // Initialize the bindings such that the minimum IntoTime contains the minimum FromTime
                 // frontier.
-                bindings.update_at(Partitioned::minimum(), 0, 1);
+                bindings.update_at(Partitioned::minimum(), 0, Diff::ONE);
                 // First mint bindings for 0 at timestamp 1000
-                bindings.update_at(Partitioned::minimum(), 1000, -1);
+                bindings.update_at(Partitioned::minimum(), 1000, Diff::MINUS_ONE);
                 for time in partitioned_frontier([(0, 50)]) {
-                    bindings.update_at(time, 1000, 1);
+                    bindings.update_at(time, 1000, Diff::ONE);
                 }
                 // Then only for 1 at timestamp 2000
                 for time in partitioned_frontier([(0, 50)]) {
-                    bindings.update_at(time, 2000, -1);
+                    bindings.update_at(time, 2000, Diff::MINUS_ONE);
                 }
                 for time in partitioned_frontier([(0, 50), (1, 50)]) {
-                    bindings.update_at(time, 2000, 1);
+                    bindings.update_at(time, 2000, Diff::ONE);
                 }
                 // Then again only for 0 at timestamp 3000
                 for time in partitioned_frontier([(0, 50), (1, 50)]) {
-                    bindings.update_at(time, 3000, -1);
+                    bindings.update_at(time, 3000, Diff::MINUS_ONE);
                 }
                 for time in partitioned_frontier([(0, 100), (1, 50)]) {
-                    bindings.update_at(time, 3000, 1);
+                    bindings.update_at(time, 3000, Diff::ONE);
                 }
                 bindings.advance_to(3001);
                 bindings.flush();
@@ -887,11 +927,11 @@ mod test {
                 // Reclockng (0, 50) must ignore the updates on the FromTime frontier that happened at
                 // timestamp 2000 since those are completely unrelated
                 data.session(data_cap)
-                    .give((50, Partitioned::new_singleton(0, 50), 1));
+                    .give((50, Partitioned::new_singleton(0, 50), Diff::ONE));
                 step(worker);
                 assert_eq!(
                     reclocked.try_recv(),
-                    Ok(Event::Messages(0, vec![(50, 3000, 1),]))
+                    Ok(Event::Messages(0, vec![(50, 3000, Diff::ONE),]))
                 );
                 assert_eq!(
                     reclocked.try_recv(),
@@ -909,25 +949,25 @@ mod test {
     #[mz_ore::test]
     fn test_compaction() {
         let mut remap = vec![];
-        remap.push((Partitioned::minimum(), 0, 1));
+        remap.push((Partitioned::minimum(), 0, Diff::ONE));
         // Reclock offsets 1 and 2 to timestamp 1000
-        remap.push((Partitioned::minimum(), 1000, -1));
+        remap.push((Partitioned::minimum(), 1000, Diff::MINUS_ONE));
         for time in partitioned_frontier([(0, 3)]) {
-            remap.push((time, 1000, 1));
+            remap.push((time, 1000, Diff::ONE));
         }
         // Reclock offsets 3 and 4 to timestamp 2000
         for time in partitioned_frontier([(0, 3)]) {
-            remap.push((time, 2000, -1));
+            remap.push((time, 2000, Diff::MINUS_ONE));
         }
         for time in partitioned_frontier([(0, 5)]) {
-            remap.push((time, 2000, 1));
+            remap.push((time, 2000, Diff::ONE));
         }
 
         let source_updates = vec![
-            (1, Partitioned::new_singleton(0, 1), 1),
-            (2, Partitioned::new_singleton(0, 2), 1),
-            (3, Partitioned::new_singleton(0, 3), 1),
-            (4, Partitioned::new_singleton(0, 4), 1),
+            (1, Partitioned::new_singleton(0, 1), Diff::ONE),
+            (2, Partitioned::new_singleton(0, 2), Diff::ONE),
+            (3, Partitioned::new_singleton(0, 3), Diff::ONE),
+            (4, Partitioned::new_singleton(0, 4), Diff::ONE),
         ];
 
         let since = Antichain::from_elem(1500);
@@ -981,7 +1021,12 @@ mod test {
 
         let expected = vec![(
             1500,
-            vec![(1, 1500, 1), (2, 1500, 1), (3, 2000, 1), (4, 2000, 1)],
+            vec![
+                (1, 1500, Diff::ONE),
+                (2, 1500, Diff::ONE),
+                (3, 2000, Diff::ONE),
+                (4, 2000, Diff::ONE),
+            ],
         )];
         assert_eq!(expected, reclock_compact_remap);
         assert_eq!(expected, compact_reclock_remap);
@@ -992,5 +1037,117 @@ mod test {
         let a = ChainBatch::from_iter([('a', 0, 1)]);
         let b = ChainBatch::from_iter([('a', 0, -1), ('a', 1, 1)]);
         assert_eq!(a.merge_with(b), ChainBatch::from_iter([('a', 1, 1)]));
+    }
+
+    #[mz_ore::test]
+    #[cfg_attr(miri, ignore)] // too slow
+    fn test_binding_consolidation() {
+        use std::sync::atomic::Ordering;
+
+        #[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+        struct Time(u64);
+
+        // A counter of the number of active Time instances
+        static INSTANCES: AtomicUsize = AtomicUsize::new(0);
+
+        impl Time {
+            fn new(time: u64) -> Self {
+                INSTANCES.fetch_add(1, Ordering::Relaxed);
+                Self(time)
+            }
+        }
+
+        impl Clone for Time {
+            fn clone(&self) -> Self {
+                INSTANCES.fetch_add(1, Ordering::Relaxed);
+                Self(self.0)
+            }
+        }
+
+        impl Drop for Time {
+            fn drop(&mut self) {
+                INSTANCES.fetch_sub(1, Ordering::Relaxed);
+            }
+        }
+
+        impl Timestamp for Time {
+            type Summary = ();
+
+            fn minimum() -> Self {
+                Time::new(0)
+            }
+        }
+
+        impl PathSummary<Time> for () {
+            fn results_in(&self, src: &Time) -> Option<Time> {
+                Some(src.clone())
+            }
+
+            fn followed_by(&self, _other: &()) -> Option<Self> {
+                Some(())
+            }
+        }
+
+        impl Refines<()> for Time {
+            fn to_inner(_: ()) -> Self {
+                Self::minimum()
+            }
+            fn to_outer(self) -> () {}
+            fn summarize(_path: ()) {}
+        }
+
+        impl PartialOrder for Time {
+            fn less_equal(&self, other: &Self) -> bool {
+                self.0.less_equal(&other.0)
+            }
+        }
+
+        let as_of = 1000;
+
+        // Test that supplying a single big batch of unconsolidated bindings gets
+        // consolidated after a single worker step.
+        harness::<Time, u64, _, _>(
+            Antichain::from_elem(as_of),
+            move |worker, mut bindings, _, _| {
+                step(worker);
+                let instances_before = INSTANCES.load(Ordering::Relaxed);
+                for ts in 0..as_of {
+                    if ts > 0 {
+                        bindings.update_at(Time::new(ts - 1), ts, Diff::MINUS_ONE);
+                    }
+                    bindings.update_at(Time::new(ts), ts, Diff::ONE);
+                }
+                bindings.advance_to(as_of);
+                bindings.flush();
+                step(worker);
+                let instances_after = INSTANCES.load(Ordering::Relaxed);
+                // The extra instances live in a ChangeBatch which considers compaction when more
+                // than 32 elements are inside.
+                assert!(instances_after - instances_before < 32);
+            },
+        );
+
+        // Test that a slow feed of uncompacted bindings over multiple steps never leads to an
+        // excessive number of bindings held in memory.
+        harness::<Time, u64, _, _>(
+            Antichain::from_elem(as_of),
+            move |worker, mut bindings, _, _| {
+                step(worker);
+                let instances_before = INSTANCES.load(Ordering::Relaxed);
+                for ts in 0..as_of {
+                    if ts > 0 {
+                        bindings.update_at(Time::new(ts - 1), ts, Diff::MINUS_ONE);
+                    }
+                    bindings.update_at(Time::new(ts), ts, Diff::ONE);
+                    bindings.advance_to(ts + 1);
+                    bindings.flush();
+                    step(worker);
+                    let instances_now = INSTANCES.load(Ordering::Relaxed);
+                    // The extra instances live in a ChangeBatch which considers compaction when
+                    // more than 32 elements are inside.
+                    assert!(instances_now - instances_before < 32);
+                }
+            },
+        );
     }
 }

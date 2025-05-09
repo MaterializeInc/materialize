@@ -15,7 +15,7 @@ use mz_aws_util::s3_uploader::{
 use mz_ore::assert_none;
 use mz_ore::cast::CastFrom;
 use mz_ore::task::JoinHandleExt;
-use mz_pgcopy::{encode_copy_format, encode_copy_format_header, CopyFormatParams};
+use mz_pgcopy::{CopyFormatParams, encode_copy_format, encode_copy_format_header};
 use mz_repr::{GlobalId, RelationDesc, Row};
 use mz_storage_types::sinks::s3_oneshot_sink::S3KeyManager;
 use mz_storage_types::sinks::{S3SinkFormat, S3UploadInfo};
@@ -214,6 +214,7 @@ mod tests {
     #[mz_ore::test(tokio::test(flavor = "multi_thread"))]
     #[cfg_attr(coverage, ignore)] // https://github.com/MaterializeInc/database-issues/issues/5586
     #[cfg_attr(miri, ignore)] // error: unsupported operation: can't call foreign function `TLS_method` on OS `linux`
+    #[ignore] // TODO: Reenable against minio so it can run locally
     async fn test_multiple_files() -> Result<(), anyhow::Error> {
         let sdk_config = mz_aws_util::defaults().load().await;
         let (bucket, path) = match s3_bucket_path_for_test() {

@@ -33,6 +33,10 @@ SSL mode          | Require
 For more details and troubleshooting, check the
 [Metabase documentation](https://www.metabase.com/docs/latest/administration-guide/databases/postgresql.html).
 
+## Configure a custom cluster
+
+{{% alter-cluster/configure-cluster %}}
+
 ## Refresh rate
 
 By default, the lowest [refresh rate](https://www.metabase.com/docs/latest/users-guide/07-dashboards.html#auto-refresh)
@@ -43,7 +47,7 @@ the end of the URL, and opening the modified URL in a new tab.
 Because Metabase queries are simply reading data out of self-updating views in
 Materialize, setting your dashboards to auto-refresh at lower rates should not
 have a significant impact on database performance. To minimize this impact, we
-recommend carefully choosing an [indexing strategy](https://materialize.com/docs/sql/create-index/)
+recommend carefully choosing an [indexing strategy](/sql/create-index/)
 for any objects serving results to Metabase.
 
 [//]: # "TODO(morsapaes) Once we revamp quickstarts, add Related pages section

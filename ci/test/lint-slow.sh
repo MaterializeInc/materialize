@@ -31,4 +31,6 @@ try cargo --locked about generate ci/deploy/licenses.hbs > /dev/null
 
 try helm unittest misc/helm-charts/operator
 
+try bin/pydoc
+
 try_status_report

@@ -10,6 +10,7 @@
 # by the Apache License, Version 2.0.
 
 load("@crates_io//:defs.bzl", "aliases", "all_crate_deps")
+load("@rules_rust//cargo:defs.bzl", "extract_cargo_lints")
 load("@rules_rust//rust:defs.bzl", "rust_binary", "rust_doc_test", "rust_library", "rust_test")
 
 package(default_visibility = ["//visibility:public"])
@@ -24,16 +25,19 @@ rust_library(
     compile_data = [],
     crate_features = ["default"],
     data = [],
+    lint_config = ":lints",
     proc_macro_deps = [] + all_crate_deps(proc_macro = True),
     rustc_env = {},
     rustc_flags = [],
     version = "0.0.1",
     deps = [
+        "//src/adapter-types:mz_adapter_types",
         "//src/build-info:mz_build_info",
         "//src/catalog:mz_catalog",
         "//src/controller:mz_controller",
         "//src/dyncfgs:mz_dyncfgs",
         "//src/environmentd:mz_environmentd",
+        "//src/license-keys:mz_license_keys",
         "//src/orchestrator:mz_orchestrator",
         "//src/orchestrator-process:mz_orchestrator_process",
         "//src/orchestrator-tracing:mz_orchestrator_tracing",
@@ -65,6 +69,7 @@ rust_test(
     crate_features = ["default"],
     data = [],
     env = {},
+    lint_config = ":lints",
     proc_macro_deps = [] + all_crate_deps(
         proc_macro = True,
         proc_macro_dev = True,
@@ -73,11 +78,13 @@ rust_test(
     rustc_flags = [],
     version = "0.0.1",
     deps = [
+        "//src/adapter-types:mz_adapter_types",
         "//src/build-info:mz_build_info",
         "//src/catalog:mz_catalog",
         "//src/controller:mz_controller",
         "//src/dyncfgs:mz_dyncfgs",
         "//src/environmentd:mz_environmentd",
+        "//src/license-keys:mz_license_keys",
         "//src/orchestrator:mz_orchestrator",
         "//src/orchestrator-process:mz_orchestrator_process",
         "//src/orchestrator-tracing:mz_orchestrator_tracing",
@@ -102,11 +109,13 @@ rust_doc_test(
     name = "mz_sqllogictest_doc_test",
     crate = ":mz_sqllogictest",
     deps = [
+        "//src/adapter-types:mz_adapter_types",
         "//src/build-info:mz_build_info",
         "//src/catalog:mz_catalog",
         "//src/controller:mz_controller",
         "//src/dyncfgs:mz_dyncfgs",
         "//src/environmentd:mz_environmentd",
+        "//src/license-keys:mz_license_keys",
         "//src/orchestrator:mz_orchestrator",
         "//src/orchestrator-process:mz_orchestrator_process",
         "//src/orchestrator-tracing:mz_orchestrator_tracing",
@@ -142,6 +151,7 @@ rust_test(
     crate_name = "parser",
     data = [],
     env = {},
+    lint_config = ":lints",
     proc_macro_deps = [] + all_crate_deps(
         proc_macro = True,
         proc_macro_dev = True,
@@ -151,11 +161,13 @@ rust_test(
     version = "0.0.1",
     deps = [
         ":mz_sqllogictest",
+        "//src/adapter-types:mz_adapter_types",
         "//src/build-info:mz_build_info",
         "//src/catalog:mz_catalog",
         "//src/controller:mz_controller",
         "//src/dyncfgs:mz_dyncfgs",
         "//src/environmentd:mz_environmentd",
+        "//src/license-keys:mz_license_keys",
         "//src/orchestrator:mz_orchestrator",
         "//src/orchestrator-process:mz_orchestrator_process",
         "//src/orchestrator-tracing:mz_orchestrator_tracing",
@@ -188,17 +200,23 @@ rust_binary(
     data = [],
     env = {},
     features = [],
+    lint_config = ":lints",
     proc_macro_deps = [] + all_crate_deps(proc_macro = True),
     rustc_env = {},
-    rustc_flags = [],
+    rustc_flags = [] + select({
+        "@//misc/bazel/platforms:xlang_lto_enabled": ["-Clinker-plugin-lto"],
+        "//conditions:default": [],
+    }),
     version = "0.0.1",
     deps = [
         ":mz_sqllogictest",
+        "//src/adapter-types:mz_adapter_types",
         "//src/build-info:mz_build_info",
         "//src/catalog:mz_catalog",
         "//src/controller:mz_controller",
         "//src/dyncfgs:mz_dyncfgs",
         "//src/environmentd:mz_environmentd",
+        "//src/license-keys:mz_license_keys",
         "//src/orchestrator:mz_orchestrator",
         "//src/orchestrator-process:mz_orchestrator_process",
         "//src/orchestrator-tracing:mz_orchestrator_tracing",
@@ -214,4 +232,10 @@ rust_binary(
         "//src/storage-types:mz_storage_types",
         "//src/tracing:mz_tracing",
     ] + all_crate_deps(normal = True),
+)
+
+extract_cargo_lints(
+    name = "lints",
+    manifest = "Cargo.toml",
+    workspace = "@//:Cargo.toml",
 )

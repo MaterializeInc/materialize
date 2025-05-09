@@ -8,9 +8,9 @@
 // by the Apache License, Version 2.0.
 
 use mz_ore::now::NowFn;
-use mz_repr::{Datum, Row};
-use mz_storage_types::sources::load_generator::{Event, Generator, LoadGeneratorOutput};
+use mz_repr::{Datum, Diff, Row};
 use mz_storage_types::sources::MzOffset;
+use mz_storage_types::sources::load_generator::{Event, Generator, LoadGeneratorOutput};
 
 pub struct Counter {
     /// How many values will be emitted before old ones are retracted,
@@ -27,7 +27,7 @@ impl Generator for Counter {
         _now: NowFn,
         _seed: Option<u64>,
         resume_offset: MzOffset,
-    ) -> Box<(dyn Iterator<Item = (LoadGeneratorOutput, Event<Option<MzOffset>, (Row, i64)>)>)>
+    ) -> Box<(dyn Iterator<Item = (LoadGeneratorOutput, Event<Option<MzOffset>, (Row, Diff)>)>)>
     {
         let max_cardinality = self.max_cardinality;
 
@@ -48,7 +48,7 @@ impl Generator for Counter {
                             let row = Row::pack_slice(&[Datum::Int64(retracted_value)]);
                             Some((
                                 LoadGeneratorOutput::Default,
-                                Event::Message(MzOffset::from(offset), (row, -1)),
+                                Event::Message(MzOffset::from(offset), (row, Diff::MINUS_ONE)),
                             ))
                         }
                         _ => None,
@@ -59,7 +59,7 @@ impl Generator for Counter {
                     let insertion = [
                         (
                             LoadGeneratorOutput::Default,
-                            Event::Message(MzOffset::from(offset), (row, 1)),
+                            Event::Message(MzOffset::from(offset), (row, Diff::ONE)),
                         ),
                         (
                             LoadGeneratorOutput::Default,

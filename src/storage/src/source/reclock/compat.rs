@@ -15,26 +15,28 @@ use std::rc::Rc;
 use std::sync::Arc;
 use std::time::Duration;
 
-use anyhow::{anyhow, Context};
+use anyhow::Context;
 use differential_dataflow::lattice::Lattice;
 use fail::fail_point;
-use futures::stream::LocalBoxStream;
 use futures::StreamExt;
+use futures::stream::LocalBoxStream;
+use mz_ore::soft_panic_or_log;
 use mz_ore::vec::VecExt;
+use mz_persist_client::Diagnostics;
 use mz_persist_client::cache::PersistClientCache;
 use mz_persist_client::error::UpperMismatch;
 use mz_persist_client::read::ListenEvent;
 use mz_persist_client::write::WriteHandle;
-use mz_persist_client::Diagnostics;
-use mz_persist_types::codec_impls::UnitSchema;
 use mz_persist_types::Codec64;
+use mz_persist_types::codec_impls::UnitSchema;
 use mz_repr::{Diff, GlobalId, RelationDesc};
 use mz_storage_client::util::remap_handle::{RemapHandle, RemapHandleReader};
+use mz_storage_types::StorageDiff;
 use mz_storage_types::controller::CollectionMetadata;
 use mz_storage_types::sources::{SourceData, SourceTimestamp};
 use timely::order::PartialOrder;
-use timely::progress::frontier::Antichain;
 use timely::progress::Timestamp;
+use timely::progress::frontier::Antichain;
 use tokio::sync::watch;
 
 /// A handle to a persist shard that stores remap bindings
@@ -46,11 +48,11 @@ pub struct PersistHandle<FromTime: SourceTimestamp, IntoTime: Timestamp + Lattic
             (
                 (Result<SourceData, String>, Result<(), String>),
                 IntoTime,
-                Diff,
+                StorageDiff,
             ),
         >,
     >,
-    write_handle: WriteHandle<SourceData, (), IntoTime, Diff>,
+    write_handle: WriteHandle<SourceData, (), IntoTime, StorageDiff>,
     /// Whether or not this handle is in read-only mode.
     read_only_rx: watch::Receiver<bool>,
     pending_batch: Vec<(FromTime, IntoTime, Diff)>,
@@ -83,9 +85,14 @@ where
         remap_relation_desc: RelationDesc,
         remap_collection_id: GlobalId,
     ) -> anyhow::Result<Self> {
-        let remap_shard = metadata.remap_shard.ok_or_else(|| {
-            anyhow!("cannot create remap PersistHandle for collection without remap shard")
-        })?;
+        let remap_shard = if let Some(remap_shard) = metadata.remap_shard {
+            remap_shard
+        } else {
+            panic!(
+                "cannot create remap PersistHandle for collection without remap shard: {id}, metadata: {:?}",
+                metadata
+            );
+        };
 
         let persist_client = persist_clients
             .open(metadata.persist_location.clone())
@@ -104,7 +111,7 @@ where
                 false,
             )
             .await
-            .context("error opening persist shard")?;
+            .expect("invalid usage");
 
         let upper = write_handle.upper();
         // We want a leased reader because elsewhere in the code the `as_of`
@@ -117,13 +124,41 @@ where
         // Allow manually simulating the scenario where the since of the remap
         // shard has advanced too far.
         fail_point!("invalid_remap_as_of");
-        assert!(
-            PartialOrder::less_equal(since, &as_of),
-            "invalid as_of: as_of({as_of:?}) < since({since:?}), \
-            source {id}, \
-            remap_shard: {:?}",
-            metadata.remap_shard
-        );
+
+        if since.is_empty() {
+            // This can happen when, say, a source is being dropped but we on
+            // the cluster are busy and notice that only later. In those cases
+            // it can happen that we still try to render an ingestion that is
+            // not valid anymore and where the shards it uses are not valid to
+            // use anymore.
+            //
+            // This is a rare race condition and something that is expected to
+            // happen every now and then. It's not a bug in the current way of
+            // how things work.
+            tracing::info!(
+                source_id = %id,
+                %worker_id,
+                "since of remap shard is the empty antichain, suspending...");
+
+            // We wait 5 hours to give the commands a chance to arrive at this
+            // replica and for it to drop our dataflow.
+            tokio::time::sleep(Duration::from_secs(5 * 60 * 60)).await;
+
+            // If we're still here after 5 hours, something has gone wrong and
+            // we complain.
+            soft_panic_or_log!(
+                "since of remap shard is the empty antichain, source_id = {id}, worker_id = {worker_id}"
+            );
+        }
+
+        if !PartialOrder::less_equal(since, &as_of) {
+            anyhow::bail!(
+                "invalid as_of: as_of({as_of:?}) < since({since:?}), \
+                source {id}, \
+                remap_shard: {:?}",
+                metadata.remap_shard
+            );
+        }
 
         assert!(
             as_of.elements() == [IntoTime::minimum()] || PartialOrder::less_than(&as_of, upper),
@@ -201,7 +236,7 @@ where
                         let from_ts = FromTime::decode_row(
                             &update.expect("invalid row").0.expect("invalid row"),
                         );
-                        self.pending_batch.push((from_ts, into_ts, diff));
+                        self.pending_batch.push((from_ts, into_ts, diff.into()));
                     }
                 }
             }
@@ -273,7 +308,11 @@ where
         }
 
         let row_updates = updates.into_iter().map(|(from_ts, into_ts, diff)| {
-            ((SourceData(Ok(from_ts.encode_row())), ()), into_ts, diff)
+            (
+                (SourceData(Ok(from_ts.encode_row())), ()),
+                into_ts,
+                diff.into_inner(),
+            )
         });
 
         match self

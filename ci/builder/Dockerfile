@@ -10,7 +10,7 @@
 # Stage 1: Build a minimum CI Builder image that we can use for the initial
 # steps like `mkpipeline` and `Build`, as well as any tests that are self
 # contained and use other Docker images.
-FROM ubuntu:noble-20241015 AS ci-builder-min
+FROM ubuntu:noble-20250404 AS ci-builder-min
 
 WORKDIR /workdir
 
@@ -45,6 +45,7 @@ RUN apt-get update --fix-missing && TZ=UTC DEBIAN_FRONTEND=noninteractive apt-ge
     gnupg2 \
     libxml2 \
     python3 \
+    python3.12-venv \
     && rm -rf /var/lib/apt/lists/*
 
 # Install Python dependencies. These are necessary to run some of our base tooling.
@@ -111,7 +112,7 @@ ENTRYPOINT ["autouseradd", "--user", "materialize"]
 # Linux that we support.
 #
 # TODO(parkmycar): This shouldn't be necessary anymore with Bazel.
-FROM ubuntu:noble-20241015 as crosstool
+FROM ubuntu:noble-20250404 as crosstool
 
 ARG ARCH_GCC
 ARG ARCH_GO
@@ -156,8 +157,8 @@ RUN gpg --import crosstool.asc \
     && rm crosstool.asc \
     && echo "trusted-key 09f6dd5f1f30ef2e" >> ~/.gnupg/gpg.conf \
     && mkdir crosstool \
-    && curl -fsSL http://crosstool-ng.org/download/crosstool-ng/crosstool-ng-1.26.0.tar.xz > crosstool.tar.xz \
-    && curl -fsSL http://crosstool-ng.org/download/crosstool-ng/crosstool-ng-1.26.0.tar.xz.sig > crosstool.sig \
+    && curl -fsSL https://github.com/crosstool-ng/crosstool-ng/releases/download/crosstool-ng-1.26.0/crosstool-ng-1.26.0.tar.xz > crosstool.tar.xz \
+    && curl -fsSL https://github.com/crosstool-ng/crosstool-ng/releases/download/crosstool-ng-1.26.0/crosstool-ng-1.26.0.tar.xz.sig > crosstool.sig \
     && gpg --verify crosstool.sig crosstool.tar.xz \
     && tar -xf crosstool.tar.xz -C crosstool --strip-components=1 \
     && rm crosstool.sig crosstool.tar.xz \
@@ -289,14 +290,14 @@ RUN mkdir rust \
     && gpg --verify rust.asc rust.tar.gz \
     && tar -xzf rust.tar.gz -C /usr/local/lib/rustlib/ --strip-components=4 \
     && rm -rf rust.asc rust.tar.gz rust \
-    && cargo install --root /usr/local --version "=0.6.1" --locked cargo-about \
+    && cargo install --root /usr/local --version "=0.6.6" --locked cargo-about \
     && cargo install --root /usr/local --version "=2.0.2" --locked cargo-deb \
     && cargo install --root /usr/local --version "=0.14.21" --locked cargo-deny \
     && cargo install --root /usr/local --version "=0.1.0" --locked cargo-deplint \
     && cargo install --root /usr/local --version ="0.9.28" --locked cargo-hakari \
     && cargo install --root /usr/local --version "=0.9.72" --locked cargo-nextest \
     && cargo install --root /usr/local --version "=0.6.11" --locked cargo-llvm-cov \
-    && cargo install --root /usr/local --version "=0.1.50" --locked --features=vendored-openssl cargo-udeps \
+    && cargo install --root /usr/local --version "=0.1.55" --locked --features=vendored-openssl cargo-udeps \
     && cargo install --root /usr/local --version "=0.2.15" --locked --no-default-features --features=s3,openssl/vendored sccache \
     && cargo install --root /usr/local --version "=0.3.6" --locked cargo-binutils \
     && cargo install --root /usr/local --version "=0.13.0" --locked wasm-pack
@@ -326,7 +327,17 @@ RUN curl -fsSL https://github.com/deb-s3/deb-s3/releases/download/0.11.3/deb-s3-
 RUN curl -fsSL "https://awscli.amazonaws.com/awscli-exe-linux-$ARCH_GCC-2.17.2.zip" > awscli.zip \
     && unzip awscli.zip \
     && ./aws/install \
-    && rm -rf aws
+    && rm -rf aws awscli.zip
+
+# Install the gcloud CLI.
+
+RUN arch_gcloud=$(echo "$ARCH_GCC" | sed -e "s/aarch64/arm/" -e "s/amd64/x86_64/") \
+    && curl -fsSL "https://storage.googleapis.com/cloud-sdk-release/google-cloud-cli-507.0.0-linux-$arch_gcloud.tar.gz" > gcloud.tar.gz \
+    && tar -xzf gcloud.tar.gz -C /opt \
+    && rm gcloud.tar.gz \
+    && CLOUDSDK_CORE_DISABLE_PROMPTS=1 /opt/google-cloud-sdk/install.sh --path-update false \
+    && /opt/google-cloud-sdk/bin/gcloud config set disable_usage_reporting false \
+    && /opt/google-cloud-sdk/bin/gcloud components install gke-gcloud-auth-plugin
 
 # Install docs site dependencies. These are towards the end for the same reason
 # as the Python dependencies. These are only supported on x86_64 at the moment.
@@ -382,6 +393,12 @@ RUN curl -fsSL https://releases.hashicorp.com/terraform/1.9.8/terraform_1.9.8_li
     && chmod +x /usr/local/bin/terraform \
     && rm terraform.zip
 
+RUN curl -fsSL https://github.com/mikefarah/yq/releases/download/v4.45.1/yq_linux_$ARCH_GO > yq \
+    && if [ $ARCH_GO = amd64 ]; then echo '654d2943ca1d3be2024089eb4f270f4070f491a0610481d128509b2834870049 yq' | sha256sum --check; fi \
+    && if [ $ARCH_GO = arm64 ]; then echo 'ceea73d4c86f2e5c91926ee0639157121f5360da42beeb8357783d79c2cc6a1d yq' | sha256sum --check; fi \
+    && chmod +x yq \
+    && mv yq /usr/local/bin
+
 # Hardcode some known SSH hosts, or else SSH will ask whether the host is
 # trustworthy on the first connection.
 
@@ -404,7 +421,7 @@ ENV TARGET_CC=$CC
 ENV TARGET_CXX=$CXX
 ENV TARGET_CXXSTDLIB=static=stdc++
 ENV TARGET_RANLIB=$RANLIB
-ENV PATH=/opt/x-tools/$ARCH_GCC-unknown-linux-gnu/bin:$PATH
+ENV PATH=/opt/google-cloud-sdk/bin:/opt/x-tools/$ARCH_GCC-unknown-linux-gnu/bin:$PATH
 ENV CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER=x86_64-unknown-linux-gnu-cc
 ENV CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER=aarch64-unknown-linux-gnu-cc
 ENV CARGO_TARGET_DIR=/mnt/build

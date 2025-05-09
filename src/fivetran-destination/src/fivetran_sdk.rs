@@ -15,6 +15,6 @@
     clippy::as_conversions
 )]
 mod proto {
-    include!(concat!(env!("OUT_DIR"), "/fivetran_sdk.rs"));
+    include!(concat!(env!("OUT_DIR"), "/fivetran_sdk.v2.rs"));
 }
 pub use proto::*;

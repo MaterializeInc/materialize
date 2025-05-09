@@ -345,15 +345,15 @@ pub mod types;
 pub use crate::codec::Codec;
 pub use crate::decode::public_decoders::*;
 pub use crate::decode::{
-    give_value, AvroArrayAccess, AvroDecodable, AvroDecode, AvroDeserializer, AvroFieldAccess,
-    AvroMapAccess, AvroRead, AvroRecordAccess, GeneralDeserializer, Skip, StatefulAvroDecodable,
-    ValueOrReader,
+    AvroArrayAccess, AvroDecodable, AvroDecode, AvroDeserializer, AvroFieldAccess, AvroMapAccess,
+    AvroRead, AvroRecordAccess, GeneralDeserializer, Skip, StatefulAvroDecodable, ValueOrReader,
+    give_value,
 };
 pub use crate::encode::encode as encode_unchecked;
-pub use crate::reader::{from_avro_datum, Block, BlockIter, Reader};
+pub use crate::reader::{Block, BlockIter, Reader, from_avro_datum};
 pub use crate::schema::{ParseSchemaError, Schema};
 pub use crate::types::SchemaResolutionError;
-pub use crate::writer::{to_avro_datum, write_avro_datum, ValidationError, Writer};
+pub use crate::writer::{ValidationError, Writer, to_avro_datum, write_avro_datum};
 
 #[cfg(test)]
 mod tests {

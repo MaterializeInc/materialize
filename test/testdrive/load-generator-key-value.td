@@ -18,6 +18,37 @@ ALTER SYSTEM SET enable_load_generator_key_value = true
 
 > CREATE CLUSTER lg_cluster SIZE '${arg.default-replica-size}'
 
+# Error if trying to create with subsources
+! CREATE SOURCE g FROM LOAD GENERATOR KEY VALUE(
+    KEYS 8,
+    PARTITIONS 1,
+    SNAPSHOT ROUNDS 1,
+    VALUE SIZE 1,
+    SEED 42,
+    BATCH SIZE 4
+    )  FOR ALL TABLES;
+contains:FOR ALL TABLES
+
+! CREATE SOURCE g FROM LOAD GENERATOR KEY VALUE(
+    KEYS 8,
+    PARTITIONS 1,
+    SNAPSHOT ROUNDS 1,
+    VALUE SIZE 1,
+    SEED 42,
+    BATCH SIZE 4
+    )  FOR TABLES ("foo");
+contains:FOR TABLES
+
+! CREATE SOURCE g FROM LOAD GENERATOR KEY VALUE(
+    KEYS 8,
+    PARTITIONS 1,
+    SNAPSHOT ROUNDS 1,
+    VALUE SIZE 1,
+    SEED 42,
+    BATCH SIZE 4
+    )  FOR SCHEMAS ("foo");
+contains:FOR SCHEMAS
+
 # A loadgen that only snapshots.
 > CREATE SOURCE up_no_update
   IN CLUSTER lg_cluster

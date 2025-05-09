@@ -26,7 +26,8 @@ certificates) can be specified as plain `text`, or also stored as secrets.
 An Amazon Web Services (AWS) connection provides Materialize with access to an
 Identity and Access Management (IAM) user or role in your AWS account. You can
 use AWS connections to perform [bulk exports to Amazon S3](/serve-results/s3/),
-or perform [authentication with an Amazon MSK cluster](#kafka-aws-connection).
+perform [authentication with an Amazon MSK cluster](#kafka-aws-connection), or
+perform [authentication with an Amazon RDS MySQL database](#mysql-aws-connection).
 
 {{< diagram "create-connection-aws.svg" >}}
 
@@ -115,7 +116,7 @@ assume:
 <th>Trust policy</th>
 <tr>
 <td><code>WarehouseExport</code></td>
-<td>400121260767</td>
+<td>000000000000</td>
 <td>
 
 ```json
@@ -125,7 +126,7 @@ assume:
         {
             "Effect": "Allow",
             "Principal": {
-                "AWS": "arn:aws:iam::664411391173:role/MaterializeConnection"
+                "AWS": "arn:aws:iam::000000000000:role/MaterializeConnection"
             },
             "Action": "sts:AssumeRole",
             "Condition": {
@@ -146,21 +147,23 @@ To create an AWS connection that will assume the `WarehouseExport` role:
 
 ```mzsql
 CREATE CONNECTION aws_role_assumption TO AWS (
-    ASSUME ROLE ARN = 'arn:aws:iam::400121260767:role/WarehouseExport'
+    ASSUME ROLE ARN = 'arn:aws:iam::000000000000:role/WarehouseExport'
 );
 ```
 {{< /tab >}}
 
 {{< tab "Credentials">}}
 {{< warning >}}
+
 Use of credentials-based authentication is deprecated.  AWS strongly encourages
 the use of role assumption-based authentication instead.
+
 {{< /warning >}}
 
 To create an AWS connection that uses static access key credentials:
 
 ```mzsql
-CREATE SECRET aws_secret_access_key = '...';
+CREATE SECRET aws_secret_access_key AS '...';
 CREATE CONNECTION aws_credentials TO AWS (
     ACCESS KEY ID = 'ASIAV2KIV5LPTG6HGXG6',
     SECRET ACCESS KEY = SECRET aws_secret_access_key
@@ -193,7 +196,7 @@ connections to create [sources](/sql/create-source/kafka) and [sinks](/sql/creat
 | `SSL CERTIFICATE`                         | secret or `text` | Your TLS certificate in PEM format for SSL client authentication. If unspecified, no client authentication is performed.<br><br>Only valid when the security protocol is `SSL` or `SASL_SSL`.
 | `SSL KEY`                                 | secret           | Your TLS certificate's key in PEM format.<br><br>Required and only valid when `SSL CERTIFICATE` is specified.
 | `SSH TUNNEL`                              | object name      | The name of an [SSH tunnel connection](#ssh-tunnel) to route network traffic through by default.
-| `AWS CONNECTION` <a name="kafka-aws-connection"></a>  | object name      | The name of an [AWS connection](#aws) to use when performing IAM authentication with an Amazon MSK cluster.<br><br>Only valid if the security protocol is `SASL_PLAINTEXT` or `SASL_SSL`.<br><br>***Private preview.** This option has known performance or stability issues and is under active development.*
+| `AWS CONNECTION` <a name="kafka-aws-connection"></a>  | object name      | The name of an [AWS connection](#aws) to use when performing IAM authentication with an Amazon MSK cluster.<br><br>Only valid if the security protocol is `SASL_PLAINTEXT` or `SASL_SSL`.
 | `AWS PRIVATELINK`                         | object name      | The name of an [AWS PrivateLink connection](#aws-privatelink) to route network traffic through. <br><br>Exactly one of `BROKER`, `BROKERS`, or `AWS PRIVATELINK` must be specified.
 | `PROGRESS TOPIC`                          | `text`           | The name of a topic that Kafka sinks can use to track internal consistency metadata. Default: `_materialize-progress-{REGION ID}-{CONNECTION ID}`.
 | `PROGRESS TOPIC REPLICATION FACTOR`       | `int`            | {{< warn-if-unreleased-inline "v0.106" >}} The partition count to use when creating the progress topic (if the Kafka topic does not already exist).<br>Default: Broker's default.
@@ -310,11 +313,9 @@ CREATE CONNECTION kafka_connection TO KAFKA (
 
 {{< tab "AWS IAM">}}
 
-{{< private-preview />}}
-
 ```mzsql
 CREATE CONNECTION aws_msk TO AWS (
-    ASSUME ROLE ARN = 'arn:aws:iam::400121260767:role/MaterializeMSK'
+    ASSUME ROLE ARN = 'arn:aws:iam::000000000000:role/MaterializeMSK'
 );
 
 CREATE CONNECTION kafka_msk TO KAFKA (
@@ -632,16 +633,17 @@ MySQL connections to create [sources](/sql/create-source/mysql).
 
 #### Connection options {#mysql-options}
 
-Field                       | Value            | Required | Description
-----------------------------|------------------|:--------:|-----------------------------
-`HOST`                      | `text`           | ✓        | Database hostname.
-`PORT`                      | `integer`        |          | Default: `3306`. Port number to connect to at the server host.
-`USER`                      | `text`           | ✓        | Database username.
-`PASSWORD`                  | secret           |          | Password for the connection.
-`SSL CERTIFICATE AUTHORITY` | secret or `text` |          | The certificate authority (CA) certificate in PEM format. Used for both SSL client and server authentication. If unspecified, uses the system's default CA certificates.
-`SSL MODE`                  | `text`           |          | Default: `disabled`. Enables SSL connections if set to `required`, `verify_ca`, or `verify_identity`. See the [MySQL documentation](https://dev.mysql.com/doc/refman/8.0/en/using-encrypted-connections.html) for more details.
-`SSL CERTIFICATE`           | secret or `text` |          | Client SSL certificate in PEM format.
-`SSL KEY`                   | secret           |          | Client SSL key in PEM format.
+Field                                                | Value            | Required | Description
+-----------------------------------------------------|------------------|:--------:|-----------------------------
+`HOST`                                               | `text`           | ✓        | Database hostname.
+`PORT`                                               | `integer`        |          | Default: `3306`. Port number to connect to at the server host.
+`USER`                                               | `text`           | ✓        | Database username.
+`PASSWORD`                                           | secret           |          | Password for the connection.
+`SSL CERTIFICATE AUTHORITY`                          | secret or `text` |          | The certificate authority (CA) certificate in PEM format. Used for both SSL client and server authentication. If unspecified, uses the system's default CA certificates.
+`AWS CONNECTION` <a name="mysql-aws-connection"></a> | object name      |          | The name of an [AWS connection](#aws) to use when performing IAM authentication with an Amazon RDS MySQL cluster.<br><br>Only valid if `SSL MODE` is set to `required`, `verify_ca`, or `verify_identity`. <br><br>Incompatible with `PASSWORD` being set.
+`SSL MODE`                                           | `text`           |          | Default: `disabled`. Enables SSL connections if set to `required`, `verify_ca`, or `verify_identity`. See the [MySQL documentation](https://dev.mysql.com/doc/refman/8.0/en/using-encrypted-connections.html) for more details.
+`SSL CERTIFICATE`                                    | secret or `text` |          | Client SSL certificate in PEM format.
+`SSL KEY`                                            | secret           |          | Client SSL key in PEM format.
 
 #### `WITH` options {#mysql-with-options}
 
@@ -724,6 +726,25 @@ CREATE CONNECTION mysql_connection TO MYSQL (
 For step-by-step instructions on creating SSH tunnel connections and configuring
 an SSH bastion server to accept connections from Materialize, check [this guide](/ops/network-security/ssh-tunnel/).
 
+{{< /tab >}}
+
+{{< tab "AWS IAM">}}
+
+##### Example {#mysql-aws-connection-example}
+
+```mzsql
+CREATE CONNECTION aws_rds_mysql TO AWS (
+    ASSUME ROLE ARN = 'arn:aws:iam::000000000000:role/MaterializeRDS'
+);
+
+CREATE CONNECTION mysql_connection TO MYSQL (
+    HOST 'instance.foo000.us-west-1.rds.amazonaws.com',
+    PORT 3306,
+    USER 'root',
+    AWS CONNECTION aws_rds_mysql,
+    SSL MODE 'verify_identity'
+);
+```
 {{< /tab >}}
 {{< /tabs >}}
 
