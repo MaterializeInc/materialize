@@ -862,6 +862,8 @@ an SSH bastion server to accept connections from Materialize, check [this guide]
 
 ### SQL Server
 
+{{< private-preview />}}
+
 A SQL Server connection establishes a link to a single database of a
 [SQL Server] instance. You can use SQL Server connections to create [sources](/sql/create-source/sql-server).
 
