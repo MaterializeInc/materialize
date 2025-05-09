@@ -1317,9 +1317,9 @@ pub fn plan_params<'a>(
 
     let mut datums = Row::default();
     let mut packer = datums.packer();
-    let mut types = Vec::new();
+    let mut actual_types = Vec::new();
     let temp_storage = &RowArena::new();
-    for (mut expr, ty) in params.into_iter().zip(&desc.param_types) {
+    for (mut expr, expected_ty) in params.into_iter().zip(&desc.param_types) {
         transform_ast::transform(scx, &mut expr)?;
 
         let ecx = &ExprContext {
@@ -1333,20 +1333,20 @@ pub fn plan_params<'a>(
             allow_windows: false,
         };
         let ex = plan_expr(ecx, &expr)?.type_as_any(ecx)?;
-        let st = ecx.scalar_type(&ex);
-        if st != *ty {
+        let actual_ty = ecx.scalar_type(&ex);
+        if actual_ty != *expected_ty {
             sql_bail!(
                 "mismatched parameter type: expected {}, got {}",
-                ecx.humanize_scalar_type(ty, false),
-                ecx.humanize_scalar_type(&st, false),
+                ecx.humanize_scalar_type(expected_ty, false),
+                ecx.humanize_scalar_type(&actual_ty, false),
             );
         }
         let ex = ex.lower_uncorrelated()?;
         let evaled = ex.eval(&[], temp_storage)?;
         packer.push(evaled);
-        types.push(st);
+        actual_types.push(actual_ty);
     }
-    Ok(Params { datums, types })
+    Ok(Params { datums, types: actual_types })
 }
 
 pub fn plan_index_exprs<'a>(
