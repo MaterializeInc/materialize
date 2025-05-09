@@ -305,6 +305,11 @@ impl ComputeState {
             std::sync::atomic::Ordering::Relaxed,
         );
 
+        crate::row_spine::DICTIONARY_COMPRESSION.store(
+            ENABLE_ARRANGEMENT_DICTIONARY_COMPRESSION.get(config),
+            std::sync::atomic::Ordering::Relaxed,
+        );
+
         let enable_columnar_lgalloc = ENABLE_COLUMNAR_LGALLOC.get(config);
         mz_timely_util::containers::set_enable_columnar_lgalloc(enable_columnar_lgalloc);
 
