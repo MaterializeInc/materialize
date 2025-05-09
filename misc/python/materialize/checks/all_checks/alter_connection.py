@@ -272,7 +272,7 @@ class AlterConnectionDependencyOrder(Check):
                 $ set-from-sql var=other_ssh_id
                 SELECT id FROM mz_connections WHERE name = 'other_ssh';
 
-                > SELECT name FROM mz_connections WHERE create_sql LIKE '%${other_ssh_id}%';
+                > SELECT name FROM mz_connections WHERE create_sql LIKE '%[${other_ssh_id} AS %';
                 my_kafka_alter_conn
                 """
             )
