@@ -156,9 +156,9 @@ use crate::plan::{
     CreateSecretPlan, CreateSinkPlan, CreateSourcePlan, CreateTablePlan, CreateTypePlan,
     CreateViewPlan, DataSourceDesc, DropObjectsPlan, DropOwnedPlan, HirRelationExpr, Index,
     Ingestion, MaterializedView, NetworkPolicyRule, NetworkPolicyRuleAction,
-    NetworkPolicyRuleDirection, Params, Plan, PlanClusterOption, PlanNotice, PolicyAddress,
-    QueryContext, ReplicaConfig, Secret, Sink, Source, Table, TableDataSource, Type, VariableValue,
-    View, WebhookBodyFormat, WebhookHeaderFilters, WebhookHeaders, WebhookValidation, literal,
+    NetworkPolicyRuleDirection, Plan, PlanClusterOption, PlanNotice, PolicyAddress, QueryContext,
+    ReplicaConfig, Secret, Sink, Source, Table, TableDataSource, Type, VariableValue, View,
+    WebhookBodyFormat, WebhookHeaderFilters, WebhookHeaders, WebhookValidation, literal,
     plan_utils, query, transform_ast,
 };
 use crate::session::vars::{
@@ -2483,7 +2483,6 @@ pub fn describe_create_view(
 pub fn plan_view(
     scx: &StatementContext,
     def: &mut ViewDefinition<Aug>,
-    params: &Params,
     temporary: bool,
 ) -> Result<(QualifiedItemName, View), PlanError> {
     let create_sql = normalize::create_statement(
@@ -2502,7 +2501,7 @@ pub fn plan_view(
     } = def;
 
     let query::PlannedRootQuery {
-        mut expr,
+        expr,
         mut desc,
         finishing,
         scope: _,
@@ -2516,8 +2515,10 @@ pub fn plan_view(
         &finishing,
         expr.arity()
     ));
+    if expr.contains_parameters()? {
+        sql_bail!("views cannot have parameters")
+    }
 
-    expr.bind_parameters(params)?;
     let dependencies = expr
         .depends_on()
         .into_iter()
@@ -2555,14 +2556,13 @@ pub fn plan_view(
 pub fn plan_create_view(
     scx: &StatementContext,
     mut stmt: CreateViewStatement<Aug>,
-    params: &Params,
 ) -> Result<Plan, PlanError> {
     let CreateViewStatement {
         temporary,
         if_exists,
         definition,
     } = &mut stmt;
-    let (name, view) = plan_view(scx, definition, params, *temporary)?;
+    let (name, view) = plan_view(scx, definition, *temporary)?;
 
     // Override the statement-level IfExistsBehavior with Skip if this is
     // explicitly requested in the PlanContext (the default is `false`).
@@ -2668,7 +2668,6 @@ pub fn describe_alter_network_policy(
 pub fn plan_create_materialized_view(
     scx: &StatementContext,
     mut stmt: CreateMaterializedViewStatement<Aug>,
-    params: &Params,
 ) -> Result<Plan, PlanError> {
     let cluster_id =
         crate::plan::statement::resolve_cluster_for_materialized_view(scx.catalog, &stmt)?;
@@ -2684,7 +2683,7 @@ pub fn plan_create_materialized_view(
     let name = scx.allocate_qualified_name(partial_name.clone())?;
 
     let query::PlannedRootQuery {
-        mut expr,
+        expr,
         mut desc,
         finishing,
         scope: _,
@@ -2694,8 +2693,9 @@ pub fn plan_create_materialized_view(
         &finishing,
         expr.arity()
     ));
-
-    expr.bind_parameters(params)?;
+    if expr.contains_parameters()? {
+        sql_bail!("materialized views cannot have parameters")
+    }
 
     plan_utils::maybe_rename_columns(
         format!("materialized view {}", scx.catalog.resolve_full_name(&name)),
@@ -2963,7 +2963,6 @@ generate_extracted_config!(
 pub fn plan_create_continual_task(
     scx: &StatementContext,
     mut stmt: CreateContinualTaskStatement<Aug>,
-    params: &Params,
 ) -> Result<Plan, PlanError> {
     match &stmt.sugar {
         None => scx.require_feature_flag(&vars::ENABLE_CONTINUAL_TASK_CREATE)?,
@@ -3061,7 +3060,7 @@ pub fn plan_create_continual_task(
     for (idx, stmt) in stmt.stmts.iter().enumerate() {
         let query = continual_task_query(&ct_name, stmt).ok_or_else(|| sql_err!("TODO(ct3)"))?;
         let query::PlannedRootQuery {
-            mut expr,
+            expr,
             desc: desc_query,
             finishing,
             scope: _,
@@ -3072,7 +3071,9 @@ pub fn plan_create_continual_task(
             &finishing,
             expr.arity()
         ));
-        expr.bind_parameters(params)?;
+        if expr.contains_parameters()? {
+            sql_bail!("continual tasks cannot have parameters")
+        }
         let expr = match desc.as_mut() {
             None => {
                 desc = Some(desc_query);

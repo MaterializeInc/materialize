@@ -531,7 +531,7 @@ fn plan_explainee(
                 );
             }
 
-            let Plan::CreateView(plan) = ddl::plan_create_view(scx, *stmt, params)? else {
+            let Plan::CreateView(plan) = ddl::plan_create_view(scx, *stmt)? else {
                 sql_bail!("expected CreateViewPlan plan");
             };
 
@@ -552,7 +552,7 @@ fn plan_explainee(
             }
 
             let Plan::CreateMaterializedView(plan) =
-                ddl::plan_create_materialized_view(scx, *stmt, params)?
+                ddl::plan_create_materialized_view(scx, *stmt)?
             else {
                 sql_bail!("expected CreateMaterializedViewPlan plan");
             };
@@ -696,7 +696,6 @@ pub fn plan_explain_pushdown(
 pub fn plan_explain_timestamp(
     scx: &StatementContext,
     explain: ExplainTimestampStatement<Aug>,
-    params: &Params,
 ) -> Result<Plan, PlanError> {
     let format = match explain.format() {
         mz_sql_parser::ast::ExplainFormat::Text => ExplainFormat::Text,
@@ -707,12 +706,14 @@ pub fn plan_explain_timestamp(
 
     let raw_plan = {
         let query::PlannedRootQuery {
-            expr: mut raw_plan,
+            expr: raw_plan,
             desc: _,
             finishing: _,
             scope: _,
         } = query::plan_root_query(scx, explain.select.query, QueryLifetime::OneShot)?;
-        raw_plan.bind_parameters(params)?;
+        if raw_plan.contains_parameters()? {
+            sql_bail!("EXPLAIN TIMESTAMP cannot have parameters")
+        }
 
         raw_plan
     };

@@ -2120,6 +2120,18 @@ impl HirRelationExpr {
         })
     }
 
+    pub fn contains_parameters(&self) -> Result<bool, PlanError> {
+        let mut contains_parameters = false;
+        #[allow(deprecated)]
+        self.visit_scalar_expressions(0, &mut |e: &HirScalarExpr, _: usize| {
+            if e.contains_parameters() {
+                contains_parameters = true;
+            }
+            Ok::<(), PlanError>(())
+        })?;
+        Ok(contains_parameters)
+    }
+
     /// See the documentation for [`HirScalarExpr::splice_parameters`].
     pub fn splice_parameters(&mut self, params: &[HirScalarExpr], depth: usize) {
         #[allow(deprecated)]
@@ -3774,12 +3786,6 @@ impl AbstractExpr for HirScalarExpr {
 }
 
 impl AggregateExpr {
-    /// Replaces any parameter references in the expression with the
-    /// corresponding datum from `parameters`.
-    pub fn bind_parameters(&mut self, params: &Params) -> Result<(), PlanError> {
-        self.expr.bind_parameters(params)
-    }
-
     pub fn typ(
         &self,
         outers: &[RelationType],
