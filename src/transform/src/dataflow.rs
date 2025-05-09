@@ -29,6 +29,7 @@ use mz_repr::explain::{DeltaJoinIndexUsageType, IndexUsageType, UsedIndexes};
 use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
 
+use crate::demand::Demand;
 use crate::monotonic::MonotonicFlag;
 use crate::notice::RawOptimizerNotice;
 use crate::{IndexOracle, Optimizer, TransformCtx, TransformError};
@@ -91,6 +92,10 @@ pub fn optimize_dataflow(
         )?;
 
         optimize_dataflow_monotonic(dataflow, transform_ctx)?;
+
+        for object in dataflow.objects_to_build.iter() {
+            Demand::soft_assert_no_more_projection_pushdown(&object.plan.0)?;
+        }
     }
 
     prune_and_annotate_dataflow_index_imports(
