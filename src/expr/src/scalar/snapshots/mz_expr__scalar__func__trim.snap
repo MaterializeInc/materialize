@@ -1,6 +1,6 @@
 ---
 source: src/expr/src/scalar/func.rs
-expression: "#[sqlfunc(output_type = \"String\", propagates_nulls = true)]\nfn encode<'a>(\n    bytes: Datum<'a>,\n    format: Datum<'a>,\n    temp_storage: &'a RowArena,\n) -> Result<Datum<'a>, EvalError> {\n    let format = encoding::lookup_format(format.unwrap_str())?;\n    let out = format.encode(bytes.unwrap_bytes());\n    Ok(Datum::from(temp_storage.push_string(out)))\n}\n"
+expression: "#[sqlfunc(sqlname = \"btrim\", output_type = \"String\", propagates_nulls = true)]\nfn trim<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {\n    let trim_chars = b.unwrap_str();\n    Datum::from(a.unwrap_str().trim_matches(|c| trim_chars.contains(c)))\n}\n"
 ---
 #[derive(
     proptest_derive::Arbitrary,
@@ -15,18 +15,18 @@ expression: "#[sqlfunc(output_type = \"String\", propagates_nulls = true)]\nfn e
     Hash,
     mz_lowertest::MzReflect
 )]
-pub struct Encode;
-impl<'a> crate::func::binary::EagerBinaryFunc<'a> for Encode {
+pub struct Trim;
+impl<'a> crate::func::binary::EagerBinaryFunc<'a> for Trim {
     type Input1 = Datum<'a>;
     type Input2 = Datum<'a>;
-    type Output = Result<Datum<'a>, EvalError>;
+    type Output = Datum<'a>;
     fn call(
         &self,
         a: Self::Input1,
         b: Self::Input2,
         temp_storage: &'a mz_repr::RowArena,
     ) -> Self::Output {
-        encode(a, b, temp_storage)
+        trim(a, b)
     }
     fn output_type(
         &self,
@@ -53,17 +53,12 @@ impl<'a> crate::func::binary::EagerBinaryFunc<'a> for Encode {
         true
     }
 }
-impl std::fmt::Display for Encode {
+impl std::fmt::Display for Trim {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-        f.write_str(stringify!(encode))
+        f.write_str("btrim")
     }
 }
-fn encode<'a>(
-    bytes: Datum<'a>,
-    format: Datum<'a>,
-    temp_storage: &'a RowArena,
-) -> Result<Datum<'a>, EvalError> {
-    let format = encoding::lookup_format(format.unwrap_str())?;
-    let out = format.encode(bytes.unwrap_bytes());
-    Ok(Datum::from(temp_storage.push_string(out)))
+fn trim<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
+    let trim_chars = b.unwrap_str();
+    Datum::from(a.unwrap_str().trim_matches(|c| trim_chars.contains(c)))
 }
