@@ -889,7 +889,13 @@ impl<'a, A: Allocate + 'static> ActiveComputeState<'a, A> {
                 let is_ready = peek.is_ready(upper);
 
                 match is_ready {
-                    Ok(true) => Some(peek.read_result(upper, self.compute_state.max_result_size)),
+                    Ok(true) => {
+                        if let Some(err) = peek.extract_errs(upper) {
+                            Some(err)
+                        } else {
+                            Some(peek.read_result(upper, self.compute_state.max_result_size))
+                        }
+                    }
                     Ok(false) => None,
                     Err(err) => Some(err),
                 }
@@ -1414,18 +1420,33 @@ impl IndexPeek {
         let read_frontier = self.trace_bundle.compaction_frontier();
         assert!(read_frontier.less_equal(&self.peek.timestamp));
 
-        let response = match self.collect_finished_data(max_result_size) {
+        let result = Self::collect_ok_finished_data(
+            &mut self.peek,
+            self.trace_bundle.oks_mut(),
+            max_result_size,
+        );
+
+        let response = match result {
             Ok(rows) => PeekResponse::Rows(RowCollection::new(rows, &self.peek.finishing.order_by)),
             Err(text) => PeekResponse::Error(text),
         };
         response
     }
 
-    /// Collects data for a known-complete peek from the ok stream.
-    fn collect_finished_data(
-        &mut self,
-        max_result_size: u64,
-    ) -> Result<Vec<(Row, NonZeroUsize)>, String> {
+    /// Returns errors from this peeks result, if any. Must only be called when
+    /// this peek is ready.
+    ///
+    /// Errors are returned as a `PeekResponse::Error`.
+    fn extract_errs(&mut self, upper: &mut Antichain<Timestamp>) -> Option<PeekResponse> {
+        self.trace_bundle.oks_mut().read_upper(upper);
+        assert!(!upper.less_equal(&self.peek.timestamp));
+
+        self.trace_bundle.errs_mut().read_upper(upper);
+        assert!(!upper.less_equal(&self.peek.timestamp));
+
+        let read_frontier = self.trace_bundle.compaction_frontier();
+        assert!(read_frontier.less_equal(&self.peek.timestamp));
+
         // Check if there exist any errors and, if so, return whatever one we
         // find first.
         let (mut cursor, storage) = self.trace_bundle.errs_mut().cursor();
@@ -1437,19 +1458,19 @@ impl IndexPeek {
                 }
             });
             if copies.is_negative() {
-                return Err(format!(
+                return Some(PeekResponse::Error(format!(
                     "Invalid data in source errors, saw retractions ({}) for row that does not exist: {}",
                     -copies,
                     cursor.key(&storage),
-                ));
+                )));
             }
             if copies.is_positive() {
-                return Err(cursor.key(&storage).to_string());
+                return Some(PeekResponse::Error(cursor.key(&storage).to_string()));
             }
             cursor.step_key(&storage);
         }
 
-        Self::collect_ok_finished_data(&mut self.peek, self.trace_bundle.oks_mut(), max_result_size)
+        None
     }
 
     /// Collects data for a known-complete peek from the ok stream.
