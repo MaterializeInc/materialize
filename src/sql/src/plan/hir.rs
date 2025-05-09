@@ -2989,7 +2989,7 @@ impl HirScalarExpr {
         self.visit_recursively_mut(0, &mut |_: usize, e: &mut HirScalarExpr| {
             if let HirScalarExpr::Parameter(n, name) = e {
                 let datum = match params.datums.iter().nth(*n - 1) {
-                    None => sql_bail!("there is no parameter ${}", n),
+                    None => return Err(PlanError::UnknownParameter(*n)),
                     Some(datum) => datum,
                 };
                 let scalar_type = &params.types[*n - 1];
