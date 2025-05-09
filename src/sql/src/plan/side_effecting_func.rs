@@ -102,7 +102,7 @@ pub fn plan_select_if_side_effecting(
     let temp_storage = RowArena::new();
     let mut args = vec![];
     for mut arg in sef_call.args {
-        arg.bind_parameters(params)?;
+        arg.bind_parameters(scx, QueryLifetime::OneShot, params)?;
         let arg = arg.lower_uncorrelated()?;
         args.push(arg);
     }

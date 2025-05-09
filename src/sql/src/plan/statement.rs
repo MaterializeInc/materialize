@@ -278,7 +278,10 @@ pub fn plan(
     resolved_ids: &ResolvedIds,
 ) -> Result<Plan, PlanError> {
     let param_types = params
-        .types
+        // We need the `expected_types` here, not the `actual_types`! This is because
+        // `expected_types` is how the parameter expression (e.g. `$1`) looks "from the outside":
+        // `bind_parameters` will insert a cast from the actual type to the expected type.
+        .expected_types
         .iter()
         .enumerate()
         .map(|(i, ty)| (i + 1, ty.clone()))
