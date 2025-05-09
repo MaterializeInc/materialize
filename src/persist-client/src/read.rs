@@ -726,7 +726,6 @@ where
             filter,
             desc,
             part,
-            leased_seqno: self.machine.seqno(),
             lease: Some(self.lease_seqno()),
             filter_pushdown_audit: false,
         }
@@ -752,7 +751,10 @@ where
     /// collected until its lease has been returned.
     fn lease_seqno(&mut self) -> Lease {
         let seqno = self.machine.seqno();
-        let lease = self.leased_seqnos.entry(seqno).or_default();
+        let lease = self
+            .leased_seqnos
+            .entry(seqno)
+            .or_insert_with(|| Lease::new(seqno));
         lease.clone()
     }
 
@@ -1448,7 +1450,7 @@ mod tests {
 
         // Repeat the same process as above, more or less, while fetching + returning parts
         for (mut i, part) in parts.into_iter().enumerate() {
-            let part_seqno = part.leased_seqno;
+            let part_seqno = part.lease.as_ref().unwrap().seqno();
             let last_seqno = this_seqno;
             this_seqno = part_seqno;
             assert!(this_seqno >= last_seqno);
