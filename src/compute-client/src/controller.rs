@@ -53,7 +53,9 @@ use mz_ore::collections::CollectionExt;
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::NowFn;
 use mz_ore::tracing::OpenTelemetryContext;
+use mz_persist_client::HollowBatch;
 use mz_persist_types::PersistLocation;
+use mz_proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
 use mz_repr::{Datum, GlobalId, RelationType, Row, TimestampManipulation};
 use mz_storage_client::controller::StorageController;
 use mz_storage_types::dyncfgs::ORE_OVERFLOWING_BEHAVIOR;
@@ -158,10 +160,26 @@ impl PeekNotification {
             // WIP: Figure out rows and result_size!
             // TODO(aljoscha): We know how to get this from Batch/HollowBatch,
             // but need to do it in adapter which has a PersistClient.
-            PeekResponse::Stashed(_batches) => Self::Success {
-                rows: 1,
-                result_size: 1,
-            },
+            PeekResponse::Stashed(stashed_response) => {
+                let mut rows = 0;
+                let mut result_size = 0;
+                for proto_batch in stashed_response.batches.iter() {
+                    // let batch = HollowBatch::<mz_repr::Timestamp>::from_proto(proto_batch.batch).into_rust_if_so;
+                    let batch: HollowBatch<mz_repr::Timestamp> = proto_batch
+                        .batch
+                        .clone()
+                        .into_rust_if_some("ProtoBatch::batch")
+                        .expect("valid proto batch");
+
+                    rows += batch.len;
+                    result_size += batch.encoded_size_bytes()
+                }
+                tracing::info!(?rows, ?result_size, "result");
+                Self::Success {
+                    rows: u64::cast_from(rows),
+                    result_size: u64::cast_from(result_size),
+                }
+            }
             PeekResponse::Error(err) => Self::Error(err.clone()),
             PeekResponse::Canceled => Self::Canceled,
         }
