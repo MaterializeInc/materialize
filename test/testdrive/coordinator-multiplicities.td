@@ -115,10 +115,10 @@
 2
 
 
-> SELECT * FROM t1 OFFSET 4;
-1
+> SELECT * FROM t1 ORDER BY 1 OFFSET 4;
 2
-2
+<null>
+<null>
 
 > SELECT * FROM t1 OFFSET 999999;
 
