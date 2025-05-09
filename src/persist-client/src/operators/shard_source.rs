@@ -572,9 +572,7 @@ where
                 // seemed to work okay so far. Continue to revisit as necessary.
                 let worker_idx = usize::cast_from(Instant::now().hashed()) % num_workers;
                 let (part, lease) = part_desc.into_exchangeable_part();
-                if let Some(lease) = lease {
-                    leases.borrow_mut().push_at(current_ts.clone(), lease);
-                }
+                leases.borrow_mut().push_at(current_ts.clone(), lease);
                 descs_output.give(&session_cap, (worker_idx, part));
             }
 

@@ -726,7 +726,7 @@ where
             filter,
             desc,
             part,
-            lease: Some(self.lease_seqno()),
+            lease: self.lease_seqno(),
             filter_pushdown_audit: false,
         }
     }
@@ -1450,7 +1450,7 @@ mod tests {
 
         // Repeat the same process as above, more or less, while fetching + returning parts
         for (mut i, part) in parts.into_iter().enumerate() {
-            let part_seqno = part.lease.as_ref().unwrap().seqno();
+            let part_seqno = part.lease.seqno();
             let last_seqno = this_seqno;
             this_seqno = part_seqno;
             assert!(this_seqno >= last_seqno);
@@ -1463,9 +1463,8 @@ mod tests {
             for event in subscribe.next(None).await {
                 if let ListenEvent::Updates(parts) = event {
                     for part in parts {
-                        if let (_, Some(lease)) = part.into_exchangeable_part() {
-                            subsequent_parts.push(lease);
-                        }
+                        let (_, lease) = part.into_exchangeable_part();
+                        subsequent_parts.push(lease);
                     }
                 }
             }
