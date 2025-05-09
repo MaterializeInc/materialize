@@ -57,6 +57,53 @@ Refer to the specific cloud provider guidelines:
 - [Azure Deployment
   guidelines](/installation/install-on-azure/appendix-deployment-guidelines/)
 
+## Custom Cluster Sizes
+
+When installing the materialize helm chart you may specify a list of cluster sizes.
+```yaml
+operator:
+  clusters:
+    sizes:
+    ...
+```
+These cluster sizes will be used for internal clusters, such as the `system_cluster` as well as 
+user clusters. For that reason we recommend that you at minimum keep the 25-200cc cluster sizes.
+If you wish to have have cluster sizes
+| Field   | type | Description |
+| workers | int  | The number of timely workers in your cluster replica. |
+| scale   | int  | The number of processes or pods to use in a cluster replica. |
+| cpu_exclusive  | bool | Whether the workers should attempt to pin to a particular cpu core. |
+| cpu_limit      | float | The k8s limit for CPU for a replica pod in cores. |
+| memory_limit   | float | The k8s limit for memory for a replica pod in bytes. |
+| disk_limit     | float | The size of the nvme persistent volume to provision for a replica pod in bytes. |
+| credits_per_hour | string | This is a cloud attribute that should be set to "0.00" in self-managed. |
+
+### Recommendations for cluster sizes:
+**workers**
+* We recommend using 1 worker per CPU core while maintaining a minimum of 1 worker.
+
+**scale**
+* Scale is used to scale out replicas horrizontally. Each pod will be
+  provisioned using the settings defined in the size definition. This should
+  only be greater than one when a replica needs to take on limits that are
+  greater than the maximum limits permitted on a single node.
+
+**cpu_exclusive**
+* set this to true if and only if a whole number is used for cpu_limit and the cpu management policy is set to static on the k8s cluster.
+
+**cpu_limit**
+* K8s will only allow CPU Affinity for pods taking a whole number of cores (not hyperthreads). When possible use a whole number.
+
+Ratios:
+**CPU : Memory**
+* For most workloads, we find find a 1:8 ratio of cores to Gib to work well, but this can be quite workload dependent.
+
+**Memory : Disk**
+* Materialize attempts to keep actively used data in memory. In order to allow
+  for larger workloads data can spill to disk at some cost for performance.
+  Our current recommendation is a 1:2 ratio of memory to disk.
+
+
 ## See also
 
 - [Configuration](/installation/configuration/)
