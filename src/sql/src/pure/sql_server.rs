@@ -330,24 +330,31 @@ fn generate_source_export_statement_values(
     };
 
     // Filter out columns that the user wanted to exclude.
-    let included_columns = table
-        .columns
-        .iter()
-        .filter_map(|c| c.column_type.as_ref().map(|ct| (c.name.as_ref(), ct)));
+    let included_columns = table.columns.iter().filter_map(|c| {
+        c.column_type
+            .as_ref()
+            .map(|ct| (c.name.as_ref(), ct, c.is_primary_key))
+    });
     let mut column_defs = vec![];
 
-    for (col_name, col_type) in included_columns {
+    for (col_name, col_type, col_is_primary_key) in included_columns {
         let name = Ident::new(col_name)?;
         let ty = mz_pgrepr::Type::from(&col_type.scalar_type);
         let data_type = scx.resolve_type(ty)?;
         let mut col_options = vec![];
 
-        if !col_type.nullable {
+        if col_is_primary_key {
+            col_options.push(mz_sql_parser::ast::ColumnOptionDef {
+                name: None,
+                option: mz_sql_parser::ast::ColumnOption::Unique { is_primary: true },
+            })
+        } else if !col_type.nullable {
             col_options.push(mz_sql_parser::ast::ColumnOptionDef {
                 name: None,
                 option: mz_sql_parser::ast::ColumnOption::NotNull,
             });
         }
+
         column_defs.push(ColumnDef {
             name,
             data_type,

@@ -313,12 +313,29 @@ SELECT
     c.is_nullable as col_nullable,
     c.max_length as col_max_length,
     c.precision as col_precision,
-    c.scale as col_scale
+    c.scale as col_scale,
+    CAST(
+        CASE
+            WHEN tc.constraint_type = 'PRIMARY KEY' THEN 1
+            ELSE 0
+        END AS BIT
+    ) AS col_is_primary_key
 FROM sys.tables t
 JOIN sys.schemas s ON t.schema_id = s.schema_id
 JOIN sys.columns c ON t.object_id = c.object_id
 JOIN sys.types ty ON c.user_type_id = ty.user_type_id
 JOIN cdc.change_tables ch ON t.object_id = ch.source_object_id
+LEFT JOIN information_schema.key_column_usage kc
+    ON kc.table_schema = s.name
+    AND kc.table_name = t.name
+    AND kc.column_name = c.name
+LEFT JOIN information_schema.table_constraints tc
+    ON tc.constraint_catalog = kc.constraint_catalog
+    AND tc.constraint_schema = kc.constraint_schema
+    AND tc.constraint_name = kc.constraint_name
+    AND tc.table_schema = kc.table_schema
+    AND tc.table_name = kc.table_name
+    AND tc.constraint_type = 'PRIMARY KEY';
 ";
     fn get_value<'a, T: tiberius::FromSql<'a>>(
         row: &'a tiberius::Row,
@@ -342,6 +359,7 @@ JOIN cdc.change_tables ch ON t.object_id = ch.source_object_id
             name: Arc::clone(&column_name),
             data_type: get_value::<&str>(&row, "col_type")?.into(),
             is_nullable: get_value(&row, "col_nullable")?,
+            is_primary_key: get_value(&row, "col_is_primary_key")?,
             max_length: get_value(&row, "col_max_length")?,
             precision: get_value(&row, "col_precision")?,
             scale: get_value(&row, "col_scale")?,

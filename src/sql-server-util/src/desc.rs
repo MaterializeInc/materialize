@@ -174,6 +174,8 @@ pub struct SqlServerColumnDesc {
     /// Note: This type might differ from the `decode_type`, e.g. a user can
     /// specify `TEXT COLUMNS` to decode columns as text.
     pub column_type: Option<ColumnType>,
+    /// Whether or not this column is the primary key for the table.
+    pub is_primary_key: bool,
     /// Rust type we should parse the data from a [`tiberius::Row`] as.
     pub decode_type: SqlServerColumnDecodeType,
     /// Raw type of the column as we read it from upstream.
@@ -206,6 +208,7 @@ impl SqlServerColumnDesc {
         };
         SqlServerColumnDesc {
             name: Arc::clone(&raw.name),
+            is_primary_key: raw.is_primary_key,
             column_type,
             decode_type,
             raw_type: Arc::clone(&raw.data_type),
@@ -239,6 +242,7 @@ impl RustType<ProtoSqlServerColumnDesc> for SqlServerColumnDesc {
         ProtoSqlServerColumnDesc {
             name: self.name.to_string(),
             column_type: self.column_type.into_proto(),
+            is_primary_key: self.is_primary_key,
             decode_type: Some(self.decode_type.into_proto()),
             raw_type: self.raw_type.to_string(),
         }
@@ -248,6 +252,7 @@ impl RustType<ProtoSqlServerColumnDesc> for SqlServerColumnDesc {
         Ok(SqlServerColumnDesc {
             name: proto.name.into(),
             column_type: proto.column_type.into_rust()?,
+            is_primary_key: proto.is_primary_key,
             decode_type: proto
                 .decode_type
                 .into_rust_if_some("ProtoSqlServerColumnDesc::decode_type")?,
@@ -482,6 +487,8 @@ pub struct SqlServerColumnRaw {
     pub data_type: Arc<str>,
     /// Whether or not the column is nullable.
     pub is_nullable: bool,
+    /// Whether or not the column is the primary key for the table.
+    pub is_primary_key: bool,
     /// Maximum length (in bytes) of the column.
     ///
     /// For `varchar(max)`, `nvarchar(max)`, `varbinary(max)`, or `xml` this will be `-1`. For
@@ -997,6 +1004,7 @@ mod tests {
                 name: name.into(),
                 data_type: data_type.into(),
                 is_nullable: false,
+                is_primary_key: false,
                 max_length: 0,
                 precision: 0,
                 scale: 0,
