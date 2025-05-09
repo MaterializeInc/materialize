@@ -895,22 +895,29 @@ impl<'a, A: Allocate + 'static> ActiveComputeState<'a, A> {
                         if let Some(err) = peek.extract_errs(upper) {
                             Some(err)
                         } else {
-                            let _span =
-                                span!(parent: &peek.span, Level::DEBUG, "process_stashed_peek")
-                                    .entered();
-                            let stash_task = StashPeekResponse::start_upload(
-                                Arc::clone(&self.compute_state.persist_clients),
+                            let peek_stash_enabled =
+                                ENABLE_PEEK_RESPONSE_STASH.get(&self.compute_state.worker_config);
+
+                            if peek_stash_enabled {
+                                let _span =
+                                    span!(parent: &peek.span, Level::DEBUG, "process_stashed_peek")
+                                        .entered();
+                                let stash_task = StashPeekResponse::start_upload(
+                                    Arc::clone(&self.compute_state.persist_clients),
+                                    self.compute_state
+                                        .peek_stash_persist_location
+                                        .as_ref()
+                                        .expect("missing persist location for peek responses"),
+                                    peek.peek.clone(),
+                                    peek.trace_bundle.clone(),
+                                );
                                 self.compute_state
-                                    .peek_stash_persist_location
-                                    .as_ref()
-                                    .expect("missing persist location for peek responses"),
-                                peek.peek.clone(),
-                                peek.trace_bundle.clone(),
-                            );
-                            self.compute_state
-                                .pending_peek_responses
-                                .insert(peek.peek.uuid, stash_task);
-                            return;
+                                    .pending_peek_responses
+                                    .insert(peek.peek.uuid, stash_task);
+                                return;
+                            } else {
+                                Some(peek.read_result(upper, self.compute_state.max_result_size))
+                            }
                         }
                     }
                     Ok(false) => None,
