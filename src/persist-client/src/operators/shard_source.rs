@@ -696,17 +696,17 @@ mod tests {
     use super::*;
     use std::sync::Arc;
 
+    use crate::operators::shard_source::shard_source;
+    use crate::{Diagnostics, ShardId};
+    use mz_persist::location::SeqNo;
     use timely::dataflow::Scope;
     use timely::dataflow::operators::Leave;
     use timely::dataflow::operators::Probe;
     use timely::progress::Antichain;
 
-    use crate::operators::shard_source::shard_source;
-    use crate::{Diagnostics, ShardId};
-
     #[mz_ore::test]
     fn test_lease_manager() {
-        let lease = Lease::default();
+        let lease = Lease::new(SeqNo::minimum());
         let mut manager = LeaseManager::new();
         for t in 0u64..10 {
             manager.push_at(t, lease.clone());

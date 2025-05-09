@@ -428,10 +428,19 @@ where
 ///
 /// Generally the state and lease are bundled together, as in [LeasedBatchPart]... but sometimes
 /// it's necessary to handle them separately, so this struct is exposed as well. Handle with care.
-#[derive(Clone, Debug, Default)]
-pub(crate) struct Lease(Arc<()>);
+#[derive(Clone, Debug)]
+pub(crate) struct Lease(Arc<SeqNo>);
 
 impl Lease {
+    pub fn new(seqno: SeqNo) -> Self {
+        Self(Arc::new(seqno))
+    }
+
+    #[cfg(test)]
+    pub fn seqno(&self) -> SeqNo {
+        *self.0
+    }
+
     /// Returns the number of live copies of this lease, including this one.
     pub fn count(&self) -> usize {
         Arc::strong_count(&self.0)
@@ -470,10 +479,6 @@ pub struct LeasedBatchPart<T> {
     pub(crate) filter: FetchBatchFilter<T>,
     pub(crate) desc: Description<T>,
     pub(crate) part: BatchPart<T>,
-    /// The `SeqNo` from which this part originated; we track this value as
-    /// to ensure the `SeqNo` isn't garbage collected while a
-    /// read still depends on it.
-    pub(crate) leased_seqno: SeqNo,
     /// The lease that prevents this part from being GCed. Code should ensure that this lease
     /// lives as long as the part is needed.
     pub(crate) lease: Option<Lease>,
