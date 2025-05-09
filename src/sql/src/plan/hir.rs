@@ -25,7 +25,6 @@ use mz_expr::AggregateFunc::{FusedWindowAggregate, WindowAggregate};
 pub use mz_expr::{
     BinaryFunc, ColumnOrder, TableFunc, UnaryFunc, UnmaterializableFunc, VariadicFunc, WindowFrame,
 };
-use mz_ore::cast::CastInto;
 use mz_ore::collections::CollectionExt;
 use mz_ore::error::ErrorExt;
 use mz_ore::stack::RecursionLimitError;
@@ -3425,7 +3424,10 @@ impl HirScalarExpr {
         f(depth, self)
     }
 
-    /// Returns an _internal_ error if the expression contains
+    /// Attempts to simplify self into a literal.
+    ///
+    /// Returns None if self is not constant and therefore can't be simplified to a literal, or if
+    /// an evaluation error occurs during simplification, or if self contains
     /// - a subquery
     /// - a column reference to an outer level
     /// - a parameter
@@ -3439,7 +3441,11 @@ impl HirScalarExpr {
         }
     }
 
-    /// Returns an _internal_ error if the expression contains
+    /// Simplifies self into a literal. If this is not possible (e.g., because self is not constant
+    /// or an evaluation error occurs during simplification), it returns
+    /// [`PlanError::ConstantExpressionSimplificationFailed`].
+    ///
+    /// The returned error is an _internal_ error if the expression contains
     /// - a subquery
     /// - a column reference to an outer level
     /// - a parameter
@@ -3556,7 +3562,7 @@ impl HirScalarExpr {
                         self
                     )))
                 } else {
-                    Ok(datum.unwrap_int64().cast_into())
+                    Ok(datum.unwrap_int64())
                 }
             })
     }
