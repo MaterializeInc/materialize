@@ -93,12 +93,12 @@ USING AWS CONNECTION iceberg_s3_conn
 NAMESPACE "namespace_name" TABLE "table_name"
 WITH (
     FORMAT = 'parquet', -- TODO: should this be a separate thing, e.g. CREATE FORMAT xxx .... because a PARQUET file can have multiple options
-    MINIMUM SIZE = '1MiB', -- Ability to specify minimum size of the update to append.
-    MAXIMUM PERIOD = '10s', -- Ability to that an update should be appended after some period, even if minimum size is not reached.
+    MINIMUM SIZE = '1MiB', -- Ability to specify minimum size to append.
+    MAXIMUM PERIOD = '10s', -- Ability to specify a forced append after some period, even if minimum size is not reached.
 );
 ```
 *Appending data to iceberg requires uploading metadata and data files, and reading data requires accessing metadata to know which data files need to be retrieved. It is inefficient to write very small updates, and very resource intensive for readers to perform the reads when there are many small updates.  To give users control over the dimensions of the appended data, Materialize will allow users to optionally specify a minumum size and a maximum period for the sink. Materialize will append data to the iceberg table if either:*
-- *the size of the update is above the minimum size*
+- *the size of the append is above the minimum size*
 - *the maximum period of time has passed since the last append*
 
 
@@ -123,9 +123,9 @@ The commit performs a compare and swap operation to update the metadata of the t
 
 ### Coordinator
 
-The coordinator is responsible for DDL (creating iceberg namespace, iceberg table, etc.) and managing append transactions. A timely worker will be responsible for the coordinator function.  In the MVP, the coordinator will be responsible for all operations.  In subsequent updates, specifically after partitioning is added, Materialize can investigate distributing work to multiple workers.
+The coordinator is responsible for DDL (creating iceberg namespace, iceberg table, etc.) and managing append transactions. A timely worker will be responsible for the coordinator function.  In the MVP, the coordinator will be responsible for all operations.  In subsequent versions, specifically after partitioning is added, Materialize can investigate distributing work to multiple workers.
 
-To manage transactions, the coordinator will tracking the size of the current iceberg append as well as the last successful append time. Once an update has reached either the minimum size or the maximum period, if set, writes are flushed and the update is committed to iceberg. Materialize will respect the MZ timestamp.  All updates that happen within the same tick will be committed together, even if that exceeds the time. 
+To manage transactions, the coordinator will tracking the size of the current iceberg append as well as the last successful append time. Once an append has reached either the minimum size or the maximum period, if set, writes are flushed and the append is committed to iceberg. Materialize will respect the MZ timestamp.  All updates that happen within the same tick will be committed together, even if that exceeds the time. 
 
 If neither minimum size or maximum period is set, Materialize will perform appends according to the MZ timestamp.
 
@@ -147,7 +147,7 @@ A writer will store in memory the last successful commit performed to the iceber
 
 This approach likely will not allow a new replica to immediately take over, as fencing out an existing replica requires successfully appending data to the iceberg table. In the case where there is an existing replica and a new replica comes online, the existing replica will already be in the process of collecting updates into parquet files to append to the iceberg table. Likewise, the new replica may start with write conditions that allow for larger appends, meaning there will be a longer delay in performing them. Hence, this approach relies heavily on the orchestration to stop the existing replica before the new replica can make progress.
 
-This design does not consider resuming an append after a restart (say the data and delete files are uploaded, but the update was not committed to the iceberg table). The design allows users to specify time and size conditions to control append to the iceberg table, so it is possible that one replica is running with a newer version of these parameters, meaning it's append size may be different.  In order to accomplish this, Materialize would need to persistently store a plan of the intended operation(s), data, and files to commit so that it could be resumed.
+This design does not consider resuming an append after a restart (say the data and delete files are uploaded, but the append was not committed to the iceberg table). The design allows users to specify time and size conditions to control append to the iceberg table, so it is possible that one replica is running with a newer version of these parameters, meaning it's append size may be different.  In order to accomplish this, Materialize would need to persistently store a plan of the intended operation(s), data, and files to commit so that it could be resumed.
 
 The append process does not attempt to delete files on a failed commit. S3Tables, for example, does not allow `DeleteObject` and returns a 403 (in my testing, but I could not find this documented). Orphaned files will be cleaned up by [iceberg maintenance tasks](#cleanup-of-orphaned-files).
 
