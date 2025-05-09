@@ -130,8 +130,6 @@ fn test_bind_params() {
 
     // Some statement types can't have parameters at all.
     //
-    // TODO: these should be `SqlState::UNDEFINED_PARAMETER`.
-    //
     // TODO: We should harmonize whether `describe` returns parameters for statement types that
     // can't have parameters. For example, currently it does return parameters for
     // EXPLAIN TIMESTAMP,
@@ -144,14 +142,14 @@ fn test_bind_params() {
             .query_one("CREATE VIEW v AS SELECT $3", &[])
             .unwrap_db_error();
         assert_eq!(err.message(), "views cannot have parameters");
-        assert_eq!(err.code(), &SqlState::INTERNAL_ERROR);
+        assert_eq!(err.code(), &SqlState::UNDEFINED_PARAMETER);
     }
     {
         let err = client
             .query_one("CREATE MATERIALIZED VIEW mv AS SELECT $3", &[])
             .unwrap_db_error();
         assert_eq!(err.message(), "materialized views cannot have parameters");
-        assert_eq!(err.code(), &SqlState::INTERNAL_ERROR);
+        assert_eq!(err.code(), &SqlState::UNDEFINED_PARAMETER);
     }
     {
         let err = client
@@ -161,14 +159,14 @@ fn test_bind_params() {
             .query_one("EXPLAIN TIMESTAMP FOR SELECT $1::int", &[&42_i32])
             .unwrap_db_error();
         assert_eq!(err.message(), "EXPLAIN TIMESTAMP cannot have parameters");
-        assert_eq!(err.code(), &SqlState::INTERNAL_ERROR);
+        assert_eq!(err.code(), &SqlState::UNDEFINED_PARAMETER);
     }
     {
         let err = client
             .query_one("EXPLAIN CREATE MATERIALIZED VIEW mv AS SELECT $3", &[])
             .unwrap_db_error();
         assert_eq!(err.message(), "materialized views cannot have parameters");
-        assert_eq!(err.code(), &SqlState::INTERNAL_ERROR);
+        assert_eq!(err.code(), &SqlState::UNDEFINED_PARAMETER);
     }
 
     // Surprisingly, the following are allowed. The weirdness is that it is only allowed through a
