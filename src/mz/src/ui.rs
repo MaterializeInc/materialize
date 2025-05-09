@@ -20,7 +20,8 @@ use mz_ore::option::OptionExt;
 
 use serde::{Deserialize, Serialize};
 use serde_aux::serde_introspection::serde_introspect;
-use tabled::{Style, Table, Tabled};
+use tabled::settings::Style;
+use tabled::{Table, Tabled};
 use termcolor::{Color, ColorChoice, ColorSpec, StandardStream, WriteColor};
 
 use crate::error::Error;
