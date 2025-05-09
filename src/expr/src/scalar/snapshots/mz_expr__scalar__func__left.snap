@@ -26,7 +26,33 @@ impl<'a> crate::func::binary::EagerBinaryFunc<'a> for Left {
         b: Self::Input2,
         temp_storage: &'a mz_repr::RowArena,
     ) -> Self::Output {
-        left(a, b)
+        {
+            let string: &'a str = a.unwrap_str();
+            let n = i64::from(b.unwrap_int32());
+            let mut byte_indices = string.char_indices().map(|(i, _)| i);
+            let end_in_bytes = match n.cmp(&0) {
+                Ordering::Equal => 0,
+                Ordering::Greater => {
+                    let n = usize::try_from(n)
+                        .map_err(|_| {
+                            EvalError::InvalidParameterValue(
+                                format!("invalid parameter n: {:?}", n).into(),
+                            )
+                        })?;
+                    byte_indices.nth(n).unwrap_or(string.len())
+                }
+                Ordering::Less => {
+                    let n = usize::try_from(n.abs() - 1)
+                        .map_err(|_| {
+                            EvalError::InvalidParameterValue(
+                                format!("invalid parameter n: {:?}", n).into(),
+                            )
+                        })?;
+                    byte_indices.rev().nth(n).unwrap_or(0)
+                }
+            };
+            Ok(Datum::String(&string[..end_in_bytes]))
+        }
     }
     fn output_type(
         &self,
@@ -57,31 +83,4 @@ impl std::fmt::Display for Left {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         f.write_str(stringify!(left))
     }
-}
-fn left<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
-    let string: &'a str = a.unwrap_str();
-    let n = i64::from(b.unwrap_int32());
-    let mut byte_indices = string.char_indices().map(|(i, _)| i);
-    let end_in_bytes = match n.cmp(&0) {
-        Ordering::Equal => 0,
-        Ordering::Greater => {
-            let n = usize::try_from(n)
-                .map_err(|_| {
-                    EvalError::InvalidParameterValue(
-                        format!("invalid parameter n: {:?}", n).into(),
-                    )
-                })?;
-            byte_indices.nth(n).unwrap_or(string.len())
-        }
-        Ordering::Less => {
-            let n = usize::try_from(n.abs() - 1)
-                .map_err(|_| {
-                    EvalError::InvalidParameterValue(
-                        format!("invalid parameter n: {:?}", n).into(),
-                    )
-                })?;
-            byte_indices.rev().nth(n).unwrap_or(0)
-        }
-    };
-    Ok(Datum::String(&string[..end_in_bytes]))
 }

@@ -20,7 +20,10 @@ impl<'a> crate::func::EagerUnaryFunc<'a> for TryParseMonotonicIso8601Timestamp {
     type Input = &'a str;
     type Output = Option<CheckedTimestamp<NaiveDateTime>>;
     fn call(&self, a: Self::Input) -> Self::Output {
-        try_parse_monotonic_iso8601_timestamp(a)
+        let ts = mz_persist_types::timestamp::try_parse_monotonic_iso8601_timestamp(a)?;
+        let ts = CheckedTimestamp::from_timestamplike(ts)
+            .expect("monotonic_iso8601 range is a subset of CheckedTimestamp domain");
+        Some(ts)
     }
     fn output_type(&self, input_type: mz_repr::ColumnType) -> mz_repr::ColumnType {
         use mz_repr::AsColumnType;
@@ -29,29 +32,9 @@ impl<'a> crate::func::EagerUnaryFunc<'a> for TryParseMonotonicIso8601Timestamp {
         let nullable = output.nullable;
         output.nullable(nullable || (propagates_nulls && input_type.nullable))
     }
-    fn inverse(&self) -> Option<crate::UnaryFunc> {
-        None
-    }
-    fn is_monotone(&self) -> bool {
-        false
-    }
-    fn preserves_uniqueness(&self) -> bool {
-        false
-    }
 }
 impl std::fmt::Display for TryParseMonotonicIso8601Timestamp {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         f.write_str("try_parse_monotonic_iso8601_timestamp")
-    }
-}
-#[allow(clippy::extra_unused_lifetimes)]
-pub fn try_parse_monotonic_iso8601_timestamp<'a>(
-    a: &'a str,
-) -> Option<CheckedTimestamp<NaiveDateTime>> {
-    {
-        let ts = mz_persist_types::timestamp::try_parse_monotonic_iso8601_timestamp(a)?;
-        let ts = CheckedTimestamp::from_timestamplike(ts)
-            .expect("monotonic_iso8601 range is a subset of CheckedTimestamp domain");
-        Some(ts)
     }
 }

@@ -26,7 +26,26 @@ impl<'a> crate::func::binary::EagerBinaryFunc<'a> for TimezoneOffset {
         b: Self::Input2,
         temp_storage: &'a mz_repr::RowArena,
     ) -> Self::Output {
-        timezone_offset(a, b, temp_storage)
+        {
+            let tz_str = a.unwrap_str();
+            let tz = match Tz::from_str_insensitive(tz_str) {
+                Ok(tz) => tz,
+                Err(_) => return Err(EvalError::InvalidIanaTimezoneId(tz_str.into())),
+            };
+            let offset = tz
+                .offset_from_utc_datetime(&b.unwrap_timestamptz().naive_utc());
+            Ok(
+                temp_storage
+                    .make_datum(|packer| {
+                        packer
+                            .push_list_with(|packer| {
+                                packer.push(Datum::from(offset.abbreviation()));
+                                packer.push(Datum::from(offset.base_utc_offset()));
+                                packer.push(Datum::from(offset.dst_offset()));
+                            });
+                    }),
+            )
+        }
     }
     fn output_type(
         &self,
@@ -66,27 +85,4 @@ impl std::fmt::Display for TimezoneOffset {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         f.write_str(stringify!(timezone_offset))
     }
-}
-fn timezone_offset<'a>(
-    a: Datum<'a>,
-    b: Datum<'a>,
-    temp_storage: &'a RowArena,
-) -> Result<Datum<'a>, EvalError> {
-    let tz_str = a.unwrap_str();
-    let tz = match Tz::from_str_insensitive(tz_str) {
-        Ok(tz) => tz,
-        Err(_) => return Err(EvalError::InvalidIanaTimezoneId(tz_str.into())),
-    };
-    let offset = tz.offset_from_utc_datetime(&b.unwrap_timestamptz().naive_utc());
-    Ok(
-        temp_storage
-            .make_datum(|packer| {
-                packer
-                    .push_list_with(|packer| {
-                        packer.push(Datum::from(offset.abbreviation()));
-                        packer.push(Datum::from(offset.base_utc_offset()));
-                        packer.push(Datum::from(offset.dst_offset()));
-                    });
-            }),
-    )
 }

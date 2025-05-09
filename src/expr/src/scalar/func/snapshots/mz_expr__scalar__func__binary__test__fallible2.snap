@@ -26,7 +26,7 @@ impl<'a> crate::func::binary::EagerBinaryFunc<'a> for Fallible2 {
         b: Self::Input2,
         temp_storage: &'a mz_repr::RowArena,
     ) -> Self::Output {
-        fallible2(a, b)
+        { Ok(a.unwrap_or_default() + b.unwrap_or_default()) }
     }
     fn output_type(
         &self,
@@ -51,7 +51,4 @@ impl std::fmt::Display for Fallible2 {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         f.write_str(stringify!(fallible2))
     }
-}
-fn fallible2(a: Option<f32>, b: Option<f32>) -> Result<f32, EvalError> {
-    Ok(a.unwrap_or_default() + b.unwrap_or_default())
 }

@@ -26,7 +26,15 @@ impl<'a> crate::func::binary::EagerBinaryFunc<'a> for JsonbContainsString {
         b: Self::Input2,
         temp_storage: &'a mz_repr::RowArena,
     ) -> Self::Output {
-        jsonb_contains_string(a, b)
+        {
+            let k = b.unwrap_str();
+            match a {
+                Datum::List(list) => list.iter().any(|k2| b == k2).into(),
+                Datum::Map(dict) => dict.iter().any(|(k2, _v)| k == k2).into(),
+                Datum::String(string) => (string == k).into(),
+                _ => false.into(),
+            }
+        }
     }
     fn output_type(
         &self,
@@ -59,14 +67,5 @@ impl<'a> crate::func::binary::EagerBinaryFunc<'a> for JsonbContainsString {
 impl std::fmt::Display for JsonbContainsString {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         f.write_str("?")
-    }
-}
-fn jsonb_contains_string<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
-    let k = b.unwrap_str();
-    match a {
-        Datum::List(list) => list.iter().any(|k2| b == k2).into(),
-        Datum::Map(dict) => dict.iter().any(|(k2, _v)| k == k2).into(),
-        Datum::String(string) => (string == k).into(),
-        _ => false.into(),
     }
 }

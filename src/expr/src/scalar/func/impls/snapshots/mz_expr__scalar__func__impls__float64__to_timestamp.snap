@@ -19,34 +19,7 @@ pub struct ToTimestamp;
 impl<'a> crate::func::EagerUnaryFunc<'a> for ToTimestamp {
     type Input = f64;
     type Output = Result<CheckedTimestamp<DateTime<Utc>>, EvalError>;
-    fn call(&self, a: Self::Input) -> Self::Output {
-        to_timestamp(a)
-    }
-    fn output_type(&self, input_type: mz_repr::ColumnType) -> mz_repr::ColumnType {
-        use mz_repr::AsColumnType;
-        let output = Self::Output::as_column_type();
-        let propagates_nulls = crate::func::EagerUnaryFunc::propagates_nulls(self);
-        let nullable = output.nullable;
-        output.nullable(nullable || (propagates_nulls && input_type.nullable))
-    }
-    fn inverse(&self) -> Option<crate::UnaryFunc> {
-        None
-    }
-    fn is_monotone(&self) -> bool {
-        false
-    }
-    fn preserves_uniqueness(&self) -> bool {
-        false
-    }
-}
-impl std::fmt::Display for ToTimestamp {
-    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-        f.write_str("tots")
-    }
-}
-#[allow(clippy::extra_unused_lifetimes)]
-pub fn to_timestamp<'a>(f: f64) -> Result<CheckedTimestamp<DateTime<Utc>>, EvalError> {
-    {
+    fn call(&self, f: Self::Input) -> Self::Output {
         const NANO_SECONDS_PER_SECOND: i64 = 1_000_000_000;
         if f.is_nan() {
             Err(EvalError::TimestampCannotBeNan)
@@ -78,5 +51,17 @@ pub fn to_timestamp<'a>(f: f64) -> Result<CheckedTimestamp<DateTime<Utc>>, EvalE
                 None => Err(EvalError::TimestampOutOfRange),
             }
         }
+    }
+    fn output_type(&self, input_type: mz_repr::ColumnType) -> mz_repr::ColumnType {
+        use mz_repr::AsColumnType;
+        let output = Self::Output::as_column_type();
+        let propagates_nulls = crate::func::EagerUnaryFunc::propagates_nulls(self);
+        let nullable = output.nullable;
+        output.nullable(nullable || (propagates_nulls && input_type.nullable))
+    }
+}
+impl std::fmt::Display for ToTimestamp {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        f.write_str("tots")
     }
 }

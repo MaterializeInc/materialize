@@ -20,33 +20,6 @@ impl<'a> crate::func::EagerUnaryFunc<'a> for SqrtNumeric {
     type Input = Numeric;
     type Output = Result<Numeric, EvalError>;
     fn call(&self, a: Self::Input) -> Self::Output {
-        sqrt_numeric(a)
-    }
-    fn output_type(&self, input_type: mz_repr::ColumnType) -> mz_repr::ColumnType {
-        use mz_repr::AsColumnType;
-        let output = Self::Output::as_column_type();
-        let propagates_nulls = crate::func::EagerUnaryFunc::propagates_nulls(self);
-        let nullable = output.nullable;
-        output.nullable(nullable || (propagates_nulls && input_type.nullable))
-    }
-    fn inverse(&self) -> Option<crate::UnaryFunc> {
-        None
-    }
-    fn is_monotone(&self) -> bool {
-        false
-    }
-    fn preserves_uniqueness(&self) -> bool {
-        false
-    }
-}
-impl std::fmt::Display for SqrtNumeric {
-    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-        f.write_str("sqrtnumeric")
-    }
-}
-#[allow(clippy::extra_unused_lifetimes)]
-pub fn sqrt_numeric<'a>(a: Numeric) -> Result<Numeric, EvalError> {
-    {
         let mut a = a;
         {
             if a.is_negative() {
@@ -57,5 +30,17 @@ pub fn sqrt_numeric<'a>(a: Numeric) -> Result<Numeric, EvalError> {
             numeric::munge_numeric(&mut a).unwrap();
             Ok(a)
         }
+    }
+    fn output_type(&self, input_type: mz_repr::ColumnType) -> mz_repr::ColumnType {
+        use mz_repr::AsColumnType;
+        let output = Self::Output::as_column_type();
+        let propagates_nulls = crate::func::EagerUnaryFunc::propagates_nulls(self);
+        let nullable = output.nullable;
+        output.nullable(nullable || (propagates_nulls && input_type.nullable))
+    }
+}
+impl std::fmt::Display for SqrtNumeric {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        f.write_str("sqrtnumeric")
     }
 }

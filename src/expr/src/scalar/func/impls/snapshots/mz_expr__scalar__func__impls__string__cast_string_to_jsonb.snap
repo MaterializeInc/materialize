@@ -20,7 +20,7 @@ impl<'a> crate::func::EagerUnaryFunc<'a> for CastStringToJsonb {
     type Input = &'a str;
     type Output = Result<Jsonb, EvalError>;
     fn call(&self, a: Self::Input) -> Self::Output {
-        cast_string_to_jsonb(a)
+        Ok(strconv::parse_jsonb(a)?)
     }
     fn output_type(&self, input_type: mz_repr::ColumnType) -> mz_repr::ColumnType {
         use mz_repr::AsColumnType;
@@ -32,19 +32,9 @@ impl<'a> crate::func::EagerUnaryFunc<'a> for CastStringToJsonb {
     fn inverse(&self) -> Option<crate::UnaryFunc> {
         to_unary!(super::CastJsonbToString)
     }
-    fn is_monotone(&self) -> bool {
-        false
-    }
-    fn preserves_uniqueness(&self) -> bool {
-        false
-    }
 }
 impl std::fmt::Display for CastStringToJsonb {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         f.write_str("text_to_jsonb")
     }
-}
-#[allow(clippy::extra_unused_lifetimes)]
-pub fn cast_string_to_jsonb<'a>(a: &'a str) -> Result<Jsonb, EvalError> {
-    { Ok(strconv::parse_jsonb(a)?) }
 }

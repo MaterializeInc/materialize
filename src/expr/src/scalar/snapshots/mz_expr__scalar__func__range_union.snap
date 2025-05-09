@@ -26,7 +26,11 @@ impl<'a> crate::func::binary::EagerBinaryFunc<'a> for RangeUnion {
         b: Self::Input2,
         temp_storage: &'a mz_repr::RowArena,
     ) -> Self::Output {
-        range_union(a, b, temp_storage)
+        {
+            let l = a.unwrap_range();
+            let r = b.unwrap_range();
+            l.union(&r)?.into_result(temp_storage)
+        }
     }
     fn output_type(
         &self,
@@ -60,13 +64,4 @@ impl std::fmt::Display for RangeUnion {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         f.write_str("+")
     }
-}
-fn range_union<'a>(
-    a: Datum<'a>,
-    b: Datum<'a>,
-    temp_storage: &'a RowArena,
-) -> Result<Datum<'a>, EvalError> {
-    let l = a.unwrap_range();
-    let r = b.unwrap_range();
-    l.union(&r)?.into_result(temp_storage)
 }

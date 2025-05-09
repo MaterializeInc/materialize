@@ -26,7 +26,15 @@ impl<'a> crate::func::binary::EagerBinaryFunc<'a> for ListContainsList {
         b: Self::Input2,
         temp_storage: &'a mz_repr::RowArena,
     ) -> Self::Output {
-        list_contains_list(a, b)
+        {
+            let a = a.unwrap_list();
+            let b = b.unwrap_list();
+            if b.iter().contains(&Datum::Null) {
+                Datum::False
+            } else {
+                b.iter().all(|item_b| a.iter().any(|item_a| item_a == item_b)).into()
+            }
+        }
     }
     fn output_type(
         &self,
@@ -59,14 +67,5 @@ impl<'a> crate::func::binary::EagerBinaryFunc<'a> for ListContainsList {
 impl std::fmt::Display for ListContainsList {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         f.write_str("@>")
-    }
-}
-fn list_contains_list<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
-    let a = a.unwrap_list();
-    let b = b.unwrap_list();
-    if b.iter().contains(&Datum::Null) {
-        Datum::False
-    } else {
-        b.iter().all(|item_b| a.iter().any(|item_a| item_a == item_b)).into()
     }
 }

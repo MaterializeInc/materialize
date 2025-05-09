@@ -1,6 +1,6 @@
 ---
 source: src/expr/src/scalar/func.rs
-expression: "#[sqlfunc(\n    is_monotone = (true, true),\n    output_type = i16,\n    is_infix_op = true,\n    sqlname = \"*\",\n    propagates_nulls = true\n)]\nfn mul_int16<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {\n    a.unwrap_int16()\n        .checked_mul(b.unwrap_int16())\n        .ok_or(EvalError::NumericFieldOverflow)\n        .map(Datum::from)\n}\n"
+expression: "#[sqlfunc(\n    is_monotone = \"(true, true)\",\n    output_type = \"i16\",\n    is_infix_op = true,\n    sqlname = \"*\",\n    propagates_nulls = true\n)]\nfn mul_int16<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {\n    a.unwrap_int16()\n        .checked_mul(b.unwrap_int16())\n        .ok_or(EvalError::NumericFieldOverflow)\n        .map(Datum::from)\n}\n"
 ---
 #[derive(
     proptest_derive::Arbitrary,
@@ -26,7 +26,12 @@ impl<'a> crate::func::binary::EagerBinaryFunc<'a> for MulInt16 {
         b: Self::Input2,
         temp_storage: &'a mz_repr::RowArena,
     ) -> Self::Output {
-        mul_int16(a, b)
+        {
+            a.unwrap_int16()
+                .checked_mul(b.unwrap_int16())
+                .ok_or(EvalError::NumericFieldOverflow)
+                .map(Datum::from)
+        }
     }
     fn output_type(
         &self,
@@ -63,10 +68,4 @@ impl std::fmt::Display for MulInt16 {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         f.write_str("*")
     }
-}
-fn mul_int16<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
-    a.unwrap_int16()
-        .checked_mul(b.unwrap_int16())
-        .ok_or(EvalError::NumericFieldOverflow)
-        .map(Datum::from)
 }

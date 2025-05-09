@@ -26,7 +26,12 @@ impl<'a> crate::func::binary::EagerBinaryFunc<'a> for TextConcatBinary {
         b: Self::Input2,
         temp_storage: &'a mz_repr::RowArena,
     ) -> Self::Output {
-        text_concat_binary(a, b, temp_storage)
+        {
+            let mut buf = String::new();
+            buf.push_str(a.unwrap_str());
+            buf.push_str(b.unwrap_str());
+            Datum::String(temp_storage.push_string(buf))
+        }
     }
     fn output_type(
         &self,
@@ -63,14 +68,4 @@ impl std::fmt::Display for TextConcatBinary {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         f.write_str("||")
     }
-}
-fn text_concat_binary<'a>(
-    a: Datum<'a>,
-    b: Datum<'a>,
-    temp_storage: &'a RowArena,
-) -> Datum<'a> {
-    let mut buf = String::new();
-    buf.push_str(a.unwrap_str());
-    buf.push_str(b.unwrap_str());
-    Datum::String(temp_storage.push_string(buf))
 }

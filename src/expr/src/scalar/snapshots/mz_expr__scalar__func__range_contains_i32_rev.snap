@@ -26,7 +26,7 @@ impl<'a> crate::func::binary::EagerBinaryFunc<'a> for RangeContainsI32Rev {
         b: Self::Input2,
         temp_storage: &'a mz_repr::RowArena,
     ) -> Self::Output {
-        range_contains_i32_rev(a, b)
+        { a.contains_elem(&b) }
     }
     fn output_type(
         &self,
@@ -57,7 +57,4 @@ impl std::fmt::Display for RangeContainsI32Rev {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         f.write_str("<@")
     }
-}
-fn range_contains_i32_rev<'a>(a: Range<Datum<'a>>, b: i32) -> bool {
-    a.contains_elem(&b)
 }

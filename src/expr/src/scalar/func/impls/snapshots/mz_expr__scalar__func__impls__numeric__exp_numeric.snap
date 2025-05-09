@@ -20,33 +20,6 @@ impl<'a> crate::func::EagerUnaryFunc<'a> for ExpNumeric {
     type Input = Numeric;
     type Output = Result<Numeric, EvalError>;
     fn call(&self, a: Self::Input) -> Self::Output {
-        exp_numeric(a)
-    }
-    fn output_type(&self, input_type: mz_repr::ColumnType) -> mz_repr::ColumnType {
-        use mz_repr::AsColumnType;
-        let output = Self::Output::as_column_type();
-        let propagates_nulls = crate::func::EagerUnaryFunc::propagates_nulls(self);
-        let nullable = output.nullable;
-        output.nullable(nullable || (propagates_nulls && input_type.nullable))
-    }
-    fn inverse(&self) -> Option<crate::UnaryFunc> {
-        None
-    }
-    fn is_monotone(&self) -> bool {
-        false
-    }
-    fn preserves_uniqueness(&self) -> bool {
-        false
-    }
-}
-impl std::fmt::Display for ExpNumeric {
-    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-        f.write_str("expnumeric")
-    }
-}
-#[allow(clippy::extra_unused_lifetimes)]
-pub fn exp_numeric<'a>(a: Numeric) -> Result<Numeric, EvalError> {
-    {
         let mut a = a;
         {
             let mut cx = numeric::cx_datum();
@@ -61,5 +34,17 @@ pub fn exp_numeric<'a>(a: Numeric) -> Result<Numeric, EvalError> {
                 Ok(a)
             }
         }
+    }
+    fn output_type(&self, input_type: mz_repr::ColumnType) -> mz_repr::ColumnType {
+        use mz_repr::AsColumnType;
+        let output = Self::Output::as_column_type();
+        let propagates_nulls = crate::func::EagerUnaryFunc::propagates_nulls(self);
+        let nullable = output.nullable;
+        output.nullable(nullable || (propagates_nulls && input_type.nullable))
+    }
+}
+impl std::fmt::Display for ExpNumeric {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        f.write_str("expnumeric")
     }
 }

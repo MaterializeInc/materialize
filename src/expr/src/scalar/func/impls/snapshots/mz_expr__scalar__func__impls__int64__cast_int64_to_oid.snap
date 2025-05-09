@@ -20,7 +20,9 @@ impl<'a> crate::func::EagerUnaryFunc<'a> for CastInt64ToOid {
     type Input = i64;
     type Output = Result<Oid, EvalError>;
     fn call(&self, a: Self::Input) -> Self::Output {
-        cast_int64_to_oid(a)
+        u32::try_from(a)
+            .map(Oid)
+            .or_else(|_| Err(EvalError::OidOutOfRange(a.to_string().into())))
     }
     fn output_type(&self, input_type: mz_repr::ColumnType) -> mz_repr::ColumnType {
         use mz_repr::AsColumnType;
@@ -32,9 +34,6 @@ impl<'a> crate::func::EagerUnaryFunc<'a> for CastInt64ToOid {
     fn inverse(&self) -> Option<crate::UnaryFunc> {
         to_unary!(super::CastOidToInt64)
     }
-    fn is_monotone(&self) -> bool {
-        false
-    }
     fn preserves_uniqueness(&self) -> bool {
         true
     }
@@ -42,13 +41,5 @@ impl<'a> crate::func::EagerUnaryFunc<'a> for CastInt64ToOid {
 impl std::fmt::Display for CastInt64ToOid {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         f.write_str("bigint_to_oid")
-    }
-}
-#[allow(clippy::extra_unused_lifetimes)]
-pub fn cast_int64_to_oid<'a>(a: i64) -> Result<Oid, EvalError> {
-    {
-        u32::try_from(a)
-            .map(Oid)
-            .or_else(|_| Err(EvalError::OidOutOfRange(a.to_string().into())))
     }
 }

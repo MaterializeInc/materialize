@@ -26,7 +26,12 @@ impl<'a> crate::func::binary::EagerBinaryFunc<'a> for LikeEscape {
         b: Self::Input2,
         temp_storage: &'a mz_repr::RowArena,
     ) -> Self::Output {
-        like_escape(a, b, temp_storage)
+        {
+            let pattern = a.unwrap_str();
+            let escape = like_pattern::EscapeBehavior::from_str(b.unwrap_str())?;
+            let normalized = like_pattern::normalize_pattern(pattern, escape)?;
+            Ok(Datum::String(temp_storage.push_string(normalized)))
+        }
     }
     fn output_type(
         &self,
@@ -57,14 +62,4 @@ impl std::fmt::Display for LikeEscape {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         f.write_str(stringify!(like_escape))
     }
-}
-fn like_escape<'a>(
-    a: Datum<'a>,
-    b: Datum<'a>,
-    temp_storage: &'a RowArena,
-) -> Result<Datum<'a>, EvalError> {
-    let pattern = a.unwrap_str();
-    let escape = like_pattern::EscapeBehavior::from_str(b.unwrap_str())?;
-    let normalized = like_pattern::normalize_pattern(pattern, escape)?;
-    Ok(Datum::String(temp_storage.push_string(normalized)))
 }

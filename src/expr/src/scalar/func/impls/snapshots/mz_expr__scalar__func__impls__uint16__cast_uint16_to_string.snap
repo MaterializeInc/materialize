@@ -20,7 +20,9 @@ impl<'a> crate::func::EagerUnaryFunc<'a> for CastUint16ToString {
     type Input = u16;
     type Output = String;
     fn call(&self, a: Self::Input) -> Self::Output {
-        cast_uint16_to_string(a)
+        let mut buf = String::new();
+        strconv::format_uint16(&mut buf, a);
+        buf
     }
     fn output_type(&self, input_type: mz_repr::ColumnType) -> mz_repr::ColumnType {
         use mz_repr::AsColumnType;
@@ -32,9 +34,6 @@ impl<'a> crate::func::EagerUnaryFunc<'a> for CastUint16ToString {
     fn inverse(&self) -> Option<crate::UnaryFunc> {
         to_unary!(super::CastStringToUint16)
     }
-    fn is_monotone(&self) -> bool {
-        false
-    }
     fn preserves_uniqueness(&self) -> bool {
         true
     }
@@ -42,13 +41,5 @@ impl<'a> crate::func::EagerUnaryFunc<'a> for CastUint16ToString {
 impl std::fmt::Display for CastUint16ToString {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         f.write_str("uint2_to_text")
-    }
-}
-#[allow(clippy::extra_unused_lifetimes)]
-pub fn cast_uint16_to_string<'a>(a: u16) -> String {
-    {
-        let mut buf = String::new();
-        strconv::format_uint16(&mut buf, a);
-        buf
     }
 }

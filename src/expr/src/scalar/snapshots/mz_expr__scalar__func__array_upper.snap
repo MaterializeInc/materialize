@@ -26,7 +26,27 @@ impl<'a> crate::func::binary::EagerBinaryFunc<'a> for ArrayUpper {
         b: Self::Input2,
         temp_storage: &'a mz_repr::RowArena,
     ) -> Self::Output {
-        array_upper(a, b)
+        {
+            let i = b.unwrap_int64();
+            if i < 1 {
+                return Ok(Datum::Null);
+            }
+            Ok(
+                match a.unwrap_array().dims().into_iter().nth(i as usize - 1) {
+                    Some(dim) => {
+                        Datum::Int32(
+                            dim
+                                .length
+                                .try_into()
+                                .map_err(|_| EvalError::Int32OutOfRange(
+                                    dim.length.to_string().into(),
+                                ))?,
+                        )
+                    }
+                    None => Datum::Null,
+                },
+            )
+        }
     }
     fn output_type(
         &self,
@@ -60,26 +80,4 @@ impl std::fmt::Display for ArrayUpper {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         f.write_str("array_upper")
     }
-}
-#[allow(clippy::as_conversions)]
-fn array_upper<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
-    let i = b.unwrap_int64();
-    if i < 1 {
-        return Ok(Datum::Null);
-    }
-    Ok(
-        match a.unwrap_array().dims().into_iter().nth(i as usize - 1) {
-            Some(dim) => {
-                Datum::Int32(
-                    dim
-                        .length
-                        .try_into()
-                        .map_err(|_| EvalError::Int32OutOfRange(
-                            dim.length.to_string().into(),
-                        ))?,
-                )
-            }
-            None => Datum::Null,
-        },
-    )
 }

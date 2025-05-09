@@ -26,7 +26,7 @@ impl<'a> crate::func::binary::EagerBinaryFunc<'a> for Fallible1 {
         b: Self::Input2,
         temp_storage: &'a mz_repr::RowArena,
     ) -> Self::Output {
-        fallible1(a, b)
+        { Ok(a + b) }
     }
     fn output_type(
         &self,
@@ -51,7 +51,4 @@ impl std::fmt::Display for Fallible1 {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         f.write_str(stringify!(fallible1))
     }
-}
-fn fallible1(a: f32, b: f32) -> Result<f32, EvalError> {
-    Ok(a + b)
 }

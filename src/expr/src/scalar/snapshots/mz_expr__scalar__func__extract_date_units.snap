@@ -26,7 +26,15 @@ impl<'a> crate::func::binary::EagerBinaryFunc<'a> for ExtractDateUnits {
         b: Self::Input2,
         temp_storage: &'a mz_repr::RowArena,
     ) -> Self::Output {
-        extract_date_units(a, b)
+        {
+            let units = a.unwrap_str();
+            match units.parse() {
+                Ok(units) => {
+                    Ok(extract_date_inner(units, b.unwrap_date().into())?.into())
+                }
+                Err(_) => Err(EvalError::UnknownUnits(units.into())),
+            }
+        }
     }
     fn output_type(
         &self,
@@ -56,12 +64,5 @@ impl<'a> crate::func::binary::EagerBinaryFunc<'a> for ExtractDateUnits {
 impl std::fmt::Display for ExtractDateUnits {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         f.write_str("extractd")
-    }
-}
-fn extract_date_units<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
-    let units = a.unwrap_str();
-    match units.parse() {
-        Ok(units) => Ok(extract_date_inner(units, b.unwrap_date().into())?.into()),
-        Err(_) => Err(EvalError::UnknownUnits(units.into())),
     }
 }

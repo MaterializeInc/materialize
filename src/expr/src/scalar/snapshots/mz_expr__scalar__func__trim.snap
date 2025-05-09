@@ -26,7 +26,10 @@ impl<'a> crate::func::binary::EagerBinaryFunc<'a> for Trim {
         b: Self::Input2,
         temp_storage: &'a mz_repr::RowArena,
     ) -> Self::Output {
-        trim(a, b)
+        {
+            let trim_chars = b.unwrap_str();
+            Datum::from(a.unwrap_str().trim_matches(|c| trim_chars.contains(c)))
+        }
     }
     fn output_type(
         &self,
@@ -57,8 +60,4 @@ impl std::fmt::Display for Trim {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         f.write_str("btrim")
     }
-}
-fn trim<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
-    let trim_chars = b.unwrap_str();
-    Datum::from(a.unwrap_str().trim_matches(|c| trim_chars.contains(c)))
 }

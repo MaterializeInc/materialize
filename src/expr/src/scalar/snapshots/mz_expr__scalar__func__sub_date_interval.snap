@@ -26,7 +26,22 @@ impl<'a> crate::func::binary::EagerBinaryFunc<'a> for SubDateInterval {
         b: Self::Input2,
         temp_storage: &'a mz_repr::RowArena,
     ) -> Self::Output {
-        sub_date_interval(a, b)
+        {
+            let date = a.unwrap_date();
+            let interval = b.unwrap_interval();
+            let dt = NaiveDate::from(date).and_hms_opt(0, 0, 0).unwrap();
+            let dt = interval
+                .months
+                .checked_neg()
+                .ok_or_else(|| EvalError::IntervalOutOfRange(
+                    interval.months.to_string().into(),
+                ))
+                .and_then(|months| add_timestamp_months(&dt, months))?;
+            let dt = dt
+                .checked_sub_signed(interval.duration_as_chrono())
+                .ok_or(EvalError::TimestampOutOfRange)?;
+            Ok(dt.try_into()?)
+        }
     }
     fn output_type(
         &self,
@@ -63,18 +78,4 @@ impl std::fmt::Display for SubDateInterval {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         f.write_str("-")
     }
-}
-fn sub_date_interval<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
-    let date = a.unwrap_date();
-    let interval = b.unwrap_interval();
-    let dt = NaiveDate::from(date).and_hms_opt(0, 0, 0).unwrap();
-    let dt = interval
-        .months
-        .checked_neg()
-        .ok_or_else(|| EvalError::IntervalOutOfRange(interval.months.to_string().into()))
-        .and_then(|months| add_timestamp_months(&dt, months))?;
-    let dt = dt
-        .checked_sub_signed(interval.duration_as_chrono())
-        .ok_or(EvalError::TimestampOutOfRange)?;
-    Ok(dt.try_into()?)
 }

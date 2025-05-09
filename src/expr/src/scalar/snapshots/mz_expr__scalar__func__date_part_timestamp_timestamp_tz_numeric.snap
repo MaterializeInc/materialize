@@ -23,11 +23,18 @@ for DatePartTimestampTimestampTzNumeric {
     type Output = Result<Datum<'a>, EvalError>;
     fn call(
         &self,
-        a: Self::Input1,
-        b: Self::Input2,
+        units: Self::Input1,
+        ts: Self::Input2,
         temp_storage: &'a mz_repr::RowArena,
     ) -> Self::Output {
-        date_part_timestamp_timestamp_tz_numeric(a, b)
+        {
+            match units.parse() {
+                Ok(units) => {
+                    Ok(date_part_timestamp_inner::<_, Numeric>(units, &*ts)?.into())
+                }
+                Err(_) => Err(EvalError::UnknownUnits(units.into())),
+            }
+        }
     }
     fn output_type(
         &self,
@@ -57,14 +64,5 @@ for DatePartTimestampTimestampTzNumeric {
 impl std::fmt::Display for DatePartTimestampTimestampTzNumeric {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         f.write_str("extracttstz")
-    }
-}
-fn date_part_timestamp_timestamp_tz_numeric<'a>(
-    units: &str,
-    ts: CheckedTimestamp<DateTime<Utc>>,
-) -> Result<Datum<'a>, EvalError> {
-    match units.parse() {
-        Ok(units) => Ok(date_part_timestamp_inner::<_, Numeric>(units, &*ts)?.into()),
-        Err(_) => Err(EvalError::UnknownUnits(units.into())),
     }
 }

@@ -1,6 +1,6 @@
 ---
 source: src/expr/src/scalar/func.rs
-expression: "#[sqlfunc(\n    is_monotone = (true, false),\n    output_type = Numeric,\n    is_infix_op = true,\n    sqlname = \"/\",\n    propagates_nulls = true\n)]\nfn div_numeric<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {\n    let mut cx = numeric::cx_datum();\n    let mut a = a.unwrap_numeric().0;\n    let b = b.unwrap_numeric().0;\n    cx.div(&mut a, &b);\n    let cx_status = cx.status();\n    if b.is_zero() {\n        Err(EvalError::DivisionByZero)\n    } else if cx_status.overflow() {\n        Err(EvalError::FloatOverflow)\n    } else if cx_status.subnormal() {\n        Err(EvalError::FloatUnderflow)\n    } else {\n        numeric::munge_numeric(&mut a).unwrap();\n        Ok(Datum::from(a))\n    }\n}\n"
+expression: "#[sqlfunc(\n    is_monotone = \"(true, false)\",\n    output_type = \"Numeric\",\n    is_infix_op = true,\n    sqlname = \"/\",\n    propagates_nulls = true\n)]\nfn div_numeric<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {\n    let mut cx = numeric::cx_datum();\n    let mut a = a.unwrap_numeric().0;\n    let b = b.unwrap_numeric().0;\n    cx.div(&mut a, &b);\n    let cx_status = cx.status();\n    if b.is_zero() {\n        Err(EvalError::DivisionByZero)\n    } else if cx_status.overflow() {\n        Err(EvalError::FloatOverflow)\n    } else if cx_status.subnormal() {\n        Err(EvalError::FloatUnderflow)\n    } else {\n        numeric::munge_numeric(&mut a).unwrap();\n        Ok(Datum::from(a))\n    }\n}\n"
 ---
 #[derive(
     proptest_derive::Arbitrary,
@@ -26,7 +26,23 @@ impl<'a> crate::func::binary::EagerBinaryFunc<'a> for DivNumeric {
         b: Self::Input2,
         temp_storage: &'a mz_repr::RowArena,
     ) -> Self::Output {
-        div_numeric(a, b)
+        {
+            let mut cx = numeric::cx_datum();
+            let mut a = a.unwrap_numeric().0;
+            let b = b.unwrap_numeric().0;
+            cx.div(&mut a, &b);
+            let cx_status = cx.status();
+            if b.is_zero() {
+                Err(EvalError::DivisionByZero)
+            } else if cx_status.overflow() {
+                Err(EvalError::FloatOverflow)
+            } else if cx_status.subnormal() {
+                Err(EvalError::FloatUnderflow)
+            } else {
+                numeric::munge_numeric(&mut a).unwrap();
+                Ok(Datum::from(a))
+            }
+        }
     }
     fn output_type(
         &self,
@@ -62,22 +78,5 @@ impl<'a> crate::func::binary::EagerBinaryFunc<'a> for DivNumeric {
 impl std::fmt::Display for DivNumeric {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         f.write_str("/")
-    }
-}
-fn div_numeric<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
-    let mut cx = numeric::cx_datum();
-    let mut a = a.unwrap_numeric().0;
-    let b = b.unwrap_numeric().0;
-    cx.div(&mut a, &b);
-    let cx_status = cx.status();
-    if b.is_zero() {
-        Err(EvalError::DivisionByZero)
-    } else if cx_status.overflow() {
-        Err(EvalError::FloatOverflow)
-    } else if cx_status.subnormal() {
-        Err(EvalError::FloatUnderflow)
-    } else {
-        numeric::munge_numeric(&mut a).unwrap();
-        Ok(Datum::from(a))
     }
 }

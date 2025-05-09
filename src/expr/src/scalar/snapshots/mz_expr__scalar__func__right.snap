@@ -26,7 +26,34 @@ impl<'a> crate::func::binary::EagerBinaryFunc<'a> for Right {
         b: Self::Input2,
         temp_storage: &'a mz_repr::RowArena,
     ) -> Self::Output {
-        right(a, b)
+        {
+            let string: &'a str = a.unwrap_str();
+            let n = b.unwrap_int32();
+            let mut byte_indices = string.char_indices().map(|(i, _)| i);
+            let start_in_bytes = if n == 0 {
+                string.len()
+            } else if n > 0 {
+                let n = usize::try_from(n - 1)
+                    .map_err(|_| {
+                        EvalError::InvalidParameterValue(
+                            format!("invalid parameter n: {:?}", n).into(),
+                        )
+                    })?;
+                byte_indices.rev().nth(n).unwrap_or(0)
+            } else if n == i32::MIN {
+                0
+            } else {
+                let n = n.abs();
+                let n = usize::try_from(n)
+                    .map_err(|_| {
+                        EvalError::InvalidParameterValue(
+                            format!("invalid parameter n: {:?}", n).into(),
+                        )
+                    })?;
+                byte_indices.nth(n).unwrap_or(string.len())
+            };
+            Ok(Datum::String(&string[start_in_bytes..]))
+        }
     }
     fn output_type(
         &self,
@@ -57,32 +84,4 @@ impl std::fmt::Display for Right {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         f.write_str(stringify!(right))
     }
-}
-fn right<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
-    let string: &'a str = a.unwrap_str();
-    let n = b.unwrap_int32();
-    let mut byte_indices = string.char_indices().map(|(i, _)| i);
-    let start_in_bytes = if n == 0 {
-        string.len()
-    } else if n > 0 {
-        let n = usize::try_from(n - 1)
-            .map_err(|_| {
-                EvalError::InvalidParameterValue(
-                    format!("invalid parameter n: {:?}", n).into(),
-                )
-            })?;
-        byte_indices.rev().nth(n).unwrap_or(0)
-    } else if n == i32::MIN {
-        0
-    } else {
-        let n = n.abs();
-        let n = usize::try_from(n)
-            .map_err(|_| {
-                EvalError::InvalidParameterValue(
-                    format!("invalid parameter n: {:?}", n).into(),
-                )
-            })?;
-        byte_indices.nth(n).unwrap_or(string.len())
-    };
-    Ok(Datum::String(&string[start_in_bytes..]))
 }

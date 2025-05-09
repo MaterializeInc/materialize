@@ -26,7 +26,16 @@ impl<'a> crate::func::binary::EagerBinaryFunc<'a> for ArrayLower {
         b: Self::Input2,
         temp_storage: &'a mz_repr::RowArena,
     ) -> Self::Output {
-        array_lower(a, b)
+        {
+            let i = b.unwrap_int64();
+            if i < 1 {
+                return Datum::Null;
+            }
+            match a.unwrap_array().dims().into_iter().nth(i as usize - 1) {
+                Some(_) => Datum::Int32(1),
+                None => Datum::Null,
+            }
+        }
     }
     fn output_type(
         &self,
@@ -59,16 +68,5 @@ impl<'a> crate::func::binary::EagerBinaryFunc<'a> for ArrayLower {
 impl std::fmt::Display for ArrayLower {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         f.write_str("array_lower")
-    }
-}
-#[allow(clippy::as_conversions)]
-fn array_lower<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
-    let i = b.unwrap_int64();
-    if i < 1 {
-        return Datum::Null;
-    }
-    match a.unwrap_array().dims().into_iter().nth(i as usize - 1) {
-        Some(_) => Datum::Int32(1),
-        None => Datum::Null,
     }
 }

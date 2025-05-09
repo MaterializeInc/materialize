@@ -26,7 +26,18 @@ impl<'a> crate::func::binary::EagerBinaryFunc<'a> for DatePartIntervalNumeric {
         b: Self::Input2,
         temp_storage: &'a mz_repr::RowArena,
     ) -> Self::Output {
-        date_part_interval_numeric(a, b)
+        {
+            let units = a.unwrap_str();
+            match units.parse() {
+                Ok(units) => {
+                    Ok(
+                        date_part_interval_inner::<Numeric>(units, b.unwrap_interval())?
+                            .into(),
+                    )
+                }
+                Err(_) => Err(EvalError::UnknownUnits(units.into())),
+            }
+        }
     }
     fn output_type(
         &self,
@@ -56,17 +67,5 @@ impl<'a> crate::func::binary::EagerBinaryFunc<'a> for DatePartIntervalNumeric {
 impl std::fmt::Display for DatePartIntervalNumeric {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         f.write_str("extractiv")
-    }
-}
-fn date_part_interval_numeric<'a>(
-    a: Datum<'a>,
-    b: Datum<'a>,
-) -> Result<Datum<'a>, EvalError> {
-    let units = a.unwrap_str();
-    match units.parse() {
-        Ok(units) => {
-            Ok(date_part_interval_inner::<Numeric>(units, b.unwrap_interval())?.into())
-        }
-        Err(_) => Err(EvalError::UnknownUnits(units.into())),
     }
 }

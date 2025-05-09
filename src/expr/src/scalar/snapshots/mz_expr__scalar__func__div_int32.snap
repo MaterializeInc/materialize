@@ -26,7 +26,19 @@ impl<'a> crate::func::binary::EagerBinaryFunc<'a> for DivInt32 {
         b: Self::Input2,
         temp_storage: &'a mz_repr::RowArena,
     ) -> Self::Output {
-        div_int32(a, b)
+        {
+            let b = b.unwrap_int32();
+            if b == 0 {
+                Err(EvalError::DivisionByZero)
+            } else {
+                a.unwrap_int32()
+                    .checked_div(b)
+                    .map(Datum::from)
+                    .ok_or_else(|| EvalError::Int32OutOfRange(
+                        format!("{a} / {b}").into(),
+                    ))
+            }
+        }
     }
     fn output_type(
         &self,
@@ -62,16 +74,5 @@ impl<'a> crate::func::binary::EagerBinaryFunc<'a> for DivInt32 {
 impl std::fmt::Display for DivInt32 {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         f.write_str("/")
-    }
-}
-fn div_int32<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
-    let b = b.unwrap_int32();
-    if b == 0 {
-        Err(EvalError::DivisionByZero)
-    } else {
-        a.unwrap_int32()
-            .checked_div(b)
-            .map(Datum::from)
-            .ok_or_else(|| EvalError::Int32OutOfRange(format!("{a} / {b}").into()))
     }
 }

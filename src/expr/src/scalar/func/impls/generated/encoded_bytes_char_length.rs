@@ -1,0 +1,91 @@
+// Copyright Materialize, Inc. and contributors. All rights reserved.
+//
+// Use of this software is governed by the Business Source License
+// included in the LICENSE file.
+//
+// As of the Change Date specified in that file, in accordance with
+// the Business Source License, use of this software will be governed
+// by the Apache License, Version 2.0.
+
+
+#[derive(
+    proptest_derive::Arbitrary,
+    Ord,
+    PartialOrd,
+    Clone,
+    Debug,
+    Eq,
+    PartialEq,
+    serde::Serialize,
+    serde::Deserialize,
+    Hash,
+    mz_lowertest::MzReflect
+)]
+pub struct EncodedBytesCharLength;
+impl<'a> crate::func::binary::EagerBinaryFunc<'a> for EncodedBytesCharLength {
+    type Input1 = Datum<'a>;
+    type Input2 = Datum<'a>;
+    type Output = Result<Datum<'a>, EvalError>;
+    fn call(
+        &self,
+        a: Self::Input1,
+        b: Self::Input2,
+        temp_storage: &'a mz_repr::RowArena,
+    ) -> Self::Output {
+        {
+            let encoding_name = b
+                .unwrap_str()
+                .to_lowercase()
+                .replace('_', "-")
+                .into_boxed_str();
+            let enc = match encoding_from_whatwg_label(&encoding_name) {
+                Some(enc) => enc,
+                None => return Err(EvalError::InvalidEncodingName(encoding_name)),
+            };
+            let decoded_string = match enc.decode(a.unwrap_bytes(), DecoderTrap::Strict)
+            {
+                Ok(s) => s,
+                Err(e) => {
+                    return Err(EvalError::InvalidByteSequence {
+                        byte_sequence: e.into(),
+                        encoding_name,
+                    });
+                }
+            };
+            let count = decoded_string.chars().count();
+            match i32::try_from(count) {
+                Ok(l) => Ok(Datum::from(l)),
+                Err(_) => Err(EvalError::Int32OutOfRange(count.to_string().into())),
+            }
+        }
+    }
+    fn output_type(
+        &self,
+        input_type_a: mz_repr::ColumnType,
+        input_type_b: mz_repr::ColumnType,
+    ) -> mz_repr::ColumnType {
+        use mz_repr::AsColumnType;
+        let output = <i32>::as_column_type();
+        let propagates_nulls = crate::func::binary::EagerBinaryFunc::propagates_nulls(
+            self,
+        );
+        let nullable = output.nullable;
+        output
+            .nullable(
+                nullable
+                    || (propagates_nulls
+                        && (input_type_a.nullable || input_type_b.nullable)),
+            )
+    }
+    fn introduces_nulls(&self) -> bool {
+        <i32 as ::mz_repr::DatumType<'_, ()>>::nullable()
+    }
+    fn propagates_nulls(&self) -> bool {
+        true
+    }
+}
+impl std::fmt::Display for EncodedBytesCharLength {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        f.write_str("length")
+    }
+}

@@ -26,7 +26,26 @@ impl<'a> crate::func::binary::EagerBinaryFunc<'a> for JsonbDeleteInt64 {
         b: Self::Input2,
         temp_storage: &'a mz_repr::RowArena,
     ) -> Self::Output {
-        jsonb_delete_int64(a, b, temp_storage)
+        {
+            let i = b.unwrap_int64();
+            match a {
+                Datum::List(list) => {
+                    let i = if i >= 0 {
+                        usize::cast_from(i.unsigned_abs())
+                    } else {
+                        let i = usize::cast_from(i.unsigned_abs());
+                        (list.iter().count()).wrapping_sub(i)
+                    };
+                    let elems = list
+                        .iter()
+                        .enumerate()
+                        .filter(|(i2, _e)| i != *i2)
+                        .map(|(_, e)| e);
+                    temp_storage.make_datum(|packer| packer.push_list(elems))
+                }
+                _ => Datum::Null,
+            }
+        }
     }
     fn output_type(
         &self,
@@ -59,29 +78,5 @@ impl<'a> crate::func::binary::EagerBinaryFunc<'a> for JsonbDeleteInt64 {
 impl std::fmt::Display for JsonbDeleteInt64 {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         f.write_str("-")
-    }
-}
-fn jsonb_delete_int64<'a>(
-    a: Datum<'a>,
-    b: Datum<'a>,
-    temp_storage: &'a RowArena,
-) -> Datum<'a> {
-    let i = b.unwrap_int64();
-    match a {
-        Datum::List(list) => {
-            let i = if i >= 0 {
-                usize::cast_from(i.unsigned_abs())
-            } else {
-                let i = usize::cast_from(i.unsigned_abs());
-                (list.iter().count()).wrapping_sub(i)
-            };
-            let elems = list
-                .iter()
-                .enumerate()
-                .filter(|(i2, _e)| i != *i2)
-                .map(|(_, e)| e);
-            temp_storage.make_datum(|packer| packer.push_list(elems))
-        }
-        _ => Datum::Null,
     }
 }

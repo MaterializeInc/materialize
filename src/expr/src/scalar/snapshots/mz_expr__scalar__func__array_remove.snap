@@ -26,7 +26,28 @@ impl<'a> crate::func::binary::EagerBinaryFunc<'a> for ArrayRemove {
         b: Self::Input2,
         temp_storage: &'a mz_repr::RowArena,
     ) -> Self::Output {
-        array_remove(a, b, temp_storage)
+        {
+            if a.is_null() {
+                return Ok(a);
+            }
+            let arr = a.unwrap_array();
+            if arr.dims().len() == 0 {
+                return Ok(a);
+            }
+            if arr.dims().len() > 1 {
+                return Err(EvalError::MultidimensionalArrayRemovalNotSupported);
+            }
+            let elems: Vec<_> = arr.elements().iter().filter(|v| v != &b).collect();
+            let mut dims = arr.dims().into_iter().collect::<Vec<_>>();
+            dims[0] = ArrayDimension {
+                lower_bound: 1,
+                length: elems.len(),
+            };
+            Ok(
+                temp_storage
+                    .try_make_datum(|packer| packer.try_push_array(&dims, elems))?,
+            )
+        }
     }
     fn output_type(
         &self,
@@ -57,27 +78,4 @@ impl std::fmt::Display for ArrayRemove {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         f.write_str("array_remove")
     }
-}
-fn array_remove<'a>(
-    a: Datum<'a>,
-    b: Datum<'a>,
-    temp_storage: &'a RowArena,
-) -> Result<Datum<'a>, EvalError> {
-    if a.is_null() {
-        return Ok(a);
-    }
-    let arr = a.unwrap_array();
-    if arr.dims().len() == 0 {
-        return Ok(a);
-    }
-    if arr.dims().len() > 1 {
-        return Err(EvalError::MultidimensionalArrayRemovalNotSupported);
-    }
-    let elems: Vec<_> = arr.elements().iter().filter(|v| v != &b).collect();
-    let mut dims = arr.dims().into_iter().collect::<Vec<_>>();
-    dims[0] = ArrayDimension {
-        lower_bound: 1,
-        length: elems.len(),
-    };
-    Ok(temp_storage.try_make_datum(|packer| packer.try_push_array(&dims, elems))?)
 }

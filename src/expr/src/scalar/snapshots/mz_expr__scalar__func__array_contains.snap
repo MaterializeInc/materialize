@@ -26,7 +26,10 @@ impl<'a> crate::func::binary::EagerBinaryFunc<'a> for ArrayContains {
         b: Self::Input2,
         temp_storage: &'a mz_repr::RowArena,
     ) -> Self::Output {
-        array_contains(a, b)
+        {
+            let array = Datum::unwrap_array(&b);
+            Datum::from(array.elements().iter().any(|e| e == a))
+        }
     }
     fn output_type(
         &self,
@@ -60,8 +63,4 @@ impl std::fmt::Display for ArrayContains {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         f.write_str("array_contains")
     }
-}
-fn array_contains<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
-    let array = Datum::unwrap_array(&b);
-    Datum::from(array.elements().iter().any(|e| e == a))
 }

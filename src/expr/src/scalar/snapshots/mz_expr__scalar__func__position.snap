@@ -26,7 +26,22 @@ impl<'a> crate::func::binary::EagerBinaryFunc<'a> for Position {
         b: Self::Input2,
         temp_storage: &'a mz_repr::RowArena,
     ) -> Self::Output {
-        position(a, b)
+        {
+            let substring: &'a str = a.unwrap_str();
+            let string = b.unwrap_str();
+            let char_index = string.find(substring);
+            if let Some(char_index) = char_index {
+                let string_prefix = &string[0..char_index];
+                let num_prefix_chars = string_prefix.chars().count();
+                let num_prefix_chars = i32::try_from(num_prefix_chars)
+                    .map_err(|_| EvalError::Int32OutOfRange(
+                        num_prefix_chars.to_string().into(),
+                    ))?;
+                Ok(Datum::Int32(num_prefix_chars + 1))
+            } else {
+                Ok(Datum::Int32(0))
+            }
+        }
     }
     fn output_type(
         &self,
@@ -56,21 +71,5 @@ impl<'a> crate::func::binary::EagerBinaryFunc<'a> for Position {
 impl std::fmt::Display for Position {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         f.write_str(stringify!(position))
-    }
-}
-fn position<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
-    let substring: &'a str = a.unwrap_str();
-    let string = b.unwrap_str();
-    let char_index = string.find(substring);
-    if let Some(char_index) = char_index {
-        let string_prefix = &string[0..char_index];
-        let num_prefix_chars = string_prefix.chars().count();
-        let num_prefix_chars = i32::try_from(num_prefix_chars)
-            .map_err(|_| EvalError::Int32OutOfRange(
-                num_prefix_chars.to_string().into(),
-            ))?;
-        Ok(Datum::Int32(num_prefix_chars + 1))
-    } else {
-        Ok(Datum::Int32(0))
     }
 }
