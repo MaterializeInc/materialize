@@ -155,42 +155,37 @@ async def run():
             logger.info(f"Starting SSE server on {cfg.host}:{cfg.port}...")
             from starlette.applications import Starlette
             from starlette.routing import Mount, Route
+            from starlette.types import Receive, Scope, Send
 
             sse = SseServerTransport("/messages/")
 
-            async def handle_sse(request):
-                logger.debug(
-                    "New SSE connection from %s",
-                    request.client.host if request.client else "unknown",
-                )
+            async def handle_sse(scope: Scope, receive: Receive, send: Send):
                 try:
-                    async with sse.connect_sse(
-                        request.scope, request.receive, request._send
-                    ) as streams:
-                        await server.run(
-                            streams[0],
-                            streams[1],
-                            options,
-                        )
+                    async with sse.connect_sse(scope, receive, send) as (
+                        read_stream,
+                        write_stream,
+                    ):
+                        await server.run(read_stream, write_stream, options)
                 except Exception as e:
                     logger.error(f"Error handling SSE connection: {str(e)}")
                     raise
 
             starlette_app = Starlette(
                 routes=[
-                    Route("/sse", endpoint=handle_sse),
+                    Route("/sse", endpoint=handle_sse, methods=["GET"]),
                     Mount("/messages/", app=sse.handle_post_message),
                 ],
             )
 
-            config = uvicorn.Config(
-                starlette_app,
-                host=cfg.host,
-                port=cfg.port,
-                log_level=cfg.log_level.upper(),
+            uv_server = uvicorn.Server(
+                uvicorn.Config(
+                    starlette_app,
+                    host=cfg.host,
+                    port=cfg.port,
+                    log_level=cfg.log_level.lower(),
+                )
             )
-            server = uvicorn.Server(config)
-            await server.serve()
+            await uv_server.serve()
         case t:
             raise ValueError(f"Unknown transport: {t}")
 
