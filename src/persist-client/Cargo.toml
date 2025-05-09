@@ -51,7 +51,7 @@ mz-proto = { path = "../proto" }
 mz-timely-util = { path = "../timely-util" }
 mz-postgres-client = { path = "../postgres-client" }
 num_cpus = "1.16.0"
-prometheus = { version = "0.13.4", default-features = false }
+prometheus = { version = "0.14.0", default-features = false }
 proptest = { version = "1.6.0", default-features = false, features = ["std"] }
 proptest-derive = { version = "0.5.1", features = ["boxed_union"] }
 prost = { version = "0.13.5", features = ["no-recursion-limit"] }

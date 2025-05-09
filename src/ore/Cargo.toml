@@ -45,7 +45,7 @@ openssl = { version = "0.10.71", features = ["vendored"], optional = true }
 parquet = { version = "53.3.0", optional = true, default-features = false }
 paste = "1.0.11"
 pin-project = "1.1.10"
-prometheus = { version = "0.13.4", default-features = false, optional = true }
+prometheus = { version = "0.14.0", default-features = false, optional = true }
 proptest = { version = "1.6.0", default-features = false, features = [
     "std",
 ], optional = true }

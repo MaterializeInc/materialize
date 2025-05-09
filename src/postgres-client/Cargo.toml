@@ -14,7 +14,7 @@ anyhow = "1.0.98"
 deadpool-postgres = "0.10.3"
 mz-ore = { path = "../ore", default-features = false, features = ["metrics", "async", "bytes"] }
 mz-tls-util = { path = "../tls-util" }
-prometheus = { version = "0.13.4", default-features = false }
+prometheus = { version = "0.14.0", default-features = false }
 tokio = { version = "1.44.1", default-features = false, features = ["fs", "macros", "sync", "rt", "rt-multi-thread"] }
 tracing = "0.1.37"
 workspace-hack = { version = "0.0.0", path = "../workspace-hack", optional = true }

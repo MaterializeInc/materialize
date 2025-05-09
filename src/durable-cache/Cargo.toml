@@ -20,7 +20,7 @@ mz-dyncfg = { path = "../dyncfg" }
 mz-persist-types = { path = "../persist-types" }
 mz-persist-client = { path = "../persist-client" }
 mz-timely-util = { path = "../timely-util" }
-prometheus = { version = "0.13.4", default-features = false }
+prometheus = { version = "0.14.0", default-features = false }
 prost = { version = "0.13.5", features = ["no-recursion-limit"] }
 serde = { version = "1.0.219", features = ["derive", "rc"] }
 timely = "0.20.0"

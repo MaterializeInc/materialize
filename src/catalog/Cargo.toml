@@ -49,7 +49,7 @@ mz-storage-client = { path = "../storage-client" }
 mz-storage-types = { path = "../storage-types" }
 mz-transform = { path = "../transform" }
 paste = "1.0.11"
-prometheus = { version = "0.13.4", default-features = false }
+prometheus = { version = "0.14.0", default-features = false }
 proptest = { version = "1.6.0", default-features = false, features = ["std"] }
 proptest-derive = { version = "0.5.1", features = ["boxed_union"] }
 prost = "0.13.5"
