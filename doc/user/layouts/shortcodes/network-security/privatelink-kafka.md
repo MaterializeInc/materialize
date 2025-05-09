@@ -97,6 +97,9 @@ and retrieve the AWS principal needed to configure the AWS PrivateLink service.
       You **do not need** to specify `AVAILABILITY ZONES` manually — these will
       be optimally auto-assigned when none are provided.
 
+    - For Kafka connections, it is required for [cross-zone load balancing](https://docs.aws.amazon.com/elasticloadbalancing/latest/network/network-load-balancers.html) to be
+      enabled on the VPC endpoint service's NLB when using cross-region Privatelink.
+
 ## Configure the AWS PrivateLink service
 
 1. Retrieve the AWS principal for the AWS PrivateLink connection you just created:
