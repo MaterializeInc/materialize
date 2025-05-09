@@ -15,6 +15,7 @@ use mz_compute_types::plan::LirId;
 use mz_expr::row::RowCollection;
 use mz_ore::cast::CastFrom;
 use mz_ore::tracing::OpenTelemetryContext;
+use mz_persist_client::HollowBatch;
 use mz_persist_client::batch::ProtoBatch;
 use mz_persist_types::ShardId;
 use mz_proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError, any_uuid};
@@ -383,6 +384,9 @@ impl Arbitrary for PeekResponse {
 /// Response from a peek whose results have been stashed into persist.
 #[derive(Clone, Debug, PartialEq)]
 pub struct StashedPeekResponse {
+    /// The number of rows represented by this response. This is the sum of the
+    /// diff values of the contained rows.
+    pub num_rows: u64,
     /// [RelationDesc] for the rows in these stashed batches of results.
     pub relation_desc: RelationDesc,
     /// The [ShardId] under which result batches have been stashed.
@@ -392,12 +396,47 @@ pub struct StashedPeekResponse {
     pub batches: Vec<ProtoBatch>,
 }
 
+impl StashedPeekResponse {
+    /// Total count of [`Row`]s represented by this collection, considering a
+    /// possible `OFFSET` and `LIMIT`.
+    pub fn num_rows(&self, offset: usize, limit: Option<usize>) -> usize {
+        let mut result: usize = usize::cast_from(self.num_rows);
+
+        // Consider a possible OFFSET.
+        result = result.saturating_sub(offset);
+
+        // Consider a possible LIMIT.
+        if let Some(limit) = limit {
+            result = std::cmp::min(limit, result);
+        }
+
+        result
+    }
+
+    /// The size in bytes of the encoded rows in this result.
+    pub fn size_bytes(&self) -> usize {
+        let mut size = 0;
+        for proto_batch in self.batches.iter() {
+            let batch: HollowBatch<mz_repr::Timestamp> = proto_batch
+                .batch
+                .clone()
+                .into_rust_if_some("ProtoBatch::batch")
+                .expect("valid proto batch");
+
+            size += batch.encoded_size_bytes()
+        }
+
+        size
+    }
+}
+
 impl RustType<ProtoStashedPeekResponse> for StashedPeekResponse {
     fn into_proto(&self) -> ProtoStashedPeekResponse {
         ProtoStashedPeekResponse {
             relation_desc: Some(self.relation_desc.into_proto()),
             shard_id: self.shard_id.into_proto(),
             batches: self.batches.clone(),
+            num_rows: self.num_rows.into_proto(),
         }
     }
 
@@ -412,6 +451,7 @@ impl RustType<ProtoStashedPeekResponse> for StashedPeekResponse {
                 .into_rust_if_some("ProtoStashedPeekResponse::relation_desc")?,
             shard_id,
             batches: proto.batches,
+            num_rows: proto.num_rows,
         })
     }
 }

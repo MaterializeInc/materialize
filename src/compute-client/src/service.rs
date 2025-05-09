@@ -35,7 +35,7 @@ use crate::metrics::ReplicaMetrics;
 use crate::protocol::command::{ComputeCommand, ProtoComputeCommand};
 use crate::protocol::response::{
     ComputeResponse, CopyToResponse, FrontiersResponse, PeekResponse, ProtoComputeResponse,
-    SubscribeBatch, SubscribeResponse,
+    StashedPeekResponse, SubscribeBatch, SubscribeResponse,
 };
 use crate::service::proto_compute_server::ProtoCompute;
 
@@ -357,14 +357,36 @@ where
                                     PeekResponse::Rows(rows)
                                 }
                             }
-                            (
-                                PeekResponse::Stashed(mut batches),
-                                PeekResponse::Stashed(mut other),
-                            ) => {
-                                assert_eq!(batches.shard_id, other.shard_id);
-                                assert_eq!(batches.relation_desc, other.relation_desc);
-                                batches.batches.append(&mut other.batches);
-                                PeekResponse::Stashed(batches)
+                            (PeekResponse::Stashed(batches), PeekResponse::Stashed(other)) => {
+                                // Deconstruct so we don't miss adding new
+                                // fields. We need to be careful about merging
+                                // everything!
+                                let StashedPeekResponse {
+                                    num_rows: self_num_rows,
+                                    relation_desc: self_relation_desc,
+                                    shard_id: self_shard_id,
+                                    batches: mut self_batches,
+                                } = batches;
+                                let StashedPeekResponse {
+                                    num_rows: other_num_rows,
+                                    relation_desc: other_relation_desc,
+                                    shard_id: other_shard_id,
+                                    batches: mut other_batches,
+                                } = other;
+
+                                assert_eq!(self_shard_id, other_shard_id);
+                                assert_eq!(self_relation_desc, other_relation_desc);
+
+                                self_batches.append(&mut other_batches);
+
+                                let merged_response = StashedPeekResponse {
+                                    num_rows: self_num_rows + other_num_rows,
+                                    relation_desc: self_relation_desc,
+                                    shard_id: self_shard_id,
+                                    batches: self_batches,
+                                };
+
+                                PeekResponse::Stashed(merged_response)
                             }
                         };
                     }

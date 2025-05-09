@@ -29,6 +29,7 @@ use mz_compute_client::protocol::response::{
     StashedPeekResponse, StatusResponse, SubscribeResponse,
 };
 use mz_compute_types::dataflows::DataflowDescription;
+use mz_compute_types::dyncfgs::ENABLE_PEEK_RESPONSE_STASH;
 use mz_compute_types::plan::LirId;
 use mz_compute_types::plan::render_plan::RenderPlan;
 use mz_dyncfg::ConfigSet;
@@ -894,7 +895,6 @@ impl<'a, A: Allocate + 'static> ActiveComputeState<'a, A> {
                         if let Some(err) = peek.extract_errs(upper) {
                             Some(err)
                         } else {
-                            // Some(peek.read_result(upper, self.compute_state.max_result_size))
                             let _span =
                                 span!(parent: &peek.span, Level::DEBUG, "process_stashed_peek")
                                     .entered();
@@ -1733,13 +1733,22 @@ impl StashPeekResponse {
             .await
             .expect("invalid usage");
 
+        let mut num_rows: usize = 0;
+
         loop {
             let row = rows_rx.recv().await;
             match row {
                 Some(Ok((row, diff))) => {
-                    tracing::info!(?row, ?diff, "row");
-                    let diff = NonZeroI64::try_from(diff).expect("result diff must fit");
-                    let diff = i64::try_from(diff).expect("result diff must fit");
+                    num_rows += usize::from(diff);
+                    let diff = if let Ok(diff) = NonZeroI64::try_from(diff) {
+                        diff
+                    } else {
+                        return Ok(PeekResponse::Error(format!(
+                            "result diff does not fit inside i64"
+                        )));
+                    };
+                    let diff = i64::try_from(diff).expect("must fit");
+
                     batch_builder
                         .add(&row, &(), &Timestamp::default(), &diff)
                         .await
@@ -1755,6 +1764,7 @@ impl StashPeekResponse {
         let batch = batch_builder.finish(upper).await.expect("invalid usage");
 
         let stashed_response = StashedPeekResponse {
+            num_rows: u64::cast_from(num_rows),
             relation_desc,
             shard_id,
             batches: vec![batch.into_transmittable_batch()],

@@ -153,28 +153,23 @@ impl PeekNotification {
     /// parameters are used to calculate the number of rows in the peek result.
     fn new(peek_response: &PeekResponse, offset: usize, limit: Option<usize>) -> Self {
         match peek_response {
-            PeekResponse::Rows(rows) => Self::Success {
-                rows: u64::cast_from(rows.count(offset, limit)),
-                result_size: u64::cast_from(rows.byte_len()),
-            },
+            PeekResponse::Rows(rows) => {
+                let num_rows = u64::cast_from(rows.count(offset, limit));
+                let result_size = u64::cast_from(rows.byte_len());
+
+                tracing::info!(?num_rows, ?result_size, "inline result");
+                Self::Success {
+                    rows: num_rows,
+                    result_size,
+                }
+            }
             // WIP: Figure out rows and result_size!
             // TODO(aljoscha): We know how to get this from Batch/HollowBatch,
             // but need to do it in adapter which has a PersistClient.
             PeekResponse::Stashed(stashed_response) => {
-                let mut rows = 0;
-                let mut result_size = 0;
-                for proto_batch in stashed_response.batches.iter() {
-                    // let batch = HollowBatch::<mz_repr::Timestamp>::from_proto(proto_batch.batch).into_rust_if_so;
-                    let batch: HollowBatch<mz_repr::Timestamp> = proto_batch
-                        .batch
-                        .clone()
-                        .into_rust_if_some("ProtoBatch::batch")
-                        .expect("valid proto batch");
-
-                    rows += batch.len;
-                    result_size += batch.encoded_size_bytes()
-                }
-                tracing::info!(?rows, ?result_size, "result");
+                let rows = stashed_response.num_rows(offset, limit);
+                let result_size = stashed_response.size_bytes();
+                tracing::info!(?rows, ?result_size, "stashed result");
                 Self::Success {
                     rows: u64::cast_from(rows),
                     result_size: u64::cast_from(result_size),
