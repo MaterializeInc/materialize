@@ -325,3 +325,7 @@ Source materialize.public.events
 The filter in our query appears in the `pushdown=` list at the bottom of the output, so the filter pushdown optimization will be able to filter out irrelevant ranges of data in that source and make the overall query more efficient.
 
 Some common functions, such as casting from a string to a timestamp, can prevent filter pushdown for a query. For similar functions that _do_ allow pushdown, see [the pushdown functions documentation](/sql/functions/pushdown/).
+
+{{< note >}}
+See the guide on [partitioning and filter pushdown](/transform-data/patterns/partition-by/) for a **private preview** feature that can make the filter pushdown optimization more predictable.
+{{< /note >}}
