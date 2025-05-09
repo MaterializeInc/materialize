@@ -9,7 +9,7 @@ use std::any::Any;
 use std::cell::RefCell;
 use std::cmp::Ordering;
 use std::collections::{BTreeMap, BTreeSet};
-use std::num::NonZeroUsize;
+use std::num::{NonZeroI64, NonZeroUsize};
 use std::rc::Rc;
 use std::sync::{Arc, mpsc};
 use std::time::{Duration, Instant};
@@ -47,9 +47,7 @@ use mz_persist_client::{Diagnostics, Schemas};
 use mz_persist_types::codec_impls::UnitSchema;
 use mz_persist_types::{PersistLocation, ShardId};
 use mz_repr::fixed_length::ToDatumIter;
-use mz_repr::{
-    DatumVec, Diff, GlobalId, IntoRowIterator, RelationDesc, Row, RowArena, RowIterator, Timestamp,
-};
+use mz_repr::{DatumVec, Diff, GlobalId, RelationDesc, Row, RowArena, Timestamp};
 use mz_storage_operators::stats::StatsCursor;
 use mz_storage_types::StorageDiff;
 use mz_storage_types::controller::CollectionMetadata;
@@ -64,17 +62,20 @@ use timely::order::PartialOrder;
 use timely::progress::frontier::Antichain;
 use timely::scheduling::Scheduler;
 use timely::worker::Worker as TimelyWorker;
+use tokio::sync::mpsc::error::TrySendError;
 use tokio::sync::{oneshot, watch};
 use tracing::{Level, debug, error, info, span, warn};
 use uuid::Uuid;
 
-use crate::arrangement::manager::{TraceBundle, TraceManager};
+use crate::arrangement::manager::{PaddedTrace, TraceBundle, TraceManager};
+use crate::compute_state::peek_execution::PeekResultIterator;
 use crate::logging;
 use crate::logging::compute::{CollectionLogging, ComputeEvent, PeekEvent};
 use crate::logging::initialize::LoggingTraces;
 use crate::metrics::{CollectionMetrics, WorkerMetrics};
 use crate::render::{LinearJoinSpec, StartSignal};
 use crate::server::{ComputeInstanceContext, ResponseSender};
+use crate::typedefs::RowRowAgent;
 
 mod peek_execution;
 
@@ -893,7 +894,23 @@ impl<'a, A: Allocate + 'static> ActiveComputeState<'a, A> {
                         if let Some(err) = peek.extract_errs(upper) {
                             Some(err)
                         } else {
-                            Some(peek.read_result(upper, self.compute_state.max_result_size))
+                            // Some(peek.read_result(upper, self.compute_state.max_result_size))
+                            let _span =
+                                span!(parent: &peek.span, Level::DEBUG, "process_stashed_peek")
+                                    .entered();
+                            let stash_task = StashPeekResponse::start_upload(
+                                Arc::clone(&self.compute_state.persist_clients),
+                                self.compute_state
+                                    .peek_stash_persist_location
+                                    .as_ref()
+                                    .expect("missing persist location for peek responses"),
+                                peek.peek.clone(),
+                                peek.trace_bundle.clone(),
+                            );
+                            self.compute_state
+                                .pending_peek_responses
+                                .insert(peek.peek.uuid, stash_task);
+                            return;
                         }
                     }
                     Ok(false) => None,
@@ -911,19 +928,7 @@ impl<'a, A: Allocate + 'static> ActiveComputeState<'a, A> {
 
         if let Some(response) = response {
             let _span = span!(parent: peek.span(), Level::DEBUG, "process_peek_response").entered();
-            let stash_task = StashPeekResponse::start_upload(
-                Arc::clone(&self.compute_state.persist_clients),
-                self.compute_state
-                    .peek_stash_persist_location
-                    .as_ref()
-                    .expect("missing persist location for peek responses"),
-                peek.peek().clone(),
-                response,
-            );
-            self.compute_state
-                .pending_peek_responses
-                .insert(peek.peek().uuid, stash_task);
-            // self.send_peek_response(peek.peek(), response)
+            self.send_peek_response(peek.peek(), response)
         } else {
             let uuid = peek.peek().uuid;
             self.compute_state.pending_peeks.insert(uuid, peek);
@@ -940,6 +945,9 @@ impl<'a, A: Allocate + 'static> ActiveComputeState<'a, A> {
 
         let pending_peeks_response = std::mem::take(&mut self.compute_state.pending_peek_responses);
         for (uuid, mut peek_response) in pending_peeks_response {
+            // WIP: Make configurable via dyncfg
+            peek_response.pump_rows(10);
+
             if let Ok((response, duration)) = peek_response.result.try_recv() {
                 // let _span =
                 //     span!(parent: peek_response.span, Level::DEBUG, "send_peek_response").entered();
@@ -1589,6 +1597,22 @@ impl IndexPeek {
 /// done or no longer needed.
 pub struct StashPeekResponse {
     peek: Peek,
+    /// Iterator for the results. The worker thread has to continually pump
+    /// results from this to the `rows_tx` channel.
+    peek_iterator: Option<
+        PeekResultIterator<
+            PaddedTrace<RowRowAgent<Timestamp, Diff>>,
+            Box<dyn Iterator<Item = Row>>,
+        >,
+    >,
+    /// We can't give a PeekResultIterator to our async upload task because the
+    /// underlying trace reader is not Send/Sync. So we need to use a channel to
+    /// send result rows from the worker thread to the async background task.
+    rows_tx: Option<tokio::sync::mpsc::Sender<Result<(Row, NonZeroUsize), String>>>,
+    /// When the async task is busy it cannot work of rows, and we don't want to
+    /// use an unbounded channel. We stash rows that we cannot send and retry
+    /// later.
+    stashed_row: Option<Result<(Row, NonZeroUsize), String>>,
     /// The result of the background task, eventually.
     result: oneshot::Receiver<(PeekResponse, Duration)>,
     /// The `tracing::Span` tracking this peek's operation
@@ -1602,16 +1626,38 @@ impl StashPeekResponse {
     fn start_upload(
         persist_clients: Arc<PersistClientCache>,
         persist_location: &PersistLocation,
-        peek: Peek,
-        peek_response: PeekResponse,
+        mut peek: Peek,
+        mut trace_bundle: TraceBundle,
     ) -> Self {
-        let (result_tx, result_rx) = oneshot::channel();
+        let (rows_tx, rows_rx) = tokio::sync::mpsc::channel(100);
+        let (result_tx, result_rx) = oneshot::channel::<(PeekResponse, Duration)>();
 
         let persist_clients = Arc::clone(&persist_clients);
         let persist_location = persist_location.clone();
 
         let peek_uuid = peek.uuid;
         let relation_desc = peek.result_desc.clone();
+
+        // We have to sort the literal constraints because cursor.seek_key can
+        // seek only forward.
+        peek.literal_constraints
+            .iter_mut()
+            .for_each(|vec| vec.sort());
+        let has_literal_constraints = peek.literal_constraints.is_some();
+        let literals = Option::take(&mut peek.literal_constraints)
+            .into_iter()
+            .flatten();
+        let literals: Box<dyn Iterator<Item = Row>> = Box::new(literals);
+
+        let oks_handle = trace_bundle.oks_mut();
+
+        let peek_iterator = peek_execution::PeekResultIterator::new(
+            peek.map_filter_project.clone(),
+            peek.timestamp,
+            has_literal_constraints,
+            literals,
+            oks_handle,
+        );
 
         let task_handle = mz_ore::task::spawn(|| "compute::stash_peek_response", async move {
             let start = Instant::now();
@@ -1621,7 +1667,7 @@ impl StashPeekResponse {
                 persist_location,
                 peek.uuid,
                 relation_desc,
-                peek_response,
+                rows_rx,
             )
             .await;
 
@@ -1639,6 +1685,9 @@ impl StashPeekResponse {
 
         Self {
             peek,
+            peek_iterator: Some(peek_iterator),
+            rows_tx: Some(rows_tx),
+            stashed_row: None,
             result: result_rx,
             span: tracing::Span::current(),
             _abort_handle: task_handle.abort_on_drop(),
@@ -1650,22 +1699,23 @@ impl StashPeekResponse {
         persist_location: PersistLocation,
         peek_uuid: Uuid,
         relation_desc: RelationDesc,
-        peek_response: PeekResponse,
+        mut rows_rx: tokio::sync::mpsc::Receiver<Result<(Row, NonZeroUsize), String>>,
     ) -> Result<PeekResponse, String> {
         let client = persist_clients
             .open(persist_location)
             .await
             .map_err(|e| e.to_string())?;
 
-        if relation_desc.typ().columns().is_empty() {
-            match peek_response {
-                PeekResponse::Rows(row_collection) => {
-                    assert_eq!(row_collection.entries(), 0);
-                    return Ok(PeekResponse::Rows(row_collection));
-                }
-                _ => {}
-            }
-        }
+        // WIP: Turn this on again
+        // if relation_desc.typ().columns().is_empty() {
+        //     match peek_response {
+        //         PeekResponse::Rows(row_collection) => {
+        //             assert_eq!(row_collection.entries(), 0);
+        //             return Ok(PeekResponse::Rows(row_collection));
+        //         }
+        //         _ => {}
+        //     }
+        // }
 
         let shard_id = format!("s{}", peek_uuid);
         let shard_id = ShardId::try_from(shard_id).expect("can parse");
@@ -1683,23 +1733,23 @@ impl StashPeekResponse {
             .await
             .expect("invalid usage");
 
-        let rows = match peek_response {
-            PeekResponse::Rows(row_collection) => row_collection,
-            PeekResponse::Stashed(_stashed_peek_response) => unreachable!(),
-            PeekResponse::Error(e) => return Ok(PeekResponse::Error(e)),
-            PeekResponse::Canceled => return Ok(PeekResponse::Canceled),
-        };
-        let row_sorted_view = rows.sorted_view(&[]);
-        let mut row_iter = row_sorted_view.into_row_iter();
-
-        // WIP: Don't go through a PeekResponse, which forces us to iterate and
-        // clone here.
-        while let Some(row) = row_iter.next() {
-            // tracing::info!(?row, "row!");
-            batch_builder
-                .add(&row.into_owned(), &(), &Timestamp::default(), &1)
-                .await
-                .expect("invalid usage");
+        loop {
+            let row = rows_rx.recv().await;
+            match row {
+                Some(Ok((row, diff))) => {
+                    tracing::info!(?row, ?diff, "row");
+                    let diff = NonZeroI64::try_from(diff).expect("result diff must fit");
+                    let diff = i64::try_from(diff).expect("result diff must fit");
+                    batch_builder
+                        .add(&row, &(), &Timestamp::default(), &diff)
+                        .await
+                        .expect("invalid usage");
+                }
+                Some(Err(err)) => return Ok(PeekResponse::Error(err)),
+                None => {
+                    break;
+                }
+            }
         }
 
         let batch = batch_builder.finish(upper).await.expect("invalid usage");
@@ -1711,6 +1761,44 @@ impl StashPeekResponse {
         };
         let result = PeekResponse::Stashed(stashed_response);
         Ok(result)
+    }
+
+    /// Pumps rows from the [PeekResultIterator] to the async task, via our
+    /// `rows_tx`. Will pump at most `max_rows` rows in one invocation.
+    fn pump_rows(&mut self, max_rows: usize) {
+        for _i in 0..max_rows {
+            let row = if let Some(row) = self.stashed_row.take() {
+                Some(row)
+            } else {
+                match self.peek_iterator.as_mut() {
+                    Some(i) => i.next(),
+                    None => None,
+                }
+            };
+            if let Some(row) = row {
+                match self
+                    .rows_tx
+                    .as_mut()
+                    .expect("missing rows_tx")
+                    .try_send(row)
+                {
+                    Ok(_) => {
+                        // All good!
+                    }
+                    Err(TrySendError::Full(row)) => {
+                        // Need to stash the row and try again later
+                        let prev = self.stashed_row.replace(row);
+                        assert!(prev.is_none());
+                    }
+                    _ => {}
+                }
+            } else {
+                // We are done, yank our iterator and the row_tx.
+                self.peek_iterator.take();
+                self.rows_tx.take();
+                break;
+            }
+        }
     }
 }
 
