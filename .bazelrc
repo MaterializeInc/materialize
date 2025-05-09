@@ -144,6 +144,10 @@ build --@rules_rust//:extra_rustc_flag="-Ccodegen-units=64"
 # just `.rmeta` instead of the full `.rlib`.
 build --@rules_rust//rust/settings:pipelined_compilation=True
 
+# Enforce frame pointers everywhere. We rely on them for collecting backtraces.
+build --@rules_rust//:extra_rustc_flag="-Cforce-frame-pointers=yes"
+build --copt=-fno-omit-frame-pointer
+
 # `cargo check` like config, still experimental!
 #
 # Ignores all outputs other than `.rmeta`, requires pipelied_compilation to be enabled!

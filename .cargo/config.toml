@@ -17,6 +17,7 @@ rustflags = [
     "-Clink-arg=-Wl,-O3",
     "-Clink-arg=-fuse-ld=lld",
     "-Csymbol-mangling-version=v0",
+    "-Cforce-frame-pointers=yes",
     "--cfg=tokio_unstable",
 ]
 
@@ -34,6 +35,7 @@ rustflags = [
     "-Clink-arg=-Wl,-O3",
     "-Clink-arg=-fuse-ld=lld",
     "-Csymbol-mangling-version=v0",
+    "-Cforce-frame-pointers=yes",
     "--cfg=tokio_unstable",
 ]
 
