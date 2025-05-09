@@ -3966,9 +3966,9 @@ checksum = "5622af6d21ff86ed7797ef98e11b8f302da25ec69a7db9f6cde8e2e1c8df9992"
 dependencies = [
  "anyhow",
  "libc",
- "mappings",
+ "mappings 0.7.0",
  "once_cell",
- "pprof_util",
+ "pprof_util 0.7.0",
  "tempfile",
  "tikv-jemalloc-ctl",
  "tokio",
@@ -4558,7 +4558,20 @@ dependencies = [
  "anyhow",
  "libc",
  "once_cell",
- "pprof_util",
+ "pprof_util 0.6.0",
+ "tracing",
+]
+
+[[package]]
+name = "mappings"
+version = "0.7.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e434981a332777c2b3062652d16a55f8e74fa78e6b1882633f0d77399c84fc2a"
+dependencies = [
+ "anyhow",
+ "libc",
+ "once_cell",
+ "pprof_util 0.7.0",
  "tracing",
 ]
 
@@ -6819,7 +6832,7 @@ dependencies = [
  "mz-build-tools",
  "mz-ore",
  "pprof",
- "pprof_util",
+ "pprof_util 0.7.0",
  "prost",
  "prost-build",
  "tikv-jemalloc-ctl",
@@ -6842,14 +6855,14 @@ dependencies = [
  "http 1.2.0",
  "include_dir",
  "jemalloc_pprof",
- "mappings",
+ "mappings 0.6.0",
  "mime",
  "mz-build-info",
  "mz-http-util",
  "mz-npm",
  "mz-ore",
  "mz-prof",
- "pprof_util",
+ "pprof_util 0.7.0",
  "serde",
  "tokio",
  "tracing",
@@ -8889,6 +8902,19 @@ dependencies = [
  "symbolic-demangle",
  "tempfile",
  "thiserror 1.0.69",
+]
+
+[[package]]
+name = "pprof_util"
+version = "0.7.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9fa015c78eed2130951e22c58d2095849391e73817ab2e74f71b0b9f63dd8416"
+dependencies = [
+ "anyhow",
+ "flate2",
+ "num",
+ "paste",
+ "prost",
 ]
 
 [[package]]
