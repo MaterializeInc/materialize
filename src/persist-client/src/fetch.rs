@@ -36,7 +36,7 @@ use mz_persist_types::part::Codec64Mut;
 use mz_persist_types::schema::backward_compatible;
 use mz_persist_types::stats::PartStats;
 use mz_persist_types::{Codec, Codec64};
-use mz_proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
+use mz_proto::RustType;
 use serde::{Deserialize, Serialize};
 use timely::PartialOrder;
 use timely::progress::frontier::AntichainRef;
@@ -44,17 +44,15 @@ use timely::progress::{Antichain, Timestamp};
 use tracing::{Instrument, debug, debug_span, trace_span};
 
 use crate::ShardId;
-use crate::batch::{
-    ProtoFetchBatchFilter, ProtoFetchBatchFilterListen, ProtoLease, ProtoLeasedBatchPart,
-    proto_fetch_batch_filter,
-};
 use crate::cfg::PersistConfig;
 use crate::error::InvalidUsage;
 use crate::internal::encoding::{LazyInlineBatchPart, LazyPartStats, LazyProto, Schemas};
 use crate::internal::machine::retry_external;
 use crate::internal::metrics::{Metrics, MetricsPermits, ReadMetrics, ShardMetrics};
 use crate::internal::paths::BlobKey;
-use crate::internal::state::{BatchPart, HollowBatchPart, ProtoInlineBatchPart};
+use crate::internal::state::{
+    BatchPart, HollowBatchPart, ProtoHollowBatchPart, ProtoInlineBatchPart,
+};
 use crate::read::LeasedReaderId;
 use crate::schema::{PartMigration, SchemaCache};
 
@@ -141,42 +139,42 @@ where
     T: Timestamp + Lattice + Codec64 + Sync,
     D: Semigroup + Codec64 + Send + Sync,
 {
-    /// Takes a [`SerdeLeasedBatchPart`] into a [`LeasedBatchPart`].
-    pub fn leased_part_from_exchangeable(&self, x: SerdeLeasedBatchPart) -> LeasedBatchPart<T> {
-        x.decode(Arc::clone(&self.metrics))
-    }
-
     /// Trade in an exchange-able [LeasedBatchPart] for the data it represents.
     ///
     /// Note to check the `LeasedBatchPart` documentation for how to handle the
     /// returned value.
     pub async fn fetch_leased_part(
         &mut self,
-        part: &LeasedBatchPart<T>,
+        part: ExchangeableBatchPart<T>,
     ) -> Result<Result<FetchedBlob<K, V, T, D>, BlobKey>, InvalidUsage<T>> {
-        if &part.shard_id != &self.shard_id {
-            let batch_shard = part.shard_id.clone();
+        let ExchangeableBatchPart {
+            shard_id,
+            encoded_size_bytes: _,
+            desc,
+            filter,
+            filter_pushdown_audit,
+            part,
+        } = part;
+        let part: BatchPart<T> = part.decode_to().expect("valid part");
+        if shard_id != self.shard_id {
             return Err(InvalidUsage::BatchNotFromThisShard {
-                batch_shard,
+                batch_shard: shard_id,
                 handle_shard: self.shard_id.clone(),
             });
         }
 
-        let migration = PartMigration::new(
-            &part.part,
-            self.read_schemas.clone(),
-            &mut self.schema_cache,
-        )
-        .await
-        .unwrap_or_else(|read_schemas| {
-            panic!(
-                "could not decode part {:?} with schema: {:?}",
-                part.part.schema_id(),
-                read_schemas
-            )
-        });
+        let migration =
+            PartMigration::new(&part, self.read_schemas.clone(), &mut self.schema_cache)
+                .await
+                .unwrap_or_else(|read_schemas| {
+                    panic!(
+                        "could not decode part {:?} with schema: {:?}",
+                        part.schema_id(),
+                        read_schemas
+                    )
+                });
 
-        let (buf, fetch_permit) = match &part.part {
+        let (buf, fetch_permit) = match &part {
             BatchPart::Hollow(x) => {
                 let fetch_permit = self
                     .metrics
@@ -189,7 +187,7 @@ where
                     &self.metrics.read.batch_fetcher
                 };
                 let buf = fetch_batch_part_blob(
-                    &part.shard_id,
+                    &shard_id,
                     self.blob.as_ref(),
                     &self.metrics,
                     &self.shard_metrics,
@@ -213,7 +211,7 @@ where
                 ..
             } => {
                 let buf = FetchedBlobBuf::Inline {
-                    desc: part.desc.clone(),
+                    desc: desc.clone(),
                     updates: updates.clone(),
                     ts_rewrite: ts_rewrite.clone(),
                 };
@@ -224,10 +222,10 @@ where
             metrics: Arc::clone(&self.metrics),
             read_metrics: self.metrics.read.batch_fetcher.clone(),
             buf,
-            registered_desc: part.desc.clone(),
+            registered_desc: desc.clone(),
             migration,
-            filter: part.filter.clone(),
-            filter_pushdown_audit: part.filter_pushdown_audit,
+            filter: filter.clone(),
+            filter_pushdown_audit,
             structured_part_audit: self.cfg.part_decode_format(),
             fetch_permit,
             _phantom: PhantomData,
@@ -236,7 +234,7 @@ where
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub(crate) enum FetchBatchFilter<T> {
     Snapshot {
         as_of: Antichain<T>,
@@ -283,42 +281,6 @@ impl<T: Timestamp + Lattice> FetchBatchFilter<T> {
                 t.advance_by(since.borrow());
                 true
             }
-        }
-    }
-}
-
-impl<T: Timestamp + Codec64> RustType<ProtoFetchBatchFilter> for FetchBatchFilter<T> {
-    fn into_proto(&self) -> ProtoFetchBatchFilter {
-        let kind = match self {
-            FetchBatchFilter::Snapshot { as_of } => {
-                proto_fetch_batch_filter::Kind::Snapshot(as_of.into_proto())
-            }
-            FetchBatchFilter::Listen { as_of, lower } => {
-                proto_fetch_batch_filter::Kind::Listen(ProtoFetchBatchFilterListen {
-                    as_of: Some(as_of.into_proto()),
-                    lower: Some(lower.into_proto()),
-                })
-            }
-            FetchBatchFilter::Compaction { .. } => unreachable!("not serialized"),
-        };
-        ProtoFetchBatchFilter { kind: Some(kind) }
-    }
-
-    fn from_proto(proto: ProtoFetchBatchFilter) -> Result<Self, TryFromProtoError> {
-        let kind = proto
-            .kind
-            .ok_or_else(|| TryFromProtoError::missing_field("ProtoFetchBatchFilter::kind"))?;
-        match kind {
-            proto_fetch_batch_filter::Kind::Snapshot(as_of) => Ok(FetchBatchFilter::Snapshot {
-                as_of: as_of.into_rust()?,
-            }),
-            proto_fetch_batch_filter::Kind::Listen(ProtoFetchBatchFilterListen {
-                as_of,
-                lower,
-            }) => Ok(FetchBatchFilter::Listen {
-                as_of: as_of.into_rust_if_some("ProtoFetchBatchFilterListen::as_of")?,
-                lower: lower.into_rust_if_some("ProtoFetchBatchFilterListen::lower")?,
-            }),
         }
     }
 }
@@ -485,8 +447,8 @@ impl Lease {
 ///
 /// You can exchange `LeasedBatchPart`:
 /// - If `leased_seqno.is_none()`
-/// - By converting it to [`SerdeLeasedBatchPart`] through
-///   `Self::into_exchangeable_part`. [`SerdeLeasedBatchPart`] is exchangeable,
+/// - By converting it to [`ExchangeableBatchPart`] through
+///   `Self::into_exchangeable_part`. [`ExchangeableBatchPart`] is exchangeable,
 ///   including over the network.
 ///
 /// n.b. `Self::into_exchangeable_part` is known to be equivalent to
@@ -505,7 +467,6 @@ impl Lease {
 pub struct LeasedBatchPart<T> {
     pub(crate) metrics: Arc<Metrics>,
     pub(crate) shard_id: ShardId,
-    pub(crate) reader_id: LeasedReaderId,
     pub(crate) filter: FetchBatchFilter<T>,
     pub(crate) desc: Description<T>,
     pub(crate) part: BatchPart<T>,
@@ -523,7 +484,7 @@ impl<T> LeasedBatchPart<T>
 where
     T: Timestamp + Codec64,
 {
-    /// Takes `self` into a [`SerdeLeasedBatchPart`], which allows `self` to be
+    /// Takes `self` into a [`ExchangeableBatchPart`], which allows `self` to be
     /// exchanged (potentially across the network).
     ///
     /// !!!WARNING!!!
@@ -532,13 +493,16 @@ where
     /// that can't travel across process boundaries. The caller is responsible for
     /// ensuring that the lease is held for as long as the batch part may be in use:
     /// dropping it too early may cause a fetch to fail.
-    pub(crate) fn into_exchangeable_part(mut self) -> (SerdeLeasedBatchPart, Option<Lease>) {
-        let (proto, _metrics) = self.into_proto();
+    pub(crate) fn into_exchangeable_part(mut self) -> (ExchangeableBatchPart<T>, Option<Lease>) {
         // If `x` has a lease, we've effectively transferred it to `r`.
         let lease = self.lease.take();
-        let part = SerdeLeasedBatchPart {
+        let part = ExchangeableBatchPart {
+            shard_id: self.shard_id,
             encoded_size_bytes: self.part.encoded_size_bytes(),
-            proto: LazyProto::from(&proto),
+            desc: self.desc.clone(),
+            filter: self.filter.clone(),
+            part: LazyProto::from(&self.part.into_proto()),
+            filter_pushdown_audit: self.filter_pushdown_audit,
         };
         (part, lease)
     }
@@ -1392,68 +1356,20 @@ where
 /// - [`LeasedBatchPart`]
 /// - `From<SerdeLeasedBatchPart>` for `LeasedBatchPart<T>`
 #[derive(Debug, Serialize, Deserialize, Clone)]
-pub struct SerdeLeasedBatchPart {
+pub struct ExchangeableBatchPart<T> {
+    shard_id: ShardId,
     // Duplicated with the one serialized in the proto for use in backpressure.
     encoded_size_bytes: usize,
-    // We wrap this in a LazyProto because it guarantees that we use the proto
-    // encoding for the serde impls.
-    proto: LazyProto<ProtoLeasedBatchPart>,
+    desc: Description<T>,
+    filter: FetchBatchFilter<T>,
+    part: LazyProto<ProtoHollowBatchPart>,
+    filter_pushdown_audit: bool,
 }
 
-impl SerdeLeasedBatchPart {
+impl<T> ExchangeableBatchPart<T> {
     /// Returns the encoded size of the given part.
     pub fn encoded_size_bytes(&self) -> usize {
         self.encoded_size_bytes
-    }
-
-    pub(crate) fn decode<T: Timestamp + Codec64>(
-        &self,
-        metrics: Arc<Metrics>,
-    ) -> LeasedBatchPart<T> {
-        let proto = self.proto.decode().expect("valid leased batch part");
-        (proto, metrics)
-            .into_rust()
-            .expect("valid leased batch part")
-    }
-}
-
-// TODO: The way we're smuggling the metrics through here is a bit odd. Perhaps
-// we could refactor `LeasedBatchPart` into some proto-able struct plus the
-// metrics for the Drop bit?
-impl<T: Timestamp + Codec64> RustType<(ProtoLeasedBatchPart, Arc<Metrics>)> for LeasedBatchPart<T> {
-    fn into_proto(&self) -> (ProtoLeasedBatchPart, Arc<Metrics>) {
-        let proto = ProtoLeasedBatchPart {
-            shard_id: self.shard_id.into_proto(),
-            filter: Some(self.filter.into_proto()),
-            desc: Some(self.desc.into_proto()),
-            part: Some(self.part.into_proto()),
-            lease: Some(ProtoLease {
-                reader_id: self.reader_id.into_proto(),
-                seqno: Some(self.leased_seqno.into_proto()),
-            }),
-            filter_pushdown_audit: self.filter_pushdown_audit,
-        };
-        (proto, Arc::clone(&self.metrics))
-    }
-
-    fn from_proto(proto: (ProtoLeasedBatchPart, Arc<Metrics>)) -> Result<Self, TryFromProtoError> {
-        let (proto, metrics) = proto;
-        let lease = proto
-            .lease
-            .ok_or_else(|| TryFromProtoError::missing_field("ProtoLeasedBatchPart::lease"))?;
-        Ok(LeasedBatchPart {
-            metrics,
-            shard_id: proto.shard_id.into_rust()?,
-            filter: proto
-                .filter
-                .into_rust_if_some("ProtoLeasedBatchPart::filter")?,
-            desc: proto.desc.into_rust_if_some("ProtoLeasedBatchPart::desc")?,
-            part: proto.part.into_rust_if_some("ProtoLeasedBatchPart::part")?,
-            reader_id: lease.reader_id.into_rust()?,
-            leased_seqno: lease.seqno.into_rust_if_some("ProtoLease::seqno")?,
-            lease: None,
-            filter_pushdown_audit: proto.filter_pushdown_audit,
-        })
     }
 }
 
@@ -1522,6 +1438,6 @@ fn client_exchange_data() {
     // between timely workers, including over the network. Enforce then that it
     // implements ExchangeData.
     fn is_exchange_data<T: timely::ExchangeData>() {}
-    is_exchange_data::<SerdeLeasedBatchPart>();
-    is_exchange_data::<SerdeLeasedBatchPart>();
+    is_exchange_data::<ExchangeableBatchPart<u64>>();
+    is_exchange_data::<ExchangeableBatchPart<u64>>();
 }

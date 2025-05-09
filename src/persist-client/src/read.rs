@@ -723,7 +723,6 @@ where
         LeasedBatchPart {
             metrics: Arc::clone(&self.metrics),
             shard_id: self.machine.shard_id(),
-            reader_id: self.reader_id.clone(),
             filter,
             desc,
             part,
@@ -1454,8 +1453,9 @@ mod tests {
             this_seqno = part_seqno;
             assert!(this_seqno >= last_seqno);
 
-            let _ = fetcher.fetch_leased_part(&part).await;
-            drop(part);
+            let (part, lease) = part.into_exchangeable_part();
+            let _ = fetcher.fetch_leased_part(part).await;
+            drop(lease);
 
             // Simulates an exchange
             for event in subscribe.next(None).await {
