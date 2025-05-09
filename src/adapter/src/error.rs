@@ -489,6 +489,12 @@ impl AdapterError {
             AdapterError::PlanError(PlanError::ColumnAlreadyExists { .. }) => {
                 SqlState::DUPLICATE_COLUMN
             }
+            AdapterError::PlanError(PlanError::UnknownParameter(_)) => {
+                SqlState::UNDEFINED_PARAMETER
+            }
+            AdapterError::PlanError(PlanError::ParameterNotAllowed(_)) => {
+                SqlState::UNDEFINED_PARAMETER
+            }
             AdapterError::PlanError(_) => SqlState::INTERNAL_ERROR,
             AdapterError::PreparedStatementExists(_) => SqlState::DUPLICATE_PSTATEMENT,
             AdapterError::ReadOnlyTransaction => SqlState::READ_ONLY_SQL_TRANSACTION,
