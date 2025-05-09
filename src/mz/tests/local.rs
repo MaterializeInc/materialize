@@ -15,7 +15,8 @@ mod tests {
     use mz::ui::OptionalStr;
     use mz_frontegg_auth::AppPassword;
     use serde::{Deserialize, Serialize};
-    use tabled::{Style, Table, Tabled};
+    use tabled::settings::Style;
+    use tabled::{Table, Tabled};
     use uuid::Uuid;
 
     fn get_config_path() -> PathBuf {
