@@ -1,0 +1,47 @@
+
+1. In the [SQL Shell](https://console.materialize.com/), or your preferred SQL
+   client connected to Materialize, use the [`CREATE SECRET`](/sql/create-secret/)
+   command to securely store the password for the SQL Server role you'll use to
+   replicate data into Materialize:
+
+    ```mzsql
+    CREATE SECRET sqlserver_pass AS '<PASSWORD>';
+    ```
+
+1. Use the [`CREATE CONNECTION`](/sql/create-connection/) command to create a
+   connection object with access and authentication details for Materialize to
+   use:
+
+    ```mzsql
+    CREATE CONNECTION sqlserver_connection TO SQL SERVER (
+        HOST <host>,
+        PORT 1433,
+        USER 'materialize',
+        PASSWORD SECRET sqlserver_pass,
+        DATABASE <database>
+    );
+    ```
+
+    - Replace `<host>` with your SQL Server endpoint, and `<database>` with the database you'd like to connect to.
+
+1. Use the [`CREATE SOURCE`](/sql/create-source/) command to connect Materialize
+   to your SQL Server instance and start ingesting data:
+
+    ```mzsql
+    CREATE SOURCE mz_source
+      FROM SQL SERVER CONNECTION sqlserver_connection
+      FOR ALL TABLES;
+    ```
+
+    - By default, the source will be created in the active cluster; to use a
+      different cluster, use the `IN CLUSTER` clause.
+
+    - To ingest data from specific tables use the `FOR TABLES
+      (<table1>, <table2>)` options instead of `FOR ALL TABLES`.
+
+    - To handle unsupported data types, use the `TEXT COLUMNS` or `EXCLUDE
+      COLUMNS` options. Check out the [reference documentation](/sql/create-source/sql-server/#supported-types)
+      for guidance.
+
+1. After source creation, you can handle upstream [schema changes](/sql/create-source/sql-server/#schema-changes)
+   by dropping and recreating the source.

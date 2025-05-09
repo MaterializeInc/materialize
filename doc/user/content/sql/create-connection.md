@@ -860,6 +860,45 @@ an SSH bastion server to accept connections from Materialize, check [this guide]
 {{< /tab >}}
 {{< /tabs >}}
 
+### SQL Server
+
+A SQL Server connection establishes a link to a single database of a
+[SQL Server] instance. You can use SQL Server connections to create [sources](/sql/create-source/sql-server).
+
+#### Syntax {#sql-server-syntax}
+
+{{< diagram "create-connection-sql-server.svg" >}}
+
+#### Connection options {#postgres-options}
+
+Field                       | Value            | Required | Description
+----------------------------|------------------|:--------:|-----------------------------
+`HOST`                      | `text`           | ✓        | Database hostname.
+`PORT`                      | `integer`        |          | Default: `1433`. Port number to connect to at the server host.
+`DATABASE`                  | `text`           | ✓        | Target database.
+`USER`                      | `text`           | ✓        | Database username.
+`PASSWORD`                  | secret           | ✓        | Password for the connection.
+
+#### `WITH` options {#postgres-with-options}
+
+Field         | Value     | Description
+--------------|-----------|-------------------------------------
+`VALIDATE`    | `boolean` | Default: `true`. Whether [connection validation](#connection-validation) should be performed on connection creation.
+
+#### Example {#sql-server-example}
+
+```mzsql
+CREATE SECRET sqlserver_pass AS '<SQL_SERVER_PASSWORD>';
+
+CREATE CONNECTION sqlserver_connection TO SQL SERVER (
+    HOST 'instance.foo000.us-west-1.rds.amazonaws.com',
+    PORT 1433,
+    USER 'SA',
+    PASSWORD SECRET sqlserver_pass,
+    DATABASE 'my_db'
+);
+```
+
 ## Network security connections
 
 ### AWS PrivateLink
@@ -1047,6 +1086,7 @@ The privileges required to execute this statement are:
 [Kafka]: https://kafka.apache.org
 [MySQL]: https://www.mysql.com/
 [PostgreSQL]: https://www.postgresql.org
+[SQL Server]: https://www.microsoft.com/en-us/sql-server
 [`ALTER CONNECTION`]: /sql/alter-connection
 [`CREATE SOURCE`]: /sql/create-source
 [`CREATE SINK`]: /sql/create-sink
