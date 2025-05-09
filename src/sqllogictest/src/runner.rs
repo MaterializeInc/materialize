@@ -201,10 +201,15 @@ impl<'a> Outcome<'a> {
                 // This value gets fed back into regex to check that it matches
                 // `self`, so escape its meta characters.
                 regex::escape(
-                    // Take only first string in error message, which should be
-                    // sufficient for meaningfully matching error.
+                    // Take only the first string in the error message, which should be
+                    // sufficient for meaningfully matching the error.
                     error.to_string().split('\n').next().unwrap(),
-                ),
+                )
+                // We need to undo the escaping of #. `regex::escape` escapes this because it
+                // expects that we use the `x` flag when building a regex, but this is not the case,
+                // so \# would end up being an invalid escape sequence, which would choke the
+                // parsing of the slt file the next time around.
+                .replace(r"\#", "#"),
             ),
             _ => None,
         }

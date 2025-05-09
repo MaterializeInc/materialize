@@ -1314,10 +1314,7 @@ FROM foo
 ORDER BY a, b
 OFFSET a;
 
-# TODO: This error msg is incomplete: it's missing the `integer_to_bigint\(\#\^0\{a\}\)` from the end, which is present
-# in the actual error msg. If we include that, then sqllogictest panics due to a bug in sqllogictest and/or in
-# `regex::escape`.
-query error db error: ERROR: Invalid OFFSET clause: must be simplifiable to a constant, possibly after parameter binding, got
+query error db error: ERROR: Invalid OFFSET clause: must be simplifiable to a constant, possibly after parameter binding, got integer_to_bigint\(#\^0\{a\}\)
 PREPARE p_error AS
 SELECT
   (
@@ -1352,7 +1349,7 @@ SELECT
 FROM foo AS outer_foo;
 
 # This tests the `plan_select_inner`'s `try_visit_mut_pre` just after binding the parameters of `expr`.
-query error db error: ERROR: Invalid OFFSET clause: Expected a constant expression, got
+query error db error: ERROR: Invalid OFFSET clause: Expected a constant expression, got integer_to_bigint\(\(#\^0\{a\} \+ 7\)\)
 EXECUTE p_error_1(7);
 
 query error db error: ERROR: OFFSET does not allow subqueries
@@ -1440,7 +1437,7 @@ FROM foo
 ORDER BY b, a
 OFFSET null;
 
-query error db error: ERROR: Invalid OFFSET clause: must be simplifiable to a constant, possibly after parameter binding, got
+query error db error: ERROR: Invalid OFFSET clause: must be simplifiable to a constant, possibly after parameter binding, got text_to_bigint\(mz_timestamp_to_text\(mz_now\(\)\)\)
 CREATE VIEW err AS
 SELECT *
 FROM foo
@@ -1518,7 +1515,7 @@ FROM foo
 ORDER BY b, a
 OFFSET null;
 
-query error db error: ERROR: Invalid OFFSET clause: must be simplifiable to a constant, possibly after parameter binding, got
+query error db error: ERROR: Invalid OFFSET clause: must be simplifiable to a constant, possibly after parameter binding, got text_to_bigint\(mz_timestamp_to_text\(mz_now\(\)\)\)
 CREATE MATERIALIZED VIEW err AS
 SELECT *
 FROM foo
