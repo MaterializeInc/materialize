@@ -151,7 +151,7 @@ extern "C" fn handle_termination_signal(signum: i32) {
 
     let ret = unsafe { libc::raise(signum) };
     if ret == -1 {
-        let errno = errno::from_i32(errno::errno());
+        let errno = errno::Errno::from_raw(errno::Errno::last_raw());
         panic!("failed to re-raise signal {}: {}", signum, errno);
     }
 }
