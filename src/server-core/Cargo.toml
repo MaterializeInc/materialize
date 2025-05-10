@@ -15,6 +15,7 @@ async-trait = { version = "0.1.88" }
 clap = { version = "4.5.23", features = ["derive", "env"] }
 openssl = { version = "0.10.71", features = ["vendored"] }
 scopeguard = "1.2.0"
+serde = { version = "1.0.219", features = ["derive"] }
 socket2 = "0.5.8"
 tokio-stream = "0.1.17"
 proxy-header = "0.1.2"
