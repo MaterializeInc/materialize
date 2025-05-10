@@ -87,6 +87,7 @@ impl darling::FromMeta for SqlName {
 pub fn sqlfunc(
     attr: TokenStream,
     item: TokenStream,
+    include_func: bool,
     include_test: bool,
 ) -> darling::Result<TokenStream> {
     let attr_args = darling::ast::NestedMeta::parse_meta_list(attr.clone())?;
@@ -106,11 +107,50 @@ pub fn sqlfunc(
     }?;
 
     let test = include_test.then(|| generate_test(attr, item, &func.sig.ident));
+    let func = include_func.then(|| func);
 
     Ok(quote! {
         #tokens
+        #func
         #test
     })
+}
+
+const HEADER: &'static str = "// Copyright Materialize, Inc. and contributors. All rights reserved.
+//
+// Use of this software is governed by the Business Source License
+// included in the LICENSE file.
+//
+// As of the Change Date specified in that file, in accordance with
+// the Business Source License, use of this software will be governed
+// by the Apache License, Version 2.0.
+
+";
+
+pub fn save_file(file: &str, fn_name: &str, struct_name: &str, contents: &str) {
+    if std::env::var("SQLFUNC_WRITE").is_err() {
+        return;
+    }
+    println!("file: {file}, fn_name: {fn_name}");
+    let file =
+        std::path::Path::new("src/scalar/func/impls/generated/").join(format!("{fn_name}.rs"));
+    println!("Writing to file: {}", file.display());
+    println!(
+        "current dir: {}",
+        std::env::current_dir().unwrap().display()
+    );
+    std::fs::write(file, format!("{HEADER}\n{contents}").as_bytes()).unwrap();
+
+    let mod_file = "src/scalar/func/impls/generated.rs";
+
+    let mut mod_file = std::fs::OpenOptions::new()
+        .write(true)
+        .append(true)
+        .open(mod_file)
+        .unwrap();
+
+    use std::io::Write;
+    writeln!(mod_file, "mod {fn_name};pub use {fn_name}::{struct_name};").unwrap();
 }
 
 #[cfg(any(feature = "test", test))]
@@ -118,6 +158,7 @@ fn generate_test(attr: TokenStream, item: TokenStream, name: &Ident) -> TokenStr
     let attr = attr.to_string();
     let item = item.to_string();
     let test_name = Ident::new(&format!("test_{}", name), name.span());
+    let struct_name = camel_case(name).to_string();
     let fn_name = name.to_string();
 
     quote! {
@@ -126,6 +167,7 @@ fn generate_test(attr: TokenStream, item: TokenStream, name: &Ident) -> TokenStr
         #[mz_ore::test]
         fn #test_name() {
             let (output, input) = mz_expr_derive_impl::test_sqlfunc_str(#attr, #item);
+            mz_expr_derive_impl::save_file(file!(), #fn_name, #struct_name, &output);
             insta::assert_snapshot!(#fn_name, output, &input);
         }
     }
@@ -255,29 +297,36 @@ fn unary_func(func: &syn::ItemFn, modifiers: Modifiers) -> darling::Result<Token
         ));
     }
 
-    let preserves_uniqueness_fn = preserves_uniqueness.map(|preserves_uniqueness| {
-        quote! {
-            fn preserves_uniqueness(&self) -> bool {
-                #preserves_uniqueness
+    let preserves_uniqueness_fn = preserves_uniqueness
+        .filter(|preserves_uniqueness| quote! {#preserves_uniqueness}.to_string() != "false")
+        .map(|preserves_uniqueness| {
+            quote! {
+                fn preserves_uniqueness(&self) -> bool {
+                    #preserves_uniqueness
+                }
             }
-        }
-    });
+        });
 
-    let inverse_fn = inverse.as_ref().map(|inverse| {
-        quote! {
-            fn inverse(&self) -> Option<crate::UnaryFunc> {
-                #inverse
+    let inverse_fn = inverse
+        .as_ref()
+        .filter(|inverse| quote! {#inverse}.to_string() != "None")
+        .map(|inverse| {
+            quote! {
+                fn inverse(&self) -> Option<crate::UnaryFunc> {
+                    #inverse
+                }
             }
-        }
-    });
+        });
 
-    let is_monotone_fn = is_monotone.map(|is_monotone| {
-        quote! {
-            fn is_monotone(&self) -> bool {
-                #is_monotone
+    let is_monotone_fn = is_monotone
+        .filter(|is_monotone| quote! {#is_monotone}.to_string() != "false")
+        .map(|is_monotone| {
+            quote! {
+                fn is_monotone(&self) -> bool {
+                    #is_monotone
+                }
             }
-        }
-    });
+        });
 
     let name = sqlname
         .as_ref()
@@ -311,6 +360,17 @@ fn unary_func(func: &syn::ItemFn, modifiers: Modifiers) -> darling::Result<Token
         }
     });
 
+    let fn_arg = match func.sig.inputs.first() {
+        Some(syn::FnArg::Typed(pat)) => &*pat.pat,
+        _ => unreachable!("Function must have at least one argument"),
+    };
+    let fn_body = &*func.block;
+    let fn_body = if let Some(syn::Stmt::Expr(Expr::Block(block), _)) = fn_body.stmts.first() {
+        &block.block
+    } else {
+        fn_body
+    };
+
     let result = quote! {
         #[derive(proptest_derive::Arbitrary, Ord, PartialOrd, Clone, Debug, Eq, PartialEq, serde::Serialize, serde::Deserialize, Hash, mz_lowertest::MzReflect)]
         pub struct #struct_name;
@@ -319,9 +379,7 @@ fn unary_func(func: &syn::ItemFn, modifiers: Modifiers) -> darling::Result<Token
             type Input = #input_ty;
             type Output = #output_ty;
 
-            fn call(&self, a: Self::Input) -> Self::Output {
-                #fn_name(a)
-            }
+            fn call(&self, #fn_arg: Self::Input) -> Self::Output #fn_body
 
             fn output_type(&self, input_type: mz_repr::ColumnType) -> mz_repr::ColumnType {
                 use mz_repr::AsColumnType;
@@ -345,8 +403,6 @@ fn unary_func(func: &syn::ItemFn, modifiers: Modifiers) -> darling::Result<Token
                 f.write_str(#name)
             }
         }
-
-        #func
     };
     Ok(result)
 }
@@ -472,6 +528,20 @@ fn binary_func(
         }
     });
 
+    let mut fn_args = func.sig.inputs.iter().take(2).map(|input| match input {
+        syn::FnArg::Typed(pat) => &*pat.pat,
+        _ => unreachable!("Function must have at least one argument"),
+    });
+
+    let fn_arg1 = fn_args.next().unwrap();
+    let fn_arg2 = fn_args.next().unwrap();
+    let fn_body = &*func.block;
+    let fn_body = if let Some(syn::Stmt::Expr(Expr::Block(block), _)) = fn_body.stmts.first() {
+        &block.block
+    } else {
+        fn_body
+    };
+
     let result = quote! {
         #[derive(proptest_derive::Arbitrary, Ord, PartialOrd, Clone, Debug, Eq, PartialEq, serde::Serialize, serde::Deserialize, Hash, mz_lowertest::MzReflect)]
         pub struct #struct_name;
@@ -481,8 +551,9 @@ fn binary_func(
             type Input2 = #input2_ty;
             type Output = #output_ty;
 
-            fn call(&self, a: Self::Input1, b: Self::Input2, temp_storage: &'a mz_repr::RowArena) -> Self::Output {
-                #fn_name(a, b #arena)
+            fn call(&self, #fn_arg1: Self::Input1, #fn_arg2: Self::Input2, temp_storage: &'a mz_repr::RowArena) -> Self::Output {
+                // #fn_name(a, b #arena)
+                #fn_body
             }
 
             fn output_type(&self, input_type_a: mz_repr::ColumnType, input_type_b: mz_repr::ColumnType) -> mz_repr::ColumnType {
@@ -508,9 +579,6 @@ fn binary_func(
                 f.write_str(#name)
             }
         }
-
-        #func
-
     };
     Ok(result)
 }

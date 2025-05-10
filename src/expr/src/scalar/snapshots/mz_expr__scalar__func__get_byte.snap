@@ -26,7 +26,18 @@ impl<'a> crate::func::binary::EagerBinaryFunc<'a> for GetByte {
         b: Self::Input2,
         temp_storage: &'a mz_repr::RowArena,
     ) -> Self::Output {
-        get_byte(a, b)
+        {
+            let bytes = a.unwrap_bytes();
+            let index = b.unwrap_int32();
+            let err = EvalError::IndexOutOfRange {
+                provided: index,
+                valid_end: i32::try_from(bytes.len()).unwrap() - 1,
+            };
+            let i: &u8 = bytes
+                .get(usize::try_from(index).map_err(|_| err.clone())?)
+                .ok_or(err)?;
+            Ok(Datum::from(i32::from(*i)))
+        }
     }
     fn output_type(
         &self,
@@ -57,14 +68,4 @@ impl std::fmt::Display for GetByte {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         f.write_str(stringify!(get_byte))
     }
-}
-fn get_byte<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
-    let bytes = a.unwrap_bytes();
-    let index = b.unwrap_int32();
-    let err = EvalError::IndexOutOfRange {
-        provided: index,
-        valid_end: i32::try_from(bytes.len()).unwrap() - 1,
-    };
-    let i: &u8 = bytes.get(usize::try_from(index).map_err(|_| err.clone())?).ok_or(err)?;
-    Ok(Datum::from(i32::from(*i)))
 }

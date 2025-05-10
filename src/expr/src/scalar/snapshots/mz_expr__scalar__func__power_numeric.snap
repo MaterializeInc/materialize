@@ -26,7 +26,36 @@ impl<'a> crate::func::binary::EagerBinaryFunc<'a> for PowerNumeric {
         b: Self::Input2,
         temp_storage: &'a mz_repr::RowArena,
     ) -> Self::Output {
-        power_numeric(a, b)
+        {
+            let mut a = a.unwrap_numeric().0;
+            let b = b.unwrap_numeric().0;
+            if a.is_zero() {
+                if b.is_zero() {
+                    return Ok(Datum::from(Numeric::from(1)));
+                }
+                if b.is_negative() {
+                    return Err(
+                        EvalError::Undefined("zero raised to a negative power".into()),
+                    );
+                }
+            }
+            if a.is_negative() && b.exponent() < 0 {
+                return Err(EvalError::ComplexOutOfRange("pow".into()));
+            }
+            let mut cx = numeric::cx_datum();
+            cx.pow(&mut a, &b);
+            let cx_status = cx.status();
+            if cx_status.overflow()
+                || (cx_status.invalid_operation() && !b.is_negative())
+            {
+                Err(EvalError::FloatOverflow)
+            } else if cx_status.subnormal() || cx_status.invalid_operation() {
+                Err(EvalError::FloatUnderflow)
+            } else {
+                numeric::munge_numeric(&mut a).unwrap();
+                Ok(Datum::from(a))
+            }
+        }
     }
     fn output_type(
         &self,
@@ -56,31 +85,5 @@ impl<'a> crate::func::binary::EagerBinaryFunc<'a> for PowerNumeric {
 impl std::fmt::Display for PowerNumeric {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         f.write_str(stringify!(power_numeric))
-    }
-}
-fn power_numeric<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
-    let mut a = a.unwrap_numeric().0;
-    let b = b.unwrap_numeric().0;
-    if a.is_zero() {
-        if b.is_zero() {
-            return Ok(Datum::from(Numeric::from(1)));
-        }
-        if b.is_negative() {
-            return Err(EvalError::Undefined("zero raised to a negative power".into()));
-        }
-    }
-    if a.is_negative() && b.exponent() < 0 {
-        return Err(EvalError::ComplexOutOfRange("pow".into()));
-    }
-    let mut cx = numeric::cx_datum();
-    cx.pow(&mut a, &b);
-    let cx_status = cx.status();
-    if cx_status.overflow() || (cx_status.invalid_operation() && !b.is_negative()) {
-        Err(EvalError::FloatOverflow)
-    } else if cx_status.subnormal() || cx_status.invalid_operation() {
-        Err(EvalError::FloatUnderflow)
-    } else {
-        numeric::munge_numeric(&mut a).unwrap();
-        Ok(Datum::from(a))
     }
 }

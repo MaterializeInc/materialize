@@ -20,33 +20,6 @@ impl<'a> crate::func::EagerUnaryFunc<'a> for CastJsonbableToJsonb {
     type Input = JsonbRef<'a>;
     type Output = JsonbRef<'a>;
     fn call(&self, a: Self::Input) -> Self::Output {
-        cast_jsonbable_to_jsonb(a)
-    }
-    fn output_type(&self, input_type: mz_repr::ColumnType) -> mz_repr::ColumnType {
-        use mz_repr::AsColumnType;
-        let output = Self::Output::as_column_type();
-        let propagates_nulls = crate::func::EagerUnaryFunc::propagates_nulls(self);
-        let nullable = output.nullable;
-        output.nullable(nullable || (propagates_nulls && input_type.nullable))
-    }
-    fn inverse(&self) -> Option<crate::UnaryFunc> {
-        None
-    }
-    fn is_monotone(&self) -> bool {
-        false
-    }
-    fn preserves_uniqueness(&self) -> bool {
-        false
-    }
-}
-impl std::fmt::Display for CastJsonbableToJsonb {
-    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-        f.write_str("jsonbable_to_jsonb")
-    }
-}
-#[allow(clippy::extra_unused_lifetimes)]
-pub fn cast_jsonbable_to_jsonb<'a>(a: JsonbRef<'a>) -> JsonbRef<'a> {
-    {
         match a.into_datum() {
             Datum::Numeric(n) => {
                 let n = n.into_inner();
@@ -63,5 +36,17 @@ pub fn cast_jsonbable_to_jsonb<'a>(a: JsonbRef<'a>) -> JsonbRef<'a> {
             }
             datum => JsonbRef::from_datum(datum),
         }
+    }
+    fn output_type(&self, input_type: mz_repr::ColumnType) -> mz_repr::ColumnType {
+        use mz_repr::AsColumnType;
+        let output = Self::Output::as_column_type();
+        let propagates_nulls = crate::func::EagerUnaryFunc::propagates_nulls(self);
+        let nullable = output.nullable;
+        output.nullable(nullable || (propagates_nulls && input_type.nullable))
+    }
+}
+impl std::fmt::Display for CastJsonbableToJsonb {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        f.write_str("jsonbable_to_jsonb")
     }
 }

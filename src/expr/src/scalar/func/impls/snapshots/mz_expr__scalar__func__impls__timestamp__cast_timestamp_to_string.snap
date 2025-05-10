@@ -20,7 +20,9 @@ impl<'a> crate::func::EagerUnaryFunc<'a> for CastTimestampToString {
     type Input = CheckedTimestamp<NaiveDateTime>;
     type Output = String;
     fn call(&self, a: Self::Input) -> Self::Output {
-        cast_timestamp_to_string(a)
+        let mut buf = String::new();
+        strconv::format_timestamp(&mut buf, &a);
+        buf
     }
     fn output_type(&self, input_type: mz_repr::ColumnType) -> mz_repr::ColumnType {
         use mz_repr::AsColumnType;
@@ -32,9 +34,6 @@ impl<'a> crate::func::EagerUnaryFunc<'a> for CastTimestampToString {
     fn inverse(&self) -> Option<crate::UnaryFunc> {
         to_unary!(super::CastStringToTimestamp(None))
     }
-    fn is_monotone(&self) -> bool {
-        false
-    }
     fn preserves_uniqueness(&self) -> bool {
         true
     }
@@ -42,13 +41,5 @@ impl<'a> crate::func::EagerUnaryFunc<'a> for CastTimestampToString {
 impl std::fmt::Display for CastTimestampToString {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         f.write_str("timestamp_to_text")
-    }
-}
-#[allow(clippy::extra_unused_lifetimes)]
-pub fn cast_timestamp_to_string<'a>(a: CheckedTimestamp<NaiveDateTime>) -> String {
-    {
-        let mut buf = String::new();
-        strconv::format_timestamp(&mut buf, &a);
-        buf
     }
 }

@@ -20,7 +20,9 @@ impl<'a> crate::func::EagerUnaryFunc<'a> for CastOidToString {
     type Input = Oid;
     type Output = String;
     fn call(&self, a: Self::Input) -> Self::Output {
-        cast_oid_to_string(a)
+        let mut buf = String::new();
+        strconv::format_uint32(&mut buf, a.0);
+        buf
     }
     fn output_type(&self, input_type: mz_repr::ColumnType) -> mz_repr::ColumnType {
         use mz_repr::AsColumnType;
@@ -32,9 +34,6 @@ impl<'a> crate::func::EagerUnaryFunc<'a> for CastOidToString {
     fn inverse(&self) -> Option<crate::UnaryFunc> {
         to_unary!(super::CastStringToOid)
     }
-    fn is_monotone(&self) -> bool {
-        false
-    }
     fn preserves_uniqueness(&self) -> bool {
         true
     }
@@ -42,13 +41,5 @@ impl<'a> crate::func::EagerUnaryFunc<'a> for CastOidToString {
 impl std::fmt::Display for CastOidToString {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         f.write_str("oid_to_text")
-    }
-}
-#[allow(clippy::extra_unused_lifetimes)]
-pub fn cast_oid_to_string<'a>(a: Oid) -> String {
-    {
-        let mut buf = String::new();
-        strconv::format_uint32(&mut buf, a.0);
-        buf
     }
 }

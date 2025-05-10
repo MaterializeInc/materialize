@@ -26,7 +26,27 @@ impl<'a> crate::func::binary::EagerBinaryFunc<'a> for ArrayLength {
         b: Self::Input2,
         temp_storage: &'a mz_repr::RowArena,
     ) -> Self::Output {
-        array_length(a, b)
+        {
+            let i = match usize::try_from(b.unwrap_int64()) {
+                Ok(0) | Err(_) => return Ok(Datum::Null),
+                Ok(n) => n - 1,
+            };
+            Ok(
+                match a.unwrap_array().dims().into_iter().nth(i) {
+                    None => Datum::Null,
+                    Some(dim) => {
+                        Datum::Int32(
+                            dim
+                                .length
+                                .try_into()
+                                .map_err(|_| EvalError::Int32OutOfRange(
+                                    dim.length.to_string().into(),
+                                ))?,
+                        )
+                    }
+                },
+            )
+        }
     }
     fn output_type(
         &self,
@@ -60,25 +80,4 @@ impl std::fmt::Display for ArrayLength {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         f.write_str("array_length")
     }
-}
-fn array_length<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
-    let i = match usize::try_from(b.unwrap_int64()) {
-        Ok(0) | Err(_) => return Ok(Datum::Null),
-        Ok(n) => n - 1,
-    };
-    Ok(
-        match a.unwrap_array().dims().into_iter().nth(i) {
-            None => Datum::Null,
-            Some(dim) => {
-                Datum::Int32(
-                    dim
-                        .length
-                        .try_into()
-                        .map_err(|_| EvalError::Int32OutOfRange(
-                            dim.length.to_string().into(),
-                        ))?,
-                )
-            }
-        },
-    )
 }

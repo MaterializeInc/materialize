@@ -26,7 +26,10 @@ impl<'a> crate::func::binary::EagerBinaryFunc<'a> for DigestString {
         b: Self::Input2,
         temp_storage: &'a mz_repr::RowArena,
     ) -> Self::Output {
-        digest_string(a, b, temp_storage)
+        {
+            let to_digest = a.unwrap_str().as_bytes();
+            digest_inner(to_digest, b, temp_storage)
+        }
     }
     fn output_type(
         &self,
@@ -57,12 +60,4 @@ impl std::fmt::Display for DigestString {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         f.write_str("digest")
     }
-}
-fn digest_string<'a>(
-    a: Datum<'a>,
-    b: Datum<'a>,
-    temp_storage: &'a RowArena,
-) -> Result<Datum<'a>, EvalError> {
-    let to_digest = a.unwrap_str().as_bytes();
-    digest_inner(to_digest, b, temp_storage)
 }

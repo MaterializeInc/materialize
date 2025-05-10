@@ -26,7 +26,20 @@ impl<'a> crate::func::binary::EagerBinaryFunc<'a> for JsonbDeleteString {
         b: Self::Input2,
         temp_storage: &'a mz_repr::RowArena,
     ) -> Self::Output {
-        jsonb_delete_string(a, b, temp_storage)
+        {
+            match a {
+                Datum::List(list) => {
+                    let elems = list.iter().filter(|e| b != *e);
+                    temp_storage.make_datum(|packer| packer.push_list(elems))
+                }
+                Datum::Map(dict) => {
+                    let k = b.unwrap_str();
+                    let pairs = dict.iter().filter(|(k2, _v)| k != *k2);
+                    temp_storage.make_datum(|packer| packer.push_dict(pairs))
+                }
+                _ => Datum::Null,
+            }
+        }
     }
     fn output_type(
         &self,
@@ -59,23 +72,5 @@ impl<'a> crate::func::binary::EagerBinaryFunc<'a> for JsonbDeleteString {
 impl std::fmt::Display for JsonbDeleteString {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         f.write_str("-")
-    }
-}
-fn jsonb_delete_string<'a>(
-    a: Datum<'a>,
-    b: Datum<'a>,
-    temp_storage: &'a RowArena,
-) -> Datum<'a> {
-    match a {
-        Datum::List(list) => {
-            let elems = list.iter().filter(|e| b != *e);
-            temp_storage.make_datum(|packer| packer.push_list(elems))
-        }
-        Datum::Map(dict) => {
-            let k = b.unwrap_str();
-            let pairs = dict.iter().filter(|(k2, _v)| k != *k2);
-            temp_storage.make_datum(|packer| packer.push_dict(pairs))
-        }
-        _ => Datum::Null,
     }
 }

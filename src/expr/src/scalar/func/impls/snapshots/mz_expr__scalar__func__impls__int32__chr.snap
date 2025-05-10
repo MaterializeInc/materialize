@@ -20,33 +20,6 @@ impl<'a> crate::func::EagerUnaryFunc<'a> for Chr {
     type Input = i32;
     type Output = Result<String, EvalError>;
     fn call(&self, a: Self::Input) -> Self::Output {
-        chr(a)
-    }
-    fn output_type(&self, input_type: mz_repr::ColumnType) -> mz_repr::ColumnType {
-        use mz_repr::AsColumnType;
-        let output = Self::Output::as_column_type();
-        let propagates_nulls = crate::func::EagerUnaryFunc::propagates_nulls(self);
-        let nullable = output.nullable;
-        output.nullable(nullable || (propagates_nulls && input_type.nullable))
-    }
-    fn inverse(&self) -> Option<crate::UnaryFunc> {
-        None
-    }
-    fn is_monotone(&self) -> bool {
-        false
-    }
-    fn preserves_uniqueness(&self) -> bool {
-        false
-    }
-}
-impl std::fmt::Display for Chr {
-    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-        f.write_str(stringify!(chr))
-    }
-}
-#[allow(clippy::extra_unused_lifetimes)]
-pub fn chr<'a>(a: i32) -> Result<String, EvalError> {
-    {
         let codepoint = u32::try_from(a)
             .map_err(|_| EvalError::CharacterTooLargeForEncoding(a))?;
         if codepoint == 0 {
@@ -58,5 +31,17 @@ pub fn chr<'a>(a: i32) -> Result<String, EvalError> {
                 .map(|u| u.to_string())
                 .ok_or(EvalError::CharacterTooLargeForEncoding(a))
         }
+    }
+    fn output_type(&self, input_type: mz_repr::ColumnType) -> mz_repr::ColumnType {
+        use mz_repr::AsColumnType;
+        let output = Self::Output::as_column_type();
+        let propagates_nulls = crate::func::EagerUnaryFunc::propagates_nulls(self);
+        let nullable = output.nullable;
+        output.nullable(nullable || (propagates_nulls && input_type.nullable))
+    }
+}
+impl std::fmt::Display for Chr {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        f.write_str(stringify!(chr))
     }
 }

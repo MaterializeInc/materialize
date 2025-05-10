@@ -26,7 +26,16 @@ impl<'a> crate::func::binary::EagerBinaryFunc<'a> for MapContainsAnyKeys {
         b: Self::Input2,
         temp_storage: &'a mz_repr::RowArena,
     ) -> Self::Output {
-        map_contains_any_keys(a, b)
+        {
+            let map = a.unwrap_map();
+            let keys = b.unwrap_array();
+            keys.elements()
+                .iter()
+                .any(|key| {
+                    !key.is_null() && map.iter().any(|(k, _v)| k == key.unwrap_str())
+                })
+                .into()
+        }
     }
     fn output_type(
         &self,
@@ -60,12 +69,4 @@ impl std::fmt::Display for MapContainsAnyKeys {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         f.write_str("?|")
     }
-}
-fn map_contains_any_keys<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
-    let map = a.unwrap_map();
-    let keys = b.unwrap_array();
-    keys.elements()
-        .iter()
-        .any(|key| !key.is_null() && map.iter().any(|(k, _v)| k == key.unwrap_str()))
-        .into()
 }

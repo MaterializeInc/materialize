@@ -1,6 +1,6 @@
 ---
 source: src/expr/src/scalar/func.rs
-expression: "#[sqlfunc(\n    is_monotone = (true, true),\n    output_type = f64,\n    is_infix_op = true,\n    sqlname = \"*\",\n    propagates_nulls = true\n)]\nfn mul_float64<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {\n    let a = a.unwrap_float64();\n    let b = b.unwrap_float64();\n    let product = a * b;\n    if product.is_infinite() && !a.is_infinite() && !b.is_infinite() {\n        Err(EvalError::FloatOverflow)\n    } else if product == 0.0f64 && a != 0.0f64 && b != 0.0f64 {\n        Err(EvalError::FloatUnderflow)\n    } else {\n        Ok(Datum::from(product))\n    }\n}\n"
+expression: "#[sqlfunc(\n    is_monotone = \"(true, true)\",\n    output_type = \"f64\",\n    is_infix_op = true,\n    sqlname = \"*\",\n    propagates_nulls = true\n)]\nfn mul_float64<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {\n    let a = a.unwrap_float64();\n    let b = b.unwrap_float64();\n    let product = a * b;\n    if product.is_infinite() && !a.is_infinite() && !b.is_infinite() {\n        Err(EvalError::FloatOverflow)\n    } else if product == 0.0f64 && a != 0.0f64 && b != 0.0f64 {\n        Err(EvalError::FloatUnderflow)\n    } else {\n        Ok(Datum::from(product))\n    }\n}\n"
 ---
 #[derive(
     proptest_derive::Arbitrary,
@@ -26,7 +26,18 @@ impl<'a> crate::func::binary::EagerBinaryFunc<'a> for MulFloat64 {
         b: Self::Input2,
         temp_storage: &'a mz_repr::RowArena,
     ) -> Self::Output {
-        mul_float64(a, b)
+        {
+            let a = a.unwrap_float64();
+            let b = b.unwrap_float64();
+            let product = a * b;
+            if product.is_infinite() && !a.is_infinite() && !b.is_infinite() {
+                Err(EvalError::FloatOverflow)
+            } else if product == 0.0f64 && a != 0.0f64 && b != 0.0f64 {
+                Err(EvalError::FloatUnderflow)
+            } else {
+                Ok(Datum::from(product))
+            }
+        }
     }
     fn output_type(
         &self,
@@ -62,17 +73,5 @@ impl<'a> crate::func::binary::EagerBinaryFunc<'a> for MulFloat64 {
 impl std::fmt::Display for MulFloat64 {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         f.write_str("*")
-    }
-}
-fn mul_float64<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
-    let a = a.unwrap_float64();
-    let b = b.unwrap_float64();
-    let product = a * b;
-    if product.is_infinite() && !a.is_infinite() && !b.is_infinite() {
-        Err(EvalError::FloatOverflow)
-    } else if product == 0.0f64 && a != 0.0f64 && b != 0.0f64 {
-        Err(EvalError::FloatUnderflow)
-    } else {
-        Ok(Datum::from(product))
     }
 }

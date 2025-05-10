@@ -1,0 +1,68 @@
+// Copyright Materialize, Inc. and contributors. All rights reserved.
+//
+// Use of this software is governed by the Business Source License
+// included in the LICENSE file.
+//
+// As of the Change Date specified in that file, in accordance with
+// the Business Source License, use of this software will be governed
+// by the Apache License, Version 2.0.
+
+
+#[derive(
+    proptest_derive::Arbitrary,
+    Ord,
+    PartialOrd,
+    Clone,
+    Debug,
+    Eq,
+    PartialEq,
+    serde::Serialize,
+    serde::Deserialize,
+    Hash,
+    mz_lowertest::MzReflect
+)]
+pub struct DateTruncUnitsTimestamp;
+impl<'a> crate::func::binary::EagerBinaryFunc<'a> for DateTruncUnitsTimestamp {
+    type Input1 = &'a str;
+    type Input2 = CheckedTimestamp<NaiveDateTime>;
+    type Output = Result<CheckedTimestamp<NaiveDateTime>, EvalError>;
+    fn call(
+        &self,
+        units: Self::Input1,
+        ts: Self::Input2,
+        temp_storage: &'a mz_repr::RowArena,
+    ) -> Self::Output {
+        {
+            match units.parse() {
+                Ok(units) => Ok(date_trunc_inner(units, &*ts)?.try_into()?),
+                Err(_) => Err(EvalError::UnknownUnits(units.into())),
+            }
+        }
+    }
+    fn output_type(
+        &self,
+        input_type_a: mz_repr::ColumnType,
+        input_type_b: mz_repr::ColumnType,
+    ) -> mz_repr::ColumnType {
+        use mz_repr::AsColumnType;
+        let output = Self::Output::as_column_type();
+        let propagates_nulls = crate::func::binary::EagerBinaryFunc::propagates_nulls(
+            self,
+        );
+        let nullable = output.nullable;
+        output
+            .nullable(
+                nullable
+                    || (propagates_nulls
+                        && (input_type_a.nullable || input_type_b.nullable)),
+            )
+    }
+    fn propagates_nulls(&self) -> bool {
+        true
+    }
+}
+impl std::fmt::Display for DateTruncUnitsTimestamp {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        f.write_str("date_truncts")
+    }
+}

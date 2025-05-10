@@ -20,7 +20,13 @@ impl<'a> crate::func::EagerUnaryFunc<'a> for Log10 {
     type Input = f64;
     type Output = Result<f64, EvalError>;
     fn call(&self, a: Self::Input) -> Self::Output {
-        log10(a)
+        if a.is_sign_negative() {
+            return Err(EvalError::NegativeOutOfDomain("log10".into()));
+        }
+        if a == 0.0 {
+            return Err(EvalError::ZeroOutOfDomain("log10".into()));
+        }
+        Ok(a.log10())
     }
     fn output_type(&self, input_type: mz_repr::ColumnType) -> mz_repr::ColumnType {
         use mz_repr::AsColumnType;
@@ -29,30 +35,9 @@ impl<'a> crate::func::EagerUnaryFunc<'a> for Log10 {
         let nullable = output.nullable;
         output.nullable(nullable || (propagates_nulls && input_type.nullable))
     }
-    fn inverse(&self) -> Option<crate::UnaryFunc> {
-        None
-    }
-    fn is_monotone(&self) -> bool {
-        false
-    }
-    fn preserves_uniqueness(&self) -> bool {
-        false
-    }
 }
 impl std::fmt::Display for Log10 {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         f.write_str("log10f64")
-    }
-}
-#[allow(clippy::extra_unused_lifetimes)]
-pub fn log10<'a>(a: f64) -> Result<f64, EvalError> {
-    {
-        if a.is_sign_negative() {
-            return Err(EvalError::NegativeOutOfDomain("log10".into()));
-        }
-        if a == 0.0 {
-            return Err(EvalError::ZeroOutOfDomain("log10".into()));
-        }
-        Ok(a.log10())
     }
 }

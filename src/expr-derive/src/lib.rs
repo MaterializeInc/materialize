@@ -58,7 +58,9 @@ pub fn sqlfunc(
     attr: proc_macro::TokenStream,
     item: proc_macro::TokenStream,
 ) -> proc_macro::TokenStream {
-    mz_expr_derive_impl::sqlfunc(attr.into(), item.into(), true)
+    let tokens = mz_expr_derive_impl::sqlfunc(attr.into(), item.into(), true, true)
         .unwrap_or_else(|err| err.write_errors())
-        .into()
+        .into();
+
+    tokens
 }

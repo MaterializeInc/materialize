@@ -23,10 +23,14 @@ impl<'a> crate::func::binary::EagerBinaryFunc<'a> for ToCharTimestampFormat {
     fn call(
         &self,
         a: Self::Input1,
-        b: Self::Input2,
+        format: Self::Input2,
         temp_storage: &'a mz_repr::RowArena,
     ) -> Self::Output {
-        to_char_timestamp_format(a, b)
+        {
+            let ts = a.unwrap_timestamp();
+            let fmt = DateTimeFormat::compile(format);
+            fmt.render(&*ts)
+        }
     }
     fn output_type(
         &self,
@@ -57,9 +61,4 @@ impl std::fmt::Display for ToCharTimestampFormat {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         f.write_str("tocharts")
     }
-}
-fn to_char_timestamp_format<'a>(a: Datum<'a>, format: &str) -> String {
-    let ts = a.unwrap_timestamp();
-    let fmt = DateTimeFormat::compile(format);
-    fmt.render(&*ts)
 }

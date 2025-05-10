@@ -1,6 +1,6 @@
 ---
 source: src/expr/src/scalar/func.rs
-expression: "#[sqlfunc(output_type = \"String\", sqlname = \"encode\", propagates_nulls = true)]\nfn encode<'a>(\n    bytes: Datum<'a>,\n    format: Datum<'a>,\n    temp_storage: &'a RowArena,\n) -> Result<Datum<'a>, EvalError> {\n    let format = encoding::lookup_format(format.unwrap_str())?;\n    let out = format.encode(bytes.unwrap_bytes());\n    Ok(Datum::from(temp_storage.push_string(out)))\n}\n"
+expression: "#[sqlfunc(output_type = \"String\", propagates_nulls = true)]\nfn encode<'a>(\n    bytes: Datum<'a>,\n    format: Datum<'a>,\n    temp_storage: &'a RowArena,\n) -> Result<Datum<'a>, EvalError> {\n    let format = encoding::lookup_format(format.unwrap_str())?;\n    let out = format.encode(bytes.unwrap_bytes());\n    Ok(Datum::from(temp_storage.push_string(out)))\n}\n"
 ---
 #[derive(
     proptest_derive::Arbitrary,
@@ -22,11 +22,15 @@ impl<'a> crate::func::binary::EagerBinaryFunc<'a> for Encode {
     type Output = Result<Datum<'a>, EvalError>;
     fn call(
         &self,
-        a: Self::Input1,
-        b: Self::Input2,
+        bytes: Self::Input1,
+        format: Self::Input2,
         temp_storage: &'a mz_repr::RowArena,
     ) -> Self::Output {
-        encode(a, b, temp_storage)
+        {
+            let format = encoding::lookup_format(format.unwrap_str())?;
+            let out = format.encode(bytes.unwrap_bytes());
+            Ok(Datum::from(temp_storage.push_string(out)))
+        }
     }
     fn output_type(
         &self,
@@ -55,15 +59,6 @@ impl<'a> crate::func::binary::EagerBinaryFunc<'a> for Encode {
 }
 impl std::fmt::Display for Encode {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-        f.write_str("encode")
+        f.write_str(stringify!(encode))
     }
-}
-fn encode<'a>(
-    bytes: Datum<'a>,
-    format: Datum<'a>,
-    temp_storage: &'a RowArena,
-) -> Result<Datum<'a>, EvalError> {
-    let format = encoding::lookup_format(format.unwrap_str())?;
-    let out = format.encode(bytes.unwrap_bytes());
-    Ok(Datum::from(temp_storage.push_string(out)))
 }

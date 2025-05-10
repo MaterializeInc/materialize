@@ -26,7 +26,22 @@ impl<'a> crate::func::binary::EagerBinaryFunc<'a> for ListRemove {
         b: Self::Input2,
         temp_storage: &'a mz_repr::RowArena,
     ) -> Self::Output {
-        list_remove(a, b, temp_storage)
+        {
+            if a.is_null() {
+                return a;
+            }
+            temp_storage
+                .make_datum(|packer| {
+                    packer
+                        .push_list_with(|packer| {
+                            for elem in a.unwrap_list().iter() {
+                                if elem != b {
+                                    packer.push(elem);
+                                }
+                            }
+                        })
+                })
+        }
     }
     fn output_type(
         &self,
@@ -57,20 +72,4 @@ impl std::fmt::Display for ListRemove {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         f.write_str("list_remove")
     }
-}
-fn list_remove<'a>(a: Datum<'a>, b: Datum<'a>, temp_storage: &'a RowArena) -> Datum<'a> {
-    if a.is_null() {
-        return a;
-    }
-    temp_storage
-        .make_datum(|packer| {
-            packer
-                .push_list_with(|packer| {
-                    for elem in a.unwrap_list().iter() {
-                        if elem != b {
-                            packer.push(elem);
-                        }
-                    }
-                })
-        })
 }

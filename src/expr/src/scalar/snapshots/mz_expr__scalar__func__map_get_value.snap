@@ -26,7 +26,13 @@ impl<'a> crate::func::binary::EagerBinaryFunc<'a> for MapGetValue {
         b: Self::Input2,
         temp_storage: &'a mz_repr::RowArena,
     ) -> Self::Output {
-        map_get_value(a, b)
+        {
+            let target_key = b.unwrap_str();
+            match a.unwrap_map().iter().find(|(key, _v)| target_key == *key) {
+                Some((_k, v)) => v,
+                None => Datum::Null,
+            }
+        }
     }
     fn output_type(
         &self,
@@ -63,12 +69,5 @@ impl<'a> crate::func::binary::EagerBinaryFunc<'a> for MapGetValue {
 impl std::fmt::Display for MapGetValue {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         f.write_str("->")
-    }
-}
-fn map_get_value<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
-    let target_key = b.unwrap_str();
-    match a.unwrap_map().iter().find(|(key, _v)| target_key == *key) {
-        Some((_k, v)) => v,
-        None => Datum::Null,
     }
 }

@@ -20,7 +20,9 @@ impl<'a> crate::func::EagerUnaryFunc<'a> for CastPgLegacyCharToChar {
     type Input = PgLegacyChar;
     type Output = Result<Char<String>, EvalError>;
     fn call(&self, a: Self::Input) -> Self::Output {
-        cast_pg_legacy_char_to_char(a)
+        let mut buf = String::new();
+        format_pg_legacy_char(&mut buf, a.0)?;
+        Ok(Char(buf))
     }
     fn output_type(&self, input_type: mz_repr::ColumnType) -> mz_repr::ColumnType {
         use mz_repr::AsColumnType;
@@ -32,9 +34,6 @@ impl<'a> crate::func::EagerUnaryFunc<'a> for CastPgLegacyCharToChar {
     fn inverse(&self) -> Option<crate::UnaryFunc> {
         to_unary!(super::CastStringToPgLegacyChar)
     }
-    fn is_monotone(&self) -> bool {
-        false
-    }
     fn preserves_uniqueness(&self) -> bool {
         true
     }
@@ -42,15 +41,5 @@ impl<'a> crate::func::EagerUnaryFunc<'a> for CastPgLegacyCharToChar {
 impl std::fmt::Display for CastPgLegacyCharToChar {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         f.write_str("\"char\"_to_char")
-    }
-}
-#[allow(clippy::extra_unused_lifetimes)]
-pub fn cast_pg_legacy_char_to_char<'a>(
-    a: PgLegacyChar,
-) -> Result<Char<String>, EvalError> {
-    {
-        let mut buf = String::new();
-        format_pg_legacy_char(&mut buf, a.0)?;
-        Ok(Char(buf))
     }
 }

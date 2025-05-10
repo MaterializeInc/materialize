@@ -26,7 +26,16 @@ impl<'a> crate::func::binary::EagerBinaryFunc<'a> for ListListConcat {
         b: Self::Input2,
         temp_storage: &'a mz_repr::RowArena,
     ) -> Self::Output {
-        list_list_concat(a, b, temp_storage)
+        {
+            if a.is_null() {
+                return b;
+            } else if b.is_null() {
+                return a;
+            }
+            let a = a.unwrap_list().iter();
+            let b = b.unwrap_list().iter();
+            temp_storage.make_datum(|packer| packer.push_list(a.chain(b)))
+        }
     }
     fn output_type(
         &self,
@@ -60,18 +69,4 @@ impl std::fmt::Display for ListListConcat {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         f.write_str("||")
     }
-}
-fn list_list_concat<'a>(
-    a: Datum<'a>,
-    b: Datum<'a>,
-    temp_storage: &'a RowArena,
-) -> Datum<'a> {
-    if a.is_null() {
-        return b;
-    } else if b.is_null() {
-        return a;
-    }
-    let a = a.unwrap_list().iter();
-    let b = b.unwrap_list().iter();
-    temp_storage.make_datum(|packer| packer.push_list(a.chain(b)))
 }

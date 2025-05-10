@@ -26,7 +26,19 @@ impl<'a> crate::func::binary::EagerBinaryFunc<'a> for DivInterval {
         b: Self::Input2,
         temp_storage: &'a mz_repr::RowArena,
     ) -> Self::Output {
-        div_interval(a, b)
+        {
+            let b = b.unwrap_float64();
+            if b == 0.0 {
+                Err(EvalError::DivisionByZero)
+            } else {
+                a.unwrap_interval()
+                    .checked_div(b)
+                    .ok_or_else(|| EvalError::IntervalOutOfRange(
+                        format!("{a} / {b}").into(),
+                    ))
+                    .map(Datum::from)
+            }
+        }
     }
     fn output_type(
         &self,
@@ -62,16 +74,5 @@ impl<'a> crate::func::binary::EagerBinaryFunc<'a> for DivInterval {
 impl std::fmt::Display for DivInterval {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         f.write_str("/")
-    }
-}
-fn div_interval<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
-    let b = b.unwrap_float64();
-    if b == 0.0 {
-        Err(EvalError::DivisionByZero)
-    } else {
-        a.unwrap_interval()
-            .checked_div(b)
-            .ok_or_else(|| EvalError::IntervalOutOfRange(format!("{a} / {b}").into()))
-            .map(Datum::from)
     }
 }

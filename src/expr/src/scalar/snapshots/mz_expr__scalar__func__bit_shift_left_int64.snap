@@ -26,7 +26,11 @@ impl<'a> crate::func::binary::EagerBinaryFunc<'a> for BitShiftLeftInt64 {
         b: Self::Input2,
         temp_storage: &'a mz_repr::RowArena,
     ) -> Self::Output {
-        bit_shift_left_int64(a, b)
+        {
+            let lhs = a.unwrap_int64();
+            let rhs = b.unwrap_int32() as u32;
+            Datum::from(lhs.wrapping_shl(rhs))
+        }
     }
     fn output_type(
         &self,
@@ -60,10 +64,4 @@ impl std::fmt::Display for BitShiftLeftInt64 {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         f.write_str("<<")
     }
-}
-#[allow(clippy::as_conversions)]
-fn bit_shift_left_int64<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
-    let lhs = a.unwrap_int64();
-    let rhs = b.unwrap_int32() as u32;
-    Datum::from(lhs.wrapping_shl(rhs))
 }

@@ -20,7 +20,8 @@ impl<'a> crate::func::EagerUnaryFunc<'a> for CastUint32ToInt16 {
     type Input = u32;
     type Output = Result<i16, EvalError>;
     fn call(&self, a: Self::Input) -> Self::Output {
-        cast_uint32_to_int16(a)
+        i16::try_from(a)
+            .or_else(|_| Err(EvalError::Int16OutOfRange(a.to_string().into())))
     }
     fn output_type(&self, input_type: mz_repr::ColumnType) -> mz_repr::ColumnType {
         use mz_repr::AsColumnType;
@@ -42,12 +43,5 @@ impl<'a> crate::func::EagerUnaryFunc<'a> for CastUint32ToInt16 {
 impl std::fmt::Display for CastUint32ToInt16 {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         f.write_str("uint4_to_smallint")
-    }
-}
-#[allow(clippy::extra_unused_lifetimes)]
-pub fn cast_uint32_to_int16<'a>(a: u32) -> Result<i16, EvalError> {
-    {
-        i16::try_from(a)
-            .or_else(|_| Err(EvalError::Int16OutOfRange(a.to_string().into())))
     }
 }

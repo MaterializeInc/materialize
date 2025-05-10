@@ -1,6 +1,6 @@
 ---
 source: src/expr/src/scalar/func.rs
-expression: "#[sqlfunc(\n    is_monotone = (true, true),\n    output_type = f64,\n    is_infix_op = true,\n    sqlname = \"+\",\n    propagates_nulls = true\n)]\nfn add_float64<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {\n    let a = a.unwrap_float64();\n    let b = b.unwrap_float64();\n    let sum = a + b;\n    if sum.is_infinite() && !a.is_infinite() && !b.is_infinite() {\n        Err(EvalError::FloatOverflow)\n    } else {\n        Ok(Datum::from(sum))\n    }\n}\n"
+expression: "#[sqlfunc(\n    is_monotone = \"(true, true)\",\n    output_type = \"f64\",\n    is_infix_op = true,\n    sqlname = \"+\",\n    propagates_nulls = true\n)]\nfn add_float64<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {\n    let a = a.unwrap_float64();\n    let b = b.unwrap_float64();\n    let sum = a + b;\n    if sum.is_infinite() && !a.is_infinite() && !b.is_infinite() {\n        Err(EvalError::FloatOverflow)\n    } else {\n        Ok(Datum::from(sum))\n    }\n}\n"
 ---
 #[derive(
     proptest_derive::Arbitrary,
@@ -26,7 +26,16 @@ impl<'a> crate::func::binary::EagerBinaryFunc<'a> for AddFloat64 {
         b: Self::Input2,
         temp_storage: &'a mz_repr::RowArena,
     ) -> Self::Output {
-        add_float64(a, b)
+        {
+            let a = a.unwrap_float64();
+            let b = b.unwrap_float64();
+            let sum = a + b;
+            if sum.is_infinite() && !a.is_infinite() && !b.is_infinite() {
+                Err(EvalError::FloatOverflow)
+            } else {
+                Ok(Datum::from(sum))
+            }
+        }
     }
     fn output_type(
         &self,
@@ -62,15 +71,5 @@ impl<'a> crate::func::binary::EagerBinaryFunc<'a> for AddFloat64 {
 impl std::fmt::Display for AddFloat64 {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         f.write_str("+")
-    }
-}
-fn add_float64<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
-    let a = a.unwrap_float64();
-    let b = b.unwrap_float64();
-    let sum = a + b;
-    if sum.is_infinite() && !a.is_infinite() && !b.is_infinite() {
-        Err(EvalError::FloatOverflow)
-    } else {
-        Ok(Datum::from(sum))
     }
 }

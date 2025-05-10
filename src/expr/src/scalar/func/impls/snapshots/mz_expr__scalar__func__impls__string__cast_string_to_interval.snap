@@ -20,7 +20,7 @@ impl<'a> crate::func::EagerUnaryFunc<'a> for CastStringToInterval {
     type Input = &'a str;
     type Output = Result<Interval, EvalError>;
     fn call(&self, a: Self::Input) -> Self::Output {
-        cast_string_to_interval(a)
+        strconv::parse_interval(a).err_into()
     }
     fn output_type(&self, input_type: mz_repr::ColumnType) -> mz_repr::ColumnType {
         use mz_repr::AsColumnType;
@@ -32,19 +32,9 @@ impl<'a> crate::func::EagerUnaryFunc<'a> for CastStringToInterval {
     fn inverse(&self) -> Option<crate::UnaryFunc> {
         to_unary!(super::CastIntervalToString)
     }
-    fn is_monotone(&self) -> bool {
-        false
-    }
-    fn preserves_uniqueness(&self) -> bool {
-        false
-    }
 }
 impl std::fmt::Display for CastStringToInterval {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         f.write_str("text_to_interval")
     }
-}
-#[allow(clippy::extra_unused_lifetimes)]
-pub fn cast_string_to_interval<'a>(a: &'a str) -> Result<Interval, EvalError> {
-    { strconv::parse_interval(a).err_into() }
 }

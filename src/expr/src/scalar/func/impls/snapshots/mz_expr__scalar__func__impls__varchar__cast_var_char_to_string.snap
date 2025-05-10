@@ -20,7 +20,7 @@ impl<'a> crate::func::EagerUnaryFunc<'a> for CastVarCharToString {
     type Input = VarChar<&'a str>;
     type Output = &'a str;
     fn call(&self, a: Self::Input) -> Self::Output {
-        cast_var_char_to_string(a)
+        a.0
     }
     fn output_type(&self, input_type: mz_repr::ColumnType) -> mz_repr::ColumnType {
         use mz_repr::AsColumnType;
@@ -32,9 +32,6 @@ impl<'a> crate::func::EagerUnaryFunc<'a> for CastVarCharToString {
     fn inverse(&self) -> Option<crate::UnaryFunc> {
         to_unary!(super::CastStringToVarChar { length : None, fail_on_len : false, })
     }
-    fn is_monotone(&self) -> bool {
-        false
-    }
     fn preserves_uniqueness(&self) -> bool {
         true
     }
@@ -43,8 +40,4 @@ impl std::fmt::Display for CastVarCharToString {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         f.write_str("varchar_to_text")
     }
-}
-#[allow(clippy::extra_unused_lifetimes)]
-pub fn cast_var_char_to_string<'a>(a: VarChar<&'a str>) -> &'a str {
-    { a.0 }
 }

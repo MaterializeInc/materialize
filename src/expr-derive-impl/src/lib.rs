@@ -15,6 +15,7 @@
 
 mod sqlfunc;
 
+pub use sqlfunc::save_file;
 pub use sqlfunc::sqlfunc;
 
 /// Non-exported version of `sqlfunc` for testing purposes, accepting proc_macro2 token streams.
@@ -23,7 +24,7 @@ fn sqlfunc_for_test(
     attr: proc_macro2::TokenStream,
     item: proc_macro2::TokenStream,
 ) -> darling::Result<proc_macro2::TokenStream> {
-    sqlfunc(attr, item, false)
+    sqlfunc(attr, item, false, false)
 }
 
 #[cfg(any(feature = "test", test))]

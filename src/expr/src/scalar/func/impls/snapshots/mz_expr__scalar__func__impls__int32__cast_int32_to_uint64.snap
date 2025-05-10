@@ -20,7 +20,8 @@ impl<'a> crate::func::EagerUnaryFunc<'a> for CastInt32ToUint64 {
     type Input = i32;
     type Output = Result<u64, EvalError>;
     fn call(&self, a: Self::Input) -> Self::Output {
-        cast_int32_to_uint64(a)
+        u64::try_from(a)
+            .or_else(|_| Err(EvalError::UInt64OutOfRange(a.to_string().into())))
     }
     fn output_type(&self, input_type: mz_repr::ColumnType) -> mz_repr::ColumnType {
         use mz_repr::AsColumnType;
@@ -42,12 +43,5 @@ impl<'a> crate::func::EagerUnaryFunc<'a> for CastInt32ToUint64 {
 impl std::fmt::Display for CastInt32ToUint64 {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         f.write_str("integer_to_uint8")
-    }
-}
-#[allow(clippy::extra_unused_lifetimes)]
-pub fn cast_int32_to_uint64<'a>(a: i32) -> Result<u64, EvalError> {
-    {
-        u64::try_from(a)
-            .or_else(|_| Err(EvalError::UInt64OutOfRange(a.to_string().into())))
     }
 }

@@ -26,7 +26,32 @@ impl<'a> crate::func::binary::EagerBinaryFunc<'a> for JsonbConcat {
         b: Self::Input2,
         temp_storage: &'a mz_repr::RowArena,
     ) -> Self::Output {
-        jsonb_concat(a, b, temp_storage)
+        {
+            match (a, b) {
+                (Datum::Map(dict_a), Datum::Map(dict_b)) => {
+                    let mut pairs = dict_b
+                        .iter()
+                        .chain(dict_a.iter())
+                        .collect::<Vec<_>>();
+                    pairs.sort_by(|(k1, _v1), (k2, _v2)| k1.cmp(k2));
+                    pairs.dedup_by(|(k1, _v1), (k2, _v2)| k1 == k2);
+                    temp_storage.make_datum(|packer| packer.push_dict(pairs))
+                }
+                (Datum::List(list_a), Datum::List(list_b)) => {
+                    let elems = list_a.iter().chain(list_b.iter());
+                    temp_storage.make_datum(|packer| packer.push_list(elems))
+                }
+                (Datum::List(list_a), b) => {
+                    let elems = list_a.iter().chain(Some(b));
+                    temp_storage.make_datum(|packer| packer.push_list(elems))
+                }
+                (a, Datum::List(list_b)) => {
+                    let elems = Some(a).into_iter().chain(list_b.iter());
+                    temp_storage.make_datum(|packer| packer.push_list(elems))
+                }
+                _ => Datum::Null,
+            }
+        }
     }
     fn output_type(
         &self,
@@ -59,32 +84,5 @@ impl<'a> crate::func::binary::EagerBinaryFunc<'a> for JsonbConcat {
 impl std::fmt::Display for JsonbConcat {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         f.write_str("||")
-    }
-}
-fn jsonb_concat<'a>(
-    a: Datum<'a>,
-    b: Datum<'a>,
-    temp_storage: &'a RowArena,
-) -> Datum<'a> {
-    match (a, b) {
-        (Datum::Map(dict_a), Datum::Map(dict_b)) => {
-            let mut pairs = dict_b.iter().chain(dict_a.iter()).collect::<Vec<_>>();
-            pairs.sort_by(|(k1, _v1), (k2, _v2)| k1.cmp(k2));
-            pairs.dedup_by(|(k1, _v1), (k2, _v2)| k1 == k2);
-            temp_storage.make_datum(|packer| packer.push_dict(pairs))
-        }
-        (Datum::List(list_a), Datum::List(list_b)) => {
-            let elems = list_a.iter().chain(list_b.iter());
-            temp_storage.make_datum(|packer| packer.push_list(elems))
-        }
-        (Datum::List(list_a), b) => {
-            let elems = list_a.iter().chain(Some(b));
-            temp_storage.make_datum(|packer| packer.push_list(elems))
-        }
-        (a, Datum::List(list_b)) => {
-            let elems = Some(a).into_iter().chain(list_b.iter());
-            temp_storage.make_datum(|packer| packer.push_list(elems))
-        }
-        _ => Datum::Null,
     }
 }

@@ -26,7 +26,14 @@ impl<'a> crate::func::binary::EagerBinaryFunc<'a> for AddInterval {
         b: Self::Input2,
         temp_storage: &'a mz_repr::RowArena,
     ) -> Self::Output {
-        add_interval(a, b)
+        {
+            a.unwrap_interval()
+                .checked_add(&b.unwrap_interval())
+                .ok_or_else(|| EvalError::IntervalOutOfRange(
+                    format!("{a} + {b}").into(),
+                ))
+                .map(Datum::from)
+        }
     }
     fn output_type(
         &self,
@@ -63,10 +70,4 @@ impl std::fmt::Display for AddInterval {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         f.write_str("+")
     }
-}
-fn add_interval<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
-    a.unwrap_interval()
-        .checked_add(&b.unwrap_interval())
-        .ok_or_else(|| EvalError::IntervalOutOfRange(format!("{a} + {b}").into()))
-        .map(Datum::from)
 }

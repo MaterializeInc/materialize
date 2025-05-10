@@ -20,7 +20,9 @@ impl<'a> crate::func::EagerUnaryFunc<'a> for CastFloat32ToString {
     type Input = f32;
     type Output = String;
     fn call(&self, a: Self::Input) -> Self::Output {
-        cast_float32_to_string(a)
+        let mut s = String::new();
+        strconv::format_float32(&mut s, a);
+        s
     }
     fn output_type(&self, input_type: mz_repr::ColumnType) -> mz_repr::ColumnType {
         use mz_repr::AsColumnType;
@@ -32,23 +34,9 @@ impl<'a> crate::func::EagerUnaryFunc<'a> for CastFloat32ToString {
     fn inverse(&self) -> Option<crate::UnaryFunc> {
         to_unary!(super::CastStringToFloat32)
     }
-    fn is_monotone(&self) -> bool {
-        false
-    }
-    fn preserves_uniqueness(&self) -> bool {
-        false
-    }
 }
 impl std::fmt::Display for CastFloat32ToString {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         f.write_str("real_to_text")
-    }
-}
-#[allow(clippy::extra_unused_lifetimes)]
-pub fn cast_float32_to_string<'a>(a: f32) -> String {
-    {
-        let mut s = String::new();
-        strconv::format_float32(&mut s, a);
-        s
     }
 }

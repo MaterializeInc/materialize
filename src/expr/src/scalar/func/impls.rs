@@ -40,6 +40,8 @@ mod uint64;
 mod uuid;
 mod varchar;
 
+mod generated;
+
 pub use crate::scalar::func::impls::array::*;
 pub use crate::scalar::func::impls::boolean::*;
 pub use crate::scalar::func::impls::byte::*;

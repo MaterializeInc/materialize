@@ -26,7 +26,26 @@ impl<'a> crate::func::binary::EagerBinaryFunc<'a> for Power {
         b: Self::Input2,
         temp_storage: &'a mz_repr::RowArena,
     ) -> Self::Output {
-        power(a, b)
+        {
+            let a = a.unwrap_float64();
+            let b = b.unwrap_float64();
+            if a == 0.0 && b.is_sign_negative() {
+                return Err(
+                    EvalError::Undefined("zero raised to a negative power".into()),
+                );
+            }
+            if a.is_sign_negative() && b.fract() != 0.0 {
+                return Err(EvalError::ComplexOutOfRange("pow".into()));
+            }
+            let res = a.powf(b);
+            if res.is_infinite() {
+                return Err(EvalError::FloatOverflow);
+            }
+            if res == 0.0 && a != 0.0 {
+                return Err(EvalError::FloatUnderflow);
+            }
+            Ok(Datum::from(res))
+        }
     }
     fn output_type(
         &self,
@@ -57,22 +76,4 @@ impl std::fmt::Display for Power {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         f.write_str(stringify!(power))
     }
-}
-fn power<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
-    let a = a.unwrap_float64();
-    let b = b.unwrap_float64();
-    if a == 0.0 && b.is_sign_negative() {
-        return Err(EvalError::Undefined("zero raised to a negative power".into()));
-    }
-    if a.is_sign_negative() && b.fract() != 0.0 {
-        return Err(EvalError::ComplexOutOfRange("pow".into()));
-    }
-    let res = a.powf(b);
-    if res.is_infinite() {
-        return Err(EvalError::FloatOverflow);
-    }
-    if res == 0.0 && a != 0.0 {
-        return Err(EvalError::FloatUnderflow);
-    }
-    Ok(Datum::from(res))
 }

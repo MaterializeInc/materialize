@@ -26,7 +26,37 @@ impl<'a> crate::func::binary::EagerBinaryFunc<'a> for JsonbContainsJsonb {
         b: Self::Input2,
         temp_storage: &'a mz_repr::RowArena,
     ) -> Self::Output {
-        jsonb_contains_jsonb(a, b)
+        {
+            fn contains(a: Datum, b: Datum, at_top_level: bool) -> bool {
+                match (a, b) {
+                    (Datum::JsonNull, Datum::JsonNull) => true,
+                    (Datum::False, Datum::False) => true,
+                    (Datum::True, Datum::True) => true,
+                    (Datum::Numeric(a), Datum::Numeric(b)) => a == b,
+                    (Datum::String(a), Datum::String(b)) => a == b,
+                    (Datum::List(a), Datum::List(b)) => {
+                        b.iter()
+                            .all(|b_elem| {
+                                a.iter().any(|a_elem| contains(a_elem, b_elem, false))
+                            })
+                    }
+                    (Datum::Map(a), Datum::Map(b)) => {
+                        b.iter()
+                            .all(|(b_key, b_val)| {
+                                a.iter()
+                                    .any(|(a_key, a_val)| {
+                                        (a_key == b_key) && contains(a_val, b_val, false)
+                                    })
+                            })
+                    }
+                    (Datum::List(a), b) => {
+                        at_top_level && a.iter().any(|a_elem| contains(a_elem, b, false))
+                    }
+                    _ => false,
+                }
+            }
+            contains(a, b, true).into()
+        }
     }
     fn output_type(
         &self,
@@ -60,33 +90,4 @@ impl std::fmt::Display for JsonbContainsJsonb {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         f.write_str("@>")
     }
-}
-fn jsonb_contains_jsonb<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
-    fn contains(a: Datum, b: Datum, at_top_level: bool) -> bool {
-        match (a, b) {
-            (Datum::JsonNull, Datum::JsonNull) => true,
-            (Datum::False, Datum::False) => true,
-            (Datum::True, Datum::True) => true,
-            (Datum::Numeric(a), Datum::Numeric(b)) => a == b,
-            (Datum::String(a), Datum::String(b)) => a == b,
-            (Datum::List(a), Datum::List(b)) => {
-                b.iter()
-                    .all(|b_elem| a.iter().any(|a_elem| contains(a_elem, b_elem, false)))
-            }
-            (Datum::Map(a), Datum::Map(b)) => {
-                b.iter()
-                    .all(|(b_key, b_val)| {
-                        a.iter()
-                            .any(|(a_key, a_val)| {
-                                (a_key == b_key) && contains(a_val, b_val, false)
-                            })
-                    })
-            }
-            (Datum::List(a), b) => {
-                at_top_level && a.iter().any(|a_elem| contains(a_elem, b, false))
-            }
-            _ => false,
-        }
-    }
-    contains(a, b, true).into()
 }

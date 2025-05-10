@@ -26,7 +26,11 @@ impl<'a> crate::func::binary::EagerBinaryFunc<'a> for ConstantTimeEqBytes {
         b: Self::Input2,
         temp_storage: &'a mz_repr::RowArena,
     ) -> Self::Output {
-        constant_time_eq_bytes(a, b)
+        {
+            let a_bytes = a.unwrap_bytes();
+            let b_bytes = b.unwrap_bytes();
+            Ok(Datum::from(bool::from(a_bytes.ct_eq(b_bytes))))
+        }
     }
     fn output_type(
         &self,
@@ -57,12 +61,4 @@ impl std::fmt::Display for ConstantTimeEqBytes {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         f.write_str("constant_time_compare_bytes")
     }
-}
-pub fn constant_time_eq_bytes<'a>(
-    a: Datum<'a>,
-    b: Datum<'a>,
-) -> Result<Datum<'a>, EvalError> {
-    let a_bytes = a.unwrap_bytes();
-    let b_bytes = b.unwrap_bytes();
-    Ok(Datum::from(bool::from(a_bytes.ct_eq(b_bytes))))
 }

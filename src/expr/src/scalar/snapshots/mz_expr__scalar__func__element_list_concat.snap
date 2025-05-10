@@ -26,7 +26,20 @@ impl<'a> crate::func::binary::EagerBinaryFunc<'a> for ElementListConcat {
         b: Self::Input2,
         temp_storage: &'a mz_repr::RowArena,
     ) -> Self::Output {
-        element_list_concat(a, b, temp_storage)
+        {
+            temp_storage
+                .make_datum(|packer| {
+                    packer
+                        .push_list_with(|packer| {
+                            packer.push(a);
+                            if !b.is_null() {
+                                for elem in b.unwrap_list().iter() {
+                                    packer.push(elem);
+                                }
+                            }
+                        })
+                })
+        }
     }
     fn output_type(
         &self,
@@ -60,22 +73,4 @@ impl std::fmt::Display for ElementListConcat {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         f.write_str("||")
     }
-}
-fn element_list_concat<'a>(
-    a: Datum<'a>,
-    b: Datum<'a>,
-    temp_storage: &'a RowArena,
-) -> Datum<'a> {
-    temp_storage
-        .make_datum(|packer| {
-            packer
-                .push_list_with(|packer| {
-                    packer.push(a);
-                    if !b.is_null() {
-                        for elem in b.unwrap_list().iter() {
-                            packer.push(elem);
-                        }
-                    }
-                })
-        })
 }

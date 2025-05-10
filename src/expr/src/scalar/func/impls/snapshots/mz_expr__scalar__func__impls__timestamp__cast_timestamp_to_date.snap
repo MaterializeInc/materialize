@@ -20,7 +20,7 @@ impl<'a> crate::func::EagerUnaryFunc<'a> for CastTimestampToDate {
     type Input = CheckedTimestamp<NaiveDateTime>;
     type Output = Result<Date, EvalError>;
     fn call(&self, a: Self::Input) -> Self::Output {
-        cast_timestamp_to_date(a)
+        Ok(a.date().try_into()?)
     }
     fn output_type(&self, input_type: mz_repr::ColumnType) -> mz_repr::ColumnType {
         use mz_repr::AsColumnType;
@@ -35,18 +35,9 @@ impl<'a> crate::func::EagerUnaryFunc<'a> for CastTimestampToDate {
     fn is_monotone(&self) -> bool {
         true
     }
-    fn preserves_uniqueness(&self) -> bool {
-        false
-    }
 }
 impl std::fmt::Display for CastTimestampToDate {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         f.write_str("timestamp_to_date")
     }
-}
-#[allow(clippy::extra_unused_lifetimes)]
-pub fn cast_timestamp_to_date<'a>(
-    a: CheckedTimestamp<NaiveDateTime>,
-) -> Result<Date, EvalError> {
-    { Ok(a.date().try_into()?) }
 }

@@ -1,0 +1,81 @@
+// Copyright Materialize, Inc. and contributors. All rights reserved.
+//
+// Use of this software is governed by the Business Source License
+// included in the LICENSE file.
+//
+// As of the Change Date specified in that file, in accordance with
+// the Business Source License, use of this software will be governed
+// by the Apache License, Version 2.0.
+
+
+#[derive(
+    proptest_derive::Arbitrary,
+    Ord,
+    PartialOrd,
+    Clone,
+    Debug,
+    Eq,
+    PartialEq,
+    serde::Serialize,
+    serde::Deserialize,
+    Hash,
+    mz_lowertest::MzReflect
+)]
+pub struct Position;
+impl<'a> crate::func::binary::EagerBinaryFunc<'a> for Position {
+    type Input1 = Datum<'a>;
+    type Input2 = Datum<'a>;
+    type Output = Result<Datum<'a>, EvalError>;
+    fn call(
+        &self,
+        a: Self::Input1,
+        b: Self::Input2,
+        temp_storage: &'a mz_repr::RowArena,
+    ) -> Self::Output {
+        {
+            let substring: &'a str = a.unwrap_str();
+            let string = b.unwrap_str();
+            let char_index = string.find(substring);
+            if let Some(char_index) = char_index {
+                let string_prefix = &string[0..char_index];
+                let num_prefix_chars = string_prefix.chars().count();
+                let num_prefix_chars = i32::try_from(num_prefix_chars)
+                    .map_err(|_| EvalError::Int32OutOfRange(
+                        num_prefix_chars.to_string().into(),
+                    ))?;
+                Ok(Datum::Int32(num_prefix_chars + 1))
+            } else {
+                Ok(Datum::Int32(0))
+            }
+        }
+    }
+    fn output_type(
+        &self,
+        input_type_a: mz_repr::ColumnType,
+        input_type_b: mz_repr::ColumnType,
+    ) -> mz_repr::ColumnType {
+        use mz_repr::AsColumnType;
+        let output = <i32>::as_column_type();
+        let propagates_nulls = crate::func::binary::EagerBinaryFunc::propagates_nulls(
+            self,
+        );
+        let nullable = output.nullable;
+        output
+            .nullable(
+                nullable
+                    || (propagates_nulls
+                        && (input_type_a.nullable || input_type_b.nullable)),
+            )
+    }
+    fn introduces_nulls(&self) -> bool {
+        <i32 as ::mz_repr::DatumType<'_, ()>>::nullable()
+    }
+    fn propagates_nulls(&self) -> bool {
+        true
+    }
+}
+impl std::fmt::Display for Position {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        f.write_str(stringify!(position))
+    }
+}

@@ -26,7 +26,12 @@ impl<'a> crate::func::binary::EagerBinaryFunc<'a> for SubUint64 {
         b: Self::Input2,
         temp_storage: &'a mz_repr::RowArena,
     ) -> Self::Output {
-        sub_uint64(a, b)
+        {
+            a.unwrap_uint64()
+                .checked_sub(b.unwrap_uint64())
+                .ok_or_else(|| EvalError::UInt64OutOfRange(format!("{a} - {b}").into()))
+                .map(Datum::from)
+        }
     }
     fn output_type(
         &self,
@@ -63,10 +68,4 @@ impl std::fmt::Display for SubUint64 {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         f.write_str("-")
     }
-}
-fn sub_uint64<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
-    a.unwrap_uint64()
-        .checked_sub(b.unwrap_uint64())
-        .ok_or_else(|| EvalError::UInt64OutOfRange(format!("{a} - {b}").into()))
-        .map(Datum::from)
 }

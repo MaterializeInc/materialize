@@ -26,7 +26,15 @@ impl<'a> crate::func::binary::EagerBinaryFunc<'a> for DatePartTimeF64 {
         b: Self::Input2,
         temp_storage: &'a mz_repr::RowArena,
     ) -> Self::Output {
-        date_part_time_f64(a, b)
+        {
+            let units = a.unwrap_str();
+            match units.parse() {
+                Ok(units) => {
+                    Ok(date_part_time_inner::<f64>(units, b.unwrap_time())?.into())
+                }
+                Err(_) => Err(EvalError::UnknownUnits(units.into())),
+            }
+        }
     }
     fn output_type(
         &self,
@@ -56,12 +64,5 @@ impl<'a> crate::func::binary::EagerBinaryFunc<'a> for DatePartTimeF64 {
 impl std::fmt::Display for DatePartTimeF64 {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         f.write_str("date_partt")
-    }
-}
-fn date_part_time_f64<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
-    let units = a.unwrap_str();
-    match units.parse() {
-        Ok(units) => Ok(date_part_time_inner::<f64>(units, b.unwrap_time())?.into()),
-        Err(_) => Err(EvalError::UnknownUnits(units.into())),
     }
 }

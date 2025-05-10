@@ -26,7 +26,7 @@ impl<'a> crate::func::binary::EagerBinaryFunc<'a> for NotEq {
         b: Self::Input2,
         temp_storage: &'a mz_repr::RowArena,
     ) -> Self::Output {
-        not_eq(a, b)
+        { Datum::from(a != b) }
     }
     fn output_type(
         &self,
@@ -60,7 +60,4 @@ impl std::fmt::Display for NotEq {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         f.write_str("!=")
     }
-}
-fn not_eq<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
-    Datum::from(a != b)
 }
