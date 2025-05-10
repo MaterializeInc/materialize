@@ -18,7 +18,7 @@ use mz_expr::{
     CollectionPlan, EvalError, Id, LetRecLimit, LocalId, MapFilterProject, MirScalarExpr, TableFunc,
 };
 use mz_proto::{IntoRustIfSome, ProtoMapEntry, ProtoType, RustType, TryFromProtoError};
-use mz_repr::explain::ExprHumanizer;
+use mz_repr::explain::{CompactScalars, ExprHumanizer};
 use mz_repr::{Diff, GlobalId, Row};
 use proptest::prelude::*;
 use serde::{Deserialize, Serialize};
@@ -795,8 +795,10 @@ impl<T> Expr<T> {
 ///
 /// Invariant: the [`std::fmt::Display`] instance should produce a single line for a given expr.
 #[derive(Debug)]
-struct RenderPlanExprHumanizer<'a, T> {
+pub struct RenderPlanExprHumanizer<'a, T> {
+    /// The [`Expr`] to be rendered.
     expr: &'a Expr<T>,
+    /// Humanization information.
     humanizer: &'a dyn ExprHumanizer,
 }
 
@@ -810,6 +812,10 @@ impl<'a, T> RenderPlanExprHumanizer<'a, T> {
 }
 
 impl<'a, T> std::fmt::Display for RenderPlanExprHumanizer<'a, T> {
+    // NOTE: This code needs to be kept in sync with `Plan::fmt_default_text`.
+    //
+    // This code determines what you see in `mz_lir_mapping`; that other code
+    // determine what you see when you run `EXPLAIN`.
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         use Expr::*;
 
@@ -818,54 +824,58 @@ impl<'a, T> std::fmt::Display for RenderPlanExprHumanizer<'a, T> {
                 write!(f, "Constant ")?;
 
                 match rows {
-                    Ok(rows) => write!(f, "{} rows", rows.len()),
-                    Err(err) => write!(f, "error ({err})"),
+                    Ok(rows) => write!(f, "({} rows)", rows.len()),
+                    Err(err) => write!(f, "(error: {err})"),
                 }
             }
-            Get { id, keys: _, plan } => {
-                write!(f, "Get::")?;
-
-                match plan {
-                    GetPlan::PassArrangements => write!(f, "PassArrangements")?,
-                    GetPlan::Arrangement(_key, Some(val), _mfp) => write!(
-                        f,
-                        "Arrangement (val={})",
-                        HumanizedExplain::new(false).expr(val, None)
-                    )?,
-                    GetPlan::Arrangement(_key, None, _mfp) => write!(f, "Arrangement")?,
-                    GetPlan::Collection(_mfp) => write!(f, "Collection")?,
+            Get { id, keys, plan } => {
+                let id = match id {
+                    Id::Local(id) => id.to_string(),
+                    Id::Global(id) => self
+                        .humanizer
+                        .humanize_id(*id)
+                        .unwrap_or_else(|| id.to_string()),
                 };
 
-                write!(f, " ")?;
-
-                match id {
-                    Id::Local(id) => write!(f, "{id}"),
-                    Id::Global(id) => {
-                        if let Some(id) = self.humanizer.humanize_id(*id) {
-                            write!(f, "{id}")
+                match plan {
+                    GetPlan::PassArrangements => {
+                        if keys.raw && keys.arranged.is_empty() {
+                            write!(f, "Stream {id}")
                         } else {
-                            write!(f, "{id}")
+                            // we don't know which arrangement will be used, but one could be (so we say "Indexed")
+                            // we're not reporting on whether or not `raw` is set
+                            // we're not reporting on how many arrangements there are
+                            write!(f, "Indexed {id}")
                         }
                     }
+                    GetPlan::Arrangement(_key, Some(val), _mfp) => write!(
+                        f,
+                        "Index Lookup on {id} (val={})",
+                        HumanizedExplain::new(false).expr(val, None)
+                    ),
+                    GetPlan::Arrangement(_key, None, _mfp) => write!(f, "Indexed {id}"),
+                    GetPlan::Collection(_mfp) => write!(f, "Read {id}"),
                 }
             }
             Mfp {
-                input,
+                input: _,
                 mfp: _,
                 input_key_val: _,
             } => {
                 // TODO(mgree) show MFP detail
-                write!(f, "MapFilterProject {input}")
+                write!(f, "Map/Filter/Project")
             }
             FlatMap {
-                input,
+                input: _,
                 func,
-                exprs: _,
+                exprs,
                 mfp_after: _,
                 input_key: _,
             } => {
-                // TODO(mgree) show FlatMap detail
-                write!(f, "FlatMap {input} ({func})")
+                let mode = HumanizedExplain::new(false);
+                let exprs = CompactScalars(mode.seq(exprs, None));
+
+                write!(f, "Table Function {func}({exprs})")
             }
             Join { inputs, plan } => match plan {
                 JoinPlan::Linear(LinearJoinPlan {
@@ -873,7 +883,7 @@ impl<'a, T> std::fmt::Display for RenderPlanExprHumanizer<'a, T> {
                     stage_plans,
                     ..
                 }) => {
-                    write!(f, "Join::Differential ")?;
+                    write!(f, "Differential Join ")?;
 
                     write!(f, "{}", inputs[*source_relation])?;
                     for dsp in stage_plans {
@@ -883,22 +893,27 @@ impl<'a, T> std::fmt::Display for RenderPlanExprHumanizer<'a, T> {
                     Ok(())
                 }
                 JoinPlan::Delta(DeltaJoinPlan { path_plans }) => {
-                    write!(f, "Join::Delta")?;
+                    write!(f, "Delta Join ")?;
 
+                    let mut first = true;
                     for dpp in path_plans {
+                        if !first {
+                            write!(f, " ")?;
+                            first = false;
+                        }
                         write!(f, "[{}", inputs[dpp.source_relation])?;
 
                         for dsp in &dpp.stage_plans {
                             write!(f, " » {}", inputs[dsp.lookup_relation])?;
                         }
-                        write!(f, "] ")?;
+                        write!(f, "]")?;
                     }
 
                     Ok(())
                 }
             },
             Reduce {
-                input,
+                input: _,
                 key_val_plan: _key_val_plan,
                 plan,
                 input_key: _input_key,
@@ -907,30 +922,29 @@ impl<'a, T> std::fmt::Display for RenderPlanExprHumanizer<'a, T> {
                 write!(f, "Reduce::")?;
 
                 match plan {
-                    ReducePlan::Distinct => write!(f, "Distinct {input}"),
-                    ReducePlan::Accumulable(..) => write!(f, "Accumulable {input}"),
+                    ReducePlan::Distinct => write!(f, "Distinct GroupAggregate"),
+                    ReducePlan::Accumulable(..) => write!(f, "Accumulable GroupAggregate"),
                     ReducePlan::Hierarchical(HierarchicalPlan::Monotonic(..)) => {
-                        write!(f, "Hierarchical {input} (monotonic)")
+                        write!(f, "Monotonic Hierarchical GroupAggregate")
                     }
                     ReducePlan::Hierarchical(HierarchicalPlan::Bucketed(BucketedPlan {
                         buckets,
                         ..
                     })) => {
-                        write!(f, "Hierarchical {input} (buckets:")?;
+                        write!(f, "Bucketed Hierarchical GroupAggregate (buckets:")?;
 
                         for bucket in buckets {
                             write!(f, " {bucket}")?;
                         }
                         write!(f, ")")
                     }
-                    ReducePlan::Basic(..) => write!(f, "Basic"),
-                    ReducePlan::Collation(..) => write!(f, "Collation"),
+                    ReducePlan::Basic(..) => write!(f, "Non-incremental GroupAggregate`"),
+                    ReducePlan::Collation(..) => write!(f, "Collated Multi-GroupAggregate"),
                 }
             }
             TopK { input, top_k_plan } => {
-                write!(f, "TopK::")?;
                 match top_k_plan {
-                    TopKPlan::MonotonicTop1(..) => write!(f, "MonotonicTop1")?,
+                    TopKPlan::MonotonicTop1(..) => write!(f, "Monotonic Top1")?,
                     TopKPlan::MonotonicTopK(MonotonicTopKPlan {
                         limit: Some(limit), ..
                     }) => write!(
@@ -939,39 +953,41 @@ impl<'a, T> std::fmt::Display for RenderPlanExprHumanizer<'a, T> {
                         HumanizedExplain::new(false).expr(limit, None)
                     )?,
                     TopKPlan::MonotonicTopK(MonotonicTopKPlan { .. }) => {
-                        write!(f, "MonotonicTopK")?
+                        write!(f, "Monotonic TopK")?
                     }
-                    TopKPlan::Basic(..) => write!(f, "Basic")?,
+                    TopKPlan::Basic(..) => write!(f, "Non-monotonic TopK")?,
                 };
                 write!(f, " {input}")
             }
-            Negate { input } => write!(f, "Negate {input}"),
+            Negate { input: _ } => write!(f, "Negate Diffs"),
             Threshold {
-                input,
+                input: _,
                 threshold_plan: _,
-            } => write!(f, "Threshold {input}"),
+            } => write!(f, "Threshold Diffs"),
             Union {
-                inputs,
+                inputs: _,
                 consolidate_output,
             } => {
-                write!(f, "Union")?;
-
-                for input in inputs {
-                    write!(f, " {input}")?;
-                }
-
                 if *consolidate_output {
-                    write!(f, " (consolidates output)")?;
+                    write!(f, "Consolidating ")?;
                 }
+
+                write!(f, "Union")?;
 
                 Ok(())
             }
             ArrangeBy {
-                input,
-                forms: _,
+                input: _,
+                forms,
                 input_key: _,
                 input_mfp: _,
-            } => write!(f, "Arrange {input}"),
+            } => {
+                if forms.raw && forms.arranged.is_empty() {
+                    write!(f, "Unarranged Raw Stream")
+                } else {
+                    write!(f, "Arrange")
+                }
+            }
         }
     }
 }

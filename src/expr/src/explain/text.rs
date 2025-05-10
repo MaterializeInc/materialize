@@ -248,6 +248,18 @@ where
     }
 }
 
+impl<'a, M: HumanizerMode> HumanizedExpr<'a, MapFilterProject, M> {
+    /// Render an MFP using the the default (concise) syntax.
+    pub fn fmt_default_text<T>(
+        &self,
+        f: &mut fmt::Formatter<'_>,
+        ctx: &mut PlanRenderingContext<'_, T>,
+    ) -> fmt::Result {
+        // TODO(mgree) LIR default output
+        self.fmt_text(f, ctx)
+    }
+}
+
 /// `EXPLAIN ... AS TEXT` support for [`MirRelationExpr`].
 ///
 /// The format adheres to the following conventions:
@@ -266,26 +278,25 @@ impl DisplayText<PlanRenderingContext<'_, MirRelationExpr>> for MirRelationExpr 
         f: &mut fmt::Formatter<'_>,
         ctx: &mut PlanRenderingContext<'_, MirRelationExpr>,
     ) -> fmt::Result {
-        if ctx.config.raw_syntax {
-            self.fmt_raw_syntax(f, ctx)
+        if ctx.config.verbose_syntax {
+            self.fmt_verbose_syntax(f, ctx)
         } else {
-            self.fmt_virtual_syntax(f, ctx)
+            self.fmt_default_syntax(f, ctx)
         }
     }
 }
 
 impl MirRelationExpr {
-    fn fmt_virtual_syntax(
+    fn fmt_default_syntax(
         &self,
         f: &mut fmt::Formatter<'_>,
         ctx: &mut PlanRenderingContext<'_, MirRelationExpr>,
     ) -> fmt::Result {
-        // no virtual syntax support for now, evolve this
-        // method as its HirRelationExpr counterpart
-        self.fmt_raw_syntax(f, ctx)
+        // TODO(mgree) MIR does not support a different default syntax (yet!)
+        self.fmt_verbose_syntax(f, ctx)
     }
 
-    fn fmt_raw_syntax(
+    fn fmt_verbose_syntax(
         &self,
         f: &mut fmt::Formatter<'_>,
         ctx: &mut PlanRenderingContext<'_, MirRelationExpr>,

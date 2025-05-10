@@ -140,6 +140,7 @@ mod tests {
                     non_negative: false,
                     raw_plans: false,
                     raw_syntax: false,
+                    verbose_syntax: true,
                     subtree_size: false,
                     equivalences: false,
                     timing: false,
@@ -163,7 +164,7 @@ mod tests {
                 };
 
                 Explainable(&mut rel.clone())
-                    .explain(&ExplainFormat::VerboseText, &context)
+                    .explain(&ExplainFormat::Text, &context)
                     .unwrap()
             }
         }
@@ -581,18 +582,16 @@ mod explain {
     impl<'a> Explain<'a> for Explainable<'a, MirRelationExpr> {
         type Context = ExplainContext<'a>;
 
-        type Text = UnsupportedFormat;
-
-        type VerboseText = ExplainSinglePlan<'a, MirRelationExpr>;
+        type Text = ExplainSinglePlan<'a, MirRelationExpr>;
 
         type Json = UnsupportedFormat;
 
         type Dot = UnsupportedFormat;
 
-        fn explain_verbose_text(
+        fn explain_text(
             &'a mut self,
             context: &'a Self::Context,
-        ) -> Result<Self::VerboseText, ExplainError> {
+        ) -> Result<Self::Text, ExplainError> {
             self.as_explain_single_plan(context)
         }
     }
