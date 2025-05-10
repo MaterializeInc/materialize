@@ -35,20 +35,11 @@ steps:
     concurrency: 1
     concurrency_group: deploy-mz-lsp-server/linux/aarch64
 
-  - id: deploy-mz-lsp-server-macos-x86-64
-    label: "Deploy mz-lsp-server for macOS x86-64"
-    command: bin/pyactivate -m ci.deploy_mz_lsp_server.macos
-    agents:
-      queue: mac-x86_64
-    timeout_in_minutes: 30
-    concurrency: 1
-    concurrency_group: deploy-mz-lsp-server/macos/x86_64
-
   - id: deploy-mz-lsp-server-macos-aarch64
     label: "Deploy mz-lsp-server for macOS aarch64"
     command: bin/pyactivate -m ci.deploy_mz_lsp_server.macos
     agents:
-      queue: mac-aarch64
+      queue: buildkite-hosted-macos
     timeout_in_minutes: 30
     concurrency: 1
     concurrency_group: deploy-mz-lsp-server/macos/aarch64
