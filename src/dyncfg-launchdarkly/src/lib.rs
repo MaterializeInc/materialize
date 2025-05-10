@@ -201,6 +201,12 @@ impl<F: Fn(&ConfigUpdates, &ConfigSet) + Send> SyncedConfigSet<F> {
                     entry.name()
                 ),
             };
+            tracing::debug!(
+                "updating config value {} from {:?} to {:?}",
+                &entry.name(),
+                &entry.val(),
+                update
+            );
             updates.add_dynamic(entry.name(), update);
         }
         updates.apply(&self.set);
