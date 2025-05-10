@@ -1106,8 +1106,9 @@ mod tests {
                 )
                 .await
                 .unwrap();
-            for batch in snap {
-                let res = fetcher1.fetch_leased_part(&batch).await;
+            for part in snap {
+                let (part, _lease) = part.into_exchangeable_part();
+                let res = fetcher1.fetch_leased_part(part).await;
                 assert_eq!(
                     res.unwrap_err(),
                     InvalidUsage::BatchNotFromThisShard {

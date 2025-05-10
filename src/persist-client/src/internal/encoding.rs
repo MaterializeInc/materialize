@@ -169,6 +169,10 @@ impl<T: Message + Default> LazyProto<T> {
     pub fn decode(&self) -> Result<T, prost::DecodeError> {
         T::decode(&*self.buf)
     }
+
+    pub fn decode_to<R: RustType<T>>(&self) -> anyhow::Result<R> {
+        Ok(T::decode(&*self.buf)?.into_rust()?)
+    }
 }
 
 impl<T: Message + Default> RustType<Bytes> for LazyProto<T> {
