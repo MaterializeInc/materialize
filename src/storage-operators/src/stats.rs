@@ -75,7 +75,7 @@ impl StatsCursor {
                     .clone();
                 let _ = txns_read.update_gt(&as_of).await;
                 let data_snapshot = txns_read.data_snapshot(handle.shard_id(), as_of);
-                let errors: Cursor<SourceData, (), Timestamp, i64> = data_snapshot
+                let errors: Cursor<SourceData, (), Timestamp, StorageDiff> = data_snapshot
                     .snapshot_cursor(handle, should_fetch("errors", true))
                     .await?;
                 let data = data_snapshot

@@ -33,9 +33,9 @@ use timely::order::TotalOrder;
 use timely::progress::{Antichain, Timestamp};
 use tracing::debug;
 
-use crate::TxnsCodecDefault;
 use crate::metrics::Metrics;
 use crate::txn_read::{DataListenNext, DataRemapEntry, DataSnapshot, DataSubscribe};
+use crate::{TxnDiff, TxnsCodecDefault};
 
 /// A cache of the txn shard contents, optimized for various in-memory
 /// operations.
@@ -121,9 +121,9 @@ pub struct TxnsCacheState<T> {
 #[derive(Debug)]
 pub struct TxnsCache<T, C: TxnsCodec = TxnsCodecDefault> {
     /// A subscribe over the txn shard.
-    pub(crate) txns_subscribe: Subscribe<C::Key, C::Val, T, i64>,
+    pub(crate) txns_subscribe: Subscribe<C::Key, C::Val, T, TxnDiff>,
     /// Pending updates for timestamps that haven't closed.
-    pub(crate) buf: Vec<(TxnsEntry, T, i64)>,
+    pub(crate) buf: Vec<(TxnsEntry, T, TxnDiff)>,
     state: TxnsCacheState<T>,
 }
 
@@ -150,8 +150,8 @@ impl<T: Timestamp + Lattice + TotalOrder + StepForward + Codec64 + Sync> TxnsCac
     /// `txns_read` is a [`ReadHandle`] on the txn shard.
     pub(crate) async fn init<C: TxnsCodec>(
         only_data_id: Option<ShardId>,
-        txns_read: ReadHandle<C::Key, C::Val, T, i64>,
-    ) -> (Self, Subscribe<C::Key, C::Val, T, i64>) {
+        txns_read: ReadHandle<C::Key, C::Val, T, TxnDiff>,
+    ) -> (Self, Subscribe<C::Key, C::Val, T, TxnDiff>) {
         let txns_id = txns_read.shard_id();
         let as_of = txns_read.since().clone();
         let since_ts = as_of.as_option().expect("txns shard is not closed").clone();
@@ -457,7 +457,7 @@ impl<T: Timestamp + Lattice + TotalOrder + StepForward + Codec64 + Sync> TxnsCac
     }
 
     /// Update contents with `entries` and mark this cache as progressed up to `progress`.
-    pub(crate) fn push_entries(&mut self, mut entries: Vec<(TxnsEntry, T, i64)>, progress: T) {
+    pub(crate) fn push_entries(&mut self, mut entries: Vec<(TxnsEntry, T, TxnDiff)>, progress: T) {
         // Persist emits the times sorted by little endian encoding,
         // which is not what we want. If we ever expose an interface for
         // registering and committing to a data shard at the same
@@ -481,11 +481,11 @@ impl<T: Timestamp + Lattice + TotalOrder + StepForward + Codec64 + Sync> TxnsCac
         debug_assert_eq!(self.validate(), Ok(()));
     }
 
-    fn push_register(&mut self, data_id: ShardId, ts: T, diff: i64, compacted_ts: T) {
+    fn push_register(&mut self, data_id: ShardId, ts: T, diff: TxnDiff, compacted_ts: T) {
         self.assert_only_data_id(&data_id);
         // Since we keep the original non-advanced timestamp around, retractions
         // necessarily might be for times in the past, so `|| diff < 0`.
-        debug_assert!(ts >= self.progress_exclusive || diff < 0);
+        debug_assert!(ts >= self.progress_exclusive || diff < TxnDiff::ZERO);
         if let Some(only_data_id) = self.only_data_id.as_ref() {
             if only_data_id != &data_id {
                 return;
@@ -531,11 +531,11 @@ impl<T: Timestamp + Lattice + TotalOrder + StepForward + Codec64 + Sync> TxnsCac
         debug_assert_eq!(self.validate(), Ok(()));
     }
 
-    fn push_append(&mut self, data_id: ShardId, batch: Vec<u8>, ts: T, diff: i64) {
+    fn push_append(&mut self, data_id: ShardId, batch: Vec<u8>, ts: T, diff: TxnDiff) {
         self.assert_only_data_id(&data_id);
         // Since we keep the original non-advanced timestamp around, retractions
         // necessarily might be for times in the past, so `|| diff < 0`.
-        debug_assert!(ts >= self.progress_exclusive || diff < 0);
+        debug_assert!(ts >= self.progress_exclusive || diff < TxnDiff::ZERO);
         if let Some(only_data_id) = self.only_data_id.as_ref() {
             if only_data_id != &data_id {
                 return;
@@ -801,8 +801,8 @@ where
     /// from that shard.
     pub(crate) async fn init(
         init_ts: T,
-        txns_read: ReadHandle<C::Key, C::Val, T, i64>,
-        txns_write: &mut WriteHandle<C::Key, C::Val, T, i64>,
+        txns_read: ReadHandle<C::Key, C::Val, T, TxnDiff>,
+        txns_write: &mut WriteHandle<C::Key, C::Val, T, TxnDiff>,
     ) -> Self {
         let () = crate::empty_caa(|| "txns init", txns_write, init_ts.clone()).await;
         let mut ret = Self::from_read(txns_read, None).await;
@@ -838,7 +838,7 @@ where
     }
 
     async fn from_read(
-        txns_read: ReadHandle<C::Key, C::Val, T, i64>,
+        txns_read: ReadHandle<C::Key, C::Val, T, TxnDiff>,
         only_data_id: Option<ShardId>,
     ) -> Self {
         let (state, txns_subscribe) = TxnsCacheState::init::<C>(only_data_id, txns_read).await;
@@ -892,8 +892,8 @@ where
     /// Listen to the txns shard for events until `done` returns true.
     async fn update<F: Fn(&T) -> bool>(
         state: &mut TxnsCacheState<T>,
-        txns_subscribe: &mut Subscribe<C::Key, C::Val, T, i64>,
-        buf: &mut Vec<(TxnsEntry, T, i64)>,
+        txns_subscribe: &mut Subscribe<C::Key, C::Val, T, TxnDiff>,
+        buf: &mut Vec<(TxnsEntry, T, TxnDiff)>,
         only_data_id: Option<ShardId>,
         done: F,
     ) {
@@ -927,9 +927,9 @@ where
 
     pub(crate) async fn fetch_parts(
         only_data_id: Option<ShardId>,
-        txns_subscribe: &mut Subscribe<C::Key, C::Val, T, i64>,
+        txns_subscribe: &mut Subscribe<C::Key, C::Val, T, TxnDiff>,
         parts: Vec<LeasedBatchPart<T>>,
-        updates: &mut Vec<(TxnsEntry, T, i64)>,
+        updates: &mut Vec<(TxnsEntry, T, TxnDiff)>,
     ) {
         // We filter out unrelated data in two passes. The first is
         // `should_fetch_part`, which allows us to skip entire fetches
@@ -1241,44 +1241,44 @@ mod tests {
         testcase(&mut c, 1, d0, ds(None, 1, 2), ReadDataTo(2));
 
         // ts 2 (register)
-        c.push_register(d0, 2, 1, 2);
+        c.push_register(d0, 2, TxnDiff::ONE, 2);
         testcase(&mut c, 2, d0, ds(None, 2, 3), ReadDataTo(3));
 
         // ts 3 (registered, not written)
         testcase(&mut c, 3, d0, ds(None, 3, 4), EmitLogicalProgress(4));
 
         // ts 4 (written via txns)
-        c.push_append(d0, vec![4], 4, 1);
+        c.push_append(d0, vec![4], 4, TxnDiff::ONE);
         testcase(&mut c, 4, d0, ds(Some(4), 4, 5), ReadDataTo(5));
 
         // ts 5 (written via txns, write at preceding ts)
-        c.push_append(d0, vec![5], 5, 1);
+        c.push_append(d0, vec![5], 5, TxnDiff::ONE);
         testcase(&mut c, 5, d0, ds(Some(5), 5, 6), ReadDataTo(6));
 
         // ts 6 (registered, not written, write at preceding ts)
         testcase(&mut c, 6, d0, ds(Some(5), 6, 7), EmitLogicalProgress(7));
 
         // ts 7 (written via txns, write at non-preceding ts)
-        c.push_append(d0, vec![7], 7, 1);
+        c.push_append(d0, vec![7], 7, TxnDiff::ONE);
         testcase(&mut c, 7, d0, ds(Some(7), 7, 8), ReadDataTo(8));
 
         // ts 8 (apply and tidy write from ts 4)
-        c.push_append(d0, vec![4], 8, -1);
+        c.push_append(d0, vec![4], 8, -TxnDiff::ONE);
         testcase(&mut c, 8, d0, ds(Some(7), 8, 9), EmitLogicalProgress(9));
 
         // ts 9 (apply and tidy write from ts 5)
-        c.push_append(d0, vec![5], 9, -1);
+        c.push_append(d0, vec![5], 9, -TxnDiff::ONE);
         testcase(&mut c, 9, d0, ds(Some(7), 9, 10), EmitLogicalProgress(10));
 
         // ts 10 (apply and tidy write from ts 7)
-        c.push_append(d0, vec![7], 10, -1);
+        c.push_append(d0, vec![7], 10, -TxnDiff::ONE);
         testcase(&mut c, 10, d0, ds(None, 10, 11), EmitLogicalProgress(11));
 
         // ts 11 (forget)
         // Revisit when
         // https://github.com/MaterializeInc/database-issues/issues/7746 is fixed,
         // it's unclear how to encode the register timestamp in a forget.
-        c.push_register(d0, 11, -1, 11);
+        c.push_register(d0, 11, -TxnDiff::ONE, 11);
         testcase(&mut c, 11, d0, ds(None, 11, 12), ReadDataTo(12));
 
         // ts 12 (not registered, not written). This ReadDataTo would block until
@@ -1293,14 +1293,14 @@ mod tests {
         testcase(&mut c, 14, d0, ds(None, 14, 15), ReadDataTo(15));
 
         // ts 15 (registered, previously forgotten)
-        c.push_register(d0, 15, 1, 15);
+        c.push_register(d0, 15, TxnDiff::ONE, 15);
         testcase(&mut c, 15, d0, ds(None, 15, 16), ReadDataTo(16));
 
         // ts 16 (forgotten, registered at preceding ts)
         // Revisit when
         // https://github.com/MaterializeInc/database-issues/issues/7746 is fixed,
         // it's unclear how to encode the register timestamp in a forget.
-        c.push_register(d0, 16, -1, 16);
+        c.push_register(d0, 16, -TxnDiff::ONE, 16);
         testcase(&mut c, 16, d0, ds(None, 16, 17), ReadDataTo(17));
 
         // Now that we have more history, some of the old answers change! In
@@ -1478,8 +1478,12 @@ mod tests {
         // With the bug, this panics via an internal sanity assertion.
         cache.push_entries(
             vec![
-                (TxnsEntry::Register(d0, u64::encode(&2)), 2, -1),
-                (TxnsEntry::Register(d0, u64::encode(&1)), 2, 1),
+                (
+                    TxnsEntry::Register(d0, u64::encode(&2)),
+                    2,
+                    TxnDiff::MINUS_ONE,
+                ),
+                (TxnsEntry::Register(d0, u64::encode(&1)), 2, TxnDiff::ONE),
             ],
             3,
         );

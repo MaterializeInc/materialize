@@ -173,7 +173,7 @@ where
             source_upper.update_iter(
                 remap_updates[0..idx]
                     .iter()
-                    .map(|(from_time, _, diff)| (from_time.clone(), *diff)),
+                    .map(|(from_time, _, diff)| (from_time.clone(), diff.into_inner())),
             );
             source_upper.frontier().to_owned()
         }

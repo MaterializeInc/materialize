@@ -20,7 +20,7 @@ use futures::StreamExt;
 use futures::stream::FuturesUnordered;
 use mz_dyncfg::{Config, ConfigSet, ConfigValHandle};
 use mz_ore::collections::HashSet;
-use mz_ore::instrument;
+use mz_ore::{Overflowing, instrument};
 use mz_persist_client::batch::Batch;
 use mz_persist_client::cfg::USE_CRITICAL_SINCE_TXN;
 use mz_persist_client::critical::SinceHandle;
@@ -33,10 +33,10 @@ use timely::order::TotalOrder;
 use timely::progress::Timestamp;
 use tracing::debug;
 
-use crate::TxnsCodecDefault;
 use crate::metrics::Metrics;
 use crate::txn_cache::{TxnsCache, Unapplied};
 use crate::txn_write::Txn;
+use crate::{TxnDiff, TxnsCodecDefault};
 
 /// An interface for atomic multi-shard writes.
 ///
@@ -107,8 +107,8 @@ use crate::txn_write::Txn;
 pub struct TxnsHandle<K: Codec, V: Codec, T, D, O = u64, C: TxnsCodec = TxnsCodecDefault> {
     pub(crate) metrics: Arc<Metrics>,
     pub(crate) txns_cache: TxnsCache<T, C>,
-    pub(crate) txns_write: WriteHandle<C::Key, C::Val, T, i64>,
-    pub(crate) txns_since: SinceHandle<C::Key, C::Val, T, i64, O>,
+    pub(crate) txns_write: WriteHandle<C::Key, C::Val, T, Overflowing<i64>>,
+    pub(crate) txns_since: SinceHandle<C::Key, C::Val, T, Overflowing<i64>, O>,
     pub(crate) datas: DataHandles<K, V, T, D>,
 }
 
@@ -138,7 +138,7 @@ where
         txns_id: ShardId,
     ) -> Self {
         let (txns_key_schema, txns_val_schema) = C::schemas();
-        let (mut txns_write, txns_read) = client
+        let (mut txns_write, txns_read): (WriteHandle<_, _, _, Overflowing<i64>>, _) = client
             .open(
                 txns_id,
                 Arc::new(txns_key_schema),
@@ -246,7 +246,7 @@ where
                     .flat_map(|(data_id, (key, val))| {
                         let registered =
                             self.txns_cache.registered_at_progress(data_id, &txns_upper);
-                        (!registered).then_some(((key, val), &register_ts, 1))
+                        (!registered).then_some(((key, val), &register_ts, TxnDiff::ONE))
                     })
                     .collect::<Vec<_>>();
                 // If the txns_upper has passed register_ts, we can no longer write.
@@ -387,7 +387,7 @@ where
                     .collect::<Vec<_>>();
                 let updates = updates
                     .iter()
-                    .map(|(key, val)| ((key, val), &forget_ts, -1))
+                    .map(|(key, val)| ((key, val), &forget_ts, TxnDiff::MINUS_ONE))
                     .collect::<Vec<_>>();
 
                 // If the txns_upper has passed forget_ts, we can no longer write.
@@ -488,7 +488,7 @@ where
                     .collect::<Vec<_>>();
                 let updates = updates
                     .iter()
-                    .map(|(key, val)| ((key, val), &forget_ts, -1))
+                    .map(|(key, val)| ((key, val), &forget_ts, TxnDiff::MINUS_ONE))
                     .collect::<Vec<_>>();
 
                 // If the txns_upper has passed forget_ts, we can no longer write.
