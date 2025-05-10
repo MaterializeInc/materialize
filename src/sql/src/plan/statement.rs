@@ -341,11 +341,9 @@ pub fn plan(
         Statement::CreateTable(stmt) => ddl::plan_create_table(scx, stmt),
         Statement::CreateTableFromSource(stmt) => ddl::plan_create_table_from_source(scx, stmt),
         Statement::CreateType(stmt) => ddl::plan_create_type(scx, stmt),
-        Statement::CreateView(stmt) => ddl::plan_create_view(scx, stmt, params),
-        Statement::CreateMaterializedView(stmt) => {
-            ddl::plan_create_materialized_view(scx, stmt, params)
-        }
-        Statement::CreateContinualTask(stmt) => ddl::plan_create_continual_task(scx, stmt, params),
+        Statement::CreateView(stmt) => ddl::plan_create_view(scx, stmt),
+        Statement::CreateMaterializedView(stmt) => ddl::plan_create_materialized_view(scx, stmt),
+        Statement::CreateContinualTask(stmt) => ddl::plan_create_continual_task(scx, stmt),
         Statement::CreateNetworkPolicy(stmt) => ddl::plan_create_network_policy(scx, stmt),
         Statement::DropObjects(stmt) => ddl::plan_drop_objects(scx, stmt),
         Statement::DropOwned(stmt) => ddl::plan_drop_owned(scx, stmt),
@@ -364,7 +362,7 @@ pub fn plan(
         Statement::Delete(stmt) => dml::plan_delete(scx, stmt, params),
         Statement::ExplainPlan(stmt) => dml::plan_explain_plan(scx, stmt, params),
         Statement::ExplainPushdown(stmt) => dml::plan_explain_pushdown(scx, stmt, params),
-        Statement::ExplainTimestamp(stmt) => dml::plan_explain_timestamp(scx, stmt, params),
+        Statement::ExplainTimestamp(stmt) => dml::plan_explain_timestamp(scx, stmt),
         Statement::ExplainSinkSchema(stmt) => dml::plan_explain_schema(scx, stmt),
         Statement::Insert(stmt) => dml::plan_insert(scx, stmt, params),
         Statement::Select(stmt) => dml::plan_select(scx, stmt, params, None),

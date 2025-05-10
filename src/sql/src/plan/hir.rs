@@ -2119,6 +2119,18 @@ impl HirRelationExpr {
         })
     }
 
+    pub fn contains_parameters(&self) -> Result<bool, PlanError> {
+        let mut contains_parameters = false;
+        #[allow(deprecated)]
+        self.visit_scalar_expressions(0, &mut |e: &HirScalarExpr, _: usize| {
+            if e.contains_parameters() {
+                contains_parameters = true;
+            }
+            Ok::<(), PlanError>(())
+        })?;
+        Ok(contains_parameters)
+    }
+
     /// See the documentation for [`HirScalarExpr::splice_parameters`].
     pub fn splice_parameters(&mut self, params: &[HirScalarExpr], depth: usize) {
         #[allow(deprecated)]
@@ -2977,7 +2989,7 @@ impl HirScalarExpr {
         self.visit_recursively_mut(0, &mut |_: usize, e: &mut HirScalarExpr| {
             if let HirScalarExpr::Parameter(n, name) = e {
                 let datum = match params.datums.iter().nth(*n - 1) {
-                    None => sql_bail!("there is no parameter ${}", n),
+                    None => return Err(PlanError::UnknownParameter(*n)),
                     Some(datum) => datum,
                 };
                 let scalar_type = &params.types[*n - 1];
@@ -3780,12 +3792,6 @@ impl AbstractExpr for HirScalarExpr {
 }
 
 impl AggregateExpr {
-    /// Replaces any parameter references in the expression with the
-    /// corresponding datum from `parameters`.
-    pub fn bind_parameters(&mut self, params: &Params) -> Result<(), PlanError> {
-        self.expr.bind_parameters(params)
-    }
-
     pub fn typ(
         &self,
         outers: &[RelationType],
