@@ -63,7 +63,7 @@ uuid = "1.16.0"
 workspace-hack = { version = "0.0.0", path = "../workspace-hack", optional = true }
 
 [build-dependencies]
-mz-build-tools = { path = "../build-tools", default-features = false }
+mz-build-tools = { path = "../build-tools", default-features = false, features = ["protobuf-src"] }
 prost-build = "0.13.5"
 tonic-build = "0.12.3"
 

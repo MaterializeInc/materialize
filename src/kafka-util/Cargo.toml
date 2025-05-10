@@ -39,7 +39,7 @@ url = "2.3.1"
 workspace-hack = { version = "0.0.0", path = "../workspace-hack", optional = true }
 
 [build-dependencies]
-mz-build-tools = { path = "../build-tools", default-features = false }
+mz-build-tools = { path = "../build-tools", default-features = false, features = ["protobuf-src"] }
 prost-build = "0.13.5"
 
 [features]

@@ -44,7 +44,7 @@ criterion = { version = "0.5.1", features = ["async_tokio"] }
 tokio = { version = "1.44.1", features = ["macros"] }
 
 [build-dependencies]
-mz-build-tools = { path = "../build-tools", default-features = false }
+mz-build-tools = { path = "../build-tools", default-features = false, features = ["protobuf-src"] }
 prost-build = "0.13.5"
 
 [features]

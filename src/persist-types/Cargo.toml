@@ -36,7 +36,7 @@ proptest = { version = "1.6.0", default-features = false, features = ["std"] }
 
 [build-dependencies]
 prost-build = "0.13.5"
-mz-build-tools = { path = "../build-tools", default-features = false }
+mz-build-tools = { path = "../build-tools", default-features = false, features = ["protobuf-src"] }
 
 [package.metadata.cargo-udeps.ignore]
 normal = ["workspace-hack"]

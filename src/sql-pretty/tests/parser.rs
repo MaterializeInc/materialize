@@ -7,6 +7,8 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+#![cfg(not(target_arch = "wasm32"))]
+
 use datadriven::walk;
 use mz_sql_parser::ast::display::{AstDisplay, FormatMode};
 use mz_sql_parser::datadriven_testcase;

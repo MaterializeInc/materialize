@@ -26,7 +26,7 @@ workspace-hack = { version = "0.0.0", path = "../workspace-hack", optional = tru
 [build-dependencies]
 anyhow = "1.0.98"
 chrono-tz = { version = "0.8.1", features = ["serde", "case-insensitive"] }
-mz-build-tools = { path = "../build-tools", default-features = false }
+mz-build-tools = { path = "../build-tools", default-features = false, features = ["protobuf-src"] }
 mz-ore-build = { path = "../ore-build", default-features = false }
 phf_codegen = "0.11.3"
 prost-build = "0.13.5"

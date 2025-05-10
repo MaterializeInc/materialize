@@ -87,9 +87,6 @@ thiserror = { version = "2.0.12" }
 uuid = { version = "1.16.0", features = ["serde", "v4"] }
 workspace-hack = { version = "0.0.0", path = "../workspace-hack", optional = true }
 
-[build-dependencies]
-mz-build-tools = { path = "../build-tools", default-features = false }
-
 [dev-dependencies]
 async-trait = "0.1.88"
 axum = "0.7.5"
@@ -102,7 +99,7 @@ tempfile = "3.19.1"
 tokio = { version = "1.44.1", features = ["test-util"] }
 
 [features]
-default = ["mz-build-tools/default", "workspace-hack"]
+default = ["workspace-hack"]
 
 [package.metadata.cargo-udeps.ignore]
 # only used on linux

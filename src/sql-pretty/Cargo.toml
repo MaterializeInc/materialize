@@ -15,10 +15,10 @@ pretty = "0.12.4"
 thiserror = "2.0.12"
 workspace-hack = { version = "0.0.0", path = "../workspace-hack", optional = true }
 
-[dev-dependencies]
+[target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
 datadriven = "0.8.0"
-mz-ore = { path = "../ore", default-features = false, features = ["test"] }
 mz-sql-parser = { path = "../sql-parser", features = ["test"] }
+mz-ore = { path = "../ore", default-features = false, features = ["test"] }
 
 [features]
 default = ["workspace-hack", "mz-sql-parser/workspace-hack"]

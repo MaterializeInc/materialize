@@ -20,11 +20,8 @@ mz-ore = { path = "../ore", default-features = false }
 serde = "1.0"
 workspace-hack = { version = "0.0.0", path = "../workspace-hack", optional = true }
 
-[build-dependencies]
-mz-build-tools = { path = "../build-tools", default-features = false }
-
 [features]
-default = ["mz-build-tools/default", "workspace-hack"]
+default = ["workspace-hack"]
 
 [package.metadata.cargo-udeps.ignore]
 normal = ["workspace-hack"]

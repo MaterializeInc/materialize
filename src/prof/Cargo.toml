@@ -16,7 +16,7 @@ backtrace = "0.3.74"
 flate2 = "1.1.1"
 jemalloc_pprof = { version = "0.7", optional = true }
 pprof_util = "0.7"
-mz-ore = { path = "../ore", default-features = false }
+mz-ore = { path = "../ore", default-features = false, features = ["async"] }
 pprof = "0.14.0"
 prost = { version = "0.13.5", features = ["no-recursion-limit"] }
 tikv-jemalloc-ctl = { version = "0.6", features = ["use_std", "stats"], optional = true }
@@ -26,11 +26,11 @@ workspace-hack = { version = "0.0.0", path = "../workspace-hack", optional = tru
 
 [build-dependencies]
 anyhow = "1.0.98"
-mz-build-tools = { path = "../build-tools", default-features = false }
+mz-build-tools = { path = "../build-tools", default-features = false, features = ["protobuf-src"] }
 prost-build = "0.13.5"
 
 [features]
-default = ["mz-build-tools/default", "workspace-hack"]
+default = ["workspace-hack"]
 # Whether to enable profiling features that depend on jemalloc.
 jemalloc = ["tikv-jemalloc-ctl", "jemalloc_pprof"]
 
