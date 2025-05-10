@@ -54,7 +54,7 @@ steps:
         priority: 50
         if: build.tag != null || (build.env("CI_UPLOAD_DEBUG_SYMBOLS") != null && build.env("CI_UPLOAD_DEBUG_SYMBOLS") != "0")
         agents:
-          queue: linux-x86_64-small
+          queue: linux-x86_64
         coverage: skip
 
       - id: rust-build-aarch64
@@ -82,7 +82,7 @@ steps:
         timeout_in_minutes: 20
         if: build.tag != null || (build.env("CI_UPLOAD_DEBUG_SYMBOLS") != null && build.env("CI_UPLOAD_DEBUG_SYMBOLS") != "0")
         agents:
-          queue: linux-aarch64-small
+          queue: linux-aarch64
         coverage: skip
 
       - id: build-x86_64
