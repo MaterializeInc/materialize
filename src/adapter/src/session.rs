@@ -723,6 +723,7 @@ impl<T: TimestampManipulation> Session<T> {
                 result_formats,
                 state: PortalState::NotStarted,
                 logging,
+                lifecycle_timestamps: None,
             },
         );
         Ok(())
@@ -774,6 +775,7 @@ impl<T: TimestampManipulation> Session<T> {
                         result_formats,
                         state: PortalState::NotStarted,
                         logging,
+                        lifecycle_timestamps: None,
                     });
                     return Ok(name);
                 }
@@ -952,6 +954,9 @@ pub struct Portal {
     /// The execution state of the portal.
     #[derivative(Debug = "ignore")]
     pub state: PortalState,
+    /// Statement lifecycle timestamps coming from `mz-pgwire`. This is set only for
+    /// "Simple Query"s.
+    pub lifecycle_timestamps: Option<LifecycleTimestamps>,
 }
 
 /// Execution states of a portal.
@@ -987,6 +992,17 @@ impl InProgressRows {
 
 /// A channel of batched rows.
 pub type RowBatchStream = UnboundedReceiver<PeekResponseUnary>;
+
+/// Part of statement lifecycle. These are timestamps that come from the `mz-pgwire` part of the
+/// lifecycle.
+#[derive(Debug, Clone)]
+pub struct LifecycleTimestamps {
+    /// When the query was received. More specifically, when the tokio recv returned with a
+    /// complete query.
+    pub received: EpochMillis,
+    /// When the parsing of a "Simple Query" finished.
+    pub parsing_finished: EpochMillis,
+}
 
 /// The transaction status of a session.
 ///

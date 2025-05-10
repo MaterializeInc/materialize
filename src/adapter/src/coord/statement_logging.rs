@@ -33,7 +33,7 @@ use tracing::debug;
 use uuid::Uuid;
 
 use crate::coord::{ConnMeta, Coordinator};
-use crate::session::Session;
+use crate::session::{LifecycleTimestamps, Session};
 use crate::statement_logging::{
     SessionHistoryEvent, StatementBeganExecutionRecord, StatementEndedExecutionReason,
     StatementEndedExecutionRecord, StatementLifecycleEvent, StatementPreparedRecord,
@@ -666,6 +666,7 @@ impl Coordinator {
         session: &mut Session,
         params: &Params,
         logging: &Arc<QCell<PreparedStatementLoggingInfo>>,
+        lifecycle_timestamps: Option<LifecycleTimestamps>,
     ) -> Option<StatementLoggingId> {
         let enable_internal_statement_logging = self
             .catalog()
@@ -720,9 +721,23 @@ impl Coordinator {
         let (ps_record, ps_uuid) = self.log_prepared_statement(session, logging)?;
 
         let now = self.now();
-        let uuid = epoch_to_uuid_v7(&now);
+        let execution_uuid = epoch_to_uuid_v7(&now);
+
+        if let Some(lifecycle_timestamps) = lifecycle_timestamps {
+            self.record_statement_lifecycle_event(
+                &StatementLoggingId(execution_uuid),
+                &StatementLifecycleEvent::Received,
+                lifecycle_timestamps.received,
+            );
+            self.record_statement_lifecycle_event(
+                &StatementLoggingId(execution_uuid),
+                &StatementLifecycleEvent::ParsingFinished,
+                lifecycle_timestamps.parsing_finished,
+            );
+        }
+
         self.record_statement_lifecycle_event(
-            &StatementLoggingId(uuid),
+            &StatementLoggingId(execution_uuid),
             &StatementLifecycleEvent::ExecutionBegan,
             now,
         );
@@ -738,7 +753,7 @@ impl Coordinator {
             })
             .collect();
         let record = StatementBeganExecutionRecord {
-            id: uuid,
+            id: execution_uuid,
             prepared_statement_id: ps_uuid,
             sample_rate,
             params,
@@ -773,7 +788,9 @@ impl Coordinator {
         self.statement_logging
             .pending_statement_execution_events
             .push((mseh_update, Diff::ONE));
-        self.statement_logging.executions_begun.insert(uuid, record);
+        self.statement_logging
+            .executions_begun
+            .insert(execution_uuid, record);
         if let Some((ps_record, ps_update)) = ps_record {
             self.statement_logging
                 .pending_prepared_statement_events
@@ -789,7 +806,7 @@ impl Coordinator {
                     .push(sh_update);
             }
         }
-        Some(StatementLoggingId(uuid))
+        Some(StatementLoggingId(execution_uuid))
     }
 
     /// Record a new connection event

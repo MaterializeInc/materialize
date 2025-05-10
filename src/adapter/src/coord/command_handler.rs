@@ -551,6 +551,7 @@ impl Coordinator {
             let params = portal.parameters.clone();
             let stmt = portal.stmt.clone();
             let logging = Arc::clone(&portal.logging);
+            let lifecycle_timestamps = portal.lifecycle_timestamps.clone();
 
             let extra = if let Some(extra) = outer_context {
                 // We are executing in the context of another SQL statement, so we don't
@@ -559,7 +560,12 @@ impl Coordinator {
                 extra
             } else {
                 // This is a new statement, log it and return the context
-                let maybe_uuid = self.begin_statement_execution(&mut session, &params, &logging);
+                let maybe_uuid = self.begin_statement_execution(
+                    &mut session,
+                    &params,
+                    &logging,
+                    lifecycle_timestamps,
+                );
 
                 ExecuteContextExtra::new(maybe_uuid)
             };
