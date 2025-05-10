@@ -2042,7 +2042,8 @@ impl TryFrom<ClusterAlterOptionExtracted> for AlterClusterPlanStrategy {
 #[derive(Debug, Clone)]
 pub struct Params {
     pub datums: Row,
-    pub types: Vec<ScalarType>,
+    pub actual_types: Vec<ScalarType>,
+    pub expected_types: Vec<ScalarType>,
 }
 
 impl Params {
@@ -2050,7 +2051,8 @@ impl Params {
     pub fn empty() -> Params {
         Params {
             datums: Row::pack_slice(&[]),
-            types: vec![],
+            actual_types: vec![],
+            expected_types: vec![],
         }
     }
 }

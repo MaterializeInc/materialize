@@ -100,6 +100,8 @@ pub enum PlanError {
         context: String,
     },
     UnknownParameter(usize),
+    ParameterNotAllowed(String),
+    WrongParameterType(usize, String, String),
     RecursionLimit(RecursionLimitError),
     StrconvParse(strconv::ParseError),
     Catalog(CatalogError),
@@ -478,6 +480,9 @@ impl PlanError {
             Self::NetworkPolicyInUse => {
                 Some("Use ALTER SYSTEM SET 'network_policy' to change the default network policy.".into())
             }
+            Self::WrongParameterType(_, _, _) => {
+                Some("EXECUTE automatically inserts only such casts that are allowed in an assignment cast context. Try adding an explicit cast.".into())
+            }
             _ => None,
         }
     }
@@ -575,6 +580,8 @@ impl fmt::Display for PlanError {
                 write!(f, "{} does not allow subqueries", context)
             }
             Self::UnknownParameter(n) => write!(f, "there is no parameter ${}", n),
+            Self::ParameterNotAllowed(object_type) => write!(f, "{} cannot have parameters", object_type),
+            Self::WrongParameterType(i, expected_ty, actual_ty) => write!(f, "unable to cast given parameter ${}: expected {}, got {}", i, expected_ty, actual_ty),
             Self::RecursionLimit(e) => write!(f, "{}", e),
             Self::StrconvParse(e) => write!(f, "{}", e),
             Self::Catalog(e) => write!(f, "{}", e),

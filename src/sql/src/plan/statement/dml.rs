@@ -99,7 +99,7 @@ pub fn plan_insert(
 ) -> Result<Plan, PlanError> {
     let (id, mut expr, returning) =
         query::plan_insert_query(scx, table_name, columns, source, returning)?;
-    expr.bind_parameters(params)?;
+    expr.bind_parameters(scx, QueryLifetime::OneShot, params)?;
     let returning = returning
         .expr
         .into_iter()
@@ -127,7 +127,7 @@ pub fn plan_delete(
     params: &Params,
 ) -> Result<Plan, PlanError> {
     let rtw_plan = query::plan_delete_query(scx, stmt)?;
-    plan_read_then_write(MutationKind::Delete, params, rtw_plan)
+    plan_read_then_write(scx, MutationKind::Delete, params, rtw_plan)
 }
 
 pub fn describe_update(
@@ -144,10 +144,11 @@ pub fn plan_update(
     params: &Params,
 ) -> Result<Plan, PlanError> {
     let rtw_plan = query::plan_update_query(scx, stmt)?;
-    plan_read_then_write(MutationKind::Update, params, rtw_plan)
+    plan_read_then_write(scx, MutationKind::Update, params, rtw_plan)
 }
 
 pub fn plan_read_then_write(
+    scx: &StatementContext,
     kind: MutationKind,
     params: &Params,
     query::ReadThenWritePlan {
@@ -157,10 +158,10 @@ pub fn plan_read_then_write(
         assignments,
     }: query::ReadThenWritePlan,
 ) -> Result<Plan, PlanError> {
-    selection.bind_parameters(params)?;
+    selection.bind_parameters(scx, QueryLifetime::OneShot, params)?;
     let mut assignments_outer = BTreeMap::new();
     for (idx, mut set) in assignments {
-        set.bind_parameters(params)?;
+        set.bind_parameters(scx, QueryLifetime::OneShot, params)?;
         let set = set.lower_uncorrelated()?;
         assignments_outer.insert(idx, set);
     }
@@ -209,13 +210,14 @@ fn plan_select_inner(
     copy_to: Option<CopyFormat>,
 ) -> Result<(SelectPlan, RelationDesc), PlanError> {
     let when = query::plan_as_of(scx, select.as_of.clone())?;
+    let lifetime = QueryLifetime::OneShot;
     let query::PlannedRootQuery {
         mut expr,
         desc,
         finishing,
         scope: _,
-    } = query::plan_root_query(scx, select.query.clone(), QueryLifetime::OneShot)?;
-    expr.bind_parameters(params)?;
+    } = query::plan_root_query(scx, select.query.clone(), lifetime)?;
+    expr.bind_parameters(scx, lifetime, params)?;
 
     // OFFSET clauses in `expr` should become constants with the above binding of parameters.
     // Let's check this and simplify them to literals.
@@ -238,9 +240,13 @@ fn plan_select_inner(
     let limit = match finishing.limit {
         None => None,
         Some(mut limit) => {
-            limit.bind_parameters(params)?;
+            limit.bind_parameters(scx, lifetime, params)?;
+            // TODO: Call `try_into_literal_int64` instead of `as_literal`.
             let Some(limit) = limit.as_literal() else {
-                sql_bail!("Top-level LIMIT must be a constant expression")
+                sql_bail!(
+                    "Top-level LIMIT must be a constant expression, got {}",
+                    limit
+                )
             };
             match limit {
                 Datum::Null => None,
@@ -254,7 +260,7 @@ fn plan_select_inner(
     };
     let offset = {
         let mut offset = finishing.offset.clone();
-        offset.bind_parameters(params)?;
+        offset.bind_parameters(scx, lifetime, params)?;
         let offset = offset_into_value(offset.take())?;
         offset
             .try_into()
@@ -531,7 +537,7 @@ fn plan_explainee(
                 );
             }
 
-            let Plan::CreateView(plan) = ddl::plan_create_view(scx, *stmt, params)? else {
+            let Plan::CreateView(plan) = ddl::plan_create_view(scx, *stmt)? else {
                 sql_bail!("expected CreateViewPlan plan");
             };
 
@@ -552,7 +558,7 @@ fn plan_explainee(
             }
 
             let Plan::CreateMaterializedView(plan) =
-                ddl::plan_create_materialized_view(scx, *stmt, params)?
+                ddl::plan_create_materialized_view(scx, *stmt)?
             else {
                 sql_bail!("expected CreateMaterializedViewPlan plan");
             };
@@ -696,7 +702,6 @@ pub fn plan_explain_pushdown(
 pub fn plan_explain_timestamp(
     scx: &StatementContext,
     explain: ExplainTimestampStatement<Aug>,
-    params: &Params,
 ) -> Result<Plan, PlanError> {
     let format = match explain.format() {
         mz_sql_parser::ast::ExplainFormat::Text => ExplainFormat::Text,
@@ -707,12 +712,16 @@ pub fn plan_explain_timestamp(
 
     let raw_plan = {
         let query::PlannedRootQuery {
-            expr: mut raw_plan,
+            expr: raw_plan,
             desc: _,
             finishing: _,
             scope: _,
         } = query::plan_root_query(scx, explain.select.query, QueryLifetime::OneShot)?;
-        raw_plan.bind_parameters(params)?;
+        if raw_plan.contains_parameters()? {
+            return Err(PlanError::ParameterNotAllowed(
+                "EXPLAIN TIMESTAMP".to_string(),
+            ));
+        }
 
         raw_plan
     };
@@ -740,7 +749,7 @@ pub fn plan_query(
         finishing,
         scope,
     } = query::plan_root_query(scx, query, lifetime)?;
-    expr.bind_parameters(params)?;
+    expr.bind_parameters(scx, lifetime, params)?;
 
     Ok(query::PlannedRootQuery {
         // No metrics passed! One more reason not to use this deprecated function.
