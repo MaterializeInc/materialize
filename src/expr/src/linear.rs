@@ -10,13 +10,14 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Display;
 
 use mz_proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
-use mz_repr::{Datum, Row};
+use mz_repr::{Datum, Row, RowArena};
 use proptest::prelude::*;
 use serde::{Deserialize, Serialize};
 
 use crate::linear::proto_map_filter_project::ProtoPredicate;
+use crate::static_eval::StaticMirScalarExprs;
 use crate::visit::Visit;
-use crate::{MirRelationExpr, MirScalarExpr};
+use crate::{EvalError, MirRelationExpr, MirScalarExpr, SafeMfpPlan};
 
 include!(concat!(env!("OUT_DIR"), "/mz_expr.linear.rs"));
 
@@ -2098,6 +2099,114 @@ pub mod plan {
                 && self.mfp.mfp.projection.is_empty()
                 && self.mfp.mfp.predicates.is_empty()
         }
+    }
+}
+
+#[derive(Debug)]
+pub struct StaticMapFilterProject {
+    /// A sequence of expressions that should be appended to the row.
+    ///
+    /// Many of these expressions may not be produced in the output,
+    /// and may only be present as common subexpressions.
+    pub expressions: Vec<StaticMirScalarExprs>,
+    /// Expressions that must evaluate to `Datum::True` for the output
+    /// row to be produced.
+    ///
+    /// Each entry is prepended with a column identifier indicating
+    /// the column *before* which the predicate should first be applied.
+    /// Most commonly this would be one plus the largest column identifier
+    /// in the predicate's support, but it could be larger to implement
+    /// guarded evaluation of predicates.
+    ///
+    /// This list should be sorted by the first field.
+    pub predicates: Vec<(usize, StaticMirScalarExprs)>,
+    /// A sequence of column identifiers whose data form the output row.
+    pub projection: Vec<usize>,
+    /// The expected number of input columns.
+    ///
+    /// This is needed to ensure correct identification of newly formed
+    /// columns in the output.
+    pub input_arity: usize,
+}
+
+impl From<&SafeMfpPlan> for StaticMapFilterProject {
+    fn from(value: &SafeMfpPlan) -> Self {
+        (&value.mfp).into()
+    }
+}
+
+impl From<&MapFilterProject> for StaticMapFilterProject {
+    fn from(mfp: &MapFilterProject) -> Self {
+        Self {
+            expressions: mfp.expressions.iter().map(|e| e.into()).collect(),
+            predicates: mfp.predicates.iter().map(|(i, e)| (*i, e.into())).collect(),
+            projection: mfp.projection.clone(),
+            input_arity: mfp.input_arity,
+        }
+    }
+}
+
+impl StaticMapFilterProject {
+    #[inline(always)]
+    pub fn evaluate_into<'a, 'row>(
+        &'a self,
+        datums: &mut Vec<Datum<'a>>,
+        arena: &'a RowArena,
+        row_buf: &'row mut Row,
+    ) -> Result<Option<&'row Row>, EvalError> {
+        let passed_predicates = self.evaluate_inner(datums, arena)?;
+        if !passed_predicates {
+            Ok(None)
+        } else {
+            row_buf
+                .packer()
+                .extend(self.projection.iter().map(|c| datums[*c]));
+            Ok(Some(row_buf))
+        }
+    }
+
+    /// A version of `evaluate` which produces an iterator over `Datum`
+    /// as output.
+    ///
+    /// This version can be useful when one wants to capture the resulting
+    /// datums without packing and then unpacking a row.
+    #[inline(always)]
+    pub fn evaluate_iter<'b, 'a: 'b>(
+        &'a self,
+        datums: &'b mut Vec<Datum<'a>>,
+        arena: &'a RowArena,
+    ) -> Result<Option<impl Iterator<Item = Datum<'a>> + 'b>, EvalError> {
+        let passed_predicates = self.evaluate_inner(datums, arena)?;
+        if !passed_predicates {
+            Ok(None)
+        } else {
+            Ok(Some(self.projection.iter().map(move |i| datums[*i])))
+        }
+    }
+
+    /// Populates `datums` with `self.expressions` and tests `self.predicates`.
+    ///
+    /// This does not apply `self.projection`, which is up to the calling method.
+    pub fn evaluate_inner<'b, 'a: 'b>(
+        &'a self,
+        datums: &'b mut Vec<Datum<'a>>,
+        arena: &'a RowArena,
+    ) -> Result<bool, EvalError> {
+        let mut expression = 0;
+        for (support, predicate) in self.predicates.iter() {
+            while self.input_arity + expression < *support {
+                datums.push(self.expressions[expression].eval(&datums[..], arena)?);
+                expression += 1;
+            }
+            if predicate.eval(&datums[..], arena)? != Datum::True {
+                return Ok(false);
+            }
+        }
+        while expression < self.expressions.len() {
+            datums.push(self.expressions[expression].eval(&datums[..], arena)?);
+            expression += 1;
+        }
+        Ok(true)
     }
 }
 

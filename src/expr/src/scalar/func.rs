@@ -67,6 +67,7 @@ use crate::scalar::func::format::DateTimeFormat;
 use crate::scalar::{
     ProtoBinaryFunc, ProtoUnaryFunc, ProtoUnmaterializableFunc, ProtoVariadicFunc,
 };
+use crate::StaticMirScalarExprs;
 use crate::{EvalError, MirScalarExpr, like_pattern};
 
 #[macro_use]
@@ -276,10 +277,60 @@ pub fn and<'a>(
     }
 }
 
+pub fn static_and<'a>(
+    datums: &[Datum<'a>],
+    temp_storage: &'a RowArena,
+    exprs: &'a [StaticMirScalarExprs],
+) -> Result<Datum<'a>, EvalError> {
+    // If any is false, then return false. Else, if any is null, then return null. Else, return true.
+    let mut null = false;
+    let mut err = None;
+    for expr in exprs {
+        match expr.eval(datums, temp_storage) {
+            Ok(Datum::False) => return Ok(Datum::False), // short-circuit
+            Ok(Datum::True) => {}
+            // No return in these two cases, because we might still see a false
+            Ok(Datum::Null) => null = true,
+            Err(this_err) => err = std::cmp::max(err.take(), Some(this_err)),
+            _ => unreachable!(),
+        }
+    }
+    match (err, null) {
+        (Some(err), _) => Err(err),
+        (None, true) => Ok(Datum::Null),
+        (None, false) => Ok(Datum::True),
+    }
+}
+
 pub fn or<'a>(
     datums: &[Datum<'a>],
     temp_storage: &'a RowArena,
     exprs: &'a [MirScalarExpr],
+) -> Result<Datum<'a>, EvalError> {
+    // If any is true, then return true. Else, if any is null, then return null. Else, return false.
+    let mut null = false;
+    let mut err = None;
+    for expr in exprs {
+        match expr.eval(datums, temp_storage) {
+            Ok(Datum::False) => {}
+            Ok(Datum::True) => return Ok(Datum::True), // short-circuit
+            // No return in these two cases, because we might still see a true
+            Ok(Datum::Null) => null = true,
+            Err(this_err) => err = std::cmp::max(err.take(), Some(this_err)),
+            _ => unreachable!(),
+        }
+    }
+    match (err, null) {
+        (Some(err), _) => Err(err),
+        (None, true) => Ok(Datum::Null),
+        (None, false) => Ok(Datum::False),
+    }
+}
+
+pub fn static_or<'a>(
+    datums: &[Datum<'a>],
+    temp_storage: &'a RowArena,
+    exprs: &'a [StaticMirScalarExprs],
 ) -> Result<Datum<'a>, EvalError> {
     // If any is true, then return true. Else, if any is null, then return null. Else, return false.
     let mut null = false;
@@ -3502,6 +3553,15 @@ impl BinaryFunc {
     ) -> Result<Datum<'a>, EvalError> {
         let a = a_expr.eval(datums, temp_storage)?;
         let b = b_expr.eval(datums, temp_storage)?;
+        self.eval_input(temp_storage, a, b)
+    }
+
+    pub fn eval_input<'a>(
+        &'a self,
+        temp_storage: &'a RowArena,
+        a: Datum<'a>,
+        b: Datum<'a>,
+    ) -> Result<Datum<'a>, EvalError> {
         if self.propagates_nulls() && (a.is_null() || b.is_null()) {
             return Ok(Datum::Null);
         }
@@ -5556,6 +5616,14 @@ trait LazyUnaryFunc {
         datums: &[Datum<'a>],
         temp_storage: &'a RowArena,
         a: &'a MirScalarExpr,
+    ) -> Result<Datum<'a>, EvalError> {
+        self.eval_input(temp_storage, a.eval(datums, temp_storage))
+    }
+
+    fn eval_input<'a>(
+        &'a self,
+        temp_storage: &'a RowArena,
+        input: Result<Datum<'a>, EvalError>,
     ) -> Result<Datum<'a>, EvalError>;
 
     /// The output ColumnType of this function.
@@ -5673,7 +5741,15 @@ impl<T: for<'a> EagerUnaryFunc<'a>> LazyUnaryFunc for T {
         temp_storage: &'a RowArena,
         a: &'a MirScalarExpr,
     ) -> Result<Datum<'a>, EvalError> {
-        match T::Input::try_from_result(a.eval(datums, temp_storage)) {
+        self.eval_input(temp_storage, a.eval(datums, temp_storage))
+    }
+
+    fn eval_input<'a>(
+        &'a self,
+        temp_storage: &'a RowArena,
+        input: Result<Datum<'a>, EvalError>,
+    ) -> Result<Datum<'a>, EvalError> {
+        match T::Input::try_from_result(input) {
             // If we can convert to the input type then we call the function
             Ok(input) => self.call(input).into_result(temp_storage),
             // If we can't and we got a non-null datum something went wrong in the planner
@@ -7393,6 +7469,20 @@ fn coalesce<'a>(
     Ok(Datum::Null)
 }
 
+fn static_coalesce<'a>(
+    datums: &[Datum<'a>],
+    temp_storage: &'a RowArena,
+    exprs: &'a [StaticMirScalarExprs],
+) -> Result<Datum<'a>, EvalError> {
+    for e in exprs {
+        let d = e.eval(datums, temp_storage)?;
+        if !d.is_null() {
+            return Ok(d);
+        }
+    }
+    Ok(Datum::Null)
+}
+
 fn greatest<'a>(
     datums: &[Datum<'a>],
     temp_storage: &'a RowArena,
@@ -7405,10 +7495,34 @@ fn greatest<'a>(
         .unwrap_or(Datum::Null))
 }
 
+fn static_greatest<'a>(
+    datums: &[Datum<'a>],
+    temp_storage: &'a RowArena,
+    exprs: &'a [StaticMirScalarExprs],
+) -> Result<Datum<'a>, EvalError> {
+    let datums = fallible_iterator::convert(exprs.iter().map(|e| e.eval(datums, temp_storage)));
+    Ok(datums
+        .filter(|d| Ok(!d.is_null()))
+        .max()?
+        .unwrap_or(Datum::Null))
+}
+
 fn least<'a>(
     datums: &[Datum<'a>],
     temp_storage: &'a RowArena,
     exprs: &'a [MirScalarExpr],
+) -> Result<Datum<'a>, EvalError> {
+    let datums = fallible_iterator::convert(exprs.iter().map(|e| e.eval(datums, temp_storage)));
+    Ok(datums
+        .filter(|d| Ok(!d.is_null()))
+        .min()?
+        .unwrap_or(Datum::Null))
+}
+
+fn static_least<'a>(
+    datums: &[Datum<'a>],
+    temp_storage: &'a RowArena,
+    exprs: &'a [StaticMirScalarExprs],
 ) -> Result<Datum<'a>, EvalError> {
     let datums = fallible_iterator::convert(exprs.iter().map(|e| e.eval(datums, temp_storage)));
     Ok(datums
@@ -7430,6 +7544,28 @@ fn error_if_null<'a>(
                     return Err(EvalError::Internal(
                         "unexpected NULL in error side of error_if_null".into(),
                     ));
+                }
+                o => o.unwrap_str(),
+            };
+            Err(EvalError::IfNullError(err_msg.into()))
+        }
+        _ => Ok(first),
+    }
+}
+
+fn static_error_if_null<'a>(
+    datums: &[Datum<'a>],
+    temp_storage: &'a RowArena,
+    exprs: &'a [StaticMirScalarExprs],
+) -> Result<Datum<'a>, EvalError> {
+    let first = exprs[0].eval(datums, temp_storage)?;
+    match first {
+        Datum::Null => {
+            let err_msg = match exprs[1].eval(datums, temp_storage)? {
+                Datum::Null => {
+                    return Err(EvalError::Internal(
+                        "unexpected NULL in error side of error_if_null".into(),
+                    ))
                 }
                 o => o.unwrap_str(),
             };
@@ -9084,6 +9220,54 @@ impl VariadicFunc {
             .iter()
             .map(|e| e.eval(datums, temp_storage))
             .collect::<Result<Vec<_>, _>>()?;
+        self.eval_eager(&ds, temp_storage)
+    }
+
+    pub fn eval_static_the_second<'a>(
+        &'a self,
+        columns: &[Datum<'a>],
+        temp_storage: &'a RowArena,
+        exprs: &'a [StaticMirScalarExprs],
+    ) -> Result<Datum<'a>, EvalError> {
+        // Evaluate all non-eager functions directly
+        match self {
+            VariadicFunc::Coalesce => return static_coalesce(columns, temp_storage, exprs),
+            VariadicFunc::Greatest => return static_greatest(columns, temp_storage, exprs),
+            VariadicFunc::And => return static_and(columns, temp_storage, exprs),
+            VariadicFunc::Or => return static_or(columns, temp_storage, exprs),
+            VariadicFunc::ErrorIfNull => {
+                return static_error_if_null(columns, temp_storage, exprs)
+            }
+            VariadicFunc::Least => return static_least(columns, temp_storage, exprs),
+            _ => {}
+        };
+
+        // Compute parameters to eager functions
+        let ds = exprs
+            .iter()
+            .map(|e| e.eval(columns, temp_storage))
+            .collect::<Result<Vec<_>, _>>()?;
+        self.eval_eager(&ds, temp_storage)
+    }
+
+    pub fn eval_eager<'a>(
+        &'a self,
+        ds: &[Datum<'a>],
+        temp_storage: &'a RowArena,
+    ) -> Result<Datum<'a>, EvalError> {
+        // Non-eager functions shouldn't be evaluated here.
+        if matches!(
+            self,
+            VariadicFunc::Coalesce
+                | VariadicFunc::Greatest
+                | VariadicFunc::And
+                | VariadicFunc::Or
+                | VariadicFunc::ErrorIfNull
+                | VariadicFunc::Least
+        ) {
+            panic!("non-eager functions should be evaluated directly");
+        }
+
         // Check NULL propagation
         if self.propagates_nulls() && ds.iter().any(|d| d.is_null()) {
             return Ok(Datum::Null);

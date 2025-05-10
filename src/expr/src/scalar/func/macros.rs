@@ -367,6 +367,35 @@ macro_rules! derive_unary {
                 }
             }
 
+            paste::paste! {
+                pub fn static_unary_fn(&self) -> for<'a> fn(
+                    this: &'a UnaryFunc,
+                    datum: Result<Datum<'a>, EvalError>,
+                    temp_storage: &'a RowArena,
+                ) -> Result<Datum<'a>, EvalError> {
+                    $(
+                        #[allow(non_snake_case)]
+                        fn $name<'a>(func: &'a UnaryFunc, datum: Result<Datum<'a>, EvalError>, temp_storage: &'a RowArena) -> Result<Datum<'a>, EvalError> {
+                            let func = func.[< unwrap_$name >]();
+                            func.eval_input(temp_storage, datum)
+                        }
+                    )*
+                    match self {
+                        $(Self::$name(_) => $name,)*
+                    }
+                }
+
+                $(
+                    #[allow(non_snake_case)]
+                    fn [<unwrap_$name>](&self) -> &$name {
+                        match self {
+                            Self::$name(f) => f,
+                            _ => panic!("Unexpected type, expected {}", stringify!($name)),
+                        }
+                    }
+                )*
+            }
+
             pub fn output_type(&self, input_type: ColumnType) -> ColumnType {
                 match self {
                     $(Self::$name(f) => LazyUnaryFunc::output_type(f, input_type),)*

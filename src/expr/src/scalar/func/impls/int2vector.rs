@@ -15,7 +15,7 @@ use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
 
 use crate::scalar::func::{LazyUnaryFunc, stringify_datum};
-use crate::{EvalError, MirScalarExpr};
+use crate::EvalError;
 
 #[derive(
     Arbitrary, Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzReflect,
@@ -25,13 +25,12 @@ pub struct CastInt2VectorToArray;
 // This could be simplified to an EagerUnaryFunc once we have
 // auto-parameterization of array built-in functions.
 impl LazyUnaryFunc for CastInt2VectorToArray {
-    fn eval<'a>(
+    fn eval_input<'a>(
         &'a self,
-        datums: &[Datum<'a>],
-        temp_storage: &'a RowArena,
-        a: &'a MirScalarExpr,
+        _temp_storage: &'a RowArena,
+        input: Result<Datum<'a>, EvalError>,
     ) -> Result<Datum<'a>, EvalError> {
-        a.eval(datums, temp_storage)
+        input
     }
 
     /// The output ColumnType of this function
@@ -75,13 +74,12 @@ impl fmt::Display for CastInt2VectorToArray {
 pub struct CastInt2VectorToString;
 
 impl LazyUnaryFunc for CastInt2VectorToString {
-    fn eval<'a>(
+    fn eval_input<'a>(
         &'a self,
-        datums: &[Datum<'a>],
         temp_storage: &'a RowArena,
-        a: &'a MirScalarExpr,
+        input: Result<Datum<'a>, EvalError>,
     ) -> Result<Datum<'a>, EvalError> {
-        let a = a.eval(datums, temp_storage)?;
+        let a = input?;
         if a.is_null() {
             return Ok(Datum::Null);
         }

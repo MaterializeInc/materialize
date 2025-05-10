@@ -33,7 +33,7 @@ use mz_compute_types::dataflows::DataflowDescription;
 use mz_compute_types::plan::LirId;
 use mz_compute_types::plan::render_plan::RenderPlan;
 use mz_dyncfg::ConfigSet;
-use mz_expr::SafeMfpPlan;
+use mz_expr::{SafeMfpPlan, StaticMapFilterProject};
 use mz_expr::row::RowCollection;
 use mz_ore::cast::CastFrom;
 use mz_ore::collections::CollectionExt;
@@ -1430,6 +1430,8 @@ impl IndexPeek {
         let mut literals = peek.literal_constraints.iter().flatten();
         let mut current_literal = None;
 
+        let static_mfp = StaticMapFilterProject::from(&peek.map_filter_project);
+
         while cursor.key_valid(&storage) {
             if has_literal_constraints {
                 loop {
@@ -1485,8 +1487,7 @@ impl IndexPeek {
                     // loop.
                     datum_vec.extend(current_literal.unwrap().iter());
                 }
-                if let Some(result) = peek
-                    .map_filter_project
+                if let Some(result) = static_mfp
                     .evaluate_into(&mut borrow, &arena, &mut row_builder)
                     .map(|row| row.cloned())
                     .map_err_to_string_with_causes()?

@@ -23,7 +23,7 @@ use differential_dataflow::trace::{BatchReader, Cursor, TraceReader};
 use differential_dataflow::{AsCollection, Collection};
 use mz_compute_types::plan::join::JoinClosure;
 use mz_compute_types::plan::join::delta_join::{DeltaJoinPlan, DeltaPathPlan, DeltaStagePlan};
-use mz_expr::MirScalarExpr;
+use mz_expr::{MirScalarExpr, StaticMirScalarExprs};
 use mz_repr::fixed_length::ToDatumIter;
 use mz_repr::{DatumVec, Diff, Row, RowArena, SharedRow};
 use mz_storage_types::errors::DataflowError;
@@ -344,6 +344,7 @@ where
     for<'a> Tr::Val<'a>: ToDatumIter,
     CF: Fn(Tr::TimeGat<'_>, &G::Timestamp) -> bool + 'static,
 {
+    let prev_key: Vec<_> = prev_key.iter().map(StaticMirScalarExprs::from).collect();
     let name = "DeltaJoinKeyPreparation";
     type CB<C> = CapacityContainerBuilder<C>;
     let (updates, errs) = updates.map_fallible::<CB<_>, CB<_>, _, _, _>(name, {

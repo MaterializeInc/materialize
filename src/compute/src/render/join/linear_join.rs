@@ -24,6 +24,7 @@ use mz_compute_types::dyncfgs::{ENABLE_MZ_JOIN_CORE, LINEAR_JOIN_YIELDING};
 use mz_compute_types::plan::join::JoinClosure;
 use mz_compute_types::plan::join::linear_join::{LinearJoinPlan, LinearStagePlan};
 use mz_dyncfg::ConfigSet;
+use mz_expr::StaticMirScalarExprs;
 use mz_repr::fixed_length::ToDatumIter;
 use mz_repr::{DatumVec, Diff, Row, RowArena, SharedRow};
 use mz_storage_types::errors::DataflowError;
@@ -356,6 +357,7 @@ where
     where
         S: Scope<Timestamp = G::Timestamp>,
     {
+        let stream_key: Vec<_> = stream_key.iter().map(StaticMirScalarExprs::from).collect();
         // If we have only a streamed collection, we must first form an arrangement.
         if let JoinedFlavor::Collection(stream) = joined {
             let name = "LinearJoinKeyPreparation";

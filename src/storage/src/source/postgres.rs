@@ -86,7 +86,7 @@ use std::time::Duration;
 
 use differential_dataflow::AsCollection;
 use itertools::Itertools as _;
-use mz_expr::{EvalError, MirScalarExpr};
+use mz_expr::{EvalError, StaticMirScalarExprs};
 use mz_ore::cast::CastFrom;
 use mz_ore::error::ErrorExt;
 use mz_postgres_util::desc::PostgresTableDesc;
@@ -152,7 +152,11 @@ impl SourceRender for PostgresSourceConnection {
                 _ => panic!("unexpected source export details: {:?}", details),
             };
             let desc = details.table.clone();
-            let casts = details.column_casts.clone();
+            let casts = details
+                .column_casts
+                .iter()
+                .map(|(cast_type, expr)| (*cast_type, StaticMirScalarExprs::from(expr)))
+                .collect();
             let resume_upper = Antichain::from_iter(
                 config
                     .source_resume_uppers
@@ -268,7 +272,7 @@ impl SourceRender for PostgresSourceConnection {
 #[derive(Clone, Debug)]
 struct SourceOutputInfo {
     desc: PostgresTableDesc,
-    casts: Vec<(CastType, MirScalarExpr)>,
+    casts: Vec<(CastType, StaticMirScalarExprs)>,
     resume_upper: Antichain<MzOffset>,
 }
 
@@ -462,7 +466,7 @@ fn verify_schema(
     oid: u32,
     expected_desc: &PostgresTableDesc,
     upstream_info: &BTreeMap<u32, PostgresTableDesc>,
-    casts: &[(CastType, MirScalarExpr)],
+    casts: &[(CastType, StaticMirScalarExprs)],
 ) -> Result<(), DefiniteError> {
     let current_desc = upstream_info.get(&oid).ok_or(DefiniteError::TableDropped)?;
 
@@ -484,7 +488,7 @@ fn verify_schema(
 
 /// Casts a text row into the target types
 fn cast_row(
-    casts: &[(CastType, MirScalarExpr)],
+    casts: &[(CastType, StaticMirScalarExprs)],
     datums: &[Datum<'_>],
     row: &mut Row,
 ) -> Result<(), DefiniteError> {
