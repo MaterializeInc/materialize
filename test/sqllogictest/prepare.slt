@@ -1,0 +1,62 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+# For more prepared statement tests, see `order_by.slt` and `test_bind_params`.
+
+statement ok
+CREATE TABLE t (a int);
+
+# INSERT
+statement ok
+PREPARE i1 AS
+INSERT INTO t(a) VALUES($1);
+
+statement ok
+EXECUTE i1(5);
+
+query I
+SELECT * FROM t;
+----
+5
+
+# INSERT ... RETURNING
+statement ok
+PREPARE i2 AS
+INSERT INTO t(a) VALUES($1 - 1) RETURNING $1 + 1;
+
+query I
+EXECUTE i2(7);
+----
+8
+
+query I
+SELECT * FROM t;
+----
+5
+6
+
+query error db error: ERROR: operator is not unique: unknown \+ unknown
+PREPARE i3 AS
+INSERT INTO t(a) VALUES(4) RETURNING $1 + $1;
+
+statement ok
+PREPARE i3 AS
+INSERT INTO t(a) VALUES(4) RETURNING $1;
+
+query T
+EXECUTE i3('x');
+----
+x
+
+query I
+SELECT * FROM t;
+----
+4
+5
+6

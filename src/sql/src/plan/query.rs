@@ -439,7 +439,7 @@ pub fn plan_insert_query(
             relation_type: &typ,
             allow_aggregates: false,
             allow_subqueries: false,
-            allow_parameters: false,
+            allow_parameters: true,
             allow_windows: false,
         };
         let table_func_names = BTreeMap::new();
