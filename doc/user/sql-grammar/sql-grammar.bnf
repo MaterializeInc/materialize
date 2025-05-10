@@ -124,6 +124,10 @@ create_connection_mysql ::=
   'CREATE' 'CONNECTION' 'IF NOT EXISTS'? connection_name 'TO' 'MYSQL'
   '(' field '='? val ( ',' field '='? val )* ')'
   ('WITH' with_options)?
+create_connection_sql-server ::=
+  'CREATE' 'CONNECTION' 'IF NOT EXISTS'? connection_name 'TO' 'SQL SERVER'
+  '(' field '='? val ( ',' field '='? val )* ')'
+  ('WITH' with_options)?
 create_connection_aws_privatelink ::=
   'CREATE' 'CONNECTION' 'IF NOT EXISTS'? connection_name 'TO' 'AWS' 'PRIVATELINK'
   '(' field '='? val ( ',' field '='? val )* ')'
@@ -231,6 +235,17 @@ create_source_mysql ::=
   ('FOR ALL TABLES'
     | 'FOR TABLES' '(' table_name ('AS' subsrc_name)?  (',' table_name ('AS' subsrc_name)? )* ')'
     | 'FOR SCHEMAS' '(' schema_name (',' schema_name )* ')'
+  )
+  ('EXPOSE' 'PROGRESS' 'AS' progress_subsource_name)?
+  with_options?
+create_source_sql-server ::=
+  'CREATE SOURCE' ('IF NOT EXISTS')? src_name
+  ('IN CLUSTER' cluster_name)?
+  'FROM' 'SQL SERVER' 'CONNECTION' connection_name
+  ( ( '(' 'TEXT COLUMNS' (  '(' (column_name) ( ( ',' column_name ) )* ')')? )? )
+      ( ( ',' 'EXCLUDE COLUMNS' ('(' (column_name) ( ( ',' column_name ) )* ')')? ')' )? )
+  ('FOR ALL TABLES'
+    | 'FOR TABLES' '(' table_name ('AS' subsrc_name)? (',' table_name ('AS' subsrc_name)? )* ')'
   )
   ('EXPOSE' 'PROGRESS' 'AS' progress_subsource_name)?
   with_options?

@@ -28,7 +28,7 @@ Materialize bundles **native connectors** that allow ingesting data from the fol
 {{< linkbox title="Databases (CDC)" >}}
 - [PostgreSQL](/ingest-data/postgres/)
 - [MySQL](/ingest-data/mysql/)
-- [SQL Server](/ingest-data/cdc-sql-server/)
+- [SQL Server](/ingest-data/sql-server/)
 - [MongoDB](https://github.com/MaterializeIncLabs/materialize-mongodb-debezium)
 - [CockroachDB](/ingest-data/cdc-cockroachdb/)
 {{</ linkbox >}}

@@ -17,7 +17,7 @@ sources instead.
 |------------|---------------------| ---------------------------------------------------------------------------------------------- |
 | PostgreSQL | ✓                   | {{% ingest-data/postgres-native-support %}}                                                    |
 | MySQL      | ✓                   | {{% ingest-data/mysql-native-support %}}                                                       |
-| SQL Server |                     | [Kafka + Debezium](/ingest-data/cdc-sql-server/)                                               |
+| SQL Server | ✓                   | {{% ingest-data/sql-server-native-support %}}                                                  |
 | Oracle     |                     | [Kafka + Debezium](https://debezium.io/documentation/reference/stable/connectors/oracle.html)  |
 | MongoDB    |                     | [Kafka + Debezium](https://debezium.io/documentation/reference/stable/connectors/mongodb.html) |
 
