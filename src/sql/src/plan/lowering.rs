@@ -43,6 +43,7 @@ use itertools::Itertools;
 use mz_expr::visit::Visit;
 use mz_expr::{AccessStrategy, AggregateFunc, MirRelationExpr, MirScalarExpr};
 use mz_ore::collections::CollectionExt;
+use mz_ore::soft_panic_or_log;
 use mz_ore::stack::maybe_grow;
 use mz_repr::*;
 
@@ -1699,6 +1700,7 @@ impl HirScalarExpr {
                 els: Box::new(els.lower_uncorrelated()?),
             },
             Select { .. } | Exists { .. } | Parameter(..) | Column(..) | Windowing(..) => {
+                soft_panic_or_log!("unexpected HirScalarExpr in lower_uncorrelated: {:?}", self);
                 sql_bail!(
                     "Internal error: unexpected HirScalarExpr in lower_uncorrelated: {:?}",
                     self
