@@ -27,7 +27,7 @@ variable "orchestratord_version" {
 }
 
 module "materialize_infrastructure" {
-  source = "git::https://github.com/MaterializeInc/terraform-aws-materialize.git?ref=v0.2.7"
+  source = "git::https://github.com/MaterializeInc/terraform-aws-materialize.git?ref=v0.4.4"
 
   # Basic settings
   namespace    = "aws-persistent"
