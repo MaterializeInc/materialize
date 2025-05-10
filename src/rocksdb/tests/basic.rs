@@ -7,10 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use std::time::Duration;
-
 use mz_ore::metrics::MetricVecExt;
-use mz_ore::retry::{Retry, RetryResult};
 use mz_rocksdb::config::SharedWriteBufferManager;
 use mz_rocksdb::{
     InstanceOptions, KeyUpdate, RocksDBConfig, RocksDBInstance, RocksDBInstanceMetrics,
@@ -340,17 +337,9 @@ async fn shared_write_buffer_manager() -> Result<(), anyhow::Error> {
         instance_metrics_for_tests()?,
     )?;
 
-    let retry = Retry::default()
-        .max_tries(5)
-        .initial_backoff(Duration::from_millis(100));
-    let res = retry.retry(|_| {
-        if shared_write_buffer_manager.get().is_some() {
-            RetryResult::Ok(())
-        } else {
-            RetryResult::RetryableErr(())
-        }
-    });
-    assert!(res.is_ok());
+    // this is a no-op, but it won't return until instance1 has started
+    let _ = instance1.manual_compaction().await?;
+
     {
         // Arc will be dropped by the end of this scope
         let buf = shared_write_buffer_manager.get().unwrap();
@@ -374,6 +363,9 @@ async fn shared_write_buffer_manager() -> Result<(), anyhow::Error> {
         shared_metrics_for_tests()?,
         instance_metrics_for_tests()?,
     )?;
+
+    // this is a no-op, but it won't return until instance2 has started
+    let _ = instance2.manual_compaction().await?;
 
     instance1.close().await?;
     // The shared write buffer manager should still have a reference
@@ -403,17 +395,9 @@ async fn shared_write_buffer_manager() -> Result<(), anyhow::Error> {
         instance_metrics_for_tests()?,
     )?;
 
-    let retry = Retry::default()
-        .max_tries(5)
-        .initial_backoff(Duration::from_millis(100));
-    let res = retry.retry(|_| {
-        if shared_write_buffer_manager.get().is_some() {
-            RetryResult::Ok(())
-        } else {
-            RetryResult::RetryableErr(())
-        }
-    });
-    assert!(res.is_ok());
+    // this is a no-op, but it won't return until instance3 has started
+    let _ = instance3.manual_compaction().await?;
+
     {
         let buf = shared_write_buffer_manager.get().unwrap();
         assert!(buf.enabled());
