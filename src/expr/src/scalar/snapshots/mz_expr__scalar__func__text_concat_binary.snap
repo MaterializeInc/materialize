@@ -1,6 +1,6 @@
 ---
 source: src/expr/src/scalar/func.rs
-expression: "#[sqlfunc(output_type = \"String\", propagates_nulls = true)]\nfn encode<'a>(\n    bytes: Datum<'a>,\n    format: Datum<'a>,\n    temp_storage: &'a RowArena,\n) -> Result<Datum<'a>, EvalError> {\n    let format = encoding::lookup_format(format.unwrap_str())?;\n    let out = format.encode(bytes.unwrap_bytes());\n    Ok(Datum::from(temp_storage.push_string(out)))\n}\n"
+expression: "#[sqlfunc(\n    sqlname = \"||\",\n    is_infix_op = true,\n    output_type = \"String\",\n    propagates_nulls = true,\n    is_monotone = (false, true),\n)]\nfn text_concat_binary<'a>(\n    a: Datum<'a>,\n    b: Datum<'a>,\n    temp_storage: &'a RowArena,\n) -> Datum<'a> {\n    let mut buf = String::new();\n    buf.push_str(a.unwrap_str());\n    buf.push_str(b.unwrap_str());\n    Datum::String(temp_storage.push_string(buf))\n}\n"
 ---
 #[derive(
     proptest_derive::Arbitrary,
@@ -15,18 +15,18 @@ expression: "#[sqlfunc(output_type = \"String\", propagates_nulls = true)]\nfn e
     Hash,
     mz_lowertest::MzReflect
 )]
-pub struct Encode;
-impl<'a> crate::func::binary::EagerBinaryFunc<'a> for Encode {
+pub struct TextConcatBinary;
+impl<'a> crate::func::binary::EagerBinaryFunc<'a> for TextConcatBinary {
     type Input1 = Datum<'a>;
     type Input2 = Datum<'a>;
-    type Output = Result<Datum<'a>, EvalError>;
+    type Output = Datum<'a>;
     fn call(
         &self,
         a: Self::Input1,
         b: Self::Input2,
         temp_storage: &'a mz_repr::RowArena,
     ) -> Self::Output {
-        encode(a, b, temp_storage)
+        text_concat_binary(a, b, temp_storage)
     }
     fn output_type(
         &self,
@@ -49,21 +49,28 @@ impl<'a> crate::func::binary::EagerBinaryFunc<'a> for Encode {
     fn introduces_nulls(&self) -> bool {
         <String as ::mz_repr::DatumType<'_, ()>>::nullable()
     }
+    fn is_infix_op(&self) -> bool {
+        true
+    }
+    fn is_monotone(&self) -> (bool, bool) {
+        (false, true)
+    }
     fn propagates_nulls(&self) -> bool {
         true
     }
 }
-impl std::fmt::Display for Encode {
+impl std::fmt::Display for TextConcatBinary {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-        f.write_str(stringify!(encode))
+        f.write_str("||")
     }
 }
-fn encode<'a>(
-    bytes: Datum<'a>,
-    format: Datum<'a>,
+fn text_concat_binary<'a>(
+    a: Datum<'a>,
+    b: Datum<'a>,
     temp_storage: &'a RowArena,
-) -> Result<Datum<'a>, EvalError> {
-    let format = encoding::lookup_format(format.unwrap_str())?;
-    let out = format.encode(bytes.unwrap_bytes());
-    Ok(Datum::from(temp_storage.push_string(out)))
+) -> Datum<'a> {
+    let mut buf = String::new();
+    buf.push_str(a.unwrap_str());
+    buf.push_str(b.unwrap_str());
+    Datum::String(temp_storage.push_string(buf))
 }

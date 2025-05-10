@@ -513,7 +513,13 @@ mod test {
         );
         check(func::RoundNumericBinary, BF::RoundNumeric, &i32_ty, &i32_ty);
         check(func::ConvertFrom, BF::ConvertFrom, &i32_ty, &i32_ty);
+        check(func::Left, BF::Left, &i32_ty, &i32_ty);
+        check(func::Right, BF::Right, &i32_ty, &i32_ty);
+        check(func::Trim, BF::Trim, &i32_ty, &i32_ty);
+        check(func::TrimLeading, BF::TrimLeading, &i32_ty, &i32_ty);
+        check(func::TrimTrailing, BF::TrimTrailing, &i32_ty, &i32_ty);
         check(func::Encode, BF::Encode, &i32_ty, &i32_ty);
+        check(func::Decode, BF::Decode, &i32_ty, &i32_ty);
         check(
             func::EncodedBytesCharLength,
             BF::EncodedBytesCharLength,
@@ -839,6 +845,10 @@ mod test {
         check(func::Gt, BF::Gt, &i32_ty, &i32_ty);
         check(func::Gte, BF::Gte, &i32_ty, &i32_ty);
 
+        check(func::LikeEscape, BF::LikeEscape, &i32_ty, &i32_ty);
+        check(func::TimezoneOffset, BF::TimezoneOffset, &i32_ty, &i32_ty);
+        check(func::TextConcatBinary, BF::TextConcat, &i32_ty, &i32_ty);
+
         check(
             func::ToCharTimestampFormat,
             BF::ToCharTimestamp,
@@ -1022,5 +1032,14 @@ mod test {
         check(func::DigestString, BF::DigestString, &i32_ty, &i32_ty);
         check(func::DigestBytes, BF::DigestBytes, &i32_ty, &i32_ty);
         check(func::MzRenderTypmod, BF::MzRenderTypmod, &i32_ty, &i32_ty);
+        check(
+            func::MzAclItemContainsPrivilege,
+            BF::MzAclItemContainsPrivilege,
+            &i32_ty,
+            &i32_ty,
+        );
+        check(func::ParseIdent, BF::ParseIdent, &i32_ty, &i32_ty);
+        check(func::StartsWith, BF::StartsWith, &i32_ty, &i32_ty);
+        check(func::PrettySql, BF::PrettySql, &i32_ty, &i32_ty);
     }
 }
