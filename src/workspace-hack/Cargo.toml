@@ -130,7 +130,7 @@ toml_datetime = { version = "0.6.9", default-features = false, features = ["serd
 toml_edit = { version = "0.22.26", features = ["serde"] }
 tonic = { version = "0.12.3", features = ["gzip"] }
 tower = { version = "0.5.2", default-features = false, features = ["balance", "buffer", "filter", "limit", "load-shed", "log", "retry", "timeout"] }
-tower-http = { version = "0.6.2", features = ["auth", "cors", "map-response-body", "trace", "util"] }
+tower-http = { version = "0.6.4", features = ["auth", "cors", "map-response-body", "trace", "util"] }
 tracing = { version = "0.1.41", features = ["log"] }
 tracing-core = { version = "0.1.33" }
 tracing-subscriber = { version = "0.3.19", features = ["env-filter", "json"] }
@@ -261,7 +261,7 @@ toml_datetime = { version = "0.6.9", default-features = false, features = ["serd
 toml_edit = { version = "0.22.26", features = ["serde"] }
 tonic = { version = "0.12.3", features = ["gzip"] }
 tower = { version = "0.5.2", default-features = false, features = ["balance", "buffer", "filter", "limit", "load-shed", "log", "retry", "timeout"] }
-tower-http = { version = "0.6.2", features = ["auth", "cors", "map-response-body", "trace", "util"] }
+tower-http = { version = "0.6.4", features = ["auth", "cors", "map-response-body", "trace", "util"] }
 tracing = { version = "0.1.41", features = ["log"] }
 tracing-core = { version = "0.1.33" }
 tracing-subscriber = { version = "0.3.19", features = ["env-filter", "json"] }
@@ -285,7 +285,8 @@ openssl = { version = "0.10.72", features = ["vendored"] }
 openssl-sys = { version = "0.9.108", default-features = false, features = ["vendored"] }
 pathdiff = { version = "0.2.3", default-features = false, features = ["camino"] }
 ring = { version = "0.17.14", features = ["std"] }
-rustix = { version = "0.38.44", features = ["event", "fs", "net", "pipe", "process", "termios", "time"] }
+rustix-d585fab2519d2d1 = { package = "rustix", version = "0.38.44", features = ["event", "fs", "net", "pipe", "process", "termios", "time"] }
+rustix-dff4ba8e3ae991db = { package = "rustix", version = "1.0.5", features = ["fs"] }
 
 [target.x86_64-unknown-linux-gnu.build-dependencies]
 camino = { version = "1.1.9", default-features = false, features = ["serde1"] }
@@ -297,7 +298,8 @@ openssl = { version = "0.10.72", features = ["vendored"] }
 openssl-sys = { version = "0.9.108", default-features = false, features = ["vendored"] }
 pathdiff = { version = "0.2.3", default-features = false, features = ["camino"] }
 ring = { version = "0.17.14", features = ["std"] }
-rustix = { version = "0.38.44", features = ["event", "fs", "net", "pipe", "process", "termios", "time"] }
+rustix-d585fab2519d2d1 = { package = "rustix", version = "0.38.44", features = ["event", "fs", "net", "pipe", "process", "termios", "time"] }
+rustix-dff4ba8e3ae991db = { package = "rustix", version = "1.0.5", features = ["fs"] }
 
 [target.x86_64-apple-darwin.dependencies]
 camino = { version = "1.1.9", default-features = false, features = ["serde1"] }
@@ -306,7 +308,8 @@ miniz_oxide = { version = "0.8.8", default-features = false, features = ["with-a
 native-tls = { version = "0.2.14", default-features = false, features = ["vendored"] }
 pathdiff = { version = "0.2.3", default-features = false, features = ["camino"] }
 ring = { version = "0.17.14", features = ["std"] }
-rustix = { version = "0.38.44", features = ["event", "fs", "net", "pipe", "process", "termios", "time"] }
+rustix-d585fab2519d2d1 = { package = "rustix", version = "0.38.44", features = ["event", "fs", "net", "pipe", "process", "termios", "time"] }
+rustix-dff4ba8e3ae991db = { package = "rustix", version = "1.0.5", features = ["fs"] }
 security-framework = { version = "2.10.0", features = ["alpn"] }
 
 [target.x86_64-apple-darwin.build-dependencies]
@@ -316,7 +319,8 @@ miniz_oxide = { version = "0.8.8", default-features = false, features = ["with-a
 native-tls = { version = "0.2.14", default-features = false, features = ["vendored"] }
 pathdiff = { version = "0.2.3", default-features = false, features = ["camino"] }
 ring = { version = "0.17.14", features = ["std"] }
-rustix = { version = "0.38.44", features = ["event", "fs", "net", "pipe", "process", "termios", "time"] }
+rustix-d585fab2519d2d1 = { package = "rustix", version = "0.38.44", features = ["event", "fs", "net", "pipe", "process", "termios", "time"] }
+rustix-dff4ba8e3ae991db = { package = "rustix", version = "1.0.5", features = ["fs"] }
 security-framework = { version = "2.10.0", features = ["alpn"] }
 
 ### END HAKARI SECTION
