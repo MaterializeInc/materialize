@@ -16,7 +16,7 @@ chrono = { version = "0.4.39", default-features = false, features = ["serde", "s
 chrono-tz = { version = "0.8.1", features = ["serde", "case-insensitive"], optional = true }
 globset = "0.4.16"
 http = "1.2.0"
-mz-ore = { path = "../ore", default-features = false, features = ["proptest", "test"] }
+mz-ore = { path = "../ore", default-features = false, features = ["proptest", "test", "overflowing"] }
 num = "0.4.3"
 proptest = { version = "1.6.0", default-features = false, features = ["std"] }
 proptest-derive = { version = "0.5.1", features = ["boxed_union"] }
@@ -34,7 +34,7 @@ default = ["mz-build-tools/default", "workspace-hack"]
 chrono = ["dep:chrono", "dep:chrono-tz"]
 
 [build-dependencies]
-mz-build-tools = { path = "../build-tools", default-features = false }
+mz-build-tools = { path = "../build-tools", default-features = false, features = ["protobuf-src"] }
 prost-build = "0.13.5"
 
 [package.metadata.cargo-udeps.ignore]

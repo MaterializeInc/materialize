@@ -33,7 +33,7 @@ mysql_async = { version = "0.35.1", default-features = false, features = [
     "minimal",
     "native-tls-tls",
 ] }
-mz-aws-util = { path = "../aws-util" }
+mz-aws-util = { path = "../aws-util", features = ["s3"] }
 mz-ccsr = { path = "../ccsr" }
 mz-cloud-resources = { path = "../cloud-resources" }
 mz-dyncfg = { path = "../dyncfg" }
@@ -84,7 +84,7 @@ mz-persist = { path = "../persist" }
 rand = "0.8.5"
 
 [build-dependencies]
-mz-build-tools = { path = "../build-tools", default-features = false }
+mz-build-tools = { path = "../build-tools", default-features = false, features = ["protobuf-src"] }
 prost-build = "0.13.5"
 tonic-build = "0.12.3"
 

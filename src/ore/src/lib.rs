@@ -22,8 +22,8 @@
 #![warn(missing_docs, missing_debug_implementations)]
 #![cfg_attr(nightly_doc_features, feature(doc_cfg))]
 
-#[cfg_attr(nightly_doc_features, doc(cfg(feature = "assert")))]
-#[cfg(feature = "assert")]
+#[cfg_attr(nightly_doc_features, doc(cfg(feature = "assert-no-tracing")))]
+#[cfg(feature = "assert-no-tracing")]
 pub mod assert;
 pub mod bits;
 #[cfg_attr(nightly_doc_features, doc(cfg(feature = "bytes")))]
@@ -65,6 +65,8 @@ pub mod netio;
 pub mod now;
 pub mod num;
 pub mod option;
+#[cfg_attr(nightly_doc_features, doc(cfg(feature = "overflowing")))]
+#[cfg(feature = "overflowing")]
 pub mod overflowing;
 #[cfg(not(target_family = "wasm"))]
 #[cfg(feature = "panic")]
@@ -103,6 +105,8 @@ pub mod vec;
 
 pub use mz_ore_proc::{instrument, static_list, test};
 
+#[cfg_attr(nightly_doc_features, doc(cfg(feature = "overflowing")))]
+#[cfg(feature = "overflowing")]
 pub use overflowing::Overflowing;
 
 #[doc(hidden)]

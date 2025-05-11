@@ -82,7 +82,7 @@ quote = "1"
 rand = "0.8.5"
 
 [build-dependencies]
-mz-build-tools = { path = "../build-tools", default-features = false }
+mz-build-tools = { path = "../build-tools", default-features = false, features = ["protobuf-src"] }
 prost-build = "0.13.5"
 
 [features]
