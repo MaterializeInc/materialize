@@ -376,7 +376,13 @@ pub mod v1alpha1 {
                 // version checks. Usually these are custom images that have
                 // been by a developer on a branch forked from a recent copy
                 // of main, and so this works out reasonably well in practice.
-                None => true,
+                None => {
+                    mz_ore::soft_panic_or_log!(
+                        "failed to parse image ref: {}",
+                        self.spec.environmentd_image_ref
+                    );
+                    true
+                }
             }
         }
 
