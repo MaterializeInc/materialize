@@ -157,6 +157,8 @@ skip = [
     { name = "dashmap", version = "5.5.3" },
     # Used by bindgen
     { name = "itertools", version = "0.12.1" },
+    # Used by pprof
+    { name = "nix", version = "0.26.4" },
 ]
 
 [[bans.deny]]
