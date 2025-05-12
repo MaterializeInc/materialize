@@ -1624,6 +1624,7 @@ class PostgresTablesOldSyntax(Generator):
           """
         )
         for i in cls.all():
+            print("$ set-sql-timeout duration=300s")
             cls.store_explain_and_run(f"SELECT * FROM t{i}")
             print(f"{i}")
 
