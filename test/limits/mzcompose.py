@@ -32,7 +32,7 @@ from materialize.mzcompose.services.kafka import Kafka
 from materialize.mzcompose.services.materialized import Materialized
 from materialize.mzcompose.services.mysql import MySql
 from materialize.mzcompose.services.mz import Mz
-from materialize.mzcompose.services.postgres import Postgres
+from materialize.mzcompose.services.postgres import Postgres, PostgresMetadata
 from materialize.mzcompose.services.schema_registry import SchemaRegistry
 from materialize.mzcompose.services.test_certs import TestCerts
 from materialize.mzcompose.services.testdrive import Testdrive
@@ -74,6 +74,7 @@ class Generator:
     # For tests that deal with records, the number of records processed
     # is usually COUNT * 1000
     COUNT: int = 1000
+    MAX_COUNT: int = 2000
 
     VERSION: str = "1.0.0"
 
@@ -131,7 +132,7 @@ class Connections(Generator):
         # three extra connections for mz_system, default connection, and one
         # since sqlparse 0.4.4. 3 reserved superuser connections since materialize#25666
         # try bumping limit a bit further since this is sometimes flaky
-        print(f"ALTER SYSTEM SET max_connections = {Connections.COUNT+10};")
+        print(f"ALTER SYSTEM SET max_connections = {Connections.COUNT + 10};")
 
         for i in cls.all():
             print(
@@ -328,7 +329,7 @@ class KafkaPartitions(Generator):
             '$ set value-schema={"type": "record", "name": "r", "fields": [{"name": "f1", "type": "string"}]}'
         )
         print(
-            f"$ kafka-create-topic topic=kafka-partitions partitions={round(cls.COUNT/2)}"
+            f"$ kafka-create-topic topic=kafka-partitions partitions={round(cls.COUNT / 2)}"
         )
         print(
             "$ kafka-ingest format=avro topic=kafka-partitions key-format=avro key-schema=${key-schema} schema=${value-schema} partition=-1"
@@ -668,7 +669,7 @@ class TablesCommaJoinWithJoinCondition(Generator):
         print("> CREATE TABLE t1 (f1 INTEGER);")
         print("> INSERT INTO t1 VALUES (1);")
         table_list = ", ".join(f"t1 as a{i}" for i in cls.all())
-        condition_list = " AND ".join(f"a{i}.f1 = a{i+1}.f1" for i in cls.no_last())
+        condition_list = " AND ".join(f"a{i}.f1 = a{i + 1}.f1" for i in cls.no_last())
         cls.store_explain_and_run(f"SELECT * FROM {table_list} WHERE {condition_list};")
         print(" ".join("1" for i in cls.all()))
 
@@ -708,7 +709,7 @@ class TablesOuterJoinOn(Generator):
         print("> CREATE TABLE t1 (f1 INTEGER);")
         print("> INSERT INTO t1 VALUES (1);")
         table_list = " LEFT JOIN ".join(
-            f"t1 as a{i} ON (a{i-1}.f1 = a{i}.f1)" for i in cls.no_first()
+            f"t1 as a{i} ON (a{i - 1}.f1 = a{i}.f1)" for i in cls.no_first()
         )
         cls.store_explain_and_run(f"SELECT * FROM t1 AS a1 LEFT JOIN {table_list};")
         print(" ".join("1" for i in cls.all()))
@@ -845,7 +846,7 @@ class ViewsNested(Generator):
         print("> CREATE VIEW v0 (f1) AS SELECT f1 FROM t;")
 
         for i in cls.all():
-            print(f"> CREATE VIEW v{i} AS SELECT f1 + 1 AS f1 FROM v{i-1};")
+            print(f"> CREATE VIEW v{i} AS SELECT f1 + 1 AS f1 FROM v{i - 1};")
 
         cls.store_explain_and_run(f"SELECT * FROM v{cls.COUNT};")
         print(f"{cls.COUNT}")
@@ -871,7 +872,7 @@ class ViewsMaterializedNested(Generator):
 
         for i in cls.all():
             print(
-                f"> CREATE MATERIALIZED VIEW v{i} AS SELECT f1 + 1 AS f1 FROM v{i-1};"
+                f"> CREATE MATERIALIZED VIEW v{i} AS SELECT f1 + 1 AS f1 FROM v{i - 1};"
             )
 
         cls.store_explain_and_run(f"SELECT * FROM v{cls.COUNT};")
@@ -907,7 +908,7 @@ class NestedCTEsIndependent(Generator):
         print("> CREATE TABLE t1 (f1 INTEGER);")
         print("> INSERT INTO t1 VALUES " + ", ".join(f"({i})" for i in cls.all()))
         cte_list = ", ".join(
-            f"a{i} AS (SELECT f1 + 1 AS f1 FROM a{i-1} WHERE f1 <= {i})"
+            f"a{i} AS (SELECT f1 + 1 AS f1 FROM a{i - 1} WHERE f1 <= {i})"
             for i in cls.no_first()
         )
         table_list = ", ".join(f"a{i}" for i in cls.all())
@@ -927,7 +928,7 @@ class NestedCTEsChained(Generator):
         print("> CREATE TABLE t1 (f1 INTEGER);")
         print("> INSERT INTO t1 VALUES (1)")
         cte_list = ", ".join(
-            f"a{i} AS (SELECT a{i-1}.f1 + 0 AS f1 FROM a{i-1}, t1 WHERE a{i-1}.f1 = t1.f1)"
+            f"a{i} AS (SELECT a{i - 1}.f1 + 0 AS f1 FROM a{i - 1}, t1 WHERE a{i - 1}.f1 = t1.f1)"
             for i in cls.no_first()
         )
         cls.store_explain_and_run(
@@ -952,7 +953,7 @@ class DerivedTables(Generator):
             for i in cls.all()
         )
         cls.store_explain_and_run(f"SELECT * FROM {table_list};")
-        print(" ".join(f"{i+1}" for i in cls.all()))
+        print(" ".join(f"{i + 1}" for i in cls.all()))
 
 
 class Lateral(Generator):
@@ -967,7 +968,7 @@ class Lateral(Generator):
         print("> CREATE TABLE t1 (f1 INTEGER);")
         print("> INSERT INTO t1 VALUES (1)")
         table_list = ", LATERAL ".join(
-            f"(SELECT t1.f1 + {i-1} AS f1 FROM t1 WHERE f1 <= a{i-1}.f1) AS a{i}"
+            f"(SELECT t1.f1 + {i - 1} AS f1 FROM t1 WHERE f1 <= a{i - 1}.f1) AS a{i}"
             for i in cls.no_first()
         )
         cls.store_explain_and_run(f"SELECT * FROM t1 AS a1 , LATERAL {table_list};")
@@ -1275,7 +1276,7 @@ class Concat(Generator):
         )
         print("> CREATE DEFAULT INDEX ON v")
         cls.store_explain_and_run("SELECT LENGTH(c) FROM v")
-        print(f"{cls.COUNT*1024}")
+        print(f"{cls.COUNT * 1024}")
 
 
 class ArrayAgg(Generator):
@@ -1286,25 +1287,27 @@ class ArrayAgg(Generator):
         print("> SET statement_timeout='300s'")
         print(
             f"""> CREATE TABLE t ({
-            ", ".join(
-                ", ".join([
-                    f"a{i} STRING",
-                    f"b{i} STRING",
-                    f"c{i} STRING",
-                    f"d{i} STRING[]",
-                ])
-                for i in cls.all()
-            )
-        });"""
+                ", ".join(
+                    ", ".join(
+                        [
+                            f"a{i} STRING",
+                            f"b{i} STRING",
+                            f"c{i} STRING",
+                            f"d{i} STRING[]",
+                        ]
+                    )
+                    for i in cls.all()
+                )
+            });"""
         )
         print("> INSERT INTO t DEFAULT VALUES;")
         print(
             f"""> CREATE MATERIALIZED VIEW v2 AS SELECT {
-            ", ".join(
-                f"ARRAY_AGG(a{i} ORDER BY b1) FILTER (WHERE 's{i}' = ANY(d{i})) AS r{i}"
-                for i in cls.all()
-            )
-        } FROM t GROUP BY a1;"""
+                ", ".join(
+                    f"ARRAY_AGG(a{i} ORDER BY b1) FILTER (WHERE 's{i}' = ANY(d{i})) AS r{i}"
+                    for i in cls.all()
+                )
+            } FROM t GROUP BY a1;"""
         )
         print("> CREATE DEFAULT INDEX ON v2;")
 
@@ -1790,6 +1793,7 @@ SERVICES = [
         ],
     ),
     Cockroach(in_memory=True),
+    PostgresMetadata(),
     Materialized(
         memory="8G",
         cpu="2",
@@ -1810,7 +1814,7 @@ SERVICES = [
         ],
         sanity_restart=False,
         external_metadata_store=True,
-        metadata_store="cockroach",
+        metadata_store="postgres-metadata",
     ),
     Mz(app_password=""),
 ]
@@ -1819,7 +1823,11 @@ for cluster_id in range(1, MAX_CLUSTERS + 1):
     for replica_id in range(1, MAX_REPLICAS + 1):
         for node_id in range(1, MAX_NODES + 1):
             SERVICES.append(
-                Clusterd(name=f"clusterd_{cluster_id}_{replica_id}_{node_id}", cpu="2")
+                Clusterd(
+                    name=f"clusterd_{cluster_id}_{replica_id}_{node_id}",
+                    cpu="2",
+                    memory="4G",
+                )
             )
 
 
