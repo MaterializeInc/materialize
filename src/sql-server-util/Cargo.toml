@@ -16,7 +16,7 @@ name = "cdc"
 anyhow = "1.0.98"
 async-stream = "0.3.3"
 base64 = "0.22.1"
-chrono = { version = "0.4.39", default-features = false, features = ["std"] }
+chrono = { version = "0.4.41", default-features = false, features = ["std"] }
 columnation = "0.1.0"
 dec = "0.4.8"
 derivative = "2.2.0"

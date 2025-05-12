@@ -25,16 +25,16 @@ checksum = "512761e0bb2578dd7380c6baaa0f4ce03e84f95e960231d1dec8bf4d7d6e2627"
 
 [[package]]
 name = "ahash"
-version = "0.8.11"
+version = "0.8.12"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e89da841a80418a9b391ebaea17f5c112ffaaa96f621d2c285b5174da76b9011"
+checksum = "5a15f179cd60c4584b8a8c596927aadc462e27f2ca70c04e0071964a73ba7a75"
 dependencies = [
  "cfg-if",
  "const-random",
- "getrandom 0.2.10",
+ "getrandom 0.3.2",
  "once_cell",
  "version_check",
- "zerocopy 0.7.32",
+ "zerocopy",
 ]
 
 [[package]]
@@ -447,17 +447,17 @@ dependencies = [
 
 [[package]]
 name = "async-compression"
-version = "0.4.11"
+version = "0.4.23"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "cd066d0b4ef8ecb03a55319dc13aa6910616d0f44008a045bb1835af830abff5"
+checksum = "b37fc50485c4f3f736a4fb14199f6d5f5ba008d7f28fe710306c92780f004c07"
 dependencies = [
  "bzip2",
  "flate2",
  "futures-core",
+ "liblzma",
  "memchr",
  "pin-project-lite",
  "tokio",
- "xz2",
  "zstd",
  "zstd-safe",
 ]
@@ -947,7 +947,7 @@ dependencies = [
  "aws-smithy-async",
  "aws-smithy-runtime-api",
  "aws-smithy-types",
- "h2 0.4.9",
+ "h2 0.4.10",
  "http 0.2.9",
  "http-body 0.4.5",
  "hyper 0.14.27",
@@ -1276,9 +1276,9 @@ dependencies = [
 
 [[package]]
 name = "backtrace"
-version = "0.3.74"
+version = "0.3.75"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8d82cb332cdfaed17ae235a638438ac4d4839913cc2af585c3c6746e8f8bee1a"
+checksum = "6806a6321ec58106fea15becdad98371e28d92ccbc7c8f1b3b6dd724fe8f1002"
 dependencies = [
  "addr2line",
  "cfg-if",
@@ -1550,12 +1550,11 @@ checksum = "a3e368af43e418a04d52505cf3dbc23dda4e3407ae2fa99fd0e4f308ce546acc"
 
 [[package]]
 name = "bzip2"
-version = "0.4.4"
+version = "0.5.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "bdb116a6ef3f6c3698828873ad02c3014b3c85cadb88496095628e3ef1e347f8"
+checksum = "49ecfb22d906f800d4fe833b6282cf4dc1c298f5057ca0b5445e5c209735ca47"
 dependencies = [
  "bzip2-sys",
- "libc",
 ]
 
 [[package]]
@@ -1641,9 +1640,9 @@ checksum = "37b2a672a2cb129a2e41c10b1224bb368f9f37a2b16b612598138befd7b37eb5"
 
 [[package]]
 name = "cc"
-version = "1.2.21"
+version = "1.2.22"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8691782945451c1c383942c4874dbe63814f61cb57ef773cda2972682b7bb3c0"
+checksum = "32db95edf998450acc7881c932f94cd9b05c87b4b2599e8bab064753da4acfd1"
 dependencies = [
  "jobserver",
  "libc",
@@ -1683,9 +1682,9 @@ checksum = "613afe47fcd5fac7ccf1db93babcb082c5994d996f20b8b159f2ad1658eb5724"
 
 [[package]]
 name = "chrono"
-version = "0.4.39"
+version = "0.4.41"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7e36cc9d416881d2e24f9a963be5fb1cd90966419ac844274161d10488b3e825"
+checksum = "c469d952047f47f91b68d1cba3f10d63c11d73e4636f24f08daf0278abf01c4d"
 dependencies = [
  "android-tzdata",
  "iana-time-zone",
@@ -1693,7 +1692,7 @@ dependencies = [
  "num-traits",
  "serde",
  "wasm-bindgen",
- "windows-targets 0.52.6",
+ "windows-link",
 ]
 
 [[package]]
@@ -1837,6 +1836,17 @@ dependencies = [
  "rmp-serde",
  "serde",
  "serde_json",
+]
+
+[[package]]
+name = "columnar"
+version = "0.5.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c412cb3cd9449abf2cb39dd504efb00701ab1f0c0e8b030042f8afe2e7c2adcf"
+dependencies = [
+ "bytemuck",
+ "columnar_derive",
+ "serde",
 ]
 
 [[package]]
@@ -2470,23 +2480,37 @@ version = "0.14.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b7aba4beebe3ae1d6a53383759d0281662e988523bb7ddcbff8f7a924444b438"
 dependencies = [
- "columnar",
+ "columnar 0.4.1",
  "columnation",
  "fnv",
  "paste",
  "serde",
- "timely",
+ "timely 0.20.0",
+]
+
+[[package]]
+name = "differential-dataflow"
+version = "0.15.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1ae8efe4a685ee677d41c6679f9eb81ae9623f7f4aa548c5894213045eb66796"
+dependencies = [
+ "columnar 0.5.0",
+ "columnation",
+ "fnv",
+ "paste",
+ "serde",
+ "timely 0.21.0",
 ]
 
 [[package]]
 name = "differential-dogs3"
-version = "0.1.10"
+version = "0.1.12"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9225d870c915d907fc49f1cea53b90248dab9af0684beae36069ad90bc7cf57a"
+checksum = "f9197f5d5cdd4676a96d24b550909ebbf19619a27a138bfc2892e95d3389aacf"
 dependencies = [
- "differential-dataflow",
+ "differential-dataflow 0.15.1",
  "serde",
- "timely",
+ "timely 0.21.0",
 ]
 
 [[package]]
@@ -3320,9 +3344,9 @@ dependencies = [
 
 [[package]]
 name = "h2"
-version = "0.4.9"
+version = "0.4.10"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "75249d144030531f8dee69fe9cea04d3edf809a017ae445e2abdff6629e86633"
+checksum = "a9421a676d1b147b16b82c9225157dc629087ef8ec4d5e2960f9437a90dac0a5"
 dependencies = [
  "atomic-waker",
  "bytes",
@@ -3609,7 +3633,7 @@ dependencies = [
  "bytes",
  "futures-channel",
  "futures-util",
- "h2 0.4.9",
+ "h2 0.4.10",
  "http 1.2.0",
  "http-body 1.0.1",
  "httparse",
@@ -4367,6 +4391,26 @@ dependencies = [
 ]
 
 [[package]]
+name = "liblzma"
+version = "0.4.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "66352d7a8ac12d4877b6e6ea5a9b7650ee094257dc40889955bea5bc5b08c1d0"
+dependencies = [
+ "liblzma-sys",
+]
+
+[[package]]
+name = "liblzma-sys"
+version = "0.4.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5839bad90c3cc2e0b8c4ed8296b80e86040240f81d46b9c0e9bc8dd51ddd3af1"
+dependencies = [
+ "cc",
+ "libc",
+ "pkg-config",
+]
+
+[[package]]
 name = "libm"
 version = "0.2.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4536,17 +4580,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "75761162ae2b0e580d7e7c390558127e5f01b4194debd6221fd8c207fc80e3f5"
 dependencies = [
  "twox-hash 1.6.3",
-]
-
-[[package]]
-name = "lzma-sys"
-version = "0.1.20"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5fda04ab3764e6cde78b9974eec4f779acaba7c4e84b36eca3cf77c581b85d27"
-dependencies = [
- "cc",
- "libc",
- "pkg-config",
 ]
 
 [[package]]
@@ -4824,7 +4857,7 @@ dependencies = [
  "datadriven",
  "dec",
  "derivative",
- "differential-dataflow",
+ "differential-dataflow 0.14.2",
  "enum-kinds",
  "fail",
  "futures",
@@ -4890,7 +4923,7 @@ dependencies = [
  "smallvec",
  "static_assertions",
  "thiserror 2.0.12",
- "timely",
+ "timely 0.20.0",
  "tokio",
  "tokio-postgres",
  "tracing",
@@ -4911,7 +4944,7 @@ dependencies = [
  "mz-repr",
  "mz-storage-types",
  "serde",
- "timely",
+ "timely 0.20.0",
  "tracing",
  "workspace-hack",
 ]
@@ -5135,7 +5168,7 @@ dependencies = [
  "chrono",
  "clap",
  "derivative",
- "differential-dataflow",
+ "differential-dataflow 0.14.2",
  "futures",
  "insta",
  "ipnet",
@@ -5180,7 +5213,7 @@ dependencies = [
  "sha2",
  "static_assertions",
  "thiserror 2.0.12",
- "timely",
+ "timely 0.20.0",
  "tokio",
  "tracing",
  "uuid",
@@ -5316,7 +5349,7 @@ dependencies = [
  "anyhow",
  "async-trait",
  "crossbeam-channel",
- "differential-dataflow",
+ "differential-dataflow 0.14.2",
  "futures",
  "lgalloc",
  "mz-cluster-client",
@@ -5324,7 +5357,7 @@ dependencies = [
  "mz-service",
  "rand 0.8.5",
  "regex",
- "timely",
+ "timely 0.20.0",
  "tokio",
  "tracing",
  "tracing-subscriber",
@@ -5399,11 +5432,11 @@ dependencies = [
  "anyhow",
  "async-stream",
  "bytesize",
- "columnar",
+ "columnar 0.4.1",
  "core_affinity",
  "crossbeam-channel",
  "dec",
- "differential-dataflow",
+ "differential-dataflow 0.14.2",
  "differential-dogs3",
  "futures",
  "itertools 0.14.0",
@@ -5427,7 +5460,7 @@ dependencies = [
  "scopeguard",
  "serde",
  "smallvec",
- "timely",
+ "timely 0.20.0",
  "tokio",
  "tracing",
  "uuid",
@@ -5444,7 +5477,7 @@ dependencies = [
  "chrono",
  "crossbeam-channel",
  "derivative",
- "differential-dataflow",
+ "differential-dataflow 0.14.2",
  "futures",
  "http 1.2.0",
  "mz-build-info",
@@ -5474,7 +5507,7 @@ dependencies = [
  "serde",
  "serde_json",
  "thiserror 2.0.12",
- "timely",
+ "timely 0.20.0",
  "tokio",
  "tokio-stream",
  "tonic",
@@ -5488,9 +5521,9 @@ dependencies = [
 name = "mz-compute-types"
 version = "0.0.0"
 dependencies = [
- "columnar",
+ "columnar 0.4.1",
  "columnation",
- "differential-dataflow",
+ "differential-dataflow 0.14.2",
  "itertools 0.14.0",
  "mz-build-tools",
  "mz-dyncfg",
@@ -5504,7 +5537,7 @@ dependencies = [
  "prost",
  "prost-build",
  "serde",
- "timely",
+ "timely 0.20.0",
  "tonic-build",
  "tracing",
  "workspace-hack",
@@ -5537,7 +5570,7 @@ dependencies = [
  "regex",
  "serde",
  "serde_json",
- "timely",
+ "timely 0.20.0",
  "tokio",
  "tracing",
  "uuid",
@@ -5588,7 +5621,7 @@ version = "0.0.0"
 dependencies = [
  "async-trait",
  "bytes",
- "differential-dataflow",
+ "differential-dataflow 0.14.2",
  "futures",
  "itertools 0.14.0",
  "mz-dyncfg",
@@ -5599,7 +5632,7 @@ dependencies = [
  "prometheus",
  "prost",
  "serde",
- "timely",
+ "timely 0.20.0",
  "tokio",
  "tracing",
  "uuid",
@@ -5762,7 +5795,7 @@ dependencies = [
  "sysctl",
  "tempfile",
  "thiserror 2.0.12",
- "timely",
+ "timely 0.20.0",
  "tokio",
  "tokio-postgres",
  "tokio-stream",
@@ -5794,7 +5827,7 @@ dependencies = [
  "datadriven",
  "dec",
  "derivative",
- "differential-dataflow",
+ "differential-dataflow 0.14.2",
  "encoding",
  "enum-iterator",
  "fallible-iterator",
@@ -5838,7 +5871,7 @@ dependencies = [
  "sha2",
  "smallvec",
  "subtle",
- "timely",
+ "timely 0.20.0",
  "tracing",
  "uncased",
  "uuid",
@@ -6038,7 +6071,7 @@ dependencies = [
  "chrono",
  "clap",
  "criterion",
- "differential-dataflow",
+ "differential-dataflow 0.14.2",
  "itertools 0.14.0",
  "maplit",
  "mz-avro",
@@ -6053,7 +6086,7 @@ dependencies = [
  "prost-reflect",
  "seahash",
  "serde_json",
- "timely",
+ "timely 0.20.0",
  "tokio",
  "tracing",
  "uuid",
@@ -6404,14 +6437,14 @@ dependencies = [
  "bytes",
  "chrono",
  "clap",
- "columnar",
+ "columnar 0.4.1",
  "columnation",
  "compact_bytes",
  "console-subscriber",
  "criterion",
  "ctor",
  "derivative",
- "differential-dataflow",
+ "differential-dataflow 0.14.2",
  "either",
  "futures",
  "hibitset",
@@ -6499,7 +6532,7 @@ dependencies = [
  "base64 0.22.1",
  "bytes",
  "deadpool-postgres",
- "differential-dataflow",
+ "differential-dataflow 0.14.2",
  "fail",
  "futures-util",
  "itertools 0.14.0",
@@ -6527,7 +6560,7 @@ dependencies = [
  "serde_json",
  "sha2",
  "tempfile",
- "timely",
+ "timely 0.20.0",
  "tokio",
  "tokio-postgres",
  "tracing",
@@ -6550,11 +6583,11 @@ dependencies = [
  "clap",
  "criterion",
  "datadriven",
- "differential-dataflow",
+ "differential-dataflow 0.14.2",
  "futures",
  "futures-task",
  "futures-util",
- "h2 0.4.9",
+ "h2 0.4.10",
  "hex",
  "itertools 0.14.0",
  "mz-build-info",
@@ -6579,7 +6612,7 @@ dependencies = [
  "serde_json",
  "tempfile",
  "thiserror 2.0.12",
- "timely",
+ "timely 0.20.0",
  "tokio",
  "tokio-metrics",
  "tokio-stream",
@@ -6620,7 +6653,7 @@ dependencies = [
  "prost-build",
  "serde",
  "serde_json",
- "timely",
+ "timely 0.20.0",
  "tracing",
  "uuid",
  "workspace-hack",
@@ -6897,12 +6930,12 @@ dependencies = [
  "bytes",
  "cfg-if",
  "chrono",
- "columnar",
+ "columnar 0.4.1",
  "columnation",
  "compact_bytes",
  "criterion",
  "dec",
- "differential-dataflow",
+ "differential-dataflow 0.14.2",
  "enum-kinds",
  "hex",
  "insta",
@@ -6932,7 +6965,7 @@ dependencies = [
  "static_assertions",
  "strsim",
  "thiserror 2.0.12",
- "timely",
+ "timely 0.20.0",
  "tokio-postgres",
  "tracing",
  "tracing-core",
@@ -7095,7 +7128,7 @@ dependencies = [
  "sentry-tracing",
  "serde",
  "sysinfo",
- "timely",
+ "timely 0.20.0",
  "tokio",
  "tokio-stream",
  "tonic",
@@ -7265,7 +7298,7 @@ dependencies = [
  "static_assertions",
  "thiserror 2.0.12",
  "tiberius",
- "timely",
+ "timely 0.20.0",
  "tokio",
  "tokio-stream",
  "tokio-util",
@@ -7370,7 +7403,7 @@ dependencies = [
  "crossbeam-channel",
  "csv-core",
  "dec",
- "differential-dataflow",
+ "differential-dataflow 0.14.2",
  "fail",
  "futures",
  "humantime",
@@ -7421,7 +7454,7 @@ dependencies = [
  "sha2",
  "tempfile",
  "thiserror 2.0.12",
- "timely",
+ "timely 0.20.0",
  "tokio",
  "tokio-postgres",
  "tokio-stream",
@@ -7438,7 +7471,7 @@ dependencies = [
  "anyhow",
  "async-trait",
  "chrono",
- "differential-dataflow",
+ "differential-dataflow 0.14.2",
  "futures",
  "http 1.2.0",
  "itertools 0.14.0",
@@ -7472,7 +7505,7 @@ dependencies = [
  "serde_json",
  "smallvec",
  "static_assertions",
- "timely",
+ "timely 0.20.0",
  "tokio",
  "tokio-stream",
  "tonic",
@@ -7491,7 +7524,7 @@ dependencies = [
  "bytes",
  "chrono",
  "derivative",
- "differential-dataflow",
+ "differential-dataflow 0.14.2",
  "futures",
  "itertools 0.14.0",
  "mz-build-info",
@@ -7514,7 +7547,7 @@ dependencies = [
  "prost",
  "serde",
  "serde_json",
- "timely",
+ "timely 0.20.0",
  "tokio",
  "tokio-postgres",
  "tokio-stream",
@@ -7538,7 +7571,7 @@ dependencies = [
  "bytesize",
  "csv-async",
  "derivative",
- "differential-dataflow",
+ "differential-dataflow 0.14.2",
  "futures",
  "glob",
  "http 1.2.0",
@@ -7566,7 +7599,7 @@ dependencies = [
  "serde",
  "smallvec",
  "thiserror 2.0.12",
- "timely",
+ "timely 0.20.0",
  "tokio",
  "tokio-stream",
  "tokio-util",
@@ -7593,7 +7626,7 @@ dependencies = [
  "criterion",
  "dec",
  "derivative",
- "differential-dataflow",
+ "differential-dataflow 0.14.2",
  "hex",
  "http 1.2.0",
  "insta",
@@ -7637,7 +7670,7 @@ dependencies = [
  "serde_json",
  "thiserror 2.0.12",
  "tiberius",
- "timely",
+ "timely 0.20.0",
  "tokio",
  "tokio-postgres",
  "tonic-build",
@@ -7750,9 +7783,9 @@ dependencies = [
  "ahash",
  "bincode",
  "bytemuck",
- "columnar",
+ "columnar 0.4.1",
  "columnation",
- "differential-dataflow",
+ "differential-dataflow 0.14.2",
  "either",
  "futures-util",
  "lgalloc",
@@ -7760,7 +7793,7 @@ dependencies = [
  "num-traits",
  "proptest",
  "serde",
- "timely",
+ "timely 0.20.0",
  "tokio",
  "tracing",
  "uuid",
@@ -7828,7 +7861,7 @@ version = "0.0.0"
 dependencies = [
  "anyhow",
  "datadriven",
- "differential-dataflow",
+ "differential-dataflow 0.14.2",
  "enum-kinds",
  "itertools 0.14.0",
  "mz-compute-types",
@@ -7857,7 +7890,7 @@ dependencies = [
  "async-trait",
  "bytes",
  "crossbeam-channel",
- "differential-dataflow",
+ "differential-dataflow 0.14.2",
  "futures",
  "itertools 0.14.0",
  "mz-build-tools",
@@ -7871,7 +7904,7 @@ dependencies = [
  "prost-build",
  "rand 0.8.5",
  "serde",
- "timely",
+ "timely 0.20.0",
  "tokio",
  "tracing",
  "uuid",
@@ -8567,7 +8600,7 @@ dependencies = [
  "axum",
  "bytes",
  "clap",
- "differential-dataflow",
+ "differential-dataflow 0.14.2",
  "futures",
  "humantime",
  "mz-dyncfg",
@@ -8585,7 +8618,7 @@ dependencies = [
  "prometheus",
  "serde",
  "serde_json",
- "timely",
+ "timely 0.20.0",
  "tokio",
  "tracing",
  "url",
@@ -8912,7 +8945,7 @@ version = "0.2.21"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "85eae3c4ed2f50dcfe72643da4befc30deadb458a9b590d720cde2f2b1e97da9"
 dependencies = [
- "zerocopy 0.8.24",
+ "zerocopy",
 ]
 
 [[package]]
@@ -9333,7 +9366,7 @@ checksum = "3779b94aeb87e8bd4e834cee3650289ee9e0d5677f976ecdb6d219e5f4f6cd94"
 dependencies = [
  "rand_chacha 0.9.0",
  "rand_core 0.9.3",
- "zerocopy 0.8.24",
+ "zerocopy",
 ]
 
 [[package]]
@@ -9640,7 +9673,7 @@ dependencies = [
  "futures-channel",
  "futures-core",
  "futures-util",
- "h2 0.4.9",
+ "h2 0.4.10",
  "http 1.2.0",
  "http-body 1.0.1",
  "http-body-util",
@@ -11051,9 +11084,28 @@ checksum = "6ea7156d1279a6584987054087dcccb36d0b7907e2add627eb58de52d57ea9f9"
 dependencies = [
  "bincode",
  "byteorder",
- "columnar",
+ "columnar 0.4.1",
  "columnation",
  "crossbeam-channel",
+ "getopts",
+ "serde",
+ "smallvec",
+ "timely_bytes",
+ "timely_communication",
+ "timely_container",
+ "timely_logging",
+]
+
+[[package]]
+name = "timely"
+version = "0.21.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "dd63bb91bfa5158aba1d7cb8c8d9fb9175691e7e35eed49ec75538e4215a6685"
+dependencies = [
+ "bincode",
+ "byteorder",
+ "columnar 0.5.0",
+ "columnation",
  "getopts",
  "serde",
  "smallvec",
@@ -11076,7 +11128,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f6a36db4ca48c9b7169b2c886a00f371a7bb1a79b53c58b444881366f8abaa2b"
 dependencies = [
  "byteorder",
- "columnar",
+ "columnar 0.4.1",
  "getopts",
  "serde",
  "timely_bytes",
@@ -11379,7 +11431,7 @@ dependencies = [
  "base64 0.22.1",
  "bytes",
  "flate2",
- "h2 0.4.9",
+ "h2 0.4.10",
  "http 1.2.0",
  "http-body 1.0.1",
  "http-body-util",
@@ -12677,7 +12729,7 @@ dependencies = [
  "syn 2.0.100",
  "time",
  "time-macros",
- "timely",
+ "timely 0.20.0",
  "tokio",
  "tokio-postgres",
  "tokio-stream",
@@ -12728,15 +12780,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "4d25c75bf9ea12c4040a97f829154768bbbce366287e2dc044af160cd79a13fd"
 
 [[package]]
-name = "xz2"
-version = "0.1.7"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "388c44dc09d76f1536602ead6d325eb532f5c122f17782bd57fb47baeeb767e2"
-dependencies = [
- "lzma-sys",
-]
-
-[[package]]
 name = "yansi"
 version = "1.0.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -12744,31 +12787,11 @@ checksum = "cfe53a6657fd280eaa890a3bc59152892ffa3e30101319d168b781ed6529b049"
 
 [[package]]
 name = "zerocopy"
-version = "0.7.32"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "74d4d3961e53fa4c9a25a8637fc2bfaf2595b3d3ae34875568a5cf64787716be"
-dependencies = [
- "zerocopy-derive 0.7.32",
-]
-
-[[package]]
-name = "zerocopy"
 version = "0.8.24"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "2586fea28e186957ef732a5f8b3be2da217d65c5969d4b1e17f973ebbe876879"
 dependencies = [
- "zerocopy-derive 0.8.24",
-]
-
-[[package]]
-name = "zerocopy-derive"
-version = "0.7.32"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9ce1b18ccd8e73a9321186f97e46f9f04b778851177567b1975109d26a08d2a6"
-dependencies = [
- "proc-macro2",
- "quote",
- "syn 2.0.100",
+ "zerocopy-derive",
 ]
 
 [[package]]

@@ -10,7 +10,7 @@ publish = false
 workspace = true
 
 [dependencies]
-ahash = { version = "0.8.11", default-features = false }
+ahash = { version = "0.8.12", default-features = false }
 bincode = "1.3.3"
 bytemuck = "1.22.0"
 columnar = "0.4.1"
