@@ -5752,7 +5752,7 @@ dependencies = [
  "reqwest 0.11.24",
  "rlimit",
  "semver",
- "sentry-tracing 0.37.0",
+ "sentry-tracing",
  "serde",
  "serde_json",
  "serde_urlencoded",
@@ -6347,7 +6347,7 @@ dependencies = [
  "mz-tracing",
  "opentelemetry",
  "opentelemetry_sdk",
- "sentry-tracing 0.37.0",
+ "sentry-tracing",
  "tracing",
  "tracing-capture",
  "tracing-subscriber",
@@ -6440,7 +6440,7 @@ dependencies = [
  "scopeguard",
  "sentry",
  "sentry-panic",
- "sentry-tracing 0.37.0",
+ "sentry-tracing",
  "serde",
  "serde_json",
  "smallvec",
@@ -6574,7 +6574,7 @@ dependencies = [
  "prost",
  "prost-build",
  "semver",
- "sentry-tracing 0.37.0",
+ "sentry-tracing",
  "serde",
  "serde_json",
  "tempfile",
@@ -7092,7 +7092,7 @@ dependencies = [
  "prost",
  "prost-build",
  "semver",
- "sentry-tracing 0.37.0",
+ "sentry-tracing",
  "serde",
  "sysinfo",
  "timely",
@@ -10087,25 +10087,13 @@ dependencies = [
  "httpdate",
  "native-tls",
  "reqwest 0.12.15",
- "sentry-backtrace 0.38.0",
+ "sentry-backtrace",
  "sentry-contexts",
- "sentry-core 0.38.0",
+ "sentry-core",
  "sentry-debug-images",
- "sentry-tracing 0.38.0",
+ "sentry-tracing",
  "tokio",
  "ureq",
-]
-
-[[package]]
-name = "sentry-backtrace"
-version = "0.37.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "00293cd332a859961f24fd69258f7e92af736feaeb91020cff84dac4188a4302"
-dependencies = [
- "backtrace",
- "once_cell",
- "regex",
- "sentry-core 0.37.0",
 ]
 
 [[package]]
@@ -10116,7 +10104,7 @@ checksum = "d9a7ad1cd444278b2327518bea81e5ae692e7a91516d78929069179388c0d0ad"
 dependencies = [
  "backtrace",
  "regex",
- "sentry-core 0.38.0",
+ "sentry-core",
 ]
 
 [[package]]
@@ -10129,21 +10117,8 @@ dependencies = [
  "libc",
  "os_info",
  "rustc_version",
- "sentry-core 0.38.0",
+ "sentry-core",
  "uname",
-]
-
-[[package]]
-name = "sentry-core"
-version = "0.37.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1a6409d845707d82415c800290a5d63be5e3df3c2e417b0997c60531dfbd35ef"
-dependencies = [
- "once_cell",
- "rand 0.8.5",
- "sentry-types 0.37.0",
- "serde",
- "serde_json",
 ]
 
 [[package]]
@@ -10153,7 +10128,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d37745984fb7145c2f8bd46b7dacffa88da18d5ddcc8e76c24546075586927a0"
 dependencies = [
  "rand 0.9.0",
- "sentry-types 0.38.0",
+ "sentry-types",
  "serde",
  "serde_json",
 ]
@@ -10165,28 +10140,17 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "77185380ffb0e75e6c3450296b5c28d3f94a5b320155b4a504e69f670ff51f01"
 dependencies = [
  "findshlibs",
- "sentry-core 0.38.0",
+ "sentry-core",
 ]
 
 [[package]]
 name = "sentry-panic"
-version = "0.37.0"
+version = "0.38.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "609b1a12340495ce17baeec9e08ff8ed423c337c1a84dffae36a178c783623f3"
+checksum = "793ec075ff28803f0e21961546460d65c99ef6366a1005de916470a3798bcd44"
 dependencies = [
- "sentry-backtrace 0.37.0",
- "sentry-core 0.37.0",
-]
-
-[[package]]
-name = "sentry-tracing"
-version = "0.37.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "49f4e86402d5c50239dc7d8fd3f6d5e048221d5fcb4e026d8d50ab57fe4644cb"
-dependencies = [
- "sentry-core 0.37.0",
- "tracing-core",
- "tracing-subscriber",
+ "sentry-backtrace",
+ "sentry-core",
 ]
 
 [[package]]
@@ -10195,27 +10159,10 @@ version = "0.38.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "26330ceb28d1b2bb3badb8c55e589e3ab4bb9044ced66d8ffe86c91c2082ef11"
 dependencies = [
- "sentry-backtrace 0.38.0",
- "sentry-core 0.38.0",
+ "sentry-backtrace",
+ "sentry-core",
  "tracing-core",
  "tracing-subscriber",
-]
-
-[[package]]
-name = "sentry-types"
-version = "0.37.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3d3f117b8755dbede8260952de2aeb029e20f432e72634e8969af34324591631"
-dependencies = [
- "debugid",
- "hex",
- "rand 0.8.5",
- "serde",
- "serde_json",
- "thiserror 1.0.69",
- "time",
- "url",
- "uuid",
 ]
 
 [[package]]
