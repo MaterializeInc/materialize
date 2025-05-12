@@ -1179,8 +1179,10 @@ EOF
 # Tests for prepared statement parameters in OFFSET, and for non-trivial expressions in OFFSET.
 # (Non-trivial expressions in OFFSET clauses have to be simplifiable to a literal, possibly after parameter binding.)
 #
-# (LIMIT clauses with prepared statement parameters have tests in `test_bind_params` in `pgwire.rs`.
-# LIMIT clauses with non-trivial expressions, referring to the outer context, have tests in `limit_expr.slt`.)
+# LIMIT clauses with non-trivial expressions, referring to an outer context of a subquery, have tests in
+# `limit_expr.slt`.)
+#
+# For prepared statements managed through pgwire's Extended Query protocol, see `test_bind_params` in `pgwire.rs`.
 ########################################################################################################################
 
 statement ok
@@ -1191,25 +1193,28 @@ ORDER BY a, b
 OFFSET $1;
 
 query IT
-EXECUTE p1(0::bigint);
+EXECUTE p1(0);
 ----
 0  zero
 1  one
 2  two
 
 query IT
-EXECUTE p1(1::bigint);
+EXECUTE p1(1);
 ----
 1  one
 2  two
 
 query IT
-EXECUTE p1((1+1)::bigint);
+EXECUTE p1(1+1);
 ----
 2  two
 
 query error db error: ERROR: Invalid OFFSET clause: Expected an expression that evaluates to a non\-null value, got null
 EXECUTE p1(null::bigint);
+
+query error db error: ERROR: Invalid OFFSET clause: Expected an expression that evaluates to a non\-null value, got integer_to_bigint\(null\)
+EXECUTE p1(coalesce(null + 5, 7 + null));
 
 query error db error: ERROR: Invalid OFFSET clause: Expected an expression that evaluates to a non\-null value, got null
 PREPARE p_error AS
@@ -1232,27 +1237,27 @@ FROM foo AS outer_foo
 OFFSET $2;
 
 query I
-EXECUTE p2(0::bigint, 0::bigint);
+EXECUTE p2(0, 0);
 ----
 3
 3
 3
 
 query I
-EXECUTE p2(2::bigint, 0::bigint);
+EXECUTE p2(2, 0);
 ----
 2
 2
 2
 
 query I
-EXECUTE p2(0::bigint, 1::bigint);
+EXECUTE p2(0, 1);
 ----
 3
 3
 
 query I
-EXECUTE p2(2::bigint, 1::bigint);
+EXECUTE p2(2, 1);
 ----
 2
 2
@@ -1280,10 +1285,29 @@ EXECUTE p3(3);
 1  0
 2  0
 
-query error db error: ERROR: mismatched parameter type: expected bigint, got integer
+# This needs a cast to be auto-inserted from Int32 to Int64
+query IT
 EXECUTE p1(1);
+----
+1  one
+2  two
 
-query error db error: ERROR: mismatched parameter type: expected bigint, got text
+# The cast has CastContext::Assignment, so even Numeric -> Int64 is allowed.
+query IT
+EXECUTE p1(0.4);
+----
+0  zero
+1  one
+2  two
+
+query IT
+EXECUTE p1(0.6);
+----
+1  one
+2  two
+
+# But text -> bigint is not allowed even in CastContext::Assignment.
+query error db error: ERROR: unable to cast given parameter \$1: expected bigint, got text
 EXECUTE p1('aaa');
 
 query error db error: ERROR: Invalid OFFSET clause: must not be negative, got \-7
@@ -1549,7 +1573,7 @@ PREPARE p4 AS
 VALUES (0), (1), (2) OFFSET $1
 
 query I
-EXECUTE p4(1::bigint);
+EXECUTE p4(1);
 ----
 1
 2
@@ -1577,3 +1601,38 @@ EXECUTE p6(2, 100, 200);
 12
 11
 10
+
+# Prepared statement parameter in LIMIT
+statement ok
+PREPARE fizz_paginated AS
+SELECT *
+FROM fizz
+ORDER BY a, b DESC
+LIMIT $1
+OFFSET $2
+
+query IT
+EXECUTE fizz_paginated(4::bigint, 0*4);
+----
+1735  two
+7584  twelve
+12345  two
+12345  three
+
+query IT
+EXECUTE fizz_paginated(4::bigint, 1*4);
+----
+12345  one
+21243  four
+21758  fourteen
+24223  four
+
+query IT
+EXECUTE fizz_paginated(4::bigint, 2*4);
+----
+25040  two
+
+# TODO: LIMIT currently just tries to match a literal after parameter binding. It should also do constant folding,
+# similarly to OFFSET.
+query error db error: ERROR: Top\-level LIMIT must be a constant expression, got integer_to_bigint\(4\)
+EXECUTE fizz_paginated(4, 2*4);

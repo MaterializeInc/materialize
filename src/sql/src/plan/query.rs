@@ -42,7 +42,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::convert::{TryFrom, TryInto};
 use std::num::NonZeroU64;
 use std::rc::Rc;
-use std::sync::Arc;
+use std::sync::{Arc, LazyLock};
 use std::{iter, mem};
 
 use itertools::Itertools;
@@ -97,7 +97,7 @@ use crate::plan::hir::{
 use crate::plan::plan_utils::{self, GroupSizeHints, JoinSide};
 use crate::plan::scope::{Scope, ScopeItem, ScopeUngroupedColumn};
 use crate::plan::statement::{StatementContext, StatementDesc, show};
-use crate::plan::typeconv::{self, CastContext};
+use crate::plan::typeconv::{self, CastContext, plan_hypothetical_cast};
 use crate::plan::{
     Params, PlanContext, QueryWhen, ShowCreatePlan, WebhookValidation, WebhookValidationSecret,
     literal, transform_ast,
@@ -1312,42 +1312,59 @@ pub fn plan_params<'a>(
     }
 
     let qcx = QueryContext::root(scx, QueryLifetime::OneShot);
-    let scope = Scope::empty();
-    let rel_type = RelationType::empty();
 
     let mut datums = Row::default();
     let mut packer = datums.packer();
-    let mut types = Vec::new();
+    let mut actual_types = Vec::new();
     let temp_storage = &RowArena::new();
-    for (mut expr, ty) in params.into_iter().zip(&desc.param_types) {
+    for (i, (mut expr, expected_ty)) in params.into_iter().zip(&desc.param_types).enumerate() {
         transform_ast::transform(scx, &mut expr)?;
 
-        let ecx = &ExprContext {
-            qcx: &qcx,
-            name: "EXECUTE",
-            scope: &scope,
-            relation_type: &rel_type,
-            allow_aggregates: false,
-            allow_subqueries: false,
-            allow_parameters: false,
-            allow_windows: false,
-        };
-        let ex = plan_expr(ecx, &expr)?.type_as_any(ecx)?;
-        let st = ecx.scalar_type(&ex);
-        if st != *ty {
-            sql_bail!(
-                "mismatched parameter type: expected {}, got {}",
-                ecx.humanize_scalar_type(ty, false),
-                ecx.humanize_scalar_type(&st, false),
-            );
+        let ecx = execute_expr_context(&qcx);
+        let ex = plan_expr(&ecx, &expr)?.type_as_any(&ecx)?;
+        let actual_ty = ecx.scalar_type(&ex);
+        if plan_hypothetical_cast(&ecx, *EXECUTE_CAST_CONTEXT, &actual_ty, expected_ty).is_none() {
+            return Err(PlanError::WrongParameterType(
+                i + 1,
+                ecx.humanize_scalar_type(expected_ty, false),
+                ecx.humanize_scalar_type(&actual_ty, false),
+            ));
         }
         let ex = ex.lower_uncorrelated()?;
         let evaled = ex.eval(&[], temp_storage)?;
         packer.push(evaled);
-        types.push(st);
+        actual_types.push(actual_ty);
     }
-    Ok(Params { datums, types })
+    Ok(Params {
+        datums,
+        execute_types: actual_types,
+        expected_types: desc.param_types.clone(),
+    })
 }
+
+static EXECUTE_CONTEXT_SCOPE: LazyLock<Scope> = LazyLock::new(Scope::empty);
+static EXECUTE_CONTEXT_REL_TYPE: LazyLock<RelationType> = LazyLock::new(RelationType::empty);
+
+/// Returns an `ExprContext` for the expressions in the parameters of an EXECUTE statement.
+pub(crate) fn execute_expr_context<'a>(qcx: &'a QueryContext<'a>) -> ExprContext<'a> {
+    ExprContext {
+        qcx,
+        name: "EXECUTE",
+        scope: &EXECUTE_CONTEXT_SCOPE,
+        relation_type: &EXECUTE_CONTEXT_REL_TYPE,
+        allow_aggregates: false,
+        allow_subqueries: false,
+        allow_parameters: false,
+        allow_windows: false,
+    }
+}
+
+/// The CastContext used when matching up the types of parameters passed to EXECUTE.
+///
+/// This is an assignment cast also in Postgres, see
+/// <https://github.com/MaterializeInc/database-issues/issues/9266>
+pub(crate) static EXECUTE_CAST_CONTEXT: LazyLock<CastContext> =
+    LazyLock::new(|| CastContext::Assignment);
 
 pub fn plan_index_exprs<'a>(
     scx: &'a StatementContext,

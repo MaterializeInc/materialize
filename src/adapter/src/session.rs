@@ -710,6 +710,7 @@ impl<T: TimestampManipulation> Session<T> {
         if !portal_name.is_empty() && self.portals.contains_key(&portal_name) {
             return Err(AdapterError::DuplicateCursor(portal_name));
         }
+        let param_types = desc.param_types.clone();
         self.portals.insert(
             portal_name,
             Portal {
@@ -718,7 +719,8 @@ impl<T: TimestampManipulation> Session<T> {
                 catalog_revision,
                 parameters: Params {
                     datums: Row::pack(params.iter().map(|(d, _t)| d)),
-                    types: params.into_iter().map(|(_d, t)| t).collect(),
+                    execute_types: params.into_iter().map(|(_d, t)| t).collect(),
+                    expected_types: param_types,
                 },
                 result_formats,
                 state: PortalState::NotStarted,

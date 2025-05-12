@@ -36,10 +36,10 @@ use mz_repr::adt::numeric::NumericMaxScale;
 use mz_repr::*;
 use serde::{Deserialize, Serialize};
 
-use crate::plan::Params;
 use crate::plan::error::PlanError;
-use crate::plan::query::ExprContext;
-use crate::plan::typeconv::{self, CastContext};
+use crate::plan::query::{EXECUTE_CAST_CONTEXT, ExprContext, execute_expr_context};
+use crate::plan::typeconv::{self, CastContext, plan_cast};
+use crate::plan::{Params, QueryContext, QueryLifetime, StatementContext};
 
 use super::plan_utils::GroupSizeHints;
 
@@ -167,24 +167,18 @@ pub enum HirRelationExpr {
         /// Column indices used to order rows within groups.
         order_key: Vec<ColumnOrder>,
         /// Number of records to retain.
-        /// It is of ScalarType::Int64. (It's not entirely clear why not UInt64, see below at
-        /// `offset`.)
+        /// It is of ScalarType::Int64.
+        /// (UInt64 would make sense in theory: Then we wouldn't need to manually check
+        /// non-negativity, but would just get this for free when casting to UInt64. However, Int64
+        /// is better for Postgres compat. This is because if there is a $1 here, then when external
+        /// tools `describe` the prepared statement, they discover this type. If what they find
+        /// were UInt64, then they might have trouble calling the prepared statement, because the
+        /// unsigned types are non-standard, and also don't exist even in Postgres.)
         limit: Option<HirScalarExpr>,
         /// Number of records to skip.
         /// It is of ScalarType::Int64.
         /// This can contain parameters at first, but by the time we reach lowering, this should
         /// already be simply a Literal.
-        ///
-        /// TODO: It's not clear why this is Int64 instead of UInt64. If it were UInt64, we wouldn't
-        /// need to manually check non-negativity, but would just get this for free when casting to
-        /// UInt64.
-        /// There are some arguments for Postgres-compatibility, because Postgres expects an
-        /// Int64. But it's not clear whether there is an actual situation where having a UInt64
-        /// here would introduce a Postgres-incompatibility.
-        /// Another thing is that our prepared statements currently have the limitation that the
-        /// argument passed to EXECUTE must have exactly the same type as the parameter, i.e., it's
-        /// not enough if it's castable. Since UInt64 is not a standard type, various tools might
-        /// have trouble passing it.
         offset: HirScalarExpr,
         /// User-supplied hint: how many rows will have the same group key.
         expected_group_size: Option<u64>,
@@ -2112,10 +2106,15 @@ impl HirRelationExpr {
 
     /// Replaces any parameter references in the expression with the
     /// corresponding datum from `params`.
-    pub fn bind_parameters(&mut self, params: &Params) -> Result<(), PlanError> {
+    pub fn bind_parameters(
+        &mut self,
+        scx: &StatementContext,
+        lifetime: QueryLifetime,
+        params: &Params,
+    ) -> Result<(), PlanError> {
         #[allow(deprecated)]
         self.visit_scalar_expressions_mut(0, &mut |e: &mut HirScalarExpr, _: usize| {
-            e.bind_parameters(params)
+            e.bind_parameters(scx, lifetime, params)
         })
     }
 
@@ -2984,7 +2983,12 @@ impl HirScalarExpr {
 
     /// Replaces any parameter references in the expression with the
     /// corresponding datum in `params`.
-    pub fn bind_parameters(&mut self, params: &Params) -> Result<(), PlanError> {
+    pub fn bind_parameters(
+        &mut self,
+        scx: &StatementContext,
+        lifetime: QueryLifetime,
+        params: &Params,
+    ) -> Result<(), PlanError> {
         #[allow(deprecated)]
         self.visit_recursively_mut(0, &mut |_: usize, e: &mut HirScalarExpr| {
             if let HirScalarExpr::Parameter(n, name) = e {
@@ -2992,7 +2996,7 @@ impl HirScalarExpr {
                     None => return Err(PlanError::UnknownParameter(*n)),
                     Some(datum) => datum,
                 };
-                let scalar_type = &params.types[*n - 1];
+                let scalar_type = &params.execute_types[*n - 1];
                 let row = Row::pack([datum]);
                 let column_type = scalar_type.clone().nullable(datum.is_null());
 
@@ -3002,7 +3006,16 @@ impl HirScalarExpr {
                     Some(Arc::from(format!("${n}")))
                 };
 
-                *e = HirScalarExpr::Literal(row, column_type, TreatAsEqual(name));
+                let qcx = QueryContext::root(scx, lifetime);
+                let ecx = execute_expr_context(&qcx);
+
+                *e = plan_cast(
+                    &ecx,
+                    *EXECUTE_CAST_CONTEXT,
+                    HirScalarExpr::Literal(row, column_type, TreatAsEqual(name)),
+                    &params.expected_types[*n - 1],
+                )
+                .expect("checked in plan_params");
             }
             Ok(())
         })

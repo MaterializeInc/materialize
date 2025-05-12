@@ -68,12 +68,16 @@ impl Coordinator {
         now: EpochMillis,
     ) -> Result<(), AdapterError> {
         let param_types = params
-            .types
+            .execute_types
             .iter()
             .map(|ty| Some(ty.clone()))
             .collect::<Vec<_>>();
         let desc = describe(catalog, stmt.clone(), &param_types, session)?;
-        let params = params.datums.into_iter().zip(params.types).collect();
+        let params = params
+            .datums
+            .into_iter()
+            .zip(params.execute_types)
+            .collect();
         let result_formats = vec![mz_pgwire_common::Format::Text; desc.arity()];
         let logging = session.mint_logging(sql, Some(&stmt), now);
         session.set_portal(
