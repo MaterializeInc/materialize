@@ -103,7 +103,10 @@ pub fn plan_insert(
     let returning = returning
         .expr
         .into_iter()
-        .map(|expr| expr.lower_uncorrelated())
+        .map(|mut expr| {
+            expr.bind_parameters(params)?;
+            expr.lower_uncorrelated()
+        })
         .collect::<Result<Vec<_>, _>>()?;
 
     Ok(Plan::Insert(InsertPlan {
