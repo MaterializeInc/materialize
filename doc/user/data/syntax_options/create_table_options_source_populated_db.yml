@@ -1,0 +1,45 @@
+columns:
+  - column: "Parameter"
+  - column: "Description"
+rows:
+  - "Parameter": "`<table_name>`"
+    "Description": |
+
+      The name of the table to create. Names for tables must follow the [naming
+      guidelines](/sql/identifiers/#naming-restrictions).
+
+  - "Parameter": "`<source_name>`"
+    "Description": |
+
+      The name of the [source](/sql/create-source/) associated with the
+      reference object from which to create the table.
+
+  - "Parameter": "**(REFERENCE <ref_object>)**"
+    "Description": |
+
+      The name of the reference object from which to create the table. Reference
+      objects are the names of the tables in the upstream database. You can
+      create multiple tables from the same reference object.
+
+      To find the reference objects available in your
+      [source](/sql/create-source/), you can use the following query,
+      substituting your source name for `<source_name>`:
+
+      <br>
+
+      ```mzsql
+      SELECT refs.*
+      FROM mz_internal.mz_source_references refs, mz_sources s
+      WHERE s.name = '<source_name>' -- substitute with your source name
+      AND refs.source_id = s.id;
+      ```
+
+  - "Parameter": "**WITH (<with_option>[,...])**"
+    "Description": |
+      The following `<with_option>`s are supported:
+
+      | Option | Description |
+      |--------|-------------|
+      | <a name="text-columns"></a>`TEXT COLUMNS (<fq_column_name> [, ...])` | *Optional.* If specified, decode data as `text` for the listed column(s), such as for unsupported data types. Use fully qualified column names. See also [supported types](#supported-db-source-types). |
+      | <a name="exclude-columns"></a>`EXCLUDE COLUMNS (<fq_column_name> [, ...])` | *Optional.* If specified, exclude the listed column(s) from the table. Use fully qualified column names. |
+      | <a name="partition-by"></a>`PARTITION BY (<column> [, ...])` | *Optional.* The key by which Materialize should internally partition the table. See the [partitioning guide](/transform-data/patterns/partition-by/) for restrictions on valid values and other details. |
