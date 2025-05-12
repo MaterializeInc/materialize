@@ -871,7 +871,7 @@ A SQL Server connection establishes a link to a single database of a
 
 {{< diagram "create-connection-sql-server.svg" >}}
 
-#### Connection options {#postgres-options}
+#### Connection options {#sql-server-options}
 
 Field                       | Value            | Required | Description
 ----------------------------|------------------|:--------:|-----------------------------
@@ -881,7 +881,7 @@ Field                       | Value            | Required | Description
 `USER`                      | `text`           | ✓        | Database username.
 `PASSWORD`                  | secret           | ✓        | Password for the connection.
 
-#### `WITH` options {#postgres-with-options}
+#### `WITH` options {#sql-server-with-options}
 
 Field         | Value     | Description
 --------------|-----------|-------------------------------------

@@ -34,8 +34,8 @@ Field | Use
 _src_name_  | The name for the source.
 **IF NOT EXISTS**  | Do nothing (except issuing a notice) if a source with the same name already exists. _Default._
 **IN CLUSTER** _cluster_name_ | The [cluster](/sql/create-cluster) to maintain this source.
-**CONNECTION** _connection_name_ | The name of the SQL Server connection to use in the source. For details on creating connections, check the [`CREATE CONNECTION`](/sql/create-connection/#mysql) documentation page.
-**FOR ALL TABLES** | Create subsources for all tables in all schemas upstream. The [`mysql` system schema](https://dev.mysql.com/doc/refman/8.3/en/system-schema.html) is ignored.
+**CONNECTION** _connection_name_ | The name of the SQL Server connection to use in the source. For details on creating connections, check the [`CREATE CONNECTION`](/sql/create-connection/#sql-server) documentation page.
+**FOR ALL TABLES** | Create subsources for all tables with CDC enabled in all schemas upstream.
 **FOR TABLES (** _table_list_ **)** | Create subsources for specific tables upstream. Requires fully-qualified table names (`<schema>.<table>`).
 **RETAIN HISTORY FOR** <br>_retention_period_ | ***Private preview.** This option has known performance or stability issues and is under active development.* Duration for which Materialize retains historical data, which is useful to implement [durable subscriptions](/transform-data/patterns/durable-subscriptions/#history-retention-period). Accepts positive [interval](/sql/types/interval/) values (e.g. `'1hr'`). Default: `1s`.
 

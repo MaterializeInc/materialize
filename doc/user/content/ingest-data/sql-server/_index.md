@@ -6,7 +6,7 @@ menu:
   main:
     parent: 'ingest-data'
     identifier: 'sql-server'
-    weight: 5
+    weight: 15
 ---
 
 ## Change Data Capture (CDC)
@@ -25,7 +25,7 @@ SQL Server Change Data Capture (CDC) in Materialize gives you the following bene
     the upstream SQL Server database are respected downstream. Materialize will
     **never show partial results** based on partially replicated transactions.
 
-* **Incrementally updated materialized views:** Materialized views are **not
-    supported in MySQL**, so you can use Materialize as a
-    read-replica to build views on top of your MySQL data that are efficiently
-    maintained and always up-to-date.
+* **Incrementally updated materialized views:** Incrementally updated Materialized
+    views are considerably **limited in SQL Server**, so you can use Materialize as
+    a read-replica to build views on top of your SQL Server data that are
+    efficiently maintained and always up-to-date.

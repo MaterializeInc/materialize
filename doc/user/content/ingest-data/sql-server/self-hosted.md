@@ -6,10 +6,12 @@ menu:
     parent: "sql-server"
     name: "Self-hosted"
     identifier: "sql-server-self-hosted"
+aliases:
+  - /ingest-data/cdc-sql-server/
 ---
 
-This page shows you how to stream data from a self-hosted MySQL database to
-Materialize using the [SQL Server source](/sql/create-source/sql-server/).
+This page shows you how to stream data from a self-hosted SQL Server database
+to Materialize using the [SQL Server source](/sql/create-source/sql-server/).
 
 {{< tip >}}
 {{< guided-tour-blurb-for-ingest-data >}}
