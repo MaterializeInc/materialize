@@ -29,7 +29,7 @@ differential-dataflow = "0.14.2"
 hex = "0.4.3"
 http = "1.2.0"
 itertools = { version = "0.14.0" }
-mysql_async = { version = "0.35.1", default-features = false, features = [
+mysql_async = { version = "0.36.1", default-features = false, features = [
     "minimal",
     "native-tls-tls",
 ] }

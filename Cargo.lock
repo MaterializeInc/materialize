@@ -4709,24 +4709,23 @@ checksum = "fb585ade2549a017db2e35978b77c319214fa4b37cede841e27954dd6e8f3ca8"
 
 [[package]]
 name = "mysql_async"
-version = "0.35.1"
+version = "0.36.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d14cf024116ba8fef4a7fec5abf0bd5de89b9fb29a7e55818a119ac5ec745077"
+checksum = "277ce2f2459b2af4cc6d0a0b7892381f80800832f57c533f03e2845f4ea331ea"
 dependencies = [
  "bytes",
- "crossbeam",
+ "crossbeam-queue",
  "flate2",
  "futures-core",
  "futures-sink",
  "futures-util",
  "keyed_priority_queue",
- "lru 0.12.5",
- "mysql_common 0.34.1",
+ "lru 0.14.0",
+ "mysql_common",
  "native-tls",
  "pem",
  "percent-encoding",
- "pin-project",
- "rand 0.8.5",
+ "rand 0.9.0",
  "serde",
  "serde_json",
  "socket2 0.5.9",
@@ -4737,38 +4736,6 @@ dependencies = [
  "tracing",
  "twox-hash 2.1.0",
  "url",
-]
-
-[[package]]
-name = "mysql_common"
-version = "0.34.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "34a9141e735d5bb02414a7ac03add09522466d4db65bdd827069f76ae0850e58"
-dependencies = [
- "base64 0.22.1",
- "bitflags 2.9.0",
- "bitvec",
- "btoi",
- "byteorder",
- "bytes",
- "cc",
- "cmake",
- "crc32fast",
- "flate2",
- "lazy_static",
- "num-bigint",
- "num-traits",
- "rand 0.8.5",
- "regex",
- "saturating",
- "serde",
- "serde_json",
- "sha1",
- "sha2",
- "subprocess",
- "thiserror 1.0.69",
- "uuid",
- "zstd",
 ]
 
 [[package]]
@@ -6249,7 +6216,7 @@ dependencies = [
  "itertools 0.14.0",
  "maplit",
  "mysql_async",
- "mysql_common 0.35.4",
+ "mysql_common",
  "mz-build-tools",
  "mz-cloud-resources",
  "mz-ore",
@@ -7406,7 +7373,7 @@ dependencies = [
  "itertools 0.14.0",
  "maplit",
  "mysql_async",
- "mysql_common 0.35.4",
+ "mysql_common",
  "mz-build-info",
  "mz-ccsr",
  "mz-cluster",
@@ -10675,16 +10642,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7da8b5736845d9f2fcb837ea5d9e2628564b3b043a70948a3f0b778838c5fb4f"
 
 [[package]]
-name = "subprocess"
-version = "0.2.9"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0c2e86926081dda636c546d8c5e641661049d7562a68f5488be4a1f7f66f6086"
-dependencies = [
- "libc",
- "winapi",
-]
-
-[[package]]
 name = "subtle"
 version = "2.6.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -12620,6 +12577,7 @@ dependencies = [
  "criterion",
  "crossbeam-deque",
  "crossbeam-epoch",
+ "crossbeam-queue",
  "crossbeam-utils",
  "crypto-common",
  "csv-async",
@@ -12656,7 +12614,7 @@ dependencies = [
  "minimal-lexical",
  "miniz_oxide",
  "mysql_async",
- "mysql_common 0.35.4",
+ "mysql_common",
  "native-tls",
  "nom",
  "num",
