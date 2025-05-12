@@ -718,7 +718,9 @@ mod relation {
 
 /// Support for parsing [mz_expr::MirScalarExpr].
 mod scalar {
-    use mz_expr::{BinaryFunc, ColumnOrder, MirScalarExpr};
+    use mz_expr::{
+        BinaryFunc, ColumnOrder, MirScalarExpr, UnaryFunc, UnmaterializableFunc, VariadicFunc,
+    };
     use mz_repr::{AsColumnType, Datum, Row, RowArena, ScalarType};
 
     use super::*;
@@ -1102,8 +1104,6 @@ mod scalar {
     }
 
     fn parse_apply(input: ParseStream) -> Result {
-        use mz_expr::func::{BinaryFunc::*, UnmaterializableFunc::*, VariadicFunc::*, *};
-
         let ident = input.parse::<syn::Ident>()?;
 
         // parse parentheses
@@ -1135,14 +1135,14 @@ mod scalar {
         // name resolution in the parser.
         match ident.to_string().to_lowercase().as_str() {
             // Supported unmaterializable (a.k.a. nullary) functions:
-            "mz_environment_id" => parse_nullary(MzEnvironmentId),
+            "mz_environment_id" => parse_nullary(UnmaterializableFunc::MzEnvironmentId),
             // Supported unary functions:
-            "abs" => parse_unary(AbsInt64.into()),
-            "not" => parse_unary(Not.into()),
+            "abs" => parse_unary(mz_expr::func::AbsInt64.into()),
+            "not" => parse_unary(mz_expr::func::Not.into()),
             // Supported binary functions:
-            "ltrim" => parse_binary(TrimLeading),
+            "ltrim" => parse_binary(BinaryFunc::TrimLeading),
             // Supported variadic functions:
-            "greatest" => parse_variadic(Greatest),
+            "greatest" => parse_variadic(VariadicFunc::Greatest),
             _ => Err(Error::new(ident.span(), "unsupported function name")),
         }
     }

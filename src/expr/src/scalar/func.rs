@@ -3029,14 +3029,14 @@ fn timezone_interval_timestamptz(a: Datum<'_>, b: Datum<'_>) -> Result<Datum<'st
 }
 
 #[sqlfunc(
-    output_type_expr = "ScalarType::Record {
+    output_type_expr = r#"ScalarType::Record {
                 fields: [
-                    (\"abbrev\".into(), ScalarType::String.nullable(false)),
-                    (\"base_utc_offset\".into(), ScalarType::Interval.nullable(false)),
-                    (\"dst_offset\".into(), ScalarType::Interval.nullable(false)),
+                    ("abbrev".into(), ScalarType::String.nullable(false)),
+                    ("base_utc_offset".into(), ScalarType::Interval.nullable(false)),
+                    ("dst_offset".into(), ScalarType::Interval.nullable(false)),
                 ].into(),
                 custom_id: None,
-            }.nullable(true)",
+            }.nullable(true)"#,
     propagates_nulls = true,
     introduces_nulls = false
 )]
