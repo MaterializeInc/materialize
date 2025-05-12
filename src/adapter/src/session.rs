@@ -719,7 +719,7 @@ impl<T: TimestampManipulation> Session<T> {
                 catalog_revision,
                 parameters: Params {
                     datums: Row::pack(params.iter().map(|(d, _t)| d)),
-                    actual_types: params.into_iter().map(|(_d, t)| t).collect(),
+                    execute_types: params.into_iter().map(|(_d, t)| t).collect(),
                     expected_types: param_types,
                 },
                 result_formats,

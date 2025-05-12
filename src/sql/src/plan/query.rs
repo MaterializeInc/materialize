@@ -1337,7 +1337,7 @@ pub fn plan_params<'a>(
     }
     Ok(Params {
         datums,
-        actual_types,
+        execute_types: actual_types,
         expected_types: desc.param_types.clone(),
     })
 }

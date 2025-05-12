@@ -2041,8 +2041,11 @@ impl TryFrom<ClusterAlterOptionExtracted> for AlterClusterPlanStrategy {
 /// A vector of values to which parameter references should be bound.
 #[derive(Debug, Clone)]
 pub struct Params {
+    /// The datums that were provided in the EXECUTE statement.
     pub datums: Row,
-    pub actual_types: Vec<ScalarType>,
+    /// The types of the datums provided in the EXECUTE statement.
+    pub execute_types: Vec<ScalarType>,
+    /// The types that the prepared statement expects based on its definition.
     pub expected_types: Vec<ScalarType>,
 }
 
@@ -2051,7 +2054,7 @@ impl Params {
     pub fn empty() -> Params {
         Params {
             datums: Row::pack_slice(&[]),
-            actual_types: vec![],
+            execute_types: vec![],
             expected_types: vec![],
         }
     }

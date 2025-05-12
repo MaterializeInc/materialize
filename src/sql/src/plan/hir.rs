@@ -2996,7 +2996,7 @@ impl HirScalarExpr {
                     None => return Err(PlanError::UnknownParameter(*n)),
                     Some(datum) => datum,
                 };
-                let scalar_type = &params.actual_types[*n - 1];
+                let scalar_type = &params.execute_types[*n - 1];
                 let row = Row::pack([datum]);
                 let column_type = scalar_type.clone().nullable(datum.is_null());
 

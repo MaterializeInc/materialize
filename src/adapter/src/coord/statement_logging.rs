@@ -727,7 +727,7 @@ impl Coordinator {
             now,
         );
 
-        let params = std::iter::zip(params.actual_types.iter(), params.datums.iter())
+        let params = std::iter::zip(params.execute_types.iter(), params.datums.iter())
             .map(|(r#type, datum)| {
                 mz_pgrepr::Value::from_datum(datum, r#type).map(|val| {
                     let mut buf = BytesMut::new();

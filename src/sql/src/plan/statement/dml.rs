@@ -104,7 +104,7 @@ pub fn plan_insert(
         .expr
         .into_iter()
         .map(|mut expr| {
-            expr.bind_parameters(params)?;
+            expr.bind_parameters(scx, QueryLifetime::OneShot, params)?;
             expr.lower_uncorrelated()
         })
         .collect::<Result<Vec<_>, _>>()?;
