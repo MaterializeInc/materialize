@@ -26,6 +26,7 @@ use timely::logging::{TimelyEvent, TimelyEventBuilder};
 use timely::logging_core::{Logger, Registry};
 use timely::order::Product;
 use timely::progress::reachability::logging::{TrackerEvent, TrackerEventBuilder};
+use timely::worker::AsWorker;
 
 use crate::arrangement::manager::TraceBundle;
 use crate::extensions::arrange::{KeyCollection, MzArrange};
@@ -76,7 +77,7 @@ pub fn initialize<A: Allocate + 'static>(
         traces
     };
 
-    let compute_logger = worker.log_register().get("materialize/compute").unwrap();
+    let compute_logger = worker.logger_for("materialize/compute").unwrap();
     LoggingTraces {
         traces,
         dataflow_index,
@@ -195,7 +196,7 @@ impl<A: Allocate + 'static> LoggingContext<'_, A> {
         let d_logger = self.simple_logger::<DifferentialEventBuilder>(self.d_event_queue.clone());
         let c_logger = self.simple_logger::<ComputeEventBuilder>(self.c_event_queue.clone());
 
-        let mut register = self.worker.log_register();
+        let mut register = self.worker.log_register().expect("Logging must be enabled");
         register.insert_logger("timely", t_logger);
         // Note that each reachability logger has a unique index, this is crucial to avoid dropping
         // data because the event link structure is not multi-producer safe.

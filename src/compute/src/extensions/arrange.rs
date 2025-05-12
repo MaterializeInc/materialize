@@ -248,10 +248,7 @@ where
     L: FnMut(&Tr) -> (usize, usize, usize) + 'static,
 {
     let scope = arranged.stream.scope();
-    let Some(logger) = scope
-        .log_register()
-        .get::<ComputeEventBuilder>("materialize/compute")
-    else {
+    let Some(logger) = scope.logger_for::<ComputeEventBuilder>("materialize/compute") else {
         return arranged;
     };
     let operator_id = arranged.trace.operator().global_id;

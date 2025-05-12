@@ -643,6 +643,7 @@ impl DataSubscribe {
         let mut worker = Worker::new(
             WorkerConfig::default(),
             timely::communication::allocator::Thread::default(),
+            Some(std::time::Instant::now()),
         );
         let (data, txns, capture, tokens) = worker.dataflow::<u64, _, _>(|scope| {
             let (data_stream, shard_source_token) = scope.scoped::<u64, _, _>("hybrid", |scope| {
