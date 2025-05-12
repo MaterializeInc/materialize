@@ -1,0 +1,74 @@
+// Copyright Materialize, Inc. and contributors. All rights reserved.
+//
+// Use of this software is governed by the Business Source License
+// included in the LICENSE file.
+//
+// As of the Change Date specified in that file, in accordance with
+// the Business Source License, use of this software will be governed
+// by the Apache License, Version 2.0.
+
+
+#[derive(
+    proptest_derive::Arbitrary,
+    Ord,
+    PartialOrd,
+    Clone,
+    Debug,
+    Eq,
+    PartialEq,
+    serde::Serialize,
+    serde::Deserialize,
+    Hash,
+    mz_lowertest::MzReflect
+)]
+pub struct CastIntervalToTime;
+impl<'a> crate::func::EagerUnaryFunc<'a> for CastIntervalToTime {
+    type Input = Interval;
+    type Output = NaiveTime;
+    fn call(&self, i: Self::Input) -> Self::Output {
+        let mut result = i.micros % *USECS_PER_DAY;
+        if result < 0 {
+            result += *USECS_PER_DAY;
+        }
+        let i = Interval::new(0, 0, result);
+        let hours: u32 = i
+            .hours()
+            .try_into()
+            .expect(
+                "interval is positive and hours() returns a value in the range [-24, 24]",
+            );
+        let minutes: u32 = i
+            .minutes()
+            .try_into()
+            .expect(
+                "interval is positive and minutes() returns a value in the range [-60, 60]",
+            );
+        let seconds: u32 = i64::cast_lossy(i.seconds::<f64>())
+            .try_into()
+            .expect(
+                "interval is positive and seconds() returns a value in the range [-60.0, 60.0]",
+            );
+        let nanoseconds: u32 = i
+            .nanoseconds()
+            .try_into()
+            .expect(
+                "interval is positive and nanoseconds() returns a value in the range [-1_000_000_000, 1_000_000_000]",
+            );
+        NaiveTime::from_hms_nano_opt(hours, minutes, seconds, nanoseconds).unwrap()
+    }
+    fn output_type(&self, input_type: mz_repr::ColumnType) -> mz_repr::ColumnType {
+        use mz_repr::AsColumnType;
+        let output = Self::Output::as_column_type();
+        let propagates_nulls = crate::func::EagerUnaryFunc::propagates_nulls(self);
+        let nullable = output.nullable;
+        output.nullable(nullable || (propagates_nulls && input_type.nullable))
+    }
+    fn inverse(&self) -> Option<crate::UnaryFunc> {
+        to_unary!(super::CastTimeToInterval)
+    }
+}
+impl std::fmt::Display for CastIntervalToTime {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        f.write_str("interval_to_time")
+    }
+}

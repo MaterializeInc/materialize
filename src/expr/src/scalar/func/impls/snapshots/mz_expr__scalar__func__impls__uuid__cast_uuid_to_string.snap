@@ -19,8 +19,10 @@ pub struct CastUuidToString;
 impl<'a> crate::func::EagerUnaryFunc<'a> for CastUuidToString {
     type Input = Uuid;
     type Output = String;
-    fn call(&self, a: Self::Input) -> Self::Output {
-        cast_uuid_to_string(a)
+    fn call(&self, u: Self::Input) -> Self::Output {
+        let mut buf = String::with_capacity(36);
+        strconv::format_uuid(&mut buf, u);
+        buf
     }
     fn output_type(&self, input_type: mz_repr::ColumnType) -> mz_repr::ColumnType {
         use mz_repr::AsColumnType;
@@ -32,9 +34,6 @@ impl<'a> crate::func::EagerUnaryFunc<'a> for CastUuidToString {
     fn inverse(&self) -> Option<crate::UnaryFunc> {
         to_unary!(super::CastStringToUuid)
     }
-    fn is_monotone(&self) -> bool {
-        false
-    }
     fn preserves_uniqueness(&self) -> bool {
         true
     }
@@ -42,13 +41,5 @@ impl<'a> crate::func::EagerUnaryFunc<'a> for CastUuidToString {
 impl std::fmt::Display for CastUuidToString {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         f.write_str("uuid_to_text")
-    }
-}
-#[allow(clippy::extra_unused_lifetimes)]
-pub fn cast_uuid_to_string<'a>(u: Uuid) -> String {
-    {
-        let mut buf = String::with_capacity(36);
-        strconv::format_uuid(&mut buf, u);
-        buf
     }
 }

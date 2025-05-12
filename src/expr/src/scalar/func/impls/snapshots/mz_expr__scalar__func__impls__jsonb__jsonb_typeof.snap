@@ -20,33 +20,6 @@ impl<'a> crate::func::EagerUnaryFunc<'a> for JsonbTypeof {
     type Input = JsonbRef<'a>;
     type Output = &'a str;
     fn call(&self, a: Self::Input) -> Self::Output {
-        jsonb_typeof(a)
-    }
-    fn output_type(&self, input_type: mz_repr::ColumnType) -> mz_repr::ColumnType {
-        use mz_repr::AsColumnType;
-        let output = Self::Output::as_column_type();
-        let propagates_nulls = crate::func::EagerUnaryFunc::propagates_nulls(self);
-        let nullable = output.nullable;
-        output.nullable(nullable || (propagates_nulls && input_type.nullable))
-    }
-    fn inverse(&self) -> Option<crate::UnaryFunc> {
-        None
-    }
-    fn is_monotone(&self) -> bool {
-        false
-    }
-    fn preserves_uniqueness(&self) -> bool {
-        false
-    }
-}
-impl std::fmt::Display for JsonbTypeof {
-    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-        f.write_str(stringify!(jsonb_typeof))
-    }
-}
-#[allow(clippy::extra_unused_lifetimes)]
-pub fn jsonb_typeof<'a>(a: JsonbRef<'a>) -> &'a str {
-    {
         match a.into_datum() {
             Datum::Map(_) => "object",
             Datum::List(_) => "array",
@@ -56,5 +29,17 @@ pub fn jsonb_typeof<'a>(a: JsonbRef<'a>) -> &'a str {
             Datum::JsonNull => "null",
             d => panic!("Not jsonb: {:?}", d),
         }
+    }
+    fn output_type(&self, input_type: mz_repr::ColumnType) -> mz_repr::ColumnType {
+        use mz_repr::AsColumnType;
+        let output = Self::Output::as_column_type();
+        let propagates_nulls = crate::func::EagerUnaryFunc::propagates_nulls(self);
+        let nullable = output.nullable;
+        output.nullable(nullable || (propagates_nulls && input_type.nullable))
+    }
+}
+impl std::fmt::Display for JsonbTypeof {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        f.write_str(stringify!(jsonb_typeof))
     }
 }

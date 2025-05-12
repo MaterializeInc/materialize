@@ -1,6 +1,6 @@
 ---
 source: src/expr/src/scalar/func.rs
-expression: "#[sqlfunc(\n    is_monotone = (true, true),\n    output_type = Interval,\n    is_infix_op = true,\n    sqlname = \"-\",\n    propagates_nulls = true\n)]\nfn sub_time<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {\n    Datum::from(a.unwrap_time() - b.unwrap_time())\n}\n"
+expression: "#[sqlfunc(\n    is_monotone = \"(true, true)\",\n    output_type = \"Interval\",\n    is_infix_op = true,\n    sqlname = \"-\",\n    propagates_nulls = true\n)]\nfn sub_time<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {\n    Datum::from(a.unwrap_time() - b.unwrap_time())\n}\n"
 ---
 #[derive(
     proptest_derive::Arbitrary,
@@ -26,7 +26,7 @@ impl<'a> crate::func::binary::EagerBinaryFunc<'a> for SubTime {
         b: Self::Input2,
         temp_storage: &'a mz_repr::RowArena,
     ) -> Self::Output {
-        sub_time(a, b)
+        { Datum::from(a.unwrap_time() - b.unwrap_time()) }
     }
     fn output_type(
         &self,
@@ -63,7 +63,4 @@ impl std::fmt::Display for SubTime {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         f.write_str("-")
     }
-}
-fn sub_time<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
-    Datum::from(a.unwrap_time() - b.unwrap_time())
 }

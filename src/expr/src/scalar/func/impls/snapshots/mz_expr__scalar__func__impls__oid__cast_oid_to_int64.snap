@@ -20,7 +20,7 @@ impl<'a> crate::func::EagerUnaryFunc<'a> for CastOidToInt64 {
     type Input = Oid;
     type Output = i64;
     fn call(&self, a: Self::Input) -> Self::Output {
-        cast_oid_to_int64(a)
+        i64::from(a.0)
     }
     fn output_type(&self, input_type: mz_repr::ColumnType) -> mz_repr::ColumnType {
         use mz_repr::AsColumnType;
@@ -32,9 +32,6 @@ impl<'a> crate::func::EagerUnaryFunc<'a> for CastOidToInt64 {
     fn inverse(&self) -> Option<crate::UnaryFunc> {
         to_unary!(super::CastInt64ToOid)
     }
-    fn is_monotone(&self) -> bool {
-        false
-    }
     fn preserves_uniqueness(&self) -> bool {
         true
     }
@@ -43,8 +40,4 @@ impl std::fmt::Display for CastOidToInt64 {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         f.write_str("oid_to_bigint")
     }
-}
-#[allow(clippy::extra_unused_lifetimes)]
-pub fn cast_oid_to_int64<'a>(a: Oid) -> i64 {
-    { i64::from(a.0) }
 }

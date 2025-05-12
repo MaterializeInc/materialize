@@ -26,7 +26,39 @@ impl<'a> crate::func::binary::EagerBinaryFunc<'a> for RoundNumericBinary {
         b: Self::Input2,
         temp_storage: &'a mz_repr::RowArena,
     ) -> Self::Output {
-        round_numeric_binary(a, b)
+        {
+            let mut a = a.unwrap_numeric().0;
+            let mut b = b.unwrap_int32();
+            let mut cx = numeric::cx_datum();
+            let a_exp = a.exponent();
+            if a_exp > 0 && b > 0 || a_exp < 0 && -a_exp < b {
+                let max_remaining_scale = u32::from(numeric::NUMERIC_DATUM_MAX_PRECISION)
+                    - (numeric::get_precision(&a) - numeric::get_scale(&a));
+                b = match i32::try_from(max_remaining_scale) {
+                    Ok(max_remaining_scale) => std::cmp::min(b, max_remaining_scale),
+                    Err(_) => b,
+                };
+                cx.rescale(&mut a, &numeric::Numeric::from(-b));
+            } else {
+                const MAX_P_LIMIT: i32 = 1
+                    + cast::u8_to_i32(numeric::NUMERIC_DATUM_MAX_PRECISION);
+                b = std::cmp::min(MAX_P_LIMIT, b);
+                b = std::cmp::max(-MAX_P_LIMIT, b);
+                let mut b = numeric::Numeric::from(b);
+                cx.scaleb(&mut a, &b);
+                cx.round(&mut a);
+                cx.neg(&mut b);
+                cx.scaleb(&mut a, &b);
+            }
+            if cx.status().overflow() {
+                Err(EvalError::FloatOverflow)
+            } else if a.is_zero() {
+                Ok(Datum::from(numeric::Numeric::zero()))
+            } else {
+                numeric::munge_numeric(&mut a).unwrap();
+                Ok(Datum::from(a))
+            }
+        }
     }
     fn output_type(
         &self,
@@ -59,38 +91,5 @@ impl<'a> crate::func::binary::EagerBinaryFunc<'a> for RoundNumericBinary {
 impl std::fmt::Display for RoundNumericBinary {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         f.write_str("round")
-    }
-}
-fn round_numeric_binary<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
-    let mut a = a.unwrap_numeric().0;
-    let mut b = b.unwrap_int32();
-    let mut cx = numeric::cx_datum();
-    let a_exp = a.exponent();
-    if a_exp > 0 && b > 0 || a_exp < 0 && -a_exp < b {
-        let max_remaining_scale = u32::from(numeric::NUMERIC_DATUM_MAX_PRECISION)
-            - (numeric::get_precision(&a) - numeric::get_scale(&a));
-        b = match i32::try_from(max_remaining_scale) {
-            Ok(max_remaining_scale) => std::cmp::min(b, max_remaining_scale),
-            Err(_) => b,
-        };
-        cx.rescale(&mut a, &numeric::Numeric::from(-b));
-    } else {
-        const MAX_P_LIMIT: i32 = 1
-            + cast::u8_to_i32(numeric::NUMERIC_DATUM_MAX_PRECISION);
-        b = std::cmp::min(MAX_P_LIMIT, b);
-        b = std::cmp::max(-MAX_P_LIMIT, b);
-        let mut b = numeric::Numeric::from(b);
-        cx.scaleb(&mut a, &b);
-        cx.round(&mut a);
-        cx.neg(&mut b);
-        cx.scaleb(&mut a, &b);
-    }
-    if cx.status().overflow() {
-        Err(EvalError::FloatOverflow)
-    } else if a.is_zero() {
-        Ok(Datum::from(numeric::Numeric::zero()))
-    } else {
-        numeric::munge_numeric(&mut a).unwrap();
-        Ok(Datum::from(a))
     }
 }

@@ -26,7 +26,7 @@ impl<'a> crate::func::binary::EagerBinaryFunc<'a> for ArrayContainsArrayRev {
         b: Self::Input2,
         temp_storage: &'a mz_repr::RowArena,
     ) -> Self::Output {
-        array_contains_array_rev(a, b)
+        { array_contains_array(a, b) }
     }
     fn output_type(
         &self,
@@ -60,7 +60,4 @@ impl std::fmt::Display for ArrayContainsArrayRev {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         f.write_str("<@")
     }
-}
-fn array_contains_array_rev<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
-    array_contains_array(a, b)
 }

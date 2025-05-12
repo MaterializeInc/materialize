@@ -26,7 +26,74 @@ impl<'a> crate::func::binary::EagerBinaryFunc<'a> for ArrayArrayConcat {
         b: Self::Input2,
         temp_storage: &'a mz_repr::RowArena,
     ) -> Self::Output {
-        array_array_concat(a, b, temp_storage)
+        {
+            if a.is_null() {
+                return Ok(b);
+            } else if b.is_null() {
+                return Ok(a);
+            }
+            let a_array = a.unwrap_array();
+            let b_array = b.unwrap_array();
+            let a_dims: Vec<ArrayDimension> = a_array.dims().into_iter().collect();
+            let b_dims: Vec<ArrayDimension> = b_array.dims().into_iter().collect();
+            let a_ndims = a_dims.len();
+            let b_ndims = b_dims.len();
+            if a_ndims == 0 {
+                return Ok(b);
+            } else if b_ndims == 0 {
+                return Ok(a);
+            }
+            #[allow(clippy::as_conversions)]
+            if (a_ndims as isize - b_ndims as isize).abs() > 1 {
+                return Err(EvalError::IncompatibleArrayDimensions {
+                    dims: Some((a_ndims, b_ndims)),
+                });
+            }
+            let mut dims;
+            match a_ndims.cmp(&b_ndims) {
+                Ordering::Equal => {
+                    if &a_dims[1..] != &b_dims[1..] {
+                        return Err(EvalError::IncompatibleArrayDimensions {
+                            dims: None,
+                        });
+                    }
+                    dims = vec![
+                        ArrayDimension { lower_bound : a_dims[0].lower_bound, length :
+                        a_dims[0].length + b_dims[0].length, }
+                    ];
+                    dims.extend(&a_dims[1..]);
+                }
+                Ordering::Less => {
+                    if &a_dims[..] != &b_dims[1..] {
+                        return Err(EvalError::IncompatibleArrayDimensions {
+                            dims: None,
+                        });
+                    }
+                    dims = vec![
+                        ArrayDimension { lower_bound : b_dims[0].lower_bound, length :
+                        b_dims[0].length + 1, }
+                    ];
+                    dims.extend(a_dims);
+                }
+                Ordering::Greater => {
+                    if &a_dims[1..] != &b_dims[..] {
+                        return Err(EvalError::IncompatibleArrayDimensions {
+                            dims: None,
+                        });
+                    }
+                    dims = vec![
+                        ArrayDimension { lower_bound : a_dims[0].lower_bound, length :
+                        a_dims[0].length + 1, }
+                    ];
+                    dims.extend(b_dims);
+                }
+            }
+            let elems = a_array.elements().iter().chain(b_array.elements().iter());
+            Ok(
+                temp_storage
+                    .try_make_datum(|packer| packer.try_push_array(&dims, elems))?,
+            )
+        }
     }
     fn output_type(
         &self,
@@ -60,73 +127,4 @@ impl std::fmt::Display for ArrayArrayConcat {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         f.write_str("||")
     }
-}
-fn array_array_concat<'a>(
-    a: Datum<'a>,
-    b: Datum<'a>,
-    temp_storage: &'a RowArena,
-) -> Result<Datum<'a>, EvalError> {
-    if a.is_null() {
-        return Ok(b);
-    } else if b.is_null() {
-        return Ok(a);
-    }
-    let a_array = a.unwrap_array();
-    let b_array = b.unwrap_array();
-    let a_dims: Vec<ArrayDimension> = a_array.dims().into_iter().collect();
-    let b_dims: Vec<ArrayDimension> = b_array.dims().into_iter().collect();
-    let a_ndims = a_dims.len();
-    let b_ndims = b_dims.len();
-    if a_ndims == 0 {
-        return Ok(b);
-    } else if b_ndims == 0 {
-        return Ok(a);
-    }
-    #[allow(clippy::as_conversions)]
-    if (a_ndims as isize - b_ndims as isize).abs() > 1 {
-        return Err(EvalError::IncompatibleArrayDimensions {
-            dims: Some((a_ndims, b_ndims)),
-        });
-    }
-    let mut dims;
-    match a_ndims.cmp(&b_ndims) {
-        Ordering::Equal => {
-            if &a_dims[1..] != &b_dims[1..] {
-                return Err(EvalError::IncompatibleArrayDimensions {
-                    dims: None,
-                });
-            }
-            dims = vec![
-                ArrayDimension { lower_bound : a_dims[0].lower_bound, length : a_dims[0]
-                .length + b_dims[0].length, }
-            ];
-            dims.extend(&a_dims[1..]);
-        }
-        Ordering::Less => {
-            if &a_dims[..] != &b_dims[1..] {
-                return Err(EvalError::IncompatibleArrayDimensions {
-                    dims: None,
-                });
-            }
-            dims = vec![
-                ArrayDimension { lower_bound : b_dims[0].lower_bound, length : b_dims[0]
-                .length + 1, }
-            ];
-            dims.extend(a_dims);
-        }
-        Ordering::Greater => {
-            if &a_dims[1..] != &b_dims[..] {
-                return Err(EvalError::IncompatibleArrayDimensions {
-                    dims: None,
-                });
-            }
-            dims = vec![
-                ArrayDimension { lower_bound : a_dims[0].lower_bound, length : a_dims[0]
-                .length + 1, }
-            ];
-            dims.extend(b_dims);
-        }
-    }
-    let elems = a_array.elements().iter().chain(b_array.elements().iter());
-    Ok(temp_storage.try_make_datum(|packer| packer.try_push_array(&dims, elems))?)
 }

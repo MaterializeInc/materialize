@@ -20,7 +20,7 @@ impl<'a> crate::func::EagerUnaryFunc<'a> for CastStringToTime {
     type Input = &'a str;
     type Output = Result<NaiveTime, EvalError>;
     fn call(&self, a: Self::Input) -> Self::Output {
-        cast_string_to_time(a)
+        strconv::parse_time(a).err_into()
     }
     fn output_type(&self, input_type: mz_repr::ColumnType) -> mz_repr::ColumnType {
         use mz_repr::AsColumnType;
@@ -32,19 +32,9 @@ impl<'a> crate::func::EagerUnaryFunc<'a> for CastStringToTime {
     fn inverse(&self) -> Option<crate::UnaryFunc> {
         to_unary!(super::CastTimeToString)
     }
-    fn is_monotone(&self) -> bool {
-        false
-    }
-    fn preserves_uniqueness(&self) -> bool {
-        false
-    }
 }
 impl std::fmt::Display for CastStringToTime {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         f.write_str("text_to_time")
     }
-}
-#[allow(clippy::extra_unused_lifetimes)]
-pub fn cast_string_to_time<'a>(a: &'a str) -> Result<NaiveTime, EvalError> {
-    { strconv::parse_time(a).err_into() }
 }

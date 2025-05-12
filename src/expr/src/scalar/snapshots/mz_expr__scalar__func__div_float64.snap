@@ -1,6 +1,6 @@
 ---
 source: src/expr/src/scalar/func.rs
-expression: "#[sqlfunc(\n    is_monotone = (true, false),\n    output_type = f64,\n    is_infix_op = true,\n    sqlname = \"/\",\n    propagates_nulls = true\n)]\nfn div_float64<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {\n    let a = a.unwrap_float64();\n    let b = b.unwrap_float64();\n    if b == 0.0f64 && !a.is_nan() {\n        Err(EvalError::DivisionByZero)\n    } else {\n        let quotient = a / b;\n        if quotient.is_infinite() && !a.is_infinite() {\n            Err(EvalError::FloatOverflow)\n        } else if quotient == 0.0f64 && a != 0.0f64 && !b.is_infinite() {\n            Err(EvalError::FloatUnderflow)\n        } else {\n            Ok(Datum::from(quotient))\n        }\n    }\n}\n"
+expression: "#[sqlfunc(\n    is_monotone = \"(true, false)\",\n    output_type = \"f64\",\n    is_infix_op = true,\n    sqlname = \"/\",\n    propagates_nulls = true\n)]\nfn div_float64<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {\n    let a = a.unwrap_float64();\n    let b = b.unwrap_float64();\n    if b == 0.0f64 && !a.is_nan() {\n        Err(EvalError::DivisionByZero)\n    } else {\n        let quotient = a / b;\n        if quotient.is_infinite() && !a.is_infinite() {\n            Err(EvalError::FloatOverflow)\n        } else if quotient == 0.0f64 && a != 0.0f64 && !b.is_infinite() {\n            Err(EvalError::FloatUnderflow)\n        } else {\n            Ok(Datum::from(quotient))\n        }\n    }\n}\n"
 ---
 #[derive(
     proptest_derive::Arbitrary,
@@ -26,7 +26,22 @@ impl<'a> crate::func::binary::EagerBinaryFunc<'a> for DivFloat64 {
         b: Self::Input2,
         temp_storage: &'a mz_repr::RowArena,
     ) -> Self::Output {
-        div_float64(a, b)
+        {
+            let a = a.unwrap_float64();
+            let b = b.unwrap_float64();
+            if b == 0.0f64 && !a.is_nan() {
+                Err(EvalError::DivisionByZero)
+            } else {
+                let quotient = a / b;
+                if quotient.is_infinite() && !a.is_infinite() {
+                    Err(EvalError::FloatOverflow)
+                } else if quotient == 0.0f64 && a != 0.0f64 && !b.is_infinite() {
+                    Err(EvalError::FloatUnderflow)
+                } else {
+                    Ok(Datum::from(quotient))
+                }
+            }
+        }
     }
     fn output_type(
         &self,
@@ -62,21 +77,5 @@ impl<'a> crate::func::binary::EagerBinaryFunc<'a> for DivFloat64 {
 impl std::fmt::Display for DivFloat64 {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         f.write_str("/")
-    }
-}
-fn div_float64<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
-    let a = a.unwrap_float64();
-    let b = b.unwrap_float64();
-    if b == 0.0f64 && !a.is_nan() {
-        Err(EvalError::DivisionByZero)
-    } else {
-        let quotient = a / b;
-        if quotient.is_infinite() && !a.is_infinite() {
-            Err(EvalError::FloatOverflow)
-        } else if quotient == 0.0f64 && a != 0.0f64 && !b.is_infinite() {
-            Err(EvalError::FloatUnderflow)
-        } else {
-            Ok(Datum::from(quotient))
-        }
     }
 }

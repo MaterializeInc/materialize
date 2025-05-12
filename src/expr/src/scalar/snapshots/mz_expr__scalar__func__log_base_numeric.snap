@@ -26,7 +26,31 @@ impl<'a> crate::func::binary::EagerBinaryFunc<'a> for LogBaseNumeric {
         b: Self::Input2,
         temp_storage: &'a mz_repr::RowArena,
     ) -> Self::Output {
-        log_base_numeric(a, b)
+        {
+            let mut a = a.unwrap_numeric().0;
+            log_guard_numeric(&a, "log")?;
+            let mut b = b.unwrap_numeric().0;
+            log_guard_numeric(&b, "log")?;
+            let mut cx = numeric::cx_datum();
+            cx.ln(&mut a);
+            cx.ln(&mut b);
+            cx.div(&mut b, &a);
+            if a.is_zero() {
+                Err(EvalError::DivisionByZero)
+            } else {
+                cx.set_precision(usize::from(numeric::NUMERIC_DATUM_MAX_PRECISION - 1))
+                    .expect("reducing precision below max always succeeds");
+                let mut integral_check = b.clone();
+                cx.reduce(&mut integral_check);
+                let mut b = if integral_check.exponent() >= 0 {
+                    integral_check
+                } else {
+                    b
+                };
+                numeric::munge_numeric(&mut b).unwrap();
+                Ok(Datum::from(b))
+            }
+        }
     }
     fn output_type(
         &self,
@@ -56,26 +80,5 @@ impl<'a> crate::func::binary::EagerBinaryFunc<'a> for LogBaseNumeric {
 impl std::fmt::Display for LogBaseNumeric {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         f.write_str("log")
-    }
-}
-fn log_base_numeric<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
-    let mut a = a.unwrap_numeric().0;
-    log_guard_numeric(&a, "log")?;
-    let mut b = b.unwrap_numeric().0;
-    log_guard_numeric(&b, "log")?;
-    let mut cx = numeric::cx_datum();
-    cx.ln(&mut a);
-    cx.ln(&mut b);
-    cx.div(&mut b, &a);
-    if a.is_zero() {
-        Err(EvalError::DivisionByZero)
-    } else {
-        cx.set_precision(usize::from(numeric::NUMERIC_DATUM_MAX_PRECISION - 1))
-            .expect("reducing precision below max always succeeds");
-        let mut integral_check = b.clone();
-        cx.reduce(&mut integral_check);
-        let mut b = if integral_check.exponent() >= 0 { integral_check } else { b };
-        numeric::munge_numeric(&mut b).unwrap();
-        Ok(Datum::from(b))
     }
 }

@@ -26,7 +26,32 @@ impl<'a> crate::func::binary::EagerBinaryFunc<'a> for EncodedBytesCharLength {
         b: Self::Input2,
         temp_storage: &'a mz_repr::RowArena,
     ) -> Self::Output {
-        encoded_bytes_char_length(a, b)
+        {
+            let encoding_name = b
+                .unwrap_str()
+                .to_lowercase()
+                .replace('_', "-")
+                .into_boxed_str();
+            let enc = match encoding_from_whatwg_label(&encoding_name) {
+                Some(enc) => enc,
+                None => return Err(EvalError::InvalidEncodingName(encoding_name)),
+            };
+            let decoded_string = match enc.decode(a.unwrap_bytes(), DecoderTrap::Strict)
+            {
+                Ok(s) => s,
+                Err(e) => {
+                    return Err(EvalError::InvalidByteSequence {
+                        byte_sequence: e.into(),
+                        encoding_name,
+                    });
+                }
+            };
+            let count = decoded_string.chars().count();
+            match i32::try_from(count) {
+                Ok(l) => Ok(Datum::from(l)),
+                Err(_) => Err(EvalError::Int32OutOfRange(count.to_string().into())),
+            }
+        }
     }
     fn output_type(
         &self,
@@ -56,29 +81,5 @@ impl<'a> crate::func::binary::EagerBinaryFunc<'a> for EncodedBytesCharLength {
 impl std::fmt::Display for EncodedBytesCharLength {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         f.write_str("length")
-    }
-}
-fn encoded_bytes_char_length<'a>(
-    a: Datum<'a>,
-    b: Datum<'a>,
-) -> Result<Datum<'a>, EvalError> {
-    let encoding_name = b.unwrap_str().to_lowercase().replace('_', "-").into_boxed_str();
-    let enc = match encoding_from_whatwg_label(&encoding_name) {
-        Some(enc) => enc,
-        None => return Err(EvalError::InvalidEncodingName(encoding_name)),
-    };
-    let decoded_string = match enc.decode(a.unwrap_bytes(), DecoderTrap::Strict) {
-        Ok(s) => s,
-        Err(e) => {
-            return Err(EvalError::InvalidByteSequence {
-                byte_sequence: e.into(),
-                encoding_name,
-            });
-        }
-    };
-    let count = decoded_string.chars().count();
-    match i32::try_from(count) {
-        Ok(l) => Ok(Datum::from(l)),
-        Err(_) => Err(EvalError::Int32OutOfRange(count.to_string().into())),
     }
 }

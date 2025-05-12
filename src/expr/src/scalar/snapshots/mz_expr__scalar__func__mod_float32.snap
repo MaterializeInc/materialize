@@ -26,7 +26,14 @@ impl<'a> crate::func::binary::EagerBinaryFunc<'a> for ModFloat32 {
         b: Self::Input2,
         temp_storage: &'a mz_repr::RowArena,
     ) -> Self::Output {
-        mod_float32(a, b)
+        {
+            let b = b.unwrap_float32();
+            if b == 0.0 {
+                Err(EvalError::DivisionByZero)
+            } else {
+                Ok(Datum::from(a.unwrap_float32() % b))
+            }
+        }
     }
     fn output_type(
         &self,
@@ -59,13 +66,5 @@ impl<'a> crate::func::binary::EagerBinaryFunc<'a> for ModFloat32 {
 impl std::fmt::Display for ModFloat32 {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         f.write_str("%")
-    }
-}
-fn mod_float32<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
-    let b = b.unwrap_float32();
-    if b == 0.0 {
-        Err(EvalError::DivisionByZero)
-    } else {
-        Ok(Datum::from(a.unwrap_float32() % b))
     }
 }

@@ -26,7 +26,11 @@ impl<'a> crate::func::binary::EagerBinaryFunc<'a> for RangeOverright {
         b: Self::Input2,
         temp_storage: &'a mz_repr::RowArena,
     ) -> Self::Output {
-        range_overright(a, b)
+        {
+            let l = a.unwrap_range();
+            let r = b.unwrap_range();
+            Datum::from(Range::<Datum<'a>>::overright(&l, &r))
+        }
     }
     fn output_type(
         &self,
@@ -60,9 +64,4 @@ impl std::fmt::Display for RangeOverright {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         f.write_str("&>")
     }
-}
-fn range_overright<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
-    let l = a.unwrap_range();
-    let r = b.unwrap_range();
-    Datum::from(Range::<Datum<'a>>::overright(&l, &r))
 }

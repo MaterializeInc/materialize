@@ -1,0 +1,90 @@
+// Copyright Materialize, Inc. and contributors. All rights reserved.
+//
+// Use of this software is governed by the Business Source License
+// included in the LICENSE file.
+//
+// As of the Change Date specified in that file, in accordance with
+// the Business Source License, use of this software will be governed
+// by the Apache License, Version 2.0.
+
+
+#[derive(
+    proptest_derive::Arbitrary,
+    Ord,
+    PartialOrd,
+    Clone,
+    Debug,
+    Eq,
+    PartialEq,
+    serde::Serialize,
+    serde::Deserialize,
+    Hash,
+    mz_lowertest::MzReflect
+)]
+pub struct LogBaseNumeric;
+impl<'a> crate::func::binary::EagerBinaryFunc<'a> for LogBaseNumeric {
+    type Input1 = Datum<'a>;
+    type Input2 = Datum<'a>;
+    type Output = Result<Datum<'a>, EvalError>;
+    fn call(
+        &self,
+        a: Self::Input1,
+        b: Self::Input2,
+        temp_storage: &'a mz_repr::RowArena,
+    ) -> Self::Output {
+        {
+            let mut a = a.unwrap_numeric().0;
+            log_guard_numeric(&a, "log")?;
+            let mut b = b.unwrap_numeric().0;
+            log_guard_numeric(&b, "log")?;
+            let mut cx = numeric::cx_datum();
+            cx.ln(&mut a);
+            cx.ln(&mut b);
+            cx.div(&mut b, &a);
+            if a.is_zero() {
+                Err(EvalError::DivisionByZero)
+            } else {
+                cx.set_precision(usize::from(numeric::NUMERIC_DATUM_MAX_PRECISION - 1))
+                    .expect("reducing precision below max always succeeds");
+                let mut integral_check = b.clone();
+                cx.reduce(&mut integral_check);
+                let mut b = if integral_check.exponent() >= 0 {
+                    integral_check
+                } else {
+                    b
+                };
+                numeric::munge_numeric(&mut b).unwrap();
+                Ok(Datum::from(b))
+            }
+        }
+    }
+    fn output_type(
+        &self,
+        input_type_a: mz_repr::ColumnType,
+        input_type_b: mz_repr::ColumnType,
+    ) -> mz_repr::ColumnType {
+        use mz_repr::AsColumnType;
+        let output = <Numeric>::as_column_type();
+        let propagates_nulls = crate::func::binary::EagerBinaryFunc::propagates_nulls(
+            self,
+        );
+        let nullable = output.nullable;
+        output
+            .nullable(
+                nullable
+                    || (propagates_nulls
+                        && (input_type_a.nullable || input_type_b.nullable)),
+            )
+    }
+    fn introduces_nulls(&self) -> bool {
+        <Numeric as ::mz_repr::DatumType<'_, ()>>::nullable()
+    }
+    fn propagates_nulls(&self) -> bool {
+        true
+    }
+}
+impl std::fmt::Display for LogBaseNumeric {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        f.write_str("log")
+    }
+}

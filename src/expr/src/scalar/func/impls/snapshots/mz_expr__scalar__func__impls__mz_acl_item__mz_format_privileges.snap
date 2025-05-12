@@ -19,36 +19,7 @@ pub struct MzFormatPrivileges;
 impl<'a> crate::func::EagerUnaryFunc<'a> for MzFormatPrivileges {
     type Input = String;
     type Output = Result<ArrayRustType<String>, EvalError>;
-    fn call(&self, a: Self::Input) -> Self::Output {
-        mz_format_privileges(a)
-    }
-    fn output_type(&self, input_type: mz_repr::ColumnType) -> mz_repr::ColumnType {
-        use mz_repr::AsColumnType;
-        let output = Self::Output::as_column_type();
-        let propagates_nulls = crate::func::EagerUnaryFunc::propagates_nulls(self);
-        let nullable = output.nullable;
-        output.nullable(nullable || (propagates_nulls && input_type.nullable))
-    }
-    fn inverse(&self) -> Option<crate::UnaryFunc> {
-        None
-    }
-    fn is_monotone(&self) -> bool {
-        false
-    }
-    fn preserves_uniqueness(&self) -> bool {
-        false
-    }
-}
-impl std::fmt::Display for MzFormatPrivileges {
-    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-        f.write_str("mz_format_privileges")
-    }
-}
-#[allow(clippy::extra_unused_lifetimes)]
-pub fn mz_format_privileges<'a>(
-    privileges: String,
-) -> Result<ArrayRustType<String>, EvalError> {
-    {
+    fn call(&self, privileges: Self::Input) -> Self::Output {
         AclMode::from_str(&privileges)
             .map(|acl_mode| {
                 ArrayRustType(
@@ -62,5 +33,17 @@ pub fn mz_format_privileges<'a>(
             .map_err(|e: anyhow::Error| EvalError::InvalidPrivileges(
                 e.to_string().into(),
             ))
+    }
+    fn output_type(&self, input_type: mz_repr::ColumnType) -> mz_repr::ColumnType {
+        use mz_repr::AsColumnType;
+        let output = Self::Output::as_column_type();
+        let propagates_nulls = crate::func::EagerUnaryFunc::propagates_nulls(self);
+        let nullable = output.nullable;
+        output.nullable(nullable || (propagates_nulls && input_type.nullable))
+    }
+}
+impl std::fmt::Display for MzFormatPrivileges {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        f.write_str("mz_format_privileges")
     }
 }

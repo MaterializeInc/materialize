@@ -20,7 +20,7 @@ impl<'a> crate::func::EagerUnaryFunc<'a> for CastInt64ToBool {
     type Input = i64;
     type Output = bool;
     fn call(&self, a: Self::Input) -> Self::Output {
-        cast_int64_to_bool(a)
+        a != 0
     }
     fn output_type(&self, input_type: mz_repr::ColumnType) -> mz_repr::ColumnType {
         use mz_repr::AsColumnType;
@@ -32,19 +32,9 @@ impl<'a> crate::func::EagerUnaryFunc<'a> for CastInt64ToBool {
     fn inverse(&self) -> Option<crate::UnaryFunc> {
         to_unary!(super::CastBoolToInt64)
     }
-    fn is_monotone(&self) -> bool {
-        false
-    }
-    fn preserves_uniqueness(&self) -> bool {
-        false
-    }
 }
 impl std::fmt::Display for CastInt64ToBool {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         f.write_str("bigint_to_boolean")
     }
-}
-#[allow(clippy::extra_unused_lifetimes)]
-pub fn cast_int64_to_bool<'a>(a: i64) -> bool {
-    { a != 0 }
 }

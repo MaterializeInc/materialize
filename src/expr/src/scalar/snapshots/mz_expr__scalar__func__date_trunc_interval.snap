@@ -26,7 +26,17 @@ impl<'a> crate::func::binary::EagerBinaryFunc<'a> for DateTruncInterval {
         b: Self::Input2,
         temp_storage: &'a mz_repr::RowArena,
     ) -> Self::Output {
-        date_trunc_interval(a, b)
+        {
+            let mut interval = b.unwrap_interval();
+            let units = a.unwrap_str();
+            let dtf = units.parse().map_err(|_| EvalError::UnknownUnits(units.into()))?;
+            interval
+                .truncate_low_fields(dtf, Some(0), RoundBehavior::Truncate)
+                .expect(
+                    "truncate_low_fields should not fail with max_precision 0 and RoundBehavior::Truncate",
+                );
+            Ok(interval.into())
+        }
     }
     fn output_type(
         &self,
@@ -57,15 +67,4 @@ impl std::fmt::Display for DateTruncInterval {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         f.write_str("date_trunciv")
     }
-}
-fn date_trunc_interval<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
-    let mut interval = b.unwrap_interval();
-    let units = a.unwrap_str();
-    let dtf = units.parse().map_err(|_| EvalError::UnknownUnits(units.into()))?;
-    interval
-        .truncate_low_fields(dtf, Some(0), RoundBehavior::Truncate)
-        .expect(
-            "truncate_low_fields should not fail with max_precision 0 and RoundBehavior::Truncate",
-        );
-    Ok(interval.into())
 }

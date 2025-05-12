@@ -20,7 +20,7 @@ impl<'a> crate::func::EagerUnaryFunc<'a> for CastTimestampTzToDate {
     type Input = CheckedTimestamp<DateTime<Utc>>;
     type Output = Result<Date, EvalError>;
     fn call(&self, a: Self::Input) -> Self::Output {
-        cast_timestamp_tz_to_date(a)
+        Ok(a.naive_utc().date().try_into()?)
     }
     fn output_type(&self, input_type: mz_repr::ColumnType) -> mz_repr::ColumnType {
         use mz_repr::AsColumnType;
@@ -35,18 +35,9 @@ impl<'a> crate::func::EagerUnaryFunc<'a> for CastTimestampTzToDate {
     fn is_monotone(&self) -> bool {
         true
     }
-    fn preserves_uniqueness(&self) -> bool {
-        false
-    }
 }
 impl std::fmt::Display for CastTimestampTzToDate {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         f.write_str("timestamp_with_time_zone_to_date")
     }
-}
-#[allow(clippy::extra_unused_lifetimes)]
-pub fn cast_timestamp_tz_to_date<'a>(
-    a: CheckedTimestamp<DateTime<Utc>>,
-) -> Result<Date, EvalError> {
-    { Ok(a.naive_utc().date().try_into()?) }
 }
