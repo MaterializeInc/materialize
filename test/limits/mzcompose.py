@@ -661,7 +661,7 @@ class TablesCommaJoinNoCondition(Generator):
 class TablesCommaJoinWithJoinCondition(Generator):
     COUNT = 20  # Otherwise is very slow
 
-    MAX_COUNT = 320  # Too long-running with 640 conditions
+    MAX_COUNT = 200  # Too long-running with 400 conditions
 
     @classmethod
     def body(cls) -> None:
@@ -941,7 +941,7 @@ class DerivedTables(Generator):
         Generator.COUNT, 10
     )  # https://github.com/MaterializeInc/database-issues/issues/2630
 
-    MAX_COUNT = 320  # Too long-running with count=480
+    MAX_COUNT = 160  # Too long-running with count=320
 
     @classmethod
     def body(cls) -> None:
@@ -1587,7 +1587,7 @@ class PostgresTables(Generator):
 
 
 class PostgresTablesOldSyntax(Generator):
-    MAX_COUNT = 2000  # Too long-running with count=3000
+    MAX_COUNT = 1500  # Too long-running with count=1800
 
     @classmethod
     def body(cls) -> None:
