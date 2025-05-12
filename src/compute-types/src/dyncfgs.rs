@@ -229,6 +229,13 @@ pub const COMPUTE_LOGICAL_BACKPRESSURE_INFLIGHT_SLACK: Config<Duration> = Config
     "Round observed timestamps to slack.",
 );
 
+/// Enable per-column dictionary compression for row containers in arrangements.
+pub const ENABLE_ARRANGEMENT_DICTIONARY_COMPRESSION: Config<bool> = Config::new(
+    "enable_arrangement_dictionary_compression",
+    true,
+    "Enable arrangement dictionary compression.",
+);
+
 /// Adds the full set of all compute `Config`s.
 pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
     configs
@@ -259,4 +266,5 @@ pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
         .add(&ENABLE_COMPUTE_LOGICAL_BACKPRESSURE)
         .add(&COMPUTE_LOGICAL_BACKPRESSURE_MAX_RETAINED_CAPABILITIES)
         .add(&COMPUTE_LOGICAL_BACKPRESSURE_INFLIGHT_SLACK)
+        .add(&ENABLE_ARRANGEMENT_DICTIONARY_COMPRESSION)
 }
