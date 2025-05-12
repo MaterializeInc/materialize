@@ -377,9 +377,9 @@ pub mod v1alpha1 {
                 // been by a developer on a branch forked from a recent copy
                 // of main, and so this works out reasonably well in practice.
                 None => {
-                    mz_ore::soft_panic_or_log!(
-                        "failed to parse image ref: {}",
-                        self.spec.environmentd_image_ref
+                    tracing::warn!(
+                        image_ref = %self.spec.environmentd_image_ref,
+                        "failed to parse image ref",
                     );
                     true
                 }
