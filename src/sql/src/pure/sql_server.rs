@@ -10,12 +10,13 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
+use mz_ore::collections::CollectionExt;
 use mz_proto::RustType;
 use mz_sql_parser::ast::display::AstDisplay;
 use mz_sql_parser::ast::{
     ColumnDef, CreateSubsourceOption, CreateSubsourceOptionName, CreateSubsourceStatement,
-    ExternalReferences, Ident, SqlServerConfigOptionName, UnresolvedItemName, Value,
-    WithOptionValue,
+    ExternalReferences, Ident, SqlServerConfigOptionName, TableConstraint, UnresolvedItemName,
+    Value, WithOptionValue,
 };
 use mz_sql_server_util::desc::{SqlServerQualifiedTableName, SqlServerTableDesc};
 use mz_storage_types::sources::{SourceExportStatementDetails, SourceReferenceResolver};
@@ -259,6 +260,7 @@ pub fn generate_create_subsource_statements(
     for (subsource_name, purified_export) in requested_subsources {
         let SqlServerExportStatementValues {
             columns,
+            constraints,
             text_columns,
             excl_columns,
             details,
@@ -296,8 +298,7 @@ pub fn generate_create_subsource_statements(
             name: subsource_name,
             columns,
             of_source: Some(source_name.clone()),
-            // TODO(sql_server2): Support contraints from the upstream SQL Server instasnce.
-            constraints: vec![],
+            constraints,
             if_not_exists: false,
             with_options,
         };
@@ -309,6 +310,7 @@ pub fn generate_create_subsource_statements(
 
 struct SqlServerExportStatementValues {
     pub columns: Vec<ColumnDef<Aug>>,
+    pub constraints: Vec<TableConstraint<Aug>>,
     pub text_columns: Option<Vec<WithOptionValue<Aug>>>,
     pub excl_columns: Option<Vec<WithOptionValue<Aug>>>,
     pub details: SourceExportStatementDetails,
@@ -330,24 +332,33 @@ fn generate_source_export_statement_values(
     };
 
     // Filter out columns that the user wanted to exclude.
-    let included_columns = table
-        .columns
-        .iter()
-        .filter_map(|c| c.column_type.as_ref().map(|ct| (c.name.as_ref(), ct)));
-    let mut column_defs = vec![];
+    let included_columns = table.columns.iter().filter_map(|c| {
+        c.column_type
+            .as_ref()
+            .map(|ct| (c.name.as_ref(), ct, c.primary_key_constraint.clone()))
+    });
 
-    for (col_name, col_type) in included_columns {
+    let mut primary_keys: BTreeMap<Arc<str>, Vec<Ident>> = BTreeMap::new();
+    let mut column_defs = vec![];
+    let mut constraints = vec![];
+
+    for (col_name, col_type, col_primary_key_constraint) in included_columns {
         let name = Ident::new(col_name)?;
         let ty = mz_pgrepr::Type::from(&col_type.scalar_type);
         let data_type = scx.resolve_type(ty)?;
         let mut col_options = vec![];
 
+        if let Some(constraint) = col_primary_key_constraint {
+            let columns = primary_keys.entry(constraint).or_default();
+            columns.push(name.clone());
+        }
         if !col_type.nullable {
             col_options.push(mz_sql_parser::ast::ColumnOptionDef {
                 name: None,
                 option: mz_sql_parser::ast::ColumnOption::NotNull,
             });
         }
+
         column_defs.push(ColumnDef {
             name,
             data_type,
@@ -356,7 +367,26 @@ fn generate_source_export_statement_values(
         });
     }
 
-    // TODO(sql_server2): Support table contraints like primary key or unique.
+    match primary_keys.len() {
+        // No primary key.
+        0 => (),
+        1 => {
+            let (constraint_name, columns) = primary_keys.into_element();
+            constraints.push(mz_sql_parser::ast::TableConstraint::Unique {
+                name: Some(Ident::new_lossy(&*constraint_name)),
+                columns,
+                is_primary: true,
+                nulls_not_distinct: false,
+            });
+        }
+        // Multiple primary keys..?
+        2.. => {
+            let constraint_names = primary_keys.into_keys().collect();
+            return Err(PlanError::SqlServerSourcePurificationError(
+                SqlServerSourcePurificationError::MultiplePrimaryKeys { constraint_names },
+            ));
+        }
+    }
 
     let details = SourceExportStatementDetails::SqlServer {
         table,
@@ -379,6 +409,7 @@ fn generate_source_export_statement_values(
 
     let values = SqlServerExportStatementValues {
         columns: column_defs,
+        constraints,
         text_columns,
         excl_columns,
         details,
