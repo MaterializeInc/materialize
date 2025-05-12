@@ -1,6 +1,6 @@
 ---
 source: src/expr/src/scalar/func.rs
-expression: "#[sqlfunc(output_type = \"String\", propagates_nulls = true)]\nfn encode<'a>(\n    bytes: Datum<'a>,\n    format: Datum<'a>,\n    temp_storage: &'a RowArena,\n) -> Result<Datum<'a>, EvalError> {\n    let format = encoding::lookup_format(format.unwrap_str())?;\n    let out = format.encode(bytes.unwrap_bytes());\n    Ok(Datum::from(temp_storage.push_string(out)))\n}\n"
+expression: "#[sqlfunc(output_type = \"Vec<u8>\", propagates_nulls = true)]\nfn decode<'a>(\n    string: Datum<'a>,\n    format: Datum<'a>,\n    temp_storage: &'a RowArena,\n) -> Result<Datum<'a>, EvalError> {\n    let format = encoding::lookup_format(format.unwrap_str())?;\n    let out = format.decode(string.unwrap_str())?;\n    Ok(Datum::from(temp_storage.push_bytes(out)))\n}\n"
 ---
 #[derive(
     proptest_derive::Arbitrary,
@@ -15,8 +15,8 @@ expression: "#[sqlfunc(output_type = \"String\", propagates_nulls = true)]\nfn e
     Hash,
     mz_lowertest::MzReflect
 )]
-pub struct Encode;
-impl<'a> crate::func::binary::EagerBinaryFunc<'a> for Encode {
+pub struct Decode;
+impl<'a> crate::func::binary::EagerBinaryFunc<'a> for Decode {
     type Input1 = Datum<'a>;
     type Input2 = Datum<'a>;
     type Output = Result<Datum<'a>, EvalError>;
@@ -26,7 +26,7 @@ impl<'a> crate::func::binary::EagerBinaryFunc<'a> for Encode {
         b: Self::Input2,
         temp_storage: &'a mz_repr::RowArena,
     ) -> Self::Output {
-        encode(a, b, temp_storage)
+        decode(a, b, temp_storage)
     }
     fn output_type(
         &self,
@@ -34,7 +34,7 @@ impl<'a> crate::func::binary::EagerBinaryFunc<'a> for Encode {
         input_type_b: mz_repr::ColumnType,
     ) -> mz_repr::ColumnType {
         use mz_repr::AsColumnType;
-        let output = <String>::as_column_type();
+        let output = <Vec<u8>>::as_column_type();
         let propagates_nulls = crate::func::binary::EagerBinaryFunc::propagates_nulls(
             self,
         );
@@ -47,23 +47,23 @@ impl<'a> crate::func::binary::EagerBinaryFunc<'a> for Encode {
             )
     }
     fn introduces_nulls(&self) -> bool {
-        <String as ::mz_repr::DatumType<'_, ()>>::nullable()
+        <Vec<u8> as ::mz_repr::DatumType<'_, ()>>::nullable()
     }
     fn propagates_nulls(&self) -> bool {
         true
     }
 }
-impl std::fmt::Display for Encode {
+impl std::fmt::Display for Decode {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-        f.write_str(stringify!(encode))
+        f.write_str(stringify!(decode))
     }
 }
-fn encode<'a>(
-    bytes: Datum<'a>,
+fn decode<'a>(
+    string: Datum<'a>,
     format: Datum<'a>,
     temp_storage: &'a RowArena,
 ) -> Result<Datum<'a>, EvalError> {
     let format = encoding::lookup_format(format.unwrap_str())?;
-    let out = format.encode(bytes.unwrap_bytes());
-    Ok(Datum::from(temp_storage.push_string(out)))
+    let out = format.decode(string.unwrap_str())?;
+    Ok(Datum::from(temp_storage.push_bytes(out)))
 }

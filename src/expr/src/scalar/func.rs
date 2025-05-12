@@ -592,7 +592,7 @@ fn convert_from<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> 
     }
 }
 
-#[sqlfunc(output_type = "String", sqlname = "encode", propagates_nulls = true)]
+#[sqlfunc(output_type = "String", propagates_nulls = true)]
 fn encode<'a>(
     bytes: Datum<'a>,
     format: Datum<'a>,
@@ -603,6 +603,7 @@ fn encode<'a>(
     Ok(Datum::from(temp_storage.push_string(out)))
 }
 
+#[sqlfunc(output_type = "Vec<u8>", propagates_nulls = true)]
 fn decode<'a>(
     string: Datum<'a>,
     format: Datum<'a>,
@@ -3027,6 +3028,18 @@ fn timezone_interval_timestamptz(a: Datum<'_>, b: Datum<'_>) -> Result<Datum<'st
     }
 }
 
+#[sqlfunc(
+    output_type_expr = r#"ScalarType::Record {
+                fields: [
+                    ("abbrev".into(), ScalarType::String.nullable(false)),
+                    ("base_utc_offset".into(), ScalarType::Interval.nullable(false)),
+                    ("dst_offset".into(), ScalarType::Interval.nullable(false)),
+                ].into(),
+                custom_id: None,
+            }.nullable(true)"#,
+    propagates_nulls = true,
+    introduces_nulls = false
+)]
 fn timezone_offset<'a>(
     a: Datum<'a>,
     b: Datum<'a>,
@@ -3049,7 +3062,12 @@ fn timezone_offset<'a>(
 
 /// Determines if an mz_aclitem contains one of the specified privileges. This will return true if
 /// any of the listed privileges are contained in the mz_aclitem.
-fn mz_acl_item_contains_privilege(a: Datum<'_>, b: Datum<'_>) -> Result<Datum<'static>, EvalError> {
+#[sqlfunc(
+    sqlname = "mz_aclitem_contains_privilege",
+    output_type = "bool",
+    propagates_nulls = true
+)]
+fn mz_acl_item_contains_privilege<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
     let mz_acl_item = a.unwrap_mz_acl_item();
     let privileges = b.unwrap_str();
     let acl_mode = AclMode::parse_multiple_privileges(privileges)
@@ -3058,6 +3076,10 @@ fn mz_acl_item_contains_privilege(a: Datum<'_>, b: Datum<'_>) -> Result<Datum<'s
     Ok(contains.into())
 }
 
+#[sqlfunc(
+    output_type = "mz_repr::ArrayRustType<String>",
+    propagates_nulls = true
+)]
 // transliterated from postgres/src/backend/utils/adt/misc.c
 fn parse_ident<'a>(
     a: Datum<'a>,
@@ -3267,6 +3289,7 @@ fn regexp_split_to_array_re<'a>(
     Ok(temp_storage.push_unary_row(row))
 }
 
+#[sqlfunc(output_type = "String", propagates_nulls = true)]
 fn pretty_sql<'a>(
     sql: Datum<'a>,
     width: Datum<'a>,
@@ -3288,6 +3311,7 @@ fn pretty_sql<'a>(
     Ok(Datum::String(pretty))
 }
 
+#[sqlfunc(output_type = "bool", propagates_nulls = true)]
 fn starts_with<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
     let a = a.unwrap_str();
     let b = b.unwrap_str();
@@ -4470,7 +4494,12 @@ impl BinaryFunc {
             | BinaryFunc::ListRemove
             | BinaryFunc::ToCharTimestamp
             | BinaryFunc::ToCharTimestampTz
-            | BinaryFunc::ListContainsList { rev: _ } => false,
+            | BinaryFunc::ListContainsList { rev: _ }
+            | BinaryFunc::Trim
+            | BinaryFunc::TrimLeading
+            | BinaryFunc::TrimTrailing
+            | BinaryFunc::TextConcat
+            | BinaryFunc::StartsWith => false,
 
             _ => true,
         }
@@ -7439,6 +7468,13 @@ fn error_if_null<'a>(
     }
 }
 
+#[sqlfunc(
+    sqlname = "||",
+    is_infix_op = true,
+    output_type = "String",
+    propagates_nulls = true,
+    is_monotone = (false, true),
+)]
 fn text_concat_binary<'a>(a: Datum<'a>, b: Datum<'a>, temp_storage: &'a RowArena) -> Datum<'a> {
     let mut buf = String::new();
     buf.push_str(a.unwrap_str());
@@ -7597,6 +7633,11 @@ fn split_part<'a>(datums: &[Datum<'a>]) -> Result<Datum<'a>, EvalError> {
     ))
 }
 
+#[sqlfunc(
+    output_type = "String",
+    propagates_nulls = true,
+    introduces_nulls = false
+)]
 fn like_escape<'a>(
     a: Datum<'a>,
     b: Datum<'a>,
@@ -8307,6 +8348,7 @@ fn make_timestamp<'a>(datums: &[Datum<'a>]) -> Result<Datum<'a>, EvalError> {
     Ok(timestamp.try_into()?)
 }
 
+#[sqlfunc(output_type = "i32", propagates_nulls = true)]
 fn position<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
     let substring: &'a str = a.unwrap_str();
     let string = b.unwrap_str();
@@ -8326,6 +8368,7 @@ fn position<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
     }
 }
 
+#[sqlfunc(output_type = "String", propagates_nulls = true)]
 fn left<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
     let string: &'a str = a.unwrap_str();
     let n = i64::from(b.unwrap_int32());
@@ -8352,6 +8395,7 @@ fn left<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
     Ok(Datum::String(&string[..end_in_bytes]))
 }
 
+#[sqlfunc(output_type = "String", propagates_nulls = true)]
 fn right<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
     let string: &'a str = a.unwrap_str();
     let n = b.unwrap_int32();
@@ -8380,12 +8424,14 @@ fn right<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
     Ok(Datum::String(&string[start_in_bytes..]))
 }
 
+#[sqlfunc(sqlname = "btrim", output_type = "String", propagates_nulls = true)]
 fn trim<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
     let trim_chars = b.unwrap_str();
 
     Datum::from(a.unwrap_str().trim_matches(|c| trim_chars.contains(c)))
 }
 
+#[sqlfunc(sqlname = "ltrim", output_type = "String", propagates_nulls = true)]
 fn trim_leading<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
     let trim_chars = b.unwrap_str();
 
@@ -8395,6 +8441,7 @@ fn trim_leading<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
     )
 }
 
+#[sqlfunc(sqlname = "rtrim", output_type = "String", propagates_nulls = true)]
 fn trim_trailing<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
     let trim_chars = b.unwrap_str();
 
