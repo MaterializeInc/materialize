@@ -712,7 +712,9 @@ pub fn plan_explain_timestamp(
             scope: _,
         } = query::plan_root_query(scx, explain.select.query, QueryLifetime::OneShot)?;
         if raw_plan.contains_parameters()? {
-            sql_bail!("EXPLAIN TIMESTAMP cannot have parameters")
+            return Err(PlanError::ParameterNotAllowed(
+                "EXPLAIN TIMESTAMP".to_string(),
+            ));
         }
 
         raw_plan

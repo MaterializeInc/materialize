@@ -2516,7 +2516,7 @@ pub fn plan_view(
         expr.arity()
     ));
     if expr.contains_parameters()? {
-        sql_bail!("views cannot have parameters")
+        return Err(PlanError::ParameterNotAllowed("views".to_string()));
     }
 
     let dependencies = expr
@@ -2694,7 +2694,9 @@ pub fn plan_create_materialized_view(
         expr.arity()
     ));
     if expr.contains_parameters()? {
-        sql_bail!("materialized views cannot have parameters")
+        return Err(PlanError::ParameterNotAllowed(
+            "materialized views".to_string(),
+        ));
     }
 
     plan_utils::maybe_rename_columns(
@@ -3072,7 +3074,11 @@ pub fn plan_create_continual_task(
             expr.arity()
         ));
         if expr.contains_parameters()? {
-            sql_bail!("continual tasks cannot have parameters")
+            if expr.contains_parameters()? {
+                return Err(PlanError::ParameterNotAllowed(
+                    "continual tasks".to_string(),
+                ));
+            }
         }
         let expr = match desc.as_mut() {
             None => {

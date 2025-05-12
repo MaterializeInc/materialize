@@ -100,6 +100,7 @@ pub enum PlanError {
         context: String,
     },
     UnknownParameter(usize),
+    ParameterNotAllowed(String),
     RecursionLimit(RecursionLimitError),
     StrconvParse(strconv::ParseError),
     Catalog(CatalogError),
@@ -575,6 +576,7 @@ impl fmt::Display for PlanError {
                 write!(f, "{} does not allow subqueries", context)
             }
             Self::UnknownParameter(n) => write!(f, "there is no parameter ${}", n),
+            Self::ParameterNotAllowed(object_type) => write!(f, "{} cannot have parameters", object_type),
             Self::RecursionLimit(e) => write!(f, "{}", e),
             Self::StrconvParse(e) => write!(f, "{}", e),
             Self::Catalog(e) => write!(f, "{}", e),
