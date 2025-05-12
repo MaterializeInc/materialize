@@ -24,7 +24,6 @@ use differential_dataflow::consolidation::ConsolidatingContainerBuilder;
 use differential_dataflow::containers::{Columnation, TimelyStack};
 use differential_dataflow::difference::{Multiply, Semigroup};
 use differential_dataflow::lattice::Lattice;
-use differential_dataflow::logging::DifferentialEventBuilder;
 use differential_dataflow::trace::{Batcher, Builder, Description};
 use differential_dataflow::{AsCollection, Collection, Hashable};
 use timely::container::{ContainerBuilder, PushInto};
@@ -816,13 +815,10 @@ where
 {
     stream.unary_frontier(pact, name, |_cap, info| {
         // Acquire a logger for arrange events.
-        let logger = {
-            let scope = stream.scope();
-            let register = scope.log_register();
-            register
-                .get::<DifferentialEventBuilder>("differential/arrange")
-                .map(Into::into)
-        };
+        let logger = stream
+            .scope()
+            .logger_for("differential/arrange")
+            .map(Into::into);
 
         let mut batcher = Ba::new(logger, info.global_id);
         // Capabilities for the lower envelope of updates in `batcher`.

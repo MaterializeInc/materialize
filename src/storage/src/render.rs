@@ -213,7 +213,7 @@ use timely::communication::Allocate;
 use timely::dataflow::Scope;
 use timely::dataflow::operators::{Concatenate, ConnectLoop, Feedback, Leave, Map};
 use timely::progress::Antichain;
-use timely::worker::Worker as TimelyWorker;
+use timely::worker::{AsWorker, Worker as TimelyWorker};
 use tokio::sync::Semaphore;
 
 use crate::healthcheck::{HealthStatusMessage, HealthStatusUpdate, StatusNamespace};
@@ -238,7 +238,7 @@ pub fn build_ingestion_dataflow<A: Allocate>(
     source_resume_uppers: BTreeMap<GlobalId, Vec<Row>>,
 ) {
     let worker_id = timely_worker.index();
-    let worker_logging = timely_worker.log_register().get("timely").map(Into::into);
+    let worker_logging = timely_worker.logger_for("timely").map(Into::into);
     let debug_name = primary_source_id.to_string();
     let name = format!("Source dataflow: {debug_name}");
     timely_worker.dataflow_core(&name, worker_logging, Box::new(()), |_, root_scope| {
@@ -436,7 +436,7 @@ pub fn build_export_dataflow<A: Allocate>(
     id: GlobalId,
     description: StorageSinkDesc<CollectionMetadata, mz_repr::Timestamp>,
 ) {
-    let worker_logging = timely_worker.log_register().get("timely").map(Into::into);
+    let worker_logging = timely_worker.logger_for("timely").map(Into::into);
     let debug_name = id.to_string();
     let name = format!("Source dataflow: {debug_name}");
     timely_worker.dataflow_core(&name, worker_logging, Box::new(()), |_, root_scope| {

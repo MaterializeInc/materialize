@@ -149,7 +149,7 @@ use timely::order::Product;
 use timely::progress::timestamp::Refines;
 use timely::progress::{Antichain, Timestamp};
 use timely::scheduling::ActivateOnDrop;
-use timely::worker::Worker as TimelyWorker;
+use timely::worker::{AsWorker, Worker as TimelyWorker};
 
 use crate::arrangement::manager::TraceBundle;
 use crate::compute_state::ComputeState;
@@ -209,7 +209,7 @@ pub fn build_compute_dataflow<A: Allocate>(
         .map(|(sink_id, sink)| (*sink_id, dataflow.depends_on(sink.from), sink.clone()))
         .collect::<Vec<_>>();
 
-    let worker_logging = timely_worker.log_register().get("timely").map(Into::into);
+    let worker_logging = timely_worker.logger_for("timely").map(Into::into);
     let apply_demands = COMPUTE_APPLY_COLUMN_DEMANDS.get(&compute_state.worker_config);
 
     // If you change the format here to something other than "Dataflow: {name}",
