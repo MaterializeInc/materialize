@@ -7,7 +7,39 @@ menu:
     weight: 900
 ---
 
+## Default Cluster Sizes
+
 {{% self-managed/materialize-cluster-sizes %}}
+
+## Custom Cluster Sizes
+
+When installing the Materialize Helm chart, you can override the [default
+cluster sizes and resource allocations](/sql/appendix-cluster-sizes/). These
+cluster sizes are used for both internal clusters, such as the `system_cluster`,
+as well as user clusters.
+
+{{< tip >}}
+
+In general, you should not have to override the defaults. At minimum, we
+recommend that you keep the 25-200cc cluster sizes.
+
+{{</ tip >}}
+
+```yaml
+operator:
+  clusters:
+    sizes:
+      <size>:
+        workers: <int>
+        scale: <int>
+        cpu_exclusive: <bool>
+        cpu_limit: <float>         # e.g., 6
+        credits_per_hour: <string> # e.g., "0.0"
+        disk_limit: <string>       # e.g., "93150MiB"
+        memory_limit: <string>     # e.g., "46575MiB"
+```
+
+{{< yaml-table data="best_practices/sizing_recommendation" >}}
 
 {{< note >}}
 
