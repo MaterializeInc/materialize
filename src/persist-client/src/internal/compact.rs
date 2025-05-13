@@ -636,6 +636,7 @@ where
                     Arc::clone(&shard_metrics),
                     Arc::clone(&isolated_runtime),
                     write_schemas.clone(),
+                    None
                 )
                 .await?;
 
@@ -657,7 +658,7 @@ where
                 // Set up active compaction metadata
                 let clock = SYSTEM_TIME.clone();
                 let active_compaction = if applied < total_chunked_runs - 1 {
-                    Some(ActiveCompaction { start_ms: clock() })
+                    Some(ActiveCompaction { start_ms: clock(), batch_so_far: None })
                 } else {
                     None
                 };
@@ -831,6 +832,7 @@ where
         shard_metrics: Arc<ShardMetrics>,
         isolated_runtime: Arc<IsolatedRuntime>,
         write_schemas: Schemas<K, V>,
+        incremental_tx: Option<Sender<HollowBatch<T>>>
     ) -> Result<HollowBatch<T>, anyhow::Error> {
         // TODO: Figure out a more principled way to allocate our memory budget.
         // Currently, we give any excess budget to write parallelism. If we had
@@ -928,6 +930,27 @@ where
             else {
                 break;
             };
+
+            if let Some(tx) = incremental_tx.as_ref() {
+                // This is where we record whatever parts were successfully flushed
+                // to blob. That way we can resume an interrupted compaction later.
+                let partial_batch = batch.batch_with_finished_parts(desc.clone());
+                if let Some(partial_batch) = partial_batch {
+                    match tx.send(partial_batch).await {
+                        Ok(_) => {
+                            // metrics.compaction.incremental_batch_sent.inc();
+                        },
+                        Err(e) => {
+                            error!("Failed to send batch to incremental compaction: {}", e);
+                            // metrics.compaction.incremental_batch_send_fail.inc()
+                        }
+                    };
+                }
+            }
+
+            // part
+            // upper bound kvt
+            // find the last part where the lower bound < recorded upper bound
             batch.flush_part(desc.clone(), updates).await;
         }
         let mut batch = batch.finish(desc.clone()).await?;

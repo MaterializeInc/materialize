@@ -131,6 +131,7 @@ message ProtoIdSpineBatch {
 
 message ProtoCompaction {
   uint64 start_ms = 1;
+  optional ProtoHollowBatch batch_so_far = 2;
 }
 
 message ProtoMerge {

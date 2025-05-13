@@ -1658,6 +1658,7 @@ where
                 req.id,
                 ActiveCompaction {
                     start_ms: heartbeat_timestamp_ms,
+                    batch_so_far: None
                 },
             )
         }
@@ -1682,6 +1683,27 @@ where
         );
 
         Continue(merge_reqs)
+    }
+
+    /// This is a best effort attempt to apply incremental compaction
+    /// to the spine.
+    pub fn apply_compaction_progress(
+        &mut self,
+        batch_so_far: &HollowBatch<T>,
+        new_ts: u64,
+    ) -> ControlFlow<NoOpStateTransition<()>, ()> {
+        if self.is_tombstone() {
+            return Break(NoOpStateTransition(()));
+        }
+
+        let new_active_compaction = ActiveCompaction {
+            start_ms: new_ts,
+            batch_so_far: Some(batch_so_far.clone())
+        };
+
+        self.trace.apply_incremental_compaction(&new_active_compaction);
+
+        Continue(())
     }
 
     pub fn apply_merge_res(

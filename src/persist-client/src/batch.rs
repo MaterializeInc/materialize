@@ -676,6 +676,41 @@ where
         }
     }
 
+    pub fn batch_with_finished_parts(
+        &self,
+        registered_desc: Description<T>,
+    ) -> Option<HollowBatch<T>> {
+        let runs = self.parts.finish_completed_runs();
+
+        if runs.is_empty() { return None; }
+
+        let mut run_parts = vec![];
+        let mut run_splits = vec![];
+        let mut run_meta = vec![];
+        for (order, parts) in runs {
+            if parts.is_empty() {
+                continue;
+            }
+            if run_parts.len() != 0 {
+                run_splits.push(run_parts.len());
+            }
+            run_meta.push(RunMeta {
+                order: Some(order),
+                schema: self.write_schemas.id,
+                // Field has been deprecated but kept around to roundtrip state.
+                deprecated_schema: None,
+            });
+            run_parts.extend(parts);
+        }
+        //TODO(dov): should we fetch the last part and constrain the upper bound
+        // to whatever we have actually flushed?
+        let desc = registered_desc;
+
+        let batch = HollowBatch::new(desc, run_parts, self.num_updates, run_meta, run_splits);
+
+        Some(batch)
+    }
+
     /// Finish writing this batch and return a handle to the written batch.
     ///
     /// This fails if any of the updates in this batch are beyond the given
@@ -843,6 +878,7 @@ impl<T: Timestamp + Codec64> BatchParts<T> {
                             shard_metrics,
                             isolated_runtime,
                             write_schemas,
+                            None
                         )
                         .await
                         .expect("successful compaction");
@@ -940,6 +976,7 @@ impl<T: Timestamp + Codec64> BatchParts<T> {
             WritingRuns::Compacting(_) => RunOrder::Unordered,
         }
     }
+
 
     pub(crate) async fn write<K: Codec, V: Codec, D: Codec64>(
         &mut self,
@@ -1227,6 +1264,23 @@ impl<T: Timestamp + Codec64> BatchParts<T> {
             // Field has been deprecated but kept around to roundtrip state.
             deprecated_schema_id: None,
         })
+    }
+
+    pub(crate) fn finish_completed_runs(&self) -> Vec<(RunOrder, Vec<RunPart<T>>)> {
+        match &self.writing_runs {
+            WritingRuns::Ordered(order, tree) => tree.iter()
+                .take_while(|part| matches!(part, Pending::Finished(_))).map(|part| match part {
+                Pending::Finished(p) => (order.clone(), vec![p.clone()]),
+                _ => (order.clone(), vec![]),
+            }).collect(),
+            WritingRuns::Compacting(tree) => tree.iter()
+                .take_while(|(_, run)| matches!(run, Pending::Finished(_)))
+                .map(|(order, run)| match run {
+                    Pending::Finished(parts) => (order.clone(), parts.clone()),
+                    _ => (order.clone(), vec![]),
+                })
+                .collect()
+        }
     }
 
     #[instrument(level = "debug", name = "batch::finish_upload", fields(shard = %self.shard_id))]
