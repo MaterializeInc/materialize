@@ -1,6 +1,6 @@
 ---
 title: "CREATE TABLE"
-description: "`CREATE TABLE` creates a table that is persisted in durable storage."
+description: "Reference page for `CREATE TABLE`. `CREATE TABLE` creates a table that is persisted in durable storage."
 pagerank: 40
 menu:
   # This should also have a "non-content entry" under Reference, which is
@@ -186,6 +186,52 @@ See also [Materialize SQL data types](/sql/types/).
 
 {{</ tab >}}
 
+{{< tab "Source-populated tables (Kafka/Redpanda source)" >}}
+
+To create a table from a source, where the source maps to an external
+Kafka/Redpanda system:
+
+{{< note >}}
+
+Users cannot write to source-populated tables; i.e., users cannot perform
+[`INSERT`](/sql/insert/)/[`UPDATE`](/sql/update/)/[`DELETE`](/sql/delete/)
+operations on source-populated tables.
+
+{{</  note >}}
+
+```mzsql
+CREATE TABLE <table_name> FROM SOURCE <source_name> [(REFERENCE <ref_object>)]
+[FORMAT <format> | KEY FORMAT <format> VALUE FORMAT <format>]
+   -- <format> can be:
+   -- AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION <conn_name>
+   --     [KEY STRATEGY
+   --       INLINE <schema> | ID <schema_registry_id> | LATEST ]
+   --     [VALUE STRATEGY
+   --       INLINE <schema> | ID <schema_registry_id> | LATEST ]
+  -- | PROTOBUF USING CONFLUENT SCHEMA REGISTRY CONNECTION <conn_name>
+  -- | PROTOBUF MESSAGE <msg_name> USING SCHEMA <encoded_schema>
+  -- | CSV WITH HEADER ( <col_name>[, ...]) [DELIMITED BY <char>]
+  -- | CSV WITH <num> COLUMNS DELIMITED BY <char>
+  -- | JSON | TEXT | BYTES
+]
+[INCLUDE
+    KEY [AS <name>] | PARTITION [AS <name>] | OFFSET [AS <name>]
+  | TIMESTAMP [AS <name>] | HEADERS [AS <name>] | HEADER <key_name> AS <name> [BYTES]
+  [, ...]
+]
+[ENVELOPE
+    NONE  --  Default.  Uses the append-only envelope.
+  | DEBEZIUM
+  | UPSERT [(VALUE DECODING ERRORS = INLINE [AS name])]
+]
+;
+```
+
+{{% yaml-table data="syntax_options/create_table_options_source_populated_kafka"
+%}}
+
+
+{{</ tab >}}
 
 {{</ tabs >}}
 
