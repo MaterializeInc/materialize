@@ -10,11 +10,15 @@ aliases:
   - /installation/install-on-azure/appendix-azure-provider-configuration
 ---
 
+When using the root `main.tf` file from the [Materialize on Azure Terraform
+module](https://github.com/MaterializeInc/terraform-azurerm-materialize), the
+following configurations are required. [^1]
+
 ## Required variables
 
-The following variables are required when using the [Materialize on Azure
-Terraform
-module](https://github.com/MaterializeInc/terraform-azurerm-materialize).
+When using the root `main.tf` file from the [Materialize on Azure Terraform
+module](https://github.com/MaterializeInc/terraform-azurerm-materialize), the
+following variables must be set: [^1]
 
 {{< yaml-table data="self_managed/azure_required_variables" >}}
 
@@ -22,11 +26,34 @@ For a list of all variables, see the
 [README.md](https://github.com/MaterializeInc/terraform-azurerm-materialize?tab=readme-ov-file#inputs)
 or the [`variables.tf` file](https://github.com/MaterializeInc/terraform-azurerm-materialize/blob/main/variables.tf).
 
-## Required providers and data source declaration
+## Resource group
 
-To use [Materialize on Azure Terraform
-module](https://github.com/MaterializeInc/terraform-azurerm-materialize)
-v0.2.0+, you need to declare the following providers:
+When using the root `main.tf` file from the [Materialize on Azure Terraform
+module](https://github.com/MaterializeInc/terraform-azurerm-materialize), an
+Azure Resource Group `azurerm_resource_group` is required.[^1] You can either
+create a new resource group or use an existing resource group:
+
+- **To create a new resource group**, declare the resource group to create in
+  your configuration:
+
+  ```hcl
+  resource "azurerm_resource_group" "materialize" {
+    name     = var.resource_group_name
+    location = var.location                    # Defaults to eastus2
+    tags     = var.tags                        # Optional
+  }
+  ```
+
+- **To use an existing resource group**, set the [`resource_group_name`
+  variable](https://github.com/MaterializeInc/terraform-azurerm-materialize/blob/main/variables.tf)
+  to that group's name.
+
+## Required providers
+
+When using the root `main.tf` file from the [Materialize on Azure Terraform
+module
+v0.2.0+](https://github.com/MaterializeInc/terraform-azurerm-materialize), the
+following provider declarations are required: [^1]
 
 ```hcl
 provider "azurerm" {
@@ -55,3 +82,6 @@ provider "helm" {
   }
 }
 ```
+
+[^1]: If using the `examples/simple/main.tf`, the example configuration handles
+them for you.
