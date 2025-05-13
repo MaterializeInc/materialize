@@ -21,21 +21,39 @@ export GIT_AUTHOR_NAME=Materialize Bot
 export GIT_AUTHOR_EMAIL=infra+bot@materialize.com
 export GIT_COMMITTER_NAME=$GIT_AUTHOR_NAME
 export GIT_COMMITTER_EMAIL=$GIT_AUTHOR_EMAIL
+export GIT_PAGER=cat
 
 : "${CI_HELM_CHART_VERSION:=}"
 : "${CI_MZ_VERSION:=}"
 : "${CI_NO_TERRAFORM_BUMP:=0}"
+: "${CI_DRY_RUN:=0}"
 if [[ -z "$CI_HELM_CHART_VERSION" || -z "$CI_MZ_VERSION" ]]; then
   echo "\$CI_HELM_CHART_VERSION and \$CI_MZ_VERSION have to be set, use https://trigger-ci.dev.materialize.com to trigger this pipeline"
   exit 1
 fi
+
+cat > ~/.netrc <<EOF
+machine github.com
+login materializebot
+password $GITHUB_TOKEN
+EOF
+chmod 600 ~/.netrc
+
+run_if_not_dry() {
+  if ! is_truthy "$CI_DRY_RUN"; then
+    "$@"
+  else
+    echo "[DRY RUN] $*"
+  fi
+}
 
 echo "--- Publishing Helm Chart $CI_HELM_CHART_VERSION with Materialize $CI_MZ_VERSION"
 bin/helm-chart-version-bump --helm-chart-version "$CI_HELM_CHART_VERSION" "$CI_MZ_VERSION"
 git commit -a -m "Bumping helm-chart version to $CI_HELM_CHART_VERSION with Materialize $CI_MZ_VERSION"
 TAG="self-managed-$CI_HELM_CHART_VERSION"
 git tag "$TAG"
-git push "https://materializebot:$GITHUB_TOKEN@github.com/MaterializeInc/materialize.git" "$TAG"
+git diff HEAD~
+run_if_not_dry git push "https://github.com/MaterializeInc/materialize.git" "$TAG"
 
 # Find directories containing Chart.yaml
 CHARTS=""
@@ -52,7 +70,7 @@ fi
 echo "Found valid charts: $CHARTS"
 
 rm -rf gh-pages
-git clone --branch "$GITHUB_PAGES_BRANCH" --depth 1 https://"$GITHUB_TOKEN"@github.com/MaterializeInc/materialize.git gh-pages
+git clone --branch "$GITHUB_PAGES_BRANCH" --depth 1 https://github.com/MaterializeInc/materialize.git gh-pages
 
 mkdir -p $RELEASE_DIR
 CHANGES_MADE=0
@@ -91,7 +109,8 @@ if [ $CHANGES_MADE -eq 1 ]; then
   git config user.email "noreply@materialize.com"
   git config user.name "Buildkite"
   git commit -m "helm-charts: publish updated charts"
-  git push origin $GITHUB_PAGES_BRANCH
+  git diff HEAD~
+  run_if_not_dry git push origin $GITHUB_PAGES_BRANCH
   cd ..
 else
   echo "No new chart versions to publish"
@@ -100,31 +119,35 @@ fi
 
 echo "--- Verifying that Helm Chart has been published"
 i=0
-HELM_CHART_PUBLISHED=false
-while (( i < 30 )); do
-  YAML=$(curl -s "https://materializeinc.github.io/materialize/index.yaml")
-  CURRENT_HELM_CHART_VERSION=$(echo "$YAML" | yq '.entries["materialize-operator"][0].version')
-  CURRENT_MZ_VERSION=$(echo "$YAML" | yq '.entries["materialize-operator"][0].appVersion')
-  if [[ "$CURRENT_HELM_CHART_VERSION" == "$CI_HELM_CHART_VERSION" && "$CURRENT_MZ_VERSION" == "$CI_MZ_VERSION" ]]; then
-    echo "Helm Chart $CURRENT_HELM_CHART_VERSION with Materialize $CURRENT_MZ_VERSION has successfully been published"
-    HELM_CHART_PUBLISHED=true
-    break
+if ! is_truthy "$CI_DRY_RUN"; then
+  HELM_CHART_PUBLISHED=false
+  while (( i < 30 )); do
+    YAML=$(curl -s "https://materializeinc.github.io/materialize/index.yaml")
+    CURRENT_HELM_CHART_VERSION=$(echo "$YAML" | yq '.entries["materialize-operator"][0].version')
+    CURRENT_MZ_VERSION=$(echo "$YAML" | yq '.entries["materialize-operator"][0].appVersion')
+    if [[ "$CURRENT_HELM_CHART_VERSION" == "$CI_HELM_CHART_VERSION" && "$CURRENT_MZ_VERSION" == "$CI_MZ_VERSION" ]]; then
+      echo "Helm Chart $CURRENT_HELM_CHART_VERSION with Materialize $CURRENT_MZ_VERSION has successfully been published"
+      HELM_CHART_PUBLISHED=true
+      break
+    fi
+    echo "Latest version seems to be Helm Chart $CURRENT_HELM_CHART_VERSION with Materialize $CURRENT_MZ_VERSION"
+    sleep 10
+    ((i += 1))
+  done
+
+  if [ "$HELM_CHART_PUBLISHED" = false ]; then
+    echo "Failing because Helm Chart was not successfully published"
+    exit 1
   fi
-  echo "Latest version seems to be Helm Chart $CURRENT_HELM_CHART_VERSION with Materialize $CURRENT_MZ_VERSION"
-  sleep 10
-  ((i += 1))
-done
 
-if [ "$HELM_CHART_PUBLISHED" = false ]; then
-  echo "Failing because Helm Chart was not successfully published"
-  exit 1
-fi
+  HIGHEST_HELM_CHART_VERSION=$(echo "$YAML" | yq '.entries["materialize-operator"][].version' | grep -v beta | sort -V | tail -n 1)
 
-HIGHEST_HELM_CHART_VERSION=$(echo "$YAML" | yq '.entries["materialize-operator"][].version' | grep -v beta | sort -V | tail -n 1)
-
-if [ "$HIGHEST_HELM_CHART_VERSION" != "$CI_HELM_CHART_VERSION" ]; then
-  echo "--- Higher helm-chart version $HIGHEST_HELM_CHART_VERSION > $CI_HELM_CHART_VERSION has already been released, not bumping terraform versions"
-  CI_NO_TERRAFORM_BUMP=1
+  if [ "$HIGHEST_HELM_CHART_VERSION" != "$CI_HELM_CHART_VERSION" ]; then
+    echo "--- Higher helm-chart version $HIGHEST_HELM_CHART_VERSION > $CI_HELM_CHART_VERSION has already been released, not bumping terraform versions"
+    CI_NO_TERRAFORM_BUMP=1
+  fi
+else
+  echo "[DRY RUN] Nothing to verify"
 fi
 
 if is_truthy "$CI_NO_TERRAFORM_BUMP"; then
@@ -132,7 +155,7 @@ if is_truthy "$CI_NO_TERRAFORM_BUMP"; then
 else
   echo "--- Bumping terraform-helm-materialize"
   rm -rf terraform-helm-materialize
-  git clone https://"$GITHUB_TOKEN"@github.com/MaterializeInc/terraform-helm-materialize.git
+  git clone https://github.com/MaterializeInc/terraform-helm-materialize.git
   cd terraform-helm-materialize
   sed -i "s/\".*\"\(.*\) # META: helm-chart version/\"$CI_HELM_CHART_VERSION\"\\1 # META: helm-chart version/" variables.tf
   sed -i "s/\".*\"\(.*\) # META: mz version/\"$CI_MZ_VERSION\"\\1 # META: mz version/" variables.tf
@@ -144,23 +167,26 @@ else
 # Bump the patch version by one (v0.1.12 -> v0.1.13)
   TERRAFORM_HELM_VERSION=$(git for-each-ref --sort=creatordate --format '%(refname:strip=2)' refs/tags | grep '^v' | tail -n1 | awk -F. -v OFS=. '{$NF += 1; print}')
   git tag "$TERRAFORM_HELM_VERSION"
-  git push origin main "$TERRAFORM_HELM_VERSION"
+  git diff HEAD~
+  run_if_not_dry git push origin main "$TERRAFORM_HELM_VERSION"
   cd ..
 
   declare -A TERRAFORM_VERSION
   for repo in terraform-aws-materialize terraform-azurerm-materialize terraform-google-materialize; do
     echo "--- Bumping $repo"
     rm -rf $repo
-    git clone https://"$GITHUB_TOKEN"@github.com/MaterializeInc/$repo.git
+    git clone https://github.com/MaterializeInc/$repo.git
     cd $repo
     sed -i "s|github.com/MaterializeInc/terraform-helm-materialize?ref=v[0-9.]*|github.com/MaterializeInc/terraform-helm-materialize?ref=$TERRAFORM_HELM_VERSION|" main.tf
     terraform-docs markdown table --output-file README.md --output-mode inject .
     # Initialize Terraform to update the lock file
-    terraform init -upgrade
-    # If lock file doesn't exist yet (unlikely but possible)
-    if [ ! -f .terraform.lock.hcl ]; then
-      echo "No lock file found. Creating it with terraform init."
-      terraform init
+    if ! is_truthy "$CI_DRY_RUN"; then
+      terraform init -upgrade
+      # If lock file doesn't exist yet (unlikely but possible)
+      if [ ! -f .terraform.lock.hcl ]; then
+        echo "No lock file found. Creating it with terraform init."
+        terraform init
+      fi
     fi
     git config user.email "noreply@materialize.com"
     git config user.name "Buildkite"
@@ -168,8 +194,9 @@ else
     git commit -m "Bump to terraform-helm-materialize $TERRAFORM_HELM_VERSION"
 # Bump the patch version by one (v0.1.12 -> v0.1.13)
     TERRAFORM_VERSION[$repo]=$(git for-each-ref --sort=creatordate --format '%(refname:strip=2)' refs/tags | grep '^v' | tail -n1 | awk -F. -v OFS=. '{$NF += 1; print}')
-    git tag "$TERRAFORM_AWS_VERSION"
-    git push origin main "$TERRAFORM_AWS_VERSION"
+    git tag "${TERRAFORM_VERSION[$repo]}"
+    git diff HEAD~
+    run_if_not_dry git push origin main "${TERRAFORM_VERSION[$repo]}"
     cd ..
   done
 fi
@@ -179,30 +206,34 @@ ORCHESTRATORD_VERSION=$(yq -r '.operator.image.tag' misc/helm-charts/operator/va
 DOCS_BRANCH=self-managed-docs/$(echo "$CI_HELM_CHART_VERSION" | cut -d. -f1,2)
 git fetch origin "$DOCS_BRANCH"
 git checkout "origin/$DOCS_BRANCH"
+git submodule update --init --recursive
 git config user.email "noreply@materialize.com"
 git config user.name "Buildkite"
 VERSIONS_YAML_PATH=doc/user/data/self_managed/latest_versions.yml
-yq -Y -i ".operator_helm_chart_version = \"$CI_HELM_CHART_VERSION\"" $VERSIONS_YAML_PATH
-yq -Y -i ".environmentd_version = \"$CI_MZ_VERSION\"" $VERSIONS_YAML_PATH
-yq -Y -i ".orchestratord_version = \"$ORCHESTRATORD_VERSION\"" $VERSIONS_YAML_PATH
+yq -i ".operator_helm_chart_version = \"$CI_HELM_CHART_VERSION\"" $VERSIONS_YAML_PATH
+yq -i ".environmentd_version = \"$CI_MZ_VERSION\"" $VERSIONS_YAML_PATH
+yq -i ".orchestratord_version = \"$ORCHESTRATORD_VERSION\"" $VERSIONS_YAML_PATH
 if ! is_truthy "$CI_NO_TERRAFORM_BUMP"; then
-  yq -Y -i ".terraform_helm_version= \"$TERRAFORM_HELM_VERSION\"" $VERSIONS_YAML_PATH
-  yq -Y -i ".terraform_gcp_version= \"${TERRAFORM_VERSION[terraform-google-materialize]}\"" $VERSIONS_YAML_PATH
-  yq -Y -i ".terraform_azure_version= \"${TERRAFORM_VERSION[terraform-azurerm-materialize]}\"" $VERSIONS_YAML_PATH
-  yq -Y -i ".terraform_aws_version= \"${TERRAFORM_VERSION[terraform-aws-materialize]}\"" $VERSIONS_YAML_PATH
+  yq -i ".terraform_helm_version= \"$TERRAFORM_HELM_VERSION\"" $VERSIONS_YAML_PATH
+  yq -i ".terraform_gcp_version= \"${TERRAFORM_VERSION[terraform-google-materialize]}\"" $VERSIONS_YAML_PATH
+  yq -i ".terraform_azure_version= \"${TERRAFORM_VERSION[terraform-azurerm-materialize]}\"" $VERSIONS_YAML_PATH
+  yq -i ".terraform_aws_version= \"${TERRAFORM_VERSION[terraform-aws-materialize]}\"" $VERSIONS_YAML_PATH
 fi
 git add $VERSIONS_YAML_PATH
 git commit -m "docs: Bump to helm-chart $CI_HELM_CHART_VERSION, environmentd $CI_MZ_VERSION, orchestratord $ORCHESTRATORD_VERSION"
-git push "https://materializebot:$GITHUB_TOKEN@github.com/MaterializeInc/materialize.git" "$DOCS_BRANCH"
+git diff HEAD~
+run_if_not_dry git push "https://github.com/MaterializeInc/materialize.git" "$DOCS_BRANCH"
 
 if ! is_truthy "$CI_NO_TERRAFORM_BUMP"; then
   echo "--- Bumping versions in Terraform Nightly tests"
   git fetch origin main
   git checkout origin/main
+  git submodule update --init --recursive
   sed -i "s|\"git::https://github.com/MaterializeInc/terraform-aws-materialize.git?ref=.*\"|\"git::https://github.com/MaterializeInc/terraform-aws-materialize.git?ref=${TERRAFORM_VERSION[terraform-aws-materialize]}\"|" test/terraform/aws-*/main.tf
   sed -i "s|\"git::https://github.com/MaterializeInc/terraform-azurerm-materialize.git?ref=.*\"|\"git::https://github.com/MaterializeInc/terraform-azurerm-materialize.git?ref=${TERRAFORM_VERSION[terraform-azurerm-materialize]}\"|" test/terraform/azure-*/main.tf
   sed -i "s|\"git::https://github.com/MaterializeInc/terraform-google-materialize.git?ref=.*\"|\"git::https://github.com/MaterializeInc/terraform-google-materialize.git?ref=${TERRAFORM_VERSION[terraform-google-materialize]}\"|" test/terraform/gcp-*/main.tf
   git add test/terraform/*/main.tf
   git commit -m "terraform tests: Bump to AWS ${TERRAFORM_VERSION[terraform-aws-materialize]}, GCP ${TERRAFORM_VERSION[terraform-google-materialize]}, Azure ${TERRAFORM_VERSION[terraform-azurerm-materialize]}"
-  git push "https://materializebot:$GITHUB_TOKEN@github.com/MaterializeInc/materialize.git" main
+  git diff HEAD~
+  run_if_not_dry git push "https://github.com/MaterializeInc/materialize.git" main
 fi
