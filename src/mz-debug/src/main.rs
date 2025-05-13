@@ -129,7 +129,7 @@ pub struct Args {
 pub trait ContainerDumper {
     fn dump_container_resources(&self) -> impl std::future::Future<Output = ()>;
 }
-#[derive(Clone)]
+
 struct SelfManagedContext {
     dump_k8s: bool,
     k8s_client: KubernetesClient,
@@ -137,7 +137,7 @@ struct SelfManagedContext {
     k8s_namespaces: Vec<String>,
     k8s_dump_secret_values: bool,
 
-    _mz_port_forward_process: Arc<Option<PortForwardConnection>>,
+    _mz_port_forward_process: Option<PortForwardConnection>,
 }
 #[derive(Clone)]
 struct EmulatorContext {
@@ -145,15 +145,13 @@ struct EmulatorContext {
     docker_container_id: String,
 }
 
-#[derive(Clone)]
 enum DebugModeContext {
     SelfManaged(SelfManagedContext),
     Emulator(EmulatorContext),
 }
 
-#[derive(Clone)]
 pub struct Context {
-    start_time: DateTime<Utc>,
+    base_path: PathBuf,
     debug_mode_context: DebugModeContext,
 
     mz_connection_url: String,
@@ -222,7 +220,7 @@ async fn initialize_context(args: Args, base_path: PathBuf) -> Result<Context, a
                     }
                 };
 
-            let _mz_port_forward_process = if args.auto_port_forward {
+            let mz_port_forward_process = if args.auto_port_forward {
                 let port_forwarder = create_pg_wire_port_forwarder(
                     &k8s_client,
                     &args.k8s_context,
@@ -254,7 +252,7 @@ async fn initialize_context(args: Args, base_path: PathBuf) -> Result<Context, a
                     k8s_context: args.k8s_context.clone(),
                     k8s_namespaces: args.k8s_namespaces.clone(),
                     k8s_dump_secret_values: args.k8s_dump_secret_values,
-                    _mz_port_forward_process: Arc::new(_mz_port_forward_process),
+                    _mz_port_forward_process: mz_port_forward_process,
                 }),
                 mz_connection_url,
             )
@@ -312,7 +310,12 @@ async fn run(context: Context) -> Result<(), anyhow::Error> {
 
     if context.dump_system_catalog {
         // Dump the system catalog.
-        let catalog_dumper = match system_catalog_dumper::SystemCatalogDumper::new(&context).await {
+        let catalog_dumper = match system_catalog_dumper::SystemCatalogDumper::new(
+            &context.mz_connection_url,
+            context.base_path.clone(),
+        )
+        .await
+        {
             Ok(dumper) => Some(dumper),
             Err(e) => {
                 warn!("Failed to dump system catalog: {}", e);

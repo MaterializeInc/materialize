@@ -36,6 +36,9 @@ pub struct KubectlPortForwarder {
 pub struct PortForwardConnection {
     // tokio process that's killed on drop
     pub _port_forward_process: tokio::process::Child,
+    // We need to keep the lines otherwise the process will be killed when new lines
+    // are added to the stdout.
+    pub _lines: tokio::io::Lines<tokio::io::BufReader<tokio::process::ChildStdout>>,
 }
 
 impl KubectlPortForwarder {
@@ -60,18 +63,18 @@ impl KubectlPortForwarder {
 
         let child = tokio::process::Command::new("kubectl")
             .args(args)
-            // Silence stdout
-            .stdout(std::process::Stdio::null())
-            .stderr(std::process::Stdio::piped())
+            // Silence stderr
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::null())
             .kill_on_drop(true)
             .spawn();
 
         if let Ok(mut child) = child {
-            if let Some(stderr) = child.stderr.take() {
-                let stderr_reader = tokio::io::BufReader::new(stderr);
+            if let Some(stdout) = child.stdout.take() {
+                let stdout_reader = tokio::io::BufReader::new(stdout);
+                let mut lines = stdout_reader.lines();
                 // Wait until we know port forwarding is established
                 let timeout = tokio::time::timeout(std::time::Duration::from_secs(5), async {
-                    let mut lines = stderr_reader.lines();
                     while let Ok(Some(line)) = lines.next_line().await {
                         if line.contains("Forwarding from") {
                             break;
@@ -90,6 +93,7 @@ impl KubectlPortForwarder {
                 );
 
                 return Ok(PortForwardConnection {
+                    _lines: lines,
                     _port_forward_process: child,
                 });
             }

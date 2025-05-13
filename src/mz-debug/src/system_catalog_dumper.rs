@@ -474,8 +474,8 @@ impl fmt::Display for ClusterReplica {
     }
 }
 
-pub struct SystemCatalogDumper<'n> {
-    context: &'n Context,
+pub struct SystemCatalogDumper {
+    base_path: PathBuf,
     pg_client: Arc<Mutex<PgClient>>,
     pg_tls: MakeTlsConnector,
     cluster_replicas: Vec<ClusterReplica>,
@@ -682,15 +682,11 @@ pub async fn query_relation(
     Ok::<(), anyhow::Error>(())
 }
 
-impl<'n> SystemCatalogDumper<'n> {
-    pub async fn new(context: &'n Context) -> Result<Self, anyhow::Error> {
-        let (pg_client, pg_conn, pg_tls) =
-            create_postgres_connection(&context.mz_connection_url).await?;
+impl SystemCatalogDumper {
+    pub async fn new(connection_url: &str, base_path: PathBuf) -> Result<Self, anyhow::Error> {
+        let (pg_client, pg_conn, pg_tls) = create_postgres_connection(connection_url).await?;
 
-        info!(
-            "Connected to PostgreSQL server at {}",
-            context.mz_connection_url
-        );
+        info!("Connected to PostgreSQL server at {}", connection_url);
 
         let handle = task::spawn(|| "postgres-connection", pg_conn);
 
@@ -726,7 +722,7 @@ impl<'n> SystemCatalogDumper<'n> {
         };
 
         Ok(Self {
-            context,
+            base_path,
             pg_client: Arc::new(Mutex::new(pg_client)),
             pg_tls,
             cluster_replicas,
@@ -749,7 +745,7 @@ impl<'n> SystemCatalogDumper<'n> {
             cluster_replica.map_or_else(|| "".to_string(), |replica| format!(" in {}", replica))
         );
 
-        let base_path = self.context.base_path.clone();
+        let base_path = self.base_path.clone();
         let pg_client = &self.pg_client;
 
         let relation_name = relation.name.to_string();
