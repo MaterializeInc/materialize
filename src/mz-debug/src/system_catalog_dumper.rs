@@ -40,8 +40,6 @@ use mz_ore::task::{self, JoinHandle};
 use postgres_openssl::{MakeTlsConnector, TlsStream};
 use tracing::{info, warn};
 
-use crate::Context;
-
 #[derive(Debug, Clone)]
 pub enum RelationCategory {
     /// For relations that belong in the `mz_introspection` schema.

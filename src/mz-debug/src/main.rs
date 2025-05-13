@@ -10,7 +10,7 @@
 //! Debug tool for self managed environments.
 use std::path::PathBuf;
 use std::process;
-use std::sync::{Arc, LazyLock};
+use std::sync::LazyLock;
 
 use chrono::Utc;
 use clap::Parser;
@@ -25,6 +25,7 @@ use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::util::SubscriberInitExt;
 
 use crate::docker_dumper::DockerDumper;
+use crate::internal_http_dumper::{dump_emulator_http_resources, dump_self_managed_http_resources};
 use crate::k8s_dumper::K8sDumper;
 use crate::kubectl_port_forwarder::{PortForwardConnection, create_pg_wire_port_forwarder};
 use crate::utils::{
@@ -63,8 +64,6 @@ pub struct SelfManagedDebugModeArgs {
     /// If true, the tool will dump the values of secrets in the Kubernetes cluster.
     #[clap(long, default_value = "false", action = clap::ArgAction::Set)]
     k8s_dump_secret_values: bool,
-    // TODO (debug_tool1): Convert port forwarding variables into a map since we'll be
-    // portforwarding multiple times
     /// If true, the tool will automatically port-forward the external SQL port in the Kubernetes cluster.
     /// If dump_k8s is false however, we will not automatically port-forward.
     #[clap(long, default_value = "true", action = clap::ArgAction::Set)]
@@ -124,6 +123,12 @@ pub struct Args {
     /// If true, the tool will dump the system catalog in Materialize.
     #[clap(long, default_value = "true", action = clap::ArgAction::Set, global = true)]
     dump_system_catalog: bool,
+    /// If true, the tool will dump the heap profiles in Materialize.
+    #[clap(long, default_value = "true", action = clap::ArgAction::Set, global = true)]
+    dump_heap_profiles: bool,
+    /// If true, the tool will dump the prometheus metrics in Materialize.
+    #[clap(long, default_value = "true", action = clap::ArgAction::Set, global = true)]
+    dump_prometheus_metrics: bool,
 }
 
 pub trait ContainerDumper {
@@ -156,6 +161,8 @@ pub struct Context {
 
     mz_connection_url: String,
     dump_system_catalog: bool,
+    dump_heap_profiles: bool,
+    dump_prometheus_metrics: bool,
 }
 
 #[tokio::main]
@@ -214,11 +221,11 @@ async fn initialize_context(args: Args, base_path: PathBuf) -> Result<Context, a
         DebugModeArgs::SelfManaged(args) => {
             let k8s_client = match create_k8s_client(args.k8s_context.clone()).await {
                 Ok(k8s_client) => k8s_client,
-                    Err(e) => {
-                        error!("Failed to create k8s client: {}", e);
-                        return Err(e);
-                    }
-                };
+                Err(e) => {
+                    error!("Failed to create k8s client: {}", e);
+                    return Err(e);
+                }
+            };
 
             let mz_port_forward_process = if args.auto_port_forward {
                 let port_forwarder = create_pg_wire_port_forwarder(
@@ -230,16 +237,16 @@ async fn initialize_context(args: Args, base_path: PathBuf) -> Result<Context, a
                 )
                 .await?;
 
-                    match port_forwarder.spawn_port_forward().await {
+                match port_forwarder.spawn_port_forward().await {
                     Ok(process) => Some(process),
-                        Err(err) => {
-                            warn!("{}", err);
-                            None
-                        }
+                    Err(err) => {
+                        warn!("{}", err);
+                        None
                     }
-                } else {
-                    None
-                };
+                }
+            } else {
+                None
+            };
             let mz_connection_url = kubectl_port_forwarder::create_mz_connection_url(
                 args.port_forward_local_address.clone(),
                 args.port_forward_local_port,
@@ -271,6 +278,8 @@ async fn initialize_context(args: Args, base_path: PathBuf) -> Result<Context, a
         debug_mode_context,
         mz_connection_url,
         dump_system_catalog: args.dump_system_catalog,
+        dump_heap_profiles: args.dump_heap_profiles,
+        dump_prometheus_metrics: args.dump_prometheus_metrics,
     })
 }
 
@@ -303,8 +312,21 @@ async fn run(context: Context) -> Result<(), anyhow::Error> {
         }) => {
             if *dump_docker {
                 let dumper = DockerDumper::new(&context, docker_container_id.clone());
-        dumper.dump_container_resources().await;
-    }
+                dumper.dump_container_resources().await;
+            }
+        }
+    };
+
+    match &context.debug_mode_context {
+        DebugModeContext::SelfManaged(self_managed_context) => {
+            if let Err(e) = dump_self_managed_http_resources(&context, self_managed_context).await {
+                warn!("Failed to dump self-managed http resources: {}", e);
+            }
+        }
+        DebugModeContext::Emulator(_) => {
+            if let Err(e) = dump_emulator_http_resources(&context).await {
+                warn!("Failed to dump emulator http resources: {}", e);
+            }
         }
     };
 

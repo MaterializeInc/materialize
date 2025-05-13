@@ -5562,6 +5562,7 @@ dependencies = [
  "mz-ore",
  "mz-tls-util",
  "postgres-openssl",
+ "reqwest 0.11.24",
  "serde",
  "serde_yaml",
  "tokio",
