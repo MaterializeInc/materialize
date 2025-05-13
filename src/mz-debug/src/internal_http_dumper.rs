@@ -1,3 +1,13 @@
+// Copyright Materialize, Inc. and contributors. All rights reserved.
+//
+// Use of this software is governed by the Business Source License
+// included in the LICENSE file.
+//
+// As of the Change Date specified in that file, in accordance with
+// the Business Source License, use of this software will be governed
+// by the Apache License, Version 2.0.
+
+//! Dumps internal http debug information to files.
 use anyhow::{Context as AnyhowContext, Result};
 use futures::StreamExt;
 use k8s_openapi::api::core::v1::ServicePort;
@@ -95,7 +105,7 @@ impl<'n> InternalHttpDumpClient<'n> {
         let output_path = output_dir.join(format!("{}.memprof.pprof", service_name));
 
         self.dump_request_to_file(
-            &relative_url,
+            relative_url,
             {
                 let mut headers = HeaderMap::new();
                 headers.insert(
@@ -127,7 +137,7 @@ impl<'n> InternalHttpDumpClient<'n> {
 
         let output_path = output_dir.join(format!("{}.metrics.txt", service_name));
         self.dump_request_to_file(
-            &relative_url,
+            relative_url,
             {
                 let mut headers = HeaderMap::new();
                 headers.insert("Accept", HeaderValue::from_static("text/plain"));

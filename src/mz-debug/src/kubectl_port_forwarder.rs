@@ -202,7 +202,7 @@ pub async fn create_pg_wire_port_forwarder(
 ) -> Result<KubectlPortForwarder> {
     let service_info = find_environmentd_service(client, k8s_namespaces)
         .await
-        .with_context(|| format!("Cannot find ports for environmentd service"))?;
+        .with_context(|| "Cannot find ports for environmentd service")?;
 
     let maybe_internal_sql_port = service_info.service_ports.iter().find_map(|port_info| {
         if let Some(port_name) = &port_info.name {

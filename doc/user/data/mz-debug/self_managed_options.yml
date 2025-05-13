@@ -57,18 +57,6 @@ rows:
 
       Defaults to `6875`.
 
-  - Option: "`--mz-connection-url <URL>`"
-    Description: |
-
-      <a name="mz-connection-url"></a>The Materialize instance's [PostgreSQL
-      connection
-      URL](https://www.postgresql.org/docs/14/libpq-connect.html#LIBPQ-CONNSTRING).
-
-      Defaults to a connection URL constructed from:
-
-      [`--port-forward-local-address`](#port-forward-local-address) and
-      [`--port-forward-local-port`](#port-forward-local-port) values.
-
   - Option: "`-h`, `--help`"
     Description: |
 
