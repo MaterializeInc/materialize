@@ -574,6 +574,17 @@ impl<'w, A: Allocate + 'static> Worker<'w, A> {
                                     new_as_of = ?as_of,
                                     "dataflow reconciliation failed",
                                 );
+
+                                // Dump the full dataflow plans if they are incompatible, to
+                                // simplify debugging hard-to-reproduce reconciliation failures.
+                                if !compatible {
+                                    warn!(
+                                        old = ?old_dataflow,
+                                        new = ?dataflow,
+                                        "incompatible dataflows in reconciliation",
+                                    );
+                                }
+
                                 todo_commands
                                     .push(ComputeCommand::CreateDataflow(dataflow.clone()));
                             }
