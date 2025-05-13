@@ -50,6 +50,8 @@ As with all icebergs, most of it is below the surface.  Iceberg is a table speci
     - Vendors I surveyed only support writing V2. Support for V1 would make more sense for read access of existing data lakes, which isn't this use case.
 - Support for creating iceberg sink based on catalog object
     - Kafka sink also does not support, and there doesn't appear to be a need for this functionality as of this writing.
+- Iceberg Table Maintenance
+    - Performing table maintainence operations (see section [below](#iceberg-table-maintenance)).
 
 ## Solution Proposal
 
