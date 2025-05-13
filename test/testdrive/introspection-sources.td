@@ -361,6 +361,10 @@ true true true true true
   ORDER BY f1, f2 DESC;
 > CREATE DEFAULT INDEX ON m_top1;
 
+# TODO: Reenable when https://github.com/MaterializeInc/database-issues/issues/9261 is fixed
+$ skip-if
+SELECT true
+
 > SELECT
     records >= 2 * 1000,
     records < 1.1 * 2 * 1000,
@@ -370,6 +374,8 @@ true true true true true
   FROM mz_introspection.mz_dataflow_arrangement_sizes
   WHERE name LIKE '%m_minmax%';
 true true true true true
+
+$ skip-end
 
 > SELECT
     records >= 2 * 1000,

@@ -1122,7 +1122,7 @@ steps:
         depends_on: build-aarch64
         timeout_in_minutes: 40
         agents:
-          queue: hetzner-aarch64-4cpu-8gb
+          queue: hetzner-aarch64-8cpu-16gb
         artifact_paths: [test/persist/maelstrom/**/*.log]
         plugins:
           - ./ci/plugins/mzcompose:
