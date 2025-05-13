@@ -12,6 +12,7 @@ use std::path::PathBuf;
 use std::process;
 use std::sync::LazyLock;
 
+use anyhow::Context as AnyhowContext;
 use chrono::Utc;
 use clap::Parser;
 use kube::config::KubeConfigOptions;
@@ -74,16 +75,6 @@ pub struct SelfManagedDebugModeArgs {
     /// The port to listen on for the port-forward.
     #[clap(long, default_value = "6875")]
     port_forward_local_port: i32,
-    /// The URL of the Materialize SQL connection used to dump the system catalog.
-    /// An example URL is `postgres://root@127.0.0.1:6875/materialize?sslmode=disable`.
-    /// By default, we will create a connection URL based on `port_forward_local_address` and `port_forward_local_port`.
-    // TODO(debug_tool3): Allow users to specify the pgconfig via separate variables
-    #[clap(
-        long,
-        env = "MZ_CONNECTION_URL",
-        value_parser = validate_pg_connection_string,
-    )]
-    mz_connection_url: Option<String>,
 }
 
 #[derive(Parser, Debug, Clone)]
@@ -94,17 +85,6 @@ pub struct EmulatorDebugModeArgs {
     /// The ID of the docker container to dump.
     #[clap(long)]
     docker_container_id: String,
-    /// The URL of the Materialize SQL connection used to dump the system catalog.
-    /// An example URL is `postgres://root@127.0.0.1:6875/materialize?sslmode=disable`.
-    // TODO(debug_tool3): Allow users to specify the pgconfig via separate variables
-    #[clap(
-        long,
-        env = "MZ_CONNECTION_URL",
-        // We assume that the emulator is running on the default port.
-        default_value = "postgres://127.0.0.1:6875/materialize?sslmode=prefer",
-        value_parser = validate_pg_connection_string,
-    )]
-    mz_connection_url: String,
 }
 
 #[derive(Parser, Debug, Clone)]
@@ -129,6 +109,18 @@ pub struct Args {
     /// If true, the tool will dump the prometheus metrics in Materialize.
     #[clap(long, default_value = "true", action = clap::ArgAction::Set, global = true)]
     dump_prometheus_metrics: bool,
+    /// The URL of the Materialize SQL connection used to dump the system catalog.
+    /// An example URL is `postgres://root@127.0.0.1:6875/materialize?sslmode=disable`.
+    /// By default, we will create a connection URL based on `port_forward_local_address:port_forward_local_port` for self-managed
+    /// or `docker_container_ip:6875` for the emulator.
+    // TODO(debug_tool3): Allow users to specify the pgconfig via separate variables
+    #[clap(
+        long,
+        env = "MZ_CONNECTION_URL",
+        value_parser = validate_pg_connection_string,
+        global = true
+    )]
+    mz_connection_url: Option<String>,
 }
 
 pub trait ContainerDumper {
@@ -148,6 +140,7 @@ struct SelfManagedContext {
 struct EmulatorContext {
     dump_docker: bool,
     docker_container_id: String,
+    container_ip: String,
 }
 
 enum DebugModeContext {
@@ -216,8 +209,22 @@ async fn main() {
     }
 }
 
-async fn initialize_context(args: Args, base_path: PathBuf) -> Result<Context, anyhow::Error> {
-    let (debug_mode_context, mz_connection_url) = match &args.debug_mode_args {
+fn create_mz_connection_url(
+    local_address: String,
+    local_port: i32,
+    connection_url_override: Option<String>,
+) -> String {
+    if let Some(connection_url_override) = connection_url_override {
+        return connection_url_override;
+    }
+    format!("postgres://{}:{}?sslmode=prefer", local_address, local_port)
+}
+
+async fn initialize_context(
+    global_args: Args,
+    base_path: PathBuf,
+) -> Result<Context, anyhow::Error> {
+    let (debug_mode_context, mz_connection_url) = match &global_args.debug_mode_args {
         DebugModeArgs::SelfManaged(args) => {
             let k8s_client = match create_k8s_client(args.k8s_context.clone()).await {
                 Ok(k8s_client) => k8s_client,
@@ -247,10 +254,10 @@ async fn initialize_context(args: Args, base_path: PathBuf) -> Result<Context, a
             } else {
                 None
             };
-            let mz_connection_url = kubectl_port_forwarder::create_mz_connection_url(
+            let mz_connection_url = create_mz_connection_url(
                 args.port_forward_local_address.clone(),
                 args.port_forward_local_port,
-                args.mz_connection_url.clone(),
+                global_args.mz_connection_url.clone(),
             );
             (
                 DebugModeContext::SelfManaged(SelfManagedContext {
@@ -264,22 +271,40 @@ async fn initialize_context(args: Args, base_path: PathBuf) -> Result<Context, a
                 mz_connection_url,
             )
         }
-        DebugModeArgs::Emulator(args) => (
-            DebugModeContext::Emulator(EmulatorContext {
-                dump_docker: args.dump_docker,
-                docker_container_id: args.docker_container_id.clone(),
-            }),
-            args.mz_connection_url.clone(),
-        ),
+        DebugModeArgs::Emulator(args) => {
+            let container_ip = docker_dumper::get_container_ip(&args.docker_container_id)
+                .await
+                .with_context(|| {
+                    format!(
+                        "Failed to get IP for container {}",
+                        args.docker_container_id
+                    )
+                })?;
+
+            let mz_connection_url = create_mz_connection_url(
+                container_ip.clone(),
+                6875,
+                global_args.mz_connection_url.clone(),
+            );
+
+            (
+                DebugModeContext::Emulator(EmulatorContext {
+                    dump_docker: args.dump_docker,
+                    docker_container_id: args.docker_container_id.clone(),
+                    container_ip,
+                }),
+                mz_connection_url,
+            )
+        }
     };
 
     Ok(Context {
         base_path,
         debug_mode_context,
         mz_connection_url,
-        dump_system_catalog: args.dump_system_catalog,
-        dump_heap_profiles: args.dump_heap_profiles,
-        dump_prometheus_metrics: args.dump_prometheus_metrics,
+        dump_system_catalog: global_args.dump_system_catalog,
+        dump_heap_profiles: global_args.dump_heap_profiles,
+        dump_prometheus_metrics: global_args.dump_prometheus_metrics,
     })
 }
 
@@ -309,6 +334,7 @@ async fn run(context: Context) -> Result<(), anyhow::Error> {
         DebugModeContext::Emulator(EmulatorContext {
             dump_docker,
             docker_container_id,
+            ..
         }) => {
             if *dump_docker {
                 let dumper = DockerDumper::new(&context, docker_container_id.clone());
@@ -323,8 +349,8 @@ async fn run(context: Context) -> Result<(), anyhow::Error> {
                 warn!("Failed to dump self-managed http resources: {}", e);
             }
         }
-        DebugModeContext::Emulator(_) => {
-            if let Err(e) = dump_emulator_http_resources(&context).await {
+        DebugModeContext::Emulator(emulator_context) => {
+            if let Err(e) = dump_emulator_http_resources(&context, emulator_context).await {
                 warn!("Failed to dump emulator http resources: {}", e);
             }
         }

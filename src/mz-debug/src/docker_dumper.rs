@@ -20,6 +20,7 @@ use std::io::Write;
 use std::path::PathBuf;
 use std::time::Duration;
 
+use anyhow::Context as AnyhowContext;
 use mz_ore::retry::{self, RetryResult};
 use tracing::{info, warn};
 
@@ -145,4 +146,35 @@ fn write_output(
     file.write_all(&output)?;
     info!("Exported {}", file_path.display());
     Ok(())
+}
+
+/// Gets the IP address of a Docker container using the container ID.
+pub async fn get_container_ip(container_id: &str) -> Result<String, anyhow::Error> {
+    let output = tokio::process::Command::new("docker")
+        .args([
+            "inspect",
+            "-f",
+            "{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}",
+            container_id,
+        ])
+        .output()
+        .await
+        .with_context(|| format!("Failed to get container IP address for {}", container_id))?;
+
+    if !output.status.success() {
+        return Err(anyhow::anyhow!(
+            "Docker command failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        ));
+    }
+
+    let ip = String::from_utf8(output.stdout)
+        .with_context(|| "Failed to convert container IP address to string")?
+        .trim()
+        .to_string();
+    if ip.is_empty() {
+        return Err(anyhow::anyhow!("Container IP address not found"));
+    }
+
+    Ok(ip)
 }

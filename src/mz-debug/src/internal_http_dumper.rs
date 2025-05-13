@@ -10,11 +10,13 @@ use tracing::{info, warn};
 use crate::kubectl_port_forwarder::{
     KubectlPortForwarder, find_cluster_services, find_environmentd_service,
 };
-use crate::{Context, SelfManagedContext};
+use crate::{Context, EmulatorContext, SelfManagedContext};
 
 static PROM_METRICS_ENDPOINT: &str = "metrics";
 static ENVD_HEAP_PROFILE_ENDPOINT: &str = "prof/heap";
 static CLUSTERD_HEAP_PROFILE_ENDPOINT: &str = "heap";
+static INTERNAL_HOST_ADDRESS: &str = "127.0.0.1";
+static INTERNAL_HTTP_PORT: i32 = 6878;
 
 /// A struct that handles downloading and saving profile data from HTTP endpoints
 pub struct InternalHttpDumpClient<'n> {
@@ -140,7 +142,10 @@ impl<'n> InternalHttpDumpClient<'n> {
 }
 
 // TODO (debug_tool3): Scrape cluster profiles through a proxy when (database-issues#8942) is implemented
-pub async fn dump_emulator_http_resources(context: &Context) -> Result<()> {
+pub async fn dump_emulator_http_resources(
+    context: &Context,
+    emulator_context: &EmulatorContext,
+) -> Result<()> {
     let http_client = reqwest::Client::new();
     let dump_task = InternalHttpDumpClient::new(context, &http_client);
 
@@ -148,10 +153,12 @@ pub async fn dump_emulator_http_resources(context: &Context) -> Result<()> {
         let resource_name = "environmentd".to_string();
 
         // We assume the emulator is exposed on the local network and uses port 6878.
-        // TODO (debug_tool1): Figure out the correct IP address from the docker container
         if let Err(e) = dump_task
             .dump_heap_profile(
-                &format!("127.0.0.1:6878/{}", ENVD_HEAP_PROFILE_ENDPOINT),
+                &format!(
+                    "{}:{}/{}",
+                    emulator_context.container_ip, INTERNAL_HTTP_PORT, ENVD_HEAP_PROFILE_ENDPOINT
+                ),
                 &resource_name,
             )
             .await
@@ -167,7 +174,10 @@ pub async fn dump_emulator_http_resources(context: &Context) -> Result<()> {
 
         if let Err(e) = dump_task
             .dump_prometheus_metrics(
-                &format!("127.0.0.1:6878/{}", PROM_METRICS_ENDPOINT),
+                &format!(
+                    "{}:{}/{}",
+                    emulator_context.container_ip, INTERNAL_HTTP_PORT, PROM_METRICS_ENDPOINT
+                ),
                 &resource_name,
             )
             .await
@@ -184,9 +194,6 @@ pub async fn dump_self_managed_http_resources(
     self_managed_context: &SelfManagedContext,
 ) -> Result<()> {
     let http_client = reqwest::Client::new();
-    // TODO (debug_tool3): Allow user to override temporary local address for http port forwarding
-    let local_address = "127.0.0.1";
-    let local_port = 6878;
 
     let cluster_services = find_cluster_services(
         &self_managed_context.k8s_client,
@@ -201,20 +208,20 @@ pub async fn dump_self_managed_http_resources(
     )
     .await
     .with_context(|| "Failed to find environmentd service")?;
-
+    // TODO (debug_tool3): Allow user to override temporary local address for http port forwarding
     let prom_metrics_endpoint = format!(
         "{}:{}/{}",
-        &local_address, local_port, PROM_METRICS_ENDPOINT
+        INTERNAL_HOST_ADDRESS, INTERNAL_HTTP_PORT, PROM_METRICS_ENDPOINT
     );
 
     let clusterd_heap_profile_endpoint = format!(
         "{}:{}/{}",
-        &local_address, local_port, CLUSTERD_HEAP_PROFILE_ENDPOINT
+        INTERNAL_HOST_ADDRESS, INTERNAL_HTTP_PORT, CLUSTERD_HEAP_PROFILE_ENDPOINT
     );
 
     let envd_heap_profile_endpoint = format!(
         "{}:{}/{}",
-        &local_address, local_port, ENVD_HEAP_PROFILE_ENDPOINT
+        INTERNAL_HOST_ADDRESS, INTERNAL_HTTP_PORT, ENVD_HEAP_PROFILE_ENDPOINT
     );
 
     let services = cluster_services
@@ -238,8 +245,8 @@ pub async fn dump_self_managed_http_resources(
                 namespace: service_info.namespace.clone(),
                 service_name: service_info.service_name.clone(),
                 target_port: internal_http_port.port,
-                local_address: local_address.to_string(),
-                local_port,
+                local_address: INTERNAL_HOST_ADDRESS.to_string(),
+                local_port: INTERNAL_HTTP_PORT,
             };
 
             let _internal_http_connection =

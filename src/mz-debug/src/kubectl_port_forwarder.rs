@@ -229,14 +229,3 @@ pub async fn create_pg_wire_port_forwarder(
         ))
     }
 }
-
-pub fn create_mz_connection_url(
-    local_address: String,
-    local_port: i32,
-    connection_url_override: Option<String>,
-) -> String {
-    if let Some(connection_url_override) = connection_url_override {
-        return connection_url_override;
-    }
-    format!("postgres://{}:{}?sslmode=prefer", local_address, local_port)
-}
