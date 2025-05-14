@@ -196,11 +196,13 @@ ingestion progress and debugging related issues, see [Troubleshooting](/ops/trou
 
 ## Known limitations
 
-##### Schema changes
+### Schema changes
+
+{{< include-md file="shared-content/schema-changes-in-progress.md" >}}
 
 {{% schema-changes %}}
 
-#### Publication membership
+### Publication membership
 
 PostgreSQL's logical replication API does not provide a signal when users remove
 tables from publications. Because of this, Materialize relies on periodic checks
@@ -217,7 +219,7 @@ To mitigate this issue, if you need to drop and re-add a table to a publication,
 ensure that you remove the table/subsource from the source _before_ re-adding it
 using the [`DROP SOURCE`](/sql/drop-source/) command.
 
-##### Supported types
+### Supported types
 
 Materialize natively supports the following PostgreSQL types (including the
 array type for each of the types):
@@ -264,7 +266,7 @@ example:
 * [`money`]: the resulting `text` value cannot be cast back to e.g. `numeric`,
   since PostgreSQL adds typical currency formatting to the output.
 
-##### Truncation
+### Truncation
 
 Tables replicated into Materialize should not be truncated. If a table is
 truncated while replicated, the whole source becomes inaccessible and will not
@@ -275,7 +277,7 @@ using an unqualified `DELETE`.
 DELETE FROM t;
 ```
 
-##### Inherited tables
+### Inherited tables
 
 When using [PostgreSQL table inheritance](https://www.postgresql.org/docs/current/tutorial-inheritance.html),
 PostgreSQL serves data from `SELECT`s as if the inheriting tables' data is also
@@ -297,7 +299,7 @@ non-) that unions the new table.
 
 ## Examples
 
-{{< warning >}}
+{{< important >}}
 Before creating a PostgreSQL source, you must set up logical replication in the
 upstream database. For step-by-step instructions, see the integration guide for
 your PostgreSQL service: [AlloyDB](/ingest-data/postgres-alloydb/),
@@ -306,7 +308,7 @@ your PostgreSQL service: [AlloyDB](/ingest-data/postgres-alloydb/),
 [Azure DB](/ingest-data/postgres-azure-db/),
 [Google Cloud SQL](/ingest-data/postgres-google-cloud-sql/),
 [Self-hosted](/ingest-data/postgres-self-hosted/).
-{{< /warning >}}
+{{< /important >}}
 
 ### Creating a connection
 
@@ -399,6 +401,8 @@ CREATE SOURCE mz_source
 ```
 
 ### Handling errors and schema changes
+
+{{< include-md file="shared-content/schema-changes-in-progress.md" >}}
 
 To handle upstream [schema changes](#schema-changes) or errored subsources, use
 the [`DROP SOURCE`](/sql/alter-source/#context) syntax to drop the affected
