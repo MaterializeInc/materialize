@@ -31,10 +31,10 @@ operator:
     sizes:
       <size>:
         workers: <int>
-        scale: <int>
+        scale: 1                  # Generally, should be set to 1.
         cpu_exclusive: <bool>
         cpu_limit: <float>         # e.g., 6
-        credits_per_hour: <string> # e.g., "0.0"
+        credits_per_hour: "0.0"    # N/A for self-managed.
         disk_limit: <string>       # e.g., "93150MiB"
         memory_limit: <string>     # e.g., "46575MiB"
 ```

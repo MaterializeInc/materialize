@@ -48,7 +48,7 @@ rows:
     Recommendation: |
 
       Prefer whole number values to enable CPU affinity. Kubernetes only allows
-      CPU Affinity for pods taking a whole number of cores (not hyperthreads).
+      CPU Affinity for pods taking a whole number of cores.
 
       If the value is not a whole number, set [`cpu_exclusive`](#cpu_exclusive) to false.
 
