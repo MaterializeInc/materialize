@@ -160,7 +160,7 @@ available(also for PostgreSQL)."
 
 {{% mysql-direct/right-size-the-cluster %}}
 
-## Next steps
+## D. Explore your data
 
 {{% mysql-direct/next-steps %}}
 

@@ -297,7 +297,7 @@ created [earlier](#2-create-a-publication-and-a-replication-user):
 
 {{% postgres-direct/right-size-the-cluster %}}
 
-## Next steps
+## D. Explore your data
 
 {{% postgres-direct/next-steps %}}
 

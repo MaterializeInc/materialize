@@ -548,7 +548,7 @@ password for the `materialize` PostgreSQL user you created [earlier](#2-create-a
 
 {{% postgres-direct/right-size-the-cluster %}}
 
-## Next steps
+## D. Explore your data
 
 {{% postgres-direct/next-steps %}}
 
