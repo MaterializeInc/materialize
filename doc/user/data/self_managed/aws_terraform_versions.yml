@@ -4,7 +4,14 @@ columns:
 
 rows:
 - "Terraform version": |
-    [v0.4.3](https://github.com/MaterializeInc/terraform-aws-materialize/releases/tag/v0.4.0)
+    [v0.4.4](https://github.com/MaterializeInc/terraform-aws-materialize/releases/tag/v0.4.4)
+  "Notable changes": |
+    - Defaults to using Materialize Operator v25.1.11 (via
+    `terraform-helm-materialize` v0.1.13).
+
+
+- "Terraform version": |
+    [v0.4.3](https://github.com/MaterializeInc/terraform-aws-materialize/releases/tag/v0.4.3)
   "Notable changes": |
     - Defaults to using Materialize Operator v25.1.7 (via
     `terraform-helm-materialize` v0.1.12).
