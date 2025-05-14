@@ -1537,9 +1537,13 @@ impl MirScalarExpr {
             // element of `list_create_mut_refs` is not actually a ListCreate, then we break out of
             // the loop. When we remove a literal, we need to partial-evaluate all ListCreates
             // that are at the current level (except those that disappeared due to
-            // literals at earlier levels), and change each element in `list_create_mut_refs`
-            // to the result of the partial evaluation.
+            // literals at earlier levels), index into them with the literal, and change each
+            // element in `list_create_mut_refs` to the result.
+            // We also record mut refs to all the earlier `element_type` references that we have
+            // seen in ListCreate calls, because when we process a literal index, we need to remove
+            // one layer of list type from all these earlier ListCreate `element_type`s.
             let mut list_create_mut_refs = vec![&mut list_create_to_reduce];
+            let mut earlier_list_create_types: Vec<&mut ScalarType> = vec![];
             let mut i = 0;
             while i < index_exprs.len()
                 && list_create_mut_refs
@@ -1558,7 +1562,7 @@ impl MirScalarExpr {
                     for list_create in &mut list_create_mut_refs {
                         let list_create_args = match list_create {
                             MirScalarExpr::CallVariadic {
-                                func: VariadicFunc::ListCreate { .. },
+                                func: VariadicFunc::ListCreate { elem_type: _ },
                                 exprs,
                             } => exprs,
                             _ => unreachable!(), // func cannot be anything else than a ListCreate
@@ -1573,6 +1577,29 @@ impl MirScalarExpr {
                             **list_create = MirScalarExpr::literal_null(typ);
                         }
                     }
+                    // Peel one layer off of each of the earlier element types.
+                    for t in earlier_list_create_types.iter_mut() {
+                        if let ScalarType::List {
+                            element_type,
+                            custom_id: _,
+                        } = t
+                        {
+                            **t = *element_type.clone();
+                            // These are not the same types anymore, so remove custom_ids all the
+                            // way down.
+                            let mut u = &mut **t;
+                            while let ScalarType::List {
+                                element_type,
+                                custom_id,
+                            } = u
+                            {
+                                *custom_id = None;
+                                u = &mut **element_type;
+                            }
+                        } else {
+                            unreachable!("already matched below");
+                        }
+                    }
                 } else {
                     // We can't remove this index, so we can't reduce any of the ListCreates at this
                     // level. So we change list_create_mut_refs to refer to all the arguments of all
@@ -1581,9 +1608,12 @@ impl MirScalarExpr {
                         .into_iter()
                         .flat_map(|list_create| match list_create {
                             MirScalarExpr::CallVariadic {
-                                func: VariadicFunc::ListCreate { .. },
+                                func: VariadicFunc::ListCreate { elem_type },
                                 exprs: list_create_args,
-                            } => list_create_args,
+                            } => {
+                                earlier_list_create_types.push(elem_type);
+                                list_create_args
+                            }
                             // func cannot be anything else than a ListCreate
                             _ => unreachable!(),
                         })
