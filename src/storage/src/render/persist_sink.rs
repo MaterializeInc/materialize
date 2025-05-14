@@ -84,8 +84,6 @@
 //! Some, particularly `append_batches` could be merged with
 //! the compute version, but that requires some amount of
 //! onerous refactoring that we have chosen to skip for now.
-//!
-// TODO(guswynn): merge at least the `append_batches` operator`
 
 use std::cmp::Ordering;
 use std::collections::BTreeMap;
@@ -1002,6 +1000,7 @@ where
         let mut batches_frontier = Antichain::from_elem(Timestamp::minimum());
 
         loop {
+            // Drain both input channels as of resumption and advance frontier.
             tokio::select! {
                 Some(event) = descriptions_input.next() => {
                     match event {
@@ -1285,7 +1284,7 @@ where
                         upper_cap_set.downgrade(current_upper.borrow().iter());
                     }
                     Err(mismatch) => {
-                        // We tried to to a non-contiguous append, that won't work.
+                        // We tried to do a non-contiguous append, that won't work.
                         if PartialOrder::less_than(&mismatch.current, &batch_lower) {
                             // Best-effort attempt to delete unneeded batches.
                             future::join_all(batches.into_iter().map(|b| b.batch.delete())).await;
