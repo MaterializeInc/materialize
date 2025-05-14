@@ -300,3 +300,7 @@ created [earlier](#2-create-a-publication-and-a-replication-user):
 ## Next steps
 
 {{% postgres-direct/next-steps %}}
+
+## Considerations
+
+{{% include-md file="shared-content/postgres-considerations.md" %}}

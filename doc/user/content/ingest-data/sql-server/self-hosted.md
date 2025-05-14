@@ -158,3 +158,7 @@ available(also for PostgreSQL)."
 ## Next steps
 
 {{% sql-server-direct/next-steps %}}
+
+## Considerations
+
+{{% include-md file="shared-content/sql-server-considerations.md" %}}

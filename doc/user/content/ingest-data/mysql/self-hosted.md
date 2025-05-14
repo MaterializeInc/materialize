@@ -163,3 +163,7 @@ available(also for PostgreSQL)."
 ## Next steps
 
 {{% mysql-direct/next-steps %}}
+
+## Considerations
+
+{{% include-md file="shared-content/mysql-considerations.md" %}}

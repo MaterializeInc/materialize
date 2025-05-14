@@ -161,3 +161,7 @@ networking configuration, so start by selecting the relevant option.
 ## Next steps
 
 {{% mysql-direct/next-steps %}}
+
+## Considerations
+
+{{% include-md file="shared-content/mysql-considerations.md" %}}

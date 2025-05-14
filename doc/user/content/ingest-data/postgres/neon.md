@@ -309,3 +309,7 @@ ingesting data.
 ## Next steps
 
 {{% postgres-direct/next-steps %}}
+
+## Considerations
+
+{{% include-md file="shared-content/postgres-considerations.md" %}}

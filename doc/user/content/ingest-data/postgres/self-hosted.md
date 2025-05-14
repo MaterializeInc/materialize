@@ -488,3 +488,7 @@ start by selecting the relevant option.
 ## Next steps
 
 {{% postgres-direct/next-steps %}}
+
+## Considerations
+
+{{% include-md file="shared-content/postgres-considerations.md" %}}

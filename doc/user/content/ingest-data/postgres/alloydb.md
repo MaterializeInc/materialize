@@ -159,3 +159,7 @@ Materialize to your AlloyDB instance and begin the data ingestion process.
 ## Next steps
 
 {{% postgres-direct/next-steps %}}
+
+## Considerations
+
+{{< include-md file="shared-content/postgres-considerations.md" >}}
