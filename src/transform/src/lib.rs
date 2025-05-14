@@ -186,7 +186,8 @@ impl<'a> TransformCtx<'a> {
         Arc::clone(self.typecheck_ctx)
     }
 
-    fn set_global_id(&mut self, global_id: GlobalId) {
+    /// Lets self know the id of the object that is being optimized.
+    pub fn set_global_id(&mut self, global_id: GlobalId) {
         self.global_id = Some(global_id);
     }
 
