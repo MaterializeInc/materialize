@@ -19,6 +19,7 @@ use mz_expr::{
     AggregateExpr, ColumnOrder, Id, JoinImplementation, LocalId, MirRelationExpr, MirScalarExpr,
     RECURSION_LIMIT, non_nullable_columns,
 };
+use mz_ore::soft_panic_or_log;
 use mz_ore::stack::{CheckedRecursion, RecursionGuard, RecursionLimitError};
 use mz_repr::explain::{DummyHumanizer, ExprHumanizer};
 use mz_repr::{ColumnName, ColumnType, RelationType, Row, ScalarBaseType, ScalarType};
@@ -1194,14 +1195,14 @@ impl Typecheck {
     }
 }
 
-/// Detailed type error logging as a warning, with failures in CI (SOFT_ASSERTIONS) and a logged error in production
+/// Detailed type error logging as a warning, with failures in CI and a logged error in production
 ///
 /// type_error(severity, ...) logs a type warning; if `severity` is `true`, it will also log an error (visible in Sentry)
 macro_rules! type_error {
     ($severity:expr, $($arg:tt)+) => {{
         if $severity {
           ::tracing::warn!($($arg)+);
-          ::tracing::error!("type error in MIR optimization (details in warning; see 'Type error omnibus' issue database-issues#5663 <https://github.com/MaterializeInc/database-issues/issues/5663>)");
+          soft_panic_or_log!("type error in MIR optimization (details in warning; see 'Type error omnibus' issue database-issues#5663 <https://github.com/MaterializeInc/database-issues/issues/5663>)");
         } else {
           ::tracing::debug!($($arg)+);
         }
