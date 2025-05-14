@@ -255,8 +255,21 @@ impl<'a, M: HumanizerMode> HumanizedExpr<'a, MapFilterProject, M> {
         f: &mut fmt::Formatter<'_>,
         ctx: &mut PlanRenderingContext<'_, T>,
     ) -> fmt::Result {
-        // TODO(mgree) LIR default output
-        self.fmt_text(f, ctx)
+        // skip projection
+        // render `filter` field iff predicates are present
+        if !self.expr.predicates.is_empty() {
+            let predicates = self.expr.predicates.iter().map(|(_, p)| self.child(p));
+            let predicates = separated(" AND ", predicates);
+            writeln!(f, "{}Filter: {predicates}", ctx.indent)?;
+        }
+        // render `map` field iff scalars are present
+        if !self.expr.expressions.is_empty() {
+            let scalars = self.expr.expressions.iter().map(|s| self.child(s));
+            let scalars = separated(", ", scalars);
+            writeln!(f, "{}Map: {scalars}", ctx.indent)?;
+        }
+
+        Ok(())
     }
 }
 
@@ -1203,7 +1216,14 @@ where
                 M::humanize_ident(*self.expr.0, ident, f)
             }
             // We don't have name inferred for this column.
-            _ => M::humanize_ident(*self.expr.0, Ident::new_unchecked(self.expr.1.as_ref()), f),
+            _ => {
+                // Don't show dummy column names.
+                if self.expr.1.as_ref() == "\"?column?\"" {
+                    write!(f, "#{}", self.expr.0)
+                } else {
+                    M::humanize_ident(*self.expr.0, Ident::new_unchecked(self.expr.1.as_ref()), f)
+                }
+            }
         }
     }
 }
