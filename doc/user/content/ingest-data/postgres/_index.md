@@ -53,3 +53,7 @@ but you would like to use with Materialize, please submit a [feature
 request](https://github.com/MaterializeInc/materialize/discussions/new?category=feature-requests&labels=A-integration)
 or reach out in the Materialize [Community
 Slack](https://materialize.com/s/chat).
+
+## Considerations
+
+{{% include-md file="shared-content/postgres-considerations.md" %}}

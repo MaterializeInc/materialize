@@ -155,6 +155,10 @@ available(also for PostgreSQL)."
 
 {{% sql-server-direct/right-size-the-cluster %}}
 
-## Next steps
+## D. Explore your data
 
 {{% sql-server-direct/next-steps %}}
+
+## Considerations
+
+{{% include-md file="shared-content/sql-server-considerations.md" %}}

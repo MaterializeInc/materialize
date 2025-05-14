@@ -156,6 +156,10 @@ Materialize to your AlloyDB instance and begin the data ingestion process.
 
 {{% postgres-direct/right-size-the-cluster %}}
 
-## Next steps
+## D. Explore your data
 
 {{% postgres-direct/next-steps %}}
+
+## Considerations
+
+{{< include-md file="shared-content/postgres-considerations.md" >}}

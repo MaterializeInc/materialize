@@ -306,6 +306,10 @@ ingesting data.
 
 {{% postgres-direct/right-size-the-cluster %}}
 
-## Next steps
+## D. Explore your data
 
 {{% postgres-direct/next-steps %}}
+
+## Considerations
+
+{{% include-md file="shared-content/postgres-considerations.md" %}}

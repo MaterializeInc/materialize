@@ -158,6 +158,10 @@ networking configuration, so start by selecting the relevant option.
 
 {{% mysql-direct/right-size-the-cluster %}}
 
-## Next steps
+## D. Explore your data
 
 {{% mysql-direct/next-steps %}}
+
+## Considerations
+
+{{% include-md file="shared-content/mysql-considerations.md" %}}

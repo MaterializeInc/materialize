@@ -30,8 +30,14 @@ SQL Server Change Data Capture (CDC) in Materialize gives you the following bene
     a read-replica to build views on top of your SQL Server data that are
     efficiently maintained and always up-to-date.
 
-* **Supported versions:** Materialize supports replicating data from SQL Server 2016
-    or higher.
+## Supported versions
 
-* **Integration Guides**
-    * [Self-hosted SQL Server](/ingest-data/sql-server/self-hosted/)
+Materialize supports replicating data from SQL Server 2016 or higher.
+
+## Integration Guides
+
+- [Self-hosted SQL Server](/ingest-data/sql-server/self-hosted/)
+
+## Considerations
+
+{{% include-md file="shared-content/sql-server-considerations.md" %}}
