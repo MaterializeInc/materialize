@@ -15,6 +15,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 use std::num::NonZeroUsize;
+use std::ops::Deref;
 
 use differential_dataflow::consolidation::consolidate;
 use futures::TryFutureExt;
@@ -34,7 +35,7 @@ use mz_expr::{
     permutation_for_arrangement,
 };
 use mz_ore::cast::CastFrom;
-use mz_ore::str::{StrExt, separated};
+use mz_ore::str::{IndentLike, StrExt, separated};
 use mz_ore::tracing::OpenTelemetryContext;
 use mz_repr::explain::text::DisplayText;
 use mz_repr::explain::{CompactScalars, IndexUsageType, PlanRenderingContext, UsedIndexes};
@@ -128,8 +129,93 @@ impl<'a, T: 'a> DisplayText<PlanRenderingContext<'a, T>> for FastPathPlan {
         f: &mut fmt::Formatter<'_>,
         ctx: &mut PlanRenderingContext<'a, T>,
     ) -> fmt::Result {
-        let redacted = ctx.config.redacted;
+        if ctx.config.verbose_syntax {
+            self.fmt_verbose_text(f, ctx)
+        } else {
+            self.fmt_default_text(f, ctx)
+        }
+    }
+}
+
+impl FastPathPlan {
+    pub fn fmt_default_text<'a, T>(
+        &self,
+        f: &mut fmt::Formatter<'_>,
+        ctx: &mut PlanRenderingContext<'a, T>,
+    ) -> fmt::Result {
         let mode = HumanizedExplain::new(ctx.config.redacted);
+
+        match self {
+            FastPathPlan::Constant(rows, _) => {
+                write!(f, "{}Constant ", ctx.indent)?;
+
+                match rows {
+                    Ok(rows) => write!(f, "({} rows)", rows.len())?,
+                    Err(err) => {
+                        if mode.redacted() {
+                            write!(f, "(error: █)")?;
+                        } else {
+                            write!(f, "(error: {})", err.to_string().quoted(),)?;
+                        }
+                    }
+                }
+            }
+            FastPathPlan::PeekExisting(coll_id, idx_id, literal_constraints, mfp) => {
+                let coll = ctx
+                    .humanizer
+                    .humanize_id(*coll_id)
+                    .unwrap_or_else(|| coll_id.to_string());
+                let idx = ctx
+                    .humanizer
+                    .humanize_id(*idx_id)
+                    .unwrap_or_else(|| idx_id.to_string());
+                writeln!(f, "{}Map/Filter/Project", ctx.indent)?;
+                ctx.indented(|ctx| {
+                    mode.expr(mfp.deref(), None).fmt_default_text(f, ctx)?;
+                    ctx.indented(|ctx| {
+                        if let Some(literal_constraints) = literal_constraints {
+                            writeln!(f, "{}Index Lookup on {coll} (using {idx})", ctx.indent)?;
+                            ctx.indented(|ctx| {
+                                let values = separated("; ", mode.seq(literal_constraints, None));
+                                writeln!(f, "{}Lookup values: {values}", ctx.indent)
+                            })
+                        } else {
+                            writeln!(f, "{}Indexed {coll} (using {idx})", ctx.indent)
+                        }
+                    })
+                })?;
+            }
+            FastPathPlan::PeekPersist(global_id, literal_constraint, mfp) => {
+                let coll = ctx
+                    .humanizer
+                    .humanize_id(*global_id)
+                    .unwrap_or_else(|| global_id.to_string());
+                writeln!(f, "{}Map/Filter/Project", ctx.indent)?;
+                ctx.indented(|ctx| {
+                    mode.expr(mfp.deref(), None).fmt_default_text(f, ctx)?;
+                    if let Some(literal_constraint) = literal_constraint {
+                        writeln!(f, "{}Index Lookup on {coll} (from storage)", ctx.indent)?;
+                        ctx.indented(|ctx| {
+                            let value = mode.expr(literal_constraint, None);
+                            writeln!(f, "{}Lookup value: {value}", ctx.indent)
+                        })
+                    } else {
+                        writeln!(f, "{}Indexed {coll} (from storage)", ctx.indent)
+                    }
+                })?;
+            }
+        }
+
+        Ok(())
+    }
+
+    pub fn fmt_verbose_text<'a, T>(
+        &self,
+        f: &mut fmt::Formatter<'_>,
+        ctx: &mut PlanRenderingContext<'a, T>,
+    ) -> fmt::Result {
+        let redacted = ctx.config.redacted;
+        let mode = HumanizedExplain::new(redacted);
 
         // TODO(aalexandrov): factor out common PeekExisting and PeekPersist
         // code.
