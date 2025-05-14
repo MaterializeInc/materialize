@@ -169,9 +169,8 @@ cause a rollback — no size change will take effect in that case.
 The `REPLICATION FACTOR` option determines the number of replicas provisioned
 for the cluster. Each replica of the cluster provisions a new pool of compute
 resources to perform exactly the same computations on exactly the same data.
-Each replica incurs cost, calculated as `cluster
-[size](#resizing) * replication factor` per second. See [Usage &
-billing](/administration/billing/) for more details.
+Each replica incurs cost, calculated as `cluster size * replication factor` per
+second. See [Usage & billing](/administration/billing/) for more details.
 
 #### Replication factor and fault tolerance
 
@@ -182,9 +181,9 @@ available, the cluster can continue to maintain dataflows and serve queries.
 
 {{< note >}}
 
-- Each replica incurs cost, calculated as `cluster [size](#resizing)
-  * replication factor` per second. See [Usage & billing](/administration/billing/)
-  for more details.
+- Each replica incurs cost, calculated as `cluster size *
+  replication factor` per second. See [Usage &
+  billing](/administration/billing/) for more details.
 
 - Increasing the replication factor does **not** increase the cluster's work
   capacity. Replicas are exact copies of one another: each replica must do
