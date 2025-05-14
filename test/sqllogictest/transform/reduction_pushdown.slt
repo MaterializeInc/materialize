@@ -158,7 +158,7 @@ GROUP BY 1, 2, 3;
 ----
 
 query T multiline
-EXPLAIN WITH (arity, humanized expressions)
+EXPLAIN OPTIMIZED PLAN WITH (arity, humanized expressions) AS VERBOSE TEXT FOR
 SELECT
     (a1.f1) AS c1,
     (a2.f1) AS c2,
