@@ -18,7 +18,6 @@ use dynfmt::{Format, SimpleCurlyFormat};
 use itertools::Itertools;
 use mz_expr::func::{CastArrayToJsonb, CastListToJsonb};
 use mz_expr::{VariadicFunc, func};
-use mz_ore::assert_none;
 use mz_repr::{ColumnName, ColumnType, Datum, RelationType, ScalarBaseType, ScalarType};
 
 use crate::catalog::TypeCategory;
@@ -1134,7 +1133,16 @@ pub fn plan_coerce<'a>(
 
         Parameter(n) => {
             let prev = ecx.param_types().borrow_mut().insert(n, coerce_to.clone());
-            assert_none!(prev);
+            if let Some(prev) = prev {
+                if prev != *coerce_to {
+                    sql_bail!(
+                        "there are contradicting constraints for the type of parameter ${}: should be both {} and {}",
+                        n,
+                        ecx.humanize_scalar_type(&prev, false),
+                        ecx.humanize_scalar_type(coerce_to, false),
+                    );
+                }
+            }
             HirScalarExpr::parameter(n)
         }
     })

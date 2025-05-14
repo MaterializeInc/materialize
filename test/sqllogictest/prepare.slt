@@ -60,3 +60,63 @@ SELECT * FROM t;
 4
 5
 6
+
+statement ok
+PREPARE p1 AS
+SELECT $1 + $1::bigint;
+
+query I
+EXECUTE p1(5);
+----
+10
+
+statement ok
+PREPARE p2 AS
+SELECT $1::bigint + $1::bigint;
+
+query I
+EXECUTE p2(7);
+----
+14
+
+statement ok
+PREPARE p3 AS
+SELECT $1 || $1;
+
+query T
+EXECUTE p3('abc');
+----
+abcabc
+
+statement ok
+PREPARE p4 AS
+SELECT $1::text || $1::bigint::text;
+
+query error db error: ERROR: invalid input syntax for type bigint: invalid digit found in string: "abc"
+EXECUTE p4('abc');
+
+query T
+EXECUTE p4('123');
+----
+123123
+
+statement ok
+PREPARE p5 AS
+SELECT $1, $1::bigint;
+
+query II
+EXECUTE p5(7);
+----
+0
+7
+
+query error db error: ERROR: operator does not exist: bigint \|\| bigint
+PREPARE p6 AS
+SELECT $1 + $1::bigint, $1 || $1;
+
+query error db error: ERROR: operator does not exist: text \+ bigint
+PREPARE p7 AS
+SELECT $1 || $1, $1 + $1::bigint;
+
+query error db error: ERROR: there are contradicting constraints for the type of parameter \$1: should be both text and integer
+PREPARE p AS SELECT repeat($1, $1);
