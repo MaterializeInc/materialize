@@ -84,4 +84,3 @@ rows:
       | **ENVELOPE UPSERT** [**(VALUE DECODING ERRORS = INLINE)**] | Use the upsert envelope, which uses message keys to handle CRUD operations. To handle value decoding errors, use the `(VALUE DECODING ERRORS = INLINE)` option. For more information, see [Handling upserts](/sql/create-source/kafka/#handling-upserts) and [Value decoding errors](/sql/create-source/kafka/#value-decoding-errors).
 
       {{< include-md file="shared-content/kafka-format-envelope-compat-table.md" >}}
-
