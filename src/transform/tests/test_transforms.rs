@@ -12,12 +12,15 @@ use std::collections::BTreeSet;
 use mz_expr::explain::{ExplainContext, enforce_linear_chains};
 use mz_expr_parser::{TestCatalog, handle_define, try_parse_mir};
 use mz_ore::str::Indent;
+use mz_repr::GlobalId;
 use mz_repr::explain::text::text_string_at;
 use mz_repr::explain::{ExplainConfig, PlanRenderingContext};
 use mz_repr::optimize::{OptimizerFeatures, OverrideFrom};
 use mz_transform::analysis::annotate_plan;
 use mz_transform::dataflow::DataflowMetainfo;
 use mz_transform::typecheck::TypeErrorHumanizer;
+
+const TEST_GLOBAL_ID: GlobalId = GlobalId::Transient(1234567);
 
 #[mz_ore::test]
 #[cfg_attr(miri, ignore)] // can't call foreign function `rust_psm_stack_pointer` on OS `linux`
@@ -263,8 +266,13 @@ fn apply_transform<T: mz_transform::Transform>(
     features.enable_dequadratic_eqprop_map = true;
     let typecheck_ctx = mz_transform::typecheck::empty_context();
     let mut df_meta = DataflowMetainfo::default();
-    let mut transform_ctx =
-        mz_transform::TransformCtx::local(&features, &typecheck_ctx, &mut df_meta, None);
+    let mut transform_ctx = mz_transform::TransformCtx::local(
+        &features,
+        &typecheck_ctx,
+        &mut df_meta,
+        None,
+        Some(TEST_GLOBAL_ID),
+    );
 
     // Apply the transformation, returning early on TransformError.
     transform

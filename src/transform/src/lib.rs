@@ -144,11 +144,12 @@ impl<'a> TransformCtx<'a> {
         typecheck_ctx: &'a SharedContext,
         df_meta: &'a mut DataflowMetainfo,
         metrics: Option<&'a OptimizerMetrics>,
+        global_id: Option<GlobalId>,
     ) -> Self {
         Self {
             indexes: &EmptyIndexOracle,
             stats: &EmptyStatisticsOracle,
-            global_id: None,
+            global_id,
             features,
             typecheck_ctx,
             df_meta,

@@ -69,6 +69,7 @@ impl Optimize<HirRelationExpr> for Optimizer {
             &self.typecheck_ctx,
             &mut df_meta,
             self.metrics.as_ref(),
+            None,
         );
 
         // First, we run a very simple optimizer pipeline, which only folds constants. This takes
