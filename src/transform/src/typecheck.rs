@@ -1201,8 +1201,7 @@ impl Typecheck {
 macro_rules! type_error {
     ($severity:expr, $($arg:tt)+) => {{
         if $severity {
-          ::tracing::warn!($($arg)+);
-          soft_panic_or_log!("type error in MIR optimization (details in warning; see 'Type error omnibus' issue database-issues#5663 <https://github.com/MaterializeInc/database-issues/issues/5663>)");
+          soft_panic_or_log!($($arg)+);
         } else {
           ::tracing::debug!($($arg)+);
         }
@@ -1233,7 +1232,7 @@ impl crate::Transform for Typecheck {
             {
                 type_error!(
                     false, // not severe
-                    "TYPE WARNING: NEW NON-TRANSIENT GLOBAL ID {id}\n{}",
+                    "type warning: new non-transient global id {id}\n{}",
                     relation.pretty()
                 );
             }
@@ -1265,7 +1264,7 @@ impl crate::Transform for Typecheck {
                         ),
                     };
 
-                    type_error!(severity, "TYPE ERROR IN KNOWN GLOBAL ID {id}:\n{err}");
+                    type_error!(severity, "type error in known global id {id}:\n{err}");
                 }
             }
             (Ok(got), None) => {
@@ -1279,15 +1278,15 @@ impl crate::Transform for Typecheck {
                         let id = transform_ctx.global_id.unwrap();
                         (
                             format!("expected type {}\n", columns_pretty(expected, &humanizer)),
-                            format!("KNOWN GLOBAL ID {id}"),
+                            format!("known global id {id}"),
                         )
                     }
-                    None => ("".to_string(), "TRANSIENT QUERY".to_string()),
+                    None => ("".to_string(), "transient query".to_string()),
                 };
 
                 type_error!(
                     true, // SEVERE: the transformed code is inconsistent
-                    "TYPE ERROR IN {binding}:\n{err}\n{expected}{}",
+                    "type error in {binding}:\n{err}\n{expected}{}",
                     relation.pretty()
                 );
             }
