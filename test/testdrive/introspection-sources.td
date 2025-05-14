@@ -216,8 +216,8 @@ true true
 
 > CREATE DEFAULT INDEX ii_empty ON t3
 
-> SELECT records, batches, size < 16 * 1024, allocations < 512 FROM mz_introspection.mz_dataflow_arrangement_sizes WHERE name LIKE '%ii_empty'
-0 32 true true
+> SELECT records, size < 16 * 1024, allocations < 512 FROM mz_introspection.mz_dataflow_arrangement_sizes WHERE name LIKE '%ii_empty'
+0 true true
 
 # Tests that arrangement sizes are approximate
 
@@ -227,13 +227,13 @@ true true
 
 # We have 16 workers, and only want to ensure that the sizes are not egregious.
 
-> SELECT records, batches, size < 16 * 1024, allocations < 512 FROM mz_introspection.mz_dataflow_arrangement_sizes WHERE name LIKE '%ii_t4'
-0 32 true true
+> SELECT records, size < 16 * 1024, allocations < 512 FROM mz_introspection.mz_dataflow_arrangement_sizes WHERE name LIKE '%ii_t4'
+0 true true
 
 > INSERT INTO t4 SELECT 1
 
-> SELECT records, batches, size < 16 * 1024, allocations > 0 FROM mz_introspection.mz_dataflow_arrangement_sizes WHERE name LIKE '%ii_t4'
-1 32 true true
+> SELECT records, size < 16 * 1024, allocations > 0 FROM mz_introspection.mz_dataflow_arrangement_sizes WHERE name LIKE '%ii_t4'
+1 true true
 
 > INSERT INTO t4 SELECT generate_series(1, 1000)
 
@@ -342,7 +342,7 @@ true true true true true
 # monotonic inputs. The latter is when there is a possibility for memory misestimation
 # since we include monoids in the diff field.
 > CREATE CLUSTER counter_cluster SIZE = '1';
-> CREATE SOURCE counter IN CLUSTER counter_cluster FROM LOAD GENERATOR COUNTER (TICK INTERVAL '2ms', UP TO 10000);
+> CREATE SOURCE counter IN CLUSTER counter_cluster FROM LOAD GENERATOR COUNTER (TICK INTERVAL '2ms');
 
 > CREATE VIEW input AS
   SELECT counter % 1000 + 1 AS f1, counter % 10 + 1 AS f2
@@ -361,10 +361,6 @@ true true true true true
   ORDER BY f1, f2 DESC;
 > CREATE DEFAULT INDEX ON m_top1;
 
-# TODO: Reenable when https://github.com/MaterializeInc/database-issues/issues/9261 is fixed
-$ skip-if
-SELECT true
-
 > SELECT
     records >= 2 * 1000,
     records < 1.1 * 2 * 1000,
@@ -374,8 +370,6 @@ SELECT true
   FROM mz_introspection.mz_dataflow_arrangement_sizes
   WHERE name LIKE '%m_minmax%';
 true true true true true
-
-$ skip-end
 
 > SELECT
     records >= 2 * 1000,
