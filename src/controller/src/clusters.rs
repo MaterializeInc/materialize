@@ -352,7 +352,8 @@ where
         id: ClusterId,
         config: ClusterConfig,
     ) -> Result<(), anyhow::Error> {
-        self.storage.create_instance(id);
+        self.storage
+            .create_instance(id, config.workload_class.clone());
         self.compute
             .create_instance(id, config.arranged_logs, config.workload_class)?;
         Ok(())

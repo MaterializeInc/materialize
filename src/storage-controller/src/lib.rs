@@ -508,9 +508,10 @@ where
         self.storage_collections.check_exists(id)
     }
 
-    fn create_instance(&mut self, id: StorageInstanceId) {
+    fn create_instance(&mut self, id: StorageInstanceId, workload_class: Option<String>) {
         let metrics = self.metrics.for_instance(id);
         let mut instance = Instance::new(
+            workload_class,
             self.envd_epoch,
             metrics,
             Arc::clone(self.config().config_set()),

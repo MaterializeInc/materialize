@@ -119,6 +119,7 @@ where
 {
     /// Creates a new [`Instance`].
     pub fn new(
+        workload_class: Option<String>,
         envd_epoch: NonZeroI64,
         metrics: InstanceMetrics,
         dyncfg: Arc<ConfigSet>,
@@ -130,7 +131,7 @@ where
         let epoch = ClusterStartupEpoch::new(envd_epoch, 0);
 
         let mut instance = Self {
-            workload_class: None,
+            workload_class,
             replicas: Default::default(),
             active_ingestions: Default::default(),
             ingestion_exports: Default::default(),
