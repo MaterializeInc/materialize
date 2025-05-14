@@ -123,11 +123,13 @@ ingestion progress and debugging related issues, see [Troubleshooting](/ops/trou
 
 ## Known limitations
 
-##### Schema changes
+### Schema changes
+
+{{< include-md file="shared-content/schema-changes-in-progress.md" >}}
 
 {{% schema-changes %}}
 
-##### Supported types
+### Supported types
 
 Materialize natively supports the following SQL Server types:
 
@@ -176,7 +178,7 @@ Columns with the specified types need to be excluded because [SQL Server does no
 the "before"](https://learn.microsoft.com/en-us/sql/relational-databases/system-tables/cdc-capture-instance-ct-transact-sql?view=sql-server-2017#large-object-data-types)
 value when said column is updated.
 
-#### Timestamp Rounding
+### Timestamp Rounding
 
 The `time`, `datetime2`, and `datetimeoffset` types in SQL Server have a default
 scale of 7 decimal places, or in other words a accuracy of 100 nanoseconds. But
@@ -201,10 +203,10 @@ SELECT * FROM my_timestamps;
 
 ## Examples
 
-{{< warning >}}
+{{< important >}}
 Before creating a SQL Server source, you must enable Change Data Capture and
 `SNAPSHOT` transaction isolation in the upstream database.
-{{< /warning >}}
+{{</ important >}}
 
 ### Creating a connection
 
@@ -304,6 +306,8 @@ CREATE SOURCE mz_source
 ```
 
 ### Handling errors and schema changes
+
+{{< include-md file="shared-content/schema-changes-in-progress.md" >}}
 
 To handle upstream [schema changes](#schema-changes) or errored subsources, use
 the [`DROP SOURCE`](/sql/alter-source/#context) syntax to drop the affected

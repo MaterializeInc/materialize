@@ -206,11 +206,13 @@ debugging related issues, see [Troubleshooting](/ops/troubleshooting/).
 
 ## Known limitations
 
-##### Schema changes
+### Schema changes
+
+{{< include-md file="shared-content/schema-changes-in-progress.md" >}}
 
 {{% schema-changes %}}
 
-##### Supported types
+### Supported types
 
 Materialize natively supports the following MySQL types:
 
@@ -259,7 +261,7 @@ The specified columns will be treated as `text`, and will thus not offer the
 expected MySQL type features. For any unsupported data types not listed above,
 use the [`EXCLUDE COLUMNS`](#excluding-columns) option.
 
-##### Truncation
+### Truncation
 
 Tables replicated into Materialize should not be truncated. If a table is
 truncated while replicated, the whole source becomes inaccessible and will not
@@ -272,7 +274,7 @@ DELETE FROM t;
 
 ## Examples
 
-{{< warning >}}
+{{< important >}}
 Before creating a MySQL source, you must enable GTID-based binlog replication in the
 upstream database. For step-by-step instructions, see the integration guide for
 your MySQL service: [Amazon RDS](/ingest-data/mysql/amazon-rds/),
@@ -280,7 +282,7 @@ your MySQL service: [Amazon RDS](/ingest-data/mysql/amazon-rds/),
 [Azure DB](/ingest-data/mysql/azure-db/),
 [Google Cloud SQL](/ingest-data/mysql/google-cloud-sql/),
 [Self-hosted](/ingest-data/mysql/self-hosted/).
-{{< /warning >}}
+{{< /important >}}
 
 ### Creating a connection
 
@@ -408,6 +410,8 @@ CREATE SOURCE mz_source
 ```
 
 ### Handling errors and schema changes
+
+{{< include-md file="shared-content/schema-changes-in-progress.md" >}}
 
 To handle upstream [schema changes](#schema-changes) or errored subsources, use
 the [`DROP SOURCE`](/sql/alter-source/#context) syntax to drop the affected
