@@ -724,10 +724,10 @@ impl<'w, A: Allocate + 'static> Worker<'w, A> {
     }
 }
 
-/// Spawn a thread to bridge between [`ClusterClient`] and [`Worker`] channels.
+/// Spawn a thread to bridge between `ClusterClient` and [`Worker`] channels.
 ///
 /// The [`Worker`] expects a pair of persistent channels, with punctuation marking reconnects,
-/// while the [`ClusterClient`] provides a new pair of channels on each reconnect.
+/// while the `ClusterClient` provides a new pair of channels on each reconnect.
 fn spawn_channel_adapter(
     client_rx: crossbeam_channel::Receiver<(
         crossbeam_channel::Receiver<ComputeCommand>,
