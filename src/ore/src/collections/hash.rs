@@ -45,7 +45,7 @@
 #![allow(clippy::disallowed_types)]
 
 use std::borrow::Borrow;
-use std::collections::hash_map::Entry;
+use std::collections::hash_map::{Drain, Entry};
 use std::collections::{HashMap as StdMap, HashSet as StdSet, TryReserveError};
 use std::hash::Hash;
 use std::ops::{BitAnd, BitOr, BitXor, Index, Sub};
@@ -95,6 +95,12 @@ impl<K, V> HashMap<K, V> {
     #[inline]
     pub fn clear(&mut self) {
         self.0.clear();
+    }
+
+    /// See [`std::collections::HashMap::drain`].
+    #[inline]
+    pub fn drain(&mut self) -> Drain<'_, K, V> {
+        self.0.drain()
     }
 }
 
