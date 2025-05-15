@@ -1270,16 +1270,19 @@ where
                 Ok(()) => {
                     // Only update these metrics when we know that _we_ were
                     // successful.
-                    /* let batch_metrics = batch_metrics.drain(..).reduce();
-                    source_statistics
-                        .inc_updates_committed_by(batch_metrics.inserts + batch_metrics.retractions);
-                    metrics.processed_batches.inc_by(batch_metrics.len());
-                    metrics.row_inserts.inc_by(batch_metrics.inserts);
-                    metrics.row_retractions.inc_by(batch_metrics.retractions);
-                    metrics.error_inserts.inc_by(batch_metrics.error_inserts);
-                    metrics
-                        .error_retractions
-                        .inc_by(batch_metrics.error_retractions); */
+                    if let Some(batch_metrics) = batch_metrics.drain(..).reduce(|mut l, r| {l.add_assign(&r); l}) {
+                        source_statistics
+                            .inc_updates_committed_by(batch_metrics.inserts + batch_metrics.retractions);
+                        // FIXME(ptravers): we should increment by the total number of batchese in the stored batch
+                        // to match prior behaviour.
+                        metrics.processed_batches.inc();
+                        metrics.row_inserts.inc_by(batch_metrics.inserts);
+                        metrics.row_retractions.inc_by(batch_metrics.retractions);
+                        metrics.error_inserts.inc_by(batch_metrics.error_inserts);
+                        metrics
+                            .error_retractions
+                            .inc_by(batch_metrics.error_retractions);
+                    }
 
                     current_upper.borrow_mut().clone_from(&batch_upper);
                     upper_cap_set.downgrade(current_upper.borrow().iter());
