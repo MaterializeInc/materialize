@@ -160,7 +160,7 @@ The iceberg sink should eventually support the ability to utilize [partitioning]
 
 The iceberg create provides implementation of the [transforms](https://docs.rs/iceberg/latest/iceberg/spec/enum.Transform.html). Materialize will need to implement parsing for the `PARTITION BY` in Materialize SQL to ensure customer provides valid functions.  It would be ideal for the column names to be validated against the schema during purification, but in the case it isn't possible, it will be up to the customer to ensure the columns are correct.
 
-When writing partitioned data, Materialize will partition the data into separate data files that match the specification.  The operation to perform the append is otherwise th same (with multiple data files instead of 1).
+When writing partitioned data, Materialize will partition the data into separate data files that match the specification.  The operation to perform the append is otherwise the same (with multiple data files instead of 1).
 
 ### Metrics
 
