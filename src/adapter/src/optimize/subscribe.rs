@@ -231,6 +231,7 @@ impl Optimize<SubscribeFrom> for Optimizer {
                     &self.typecheck_ctx,
                     &mut df_meta,
                     Some(&self.metrics),
+                    Some(self.view_id),
                 );
                 let expr = optimize_mir_local(expr, &mut transform_ctx)?;
 

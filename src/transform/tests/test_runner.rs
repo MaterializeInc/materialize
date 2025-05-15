@@ -46,27 +46,33 @@ mod tests {
     const JSON: &str = "json";
     const TEST: &str = "test";
 
-    thread_local! {
-        static FULL_TRANSFORM_LIST: Vec<Box<dyn Transform>> = {
-            let features = OptimizerFeatures::default();
-            let typecheck_ctx = typecheck::empty_context();
-            let mut df_meta = DataflowMetainfo::default();
-            let mut transform_ctx = TransformCtx::local(&features, &typecheck_ctx, &mut df_meta, None);
+    const TEST_GLOBAL_ID: GlobalId = GlobalId::Transient(1234567);
 
-            #[allow(deprecated)]
-            Optimizer::logical_optimizer(&mut transform_ctx)
-                .transforms
-                .into_iter()
-                .chain(std::iter::once::<Box<dyn Transform>>(
-                    Box::new(mz_transform::movement::ProjectionPushdown::default())
-                ))
-                .chain(std::iter::once::<Box<dyn Transform>>(
-                    Box::new(mz_transform::normalize_lets::NormalizeLets::new(false))
-                ))
-                .chain(Optimizer::logical_cleanup_pass(&mut transform_ctx, false).transforms.into_iter())
-                .chain(Optimizer::physical_optimizer(&mut transform_ctx).transforms.into_iter())
-                .collect::<Vec<_>>()
-            };
+    fn full_transform_list() -> Vec<Box<dyn Transform>> {
+        let features = OptimizerFeatures::default();
+        let typecheck_ctx = typecheck::empty_context();
+        let mut df_meta = DataflowMetainfo::default();
+        let mut transform_ctx = TransformCtx::local(
+            &features,
+            &typecheck_ctx,
+            &mut df_meta,
+            None,
+            Some(TEST_GLOBAL_ID),
+        );
+
+        #[allow(deprecated)]
+        Optimizer::logical_optimizer(&mut transform_ctx)
+            .transforms
+            .into_iter()
+            .chain(std::iter::once::<Box<dyn Transform>>(Box::new(
+                mz_transform::movement::ProjectionPushdown::default(),
+            )))
+            .chain(std::iter::once::<Box<dyn Transform>>(Box::new(
+                mz_transform::normalize_lets::NormalizeLets::new(false),
+            )))
+            .chain(Optimizer::logical_cleanup_pass(&mut transform_ctx, false).transforms)
+            .chain(Optimizer::physical_optimizer(&mut transform_ctx).transforms)
+            .collect::<Vec<_>>()
     }
 
     #[derive(Debug, Copy, Clone, PartialEq, Eq)]
@@ -179,7 +185,13 @@ mod tests {
         let features = OptimizerFeatures::default();
         let typecheck_ctx = typecheck::empty_context();
         let mut df_meta = DataflowMetainfo::default();
-        let mut transform_ctx = TransformCtx::local(&features, &typecheck_ctx, &mut df_meta, None);
+        let mut transform_ctx = TransformCtx::local(
+            &features,
+            &typecheck_ctx,
+            &mut df_meta,
+            None,
+            Some(TEST_GLOBAL_ID),
+        );
         let mut rel = parse_relation(s, cat, args)?;
         for t in args.get("apply").cloned().unwrap_or_else(Vec::new).iter() {
             get_transform(t)?.transform(&mut rel, &mut transform_ctx)?;
@@ -188,12 +200,13 @@ mod tests {
         let format_type = get_format_type(args);
 
         let out = match test_type {
-            TestType::Opt => FULL_TRANSFORM_LIST.with(|transforms| -> Result<_, Error> {
+            TestType::Opt => {
+                let transforms = full_transform_list();
                 for transform in transforms.iter() {
                     transform.transform(&mut rel, &mut transform_ctx)?;
                 }
-                Ok(convert_rel_to_string(&rel, cat, &format_type))
-            })?,
+                convert_rel_to_string(&rel, cat, &format_type)
+            }
             TestType::Build => convert_rel_to_string(&rel, cat, &format_type),
             TestType::Steps => {
                 // TODO(justin): this thing does not currently peek into fixpoints, so it's not
@@ -205,32 +218,30 @@ mod tests {
                 writeln!(out, "{}", convert_rel_to_string(&rel, cat, &format_type))?;
                 writeln!(out, "====")?;
 
-                FULL_TRANSFORM_LIST.with(|transforms| -> Result<_, Error> {
-                    for transform in transforms {
-                        let prev = rel.clone();
-                        transform.transform(&mut rel, &mut transform_ctx)?;
+                let transforms = full_transform_list();
+                for transform in transforms {
+                    let prev = rel.clone();
+                    transform.transform(&mut rel, &mut transform_ctx)?;
 
-                        if rel != prev {
-                            if no_change.len() > 0 {
-                                write!(out, "No change:")?;
-                                let mut sep = " ";
-                                for t in no_change.iter() {
-                                    write!(out, "{}{}", sep, t)?;
-                                    sep = ", ";
-                                }
-                                writeln!(out, "\n====")?;
+                    if rel != prev {
+                        if no_change.len() > 0 {
+                            write!(out, "No change:")?;
+                            let mut sep = " ";
+                            for t in no_change.iter() {
+                                write!(out, "{}{}", sep, t)?;
+                                sep = ", ";
                             }
-                            no_change = vec![];
-
-                            write!(out, "Applied {:?}:", transform)?;
-                            writeln!(out, "\n{}", convert_rel_to_string(&rel, cat, &format_type))?;
-                            writeln!(out, "====")?;
-                        } else {
-                            no_change.push(format!("{:?}", transform));
+                            writeln!(out, "\n====")?;
                         }
+                        no_change = vec![];
+
+                        write!(out, "Applied {:?}:", transform)?;
+                        writeln!(out, "\n{}", convert_rel_to_string(&rel, cat, &format_type))?;
+                        writeln!(out, "====")?;
+                    } else {
+                        no_change.push(format!("{:?}", transform));
                     }
-                    Ok(())
-                })?;
+                }
 
                 if no_change.len() > 0 {
                     write!(out, "No change:")?;
@@ -356,14 +367,20 @@ mod tests {
             let features = OptimizerFeatures::default();
             let typecheck_ctx = typecheck::empty_context();
             let mut df_meta = DataflowMetainfo::default();
-            let mut transform_ctx =
-                TransformCtx::local(&features, &typecheck_ctx, &mut df_meta, None);
+            let mut transform_ctx = TransformCtx::local(
+                &features,
+                &typecheck_ctx,
+                &mut df_meta,
+                None,
+                Some(TEST_GLOBAL_ID),
+            );
 
             #[allow(deprecated)]
             let optimizer = Optimizer::logical_optimizer(&mut transform_ctx);
             dataflow = dataflow
                 .into_iter()
                 .map(|(id, rel)| {
+                    transform_ctx.set_global_id(id);
                     (
                         id,
                         optimizer
@@ -391,14 +408,20 @@ mod tests {
             let features = OptimizerFeatures::default();
             let typecheck_ctx = typecheck::empty_context();
             let mut df_meta = DataflowMetainfo::default();
-            let mut transform_ctx =
-                TransformCtx::local(&features, &typecheck_ctx, &mut df_meta, None);
+            let mut transform_ctx = TransformCtx::local(
+                &features,
+                &typecheck_ctx,
+                &mut df_meta,
+                None,
+                Some(TEST_GLOBAL_ID),
+            );
 
             let log_optimizer = Optimizer::logical_cleanup_pass(&mut transform_ctx, true);
             let phys_optimizer = Optimizer::physical_optimizer(&mut transform_ctx);
             dataflow = dataflow
                 .into_iter()
                 .map(|(id, rel)| {
+                    transform_ctx.set_global_id(id);
                     let local_mir_plan = log_optimizer
                         .optimize(rel, &mut transform_ctx)
                         .unwrap()

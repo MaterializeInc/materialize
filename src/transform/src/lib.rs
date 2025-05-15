@@ -144,11 +144,12 @@ impl<'a> TransformCtx<'a> {
         typecheck_ctx: &'a SharedContext,
         df_meta: &'a mut DataflowMetainfo,
         metrics: Option<&'a OptimizerMetrics>,
+        global_id: Option<GlobalId>,
     ) -> Self {
         Self {
             indexes: &EmptyIndexOracle,
             stats: &EmptyStatisticsOracle,
-            global_id: None,
+            global_id,
             features,
             typecheck_ctx,
             df_meta,
@@ -185,7 +186,8 @@ impl<'a> TransformCtx<'a> {
         Arc::clone(self.typecheck_ctx)
     }
 
-    fn set_global_id(&mut self, global_id: GlobalId) {
+    /// Lets self know the id of the object that is being optimized.
+    pub fn set_global_id(&mut self, global_id: GlobalId) {
         self.global_id = Some(global_id);
     }
 
