@@ -5548,7 +5548,7 @@ dependencies = [
 
 [[package]]
 name = "mz-debug"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "chrono",
@@ -5562,6 +5562,7 @@ dependencies = [
  "mz-ore",
  "mz-tls-util",
  "postgres-openssl",
+ "reqwest 0.11.24",
  "serde",
  "serde_yaml",
  "tokio",
@@ -5569,6 +5570,7 @@ dependencies = [
  "tokio-util",
  "tracing",
  "tracing-subscriber",
+ "url",
  "walkdir",
  "workspace-hack",
  "zip",

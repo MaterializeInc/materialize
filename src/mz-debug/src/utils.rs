@@ -33,8 +33,7 @@ pub fn validate_pg_connection_string(connection_string: &str) -> Result<String, 
         .map_err(|e| format!("Invalid PostgreSQL connection string: {}", e))
 }
 
-pub fn create_tracing_log_file(date_time: DateTime<Utc>) -> Result<File, std::io::Error> {
-    let dir = format_base_path(date_time);
+pub fn create_tracing_log_file(dir: PathBuf) -> Result<File, std::io::Error> {
     let log_file = dir.join("tracing.log");
     if log_file.exists() {
         remove_dir_all(&log_file)?;

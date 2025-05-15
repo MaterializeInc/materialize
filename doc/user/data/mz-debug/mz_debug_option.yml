@@ -2,6 +2,22 @@ columns:
   - column: "Option"
   - column: "Description"
 rows:
+  - Option: "`--dump-heap-profiles <boolean>`"
+    Description: |
+
+      <a name="dump-heap-profiles"></a> If `true`, dump heap profiles (.pprof.gz) from
+      your Materialize instance.
+
+      Defaults to `true`.
+  - Option: "`--dump-prometheus-metrics <boolean>`"
+    Description: |
+
+      <a name="dump-prometheus-metrics"></a> If `true`, dump prometheus metrics from
+      your Materialize instance.
+
+      Defaults to `true`.
+
+
   - Option: "`--dump-system-catalog <boolean>`"
     Description: |
 
@@ -9,3 +25,13 @@ rows:
       your Materialize instance.
 
       Defaults to `true`.
+
+
+  - Option: "`--mz-connection-url <URL>`"
+    Description: |
+
+      <a name="mz-connection-url"></a>The Materialize instance's [PostgreSQL
+      connection
+      URL](https://www.postgresql.org/docs/14/libpq-connect.html#LIBPQ-CONNSTRING).
+
+      Defaults to `postgres://127.0.0.1:6875/materialize?sslmode=prefer`.

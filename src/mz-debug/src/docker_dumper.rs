@@ -20,12 +20,13 @@ use std::io::Write;
 use std::path::PathBuf;
 use std::time::Duration;
 
+use anyhow::Context as AnyhowContext;
 use mz_ore::retry::{self, RetryResult};
 use tracing::{info, warn};
 
-use crate::utils::format_base_path;
 use crate::{ContainerDumper, Context};
 
+static DOCKER_DUMP_DIR: &str = "docker";
 static DOCKER_RESOURCE_DUMP_TIMEOUT: Duration = Duration::from_secs(30);
 
 pub struct DockerDumper {
@@ -36,9 +37,7 @@ pub struct DockerDumper {
 impl DockerDumper {
     pub fn new(context: &Context, container_id: String) -> Self {
         Self {
-            directory_path: format_base_path(context.start_time)
-                .join("docker")
-                .join(&container_id),
+            directory_path: context.base_path.join(DOCKER_DUMP_DIR).join(&container_id),
             container_id,
         }
     }
@@ -148,4 +147,35 @@ fn write_output(
     file.write_all(&output)?;
     info!("Exported {}", file_path.display());
     Ok(())
+}
+
+/// Gets the IP address of a Docker container using the container ID.
+pub async fn get_container_ip(container_id: &str) -> Result<String, anyhow::Error> {
+    let output = tokio::process::Command::new("docker")
+        .args([
+            "inspect",
+            "-f",
+            "{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}",
+            container_id,
+        ])
+        .output()
+        .await
+        .with_context(|| format!("Failed to get container IP address for {}", container_id))?;
+
+    if !output.status.success() {
+        return Err(anyhow::anyhow!(
+            "Docker command failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        ));
+    }
+
+    let ip = String::from_utf8(output.stdout)
+        .with_context(|| "Failed to convert container IP address to string")?
+        .trim()
+        .to_string();
+    if ip.is_empty() {
+        return Err(anyhow::anyhow!("Container IP address not found"));
+    }
+
+    Ok(ip)
 }

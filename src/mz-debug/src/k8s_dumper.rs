@@ -22,7 +22,6 @@ use std::io::Write;
 use std::path::PathBuf;
 use std::pin::Pin;
 
-use chrono::{DateTime, Utc};
 use futures::future::join_all;
 use k8s_openapi::NamespaceResourceScope;
 use k8s_openapi::api::admissionregistration::v1::{
@@ -45,7 +44,6 @@ use mz_cloud_resources::crd::materialize::v1alpha1::Materialize;
 use serde::{Serialize, de::DeserializeOwned};
 use tracing::{info, warn};
 
-use crate::utils::format_base_path;
 use crate::{ContainerDumper, Context};
 
 struct K8sResourceDumper<'n, K> {
@@ -100,7 +98,7 @@ where
             return Ok(());
         }
         let file_path = format_resource_path(
-            self.context.start_time,
+            self.context.base_path.clone(),
             self.resource_type.as_str(),
             self.namespace.as_ref(),
         );
@@ -207,8 +205,11 @@ impl<'n> K8sDumper<'n> {
             return Ok(());
         }
 
-        let file_path =
-            format_resource_path(self.context.start_time, resource_type.as_str(), namespace);
+        let file_path = format_resource_path(
+            self.context.base_path.clone(),
+            resource_type.as_str(),
+            namespace,
+        );
         let file_name = file_path.join("describe.txt");
         create_dir_all(&file_path)?;
         let mut file = File::create(&file_name)?;
@@ -290,7 +291,8 @@ impl<'n> K8sDumper<'n> {
     }
 
     async fn _dump_k8s_pod_logs(&self, namespace: &String) -> Result<(), anyhow::Error> {
-        let file_path = format_resource_path(self.context.start_time, "logs", Some(namespace));
+        let file_path =
+            format_resource_path(self.context.base_path.clone(), "logs", Some(namespace));
         create_dir_all(&file_path)?;
 
         let pods: Api<Pod> = Api::<Pod>::namespaced(self.client.clone(), namespace);
@@ -566,11 +568,11 @@ impl<'n> ContainerDumper for K8sDumper<'n> {
 }
 
 fn format_resource_path(
-    date_time: DateTime<Utc>,
+    base_path: PathBuf,
     resource_type: &str,
     namespace: Option<&String>,
 ) -> PathBuf {
-    let mut path = format_base_path(date_time).join(resource_type);
+    let mut path = base_path.join(resource_type);
 
     if let Some(namespace) = namespace {
         path = path.join(namespace);
