@@ -864,22 +864,22 @@ pub(crate) struct UnexpiredReadHandleState {
 /// client should call `next` until it returns `None`, which signals all data has been returned...
 /// but it's also free to abandon the instance at any time if it eg. only needs a few entries.
 #[derive(Debug)]
-pub struct Cursor<'a, K: Codec, V: Codec, T: Timestamp + Codec64, D: Codec64> {
-    consolidator: CursorConsolidator<'a, K, V, T, D>,
+pub struct Cursor<K: Codec, V: Codec, T: Timestamp + Codec64, D: Codec64> {
+    consolidator: CursorConsolidator<K, V, T, D>,
     _lease: Lease,
     read_schemas: Schemas<K, V>,
 }
 
 #[derive(Debug)]
-enum CursorConsolidator<'a, K: Codec, V: Codec, T: Timestamp + Codec64, D: Codec64> {
+enum CursorConsolidator<K: Codec, V: Codec, T: Timestamp + Codec64, D: Codec64> {
     Structured {
-        consolidator: Consolidator<'a, T, D, StructuredSort<K, V, T, D>>,
+        consolidator: Consolidator<T, D, StructuredSort<K, V, T, D>>,
         max_len: usize,
         max_bytes: usize,
     },
 }
 
-impl<'a, K, V, T, D> Cursor<'a, K, V, T, D>
+impl<K, V, T, D> Cursor<K, V, T, D>
 where
     K: Debug + Codec + Ord,
     V: Debug + Codec + Ord,
@@ -950,7 +950,6 @@ where
         &mut self,
         as_of: Antichain<T>,
     ) -> Result<Vec<((Result<K, String>, Result<V, String>), T, D)>, Since<T>> {
-        let shard_metrics = &self.machine.applier.shard_metrics.clone();
         let mut cursor = self.snapshot_cursor(as_of, |_| true).await?;
         let mut contents = Vec::new();
         while let Some(iter) = cursor.next().await {
@@ -963,7 +962,9 @@ where
         consolidate_updates(&mut contents);
         if old_len != contents.len() {
             // TODO(bkirwi): do we need more / finer-grained metrics for this?
-            shard_metrics
+            self.machine
+                .applier
+                .shard_metrics
                 .unconsolidated_snapshot
                 .inc();
         }

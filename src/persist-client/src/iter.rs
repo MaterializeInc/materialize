@@ -29,10 +29,10 @@ use mz_ore::task::JoinHandle;
 use mz_persist::indexed::encoding::BlobTraceUpdates;
 use mz_persist::location::Blob;
 use mz_persist::metrics::ColumnarMetrics;
-use mz_persist_types::arrow::{ArrayBound, ArrayIdx, ArrayOrd};
+use mz_persist_types::arrow::{ArrayBound, ArrayIdx, ArrayOrd, OwnedArrayIdx};
 use mz_persist_types::part::Part;
 use mz_persist_types::{Codec, Codec64};
-use semver::Version;
+use semver::{Op, Version};
 use timely::progress::Timestamp;
 use tracing::{Instrument, debug_span};
 
@@ -158,6 +158,13 @@ impl<K: Codec, V: Codec, T, D> StructuredSort<K, V, T, D> {
 }
 
 pub type SortKV<'a> = (ArrayIdx<'a>, Option<ArrayIdx<'a>>);
+pub type OwnedSortKV = (OwnedArrayIdx, Option<OwnedArrayIdx>);
+
+pub fn sort_kv_from_owned<'a>(kv: &'a OwnedSortKV) -> SortKV<'a> {
+    let (key, value) = kv;
+    (key.as_ref(), value.as_ref().map(|v| v.as_ref()))
+}
+
 fn kv_lower<T>(data: &FetchData<T>) -> Option<SortKV<'_>> {
     let key_idx = data.structured_lower.as_ref().map(|l| l.get())?;
     Some((key_idx, None))
@@ -331,7 +338,7 @@ impl<T: Timestamp + Codec64 + Lattice, D: Codec64> ConsolidationPart<T, D> {
 /// client should call `next` until it returns `None`, which signals all data has been returned...
 /// but it's also free to abandon the instance at any time if it eg. only needs a few entries.
 #[derive(Debug)]
-pub(crate) struct Consolidator<'a, T, D, Sort: RowSort<T, D>> {
+pub(crate) struct Consolidator<T, D, Sort: RowSort<T, D>> {
     context: String,
     shard_id: ShardId,
     sort: Sort,
@@ -342,7 +349,7 @@ pub(crate) struct Consolidator<'a, T, D, Sort: RowSort<T, D>> {
     runs: Vec<VecDeque<(ConsolidationPart<T, D>, usize)>>,
     filter: FetchBatchFilter<T>,
     budget: usize,
-    lower_bound: Option<(SortKV<'a>, T)>,
+    lower_bound: Option<(OwnedSortKV, T)>,
     // NB: this is the tricky part!
     // One hazard of streaming consolidation is that we may start consolidating a particular KVT,
     // but not be able to finish, because some other part that might also contain the same KVT
@@ -351,7 +358,7 @@ pub(crate) struct Consolidator<'a, T, D, Sort: RowSort<T, D>> {
     drop_stash: Option<StructuredUpdates>,
 }
 
-impl<'a, T, D, Sort> Consolidator<'a, T, D, Sort>
+impl<T, D, Sort> Consolidator<T, D, Sort>
 where
     T: Timestamp + Codec64 + Lattice,
     D: Codec64 + Semigroup + Ord,
@@ -369,7 +376,7 @@ where
         shard_metrics: Arc<ShardMetrics>,
         read_metrics: ReadMetrics,
         filter: FetchBatchFilter<T>,
-        lower_bound: Option<(SortKV<'a>, T)>,
+        lower_bound: Option<(OwnedSortKV, T)>,
         prefetch_budget_bytes: usize,
     ) -> Self {
         Self {
@@ -389,7 +396,7 @@ where
     }
 }
 
-impl<'a, T, D, Sort> Consolidator<'a, T, D, Sort>
+impl<T, D, Sort> Consolidator<T, D, Sort>
 where
     T: Timestamp + Codec64 + Lattice + Sync,
     D: Codec64 + Semigroup + Ord,
@@ -487,7 +494,12 @@ where
             return None;
         }
 
-        let mut iter = ConsolidatingIter::new(&self.context, &self.filter, &self.lower_bound, &mut self.drop_stash);
+        let mut iter = ConsolidatingIter::new(
+            &self.context,
+            &self.filter,
+            &self.lower_bound,
+            &mut self.drop_stash,
+        );
 
         for run in &mut self.runs {
             let last_in_run = run.len() < 2;
@@ -756,7 +768,7 @@ where
     }
 }
 
-impl<'a, T, D, Sort: RowSort<T, D>> Drop for Consolidator<'a, T, D, Sort> {
+impl<T, D, Sort: RowSort<T, D>> Drop for Consolidator<T, D, Sort> {
     fn drop(&mut self) {
         for run in &self.runs {
             for (part, _) in run {
@@ -839,7 +851,7 @@ where
     parts: Vec<&'a StructuredUpdates>,
     heap: BinaryHeap<PartRef<'a, T, D>>,
     upper_bound: Option<(SortKV<'a>, T)>,
-    lower_bound: &'a Option<(SortKV<'a>, T)>,
+    lower_bound: &'a Option<(OwnedSortKV, T)>,
     state: Option<(Indices, SortKV<'a>, T, D)>,
     drop_stash: &'a mut Option<StructuredUpdates>,
 }
@@ -852,7 +864,7 @@ where
     fn new(
         context: &'a str,
         filter: &'a FetchBatchFilter<T>,
-        lower_bound: &'a Option<(SortKV<'a>, T)>,
+        lower_bound: &'a Option<(OwnedSortKV, T)>,
         drop_stash: &'a mut Option<StructuredUpdates>,
     ) -> Self {
         Self {
@@ -933,7 +945,8 @@ where
 
                     // This code checks our inclusive lower bound against
                     if let Some((kv_lower, t_lower)) = &self.lower_bound {
-                        if (kv_lower, t_lower) >= (kv1, t1) {
+                        let sort_kv = sort_kv_from_owned(kv_lower);
+                        if (&sort_kv, t_lower) >= (kv1, t1) {
                             // Discard this item from the part, since it's past our lower bound.
                             let _ = part.pop(&self.parts, self.filter);
 

@@ -15,25 +15,6 @@ use std::pin::pin;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use anyhow::anyhow;
-use differential_dataflow::difference::Semigroup;
-use differential_dataflow::lattice::Lattice;
-use differential_dataflow::trace::Description;
-use futures::{Stream, pin_mut};
-use futures_util::StreamExt;
-use mz_dyncfg::Config;
-use mz_ore::cast::CastFrom;
-use mz_ore::error::ErrorExt;
-use mz_ore::now::SYSTEM_TIME;
-use mz_persist::location::Blob;
-use mz_persist_types::part::Part;
-use mz_persist_types::{Codec, Codec64};
-use timely::PartialOrder;
-use timely::progress::{Antichain, Timestamp};
-use tokio::sync::mpsc::Sender;
-use tokio::sync::{TryAcquireError, mpsc, oneshot};
-use tracing::{Instrument, Span, debug, debug_span, error, trace, warn};
-use mz_persist_types::arrow::ArrayBound;
 use crate::async_runtime::IsolatedRuntime;
 use crate::batch::{BatchBuilderConfig, BatchBuilderInternal, BatchParts, PartDeletes};
 use crate::cfg::{
@@ -49,8 +30,27 @@ use crate::internal::maintenance::RoutineMaintenance;
 use crate::internal::metrics::ShardMetrics;
 use crate::internal::state::{HollowBatch, RunMeta, RunOrder, RunPart};
 use crate::internal::trace::{ApplyMergeResult, FueledMergeRes};
-use crate::iter::{Consolidator, SortKV, StructuredSort};
+use crate::iter::{Consolidator, OwnedSortKV, SortKV, StructuredSort};
 use crate::{Metrics, PersistConfig, ShardId};
+use anyhow::anyhow;
+use differential_dataflow::difference::Semigroup;
+use differential_dataflow::lattice::Lattice;
+use differential_dataflow::trace::Description;
+use futures::{Stream, pin_mut};
+use futures_util::StreamExt;
+use mz_dyncfg::Config;
+use mz_ore::cast::CastFrom;
+use mz_ore::error::ErrorExt;
+use mz_ore::now::SYSTEM_TIME;
+use mz_persist::location::Blob;
+use mz_persist_types::arrow::{ArrayBound, OwnedArrayIdx};
+use mz_persist_types::part::Part;
+use mz_persist_types::{Codec, Codec64};
+use timely::PartialOrder;
+use timely::progress::{Antichain, Timestamp};
+use tokio::sync::mpsc::Sender;
+use tokio::sync::{TryAcquireError, mpsc, oneshot};
+use tracing::{Instrument, Span, debug, debug_span, error, trace, warn};
 
 use super::trace::ActiveCompaction;
 
@@ -841,7 +841,7 @@ where
         isolated_runtime: Arc<IsolatedRuntime>,
         write_schemas: Schemas<K, V>,
         batch_so_far: Option<HollowBatch<T>>,
-        incremental_tx: Option<Sender<HollowBatch<T>>>
+        incremental_tx: Option<Sender<HollowBatch<T>>>,
     ) -> Result<HollowBatch<T>, anyhow::Error> {
         // TODO: Figure out a more principled way to allocate our memory budget.
         // Currently, we give any excess budget to write parallelism. If we had
@@ -859,7 +859,7 @@ where
         let mut k_bound = None;
         let mut v_bound = None;
         let mut timestamp = None;
-        let mut sort: Option<(SortKV<'_>, T)> = None;
+        let mut sort: Option<(OwnedSortKV, T)> = None;
 
         // Use compaction as a method of getting inline writes out of state, to
         // make room for more inline writes. We could instead do this at the end
@@ -868,7 +868,9 @@ where
         batch_cfg.inline_writes_single_max_bytes = 0;
 
         if let Some(batch_so_far) = batch_so_far {
-            let last_part = batch_so_far.last_part(shard_id.clone(), &*blob, &metrics).await;
+            let last_part = batch_so_far
+                .last_part(shard_id.clone(), &*blob, &metrics)
+                .await;
             if let Some(last_part) = last_part {
                 let fetched = EncodedPart::fetch(
                     shard_id,
@@ -878,13 +880,13 @@ where
                     &metrics.read.batch_fetcher,
                     &batch_so_far.desc,
                     &last_part,
-                ).await.map_err(|blob_key| anyhow!("missing key {blob_key}"))?;
+                )
+                .await
+                .map_err(|blob_key| anyhow!("missing key {blob_key}"))?;
 
                 let updates = fetched.normalize(&metrics.columnar);
-                let structured = updates.as_structured::<K, V>(
-                    write_schemas.key.as_ref(),
-                    write_schemas.val.as_ref(),
-                );
+                let structured = updates
+                    .as_structured::<K, V>(write_schemas.key.as_ref(), write_schemas.val.as_ref());
                 let part = match structured.as_part() {
                     Some(p) => p,
                     None => return Err(anyhow!("unexpected empty part")),
@@ -899,13 +901,22 @@ where
             }
         };
 
-        if let (Some(k_ref), Some(v_ref), Some(ts_value)) = (k_bound.as_ref(), v_bound.as_ref(), timestamp) {
+        if let (Some(k_ref), Some(v_ref), Some(ts_value)) =
+            (k_bound.as_ref(), v_bound.as_ref(), timestamp)
+        {
             let key_idx = k_ref.get();
             let val_idx = v_ref.get();
-            sort = Some(((key_idx, Some(val_idx)), ts_value));
+            sort = Some((
+                (
+                    OwnedArrayIdx::from(key_idx),
+                    Some(OwnedArrayIdx::from(val_idx)),
+                ),
+                ts_value,
+            ));
 
             for (_, _, run) in &mut runs {
-                let start = run.iter()
+                let start = run
+                    .iter()
                     .position(|part| {
                         part.structured_key_lower()
                             .map_or(true, |lower| lower.get() >= key_idx)
@@ -915,7 +926,6 @@ where
                 *run = &run[start.saturating_sub(1)..];
             }
         }
-
 
         let parts = BatchParts::new_ordered(
             batch_cfg,
@@ -956,7 +966,7 @@ where
             sort,
             prefetch_budget_bytes,
         );
-        
+
         for (desc, meta, parts) in runs {
             consolidator.enqueue_run(desc, meta, parts.iter().cloned());
         }
@@ -1004,7 +1014,7 @@ where
                     match tx.send(partial_batch).await {
                         Ok(_) => {
                             // metrics.compaction.incremental_batch_sent.inc();
-                        },
+                        }
                         Err(e) => {
                             error!("Failed to send batch to incremental compaction: {}", e);
                             // metrics.compaction.incremental_batch_send_fail.inc()
