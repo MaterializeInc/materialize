@@ -5,7 +5,7 @@ rows:
   - Option: "`--dump-heap-profiles <boolean>`"
     Description: |
 
-      <a name="dump-heap-profiles"></a> If `true`, dump heap profiles (.pprof) from
+      <a name="dump-heap-profiles"></a> If `true`, dump heap profiles (.pprof.gz) from
       your Materialize instance.
 
       Defaults to `true`.
