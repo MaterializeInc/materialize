@@ -208,7 +208,6 @@ steps:
           queue: mac
         coverage: skip
         sanitizer: skip
-        branches: "main v*.* self-managed/v*"
 
       - id: lint-deps
         label: Lint dependencies
