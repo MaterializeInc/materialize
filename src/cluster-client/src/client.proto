@@ -26,5 +26,4 @@ message ProtoTimelyConfig {
   bool enable_zero_copy = 5;
   bool enable_zero_copy_lgalloc = 6;
   optional uint64 zero_copy_limit = 7;
-  bool enable_create_sockets_v2 = 8;
 }
