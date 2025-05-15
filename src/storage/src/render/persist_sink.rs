@@ -99,7 +99,7 @@ use differential_dataflow::{AsCollection, Collection, Hashable};
 use futures::{StreamExt, future};
 use itertools::Itertools;
 use mz_ore::cast::CastFrom;
-use mz_ore::collections::{CollectionExt, HashMap};
+use mz_ore::collections::HashMap;
 use mz_persist_client::Diagnostics;
 use mz_persist_client::batch::{Batch, BatchBuilder, ProtoBatch};
 use mz_persist_client::cache::PersistClientCache;
@@ -1108,8 +1108,19 @@ where
                 }
             });
 
-            let batch_lower = done_batches.iter().into_last().0.clone();
-            let batch_upper = done_batches.iter().into_first().1.clone();
+            let mut done_batches_iter = done_batches.iter();
+
+            let Some(first_batch_description) = done_batches_iter.next() else {
+                continue;
+            };
+
+            let batch_upper = first_batch_description.1.clone();
+
+            let batch_lower = if let Some(last_batch_description) = done_batches_iter.last() {
+                last_batch_description.0.clone()
+            } else {
+                first_batch_description.0.clone()
+            };
 
             let mut batches: Vec<FinishedBatch> = vec![];
             let mut batch_metrics: Vec<BatchMetrics> = vec![];
