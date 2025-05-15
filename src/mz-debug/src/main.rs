@@ -247,7 +247,7 @@ async fn initialize_context(
                 match port_forwarder.spawn_port_forward().await {
                     Ok(process) => Some(process),
                     Err(err) => {
-                        warn!("{}", err);
+                        warn!("{:#}", err);
                         None
                     }
                 }
@@ -346,12 +346,12 @@ async fn run(context: Context) -> Result<(), anyhow::Error> {
     match &context.debug_mode_context {
         DebugModeContext::SelfManaged(self_managed_context) => {
             if let Err(e) = dump_self_managed_http_resources(&context, self_managed_context).await {
-                warn!("Failed to dump self-managed http resources: {}", e);
+                warn!("Failed to dump self-managed http resources: {:#}", e);
             }
         }
         DebugModeContext::Emulator(emulator_context) => {
             if let Err(e) = dump_emulator_http_resources(&context, emulator_context).await {
-                warn!("Failed to dump emulator http resources: {}", e);
+                warn!("Failed to dump emulator http resources: {:#}", e);
             }
         }
     };
@@ -366,7 +366,7 @@ async fn run(context: Context) -> Result<(), anyhow::Error> {
         {
             Ok(dumper) => Some(dumper),
             Err(e) => {
-                warn!("Failed to dump system catalog: {}", e);
+                warn!("Failed to dump system catalog: {:#}", e);
                 None
             }
         };
@@ -381,9 +381,9 @@ async fn run(context: Context) -> Result<(), anyhow::Error> {
     let zip_file_name = format!("{}.zip", &context.base_path.display());
 
     if let Err(e) = zip_debug_folder(PathBuf::from(&zip_file_name), &context.base_path) {
-        warn!("Failed to zip debug directory: {}", e);
+        warn!("Failed to zip debug directory: {:#}", e);
     } else {
-        info!("Created zip debug at {}", &zip_file_name);
+        info!("Created zip debug at {:#}", &zip_file_name);
     }
 
     Ok(())

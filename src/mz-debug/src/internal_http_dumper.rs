@@ -16,6 +16,7 @@ use std::path::Path;
 use tokio::fs::{File, create_dir_all};
 use tokio::io::AsyncWriteExt;
 use tracing::{info, warn};
+use url::Url;
 
 use crate::kubectl_port_forwarder::{
     KubectlPortForwarder, find_cluster_services, find_environmentd_service,
@@ -52,18 +53,26 @@ impl<'n> InternalHttpDumpClient<'n> {
         output_path: &Path,
     ) -> Result<(), anyhow::Error> {
         // Try HTTPS first, then fall back to HTTP if that fails
-        let mut url = format!("https://{}", relative_url);
+        let mut url = Url::parse(&format!("https://{}", relative_url))
+            .with_context(|| format!("Failed to parse URL: https://{}", relative_url))?;
+
         let mut response = self
             .http_client
-            .get(&url)
+            .get(url.to_string())
             .headers(headers.clone())
             .send()
             .await;
 
         if response.is_err() {
             // Fall back to HTTP if HTTPS fails
-            url = format!("http://{}", relative_url);
-            response = self.http_client.get(&url).headers(headers).send().await;
+            let _ = url.set_scheme("http");
+
+            response = self
+                .http_client
+                .get(url.to_string())
+                .headers(headers)
+                .send()
+                .await;
         }
 
         let response = response.with_context(|| format!("Failed to send request to {}", url))?;
@@ -175,7 +184,7 @@ pub async fn dump_emulator_http_resources(
             )
             .await
         {
-            warn!("Failed to dump heap profile: {}", e);
+            warn!("Failed to dump heap profile: {:#}", e);
         }
     }
 
@@ -194,7 +203,7 @@ pub async fn dump_emulator_http_resources(
             )
             .await
         {
-            warn!("Failed to dump prometheus metrics: {}", e);
+            warn!("Failed to dump prometheus metrics: {:#}", e);
         }
     }
 
