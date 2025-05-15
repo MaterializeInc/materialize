@@ -41,7 +41,7 @@ mz-storage-types = { path = "../storage-types" }
 mz-timely-util = { path = "../timely-util" }
 mz-txn-wal = { path = "../txn-wal" }
 parquet = { version = "53.3.0", default-features = false, features = ["arrow", "async", "snap"] }
-prometheus = { version = "0.13.4", default-features = false }
+prometheus = { version = "0.14.0", default-features = false }
 proptest = { version = "1.6.0", default-features = false, features = ["std"] }
 prost = "0.13.5"
 reqwest = { version = "0.11.13", features = ["stream"] }

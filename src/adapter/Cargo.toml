@@ -71,7 +71,7 @@ mz-tracing = { path = "../tracing" }
 mz-transform = { path = "../transform" }
 mz-timestamp-oracle = { path = "../timestamp-oracle" }
 opentelemetry = { version = "0.24.0", features = ["trace"] }
-prometheus = { version = "0.13.4", default-features = false }
+prometheus = { version = "0.14.0", default-features = false }
 prost = { version = "0.13.5", features = ["no-recursion-limit"] }
 qcell = "0.5"
 rand = "0.8.5"
