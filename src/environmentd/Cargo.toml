@@ -99,7 +99,7 @@ sentry-tracing = "0.38.0"
 serde = { version = "1.0.219", features = ["derive"] }
 serde_json = "1.0.127"
 shell-words = "1.1.0"
-stacker = "0.1.21"
+stacker = "0.1.20"
 sysctl = "0.6.0"
 tempfile = "3.19.1"
 thiserror = "2.0.12"
