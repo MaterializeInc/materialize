@@ -70,6 +70,7 @@ copyright_files=$(grep -vE \
     -e '^src/repr/src/adt/snapshots/.*' \
     -e '^src/environmentd/tests/testdata/timezones/.*\.csv' \
     -e '^test/fivetran-destination/.*\/00-README$' \
+    -e '^misc/python/materialize/visualize_pprof_profile/(profile\.proto|profile_pb2\.py)' \
     <<< "$files"
 )
 
