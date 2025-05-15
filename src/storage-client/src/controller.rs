@@ -373,7 +373,7 @@ pub trait StorageController: Debug {
     /// created with zero replicas.
     ///
     /// Panics if a storage instance with the given ID already exists.
-    fn create_instance(&mut self, id: StorageInstanceId);
+    fn create_instance(&mut self, id: StorageInstanceId, workload_class: Option<String>);
 
     /// Drops the storage instance with the given ID.
     ///
