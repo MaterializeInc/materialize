@@ -41,7 +41,7 @@ def dump_slt(conn: pg8000.Connection, query: str) -> None:
     print(
         f"""
 
-query {colspec}
+query {colspec} rowsort
 {query}
 ----
 9999999999 values hashing to YY

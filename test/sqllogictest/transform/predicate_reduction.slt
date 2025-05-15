@@ -50,13 +50,15 @@ Target cluster: quickstart
 
 EOF
 
-query II
+mode cockroach
+
+query II rowsort
 SELECT * FROM t1 WHERE f1 is null and (f1 is null or f1 = 1)
 ----
-NULL
-NULL
-NULL
-0
+NULL NULL
+NULL 0
+
+mode standard
 
 # Test that subexpression matching can detect a `!(predicate)` and then replace
 # other instances of `predicate` with `false`.
@@ -75,13 +77,15 @@ Target cluster: quickstart
 
 EOF
 
-query II
+mode cockroach
+
+query II rowsort
 SELECT * FROM t1 WHERE f1 is not null and (f1 is null or f1 = 1)
 ----
-1
-NULL
-1
-0
+1 NULL
+1 0
+
+mode standard
 
 # A test that simplification works when overlapping subexpressions are nested.
 

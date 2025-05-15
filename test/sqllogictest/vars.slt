@@ -672,7 +672,7 @@ SHOW cluster;
 will_work
 COMPLETE 1
 
-query TTT
+query TTT rowsort
 SELECT r.name, rp.parameter_name, rp.parameter_value
 FROM mz_role_parameters rp
 LEFT JOIN mz_roles r ON rp.role_id = r.id;

@@ -216,7 +216,7 @@ Target cluster: multiprocess
 
 EOF
 
-query TT
+query TT valuesort
 SELECT replace(s, E'\n', '<newline>'), regexp_match(s, 'a.*') FROM t;
 ----
 ABC
@@ -243,7 +243,7 @@ Target cluster: multiprocess
 
 EOF
 
-query TT
+query TT valuesort
 SELECT replace(s, E'\n', '<newline>'), regexp_match(s, 'a.*', 'i') FROM t;
 ----
 ccc
@@ -255,7 +255,7 @@ ABC
 abc
 {abc}
 
-query TT
+query TT valuesort
 SELECT replace(s, E'\n', '<newline>'), regexp_match(s, 'a.*', 'ic') FROM t;
 ----
 ABC
@@ -267,7 +267,7 @@ NULL
 abc
 {abc}
 
-query TT
+query TT valuesort
 SELECT replace(s, E'\n', '<newline>'), regexp_match(s, 'a.*', 'ci') FROM t;
 ----
 ccc
@@ -324,7 +324,7 @@ Target cluster: multiprocess
 
 EOF
 
-query T
+query T valuesort
 SELECT replace(s, E'\n', '<newline>') FROM t WHERE s ~* regex_pat;
 ----
 ABC
@@ -347,7 +347,7 @@ Target cluster: multiprocess
 EOF
 
 # We need to also replace newlines in the output here to not confuse sqllogictest.
-query TTT
+query TTT valuesort
 SELECT replace(s, E'\n', '<newline>'), regex_pat, replace(regexp_match(s, regex_pat)::text, E'\n', '<newline>') FROM t;
 ----
 ABC
@@ -378,7 +378,7 @@ Target cluster: multiprocess
 
 EOF
 
-query TTT
+query TTT valuesort
 SELECT replace(s, E'\n', '<newline>'), regex_pat, replace(regexp_match(s, regex_pat, 'i')::text, E'\n', '<newline>') FROM t;
 ----
 ccc
@@ -394,7 +394,7 @@ test line 1<newline>test line 2
 1.*2
 {"1<newline>test line 2"}
 
-query TTT
+query TTT valuesort
 SELECT replace(s, E'\n', '<newline>'), regex_pat, replace(regexp_match(s, regex_pat, 'ic')::text, E'\n', '<newline>') FROM t;
 ----
 ABC
@@ -410,7 +410,7 @@ test line 1<newline>test line 2
 1.*2
 {"1<newline>test line 2"}
 
-query TTT
+query TTT valuesort
 SELECT replace(s, E'\n', '<newline>'), regex_pat, replace(regexp_match(s, regex_pat, 'ci')::text, E'\n', '<newline>') FROM t;
 ----
 ccc
@@ -611,17 +611,13 @@ Target cluster: multiprocess
 
 EOF
 
-query TT
+query TT rowsort
 SELECT s, regexp_replace(s, 'b..', 'X') FROM r;
 ----
-foobarbaz
-fooXbaz
-foobarbaz
-fooXbaz
-FOOBARBAZ
-FOOBARBAZ
-FOOZARZAZ
-FOOZARZAZ
+foobarbaz fooXbaz
+foobarbaz fooXbaz
+FOOBARBAZ FOOBARBAZ
+FOOZARZAZ FOOZARZAZ
 
 query T multiline
 EXPLAIN OPTIMIZED PLAN WITH (humanized expressions) AS VERBOSE TEXT FOR
@@ -638,17 +634,13 @@ Target cluster: multiprocess
 
 EOF
 
-query TT
+query TT rowsort
 SELECT s, regexp_replace(s, 'b..', 'X', 'i') FROM r;
 ----
-FOOBARBAZ
-FOOXBAZ
-foobarbaz
-fooXbaz
-foobarbaz
-fooXbaz
-FOOZARZAZ
-FOOZARZAZ
+FOOBARBAZ FOOXBAZ
+foobarbaz fooXbaz
+foobarbaz fooXbaz
+FOOZARZAZ FOOZARZAZ
 
 query T multiline
 EXPLAIN OPTIMIZED PLAN WITH (humanized expressions) AS VERBOSE TEXT FOR
@@ -665,17 +657,13 @@ Target cluster: multiprocess
 
 EOF
 
-query TT
+query TT rowsort
 SELECT s, regexp_replace(s, 'b..', 'X', 'ig') FROM r;
 ----
-FOOBARBAZ
-FOOXX
-foobarbaz
-fooXX
-foobarbaz
-fooXX
-FOOZARZAZ
-FOOZARZAZ
+FOOBARBAZ FOOXX
+foobarbaz fooXX
+foobarbaz fooXX
+FOOZARZAZ FOOZARZAZ
 
 query T multiline
 EXPLAIN OPTIMIZED PLAN WITH (humanized expressions) AS VERBOSE TEXT FOR
@@ -692,17 +680,13 @@ Target cluster: multiprocess
 
 EOF
 
-query TT
+query TT rowsort
 SELECT s, regexp_replace(s, regex, replacement, 'ig') FROM r;
 ----
-FOOBARBAZ
-FOOXX
-foobarbaz
-fooXX
-FOOZARZAZ
-FOOZARZAZ
-foobarbaz
-foo>ar<>az<
+FOOBARBAZ FOOXX
+foobarbaz fooXX
+FOOZARZAZ FOOZARZAZ
+foobarbaz foo>ar<>az<
 
 # Test regexp_replace error paths
 
@@ -776,7 +760,7 @@ SELECT regexp_matches('foobarbequebazilbarfbonkbilbobagginsbarbellbeachball', '(
 ----
 {bar,beque,bazil}
 
-query T
+query T rowsort
 SELECT regexp_matches('foobarbequebazilbarfbonkbilbobagginsbarbellbeachball', '(b[^b]+)(b[^b]+)(b[^b]+)', 'g');
 ----
 {barf,bonk,bil}
@@ -791,7 +775,7 @@ query T
 SELECT regexp_matches('orangeoculus', '(b[^b]+)(b[^b]+)(b[^b]+)', 'g');
 ----
 
-query T
+query T rowsort
 SELECT regexp_matches('fooBarBequebazilbarfBonkbilbobagginsbarbellbeachball', '(b[^b]+)(b[^b]+)(b[^b]+)', 'ig');
 ----
 {barf,Bonk,bil}
@@ -805,7 +789,7 @@ CREATE TABLE foo(bar text, pattern text);
 statement OK
 insert into foo values ('fooBarBequebazilbarfBonkbilbobagginsbarbellbeachball', '(b[^b]+)(b[^b]+)(b[^b]+)'), ('bellbeachball', '(b[^b]+)(b[^b]+)(b[^b]+)');
 
-query T
+query T rowsort
 SELECT regexp_matches(bar, pattern, 'ig') FROM foo;
 ----
 {barf,Bonk,bil}

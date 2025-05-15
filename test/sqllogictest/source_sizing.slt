@@ -18,7 +18,7 @@ CREATE SOURCE s1 FROM LOAD GENERATOR COUNTER;
 statement ok
 CREATE SOURCE s2 FROM LOAD GENERATOR COUNTER;
 
-query TTTTTT
+query TTTTTT rowsort
 SELECT id, schema_id, name, type, connection_id, size FROM mz_sources WHERE id LIKE 'u%'
 ----
 u2  u3  s1  load-generator  NULL  NULL

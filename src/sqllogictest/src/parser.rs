@@ -305,6 +305,10 @@ impl<'a> Parser<'a> {
                             if !multiline {
                                 vals = vals.into_iter().map(|val| val.replace('⏎', "\n")).collect();
                             }
+
+                            if sort == Sort::Value {
+                                vals.sort();
+                            }
                         }
                         Mode::Cockroach => {
                             let mut rows: Vec<Vec<String>> = vec![];
@@ -371,12 +375,15 @@ impl<'a> Parser<'a> {
         let mut conn = None;
         let mut user = None;
         let mut multiline = false;
+        let mut sort = Sort::No;
         if let Some(options) = words.next() {
             for option in options.split(',') {
                 if let Some(value) = option.strip_prefix("conn=") {
                     conn = Some(value);
                 } else if let Some(value) = option.strip_prefix("user=") {
                     user = Some(value);
+                } else if option == "rowsort" {
+                    sort = Sort::Row;
                 } else if option == "multiline" {
                     multiline = true;
                 } else {
@@ -404,13 +411,22 @@ impl<'a> Parser<'a> {
                 v
             })
         } else {
-            Output::Values(output_str.lines().map(String::from).collect())
+            // We only apply rowsort in mode cockroach, for "query" statements,
+            // so mirror that here.
+            let mut output_lines: Vec<String> = output_str.lines().map(String::from).collect();
+
+            if self.mode == Mode::Cockroach && sort == Sort::Row {
+                output_lines.sort();
+            }
+
+            Output::Values(output_lines)
         };
         Ok(Record::Simple {
             location,
             conn,
             user,
             sql,
+            sort,
             output,
             output_str,
         })

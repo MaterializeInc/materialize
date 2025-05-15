@@ -1099,7 +1099,7 @@ FROM (SELECT DISTINCT f1, f2 FROM t) q
 1  2
 3  12
 
-query II
+query II rowsort
 WITH t (f1, f2) AS (VALUES (1, 2), (1, 2), (3, 4))
 SELECT f1, lag(f1 * f2, f1 - 1) OVER (PARTITION BY f1, f2)
 FROM (SELECT DISTINCT f1, f2 FROM t) q

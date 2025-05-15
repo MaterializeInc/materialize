@@ -426,13 +426,13 @@ SELECT generate_series FROM generate_series(2::bigint, 4::bigint, 2::bigint)
 2
 4
 
-query I
+query I rowsort
 SELECT generate_series FROM generate_series(-2, 2, 3)
 ----
 1
 -2
 
-query I
+query I rowsort
 SELECT generate_series FROM generate_series(-2::bigint, 2::bigint, 3::bigint)
 ----
 1
@@ -665,7 +665,7 @@ SELECT jsonb_array_elements.generate_series FROM ROWS FROM (jsonb_array_elements
 generate_series
 1
 
-query T colnames
+query T colnames,rowsort
 SELECT repeat_row FROM ROWS FROM (repeat_row(2), generate_series(1, 1));
 ----
 repeat_row
@@ -810,7 +810,7 @@ SELECT jsonb_build_object(jsonb_object_keys('{"a":2, "b":3}'), 1, 'c', 3), jsonb
 query error key cannot be null
 SELECT jsonb_build_object(jsonb_object_keys('{"a":2, "b":3}'), 1, 'c', 3), jsonb_build_object(jsonb_object_keys('{"a":2}'), 1, 'c', 3)
 
-query TT
+query TT rowsort
 SELECT jsonb_build_array(jsonb_object_keys('{"a":2, "b":3}')), jsonb_build_array(jsonb_object_keys('{"a":2}'));
 ----
 ["b"]  [null]

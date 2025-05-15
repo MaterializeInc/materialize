@@ -134,7 +134,7 @@ nlb
 statement ok
 DROP ROLE nlb
 
-query T
+query T rowsort
 SELECT name FROM mz_roles
 ----
 mz_system

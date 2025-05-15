@@ -7,6 +7,8 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
+mode cockroach
+
 # bin_date
 simple conn=mz_system,user=mz_system
 ALTER SYSTEM SET enable_binary_date_bin = true
@@ -14,71 +16,51 @@ ALTER SYSTEM SET enable_binary_date_bin = true
 COMPLETE 0
 
 # case 1: AD dates, origin < input
-query TTT
+query TTT rowsort
 SELECT
   str,
   "interval",
   date_trunc(str, ts) = date_bin("interval"::interval, ts, timestamp '2001-01-01') AS equal
 FROM (
   VALUES
-  ('week', '7 d'),
-  ('day', '1 d'),
-  ('hour', '1 h'),
-  ('minute', '1 m'),
-  ('second', '1 s')
+  ('week', '7d'),
+  ('day', '1d'),
+  ('hour', '1h'),
+  ('minute', '1m'),
+  ('second', '1s')
 ) intervals (str, interval),
 (VALUES (timestamp '2020-02-29 15:44:17.71393')) ts (ts);
 ----
-day
-1 d
-true
-hour
-1 h
-true
-week
-7 d
-true
-minute
-1 m
-true
-second
-1 s
-true
+day 1d true
+hour 1h true
+week 7d true
+minute 1m true
+second 1s true
 
 # case 3: AD dates, origin > input
-query TTT
+query TTT rowsort
 SELECT
   str,
   "interval",
   date_trunc(str, ts) = date_bin("interval"::interval, ts, timestamp '2020-03-02') AS equal
 FROM (
   VALUES
-  ('week', '7 d'),
-  ('day', '1 d'),
-  ('hour', '1 h'),
-  ('minute', '1 m'),
-  ('second', '1 s')
+  ('week', '7d'),
+  ('day', '1d'),
+  ('hour', '1h'),
+  ('minute', '1m'),
+  ('second', '1s')
 ) intervals (str, interval),
 (VALUES (timestamp '2020-02-29 15:44:17.71393')) ts (ts);
 ----
-day
-1 d
-true
-hour
-1 h
-true
-week
-7 d
-true
-minute
-1 m
-true
-second
-1 s
-true
+day 1d true
+hour 1h true
+week 7d true
+minute 1m true
+second 1s true
 
 # bin timestamps into arbitrary intervals
-query TT
+query TT rowsort
 SELECT
   "interval",
   date_bin("interval"::interval, ts, origin)
@@ -93,16 +75,11 @@ FROM (
 (VALUES (timestamp '2020-02-11 15:44:17.71393')) ts (ts),
 (VALUES (timestamp '2001-01-01')) origin (origin);
 ----
-15 days
-2020-02-06 00:00:00
-2 hours
-2020-02-11 14:00:00
-10 seconds
-2020-02-11 15:44:10
-15 minutes
-2020-02-11 15:30:00
-1 hour 30 minutes
-2020-02-11 15:00:00
+15␠days 2020-02-06␠00:00:00
+2␠hours 2020-02-11␠14:00:00
+10␠seconds 2020-02-11␠15:44:10
+15␠minutes 2020-02-11␠15:30:00
+1␠hour␠30␠minutes 2020-02-11␠15:00:00
 
 # shift bins using the origin parameter:
 query T
@@ -134,7 +111,7 @@ query error source and origin must not differ more than 2\^63 nanoseconds
 SELECT date_bin('1m', timestamp '2262-04-11 23:47:17');
 
 # Test unintuitive day binning
-query TT
+query TT rowsort
 SELECT
     "interval",
     date_bin("interval"::interval, timestamp '2020-02-27 15:44:17.71393', timestamp '2001-01-01')
@@ -145,27 +122,18 @@ FROM (
     ('7d'), ('8d'), ('9d')
 ) intervals ("interval");
 ----
-1d
-2020-02-27 00:00:00
-2d
-2020-02-27 00:00:00
-3d
-2020-02-27 00:00:00
-4d
-2020-02-27 00:00:00
-5d
-2020-02-26 00:00:00
-6d
-2020-02-27 00:00:00
-7d
-2020-02-24 00:00:00
-8d
-2020-02-23 00:00:00
-9d
-2020-02-24 00:00:00
+1d 2020-02-27␠00:00:00
+2d 2020-02-27␠00:00:00
+3d 2020-02-27␠00:00:00
+4d 2020-02-27␠00:00:00
+5d 2020-02-26␠00:00:00
+6d 2020-02-27␠00:00:00
+7d 2020-02-24␠00:00:00
+8d 2020-02-23␠00:00:00
+9d 2020-02-24␠00:00:00
 
 # Test that binary extension behaves as expected
-query TT
+query TT rowsort
 SELECT
   "interval",
   date_bin("interval"::interval, ts) = date_bin("interval"::interval, ts, timestamp '1970-01-01') AS equal
@@ -179,16 +147,11 @@ FROM (
 ) intervals (interval),
 (VALUES (timestamp '2020-02-29 15:44:17.71393')) ts (ts);
 ----
-15 days
-true
-2 hours
-true
-10 seconds
-true
-15 minutes
-true
-1 hour 30 minutes
-true
+15␠days true
+2␠hours true
+10␠seconds true
+15␠minutes true
+1␠hour␠30␠minutes true
 
 query T
 SELECT '99999-01-01'::TIMESTAMP + '162143 y';
@@ -204,7 +167,7 @@ ALTER SYSTEM SET enable_date_bin_hopping = true
 ----
 COMPLETE 0
 
-query T
+query T rowsort
 SELECT * FROM date_bin_hopping('45s', '1m', '2001-01-01 00:01:20') ORDER BY 1;
 ----
 2001-01-01 00:00:30+00
@@ -223,72 +186,56 @@ INSERT INTO t VALUES
   ('2021-01-01 01:17', 61);
 
 # ts unix epoch origin
-query TI
+query TI rowsort
 SELECT date_bin_hopping AS w, sum(v)
   FROM t,
   date_bin_hopping('5m', '10m', t.ts)
 GROUP BY w
 ORDER BY 1;
 ----
-2021-01-01 01:00:00
-113
-2021-01-01 01:05:00
-155
-2021-01-01 01:10:00
-103
-2021-01-01 01:15:00
-61
+2021-01-01␠01:00:00 113
+2021-01-01␠01:05:00 155
+2021-01-01␠01:10:00 103
+2021-01-01␠01:15:00 61
 
 # tstz unix epoch origin
-query TI
+query TI rowsort
 SELECT date_bin_hopping AS w, sum(v)
   FROM t,
   date_bin_hopping('5m', '10m', t.ts::timestamptz)
 GROUP BY w
 ORDER BY 1;
 ----
-2021-01-01 01:00:00+00
-113
-2021-01-01 01:05:00+00
-155
-2021-01-01 01:10:00+00
-103
-2021-01-01 01:15:00+00
-61
+2021-01-01␠01:00:00+00 113
+2021-01-01␠01:05:00+00 155
+2021-01-01␠01:10:00+00 103
+2021-01-01␠01:15:00+00 61
 
 # ts
-query TI
+query TI rowsort
 SELECT date_bin_hopping AS w, sum(v)
   FROM t,
   date_bin_hopping('5m', '10m', t.ts, '1970-01-01')
 GROUP BY w
 ORDER BY 1;
 ----
-2021-01-01 01:00:00
-113
-2021-01-01 01:05:00
-155
-2021-01-01 01:10:00
-103
-2021-01-01 01:15:00
-61
+2021-01-01␠01:00:00 113
+2021-01-01␠01:05:00 155
+2021-01-01␠01:10:00 103
+2021-01-01␠01:15:00 61
 
 #tstz
-query TI
+query TI rowsort
 SELECT date_bin_hopping AS w, sum(v)
   FROM t,
   date_bin_hopping('5m', '10m', t.ts::timestamptz, '1970-01-01')
 GROUP BY w
 ORDER BY 1;
 ----
-2021-01-01 01:00:00+00
-113
-2021-01-01 01:05:00+00
-155
-2021-01-01 01:10:00+00
-103
-2021-01-01 01:15:00+00
-61
+2021-01-01␠01:00:00+00 113
+2021-01-01␠01:05:00+00 155
+2021-01-01␠01:10:00+00 103
+2021-01-01␠01:15:00+00 61
 
 statement ok
 DROP TABLE t;
@@ -393,7 +340,7 @@ SELECT to_char(ts, 'FMIYYY FMIYY FMIY FMI FMIW FMIDDD FMID') FROM t
 2024 24 24 4 12 81 4
 2060 60 60 0 53 369 5
 
-query T
+query T rowsort
 SELECT to_char(ts, 'FF1 FF2 FF3 FF4 FF5 FF6  ff1 ff2 ff3 ff4 ff5 ff6  MS US') FROM (
     VALUES
         ('2018-11-02 12:34:56'::timestamp),
@@ -436,7 +383,7 @@ SELECT to_char(ts, 'HH:MI:SS') FROM t
 12:09:23
 NULL
 
-query T
+query T rowsort
 SELECT to_char(ts, NULL) FROM t
 ----
 NULL

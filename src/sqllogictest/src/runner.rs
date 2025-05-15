@@ -1249,11 +1249,12 @@ impl<'a> RunnerInner<'a> {
                 conn,
                 user,
                 sql,
+                sort,
                 output,
                 location,
                 ..
             } => {
-                self.run_simple(*conn, *user, sql, output, location.clone())
+                self.run_simple(*conn, *user, sql, sort.clone(), output, location.clone())
                     .await
             }
             Record::Copy {
@@ -1713,28 +1714,40 @@ impl<'a> RunnerInner<'a> {
         conn: Option<&'r str>,
         user: Option<&'r str>,
         sql: &'r str,
+        sort: Sort,
         output: &'r Output,
         location: Location,
     ) -> Result<Outcome<'r>, anyhow::Error> {
         let client = self.get_conn(conn, user).await;
         let actual = Output::Values(match client.simple_query(sql).await {
-            Ok(result) => result
-                .into_iter()
-                .filter_map(|m| match m {
-                    SimpleQueryMessage::Row(row) => {
-                        let mut s = vec![];
-                        for i in 0..row.len() {
-                            s.push(row.get(i).unwrap_or("NULL"));
+            Ok(result) => {
+                let mut rows = Vec::new();
+
+                for m in result.into_iter() {
+                    match m {
+                        SimpleQueryMessage::Row(row) => {
+                            let mut s = vec![];
+                            for i in 0..row.len() {
+                                s.push(row.get(i).unwrap_or("NULL"));
+                            }
+                            rows.push(s.join(","));
                         }
-                        Some(s.join(","))
+                        SimpleQueryMessage::CommandComplete(count) => {
+                            // This applies any sort on the COMPLETE line as
+                            // well, but we do the same for the expected output.
+                            rows.push(format!("COMPLETE {}", count));
+                        }
+                        SimpleQueryMessage::RowDescription(_) => {}
+                        _ => panic!("unexpected"),
                     }
-                    SimpleQueryMessage::CommandComplete(count) => {
-                        Some(format!("COMPLETE {}", count))
-                    }
-                    SimpleQueryMessage::RowDescription(_) => None,
-                    _ => panic!("unexpected"),
-                })
-                .collect::<Vec<_>>(),
+                }
+
+                if let Sort::Row = sort {
+                    rows.sort();
+                }
+
+                rows
+            }
             // Errors can contain multiple lines (say if there are details), and rewrite
             // sticks them each on their own line, so we need to split up the lines here to
             // each be its own String in the Vec.

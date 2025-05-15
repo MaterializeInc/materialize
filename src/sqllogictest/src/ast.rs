@@ -131,6 +131,7 @@ pub enum Record<'a> {
         conn: Option<&'a str>,
         user: Option<&'a str>,
         sql: &'a str,
+        sort: Sort,
         output: Output,
         output_str: &'a str,
     },
