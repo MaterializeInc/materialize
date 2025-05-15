@@ -379,6 +379,11 @@ class SqlCommand(Command):
 
     def configure(self, parser: argparse.ArgumentParser) -> None:
         parser.add_argument(
+            "--mz_system",
+            action="store_true",
+        )
+
+        parser.add_argument(
             "service",
             metavar="SERVICE",
             nargs="?",
@@ -403,6 +408,46 @@ class SqlCommand(Command):
                 [composition.repo.images["psql"]]
             )
             deps.acquire()
+            if args.mz_system:
+                deps["psql"].run(
+                    [
+                        "-h",
+                        service.get("hostname", args.service),
+                        "-p",
+                        "6877",
+                        "-U",
+                        "mz_system",
+                        "materialize",
+                    ],
+                    docker_args=[
+                        "--interactive",
+                        f"--network={composition.name}_default",
+                    ],
+                    env={"PGPASSWORD": "materialize", "PGCLIENTENCODING": "utf-8"},
+                )
+            else:
+                deps["psql"].run(
+                    [
+                        "-h",
+                        service.get("hostname", args.service),
+                        "-p",
+                        "6875",
+                        "-U",
+                        "materialize",
+                        "materialize",
+                    ],
+                    docker_args=[
+                        "--interactive",
+                        f"--network={composition.name}_default",
+                    ],
+                    env={"PGCLIENTENCODING": "utf-8"},
+                )
+        elif image == "materialize/balancerd":
+            assert not args.mz_system
+            deps = composition.repo.resolve_dependencies(
+                [composition.repo.images["psql"]]
+            )
+            deps.acquire()
             deps["psql"].run(
                 [
                     "-h",
@@ -417,6 +462,7 @@ class SqlCommand(Command):
                 env={"PGCLIENTENCODING": "utf-8"},
             )
         elif image == "materialize/postgres":
+            assert not args.mz_system
             deps = composition.repo.resolve_dependencies(
                 [composition.repo.images["psql"]]
             )
@@ -433,6 +479,7 @@ class SqlCommand(Command):
                 env={"PGPASSWORD": "postgres", "PGCLIENTENCODING": "utf-8"},
             )
         elif image == "cockroachdb/cockroach" or args.service == "postgres-metadata":
+            assert not args.mz_system
             deps = composition.repo.resolve_dependencies(
                 [composition.repo.images["psql"]]
             )
@@ -450,6 +497,7 @@ class SqlCommand(Command):
                 env={"PGCLIENTENCODING": "utf-8"},
             )
         elif image == "mysql":
+            assert not args.mz_system
             deps = composition.repo.resolve_dependencies(
                 [composition.repo.images["mysql-client"]]
             )
