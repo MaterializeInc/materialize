@@ -1,6 +1,9 @@
 # Extending the Query Lifecycle Tables
 
-- Associated: [#9140](https://github.com/MaterializeInc/database-issues/issues/9140)
+Associated:
+- [#9140](https://github.com/MaterializeInc/database-issues/issues/9140)
+- [Original statement logging design doc](https://github.com/MaterializeInc/materialize/blob/4487749289f1591e7918ebaa1458e23b5e40633f/doc/developer/design/20230519_statement_logging.md)
+- [Original statement lifecycle design doc](https://github.com/MaterializeInc/materialize/blob/4487749289f1591e7918ebaa1458e23b5e40633f/doc/developer/design/20231204_query_lifecycle_events_logging.md)
 
 ## The Problem
 
@@ -57,11 +60,11 @@ So, what I would propose is:
         - multiple queries in 2., in which case, again, the same lifecycle event would be copied to multiple statements.
         - a `PREPARE` in 3.
         - a `Parse` in 4.
-    - `ParsingComplete`: when our parsing finishes in `protocol.rs`. (This is in 1-to-1 correspondence with `StatementReceived`.) Note that this is not the entire handling of a `Parse` msg of 4., but only the actual parsing.
-    - `PrepareComplete`: when we have finished the preparations for a statement. (This is in 1-to-1 correspondence with `StatementReceived`.) More specifically:
+    - `ParsingFinished`: when our parsing finishes in `protocol.rs`. (This is in 1-to-1 correspondence with `StatementReceived`.) Note that this is not the entire handling of a `Parse` msg of 4., but only the actual parsing.
+    - `PrepareFinished`: when we have finished the preparations for a statement. (This is in 1-to-1 correspondence with `StatementReceived`.) More specifically:
         - For 1. and 2., when `one_query` is about to call `adapter_client.execute`.
         - For 3., when a `PREPARE` completes, i.e., when we are about to send the response to the user in `protocol.rs`.
-        - For 4., when we are about to send a `ParseComplete` back to the user in `protocol.rs`.
+        - For 4., when we are about to send a `ParseFinished` back to the user in `protocol.rs`.
     - Additionally, we should have ...received and ...finished events for each of the other msgs in the "Extended Query" flow, e.g., `Bind`, `Describe`, `Execute`.
 
 Note that if a user is interested only in queries submitted through 1. or 2., and they are not interested in when the parsing and other preparation ended, it will be enough to look at `mz_statement_execution_lifecycle_history` (and optionally join it with `mz_statement_execution_history` and `mz_prepared_statement_history` to get more info about the execution and/or statement). They will still be able to get the end-to-end time, because `ExecutionMessageReceived` will be part of `mz_statement_execution_lifecycle_history`.
@@ -76,27 +79,27 @@ For a query submitted through 1.:
 - `FrontendMessage::Query` arrives in `protocol.rs`, to which
     - `mz_statement_lifecycle_history` would get the following events:
         - `StatementReceived`
-        - `ParsingComplete`
-        - `PrepareComplete`
+        - `ParsingFinished`
+        - `PrepareFinished`
     - `mz_statement_execution_lifecycle_history` would get the following events:
         - `ExecutionMessageReceived` (roughly corresponds to last byte of the query arriving) (with the same timestamp as the above `StatementReceived`)
         - `ExecutionBegan` (already exists, emitted in the Coordinator's `begin_statement_execution`)
-        - `OptimizationStarted` (new event, but not mentioned above, because it's orthogonal to the prepared statement issues) (this should be very close in time to `ExecutionBegan` if things are behaving correctly, but I have a suspicion that this is not always the case)
+        - `OptimizationBegan` (new event, but not mentioned above, because it's orthogonal to the prepared statement issues) (this should be very close in time to `ExecutionBegan` if things are behaving correctly, but I have a suspicion that this is not always the case)
         - `OptimizationFinished` (already exists)
-        - `StorageDependenciesFinished`
-        - `ComputeDependenciesFinished`
+        - `StorageDependenciesFinished` (already exists)
+        - `ComputeDependenciesFinished` (already exists)
         - `ExecutionFinished` (roughly corresponds to first byte of the result sent to user)
 
 For a query submitted through 4.:
 - `FrontendMessage::Parse` arrives in `protocol.rs`, to which
     - `mz_statement_lifecycle_history` would get the following events:
         - `StatementReceived`
-        - `ParsingComplete`
-        - `PrepareComplete`
+        - `ParsingFinished`
+        - `PrepareFinished`
 - `FrontendMessage::Bind` arrives in `protocol.rs`, to which
     - `mz_statement_lifecycle_history` would get the following events:
         - `BindReceived`
-        - `BindComplete` (whose timestamp would probably be very close to `BindReceived`, but later we might do more interesting things at bind time, in which case binding will take more time)
+        - `BindFinished` (whose timestamp would probably be very close to `BindReceived`, but later we might do more interesting things at bind time, in which case binding will take more time)
 - `FrontendMessage::Execute` arrives in `protocol.rs`, to which
     - `mz_statement_lifecycle_history` would get the following events:
         - `ExecuteReceived`
@@ -104,7 +107,7 @@ For a query submitted through 4.:
     - `mz_statement_execution_lifecycle_history` would get the following events:
         - `ExecutionMessageReceived` (with the same timestamp as the above `ExecuteReceived`)
         - `ExecutionBegan`
-        - `OptimizationStarted`
+        - `OptimizationBegan`
         - `OptimizationFinished`
         - `StorageDependenciesFinished`
         - `ComputeDependenciesFinished`
