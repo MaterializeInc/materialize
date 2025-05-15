@@ -1110,7 +1110,7 @@ where
 
             let batch_lower = done_batches.iter().into_last().0.clone();
             let batch_upper = done_batches.iter().into_first().1.clone();
-            
+
             let mut batches: Vec<FinishedBatch> = vec![];
             let mut batch_metrics: Vec<BatchMetrics> = vec![];
 
@@ -1119,7 +1119,7 @@ where
                 batches.append(&mut std::mem::replace(&mut vec![], batch.finished));
                 batch_metrics.push(batch.batch_metrics);
             }
-                
+
             let mut to_append = batches.iter_mut().map(|b| &mut b.batch).collect::<Vec<_>>();
 
             let result = {
