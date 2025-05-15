@@ -142,13 +142,20 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
 def get_all_and_latest_two_minor_mz_versions(
     use_versions_from_docs: bool,
 ) -> tuple[list[MzVersion], list[MzVersion]]:
+    current_version = MzVersion.parse_cargo()
     if use_versions_from_docs:
         version_list = VersionsFromDocs(respect_released_tag=False)
-        all_versions = version_list.all_versions()
+        all_versions = [v for v in version_list.all_versions() if v < current_version]
         tested_versions = version_list.minor_versions()[-2:]
     else:
-        tested_versions = get_published_minor_mz_versions(limit=2)
-        all_versions = get_all_published_mz_versions(newest_first=False)
+        tested_versions = [
+            v for v in get_published_minor_mz_versions() if v < current_version
+        ]
+        all_versions = [
+            v
+            for v in get_all_published_mz_versions(newest_first=False)
+            if v < current_version
+        ]
     return all_versions, tested_versions
 
 
@@ -249,8 +256,13 @@ def test_upgrade_from_version(
         c.rm(mz_service, "testdrive")
 
     if from_version != "current_source" and not lts_upgrade:
+        current_version = MzVersion.parse_cargo()
         # We can't skip in-between minor versions anymore, so go through all of them
-        for version in get_published_minor_mz_versions(newest_first=False):
+        for version in [
+            v
+            for v in get_published_minor_mz_versions(newest_first=False)
+            if v < current_version
+        ]:
             if version <= from_version:
                 continue
             if version >= MzVersion.parse_cargo():
