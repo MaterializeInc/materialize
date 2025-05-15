@@ -57,6 +57,7 @@ pub struct Relation {
     pub category: RelationCategory,
 }
 
+static SYSTEM_CATALOG_DUMP_DIR: &str = "system_catalog";
 /// This list is used to determine which relations to dump.
 /// The relations are grouped and delimited by their category (i.e. Basic object information)
 static RELATIONS: &[Relation] = &[
@@ -929,7 +930,7 @@ fn format_catalog_dump_error_message(
 }
 
 fn format_file_path(base_path: PathBuf, cluster_replica: Option<&ClusterReplica>) -> PathBuf {
-    let path = base_path.join("system-catalog");
+    let path = base_path.join(SYSTEM_CATALOG_DUMP_DIR);
     if let Some(cluster_replica) = cluster_replica {
         path.join(cluster_replica.cluster_name.as_str())
             .join(cluster_replica.replica_name.as_str())

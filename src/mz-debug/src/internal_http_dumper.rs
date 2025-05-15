@@ -22,13 +22,15 @@ use crate::kubectl_port_forwarder::{
 };
 use crate::{Context, EmulatorContext, SelfManagedContext};
 
+static HEAP_PROFILES_DIR: &str = "profiles";
+static PROM_METRICS_DIR: &str = "prom_metrics";
 static PROM_METRICS_ENDPOINT: &str = "metrics";
 static ENVD_HEAP_PROFILE_ENDPOINT: &str = "prof/heap";
 static CLUSTERD_HEAP_PROFILE_ENDPOINT: &str = "heap";
 static INTERNAL_HOST_ADDRESS: &str = "127.0.0.1";
 static INTERNAL_HTTP_PORT: i32 = 6878;
 
-/// A struct that handles downloading and saving profile data from HTTP endpoints
+/// A struct that handles downloading and saving profile data from HTTP endpoints.
 pub struct InternalHttpDumpClient<'n> {
     context: &'n Context,
     http_client: &'n reqwest::Client,
@@ -95,14 +97,14 @@ impl<'n> InternalHttpDumpClient<'n> {
 
     /// Downloads and saves heap profile data
     pub async fn dump_heap_profile(&self, relative_url: &str, service_name: &str) -> Result<()> {
-        let output_dir = self.context.base_path.join("profiles");
+        let output_dir = self.context.base_path.join(HEAP_PROFILES_DIR);
         create_dir_all(&output_dir).await.with_context(|| {
             format!(
                 "Failed to create output directory: {}",
                 output_dir.display()
             )
         })?;
-        let output_path = output_dir.join(format!("{}.memprof.pprof", service_name));
+        let output_path = output_dir.join(format!("{}.memprof.pprof.gz", service_name));
 
         self.dump_request_to_file(
             relative_url,
@@ -127,7 +129,7 @@ impl<'n> InternalHttpDumpClient<'n> {
         relative_url: &str,
         service_name: &str,
     ) -> Result<()> {
-        let output_dir = self.context.base_path.join("prom_metrics");
+        let output_dir = self.context.base_path.join(PROM_METRICS_DIR);
         create_dir_all(&output_dir).await.with_context(|| {
             format!(
                 "Failed to create output directory: {}",

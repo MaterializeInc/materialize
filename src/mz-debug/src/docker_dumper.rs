@@ -26,6 +26,7 @@ use tracing::{info, warn};
 
 use crate::{ContainerDumper, Context};
 
+static DOCKER_DUMP_DIR: &str = "docker";
 static DOCKER_RESOURCE_DUMP_TIMEOUT: Duration = Duration::from_secs(30);
 
 pub struct DockerDumper {
@@ -36,7 +37,7 @@ pub struct DockerDumper {
 impl DockerDumper {
     pub fn new(context: &Context, container_id: String) -> Self {
         Self {
-            directory_path: context.base_path.join("docker").join(&container_id),
+            directory_path: context.base_path.join(DOCKER_DUMP_DIR).join(&container_id),
             container_id,
         }
     }
