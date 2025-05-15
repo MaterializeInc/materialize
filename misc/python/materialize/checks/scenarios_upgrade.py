@@ -37,9 +37,7 @@ def get_minor_versions() -> list[MzVersion]:
         current_version = MzVersion.parse_cargo()
         _minor_versions = [
             v
-            for v in get_published_minor_mz_versions(
-                limit=4, exclude_current_minor_version=True
-            )
+            for v in get_published_minor_mz_versions(exclude_current_minor_version=True)
             if v < current_version
         ]
     return _minor_versions

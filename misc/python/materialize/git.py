@@ -124,14 +124,21 @@ def get_version_tags(
 
 
 def get_latest_version(
-    version_type: type[VERSION_TYPE], excluded_versions: set[VERSION_TYPE] | None = None
+    version_type: type[VERSION_TYPE],
+    excluded_versions: set[VERSION_TYPE] | None = None,
+    current_version: VERSION_TYPE | None = None,
 ) -> VERSION_TYPE:
     all_version_tags: list[VERSION_TYPE] = get_version_tags(
         version_type=version_type, fetch=True
     )
 
     if excluded_versions is not None:
-        all_version_tags = [v for v in all_version_tags if v not in excluded_versions]
+        all_version_tags = [
+            v
+            for v in all_version_tags
+            if v not in excluded_versions
+            and (not current_version or v < current_version)
+        ]
 
     return max(all_version_tags)
 

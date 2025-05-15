@@ -245,12 +245,15 @@ class AncestorImageResolutionInBuildkite(AncestorImageResolutionBase):
 
 
 def get_latest_published_version() -> MzVersion:
-    """Get the latest mz version for which an image is published."""
+    """Get the latest mz version, older than current state, for which an image is published."""
     excluded_versions = set()
+    current_version = MzVersion.parse_cargo()
 
     while True:
         latest_published_version = git.get_latest_version(
-            version_type=MzVersion, excluded_versions=excluded_versions
+            version_type=MzVersion,
+            excluded_versions=excluded_versions,
+            current_version=current_version,
         )
 
         if is_valid_release_image(latest_published_version):
