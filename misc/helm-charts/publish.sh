@@ -222,7 +222,7 @@ fi
 git add $VERSIONS_YAML_PATH
 git commit -m "docs: Bump to helm-chart $CI_HELM_CHART_VERSION, environmentd $CI_MZ_VERSION, orchestratord $ORCHESTRATORD_VERSION"
 git diff HEAD~
-run_if_not_dry git push "https://github.com/MaterializeInc/materialize.git" "$DOCS_BRANCH"
+run_if_not_dry git push origin "$DOCS_BRANCH"
 
 if ! is_truthy "$CI_NO_TERRAFORM_BUMP"; then
   echo "--- Bumping versions in Terraform Nightly tests"
@@ -235,5 +235,5 @@ if ! is_truthy "$CI_NO_TERRAFORM_BUMP"; then
   git add test/terraform/*/main.tf
   git commit -m "terraform tests: Bump to AWS ${TERRAFORM_VERSION[terraform-aws-materialize]}, GCP ${TERRAFORM_VERSION[terraform-google-materialize]}, Azure ${TERRAFORM_VERSION[terraform-azurerm-materialize]}"
   git diff HEAD~
-  run_if_not_dry git push "https://github.com/MaterializeInc/materialize.git" main
+  run_if_not_dry git push origin main
 fi
