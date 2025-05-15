@@ -22,6 +22,7 @@ You can manually deploy by following steps 1-2 above and running the following c
 ```bash
 # Set a tag version.
 export BUILDKITE_TAG=mz-debug-vx.y.z
+export AWS_PROFILE=...
 
 # macOS
 bin/pyactivate -m ci.deploy_mz-debug.macos
@@ -29,6 +30,7 @@ bin/pyactivate -m ci.deploy_mz-debug.macos
 # Linux
 bin/pyactivate -m ci.deploy_mz-debug.linux
 ```
+where AWS_PROFILE is the profile with access to the materialize-binaries S3 bucket in the Materialize Core account.
 
 **Important Notes:**
 - When running on macOS, modify `linux.py` to use `target` instead of `target-xcompile`
