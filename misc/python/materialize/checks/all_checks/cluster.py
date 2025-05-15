@@ -37,6 +37,8 @@ class CreateCluster(Check):
         return Testdrive(
             dedent(
                 """
+                $ set-sql-timeout duration=240s
+
                 > CREATE TABLE create_cluster1_table (f1 INTEGER);
                 > CREATE TABLE create_cluster2_table (f1 INTEGER);
 
