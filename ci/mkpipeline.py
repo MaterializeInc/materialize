@@ -180,6 +180,8 @@ so it is executed.""",
                     agent = "hetzner-aarch64-4cpu-8gb"
                 elif agent == "hetzner-aarch64-4cpu-8gb":
                     agent = "hetzner-aarch64-8cpu-16gb"
+                elif agent == "hetzner-aarch64-8cpu-16gb":
+                    agent = "hetzner-aarch64-16cpu-32gb"
                 elif agent == "hetzner-x86-64-2cpu-4gb":
                     agent = "hetzner-x86-64-4cpu-8gb"
                 elif agent == "hetzner-x86-64-4cpu-8gb":
@@ -187,11 +189,11 @@ so it is executed.""",
                 elif agent == "hetzner-x86-64-8cpu-16gb":
                     agent = "hetzner-x86-64-16cpu-32gb"
                 elif agent == "hetzner-x86-64-16cpu-32gb":
-                    agent = "hetzner-x86-64-16cpu-64gb"
+                    agent = "hetzner-x86-64-dedi-16cpu-64gb"
                 elif agent == "hetzner-x86-64-16cpu-64gb":
-                    agent = "hetzner-x86-64-32cpu-128gb"
-                elif agent == "hetzner-x86-64-32cpu-128gb":
-                    agent = "hetzner-x86-64-48cpu-192gb"
+                    agent = "hetzner-x86-64-dedi-32cpu-128gb"
+                elif agent == "hetzner-x86-64-dedi-32cpu-128gb":
+                    agent = "hetzner-x86-64-dedi-48cpu-192gb"
                 step["agents"] = {"queue": agent}
 
             if step.get("sanitizer") == "skip":
