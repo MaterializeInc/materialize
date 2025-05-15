@@ -191,7 +191,7 @@ A MVP implementation will support the following:
     - For large updates, like the initial snapshot, the data could be loaded via DataFusion's EXTERNAL TABLE (requires writing the data as CSV/parquet somewhere and letting DF consume it.)
 - Store Materialize properties (timestamp, sink version) within iceberg metadata
     - Table `properties` field
-        - The [iceberg specfication](https://iceberg.apache.org/spec/#table-metadata-fields) calls out that this field intended to control table reading/writing, not for arbitrary metadata.
+        - The [iceberg specification](https://iceberg.apache.org/spec/#table-metadata-fields) calls out that this field intended to control table reading/writing, not for arbitrary metadata.
 - Using metadata DB and a 2PC approach for fencing and tracking write transactions (a very abridged version)
     - This approach requires maintianing a record in the form of `(GlobalId, epoch, phase, payload)`. A coordinator will condtionally upsert a new record when initiating a transaction, `(GlobalId, epoch+1, phase, payload)` for `(GlobalId, epoch)`.  If this fails to update due to a contraint or condition violation, the process(es) that failed are fenced. Phase would be either `precommit` or `commit`.  Payload, for a sink, would be `(ts, sink_version, snapshot_id)` - denoting the greatest MZ timestamp contained within the apped, the version of the sink, and the snapshot_id intended to be stored there.
     - A writer will record a message with `epoch+1` and phase `precommit`.  Start a transaction to update the record to `epoch+1` and phase`commit`, commit to iceberg, finally commit the transaction in the metadata store.
