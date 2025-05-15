@@ -203,10 +203,7 @@ rust_binary(
     lint_config = ":lints",
     proc_macro_deps = [] + all_crate_deps(proc_macro = True),
     rustc_env = {},
-    rustc_flags = [] + select({
-        "@//misc/bazel/platforms:xlang_lto_enabled": ["-Clinker-plugin-lto"],
-        "//conditions:default": [],
-    }),
+    rustc_flags = [],
     version = "0.0.1",
     deps = [
         ":mz_sqllogictest",

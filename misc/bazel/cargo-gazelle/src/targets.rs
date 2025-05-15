@@ -21,7 +21,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::{self, Write};
 use std::str::FromStr;
 
-use crate::config::{ConfigSettingGroup, CrateConfig, GlobalConfig};
+use crate::config::{CrateConfig, GlobalConfig};
 use crate::context::CrateContext;
 use crate::platforms::PlatformVariant;
 use crate::rules::Rule;
@@ -382,17 +382,8 @@ impl RustBinary {
         let (paths, globs) = bin_config.common().compile_data();
         let compile_data = List::new(paths).concat_other(globs.map(Glob::new));
 
-        let xlang_lto_select: Select<List<QuotedString>> = Select::new(
-            [(
-                ConfigSettingGroup::XlangLtoEnabled,
-                vec![QuotedString::new("-Clinker-plugin-lto")],
-            )],
-            vec![],
-        );
-
         let env = Dict::new(bin_config.env());
-        let rustc_flags =
-            List::new(bin_config.common().rustc_flags()).concat_other(xlang_lto_select);
+        let rustc_flags = List::new(bin_config.common().rustc_flags());
         let rustc_env = Dict::new(bin_config.common().rustc_env());
 
         Ok(Some(RustBinary {

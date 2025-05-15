@@ -16,7 +16,7 @@ support building Materialize for.
 """
 
 load("@bazel_skylib//lib:selects.bzl", "selects")
-load("@bazel_skylib//rules:common_settings.bzl", "bool_flag", "string_flag")
+load("@bazel_skylib//rules:common_settings.bzl", "string_flag")
 
 # A flag that we can specify on the command line to configure whether or not we
 # build with a sanitizer.
@@ -43,28 +43,6 @@ config_setting(
 config_setting(
     name = "sanitizer_hwaddress",
     flag_values = {":sanitizer": "hwaddress"},
-)
-
-bool_flag(
-    name = "xlang_lto",
-    build_setting_default = False,
-)
-
-config_setting(
-    name = "use_xlang_lto",
-    flag_values = {":xlang_lto": "True"},
-)
-
-# With our current toolchain setup, cross language LTO is only supported when building for Linux.
-#
-# See <https://github.com/rust-lang/rust/issues/60059> for macOS support.
-selects.config_setting_group(
-    name = "xlang_lto_enabled",
-    match_all = [
-        "@platforms//os:linux",
-        ":use_xlang_lto",
-    ],
-    visibility = ["//visibility:public"],
 )
 
 # We only want to use jemalloc if we're building for Linux and we're not using sanitizers.

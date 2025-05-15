@@ -11,6 +11,7 @@ use std::collections::{BTreeMap, VecDeque};
 use std::fmt::{self, Debug, Write};
 use std::rc::Rc;
 
+use crate::platforms::PlatformVariant;
 use crate::targets::RustTarget;
 
 pub mod args;
@@ -509,21 +510,20 @@ impl ToBazelDefinition for Glob {
 /// ```
 #[derive(Debug)]
 pub struct Select<T> {
-    entries: BTreeMap<String, T>,
+    entries: BTreeMap<PlatformVariant, T>,
     default: T,
 }
 
 impl<T> Select<T> {
-    pub fn new<E, I, J>(entires: I, default: E) -> Select<T>
+    pub fn new<E, I>(entires: I, default: E) -> Select<T>
     where
         E: Into<T>,
-        J: ToBazelDefinition,
-        I: IntoIterator<Item = (J, E)>,
+        I: IntoIterator<Item = (PlatformVariant, E)>,
     {
         Select {
             entries: entires
                 .into_iter()
-                .map(|(variant, entry)| (variant.to_bazel_definition(), entry.into()))
+                .map(|(variant, entry)| (variant, entry.into()))
                 .collect(),
             default: default.into(),
         }
@@ -538,7 +538,7 @@ impl<T: ToBazelDefinition> ToBazelDefinition for Select<T> {
         {
             let mut w = w.indent();
             for (variant, entry) in &self.entries {
-                write!(w, "{variant}")?;
+                variant.format(&mut w)?;
                 write!(w, ": ")?;
                 entry.format(&mut w)?;
                 writeln!(w, ",")?;
