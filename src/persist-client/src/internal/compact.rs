@@ -33,7 +33,7 @@ use timely::progress::{Antichain, Timestamp};
 use tokio::sync::mpsc::Sender;
 use tokio::sync::{TryAcquireError, mpsc, oneshot};
 use tracing::{Instrument, Span, debug, debug_span, error, trace, warn};
-
+use mz_persist_types::arrow::ArrayBound;
 use crate::async_runtime::IsolatedRuntime;
 use crate::batch::{BatchBuilderConfig, BatchBuilderInternal, BatchParts, PartDeletes};
 use crate::cfg::{
@@ -41,7 +41,7 @@ use crate::cfg::{
     COMPACTION_HEURISTIC_MIN_UPDATES, COMPACTION_MEMORY_BOUND_BYTES,
     GC_BLOB_DELETE_CONCURRENCY_LIMIT, INCREMENTAL_COMPACTION_DISABLED, MiB,
 };
-use crate::fetch::FetchBatchFilter;
+use crate::fetch::{EncodedPart, FetchBatchFilter};
 use crate::internal::encoding::Schemas;
 use crate::internal::gc::GarbageCollector;
 use crate::internal::machine::Machine;
@@ -49,7 +49,7 @@ use crate::internal::maintenance::RoutineMaintenance;
 use crate::internal::metrics::ShardMetrics;
 use crate::internal::state::{HollowBatch, RunMeta, RunOrder, RunPart};
 use crate::internal::trace::{ApplyMergeResult, FueledMergeRes};
-use crate::iter::{Consolidator, StructuredSort};
+use crate::iter::{Consolidator, SortKV, StructuredSort};
 use crate::{Metrics, PersistConfig, ShardId};
 
 use super::trace::ActiveCompaction;
@@ -68,6 +68,10 @@ pub struct CompactReq<T> {
     /// The updates to include in the output batch. Any data in these outside of
     /// the output descriptions bounds should be ignored.
     pub inputs: Vec<HollowBatch<T>>,
+
+    /// If this compaction is a resume of a previously interrupted compaction
+    /// then prev_batch contains the work done so far.
+    pub prev_batch: Option<HollowBatch<T>>,
 }
 
 /// A response from compaction.
@@ -601,6 +605,9 @@ where
             let run_reserved_memory_bytes =
                 cfg.compaction_memory_bound_bytes - in_progress_part_reserved_memory_bytes;
 
+            //if there is an active compaction
+            //We should call compact_runs with the same
+
             // Flatten the input batches into a single list of runs
             let ordered_runs =
                 Self::order_runs(&req, cfg.batch.preferred_order, &*blob, &*metrics).await?;
@@ -636,6 +643,7 @@ where
                     Arc::clone(&shard_metrics),
                     Arc::clone(&isolated_runtime),
                     write_schemas.clone(),
+                    None,
                     None
                 )
                 .await?;
@@ -826,12 +834,13 @@ where
         cfg: &CompactConfig,
         shard_id: &ShardId,
         desc: &Description<T>,
-        runs: Vec<(&Description<T>, &RunMeta, &[RunPart<T>])>,
+        mut runs: Vec<(&Description<T>, &RunMeta, &[RunPart<T>])>,
         blob: Arc<dyn Blob>,
         metrics: Arc<Metrics>,
         shard_metrics: Arc<ShardMetrics>,
         isolated_runtime: Arc<IsolatedRuntime>,
         write_schemas: Schemas<K, V>,
+        batch_so_far: Option<HollowBatch<T>>,
         incremental_tx: Option<Sender<HollowBatch<T>>>
     ) -> Result<HollowBatch<T>, anyhow::Error> {
         // TODO: Figure out a more principled way to allocate our memory budget.
@@ -847,11 +856,66 @@ where
 
         let mut batch_cfg = cfg.batch.clone();
 
+        let mut k_bound = None;
+        let mut v_bound = None;
+        let mut timestamp = None;
+        let mut sort: Option<(SortKV<'_>, T)> = None;
+
         // Use compaction as a method of getting inline writes out of state, to
         // make room for more inline writes. We could instead do this at the end
         // of compaction by flushing out the batch, but doing it here based on
         // the config allows BatchBuilder to do its normal pipelining of writes.
         batch_cfg.inline_writes_single_max_bytes = 0;
+
+        if let Some(batch_so_far) = batch_so_far {
+            let last_part = batch_so_far.last_part(shard_id.clone(), &*blob, &metrics).await;
+            if let Some(last_part) = last_part {
+                let fetched = EncodedPart::fetch(
+                    shard_id,
+                    &*blob,
+                    &metrics,
+                    &shard_metrics,
+                    &metrics.read.batch_fetcher,
+                    &batch_so_far.desc,
+                    &last_part,
+                ).await.map_err(|blob_key| anyhow!("missing key {blob_key}"))?;
+
+                let updates = fetched.normalize(&metrics.columnar);
+                let structured = updates.as_structured::<K, V>(
+                    write_schemas.key.as_ref(),
+                    write_schemas.val.as_ref(),
+                );
+                let part = match structured.as_part() {
+                    Some(p) => p,
+                    None => return Err(anyhow!("unexpected empty part")),
+                };
+
+                let last = part.len() - 1;
+                let key_bound = ArrayBound::new(part.key.clone(), last);
+                let val_bound = ArrayBound::new(part.val.clone(), last);
+                timestamp = Some(T::decode(part.time.values()[last].to_le_bytes()));
+                k_bound = Some(key_bound);
+                v_bound = Some(val_bound);
+            }
+        };
+
+        if let (Some(k_ref), Some(v_ref), Some(ts_value)) = (k_bound.as_ref(), v_bound.as_ref(), timestamp) {
+            let key_idx = k_ref.get();
+            let val_idx = v_ref.get();
+            sort = Some(((key_idx, Some(val_idx)), ts_value));
+
+            for (_, _, run) in &mut runs {
+                let start = run.iter()
+                    .position(|part| {
+                        part.structured_key_lower()
+                            .map_or(true, |lower| lower.get() >= key_idx)
+                    })
+                    .unwrap_or(run.len());
+
+                *run = &run[start.saturating_sub(1)..];
+            }
+        }
+
 
         let parts = BatchParts::new_ordered(
             batch_cfg,
@@ -889,9 +953,10 @@ where
             FetchBatchFilter::Compaction {
                 since: desc.since().clone(),
             },
+            sort,
             prefetch_budget_bytes,
         );
-
+        
         for (desc, meta, parts) in runs {
             consolidator.enqueue_run(desc, meta, parts.iter().cloned());
         }
@@ -1085,6 +1150,7 @@ mod tests {
                 Antichain::from_elem(10u64),
             ),
             inputs: vec![b0, b1],
+            prev_batch: None,
         };
         let schemas = Schemas {
             id: None,
@@ -1164,6 +1230,7 @@ mod tests {
                 Antichain::from_elem(Product::new(10, 0)),
             ),
             inputs: vec![b0, b1],
+            prev_batch: None,
         };
         let schemas = Schemas {
             id: None,
@@ -1234,6 +1301,7 @@ mod tests {
                 Antichain::from_elem(10u64),
             ),
             inputs: vec![b0, b1],
+            prev_batch: None,
         };
         write.cfg.set_config(&COMPACTION_HEURISTIC_MIN_INPUTS, 1);
         let compactor = write.compact.as_ref().expect("compaction hard disabled");
@@ -1279,6 +1347,7 @@ mod tests {
                 Antichain::from_elem(20u64),
             ),
             inputs: vec![b2, b3],
+            prev_batch: None,
         };
         let compactor = write.compact.as_ref().expect("compaction hard disabled");
 

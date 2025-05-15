@@ -46,7 +46,6 @@ use timely::PartialOrder;
 use timely::order::TotalOrder;
 use timely::progress::{Antichain, Timestamp};
 use tracing::{Instrument, debug_span, trace_span, warn};
-
 use crate::async_runtime::IsolatedRuntime;
 use crate::cfg::{BATCH_BUILDER_MAX_OUTSTANDING_PARTS, MiB};
 use crate::error::InvalidUsage;
@@ -878,6 +877,7 @@ impl<T: Timestamp + Codec64> BatchParts<T> {
                             shard_metrics,
                             isolated_runtime,
                             write_schemas,
+                            None,
                             None
                         )
                         .await

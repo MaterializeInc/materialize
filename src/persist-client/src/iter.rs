@@ -157,8 +157,7 @@ impl<K: Codec, V: Codec, T, D> StructuredSort<K, V, T, D> {
     }
 }
 
-type SortKV<'a> = (ArrayIdx<'a>, Option<ArrayIdx<'a>>);
-
+pub type SortKV<'a> = (ArrayIdx<'a>, Option<ArrayIdx<'a>>);
 fn kv_lower<T>(data: &FetchData<T>) -> Option<SortKV<'_>> {
     let key_idx = data.structured_lower.as_ref().map(|l| l.get())?;
     Some((key_idx, None))
@@ -332,7 +331,7 @@ impl<T: Timestamp + Codec64 + Lattice, D: Codec64> ConsolidationPart<T, D> {
 /// client should call `next` until it returns `None`, which signals all data has been returned...
 /// but it's also free to abandon the instance at any time if it eg. only needs a few entries.
 #[derive(Debug)]
-pub(crate) struct Consolidator<T, D, Sort: RowSort<T, D>> {
+pub(crate) struct Consolidator<'a, T, D, Sort: RowSort<T, D>> {
     context: String,
     shard_id: ShardId,
     sort: Sort,
@@ -343,6 +342,7 @@ pub(crate) struct Consolidator<T, D, Sort: RowSort<T, D>> {
     runs: Vec<VecDeque<(ConsolidationPart<T, D>, usize)>>,
     filter: FetchBatchFilter<T>,
     budget: usize,
+    lower_bound: Option<(SortKV<'a>, T)>,
     // NB: this is the tricky part!
     // One hazard of streaming consolidation is that we may start consolidating a particular KVT,
     // but not be able to finish, because some other part that might also contain the same KVT
@@ -351,7 +351,7 @@ pub(crate) struct Consolidator<T, D, Sort: RowSort<T, D>> {
     drop_stash: Option<StructuredUpdates>,
 }
 
-impl<T, D, Sort> Consolidator<T, D, Sort>
+impl<'a, T, D, Sort> Consolidator<'a, T, D, Sort>
 where
     T: Timestamp + Codec64 + Lattice,
     D: Codec64 + Semigroup + Ord,
@@ -369,6 +369,7 @@ where
         shard_metrics: Arc<ShardMetrics>,
         read_metrics: ReadMetrics,
         filter: FetchBatchFilter<T>,
+        lower_bound: Option<(SortKV<'a>, T)>,
         prefetch_budget_bytes: usize,
     ) -> Self {
         Self {
@@ -382,12 +383,13 @@ where
             runs: vec![],
             filter,
             budget: prefetch_budget_bytes,
+            lower_bound,
             drop_stash: None,
         }
     }
 }
 
-impl<T, D, Sort> Consolidator<T, D, Sort>
+impl<'a, T, D, Sort> Consolidator<'a, T, D, Sort>
 where
     T: Timestamp + Codec64 + Lattice + Sync,
     D: Codec64 + Semigroup + Ord,
@@ -485,7 +487,7 @@ where
             return None;
         }
 
-        let mut iter = ConsolidatingIter::new(&self.context, &self.filter, &mut self.drop_stash);
+        let mut iter = ConsolidatingIter::new(&self.context, &self.filter, &self.lower_bound, &mut self.drop_stash);
 
         for run in &mut self.runs {
             let last_in_run = run.len() < 2;
@@ -754,7 +756,7 @@ where
     }
 }
 
-impl<T, D, Sort: RowSort<T, D>> Drop for Consolidator<T, D, Sort> {
+impl<'a, T, D, Sort: RowSort<T, D>> Drop for Consolidator<'a, T, D, Sort> {
     fn drop(&mut self) {
         for run in &self.runs {
             for (part, _) in run {
@@ -837,6 +839,7 @@ where
     parts: Vec<&'a StructuredUpdates>,
     heap: BinaryHeap<PartRef<'a, T, D>>,
     upper_bound: Option<(SortKV<'a>, T)>,
+    lower_bound: &'a Option<(SortKV<'a>, T)>,
     state: Option<(Indices, SortKV<'a>, T, D)>,
     drop_stash: &'a mut Option<StructuredUpdates>,
 }
@@ -849,6 +852,7 @@ where
     fn new(
         context: &'a str,
         filter: &'a FetchBatchFilter<T>,
+        lower_bound: &'a Option<(SortKV<'a>, T)>,
         drop_stash: &'a mut Option<StructuredUpdates>,
     ) -> Self {
         Self {
@@ -857,6 +861,7 @@ where
             parts: vec![],
             heap: BinaryHeap::new(),
             upper_bound: None,
+            lower_bound,
             state: None,
             drop_stash,
         }
@@ -923,6 +928,17 @@ where
                     if let Some((kv0, t0)) = &self.upper_bound {
                         if (kv0, t0) <= (kv1, t1) {
                             return None;
+                        }
+                    }
+
+                    // This code checks our inclusive lower bound against
+                    if let Some((kv_lower, t_lower)) = &self.lower_bound {
+                        if (kv_lower, t_lower) >= (kv1, t1) {
+                            // Discard this item from the part, since it's past our lower bound.
+                            let _ = part.pop(&self.parts, self.filter);
+
+                            // Continue to the next part, since it might still be relevant.
+                            continue;
                         }
                     }
 
@@ -1093,6 +1109,7 @@ mod tests {
                     filter,
                     budget: 0,
                     drop_stash: None,
+                    lower_bound: None,
                 };
 
                 let mut out = vec![];
@@ -1164,6 +1181,7 @@ mod tests {
                     FetchBatchFilter::Compaction {
                         since: desc.since().clone(),
                     },
+                    None,
                     budget,
                 );
 

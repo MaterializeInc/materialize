@@ -638,6 +638,21 @@ impl<T: Timestamp + Codec64 + Sync> RunPart<T> {
             }
         }
     }
+    pub async fn last_part<'a>(
+        &'a self,
+        shard_id: ShardId,
+        blob: &'a dyn Blob,
+        metrics: &'a Metrics,
+    ) -> Result<Box<BatchPart<T>>, MissingBlob> {
+        match self {
+            RunPart::Single(p) => Ok(Box::new(p.clone())),
+            RunPart::Many(r) => {
+                let fetched = r.get(shard_id, blob, metrics).await.ok_or_else(|| MissingBlob(r.key.complete(&shard_id)))?;
+                let last_part = fetched.parts.last().ok_or_else(|| MissingBlob(r.key.complete(&shard_id)))?;
+                Ok(Box::pin(last_part.last_part(shard_id, blob, metrics)).await?)
+            },
+        }
+    }
 }
 
 impl<T: Ord> PartialOrd for BatchPart<T> {
@@ -881,6 +896,20 @@ impl<T: Timestamp + Codec64 + Sync> HollowBatch<T> {
                     yield part;
                 }
             }
+        }
+    }
+
+    pub async fn last_part<'a>(
+        &'a self,
+        shard_id: ShardId,
+        blob: &'a dyn Blob,
+        metrics: &'a Metrics,
+    ) -> Option<BatchPart<T>> {
+        let last_part = self.parts.last()?;
+        let last_part = last_part.last_part(shard_id, blob, metrics).await;
+        match last_part {
+            Ok(part) => Some(*part),
+            Err(MissingBlob(_)) => None,
         }
     }
 }

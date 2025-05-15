@@ -278,6 +278,7 @@ where
                     .into_iter()
                     .map(|b| Arc::unwrap_or_clone(b.batch))
                     .collect(),
+                prev_batch: None,
             })
             .collect();
         (reqs, maintenance)
@@ -500,6 +501,7 @@ where
                                 .into_iter()
                                 .map(|b| Arc::unwrap_or_clone(b.batch))
                                 .collect(),
+                            prev_batch: None,
                         };
                         compact_reqs.push(req);
                     }
@@ -2019,6 +2021,7 @@ pub mod datadriven {
             shard_id: datadriven.shard_id,
             desc: Description::new(lower, upper, since),
             inputs,
+            prev_batch: None,
         };
 
         let req_clone = req.clone();
