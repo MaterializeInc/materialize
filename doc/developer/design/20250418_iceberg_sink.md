@@ -24,12 +24,9 @@ As with all icebergs, most of it is below the surface.  Iceberg is a table speci
 
 ## Success Criteria
 
-- Support multiple catalog implementations
-    - REST, S3Tables, Hive, Glue, Hadoop, etc.
-- Support multiple object store implementations
-    - S3, GCS, ABS
-- Support control over output format
-    - File Type: Parquet, Avro, ORC
+- Support REST (including S3Tables) catalog
+- Support S3 object store
+- Support Parquet file format
 - Automatic namespace and table creation
 - Support for primary key in Iceberg
 - Support for partitioning
@@ -41,7 +38,6 @@ As with all icebergs, most of it is below the surface.  Iceberg is a table speci
     - AWS IAM
 - Support for different write modes
     - Upsert mode (applies deletes, updates, and inserts to iceberge table)
-    - Append Mode (deletes are no-op, updates just insert)
 
 ## Out of Scope
 - Copy-on-write compaction
@@ -49,9 +45,21 @@ As with all icebergs, most of it is below the surface.  Iceberg is a table speci
 - V1 Iceberg table format
     - Vendors I surveyed only support writing V2. Support for V1 would make more sense for read access of existing data lakes, which isn't this use case.
 - Support for creating iceberg sink based on catalog object
-    - Kafka sink also does not support, and there doesn't appear to be a need for this functionality as of this writing.
+    - Kafka sink also does not support this, and there doesn't appear to be a need for this functionality as of this writing.
+- Support for sized-based commit criteria
+    - E.g., commit an update once it reaches 1GB.
 - Iceberg Table Maintenance
-    - Performing table maintainence operations (see section [below](#iceberg-table-maintenance)).
+    - This is something that customers would like to see, so possibly a feature that follows iceberg sink. Detaila [below](#iceberg-table-maintenance).
+- Additional catalog support
+    - Glue, Hive, Hadoop, etc.
+- Additional object store support
+    - GCP, ABS, etc.
+- Support additional file types
+    - Avro, ORC
+- Support file format options
+    - E.g., row group sizes or compression algorithm in Parquet files.
+- Support for Append-only write mode
+    - In this mode, deletes are either a no-op or written it to the table as a tombstone.
 
 ## Solution Proposal
 
@@ -94,14 +102,10 @@ TO ICEBERG CATALOG iceberg_catalog_connection
 USING AWS CONNECTION iceberg_s3_conn
 NAMESPACE "namespace_name" TABLE "table_name"
 WITH (
-    FORMAT = 'parquet', -- TODO: should this be a separate thing, e.g. CREATE FORMAT xxx .... because a PARQUET file can have multiple options
-    MINIMUM SIZE = '1MiB', -- Ability to specify minimum size to append.
-    MAXIMUM PERIOD = '10s', -- Ability to specify a forced append after some period, even if minimum size is not reached.
+    COMMIT INTERVAL = '20m', -- commit data to the iceberg table every 20 minutes of wall clock time, optional.
 );
 ```
-*Appending data to iceberg requires uploading metadata and data files, and reading data requires accessing metadata to know which data files need to be retrieved. It is inefficient to write very small updates, and very resource intensive for readers to perform the reads when there are many small updates.  To give users control over the dimensions of the appended data, Materialize will allow users to optionally specify a minumum size and a maximum period for the sink. Materialize will append data to the iceberg table if either:*
-- *the size of the append is above the minimum size*
-- *the maximum period of time has passed since the last append*
+*Appending data to iceberg requires uploading metadata and data files, and reading data requires accessing metadata to know which data files need to be retrieved. It is inefficient to write very small updates, and very resource intensive for readers to perform the reads when there are many small updates.  To give users control over the dimensions of the appended data, Materialize will allow users to optionally specify a commit interval for the sink. Materialize will commit an update to the iceberg table after the commit interval has elapsed, with the caveat that the commit will respect frontiers.*
 
 
 ### Iceberg Concepts
@@ -127,10 +131,6 @@ The commit performs a compare and swap operation to update the metadata of the t
 
 The coordinator is responsible for DDL (creating iceberg namespace, iceberg table, etc.) and managing append transactions. A timely worker will be responsible for the coordinator function.  In the MVP, the coordinator will be responsible for all operations.  In subsequent versions, specifically after partitioning is added, Materialize can investigate distributing work to multiple workers.
 
-To manage transactions, the coordinator will tracking the size of the current iceberg append as well as the last successful append time. Once an append has reached either the minimum size or the maximum period, if set, writes are flushed and the append is committed to iceberg. Materialize will respect the MZ timestamp.  All updates that happen within the same tick will be committed together, even if that exceeds the time. 
-
-If neither minimum size or maximum period is set, Materialize will perform appends according to the MZ timestamp.
-
 
 #### - Automatic Namespace and Table Creation
 
@@ -141,19 +141,22 @@ When starting, the sink will retrieve the namespace information.  If it doesn't 
 
 Appending data includes insert, update, and delete row operations. To perform deletes, Materialize will generate [equality delete files](https://iceberg.apache.org/spec/#equality-delete-files) that match the fields of the primary key.  Inserts are performed via data files.  Updates contain delete files and data files in the same commit.  Materialize will enforce a 512MB limit (which I borrowed from S3Tables) on the size of the parquet files. Appends that are larger than 512MB will be composed of multiple files.
 
+Materialize will utilize `Fast Append`, which avoids rewrites of manifest files (see [here](https://iceberg.apache.org/spec/#snapshots)). As part of the write, Materialize will store information in the snapshot [Summary properties](https://iceberg.apache.org/spec/#optional-snapshot-summary-fields). The properies field is a `HashMap<String, String>`, in which Materialize will store the timestamp and sink version number. To determine the latest append performed by Materialize, retrieve the most recent snapshots and examine properties. It is possible that snapshot expiration has cleaned up all Iceberg Table snapshots that contain Materialize information. In this case, the sink will not be able to determine the resume upper and will need to be recreated.  A conservative snapshot expiration policy would allow keeping a 5-7 days worth to avoid having to recreate the sink.
 
-Appends to the iceberg table will utilize `Fast Append`, which avoids rewrites of manifest files (see [here](https://iceberg.apache.org/spec/#snapshots)). As part of the write, Materialize will store information in the snapshot [Summary properties](https://iceberg.apache.org/spec/#optional-snapshot-summary-fields). The properies field is a `HashMap<String, String>`, in which Materialize will store the timestamp and sink version number. To determine the latest append performed by Materialize, retrieve the most recent snapshots and examine properties.
+Appends to the iceberg table are performed transactionally. Data is written to one or more parquet files in the object store.  Upon completion of the writes, the append is committed to the iceberg table. Each append will reflect all updates from the last committed frontier to some later frontier. In upsert mode, every Iceberg snapshot will reflect the full contents of the upstream collection as-of some frontier.
 
-
-A writer will store in memory the last successful commit performed to the iceberg table (either the snapshot_id, or the timestamp + version). This can be null when the sink is first created. On startup, a writer must retrieve the latest snapshot Materialize committed to the iceberg table. In the event of a commit failure, the writer validates its last known commit is the last Materialize commit for the iceberg table (where the snapshot summary contains Materialize properties), or if there was no previous Materialize commit, there still isn't.
-
-This approach likely will not allow a new replica to immediately take over, as fencing out an existing replica requires successfully appending data to the iceberg table. In the case where there is an existing replica and a new replica comes online, the existing replica will already be in the process of collecting updates into parquet files to append to the iceberg table. Likewise, the new replica may start with write conditions that allow for larger appends, meaning there will be a longer delay in performing them. Hence, this approach relies heavily on the orchestration to stop the existing replica before the new replica can make progress.
-
-This design does not consider resuming an append after a restart (say the data and delete files are uploaded, but the append was not committed to the iceberg table). The design allows users to specify time and size conditions to control append to the iceberg table, so it is possible that one replica is running with a newer version of these parameters, meaning it's append size may be different.  In order to accomplish this, Materialize would need to persistently store a plan of the intended operation(s), data, and files to commit so that it could be resumed.
+The frequency of commits is determined by the commit interval, which is a duration of wall clock time that must elapse since the last append (or start of the dataflow) before the sink attempts to commit changes to the iceberg table. If the commit interval is not set, the sink will perform an append for each event time. The actual elapsed wall clock time between appends may be greater than the commit interval, but it will not be shorter. For example, there may be a large number of updates at a given event time which must be written out before the append can be committed. Once the append is complete, the sink will publish progress to persist. There is no intention, at this time, to make the appends deterministic. In general, the recovery for a failed commit is to suspend-and-restart.  The exception is if the commit failed for a retryable reason (e.g. icberg table compaction raced with the append), in which case the commit can be retried using the same set of parquet files.
 
 The append process does not attempt to delete files on a failed commit. S3Tables, for example, does not allow `DeleteObject` and returns a 403 (in my testing, but I could not find this documented). Orphaned files will be cleaned up by [iceberg maintenance tasks](#cleanup-of-orphaned-files).
 
 _**NOTE** For this functionality, Materialize will fork [iceberg-rust](https://github.com/apache/iceberg-rust).  The existing API in the crate is still evolving and some uses haven't been account for.  For example, it does not expose, or allow setting, the `SUMMARY` properties._
+
+**More than one sink**
+
+There may arise cases where more than one instance of sink exists.  A writer will store, in memory, the last successful commit performed to the iceberg table (either the snapshot_id, or the timestamp + version). This can be null when the sink is first created. On startup, a writer must retrieve the latest snapshot Materialize committed to the iceberg table (identified by the presence of the Materialize keys in the snapshot summary). In the event of a commit failure, the writer validates its last known commit is the last Materialize commit for the iceberg table (where the snapshot summary contains Materialize properties), or if there was no previous Materialize commit, there still isn't.
+
+This approach likely will not allow a new replica to immediately take over, as fencing out an existing replica requires successfully appending data to the iceberg table. In the case where there is an existing replica and a new replica comes online, the existing replica will already be in the process of collecting updates into parquet files to append to the iceberg table. Likewise, the new replica may start with write conditions that allow for larger appends, meaning there will be a longer delay in performing them. Hence, this approach relies heavily on the orchestration to stop the existing replica before the new replica can make progress.
+
 
 #### - Partitioning
 The iceberg sink should eventually support the ability to utilize [partitioning](https://iceberg.apache.org/spec/#partitioning). A user can specify one or more columns, including transforms defined in the spec, to be used as the partitiong spec when the sink appends data to the iceberg table. A customer will be able to provide column names in addition to the transforms supported by iceberg partitioning.  The information will be stored in the `SinkDesc` for iceberg.
@@ -192,6 +195,13 @@ A MVP implementation will support the following:
 - Store Materialize properties (timestamp, sink version) within iceberg metadata
     - Table `properties` field
         - The [iceberg specification](https://iceberg.apache.org/spec/#table-metadata-fields) calls out that this field intended to control table reading/writing, not for arbitrary metadata.
+- Alternatives to wall clock time for `COMMIT INTERVAL`
+    - Use mztime instead of wall clock time.
+        - This would be a step toward making uploads deterministic.
+        - For a upstream source that's running behind, this may see only 1 minute of mztime pass for every 10 minutes of wall clock time, resulting in long delays in appends.  The mztime approach would yield a larger update than a wall clock approach, but at a much longer delay.
+        - A user of Materialize would readily understand wall clock time, but the semantics of mztime would very likely require explanation, making it less user friendly.
+    - Use the number of MZ timestamps
+        - This is much like using mztime, other than a user needs to know less about mztime time, only that some number of updates will be batched together.
 - Using metadata DB and a 2PC approach for fencing and tracking write transactions (a very abridged version)
     - This approach requires maintianing a record in the form of `(GlobalId, epoch, phase, payload)`. A coordinator will condtionally upsert a new record when initiating a transaction, `(GlobalId, epoch+1, phase, payload)` for `(GlobalId, epoch)`.  If this fails to update due to a contraint or condition violation, the process(es) that failed are fenced. Phase would be either `precommit` or `commit`.  Payload, for a sink, would be `(ts, sink_version, snapshot_id)` - denoting the greatest MZ timestamp contained within the apped, the version of the sink, and the snapshot_id intended to be stored there.
     - A writer will record a message with `epoch+1` and phase `precommit`.  Start a transaction to update the record to `epoch+1` and phase`commit`, commit to iceberg, finally commit the transaction in the metadata store.
