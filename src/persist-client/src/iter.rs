@@ -29,7 +29,7 @@ use mz_ore::task::JoinHandle;
 use mz_persist::indexed::encoding::BlobTraceUpdates;
 use mz_persist::location::Blob;
 use mz_persist::metrics::ColumnarMetrics;
-use mz_persist_types::arrow::{ArrayBound, ArrayIdx, ArrayOrd, OwnedArrayIdx};
+use mz_persist_types::arrow::{ArrayBound, ArrayIdx, ArrayOrd};
 use mz_persist_types::part::Part;
 use mz_persist_types::{Codec, Codec64};
 use semver::{Op, Version};
@@ -158,12 +158,6 @@ impl<K: Codec, V: Codec, T, D> StructuredSort<K, V, T, D> {
 }
 
 pub type SortKV<'a> = (ArrayIdx<'a>, Option<ArrayIdx<'a>>);
-pub type OwnedSortKV = (OwnedArrayIdx, Option<OwnedArrayIdx>);
-
-pub fn sort_kv_from_owned<'a>(kv: &'a OwnedSortKV) -> SortKV<'a> {
-    let (key, value) = kv;
-    (key.as_ref(), value.as_ref().map(|v| v.as_ref()))
-}
 
 fn kv_lower<T>(data: &FetchData<T>) -> Option<SortKV<'_>> {
     let key_idx = data.structured_lower.as_ref().map(|l| l.get())?;
@@ -349,13 +343,29 @@ pub(crate) struct Consolidator<T, D, Sort: RowSort<T, D>> {
     runs: Vec<VecDeque<(ConsolidationPart<T, D>, usize)>>,
     filter: FetchBatchFilter<T>,
     budget: usize,
-    lower_bound: Option<(OwnedSortKV, T)>,
+    lower_bound: Option<LowerBound<T>>,
     // NB: this is the tricky part!
     // One hazard of streaming consolidation is that we may start consolidating a particular KVT,
     // but not be able to finish, because some other part that might also contain the same KVT
     // may not have been fetched yet. The `drop_stash` gives us somewhere
     // to store the streaming iterator's work-in-progress state between runs.
     drop_stash: Option<StructuredUpdates>,
+}
+
+#[derive(Debug)]
+pub struct LowerBound<T> {
+    pub(crate) key_bound: ArrayBound,
+    pub(crate) val_bound: ArrayBound,
+    pub(crate) t: T,
+}
+
+impl<T: Clone> LowerBound<T> {
+    pub fn kvt_bound(&self) -> (SortKV<'_>, T) {
+        (
+            (self.key_bound.get(), Some(self.val_bound.get())),
+            self.t.clone(),
+        )
+    }
 }
 
 impl<T, D, Sort> Consolidator<T, D, Sort>
@@ -376,7 +386,7 @@ where
         shard_metrics: Arc<ShardMetrics>,
         read_metrics: ReadMetrics,
         filter: FetchBatchFilter<T>,
-        lower_bound: Option<(OwnedSortKV, T)>,
+        lower_bound: Option<LowerBound<T>>,
         prefetch_budget_bytes: usize,
     ) -> Self {
         Self {
@@ -390,8 +400,8 @@ where
             runs: vec![],
             filter,
             budget: prefetch_budget_bytes,
-            lower_bound,
             drop_stash: None,
+            lower_bound,
         }
     }
 }
@@ -494,12 +504,9 @@ where
             return None;
         }
 
-        let mut iter = ConsolidatingIter::new(
-            &self.context,
-            &self.filter,
-            &self.lower_bound,
-            &mut self.drop_stash,
-        );
+        let bound = self.lower_bound.as_ref().map(|b| b.kvt_bound());
+        let mut iter =
+            ConsolidatingIter::new(&self.context, &self.filter, bound, &mut self.drop_stash);
 
         for run in &mut self.runs {
             let last_in_run = run.len() < 2;
@@ -851,7 +858,7 @@ where
     parts: Vec<&'a StructuredUpdates>,
     heap: BinaryHeap<PartRef<'a, T, D>>,
     upper_bound: Option<(SortKV<'a>, T)>,
-    lower_bound: &'a Option<(OwnedSortKV, T)>,
+    lower_bound: Option<(SortKV<'a>, T)>,
     state: Option<(Indices, SortKV<'a>, T, D)>,
     drop_stash: &'a mut Option<StructuredUpdates>,
 }
@@ -864,7 +871,7 @@ where
     fn new(
         context: &'a str,
         filter: &'a FetchBatchFilter<T>,
-        lower_bound: &'a Option<(OwnedSortKV, T)>,
+        lower_bound: Option<(SortKV<'a>, T)>,
         drop_stash: &'a mut Option<StructuredUpdates>,
     ) -> Self {
         Self {
@@ -945,8 +952,7 @@ where
 
                     // This code checks our inclusive lower bound against
                     if let Some((kv_lower, t_lower)) = &self.lower_bound {
-                        let sort_kv = sort_kv_from_owned(kv_lower);
-                        if (&sort_kv, t_lower) >= (kv1, t1) {
+                        if (kv_lower, t_lower) >= (kv1, t1) {
                             // Discard this item from the part, since it's past our lower bound.
                             let _ = part.pop(&self.parts, self.filter);
 

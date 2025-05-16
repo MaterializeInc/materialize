@@ -449,30 +449,6 @@ pub struct ArrayIdx<'a> {
     pub array: &'a ArrayOrd,
 }
 
-#[derive(Clone, Debug)]
-pub struct OwnedArrayIdx {
-    pub idx: usize,
-    pub array: ArrayOrd,
-}
-
-impl<'a> From<ArrayIdx<'a>> for OwnedArrayIdx {
-    fn from(idx: ArrayIdx<'a>) -> Self {
-        OwnedArrayIdx {
-            idx: idx.idx,
-            array: idx.array.clone(),
-        }
-    }
-}
-
-impl OwnedArrayIdx {
-    pub fn as_ref(&self) -> ArrayIdx<'_> {
-        ArrayIdx {
-            idx: self.idx,
-            array: &self.array,
-        }
-    }
-}
-
 impl Display for ArrayIdx<'_> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self.array {

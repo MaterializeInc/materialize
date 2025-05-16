@@ -30,7 +30,7 @@ use crate::internal::maintenance::RoutineMaintenance;
 use crate::internal::metrics::ShardMetrics;
 use crate::internal::state::{HollowBatch, RunMeta, RunOrder, RunPart};
 use crate::internal::trace::{ApplyMergeResult, FueledMergeRes};
-use crate::iter::{Consolidator, OwnedSortKV, SortKV, StructuredSort};
+use crate::iter::{Consolidator, LowerBound, StructuredSort};
 use crate::{Metrics, PersistConfig, ShardId};
 use anyhow::anyhow;
 use differential_dataflow::difference::Semigroup;
@@ -43,7 +43,7 @@ use mz_ore::cast::CastFrom;
 use mz_ore::error::ErrorExt;
 use mz_ore::now::SYSTEM_TIME;
 use mz_persist::location::Blob;
-use mz_persist_types::arrow::{ArrayBound, OwnedArrayIdx};
+use mz_persist_types::arrow::ArrayBound;
 use mz_persist_types::part::Part;
 use mz_persist_types::{Codec, Codec64};
 use timely::PartialOrder;
@@ -856,10 +856,7 @@ where
 
         let mut batch_cfg = cfg.batch.clone();
 
-        let mut k_bound = None;
-        let mut v_bound = None;
-        let mut timestamp = None;
-        let mut sort: Option<(OwnedSortKV, T)> = None;
+        let mut lower_bound = None;
 
         // Use compaction as a method of getting inline writes out of state, to
         // make room for more inline writes. We could instead do this at the end
@@ -895,31 +892,22 @@ where
                 let last = part.len() - 1;
                 let key_bound = ArrayBound::new(part.key.clone(), last);
                 let val_bound = ArrayBound::new(part.val.clone(), last);
-                timestamp = Some(T::decode(part.time.values()[last].to_le_bytes()));
-                k_bound = Some(key_bound);
-                v_bound = Some(val_bound);
+                let t = T::decode(part.time.values()[last].to_le_bytes());
+                lower_bound = Some(LowerBound {
+                    val_bound,
+                    key_bound,
+                    t,
+                });
             }
         };
 
-        if let (Some(k_ref), Some(v_ref), Some(ts_value)) =
-            (k_bound.as_ref(), v_bound.as_ref(), timestamp)
-        {
-            let key_idx = k_ref.get();
-            let val_idx = v_ref.get();
-            sort = Some((
-                (
-                    OwnedArrayIdx::from(key_idx),
-                    Some(OwnedArrayIdx::from(val_idx)),
-                ),
-                ts_value,
-            ));
-
+        if let Some(lower_bound) = lower_bound.as_ref() {
             for (_, _, run) in &mut runs {
                 let start = run
                     .iter()
                     .position(|part| {
                         part.structured_key_lower()
-                            .map_or(true, |lower| lower.get() >= key_idx)
+                            .map_or(true, |lower| lower.get() >= lower_bound.key_bound.get())
                     })
                     .unwrap_or(run.len());
 
@@ -963,7 +951,7 @@ where
             FetchBatchFilter::Compaction {
                 since: desc.since().clone(),
             },
-            sort,
+            lower_bound,
             prefetch_budget_bytes,
         );
 
