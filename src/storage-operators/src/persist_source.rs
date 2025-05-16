@@ -26,8 +26,8 @@ use mz_ore::collections::CollectionExt;
 use mz_ore::vec::VecExt;
 use mz_persist_client::cache::PersistClientCache;
 use mz_persist_client::cfg::{PersistConfig, RetryParameters};
+use mz_persist_client::fetch::{ExchangeableBatchPart, ShardSourcePart};
 use mz_persist_client::fetch::{FetchedBlob, FetchedPart};
-use mz_persist_client::fetch::{SerdeLeasedBatchPart, ShardSourcePart};
 use mz_persist_client::operators::shard_source::{
     ErrorHandler, FilterResult, SnapshotMode, shard_source,
 };
@@ -690,7 +690,7 @@ pub trait Backpressureable: Clone + 'static {
     fn byte_size(&self) -> usize;
 }
 
-impl Backpressureable for (usize, SerdeLeasedBatchPart) {
+impl<T: Clone + 'static> Backpressureable for (usize, ExchangeableBatchPart<T>) {
     fn byte_size(&self) -> usize {
         self.1.encoded_size_bytes()
     }

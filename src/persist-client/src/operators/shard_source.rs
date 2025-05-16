@@ -47,7 +47,7 @@ use tracing::{debug, trace};
 
 use crate::batch::BLOB_TARGET_SIZE;
 use crate::cfg::{RetryParameters, USE_CRITICAL_SINCE_SOURCE};
-use crate::fetch::{FetchedBlob, Lease, SerdeLeasedBatchPart};
+use crate::fetch::{ExchangeableBatchPart, FetchedBlob, Lease};
 use crate::internal::state::BatchPart;
 use crate::stats::{STATS_AUDIT_PERCENT, STATS_FILTER_ENABLED};
 use crate::{Diagnostics, PersistClient, ShardId};
@@ -169,10 +169,10 @@ where
     T: Refines<G::Timestamp>,
     DT: FnOnce(
         Child<'g, G, T>,
-        &Stream<Child<'g, G, T>, (usize, SerdeLeasedBatchPart)>,
+        &Stream<Child<'g, G, T>, (usize, ExchangeableBatchPart<G::Timestamp>)>,
         usize,
     ) -> (
-        Stream<Child<'g, G, T>, (usize, SerdeLeasedBatchPart)>,
+        Stream<Child<'g, G, T>, (usize, ExchangeableBatchPart<G::Timestamp>)>,
         Vec<PressOnDropButton>,
     ),
     C: Future<Output = PersistClient> + Send + 'static,
@@ -309,7 +309,10 @@ pub(crate) fn shard_source_descs<K, V, D, G>(
     listen_sleep: Option<impl Fn() -> RetryParameters + 'static>,
     start_signal: impl Future<Output = ()> + 'static,
     error_handler: ErrorHandler,
-) -> (Stream<G, (usize, SerdeLeasedBatchPart)>, PressOnDropButton)
+) -> (
+    Stream<G, (usize, ExchangeableBatchPart<G::Timestamp>)>,
+    PressOnDropButton,
+)
 where
     K: Debug + Codec,
     V: Debug + Codec,
@@ -569,9 +572,7 @@ where
                 // seemed to work okay so far. Continue to revisit as necessary.
                 let worker_idx = usize::cast_from(Instant::now().hashed()) % num_workers;
                 let (part, lease) = part_desc.into_exchangeable_part();
-                if let Some(lease) = lease {
-                    leases.borrow_mut().push_at(current_ts.clone(), lease);
-                }
+                leases.borrow_mut().push_at(current_ts.clone(), lease);
                 descs_output.give(&session_cap, (worker_idx, part));
             }
 
@@ -584,7 +585,7 @@ where
 }
 
 pub(crate) fn shard_source_fetch<K, V, T, D, G>(
-    descs: &Stream<G, (usize, SerdeLeasedBatchPart)>,
+    descs: &Stream<G, (usize, ExchangeableBatchPart<T>)>,
     name: &str,
     client: impl Future<Output = PersistClient> + Send + 'static,
     shard_id: ShardId,
@@ -645,9 +646,8 @@ where
                 // `LeasedBatchPart`es cannot be dropped at this point w/o
                 // panicking, so swap them to an owned version.
                 for (_idx, part) in data {
-                    let leased_part = fetcher.leased_part_from_exchangeable(part);
                     let fetched = fetcher
-                        .fetch_leased_part(&leased_part)
+                        .fetch_leased_part(part)
                         .await
                         .expect("shard_id should match across all workers");
                     let fetched = match fetched {
@@ -694,6 +694,7 @@ mod tests {
     use super::*;
     use std::sync::Arc;
 
+    use mz_persist::location::SeqNo;
     use timely::dataflow::Scope;
     use timely::dataflow::operators::Leave;
     use timely::dataflow::operators::Probe;
@@ -704,7 +705,7 @@ mod tests {
 
     #[mz_ore::test]
     fn test_lease_manager() {
-        let lease = Lease::default();
+        let lease = Lease::new(SeqNo::minimum());
         let mut manager = LeaseManager::new();
         for t in 0u64..10 {
             manager.push_at(t, lease.clone());
