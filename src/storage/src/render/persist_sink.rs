@@ -1108,18 +1108,20 @@ where
                 }
             });
 
+            done_batches.reverse();
+
             let mut done_batches_iter = done_batches.iter();
 
             let Some(first_batch_description) = done_batches_iter.next() else {
                 continue;
             };
 
-            let batch_lower = first_batch_description.0.clone();
+            let batch_upper = first_batch_description.1.clone();
 
-            let batch_upper = if let Some(last_batch_description) = done_batches_iter.last() {
-                last_batch_description.1.clone()
+            let batch_lower = if let Some(last_batch_description) = done_batches_iter.last() {
+                last_batch_description.0.clone()
             } else {
-                first_batch_description.1.clone()
+                first_batch_description.0.clone()
             };
 
             let mut batches: Vec<FinishedBatch> = vec![];
