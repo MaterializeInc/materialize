@@ -7251,6 +7251,7 @@ dependencies = [
  "mz-repr",
  "mz-secrets",
  "os_info",
+ "pin-project",
  "prometheus",
  "proptest",
  "proptest-derive",
