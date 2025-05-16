@@ -115,8 +115,8 @@ See [Monitoring hydration/data freshness status](/ingest-data/monitoring-data-in
 
 ## Hydration
 
-When a cluster is restarted (such as after resizing), certain objects (such as
-sources, indexes, materialized views, and sinks) on that cluster undergo
+When a cluster is restarted (such as after resizing), certain objectson that
+cluster  (such as sources, indexes, materialized views, and sinks) undergo
 hydration. Hydration refers to the reconstruction of in-memory state by reading
 data from Materialize's storage layer; hydration **does not** require reading
 data from the upstream system.
