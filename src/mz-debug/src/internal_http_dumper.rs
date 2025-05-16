@@ -162,7 +162,7 @@ impl<'n> InternalHttpDumpClient<'n> {
     }
 }
 
-// TODO (debug_tool3): Scrape cluster profiles through a proxy when (database-issues#8942) is implemented
+// TODO (debug_tool3): Scrape cluster profiles through a proxy when (database-issues#7049) is implemented
 pub async fn dump_emulator_http_resources(
     context: &Context,
     emulator_context: &EmulatorContext,
