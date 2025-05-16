@@ -659,8 +659,7 @@ fn rocksdb_core_loop<K, V, M, O, IM, F>(
     while let Some(cmd) = cmd_rx.blocking_recv() {
         match cmd {
             Command::Shutdown { done_sender } => {
-                db.cancel_all_background_work(true);
-                drop(db);
+                shutdown_and_cleanup(db, &instance_path);
                 drop(write_buffer_handle);
                 let _ = done_sender.send(());
                 return;
@@ -894,6 +893,10 @@ fn rocksdb_core_loop<K, V, M, O, IM, F>(
             }
         }
     }
+    shutdown_and_cleanup(db, &instance_path);
+}
+
+fn shutdown_and_cleanup(db: DB, instance_path: &PathBuf) {
     // Gracefully cleanup if the `RocksDBInstance` has gone away.
     db.cancel_all_background_work(true);
     drop(db);
