@@ -16,6 +16,9 @@
 //! CTP supports any message type that implements the serde [`Serialize`] and [`Deserialize`]
 //! traits. Messages are encoded using the [`bincode`] format, compressed, and then sent over the
 //! wire with a length prefix.
+//!
+//! A CTP server only serves a single client at a time. If a new client connects while a connection
+//! is already established, the previous connection is canceled.
 
 use std::convert::Infallible;
 use std::fmt::Debug;
@@ -29,12 +32,12 @@ use flate2::write::DeflateEncoder;
 use futures::future;
 use mz_ore::cast::CastInto;
 use mz_ore::netio::{Listener, SocketAddr, Stream, TimedReader, TimedWriter};
-use mz_ore::task::AbortOnDropHandle;
+use mz_ore::task::{AbortOnDropHandle, JoinHandle, JoinHandleExt};
 use semver::Version;
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
-use tokio::sync::{mpsc, watch};
+use tokio::sync::{mpsc, oneshot, watch};
 use tracing::{debug, info, trace, warn};
 
 use crate::client::{GenericClient, Partitionable, Partitioned};
@@ -134,6 +137,14 @@ where
     Out: Message,
     H: GenericClient<In, Out> + 'static,
 {
+    // Keep a handle to the task serving the current connection, as well as a cancelation token, so
+    // we can cancel it when a new client connects.
+    //
+    // Note that we cannot simply abort the previous connection task because its future isn't known
+    // to be cancel safe. Instead we pass the connection tasks a cancelation token and wait for
+    // them to shut themselves down gracefully once the token gets dropped.
+    let mut connection_task: Option<(JoinHandle<()>, oneshot::Sender<()>)> = None;
+
     let listener = Listener::bind(&address).await?;
     info!(%address, "ctp: listening for client connections");
 
@@ -141,15 +152,31 @@ where
         let (stream, peer) = listener.accept().await?;
         info!(%peer, "ctp: accepted client connection");
 
+        // Cancel any existing connection before starting to serve the new one.
+        if let Some((task, token)) = connection_task.take() {
+            drop(token);
+            task.wait_and_assert_finished().await;
+        }
+
         let handler = handler_fn();
         let version = version.clone();
         let server_fqdn = server_fqdn.clone();
+        let (cancel_tx, cancel_rx) = oneshot::channel();
 
-        mz_ore::task::spawn(|| "ctp::connection", async move {
-            let Err(error) =
-                serve_connection(stream, handler, version, server_fqdn, idle_timeout).await;
+        let handle = mz_ore::task::spawn(|| "ctp::connection", async move {
+            let Err(error) = serve_connection(
+                stream,
+                handler,
+                version,
+                server_fqdn,
+                idle_timeout,
+                cancel_rx,
+            )
+            .await;
             info!("ctp: connection failed: {error}");
         });
+
+        connection_task = Some((handle, cancel_tx));
     }
 }
 
@@ -160,6 +187,7 @@ async fn serve_connection<In, Out, H>(
     version: Version,
     server_fqdn: Option<String>,
     timeout: Duration,
+    cancel_rx: oneshot::Receiver<()>,
 ) -> anyhow::Result<Infallible>
 where
     In: Message,
@@ -168,6 +196,7 @@ where
 {
     let mut conn = Connection::start(stream, version, server_fqdn, timeout).await?;
 
+    let mut cancel_rx = Some(cancel_rx);
     loop {
         tokio::select! {
             // `Connection::recv` is documented to be cancel safe.
@@ -180,6 +209,7 @@ where
                 Some(msg) => conn.send(msg).await?,
                 None => bail!("client disconnected"),
             },
+            _ = cancel_rx.as_mut().unwrap() => bail!("connection canceled"),
         }
     }
 }
