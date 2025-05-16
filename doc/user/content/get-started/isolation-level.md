@@ -5,6 +5,10 @@ aliases:
     - /sql/consistency
     - /sql/isolation-level
     - /overview/isolation-level/
+menu:
+  main:
+    parent: get-started
+    weight: 60
 ---
 
 The SQL standard defines four levels of transaction isolation. In order of least strict to most strict they are:
@@ -14,24 +18,27 @@ The SQL standard defines four levels of transaction isolation. In order of least
 -   Repeatable Read
 -   Serializable
 
-In Materialize, you can request any of these isolation
-levels, but they all behave the same as the Serializable isolation level. In addition to the four levels defined in the
-SQL Standard, Materialize also defines a [Strict Serializable](#strict-serializable) isolation level.
+In Materialize, Read Uncommitted, Read Committed, Repeatable Read are aliases
+for Serializable isolation level. In addition to the four levels defined in the
+SQL Standard, Materialize also defines a [Strict
+Serializable](#strict-serializable) isolation level.
+
+## Syntax
 
 Isolation level is a configuration parameter that can be set by the user on a session-by-session basis. The default isolation level is
 [Strict Serializable](#strict-serializable).
 
-## Syntax
+```mzsql
+SET TRANSACTION_ISOLATION [TO|=] <level>;
+```
 
-{{< diagram "set-transaction-isolation.svg" >}}
-
-| Valid Isolation Levels                      |
-| ------------------------------------------- |
-| [Read Uncommitted](#serializable)           |
-| [Read Committed](#serializable)             |
-| [Repeatable Read](#serializable)            |
-| [Serializable](#serializable)               |
-| [Strict Serializable](#strict-serializable) |
+| Valid Isolation Levels                      |  Notes                  |
+| ------------------------------------------- | ----------------------- |
+| [Read Uncommitted](#serializable)           | Alias for [Serializable](#serializable) |
+| [Read Committed](#serializable)             | Alias for [Serializable](#serializable) |
+| [Repeatable Read](#serializable)            | Alias for [Serializable](#serializable) |
+| [Serializable](#serializable)               | |
+| [Strict Serializable](#strict-serializable) | Default. |
 
 ## Examples
 
@@ -52,14 +59,14 @@ The SQL standard defines the Serializable isolation level as preventing the foll
     > "SQL-transaction T1 modifies a row. SQL-transaction T2 then reads that row before T1 performs a
     > COMMIT. If T1 then performs a ROLLBACK, T2 will have read a row that was never committed and that may thus be
     > considered to have never existed."
-    > (ISO/IEC 9075-2:1999 (E) 4.32 SQL-transactions)
+    > -- ISO/IEC 9075-2:1999 (E) 4.32 SQL-transactions
 
 -   **P2 (”Non-repeatable read”):**
 
     > "SQL-transaction T1 reads a row. SQL-transaction T2 then modifies or deletes that row and performs
     > a COMMIT. If T1 then attempts to reread the row, it may receive the modified value or discover that the row has been
     > deleted."
-    > (ISO/IEC 9075-2:1999 (E) 4.32 SQL-transactions)
+    > -- ISO/IEC 9075-2:1999 (E) 4.32 SQL-transactions
 
 -   **P3 (”Phantom”):**
 
@@ -67,7 +74,7 @@ The SQL standard defines the Serializable isolation level as preventing the foll
     > T2 then executes SQL-statements that generate one or more rows that satisfy the \<search condition\> used by
     > SQL-transaction T1. If SQL-transaction T1 then repeats the initial read with the same \<search condition\>, it obtains a
     > different collection of rows."
-    > (ISO/IEC 9075-2:1999 (E) 4.32 SQL-transactions)
+    > -- ISO/IEC 9075-2:1999 (E) 4.32 SQL-transactions
 
 Furthermore, Serializable also guarantees that the result of executing a group of concurrent SQL-transactions produces
 the same effect as some serial execution of those same transactions. A serial execution is one where each

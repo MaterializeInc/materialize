@@ -48,7 +48,7 @@ operators:
       There are three types of `Get`.
 
       1. `Get::PassArrangements`, which means the plan will use an
-         existing [arrangement](/get-started/arrangements/#arrangements).
+         existing [arrangement](/architecture/arrangements/#arrangements).
 
       2. `Get::Arrangement`, which means that the results will be
          _looked up_ in an existing arrangement.
@@ -166,7 +166,7 @@ operators:
     uses_memory: True
     memory_details: |
       The `Join` operator itself uses memory only for `type=differential` with more than 2 inputs.
-      However, `Join` operators need [arrangements](/get-started/arrangements/#arrangements) on their inputs (shown by the `ArrangeBy` operator).
+      However, `Join` operators need [arrangements](/architecture/arrangements/#arrangements) on their inputs (shown by the `ArrangeBy` operator).
       These arrangements use memory proportional to the input sizes. If an input has an [appropriate index](/transform-data/optimization/#join), then the arrangement of the index will be reused.
     expansive: True
     expansive_details: |
@@ -375,7 +375,7 @@ operators:
   - operator: ArrangeBy
     plan_types: "optimized"
     description: |
-      Indicates a point that will become an [arrangement](/get-started/arrangements/#arrangements) in the dataflow engine (each `keys` element will be a different arrangement). Note that if an appropriate index already exists on the input or the output of the previous operator is already arranged with a key that is also requested here, then this operator will just pass on that existing arrangement instead of creating a new one.
+      Indicates a point that will become an [arrangement](/architecture/arrangements/#arrangements) in the dataflow engine (each `keys` element will be a different arrangement). Note that if an appropriate index already exists on the input or the output of the previous operator is already arranged with a key that is also requested here, then this operator will just pass on that existing arrangement instead of creating a new one.
     uses_memory: True
     memory_details: |
       Depends. If arrangements need to be created, they use memory proportional to the input size.
@@ -385,7 +385,7 @@ operators:
   - operator: Arrange
     plan_types: "LIR"
     description: |
-      Indicates a point that will become an [arrangement](/get-started/arrangements/#arrangements) in the dataflow engine, i.e., it will consume memory to cache results.
+      Indicates a point that will become an [arrangement](/architecture/arrangements/#arrangements) in the dataflow engine, i.e., it will consume memory to cache results.
     uses_memory: True
     memory_details: |
       Uses memory proportional to the input size. Note that in the LIR / physical plan, `Arrange`/`ArrangeBy` almost always means that an arrangement will actually be created. (This is in contrast to the "optimized" plan, where an `ArrangeBy` being present in the plan often does not mean that an arrangement will actually be created.)
