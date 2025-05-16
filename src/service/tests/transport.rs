@@ -12,6 +12,7 @@
 use std::sync::{Arc, Mutex, Once};
 use std::time::Duration;
 
+use async_trait::async_trait;
 use futures::future;
 use mz_ore::assert_none;
 use mz_ore::netio::Listener;
@@ -387,6 +388,90 @@ fn test_keepalive() {
     });
 
     sim.run().unwrap();
+}
+
+#[test] // allow(test-attribute)
+#[cfg_attr(miri, ignore)] // too slow
+fn test_connection_cancelation() {
+    let mut sim = setup();
+
+    // Use a high connection timeout to avoid that the connection is severed by the timeout, which
+    // isn't what we want to test here.
+    const TIMEOUT: Duration = Duration::from_secs(60 * 60);
+
+    sim.host("server", move || async {
+        transport::serve(
+            "turmoil:0.0.0.0:7777".parse().unwrap(),
+            VERSION,
+            Some("server".into()),
+            TIMEOUT,
+            OneOutputHandler::new,
+        )
+        .await?;
+
+        Ok(())
+    });
+
+    let (ready_tx, mut ready_rx) = oneshot::channel();
+
+    sim.client("client1", async move {
+        let mut client = connect_ctp::<i32, i32>("turmoil:server:7777", VERSION, TIMEOUT).await;
+
+        client.recv().await?;
+        ready_tx.send(1).unwrap();
+
+        // Connection canceled.
+        assert_eq!(
+            client.recv().await.map_err(|e| e.to_string()),
+            Err("unexpected end of file".into()),
+        );
+
+        Ok(())
+    });
+
+    // Wait until the first client is connected, then spawn a second one to force the first
+    // connection to be canceled.
+    while ready_rx.try_recv().is_err() {
+        sim.step().unwrap();
+    }
+
+    sim.client("client2", async move {
+        let mut client = connect_ctp::<i32, i32>("turmoil:server:7777", VERSION, TIMEOUT).await;
+
+        client.recv().await?;
+
+        Ok(())
+    });
+
+    sim.run().unwrap();
+}
+
+/// A connection handler that produces a single outbound message and then becomes silent.
+#[derive(Debug)]
+struct OneOutputHandler {
+    done: bool,
+}
+
+impl OneOutputHandler {
+    fn new() -> Self {
+        Self { done: false }
+    }
+}
+
+#[async_trait]
+impl GenericClient<i32, i32> for OneOutputHandler {
+    async fn send(&mut self, _cmd: i32) -> anyhow::Result<()> {
+        Ok(())
+    }
+
+    async fn recv(&mut self) -> anyhow::Result<Option<i32>> {
+        if self.done {
+            future::pending().await
+        } else {
+            self.done = true;
+            Ok(Some(123))
+        }
+    }
 }
 
 /// Configure tracing for turmoil tests.
