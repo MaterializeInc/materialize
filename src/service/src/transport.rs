@@ -21,10 +21,10 @@
 //! is already established, the previous connection is canceled.
 
 use std::convert::Infallible;
-use std::fmt;
 use std::marker::PhantomData;
 use std::pin::pin;
 use std::time::Duration;
+use std::{fmt, mem};
 
 use anyhow::{anyhow, bail};
 use async_trait::async_trait;
@@ -33,7 +33,7 @@ use flate2::read::DeflateDecoder;
 use flate2::write::DeflateEncoder;
 use futures::stream::StreamExt;
 use futures::{FutureExt, future};
-use mz_ore::cast::CastInto;
+use mz_ore::cast::{CastFrom, CastInto};
 use mz_ore::netio::{Listener, SocketAddr, Stream};
 use mz_ore::task::{JoinHandle, JoinHandleExt};
 use semver::Version;
@@ -69,6 +69,7 @@ impl<Out: Payload, In: Payload> Client<Out, In> {
         version: Version,
         connect_timeout: Duration,
         keepalive_timeout: Duration,
+        metrics: impl Metrics<Out, In>,
     ) -> anyhow::Result<Self> {
         let dest_host = host_from_address(address);
         let stream = mz_ore::future::timeout(connect_timeout, Stream::connect(address)).await?;
@@ -79,7 +80,7 @@ impl<Out: Payload, In: Payload> Client<Out, In> {
         let (error_tx, error_rx) = oneshot::channel();
 
         mz_ore::task::spawn(|| "ctp::client-connection", async move {
-            let conn = Connection::new(stream, version, dest_host, keepalive_timeout);
+            let conn = Connection::new(stream, version, dest_host, keepalive_timeout, metrics);
             let handler = ChannelHandler::new(in_tx, out_rx);
             let cancel_signal = futures::future::pending();
 
@@ -139,10 +140,11 @@ where
         version: Version,
         connect_timeout: Duration,
         keepalive_timeout: Duration,
+        metrics: impl Metrics<Out, In>,
     ) -> anyhow::Result<Partitioned<Self, Out, In>> {
         let connects = addresses
             .iter()
-            .map(|addr| Self::connect(addr, version.clone(), connect_timeout, keepalive_timeout));
+            .map(|addr| Self::connect(addr, version.clone(), connect_timeout, keepalive_timeout, metrics.clone()));
         let clients = future::try_join_all(connects).await?;
         Ok(Partitioned::new(clients))
     }
@@ -175,6 +177,7 @@ pub async fn serve<In, Out, H>(
     server_fqdn: Option<String>,
     keepalive_timeout: Duration,
     handler_fn: impl Fn() -> H,
+    metrics: impl Metrics<Out, In>,
 ) -> anyhow::Result<()>
 where
     In: Payload,
@@ -205,12 +208,13 @@ where
         let handler = handler_fn();
         let version = version.clone();
         let server_fqdn = server_fqdn.clone();
+        let metrics = metrics.clone();
 
         let (cancel_tx, cancel_rx) = oneshot::channel();
         let cancel_signal = cancel_rx.map(|_| ());
 
         let handle = mz_ore::task::spawn(|| "ctp::server-connection", async move {
-            let conn = Connection::new(stream, version, server_fqdn, keepalive_timeout);
+            let conn = Connection::new(stream, version, server_fqdn, keepalive_timeout, metrics);
 
             let Err(error) = conn.serve(handler, cancel_signal).await;
             info!("ctp: connection failed: {error}");
@@ -219,9 +223,24 @@ where
     }
 }
 
+/// A trait for types that observe connection metric events.
+pub trait Metrics<Out, In>: Clone + Send + 'static {
+    fn message_sent(&mut self, bytes: u64, payload: Option<&Out>);
+    fn message_received(&mut self, bytes: u64, payload: Option<&In>);
+}
+
+/// Dummy [`Metrics`] implementation that ignores all events.
+#[derive(Clone)]
+pub struct NoopMetrics;
+
+impl<Out, In> Metrics<Out, In> for NoopMetrics {
+    fn message_sent(&mut self, _bytes: u64, _payload: Option<&Out>) {}
+    fn message_received(&mut self, _bytes: u64, _payload: Option<&In>) {}
+}
+
 /// An active CTP connection.
 #[derive(Debug)]
-struct Connection<Out, In> {
+struct Connection<Out, In, M> {
     /// The underlying connection to the peer.
     stream: Stream,
     /// The version of this connection endpoint.
@@ -236,22 +255,31 @@ struct Connection<Out, In> {
     server_fqdn: Option<String>,
     /// The timeout for all network operations.
     timeout: Duration,
+    /// Metrics tracked for this connection.
+    metrics: M,
     _payloads: PhantomData<(Out, In)>,
 }
 
-impl<Out: Payload, In: Payload> Connection<Out, In> {
+impl<Out, In, M> Connection<Out, In, M>
+where
+    Out: Payload,
+    In: Payload,
+    M: Metrics<Out, In>,
+{
     /// Create a new connection wrapping the given stream.
     fn new(
         stream: Stream,
         version: Version,
         server_fqdn: Option<String>,
         timeout: Duration,
+        metrics: M,
     ) -> Self {
         Self {
             stream,
             version,
             server_fqdn,
             timeout,
+            metrics,
             _payloads: PhantomData,
         }
     }
@@ -277,9 +305,10 @@ impl<Out: Payload, In: Payload> Connection<Out, In> {
         // Instead we wrap it into an async stream and select on `Stream::next`, which is cancel
         // safe.
         let (mut stream_rx, mut stream_tx) = self.stream.split();
+        let mut metrics = self.metrics.clone();
         let mut inbound = pin!(async_stream::stream! {
             loop {
-                yield Self::recv(&mut stream_rx, self.timeout).await;
+                yield Self::recv(&mut stream_rx, self.timeout, &mut metrics).await;
             }
         });
 
@@ -298,7 +327,7 @@ impl<Out: Payload, In: Payload> Connection<Out, In> {
                 outbound = handler.recv() => match outbound? {
                     Some(p) => {
                         let msg = Message::Payload(p);
-                        Self::send(&mut stream_tx, msg, self.timeout).await?;
+                        Self::send(&mut stream_tx, msg, self.timeout, &mut self.metrics).await?;
                         keepalive_interval.reset();
                     }
                     None => bail!("client disconnected"),
@@ -306,7 +335,7 @@ impl<Out: Payload, In: Payload> Connection<Out, In> {
                 // `Interval::tick` is documented to be cancel safe.
                 _ = keepalive_interval.tick() => {
                     let msg = Message::Keepalive;
-                    Self::send(&mut stream_tx, msg, self.timeout).await?;
+                    Self::send(&mut stream_tx, msg, self.timeout, &mut self.metrics).await?;
                 }
                 _ = cancel_signal.as_mut().unwrap() => bail!("connection canceled"),
             }
@@ -324,9 +353,9 @@ impl<Out: Payload, In: Payload> Connection<Out, In> {
             version: self.version.clone(),
             server_fqdn: self.server_fqdn.clone(),
         };
-        Self::send(&mut self.stream, hello, self.timeout).await?;
+        Self::send(&mut self.stream, hello, self.timeout, &mut self.metrics).await?;
 
-        let msg = Self::recv(&mut self.stream, self.timeout).await?;
+        let msg = Self::recv(&mut self.stream, self.timeout, &mut self.metrics).await?;
         let Message::Hello {
             version,
             server_fqdn,
@@ -352,6 +381,7 @@ impl<Out: Payload, In: Payload> Connection<Out, In> {
         mut writer: W,
         message: Message<Out>,
         timeout: Duration,
+        metrics: &mut impl Metrics<Out, In>,
     ) -> anyhow::Result<()> {
         trace!(?message, "ctp: sending message");
 
@@ -361,6 +391,9 @@ impl<Out: Payload, In: Payload> Connection<Out, In> {
         mz_ore::future::timeout(timeout, writer.write_u64(len)).await?;
         mz_ore::future::timeout(timeout, writer.write_all(&bytes)).await?;
 
+        let bytes_sent = u64::cast_from(mem::size_of::<u64>()) + len;
+        metrics.message_sent(bytes_sent, message.payload());
+
         Ok(())
     }
 
@@ -368,6 +401,7 @@ impl<Out: Payload, In: Payload> Connection<Out, In> {
     async fn recv<R: AsyncRead + Unpin>(
         mut reader: R,
         timeout: Duration,
+        metrics: &mut impl Metrics<Out, In>,
     ) -> anyhow::Result<Message<In>> {
         let len = mz_ore::future::timeout(timeout, reader.read_u64()).await?;
         let mut bytes = vec![0; len.cast_into()];
@@ -375,6 +409,9 @@ impl<Out: Payload, In: Payload> Connection<Out, In> {
 
         let message = Message::wire_decode(&bytes)?;
         trace!(?message, "ctp: received message");
+
+        let bytes_received = u64::cast_from(mem::size_of::<u64>()) + len;
+        metrics.message_received(bytes_received, message.payload());
 
         Ok(message)
     }
@@ -442,6 +479,7 @@ impl<P: Payload> Message<P> {
         let mut compressor = DeflateEncoder::new(Vec::new(), Compression::default());
         bincode::serialize_into(&mut compressor, self)?;
         let bytes = compressor.finish()?;
+
         Ok(bytes)
     }
 
@@ -450,5 +488,13 @@ impl<P: Payload> Message<P> {
         let mut decompressor = DeflateDecoder::new(bytes);
         let msg = bincode::deserialize_from(&mut decompressor)?;
         Ok(msg)
+    }
+
+    /// Return the wrapped payload, if any.
+    fn payload(&self) -> Option<&P> {
+        match self {
+            Self::Payload(p) => Some(p),
+            _ => None,
+        }
     }
 }
