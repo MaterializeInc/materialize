@@ -48,7 +48,6 @@ rows:
       | `JSON` | Decode the data as JSON. |
       | `TEXT` | Decode the data as TEXT. |
       | `BYTES` | Decode the data as BYTES. |
-      | `CSV WITH HEADER ( <col_name>[, ...]) [DELIMITED BY <char>]` | Parse the data as CSV with a header row. Materialize uses this header to infer both the number of columns and their names. The header is **not** ingested as data. The optional `DELIMITED BY <char>` clause specifies the delimiter character. <br><br>The data is decoded as [`text`](/sql/types/text). You can convert the data to other to other types using explicit [casts](/sql/functions/cast/) when creating views.|
       | `CSV WITH <num> COLUMNS DELIMITED BY <char>` | Parse the data as CSV with a specified number of columns and a specified delimiter. The columns are named `column1`, `column2`...`columnN`. <br><br> The data is decoded as [`text`](/sql/types/text). You can convert the data to other to other types using explicit [casts](/sql/functions/cast/) when creating views.|
 
       {{< include-md file="shared-content/kafka-format-envelope-compat-table.md"

@@ -1,4 +1,7 @@
 <!-- Adapted from https://discourse.gohugo.io/t/code-tabs-widget/975/7 -->
-<div class="tab-pane" title="{{ .Get 0 }}">
-  {{ .Inner | .Page.RenderString }}
+{{ $title := .Get 0 }}
+{{ $id := printf "tab-%s" (anchorize $title) }}
+
+<div class="tab-pane" title="{{ $title }}" id="{{ $id }}">
+    {{ .Inner | .Page.RenderString }}
 </div>
