@@ -4301,7 +4301,7 @@ async fn test_double_encoded_json() {
     ))
     .unwrap();
     let query = serde_json::json!({
-        "query": "SELECT a FROM t1"
+        "query": "SELECT a FROM t1 ORDER BY a"
     });
 
     let result: serde_json::Value = http_client
@@ -4330,12 +4330,12 @@ async fn test_double_encoded_json() {
     insta::assert_debug_snapshot!(rows, @r###"
     Array [
         Array [
+            String(" { \"type\": \"foo\" } "),
+        ],
+        Array [
             Object {
                 "type": String("foo"),
             },
-        ],
-        Array [
-            String(" { \"type\": \"foo\" } "),
         ],
     ]
     "###);
@@ -4344,7 +4344,7 @@ async fn test_double_encoded_json() {
     let (mut ws, _resp) = tungstenite::connect(ws_url).unwrap();
     let _ws_init = test_util::auth_with_ws(&mut ws, BTreeMap::default()).unwrap();
 
-    let json = "{\"query\":\"SELECT a FROM t1;\"}";
+    let json = "{\"query\":\"SELECT a FROM t1 ORDER BY a;\"}";
     let json: serde_json::Value = serde_json::from_str(json).unwrap();
     ws.send(Message::Text(json.to_string())).unwrap();
 
@@ -4360,9 +4360,7 @@ async fn test_double_encoded_json() {
     insta::assert_debug_snapshot!(row_1, @r###"
     Row(
         [
-            Object {
-                "type": String("foo"),
-            },
+            String(" { \"type\": \"foo\" } "),
         ],
     )
     "###);
@@ -4370,7 +4368,9 @@ async fn test_double_encoded_json() {
     insta::assert_debug_snapshot!(row_2, @r###"
     Row(
         [
-            String(" { \"type\": \"foo\" } "),
+            Object {
+                "type": String("foo"),
+            },
         ],
     )
     "###);
