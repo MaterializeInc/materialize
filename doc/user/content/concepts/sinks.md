@@ -29,7 +29,7 @@ See also [Operational guidelines](/manage/operational-guidelines/).
 
 ## Hydration considerations
 
-During hydration, sinks need to load an entire snpshot of the data in memory.
+During creation, sinks need to load an entire snapshot of the data in memory.
 
 ## Related pages
 

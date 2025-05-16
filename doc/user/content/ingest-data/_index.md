@@ -115,22 +115,25 @@ See [Monitoring hydration/data freshness status](/ingest-data/monitoring-data-in
 
 ## Hydration
 
-When a cluster is restarted (such as after resizing), sources undergo
-hydration.[^1] Hydration refers to the reconstruction of in-memory state by
-reading data from the storage layer; hydration does not require reading data
-from the upstream system.
+When a cluster is restarted (such as after resizing), certain objects (such as
+sources, indexes, materialized views, and sinks) on that cluster undergo
+hydration. Hydration refers to the reconstruction of in-memory state by reading
+data from Materialize's storage layer; hydration **does not** require reading
+data from the upstream system.
 
 {{% tip %}}
 
 If possible, use a dedicated cluster just for sources. That is, avoid
-using the same cluster for sources and other objects, such as sinks, etc. See [Best practices](#best-practices) for more details.
+using the same cluster for sources and other objects, such as sinks, etc.
+
+See [Best practices](#best-practices) for more details.
 
 {{% /tip %}}
 
 ### Process
 
-During hydration, data from the storage layer is read to reconstruct the
-in-memory state of the object. As part of the hydration process:
+During hydration, data from Materialize's storage layer is read to reconstruct
+the in-memory state of the object. As part of the hydration process:
 
 - Internal data structures are re-created.
 
@@ -228,7 +231,3 @@ incurs downtime for the duration it takes for all objects in the cluster to
 
 - [Monitoring data ingestion](/ingest-data/monitoring-data-ingestion)
 - [Troubleshooting data ingestion](/ingest-data/troubleshooting)
-
-[^1]: Other objects, such as sinks, indexes, materialized views, etc., also
-undergo hydration if their cluster is restarted.  If possible, use a dedicated
-cluster just for sources.
