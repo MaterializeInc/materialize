@@ -86,5 +86,5 @@ See also [Cluster architecture](#cluster-architecture).
   estimating required resources, consider both the hydration cost and the
   steady-state cost.
 
-- During initial hydration, sinks need to load an entire snapshot of the data in
-  memory.
+- During sink creation (initial hydration), sinks need to load an entire
+  snapshot of the data in memory.
