@@ -19,6 +19,7 @@ use mz_expr::{
     AggregateExpr, ColumnOrder, Id, JoinImplementation, LocalId, MirRelationExpr, MirScalarExpr,
     RECURSION_LIMIT, non_nullable_columns,
 };
+use mz_ore::soft_panic_or_log;
 use mz_ore::stack::{CheckedRecursion, RecursionGuard, RecursionLimitError};
 use mz_repr::explain::{DummyHumanizer, ExprHumanizer};
 use mz_repr::{ColumnName, ColumnType, RelationType, Row, ScalarBaseType, ScalarType};
@@ -1194,14 +1195,13 @@ impl Typecheck {
     }
 }
 
-/// Detailed type error logging as a warning, with failures in CI (SOFT_ASSERTIONS) and a logged error in production
+/// Detailed type error logging as a warning, with failures in CI and a logged error in production
 ///
 /// type_error(severity, ...) logs a type warning; if `severity` is `true`, it will also log an error (visible in Sentry)
 macro_rules! type_error {
     ($severity:expr, $($arg:tt)+) => {{
         if $severity {
-          ::tracing::warn!($($arg)+);
-          ::tracing::error!("type error in MIR optimization (details in warning; see 'Type error omnibus' issue database-issues#5663 <https://github.com/MaterializeInc/database-issues/issues/5663>)");
+          soft_panic_or_log!($($arg)+);
         } else {
           ::tracing::debug!($($arg)+);
         }
@@ -1232,7 +1232,7 @@ impl crate::Transform for Typecheck {
             {
                 type_error!(
                     false, // not severe
-                    "TYPE WARNING: NEW NON-TRANSIENT GLOBAL ID {id}\n{}",
+                    "type warning: new non-transient global id {id}\n{}",
                     relation.pretty()
                 );
             }
@@ -1264,7 +1264,7 @@ impl crate::Transform for Typecheck {
                         ),
                     };
 
-                    type_error!(severity, "TYPE ERROR IN KNOWN GLOBAL ID {id}:\n{err}");
+                    type_error!(severity, "type error in known global id {id}:\n{err}");
                 }
             }
             (Ok(got), None) => {
@@ -1278,15 +1278,15 @@ impl crate::Transform for Typecheck {
                         let id = transform_ctx.global_id.unwrap();
                         (
                             format!("expected type {}\n", columns_pretty(expected, &humanizer)),
-                            format!("KNOWN GLOBAL ID {id}"),
+                            format!("known global id {id}"),
                         )
                     }
-                    None => ("".to_string(), "TRANSIENT QUERY".to_string()),
+                    None => ("".to_string(), "transient query".to_string()),
                 };
 
                 type_error!(
                     true, // SEVERE: the transformed code is inconsistent
-                    "TYPE ERROR IN {binding}:\n{err}\n{expected}{}",
+                    "type error in {binding}:\n{err}\n{expected}{}",
                     relation.pretty()
                 );
             }
