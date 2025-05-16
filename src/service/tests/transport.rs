@@ -9,6 +9,7 @@
 
 //! Tests for the Cluster Transport Protocol.
 
+use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, Once};
 use std::time::Duration;
 
@@ -18,7 +19,7 @@ use mz_ore::assert_none;
 use mz_ore::netio::Listener;
 use mz_ore::retry::Retry;
 use mz_service::client::GenericClient;
-use mz_service::transport::{self, ChannelHandler, Message};
+use mz_service::transport::{self, ChannelHandler, Message, NoopMetrics};
 use rand::SeedableRng;
 use rand::rngs::SmallRng;
 use semver::Version;
@@ -53,9 +54,12 @@ async fn connect_ctp<Out: Message, In: Message>(
     address: &str,
     version: Version,
     timeout: Duration,
+    metrics: impl transport::Metrics<Out, In>,
 ) -> transport::Client<Out, In> {
     Retry::default()
-        .retry_async(|_| transport::Client::connect(address, version.clone(), timeout, timeout))
+        .retry_async(|_| {
+            transport::Client::connect(address, version.clone(), timeout, timeout, metrics.clone())
+        })
         .await
         .expect("retries forever")
 }
@@ -68,9 +72,14 @@ async fn connect_ctp_error<Out: Message, In: Message>(
 ) -> anyhow::Result<()> {
     Retry::default()
         .retry_async(async |_| {
-            let result =
-                transport::Client::<(), ()>::connect(address, version.clone(), TIMEOUT, TIMEOUT)
-                    .await;
+            let result = transport::Client::<(), ()>::connect(
+                address,
+                version.clone(),
+                TIMEOUT,
+                TIMEOUT,
+                NoopMetrics,
+            )
+            .await;
             let error = result.expect_err("connection must fail");
             if error.to_string() == expected_error {
                 Ok(())
@@ -100,6 +109,7 @@ fn test_bidirectional_communication() {
                 Some("server".into()),
                 TIMEOUT,
                 move || handler.lock().unwrap().take().unwrap(),
+                NoopMetrics,
             ),
         );
 
@@ -116,7 +126,7 @@ fn test_bidirectional_communication() {
     });
 
     sim.client("client", async move {
-        let mut client = connect_ctp("turmoil:server:7777", VERSION, TIMEOUT).await;
+        let mut client = connect_ctp("turmoil:server:7777", VERSION, TIMEOUT, NoopMetrics).await;
 
         client.send(1).await?;
         client.send(2).await?;
@@ -154,6 +164,7 @@ fn test_server_error() {
                 Some("server".into()),
                 TIMEOUT,
                 move || handler.lock().unwrap().take().unwrap(),
+                NoopMetrics,
             ),
         );
 
@@ -164,7 +175,8 @@ fn test_server_error() {
     });
 
     sim.client("client", async move {
-        let mut client = connect_ctp::<i32, ()>("turmoil:server:7777", VERSION, TIMEOUT).await;
+        let mut client =
+            connect_ctp::<i32, ()>("turmoil:server:7777", VERSION, TIMEOUT, NoopMetrics).await;
 
         client.send(1).await?;
 
@@ -233,6 +245,7 @@ fn test_handshake_version_mismatch() {
                 Some("server".into()),
                 TIMEOUT,
                 move || handler.lock().unwrap().take().unwrap(),
+                NoopMetrics,
             ),
         );
 
@@ -275,6 +288,7 @@ fn test_handshake_fqdn_mismatch() {
                 Some("wrong.server".into()),
                 TIMEOUT,
                 move || handler.lock().unwrap().take().unwrap(),
+                NoopMetrics,
             ),
         );
 
@@ -317,6 +331,7 @@ fn test_idle_timeout() {
                 Some("server".into()),
                 TIMEOUT,
                 move || handler.lock().unwrap().take().unwrap(),
+                NoopMetrics,
             ),
         );
 
@@ -327,7 +342,8 @@ fn test_idle_timeout() {
     let (ready_tx, mut ready_rx) = oneshot::channel();
 
     sim.client("client", async move {
-        let mut client = connect_ctp::<i32, i32>("turmoil:server:7777", VERSION, TIMEOUT).await;
+        let mut client =
+            connect_ctp::<i32, i32>("turmoil:server:7777", VERSION, TIMEOUT, NoopMetrics).await;
 
         client.recv().await?;
         ready_tx.send(1).unwrap();
@@ -369,6 +385,7 @@ fn test_keepalive() {
                 Some("server".into()),
                 TIMEOUT,
                 move || handler.lock().unwrap().take().unwrap(),
+                NoopMetrics,
             ),
         );
 
@@ -380,7 +397,8 @@ fn test_keepalive() {
     });
 
     sim.client("client", async move {
-        let mut client = connect_ctp::<i32, i32>("turmoil:server:7777", VERSION, TIMEOUT).await;
+        let mut client =
+            connect_ctp::<i32, i32>("turmoil:server:7777", VERSION, TIMEOUT, NoopMetrics).await;
 
         client.recv().await?;
 
@@ -406,6 +424,7 @@ fn test_connection_cancelation() {
             Some("server".into()),
             TIMEOUT,
             OneOutputHandler::new,
+            NoopMetrics,
         )
         .await?;
 
@@ -415,7 +434,8 @@ fn test_connection_cancelation() {
     let (ready_tx, mut ready_rx) = oneshot::channel();
 
     sim.client("client1", async move {
-        let mut client = connect_ctp::<i32, i32>("turmoil:server:7777", VERSION, TIMEOUT).await;
+        let mut client =
+            connect_ctp::<i32, i32>("turmoil:server:7777", VERSION, TIMEOUT, NoopMetrics).await;
 
         client.recv().await?;
         ready_tx.send(1).unwrap();
@@ -436,9 +456,101 @@ fn test_connection_cancelation() {
     }
 
     sim.client("client2", async move {
-        let mut client = connect_ctp::<i32, i32>("turmoil:server:7777", VERSION, TIMEOUT).await;
+        let mut client =
+            connect_ctp::<i32, i32>("turmoil:server:7777", VERSION, TIMEOUT, NoopMetrics).await;
 
         client.recv().await?;
+
+        Ok(())
+    });
+
+    sim.run().unwrap();
+}
+
+#[test] // allow(test-attribute)
+#[cfg_attr(miri, ignore)] // too slow
+fn test_metrics() {
+    #[derive(Clone, Default)]
+    struct Metrics {
+        bytes_sent: Arc<AtomicUsize>,
+        bytes_received: Arc<AtomicUsize>,
+        messages_sent: Arc<AtomicU64>,
+        messages_received: Arc<AtomicU64>,
+    }
+
+    impl transport::Metrics<String, String> for Metrics {
+        fn bytes_sent(&mut self, len: usize) {
+            self.bytes_sent.fetch_add(len, Ordering::SeqCst);
+        }
+
+        fn bytes_received(&mut self, len: usize) {
+            self.bytes_received.fetch_add(len, Ordering::SeqCst);
+        }
+
+        fn message_sent(&mut self, _msg: &String) {
+            self.messages_sent.fetch_add(1, Ordering::SeqCst);
+        }
+
+        fn message_received(&mut self, _msg: &String) {
+            self.messages_received.fetch_add(1, Ordering::SeqCst);
+        }
+    }
+
+    let mut sim = setup();
+
+    sim.host("server", move || async {
+        let (in_tx, mut in_rx) = mpsc::unbounded_channel();
+        let (out_tx, out_rx) = mpsc::unbounded_channel();
+        let handler = ChannelHandler::new(in_tx, out_rx);
+        let handler = Arc::new(Mutex::new(Some(handler)));
+
+        let metrics = Metrics::default();
+
+        mz_ore::task::spawn(
+            || "serve",
+            transport::serve(
+                "turmoil:0.0.0.0:7777".parse().unwrap(),
+                VERSION,
+                Some("server".into()),
+                TIMEOUT,
+                move || handler.lock().unwrap().take().unwrap(),
+                metrics.clone(),
+            ),
+        );
+
+        out_tx.send("long message from server".into())?;
+        assert_eq!(in_rx.recv().await, Some("short".into()));
+
+        // Wait for message to be transmitted.
+        tokio::time::sleep(Duration::from_secs(1)).await;
+
+        assert!(metrics.bytes_sent.load(Ordering::SeqCst) >= 63);
+        assert!(metrics.bytes_received.load(Ordering::SeqCst) >= 44);
+        assert_eq!(metrics.messages_sent.load(Ordering::SeqCst), 1);
+        assert_eq!(metrics.messages_received.load(Ordering::SeqCst), 1);
+
+        Ok(())
+    });
+
+    sim.client("client", async move {
+        let metrics = Metrics::default();
+
+        let mut client =
+            connect_ctp("turmoil:server:7777", VERSION, TIMEOUT, metrics.clone()).await;
+
+        client.send("short".into()).await?;
+        assert_eq!(
+            client.recv().await?,
+            Some("long message from server".into()),
+        );
+
+        // Wait for message to be transmitted.
+        tokio::time::sleep(Duration::from_secs(1)).await;
+
+        assert!(metrics.bytes_sent.load(Ordering::SeqCst) >= 44);
+        assert!(metrics.bytes_received.load(Ordering::SeqCst) >= 63);
+        assert_eq!(metrics.messages_sent.load(Ordering::SeqCst), 1);
+        assert_eq!(metrics.messages_received.load(Ordering::SeqCst), 1);
 
         Ok(())
     });

@@ -20,6 +20,8 @@
 //! A CTP server only serves a single client at a time. If a new client connects while a connection
 //! is already established, the previous connection is canceled.
 
+mod metrics;
+
 use std::convert::Infallible;
 use std::fmt::Debug;
 use std::time::Duration;
@@ -39,6 +41,8 @@ use tokio::sync::{mpsc, oneshot, watch};
 use tracing::{debug, info, trace, warn};
 
 use crate::client::{GenericClient, Partitionable, Partitioned};
+
+pub use metrics::{Metrics, NoopMetrics};
 
 /// Trait for messages that can be sent over CTP.
 pub trait Message: Debug + Send + Sync + Serialize + DeserializeOwned + 'static {}
@@ -60,12 +64,13 @@ impl<Out: Message, In: Message> Client<Out, In> {
         version: Version,
         connect_timeout: Duration,
         idle_timeout: Duration,
+        metrics: impl Metrics<Out, In>,
     ) -> anyhow::Result<Self> {
         let dest_host = host_from_address(address);
         let stream = mz_ore::future::timeout(connect_timeout, Stream::connect(address)).await?;
         info!(%address, "ctp: connected to server");
 
-        let conn = Connection::start(stream, version, dest_host, idle_timeout).await?;
+        let conn = Connection::start(stream, version, dest_host, idle_timeout, metrics).await?;
         Ok(Self { conn })
     }
 }
@@ -98,10 +103,17 @@ where
         version: Version,
         connect_timeout: Duration,
         idle_timeout: Duration,
+        metrics: impl Metrics<Out, In>,
     ) -> anyhow::Result<Partitioned<Self, Out, In>> {
-        let connects = addresses
-            .iter()
-            .map(|addr| Self::connect(addr, version.clone(), connect_timeout, idle_timeout));
+        let connects = addresses.iter().map(|addr| {
+            Self::connect(
+                addr,
+                version.clone(),
+                connect_timeout,
+                idle_timeout,
+                metrics.clone(),
+            )
+        });
         let clients = future::try_join_all(connects).await?;
         Ok(Partitioned::new(clients))
     }
@@ -129,6 +141,7 @@ pub async fn serve<In, Out, H>(
     server_fqdn: Option<String>,
     idle_timeout: Duration,
     handler_fn: impl Fn() -> H,
+    metrics: impl Metrics<Out, In>,
 ) -> anyhow::Result<()>
 where
     In: Message,
@@ -159,6 +172,7 @@ where
         let handler = handler_fn();
         let version = version.clone();
         let server_fqdn = server_fqdn.clone();
+        let metrics = metrics.clone();
         let (cancel_tx, cancel_rx) = oneshot::channel();
 
         let handle = mz_ore::task::spawn(|| "ctp::connection", async move {
@@ -169,6 +183,7 @@ where
                 server_fqdn,
                 idle_timeout,
                 cancel_rx,
+                metrics,
             )
             .await;
             info!("ctp: connection failed: {error}");
@@ -186,13 +201,14 @@ async fn serve_connection<In, Out, H>(
     server_fqdn: Option<String>,
     timeout: Duration,
     cancel_rx: oneshot::Receiver<()>,
+    metrics: impl Metrics<Out, In>,
 ) -> anyhow::Result<Infallible>
 where
     In: Message,
     Out: Message,
     H: GenericClient<In, Out>,
 {
-    let mut conn = Connection::start(stream, version, server_fqdn, timeout).await?;
+    let mut conn = Connection::start(stream, version, server_fqdn, timeout, metrics).await?;
 
     let mut cancel_rx = cancel_rx;
     loop {
@@ -252,6 +268,7 @@ impl<Out: Message, In: Message> Connection<Out, In> {
         version: Version,
         server_fqdn: Option<String>,
         mut timeout: Duration,
+        metrics: impl Metrics<Out, In>,
     ) -> anyhow::Result<Self> {
         if timeout < Self::MIN_TIMEOUT {
             warn!(
@@ -264,8 +281,11 @@ impl<Out: Message, In: Message> Connection<Out, In> {
         let (reader, writer) = stream.split();
 
         // Apply the timeout to all connection reads and writes.
-        let mut reader = TimedReader::new(reader, timeout);
-        let mut writer = TimedWriter::new(writer, timeout);
+        let reader = TimedReader::new(reader, timeout);
+        let writer = TimedWriter::new(writer, timeout);
+        // Track byte count metrics for all connection reads and writes.
+        let mut reader = metrics::Reader::new(reader, metrics.clone());
+        let mut writer = metrics::Writer::new(writer, metrics.clone());
 
         handshake(&mut reader, &mut writer, version, server_fqdn).await?;
 
@@ -277,10 +297,12 @@ impl<Out: Message, In: Message> Connection<Out, In> {
 
         let send_task = mz_ore::task::spawn(
             || "ctp::send",
-            Self::run_send_task(writer, out_rx, error_tx.clone()),
+            Self::run_send_task(writer, out_rx, error_tx.clone(), metrics.clone()),
         );
-        let recv_task =
-            mz_ore::task::spawn(|| "ctp::recv", Self::run_recv_task(reader, in_tx, error_tx));
+        let recv_task = mz_ore::task::spawn(
+            || "ctp::recv",
+            Self::run_recv_task(reader, in_tx, error_tx, metrics),
+        );
 
         Ok(Self {
             msg_tx: out_tx,
@@ -327,6 +349,7 @@ impl<Out: Message, In: Message> Connection<Out, In> {
         mut writer: W,
         mut msg_rx: mpsc::Receiver<Out>,
         error_tx: watch::Sender<String>,
+        mut metrics: impl Metrics<Out, In>,
     ) {
         loop {
             let msg = tokio::select! {
@@ -350,6 +373,10 @@ impl<Out: Message, In: Message> Connection<Out, In> {
                 let _ = error_tx.send(error.to_string());
                 break;
             };
+
+            if let Some(msg) = &msg {
+                metrics.message_sent(msg);
+            }
         }
     }
 
@@ -358,11 +385,13 @@ impl<Out: Message, In: Message> Connection<Out, In> {
         mut reader: R,
         msg_tx: mpsc::Sender<In>,
         error_tx: watch::Sender<String>,
+        mut metrics: impl Metrics<Out, In>,
     ) {
         loop {
             match read_message(&mut reader).await {
                 Ok(msg) => {
                     trace!(?msg, "ctp: received message");
+                    metrics.message_received(&msg);
 
                     if msg_tx.send(msg).await.is_err() {
                         break;
