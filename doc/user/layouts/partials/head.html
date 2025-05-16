@@ -116,6 +116,8 @@ toCSS | fingerprint }}
 {{/* Tabs */}}
 <script>
 document.addEventListener("DOMContentLoaded", function () {
+  const currentHash = window.location.hash;
+
   document.querySelectorAll(".code-tabs").forEach(function (tabGroup, groupIndex) {
     const navTabs = tabGroup.querySelector(".nav-tabs");
     const tabContent = tabGroup.querySelector(".tab-content");
@@ -126,8 +128,7 @@ document.addEventListener("DOMContentLoaded", function () {
     // Create tab headers from panes
     tabPanes.forEach(function (pane, tabIndex) {
       const title = pane.getAttribute("title") || `Tab ${tabIndex + 1}`;
-      const id = `tab-${groupIndex}-${tabIndex}`;
-      pane.setAttribute("id", id);
+      const id =  pane.getAttribute("id");
 
       const tabItem = document.createElement("li");
       const link = document.createElement("a");
@@ -155,9 +156,16 @@ document.addEventListener("DOMContentLoaded", function () {
       });
     });
 
-    // Activate the first tab by default
-    const firstLink = navTabs.querySelector("a");
-    if (firstLink) firstLink.click();
+    const matchingLink = currentHash
+      ? navTabs.querySelector(`a[href="${currentHash}"]`)
+      : null;
+
+    if (matchingLink) {
+      matchingLink.click();
+    } else {
+      const firstLink = navTabs.querySelector("a");
+      if (firstLink) firstLink.click();
+    }
   });
 });
 
