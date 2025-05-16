@@ -19,6 +19,10 @@ Materialize, you can create:
   be written to by the user; they are populated through data ingestion from a
   source.
 
+- Webhook-populated tables. Webhook-populated tables cannot be written to by the
+  user; they are populated through data posted to associated **public** webhook
+  endpoint, automatically created with the table creation.
+
 Tables can be joined with other tables, materialized views, and views. Tables in
 Materialize are similar to tables in standard relational databases: they consist
 of rows and columns where the columns are fixed when the table is created.
@@ -45,14 +49,14 @@ CREATE [TEMP|TEMPORARY] TABLE <table_name> (
 ;
 ```
 
-{{% yaml-table data="syntax_options/create_table_options_user_populated" %}}
+{{% yaml-table data="syntax_options/create_table/create_table_options_user_populated" %}}
 
 {{</ tab >}}
 
-{{< tab "Source-populated tables (DB source)" >}}
+{{< tab "Source-populated tables (DB connector)" >}}
 
-To create a table from a [source](/sql/create-source/), where the source maps to
-an external database system:
+To create a table from a [source](/sql/create-source/) connected (via native
+connector) to an external database system:
 
 {{< note >}}
 
@@ -73,46 +77,14 @@ CREATE TABLE <table_name> FROM SOURCE <source_name> (REFERENCE <ref_object>)
 ;
 ```
 
-{{% yaml-table data="syntax_options/create_table_options_source_populated_db" %}}
+{{% yaml-table data="syntax_options/create_table/create_table_options_source_populated_db" %}}
 
 <a name="supported-db-source-types" ></a>
 
 {{< tabs >}}
 {{< tab "Supported MySQL types">}}
 
-Materialize natively supports the following MySQL types:
-
-<ul style="column-count: 3">
-<li><code>bigint</code></li>
-<li><code>binary</code></li>
-<li><code>bit</code></li>
-<li><code>blob</code></li>
-<li><code>boolean</code></li>
-<li><code>char</code></li>
-<li><code>date</code></li>
-<li><code>datetime</code></li>
-<li><code>decimal</code></li>
-<li><code>double</code></li>
-<li><code>float</code></li>
-<li><code>int</code></li>
-<li><code>json</code></li>
-<li><code>longblob</code></li>
-<li><code>longtext</code></li>
-<li><code>mediumblob</code></li>
-<li><code>mediumint</code></li>
-<li><code>mediumtext</code></li>
-<li><code>numeric</code></li>
-<li><code>real</code></li>
-<li><code>smallint</code></li>
-<li><code>text</code></li>
-<li><code>time</code></li>
-<li><code>timestamp</code></li>
-<li><code>tinyblob</code></li>
-<li><code>tinyint</code></li>
-<li><code>tinytext</code></li>
-<li><code>varbinary</code></li>
-<li><code>varchar</code></li>
-</ul>
+{{< include-md file="shared-content/mysql-supported-types.md" >}}
 
 Replicating tables that contain **unsupported data types** is
 possible via the [`TEXT COLUMNS` option](#text-columns) for the
@@ -130,39 +102,8 @@ use the [`EXCLUDE COLUMNS`](#exclude-columns) option.
 {{</ tab >}}
 
 {{< tab "Supported PostgreSQL types">}}
-Materialize natively supports the following PostgreSQL types (including the
-array type for each of the types):
 
-<ul style="column-count: 3">
-<li><code>bool</code></li>
-<li><code>bpchar</code></li>
-<li><code>bytea</code></li>
-<li><code>char</code></li>
-<li><code>date</code></li>
-<li><code>daterange</code></li>
-<li><code>float4</code></li>
-<li><code>float8</code></li>
-<li><code>int2</code></li>
-<li><code>int2vector</code></li>
-<li><code>int4</code></li>
-<li><code>int4range</code></li>
-<li><code>int8</code></li>
-<li><code>int8range</code></li>
-<li><code>interval</code></li>
-<li><code>json</code></li>
-<li><code>jsonb</code></li>
-<li><code>numeric</code></li>
-<li><code>numrange</code></li>
-<li><code>oid</code></li>
-<li><code>text</code></li>
-<li><code>time</code></li>
-<li><code>timestamp</code></li>
-<li><code>timestamptz</code></li>
-<li><code>tsrange</code></li>
-<li><code>tstzrange</code></li>
-<li><code>uuid</code></li>
-<li><code>varchar</code></li>
-</ul>
+{{< include-md file="shared-content/postgres-supported-types.md" >}}
 
 Replicating tables that contain **unsupported data types** is possible via the
 [`TEXT COLUMNS` option](#text-columns). When decoded as `text`, the specified
@@ -180,16 +121,40 @@ columns will not have the expected PostgreSQL type features. For example:
 [`money`]: https://www.postgresql.org/docs/current/datatype-money.html
 
 {{</ tab >}}
+
+{{< tab "Supported SQL Server types">}}
+
+{{< include-md file="shared-content/sql-server-supported-types.md" >}}
+
+Replicating tables that contain **unsupported data types** is possible via the
+[`EXCLUDE COLUMNS`
+option](#exclude-columns) for the
+following types:
+
+<ul style="column-count: 3">
+<li><code>text</code></li>
+<li><code>ntext</code></li>
+<li><code>image</code></li>
+<li><code>varchar(max)</code></li>
+<li><code>nvarchar(max)</code></li>
+<li><code>varbinary(max)</code></li>
+</ul>
+
+**Timestamp rounding**
+
+{{< include-md file="shared-content/sql-server-timestamp-rounding.md" >}}
+
+{{</ tab >}}
 {{</ tabs >}}
 
 See also [Materialize SQL data types](/sql/types/).
 
 {{</ tab >}}
 
-{{< tab "Source-populated tables (Kafka/Redpanda source)" >}}
+{{< tab "Source-populated tables (via Kafka/Redpanda)" >}}
 
-To create a table from a source, where the source maps to an external
-Kafka/Redpanda system:
+To create a table from a source, where the source is connected to
+Kafka/Redpanda:
 
 {{< note >}}
 
@@ -210,7 +175,6 @@ CREATE TABLE <table_name> FROM SOURCE <source_name> [(REFERENCE <ref_object>)]
    --       INLINE <schema> | ID <schema_registry_id> | LATEST ]
   -- | PROTOBUF USING CONFLUENT SCHEMA REGISTRY CONNECTION <conn_name>
   -- | PROTOBUF MESSAGE <msg_name> USING SCHEMA <encoded_schema>
-  -- | CSV WITH HEADER ( <col_name>[, ...]) [DELIMITED BY <char>]
   -- | CSV WITH <num> COLUMNS DELIMITED BY <char>
   -- | JSON | TEXT | BYTES
 ]
@@ -227,9 +191,35 @@ CREATE TABLE <table_name> FROM SOURCE <source_name> [(REFERENCE <ref_object>)]
 ;
 ```
 
-{{% yaml-table data="syntax_options/create_table_options_source_populated_kafka"
+{{% yaml-table data="syntax_options/create_table/create_table_options_source_populated_kafka"
 %}}
 
+
+{{</ tab >}}
+
+{{< tab "Webhook-populated table" >}}
+
+To create a table (and the associated webhook endpoint) that is populated with
+data POSTed to the associated webhook endpoint. The created table has, by
+default, 1 column `body`.  You can specify `INCLUDE <header_option>` to include
+header columns.
+
+```mzsql
+CREATE TABLE <table_name>
+FROM WEBHOOK
+  BODY FORMAT <TEXT | JSON [ARRAY] | BYTES>
+  [ INCLUDE <header_option> ]
+  -- <header_option> can be:
+  -- INCLUDE HEADER <header_name> AS <col_name> [BYTES] [, ... ]
+  -- | INCLUDE HEADERS [ ([NOT] <header_name> [, [NOT] <header_name> [, ...] ]) ]
+  [ CHECK (
+      [ WITH (<BODY|HEADERS|SECRET <secret_name>> [AS <alias>] [BYTES] [, ... ]) ]
+      <check_expression>
+  ) ]
+```
+
+{{% yaml-table data="syntax_options/create_table/create_table_options_webhook_populated"
+%}}
 
 {{</ tab >}}
 
@@ -262,6 +252,15 @@ connections. They are always created in the special `mz_temp` schema.
 Temporary tables may depend upon other temporary database objects, but non-temporary
 tables may not depend on temporary objects.
 
+### Required privileges
+
+The privileges required to execute the command are:
+
+- `CREATE` privileges on the containing schema.
+- `USAGE` privileges on all types used in the table definition.
+- `USAGE` privileges on the schemas that all types in the statement are
+  contained in.
+
 ## Examples
 
 ### Creating a table
@@ -287,13 +286,6 @@ a          true      int4
 b          false     text
 ```
 
-## Privileges
-
-The privileges required to execute this statement are:
-
-- `CREATE` privileges on the containing schema.
-- `USAGE` privileges on all types used in the table definition.
-- `USAGE` privileges on the schemas that all types in the statement are contained in.
 
 ## Related pages
 
