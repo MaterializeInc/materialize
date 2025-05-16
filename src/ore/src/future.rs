@@ -260,7 +260,7 @@ where
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             TimeoutError::DeadlineElapsed => f.write_str("deadline has elapsed"),
-            e => e.fmt(f),
+            TimeoutError::Inner(e) => e.fmt(f),
         }
     }
 }
