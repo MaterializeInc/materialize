@@ -16,7 +16,7 @@ use std::collections::BTreeMap;
 use std::fmt::{Debug, Formatter};
 use std::marker::PhantomData;
 use std::ops::ControlFlow::{self, Break, Continue};
-use std::ops::{Deref, DerefMut};
+use std::ops::{Add, Deref, DerefMut};
 use std::time::Duration;
 
 use arrow::array::{Array, ArrayData, make_array};
@@ -647,10 +647,16 @@ impl<T: Timestamp + Codec64 + Sync> RunPart<T> {
         match self {
             RunPart::Single(p) => Ok(Box::new(p.clone())),
             RunPart::Many(r) => {
-                let fetched = r.get(shard_id, blob, metrics).await.ok_or_else(|| MissingBlob(r.key.complete(&shard_id)))?;
-                let last_part = fetched.parts.last().ok_or_else(|| MissingBlob(r.key.complete(&shard_id)))?;
+                let fetched = r
+                    .get(shard_id, blob, metrics)
+                    .await
+                    .ok_or_else(|| MissingBlob(r.key.complete(&shard_id)))?;
+                let last_part = fetched
+                    .parts
+                    .last()
+                    .ok_or_else(|| MissingBlob(r.key.complete(&shard_id)))?;
                 Ok(Box::pin(last_part.last_part(shard_id, blob, metrics)).await?)
-            },
+            }
         }
     }
 }
@@ -1687,7 +1693,7 @@ where
                 req.id,
                 ActiveCompaction {
                     start_ms: heartbeat_timestamp_ms,
-                    batch_so_far: None
+                    batch_so_far: None,
                 },
             )
         }
@@ -1727,10 +1733,11 @@ where
 
         let new_active_compaction = ActiveCompaction {
             start_ms: new_ts,
-            batch_so_far: Some(batch_so_far.clone())
+            batch_so_far: Some(batch_so_far.clone()),
         };
 
-        self.trace.apply_incremental_compaction(&new_active_compaction);
+        self.trace
+            .apply_incremental_compaction(&new_active_compaction);
 
         Continue(())
     }

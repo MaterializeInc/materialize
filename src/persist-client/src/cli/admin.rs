@@ -500,6 +500,7 @@ where
                 Arc::new(IsolatedRuntime::default()),
                 req.clone(),
                 schemas,
+                &machine,
             );
             pin_mut!(stream);
 

@@ -72,6 +72,7 @@ pub struct FueledMergeReq<T> {
     pub id: SpineId,
     pub desc: Description<T>,
     pub inputs: Vec<IdHollowBatch<T>>,
+    pub active_compaction: Option<HollowBatch<T>>,
 }
 
 #[derive(Debug)]
@@ -610,10 +611,23 @@ impl<T: Timestamp + Lattice> Trace<T> {
                     .as_ref()
                     .map_or(true, move |c| c.start_ms <= threshold_ms)
             })
-            .map(|b| FueledMergeReq {
-                id: b.id,
-                desc: b.desc.clone(),
-                inputs: b.parts.clone(),
+            .map(|b| {
+                let inputs = b
+                    .active_compaction
+                    .as_ref()
+                    .and_then(|ac| ac.batch_so_far.as_ref()) // If Some, chain to Option<&BatchSoFarType>
+                    .map_or_else(|| b.parts.clone(), |bsf| b.filtered_batches(&bsf.desc));
+                let active_compaction_hollow_batch = b
+                    .active_compaction
+                    .as_ref()
+                    .and_then(|ac| ac.batch_so_far.clone())
+                    .map_or_else(|| None, |bsf| Some(bsf));
+                FueledMergeReq {
+                    id: b.id,
+                    desc: b.desc.clone(),
+                    inputs,
+                    active_compaction: active_compaction_hollow_batch,
+                }
             })
     }
 
@@ -701,7 +715,7 @@ pub struct IdHollowBatch<T> {
 #[derive(Debug, Clone, Eq, PartialEq, Serialize)]
 pub struct ActiveCompaction<T> {
     pub start_ms: u64,
-    pub batch_so_far: Option<HollowBatch<T>>
+    pub batch_so_far: Option<HollowBatch<T>>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -838,11 +852,14 @@ impl<T: Timestamp + Lattice> SpineBatch<T> {
         })
     }
 
-    fn maybe_update_active_compaction(&mut self, active_compaction: &ActiveCompaction<T>) -> ApplyMergeResult {
-       let batch = match active_compaction.batch_so_far.as_ref() {
-           Some(batch) => batch,
-           None => return ApplyMergeResult::NotAppliedNoMatch,
-       };
+    fn maybe_update_active_compaction(
+        &mut self,
+        active_compaction: &ActiveCompaction<T>,
+    ) -> ApplyMergeResult {
+        let batch = match active_compaction.batch_so_far.as_ref() {
+            Some(batch) => batch,
+            None => return ApplyMergeResult::NotAppliedNoMatch,
+        };
 
         // The spine's and merge res's sinces don't need to match (which could occur if Spine
         // has been reloaded from state due to compare_and_set mismatch), but if so, the Spine
@@ -852,54 +869,42 @@ impl<T: Timestamp + Lattice> SpineBatch<T> {
         }
 
         // If our merge result exactly matches a spine batch, we can swap it in directly
-        let exact_match = batch.desc.lower() == self.desc().lower()
-            && batch.desc.upper() == self.desc().upper();
+        let exact_match =
+            batch.desc.lower() == self.desc().lower() && batch.desc.upper() == self.desc().upper();
         if exact_match {
             self.active_compaction = Some(active_compaction.clone());
 
             return ApplyMergeResult::AppliedExact;
         }
 
-        // It is possible the structure of the spine has changed since the merge res
-        // was created, such that it no longer exactly matches the description of a
-        // spine batch. This can happen if another merge has happened in the interim,
-        // or if spine needed to be rebuilt from state.
-        //
-        // When this occurs, we can still attempt to slot the merge res in to replace
-        // the parts of a fueled merge. e.g. if the res is for `[1,3)` and the parts
-        // are `[0,1),[1,2),[2,3),[3,4)`, we can swap out the middle two parts for res.
         let SpineBatch {
-            id,
-            parts,
+            id: _,
+            parts: _,
             desc,
             active_compaction: _,
             len: _,
         } = self;
-        // first, determine if a subset of parts can be cleanly replaced by the merge res
-        let mut lower = None;
-        let mut upper = None;
-        for (i, batch) in parts.iter().enumerate() {
-            if batch.batch.desc.lower() == desc.lower() {
-                lower = Some((i, batch.id.0));
-            }
-            if batch.batch.desc.upper() == desc.upper() {
-                upper = Some((i, batch.id.1));
-            }
-            if lower.is_some() && upper.is_some() {
-                break;
-            }
-        }
 
-        match (lower, upper) {
-            (Some((_lower, _id_lower)), Some((_upper, _id_upper))) => {
-                // This is a subset of the batch, so we can update the active compaction.
-                // Normally we would want to actually slot the merge res in, but we aren't
-                // focusing on that here.
-                self.active_compaction = Some(active_compaction.clone());
-                ApplyMergeResult::AppliedSubset
-            }
-            _ => ApplyMergeResult::NotAppliedNoMatch,
+        if PartialOrder::less_equal(desc.lower(), batch.desc.lower())
+            && PartialOrder::less_equal(batch.desc.upper(), desc.upper())
+        {
+            self.active_compaction = Some(active_compaction.clone());
+            ApplyMergeResult::AppliedSubset
+        } else {
+            ApplyMergeResult::NotAppliedNoMatch
         }
+    }
+
+    fn filtered_batches(&self, desc: &Description<T>) -> Vec<IdHollowBatch<T>> {
+        self.parts
+            .iter()
+            .filter(|b| {
+                let part_desc = &b.batch.desc;
+                PartialOrder::less_equal(part_desc.lower(), desc.lower())
+                    && PartialOrder::less_equal(desc.upper(), part_desc.upper())
+            })
+            .cloned()
+            .collect()
     }
 
     // TODO: Roundtrip the SpineId through FueledMergeReq/FueledMergeRes?
@@ -1107,6 +1112,7 @@ impl<T: Timestamp + Lattice> FuelingMerge<T> {
                 id,
                 desc: desc.clone(),
                 inputs: merged_parts.clone(),
+                active_compaction: None,
             });
         }
 
@@ -1950,7 +1956,13 @@ pub(crate) mod tests {
                     .fueled_merge_reqs_before_ms(timeout_ms, None)
                     .collect();
                 for req in reqs {
-                    trace.claim_compaction(req.id, ActiveCompaction { start_ms: 0, batch_so_far: None })
+                    trace.claim_compaction(
+                        req.id,
+                        ActiveCompaction {
+                            start_ms: 0,
+                            batch_so_far: None,
+                        },
+                    )
                 }
                 trace.roundtrip_structure = roundtrip_structure;
                 trace
@@ -2020,6 +2032,7 @@ pub(crate) mod tests {
                     Antichain::new(),
                 ),
                 inputs: vec![],
+                active_compaction: None,
             }
         }
 
@@ -2089,6 +2102,7 @@ pub(crate) mod tests {
                 Antichain::from_elem(5),
             ),
             inputs: vec![],
+            active_compaction: None,
         };
         assert_eq!(
             Trace::remove_redundant_merge_reqs(vec![req(0, 1), req015.clone()]),

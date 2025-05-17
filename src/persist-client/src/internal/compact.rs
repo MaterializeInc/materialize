@@ -397,6 +397,7 @@ where
                             Arc::clone(&machine_clone.isolated_runtime),
                             req.clone(),
                             compaction_schema,
+                            &machine_clone,
                         );
 
                         let maintenance =
@@ -570,6 +571,7 @@ where
         isolated_runtime: Arc<IsolatedRuntime>,
         req: CompactReq<T>,
         write_schemas: Schemas<K, V>,
+        machine: &Machine<K, V, T, D>,
     ) -> impl Stream<Item = Result<FueledMergeRes<T>, anyhow::Error>> {
         async_stream::stream! {
             let _ = Self::validate_req(&req)?;
@@ -605,9 +607,6 @@ where
             let run_reserved_memory_bytes =
                 cfg.compaction_memory_bound_bytes - in_progress_part_reserved_memory_bytes;
 
-            //if there is an active compaction
-            //We should call compact_runs with the same
-
             // Flatten the input batches into a single list of runs
             let ordered_runs =
                 Self::order_runs(&req, cfg.batch.preferred_order, &*blob, &*metrics).await?;
@@ -615,6 +614,8 @@ where
             // Split the runs into manageable chunks
             let chunked_runs =
                 Self::chunk_runs(&ordered_runs, &cfg, &*metrics, run_reserved_memory_bytes);
+
+            let (incremental_tx, mut incremental_rx) = mpsc::channel(1);
 
             let total_chunked_runs = chunked_runs.len();
             let mut applied = 0;
@@ -643,10 +644,15 @@ where
                     Arc::clone(&shard_metrics),
                     Arc::clone(&isolated_runtime),
                     write_schemas.clone(),
-                    None,
-                    None
+                    &req.prev_batch,
+                    Some(incremental_tx.clone())
                 )
                 .await?;
+
+                while let Some(res) = incremental_rx.recv().await {
+                    let now = SYSTEM_TIME.clone();
+                    machine.checkpoint_compaction_progress(&res, now()).await;
+                }
 
                 let (parts, run_splits, run_meta, updates) =
                     (batch.parts, batch.run_splits, batch.run_meta, batch.len);
@@ -690,6 +696,7 @@ where
 
                 applied += 1;
             }
+            drop(incremental_tx);
         }
     }
 
@@ -827,6 +834,28 @@ where
         Ok(ordered_runs)
     }
 
+    fn combine_hollow_batch_with_previous(
+        previous_batch: &HollowBatch<T>,
+        batch: &HollowBatch<T>,
+    ) -> HollowBatch<T> {
+        // Simplifying assumption: you can't combine batches with different descriptions.
+        assert_eq!(previous_batch.desc, batch.desc);
+        let len = previous_batch.len + batch.len;
+        let mut parts = Vec::with_capacity(previous_batch.parts.len() + batch.parts.len());
+        parts.extend(previous_batch.parts.clone());
+        parts.extend(batch.parts.clone());
+        assert!(previous_batch.run_splits.is_empty());
+        assert!(batch.run_splits.is_empty());
+        assert_eq!(previous_batch.run_meta, batch.run_meta);
+        HollowBatch::new(
+            previous_batch.desc.clone(),
+            parts,
+            len,
+            previous_batch.run_meta.clone(),
+            previous_batch.run_splits.clone(),
+        )
+    }
+
     /// Compacts runs together. If the input runs are sorted, a single run will be created as output.
     ///
     /// Maximum possible memory usage is `(# runs + 2) * [crate::PersistConfig::blob_target_size]`
@@ -840,7 +869,7 @@ where
         shard_metrics: Arc<ShardMetrics>,
         isolated_runtime: Arc<IsolatedRuntime>,
         write_schemas: Schemas<K, V>,
-        batch_so_far: Option<HollowBatch<T>>,
+        batch_so_far: &Option<HollowBatch<T>>,
         incremental_tx: Option<Sender<HollowBatch<T>>>,
     ) -> Result<HollowBatch<T>, anyhow::Error> {
         // TODO: Figure out a more principled way to allocate our memory budget.
@@ -864,7 +893,7 @@ where
         // the config allows BatchBuilder to do its normal pipelining of writes.
         batch_cfg.inline_writes_single_max_bytes = 0;
 
-        if let Some(batch_so_far) = batch_so_far {
+        if let Some(batch_so_far) = batch_so_far.as_ref() {
             let last_part = batch_so_far
                 .last_part(shard_id.clone(), &*blob, &metrics)
                 .await;
@@ -994,12 +1023,20 @@ where
                 break;
             };
 
+            batch.flush_part(desc.clone(), updates).await;
+
             if let Some(tx) = incremental_tx.as_ref() {
                 // This is where we record whatever parts were successfully flushed
                 // to blob. That way we can resume an interrupted compaction later.
                 let partial_batch = batch.batch_with_finished_parts(desc.clone());
+
                 if let Some(partial_batch) = partial_batch {
-                    match tx.send(partial_batch).await {
+                    let hollow_batch = if let Some(batch_so_far) = batch_so_far.as_ref() {
+                        Self::combine_hollow_batch_with_previous(batch_so_far, &partial_batch)
+                    } else {
+                        partial_batch
+                    };
+                    match tx.send(hollow_batch).await {
                         Ok(_) => {
                             // metrics.compaction.incremental_batch_sent.inc();
                         }
@@ -1010,11 +1047,6 @@ where
                     };
                 }
             }
-
-            // part
-            // upper bound kvt
-            // find the last part where the lower bound < recorded upper bound
-            batch.flush_part(desc.clone(), updates).await;
         }
         let mut batch = batch.finish(desc.clone()).await?;
 
@@ -1036,8 +1068,14 @@ where
                 .await;
         }
 
+        let hollow_batch = if let Some(batch_so_far) = batch_so_far.as_ref() {
+            Self::combine_hollow_batch_with_previous(batch_so_far, &batch.into_hollow_batch())
+        } else {
+            batch.into_hollow_batch()
+        };
+
         timings.record(&metrics);
-        Ok(batch.into_hollow_batch())
+        Ok(hollow_batch)
     }
 
     fn validate_req(req: &CompactReq<T>) -> Result<(), anyhow::Error> {
@@ -1163,6 +1201,7 @@ mod tests {
             Arc::new(IsolatedRuntime::default()),
             req.clone(),
             schemas.clone(),
+            &write.machine,
         );
 
         let res = Compactor::<String, String, u64, i64>::compact_all(stream, req.clone())
@@ -1243,6 +1282,7 @@ mod tests {
             Arc::new(IsolatedRuntime::default()),
             req.clone(),
             schemas.clone(),
+            &write.machine,
         );
 
         let res =

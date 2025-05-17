@@ -501,7 +501,7 @@ where
                                 .into_iter()
                                 .map(|b| Arc::unwrap_or_clone(b.batch))
                                 .collect(),
-                            prev_batch: None,
+                            prev_batch: req.active_compaction,
                         };
                         compact_reqs.push(req);
                     }
@@ -611,13 +611,15 @@ where
         let metrics = Arc::clone(&self.applier.metrics);
 
         //TODO(dov): new metric
-        let _ = self.apply_unbatched_idempotent_cmd(&metrics.cmds.merge_res, |_, _, state| {
-            let ret = state.apply_compaction_progress(batch_so_far, current_ts);
-            if let Continue(_) = ret {
-                // metrics.state.compaction_progress_applied.inc();
-            }
-            ret
-        }).await;
+        let _ = self
+            .apply_unbatched_idempotent_cmd(&metrics.cmds.merge_res, |_, _, state| {
+                let ret = state.apply_compaction_progress(batch_so_far, current_ts);
+                if let Continue(_) = ret {
+                    // metrics.state.compaction_progress_applied.inc();
+                }
+                ret
+            })
+            .await;
     }
 
     pub async fn merge_res(
@@ -2033,6 +2035,7 @@ pub mod datadriven {
             Arc::clone(&datadriven.client.isolated_runtime),
             req_clone,
             SCHEMAS.clone(),
+            &datadriven.machine,
         );
 
         let res = Compactor::<String, (), u64, i64>::compact_all(stream, req.clone()).await?;
