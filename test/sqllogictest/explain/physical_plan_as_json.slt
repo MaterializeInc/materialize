@@ -501,6 +501,14 @@ SELECT * FROM ov
               "lir_id": 2,
               "node": {
                 "ArrangeBy": {
+                  "input_key": [
+                    {
+                      "Column": [
+                        0,
+                        "a"
+                      ]
+                    }
+                  ],
                   "input": {
                     "lir_id": 1,
                     "node": {
@@ -546,19 +554,6 @@ SELECT * FROM ov
                       }
                     }
                   },
-                  "forms": {
-                    "raw": true,
-                    "arranged": [],
-                    "types": null
-                  },
-                  "input_key": [
-                    {
-                      "Column": [
-                        0,
-                        "a"
-                      ]
-                    }
-                  ],
                   "input_mfp": {
                     "expressions": [],
                     "predicates": [],
@@ -567,6 +562,11 @@ SELECT * FROM ov
                       1
                     ],
                     "input_arity": 2
+                  },
+                  "forms": {
+                    "raw": true,
+                    "arranged": [],
+                    "types": null
                   }
                 }
               }
@@ -632,6 +632,7 @@ SELECT a FROM t EXCEPT ALL SELECT b FROM mv
               "lir_id": 5,
               "node": {
                 "ArrangeBy": {
+                  "input_key": null,
                   "input": {
                     "lir_id": 4,
                     "node": {
@@ -741,6 +742,14 @@ SELECT a FROM t EXCEPT ALL SELECT b FROM mv
                       }
                     }
                   },
+                  "input_mfp": {
+                    "expressions": [],
+                    "predicates": [],
+                    "projection": [
+                      0
+                    ],
+                    "input_arity": 1
+                  },
                   "forms": {
                     "raw": false,
                     "arranged": [
@@ -765,15 +774,6 @@ SELECT a FROM t EXCEPT ALL SELECT b FROM mv
                         "nullable": true
                       }
                     ]
-                  },
-                  "input_key": null,
-                  "input_mfp": {
-                    "expressions": [],
-                    "predicates": [],
-                    "projection": [
-                      0
-                    ],
-                    "input_arity": 1
                   }
                 }
               }
@@ -835,6 +835,14 @@ SELECT * FROM ov
               "lir_id": 2,
               "node": {
                 "ArrangeBy": {
+                  "input_key": [
+                    {
+                      "Column": [
+                        0,
+                        "a"
+                      ]
+                    }
+                  ],
                   "input": {
                     "lir_id": 1,
                     "node": {
@@ -880,19 +888,6 @@ SELECT * FROM ov
                       }
                     }
                   },
-                  "forms": {
-                    "raw": true,
-                    "arranged": [],
-                    "types": null
-                  },
-                  "input_key": [
-                    {
-                      "Column": [
-                        0,
-                        "a"
-                      ]
-                    }
-                  ],
                   "input_mfp": {
                     "expressions": [],
                     "predicates": [],
@@ -901,6 +896,11 @@ SELECT * FROM ov
                       1
                     ],
                     "input_arity": 2
+                  },
+                  "forms": {
+                    "raw": true,
+                    "arranged": [],
+                    "types": null
                   }
                 }
               }
@@ -972,6 +972,7 @@ WITH cte(x) as (SELECT a FROM t EXCEPT ALL SELECT b FROM mv)
                     "lir_id": 5,
                     "node": {
                       "ArrangeBy": {
+                        "input_key": null,
                         "input": {
                           "lir_id": 4,
                           "node": {
@@ -1081,6 +1082,14 @@ WITH cte(x) as (SELECT a FROM t EXCEPT ALL SELECT b FROM mv)
                             }
                           }
                         },
+                        "input_mfp": {
+                          "expressions": [],
+                          "predicates": [],
+                          "projection": [
+                            0
+                          ],
+                          "input_arity": 1
+                        },
                         "forms": {
                           "raw": false,
                           "arranged": [
@@ -1105,15 +1114,6 @@ WITH cte(x) as (SELECT a FROM t EXCEPT ALL SELECT b FROM mv)
                               "nullable": true
                             }
                           ]
-                        },
-                        "input_key": null,
-                        "input_mfp": {
-                          "expressions": [],
-                          "predicates": [],
-                          "projection": [
-                            0
-                          ],
-                          "input_arity": 1
                         }
                       }
                     }
@@ -1362,6 +1362,7 @@ SELECT x * 5 FROM cte WHERE x = 5
                     "lir_id": 8,
                     "node": {
                       "ArrangeBy": {
+                        "input_key": null,
                         "input": {
                           "lir_id": 7,
                           "node": {
@@ -1421,6 +1422,7 @@ SELECT x * 5 FROM cte WHERE x = 5
                                           "lir_id": 3,
                                           "node": {
                                             "ArrangeBy": {
+                                              "input_key": null,
                                               "input": {
                                                 "lir_id": 2,
                                                 "node": {
@@ -1441,6 +1443,14 @@ SELECT x * 5 FROM cte WHERE x = 5
                                                     }
                                                   }
                                                 }
+                                              },
+                                              "input_mfp": {
+                                                "expressions": [],
+                                                "predicates": [],
+                                                "projection": [
+                                                  0
+                                                ],
+                                                "input_arity": 1
                                               },
                                               "forms": {
                                                 "raw": true,
@@ -1466,15 +1476,6 @@ SELECT x * 5 FROM cte WHERE x = 5
                                                     "nullable": false
                                                   }
                                                 ]
-                                              },
-                                              "input_key": null,
-                                              "input_mfp": {
-                                                "expressions": [],
-                                                "predicates": [],
-                                                "projection": [
-                                                  0
-                                                ],
-                                                "input_arity": 1
                                               }
                                             }
                                           }
@@ -1572,6 +1573,14 @@ SELECT x * 5 FROM cte WHERE x = 5
                             }
                           }
                         },
+                        "input_mfp": {
+                          "expressions": [],
+                          "predicates": [],
+                          "projection": [
+                            0
+                          ],
+                          "input_arity": 1
+                        },
                         "forms": {
                           "raw": false,
                           "arranged": [
@@ -1596,15 +1605,6 @@ SELECT x * 5 FROM cte WHERE x = 5
                               "nullable": false
                             }
                           ]
-                        },
-                        "input_key": null,
-                        "input_mfp": {
-                          "expressions": [],
-                          "predicates": [],
-                          "projection": [
-                            0
-                          ],
-                          "input_arity": 1
                         }
                       }
                     }
@@ -1733,6 +1733,14 @@ SELECT generate_series(a, b) from t
         "lir_id": 2,
         "node": {
           "FlatMap": {
+            "input_key": [
+              {
+                "Column": [
+                  0,
+                  "a"
+                ]
+              }
+            ],
             "input": {
               "lir_id": 1,
               "node": {
@@ -1778,7 +1786,6 @@ SELECT generate_series(a, b) from t
                 }
               }
             },
-            "func": "GenerateSeriesInt32",
             "exprs": [
               {
                 "Column": [
@@ -1809,6 +1816,7 @@ SELECT generate_series(a, b) from t
                 ]
               }
             ],
+            "func": "GenerateSeriesInt32",
             "mfp_after": {
               "expressions": [],
               "predicates": [],
@@ -1816,15 +1824,7 @@ SELECT generate_series(a, b) from t
                 2
               ],
               "input_arity": 3
-            },
-            "input_key": [
-              {
-                "Column": [
-                  0,
-                  "a"
-                ]
-              }
-            ]
+            }
           }
         }
       }
@@ -1847,6 +1847,14 @@ SELECT DISTINCT a, b FROM t
         "lir_id": 2,
         "node": {
           "Reduce": {
+            "input_key": [
+              {
+                "Column": [
+                  0,
+                  "a"
+                ]
+              }
+            ],
             "input": {
               "lir_id": 1,
               "node": {
@@ -1914,14 +1922,6 @@ SELECT DISTINCT a, b FROM t
               }
             },
             "plan": "Distinct",
-            "input_key": [
-              {
-                "Column": [
-                  0,
-                  "a"
-                ]
-              }
-            ],
             "mfp_after": {
               "expressions": [],
               "predicates": [],
@@ -1958,6 +1958,14 @@ GROUP BY a
         "lir_id": 2,
         "node": {
           "Reduce": {
+            "input_key": [
+              {
+                "Column": [
+                  0,
+                  "a"
+                ]
+              }
+            ],
             "input": {
               "lir_id": 1,
               "node": {
@@ -2084,14 +2092,6 @@ GROUP BY a
                 ]
               }
             },
-            "input_key": [
-              {
-                "Column": [
-                  0,
-                  "a"
-                ]
-              }
-            ],
             "mfp_after": {
               "expressions": [],
               "predicates": [],
@@ -2132,6 +2132,7 @@ FROM t
               "lir_id": 2,
               "node": {
                 "Reduce": {
+                  "input_key": null,
                   "input": {
                     "lir_id": 1,
                     "node": {
@@ -2276,7 +2277,6 @@ FROM t
                       ]
                     }
                   },
-                  "input_key": null,
                   "mfp_after": {
                     "expressions": [],
                     "predicates": [],
@@ -2298,6 +2298,7 @@ FROM t
                       "lir_id": 9,
                       "node": {
                         "ArrangeBy": {
+                          "input_key": [],
                           "input": {
                             "lir_id": 3,
                             "node": {
@@ -2326,12 +2327,6 @@ FROM t
                               }
                             }
                           },
-                          "forms": {
-                            "raw": true,
-                            "arranged": [],
-                            "types": null
-                          },
-                          "input_key": [],
                           "input_mfp": {
                             "expressions": [],
                             "predicates": [],
@@ -2340,6 +2335,11 @@ FROM t
                               1
                             ],
                             "input_arity": 2
+                          },
+                          "forms": {
+                            "raw": true,
+                            "arranged": [],
+                            "types": null
                           }
                         }
                       }
@@ -2493,6 +2493,14 @@ SELECT * FROM hierarchical_group_by
         "lir_id": 2,
         "node": {
           "Reduce": {
+            "input_key": [
+              {
+                "Column": [
+                  0,
+                  "a"
+                ]
+              }
+            ],
             "input": {
               "lir_id": 1,
               "node": {
@@ -2576,14 +2584,6 @@ SELECT * FROM hierarchical_group_by
                 }
               }
             },
-            "input_key": [
-              {
-                "Column": [
-                  0,
-                  "a"
-                ]
-              }
-            ],
             "mfp_after": {
               "expressions": [],
               "predicates": [],
@@ -2621,6 +2621,7 @@ MATERIALIZED VIEW hierarchical_global_mv
               "lir_id": 2,
               "node": {
                 "Reduce": {
+                  "input_key": null,
                   "input": {
                     "lir_id": 1,
                     "node": {
@@ -2730,7 +2731,6 @@ MATERIALIZED VIEW hierarchical_global_mv
                       }
                     }
                   },
-                  "input_key": null,
                   "mfp_after": {
                     "expressions": [],
                     "predicates": [],
@@ -2752,6 +2752,7 @@ MATERIALIZED VIEW hierarchical_global_mv
                       "lir_id": 9,
                       "node": {
                         "ArrangeBy": {
+                          "input_key": [],
                           "input": {
                             "lir_id": 3,
                             "node": {
@@ -2780,12 +2781,6 @@ MATERIALIZED VIEW hierarchical_global_mv
                               }
                             }
                           },
-                          "forms": {
-                            "raw": true,
-                            "arranged": [],
-                            "types": null
-                          },
-                          "input_key": [],
                           "input_mfp": {
                             "expressions": [],
                             "predicates": [],
@@ -2794,6 +2789,11 @@ MATERIALIZED VIEW hierarchical_global_mv
                               1
                             ],
                             "input_arity": 2
+                          },
+                          "forms": {
+                            "raw": true,
+                            "arranged": [],
+                            "types": null
                           }
                         }
                       }
@@ -2952,6 +2952,7 @@ SELECT * FROM hierarchical_global
               "lir_id": 2,
               "node": {
                 "Reduce": {
+                  "input_key": null,
                   "input": {
                     "lir_id": 1,
                     "node": {
@@ -3053,7 +3054,6 @@ SELECT * FROM hierarchical_global
                       }
                     }
                   },
-                  "input_key": null,
                   "mfp_after": {
                     "expressions": [],
                     "predicates": [],
@@ -3075,6 +3075,7 @@ SELECT * FROM hierarchical_global
                       "lir_id": 9,
                       "node": {
                         "ArrangeBy": {
+                          "input_key": [],
                           "input": {
                             "lir_id": 3,
                             "node": {
@@ -3103,12 +3104,6 @@ SELECT * FROM hierarchical_global
                               }
                             }
                           },
-                          "forms": {
-                            "raw": true,
-                            "arranged": [],
-                            "types": null
-                          },
-                          "input_key": [],
                           "input_mfp": {
                             "expressions": [],
                             "predicates": [],
@@ -3117,6 +3112,11 @@ SELECT * FROM hierarchical_global
                               1
                             ],
                             "input_arity": 2
+                          },
+                          "forms": {
+                            "raw": true,
+                            "arranged": [],
+                            "types": null
                           }
                         }
                       }
@@ -3275,6 +3275,14 @@ GROUP BY a
         "lir_id": 2,
         "node": {
           "Reduce": {
+            "input_key": [
+              {
+                "Column": [
+                  0,
+                  "a"
+                ]
+              }
+            ],
             "input": {
               "lir_id": 1,
               "node": {
@@ -3687,14 +3695,6 @@ GROUP BY a
                 ]
               }
             },
-            "input_key": [
-              {
-                "Column": [
-                  0,
-                  "a"
-                ]
-              }
-            ],
             "mfp_after": {
               "expressions": [],
               "predicates": [],
@@ -3735,6 +3735,7 @@ FROM t
               "lir_id": 2,
               "node": {
                 "Reduce": {
+                  "input_key": null,
                   "input": {
                     "lir_id": 1,
                     "node": {
@@ -4165,7 +4166,6 @@ FROM t
                       ]
                     }
                   },
-                  "input_key": null,
                   "mfp_after": {
                     "expressions": [],
                     "predicates": [],
@@ -4187,6 +4187,7 @@ FROM t
                       "lir_id": 9,
                       "node": {
                         "ArrangeBy": {
+                          "input_key": [],
                           "input": {
                             "lir_id": 3,
                             "node": {
@@ -4215,12 +4216,6 @@ FROM t
                               }
                             }
                           },
-                          "forms": {
-                            "raw": true,
-                            "arranged": [],
-                            "types": null
-                          },
-                          "input_key": [],
                           "input_mfp": {
                             "expressions": [],
                             "predicates": [],
@@ -4229,6 +4224,11 @@ FROM t
                               1
                             ],
                             "input_arity": 2
+                          },
+                          "forms": {
+                            "raw": true,
+                            "arranged": [],
+                            "types": null
                           }
                         }
                       }
@@ -4382,6 +4382,14 @@ MATERIALIZED VIEW collated_group_by_mv
         "lir_id": 2,
         "node": {
           "Reduce": {
+            "input_key": [
+              {
+                "Column": [
+                  0,
+                  "a"
+                ]
+              }
+            ],
             "input": {
               "lir_id": 1,
               "node": {
@@ -4885,14 +4893,6 @@ MATERIALIZED VIEW collated_group_by_mv
                 ]
               }
             },
-            "input_key": [
-              {
-                "Column": [
-                  0,
-                  "a"
-                ]
-              }
-            ],
             "mfp_after": {
               "expressions": [],
               "predicates": [],
@@ -4929,6 +4929,14 @@ SELECT * FROM collated_group_by
         "lir_id": 2,
         "node": {
           "Reduce": {
+            "input_key": [
+              {
+                "Column": [
+                  0,
+                  "a"
+                ]
+              }
+            ],
             "input": {
               "lir_id": 1,
               "node": {
@@ -5424,14 +5432,6 @@ SELECT * FROM collated_group_by
                 ]
               }
             },
-            "input_key": [
-              {
-                "Column": [
-                  0,
-                  "a"
-                ]
-              }
-            ],
             "mfp_after": {
               "expressions": [],
               "predicates": [],
@@ -5473,6 +5473,7 @@ MATERIALIZED VIEW collated_global_mv
               "lir_id": 2,
               "node": {
                 "Reduce": {
+                  "input_key": null,
                   "input": {
                     "lir_id": 1,
                     "node": {
@@ -5994,7 +5995,6 @@ MATERIALIZED VIEW collated_global_mv
                       ]
                     }
                   },
-                  "input_key": null,
                   "mfp_after": {
                     "expressions": [],
                     "predicates": [],
@@ -6020,6 +6020,7 @@ MATERIALIZED VIEW collated_global_mv
                       "lir_id": 9,
                       "node": {
                         "ArrangeBy": {
+                          "input_key": [],
                           "input": {
                             "lir_id": 3,
                             "node": {
@@ -6056,12 +6057,6 @@ MATERIALIZED VIEW collated_global_mv
                               }
                             }
                           },
-                          "forms": {
-                            "raw": true,
-                            "arranged": [],
-                            "types": null
-                          },
-                          "input_key": [],
                           "input_mfp": {
                             "expressions": [],
                             "predicates": [],
@@ -6074,6 +6069,11 @@ MATERIALIZED VIEW collated_global_mv
                               5
                             ],
                             "input_arity": 6
+                          },
+                          "forms": {
+                            "raw": true,
+                            "arranged": [],
+                            "types": null
                           }
                         }
                       }
@@ -6304,6 +6304,7 @@ SELECT * FROM collated_global
               "lir_id": 2,
               "node": {
                 "Reduce": {
+                  "input_key": null,
                   "input": {
                     "lir_id": 1,
                     "node": {
@@ -6817,7 +6818,6 @@ SELECT * FROM collated_global
                       ]
                     }
                   },
-                  "input_key": null,
                   "mfp_after": {
                     "expressions": [],
                     "predicates": [],
@@ -6843,6 +6843,7 @@ SELECT * FROM collated_global
                       "lir_id": 9,
                       "node": {
                         "ArrangeBy": {
+                          "input_key": [],
                           "input": {
                             "lir_id": 3,
                             "node": {
@@ -6879,12 +6880,6 @@ SELECT * FROM collated_global
                               }
                             }
                           },
-                          "forms": {
-                            "raw": true,
-                            "arranged": [],
-                            "types": null
-                          },
-                          "input_key": [],
                           "input_mfp": {
                             "expressions": [],
                             "predicates": [],
@@ -6897,6 +6892,11 @@ SELECT * FROM collated_global
                               5
                             ],
                             "input_arity": 6
+                          },
+                          "forms": {
+                            "raw": true,
+                            "arranged": [],
+                            "types": null
                           }
                         }
                       }
@@ -7174,6 +7174,7 @@ WHERE a = c AND d = e AND b + d > 42
                 "lir_id": 3,
                 "node": {
                   "ArrangeBy": {
+                    "input_key": null,
                     "input": {
                       "lir_id": 2,
                       "node": {
@@ -7201,6 +7202,15 @@ WHERE a = c AND d = e AND b + d > 42
                           }
                         }
                       }
+                    },
+                    "input_mfp": {
+                      "expressions": [],
+                      "predicates": [],
+                      "projection": [
+                        0,
+                        1
+                      ],
+                      "input_arity": 2
                     },
                     "forms": {
                       "raw": true,
@@ -7250,16 +7260,6 @@ WHERE a = c AND d = e AND b + d > 42
                           "nullable": false
                         }
                       ]
-                    },
-                    "input_key": null,
-                    "input_mfp": {
-                      "expressions": [],
-                      "predicates": [],
-                      "projection": [
-                        0,
-                        1
-                      ],
-                      "input_arity": 2
                     }
                   }
                 }
@@ -7268,6 +7268,7 @@ WHERE a = c AND d = e AND b + d > 42
                 "lir_id": 5,
                 "node": {
                   "ArrangeBy": {
+                    "input_key": null,
                     "input": {
                       "lir_id": 4,
                       "node": {
@@ -7295,6 +7296,14 @@ WHERE a = c AND d = e AND b + d > 42
                         }
                       }
                     },
+                    "input_mfp": {
+                      "expressions": [],
+                      "predicates": [],
+                      "projection": [
+                        0
+                      ],
+                      "input_arity": 1
+                    },
                     "forms": {
                       "raw": true,
                       "arranged": [
@@ -7319,15 +7328,6 @@ WHERE a = c AND d = e AND b + d > 42
                           "nullable": false
                         }
                       ]
-                    },
-                    "input_key": null,
-                    "input_mfp": {
-                      "expressions": [],
-                      "predicates": [],
-                      "projection": [
-                        0
-                      ],
-                      "input_arity": 1
                     }
                   }
                 }
@@ -8064,6 +8064,7 @@ WHERE a = c AND d = e AND f = a
                 "lir_id": 3,
                 "node": {
                   "ArrangeBy": {
+                    "input_key": null,
                     "input": {
                       "lir_id": 2,
                       "node": {
@@ -8177,6 +8178,15 @@ WHERE a = c AND d = e AND f = a
                         }
                       }
                     },
+                    "input_mfp": {
+                      "expressions": [],
+                      "predicates": [],
+                      "projection": [
+                        0,
+                        1
+                      ],
+                      "input_arity": 2
+                    },
                     "forms": {
                       "raw": true,
                       "arranged": [
@@ -8229,16 +8239,6 @@ WHERE a = c AND d = e AND f = a
                           "nullable": false
                         }
                       ]
-                    },
-                    "input_key": null,
-                    "input_mfp": {
-                      "expressions": [],
-                      "predicates": [],
-                      "projection": [
-                        0,
-                        1
-                      ],
-                      "input_arity": 2
                     }
                   }
                 }
@@ -8247,6 +8247,7 @@ WHERE a = c AND d = e AND f = a
                 "lir_id": 5,
                 "node": {
                   "ArrangeBy": {
+                    "input_key": null,
                     "input": {
                       "lir_id": 4,
                       "node": {
@@ -8360,6 +8361,15 @@ WHERE a = c AND d = e AND f = a
                         }
                       }
                     },
+                    "input_mfp": {
+                      "expressions": [],
+                      "predicates": [],
+                      "projection": [
+                        0,
+                        1
+                      ],
+                      "input_arity": 2
+                    },
                     "forms": {
                       "raw": true,
                       "arranged": [
@@ -8395,16 +8405,6 @@ WHERE a = c AND d = e AND f = a
                           "nullable": false
                         }
                       ]
-                    },
-                    "input_key": null,
-                    "input_mfp": {
-                      "expressions": [],
-                      "predicates": [],
-                      "projection": [
-                        0,
-                        1
-                      ],
-                      "input_arity": 2
                     }
                   }
                 }

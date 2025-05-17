@@ -347,10 +347,10 @@ impl Context {
                                     limits,
                                     body: Box::new(
                                         PlanNode::ArrangeBy {
-                                            input: body,
-                                            forms,
                                             input_key,
+                                            input: body,
                                             input_mfp,
+                                            forms,
                                         }
                                         .as_plan(inner_lir_id),
                                     ),
@@ -360,10 +360,10 @@ impl Context {
                             lir_value => {
                                 let lir_id = self.allocate_lir_id();
                                 PlanNode::ArrangeBy {
-                                    input: Box::new(lir_value),
-                                    forms,
                                     input_key,
+                                    input: Box::new(lir_value),
                                     input_mfp,
+                                    forms,
                                 }
                                 .as_plan(lir_id)
                             }
@@ -534,11 +534,11 @@ impl Context {
                     // Return the plan, and no arrangements.
                     (
                         PlanNode::FlatMap {
-                            input: Box::new(input),
-                            func: func.clone(),
-                            exprs: exprs.clone(),
-                            mfp_after: mfp,
                             input_key,
+                            input: Box::new(input),
+                            exprs: exprs.clone(),
+                            func: func.clone(),
+                            mfp_after: mfp,
                         }
                         .as_plan(lir_id),
                         AvailableCollections::new_raw(),
@@ -890,10 +890,10 @@ This is not expected to cause incorrect results, but could indicate a performanc
                     let lir_id = self.allocate_lir_id();
                     (
                         PlanNode::ArrangeBy {
-                            input: Box::new(input),
-                            forms,
                             input_key,
+                            input: Box::new(input),
                             input_mfp,
+                            forms,
                         }
                         .as_plan(lir_id),
                         input_keys,
@@ -1049,10 +1049,10 @@ This is not expected to cause incorrect results, but could indicate a performanc
         let lir_id = self.allocate_lir_id();
         Ok((
             PlanNode::Reduce {
+                input_key,
                 input: Box::new(input),
                 key_val_plan,
                 plan: reduce_plan,
-                input_key,
                 mfp_after,
             }
             .as_plan(lir_id),
@@ -1072,10 +1072,10 @@ This is not expected to cause incorrect results, but could indicate a performanc
         if let Plan {
             node:
                 PlanNode::ArrangeBy {
-                    input,
-                    mut forms,
                     input_key,
+                    input,
                     input_mfp,
+                    mut forms,
                 },
             lir_id,
         } = plan
@@ -1090,10 +1090,10 @@ This is not expected to cause incorrect results, but could indicate a performanc
                 assert!(collections.types.is_none() || collections.types == forms.types);
             }
             PlanNode::ArrangeBy {
-                input,
-                forms,
                 input_key,
+                input,
                 input_mfp,
+                forms,
             }
             .as_plan(lir_id)
         } else {
@@ -1109,10 +1109,10 @@ This is not expected to cause incorrect results, but could indicate a performanc
             let lir_id = self.allocate_lir_id();
 
             PlanNode::ArrangeBy {
-                input: Box::new(plan),
-                forms: collections,
                 input_key,
+                input: Box::new(plan),
                 input_mfp,
+                forms: collections,
             }
             .as_plan(lir_id)
         }

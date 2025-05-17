@@ -141,11 +141,11 @@ impl<T> Interpreter<T> for SingleTimeMonotonic<'_, T> {
     fn flat_map(
         &self,
         _ctx: &Context<Self::Domain>,
-        input: Self::Domain,
-        _func: &TableFunc,
-        _exprs: &Vec<MirScalarExpr>,
-        _mfp: &MapFilterProject,
         _input_key: &Option<Vec<MirScalarExpr>>,
+        input: Self::Domain,
+        _exprs: &Vec<MirScalarExpr>,
+        _func: &TableFunc,
+        _mfp: &MapFilterProject,
     ) -> Self::Domain {
         // In a single-time context, we just propagate the monotonicity
         // status of the input
@@ -169,10 +169,10 @@ impl<T> Interpreter<T> for SingleTimeMonotonic<'_, T> {
     fn reduce(
         &self,
         ctx: &Context<Self::Domain>,
+        _input_key: &Option<Vec<MirScalarExpr>>,
         _input: Self::Domain,
         _key_val_plan: &KeyValPlan,
         _plan: &ReducePlan,
-        _input_key: &Option<Vec<MirScalarExpr>>,
         _mfp_after: &MapFilterProject,
     ) -> Self::Domain {
         // In a recursive context, reduce will advance across timestamps
