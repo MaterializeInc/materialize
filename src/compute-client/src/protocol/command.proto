@@ -22,6 +22,7 @@ import "expr/src/relation.proto";
 import "google/protobuf/empty.proto";
 import "proto/src/proto.proto";
 import "repr/src/global_id.proto";
+import "repr/src/relation_and_scalar.proto";
 import "repr/src/row.proto";
 import "service/src/params.proto";
 import "storage-client/src/client.proto";
@@ -51,6 +52,8 @@ message ProtoComputeCommand {
 message ProtoInstanceConfig {
   logging.ProtoLoggingConfig logging = 1;
   optional mz_proto.ProtoDuration expiration_offset = 2;
+  string peek_stash_blob_uri = 3;
+  string peek_stash_consensus_uri = 4;
 }
 
 message ProtoIndexTarget {
@@ -69,6 +72,7 @@ message ProtoPeek {
   mz_expr.relation.ProtoRowSetFinishing finishing = 5;
   mz_expr.linear.ProtoSafeMfpPlan map_filter_project = 6;
   map<string, string> otel_ctx = 7;
+  mz_repr.relation_and_scalar.ProtoRelationDesc result_desc = 10;
   oneof target {
     ProtoIndexTarget index = 8;
     ProtoPersistTarget persist = 9;
