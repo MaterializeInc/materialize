@@ -12,6 +12,7 @@ use std::sync::Arc;
 use criterion::measurement::WallTime;
 use criterion::{Bencher, BenchmarkGroup, BenchmarkId, Criterion, criterion_group, criterion_main};
 use mz_build_info::DUMMY_BUILD_INFO;
+use mz_ore::cast::CastInto;
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::SYSTEM_TIME;
 use mz_persist::file::{FileBlob, FileBlobConfig};
@@ -74,6 +75,13 @@ pub fn bench_persist(c: &mut Criterion) {
         DataGenerator::small()
     };
 
+    let num_shards: usize =
+        if let Some(num_shards_string) = std::env::var_os("MZ_PERSIST_BENCH_NUM_SHARDS") {
+            num_shards_string.cast_into()
+        } else {
+            ncpus_useful
+        };
+
     porcelain::bench_writes("porcelain/writes", throughput, c, &runtime, &data);
     porcelain::bench_write_to_listen("porcelain/write_to_listen", throughput, c, &runtime, &data);
     porcelain::bench_snapshot("porcelain/snapshot", throughput, c, &runtime, &data);
@@ -95,7 +103,7 @@ pub fn bench_persist(c: &mut Criterion) {
             )
         };
         bench_compare_and_set(1, 1);
-        bench_compare_and_set(1, ncpus_useful);
+        bench_compare_and_set(1, num_shards);
     }
     plumbing::bench_encode_batch("plumbing/encode_batch", throughput, c, &data);
     plumbing::bench_trace_push_batch(c);
