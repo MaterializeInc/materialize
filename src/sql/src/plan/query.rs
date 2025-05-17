@@ -81,7 +81,7 @@ use mz_sql_parser::ast::{
 use mz_sql_parser::ident;
 
 use crate::catalog::{CatalogItemType, CatalogType, SessionCatalog};
-use crate::func::{self, Func, FuncSpec};
+use crate::func::{self, Func, FuncSpec, TableFuncImpl};
 use crate::names::{
     Aug, FullItemName, PartialItemName, ResolvedDataType, ResolvedItemName, SchemaSpecifier,
 };
@@ -3297,7 +3297,20 @@ fn plan_table_function_internal(
         Func::Table(impls) => {
             let tf = func::select_impl(ecx, FuncSpec::Func(name), impls, scalar_args, vec![])?;
             let scope = Scope::from_source(scope_name.clone(), tf.column_names);
-            (tf.expr, scope)
+            let expr = match tf.imp {
+                TableFuncImpl::CallTable {
+                    func,
+                    exprs,
+                } => {
+                    HirRelationExpr::CallTable {
+                        func,
+                        exprs,
+                        //////////////////////// todo: with_ordinality
+                    }
+                }
+                TableFuncImpl::Expr(expr) => expr,
+            };
+            (expr, scope)
         }
         Func::Scalar(impls) => {
             let expr = func::select_impl(ecx, FuncSpec::Func(name), impls, scalar_args, vec![])?;
@@ -3319,6 +3332,7 @@ fn plan_table_function_internal(
                 HirRelationExpr::CallTable {
                     func: mz_expr::TableFunc::TabletizedScalar { relation, name },
                     exprs: vec![expr],
+                    //////////// todo: with_ordinality
                 },
                 scope,
             )
