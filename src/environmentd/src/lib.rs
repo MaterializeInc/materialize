@@ -23,6 +23,7 @@ use std::{env, io};
 
 use anyhow::{Context, anyhow};
 use derivative::Derivative;
+use futures::FutureExt;
 use ipnet::IpNet;
 use mz_adapter::config::{SystemParameterSyncConfig, system_parameter_sync};
 use mz_adapter::webhook::WebhookConcurrencyLimiter;
@@ -32,6 +33,7 @@ use mz_adapter_types::dyncfgs::{
     ENABLE_0DT_DEPLOYMENT, ENABLE_0DT_DEPLOYMENT_PANIC_AFTER_TIMEOUT,
     WITH_0DT_DEPLOYMENT_DDL_CHECK_INTERVAL, WITH_0DT_DEPLOYMENT_MAX_WAIT,
 };
+use mz_authenticator::Authenticator;
 use mz_build_info::{BuildInfo, build_info};
 use mz_catalog::config::ClusterReplicaSizeMap;
 use mz_catalog::durable::BootstrapArgs;
@@ -50,6 +52,7 @@ use mz_persist_client::usage::StorageUsageClient;
 use mz_pgwire_common::ConnectionCounter;
 use mz_repr::strconv;
 use mz_secrets::SecretsController;
+use mz_server_core::listeners::{AllowedRoles, AuthenticatorKind, HttpRoutesEnabled};
 use mz_server_core::{ConnectionStream, ListenerHandle, ReloadTrigger, ServeConfig, TlsCertConfig};
 use mz_sql::catalog::EnvironmentId;
 use mz_sql::session::vars::{Value, VarInput};
@@ -59,7 +62,7 @@ use tracing::{Instrument, info, info_span};
 
 use crate::deployment::preflight::{PreflightInput, PreflightOutput};
 use crate::deployment::state::DeploymentState;
-use crate::http::{HttpConfig, HttpServer, InternalHttpConfig, InternalHttpServer};
+use crate::http::{HttpConfig, HttpServer, InternalRouteConfig};
 
 pub use crate::http::{SqlResponse, WebSocketAuth, WebSocketResponse};
 
@@ -308,21 +311,59 @@ impl Listeners {
         let active_connection_counter = ConnectionCounter::default();
         let (deployment_state, deployment_state_handle) = DeploymentState::new();
 
+        let webhook_concurrency_limit = WebhookConcurrencyLimiter::default();
+        let internal_route_config = InternalRouteConfig {
+            deployment_state_handle,
+            internal_console_redirect_url: config.internal_console_redirect_url,
+        };
+
+        let (authenticator_frontegg_tx, authenticator_frontegg_rx) = oneshot::channel();
+        let authenticator_frontegg_rx = authenticator_frontegg_rx.shared();
+        let (authenticator_none_tx, authenticator_none_rx) = oneshot::channel();
+        let authenticator_none_rx = authenticator_none_rx.shared();
+
+        if let Some(frontegg) = &config.frontegg {
+            authenticator_frontegg_tx
+                .send(Arc::new(Authenticator::Frontegg(frontegg.clone())))
+                .expect("HTTP server should not drop first");
+        }
+        authenticator_none_tx
+            .send(Arc::new(Authenticator::None))
+            .expect("internal HTTP server should not drop first");
+
+        let (adapter_client_tx, adapter_client_rx) = oneshot::channel();
+        let adapter_client_rx = adapter_client_rx.shared();
+
         // Start the internal HTTP server.
         //
         // We start this server before we've completed initialization so that
         // metrics are accessible during initialization. Some internal HTTP
         // endpoints require the adapter to be initialized; requests to those
         // endpoints block until the adapter client is installed.
-        let (internal_http_adapter_client_tx, internal_http_adapter_client_rx) = oneshot::channel();
         task::spawn(|| "internal_http_server", {
-            let internal_http_server = InternalHttpServer::new(InternalHttpConfig {
-                metrics_registry: config.metrics_registry.clone(),
-                adapter_client_rx: internal_http_adapter_client_rx,
+            let metrics_registry = config.metrics_registry.clone();
+            let metrics = http::Metrics::register_into(&metrics_registry, "mz_internal_http");
+            let internal_http_server = HttpServer::new(HttpConfig {
+                adapter_client_rx: adapter_client_rx.clone(),
                 active_connection_counter: active_connection_counter.clone(),
                 helm_chart_version: config.helm_chart_version.clone(),
-                deployment_state_handle,
-                internal_console_redirect_url: config.internal_console_redirect_url,
+                source: "internal",
+                tls: None,
+                authenticator_kind: AuthenticatorKind::None,
+                authenticator_rx: authenticator_none_rx.clone(),
+                allowed_origin: config.cors_allowed_origin.clone(),
+                concurrent_webhook_req: webhook_concurrency_limit.semaphore(),
+                metrics,
+                metrics_registry,
+                allowed_roles: AllowedRoles::NormalAndInternal,
+                internal_route_config: internal_route_config.clone(),
+                routes_enabled: HttpRoutesEnabled {
+                    base: true,
+                    webhook: true,
+                    internal: true,
+                    metrics: true,
+                    profiling: true,
+                },
             });
             mz_server_core::serve(ServeConfig {
                 server: internal_http_server,
@@ -672,7 +713,6 @@ impl Listeners {
             connection_limiter.update_superuser_reserved(superuser_reserved);
         });
 
-        let webhook_concurrency_limit = WebhookConcurrencyLimiter::default();
         let (adapter_handle, adapter_client) = mz_adapter::serve(mz_adapter::Config {
             connection_context: config.controller.connection_context.clone(),
             connection_limit_callback,
@@ -727,7 +767,7 @@ impl Listeners {
         info!("startup: envd serve: postamble beginning");
 
         // Install an adapter client in the internal HTTP server.
-        internal_http_adapter_client_tx
+        adapter_client_tx
             .send(adapter_client.clone())
             .expect("internal HTTP server should not drop first");
 
@@ -785,19 +825,34 @@ impl Listeners {
             })
         });
 
+        let (authenticator_kind, authenticator_rx) = match &config.frontegg {
+            Some(_) => (AuthenticatorKind::Frontegg, authenticator_frontegg_rx),
+            None => (AuthenticatorKind::None, authenticator_none_rx),
+        };
         // Launch HTTP server.
         let http_metrics = http::Metrics::register_into(&config.metrics_registry, "mz_http");
         task::spawn(|| "http_server", {
             let http_server = HttpServer::new(HttpConfig {
                 source: "external",
                 tls: http_tls,
-                frontegg: config.frontegg.clone(),
-                adapter_client: adapter_client.clone(),
+                authenticator_kind,
+                authenticator_rx,
+                adapter_client_rx: adapter_client_rx.clone(),
                 allowed_origin: config.cors_allowed_origin.clone(),
                 active_connection_counter: active_connection_counter.clone(),
                 helm_chart_version: config.helm_chart_version.clone(),
                 concurrent_webhook_req: webhook_concurrency_limit.semaphore(),
                 metrics: http_metrics.clone(),
+                metrics_registry: config.metrics_registry,
+                allowed_roles: AllowedRoles::Normal,
+                internal_route_config,
+                routes_enabled: HttpRoutesEnabled {
+                    base: true,
+                    webhook: true,
+                    internal: false,
+                    metrics: false,
+                    profiling: false,
+                },
             });
             mz_server_core::serve(ServeConfig {
                 conns: http_conns,

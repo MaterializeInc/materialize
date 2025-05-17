@@ -8,6 +8,7 @@ members = [
     "src/arrow-util",
     "src/audit-log",
     "src/auth",
+    "src/authenticator",
     "src/avro",
     "src/aws-secrets-controller",
     "src/aws-util",
@@ -131,6 +132,8 @@ default-members = [
     "src/alloc",
     "src/arrow-util",
     "src/audit-log",
+    "src/auth",
+    "src/authenticator",
     "src/avro",
     "src/aws-secrets-controller",
     "src/aws-util",
@@ -237,7 +240,6 @@ default-members = [
     "src/workspace-hack",
     "test/metabase/smoketest",
     "test/test-util",
-    "src/auth",
 ]
 
 exclude = [
