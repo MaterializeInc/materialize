@@ -290,17 +290,17 @@ pub enum PlanNode<T = mz_repr::Timestamp> {
     /// are being unpacked, producing quadratic output in those cases. Instead,
     /// in these cases use a `mfp` member that projects away these large fields.
     FlatMap {
-        /// The input collection.
-        input: Box<Plan<T>>,
-        /// The variable-record emitting function.
-        func: TableFunc,
-        /// Expressions that for each row prepare the arguments to `func`.
-        exprs: Vec<MirScalarExpr>,
-        /// Linear operator to apply to each record produced by `func`.
-        mfp_after: MapFilterProject,
         /// The particular arrangement of the input we expect to use,
         /// if any
         input_key: Option<Vec<MirScalarExpr>>,
+        /// The input collection.
+        input: Box<Plan<T>>,
+        /// Expressions that for each row prepare the arguments to `func`.
+        exprs: Vec<MirScalarExpr>,
+        /// The variable-record emitting function.
+        func: TableFunc,
+        /// Linear operator to apply to each record produced by `func`.
+        mfp_after: MapFilterProject,
     },
     /// A multiway relational equijoin, with fused map, filter, and projection.
     ///
@@ -319,6 +319,9 @@ pub enum PlanNode<T = mz_repr::Timestamp> {
     },
     /// Aggregation by key.
     Reduce {
+        /// The particular arrangement of the input we expect to use,
+        /// if any
+        input_key: Option<Vec<MirScalarExpr>>,
         /// The input collection.
         input: Box<Plan<T>>,
         /// A plan for changing input records into key, value pairs.
@@ -329,9 +332,6 @@ pub enum PlanNode<T = mz_repr::Timestamp> {
         /// on the properties of the reduction, and the input itself. Please check
         /// out the documentation for this type for more detail.
         plan: ReducePlan,
-        /// The particular arrangement of the input we expect to use,
-        /// if any
-        input_key: Option<Vec<MirScalarExpr>>,
         /// An MFP that must be applied to results. The projection part of this
         /// MFP must preserve the key for the reduction; otherwise, the results
         /// become undefined. Additionally, the MFP must be free from temporal
@@ -388,16 +388,16 @@ pub enum PlanNode<T = mz_repr::Timestamp> {
     /// be important for e.g. the `Join` stage which benefits from multiple arrangements
     /// or to cap a `Plan` so that indexes can be exported.
     ArrangeBy {
+        /// The key that must be used to access the input.
+        input_key: Option<Vec<MirScalarExpr>>,
         /// The input collection.
         input: Box<Plan<T>>,
+        /// The MFP that must be applied to the input.
+        input_mfp: MapFilterProject,
         /// A list of arrangement keys, and possibly a raw collection,
         /// that will be added to those of the input. Does not include
         /// any other existing arrangements.
         forms: AvailableCollections,
-        /// The key that must be used to access the input.
-        input_key: Option<Vec<MirScalarExpr>>,
-        /// The MFP that must be applied to the input.
-        input_mfp: MapFilterProject,
     },
 }
 
@@ -597,11 +597,11 @@ impl Arbitrary for Plan {
                 )
                     .prop_map(|(input, func, exprs, mfp, input_key, lir_id)| {
                         PlanNode::FlatMap {
-                            input: input.into(),
-                            func,
-                            exprs,
-                            mfp_after: mfp,
                             input_key,
+                            input: input.into(),
+                            exprs,
+                            func,
+                            mfp_after: mfp,
                         }
                         .as_plan(lir_id)
                     })
@@ -628,10 +628,10 @@ impl Arbitrary for Plan {
                     .prop_map(
                         |(input, key_val_plan, plan, input_key, mfp_after, lir_id)| {
                             PlanNode::Reduce {
+                                input_key,
                                 input: input.into(),
                                 key_val_plan,
                                 plan,
-                                input_key,
                                 mfp_after,
                             }
                             .as_plan(lir_id)
@@ -686,10 +686,10 @@ impl Arbitrary for Plan {
                 )
                     .prop_map(|(input, forms, input_key, input_mfp, lir_id)| {
                         PlanNode::ArrangeBy {
-                            input: input.into(),
-                            forms,
                             input_key,
+                            input: input.into(),
                             input_mfp,
+                            forms,
                         }
                         .as_plan(lir_id)
                     })
@@ -1062,23 +1062,23 @@ impl<T> CollectionPlan for PlanNode<T> {
                 input_key_val: _,
             }
             | PlanNode::FlatMap {
-                input,
-                func: _,
-                exprs: _,
-                mfp_after: _,
                 input_key: _,
+                input,
+                exprs: _,
+                func: _,
+                mfp_after: _,
             }
             | PlanNode::ArrangeBy {
-                input,
-                forms: _,
                 input_key: _,
+                input,
                 input_mfp: _,
+                forms: _,
             }
             | PlanNode::Reduce {
+                input_key: _,
                 input,
                 key_val_plan: _,
                 plan: _,
-                input_key: _,
                 mfp_after: _,
             }
             | PlanNode::TopK {

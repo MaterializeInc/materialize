@@ -163,10 +163,10 @@ Explained Query:
     cte l0 =
       Reduce::Accumulable
         simple_aggrs[0]=(0, 0, count(*))
+        key_plan=id
         val_plan
           project=(#0)
           map=(true)
-        key_plan=id
         Join::Linear
           linear_stage[0]
             closure

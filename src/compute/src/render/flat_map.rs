@@ -31,11 +31,11 @@ where
     /// Applies a `TableFunc` to every row, followed by an `mfp`.
     pub fn render_flat_map(
         &self,
-        input: CollectionBundle<G>,
-        func: TableFunc,
-        exprs: Vec<MirScalarExpr>,
-        mfp: MapFilterProject,
         input_key: Option<Vec<MirScalarExpr>>,
+        input: CollectionBundle<G>,
+        exprs: Vec<MirScalarExpr>,
+        func: TableFunc,
+        mfp: MapFilterProject,
     ) -> CollectionBundle<G> {
         let until = self.until.clone();
         let mfp_plan = mfp.into_plan().expect("MapFilterProject planning failed");
