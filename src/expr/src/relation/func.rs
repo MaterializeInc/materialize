@@ -53,8 +53,8 @@ use crate::relation::proto_aggregate_func::{
 };
 use crate::relation::proto_table_func::ProtoTabletizedScalar;
 use crate::relation::{
-    ColumnOrder, ProtoAggregateFunc, ProtoTableFunc, WindowFrame, WindowFrameBound,
-    WindowFrameUnits, compare_columns, proto_table_func,
+    ColumnOrder, ProtoAggregateFunc, ProtoTableFunc, ProtoTableFuncMaybeWithOrdinality,
+    WindowFrame, WindowFrameBound, WindowFrameUnits, compare_columns, proto_table_func,
 };
 use crate::scalar::func::{add_timestamp_months, jsonb_stringify};
 
@@ -4211,6 +4211,136 @@ impl fmt::Display for TableFunc {
             TableFunc::TabletizedScalar { name, .. } => f.write_str(name),
             TableFunc::RegexpMatches => write!(f, "regexp_matches(_, _, _)"),
         }
+    }
+}
+
+/// A table function plus an optional WITH ORDINALITY clause.
+///
+/// WITH ORDINALITY means that we append an extra output column, whose value is 1,2,3,... for the
+/// output rows corresponding to a call of the table function on one input row. For example,
+/// WITH ORDINALITY numbers the elements of a list when calling unnest_list.
+#[derive(
+    Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize, MzReflect, Arbitrary,
+)]
+pub struct TableFuncMaybeWithOrdinality {
+    pub func: TableFunc,
+    pub with_ordinality: bool,
+}
+
+impl RustType<ProtoTableFuncMaybeWithOrdinality> for TableFuncMaybeWithOrdinality {
+    fn into_proto(&self) -> ProtoTableFuncMaybeWithOrdinality {
+        ProtoTableFuncMaybeWithOrdinality {
+            func: Some(self.func.clone()).into_proto(),
+            with_ordinality: self.with_ordinality,
+        }
+    }
+
+    fn from_proto(proto: ProtoTableFuncMaybeWithOrdinality) -> Result<Self, TryFromProtoError> {
+        Ok(TableFuncMaybeWithOrdinality {
+            func: proto
+                .func
+                .into_rust_if_some("ProtoTableFuncMaybeWithOrdinality::func")?,
+            with_ordinality: proto.with_ordinality,
+        })
+    }
+}
+
+impl TableFuncMaybeWithOrdinality {
+    pub fn eval<'a>(
+        &'a self,
+        datums: &'a [Datum<'a>],
+        temp_storage: &'a RowArena,
+    ) -> Result<Box<dyn Iterator<Item = (Row, Diff)> + 'a>, EvalError> {
+        if !self.with_ordinality {
+            return self.func.eval(datums, temp_storage);
+        }
+
+        // WITH ORDINALITY: zip 1, 2, 3, 4, ... to the output of the table function.
+        //
+        // We don't want to handle negative diffs here, similarly to how Reduce and TopK assert that
+        // there are no negative diffs. It's a bit more dangerous here, because Reduce and TopK have
+        // a consolidation before their assertions. But we should be fine even without a
+        // consolidation, because a Union with a Negated input always immediately does a
+        // consolidation (see `refine_union_negate_consolidation`). We have an issue for making this
+        // invariant official:
+        // https://github.com/MaterializeInc/database-issues/issues/8771
+        //
+        // (Note that there is the `repeat_row` _internal_ table function, which can produce a
+        // negative diff by itself, i.e., without inheriting a negative diff from its input. This is
+        // not supported together with WITH ORDINALITY, which seems appropriate.)
+        //
+        // But, if things go south, and we somehow encounter negative diffs here, then we do want to
+        // emit an EvalError. However, we don't want to materialize the table function's results
+        // into a Vec. So, we evaluate the table function twice: first just checking for negative
+        // diffs, and second doing the actual WITH ORDINALITY.
+
+        // 1. Check for negative diffs.
+        for (_row, diff) in self.func.eval(datums, temp_storage)? {
+            if diff.into_inner() < 0 {
+                tracing::error!("TableFunc with_ordinality encountered a negative diff");
+                return Err(EvalError::Internal(
+                    "TableFunc with_ordinality encountered a negative diff".into(),
+                ));
+            }
+        }
+
+        // 2. Do the WITH ORDINALITY.
+        let mut row_buf = Row::default();
+        let it = self
+            .func
+            .eval(datums, temp_storage)?
+            .flat_map(|(row, diff)| {
+                iter::repeat(row).take(
+                    diff.into_inner()
+                        .try_into()
+                        .expect("checked above for negative diffs"),
+                )
+            })
+            .enumerate()
+            .map(move |(i, row)| {
+                let mut packer = row_buf.packer();
+                packer.extend_by_row(&row);
+                // the `+ 1` is because WITH ORDINALITY starts from 1, while `enumerate` starts from 0.
+                packer.push(Datum::Int64(
+                    (i + 1)
+                        .try_into()
+                        .expect("table function doesn't have more than 2^63 output rows"),
+                ));
+                (row_buf.clone(), Diff::ONE)
+            });
+        Ok(Box::new(it))
+    }
+
+    pub fn output_type(&self) -> RelationType {
+        let mut typ = self.func.output_type();
+        if self.with_ordinality {
+            typ.column_types.push(ScalarType::Int64.nullable(false));
+        }
+        typ
+    }
+
+    pub fn output_arity(&self) -> usize {
+        self.func.output_arity() + if self.with_ordinality { 1 } else { 0 }
+    }
+
+    pub fn empty_on_null_input(&self) -> bool {
+        self.func.empty_on_null_input()
+    }
+
+    /// True iff the table function preserves the append-only property of its input.
+    pub fn preserves_monotonicity(&self) -> bool {
+        self.func.preserves_monotonicity()
+    }
+}
+
+impl fmt::Display for TableFuncMaybeWithOrdinality {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        let with_ordinality = if self.with_ordinality {
+            "[with ordinality]"
+        } else {
+            ""
+        };
+        write!(f, "{}{}", self.func, with_ordinality)
     }
 }
 

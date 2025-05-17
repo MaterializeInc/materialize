@@ -27,6 +27,16 @@ asdf     asdf     NULL
 asdfjkl  asdf     NULL
 jkl      NULL     jkl
 
+query TTTI colnames
+SELECT data.*, reg.*
+FROM data, regexp_extract('(asdf)|(?P<foo>jkl)', data.input) reg WITH ORDINALITY
+ORDER BY data.input
+----
+input    column1  foo   ordinality
+asdf     asdf     NULL  1
+asdfjkl  asdf     NULL  1
+jkl      NULL     jkl   1
+
 # TODO(brennan): test that the regex columns have the correct nullability, once
 # they actually do (database-issues#612).
 

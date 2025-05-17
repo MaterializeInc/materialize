@@ -417,7 +417,7 @@ impl Context {
                 // it would be very hard to hunt down all these parts. (For example, key inference
                 // infers the group key as a unique key.)
                 let fused_with_reduce = 'fusion: {
-                    if !matches!(func, TableFunc::UnnestList { .. }) {
+                    if !matches!(func.func, TableFunc::UnnestList { .. }) || func.with_ordinality {
                         break 'fusion None;
                     }
                     // We might have a Project of a single col between the FlatMap and the

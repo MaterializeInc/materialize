@@ -17,7 +17,7 @@ use std::num::NonZeroU64;
 use columnar::Columnar;
 use mz_expr::{
     CollectionPlan, EvalError, Id, LetRecLimit, LocalId, MapFilterProject, MirScalarExpr,
-    OptimizedMirRelationExpr, TableFunc,
+    OptimizedMirRelationExpr, TableFuncMaybeWithOrdinality,
 };
 use mz_ore::soft_assert_eq_no_log;
 use mz_ore::str::Indent;
@@ -298,7 +298,7 @@ pub enum PlanNode<T = mz_repr::Timestamp> {
         /// Expressions that for each row prepare the arguments to `func`.
         exprs: Vec<MirScalarExpr>,
         /// The variable-record emitting function.
-        func: TableFunc,
+        func: TableFuncMaybeWithOrdinality,
         /// Linear operator to apply to each record produced by `func`.
         mfp_after: MapFilterProject,
     },
@@ -589,7 +589,7 @@ impl Arbitrary for Plan {
                 //Plan::FlatMap
                 (
                     inner.clone(),
-                    any::<TableFunc>(),
+                    any::<TableFuncMaybeWithOrdinality>(),
                     any::<Vec<MirScalarExpr>>(),
                     any::<MapFilterProject>(),
                     any::<Option<Vec<MirScalarExpr>>>(),

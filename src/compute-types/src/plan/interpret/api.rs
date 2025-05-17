@@ -20,7 +20,7 @@ use differential_dataflow::lattice::Lattice;
 use itertools::zip_eq;
 use mz_expr::{
     EvalError, Id, LetRecLimit, LocalId, MapFilterProject, MirScalarExpr, RECURSION_LIMIT,
-    TableFunc,
+    TableFuncMaybeWithOrdinality,
 };
 use mz_ore::cast::CastFrom;
 use mz_ore::stack::{CheckedRecursion, RecursionGuard, RecursionLimitError};
@@ -83,7 +83,7 @@ pub trait Interpreter<T = mz_repr::Timestamp> {
         input_key: &Option<Vec<MirScalarExpr>>,
         input: Self::Domain,
         exprs: &Vec<MirScalarExpr>,
-        func: &TableFunc,
+        func: &TableFuncMaybeWithOrdinality,
         mfp: &MapFilterProject,
     ) -> Self::Domain;
 

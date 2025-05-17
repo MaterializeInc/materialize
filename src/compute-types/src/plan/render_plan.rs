@@ -15,7 +15,8 @@ use std::collections::{BTreeMap, BTreeSet};
 use itertools::izip;
 use mz_expr::explain::{HumanizedExplain, HumanizerMode};
 use mz_expr::{
-    CollectionPlan, EvalError, Id, LetRecLimit, LocalId, MapFilterProject, MirScalarExpr, TableFunc,
+    CollectionPlan, EvalError, Id, LetRecLimit, LocalId, MapFilterProject, MirScalarExpr,
+    TableFuncMaybeWithOrdinality,
 };
 use mz_ore::soft_assert_or_log;
 use mz_proto::{IntoRustIfSome, ProtoMapEntry, ProtoType, RustType, TryFromProtoError};
@@ -185,7 +186,7 @@ pub enum Expr<T = mz_repr::Timestamp> {
         /// Expressions that for each row prepare the arguments to `func`.
         exprs: Vec<MirScalarExpr>,
         /// The variable-record emitting function.
-        func: TableFunc,
+        func: TableFuncMaybeWithOrdinality,
         /// Linear operator to apply to each record produced by `func`.
         mfp_after: MapFilterProject,
     },

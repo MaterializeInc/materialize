@@ -697,7 +697,10 @@ SELECT generate_series(a, b) from t
                     "access_strategy": "UnknownOrLocal"
                   }
                 },
-                "func": "GenerateSeriesInt32",
+                "func": {
+                  "func": "GenerateSeriesInt32",
+                  "with_ordinality": false
+                },
                 "exprs": [
                   {
                     "Column": [
@@ -3121,9 +3124,12 @@ SELECT (SELECT v.a FROM v WHERE v.b = t.b LIMIT 1), (SELECT mv.a FROM mv WHERE m
                                                                 }
                                                               },
                                                               "func": {
-                                                                "GuardSubquerySize": {
-                                                                  "column_type": "Int32"
-                                                                }
+                                                                "func": {
+                                                                  "GuardSubquerySize": {
+                                                                    "column_type": "Int32"
+                                                                  }
+                                                                },
+                                                                "with_ordinality": false
                                                               },
                                                               "exprs": [
                                                                 {
@@ -3701,9 +3707,12 @@ SELECT (SELECT v.a FROM v WHERE v.b = t.b LIMIT 1), (SELECT mv.a FROM mv WHERE m
                                                                 }
                                                               },
                                                               "func": {
-                                                                "GuardSubquerySize": {
-                                                                  "column_type": "Int32"
-                                                                }
+                                                                "func": {
+                                                                  "GuardSubquerySize": {
+                                                                    "column_type": "Int32"
+                                                                  }
+                                                                },
+                                                                "with_ordinality": false
                                                               },
                                                               "exprs": [
                                                                 {

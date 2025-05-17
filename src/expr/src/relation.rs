@@ -50,8 +50,8 @@ use crate::relation::func::{AggregateFunc, LagLeadType, TableFunc};
 use crate::row::{RowCollection, SortedRowCollectionIter};
 use crate::visit::{Visit, VisitChildren};
 use crate::{
-    EvalError, FilterCharacteristics, Id, LocalId, MirScalarExpr, UnaryFunc, VariadicFunc,
-    func as scalar_func,
+    EvalError, FilterCharacteristics, Id, LocalId, MirScalarExpr, TableFuncMaybeWithOrdinality,
+    UnaryFunc, VariadicFunc, func as scalar_func,
 };
 
 pub mod canonicalize;
@@ -198,8 +198,8 @@ pub enum MirRelationExpr {
     FlatMap {
         /// The source collection
         input: Box<MirRelationExpr>,
-        /// The table func to apply
-        func: TableFunc,
+        /// The table func to apply, with an optional WITH ORDINALITY clause.
+        func: TableFuncMaybeWithOrdinality,
         /// The argument to the table func
         exprs: Vec<MirScalarExpr>,
     },
@@ -393,12 +393,18 @@ impl Arbitrary for MirRelationExpr {
                     inner.clone(),
                     any::<TableFunc>(),
                     any::<Vec<MirScalarExpr>>(),
+                    any::<bool>(),
                 )
-                    .prop_map(|(input, func, exprs)| MirRelationExpr::FlatMap {
-                        input: Box::new(input),
-                        func,
-                        exprs,
-                    })
+                    .prop_map(
+                        |(input, func, exprs, with_ordinality)| MirRelationExpr::FlatMap {
+                            input: Box::new(input),
+                            func: TableFuncMaybeWithOrdinality {
+                                func,
+                                with_ordinality,
+                            },
+                            exprs,
+                        },
+                    )
                     .boxed(),
                 // Filter
                 (inner.clone(), any::<Vec<MirScalarExpr>>())
@@ -1228,9 +1234,7 @@ impl MirRelationExpr {
             }
             Project { outputs, .. } => outputs.len(),
             Map { scalars, .. } => input_arities.next().unwrap() + scalars.len(),
-            FlatMap { func, .. } => {
-                input_arities.next().unwrap() + func.output_type().column_types.len()
-            }
+            FlatMap { func, .. } => input_arities.next().unwrap() + func.output_arity(),
             Join { .. } => input_arities.sum(),
             Reduce {
                 input: _,
@@ -1384,6 +1388,22 @@ impl MirRelationExpr {
 
     /// Like `map`, but yields zero-or-more output rows per input row
     pub fn flat_map(self, func: TableFunc, exprs: Vec<MirScalarExpr>) -> Self {
+        MirRelationExpr::FlatMap {
+            input: Box::new(self),
+            func: TableFuncMaybeWithOrdinality {
+                func,
+                with_ordinality: false,
+            },
+            exprs,
+        }
+    }
+
+    /// Like `flat_map`, but can include a WITH ORDINALITY clause.
+    pub fn flat_map_maybe_with_ordinality(
+        self,
+        func: TableFuncMaybeWithOrdinality,
+        exprs: Vec<MirScalarExpr>,
+    ) -> Self {
         MirRelationExpr::FlatMap {
             input: Box::new(self),
             func,

@@ -944,6 +944,7 @@ mod column_names {
     use mz_expr::{AggregateFunc, Id, MirRelationExpr, MirScalarExpr};
     use mz_repr::GlobalId;
     use mz_repr::explain::ExprHumanizer;
+    use mz_sql::ORDINALITY_COL_NAME;
 
     /// An abstract type denoting an inferred column name.
     #[derive(Debug, Clone)]
@@ -1109,6 +1110,9 @@ mod column_names {
                     let func_output_start = column_names.len();
                     let func_output_end = column_names.len() + func.output_arity();
                     column_names.extend(Self::anonymous(func_output_start..func_output_end));
+                    if func.with_ordinality {
+                        column_names.push(ColumnName::Annotated(ORDINALITY_COL_NAME.into()));
+                    }
                     column_names
                 }
                 Filter {
@@ -1388,8 +1392,8 @@ mod cardinality {
     use std::collections::{BTreeMap, BTreeSet};
 
     use mz_expr::{
-        BinaryFunc, Id, JoinImplementation, MirRelationExpr, MirScalarExpr, TableFunc, UnaryFunc,
-        VariadicFunc,
+        BinaryFunc, Id, JoinImplementation, MirRelationExpr, MirScalarExpr, TableFunc,
+        TableFuncMaybeWithOrdinality, UnaryFunc, VariadicFunc,
     };
     use mz_ore::cast::{CastFrom, CastLossy, TryCastFrom};
     use mz_repr::GlobalId;
@@ -1571,8 +1575,12 @@ mod cardinality {
     //
     // We split it up into functions to make it all a bit more tractable to work with.
     impl Cardinality {
-        fn flat_map(&self, tf: &TableFunc, input: CardinalityEstimate) -> CardinalityEstimate {
-            match tf {
+        fn flat_map(
+            &self,
+            tf: &TableFuncMaybeWithOrdinality,
+            input: CardinalityEstimate,
+        ) -> CardinalityEstimate {
+            match &tf.func {
                 TableFunc::Wrap { types, width } => {
                     input * (f64::cast_lossy(types.len()) / f64::cast_lossy(*width))
                 }

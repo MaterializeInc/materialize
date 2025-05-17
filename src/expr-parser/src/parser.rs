@@ -70,7 +70,10 @@ pub fn try_parse_def(catalog: &TestCatalog, s: &str) -> Result<Def, String> {
 mod relation {
     use std::collections::BTreeMap;
 
-    use mz_expr::{AccessStrategy, Id, JoinImplementation, LocalId, MirRelationExpr};
+    use mz_expr::{
+        AccessStrategy, Id, JoinImplementation, LocalId, MirRelationExpr,
+        TableFuncMaybeWithOrdinality,
+    };
     use mz_repr::{Diff, RelationType, Row, ScalarType};
 
     use crate::parser::analyses::Analyses;
@@ -382,6 +385,11 @@ mod relation {
             "generate_series" => GenerateSeriesInt64,
             "jsonb_object_keys" => JsonbObjectKeys,
             _ => Err(Error::new(ident.span(), "unsupported function name"))?,
+        };
+
+        let func = TableFuncMaybeWithOrdinality {
+            func,
+            with_ordinality: false,
         };
 
         let exprs = {

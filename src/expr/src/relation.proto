@@ -205,3 +205,8 @@ message ProtoTableFunc {
     mz_repr.relation_and_scalar.ProtoScalarType guard_subquery_size = 20;
   }
 }
+
+message ProtoTableFuncMaybeWithOrdinality {
+  ProtoTableFunc func = 1;
+  bool with_ordinality = 2;
+}

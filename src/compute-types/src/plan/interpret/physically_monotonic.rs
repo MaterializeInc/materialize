@@ -15,7 +15,7 @@ use std::collections::BTreeSet;
 use std::marker::PhantomData;
 
 use differential_dataflow::lattice::Lattice;
-use mz_expr::{EvalError, Id, MapFilterProject, MirScalarExpr, TableFunc};
+use mz_expr::{EvalError, Id, MapFilterProject, MirScalarExpr, TableFuncMaybeWithOrdinality};
 use mz_repr::{Diff, GlobalId, Row};
 use timely::PartialOrder;
 
@@ -144,7 +144,7 @@ impl<T> Interpreter<T> for SingleTimeMonotonic<'_, T> {
         _input_key: &Option<Vec<MirScalarExpr>>,
         input: Self::Domain,
         _exprs: &Vec<MirScalarExpr>,
-        _func: &TableFunc,
+        _func: &TableFuncMaybeWithOrdinality,
         _mfp: &MapFilterProject,
     ) -> Self::Domain {
         // In a single-time context, we just propagate the monotonicity

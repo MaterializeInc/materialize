@@ -39,15 +39,15 @@ pub use linear::{
 pub use relation::func::order_aggregate_datums as order_aggregate_datums_exported_for_benchmarking;
 pub use relation::func::{
     AggregateFunc, AnalyzedRegex, AnalyzedRegexOpts, CaptureGroupDesc, LagLeadType,
-    NaiveOneByOneAggr, OneByOneAggr, TableFunc,
+    NaiveOneByOneAggr, OneByOneAggr, TableFunc, TableFuncMaybeWithOrdinality,
 };
 pub use relation::join_input_mapper::JoinInputMapper;
 pub use relation::{
     AccessStrategy, AggregateExpr, CollectionPlan, ColumnOrder, JoinImplementation,
     JoinInputCharacteristics, LetRecLimit, MirRelationExpr, ProtoAggregateExpr, ProtoAggregateFunc,
-    ProtoColumnOrder, ProtoRowSetFinishing, ProtoTableFunc, RECURSION_LIMIT, RowSetFinishing,
-    RowSetFinishingIncremental, WindowFrame, WindowFrameBound, WindowFrameUnits, canonicalize,
-    compare_columns, non_nullable_columns,
+    ProtoColumnOrder, ProtoRowSetFinishing, ProtoTableFunc, ProtoTableFuncMaybeWithOrdinality,
+    RECURSION_LIMIT, RowSetFinishing, RowSetFinishingIncremental, WindowFrame, WindowFrameBound,
+    WindowFrameUnits, canonicalize, compare_columns, non_nullable_columns,
 };
 pub use scalar::func::{self, BinaryFunc, UnaryFunc, UnmaterializableFunc, VariadicFunc};
 pub use scalar::{
