@@ -27,12 +27,23 @@ ALTER SYSTEM SET enable_repeat_row = true
 COMPLETE 0
 
 statement ok
-CREATE TABLE y (a JSONB)
+CREATE TABLE y (a JSONB);
+
+statement ok
+INSERT INTO y VALUES ('[-1, 27]');
 
 # Ensure this does not panic.
-query TTTT
-SELECT * FROM y a, y b, jsonb_each(a.a);
+query TTT
+SELECT * FROM y a, y b, jsonb_array_elements(a.a);
 ----
+[-1,27]  [-1,27]  -1
+[-1,27]  [-1,27]  27
+
+query TTTI
+SELECT * FROM y a, y b, jsonb_array_elements(a.a) WITH ORDINALITY;
+----
+[-1,27]  [-1,27]  -1  1
+[-1,27]  [-1,27]  27  2
 
 query I rowsort
 SELECT generate_series FROM generate_series(1, 3)
@@ -349,6 +360,24 @@ SELECT * FROM generate_series(0,3), repeat_row(generate_series);
 3
 3
 3
+
+query II
+SELECT * FROM generate_series(0,3), repeat_row(generate_series) WITH ORDINALITY;
+----
+1  1
+2  1
+2  2
+3  1
+3  2
+3  3
+
+query II
+SELECT * FROM generate_series(0,3), repeat_row(abs(generate_series - 1)) WITH ORDINALITY;
+----
+0  1
+2  1
+3  1
+3  2
 
 query I
 SELECT abs(generate_series) FROM generate_series(-1, 2), repeat_row(generate_series);
@@ -1095,6 +1124,13 @@ NULL  NULL  NULL  10
 NULL  NULL  NULL  11
 NULL  NULL  NULL  12
 
+########################################################################################################################
+# All these tests that involve `_pg_expandarray` and `ROWS FROM` currently emit
+# ERROR mz_sql::plan::query: Using the legacy WITH ORDINALITY / ROWS FROM implementation for table function information_schema._pg_expandarray
+# We are hoping that this is a rare combination in practice, but sooner or later we'll probably need to do something
+# about this. For further details, see comment in `plan_table_function_internal`.
+########################################################################################################################
+
 query IIII colnames
 SELECT * FROM ROWS FROM (generate_series(1, 2), information_schema._pg_expandarray(array[9]), generate_series(3, 6)) ORDER BY 4;
 ----
@@ -1193,6 +1229,17 @@ SELECT * FROM LATERAL ROWS FROM (generate_series(1,1), information_schema._pg_ex
 ----
 a b c
 1 1 1
+
+# ROWS FROM together with WITH ORDINALITY explicitly specified
+query III colnames
+SELECT *
+FROM ROWS FROM (generate_series(6, 7), generate_series(10, 12)) WITH ORDINALITY
+ORDER BY ordinality;
+----
+generate_series generate_series ordinality
+6  10  1
+7  11  2
+NULL  12  3
 
 # Multiple table funcs in SELECT projection.
 
@@ -1407,6 +1454,13 @@ SELECT * FROM generate_series(1, 3) as foo(a), ROWS FROM (generate_series(foo.a,
 statement ok
 create view bar as select * from y, rows from (generate_series(1, 2), jsonb_array_elements(y.a));
 
+query TIT
+SELECT *
+FROM bar
+----
+[-1,27]  1  -1
+[-1,27]  2  27
+
 # Regression for database-issues#3078
 query IT
 WITH a(x) AS (SELECT 'a') SELECT generate_series(1, 2), * FROM a ORDER BY generate_series
@@ -1450,10 +1504,9 @@ Project (#5, #6)
     Project (#0, #1, #3..=#5)
       Map (coalesce(#2, #4))
         FullOuterJoin (#2 = #4)
-          Map (row_number() over (order by []), #1)
-            CallTable jsonb_object_keys(text_to_jsonb("{\"1\":2}"))
-          Map (row_number() over (order by []))
-            CallTable jsonb_object_keys(text_to_jsonb("{\"3\":4}"))
+          Map (#1)
+            CallTable jsonb_object_keys[with_ordinality](text_to_jsonb("{\"1\":2}"))
+          CallTable jsonb_object_keys[with_ordinality](text_to_jsonb("{\"3\":4}"))
 
 Target cluster: quickstart
 
@@ -1476,3 +1529,60 @@ SELECT generate_series FROM generate_series(DISTINCT 1, 3);
 # Regression for https://github.com/MaterializeInc/database-issues/issues/6180
 query error db error: ERROR: regexp_extract must specify at least one capture group
 select regexp_extract('aaa', 'a')
+
+# Test `FlatMapElimination`
+query T multiline
+EXPLAIN OPTIMIZED PLAN AS TEXT FOR
+SELECT unnest(LIST[5]) from x;
+----
+Explained Query:
+  Project (#2)
+    Map (5)
+      ReadStorage materialize.public.x
+
+Source materialize.public.x
+
+Target cluster: quickstart
+
+EOF
+
+query I
+SELECT unnest(LIST[5]) from x;
+----
+5
+5
+5
+
+query T multiline
+EXPLAIN OPTIMIZED PLAN AS TEXT FOR
+SELECT *
+FROM x, unnest(LIST[5]) WITH ORDINALITY;
+----
+Explained Query:
+  Map (5, 1)
+    ReadStorage materialize.public.x
+
+Source materialize.public.x
+
+Target cluster: quickstart
+
+EOF
+
+query IIII
+SELECT *
+FROM x, unnest(LIST[5]) WITH ORDINALITY;
+----
+1  2  5  1
+2  3  5  1
+3  4  5  1
+
+# Regression test for the ordering issue with the old WITH ORDINALITY implementation
+# https://github.com/MaterializeInc/database-issues/issues/4764
+query TTI
+SELECT *
+FROM
+  (VALUES (ARRAY['bb','a'])) AS v(x),
+  LATERAL unnest(x) WITH ORDINALITY;
+----
+{bb,a}  a  2
+{bb,a}  bb  1

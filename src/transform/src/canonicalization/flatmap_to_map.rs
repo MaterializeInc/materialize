@@ -11,8 +11,8 @@
 //!
 
 use mz_expr::visit::Visit;
-use mz_expr::{MirRelationExpr, TableFunc};
-use mz_repr::Diff;
+use mz_expr::{MirRelationExpr, MirScalarExpr, TableFunc};
+use mz_repr::{Datum, Diff, RowPacker, ScalarType};
 
 use crate::TransformCtx;
 
@@ -45,9 +45,22 @@ impl FlatMapToMap {
     /// Turns `FlatMap` into `Map` if only one row is produced by flatmap.
     pub fn action(relation: &mut MirRelationExpr) {
         if let MirRelationExpr::FlatMap { func, exprs, input } = relation {
+            let (func, with_ordinality) = if let TableFunc::WithOrdinality { inner } = func {
+                // get to the actual function, but remember that we have a WITH ORDINALITY clause.
+                (&**inner, true)
+            } else {
+                (&*func, false)
+            };
+
             if let TableFunc::Wrap { width, .. } = func {
                 if *width >= exprs.len() {
                     *relation = input.take_dangerous().map(std::mem::take(exprs));
+                    if with_ordinality {
+                        *relation = relation.take_dangerous().map_one(MirScalarExpr::literal(
+                            Ok(Datum::Int64(1)),
+                            ScalarType::Int64,
+                        ));
+                    }
                 }
             } else if is_supported_unnest(func) {
                 let func = func.clone();
@@ -62,7 +75,11 @@ impl FlatMapToMap {
                                 // If there are no elements in the literal argument, no output.
                                 relation.take_safely(None);
                             }
-                            (Some((row, Diff::ONE)), None) => {
+                            (Some((mut row, Diff::ONE)), None) => {
+                                if with_ordinality {
+                                    RowPacker::for_existing_row(&mut row).push(Datum::Int64(1));
+                                }
+                                assert_eq!(func.output_type().column_types.len(), 1);
                                 *relation =
                                     input.take_dangerous().map(vec![MirScalarExpr::Literal(
                                         Ok(row),
