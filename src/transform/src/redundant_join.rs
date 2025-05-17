@@ -397,13 +397,17 @@ impl RedundantJoin {
                     Ok(result)
                 }
 
-                MirRelationExpr::FlatMap { input, func, .. } => {
+                MirRelationExpr::FlatMap {
+                    input,
+                    func,
+                    exprs: _,
+                } => {
                     // FlatMap may drop records, and so we unset `exact`.
                     let mut result = self.action(input, ctx)?;
                     for prov in result.iter_mut() {
                         prov.exact = false;
                         prov.dereferenced_projection
-                            .extend((0..func.output_type().column_types.len()).map(|_| None));
+                            .extend((0..func.output_arity()).map(|_| None));
                     }
                     Ok(result)
                 }

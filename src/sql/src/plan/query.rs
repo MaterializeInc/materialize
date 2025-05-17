@@ -48,7 +48,8 @@ use std::{iter, mem};
 use itertools::Itertools;
 use mz_expr::virtual_syntax::AlgExcept;
 use mz_expr::{
-    Id, LetRecLimit, LocalId, MapFilterProject, MirScalarExpr, RowSetFinishing, func as expr_func,
+    Id, LetRecLimit, LocalId, MapFilterProject, MirScalarExpr, RowSetFinishing, TableFunc,
+    func as expr_func,
 };
 use mz_ore::assert_none;
 use mz_ore::collections::CollectionExt;
@@ -85,7 +86,6 @@ use crate::func::{self, Func, FuncSpec, TableFuncImpl};
 use crate::names::{
     Aug, FullItemName, PartialItemName, ResolvedDataType, ResolvedItemName, SchemaSpecifier,
 };
-use crate::normalize;
 use crate::plan::PlanError::InvalidWmrRecursionLimit;
 use crate::plan::error::PlanError;
 use crate::plan::hir::{
@@ -103,6 +103,7 @@ use crate::plan::{
     literal, transform_ast,
 };
 use crate::session::vars::{self, FeatureFlag};
+use crate::{ORDINALITY_COL_NAME, normalize};
 
 #[derive(Debug)]
 pub struct PlannedRootQuery<E> {
@@ -2128,7 +2129,7 @@ fn plan_values(
         }
     }
     let out = HirRelationExpr::CallTable {
-        func: mz_expr::TableFunc::Wrap {
+        func: TableFunc::Wrap {
             width: ncols,
             types: col_types,
         },
@@ -2207,7 +2208,7 @@ fn plan_values_insert(
     }
 
     Ok(HirRelationExpr::CallTable {
-        func: mz_expr::TableFunc::Wrap {
+        func: TableFunc::Wrap {
             width: values[0].len(),
             types,
         },
@@ -3146,7 +3147,7 @@ fn plan_rows_from_internal<'a>(
     left_expr = left_expr.map(vec![HirScalarExpr::column(left_scope.len() - 1)]);
     left_scope
         .items
-        .push(ScopeItem::from_column_name("ordinality"));
+        .push(ScopeItem::from_column_name(ORDINALITY_COL_NAME));
 
     for function in functions {
         // The right hand side of a join must be planned in a new scope.
@@ -3293,22 +3294,42 @@ fn plan_table_function_internal(
         item: table_name,
     });
 
-    let (mut expr, mut scope) = match resolve_func(ecx, name, args)? {
+    let (expr, mut scope) = match resolve_func(ecx, name, args)? {
         Func::Table(impls) => {
             let tf = func::select_impl(ecx, FuncSpec::Func(name), impls, scalar_args, vec![])?;
             let scope = Scope::from_source(scope_name.clone(), tf.column_names);
             let expr = match tf.imp {
-                TableFuncImpl::CallTable {
-                    func,
-                    exprs,
-                } => {
-                    HirRelationExpr::CallTable {
-                        func,
-                        exprs,
-                        //////////////////////// todo: with_ordinality
+                TableFuncImpl::CallTable { mut func, exprs } => {
+                    if with_ordinality {
+                        func = TableFunc::WithOrdinality {
+                            inner: Box::new(func),
+                        };
+                    }
+                    HirRelationExpr::CallTable { func, exprs }
+                }
+                TableFuncImpl::Expr(expr) => {
+                    if !with_ordinality {
+                        expr
+                    } else {
+                        // The table function is defined in SQL (i.e., TableFuncImpl::Expr), so we
+                        // fall back to the legacy WITH ORDINALITY / ROWS FROM implementation.
+                        // Note that this can give an incorrect ordering, and also has an extreme
+                        // performance problem in some cases. See the doc comment of
+                        // `TableFuncImpl`.
+                        tracing::error!(
+                            %name,
+                            "Using the legacy WITH ORDINALITY / ROWS FROM implementation for a table function",
+                        );
+                        expr.map(vec![HirScalarExpr::windowing(WindowExpr {
+                            func: WindowExprType::Scalar(ScalarWindowExpr {
+                                func: ScalarWindowFunc::RowNumber,
+                                order_by: vec![],
+                            }),
+                            partition_by: vec![],
+                            order_by: vec![],
+                        })])
                     }
                 }
-                TableFuncImpl::Expr(expr) => expr,
             };
             (expr, scope)
         }
@@ -3328,11 +3349,16 @@ fn plan_table_function_internal(
 
             let scope = Scope::from_source(scope_name.clone(), vec![column_name]);
 
+            let mut func = TableFunc::TabletizedScalar { relation, name };
+            if with_ordinality {
+                func = TableFunc::WithOrdinality {
+                    inner: Box::new(func),
+                };
+            }
             (
                 HirRelationExpr::CallTable {
-                    func: mz_expr::TableFunc::TabletizedScalar { relation, name },
+                    func,
                     exprs: vec![expr],
-                    //////////// todo: with_ordinality
                 },
                 scope,
             )
@@ -3344,14 +3370,6 @@ fn plan_table_function_internal(
     };
 
     if with_ordinality {
-        expr = expr.map(vec![HirScalarExpr::windowing(WindowExpr {
-            func: WindowExprType::Scalar(ScalarWindowExpr {
-                func: ScalarWindowFunc::RowNumber,
-                order_by: vec![],
-            }),
-            partition_by: vec![],
-            order_by: vec![],
-        })]);
         scope
             .items
             .push(ScopeItem::from_name(scope_name, "ordinality"));

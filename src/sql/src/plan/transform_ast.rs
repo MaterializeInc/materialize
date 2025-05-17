@@ -24,8 +24,8 @@ use mz_sql_parser::ast::{
 use mz_sql_parser::ident;
 
 use crate::names::{Aug, PartialItemName, ResolvedDataType, ResolvedItemName};
-use crate::normalize;
 use crate::plan::{PlanError, StatementContext};
+use crate::{ORDINALITY_COL_NAME, normalize};
 
 pub(crate) fn transform<N>(scx: &StatementContext, node: &mut N) -> Result<(), PlanError>
 where
@@ -515,7 +515,7 @@ impl<'ast> VisitMut<'ast, Aug> for FuncRewriter<'_> {
                     if *with_ordinality {
                         select = select.project(SelectItem::Expr {
                             expr: Expr::Value(Value::Number("1".into())),
-                            alias: Some(ident!("ordinality")),
+                            alias: Some(ident!(ORDINALITY_COL_NAME)),
                         });
                     }
 

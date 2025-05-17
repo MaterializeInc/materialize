@@ -1556,7 +1556,7 @@ impl HirRelationExpr {
             HirRelationExpr::LetRec { body, .. } => body.arity(),
             HirRelationExpr::Project { outputs, .. } => outputs.len(),
             HirRelationExpr::Map { input, scalars } => input.arity() + scalars.len(),
-            HirRelationExpr::CallTable { func, .. } => func.output_arity(),
+            HirRelationExpr::CallTable { func, exprs: _ } => func.output_arity(),
             HirRelationExpr::Filter { input, .. }
             | HirRelationExpr::TopK { input, .. }
             | HirRelationExpr::Distinct { input }

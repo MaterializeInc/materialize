@@ -941,9 +941,10 @@ mod column_names {
     use std::sync::Arc;
 
     use super::Analysis;
-    use mz_expr::{AggregateFunc, Id, MirRelationExpr, MirScalarExpr};
+    use mz_expr::{AggregateFunc, Id, MirRelationExpr, MirScalarExpr, TableFunc};
     use mz_repr::GlobalId;
     use mz_repr::explain::ExprHumanizer;
+    use mz_sql::ORDINALITY_COL_NAME;
 
     /// An abstract type denoting an inferred column name.
     #[derive(Debug, Clone)]
@@ -1109,6 +1110,13 @@ mod column_names {
                     let func_output_start = column_names.len();
                     let func_output_end = column_names.len() + func.output_arity();
                     column_names.extend(Self::anonymous(func_output_start..func_output_end));
+                    if let TableFunc::WithOrdinality { .. } = func {
+                        // We know the name of the last column
+                        // TODO(ggevay): generalize this to meaningful col names for all table functions
+                        **column_names.last_mut().as_mut().expect(
+                            "there is at least one output column, from the WITH ORDINALITY",
+                        ) = ColumnName::Annotated(ORDINALITY_COL_NAME.into());
+                    }
                     column_names
                 }
                 Filter {

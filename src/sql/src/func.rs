@@ -466,6 +466,10 @@ fn sql_impl_table_func_inner(
     })
 }
 
+/// Implements a table function using SQL.
+///
+/// Warning: These implementations are currently defective for WITH ORDINALITY / FROM ROWS, see
+/// comment in `plan_table_function_internal`.
 fn sql_impl_table_func(sql: &'static str) -> Operation<TableFuncPlan> {
     sql_impl_table_func_inner(sql, None)
 }
@@ -1662,12 +1666,35 @@ pub struct TableFuncPlan {
 }
 
 /// The implementation of a table function is either
-/// - just a `CallTable` HIR node (in which case we can put `WITH ORDINALITY` into it when we
-///   create the actual HIR node),
-/// - or a general HIR expression. This happens when it's implemented as SQL, i.e., by a call to
-///   [`sql_impl_table_func_inner`]. (We unfortunately don't support `WITH ORDINALITY` in this case
-///   for now. Note that the SQL standard only allows it on `unnest_...` functions, on which we
-///   always support it; it's only a Postgres extension to support it on arbitrary table functions.)
+/// 1. just a `CallTable` HIR node (in which case we can put `WITH ORDINALITY` into it when we
+///    create the actual HIR node in `plan_table_function_internal`),
+/// 2. or a general HIR expression. This happens when it's implemented as SQL, i.e., by a call to
+///    `sql_impl_table_func_inner`.
+///
+/// TODO(ggevay): when a table function in 2. is used with WITH ORDINALITY or ROWS FROM, we fall
+/// back to the legacy WITH ORDINALITY implementation, which relies on the row_number window
+/// function, and is mostly broken. It can give an incorrect ordering, and also has an extreme
+/// performance problem in some cases, see
+/// <https://github.com/MaterializeInc/database-issues/issues/4764#issuecomment-2854572614>
+///
+/// These table functions are somewhat exotic, and WITH ORDINALITY / ROWS FROM are also somewhat
+/// exotic, so let's hope that the combination of these is so exotic that nobody will need it for
+/// quite a while. Note that the SQL standard only allows WITH ORDINALITY on `unnest_...` functions,
+/// of which none fall into the 2. category, so we are fine with these; it's only a Postgres
+/// extension to support WITH ORDINALITY on arbitrary table functions. When this combination arises,
+/// we emit a Sentry error, so that we'll know about it.
+///
+/// When we eventually need to fix this, a possible approach would be to write two SQL
+/// implementations: one would be their current implementation, and the other would be
+/// WITH ORDINALITY.
+/// - This will be trivial for some table functions, e.g., those that end with an UNNEST just need a
+///   WITH ORDINALITY on this UNNEST (e.g., `regexp_split_to_table`).
+/// - `_pg_expandarray` and `date_bin_hopping` also look easy.
+/// - `mz_name_rank` and `mz_resolve_object_name` look more complicated but hopefully solvable.
+///
+/// Another approach to fixing this would be to add an ORDER BY to the SQL definitions and then
+/// move this ORDER BY into a row_number window function call. This would at least solve the
+/// correctness problem, but not the performance problem.
 #[derive(Debug)]
 pub enum TableFuncImpl {
     CallTable {
