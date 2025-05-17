@@ -914,7 +914,7 @@ where
                     (
                         (SourceData(Ok(row.clone())), ()),
                         self.current_upper.clone(),
-                        diff.into_inner(),
+                        diff,
                     )
                 })
                 .collect::<Vec<_>>();
@@ -1528,7 +1528,11 @@ where
     for (row, diff) in &mut rows {
         let datums = row.unpack();
         let occurred_at = datums[occurred_at_col].unwrap_timestamptz();
-        *diff = if *occurred_at < keep_since { -*diff } else { 0 };
+        *diff = if *occurred_at < keep_since {
+            -*diff
+        } else {
+            Diff::ZERO
+        };
     }
 
     // Consolidate to avoid superfluous writes.
@@ -1615,7 +1619,7 @@ where
             let timestamp = (status_history_desc.extract_time)(&datums);
 
             assert!(
-                diff > 0,
+                diff > Diff::ZERO,
                 "only know how to operate over consolidated data with diffs > 0, \
                     found diff {diff} for object {key:?} in {introspection_type:?}",
             );
@@ -1645,7 +1649,7 @@ where
                 // Duplicate rows ARE possible if many status changes happen in VERY quick succession,
                 // so we handle duplicated rows separately.
                 let entries = last_n_entries_per_key.entry(key).or_default();
-                for _ in 0..diff {
+                for _ in 0i64..diff.into_inner() {
                     // We CAN have multiple statuses (most likely Starting and Running) at the exact same
                     // millisecond, depending on how the `health_operator` is scheduled.
                     //
@@ -1693,7 +1697,13 @@ where
     // Updates are only deletes because everything else is already in the shard.
     let updates = deletions
         .into_iter()
-        .map(|row| ((SourceData(Ok(row)), ()), expected_upper.clone(), -1))
+        .map(|row| {
+            (
+                (SourceData(Ok(row)), ()),
+                expected_upper.clone(),
+                Diff::MINUS_ONE,
+            )
+        })
         .collect::<Vec<_>>();
 
     let res = write_handle
@@ -1758,11 +1768,7 @@ async fn monotonic_append<T: Timestamp + Lattice + Codec64 + TimestampManipulati
         let updates = updates
             .iter()
             .map(|TimestamplessUpdate { row, diff }| {
-                (
-                    (SourceData(Ok(row.clone())), ()),
-                    lower.clone(),
-                    diff.into_inner(),
-                )
+                ((SourceData(Ok(row.clone())), ()), lower.clone(), diff)
             })
             .collect::<Vec<_>>();
         let res = write_handle

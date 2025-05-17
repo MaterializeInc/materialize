@@ -84,6 +84,13 @@ impl<T: std::fmt::Display> std::fmt::Display for Overflowing<T> {
     }
 }
 
+impl<T: PartialEq<T>> PartialEq<T> for Overflowing<T> {
+    #[inline(always)]
+    fn eq(&self, other: &T) -> bool {
+        self.0.eq(other)
+    }
+}
+
 #[cfg(feature = "columnar")]
 mod columnar {
     use crate::overflowing::Overflowing;

@@ -751,7 +751,7 @@ impl<D: Ord> SinkState<D, Timestamp> {
         let append_data = self
             .to_append
             .iter()
-            .filter_map(|((k, t), d)| (t <= write_ts).then_some(((k, &()), t, d.into_inner())))
+            .filter_map(|((k, t), d)| (t <= write_ts).then_some(((k, &()), t, *d)))
             .collect();
         Some((Antichain::from_elem(write_ts.step_forward()), append_data))
     }

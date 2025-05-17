@@ -489,11 +489,7 @@ impl<T: TryIntoStateUpdateKind, U: ApplyUpdate<T>> PersistHandle<T, U> {
 
         let updates = updates.into_iter().map(|(kind, diff)| {
             let kind: StateUpdateKindJson = kind.into();
-            (
-                (Into::<SourceData>::into(kind), ()),
-                commit_ts,
-                diff.into_inner(),
-            )
+            ((Into::<SourceData>::into(kind), ()), commit_ts, diff)
         });
         let next_upper = commit_ts.step_forward();
         let res = self
@@ -1313,7 +1309,7 @@ impl UnopenedPersistCatalogState {
                 .await;
             let write_handle = catalog
                 .persist_client
-                .open_writer::<SourceData, (), Timestamp, i64>(
+                .open_writer::<SourceData, (), Timestamp, StorageDiff>(
                     catalog.write_handle.shard_id(),
                     Arc::new(desc()),
                     Arc::new(UnitSchema::default()),

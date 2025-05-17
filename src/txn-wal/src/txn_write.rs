@@ -29,6 +29,7 @@ use timely::order::TotalOrder;
 use timely::progress::{Antichain, Timestamp};
 use tracing::debug;
 
+use crate::TxnDiff;
 use crate::proto::ProtoIdBatch;
 use crate::txns::{Tidy, TxnsHandle};
 
@@ -253,7 +254,7 @@ where
                 let mut txns_updates = txn_batches_updates
                     .iter()
                     .flat_map(|(_, batch_updates)| batch_updates.iter().map(|(_, updates)| updates))
-                    .map(|(key, val)| ((key, val), &commit_ts, 1))
+                    .map(|(key, val)| ((key, val), &commit_ts, TxnDiff::ONE))
                     .collect::<Vec<_>>();
                 let apply_is_empty = txns_updates.is_empty();
 
@@ -272,7 +273,7 @@ where
                 txns_updates.extend(
                     filtered_retractions
                         .iter()
-                        .map(|(key, val)| ((key, val), &commit_ts, -1)),
+                        .map(|(key, val)| ((key, val), &commit_ts, TxnDiff::MINUS_ONE)),
                 );
 
                 let res = crate::small_caa(

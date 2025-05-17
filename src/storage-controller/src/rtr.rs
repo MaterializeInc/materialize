@@ -188,7 +188,7 @@ async fn decode_remap_data_until_geq_external_frontier<
                     let update = pending_remap.peek_mut()?;
                     if PartialOrder::less_equal(&update.0.0, &binding_ts) {
                         let Reverse((_, from_ts, diff)) = PeekMut::pop(update);
-                        Some((from_ts, diff))
+                        Some((from_ts, diff.into_inner()))
                     } else {
                         None
                     }

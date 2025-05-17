@@ -1065,8 +1065,8 @@ mod write {
             let ok_updates = self.corrections.ok.updates_before(&desc.upper);
             let err_updates = self.corrections.err.updates_before(&desc.upper);
 
-            let oks = ok_updates.map(|(d, t, r)| ((SourceData(Ok(d)), ()), t, r.into_inner()));
-            let errs = err_updates.map(|(d, t, r)| ((SourceData(Err(d)), ()), t, r.into_inner()));
+            let oks = ok_updates.map(|(d, t, r)| ((SourceData(Ok(d)), ()), t, r));
+            let errs = err_updates.map(|(d, t, r)| ((SourceData(Err(d)), ()), t, r));
             let mut updates = oks.chain(errs).peekable();
 
             // Don't write empty batches.
