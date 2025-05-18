@@ -13,7 +13,7 @@ use mz_ore::metrics::MetricsRegistry;
 
 #[cfg(all(feature = "jemalloc", not(miri)))]
 #[global_allocator]
-static ALLOC: tikv_jemallocator::Jemalloc = tikv_jemallocator::Jemalloc;
+static ALLOC: custom_alloc::Allocator = custom_alloc::Allocator;
 
 /// Registers metrics for the global allocator into the provided registry.
 ///
@@ -32,4 +32,25 @@ pub async fn register_metrics_into(_: &MetricsRegistry) {
 #[cfg(all(feature = "jemalloc", not(miri)))]
 pub async fn register_metrics_into(registry: &MetricsRegistry) {
     mz_prof::jemalloc::JemallocMetrics::register_into(registry).await;
+}
+
+#[cfg(all(feature = "jemalloc", not(miri)))]
+mod custom_alloc {
+    use std::alloc::{GlobalAlloc, Layout};
+    use tikv_jemallocator::Jemalloc;
+
+    pub struct Allocator;
+
+    unsafe impl GlobalAlloc for Allocator {
+        unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
+            if layout.size() > 1 << 40 {
+                panic!("attempt to allocate {} bytes", layout.size());
+            }
+            Jemalloc.alloc(layout)
+        }
+
+        unsafe fn dealloc(&self, ptr: *mut u8, layout: Layout) {
+            Jemalloc.dealloc(ptr, layout);
+        }
+    }
 }
