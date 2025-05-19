@@ -373,6 +373,8 @@ pub enum SqlServerSourcePurificationError {
         option_name: String,
         items: Vec<UnresolvedItemName>,
     },
+    #[error("found multiple primary keys for a table. constraints {constraint_names:?}")]
+    MultiplePrimaryKeys { constraint_names: Vec<Arc<str>> },
     #[error("column {schema_name}.{tbl_name}.{col_name} of type {col_type} is not supported")]
     UnsupportedColumn {
         schema_name: Arc<str>,
