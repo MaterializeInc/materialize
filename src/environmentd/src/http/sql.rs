@@ -568,6 +568,7 @@ pub enum SqlResult {
 impl SqlResult {
     /// Convert adapter Row results into the web row result format. Error if the row format does not
     /// match the expected descriptor.
+    // TODO(aljoscha): Bail when max_result_size is exceeded.
     fn rows(
         client: &mut SessionClient,
         mut sql_rows: Box<dyn RowIterator>,

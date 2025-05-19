@@ -332,16 +332,25 @@ where
                             (PeekResponse::Canceled, _) => PeekResponse::Canceled,
                             (_, PeekResponse::Error(e)) => PeekResponse::Error(e),
                             (PeekResponse::Error(e), _) => PeekResponse::Error(e),
-                            (PeekResponse::Rows(rows), PeekResponse::Stashed(batches))
-                            | (PeekResponse::Stashed(batches), PeekResponse::Rows(rows)) => {
-                                // By default we merge into an empty `PeekResponse::Rows`.
-                                if rows.entries() == 0 {
-                                    PeekResponse::Stashed(batches)
-                                } else {
-                                    mz_ore::soft_panic_or_log!(
-                                        "got both PeekResponse Stashed and Rows"
+                            (PeekResponse::Rows(rows), PeekResponse::Stashed(mut stashed))
+                            | (PeekResponse::Stashed(mut stashed), PeekResponse::Rows(rows)) => {
+                                tracing::info!(?stashed, ?rows, "merging!");
+                                let total_inlined_size = rows
+                                    .byte_len()
+                                    .saturating_add(stashed.inline_rows.byte_len());
+
+                                if total_inlined_size > usize::cast_from(self.max_result_size) {
+                                    // Note: We match on this specific error message in tests
+                                    // so it's important that nothing else returns the same
+                                    // string.
+                                    let err = format!(
+                                        "total result exceeds max size of {}",
+                                        ByteSize::b(self.max_result_size)
                                     );
-                                    PeekResponse::Error("internal error".to_string())
+                                    PeekResponse::Error(err)
+                                } else {
+                                    stashed.inline_rows.merge(&rows);
+                                    PeekResponse::Stashed(stashed)
                                 }
                             }
                             (PeekResponse::Rows(mut rows), PeekResponse::Rows(other)) => {
@@ -362,7 +371,7 @@ where
                                     PeekResponse::Rows(rows)
                                 }
                             }
-                            (PeekResponse::Stashed(batches), PeekResponse::Stashed(other)) => {
+                            (PeekResponse::Stashed(stashed), PeekResponse::Stashed(other)) => {
                                 // Deconstruct so we don't miss adding new
                                 // fields. We need to be careful about merging
                                 // everything!
@@ -371,27 +380,47 @@ where
                                     relation_desc: self_relation_desc,
                                     shard_id: self_shard_id,
                                     batches: mut self_batches,
-                                } = batches;
+                                    inline_rows: mut self_inline_rows,
+                                } = stashed;
                                 let StashedPeekResponse {
                                     num_rows: other_num_rows,
                                     relation_desc: other_relation_desc,
                                     shard_id: other_shard_id,
                                     batches: mut other_batches,
+                                    inline_rows: other_inline_rows,
                                 } = other;
 
                                 assert_eq!(self_shard_id, other_shard_id);
                                 assert_eq!(self_relation_desc, other_relation_desc);
 
-                                self_batches.append(&mut other_batches);
+                                let total_inlined_size = self_inline_rows
+                                    .byte_len()
+                                    .saturating_add(other_inline_rows.byte_len());
 
-                                let merged_response = StashedPeekResponse {
-                                    num_rows: self_num_rows + other_num_rows,
-                                    relation_desc: self_relation_desc,
-                                    shard_id: self_shard_id,
-                                    batches: self_batches,
-                                };
+                                if total_inlined_size > usize::cast_from(self.max_result_size) {
+                                    // Note: We match on this specific error message in tests
+                                    // so it's important that nothing else returns the same
+                                    // string.
+                                    let err = format!(
+                                        "total result exceeds max size of {}",
+                                        ByteSize::b(self.max_result_size)
+                                    );
+                                    PeekResponse::Error(err)
+                                } else {
+                                    self_inline_rows.merge(&other_inline_rows);
 
-                                PeekResponse::Stashed(merged_response)
+                                    self_batches.append(&mut other_batches);
+
+                                    let merged_response = StashedPeekResponse {
+                                        num_rows: self_num_rows + other_num_rows,
+                                        relation_desc: self_relation_desc,
+                                        shard_id: self_shard_id,
+                                        batches: self_batches,
+                                        inline_rows: self_inline_rows,
+                                    };
+
+                                    PeekResponse::Stashed(merged_response)
+                                }
                             }
                         };
                     }

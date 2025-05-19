@@ -64,6 +64,7 @@ message ProtoStashedPeekResponse {
   string shard_id = 2;
   repeated mz_persist_client.batch.ProtoBatch batches = 3;
   uint64 num_rows = 4;
+  mz_expr.row.collection.ProtoRowCollection inline_rows = 5;
 }
 
 message ProtoPeekResponse {

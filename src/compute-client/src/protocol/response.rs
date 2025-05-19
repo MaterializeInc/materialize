@@ -394,6 +394,12 @@ pub struct StashedPeekResponse {
     /// Batches of Rows, must be combined with reponses from other workers and
     /// consolidated before sending back via a client.
     pub batches: Vec<ProtoBatch>,
+    /// Rows that have not been uploaded to the stash, because their total size
+    /// did not go above the threshold for using the peek stash.
+    ///
+    /// We will have a mix of stashed responses and inline responses because the
+    /// result sizes across different workers can and will vary.
+    pub inline_rows: RowCollection,
 }
 
 impl StashedPeekResponse {
@@ -437,6 +443,7 @@ impl RustType<ProtoStashedPeekResponse> for StashedPeekResponse {
             shard_id: self.shard_id.into_proto(),
             batches: self.batches.clone(),
             num_rows: self.num_rows.into_proto(),
+            inline_rows: Some(self.inline_rows.into_proto()),
         }
     }
 
@@ -452,6 +459,9 @@ impl RustType<ProtoStashedPeekResponse> for StashedPeekResponse {
             shard_id,
             batches: proto.batches,
             num_rows: proto.num_rows,
+            inline_rows: proto
+                .inline_rows
+                .into_rust_if_some("ProtoStashedPeekResponse::inline_rows")?,
         })
     }
 }
@@ -744,7 +754,7 @@ mod tests {
     /// Test to ensure the size of the `ComputeResponse` enum doesn't regress.
     #[mz_ore::test]
     fn test_compute_response_size() {
-        assert_eq!(std::mem::size_of::<ComputeResponse>(), 160);
+        assert_eq!(std::mem::size_of::<ComputeResponse>(), 232);
     }
 
     proptest! {

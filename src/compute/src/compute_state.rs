@@ -1841,6 +1841,7 @@ impl StashPeekResponse {
             relation_desc,
             shard_id,
             batches: vec![batch.into_transmittable_batch()],
+            inline_rows: RowCollection::new(vec![], &[]),
         };
         let result = PeekResponse::Stashed(stashed_response);
         Ok(result)
