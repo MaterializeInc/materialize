@@ -441,10 +441,11 @@ steps:
 
       - id: zippy-kafka-sources-azurite
         label: "Zippy Kafka Sources with :azure: blob store"
-        depends_on: build-aarch64
+        depends_on: build-x86_64
         timeout_in_minutes: 120
         agents:
-          queue: hetzner-aarch64-16cpu-32gb
+          # Azurite is rather slow, prevent timeouts by using dedicated CPUs
+          queue: hetzner-x86-64-dedi-16cpu-64gb
         plugins:
           - ./ci/plugins/mzcompose:
               composition: zippy
