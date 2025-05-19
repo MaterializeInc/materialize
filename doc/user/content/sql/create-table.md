@@ -1,6 +1,6 @@
 ---
 title: "CREATE TABLE"
-description: "`CREATE TABLE` creates a table that is persisted in durable storage."
+description: "Reference page for `CREATE TABLE`. `CREATE TABLE` creates a table that is persisted in durable storage."
 pagerank: 40
 menu:
   # This should also have a "non-content entry" under Reference, which is
@@ -9,49 +9,228 @@ menu:
     parent: 'commands'
 ---
 
-`CREATE TABLE` defines a table that is persisted in durable storage and can be
-written to, updated and seamlessly joined with other tables, views or sources.
+`CREATE TABLE` defines a table that is persisted in durable storage. In
+Materialize, you can create:
 
-Tables in Materialize are similar to tables in standard relational databases:
-they consist of rows and columns where the columns are fixed when the table is
-created but rows can be added to at will via [`INSERT`](../insert) statements.
+- User-populated tables. User-populated tables can be written to (i.e.,
+  [`INSERT`]/[`UPDATE`]/[`DELETE`]) by the user.
 
-{{< warning >}}
-At the moment, tables have many [known limitations](#known-limitations). In most
-situations, you should use [sources](/sql/create-source) instead.
-{{< /warning >}}
+- [Source-populated](/concepts/sources/) tables. Source-populated tables cannot
+  be written to by the user; they are populated through data ingestion from a
+  source.
 
-[//]: # "TODO(morsapaes) Bring back When to use a table? once there's more
-clarity around best practices."
+- Webhook-populated tables. Webhook-populated tables cannot be written to by the
+  user; they are populated through data posted to associated **public** webhook
+  endpoint, automatically created with the table creation.
+
+Tables can be joined with other tables, materialized views, and views. Tables in
+Materialize are similar to tables in standard relational databases: they consist
+of rows and columns where the columns are fixed when the table is created.
 
 ## Syntax
 
-{{< diagram "create-table.svg" >}}
+{{< tabs >}}
 
-### `col_option`
+{{< tab "User-populated tables" >}}
 
-{{< diagram "col-option.svg" >}}
+To create a table that users can write to (i.e., perform
+[`INSERT`](/sql/insert/)/[`UPDATE`](/sql/update/)/[`DELETE`](/sql/delete/)
+operations):
 
-Field | Use
-------|-----
-**TEMP** / **TEMPORARY** | Mark the table as [temporary](#temporary-tables).
-_table&lowbar;name_ | A name for the table.
-_col&lowbar;name_ | The name of the column to be created in the table.
-_col&lowbar;type_ | The data type of the column indicated by _col&lowbar;name_.
-**NOT NULL** | Do not allow the column to contain _NULL_ values. Columns without this constraint can contain _NULL_ values.
-*default_expr* | A default value to use for the column in an [`INSERT`](/sql/insert) statement if an explicit value is not provided. If not specified, `NULL` is assumed.
+```mzsql
+CREATE [TEMP|TEMPORARY] TABLE <table_name> (
+  <column_name> <column_type> [NOT NULL][DEFAULT <default_expr>]
+  [, ...]
+)
+[WITH (
+  PARTITION BY (<column_name> [, ...]) |
+  RETAIN HISTORY [=] FOR <duration>
+)]
+;
+```
 
-### `with_options`
+{{% yaml-table data="syntax_options/create_table/create_table_options_user_populated" %}}
 
-{{< diagram "with-options.svg" >}}
+{{</ tab >}}
 
-| Field                                    | Value               | Description                                                                                                                                                       |
-|------------------------------------------|---------------------| ----------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **PARTITION BY** _columns_               | `(ident [, ident]*)` | The key by which Materialize should internally partition this durable collection. See the [partitioning guide](/transform-data/patterns/partition-by/) for restrictions on valid values and other details.
-| **RETAIN HISTORY FOR** _retention_period_ | `interval`          | ***Private preview.** This option has known performance or stability issues and is under active development.* Duration for which Materialize retains historical data, which is useful to implement [durable subscriptions](/transform-data/patterns/durable-subscriptions/#history-retention-period). Accepts positive [interval](/sql/types/interval/) values (e.g. `'1hr'`). Default: `1s`.
+{{< tab "Source-populated tables (DB connector)" >}}
 
+To create a table from a [source](/sql/create-source/) connected (via native
+connector) to an external database system:
+
+{{< note >}}
+
+Users cannot write to source-populated tables; i.e., users cannot perform
+[`INSERT`](/sql/insert/)/[`UPDATE`](/sql/update/)/[`DELETE`](/sql/delete/)
+operations on source-populated tables.
+
+{{</ note >}}
+
+```mzsql
+CREATE TABLE <table_name> FROM SOURCE <source_name> (REFERENCE <ref_object>)
+[WITH (
+    TEXT COLUMNS (<fq_column_name> [, ...])
+  | EXCLUDE COLUMNS (<fq_column_name> [, ...])
+  | PARTITION BY (<column_name> [, ...])
+  [, ...]
+)]
+;
+```
+
+{{% yaml-table data="syntax_options/create_table/create_table_options_source_populated_db" %}}
+
+<a name="supported-db-source-types" ></a>
+
+{{< tabs >}}
+{{< tab "Supported MySQL types">}}
+
+{{< include-md file="shared-content/mysql-supported-types.md" >}}
+
+Replicating tables that contain **unsupported data types** is
+possible via the [`TEXT COLUMNS` option](#text-columns) for the
+following types:
+
+<ul style="column-count: 1">
+<li><code>enum</code></li>
+<li><code>year</code></li>
+</ul>
+
+The specified columns will be treated as `text`, and will thus not offer the
+expected MySQL type features. For any unsupported data types not listed above,
+use the [`EXCLUDE COLUMNS`](#exclude-columns) option.
+
+{{</ tab >}}
+
+{{< tab "Supported PostgreSQL types">}}
+
+{{< include-md file="shared-content/postgres-supported-types.md" >}}
+
+Replicating tables that contain **unsupported data types** is possible via the
+[`TEXT COLUMNS` option](#text-columns). When decoded as `text`, the specified
+columns will not have the expected PostgreSQL type features. For example:
+
+* [`enum`]: When decoded as `text`, the resulting `text` values will
+  not observe the implicit ordering of the original PostgreSQL `enum`; instead,
+  Materialize will sort the values as `text`.
+
+* [`money`]: When decoded as `text`, the resulting `text` value
+  cannot be cast back to `numeric` since PostgreSQL adds typical currency
+  formatting to the output.
+
+[`enum`]: https://www.postgresql.org/docs/current/datatype-enum.html
+[`money`]: https://www.postgresql.org/docs/current/datatype-money.html
+
+{{</ tab >}}
+
+{{< tab "Supported SQL Server types">}}
+
+{{< include-md file="shared-content/sql-server-supported-types.md" >}}
+
+Replicating tables that contain **unsupported data types** is possible via the
+[`EXCLUDE COLUMNS`
+option](#exclude-columns) for the
+following types:
+
+<ul style="column-count: 3">
+<li><code>text</code></li>
+<li><code>ntext</code></li>
+<li><code>image</code></li>
+<li><code>varchar(max)</code></li>
+<li><code>nvarchar(max)</code></li>
+<li><code>varbinary(max)</code></li>
+</ul>
+
+**Timestamp rounding**
+
+{{< include-md file="shared-content/sql-server-timestamp-rounding.md" >}}
+
+{{</ tab >}}
+{{</ tabs >}}
+
+See also [Materialize SQL data types](/sql/types/).
+
+{{</ tab >}}
+
+{{< tab "Source-populated tables (via Kafka/Redpanda)" >}}
+
+To create a table from a source, where the source is connected to
+Kafka/Redpanda:
+
+{{< note >}}
+
+Users cannot write to source-populated tables; i.e., users cannot perform
+[`INSERT`](/sql/insert/)/[`UPDATE`](/sql/update/)/[`DELETE`](/sql/delete/)
+operations on source-populated tables.
+
+{{</  note >}}
+
+```mzsql
+CREATE TABLE <table_name> FROM SOURCE <source_name> [(REFERENCE <ref_object>)]
+[FORMAT <format> | KEY FORMAT <format> VALUE FORMAT <format>]
+   -- <format> can be:
+   -- AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION <conn_name>
+   --     [KEY STRATEGY
+   --       INLINE <schema> | ID <schema_registry_id> | LATEST ]
+   --     [VALUE STRATEGY
+   --       INLINE <schema> | ID <schema_registry_id> | LATEST ]
+  -- | PROTOBUF USING CONFLUENT SCHEMA REGISTRY CONNECTION <conn_name>
+  -- | PROTOBUF MESSAGE <msg_name> USING SCHEMA <encoded_schema>
+  -- | CSV WITH <num> COLUMNS DELIMITED BY <char>
+  -- | JSON | TEXT | BYTES
+]
+[INCLUDE
+    KEY [AS <name>] | PARTITION [AS <name>] | OFFSET [AS <name>]
+  | TIMESTAMP [AS <name>] | HEADERS [AS <name>] | HEADER <key_name> AS <name> [BYTES]
+  [, ...]
+]
+[ENVELOPE
+    NONE  --  Default.  Uses the append-only envelope.
+  | DEBEZIUM
+  | UPSERT [(VALUE DECODING ERRORS = INLINE [AS name])]
+]
+;
+```
+
+{{% yaml-table data="syntax_options/create_table/create_table_options_source_populated_kafka"
+%}}
+
+
+{{</ tab >}}
+
+{{< tab "Webhook-populated table" >}}
+
+To create a table (and the associated webhook endpoint) that is populated with
+data POSTed to the associated webhook endpoint. The created table has, by
+default, 1 column `body`.  You can specify `INCLUDE <header_option>` to include
+header columns.
+
+```mzsql
+CREATE TABLE <table_name>
+FROM WEBHOOK
+  BODY FORMAT <TEXT | JSON [ARRAY] | BYTES>
+  [ INCLUDE <header_option> ]
+  -- <header_option> can be:
+  -- INCLUDE HEADER <header_name> AS <col_name> [BYTES] [, ... ]
+  -- | INCLUDE HEADERS [ ([NOT] <header_name> [, [NOT] <header_name> [, ...] ]) ]
+  [ CHECK (
+      [ WITH (<BODY|HEADERS|SECRET <secret_name>> [AS <alias>] [BYTES] [, ... ]) ]
+      <check_expression>
+  ) ]
+```
+
+{{% yaml-table data="syntax_options/create_table/create_table_options_webhook_populated"
+%}}
+
+{{</ tab >}}
+
+{{</ tabs >}}
 
 ## Details
+
+### Table names and column names
+
+Names for tables and column(s) must follow the [naming
+guidelines](/sql/identifiers/#naming-restrictions).
 
 ### Known limitations
 
@@ -72,6 +251,15 @@ connections. They are always created in the special `mz_temp` schema.
 
 Temporary tables may depend upon other temporary database objects, but non-temporary
 tables may not depend on temporary objects.
+
+### Required privileges
+
+The privileges required to execute the command are:
+
+- `CREATE` privileges on the containing schema.
+- `USAGE` privileges on all types used in the table definition.
+- `USAGE` privileges on the schemas that all types in the statement are
+  contained in.
 
 ## Examples
 
@@ -98,15 +286,13 @@ a          true      int4
 b          false     text
 ```
 
-## Privileges
-
-The privileges required to execute this statement are:
-
-- `CREATE` privileges on the containing schema.
-- `USAGE` privileges on all types used in the table definition.
-- `USAGE` privileges on the schemas that all types in the statement are contained in.
 
 ## Related pages
 
 - [`INSERT`](../insert)
+- [`CREATE SOURCE`](/sql/create-source/)
 - [`DROP TABLE`](../drop-table)
+
+[`INSERT`]: /sql/insert/
+[`UPDATE`]: /sql/update/
+[`DELETE`]: /sql/delete/
