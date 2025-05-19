@@ -60,10 +60,10 @@ toml==0.10.2
 twine==6.1.0
 types-Markdown==3.8.0.20250415
 types-prettytable==3.4.2.6
-types-psutil==7.0.0.20250401
+types-psutil==7.0.0.20250516
 types-PyMYSQL==1.1.0.20250516
 types-PyYAML==6.0.12.20250402
-types-requests==2.32.0.20250328
+types-requests==2.32.0.20250515
 types-setuptools==80.4.0.20250511
 types-toml==0.10.8.20240310
 typing-extensions==4.13.2
