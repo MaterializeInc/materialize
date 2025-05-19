@@ -314,10 +314,7 @@ SELECT
     c.max_length as col_max_length,
     c.precision as col_precision,
     c.scale as col_scale,
-    CASE
-        WHEN tc.constraint_type = 'PRIMARY KEY' THEN tc.constraint_name
-        ELSE NULL
-    END AS col_primary_key_constraint
+    tc.constraint_name AS col_primary_key_constraint
 FROM sys.tables t
 JOIN sys.schemas s ON t.schema_id = s.schema_id
 JOIN sys.columns c ON t.object_id = c.object_id
