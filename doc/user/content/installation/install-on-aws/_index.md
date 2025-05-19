@@ -283,9 +283,9 @@ components:
    EOF
    ```
 
-   Starting in v0.3.0, the Materialize on AWS Terraform module also deploys, by
-   default, Network Load Balancers (NLBs) for each Materialize instance (i.e.,
-   the
+   - **Starting in v0.3.0**, the Materialize on AWS Terraform module also
+   deploys, by default, Network Load Balancers (NLBs) for each Materialize
+   instance (i.e., the
    [`create_nlb`](https://github.com/MaterializeInc/terraform-aws-materialize?tab=readme-ov-file#input_materialize_instances)
    flag defaults to `true`).  The NLBs, by default, are configured to be
     internal (i.e., the
@@ -294,9 +294,14 @@ components:
    https://github.com/MaterializeInc/terraform-aws-materialize?tab=readme-ov-file#input_materialize_instances)
    for the Materialize instance configuration options.
 
-   Starting in v0.4.0, a self-signed `ClusterIssuer` is deployed by default. The
-   `ClusterIssuer` is deployed on subsequent after the `cert-manager` is
-   running.
+   - **Starting in v0.4.0**, a self-signed `ClusterIssuer` is deployed by
+   default. The `ClusterIssuer` is deployed on subsequent after the
+   `cert-manager` is running.
+
+   - **Starting in v0.4.6**, you can specify addition configuration options via
+     `environmentd_extra_args`.
+
+     {{% include-md file="shared-content/materialized_extra_args.md" %}}
 
    {{< tip >}}
    {{% self-managed/aws-terraform-upgrade-notes %}}
