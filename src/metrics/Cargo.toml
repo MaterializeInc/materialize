@@ -15,7 +15,7 @@ libc = "0.2.172"
 mz-dyncfg = { path = "../dyncfg" }
 mz-ore = { path = "../ore", features = ["metrics"] }
 paste = "1.0"
-prometheus = { version = "0.13.4", default-features = false }
+prometheus = { version = "0.14.0", default-features = false }
 thiserror = "2.0.12"
 tokio = { version = "1.44.1", features = ["sync", "time"] }
 tokio-util = { version = "0.7.15" }

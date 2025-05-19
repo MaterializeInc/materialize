@@ -15,7 +15,7 @@ http = "1.2.0"
 mz-ore = { path = "../ore", features = ["tracing"] }
 mz-proto = { path = "../proto" }
 mz-repr = { path = "../repr" }
-prometheus = { version = "0.13.4", default-features = false }
+prometheus = { version = "0.14.0", default-features = false }
 proptest = { version = "1.6.0", default-features = false, features = ["std"] }
 proptest-derive = { version = "0.5.1", features = ["boxed_union"] }
 prost = { version = "0.13.5", features = ["no-recursion-limit"] }
