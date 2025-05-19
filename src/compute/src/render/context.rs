@@ -47,7 +47,7 @@ use crate::compute_state::{ComputeState, HydrationEvent};
 use crate::extensions::arrange::{KeyCollection, MzArrange, MzArrangeCore};
 use crate::render::errors::ErrorLogger;
 use crate::render::{LinearJoinSpec, RenderTimestamp};
-use crate::row_spine::{DatumSeq, RowRowBuilder};
+use crate::row_spine::{DatumSeq, RowRowBuilderColumn};
 use crate::typedefs::{
     ErrAgent, ErrBatcher, ErrBuilder, ErrEnter, ErrSpine, MzTimestamp, RowRowAgent, RowRowEnter,
     RowRowSpine,
@@ -962,7 +962,7 @@ where
                 },
             );
         let oks = oks
-            .mz_arrange_core::<_, Col2ValBatcher<_, _,_, _>, RowRowBuilder<_, _>, RowRowSpine<_, _>>(
+            .mz_arrange_core::<_, Col2ValBatcher<_, _,_, _>, RowRowBuilderColumn<_, _>, RowRowSpine<_, _>>(
                 ExchangeCore::<ColumnBuilder<_>, _>::new_core(columnar_exchange::<Row, Row, S::Timestamp, Diff>),name
             );
         (oks, errs.as_collection())

@@ -22,7 +22,7 @@ use differential_dataflow::trace::{BatchReader, Cursor};
 use mz_compute_types::plan::LirId;
 use mz_ore::cast::CastFrom;
 use mz_repr::{Datum, Diff, GlobalId, Timestamp};
-use mz_timely_util::containers::{Column, ColumnBuilder, ProvidedBuilder};
+use mz_timely_util::containers::{Column, ColumnBuilder, ProvidedBuilder, Vec2Col2ValBatcher};
 use mz_timely_util::replay::MzReplay;
 use timely::dataflow::channels::pact::Pipeline;
 use timely::dataflow::operators::Operator;
@@ -39,7 +39,7 @@ use crate::logging::{
     ComputeLog, EventQueue, LogCollection, LogVariant, OutputSessionColumnar, OutputSessionVec,
     PermutedRowPacker, SharedLoggingState, Update,
 };
-use crate::row_spine::{RowRowBatcher, RowRowBuilder};
+use crate::row_spine::RowRowBuilderColumn;
 use crate::typedefs::RowRowSpine;
 
 /// Type alias for a logger of compute events.
@@ -567,7 +567,7 @@ pub(super) fn construct<S: Scheduler + 'static, G: Scope<Timestamp = Timestamp>>
             let variant = LogVariant::Compute(variant);
             if config.index_logs.contains_key(&variant) {
                 let trace = collection
-                    .mz_arrange::<RowRowBatcher<_, _>, RowRowBuilder<_, _>, RowRowSpine<_, _>>(
+                    .mz_arrange::<Vec2Col2ValBatcher<_, _, _, _>, RowRowBuilderColumn<_, _>, RowRowSpine<_, _>>(
                         &format!("Arrange {variant:?}"),
                     )
                     .trace;
