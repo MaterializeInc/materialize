@@ -297,7 +297,8 @@ steps:
         depends_on: build-aarch64
         timeout_in_minutes: 180
         agents:
-          queue: hetzner-aarch64-8cpu-16gb
+          # Larger agent because Azurite is slow
+          queue: hetzner-aarch64-16cpu-32gb
         plugins:
           - ./ci/plugins/mzcompose:
               composition: testdrive
@@ -463,7 +464,7 @@ steps:
               args: [--scenario=KafkaParallelInsert, --transaction-isolation=serializable, --actions=10000, --max-execution-time=30m]
 
       - id: zippy-kafka-parallel-insert-azurite
-        label: "Zippy Kafka Parallel Insert with :azurite: blob store"
+        label: "Zippy Kafka Parallel Insert with :azure: blob store"
         depends_on: build-aarch64
         timeout_in_minutes: 120
         agents:
