@@ -2429,6 +2429,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "deranged"
+version = "0.4.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9c9e6a11ca8224451684bc0d7d5a7adbf8f2fd6887261a1cfc3c0432f9d4068e"
+dependencies = [
+ "powerfmt",
+ "quickcheck",
+ "serde",
+]
+
+[[package]]
 name = "derivative"
 version = "2.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -10973,7 +10984,7 @@ version = "0.3.37"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "35e7868883861bd0e56d9ac6efcaaca0d6d5d82a2a7ec8209ff492c07cf37b21"
 dependencies = [
- "deranged",
+ "deranged 0.3.11",
  "itoa",
  "js-sys",
  "libc",
@@ -12556,7 +12567,7 @@ dependencies = [
  "csv-async",
  "darling_core",
  "dec",
- "deranged",
+ "deranged 0.4.0",
  "digest",
  "either",
  "event-listener 5.4.0",
