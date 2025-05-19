@@ -1361,13 +1361,6 @@ pub static STATEMENT_LOGGING_SAMPLE_RATE: VarDefinition = VarDefinition::new_laz
     true,
 ).with_constraint(&NUMERIC_BOUNDED_0_1_INCLUSIVE);
 
-pub static ARRANGEMENT_EXERT_PROPORTIONALITY: VarDefinition = VarDefinition::new(
-    "arrangement_exert_proportionality",
-    value!(u32; 16),
-    "Value that controls how much merge effort to exert on arrangements.",
-    false,
-);
-
 pub static ENABLE_DEFAULT_CONNECTION_VALIDATION: VarDefinition = VarDefinition::new(
     "enable_default_connection_validation",
     value!(bool; true),

@@ -62,6 +62,12 @@ pub const TIMELY_ZERO_COPY_LIMIT: Config<Option<usize>> = Config::new(
     "Optional limit of the zero copy allocator in allocations (timely dataflow).",
 );
 
+pub const ARRANGEMENT_EXERT_PROPORTIONALITY: Config<u32> = Config::new(
+    "arrangement_exert_proportionality",
+    16,
+    "Value that controls how much merge effort to exert on arrangements.",
+);
+
 /// Adds the full set of all controller `Config`s.
 pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
     configs
@@ -73,4 +79,5 @@ pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
         .add(&ENABLE_TIMELY_ZERO_COPY)
         .add(&ENABLE_TIMELY_ZERO_COPY_LGALLOC)
         .add(&TIMELY_ZERO_COPY_LIMIT)
+        .add(&ARRANGEMENT_EXERT_PROPORTIONALITY)
 }

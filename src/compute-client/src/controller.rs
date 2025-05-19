@@ -44,7 +44,8 @@ use mz_compute_types::config::ComputeReplicaConfig;
 use mz_compute_types::dataflows::DataflowDescription;
 use mz_compute_types::dyncfgs::COMPUTE_REPLICA_EXPIRATION_OFFSET;
 use mz_controller_types::dyncfgs::{
-    ENABLE_TIMELY_ZERO_COPY, ENABLE_TIMELY_ZERO_COPY_LGALLOC, TIMELY_ZERO_COPY_LIMIT,
+    ARRANGEMENT_EXERT_PROPORTIONALITY, ENABLE_TIMELY_ZERO_COPY, ENABLE_TIMELY_ZERO_COPY_LGALLOC,
+    TIMELY_ZERO_COPY_LIMIT,
 };
 use mz_dyncfg::ConfigSet;
 use mz_expr::RowSetFinishing;
@@ -384,11 +385,6 @@ impl<T: ComputeControllerTimestamp> ComputeController<T> {
         Ok(ids)
     }
 
-    /// Set the `arrangement_exert_proportionality` value to be passed to new replicas.
-    pub fn set_arrangement_exert_proportionality(&mut self, value: u32) {
-        self.initial_config.arrangement_exert_proportionality = value;
-    }
-
     /// Set the `enable_zero_copy` value to be passed to new replicas.
     pub fn set_enable_zero_copy(&mut self, value: bool) {
         self.initial_config.enable_zero_copy = value;
@@ -661,6 +657,9 @@ where
     pub fn update_configuration(&mut self, config_params: ComputeParameters) {
         // Apply dyncfg updates.
         config_params.dyncfg_updates.apply(&self.dyncfg);
+
+        self.initial_config.arrangement_exert_proportionality =
+            ARRANGEMENT_EXERT_PROPORTIONALITY.get(&self.dyncfg);
 
         // Update zero-copy settings.
         self.set_enable_zero_copy(ENABLE_TIMELY_ZERO_COPY.get(&self.dyncfg));

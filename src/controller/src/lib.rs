@@ -203,10 +203,6 @@ pub struct Controller<T: ComputeControllerTimestamp = mz_repr::Timestamp> {
 }
 
 impl<T: ComputeControllerTimestamp> Controller<T> {
-    pub fn set_arrangement_exert_proportionality(&mut self, value: u32) {
-        self.compute.set_arrangement_exert_proportionality(value);
-    }
-
     /// Start sinking the compute controller's introspection data into storage.
     ///
     /// This method should be called once the introspection collections have been registered with
