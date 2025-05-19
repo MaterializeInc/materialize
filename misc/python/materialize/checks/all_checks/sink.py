@@ -1203,7 +1203,7 @@ class AlterSinkPgSource(Check):
                 true
 
                 # Still needs to sleep some before the sink is updated
-                $ sleep-is-probably-flaky-i-have-justified-my-need-with-a-comment duration="10s"
+                $ sleep-is-probably-flaky-i-have-justified-my-need-with-a-comment duration="20s"
 
                 $ postgres-execute connection=postgres://postgres:postgres@postgres
                 INSERT INTO pg_table2 VALUES (2);
@@ -1228,7 +1228,7 @@ class AlterSinkPgSource(Check):
                 true
 
                 # Still needs to sleep some before the sink is updated
-                $ sleep-is-probably-flaky-i-have-justified-my-need-with-a-comment duration="10s"
+                $ sleep-is-probably-flaky-i-have-justified-my-need-with-a-comment duration="20s"
 
                 $ postgres-execute connection=postgres://postgres:postgres@postgres
                 INSERT INTO pg_table3 VALUES (3);
