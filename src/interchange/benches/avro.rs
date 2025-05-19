@@ -6,8 +6,10 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+use std::hint::black_box;
+
 use byteorder::{NetworkEndian, WriteBytesExt};
-use criterion::{Criterion, Throughput, black_box};
+use criterion::{Criterion, Throughput};
 use mz_avro::types::Value as AvroValue;
 use mz_interchange::avro::{Decoder, parse_schema};
 use mz_ore::cast::CastFrom;
