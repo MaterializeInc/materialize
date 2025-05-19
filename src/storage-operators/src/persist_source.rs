@@ -232,28 +232,30 @@ where
     // upper. Render a dataflow operator that passes through the input and
     // translates the progress frontiers as necessary.
     let (stream, txns_tokens) = match metadata.txns_shard {
-        Some(txns_shard) => txns_progress::<SourceData, (), Timestamp, i64, _, TxnsCodecRow, _, _>(
-            stream,
-            &source_id.to_string(),
-            txns_ctx,
-            worker_dyncfgs,
-            move || {
-                let (c, l) = (
-                    Arc::clone(&persist_clients),
-                    metadata.persist_location.clone(),
-                );
-                async move { c.open(l).await.expect("location is valid") }
-            },
-            txns_shard,
-            metadata.data_shard,
-            as_of
-                .expect("as_of is provided for table sources")
-                .into_option()
-                .expect("shard is not closed"),
-            until,
-            Arc::new(metadata.relation_desc),
-            Arc::new(UnitSchema),
-        ),
+        Some(txns_shard) => {
+            txns_progress::<SourceData, (), Timestamp, Diff, _, TxnsCodecRow, _, _>(
+                stream,
+                &source_id.to_string(),
+                txns_ctx,
+                worker_dyncfgs,
+                move || {
+                    let (c, l) = (
+                        Arc::clone(&persist_clients),
+                        metadata.persist_location.clone(),
+                    );
+                    async move { c.open(l).await.expect("location is valid") }
+                },
+                txns_shard,
+                metadata.data_shard,
+                as_of
+                    .expect("as_of is provided for table sources")
+                    .into_option()
+                    .expect("shard is not closed"),
+                until,
+                Arc::new(metadata.relation_desc),
+                Arc::new(UnitSchema),
+            )
+        }
         None => (stream, vec![]),
     };
     tokens.extend(txns_tokens);
