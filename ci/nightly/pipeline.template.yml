@@ -40,6 +40,32 @@ steps:
         agents:
           queue: builder-linux-aarch64-mem
 
+      - id: build-x86_64-asan
+        label: ":bazel: Build x86_64 (ASan)"
+        command: bin/ci-builder run min bin/pyactivate -m ci.test.build
+        inputs:
+          - "*"
+        artifact_paths: bazel-explain.log
+        depends_on: []
+        timeout_in_minutes: 60
+        agents:
+          queue: builder-linux-x86_64
+        env:
+          CI_SANITIZER: address
+
+      - id: build-aarch64-asan
+        label: ":bazel: Build aarch64 (ASan)"
+        command: bin/ci-builder run min bin/pyactivate -m ci.test.build
+        inputs:
+          - "*"
+        artifact_paths: bazel-explain.log
+        depends_on: []
+        timeout_in_minutes: 60
+        agents:
+          queue: builder-linux-aarch64-mem
+        env:
+          CI_SANITIZER: address
+
   - group: Linters
     key: linters
     steps:
