@@ -405,21 +405,19 @@ components:
    EOF
    ```
 
-   Starting in v0.3.0, the Materialize on GCP Terraform module also deploys, by
-   default,
+   - **Starting in v0.3.0**, the Materialize on GCP Terraform module also
+     deploys, by default:
 
-   - [Load
-    balancers](https://github.com/MaterializeInc/terraform-google-materialize?tab=readme-ov-file#input_materialize_instances)
-    for Materialize instances (i.e., the
-    [`create_load_balancer`](https://github.com/MaterializeInc/terraform-google-materialize?tab=readme-ov-file#input_materialize_instances)
-    flag defaults to `true`). The load balancers, by default, are configured to
-    be internal (i.e., the
-    [`internal_load_balancer`](https://github.com/MaterializeInc/terraform-google-materialize?tab=readme-ov-file#input_materialize_instances)
-    flag defaults to `true`).
+     - [Load balancers](https://github.com/MaterializeInc/terraform-google-materialize?tab=readme-ov-file#input_materialize_instances) for Materialize instances (i.e., the [`create_load_balancer`](https://github.com/MaterializeInc/terraform-google-materialize?tab=readme-ov-file#input_materialize_instances) flag defaults to `true`). The load balancers, by default, are configured  to be internal (i.e., the [`internal_load_balancer`](https://github.com/MaterializeInc/terraform-google-materialize?tab=readme-ov-file#input_materialize_instances) flag defaults to `true`).
 
-   - A self-signed `ClusterIssuer`. The `ClusterIssuer` is deployed  after the
+     - A self-signed `ClusterIssuer`. The `ClusterIssuer` is deployed  after the
      `cert-manager` is deployed and running.
 
+
+   - **Starting in v0.4.3**, you can specify addition configuration options via
+     `environmentd_extra_args`.
+
+     {{% include-md file="shared-content/materialized_extra_args.md" %}}
    {{< tip >}}
    {{% self-managed/gcp-terraform-upgrade-notes %}}
 
