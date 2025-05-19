@@ -25,7 +25,7 @@ use differential_dataflow::trace::Description;
 use mz_build_info::{BuildInfo, build_info};
 use mz_dyncfg::ConfigSet;
 use mz_ore::{instrument, soft_assert_or_log};
-use mz_persist::location::{Blob, Consensus, ExternalError};
+use mz_persist::location::{Blob, Consensus, ExternalError, SeqNo};
 use mz_persist_types::schema::SchemaId;
 use mz_persist_types::{Codec, Codec64, Opaque};
 use mz_proto::{IntoRustIfSome, ProtoType};
@@ -731,7 +731,8 @@ impl PersistClient {
 
         Ok(Cursor {
             consolidator,
-            _lease: Lease::default(),
+            // WIP: What to do about this?
+            _lease: Lease::new(SeqNo(0)),
             read_schemas,
         })
     }
