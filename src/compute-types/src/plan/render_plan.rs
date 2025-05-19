@@ -942,7 +942,10 @@ impl<'a, T> std::fmt::Display for RenderPlanExprHumanizer<'a, T> {
                     ReducePlan::Collation(..) => write!(f, "Collated Multi-GroupAggregate"),
                 }
             }
-            TopK { input, top_k_plan } => {
+            TopK {
+                input: _,
+                top_k_plan,
+            } => {
                 match top_k_plan {
                     TopKPlan::MonotonicTop1(..) => write!(f, "Monotonic Top1")?,
                     TopKPlan::MonotonicTopK(MonotonicTopKPlan {
@@ -957,7 +960,8 @@ impl<'a, T> std::fmt::Display for RenderPlanExprHumanizer<'a, T> {
                     }
                     TopKPlan::Basic(..) => write!(f, "Non-monotonic TopK")?,
                 };
-                write!(f, " {input}")
+
+                Ok(())
             }
             Negate { input: _ } => write!(f, "Negate Diffs"),
             Threshold {
