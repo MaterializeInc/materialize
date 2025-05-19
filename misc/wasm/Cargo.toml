@@ -3,6 +3,7 @@ resolver = "2"
 members = [
     "src/sql-lexer-wasm",
     "src/sql-pretty-wasm",
+    "src/function-test",
 ]
 
 [workspace.package]
