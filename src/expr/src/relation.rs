@@ -3687,6 +3687,18 @@ impl<L> RowSetFinishing<L> {
             && self.offset == 0
             && self.project.iter().copied().eq(0..arity)
     }
+    /// True if the finishing does not require an ORDER BY or projection.
+    ///
+    /// Technically, projections would be streamable, but we don't want to get
+    /// into the business of projecting rows in that path for now.
+    ///
+    /// `LIMIT` and `OFFSET` _are_ streamable: without an explicit ordering we
+    /// will skip an arbitrary bag of elements and return the first arbitrary
+    /// elements in the remaining bag. The result semantics are still correct
+    /// but maybe surprising for some users.
+    pub fn is_streamable(&self, arity: usize) -> bool {
+        self.order_by.is_empty() && self.project.iter().copied().eq(0..arity)
+    }
 }
 
 impl RowSetFinishing {

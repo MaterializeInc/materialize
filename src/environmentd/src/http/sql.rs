@@ -10,7 +10,7 @@
 use std::borrow::Cow;
 use std::collections::BTreeMap;
 use std::net::{IpAddr, SocketAddr};
-use std::pin::pin;
+use std::pin::{Pin, pin};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -21,8 +21,8 @@ use axum::extract::ws::{CloseFrame, Message, WebSocket};
 use axum::extract::{State, WebSocketUpgrade};
 use axum::response::IntoResponse;
 use axum::{Extension, Json};
-use futures::Future;
 use futures::future::BoxFuture;
+use futures::{Future, Stream, StreamExt};
 
 use http::StatusCode;
 use itertools::izip;
@@ -568,6 +568,7 @@ pub enum SqlResult {
 impl SqlResult {
     /// Convert adapter Row results into the web row result format. Error if the row format does not
     /// match the expected descriptor.
+    // TODO(aljoscha): Bail when max_result_size is exceeded.
     fn rows(
         client: &mut SessionClient,
         mut sql_rows: Box<dyn RowIterator>,
@@ -1052,6 +1053,57 @@ where
     }
 }
 
+/// Awaits and returns exactly one result from a stream of results.
+async fn await_single_streaming_rows<S, R>(
+    sender: &mut S,
+    client: &mut SessionClient,
+    mut rows_stream: Pin<Box<dyn Stream<Item = R> + Send + Sync>>,
+) -> Result<R, Error>
+where
+    S: ResultSender,
+{
+    let rows = loop {
+        tokio::select! {
+            notice = client.session().recv_notice(), if S::SUPPORTS_STREAMING_NOTICES => {
+                sender.emit_streaming_notices(vec![notice]).await?;
+            }
+            e = sender.connection_error() => return Err(e),
+            r = &mut rows_stream.next() => {
+                match r {
+                    Some(r) => break r,
+                    None => {
+                    return Err(Error::Adapter(AdapterError::Internal("row result stream exhausted".to_string())));
+                    }
+                }
+            },
+        }
+    };
+
+    let next_rows = rows_stream.next().await;
+
+    match next_rows {
+        Some(_rows) => {
+            // Getting more than one result from the stream indicates that this
+            // is a large result, which we cannot handle.
+            //
+            // TODO(aljoscha): We could try and be smarter here. Try and
+            // materialize the result and bail after it exceeds the configured
+            // max result size. Or we could thread through the information that
+            // this endpoint cannot handle streaming results: right now, the
+            // adapter doesn't know what it is returning the results to and what
+            // the receiver's (us in, that case) capabilitites are.
+            return Err(Error::Adapter(AdapterError::ResultSize(
+                "result exceeds max size".to_string(),
+            )));
+        }
+        None => {
+            // All good, the stream is exhausted after a single result.
+        }
+    }
+
+    Ok(rows)
+}
+
 async fn send_and_retire<S: ResultSender>(
     res: StatementResult,
     client: &mut SessionClient,
@@ -1462,12 +1514,12 @@ async fn execute_stmt<S: ResultSender>(
             )
             .into()
         }
-        ExecuteResponse::SendingRows {
-            future: mut rows,
+        ExecuteResponse::SendingRowsStreaming {
+            rows,
             instance_id,
             strategy,
         } => {
-            let rows = match await_rows(sender, client, &mut rows).await? {
+            let rows = match await_single_streaming_rows(sender, client, rows).await? {
                 PeekResponseUnary::Rows(rows) => {
                     RecordFirstRowStream::record(
                         execute_started,
