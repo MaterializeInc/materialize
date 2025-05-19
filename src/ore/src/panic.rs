@@ -37,7 +37,8 @@ use tokio::task_local;
 use crate::iter::IteratorExt;
 
 thread_local! {
-    static CATCHING_UNWIND: RefCell<bool> = const { RefCell::new(false) };
+    /// Keeps track of how many `catch_unwind` calls we are inside.
+    static CATCHING_UNWIND: RefCell<usize> = const { RefCell::new(0) };
 }
 
 #[cfg(feature = "async")]
@@ -91,7 +92,7 @@ pub fn install_enhanced_handler() {
         let catching_unwind_async = CATCHING_UNWIND_ASYNC.try_with(|v| *v).unwrap_or(false);
         #[cfg(not(feature = "async"))]
         let catching_unwind_async = false;
-        if catching_unwind || catching_unwind_async {
+        if catching_unwind != 0 || catching_unwind_async {
             return;
         }
 
@@ -211,10 +212,10 @@ where
     F: FnOnce() -> R + UnwindSafe,
 {
     CATCHING_UNWIND.with(|catching_unwind| {
-        *catching_unwind.borrow_mut() = true;
+        *catching_unwind.borrow_mut() += 1;
         #[allow(clippy::disallowed_methods)]
         let res = panic::catch_unwind(f);
-        *catching_unwind.borrow_mut() = false;
+        *catching_unwind.borrow_mut() -= 1;
         res
     })
 }
