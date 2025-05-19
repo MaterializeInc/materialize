@@ -63,6 +63,8 @@ selects.config_setting_group(
     match_all = [
         "@platforms//os:linux",
         ":use_xlang_lto",
+        # ASAN doesn't support being built when cross language LTO is enabled.
+        ":sanitizer_none",
     ],
     visibility = ["//visibility:public"],
 )
