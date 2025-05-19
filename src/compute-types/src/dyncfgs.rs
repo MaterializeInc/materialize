@@ -234,7 +234,7 @@ pub const COMPUTE_LOGICAL_BACKPRESSURE_INFLIGHT_SLACK: Config<Duration> = Config
 /// ones that would be small enough for a regular inline compute response.
 pub const FORCE_ENABLE_PEEK_RESPONSE_STASH: Config<bool> = Config::new(
     "compute_force_enable_peek_response_stash",
-    true,
+    false,
     "Whether to force-enable the peek response stash, for sending back large
     peek responses.",
 );
@@ -245,7 +245,17 @@ pub const FORCE_ENABLE_PEEK_RESPONSE_STASH: Config<bool> = Config::new(
 pub const ENABLE_PEEK_RESPONSE_STASH: Config<bool> = Config::new(
     "compute_enable_peek_response_stash",
     true,
-    "Whether to enable the peek response stash, for sending back large peek responses. Will only be used for results that exceed max_result_size.",
+    "Whether to enable the peek response stash, for sending back large peek responses. Will only be used for results that exceed compute_peek_response_stash_threshold.",
+);
+
+/// The threshold for peek response size above which we should use the peek
+/// response stash. Only used if the peek response stash is enabled _and_ if the
+/// query is "streamable" (roughly: doesn't have an ORDER BY).
+pub const PEEK_RESPONSE_STASH_THRESHOLD_BYTES: Config<usize> = Config::new(
+    "compute_peek_response_stash_threshold_bytes",
+    // 1024 * 1024 * 300, /* 300mb */
+    50, /* 50, for testing */
+    "The threshold above which to use the peek response stash, for sending back large peek responses.",
 );
 
 /// Adds the full set of all compute `Config`s.
@@ -280,4 +290,5 @@ pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
         .add(&COMPUTE_LOGICAL_BACKPRESSURE_INFLIGHT_SLACK)
         .add(&ENABLE_PEEK_RESPONSE_STASH)
         .add(&FORCE_ENABLE_PEEK_RESPONSE_STASH)
+        .add(&PEEK_RESPONSE_STASH_THRESHOLD_BYTES)
 }

@@ -9,7 +9,6 @@ use std::any::Any;
 use std::cell::RefCell;
 use std::cmp::Ordering;
 use std::collections::{BTreeMap, BTreeSet};
-use std::fmt::Display;
 use std::num::{NonZeroI64, NonZeroU64, NonZeroUsize};
 use std::rc::Rc;
 use std::sync::{Arc, mpsc};
@@ -30,7 +29,10 @@ use mz_compute_client::protocol::response::{
     StashedPeekResponse, StatusResponse, SubscribeResponse,
 };
 use mz_compute_types::dataflows::DataflowDescription;
-use mz_compute_types::dyncfgs::{ENABLE_PEEK_RESPONSE_STASH, FORCE_ENABLE_PEEK_RESPONSE_STASH};
+use mz_compute_types::dyncfgs::{
+    ENABLE_PEEK_RESPONSE_STASH, FORCE_ENABLE_PEEK_RESPONSE_STASH,
+    PEEK_RESPONSE_STASH_THRESHOLD_BYTES,
+};
 use mz_compute_types::plan::LirId;
 use mz_compute_types::plan::render_plan::RenderPlan;
 use mz_dyncfg::ConfigSet;
@@ -904,7 +906,12 @@ impl<'a, A: Allocate + 'static> ActiveComputeState<'a, A> {
                 let peek_stash_force_enabled =
                     FORCE_ENABLE_PEEK_RESPONSE_STASH.get(&self.compute_state.worker_config);
 
-                if peek_stash_force_enabled {
+                let peek_stash_eligible = peek
+                    .peek
+                    .finishing
+                    .is_streamable(peek.peek.result_desc.arity());
+
+                if peek_stash_force_enabled && peek_stash_eligible {
                     let _span =
                         span!(parent: &peek.span, Level::DEBUG, "process_stashed_peek").entered();
                     let stash_task = StashPeekResponse::start_upload(
@@ -921,41 +928,41 @@ impl<'a, A: Allocate + 'static> ActiveComputeState<'a, A> {
                         .insert(peek.peek.uuid, stash_task);
                     return;
                 } else {
-                    let result = peek.read_result(upper, self.compute_state.max_result_size);
+                    let peek_stash_enabled =
+                        ENABLE_PEEK_RESPONSE_STASH.get(&self.compute_state.worker_config);
+
+                    let peek_stash_threshold_bytes =
+                        PEEK_RESPONSE_STASH_THRESHOLD_BYTES.get(&self.compute_state.worker_config);
+
+                    let result = peek.read_result(
+                        upper,
+                        self.compute_state.max_result_size,
+                        peek_stash_enabled && peek_stash_eligible,
+                        peek_stash_threshold_bytes,
+                    );
                     let response = match result {
                         Ok(rows) => PeekResponse::Rows(RowCollection::new(
                             rows,
                             &peek.peek.finishing.order_by,
                         )),
-                        Err(InternalPeekError::Query(err)) => PeekResponse::Error(err),
-                        Err(err @ InternalPeekError::ResultSize { .. }) => {
-                            let peek_stash_enabled =
-                                ENABLE_PEEK_RESPONSE_STASH.get(&self.compute_state.worker_config);
-                            if peek
-                                .peek
-                                .finishing
-                                .is_streamable(peek.peek.result_desc.arity())
-                                && peek_stash_enabled
-                            {
-                                let _span =
-                                    span!(parent: &peek.span, Level::DEBUG, "process_stashed_peek")
-                                        .entered();
-                                let stash_task = StashPeekResponse::start_upload(
-                                    Arc::clone(&self.compute_state.persist_clients),
-                                    self.compute_state
-                                        .peek_stash_persist_location
-                                        .as_ref()
-                                        .expect("missing persist location for peek responses"),
-                                    peek.peek.clone(),
-                                    peek.trace_bundle.clone(),
-                                );
+                        Err(InternalPeekError::Error(err)) => PeekResponse::Error(err),
+                        Err(InternalPeekError::UsePeekStash) => {
+                            let _span =
+                                span!(parent: &peek.span, Level::DEBUG, "process_stashed_peek")
+                                    .entered();
+                            let stash_task = StashPeekResponse::start_upload(
+                                Arc::clone(&self.compute_state.persist_clients),
                                 self.compute_state
-                                    .pending_peek_responses
-                                    .insert(peek.peek.uuid, stash_task);
-                                return;
-                            } else {
-                                PeekResponse::Error(format!("{err}"))
-                            }
+                                    .peek_stash_persist_location
+                                    .as_ref()
+                                    .expect("missing persist location for peek responses"),
+                                peek.peek.clone(),
+                                peek.trace_bundle.clone(),
+                            );
+                            self.compute_state
+                                .pending_peek_responses
+                                .insert(peek.peek.uuid, stash_task);
+                            return;
                         }
                     };
                     Some(response)
@@ -1413,34 +1420,21 @@ impl PersistPeek {
     }
 }
 
-/// Errors that occur while processing a peek, on the cluster. We handle
-/// `ResultSize` errors separately, based on configuration, so need this bit of
-/// structure in those errors. Most of the errors occuring in processing a peek
-/// are just forwarded to the client, though.
+/// Errors that occur while processing a peek, on the cluster. We use this for
+/// real errors but also to tell callers that execution should fall back to
+/// using the peek stash for sending back results.
 enum InternalPeekError {
     /// An error arising from "within" while processing the query, which should
     /// be forwarded as is to the client as an error.
-    Query(String),
-    /// The result size is too large. Can be forwared to the client.
-    ResultSize { max_result_size: usize },
+    Error(String),
+    /// The result size is above the threshold and the peek is eligible for
+    /// using the peek stash.
+    UsePeekStash,
 }
 
 impl From<String> for InternalPeekError {
     fn from(error: String) -> Self {
-        Self::Query(error)
-    }
-}
-
-impl Display for InternalPeekError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            InternalPeekError::Query(err) => write!(f, "{}", err),
-            InternalPeekError::ResultSize { max_result_size } => write!(
-                f,
-                "result exceeds max size of {}",
-                ByteSize::b(u64::cast_from(*max_result_size))
-            ),
-        }
+        Self::Error(error)
     }
 }
 
@@ -1495,6 +1489,8 @@ impl IndexPeek {
         &mut self,
         upper: &mut Antichain<Timestamp>,
         max_result_size: u64,
+        peek_stash_eligible: bool,
+        peek_stash_threshold_bytes: usize,
     ) -> Result<Vec<(Row, std::num::NonZero<usize>)>, InternalPeekError> {
         self.trace_bundle.oks_mut().read_upper(upper);
         assert!(!upper.less_equal(&self.peek.timestamp));
@@ -1509,6 +1505,8 @@ impl IndexPeek {
             &mut self.peek,
             self.trace_bundle.oks_mut(),
             max_result_size,
+            peek_stash_eligible,
+            peek_stash_threshold_bytes,
         );
 
         result
@@ -1559,6 +1557,8 @@ impl IndexPeek {
         peek: &mut Peek<Timestamp>,
         oks_handle: &mut Tr,
         max_result_size: u64,
+        peek_stash_eligible: bool,
+        peek_stash_threshold_bytes: usize,
     ) -> Result<Vec<(Row, NonZeroUsize)>, InternalPeekError>
     where
         for<'a> Tr: TraceReader<DiffGat<'a> = &'a Diff>,
@@ -1611,9 +1611,17 @@ impl IndexPeek {
             total_size = total_size
                 .saturating_add(row.byte_len())
                 .saturating_add(count_byte_size);
-            if total_size > max_result_size {
-                return Err(InternalPeekError::ResultSize { max_result_size });
+            if peek_stash_eligible && total_size > peek_stash_threshold_bytes {
+                return Err(InternalPeekError::UsePeekStash);
             }
+            if total_size > max_result_size {
+                return Err(format!(
+                    "result exceeds max size of {}",
+                    ByteSize::b(u64::cast_from(max_result_size))
+                )
+                .into());
+            }
+
             results.push((row, copies));
 
             // If we hold many more than `max_results` records, we can thin down
