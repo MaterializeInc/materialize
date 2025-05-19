@@ -74,9 +74,6 @@ skip = [
     { name = "toml_edit", version = "0.19.14" },
     { name = "winnow", version = "0.5.4" },
 
-    # tabled_derive and enum-as-inner
-    { name = "heck", version = "0.4.0" },
-
     # There are some crates in our dependency tree that have yet to upgrade to
     # `hyper 1.*`. As of now these are:
     #     * `aws-config`
@@ -131,8 +128,6 @@ skip = [
     # Used by tempfile
     { name = "linux-raw-sys", version = "0.9.2" },
     { name = "rustix", version = "0.38.44" },
-    # Used by ahash
-    { name = "zerocopy", version = "0.7.23" },
     # Used by axum
     { name = "tower", version = "0.4.13" },
     # Used by tracing-capture
@@ -157,6 +152,7 @@ skip = [
     { name = "dashmap", version = "5.5.3" },
     # Used by bindgen
     { name = "itertools", version = "0.12.1" },
+    { name = "itertools", version = "0.13.0" },
     # Used by pprof
     { name = "nix", version = "0.26.4" },
 ]
@@ -236,7 +232,6 @@ wrappers = [
     "findshlibs",
     "launchdarkly-server-sdk",
     "launchdarkly-server-sdk-evaluation",
-    "mysql_common",
     "prometheus",
     "proptest",
     "rayon-core",

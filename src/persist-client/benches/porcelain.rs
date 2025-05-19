@@ -7,10 +7,11 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+use std::hint::black_box;
 use std::sync::Arc;
 use std::time::Instant;
 
-use criterion::{Criterion, Throughput, black_box};
+use criterion::{Criterion, Throughput};
 use mz_ore::cast::{CastFrom, TryCastFrom};
 use mz_ore::task;
 use mz_persist::workload::DataGenerator;

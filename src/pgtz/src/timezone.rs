@@ -211,7 +211,7 @@ fn tokenize_timezone(value: &str) -> Result<Vec<TimeStrToken>, String> {
     // Toggles whether or not we should skip whitespace. This would be nicer to
     // do inline but ownership makes that annoying.
     let mut space_skip_mode = false;
-    for (i, chr) in value.chars().enumerate() {
+    for (i, chr) in value.char_indices() {
         // Stay in space skip mode iff already in it and element is space.
         if space_skip_mode && chr.is_ascii_whitespace() {
             continue;
