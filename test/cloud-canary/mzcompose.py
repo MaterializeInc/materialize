@@ -164,15 +164,23 @@ class Redpanda:
         cloud_cursor.close()
         cloud_conn.close()
 
-        result = self.cloud.patch(
-            f"clusters/{self.cluster_info['id']}",
-            {
-                "aws_private_link": {
-                    "enabled": True,
-                    "allowed_principals": [privatelink_principal],
-                }
-            },
-        )
+        # Redpanda API sometimes returns a 404 for a while, ignore
+        while True:
+            try:
+                result = self.cloud.patch(
+                    f"clusters/{self.cluster_info['id']}",
+                    {
+                        "aws_private_link": {
+                            "enabled": True,
+                            "allowed_principals": [privatelink_principal],
+                        }
+                    },
+                )
+            except ValueError as e:
+                print(f"Failure, retrying in 10s: {e}")
+                time.sleep(10)
+                continue
+            break
         self.cloud.wait(result)
 
     def delete(self):
