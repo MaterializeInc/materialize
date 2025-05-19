@@ -100,6 +100,7 @@ use futures::{StreamExt, future};
 use itertools::Itertools;
 use mz_ore::cast::CastFrom;
 use mz_ore::collections::HashMap;
+use mz_ore::vec::VecExt;
 use mz_persist_client::Diagnostics;
 use mz_persist_client::batch::{Batch, BatchBuilder, ProtoBatch};
 use mz_persist_client::cache::PersistClientCache;
@@ -115,14 +116,14 @@ use mz_timely_util::builder_async::{
     Event, OperatorBuilder as AsyncOperatorBuilder, PressOnDropButton,
 };
 use serde::{Deserialize, Serialize};
-use timely::PartialOrder;
 use timely::container::CapacityContainerBuilder;
 use timely::dataflow::channels::pact::{Exchange, Pipeline};
 use timely::dataflow::operators::{Broadcast, Capability, CapabilitySet, Inspect};
 use timely::dataflow::{Scope, Stream};
 use timely::progress::{Antichain, Timestamp};
+use timely::{Container, PartialOrder};
 use tokio::sync::Semaphore;
-use tracing::trace;
+use tracing::{info, trace};
 
 use crate::metrics::source::SourcePersistSinkMetrics;
 use crate::storage_state::StorageState;
@@ -1100,15 +1101,13 @@ where
             // `upper` line up.
             done_batches.sort_by(|a, b| {
                 if PartialOrder::less_than(a, b) {
-                    Ordering::Less
-                } else if PartialOrder::less_than(b, a) {
                     Ordering::Greater
+                } else if PartialOrder::less_than(b, a) {
+                    Ordering::Less
                 } else {
                     Ordering::Equal
                 }
             });
-
-            done_batches.reverse();
 
             let mut done_batches_iter = done_batches.iter();
 
@@ -1118,7 +1117,7 @@ where
 
             let batch_upper = first_batch_description.1.clone();
 
-            let batch_lower = if let Some(last_batch_description) = done_batches_iter.last() {
+            let mut batch_lower = if let Some(last_batch_description) = done_batches_iter.last() {
                 last_batch_description.0.clone()
             } else {
                 first_batch_description.0.clone()
@@ -1128,242 +1127,227 @@ where
             let mut batch_metrics: Vec<BatchMetrics> = vec![];
 
             for batch_metadata in done_batches.drain(..) {
-                let batch = in_flight_batches.remove(&batch_metadata).unwrap_or_default();
-                batches.append(&mut std::mem::replace(&mut vec![], batch.finished));
+                in_flight_descriptions.remove(&batch_metadata);
+                let mut batch = in_flight_batches.remove(&batch_metadata).unwrap_or_default();
+                batches.append(&mut batch.finished);
                 batch_metrics.push(batch.batch_metrics);
             }
 
             let mut to_append = batches.iter_mut().map(|b| &mut b.batch).collect::<Vec<_>>();
 
-            let result = {
-                let maybe_err = if *read_only_rx.borrow() {
+            while to_append.len() > 0 {
+                let result = {
+                    let maybe_err = if *read_only_rx.borrow() {
 
-                    // We have to wait for either us coming out of read-only
-                    // mode or someone else applying a write that covers our
-                    // batch.
-                    //
-                    // If we didn't wait for the latter here, and just go
-                    // around the loop again, we might miss a moment where
-                    // _we_ have to write down a batch. For example when our
-                    // input frontier advances to a state where we can
-                    // write, and the read-write instance sees the same
-                    // update but then crashes before it can append a batch.
+                        // We have to wait for either us coming out of read-only
+                        // mode or someone else applying a write that covers our
+                        // batch.
+                        //
+                        // If we didn't wait for the latter here, and just go
+                        // around the loop again, we might miss a moment where
+                        // _we_ have to write down a batch. For example when our
+                        // input frontier advances to a state where we can
+                        // write, and the read-write instance sees the same
+                        // update but then crashes before it can append a batch.
 
-                    let maybe_err = loop {
-                        if collection_id.is_user() {
-                            tracing::debug!(
-                                %worker_id,
-                                %collection_id,
-                                %shard_id,
-                                ?batch_lower,
-                                ?batch_upper,
-                                ?current_upper,
-                                "persist_sink is in read-only mode, waiting until we come out of it or the shard upper advances"
-                            );
-                        }
-
-                        // We don't try to be smart here, and for example
-                        // use `wait_for_upper_past()`. We'd have to use a
-                        // select!, which would require cancel safety of
-                        // `wait_for_upper_past()`, which it doesn't
-                        // advertise.
-                        let _ = tokio::time::timeout(Duration::from_secs(1), read_only_rx.changed()).await;
-
-                        if !*read_only_rx.borrow() {
-                            if collection_id.is_user() {
-                                tracing::debug!(
+                        let maybe_err = loop {
+                                tracing::info!(
                                     %worker_id,
                                     %collection_id,
                                     %shard_id,
                                     ?batch_lower,
                                     ?batch_upper,
                                     ?current_upper,
-                                    "persist_sink has come out of read-only mode"
+                                    "persist_sink is in read-only mode, waiting until we come out of it or the shard upper advances"
                                 );
+
+                            // We don't try to be smart here, and for example
+                            // use `wait_for_upper_past()`. We'd have to use a
+                            // select!, which would require cancel safety of
+                            // `wait_for_upper_past()`, which it doesn't
+                            // advertise.
+                            let _ = tokio::time::timeout(Duration::from_secs(1), read_only_rx.changed()).await;
+
+                            if !*read_only_rx.borrow() {
+                                    tracing::debug!(
+                                        "persist_sink has come out of read-only mode"
+                                    );
+
+                                // It's okay to write now.
+                                break Ok(());
                             }
 
-                            // It's okay to write now.
-                            break Ok(());
-                        }
+                            let current_upper = write.fetch_recent_upper().await;
 
-                        let current_upper = write.fetch_recent_upper().await;
+                            if PartialOrder::less_than(&batch_upper, current_upper) {
+                                // We synthesize an `UpperMismatch` so that we can go
+                                // through the same logic below for trimming down our
+                                // batches.
+                                //
+                                // Notably, we are not trying to be smart, and teach the
+                                // write operator about read-only mode. Writing down
+                                // those batches does not append anything to the persist
+                                // shard, and it would be a hassle to figure out in the
+                                // write workers how to trim down batches in read-only
+                                // mode, when the shard upper advances.
+                                //
+                                // Right here, in the logic below, we have all we need
+                                // for figuring out how to trim our batches.
 
-                        if PartialOrder::less_than(&batch_upper, current_upper) {
-                            // We synthesize an `UpperMismatch` so that we can go
-                            // through the same logic below for trimming down our
-                            // batches.
-                            //
-                            // Notably, we are not trying to be smart, and teach the
-                            // write operator about read-only mode. Writing down
-                            // those batches does not append anything to the persist
-                            // shard, and it would be a hassle to figure out in the
-                            // write workers how to trim down batches in read-only
-                            // mode, when the shard upper advances.
-                            //
-                            // Right here, in the logic below, we have all we need
-                            // for figuring out how to trim our batches.
+                                if collection_id.is_user() {
+                                    tracing::info!(
+                                        %worker_id,
+                                        %collection_id,
+                                        %shard_id,
+                                        ?batch_lower,
+                                        ?batch_upper,
+                                        ?current_upper,
+                                        "persist_sink not appending in read-only mode"
+                                    );
+                                }
 
-                            if collection_id.is_user() {
-                                tracing::debug!(
-                                    %worker_id,
-                                    %collection_id,
-                                    %shard_id,
-                                    ?batch_lower,
-                                    ?batch_upper,
-                                    ?current_upper,
-                                    "persist_sink not appending in read-only mode"
+                                break Err(UpperMismatch {
+                                    current: current_upper.clone(),
+                                    expected: batch_lower.clone()}
                                 );
                             }
+                        };
 
-                            break Err(UpperMismatch {
-                                current: current_upper.clone(),
-                                expected: batch_lower.clone()}
-                            );
-                        }
+                        maybe_err
+                    } else {
+                        // It's okay to proceed with the write.
+                        Ok(())
                     };
 
-                    maybe_err
-                } else {
-                    // It's okay to proceed with the write.
-                    Ok(())
+                    match maybe_err {
+                        Ok(()) => {
+                            info!("attempting to write to persist.");
+                            let _permit = busy_signal.acquire().await;
+
+                            write.compare_and_append_batch(
+                                &mut to_append[..],
+                                batch_lower.clone(),
+                                batch_upper.clone(),
+                            )
+                            .await
+                            .expect("Invalid usage")
+                        },
+                        Err(e) => {
+                            // We forward the synthesize error message, so that
+                            // we go though the batch cleanup logic below.
+                            Err(e)
+                        }
+                    }
                 };
 
-                match maybe_err {
+                info!("batch write result {:?}", result);
+
+                // These metrics are independent of whether it was _us_ or
+                // _someone_ that managed to commit a batch that advanced the
+                // upper.
+                source_statistics.update_snapshot_committed(&batch_upper);
+                source_statistics.update_rehydration_latency_ms(&batch_upper);
+                metrics
+                    .progress
+                    .set(mz_persist_client::metrics::encode_ts_metric(&batch_upper));
+
+                if collection_id.is_user() {
+                    info!(
+                        "persist_sink {collection_id}/{shard_id}: \
+                            append result for batch ({:?} -> {:?}): {:?}",
+                        batch_lower,
+                        batch_upper,
+                        result
+                    );
+                }
+
+                match result {
                     Ok(()) => {
-                        let _permit = busy_signal.acquire().await;
-
-                        write.compare_and_append_batch(
-                            &mut to_append[..],
-                            batch_lower.clone(),
-                            batch_upper.clone(),
-                        )
-                        .await
-                        .expect("Invalid usage")
-                    },
-                    Err(e) => {
-                        // We forward the synthesize error message, so that
-                        // we go though the batch cleanup logic below.
-                        Err(e)
-                    }
-                }
-            };
-
-
-            // These metrics are independent of whether it was _us_ or
-            // _someone_ that managed to commit a batch that advanced the
-            // upper.
-            source_statistics.update_snapshot_committed(&batch_upper);
-            source_statistics.update_rehydration_latency_ms(&batch_upper);
-            metrics
-                .progress
-                .set(mz_persist_client::metrics::encode_ts_metric(&batch_upper));
-
-            if collection_id.is_user() {
-                trace!(
-                    "persist_sink {collection_id}/{shard_id}: \
-                        append result for batch ({:?} -> {:?}): {:?}",
-                    batch_lower,
-                    batch_upper,
-                    result
-                );
-            }
-
-            match result {
-                Ok(()) => {
-                    // Only update these metrics when we know that _we_ were
-                    // successful.
-                    if let Some(batch_metrics) = batch_metrics.drain(..).reduce(|mut l, r| {l.add_assign(&r); l}) {
-                        source_statistics
-                            .inc_updates_committed_by(batch_metrics.inserts + batch_metrics.retractions);
-                        // FIXME(ptravers): we should increment by the total number of batchese in the stored batch
-                        // to match prior behaviour.
-                        metrics.processed_batches.inc();
-                        metrics.row_inserts.inc_by(batch_metrics.inserts);
-                        metrics.row_retractions.inc_by(batch_metrics.retractions);
-                        metrics.error_inserts.inc_by(batch_metrics.error_inserts);
-                        metrics
-                            .error_retractions
-                            .inc_by(batch_metrics.error_retractions);
-                    }
-
-                    current_upper.borrow_mut().clone_from(&batch_upper);
-                    upper_cap_set.downgrade(current_upper.borrow().iter());
-                }
-                Err(mismatch) => {
-                    // We tried to do a non-contiguous append, that won't work.
-                    if PartialOrder::less_than(&mismatch.current, &batch_lower) {
-                        // Best-effort attempt to delete unneeded batches.
-                        future::join_all(batches.into_iter().map(|b| b.batch.delete())).await;
-
-                        // We always bail when this happens, regardless of
-                        // `bail_on_concurrent_modification`.
-                        tracing::warn!(
-                            "persist_sink({}): invalid upper! \
-                                Tried to append batch ({:?} -> {:?}) but upper \
-                                is {:?}. This is surpising and likely indicates \
-                                a bug in the persist sink, but we'll restart the \
-                                dataflow and try again.",
-                            collection_id, batch_lower, batch_upper, mismatch.current,
-                        );
-                        anyhow::bail!("collection concurrently modified. Ingestion dataflow will be restarted");
-                    } else if PartialOrder::less_than(&mismatch.current, &batch_upper) {
-                        // The shard's upper was ahead of our batch's lower
-                        // but not ahead of our upper. Cut down the
-                        // description by advancing its lower to the current
-                        // shard upper and try again. IMPORTANT: We can only
-                        // advance the lower, meaning we cut updates away,
-                        // we must not "extend" the batch by changing to a
-                        // lower that is not beyond the current lower. This
-                        // invariant is checked by the first if branch: if
-                        // `!(current_upper < lower)` then it holds that
-                        // `lower <= current_upper`.
-
-                        // First, construct a new batch description with the
-                        // lower advanced to the current shard upper.
-                        let new_batch_lower = mismatch.current.clone();
-                        let new_done_batch_metadata = (new_batch_lower.clone(), batch_upper.clone());
-
-                        // Re-add the new batch to the list of batches to
-                        // process.
-                        done_batches.push(new_done_batch_metadata.clone());
-
-                        // Retain any batches that are still in advance of
-                        // the new lower, and delete any batches that are
-                        // not.
-                        //
-                        // Temporary measure: this bookkeeping is made
-                        // possible by the fact that each batch only
-                        // contains data at a single timestamp, even though
-                        // it might declare a larger lower or upper. In the
-                        // future, we'll want to use persist's `append` API
-                        // and let persist handle the truncation internally.
-                        let new_batch_set = in_flight_batches.entry(new_done_batch_metadata).or_default();
-                        let mut batch_delete_futures = vec![];
-                        for batch in batches {
-                            if new_batch_lower.less_equal(&batch.data_ts) {
-                                new_batch_set.finished.push(batch);
-                            } else {
-                                batch_delete_futures.push(batch.batch.delete());
-                            }
+                        // Only update these metrics when we know that _we_ were
+                        // successful.
+                        info!("wrote batch down succesfully for lower = {batch_lower:?} upper = {batch_upper:?} previous upper = {current_upper:?} metrics {batch_metrics:?}");
+                        if let Some(batch_metrics) = batch_metrics.drain(..).reduce(|mut l, r| {l.add_assign(&r); l}) {
+                            source_statistics
+                                .inc_updates_committed_by(batch_metrics.inserts + batch_metrics.retractions);
+                            // FIXME(ptravers): we should increment by the total number of batches in the stored batch
+                            // to match prior behaviour.
+                            metrics.processed_batches.inc();
+                            metrics.row_inserts.inc_by(batch_metrics.inserts);
+                            metrics.row_retractions.inc_by(batch_metrics.retractions);
+                            metrics.error_inserts.inc_by(batch_metrics.error_inserts);
+                            metrics
+                                .error_retractions
+                                .inc_by(batch_metrics.error_retractions);
                         }
 
-                        // Best-effort attempt to delete unneeded batches.
-                        future::join_all(batch_delete_futures).await;
-                    } else {
-                        // Best-effort attempt to delete unneeded batches.
-                        future::join_all(batches.into_iter().map(|b| b.batch.delete())).await;
+                        to_append.clear();
+                        current_upper.borrow_mut().clone_from(&batch_upper);
+                        upper_cap_set.downgrade(current_upper.borrow().iter());
                     }
+                    Err(mismatch) => {
+                        // We tried to do a non-contiguous append, that won't work.
+                        if PartialOrder::less_than(&mismatch.current, &batch_lower) {
+                            // Best-effort attempt to delete unneeded batches.
+                            future::join_all(batches.into_iter().map(|b| b.batch.delete())).await;
 
-                    if bail_on_concurrent_modification {
-                        tracing::warn!(
-                            "persist_sink({}): invalid upper! \
-                                Tried to append batch ({:?} -> {:?}) but upper \
-                                is {:?}. This is not a problem, it just means \
-                                someone else was faster than us. We will try \
-                                again with a new batch description.",
-                            collection_id, batch_lower, batch_upper, mismatch.current,
-                        );
-                        anyhow::bail!("collection concurrently modified. Ingestion dataflow will be restarted");
+                            // We always bail when this happens, regardless of
+                            // `bail_on_concurrent_modification`.
+                            tracing::warn!(
+                                "persist_sink({}): invalid upper! \
+                                    Tried to append batch ({:?} -> {:?}) but upper \
+                                    is {:?}. This is surpising and likely indicates \
+                                    a bug in the persist sink, but we'll restart the \
+                                    dataflow and try again.",
+                                collection_id, batch_lower, batch_upper, mismatch.current,
+                            );
+                            anyhow::bail!("collection concurrently modified. Ingestion dataflow will be restarted");
+                        } else if PartialOrder::less_than(&mismatch.current, &batch_upper) {
+                            // The shard's upper was ahead of our batch's lower
+                            // but not ahead of our upper. Cut down the
+                            // description by advancing its lower to the current
+                            // shard upper and try again. IMPORTANT: We can only
+                            // advance the lower, meaning we cut updates away,
+                            // we must not "extend" the batch by changing to a
+                            // lower that is not beyond the current lower. This
+                            // invariant is checked by the first if branch: if
+                            // `!(current_upper < lower)` then it holds that
+                            // `lower <= current_upper`.
+
+                            // Retain any batches that are still in advance of
+                            // the new lower, and delete any batches that are
+                            // not.
+                            let mut batch_delete_futures = vec![];
+                            for batch in batches.drain_filter_swapping(|batch| !mismatch.current.less_equal(&batch.data_ts)) {
+                                batch_delete_futures.push(batch.batch.delete());
+                            }
+
+                            batch_lower = mismatch.current.clone();
+                            to_append = batches.iter_mut()
+                                .sorted_by(|l, r| Ord::cmp(&l.data_ts, &r.data_ts))
+                                .map(|batch| &mut batch.batch).collect::<Vec<_>>();
+
+                            // Best-effort attempt to delete unneeded batches.
+                            future::join_all(batch_delete_futures).await;
+                            continue;
+                        } else {
+                            // Best-effort attempt to delete unneeded batches.
+                            future::join_all(batches.into_iter().map(|b| b.batch.delete())).await;
+                            current_upper.replace(mismatch.current.clone());
+                        }
+
+                        if bail_on_concurrent_modification {
+                            tracing::warn!(
+                                "persist_sink({}): invalid upper! \
+                                    Tried to append batch ({:?} -> {:?}) but upper \
+                                    is {:?}. This is not a problem, it just means \
+                                    someone else was faster than us. We will try \
+                                    again with a new batch description.",
+                                collection_id, batch_lower, batch_upper, mismatch.current,
+                            );
+                            anyhow::bail!("collection concurrently modified. Ingestion dataflow will be restarted");
+                        }
+
+                        break;
                     }
                 }
             }
