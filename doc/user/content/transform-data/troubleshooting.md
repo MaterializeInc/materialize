@@ -282,7 +282,7 @@ A larger size cluster will provision more memory and CPU resources.
 {{< public-preview />}}
 
 You can [`EXPLAIN`](/sql/explain-plan/) a query to see how it will be run as a
-dataflow. In particular, `EXPLAIN PHYSICAL PLAN` will show the concrete, fully
+dataflow. In particular, `EXPLAIN PHYSICAL PLAN` (the default) will show the concrete, fully
 optimized plan that Materialize will run. That plan is written in our "low-level
 intermediate representation" (LIR).
 
@@ -354,7 +354,6 @@ SELECT
     mo.name AS name,
     mo.global_id AS global_id,
     mlm.lir_id,
-    mlm.parent_lir_id,
     REPEAT(' ', mlm.nesting * 2) || mlm.operator AS operator,
     ( -- Subquery to extract the duration of operators in the id range
         SELECT SUM(elapsed_ns)/1000 * '1 microsecond'::INTERVAL
@@ -368,14 +367,26 @@ SELECT
     ) as count
     FROM mz_introspection.mz_lir_mapping mlm
     JOIN mz_introspection.mz_mappable_objects mo ON (mlm.global_id = mo.global_id)
-GROUP BY 1, 2, 3, 4, 5, 6, 7
+    WHERE mo.name like '%wins_by_item'
+GROUP BY 1, 2, 3, 4, 5, 6
 ORDER BY mo.global_id, lir_id DESC;
 ```
 
+Note that we filter based on the name of the index, not the view.
 The query produces results similar to the following (your specific numbers will
 vary):
 
-{{< yaml-table data="query_attribution_computation_time_output" >}}
+<!-- this table has non-breaking spaces in the `operator` column for formatting -->
+|             name                | global_id | lir_id |         operator          |    duration     | count |
+| :------------------------------ | :-------- | :----- | :------------------------ | --------------: | ----: |
+| materialize.public.wins_by_item | u10       | 8      | Arrange                   | 00:00:00.0821   |   105 |
+| materialize.public.wins_by_item | u10       | 7      |   Stream u9               |                 |       |
+| materialize.public.wins_by_item | u9        | 6      | Non-monotonic TopK        | 00:00:12.59304  |  1250 |
+| materialize.public.wins_by_item | u9        | 5      |   Differential Join 2 » 4 | 00:00:00.741274 |   239 |
+| materialize.public.wins_by_item | u9        | 4      |     Arrange               | 00:00:00.346064 |   159 |
+| materialize.public.wins_by_item | u9        | 3      |       Stream u6           |                 |       |
+| materialize.public.wins_by_item | u9        | 2      |     Arrange               | 00:00:00.089684 |   121 |
+| materialize.public.wins_by_item | u9        | 1      |       Read u5             |                 |       |
 
 - The `duration` column shows that the `TopK` operator is where we spend the
   bulk of the query's computation time.
@@ -427,7 +438,7 @@ with
 [`mz_introspection.mz_arrangement_sizes`](/sql/system-catalog/mz_introspection/#mz_arrangement_sizes):
 
 ```sql
-  SELECT mo.name AS name, mo.global_id AS global_id, lir_id, parent_lir_id, REPEAT(' ', nesting * 2) || operator AS operator,
+  SELECT mo.name AS name, mo.global_id AS global_id, lir_id, REPEAT(' ', nesting * 2) || operator AS operator,
          pg_size_pretty(SUM(size)) AS size
     FROM           mz_introspection.mz_lir_mapping mlm
          LEFT JOIN mz_introspection.mz_arrangement_sizes mas
@@ -442,7 +453,18 @@ ORDER BY mo.global_id, lir_id DESC;
 The query produces results similar to the following (your specific numbers will
 vary):
 
-{{< yaml-table data="query_attribution_memory_usage_output" >}}
+<!-- this table has non-breaking spaces in the `operator` column for formatting -->
+
+|              name               | global_id | lir_id |         operator          |  size   |
+| :------------------------------ | :-------- | :----- | :------------------------ | ------: |
+| materialize.public.wins_by_item | u10       | 8      | Arrange                   | 715 kB  |
+| materialize.public.wins_by_item | u10       | 7      |   Stream u9               |         |
+| materialize.public.wins_by_item | u9        | 6      | Non-monotonic TopK        | 38 MB   |
+| materialize.public.wins_by_item | u9        | 5      |   Differential Join 2 » 4 |         |
+| materialize.public.wins_by_item | u9        | 4      |     Arrange               | 2185 kB |
+| materialize.public.wins_by_item | u9        | 3      |       Stream u6           |         |
+| materialize.public.wins_by_item | u9        | 2      |     Arrange               | 888 kB  |
+| materialize.public.wins_by_item | u9        | 1      |       Read u5             |         |
 
 The results show:
 
@@ -468,7 +490,7 @@ can attribute this to particular parts of our query using
 [`mz_introspection.mz_lir_mapping`](/sql/system-catalog/mz_introspection/#mz_lir_mapping):
 
 ```sql
-  SELECT mo.name AS name, mo.global_id AS global_id, lir_id, parent_lir_id, REPEAT(' ', nesting * 2) || operator AS operator,
+  SELECT mo.name AS name, mo.global_id AS global_id, lir_id, REPEAT(' ', nesting * 2) || operator AS operator,
          levels, to_cut, hint, pg_size_pretty(savings) AS savings
     FROM           mz_introspection.mz_lir_mapping mlm
               JOIN mz_introspection.mz_dataflow_global_ids mdgi
@@ -485,7 +507,16 @@ ORDER BY mo.global_id, lir_id DESC;
 Each `TopK` operator will have an [associated `DISTINCT ON INPUT GROUP SIZE`
 query hint](/transform-data/idiomatic-materialize-sql/top-k/#query-hints-1):
 
-{{< yaml-table data="query_attribution_topk_hints_output" >}}
+|              name               | global_id | lir_id |         operator          | levels | to_cut | hint | savings |
+| :------------------------------ | :-------- | :----- | :------------------------ | -----: | -----: | ---: | ------: |
+| materialize.public.wins_by_item | u10       | 8      | Arrange                   |        |        |      |         |
+| materialize.public.wins_by_item | u10       | 7      |   Stream u9               |        |        |      |         |
+| materialize.public.wins_by_item | u9        | 6      | Non-monotonic TopK        |      8 |      6 |  255 | 27 MB   |
+| materialize.public.wins_by_item | u9        | 5      |   Differential Join 2 » 4 |        |        |      |         |
+| materialize.public.wins_by_item | u9        | 4      |     Arrange               |        |        |      |         |
+| materialize.public.wins_by_item | u9        | 3      |       Stream u6           |        |        |      |         |
+| materialize.public.wins_by_item | u9        | 2      |     Arrange               |        |        |      |         |
+| materialize.public.wins_by_item | u9        | 1      |       Read u5             |        |        |      |         |
 
 Here, the hinted `DISTINCT ON INPUT GROUP SIZE` is `255.0`. We can re-create our view and index using the hint as follows:
 
@@ -513,7 +544,18 @@ hints because our `TopK` is now appropriately sized. But if we re-run our [query
 for attributing memory usage](#attributing-memory-usage), we can see that our
 `TopK` operator uses a third of the memory it was using before:
 
-{{< yaml-table data="query_attribution_memory_usage_w_hint_output" >}}
+<!-- this table has non-breaking spaces in the `operator` column for formatting -->
+
+|              name               | global_id | lir_id |         operator          |  size   |
+|:--------------------------------|:----------|:-------|:--------------------------|--------:|
+| materialize.public.wins_by_item | u11       | 6      | Non-monotonic TopK        | 11 MB   |
+| materialize.public.wins_by_item | u11       | 5      |   Differential Join 2 » 4 |         |
+| materialize.public.wins_by_item | u11       | 4      |     Arrange               | 1974 kB |
+| materialize.public.wins_by_item | u11       | 3      |       Stream u6           |         |
+| materialize.public.wins_by_item | u11       | 2      |     Arrange               | 565 kB  |
+| materialize.public.wins_by_item | u11       | 1      |       Read u5             |         |
+| materialize.public.wins_by_item | u12       | 8      | Arrange                   | 433 kB  |
+| materialize.public.wins_by_item | u12       | 7      |   Stream u11              |         |
 
 ### Localizing worker skew
 
@@ -534,7 +576,7 @@ You can identify worker skew by comparing a worker's time spent to the
 overall time spent across all workers:
 
 ```sql
- SELECT mo.name AS name, mo.global_id AS global_id, lir_id, REPEAT(' ', 2 * nesting) || operator AS operator,
+ SELECT mo.global_id AS global_id, lir_id, REPEAT(' ', 2 * nesting) || operator AS operator,
         worker_id,
         ROUND(SUM(elapsed_ns) / SUM(aebi.total_ns), 2) AS ratio,
         SUM(epw.elapsed_ns) / 1000 * '1 microsecond'::INTERVAL AS elapsed_ns,
@@ -551,11 +593,34 @@ overall time spent across all workers:
                       JOIN mz_introspection.mz_mappable_objects mo
                         ON (mlm.global_id = mo.global_id)
    WHERE mo.name IN ('materialize.public.wins_by_item', 'materialize.public.winning_bids')
-GROUP BY mo.name, mo.global_id, lir_id, nesting, operator, worker_id
+GROUP BY mo.global_id, lir_id, nesting, operator, worker_id
 ORDER BY mo.global_id, lir_id DESC;
 ```
 
-{{< yaml-table data="query_attribution_worker_skew_output" >}}
+<!-- this table has non-breaking spaces in the `operator` column for formatting -->
+
+| global_id | lir_id |         operator          | worker_id | ratio |   elapsed_ns    |     avg_ns
+|-----------|--------|---------------------------|-----------|-------|-----------------|-----------------
+| u11       | 6      | Non-monotonic TopK        | 0         |     1 | 00:00:04.513477 | 00:00:04.528227
+| u11       | 6      | Non-monotonic TopK        | 1         |     1 | 00:00:04.523179 | 00:00:04.528227
+| u11       | 6      | Non-monotonic TopK        | 2         |     1 | 00:00:04.540485 | 00:00:04.528227
+| u11       | 6      | Non-monotonic TopK        | 3         |     1 | 00:00:04.535767 | 00:00:04.528227
+| u11       | 5      |   Differential Join 2 » 4 | 0         |  1.03 | 00:00:00.880448 | 00:00:00.856188
+| u11       | 5      |   Differential Join 2 » 4 | 1         |  1.03 | 00:00:00.884771 | 00:00:00.856188
+| u11       | 5      |   Differential Join 2 » 4 | 2         |  1.03 | 00:00:00.879886 | 00:00:00.856188
+| u11       | 5      |   Differential Join 2 » 4 | 3         |  0.91 | 00:00:00.779647 | 00:00:00.856188
+| u11       | 4      |     Arrange               | 0         |  0.27 | 00:00:00.123463 | 00:00:00.451052
+| u11       | 4      |     Arrange               | 1         |  0.29 | 00:00:00.131044 | 00:00:00.451052
+| u11       | 4      |     Arrange               | 2         |  0.29 | 00:00:00.133049 | 00:00:00.451052
+| u11       | 4      |     Arrange               | 3         |  3.14 | 00:00:01.416651 | 00:00:00.451052
+| u11       | 2      |     Arrange               | 0         |  2.94 | 00:00:00.250289 | 00:00:00.085038
+| u11       | 2      |     Arrange               | 1         |  0.35 | 00:00:00.030035 | 00:00:00.085038
+| u11       | 2      |     Arrange               | 2         |  0.37 | 00:00:00.031679 | 00:00:00.085038
+| u11       | 2      |     Arrange               | 3         |  0.33 | 00:00:00.028151 | 00:00:00.085038
+| u12       | 8      | Arrange                   | 0         |  0.94 | 00:00:00.094332 | 00:00:00.099984
+| u12       | 8      | Arrange                   | 1         |  1.15 | 00:00:00.114893 | 00:00:00.099984
+| u12       | 8      | Arrange                   | 2         |  1.18 | 00:00:00.117627 | 00:00:00.099984
+| u12       | 8      | Arrange                   | 3         |  0.73 | 00:00:00.073085 | 00:00:00.099984
 
 The `ratio` column tells you whether a worker is particularly over- or
 under-loaded:

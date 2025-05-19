@@ -96,12 +96,13 @@ FOR ] -- The FOR keyword is required if the PLAN keyword is specified
 {{</tab>}}
 {{</tabs>}}
 
-Note that the `FOR` keyword is required if the `PLAN` keyword is present. In other words, the following three statements are equivalent:
+Note that the `FOR` keyword is required if the `PLAN` keyword is present. The following four statements are equivalent:
 
 ```mzsql
 EXPLAIN <explainee>;
 EXPLAIN PLAN FOR <explainee>;
-EXPLAIN OPTIMIZED PLAN FOR <explainee>;
+EXPLAIN PHYSICAL PLAN FOR <explainee>;
+EXPLAIN PHYSICAL PLAN AS TEXT FOR <explainee>;
 ```
 
 ### Explained object
@@ -138,8 +139,8 @@ Plan Stage | Description
 **RAW PLAN** | Display the raw plan; this is closest to the original SQL.
 **DECORRELATED PLAN** | Display the decorrelated but not-yet-optimized plan.
 **LOCALLY OPTIMIZED** | Display the locally optimized plan (before view inlining and access path selection). This is the final stage for regular `CREATE VIEW` optimization.
-**OPTIMIZED PLAN** | _(Default)_ Display the optimized plan.
-**PHYSICAL PLAN** | Display the physical plan; this is close but not identical to the operators shown in [`mz_introspection.mz_lir_mapping`](../../sql/system-catalog/mz_introspection/#mz_lir_mapping).
+**OPTIMIZED PLAN** | Display the optimized plan.
+**PHYSICAL PLAN** | _(Default)_ Display the physical plan; this corresponds to the operators shown in [`mz_introspection.mz_lir_mapping`](../../sql/system-catalog/mz_introspection/#mz_lir_mapping).
 
 ### Output modifiers
 
@@ -246,19 +247,38 @@ Materialize plans are directed, potentially cyclic, graphs of operators. Each op
 receives inputs from zero or more other operators and produces a single output.
 Sub-graphs where each output is consumed only once are rendered as tree-shaped fragments.
 Sub-graphs consumed more than once are represented as common table expressions (CTEs).
-In the example below, the CTE `l0` represents a linear sub-plan (a chain of `Get`,
-`Filter`, and `Project` operators) which is used in both inputs of a self-join.
+In the example below, the CTE `l0` represents a linear sub-plan (a chain of `Read` from the table `t`)
+which is used in both inputs of a self-join (`Differential Join`).
 
 ```text
-With
-  cte l0 =
-    Project (#0, #1)
-      Filter (#0 > #2)
-        ReadStorage materialize.public.t
-Return
-  Join on=(#1 = #2)
-    Get l0
-    Get l0
+> CREATE TABLE t(x INT NOT NULL, y INT NOT NULL);
+CREATE TABLE
+> EXPLAIN SELECT t1.x, t1.y
+          FROM (SELECT * FROM t WHERE x > y) AS t1,
+               (SELECT * FROM t where x > y) AS t2
+          WHERE t1.y = t2.y;
+                     Physical Plan
+--------------------------------------------------------
+ Explained Query:                                      +
+   →With                                               +
+     cte l0 =                                          +
+       →Read materialize.public.t                      +
+   →Return                                             +
+     →Differential Join %0 » %1                        +
+       Join stage %0: Lookup key #0{y} in %1           +
+       →Arrange                                        +
+         Keys: 1 arrangement available, plus raw stream+
+           Arrangement 0: #1{y}                        +
+         →Stream l0                                    +
+       →Arrange                                        +
+         Keys: 1 arrangement available, plus raw stream+
+           Arrangement 0: #0{y}                        +
+         →Read l0                                      +
+                                                       +
+ Source materialize.public.t                           +
+   filter=((#0{x} > #1{y}))                            +
+                                                       +
+ Target cluster: quickstart                            +
 ```
 
 Note that CTEs in optimized plans do not directly correspond to CTEs in your original SQL query: For example, CTEs might disappear due to inlining (i.e., when a CTE is used only once, its definition is copied to that usage site); new CTEs can appear due to the optimizer recognizing that a part of the query appears more than once (aka common subexpression elimination). Also, certain SQL-level concepts, such as outer joins or subqueries, do not have an explicit representation in optimized plans, and are instead expressed as a pattern of operators involving CTEs. CTE names are always `l0`, `l1`, `l2`, ..., and do not correspond to SQL-level CTE names.
@@ -270,7 +290,7 @@ Many operators need to refer to columns in their input. These are displayed like
 columns assigned to `Map` operators, it might be useful to request [the `arity` output modifier](#output-modifiers).
 
 Each operator can also be annotated with additional metadata. Details are shown
-by default in the `EXPLAIN PHYSICAL PLAN` output, but are hidden elsewhere. <a
+by default in the `EXPLAIN PHYSICAL PLAN` output (the default), but are hidden elsewhere. <a
 name="explain-with-join-implementations"></a>In `EXPLAIN OPTIMIZED
 PLAN`, details about the implementation in the `Join` operator can be requested
 with [the `join implementations` output modifier](#output-modifiers) (that is,
@@ -336,12 +356,12 @@ actually run).
 
 {{< tabs >}}
 
-{{< tab "In decorrelated and optimized plans (default EXPLAIN)" >}}
-{{< explain-plans/operator-table data="explain_plan_operators" planType="optimized" >}}
-{{< /tab >}}
-
 {{< tab "In fully optimized physical (LIR) plans" >}}
 {{< explain-plans/operator-table data="explain_plan_operators" planType="LIR" >}}
+{{< /tab >}}
+
+{{< tab "In decorrelated and optimized plans (default EXPLAIN)" >}}
+{{< explain-plans/operator-table data="explain_plan_operators" planType="optimized" >}}
 {{< /tab >}}
 
 {{< tab "In raw plans" >}}
