@@ -79,6 +79,7 @@ tracing = { version = "0.1.37" }
 # for the tracing feature
 tracing-subscriber = { version = "0.3.19", default-features = false, optional = true }
 workspace-hack = { version = "0.0.0", path = "../workspace-hack", optional = true }
+bytemuck = { version = "1.23.0", features = ["derive"] }
 
 [dev-dependencies]
 criterion = { version = "0.6.0" }

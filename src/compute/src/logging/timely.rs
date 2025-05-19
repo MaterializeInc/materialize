@@ -39,7 +39,7 @@ use crate::extensions::arrange::MzArrangeCore;
 use crate::logging::compute::{ComputeEvent, DataflowShutdown};
 use crate::logging::{EventQueue, LogVariant, TimelyLog};
 use crate::logging::{LogCollection, SharedLoggingState, consolidate_and_pack};
-use crate::row_spine::RowRowBuilder;
+use crate::row_spine::RowRowBuilderColumn;
 use crate::typedefs::{KeyBatcher, KeyValBatcher, RowRowSpine};
 
 /// The return type of [`construct`].
@@ -312,7 +312,7 @@ pub(super) fn construct<G: Scope<Timestamp = Timestamp>>(
             let variant = LogVariant::Timely(variant);
             if config.index_logs.contains_key(&variant) {
                 let trace = collection
-                    .mz_arrange_core::<_, Col2ValBatcher<_, _, _, _>, RowRowBuilder<_, _>, RowRowSpine<_, _>>(
+                    .mz_arrange_core::<_, Col2ValBatcher<_, _, _, _>, RowRowBuilderColumn<_, _>, RowRowSpine<_, _>>(
                         ExchangeCore::<ColumnBuilder<_>, _>::new_core(columnar_exchange::<mz_repr::Row, mz_repr::Row, Timestamp, Diff>),
                         &format!("Arrange {variant:?}"),
                     )

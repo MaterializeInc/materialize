@@ -11,7 +11,6 @@ use std::convert::TryFrom;
 use std::num::TryFromIntError;
 use std::time::Duration;
 
-use columnar::Columnar;
 use dec::TryFromDecimalError;
 use mz_proto::{RustType, TryFromProtoError};
 use proptest_derive::Arbitrary;
@@ -35,9 +34,10 @@ include!(concat!(env!("OUT_DIR"), "/mz_repr.timestamp.rs"));
     Hash,
     Default,
     Arbitrary,
-    Columnar,
+    bytemuck::AnyBitPattern,
+    bytemuck::NoUninit,
 )]
-#[columnar(derive(PartialEq, Eq, PartialOrd, Ord))]
+#[repr(transparent)]
 pub struct Timestamp {
     /// note no `pub`.
     internal: u64,
@@ -64,6 +64,82 @@ impl RustType<ProtoTimestamp> for Timestamp {
 
     fn from_proto(proto: ProtoTimestamp) -> Result<Self, TryFromProtoError> {
         Ok(Timestamp::new(proto.internal))
+    }
+}
+
+mod columnar_timestamp {
+    use crate::Timestamp;
+    use columnar::Columnar;
+
+    /// A newtype wrapper for a vector of `Timestamp` values.
+    #[derive(Clone, Copy, Default, Debug)]
+    pub struct TimestampVec<T>(T);
+    impl<D, T: columnar::Push<D>> columnar::Push<D> for TimestampVec<T> {
+        #[inline(always)]
+        fn push(&mut self, item: D) {
+            self.0.push(item)
+        }
+    }
+    impl<T: columnar::Clear> columnar::Clear for TimestampVec<T> {
+        #[inline(always)]
+        fn clear(&mut self) {
+            self.0.clear()
+        }
+    }
+    impl<T: columnar::Len> columnar::Len for TimestampVec<T> {
+        #[inline(always)]
+        fn len(&self) -> usize {
+            self.0.len()
+        }
+    }
+    impl<'a> columnar::Index for TimestampVec<&'a [Timestamp]> {
+        type Ref = Timestamp;
+
+        #[inline(always)]
+        fn get(&self, index: usize) -> Self::Ref {
+            *self.0.get(index).unwrap()
+        }
+    }
+
+    impl Columnar for Timestamp {
+        type Ref<'a> = Timestamp;
+
+        fn into_owned<'a>(other: Self::Ref<'a>) -> Self {
+            other
+        }
+
+        type Container = TimestampVec<Vec<Timestamp>>;
+    }
+
+    impl columnar::Container<Timestamp> for TimestampVec<Vec<Timestamp>> {
+        type Borrowed<'a>
+            = TimestampVec<&'a [Timestamp]>
+        where
+            Self: 'a;
+        fn borrow<'a>(&'a self) -> Self::Borrowed<'a> {
+            TimestampVec(self.0.as_slice())
+        }
+    }
+
+    impl columnar::HeapSize for Timestamp {}
+
+    impl<'a> columnar::AsBytes<'a> for TimestampVec<&'a [Timestamp]> {
+        #[inline(always)]
+        fn as_bytes(&self) -> impl Iterator<Item = (u64, &'a [u8])> {
+            std::iter::once((
+                std::mem::align_of::<Timestamp>() as u64,
+                bytemuck::cast_slice(&self.0[..]),
+            ))
+        }
+    }
+    impl<'a> columnar::FromBytes<'a> for TimestampVec<&'a [Timestamp]> {
+        fn from_bytes(bytes: &mut impl Iterator<Item = &'a [u8]>) -> Self {
+            // We use `unwrap()` here in order to panic with the `bytemuck` error, which may be informative.
+            TimestampVec(
+                bytemuck::try_cast_slice(bytes.next().expect("Iterator exhausted prematurely"))
+                    .unwrap(),
+            )
+        }
     }
 }
 
