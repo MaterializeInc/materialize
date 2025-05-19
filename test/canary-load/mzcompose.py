@@ -17,7 +17,7 @@ from textwrap import dedent
 import psycopg
 import requests
 from psycopg import Connection, Cursor
-from psycopg.errors import OperationalError
+from psycopg.errors import IdleInTransactionSessionTimeout, OperationalError
 from requests.exceptions import ConnectionError, ReadTimeout
 
 from materialize.cloudtest.util.jwt_key import fetch_jwt
@@ -112,11 +112,22 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
                 close_connection_and_cursor(conn1, cursor_on_table, "subscribe_table")
                 close_connection_and_cursor(conn2, cursor_on_mv, "subscribe_mv")
 
-            except (OperationalError, ReadTimeout, ConnectionError) as e:
+            except (
+                OperationalError,
+                ReadTimeout,
+                ConnectionError,
+                IdleInTransactionSessionTimeout,
+            ) as e:
                 error_msg_str = str(e)
                 if (
                     "Read timed out" in error_msg_str
                     or "closed connection" in error_msg_str
+                    or "terminating connection due to idle-in-transaction timeout"
+                    in error_msg_str
+                    or "consuming input failed: SSL SYSCALL error: EOF detected"
+                    in error_msg_str
+                    or "consuming input failed: SSL connection has been closed unexpectedly"
+                    in error_msg_str
                     or "terminating connection due to idle-in-transaction timeout"
                     in error_msg_str
                 ):
@@ -176,7 +187,7 @@ def http_sql_query(
         res = e.response
         print(f"{e}\n{res}\n{res.text}")
         raise
-    except requests.exceptions.Timeout:
+    except (requests.exceptions.Timeout, requests.exceptions.ReadTimeout):
         # TODO: This should be an error once database-issues#8737 is fixed
         if retries > 0:
             print("Timed out after 60s, retrying")
