@@ -33,10 +33,12 @@ use crate::internal::state::{
 use crate::stats::{STATS_BUDGET_BYTES, STATS_COLLECTION_ENABLED, untrimmable_columns};
 use crate::{PersistConfig, ShardId};
 use arrow::array::{Array, Int64Array};
+use arrow::compute::kernels::filter;
 use bytes::Bytes;
 use differential_dataflow::difference::Semigroup;
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::trace::Description;
+use differential_dataflow::trace::implementations::merge_batcher::container::vec;
 use futures_util::stream::StreamExt;
 use futures_util::{FutureExt, stream};
 use mz_dyncfg::Config;
@@ -60,7 +62,7 @@ use semver::Version;
 use timely::PartialOrder;
 use timely::order::TotalOrder;
 use timely::progress::{Antichain, Timestamp};
-use tracing::{Instrument, debug_span, trace_span, warn};
+use tracing::{Instrument, debug_span, info, trace_span, warn};
 
 include!(concat!(env!("OUT_DIR"), "/mz_persist_client.batch.rs"));
 
@@ -705,7 +707,16 @@ where
         }
         let desc = registered_desc;
 
-        let batch = HollowBatch::new(desc, run_parts, self.num_updates, run_meta, run_splits);
+        let len = run_parts.iter().fold(0, |len, part| {
+            let stats = part.stats();
+            if let Some(stats) = stats {
+                len + stats.decode().key.len
+            } else {
+                len
+            }
+        });
+
+        let batch = HollowBatch::new(desc, run_parts, len, run_meta, run_splits);
 
         Some(batch)
     }
@@ -1055,14 +1066,21 @@ impl<T: Timestamp + Codec64> BatchParts<T> {
                 let part = Pending::new(mz_ore::task::spawn(|| name, write_future));
                 run.push(part);
 
+                let take_num = run
+                    .iter()
+                    .filter(|p| !p.is_finished())
+                    .count()
+                    .saturating_sub(self.cfg.batch_builder_max_outstanding_parts);
+                println!("take_num: {take_num}");
                 // If there are more than the max outstanding parts, block on all but the
                 //  most recent.
                 for part in run
                     .iter_mut()
-                    .rev()
-                    .skip(self.cfg.batch_builder_max_outstanding_parts)
-                    .take_while(|p| !p.is_finished())
+                    .filter(|p| !p.is_finished())
+                    // .take_while(|p| !p.is_finished())
+                    .take(take_num)
                 {
+                    println!("blocking on part");
                     self.batch_metrics.write_stalls.inc();
                     part.block_until_ready().await;
                 }
@@ -1267,14 +1285,25 @@ impl<T: Timestamp + Codec64> BatchParts<T> {
 
     pub(crate) fn finish_completed_runs(&self) -> Vec<(RunOrder, Vec<RunPart<T>>)> {
         match &self.writing_runs {
-            WritingRuns::Ordered(order, tree) => tree
+            WritingRuns::Ordered(RunOrder::Unordered, tree) => tree
                 .iter()
                 .take_while(|part| matches!(part, Pending::Finished(_)))
                 .map(|part| match part {
-                    Pending::Finished(p) => (order.clone(), vec![p.clone()]),
-                    _ => (order.clone(), vec![]),
+                    Pending::Finished(p) => (RunOrder::Unordered, vec![p.clone()]),
+                    _ => (RunOrder::Unordered, vec![]),
                 })
                 .collect(),
+            WritingRuns::Ordered(order, tree) => {
+                let parts = tree
+                    .iter()
+                    .take_while(|part| matches!(part, Pending::Finished(_)))
+                    .filter_map(|part| match part {
+                        Pending::Finished(p) => Some(p.clone()),
+                        _ => None,
+                    })
+                    .collect();
+                vec![(order.clone(), parts)]
+            }
             WritingRuns::Compacting(tree) => tree
                 .iter()
                 .take_while(|(_, run)| matches!(run, Pending::Finished(_)))

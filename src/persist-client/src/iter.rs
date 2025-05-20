@@ -34,7 +34,7 @@ use mz_persist_types::part::Part;
 use mz_persist_types::{Codec, Codec64};
 use semver::{Op, Version};
 use timely::progress::Timestamp;
-use tracing::{Instrument, debug_span};
+use tracing::{Instrument, debug_span, info};
 
 use crate::ShardId;
 use crate::fetch::{EncodedPart, FetchBatchFilter};
@@ -953,6 +953,10 @@ where
                     // This code checks our inclusive lower bound against
                     if let Some((kv_lower, t_lower)) = &self.lower_bound {
                         if (kv_lower, t_lower) >= (kv1, t1) {
+                            info!(
+                                "discarding {kv1:?} {t1:?} from {context} because it's below our lower bound",
+                                context = self.context
+                            );
                             // Discard this item from the part, since it's past our lower bound.
                             let _ = part.pop(&self.parts, self.filter);
 

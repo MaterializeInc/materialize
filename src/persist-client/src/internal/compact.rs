@@ -50,7 +50,7 @@ use timely::PartialOrder;
 use timely::progress::{Antichain, Timestamp};
 use tokio::sync::mpsc::Sender;
 use tokio::sync::{TryAcquireError, mpsc, oneshot};
-use tracing::{Instrument, Span, debug, debug_span, error, trace, warn};
+use tracing::{Instrument, Span, debug, debug_span, error, info, trace, warn};
 
 use super::trace::ActiveCompaction;
 
@@ -632,7 +632,8 @@ where
                     / cfg.batch.blob_target_size;
 
                 let mut run_cfg = cfg.clone();
-                run_cfg.batch.batch_builder_max_outstanding_parts = 1 + extra_outstanding_parts;
+                // run_cfg.batch.batch_builder_max_outstanding_parts = 1 + extra_outstanding_parts;
+                run_cfg.batch.batch_builder_max_outstanding_parts = 1;
 
                 let batch = Self::compact_runs(
                     &run_cfg,
@@ -649,7 +650,8 @@ where
                 )
                 .await?;
 
-                while let Some(res) = incremental_rx.recv().await {
+                let incremental = incremental_rx.try_recv();
+                if let Ok(res) = incremental {
                     let now = SYSTEM_TIME.clone();
                     machine.checkpoint_compaction_progress(&res, now()).await;
                 }
@@ -838,6 +840,7 @@ where
         previous_batch: &HollowBatch<T>,
         batch: &HollowBatch<T>,
     ) -> HollowBatch<T> {
+        info!("combine_hollow_batch_with_previous");
         // Simplifying assumption: you can't combine batches with different descriptions.
         assert_eq!(previous_batch.desc, batch.desc);
         let len = previous_batch.len + batch.len;
@@ -846,7 +849,6 @@ where
         parts.extend(batch.parts.clone());
         assert!(previous_batch.run_splits.is_empty());
         assert!(batch.run_splits.is_empty());
-        assert_eq!(previous_batch.run_meta, batch.run_meta);
         HollowBatch::new(
             previous_batch.desc.clone(),
             parts,
@@ -1069,7 +1071,12 @@ where
         }
 
         let hollow_batch = if let Some(batch_so_far) = batch_so_far.as_ref() {
-            Self::combine_hollow_batch_with_previous(batch_so_far, &batch.into_hollow_batch())
+            let hollow_batch = batch.into_hollow_batch();
+            info!(
+                "combining hollow batch {:?} with previous batch",
+                hollow_batch
+            );
+            Self::combine_hollow_batch_with_previous(batch_so_far, &hollow_batch)
         } else {
             batch.into_hollow_batch()
         };
@@ -1137,15 +1144,17 @@ impl Timings {
 
 #[cfg(test)]
 mod tests {
+    use differential_dataflow::trace::implementations::merge_batcher::container::vec;
     use mz_dyncfg::ConfigUpdates;
     use mz_ore::{assert_contains, assert_err};
     use mz_persist_types::codec_impls::StringSchema;
     use timely::order::Product;
     use timely::progress::Antichain;
 
-    use crate::PersistLocation;
     use crate::batch::BLOB_TARGET_SIZE;
+    use crate::cfg::BATCH_BUILDER_MAX_OUTSTANDING_PARTS;
     use crate::tests::{all_ok, expect_fetch_part, new_test_client_cache};
+    use crate::{PersistLocation, batch};
 
     use super::*;
 
@@ -1399,5 +1408,185 @@ mod tests {
             .await
             .expect("channel closed")
             .expect("compaction success");
+    }
+
+    #[mz_persist_proc::test(tokio::test)]
+    // #[mz_ore::test(tokio::test)]
+    #[cfg_attr(miri, ignore)] // unsupported operation: returning ready events from epoll_wait is not yet implemented
+    async fn incremental_compaction(dyncfgs: ConfigUpdates) {
+        // let dyncfgs = ::mz_dyncfg::ConfigUpdates::default();
+        // Generate a bunch of data and batches for testing incremental compaction.
+        let mut data = Vec::new();
+        let num_keys = 10;
+        let num_times = 10;
+        for time in 0..num_times {
+            for key in 0..num_keys {
+                // Ensure time is monotonically increasing across all keys
+                let t = time * num_keys + key;
+                data.push(((key.to_string(), format!("val_{key}")), t as u64, 1));
+            }
+        }
+
+        let cache = new_test_client_cache(&dyncfgs);
+        cache.cfg.set_config(&BLOB_TARGET_SIZE, 100);
+
+        let (mut write, _) = cache
+            .open(PersistLocation::new_in_mem())
+            .await
+            .expect("client construction failed")
+            .expect_open::<String, String, u64, i64>(ShardId::new())
+            .await;
+
+        // Split data into batches of 3 updates each.
+        let batch_size = 3;
+        let mut batches = Vec::new();
+        let mut lower = 0;
+        while lower < data.len() {
+            let upper = (lower + batch_size).min(data.len());
+            let batch = write
+                .expect_batch(&data[lower..upper], lower as u64, upper as u64)
+                .await
+                .into_hollow_batch();
+            batches.push(batch);
+            lower = upper;
+        }
+
+        let req = CompactReq {
+            shard_id: write.machine.shard_id(),
+            desc: Description::new(
+                batches.first().unwrap().desc.lower().clone(),
+                batches.last().unwrap().desc.upper().clone(),
+                Antichain::from_elem(10u64),
+            ),
+            inputs: batches.clone(),
+            prev_batch: None,
+        };
+        let schemas = Schemas {
+            id: None,
+            key: Arc::new(StringSchema),
+            val: Arc::new(StringSchema),
+        };
+        let ordered_runs = Compactor::<String, String, u64, i64>::order_runs(
+            &req,
+            RunOrder::Structured,
+            &*write.blob,
+            &write.metrics,
+        )
+        .await
+        .expect("order runs failed");
+
+        // Set this to an arbitrarily small number to force writes to flush
+        // to blob.
+        write
+            .cfg
+            .set_config(&BATCH_BUILDER_MAX_OUTSTANDING_PARTS, 1);
+
+        // Set this to an arbitrarily small number to force multiple parts to be
+        // written.
+        write.cfg.set_config(&BLOB_TARGET_SIZE, 10);
+
+        let cfg = CompactConfig::new(&write.cfg, write.shard_id());
+
+        let chunked_runs = Compactor::<String, String, u64, i64>::chunk_runs(
+            &ordered_runs,
+            &cfg,
+            &write.metrics,
+            1000000,
+        );
+
+        let mut incremental_result = None;
+        let mut first_batch = None;
+        let mut second_batch = None;
+
+        let chunked_runs_clone = chunked_runs.clone();
+
+        for (runs, _max_memory) in chunked_runs_clone.iter() {
+            let (incremental_tx, mut incremental_rx) = tokio::sync::mpsc::channel(1);
+            let shard_id = write.shard_id();
+
+            let batch_handle = Compactor::<String, String, u64, i64>::compact_runs(
+                &cfg,
+                &shard_id,
+                &req.desc,
+                runs.clone(),
+                Arc::clone(&write.blob),
+                Arc::clone(&write.metrics),
+                write.metrics.shards.shard(&write.machine.shard_id(), ""),
+                Arc::new(IsolatedRuntime::default()),
+                schemas.clone(),
+                &None,
+                Some(incremental_tx),
+            );
+
+            let incremental_handle = tokio::spawn(async move {
+                let mut batches = vec![];
+                while let Some(b) = incremental_rx.recv().await {
+                    batches.push(b);
+                }
+                batches
+            });
+
+            let (batch_result, incremental) = tokio::join! {
+                batch_handle,
+                incremental_handle,
+            };
+            let incremental = incremental.unwrap();
+
+            incremental_result = Some(incremental[incremental.len() - 1].clone());
+            first_batch = Some(batch_result.unwrap());
+        }
+
+        for (runs, _max_memory) in chunked_runs.iter() {
+            let (incremental_tx, mut incremental_rx) = tokio::sync::mpsc::channel(1);
+            let shard_id = write.shard_id();
+
+            let batch_handle = Compactor::<String, String, u64, i64>::compact_runs(
+                &cfg,
+                &shard_id,
+                &req.desc,
+                runs.clone(),
+                Arc::clone(&write.blob),
+                Arc::clone(&write.metrics),
+                write.metrics.shards.shard(&write.machine.shard_id(), ""),
+                Arc::new(IsolatedRuntime::default()),
+                schemas.clone(),
+                &incremental_result,
+                Some(incremental_tx),
+            );
+
+            let incremental_handle = tokio::spawn(async move {
+                let mut batch = None;
+                while let Some(b) = incremental_rx.recv().await {
+                    batch = Some(b);
+                }
+                batch
+            });
+
+            let (batch_result, _incremental) = tokio::join! {
+                batch_handle,
+                incremental_handle,
+            };
+
+            let batch_result = batch_result.unwrap();
+            second_batch = Some(batch_result.clone());
+        }
+
+        println!("first_batch={:#?}", first_batch);
+        println!("second_batch={:#?}", second_batch);
+
+        // We want to assert that the first batch is equal to the second batch,
+        // _except_ for the last part, which is where the second run should have
+        // picked up incrementally.
+        let (mut first_batch, mut second_batch) = (
+            first_batch.expect("first batch"),
+            second_batch.expect("second batch"),
+        );
+
+        first_batch.parts.pop();
+        second_batch.parts.pop();
+
+        assert_eq!(first_batch, second_batch);
+
+        println!("chunked_runs={:#?}", chunked_runs.iter().len());
     }
 }
