@@ -10,6 +10,7 @@
 use anyhow::ensure;
 use async_stream::{stream, try_stream};
 use mz_persist::metrics::ColumnarMetrics;
+use mz_persist_types::bloom_filter::BloomFilter;
 use std::borrow::Cow;
 use std::cmp::Ordering;
 use std::collections::BTreeMap;
@@ -751,6 +752,10 @@ pub struct HollowBatchPart<T> {
 
     /// ID of a schema that has since been deprecated and exists only to cleanly roundtrip.
     pub deprecated_schema_id: Option<SchemaId>,
+
+    /// If bloom filters are enabled then a bloom filter we be available for the part to
+    /// determine if a primary key is in the `HollowBatchPart`.
+    pub bloom_filter: Option<Vec<BloomFilter>>,
 }
 
 /// A [Batch] but with the updates themselves stored externally.
@@ -2213,6 +2218,7 @@ where
                 critical_readers: BTreeMap::new(),
                 writers: BTreeMap::new(),
                 schemas: BTreeMap::new(),
+                bloom_filters: BTreeMap::new(),
                 trace: Trace::default(),
             },
         };
