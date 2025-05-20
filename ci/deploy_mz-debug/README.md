@@ -32,4 +32,4 @@ bin/pyactivate -m ci.deploy_mz-debug.linux
 
 **Important Notes:**
 - When running on macOS, modify `linux.py` to use `target` instead of `target-xcompile`
-- For any new changes, regardless of how small, create a new version (patch if small) instead of overwriting the current git tag. This is because otherwise, `git fetch`s in our CI will error due to stale references of the old git tag.
+- For any new changes, regardless of how small, create a new version (patch if small) instead of overwriting the current git tag. This is because otherwise, local `git fetch --tag`s may error due to stale references of the old git tag.
