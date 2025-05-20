@@ -28,6 +28,10 @@ use proptest_derive::Arbitrary;
 pub struct EncodingConfig {
     /// Enable dictionary encoding for Parquet data.
     pub use_dictionary: bool,
+    /// Enabled bloom filters for Parquet data.
+    pub use_bloom_filter: bool,
+    /// Max row group size for Parquet data.
+    pub max_row_group_size: usize,
     /// Compression format for Parquet data.
     pub compression: CompressionFormat,
 }
@@ -36,6 +40,8 @@ impl Default for EncodingConfig {
     fn default() -> Self {
         EncodingConfig {
             use_dictionary: false,
+            use_bloom_filter: false,
+            max_row_group_size: 0,
             compression: CompressionFormat::default(),
         }
     }

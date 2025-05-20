@@ -12766,3 +12766,8 @@ dependencies = [
  "cc",
  "pkg-config",
 ]
+
+[[patch.unused]]
+name = "parquet"
+version = "55.1.0"
+source = "git+https://github.com/ptravers/arrow-rs#4a643af14a4ea3076218afaba56f0185cb4a9654"

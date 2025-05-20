@@ -26,6 +26,7 @@ use uuid::Uuid;
 use crate::columnar::Schema;
 
 pub mod arrow;
+pub mod bloom_filter;
 pub mod codec_impls;
 pub mod columnar;
 pub mod parquet;
