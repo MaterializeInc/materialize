@@ -1085,14 +1085,16 @@ where
                 .cloned()
                 .collect::<Vec<_>>();
 
-            trace!(
+            info!(
                 "persist_sink {collection_id}/{shard_id}: \
-                    append_batches: in_flight: {:?}, \
-                    done: {:?}, \
+                    append_batches: in_flight_descriptions size: {:?}, \
+                    in_flight_batches size: {:?}, \
+                    done size: {:?}, \
                     batch_frontier: {:?}, \
                     batch_description_frontier: {:?}",
-                in_flight_descriptions,
-                done_batches,
+                in_flight_descriptions.len(),
+                in_flight_batches.len(),
+                done_batches.len(),
                 batches_frontier,
                 batch_description_frontier
             );
@@ -1112,6 +1114,7 @@ where
             let mut done_batches_iter = done_batches.iter();
 
             let Some(first_batch_description) = done_batches_iter.next() else {
+                upper_cap_set.downgrade(current_upper.borrow().iter());
                 continue;
             };
 
@@ -1135,7 +1138,7 @@ where
 
             let mut to_append = batches.iter_mut().map(|b| &mut b.batch).collect::<Vec<_>>();
 
-            while to_append.len() > 0 {
+            loop {
                 let result = {
                     let maybe_err = if *read_only_rx.borrow() {
 
@@ -1283,6 +1286,7 @@ where
                         to_append.clear();
                         current_upper.borrow_mut().clone_from(&batch_upper);
                         upper_cap_set.downgrade(current_upper.borrow().iter());
+                        break;
                     }
                     Err(mismatch) => {
                         // We tried to do a non-contiguous append, that won't work.
@@ -1324,7 +1328,8 @@ where
                             batch_lower = mismatch.current.clone();
                             to_append = batches.iter_mut()
                                 .sorted_by(|l, r| Ord::cmp(&l.data_ts, &r.data_ts))
-                                .map(|batch| &mut batch.batch).collect::<Vec<_>>();
+                                .map(|batch| &mut batch.batch)
+                                .collect::<Vec<_>>();
 
                             // Best-effort attempt to delete unneeded batches.
                             future::join_all(batch_delete_futures).await;
@@ -1332,7 +1337,8 @@ where
                         } else {
                             // Best-effort attempt to delete unneeded batches.
                             future::join_all(batches.into_iter().map(|b| b.batch.delete())).await;
-                            current_upper.replace(mismatch.current.clone());
+                            current_upper.borrow_mut().clone_from(&mismatch.current);
+                            upper_cap_set.downgrade(current_upper.borrow().iter());
                         }
 
                         if bail_on_concurrent_modification {
