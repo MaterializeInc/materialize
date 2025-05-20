@@ -1,20 +1,19 @@
 use mz_persist_client::read::ReadHandle;
-use mz_persist_types::Codec;
+use mz_repr::{DatumVec, Row};
+use mz_storage_types::sources::SourceData;
 
-pub struct KeyValueReadHandle<K: Codec, V: Codec, T, D> {
-    handle: ReadHandle<K, V, T, D>,
+pub struct KeyValueReadHandle<T, D> {
+    handle: ReadHandle<SourceData, (), T, D>,
 }
 
-impl<K: Codec, V: Codec, T, D> KeyValueReadHandle<K, V, T, D> {
-    pub fn new(handle: ReadHandle<K, V, T, D>) -> Self {
+impl<T, D> KeyValueReadHandle<T, D> {
+    pub fn new(handle: ReadHandle<SourceData, (), T, D>) -> Self {
         todo!()
     }
 
-    pub fn get_multi(&self, keys: Vec<K>, ts: T) -> Vec<(K, V)> {
+    pub fn get_multi(&self, key_columns: &[usize], keys: DatumVec, ts: T) -> Vec<(DatumVec, Row)> {
         todo!()
     }
 
-    pub fn apply_changes(&mut self, changes: Vec<(K, V, D)>) {
-
-    }
+    pub fn apply_changes(&mut self, changes: Vec<(SourceData, T, D)>) {}
 }
