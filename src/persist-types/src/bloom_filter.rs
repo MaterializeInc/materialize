@@ -17,7 +17,7 @@ impl BloomFilter {
         Self {}
     }
 
-    fn contains<K>(&self, k: K) -> bool {
+    pub fn contains<K>(&self, k: K) -> bool {
         false
     }
 

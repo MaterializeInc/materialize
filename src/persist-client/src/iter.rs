@@ -213,6 +213,7 @@ impl<T: Codec64 + Timestamp + Lattice> FetchData<T> {
                     read_metrics,
                     &self.part_desc,
                     &part,
+                    |_| true,
                 )
                 .await
                 .map_err(|blob_key| anyhow!("missing unleased key {blob_key}"))?;
@@ -1184,6 +1185,7 @@ mod tests {
                             format: None,
                             schema_id: None,
                             deprecated_schema_id: None,
+                            bloom_filter: None,
                         }))
                     })
                     .collect();

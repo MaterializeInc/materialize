@@ -291,7 +291,7 @@ impl<T: Timestamp + Lattice> FetchBatchFilter<T> {
 ///
 /// Note to check the `LeasedBatchPart` documentation for how to handle the
 /// returned value.
-pub(crate) async fn fetch_leased_part<K, V, T, D>(
+pub(crate) async fn fetch_leased_part<K, V, T, D, F>(
     cfg: &PersistConfig,
     part: &LeasedBatchPart<T>,
     blob: &dyn Blob,
@@ -301,12 +301,14 @@ pub(crate) async fn fetch_leased_part<K, V, T, D>(
     reader_id: &LeasedReaderId,
     read_schemas: Schemas<K, V>,
     schema_cache: &mut SchemaCache<K, V, T, D>,
+    should_fetch_row_group: F,
 ) -> FetchedPart<K, V, T, D>
 where
     K: Debug + Codec,
     V: Debug + Codec,
     T: Timestamp + Lattice + Codec64 + Sync,
     D: Semigroup + Codec64 + Send + Sync,
+    F: FnMut(&BloomFilter) -> bool,
 {
     let encoded_part = EncodedPart::fetch(
         &part.shard_id,
@@ -316,6 +318,7 @@ where
         read_metrics,
         &part.desc,
         &part.part,
+        should_fetch_row_group,
     )
     .await
     .unwrap_or_else(|blob_key| {
@@ -357,10 +360,10 @@ pub(crate) async fn fetch_batch_part_blob<T, F>(
     shard_metrics: &ShardMetrics,
     read_metrics: &ReadMetrics,
     part: &HollowBatchPart<T>,
-    should_fetch_row_group: F,
+    mut should_fetch_row_group: F,
 ) -> Result<SegmentedBytes, BlobKey>
 where
-    F: Fn(&BloomFilter) -> bool,
+    F: FnMut(&BloomFilter) -> bool,
 {
     let now = Instant::now();
     let get_span = debug_span!("fetch_batch::get");
@@ -427,7 +430,7 @@ where
     })
 }
 
-pub(crate) async fn fetch_batch_part<T>(
+pub(crate) async fn fetch_batch_part<T, F>(
     shard_id: &ShardId,
     blob: &dyn Blob,
     metrics: &Metrics,
@@ -435,9 +438,11 @@ pub(crate) async fn fetch_batch_part<T>(
     read_metrics: &ReadMetrics,
     registered_desc: &Description<T>,
     part: &HollowBatchPart<T>,
+    should_fetch_row_group: F,
 ) -> Result<EncodedPart<T>, BlobKey>
 where
     T: Timestamp + Lattice + Codec64,
+    F: FnMut(&BloomFilter) -> bool,
 {
     let buf = fetch_batch_part_blob(
         shard_id,
@@ -446,7 +451,7 @@ where
         shard_metrics,
         read_metrics,
         part,
-        |_| true,
+        should_fetch_row_group,
     )
     .await?;
     let part = decode_batch_part_blob(metrics, read_metrics, registered_desc.clone(), part, &buf);
@@ -1156,7 +1161,7 @@ impl<T> EncodedPart<T>
 where
     T: Timestamp + Lattice + Codec64,
 {
-    pub async fn fetch(
+    pub async fn fetch<F>(
         shard_id: &ShardId,
         blob: &dyn Blob,
         metrics: &Metrics,
@@ -1164,7 +1169,11 @@ where
         read_metrics: &ReadMetrics,
         registered_desc: &Description<T>,
         part: &BatchPart<T>,
-    ) -> Result<Self, BlobKey> {
+        should_fetch_row_group: F,
+    ) -> Result<Self, BlobKey>
+    where
+        F: FnMut(&BloomFilter) -> bool,
+    {
         match part {
             BatchPart::Hollow(x) => {
                 fetch_batch_part(
@@ -1175,6 +1184,7 @@ where
                     read_metrics,
                     registered_desc,
                     x,
+                    should_fetch_row_group,
                 )
                 .await
             }
