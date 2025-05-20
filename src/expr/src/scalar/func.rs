@@ -10030,3 +10030,11 @@ mod test {
         proptest_binary(BinaryFunc::Left, &arena, &str_datums, &i32_datums);
     }
 }
+
+#[cfg(kani)]
+mod kani_test {
+    #[kani::proof]
+    fn kani_smoketest() {
+        assert!(1 == 2);
+    }
+}
