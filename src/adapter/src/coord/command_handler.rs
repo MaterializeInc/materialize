@@ -701,6 +701,7 @@ impl Coordinator {
                     | Statement::Execute(_)
                     | Statement::ExplainPlan(_)
                     | Statement::ExplainPushdown(_)
+                    | Statement::ExplainAnalyze(_)
                     | Statement::ExplainTimestamp(_)
                     | Statement::ExplainSinkSchema(_)
                     | Statement::Fetch(_)

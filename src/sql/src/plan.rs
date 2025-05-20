@@ -53,9 +53,7 @@ use mz_repr::{
     ScalarType, Timestamp, VersionedRelationDesc,
 };
 use mz_sql_parser::ast::{
-    AlterSourceAddSubsourceOption, ClusterAlterOptionValue, ConnectionOptionName, QualifiedReplica,
-    RawDataType, SelectStatement, TransactionIsolationLevel, TransactionMode, UnresolvedItemName,
-    Value, WithOptionValue,
+    AlterSourceAddSubsourceOption, ClusterAlterOptionValue, ConnectionOptionName, ExplainAnalyzeProperty, QualifiedReplica, RawDataType, SelectStatement, TransactionIsolationLevel, TransactionMode, UnresolvedItemName, Value, WithOptionValue
 };
 use mz_ssh_util::keys::SshKeyPair;
 use mz_storage_types::connections::aws::AwsConnection;
@@ -171,6 +169,7 @@ pub enum Plan {
     CopyTo(CopyToPlan),
     ExplainPlan(ExplainPlanPlan),
     ExplainPushdown(ExplainPushdownPlan),
+    ExplainAnalyze(ExplainAnalyzePlan),
     ExplainTimestamp(ExplainTimestampPlan),
     ExplainSinkSchema(ExplainSinkSchemaPlan),
     Insert(InsertPlan),
@@ -291,6 +290,7 @@ impl Plan {
             StatementKind::Execute => &[PlanKind::Execute],
             StatementKind::ExplainPlan => &[PlanKind::ExplainPlan],
             StatementKind::ExplainPushdown => &[PlanKind::ExplainPushdown],
+            StatementKind::ExplainAnalyze => &[PlanKind::ExplainAnalyze, PlanKind::Select],
             StatementKind::ExplainTimestamp => &[PlanKind::ExplainTimestamp],
             StatementKind::ExplainSinkSchema => &[PlanKind::ExplainSinkSchema],
             StatementKind::Fetch => &[PlanKind::Fetch],
@@ -384,6 +384,7 @@ impl Plan {
             Plan::CopyTo(_) => "copy to",
             Plan::ExplainPlan(_) => "explain plan",
             Plan::ExplainPushdown(_) => "EXPLAIN FILTER PUSHDOWN",
+            Plan::ExplainAnalyze(_) => "explain analyze",
             Plan::ExplainTimestamp(_) => "explain timestamp",
             Plan::ExplainSinkSchema(_) => "explain schema",
             Plan::Insert(_) => "insert",
@@ -1103,6 +1104,14 @@ impl std::fmt::Display for ExplaineeStatementKind {
 #[derive(Clone, Debug)]
 pub struct ExplainPushdownPlan {
     pub explainee: Explainee,
+}
+
+#[derive(Clone, Debug)]
+pub struct ExplainAnalyzePlan {
+    pub properties: ExplainAnalyzeProperty,
+    pub explainee: Explainee,
+    pub explainee_name: String,
+    pub as_sql: bool,
 }
 
 #[derive(Clone, Debug)]

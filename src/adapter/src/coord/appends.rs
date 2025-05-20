@@ -984,6 +984,7 @@ pub(crate) fn waiting_on_startup_appends(
         | Plan::CopyTo(_)
         | Plan::ExplainPlan(_)
         | Plan::ExplainPushdown(_)
+        | Plan::ExplainAnalyze(_)
         | Plan::ExplainSinkSchema(_)
         | Plan::Insert(_)
         | Plan::AlterNetworkPolicy(_)

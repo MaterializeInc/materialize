@@ -97,6 +97,7 @@ pub enum Statement<T: AstInfo> {
     ExplainPushdown(ExplainPushdownStatement<T>),
     ExplainTimestamp(ExplainTimestampStatement<T>),
     ExplainSinkSchema(ExplainSinkSchemaStatement<T>),
+    ExplainAnalyze(ExplainAnalyzeStatement<T>),
     Declare(DeclareStatement<T>),
     Fetch(FetchStatement<T>),
     Close(CloseStatement),
@@ -171,6 +172,7 @@ impl<T: AstInfo> AstDisplay for Statement<T> {
             Statement::Subscribe(stmt) => f.write_node(stmt),
             Statement::ExplainPlan(stmt) => f.write_node(stmt),
             Statement::ExplainPushdown(stmt) => f.write_node(stmt),
+            Statement::ExplainAnalyze(stmt) => f.write_node(stmt),
             Statement::ExplainTimestamp(stmt) => f.write_node(stmt),
             Statement::ExplainSinkSchema(stmt) => f.write_node(stmt),
             Statement::Declare(stmt) => f.write_node(stmt),
@@ -250,6 +252,7 @@ pub fn statement_kind_label_value(kind: StatementKind) -> &'static str {
         StatementKind::Subscribe => "subscribe",
         StatementKind::ExplainPlan => "explain_plan",
         StatementKind::ExplainPushdown => "explain_pushdown",
+        StatementKind::ExplainAnalyze => "explain_analyze",
         StatementKind::ExplainTimestamp => "explain_timestamp",
         StatementKind::ExplainSinkSchema => "explain_sink_schema",
         StatementKind::Declare => "declare",
@@ -4034,6 +4037,63 @@ impl<T: AstInfo> AstDisplay for ExplainPushdownStatement<T> {
 impl_display_t!(ExplainPushdownStatement);
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum ExplainAnalyzeComputationProperty {
+    Cpu,
+    Memory,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum ExplainAnalyzeProperty {
+    Computation {
+        /// Must be non-empty.
+        properties: Vec<ExplainAnalyzeComputationProperty>,
+        skew: bool,
+    },
+    Hints,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct ExplainAnalyzeStatement<T: AstInfo> {
+    pub properties: ExplainAnalyzeProperty,
+    /// Should only be `Explainee::Index` or `Explainee::MaterializedView`
+    pub explainee: Explainee<T>,
+    pub as_sql: bool,
+}
+
+impl<T: AstInfo> AstDisplay for ExplainAnalyzeStatement<T> {
+    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
+        f.write_str("EXPLAIN ANALYZE");
+        match &self.properties {
+            ExplainAnalyzeProperty::Computation { properties, skew } => {
+                let mut first = true;
+                for property in properties {
+                    if first {
+                        f.write_str(" ");
+                        first = false;
+                    } else {
+                        f.write_str(", ");
+                    }
+                    match property {
+                        ExplainAnalyzeComputationProperty::Cpu => f.write_str("CPU"),
+                        ExplainAnalyzeComputationProperty::Memory => f.write_str("MEMORY"),
+                    }
+                }
+                if *skew {
+                    f.write_str(" WITH SKEW");
+                }
+            }
+            ExplainAnalyzeProperty::Hints => f.write_str("HINTS"),
+        }
+        f.write_str(" FOR ");
+        f.write_node(&self.explainee);
+        if self.as_sql {
+            f.write_str(" AS SQL");
+        }
+    }
+}
+impl_display_t!(ExplainAnalyzeStatement);
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct ExplainTimestampStatement<T: AstInfo> {
     pub format: Option<ExplainFormat>,
     pub select: SelectStatement<T>,
@@ -4629,6 +4689,21 @@ pub enum Explainee<T: AstInfo> {
 }
 
 impl<T: AstInfo> Explainee<T> {
+    pub fn name(&self) -> Option<&T::ItemName> {
+        match self {
+            Self::View(name)
+            | Self::ReplanView(name)
+            | Self::MaterializedView(name)
+            | Self::ReplanMaterializedView(name)
+            | Self::Index(name)
+            | Self::ReplanIndex(name) => Some(name),
+            Self::Select(..)
+            | Self::CreateView(..)
+            | Self::CreateMaterializedView(..)
+            | Self::CreateIndex(..) => None,
+        }
+    }
+
     pub fn is_view(&self) -> bool {
         use Explainee::*;
         matches!(self, View(_) | ReplanView(_) | CreateView(_, _))

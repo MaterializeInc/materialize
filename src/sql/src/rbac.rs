@@ -897,7 +897,13 @@ fn generate_rbac_requirements(
             config: _,
             explainee,
         })
-        | Plan::ExplainPushdown(plan::ExplainPushdownPlan { explainee }) => RbacRequirements {
+        | Plan::ExplainPushdown(plan::ExplainPushdownPlan { explainee })
+        | Plan::ExplainAnalyze(plan::ExplainAnalyzePlan {
+            properties: _,
+            as_sql: _,
+            explainee_name: _,
+            explainee,
+        }) => RbacRequirements {
             privileges: match explainee {
                 Explainee::View(id)
                 | Explainee::MaterializedView(id)

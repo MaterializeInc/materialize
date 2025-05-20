@@ -420,6 +420,9 @@ impl Coordinator {
                     self.sequence_explain_pushdown(ctx, plan, target_cluster)
                         .await;
                 }
+                Plan::ExplainAnalyze(plan) => {
+                    self.sequence_explain_analyze(ctx, plan, target_cluster).await;
+                }
                 Plan::ExplainSinkSchema(plan) => {
                     let result = self.sequence_explain_schema(plan);
                     ctx.retire(result);

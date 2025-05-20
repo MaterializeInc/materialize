@@ -29,9 +29,10 @@ use mz_repr::explain::{ExplainConfig, ExplainFormat};
 use mz_repr::optimize::OptimizerFeatureOverrides;
 use mz_repr::{CatalogItemId, Datum, RelationDesc, ScalarType};
 use mz_sql_parser::ast::{
-    CteBlock, ExplainPlanOption, ExplainPlanOptionName, ExplainPushdownStatement,
-    ExplainSinkSchemaFor, ExplainSinkSchemaStatement, ExplainTimestampStatement, Expr,
-    IfExistsBehavior, OrderByExpr, SetExpr, SubscribeOutput, UnresolvedItemName,
+    CteBlock, ExplainAnalyzeComputationProperty, ExplainAnalyzeProperty, ExplainAnalyzeStatement,
+    ExplainPlanOption, ExplainPlanOptionName, ExplainPushdownStatement, ExplainSinkSchemaFor,
+    ExplainSinkSchemaStatement, ExplainTimestampStatement, Expr, IfExistsBehavior, OrderByExpr,
+    SetExpr, SubscribeOutput, UnresolvedItemName,
 };
 use mz_sql_parser::ident;
 use mz_storage_types::sinks::{
@@ -53,8 +54,9 @@ use crate::plan::query::{ExprContext, QueryLifetime, offset_into_value, plan_exp
 use crate::plan::scope::Scope;
 use crate::plan::statement::{StatementContext, StatementDesc, ddl};
 use crate::plan::{
-    self, CopyFromFilter, CopyToPlan, CreateSinkPlan, ExplainPushdownPlan, ExplainSinkSchemaPlan,
-    ExplainTimestampPlan, HirRelationExpr, HirScalarExpr, side_effecting_func, transform_ast,
+    self, CopyFromFilter, CopyToPlan, CreateSinkPlan, ExplainAnalyzePlan, ExplainPushdownPlan,
+    ExplainSinkSchemaPlan, ExplainTimestampPlan, HirRelationExpr, HirScalarExpr,
+    side_effecting_func, transform_ast,
 };
 use crate::plan::{
     CopyFormat, CopyFromPlan, ExplainPlanPlan, InsertPlan, MutationKind, Params, Plan, PlanError,
@@ -352,6 +354,76 @@ pub fn describe_explain_pushdown(
             _ => vec![],
         }),
     )
+}
+
+pub fn describe_explain_analyze(
+    _scx: &StatementContext,
+    statement: ExplainAnalyzeStatement<Aug>,
+) -> Result<StatementDesc, PlanError> {
+    if statement.as_sql {
+        let relation_desc = RelationDesc::builder()
+            .with_column("SQL", ScalarType::String.nullable(false))
+            .finish();
+        return Ok(StatementDesc::new(Some(relation_desc)));
+    }
+
+    match statement.properties {
+        ExplainAnalyzeProperty::Computation { properties, skew } => {
+            let mut relation_desc =
+                RelationDesc::builder().with_column("operator", ScalarType::String.nullable(false));
+
+            if skew {
+                relation_desc =
+                    relation_desc.with_column("worker_id", ScalarType::Int64.nullable(false));
+            }
+
+            for property in properties {
+                match property {
+                    ExplainAnalyzeComputationProperty::Cpu if skew => {
+                        relation_desc = relation_desc
+                            .with_column("cpu_ratio", ScalarType::Float64.nullable(false))
+                            .with_column("worker_ns", ScalarType::Int64.nullable(false))
+                            .with_column("avg_ns", ScalarType::Int64.nullable(false))
+                            .with_column(
+                                "count",
+                                ScalarType::Numeric { max_scale: None }.nullable(false),
+                            );
+                    }
+                    ExplainAnalyzeComputationProperty::Cpu => {
+                        relation_desc = relation_desc
+                            .with_column("duration_ns", ScalarType::Int64.nullable(false))
+                            .with_column(
+                                "count",
+                                ScalarType::Numeric { max_scale: None }.nullable(false),
+                            );
+                    }
+                    ExplainAnalyzeComputationProperty::Memory if skew => {
+                        relation_desc = relation_desc
+                            .with_column("memory_ratio", ScalarType::Float64.nullable(false))
+                            .with_column("worker_size", ScalarType::String.nullable(false))
+                            .with_column("avg_size", ScalarType::String.nullable(false));
+                    }
+                    ExplainAnalyzeComputationProperty::Memory => {
+                        relation_desc =
+                            relation_desc.with_column("size", ScalarType::String.nullable(false));
+                    }
+                }
+            }
+
+            let relation_desc = relation_desc.finish();
+            Ok(StatementDesc::new(Some(relation_desc)))
+        }
+        ExplainAnalyzeProperty::Hints => {
+            let relation_desc = RelationDesc::builder()
+                .with_column("operator", ScalarType::String.nullable(false))
+                .with_column("levels", ScalarType::Int64.nullable(false))
+                .with_column("to_cut", ScalarType::Int64.nullable(false))
+                .with_column("hint", ScalarType::Float64.nullable(false))
+                .with_column("savings", ScalarType::String.nullable(true))
+                .finish();
+            Ok(StatementDesc::new(Some(relation_desc)))
+        }
+    }
 }
 
 pub fn describe_explain_timestamp(
@@ -700,6 +772,25 @@ pub fn plan_explain_pushdown(
     scx.require_feature_flag(&vars::ENABLE_EXPLAIN_PUSHDOWN)?;
     let explainee = plan_explainee(scx, statement.explainee, params)?;
     Ok(Plan::ExplainPushdown(ExplainPushdownPlan { explainee }))
+}
+
+pub fn plan_explain_analyze(
+    scx: &StatementContext,
+    statement: ExplainAnalyzeStatement<Aug>,
+    params: &Params,
+) -> Result<Plan, PlanError> {
+    let explainee_name = statement
+        .explainee
+        .name()
+        .expect("EXPLAIN ANALYZE is not supported for this explainee")
+        .full_name_str();
+    let explainee = plan_explainee(scx, statement.explainee, params)?;
+    Ok(Plan::ExplainAnalyze(ExplainAnalyzePlan {
+        properties: statement.properties,
+        explainee,
+        explainee_name,
+        as_sql: statement.as_sql,
+    }))
 }
 
 pub fn plan_explain_timestamp(
