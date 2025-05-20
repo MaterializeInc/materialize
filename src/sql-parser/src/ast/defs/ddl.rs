@@ -586,6 +586,7 @@ pub enum SourceErrorPolicy {
         /// The alias to use for the error column. If unspecified will be `error`.
         alias: Option<Ident>,
     },
+    Dummy,
 }
 
 impl AstDisplay for SourceErrorPolicy {
@@ -598,6 +599,7 @@ impl AstDisplay for SourceErrorPolicy {
                     f.write_node(alias);
                 }
             }
+            Self::Dummy => unreachable!(),
         }
     }
 }
@@ -1467,6 +1469,7 @@ pub enum CreateSinkConnection<T: AstInfo> {
         key: Option<KafkaSinkKey>,
         headers: Option<Ident>,
     },
+    Dummy,
 }
 
 impl<T: AstInfo> AstDisplay for CreateSinkConnection<T> {
@@ -1493,6 +1496,7 @@ impl<T: AstInfo> AstDisplay for CreateSinkConnection<T> {
                     f.write_node(headers);
                 }
             }
+            CreateSinkConnection::Dummy => unreachable!(),
         }
     }
 }
@@ -1597,6 +1601,7 @@ impl_display_t!(TableConstraint);
 pub enum KeyConstraint {
     // PRIMARY KEY (<columns>) NOT ENFORCED
     PrimaryKeyNotEnforced { columns: Vec<Ident> },
+    Dummy,
 }
 
 impl AstDisplay for KeyConstraint {
@@ -1609,6 +1614,7 @@ impl AstDisplay for KeyConstraint {
                 f.write_str(") ");
                 f.write_str("NOT ENFORCED");
             }
+            KeyConstraint::Dummy => unreachable!(),
         }
     }
 }
