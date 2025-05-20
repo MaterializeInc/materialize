@@ -6087,10 +6087,13 @@ dependencies = [
 name = "mz-kv-cache"
 version = "0.1.0"
 dependencies = [
+ "anyhow",
+ "differential-dataflow",
  "mz-persist-client",
  "mz-persist-types",
  "mz-repr",
  "mz-storage-types",
+ "timely",
 ]
 
 [[package]]

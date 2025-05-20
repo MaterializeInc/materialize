@@ -5,10 +5,13 @@ edition.workspace = true
 rust-version.workspace = true
 
 [dependencies]
+anyhow = "1.0.98"
+differential-dataflow = "0.15.1"
 mz-persist-types = { path = "../persist-types" }
 mz-persist-client = { path = "../persist-client" }
 mz-repr = { path = "../repr" }
 mz-storage-types = { path = "../storage-types" }
+timely = "0.21.0"
 
 [lints]
 workspace = true

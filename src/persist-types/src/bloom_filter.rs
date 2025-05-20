@@ -9,7 +9,7 @@
 use parquet::bloom_filter::Sbbf;
 use serde::Serialize;
 
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, Serialize, PartialEq, Eq, PartialOrd, Ord)]
 pub struct BloomFilter {}
 
 impl BloomFilter {

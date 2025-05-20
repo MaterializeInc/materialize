@@ -1102,6 +1102,31 @@ where
     T: Timestamp + Lattice + Codec64 + Sync,
     D: Semigroup + Codec64 + Send + Sync,
 {
+    /// TODO
+    pub async fn fetch(&self, part: &LeasedBatchPart<T>) {
+        let blob = Arc::clone(&self.blob);
+        let metrics = Arc::clone(&self.metrics);
+        let snapshot_metrics = self.metrics.read.snapshot.clone();
+        let shard_metrics = Arc::clone(&self.machine.applier.shard_metrics);
+        let reader_id = self.reader_id.clone();
+        let schemas = self.read_schemas.clone();
+        let mut schema_cache = self.schema_cache.clone();
+        let persist_cfg = self.cfg.clone();
+
+        let fetched_part = fetch_leased_part(
+            &persist_cfg,
+            &part,
+            blob.as_ref(),
+            Arc::clone(&metrics),
+            &snapshot_metrics,
+            &shard_metrics,
+            &reader_id,
+            schemas.clone(),
+            &mut schema_cache,
+        )
+        .await;
+    }
+
     /// Generates a [Self::snapshot], and streams out all of the updates
     /// it contains in bounded memory.
     ///

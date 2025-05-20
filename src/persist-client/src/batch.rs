@@ -13,9 +13,9 @@ use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Debug;
 use std::marker::PhantomData;
-use std::mem;
 use std::sync::Arc;
 use std::time::Instant;
+use std::{mem, usize};
 
 use arrow::array::{Array, Int64Array};
 use bytes::Bytes;
@@ -443,6 +443,9 @@ impl BatchBuilderConfig {
             encoding_config: EncodingConfig {
                 use_dictionary: ENCODING_ENABLE_DICTIONARY.get(value),
                 compression: CompressionFormat::from_str(&ENCODING_COMPRESSION_FORMAT.get(value)),
+                // TODO(upsert-in-persist).
+                use_bloom_filter: true,
+                max_row_group_size: usize::MAX,
             },
             preferred_order,
             structured_key_lower_len: STRUCTURED_KEY_LOWER_LEN.get(value),
@@ -1226,6 +1229,8 @@ impl<T: Timestamp + Codec64> BatchParts<T> {
             schema_id,
             // Field has been deprecated but kept around to roundtrip state.
             deprecated_schema_id: None,
+            // TODO(upsert-in-persist).
+            bloom_filter: None,
         })
     }
 

@@ -31,6 +31,7 @@ use mz_persist::indexed::encoding::{BlobTraceBatchPart, BlobTraceUpdates};
 use mz_persist::location::{Blob, SeqNo};
 use mz_persist::metrics::ColumnarMetrics;
 use mz_persist_types::arrow::ArrayOrd;
+use mz_persist_types::bloom_filter::BloomFilter;
 use mz_persist_types::columnar::{ColumnDecoder, Schema, data_type};
 use mz_persist_types::part::Codec64Mut;
 use mz_persist_types::schema::backward_compatible;
@@ -193,6 +194,7 @@ where
                     &self.shard_metrics,
                     read_metrics,
                     x,
+                    |_| true,
                 )
                 .await;
                 let buf = match buf {
@@ -348,17 +350,38 @@ where
     )
 }
 
-pub(crate) async fn fetch_batch_part_blob<T>(
+pub(crate) async fn fetch_batch_part_blob<T, F>(
     shard_id: &ShardId,
     blob: &dyn Blob,
     metrics: &Metrics,
     shard_metrics: &ShardMetrics,
     read_metrics: &ReadMetrics,
     part: &HollowBatchPart<T>,
-) -> Result<SegmentedBytes, BlobKey> {
+    should_fetch_row_group: F,
+) -> Result<SegmentedBytes, BlobKey>
+where
+    F: Fn(&BloomFilter) -> bool,
+{
     let now = Instant::now();
     let get_span = debug_span!("fetch_batch::get");
     let blob_key = part.key.complete(shard_id);
+
+    let ranges: Option<Vec<_>> = if let Some(bloom_filters) = part.bloom_filter.as_ref() {
+        let ranges = bloom_filters
+            .iter()
+            .filter_map(|(filter, range)| {
+                if (should_fetch_row_group)(filter) {
+                    Some(range.clone())
+                } else {
+                    None
+                }
+            })
+            .collect();
+        Some(ranges)
+    } else {
+        None
+    };
+
     let value = retry_external(&metrics.retries.external.fetch_batch_get, || async {
         shard_metrics.blob_gets.inc();
         blob.get(&blob_key).await
@@ -416,8 +439,16 @@ pub(crate) async fn fetch_batch_part<T>(
 where
     T: Timestamp + Lattice + Codec64,
 {
-    let buf =
-        fetch_batch_part_blob(shard_id, blob, metrics, shard_metrics, read_metrics, part).await?;
+    let buf = fetch_batch_part_blob(
+        shard_id,
+        blob,
+        metrics,
+        shard_metrics,
+        read_metrics,
+        part,
+        |_| true,
+    )
+    .await?;
     let part = decode_batch_part_blob(metrics, read_metrics, registered_desc.clone(), part, &buf);
     Ok(part)
 }

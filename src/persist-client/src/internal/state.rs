@@ -755,7 +755,7 @@ pub struct HollowBatchPart<T> {
 
     /// If bloom filters are enabled then a bloom filter we be available for the part to
     /// determine if a primary key is in the `HollowBatchPart`.
-    pub bloom_filter: Option<Vec<BloomFilter>>,
+    pub bloom_filter: Option<Vec<(BloomFilter, (usize, usize))>>,
 }
 
 /// A [Batch] but with the updates themselves stored externally.
@@ -1088,6 +1088,7 @@ impl<T: Ord> Ord for HollowBatchPart<T> {
             format: self_format,
             schema_id: self_schema_id,
             deprecated_schema_id: self_deprecated_schema_id,
+            bloom_filter: self_bloom_filter,
         } = self;
         let HollowBatchPart {
             key: other_key,
@@ -1100,6 +1101,7 @@ impl<T: Ord> Ord for HollowBatchPart<T> {
             format: other_format,
             schema_id: other_schema_id,
             deprecated_schema_id: other_deprecated_schema_id,
+            bloom_filter: other_bloom_filter,
         } = other;
         (
             self_key,
@@ -1112,6 +1114,7 @@ impl<T: Ord> Ord for HollowBatchPart<T> {
             self_format,
             self_schema_id,
             self_deprecated_schema_id,
+            self_bloom_filter,
         )
             .cmp(&(
                 other_key,
@@ -1124,6 +1127,7 @@ impl<T: Ord> Ord for HollowBatchPart<T> {
                 other_format,
                 other_schema_id,
                 other_deprecated_schema_id,
+                other_bloom_filter,
             ))
     }
 }
@@ -2218,7 +2222,6 @@ where
                 critical_readers: BTreeMap::new(),
                 writers: BTreeMap::new(),
                 schemas: BTreeMap::new(),
-                bloom_filters: BTreeMap::new(),
                 trace: Trace::default(),
             },
         };
@@ -2804,6 +2807,8 @@ pub(crate) mod tests {
                     format,
                     schema_id,
                     deprecated_schema_id,
+                    // TODO(upsert-in-persist).
+                    bloom_filter: None,
                 }
             },
         )
@@ -2977,6 +2982,7 @@ pub(crate) mod tests {
                         format: None,
                         schema_id: None,
                         deprecated_schema_id: None,
+                        bloom_filter: None,
                     }))
                 })
                 .collect(),
