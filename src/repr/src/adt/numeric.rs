@@ -51,14 +51,14 @@ pub const NUMERIC_AGG_MAX_PRECISION: u8 = NUMERIC_AGG_WIDTH * 3;
 /// A double-width version of [`Numeric`] for use in aggregations.
 pub type NumericAgg = Decimal<NUMERIC_AGG_WIDTH_USIZE>;
 
-static CX_DATUM: LazyLock<Context<Numeric>> = LazyLock::new(|| {
-    let mut cx = Context::<Numeric>::default();
-    cx.set_max_exponent(isize::from(NUMERIC_DATUM_MAX_PRECISION - 1))
-        .unwrap();
-    cx.set_min_exponent(-isize::from(NUMERIC_DATUM_MAX_PRECISION))
-        .unwrap();
-    cx
-});
+// static CX_DATUM: LazyLock<Context<Numeric>> = LazyLock::new(|| {
+//     let mut cx = Context::<Numeric>::default();
+//     cx.set_max_exponent(isize::from(NUMERIC_DATUM_MAX_PRECISION - 1))
+//         .unwrap();
+//     cx.set_min_exponent(-isize::from(NUMERIC_DATUM_MAX_PRECISION))
+//         .unwrap();
+//     cx
+// });
 static CX_AGG: LazyLock<Context<NumericAgg>> = LazyLock::new(|| {
     let mut cx = Context::<NumericAgg>::default();
     cx.set_max_exponent(isize::from(NUMERIC_AGG_MAX_PRECISION - 1))
@@ -205,7 +205,9 @@ pub trait Dec<const N: usize> {
 impl Dec<NUMERIC_DATUM_WIDTH_USIZE> for Numeric {
     const TWOS_COMPLEMENT_BYTE_WIDTH: usize = 17;
     fn context() -> Context<Numeric> {
-        CX_DATUM.clone()
+        /////////CX_DATUM.clone()
+
+        todo!()
     }
     fn u128_splitter() -> &'static Numeric {
         &U128_SPLITTER_DATUM
@@ -224,7 +226,9 @@ impl Dec<NUMERIC_AGG_WIDTH_USIZE> for NumericAgg {
 
 /// Returns a new context appropriate for operating on numeric datums.
 pub fn cx_datum() -> Context<Numeric> {
-    CX_DATUM.clone()
+    /////CX_DATUM.clone()
+
+    todo!()
 }
 
 /// Returns a new context appropriate for operating on numeric aggregates.
