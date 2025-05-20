@@ -10031,10 +10031,24 @@ mod test {
     }
 }
 
-#[cfg(kani)]
 mod kani_test {
+    use super::*;
+
     #[kani::proof]
     fn kani_smoketest() {
-        assert!(1 == 2);
+        let a1: i64 = kani::any();
+        let a2: i64 = kani::any();
+        kani::assume(a1 != a2);
+
+        let e = MirScalarExpr::Column(0, Default::default());
+
+        let d1 = &[Datum::Int64(a1)];
+        let d2 = &[Datum::Int64(a2)];
+
+        let mut arena = RowArena::new();
+        let r1 = UnaryFunc::NegInt64(NegInt64).eval(d1, &arena, &e).unwrap();
+        let r2 = UnaryFunc::NegInt64(NegInt64).eval(d2, &arena, &e).unwrap();
+
+        assert_ne!(r1, r2);
     }
 }
