@@ -1412,6 +1412,7 @@ pub struct RowColumnarEncoder {
     encoders: Vec<DatumEncoder>,
     // TODO(parkmycar): Replace the `usize` with a `ColumnIdx` type.
     col_names: Vec<(usize, Arc<str>)>,
+    primary_keys: Vec<Vec<usize>>,
     // TODO(parkmycar): Optionally omit this.
     nullability: BooleanBufferBuilder,
 }
@@ -1453,6 +1454,7 @@ impl RowColumnarEncoder {
             encoders,
             col_names,
             nullability: BooleanBufferBuilder::new(100),
+            primary_keys: desc.typ().keys.clone(),
         })
     }
 }
@@ -1492,8 +1494,12 @@ impl ColumnEncoder<Row> for RowColumnarEncoder {
             encoders,
             col_names,
             nullability,
+            primary_keys,
             ..
         } = self;
+
+        // Simplifying assumption: we only support a single primary key for now.
+        let pkeys = primary_keys.get(0).cloned().unwrap_or_default();
 
         let (arrays, fields): (Vec<_>, Vec<_>) = col_names
             .iter()
@@ -1506,7 +1512,11 @@ impl ColumnEncoder<Row> for RowColumnarEncoder {
                 // See: <https://github.com/MaterializeInc/database-issues/issues/2488>
                 let nullable = true;
                 let array = encoder.finish();
-                let field = Field::new(col_idx.to_string(), array.data_type().clone(), nullable);
+                let mut field =
+                    Field::new(col_idx.to_string(), array.data_type().clone(), nullable);
+                if pkeys.contains(col_idx) {
+                    field.set_metadata([("primary_key".to_string(), "true".to_string())].into());
+                }
 
                 (array, field)
             })

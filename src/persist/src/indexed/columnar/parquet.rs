@@ -12,6 +12,7 @@
 use std::io::Write;
 use std::sync::Arc;
 
+use arrow::row;
 use differential_dataflow::trace::Description;
 use mz_ore::bytes::SegmentedBytes;
 use mz_ore::cast::CastFrom;
@@ -99,6 +100,14 @@ pub fn decode_trace_parquet<T: Timestamp + Codec64>(
     Ok(ret)
 }
 
+pub struct RowGroupStats {
+    pub offset: i64,
+    pub size: i64,
+    // pub blooms: Vec<parquet::bloom_filter::Sbbf>,
+    pub bloom_offset: i64,
+    pub bloom_size: i32,
+}
+
 /// Encodes [`BlobTraceUpdates`] to Parquet using the [`parquet`] crate.
 pub fn encode_parquet_kvtd<W: Write + Send>(
     w: &mut W,
@@ -118,7 +127,8 @@ pub fn encode_parquet_kvtd<W: Write + Send>(
         .set_compression(cfg.compression.into())
         .set_writer_version(WriterVersion::PARQUET_2_0)
         .set_data_page_size_limit(1024 * 1024)
-        .set_max_row_group_size(usize::MAX)
+        // .set_max_row_group_size(usize::MAX)
+        .set_bloom_filter_enabled(true)
         .set_key_value_metadata(Some(vec![metadata]))
         .build();
 
@@ -129,12 +139,52 @@ pub fn encode_parquet_kvtd<W: Write + Send>(
         BlobTraceUpdates::Structured { .. } => "t,d,k_s,v_s",
     };
 
+    let primary_keys: Vec<usize> = batch
+        .schema()
+        .fields
+        .iter()
+        .enumerate()
+        .filter_map(|(i, f)| {
+            if f.metadata().get("primary_key").is_some() {
+                Some(i)
+            } else {
+                None
+            }
+        })
+        .collect();
+
+    assert!(primary_keys.len() <= 1);
+
     let mut writer = ArrowWriter::try_new(w, batch.schema(), Some(properties))?;
+
     writer.write(&batch)?;
 
     writer.flush()?;
+    let mut row_group_stats = vec![];
     let bytes_written = writer.bytes_written();
     let file_metadata = writer.close()?;
+    for row_group in &file_metadata.row_groups {
+        let row_group_offset = row_group.file_offset.expect("row group offset");
+        let row_group_size = row_group.total_compressed_size.expect("row group size");
+        for (i, column) in row_group.columns.iter().enumerate() {
+            //If this is part of the primary key, we need to read out the bloom filter
+            if primary_keys.contains(&i) {
+                let bloom = column
+                    .meta_data
+                    .as_ref()
+                    .and_then(|m| Some((m.bloom_filter_offset, m.bloom_filter_length)));
+                if let Some((Some(offset), Some(size))) = bloom {
+                    row_group_stats.push(RowGroupStats {
+                        offset: row_group_offset,
+                        size: row_group_size,
+                        bloom_offset: offset,
+                        bloom_size: size,
+                    });
+                    // Read the bloom filter
+                }
+            }
+        }
+    }
 
     report_parquet_metrics(metrics, &file_metadata, bytes_written, format);
 
