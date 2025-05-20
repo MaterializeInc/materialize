@@ -224,7 +224,7 @@ http_archive(
 LLVM_VERSION = "19.1.6"
 
 # We have a few variants of our clang toolchain, either improving how it's built or adding new tools.
-LLVM_VERSION_SUFFIX = "1"
+LLVM_VERSION_SUFFIX = "2"
 
 # Version of the "toolchains_llvm" rule set, _not_ the version of clang/llvm.
 #
@@ -251,10 +251,10 @@ llvm_toolchain(
     name = "llvm_toolchain",
     llvm_version = LLVM_VERSION,
     sha256 = {
-        "darwin-aarch64": "94ed965925dbdc25b29e6fcfa9a84b28d915d5c9da7c71405fc20bbcf8396bd1",
-        "darwin-x86_64": "9395b07fd5018816bcaee84522d9c9386fdbefe62fdf8afff89b57e1b7095463",
-        "linux-aarch64": "24fd3405f65ccbc39f0d14a5126ee2edb5904d7a9525ae483f34a510a1bdce3e",
-        "linux-x86_64": "bad3d776c222c99056eba8b64c085a1e08edd783cb102e1b6eba43b78ce2fe2b",
+        "darwin-aarch64": "204a05a12aaa7c59791aea7c70f9c3e4c71e8a414002ae5026faaf4da0e21ef1",
+        "darwin-x86_64": "3990b08cedea77d1c72fc3ba37bde2b79493bc4214a9fa3b5bc9560338b9741a",
+        "linux-aarch64": "d5cb31841299c00e72e26a3dc1db7bd980d65e058b952c93a8f5304d1f17c325",
+        "linux-x86_64": "d0dbc6cecb7798cf5c22eb07413a0773615edfdf24d832f0096e13e88105d51b",
     },
     sysroot = {
         "darwin-aarch64": "@sysroot_darwin_universal//:sysroot",
@@ -436,10 +436,10 @@ rust_bindgen_dependencies()
 bindgen_toolchains(
     "{0}-{1}".format(LLVM_VERSION, LLVM_VERSION_SUFFIX),
     {
-        "darwin_aarch64": "sha256-wni7a1Wu6qGeNVOZOjc6ks1ACXf+RBoXu6YcSVkleos=",
-        "darwin_x86_64": "sha256-MKjPkNE2g2nw75SkOvjnieKnTtubUKyE3/o7olQm8j0=",
-        "linux_aarch64": "sha256-BvzsXMuiObNStcP86QwgBRDcTVBRsWUYio1iRCMhgxo=",
-        "linux_x86_64": "sha256-9PgulfHhsOd03ZhEO7ljp2EuDafIbME1oCJ/Rj/R7pU=",
+        "darwin_aarch64": "sha256-8u9xQ+3q4SO810j6wue+lM6njkucOyChRQRTk246tSE=",
+        "darwin_x86_64": "sha256-rf03+b1xaxYpQiSkYTDazfr1jcfn5O7dTtd1rBRog7s=",
+        "linux_aarch64": "sha256-e8Wj26Md/qLdw23Eq0FxbVsTNQa/4jKmrfeUEJ078iE=",
+        "linux_x86_64": "sha256-Dgtp3+gN+Iq0POdhkl8ny/tKdV8hG/ZrtLOLYPgc/4A=",
     },
 )
 
