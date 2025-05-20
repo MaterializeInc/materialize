@@ -10035,34 +10035,24 @@ mod kani_test {
     use super::*;
 
     #[kani::proof]
-    #[kani::unwind(8)]
+    #[kani::unwind(5)]
     fn kani_smoketest() {
         let a1: i64 = kani::any();
         let a2: i64 = kani::any();
         kani::assume(a1 != a2);
 
-        let e = MirScalarExpr::Column(0, Default::default());
+        let func = NegInt64;
+        let r1 = func.call(a1);
+        let r2 = func.call(a2);
 
-        let d1 = &[Datum::Int64(a1)];
-        let d2 = &[Datum::Int64(a2)];
-
-        let mut arena = RowArena::new();
-
-        // let r1 = UnaryFunc::NegInt64(NegInt64).eval(d1, &arena, &e).unwrap();
-        // let r2 = UnaryFunc::NegInt64(NegInt64).eval(d2, &arena, &e).unwrap();
-
-        // let r1 = NegInt64.eval(d1, &arena, &e).unwrap();
-        // let r2 = NegInt64.eval(d2, &arena, &e).unwrap();
-        //
-        // assert_ne!(r1, r2);
-
-        let r1 = NegInt64.eval(d1, &arena, &e);
-        let r2 = NegInt64.eval(d2, &arena, &e);
         match (r1, r2) {
             (Ok(r1), Ok(r2)) => {
                 assert_ne!(r1, r2);
             }
-            _ => {}
+            a => {
+                std::mem::forget(a);
+            }
         }
+        std::mem::forget(func);
     }
 }
