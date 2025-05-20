@@ -21,10 +21,12 @@ use futures::future::FutureExt;
 use indexmap::map::Entry;
 use itertools::Itertools;
 use mz_ore::error::ErrorExt;
+use mz_persist_client::cache::PersistClientCache;
 use mz_repr::{Datum, DatumVec, Diff, GlobalId, Row};
 use mz_rocksdb::ValueIterator;
 use mz_storage_operators::metrics::BackpressureMetrics;
 use mz_storage_types::configuration::StorageConfiguration;
+use mz_storage_types::controller::CollectionMetadata;
 use mz_storage_types::dyncfgs;
 use mz_storage_types::errors::{DataflowError, EnvelopeError, UpsertError};
 use mz_storage_types::sources::envelope::UpsertEnvelope;
@@ -61,8 +63,11 @@ pub(crate) mod types;
 
 pub type UpsertValue = Result<Row, UpsertError>;
 
-#[derive(Copy, Clone, Debug, Hash, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
-pub struct UpsertKey([u8; 32]);
+#[derive(Clone, Debug, Hash, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+pub struct UpsertKey {
+    hash: [u8; 32],
+    pub key_columns: Row,
+}
 
 impl AsRef<[u8]> for UpsertKey {
     #[inline(always)]
@@ -70,13 +75,16 @@ impl AsRef<[u8]> for UpsertKey {
     // batch, we effectively consolidate each key, before persisting that consolidated value.
     // Easy!!
     fn as_ref(&self) -> &[u8] {
-        &self.0
+        &self.hash
     }
 }
 
 impl From<&[u8]> for UpsertKey {
     fn from(bytes: &[u8]) -> Self {
-        UpsertKey(bytes.try_into().expect("invalid key length"))
+        UpsertKey {
+            hash: bytes.try_into().expect("invalid key length"),
+            key_columns: Row::empty(),
+        }
     }
 }
 
@@ -135,7 +143,15 @@ impl UpsertKey {
             };
             let mut hasher = DigestHasher(KeyHash::new());
             key.hash(&mut hasher);
-            Self(hasher.0.finalize().into())
+
+            let hash = hasher.0.finalize().into();
+            let key_columns_row = Row::pack_slice(&key_datums);
+
+            Self {
+                hash,
+                // WIP!
+                key_columns: key_columns_row,
+            }
         })
     }
 }
@@ -213,6 +229,8 @@ pub(crate) fn upsert<G: Scope, FromTime>(
     storage_configuration: &StorageConfiguration,
     dataflow_paramters: &crate::internal_control::DataflowParameters,
     backpressure_metrics: Option<BackpressureMetrics>,
+    persist_clients: Arc<PersistClientCache>,
+    storage_metadata: CollectionMetadata,
 ) -> (
     Collection<G, Result<Row, DataflowError>, Diff>,
     Stream<G, (Option<GlobalId>, HealthStatusUpdate)>,
@@ -344,6 +362,8 @@ where
                 storage_configuration,
                 prevent_snapshot_buffering,
                 snapshot_buffering_max,
+                persist_clients,
+                storage_metadata,
             )
         } else {
             upsert_operator(
@@ -359,6 +379,8 @@ where
                 storage_configuration,
                 prevent_snapshot_buffering,
                 snapshot_buffering_max,
+                persist_clients,
+                storage_metadata,
             )
         }
     } else {
@@ -380,6 +402,8 @@ where
             storage_configuration,
             prevent_snapshot_buffering,
             snapshot_buffering_max,
+            persist_clients,
+            storage_metadata,
         )
     }
 }
@@ -399,6 +423,8 @@ fn upsert_operator<G: Scope, FromTime, F, Fut, US>(
     _storage_configuration: &StorageConfiguration,
     prevent_snapshot_buffering: bool,
     snapshot_buffering_max: Option<usize>,
+    persist_clients: Arc<PersistClientCache>,
+    storage_metadata: CollectionMetadata,
 ) -> (
     Collection<G, Result<Row, DataflowError>, Diff>,
     Stream<G, (Option<GlobalId>, HealthStatusUpdate)>,
@@ -433,6 +459,8 @@ where
             upsert_config,
             prevent_snapshot_buffering,
             snapshot_buffering_max,
+            persist_clients,
+            storage_metadata,
         )
     } else {
         upsert_classic(
@@ -583,13 +611,13 @@ async fn drain_staged_input<S, G, T, FromTime, E>(
     // along with the value with the _latest timestamp for that key_.
     commands_state.clear();
     for (_, key, _, _) in stash.iter().take(idx) {
-        commands_state.entry(*key).or_default();
+        commands_state.entry(key.clone()).or_default();
     }
 
     // These iterators iterate in the same order because `commands_state`
     // is an `IndexMap`.
     multi_get_scratch.clear();
-    multi_get_scratch.extend(commands_state.iter().map(|(k, _)| *k));
+    multi_get_scratch.extend(commands_state.iter().map(|(k, _)| k.clone()));
     match state
         .multi_get(multi_get_scratch.drain(..), commands_state.values_mut())
         .await
