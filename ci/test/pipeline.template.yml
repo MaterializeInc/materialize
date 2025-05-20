@@ -133,7 +133,7 @@ steps:
         depends_on: []
         timeout_in_minutes: 45
         agents:
-          queue: hetzner-aarch64-16cpu-32gb
+          queue: hetzner-aarch64-8cpu-16gb
         if: "build.pull_request.id != null"
         coverage: skip
         sanitizer: skip
@@ -301,7 +301,7 @@ steps:
       - ./ci/plugins/mzcompose:
           composition: testdrive
     agents:
-      queue: hetzner-aarch64-16cpu-32gb
+      queue: hetzner-aarch64-8cpu-16gb
 
   - id: cluster-tests
     label: "Cluster tests"
@@ -313,7 +313,7 @@ steps:
       - ./ci/plugins/mzcompose:
           composition: cluster
     agents:
-      queue: hetzner-aarch64-8cpu-16gb
+      queue: hetzner-aarch64-4cpu-8gb
 
   - id: sqllogictest-fast
     label: "Fast SQL logic tests"
@@ -326,7 +326,7 @@ steps:
           composition: sqllogictest
           run: fast-tests
     agents:
-      queue: hetzner-aarch64-16cpu-32gb
+      queue: hetzner-aarch64-8cpu-16gb
 
   - id: restarts
     label: "Restart test"
@@ -336,7 +336,7 @@ steps:
       - ./ci/plugins/mzcompose:
           composition: restart
     agents:
-      queue: hetzner-aarch64-8cpu-16gb
+      queue: hetzner-aarch64-4cpu-8gb
 
   - id: legacy-upgrade-docs-ignore-missing
     label: "Legacy upgrade tests (last version from docs, ignore missing)"
@@ -363,7 +363,7 @@ steps:
               composition: debezium
               run: postgres
         agents:
-          queue: hetzner-aarch64-8cpu-16gb
+          queue: hetzner-aarch64-4cpu-8gb
 
       - id: debezium-sql-server
         label: "Debezium SQL Server tests"
@@ -415,7 +415,7 @@ steps:
           - ./ci/plugins/mzcompose:
               composition: mysql-cdc-resumption
         agents:
-          queue: hetzner-aarch64-8cpu-16gb
+          queue: hetzner-aarch64-4cpu-8gb
 
       - id: mysql-rtr
         label: "MySQL RTR tests"
@@ -455,7 +455,7 @@ steps:
               composition: pg-cdc-resumption
         agents:
           # Larger agent for faster runtime
-          queue: hetzner-aarch64-16cpu-32gb
+          queue: hetzner-aarch64-8cpu-16gb
 
       - id: pg-rtr
         label: "Postgres RTR tests"
@@ -509,7 +509,7 @@ steps:
           - ./ci/plugins/mzcompose:
               composition: ssh-connection
         agents:
-          queue: hetzner-aarch64-8cpu-16gb
+          queue: hetzner-aarch64-4cpu-8gb
 
       - id: fivetran-destination-tests
         label: Fivetran Destination tests
@@ -548,7 +548,7 @@ steps:
           - ./ci/plugins/mzcompose:
               composition: kafka-resumption
         agents:
-          queue: hetzner-aarch64-8cpu-16gb
+          queue: hetzner-aarch64-4cpu-8gb
 
       - id: kafka-auth
         label: Kafka auth test
@@ -582,7 +582,7 @@ steps:
               composition: kafka-rtr
         agents:
           # Larger agent to run test faster
-          queue: hetzner-aarch64-8cpu-16gb
+          queue: hetzner-aarch64-4cpu-8gb
 
   - id: zippy-kafka-sources-short
     label: "Short Zippy"
@@ -606,7 +606,7 @@ steps:
         timeout_in_minutes: 45
         parallelism: 6
         agents:
-          queue: hetzner-aarch64-16cpu-32gb
+          queue: hetzner-aarch64-8cpu-16gb
         plugins:
           - ./ci/plugins/mzcompose:
               composition: platform-checks
@@ -624,7 +624,7 @@ steps:
         timeout_in_minutes: 45
         parallelism: 6
         agents:
-          queue: hetzner-x86-64-16cpu-32gb
+          queue: hetzner-x86-64-8cpu-16gb
         plugins:
           - ./ci/plugins/mzcompose:
               composition: platform-checks
@@ -642,7 +642,7 @@ steps:
         timeout_in_minutes: 45
         parallelism: 6
         agents:
-          queue: hetzner-aarch64-16cpu-32gb
+          queue: hetzner-aarch64-8cpu-16gb
         plugins:
           - ./ci/plugins/mzcompose:
               composition: platform-checks
@@ -759,7 +759,7 @@ steps:
       - ./ci/plugins/mzcompose:
           composition: rtr-combined
     agents:
-      queue: hetzner-aarch64-8cpu-16gb
+      queue: hetzner-aarch64-4cpu-8gb
     skip: "Flakes because of database-issues#8489"
 
   - id: skip-version-upgrade
@@ -783,7 +783,7 @@ steps:
           composition: mz-debug
     agents:
       # Faster agent since it currently compiles mz-debug itself
-      queue: hetzner-aarch64-16cpu-32gb
+      queue: hetzner-aarch64-8cpu-16gb
 
   - id: deploy-website
     label: Deploy website
@@ -884,7 +884,7 @@ steps:
     inputs: ["*"]
     priority: 1
     agents:
-      queue: hetzner-aarch64-16cpu-32gb
+      queue: hetzner-aarch64-8cpu-16gb
     coverage: only
 
   - wait: ~
