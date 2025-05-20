@@ -6089,6 +6089,8 @@ version = "0.1.0"
 dependencies = [
  "mz-persist-client",
  "mz-persist-types",
+ "mz-repr",
+ "mz-storage-types",
 ]
 
 [[package]]

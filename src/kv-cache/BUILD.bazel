@@ -33,6 +33,8 @@ rust_library(
     deps = [
         "//src/persist-client:mz_persist_client",
         "//src/persist-types:mz_persist_types",
+        "//src/repr:mz_repr",
+        "//src/storage-types:mz_storage_types",
     ] + all_crate_deps(normal = True),
 )
 
@@ -66,6 +68,8 @@ rust_test(
     deps = [
         "//src/persist-client:mz_persist_client",
         "//src/persist-types:mz_persist_types",
+        "//src/repr:mz_repr",
+        "//src/storage-types:mz_storage_types",
     ] + all_crate_deps(
         normal = True,
         normal_dev = True,
@@ -78,6 +82,8 @@ rust_doc_test(
     deps = [
         "//src/persist-client:mz_persist_client",
         "//src/persist-types:mz_persist_types",
+        "//src/repr:mz_repr",
+        "//src/storage-types:mz_storage_types",
     ] + all_crate_deps(
         normal = True,
         normal_dev = True,
