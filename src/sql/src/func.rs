@@ -3852,6 +3852,9 @@ pub static MZ_CATALOG_BUILTINS: LazyLock<BTreeMap<&'static str, Func>> = LazyLoc
         "starts_with" => Scalar {
             params!(String, String) => BinaryFunc::StartsWith => Bool, 3696;
         },
+        "wasm" => Scalar {
+            params!(String, Int64) => BinaryFunc::Wasm => Int64, oid::FUNC_WASM_OID;
+        },
         "timezone_offset" => Scalar {
             params!(String, TimestampTz) => BinaryFunc::TimezoneOffset => RecordAny, oid::FUNC_TIMEZONE_OFFSET;
         },

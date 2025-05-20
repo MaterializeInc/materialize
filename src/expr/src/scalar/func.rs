@@ -3320,6 +3320,7 @@ fn starts_with<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
 
 #[derive(Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzReflect)]
 pub enum BinaryFunc {
+    Wasm,
     AddInt16,
     AddInt32,
     AddInt64,
@@ -3516,6 +3517,19 @@ pub enum BinaryFunc {
     StartsWith,
 }
 
+fn wasm<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
+    use wasmtime::*;
+    let engine = Engine::default();
+    let module = Module::new(&engine, a.unwrap_str()).unwrap();
+    let mut store = Store::new(&engine, ());
+    let instance = Instance::new(&mut store, &module, &[]).unwrap();
+    let act = instance
+        .get_typed_func::<(i64,), i64>(&mut store, "act")
+        .unwrap();
+    let res = act.call(&mut store, (b.unwrap_int64(),)).unwrap();
+    Ok(Datum::Int64(res))
+}
+
 impl BinaryFunc {
     pub fn eval<'a>(
         &'a self,
@@ -3530,6 +3544,7 @@ impl BinaryFunc {
             return Ok(Datum::Null);
         }
         match self {
+            BinaryFunc::Wasm => wasm(a, b),
             BinaryFunc::AddInt16 => add_int16(a, b),
             BinaryFunc::AddInt32 => add_int32(a, b),
             BinaryFunc::AddInt64 => add_int64(a, b),
@@ -3823,6 +3838,7 @@ impl BinaryFunc {
             | EncodedBytesCharLength
             | SubDate => ScalarType::Int32.nullable(in_nullable),
 
+            Wasm |
             AddInt64 | SubInt64 | MulInt64 | DivInt64 | ModInt64 | BitAndInt64 | BitOrInt64
             | BitXorInt64 | BitShiftLeftInt64 | BitShiftRightInt64 => {
                 ScalarType::Int64.nullable(in_nullable)
@@ -4004,7 +4020,8 @@ impl BinaryFunc {
     pub fn introduces_nulls(&self) -> bool {
         use BinaryFunc::*;
         match self {
-            AddInt16
+            Wasm
+            | AddInt16
             | AddInt32
             | AddInt64
             | AddUInt16
@@ -4343,7 +4360,8 @@ impl BinaryFunc {
             | RangeUnion
             | RangeIntersection
             | RangeDifference => true,
-            ToCharTimestamp
+            Wasm
+            | ToCharTimestamp
             | ToCharTimestampTz
             | AgeTimestamp
             | AgeTimestampTz
@@ -4715,6 +4733,7 @@ impl BinaryFunc {
             BinaryFunc::PrettySql => (false, false),
             BinaryFunc::RegexpReplace { .. } => (false, false),
             BinaryFunc::StartsWith => (false, false),
+            BinaryFunc::Wasm => (false, false),
         }
     }
 }
@@ -4933,6 +4952,7 @@ impl fmt::Display for BinaryFunc {
                 limit
             ),
             BinaryFunc::StartsWith => f.write_str("starts_with"),
+            BinaryFunc::Wasm => f.write_str("wasm"),
         }
     }
 }
@@ -5356,6 +5376,7 @@ impl RustType<ProtoBinaryFunc> for BinaryFunc {
                 })
             }
             BinaryFunc::StartsWith => StartsWith(()),
+            BinaryFunc::Wasm => Wasm(()),
         };
         ProtoBinaryFunc { kind: Some(kind) }
     }
@@ -5570,6 +5591,7 @@ impl RustType<ProtoBinaryFunc> for BinaryFunc {
                     limit: inner.limit.into_rust()?,
                 }),
                 StartsWith(()) => Ok(BinaryFunc::StartsWith),
+                Wasm(()) => Ok(BinaryFunc::Wasm),
             }
         } else {
             Err(TryFromProtoError::missing_field("ProtoBinaryFunc::kind"))
