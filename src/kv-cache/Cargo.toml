@@ -1,0 +1,12 @@
+[package]
+name = "mz-kv-cache"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+mz-persist-types = { path = "../persist-types" }
+mz-persist-client = { path = "../persist-client" }
+
+[lints]
+workspace = true

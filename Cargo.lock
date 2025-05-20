@@ -6084,6 +6084,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "mz-kv-cache"
+version = "0.1.0"
+dependencies = [
+ "mz-persist-client",
+ "mz-persist-types",
+]
+
+[[package]]
 name = "mz-license-keys"
 version = "0.0.0"
 dependencies = [
