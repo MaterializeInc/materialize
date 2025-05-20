@@ -15,6 +15,7 @@ use std::sync::{Arc, Mutex};
 use mz_orchestratord::controller::materialize::environmentd::DeploymentStatus;
 use mz_ore::channel::trigger::{self, Trigger};
 
+#[derive(Debug)]
 enum DeploymentStateInner {
     Initializing,
     CatchingUp { _skip_trigger: Option<Trigger> },
@@ -128,7 +129,7 @@ impl DeploymentState {
 /// `environmentd` (e.g., the HTTP server). It provides methods to inspect the
 /// current leadership state, and to promote the deployment to the leader if it
 /// is ready to do so.
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub struct DeploymentStateHandle {
     inner: Arc<Mutex<DeploymentStateInner>>,
 }

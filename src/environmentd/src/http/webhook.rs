@@ -31,13 +31,14 @@ use crate::http::WebhookState;
 
 pub async fn handle_webhook(
     State(WebhookState {
-        adapter_client,
+        adapter_client_rx,
         webhook_cache,
     }): State<WebhookState>,
     Path((database, schema, name)): Path<(String, String, String)>,
     headers: http::HeaderMap,
     body: Bytes,
 ) -> impl IntoResponse {
+    let adapter_client = adapter_client_rx.clone().await.expect("sender not dropped");
     // Collect headers into a map, while converting them into strings.
     let mut headers_s = BTreeMap::new();
     for (name, val) in headers.iter() {

@@ -1,0 +1,23 @@
+[package]
+name = "mz-authenticator"
+version = "0.1.0"
+authors = ["Materialize, Inc."]
+license = "proprietary"
+edition.workspace = true
+rust-version.workspace = true
+publish = false
+
+[dependencies]
+mz-frontegg-auth = { path = "../frontegg-auth" }
+mz-server-core = { path = "../server-core" }
+serde = { version = "1.0.219", features = ["derive"] }
+workspace-hack = { version = "0.0.0", path = "../workspace-hack", optional = true }
+
+[lints]
+workspace = true
+
+[features]
+default = ["workspace-hack"]
+
+[package.metadata.cargo-udeps.ignore]
+normal = ["mz-server-core", "workspace-hack"]

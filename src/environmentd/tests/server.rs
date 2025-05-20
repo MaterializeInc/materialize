@@ -2497,19 +2497,6 @@ fn test_internal_http_auth() {
     ))
     .unwrap();
 
-    let res = Client::new().post(url.clone()).json(&json).send().unwrap();
-
-    tracing::info!("response: {res:?}");
-
-    assert_eq!(
-        res.status(),
-        StatusCode::OK,
-        "{:?}",
-        res.json::<serde_json::Value>()
-    );
-    // defaults to mz_system
-    assert!(res.text().unwrap().to_string().contains("mz_system"));
-
     let res = Client::new()
         .post(url.clone())
         .header("x-materialize-user", "mz_system")

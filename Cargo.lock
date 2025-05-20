@@ -4969,6 +4969,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "mz-authenticator"
+version = "0.1.0"
+dependencies = [
+ "mz-frontegg-auth",
+ "mz-server-core",
+ "serde",
+ "workspace-hack",
+]
+
+[[package]]
 name = "mz-avro"
 version = "0.7.0"
 dependencies = [
@@ -5683,6 +5693,8 @@ dependencies = [
  "mz-adapter-types",
  "mz-alloc",
  "mz-alloc-default",
+ "mz-auth",
+ "mz-authenticator",
  "mz-aws-secrets-controller",
  "mz-build-info",
  "mz-catalog",
@@ -7043,6 +7055,7 @@ dependencies = [
  "openssl",
  "proxy-header",
  "scopeguard",
+ "serde",
  "socket2 0.5.9",
  "tokio",
  "tokio-stream",
