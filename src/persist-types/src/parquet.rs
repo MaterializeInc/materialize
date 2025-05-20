@@ -178,19 +178,41 @@ pub fn encode_arrays<W: Write + Send>(
     let props = WriterProperties::builder()
         .set_dictionary_enabled(config.use_dictionary)
         .set_encoding(Encoding::PLAIN)
-        .set_statistics_enabled(EnabledStatistics::None)
+        .set_statistics_enabled(EnabledStatistics::Chunk)
         .set_compression(config.compression.into())
         .set_writer_version(WriterVersion::PARQUET_2_0)
         .set_data_page_size_limit(1024 * 1024)
-        .set_max_row_group_size(usize::MAX)
+        // .set_max_row_group_size(usize::MAX)
+        .set_bloom_filter_enabled(true)
         .build();
     let mut writer = ArrowWriter::try_new(w, Arc::clone(&schema), Some(props))?;
+
+    let primary_keys: Vec<usize> = schema
+        .fields
+        .iter()
+        .enumerate()
+        .filter_map(|(i, f)| {
+            if f.metadata().get("primary_key").is_some() {
+                Some(i)
+            } else {
+                None
+            }
+        })
+        .collect();
+
+    assert!(primary_keys.len() <= 1);
 
     let record_batch = RecordBatch::try_new(schema, arrays)?;
 
     writer.write(&record_batch)?;
     writer.flush()?;
     writer.close()?;
+    // for row_group in writer.close()?.row_groups {
+    //     for column in row_group.columns {
+    //         println!("path: {:?}", column.meta_data.map(|m| m.path_in_schema));
+    //         // println!("meta_data: {:?}", column.meta_data);
+    //     }
+    // }
 
     Ok(())
 }
