@@ -61,8 +61,15 @@ cannot serve queries. That is, queries issued to the snapshotting source (and
 its subsources) will return after the snapshotting completes (unless the user
 breaks out of the query).
 
-Snapshotting can take between a few minutes to several hours, depending on the
-size of your dataset and the [size of your ingestion cluster](/sql/create-cluster/#size).
+Snapshotting can take anywhere from a few minutes to several hours, depending on the size of your dataset, 
+the upstream database, the number of tables (more tables can be parallelized in Postgres), and the [size of your ingestion cluster](/sql/create-cluster/#size).
+
+We've observed the following approximate snapshot rates from PostgreSQL:
+| Cluster Size | Snapshot Rate |
+|--------------|---------------|
+| 25 cc | ~20 MB/s |
+| 100 cc | ~50 MB/s | 
+| 800 cc | ~200 MB/s |
 
 To determine whether your source has completed ingesting the initial snapshot,
 you can query the [`mz_source_statistics`](/sql/system-catalog/mz_internal/#mz_source_statistics)
@@ -81,6 +88,12 @@ components of the snapshot.
 
 Even if your source has not yet committed its initial snapshot, you can still
 monitor its progress. See [How do I monitor source ingestion progress?](#how-do-i-monitor-source-ingestion-progress).
+
+## How do I speed up the snapshotting process?
+
+Scale up the cluster used for the snapshot, then scale it back down once the snapshot completes. See [Use a larger cluster for upsert source snapshotting](https://materialize.com/docs/self-managed/v25.1/ingest-data/#use-a-larger-cluster-for-upsert-source-snapshotting).
+
+
 
 ## How do I monitor source ingestion progress?
 
