@@ -433,7 +433,14 @@ where
             })
             .collect();
 
-        let encoded_part = decode_batch_part_row_groups(bytes, footer_range);
+        let encoded_part = decode_batch_part_row_groups(
+            metrics,
+            read_metrics,
+            registered_desc,
+            part,
+            bytes,
+            footer_range,
+        );
         Ok(encoded_part)
     } else {
         let value = retry_external(&metrics.retries.external.fetch_batch_get, || async {
@@ -450,12 +457,47 @@ where
 }
 
 pub(crate) fn decode_batch_part_row_groups<T>(
+    metrics: &Metrics,
+    read_metrics: &ReadMetrics,
+    registered_desc: Description<T>,
+    part: &HollowBatchPart<T>,
     bytes: Vec<(Bytes, (usize, usize))>,
     footer: (usize, usize),
-) -> EncodedPart<T> {
-    let footer_bytes = bytes.iter().find(|(_bytes, range)| *range == footer);
+) -> EncodedPart<T>
+where
+    T: Timestamp + Lattice + Codec64,
+{
+    let (footer_bytes, _) = bytes
+        .iter()
+        .find(|(_bytes, range)| *range == footer)
+        .expect("should have footer bytes");
 
-    todo!()
+    let metadata =
+        ::parquet::file::metadata::ParquetMetaDataReader::decode_metadata(&footer_bytes[..])
+            .expect("failed to decode metadata");
+    let metadata = ::parquet::arrow::arrow_reader::ArrowReaderMetadata::try_new(
+        Arc::new(metadata),
+        ::parquet::arrow::arrow_reader::ArrowReaderOptions::new(),
+    )
+    .expect("failed to create metadata");
+
+    let bytes = bytes
+        .into_iter()
+        .map(|(bytes, range)| (range, bytes))
+        .collect();
+    let chunks = mz_persist::indexed::columnar::parquet::RowGroupsReader::new(bytes);
+
+    let row_groups =
+        parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder::new_with_metadata(
+            chunks,
+            metadata.clone(),
+        )
+        .build()
+        .expect("failed to create reader");
+    let parsed =
+        BlobTraceBatchPart::decode2(row_groups, &metadata, &metrics.columnar).expect("HACK WEEK");
+
+    EncodedPart::from_hollow(read_metrics.clone(), registered_desc, part, parsed)
 }
 
 pub(crate) fn decode_batch_part_blob<T>(
@@ -500,17 +542,18 @@ where
     T: Timestamp + Lattice + Codec64,
     F: FnMut(&BloomFilter) -> bool,
 {
-    let buf = fetch_batch_part_blob(
+    let part = fetch_batch_part_blob2(
         shard_id,
         blob,
         metrics,
         shard_metrics,
         read_metrics,
         part,
+        registered_desc.clone(),
         should_fetch_row_group,
     )
     .await?;
-    let part = decode_batch_part_blob(metrics, read_metrics, registered_desc.clone(), part, &buf);
+    // let part = decode_batch_part_blob(metrics, read_metrics, registered_desc.clone(), part, &buf);
     Ok(part)
 }
 

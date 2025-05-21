@@ -24,6 +24,7 @@ bench = false
 [dependencies]
 anyhow = "1.0.98"
 arrow = { version = "53.3.0", default-features = false }
+arrow-array = { git = "https://github.com/ptravers/arrow-rs", branch = "hackweek/upsert-in-s3" }
 async-trait = "0.1.88"
 async-stream = "0.3.6"
 aws-config = { version = "1.2.0", default-features = false }

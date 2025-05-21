@@ -40,7 +40,7 @@ use crate::indexed::encoding::{
 };
 use crate::metrics::{ColumnarMetrics, ParquetColumnMetrics};
 
-const INLINE_METADATA_KEY: &str = "MZ:inline";
+pub const INLINE_METADATA_KEY: &str = "MZ:inline";
 
 /// Information that can be used to locate a row group, and the
 /// bloom filter within it.
