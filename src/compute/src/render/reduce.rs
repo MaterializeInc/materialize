@@ -14,6 +14,7 @@
 use std::collections::BTreeMap;
 use std::sync::LazyLock;
 
+use columnar::Columnar;
 use dec::OrderedDecimal;
 use differential_dataflow::IntoOwned;
 use differential_dataflow::collection::AsCollection;
@@ -36,6 +37,7 @@ use mz_repr::adt::numeric::{self, Numeric, NumericAgg};
 use mz_repr::fixed_length::ToDatumIter;
 use mz_repr::{Datum, DatumList, DatumVec, Diff, Row, RowArena, SharedRow};
 use mz_storage_types::errors::DataflowError;
+use mz_timely_util::containers::Vec2Col2ValBatcher;
 use mz_timely_util::operator::CollectionExt;
 use serde::{Deserialize, Serialize};
 use timely::Container;
@@ -52,7 +54,8 @@ use crate::render::errors::MaybeValidatingRow;
 use crate::render::reduce::monoids::{ReductionMonoid, get_monoid};
 use crate::render::{ArrangementFlavor, Pairer};
 use crate::row_spine::{
-    DatumSeq, RowBatcher, RowBuilder, RowRowBatcher, RowRowBuilder, RowValBatcher, RowValBuilder,
+    DatumSeq, RowBatcher, RowBuilder, RowRowBuilder, RowRowBuilderColumn, RowValBatcher,
+    RowValBuilder,
 };
 use crate::typedefs::{
     ErrBatcher, ErrBuilder, KeyBatcher, RowErrBuilder, RowErrSpine, RowRowAgent, RowRowArrangement,
@@ -62,7 +65,8 @@ use crate::typedefs::{
 impl<G, T> Context<G, T>
 where
     G: Scope,
-    G::Timestamp: Lattice + Refines<T> + Columnation,
+    G::Timestamp: Lattice + Refines<T> + Columnation + Columnar,
+    for<'a> <G::Timestamp as Columnar>::Ref<'a>: Copy,
     T: Timestamp + Lattice + Columnation,
 {
     /// Renders a `MirRelationExpr::Reduce` using various non-obvious techniques to
@@ -522,7 +526,7 @@ where
         let mfp_after2 = mfp_after.filter(|mfp| mfp.could_error());
 
         let (output, errors) = collection
-            .mz_arrange::<RowRowBatcher<_, _>, RowRowBuilder<_, _,>, RowRowSpine<_, _>>("Arranged DistinctBy")
+            .mz_arrange::<Vec2Col2ValBatcher<_, _,_, _>, RowRowBuilderColumn<_, _,>, RowRowSpine<_, _>>("Arranged DistinctBy")
             .reduce_pair::<_, _, _, RowRowBuilder<_, _,>, RowRowSpine<_, _>, _, _, RowErrBuilder<_,_>, RowErrSpine<_, _>>(
                 "DistinctBy",
                 "DistinctByErrorCheck",
@@ -757,7 +761,7 @@ where
             "FusedReduceUnnestList"
         };
         let arranged = partial
-            .mz_arrange::<RowRowBatcher<_, _>, RowRowBuilder<_, _>, RowRowSpine<_, _>>(&format!(
+            .mz_arrange::<Vec2Col2ValBatcher<_, _, _, _>, RowRowBuilderColumn<_, _>, RowRowSpine<_, _>>(&format!(
                 "Arranged {name}"
             ));
         let oks = if !fused_unnest_list {
@@ -1088,7 +1092,7 @@ where
             // NOTE(vmarcos): The input operator name below is used in the tuning advice built-in
             // view mz_introspection.mz_expected_group_size_advice.
             let arranged = partial
-                .mz_arrange::<RowRowBatcher<_, _>, RowRowBuilder<_, _>, RowRowSpine<_, _>>(
+                .mz_arrange::<Vec2Col2ValBatcher<_, _, _, _>, RowRowBuilderColumn<_, _>, RowRowSpine<_, _>>(
                     "Arrange ReduceMinsMaxes",
                 );
             // Note that we would prefer to use `mz_timely_util::reduce::ReduceExt::reduce_pair` here,
@@ -1276,7 +1280,7 @@ where
         // NOTE(vmarcos): The input operator name below is used in the tuning advice built-in
         // view mz_introspection.mz_expected_group_size_advice.
         let arranged_input = input
-            .mz_arrange::<RowRowBatcher<_, _>, RowRowBuilder<_, _>, RowRowSpine<_, _>>(
+            .mz_arrange::<Vec2Col2ValBatcher<_, _, _, _>, RowRowBuilderColumn<_, _>, RowRowSpine<_, _>>(
                 "Arranged MinsMaxesHierarchical input",
             );
 
