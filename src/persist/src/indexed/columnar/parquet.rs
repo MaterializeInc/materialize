@@ -194,7 +194,7 @@ pub fn encode_parquet_kvtd<W: Write + Send>(
     let properties = WriterProperties::builder()
         .set_dictionary_enabled(cfg.use_dictionary)
         .set_encoding(Encoding::PLAIN)
-        .set_statistics_enabled(EnabledStatistics::None)
+        .set_statistics_enabled(EnabledStatistics::Chunk)
         .set_compression(cfg.compression.into())
         .set_writer_version(WriterVersion::PARQUET_2_0)
         .set_data_page_size_limit(1024 * 1024)
