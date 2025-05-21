@@ -38,7 +38,7 @@ cc_library(
         "@com_google_absl//absl/strings",
         "@com_google_protobuf//src/google/protobuf/compiler:code_generator",
         "@com_google_protobuf//src/google/protobuf/compiler:importer",
-        "@crates_io__cxx-1.0.122//:cxx_cc",
+        "@crates_io__cxx-1.0.158//:cxx_cc",
     ],
 )
 
@@ -82,6 +82,6 @@ cc_library(
     include_prefix = "protobuf-native",
     deps = [
         "@com_google_absl//absl/strings",
-        "@crates_io__cxx-1.0.122//:cxx_cc",
+        "@crates_io__cxx-1.0.158//:cxx_cc",
     ],
 )
