@@ -705,6 +705,21 @@ pub struct RunMeta {
     pub(crate) deprecated_schema: Option<SchemaId>,
 }
 
+/// Metadata describing `RowGroup` related to the underlying HollowBatchPart.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct RowGroupMetadata {
+    pub(crate) bloom_filter: BloomFilter,
+    pub(crate) size: usize,
+    pub(crate) footer_offset: usize,
+}
+
+/// Metadata describing the bytes used by the footer in the underlying parquet file.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct ParquetFooter {
+    pub(crate) offset: usize,
+    pub(crate) size: usize,
+}
+
 /// A subset of a [HollowBatch] corresponding 1:1 to a blob.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub struct HollowBatchPart<T> {
@@ -754,9 +769,9 @@ pub struct HollowBatchPart<T> {
     pub deprecated_schema_id: Option<SchemaId>,
 
     /// BloomFilter stored next to (offset, size, footer_offset) of the row group.
-    pub bloom_filter: Option<Vec<(BloomFilter, (usize, usize))>>,
+    pub row_group_metadata: Option<Vec<RowGroupMetadata>>,
     /// The offset and size of the parquet footer in the blob.
-    pub parquet_footer: Option<(usize, usize)>,
+    pub parquet_footer: Option<ParquetFooter>,
 }
 
 /// A [Batch] but with the updates themselves stored externally.
@@ -1089,7 +1104,7 @@ impl<T: Ord> Ord for HollowBatchPart<T> {
             format: self_format,
             schema_id: self_schema_id,
             deprecated_schema_id: self_deprecated_schema_id,
-            bloom_filter: self_bloom_filter,
+            row_group_metadata: self_bloom_filter,
             parquet_footer: self_parquet_footer,
         } = self;
         let HollowBatchPart {
@@ -1103,7 +1118,7 @@ impl<T: Ord> Ord for HollowBatchPart<T> {
             format: other_format,
             schema_id: other_schema_id,
             deprecated_schema_id: other_deprecated_schema_id,
-            bloom_filter: other_bloom_filter,
+            row_group_metadata: other_bloom_filter,
             parquet_footer: other_parquet_footer,
         } = other;
         (
@@ -2813,7 +2828,7 @@ pub(crate) mod tests {
                     schema_id,
                     deprecated_schema_id,
                     // TODO(upsert-in-persist).
-                    bloom_filter: None,
+                    row_group_metadata: None,
                     parquet_footer: None,
                 }
             },
@@ -2988,7 +3003,7 @@ pub(crate) mod tests {
                         format: None,
                         schema_id: None,
                         deprecated_schema_id: None,
-                        bloom_filter: None,
+                        row_group_metadata: None,
                         parquet_footer: None,
                     }))
                 })
