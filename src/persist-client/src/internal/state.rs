@@ -2227,7 +2227,6 @@ where
                 critical_readers: BTreeMap::new(),
                 writers: BTreeMap::new(),
                 schemas: BTreeMap::new(),
-                bloom_filters: BTreeMap::new(),
                 trace: Trace::default(),
             },
         };

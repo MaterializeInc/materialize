@@ -316,6 +316,17 @@ postgres-openssl = { git = "https://github.com/MaterializeInc/rust-postgres" }
 postgres_array = { git = "https://github.com/MaterializeInc/rust-postgres-array" }
 
 parquet = { git = "https://github.com/ptravers/arrow-rs", branch = "hackweek/upsert-in-s3" }
+arrow-data = { git = "https://github.com/ptravers/arrow-rs", branch = "hackweek/upsert-in-s3" }
+arrow-buffer = { git = "https://github.com/ptravers/arrow-rs", branch = "hackweek/upsert-in-s3" }
+arrow-cast = { git = "https://github.com/ptravers/arrow-rs", branch = "hackweek/upsert-in-s3" }
+arrow-ipc = { git = "https://github.com/ptravers/arrow-rs", branch = "hackweek/upsert-in-s3" }
+arrow-select = { git = "https://github.com/ptravers/arrow-rs", branch = "hackweek/upsert-in-s3" }
+arrow-string = { git = "https://github.com/ptravers/arrow-rs", branch = "hackweek/upsert-in-s3" }
+arrow-ord = { git = "https://github.com/ptravers/arrow-rs", branch = "hackweek/upsert-in-s3" }
+arrow-arith = { git = "https://github.com/ptravers/arrow-rs", branch = "hackweek/upsert-in-s3" }
+arrow = { git = "https://github.com/ptravers/arrow-rs", branch = "hackweek/upsert-in-s3" }
+arrow-schema = { git = "https://github.com/ptravers/arrow-rs", branch = "hackweek/upsert-in-s3" }
+arrow-array = { git = "https://github.com/ptravers/arrow-rs", branch = "hackweek/upsert-in-s3" }
 
 # Waiting on https://github.com/MaterializeInc/serde-value/pull/35.
 serde-value = { git = "https://github.com/MaterializeInc/serde-value.git" }
