@@ -56,7 +56,6 @@ members = [
     "src/metrics",
     "src/mysql-util",
     "src/mz",
-    "src/mz-debug",
     "src/npm",
     "src/orchestrator",
     "src/orchestrator-kubernetes",
@@ -177,7 +176,6 @@ default-members = [
     "src/metrics",
     "src/mysql-util",
     "src/mz",
-    "src/mz-debug",
     "src/npm",
     "src/orchestrator",
     "src/orchestrator-kubernetes",
@@ -316,7 +314,7 @@ postgres-types = { git = "https://github.com/MaterializeInc/rust-postgres" }
 postgres-openssl = { git = "https://github.com/MaterializeInc/rust-postgres" }
 postgres_array = { git = "https://github.com/MaterializeInc/rust-postgres-array" }
 
-parquet = { git = "https://github.com/ptravers/arrow-rs" }
+parquet = { git = "https://github.com/ptravers/arrow-rs", branch = "hackweek/upsert-in-s3" }
 
 # Waiting on https://github.com/MaterializeInc/serde-value/pull/35.
 serde-value = { git = "https://github.com/MaterializeInc/serde-value.git" }

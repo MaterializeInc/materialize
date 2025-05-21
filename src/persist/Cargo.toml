@@ -50,7 +50,7 @@ mz-postgres-client = { path = "../postgres-client" }
 mz-proto = { path = "../proto" }
 openssl = { version = "0.10.71", features = ["vendored"] }
 openssl-sys = { version = "0.9.108", features = ["vendored"] }
-parquet = { version = "53.3.0", default-features = false, features = ["arrow", "brotli", "flate2", "snap", "lz4", "zstd"] }
+parquet = { git = "https://github.com/ptravers/arrow-rs", branch = "hackweek/upsert-in-s3", default-features = false, features = ["arrow", "brotli", "flate2", "snap", "lz4", "zstd"] }
 postgres-openssl = { version = "0.5.0" }
 postgres-protocol = { version = "0.6.5" }
 prometheus = { version = "0.13.4", default-features = false }
