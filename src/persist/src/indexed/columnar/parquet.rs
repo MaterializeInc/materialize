@@ -12,7 +12,9 @@
 use std::io::Write;
 use std::sync::Arc;
 
-use arrow::row;
+use arrow::row::Row;
+use bytes::buf::Reader;
+use bytes::{Buf, Bytes};
 use differential_dataflow::trace::Description;
 use mz_ore::bytes::SegmentedBytes;
 use mz_ore::cast::CastFrom;
@@ -21,8 +23,10 @@ use mz_persist_types::parquet::EncodingConfig;
 use parquet::arrow::ArrowWriter;
 use parquet::arrow::arrow_reader::{ArrowReaderMetadata, ParquetRecordBatchReaderBuilder};
 use parquet::basic::Encoding;
+use parquet::errors::ParquetError;
 use parquet::file::metadata::KeyValue;
 use parquet::file::properties::{EnabledStatistics, WriterProperties, WriterVersion};
+use parquet::file::reader::{ChunkReader, Length};
 use timely::progress::{Antichain, Timestamp};
 use tracing::warn;
 
@@ -47,6 +51,74 @@ pub struct RowGroupStats {
     pub size: i64,
     /// The offset and size of the bloom 🌸 filter within the row group.
     pub blooms: Vec<(i64, i32)>,
+}
+
+/// A reader for row groups in a parquet file.
+/// This is kind of a hack, but it maps logical offsets
+/// (from the original file) to physical batches of data.
+#[derive(Debug, Clone)]
+pub struct RowGroupsReader {
+    /// A mapping of the logical offset to the physical bytes.
+    pub segments: Vec<((usize, usize), Bytes)>,
+    /// all the bytes in the segments
+    pub length: usize,
+}
+
+impl RowGroupsReader {
+    /// Creates a new [`RowGroupsReader`] from the given segments.
+    pub fn new(segments: Vec<((usize, usize), Bytes)>) -> Self {
+        let length = segments.iter().map(|(_, bytes)| bytes.len()).sum();
+        RowGroupsReader { segments, length }
+    }
+
+    /// Returns the number of segments in the reader.
+    pub fn len(&self) -> usize {
+        self.segments.len()
+    }
+
+    /// Add a new row group to the reader.
+    pub fn push_row_group(&mut self, offset: (usize, usize), bytes: Bytes) {
+        self.length += bytes.len();
+        self.segments.push((offset, bytes));
+    }
+}
+
+impl Length for RowGroupsReader {
+    fn len(&self) -> u64 {
+        self.length as u64
+    }
+}
+
+impl ChunkReader for RowGroupsReader {
+    type T = Reader<Bytes>;
+    fn get_bytes(&self, start: u64, length: usize) -> parquet::errors::Result<Bytes> {
+        for ((offset_start, offset_end), bytes) in &self.segments {
+            if *offset_start <= start.try_into().unwrap()
+                && *offset_end >= TryInto::<usize>::try_into(start).unwrap() + length
+            {
+                let offset = start - *offset_start as u64;
+                let length = length as u64;
+                return Ok(bytes.slice(offset as usize..(offset + length) as usize));
+            }
+        }
+        Err(ParquetError::EOF(format!(
+            "could not find bytes in segments: {start} {length}"
+        )))
+    }
+
+    fn get_read(&self, start: u64) -> parquet::errors::Result<Self::T> {
+        for ((offset_start, offset_end), bytes) in &self.segments {
+            if *offset_start <= start.try_into().unwrap()
+                && *offset_end >= TryInto::<usize>::try_into(start).unwrap()
+            {
+                let offset = start - *offset_start as u64;
+                return Ok(bytes.slice(offset as usize..*offset_end as usize).reader());
+            }
+        }
+        Err(ParquetError::EOF(format!(
+            "could not find bytes in segments: {start}"
+        )))
+    }
 }
 
 /// Encodes a [`BlobTraceBatchPart`] into the Parquet format.
