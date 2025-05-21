@@ -71,11 +71,6 @@ impl RowGroupsReader {
         RowGroupsReader { segments, length }
     }
 
-    /// Returns the number of segments in the reader.
-    pub fn len(&self) -> usize {
-        self.segments.len()
-    }
-
     /// Add a new row group to the reader.
     pub fn push_row_group(&mut self, offset: (usize, usize), bytes: Bytes) {
         self.length += bytes.len();
