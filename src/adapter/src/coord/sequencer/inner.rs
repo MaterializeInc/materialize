@@ -33,7 +33,6 @@ use mz_expr::{
 };
 use mz_ore::cast::CastFrom;
 use mz_ore::collections::{CollectionExt, HashSet};
-use mz_ore::str::separated;
 use mz_ore::task::{self, JoinHandle, spawn};
 use mz_ore::tracing::OpenTelemetryContext;
 use mz_ore::vec::VecExt;
@@ -49,8 +48,7 @@ use mz_repr::{
     RelationVersionSelector, Row, RowArena, RowIterator, Timestamp,
 };
 use mz_sql::ast::{
-    AlterSourceAddSubsourceOption, ExplainAnalyzeComputationProperty, ExplainAnalyzeProperty,
-    SqlServerConfigOption, SqlServerConfigOptionName,
+    AlterSourceAddSubsourceOption, SqlServerConfigOption, SqlServerConfigOptionName,
 };
 use mz_sql::ast::{CreateSubsourceStatement, MySqlConfigOptionName, UnresolvedItemName};
 use mz_sql::catalog::{
@@ -2718,98 +2716,6 @@ impl Coordinator {
             }
         };
         fut
-    }
-
-    pub(super) async fn sequence_explain_analyze(
-        &mut self,
-        ctx: ExecuteContext,
-        plan: plan::ExplainAnalyzePlan,
-        target_cluster: TargetCluster,
-    ) {
-        match plan.explainee {
-            Explainee::Index(index_id) => (),
-            Explainee::MaterializedView(item_id) => (),
-            _ => {
-                ctx.retire(Err(AdapterError::Unsupported(
-                    "EXPLAIN ANALYZE queries for this explainee type",
-                )));
-                return;
-            }
-        };
-
-        // generate SQL query
-
-        /* SELECT REPEAT(' ', nesting * 2) || operator AS operator
-                 fields for each property
-            FROM                    mz_introspection.mz_lir_mapping mlm
-                          LEFT JOIN tables for each property
-                [CROSS JOIN LATERAL (sums per worker and averages for each property) IF SKEW]
-                               JOIN mz_introspection.mz_mappable_objects mo
-                                 ON (mlm.global_id = mo.global_id)
-           WHERE mo.name = {plan.explainee_name}
-           GROUP BY lir_id, nesting, operator, [worker_id IF SKEW]
-           ORDER BY lir_id DESC
-        */
-        let mut columns = vec!["REPEAT(' ', nesting * 2) || operator AS operator"];
-        let mut from = vec!["mz_introspection.mz_lir_mapping mlm"];
-        let mut group_by = vec!["lir_id", "nesting", "operator"];
-        let mut order_by = vec!["lir_id DESC"];
-
-        match plan.properties {
-            ExplainAnalyzeProperty::Computation {
-                properties,
-                skew: true,
-            } => {
-                for property in properties {
-                    match property {
-                        ExplainAnalyzeComputationProperty::Cpu => todo!(),
-                        ExplainAnalyzeComputationProperty::Memory => todo!(),
-                    }
-                }
-            }
-            ExplainAnalyzeProperty::Computation {
-                properties,
-                skew: false,
-            } => {
-                for property in properties {
-                    match property {
-                        ExplainAnalyzeComputationProperty::Cpu => todo!(),
-                        ExplainAnalyzeComputationProperty::Memory => todo!(),
-                    }
-                }
-            }
-            ExplainAnalyzeProperty::Hints => {
-                columns.extend([
-                    "levels",
-                    "to_cut",
-                    "hint",
-                    "pg_size_pretty(savings) AS savings",
-                ]);
-                from.extend(["JOIN mz_introspection.mz_dataflow_global_ids mdgi ON (mlm.global_id = mdgi.global_id)",
-                "LEFT JOIN mz_introspection.mz_expected_group_size_advice megsa ON (megsa.dataflow_id = mdgi.id AND mlm.operator_id_start <= megsa.region_id AND megsa.region_id < mlm.operator_id_end)"]);
-            }
-        }
-
-        from.push("JOIN mz_introspection.mz_mappable_objects mo ON (mlm.global_id = mo.global_id)");
-
-        let columns = separated(", ", columns);
-        let from = separated(" ", from);
-        let explainee_name = plan.explainee_name;
-        let group_by = separated(", ", group_by);
-        let order_by = separated(", ", order_by);
-        let query = format!(
-            r#"SELECT {columns}
-                 FROM {from}
-                WHERE mo.name = '{explainee_name}'
-               GROUP BY {group_by}
-               ORDER BY {order_by}"#
-        );
-
-        if plan.as_sql {
-            todo!("send query as immediate response")
-        } else {
-            todo!("execute the query")
-        }
     }
 
     #[instrument]

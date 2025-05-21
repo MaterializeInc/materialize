@@ -4036,7 +4036,7 @@ impl<T: AstInfo> AstDisplay for ExplainPushdownStatement<T> {
 }
 impl_display_t!(ExplainPushdownStatement);
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum ExplainAnalyzeComputationProperty {
     Cpu,
     Memory,
@@ -4068,21 +4068,20 @@ impl<T: AstInfo> AstDisplay for ExplainAnalyzeStatement<T> {
                 let mut first = true;
                 for property in properties {
                     if first {
-                        f.write_str(" ");
                         first = false;
                     } else {
-                        f.write_str(", ");
+                        f.write_str(",");
                     }
                     match property {
-                        ExplainAnalyzeComputationProperty::Cpu => f.write_str("CPU"),
-                        ExplainAnalyzeComputationProperty::Memory => f.write_str("MEMORY"),
+                        ExplainAnalyzeComputationProperty::Cpu => f.write_str(" CPU"),
+                        ExplainAnalyzeComputationProperty::Memory => f.write_str(" MEMORY"),
                     }
                 }
                 if *skew {
                     f.write_str(" WITH SKEW");
                 }
             }
-            ExplainAnalyzeProperty::Hints => f.write_str("HINTS"),
+            ExplainAnalyzeProperty::Hints => f.write_str(" HINTS"),
         }
         f.write_str(" FOR ");
         f.write_node(&self.explainee);

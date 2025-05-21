@@ -49,11 +49,13 @@ use mz_repr::optimize::OptimizerFeatureOverrides;
 use mz_repr::refresh_schedule::RefreshSchedule;
 use mz_repr::role_id::RoleId;
 use mz_repr::{
-    CatalogItemId, ColumnIndex, ColumnName, ColumnType, Diff, GlobalId, RelationDesc, Row,
-    ScalarType, Timestamp, VersionedRelationDesc,
+    CatalogItemId, ColumnIndex, ColumnName, ColumnType, Diff, GlobalId, RelationDesc, RelationType,
+    Row, ScalarType, Timestamp, VersionedRelationDesc,
 };
 use mz_sql_parser::ast::{
-    AlterSourceAddSubsourceOption, ClusterAlterOptionValue, ConnectionOptionName, ExplainAnalyzeProperty, QualifiedReplica, RawDataType, SelectStatement, TransactionIsolationLevel, TransactionMode, UnresolvedItemName, Value, WithOptionValue
+    AlterSourceAddSubsourceOption, ClusterAlterOptionValue, ConnectionOptionName, QualifiedReplica,
+    RawDataType, SelectStatement, TransactionIsolationLevel, TransactionMode, UnresolvedItemName,
+    Value, WithOptionValue,
 };
 use mz_ssh_util::keys::SshKeyPair;
 use mz_storage_types::connections::aws::AwsConnection;
@@ -169,7 +171,6 @@ pub enum Plan {
     CopyTo(CopyToPlan),
     ExplainPlan(ExplainPlanPlan),
     ExplainPushdown(ExplainPushdownPlan),
-    ExplainAnalyze(ExplainAnalyzePlan),
     ExplainTimestamp(ExplainTimestampPlan),
     ExplainSinkSchema(ExplainSinkSchemaPlan),
     Insert(InsertPlan),
@@ -290,7 +291,7 @@ impl Plan {
             StatementKind::Execute => &[PlanKind::Execute],
             StatementKind::ExplainPlan => &[PlanKind::ExplainPlan],
             StatementKind::ExplainPushdown => &[PlanKind::ExplainPushdown],
-            StatementKind::ExplainAnalyze => &[PlanKind::ExplainAnalyze, PlanKind::Select],
+            StatementKind::ExplainAnalyze => &[PlanKind::Select],
             StatementKind::ExplainTimestamp => &[PlanKind::ExplainTimestamp],
             StatementKind::ExplainSinkSchema => &[PlanKind::ExplainSinkSchema],
             StatementKind::Fetch => &[PlanKind::Fetch],
@@ -384,7 +385,6 @@ impl Plan {
             Plan::CopyTo(_) => "copy to",
             Plan::ExplainPlan(_) => "explain plan",
             Plan::ExplainPushdown(_) => "EXPLAIN FILTER PUSHDOWN",
-            Plan::ExplainAnalyze(_) => "explain analyze",
             Plan::ExplainTimestamp(_) => "explain timestamp",
             Plan::ExplainSinkSchema(_) => "explain schema",
             Plan::Insert(_) => "insert",
@@ -863,6 +863,19 @@ pub struct SelectPlan {
     pub copy_to: Option<CopyFormat>,
 }
 
+impl SelectPlan {
+    pub fn immediate(rows: Vec<Row>, typ: RelationType) -> Self {
+        let arity = typ.arity();
+        SelectPlan {
+            select: None,
+            source: HirRelationExpr::Constant { rows, typ },
+            when: QueryWhen::Immediately,
+            finishing: RowSetFinishing::trivial(arity),
+            copy_to: None,
+        }
+    }
+}
+
 #[derive(Debug)]
 pub enum SubscribeOutput {
     Diffs,
@@ -1104,14 +1117,6 @@ impl std::fmt::Display for ExplaineeStatementKind {
 #[derive(Clone, Debug)]
 pub struct ExplainPushdownPlan {
     pub explainee: Explainee,
-}
-
-#[derive(Clone, Debug)]
-pub struct ExplainAnalyzePlan {
-    pub properties: ExplainAnalyzeProperty,
-    pub explainee: Explainee,
-    pub explainee_name: String,
-    pub as_sql: bool,
 }
 
 #[derive(Clone, Debug)]

@@ -8897,6 +8897,13 @@ impl<'a> Parser<'a> {
         &mut self,
         properties: &[Keyword],
     ) -> Result<(Keyword, ExplainAnalyzeComputationProperty), ParserError> {
+        if properties.is_empty() {
+            return Err(ParserError::new(
+                self.index,
+                "both CPU and MEMORY were specified, expected WITH SKEW or FOR",
+            ));
+        }
+
         match self.parse_one_of_keywords(properties) {
             Some(kw) if kw == CPU => Ok((kw, ExplainAnalyzeComputationProperty::Cpu)),
             Some(kw) if kw == MEMORY => Ok((kw, ExplainAnalyzeComputationProperty::Memory)),

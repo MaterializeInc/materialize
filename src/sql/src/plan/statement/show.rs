@@ -911,7 +911,7 @@ fn show_continual_tasks<'a>(
 /// Can be interrogated for its columns, or converted into a proper [`Plan`].
 pub struct ShowSelect<'a> {
     scx: &'a StatementContext<'a>,
-    stmt: SelectStatement<Aug>,
+    pub(crate) stmt: SelectStatement<Aug>,
 }
 
 impl<'a> ShowSelect<'a> {
@@ -955,6 +955,14 @@ impl<'a> ShowSelect<'a> {
             filter,
             order.unwrap_or("q.*")
         );
+
+        Self::new_from_bare_query(scx, query)
+    }
+
+    pub fn new_from_bare_query(
+        scx: &'a StatementContext,
+        query: String,
+    ) -> Result<(ShowSelect<'a>, ResolvedIds), PlanError> {
         let stmts = parse::parse(&query).expect("ShowSelect::new called with invalid SQL");
         let stmt = match stmts.into_element().ast {
             Statement::Select(select) => select,

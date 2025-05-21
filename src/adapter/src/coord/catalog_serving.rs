@@ -105,7 +105,6 @@ pub fn auto_run_on_catalog_server<'a, 's, 'p>(
         | Plan::CopyTo(_)
         | Plan::ExplainPlan(_)
         | Plan::ExplainPushdown(_)
-        | Plan::ExplainAnalyze(_)
         | Plan::ExplainSinkSchema(_)
         | Plan::Insert(_)
         | Plan::AlterNetworkPolicy(_)

@@ -644,9 +644,8 @@ impl ExecuteResponse {
             DropObjects => &[DroppedObject],
             DropOwned => &[DroppedOwned],
             PlanKind::EmptyQuery => &[ExecuteResponseKind::EmptyQuery],
-            ExplainPlan | ExplainPushdown | ExplainAnalyze | ExplainTimestamp | Select
-            | ShowAllVariables | ShowCreate | ShowColumns | ShowVariable | InspectShard
-            | ExplainSinkSchema => &[
+            ExplainPlan | ExplainPushdown | ExplainTimestamp | Select | ShowAllVariables
+            | ShowCreate | ShowColumns | ShowVariable | InspectShard | ExplainSinkSchema => &[
                 ExecuteResponseKind::CopyTo,
                 SendingRows,
                 SendingRowsImmediate,

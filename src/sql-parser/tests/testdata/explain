@@ -319,3 +319,45 @@ EXPLAIN WITH (ARITY, EQUIVALENCES, HUMANIZED EXPRESSIONS) CREATE MATERIALIZED VI
 EXPLAIN WITH (ARITY, EQUIVALENCES, HUMANIZED EXPRESSIONS) CREATE MATERIALIZED VIEW mv AS SELECT 665
 =>
 ExplainPlan(ExplainPlanStatement { stage: None, with_options: [ExplainPlanOption { name: Arity, value: None }, ExplainPlanOption { name: Equivalences, value: None }, ExplainPlanOption { name: HumanizedExpressions, value: None }], format: None, explainee: CreateMaterializedView(CreateMaterializedViewStatement { if_exists: Error, name: UnresolvedItemName([Ident("mv")]), columns: [], in_cluster: None, query: Query { ctes: Simple([]), body: Select(Select { distinct: None, projection: [Expr { expr: Value(Number("665")), alias: None }], from: [], selection: None, group_by: [], having: None, qualify: None, options: [] }), order_by: [], limit: None, offset: None }, as_of: None, with_options: [] }, false) })
+
+parse-statement
+EXPLAIN ANALYZE MEMORY FOR INDEX i AS SQL
+----
+EXPLAIN ANALYZE MEMORY FOR INDEX i AS SQL
+=>
+ExplainAnalyze(ExplainAnalyzeStatement { properties: Computation { properties: [Memory], skew: false }, explainee: Index(Name(UnresolvedItemName([Ident("i")]))), as_sql: true })
+
+parse-statement
+EXPLAIN ANALYZE HINTS FOR INDEX i AS SQL
+----
+EXPLAIN ANALYZE HINTS FOR INDEX i AS SQL
+=>
+ExplainAnalyze(ExplainAnalyzeStatement { properties: Hints, explainee: Index(Name(UnresolvedItemName([Ident("i")]))), as_sql: true })
+
+parse-statement
+EXPLAIN ANALYZE MEMORY, CPU WITH SKEW FOR INDEX i AS SQL
+----
+EXPLAIN ANALYZE MEMORY, CPU WITH SKEW FOR INDEX i AS SQL
+=>
+ExplainAnalyze(ExplainAnalyzeStatement { properties: Computation { properties: [Memory, Cpu], skew: true }, explainee: Index(Name(UnresolvedItemName([Ident("i")]))), as_sql: true })
+
+parse-statement
+EXPLAIN ANALYZE MEMORY, CPU WITH SKEW FOR MATERIALIZED VIEW w
+----
+EXPLAIN ANALYZE MEMORY, CPU WITH SKEW FOR MATERIALIZED VIEW w
+=>
+ExplainAnalyze(ExplainAnalyzeStatement { properties: Computation { properties: [Memory, Cpu], skew: true }, explainee: MaterializedView(Name(UnresolvedItemName([Ident("w")]))), as_sql: false })
+
+parse-statement
+EXPLAIN ANALYZE MEMORY, CPU, CPU WITH SKEW FOR MATERIALIZED VIEW w
+----
+error: both CPU and MEMORY were specified, expected WITH SKEW or FOR
+EXPLAIN ANALYZE MEMORY, CPU, CPU WITH SKEW FOR MATERIALIZED VIEW w
+      ^
+
+parse-statement
+EXPLAIN ANALYZE HINTS FOR SELECT 1
+----
+error: expected INDEX or MATERIALIZED VIEW
+EXPLAIN ANALYZE HINTS FOR SELECT 1
+      ^
