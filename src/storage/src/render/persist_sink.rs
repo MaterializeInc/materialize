@@ -123,7 +123,7 @@ use timely::dataflow::{Scope, Stream};
 use timely::progress::{Antichain, Timestamp};
 use timely::{Container, PartialOrder};
 use tokio::sync::Semaphore;
-use tracing::{info, trace};
+use tracing::trace;
 
 use crate::metrics::source::SourcePersistSinkMetrics;
 use crate::storage_state::StorageState;
@@ -1085,7 +1085,7 @@ where
                 .cloned()
                 .collect::<Vec<_>>();
 
-            info!(
+            trace!(
                 "persist_sink {collection_id}/{shard_id}: \
                     append_batches: in_flight_descriptions size: {:?}, \
                     in_flight_batches size: {:?}, \
@@ -1154,7 +1154,7 @@ where
                         // update but then crashes before it can append a batch.
 
                         let maybe_err = loop {
-                                tracing::info!(
+                                tracing::trace!(
                                     %worker_id,
                                     %collection_id,
                                     %shard_id,
@@ -1198,7 +1198,7 @@ where
                                 // for figuring out how to trim our batches.
 
                                 if collection_id.is_user() {
-                                    tracing::info!(
+                                    tracing::trace!(
                                         %worker_id,
                                         %collection_id,
                                         %shard_id,
@@ -1224,7 +1224,6 @@ where
 
                     match maybe_err {
                         Ok(()) => {
-                            info!("attempting to write to persist.");
                             let _permit = busy_signal.acquire().await;
 
                             write.compare_and_append_batch(
@@ -1243,8 +1242,6 @@ where
                     }
                 };
 
-                info!("batch write result {:?}", result);
-
                 // These metrics are independent of whether it was _us_ or
                 // _someone_ that managed to commit a batch that advanced the
                 // upper.
@@ -1255,7 +1252,7 @@ where
                     .set(mz_persist_client::metrics::encode_ts_metric(&batch_upper));
 
                 if collection_id.is_user() {
-                    info!(
+                    trace!(
                         "persist_sink {collection_id}/{shard_id}: \
                             append result for batch ({:?} -> {:?}): {:?}",
                         batch_lower,
@@ -1268,7 +1265,6 @@ where
                     Ok(()) => {
                         // Only update these metrics when we know that _we_ were
                         // successful.
-                        info!("wrote batch down succesfully for lower = {batch_lower:?} upper = {batch_upper:?} previous upper = {current_upper:?} metrics {batch_metrics:?}");
                         if let Some(batch_metrics) = batch_metrics.drain(..).reduce(|mut l, r| {l.add_assign(&r); l}) {
                             source_statistics
                                 .inc_updates_committed_by(batch_metrics.inserts + batch_metrics.retractions);
