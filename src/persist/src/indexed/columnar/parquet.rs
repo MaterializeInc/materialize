@@ -22,6 +22,7 @@ use mz_persist_types::Codec64;
 use mz_persist_types::parquet::EncodingConfig;
 use parquet::arrow::ArrowWriter;
 use parquet::arrow::arrow_reader::{ArrowReaderMetadata, ParquetRecordBatchReaderBuilder};
+use parquet::arrow::arrow_writer::ArrowWriterOptions;
 use parquet::basic::Encoding;
 use parquet::errors::ParquetError;
 use parquet::file::metadata::KeyValue;
@@ -203,6 +204,10 @@ pub fn encode_parquet_kvtd<W: Write + Send>(
         .set_key_value_metadata(Some(vec![metadata]))
         .build();
 
+    let opts = ArrowWriterOptions::new()
+        .with_skip_arrow_metadata(true)
+        .with_properties(properties);
+
     let batch = encode_arrow_batch(updates);
     let format = match updates {
         BlobTraceUpdates::Row(_) => "k,v,t,d",
@@ -226,7 +231,7 @@ pub fn encode_parquet_kvtd<W: Write + Send>(
 
     assert!(primary_keys.len() <= 1);
 
-    let mut writer = ArrowWriter::try_new(w, batch.schema(), Some(properties))?;
+    let mut writer = ArrowWriter::try_new_with_options(w, batch.schema(), opts)?;
 
     writer.write(&batch)?;
 
