@@ -234,26 +234,28 @@ pub fn encode_parquet_kvtd<W: Write + Send>(
     let mut row_group_stats = vec![];
     let bytes_written = writer.bytes_written();
     let file_metadata = writer.close()?;
-    for row_group in &file_metadata.row_groups {
-        let row_group_offset = row_group.file_offset.expect("row group offset");
-        let row_group_size = row_group.total_compressed_size.expect("row group size");
-        for (i, column) in row_group.columns.iter().enumerate() {
-            let mut blooms = vec![];
-            if primary_keys.contains(&i) {
-                let bloom = column
-                    .meta_data
-                    .as_ref()
-                    .and_then(|m| Some((m.bloom_filter_offset, m.bloom_filter_length)));
-                if let Some((Some(offset), Some(size))) = bloom {
-                    blooms.push((offset, size));
+    if cfg.use_bloom_filter {
+        for row_group in &file_metadata.row_groups {
+            let row_group_offset = row_group.file_offset.expect("row group offset");
+            let row_group_size = row_group.total_compressed_size.expect("row group size");
+            for (i, column) in row_group.columns.iter().enumerate() {
+                let mut blooms = vec![];
+                if primary_keys.contains(&i) {
+                    let bloom = column
+                        .meta_data
+                        .as_ref()
+                        .and_then(|m| Some((m.bloom_filter_offset, m.bloom_filter_length)));
+                    if let Some((Some(offset), Some(size))) = bloom {
+                        blooms.push((offset, size));
+                    }
                 }
-            }
 
-            row_group_stats.push(RowGroupStats {
-                offset: row_group_offset,
-                size: row_group_size,
-                blooms,
-            });
+                row_group_stats.push(RowGroupStats {
+                    offset: row_group_offset,
+                    size: row_group_size,
+                    blooms,
+                });
+            }
         }
     }
 
