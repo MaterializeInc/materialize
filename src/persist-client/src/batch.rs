@@ -12,12 +12,14 @@
 use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Debug;
+use std::io::Cursor;
 use std::marker::PhantomData;
 use std::sync::Arc;
 use std::time::Instant;
 use std::{mem, usize};
 
 use arrow::array::{Array, Int64Array};
+use byteorder::{LittleEndian, ReadBytesExt};
 use bytes::Bytes;
 use differential_dataflow::difference::Semigroup;
 use differential_dataflow::lattice::Lattice;
@@ -1200,6 +1202,15 @@ impl<T: Timestamp + Codec64> BatchParts<T> {
         })
         .instrument(trace_span!("batch::set", payload_len))
         .await;
+        // Assume buf is the last 8 bytes of the file
+        let mut cursor = Cursor::new(&buf[buf.len() - 8..]);
+
+        // Read footer length (first 4 bytes of that slice)
+        let footer_len =
+            usize::try_from(cursor.read_u32::<LittleEndian>().expect("read footer len"))
+                .expect("footer len");
+        let footer_offset = payload_len - 8 - footer_len;
+
         batch_metrics.seconds.inc_by(start.elapsed().as_secs_f64());
         batch_metrics.bytes.inc_by(u64::cast_from(payload_len));
         batch_metrics.goodbytes.inc_by(u64::cast_from(goodbytes));
@@ -1236,6 +1247,7 @@ impl<T: Timestamp + Codec64> BatchParts<T> {
             deprecated_schema_id: None,
             // TODO(upsert-in-persist).
             bloom_filter: None,
+            parquet_footer: Some((footer_offset, footer_len)),
         })
     }
 

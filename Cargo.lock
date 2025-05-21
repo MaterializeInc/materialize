@@ -6547,6 +6547,7 @@ dependencies = [
  "arrow",
  "async-stream",
  "async-trait",
+ "byteorder",
  "bytes",
  "clap",
  "criterion",

@@ -1369,6 +1369,7 @@ impl<T: Timestamp + Codec64> RustType<ProtoHollowBatch> for HollowBatch<T> {
                 deprecated_schema_id: None,
                 // TODO(upsert-in-persist).
                 bloom_filter: None,
+                parquet_footer: None,
             }))
         }));
         // We discard default metadatas from the proto above; re-add them here.
@@ -1533,6 +1534,7 @@ impl<T: Timestamp + Codec64> RustType<ProtoHollowBatchPart> for BatchPart<T> {
                     deprecated_schema_id,
                     // TODO(upsert-in-persist).
                     bloom_filter: None,
+                    parquet_footer: None,
                 }))
             }
             Some(proto_hollow_batch_part::Kind::Inline(x)) => {
@@ -1902,6 +1904,7 @@ mod tests {
                 deprecated_schema_id: None,
                 // TODO(upsert-in-persist).
                 bloom_filter: None,
+                parquet_footer: None,
             }))],
             4,
         );
@@ -1931,6 +1934,7 @@ mod tests {
                 deprecated_schema_id: None,
                 // TODO(upsert-in-persist).
                 bloom_filter: None,
+                parquet_footer: None,
             })));
         assert_eq!(<HollowBatch<u64>>::from_proto(old).unwrap(), expected);
     }
