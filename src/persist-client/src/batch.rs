@@ -1218,7 +1218,7 @@ impl<T: Timestamp + Codec64> BatchParts<T> {
             let mut blooms = Vec::new();
             for row_group in row_group_stats.iter() {
                 // No composite primary keys for now
-                assert_eq!(row_group.blooms.len(), 1);
+                assert!(row_group.blooms.len() <= 1);
                 if let Some((raw_offset, size)) = row_group.blooms.get(0) {
                     let bloom_buffer =
                         &buf[*raw_offset as usize..*raw_offset as usize + *size as usize];
@@ -1244,7 +1244,9 @@ impl<T: Timestamp + Codec64> BatchParts<T> {
                     ));
                 }
             }
-            bloom_filters = Some(blooms);
+            if !blooms.is_empty() {
+                bloom_filters = Some(blooms);
+            }
         }
 
         batch_metrics.seconds.inc_by(start.elapsed().as_secs_f64());
