@@ -755,6 +755,7 @@ pub struct HollowBatchPart<T> {
 
     /// If bloom filters are enabled then a bloom filter we be available for the part to
     /// determine if a primary key is in the `HollowBatchPart`.
+    /// BloomFilter stored next to (offset, size) of the row group.
     pub bloom_filter: Option<Vec<(BloomFilter, (usize, usize))>>,
 }
 

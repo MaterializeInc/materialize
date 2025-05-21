@@ -1086,99 +1086,104 @@ impl<T: Timestamp + Codec64> BatchParts<T> {
         let metrics_ = Arc::clone(&metrics);
         let schema_id = write_schemas.id;
 
-        let (stats, key_lower, structured_key_lower, (buf, encode_time)) = isolated_runtime
-            .spawn_named(|| "batch::encode_part", async move {
-                // Measure the expensive steps of the part build - re-encoding and stats collection.
-                let stats = metrics_.columnar.arrow().measure_part_build(|| {
-                    let stats = if cfg.stats_collection_enabled {
-                        let ext = updates.updates.get_or_make_structured::<K, V>(
+        let (stats, key_lower, structured_key_lower, (buf, encode_time, row_group_stats)) =
+            isolated_runtime
+                .spawn_named(|| "batch::encode_part", async move {
+                    // Measure the expensive steps of the part build - re-encoding and stats collection.
+                    let stats = metrics_.columnar.arrow().measure_part_build(|| {
+                        let stats = if cfg.stats_collection_enabled {
+                            let ext = updates.updates.get_or_make_structured::<K, V>(
+                                write_schemas.key.as_ref(),
+                                write_schemas.val.as_ref(),
+                            );
+
+                            let key_stats = write_schemas
+                                .key
+                                .decoder_any(ext.key.as_ref())
+                                .expect("decoding just-encoded data")
+                                .stats();
+
+                            let part_stats = PartStats { key: key_stats };
+
+                            // Collect stats about the updates, if stats collection is enabled.
+                            let trimmed_start = Instant::now();
+                            let mut trimmed_bytes = 0;
+                            let trimmed_stats = LazyPartStats::encode(&part_stats, |s| {
+                                trimmed_bytes = trim_to_budget(s, cfg.stats_budget, |s| {
+                                    cfg.stats_untrimmable_columns.should_retain(s)
+                                })
+                            });
+                            let trimmed_duration = trimmed_start.elapsed();
+                            Some((trimmed_stats, trimmed_duration, trimmed_bytes))
+                        } else {
+                            None
+                        };
+
+                        // Ensure the updates are in the specified columnar format before encoding.
+                        updates.updates = updates.updates.as_structured::<K, V>(
                             write_schemas.key.as_ref(),
                             write_schemas.val.as_ref(),
                         );
 
-                        let key_stats = write_schemas
-                            .key
-                            .decoder_any(ext.key.as_ref())
-                            .expect("decoding just-encoded data")
-                            .stats();
+                        stats
+                    });
 
-                        let part_stats = PartStats { key: key_stats };
+                    let key_lower = if let Some(records) = updates.updates.records() {
+                        let key_bytes = records.keys();
+                        if key_bytes.is_empty() {
+                            &[]
+                        } else if run_order == RunOrder::Codec {
+                            key_bytes.value(0)
+                        } else {
+                            ::arrow::compute::min_binary(key_bytes).expect("min of nonempty array")
+                        }
+                    } else {
+                        &[]
+                    };
+                    let key_lower = truncate_bytes(key_lower, TRUNCATE_LEN, TruncateBound::Lower)
+                        .expect("lower bound always exists");
 
-                        // Collect stats about the updates, if stats collection is enabled.
-                        let trimmed_start = Instant::now();
-                        let mut trimmed_bytes = 0;
-                        let trimmed_stats = LazyPartStats::encode(&part_stats, |s| {
-                            trimmed_bytes = trim_to_budget(s, cfg.stats_budget, |s| {
-                                cfg.stats_untrimmable_columns.should_retain(s)
-                            })
-                        });
-                        let trimmed_duration = trimmed_start.elapsed();
-                        Some((trimmed_stats, trimmed_duration, trimmed_bytes))
+                    let structured_key_lower = if cfg.structured_key_lower_len > 0 {
+                        updates.updates.structured().and_then(|ext| {
+                            let min_key = if run_order == RunOrder::Structured {
+                                0
+                            } else {
+                                let ord = ArrayOrd::new(ext.key.as_ref());
+                                (0..ext.key.len())
+                                    .min_by_key(|i| ord.at(*i))
+                                    .expect("non-empty batch")
+                            };
+                            let lower = ArrayBound::new(Arc::clone(&ext.key), min_key)
+                                .to_proto_lower(cfg.structured_key_lower_len);
+                            if lower.is_none() {
+                                batch_metrics.key_lower_too_big.inc()
+                            }
+                            lower.map(|proto| LazyProto::from(&proto))
+                        })
                     } else {
                         None
                     };
 
-                    // Ensure the updates are in the specified columnar format before encoding.
-                    updates.updates = updates.updates.as_structured::<K, V>(
-                        write_schemas.key.as_ref(),
-                        write_schemas.val.as_ref(),
+                    let encode_start = Instant::now();
+                    let mut buf = Vec::new();
+                    let row_group_stats = updates.encode_with_row_groups(
+                        &mut buf,
+                        &metrics_.columnar,
+                        &cfg.encoding_config,
                     );
 
-                    stats
-                });
-
-                let key_lower = if let Some(records) = updates.updates.records() {
-                    let key_bytes = records.keys();
-                    if key_bytes.is_empty() {
-                        &[]
-                    } else if run_order == RunOrder::Codec {
-                        key_bytes.value(0)
-                    } else {
-                        ::arrow::compute::min_binary(key_bytes).expect("min of nonempty array")
-                    }
-                } else {
-                    &[]
-                };
-                let key_lower = truncate_bytes(key_lower, TRUNCATE_LEN, TruncateBound::Lower)
-                    .expect("lower bound always exists");
-
-                let structured_key_lower = if cfg.structured_key_lower_len > 0 {
-                    updates.updates.structured().and_then(|ext| {
-                        let min_key = if run_order == RunOrder::Structured {
-                            0
-                        } else {
-                            let ord = ArrayOrd::new(ext.key.as_ref());
-                            (0..ext.key.len())
-                                .min_by_key(|i| ord.at(*i))
-                                .expect("non-empty batch")
-                        };
-                        let lower = ArrayBound::new(Arc::clone(&ext.key), min_key)
-                            .to_proto_lower(cfg.structured_key_lower_len);
-                        if lower.is_none() {
-                            batch_metrics.key_lower_too_big.inc()
-                        }
-                        lower.map(|proto| LazyProto::from(&proto))
-                    })
-                } else {
-                    None
-                };
-
-                let encode_start = Instant::now();
-                let mut buf = Vec::new();
-                updates.encode(&mut buf, &metrics_.columnar, &cfg.encoding_config);
-
-                // Drop batch as soon as we can to reclaim its memory.
-                drop(updates);
-                (
-                    stats,
-                    key_lower,
-                    structured_key_lower,
-                    (Bytes::from(buf), encode_start.elapsed()),
-                )
-            })
-            .instrument(debug_span!("batch::encode_part"))
-            .await
-            .expect("part encode task failed");
+                    // Drop batch as soon as we can to reclaim its memory.
+                    drop(updates);
+                    (
+                        stats,
+                        key_lower,
+                        structured_key_lower,
+                        (Bytes::from(buf), encode_start.elapsed(), row_group_stats),
+                    )
+                })
+                .instrument(debug_span!("batch::encode_part"))
+                .await
+                .expect("part encode task failed");
         // Can't use the `CodecMetrics::encode` helper because of async.
         metrics.codecs.batch.encode_count.inc();
         metrics

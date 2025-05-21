@@ -56,6 +56,8 @@ use crate::indexed::columnar::{ColumnarRecords, ColumnarRecordsStructuredExt};
 use crate::location::Blob;
 use crate::metrics::ColumnarMetrics;
 
+use super::columnar::parquet::RowGroupStats;
+
 /// Column format of a batch.
 #[derive(Debug, Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize)]
 pub enum BatchColumnarFormat {
@@ -695,6 +697,19 @@ impl<T: Timestamp + Codec64> BlobTraceBatchPart<T> {
         }
 
         Ok(())
+    }
+
+    /// Encodes an BlobTraceBatchPart into the Parquet format.
+    pub fn encode_with_row_groups<B>(
+        &self,
+        buf: &mut B,
+        metrics: &ColumnarMetrics,
+        cfg: &EncodingConfig,
+    ) -> Vec<RowGroupStats>
+    where
+        B: BufMut + Send,
+    {
+        encode_trace_parquet(&mut buf.writer(), self, metrics, cfg).expect("batch was invalid")
     }
 
     /// Encodes an BlobTraceBatchPart into the Parquet format.
