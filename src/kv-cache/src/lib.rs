@@ -25,6 +25,10 @@ where
         keys: Vec<Row>,
         ts: T,
     ) -> Vec<(Row, Row)> {
+        if keys.is_empty() {
+            return Vec::new()
+        }
+
         let as_of = Antichain::from_elem(ts);
         let batch_parts = self.handle.snapshot(as_of).await.expect("OH NO");
         assert_eq!(key_columns.len(), 1, "support composite keys");

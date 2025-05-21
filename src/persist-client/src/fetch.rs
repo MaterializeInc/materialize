@@ -17,6 +17,7 @@ use std::time::Instant;
 use anyhow::anyhow;
 use arrow::array::{Array, ArrayRef, AsArray, BooleanArray, Int64Array};
 use arrow::compute::FilterBuilder;
+use bytes::Bytes;
 use differential_dataflow::difference::Semigroup;
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::trace::Description;
@@ -393,13 +394,13 @@ pub(crate) async fn fetch_batch_part_blob2<T, F>(
     shard_metrics: &ShardMetrics,
     read_metrics: &ReadMetrics,
     part: &HollowBatchPart<T>,
+    registered_desc: Description<T>,
     mut should_fetch_row_group: F,
-) -> Result<SegmentedBytes, BlobKey>
+) -> Result<EncodedPart<T>, BlobKey>
 where
+    T: Timestamp + Lattice + Codec64,
     F: FnMut(&BloomFilter) -> bool,
 {
-    let now = Instant::now();
-    // let get_span = debug_span!("fetch_batch::get");
     let blob_key = part.key.complete(shard_id);
 
     if let Some(bloom_filters) = part.bloom_filter.as_ref() {
@@ -432,24 +433,29 @@ where
             })
             .collect();
 
-        todo!()
+        let encoded_part = decode_batch_part_row_groups(bytes, footer_range);
+        Ok(encoded_part)
     } else {
-        retry_external(&metrics.retries.external.fetch_batch_get, || async {
+        let value = retry_external(&metrics.retries.external.fetch_batch_get, || async {
             shard_metrics.blob_gets.inc();
             blob.get(&blob_key).await
         })
-        // .instrument(get_span.clone())
         .await
-        .ok_or(blob_key)
+        .ok_or(blob_key)?;
+
+        let encoded_part =
+            decode_batch_part_blob(metrics, read_metrics, registered_desc, part, &value);
+        Ok(encoded_part)
     }
+}
 
-    // drop(get_span);
+pub(crate) fn decode_batch_part_row_groups<T>(
+    bytes: Vec<(Bytes, (usize, usize))>,
+    footer: (usize, usize),
+) -> EncodedPart<T> {
+    let footer_bytes = bytes.iter().find(|(_bytes, range)| *range == footer);
 
-    // read_metrics.part_count.inc();
-    // read_metrics.part_bytes.inc_by(u64::cast_from(value.len()));
-    // read_metrics.seconds.inc_by(now.elapsed().as_secs_f64());
-
-    // Ok(value)
+    todo!()
 }
 
 pub(crate) fn decode_batch_part_blob<T>(
