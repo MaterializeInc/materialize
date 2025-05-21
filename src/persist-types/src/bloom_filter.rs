@@ -18,7 +18,7 @@ impl BloomFilter {
     }
 
     pub fn contains<K>(&self, k: K) -> bool {
-        false
+        true
     }
 
     fn update(&mut self, filter: Sbbf) {}

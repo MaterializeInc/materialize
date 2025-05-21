@@ -1,6 +1,3 @@
-use std::collections::BTreeMap;
-use std::fmt::Debug;
-
 use differential_dataflow::lattice::Lattice;
 use mz_persist_client::read::ReadHandle;
 use mz_persist_types::Codec64;
