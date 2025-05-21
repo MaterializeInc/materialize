@@ -20,6 +20,7 @@ use arrow::compute::FilterBuilder;
 use differential_dataflow::difference::Semigroup;
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::trace::Description;
+use futures::TryFutureExt;
 use itertools::EitherOrBoth;
 use mz_dyncfg::{Config, ConfigSet, ConfigValHandle};
 use mz_ore::bytes::SegmentedBytes;
@@ -366,40 +367,57 @@ where
     F: FnMut(&BloomFilter) -> bool,
 {
     let now = Instant::now();
-    let get_span = debug_span!("fetch_batch::get");
+    // let get_span = debug_span!("fetch_batch::get");
     let blob_key = part.key.complete(shard_id);
 
-    let ranges: Option<Vec<_>> = if let Some(bloom_filters) = part.bloom_filter.as_ref() {
-        let ranges = bloom_filters
-            .iter()
-            .filter_map(|(filter, range)| {
-                if (should_fetch_row_group)(filter) {
-                    Some(range.clone())
-                } else {
-                    None
-                }
+    if let Some(bloom_filters) = part.bloom_filter.as_ref() {
+        let row_group_ranges = bloom_filters.iter().filter_map(|(filter, range)| {
+            if (should_fetch_row_group)(filter) {
+                Some(range.clone())
+            } else {
+                None
+            }
+        });
+        let footer_range = part
+            .parquet_footer
+            .expect("if we have bloom filters we have a footer");
+        let ranges = row_group_ranges.chain(std::iter::once(footer_range));
+
+        let mut fetch_requests = Vec::new();
+        for (start, length) in ranges {
+            let fetch_fut = blob
+                .get_range(&blob_key, start, length)
+                .map_ok(move |bytes| (bytes, (start, length)));
+            fetch_requests.push(fetch_fut);
+        }
+        let results = futures::future::join_all(fetch_requests).await;
+        let bytes: Vec<_> = results
+            .into_iter()
+            .map(|result| {
+                let (maybe_bytes, range) = result.expect("S3 GET failed!");
+                let bytes = maybe_bytes.expect("key not found");
+                (bytes, range)
             })
             .collect();
-        Some(ranges)
+
+        todo!()
     } else {
-        None
-    };
+        retry_external(&metrics.retries.external.fetch_batch_get, || async {
+            shard_metrics.blob_gets.inc();
+            blob.get(&blob_key).await
+        })
+        // .instrument(get_span.clone())
+        .await
+        .ok_or(blob_key)
+    }
 
-    let value = retry_external(&metrics.retries.external.fetch_batch_get, || async {
-        shard_metrics.blob_gets.inc();
-        blob.get(&blob_key).await
-    })
-    .instrument(get_span.clone())
-    .await
-    .ok_or(blob_key)?;
+    // drop(get_span);
 
-    drop(get_span);
+    // read_metrics.part_count.inc();
+    // read_metrics.part_bytes.inc_by(u64::cast_from(value.len()));
+    // read_metrics.seconds.inc_by(now.elapsed().as_secs_f64());
 
-    read_metrics.part_count.inc();
-    read_metrics.part_bytes.inc_by(u64::cast_from(value.len()));
-    read_metrics.seconds.inc_by(now.elapsed().as_secs_f64());
-
-    Ok(value)
+    // Ok(value)
 }
 
 pub(crate) fn decode_batch_part_blob<T>(

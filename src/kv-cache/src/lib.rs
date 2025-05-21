@@ -26,7 +26,7 @@ where
         ts: T,
     ) -> Vec<(Row, Row)> {
         let as_of = Antichain::from_elem(ts);
-        let batch_parts = self.handle.snapshot(as_of).await.expect("OH NO");
+        let mut batch_parts = self.handle.snapshot(as_of).await.expect("OH NO");
         assert_eq!(key_columns.len(), 1, "support composite keys");
         let key_col = key_columns[0];
 
@@ -44,6 +44,8 @@ where
         let mut filtered_values = Vec::new();
         let mut datum_vec_b = DatumVec::new();
         let mut datum_vec_c = DatumVec::new();
+
+
 
         for part in batch_parts {
             let values = self.handle.fetch_values(&part, &mut should_fetch).await;
