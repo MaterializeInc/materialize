@@ -10036,6 +10036,8 @@ mod kani_test {
 
     use ordered_float::OrderedFloat;
 
+    use crate::func::binary::EagerBinaryFunc;
+
     use super::*;
 
     fn check_uniqueness<F>(func: F)
@@ -10063,6 +10065,32 @@ mod kani_test {
         std::mem::forget(func);
     }
 
+    fn check_monotone_binary_first_arg_float<F>(func: F)
+    where
+        F: for<'a> EagerBinaryFunc<'a, Input1 = Datum<'a>, Input2 = Datum<'a>>,
+    {
+        let a1 = OrderedFloat(kani::any::<f64>());
+        let a2 = OrderedFloat(kani::any::<f64>());
+        let a3 = OrderedFloat(kani::any::<f64>());
+        let b = OrderedFloat(kani::any::<f64>());
+        kani::assume(a1 <= a2);
+        kani::assume(a2 <= a3);
+        let arena = ManuallyDrop::new(RowArena::new());
+
+        let r1 = func.call(a1.into(), b.into(), &*arena).into_result(&*arena);
+        let r2 = func.call(a2.into(), b.into(), &*arena).into_result(&*arena);
+        let r3 = func.call(a3.into(), b.into(), &*arena).into_result(&*arena);
+
+        match (&r1, &r2, &r3) {
+            (Ok(Datum::Float64(r1)), Ok(Datum::Float64(r2)), Ok(Datum::Float64(r3))) => {
+                assert!((r1 <= r2 && r2 <= r3) || (r1 >= r2 && r2 >= r3));
+            }
+            _ => (),
+        }
+        std::mem::forget(func);
+        std::mem::forget(r1);
+    }
+
     #[kani::proof]
     #[kani::unwind(5)]
     fn negint64_preserves_uniqueness() {
@@ -10081,31 +10109,31 @@ mod kani_test {
         check_uniqueness(NegInt32);
     }
 
+    // FAILS
+    #[kani::proof]
+    #[kani::unwind(5)]
+    fn add_float64_is_monotone_in_first_arg() {
+        check_monotone_binary_first_arg_float(AddFloat64);
+    }
+
+    // FAILS
+    #[kani::proof]
+    #[kani::unwind(5)]
+    fn sub_float64_is_monotone_in_first_arg() {
+        check_monotone_binary_first_arg_float(SubFloat64);
+    }
+
+    // FAILS
+    #[kani::proof]
+    #[kani::unwind(5)]
+    fn mul_float64_is_monotone_in_first_arg() {
+        check_monotone_binary_first_arg_float(MulFloat64);
+    }
+
+    // FAILS
     #[kani::proof]
     #[kani::unwind(5)]
     fn div_float64_is_monotone_in_first_arg() {
-        let a1: f64 = kani::any();
-        let a2: f64 = kani::any();
-        let b: f64 = kani::any();
-        kani::assume(a1 <= a2);
-
-        let r1 = div_float64(
-            Datum::Float64(OrderedFloat(a1)),
-            Datum::Float64(OrderedFloat(b)),
-        );
-        let r2 = div_float64(
-            Datum::Float64(OrderedFloat(a2)),
-            Datum::Float64(OrderedFloat(b)),
-        );
-
-        match (&r1, &r2) {
-            (Ok(Datum::Float64(r1)), Ok(Datum::Float64(r2))) => {
-                assert!(r1 <= r2);
-            }
-            // (Ok(_), _) | (_, Ok(_)) => unreachable!(),
-            _ => (),
-        }
-
-        std::mem::forget((r1, r2));
+        check_monotone_binary_first_arg_float(DivFloat64);
     }
 }
