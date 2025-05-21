@@ -2146,7 +2146,7 @@ CREATE TABLE t3(x int, y text, z bool);
 # `to_jsonb` from the CASE should not happen.
 
 query T multiline
-EXPLAIN
+EXPLAIN OPTIMIZED PLAN AS VERBOSE TEXT FOR
 SELECT
   CASE x
     WHEN 1 THEN to_jsonb(x)
@@ -2169,7 +2169,7 @@ EOF
 
 # Check that we are still doing the optimization when the types do match.
 query T multiline
-EXPLAIN
+EXPLAIN OPTIMIZED PLAN AS VERBOSE TEXT FOR
 SELECT
   CASE x
     WHEN 1 THEN to_jsonb(1*x)

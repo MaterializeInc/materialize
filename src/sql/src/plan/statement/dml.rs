@@ -449,6 +449,7 @@ impl TryFrom<ExplainPlanOptionExtracted> for ExplainConfig {
             non_negative: v.non_negative,
             raw_plans: v.raw_plans,
             raw_syntax: v.raw_syntax,
+            verbose_syntax: false,
             redacted: v.redacted,
             subtree_size: v.subtree_size,
             equivalences: v.equivalences,
@@ -599,16 +600,16 @@ pub fn plan_explain_plan(
     explain: ExplainPlanStatement<Aug>,
     params: &Params,
 ) -> Result<Plan, PlanError> {
-    let format = match explain.format() {
-        mz_sql_parser::ast::ExplainFormat::Text => ExplainFormat::Text,
-        mz_sql_parser::ast::ExplainFormat::VerboseText => ExplainFormat::VerboseText,
-        mz_sql_parser::ast::ExplainFormat::Json => ExplainFormat::Json,
-        mz_sql_parser::ast::ExplainFormat::Dot => ExplainFormat::Dot,
+    let (format, verbose_syntax) = match explain.format() {
+        mz_sql_parser::ast::ExplainFormat::Text => (ExplainFormat::Text, false),
+        mz_sql_parser::ast::ExplainFormat::VerboseText => (ExplainFormat::Text, true),
+        mz_sql_parser::ast::ExplainFormat::Json => (ExplainFormat::Json, false),
+        mz_sql_parser::ast::ExplainFormat::Dot => (ExplainFormat::Dot, false),
     };
     let stage = explain.stage();
 
     // Plan ExplainConfig.
-    let config = {
+    let mut config = {
         let mut with_options = ExplainPlanOptionExtracted::try_from(explain.with_options)?;
 
         if !scx.catalog.system_vars().persist_stats_filter_enabled() {
@@ -618,6 +619,7 @@ pub fn plan_explain_plan(
 
         ExplainConfig::try_from(with_options)?
     };
+    config.verbose_syntax = verbose_syntax;
 
     let explainee = plan_explainee(scx, explain.explainee, params)?;
 
@@ -706,11 +708,11 @@ pub fn plan_explain_timestamp(
     scx: &StatementContext,
     explain: ExplainTimestampStatement<Aug>,
 ) -> Result<Plan, PlanError> {
-    let format = match explain.format() {
-        mz_sql_parser::ast::ExplainFormat::Text => ExplainFormat::Text,
-        mz_sql_parser::ast::ExplainFormat::VerboseText => ExplainFormat::VerboseText,
-        mz_sql_parser::ast::ExplainFormat::Json => ExplainFormat::Json,
-        mz_sql_parser::ast::ExplainFormat::Dot => ExplainFormat::Dot,
+    let (format, _verbose_syntax) = match explain.format() {
+        mz_sql_parser::ast::ExplainFormat::Text => (ExplainFormat::Text, false),
+        mz_sql_parser::ast::ExplainFormat::VerboseText => (ExplainFormat::Text, true),
+        mz_sql_parser::ast::ExplainFormat::Json => (ExplainFormat::Json, false),
+        mz_sql_parser::ast::ExplainFormat::Dot => (ExplainFormat::Dot, false),
     };
 
     let raw_plan = {

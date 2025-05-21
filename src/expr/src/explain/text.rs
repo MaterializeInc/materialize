@@ -248,6 +248,31 @@ where
     }
 }
 
+impl<'a, M: HumanizerMode> HumanizedExpr<'a, MapFilterProject, M> {
+    /// Render an MFP using the the default (concise) syntax.
+    pub fn fmt_default_text<T>(
+        &self,
+        f: &mut fmt::Formatter<'_>,
+        ctx: &mut PlanRenderingContext<'_, T>,
+    ) -> fmt::Result {
+        // skip projection
+        // render `filter` field iff predicates are present
+        if !self.expr.predicates.is_empty() {
+            let predicates = self.expr.predicates.iter().map(|(_, p)| self.child(p));
+            let predicates = separated(" AND ", predicates);
+            writeln!(f, "{}Filter: {predicates}", ctx.indent)?;
+        }
+        // render `map` field iff scalars are present
+        if !self.expr.expressions.is_empty() {
+            let scalars = self.expr.expressions.iter().map(|s| self.child(s));
+            let scalars = separated(", ", scalars);
+            writeln!(f, "{}Map: {scalars}", ctx.indent)?;
+        }
+
+        Ok(())
+    }
+}
+
 /// `EXPLAIN ... AS TEXT` support for [`MirRelationExpr`].
 ///
 /// The format adheres to the following conventions:
@@ -266,26 +291,25 @@ impl DisplayText<PlanRenderingContext<'_, MirRelationExpr>> for MirRelationExpr 
         f: &mut fmt::Formatter<'_>,
         ctx: &mut PlanRenderingContext<'_, MirRelationExpr>,
     ) -> fmt::Result {
-        if ctx.config.raw_syntax {
-            self.fmt_raw_syntax(f, ctx)
+        if ctx.config.verbose_syntax {
+            self.fmt_verbose_syntax(f, ctx)
         } else {
-            self.fmt_virtual_syntax(f, ctx)
+            self.fmt_default_syntax(f, ctx)
         }
     }
 }
 
 impl MirRelationExpr {
-    fn fmt_virtual_syntax(
+    fn fmt_default_syntax(
         &self,
         f: &mut fmt::Formatter<'_>,
         ctx: &mut PlanRenderingContext<'_, MirRelationExpr>,
     ) -> fmt::Result {
-        // no virtual syntax support for now, evolve this
-        // method as its HirRelationExpr counterpart
-        self.fmt_raw_syntax(f, ctx)
+        // TODO(mgree) MIR does not support a different default syntax (yet!)
+        self.fmt_verbose_syntax(f, ctx)
     }
 
-    fn fmt_raw_syntax(
+    fn fmt_verbose_syntax(
         &self,
         f: &mut fmt::Formatter<'_>,
         ctx: &mut PlanRenderingContext<'_, MirRelationExpr>,
@@ -1192,7 +1216,14 @@ where
                 M::humanize_ident(*self.expr.0, ident, f)
             }
             // We don't have name inferred for this column.
-            _ => M::humanize_ident(*self.expr.0, Ident::new_unchecked(self.expr.1.as_ref()), f),
+            _ => {
+                // Don't show dummy column names.
+                if self.expr.1.as_ref() == "\"?column?\"" {
+                    write!(f, "#{}", self.expr.0)
+                } else {
+                    M::humanize_ident(*self.expr.0, Ident::new_unchecked(self.expr.1.as_ref()), f)
+                }
+            }
         }
     }
 }
