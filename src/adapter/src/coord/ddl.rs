@@ -218,7 +218,6 @@ impl Coordinator {
         let mut update_metrics_retention = false;
         let mut update_secrets_caching_config = false;
         let mut update_cluster_scheduling_config = false;
-        let mut update_arrangement_exert_proportionality = false;
         let mut update_http_config = false;
 
         for op in &ops {
@@ -331,8 +330,6 @@ impl Coordinator {
                     update_metrics_retention |= name == vars::METRICS_RETENTION.name();
                     update_secrets_caching_config |= vars::is_secrets_caching_var(name);
                     update_cluster_scheduling_config |= vars::is_cluster_scheduling_var(name);
-                    update_arrangement_exert_proportionality |=
-                        name == vars::ARRANGEMENT_EXERT_PROPORTIONALITY.name();
                     update_http_config |= vars::is_http_config_var(name);
                 }
                 catalog::Op::ResetAllSystemConfiguration => {
@@ -346,7 +343,6 @@ impl Coordinator {
                     update_metrics_retention = true;
                     update_secrets_caching_config = true;
                     update_cluster_scheduling_config = true;
-                    update_arrangement_exert_proportionality = true;
                     update_http_config = true;
                 }
                 catalog::Op::RenameItem { id, .. } => {
@@ -820,9 +816,6 @@ impl Coordinator {
             if update_cluster_scheduling_config {
                 self.update_cluster_scheduling_config();
             }
-            if update_arrangement_exert_proportionality {
-                self.update_arrangement_exert_proportionality();
-            }
             if update_http_config {
                 self.update_http_config();
             }
@@ -1294,16 +1287,6 @@ impl Coordinator {
             .collect::<Vec<_>>();
         self.update_storage_read_policies(storage_policies);
         self.update_compute_read_policies(compute_policies);
-    }
-
-    fn update_arrangement_exert_proportionality(&mut self) {
-        let prop = self
-            .catalog()
-            .system_config()
-            .arrangement_exert_proportionality();
-        self.controller
-            .compute
-            .set_arrangement_exert_proportionality(prop);
     }
 
     fn update_http_config(&mut self) {

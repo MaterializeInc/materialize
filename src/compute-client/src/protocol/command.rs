@@ -541,20 +541,6 @@ impl RustType<ProtoWorkloadClass> for Option<String> {
     }
 }
 
-/// Compute parameters supplied to new replicas as part of the Timely instantiation. Usually cannot
-/// be changed once set.
-#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize, Arbitrary)]
-pub struct InitialComputeParameters {
-    /// `arrangement_exert_proportionality` value passed to new replicas.
-    pub arrangement_exert_proportionality: u32,
-    /// Enable zero copy allocator.
-    pub enable_zero_copy: bool,
-    /// Enable lgalloc to back the zero copy allocator.
-    pub enable_zero_copy_lgalloc: bool,
-    /// Optional limit on the number of empty buffers retained by the zero copy allocator.
-    pub zero_copy_limit: Option<usize>,
-}
-
 /// Metadata specific to the peek variant.
 #[derive(Arbitrary, Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub enum PeekTarget {
