@@ -10034,6 +10034,8 @@ mod test {
 mod kani_test {
     use std::mem::ManuallyDrop;
 
+    use ordered_float::OrderedFloat;
+
     use super::*;
 
     fn check_uniqueness<F>(func: F)
@@ -10063,7 +10065,47 @@ mod kani_test {
 
     #[kani::proof]
     #[kani::unwind(5)]
-    fn kani_smoketest() {
+    fn negint64_preserves_uniqueness() {
         check_uniqueness(NegInt64);
+    }
+
+    #[kani::proof]
+    #[kani::unwind(5)]
+    fn negint16_preserves_uniqueness() {
+        check_uniqueness(NegInt16);
+    }
+
+    #[kani::proof]
+    #[kani::unwind(5)]
+    fn negint32_preserves_uniqueness() {
+        check_uniqueness(NegInt32);
+    }
+
+    #[kani::proof]
+    #[kani::unwind(5)]
+    fn div_float64_is_monotone_in_first_arg() {
+        let a1: f64 = kani::any();
+        let a2: f64 = kani::any();
+        let b: f64 = kani::any();
+        kani::assume(a1 <= a2);
+
+        let r1 = div_float64(
+            Datum::Float64(OrderedFloat(a1)),
+            Datum::Float64(OrderedFloat(b)),
+        );
+        let r2 = div_float64(
+            Datum::Float64(OrderedFloat(a2)),
+            Datum::Float64(OrderedFloat(b)),
+        );
+
+        match (&r1, &r2) {
+            (Ok(Datum::Float64(r1)), Ok(Datum::Float64(r2))) => {
+                assert!(r1 <= r2);
+            }
+            // (Ok(_), _) | (_, Ok(_)) => unreachable!(),
+            _ => (),
+        }
+
+        std::mem::forget((r1, r2));
     }
 }
