@@ -10032,18 +10032,23 @@ mod test {
 }
 
 mod kani_test {
+    use std::mem::ManuallyDrop;
+
     use super::*;
 
-    #[kani::proof]
-    #[kani::unwind(5)]
-    fn kani_smoketest() {
-        let a1: i64 = kani::any();
-        let a2: i64 = kani::any();
+    fn check_uniqueness<F>(func: F)
+    where
+        F: for<'a> EagerUnaryFunc<'a>,
+        for<'a> <F as EagerUnaryFunc<'a>>::Input: PartialEq + kani::Arbitrary,
+        for<'a> <F as EagerUnaryFunc<'a>>::Output: PartialEq,
+    {
+        let a1: F::Input = kani::any();
+        let a2: F::Input = kani::any();
         kani::assume(a1 != a2);
+        let arena = ManuallyDrop::new(RowArena::new());
 
-        let func = NegInt64;
-        let r1 = func.call(a1);
-        let r2 = func.call(a2);
+        let r1 = func.call(a1).into_result(&*arena);
+        let r2 = func.call(a2).into_result(&*arena);
 
         match (r1, r2) {
             (Ok(r1), Ok(r2)) => {
@@ -10054,5 +10059,11 @@ mod kani_test {
             }
         }
         std::mem::forget(func);
+    }
+
+    #[kani::proof]
+    #[kani::unwind(5)]
+    fn kani_smoketest() {
+        check_uniqueness(NegInt64);
     }
 }
