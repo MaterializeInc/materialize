@@ -6181,6 +6181,7 @@ dependencies = [
  "mz-repr",
  "mz-storage-types",
  "timely",
+ "tracing",
 ]
 
 [[package]]

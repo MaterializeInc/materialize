@@ -406,7 +406,7 @@ where
     if part.row_group_metadata.len() > 0 {
         let row_group_ranges = part.row_group_metadata.iter().filter_map(|metadata| {
             if (should_fetch_row_group)(&metadata.bloom_filter) {
-                Some((metadata.size.clone(), metadata.footer_offset))
+                Some((metadata.offset.clone(), metadata.length))
             } else {
                 None
             }

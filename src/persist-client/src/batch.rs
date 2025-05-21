@@ -60,8 +60,8 @@ use crate::internal::merge::{MergeTree, Pending};
 use crate::internal::metrics::{BatchWriteMetrics, Metrics, RetryMetrics, ShardMetrics};
 use crate::internal::paths::{PartId, PartialBatchKey, WriterKey};
 use crate::internal::state::{
-    BatchPart, HollowBatch, HollowBatchPart, HollowRun, HollowRunRef, ProtoInlineBatchPart,
-    RunMeta, RunOrder, RunPart,
+    BatchPart, HollowBatch, HollowBatchPart, HollowRun, HollowRunRef, ParquetFooter,
+    ProtoInlineBatchPart, RunMeta, RunOrder, RunPart,
 };
 use crate::stats::{STATS_BUDGET_BYTES, STATS_COLLECTION_ENABLED, untrimmable_columns};
 use crate::{PersistConfig, ShardId};
@@ -1212,7 +1212,7 @@ impl<T: Timestamp + Codec64> BatchParts<T> {
                 .expect("footer len");
         let footer_offset = payload_len - 8 - footer_len;
 
-        let mut bloom_filters = None;
+        let mut row_group_metadata = Vec::default();
 
         if cfg.encoding_config.use_bloom_filter {
             let mut blooms = Vec::new();
@@ -1244,8 +1244,13 @@ impl<T: Timestamp + Codec64> BatchParts<T> {
                     ));
                 }
             }
-            if !blooms.is_empty() {
-                bloom_filters = Some(blooms);
+
+            for (bloom, (offset, length)) in blooms {
+                row_group_metadata.push(crate::internal::state::RowGroupMetadata {
+                    bloom_filter: bloom,
+                    offset,
+                    length,
+                });
             }
         }
 
@@ -1284,9 +1289,12 @@ impl<T: Timestamp + Codec64> BatchParts<T> {
             // Field has been deprecated but kept around to roundtrip state.
             deprecated_schema_id: None,
             // TODO(upsert-in-persist).
-            row_group_metadata: vec![],
+            row_group_metadata,
             // TODO(upsert-in-persist).
-            parquet_footer: None,
+            parquet_footer: Some(ParquetFooter {
+                offset: footer_offset,
+                size: footer_len,
+            }),
         })
     }
 

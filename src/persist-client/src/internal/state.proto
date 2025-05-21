@@ -42,8 +42,8 @@ message ProtoHollowRunRef {
 
 message ProtoRowGroupMetadata {
   repeated bytes bloom_filter = 1;
-  uint64 size = 2;
-  uint64 footer_offset = 3;
+  uint64 offset = 2;
+  uint64 length = 3;
 }
 
 message ProtoParquetFooter {

@@ -1371,7 +1371,6 @@ impl<T: Timestamp + Codec64> RustType<ProtoHollowBatch> for HollowBatch<T> {
                 format: None,
                 schema_id: None,
                 deprecated_schema_id: None,
-                // TODO(upsert-in-persist).
                 row_group_metadata: vec![],
                 parquet_footer: None,
             }))
@@ -1546,9 +1545,12 @@ impl<T: Timestamp + Codec64> RustType<ProtoHollowBatchPart> for BatchPart<T> {
                     format: proto.format.map(|f| f.into_rust()).transpose()?,
                     schema_id,
                     deprecated_schema_id,
-                    // TODO(upsert-in-persist).
-                    row_group_metadata: vec![],
-                    parquet_footer: None,
+                    row_group_metadata: proto
+                        .row_group_metadata
+                        .into_iter()
+                        .map(|x| x.into_rust())
+                        .collect::<Result<Vec<_>, _>>()?,
+                    parquet_footer: proto.parquet_footer.map(|x| x.into_rust()).transpose()?,
                 }))
             }
             Some(proto_hollow_batch_part::Kind::Inline(x)) => {
@@ -1580,16 +1582,16 @@ impl RustType<ProtoRowGroupMetadata> for RowGroupMetadata {
                 .iter()
                 .map(|s| s.into())
                 .collect(),
-            size: self.size as u64,
-            footer_offset: self.footer_offset as u64,
+            offset: self.offset.cast_into(),
+            length: self.length.cast_into(),
         }
     }
 
     fn from_proto(proto: ProtoRowGroupMetadata) -> Result<Self, TryFromProtoError> {
         Ok(Self {
             bloom_filter: BloomFilter::from_bitset(proto.bloom_filter),
-            size: proto.size as usize,
-            footer_offset: proto.footer_offset as usize,
+            offset: proto.offset.cast_into(),
+            length: proto.length.cast_into(),
         })
     }
 }

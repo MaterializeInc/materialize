@@ -709,8 +709,8 @@ pub struct RunMeta {
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize)]
 pub struct RowGroupMetadata {
     pub(crate) bloom_filter: BloomFilter,
-    pub(crate) size: usize,
-    pub(crate) footer_offset: usize,
+    pub(crate) offset: usize,
+    pub(crate) length: usize,
 }
 
 /// Metadata describing the bytes used by the footer in the underlying parquet file.
