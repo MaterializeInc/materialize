@@ -6,12 +6,13 @@
 // As of the Change Date specified in that file, in accordance with
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
-use columnar::FixedSizeCodec;
+
 use parquet::bloom_filter::{Sbbf, hash};
 use serde::{Serialize, Serializer};
 
 use crate::columnar;
 
+/// TODO
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize)]
 pub struct BloomFilter {
     #[serde(serialize_with = "serialize_bloom_filter")]
@@ -19,15 +20,20 @@ pub struct BloomFilter {
 }
 
 impl BloomFilter {
-    fn new(inner: Sbbf) -> Self {
+    /// TODO
+    pub fn new(inner: Sbbf) -> Self {
         Self { inner }
     }
 
-    fn contains<T: Sized, K: FixedSizeCodec<T>>(&self, k: K) -> bool {
-        self.inner.check_hash(hash(k.as_bytes()))
+    /// TODO
+    pub fn contains<K: AsParquetBytes>(&self, k: K, buf: &mut Vec<u8>) -> bool {
+        buf.clear();
+        k.encode_into(buf);
+        self.inner.check_hash(hash(&buf[..]))
     }
 
-    fn update(&mut self, filter: Sbbf) {
+    /// TODO
+    pub fn update(&mut self, filter: Sbbf) {
         self.inner = filter;
     }
 }
@@ -36,7 +42,16 @@ fn serialize_bloom_filter<S: Serializer>(filter: &Sbbf, s: S) -> Result<S::Ok, S
     s.serialize_bytes(filter.get_bitset().as_slice())
 }
 
+
 pub fn bloom_filter_from_bytes(bytes: &[u8]) -> BloomFilter {
     let sbbf = Sbbf::new(bytes);
     BloomFilter::new(sbbf)
+}
+
+/// Encode a given type as Parquet would.
+///
+/// Allows you to check if a given type is present in a bloom filter.
+pub trait AsParquetBytes {
+    /// Encode self into the provided buffer as it would be encoded in Parquet.
+    fn encode_into(&self, buf: &mut Vec<u8>);
 }

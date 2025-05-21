@@ -367,6 +367,38 @@ where
     F: FnMut(&BloomFilter) -> bool,
 {
     let now = Instant::now();
+    let get_span = debug_span!("fetch_batch::get");
+    let blob_key = part.key.complete(shard_id);
+    let value = retry_external(&metrics.retries.external.fetch_batch_get, || async {
+        shard_metrics.blob_gets.inc();
+        blob.get(&blob_key).await
+    })
+    .instrument(get_span.clone())
+    .await
+    .ok_or(blob_key)?;
+
+    drop(get_span);
+
+    read_metrics.part_count.inc();
+    read_metrics.part_bytes.inc_by(u64::cast_from(value.len()));
+    read_metrics.seconds.inc_by(now.elapsed().as_secs_f64());
+
+    Ok(value)
+}
+
+pub(crate) async fn fetch_batch_part_blob2<T, F>(
+    shard_id: &ShardId,
+    blob: &dyn Blob,
+    metrics: &Metrics,
+    shard_metrics: &ShardMetrics,
+    read_metrics: &ReadMetrics,
+    part: &HollowBatchPart<T>,
+    mut should_fetch_row_group: F,
+) -> Result<SegmentedBytes, BlobKey>
+where
+    F: FnMut(&BloomFilter) -> bool,
+{
+    let now = Instant::now();
     // let get_span = debug_span!("fetch_batch::get");
     let blob_key = part.key.complete(shard_id);
 
