@@ -77,7 +77,7 @@ message ProtoHollowBatchPart {
 
   optional uint64 deprecated_schema_id = 9;
 
-  optional ProtoRowGroupMetadata row_group_metadata = 14;
+  repeated ProtoRowGroupMetadata row_group_metadata = 14;
 
   optional ProtoParquetFooter parquet_footer = 15;
 }

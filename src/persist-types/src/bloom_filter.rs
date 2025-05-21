@@ -10,8 +10,6 @@
 use parquet::bloom_filter::{Sbbf, hash};
 use serde::{Serialize, Serializer};
 
-use crate::columnar;
-
 /// TODO
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize)]
 pub struct BloomFilter {
@@ -20,26 +18,37 @@ pub struct BloomFilter {
 }
 
 impl BloomFilter {
-    /// TODO
+    /// create from an existing Sbbf.
     pub fn new(inner: Sbbf) -> Self {
         Self { inner }
     }
 
-    /// TODO
+    pub fn from_bitset(bitset: Vec<Vec<u8>>) -> Self {
+        Self {
+            inner: Sbbf::new(bitset.concat().as_slice()),
+        }
+    }
+
+    /// check if the key is in the key is in the bloom filter.
     pub fn contains<K: AsParquetBytes>(&self, k: K, buf: &mut Vec<u8>) -> bool {
         buf.clear();
         k.encode_into(buf);
         self.inner.check_hash(hash(&buf[..]))
     }
 
-    /// TODO
+    /// update underlying bloom filter.
     pub fn update(&mut self, filter: Sbbf) {
         self.inner = filter;
+    }
+
+    /// get the underlying bloom filter as a bitset.
+    pub fn into_bitset(&self) -> Vec<[u8; 32]> {
+        self.inner.into_bitset()
     }
 }
 
 fn serialize_bloom_filter<S: Serializer>(filter: &Sbbf, s: S) -> Result<S::Ok, S::Error> {
-    s.serialize_bytes(filter.get_bitset().as_slice())
+    s.serialize_bytes(filter.into_bitset().concat().as_slice())
 }
 
 /// Encode a given type as Parquet would.

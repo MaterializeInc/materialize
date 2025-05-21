@@ -174,7 +174,7 @@ checksum = "7c02d123df017efcdfbd739ef81735b36c5ba83ec3c59c80a9d7ecc718f92e50"
 [[package]]
 name = "arrow"
 version = "53.4.1"
-source = "git+https://github.com/ptravers/arrow-rs?branch=hackweek%2Fupsert-in-s3#145abd1ab695f4bed0b4009c18ede8e2a6b0ca3d"
+source = "git+https://github.com/ptravers/arrow-rs?branch=hackweek%2Fupsert-in-s3#a5f74caa86442d6a06b7c0a286d10befa25f196d"
 dependencies = [
  "arrow-arith",
  "arrow-array",
@@ -191,7 +191,7 @@ dependencies = [
 [[package]]
 name = "arrow-arith"
 version = "53.4.1"
-source = "git+https://github.com/ptravers/arrow-rs?branch=hackweek%2Fupsert-in-s3#145abd1ab695f4bed0b4009c18ede8e2a6b0ca3d"
+source = "git+https://github.com/ptravers/arrow-rs?branch=hackweek%2Fupsert-in-s3#a5f74caa86442d6a06b7c0a286d10befa25f196d"
 dependencies = [
  "arrow-array",
  "arrow-buffer",
@@ -205,7 +205,7 @@ dependencies = [
 [[package]]
 name = "arrow-array"
 version = "53.4.1"
-source = "git+https://github.com/ptravers/arrow-rs?branch=hackweek%2Fupsert-in-s3#145abd1ab695f4bed0b4009c18ede8e2a6b0ca3d"
+source = "git+https://github.com/ptravers/arrow-rs?branch=hackweek%2Fupsert-in-s3#a5f74caa86442d6a06b7c0a286d10befa25f196d"
 dependencies = [
  "ahash",
  "arrow-buffer",
@@ -220,7 +220,7 @@ dependencies = [
 [[package]]
 name = "arrow-buffer"
 version = "53.4.1"
-source = "git+https://github.com/ptravers/arrow-rs?branch=hackweek%2Fupsert-in-s3#145abd1ab695f4bed0b4009c18ede8e2a6b0ca3d"
+source = "git+https://github.com/ptravers/arrow-rs?branch=hackweek%2Fupsert-in-s3#a5f74caa86442d6a06b7c0a286d10befa25f196d"
 dependencies = [
  "bytes",
  "half",
@@ -230,7 +230,7 @@ dependencies = [
 [[package]]
 name = "arrow-cast"
 version = "53.4.1"
-source = "git+https://github.com/ptravers/arrow-rs?branch=hackweek%2Fupsert-in-s3#145abd1ab695f4bed0b4009c18ede8e2a6b0ca3d"
+source = "git+https://github.com/ptravers/arrow-rs?branch=hackweek%2Fupsert-in-s3#a5f74caa86442d6a06b7c0a286d10befa25f196d"
 dependencies = [
  "arrow-array",
  "arrow-buffer",
@@ -249,7 +249,7 @@ dependencies = [
 [[package]]
 name = "arrow-data"
 version = "53.4.1"
-source = "git+https://github.com/ptravers/arrow-rs?branch=hackweek%2Fupsert-in-s3#145abd1ab695f4bed0b4009c18ede8e2a6b0ca3d"
+source = "git+https://github.com/ptravers/arrow-rs?branch=hackweek%2Fupsert-in-s3#a5f74caa86442d6a06b7c0a286d10befa25f196d"
 dependencies = [
  "arrow-buffer",
  "arrow-schema",
@@ -260,7 +260,7 @@ dependencies = [
 [[package]]
 name = "arrow-ipc"
 version = "53.4.1"
-source = "git+https://github.com/ptravers/arrow-rs?branch=hackweek%2Fupsert-in-s3#145abd1ab695f4bed0b4009c18ede8e2a6b0ca3d"
+source = "git+https://github.com/ptravers/arrow-rs?branch=hackweek%2Fupsert-in-s3#a5f74caa86442d6a06b7c0a286d10befa25f196d"
 dependencies = [
  "arrow-array",
  "arrow-buffer",
@@ -273,7 +273,7 @@ dependencies = [
 [[package]]
 name = "arrow-ord"
 version = "53.4.1"
-source = "git+https://github.com/ptravers/arrow-rs?branch=hackweek%2Fupsert-in-s3#145abd1ab695f4bed0b4009c18ede8e2a6b0ca3d"
+source = "git+https://github.com/ptravers/arrow-rs?branch=hackweek%2Fupsert-in-s3#a5f74caa86442d6a06b7c0a286d10befa25f196d"
 dependencies = [
  "arrow-array",
  "arrow-buffer",
@@ -287,7 +287,7 @@ dependencies = [
 [[package]]
 name = "arrow-row"
 version = "53.4.1"
-source = "git+https://github.com/ptravers/arrow-rs?branch=hackweek%2Fupsert-in-s3#145abd1ab695f4bed0b4009c18ede8e2a6b0ca3d"
+source = "git+https://github.com/ptravers/arrow-rs?branch=hackweek%2Fupsert-in-s3#a5f74caa86442d6a06b7c0a286d10befa25f196d"
 dependencies = [
  "ahash",
  "arrow-array",
@@ -300,12 +300,12 @@ dependencies = [
 [[package]]
 name = "arrow-schema"
 version = "53.4.1"
-source = "git+https://github.com/ptravers/arrow-rs?branch=hackweek%2Fupsert-in-s3#145abd1ab695f4bed0b4009c18ede8e2a6b0ca3d"
+source = "git+https://github.com/ptravers/arrow-rs?branch=hackweek%2Fupsert-in-s3#a5f74caa86442d6a06b7c0a286d10befa25f196d"
 
 [[package]]
 name = "arrow-select"
 version = "53.4.1"
-source = "git+https://github.com/ptravers/arrow-rs?branch=hackweek%2Fupsert-in-s3#145abd1ab695f4bed0b4009c18ede8e2a6b0ca3d"
+source = "git+https://github.com/ptravers/arrow-rs?branch=hackweek%2Fupsert-in-s3#a5f74caa86442d6a06b7c0a286d10befa25f196d"
 dependencies = [
  "ahash",
  "arrow-array",
@@ -318,7 +318,7 @@ dependencies = [
 [[package]]
 name = "arrow-string"
 version = "53.4.1"
-source = "git+https://github.com/ptravers/arrow-rs?branch=hackweek%2Fupsert-in-s3#145abd1ab695f4bed0b4009c18ede8e2a6b0ca3d"
+source = "git+https://github.com/ptravers/arrow-rs?branch=hackweek%2Fupsert-in-s3#a5f74caa86442d6a06b7c0a286d10befa25f196d"
 dependencies = [
  "arrow-array",
  "arrow-buffer",
@@ -740,9 +740,9 @@ dependencies = [
 
 [[package]]
 name = "aws-sdk-sso"
-version = "1.69.0"
+version = "1.70.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6e9c2e5f57f4a5b7f7e7a1c54427d679ab2337a29e578efbd005e244fd90c4ea"
+checksum = "83447efb7179d8e2ad2afb15ceb9c113debbc2ecdf109150e338e2e28b86190b"
 dependencies = [
  "aws-credential-types",
  "aws-runtime",
@@ -762,9 +762,9 @@ dependencies = [
 
 [[package]]
 name = "aws-sdk-ssooidc"
-version = "1.70.0"
+version = "1.71.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0acaed9a89e82afa50045f68d27bc927600bdc0cc7d617dec61dfb9e6952d22f"
+checksum = "c5f9bfbbda5e2b9fe330de098f14558ee8b38346408efe9f2e9cee82dc1636a4"
 dependencies = [
  "aws-credential-types",
  "aws-runtime",
@@ -784,9 +784,9 @@ dependencies = [
 
 [[package]]
 name = "aws-sdk-sts"
-version = "1.70.0"
+version = "1.71.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "015851dba63fbf22c70c278d8e60c85f008d03640c5b40908730802e1267f651"
+checksum = "e17b984a66491ec08b4f4097af8911251db79296b3e4a763060b45805746264f"
 dependencies = [
  "aws-credential-types",
  "aws-runtime",
@@ -8567,7 +8567,7 @@ dependencies = [
 [[package]]
 name = "parquet"
 version = "53.4.1"
-source = "git+https://github.com/ptravers/arrow-rs?branch=hackweek%2Fupsert-in-s3#145abd1ab695f4bed0b4009c18ede8e2a6b0ca3d"
+source = "git+https://github.com/ptravers/arrow-rs?branch=hackweek%2Fupsert-in-s3#a5f74caa86442d6a06b7c0a286d10befa25f196d"
 dependencies = [
  "ahash",
  "arrow-array",

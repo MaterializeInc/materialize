@@ -706,7 +706,7 @@ pub struct RunMeta {
 }
 
 /// Metadata describing `RowGroup` related to the underlying HollowBatchPart.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize)]
 pub struct RowGroupMetadata {
     pub(crate) bloom_filter: BloomFilter,
     pub(crate) size: usize,
@@ -714,7 +714,7 @@ pub struct RowGroupMetadata {
 }
 
 /// Metadata describing the bytes used by the footer in the underlying parquet file.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize)]
 pub struct ParquetFooter {
     pub(crate) offset: usize,
     pub(crate) size: usize,
@@ -769,7 +769,7 @@ pub struct HollowBatchPart<T> {
     pub deprecated_schema_id: Option<SchemaId>,
 
     /// BloomFilter stored next to (offset, size, footer_offset) of the row group.
-    pub row_group_metadata: Option<Vec<RowGroupMetadata>>,
+    pub row_group_metadata: Vec<RowGroupMetadata>,
     /// The offset and size of the parquet footer in the blob.
     pub parquet_footer: Option<ParquetFooter>,
 }
@@ -2828,7 +2828,7 @@ pub(crate) mod tests {
                     schema_id,
                     deprecated_schema_id,
                     // TODO(upsert-in-persist).
-                    row_group_metadata: None,
+                    row_group_metadata: vec![],
                     parquet_footer: None,
                 }
             },
@@ -3003,7 +3003,7 @@ pub(crate) mod tests {
                         format: None,
                         schema_id: None,
                         deprecated_schema_id: None,
-                        row_group_metadata: None,
+                        row_group_metadata: vec![],
                         parquet_footer: None,
                     }))
                 })

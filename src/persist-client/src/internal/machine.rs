@@ -1893,6 +1893,7 @@ pub mod datadriven {
                 &datadriven.client.metrics.read.batch_fetcher,
                 &batch.desc,
                 part,
+                |_| true,
             )
             .await
             .expect("invalid batch part");
@@ -2153,6 +2154,7 @@ pub mod datadriven {
                         &datadriven.client.metrics.read.batch_fetcher,
                         &batch.desc,
                         part,
+                        |_| true,
                     )
                     .await
                     .expect("invalid batch part");

@@ -113,7 +113,7 @@ impl<'a> DirectiveArgs<'a> {
                         format: None,
                         schema_id: None,
                         deprecated_schema_id: None,
-                        row_group_metadata: None,
+                        row_group_metadata: vec![],
                         parquet_footer: None,
                     }))
                 })

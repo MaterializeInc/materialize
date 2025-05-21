@@ -1185,7 +1185,7 @@ mod tests {
                             format: None,
                             schema_id: None,
                             deprecated_schema_id: None,
-                            bloom_filter: None,
+                            row_group_metadata: vec![],
                             parquet_footer: None,
                         }))
                     })

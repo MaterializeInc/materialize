@@ -30,6 +30,14 @@ fn main() {
             "#[derive(serde::Deserialize)]",
         )
         .type_attribute(
+            ".mz_persist_client.internal.state.ProtoRowGroupMetadata",
+            "#[derive(serde::Deserialize)]",
+        )
+        .type_attribute(
+            ".mz_persist_client.internal.state.ProtoParquetFooter",
+            "#[derive(serde::Deserialize)]",
+        )
+        .type_attribute(
             ".mz_persist_client.internal.state.ProtoHollowRunRef",
             "#[derive(serde::Deserialize)]",
         )
