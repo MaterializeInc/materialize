@@ -41,7 +41,7 @@ impl Default for EncodingConfig {
         EncodingConfig {
             use_dictionary: false,
             use_bloom_filter: true,
-            max_row_group_size: 0,
+            max_row_group_size: 1024 * 1024,
             compression: CompressionFormat::default(),
         }
     }
