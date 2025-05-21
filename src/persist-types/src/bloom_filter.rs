@@ -12,7 +12,7 @@ use serde::{Serialize, Serializer};
 
 use crate::columnar;
 
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize)]
 pub struct BloomFilter {
     #[serde(serialize_with = "serialize_bloom_filter")]
     inner: Sbbf,
