@@ -1284,8 +1284,8 @@ impl<T: Timestamp + Codec64> BatchParts<T> {
             // Field has been deprecated but kept around to roundtrip state.
             deprecated_schema_id: None,
             // TODO(upsert-in-persist).
-            bloom_filter: bloom_filters,
-            parquet_footer: Some((footer_offset, footer_len)),
+            bloom_filter: None,
+            parquet_footer: None,
         })
     }
 
