@@ -174,31 +174,29 @@ checksum = "7c02d123df017efcdfbd739ef81735b36c5ba83ec3c59c80a9d7ecc718f92e50"
 [[package]]
 name = "arrow"
 version = "53.4.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d3a3ec4fe573f9d1f59d99c085197ef669b00b088ba1d7bb75224732d9357a74"
+source = "git+https://github.com/ptravers/arrow-rs?branch=hackweek%2Fupsert-in-s3#a5085be6891ad4ec872e456235fde8e1ee1eac3a"
 dependencies = [
  "arrow-arith",
- "arrow-array 53.4.1 (registry+https://github.com/rust-lang/crates.io-index)",
- "arrow-buffer 53.4.1 (registry+https://github.com/rust-lang/crates.io-index)",
- "arrow-cast 53.4.1 (registry+https://github.com/rust-lang/crates.io-index)",
- "arrow-data 53.4.1 (registry+https://github.com/rust-lang/crates.io-index)",
+ "arrow-array",
+ "arrow-buffer",
+ "arrow-cast",
+ "arrow-data",
  "arrow-ord",
  "arrow-row",
- "arrow-schema 53.4.1 (registry+https://github.com/rust-lang/crates.io-index)",
- "arrow-select 53.4.1 (registry+https://github.com/rust-lang/crates.io-index)",
+ "arrow-schema",
+ "arrow-select",
  "arrow-string",
 ]
 
 [[package]]
 name = "arrow-arith"
 version = "53.4.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6dcf19f07792d8c7f91086c67b574a79301e367029b17fcf63fb854332246a10"
+source = "git+https://github.com/ptravers/arrow-rs?branch=hackweek%2Fupsert-in-s3#a5085be6891ad4ec872e456235fde8e1ee1eac3a"
 dependencies = [
- "arrow-array 53.4.1 (registry+https://github.com/rust-lang/crates.io-index)",
- "arrow-buffer 53.4.1 (registry+https://github.com/rust-lang/crates.io-index)",
- "arrow-data 53.4.1 (registry+https://github.com/rust-lang/crates.io-index)",
- "arrow-schema 53.4.1 (registry+https://github.com/rust-lang/crates.io-index)",
+ "arrow-array",
+ "arrow-buffer",
+ "arrow-data",
+ "arrow-schema",
  "chrono",
  "half",
  "num",
@@ -207,28 +205,12 @@ dependencies = [
 [[package]]
 name = "arrow-array"
 version = "53.4.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7845c32b41f7053e37a075b3c2f29c6f5ea1b3ca6e5df7a2d325ee6e1b4a63cf"
+source = "git+https://github.com/ptravers/arrow-rs?branch=hackweek%2Fupsert-in-s3#a5085be6891ad4ec872e456235fde8e1ee1eac3a"
 dependencies = [
  "ahash",
- "arrow-buffer 53.4.1 (registry+https://github.com/rust-lang/crates.io-index)",
- "arrow-data 53.4.1 (registry+https://github.com/rust-lang/crates.io-index)",
- "arrow-schema 53.4.1 (registry+https://github.com/rust-lang/crates.io-index)",
- "chrono",
- "half",
- "hashbrown 0.15.3",
- "num",
-]
-
-[[package]]
-name = "arrow-array"
-version = "53.4.1"
-source = "git+https://github.com/ptravers/arrow-rs?branch=hackweek%2Fupsert-in-s3#796c66dfec436facdb5d3c595653d27382b448ff"
-dependencies = [
- "ahash",
- "arrow-buffer 53.4.1 (git+https://github.com/ptravers/arrow-rs?branch=hackweek%2Fupsert-in-s3)",
- "arrow-data 53.4.1 (git+https://github.com/ptravers/arrow-rs?branch=hackweek%2Fupsert-in-s3)",
- "arrow-schema 53.4.1 (git+https://github.com/ptravers/arrow-rs?branch=hackweek%2Fupsert-in-s3)",
+ "arrow-buffer",
+ "arrow-data",
+ "arrow-schema",
  "chrono",
  "half",
  "hashbrown 0.15.3",
@@ -238,18 +220,7 @@ dependencies = [
 [[package]]
 name = "arrow-buffer"
 version = "53.4.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5b5c681a99606f3316f2a99d9c8b6fa3aad0b1d34d8f6d7a1b471893940219d8"
-dependencies = [
- "bytes",
- "half",
- "num",
-]
-
-[[package]]
-name = "arrow-buffer"
-version = "53.4.1"
-source = "git+https://github.com/ptravers/arrow-rs?branch=hackweek%2Fupsert-in-s3#796c66dfec436facdb5d3c595653d27382b448ff"
+source = "git+https://github.com/ptravers/arrow-rs?branch=hackweek%2Fupsert-in-s3#a5085be6891ad4ec872e456235fde8e1ee1eac3a"
 dependencies = [
  "bytes",
  "half",
@@ -259,33 +230,13 @@ dependencies = [
 [[package]]
 name = "arrow-cast"
 version = "53.4.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6365f8527d4f87b133eeb862f9b8093c009d41a210b8f101f91aa2392f61daac"
+source = "git+https://github.com/ptravers/arrow-rs?branch=hackweek%2Fupsert-in-s3#a5085be6891ad4ec872e456235fde8e1ee1eac3a"
 dependencies = [
- "arrow-array 53.4.1 (registry+https://github.com/rust-lang/crates.io-index)",
- "arrow-buffer 53.4.1 (registry+https://github.com/rust-lang/crates.io-index)",
- "arrow-data 53.4.1 (registry+https://github.com/rust-lang/crates.io-index)",
- "arrow-schema 53.4.1 (registry+https://github.com/rust-lang/crates.io-index)",
- "arrow-select 53.4.1 (registry+https://github.com/rust-lang/crates.io-index)",
- "atoi",
- "base64 0.22.1",
- "chrono",
- "half",
- "lexical-core",
- "num",
- "ryu",
-]
-
-[[package]]
-name = "arrow-cast"
-version = "53.4.1"
-source = "git+https://github.com/ptravers/arrow-rs?branch=hackweek%2Fupsert-in-s3#796c66dfec436facdb5d3c595653d27382b448ff"
-dependencies = [
- "arrow-array 53.4.1 (git+https://github.com/ptravers/arrow-rs?branch=hackweek%2Fupsert-in-s3)",
- "arrow-buffer 53.4.1 (git+https://github.com/ptravers/arrow-rs?branch=hackweek%2Fupsert-in-s3)",
- "arrow-data 53.4.1 (git+https://github.com/ptravers/arrow-rs?branch=hackweek%2Fupsert-in-s3)",
- "arrow-schema 53.4.1 (git+https://github.com/ptravers/arrow-rs?branch=hackweek%2Fupsert-in-s3)",
- "arrow-select 53.4.1 (git+https://github.com/ptravers/arrow-rs?branch=hackweek%2Fupsert-in-s3)",
+ "arrow-array",
+ "arrow-buffer",
+ "arrow-data",
+ "arrow-schema",
+ "arrow-select",
  "atoi",
  "base64 0.22.1",
  "chrono",
@@ -298,22 +249,10 @@ dependencies = [
 [[package]]
 name = "arrow-data"
 version = "53.4.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "cd962fc3bf7f60705b25bcaa8eb3318b2545aa1d528656525ebdd6a17a6cd6fb"
+source = "git+https://github.com/ptravers/arrow-rs?branch=hackweek%2Fupsert-in-s3#a5085be6891ad4ec872e456235fde8e1ee1eac3a"
 dependencies = [
- "arrow-buffer 53.4.1 (registry+https://github.com/rust-lang/crates.io-index)",
- "arrow-schema 53.4.1 (registry+https://github.com/rust-lang/crates.io-index)",
- "half",
- "num",
-]
-
-[[package]]
-name = "arrow-data"
-version = "53.4.1"
-source = "git+https://github.com/ptravers/arrow-rs?branch=hackweek%2Fupsert-in-s3#796c66dfec436facdb5d3c595653d27382b448ff"
-dependencies = [
- "arrow-buffer 53.4.1 (git+https://github.com/ptravers/arrow-rs?branch=hackweek%2Fupsert-in-s3)",
- "arrow-schema 53.4.1 (git+https://github.com/ptravers/arrow-rs?branch=hackweek%2Fupsert-in-s3)",
+ "arrow-buffer",
+ "arrow-schema",
  "half",
  "num",
 ]
@@ -321,27 +260,26 @@ dependencies = [
 [[package]]
 name = "arrow-ipc"
 version = "53.4.1"
-source = "git+https://github.com/ptravers/arrow-rs?branch=hackweek%2Fupsert-in-s3#796c66dfec436facdb5d3c595653d27382b448ff"
+source = "git+https://github.com/ptravers/arrow-rs?branch=hackweek%2Fupsert-in-s3#a5085be6891ad4ec872e456235fde8e1ee1eac3a"
 dependencies = [
- "arrow-array 53.4.1 (git+https://github.com/ptravers/arrow-rs?branch=hackweek%2Fupsert-in-s3)",
- "arrow-buffer 53.4.1 (git+https://github.com/ptravers/arrow-rs?branch=hackweek%2Fupsert-in-s3)",
- "arrow-cast 53.4.1 (git+https://github.com/ptravers/arrow-rs?branch=hackweek%2Fupsert-in-s3)",
- "arrow-data 53.4.1 (git+https://github.com/ptravers/arrow-rs?branch=hackweek%2Fupsert-in-s3)",
- "arrow-schema 53.4.1 (git+https://github.com/ptravers/arrow-rs?branch=hackweek%2Fupsert-in-s3)",
+ "arrow-array",
+ "arrow-buffer",
+ "arrow-cast",
+ "arrow-data",
+ "arrow-schema",
  "flatbuffers",
 ]
 
 [[package]]
 name = "arrow-ord"
 version = "53.4.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "79af2db0e62a508d34ddf4f76bfd6109b6ecc845257c9cba6f939653668f89ac"
+source = "git+https://github.com/ptravers/arrow-rs?branch=hackweek%2Fupsert-in-s3#a5085be6891ad4ec872e456235fde8e1ee1eac3a"
 dependencies = [
- "arrow-array 53.4.1 (registry+https://github.com/rust-lang/crates.io-index)",
- "arrow-buffer 53.4.1 (registry+https://github.com/rust-lang/crates.io-index)",
- "arrow-data 53.4.1 (registry+https://github.com/rust-lang/crates.io-index)",
- "arrow-schema 53.4.1 (registry+https://github.com/rust-lang/crates.io-index)",
- "arrow-select 53.4.1 (registry+https://github.com/rust-lang/crates.io-index)",
+ "arrow-array",
+ "arrow-buffer",
+ "arrow-data",
+ "arrow-schema",
+ "arrow-select",
  "half",
  "num",
 ]
@@ -349,66 +287,44 @@ dependencies = [
 [[package]]
 name = "arrow-row"
 version = "53.4.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "da30e9d10e9c52f09ea0cf15086d6d785c11ae8dcc3ea5f16d402221b6ac7735"
+source = "git+https://github.com/ptravers/arrow-rs?branch=hackweek%2Fupsert-in-s3#a5085be6891ad4ec872e456235fde8e1ee1eac3a"
 dependencies = [
  "ahash",
- "arrow-array 53.4.1 (registry+https://github.com/rust-lang/crates.io-index)",
- "arrow-buffer 53.4.1 (registry+https://github.com/rust-lang/crates.io-index)",
- "arrow-data 53.4.1 (registry+https://github.com/rust-lang/crates.io-index)",
- "arrow-schema 53.4.1 (registry+https://github.com/rust-lang/crates.io-index)",
+ "arrow-array",
+ "arrow-buffer",
+ "arrow-data",
+ "arrow-schema",
  "half",
 ]
 
 [[package]]
 name = "arrow-schema"
 version = "53.4.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "35b0f9c0c3582dd55db0f136d3b44bfa0189df07adcf7dc7f2f2e74db0f52eb8"
-
-[[package]]
-name = "arrow-schema"
-version = "53.4.1"
-source = "git+https://github.com/ptravers/arrow-rs?branch=hackweek%2Fupsert-in-s3#796c66dfec436facdb5d3c595653d27382b448ff"
+source = "git+https://github.com/ptravers/arrow-rs?branch=hackweek%2Fupsert-in-s3#a5085be6891ad4ec872e456235fde8e1ee1eac3a"
 
 [[package]]
 name = "arrow-select"
 version = "53.4.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "92fc337f01635218493c23da81a364daf38c694b05fc20569c3193c11c561984"
+source = "git+https://github.com/ptravers/arrow-rs?branch=hackweek%2Fupsert-in-s3#a5085be6891ad4ec872e456235fde8e1ee1eac3a"
 dependencies = [
  "ahash",
- "arrow-array 53.4.1 (registry+https://github.com/rust-lang/crates.io-index)",
- "arrow-buffer 53.4.1 (registry+https://github.com/rust-lang/crates.io-index)",
- "arrow-data 53.4.1 (registry+https://github.com/rust-lang/crates.io-index)",
- "arrow-schema 53.4.1 (registry+https://github.com/rust-lang/crates.io-index)",
- "num",
-]
-
-[[package]]
-name = "arrow-select"
-version = "53.4.1"
-source = "git+https://github.com/ptravers/arrow-rs?branch=hackweek%2Fupsert-in-s3#796c66dfec436facdb5d3c595653d27382b448ff"
-dependencies = [
- "ahash",
- "arrow-array 53.4.1 (git+https://github.com/ptravers/arrow-rs?branch=hackweek%2Fupsert-in-s3)",
- "arrow-buffer 53.4.1 (git+https://github.com/ptravers/arrow-rs?branch=hackweek%2Fupsert-in-s3)",
- "arrow-data 53.4.1 (git+https://github.com/ptravers/arrow-rs?branch=hackweek%2Fupsert-in-s3)",
- "arrow-schema 53.4.1 (git+https://github.com/ptravers/arrow-rs?branch=hackweek%2Fupsert-in-s3)",
+ "arrow-array",
+ "arrow-buffer",
+ "arrow-data",
+ "arrow-schema",
  "num",
 ]
 
 [[package]]
 name = "arrow-string"
 version = "53.4.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d596a9fc25dae556672d5069b090331aca8acb93cae426d8b7dcdf1c558fa0ce"
+source = "git+https://github.com/ptravers/arrow-rs?branch=hackweek%2Fupsert-in-s3#a5085be6891ad4ec872e456235fde8e1ee1eac3a"
 dependencies = [
- "arrow-array 53.4.1 (registry+https://github.com/rust-lang/crates.io-index)",
- "arrow-buffer 53.4.1 (registry+https://github.com/rust-lang/crates.io-index)",
- "arrow-data 53.4.1 (registry+https://github.com/rust-lang/crates.io-index)",
- "arrow-schema 53.4.1 (registry+https://github.com/rust-lang/crates.io-index)",
- "arrow-select 53.4.1 (registry+https://github.com/rust-lang/crates.io-index)",
+ "arrow-array",
+ "arrow-buffer",
+ "arrow-data",
+ "arrow-schema",
+ "arrow-select",
  "memchr",
  "num",
  "regex",
@@ -6779,6 +6695,8 @@ version = "0.0.0"
 dependencies = [
  "anyhow",
  "arrow",
+ "arrow-array",
+ "arrow-schema",
  "bytes",
  "chrono",
  "hex",
@@ -8649,16 +8567,16 @@ dependencies = [
 [[package]]
 name = "parquet"
 version = "53.4.1"
-source = "git+https://github.com/ptravers/arrow-rs?branch=hackweek%2Fupsert-in-s3#796c66dfec436facdb5d3c595653d27382b448ff"
+source = "git+https://github.com/ptravers/arrow-rs?branch=hackweek%2Fupsert-in-s3#a5085be6891ad4ec872e456235fde8e1ee1eac3a"
 dependencies = [
  "ahash",
- "arrow-array 53.4.1 (git+https://github.com/ptravers/arrow-rs?branch=hackweek%2Fupsert-in-s3)",
- "arrow-buffer 53.4.1 (git+https://github.com/ptravers/arrow-rs?branch=hackweek%2Fupsert-in-s3)",
- "arrow-cast 53.4.1 (git+https://github.com/ptravers/arrow-rs?branch=hackweek%2Fupsert-in-s3)",
- "arrow-data 53.4.1 (git+https://github.com/ptravers/arrow-rs?branch=hackweek%2Fupsert-in-s3)",
+ "arrow-array",
+ "arrow-buffer",
+ "arrow-cast",
+ "arrow-data",
  "arrow-ipc",
- "arrow-schema 53.4.1 (git+https://github.com/ptravers/arrow-rs?branch=hackweek%2Fupsert-in-s3)",
- "arrow-select 53.4.1 (git+https://github.com/ptravers/arrow-rs?branch=hackweek%2Fupsert-in-s3)",
+ "arrow-schema",
+ "arrow-select",
  "base64 0.22.1",
  "brotli",
  "bytes",

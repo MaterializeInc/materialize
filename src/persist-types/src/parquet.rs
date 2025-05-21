@@ -13,8 +13,8 @@ use std::fmt::Debug;
 use std::io::Write;
 use std::sync::Arc;
 
-use arrow::array::{Array, RecordBatch};
-use arrow::datatypes::{Fields, Schema as ArrowSchema};
+use arrow_array::{Array, RecordBatch};
+use arrow_schema::{Fields, Schema as ArrowSchema};
 use parquet::arrow::ArrowWriter;
 use parquet::arrow::arrow_reader::{ParquetRecordBatchReader, ParquetRecordBatchReaderBuilder};
 use parquet::basic::Encoding;

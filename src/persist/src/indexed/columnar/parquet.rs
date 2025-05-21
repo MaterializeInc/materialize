@@ -12,7 +12,6 @@
 use std::io::Write;
 use std::sync::Arc;
 
-use arrow::row;
 use differential_dataflow::trace::Description;
 use mz_ore::bytes::SegmentedBytes;
 use mz_ore::cast::CastFrom;
@@ -221,7 +220,7 @@ pub fn decode_parquet_file_kvtd(
             if ret.len() != 1 {
                 warn!("unexpected number of row groups: {}", ret.len());
             }
-            let batch = ::arrow::compute::concat_batches(&schema, &ret)?;
+            let batch = arrow::compute::concat_batches(&schema, &ret)?;
             let updates = decode_arrow_batch(&batch, metrics).map_err(|e| e.to_string())?;
             Ok(updates)
         }
@@ -238,7 +237,7 @@ pub fn decode_parquet_file_kvtd(
                 }
             });
 
-            let batch = ::arrow::compute::concat_batches(&schema, &batches)?;
+            let batch = arrow::compute::concat_batches(&schema, &batches)?;
 
             let updates = decode_arrow_batch(&batch, metrics).map_err(|e| e.to_string())?;
             Ok(updates)
