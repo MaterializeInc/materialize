@@ -135,6 +135,17 @@ impl Blob for BlobMemCache {
         Ok(res)
     }
 
+    /// Returns a reference to the specified range of the provided key.
+    async fn get_range(
+        &self,
+        key: &str,
+        start: usize,
+        length: usize,
+    ) -> Result<Option<bytes::Bytes>, ExternalError> {
+        // TODO(upsert-in-s3): Actually cache the blobs.
+        self.blob.get_range(key, start, length).await
+    }
+
     async fn list_keys_and_metadata(
         &self,
         key_prefix: &str,

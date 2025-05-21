@@ -522,6 +522,14 @@ pub trait Blob: std::fmt::Debug + Send + Sync {
     /// Returns a reference to the value corresponding to the key.
     async fn get(&self, key: &str) -> Result<Option<SegmentedBytes>, ExternalError>;
 
+    /// Returns a reference to the specified range of the provided key.
+    async fn get_range(
+        &self,
+        key: &str,
+        start: usize,
+        length: usize,
+    ) -> Result<Option<bytes::Bytes>, ExternalError>;
+
     /// List all of the keys in the map with metadata about the entry.
     ///
     /// Can be optionally restricted to only list keys starting with a
@@ -564,6 +572,21 @@ impl<A: Blob + 'static> Blob for Tasked<A> {
         mz_ore::task::spawn(
             || "persist::task::get",
             async move { backing.get(&key).await }.instrument(Span::current()),
+        )
+        .await?
+    }
+
+    async fn get_range(
+        &self,
+        key: &str,
+        start: usize,
+        length: usize,
+    ) -> Result<Option<bytes::Bytes>, ExternalError> {
+        let backing = self.clone_backing();
+        let key = key.to_owned();
+        mz_ore::task::spawn(
+            || "persist::task::get_range",
+            async move { backing.get_range(&key, start, length).await }.instrument(Span::current()),
         )
         .await?
     }

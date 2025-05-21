@@ -569,6 +569,44 @@ impl Blob for S3Blob {
         Ok(Some(SegmentedBytes::from(segments)))
     }
 
+    /// Returns a reference to the specified range of the provided key.
+    async fn get_range(
+        &self,
+        key: &str,
+        start: usize,
+        length: usize,
+    ) -> Result<Option<bytes::Bytes>, ExternalError> {
+        let path = self.get_path(key);
+        let end = start + length;
+        let range_header = format!("bytes={}-{}", start, end);
+
+        let result = self
+            .client
+            .get_object()
+            .bucket(&self.bucket)
+            .key(&path)
+            .range(&range_header)
+            .send()
+            .await;
+        let mut object = match result {
+            Ok(object) => object,
+            Err(SdkError::ServiceError(err)) if err.err().is_no_such_key() => return Ok(None),
+            Err(err) => {
+                self.update_error_metrics("GetObject", &err);
+                Err(anyhow!(err).context("s3 get meta err"))?
+            }
+        };
+
+        // TODO(upsert-in-s3): Assert the length provided matches what we get
+        // back from S3.
+        let mut buffer = Vec::with_capacity(length);
+        while let Some(part) = object.body.next().await {
+            let data = part.context("s3 get range body err")?;
+            buffer.extend_from_slice(&data[..]);
+        }
+        Ok(Some(bytes::Bytes::from(buffer)))
+    }
+
     async fn list_keys_and_metadata(
         &self,
         key_prefix: &str,

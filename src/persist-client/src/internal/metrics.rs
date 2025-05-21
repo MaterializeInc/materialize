@@ -2807,6 +2807,29 @@ impl Blob for MetricsBlob {
         res
     }
 
+    /// Returns a reference to the specified range of the provided key.
+    async fn get_range(
+        &self,
+        key: &str,
+        start: usize,
+        length: usize,
+    ) -> Result<Option<bytes::Bytes>, ExternalError> {
+        let res = self
+            .metrics
+            .blob
+            .get
+            .run_op(|| self.blob.get_range(key, start, length), Self::on_err)
+            .await;
+        if let Ok(Some(value)) = res.as_ref() {
+            self.metrics
+                .blob
+                .get
+                .bytes
+                .inc_by(u64::cast_from(value.len()));
+        }
+        res
+    }
+
     #[instrument(name = "blob::list_keys_and_metadata", fields(shard=blob_key_shard_id(key_prefix)))]
     async fn list_keys_and_metadata(
         &self,
