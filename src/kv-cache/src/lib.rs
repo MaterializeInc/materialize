@@ -39,7 +39,6 @@ where
         let mut encode_buffer = Vec::new();
         let mut should_fetch = |bloom_filter: &BloomFilter| {
             keys.iter().any(|row| {
-                // tracing::info!(?row, ?bloom_filter, "matched bloom filter!");
                 let datums = datum_vec_a.borrow_with(row);
                 assert_eq!(datums.len(), 1, "composite keys");
                 let key = datums[0];
@@ -54,7 +53,6 @@ where
         // When looking for the latest value of a key, we only need to scan parts
 
         for part in batch_parts {
-            // tracing::info!(metadata = ?part.part().row_group_metadata(), "part metadata");
             let values = self.handle.fetch_values(&part, &mut should_fetch).await;
             for ((source_data, _unit_type), _ts, diff) in values {
                 let source_data = source_data.expect("HACK WEEK");
