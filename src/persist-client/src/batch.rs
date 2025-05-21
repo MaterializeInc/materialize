@@ -448,7 +448,7 @@ impl BatchBuilderConfig {
                 compression: CompressionFormat::from_str(&ENCODING_COMPRESSION_FORMAT.get(value)),
                 // TODO(upsert-in-persist).
                 use_bloom_filter: true,
-                max_row_group_size: usize::MAX,
+                max_row_group_size: 1024 * 1024,
             },
             preferred_order,
             structured_key_lower_len: STRUCTURED_KEY_LOWER_LEN.get(value),
