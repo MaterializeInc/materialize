@@ -19,7 +19,7 @@ use fail::fail_point;
 use mz_ore::bytes::SegmentedBytes;
 use mz_ore::cast::CastFrom;
 use tokio::fs::{self, File};
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::io::{AsyncReadExt, AsyncSeekExt, AsyncWriteExt};
 
 use crate::error::Error;
 use crate::location::{Blob, BlobMetadata, Determinate, ExternalError};
@@ -104,7 +104,19 @@ impl Blob for FileBlob {
         start: usize,
         length: usize,
     ) -> Result<Option<bytes::Bytes>, ExternalError> {
-        todo!()
+        let file_path = self.blob_path(&FileBlob::replace_forward_slashes(key));
+        let mut file = match File::open(file_path).await {
+            Ok(file) => file,
+            Err(err) if err.kind() == ErrorKind::NotFound => return Ok(None),
+            Err(err) => return Err(err.into()),
+        };
+        file.seek(std::io::SeekFrom::Start(u64::cast_from(start)))
+            .await?;
+
+        let mut buf = vec![0; length];
+        file.read_exact(&mut buf).await?;
+
+        Ok(Some(bytes::Bytes::from(buf)))
     }
 
     async fn list_keys_and_metadata(

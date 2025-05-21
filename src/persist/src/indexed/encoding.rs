@@ -35,6 +35,7 @@ use mz_persist_types::part::Part;
 use mz_persist_types::schema::backward_compatible;
 use mz_persist_types::{Codec, Codec64};
 use mz_proto::{RustType, TryFromProtoError};
+use parquet::arrow::arrow_reader::{ArrowReaderMetadata, ParquetRecordBatchReader};
 use proptest::arbitrary::Arbitrary;
 use proptest::prelude::*;
 use proptest::strategy::{BoxedStrategy, Just};
@@ -51,7 +52,9 @@ use crate::generated::persist::{
     ProtoU64Description,
 };
 use crate::indexed::columnar::arrow::realloc_array;
-use crate::indexed::columnar::parquet::{decode_trace_parquet, encode_trace_parquet};
+use crate::indexed::columnar::parquet::{
+    INLINE_METADATA_KEY, decode_trace_parquet, encode_trace_parquet,
+};
 use crate::indexed::columnar::{ColumnarRecords, ColumnarRecordsStructuredExt};
 use crate::location::Blob;
 use crate::metrics::ColumnarMetrics;
@@ -723,6 +726,50 @@ impl<T: Timestamp + Codec64> BlobTraceBatchPart<T> {
     /// Decodes a BlobTraceBatchPart from the Parquet format.
     pub fn decode(buf: &SegmentedBytes, metrics: &ColumnarMetrics) -> Result<Self, Error> {
         decode_trace_parquet(buf.clone(), metrics)
+    }
+
+    /// TODO.
+    pub fn decode2(
+        reader: ParquetRecordBatchReader,
+        metadata: &ArrowReaderMetadata,
+        metrics: &ColumnarMetrics,
+    ) -> Result<Self, Error> {
+        use arrow_array::RecordBatchReader;
+
+        let inline_metadata = metadata
+            .metadata()
+            .file_metadata()
+            .key_value_metadata()
+            .as_ref()
+            .and_then(|x| x.iter().find(|x| x.key == INLINE_METADATA_KEY));
+        let (format, metadata) =
+            decode_trace_inline_meta(inline_metadata.and_then(|x| x.value.as_ref()))?;
+
+        tracing::info!(?format, "uhhhmmmm here");
+
+        let schema = reader.schema();
+        let batches = reader.collect::<Result<Vec<_>, _>>().expect("HACK WEEK");
+        let batch = arrow::compute::concat_batches(&schema, &batches).expect("HACK WEEK");
+
+        let updates = crate::indexed::columnar::arrow::decode_arrow_batch(&batch, metrics)
+            .map_err(|e| e.to_string())?;
+
+        let ret = BlobTraceBatchPart {
+            desc: metadata.desc.map_or_else(
+                || {
+                    Description::new(
+                        Antichain::from_elem(T::minimum()),
+                        Antichain::from_elem(T::minimum()),
+                        Antichain::from_elem(T::minimum()),
+                    )
+                },
+                |x| x.into(),
+            ),
+            index: metadata.index,
+            updates,
+        };
+        ret.validate()?;
+        Ok(ret)
     }
 
     /// Scans the part and returns a lower bound on the contained keys.

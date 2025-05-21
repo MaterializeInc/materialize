@@ -6574,6 +6574,7 @@ version = "0.0.0"
 dependencies = [
  "anyhow",
  "arrow",
+ "arrow-array",
  "async-stream",
  "async-trait",
  "aws-config",
@@ -6657,6 +6658,7 @@ dependencies = [
  "mz-proto",
  "mz-timely-util",
  "num_cpus",
+ "parquet",
  "prometheus",
  "proptest",
  "proptest-derive",

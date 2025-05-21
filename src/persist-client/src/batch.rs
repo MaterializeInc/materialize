@@ -12,7 +12,7 @@
 use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Debug;
-use std::io::Cursor;
+use std::io::{Cursor, Read};
 use std::marker::PhantomData;
 use std::sync::Arc;
 use std::time::Instant;
@@ -28,10 +28,11 @@ use futures_util::stream::StreamExt;
 use futures_util::{FutureExt, stream};
 use mz_dyncfg::Config;
 use mz_ore::cast::CastFrom;
-use mz_ore::instrument;
+use mz_ore::{bits, instrument};
 use mz_persist::indexed::encoding::{BatchColumnarFormat, BlobTraceBatchPart, BlobTraceUpdates};
 use mz_persist::location::Blob;
 use mz_persist_types::arrow::{ArrayBound, ArrayOrd};
+use mz_persist_types::bloom_filter::bloom_filter_from_bytes;
 use mz_persist_types::columnar::{ColumnDecoder, Schema};
 use mz_persist_types::parquet::{CompressionFormat, EncodingConfig};
 use mz_persist_types::part::{Part, PartBuilder};
@@ -39,7 +40,7 @@ use mz_persist_types::schema::SchemaId;
 use mz_persist_types::stats::{
     PartStats, TRUNCATE_LEN, TruncateBound, trim_to_budget, truncate_bytes,
 };
-use mz_persist_types::{Codec, Codec64};
+use mz_persist_types::{Codec, Codec64, bloom_filter};
 use mz_proto::RustType;
 use mz_timely_util::order::Reverse;
 use proptest_derive::Arbitrary;
@@ -447,7 +448,7 @@ impl BatchBuilderConfig {
                 compression: CompressionFormat::from_str(&ENCODING_COMPRESSION_FORMAT.get(value)),
                 // TODO(upsert-in-persist).
                 use_bloom_filter: true,
-                max_row_group_size: usize::MAX,
+                max_row_group_size: 1024 * 1024,
             },
             preferred_order,
             structured_key_lower_len: STRUCTURED_KEY_LOWER_LEN.get(value),
@@ -1210,6 +1211,43 @@ impl<T: Timestamp + Codec64> BatchParts<T> {
             usize::try_from(cursor.read_u32::<LittleEndian>().expect("read footer len"))
                 .expect("footer len");
         let footer_offset = payload_len - 8 - footer_len;
+
+        let mut bloom_filters = None;
+
+        if cfg.encoding_config.use_bloom_filter {
+            let mut blooms = Vec::new();
+            for row_group in row_group_stats.iter() {
+                // No composite primary keys for now
+                assert!(row_group.blooms.len() <= 1);
+                if let Some((raw_offset, size)) = row_group.blooms.get(0) {
+                    let bloom_buffer =
+                        &buf[*raw_offset as usize..*raw_offset as usize + *size as usize];
+                    let bloom_bytes = Bytes::copy_from_slice(bloom_buffer);
+                    let (_, offset) =
+                        parquet::bloom_filter::chunk_read_bloom_filter_header_and_offset(
+                            0,
+                            bloom_bytes.clone(),
+                        )
+                        .expect("read bloom filter header");
+                    let mut bitset_buffer = Vec::new();
+                    let mut cursor = Cursor::new(&bloom_bytes[offset as usize..]);
+                    cursor
+                        .read_exact(&mut bitset_buffer)
+                        .expect("read bloom filter");
+                    let bloom_filter = bloom_filter_from_bytes(&bitset_buffer);
+                    blooms.push((
+                        bloom_filter,
+                        (
+                            usize::try_from(row_group.offset).unwrap(),
+                            usize::try_from(row_group.size).unwrap(),
+                        ),
+                    ));
+                }
+            }
+            if !blooms.is_empty() {
+                bloom_filters = Some(blooms);
+            }
+        }
 
         batch_metrics.seconds.inc_by(start.elapsed().as_secs_f64());
         batch_metrics.bytes.inc_by(u64::cast_from(payload_len));

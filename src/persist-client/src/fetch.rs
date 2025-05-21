@@ -17,6 +17,7 @@ use std::time::Instant;
 use anyhow::anyhow;
 use arrow::array::{Array, ArrayRef, AsArray, BooleanArray, Int64Array};
 use arrow::compute::FilterBuilder;
+use bytes::Bytes;
 use differential_dataflow::difference::Semigroup;
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::trace::Description;
@@ -393,13 +394,13 @@ pub(crate) async fn fetch_batch_part_blob2<T, F>(
     shard_metrics: &ShardMetrics,
     read_metrics: &ReadMetrics,
     part: &HollowBatchPart<T>,
+    registered_desc: Description<T>,
     mut should_fetch_row_group: F,
-) -> Result<SegmentedBytes, BlobKey>
+) -> Result<EncodedPart<T>, BlobKey>
 where
+    T: Timestamp + Lattice + Codec64,
     F: FnMut(&BloomFilter) -> bool,
 {
-    let now = Instant::now();
-    // let get_span = debug_span!("fetch_batch::get");
     let blob_key = part.key.complete(shard_id);
 
     if part.row_group_metadata.len() > 0 {
@@ -434,24 +435,71 @@ where
             })
             .collect();
 
-        todo!()
+        let encoded_part = decode_batch_part_row_groups(
+            metrics,
+            read_metrics,
+            registered_desc,
+            part,
+            bytes,
+            footer_range,
+        );
+        Ok(encoded_part)
     } else {
-        retry_external(&metrics.retries.external.fetch_batch_get, || async {
+        let value = retry_external(&metrics.retries.external.fetch_batch_get, || async {
             shard_metrics.blob_gets.inc();
             blob.get(&blob_key).await
         })
-        // .instrument(get_span.clone())
         .await
-        .ok_or(blob_key)
+        .ok_or(blob_key)?;
+
+        let encoded_part =
+            decode_batch_part_blob(metrics, read_metrics, registered_desc, part, &value);
+        Ok(encoded_part)
     }
+}
 
-    // drop(get_span);
+pub(crate) fn decode_batch_part_row_groups<T>(
+    metrics: &Metrics,
+    read_metrics: &ReadMetrics,
+    registered_desc: Description<T>,
+    part: &HollowBatchPart<T>,
+    bytes: Vec<(Bytes, (usize, usize))>,
+    footer: (usize, usize),
+) -> EncodedPart<T>
+where
+    T: Timestamp + Lattice + Codec64,
+{
+    let (footer_bytes, _) = bytes
+        .iter()
+        .find(|(_bytes, range)| *range == footer)
+        .expect("should have footer bytes");
 
-    // read_metrics.part_count.inc();
-    // read_metrics.part_bytes.inc_by(u64::cast_from(value.len()));
-    // read_metrics.seconds.inc_by(now.elapsed().as_secs_f64());
+    let metadata =
+        ::parquet::file::metadata::ParquetMetaDataReader::decode_metadata(&footer_bytes[..])
+            .expect("failed to decode metadata");
+    let metadata = ::parquet::arrow::arrow_reader::ArrowReaderMetadata::try_new(
+        Arc::new(metadata),
+        ::parquet::arrow::arrow_reader::ArrowReaderOptions::new(),
+    )
+    .expect("failed to create metadata");
 
-    // Ok(value)
+    let bytes = bytes
+        .into_iter()
+        .map(|(bytes, range)| (range, bytes))
+        .collect();
+    let chunks = mz_persist::indexed::columnar::parquet::RowGroupsReader::new(bytes);
+
+    let row_groups =
+        parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder::new_with_metadata(
+            chunks,
+            metadata.clone(),
+        )
+        .build()
+        .expect("failed to create reader");
+    let parsed =
+        BlobTraceBatchPart::decode2(row_groups, &metadata, &metrics.columnar).expect("HACK WEEK");
+
+    EncodedPart::from_hollow(read_metrics.clone(), registered_desc, part, parsed)
 }
 
 pub(crate) fn decode_batch_part_blob<T>(
@@ -496,17 +544,18 @@ where
     T: Timestamp + Lattice + Codec64,
     F: FnMut(&BloomFilter) -> bool,
 {
-    let buf = fetch_batch_part_blob(
+    let part = fetch_batch_part_blob2(
         shard_id,
         blob,
         metrics,
         shard_metrics,
         read_metrics,
         part,
+        registered_desc.clone(),
         should_fetch_row_group,
     )
     .await?;
-    let part = decode_batch_part_blob(metrics, read_metrics, registered_desc.clone(), part, &buf);
+    // let part = decode_batch_part_blob(metrics, read_metrics, registered_desc.clone(), part, &buf);
     Ok(part)
 }
 

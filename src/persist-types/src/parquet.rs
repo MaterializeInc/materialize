@@ -40,8 +40,8 @@ impl Default for EncodingConfig {
     fn default() -> Self {
         EncodingConfig {
             use_dictionary: false,
-            use_bloom_filter: false,
-            max_row_group_size: 0,
+            use_bloom_filter: true,
+            max_row_group_size: 1024 * 1024,
             compression: CompressionFormat::default(),
         }
     }
