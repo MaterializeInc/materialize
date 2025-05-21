@@ -26,18 +26,19 @@ where
         ts: T,
     ) -> Vec<(Row, Row)> {
         let as_of = Antichain::from_elem(ts);
-        let mut batch_parts = self.handle.snapshot(as_of).await.expect("OH NO");
+        let batch_parts = self.handle.snapshot(as_of).await.expect("OH NO");
         assert_eq!(key_columns.len(), 1, "support composite keys");
         let key_col = key_columns[0];
 
         // We should fetch a RowGroup in a Part if it contains any of our keys.
         let mut datum_vec_a = DatumVec::new();
+        let mut encode_buffer = Vec::new();
         let mut should_fetch = |bloom_filter: &BloomFilter| {
             keys.iter().any(|row| {
                 let datums = datum_vec_a.borrow_with(row);
                 assert_eq!(datums.len(), 1, "composite keys");
                 let key = datums[0];
-                bloom_filter.contains(key)
+                bloom_filter.contains(key, &mut encode_buffer)
             })
         };
 

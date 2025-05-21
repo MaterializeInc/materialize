@@ -6,7 +6,7 @@
 // As of the Change Date specified in that file, in accordance with
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
-use columnar::FixedSizeCodec;
+
 use parquet::bloom_filter::{Sbbf, hash};
 use serde::{Serialize, Serializer};
 
@@ -26,8 +26,10 @@ impl BloomFilter {
     }
 
     /// TODO
-    pub fn contains<T: Sized, K: FixedSizeCodec<T>>(&self, k: K) -> bool {
-        self.inner.check_hash(hash(k.as_bytes()))
+    pub fn contains<K: AsParquetBytes>(&self, k: K, buf: &mut Vec<u8>) -> bool {
+        buf.clear();
+        k.encode_into(buf);
+        self.inner.check_hash(hash(&buf[..]))
     }
 
     /// TODO
@@ -38,4 +40,12 @@ impl BloomFilter {
 
 fn serialize_bloom_filter<S: Serializer>(filter: &Sbbf, s: S) -> Result<S::Ok, S::Error> {
     s.serialize_bytes(filter.get_bitset().as_slice())
+}
+
+/// Encode a given type as Parquet would.
+///
+/// Allows you to check if a given type is present in a bloom filter.
+pub trait AsParquetBytes {
+    /// Encode self into the provided buffer as it would be encoded in Parquet.
+    fn encode_into(&self, buf: &mut Vec<u8>);
 }

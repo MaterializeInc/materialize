@@ -168,6 +168,29 @@ pub enum Datum<'a> {
     // other datum variants should appear before `Null`.
 }
 
+impl mz_persist_types::bloom_filter::AsParquetBytes for Datum<'_> {
+    fn encode_into(&self, buf: &mut Vec<u8>) {
+        match self {
+            Datum::String(val) => {
+                buf.extend_from_slice(val.as_bytes());
+            }
+            Datum::UInt16(val) => {
+                buf.extend_from_slice(&val.to_le_bytes()[..]);
+            }
+            Datum::UInt32(val) => {
+                buf.extend_from_slice(&val.to_le_bytes()[..]);
+            }
+            Datum::UInt64(val) => {
+                buf.extend_from_slice(&val.to_le_bytes()[..]);
+            }
+            Datum::Uuid(val) => {
+                buf.extend_from_slice(val.as_bytes());
+            }
+            other => todo!("implement bloom filter support for {other:?}"),
+        }
+    }
+}
+
 impl TryFrom<Datum<'_>> for bool {
     type Error = ();
 
