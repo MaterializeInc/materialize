@@ -31,6 +31,7 @@ use mz_persist::indexed::encoding::{BlobTraceBatchPart, BlobTraceUpdates};
 use mz_persist::location::{Blob, SeqNo};
 use mz_persist::metrics::ColumnarMetrics;
 use mz_persist_types::arrow::ArrayOrd;
+use mz_persist_types::bloom_filter::BloomFilter;
 use mz_persist_types::columnar::{ColumnDecoder, Schema, data_type};
 use mz_persist_types::part::Codec64Mut;
 use mz_persist_types::schema::backward_compatible;
@@ -193,6 +194,7 @@ where
                     &self.shard_metrics,
                     read_metrics,
                     x,
+                    |_| true,
                 )
                 .await;
                 let buf = match buf {
@@ -289,7 +291,7 @@ impl<T: Timestamp + Lattice> FetchBatchFilter<T> {
 ///
 /// Note to check the `LeasedBatchPart` documentation for how to handle the
 /// returned value.
-pub(crate) async fn fetch_leased_part<K, V, T, D>(
+pub(crate) async fn fetch_leased_part<K, V, T, D, F>(
     cfg: &PersistConfig,
     part: &LeasedBatchPart<T>,
     blob: &dyn Blob,
@@ -299,12 +301,14 @@ pub(crate) async fn fetch_leased_part<K, V, T, D>(
     reader_id: &LeasedReaderId,
     read_schemas: Schemas<K, V>,
     schema_cache: &mut SchemaCache<K, V, T, D>,
+    should_fetch_row_group: F,
 ) -> FetchedPart<K, V, T, D>
 where
     K: Debug + Codec,
     V: Debug + Codec,
     T: Timestamp + Lattice + Codec64 + Sync,
     D: Semigroup + Codec64 + Send + Sync,
+    F: FnMut(&BloomFilter) -> bool,
 {
     let encoded_part = EncodedPart::fetch(
         &part.shard_id,
@@ -314,6 +318,7 @@ where
         read_metrics,
         &part.desc,
         &part.part,
+        should_fetch_row_group,
     )
     .await
     .unwrap_or_else(|blob_key| {
@@ -348,17 +353,38 @@ where
     )
 }
 
-pub(crate) async fn fetch_batch_part_blob<T>(
+pub(crate) async fn fetch_batch_part_blob<T, F>(
     shard_id: &ShardId,
     blob: &dyn Blob,
     metrics: &Metrics,
     shard_metrics: &ShardMetrics,
     read_metrics: &ReadMetrics,
     part: &HollowBatchPart<T>,
-) -> Result<SegmentedBytes, BlobKey> {
+    mut should_fetch_row_group: F,
+) -> Result<SegmentedBytes, BlobKey>
+where
+    F: FnMut(&BloomFilter) -> bool,
+{
     let now = Instant::now();
     let get_span = debug_span!("fetch_batch::get");
     let blob_key = part.key.complete(shard_id);
+
+    let ranges: Option<Vec<_>> = if let Some(bloom_filters) = part.bloom_filter.as_ref() {
+        let ranges = bloom_filters
+            .iter()
+            .filter_map(|(filter, range)| {
+                if (should_fetch_row_group)(filter) {
+                    Some(range.clone())
+                } else {
+                    None
+                }
+            })
+            .collect();
+        Some(ranges)
+    } else {
+        None
+    };
+
     let value = retry_external(&metrics.retries.external.fetch_batch_get, || async {
         shard_metrics.blob_gets.inc();
         blob.get(&blob_key).await
@@ -404,7 +430,7 @@ where
     })
 }
 
-pub(crate) async fn fetch_batch_part<T>(
+pub(crate) async fn fetch_batch_part<T, F>(
     shard_id: &ShardId,
     blob: &dyn Blob,
     metrics: &Metrics,
@@ -412,12 +438,22 @@ pub(crate) async fn fetch_batch_part<T>(
     read_metrics: &ReadMetrics,
     registered_desc: &Description<T>,
     part: &HollowBatchPart<T>,
+    should_fetch_row_group: F,
 ) -> Result<EncodedPart<T>, BlobKey>
 where
     T: Timestamp + Lattice + Codec64,
+    F: FnMut(&BloomFilter) -> bool,
 {
-    let buf =
-        fetch_batch_part_blob(shard_id, blob, metrics, shard_metrics, read_metrics, part).await?;
+    let buf = fetch_batch_part_blob(
+        shard_id,
+        blob,
+        metrics,
+        shard_metrics,
+        read_metrics,
+        part,
+        should_fetch_row_group,
+    )
+    .await?;
     let part = decode_batch_part_blob(metrics, read_metrics, registered_desc.clone(), part, &buf);
     Ok(part)
 }
@@ -1125,7 +1161,7 @@ impl<T> EncodedPart<T>
 where
     T: Timestamp + Lattice + Codec64,
 {
-    pub async fn fetch(
+    pub async fn fetch<F>(
         shard_id: &ShardId,
         blob: &dyn Blob,
         metrics: &Metrics,
@@ -1133,7 +1169,11 @@ where
         read_metrics: &ReadMetrics,
         registered_desc: &Description<T>,
         part: &BatchPart<T>,
-    ) -> Result<Self, BlobKey> {
+        should_fetch_row_group: F,
+    ) -> Result<Self, BlobKey>
+    where
+        F: FnMut(&BloomFilter) -> bool,
+    {
         match part {
             BatchPart::Hollow(x) => {
                 fetch_batch_part(
@@ -1144,6 +1184,7 @@ where
                     read_metrics,
                     registered_desc,
                     x,
+                    should_fetch_row_group,
                 )
                 .await
             }

@@ -753,9 +753,10 @@ pub struct HollowBatchPart<T> {
     /// ID of a schema that has since been deprecated and exists only to cleanly roundtrip.
     pub deprecated_schema_id: Option<SchemaId>,
 
-    /// If bloom filters are enabled then a bloom filter we be available for the part to
-    /// determine if a primary key is in the `HollowBatchPart`.
-    pub bloom_filter: Option<Vec<BloomFilter>>,
+    /// BloomFilter stored next to (offset, size, footer_offset) of the row group.
+    pub bloom_filter: Option<Vec<(BloomFilter, (usize, usize))>>,
+    /// The offset and size of the parquet footer in the blob.
+    pub parquet_footer: Option<(usize, usize)>,
 }
 
 /// A [Batch] but with the updates themselves stored externally.
@@ -1088,6 +1089,8 @@ impl<T: Ord> Ord for HollowBatchPart<T> {
             format: self_format,
             schema_id: self_schema_id,
             deprecated_schema_id: self_deprecated_schema_id,
+            bloom_filter: self_bloom_filter,
+            parquet_footer: self_parquet_footer,
         } = self;
         let HollowBatchPart {
             key: other_key,
@@ -1100,6 +1103,8 @@ impl<T: Ord> Ord for HollowBatchPart<T> {
             format: other_format,
             schema_id: other_schema_id,
             deprecated_schema_id: other_deprecated_schema_id,
+            bloom_filter: other_bloom_filter,
+            parquet_footer: other_parquet_footer,
         } = other;
         (
             self_key,
@@ -1112,6 +1117,8 @@ impl<T: Ord> Ord for HollowBatchPart<T> {
             self_format,
             self_schema_id,
             self_deprecated_schema_id,
+            self_bloom_filter,
+            self_parquet_footer,
         )
             .cmp(&(
                 other_key,
@@ -1124,6 +1131,8 @@ impl<T: Ord> Ord for HollowBatchPart<T> {
                 other_format,
                 other_schema_id,
                 other_deprecated_schema_id,
+                other_bloom_filter,
+                other_parquet_footer,
             ))
     }
 }
@@ -2804,6 +2813,9 @@ pub(crate) mod tests {
                     format,
                     schema_id,
                     deprecated_schema_id,
+                    // TODO(upsert-in-persist).
+                    bloom_filter: None,
+                    parquet_footer: None,
                 }
             },
         )
@@ -2977,6 +2989,8 @@ pub(crate) mod tests {
                         format: None,
                         schema_id: None,
                         deprecated_schema_id: None,
+                        bloom_filter: None,
+                        parquet_footer: None,
                     }))
                 })
                 .collect(),

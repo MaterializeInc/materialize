@@ -325,6 +325,16 @@ impl Blob for AzureBlob {
         Ok(Some(segments))
     }
 
+    /// Returns a reference to the specified range of the provided key.
+    async fn get_range(
+        &self,
+        key: &str,
+        start: usize,
+        length: usize,
+    ) -> Result<Option<bytes::Bytes>, ExternalError> {
+        todo!()
+    }
+
     async fn list_keys_and_metadata(
         &self,
         key_prefix: &str,

@@ -6255,6 +6255,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "mz-kv-cache"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "differential-dataflow",
+ "mz-persist-client",
+ "mz-persist-types",
+ "mz-repr",
+ "mz-storage-types",
+ "timely",
+]
+
+[[package]]
 name = "mz-license-keys"
 version = "0.0.0"
 dependencies = [
@@ -6705,6 +6718,7 @@ dependencies = [
  "arrow",
  "async-stream",
  "async-trait",
+ "byteorder",
  "bytes",
  "clap",
  "criterion",

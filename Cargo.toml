@@ -46,6 +46,7 @@ members = [
     "src/http-util",
     "src/interchange",
     "src/kafka-util",
+    "src/kv-cache",
     "src/license-keys",
     "src/lowertest",
     "src/lowertest-derive",

@@ -12,6 +12,7 @@
 use std::io::Write;
 use std::sync::Arc;
 
+use arrow::row;
 use differential_dataflow::trace::Description;
 use mz_ore::bytes::SegmentedBytes;
 use mz_ore::cast::CastFrom;
@@ -36,13 +37,25 @@ use crate::metrics::{ColumnarMetrics, ParquetColumnMetrics};
 
 const INLINE_METADATA_KEY: &str = "MZ:inline";
 
+/// Information that can be used to locate a row group, and the
+/// bloom filter within it.
+#[derive(Debug, Clone)]
+pub struct RowGroupStats {
+    /// The offset of the row group within the file.
+    pub offset: i64,
+    /// The size of the row group within the file.
+    pub size: i64,
+    /// The offset and size of the bloom 🌸 filter within the row group.
+    pub blooms: Vec<(i64, i32)>,
+}
+
 /// Encodes a [`BlobTraceBatchPart`] into the Parquet format.
 pub fn encode_trace_parquet<W: Write + Send, T: Timestamp + Codec64>(
     w: &mut W,
     batch: &BlobTraceBatchPart<T>,
     metrics: &ColumnarMetrics,
     cfg: &EncodingConfig,
-) -> Result<(), Error> {
+) -> Result<Vec<RowGroupStats>, Error> {
     // Better to error now than write out an invalid batch.
     batch.validate()?;
 
@@ -106,7 +119,7 @@ pub fn encode_parquet_kvtd<W: Write + Send>(
     updates: &BlobTraceUpdates,
     metrics: &ColumnarMetrics,
     cfg: &EncodingConfig,
-) -> Result<(), Error> {
+) -> Result<Vec<RowGroupStats>, Error> {
     let metadata = KeyValue::new(INLINE_METADATA_KEY.to_string(), inline_base64);
 
     // Note: most of these settings are the defaults from `arrow2` which we
@@ -118,7 +131,8 @@ pub fn encode_parquet_kvtd<W: Write + Send>(
         .set_compression(cfg.compression.into())
         .set_writer_version(WriterVersion::PARQUET_2_0)
         .set_data_page_size_limit(1024 * 1024)
-        .set_max_row_group_size(usize::MAX)
+        .set_max_row_group_size(cfg.max_row_group_size)
+        .set_bloom_filter_enabled(cfg.use_bloom_filter)
         .set_key_value_metadata(Some(vec![metadata]))
         .build();
 
@@ -129,16 +143,56 @@ pub fn encode_parquet_kvtd<W: Write + Send>(
         BlobTraceUpdates::Structured { .. } => "t,d,k_s,v_s",
     };
 
+    let primary_keys: Vec<usize> = batch
+        .schema()
+        .fields
+        .iter()
+        .enumerate()
+        .filter_map(|(i, f)| {
+            if f.metadata().get("primary_key").is_some() {
+                Some(i)
+            } else {
+                None
+            }
+        })
+        .collect();
+
+    assert!(primary_keys.len() <= 1);
+
     let mut writer = ArrowWriter::try_new(w, batch.schema(), Some(properties))?;
+
     writer.write(&batch)?;
 
     writer.flush()?;
+    let mut row_group_stats = vec![];
     let bytes_written = writer.bytes_written();
     let file_metadata = writer.close()?;
+    for row_group in &file_metadata.row_groups {
+        let row_group_offset = row_group.file_offset.expect("row group offset");
+        let row_group_size = row_group.total_compressed_size.expect("row group size");
+        for (i, column) in row_group.columns.iter().enumerate() {
+            let mut blooms = vec![];
+            if primary_keys.contains(&i) {
+                let bloom = column
+                    .meta_data
+                    .as_ref()
+                    .and_then(|m| Some((m.bloom_filter_offset, m.bloom_filter_length)));
+                if let Some((Some(offset), Some(size))) = bloom {
+                    blooms.push((offset, size));
+                }
+            }
+
+            row_group_stats.push(RowGroupStats {
+                offset: row_group_offset,
+                size: row_group_size,
+                blooms,
+            });
+        }
+    }
 
     report_parquet_metrics(metrics, &file_metadata, bytes_written, format);
 
-    Ok(())
+    Ok(row_group_stats)
 }
 
 /// Decodes [`BlobTraceUpdates`] from a reader, using [`arrow`].
@@ -149,12 +203,8 @@ pub fn decode_parquet_file_kvtd(
 ) -> Result<BlobTraceUpdates, Error> {
     let builder = ParquetRecordBatchReaderBuilder::try_new(r)?;
 
-    // To match arrow2, we default the batch size to the number of rows in the RowGroup.
     let row_groups = builder.metadata().row_groups();
-    if row_groups.len() > 1 {
-        return Err(Error::String("found more than 1 RowGroup".to_string()));
-    }
-    let num_rows = usize::try_from(row_groups[0].num_rows())
+    let num_rows = usize::try_from(row_groups.iter().map(|rg| rg.num_rows()).sum::<i64>())
         .map_err(|_| Error::String("found negative rows".to_string()))?;
     let builder = builder.with_batch_size(num_rows);
 
@@ -176,19 +226,19 @@ pub fn decode_parquet_file_kvtd(
             Ok(updates)
         }
         Some(ProtoFormatMetadata::StructuredMigration(v @ 1..=3)) => {
-            let mut batch = reader
-                .next()
-                .ok_or_else(|| Error::String("found empty batch".to_string()))??;
+            let mut batches: Vec<_> = reader
+                .into_iter()
+                .collect::<Result<Vec<_>, _>>()
+                .map_err(|e| Error::String(e.to_string()))?;
 
-            // We enforce an invariant that we have a single RowGroup.
-            if reader.next().is_some() {
-                return Err(Error::String("found more than one RowGroup".to_string()));
-            }
+            batches.iter_mut().for_each(|batch| {
+                // Version 1 is a deprecated format so we just ignored the k_s and v_s columns.
+                if *v == 1 && batch.num_columns() > 4 {
+                    batch.project(&[0, 1, 2, 3]).unwrap();
+                }
+            });
 
-            // Version 1 is a deprecated format so we just ignored the k_s and v_s columns.
-            if *v == 1 && batch.num_columns() > 4 {
-                batch = batch.project(&[0, 1, 2, 3])?;
-            }
+            let batch = ::arrow::compute::concat_batches(&schema, &batches)?;
 
             let updates = decode_arrow_batch(&batch, metrics).map_err(|e| e.to_string())?;
             Ok(updates)

@@ -113,6 +113,8 @@ impl<'a> DirectiveArgs<'a> {
                         format: None,
                         schema_id: None,
                         deprecated_schema_id: None,
+                        bloom_filter: None,
+                        parquet_footer: None,
                     }))
                 })
                 .collect(),

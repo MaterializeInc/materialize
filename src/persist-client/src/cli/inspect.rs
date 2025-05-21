@@ -396,6 +396,7 @@ async fn consolidated_size(args: &StateArgs) -> Result<(), anyhow::Error> {
                 &state_versions.metrics.read.snapshot,
                 &batch.desc,
                 &part,
+                |_| true,
             )
             .await
             .expect("part exists");
