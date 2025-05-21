@@ -48,7 +48,7 @@ use semver::Version;
 use timely::PartialOrder;
 use timely::order::TotalOrder;
 use timely::progress::{Antichain, Timestamp};
-use tracing::{Instrument, debug_span, trace_span, warn};
+use tracing::{Instrument, debug_span, info, trace_span, warn};
 
 use crate::async_runtime::IsolatedRuntime;
 use crate::cfg::{BATCH_BUILDER_MAX_OUTSTANDING_PARTS, MiB};
@@ -415,13 +415,15 @@ pub(crate) const BLOB_TARGET_SIZE: Config<usize> = Config::new(
 
 pub(crate) const INLINE_WRITES_SINGLE_MAX_BYTES: Config<usize> = Config::new(
     "persist_inline_writes_single_max_bytes",
-    4096,
+    0,
+    // 4096,
     "The (exclusive) maximum size of a write that persist will inline in metadata.",
 );
 
 pub(crate) const INLINE_WRITES_TOTAL_MAX_BYTES: Config<usize> = Config::new(
     "persist_inline_writes_total_max_bytes",
-    1 * MiB,
+    // 1 * MiB,
+    0,
     "\
     The (exclusive) maximum total size of inline writes in metadata before \
     persist will backpressure them by flushing out to s3.",
@@ -1229,7 +1231,7 @@ impl<T: Timestamp + Codec64> BatchParts<T> {
                             bloom_bytes.clone(),
                         )
                         .expect("read bloom filter header");
-                    let mut bitset_buffer = Vec::new();
+                    let mut bitset_buffer = vec![0u8; bloom_bytes.len() - offset as usize];
                     let mut cursor = Cursor::new(&bloom_bytes[offset as usize..]);
                     cursor
                         .read_exact(&mut bitset_buffer)
@@ -1253,6 +1255,8 @@ impl<T: Timestamp + Codec64> BatchParts<T> {
                 });
             }
         }
+
+        // info!("row_group_metadata: {:?}", row_group_metadata);
 
         batch_metrics.seconds.inc_by(start.elapsed().as_secs_f64());
         batch_metrics.bytes.inc_by(u64::cast_from(payload_len));

@@ -662,9 +662,9 @@ dependencies = [
 
 [[package]]
 name = "aws-sdk-kms"
-version = "1.70.0"
+version = "1.71.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e14903021031702916d9307e72b30c48c596737a45a6ed1f6e3ab8bb9d93ce4c"
+checksum = "5de993b5250e1aa051f4091ab772ce164de8c078ee9793fdee033b20f7d371ad"
 dependencies = [
  "aws-credential-types",
  "aws-runtime",
@@ -684,9 +684,9 @@ dependencies = [
 
 [[package]]
 name = "aws-sdk-s3"
-version = "1.87.0"
+version = "1.88.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "046ebea705311db979d0ce141cbebf1426e2ce7f5c5d6b248baaf6d6e511b976"
+checksum = "5ffc2a1c6dfd4585ad423350c04da3c8be831c9f418e58e8c837656054ec45f8"
 dependencies = [
  "aws-credential-types",
  "aws-runtime",
@@ -718,9 +718,9 @@ dependencies = [
 
 [[package]]
 name = "aws-sdk-secretsmanager"
-version = "1.73.0"
+version = "1.74.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9a09113113f5b457128e7157f2fa2e1969cca2f94e46684d65b86e141fad9e1e"
+checksum = "ca681408228085cf3936cd78405996b1295e006221b7f7bf78735f5c70a78fa1"
 dependencies = [
  "aws-credential-types",
  "aws-runtime",
@@ -6657,6 +6657,7 @@ dependencies = [
  "mz-persist-types",
  "mz-postgres-client",
  "mz-proto",
+ "mz-service",
  "mz-timely-util",
  "num_cpus",
  "parquet",

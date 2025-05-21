@@ -12,6 +12,7 @@
 use std::io::Write;
 use std::sync::Arc;
 
+use arrow::datatypes::DataType;
 use arrow::row::Row;
 use bytes::buf::Reader;
 use bytes::{Buf, Bytes};
@@ -221,10 +222,26 @@ pub fn encode_parquet_kvtd<W: Write + Send>(
         .iter()
         .enumerate()
         .filter_map(|(i, f)| {
-            if f.metadata().get("primary_key").is_some() {
-                Some(i)
-            } else {
-                None
+            match f.data_type() {
+                DataType::Struct(child_fields) => {
+                    // Check if any direct child of `f` is a struct
+                    // and that struct itself has a child (a grandchild of `f`)
+                    // with "primary_key" metadata.
+                    let has_pk_grandchild = child_fields.iter().any(|child_field| {
+                        if let DataType::Struct(grandchild_fields) = child_field.data_type() {
+                            grandchild_fields.iter().any(|grandchild_field| {
+                                grandchild_field.metadata().get("primary_key").is_some()
+                            })
+                        } else {
+                            // This child_field is not a struct, so it cannot have
+                            // grandchildren with the specified metadata.
+                            false
+                        }
+                    });
+
+                    has_pk_grandchild.then_some(i)
+                }
+                _ => None, // `f` is not a struct.
             }
         })
         .collect();

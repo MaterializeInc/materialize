@@ -18,6 +18,7 @@ use std::str::FromStr;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, RwLock, Weak};
 use std::time::{Duration, Instant, SystemTime};
+use std::usize::MAX;
 
 use anyhow::{Error, anyhow};
 use async_trait::async_trait;
@@ -32,6 +33,7 @@ use mz_ore::retry::RetryResult;
 use mz_ore::task::JoinHandle;
 use mz_persist::location::VersionedData;
 use mz_proto::{ProtoType, RustType};
+use mz_service::grpc::MAX_GRPC_MESSAGE_SIZE;
 use prost::Message;
 use tokio::sync::mpsc::Sender;
 use tokio::sync::mpsc::error::TrySendError;
@@ -330,6 +332,9 @@ impl GrpcPubSubClient {
                     return;
                 }
             };
+            let mut client = client
+                .max_decoding_message_size(MAX_GRPC_MESSAGE_SIZE)
+                .max_encoding_message_size(MAX_GRPC_MESSAGE_SIZE);
 
             metrics
                 .pubsub_client
