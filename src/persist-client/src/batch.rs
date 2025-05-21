@@ -1247,7 +1247,8 @@ impl<T: Timestamp + Codec64> BatchParts<T> {
             deprecated_schema_id: None,
             // TODO(upsert-in-persist).
             bloom_filter: None,
-            parquet_footer: Some((footer_offset, footer_len)),
+            // TODO(upsert-in-persist).
+            parquet_footer: None,
         })
     }
 
