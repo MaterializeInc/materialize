@@ -1309,10 +1309,13 @@ where
             self.consolidate_upsert_scratch.extend(
                 self.consolidate_scratch
                     .iter()
-                    .map(|(k, _, _)| (*k, UpsertValueAndSize::default())),
+                    .map(|(k, _, _)| (k.clone(), UpsertValueAndSize::default())),
             );
-            self.multi_get_scratch
-                .extend(self.consolidate_upsert_scratch.iter().map(|(k, _)| *k));
+            self.multi_get_scratch.extend(
+                self.consolidate_upsert_scratch
+                    .iter()
+                    .map(|(k, _)| k.clone()),
+            );
             self.inner
                 .multi_get(
                     self.multi_get_scratch.drain(..),

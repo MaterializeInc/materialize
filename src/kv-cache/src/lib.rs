@@ -16,7 +16,7 @@ where
     T: Timestamp + Lattice + Codec64 + Sync,
 {
     pub fn new(handle: ReadHandle<SourceData, (), T, StorageDiff>) -> Self {
-        todo!()
+        Self { handle }
     }
 
     pub async fn get_multi(
@@ -26,7 +26,7 @@ where
         ts: T,
     ) -> Vec<(Row, Row)> {
         if keys.is_empty() {
-            return Vec::new()
+            return Vec::new();
         }
 
         let as_of = Antichain::from_elem(ts);
@@ -81,5 +81,5 @@ where
             .collect()
     }
 
-    pub fn apply_changes(&mut self, changes: Vec<(SourceData, T, StorageDiff)>) {}
+    pub async fn apply_changes(&mut self, changes: Vec<(SourceData, T, StorageDiff)>) {}
 }

@@ -7481,6 +7481,7 @@ dependencies = [
  "mz-http-util",
  "mz-interchange",
  "mz-kafka-util",
+ "mz-kv-cache",
  "mz-mysql-util",
  "mz-orchestrator-tracing",
  "mz-ore",

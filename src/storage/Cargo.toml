@@ -42,6 +42,7 @@ mz-expr = { path = "../expr" }
 mz-cluster = { path = "../cluster" }
 mz-interchange = { path = "../interchange" }
 mz-kafka-util = { path = "../kafka-util" }
+mz-kv-cache = {path = "../kv-cache" }
 mz-mysql-util = { path = "../mysql-util" }
 mz-ore = { path = "../ore", features = ["async", "tracing", "chrono", "metrics", "columnation"] }
 mz-persist = { path = "../persist" }

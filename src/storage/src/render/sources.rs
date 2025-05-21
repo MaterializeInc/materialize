@@ -321,6 +321,11 @@ where
                         metrics: base_source_config.metrics.clone(),
                         source_statistics: export_statistics,
                     };
+
+                    let storage_metadata = description.source_exports[&export_id]
+                        .storage_metadata
+                        .clone();
+
                     let (upsert, health_update, snapshot_progress, upsert_token) =
                         crate::upsert::upsert(
                             &upsert_input.enter(scope),
@@ -333,6 +338,8 @@ where
                             &storage_state.storage_configuration,
                             &storage_state.dataflow_parameters,
                             backpressure_metrics,
+                            Arc::clone(&storage_state.persist_clients),
+                            storage_metadata,
                         );
 
                     // Even though we register the `persist_sink` token at a top-level,
