@@ -753,8 +753,6 @@ pub struct HollowBatchPart<T> {
     /// ID of a schema that has since been deprecated and exists only to cleanly roundtrip.
     pub deprecated_schema_id: Option<SchemaId>,
 
-    /// If bloom filters are enabled then a bloom filter we be available for the part to
-    /// determine if a primary key is in the `HollowBatchPart`.
     /// BloomFilter stored next to (offset, size, footer_offset) of the row group.
     pub bloom_filter: Option<Vec<(BloomFilter, (usize, usize))>>,
     /// The offset and size of the parquet footer in the blob.
@@ -2229,6 +2227,7 @@ where
                 critical_readers: BTreeMap::new(),
                 writers: BTreeMap::new(),
                 schemas: BTreeMap::new(),
+                bloom_filters: BTreeMap::new(),
                 trace: Trace::default(),
             },
         };
