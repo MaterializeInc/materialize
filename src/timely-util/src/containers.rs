@@ -343,6 +343,12 @@ pub type Col2ValBatcher<K, V, T, R> = MergeBatcher<
     merger::ColumnMerger<(K, V), T, R>,
 >;
 pub type Col2KeyBatcher<K, T, R> = Col2ValBatcher<K, (), T, R>;
+pub type Vec2Col2ValBatcher<K, V, T, R> = MergeBatcher<
+    Vec<((K, V), T, R)>,
+    batcher::Chunker<Column<((K, V), T, R)>>,
+    merger::ColumnMerger<(K, V), T, R>,
+>;
+pub type Vec2Col2KeyBatcher<K, T, R> = Vec2Col2ValBatcher<K, (), T, R>;
 
 /// An exchange function for columnar tuples of the form `((K, V), T, D)`. Rust has a hard
 /// time to figure out the lifetimes of the elements when specified as a closure, so we rather
@@ -398,6 +404,28 @@ pub mod batcher {
         }
     }
 
+    impl<'a, D, T, R, C2> PushInto<&'a mut Vec<(D, T, R)>> for Chunker<C2>
+    where
+        D: Columnar + Ord,
+        T: Columnar + Ord,
+        R: Columnar + Semigroup,
+        C2: Container + for<'b> PushInto<(&'b D, &'b T, &'b R)>,
+    {
+        fn push_into(&mut self, container: &'a mut Vec<(D, T, R)>) {
+            // Sort input data
+            differential_dataflow::consolidation::consolidate_updates(container);
+
+            self.target.clear();
+            let mut iter = container.drain(..);
+            if let Some((data, time, diff)) = iter.next() {
+                self.target.push((&data, &time, &diff));
+            }
+
+            if !self.target.is_empty() {
+                self.ready.push_back(std::mem::take(&mut self.target));
+            }
+        }
+    }
     impl<'a, D, T, R, C2> PushInto<&'a mut Column<(D, T, R)>> for Chunker<C2>
     where
         D: Columnar,
@@ -526,7 +554,6 @@ pub mod merger {
             frontier: &mut Antichain<Self::TimeOwned>,
         ) -> bool {
             let time = T::into_owned(*time);
-            // let time = unimplemented!();
             if upper.less_equal(&time) {
                 frontier.insert(time);
                 true
