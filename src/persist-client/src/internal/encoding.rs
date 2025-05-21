@@ -22,6 +22,7 @@ use mz_ore::{assert_none, halt};
 use mz_persist::indexed::encoding::{BatchColumnarFormat, BlobTraceBatchPart, BlobTraceUpdates};
 use mz_persist::location::{SeqNo, VersionedData};
 use mz_persist::metrics::ColumnarMetrics;
+use mz_persist_types::bloom_filter::BloomFilter;
 use mz_persist_types::schema::SchemaId;
 use mz_persist_types::stats::{PartStats, ProtoStructStats};
 use mz_persist_types::{Codec, Codec64};
@@ -33,6 +34,7 @@ use semver::Version;
 use serde::ser::SerializeStruct;
 use serde::{Deserialize, Serialize};
 use timely::progress::{Antichain, Timestamp};
+use tracing::Instrument;
 use uuid::Uuid;
 
 use crate::critical::CriticalReaderId;
@@ -46,11 +48,11 @@ use crate::internal::state::{
     ProtoCriticalReaderState, ProtoEncodedSchemas, ProtoHandleDebugState, ProtoHollowBatch,
     ProtoHollowBatchPart, ProtoHollowRollup, ProtoHollowRun, ProtoHollowRunRef, ProtoIdHollowBatch,
     ProtoIdMerge, ProtoIdSpineBatch, ProtoInlineBatchPart, ProtoInlinedDiffs,
-    ProtoLeasedReaderState, ProtoMerge, ProtoRollup, ProtoRunMeta, ProtoRunOrder, ProtoSpineBatch,
-    ProtoSpineId, ProtoStateDiff, ProtoStateField, ProtoStateFieldDiffType, ProtoStateFieldDiffs,
-    ProtoTrace, ProtoU64Antichain, ProtoU64Description, ProtoVersionedData, ProtoWriterState,
-    RunMeta, RunOrder, RunPart, State, StateCollections, TypedState, WriterState,
-    proto_hollow_batch_part,
+    ProtoLeasedReaderState, ProtoMerge, ProtoParquetFooter, ProtoRollup, ProtoRowGroupMetadata,
+    ProtoRunMeta, ProtoRunOrder, ProtoSpineBatch, ProtoSpineId, ProtoStateDiff, ProtoStateField,
+    ProtoStateFieldDiffType, ProtoStateFieldDiffs, ProtoTrace, ProtoU64Antichain,
+    ProtoU64Description, ProtoVersionedData, ProtoWriterState, RunMeta, RunOrder, RunPart, State,
+    StateCollections, TypedState, WriterState, proto_hollow_batch_part,
 };
 use crate::internal::state_diff::{
     ProtoStateFieldDiff, ProtoStateFieldDiffsWriter, StateDiff, StateFieldDiff, StateFieldValDiff,
@@ -60,6 +62,8 @@ use crate::internal::trace::{
 };
 use crate::read::{LeasedReaderId, READER_LEASE_DURATION};
 use crate::{PersistConfig, ShardId, WriterId, cfg};
+
+use super::state::{ParquetFooter, RowGroupMetadata};
 
 #[derive(Debug)]
 pub struct Schemas<K: Codec, V: Codec> {
@@ -1368,7 +1372,7 @@ impl<T: Timestamp + Codec64> RustType<ProtoHollowBatch> for HollowBatch<T> {
                 schema_id: None,
                 deprecated_schema_id: None,
                 // TODO(upsert-in-persist).
-                bloom_filter: None,
+                row_group_metadata: vec![],
                 parquet_footer: None,
             }))
         }));
@@ -1455,6 +1459,8 @@ impl<T: Timestamp + Codec64> RustType<ProtoHollowBatchPart> for HollowRunRef<T> 
             schema_id: None,
             structured_key_lower: self.structured_key_lower.into_proto(),
             deprecated_schema_id: None,
+            row_group_metadata: vec![],
+            parquet_footer: None,
         };
         part
     }
@@ -1491,6 +1497,12 @@ impl<T: Timestamp + Codec64> RustType<ProtoHollowBatchPart> for BatchPart<T> {
                 format: x.format.map(|f| f.into_proto()),
                 schema_id: x.schema_id.into_proto(),
                 deprecated_schema_id: x.deprecated_schema_id.into_proto(),
+                row_group_metadata: x
+                    .row_group_metadata
+                    .iter()
+                    .map(|rgm| rgm.into_proto())
+                    .collect(),
+                parquet_footer: x.parquet_footer.into_proto(),
             },
             BatchPart::Inline {
                 updates,
@@ -1508,6 +1520,8 @@ impl<T: Timestamp + Codec64> RustType<ProtoHollowBatchPart> for BatchPart<T> {
                 format: None,
                 schema_id: schema_id.into_proto(),
                 deprecated_schema_id: deprecated_schema_id.into_proto(),
+                row_group_metadata: vec![],
+                parquet_footer: None,
             },
         }
     }
@@ -1533,7 +1547,7 @@ impl<T: Timestamp + Codec64> RustType<ProtoHollowBatchPart> for BatchPart<T> {
                     schema_id,
                     deprecated_schema_id,
                     // TODO(upsert-in-persist).
-                    bloom_filter: None,
+                    row_group_metadata: vec![],
                     parquet_footer: None,
                 }))
             }
@@ -1554,6 +1568,45 @@ impl<T: Timestamp + Codec64> RustType<ProtoHollowBatchPart> for BatchPart<T> {
                 "ProtoHollowBatchPart::kind",
             )),
         }
+    }
+}
+
+impl RustType<ProtoRowGroupMetadata> for RowGroupMetadata {
+    fn into_proto(&self) -> ProtoRowGroupMetadata {
+        ProtoRowGroupMetadata {
+            bloom_filter: self
+                .bloom_filter
+                .into_bitset()
+                .iter()
+                .map(|s| s.into())
+                .collect(),
+            size: self.size as u64,
+            footer_offset: self.footer_offset as u64,
+        }
+    }
+
+    fn from_proto(proto: ProtoRowGroupMetadata) -> Result<Self, TryFromProtoError> {
+        Ok(Self {
+            bloom_filter: BloomFilter::from_bitset(proto.bloom_filter),
+            size: proto.size as usize,
+            footer_offset: proto.footer_offset as usize,
+        })
+    }
+}
+
+impl RustType<ProtoParquetFooter> for ParquetFooter {
+    fn into_proto(&self) -> ProtoParquetFooter {
+        ProtoParquetFooter {
+            size: self.size as u64,
+            offset: self.offset as u64,
+        }
+    }
+
+    fn from_proto(proto: ProtoParquetFooter) -> Result<Self, TryFromProtoError> {
+        Ok(Self {
+            offset: proto.offset as usize,
+            size: proto.size as usize,
+        })
     }
 }
 
@@ -1903,7 +1956,7 @@ mod tests {
                 schema_id: None,
                 deprecated_schema_id: None,
                 // TODO(upsert-in-persist).
-                bloom_filter: None,
+                row_group_metadata: vec![],
                 parquet_footer: None,
             }))],
             4,
@@ -1933,7 +1986,7 @@ mod tests {
                 schema_id: None,
                 deprecated_schema_id: None,
                 // TODO(upsert-in-persist).
-                bloom_filter: None,
+                row_group_metadata: vec![],
                 parquet_footer: None,
             })));
         assert_eq!(<HollowBatch<u64>>::from_proto(old).unwrap(), expected);

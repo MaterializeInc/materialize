@@ -403,17 +403,19 @@ where
 {
     let blob_key = part.key.complete(shard_id);
 
-    if let Some(bloom_filters) = part.bloom_filter.as_ref() {
-        let row_group_ranges = bloom_filters.iter().filter_map(|(filter, range)| {
-            if (should_fetch_row_group)(filter) {
-                Some(range.clone())
+    if part.row_group_metadata.len() > 0 {
+        let row_group_ranges = part.row_group_metadata.iter().filter_map(|metadata| {
+            if (should_fetch_row_group)(&metadata.bloom_filter) {
+                Some((metadata.size.clone(), metadata.footer_offset))
             } else {
                 None
             }
         });
-        let footer_range = part
+        let footer = part
             .parquet_footer
+            .as_ref()
             .expect("if we have bloom filters we have a footer");
+        let footer_range = (footer.offset, footer.size);
         let ranges = row_group_ranges.chain(std::iter::once(footer_range));
 
         let mut fetch_requests = Vec::new();
