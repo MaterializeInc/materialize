@@ -99,40 +99,56 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         # Very simple data for our workload
         c.sql(
             """
-            CREATE SOURCE tpch
-              FROM LOAD GENERATOR TPCH (SCALE FACTOR 0.00001);
-
-            CREATE TABLE customer FROM SOURCE tpch (REFERENCE customer);
-            CREATE TABLE lineitem FROM SOURCE tpch (REFERENCE lineitem);
-            CREATE TABLE nation FROM SOURCE tpch (REFERENCE nation);
-            CREATE TABLE orders FROM SOURCE tpch (REFERENCE orders);
-            CREATE TABLE part FROM SOURCE tpch (REFERENCE part);
-            CREATE TABLE partsupp FROM SOURCE tpch (REFERENCE partsupp);
-            CREATE TABLE region FROM SOURCE tpch (REFERENCE region);
-            CREATE TABLE supplier FROM SOURCE tpch (REFERENCE supplier);
-
-            CREATE SOURCE auction
-              FROM LOAD GENERATOR AUCTION;
-
-            CREATE TABLE accounts FROM SOURCE auction (REFERENCE accounts);
-            CREATE TABLE auctions FROM SOURCE auction (REFERENCE auctions);
-            CREATE TABLE bids FROM SOURCE auction (REFERENCE bids);
-            CREATE TABLE organizations FROM SOURCE auction (REFERENCE organizations);
-            CREATE TABLE users FROM SOURCE auction (REFERENCE users);
-
-            CREATE SOURCE counter
-              FROM LOAD GENERATOR COUNTER;
-
-            CREATE TABLE t (a int2, b int4, c int8, d uint2, e uint4, f uint8, g text);
-            INSERT INTO t VALUES (1, 2, 3, 4, 5, 6, '7'), (3, 4, 5, 6, 7, 8, '9'), (5, 6, 7, 8, 9, 10, '11'), (7, 8, 9, 10, 11, 12, '13'), (9, 10, 11, 12, 13, 14, '15'), (11, 12, 13, 14, 15, 16, '17'), (13, 14, 15, 16, 17, 18, '19'), (15, 16, 17, 18, 19, 20, '21');
-            CREATE MATERIALIZED VIEW mv AS SELECT a + b AS col1, c + d AS col2, e + f AS col3, g AS col4 FROM t;
+            CREATE TABLE t1 (a int2, b int4, c int8, d uint2, e uint4, f uint8, g text);
+            INSERT INTO t1 VALUES (1, 2, 3, 4, 5, 6, '7'), (3, 4, 5, 6, 7, 8, '9'), (5, 6, 7, 8, 9, 10, '11'), (7, 8, 9, 10, 11, 12, '13'), (9, 10, 11, 12, 13, 14, '15'), (11, 12, 13, 14, 15, 16, '17'), (13, 14, 15, 16, 17, 18, '19'), (15, 16, 17, 18, 19, 20, '21');
+            CREATE MATERIALIZED VIEW mv AS SELECT a + b AS col1, c + d AS col2, e + f AS col3, g AS col4 FROM t1;
             CREATE MATERIALIZED VIEW mv2 AS SELECT count(*) FROM mv;
             CREATE DEFAULT INDEX ON mv;
+            CREATE TABLE t2 (
+                a_bool        BOOL,
+                b_float4      FLOAT4,
+                c_float8      FLOAT8,
+                d_numeric     NUMERIC,
+                e_char        CHAR(5),
+                f_varchar     VARCHAR(10),
+                g_bytes       BYTES,
+                h_date        DATE,
+                i_time        TIME,
+                k_timestamp   TIMESTAMP,
+                l_timestamptz TIMESTAMPTZ,
+                m_interval    INTERVAL,
+                n_jsonb       JSONB,
+                o_uuid        UUID
+            );
 
-            CREATE MATERIALIZED VIEW mv3 WITH (REFRESH EVERY '2 seconds') AS SELECT * FROM counter;
-            CREATE DEFAULT INDEX ON mv3;
+            INSERT INTO t2 VALUES
+            (
+                TRUE,
+                1.23,
+                4.56,
+                7.89,
+                'abc',
+                'hello',
+                '\x68656c6c6f',
+                DATE '2023-01-01',
+                TIME '12:34:56',
+                TIMESTAMP '2023-01-01 12:34:56',
+                TIMESTAMPTZ '2023-01-01 12:34:56+00',
+                INTERVAL '1 day 2 hours',
+                '{"key": "value"}',
+                '550e8400-e29b-41d4-a716-446655440000'
+            );
             """,
             service=mz_server,
+        )
+        c.sql(
+            """
+            ALTER SYSTEM SET TRANSACTION_ISOLATION TO 'SERIALIZABLE';
+            ALTER SYSTEM SET CLUSTER_REPLICA TO 'r1';
+            """,
+            service=mz_server,
+            port=6877,
+            user="mz_system",
         )
 
     seed = args.seed or random.randint(0, 2**31 - args.num_sqlsmith)

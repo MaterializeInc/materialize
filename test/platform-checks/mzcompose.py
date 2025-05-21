@@ -298,7 +298,6 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
                     seed=args.seed,
                 )
                 scenario.run()
-                teardown(c)
             elif execution_mode is ExecutionMode.ONEATATIME:
                 for check in checks:
                     print(
@@ -315,6 +314,5 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
                         seed=args.seed,
                     )
                     scenario.run()
-                    teardown(c)
             else:
                 raise RuntimeError(f"Unsupported execution mode: {execution_mode}")
