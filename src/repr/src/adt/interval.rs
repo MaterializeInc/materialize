@@ -28,7 +28,7 @@ include!(concat!(env!("OUT_DIR"), "/mz_repr.adt.interval.rs"));
 /// An interval of time meant to express SQL intervals.
 ///
 /// Obtained by parsing an `INTERVAL '<value>' <unit> [TO <precision>]`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Hash, Deserialize)]
+#[derive(Debug, Clone, Copy, Serialize, Hash, Deserialize, kani::Arbitrary)]
 pub struct Interval {
     /// A possibly negative number of months for field types like `YEAR`
     pub months: i32,
@@ -41,6 +41,26 @@ pub struct Interval {
     /// Irrespective of values, `micros` will not be carried over into `days` or
     /// `months`.
     pub micros: i64,
+}
+
+impl PartialEq for Interval {
+    fn eq(&self, other: &Self) -> bool {
+        self.as_microseconds() == other.as_microseconds()
+    }
+}
+
+impl Eq for Interval {}
+
+impl PartialOrd for Interval {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Ord for Interval {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        self.as_microseconds().cmp(&other.as_microseconds())
+    }
 }
 
 impl Default for Interval {
@@ -221,8 +241,8 @@ impl Interval {
 
         if micros.is_nan()
             || micros.is_infinite()
-            || Numeric::from(micros) < Numeric::from(i64::MIN)
-            || Numeric::from(micros) > Numeric::from(i64::MAX)
+            || micros < i64::MIN as f64
+            || micros > i64::MAX as f64
         {
             return None;
         }

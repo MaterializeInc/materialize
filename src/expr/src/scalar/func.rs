@@ -1501,7 +1501,7 @@ fn mul_numeric<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
 fn mul_interval<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
     a.unwrap_interval()
         .checked_mul(b.unwrap_float64())
-        .ok_or_else(|| EvalError::IntervalOutOfRange(format!("{a} * {b}").into()))
+        .ok_or_else(|| unreachable!())
         .map(Datum::from)
 }
 
@@ -1701,7 +1701,7 @@ fn div_interval<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> 
     } else {
         a.unwrap_interval()
             .checked_div(b)
-            .ok_or_else(|| EvalError::IntervalOutOfRange(format!("{a} / {b}").into()))
+            .ok_or_else(|| unreachable!())
             .map(Datum::from)
     }
 }
@@ -10065,7 +10065,7 @@ mod kani_test {
         std::mem::forget(func);
     }
 
-    fn check_monotone_binary_first_arg_float<F>(func: F)
+    fn check_monotone_binary_first_arg_float_float<F>(func: F)
     where
         F: for<'a> EagerBinaryFunc<'a, Input1 = Datum<'a>, Input2 = Datum<'a>>,
     {
@@ -10088,7 +10088,33 @@ mod kani_test {
             _ => (),
         }
         std::mem::forget(func);
-        std::mem::forget(r1);
+        std::mem::forget((r1, r2, r3));
+    }
+
+    fn check_monotone_binary_first_arg_interval_float<F>(func: F)
+    where
+        F: for<'a> EagerBinaryFunc<'a, Input1 = Datum<'a>, Input2 = Datum<'a>>,
+    {
+        let a1 = kani::any::<Interval>();
+        let a2 = kani::any::<Interval>();
+        let a3 = kani::any::<Interval>();
+        let b = OrderedFloat(kani::any::<f64>());
+        kani::assume(a1 <= a2);
+        kani::assume(a2 <= a3);
+        let arena = ManuallyDrop::new(RowArena::new());
+
+        let r1 = func.call(a1.into(), b.into(), &*arena).into_result(&*arena);
+        let r2 = func.call(a2.into(), b.into(), &*arena).into_result(&*arena);
+        let r3 = func.call(a3.into(), b.into(), &*arena).into_result(&*arena);
+
+        match (&r1, &r2, &r3) {
+            (Ok(Datum::Interval(r1)), Ok(Datum::Interval(r2)), Ok(Datum::Interval(r3))) => {
+                assert!((r1 <= r2 && r2 <= r3) || (r1 >= r2 && r2 >= r3));
+            }
+            _ => (),
+        }
+        std::mem::forget(func);
+        std::mem::forget((r1, r2, r3));
     }
 
     #[kani::proof]
@@ -10113,27 +10139,41 @@ mod kani_test {
     #[kani::proof]
     #[kani::unwind(5)]
     fn add_float64_is_monotone_in_first_arg() {
-        check_monotone_binary_first_arg_float(AddFloat64);
+        check_monotone_binary_first_arg_float_float(AddFloat64);
     }
 
     // FAILS
     #[kani::proof]
     #[kani::unwind(5)]
     fn sub_float64_is_monotone_in_first_arg() {
-        check_monotone_binary_first_arg_float(SubFloat64);
+        check_monotone_binary_first_arg_float_float(SubFloat64);
     }
 
     // FAILS
     #[kani::proof]
     #[kani::unwind(5)]
     fn mul_float64_is_monotone_in_first_arg() {
-        check_monotone_binary_first_arg_float(MulFloat64);
+        check_monotone_binary_first_arg_float_float(MulFloat64);
     }
 
     // FAILS
     #[kani::proof]
     #[kani::unwind(5)]
     fn div_float64_is_monotone_in_first_arg() {
-        check_monotone_binary_first_arg_float(DivFloat64);
+        check_monotone_binary_first_arg_float_float(DivFloat64);
+    }
+
+    // FAILS
+    #[kani::proof]
+    #[kani::unwind(10)]
+    fn mul_interval_is_monotone_in_first_arg() {
+        check_monotone_binary_first_arg_interval_float(MulInterval);
+    }
+
+    // FAILS
+    #[kani::proof]
+    #[kani::unwind(5)]
+    fn div_interval_is_monotone_in_first_arg() {
+        check_monotone_binary_first_arg_interval_float(DivInterval);
     }
 }
