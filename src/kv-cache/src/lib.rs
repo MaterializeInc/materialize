@@ -39,7 +39,6 @@ where
         let mut encode_buffer = Vec::new();
         let mut should_fetch = |bloom_filter: &BloomFilter| {
             keys.iter().any(|row| {
-                tracing::info!(?row, ?bloom_filter, "matched bloom filter!");
                 let datums = datum_vec_a.borrow_with(row);
                 assert_eq!(datums.len(), 1, "composite keys");
                 let key = datums[0];

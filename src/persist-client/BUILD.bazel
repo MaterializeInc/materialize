@@ -40,6 +40,7 @@ rust_library(
         "//src/persist-types:mz_persist_types",
         "//src/postgres-client:mz_postgres_client",
         "//src/proto:mz_proto",
+        "//src/service:mz_service",
         "//src/timely-util:mz_timely_util",
     ] + all_crate_deps(normal = True),
 )
@@ -79,6 +80,7 @@ rust_test(
         "//src/persist-types:mz_persist_types",
         "//src/postgres-client:mz_postgres_client",
         "//src/proto:mz_proto",
+        "//src/service:mz_service",
         "//src/timely-util:mz_timely_util",
     ] + all_crate_deps(
         normal = True,
@@ -97,6 +99,7 @@ rust_doc_test(
         "//src/persist-types:mz_persist_types",
         "//src/postgres-client:mz_postgres_client",
         "//src/proto:mz_proto",
+        "//src/service:mz_service",
         "//src/timely-util:mz_timely_util",
     ] + all_crate_deps(
         normal = True,

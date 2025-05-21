@@ -51,7 +51,6 @@ fn serialize_bloom_filter<S: Serializer>(filter: &Sbbf, s: S) -> Result<S::Ok, S
     s.serialize_bytes(filter.into_bitset().concat().as_slice())
 }
 
-
 pub fn bloom_filter_from_bytes(bytes: &[u8]) -> BloomFilter {
     let sbbf = Sbbf::new(bytes);
     BloomFilter::new(sbbf)
