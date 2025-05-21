@@ -1,3 +1,5 @@
+use std::collections::{BTreeMap, BTreeSet};
+
 use differential_dataflow::lattice::Lattice;
 use mz_persist_client::read::ReadHandle;
 use mz_persist_types::Codec64;
@@ -9,6 +11,8 @@ use timely::progress::{Antichain, Timestamp};
 
 pub struct KeyValueReadHandle<T> {
     handle: ReadHandle<SourceData, (), T, StorageDiff>,
+    cache: BTreeMap<Row, Row>,
+    cache_upper: T,
 }
 
 impl<T> KeyValueReadHandle<T>
@@ -16,7 +20,11 @@ where
     T: Timestamp + Lattice + Codec64 + Sync,
 {
     pub fn new(handle: ReadHandle<SourceData, (), T, StorageDiff>) -> Self {
-        Self { handle }
+        Self {
+            handle,
+            cache: BTreeMap::default(),
+            cache_upper: T::minimum(),
+        }
     }
 
     pub async fn get_multi(
@@ -25,8 +33,28 @@ where
         keys: Vec<Row>,
         ts: T,
     ) -> Vec<(Row, Row)> {
+        // Check the cache first.
+        let mut cached_values = Vec::new();
+        let mut obtained_keys = BTreeSet::new();
+        for key in &keys {
+            if let Some(cached_val) = self.cache.get(key) {
+                if self.cache_upper == ts {
+                    tracing::debug!(?key, ?ts, "returning cached value");
+                    cached_values.push((key.clone(), cached_val.clone()));
+                    obtained_keys.insert(key.clone());
+                }
+            }
+        }
+
+        // Skip querying for keys that have already been obtained from the cache.
+        let keys: Vec<_> = keys
+            .into_iter()
+            .filter(|key| obtained_keys.contains(key))
+            .collect();
+
+        // If there isn't anything else to obtain then return early!
         if keys.is_empty() {
-            return Vec::new();
+            return cached_values;
         }
 
         let as_of = Antichain::from_elem(ts);
@@ -81,5 +109,18 @@ where
             .collect()
     }
 
-    pub async fn apply_changes(&mut self, changes: Vec<(SourceData, T, StorageDiff)>) {}
+    pub fn apply_changes(&mut self, mut changes: Vec<((Row, Row), T, StorageDiff)>, upper: T) {
+        changes.sort_by(|a, b| (a.1.clone(), a.2).cmp(&(b.1.clone(), b.2)));
+        self.cache_upper = upper;
+
+        for ((key, val), _ts, diff) in changes {
+            if diff == 1 {
+                self.cache.insert(key, val);
+            } else if diff == -1 {
+                self.cache.remove(&key);
+            } else {
+                panic!("unexpected diff value {diff}");
+            }
+        }
+    }
 }

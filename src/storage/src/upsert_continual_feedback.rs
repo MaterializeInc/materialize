@@ -212,7 +212,7 @@ where
         let mut stash_cap: Option<Capability<G::Timestamp>> = None;
         let mut input_upper = Antichain::from_elem(Timestamp::minimum());
 
-        let mut persist_upper = Antichain::from_elem(Timestamp::minimum());
+        let mut persist_upper: Antichain<G::Timestamp> = Antichain::from_elem(Timestamp::minimum());
 
         // A buffer for our output.
         let mut output_updates = vec![];
@@ -233,9 +233,23 @@ where
                                     updates=%data.len(),
                                     "received persist data");
 
+                                    let changes: Vec<_> = data
+                                        .into_iter()
+                                        .map(|((key, val), ts, diff)| {
+                                            let val = val.expect("HACK WEEK");
+                                            ((key.key_columns, val), ts.to_outer(), diff.into_inner())
+                                        })
+                                        .collect();
+                                    let persist_upper = persist_upper
+                                        .as_option()
+                                        .cloned()
+                                        .expect("HACK WEEK")
+                                        .to_outer();
+                                    state.apply_changes(changes, persist_upper);
+
                                 // WIP: Throw it away for now, but later feed it
                                 // into our KV cache.
-                                drop(data);
+                                // drop(data);
                             }
                             AsyncEvent::Progress(upper) => {
                                 tracing::trace!(
