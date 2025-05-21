@@ -12,6 +12,7 @@ use serde::{Serialize, Serializer};
 
 use crate::columnar;
 
+/// TODO
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize)]
 pub struct BloomFilter {
     #[serde(serialize_with = "serialize_bloom_filter")]
@@ -19,15 +20,18 @@ pub struct BloomFilter {
 }
 
 impl BloomFilter {
-    fn new(inner: Sbbf) -> Self {
+    /// TODO
+    pub fn new(inner: Sbbf) -> Self {
         Self { inner }
     }
 
-    fn contains<T: Sized, K: FixedSizeCodec<T>>(&self, k: K) -> bool {
+    /// TODO
+    pub fn contains<T: Sized, K: FixedSizeCodec<T>>(&self, k: K) -> bool {
         self.inner.check_hash(hash(k.as_bytes()))
     }
 
-    fn update(&mut self, filter: Sbbf) {
+    /// TODO
+    pub fn update(&mut self, filter: Sbbf) {
         self.inner = filter;
     }
 }

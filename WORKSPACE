@@ -502,12 +502,12 @@ crates_repository(
             gen_build_script = False,
             deps = ["@bzip2"],
         )],
-        "lzma-sys": [crate.annotation(
-            additive_build_file = "@//misc/bazel/c_deps:rust-sys/BUILD.lzma-sys.bazel",
-            gen_build_script = False,
-            # Note: This is a target we add from the additive build file above.
-            deps = [":xz"],
-        )],
+        # "lzma-sys": [crate.annotation(
+        #     additive_build_file = "@//misc/bazel/c_deps:rust-sys/BUILD.lzma-sys.bazel",
+        #     gen_build_script = False,
+        #     # Note: This is a target we add from the additive build file above.
+        #     deps = [":xz"],
+        # )],
         "openssl-sys": [crate.annotation(
             build_script_data = [
                 "@openssl//:openssl_lib",
@@ -644,7 +644,6 @@ crates_repository(
         "//:src/metrics/Cargo.toml",
         "//:src/mysql-util/Cargo.toml",
         "//:src/mz/Cargo.toml",
-        "//:src/mz-debug/Cargo.toml",
         "//:src/npm/Cargo.toml",
         "//:src/orchestrator-kubernetes/Cargo.toml",
         "//:src/orchestrator-process/Cargo.toml",

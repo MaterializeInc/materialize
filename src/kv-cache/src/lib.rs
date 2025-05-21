@@ -45,7 +45,7 @@ where
         let mut datum_vec_b = DatumVec::new();
         let mut datum_vec_c = DatumVec::new();
 
-
+        // When looking for the latest value of a key, we only need to scan parts
 
         for part in batch_parts {
             let values = self.handle.fetch_values(&part, &mut should_fetch).await;
