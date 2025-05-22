@@ -415,15 +415,15 @@ pub(crate) const BLOB_TARGET_SIZE: Config<usize> = Config::new(
 
 pub(crate) const INLINE_WRITES_SINGLE_MAX_BYTES: Config<usize> = Config::new(
     "persist_inline_writes_single_max_bytes",
-    0,
-    // 4096,
+    // 0,
+    4096,
     "The (exclusive) maximum size of a write that persist will inline in metadata.",
 );
 
 pub(crate) const INLINE_WRITES_TOTAL_MAX_BYTES: Config<usize> = Config::new(
     "persist_inline_writes_total_max_bytes",
-    // 1 * MiB,
-    0,
+    1 * MiB,
+    // 0,
     "\
     The (exclusive) maximum total size of inline writes in metadata before \
     persist will backpressure them by flushing out to s3.",
@@ -450,7 +450,8 @@ impl BatchBuilderConfig {
                 compression: CompressionFormat::from_str(&ENCODING_COMPRESSION_FORMAT.get(value)),
                 // TODO(upsert-in-persist).
                 use_bloom_filter: true,
-                max_row_group_size: 1024 * 1024,
+                max_row_group_size: 1024,
+                // max_row_group_size: 1024 * 1024,
             },
             preferred_order,
             structured_key_lower_len: STRUCTURED_KEY_LOWER_LEN.get(value),
