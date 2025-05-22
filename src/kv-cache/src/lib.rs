@@ -133,7 +133,7 @@ where
                     })
                 };
                 if let Some(matching_key) = maybe_matching_key {
-                    tracing::info!(?matching_key, ?candidate_row, ?diff, "found matching key");
+                    tracing::debug!(?matching_key, ?candidate_row, ?diff, "found matching key");
                     filtered_values.push(((matching_key.clone(), candidate_row), diff));
                 }
             }
@@ -141,7 +141,7 @@ where
 
         differential_dataflow::consolidation::consolidate(&mut filtered_values);
         if !filtered_values.iter().all(|(_x, diff)| *diff == 1) {
-            tracing::info!("filtered values: {filtered_values:?}");
+            tracing::warn!("filtered values: {filtered_values:?}");
         }
         // filtered_values.iter().all(|(_x, diff)| *diff == 1);
 
