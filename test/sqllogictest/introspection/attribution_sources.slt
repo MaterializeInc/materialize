@@ -271,7 +271,7 @@ WITH
                 AS avg_records
         FROM
             mz_introspection.mz_lir_mapping AS mlm
-                LEFT JOIN
+                JOIN
                     mz_introspection.mz_arrangement_sizes_per_worker AS mas
                     ON
                         (
@@ -287,7 +287,7 @@ SELECT
     sm.total_records AS total_records
 FROM
     mz_introspection.mz_lir_mapping AS mlm
-        JOIN summary_memory AS sm USING(lir_id)
+        LEFT JOIN summary_memory AS sm USING(lir_id)
         JOIN
             mz_introspection.mz_mappable_objects AS mo
             ON (mlm.global_id = mo.global_id)
@@ -313,9 +313,15 @@ WITH
                 END
                 AS avg_ns
         FROM
-            mz_introspection.mz_lir_mapping AS mlm,
-            mz_introspection.mz_scheduling_elapsed_per_worker AS mse
-        WHERE mlm.operator_id_start <= mse.id AND mse.id < mlm.operator_id_end
+            mz_introspection.mz_lir_mapping AS mlm
+                JOIN
+                    mz_introspection.mz_scheduling_elapsed_per_worker AS mse
+                    ON
+                        (
+                            mlm.operator_id_start <= mse.id
+                                AND
+                            mse.id < mlm.operator_id_end
+                        )
         GROUP BY mlm.lir_id
     )
 SELECT
@@ -323,7 +329,7 @@ SELECT
     sc.total_ns / 1000 * '1 microsecond'::interval AS total_elapsed
 FROM
     mz_introspection.mz_lir_mapping AS mlm
-        JOIN summary_cpu AS sc USING(lir_id)
+        LEFT JOIN summary_cpu AS sc USING(lir_id)
         JOIN
             mz_introspection.mz_mappable_objects AS mo
             ON (mlm.global_id = mo.global_id)
@@ -356,7 +362,7 @@ WITH
                 AS avg_records
         FROM
             mz_introspection.mz_lir_mapping AS mlm
-                LEFT JOIN
+                JOIN
                     mz_introspection.mz_arrangement_sizes_per_worker AS mas
                     ON
                         (
@@ -380,9 +386,15 @@ WITH
                 END
                 AS avg_ns
         FROM
-            mz_introspection.mz_lir_mapping AS mlm,
-            mz_introspection.mz_scheduling_elapsed_per_worker AS mse
-        WHERE mlm.operator_id_start <= mse.id AND mse.id < mlm.operator_id_end
+            mz_introspection.mz_lir_mapping AS mlm
+                JOIN
+                    mz_introspection.mz_scheduling_elapsed_per_worker AS mse
+                    ON
+                        (
+                            mlm.operator_id_start <= mse.id
+                                AND
+                            mse.id < mlm.operator_id_end
+                        )
         GROUP BY mlm.lir_id
     )
 SELECT
@@ -392,8 +404,8 @@ SELECT
     sc.total_ns / 1000 * '1 microsecond'::interval AS total_elapsed
 FROM
     mz_introspection.mz_lir_mapping AS mlm
-        JOIN summary_memory AS sm USING(lir_id)
-        JOIN summary_cpu AS sc USING(lir_id)
+        LEFT JOIN summary_memory AS sm USING(lir_id)
+        LEFT JOIN summary_cpu AS sc USING(lir_id)
         JOIN
             mz_introspection.mz_mappable_objects AS mo
             ON (mlm.global_id = mo.global_id)
@@ -426,7 +438,7 @@ WITH
                 AS avg_records
         FROM
             mz_introspection.mz_lir_mapping AS mlm
-                LEFT JOIN
+                JOIN
                     mz_introspection.mz_arrangement_sizes_per_worker AS mas
                     ON
                         (
@@ -445,7 +457,7 @@ WITH
             sum(mas.records) AS worker_records
         FROM
             mz_introspection.mz_lir_mapping AS mlm
-                LEFT JOIN
+                JOIN
                     mz_introspection.mz_arrangement_sizes_per_worker AS mas
                     ON
                         (
@@ -469,9 +481,15 @@ WITH
                 END
                 AS avg_ns
         FROM
-            mz_introspection.mz_lir_mapping AS mlm,
-            mz_introspection.mz_scheduling_elapsed_per_worker AS mse
-        WHERE mlm.operator_id_start <= mse.id AND mse.id < mlm.operator_id_end
+            mz_introspection.mz_lir_mapping AS mlm
+                JOIN
+                    mz_introspection.mz_scheduling_elapsed_per_worker AS mse
+                    ON
+                        (
+                            mlm.operator_id_start <= mse.id
+                                AND
+                            mse.id < mlm.operator_id_end
+                        )
         GROUP BY mlm.lir_id
     ),
     per_worker_cpu AS
@@ -481,9 +499,15 @@ WITH
             mse.worker_id AS worker_id,
             sum(mse.elapsed_ns) AS worker_ns
         FROM
-            mz_introspection.mz_lir_mapping AS mlm,
-            mz_introspection.mz_scheduling_elapsed_per_worker AS mse
-        WHERE mlm.operator_id_start <= mse.id AND mse.id < mlm.operator_id_end
+            mz_introspection.mz_lir_mapping AS mlm
+                JOIN
+                    mz_introspection.mz_scheduling_elapsed_per_worker AS mse
+                    ON
+                        (
+                            mlm.operator_id_start <= mse.id
+                                AND
+                            mse.id < mlm.operator_id_end
+                        )
         GROUP BY mlm.lir_id, mse.worker_id
     )
 SELECT
@@ -518,10 +542,10 @@ SELECT
     sc.total_ns / 1000 * '1 microsecond'::interval AS total_elapsed
 FROM
     mz_introspection.mz_lir_mapping AS mlm
-        JOIN summary_memory AS sm USING(lir_id)
-        JOIN per_worker_memory AS pwm USING(lir_id)
-        JOIN summary_cpu AS sc USING(lir_id)
-        JOIN per_worker_cpu AS pwc USING(lir_id)
+        LEFT JOIN summary_memory AS sm USING(lir_id)
+        LEFT JOIN per_worker_memory AS pwm USING(lir_id)
+        LEFT JOIN summary_cpu AS sc USING(lir_id)
+        LEFT JOIN per_worker_cpu AS pwc USING(lir_id)
         JOIN
             mz_introspection.mz_mappable_objects AS mo
             ON (mlm.global_id = mo.global_id)
@@ -547,9 +571,15 @@ WITH
                 END
                 AS avg_ns
         FROM
-            mz_introspection.mz_lir_mapping AS mlm,
-            mz_introspection.mz_scheduling_elapsed_per_worker AS mse
-        WHERE mlm.operator_id_start <= mse.id AND mse.id < mlm.operator_id_end
+            mz_introspection.mz_lir_mapping AS mlm
+                JOIN
+                    mz_introspection.mz_scheduling_elapsed_per_worker AS mse
+                    ON
+                        (
+                            mlm.operator_id_start <= mse.id
+                                AND
+                            mse.id < mlm.operator_id_end
+                        )
         GROUP BY mlm.lir_id
     ),
     per_worker_cpu AS
@@ -559,9 +589,15 @@ WITH
             mse.worker_id AS worker_id,
             sum(mse.elapsed_ns) AS worker_ns
         FROM
-            mz_introspection.mz_lir_mapping AS mlm,
-            mz_introspection.mz_scheduling_elapsed_per_worker AS mse
-        WHERE mlm.operator_id_start <= mse.id AND mse.id < mlm.operator_id_end
+            mz_introspection.mz_lir_mapping AS mlm
+                JOIN
+                    mz_introspection.mz_scheduling_elapsed_per_worker AS mse
+                    ON
+                        (
+                            mlm.operator_id_start <= mse.id
+                                AND
+                            mse.id < mlm.operator_id_end
+                        )
         GROUP BY mlm.lir_id, mse.worker_id
     ),
     summary_memory AS
@@ -585,7 +621,7 @@ WITH
                 AS avg_records
         FROM
             mz_introspection.mz_lir_mapping AS mlm
-                LEFT JOIN
+                JOIN
                     mz_introspection.mz_arrangement_sizes_per_worker AS mas
                     ON
                         (
@@ -604,7 +640,7 @@ WITH
             sum(mas.records) AS worker_records
         FROM
             mz_introspection.mz_lir_mapping AS mlm
-                LEFT JOIN
+                JOIN
                     mz_introspection.mz_arrangement_sizes_per_worker AS mas
                     ON
                         (
@@ -646,10 +682,10 @@ SELECT
     sm.total_records AS total_records
 FROM
     mz_introspection.mz_lir_mapping AS mlm
-        JOIN summary_cpu AS sc USING(lir_id)
-        JOIN per_worker_cpu AS pwc USING(lir_id)
-        JOIN summary_memory AS sm USING(lir_id)
-        JOIN per_worker_memory AS pwm USING(lir_id)
+        LEFT JOIN summary_cpu AS sc USING(lir_id)
+        LEFT JOIN per_worker_cpu AS pwc USING(lir_id)
+        LEFT JOIN summary_memory AS sm USING(lir_id)
+        LEFT JOIN per_worker_memory AS pwm USING(lir_id)
         JOIN
             mz_introspection.mz_mappable_objects AS mo
             ON (mlm.global_id = mo.global_id)
@@ -715,9 +751,15 @@ WITH
                 END
                 AS avg_ns
         FROM
-            mz_introspection.mz_lir_mapping AS mlm,
-            mz_introspection.mz_scheduling_elapsed_per_worker AS mse
-        WHERE mlm.operator_id_start <= mse.id AND mse.id < mlm.operator_id_end
+            mz_introspection.mz_lir_mapping AS mlm
+                JOIN
+                    mz_introspection.mz_scheduling_elapsed_per_worker AS mse
+                    ON
+                        (
+                            mlm.operator_id_start <= mse.id
+                                AND
+                            mse.id < mlm.operator_id_end
+                        )
         GROUP BY mlm.lir_id
     ),
     per_worker_cpu AS
@@ -727,9 +769,15 @@ WITH
             mse.worker_id AS worker_id,
             sum(mse.elapsed_ns) AS worker_ns
         FROM
-            mz_introspection.mz_lir_mapping AS mlm,
-            mz_introspection.mz_scheduling_elapsed_per_worker AS mse
-        WHERE mlm.operator_id_start <= mse.id AND mse.id < mlm.operator_id_end
+            mz_introspection.mz_lir_mapping AS mlm
+                JOIN
+                    mz_introspection.mz_scheduling_elapsed_per_worker AS mse
+                    ON
+                        (
+                            mlm.operator_id_start <= mse.id
+                                AND
+                            mse.id < mlm.operator_id_end
+                        )
         GROUP BY mlm.lir_id, mse.worker_id
     ),
     summary_memory AS
@@ -753,7 +801,7 @@ WITH
                 AS avg_records
         FROM
             mz_introspection.mz_lir_mapping AS mlm
-                LEFT JOIN
+                JOIN
                     mz_introspection.mz_arrangement_sizes_per_worker AS mas
                     ON
                         (
@@ -772,7 +820,7 @@ WITH
             sum(mas.records) AS worker_records
         FROM
             mz_introspection.mz_lir_mapping AS mlm
-                LEFT JOIN
+                JOIN
                     mz_introspection.mz_arrangement_sizes_per_worker AS mas
                     ON
                         (
@@ -814,10 +862,10 @@ SELECT
     sm.total_records AS total_records
 FROM
     mz_introspection.mz_lir_mapping AS mlm
-        JOIN summary_cpu AS sc USING(lir_id)
-        JOIN per_worker_cpu AS pwc USING(lir_id)
-        JOIN summary_memory AS sm USING(lir_id)
-        JOIN per_worker_memory AS pwm USING(lir_id)
+        LEFT JOIN summary_cpu AS sc USING(lir_id)
+        LEFT JOIN per_worker_cpu AS pwc USING(lir_id)
+        LEFT JOIN summary_memory AS sm USING(lir_id)
+        LEFT JOIN per_worker_memory AS pwm USING(lir_id)
         JOIN
             mz_introspection.mz_mappable_objects AS mo
             ON (mlm.global_id = mo.global_id)

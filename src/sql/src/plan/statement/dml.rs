@@ -845,29 +845,27 @@ pub fn plan_explain_analyze(
          SUM(mas.records) AS total_records,
          CASE WHEN COUNT(DISTINCT mas.worker_id) <> 0 THEN SUM(mas.size) / COUNT(DISTINCT mas.worker_id) ELSE NULL END AS avg_memory,
          CASE WHEN COUNT(DISTINCT mas.worker_id) <> 0 THEN SUM(mas.records) / COUNT(DISTINCT mas.worker_id) ELSE NULL END AS avg_records
-    FROM           mz_introspection.mz_lir_mapping mlm
-         LEFT JOIN mz_introspection.mz_arrangement_sizes_per_worker mas
-                ON (    mlm.operator_id_start <= mas.operator_id
-                    AND mas.operator_id < mlm.operator_id_end)
+    FROM      mz_introspection.mz_lir_mapping mlm
+         JOIN mz_introspection.mz_arrangement_sizes_per_worker mas
+           ON (mlm.operator_id_start <= mas.operator_id AND mas.operator_id < mlm.operator_id_end)
 GROUP BY mlm.lir_id"#,
                         ));
-                        from.push("JOIN summary_memory sm USING (lir_id)");
+                        from.push("LEFT JOIN summary_memory sm USING (lir_id)");
 
                         if skew {
                             ctes.push((
                                 "per_worker_memory",
                                 r#"
- SELECT mlm.lir_id AS lir_id,
+  SELECT mlm.lir_id AS lir_id,
          mas.worker_id AS worker_id,
          SUM(mas.size) AS worker_memory,
          SUM(mas.records) AS worker_records
-    FROM           mz_introspection.mz_lir_mapping mlm
-         LEFT JOIN mz_introspection.mz_arrangement_sizes_per_worker mas
-                ON (    mlm.operator_id_start <= mas.operator_id
-                    AND mas.operator_id < mlm.operator_id_end)
+    FROM      mz_introspection.mz_lir_mapping mlm
+         JOIN mz_introspection.mz_arrangement_sizes_per_worker mas
+           ON (mlm.operator_id_start <= mas.operator_id AND mas.operator_id < mlm.operator_id_end)
 GROUP BY mlm.lir_id, mas.worker_id"#,
                             ));
-                            from.push("JOIN per_worker_memory pwm USING (lir_id)");
+                            from.push("LEFT JOIN per_worker_memory pwm USING (lir_id)");
 
                             if let Some(worker_id) = worker_id {
                                 predicates.push(format!("pwm.worker_id = {worker_id}"));
@@ -901,12 +899,12 @@ GROUP BY mlm.lir_id, mas.worker_id"#,
   SELECT mlm.lir_id AS lir_id,
          SUM(mse.elapsed_ns) AS total_ns,
          CASE WHEN COUNT(DISTINCT mse.worker_id) <> 0 THEN SUM(mse.elapsed_ns) / COUNT(DISTINCT mse.worker_id) ELSE NULL END AS avg_ns
-    FROM mz_introspection.mz_lir_mapping mlm,
-         mz_introspection.mz_scheduling_elapsed_per_worker mse
-   WHERE mlm.operator_id_start <= mse.id AND mse.id < mlm.operator_id_end
+    FROM      mz_introspection.mz_lir_mapping mlm
+         JOIN mz_introspection.mz_scheduling_elapsed_per_worker mse
+           ON (mlm.operator_id_start <= mse.id AND mse.id < mlm.operator_id_end)
 GROUP BY mlm.lir_id"#,
                         ));
-                        from.push("JOIN summary_cpu sc USING (lir_id)");
+                        from.push("LEFT JOIN summary_cpu sc USING (lir_id)");
 
                         if skew {
                             ctes.push((
@@ -915,12 +913,12 @@ GROUP BY mlm.lir_id"#,
   SELECT mlm.lir_id AS lir_id,
          mse.worker_id AS worker_id,
          SUM(mse.elapsed_ns) AS worker_ns
-    FROM mz_introspection.mz_lir_mapping mlm,
-         mz_introspection.mz_scheduling_elapsed_per_worker mse
-   WHERE mlm.operator_id_start <= mse.id AND mse.id < mlm.operator_id_end
+    FROM      mz_introspection.mz_lir_mapping mlm
+         JOIN mz_introspection.mz_scheduling_elapsed_per_worker mse
+           ON (mlm.operator_id_start <= mse.id AND mse.id < mlm.operator_id_end)
 GROUP BY mlm.lir_id, mse.worker_id"#,
                             ));
-                            from.push("JOIN per_worker_cpu pwc USING (lir_id)");
+                            from.push("LEFT JOIN per_worker_cpu pwc USING (lir_id)");
 
                             if let Some(worker_id) = worker_id {
                                 predicates.push(format!("pwc.worker_id = {worker_id}"));
