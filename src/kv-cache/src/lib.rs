@@ -1,6 +1,7 @@
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeSet;
 
 use differential_dataflow::lattice::Lattice;
+use mz_persist_client::lru::Lru;
 use mz_persist_client::read::ReadHandle;
 use mz_persist_types::Codec64;
 use mz_persist_types::bloom_filter::BloomFilter;
@@ -9,9 +10,14 @@ use mz_storage_types::StorageDiff;
 use mz_storage_types::sources::SourceData;
 use timely::progress::{Antichain, Timestamp};
 
+/// TODO(upsert-in-persist), make this configurable.
+///
+/// 20 MiB
+const LRU_CACHE_SIZE: usize = 20 * 1024 * 1024;
+
 pub struct KeyValueReadHandle<T> {
     handle: ReadHandle<SourceData, (), T, StorageDiff>,
-    cache: BTreeMap<Row, Row>,
+    cache: Lru<Row, Row>,
     cache_upper: T,
 }
 
@@ -22,7 +28,7 @@ where
     pub fn new(handle: ReadHandle<SourceData, (), T, StorageDiff>) -> Self {
         Self {
             handle,
-            cache: BTreeMap::default(),
+            cache: Lru::new(LRU_CACHE_SIZE, move |_, _, _| {}),
             cache_upper: T::minimum(),
         }
     }
@@ -37,7 +43,7 @@ where
         let mut cached_values = Vec::new();
         let mut obtained_keys = BTreeSet::new();
         for key in &keys {
-            if let Some(cached_val) = self.cache.get(key) {
+            if let Some((_key, cached_val)) = self.cache.get(key) {
                 if self.cache_upper == ts {
                     tracing::debug!(?key, ?ts, "returning cached value");
                     cached_values.push((key.clone(), cached_val.clone()));
@@ -49,7 +55,7 @@ where
         // Skip querying for keys that have already been obtained from the cache.
         let keys: Vec<_> = keys
             .into_iter()
-            .filter(|key| obtained_keys.contains(key))
+            .filter(|key| !obtained_keys.contains(key))
             .collect();
 
         // If there isn't anything else to obtain then return early!
@@ -78,7 +84,17 @@ where
         let mut datum_vec_b = DatumVec::new();
         let mut datum_vec_c = DatumVec::new();
 
-        // When looking for the latest value of a key, we only need to scan parts
+        // TODO(upsert-in-persist)
+        //
+        // There are two more things we can do to make this faster:
+        // 1. Check the statistics for the primary key column on each `Part`
+        //    before even looking at the bloom filters.
+        // 2. Sort the list of `Part`s by their upper in a descending order.
+        //    If a key exists in an upsert source it is guaranteed to have a
+        //    diff of 1 or -1, meaning the latest value for a key is the
+        //    correct value. There is no need to scan for all previous
+        //    instances of the key and then consolidate.
+
 
         for part in batch_parts {
             let values = self.handle.fetch_values(&part, &mut should_fetch).await;
@@ -106,6 +122,7 @@ where
         filtered_values
             .into_iter()
             .map(|(payload, _diff)| payload)
+            .chain(cached_values)
             .collect()
     }
 
@@ -115,7 +132,8 @@ where
 
         for ((key, val), _ts, diff) in changes {
             if diff == 1 {
-                self.cache.insert(key, val);
+                let weight = val.byte_len();
+                self.cache.insert(key, val, weight);
             } else if diff == -1 {
                 self.cache.remove(&key);
             } else {

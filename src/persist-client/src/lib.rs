@@ -115,6 +115,8 @@ mod internal {
     pub mod datadriven;
 }
 
+pub use internal::cache::lru;
+
 /// Persist build information.
 pub const BUILD_INFO: BuildInfo = build_info!();
 

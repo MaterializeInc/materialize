@@ -181,7 +181,7 @@ impl Blob for BlobMemCache {
     }
 }
 
-mod lru {
+pub mod lru {
     use std::borrow::Borrow;
     use std::collections::BTreeMap;
     use std::hash::Hash;
