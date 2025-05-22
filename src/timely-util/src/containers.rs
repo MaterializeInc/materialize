@@ -192,7 +192,17 @@ mod container {
         fn push_into(&mut self, item: T) {
             use columnar::Push;
             match self {
-                Column::Typed(t) => t.push(item),
+                Column::Typed(t) => {
+                    t.push(item);
+                    let length_in_bytes = Indexed::length_in_bytes(&t.borrow());
+
+                    if length_in_bytes >= (1 << 20) {
+                        let mut alloc = super::alloc_aligned_zeroed(length_in_bytes);
+                        let writer = std::io::Cursor::new(bytemuck::cast_slice_mut(&mut alloc[..]));
+                        Indexed::write(writer, &t.borrow()).unwrap();
+                        *self = Column::Align(alloc);
+                    }
+                }
                 Column::Align(_) | Column::Bytes(_) => {
                     // We really oughtn't be calling this in this case.
                     // We could convert to owned, but need more constraints on `C`.
@@ -416,8 +426,7 @@ pub mod batcher {
             differential_dataflow::consolidation::consolidate_updates(container);
 
             self.target.clear();
-            let mut iter = container.drain(..);
-            if let Some((data, time, diff)) = iter.next() {
+            for (data, time, diff) in container.drain(..) {
                 self.target.push((&data, &time, &diff));
             }
 
