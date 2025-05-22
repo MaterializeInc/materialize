@@ -89,6 +89,7 @@ ERROR_RE = re.compile(
     | cannot\ load\ unknown\ system\ parameter\ from\ catalog\ storage
     | SUMMARY:\ .*Sanitizer
     | primary\ source\ \w+\ seemingly\ dropped\ before\ subsource
+    | Test\ .*\ timed\ out
     # Only notifying on unexpected failures. INT, TRAP, BUS, FPE, SEGV, PIPE
     | \ ANOM_ABEND\ .*\ sig=(2|5|7|8|11|13)
     # \s\S is any character including newlines, so this matches multiline strings
