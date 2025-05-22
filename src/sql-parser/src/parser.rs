@@ -8869,17 +8869,18 @@ impl<'a> Parser<'a> {
 
         self.expect_keyword(FOR)?;
 
-        let explainee = self.parse_explainee()?;
-        match &explainee {
-            Explainee::Index(_) => (),
-            Explainee::MaterializedView(_) => (),
-            _ => {
-                return Err(ParserError::new(
-                    self.index,
-                    "expected INDEX or MATERIALIZED VIEW",
-                ));
-            }
-        }
+        let explainee = if self.parse_keywords(&[MATERIALIZED, VIEW]) {
+            // Parse: `MATERIALIZED VIEW name`
+            Explainee::MaterializedView(self.parse_raw_name()?)
+        } else if self.parse_keyword(INDEX) {
+            // Parse: `INDEX name`
+            Explainee::Index(self.parse_raw_name()?)
+        } else {
+            return Err(ParserError::new(
+                self.index,
+                "expected INDEX or MATERIALIZED VIEW",
+            ));
+        };
 
         let mut as_sql = false;
         if self.parse_keywords(&[AS, SQL]) {

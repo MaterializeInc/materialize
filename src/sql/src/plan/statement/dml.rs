@@ -375,7 +375,7 @@ pub fn describe_explain_analyze(
 
             if skew {
                 relation_desc =
-                    relation_desc.with_column("worker_id", ScalarType::UInt64.nullable(false));
+                    relation_desc.with_column("worker_id", ScalarType::UInt64.nullable(true));
             }
 
             let mut seen_properties = BTreeSet::new();
@@ -843,8 +843,8 @@ pub fn plan_explain_analyze(
   SELECT mlm.lir_id AS lir_id,
          SUM(mas.size) AS total_memory,
          SUM(mas.records) AS total_records,
-         SUM(mas.size) / COUNT(DISTINCT mas.worker_id) AS avg_memory,
-         SUM(mas.records) / COUNT(DISTINCT mas.worker_id) AS avg_records
+         CASE WHEN COUNT(DISTINCT mas.worker_id) <> 0 THEN SUM(mas.size) / COUNT(DISTINCT mas.worker_id) ELSE NULL END AS avg_memory,
+         CASE WHEN COUNT(DISTINCT mas.worker_id) <> 0 THEN SUM(mas.records) / COUNT(DISTINCT mas.worker_id) ELSE NULL END AS avg_records
     FROM           mz_introspection.mz_lir_mapping mlm
          LEFT JOIN mz_introspection.mz_arrangement_sizes_per_worker mas
                 ON (    mlm.operator_id_start <= mas.operator_id
@@ -878,11 +878,11 @@ GROUP BY mlm.lir_id, mas.worker_id"#,
                             }
 
                             columns.extend([
-                                "ROUND(pwm.worker_memory / sm.avg_memory, 2) AS memory_ratio",
+                                "CASE WHEN pwm.worker_id IS NOT NULL AND sm.avg_memory <> 0 THEN ROUND(pwm.worker_memory / sm.avg_memory, 2) ELSE NULL END AS memory_ratio",
                                 "pg_size_pretty(pwm.worker_memory) AS worker_memory",
                                 "pg_size_pretty(sm.avg_memory) AS avg_memory",
                                 "pg_size_pretty(sm.total_memory) AS total_memory",
-                                "ROUND(pwm.worker_records / sm.avg_records, 2) AS records_ratio",
+                                "CASE WHEN pwm.worker_id IS NOT NULL AND sm.avg_records <> 0 THEN ROUND(pwm.worker_records / sm.avg_records, 2) ELSE NULL END AS records_ratio",
                                 "pwm.worker_records AS worker_records",
                                 "sm.avg_records AS avg_records",
                                 "sm.total_records AS total_records",
@@ -900,7 +900,7 @@ GROUP BY mlm.lir_id, mas.worker_id"#,
                             r#"
   SELECT mlm.lir_id AS lir_id,
          SUM(mse.elapsed_ns) AS total_ns,
-         SUM(mse.elapsed_ns) / COUNT(DISTINCT mse.worker_id) AS avg_ns
+         CASE WHEN COUNT(DISTINCT mse.worker_id) <> 0 THEN SUM(mse.elapsed_ns) / COUNT(DISTINCT mse.worker_id) ELSE NULL END AS avg_ns
     FROM mz_introspection.mz_lir_mapping mlm,
          mz_introspection.mz_scheduling_elapsed_per_worker mse
    WHERE mlm.operator_id_start <= mse.id AND mse.id < mlm.operator_id_end
@@ -931,7 +931,7 @@ GROUP BY mlm.lir_id, mse.worker_id"#,
                             }
 
                             columns.extend([
-                                "ROUND(pwc.worker_ns / sc.avg_ns, 2) AS cpu_ratio",
+                                "CASE WHEN pwc.worker_id IS NOT NULL AND sc.avg_ns <> 0 THEN ROUND(pwc.worker_ns / sc.avg_ns, 2) ELSE NULL END AS cpu_ratio",
                                 "pwc.worker_ns / 1000 * '1 microsecond'::INTERVAL AS worker_elapsed",
                                 "sc.avg_ns / 1000 * '1 microsecond'::INTERVAL AS avg_elapsed",
                             ]);

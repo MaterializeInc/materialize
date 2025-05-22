@@ -256,8 +256,19 @@ WITH
             mlm.lir_id AS lir_id,
             sum(mas.size) AS total_memory,
             sum(mas.records) AS total_records,
-            sum(mas.size) / count(DISTINCT mas.worker_id) AS avg_memory,
-            sum(mas.records) / count(DISTINCT mas.worker_id) AS avg_records
+            CASE
+                    WHEN count(DISTINCT mas.worker_id) <> 0
+                            THEN sum(mas.size) / count(DISTINCT mas.worker_id)
+                        ELSE NULL
+                END
+                AS avg_memory,
+            CASE
+                    WHEN count(DISTINCT mas.worker_id) <> 0
+                            THEN
+                                sum(mas.records) / count(DISTINCT mas.worker_id)
+                        ELSE NULL
+                END
+                AS avg_records
         FROM
             mz_introspection.mz_lir_mapping AS mlm
                 LEFT JOIN
@@ -293,7 +304,14 @@ WITH
         SELECT
             mlm.lir_id AS lir_id,
             sum(mse.elapsed_ns) AS total_ns,
-            sum(mse.elapsed_ns) / count(DISTINCT mse.worker_id) AS avg_ns
+            CASE
+                    WHEN count(DISTINCT mse.worker_id) <> 0
+                            THEN
+                                sum(mse.elapsed_ns)
+                                / count(DISTINCT mse.worker_id)
+                        ELSE NULL
+                END
+                AS avg_ns
         FROM
             mz_introspection.mz_lir_mapping AS mlm,
             mz_introspection.mz_scheduling_elapsed_per_worker AS mse
@@ -323,8 +341,19 @@ WITH
             mlm.lir_id AS lir_id,
             sum(mas.size) AS total_memory,
             sum(mas.records) AS total_records,
-            sum(mas.size) / count(DISTINCT mas.worker_id) AS avg_memory,
-            sum(mas.records) / count(DISTINCT mas.worker_id) AS avg_records
+            CASE
+                    WHEN count(DISTINCT mas.worker_id) <> 0
+                            THEN sum(mas.size) / count(DISTINCT mas.worker_id)
+                        ELSE NULL
+                END
+                AS avg_memory,
+            CASE
+                    WHEN count(DISTINCT mas.worker_id) <> 0
+                            THEN
+                                sum(mas.records) / count(DISTINCT mas.worker_id)
+                        ELSE NULL
+                END
+                AS avg_records
         FROM
             mz_introspection.mz_lir_mapping AS mlm
                 LEFT JOIN
@@ -342,7 +371,14 @@ WITH
         SELECT
             mlm.lir_id AS lir_id,
             sum(mse.elapsed_ns) AS total_ns,
-            sum(mse.elapsed_ns) / count(DISTINCT mse.worker_id) AS avg_ns
+            CASE
+                    WHEN count(DISTINCT mse.worker_id) <> 0
+                            THEN
+                                sum(mse.elapsed_ns)
+                                / count(DISTINCT mse.worker_id)
+                        ELSE NULL
+                END
+                AS avg_ns
         FROM
             mz_introspection.mz_lir_mapping AS mlm,
             mz_introspection.mz_scheduling_elapsed_per_worker AS mse
@@ -375,8 +411,19 @@ WITH
             mlm.lir_id AS lir_id,
             sum(mas.size) AS total_memory,
             sum(mas.records) AS total_records,
-            sum(mas.size) / count(DISTINCT mas.worker_id) AS avg_memory,
-            sum(mas.records) / count(DISTINCT mas.worker_id) AS avg_records
+            CASE
+                    WHEN count(DISTINCT mas.worker_id) <> 0
+                            THEN sum(mas.size) / count(DISTINCT mas.worker_id)
+                        ELSE NULL
+                END
+                AS avg_memory,
+            CASE
+                    WHEN count(DISTINCT mas.worker_id) <> 0
+                            THEN
+                                sum(mas.records) / count(DISTINCT mas.worker_id)
+                        ELSE NULL
+                END
+                AS avg_records
         FROM
             mz_introspection.mz_lir_mapping AS mlm
                 LEFT JOIN
@@ -413,7 +460,14 @@ WITH
         SELECT
             mlm.lir_id AS lir_id,
             sum(mse.elapsed_ns) AS total_ns,
-            sum(mse.elapsed_ns) / count(DISTINCT mse.worker_id) AS avg_ns
+            CASE
+                    WHEN count(DISTINCT mse.worker_id) <> 0
+                            THEN
+                                sum(mse.elapsed_ns)
+                                / count(DISTINCT mse.worker_id)
+                        ELSE NULL
+                END
+                AS avg_ns
         FROM
             mz_introspection.mz_lir_mapping AS mlm,
             mz_introspection.mz_scheduling_elapsed_per_worker AS mse
@@ -435,15 +489,30 @@ WITH
 SELECT
     repeat(' ', nesting * 2) || operator AS operator,
     pwm.worker_id AS worker_id,
-    round(pwm.worker_memory / sm.avg_memory, 2) AS memory_ratio,
+    CASE
+            WHEN pwm.worker_id IS NOT NULL AND sm.avg_memory <> 0
+                    THEN round(pwm.worker_memory / sm.avg_memory, 2)
+                ELSE NULL
+        END
+        AS memory_ratio,
     pg_size_pretty(pwm.worker_memory) AS worker_memory,
     pg_size_pretty(sm.avg_memory) AS avg_memory,
     pg_size_pretty(sm.total_memory) AS total_memory,
-    round(pwm.worker_records / sm.avg_records, 2) AS records_ratio,
+    CASE
+            WHEN pwm.worker_id IS NOT NULL AND sm.avg_records <> 0
+                    THEN round(pwm.worker_records / sm.avg_records, 2)
+                ELSE NULL
+        END
+        AS records_ratio,
     pwm.worker_records AS worker_records,
     sm.avg_records AS avg_records,
     sm.total_records AS total_records,
-    round(pwc.worker_ns / sc.avg_ns, 2) AS cpu_ratio,
+    CASE
+            WHEN pwc.worker_id IS NOT NULL AND sc.avg_ns <> 0
+                    THEN round(pwc.worker_ns / sc.avg_ns, 2)
+                ELSE NULL
+        END
+        AS cpu_ratio,
     pwc.worker_ns / 1000 * '1 microsecond'::interval AS worker_elapsed,
     sc.avg_ns / 1000 * '1 microsecond'::interval AS avg_elapsed,
     sc.total_ns / 1000 * '1 microsecond'::interval AS total_elapsed
@@ -469,7 +538,14 @@ WITH
         SELECT
             mlm.lir_id AS lir_id,
             sum(mse.elapsed_ns) AS total_ns,
-            sum(mse.elapsed_ns) / count(DISTINCT mse.worker_id) AS avg_ns
+            CASE
+                    WHEN count(DISTINCT mse.worker_id) <> 0
+                            THEN
+                                sum(mse.elapsed_ns)
+                                / count(DISTINCT mse.worker_id)
+                        ELSE NULL
+                END
+                AS avg_ns
         FROM
             mz_introspection.mz_lir_mapping AS mlm,
             mz_introspection.mz_scheduling_elapsed_per_worker AS mse
@@ -494,8 +570,19 @@ WITH
             mlm.lir_id AS lir_id,
             sum(mas.size) AS total_memory,
             sum(mas.records) AS total_records,
-            sum(mas.size) / count(DISTINCT mas.worker_id) AS avg_memory,
-            sum(mas.records) / count(DISTINCT mas.worker_id) AS avg_records
+            CASE
+                    WHEN count(DISTINCT mas.worker_id) <> 0
+                            THEN sum(mas.size) / count(DISTINCT mas.worker_id)
+                        ELSE NULL
+                END
+                AS avg_memory,
+            CASE
+                    WHEN count(DISTINCT mas.worker_id) <> 0
+                            THEN
+                                sum(mas.records) / count(DISTINCT mas.worker_id)
+                        ELSE NULL
+                END
+                AS avg_records
         FROM
             mz_introspection.mz_lir_mapping AS mlm
                 LEFT JOIN
@@ -530,15 +617,30 @@ WITH
 SELECT
     repeat(' ', nesting * 2) || operator AS operator,
     pwc.worker_id AS worker_id,
-    round(pwc.worker_ns / sc.avg_ns, 2) AS cpu_ratio,
+    CASE
+            WHEN pwc.worker_id IS NOT NULL AND sc.avg_ns <> 0
+                    THEN round(pwc.worker_ns / sc.avg_ns, 2)
+                ELSE NULL
+        END
+        AS cpu_ratio,
     pwc.worker_ns / 1000 * '1 microsecond'::interval AS worker_elapsed,
     sc.avg_ns / 1000 * '1 microsecond'::interval AS avg_elapsed,
     sc.total_ns / 1000 * '1 microsecond'::interval AS total_elapsed,
-    round(pwm.worker_memory / sm.avg_memory, 2) AS memory_ratio,
+    CASE
+            WHEN pwm.worker_id IS NOT NULL AND sm.avg_memory <> 0
+                    THEN round(pwm.worker_memory / sm.avg_memory, 2)
+                ELSE NULL
+        END
+        AS memory_ratio,
     pg_size_pretty(pwm.worker_memory) AS worker_memory,
     pg_size_pretty(sm.avg_memory) AS avg_memory,
     pg_size_pretty(sm.total_memory) AS total_memory,
-    round(pwm.worker_records / sm.avg_records, 2) AS records_ratio,
+    CASE
+            WHEN pwm.worker_id IS NOT NULL AND sm.avg_records <> 0
+                    THEN round(pwm.worker_records / sm.avg_records, 2)
+                ELSE NULL
+        END
+        AS records_ratio,
     pwm.worker_records AS worker_records,
     sm.avg_records AS avg_records,
     sm.total_records AS total_records
@@ -604,7 +706,14 @@ WITH
         SELECT
             mlm.lir_id AS lir_id,
             sum(mse.elapsed_ns) AS total_ns,
-            sum(mse.elapsed_ns) / count(DISTINCT mse.worker_id) AS avg_ns
+            CASE
+                    WHEN count(DISTINCT mse.worker_id) <> 0
+                            THEN
+                                sum(mse.elapsed_ns)
+                                / count(DISTINCT mse.worker_id)
+                        ELSE NULL
+                END
+                AS avg_ns
         FROM
             mz_introspection.mz_lir_mapping AS mlm,
             mz_introspection.mz_scheduling_elapsed_per_worker AS mse
@@ -629,8 +738,19 @@ WITH
             mlm.lir_id AS lir_id,
             sum(mas.size) AS total_memory,
             sum(mas.records) AS total_records,
-            sum(mas.size) / count(DISTINCT mas.worker_id) AS avg_memory,
-            sum(mas.records) / count(DISTINCT mas.worker_id) AS avg_records
+            CASE
+                    WHEN count(DISTINCT mas.worker_id) <> 0
+                            THEN sum(mas.size) / count(DISTINCT mas.worker_id)
+                        ELSE NULL
+                END
+                AS avg_memory,
+            CASE
+                    WHEN count(DISTINCT mas.worker_id) <> 0
+                            THEN
+                                sum(mas.records) / count(DISTINCT mas.worker_id)
+                        ELSE NULL
+                END
+                AS avg_records
         FROM
             mz_introspection.mz_lir_mapping AS mlm
                 LEFT JOIN
@@ -665,15 +785,30 @@ WITH
 SELECT
     repeat(' ', nesting * 2) || operator AS operator,
     pwc.worker_id AS worker_id,
-    round(pwc.worker_ns / sc.avg_ns, 2) AS cpu_ratio,
+    CASE
+            WHEN pwc.worker_id IS NOT NULL AND sc.avg_ns <> 0
+                    THEN round(pwc.worker_ns / sc.avg_ns, 2)
+                ELSE NULL
+        END
+        AS cpu_ratio,
     pwc.worker_ns / 1000 * '1 microsecond'::interval AS worker_elapsed,
     sc.avg_ns / 1000 * '1 microsecond'::interval AS avg_elapsed,
     sc.total_ns / 1000 * '1 microsecond'::interval AS total_elapsed,
-    round(pwm.worker_memory / sm.avg_memory, 2) AS memory_ratio,
+    CASE
+            WHEN pwm.worker_id IS NOT NULL AND sm.avg_memory <> 0
+                    THEN round(pwm.worker_memory / sm.avg_memory, 2)
+                ELSE NULL
+        END
+        AS memory_ratio,
     pg_size_pretty(pwm.worker_memory) AS worker_memory,
     pg_size_pretty(sm.avg_memory) AS avg_memory,
     pg_size_pretty(sm.total_memory) AS total_memory,
-    round(pwm.worker_records / sm.avg_records, 2) AS records_ratio,
+    CASE
+            WHEN pwm.worker_id IS NOT NULL AND sm.avg_records <> 0
+                    THEN round(pwm.worker_records / sm.avg_records, 2)
+                ELSE NULL
+        END
+        AS records_ratio,
     pwm.worker_records AS worker_records,
     sm.avg_records AS avg_records,
     sm.total_records AS total_records
@@ -689,3 +824,59 @@ FROM
 WHERE mo.name = 'materialize.public.v2_idx_x' AND pwm.worker_id = pwc.worker_id
 ORDER BY mlm.lir_id DESC, worker_id;
 EOF
+
+# exhaustive "statement ok" checking
+
+statement ok
+EXPLAIN ANALYZE HINTS FOR MATERIALIZED VIEW w;
+
+statement ok
+EXPLAIN ANALYZE CPU FOR MATERIALIZED VIEW w;
+
+statement ok
+EXPLAIN ANALYZE CPU WITH SKEW FOR MATERIALIZED VIEW w;
+
+statement ok
+EXPLAIN ANALYZE MEMORY FOR MATERIALIZED VIEW w;
+
+statement ok
+EXPLAIN ANALYZE MEMORY WITH SKEW FOR MATERIALIZED VIEW w;
+
+statement ok
+EXPLAIN ANALYZE CPU, MEMORY FOR MATERIALIZED VIEW w;
+
+statement ok
+EXPLAIN ANALYZE MEMORY, CPU FOR MATERIALIZED VIEW w;
+
+statement ok
+EXPLAIN ANALYZE CPU, MEMORY WITH SKEW FOR MATERIALIZED VIEW w;
+
+statement ok
+EXPLAIN ANALYZE MEMORY, CPU WITH SKEW FOR MATERIALIZED VIEW w;
+
+statement ok
+EXPLAIN ANALYZE HINTS FOR INDEX v_idx_x;
+
+statement ok
+EXPLAIN ANALYZE CPU FOR INDEX v_idx_x;
+
+statement ok
+EXPLAIN ANALYZE CPU WITH SKEW FOR INDEX v_idx_x;
+
+statement ok
+EXPLAIN ANALYZE MEMORY FOR INDEX v_idx_x;
+
+statement ok
+EXPLAIN ANALYZE MEMORY WITH SKEW FOR INDEX v_idx_x;
+
+statement ok
+EXPLAIN ANALYZE CPU, MEMORY FOR INDEX v_idx_x;
+
+statement ok
+EXPLAIN ANALYZE MEMORY, CPU FOR INDEX v_idx_x;
+
+statement ok
+EXPLAIN ANALYZE CPU, MEMORY WITH SKEW FOR INDEX v_idx_x;
+
+statement ok
+EXPLAIN ANALYZE MEMORY, CPU WITH SKEW FOR INDEX v_idx_x;
