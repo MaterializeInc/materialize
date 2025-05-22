@@ -749,10 +749,13 @@ impl<T: Timestamp + Codec64> BlobTraceBatchPart<T> {
 
         let schema = reader.schema();
         let batches = reader.collect::<Result<Vec<_>, _>>().expect("HACK WEEK");
+        // tracing::info!("uhhhmmmm here2: collected {} batches", batches.len());
         let batch = arrow::compute::concat_batches(&schema, &batches).expect("HACK WEEK");
+        // tracing::info!("uhhhmmmm here3: concatenated batches");
 
         let updates = crate::indexed::columnar::arrow::decode_arrow_batch(&batch, metrics)
             .map_err(|e| e.to_string())?;
+        // tracing::info!("uhhhmmmm here4: decoded batch");
 
         let ret = BlobTraceBatchPart {
             desc: metadata.desc.map_or_else(

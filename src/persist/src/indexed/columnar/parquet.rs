@@ -18,7 +18,7 @@ use bytes::buf::Reader;
 use bytes::{Buf, Bytes};
 use differential_dataflow::trace::Description;
 use mz_ore::bytes::SegmentedBytes;
-use mz_ore::cast::CastFrom;
+use mz_ore::cast::{CastFrom, CastInto};
 use mz_persist_types::Codec64;
 use mz_persist_types::parquet::EncodingConfig;
 use parquet::arrow::ArrowWriter;
@@ -89,31 +89,48 @@ impl Length for RowGroupsReader {
 impl ChunkReader for RowGroupsReader {
     type T = Reader<Bytes>;
     fn get_bytes(&self, start: u64, length: usize) -> parquet::errors::Result<Bytes> {
-        for ((offset_start, offset_end), bytes) in &self.segments {
-            if *offset_start <= start.try_into().unwrap()
-                && *offset_end >= TryInto::<usize>::try_into(start).unwrap() + length
-            {
-                let offset = start - *offset_start as u64;
-                let length = length as u64;
-                return Ok(bytes.slice(offset as usize..(offset + length) as usize));
+        let start_usize = start
+            .try_into()
+            .map_err(|_| ParquetError::EOF(format!("start too large: {start}")))?;
+        let end_usize = start_usize + length;
+
+        for ((segment_offset, segment_len), bytes) in &self.segments {
+            let segment_start = *segment_offset;
+            let segment_end = segment_start + *segment_len;
+
+            if segment_start <= start_usize && end_usize <= segment_end {
+                let offset_in_segment = start_usize - segment_start;
+                return Ok(bytes.slice(offset_in_segment..offset_in_segment + length));
             }
         }
+
         Err(ParquetError::EOF(format!(
             "could not find bytes in segments: {start} {length}"
         )))
     }
 
     fn get_read(&self, start: u64) -> parquet::errors::Result<Self::T> {
-        for ((offset_start, offset_end), bytes) in &self.segments {
-            if *offset_start <= start.try_into().unwrap()
-                && *offset_end >= TryInto::<usize>::try_into(start).unwrap()
-            {
-                let offset = start - *offset_start as u64;
-                return Ok(bytes.slice(offset as usize..*offset_end as usize).reader());
+        let start_usize = start
+            .try_into()
+            .map_err(|_| ParquetError::EOF(format!("start too large: {start}")))?;
+
+        for ((segment_offset, segment_len), bytes) in &self.segments {
+            let segment_start = *segment_offset;
+            let segment_end = segment_start + *segment_len;
+
+            if segment_start <= start_usize && start_usize < segment_end {
+                let offset_in_segment = start_usize - segment_start;
+                return Ok(bytes.slice(offset_in_segment..bytes.len()).reader());
             }
         }
+
+        let ranges = self
+            .segments
+            .iter()
+            .map(|((start, len), _)| (*start..*start + *len))
+            .collect::<Vec<_>>();
         Err(ParquetError::EOF(format!(
-            "could not find bytes in segments: {start}"
+            "could not find bytes in segments: {start}. Actual ranges: {ranges:?}"
         )))
     }
 }
@@ -201,6 +218,8 @@ pub fn encode_parquet_kvtd<W: Write + Send>(
         .set_writer_version(WriterVersion::PARQUET_2_0)
         .set_data_page_size_limit(1024 * 1024)
         .set_max_row_group_size(cfg.max_row_group_size)
+        .set_bloom_filter_fpp(0.1)
+        .set_bloom_filter_ndv(cfg.max_row_group_size.cast_into())
         .set_bloom_filter_enabled(cfg.use_bloom_filter)
         .set_key_value_metadata(Some(vec![metadata]))
         .build();
@@ -263,6 +282,11 @@ pub fn encode_parquet_kvtd<W: Write + Send>(
             for (i, column) in row_group.columns.iter().enumerate() {
                 let mut blooms = vec![];
                 if primary_keys.contains(&i) {
+                    tracing::info!(
+                        "row group number of rows: {:?}, num row_groups: {:?}",
+                        row_group.num_rows,
+                        file_metadata.row_groups.len()
+                    );
                     let bloom = column
                         .meta_data
                         .as_ref()

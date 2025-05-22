@@ -39,7 +39,7 @@ where
         for key in &keys {
             if let Some(cached_val) = self.cache.get(key) {
                 if self.cache_upper == ts {
-                    tracing::debug!(?key, ?ts, "returning cached value");
+                    tracing::info!(?key, ?ts, "returning cached value");
                     cached_values.push((key.clone(), cached_val.clone()));
                     obtained_keys.insert(key.clone());
                 }
@@ -49,11 +49,12 @@ where
         // Skip querying for keys that have already been obtained from the cache.
         let keys: Vec<_> = keys
             .into_iter()
-            .filter(|key| obtained_keys.contains(key))
+            .filter(|key| !obtained_keys.contains(key))
             .collect();
 
         // If there isn't anything else to obtain then return early!
         if keys.is_empty() {
+            // return Vec::new();
             return cached_values;
         }
 
@@ -70,7 +71,13 @@ where
                 let datums = datum_vec_a.borrow_with(row);
                 assert_eq!(datums.len(), 1, "composite keys");
                 let key = datums[0];
-                bloom_filter.contains(key, &mut encode_buffer)
+                let contains = bloom_filter.contains(key, &mut encode_buffer);
+                if contains {
+                    tracing::info!("matched bloom filter for key {key}");
+                } else {
+                    tracing::info!("did not match bloom filter for key {key}");
+                }
+                contains
             })
         };
 
@@ -106,6 +113,7 @@ where
         filtered_values
             .into_iter()
             .map(|(payload, _diff)| payload)
+            .chain(cached_values)
             .collect()
     }
 

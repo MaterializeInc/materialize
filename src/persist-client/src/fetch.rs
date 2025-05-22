@@ -17,6 +17,7 @@ use std::time::Instant;
 use anyhow::anyhow;
 use arrow::array::{Array, ArrayRef, AsArray, BooleanArray, Int64Array};
 use arrow::compute::FilterBuilder;
+use arrow::row;
 use bytes::Bytes;
 use differential_dataflow::difference::Semigroup;
 use differential_dataflow::lattice::Lattice;
@@ -403,14 +404,24 @@ where
 {
     let blob_key = part.key.complete(shard_id);
 
+    // tracing::info!(
+    //     "fetch_batch_part_blob2 part.row_group_metadata.len(): {}",
+    //     part.row_group_metadata.len()
+    // );
     if part.row_group_metadata.len() > 0 {
-        let row_group_ranges = part.row_group_metadata.iter().filter_map(|metadata| {
-            if (should_fetch_row_group)(&metadata.bloom_filter) {
-                Some((metadata.offset.clone(), metadata.length))
-            } else {
-                None
-            }
-        });
+        let mut row_group_idxs = Vec::new();
+        let row_group_ranges =
+            part.row_group_metadata
+                .iter()
+                .enumerate()
+                .filter_map(|(i, metadata)| {
+                    if (should_fetch_row_group)(&metadata.bloom_filter) {
+                        row_group_idxs.push(i);
+                        Some((metadata.offset.clone(), metadata.length))
+                    } else {
+                        None
+                    }
+                });
         let footer = part
             .parquet_footer
             .as_ref()
@@ -442,6 +453,7 @@ where
             part,
             bytes,
             footer_range,
+            row_group_idxs,
         );
         Ok(encoded_part)
     } else {
@@ -465,6 +477,7 @@ pub(crate) fn decode_batch_part_row_groups<T>(
     part: &HollowBatchPart<T>,
     bytes: Vec<(Bytes, (usize, usize))>,
     footer: (usize, usize),
+    row_group_idxs: Vec<usize>,
 ) -> EncodedPart<T>
 where
     T: Timestamp + Lattice + Codec64,
@@ -483,10 +496,18 @@ where
     )
     .expect("failed to create metadata");
 
-    let bytes = bytes
+    let bytes: Vec<((usize, usize), Bytes)> = bytes
         .into_iter()
         .map(|(bytes, range)| (range, bytes))
         .collect();
+    bytes.iter().for_each(|(range, bytes)| {
+        tracing::info!(
+            "fetch_batch::decode batch part {} range {:?} bytes {}",
+            part.key,
+            (range.0, range.0 + range.1),
+            bytes.len()
+        );
+    });
     let chunks = mz_persist::indexed::columnar::parquet::RowGroupsReader::new(bytes);
 
     let row_groups =
@@ -494,6 +515,7 @@ where
             chunks,
             metadata.clone(),
         )
+        .with_row_groups(row_group_idxs)
         .build()
         .expect("failed to create reader");
     let parsed =
