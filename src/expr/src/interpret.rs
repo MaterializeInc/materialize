@@ -772,6 +772,14 @@ impl<'a> ColumnSpecs<'a> {
                 nullable: true,
                 ..ResultSpec::nothing()
             },
+            Ok(Datum::Float64(a)) if a.is_nan() => ResultSpec {
+                values: Values::All,
+                ..ResultSpec::nothing()
+            },
+            Ok(Datum::Float32(a)) if a.is_nan() => ResultSpec {
+                values: Values::All,
+                ..ResultSpec::nothing()
+            },
             Ok(d) => ResultSpec {
                 values: Values::just(self.arena.make_datum(|packer| packer.push(d))),
                 ..ResultSpec::nothing()
