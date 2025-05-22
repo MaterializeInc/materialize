@@ -239,7 +239,7 @@ Because the MaterializeInc organization requires two-factor authentication
 (2FA), you'll need to clone via SSH as indicated above, or [configure a personal
 access token for use with HTTPS][github-https].
 
-Optionally, you may need to also clone the associated submodules:
+You also have to clone the associated submodules, at least `misc/fivetran-sdk` is required to build Materialize, while `test/sqllogictest/sqlite` is only required to run SQL Logic Tests:
 
 ```shell
 git submodule update --init --recursive
