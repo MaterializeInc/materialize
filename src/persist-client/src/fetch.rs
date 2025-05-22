@@ -689,6 +689,20 @@ where
         self.part.stats().map(|x| x.decode())
     }
 
+    /// Returns any bloom filters associated with the primary key of this Part.
+    pub fn pkey_bloom_filters(&self) -> Option<impl Iterator<Item = &BloomFilter>> {
+        match &self.part {
+            BatchPart::Inline { .. } => None,
+            BatchPart::Hollow(part) => {
+                let filters = part
+                    .row_group_metadata
+                    .iter()
+                    .map(|meta| &meta.bloom_filter);
+                Some(filters)
+            }
+        }
+    }
+
     /// Apply any relevant projection pushdown optimizations, assuming that the data in the part
     /// is equivalent to the provided key and value.
     pub fn maybe_optimize(&mut self, cfg: &ConfigSet, key: ArrayRef, val: ArrayRef) {

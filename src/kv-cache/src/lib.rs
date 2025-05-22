@@ -102,8 +102,20 @@ where
         //    correct value. There is no need to scan for all previous
         //    instances of the key and then consolidate.
 
-
         for part in batch_parts {
+            // Check if this part could possibly match any of the bloom filters.
+            let could_match = if let Some(mut bloom_filters) = part.pkey_bloom_filters() {
+                bloom_filters.any(|filter| should_fetch(filter))
+            } else {
+                // If there are no bloom filters then we could always match.
+                true
+            };
+
+            // If we can't possibly match this part then don't fetch it.
+            if !could_match {
+                continue;
+            }
+
             let values = self.handle.fetch_values(&part, &mut should_fetch).await;
             for ((source_data, _unit_type), _ts, diff) in values {
                 let source_data = source_data.expect("HACK WEEK");
