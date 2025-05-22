@@ -28,7 +28,7 @@ ADD https://api.github.com/repos/MaterializeInc/sqlsmith/git/refs/heads/master v
 # Build SQLsmith
 RUN git clone --single-branch --branch=master https://github.com/MaterializeInc/sqlsmith \
     && cd sqlsmith \
-    && git checkout 85e887a38662b015a1d7147979e5ef3a241d24ba \
+    && git checkout 5b0448c3c8c9f87654302d12c893fe173f97cbb9 \
     && cmake -DCMAKE_BUILD_TYPE=Release -DCMAKE_CXX_COMPILER=c++ . \
     && cmake --build . -j `nproc`
 
