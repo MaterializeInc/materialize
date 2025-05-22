@@ -99,9 +99,6 @@ def get_default_system_parameters(
         "enable_compute_correction_v2": "true",
         "enable_compute_logical_backpressure": "true",
         "enable_connection_validation_syntax": "true",
-        "enable_continual_task_builtins": (
-            "true" if version > MzVersion.parse_mz("v0.127.0-dev") else "false"
-        ),
         "enable_continual_task_create": "true",
         "enable_continual_task_retain": "true",
         "enable_continual_task_transform": "true",
