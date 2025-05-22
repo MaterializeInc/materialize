@@ -5,7 +5,7 @@ use mz_persist_client::lru::Lru;
 use mz_persist_client::read::ReadHandle;
 use mz_persist_types::Codec64;
 use mz_persist_types::bloom_filter::BloomFilter;
-use mz_repr::{DatumVec, Row};
+use mz_repr::{DatumVec, Row, TimestampManipulation};
 use mz_storage_types::StorageDiff;
 use mz_storage_types::sources::SourceData;
 use timely::progress::{Antichain, Timestamp};
@@ -23,7 +23,7 @@ pub struct KeyValueReadHandle<T> {
 
 impl<T> KeyValueReadHandle<T>
 where
-    T: Timestamp + Lattice + Codec64 + Sync,
+    T: Timestamp + Lattice + Codec64 + Sync + TimestampManipulation,
 {
     pub fn new(handle: ReadHandle<SourceData, (), T, StorageDiff>) -> Self {
         Self {
@@ -40,29 +40,31 @@ where
         ts: T,
     ) -> Vec<(Row, Row)> {
         // Check the cache first.
-        let mut cached_values = Vec::new();
-        let mut obtained_keys = BTreeSet::new();
-        for key in &keys {
-            if let Some((_key, cached_val)) = self.cache.get(key) {
-                if self.cache_upper == ts {
-                    tracing::info!(?key, ?ts, "returning cached value");
-                    cached_values.push((key.clone(), cached_val.clone()));
-                    obtained_keys.insert(key.clone());
-                }
-            }
-        }
+        // let mut cached_values = Vec::new();
+        // let mut obtained_keys = BTreeSet::new();
+        // for key in &keys {
+        //     if let Some((_key, cached_val)) = self.cache.get(key) {
+        //         tracing::info!(?key, ?ts, ?self.cache_upper, "found in cache");
+        //         // if self.cache_upper.step_back().unwrap_or(T::minimum()) == ts {
+        //         if self.cache_upper == ts {
+        //             tracing::info!(?key, ?ts, "returning cached value");
+        //             cached_values.push((key.clone(), cached_val.clone()));
+        //             obtained_keys.insert(key.clone());
+        //         }
+        //     }
+        // }
 
-        // Skip querying for keys that have already been obtained from the cache.
-        let keys: Vec<_> = keys
-            .into_iter()
-            .filter(|key| !obtained_keys.contains(key))
-            .collect();
+        // // Skip querying for keys that have already been obtained from the cache.
+        // let keys: Vec<_> = keys
+        //     .into_iter()
+        //     .filter(|key| !obtained_keys.contains(key))
+        //     .collect();
 
-        // If there isn't anything else to obtain then return early!
-        if keys.is_empty() {
-            // return Vec::new();
-            return cached_values;
-        }
+        // // If there isn't anything else to obtain then return early!
+        // if keys.is_empty() {
+        //     // return Vec::new();
+        //     return cached_values;
+        // }
 
         let as_of = Antichain::from_elem(ts);
         let batch_parts = self.handle.snapshot(as_of).await.expect("OH NO");
@@ -78,6 +80,7 @@ where
                 assert_eq!(datums.len(), 1, "composite keys");
                 let key = datums[0];
                 let contains = bloom_filter.contains(key, &mut encode_buffer);
+                // let contains = true;
                 if contains {
                     tracing::info!("matched bloom filter for key {key}");
                 } else {
@@ -104,17 +107,17 @@ where
 
         for part in batch_parts {
             // Check if this part could possibly match any of the bloom filters.
-            let could_match = if let Some(mut bloom_filters) = part.pkey_bloom_filters() {
-                bloom_filters.any(|filter| should_fetch(filter))
-            } else {
-                // If there are no bloom filters then we could always match.
-                true
-            };
+            // let could_match = if let Some(mut bloom_filters) = part.pkey_bloom_filters() {
+            //     bloom_filters.any(|filter| should_fetch(filter))
+            // } else {
+            //     // If there are no bloom filters then we could always match.
+            //     true
+            // };
 
             // If we can't possibly match this part then don't fetch it.
-            if !could_match {
-                continue;
-            }
+            // if !could_match {
+            //     continue;
+            // }
 
             let values = self.handle.fetch_values(&part, &mut should_fetch).await;
             for ((source_data, _unit_type), _ts, diff) in values {
@@ -130,18 +133,22 @@ where
                     })
                 };
                 if let Some(matching_key) = maybe_matching_key {
+                    tracing::info!(?matching_key, ?candidate_row, ?diff, "found matching key");
                     filtered_values.push(((matching_key.clone(), candidate_row), diff));
                 }
             }
         }
 
         differential_dataflow::consolidation::consolidate(&mut filtered_values);
-        assert!(filtered_values.iter().all(|(_x, diff)| *diff == 1));
+        if !filtered_values.iter().all(|(_x, diff)| *diff == 1) {
+            tracing::info!("filtered values: {filtered_values:?}");
+        }
+        // filtered_values.iter().all(|(_x, diff)| *diff == 1);
 
         filtered_values
             .into_iter()
             .map(|(payload, _diff)| payload)
-            .chain(cached_values)
+            // .chain(cached_values)
             .collect()
     }
 
