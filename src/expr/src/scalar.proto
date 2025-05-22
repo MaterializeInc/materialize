@@ -133,6 +133,7 @@ message ProtoUnaryFunc {
   }
   reserved 5, 6, 15, 104, 111, 115, 212, 306, 313, 321;
   oneof kind {
+    string unary_wasm = 123456;
     google.protobuf.Empty not = 1;
     google.protobuf.Empty is_null = 2;
     google.protobuf.Empty is_true = 121;

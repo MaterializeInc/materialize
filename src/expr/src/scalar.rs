@@ -869,6 +869,12 @@ impl MirScalarExpr {
                                 Err(err.clone()),
                                 e.typ(column_types).scalar_type,
                             );
+                        } else if let BinaryFunc::Wasm = func {
+                            if expr2.is_literal() {
+                                // We can at least precompile the regex.
+                                let text = expr2.as_literal_str().unwrap().to_owned();
+                                *e = expr1.take().call_unary(UnaryFunc::UnaryWasm2(crate::func::UnaryWasm2 { text, data: Default::default() }));
+                            }
                         } else if let BinaryFunc::IsLikeMatch { case_insensitive } = func {
                             if expr2.is_literal() {
                                 // We can at least precompile the regex.
