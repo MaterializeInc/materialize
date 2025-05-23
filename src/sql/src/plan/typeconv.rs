@@ -911,7 +911,7 @@ pub fn to_jsonb(ecx: &ExprContext, expr: HirScalarExpr) -> HirScalarExpr {
         Bool | Jsonb | Numeric { .. } => {
             expr.call_unary(UnaryFunc::CastJsonbableToJsonb(func::CastJsonbableToJsonb))
         }
-        Int16 | Int32 | Float32 | Float64 => plan_cast(
+        Int16 | Int32 | Int64 | UInt16 | UInt32 | UInt64 | Float32 | Float64 => plan_cast(
             ecx,
             CastContext::Explicit,
             expr,
