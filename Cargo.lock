@@ -4329,8 +4329,7 @@ dependencies = [
 [[package]]
 name = "lgalloc"
 version = "0.5.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "76a3c66aab975ca357cdecbc25eb804168ff50a9242a3d03e6087c91f3824dd0"
+source = "git+https://github.com/antiguru/rust-lgalloc?branch=buddy_alloc#104e823ffd73e7af1491314e2573c6c1979359d6"
 dependencies = [
  "crossbeam-deque",
  "libc",
