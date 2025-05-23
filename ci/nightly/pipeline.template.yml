@@ -930,7 +930,7 @@ steps:
         timeout_in_minutes: 180
         parallelism: 3
         agents:
-          queue: hetzner-aarch64-8cpu-16gb
+          queue: hetzner-aarch64-16cpu-32gb
         plugins:
           - ./ci/plugins/mzcompose:
               composition: platform-checks
@@ -942,7 +942,7 @@ steps:
         timeout_in_minutes: 120
         parallelism: 3
         agents:
-          queue: hetzner-aarch64-8cpu-16gb
+          queue: hetzner-aarch64-16cpu-32gb
         plugins:
           - ./ci/plugins/mzcompose:
               composition: platform-checks
@@ -954,7 +954,7 @@ steps:
         timeout_in_minutes: 120
         parallelism: 3
         agents:
-          queue: hetzner-aarch64-8cpu-16gb
+          queue: hetzner-aarch64-16cpu-32gb
         plugins:
           - ./ci/plugins/mzcompose:
               composition: platform-checks
@@ -966,7 +966,7 @@ steps:
         timeout_in_minutes: 120
         parallelism: 3
         agents:
-          queue: hetzner-aarch64-8cpu-16gb
+          queue: hetzner-aarch64-16cpu-32gb
         plugins:
           - ./ci/plugins/mzcompose:
               composition: platform-checks
@@ -1955,7 +1955,7 @@ steps:
           composition: cluster
           args: ["--azurite"]
     agents:
-      queue: hetzner-aarch64-4cpu-8gb
+      queue: hetzner-aarch64-8cpu-16gb
 
   - group: "Race Condition"
     key: race-condition
