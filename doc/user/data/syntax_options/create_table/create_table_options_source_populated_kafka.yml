@@ -8,6 +8,14 @@ rows:
       The name of the table to create. Names for tables must follow the [naming
       guidelines](/sql/identifiers/#naming-restrictions).
 
+  - "Parameter": "`<col_name>`"
+    "Description": |
+
+      **For `FORMAT CSV` only**.
+      If specified, use the specified names for the columns to create.  Names for columns must follow the [naming
+      guidelines](/sql/identifiers/#naming-restrictions).
+      By default, the columns are named `column1`, `column2`...`columnN`.
+
   - "Parameter": "`<source_name>`"
     "Description": |
 
@@ -48,7 +56,7 @@ rows:
       | `JSON` | Decode the data as JSON. |
       | `TEXT` | Decode the data as TEXT. |
       | `BYTES` | Decode the data as BYTES. |
-      | `CSV WITH <num> COLUMNS DELIMITED BY <char>` | Parse the data as CSV with a specified number of columns and a specified delimiter. The columns are named `column1`, `column2`...`columnN`. <br><br> The data is decoded as [`text`](/sql/types/text). You can convert the data to other to other types using explicit [casts](/sql/functions/cast/) when creating views.|
+      | `CSV WITH <num> COLUMNS DELIMITED BY <char>` | Parse the data as CSV with a specified number of columns and a specified delimiter. By default, the columns are named `column1`, `column2`...`columnN`. You can specify alternative column names after the table name `(<column_name1>, <column_name2>, ...)`. <br><br> The data is decoded as [`text`](/sql/types/text). You can convert the data to other to other types using explicit [casts](/sql/functions/cast/) when creating views.|
 
       {{< include-md file="shared-content/kafka-format-envelope-compat-table.md"
       >}}
@@ -63,7 +71,7 @@ rows:
 
       | Option | Description |
       |--------|-------------|
-      | **KEY [AS \<name\>]** | Include a column containing the Kafka message key. If the key is encoded using a format that includes schemas the column will take its name from the schema. For unnamed formats (e.g. `TEXT`), the column will be named `key`. The column can be renamed with the optional **AS** *name* statement.
+      | **KEY [AS \<name\>]** | **Available for `FORMAT AVRO` and `KEY FORMAT ...`**. Include a column containing the Kafka message key. If the key is encoded using a format that includes schemas, the column will take its name from the schema. For unnamed formats (e.g. `TEXT`), the column will be named `key`. The column can be renamed with the optional **AS** *name* statement.
       | **PARTITION [AS \<name\>]** | Include a `partition` column containing the Kafka message partition. The column can be renamed with the optional **AS** *name* clause.
       | **OFFSET [AS \<name\>]** | Include an `offset` column containing the Kafka message offset. The column can be renamed with the optional **AS** *name* clause.
       | **TIMESTAMP [AS \<name\>]** | Include a `timestamp` column containing the Kafka message timestamp. The column can be renamed with the optional **AS** *name* clause. <br><br>Note that the timestamp of a Kafka message depends on how the topic and its producers are configured. See the [Confluent documentation](https://docs.confluent.io/3.0.0/streams/concepts.html?#time) for details.
