@@ -382,10 +382,11 @@ pub mod batcher {
     use columnar::Columnar;
     use differential_dataflow::difference::Semigroup;
     use timely::Container;
-    use timely::container::{ContainerBuilder, PushInto};
+    use timely::container::{ContainerBuilder, PushInto, SizableContainer};
 
     use crate::containers::Column;
 
+    // TODO: Turn `C` into `CB: ContainerBuilder`
     #[derive(Default)]
     pub struct Chunker<C> {
         /// Buffer into which we'll consolidate.
@@ -419,7 +420,7 @@ pub mod batcher {
         D: Columnar + Ord,
         T: Columnar + Ord,
         R: Columnar + Semigroup,
-        C2: Container + for<'b> PushInto<(&'b D, &'b T, &'b R)>,
+        C2: Container + SizableContainer + for<'b> PushInto<(&'b D, &'b T, &'b R)>,
     {
         fn push_into(&mut self, container: &'a mut Vec<(D, T, R)>) {
             // Sort input data
@@ -427,7 +428,11 @@ pub mod batcher {
 
             self.target.clear();
             for (data, time, diff) in container.drain(..) {
-                self.target.push((&data, &time, &diff));
+                self.target.push_into((&data, &time, &diff));
+                // TODO: This should be a builder.
+                if self.target.at_capacity() {
+                    self.ready.push_back(std::mem::take(&mut self.target));
+                }
             }
 
             if !self.target.is_empty() {
