@@ -32,7 +32,7 @@ rust_library(
     proc_macro_deps = [] + all_crate_deps(proc_macro = True),
     rustc_env = {},
     rustc_flags = [],
-    version = "0.145.0-dev.0",
+    version = "0.146.0-dev.0",
     deps = [
         "//src/alloc:mz_alloc",
         "//src/alloc-default:mz_alloc_default",
@@ -73,7 +73,7 @@ rust_test(
     ),
     rustc_env = {},
     rustc_flags = [],
-    version = "0.145.0-dev.0",
+    version = "0.146.0-dev.0",
     deps = [
         "//src/alloc:mz_alloc",
         "//src/alloc-default:mz_alloc_default",
@@ -141,7 +141,7 @@ rust_test(
     ),
     rustc_env = {},
     rustc_flags = [],
-    version = "0.145.0-dev.0",
+    version = "0.146.0-dev.0",
     deps = [
         ":mz_balancerd",
         "//src/alloc:mz_alloc",
@@ -183,7 +183,7 @@ rust_binary(
         "@//misc/bazel/platforms:xlang_lto_enabled": ["-Clinker-plugin-lto"],
         "//conditions:default": [],
     }),
-    version = "0.145.0-dev.0",
+    version = "0.146.0-dev.0",
     deps = [
         ":mz_balancerd",
         "//src/alloc:mz_alloc",
