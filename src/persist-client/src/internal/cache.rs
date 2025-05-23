@@ -21,6 +21,8 @@ use mz_persist::location::{Blob, BlobMetadata, ExternalError};
 use crate::cfg::PersistConfig;
 use crate::internal::metrics::Metrics;
 
+/// Option(range) + key
+type CacheKey = (Option<(usize, usize)>, String);
 // In-memory cache for [Blob].
 #[derive(Debug)]
 pub struct BlobMemCache {
@@ -29,7 +31,7 @@ pub struct BlobMemCache {
     /// Number of 'workers' or threads in the current process, used for dynamic sizing.
     num_workers: usize,
     metrics: Arc<Metrics>,
-    cache: Mutex<lru::Lru<String, SegmentedBytes>>,
+    cache: Mutex<lru::Lru<CacheKey, SegmentedBytes>>,
     blob: Arc<dyn Blob>,
 }
 
@@ -71,7 +73,7 @@ impl BlobMemCache {
         Arc::new(blob)
     }
 
-    fn resize_and_update_size_metrics(&self, cache: &mut lru::Lru<String, SegmentedBytes>) {
+    fn resize_and_update_size_metrics(&self, cache: &mut lru::Lru<CacheKey, SegmentedBytes>) {
         let capacity_bytes = BlobMemCache::get_capacity_bytes(&self.cfg, self.num_workers);
         cache.update_capacity(capacity_bytes);
         self.metrics
@@ -109,7 +111,13 @@ impl Blob for BlobMemCache {
         // any races or cache invalidations here. If the value is in the cache,
         // any value in S3 is guaranteed to match (if not, then there's a
         // horrible bug somewhere else).
-        if let Some((_, cached_value)) = self.cache.lock().expect("lock poisoned").get(key) {
+        let composite_key = (None, key.to_owned());
+        if let Some((_, cached_value)) = self
+            .cache
+            .lock()
+            .expect("lock poisoned")
+            .get(&composite_key)
+        {
             self.metrics.blob_cache_mem.hits_blobs.inc();
             self.metrics
                 .blob_cache_mem
@@ -128,7 +136,7 @@ impl Blob for BlobMemCache {
             // the cache, it will push out everything in the cache and then
             // immediately get evicted itself. So, skip adding it in that case.
             if blob.len() <= cache.capacity() {
-                cache.insert(key.to_owned(), blob.clone(), blob.len());
+                cache.insert(composite_key.to_owned(), blob.clone(), blob.len());
                 self.resize_and_update_size_metrics(&mut cache);
             }
         }
@@ -142,8 +150,39 @@ impl Blob for BlobMemCache {
         start: usize,
         length: usize,
     ) -> Result<Option<bytes::Bytes>, ExternalError> {
+        let composite_key = (Some((start, start + length)), key.to_owned());
+        if let Some((_, cached_value)) = self
+            .cache
+            .lock()
+            .expect("lock poisoned")
+            .get(&composite_key)
+        {
+            self.metrics.blob_cache_mem.hits_blobs.inc();
+            self.metrics
+                .blob_cache_mem
+                .hits_bytes
+                .inc_by(u64::cast_from(cached_value.len()));
+            return Ok(Some(cached_value.clone().into_contiguous().into()));
+        }
         // TODO(upsert-in-s3): Actually cache the blobs.
-        self.blob.get_range(key, start, length).await
+        let blob = self.blob.get_range(key, start, length).await;
+        match blob {
+            Ok(Some(ref blob)) => {
+                // TODO: It would likely be useful to allow a caller to opt out of
+                // adding the data to the cache (e.g. compaction inputs, perhaps
+                // some read handles).
+                let mut cache = self.cache.lock().expect("lock poisoned");
+                // If the weight of this single blob is greater than the capacity of
+                // the cache, it will push out everything in the cache and then
+                // immediately get evicted itself. So, skip adding it in that case.
+                if blob.len() <= cache.capacity() {
+                    cache.insert(composite_key.to_owned(), blob.clone().into(), blob.len());
+                    self.resize_and_update_size_metrics(&mut cache);
+                }
+            }
+            _ => {}
+        };
+        blob
     }
 
     async fn list_keys_and_metadata(
@@ -156,6 +195,7 @@ impl Blob for BlobMemCache {
 
     async fn set(&self, key: &str, value: Bytes) -> Result<(), ExternalError> {
         let () = self.blob.set(key, value.clone()).await?;
+        let key = (None, key.to_owned());
         let weight = value.len();
         let mut cache = self.cache.lock().expect("lock poisoned");
         // If the weight of this single blob is greater than the capacity of
@@ -170,8 +210,9 @@ impl Blob for BlobMemCache {
 
     async fn delete(&self, key: &str) -> Result<Option<usize>, ExternalError> {
         let res = self.blob.delete(key).await;
+        let key = (None, key.to_owned());
         let mut cache = self.cache.lock().expect("lock poisoned");
-        cache.remove(key);
+        cache.remove(&key);
         self.resize_and_update_size_metrics(&mut cache);
         res
     }
