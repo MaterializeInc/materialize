@@ -207,9 +207,8 @@ CREATE INDEX wins_by_item ON winning_bids (item);
 ```
 
 Re-running the `TopK`-hints query will show only `null` hints; there are no
-hints because our `TopK` is now appropriately sized. But if we re-run our [query
-for attributing memory usage](#attributing-memory-usage), we can see that our
-`TopK` operator uses a third of the 100MB of memory it was using before:
+hints because our `TopK` is now appropriately sized. But if we re-run `EXPLAIN ANALYZE MEMORY FOR INDEX wins_by_item`, we can see that our
+`TopK` operator uses a third of the ~100MB of memory it was using before:
 
 | operator                         | total_memory | total_records |
 | -------------------------------- | ------------ | ------------- |
