@@ -974,7 +974,28 @@ pub fn to_jsonb(ecx: &ExprContext, expr: HirScalarExpr) -> HirScalarExpr {
 
             expr.call_unary(func)
         }
-        _ => to_string(ecx, expr)
+        Date
+        | Time
+        | Timestamp { .. }
+        | TimestampTz { .. }
+        | Interval
+        | PgLegacyChar
+        | PgLegacyName
+        | Bytes
+        | String
+        | Char { .. }
+        | VarChar { .. }
+        | Uuid
+        | Oid
+        | Map { .. }
+        | RegProc
+        | RegType
+        | RegClass
+        | Int2Vector
+        | MzTimestamp
+        | Range { .. }
+        | MzAclItem
+        | AclItem => to_string(ecx, expr)
             .call_unary(UnaryFunc::CastJsonbableToJsonb(func::CastJsonbableToJsonb)),
     }
 }
