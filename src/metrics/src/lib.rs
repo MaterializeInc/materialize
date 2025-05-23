@@ -34,6 +34,7 @@ pub mod rusage;
 pub struct Metrics {
     config_set: ConfigSet,
     lgalloc: MetricsTask,
+    lgalloc_map: MetricsTask,
     rusage: MetricsTask,
 }
 
@@ -61,6 +62,12 @@ pub async fn register_metrics_into(metrics_registry: &MetricsRegistry, config_se
         dyncfgs::MZ_METRICS_LGALLOC_REFRESH_INTERVAL,
         &update_duration_metric,
     );
+    let lgalloc_map = Metrics::new_metrics_task(
+        metrics_registry,
+        lgalloc::register_map_metrics_into,
+        dyncfgs::MZ_METRICS_LGALLOC_MAP_REFRESH_INTERVAL,
+        &update_duration_metric,
+    );
     let rusage = Metrics::new_metrics_task(
         metrics_registry,
         rusage::register_metrics_into,
@@ -70,6 +77,7 @@ pub async fn register_metrics_into(metrics_registry: &MetricsRegistry, config_se
 
     *METRICS.lock().expect("lock poisoned") = Some(Metrics {
         lgalloc,
+        lgalloc_map,
         rusage,
         config_set,
     });
@@ -89,6 +97,7 @@ impl Metrics {
         config_updates.apply(&self.config_set);
         // Notify tasks about updated configuration.
         self.lgalloc.update_dyncfg(&self.config_set);
+        self.lgalloc_map.update_dyncfg(&self.config_set);
         self.rusage.update_dyncfg(&self.config_set);
     }
 
