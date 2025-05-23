@@ -250,10 +250,18 @@ pub const STORAGE_RECLOCK_TO_LATEST: Config<bool> = Config::new(
 );
 
 /// Whether to use the new continual feedback upsert operator.
+// TODO: deprecate!
 pub const STORAGE_USE_CONTINUAL_FEEDBACK_UPSERT: Config<bool> = Config::new(
     "storage_use_continual_feedback_upsert",
     true,
     "Whether to use the new continual feedback upsert operator.",
+);
+
+/// Which implementation to use for UPSERT.
+pub const STORAGE_UPSERT_IMPL: Config<&str> = Config::new(
+    "storage_upsert_impl",
+    "feedback",
+    "Which UPSERT implementation to use. One of 'feedback' or 'stateless'.",
 );
 
 /// The interval at which the storage server performs maintenance tasks.
@@ -316,6 +324,7 @@ pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
         .add(&STORAGE_UPSERT_MAX_SNAPSHOT_BATCH_BUFFERING)
         .add(&STORAGE_UPSERT_PREVENT_SNAPSHOT_BUFFERING)
         .add(&STORAGE_USE_CONTINUAL_FEEDBACK_UPSERT)
+        .add(&STORAGE_UPSERT_IMPL)
         .add(&SUSPENDABLE_SOURCES)
         .add(&WALLCLOCK_GLOBAL_LAG_HISTOGRAM_RETENTION_INTERVAL)
         .add(&WALLCLOCK_LAG_HISTORY_RETENTION_INTERVAL)

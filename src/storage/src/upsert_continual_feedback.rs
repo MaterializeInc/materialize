@@ -11,43 +11,37 @@
 //! [`upsert_inner`] for a description of how the operator works and why.
 
 use std::cmp::Reverse;
-use std::collections::BTreeMap;
 use std::fmt::Debug;
 use std::sync::Arc;
-use std::time::Instant;
 
 use differential_dataflow::hashable::Hashable;
 use differential_dataflow::{AsCollection, Collection};
+use indexmap::map::Entry;
 use itertools::Itertools;
-use mz_kv_cache::KeyValueReadHandle;
 use mz_ore::vec::VecExt;
-use mz_persist_client::Diagnostics;
-use mz_persist_client::cache::PersistClientCache;
-use mz_persist_types::codec_impls::UnitSchema;
 use mz_repr::{Diff, GlobalId, Row};
-use mz_storage_types::StorageDiff;
-use mz_storage_types::controller::CollectionMetadata;
 use mz_storage_types::errors::{DataflowError, EnvelopeError, UpsertError};
-use mz_storage_types::sources::SourceData;
 use mz_timely_util::builder_async::{
     Event as AsyncEvent, OperatorBuilder as AsyncOperatorBuilder, PressOnDropButton,
 };
 use std::convert::Infallible;
 use timely::container::CapacityContainerBuilder;
 use timely::dataflow::channels::pact::Exchange;
-use timely::dataflow::operators::Capability;
+use timely::dataflow::operators::{Capability, CapabilitySet};
 use timely::dataflow::{Scope, Stream};
 use timely::order::{PartialOrder, TotalOrder};
 use timely::progress::timestamp::Refines;
 use timely::progress::{Antichain, Timestamp};
 
 use crate::healthcheck::HealthStatusUpdate;
-use crate::metrics::upsert::{UpsertMetrics, UpsertSharedMetrics};
+use crate::metrics::upsert::UpsertMetrics;
 use crate::upsert::UpsertConfig;
 use crate::upsert::UpsertErrorEmitter;
 use crate::upsert::UpsertKey;
 use crate::upsert::UpsertValue;
-use crate::upsert::types::UpsertStateBackend;
+use crate::upsert::types::UpsertValueAndSize;
+use crate::upsert::types::{self as upsert_types, ValueMetadata};
+use crate::upsert::types::{StateValue, UpsertState, UpsertStateBackend};
 
 /// An operator that transforms an input stream of upserts (updates to key-value
 /// pairs), which represents an imaginary key-value state, into a differential
@@ -111,15 +105,13 @@ pub fn upsert_inner<G: Scope, FromTime, F, Fut, US>(
     key_indices: Vec<usize>,
     resume_upper: Antichain<G::Timestamp>,
     persist_input: Collection<G, Result<Row, DataflowError>, Diff>,
-    persist_token: Option<Vec<PressOnDropButton>>,
+    mut persist_token: Option<Vec<PressOnDropButton>>,
     upsert_metrics: UpsertMetrics,
     source_config: crate::source::SourceExportCreationConfig,
-    _state_fn: F,
-    _upsert_config: UpsertConfig,
-    _prevent_snapshot_buffering: bool,
+    state_fn: F,
+    upsert_config: UpsertConfig,
+    prevent_snapshot_buffering: bool,
     snapshot_buffering_max: Option<usize>,
-    persist_clients: Arc<PersistClientCache>,
-    storage_metadata: CollectionMetadata,
 ) -> (
     Collection<G, Result<Row, DataflowError>, Diff>,
     Stream<G, (Option<GlobalId>, HealthStatusUpdate)>,
@@ -136,7 +128,6 @@ where
     let mut builder = AsyncOperatorBuilder::new("Upsert".to_string(), input.scope());
 
     // We only care about UpsertValueError since this is the only error that we can retract
-    let key_indices_clone = key_indices.clone();
     let persist_input = persist_input.flat_map(move |result| {
         let value = match result {
             Ok(ok) => Ok(ok),
@@ -146,10 +137,7 @@ where
             },
             Err(_) => return None,
         };
-        Some((
-            UpsertKey::from_value(value.as_ref(), &key_indices_clone),
-            value,
-        ))
+        Some((UpsertKey::from_value(value.as_ref(), &key_indices), value))
     });
     let (output_handle, output) = builder.new_output();
 
@@ -175,35 +163,31 @@ where
     let shutdown_button = builder.build(move |caps| async move {
         let [output_cap, snapshot_cap, health_cap]: [_; 3] = caps.try_into().unwrap();
         drop(output_cap);
+        let mut snapshot_cap = CapabilitySet::from_elem(snapshot_cap);
 
-        let persist_client = persist_clients
-            .open(storage_metadata.persist_location.clone())
-            .await
-            .unwrap();
+        // The order key of the `UpsertState` is `Option<FromTime>`, which implements `Default`
+        // (as required for `consolidate_chunk`), with slightly more efficient serialization
+        // than a default `Partitioned`.
 
-        // We create a new read handle every time someone requests a snapshot
-        // and then immediately expire it instead of keeping a read handle
-        // permanently in our state to avoid having it heartbeat continually.
-        // The assumption is that calls to snapshot are rare and therefore worth
-        // it to always create a new handle.
-        let read_handle = persist_client
-            .open_leased_reader::<SourceData, (), mz_repr::Timestamp, StorageDiff>(
-                storage_metadata.data_shard,
-                Arc::new(storage_metadata.relation_desc.clone()),
-                Arc::new(UnitSchema),
-                Diagnostics {
-                    shard_name: source_config.id.to_string(),
-                    handle_purpose: format!("upsert kv read handle {}", source_config.id),
-                },
-                false,
-            )
-            .await
-            .expect("invalid persist usage");
+        let mut state = UpsertState::<_, G::Timestamp, Option<FromTime>>::new(
+            state_fn().await,
+            upsert_shared_metrics,
+            &upsert_metrics,
+            source_config.source_statistics.clone(),
+            upsert_config.shrink_upsert_unused_buffers_by_ratio,
+        );
 
-        let mut state = KeyValueReadHandle::new(read_handle);
+        // True while we're still reading the initial "snapshot" (a whole bunch
+        // of updates, all at the same initial timestamp) from our persist
+        // input or while we're reading the initial snapshot from the upstream
+        // source.
+        let mut hydrating = true;
 
-        // We're always "hydrated", so no need for upstream to wait on us.
-        drop(snapshot_cap);
+        // A re-usable buffer of changes, per key. This is an `IndexMap` because it has to be `drain`-able
+        // and have a consistent iteration order.
+        let mut commands_state: indexmap::IndexMap<_, upsert_types::UpsertValueAndSize<G::Timestamp, Option<FromTime>>> =
+            indexmap::IndexMap::new();
+        let mut multi_get_scratch = Vec::new();
 
         // For stashing source input while it's not eligible for processing.
         let mut stash = vec![];
@@ -211,13 +195,33 @@ where
         // when the stash is empty.
         let mut stash_cap: Option<Capability<G::Timestamp>> = None;
         let mut input_upper = Antichain::from_elem(Timestamp::minimum());
+        let mut partial_drain_time = None;
 
-        let mut persist_upper: Antichain<G::Timestamp> = Antichain::from_elem(Timestamp::minimum());
+        // For our persist/feedback input, both of these.
+        let mut persist_stash = vec![];
+        let mut persist_upper = Antichain::from_elem(Timestamp::minimum());
+
+        // We keep track of the largest timestamp seen on the persist input so
+        // that we can block processing source input while that timestamp is
+        // beyond the persist frontier. While ingesting updates of a timestamp,
+        // our upsert state is in a consolidating state, and trying to read it
+        // at that time would yield a panic.
+        //
+        // NOTE(aljoscha): You would think that it cannot happen that we even
+        // attempt to process source updates while the state is in a
+        // consolidating state, because we always wait until the persist
+        // frontier "catches up" with the timestamp of the source input. If
+        // there is only this here UPSERT operator and no concurrent instances,
+        // this is true. But with concurrent instances it can happen that an
+        // operator that is faster than us makes it so updates get written to
+        // persist. And we would then be ingesting them.
+        let mut largest_seen_persist_ts: Option<G::Timestamp> = None;
 
         // A buffer for our output.
         let mut output_updates = vec![];
 
         let mut error_emitter = (&mut health_output, &health_cap);
+
 
         loop {
             tokio::select! {
@@ -233,23 +237,10 @@ where
                                     updates=%data.len(),
                                     "received persist data");
 
-                                    let changes: Vec<_> = data
-                                        .into_iter()
-                                        .map(|((key, val), ts, diff)| {
-                                            let val = val.expect("HACK WEEK");
-                                            ((key.key_columns, val), ts.to_outer(), diff.into_inner())
-                                        })
-                                        .collect();
-                                    let persist_upper = persist_upper
-                                        .as_option()
-                                        .cloned()
-                                        .expect("HACK WEEK")
-                                        .to_outer();
-                                    state.apply_changes(changes, persist_upper);
-
-                                // WIP: Throw it away for now, but later feed it
-                                // into our KV cache.
-                                // drop(data);
+                                persist_stash.extend(data.into_iter().map(|((key, value), ts, diff)| {
+                                    largest_seen_persist_ts = std::cmp::max(largest_seen_persist_ts.clone(), Some(ts.clone()));
+                                    (key, value, ts, diff)
+                                }));
                             }
                             AsyncEvent::Progress(upper) => {
                                 tracing::trace!(
@@ -261,6 +252,78 @@ where
                             }
                         }
                     }
+
+                    let last_rehydration_chunk =
+                        hydrating && PartialOrder::less_equal(&resume_upper, &persist_upper);
+
+                    tracing::debug!(
+                        worker_id = %source_config.worker_id,
+                        source_id = %source_config.id,
+                        persist_stash = %persist_stash.len(),
+                        %hydrating,
+                        %last_rehydration_chunk,
+                        ?resume_upper,
+                        ?persist_upper,
+                        "ingesting persist snapshot chunk");
+
+                    let persist_stash_iter = persist_stash
+                        .drain(..)
+                        .map(|(key, val, _ts, diff)| (key, val, diff));
+
+                    match state
+                        .consolidate_chunk(
+                            persist_stash_iter,
+                            last_rehydration_chunk,
+                        )
+                        .await
+                    {
+                        Ok(_) => {}
+                        Err(e) => {
+                            // Make sure our persist source can shut down.
+                            persist_token.take();
+                            snapshot_cap.downgrade(&[]);
+                            UpsertErrorEmitter::<G>::emit(
+                                &mut error_emitter,
+                                "Failed to rehydrate state".to_string(),
+                                e,
+                            )
+                            .await;
+                        }
+                    }
+
+                    tracing::debug!(
+                        worker_id = %source_config.worker_id,
+                        source_id = %source_config.id,
+                        ?resume_upper,
+                        ?persist_upper,
+                        "downgrading snapshot cap",
+                    );
+
+                    // Only downgrade this _after_ ingesting the data, because
+                    // that can actually take quite some time, and we don't want
+                    // to announce that we're done ingesting the initial
+                    // snapshot too early.
+                    //
+                    // When we finish ingesting our initial persist snapshot,
+                    // during "re-hydration", we downgrade this to the empty
+                    // frontier, so we need to be lenient to this failing from
+                    // then on.
+                    let _ = snapshot_cap.try_downgrade(persist_upper.iter());
+
+
+
+                    if last_rehydration_chunk {
+                        hydrating = false;
+
+                        tracing::info!(
+                            worker_id = %source_config.worker_id,
+                            source_id = %source_config.id,
+                            "upsert source finished rehydration",
+                        );
+
+                        snapshot_cap.downgrade(&[]);
+                    }
+
                 }
                 _ = input.ready() => {
                     let mut events_processed = 0;
@@ -273,6 +336,8 @@ where
                                     time=?cap.time(),
                                     updates=%data.len(),
                                     "received data");
+
+                                let event_time = cap.time().clone();
 
                                 stage_input(
                                     &mut stash,
@@ -292,6 +357,26 @@ where
                                         }
                                         None => Some(cap)
                                     };
+                                }
+
+                                if prevent_snapshot_buffering && input_upper.as_option() == Some(&event_time) {
+                                    tracing::debug!(
+                                        worker_id = %source_config.worker_id,
+                                        source_id = %source_config.id,
+                                        ?event_time,
+                                        ?resume_upper,
+                                        ?input_upper,
+                                        "allowing partial drain");
+                                    partial_drain_time = Some(event_time.clone());
+                                } else {
+                                    tracing::debug!(
+                                        worker_id = %source_config.worker_id,
+                                        source_id = %source_config.id,
+                                        %prevent_snapshot_buffering,
+                                        ?event_time,
+                                        ?resume_upper,
+                                        ?input_upper,
+                                        "not allowing partial drain");
                                 }
                             }
                             AsyncEvent::Progress(upper) => {
@@ -313,6 +398,11 @@ where
                                     continue;
                                 }
 
+                                // Disable partial drain, because this progress
+                                // update has moved the frontier. We might allow
+                                // it again once we receive data right at the
+                                // frontier again.
+                                partial_drain_time = None;
                                 input_upper = upper;
                             }
                         }
@@ -327,14 +417,24 @@ where
                 }
             };
 
+            // While we have partially ingested updates of a timestamp our state
+            // is in an inconsistent/consolidating state and accessing it would
+            // panic.
+            if let Some(largest_seen_persist_ts) = largest_seen_persist_ts.as_ref() {
+                let largest_seen_outer_persist_ts = largest_seen_persist_ts.clone().to_outer();
+                let outer_persist_upper = persist_upper.iter().map(|ts| ts.clone().to_outer());
+                let outer_persist_upper = Antichain::from_iter(outer_persist_upper);
+                if outer_persist_upper.less_equal(&largest_seen_outer_persist_ts) {
+                    continue;
+                }
+            }
+
             // We try and drain from our stash every time we go through the
             // loop. More of our stash can become eligible for draining both
             // when the source-input frontier advances or when the persist
             // frontier advances.
             if !stash.is_empty() {
-                let cap = stash_cap
-                    .as_mut()
-                    .expect("missing capability for non-empty stash");
+                let cap = stash_cap.as_mut().expect("missing capability for non-empty stash");
 
                 tracing::trace!(
                     worker_id = %source_config.worker_id,
@@ -343,16 +443,15 @@ where
                     ?stash,
                     "stashed updates");
 
-                let mut min_remaining_time = drain_staged_input::<G, _, _, _>(
+                let mut min_remaining_time = drain_staged_input::<_, G, _, _, _>(
                     &mut stash,
-                    &key_indices,
+                    &mut commands_state,
                     &mut output_updates,
-                    &input_upper,
-                    &persist_upper,
+                    &mut multi_get_scratch,
+                    DrainStyle::ToUpper{input_upper: &input_upper, persist_upper: &persist_upper},
                     &mut error_emitter,
                     &mut state,
                     &source_config,
-                    &upsert_shared_metrics,
                 )
                 .await;
 
@@ -367,14 +466,13 @@ where
                 }
 
                 if !stash.is_empty() {
-                    let min_remaining_time = min_remaining_time
-                        .take()
-                        .expect("we still have updates left");
+                    let min_remaining_time = min_remaining_time.take().expect("we still have updates left");
                     cap.downgrade(&min_remaining_time);
                 } else {
                     stash_cap = None;
                 }
             }
+
 
             if input_upper.is_empty() {
                 tracing::debug!(
@@ -383,9 +481,60 @@ where
                     "input exhausted, shutting down");
                 break;
             };
-        }
 
-        drop(persist_token);
+            // If there were staged events that occurred at the capability time, drain
+            // them. This is safe because out-of-order updates to the same key that are
+            // drained in separate calls to `drain_staged_input` are correctly ordered by
+            // their `FromTime` in `drain_staged_input`.
+            //
+            // Note also that this may result in more updates in the output collection than
+            // the minimum. However, because the frontier only advances on `Progress` updates,
+            // the collection always accumulates correctly for all keys.
+            if let Some(partial_drain_time) = &partial_drain_time {
+                if !stash.is_empty() {
+                    let cap = stash_cap.as_mut().expect("missing capability for non-empty stash");
+
+                    tracing::trace!(
+                        worker_id = %source_config.worker_id,
+                        source_id = %source_config.id,
+                        ?cap,
+                        ?stash,
+                        "stashed updates");
+
+                    let mut min_remaining_time = drain_staged_input::<_, G, _, _, _>(
+                        &mut stash,
+                        &mut commands_state,
+                        &mut output_updates,
+                        &mut multi_get_scratch,
+                        DrainStyle::AtTime{
+                            time: partial_drain_time.clone(),
+                            persist_upper: &persist_upper
+                        },
+                        &mut error_emitter,
+                        &mut state,
+                        &source_config,
+                    )
+                    .await;
+
+                    tracing::trace!(
+                        worker_id = %source_config.worker_id,
+                        source_id = %source_config.id,
+                        output_updates = %output_updates.len(),
+                        "output updates for partial timestamp");
+
+                    for (update, ts, diff) in output_updates.drain(..) {
+                        output_handle.give(cap, (update, ts, diff));
+                    }
+
+                    if !stash.is_empty() {
+                        let min_remaining_time = min_remaining_time.take().expect("we still have updates left");
+                        cap.downgrade(&min_remaining_time);
+                    } else {
+                        stash_cap = None;
+                    }
+                }
+            }
+        }
     });
 
     (
@@ -421,6 +570,21 @@ fn stage_input<T, FromTime>(
     }));
 }
 
+/// The style of drain we are performing on the stash. `AtTime`-drains cannot
+/// assume that all values have been seen, and must leave tombstones behind for deleted values.
+#[derive(Debug)]
+enum DrainStyle<'a, T> {
+    ToUpper {
+        input_upper: &'a Antichain<T>,
+        persist_upper: &'a Antichain<T>,
+    },
+    // For partial draining when taking the source snapshot.
+    AtTime {
+        time: T,
+        persist_upper: &'a Antichain<T>,
+    },
+}
+
 /// Helper method for [`upsert_inner`] used to stage `data` updates
 /// from the input timely edge.
 ///
@@ -436,44 +600,50 @@ fn stage_input<T, FromTime>(
 /// It is *not* safe to call this function more than once with the same `persist_upper` and a
 /// `ToUpper` drain style. Doing so causes all calls except the first one to base their work on
 /// stale state, since in this drain style no modifications to the state are made.
-async fn drain_staged_input<G, T, FromTime, E>(
+async fn drain_staged_input<S, G, T, FromTime, E>(
     stash: &mut Vec<(T, UpsertKey, Reverse<FromTime>, Option<UpsertValue>)>,
-    key_indices: &[usize],
+    commands_state: &mut indexmap::IndexMap<UpsertKey, UpsertValueAndSize<T, Option<FromTime>>>,
     output_updates: &mut Vec<(Result<Row, UpsertError>, T, Diff)>,
-    input_upper: &Antichain<T>,
-    persist_upper: &Antichain<T>,
-    _error_emitter: &mut E,
-    state: &mut KeyValueReadHandle<mz_repr::Timestamp>,
+    multi_get_scratch: &mut Vec<UpsertKey>,
+    drain_style: DrainStyle<'_, T>,
+    error_emitter: &mut E,
+    state: &mut UpsertState<'_, S, T, Option<FromTime>>,
     source_config: &crate::source::SourceExportCreationConfig,
-    shared_metrics: &Arc<UpsertSharedMetrics>,
 ) -> Option<T>
 where
+    S: UpsertStateBackend<T, Option<FromTime>>,
     G: Scope,
     T: TotalOrder + timely::ExchangeData + Debug + Ord + Sync,
     FromTime: timely::ExchangeData + Ord + Sync,
     E: UpsertErrorEmitter<G>,
-    T: Refines<mz_repr::Timestamp> + TotalOrder + Sync,
 {
     let mut min_remaining_time = Antichain::new();
 
-    let query_ts = persist_upper
-        .as_option()
-        .cloned()
-        .expect("source must be shut down by now")
-        .to_outer()
-        .step_back()
-        .unwrap_or(mz_repr::Timestamp::minimum());
-
     let mut eligible_updates = stash
         .drain_filter_swapping(|(ts, _, _, _)| {
-            // We make sure that a) we only process updates when we know their
-            // timestamp is complete, that is there will be no more updates for
-            // that timestamp, and b) that "previous" times in the persist input
-            // are complete. The latter makes sure that we emit updates for the
-            // next timestamp that are consistent with the global state in the
-            // output persist shard, which also serves as a persistent copy of
-            // our in-memory/on-disk upsert state.
-            let eligible = !input_upper.less_equal(ts) && !persist_upper.less_than(ts);
+            let eligible = match &drain_style {
+                DrainStyle::ToUpper {
+                    input_upper,
+                    persist_upper,
+                } => {
+                    // We make sure that a) we only process updates when we know their
+                    // timestamp is complete, that is there will be no more updates for
+                    // that timestamp, and b) that "previous" times in the persist
+                    // input are complete. The latter makes sure that we emit updates
+                    // for the next timestamp that are consistent with the global state
+                    // in the output persist shard, which also serves as a persistent
+                    // copy of our in-memory/on-disk upsert state.
+                    !input_upper.less_equal(ts) && !persist_upper.less_than(ts)
+                }
+                DrainStyle::AtTime {
+                    time,
+                    persist_upper,
+                } => {
+                    // Even when emitting partial updates, we still need to wait
+                    // until "previous" times in the persist input are complete.
+                    *ts <= *time && !persist_upper.less_than(ts)
+                }
+            };
 
             if !eligible {
                 min_remaining_time.insert(ts.clone());
@@ -482,6 +652,17 @@ where
             eligible
         })
         .filter(|(ts, _, _, _)| {
+            let persist_upper = match &drain_style {
+                DrainStyle::ToUpper {
+                    input_upper: _,
+                    persist_upper,
+                } => persist_upper,
+                DrainStyle::AtTime {
+                    time: _,
+                    persist_upper,
+                } => persist_upper,
+            };
+
             // Any update that is "in the past" of the persist upper is not
             // relevant anymore. We _can_ emit changes for it, but the
             // downstream persist_sink would filter these updates out because
@@ -498,11 +679,9 @@ where
     tracing::debug!(
         worker_id = %source_config.worker_id,
         source_id = %source_config.id,
-        ?input_upper,
-        ?persist_upper,
+        ?drain_style,
         remaining = %stash.len(),
         eligible = eligible_updates.len(),
-        ?query_ts,
         "draining stash");
 
     // Sort the eligible updates by (key, time, Reverse(from_time)) so that
@@ -513,62 +692,364 @@ where
         Ord::cmp(&(ts1, key1, from_ts1, val1), &(ts2, key2, from_ts2, val2))
     });
 
+    // Read the previous values _per key_ out of `state`, recording it
+    // along with the value with the _latest timestamp for that key_.
+    commands_state.clear();
+    for (_, key, _, _) in eligible_updates.iter() {
+        commands_state.entry(key.clone()).or_default();
+    }
+
+    // These iterators iterate in the same order because `commands_state`
+    // is an `IndexMap`.
+    multi_get_scratch.clear();
+    multi_get_scratch.extend(commands_state.iter().map(|(k, _)| k.clone()));
+    match state
+        .multi_get(multi_get_scratch.drain(..), commands_state.values_mut())
+        .await
+    {
+        Ok(_) => {}
+        Err(e) => {
+            error_emitter
+                .emit("Failed to fetch records from state".to_string(), e)
+                .await;
+        }
+    }
+
     // From the prefix that can be emitted we can deduplicate based on (ts, key) in
     // order to only process the command with the maximum order within the (ts,
     // key) group. This is achieved by wrapping order in `Reverse(FromTime)` above.;
-    let eligible_updates = eligible_updates
-        .into_iter()
-        .dedup_by(|a, b| {
-            let ((a_ts, a_key, _, _), (b_ts, b_key, _, _)) = (a, b);
-            a_ts == b_ts && a_key == b_key
-        })
-        .collect_vec();
+    let mut commands = eligible_updates.into_iter().dedup_by(|a, b| {
+        let ((a_ts, a_key, _, _), (b_ts, b_key, _, _)) = (a, b);
+        a_ts == b_ts && a_key == b_key
+    });
 
-    let keys = eligible_updates
-        .iter()
-        .map(|(_ts, upsert_key, _from_time, _value)| upsert_key.key_columns.clone())
-        .collect_vec();
+    let bincode_opts = upsert_types::upsert_bincode_opts();
+    // Upsert the values into `commands_state`, by recording the latest
+    // value (or deletion). These will be synced at the end to the `state`.
+    //
+    // Note that we are effectively doing "mini-upsert" here, using
+    // `command_state`. This "mini-upsert" is seeded with data from `state`, using
+    // a single `multi_get` above, and the final state is written out into
+    // `state` using a single `multi_put`. This simplifies `UpsertStateBackend`
+    // implementations, and reduces the number of reads and write we need to do.
+    //
+    // This "mini-upsert" technique is actually useful in `UpsertState`'s
+    // `consolidate_snapshot_read_write_inner` implementation, minimizing gets and puts on
+    // the `UpsertStateBackend` implementations. In some sense, its "upsert all the way down".
+    while let Some((ts, key, from_time, value)) = commands.next() {
+        let mut command_state = if let Entry::Occupied(command_state) = commands_state.entry(key) {
+            command_state
+        } else {
+            panic!("key missing from commands_state");
+        };
 
-    let existing_values = if query_ts != mz_repr::Timestamp::minimum() {
-        let now = Instant::now();
-        let existing_values: BTreeMap<Row, Row> = state
-            .get_multi(key_indices, keys, query_ts)
-            .await
-            .into_iter()
-            .collect();
+        let existing_state_cell = &mut command_state.get_mut().value;
 
-        let latency = now.elapsed();
-
-        shared_metrics
-            .multi_get_latency
-            .observe(latency.as_secs_f64());
-
-        existing_values
-    } else {
-        BTreeMap::new()
-    };
-
-    tracing::trace!(?existing_values, "got kv results");
-
-    for (ts, key, _from_time, value) in eligible_updates.into_iter() {
-        let existing_value = existing_values.get(&key.key_columns);
-
-        match value {
-            Some(new_value) => {
-                output_updates.push((new_value, ts.clone(), Diff::ONE));
-            }
-            None => todo!(),
+        if let Some(cs) = existing_state_cell.as_mut() {
+            cs.ensure_decoded(bincode_opts, source_config.id);
         }
 
-        match existing_value {
-            Some(existing_value) => {
-                output_updates.push((Ok(existing_value.clone()), ts.clone(), Diff::MINUS_ONE));
+        // Skip this command if its order key is below the one in the upsert state.
+        // Note that the existing order key may be `None` if the existing value
+        // is from snapshotting, which always sorts below new values/deletes.
+        let existing_order = existing_state_cell
+            .as_ref()
+            .and_then(|cs| cs.provisional_order(&ts).map_or(None, Option::as_ref));
+        //.map(|cs| cs.provisional_order(&ts).map_or(None, Option::as_ref));
+        if existing_order >= Some(&from_time.0) {
+            // Skip this update. If no later updates adjust this key, then we just
+            // end up writing the same value back to state. If there
+            // is nothing in the state, `existing_order` is `None`, and this
+            // does not occur.
+            continue;
+        }
+
+        match value {
+            Some(value) => {
+                if let Some(old_value) = existing_state_cell.as_ref() {
+                    if let Some(old_value) = old_value.provisional_value_ref(&ts) {
+                        output_updates.push((old_value.clone(), ts.clone(), Diff::MINUS_ONE));
+                    }
+                }
+
+                match &drain_style {
+                    DrainStyle::AtTime { .. } => {
+                        let existing_value = existing_state_cell.take();
+
+                        let new_value = match existing_value {
+                            Some(existing_value) => existing_value.clone().into_provisional_value(
+                                value.clone(),
+                                ts.clone(),
+                                Some(from_time.0.clone()),
+                            ),
+                            None => StateValue::new_provisional_value(
+                                value.clone(),
+                                ts.clone(),
+                                Some(from_time.0.clone()),
+                            ),
+                        };
+
+                        existing_state_cell.replace(new_value);
+                    }
+                    DrainStyle::ToUpper { .. } => {
+                        // Not writing down provisional values, or anything.
+                    }
+                };
+
+                output_updates.push((value, ts, Diff::ONE));
             }
             None => {
-                // nothing to do!
+                if let Some(old_value) = existing_state_cell.as_ref() {
+                    if let Some(old_value) = old_value.provisional_value_ref(&ts) {
+                        output_updates.push((old_value.clone(), ts.clone(), Diff::MINUS_ONE));
+                    }
+                }
+
+                match &drain_style {
+                    DrainStyle::AtTime { .. } => {
+                        let existing_value = existing_state_cell.take();
+
+                        let new_value = match existing_value {
+                            Some(existing_value) => existing_value
+                                .into_provisional_tombstone(ts.clone(), Some(from_time.0.clone())),
+                            None => StateValue::new_provisional_tombstone(
+                                ts.clone(),
+                                Some(from_time.0.clone()),
+                            ),
+                        };
+
+                        existing_state_cell.replace(new_value);
+                    }
+                    DrainStyle::ToUpper { .. } => {
+                        // Not writing down provisional values, or anything.
+                    }
+                }
             }
         }
     }
 
+    match &drain_style {
+        DrainStyle::AtTime { .. } => {
+            match state
+                .multi_put(
+                    // We don't want to update per-record stats, like size of
+                    // records indexed or count of records indexed.
+                    //
+                    // We only add provisional values and these will be
+                    // overwritten once we receive updates for state from the
+                    // persist input. And the merge functionality cannot know
+                    // what was in state before merging, so it cannot correctly
+                    // retract/update stats added here.
+                    //
+                    // Mostly, the merge functionality can't update those stats
+                    // because merging happens in a function that we pass to
+                    // rocksdb which doesn't have access to any external
+                    // context. And in general, with rocksdb we do blind writes
+                    // rather than inspect what was there before when
+                    // updating/inserting.
+                    false,
+                    commands_state.drain(..).map(|(k, cv)| {
+                        (
+                            k,
+                            upsert_types::PutValue {
+                                value: cv.value.map(|cv| cv.into_decoded()),
+                                previous_value_metadata: cv.metadata.map(|v| ValueMetadata {
+                                    size: v.size.try_into().expect("less than i64 size"),
+                                    is_tombstone: v.is_tombstone,
+                                }),
+                            },
+                        )
+                    }),
+                )
+                .await
+            {
+                Ok(_) => {}
+                Err(e) => {
+                    error_emitter
+                        .emit("Failed to update records in state".to_string(), e)
+                        .await;
+                }
+            }
+        }
+        style => {
+            tracing::trace!(
+                worker_id = %source_config.worker_id,
+                source_id = %source_config.id,
+                "not doing state update for drain style {:?}", style);
+        }
+    }
+
     min_remaining_time.into_option()
+}
+
+#[cfg(test)]
+mod test {
+    use mz_ore::metrics::MetricsRegistry;
+    use mz_persist_types::ShardId;
+    use mz_repr::{Datum, Timestamp as MzTimestamp};
+    use mz_storage_operators::persist_source::Subtime;
+    use mz_storage_types::sources::SourceEnvelope;
+    use mz_storage_types::sources::envelope::{KeyEnvelope, UpsertEnvelope, UpsertStyle};
+    use timely::dataflow::operators::capture::Extract;
+    use timely::dataflow::operators::{Capture, Input};
+    use timely::progress::Timestamp;
+
+    use crate::metrics::StorageMetrics;
+    use crate::metrics::upsert::UpsertMetricDefs;
+    use crate::source::SourceExportCreationConfig;
+    use crate::statistics::{SourceStatistics, SourceStatisticsMetricDefs};
+    use crate::upsert::memory::InMemoryHashMap;
+
+    use super::*;
+
+    #[mz_ore::test]
+    #[cfg_attr(miri, ignore)]
+    fn gh_9160_repro() {
+        // Helper to wrap timestamps in the appropriate types
+        let new_ts = |ts| (MzTimestamp::new(ts), Subtime::minimum());
+
+        let output_handle = timely::execute_directly(move |worker| {
+            let (mut input_handle, mut persist_handle, output_handle) = worker
+                .dataflow::<MzTimestamp, _, _>(|scope| {
+                    // Enter a subscope since the upsert operator expects to work a backpressure
+                    // enabled scope.
+                    scope.scoped::<(MzTimestamp, Subtime), _, _>("upsert", |scope| {
+                        let (input_handle, input) = scope.new_input();
+                        let (persist_handle, persist_input) = scope.new_input();
+                        let upsert_config = UpsertConfig {
+                            shrink_upsert_unused_buffers_by_ratio: 0,
+                        };
+                        let source_id = GlobalId::User(0);
+                        let metrics_registry = MetricsRegistry::new();
+                        let upsert_metrics_defs =
+                            UpsertMetricDefs::register_with(&metrics_registry);
+                        let upsert_metrics =
+                            UpsertMetrics::new(&upsert_metrics_defs, source_id, 0, None);
+
+                        let metrics_registry = MetricsRegistry::new();
+                        let storage_metrics = StorageMetrics::register_with(&metrics_registry);
+
+                        let metrics_registry = MetricsRegistry::new();
+                        let source_statistics_defs =
+                            SourceStatisticsMetricDefs::register_with(&metrics_registry);
+                        let envelope = SourceEnvelope::Upsert(UpsertEnvelope {
+                            source_arity: 2,
+                            style: UpsertStyle::Default(KeyEnvelope::Flattened),
+                            key_indices: vec![0],
+                        });
+                        let source_statistics = SourceStatistics::new(
+                            source_id,
+                            0,
+                            &source_statistics_defs,
+                            source_id,
+                            &ShardId::new(),
+                            envelope,
+                            Antichain::from_elem(Timestamp::minimum()),
+                        );
+
+                        let source_config = SourceExportCreationConfig {
+                            id: GlobalId::User(0),
+                            worker_id: 0,
+                            metrics: storage_metrics,
+                            source_statistics,
+                        };
+
+                        let (output, _, _, button) = upsert_inner(
+                            &input.as_collection(),
+                            vec![0],
+                            Antichain::from_elem(Timestamp::minimum()),
+                            persist_input.as_collection(),
+                            None,
+                            upsert_metrics,
+                            source_config,
+                            || async { InMemoryHashMap::default() },
+                            upsert_config,
+                            true,
+                            None,
+                        );
+                        std::mem::forget(button);
+
+                        (input_handle, persist_handle, output.inner.capture())
+                    })
+                });
+
+            // We work with a hypothetical schema of (key int, value int).
+
+            // The input will contain records for two keys, 0 and 1.
+            let key0 = UpsertKey::from_key(Ok(&Row::pack_slice(&[Datum::Int64(0)])));
+            let key1 = UpsertKey::from_key(Ok(&Row::pack_slice(&[Datum::Int64(1)])));
+
+            // We will assume that the kafka topic contains the following messages with their
+            // associated reclocked timestamp:
+            //  1. {offset=1, key=0, value=0}    @ mz_time = 0
+            //  2. {offset=2, key=1, value=NULL} @ mz_time = 2  // <- deletion of unrelated key. Causes the operator
+            //                                                  //    to maintain the associated cap to time 2
+            //  3. {offset=3, key=0, value=1}    @ mz_time = 3
+            //  4. {offset=4, key=0, value=2}    @ mz_time = 3  // <- messages 2 and 3 are reclocked to time 3
+            let value1 = Row::pack_slice(&[Datum::Int64(0), Datum::Int64(0)]);
+            let value3 = Row::pack_slice(&[Datum::Int64(0), Datum::Int64(1)]);
+            let value4 = Row::pack_slice(&[Datum::Int64(0), Datum::Int64(2)]);
+            let msg1 = (key0, Some(Ok(value1.clone())), 1);
+            let msg2 = (key1, None, 2);
+            let msg3 = (key0, Some(Ok(value3)), 3);
+            let msg4 = (key0, Some(Ok(value4)), 4);
+
+            // The first message will initialize the upsert state such that key 0 has value 0 and
+            // produce an output update to that effect.
+            input_handle.send((msg1, new_ts(0), Diff::ONE));
+            input_handle.advance_to(new_ts(2));
+            worker.step();
+
+            // We assume this worker succesfully CAAs the update to the shard so we send it back
+            // through the persist_input
+            persist_handle.send((Ok(value1), new_ts(0), Diff::ONE));
+            persist_handle.advance_to(new_ts(1));
+            worker.step();
+
+            // Then, messages 2 and 3 are sent as one batch with capability = 2
+            input_handle.send_batch(&mut vec![
+                (msg2, new_ts(2), Diff::ONE),
+                (msg3, new_ts(3), Diff::ONE),
+            ]);
+            // Advance our capability to 3
+            input_handle.advance_to(new_ts(3));
+            // Message 4 is sent with capability 3
+            input_handle.send_batch(&mut vec![(msg4, new_ts(3), Diff::ONE)]);
+            // Advance our capability to 4
+            input_handle.advance_to(new_ts(4));
+            // We now step the worker so that the pending data is received. This causes the
+            // operator to store internally the following map from capabilities to updates:
+            // cap=2 => [ msg2, msg3 ]
+            // cap=3 => [ msg4 ]
+            worker.step();
+
+            // We now assume that another replica raced us and processed msg1 at time 2, which in
+            // this test is a no-op so the persist frontier advances to time 3 without new data.
+            persist_handle.advance_to(new_ts(3));
+            // We now step this worker again, which will notice that the persist upper is {3} and
+            // wlil attempt to process msg3 and msg4 *separately*, causing it to produce a double
+            // retraction.
+            worker.step();
+
+            output_handle
+        });
+
+        let mut actual_output = output_handle
+            .extract()
+            .into_iter()
+            .flat_map(|(_cap, container)| container)
+            .collect();
+        differential_dataflow::consolidation::consolidate_updates(&mut actual_output);
+
+        // The expected consolidated output contains only updates for key 0 which has the value 0
+        // at timestamp 0 and the value 2 at timestamp 3
+        let value1 = Row::pack_slice(&[Datum::Int64(0), Datum::Int64(0)]);
+        let value4 = Row::pack_slice(&[Datum::Int64(0), Datum::Int64(2)]);
+        let expected_output: Vec<(Result<Row, DataflowError>, _, _)> = vec![
+            (Ok(value1.clone()), new_ts(0), Diff::ONE),
+            (Ok(value1), new_ts(3), Diff::MINUS_ONE),
+            (Ok(value4), new_ts(3), Diff::ONE),
+        ];
+        assert_eq!(actual_output, expected_output);
+    }
 }

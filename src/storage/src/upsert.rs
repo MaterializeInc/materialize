@@ -27,7 +27,7 @@ use mz_rocksdb::ValueIterator;
 use mz_storage_operators::metrics::BackpressureMetrics;
 use mz_storage_types::configuration::StorageConfiguration;
 use mz_storage_types::controller::CollectionMetadata;
-use mz_storage_types::dyncfgs;
+use mz_storage_types::dyncfgs::{self, STORAGE_UPSERT_IMPL};
 use mz_storage_types::errors::{DataflowError, EnvelopeError, UpsertError};
 use mz_storage_types::sources::envelope::UpsertEnvelope;
 use mz_timely_util::builder_async::{
@@ -47,7 +47,7 @@ use timely::progress::{Antichain, Timestamp};
 use crate::healthcheck::HealthStatusUpdate;
 use crate::metrics::upsert::UpsertMetrics;
 use crate::storage_state::StorageInstanceContext;
-use crate::upsert_continual_feedback;
+use crate::{upsert_continual_feedback, upsert_stateless};
 use autospill::AutoSpillBackend;
 use memory::InMemoryHashMap;
 use types::{
@@ -420,7 +420,7 @@ fn upsert_operator<G: Scope, FromTime, F, Fut, US>(
     source_config: crate::source::SourceExportCreationConfig,
     state: F,
     upsert_config: UpsertConfig,
-    _storage_configuration: &StorageConfiguration,
+    storage_configuration: &StorageConfiguration,
     prevent_snapshot_buffering: bool,
     snapshot_buffering_max: Option<usize>,
     persist_clients: Arc<PersistClientCache>,
@@ -439,15 +439,45 @@ where
     US: UpsertStateBackend<G::Timestamp, Option<FromTime>>,
     FromTime: Debug + timely::ExchangeData + Ord + Sync,
 {
-    // Hard-coded to true because classic UPSERT cannot be used safely with
-    // concurrent ingestions, which we need for both 0dt upgrades and
-    // multi-replica ingestions.
-    let use_continual_feedback_upsert = true;
+    #[derive(Debug)]
+    enum UpsertImpl {
+        Feedback,
+        Stateless,
+        Classic,
+    }
 
-    tracing::info!(id = %source_config.id, %use_continual_feedback_upsert, "upsert operator implementation");
+    let upsert_impl = {
+        let upsert_impl = STORAGE_UPSERT_IMPL.get(storage_configuration.config_set());
 
-    if use_continual_feedback_upsert {
-        upsert_continual_feedback::upsert_inner(
+        // Classic UPSERT cannot be used safely with concurrent ingestions,
+        // which we need for both 0dt upgrades and multi-replica ingestions.
+        match upsert_impl.as_ref() {
+            "feedback" => UpsertImpl::Feedback,
+            "stateless" => UpsertImpl::Stateless,
+            upsert_impl => {
+                tracing::warn!(id = %source_config.id, %upsert_impl, "unknown UPSERT impl, falling back to feedback");
+                UpsertImpl::Feedback
+            }
+        }
+    };
+
+    tracing::info!(id = %source_config.id, ?upsert_impl, "upsert operator implementation");
+
+    match upsert_impl {
+        UpsertImpl::Feedback => upsert_continual_feedback::upsert_inner(
+            input,
+            key_indices,
+            resume_upper,
+            persist_input,
+            persist_token,
+            upsert_metrics,
+            source_config,
+            state,
+            upsert_config,
+            prevent_snapshot_buffering,
+            snapshot_buffering_max,
+        ),
+        UpsertImpl::Stateless => upsert_stateless::upsert_inner(
             input,
             key_indices,
             resume_upper,
@@ -461,9 +491,8 @@ where
             snapshot_buffering_max,
             persist_clients,
             storage_metadata,
-        )
-    } else {
-        upsert_classic(
+        ),
+        UpsertImpl::Classic => upsert_classic(
             input,
             key_indices,
             resume_upper,
@@ -475,7 +504,7 @@ where
             upsert_config,
             prevent_snapshot_buffering,
             snapshot_buffering_max,
-        )
+        ),
     }
 }
 
