@@ -108,7 +108,7 @@ pub const KAFKA_POLL_MAX_WAIT: Config<Duration> = Config::new(
 /// Interval to fetch topic partition metadata.
 pub static KAFKA_METADATA_FETCH_INTERVAL: Config<Duration> = Config::new(
     "kafka_default_metadata_fetch_interval",
-    Duration::from_secs(60),
+    Duration::from_secs(1),
     "Interval to fetch topic partition metadata.",
 );
 
@@ -141,7 +141,7 @@ pub const MYSQL_REPLICATION_HEARTBEAT_INTERVAL: Config<Duration> = Config::new(
 /// Interval to fetch `offset_known`, from `@gtid_executed`
 pub const MYSQL_OFFSET_KNOWN_INTERVAL: Config<Duration> = Config::new(
     "mysql_offset_known_interval",
-    Duration::from_secs(10),
+    Duration::from_secs(1),
     "Interval to fetch `offset_known`, from `@gtid_executed`",
 );
 
@@ -157,7 +157,7 @@ pub const PG_FETCH_SLOT_RESUME_LSN_INTERVAL: Config<Duration> = Config::new(
 /// Interval to fetch `offset_known`, from `pg_current_wal_lsn`
 pub const PG_OFFSET_KNOWN_INTERVAL: Config<Duration> = Config::new(
     "pg_offset_known_interval",
-    Duration::from_secs(10),
+    Duration::from_secs(1),
     "Interval to fetch `offset_known`, from `pg_current_wal_lsn`",
 );
 
@@ -245,7 +245,7 @@ pub const STORAGE_SINK_SNAPSHOT_FRONTIER: Config<bool> = Config::new(
 /// frontier.
 pub const STORAGE_RECLOCK_TO_LATEST: Config<bool> = Config::new(
     "storage_reclock_to_latest",
-    false,
+    true,
     "Whether to mint reclock bindings based on the latest probed offset or the latest ingested offset.",
 );
 
