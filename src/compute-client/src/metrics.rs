@@ -478,8 +478,6 @@ pub(crate) struct ReplicaCollectionMetrics {
 /// Metrics keyed by `ComputeCommand` type.
 #[derive(Clone, Debug)]
 pub struct CommandMetrics<M> {
-    /// Metrics for `CreateTimely`.
-    pub create_timely: M,
     /// Metrics for `CreateInstance`.
     pub create_instance: M,
     /// Metrics for `CreateDataflow`.
@@ -507,7 +505,6 @@ impl<M> CommandMetrics<M> {
         F: Fn(&str) -> M,
     {
         Self {
-            create_timely: build_metric("create_timely"),
             create_instance: build_metric("create_instance"),
             create_dataflow: build_metric("create_dataflow"),
             schedule: build_metric("schedule"),
@@ -524,7 +521,6 @@ impl<M> CommandMetrics<M> {
     where
         F: Fn(&M),
     {
-        f(&self.create_timely);
         f(&self.create_instance);
         f(&self.initialization_complete);
         f(&self.update_configuration);
@@ -540,7 +536,6 @@ impl<M> CommandMetrics<M> {
         use ComputeCommand::*;
 
         match command {
-            CreateTimely { .. } => &self.create_timely,
             CreateInstance(_) => &self.create_instance,
             InitializationComplete => &self.initialization_complete,
             UpdateConfiguration(_) => &self.update_configuration,
@@ -557,7 +552,6 @@ impl<M> CommandMetrics<M> {
         use crate::protocol::command::proto_compute_command::Kind::*;
 
         match proto.kind.as_ref().unwrap() {
-            CreateTimely(_) => &self.create_timely,
             CreateInstance(_) => &self.create_instance,
             CreateDataflow(_) => &self.create_dataflow,
             Schedule(_) => &self.schedule,
