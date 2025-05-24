@@ -271,10 +271,10 @@ telemetry:
 # Network policies configuration
 networkPolicies:
   # -- Whether to enable network policies for securing communication between pods
-  enabled: false
+  enabled: true
   # -- Whether to enable internal communication between Materialize pods
   internal:
-    enabled: false
+    enabled: true
   # -- Whether to enable ingress to the SQL and HTTP interfaces
   # on environmentd or balancerd
   ingress:

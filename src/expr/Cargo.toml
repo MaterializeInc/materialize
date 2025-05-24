@@ -67,6 +67,7 @@ uncased = "0.9.7"
 uuid = { version = "1.16.0", features = ["v5"] }
 proptest = { version = "1.6.0", default-features = false, features = ["std"] }
 proptest-derive = { version = "0.5.1", features = ["boxed_union"] }
+wasmtime = "32.0.0"
 workspace-hack = { version = "0.0.0", path = "../workspace-hack", optional = true }
 smallvec = { version = "1.15.0" }
 
