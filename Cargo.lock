@@ -5083,7 +5083,7 @@ dependencies = [
  "postgres",
  "prometheus",
  "proxy-header",
- "reqwest 0.11.24",
+ "reqwest 0.12.15",
  "semver",
  "tempfile",
  "tokio",
@@ -5251,7 +5251,7 @@ dependencies = [
  "proptest",
  "proptest-derive",
  "prost-build",
- "reqwest 0.11.24",
+ "reqwest 0.12.15",
  "serde",
  "serde_json",
  "tokio",
@@ -5268,7 +5268,7 @@ dependencies = [
  "chrono",
  "mz-frontegg-auth",
  "mz-frontegg-client",
- "reqwest 0.11.24",
+ "reqwest 0.12.15",
  "serde",
  "thiserror 2.0.12",
  "tokio",
@@ -5566,7 +5566,7 @@ dependencies = [
  "mz-ore",
  "mz-tls-util",
  "postgres-openssl",
- "reqwest 0.11.24",
+ "reqwest 0.12.15",
  "serde",
  "serde_yaml",
  "tokio",
@@ -5749,7 +5749,7 @@ dependencies = [
  "rdkafka",
  "rdkafka-sys",
  "regex",
- "reqwest 0.11.24",
+ "reqwest 0.12.15",
  "rlimit",
  "semver",
  "sentry-tracing",
@@ -5917,7 +5917,7 @@ dependencies = [
  "prost",
  "prost-build",
  "prost-types",
- "reqwest 0.11.24",
+ "reqwest 0.12.15",
  "serde",
  "serde_json",
  "sha2",
@@ -5950,7 +5950,7 @@ dependencies = [
  "mz-ore",
  "mz-repr",
  "prometheus",
- "reqwest 0.11.24",
+ "reqwest 0.12.15",
  "reqwest-middleware",
  "reqwest-retry",
  "serde",
@@ -5969,7 +5969,7 @@ dependencies = [
  "jsonwebtoken",
  "mz-frontegg-auth",
  "mz-ore",
- "reqwest 0.11.24",
+ "reqwest 0.12.15",
  "serde",
  "serde_json",
  "thiserror 2.0.12",
@@ -5994,7 +5994,7 @@ dependencies = [
  "mz-frontegg-auth",
  "mz-ore",
  "openssl",
- "reqwest 0.11.24",
+ "reqwest 0.12.15",
  "serde",
  "serde_json",
  "tokio",
@@ -6170,7 +6170,7 @@ dependencies = [
 name = "mz-metabase"
 version = "0.0.0"
 dependencies = [
- "reqwest 0.11.24",
+ "reqwest 0.12.15",
  "serde",
  "workspace-hack",
 ]
@@ -6252,7 +6252,7 @@ dependencies = [
  "flate2",
  "hex",
  "hex-literal",
- "reqwest 0.11.24",
+ "reqwest 0.12.15",
  "sha2",
  "tar",
  "walkdir",
@@ -6380,7 +6380,7 @@ dependencies = [
  "mz-prof-http",
  "prometheus",
  "rand 0.8.5",
- "reqwest 0.11.24",
+ "reqwest 0.12.15",
  "semver",
  "serde",
  "serde_json",
@@ -7172,7 +7172,7 @@ dependencies = [
  "protobuf-native",
  "rdkafka",
  "regex",
- "reqwest 0.11.24",
+ "reqwest 0.12.15",
  "serde",
  "serde_json",
  "static_assertions",
@@ -7314,7 +7314,7 @@ dependencies = [
  "mz-tracing",
  "postgres-protocol",
  "regex",
- "reqwest 0.11.24",
+ "reqwest 0.12.15",
  "serde_json",
  "shell-words",
  "tempfile",
@@ -7562,7 +7562,7 @@ dependencies = [
  "prometheus",
  "proptest",
  "prost",
- "reqwest 0.11.24",
+ "reqwest 0.12.15",
  "sentry",
  "serde",
  "smallvec",
@@ -7721,7 +7721,7 @@ dependencies = [
  "rand 0.8.5",
  "rdkafka",
  "regex",
- "reqwest 0.11.24",
+ "reqwest 0.12.15",
  "semver",
  "serde",
  "serde_json",
@@ -9588,9 +9588,9 @@ checksum = "2b15c43186be67a4fd63bee50d0303afffcef381492ebe2c5d87f324e1b8815c"
 
 [[package]]
 name = "reqwest"
-version = "0.11.24"
+version = "0.11.27"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c6920094eb85afde5e4a138be3f2de8bbdf28000f0029e72c45025a56b042251"
+checksum = "dd67538700a17451e7cba03ac727fb961abb7607553461627b97de0b89cf4a62"
 dependencies = [
  "base64 0.21.5",
  "bytes",
@@ -9616,7 +9616,7 @@ dependencies = [
  "serde_json",
  "serde_urlencoded",
  "sync_wrapper 0.1.2",
- "system-configuration",
+ "system-configuration 0.5.1",
  "tokio",
  "tokio-native-tls",
  "tokio-util",
@@ -9662,6 +9662,7 @@ dependencies = [
  "serde_json",
  "serde_urlencoded",
  "sync_wrapper 1.0.2",
+ "system-configuration 0.6.1",
  "tokio",
  "tokio-native-tls",
  "tokio-util",
@@ -9683,7 +9684,7 @@ dependencies = [
  "anyhow",
  "async-trait",
  "http 0.2.9",
- "reqwest 0.11.24",
+ "reqwest 0.11.27",
  "serde",
  "task-local-extensions",
  "thiserror 1.0.69",
@@ -9700,7 +9701,7 @@ dependencies = [
  "futures",
  "http 0.2.9",
  "hyper 0.14.27",
- "reqwest 0.11.24",
+ "reqwest 0.11.27",
  "reqwest-middleware",
  "retry-policies",
  "task-local-extensions",
@@ -10725,7 +10726,18 @@ checksum = "ba3a3adc5c275d719af8cb4272ea1c4a6d668a777f37e115f6d11ddbc1c8e0e7"
 dependencies = [
  "bitflags 1.3.2",
  "core-foundation",
- "system-configuration-sys",
+ "system-configuration-sys 0.5.0",
+]
+
+[[package]]
+name = "system-configuration"
+version = "0.6.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3c879d448e9d986b661742763247d3693ed13609438cf3d006f51f5368a5ba6b"
+dependencies = [
+ "bitflags 2.9.0",
+ "core-foundation",
+ "system-configuration-sys 0.6.0",
 ]
 
 [[package]]
@@ -10733,6 +10745,16 @@ name = "system-configuration-sys"
 version = "0.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a75fb188eb626b924683e3b95e3a48e63551fcfb51949de2f06a9d91dbee93c9"
+dependencies = [
+ "core-foundation-sys",
+ "libc",
+]
+
+[[package]]
+name = "system-configuration-sys"
+version = "0.6.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8e1d1b10ced5ca923a1fcb8d03e96b8d3268065d724548c0211415ff6ac6bac4"
 dependencies = [
  "core-foundation-sys",
  "libc",
@@ -12626,7 +12648,7 @@ dependencies = [
  "regex",
  "regex-automata 0.4.9",
  "regex-syntax 0.8.5",
- "reqwest 0.11.24",
+ "reqwest 0.11.27",
  "reqwest 0.12.15",
  "ring",
  "rustix 0.38.44",
