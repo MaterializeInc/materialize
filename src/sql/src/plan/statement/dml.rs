@@ -13,7 +13,7 @@
 //! `INSERT`, `SELECT`, `SUBSCRIBE`, and `COPY`.
 
 use std::borrow::Cow;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use itertools::Itertools;
 
@@ -22,16 +22,18 @@ use mz_expr::visit::Visit;
 use mz_expr::{MirRelationExpr, RowSetFinishing};
 use mz_ore::num::NonNeg;
 use mz_ore::soft_panic_or_log;
+use mz_ore::str::separated;
 use mz_pgcopy::{CopyCsvFormatParams, CopyFormatParams, CopyTextFormatParams};
 use mz_repr::adt::numeric::NumericMaxScale;
 use mz_repr::bytes::ByteSize;
 use mz_repr::explain::{ExplainConfig, ExplainFormat};
 use mz_repr::optimize::OptimizerFeatureOverrides;
-use mz_repr::{CatalogItemId, Datum, RelationDesc, ScalarType};
+use mz_repr::{CatalogItemId, Datum, RelationDesc, RelationType, Row, ScalarType};
 use mz_sql_parser::ast::{
-    CteBlock, ExplainPlanOption, ExplainPlanOptionName, ExplainPushdownStatement,
-    ExplainSinkSchemaFor, ExplainSinkSchemaStatement, ExplainTimestampStatement, Expr,
-    IfExistsBehavior, OrderByExpr, SetExpr, SubscribeOutput, UnresolvedItemName,
+    CteBlock, ExplainAnalyzeComputationProperty, ExplainAnalyzeProperty, ExplainAnalyzeStatement,
+    ExplainPlanOption, ExplainPlanOptionName, ExplainPushdownStatement, ExplainSinkSchemaFor,
+    ExplainSinkSchemaStatement, ExplainTimestampStatement, Expr, IfExistsBehavior, OrderByExpr,
+    SetExpr, SubscribeOutput, UnresolvedItemName,
 };
 use mz_sql_parser::ident;
 use mz_storage_types::sinks::{
@@ -51,6 +53,7 @@ use crate::names::{Aug, ResolvedItemName};
 use crate::normalize;
 use crate::plan::query::{ExprContext, QueryLifetime, offset_into_value, plan_expr, plan_up_to};
 use crate::plan::scope::Scope;
+use crate::plan::statement::show::ShowSelect;
 use crate::plan::statement::{StatementContext, StatementDesc, ddl};
 use crate::plan::{
     self, CopyFromFilter, CopyToPlan, CreateSinkPlan, ExplainPushdownPlan, ExplainSinkSchemaPlan,
@@ -352,6 +355,87 @@ pub fn describe_explain_pushdown(
             _ => vec![],
         }),
     )
+}
+
+pub fn describe_explain_analyze(
+    _scx: &StatementContext,
+    statement: ExplainAnalyzeStatement<Aug>,
+) -> Result<StatementDesc, PlanError> {
+    if statement.as_sql {
+        let relation_desc = RelationDesc::builder()
+            .with_column("SQL", ScalarType::String.nullable(false))
+            .finish();
+        return Ok(StatementDesc::new(Some(relation_desc)));
+    }
+
+    match statement.properties {
+        ExplainAnalyzeProperty::Computation { properties, skew } => {
+            let mut relation_desc =
+                RelationDesc::builder().with_column("operator", ScalarType::String.nullable(false));
+
+            if skew {
+                relation_desc =
+                    relation_desc.with_column("worker_id", ScalarType::UInt64.nullable(true));
+            }
+
+            let mut seen_properties = BTreeSet::new();
+            for property in properties {
+                // handle each property only once (belt and suspenders)
+                if !seen_properties.insert(property) {
+                    continue;
+                }
+
+                match property {
+                    ExplainAnalyzeComputationProperty::Memory if skew => {
+                        let numeric = ScalarType::Numeric { max_scale: None }.nullable(true);
+                        relation_desc = relation_desc
+                            .with_column("memory_ratio", numeric.clone())
+                            .with_column("worker_memory", ScalarType::String.nullable(true))
+                            .with_column("avg_memory", ScalarType::String.nullable(true))
+                            .with_column("total_memory", ScalarType::String.nullable(true))
+                            .with_column("records_ratio", numeric.clone())
+                            .with_column("worker_records", numeric.clone())
+                            .with_column("avg_records", numeric.clone())
+                            .with_column("total_records", numeric);
+                    }
+                    ExplainAnalyzeComputationProperty::Memory => {
+                        relation_desc = relation_desc
+                            .with_column("total_memory", ScalarType::String.nullable(true))
+                            .with_column(
+                                "total_records",
+                                ScalarType::Numeric { max_scale: None }.nullable(true),
+                            );
+                    }
+                    ExplainAnalyzeComputationProperty::Cpu => {
+                        if skew {
+                            relation_desc = relation_desc
+                                .with_column(
+                                    "cpu_ratio",
+                                    ScalarType::Numeric { max_scale: None }.nullable(true),
+                                )
+                                .with_column("worker_elapsed", ScalarType::Interval.nullable(true))
+                                .with_column("avg_elapsed", ScalarType::Interval.nullable(true));
+                        }
+                        relation_desc = relation_desc
+                            .with_column("total_elapsed", ScalarType::Interval.nullable(true));
+                    }
+                }
+            }
+
+            let relation_desc = relation_desc.finish();
+            Ok(StatementDesc::new(Some(relation_desc)))
+        }
+        ExplainAnalyzeProperty::Hints => {
+            let relation_desc = RelationDesc::builder()
+                .with_column("operator", ScalarType::String.nullable(true))
+                .with_column("levels", ScalarType::Int64.nullable(true))
+                .with_column("to_cut", ScalarType::Int64.nullable(true))
+                .with_column("hint", ScalarType::Float64.nullable(true))
+                .with_column("savings", ScalarType::String.nullable(true))
+                .finish();
+            Ok(StatementDesc::new(Some(relation_desc)))
+        }
+    }
 }
 
 pub fn describe_explain_timestamp(
@@ -700,6 +784,214 @@ pub fn plan_explain_pushdown(
     scx.require_feature_flag(&vars::ENABLE_EXPLAIN_PUSHDOWN)?;
     let explainee = plan_explainee(scx, statement.explainee, params)?;
     Ok(Plan::ExplainPushdown(ExplainPushdownPlan { explainee }))
+}
+
+pub fn plan_explain_analyze(
+    scx: &StatementContext,
+    statement: ExplainAnalyzeStatement<Aug>,
+    params: &Params,
+) -> Result<Plan, PlanError> {
+    let explainee_name = statement
+        .explainee
+        .name()
+        .expect("EXPLAIN ANALYZE is not supported for this explainee")
+        .full_name_str();
+    let explainee = plan_explainee(scx, statement.explainee, params)?;
+
+    match explainee {
+        plan::Explainee::Index(_index_id) => (),
+        plan::Explainee::MaterializedView(_item_id) => (),
+        _ => {
+            return Err(sql_err!("EXPLAIN ANALYZE queries for this explainee type",));
+        }
+    };
+
+    // generate SQL query
+
+    /* WITH {CTEs}
+       SELECT REPEAT(' ', nesting * 2) || operator AS operator
+             {columns}
+        FROM      mz_introspection.mz_lir_mapping mlm
+             JOIN {from} USING (lir_id)
+             JOIN mz_introspection.mz_mappable_objects mo
+               ON (mlm.global_id = mo.global_id)
+       WHERE     mo.name = '{plan.explainee_name}'
+             AND {predicates}
+       ORDER BY lir_id DESC
+    */
+    let mut ctes = Vec::with_capacity(4); // max 2 per ExplainAnalyzeComputationProperty
+    let mut columns = vec!["REPEAT(' ', nesting * 2) || operator AS operator"];
+    let mut from = vec!["mz_introspection.mz_lir_mapping mlm"];
+    let mut predicates = vec![format!("mo.name = '{}'", explainee_name)];
+    let mut order_by = vec!["mlm.lir_id DESC"];
+
+    match statement.properties {
+        ExplainAnalyzeProperty::Computation { properties, skew } => {
+            let mut worker_id = None;
+            let mut seen_properties = BTreeSet::new();
+            for property in properties {
+                // handle each property only once (belt and suspenders)
+                if !seen_properties.insert(property) {
+                    continue;
+                }
+
+                match property {
+                    ExplainAnalyzeComputationProperty::Memory => {
+                        ctes.push((
+                            "summary_memory",
+                            r#"
+  SELECT mlm.lir_id AS lir_id,
+         SUM(mas.size) AS total_memory,
+         SUM(mas.records) AS total_records,
+         CASE WHEN COUNT(DISTINCT mas.worker_id) <> 0 THEN SUM(mas.size) / COUNT(DISTINCT mas.worker_id) ELSE NULL END AS avg_memory,
+         CASE WHEN COUNT(DISTINCT mas.worker_id) <> 0 THEN SUM(mas.records) / COUNT(DISTINCT mas.worker_id) ELSE NULL END AS avg_records
+    FROM      mz_introspection.mz_lir_mapping mlm
+         JOIN mz_introspection.mz_arrangement_sizes_per_worker mas
+           ON (mlm.operator_id_start <= mas.operator_id AND mas.operator_id < mlm.operator_id_end)
+GROUP BY mlm.lir_id"#,
+                        ));
+                        from.push("LEFT JOIN summary_memory sm USING (lir_id)");
+
+                        if skew {
+                            ctes.push((
+                                "per_worker_memory",
+                                r#"
+  SELECT mlm.lir_id AS lir_id,
+         mas.worker_id AS worker_id,
+         SUM(mas.size) AS worker_memory,
+         SUM(mas.records) AS worker_records
+    FROM      mz_introspection.mz_lir_mapping mlm
+         JOIN mz_introspection.mz_arrangement_sizes_per_worker mas
+           ON (mlm.operator_id_start <= mas.operator_id AND mas.operator_id < mlm.operator_id_end)
+GROUP BY mlm.lir_id, mas.worker_id"#,
+                            ));
+                            from.push("LEFT JOIN per_worker_memory pwm USING (lir_id)");
+
+                            if let Some(worker_id) = worker_id {
+                                predicates.push(format!("pwm.worker_id = {worker_id}"));
+                            } else {
+                                worker_id = Some("pwm.worker_id");
+                                columns.push("pwm.worker_id AS worker_id");
+                                order_by.push("worker_id");
+                            }
+
+                            columns.extend([
+                                "CASE WHEN pwm.worker_id IS NOT NULL AND sm.avg_memory <> 0 THEN ROUND(pwm.worker_memory / sm.avg_memory, 2) ELSE NULL END AS memory_ratio",
+                                "pg_size_pretty(pwm.worker_memory) AS worker_memory",
+                                "pg_size_pretty(sm.avg_memory) AS avg_memory",
+                                "pg_size_pretty(sm.total_memory) AS total_memory",
+                                "CASE WHEN pwm.worker_id IS NOT NULL AND sm.avg_records <> 0 THEN ROUND(pwm.worker_records / sm.avg_records, 2) ELSE NULL END AS records_ratio",
+                                "pwm.worker_records AS worker_records",
+                                "sm.avg_records AS avg_records",
+                                "sm.total_records AS total_records",
+                            ]);
+                        } else {
+                            columns.extend([
+                                "pg_size_pretty(sm.total_memory) AS total_memory",
+                                "sm.total_records AS total_records",
+                            ]);
+                        }
+                    }
+                    ExplainAnalyzeComputationProperty::Cpu => {
+                        ctes.push((
+                            "summary_cpu",
+                            r#"
+  SELECT mlm.lir_id AS lir_id,
+         SUM(mse.elapsed_ns) AS total_ns,
+         CASE WHEN COUNT(DISTINCT mse.worker_id) <> 0 THEN SUM(mse.elapsed_ns) / COUNT(DISTINCT mse.worker_id) ELSE NULL END AS avg_ns
+    FROM      mz_introspection.mz_lir_mapping mlm
+         JOIN mz_introspection.mz_scheduling_elapsed_per_worker mse
+           ON (mlm.operator_id_start <= mse.id AND mse.id < mlm.operator_id_end)
+GROUP BY mlm.lir_id"#,
+                        ));
+                        from.push("LEFT JOIN summary_cpu sc USING (lir_id)");
+
+                        if skew {
+                            ctes.push((
+                                "per_worker_cpu",
+                                r#"
+  SELECT mlm.lir_id AS lir_id,
+         mse.worker_id AS worker_id,
+         SUM(mse.elapsed_ns) AS worker_ns
+    FROM      mz_introspection.mz_lir_mapping mlm
+         JOIN mz_introspection.mz_scheduling_elapsed_per_worker mse
+           ON (mlm.operator_id_start <= mse.id AND mse.id < mlm.operator_id_end)
+GROUP BY mlm.lir_id, mse.worker_id"#,
+                            ));
+                            from.push("LEFT JOIN per_worker_cpu pwc USING (lir_id)");
+
+                            if let Some(worker_id) = worker_id {
+                                predicates.push(format!("pwc.worker_id = {worker_id}"));
+                            } else {
+                                worker_id = Some("pwc.worker_id");
+                                columns.push("pwc.worker_id AS worker_id");
+                                order_by.push("worker_id");
+                            }
+
+                            columns.extend([
+                                "CASE WHEN pwc.worker_id IS NOT NULL AND sc.avg_ns <> 0 THEN ROUND(pwc.worker_ns / sc.avg_ns, 2) ELSE NULL END AS cpu_ratio",
+                                "pwc.worker_ns / 1000 * '1 microsecond'::INTERVAL AS worker_elapsed",
+                                "sc.avg_ns / 1000 * '1 microsecond'::INTERVAL AS avg_elapsed",
+                            ]);
+                        }
+                        columns.push(
+                            "sc.total_ns / 1000 * '1 microsecond'::INTERVAL AS total_elapsed",
+                        );
+                    }
+                }
+            }
+        }
+        ExplainAnalyzeProperty::Hints => {
+            columns.extend([
+                "megsa.levels AS levels",
+                "megsa.to_cut AS to_cut",
+                "megsa.hint AS hint",
+                "pg_size_pretty(savings) AS savings",
+            ]);
+            from.extend(["JOIN mz_introspection.mz_dataflow_global_ids mdgi ON (mlm.global_id = mdgi.global_id)",
+            "LEFT JOIN mz_introspection.mz_expected_group_size_advice megsa ON (megsa.dataflow_id = mdgi.id AND mlm.operator_id_start <= megsa.region_id AND megsa.region_id < mlm.operator_id_end)"]);
+        }
+    }
+
+    from.push("JOIN mz_introspection.mz_mappable_objects mo ON (mlm.global_id = mo.global_id)");
+
+    let ctes = if !ctes.is_empty() {
+        format!(
+            "WITH {}",
+            separated(
+                ",\n",
+                ctes.iter()
+                    .map(|(name, defn)| format!("{name} AS ({defn})"))
+            )
+        )
+    } else {
+        String::new()
+    };
+    let columns = separated(", ", columns);
+    let from = separated(" ", from);
+    let predicates = separated(" AND ", predicates);
+    let order_by = separated(", ", order_by);
+    let query = format!(
+        r#"{ctes}
+SELECT {columns}
+FROM {from}
+WHERE {predicates}
+ORDER BY {order_by}"#
+    );
+
+    if statement.as_sql {
+        let rows = vec![Row::pack_slice(&[Datum::String(
+            &mz_sql_pretty::pretty_str_simple(&query, 80).map_err(|e| {
+                PlanError::Unstructured(format!("internal error parsing our own SQL: {e}"))
+            })?,
+        )])];
+        let typ = RelationType::new(vec![ScalarType::String.nullable(false)]);
+
+        Ok(Plan::Select(SelectPlan::immediate(rows, typ)))
+    } else {
+        let (show_select, _resolved_ids) = ShowSelect::new_from_bare_query(scx, query)?;
+        show_select.plan()
+    }
 }
 
 pub fn plan_explain_timestamp(
