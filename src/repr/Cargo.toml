@@ -36,7 +36,7 @@ columnation = "0.1.0"
 chrono = { version = "0.4.39", default-features = false, features = ["serde", "std"] }
 compact_bytes = "0.1.4"
 dec = "0.4.8"
-differential-dataflow = "0.15.1"
+differential-dataflow = "0.15.2"
 enum-kinds = "0.5.1"
 hex = "0.4.3"
 itertools = "0.14.0"
@@ -79,6 +79,7 @@ tracing = { version = "0.1.37" }
 # for the tracing feature
 tracing-subscriber = { version = "0.3.19", default-features = false, optional = true }
 workspace-hack = { version = "0.0.0", path = "../workspace-hack", optional = true }
+bytemuck = { version = "1.23.0", features = ["derive"] }
 
 [dev-dependencies]
 criterion = { version = "0.6.0" }

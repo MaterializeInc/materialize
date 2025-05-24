@@ -160,7 +160,7 @@ use crate::logging::compute::{
 };
 use crate::render::context::{ArrangementFlavor, Context, ShutdownToken};
 use crate::render::continual_task::ContinualTaskCtx;
-use crate::row_spine::{RowRowBatcher, RowRowBuilder};
+use crate::row_spine::RowRowBuilderColumn;
 use crate::typedefs::{ErrBatcher, ErrBuilder, ErrSpine, KeyBatcher};
 
 pub mod context;
@@ -175,6 +175,7 @@ mod top_k;
 
 pub use context::CollectionBundle;
 pub use join::LinearJoinSpec;
+use mz_timely_util::containers::Vec2Col2ValBatcher;
 
 /// Assemble the "compute"  side of a dataflow, i.e. all but the sources.
 ///
@@ -718,7 +719,7 @@ where
                 let mut oks = oks
                     .as_collection(|k, v| (k.into_owned(), v.into_owned()))
                     .leave()
-                    .mz_arrange::<RowRowBatcher<_, _>, RowRowBuilder<_, _>, _>(
+                    .mz_arrange::<Vec2Col2ValBatcher<_, _, _, _>, RowRowBuilderColumn<_, _>, _>(
                         "Arrange export iterative",
                     );
 

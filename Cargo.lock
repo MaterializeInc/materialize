@@ -1516,6 +1516,20 @@ name = "bytemuck"
 version = "1.23.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9134a6ef01ce4b366b50689c94f82c14bc72bc5d0386829828a2e2752ef7958c"
+dependencies = [
+ "bytemuck_derive",
+]
+
+[[package]]
+name = "bytemuck_derive"
+version = "1.9.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7ecc273b49b3205b83d648f0690daa588925572cc5063745bfe547fe7ec8e1a1"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 2.0.101",
+]
 
 [[package]]
 name = "byteorder"
@@ -2459,9 +2473,9 @@ dependencies = [
 
 [[package]]
 name = "differential-dataflow"
-version = "0.15.1"
+version = "0.15.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1ae8efe4a685ee677d41c6679f9eb81ae9623f7f4aa548c5894213045eb66796"
+checksum = "3b808ab85b0df005bbfed2a48f0c5a14ad05852e9acf13aafc70da114cd54688"
 dependencies = [
  "columnar",
  "columnation",
@@ -2473,9 +2487,9 @@ dependencies = [
 
 [[package]]
 name = "differential-dogs3"
-version = "0.1.12"
+version = "0.1.13"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f9197f5d5cdd4676a96d24b550909ebbf19619a27a138bfc2892e95d3389aacf"
+checksum = "8027a4370cbe79c8d6deae73addaf10961250928cbf47db90d180afb62ee27b3"
 dependencies = [
  "differential-dataflow",
  "serde",
@@ -6894,6 +6908,7 @@ dependencies = [
  "anyhow",
  "arrow",
  "bitflags 1.3.2",
+ "bytemuck",
  "bytes",
  "cfg-if",
  "chrono",
@@ -12545,6 +12560,7 @@ dependencies = [
  "bit-vec",
  "bitflags 2.9.0",
  "bstr",
+ "bytemuck",
  "byteorder",
  "bytes",
  "camino",
