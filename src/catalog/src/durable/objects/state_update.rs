@@ -1025,7 +1025,7 @@ impl From<PersistStateUpdate> for StateUpdate<StateUpdateKindJson> {
         StateUpdate {
             kind: StateUpdateKindJson::from(key),
             ts,
-            diff: diff.into(),
+            diff,
         }
     }
 }

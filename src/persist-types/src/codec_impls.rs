@@ -18,6 +18,7 @@ use arrow::array::{
     StructArray,
 };
 use bytes::{BufMut, Bytes};
+use mz_ore::Overflowing;
 use timely::order::Product;
 
 use crate::arrow::ArrayOrd;
@@ -512,6 +513,22 @@ impl Codec64 for u64 {
 impl Opaque for u64 {
     fn initial() -> Self {
         u64::MIN
+    }
+}
+
+impl Codec64 for Overflowing<i64> {
+    fn codec_name() -> String {
+        // Since we use the identical encoding to the underlying type, it's safe
+        // to use the identical codec name.
+        i64::codec_name()
+    }
+
+    fn encode(&self) -> [u8; 8] {
+        i64::encode(&self.into_inner())
+    }
+
+    fn decode(buf: [u8; 8]) -> Self {
+        i64::decode(buf).into()
     }
 }
 
