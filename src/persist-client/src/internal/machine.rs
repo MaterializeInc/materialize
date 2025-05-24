@@ -278,6 +278,7 @@ where
                     .into_iter()
                     .map(|b| Arc::unwrap_or_clone(b.batch))
                     .collect(),
+                prev_batch: None,
             })
             .collect();
         (reqs, maintenance)
@@ -500,6 +501,7 @@ where
                                 .into_iter()
                                 .map(|b| Arc::unwrap_or_clone(b.batch))
                                 .collect(),
+                            prev_batch: req.active_compaction,
                         };
                         compact_reqs.push(req);
                     }
@@ -594,6 +596,30 @@ where
                 }
             };
         }
+    }
+
+    /// As we build up batches during compaction, we incrementally commit
+    /// information about the completed (merged and persisted) parts.
+    /// That way if compaction is interrupted, we can safely resume the work.
+    ///
+    /// `checkpoint_compaction_progress` stores that in progress batch in state.
+    pub async fn checkpoint_compaction_progress(
+        &self,
+        batch_so_far: &HollowBatch<T>,
+        current_ts: u64,
+    ) {
+        let metrics = Arc::clone(&self.applier.metrics);
+
+        //TODO(dov): new metric
+        let _ = self
+            .apply_unbatched_idempotent_cmd(&metrics.cmds.merge_res, |_, _, state| {
+                let ret = state.apply_compaction_progress(batch_so_far, current_ts);
+                if let Continue(_) = ret {
+                    // metrics.state.compaction_progress_applied.inc();
+                }
+                ret
+            })
+            .await;
     }
 
     pub async fn merge_res(
@@ -1997,6 +2023,7 @@ pub mod datadriven {
             shard_id: datadriven.shard_id,
             desc: Description::new(lower, upper, since),
             inputs,
+            prev_batch: None,
         };
 
         let req_clone = req.clone();
@@ -2008,6 +2035,7 @@ pub mod datadriven {
             Arc::clone(&datadriven.client.isolated_runtime),
             req_clone,
             SCHEMAS.clone(),
+            &datadriven.machine,
         );
 
         let res = Compactor::<String, (), u64, i64>::compact_all(stream, req.clone()).await?;

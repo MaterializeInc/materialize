@@ -1002,6 +1002,7 @@ where
                 Arc::clone(&self.machine.applier.shard_metrics),
                 self.metrics.read.snapshot.clone(),
                 filter,
+                None,
                 COMPACTION_MEMORY_BOUND_BYTES.get(&self.cfg),
             );
             for batch in batches {
