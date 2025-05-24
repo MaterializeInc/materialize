@@ -911,7 +911,7 @@ pub fn to_jsonb(ecx: &ExprContext, expr: HirScalarExpr) -> HirScalarExpr {
         Bool | Jsonb | Numeric { .. } => {
             expr.call_unary(UnaryFunc::CastJsonbableToJsonb(func::CastJsonbableToJsonb))
         }
-        Int16 | Int32 | Float32 | Float64 => plan_cast(
+        Int16 | Int32 | Int64 | UInt16 | UInt32 | UInt64 | Float32 | Float64 => plan_cast(
             ecx,
             CastContext::Explicit,
             expr,
@@ -974,7 +974,28 @@ pub fn to_jsonb(ecx: &ExprContext, expr: HirScalarExpr) -> HirScalarExpr {
 
             expr.call_unary(func)
         }
-        _ => to_string(ecx, expr)
+        Date
+        | Time
+        | Timestamp { .. }
+        | TimestampTz { .. }
+        | Interval
+        | PgLegacyChar
+        | PgLegacyName
+        | Bytes
+        | String
+        | Char { .. }
+        | VarChar { .. }
+        | Uuid
+        | Oid
+        | Map { .. }
+        | RegProc
+        | RegType
+        | RegClass
+        | Int2Vector
+        | MzTimestamp
+        | Range { .. }
+        | MzAclItem
+        | AclItem => to_string(ecx, expr)
             .call_unary(UnaryFunc::CastJsonbableToJsonb(func::CastJsonbableToJsonb)),
     }
 }
