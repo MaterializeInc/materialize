@@ -37,7 +37,7 @@ azure_core = "0.21.0"
 base64 = "0.22.1"
 bytes = "1.10.1"
 deadpool-postgres = "0.10.3"
-differential-dataflow = "0.15.1"
+differential-dataflow = "0.15.2"
 fail = { version = "0.5.1", features = ["failpoints"] }
 futures-util = "0.3.31"
 itertools = "0.14.0"

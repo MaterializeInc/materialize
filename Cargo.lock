@@ -1641,9 +1641,9 @@ checksum = "37b2a672a2cb129a2e41c10b1224bb368f9f37a2b16b612598138befd7b37eb5"
 
 [[package]]
 name = "cc"
-version = "1.2.23"
+version = "1.2.24"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5f4ac86a9e5bc1e2b3449ab9d7d3a6a405e3d1bb28d7b9be8614f55846ae3766"
+checksum = "16595d3be041c03b09d08d0858631facccee9221e579704070e6e9e4915d3bc7"
 dependencies = [
  "jobserver",
  "libc",
@@ -2459,9 +2459,9 @@ dependencies = [
 
 [[package]]
 name = "differential-dataflow"
-version = "0.15.1"
+version = "0.15.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1ae8efe4a685ee677d41c6679f9eb81ae9623f7f4aa548c5894213045eb66796"
+checksum = "3b808ab85b0df005bbfed2a48f0c5a14ad05852e9acf13aafc70da114cd54688"
 dependencies = [
  "columnar",
  "columnation",
@@ -2473,9 +2473,9 @@ dependencies = [
 
 [[package]]
 name = "differential-dogs3"
-version = "0.1.12"
+version = "0.1.13"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f9197f5d5cdd4676a96d24b550909ebbf19619a27a138bfc2892e95d3389aacf"
+checksum = "8027a4370cbe79c8d6deae73addaf10961250928cbf47db90d180afb62ee27b3"
 dependencies = [
  "differential-dataflow",
  "serde",
@@ -3706,9 +3706,9 @@ dependencies = [
 
 [[package]]
 name = "hyper-util"
-version = "0.1.11"
+version = "0.1.12"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "497bbc33a26fdd4af9ed9c70d63f61cf56a938375fbb32df34db9b1cd6d643f2"
+checksum = "cf9f1e950e0d9d1d3c47184416723cf29c0d1f93bd8cccf37e4beb6b44f31710"
 dependencies = [
  "bytes",
  "futures-channel",
