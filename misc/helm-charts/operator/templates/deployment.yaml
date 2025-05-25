@@ -88,6 +88,9 @@ spec:
         {{- if not .Values.operator.features.authentication }}
         - "--disable-authentication"
         {{- end }}
+        {{- if not .Values.operator.features.databaseNetworkPolicies}}
+        - "--disable-database-network-policies"
+        {{- end }}
 
         {{/* Cluster Configuration */}}
         {{- if .Values.operator.clusters }}
