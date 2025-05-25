@@ -1,0 +1,286 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License in the LICENSE file at the
+# root of this repository, or online at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+"""
+Builds libunwind-nognu.
+
+Copied from: <https://github.com/bazelbuild/bazel-central-registry/blob/6de1a4d523ecb4fc45fcc55a4a057628c424f79e/modules/libunwind/1.8.1/overlay/BUILD.bazel>
+"""
+
+load("@bazel_skylib//lib:selects.bzl", "selects")
+load("@bazel_skylib//rules:expand_template.bzl", "expand_template")
+load("@rules_cc//cc:defs.bzl", "cc_library")
+
+### Common defines #############################################################
+
+libunwind_defines = [
+    # Defaults based on configure.ac assuming we're on a modern Linux OS.
+    "_GNU_SOURCE",
+    "CONFIG_BLOCK_SIGNALS",
+    "CONFIG_WEAK_BACKTRACE",
+    "CONSERVATIVE_CHECKS",
+    "HAVE__BUILTIN___CLEAR_CACHE",
+    "HAVE__BUILTIN_UNREACHABLE",
+    "HAVE_ELF_H",
+    "HAVE_LINK_H",
+    "HAVE_ZLIB",
+    # TODO: Add support for LZMA compression.
+    # "HAVE_LZMA",
+
+    'PACKAGE_STRING=\\"libunwind\\"',
+    'PACKAGE_BUGREPORT=\\"\\"',
+]
+
+### Common source files ########################################################
+
+dwarf_srcs = glob(["src/dwarf/*.c"])
+
+dwarf_textual_hdrs = glob(["src/dwarf/G*.c"])
+
+mi_srcs = glob(
+    ["src/mi/*.c"],
+    exclude = [
+        # Only included if Linux.
+        "src/mi/_ReadSLEB.c",
+        "src/mi/_ReadULEB.c",
+        # The Makefile does not include this, it's also broken as it can include
+        # Gdyn-remote.c in certain situations, which uses WSIZE, which will not
+        # be defined in the situations Gdyn-remote.c is included.
+        "src/mi/Ldyn-remote.c",
+        # TODO: for some reason these complain about duplicate definitions if
+        # included.
+        "src/mi/Gaddress_validator.c",
+        "src/mi/Gget_accessors.c",
+    ],
+)
+
+mi_textual_hdrs = glob(["src/mi/G*.c"])
+
+unwind_srcs = glob([
+    "src/unwind/*.c",
+    "src/unwind/*.h",
+])
+
+### Arch specific source files #################################################
+
+arm64_srcs = select({
+    "@platforms//cpu:aarch64": glob(
+        [
+            "src/aarch64/*.c",
+            "src/aarch64/*.h",
+        ],
+    ) + [
+        # The Makefile doesn't include this and only includes it if the OS
+        # is FreeBSD. This is inconsistent with the other archs, not sure
+        # whether this is intended.
+        # "src/aarch64/setcontext.S",
+        "src/aarch64/getcontext.S",
+        "src/elf64.h",
+    ],
+    "//conditions:default": [],
+})
+
+arm64_textual_hdrs = select({
+    "@platforms//cpu:aarch64": glob(
+        [
+            "src/aarch64/G*.c",
+        ],
+    ) + [
+        "src/elf64.c",
+    ],
+    "//conditions:default": [],
+})
+
+arm_srcs = select({
+    "@platforms//cpu:arm": glob(
+        [
+            "src/arm/*.c",
+            "src/arm/*.h",
+        ],
+        exclude = [
+            "src/arm/Los-freebsd.c",
+            "src/arm/Los-linux.c",
+            "src/arm/Los-other.c",
+            "src/arm/Gos-freebsd.c",
+            "src/arm/Gos-linux.c",
+            "src/arm/Gos-other.c",
+        ],
+    ) + [
+        "src/arm/getcontext.S",
+        "src/elf32.h",
+    ],
+    "//conditions:default": [],
+})
+
+arm_textual_hdrs = select({
+    "@platforms//cpu:arm": glob(
+        [
+            "src/arm/G*.c",
+        ],
+        exclude = [
+            "src/arm/Gos-freebsd.c",
+            "src/arm/Gos-linux.c",
+            "src/arm/Gos-other.c",
+        ],
+    ) + [
+        "src/elf32.c",
+    ],
+    "//conditions:default": [],
+})
+
+x86_64_srcs = select({
+    "@platforms//cpu:x86_64": glob(
+        [
+            "src/x86_64/*.c",
+            "src/x86_64/*.h",
+        ],
+        exclude = [
+            "src/x86_64/Los-freebsd.c",
+            "src/x86_64/Los-linux.c",
+            "src/x86_64/Los-qnx.c",
+            "src/x86_64/Los-solaris.c",
+            "src/x86_64/Gos-freebsd.c",
+            "src/x86_64/Gos-linux.c",
+            "src/x86_64/Gos-qnx.c",
+            "src/x86_64/Gos-solaris.c",
+        ],
+    ) + [
+        "src/elf64.h",
+        "src/x86_64/getcontext.S",
+        "src/x86_64/setcontext.S",
+    ],
+    "//conditions:default": [],
+})
+
+x86_64_textual_hdrs = select({
+    "@platforms//cpu:x86_64": glob(
+        [
+            "src/x86_64/G*.c",
+        ],
+        exclude = [
+            "src/x86_64/Gos-freebsd.c",
+            "src/x86_64/Gos-linux.c",
+            "src/x86_64/Gos-qnx.c",
+            "src/x86_64/Gos-solaris.c",
+        ],
+    ) + [
+        "src/elf64.c",
+    ],
+    "//conditions:default": [],
+})
+
+### OS specific source files ###################################################
+
+linux_srcs = select({
+    "@platforms//os:linux": [
+        "src/dl-iterate-phdr.c",
+        "src/mi/_ReadSLEB.c",
+        "src/mi/_ReadULEB.c",
+        "src/os-linux.c",
+        "src/os-linux.h",
+    ],
+    "//conditions:default": [],
+}) + select({
+    "@//misc/bazel/platforms:linux_arm": [],
+    "//conditions:default": [],
+}) + select({
+    "@//misc/bazel/platforms:linux_x86_64": [
+        "src/x86_64/Los-linux.c",
+        "src/x86_64/Gos-linux.c",
+    ],
+    "//conditions:default": [],
+})
+
+linux_textual_hdrs = select({
+    "@//misc/bazel/platforms:linux_arm": [],
+    "//conditions:default": [],
+}) + select({
+    "@//misc/bazel/platforms:linux_x86_64": ["src/x86_64/Gos-linux.c"],
+    "//conditions:default": [],
+})
+
+### libunwind ##################################################################
+
+libunwind_srcs = [
+    "src/elfxx.h",
+    "src/elfxx.c",
+] + dwarf_srcs + mi_srcs + unwind_srcs + arm64_srcs + arm_srcs + x86_64_srcs + linux_srcs
+
+libunwind_textual_hdrs = [
+    "src/elfxx.c",
+] + dwarf_textual_hdrs + mi_textual_hdrs + arm64_textual_hdrs + arm_textual_hdrs + x86_64_textual_hdrs + linux_textual_hdrs
+
+expand_template(
+    name = "libunwind_common_h",
+    out = "include/libunwind-common.h",
+    substitutions = {
+        "@PKG_MAJOR@": "1",
+        "@PKG_MINOR@": "8",
+        "@PKG_EXTRA@": "1",
+    },
+    template = "include/libunwind-common.h.in",
+)
+expand_template(
+    name = "libunwind_config_h",
+    out = "include/config.h",
+    substitutions = {
+        "@PACKAGE_STRING@": "libunwind",
+        "@PACKAGE_BUGREPORT@": "",
+    },
+    template = "include/config.h.in",
+)
+
+cc_library(
+    name = "unwind",
+    srcs = libunwind_srcs,
+    hdrs = glob(["include/tdep/*.h"]) + [
+        "include/compiler.h",
+        "include/dwarf.h",
+        "include/dwarf-eh.h",
+        "include/dwarf_i.h",
+        "include/libunwind.h",
+        "include/libunwind-dynamic.h",
+        "include/libunwind_i.h",
+        "include/mempool.h",
+        "include/remote.h",
+        "include/unwind.h",
+        ":libunwind_common_h",
+        ":libunwind_config_h",
+    ] + select({
+        "@platforms//cpu:arm64": glob(["include/tdep-aarch64/*.h"]) + ["include/libunwind-aarch64.h"],
+        "@platforms//cpu:arm": glob(["include/tdep-arm/*.h"]) + ["include/libunwind-arm.h"],
+        "@platforms//cpu:x86_64": ["include/libunwind-x86_64.h"] + glob(["include/tdep-x86_64/*.h"]),
+    }),
+    includes = [
+        "include",
+        "src",
+    ] + select({
+        "@platforms//cpu:arm64": [
+            "include/tdep-aarch64",
+        ],
+        "@platforms//cpu:arm": [
+            "include/tdep-arm",
+        ],
+        "@platforms//cpu:x86_64": [
+            "include/tdep-x86_64",
+        ],
+    }),
+    local_defines = libunwind_defines + ["HAVE_DL_ITERATE_PHDR"],
+    textual_hdrs = libunwind_textual_hdrs,
+    deps = [
+        "@zlib",
+    ],
+    visibility = ["//visibility:public"],
+)
