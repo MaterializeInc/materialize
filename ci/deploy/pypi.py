@@ -92,7 +92,16 @@ def upload_to_pypi(path: Path) -> None:
 
 
 def get_released_versions(name: str) -> set[str]:
-    res = requests.get(f"https://pypi.org/pypi/{name}/json")
+    # Default user client currently fails:
+    # > python-requests/2.32.3 User-Agents are currently blocked from accessing
+    # > JSON release resources. A cluster is apparently crawling all
+    # > project/release resources resulting in excess cache misses. Please
+    # > contact admin@pypi.org if you have information regarding what this
+    # > software may be.
+    res = requests.get(
+        f"https://pypi.org/pypi/{name}/json",
+        headers={"User-Agent": "Materialize Version Check"},
+    )
     if res.status_code == 404:
         # First release, no versions exist yet
         return set()
