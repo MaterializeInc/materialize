@@ -857,10 +857,7 @@ fn apply_diffs_spine<T: Timestamp + Lattice>(
 
     // Fast-path: compaction
     if let Some((_inputs, output)) = sniff_compaction(&diffs) {
-        let res = FueledMergeRes {
-            output,
-            new_active_compaction: None,
-        };
+        let res = FueledMergeRes { output };
         // We can't predict how spine will arrange the batches when it's
         // hydrated. This means that something that is maintaining a Spine
         // starting at some seqno may not exactly match something else
@@ -1427,10 +1424,10 @@ mod tests {
                                 .flat_map(|p| p.batch.parts.clone())
                                 .collect();
                             let output = HollowBatch::new_run(req.desc, parts, len);
-                            leader.collections.trace.apply_merge_res(&FueledMergeRes {
-                                output,
-                                new_active_compaction: None,
-                            });
+                            leader
+                                .collections
+                                .trace
+                                .apply_merge_res(&FueledMergeRes { output });
                         }
                     }
                 }

@@ -77,7 +77,6 @@ pub struct FueledMergeReq<T> {
 #[derive(Debug)]
 pub struct FueledMergeRes<T> {
     pub output: HollowBatch<T>,
-    pub new_active_compaction: Option<ActiveCompaction>,
 }
 
 /// An append-only collection of compactable update batches.
@@ -705,7 +704,7 @@ struct SpineBatch<T> {
 }
 
 impl<T> SpineBatch<T> {
-    fn merged(batch: IdHollowBatch<T>, active_compaction: Option<ActiveCompaction>) -> Self
+    fn merged(batch: IdHollowBatch<T>) -> Self
     where
         T: Clone,
     {
@@ -714,7 +713,7 @@ impl<T> SpineBatch<T> {
             desc: batch.batch.desc.clone(),
             len: batch.batch.len,
             parts: vec![batch],
-            active_compaction,
+            active_compaction: None,
         }
     }
 }
@@ -794,13 +793,10 @@ impl<T: Timestamp + Lattice> SpineBatch<T> {
         upper: Antichain<T>,
         since: Antichain<T>,
     ) -> Self {
-        SpineBatch::merged(
-            IdHollowBatch {
-                id,
-                batch: Arc::new(HollowBatch::empty(Description::new(lower, upper, since))),
-            },
-            None,
-        )
+        SpineBatch::merged(IdHollowBatch {
+            id,
+            batch: Arc::new(HollowBatch::empty(Description::new(lower, upper, since))),
+        })
     }
 
     pub fn begin_merge(
@@ -852,13 +848,10 @@ impl<T: Timestamp + Lattice> SpineBatch<T> {
             if res.output.len > self.len() {
                 return ApplyMergeResult::NotAppliedTooManyUpdates;
             }
-            *self = SpineBatch::merged(
-                IdHollowBatch {
-                    id: self.id(),
-                    batch: Arc::new(res.output.clone()),
-                },
-                res.new_active_compaction.clone(),
-            );
+            *self = SpineBatch::merged(IdHollowBatch {
+                id: self.id(),
+                batch: Arc::new(res.output.clone()),
+            });
             return ApplyMergeResult::AppliedExact;
         }
 
@@ -891,7 +884,6 @@ impl<T: Timestamp + Lattice> SpineBatch<T> {
                 break;
             }
         }
-
         // next, replace parts with the merge res batch if we can
         match (lower, upper) {
             (Some((lower, id_lower)), Some((upper, id_upper))) => {
@@ -907,7 +899,7 @@ impl<T: Timestamp + Lattice> SpineBatch<T> {
                     desc: desc.to_owned(),
                     len: new_parts.iter().map(|x| x.batch.len).sum(),
                     parts: new_parts,
-                    active_compaction: res.new_active_compaction.clone(),
+                    active_compaction: None,
                 };
                 if new_spine_batch.len() > self.len() {
                     return ApplyMergeResult::NotAppliedTooManyUpdates;
@@ -1224,13 +1216,10 @@ impl<T: Timestamp + Lattice> Spine<T> {
         assert_eq!(batch.desc.lower(), &self.upper);
 
         let id = self.next_id();
-        let batch = SpineBatch::merged(
-            IdHollowBatch {
-                id,
-                batch: Arc::new(batch),
-            },
-            None,
-        );
+        let batch = SpineBatch::merged(IdHollowBatch {
+            id,
+            batch: Arc::new(batch),
+        });
 
         self.upper.clone_from(batch.upper());
 
@@ -1818,7 +1807,6 @@ pub mod datadriven {
     ) -> Result<String, anyhow::Error> {
         let res = FueledMergeRes {
             output: DirectiveArgs::parse_hollow_batch(args.input),
-            new_active_compaction: None,
         };
         match datadriven.trace.apply_merge_res(&res) {
             ApplyMergeResult::AppliedExact => Ok("applied exact\n".into()),
