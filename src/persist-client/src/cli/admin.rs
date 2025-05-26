@@ -18,7 +18,6 @@ use std::time::{Duration, Instant};
 use anyhow::{anyhow, bail};
 use differential_dataflow::difference::Semigroup;
 use differential_dataflow::lattice::Lattice;
-use futures::pin_mut;
 use futures_util::{StreamExt, TryStreamExt, stream};
 use mz_dyncfg::{Config, ConfigSet};
 use mz_ore::metrics::MetricsRegistry;
@@ -37,11 +36,10 @@ use crate::cache::StateCache;
 use crate::cfg::{COMPACTION_MEMORY_BOUND_BYTES, all_dyncfgs};
 use crate::cli::args::{StateArgs, StoreArgs, make_blob, make_consensus};
 use crate::cli::inspect::FAKE_OPAQUE_CODEC;
-use crate::internal::compact::{CompactConfig, CompactReq, CompactRes, Compactor};
+use crate::internal::compact::{CompactConfig, CompactReq, Compactor};
 use crate::internal::encoding::Schemas;
 use crate::internal::gc::{GarbageCollector, GcReq};
 use crate::internal::machine::Machine;
-use crate::internal::state::HollowBatch;
 use crate::internal::trace::FueledMergeRes;
 use crate::rpc::{NoopPubSubSender, PubSubSender};
 use crate::write::{WriteHandle, WriterId};
@@ -491,44 +489,16 @@ where
                 val: Arc::clone(&val_schema),
             };
 
-            let stream = Compactor::<K, V, T, D>::compact_stream(
+            let res = Compactor::<K, V, T, D>::compact(
                 CompactConfig::new(&cfg, shard_id),
                 Arc::clone(&blob),
                 Arc::clone(&metrics),
                 Arc::clone(&machine.applier.shard_metrics),
                 Arc::new(IsolatedRuntime::default()),
-                req.clone(),
+                req,
                 schemas,
-            );
-            pin_mut!(stream);
-
-            let mut all_parts = vec![];
-            let mut all_run_splits = vec![];
-            let mut all_run_meta = vec![];
-            let mut len = 0;
-
-            while let Some(res) = stream.next().await {
-                let res = res?;
-                let (parts, updates, run_meta, run_splits) = (
-                    res.output.parts,
-                    res.output.len,
-                    res.output.run_meta,
-                    res.output.run_splits,
-                );
-                let run_offset = all_parts.len();
-                if !all_parts.is_empty() {
-                    all_run_splits.push(run_offset);
-                }
-                all_run_splits.extend(run_splits.iter().map(|r| r + run_offset));
-                all_run_meta.extend(run_meta);
-                all_parts.extend(parts);
-                len += updates;
-            }
-
-            let res = CompactRes {
-                output: HollowBatch::new(req.desc, all_parts, len, all_run_meta, all_run_splits),
-            };
-
+            )
+            .await?;
             metrics.compaction.admin_count.inc();
             info!(
                 "attempt {} req {}: compacted into {} parts {} bytes in {:?}",
@@ -539,10 +509,7 @@ where
                 start.elapsed(),
             );
             let (apply_res, maintenance) = machine
-                .merge_res(&FueledMergeRes {
-                    output: res.output,
-                    new_active_compaction: None,
-                })
+                .merge_res(&FueledMergeRes { output: res.output })
                 .await;
             if !maintenance.is_empty() {
                 info!("ignoring non-empty requested maintenance: {maintenance:?}")
@@ -794,7 +761,7 @@ pub async fn dangerous_force_compaction_and_break_pushdown<K, V, T, D>(
                 write.write_schemas.clone(),
             )
             .await;
-            let apply_maintenance = match res {
+            let (res, apply_maintenance) = match res {
                 Ok(x) => x,
                 Err(err) => {
                     warn!(
@@ -808,10 +775,11 @@ pub async fn dangerous_force_compaction_and_break_pushdown<K, V, T, D>(
             };
             machine.applier.metrics.compaction.admin_count.inc();
             info!(
-                "force_compaction {} {} compacted in {:?}",
+                "force_compaction {} {} compacted in {:?}: {:?}",
                 machine.applier.shard_metrics.name,
                 machine.applier.shard_metrics.shard_id,
-                start.elapsed()
+                start.elapsed(),
+                res
             );
             maintenance.merge(apply_maintenance);
         }
