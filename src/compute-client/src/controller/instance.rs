@@ -2811,7 +2811,7 @@ impl<T: ComputeControllerTimestamp> ReplicaState<T> {
             as_of.clone(),
         );
         let mut state =
-            ReplicaCollectionState::new(metrics, as_of, introspection, input_read_holds);
+            ReplicaCollectionState::new(id, metrics, as_of, introspection, input_read_holds);
 
         // In an effort to keep the produced wallclock lag introspection data small and
         // predictable, we disable wallclock lag tracking for transient collections, i.e. slow-path
@@ -2884,6 +2884,7 @@ impl<T: ComputeControllerTimestamp> ReplicaState<T> {
 
 #[derive(Debug)]
 struct ReplicaCollectionState<T: ComputeControllerTimestamp> {
+    id: GlobalId,
     /// The replica write frontier of this collection.
     ///
     /// See [`FrontiersResponse::write_frontier`].
@@ -2920,12 +2921,14 @@ struct ReplicaCollectionState<T: ComputeControllerTimestamp> {
 
 impl<T: ComputeControllerTimestamp> ReplicaCollectionState<T> {
     fn new(
+        id: GlobalId,
         metrics: Option<ReplicaCollectionMetrics>,
         as_of: Antichain<T>,
         introspection: ReplicaCollectionIntrospection<T>,
         input_read_holds: Vec<ReadHold<T>>,
     ) -> Self {
         Self {
+            id,
             write_frontier: as_of.clone(),
             input_frontier: as_of.clone(),
             output_frontier: as_of.clone(),
@@ -2961,8 +2964,12 @@ impl<T: ComputeControllerTimestamp> ReplicaCollectionState<T> {
     fn update_write_frontier(&mut self, new_frontier: Antichain<T>) {
         if PartialOrder::less_than(&new_frontier, &self.write_frontier) {
             soft_panic_or_log!(
-                "replica collection write frontier regression (old={:?}, new={new_frontier:?})",
+                "replica collection write frontier regression \
+                 (id={}, old={:?}, new={new_frontier:?}, as_of={:?}, input_read_holds={:?})",
+                self.id,
                 self.write_frontier,
+                self.as_of,
+                self.input_read_holds,
             );
             return;
         } else if new_frontier == self.write_frontier {
@@ -2976,8 +2983,12 @@ impl<T: ComputeControllerTimestamp> ReplicaCollectionState<T> {
     fn update_input_frontier(&mut self, new_frontier: Antichain<T>) {
         if PartialOrder::less_than(&new_frontier, &self.input_frontier) {
             soft_panic_or_log!(
-                "replica collection input frontier regression (old={:?}, new={new_frontier:?})",
+                "replica collection input frontier regression \
+                 (id={}, old={:?}, new={new_frontier:?}, as_of={:?}, input_read_holds={:?})",
+                self.id,
                 self.input_frontier,
+                self.as_of,
+                self.input_read_holds,
             );
             return;
         } else if new_frontier == self.input_frontier {
@@ -3001,8 +3012,12 @@ impl<T: ComputeControllerTimestamp> ReplicaCollectionState<T> {
     fn update_output_frontier(&mut self, new_frontier: Antichain<T>) {
         if PartialOrder::less_than(&new_frontier, &self.output_frontier) {
             soft_panic_or_log!(
-                "replica collection output frontier regression (old={:?}, new={new_frontier:?})",
+                "replica collection output frontier regression \
+                 (id={}, old={:?}, new={new_frontier:?}, as_of={:?}, input_read_holds={:?})",
+                self.id,
                 self.output_frontier,
+                self.as_of,
+                self.input_read_holds,
             );
             return;
         } else if new_frontier == self.output_frontier {
