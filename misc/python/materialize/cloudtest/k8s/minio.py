@@ -81,7 +81,7 @@ class Minio(K8sResource):
         self.kubectl(
             "run",
             "minio",
-            "--image=minio/mc",
+            "--image=minio/mc:RELEASE.2023-07-07T05-25-51Z",
             "--restart=Never",
             "--command",
             "/bin/sh",
