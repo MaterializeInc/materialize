@@ -12,7 +12,7 @@ workspace = true
 [dependencies]
 columnar = "0.5.0"
 columnation = "0.1.0"
-differential-dataflow = "0.15.1"
+differential-dataflow = "0.15.2"
 itertools = "0.14.0"
 mz-dyncfg = { path = "../dyncfg" }
 mz-expr = { path = "../expr" }
