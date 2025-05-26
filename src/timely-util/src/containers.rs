@@ -420,7 +420,7 @@ pub mod batcher {
         D: Columnar + Ord,
         T: Columnar + Ord,
         R: Columnar + Semigroup,
-        C2: Container + SizableContainer + for<'b> PushInto<(&'b D, &'b T, &'b R)>,
+        C2: SizableContainer + for<'b> PushInto<(&'b D, &'b T, &'b R)>,
     {
         fn push_into(&mut self, container: &'a mut Vec<(D, T, R)>) {
             // Sort input data
@@ -448,7 +448,7 @@ pub mod batcher {
         for<'b> T::Ref<'b>: Ord + Copy,
         R: Columnar + Semigroup + for<'b> Semigroup<R::Ref<'b>>,
         for<'b> R::Ref<'b>: Ord,
-        C2: Container + for<'b, 'c> PushInto<(D::Ref<'b>, T::Ref<'b>, &'c R)>,
+        C2: SizableContainer + for<'b, 'c> PushInto<(D::Ref<'b>, T::Ref<'b>, &'c R)>,
     {
         fn push_into(&mut self, container: &'a mut Column<(D, T, R)>) {
             // Sort input data
@@ -471,6 +471,10 @@ pub mod batcher {
                     } else {
                         if !prev_diff.is_zero() {
                             self.target.push_into((prev_data, prev_time, &prev_diff));
+                            // TODO: This should be a builder.
+                            if self.target.at_capacity() {
+                                self.ready.push_back(std::mem::take(&mut self.target));
+                            }
                         }
                         prev_data = data;
                         prev_time = time;
