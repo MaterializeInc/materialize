@@ -2,9 +2,10 @@
 name: Materialize
 title: Fivetran for Materialize | Configuration and documentation
 description: Connect data sources to Materialize in minutes using Fivetran. Explore documentation and start syncing your applications and events.
+menuPosition: 70
 ---
 
-# Materialize {% badge text="Partner-Built" /%} {% badge text="Private Preview" /%}
+# Materialize {% badge text="Partner-Built" /%} {% availabilityBadge connector="materialize" /%}
 
 [Materialize](https://materialize.com) is a data warehouse purpose-built for operational workloads where an analytical data warehouse would be too slow, and a stream processor would be too complicated.
 
@@ -21,6 +22,10 @@ For relational databases like PostgreSQL or MySQL, and event streaming sources l
 > NOTE: This destination is [partner-built](/docs/partner-built-program). For any questions related to the Materialize destination and its documentation, contact the [Materialize team](mailto:support@materialize.com).
 
 ----
+
+{% partial file="destinations/saas-supported-deployment-models.template.md" /%}
+
+-----
 
 ## Setup guide
 
@@ -57,7 +62,7 @@ The following table illustrates how we transform your Fivetran data types into M
 
 ## Schema changes
 
-Schema changes to existing tables is not currently supported. When creating a Connector you should select the option to "Block all" schema changes.
+Schema changes to existing tables is not currently supported. When creating a connector, you should select the [**Block all** schema change handling option](/docs/using-fivetran/fivetran-dashboard/connectors/schema#defineschemachangehandlingsettings).
 
 | SCHEMA CHANGE      | SUPPORTED | NOTES                                                                                                     |
 |--------------------|-----------|-----------------------------------------------------------------------------------------------------------|
@@ -71,3 +76,4 @@ Schema changes to existing tables is not currently supported. When creating a Co
 The Fivetran Materialize destination has the following known limitations:
 
 - Schema changes to an existing source are not supported.
+- [History mode](/docs/core-concepts/sync-modes/history-mode) is not supported.
