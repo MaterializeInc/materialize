@@ -462,6 +462,7 @@ where
                     .into_iter()
                     .map(|b| Arc::unwrap_or_clone(b.batch))
                     .collect(),
+                prev_batch: None,
             };
             let parts = req.inputs.iter().map(|x| x.part_count()).sum::<usize>();
             let bytes = req
@@ -499,6 +500,7 @@ where
                 Arc::new(IsolatedRuntime::default()),
                 req.clone(),
                 schemas,
+                &machine,
             );
             pin_mut!(stream);
 

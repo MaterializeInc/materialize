@@ -17,6 +17,21 @@ use std::mem;
 use std::sync::Arc;
 use std::time::Instant;
 
+use crate::async_runtime::IsolatedRuntime;
+use crate::cfg::{BATCH_BUILDER_MAX_OUTSTANDING_PARTS, MiB};
+use crate::error::InvalidUsage;
+use crate::internal::compact::{CompactConfig, Compactor};
+use crate::internal::encoding::{LazyInlineBatchPart, LazyPartStats, LazyProto, Schemas};
+use crate::internal::machine::{Machine, retry_external};
+use crate::internal::merge::{MergeTree, Pending};
+use crate::internal::metrics::{BatchWriteMetrics, Metrics, RetryMetrics, ShardMetrics};
+use crate::internal::paths::{PartId, PartialBatchKey, WriterKey};
+use crate::internal::state::{
+    BatchPart, HollowBatch, HollowBatchPart, HollowRun, HollowRunRef, ProtoInlineBatchPart,
+    RunMeta, RunOrder, RunPart,
+};
+use crate::stats::{STATS_BUDGET_BYTES, STATS_COLLECTION_ENABLED, untrimmable_columns};
+use crate::{PersistConfig, ShardId};
 use arrow::array::{Array, Int64Array};
 use bytes::Bytes;
 use differential_dataflow::difference::Semigroup;
@@ -46,22 +61,6 @@ use timely::PartialOrder;
 use timely::order::TotalOrder;
 use timely::progress::{Antichain, Timestamp};
 use tracing::{Instrument, debug_span, trace_span, warn};
-
-use crate::async_runtime::IsolatedRuntime;
-use crate::cfg::{BATCH_BUILDER_MAX_OUTSTANDING_PARTS, MiB};
-use crate::error::InvalidUsage;
-use crate::internal::compact::{CompactConfig, Compactor};
-use crate::internal::encoding::{LazyInlineBatchPart, LazyPartStats, LazyProto, Schemas};
-use crate::internal::machine::retry_external;
-use crate::internal::merge::{MergeTree, Pending};
-use crate::internal::metrics::{BatchWriteMetrics, Metrics, RetryMetrics, ShardMetrics};
-use crate::internal::paths::{PartId, PartialBatchKey, WriterKey};
-use crate::internal::state::{
-    BatchPart, HollowBatch, HollowBatchPart, HollowRun, HollowRunRef, ProtoInlineBatchPart,
-    RunMeta, RunOrder, RunPart,
-};
-use crate::stats::{STATS_BUDGET_BYTES, STATS_COLLECTION_ENABLED, untrimmable_columns};
-use crate::{PersistConfig, ShardId};
 
 include!(concat!(env!("OUT_DIR"), "/mz_persist_client.batch.rs"));
 
@@ -676,6 +675,41 @@ where
         }
     }
 
+    pub fn batch_with_finished_parts(
+        &self,
+        registered_desc: Description<T>,
+    ) -> Option<HollowBatch<T>> {
+        let runs = self.parts.finish_completed_runs();
+
+        if runs.is_empty() {
+            return None;
+        }
+
+        let mut run_parts = vec![];
+        let mut run_splits = vec![];
+        let mut run_meta = vec![];
+        for (order, parts) in runs {
+            if parts.is_empty() {
+                continue;
+            }
+            if run_parts.len() != 0 {
+                run_splits.push(run_parts.len());
+            }
+            run_meta.push(RunMeta {
+                order: Some(order),
+                schema: self.write_schemas.id,
+                // Field has been deprecated but kept around to roundtrip state.
+                deprecated_schema: None,
+            });
+            run_parts.extend(parts);
+        }
+        let desc = registered_desc;
+
+        let batch = HollowBatch::new(desc, run_parts, self.num_updates, run_meta, run_splits);
+
+        Some(batch)
+    }
+
     /// Finish writing this batch and return a handle to the written batch.
     ///
     /// This fails if any of the updates in this batch are beyond the given
@@ -843,6 +877,8 @@ impl<T: Timestamp + Codec64> BatchParts<T> {
                             shard_metrics,
                             isolated_runtime,
                             write_schemas,
+                            &None,
+                            None,
                         )
                         .await
                         .expect("successful compaction");
@@ -1227,6 +1263,27 @@ impl<T: Timestamp + Codec64> BatchParts<T> {
             // Field has been deprecated but kept around to roundtrip state.
             deprecated_schema_id: None,
         })
+    }
+
+    pub(crate) fn finish_completed_runs(&self) -> Vec<(RunOrder, Vec<RunPart<T>>)> {
+        match &self.writing_runs {
+            WritingRuns::Ordered(order, tree) => tree
+                .iter()
+                .take_while(|part| matches!(part, Pending::Finished(_)))
+                .map(|part| match part {
+                    Pending::Finished(p) => (order.clone(), vec![p.clone()]),
+                    _ => (order.clone(), vec![]),
+                })
+                .collect(),
+            WritingRuns::Compacting(tree) => tree
+                .iter()
+                .take_while(|(_, run)| matches!(run, Pending::Finished(_)))
+                .map(|(order, run)| match run {
+                    Pending::Finished(parts) => (order.clone(), parts.clone()),
+                    _ => (order.clone(), vec![]),
+                })
+                .collect(),
+        }
     }
 
     #[instrument(level = "debug", name = "batch::finish_upload", fields(shard = %self.shard_id))]
