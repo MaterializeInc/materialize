@@ -2050,7 +2050,6 @@ where
             // able to append that batch in the first place.
             let fake_merge = FueledMergeRes {
                 output: HollowBatch::empty(desc),
-                new_active_compaction: None,
             };
             let result = self.trace.apply_merge_res(&fake_merge);
             assert!(
