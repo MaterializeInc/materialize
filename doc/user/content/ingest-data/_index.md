@@ -193,19 +193,7 @@ ran out of memory), you can scale up to a larger
 [size](/sql/alter-cluster/#alter-cluster-size) to complete the
 operation.
 
-```sql
-ALTER CLUSTER <cluster_name> SET ( SIZE = <new_size> );
-```
-
-{{% note %}}
-
-Resizing a cluster that hosts sources requires the cluster to restart. This
-operation incurs downtime for the duration it takes for all objects in the
-cluster to [hydrate](#hydration).
-
-{{% /note %}}
-
-Once the initial snapshot has completed, you can resize the cluster.
+{{< include-md file="shared-content/resize-cluster-for-snapshotting.md" >}}
 
 #### Right-size the cluster for steady-state
 
