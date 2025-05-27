@@ -113,7 +113,7 @@ application password")
 
    | Field | Details |
    | ----- | ----------- |
-   | **Type** | Select **Personal** |
+   | **Type** | Select **Service** |
    | **Name** | Specify a descriptive name. |
    | **User** | Specify the service account user name. If the specifie account   does not exist, it will be automatically created the **first time** the application password is used. |
    | **Roles** | Select the roles to associate with the account. <br><br><ul><li><strong>Organization Admin</strong> has _superuser_ privileges in the database.</li><li><strong>Organization Member</strong> has restricted access to the database, depending on the privileges defined via [role-based access control (RBAC)](/manage/access-control/#role-based-access-control-rbac). |
