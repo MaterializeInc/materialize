@@ -79,7 +79,7 @@ impl ArrowReader {
         let mut readers = Vec::with_capacity(desc_columns.len());
         for (col_name, col_type) in desc.iter() {
             let column = array
-                .column_by_name(col_name.as_str())
+                .column_by_name(col_name)
                 .ok_or_else(|| anyhow::anyhow!("'{col_name}' not found"))?;
             let reader = scalar_type_and_array_to_reader(&col_type.scalar_type, Arc::clone(column))
                 .context(col_name.clone())?;
@@ -349,7 +349,7 @@ fn scalar_type_and_array_to_reader(
             let mut decoders = Vec::with_capacity(fields.len());
             for (name, typ) in fields.iter() {
                 let inner_array = record_array
-                    .column_by_name(name.as_str())
+                    .column_by_name(name)
                     .ok_or_else(|| anyhow::anyhow!("missing name '{name}'"))?;
                 let inner_array = mask_nulls(inner_array, null_mask);
                 let inner_decoder = scalar_type_and_array_to_reader(&typ.scalar_type, inner_array)

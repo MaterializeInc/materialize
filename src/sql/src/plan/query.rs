@@ -331,13 +331,13 @@ pub fn plan_insert_query(
             } else {
                 sql_bail!(
                     "column {} of relation {} does not exist",
-                    c.as_str().quoted(),
+                    c.quoted(),
                     table_name.full_name_str().quoted()
                 );
             }
         }
         if let Some(dup) = columns.iter().duplicates().next() {
-            sql_bail!("column {} specified more than once", dup.as_str().quoted());
+            sql_bail!("column {} specified more than once", dup.quoted());
         }
     };
 
@@ -395,7 +395,7 @@ pub fn plan_insert_query(
     let expr = cast_relation(&qcx, CastContext::Assignment, expr, source_types).map_err(|e| {
         sql_err!(
             "column {} is of type {} but expression is of type {}",
-            desc.get_name(ordering[e.column]).as_str().quoted(),
+            desc.get_name(ordering[e.column]).quoted(),
             qcx.humanize_scalar_type(&e.target_type, false),
             qcx.humanize_scalar_type(&e.source_type, false),
         )
@@ -580,13 +580,13 @@ pub fn plan_copy_item(
             } else {
                 sql_bail!(
                     "column {} of relation {} does not exist",
-                    c.as_str().quoted(),
+                    c.quoted(),
                     item_name.full_name_str().quoted()
                 );
             }
         }
         if let Some(dup) = columns.iter().duplicates().next() {
-            sql_bail!("column {} specified more than once", dup.as_str().quoted());
+            sql_bail!("column {} specified more than once", dup.quoted());
         }
 
         // The source data is a different shape than the destination table.
@@ -2192,7 +2192,7 @@ fn plan_values_insert(
                 Ok(val) => val,
                 Err(_) => sql_bail!(
                     "column {} is of type {} but expression is of type {}",
-                    target_names[column].as_str().quoted(),
+                    target_names[column].quoted(),
                     qcx.humanize_scalar_type(target_type, false),
                     qcx.humanize_scalar_type(source_type, false),
                 ),
@@ -3774,7 +3774,7 @@ fn plan_using_constraint(
             return Err(PlanError::Unsupported {
                 feature: format!(
                     "column name {} appears more than once in USING clause",
-                    c.as_str().quoted()
+                    c.quoted()
                 ),
                 discussion_no: None,
             });
@@ -3842,7 +3842,7 @@ fn plan_using_constraint(
         let mut exprs = coerce_homogeneous_exprs(
             &ecx.with_name(&format!(
                 "NATURAL/USING join column {}",
-                column_name.as_str().quoted()
+                column_name.quoted()
             )),
             vec![
                 CoercibleScalarExpr::Coerced(HirScalarExpr::named_column(

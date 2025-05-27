@@ -53,7 +53,7 @@ impl PlanNotice {
                     was a unique key of the underlying relation {}. If this key is not unique, \
                     the sink might produce multiple updates for the same key at the same time, \
                     which may confuse downstream consumers.",
-                    separated(", ", key.iter().map(|c| c.as_str().quoted())),
+                    separated(", ", key.iter().map(|c| c.quoted())),
                     name.quoted()
                 );
                 Some(details)

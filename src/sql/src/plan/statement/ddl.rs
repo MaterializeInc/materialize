@@ -293,7 +293,7 @@ pub fn plan_create_table(
         .collect();
 
     if let Some(dup) = names.iter().duplicates().next() {
-        sql_bail!("column {} specified more than once", dup.as_str().quoted());
+        sql_bail!("column {} specified more than once", dup.quoted());
     }
 
     // Build initial relation type that handles declared data types
@@ -1086,7 +1086,7 @@ pub fn plan_create_source(
 
     let names: Vec<_> = desc.iter_names().cloned().collect();
     if let Some(dup) = names.iter().duplicates().next() {
-        sql_bail!("column {} specified more than once", dup.as_str().quoted());
+        sql_bail!("column {} specified more than once", dup.quoted());
     }
 
     // Apply user-specified key constraint
@@ -1437,7 +1437,7 @@ fn plan_source_export_desc(
         .collect();
 
     if let Some(dup) = names.iter().duplicates().next() {
-        sql_bail!("column {} specified more than once", dup.as_str().quoted());
+        sql_bail!("column {} specified more than once", dup.quoted());
     }
 
     // Build initial relation type that handles declared data types
@@ -1898,7 +1898,7 @@ pub fn plan_create_table_from_source(
 
     let names: Vec<_> = desc.iter_names().cloned().collect();
     if let Some(dup) = names.iter().duplicates().next() {
-        sql_bail!("column {} specified more than once", dup.as_str().quoted());
+        sql_bail!("column {} specified more than once", dup.quoted());
     }
 
     let name = scx.allocate_qualified_name(normalize::unresolved_item_name(name.clone())?)?;
@@ -2539,7 +2539,7 @@ pub fn plan_view(
     let names: Vec<ColumnName> = desc.iter_names().cloned().collect();
 
     if let Some(dup) = names.iter().duplicates().next() {
-        sql_bail!("column {} specified more than once", dup.as_str().quoted());
+        sql_bail!("column {} specified more than once", dup.quoted());
     }
 
     let view = View {
@@ -2846,7 +2846,7 @@ pub fn plan_create_materialized_view(
                 .ok_or_else(|| {
                     sql_err!(
                         "column {} in ASSERT NOT NULL option not found",
-                        assertion_name.as_str().quoted()
+                        assertion_name.quoted()
                     )
                 })
         })
@@ -2854,14 +2854,11 @@ pub fn plan_create_materialized_view(
     non_null_assertions.sort();
     if let Some(dup) = non_null_assertions.iter().duplicates().next() {
         let dup = &column_names[*dup];
-        sql_bail!(
-            "duplicate column {} in non-null assertions",
-            dup.as_str().quoted()
-        );
+        sql_bail!("duplicate column {} in non-null assertions", dup.quoted());
     }
 
     if let Some(dup) = column_names.iter().duplicates().next() {
-        sql_bail!("column {} specified more than once", dup.as_str().quoted());
+        sql_bail!("column {} specified more than once", dup.quoted());
     }
 
     // Override the statement-level IfExistsBehavior with Skip if this is
@@ -3108,7 +3105,7 @@ pub fn plan_create_continual_task(
                     sql_err!(
                         "statement {}: column {} is of type {} but expression is of type {}",
                         idx,
-                        desc.get_name(e.column).as_str().quoted(),
+                        desc.get_name(e.column).quoted(),
                         qcx.humanize_scalar_type(&e.target_type, false),
                         qcx.humanize_scalar_type(&e.source_type, false),
                     )
@@ -3154,7 +3151,7 @@ pub fn plan_create_continual_task(
     let desc = desc.ok_or_else(|| sql_err!("TODO(ct3)"))?;
     let column_names: Vec<ColumnName> = desc.iter_names().cloned().collect();
     if let Some(dup) = column_names.iter().duplicates().next() {
-        sql_bail!("column {} specified more than once", dup.as_str().quoted());
+        sql_bail!("column {} specified more than once", dup.quoted());
     }
 
     // Check for an object in the catalog with this same name
