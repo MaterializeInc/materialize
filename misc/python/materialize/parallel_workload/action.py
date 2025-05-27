@@ -1064,6 +1064,12 @@ class FlipFlagsAction(Action):
             "16",
             "1000",
         ]
+        self.flags_with_values["persist_compaction_memory_bound_bytes"] = [
+            # 1 * 128 MiB, 4 * 128 MiB, 8 * 128 MiB
+            "134217728",
+            "536870912",
+            "1073741824",
+        ]
         self.flags_with_values["persist_part_decode_format"] = [
             "row_with_validate",
             "arrow",
