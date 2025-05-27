@@ -16,7 +16,7 @@ Follow the setup guide to connect Materialize to Fivetran.
 
 To connect Materialize to Fivetran, you need the following:
 
-- A Materialize account. If you don't have one, [sign up for a playground account](https://materialize.com/register/) first.
+- A Materialize account. If you don't have one, [sign up for a free trial account](https://materialize.com/register/) first.
 - A Fivetran account with [permission to add destinations](/docs/using-fivetran/fivetran-dashboard/account-settings/role-based-access-control#legacyandnewrbacmodel).
 
 ---
