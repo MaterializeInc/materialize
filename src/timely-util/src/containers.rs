@@ -893,7 +893,8 @@ mod tests {
     /// Produce some bytes that are in columnar format.
     fn raw_columnar_bytes() -> Vec<u8> {
         let mut raw = Vec::new();
-        raw.extend(12_u64.to_le_bytes()); // length
+        raw.extend(16_u64.to_le_bytes()); // length
+        raw.extend(28_u64.to_le_bytes()); // length
         raw.extend(1_i32.to_le_bytes());
         raw.extend(2_i32.to_le_bytes());
         raw.extend(3_i32.to_le_bytes());
