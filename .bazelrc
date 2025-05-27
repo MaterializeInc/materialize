@@ -65,6 +65,9 @@ build --nobuild_runfile_links
 # common --verbose_explanations
 
 # Compress any artifacts larger than 2MiB with zstd.
+#
+# Note(parkmycar): These thresholds were chosen arbitrarily. You should feel
+# free to change them if you encounter issues.
 common --remote_cache_compression
 common --experimental_remote_cache_compression_threshold=2097152
 # Memoizes merkle tree calculations to improve the remote cache hit checking speed.
@@ -105,7 +108,9 @@ build:linux --linkopt="-Wl,-O2"
 build:linux --@rules_rust//:extra_rustc_flag="-Clink-arg=-Wl,-O2"
 build:linux --copt="-gz=zlib"
 
-# Match the DWARF version used by Rust
+# Match the DWARF version used by Rust.
+#
+# Note(parkmycar): This might not be necessary but seemed nice to do.
 #
 # See: <https://doc.rust-lang.org/stable/unstable-book/compiler-flags/dwarf-version.html>
 build:linux --copt="-gdwarf-4"
@@ -141,7 +146,8 @@ build --@rules_rust//:extra_rustc_flag="-Csymbol-mangling-version=v0"
 # Cargo when incremental compilation is enabled.
 build --@rules_rust//:extra_rustc_flag="-Ccodegen-units=64"
 # Enabling pipelined builds allows dependent libraries to begin compiling with
-# just `.rmeta` instead of the full `.rlib`.
+# just `.rmeta` instead of the full `.rlib`. This is what Cargo does and offers
+# a significant speedup in end-to-end build times!
 build --@rules_rust//rust/settings:pipelined_compilation=True
 
 # `cargo check` like config, still experimental!
@@ -248,19 +254,3 @@ build:hwasan --action_env=ASAN_OPTIONS=verbosity=1
 # HACK(parkmycar): We want to tell Rust to use the Bazel provided `clang++` but there isn't
 # a great way to do that. We know this is where `clang++` lives though, so it works.
 build:hwasan --@rules_rust//:extra_rustc_flag=-Clinker=external/llvm_toolchain_llvm/bin/clang++
-
-# Cross Language LTO
-#
-# <https://blog.llvm.org/2019/09/closing-gap-cross-language-lto-between.html>
-#
-# TODO(parkmycar): Re-enable these. They eiter cause a compilation failure because of
-# missing object files, or (seemingly) makes the number of codegen units 1 which compiles
-# way too slow.
-#build:release --@rules_rust//:extra_rustc_flag="-Clinker-plugin-lto"
-#build:linux --@rules_rust//rust/settings:experimental_use_cc_common_link=True
-
-# This 'features' option comes from the `unix_cc_toolchain_config` in Bazel core and sets all the
-# right flags.
-#
-# See: <https://github.com/bazelbuild/bazel/blob/master/tools/cpp/unix_cc_toolchain_config.bzl>
-#build:release --features=thin_lto

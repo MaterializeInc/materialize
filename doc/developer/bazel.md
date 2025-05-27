@@ -42,11 +42,18 @@ allows Bazel to aggressively cache artifacts, which reduces build times.
   * [How Bazel Works](#how-bazel-works)
     * [`WORKSPACE`, `BUILD.bazel`, `*.bzl` files](#workspace-buildbazel-bzl-files)
     * [Generating `BUILD.bazel` files](#generating-buildbazel-files)
+      * [`cargo-gazelle`](#cargo-gazelle)
       * [Supported Configurations](#supported-configurations)
     * [Platforms](#platforms)
+      * [Custom Build Flags](#custom-build-flags)
     * [Toolchains](#toolchains)
-  * [`rules_rust`](#rules_rust)
+      * [System Roots](#system-roots)
+  * [Building Rust Code](#building-rust-code)
     * [`crates_repository`](#crates_repository)
+    * [Rust `-sys` crates](#rust--sys-crates)
+      * [Other C dependencies](#other-c-dependencies)
+    * [Protobuf Generation](#protobuf-generation)
+    * [Git Hash Versioning](#git-hash-versioning)
 
 # Getting Started
 
@@ -96,7 +103,8 @@ common --experimental_disk_cache_gc_max_age=7d
 ## Remote caching
 
 Bazel supports reading and writing artifacts to a [remote cache](https://bazel.build/remote/caching).
-We currently have two setup that are backed by S3 and running [`bazel-remote`](https://github.com/buchgr/bazel-remote).
+We currently have two setup in [`i2`](https://github.com/MaterializeInc/i2/blob/daacaca7e04e9c30e9914b5efa084047b3e58994/i2/apps/__init__.py#L126-L141)
+that are backed by S3 and running [`bazel-remote`](https://github.com/buchgr/bazel-remote).
 One is accessible by developers and used by PR builds in CI, we treat this as semi-poisoned. The
 other is only accessible by CI and used for builds from `main` and tagged builds.
 
@@ -135,15 +143,16 @@ it for other tools as well like `mzimage` and `mzcompose`! To enable Bazel speci
 flag like you would specify the `--dev` flag, e.g. `bin/mzcompose --bazel ...`.
 
 Otherwise Bazel can be used just like `cargo`, to build individual targets and run tests. We
-provide a thin wrapper around the `bazel` command in the form of `bin/bazel`. This sets up remote
-caching, and provides the `fmt` and `gen` subcommands. Otherwise it forwards all commands onto
-`bazel` itself.
+provide a thin wrapper around the `bazel` command in the form of [`bin/bazel`](../../misc/python/materialize/cli/bazel.py).
+This sets up remote caching, and provides the `fmt` and `gen` subcommands.
+Otherwise it forwards all commands onto `bazel` itself.
 
 ## Building a crate
 
-All Rust crates have a `BUILD.bazel` file that define different build targets for the crate. You
-don't have to write these files, they are automatically generated from the crate's `Cargo.toml`.
-For more details see the [Generating `BUILD.bazel` files](#generating-buildbazel-files) section.
+All Rust crates in our Cargo Workspace have a `BUILD.bazel` file that define different build
+targets for the crate. You don't have to write these files, they are automatically generated from
+the crate's `Cargo.toml`. For more details see the [Generating `BUILD.bazel` files](#generating-buildbazel-files)
+section.
 
 > **tl;dr** to build a crate run `bin/bazel build //src/<crate-name>` from the root of the repo.
 
@@ -264,7 +273,7 @@ There are three kinds of files in our Bazel setup:
 > **tl;dr** run `bin/bazel gen` from the root of the repository.
 
 Just like `Cargo.toml`, associated with every crate is a `BUILD.bazel` file that provides targets that
-Bazel can build. We auto-generate these files with a [`cargo-gazelle`](../bazel/cargo-gazelle/) which
+Bazel can build. We auto-generate these files with [`cargo-gazelle`](../../misc/bazel/cargo-gazelle) which
 developers can easily run via `bin/bazel gen`.
 
 There are times though when `Cargo.toml` doesn't provide all of the information required to build a
@@ -281,7 +290,21 @@ compile_data = ["path/to/my/file.txt"]
 This will add `"path/to/my/file.txt"` to the `compile_data` attribute on the
 resulting [`rust_library`](http://bazelbuild.github.io/rules_rust/defs.html#rust_library) Bazel target.
 
+### `cargo-gazelle`
+
+[`gazelle`](https://github.com/bazel-contrib/bazel-gazelle) is a semi-official `BUILD.bazel` file
+generator that supports Golang and protobuf. There exists a [`gazelle_rust`](https://github.com/Calsign/gazelle_rust)
+plugin, but it's not yet mature enough to fit our needs. Still, it's important for producivity that
+developers who don't want to interact with Bazel shouldn't have to, so generating a `BUILD.bazel`
+file from a `Cargo.toml` is quite important.
+
+Thus we decided to write our own generator, `cargo-gazelle`! It's not a plugin for the existing
+`gazelle` tool but theoretically could be. It's designed to be fully generic with very few (if any)
+Materialize specific configurations built in.
+
 ### Supported Configurations
+
+`cargo-gazelle` supports the following configuration in a `Cargo.toml` file.
 
 ```toml
 # Configuration for the crate as a whole.
@@ -403,11 +426,28 @@ serve:
    this is always the same as the "Host platform" since we don't utilize distributed builds.
 3. Target: the platform we are building for.
 
-The platforms that we build for are defined in [/platforms/BUILD.bazel](../bazel/platforms/BUILD.bazel).
+The platforms that we build for are defined in [`/platforms/BUILD.bazel`](../../misc/bazel/platforms/BUILD.bazel).
 
 A common way to configure a build based on platform is to use the
 [`select`](https://bazel.build/reference/be/functions#select) function. This allows you to return
 different values depending on the platform we're targetting.
+
+### Custom Build Flags
+
+Not necessarily related to platforms, but still defined in
+[`/platforms/BUILD.bazel`](../../misc/bazel/platforms/BUILD.bazel) are our custom build flags.
+Currently we have custom build settings for the following features:
+
+1. Sanitizers like AddressSanitizer (ASan).
+2. Cross language LTO
+
+While most build settings can get defined in the `.bazelrc` these features require slightly more
+complex configuration. For example, if we're building with a sanitizer we need to disable
+`jemalloc`, this is because sanitizers commonly have their own allocator. To do this we create a
+new build flag with the [`string_flag`](https://github.com/bazelbuild/bazel-skylib/blob/454b25912a8ddf3d90eb47f25260befd5ee274a8/docs/common_settings_doc.md)
+rule from the Bazel Skylib rule set and match on this using the [`config_setting`](https://bazel.build/docs/configurable-attributes)
+rule that is built in to Bazel. The [`config_setting`] is then what we can match on in our
+`BUILD.bazel` files with a `select({ ... })` function.
 
 ## Toolchains
 
@@ -418,32 +458,120 @@ specify a Rust toolchain every time you use the `rust_library` rule, you instead
 Rust toolchain that rules resolve during analysis.
 
 Toolchains are defined and registered in the [`WORKSPACE`](/WORKSPACE) file. We currently use
-Clang/LLVM to build C/C++ code, the version is defined by `LLVM_VERSION`, and we support both
-stable and nightly Rust, the versions defined by `RUST_VERSION` and `RUST_NIGHTLY_VERSION`
+Clang/LLVM to build C/C++ code (via the [`toolchains_llvm`](https://github.com/bazel-contrib/toolchains_llvm) ruleset)
+where the version is defined by the `LLVM_VERSION` constant. For Rust we support both stable and
+nightly, where the versions defined by the `RUST_VERSION` and `RUST_NIGHTLY_VERSION` constants
 respectively.
 
+Both [`toolchains_llvm`](https://github.com/bazel-contrib/toolchains_llvm/blob/0d3594c3edbe216e4734d52aa1e305049f877ea5/toolchain/osx_cc_wrapper.sh.tpl)
+and [`rules_rust`](https://github.com/bazelbuild/rules_rust/tree/e38fa8c2bc0990debceaf28daa4fcb2c57dcdc1c/util/process_wrapper) have "process wrappers".
+These are small wrappers around `clang` and `rustc` that are able to inspect the absolute path they
+are being invoked from. Bazel does not expose absolute paths _at all_ so these wrappers are how
+arguments like [`--remap-path-prefix`](https://doc.rust-lang.org/stable/rustc/command-line-arguments.html#--remap-path-prefix-remap-source-names-in-output)
+get set. These wrappers are helpful but can also cause issues like [`toolchains_llvm#421`](https://github.com/bazel-contrib/toolchains_llvm/issues/421).
+
 The upstream [LLVM toolchains](https://github.com/llvm/llvm-project/releases) are very large and
-built for bespoke CPU architectures. As such we build our own, see the
-[MaterializeInc/toolchains](https://github.com/MaterializeInc/toolchains) repo for more details.
+built for bespoke CPU architectures. While maybe not ideal, we build our own LLVM toolchains which
+live in the [MaterializeInc/toolchains](https://github.com/MaterializeInc/toolchains) repo. This
+ensures we're using the same version of `clang` across all architectures we support and greatly
+improves the speed of cold builds.
 
-# [`rules_rust`](https://github.com/bazelbuild/rules_rust)
+> Note: The upstream LLVM toolchains are ~1 GiB and compressed with gzip, end-to-end they took
+about 3 minutes to download and setup. Our toolchains are ~80MiB and compressed with zstd which
+end-to-end take less than 30 seconds to download and setup.
 
-For building Rust code we use `rules_rust`. It's primary component is the
-[`crates_repository`](http://bazelbuild.github.io/rules_rust/crate_universe.html#crates_repository) rule.
+### System Roots
+
+Along with a C-toolchain we also provide a system root for our builds. A system root contains
+things like `libc`, `libm`, and `libpthread`, as well as their associated header files. Our system
+roots also live in the [MaterializeInc/toolchains](https://github.com/MaterializeInc/toolchains/blob/22e21deac9cec196c6adfcca811722882f92f941/sysroot/Dockerfile) repo.
+
+# Building Rust Code
+
+For building Rust code we use [`rules_rust`](https://github.com/bazelbuild/rules_rust). It's
+primary component is the [`crates_repository`](http://bazelbuild.github.io/rules_rust/crate_universe.html#crates_repository)
+rule.
 
 ## `crates_repository`
 
 Normally when building a Rust library you define external dependencies in a `Cargo.toml`, and
-`cargo` handles fetching the relevant crates, generally from `crates.io`. The [`crates_repository`]
+`cargo` handles fetching the relevant crates, generally from `crates.io`. The [`crates_repository`](https://bazelbuild.github.io/rules_rust/crate_universe_workspace.html#crates_repository)
 rule does the same thing, we define a set of manifests (`Cargo.toml` files), it will analyze them
 and create a Bazel [repository](https://bazel.build/external/overview#repository) containing all of
 the necessary external dependencies.
 
-Then to build our crates, e.g. [`mz-adapter`](/src/adapter/), we use the handy
+Then to build our crates, e.g. [`mz-adapter`](../../src/adapter/), we use the handy
 [`all_crate_deps`](http://bazelbuild.github.io/rules_rust/crate_universe.html#all_crate_deps)
 macro. When using this macro in a `BUILD.bazel` file, it determines which package we're in (e.g.
 `mz-adapter`) and expands to all of the necessary external dependencies. Unfortunately it does not
 include dependencies from within our own workspace, so we still need to do a bit of manual work
 of specifying dependencies when writing our `BUILD.bazel` files.
 
-In the [`WORKSPACE`](/WORKSPACE) file we define a "root" `crates_repository` named `crates_io`.
+In the [`WORKSPACE`](../../WORKSPACE) file we define a "root" `crates_repository` named `crates_io`.
+
+## Rust `-sys` crates
+
+There are some Rust crates that are wrappers around C libraries, like
+[`decnumber-sys`](https://crates.io/crates/decnumber-sys) is a wrapper around
+[`libdecnumber`](https://speleotrove.com/decimal/). `cargo-gazelle` will generate a Bazel target
+for the crate's build script, but it's likely this build script will fail because it can't find
+tools like `cmake`, our system root, or implicitly depends on some other C library.
+
+The general approach we've used to get these crates to build is to duplicate the logic from the
+`-sys` crate's `build.rs` script into a Bazel target. See
+[bazel/c_deps/rust-sys](../../misc/bazel/c_deps/rust-sys) for some examples. Once you write a
+`BUILD.bazel` file for the C dependency we add a `crate.annotation` in our [`WORKSPACE`](https://github.com/MaterializeInc/materialize/blob/5f2f45a162c44e4c6a03ba017f8b7d1d00c3775b/WORKSPACE#L464-L469)
+file that appends your newly written `BUILD.bazel` file to the one generated for the Rust crate.
+
+Duplicating logic is never great, but having Bazel explicitly build these C dependencies provides
+better caching and more control over the process which unlocks features like cross language LTO.
+
+### Other C dependencies
+
+There are a few C dependencies which are used both by a Rust `-sys` crate and another C dependency.
+For example `zstd` is used by both the `zstd-sys` Rust crate and the `rocksdb` C library. For these
+cases instead of depending on the version included via the Rust `-sys` crate, we "manually" include
+them by downloading the source files as an [`http_archive`](https://bazel.build/rules/lib/repo/http).
+All cases of external C dependencies live in [`bazel/c_deps/repositories.bzl`](../../misc/bazel/c_deps/repositories.bzl).
+
+## Protobuf Generation
+
+Nearly all of our Rust build scripts do a single thing, and that's generate Rust bindings to
+protobuf definitions. `rules_rust` includes [rules for generating protobuf bindings](https://bazelbuild.github.io/rules_rust/rust_prost.html)
+when using Prost and Tonic, but they don't interact with Cargo Build Scripts very well. Instead we
+added a new crate called [`build-tools`](../../src/build-tools) whose purpose is to abstract over
+whatever build system you're using and provide the tool a build script might need, like `protoc`.
+
+For Bazel we provide the necessary tools via ["runfiles"](https://bazel.build/rules/lib/builtins/runfiles), which are defined in the [`data` field](https://github.com/MaterializeInc/materialize/blob/5f2f45a162c44e4c6a03ba017f8b7d1d00c3775b/src/build-tools/BUILD.bazel#L30-L33)
+of the `rust_library` target. Bazel "runfiles" are a set of files that are provided at runtime
+execution. So in your build script to get the current path of the `protoc` executable you would
+call `mz_build_tools::protoc` ([example](https://github.com/MaterializeInc/materialize/blob/5f2f45a162c44e4c6a03ba017f8b7d1d00c3775b/src/persist/build.rs#L14))
+which returns a [different path depending on the build system](https://github.com/MaterializeInc/materialize/blob/5f2f45a162c44e4c6a03ba017f8b7d1d00c3775b/src/build-tools/src/lib.rs#L38-L64)
+currently being used.
+
+## Git Hash Versioning
+
+Development builds of Materialize include the current git hash in their version number. The sandbox
+that Bazel creates when building a Rust library does not include any git info, so attempts to get
+the current hash will fail.
+
+But! Bazel has a concept of "stamping" builds which allows you to provide local system information
+as part of the build process, this information is known as the [workspace status](https://bazel.build/docs/user-manual#workspace-status).
+Generating the workspace status and providing it to Rust libraries requires a few steps, all of
+which are described in the [`bazel/build-info/BUILD.bazel`](https://github.com/MaterializeInc/materialize/blob/5f2f45a162c44e4c6a03ba017f8b7d1d00c3775b/misc/bazel/build-info/BUILD.bazel#L12-L29) file.
+
+Unfortunately this isn't the whole story though. It turns out workspace status and stamping builds
+causes poor remote cache performance. On a new build Bazel will regenerate the `volatile-status.txt`
+file used in workspace stamping which causes any stamped libraries to not be fetched from the
+remote cache, see [`bazelbuild#10075`](https://github.com/bazelbuild/bazel/issues/10075). For us
+this caused a pretty serious regression in build times so we came up with a workaround:
+
+1. When [building in release mode but not a tagged build](https://github.com/MaterializeInc/materialize/blob/e427108049dd97f55b8b6d634ae01b025b8520b5/misc/python/materialize/mzbuild.py#L156-L163),
+   (e.g. a PR) `mzbuild.py` will [write out the current git hash to a temporary file](https://github.com/MaterializeInc/materialize/blob/e427108049dd97f55b8b6d634ae01b025b8520b5/misc/python/materialize/bazel.py#L39-L64).
+2. Our `build-info` Rust crate knows to [read from this temporary file](https://github.com/MaterializeInc/materialize/blob/main/src/build-info/src/lib.rs#L123-L141)
+   in a non-hermetic/side-channel way to get the git hash into the current build without
+   invalidating the remote cache.
+
+While definitely hacky, our side-channel for the git hash does provide a substantial improvement in
+build times, while providing similar guarantees to the Cargo build with respect to when the hash
+gets re-computed.
