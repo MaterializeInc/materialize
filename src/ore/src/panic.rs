@@ -97,7 +97,15 @@ pub fn install_enhanced_handler() {
         }
 
         // Report the panic to Sentry.
-        sentry_panic::panic_handler(panic_info);
+        // Note that we can't use `sentry_panic::panic_handler` because that requires the panic
+        // integration to be enabled.
+        sentry::Hub::with_active(|hub| {
+            let event = sentry_panic::PanicIntegration::new().event_from_panic_info(panic_info);
+            hub.capture_event(event);
+            if let Some(client) = hub.client() {
+                client.flush(None);
+            }
+        });
 
         // can't use if cfg!() here because that will require chrono::Utc import
         #[cfg(feature = "chrono")]
