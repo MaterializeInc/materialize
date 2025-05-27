@@ -13,6 +13,8 @@ mode cockroach
 # repeat row (=> this panics!)
 # -------------------------------
 
+halt
+
 statement ok
 CREATE TABLE t_base (data int, diff bigint);
 
