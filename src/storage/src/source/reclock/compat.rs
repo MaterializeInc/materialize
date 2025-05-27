@@ -34,7 +34,7 @@ use mz_storage_client::util::remap_handle::{RemapHandle, RemapHandleReader};
 use mz_storage_types::StorageDiff;
 use mz_storage_types::controller::CollectionMetadata;
 use mz_storage_types::sources::{SourceData, SourceTimestamp};
-use timely::order::PartialOrder;
+use timely::order::{PartialOrder, TotalOrder};
 use timely::progress::Timestamp;
 use timely::progress::frontier::Antichain;
 use tokio::sync::watch;
@@ -63,7 +63,7 @@ pub struct PersistHandle<FromTime: SourceTimestamp, IntoTime: Timestamp + Lattic
 impl<FromTime: Timestamp, IntoTime: Timestamp + Sync> PersistHandle<FromTime, IntoTime>
 where
     FromTime: SourceTimestamp,
-    IntoTime: Timestamp + Lattice + Codec64,
+    IntoTime: Timestamp + TotalOrder + Lattice + Codec64,
 {
     pub async fn new(
         persist_clients: Arc<PersistClientCache>,
@@ -249,7 +249,7 @@ where
 impl<FromTime, IntoTime> RemapHandle for PersistHandle<FromTime, IntoTime>
 where
     FromTime: SourceTimestamp,
-    IntoTime: Timestamp + Lattice + Codec64 + Sync,
+    IntoTime: Timestamp + TotalOrder + Lattice + Codec64 + Sync,
 {
     async fn compare_and_append(
         &mut self,

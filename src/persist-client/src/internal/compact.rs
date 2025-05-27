@@ -942,7 +942,6 @@ mod tests {
     use mz_dyncfg::ConfigUpdates;
     use mz_ore::{assert_contains, assert_err};
     use mz_persist_types::codec_impls::StringSchema;
-    use timely::order::Product;
     use timely::progress::Antichain;
 
     use crate::PersistLocation;
@@ -1019,83 +1018,6 @@ mod tests {
         .await;
         assert_eq!(part.desc, res.output.desc);
         assert_eq!(updates, all_ok(&data, 10));
-    }
-
-    #[mz_persist_proc::test(tokio::test)]
-    #[cfg_attr(miri, ignore)] // unsupported operation: returning ready events from epoll_wait is not yet implemented
-    async fn compaction_partial_order(dyncfgs: ConfigUpdates) {
-        let data = vec![
-            (("0".to_owned(), "zero".to_owned()), Product::new(0, 10), 1),
-            (("1".to_owned(), "one".to_owned()), Product::new(10, 0), 1),
-        ];
-
-        let cache = new_test_client_cache(&dyncfgs);
-        cache.cfg.set_config(&BLOB_TARGET_SIZE, 100);
-        let (mut write, _) = cache
-            .open(PersistLocation::new_in_mem())
-            .await
-            .expect("client construction failed")
-            .expect_open::<String, String, Product<u32, u32>, i64>(ShardId::new())
-            .await;
-        let b0 = write
-            .batch(
-                &data[..1],
-                Antichain::from_elem(Product::new(0, 0)),
-                Antichain::from_iter([Product::new(0, 11), Product::new(10, 0)]),
-            )
-            .await
-            .expect("invalid usage")
-            .into_hollow_batch();
-
-        let b1 = write
-            .batch(
-                &data[1..],
-                Antichain::from_iter([Product::new(0, 11), Product::new(10, 0)]),
-                Antichain::from_elem(Product::new(10, 1)),
-            )
-            .await
-            .expect("invalid usage")
-            .into_hollow_batch();
-
-        let req = CompactReq {
-            shard_id: write.machine.shard_id(),
-            desc: Description::new(
-                b0.desc.lower().clone(),
-                b1.desc.upper().clone(),
-                Antichain::from_elem(Product::new(10, 0)),
-            ),
-            inputs: vec![b0, b1],
-        };
-        let schemas = Schemas {
-            id: None,
-            key: Arc::new(StringSchema),
-            val: Arc::new(StringSchema),
-        };
-        let res = Compactor::<String, String, Product<u32, u32>, i64>::compact(
-            CompactConfig::new(&write.cfg, write.shard_id()),
-            Arc::clone(&write.blob),
-            Arc::clone(&write.metrics),
-            write.metrics.shards.shard(&write.machine.shard_id(), ""),
-            Arc::new(IsolatedRuntime::default()),
-            req.clone(),
-            schemas.clone(),
-        )
-        .await
-        .expect("compaction failed");
-
-        assert_eq!(res.output.desc, req.desc);
-        assert_eq!(res.output.len, 2);
-        assert_eq!(res.output.part_count(), 1);
-        let part = res.output.parts[0].expect_hollow_part();
-        let (part, updates) = expect_fetch_part(
-            write.blob.as_ref(),
-            &part.key.complete(&write.machine.shard_id()),
-            &write.metrics,
-            &schemas,
-        )
-        .await;
-        assert_eq!(part.desc, res.output.desc);
-        assert_eq!(updates, all_ok(&data, Product::new(10, 0)));
     }
 
     #[mz_persist_proc::test(tokio::test)]

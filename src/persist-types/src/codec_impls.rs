@@ -18,7 +18,6 @@ use arrow::array::{
     StructArray,
 };
 use bytes::{BufMut, Bytes};
-use timely::order::Product;
 
 use crate::arrow::ArrayOrd;
 use crate::columnar::{ColumnDecoder, ColumnEncoder, Schema};
@@ -512,24 +511,6 @@ impl Codec64 for u64 {
 impl Opaque for u64 {
     fn initial() -> Self {
         u64::MIN
-    }
-}
-
-impl Codec64 for Product<u32, u32> {
-    fn codec_name() -> String {
-        "Product<u32, u32>".to_owned()
-    }
-
-    fn encode(&self) -> [u8; 8] {
-        let o = self.outer.to_le_bytes();
-        let i = self.inner.to_le_bytes();
-        [o[0], o[1], o[2], o[3], i[0], i[1], i[2], i[3]]
-    }
-
-    fn decode(buf: [u8; 8]) -> Self {
-        let outer = [buf[0], buf[1], buf[2], buf[3]];
-        let inner = [buf[4], buf[5], buf[6], buf[7]];
-        Product::new(u32::from_le_bytes(outer), u32::from_le_bytes(inner))
     }
 }
 
