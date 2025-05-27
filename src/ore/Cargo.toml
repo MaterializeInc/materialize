@@ -35,7 +35,7 @@ either = "1.15.0"
 futures = { version = "0.3.31", optional = true }
 hibitset = { version = "0.6.4", optional = true }
 itertools = "0.14.0"
-lgalloc = { version = "0.5", optional = true }
+lgalloc = { version = "0.6", optional = true }
 libc = { version = "0.2.172", optional = true }
 mz-ore-proc = { path = "../ore-proc", default-features = false }
 num = "0.4.3"
