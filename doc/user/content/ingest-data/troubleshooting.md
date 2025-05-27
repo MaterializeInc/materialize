@@ -61,15 +61,7 @@ cannot serve queries. That is, queries issued to the snapshotting source (and
 its subsources) will return after the snapshotting completes (unless the user
 breaks out of the query).
 
-Snapshotting can take anywhere from a few minutes to several hours, depending on the size of your dataset,
-the upstream database, the number of tables (more tables can be parallelized in Postgres), and the [size of your ingestion cluster](/sql/create-cluster/#size).
-
-We've observed the following approximate snapshot rates from PostgreSQL:
-| Cluster Size | Snapshot Rate |
-|--------------|---------------|
-| 25 cc | ~20 MB/s |
-| 100 cc | ~50 MB/s |
-| 800 cc | ~200 MB/s |
+{{< include-md file="shared-content/snapshotting-cluster-size-postgres.md" >}}
 
 To determine whether your source has completed ingesting the initial snapshot,
 you can query the [`mz_source_statistics`](/sql/system-catalog/mz_internal/#mz_source_statistics)
@@ -91,14 +83,17 @@ monitor its progress. See [How do I monitor source ingestion progress?](#how-do-
 
 ## How do I speed up the snapshotting process?
 
-Scale up the cluster used for the snapshot, then scale it back down once the
-snapshot completes.
+{{< include-md file="shared-content/snapshotting-cluster-size-postgres.md" >}}
+
+To speed up the snapshotting process, you can scale up the [size of the cluster
+](/sql/alter-cluster/#alter-cluster-size) used for snapshotting, then scale it
+back down once the snapshot completes.
 
 {{< include-md file="shared-content/resize-cluster-for-snapshotting.md" >}}
 
-For upsert sources, using a larger cluster can not only speed up snapshotting,
-but may be required to support additional memory usage during snapshotting.  For
-more information, see [Use a larger cluster for upsert source
+For upsert sources, a larger cluster can not only speed up snapshotting, but may
+also be necessary to support increased memory usage during the process. For more
+information, see [Use a larger cluster for upsert source
 snapshotting](https://materialize.com/docs/self-managed/v25.1/ingest-data/#use-a-larger-cluster-for-upsert-source-snapshotting).
 
 ## How do I monitor source ingestion progress?

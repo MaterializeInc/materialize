@@ -6,7 +6,7 @@ ALTER CLUSTER <cluster_name> SET ( SIZE = <new_size> );
 
 Resizing a cluster that hosts sources requires the cluster to restart. This
 operation incurs downtime for the duration it takes for all objects in the
-cluster to [hydrate](#hydration).
+cluster to [hydrate](/ingest-data/#hydration).
 
 {{% /note %}}
 

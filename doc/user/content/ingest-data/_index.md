@@ -184,14 +184,13 @@ operation](#snapshotting) to initially populate the source in Materialize. For
 upsert sources, snapshotting is a resource-intensive operation that can require
 a significant amount of CPU and memory.
 
-Consider using a larger cluster size during snapshotting for upsert sources.
-Once the snapshotting operation is complete, you can downsize the cluster to
-align with the steady-state ingestion.
+Consider using a [larger cluster size](/sql/alter-cluster/#alter-cluster-size)
+during snapshotting for upsert sources. Once the snapshotting operation is
+complete, you can downsize the cluster to align with the steady-state ingestion.
 
 If the cluster hosting the source restarts during snapshotting (e.g., because it
-ran out of memory), you can scale up to a larger
-[size](/sql/alter-cluster/#alter-cluster-size) to complete the
-operation.
+ran out of memory), you can scale up to a [larger
+size](/sql/alter-cluster/#alter-cluster-size) to complete the operation.
 
 {{< include-md file="shared-content/resize-cluster-for-snapshotting.md" >}}
 
