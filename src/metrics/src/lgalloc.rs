@@ -50,7 +50,7 @@ struct FileStatsAccum {
     pub allocated_size: usize,
 }
 
-/// An accumulator for [`FileStats`].
+/// An accumulator for [`MapStats`].
 #[derive(Default)]
 struct MapStatsAccum {
     /// Number of mapped bytes, if different from `dirty`. Consult `man 7 numa` for details.
