@@ -1263,10 +1263,14 @@ impl PersistPeek {
                 }
 
                 let count: usize = d.try_into().map_err(|_| {
+                    tracing::error!(
+                        shard = %metadata.data_shard, diff = d, ?row,
+                        "persist peek encountered negative multiplicities",
+                    );
                     format!(
-                        "Invalid data in source, saw retractions ({}) for row that does not exist: {:?}",
-                        -d,
-                        row,
+                        "Invalid data in source, \
+                         saw retractions ({}) for row that does not exist: {:?}",
+                        -d, row,
                     )
                 })?;
                 let Some(count) = NonZeroUsize::new(count) else {
@@ -1369,10 +1373,15 @@ impl IndexPeek {
                 }
             });
             if copies.is_negative() {
+                let error = cursor.key(&storage);
+                tracing::error!(
+                    target = %self.peek.target.id(), diff = %copies, %error,
+                    "index peek encountered negative multiplicities in error trace",
+                );
                 return Err(format!(
-                    "Invalid data in source errors, saw retractions ({}) for row that does not exist: {}",
-                    -copies,
-                    cursor.key(&storage),
+                    "Invalid data in source errors, \
+                     saw retractions ({}) for row that does not exist: {}",
+                    -copies, error,
                 ));
             }
             if copies.is_positive() {
@@ -1498,9 +1507,15 @@ impl IndexPeek {
                         }
                     });
                     let copies: usize = if copies.is_negative() {
+                        let row = &*borrow;
+                        tracing::error!(
+                            target = %peek.target.id(), diff = %copies, ?row,
+                            "index peek encountered negative multiplicities in ok trace",
+                        );
                         return Err(format!(
-                            "Invalid data in source, saw retractions ({}) for row that does not exist: {:?}",
-                            -copies, &*borrow,
+                            "Invalid data in source, \
+                             saw retractions ({}) for row that does not exist: {:?}",
+                            -copies, row,
                         ));
                     } else {
                         copies.into_inner().try_into().unwrap()
