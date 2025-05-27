@@ -516,13 +516,15 @@ where
             }
         }
 
-        // compaction needs memory enough for at least 2 runs and 2 in-progress parts
-        assert!(cfg.compaction_memory_bound_bytes >= 4 * cfg.batch.blob_target_size);
-        // reserve space for the in-progress part to be held in-mem representation and columnar
+        // Reserve space for the in-progress part to be held in-mem representation and columnar -
         let in_progress_part_reserved_memory_bytes = 2 * cfg.batch.blob_target_size;
-        // then remaining memory will go towards pulling down as many runs as we can
-        let run_reserved_memory_bytes =
-            cfg.compaction_memory_bound_bytes - in_progress_part_reserved_memory_bytes;
+        // - then remaining memory will go towards pulling down as many runs as we can.
+        // We'll always do at least two runs per chunk, which means we may go over this limit
+        // if parts are large or the limit is low... though we do at least increment a metric
+        // when that happens.
+        let run_reserved_memory_bytes = cfg
+            .compaction_memory_bound_bytes
+            .saturating_sub(in_progress_part_reserved_memory_bytes);
 
         let mut all_parts = vec![];
         let mut all_run_splits = vec![];
