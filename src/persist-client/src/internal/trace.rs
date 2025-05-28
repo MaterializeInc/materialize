@@ -62,6 +62,7 @@ use differential_dataflow::trace::Description;
 use mz_ore::cast::CastFrom;
 #[allow(unused_imports)] // False positive.
 use mz_ore::fmt::FormatBuffer;
+use mz_repr::Diff;
 use serde::{Serialize, Serializer};
 use timely::PartialOrder;
 use timely::progress::frontier::AntichainRef;
@@ -891,31 +892,36 @@ impl<T: Timestamp + Lattice + Codec64> SpineBatch<T> {
             return ApplyMergeResult::NotAppliedInvalidSince;
         }
 
-        let new_diffs_sum: i64 = res
+        let new_diffs_sum: Diff = res
             .output
             .parts
             .iter()
-            .map(|p| p.diffs_sum(metrics).unwrap_or(0))
+            .map(|p| {
+                p.diffs_sum::<Diff>(metrics)
+                    .expect("new batch must have diffs sum")
+            })
             .sum();
 
         // If our merge result exactly matches a spine batch, we can swap it in directly
         let exact_match = res.output.desc.lower() == self.desc().lower()
             && res.output.desc.upper() == self.desc().upper();
         if exact_match {
-            let old_diffs_sum: i64 = self
+            let old_diffs_sum: Option<Diff> = self
                 .parts
                 .iter()
                 .flat_map(|p| p.batch.parts.iter())
-                .map(|p| p.diffs_sum(metrics).unwrap_or(0))
-                .sum();
+                .map(|p| p.diffs_sum::<Diff>(metrics))
+                .try_fold(Diff::from(0), |acc, diff_sum| diff_sum.map(|sum| acc + sum));
 
             // This is a bit hacky, but when we are a tombstone a empty batch
             // gets applied to us, which has no parts.
             if !res.output.parts.is_empty() && res.output.len > 0 {
-                assert_eq!(
-                    old_diffs_sum, new_diffs_sum,
-                    "merge res diffs sum ({new_diffs_sum}) did not match spine batch diffs sum ({old_diffs_sum})"
-                );
+                if let Some(old_sum) = old_diffs_sum {
+                    assert_eq!(
+                        old_sum, new_diffs_sum,
+                        "merge res diffs sum ({new_diffs_sum}) did not match spine batch diffs sum ({old_sum})"
+                    );
+                }
             }
             // Spine internally has an invariant about a batch being at some level
             // or higher based on the len. We could end up violating this invariant
@@ -967,18 +973,20 @@ impl<T: Timestamp + Lattice + Codec64> SpineBatch<T> {
         // next, replace parts with the merge res batch if we can
         match (lower, upper) {
             (Some((lower, id_lower)), Some((upper, id_upper))) => {
-                let old_diffs_sum: i64 = parts
+                let old_diffs_sum: Option<Diff> = parts
                     .iter()
                     .skip(lower)
                     .take(upper - lower + 1)
                     .flat_map(|p| p.batch.parts.iter())
-                    .map(|p| p.diffs_sum(metrics).unwrap_or(0))
-                    .sum();
+                    .map(|p| p.diffs_sum::<Diff>(metrics))
+                    .try_fold(Diff::from(0), |acc, diff_sum| diff_sum.map(|sum| acc + sum));
                 if !res.output.parts.is_empty() && res.output.len > 0 {
-                    assert_eq!(
-                        old_diffs_sum, new_diffs_sum,
-                        "merge res diffs sum ({new_diffs_sum}) did not match spine batch diffs sum ({old_diffs_sum})"
-                    );
+                    if let Some(old_sum) = old_diffs_sum {
+                        assert_eq!(
+                            old_sum, new_diffs_sum,
+                            "merge res diffs sum ({new_diffs_sum}) did not match spine batch diffs sum ({old_sum})"
+                        );
+                    }
                 }
                 let mut new_parts = vec![];
                 new_parts.extend_from_slice(&parts[..lower]);

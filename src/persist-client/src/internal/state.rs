@@ -9,7 +9,9 @@
 
 use anyhow::ensure;
 use async_stream::{stream, try_stream};
+use differential_dataflow::difference::Semigroup;
 use mz_persist::metrics::ColumnarMetrics;
+use mz_repr::Diff;
 use std::borrow::Cow;
 use std::cmp::Ordering;
 use std::collections::BTreeMap;
@@ -367,9 +369,9 @@ impl<T: Timestamp + Codec64> BatchPart<T> {
         }
     }
 
-    pub fn diffs_sum(&self, metrics: &ColumnarMetrics) -> Option<i64> {
+    pub fn diffs_sum<D: Codec64 + Semigroup>(&self, metrics: &ColumnarMetrics) -> Option<D> {
         match self {
-            BatchPart::Hollow(x) => x.diffs_sum.map(i64::decode),
+            BatchPart::Hollow(x) => x.diffs_sum.map(D::decode),
             BatchPart::Inline { updates, .. } => updates
                 .decode::<T>(metrics)
                 .expect("valid inline part")
@@ -454,8 +456,8 @@ impl<T: Timestamp + Codec64> HollowRunRef<T> {
         let diffs_sum = data
             .parts
             .iter()
-            .filter_map(|p| p.diffs_sum(&metrics.columnar))
-            .sum::<i64>()
+            .filter_map(|p| p.diffs_sum::<Diff>(&metrics.columnar))
+            .sum::<Diff>()
             .encode();
 
         let key = PartialBatchKey::new(writer, &PartId::new());
@@ -627,10 +629,10 @@ impl<T> RunPart<T>
 where
     T: Timestamp + Codec64,
 {
-    pub fn diffs_sum(&self, metrics: &ColumnarMetrics) -> Option<i64> {
+    pub fn diffs_sum<D: Codec64 + Semigroup>(&self, metrics: &ColumnarMetrics) -> Option<D> {
         match self {
             Self::Single(p) => p.diffs_sum(metrics),
-            Self::Many(hollow_run) => hollow_run.diffs_sum.map(i64::decode),
+            Self::Many(hollow_run) => hollow_run.diffs_sum.map(D::decode),
         }
     }
 }
