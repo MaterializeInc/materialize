@@ -415,7 +415,7 @@ fn build_row_schema_fields(
     let mut fields = Vec::new();
     let mut field_namer = Namer::default();
     for (name, typ) in columns.iter() {
-        let (name, _seen) = field_namer.valid_name(name.as_str());
+        let (name, _seen) = field_namer.valid_name(name);
         let field_type =
             build_row_schema_field_type(type_namer, custom_names, typ, item_id, options);
 

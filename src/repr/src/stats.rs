@@ -612,7 +612,7 @@ mod tests {
         let actual: StructStats = RustType::from_proto(actual).unwrap();
         let arena = RowArena::default();
         for (name, typ) in schema.iter() {
-            let col_stats = actual.col(name.as_str()).unwrap();
+            let col_stats = actual.col(name).unwrap();
             crate::stats::col_values(&typ.scalar_type, &col_stats.values, &arena);
         }
     }

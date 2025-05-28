@@ -261,16 +261,17 @@ impl RustType<ProtoKey> for Vec<usize> {
 
 /// The name of a column in a [`RelationDesc`].
 #[derive(Clone, Debug, Eq, PartialEq, Ord, PartialOrd, Serialize, Deserialize, Hash, MzReflect)]
-pub struct ColumnName(pub(crate) String);
+pub struct ColumnName(Box<str>);
 
 impl ColumnName {
     /// Returns this column name as a `str`.
+    #[inline(always)]
     pub fn as_str(&self) -> &str {
-        &self.0
+        &*self
     }
 
-    /// Returns a mutable reference to the string underlying this column name.
-    pub fn as_mut_str(&mut self) -> &mut String {
+    /// Returns this column name as a `&mut Box<str>`.
+    pub fn as_mut_boxed_str(&mut self) -> &mut Box<str> {
         &mut self.0
     }
 
@@ -278,10 +279,19 @@ impl ColumnName {
     pub fn is_similar(&self, other: &ColumnName) -> bool {
         const SIMILARITY_THRESHOLD: f64 = 0.6;
 
-        let a_lowercase = self.0.to_lowercase();
-        let b_lowercase = other.as_str().to_lowercase();
+        let a_lowercase = self.to_lowercase();
+        let b_lowercase = other.to_lowercase();
 
         strsim::normalized_levenshtein(&a_lowercase, &b_lowercase) >= SIMILARITY_THRESHOLD
+    }
+}
+
+impl std::ops::Deref for ColumnName {
+    type Target = str;
+
+    #[inline(always)]
+    fn deref(&self) -> &Self::Target {
+        &self.0
     }
 }
 
@@ -293,7 +303,7 @@ impl fmt::Display for ColumnName {
 
 impl From<String> for ColumnName {
     fn from(s: String) -> ColumnName {
-        ColumnName(s)
+        ColumnName(s.into())
     }
 }
 
@@ -312,14 +322,17 @@ impl From<&ColumnName> for ColumnName {
 impl RustType<ProtoColumnName> for ColumnName {
     fn into_proto(&self) -> ProtoColumnName {
         ProtoColumnName {
-            value: Some(self.0.clone()),
+            value: Some(self.0.to_string()),
         }
     }
 
     fn from_proto(proto: ProtoColumnName) -> Result<Self, TryFromProtoError> {
-        Ok(ColumnName(proto.value.ok_or_else(|| {
-            TryFromProtoError::missing_field("ProtoColumnName::value")
-        })?))
+        Ok(ColumnName(
+            proto
+                .value
+                .ok_or_else(|| TryFromProtoError::missing_field("ProtoColumnName::value"))?
+                .into(),
+        ))
     }
 }
 
@@ -356,7 +369,7 @@ impl proptest::arbitrary::Arbitrary for ColumnName {
 
         name_length
             .prop_flat_map(move |length| proptest::collection::vec(Rc::clone(&char_strat), length))
-            .prop_map(|chars| ColumnName(chars.into_iter().collect::<String>()))
+            .prop_map(|chars| ColumnName(chars.into_iter().collect::<Box<str>>()))
             .no_shrink()
             .boxed()
     }
@@ -1006,7 +1019,7 @@ impl fmt::Display for NotNullViolation {
         write!(
             f,
             "null value in column {} violates not-null constraint",
-            self.0.as_str().quoted()
+            self.0.quoted()
         )
     }
 }
@@ -1703,8 +1716,8 @@ mod tests {
         let proto = ProtoRelationDesc {
             typ: Some(typ),
             names: vec![
-                ColumnName("a".to_string()).into_proto(),
-                ColumnName("b".to_string()).into_proto(),
+                ColumnName("a".into()).into_proto(),
+                ColumnName("b".into()).into_proto(),
             ],
             metadata: vec![],
         };

@@ -832,7 +832,7 @@ impl CatalogState {
                     &*MZ_COLUMNS,
                     Row::pack_slice(&[
                         Datum::String(&id.to_string()),
-                        Datum::String(column_name.as_str()),
+                        Datum::String(column_name),
                         Datum::UInt64(u64::cast_from(i + 1)),
                         Datum::from(column_type.nullable),
                         Datum::String(type_name),

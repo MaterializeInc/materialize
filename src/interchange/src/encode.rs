@@ -44,20 +44,26 @@ pub fn column_names_and_types(desc: RelationDesc) -> Vec<(ColumnName, ColumnType
     // Invent names for columns that don't have a name.
     let mut columns: Vec<_> = desc.into_iter().collect();
 
+    let mut name = String::new();
     // Deduplicate names.
     let mut seen = BTreeSet::new();
-    for (name, _ty) in &mut columns {
-        let stem_len = name.as_str().len();
+    for (column_name, _ty) in &mut columns {
+        name.clear();
+        name.push_str(column_name.as_str());
+        let stem_len = name.len();
         let mut i = 1;
-        while seen.contains(name) {
-            name.as_mut_str().truncate(stem_len);
-            if name.as_str().ends_with(|c: char| c.is_ascii_digit()) {
-                name.as_mut_str().push('_');
+        while seen.contains(&name) {
+            name.truncate(stem_len);
+            if name.ends_with(|c: char| c.is_ascii_digit()) {
+                name.push('_');
             }
-            name.as_mut_str().push_str(&i.to_string());
+            name.push_str(&i.to_string());
             i += 1;
         }
-        seen.insert(name);
+        seen.insert(name.clone());
+        if column_name.as_str() != name {
+            *column_name.as_mut_boxed_str() = name.clone().into();
+        }
     }
     columns
 }

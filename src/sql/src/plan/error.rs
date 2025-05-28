@@ -524,7 +524,7 @@ impl fmt::Display for PlanError {
             Self::AmbiguousColumn(column) => write!(
                 f,
                 "column reference {} is ambiguous",
-                column.as_str().quoted()
+                column.quoted()
             ),
             Self::TooManyColumns { max_num_columns, req_num_columns } => write!(
                 f,
@@ -534,7 +534,7 @@ impl fmt::Display for PlanError {
             Self::ColumnAlreadyExists { column_name, object_name } => write!(
                 f,
                 "column {} of relation {} already exists",
-                column_name.as_str().quoted(), object_name.quoted(),
+                column_name.quoted(), object_name.quoted(),
             ),
             Self::AmbiguousTable(table) => write!(
                 f,
@@ -544,13 +544,13 @@ impl fmt::Display for PlanError {
             Self::UnknownColumnInUsingClause { column, join_side } => write!(
                 f,
                 "column {} specified in USING clause does not exist in {} table",
-                column.as_str().quoted(),
+                column.quoted(),
                 join_side,
             ),
             Self::AmbiguousColumnInUsingClause { column, join_side } => write!(
                 f,
                 "common column name {} appears more than once in {} table",
-                column.as_str().quoted(),
+                column.quoted(),
                 join_side,
             ),
             Self::MisqualifiedName(name) => write!(
@@ -986,7 +986,7 @@ impl<'a> fmt::Display for ColumnDisplay<'a> {
         if let Some(table) = &self.table {
             format!("{}.{}", table.item, self.column).quoted().fmt(f)
         } else {
-            self.column.as_str().quoted().fmt(f)
+            self.column.quoted().fmt(f)
         }
     }
 }

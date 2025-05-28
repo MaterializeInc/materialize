@@ -923,7 +923,7 @@ pub fn to_jsonb(ecx: &ExprContext, expr: HirScalarExpr) -> HirScalarExpr {
             let mut exprs = vec![];
             for (i, (name, _ty)) in fields.iter().enumerate() {
                 exprs.push(HirScalarExpr::literal(
-                    Datum::String(name.as_str()),
+                    Datum::String(name),
                     ScalarType::String,
                 ));
                 exprs.push(to_jsonb(
