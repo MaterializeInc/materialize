@@ -54,10 +54,9 @@ where
         peek_timestamp: mz_repr::Timestamp,
         has_literal_constraints: bool,
         literals: L,
-        oks_handle: &mut Tr,
+        trace_reader: &mut Tr,
     ) -> Self {
-        let (cursor, storage): (<Tr as TraceReader>::Cursor, <Tr as TraceReader>::Storage) =
-            oks_handle.cursor();
+        let (cursor, storage) = trace_reader.cursor();
 
         let mut result = Self {
             target_id,
@@ -221,9 +220,11 @@ where
     ///
     /// Returns `true` if we are exhausted.
     fn step_key(&mut self) -> bool {
-        if self.cursor.val_valid(&self.storage) {
-            return false;
-        }
+        assert_eq!(
+            false,
+            self.cursor.val_valid(&self.storage),
+            "must only step key when the vals for a key are exhausted"
+        );
 
         loop {
             tracing::trace!(
