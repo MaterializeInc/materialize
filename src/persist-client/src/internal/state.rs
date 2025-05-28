@@ -9,6 +9,7 @@
 
 use anyhow::ensure;
 use async_stream::{stream, try_stream};
+use differential_dataflow::difference::Semigroup;
 use mz_persist::metrics::ColumnarMetrics;
 use std::borrow::Cow;
 use std::cmp::Ordering;
@@ -17,6 +18,7 @@ use std::fmt::{Debug, Formatter};
 use std::marker::PhantomData;
 use std::ops::ControlFlow::{self, Break, Continue};
 use std::ops::{Deref, DerefMut};
+use std::sync::Arc;
 use std::time::Duration;
 
 use arrow::array::{Array, ArrayData, make_array};
@@ -65,6 +67,8 @@ use crate::read::LeasedReaderId;
 use crate::schema::CaESchema;
 use crate::write::WriterId;
 use crate::{PersistConfig, ShardId};
+
+use super::metrics;
 
 include!(concat!(
     env!("OUT_DIR"),
@@ -366,6 +370,17 @@ impl<T: Timestamp + Codec64> BatchPart<T> {
             }
         }
     }
+
+    pub fn diffs_sum(&self, metrics: &ColumnarMetrics) -> Option<i64> {
+        match self {
+            BatchPart::Hollow(x) => x.diffs_sum.map(i64::decode),
+            BatchPart::Inline { updates, .. } => updates
+                .decode::<T>(metrics)
+                .expect("valid inline part")
+                .updates
+                .diffs_sum(),
+        }
+    }
 }
 
 /// An ordered list of parts, generally stored as part of a larger run.
@@ -598,6 +613,18 @@ impl<T> RunPart<T> {
     pub fn ts_rewrite(&self) -> Option<&Antichain<T>> {
         match self {
             Self::Single(p) => p.ts_rewrite(),
+            Self::Many(_) => None,
+        }
+    }
+}
+
+impl<T> RunPart<T>
+where
+    T: Timestamp + Codec64,
+{
+    pub fn diffs_sum(&self, metrics: &ColumnarMetrics) -> Option<i64> {
+        match self {
+            Self::Single(p) => p.diffs_sum(metrics),
             Self::Many(_) => None,
         }
     }
@@ -1687,6 +1714,7 @@ where
     pub fn apply_merge_res(
         &mut self,
         res: &FueledMergeRes<T>,
+        metrics: &ColumnarMetrics,
     ) -> ControlFlow<NoOpStateTransition<ApplyMergeResult>, ApplyMergeResult> {
         // We expire all writers if the upper and since both advance to the
         // empty antichain. Gracefully handle this. At the same time,
@@ -1696,7 +1724,7 @@ where
             return Break(NoOpStateTransition(ApplyMergeResult::NotAppliedNoMatch));
         }
 
-        let apply_merge_result = self.trace.apply_merge_res(res);
+        let apply_merge_result = self.trace.apply_merge_res(res, metrics);
         Continue(apply_merge_result)
     }
 
@@ -2013,7 +2041,10 @@ where
         batch_count <= 1 && is_empty
     }
 
-    pub fn become_tombstone_and_shrink(&mut self) -> ControlFlow<NoOpStateTransition<()>, ()> {
+    pub fn become_tombstone_and_shrink(
+        &mut self,
+        metrics: &ColumnarMetrics,
+    ) -> ControlFlow<NoOpStateTransition<()>, ()> {
         assert_eq!(self.trace.upper(), &Antichain::new());
         assert_eq!(self.trace.since(), &Antichain::new());
 
@@ -2052,7 +2083,7 @@ where
                 output: HollowBatch::empty(desc),
                 new_active_compaction: None,
             };
-            let result = self.trace.apply_merge_res(&fake_merge);
+            let result = self.trace.apply_merge_res(&fake_merge, metrics);
             assert!(
                 result.matched(),
                 "merge with a matching desc should always match"

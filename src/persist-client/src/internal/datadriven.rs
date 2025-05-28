@@ -151,33 +151,42 @@ impl<'a> DirectiveArgs<'a> {
 mod tests {
     use mz_dyncfg::ConfigUpdates;
 
+    use crate::tests::new_test_client;
+
     use super::*;
 
-    #[mz_ore::test]
-    fn trace() {
+    #[mz_ore::test(tokio::test)]
+    async fn trace() {
         use crate::internal::trace::datadriven as trace_dd;
+        let dyncfgs = ConfigUpdates::default();
+        let client = new_test_client(&dyncfgs).await;
 
         datadriven::walk("tests/trace", |f| {
             println!("running datadriven file: {}", f.filename);
             let mut state = trace_dd::TraceState::default();
-            f.run(move |tc| -> String {
-                let args = DirectiveArgs {
-                    args: &tc.args,
-                    input: &tc.input,
-                };
-                let res = match tc.directive.as_str() {
-                    "apply-merge-res" => trace_dd::apply_merge_res(&mut state, args),
-                    "downgrade-since" => trace_dd::downgrade_since(&mut state, args),
-                    "push-batch" => trace_dd::insert(&mut state, args),
-                    "since-upper" => trace_dd::since_upper(&state, args),
-                    "spine-batches" => trace_dd::batches(&state, args),
-                    "take-merge-reqs" => trace_dd::take_merge_req(&mut state, args),
-                    _ => panic!("unknown directive {:?}", tc),
-                };
-                match res {
-                    Ok(x) if x.is_empty() => "<empty>\n".into(),
-                    Ok(x) => x,
-                    Err(err) => format!("error: {:?}\n", err),
+            f.run({
+                let metrics = client.metrics.clone();
+                move |tc| -> String {
+                    let args = DirectiveArgs {
+                        args: &tc.args,
+                        input: &tc.input,
+                    };
+                    let res = match tc.directive.as_str() {
+                        "apply-merge-res" => {
+                            trace_dd::apply_merge_res(&mut state, args, &metrics.columnar)
+                        }
+                        "downgrade-since" => trace_dd::downgrade_since(&mut state, args),
+                        "push-batch" => trace_dd::insert(&mut state, args),
+                        "since-upper" => trace_dd::since_upper(&state, args),
+                        "spine-batches" => trace_dd::batches(&state, args),
+                        "take-merge-reqs" => trace_dd::take_merge_req(&mut state, args),
+                        _ => panic!("unknown directive {:?}", tc),
+                    };
+                    match res {
+                        Ok(x) if x.is_empty() => "<empty>\n".into(),
+                        Ok(x) => x,
+                        Err(err) => format!("error: {:?}\n", err),
+                    }
                 }
             })
         });
