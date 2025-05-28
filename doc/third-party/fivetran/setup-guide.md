@@ -33,7 +33,7 @@ The user you're using to connect to Fivetran must have [`CREATE`](https://materi
 4. Create a new app password with a name related to Fivetran, for example, "John's Fivetran App Password".
 5. Make a note of the password. You won't be able to see it again once you navigate away from this page. You will need it to [Finish Fivetran configuration](#finishfivetranconfiguration).
 6. On the navigation menu, click **Connect externally**.
-7. Make a note of the **Host** and **User** fields. You will need it to [Finish Fivetran configuration](#finishfivetranconfiguration). 
+7. Make a note of the **Host** and **User** fields. You will need it to [Finish Fivetran configuration](#finishfivetranconfiguration).
 
 ### <span class="step-item">Finish Fivetran configuration </span>
 
