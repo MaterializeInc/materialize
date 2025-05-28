@@ -8,7 +8,7 @@
 use std::collections::BTreeMap;
 use std::ops::AddAssign;
 
-use lgalloc::{FileStats, SizeClassStats};
+use lgalloc::{FileStats, MapStats};
 use mz_ore::cast::CastFrom;
 use mz_ore::metrics::{MetricsRegistry, raw};
 use paste::paste;
@@ -48,6 +48,11 @@ struct FileStatsAccum {
     pub file_size: usize,
     /// Size of the file on disk in bytes.
     pub allocated_size: usize,
+}
+
+/// An accumulator for [`MapStats`].
+#[derive(Default)]
+struct MapStatsAccum {
     /// Number of mapped bytes, if different from `dirty`. Consult `man 7 numa` for details.
     pub mapped: usize,
     /// Number of active bytes. Consult `man 7 numa` for details.
@@ -60,6 +65,11 @@ impl AddAssign<&FileStats> for FileStatsAccum {
     fn add_assign(&mut self, rhs: &FileStats) {
         self.file_size += rhs.file_size;
         self.allocated_size += rhs.allocated_size;
+    }
+}
+
+impl AddAssign<&MapStats> for MapStatsAccum {
+    fn add_assign(&mut self, rhs: &MapStats) {
         self.mapped += rhs.mapped;
         self.active += rhs.active;
         self.dirty += rhs.dirty;
@@ -118,32 +128,25 @@ macro_rules! metrics_size_class {
                 }
                 fn update(&mut self) -> Result<(), Error> {
                     let stats = lgalloc::lgalloc_stats();
-                    for sc in &stats.size_class {
-                        let sc_stats = self.get_size_class(sc.size_class);
-                        $(sc_stats.$metric.set(($conv)(u64::cast_from(sc.$name), sc));)*
+                    for (size_class, sc) in &stats.size_class {
+                        let sc_stats = self.get_size_class(*size_class);
+                        $(sc_stats.$metric.set(($conv)(u64::cast_from(sc.$name), *size_class));)*
                     }
-                    let mut accums = BTreeMap::new();
-                    match &stats.file_stats {
-                        Ok(file_stats) => {
-                            for file_stat in file_stats {
-                                let accum: &mut FileStatsAccum = accums.entry(file_stat.size_class).or_default();
+                    let mut f_accums = BTreeMap::new();
+                    for (size_class, file_stat) in &stats.file {
+                        let accum: &mut FileStatsAccum = f_accums.entry(*size_class).or_default();
+                        match file_stat {
+                            Ok(file_stat) => {
                                 accum.add_assign(file_stat);
                             }
-                        }
-                        #[cfg(target_os = "linux")]
-                        Err(err) => {
-                            return Err(Error::new(ErrorKind::FileStatsFailed(err.to_string())));
-                        }
-                        #[cfg(not(target_os = "linux"))]
-                        Err(err) => {
-                            if err.kind() != std::io::ErrorKind::NotFound {
-                                return Err(Error::new(ErrorKind::FileStatsFailed(err.to_string())));
+                            Err(err) => {
+                                return Err(ErrorKind::FileStatsFailed(err.to_string()).into());
                             }
                         }
                     }
-                    for (size_class, accum) in accums {
+                    for (size_class, f_accum) in f_accums {
                         let sc_stats = self.get_size_class(size_class);
-                        $(sc_stats.$f_metric.set(u64::cast_from(accum.$f_name));)*
+                        $(sc_stats.$f_metric.set(u64::cast_from(f_accum.$f_name));)*
                     }
                     Ok(())
                 }
@@ -152,11 +155,74 @@ macro_rules! metrics_size_class {
     };
 }
 
-fn normalize_by_size_class(value: u64, stats: &SizeClassStats) -> u64 {
-    value * u64::cast_from(stats.size_class)
+macro_rules! map_metrics {
+    ($namespace:ident
+        @mem ($(($m_name:ident, $m_metric:ident, $m_desc:expr)),*)
+    ) => {
+        map_metrics! {
+            @define $namespace
+            @mem $(($m_name, $m_metric, $m_desc)),*
+        }
+    };
+    (@define $namespace:ident
+        @mem $(($m_name:ident, $m_metric:ident, $m_desc:expr)),*
+    ) => {
+        paste! {
+            pub(crate) struct LgMapMetrics {
+                size_class: BTreeMap<usize, LgMapMetricsSC>,
+                $($m_metric: raw::UIntGaugeVec,)*
+            }
+            struct LgMapMetricsSC {
+                $($m_metric: GenericGauge<AtomicU64>,)*
+            }
+            impl LgMapMetrics {
+                fn new(registry: &MetricsRegistry) -> Self {
+                    Self {
+                        size_class: BTreeMap::default(),
+                        $($m_metric: registry.register(mz_ore::metric!(
+                            name: concat!(stringify!($namespace), "_", stringify!($m_metric)),
+                            help: $m_desc,
+                            var_labels: ["size_class"],
+                        )),)*
+                    }
+                }
+                fn get_size_class(&mut self, size_class: usize) -> &LgMapMetricsSC {
+                    self.size_class.entry(size_class).or_insert_with(|| {
+                        let labels: &[&str] = &[&size_class.to_string()];
+                        LgMapMetricsSC {
+                            $($m_metric: self.$m_metric.with_label_values(labels),)*
+                        }
+                    })
+                }
+                #[cfg(target_os = "linux")]
+                fn update(&mut self) -> std::io::Result<()> {
+                    let stats = lgalloc::lgalloc_stats_with_mapping()?;
+                    let mut m_accums = BTreeMap::new();
+                    for (size_class, map_stat) in stats.map.iter().flatten() {
+                        let accum: &mut MapStatsAccum = m_accums.entry(*size_class).or_default();
+                        accum.add_assign(map_stat);
+                    }
+                    for (size_class, m_accum) in m_accums {
+                        let sc_stats = self.get_size_class(size_class);
+                        $(sc_stats.$m_metric.set(u64::cast_from(m_accum.$m_name));)*
+                    }
+                    Ok(())
+                }
+                #[cfg(not(target_os = "linux"))]
+                fn update(&mut self) -> std::io::Result<()> {
+                    // On non-Linux systems, we do not have `numa_maps` stats.
+                    Ok(())
+                }
+            }
+        }
+    };
 }
 
-fn id(value: u64, _stats: &SizeClassStats) -> u64 {
+fn normalize_by_size_class(value: u64, size_class: usize) -> u64 {
+    value * u64::cast_from(size_class)
+}
+
+fn id(value: u64, _size_class: usize) -> u64 {
     value
 }
 
@@ -184,7 +250,13 @@ metrics_size_class! {
     )
     @file (
         (file_size, file_size_bytes, "Sum of file sizes in size class"),
-        (allocated_size, file_allocated_size_bytes, "Sum of allocated sizes in size class"),
+        (allocated_size, file_allocated_size_bytes, "Sum of allocated sizes in size class")
+    )
+}
+
+map_metrics! {
+    mz_metrics_lgalloc
+    @mem (
         (mapped, vm_mapped_bytes, "Sum of mapped sizes in size class"),
         (active, vm_active_bytes, "Sum of active sizes in size class"),
         (dirty, vm_dirty_bytes, "Sum of dirty sizes in size class")
@@ -196,9 +268,22 @@ pub(crate) fn register_metrics_into(metrics_registry: &MetricsRegistry) -> LgMet
     LgMetrics::new(metrics_registry)
 }
 
+/// Register a task to read mapping-related lgalloc stats.
+pub(crate) fn register_map_metrics_into(metrics_registry: &MetricsRegistry) -> LgMapMetrics {
+    LgMapMetrics::new(metrics_registry)
+}
+
 impl MetricsUpdate for LgMetrics {
     type Error = Error;
     const NAME: &'static str = "lgalloc";
+    fn update(&mut self) -> Result<(), Self::Error> {
+        self.update()
+    }
+}
+
+impl MetricsUpdate for LgMapMetrics {
+    type Error = std::io::Error;
+    const NAME: &'static str = "lgalloc_map";
     fn update(&mut self) -> Result<(), Self::Error> {
         self.update()
     }
