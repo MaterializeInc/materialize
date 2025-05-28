@@ -238,6 +238,16 @@ where
             if self.cursor.val_valid(&self.storage) {
                 break;
             }
+
+            panic!(
+                "val not valid, which I expect to be a thing! has_literal_constraints: {}, key={:?}",
+                self.has_literal_constraints,
+                self.cursor
+                    .key(&self.storage)
+                    .to_datum_iter()
+                    .into_iter()
+                    .collect::<Vec<_>>()
+            );
         }
 
         false
