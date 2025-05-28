@@ -877,6 +877,7 @@ def workflow_plot(c: Composition, parser: WorkflowArgumentParser) -> None:
 
 
 def analyze_file(file: str):
+    print(f"Analyzing file: {file}")
     df = pd.read_csv(file)
     # Cluster replica size as credits/hour
     df["credits_per_h"] = df["cluster_size"].str[:-2].astype(int) / 100
@@ -920,7 +921,7 @@ def analyze_file(file: str):
 
     df2 = plot_time_ms(
         df,
-        'category == "arrangement_formation" and scenario == "auction"',
+        'category == "arrangement_formation" and scenario == "auction" and mode == "weak"',
         "Auction arrangement formation",
     )
     plt.savefig(os.path.join(plot_dir, "auction_arrangement_formation_time_ms.png"))
@@ -928,7 +929,7 @@ def analyze_file(file: str):
 
     df2 = plot_credit_time(
         df,
-        'category == "arrangement_formation" and scenario == "auction"',
+        'category == "arrangement_formation" and scenario == "auction" and mode == "strong"',
         "Auction arrangement formation",
     )
     plt.savefig(os.path.join(plot_dir, "auction_arrangement_formation_credits.png"))
@@ -992,7 +993,7 @@ def plot_time_ms(data: pd.DataFrame, query: str, title: str) -> pd.DataFrame:
         kind="bar",
         figsize=(12, 6),
         ylabel="Time [ms]",
-        logy=False,
+        logy=True,
         title=f"{title}\n{dropped}",
     )
     return filtered
@@ -1015,7 +1016,7 @@ def plot_credit_time(data: pd.DataFrame, query: str, title: str) -> pd.DataFrame
         kind="bar",
         figsize=(12, 6),
         ylabel="Cost [centi-credits]",
-        logy=False,
+        logy=True,
         title=f"{title}\n{dropped}",
     )
     return filtered
