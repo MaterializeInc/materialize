@@ -913,10 +913,14 @@ impl<T: Timestamp + Lattice + Codec64> SpineBatch<T> {
                 .map(|p| p.diffs_sum(metrics).unwrap_or(0))
                 .sum();
 
-            assert_eq!(
-                old_diffs_sum, new_diffs_sum,
-                "merge res diffs sum ({new_diffs_sum}) did not match spine batch diffs sum ({old_diffs_sum})"
-            );
+            // This is a bit hacky, but when we are a tombstone a empty batch
+            // gets applied to us, which has no parts.
+            if !res.output.parts.is_empty() && res.output.len > 0 {
+                assert_eq!(
+                    old_diffs_sum, new_diffs_sum,
+                    "merge res diffs sum ({new_diffs_sum}) did not match spine batch diffs sum ({old_diffs_sum})"
+                );
+            }
             // Spine internally has an invariant about a batch being at some level
             // or higher based on the len. We could end up violating this invariant
             // if we increased the length of the batch.
@@ -978,10 +982,12 @@ impl<T: Timestamp + Lattice + Codec64> SpineBatch<T> {
                     .flat_map(|p| p.batch.parts.iter())
                     .map(|p| p.diffs_sum(metrics).unwrap_or(0))
                     .sum();
-                assert_eq!(
-                    old_diffs_sum, new_diffs_sum,
-                    "merge res diffs sum ({new_diffs_sum}) did not match spine batch diffs sum ({old_diffs_sum})"
-                );
+                if !res.output.parts.is_empty() && res.output.len > 0 {
+                    assert_eq!(
+                        old_diffs_sum, new_diffs_sum,
+                        "merge res diffs sum ({new_diffs_sum}) did not match spine batch diffs sum ({old_diffs_sum})"
+                    );
+                }
                 let mut new_parts = vec![];
                 new_parts.extend_from_slice(&parts[..lower]);
                 new_parts.push(IdHollowBatch {
