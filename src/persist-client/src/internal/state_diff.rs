@@ -794,7 +794,7 @@ fn apply_diff_map<K: Ord, V: PartialEq + Debug>(
 // This might leave state in an invalid (umm) state when returning an error. The
 // caller ultimately ends up panic'ing on error, but if that changes, we might
 // want to revisit this.
-fn apply_diffs_spine<T: Timestamp + Lattice>(
+fn apply_diffs_spine<T: Timestamp + Lattice + Codec64>(
     metrics: &Metrics,
     mut diffs: Vec<StateFieldDiff<HollowBatch<T>, ()>>,
     trace: &mut Trace<T>,
@@ -868,7 +868,7 @@ fn apply_diffs_spine<T: Timestamp + Lattice>(
         // that was generated elsewhere. Most of the time we can, though, so
         // count the good ones and fall back to the slow path below when we
         // can't.
-        if trace.apply_merge_res(&res).applied() {
+        if trace.apply_merge_res(&res, &metrics.columnar).applied() {
             // Maybe return the replaced batches from apply_merge_res and verify
             // that they match _inputs?
             metrics.state.apply_spine_fast_path.inc();
@@ -1427,7 +1427,7 @@ mod tests {
                             leader
                                 .collections
                                 .trace
-                                .apply_merge_res(&FueledMergeRes { output });
+                                .apply_merge_res(&FueledMergeRes { output }, &metrics.columnar);
                         }
                     }
                 }
