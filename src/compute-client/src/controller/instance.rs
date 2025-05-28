@@ -440,7 +440,16 @@ impl<T: ComputeControllerTimestamp> Instance<T> {
                 continue;
             }
 
-            let as_of = collection.read_frontier().to_owned();
+            let as_of = if collection.log_collection {
+                // For log collections, we don't send a `CreateDataflow` command to the replica, so
+                // it doesn't know which as-of the controler chose and defaults to the minimum
+                // frontier instead. We need to initialize the controller-side tracking with the
+                // same frontier, to avoid observing regressions in the reported frontiers.
+                Antichain::from_elem(T::minimum())
+            } else {
+                collection.read_frontier().to_owned()
+            };
+
             let input_read_holds = collection.storage_dependencies.values().cloned().collect();
             replica.add_collection(*collection_id, as_of, input_read_holds);
         }
