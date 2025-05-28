@@ -402,7 +402,7 @@ ORDER BY i;
 ## Tests for RECURSION LIMIT
 ## (See plans in `normalize_lets.slt`)
 
-query I
+query I rowsort
 WITH MUTUALLY RECURSIVE (RETURN AT RECURSION LIMIT 3)
   cnt (i int) AS (
     SELECT 1 AS i
@@ -414,7 +414,7 @@ SELECT * FROM cnt;
 2
 3
 
-query I
+query I rowsort
 WITH MUTUALLY RECURSIVE (RETURN AT RECURSION LIMIT = 3)
   cnt (i int) AS (
     SELECT 1 AS i

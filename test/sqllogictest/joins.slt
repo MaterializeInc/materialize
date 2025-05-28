@@ -671,7 +671,7 @@ Target cluster: quickstart
 
 EOF
 
-query TT
+query TT rowsort
 SELECT lb, rb FROM l3 INNER JOIN r3 ON la = ra OR (ra IS NULL AND la IS NULL)
 ----
 l1  r1
@@ -698,7 +698,7 @@ Target cluster: quickstart
 
 EOF
 
-query TT
+query TT rowsort
 SELECT lb, rb FROM l3 INNER JOIN r3 ON (la IS NULL AND ra IS NULL) OR la = ra
 ----
 l1  r1

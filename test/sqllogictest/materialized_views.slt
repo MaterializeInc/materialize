@@ -1167,7 +1167,7 @@ statement ok
 SELECT mz_unsafe.mz_sleep(8+2);
 
 # Visible now.
-query I
+query I rowsort
 SELECT * FROM mvi1;
 ----
 25
@@ -1194,7 +1194,7 @@ SELECT DISTINCT x+x+x FROM t3;
 statement ok
 CREATE DEFAULT INDEX on mvi2;
 
-query I
+query I rowsort
 SELECT * FROM mvi2;
 ----
 15
@@ -1221,7 +1221,7 @@ SELECT DISTINCT 5*x FROM t3;
 statement ok
 CREATE DEFAULT INDEX ON mvi3;
 
-query I
+query I rowsort
 SELECT * FROM mvi3
 ----
 25
@@ -1247,7 +1247,7 @@ SELECT mz_unsafe.mz_sleep(2+2);
 statement ok
 INSERT INTO t3 VALUES (-1);
 
-query I
+query I rowsort
 SELECT * FROM mvi3
 ----
 25

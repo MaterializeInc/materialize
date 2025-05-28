@@ -214,7 +214,7 @@ Target cluster: quickstart
 EOF
 
 
-query IIII
+query IIII valuesort
 SELECT o_orderkey,
        l_quantity,
        o_custkey,
@@ -226,7 +226,7 @@ WHERE c_acctbal >= o_totalprice
   AND l_commitDATE > o_orderdate
   AND l_shipDATE >= o_orderdate
 ----
-12 values hashing to bbdaf71fed5d76e9b01f5e2909fc4880
+12 values hashing to 79e5bcae275835817dd6063a9395a0dc
 
 
 query T multiline
