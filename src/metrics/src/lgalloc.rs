@@ -194,9 +194,14 @@ macro_rules! map_metrics {
                         }
                     })
                 }
-                #[cfg(target_os = "linux")]
                 fn update(&mut self) -> std::io::Result<()> {
+                    #[cfg(target_os = "linux")]
                     let stats = lgalloc::lgalloc_stats_with_mapping()?;
+                    // We don't have `numa_maps` on non-Linux platforms, so we use the regular
+                    // stats instead. It won't extract anything, but avoids unused variable
+                    // warnings.
+                    #[cfg(not(target_os = "linux"))]
+                    let stats = lgalloc::lgalloc_stats();
                     let mut m_accums = BTreeMap::new();
                     for (size_class, map_stat) in stats.map.iter().flatten() {
                         let accum: &mut MapStatsAccum = m_accums.entry(*size_class).or_default();
@@ -206,11 +211,6 @@ macro_rules! map_metrics {
                         let sc_stats = self.get_size_class(size_class);
                         $(sc_stats.$m_metric.set(u64::cast_from(m_accum.$m_name));)*
                     }
-                    Ok(())
-                }
-                #[cfg(not(target_os = "linux"))]
-                fn update(&mut self) -> std::io::Result<()> {
-                    // On non-Linux systems, we do not have `numa_maps` stats.
                     Ok(())
                 }
             }
