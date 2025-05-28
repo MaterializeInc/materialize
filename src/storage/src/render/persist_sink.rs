@@ -107,7 +107,7 @@ use mz_persist_client::cache::PersistClientCache;
 use mz_persist_client::error::UpperMismatch;
 use mz_persist_types::codec_impls::UnitSchema;
 use mz_persist_types::{Codec, Codec64};
-use mz_repr::{Diff, GlobalId, Row, TimestampManipulation};
+use mz_repr::{Diff, GlobalId, Row};
 use mz_storage_types::controller::CollectionMetadata;
 use mz_storage_types::errors::DataflowError;
 use mz_storage_types::sources::SourceData;
@@ -116,12 +116,12 @@ use mz_timely_util::builder_async::{
     Event, OperatorBuilder as AsyncOperatorBuilder, PressOnDropButton,
 };
 use serde::{Deserialize, Serialize};
-use timely::PartialOrder;
 use timely::container::CapacityContainerBuilder;
 use timely::dataflow::channels::pact::{Exchange, Pipeline};
 use timely::dataflow::operators::{Broadcast, Capability, CapabilitySet, Inspect};
 use timely::dataflow::{Scope, Stream};
 use timely::progress::{Antichain, Timestamp};
+use timely::{Container, PartialOrder};
 use tokio::sync::Semaphore;
 use tracing::trace;
 
@@ -1111,6 +1111,21 @@ where
                 }
             });
 
+            let mut done_batches_iter = done_batches.iter();
+
+            let Some(first_batch_description) = done_batches_iter.next() else {
+                upper_cap_set.downgrade(current_upper.borrow().iter());
+                continue;
+            };
+
+            let batch_upper = first_batch_description.1.clone();
+
+            let mut batch_lower = if let Some(last_batch_description) = done_batches_iter.last() {
+                last_batch_description.0.clone()
+            } else {
+                first_batch_description.0.clone()
+            };
+
             let mut batches: Vec<FinishedBatch> = vec![];
             let mut batch_metrics: Vec<BatchMetrics> = vec![];
 
@@ -1121,23 +1136,7 @@ where
                 batch_metrics.push(batch.batch_metrics);
             }
 
-            let mut batch_upper = Antichain::from_elem(mz_repr::Timestamp::minimum());
-            let mut batch_lower = Antichain::from_elem(mz_repr::Timestamp::maximum());
-
-            for batch in batches.iter() {
-                if batch_upper.lt(batch.batch.upper()) {
-                    batch_upper = batch.batch.upper().clone();
-                }
-
-                if batch_lower.gt(batch.batch.lower()) {
-                    batch_lower = batch.batch.lower().clone();
-                }
-            }
-
-            let mut to_append = batches
-                .iter_mut()
-                .map(|b| &mut b.batch)
-                .collect::<Vec<_>>();
+            let mut to_append = batches.iter_mut().map(|b| &mut b.batch).collect::<Vec<_>>();
 
             loop {
                 let result = {
@@ -1155,7 +1154,8 @@ where
                         // update but then crashes before it can append a batch.
 
                         let maybe_err = loop {
-                                tracing::trace!(
+                            if collection_id.is_user() {
+                                tracing::debug!(
                                     %worker_id,
                                     %collection_id,
                                     %shard_id,
@@ -1164,6 +1164,7 @@ where
                                     ?current_upper,
                                     "persist_sink is in read-only mode, waiting until we come out of it or the shard upper advances"
                                 );
+                            }
 
                             // We don't try to be smart here, and for example
                             // use `wait_for_upper_past()`. We'd have to use a
@@ -1199,7 +1200,7 @@ where
                                 // for figuring out how to trim our batches.
 
                                 if collection_id.is_user() {
-                                    tracing::trace!(
+                                    tracing::debug!(
                                         %worker_id,
                                         %collection_id,
                                         %shard_id,
@@ -1253,7 +1254,7 @@ where
                     .set(mz_persist_client::metrics::encode_ts_metric(&batch_upper));
 
                 if collection_id.is_user() {
-                    trace!(
+                    tracing::debug!(
                         "persist_sink {collection_id}/{shard_id}: \
                             append result for batch ({:?} -> {:?}): {:?}",
                         batch_lower,

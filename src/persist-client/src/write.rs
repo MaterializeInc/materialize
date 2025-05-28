@@ -453,6 +453,13 @@ where
     ///
     /// The clunky multi-level Result is to enable more obvious error handling
     /// in the caller. See <http://sled.rs/errors.html> for details.
+
+    // NB(ptravers): we have explicitly disabled checking the expected upper and new upper
+    // as we wish to allow batches that are a mixture of empty frontier moving
+    // updates and batches of actual data. As a result we do not check that the
+    // submitted batches fit within the stated boundaries as persist does not know
+    // in the case of a pure frontier movement if there is a batch that fills a given
+    // time span.
     #[instrument(level = "debug", fields(shard = %self.machine.shard_id()))]
     pub async fn compare_and_append_batch(
         &mut self,
@@ -463,26 +470,7 @@ where
     where
         D: Send + Sync,
     {
-        let mut max_upper: Option<&Antichain<T>> = None;
-        let mut min_lower: Option<&Antichain<T>> = None;
-
         for batch in batches.iter() {
-            if let Some(current_max_upper) = max_upper {
-                if batch.upper().gt(current_max_upper) {
-                    max_upper = Some(batch.upper());
-                }
-            } else {
-                max_upper = Some(batch.upper());
-            }
-
-            if let Some(current_min_lower) = min_lower {
-                if batch.lower().lt(current_min_lower) {
-                    min_lower = Some(batch.lower());
-                }
-            } else {
-                min_lower = Some(batch.lower());
-            }
-
             if self.machine.shard_id() != batch.shard_id() {
                 return Err(InvalidUsage::BatchNotFromThisShard {
                     batch_shard: batch.shard_id(),
@@ -503,18 +491,6 @@ where
 
         let lower = expected_upper.clone();
         let upper = new_upper;
-
-        if let (Some(max_upper), Some(min_lower)) = (max_upper, min_lower) {
-            if max_upper.lt(&upper) || min_lower.gt(&lower) {
-                return Err(InvalidUsage::InvalidBatchBounds {
-                    batch_lower: min_lower.clone(),
-                    batch_upper: max_upper.clone(),
-                    append_lower: lower.clone(),
-                    append_upper: upper.clone(),
-                });
-            }
-        }
-
         let since = Antichain::from_elem(T::minimum());
         let desc = Description::new(lower, upper, since);
 
