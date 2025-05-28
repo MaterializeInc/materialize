@@ -70,6 +70,7 @@ aws/install
 rm -r aws awscliv2.zip
 
 # Allow the Ubuntu user to access the Docker daemon.
+sudo groupadd docker
 adduser ubuntu docker
 
 # Install tools for Kubernetes testing and debugging
