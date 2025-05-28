@@ -172,7 +172,7 @@ class RepositoryDetails:
 
             # Building with sanitizers causes the intermediate artifacts to be
             # quite large so we'll skip using the RAM backed sandbox.
-            if self.sanitizer == Sanitizer.NONE:
+            if self.sanitizer == Sanitizer.none:
                 flags.append("--config=in-mem-sandbox")
 
         # Add flags for the Sanitizer
