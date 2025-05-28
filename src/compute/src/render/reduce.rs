@@ -1295,7 +1295,7 @@ where
                         );
                         // After complaining, output an error here so that we can eventually
                         // report it in an error stream.
-                        target.push((err(key.into_owned()), Diff::MINUS_ONE));
+                        target.push((err(key.into_owned()), Diff::ONE));
                         return;
                     }
                 }

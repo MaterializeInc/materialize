@@ -372,10 +372,15 @@ where
                             let batch = row.hashed() % output_batch_count;
                             if !up_to.less_equal(ts) {
                                 if diff.is_negative() {
+                                    tracing::error!(
+                                        %sink_id, %diff, ?row,
+                                        "S3 oneshot sink encountered negative multiplicities",
+                                    );
                                     anyhow::bail!(
-                                        "Invalid data in source errors, saw retractions ({}) for \
-                                        row that does not exist",
+                                        "Invalid data in source, \
+                                         saw retractions ({}) for row that does not exist: {:?}",
                                         -*diff,
+                                        row,
                                     )
                                 }
                                 row_count += u64::try_from(diff.into_inner()).unwrap();
