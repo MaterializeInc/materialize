@@ -408,6 +408,8 @@ pub struct HollowRunRef<T> {
     /// The lower bound of the data in this part, ordered by the structured ordering.
     pub structured_key_lower: Option<LazyProto<ProtoArrayData>>,
 
+    pub diffs_sum: Option<[u8; 8]>,
+
     pub(crate) _phantom_data: PhantomData<T>,
 }
 impl<T: Eq> PartialOrd<Self> for HollowRunRef<T> {
@@ -453,6 +455,12 @@ impl<T: Timestamp + Codec64> HollowRunRef<T> {
             Some(RunPart::Single(BatchPart::Hollow(p))) => p.structured_key_lower.clone(),
             Some(RunPart::Single(BatchPart::Inline { .. })) | None => None,
         };
+        let diffs_sum = data
+            .parts
+            .iter()
+            .filter_map(|p| p.diffs_sum(&metrics.columnar))
+            .sum::<i64>()
+            .encode();
 
         let key = PartialBatchKey::new(writer, &PartId::new());
         let blob_key = key.complete(&shard_id);
@@ -467,6 +475,7 @@ impl<T: Timestamp + Codec64> HollowRunRef<T> {
             max_part_bytes,
             key_lower,
             structured_key_lower,
+            diffs_sum: Some(diffs_sum),
             _phantom_data: Default::default(),
         }
     }
@@ -625,7 +634,7 @@ where
     pub fn diffs_sum(&self, metrics: &ColumnarMetrics) -> Option<i64> {
         match self {
             Self::Single(p) => p.diffs_sum(metrics),
-            Self::Many(_) => None,
+            Self::Many(hollow_run) => hollow_run.diffs_sum.map(i64::decode),
         }
     }
 }
