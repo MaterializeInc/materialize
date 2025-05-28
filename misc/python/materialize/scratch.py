@@ -264,7 +264,10 @@ async def setup(
 
 def mkrepo(i: Instance, rev: str, init: bool = True, force: bool = False) -> None:
     if init:
-        mssh(i, "git clone https://github.com/MaterializeInc/materialize.git")
+        mssh(
+            i,
+            "git clone https://github.com/MaterializeInc/materialize.git --recurse-submodules",
+        )
 
     rev = git.rev_parse(rev)
 
