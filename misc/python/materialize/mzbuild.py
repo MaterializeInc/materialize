@@ -170,6 +170,14 @@ class RepositoryDetails:
         if ui.env_is_truthy("CI"):
             flags.append("--config=ci")
 
+            # Building with sanitizers causes the intermediate artifacts to be
+            # quite large so we'll skip using the RAM backed sandbox.
+            if self.sanitizer == Sanitizer.NONE:
+                flags.append("--config=in-mem-sandbox")
+
+        # Add flags for the Sanitizer
+        bazel_build.extend(self.sanitizer.bazel_flags())
+
         return flags
 
     def rewrite_builder_path_for_host(self, path: Path) -> Path:
@@ -401,8 +409,6 @@ class CargoBuild(CargoPreImage):
 
         # Add extra Bazel config flags.
         bazel_build.extend(rd.bazel_config())
-        # Add flags for the Sanitizer
-        bazel_build.extend(rd.sanitizer.bazel_flags())
 
         return bazel_build
 
