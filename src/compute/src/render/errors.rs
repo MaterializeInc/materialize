@@ -107,7 +107,13 @@ impl ErrorLogger {
     ///
     // TODO(database-issues#5362): Rethink or justify our error logging strategy.
     pub fn log(&self, message: &'static str, details: &str) {
-        if !self.shutdown_probe.in_shutdown() {
+        // It's important that we silence errors as soon as the local shutdown token has been
+        // dropped. Dataflow operators may start discarding results, thereby producing incorrect
+        // output, as soon as they observe that all workers have dropped their token. However, not
+        // all workers are guaranteed to make this observation at the same time. So it's possible
+        // that some workers have already started discarding results while other workers still see
+        // `shutdown_probe.in_shutdown() == false`.
+        if !self.shutdown_probe.in_local_shutdown() {
             self.log_always(message, details);
         }
     }

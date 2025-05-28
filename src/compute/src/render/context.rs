@@ -267,6 +267,9 @@ impl ShutdownProbe {
     ///
     /// This method is meant to be used with the `?` operator: It returns `None` if the dataflow is
     /// in the process of shutting down and `Some` otherwise.
+    ///
+    /// The result of this method is synchronized among workers: It only returns `None` once all
+    /// workers have dropped their shutdown token.
     pub(super) fn probe(&self) -> Option<()> {
         match self.in_shutdown() {
             false => Some(()),
@@ -275,9 +278,23 @@ impl ShutdownProbe {
     }
 
     /// Returns whether the dataflow is in the process of shutting down.
+    ///
+    /// The result of this method is synchronized among workers: It only returns `true` once all
+    /// workers have dropped their shutdown token.
     pub(super) fn in_shutdown(&self) -> bool {
         match &self.0 {
             Some(t) => t.borrow_mut().all_pressed(),
+            None => false,
+        }
+    }
+
+    /// Returns whether the dataflow is in the process of shutting down on the current worker.
+    ///
+    /// In contrast to [`ShutdownProbe::in_shutdown`], this method returns `true` as soon as the
+    /// current worker has dropped its shutdown token, without waiting for other workers.
+    pub(super) fn in_local_shutdown(&self) -> bool {
+        match &self.0 {
+            Some(t) => t.borrow_mut().local_pressed(),
             None => false,
         }
     }
