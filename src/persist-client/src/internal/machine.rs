@@ -633,7 +633,7 @@ where
         let mut merge_result_ever_applied = ApplyMergeResult::NotAppliedNoMatch;
         let (_seqno, _apply_merge_result, maintenance) = self
             .apply_unbatched_idempotent_cmd(&metrics.cmds.merge_res, |_, _, state| {
-                let ret = state.apply_merge_res(res, &metrics.clone().columnar);
+                let ret = state.apply_merge_res(res, &Arc::clone(&metrics).columnar);
                 if let Continue(result) = ret {
                     // record if we've ever applied the merge
                     if result.applied() {
@@ -797,7 +797,7 @@ where
             let res = self
                 .applier
                 .apply_unbatched_cmd(&metrics.cmds.become_tombstone, |_, _, state| {
-                    state.become_tombstone_and_shrink(&metrics.clone().columnar)
+                    state.become_tombstone_and_shrink(&Arc::clone(&metrics).columnar)
                 })
                 .await;
             let err = match res {

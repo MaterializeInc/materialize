@@ -165,7 +165,7 @@ mod tests {
             println!("running datadriven file: {}", f.filename);
             let mut state = trace_dd::TraceState::default();
             f.run({
-                let metrics = client.metrics.clone();
+                let metrics = Arc::clone(&client.metrics);
                 move |tc| -> String {
                     let args = DirectiveArgs {
                         args: &tc.args,

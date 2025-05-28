@@ -9,7 +9,6 @@
 
 use anyhow::ensure;
 use async_stream::{stream, try_stream};
-use differential_dataflow::difference::Semigroup;
 use mz_persist::metrics::ColumnarMetrics;
 use std::borrow::Cow;
 use std::cmp::Ordering;
@@ -18,7 +17,6 @@ use std::fmt::{Debug, Formatter};
 use std::marker::PhantomData;
 use std::ops::ControlFlow::{self, Break, Continue};
 use std::ops::{Deref, DerefMut};
-use std::sync::Arc;
 use std::time::Duration;
 
 use arrow::array::{Array, ArrayData, make_array};
@@ -67,8 +65,6 @@ use crate::read::LeasedReaderId;
 use crate::schema::CaESchema;
 use crate::write::WriterId;
 use crate::{PersistConfig, ShardId};
-
-use super::metrics;
 
 include!(concat!(
     env!("OUT_DIR"),
