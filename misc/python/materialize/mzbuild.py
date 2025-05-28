@@ -176,7 +176,7 @@ class RepositoryDetails:
                 flags.append("--config=in-mem-sandbox")
 
         # Add flags for the Sanitizer
-        bazel_build.extend(self.sanitizer.bazel_flags())
+        flags.extend(self.sanitizer.bazel_flags())
 
         return flags
 
