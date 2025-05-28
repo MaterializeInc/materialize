@@ -62,14 +62,14 @@ fn return_true() -> bool {
 
 impl ColumnType {
     pub fn union(&self, other: &Self) -> Result<Self, anyhow::Error> {
-        match (self.scalar_type.clone(), other.scalar_type.clone()) {
+        match (&self.scalar_type, &other.scalar_type) {
             (scalar_type, other_scalar_type) if scalar_type == other_scalar_type => {
                 Ok(ColumnType {
-                    scalar_type,
+                    scalar_type: scalar_type.clone(),
                     nullable: self.nullable || other.nullable,
                 })
             }
-            (scalar_type, other_scalar_type) if scalar_type.base_eq(&other_scalar_type) => {
+            (scalar_type, other_scalar_type) if scalar_type.base_eq(other_scalar_type) => {
                 Ok(ColumnType {
                     scalar_type: scalar_type.without_modifiers(),
                     nullable: self.nullable || other.nullable,
@@ -90,24 +90,25 @@ impl ColumnType {
                     );
                 };
 
-                let mut union_fields: Vec<(ColumnName, ColumnType)> = vec![];
-                for (field, other_field) in fields.iter().zip(other_fields.iter()) {
-                    if field.0 != other_field.0 {
+                let mut union_fields = Vec::with_capacity(fields.len());
+                for ((name, typ), (other_name, other_typ)) in fields.iter().zip(other_fields.iter())
+                {
+                    if name != other_name {
                         bail!(
                             "Can't union types: {:?} and {:?}",
                             self.scalar_type,
                             other.scalar_type
                         );
                     } else {
-                        let union_column_type = field.1.union(&other_field.1)?;
-                        union_fields.push((field.0.clone(), union_column_type));
+                        let union_column_type = typ.union(other_typ)?;
+                        union_fields.push((name.clone(), union_column_type));
                     };
                 }
 
                 Ok(ColumnType {
                     scalar_type: ScalarType::Record {
                         fields: union_fields.into(),
-                        custom_id,
+                        custom_id: *custom_id,
                     },
                     nullable: self.nullable || other.nullable,
                 })
