@@ -154,10 +154,10 @@ build:check --output_groups=build_metadata
 # Note: This shouldn't change any config of the built binary, just the way it
 # gets built.
 #
-# `/dev/shm` is a RAM backed temporary filesystem, it should speedup sandbox creation.
-build:ci --sandbox_base=/dev/shm
 # Always enable verbose failures in CI, makes it easier to debug failures.
 build:ci --verbose_failures
+# `/dev/shm` is a RAM backed temporary filesystem, it should speedup sandbox creation.
+build:in-mem-sandbox --sandbox_base=/dev/shm
 
 # Release Build Configuration
 #
