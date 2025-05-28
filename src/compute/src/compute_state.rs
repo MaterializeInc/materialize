@@ -292,6 +292,7 @@ impl ComputeState {
                         .file_growth_dampener(file_growth_dampener)
                         .local_buffer_bytes(local_buffer_bytes),
                 );
+                crate::lgalloc::update_dyncfg(config);
             } else {
                 debug!("not enabling lgalloc, scratch directory not specified");
             }
