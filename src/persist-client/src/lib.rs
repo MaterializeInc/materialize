@@ -1322,6 +1322,7 @@ mod tests {
                     append_upper: Antichain::from_elem(5),
                 },
             );
+
             let batch = write0
                 .batch(&ts3, Antichain::from_elem(3), Antichain::from_elem(4))
                 .await
@@ -1338,6 +1339,7 @@ mod tests {
                     append_upper: Antichain::from_elem(3),
                 },
             );
+
             let batch = write0
                 .batch(&ts3, Antichain::from_elem(3), Antichain::from_elem(4))
                 .await
