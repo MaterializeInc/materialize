@@ -44,7 +44,7 @@ CREATE CONTINUAL TASK ct ON INPUT input AS (
 statement ok
 INSERT INTO input VALUES (3)
 
-query I
+query I rowsort
 SELECT * FROM ct
 ----
 1

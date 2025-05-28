@@ -132,7 +132,7 @@ Target cluster: quickstart
 
 EOF
 
-query II
+query II rowsort
 SELECT *
 FROM x,
      LATERAL(WITH a(m) AS (SELECT max(y.a) FROM y WHERE y.a < x.a)
@@ -296,7 +296,7 @@ FROM x,
 ----
 3  2  2
 
-query III
+query III rowsort
 SELECT *
 FROM x,
      LATERAL(WITH a(m) as (SELECT max(y.a) FROM y WHERE y.a < x.a)
@@ -401,7 +401,7 @@ Target cluster: quickstart
 
 EOF
 
-query III
+query III rowsort
 SELECT *
 FROM x,
      LATERAL(WITH a(m) AS (SELECT max(y.a) FROM y WHERE y.a < x.a)

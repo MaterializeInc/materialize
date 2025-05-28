@@ -23,14 +23,14 @@ SELECT id FROM mz_catalog.mz_tables WHERE name = 'x'
 ----
 u1
 
-query I
+query I rowsort
 SELECT a FROM x
 ----
 1
 2
 3
 
-query I
+query I rowsort
 SELECT a FROM [u1 AS materialize.public.y]
 ----
 1
@@ -44,7 +44,7 @@ statement error column "x.a" does not exist
 SELECT x.a FROM [u1 AS materialize.public.y]
 
 # Referring to it by its assigned name should work.
-query I
+query I rowsort
 SELECT y.a FROM [u1 AS materialize.public.y]
 ----
 1
