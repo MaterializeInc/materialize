@@ -270,7 +270,7 @@ where
                     {
                         // The cursor found a record whose key matches the current literal.
                         // We return and calls to `next()` will start
-                        // returning it's vals.
+                        // returning its vals.
                         return;
                     }
                     // The cursor landed on a record that has a different key, meaning that there is
