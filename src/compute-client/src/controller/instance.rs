@@ -37,11 +37,10 @@ use mz_ore::channel::instrumented_unbounded_channel;
 use mz_ore::now::NowFn;
 use mz_ore::tracing::OpenTelemetryContext;
 use mz_ore::{soft_assert_or_log, soft_panic_or_log};
-use mz_repr::adt::interval::Interval;
 use mz_repr::adt::timestamp::CheckedTimestamp;
 use mz_repr::refresh_schedule::RefreshSchedule;
 use mz_repr::{Datum, Diff, GlobalId, Row};
-use mz_storage_client::controller::{IntrospectionType, WallclockLagHistogramPeriod};
+use mz_storage_client::controller::{IntrospectionType, WallclockLag, WallclockLagHistogramPeriod};
 use mz_storage_types::read_holds::{self, ReadHold};
 use mz_storage_types::read_policy::ReadPolicy;
 use serde::Serialize;
@@ -564,30 +563,27 @@ impl<T: ComputeControllerTimestamp> Instance<T> {
 
     /// Refresh the wallclock lag introspection and metrics with the current lag values.
     ///
+    /// This method produces wallclock lag metrics of two different shapes:
+    ///
+    /// * Histories: For each replica and each collection, we measure the lag of the write frontier
+    ///   behind the wallclock time every second. Every minute we emit the maximum lag observed
+    ///   over the last minute, together with the current time.
+    /// * Histograms: For each collection, we measure the lag of the write frontier behind
+    ///   wallclock time every second. Every minute we emit all lags observed over the last minute,
+    ///   together with the current histogram period.
+    ///
+    /// Histories are emitted to both Mz introspection and Prometheus, histograms only to
+    /// introspection. We treat lags of unreadable collections (i.e. collections that contain no
+    /// readable times) as undefined and set them to NULL in introspection and `u64::MAX` in
+    /// Prometheus.
+    ///
     /// This method is invoked by `ComputeController::maintain`, which we expect to be called once
     /// per second during normal operation.
     fn refresh_wallclock_lag(&mut self) {
-        // Record lags to persist, if it's time.
-        self.maybe_record_wallclock_lag();
-
         let frontier_lag = |frontier: &Antichain<T>| match frontier.as_option() {
             Some(ts) => (self.wallclock_lag)(ts.clone()),
             None => Duration::ZERO,
         };
-
-        for replica in self.replicas.values_mut() {
-            for collection in replica.collections.values_mut() {
-                let lag = frontier_lag(&collection.write_frontier);
-
-                if let Some(wallclock_lag_max) = &mut collection.wallclock_lag_max {
-                    *wallclock_lag_max = std::cmp::max(*wallclock_lag_max, lag);
-                }
-
-                if let Some(metrics) = &mut collection.metrics {
-                    metrics.wallclock_lag.observe(lag);
-                };
-            }
-        }
 
         let now_ms = (self.now)();
         let histogram_period = WallclockLagHistogramPeriod::from_epoch_millis(now_ms, &self.dyncfg);
@@ -596,19 +592,65 @@ impl<T: ComputeControllerTimestamp> Instance<T> {
             None => BTreeMap::new(),
         };
 
-        for collection in self.collections.values_mut() {
+        // First, iterate over all collections and collect histogram measurements.
+        // We keep a record of unreadable collections, so we can emit undefined lags for those here
+        // and below when we collect history measurements.
+        let mut unreadable_collections = BTreeSet::new();
+        for (id, collection) in &mut self.collections {
+            // We need to ask the storage controller for the read frontiers of storage collections.
+            let read_frontier = match self.storage_collections.collection_frontiers(*id) {
+                Ok(f) => f.read_capabilities,
+                Err(_) => collection.read_frontier(),
+            };
+            let write_frontier = collection.write_frontier();
+            let collection_unreadable = PartialOrder::less_equal(&write_frontier, &read_frontier);
+            if collection_unreadable {
+                unreadable_collections.insert(id);
+            }
+
             if !ENABLE_WALLCLOCK_LAG_HISTOGRAM_COLLECTION.get(&self.dyncfg) {
                 continue;
             }
 
             if let Some(stash) = &mut collection.wallclock_lag_histogram_stash {
-                let lag = collection.shared.lock_write_frontier(|f| frontier_lag(f));
-                let bucket = lag.as_secs().next_power_of_two();
+                let bucket = if collection_unreadable {
+                    WallclockLag::Undefined
+                } else {
+                    let lag = frontier_lag(&write_frontier);
+                    let lag = lag.as_secs().next_power_of_two();
+                    WallclockLag::Seconds(lag)
+                };
 
                 let key = (histogram_period, bucket, histogram_labels.clone());
                 *stash.entry(key).or_default() += Diff::ONE;
             }
         }
+
+        // Second, iterate over all per-replica collections and collect history measurements.
+        for replica in self.replicas.values_mut() {
+            for (id, collection) in &mut replica.collections {
+                let lag = if unreadable_collections.contains(&id) {
+                    WallclockLag::Undefined
+                } else {
+                    let lag = frontier_lag(&collection.write_frontier);
+                    WallclockLag::Seconds(lag.as_secs())
+                };
+
+                if let Some(wallclock_lag_max) = &mut collection.wallclock_lag_max {
+                    *wallclock_lag_max = (*wallclock_lag_max).max(lag);
+                }
+
+                if let Some(metrics) = &mut collection.metrics {
+                    // No way to specify values as undefined in Prometheus metrics, so we use the
+                    // maximum value instead.
+                    let secs = lag.unwrap_seconds_or(u64::MAX);
+                    metrics.wallclock_lag.observe(secs);
+                };
+            }
+        }
+
+        // Record lags to persist, if it's time.
+        self.maybe_record_wallclock_lag();
     }
 
     /// Produce new wallclock lag introspection updates, provided enough time has passed since the
@@ -648,12 +690,11 @@ impl<T: ComputeControllerTimestamp> Instance<T> {
                     continue;
                 };
 
-                let max_lag = std::mem::take(wallclock_lag_max);
-                let max_lag_us = i64::try_from(max_lag.as_micros()).expect("must fit");
+                let max_lag = std::mem::replace(wallclock_lag_max, WallclockLag::MIN);
                 let row = Row::pack_slice(&[
                     Datum::String(&collection_id.to_string()),
                     Datum::String(&replica_id.to_string()),
-                    Datum::Interval(Interval::new(0, 0, max_lag_us)),
+                    max_lag.into_interval_datum(),
                     Datum::TimestampTz(now_ts),
                 ]);
                 history_updates.push((row, Diff::ONE));
@@ -679,7 +720,7 @@ impl<T: ComputeControllerTimestamp> Instance<T> {
                     Datum::TimestampTz(period.start),
                     Datum::TimestampTz(period.end),
                     Datum::String(&collection_id.to_string()),
-                    Datum::UInt64(lag),
+                    lag.into_uint64_datum(),
                 ]);
                 let labels = labels.iter().map(|(k, v)| (*k, Datum::String(v)));
                 packer.push_dict(labels);
@@ -2268,7 +2309,7 @@ struct CollectionState<T: ComputeControllerTimestamp> {
         BTreeMap<
             (
                 WallclockLagHistogramPeriod,
-                u64,
+                WallclockLag,
                 BTreeMap<&'static str, String>,
             ),
             Diff,
@@ -2924,7 +2965,7 @@ struct ReplicaCollectionState<T: ComputeControllerTimestamp> {
     /// Maximum frontier wallclock lag since the last `WallclockLagHistory` introspection update.
     ///
     /// If this is `None`, wallclock lag is not tracked for this collection.
-    wallclock_lag_max: Option<Duration>,
+    wallclock_lag_max: Option<WallclockLag>,
 }
 
 impl<T: ComputeControllerTimestamp> ReplicaCollectionState<T> {
@@ -2942,7 +2983,7 @@ impl<T: ComputeControllerTimestamp> ReplicaCollectionState<T> {
             as_of,
             introspection,
             input_read_holds,
-            wallclock_lag_max: Some(Duration::ZERO),
+            wallclock_lag_max: Some(WallclockLag::MIN),
         }
     }
 
