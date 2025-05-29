@@ -70,6 +70,7 @@ impl RustType<ProtoTimestamp> for Timestamp {
 mod columnar_timestamp {
     use crate::Timestamp;
     use columnar::Columnar;
+    use mz_ore::cast::CastFrom;
 
     /// A newtype wrapper for a vector of `Timestamp` values.
     #[derive(Clone, Copy, Default, Debug)]
@@ -127,8 +128,8 @@ mod columnar_timestamp {
         #[inline(always)]
         fn as_bytes(&self) -> impl Iterator<Item = (u64, &'a [u8])> {
             std::iter::once((
-                std::mem::align_of::<Timestamp>() as u64,
-                bytemuck::cast_slice(&self.0[..]),
+                u64::cast_from(align_of::<Timestamp>()),
+                bytemuck::cast_slice(self.0),
             ))
         }
     }
