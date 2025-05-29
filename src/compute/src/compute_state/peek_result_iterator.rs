@@ -260,13 +260,16 @@ where
                     // since we only perform as many of them as there are literals.
                     self.cursor
                         .seek_key(&self.storage, IntoOwned::borrow_as(current_literal));
-                    if !self.cursor.key_valid(&self.storage) {
-                        return;
-                    }
-                    if self.cursor.get_key(&self.storage).unwrap()
-                        == IntoOwned::borrow_as(current_literal)
+
+                    if self
+                        .cursor
+                        .get_key(&self.storage)
+                        .map_or(true, |key| key == IntoOwned::borrow_as(current_literal))
                     {
-                        // The cursor found a record whose key matches the current literal.
+                        // The cursor found a record whose key matches the
+                        // current literal, or we have no more keys and are
+                        // therefore exhausted.
+
                         // We return and calls to `next()` will start
                         // returning its vals.
                         return;
