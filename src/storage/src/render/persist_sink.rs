@@ -1174,9 +1174,17 @@ where
                             let _ = tokio::time::timeout(Duration::from_secs(1), read_only_rx.changed()).await;
 
                             if !*read_only_rx.borrow() {
+                                if collection_id.is_user() {
                                     tracing::debug!(
+                                        %worker_id,
+                                        %collection_id,
+                                        %shard_id,
+                                        ?batch_lower,
+                                        ?batch_upper,
+                                        ?current_upper,
                                         "persist_sink has come out of read-only mode"
                                     );
+                                }
 
                                 // It's okay to write now.
                                 break Ok(());
