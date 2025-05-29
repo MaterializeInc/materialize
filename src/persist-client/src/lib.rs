@@ -21,7 +21,6 @@ use std::sync::Arc;
 
 use differential_dataflow::difference::Semigroup;
 use differential_dataflow::lattice::Lattice;
-use differential_dataflow::trace::Description;
 use mz_build_info::{BuildInfo, build_info};
 use mz_dyncfg::ConfigSet;
 use mz_ore::{instrument, soft_assert_or_log};
@@ -33,20 +32,16 @@ use semver::Version;
 use timely::progress::{Antichain, Timestamp};
 
 use crate::async_runtime::IsolatedRuntime;
-use crate::batch::{
-    BATCH_DELETE_ENABLED, BLOB_TARGET_SIZE, Batch, BatchBuilder, BatchBuilderConfig,
-    BatchBuilderInternal, BatchParts, ProtoBatch,
-};
+use crate::batch::{BATCH_DELETE_ENABLED, BLOB_TARGET_SIZE, Batch, BatchBuilder, ProtoBatch};
 use crate::cache::{PersistClientCache, StateCache};
 use crate::cfg::{COMPACTION_MEMORY_BOUND_BYTES, PersistConfig};
 use crate::critical::{CriticalReaderId, SinceHandle};
 use crate::error::InvalidUsage;
 use crate::fetch::{BatchFetcher, BatchFetcherConfig, FetchBatchFilter, Lease};
-use crate::internal::compact::{CompactConfig, Compactor};
+use crate::internal::compact::Compactor;
 use crate::internal::encoding::parse_id;
 use crate::internal::gc::GarbageCollector;
 use crate::internal::machine::{Machine, retry_external};
-use crate::internal::state::RunOrder;
 use crate::internal::state_versions::StateVersions;
 use crate::iter::{Consolidator, StructuredSort};
 use crate::metrics::Metrics;
@@ -568,59 +563,24 @@ impl PersistClient {
         shard_id: ShardId,
         write_schemas: Schemas<K, V>,
         lower: Antichain<T>,
-    ) -> Result<BatchBuilder<K, V, T, D>, InvalidUsage<T>>
+    ) -> BatchBuilder<K, V, T, D>
     where
         K: Debug + Codec,
         V: Debug + Codec,
         T: Timestamp + Lattice + Codec64 + Sync,
         D: Semigroup + Ord + Codec64 + Send + Sync,
     {
-        let cfg = CompactConfig::new(&self.cfg, shard_id);
-        // WIP: Pass this in as an argument?
-        let shard_metrics = self.metrics.shards.shard(&shard_id, "peek_stash");
-
-        let parts = if let Some(max_runs) = cfg.batch.max_runs {
-            BatchParts::new_compacting::<K, V, D>(
-                cfg,
-                Description::new(
-                    lower.clone(),
-                    Antichain::new(),
-                    Antichain::from_elem(T::minimum()),
-                ),
-                max_runs,
-                Arc::clone(&self.metrics),
-                shard_metrics,
-                shard_id,
-                Arc::clone(&self.blob),
-                Arc::clone(&self.isolated_runtime),
-                &self.metrics.user,
-                write_schemas.clone(),
-            )
-        } else {
-            BatchParts::new_ordered(
-                cfg.batch,
-                RunOrder::Unordered,
-                Arc::clone(&self.metrics),
-                shard_metrics,
-                shard_id,
-                Arc::clone(&self.blob),
-                Arc::clone(&self.isolated_runtime),
-                &self.metrics.user,
-            )
-        };
-        let builder = BatchBuilderInternal::new(
-            BatchBuilderConfig::new(&self.cfg, shard_id),
-            parts,
+        WriteHandle::builder_inner(
+            &self.cfg,
             Arc::clone(&self.metrics),
-            write_schemas.clone(),
+            self.metrics.shards.shard(&shard_id, "peek_stash"),
+            &self.metrics.user,
+            Arc::clone(&self.isolated_runtime),
             Arc::clone(&self.blob),
             shard_id,
-            self.cfg.build_version.clone(),
-        );
-        Ok(BatchBuilder::new(
-            builder,
-            Description::new(lower, Antichain::new(), Antichain::from_elem(T::minimum())),
-        ))
+            write_schemas,
+            lower,
+        )
     }
 
     /// Turns the given [`ProtoBatch`] back into a [`Batch`] which can be used
