@@ -21,6 +21,7 @@ use std::sync::Arc;
 
 use differential_dataflow::difference::Semigroup;
 use differential_dataflow::lattice::Lattice;
+use itertools::Itertools;
 use mz_build_info::{BuildInfo, build_info};
 use mz_dyncfg::ConfigSet;
 use mz_ore::{instrument, soft_assert_or_log};
@@ -32,22 +33,20 @@ use semver::Version;
 use timely::progress::{Antichain, Timestamp};
 
 use crate::async_runtime::IsolatedRuntime;
-use crate::batch::{BATCH_DELETE_ENABLED, BLOB_TARGET_SIZE, Batch, BatchBuilder, ProtoBatch};
+use crate::batch::{BATCH_DELETE_ENABLED, Batch, BatchBuilder, ProtoBatch};
 use crate::cache::{PersistClientCache, StateCache};
-use crate::cfg::{COMPACTION_MEMORY_BOUND_BYTES, PersistConfig};
+use crate::cfg::PersistConfig;
 use crate::critical::{CriticalReaderId, SinceHandle};
 use crate::error::InvalidUsage;
-use crate::fetch::{BatchFetcher, BatchFetcherConfig, FetchBatchFilter, Lease};
+use crate::fetch::{BatchFetcher, BatchFetcherConfig, Lease};
 use crate::internal::compact::Compactor;
 use crate::internal::encoding::parse_id;
 use crate::internal::gc::GarbageCollector;
 use crate::internal::machine::{Machine, retry_external};
 use crate::internal::state_versions::StateVersions;
-use crate::iter::{Consolidator, StructuredSort};
 use crate::metrics::Metrics;
 use crate::read::{
-    Cursor, CursorConsolidator, LazyPartStats, LeasedReaderId, READER_LEASE_DURATION, ReadHandle,
-    Since,
+    Cursor, LazyPartStats, LeasedReaderId, READER_LEASE_DURATION, ReadHandle, Since,
 };
 use crate::rpc::PubSubSender;
 use crate::schema::CaESchema;
@@ -643,57 +642,30 @@ impl PersistClient {
         should_fetch_part: impl for<'a> Fn(Option<&'a LazyPartStats>) -> bool,
     ) -> Result<Cursor<K, V, T, D>, Since<T>>
     where
-        K: Debug + Codec,
-        V: Debug + Codec,
+        K: Debug + Codec + Ord,
+        V: Debug + Codec + Ord,
         T: Timestamp + Lattice + Codec64 + Sync,
         D: Semigroup + Ord + Codec64 + Send + Sync,
     {
-        let context = format!("{}[as_of={:?}]", shard_id, as_of.elements());
-        let filter = FetchBatchFilter::Snapshot {
-            as_of: as_of.clone(),
-        };
-
+        // WIP!
+        let lease = Lease::new(SeqNo(0));
         let shard_metrics = self.metrics.shards.shard(&shard_id, "peek_stash");
 
-        let consolidator = {
-            let mut consolidator = Consolidator::new(
-                context,
-                shard_id,
-                StructuredSort::new(read_schemas.clone()),
-                Arc::clone(&self.blob),
-                Arc::clone(&self.metrics),
-                Arc::clone(&shard_metrics),
-                self.metrics.read.snapshot.clone(),
-                filter,
-                COMPACTION_MEMORY_BOUND_BYTES.get(&self.cfg),
-            );
-            for batch in batches {
-                for (meta, run) in batch.batch.runs() {
-                    consolidator.enqueue_run(
-                        &batch.batch.desc,
-                        meta,
-                        run.into_iter()
-                            .filter(|p| should_fetch_part(p.stats()))
-                            .cloned(),
-                    );
-                }
-            }
-            CursorConsolidator::Structured {
-                consolidator,
-                // This default may end up consolidating more records than previously
-                // for cases like fast-path peeks, where only the first few entries are used.
-                // If this is a noticeable performance impact, thread the max-len in from the caller.
-                max_len: self.cfg.compaction_yield_after_n_updates,
-                max_bytes: BLOB_TARGET_SIZE.get(&self.cfg).max(1),
-            }
-        };
+        let hollow_batches = batches.iter().map(|b| b.batch.clone()).collect_vec();
 
-        Ok(Cursor {
-            consolidator,
-            // WIP: What to do about this?
-            _lease: Lease::new(SeqNo(0)),
+        ReadHandle::read_batches_consolidated(
+            &self.cfg,
+            Arc::clone(&self.metrics),
+            shard_metrics,
+            self.metrics.read.snapshot.clone(),
+            Arc::clone(&self.blob),
+            lease,
+            shard_id,
+            as_of,
             read_schemas,
-        })
+            &hollow_batches,
+            should_fetch_part,
+        )
     }
 
     /// Returns the requested schema, if known at the current state.
