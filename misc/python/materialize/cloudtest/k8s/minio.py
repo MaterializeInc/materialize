@@ -10,9 +10,7 @@
 from materialize.cloudtest import DEFAULT_K8S_NAMESPACE
 from materialize.cloudtest.k8s.api.k8s_resource import K8sResource
 
-MINIO_YAML_DIRECTORY_URL = (
-    "https://raw.githubusercontent.com/kubernetes/examples/master/staging/storage/minio"
-)
+MINIO_YAML_DIRECTORY_URL = "https://raw.githubusercontent.com/kubernetes/examples/1b8cbf894ead6b25e9e870af6ae04f49dfdedfc9/staging/storage/minio"
 
 
 class Minio(K8sResource):
