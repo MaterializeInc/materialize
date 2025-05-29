@@ -134,7 +134,6 @@ pub const BUILD_INFO: BuildInfo = build_info!();
 pub use mz_persist_types::{PersistLocation, ShardId};
 
 pub use crate::internal::encoding::Schemas;
-pub use crate::internal::state::HollowBatch;
 
 /// Additional diagnostic information used within Persist
 /// e.g. for logging, metric labels, etc.
