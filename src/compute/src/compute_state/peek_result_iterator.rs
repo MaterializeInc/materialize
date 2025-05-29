@@ -104,16 +104,7 @@ where
     type Item = Result<(Row, NonZeroI64), String>;
 
     fn next(&mut self) -> Option<Self::Item> {
-        tracing::trace!(
-            ?self.literals_exhausted,
-            key_valid = self.cursor.key_valid(&self.storage),
-            val_valid = self.cursor.val_valid(&self.storage), "next");
         let result = loop {
-            tracing::trace!(
-                ?self.literals_exhausted,
-                key_valid = self.cursor.key_valid(&self.storage),
-                val_valid = self.cursor.val_valid(&self.storage), "next::loop");
-
             if self.literals_exhausted {
                 return None;
             }
@@ -229,11 +220,6 @@ where
         );
 
         loop {
-            tracing::trace!(
-                ?self.literals_exhausted,
-                key_valid = self.cursor.key_valid(&self.storage),
-                val_valid = self.cursor.val_valid(&self.storage), "maybe_step_key::loop");
-
             if !self.has_literal_constraints {
                 self.cursor.step_key(&self.storage);
             } else {
