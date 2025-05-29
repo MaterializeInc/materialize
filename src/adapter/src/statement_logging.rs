@@ -20,6 +20,7 @@ use crate::{AdapterError, ExecuteResponse};
 #[derive(Clone, Debug)]
 pub enum StatementLifecycleEvent {
     ExecutionBegan,
+    OptimizationBegan,
     OptimizationFinished,
     StorageDependenciesFinished,
     ComputeDependenciesFinished,
@@ -30,6 +31,7 @@ impl StatementLifecycleEvent {
     pub fn as_str(&self) -> &str {
         match self {
             Self::ExecutionBegan => "execution-began",
+            Self::OptimizationBegan => "optimization-began",
             Self::OptimizationFinished => "optimization-finished",
             Self::StorageDependenciesFinished => "storage-dependencies-finished",
             Self::ComputeDependenciesFinished => "compute-dependencies-finished",
