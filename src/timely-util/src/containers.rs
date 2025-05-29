@@ -90,6 +90,7 @@ mod container {
 
     impl<C: Columnar> Column<C> {
         /// Borrows the container as a reference.
+        #[inline(always)]
         fn borrow(&self) -> <C::Container as columnar::Container<C>>::Borrowed<'_> {
             match self {
                 Column::Typed(t) => t.borrow(),
@@ -111,6 +112,7 @@ mod container {
     }
 
     impl<C: Columnar> Default for Column<C> {
+        #[inline(always)]
         fn default() -> Self {
             Self::Typed(Default::default())
         }
@@ -145,11 +147,13 @@ mod container {
         type ItemRef<'a> = C::Ref<'a>;
         type Item<'a> = C::Ref<'a>;
 
+        #[inline(always)]
         fn len(&self) -> usize {
             self.borrow().len()
         }
 
         // This sets the `Bytes` variant to be an empty `Typed` variant, appropriate for pushing into.
+        #[inline(always)]
         fn clear(&mut self) {
             match self {
                 Column::Typed(t) => t.clear(),
@@ -159,12 +163,14 @@ mod container {
 
         type Iter<'a> = IterOwn<<C::Container as columnar::Container<C>>::Borrowed<'a>>;
 
+        #[inline(always)]
         fn iter(&self) -> Self::Iter<'_> {
             self.borrow().into_index_iter()
         }
 
         type DrainIter<'a> = IterOwn<<C::Container as columnar::Container<C>>::Borrowed<'a>>;
 
+        #[inline(always)]
         fn drain(&mut self) -> Self::DrainIter<'_> {
             self.borrow().into_index_iter()
         }
@@ -502,6 +508,7 @@ pub mod merger {
     use differential_dataflow::trace::implementations::merge_batcher::container::{
         ContainerQueue, MergerChunk,
     };
+    use timely::Container;
     use timely::progress::{Antichain, frontier::AntichainRef};
 
     use crate::containers::Column;
@@ -595,18 +602,34 @@ pub mod merger {
                 self.push((data, time, &*stash));
             }
         }
+        // len size cap allocations
         fn account(&self) -> (usize, usize, usize, usize) {
-            (0, 0, 0, 0)
-            // unimplemented!()
-            // use timely::Container;
-            // let (mut size, mut capacity, mut allocations) = (0, 0, 0);
-            // let cb = |siz, cap| {
-            //     size += siz;
-            //     capacity += cap;
-            //     allocations += 1;
-            // };
-            // self.heap_size(cb);
-            // (self.len(), size, capacity, allocations)
+            let (mut size, mut cap) = (0, 0);
+            match self {
+                Column::Typed((_data, _time, _diff)) => {
+                    // I don't want to push the `<.. as Columnar>::Container: HeapSize` constraint
+                    // everywhere, so let's just pretend it takes no space.
+                    // use columnar::HeapSize;
+                    // let size_cap = data.heap_size();
+                    // size += size_cap.0;
+                    // cap += size_cap.1;
+                    // let size_cap = time.heap_size();
+                    // size += size_cap.0;
+                    // cap += size_cap.1;
+                    // let size_cap = diff.heap_size();
+                    // size += size_cap.0;
+                    // cap += size_cap.1;
+                }
+                Column::Bytes(bytes) => {
+                    size += bytes.len();
+                    cap += bytes.len();
+                }
+                Column::Align(align) => {
+                    size += align.len() * 8; // 8 bytes per u64
+                    cap += align.len() * 8; // 8 bytes per u64
+                }
+            }
+            (self.len(), size, cap, 0)
         }
     }
 }
@@ -632,6 +655,15 @@ pub mod dd_builder {
 
     pub type ColValBuilder<K, V, T, R> = RcBuilder<OrdValBuilder<TStack<((K, V), T, R)>>>;
     pub type ColKeyBuilder<K, T, R> = RcBuilder<OrdValBuilder<TStack<((K, ()), T, R)>>>;
+
+    type OwnedKey<L> = <<L as Layout>::KeyContainer as BatchContainer>::Owned;
+    type ReadItemKey<'a, L> = <<L as Layout>::KeyContainer as BatchContainer>::ReadItem<'a>;
+    type OwnedVal<L> = <<L as Layout>::ValContainer as BatchContainer>::Owned;
+    type ReadItemVal<'a, L> = <<L as Layout>::ValContainer as BatchContainer>::ReadItem<'a>;
+    type OwnedTime<L> = <<L as Layout>::TimeContainer as BatchContainer>::Owned;
+    type ReadItemTime<'a, L> = <<L as Layout>::TimeContainer as BatchContainer>::ReadItem<'a>;
+    type OwnedDiff<L> = <<L as Layout>::DiffContainer as BatchContainer>::Owned;
+    type ReadItemDiff<'a, L> = <<L as Layout>::DiffContainer as BatchContainer>::ReadItem<'a>;
 
     /// A builder for creating layers from unsorted update tuples.
     pub struct OrdValBuilder<L: Layout> {
@@ -665,15 +697,10 @@ pub mod dd_builder {
             diff: <L::Target as Update>::Diff,
         ) {
             // If a just-pushed update exactly equals `(time, diff)` we can avoid pushing it.
-            if self.result.times.last().map(|t| {
-                t == <<L::TimeContainer as BatchContainer>::ReadItem<'_> as IntoOwned>::borrow_as(
-                    &time,
-                )
-            }) == Some(true) && self.result.diffs.last().map(|d| {
-                d == <<L::DiffContainer as BatchContainer>::ReadItem<'_> as IntoOwned>::borrow_as(
-                    &diff,
-                )
-            }) == Some(true)
+            let last_time = self.result.times.last();
+            let last_diff = self.result.diffs.last();
+            if last_time.map_or(false, |t| t == ReadItemTime::<L>::borrow_as(&time))
+                && last_diff.map_or(false, |d| d == ReadItemDiff::<L>::borrow_as(&diff))
             {
                 assert!(self.singleton.is_none());
                 self.singleton = Some((time, diff));
@@ -693,26 +720,19 @@ pub mod dd_builder {
     impl<L> Builder for OrdValBuilder<L>
     where
         L: Layout,
-        <L::KeyContainer as BatchContainer>::Owned: Columnar,
-        <L::ValContainer as BatchContainer>::Owned: Columnar,
-        <L::TimeContainer as BatchContainer>::Owned: Columnar,
-        <L::DiffContainer as BatchContainer>::Owned: Columnar,
+        OwnedKey<L>: Columnar,
+        OwnedVal<L>: Columnar,
+        OwnedTime<L>: Columnar,
+        OwnedDiff<L>: Columnar,
         // These two constraints seem .. like we could potentially replace by `Columnar::Ref<'a>`.
-        for<'a> L::KeyContainer: PushInto<&'a <L::KeyContainer as BatchContainer>::Owned>,
-        for<'a> L::ValContainer: PushInto<&'a <L::ValContainer as BatchContainer>::Owned>,
+        for<'a> L::KeyContainer: PushInto<&'a OwnedKey<L>>,
+        for<'a> L::ValContainer: PushInto<&'a OwnedVal<L>>,
         for<'a> <L::TimeContainer as BatchContainer>::ReadItem<'a>:
             IntoOwned<'a, Owned = <L::Target as Update>::Time>,
         for<'a> <L::DiffContainer as BatchContainer>::ReadItem<'a>:
             IntoOwned<'a, Owned = <L::Target as Update>::Diff>,
     {
-        type Input = Column<(
-            (
-                <L::KeyContainer as BatchContainer>::Owned,
-                <L::ValContainer as BatchContainer>::Owned,
-            ),
-            <L::TimeContainer as BatchContainer>::Owned,
-            <L::DiffContainer as BatchContainer>::Owned,
-        )>;
+        type Input = Column<((OwnedKey<L>, OwnedVal<L>), OwnedTime<L>, OwnedDiff<L>)>;
         type Time = <L::Target as Update>::Time;
         type Output = OrdValBatch<L>;
 
@@ -746,59 +766,37 @@ pub mod dd_builder {
             let mut owned_val = None;
 
             for ((key, val), time, diff) in chunk.drain() {
-                // It would be great to avoid.
-                let key = if owned_key.is_some() {
-                    <<L::KeyContainer as BatchContainer>::Owned as Columnar>::copy_from(
-                        owned_key.as_mut().unwrap(),
-                        key,
-                    );
-                    owned_key.as_ref().unwrap()
+                let key = if let Some(owned_key) = owned_key.as_mut() {
+                    OwnedKey::<L>::copy_from(owned_key, key);
+                    owned_key
                 } else {
-                    owned_key = Some(
-                        <<L::KeyContainer as BatchContainer>::Owned as Columnar>::into_owned(key),
-                    );
-                    owned_key.as_ref().unwrap()
+                    owned_key.insert(OwnedKey::<L>::into_owned(key))
                 };
-                let val = if owned_val.is_some() {
-                    <<L::ValContainer as BatchContainer>::Owned as Columnar>::copy_from(
-                        owned_val.as_mut().unwrap(),
-                        val,
-                    );
-                    owned_val.as_ref().unwrap()
+                let val = if let Some(owned_val) = owned_val.as_mut() {
+                    OwnedVal::<L>::copy_from(owned_val, val);
+                    owned_val
                 } else {
-                    owned_val = Some(
-                        <<L::ValContainer as BatchContainer>::Owned as Columnar>::into_owned(val),
-                    );
-                    owned_val.as_ref().unwrap()
+                    owned_val.insert(OwnedVal::<L>::into_owned(val))
                 };
-                // These feel fine (wrt the other versions)
-                let time =
-                    <<L::TimeContainer as BatchContainer>::Owned as Columnar>::into_owned(time);
-                let diff =
-                    <<L::DiffContainer as BatchContainer>::Owned as Columnar>::into_owned(diff);
+
+                let time = OwnedTime::<L>::into_owned(time);
+                let diff = OwnedDiff::<L>::into_owned(diff);
 
                 // Perhaps this is a continuation of an already received key.
-                if self
-                    .result
-                    .keys
-                    .last()
-                    .map(|k| {
-                        <<L::KeyContainer as BatchContainer>::ReadItem<'_> as IntoOwned>::borrow_as(
-                            &key,
-                        )
-                        .eq(&k)
-                    })
-                    .unwrap_or(false)
-                {
+                let last_key = self.result.keys.last();
+                if last_key.map_or(false, |k| ReadItemKey::<L>::borrow_as(key).eq(&k)) {
                     // Perhaps this is a continuation of an already received value.
-                    if self.result.vals.last().map(|v| <<L::ValContainer as BatchContainer>::ReadItem<'_> as IntoOwned>::borrow_as(&val).eq(&v)).unwrap_or(false) {
+                    let last_val = self.result.vals.last();
+                    if last_val.map_or(false, |v| ReadItemVal::<L>::borrow_as(val).eq(&v)) {
                         self.push_update(time, diff);
                     } else {
                         // New value; complete representation of prior value.
                         self.result.vals_offs.push(self.result.times.len());
-                        if self.singleton.take().is_some() { self.singletons += 1; }
+                        if self.singleton.take().is_some() {
+                            self.singletons += 1;
+                        }
                         self.push_update(time, diff);
-                        self.result.vals.push(&val);
+                        self.result.vals.push(val);
                     }
                 } else {
                     // New key; complete representation of prior key.
@@ -808,8 +806,8 @@ pub mod dd_builder {
                     }
                     self.result.keys_offs.push(self.result.vals.len());
                     self.push_update(time, diff);
-                    self.result.vals.push(&val);
-                    self.result.keys.push(&key);
+                    self.result.vals.push(val);
+                    self.result.keys.push(key);
                 }
             }
         }
