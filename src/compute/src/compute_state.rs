@@ -1409,22 +1409,11 @@ impl IndexPeek {
         let max_result_size = usize::cast_from(max_result_size);
         let count_byte_size = std::mem::size_of::<NonZeroUsize>();
 
-        // We have to sort the literal constraints because cursor.seek_key can
-        // seek only forward.
-        peek.literal_constraints
-            .iter_mut()
-            .for_each(|vec| vec.sort());
-        let has_literal_constraints = peek.literal_constraints.is_some();
-        let literals = Option::take(&mut peek.literal_constraints)
-            .into_iter()
-            .flatten();
-
         let mut peek_iterator = peek_result_iterator::PeekResultIterator::new(
             peek.target.id().clone(),
             peek.map_filter_project.clone(),
             peek.timestamp,
-            has_literal_constraints,
-            literals,
+            peek.literal_constraints.clone(),
             oks_handle,
         );
 

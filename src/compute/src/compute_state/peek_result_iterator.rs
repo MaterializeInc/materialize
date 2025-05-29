@@ -16,10 +16,9 @@ use mz_repr::fixed_length::ToDatumIter;
 use mz_repr::{DatumVec, Diff, GlobalId, Row, RowArena};
 use timely::order::PartialOrder;
 
-pub struct PeekResultIterator<Tr, L>
+pub struct PeekResultIterator<Tr>
 where
     Tr: TraceReader,
-    L: Iterator<Item = Row>,
 {
     // For debug/trace logging.
     target_id: GlobalId,
@@ -31,7 +30,7 @@ where
     row_builder: Row,
     datum_vec: DatumVec,
     has_literal_constraints: bool,
-    literals: L,
+    literals: Box<dyn Iterator<Item = Row>>,
     current_literal: Option<Row>,
 }
 
@@ -39,24 +38,30 @@ where
 ///
 /// The iterator will apply a given `MapFilterProject` and obey literal
 /// constraints, if any.
-impl<Tr, L> PeekResultIterator<Tr, L>
+impl<Tr> PeekResultIterator<Tr>
 where
     Tr: TraceReader,
     for<'a> Tr: TraceReader<DiffGat<'a> = &'a Diff>,
     for<'a> Tr::Key<'a>: ToDatumIter + IntoOwned<'a, Owned = Row> + Eq,
     for<'a> Tr::Val<'a>: ToDatumIter,
     for<'a> Tr::TimeGat<'a>: PartialOrder<mz_repr::Timestamp>,
-    L: Iterator<Item = Row>,
 {
     pub fn new(
         target_id: GlobalId,
         map_filter_project: mz_expr::SafeMfpPlan,
         peek_timestamp: mz_repr::Timestamp,
-        has_literal_constraints: bool,
-        literals: L,
+        mut literal_constraints: Option<Vec<Row>>,
         trace_reader: &mut Tr,
     ) -> Self {
         let (cursor, storage) = trace_reader.cursor();
+
+        // We have to sort the literal constraints because cursor.seek_key can
+        // seek only forward.
+        if let Some(literal_constraints) = literal_constraints.as_mut() {
+            literal_constraints.sort();
+        }
+        let has_literal_constraints = literal_constraints.is_some();
+        let literals = literal_constraints.into_iter().flatten();
 
         let mut result = Self {
             target_id,
@@ -68,7 +73,7 @@ where
             row_builder: Row::default(),
             datum_vec: DatumVec::new(),
             has_literal_constraints,
-            literals,
+            literals: Box::new(literals),
             current_literal: None,
         };
 
@@ -80,23 +85,21 @@ where
     }
 }
 
-impl<Tr, L> FusedIterator for PeekResultIterator<Tr, L>
+impl<Tr> FusedIterator for PeekResultIterator<Tr>
 where
     for<'a> Tr: TraceReader<DiffGat<'a> = &'a Diff>,
     for<'a> Tr::Key<'a>: ToDatumIter + IntoOwned<'a, Owned = Row> + Eq,
     for<'a> Tr::Val<'a>: ToDatumIter,
     for<'a> Tr::TimeGat<'a>: PartialOrder<mz_repr::Timestamp>,
-    L: Iterator<Item = Row>,
 {
 }
 
-impl<Tr, L> Iterator for PeekResultIterator<Tr, L>
+impl<Tr> Iterator for PeekResultIterator<Tr>
 where
     for<'a> Tr: TraceReader<DiffGat<'a> = &'a Diff>,
     for<'a> Tr::Key<'a>: ToDatumIter + IntoOwned<'a, Owned = Row> + Eq,
     for<'a> Tr::Val<'a>: ToDatumIter,
     for<'a> Tr::TimeGat<'a>: PartialOrder<mz_repr::Timestamp>,
-    L: Iterator<Item = Row>,
 {
     type Item = Result<(Row, NonZeroI64), String>;
 
@@ -142,13 +145,12 @@ where
     }
 }
 
-impl<Tr, L> PeekResultIterator<Tr, L>
+impl<Tr> PeekResultIterator<Tr>
 where
     for<'a> Tr: TraceReader<DiffGat<'a> = &'a Diff>,
     for<'a> Tr::Key<'a>: ToDatumIter + IntoOwned<'a, Owned = Row> + Eq,
     for<'a> Tr::Val<'a>: ToDatumIter,
     for<'a> Tr::TimeGat<'a>: PartialOrder<mz_repr::Timestamp>,
-    L: Iterator<Item = Row>,
 {
     /// Extracts and returns the row currently pointed at by our cursor. Returns
     /// `Ok(None)` if our MapFilterProject evaluates to `None`. Also returns any
