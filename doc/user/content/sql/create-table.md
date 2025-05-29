@@ -15,13 +15,14 @@ Materialize, you can create:
 - User-populated tables. User-populated tables can be written to (i.e.,
   [`INSERT`]/[`UPDATE`]/[`DELETE`]) by the user.
 
-- [Source-populated](/concepts/sources/) tables. Source-populated tables cannot
-  be written to by the user; they are populated through data ingestion from a
-  source.
+- [Source-populated](/concepts/sources/) tables. Source-populated tables are
+  read-only tables; they cannot be written to by the user. These tables are
+  populated by data ingestion from a source.
 
 - Webhook-populated tables. Webhook-populated tables cannot be written to by the
-  user; they are populated through data posted to associated **public** webhook
-  endpoint, automatically created with the table creation.
+  user; they are read-only. These tables are populated through data posted to
+  the associated **public** webhook URL, which is automatically created with the
+  table creation.
 
 Tables can be joined with other tables, materialized views, and views. Tables in
 Materialize are similar to tables in standard relational databases: they consist
@@ -53,16 +54,18 @@ CREATE [TEMP|TEMPORARY] TABLE <table_name> (
 
 {{</ tab >}}
 
-{{< tab "Source-populated tables (DB connector)" >}}
+{{< tab "Source-populated tables (via DB connector)" >}}
 
-To create a table from a [source](/sql/create-source/) connected (via native
-connector) to an external database system:
+To create a table from a [source](/sql/create-source/) connected (via
+native connector) to an external database system:
+
 
 {{< note >}}
 
-Users cannot write to source-populated tables; i.e., users cannot perform
-[`INSERT`](/sql/insert/)/[`UPDATE`](/sql/update/)/[`DELETE`](/sql/delete/)
-operations on source-populated tables.
+- {{< include-md file="shared-content/create-table-from-source-readonly.md" >}}
+
+- {{< include-md file="shared-content/create-table-from-source-snapshotting.md"
+  >}}
 
 {{</ note >}}
 
@@ -81,73 +84,7 @@ CREATE TABLE <table_name> FROM SOURCE <source_name> (REFERENCE <ref_object>)
 
 <a name="supported-db-source-types" ></a>
 
-{{< tabs >}}
-{{< tab "Supported MySQL types">}}
-
-{{< include-md file="shared-content/mysql-supported-types.md" >}}
-
-Replicating tables that contain **unsupported data types** is
-possible via the [`TEXT COLUMNS` option](#text-columns) for the
-following types:
-
-<ul style="column-count: 1">
-<li><code>enum</code></li>
-<li><code>year</code></li>
-</ul>
-
-The specified columns will be treated as `text`, and will thus not offer the
-expected MySQL type features. For any unsupported data types not listed above,
-use the [`EXCLUDE COLUMNS`](#exclude-columns) option.
-
-{{</ tab >}}
-
-{{< tab "Supported PostgreSQL types">}}
-
-{{< include-md file="shared-content/postgres-supported-types.md" >}}
-
-Replicating tables that contain **unsupported data types** is possible via the
-[`TEXT COLUMNS` option](#text-columns). When decoded as `text`, the specified
-columns will not have the expected PostgreSQL type features. For example:
-
-* [`enum`]: When decoded as `text`, the resulting `text` values will
-  not observe the implicit ordering of the original PostgreSQL `enum`; instead,
-  Materialize will sort the values as `text`.
-
-* [`money`]: When decoded as `text`, the resulting `text` value
-  cannot be cast back to `numeric` since PostgreSQL adds typical currency
-  formatting to the output.
-
-[`enum`]: https://www.postgresql.org/docs/current/datatype-enum.html
-[`money`]: https://www.postgresql.org/docs/current/datatype-money.html
-
-{{</ tab >}}
-
-{{< tab "Supported SQL Server types">}}
-
-{{< include-md file="shared-content/sql-server-supported-types.md" >}}
-
-Replicating tables that contain **unsupported data types** is possible via the
-[`EXCLUDE COLUMNS`
-option](#exclude-columns) for the
-following types:
-
-<ul style="column-count: 3">
-<li><code>text</code></li>
-<li><code>ntext</code></li>
-<li><code>image</code></li>
-<li><code>varchar(max)</code></li>
-<li><code>nvarchar(max)</code></li>
-<li><code>varbinary(max)</code></li>
-</ul>
-
-**Timestamp rounding**
-
-{{< include-md file="shared-content/sql-server-timestamp-rounding.md" >}}
-
-{{</ tab >}}
-{{</ tabs >}}
-
-See also [Materialize SQL data types](/sql/types/).
+{{< include-md file="shared-content/create-table-supported-types.md" >}}
 
 {{</ tab >}}
 
@@ -158,11 +95,12 @@ Kafka/Redpanda:
 
 {{< note >}}
 
-- Users cannot write to source-populated tables; i.e., users cannot perform
-[`INSERT`](/sql/insert/)/[`UPDATE`](/sql/update/)/[`DELETE`](/sql/delete/)
-operations on source-populated tables.
-
 - {{< include-md file="shared-content/kafka-redpanda-shorthand.md" >}}
+
+- {{< include-md file="shared-content/create-table-from-source-readonly.md" >}}
+
+- {{< include-md file="shared-content/create-table-from-source-snapshotting.md"
+  >}}
 
 {{</ note >}}
 
@@ -171,7 +109,7 @@ operations on source-populated tables.
 
 {{< tab "FORMAT AVRO" >}}
 
-Use the following syntax to create a table from a [Kafka
+Use the following syntax to create a read-only table from a [Kafka
 source](/sql/create-source/), ingesting messages encoded in Avro using the
 schema from the Confluent Schema Registry.
 
@@ -204,8 +142,8 @@ FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION <conn_name>
 
 {{< tab "FORMAT PROTOBUF MESSAGE">}}
 
-Creates a table from a [Kafka source](/sql/create-source/), ingesting messages
-encoded in PROTOBUF format, specifying the hex encoded schema.
+Creates a read-only table from a [Kafka source](/sql/create-source/), ingesting
+messages encoded in PROTOBUF format, specifying the hex encoded schema.
 
 By default, the table contains the columns specified in the schema. You can
 include additional columns using the `INCLUDE` options.
@@ -241,10 +179,10 @@ FORMAT PROTOBUF MESSAGE <msg_name> USING SCHEMA <hex_encoded_schema>
 
 {{< tab "FORMAT PROTOBUF using CSR" >}}
 
-Creates a table from a [Kafka source](/sql/create-source/), ingesting messages
-encoded in PROTOBUF format using the schema information from Confluent Schema
-Registry. By default, the table contains the columns specified in the schema.
-You can include additional columns using the `INCLUDE` options.
+Creates a read-only table from a [Kafka source](/sql/create-source/), ingesting
+messages encoded in PROTOBUF format using the schema information from Confluent
+Schema Registry. By default, the table contains the columns specified in the
+schema. You can include additional columns using the `INCLUDE` options.
 
 {{< tip >}}
 
@@ -277,7 +215,7 @@ FORMAT PROTOBUF USING CONFLUENT SCHEMA REGISTRY CONNECTION <conn_name>
 
 {{< tab "FORMAT JSON" >}}
 
-Creates a table from a [Kafka source](/sql/create-source/), where the
+Creates a read-only table from a [Kafka source](/sql/create-source/), where the
 messages are JSON records.
 
 By default, creates a table with 1 column named `data` of type `jsonb`. You can
@@ -302,7 +240,7 @@ FORMAT JSON
 
 {{< tab "FORMAT CSV" >}}
 
-Creates a table from a [Kafka source](/sql/create-source/), where the
+Creates a read-only table from a [Kafka source](/sql/create-source/), where the
 messages are CSV records with the specified number of columns. By default,
 
 - The columns are named `column1`, `column2`...`columnN`. You can specify
@@ -332,8 +270,8 @@ FORMAT CSV WITH <num> COLUMNS [DELIMITED BY <char>]
 
 {{< tab "FORMAT TEXT/BYTES" >}}
 
-Creates a table from a [Kafka source](/sql/create-source/), where the messages
-are decoded either as text (`FORMAT TEXT`) or bytes (`FORMAT BYTES`).
+Creates a read-only table from a [Kafka source](/sql/create-source/), where the
+messages are decoded either as text (`FORMAT TEXT`) or bytes (`FORMAT BYTES`).
 
 By default, creates a table with 1 column:
 
@@ -400,11 +338,15 @@ KEY FORMAT <format1> VALUE FORMAT <format2>
 {{< tab "Webhook-populated table" >}}
 
 To create a table (and the associated **public** webhook URL) that is
-populated with data POSTed to the associated webhook URL.
+populated with data **POST**ed to the associated webhook URL.
 
 {{< warning >}}
 This is a public URL that is open to the internet and has no security.
 {{</ warning >}}
+
+{{< note >}}
+{{< include-md file="shared-content/create-table-from-source-readonly.md" >}}
+{{</ note >}}
 
 The created table has, by default, 1 column `body`.  You can specify `INCLUDE
 <header_option>` to include header columns.
@@ -438,6 +380,10 @@ FROM WEBHOOK
 Names for tables and column(s) must follow the [naming
 guidelines](/sql/identifiers/#naming-restrictions).
 
+### Upstream sources and supported data types
+
+{{< include-md file="shared-content/create-table-supported-types.md" >}}
+
 ### Known limitations
 
 Tables do not currently support:
@@ -469,35 +415,191 @@ The privileges required to execute the command are:
 
 ## Examples
 
-### Creating a table
+### Create a table (user-populated)
 
-You can create a table `t` with the following statement:
+The following example uses `CREATE TABLE` to create a new table `t` with two
+columns `a` and `b`:
 
 ```mzsql
 CREATE TABLE t (a int, b text NOT NULL);
 ```
 
-Once a table is created, you can inspect the table with various `SHOW` commands.
+#### Verify table creation
+
+Once a table is created, you can:
+
+- Inspect the table with various `SHOW` commands.
+
+  For example, to verify that the table has been created, you can run [`SHOW
+  TABLES`](/sql/show-tables/) to list all tables in the current [schema](/sql/namespaces/#namespace-hierarchy):
+
+  ```mzsql
+  SHOW TABLES;
+  ```
+
+  The results should include the table `t`:
+
+  ```hc {hl_lines="3"}
+  | name | comment |
+  | ---- | ------- |
+  | t    |         |
+  ```
+
+- Inspect the table columns using [`SHOW COLUMNS`](/sql/show-tables/) command:
+
+  ```mzsql
+  SHOW COLUMNS IN t;
+  ```
+
+  The results should display information on columns `a` and `b`; these should
+  match the specification in the `CREATE TABLE` command:
+
+  ```none
+  | name | nullable | type    | comment |
+  | ---- | -------- | ------- | ------- |
+  | a    | true     | integer |         |
+  | b    | false    | text    |         |
+  ```
+
+#### Read/write to the new table
+
+Once a user-populated table is created, you can perform CRUD
+(Create/Read/Update/Write) operations. For example, the following inserts two
+rows into table `t` and reads from the table afterwards:
 
 ```mzsql
-SHOW TABLES;
-TABLES
-------
-t
+INSERT INTO t VALUES
+(1, 'hello'),
+(2, 'goodbye');
 
-SHOW COLUMNS IN t;
-name       nullable  type
--------------------------
-a          true      int4
-b          false     text
+SELECT * FROM t;
 ```
 
+The results should return the two rows:
+
+```none
+| a | b       |
+| - | ------- |
+| 1 | hello   |
+| 2 | goodbye |
+```
+
+### Create a table (PostgreSQL Source)
+
+The following example uses `CREATE TABLE FROM SOURCE` to create new
+**read-only** tables `items` and `orders` that are populated from corresponding
+`items` and `orders` tables from a PostgreSQL source.
+
+{{< note >}}
+
+The example assumes you have configured your upstream PostgreSQL 11+ (i.e.,
+enabled logical replication, created the publication for the various tables and
+replication user, and updated the network configuration).
+
+For details about configuring your upstream system, see the integration
+guides:
+
+<ul style="column-count:2">
+
+- [AlloyDB for PostgreSQL](/ingest-data/postgres/alloydb/)
+- [Amazon Aurora for PostgreSQL](/ingest-data/postgres/amazon-aurora/)
+- [Amazon RDS for PostgreSQL](/ingest-data/postgres/amazon-rds/)
+- [Azure DB for PostgreSQL](/ingest-data/postgres/azure-db/)
+- [Google Cloud SQL for PostgreSQL](/ingest-data/postgres/cloud-sql/)
+- [Neon](/ingest-data/postgres/neon/)
+- [Self-hosted PostgreSQL](/ingest-data/postgres/self-hosted/)
+</ul>
+
+{{</ note >}}
+
+To create new **read-only** tables from a source, specify the table in the
+publication using the `REFERENCE` field.
+
+```mzsql
+/* This example assumes:
+   - In the upstream PostgreSQL, you have defined:
+     - replication user and password with the appropriate access.
+     - a publication named `mz_source` for the `items` and `orders` tables.
+   - In Materialize,
+     - You have defined the connection to the upstream PostgreSQL.
+     - You have used the connection to create a source.
+      CREATE SECRET pgpass AS '<replication user password>'; -- substitute
+      CREATE CONNECTION pg TO POSTGRES (
+        HOST '<hostname>',          -- substitute
+        DATABASE <db>,              -- substitute
+        USER <replication user>,    -- substitute
+        PASSWORD SECRET pgpass
+      );
+
+      CREATE SOURCE mz_source
+      FROM POSTGRES CONNECTION pg (
+      PUBLICATION 'mz_source'       -- substitute
+      );
+*/
+
+CREATE TABLE items
+FROM SOURCE mz_source(REFERENCE items)
+;
+CREATE TABLE orders
+FROM SOURCE mz_source(REFERENCE orders)
+WITH (EXCLUDE COLUMNS (receipt_png))
+;
+
+```
+
+#### Verify table creation
+
+Once a table is created, you can:
+
+- Inspect the table with various `SHOW` commands.
+
+  For example, to verify that the table has been created, you can run [`SHOW
+  TABLES`](/sql/show-tables/) to list all tables in the current [schema](/sql/namespaces/#namespace-hierarchy):
+
+  ```mzsql
+  SHOW TABLES;
+  ```
+
+  The results should include the table `t`:
+
+  ```hc {hl_lines="3-4"}
+  | name        | comment |
+  | ----------- | ------- |
+  | items       |         |
+  | orders      |         |
+  ```
+
+- Inspect the table columns using [`SHOW COLUMNS`](/sql/show-tables/) command:
+
+  ```mzsql
+  SHOW COLUMNS IN items;
+  SHOW COLUMNS IN orders;
+  ```
+
+
+
+#### Query the read-only table
+
+{{< note >}}
+{{< include-md file="shared-content/create-table-from-source-readonly.md" >}}
+{{</ note >}}
+
+{{< include-md file="shared-content/create-table-from-source-snapshotting.md"
+>}}
+
+Once the snapshotting process completes, you can query from source-populated tables:
+
+```none
+SELECT * FROM items;
+SELECT * FROM orders;
+```
 
 ## Related pages
 
 - [`INSERT`](../insert)
 - [`CREATE SOURCE`](/sql/create-source/)
 - [`DROP TABLE`](../drop-table)
+- [Ingest data](/ingest-data/)
 
 [`INSERT`]: /sql/insert/
 [`UPDATE`]: /sql/update/
