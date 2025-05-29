@@ -1262,7 +1262,7 @@ where
                     .set(mz_persist_client::metrics::encode_ts_metric(&batch_upper));
 
                 if collection_id.is_user() {
-                    tracing::debug!(
+                    trace!(
                         "persist_sink {collection_id}/{shard_id}: \
                             append result for batch ({:?} -> {:?}): {:?}",
                         batch_lower,
