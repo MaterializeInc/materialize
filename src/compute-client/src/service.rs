@@ -332,6 +332,10 @@ where
                 }
             }
             ComputeResponse::SubscribeResponse(id, response) => {
+                tracing::info!(
+                    "[{id}] SubscribeResponse received in PartitionedComputeState: {response:?}"
+                );
+
                 // Initialize tracking for this subscribe, if necessary.
                 let entry = self
                     .pending_subscribes
