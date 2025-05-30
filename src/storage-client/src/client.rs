@@ -30,7 +30,7 @@ use mz_persist_types::{Codec, Codec64, StepForward};
 use mz_proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
 use mz_repr::{Diff, GlobalId, Row, TimestampManipulation};
 use mz_service::client::{GenericClient, Partitionable, PartitionedState};
-use mz_service::grpc::{GrpcClient, GrpcServer, ProtoServiceTypes, ResponseStream};
+use mz_service::grpc::{AsSubscribeResponse, GrpcClient, GrpcServer, ProtoServiceTypes, ResponseStream};
 use mz_storage_types::controller::CollectionMetadata;
 use mz_storage_types::oneshot_sources::OneshotIngestionRequest;
 use mz_storage_types::parameters::StorageParameters;
@@ -596,6 +596,12 @@ impl From<(Row, Diff)> for AppendOnlyUpdate {
 impl From<StatusUpdate> for AppendOnlyUpdate {
     fn from(update: StatusUpdate) -> Self {
         Self::Status(update)
+    }
+}
+
+impl<T> AsSubscribeResponse for StorageResponse<T> {
+    fn as_subscribe_response(&self) -> Option<(GlobalId, String)> {
+        None
     }
 }
 

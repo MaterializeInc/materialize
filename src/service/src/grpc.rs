@@ -19,6 +19,7 @@ use mz_ore::metric;
 use mz_ore::metrics::{DeleteOnDropGauge, MetricsRegistry, UIntGaugeVec};
 use mz_ore::netio::{Listener, SocketAddr, SocketAddrType};
 use mz_proto::{ProtoType, RustType};
+use mz_repr::GlobalId;
 use prometheus::core::AtomicU64;
 use semver::Version;
 use std::error::Error;
@@ -155,11 +156,15 @@ where
     }
 }
 
+pub trait AsSubscribeResponse {
+    fn as_subscribe_response(&self) -> Option<(GlobalId, String)>;
+}
+
 #[async_trait]
 impl<G, C, R> GenericClient<C, R> for GrpcClient<G>
 where
     C: RustType<G::PC> + Send + Sync + 'static,
-    R: RustType<G::PR> + Send + Sync + 'static,
+    R: RustType<G::PR> + Send + Sync + 'static + AsSubscribeResponse,
     G: ProtoServiceTypes,
 {
     async fn send(&mut self, cmd: C) -> Result<(), anyhow::Error> {
@@ -177,7 +182,13 @@ where
         // reference to the underlying stream, so dropping it will never lose a value.
         match self.rx.try_next().await? {
             None => Ok(None),
-            Some(response) => Ok(Some(response.into_rust()?)),
+            Some(response) => {
+                let response: R = response.into_rust()?;
+                if let Some((id, sr)) = response.as_subscribe_response() {
+                    tracing::info!("[{id}] SubscribeResponse received in GrpcClient: {sr}");
+                }
+                Ok(Some(response))
+            }
         }
     }
 }
@@ -327,7 +338,7 @@ where
     where
         G: GenericClient<C, R> + 'static,
         C: RustType<PC> + Send + Sync + 'static + fmt::Debug,
-        R: RustType<PR> + Send + Sync + 'static + fmt::Debug,
+        R: RustType<PR> + Send + Sync + 'static + fmt::Debug + AsSubscribeResponse,
         PC: fmt::Debug + Send + Sync + 'static,
         PR: fmt::Debug + Send + Sync + 'static,
     {
@@ -347,9 +358,11 @@ where
         // Construct a new client and forward commands and responses until
         // canceled.
         let mut request = request.into_inner();
+        let mut epoch = 0;
         let state = Arc::clone(&self.state);
         let stream = stream! {
             let mut client = (state.client_builder)().await;
+            epoch += 1;
             loop {
                 select! {
                     command = request.next() => {
@@ -381,7 +394,12 @@ where
                     }
                     response = client.recv() => {
                         match response {
-                            Ok(Some(response)) => yield Ok(response.into_proto()),
+                            Ok(Some(response)) => {
+                                if let Some((id, sr)) = response.as_subscribe_response() {
+                                    tracing::info!("[{id}] SubscribeResponse received in GrpcServer: {sr}, epoch={epoch}");
+                                }
+                                yield Ok(response.into_proto());
+                            }
                             Ok(None) => break,
                             Err(e) => yield Err(Status::unknown(e.to_string())),
                         }

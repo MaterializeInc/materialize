@@ -303,6 +303,10 @@ where
     /// Update task state according to an observed response.
     #[mz_ore::instrument(level = "debug")]
     fn observe_response(&mut self, response: &ComputeResponse<T>) {
+        if let ComputeResponse::SubscribeResponse(id, r) = response {
+            tracing::info!("[{id}] SubscribeResponse received in ReplicaTask: {r:?}, epoch={}", self.epoch);
+        }
+
         if let ComputeResponse::PeekResponse(_, _, otel_ctx) = response {
             otel_ctx.attach_as_parent();
         }

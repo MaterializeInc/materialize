@@ -196,6 +196,10 @@ impl ResponseSender {
     pub fn send(&self, response: ComputeResponse) -> Result<(), SendError<ComputeResponse>> {
         let epoch = self.epoch.expect("epoch must be initialized");
 
+        if let ComputeResponse::SubscribeResponse(id, r) = &response {
+            tracing::info!("[{id}] SubscribeResponse received in ComputeState: {r:?}, epoch={epoch}");
+        }
+
         trace!(worker = self.worker_id, %epoch, ?response, "sending response");
         self.inner
             .send((response, epoch))
@@ -802,6 +806,10 @@ fn spawn_channel_adapter(
                         stashed_response = Some((resp, resp_epoch));
                         break;
                     } else {
+                        if let ComputeResponse::SubscribeResponse(id, r) = &resp {
+                            tracing::info!("[{id}] SubscribeResponse received in channel adapter: {r:?}, epoch={epoch}");
+                        }
+
                         // Response for the current connection; forward it.
                         if response_tx.send(resp).is_err() {
                             break;
