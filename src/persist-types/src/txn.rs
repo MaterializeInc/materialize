@@ -17,7 +17,9 @@ use crate::stats::PartStats;
 use crate::{Codec, Codec64, ShardId};
 
 /// The in-mem representation of an update in the txns shard.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+/// The ord implementation is not guaranteed to be meaningful; it's there for consolidation
+/// purposes only.
+#[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq, Ord, PartialOrd)]
 pub enum TxnsEntry {
     /// A data shard register operation.
     ///

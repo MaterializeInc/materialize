@@ -15,6 +15,7 @@ use std::fmt::Debug;
 use std::ops::{Deref, DerefMut};
 use std::sync::Arc;
 
+use differential_dataflow::consolidation::consolidate_updates;
 use differential_dataflow::hashable::Hashable;
 use differential_dataflow::lattice::Lattice;
 use itertools::Itertools;
@@ -462,6 +463,7 @@ impl<T: Timestamp + Lattice + TotalOrder + StepForward + Codec64 + Sync> TxnsCac
         // which is not what we want. If we ever expose an interface for
         // registering and committing to a data shard at the same
         // timestamp, this will also have to sort registrations first.
+        consolidate_updates(&mut entries);
         entries.sort_by(|(a, _, _), (b, _, _)| a.ts::<T>().cmp(&b.ts::<T>()));
         for (e, t, d) in entries {
             match e {
