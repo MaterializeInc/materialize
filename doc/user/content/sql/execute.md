@@ -22,9 +22,17 @@ Field | Use
 
 ## Example
 
+The following example [prepares a statement](/sql/prepare/) `a` and runs it
+using the `EXECUTE` statement:
+
 ```mzsql
-EXECUTE a ('a', 'b', 1 + 2)
+PREPARE a AS SELECT 1 + $1;
+EXECUTE a (2);
 ```
+
+All prepared statements will be cleared at the end of a session. You can also
+explicitly deallocate the statement using [`DEALLOCATE`].
+
 
 ## Related pages
 
