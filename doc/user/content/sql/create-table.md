@@ -140,79 +140,6 @@ FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION <conn_name>
 %}}
 {{</ tab >}}
 
-{{< tab "FORMAT PROTOBUF MESSAGE">}}
-
-Creates a read-only table from a [Kafka source](/sql/create-source/), ingesting
-messages encoded in PROTOBUF format, specifying the hex encoded schema.
-
-By default, the table contains the columns specified in the schema. You can
-include additional columns using the `INCLUDE` options.
-
-{{< tip >}}
-
-- Ensure your messages are raw Protobuf-encoded messages; i.e., ensure they
-  don't include prefixes, such as Confluent Schema Registry framing prefix.
-
-- If you want to specify an `UPSERT ENVELOPE`, use `KEY FORMAT ... VALUE
-  FORMAT ...` instead.
-
-{{</ tip >}}
-
-
-```mzsql
-CREATE TABLE <table_name> FROM SOURCE <source_name> [(REFERENCE <ref_object>)]
-FORMAT PROTOBUF MESSAGE <msg_name> USING SCHEMA <hex_encoded_schema>
-[INCLUDE
-    PARTITION [AS <name>] | OFFSET [AS <name>]
-  | TIMESTAMP [AS <name>] | HEADERS [AS <name>] | HEADER <key_name> AS <name> [BYTES]
-  [, ...]
-]
-[ENVELOPE NONE]  --  Default.  Uses the append-only envelope.
-[WITH (PARTITION BY (<column_name> [, ...]))]
-;
-```
-
-{{% yaml-table data="syntax_options/create_table/create_table_options_source_populated_kafka_protobuf_msg"
-%}}
-
-{{</ tab >}}
-
-{{< tab "FORMAT PROTOBUF using CSR" >}}
-
-Creates a read-only table from a [Kafka source](/sql/create-source/), ingesting
-messages encoded in PROTOBUF format using the schema information from Confluent
-Schema Registry. By default, the table contains the columns specified in the
-schema. You can include additional columns using the `INCLUDE` options.
-
-{{< tip >}}
-
-- If your `.proto` file includes a package declaration, you must specify the
-fully qualified message name using `FORMAT PROTOBUF MESSAGE` instead of `FORMAT
-PROTOBUF using CONFLUENT SCHEMA REGISTRY CONNECTION`.
-
-- If you want to specify an `UPSERT ENVELOPE`, use `KEY FORMAT ... VALUE
-  FORMAT ...` instead.
-
-{{</ tip >}}
-
-```mzsql
-CREATE TABLE <table_name> FROM SOURCE <source_name> [(REFERENCE <ref_object>)]
-FORMAT PROTOBUF USING CONFLUENT SCHEMA REGISTRY CONNECTION <conn_name>
-[INCLUDE
-    PARTITION [AS <name>] | OFFSET [AS <name>]
-  | TIMESTAMP [AS <name>] | HEADERS [AS <name>] | HEADER <key_name> AS <name> [BYTES]
-  [, ...]
-]
-[ENVELOPE NONE]  --  Default.  Uses the append-only envelope.
-[WITH (PARTITION BY (<column_name> [, ...]))]
-;
-```
-
-{{% yaml-table data="syntax_options/create_table/create_table_options_source_populated_kafka_protobuf_csr"
-%}}
-
-{{</ tab >}}
-
 {{< tab "FORMAT JSON" >}}
 
 Creates a read-only table from a [Kafka source](/sql/create-source/), where the
@@ -310,8 +237,6 @@ KEY FORMAT <format1> VALUE FORMAT <format2>
    --       INLINE <schema> | ID <schema_registry_id> | LATEST ]
    --     [VALUE STRATEGY
    --       INLINE <schema> | ID <schema_registry_id> | LATEST ]
-  -- | PROTOBUF USING CONFLUENT SCHEMA REGISTRY CONNECTION <conn_name>
-  -- | PROTOBUF MESSAGE <msg_name> USING SCHEMA <encoded_schema>
   -- | CSV WITH <num> COLUMNS DELIMITED BY <char>
   -- | JSON | TEXT | BYTES
 [INCLUDE

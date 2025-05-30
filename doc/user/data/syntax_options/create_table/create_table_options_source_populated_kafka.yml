@@ -51,8 +51,6 @@ rows:
       | Format | Description |
       |--------|-------------|
       | `AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION <csr_connection> [KEY STRATEGY <strategy> VALUE STRATEGY <strategy>]` | Decode the data as Avro, specifying the [Confluent Schema Registry connection](/sql/create-connection/#confluent-schema-registry) to use. You can also specify the `KEY STRATEGY` and `VALUE STRATEGY` to use: <table> <thead> <tr> <th>Strategy</th> <th>Description</th> </tr> </thead> <tbody> <tr> <td><code>LATEST</code></td> <td>(Default) Use the latest writer schema from the schema registry as the reader schema.</td> </tr> <tr> <td><code>ID</code></td> <td>Use a specific schema from the registry.</td> </tr> <tr> <td><code>INLINE</code></td> <td>Use the inline schema.</td> </tr> </tbody> </table>|
-      | `PROTOBUF USING CONFLUENT SCHEMA REGISTRY CONNECTION <csr_connection>` | Decode the data as Protocol Buffers, specifying the [Confluent Schema Registry connection](/sql/create-connection/#confluent-schema-registry) to use. |
-      | `PROTOBUF MESSAGE <msg_name> USING SCHEMA <encoded_schema>` | Decode the data as Protocol Buffers, specifying the `<msg_name>` and the inline `<encoded_schema>` descriptor to use. |
       | `JSON` | Decode the data as JSON. |
       | `TEXT` | Decode the data as TEXT. |
       | `BYTES` | Decode the data as BYTES. |
