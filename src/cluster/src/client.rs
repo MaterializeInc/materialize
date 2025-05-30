@@ -91,6 +91,7 @@ where
             let (cmd_tx, cmd_rx) = crossbeam_channel::unbounded();
             let (resp_tx, resp_rx) = mpsc::unbounded_channel();
 
+            tracing::info!("ClusterClient sending new client channels");
             client_tx
                 .send((cmd_rx, resp_tx))
                 .expect("worker not dropped");

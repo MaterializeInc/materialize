@@ -2079,7 +2079,7 @@ where
         if !self.collections.contains_key(&subscribe_id) {
             soft_panic_or_log!(
                 "received response for an unknown subscribe \
-                 (subscribe_id={subscribe_id}, replica_id={replica_id})",
+                 (subscribe_id={subscribe_id}, replica_id={replica_id}, response={response:?})",
             );
             return;
         }

@@ -196,6 +196,10 @@ impl ResponseSender {
     pub fn send(&self, response: ComputeResponse) -> Result<(), SendError<ComputeResponse>> {
         let epoch = self.epoch.expect("epoch must be initialized");
 
+        if let ComputeResponse::SubscribeResponse(id, r) = &response {
+            tracing::info!("[{id}] SubscribeResponse received in ComputeState: {r:?}, epoch={epoch}");
+        }
+
         trace!(worker = self.worker_id, %epoch, ?response, "sending response");
         self.inner
             .send((response, epoch))
@@ -770,6 +774,7 @@ fn spawn_channel_adapter(
 
             while let Ok((command_rx, response_tx)) = client_rx.recv() {
                 epoch += 1;
+                tracing::info!("channel adapter has new channels, epoch={epoch}");
 
                 // Wait for a new response while forwarding received commands.
                 let serve_rx_channels = || loop {
@@ -798,12 +803,21 @@ fn spawn_channel_adapter(
                         // Response for a previous connection; discard it.
                         continue;
                     } else if resp_epoch > epoch {
+                        if let ComputeResponse::SubscribeResponse(id, r) = &resp {
+                            tracing::info!("[{id}] stashed in channel adapter: {r:?}, epoch={epoch}");
+                        }
+
                         // Response for a future connection; stash it and reconnect.
                         stashed_response = Some((resp, resp_epoch));
                         break;
                     } else {
+                        if let ComputeResponse::SubscribeResponse(id, r) = &resp {
+                            tracing::info!("[{id}] SubscribeResponse received in channel adapter: {r:?}, epoch={epoch}");
+                        }
+
                         // Response for the current connection; forward it.
                         if response_tx.send(resp).is_err() {
+                            tracing::info!("channel adapter failed sending response, epoch={epoch}");
                             break;
                         }
                     }
