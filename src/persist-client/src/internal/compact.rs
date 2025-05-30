@@ -50,6 +50,8 @@ use crate::internal::trace::{ApplyMergeResult, FueledMergeRes};
 use crate::iter::{Consolidator, StructuredSort};
 use crate::{Metrics, PersistConfig, ShardId};
 
+use super::state::HollowRunRef;
+
 /// A request for compaction.
 ///
 /// This is similar to FueledMergeReq, but intentionally a different type. If we
@@ -156,7 +158,7 @@ where
     K: Debug + Codec,
     V: Debug + Codec,
     T: Timestamp + Lattice + Codec64 + Sync,
-    D: Semigroup + Ord + Codec64 + Send + Sync,
+    D: Semigroup + Ord + Codec64 + Send + Sync + Debug,
 {
     pub fn new(
         cfg: PersistConfig,
@@ -784,6 +786,13 @@ where
             Arc::clone(&blob),
             Arc::clone(&isolated_runtime),
             &metrics.compaction.batch,
+            Arc::new(Box::new(
+                |shard_id, blob, writer_key, hollow_run, metrics| {
+                    Box::pin(HollowRunRef::set::<D>(
+                        shard_id, blob, writer_key, hollow_run, metrics,
+                    ))
+                },
+            )),
         );
         let mut batch = BatchBuilderInternal::<K, V, T, D>::new(
             cfg.batch.clone(),

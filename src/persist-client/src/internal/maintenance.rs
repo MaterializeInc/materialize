@@ -195,7 +195,7 @@ where
     ) where
         K: Debug + Codec,
         V: Debug + Codec,
-        D: Semigroup + Ord + Codec64 + Send + Sync,
+        D: Semigroup + Ord + Codec64 + Send + Sync + Debug,
     {
         let machine = machine.clone();
         let gc = gc.clone();
@@ -215,7 +215,7 @@ where
     ) where
         K: Debug + Codec,
         V: Debug + Codec,
-        D: Semigroup + Ord + Codec64 + Send + Sync,
+        D: Semigroup + Ord + Codec64 + Send + Sync + Debug,
     {
         let Self {
             routine,

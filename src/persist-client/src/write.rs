@@ -44,7 +44,9 @@ use crate::internal::compact::{CompactConfig, Compactor};
 use crate::internal::encoding::{Schemas, check_data_version};
 use crate::internal::machine::{CompareAndAppendRes, ExpireFn, Machine};
 use crate::internal::metrics::Metrics;
-use crate::internal::state::{BatchPart, HandleDebugState, HollowBatch, RunOrder, RunPart};
+use crate::internal::state::{
+    BatchPart, HandleDebugState, HollowBatch, HollowRunRef, RunOrder, RunPart,
+};
 use crate::read::ReadHandle;
 use crate::schema::PartMigration;
 use crate::{GarbageCollector, IsolatedRuntime, PersistConfig, ShardId, parse_id};
@@ -764,6 +766,13 @@ where
                 Arc::clone(&self.blob),
                 Arc::clone(&self.isolated_runtime),
                 &self.metrics.user,
+                Arc::new(Box::new(
+                    |shard_id, blob, writer_key, hollow_run, metrics| {
+                        Box::pin(HollowRunRef::set::<D>(
+                            shard_id, blob, writer_key, hollow_run, metrics,
+                        ))
+                    },
+                )),
             )
         };
         let builder = BatchBuilderInternal::new(
