@@ -39,7 +39,7 @@ use mz_ore::tracing::OpenTelemetryContext;
 use mz_ore::{soft_assert_or_log, soft_panic_or_log};
 use mz_repr::adt::timestamp::CheckedTimestamp;
 use mz_repr::refresh_schedule::RefreshSchedule;
-use mz_repr::{Datum, Diff, GlobalId, Row};
+use mz_repr::{Datum, Diff, GlobalId, RelationDesc, RelationType, Row};
 use mz_storage_client::controller::{IntrospectionType, WallclockLag, WallclockLagHistogramPeriod};
 use mz_storage_types::read_holds::{self, ReadHold};
 use mz_storage_types::read_policy::ReadPolicy;
@@ -1397,6 +1397,7 @@ where
                 .unwrap_or_else(|| SharedCollectionState::new(as_of.clone()));
             let write_only = dataflow.sink_exports.contains_key(&export_id);
             let storage_sink = dataflow.persist_sink_ids().any(|id| id == export_id);
+
             self.add_collection(
                 export_id,
                 as_of.clone(),
@@ -1668,6 +1669,7 @@ where
         literal_constraints: Option<Vec<Row>>,
         uuid: Uuid,
         timestamp: T,
+        intermediate_result_type: RelationType,
         finishing: RowSetFinishing,
         map_filter_project: mz_expr::SafeMfpPlan,
         mut read_hold: ReadHold<T>,
@@ -1692,6 +1694,13 @@ where
         }
 
         let otel_ctx = OpenTelemetryContext::obtain();
+
+        // At this stage we don't know the real column names for the result.
+        let intermediate_result_column_names =
+            (0..intermediate_result_type.arity()).map(|i| format!("peek_{i}"));
+        let intermediate_result_desc =
+            RelationDesc::new(intermediate_result_type, intermediate_result_column_names);
+
         self.peeks.insert(
             uuid,
             PendingPeek {
@@ -1716,6 +1725,7 @@ where
             // tree to forward it on to the compute worker.
             otel_ctx,
             target: peek_target,
+            result_desc: intermediate_result_desc,
         };
         self.send(ComputeCommand::Peek(Box::new(peek)));
 

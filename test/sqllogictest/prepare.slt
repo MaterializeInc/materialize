@@ -54,7 +54,7 @@ EXECUTE i3('x');
 ----
 x
 
-query I
+query I valuesort
 SELECT * FROM t;
 ----
 4

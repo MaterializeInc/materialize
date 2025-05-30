@@ -41,7 +41,7 @@ SELECT * FROM blue.t2;
 statement ok
 ALTER SCHEMA blue SWAP WITH green;
 
-query I
+query I valuesort
 SELECT * FROM blue.t2;
 ----
 4
@@ -60,7 +60,7 @@ INSERT INTO "!\_\""w3😊_weird_name".t2 VALUES (7), (8), (9);
 statement ok
 ALTER SCHEMA blue SWAP WITH "!\_\""w3😊_weird_name";
 
-query I
+query I valuesort
 SELECT * FROM "!\_\""w3😊_weird_name".t2;
 ----
 4
@@ -70,7 +70,7 @@ SELECT * FROM "!\_\""w3😊_weird_name".t2;
 statement ok
 ALTER SCHEMA blue SWAP WITH blue;
 
-query I
+query I valuesort
 SELECT * FROM blue.t2;
 ----
 7
@@ -89,7 +89,7 @@ CREATE SCHEMA this_is_a_schema_with_a_super_long_name_of_exactly_255_characters_
 statement ok
 ALTER SCHEMA this_is_a_schema_with_a_super_long_name_of_exactly_255_characters_which_happens_to_be_the_maximum_we_allow_in_materialize_for_identifiers_of_any_kind_including_for_the_schema_name_so_this_should_still_work_perfectly_fine_as_long_as_we_dont_make_it_longer SWAP WITH blue;
 
-query I
+query I valuesort
 SELECT * FROM this_is_a_schema_with_a_super_long_name_of_exactly_255_characters_which_happens_to_be_the_maximum_we_allow_in_materialize_for_identifiers_of_any_kind_including_for_the_schema_name_so_this_should_still_work_perfectly_fine_as_long_as_we_dont_make_it_longer.t2;
 ----
 7

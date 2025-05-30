@@ -15,9 +15,10 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 use std::num::NonZeroUsize;
+use std::sync::Arc;
 
 use differential_dataflow::consolidation::consolidate;
-use futures::TryFutureExt;
+use itertools::Itertools;
 use mz_adapter_types::compaction::CompactionWindow;
 use mz_adapter_types::connection::ConnectionId;
 use mz_cluster_client::ReplicaId;
@@ -31,16 +32,19 @@ use mz_expr::explain::{HumanizedExplain, HumanizerMode, fmt_text_constant_rows};
 use mz_expr::row::RowCollection;
 use mz_expr::{
     EvalError, Id, MirRelationExpr, MirScalarExpr, OptimizedMirRelationExpr, RowSetFinishing,
-    permutation_for_arrangement,
+    RowSetFinishingIncremental, permutation_for_arrangement,
 };
 use mz_ore::cast::CastFrom;
 use mz_ore::str::{StrExt, separated};
 use mz_ore::tracing::OpenTelemetryContext;
+use mz_persist_client::Schemas;
+use mz_persist_types::codec_impls::UnitSchema;
 use mz_repr::explain::text::DisplayText;
 use mz_repr::explain::{CompactScalars, IndexUsageType, PlanRenderingContext, UsedIndexes};
 use mz_repr::{Diff, GlobalId, IntoRowIterator, RelationType, Row, RowIterator, preserves_order};
+use mz_storage_types::sources::SourceData;
 use serde::{Deserialize, Serialize};
-use timely::progress::Timestamp;
+use timely::progress::{Antichain, Timestamp};
 use uuid::Uuid;
 
 use crate::coord::timestamp_selection::TimestampDetermination;
@@ -268,6 +272,10 @@ pub struct PlannedPeek {
     pub plan: PeekPlan,
     pub determination: TimestampDetermination<mz_repr::Timestamp>,
     pub conn_id: ConnectionId,
+    /// The result type _after_ reading out of the "source" and applying any
+    /// [MapFilterProject](mz_expr::MapFilterProject), but _before_ applying a
+    /// [RowSetFinishing].
+    pub intermediate_result_type: RelationType,
     pub source_arity: usize,
     pub source_ids: BTreeSet<GlobalId>,
 }
@@ -522,9 +530,12 @@ impl crate::coord::Coordinator {
             plan: fast_path,
             determination,
             conn_id,
+            intermediate_result_type,
             source_arity,
             source_ids,
         } = plan;
+
+        tracing::debug!(?fast_path, ?intermediate_result_type, "implement peek");
 
         // If the dataflow optimizes to a constant expression, we can immediately return the result.
         if let PeekPlan::FastPath(FastPathPlan::Constant(rows, _)) = fast_path {
@@ -601,7 +612,12 @@ impl crate::coord::Coordinator {
                 literal_constraints,
                 map_filter_project,
             )) => (
-                (literal_constraints, timestamp, map_filter_project),
+                (
+                    literal_constraints,
+                    timestamp,
+                    map_filter_project,
+                    intermediate_result_type,
+                ),
                 None,
                 true,
                 PeekTarget::Index { id: idx_id },
@@ -616,6 +632,7 @@ impl crate::coord::Coordinator {
                     literal_constraint.map(|r| vec![r]),
                     timestamp,
                     map_filter_project,
+                    intermediate_result_type,
                 );
                 let metadata = self
                     .controller
@@ -629,7 +646,7 @@ impl crate::coord::Coordinator {
                     true,
                     PeekTarget::Persist {
                         id: coll_id,
-                        metadata,
+                        metadata: metadata.clone(),
                     },
                     StatementExecutionStrategy::PersistFastPath,
                 )
@@ -666,8 +683,14 @@ impl crate::coord::Coordinator {
                     index_key.len() + index_thinned_arity,
                 );
                 let map_filter_project = mfp_to_safe_plan(map_filter_project)?;
+
                 (
-                    (None, timestamp, map_filter_project),
+                    (
+                        None,
+                        timestamp,
+                        map_filter_project,
+                        intermediate_result_type,
+                    ),
                     Some(index_id),
                     false,
                     PeekTarget::Index { id: index_id },
@@ -705,7 +728,8 @@ impl crate::coord::Coordinator {
             .entry(conn_id)
             .or_default()
             .insert(uuid, compute_instance);
-        let (literal_constraints, timestamp, map_filter_project) = peek_command;
+        let (literal_constraints, timestamp, map_filter_project, intermediate_result_type) =
+            peek_command;
 
         self.controller
             .compute
@@ -715,6 +739,7 @@ impl crate::coord::Coordinator {
                 literal_constraints,
                 uuid,
                 timestamp,
+                intermediate_result_type,
                 finishing.clone(),
                 map_filter_project,
                 target_replica,
@@ -723,10 +748,24 @@ impl crate::coord::Coordinator {
             .unwrap_or_terminate("cannot fail to peek");
         let duration_histogram = self.metrics.row_set_finishing_seconds();
 
-        // Prepare the receiver to return as a response.
-        let rows_rx = rows_rx.map_ok_or_else(
-            |e| PeekResponseUnary::Error(e.to_string()),
-            move |resp| match resp {
+        let mut persist_client = self.persist_client.clone();
+
+        let peek_stash_read_batch_size_bytes =
+            mz_compute_types::dyncfgs::PEEK_RESPONSE_STASH_READ_BATCH_SIZE_BYTES
+                .get(self.catalog().system_config().dyncfgs());
+
+        let rows_stream = async_stream::stream!({
+            let result = rows_rx.await;
+
+            let rows = match result {
+                Ok(rows) => rows,
+                Err(e) => {
+                    yield PeekResponseUnary::Error(e.to_string());
+                    return;
+                }
+            };
+
+            match rows {
                 PeekResponse::Rows(rows) => {
                     match finishing.finish(
                         rows,
@@ -734,14 +773,190 @@ impl crate::coord::Coordinator {
                         max_returned_query_size,
                         &duration_histogram,
                     ) {
-                        Ok((rows, _size_bytes)) => PeekResponseUnary::Rows(Box::new(rows)),
-                        Err(e) => PeekResponseUnary::Error(e),
+                        Ok((rows, _size_bytes)) => yield PeekResponseUnary::Rows(Box::new(rows)),
+                        Err(e) => yield PeekResponseUnary::Error(e),
                     }
                 }
-                PeekResponse::Canceled => PeekResponseUnary::Canceled,
-                PeekResponse::Error(e) => PeekResponseUnary::Error(e),
-            },
-        );
+                PeekResponse::Stashed(response) => {
+                    let shard_id = response.shard_id;
+
+                    let mut batches = Vec::new();
+                    for proto_batch in response.batches.into_iter() {
+                        let batch =
+                            persist_client.batch_from_transmittable_batch(&shard_id, proto_batch);
+
+                        batches.push(batch);
+                    }
+                    tracing::trace!(?batches, "stashed peek response!");
+
+                    let as_of = Antichain::from_elem(mz_repr::Timestamp::default());
+                    let read_schemas: Schemas<SourceData, ()> = Schemas {
+                        id: None,
+                        key: Arc::new(response.relation_desc.clone()),
+                        val: Arc::new(UnitSchema),
+                    };
+
+                    let mut row_cursor = persist_client
+                        .read_batches_consolidated::<_, _, _, i64>(
+                            response.shard_id,
+                            as_of,
+                            read_schemas,
+                            &batches,
+                            |_stats| true,
+                        )
+                        .await
+                        .expect("invalid usage");
+
+                    // NOTE: Using the cursor creates Futures that are not Sync,
+                    // so we can't drive them on the main Coordinator loop.
+                    // Spawning a task has the additional benefit that we get to
+                    // delete batches once we're done.
+                    //
+                    // Batch deletion is best-effort, though, and there are
+                    // multiple known ways in which they can leak, among them:
+                    //
+                    // - ProtoBatch is lost in flight
+                    // - ProtoBatch is lost because when combining PeekResponse
+                    // from workers a cancellation or error "overrides" other
+                    // results, meaning we drop them
+                    // - This task here is not run to completion before it can
+                    // delete all batches
+                    let (tx, mut rx) = tokio::sync::mpsc::channel(1);
+                    mz_ore::task::spawn(|| "read_peek_batches", async move {
+                        // We always send our inline rows first. Ordering
+                        // doesn't matter because we can only be in this case
+                        // when there is no ORDER BY.
+                        //
+                        // We _could_ write these out as a Batch, and include it
+                        // in the batches we read via the Consolidator. If we
+                        // wanted to get a consistent ordering. That's not
+                        // needed for correctness! But might be nice for more
+                        // aesthetic reasons.
+                        let result = tx.send(response.inline_rows).await;
+                        if result.is_err() {
+                            tracing::error!("receiver went away");
+                        }
+
+                        let mut current_batch = Vec::new();
+                        let mut current_batch_size: usize = 0;
+                        'outer: while let Some(rows) = row_cursor.next().await {
+                            for ((key, _val), _ts, diff) in rows {
+                                let source_data = key.expect("decoding error");
+
+                                let row = source_data.0.expect("we are not sending errors");
+                                let diff = usize::try_from(diff).expect("negative diff");
+                                if diff > 0 {
+                                    let diff =
+                                        NonZeroUsize::new(diff).expect("checked to be non-zero");
+                                    current_batch_size =
+                                        current_batch_size.saturating_add(row.byte_len());
+                                    current_batch.push((row, diff));
+                                }
+
+                                if current_batch_size > peek_stash_read_batch_size_bytes {
+                                    // We're re-encoding the rows as a RowCollection
+                                    // here, for which we pay in CPU time. We're in a
+                                    // slow path already, since we're returning a big
+                                    // stashed result so this is worth the convenience
+                                    // of that for now.
+                                    let result = tx
+                                        .send(RowCollection::new(
+                                            current_batch.drain(..).collect_vec(),
+                                            &[],
+                                        ))
+                                        .await;
+                                    if result.is_err() {
+                                        tracing::error!("receiver went away");
+                                        // Don't return but break so we fall out to the
+                                        // batch delete logic below.
+                                        break 'outer;
+                                    }
+
+                                    current_batch_size = 0;
+                                }
+                            }
+                        }
+
+                        if current_batch.len() > 0 {
+                            let result = tx.send(RowCollection::new(current_batch, &[])).await;
+                            if result.is_err() {
+                                tracing::error!("receiver went away");
+                            }
+                        }
+
+                        tracing::trace!(?response.shard_id, "cleaning up batches of peek result");
+                        for batch in batches {
+                            batch.delete().await;
+                        }
+                    });
+
+                    if finishing.is_streamable(response.relation_desc.arity()) {
+                        // TODO(aljoscha): This while impl is not at all
+                        // optimized or made to look nice yet!
+
+                        tracing::info!("query result is streamable!");
+
+                        let mut incremental_finishing = RowSetFinishingIncremental::new(
+                            finishing,
+                            response.relation_desc.arity(),
+                            max_returned_query_size,
+                        );
+
+                        let mut got_zero_rows = true;
+                        while let Some(rows) = rx.recv().await {
+                            got_zero_rows = false;
+
+                            let result_rows = incremental_finishing.finish_incremental(
+                                rows,
+                                max_result_size,
+                                &duration_histogram,
+                            );
+                            match result_rows {
+                                Ok(result_rows) => {
+                                    yield PeekResponseUnary::Rows(Box::new(result_rows))
+                                }
+                                Err(e) => yield PeekResponseUnary::Error(e),
+                            }
+                        }
+
+                        // Even when there's zero rows, clients still expect an
+                        // empty PeekResponse.
+                        if got_zero_rows {
+                            let row_iter = vec![].into_row_iter();
+                            yield PeekResponseUnary::Rows(Box::new(row_iter));
+                        }
+                    } else {
+                        // WIP: Can't do this for realz, but do for now to see
+                        // if CI passes.
+                        //
+                        // We materialize (pun very much intended) all stashed
+                        // rows in memory and apply the finishing.
+                        let mut rows = RowCollection::new(Vec::new(), &finishing.order_by);
+                        while let Some(new_rows) = rx.recv().await {
+                            rows.merge(&new_rows);
+                        }
+
+                        match finishing.finish(
+                            rows,
+                            max_result_size,
+                            max_returned_query_size,
+                            &duration_histogram,
+                        ) {
+                            Ok((rows, _size_bytes)) => {
+                                yield PeekResponseUnary::Rows(Box::new(rows))
+                            }
+                            Err(e) => yield PeekResponseUnary::Error(e),
+                        }
+                    }
+                }
+                PeekResponse::Canceled => {
+                    yield PeekResponseUnary::Canceled;
+                }
+                PeekResponse::Error(e) => {
+                    yield PeekResponseUnary::Error(e);
+                }
+            }
+        });
 
         // If it was created, drop the dataflow once the peek command is sent.
         if let Some(index_id) = drop_dataflow {
@@ -749,8 +964,8 @@ impl crate::coord::Coordinator {
             self.drop_indexes(vec![(compute_instance, index_id)]);
         }
 
-        Ok(crate::ExecuteResponse::SendingRows {
-            future: Box::pin(rows_rx),
+        Ok(crate::ExecuteResponse::SendingRowsStreaming {
+            rows: Box::pin(rows_stream),
             instance_id: compute_instance,
             strategy,
         })

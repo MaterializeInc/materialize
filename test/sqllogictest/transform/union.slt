@@ -197,7 +197,7 @@ Target cluster: quickstart
 
 EOF
 
-query II
+query II rowsort
 SELECT a1.* FROM t3 AS a1 LEFT JOIN t2 AS a2 ON (a1.f1 = a2.nokey);
 ----
 2 3

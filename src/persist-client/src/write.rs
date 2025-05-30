@@ -43,7 +43,7 @@ use crate::fetch::{EncodedPart, FetchBatchFilter, FetchedPart, PartDecodeFormat}
 use crate::internal::compact::{CompactConfig, Compactor};
 use crate::internal::encoding::{Schemas, check_data_version};
 use crate::internal::machine::{CompareAndAppendRes, ExpireFn, Machine};
-use crate::internal::metrics::Metrics;
+use crate::internal::metrics::{BatchWriteMetrics, Metrics, ShardMetrics};
 use crate::internal::state::{BatchPart, HandleDebugState, HollowBatch, RunOrder, RunPart};
 use crate::read::ReadHandle;
 use crate::schema::PartMigration;
@@ -736,7 +736,33 @@ where
     /// enough that we can reasonably chunk them up: O(KB) is definitely fine,
     /// O(MB) come talk to us.
     pub fn builder(&self, lower: Antichain<T>) -> BatchBuilder<K, V, T, D> {
-        let cfg = CompactConfig::new(&self.cfg, self.shard_id());
+        Self::builder_inner(
+            &self.cfg,
+            Arc::clone(&self.metrics),
+            Arc::clone(&self.machine.applier.shard_metrics),
+            &self.metrics.user,
+            Arc::clone(&self.isolated_runtime),
+            Arc::clone(&self.blob),
+            self.shard_id(),
+            self.write_schemas.clone(),
+            lower,
+        )
+    }
+
+    /// Implementation of [Self::builder], so that we can share the
+    /// implementation in `PersistClient`.
+    pub(crate) fn builder_inner(
+        persist_cfg: &PersistConfig,
+        metrics: Arc<Metrics>,
+        shard_metrics: Arc<ShardMetrics>,
+        user_batch_metrics: &BatchWriteMetrics,
+        isolated_runtime: Arc<IsolatedRuntime>,
+        blob: Arc<dyn Blob>,
+        shard_id: ShardId,
+        schemas: Schemas<K, V>,
+        lower: Antichain<T>,
+    ) -> BatchBuilder<K, V, T, D> {
+        let cfg = CompactConfig::new(persist_cfg, shard_id);
         let parts = if let Some(max_runs) = cfg.batch.max_runs {
             BatchParts::new_compacting::<K, V, D>(
                 cfg,
@@ -746,34 +772,34 @@ where
                     Antichain::from_elem(T::minimum()),
                 ),
                 max_runs,
-                Arc::clone(&self.metrics),
-                Arc::clone(&self.machine.applier.shard_metrics),
-                self.shard_id(),
-                Arc::clone(&self.blob),
-                Arc::clone(&self.isolated_runtime),
-                &self.metrics.user,
-                self.write_schemas.clone(),
+                Arc::clone(&metrics),
+                shard_metrics,
+                shard_id,
+                Arc::clone(&blob),
+                isolated_runtime,
+                user_batch_metrics,
+                schemas.clone(),
             )
         } else {
             BatchParts::new_ordered(
                 cfg.batch,
                 RunOrder::Unordered,
-                Arc::clone(&self.metrics),
-                Arc::clone(&self.machine.applier.shard_metrics),
-                self.shard_id(),
-                Arc::clone(&self.blob),
-                Arc::clone(&self.isolated_runtime),
-                &self.metrics.user,
+                Arc::clone(&metrics),
+                shard_metrics,
+                shard_id,
+                Arc::clone(&blob),
+                isolated_runtime,
+                user_batch_metrics,
             )
         };
         let builder = BatchBuilderInternal::new(
-            BatchBuilderConfig::new(&self.cfg, self.shard_id()),
+            BatchBuilderConfig::new(persist_cfg, shard_id),
             parts,
-            Arc::clone(&self.metrics),
-            self.write_schemas.clone(),
-            Arc::clone(&self.blob),
-            self.machine.shard_id().clone(),
-            self.cfg.build_version.clone(),
+            metrics,
+            schemas,
+            blob,
+            shard_id,
+            persist_cfg.build_version.clone(),
         );
         BatchBuilder::new(
             builder,

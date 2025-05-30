@@ -10,7 +10,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Display;
 
 use mz_proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
-use mz_repr::{Datum, Row};
+use mz_repr::{Datum, RelationType, Row};
 use proptest::prelude::*;
 use serde::{Deserialize, Serialize};
 
@@ -675,6 +675,37 @@ impl MapFilterProject {
     /// using the standard machinery.
     pub fn into_plan(self) -> Result<plan::MfpPlan, String> {
         plan::MfpPlan::create_from(self)
+    }
+
+    /// Returns a [RelationType] that describes data after applying this
+    /// [MapFilterProject] to data with the given input [RelationType].
+    pub fn apply_to_relation_type(&self, input_relation_type: &RelationType) -> RelationType {
+        let (map_exprs, _filter_exprs, project_indices) = self.as_map_filter_project();
+
+        tracing::info!(
+            ?input_relation_type,
+            num_input_columns = ?input_relation_type.arity(),
+            ?map_exprs,
+            num_map_exprs = ?map_exprs.len(),
+            ?project_indices,
+            "apply_to_relation_type"
+        );
+
+        let mut mapped_relation_type = input_relation_type.clone();
+
+        for expr in &map_exprs {
+            let column_type = expr.typ(&input_relation_type.column_types);
+            mapped_relation_type.column_types.push(column_type);
+        }
+
+        let projected_column_types = project_indices
+            .iter()
+            .map(|&i| mapped_relation_type.column_types[i].clone())
+            .collect();
+
+        let projected_relation_type = RelationType::new(projected_column_types);
+
+        projected_relation_type
     }
 }
 

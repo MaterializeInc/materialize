@@ -99,7 +99,7 @@ SELECT owner_id FROM mz_databases GROUP BY owner_id
 ----
 s1
 
-query T
+query T rowsort
 SELECT owner_id FROM mz_clusters GROUP BY owner_id
 ----
 s1

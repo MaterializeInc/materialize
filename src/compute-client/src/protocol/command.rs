@@ -9,6 +9,7 @@
 
 //! Compute protocol commands.
 
+use std::str::FromStr;
 use std::time::Duration;
 
 use mz_cluster_client::client::{ClusterStartupEpoch, TimelyConfig, TryIntoTimelyConfig};
@@ -17,8 +18,10 @@ use mz_compute_types::plan::render_plan::RenderPlan;
 use mz_dyncfg::ConfigUpdates;
 use mz_expr::RowSetFinishing;
 use mz_ore::tracing::OpenTelemetryContext;
+use mz_ore::url::SensitiveUrl;
+use mz_persist_types::PersistLocation;
 use mz_proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError, any_uuid};
-use mz_repr::{GlobalId, Row};
+use mz_repr::{GlobalId, RelationDesc, Row};
 use mz_service::params::GrpcClientParameters;
 use mz_storage_client::client::ProtoCompaction;
 use mz_storage_types::controller::CollectionMetadata;
@@ -183,7 +186,7 @@ pub enum ComputeCommand<T = mz_repr::Timestamp> {
     Schedule(GlobalId),
 
     /// `AllowCompaction` informs the replica about the relaxation of external read capabilities on
-    /// a compute collection exported by one of the replica’s dataflow.
+    /// a compute collection exported by one of the replica's dataflow.
     ///
     /// The command names a collection and provides a frontier after which accumulations must be
     /// correct. The replica gains the liberty of compacting the corresponding maintained trace up
@@ -233,7 +236,7 @@ pub enum ComputeCommand<T = mz_repr::Timestamp> {
     /// A [`Peek`] description that violates any of the above properties can cause the replica to
     /// exhibit undefined behavior.
     ///
-    /// Specifying a [`Peek::timestamp`] that is less than the target index’s `since` frontier does
+    /// Specifying a [`Peek::timestamp`] that is less than the target index's `since` frontier does
     /// not provoke undefined behavior. Instead, the replica must produce a [`PeekResponse::Error`]
     /// in response.
     ///
@@ -381,12 +384,26 @@ impl Arbitrary for ComputeCommand<mz_repr::Timestamp> {
 /// Configuration for a replica, passed with the `CreateInstance`. Replicas should halt
 /// if the controller attempt to reconcile them with different values
 /// for anything in this struct.
-#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize, Arbitrary)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, Arbitrary)]
 pub struct InstanceConfig {
     /// Specification of introspection logging.
     pub logging: LoggingConfig,
     /// The offset relative to the replica startup at which it should expire. None disables feature.
     pub expiration_offset: Option<Duration>,
+    /// The persist location where we can stash large peek results.
+    pub peek_stash_persist_location: PersistLocation,
+}
+
+impl Default for InstanceConfig {
+    fn default() -> Self {
+        Self {
+            logging: Default::default(),
+            expiration_offset: Default::default(),
+            // This is only used as a placeholder and will be filled in with the
+            // real location when the command is being sent out to replicas.
+            peek_stash_persist_location: PersistLocation::new_in_mem(),
+        }
+    }
 }
 
 impl InstanceConfig {
@@ -402,10 +419,12 @@ impl InstanceConfig {
         let InstanceConfig {
             logging: self_logging,
             expiration_offset: self_offset,
+            peek_stash_persist_location: self_peek_stash_persist_location,
         } = self;
         let InstanceConfig {
             logging: other_logging,
             expiration_offset: other_offset,
+            peek_stash_persist_location: other_peek_stash_persist_location,
         } = other;
 
         // Logging is compatible if exactly the same.
@@ -417,7 +436,10 @@ impl InstanceConfig {
         let other_offset = Antichain::from_iter(*other_offset);
         let offset_compatible = timely::PartialOrder::less_equal(&other_offset, &self_offset);
 
-        logging_compatible && offset_compatible
+        let persist_location_compatible =
+            self_peek_stash_persist_location == other_peek_stash_persist_location;
+
+        logging_compatible && offset_compatible && persist_location_compatible
     }
 }
 
@@ -426,6 +448,14 @@ impl RustType<ProtoInstanceConfig> for InstanceConfig {
         ProtoInstanceConfig {
             logging: Some(self.logging.into_proto()),
             expiration_offset: self.expiration_offset.into_proto(),
+            peek_stash_blob_uri: self
+                .peek_stash_persist_location
+                .blob_uri
+                .to_string_unredacted(),
+            peek_stash_consensus_uri: self
+                .peek_stash_persist_location
+                .consensus_uri
+                .to_string_unredacted(),
         }
     }
 
@@ -435,6 +465,10 @@ impl RustType<ProtoInstanceConfig> for InstanceConfig {
                 .logging
                 .into_rust_if_some("ProtoCreateInstance::logging")?,
             expiration_offset: proto.expiration_offset.into_rust()?,
+            peek_stash_persist_location: PersistLocation {
+                blob_uri: SensitiveUrl::from_str(&proto.peek_stash_blob_uri)?,
+                consensus_uri: SensitiveUrl::from_str(&proto.peek_stash_consensus_uri)?,
+            },
         })
     }
 }
@@ -585,6 +619,10 @@ impl PeekTarget {
 pub struct Peek<T = mz_repr::Timestamp> {
     /// Target-specific metadata.
     pub target: PeekTarget,
+    /// The relation description for the rows returned by this peek, before
+    /// applying the [RowSetFinishing] but _after_ applying the given
+    /// `map_filter_project`.
+    pub result_desc: RelationDesc,
     /// If `Some`, then look up only the given keys from the collection (instead of a full scan).
     /// The vector is never empty.
     #[proptest(strategy = "proptest::option::of(proptest::collection::vec(any::<Row>(), 1..5))")]
@@ -624,6 +662,7 @@ impl RustType<ProtoPeek> for Peek {
             finishing: Some(self.finishing.into_proto()),
             map_filter_project: Some(self.map_filter_project.into_proto()),
             otel_ctx: self.otel_ctx.clone().into(),
+            result_desc: Some(self.result_desc.into_proto()),
             target: Some(match &self.target {
                 PeekTarget::Index { id } => proto_peek::Target::Index(ProtoIndexTarget {
                     id: Some(id.into_proto()),
@@ -652,6 +691,7 @@ impl RustType<ProtoPeek> for Peek {
                 .map_filter_project
                 .into_rust_if_some("ProtoPeek::map_filter_project")?,
             otel_ctx: x.otel_ctx.into(),
+            result_desc: x.result_desc.into_rust_if_some("ProtoPeek::result_desc")?,
             target: match x.target {
                 Some(proto_peek::Target::Index(target)) => PeekTarget::Index {
                     id: target.id.into_rust_if_some("ProtoIndexTarget::id")?,
