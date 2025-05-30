@@ -125,6 +125,11 @@ pub struct ServiceArgs {
     /// Setting this will enable synchronization of LaunchDarkly features.
     #[clap(long, env = "LAUNCHDARKLY_SDK_KEY")]
     launchdarkly_sdk_key: Option<String>,
+    /// An SDK key for LaunchDarkly.
+    ///
+    /// Setting this will enable synchronization of LaunchDarkly features.
+    #[clap(long, env = "CONFIG_SYNC_FILE_PATH")]
+    config_sync_file_path: Option<PathBuf>,
     /// The duration at which the LaunchDarkly synchronization times out during startup.
     #[clap(
         long,
@@ -269,6 +274,7 @@ pub async fn run(args: ServiceArgs, tracing_handle: TracingHandle) -> Result<(),
         metrics_registry,
         mz_server_core::default_cert_reload_ticker(),
         args.launchdarkly_sdk_key,
+        args.config_sync_file_path,
         args.config_sync_timeout,
         args.config_sync_loop_interval,
         args.cloud_provider,
