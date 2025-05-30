@@ -22,6 +22,8 @@ use std::{iter, thread};
 
 use anyhow::bail;
 use chrono::{DateTime, Utc};
+use flate2::Compression;
+use flate2::write::GzEncoder;
 use futures::FutureExt;
 use http::Request;
 use itertools::Itertools;
@@ -54,7 +56,7 @@ use rdkafka::ClientConfig;
 use rdkafka::admin::{AdminClient, AdminOptions, NewTopic, TopicReplication};
 use rdkafka_sys::RDKafkaErrorCode;
 use reqwest::blocking::Client;
-use reqwest::header::CONTENT_TYPE;
+use reqwest::header::{CONTENT_ENCODING, CONTENT_TYPE};
 use reqwest::{StatusCode, Url};
 use serde::{Deserialize, Serialize};
 use tempfile::TempDir;
@@ -4657,4 +4659,63 @@ fn test_builtin_connection_alterations_are_preserved_across_restarts() {
             "CREATE CONNECTION \"mz_internal\".\"mz_analytics\" TO AWS (ASSUME ROLE ARN = 'foo')"
         );
     }
+}
+
+#[mz_ore::test]
+#[cfg_attr(miri, ignore)] // too slow
+fn test_webhook_request_compression() {
+    let server = test_util::TestHarness::default().start_blocking();
+    let mut client = server.connect(postgres::NoTls).unwrap();
+
+    // Create a webhook source.
+    client
+        .execute(
+            "CREATE CLUSTER webhook_cluster REPLICAS (r1 (SIZE '1'));",
+            &[],
+        )
+        .expect("failed to create cluster");
+    client
+        .execute(
+            "CREATE SOURCE webhook_text IN CLUSTER webhook_cluster FROM WEBHOOK BODY FORMAT TEXT",
+            &[],
+        )
+        .expect("failed to create source");
+
+    let http_client = Client::new();
+    let webhook_url = format!(
+        "http://{}/api/webhook/materialize/public/webhook_text",
+        server.http_local_addr(),
+    );
+
+    let og_body = "hello world!";
+
+    let mut encoder = GzEncoder::new(Vec::new(), Compression::default());
+    encoder.write_all(og_body.as_bytes()).unwrap();
+    let compressed_body = encoder.finish().unwrap();
+
+    assert!(og_body.as_bytes().len() < compressed_body.len());
+
+    let resp = http_client
+        .post(&webhook_url)
+        .header(CONTENT_ENCODING, "gzip")
+        .body(compressed_body)
+        .send()
+        .expect("failed to POST event");
+    assert!(resp.status().is_success(), "{resp:?}");
+
+    // Wait for up to 10s for the webhook to get appended.
+    let mut row = None;
+    for _ in 0..10 {
+        std::thread::sleep(std::time::Duration::from_secs(1));
+
+        row = client
+            .query_opt("SELECT body FROM webhook_text", &[])
+            .unwrap();
+        if row.is_some() {
+            break;
+        }
+    }
+
+    let rnd_body = row.as_ref().map(|r| r.get("body"));
+    assert_eq!(rnd_body, Some(og_body));
 }
