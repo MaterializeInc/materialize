@@ -809,11 +809,7 @@ where
         //
         // TODO(guswynn): cluster-unification: consolidate this with compute.
         let _ = match command {
-            StorageCommand::CreateTimely { .. } => {
-                // Similarly, we don't reset state here like compute, because,
-                // until we are required to manage multiple replicas, we can handle
-                // keeping track of state across restarts of storage server(s).
-            }
+            StorageCommand::CreateTimely { .. } => {}
             StorageCommand::RunIngestion(ingestion) => {
                 self.insert_new_uppers(ingestion.description.collection_ids());
             }
