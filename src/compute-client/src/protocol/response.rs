@@ -9,6 +9,7 @@
 
 //! Compute protocol responses.
 
+use std::fmt::Debug;
 use std::num::NonZeroUsize;
 
 use mz_compute_types::plan::LirId;
@@ -17,6 +18,7 @@ use mz_ore::cast::CastFrom;
 use mz_ore::tracing::OpenTelemetryContext;
 use mz_proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError, any_uuid};
 use mz_repr::{Diff, GlobalId, Row};
+use mz_service::grpc::AsSubscribeResponse;
 use mz_timely_util::progress::any_antichain;
 use proptest::prelude::{Arbitrary, any};
 use proptest::strategy::{BoxedStrategy, Just, Strategy, Union};
@@ -29,6 +31,15 @@ include!(concat!(
     env!("OUT_DIR"),
     "/mz_compute_client.protocol.response.rs"
 ));
+
+impl<T: Debug> AsSubscribeResponse for ComputeResponse<T> {
+    fn as_subscribe_response(&self) -> Option<(GlobalId, String)> {
+        match self {
+            Self::SubscribeResponse(id, r) => Some((*id, format!("{r:?}"))),
+            _ => None,
+        }
+    }
+}
 
 /// Compute protocol responses, sent by replicas to the compute controller.
 ///

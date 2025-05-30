@@ -194,6 +194,8 @@ where
     type PartitionedState = PartitionedComputeState<T>;
 
     fn new(parts: usize) -> PartitionedComputeState<T> {
+        tracing::info!("creating PartitionedComputeState");
+
         PartitionedComputeState {
             parts,
             max_result_size: u64::MAX,
@@ -332,6 +334,10 @@ where
                 }
             }
             ComputeResponse::SubscribeResponse(id, response) => {
+                tracing::info!(
+                    "[{id}] SubscribeResponse received in PartitionedComputeState: {response:?}"
+                );
+
                 // Initialize tracking for this subscribe, if necessary.
                 let entry = self
                     .pending_subscribes
