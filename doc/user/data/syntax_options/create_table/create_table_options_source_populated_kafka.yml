@@ -1,0 +1,91 @@
+columns:
+  - column: "Parameter"
+  - column: "Description"
+rows:
+  - "Parameter": "`<table_name>`"
+    "Description": |
+
+      The name of the table to create. Names for tables must follow the [naming
+      guidelines](/sql/identifiers/#naming-restrictions).
+
+  - "Parameter": "`<col_name>`"
+    "Description": |
+
+      **For `FORMAT CSV` only**.
+      If specified, use the specified names for the columns to create.  Names for columns must follow the [naming
+      guidelines](/sql/identifiers/#naming-restrictions).
+      By default, the columns are named `column1`, `column2`...`columnN`.
+
+  - "Parameter": "`<source_name>`"
+    "Description": |
+
+      The name of the [source](/sql/create-source/kafka/) created for the Kafka topic.
+
+  - "Parameter": "**(REFERENCE <ref_object>)**"
+    "Description": |
+
+      *Optional.* If specified, the topic (which should match the topic
+      specified in the source) from which to create the table. You can create
+      multiple tables from the same reference object.
+
+      To find the reference objects available in your
+      [source](/sql/create-source/), you can use the following query,
+      substituting your source name for `<source_name>`:
+
+      <br>
+
+      ```mzsql
+      SELECT refs.*
+      FROM mz_internal.mz_source_references refs, mz_sources s
+      WHERE s.name = '<source_name>' -- substitute with your source name
+      AND refs.source_id = s.id;
+      ```
+
+  - "Parameter": |
+      **FORMAT \<format\> |
+      KEY FORMAT \<format\> VALUE FORMAT \<format\>**
+    "Description": |
+
+      *Optional.* If specified, use the specified format to decode the data. The following `<format>`s are supported:
+
+      | Format | Description |
+      |--------|-------------|
+      | `AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION <csr_connection> [KEY STRATEGY <strategy> VALUE STRATEGY <strategy>]` | Decode the data as Avro, specifying the [Confluent Schema Registry connection](/sql/create-connection/#confluent-schema-registry) to use. You can also specify the `KEY STRATEGY` and `VALUE STRATEGY` to use: <table> <thead> <tr> <th>Strategy</th> <th>Description</th> </tr> </thead> <tbody> <tr> <td><code>LATEST</code></td> <td>(Default) Use the latest writer schema from the schema registry as the reader schema.</td> </tr> <tr> <td><code>ID</code></td> <td>Use a specific schema from the registry.</td> </tr> <tr> <td><code>INLINE</code></td> <td>Use the inline schema.</td> </tr> </tbody> </table>|
+      | `JSON` | Decode the data as JSON. |
+      | `TEXT` | Decode the data as TEXT. |
+      | `BYTES` | Decode the data as BYTES. |
+      | `CSV WITH <num> COLUMNS DELIMITED BY <char>` | Parse the data as CSV with a specified number of columns and a specified delimiter. By default, the columns are named `column1`, `column2`...`columnN`. You can specify alternative column names after the table name `(<column_name1>, <column_name2>, ...)`. <br><br> The data is decoded as [`text`](/sql/types/text). You can convert the data to other to other types using explicit [casts](/sql/functions/cast/) when creating views.|
+
+      {{< include-md file="shared-content/kafka-format-envelope-compat-table.md"
+      >}}
+
+      For more information, see [Creating a source](/sql/create-source/kafka/#creating-a-source).
+
+  - "Parameter": |
+      **INCLUDE \<include_option\>**
+    "Description": |
+
+      *Optional.* If specified, include the additional information as column(s) in the table. The following `<include_option>`s are supported:
+
+      | Option | Description |
+      |--------|-------------|
+      | **KEY [AS \<name\>]** | **Available for `FORMAT AVRO` and `KEY FORMAT ...`**. Include a column containing the Kafka message key. If the key is encoded using a format that includes schemas, the column will take its name from the schema. For unnamed formats (e.g. `TEXT`), the column will be named `key`. The column can be renamed with the optional **AS** *name* statement.
+      | **PARTITION [AS \<name\>]** | Include a `partition` column containing the Kafka message partition. The column can be renamed with the optional **AS** *name* clause.
+      | **OFFSET [AS \<name\>]** | Include an `offset` column containing the Kafka message offset. The column can be renamed with the optional **AS** *name* clause.
+      | **TIMESTAMP [AS \<name\>]** | Include a `timestamp` column containing the Kafka message timestamp. The column can be renamed with the optional **AS** *name* clause. <br><br>Note that the timestamp of a Kafka message depends on how the topic and its producers are configured. See the [Confluent documentation](https://docs.confluent.io/3.0.0/streams/concepts.html?#time) for details.
+      | **HEADERS [AS \<name\>]** | Include a `headers` column containing the Kafka message headers as a list of records of type `(key text, value bytea)`. The column can be renamed with the optional **AS** *name* clause.
+      | **HEADER \<key\> AS \<name\> [**BYTES**]** | Include a *name* column containing the Kafka message header *key* parsed as a UTF-8 string. To expose the header value as `bytea`, use the `BYTES` option.
+
+  - "Parameter": |
+      **ENVELOPE \<envelope\>**
+    "Description": |
+
+      *Optional.* If specified, use the specified envelope. The following `<envelope>`s are supported:
+
+      | Envelope | Description |
+      |----------|-------------|
+      | **ENVELOPE NONE** | *Default*. Use an append-only envelope. This means that records will only be appended and cannot be updated or deleted.
+      | **ENVELOPE DEBEZIUM** | Use the Debezium envelope, which uses a diff  envelope to handle CRUD operations. This envelope can lead to **high memory utilization** in the cluster maintaining the source. Materialize can automatically offload processing to disk as needed. See [spilling to disk](/sql/create-source/kafka/#spilling-to-disk) for details. For more information, see [Using Debezium](/sql/create-source/kafka/#using-debezium).
+      | **ENVELOPE UPSERT** [**(VALUE DECODING ERRORS = INLINE)**] | Use the upsert envelope, which uses message keys to handle CRUD operations. To handle value decoding errors, use the `(VALUE DECODING ERRORS = INLINE)` option. For more information, see [Handling upserts](/sql/create-source/kafka/#handling-upserts) and [Value decoding errors](/sql/create-source/kafka/#value-decoding-errors).
+
+      {{< include-md file="shared-content/kafka-format-envelope-compat-table.md" >}}
