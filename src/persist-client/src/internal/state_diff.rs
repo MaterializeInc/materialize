@@ -1424,10 +1424,10 @@ mod tests {
                                 .flat_map(|p| p.batch.parts.clone())
                                 .collect();
                             let output = HollowBatch::new_run(req.desc, parts, len);
-                            leader.collections.trace.apply_merge_res_checked::<i64>(
-                                &FueledMergeRes { output },
-                                &metrics.columnar,
-                            );
+                            leader
+                                .collections
+                                .trace
+                                .apply_merge_res_unchecked(&FueledMergeRes { output });
                         }
                     }
                 }

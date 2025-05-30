@@ -541,20 +541,6 @@ impl Opaque for i64 {
     }
 }
 
-impl Codec64 for mz_ore::Overflowing<i64> {
-    fn codec_name() -> String {
-        "mz_ore::Overflowing<i64>".to_owned()
-    }
-
-    fn encode(&self) -> [u8; 8] {
-        self.into_inner().to_le_bytes()
-    }
-
-    fn decode(buf: [u8; 8]) -> Self {
-        i64::from_le_bytes(buf).into()
-    }
-}
-
 /// A placeholder for a [Codec] impl that hasn't yet gotten a real [Schema].
 #[derive(Debug)]
 pub struct TodoSchema<T>(PhantomData<T>);

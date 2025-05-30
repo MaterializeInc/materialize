@@ -35,10 +35,10 @@
 //!   point, it is eligible for asynchronous compaction and a `FueledMergeReq`
 //!   is generated.
 //! - At any later point, this request may be answered via
-//!   [Trace::apply_merge_res]. This internally replaces the
-//!   `SpineBatch`, which has no effect on the structure of `Spine`
-//!   but replaces the metadata in persist's state to point at the
-//!   new batch.
+//!   [Trace::apply_merge_res_checked] or [Trace::apply_merge_res_unchecked].
+//!   This internally replaces the`SpineBatch`, which has no
+//!   effect on the structure of `Spine` but replaces the metadata
+//!   in persist's state to point at the new batch.
 //! - `SpineBatch` is explictly allowed to accumulate a list of `HollowBatch`s.
 //!   This decouples compaction from Spine progress and also allows us to reduce
 //!   write amplification by merging `N` batches at once where `N` can be
