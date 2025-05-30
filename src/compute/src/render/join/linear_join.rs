@@ -37,7 +37,7 @@ use timely::progress::timestamp::{Refines, Timestamp};
 
 use crate::extensions::arrange::MzArrangeCore;
 use crate::render::RenderTimestamp;
-use crate::render::context::{ArrangementFlavor, CollectionBundle, Context, ShutdownToken};
+use crate::render::context::{ArrangementFlavor, CollectionBundle, Context, ShutdownProbe};
 use crate::render::join::mz_join_core::mz_join_core;
 use crate::row_spine::{RowRowBuilder, RowRowSpine};
 use crate::typedefs::{RowRowAgent, RowRowEnter};
@@ -97,7 +97,7 @@ impl LinearJoinSpec {
         &self,
         arranged1: &Arranged<G, Tr1>,
         arranged2: &Arranged<G, Tr2>,
-        shutdown_token: ShutdownToken,
+        shutdown_probe: ShutdownProbe,
         result: L,
     ) -> Collection<G, I::Item, Diff>
     where
@@ -122,19 +122,19 @@ impl LinearJoinSpec {
             (Materialize, Some(work_limit), Some(time_limit)) => {
                 let yield_fn =
                     move |start: Instant, work| work >= work_limit || start.elapsed() >= time_limit;
-                mz_join_core(arranged1, arranged2, shutdown_token, result, yield_fn).as_collection()
+                mz_join_core(arranged1, arranged2, shutdown_probe, result, yield_fn).as_collection()
             }
             (Materialize, Some(work_limit), None) => {
                 let yield_fn = move |_start, work| work >= work_limit;
-                mz_join_core(arranged1, arranged2, shutdown_token, result, yield_fn).as_collection()
+                mz_join_core(arranged1, arranged2, shutdown_probe, result, yield_fn).as_collection()
             }
             (Materialize, None, Some(time_limit)) => {
                 let yield_fn = move |start: Instant, _work| start.elapsed() >= time_limit;
-                mz_join_core(arranged1, arranged2, shutdown_token, result, yield_fn).as_collection()
+                mz_join_core(arranged1, arranged2, shutdown_probe, result, yield_fn).as_collection()
             }
             (Materialize, None, None) => {
                 let yield_fn = |_start, _work| false;
-                mz_join_core(arranged1, arranged2, shutdown_token, result, yield_fn).as_collection()
+                mz_join_core(arranged1, arranged2, shutdown_probe, result, yield_fn).as_collection()
             }
         }
     }
@@ -496,7 +496,7 @@ where
                 .render(
                     &prev_keyed,
                     &next_input,
-                    self.shutdown_token.clone(),
+                    self.shutdown_probe.clone(),
                     move |key, old, new| {
                         let mut row_builder = SharedRow::get();
                         let temp_storage = RowArena::new();
@@ -527,7 +527,7 @@ where
             let oks = self.linear_join_spec.render(
                 &prev_keyed,
                 &next_input,
-                self.shutdown_token.clone(),
+                self.shutdown_probe.clone(),
                 move |key, old, new| {
                     let mut row_builder = SharedRow::get();
                     let temp_storage = RowArena::new();

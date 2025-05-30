@@ -15,7 +15,7 @@ use differential_dataflow::ExchangeData;
 use differential_dataflow::containers::Columnation;
 use mz_repr::Row;
 
-use crate::render::context::ShutdownToken;
+use crate::render::context::ShutdownProbe;
 
 /// Used to make possibly-validating code generic: think of this as a kind of `MaybeResult`,
 /// specialized for use in compute.  Validation code will only run when the error constructor is
@@ -74,18 +74,18 @@ where
 
 /// Error logger to be used by rendering code.
 ///
-/// Holds onto a token to ensure that no false-positive errors are logged while the dataflow is in
-/// the process of shutting down.
+/// Holds onto a `[ShutdownProbe`] to ensure that no false-positive errors are logged while the
+/// dataflow is in the process of shutting down.
 #[derive(Clone)]
 pub(super) struct ErrorLogger {
-    token: ShutdownToken,
+    shutdown_probe: ShutdownProbe,
     dataflow_name: String,
 }
 
 impl ErrorLogger {
-    pub fn new(token: ShutdownToken, dataflow_name: String) -> Self {
+    pub fn new(shutdown_probe: ShutdownProbe, dataflow_name: String) -> Self {
         Self {
-            token,
+            shutdown_probe,
             dataflow_name,
         }
     }
@@ -107,7 +107,13 @@ impl ErrorLogger {
     ///
     // TODO(database-issues#5362): Rethink or justify our error logging strategy.
     pub fn log(&self, message: &'static str, details: &str) {
-        if !self.token.in_shutdown() {
+        // It's important that we silence errors as soon as the local shutdown token has been
+        // dropped. Dataflow operators may start discarding results, thereby producing incorrect
+        // output, as soon as they observe that all workers have dropped their token. However, not
+        // all workers are guaranteed to make this observation at the same time. So it's possible
+        // that some workers have already started discarding results while other workers still see
+        // `shutdown_probe.in_shutdown() == false`.
+        if !self.shutdown_probe.in_local_shutdown() {
             self.log_always(message, details);
         }
     }
