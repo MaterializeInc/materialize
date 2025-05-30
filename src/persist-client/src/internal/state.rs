@@ -11,7 +11,6 @@ use anyhow::ensure;
 use async_stream::{stream, try_stream};
 use differential_dataflow::difference::Semigroup;
 use mz_persist::metrics::ColumnarMetrics;
-use mz_repr::Diff;
 use std::borrow::Cow;
 use std::cmp::Ordering;
 use std::collections::BTreeMap;
@@ -430,7 +429,7 @@ impl<T> HollowRunRef<T> {
 
 impl<T: Timestamp + Codec64> HollowRunRef<T> {
     /// Stores the given runs and returns a [HollowRunRef] that points to them.
-    pub async fn set(
+    pub async fn set<D: Codec64 + Semigroup>(
         shard_id: ShardId,
         blob: &dyn Blob,
         writer: &WriterKey,
@@ -456,8 +455,15 @@ impl<T: Timestamp + Codec64> HollowRunRef<T> {
         let diffs_sum = data
             .parts
             .iter()
-            .filter_map(|p| p.diffs_sum::<Diff>(&metrics.columnar))
-            .sum::<Diff>()
+            .map(|p| {
+                p.diffs_sum::<D>(&metrics.columnar)
+                    .expect("valid diffs sum")
+            })
+            .reduce(|mut a, b| {
+                a.plus_equals(&b);
+                a
+            })
+            .expect("valid diffs sum")
             .encode();
 
         let key = PartialBatchKey::new(writer, &PartId::new());
@@ -1718,7 +1724,7 @@ where
         Continue(merge_reqs)
     }
 
-    pub fn apply_merge_res(
+    pub fn apply_merge_res<D: Codec64 + Semigroup + PartialEq + Debug>(
         &mut self,
         res: &FueledMergeRes<T>,
         metrics: &ColumnarMetrics,
@@ -1731,7 +1737,7 @@ where
             return Break(NoOpStateTransition(ApplyMergeResult::NotAppliedNoMatch));
         }
 
-        let apply_merge_result = self.trace.apply_merge_res(res, metrics);
+        let apply_merge_result = self.trace.apply_merge_res_checked::<D>(res, metrics);
         Continue(apply_merge_result)
     }
 
@@ -2048,10 +2054,7 @@ where
         batch_count <= 1 && is_empty
     }
 
-    pub fn become_tombstone_and_shrink(
-        &mut self,
-        metrics: &ColumnarMetrics,
-    ) -> ControlFlow<NoOpStateTransition<()>, ()> {
+    pub fn become_tombstone_and_shrink(&mut self) -> ControlFlow<NoOpStateTransition<()>, ()> {
         assert_eq!(self.trace.upper(), &Antichain::new());
         assert_eq!(self.trace.since(), &Antichain::new());
 
@@ -2089,7 +2092,7 @@ where
             let fake_merge = FueledMergeRes {
                 output: HollowBatch::empty(desc),
             };
-            let result = self.trace.apply_merge_res(&fake_merge, metrics);
+            let result = self.trace.apply_tombstone_merge(&fake_merge);
             assert!(
                 result.matched(),
                 "merge with a matching desc should always match"

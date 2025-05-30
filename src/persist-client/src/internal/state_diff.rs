@@ -868,7 +868,7 @@ fn apply_diffs_spine<T: Timestamp + Lattice + Codec64>(
         // that was generated elsewhere. Most of the time we can, though, so
         // count the good ones and fall back to the slow path below when we
         // can't.
-        if trace.apply_merge_res(&res, &metrics.columnar).applied() {
+        if trace.apply_merge_res_unchecked(&res).applied() {
             // Maybe return the replaced batches from apply_merge_res and verify
             // that they match _inputs?
             metrics.state.apply_spine_fast_path.inc();
@@ -1424,10 +1424,10 @@ mod tests {
                                 .flat_map(|p| p.batch.parts.clone())
                                 .collect();
                             let output = HollowBatch::new_run(req.desc, parts, len);
-                            leader
-                                .collections
-                                .trace
-                                .apply_merge_res(&FueledMergeRes { output }, &metrics.columnar);
+                            leader.collections.trace.apply_merge_res_checked::<i64>(
+                                &FueledMergeRes { output },
+                                &metrics.columnar,
+                            );
                         }
                     }
                 }

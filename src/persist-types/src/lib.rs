@@ -16,6 +16,8 @@
     clippy::cast_sign_loss
 )]
 
+use std::fmt::Debug;
+
 use bytes::{BufMut, Bytes};
 use mz_ore::url::SensitiveUrl;
 use mz_proto::{RustType, TryFromProtoError};
@@ -137,7 +139,7 @@ pub trait Codec: Default + Sized + PartialEq + 'static {
 
 /// Encoding and decoding operations for a type usable as a persisted timestamp
 /// or diff.
-pub trait Codec64: Sized + Clone + 'static {
+pub trait Codec64: Sized + Clone + Debug + 'static {
     /// Name of the codec.
     ///
     /// This name is stored for the timestamp and diff when a stream is first

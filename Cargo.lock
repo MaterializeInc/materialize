@@ -6566,7 +6566,6 @@ dependencies = [
  "mz-persist-types",
  "mz-postgres-client",
  "mz-proto",
- "mz-repr",
  "mz-timely-util",
  "num_cpus",
  "prometheus",

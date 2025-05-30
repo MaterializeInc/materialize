@@ -48,6 +48,7 @@
 //! [Batch::Merger]: differential_dataflow::trace::Batch::Merger
 
 use arrayvec::ArrayVec;
+use differential_dataflow::difference::Semigroup;
 use mz_persist::metrics::ColumnarMetrics;
 use mz_persist_types::Codec64;
 use std::cmp::Ordering;
@@ -62,7 +63,6 @@ use differential_dataflow::trace::Description;
 use mz_ore::cast::CastFrom;
 #[allow(unused_imports)] // False positive.
 use mz_ore::fmt::FormatBuffer;
-use mz_repr::Diff;
 use serde::{Serialize, Serializer};
 use timely::PartialOrder;
 use timely::progress::frontier::AntichainRef;
@@ -648,13 +648,33 @@ impl<T: Timestamp + Lattice> Trace<T> {
 }
 
 impl<T: Timestamp + Lattice + Codec64> Trace<T> {
-    pub fn apply_merge_res(
+    pub fn apply_merge_res_checked<D: Codec64 + Semigroup + PartialEq>(
         &mut self,
         res: &FueledMergeRes<T>,
         metrics: &ColumnarMetrics,
     ) -> ApplyMergeResult {
         for batch in self.spine.spine_batches_mut().rev() {
-            let result = batch.maybe_replace(res, metrics);
+            let result = batch.maybe_replace_checked::<D>(res, metrics);
+            if result.matched() {
+                return result;
+            }
+        }
+        ApplyMergeResult::NotAppliedNoMatch
+    }
+
+    pub fn apply_merge_res_unchecked(&mut self, res: &FueledMergeRes<T>) -> ApplyMergeResult {
+        for batch in self.spine.spine_batches_mut().rev() {
+            let result = batch.maybe_replace_unchecked(res);
+            if result.matched() {
+                return result;
+            }
+        }
+        ApplyMergeResult::NotAppliedNoMatch
+    }
+
+    pub fn apply_tombstone_merge(&mut self, res: &FueledMergeRes<T>) -> ApplyMergeResult {
+        for batch in self.spine.spine_batches_mut().rev() {
+            let result = batch.maybe_replace_with_tombstone(res);
             if result.matched() {
                 return result;
             }
@@ -879,12 +899,34 @@ impl<T: Timestamp + Lattice> SpineBatch<T> {
 }
 
 impl<T: Timestamp + Lattice + Codec64> SpineBatch<T> {
+    fn maybe_replace_with_tombstone(&mut self, res: &FueledMergeRes<T>) -> ApplyMergeResult {
+        assert!(
+            res.output.parts.is_empty(),
+            "merge res for tombstone must have no parts"
+        );
+        let exact_match = res.output.desc.lower() == self.desc().lower()
+            && res.output.desc.upper() == self.desc().upper();
+
+        if exact_match {
+            *self = SpineBatch::merged(IdHollowBatch {
+                id: self.id(),
+                batch: Arc::new(res.output.clone()),
+            });
+            return ApplyMergeResult::AppliedExact;
+        }
+        ApplyMergeResult::NotAppliedNoMatch
+    }
+
     // TODO: Roundtrip the SpineId through FueledMergeReq/FueledMergeRes?
-    fn maybe_replace(
+    /// Checked variant that performs diff sum assertions
+    fn maybe_replace_checked<D>(
         &mut self,
         res: &FueledMergeRes<T>,
         metrics: &ColumnarMetrics,
-    ) -> ApplyMergeResult {
+    ) -> ApplyMergeResult
+    where
+        D: Semigroup + Codec64 + PartialEq + Debug,
+    {
         // The spine's and merge res's sinces don't need to match (which could occur if Spine
         // has been reloaded from state due to compare_and_set mismatch), but if so, the Spine
         // since must be in advance of the merge res since.
@@ -892,26 +934,37 @@ impl<T: Timestamp + Lattice + Codec64> SpineBatch<T> {
             return ApplyMergeResult::NotAppliedInvalidSince;
         }
 
-        let new_diffs_sum: Diff = res
+        let new_diffs_sum: D = res
             .output
             .parts
             .iter()
             .map(|p| {
-                p.diffs_sum::<Diff>(metrics)
+                p.diffs_sum::<D>(metrics)
                     .expect("new batch must have diffs sum")
             })
-            .sum();
+            .reduce(|mut a, b| {
+                a.plus_equals(&b);
+                a
+            })
+            .expect("new batch must have diffs sum");
 
         // If our merge result exactly matches a spine batch, we can swap it in directly
         let exact_match = res.output.desc.lower() == self.desc().lower()
             && res.output.desc.upper() == self.desc().upper();
         if exact_match {
-            let old_diffs_sum: Option<Diff> = self
+            let old_diffs_sum: Option<D> = self
                 .parts
                 .iter()
                 .flat_map(|p| p.batch.parts.iter())
-                .map(|p| p.diffs_sum::<Diff>(metrics))
-                .try_fold(Diff::from(0), |acc, diff_sum| diff_sum.map(|sum| acc + sum));
+                .map(|p| p.diffs_sum::<D>(metrics))
+                .reduce(|a, b| match (a, b) {
+                    (Some(mut a), Some(b)) => {
+                        a.plus_equals(&b);
+                        Some(a)
+                    }
+                    _ => None,
+                })
+                .flatten();
 
             // This is a bit hacky, but when we are a tombstone a empty batch
             // gets applied to us, which has no parts.
@@ -919,10 +972,12 @@ impl<T: Timestamp + Lattice + Codec64> SpineBatch<T> {
                 if let Some(old_sum) = old_diffs_sum {
                     assert_eq!(
                         old_sum, new_diffs_sum,
-                        "merge res diffs sum ({new_diffs_sum}) did not match spine batch diffs sum ({old_sum})"
+                        "merge res diffs sum ({:?}) did not match spine batch diffs sum ({:?})",
+                        new_diffs_sum, old_sum
                     );
                 }
             }
+
             // Spine internally has an invariant about a batch being at some level
             // or higher based on the len. We could end up violating this invariant
             // if we increased the length of the batch.
@@ -941,6 +996,85 @@ impl<T: Timestamp + Lattice + Codec64> SpineBatch<T> {
             return ApplyMergeResult::AppliedExact;
         }
 
+        // Try subset replacement
+        if let Some((lower_idx, upper_idx, id_lower, id_upper)) = self.find_replacement_range(res) {
+            let old_diffs_sum: Option<D> = self
+                .parts
+                .iter()
+                .skip(lower_idx)
+                .take(upper_idx - lower_idx + 1)
+                .flat_map(|p| p.batch.parts.iter())
+                .map(|p| p.diffs_sum::<D>(metrics))
+                .reduce(|a, b| match (a, b) {
+                    (Some(mut a), Some(b)) => {
+                        a.plus_equals(&b);
+                        Some(a)
+                    }
+                    _ => None,
+                })
+                .flatten();
+
+            if !res.output.parts.is_empty() && res.output.len > 0 {
+                if let Some(old_sum) = old_diffs_sum {
+                    assert_eq!(
+                        old_sum, new_diffs_sum,
+                        "merge res diffs sum ({:?}) did not match spine batch diffs sum ({:?})",
+                        new_diffs_sum, old_sum
+                    );
+                }
+            }
+
+            self.perform_subset_replacement(res, lower_idx, upper_idx, id_lower, id_upper)
+        } else {
+            ApplyMergeResult::NotAppliedNoMatch
+        }
+    }
+
+    /// Unchecked variant that skips diff sum assertions
+    fn maybe_replace_unchecked(&mut self, res: &FueledMergeRes<T>) -> ApplyMergeResult {
+        // The spine's and merge res's sinces don't need to match (which could occur if Spine
+        // has been reloaded from state due to compare_and_set mismatch), but if so, the Spine
+        // since must be in advance of the merge res since.
+        if !PartialOrder::less_equal(res.output.desc.since(), self.desc().since()) {
+            return ApplyMergeResult::NotAppliedInvalidSince;
+        }
+
+        // If our merge result exactly matches a spine batch, we can swap it in directly
+        let exact_match = res.output.desc.lower() == self.desc().lower()
+            && res.output.desc.upper() == self.desc().upper();
+        if exact_match {
+            // Spine internally has an invariant about a batch being at some level
+            // or higher based on the len. We could end up violating this invariant
+            // if we increased the length of the batch.
+            //
+            // A res output with length greater than the existing spine batch implies
+            // a compaction has already been applied to this range, and with a higher
+            // rate of consolidation than this one. This could happen as a result of
+            // compaction's memory bound limiting the amount of consolidation possible.
+            if res.output.len > self.len() {
+                return ApplyMergeResult::NotAppliedTooManyUpdates;
+            }
+
+            *self = SpineBatch::merged(IdHollowBatch {
+                id: self.id(),
+                batch: Arc::new(res.output.clone()),
+            });
+            return ApplyMergeResult::AppliedExact;
+        }
+
+        // Try subset replacement
+        if let Some((lower_idx, upper_idx, id_lower, id_upper)) = self.find_replacement_range(res) {
+            self.perform_subset_replacement(res, lower_idx, upper_idx, id_lower, id_upper)
+        } else {
+            ApplyMergeResult::NotAppliedNoMatch
+        }
+    }
+
+    /// Find the range of parts that can be replaced by the merge result
+    fn find_replacement_range(
+        &self,
+        res: &FueledMergeRes<T>,
+    ) -> Option<(usize, usize, usize, usize)> {
         // It is possible the structure of the spine has changed since the merge res
         // was created, such that it no longer exactly matches the description of a
         // spine batch. This can happen if another merge has happened in the interim,
@@ -949,17 +1083,11 @@ impl<T: Timestamp + Lattice + Codec64> SpineBatch<T> {
         // When this occurs, we can still attempt to slot the merge res in to replace
         // the parts of a fueled merge. e.g. if the res is for `[1,3)` and the parts
         // are `[0,1),[1,2),[2,3),[3,4)`, we can swap out the middle two parts for res.
-        let SpineBatch {
-            id,
-            parts,
-            desc,
-            active_compaction: _,
-            len: _,
-        } = self;
-        // first, determine if a subset of parts can be cleanly replaced by the merge res
+
         let mut lower = None;
         let mut upper = None;
-        for (i, batch) in parts.iter().enumerate() {
+
+        for (i, batch) in self.parts.iter().enumerate() {
             if batch.batch.desc.lower() == res.output.desc.lower() {
                 lower = Some((i, batch.id.0));
             }
@@ -970,46 +1098,54 @@ impl<T: Timestamp + Lattice + Codec64> SpineBatch<T> {
                 break;
             }
         }
-        // next, replace parts with the merge res batch if we can
+
         match (lower, upper) {
-            (Some((lower, id_lower)), Some((upper, id_upper))) => {
-                let old_diffs_sum: Option<Diff> = parts
-                    .iter()
-                    .skip(lower)
-                    .take(upper - lower + 1)
-                    .flat_map(|p| p.batch.parts.iter())
-                    .map(|p| p.diffs_sum::<Diff>(metrics))
-                    .try_fold(Diff::from(0), |acc, diff_sum| diff_sum.map(|sum| acc + sum));
-                if !res.output.parts.is_empty() && res.output.len > 0 {
-                    if let Some(old_sum) = old_diffs_sum {
-                        assert_eq!(
-                            old_sum, new_diffs_sum,
-                            "merge res diffs sum ({new_diffs_sum}) did not match spine batch diffs sum ({old_sum})"
-                        );
-                    }
-                }
-                let mut new_parts = vec![];
-                new_parts.extend_from_slice(&parts[..lower]);
-                new_parts.push(IdHollowBatch {
-                    id: SpineId(id_lower, id_upper),
-                    batch: Arc::new(res.output.clone()),
-                });
-                new_parts.extend_from_slice(&parts[upper + 1..]);
-                let new_spine_batch = SpineBatch {
-                    id: *id,
-                    desc: desc.to_owned(),
-                    len: new_parts.iter().map(|x| x.batch.len).sum(),
-                    parts: new_parts,
-                    active_compaction: None,
-                };
-                if new_spine_batch.len() > self.len() {
-                    return ApplyMergeResult::NotAppliedTooManyUpdates;
-                }
-                *self = new_spine_batch;
-                ApplyMergeResult::AppliedSubset
+            (Some((lower_idx, id_lower)), Some((upper_idx, id_upper))) => {
+                Some((lower_idx, upper_idx, id_lower, id_upper))
             }
-            _ => ApplyMergeResult::NotAppliedNoMatch,
+            _ => None,
         }
+    }
+
+    /// Perform the actual subset replacement
+    fn perform_subset_replacement(
+        &mut self,
+        res: &FueledMergeRes<T>,
+        lower_idx: usize,
+        upper_idx: usize,
+        id_lower: usize,
+        id_upper: usize,
+    ) -> ApplyMergeResult {
+        let SpineBatch {
+            id,
+            parts,
+            desc,
+            active_compaction: _,
+            len: _,
+        } = self;
+
+        let mut new_parts = vec![];
+        new_parts.extend_from_slice(&parts[..lower_idx]);
+        new_parts.push(IdHollowBatch {
+            id: SpineId(id_lower, id_upper),
+            batch: Arc::new(res.output.clone()),
+        });
+        new_parts.extend_from_slice(&parts[upper_idx + 1..]);
+
+        let new_spine_batch = SpineBatch {
+            id: *id,
+            desc: desc.to_owned(),
+            len: new_parts.iter().map(|x| x.batch.len).sum(),
+            parts: new_parts,
+            active_compaction: None,
+        };
+
+        if new_spine_batch.len() > self.len() {
+            return ApplyMergeResult::NotAppliedTooManyUpdates;
+        }
+
+        *self = new_spine_batch;
+        ApplyMergeResult::AppliedSubset
     }
 }
 
@@ -1866,7 +2002,10 @@ pub mod datadriven {
         let res = FueledMergeRes {
             output: DirectiveArgs::parse_hollow_batch(args.input),
         };
-        match datadriven.trace.apply_merge_res(&res, metrics) {
+        match datadriven
+            .trace
+            .apply_merge_res_checked::<i64>(&res, metrics)
+        {
             ApplyMergeResult::AppliedExact => Ok("applied exact\n".into()),
             ApplyMergeResult::AppliedSubset => Ok("applied subset\n".into()),
             ApplyMergeResult::NotAppliedNoMatch => Ok("no-op\n".into()),
