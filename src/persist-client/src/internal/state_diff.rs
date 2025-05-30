@@ -794,7 +794,7 @@ fn apply_diff_map<K: Ord, V: PartialEq + Debug>(
 // This might leave state in an invalid (umm) state when returning an error. The
 // caller ultimately ends up panic'ing on error, but if that changes, we might
 // want to revisit this.
-fn apply_diffs_spine<T: Timestamp + Lattice>(
+fn apply_diffs_spine<T: Timestamp + Lattice + Codec64>(
     metrics: &Metrics,
     mut diffs: Vec<StateFieldDiff<HollowBatch<T>, ()>>,
     trace: &mut Trace<T>,
@@ -857,7 +857,10 @@ fn apply_diffs_spine<T: Timestamp + Lattice>(
 
     // Fast-path: compaction
     if let Some((_inputs, output)) = sniff_compaction(&diffs) {
-        let res = FueledMergeRes { output };
+        let res = FueledMergeRes {
+            output,
+            new_active_compaction: None,
+        };
         // We can't predict how spine will arrange the batches when it's
         // hydrated. This means that something that is maintaining a Spine
         // starting at some seqno may not exactly match something else
@@ -868,7 +871,7 @@ fn apply_diffs_spine<T: Timestamp + Lattice>(
         // that was generated elsewhere. Most of the time we can, though, so
         // count the good ones and fall back to the slow path below when we
         // can't.
-        if trace.apply_merge_res(&res).applied() {
+        if trace.apply_merge_res(&res, &metrics.columnar).applied() {
             // Maybe return the replaced batches from apply_merge_res and verify
             // that they match _inputs?
             metrics.state.apply_spine_fast_path.inc();
@@ -1424,10 +1427,13 @@ mod tests {
                                 .flat_map(|p| p.batch.parts.clone())
                                 .collect();
                             let output = HollowBatch::new_run(req.desc, parts, len);
-                            leader
-                                .collections
-                                .trace
-                                .apply_merge_res(&FueledMergeRes { output });
+                            leader.collections.trace.apply_merge_res(
+                                &FueledMergeRes {
+                                    output,
+                                    new_active_compaction: None,
+                                },
+                                &metrics.columnar,
+                            );
                         }
                     }
                 }

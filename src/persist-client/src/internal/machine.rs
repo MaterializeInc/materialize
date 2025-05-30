@@ -633,7 +633,7 @@ where
         let mut merge_result_ever_applied = ApplyMergeResult::NotAppliedNoMatch;
         let (_seqno, _apply_merge_result, maintenance) = self
             .apply_unbatched_idempotent_cmd(&metrics.cmds.merge_res, |_, _, state| {
-                let ret = state.apply_merge_res(res);
+                let ret = state.apply_merge_res(res, &metrics.clone().columnar);
                 if let Continue(result) = ret {
                     // record if we've ever applied the merge
                     if result.applied() {
@@ -797,7 +797,7 @@ where
             let res = self
                 .applier
                 .apply_unbatched_cmd(&metrics.cmds.become_tombstone, |_, _, state| {
-                    state.become_tombstone_and_shrink()
+                    state.become_tombstone_and_shrink(&metrics.clone().columnar)
                 })
                 .await;
             let err = match res {
@@ -1998,16 +1998,19 @@ pub mod datadriven {
             desc: Description::new(lower, upper, since),
             inputs,
         };
-        let res = Compactor::<String, (), u64, i64>::compact(
+
+        let req_clone = req.clone();
+        let stream = Compactor::<String, (), u64, i64>::compact_stream(
             CompactConfig::new(&cfg, datadriven.shard_id),
             Arc::clone(&datadriven.client.blob),
             Arc::clone(&datadriven.client.metrics),
             Arc::clone(&datadriven.machine.applier.shard_metrics),
             Arc::clone(&datadriven.client.isolated_runtime),
-            req,
+            req_clone,
             SCHEMAS.clone(),
-        )
-        .await?;
+        );
+
+        let res = Compactor::<String, (), u64, i64>::compact_all(stream, req.clone()).await?;
 
         datadriven
             .batches
@@ -2454,7 +2457,10 @@ pub mod datadriven {
             .clone();
         let (merge_res, maintenance) = datadriven
             .machine
-            .merge_res(&FueledMergeRes { output: batch })
+            .merge_res(&FueledMergeRes {
+                output: batch,
+                new_active_compaction: None,
+            })
             .await;
         datadriven.routine.push(maintenance);
         Ok(format!(
