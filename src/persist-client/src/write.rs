@@ -453,6 +453,13 @@ where
     ///
     /// The clunky multi-level Result is to enable more obvious error handling
     /// in the caller. See <http://sled.rs/errors.html> for details.
+
+    // NB(ptravers): we have explicitly disabled checking the expected upper and new upper
+    // as we wish to allow batches that are a mixture of empty frontier moving
+    // updates and batches of actual data. As a result we do not check that the
+    // submitted batches fit within the stated boundaries as persist does not know
+    // in the case of a pure frontier movement if there is a batch that fills a given
+    // time span.
     #[instrument(level = "debug", fields(shard = %self.machine.shard_id()))]
     pub async fn compare_and_append_batch(
         &mut self,

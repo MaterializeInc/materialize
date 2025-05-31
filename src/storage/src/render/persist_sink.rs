@@ -84,8 +84,6 @@
 //! Some, particularly `append_batches` could be merged with
 //! the compute version, but that requires some amount of
 //! onerous refactoring that we have chosen to skip for now.
-//!
-// TODO(guswynn): merge at least the `append_batches` operator`
 
 use std::cmp::Ordering;
 use std::collections::BTreeMap;
@@ -102,6 +100,7 @@ use futures::{StreamExt, future};
 use itertools::Itertools;
 use mz_ore::cast::CastFrom;
 use mz_ore::collections::HashMap;
+use mz_ore::vec::VecExt;
 use mz_persist_client::Diagnostics;
 use mz_persist_client::batch::{Batch, BatchBuilder, ProtoBatch};
 use mz_persist_client::cache::PersistClientCache;
@@ -117,12 +116,12 @@ use mz_timely_util::builder_async::{
     Event, OperatorBuilder as AsyncOperatorBuilder, PressOnDropButton,
 };
 use serde::{Deserialize, Serialize};
-use timely::PartialOrder;
 use timely::container::CapacityContainerBuilder;
 use timely::dataflow::channels::pact::{Exchange, Pipeline};
 use timely::dataflow::operators::{Broadcast, Capability, CapabilitySet, Inspect};
 use timely::dataflow::{Scope, Stream};
 use timely::progress::{Antichain, Timestamp};
+use timely::{Container, PartialOrder};
 use tokio::sync::Semaphore;
 use tracing::trace;
 
@@ -1002,6 +1001,7 @@ where
         let mut batches_frontier = Antichain::from_elem(Timestamp::minimum());
 
         loop {
+            // Drain both input channels as of resumption and advance frontier.
             tokio::select! {
                 Some(event) = descriptions_input.next() => {
                     match event {
@@ -1087,12 +1087,14 @@ where
 
             trace!(
                 "persist_sink {collection_id}/{shard_id}: \
-                    append_batches: in_flight: {:?}, \
-                    done: {:?}, \
+                    append_batches: in_flight_descriptions size: {:?}, \
+                    in_flight_batches size: {:?}, \
+                    done size: {:?}, \
                     batch_frontier: {:?}, \
                     batch_description_frontier: {:?}",
-                in_flight_descriptions,
-                done_batches,
+                in_flight_descriptions.len(),
+                in_flight_batches.len(),
+                done_batches.len(),
                 batches_frontier,
                 batch_description_frontier
             );
@@ -1101,39 +1103,42 @@ where
             // `upper` line up.
             done_batches.sort_by(|a, b| {
                 if PartialOrder::less_than(a, b) {
-                    Ordering::Less
-                } else if PartialOrder::less_than(b, a) {
                     Ordering::Greater
+                } else if PartialOrder::less_than(b, a) {
+                    Ordering::Less
                 } else {
                     Ordering::Equal
                 }
             });
 
-            // Reverse, as we'll pop batches off the end of the queue.
-            done_batches.reverse();
+            let mut done_batches_iter = done_batches.iter();
 
-            while let Some(done_batch_metadata) = done_batches.pop() {
-                in_flight_descriptions.remove(&done_batch_metadata);
+            let Some(first_batch_description) = done_batches_iter.next() else {
+                upper_cap_set.downgrade(current_upper.borrow().iter());
+                continue;
+            };
 
-                let batch_set = in_flight_batches
-                    .remove(&done_batch_metadata)
-                    .unwrap_or_default();
+            let batch_upper = first_batch_description.1.clone();
 
-                let mut batches = batch_set.finished;
+            let mut batch_lower = if let Some(last_batch_description) = done_batches_iter.last() {
+                last_batch_description.0.clone()
+            } else {
+                first_batch_description.0.clone()
+            };
 
-                trace!(
-                    "persist_sink {collection_id}/{shard_id}: \
-                        done batch: {:?}, {:?}",
-                    done_batch_metadata,
-                    batches
-                );
+            let mut batches: Vec<FinishedBatch> = vec![];
+            let mut batch_metrics: Vec<BatchMetrics> = vec![];
 
-                let (batch_lower, batch_upper) = done_batch_metadata;
+            for batch_metadata in done_batches.drain(..) {
+                in_flight_descriptions.remove(&batch_metadata);
+                let mut batch = in_flight_batches.remove(&batch_metadata).unwrap_or_default();
+                batches.append(&mut batch.finished);
+                batch_metrics.push(batch.batch_metrics);
+            }
 
-                let batch_metrics = batch_set.batch_metrics;
+            let mut to_append = batches.iter_mut().map(|b| &mut b.batch).collect::<Vec<_>>();
 
-                let mut to_append = batches.iter_mut().map(|b| &mut b.batch).collect::<Vec<_>>();
-
+            loop {
                 let result = {
                     let maybe_err = if *read_only_rx.borrow() {
 
@@ -1247,7 +1252,6 @@ where
                     }
                 };
 
-
                 // These metrics are independent of whether it was _us_ or
                 // _someone_ that managed to commit a batch that advanced the
                 // upper.
@@ -1271,21 +1275,27 @@ where
                     Ok(()) => {
                         // Only update these metrics when we know that _we_ were
                         // successful.
-                        source_statistics
-                            .inc_updates_committed_by(batch_metrics.inserts + batch_metrics.retractions);
-                        metrics.processed_batches.inc();
-                        metrics.row_inserts.inc_by(batch_metrics.inserts);
-                        metrics.row_retractions.inc_by(batch_metrics.retractions);
-                        metrics.error_inserts.inc_by(batch_metrics.error_inserts);
-                        metrics
-                            .error_retractions
-                            .inc_by(batch_metrics.error_retractions);
+                        if let Some(batch_metrics) = batch_metrics.drain(..).reduce(|mut l, r| {l.add_assign(&r); l}) {
+                            source_statistics
+                                .inc_updates_committed_by(batch_metrics.inserts + batch_metrics.retractions);
+                            // FIXME(ptravers): we should increment by the total number of batches in the stored batch
+                            // to match prior behaviour.
+                            metrics.processed_batches.inc();
+                            metrics.row_inserts.inc_by(batch_metrics.inserts);
+                            metrics.row_retractions.inc_by(batch_metrics.retractions);
+                            metrics.error_inserts.inc_by(batch_metrics.error_inserts);
+                            metrics
+                                .error_retractions
+                                .inc_by(batch_metrics.error_retractions);
+                        }
 
+                        to_append.clear();
                         current_upper.borrow_mut().clone_from(&batch_upper);
                         upper_cap_set.downgrade(current_upper.borrow().iter());
+                        break;
                     }
                     Err(mismatch) => {
-                        // We tried to to a non-contiguous append, that won't work.
+                        // We tried to do a non-contiguous append, that won't work.
                         if PartialOrder::less_than(&mismatch.current, &batch_lower) {
                             // Best-effort attempt to delete unneeded batches.
                             future::join_all(batches.into_iter().map(|b| b.batch.delete())).await;
@@ -1313,40 +1323,28 @@ where
                             // `!(current_upper < lower)` then it holds that
                             // `lower <= current_upper`.
 
-                            // First, construct a new batch description with the
-                            // lower advanced to the current shard upper.
-                            let new_batch_lower = mismatch.current.clone();
-                            let new_done_batch_metadata = (new_batch_lower.clone(), batch_upper.clone());
-
-                            // Re-add the new batch to the list of batches to
-                            // process.
-                            done_batches.push(new_done_batch_metadata.clone());
-
                             // Retain any batches that are still in advance of
                             // the new lower, and delete any batches that are
                             // not.
-                            //
-                            // Temporary measure: this bookkeeping is made
-                            // possible by the fact that each batch only
-                            // contains data at a single timestamp, even though
-                            // it might declare a larger lower or upper. In the
-                            // future, we'll want to use persist's `append` API
-                            // and let persist handle the truncation internally.
-                            let new_batch_set = in_flight_batches.entry(new_done_batch_metadata).or_default();
                             let mut batch_delete_futures = vec![];
-                            for batch in batches {
-                                if new_batch_lower.less_equal(&batch.data_ts) {
-                                    new_batch_set.finished.push(batch);
-                                } else {
-                                    batch_delete_futures.push(batch.batch.delete());
-                                }
+                            for batch in batches.drain_filter_swapping(|batch| !mismatch.current.less_equal(&batch.data_ts)) {
+                                batch_delete_futures.push(batch.batch.delete());
                             }
+
+                            batch_lower = mismatch.current.clone();
+                            to_append = batches.iter_mut()
+                                .sorted_by(|l, r| Ord::cmp(&l.data_ts, &r.data_ts))
+                                .map(|batch| &mut batch.batch)
+                                .collect::<Vec<_>>();
 
                             // Best-effort attempt to delete unneeded batches.
                             future::join_all(batch_delete_futures).await;
+                            continue;
                         } else {
                             // Best-effort attempt to delete unneeded batches.
                             future::join_all(batches.into_iter().map(|b| b.batch.delete())).await;
+                            current_upper.borrow_mut().clone_from(&mismatch.current);
+                            upper_cap_set.downgrade(current_upper.borrow().iter());
                         }
 
                         if bail_on_concurrent_modification {
@@ -1360,6 +1358,8 @@ where
                             );
                             anyhow::bail!("collection concurrently modified. Ingestion dataflow will be restarted");
                         }
+
+                        break;
                     }
                 }
             }
