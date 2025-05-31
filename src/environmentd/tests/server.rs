@@ -3479,7 +3479,10 @@ fn webhook_concurrency_limit() {
 #[mz_ore::test]
 #[cfg_attr(miri, ignore)] // too slow
 fn webhook_too_large_request() {
-    let server = test_util::TestHarness::default().start_blocking();
+    let metrics_registry = MetricsRegistry::new();
+    let server = test_util::TestHarness::default()
+        .with_metrics_registry(metrics_registry.clone())
+        .start_blocking();
     let mut client = server.connect(postgres::NoTls).unwrap();
 
     // Create a webhook source.
@@ -3503,8 +3506,8 @@ fn webhook_too_large_request() {
     );
 
     // Send an event with a body larger that is exactly our max size.
-    let two_mb = usize::cast_from(bytesize::mb(2u64));
-    let body = vec![42u8; two_mb];
+    let five_mib = usize::cast_from(bytesize::mib(5u64));
+    let body = vec![42u8; five_mib];
     let resp = http_client
         .post(&webhook_url)
         .body(body)
@@ -3513,7 +3516,7 @@ fn webhook_too_large_request() {
     assert!(resp.status().is_success());
 
     // Send an event that is one larger than our max size.
-    let body = vec![42u8; two_mb + 1];
+    let body = vec![42u8; five_mib + 1];
     let resp = http_client
         .post(&webhook_url)
         .body(body)
@@ -3522,6 +3525,26 @@ fn webhook_too_large_request() {
 
     // Note: If this changes then we need to update our docs.
     assert_eq!(resp.status(), StatusCode::PAYLOAD_TOO_LARGE);
+
+    // Ensure we logged a prometheus metric that we responded with a 413.
+    let metrics: Vec<_> = metrics_registry.gather().into_iter().collect();
+    let payload_too_large = metrics
+        .iter()
+        .find(|metric_family| metric_family.get_name() == "mz_http_requests_total")
+        .unwrap()
+        .get_metric()
+        .iter()
+        .find(|metric| {
+            metric
+                .get_label()
+                .iter()
+                .find(|label_pair| label_pair.get_value() == "413")
+                .is_some()
+        })
+        .unwrap()
+        .get_counter()
+        .get_value();
+    assert_eq!(payload_too_large, 1.0);
 }
 
 #[mz_ore::test]
