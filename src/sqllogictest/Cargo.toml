@@ -19,8 +19,10 @@ fallible-iterator = "0.2.0"
 futures = "0.3.31"
 itertools = "0.14.0"
 junit-report = "0.8.3"
+maplit = "1.0.2"
 md-5 = "0.10.6"
 mz-adapter-types = { path = "../adapter-types" }
+mz-authenticator = { path = "../authenticator", default-features = false }
 mz-build-info = { path = "../build-info" }
 mz-catalog = { path = "../catalog" }
 mz-controller = { path = "../controller" }

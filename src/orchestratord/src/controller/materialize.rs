@@ -145,27 +145,25 @@ pub struct MaterializeControllerArgs {
     internal_console_proxy_url: String,
 
     #[clap(long, default_value = "6875")]
-    environmentd_sql_port: i32,
+    environmentd_sql_port: u16,
     #[clap(long, default_value = "6876")]
-    environmentd_http_port: i32,
+    environmentd_http_port: u16,
     #[clap(long, default_value = "6877")]
-    environmentd_internal_sql_port: i32,
+    environmentd_internal_sql_port: u16,
     #[clap(long, default_value = "6878")]
-    environmentd_internal_http_port: i32,
-    #[clap(long)]
-    environmentd_internal_http_host_override: Option<String>,
+    environmentd_internal_http_port: u16,
     #[clap(long, default_value = "6879")]
-    environmentd_internal_persist_pubsub_port: i32,
+    environmentd_internal_persist_pubsub_port: u16,
 
     #[clap(long, default_value = "6875")]
-    balancerd_sql_port: i32,
+    balancerd_sql_port: u16,
     #[clap(long, default_value = "6876")]
-    balancerd_http_port: i32,
+    balancerd_http_port: u16,
     #[clap(long, default_value = "8080")]
-    balancerd_internal_http_port: i32,
+    balancerd_internal_http_port: u16,
 
     #[clap(long, default_value = "8080")]
-    console_http_port: i32,
+    console_http_port: u16,
 
     #[clap(long, default_value = "{}")]
     default_certificate_specs: DefaultCertificateSpecs,
@@ -424,7 +422,6 @@ impl k8s_controller::Context for Context {
                 match resources
                     .apply(
                         &client,
-                        &self.config,
                         increment_generation,
                         mz.should_force_promote(),
                         &mz.namespace(),
@@ -470,6 +467,11 @@ impl k8s_controller::Context for Context {
                         Ok(None)
                     }
                     Err(e) => {
+                        // TODO should we actually tear things down here?
+                        // I don't think we should. This might have some weird behavior if we hit
+                        // transient errors. We might end up tearing down many hours of progress on
+                        // rehydration due to a transient failure to reapply an already working K8S
+                        // object.
                         resources
                             .teardown_generation(&client, mz, next_generation)
                             .await?;
