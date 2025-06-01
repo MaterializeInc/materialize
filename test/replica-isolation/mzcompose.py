@@ -253,9 +253,7 @@ def drop_create_replica(c: Composition) -> None:
             > DROP CLUSTER REPLICA cluster1.replica1
             > CREATE CLUSTER REPLICA cluster1.replica3
               STORAGECTL ADDRESSES ['clusterd_1_1:2100', 'clusterd_1_2:2100'],
-              STORAGE ADDRESSES ['clusterd_1_1:2103', 'clusterd_1_2:2103'],
-              COMPUTECTL ADDRESSES ['clusterd_1_1:2101', 'clusterd_1_2:2101'],
-              COMPUTE ADDRESSES ['clusterd_1_1:2102', 'clusterd_1_2:2102']
+              COMPUTECTL ADDRESSES ['clusterd_1_1:2101', 'clusterd_1_2:2101']
             """
         )
     )
@@ -272,9 +270,7 @@ def create_invalid_replica(c: Composition) -> None:
             """
             > CREATE CLUSTER REPLICA cluster1.replica3
               STORAGECTL ADDRESSES ['no_such_host:2100'],
-              STORAGE ADDRESSES ['no_such_host:2103'],
-              COMPUTECTL ADDRESSES ['no_such_host:2101'],
-              COMPUTE ADDRESSES ['no_such_host:2102']
+              COMPUTECTL ADDRESSES ['no_such_host:2101']
             """
         )
     )
@@ -445,59 +441,79 @@ def run_test(c: Composition, disruption: Disruption, id: int) -> None:
     c.rm_volumes("mzdata")
     print(f"+++ Running disruption scenario {disruption.name}")
 
-    c.up("testdrive", persistent=True)
-    c.up("materialized", "clusterd_1_1", "clusterd_1_2", "clusterd_2_1", "clusterd_2_2")
-
-    c.sql(
-        "ALTER SYSTEM SET unsafe_enable_unorchestrated_cluster_replicas = true;",
-        port=6877,
-        user="mz_system",
-    )
-
-    if any(isinstance(check, ArrangedIntro) for check in disruption.compaction_checks):
-        # Disable introspection subscribes because they break the
-        # `ArrangedIntro` check by disabling compaction of logging indexes
-        # on all replicas if one of the replicas is failing. That's because
-        # of a defect of replica-targeted subscribes: They get installed on
-        # all replicas but only the targeted replica can drive the write
-        # frontier forward. If the targeted replica is crashing, the write
-        # frontier cannot advance and thus the read frontier cannot either.
-        #
-        # TODO(database-issues#8091): Fix this by installing targeted subscribes only on the
-        #               targeted replica.
-        c.sql(
-            "ALTER SYSTEM SET enable_introspection_subscribes = false;",
-            port=6877,
-            user="mz_system",
-        )
-
-    c.sql(
-        """
-        CREATE CLUSTER cluster1 REPLICAS (
-            replica1 (
-                STORAGECTL ADDRESSES ['clusterd_1_1:2100', 'clusterd_1_2:2100'],
-                STORAGE ADDRESSES ['clusterd_1_1:2103', 'clusterd_1_2:2103'],
-                COMPUTECTL ADDRESSES ['clusterd_1_1:2101', 'clusterd_1_2:2101'],
-                COMPUTE ADDRESSES ['clusterd_1_1:2102', 'clusterd_1_2:2102']
-            ),
-            replica2 (
-                STORAGECTL ADDRESSES ['clusterd_2_1:2100', 'clusterd_2_2:2100'],
-                STORAGE ADDRESSES ['clusterd_2_1:2103', 'clusterd_2_2:2103'],
-                COMPUTECTL ADDRESSES ['clusterd_2_1:2101', 'clusterd_2_2:2101'],
-                COMPUTE ADDRESSES ['clusterd_2_1:2102', 'clusterd_2_2:2102']
-            )
-        )
-        """
-    )
-
     with c.override(
         Testdrive(
             no_reset=True,
             materialize_params={"cluster": "cluster1"},
             seed=id,
             default_timeout="300s",
-        )
+        ),
+        Clusterd(
+            name="clusterd_1_1",
+            process_names=["clusterd_1_1", "clusterd_1_2"],
+        ),
+        Clusterd(
+            name="clusterd_1_2",
+            process_names=["clusterd_1_1", "clusterd_1_2"],
+        ),
+        Clusterd(
+            name="clusterd_2_1",
+            process_names=["clusterd_2_1", "clusterd_2_2"],
+        ),
+        Clusterd(
+            name="clusterd_2_2",
+            process_names=["clusterd_2_1", "clusterd_2_2"],
+        ),
     ):
+        c.up("testdrive", persistent=True)
+        c.up(
+            "materialized",
+            "clusterd_1_1",
+            "clusterd_1_2",
+            "clusterd_2_1",
+            "clusterd_2_2",
+        )
+
+        c.sql(
+            "ALTER SYSTEM SET unsafe_enable_unorchestrated_cluster_replicas = true;",
+            port=6877,
+            user="mz_system",
+        )
+
+        if any(
+            isinstance(check, ArrangedIntro) for check in disruption.compaction_checks
+        ):
+            # Disable introspection subscribes because they break the
+            # `ArrangedIntro` check by disabling compaction of logging indexes
+            # on all replicas if one of the replicas is failing. That's because
+            # of a defect of replica-targeted subscribes: They get installed on
+            # all replicas but only the targeted replica can drive the write
+            # frontier forward. If the targeted replica is crashing, the write
+            # frontier cannot advance and thus the read frontier cannot either.
+            #
+            # TODO(database-issues#8091): Fix this by installing targeted subscribes only on the
+            #               targeted replica.
+            c.sql(
+                "ALTER SYSTEM SET enable_introspection_subscribes = false;",
+                port=6877,
+                user="mz_system",
+            )
+
+        c.sql(
+            """
+            CREATE CLUSTER cluster1 REPLICAS (
+                replica1 (
+                    STORAGECTL ADDRESSES ['clusterd_1_1:2100', 'clusterd_1_2:2100'],
+                    COMPUTECTL ADDRESSES ['clusterd_1_1:2101', 'clusterd_1_2:2101']
+                ),
+                replica2 (
+                    STORAGECTL ADDRESSES ['clusterd_2_1:2100', 'clusterd_2_2:2100'],
+                    COMPUTECTL ADDRESSES ['clusterd_2_1:2101', 'clusterd_2_2:2101']
+                )
+            )
+            """
+        )
+
         populate(c)
 
         # Disrupt replica1 by some means
