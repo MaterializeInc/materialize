@@ -283,8 +283,8 @@ hyper = { version = "0.14.27", default-features = false, features = ["runtime"] 
 linux-raw-sys = { version = "0.4.15", default-features = false, features = ["elf", "errno", "general", "if_ether", "ioctl", "net", "netlink", "no_std", "prctl", "std", "xdp"] }
 miniz_oxide = { version = "0.8.8", default-features = false, features = ["with-alloc"] }
 native-tls = { version = "0.2.14", default-features = false, features = ["vendored"] }
-openssl = { version = "0.10.72", features = ["vendored"] }
-openssl-sys = { version = "0.9.108", default-features = false, features = ["vendored"] }
+openssl = { version = "0.10.73", features = ["vendored"] }
+openssl-sys = { version = "0.9.109", default-features = false, features = ["vendored"] }
 pathdiff = { version = "0.2.3", default-features = false, features = ["camino"] }
 ring = { version = "0.17.14", features = ["std"] }
 rustix-d585fab2519d2d1 = { package = "rustix", version = "0.38.44", features = ["event", "fs", "net", "pipe", "process", "termios", "time"] }
@@ -296,8 +296,8 @@ hyper = { version = "0.14.27", default-features = false, features = ["runtime"] 
 linux-raw-sys = { version = "0.4.15", default-features = false, features = ["elf", "errno", "general", "if_ether", "ioctl", "net", "netlink", "no_std", "prctl", "std", "xdp"] }
 miniz_oxide = { version = "0.8.8", default-features = false, features = ["with-alloc"] }
 native-tls = { version = "0.2.14", default-features = false, features = ["vendored"] }
-openssl = { version = "0.10.72", features = ["vendored"] }
-openssl-sys = { version = "0.9.108", default-features = false, features = ["vendored"] }
+openssl = { version = "0.10.73", features = ["vendored"] }
+openssl-sys = { version = "0.9.109", default-features = false, features = ["vendored"] }
 pathdiff = { version = "0.2.3", default-features = false, features = ["camino"] }
 ring = { version = "0.17.14", features = ["std"] }
 rustix-d585fab2519d2d1 = { package = "rustix", version = "0.38.44", features = ["event", "fs", "net", "pipe", "process", "termios", "time"] }
