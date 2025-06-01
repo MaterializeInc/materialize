@@ -26,6 +26,7 @@ use mz_sql_parser::parser::parse_statements;
 use mz_sql_pretty::PrettyConfig;
 use regex::Regex;
 use ropey::Rope;
+use serde::de::DeserializeOwned;
 use serde::Serialize;
 use serde_json::{Value, json};
 use tokio::sync::Mutex;
@@ -303,31 +304,34 @@ impl LanguageServer for Backend {
     async fn execute_command(&self, command_params: ExecuteCommandParams) -> Result<Option<Value>> {
         match command_params.command.as_str() {
             "parse" => {
-                let json_args = command_params.arguments.get(0);
+                let args: String = get_first_param(command_params)?;
+                let statements = parse_statements(&args)
+                    .map_err(|_| build_error("Error parsing the statements."))?;
 
-                if let Some(json_args) = json_args {
-                    let args = serde_json::from_value::<String>(json_args.clone())
-                        .map_err(|_| build_error("Error deserializing parse args as String."))?;
-                    let statements = parse_statements(&args)
-                        .map_err(|_| build_error("Error parsing the statements."))?;
+                // Transform raw statements to splitted statements
+                // and infere the kind.
+                // E.g. if it is a select or a create_table statement.
+                let parse_statements: Vec<ExecuteCommandParseStatement> = statements
+                    .iter()
+                    .map(|x| ExecuteCommandParseStatement {
+                        kind: statement_kind_label_value(x.ast.clone().into()).to_string(),
+                        sql: x.sql.to_string(),
+                    })
+                    .collect();
 
-                    // Transform raw statements to splitted statements
-                    // and infere the kind.
-                    // E.g. if it is a select or a create_table statement.
-                    let parse_statements: Vec<ExecuteCommandParseStatement> = statements
-                        .iter()
-                        .map(|x| ExecuteCommandParseStatement {
-                            kind: statement_kind_label_value(x.ast.clone().into()).to_string(),
-                            sql: x.sql.to_string(),
-                        })
-                        .collect();
+                return Ok(Some(json!(ExecuteCommandParseResponse {
+                    statements: parse_statements
+                })));
+            }
+            "optionsUpdate" => {
+                let args: InitializeOptions = get_first_param(command_params)?;
 
-                    return Ok(Some(json!(ExecuteCommandParseResponse {
-                        statements: parse_statements
-                    })));
-                } else {
-                    return Err(build_error("Missing command args."));
+                if let Some(formatting_width) = args.formatting_width {
+                    let mut formatting_width_guard = self.formatting_width.lock().await;
+                    *formatting_width_guard = formatting_width;
                 }
+
+                return Ok(None);
             }
             "optionsUpdate" => {
                 let json_args = command_params.arguments.get(0);
@@ -711,5 +715,30 @@ fn build_error(message: &'static str) -> tower_lsp::jsonrpc::Error {
         code: ErrorCode::InternalError,
         message: std::borrow::Cow::Borrowed(message),
         data: None,
+    }
+}
+
+/// Parses and returns the first argument from the provided [ExecuteCommandParams]
+/// using the generic type `T`.
+///
+/// Command parameters are expected to be inside an array, but typically,
+/// only a single parameter is present within the array. This function serves as a utility
+/// to avoid code repetition when retrieving that single parameter.
+///
+/// # Note
+///
+/// Ensure that the type `T` implements the `DeserializeOwned` trait for successful deserialization.
+fn get_first_param<T>(cmd: ExecuteCommandParams) -> Result<T>
+where
+    T: DeserializeOwned,
+{
+    let json_args = cmd.arguments.get(0);
+
+    if let Some(json_args) = json_args {
+        let args = serde_json::from_value::<T>(json_args.clone())
+            .map_err(|_| build_error("Error deserializing parse args as String."))?;
+        Ok(args)
+    } else {
+        Err(build_error("Missing command args."))
     }
 }
