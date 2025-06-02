@@ -2059,6 +2059,7 @@ impl CatalogState {
                     size,
                     ReplicaAllocation {
                         memory_limit,
+                        memory_request: _,
                         cpu_limit,
                         disk_limit,
                         scale,
@@ -2083,7 +2084,6 @@ impl CatalogState {
                         u64::cast_from(*workers).into(),
                         cpu_limit.as_nanocpus().into(),
                         memory_bytes.into(),
-                        // TODO(guswynn): disk size will be filled in later.
                         disk_bytes.into(),
                         (*credits_per_hour).into(),
                     ]);
