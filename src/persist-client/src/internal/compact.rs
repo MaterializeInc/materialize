@@ -50,8 +50,6 @@ use crate::internal::trace::{ApplyMergeResult, FueledMergeRes};
 use crate::iter::{Consolidator, StructuredSort};
 use crate::{Metrics, PersistConfig, ShardId};
 
-use super::state::HollowRunRef;
-
 /// A request for compaction.
 ///
 /// This is similar to FueledMergeReq, but intentionally a different type. If we

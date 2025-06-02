@@ -44,9 +44,7 @@ use crate::internal::compact::{CompactConfig, Compactor};
 use crate::internal::encoding::{Schemas, check_data_version};
 use crate::internal::machine::{CompareAndAppendRes, ExpireFn, Machine};
 use crate::internal::metrics::Metrics;
-use crate::internal::state::{
-    BatchPart, HandleDebugState, HollowBatch, HollowRunRef, RunOrder, RunPart,
-};
+use crate::internal::state::{BatchPart, HandleDebugState, HollowBatch, RunOrder, RunPart};
 use crate::read::ReadHandle;
 use crate::schema::PartMigration;
 use crate::{GarbageCollector, IsolatedRuntime, PersistConfig, ShardId, parse_id};

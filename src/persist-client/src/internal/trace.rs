@@ -970,13 +970,13 @@ impl<T: Timestamp + Lattice + Codec64> SpineBatch<T> {
                 })
                 .flatten();
 
-            // This is a bit hacky, but when we are a tombstone a empty batch
-            // gets applied to us, which has no parts.
-            assert_eq!(
-                old_diffs_sum, new_diffs_sum,
-                "merge res diffs sum ({:?}) did not match spine batch diffs sum ({:?})",
-                new_diffs_sum, old_diffs_sum
-            );
+            if !res.output.parts.is_empty() {
+                assert_eq!(
+                    old_diffs_sum, new_diffs_sum,
+                    "merge res diffs sum ({:?}) did not match spine batch diffs sum ({:?})",
+                    new_diffs_sum, old_diffs_sum
+                );
+            }
 
             // Spine internally has an invariant about a batch being at some level
             // or higher based on the len. We could end up violating this invariant
@@ -1014,11 +1014,13 @@ impl<T: Timestamp + Lattice + Codec64> SpineBatch<T> {
                 })
                 .flatten();
 
-            assert_eq!(
-                old_diffs_sum, new_diffs_sum,
-                "merge res diffs sum ({:?}) did not match spine batch diffs sum ({:?})",
-                new_diffs_sum, old_diffs_sum
-            );
+            if !res.output.parts.is_empty() {
+                assert_eq!(
+                    old_diffs_sum, new_diffs_sum,
+                    "merge res diffs sum ({:?}) did not match spine batch diffs sum ({:?})",
+                    new_diffs_sum, old_diffs_sum
+                );
+            }
 
             self.perform_subset_replacement(res, lower_idx, upper_idx, id_lower, id_upper)
         } else {

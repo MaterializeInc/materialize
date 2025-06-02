@@ -1436,7 +1436,7 @@ pub mod datadriven {
     use crate::internal::encoding::Schemas;
     use crate::internal::gc::GcReq;
     use crate::internal::paths::{BlobKey, BlobKeyPrefix, PartialBlobKey};
-    use crate::internal::state::{BatchPart, HollowRunRef, RunOrder, RunPart};
+    use crate::internal::state::{BatchPart, RunOrder, RunPart};
     use crate::internal::state_versions::EncodedRollup;
     use crate::read::{Listen, ListenEvent, READER_LEASE_DURATION};
     use crate::rpc::NoopPubSubSender;

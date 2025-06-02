@@ -14,7 +14,6 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Debug;
 use std::marker::PhantomData;
 use std::mem;
-use std::pin::Pin;
 use std::sync::Arc;
 use std::time::Instant;
 
