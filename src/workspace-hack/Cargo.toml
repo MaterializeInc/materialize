@@ -105,7 +105,7 @@ quote = { version = "1.0.40" }
 rand = { version = "0.8.5", features = ["small_rng"] }
 rand_chacha = { version = "0.3.0" }
 rand_core = { version = "0.6.4", default-features = false, features = ["std"] }
-rdkafka-sys = { git = "https://github.com/MaterializeInc/rust-rdkafka.git", features = ["cmake-build", "libz-static", "ssl-vendored", "zstd"] }
+rdkafka-sys = { git = "https://github.com/teskje/rust-rdkafka.git", branch = "ndebug", features = ["cmake-build", "libz-static", "ssl-vendored", "zstd"] }
 regex = { version = "1.11.1" }
 regex-automata = { version = "0.4.9", default-features = false, features = ["dfa", "hybrid", "meta", "nfa", "perf", "unicode"] }
 regex-syntax = { version = "0.8.5" }
@@ -236,7 +236,7 @@ quote = { version = "1.0.40" }
 rand = { version = "0.8.5", features = ["small_rng"] }
 rand_chacha = { version = "0.3.0" }
 rand_core = { version = "0.6.4", default-features = false, features = ["std"] }
-rdkafka-sys = { git = "https://github.com/MaterializeInc/rust-rdkafka.git", features = ["cmake-build", "libz-static", "ssl-vendored", "zstd"] }
+rdkafka-sys = { git = "https://github.com/teskje/rust-rdkafka.git", branch = "ndebug", features = ["cmake-build", "libz-static", "ssl-vendored", "zstd"] }
 regex = { version = "1.11.1" }
 regex-automata = { version = "0.4.9", default-features = false, features = ["dfa", "hybrid", "meta", "nfa", "perf", "unicode"] }
 regex-syntax = { version = "0.8.5" }
