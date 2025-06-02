@@ -6,9 +6,11 @@ Associated:
 - [Original statement lifecycle design doc](https://github.com/MaterializeInc/materialize/blob/4487749289f1591e7918ebaa1458e23b5e40633f/doc/developer/design/20231204_query_lifecycle_events_logging.md)
 - [Slack discussion](https://materializeinc.slack.com/archives/C08ACQNGSQK/p1747394353074239?thread_ts=1747394055.561859&cid=C08ACQNGSQK)
 
+This design doc is split into short term and medium/long term parts.
+
 ## The Problem
 
-We'd like to have more visibility into query lifecycle, with regards to how much time is spent at each stage. This will be needed both for debugging slow queries, and for being able to confidently tell how much time is spent in Materialize when an external system queries us.
+We'd like to have more visibility into query lifecycle, with regards to how much time is spent at each stage. This will be needed both for debugging slow queries, and for being able to confidently tell how much time is spent in Materialize when an external system queries us. In the short term, we concentrate on just the latter.
 
 Currently, there are the `began_at` and `finished_at` fields of `mz_statement_execution_history`, and the difference between these (the "Duration" column in the Console's Query History) is intended to show the total time in Materialize. However, `began_at` is taken after some minor steps of processing a query have already taken place. In particular, it doesn't include parsing time, because we take the `began_at` timestamp in the Coordinator in `begin_statement_execution`, but parsing and other things happen in the Adapter frontend (see `pgwire/src/protocol.rs`).
 
@@ -16,33 +18,11 @@ Currently, there are the `began_at` and `finished_at` fields of `mz_statement_ex
 
 ## Success Criteria -- Short Term
 
-In the short term, we concentrate on just being able to confidently tell how much time is spent in Materialize when an external system makes a queries us.
-
-## Success Criteria -- Long Term
-
-In the long term, we'd like as much detailed visibility into the query lifecycle as possible, so that users and Materialize engineers can understand where time is spent when executing ad hoc queries. This will be important for knowing where to focus our optimization efforts to bring down end-to-end latency
-
-Some needed lifecycle events:
-- receiving (at the `conn.recv()` in `advance_ready` in `protocol.rs`, roughly corresponding to last byte received) and when completing the processing of each message type of the Extended Query flow of pgwire;
-- parsing is finished;
-- optimization began (see [pull/32508](https://github.com/MaterializeInc/materialize/pull/32508) for why we need this one in particular).
-
-There is a much bigger list of potentially needed lifecycle events at
-[#9140](https://github.com/MaterializeInc/database-issues/issues/9140), which will be updated continuously as we are learning about exactly where we need more details.
+In the short term, we concentrate on just being able to confidently tell how much time is spent in Materialize when an external system queries us.
 
 ## Out of Scope -- Short Term
 
 We won't add new lifecycle events or new columns to internal tables due to [concerns about data volume](https://materializeinc.slack.com/archives/C08ACQNGSQK/p1747394353074239?thread_ts=1747394055.561859&cid=C08ACQNGSQK).
-
-## Out of Scope -- Medium Term
-
-We won't yet measure
-- the time from the moment a query lands at the balancer to the moment it lands at envd;
-- the time it takes for the tokio event loop in `protocol.rs` to come around to processing the next incoming query and the time of the `recv` call itself.
-
-It would be great to eventually measure the above, but it would greatly complicate the implementation. We can revisit this if the need comes up.
-
-We are also not going to measure time between first byte received and last byte received.
 
 ## Background
 
@@ -78,11 +58,49 @@ We'll create metrics for certain query processing stages that we hope to always 
 
 We'll take `began_at` (and with it the `execution-began` lifecycle event) not in the Coordinator, but in the Adapter frontend. Specifically, we'll take it when the `conn.recv()` call in `advance_ready` in `protocol.rs` returns. For the Extended Query flow, this means the receiving time of the `Execute` message, and does not include e.g., `Parse` and `Bind`. For the Simple Query flow, this means the receiving time of the single message that specifies the query.
 
-## Minimal Viable Prototype
+Note that this means `began_at` will include the time from the Adapter frontend sending a message to the coordinator to the Coordinator starting to process that message. This should usually be a short time, unless the Coordinator is very busy.
+
+## Prototype
 
 I have a prototype that doesn't add new builtin tables or change schemas in existing ones, but just adds events to the existing `mz_statement_lifecycle_history` without regard to prepared statements:
 https://github.com/MaterializeInc/materialize/pull/32424
 The prototype shows how we can transfer information between `protocol.rs` and the already existing lifecycle logging code in the Coordinator through portals. We can reuse this code for the "Move `began_at` to be taken earlier" part above.
+
+## Summary of changes in what is included in query time measurements
+
+Currently, the time we spend in the Adapter frontend is not included in query time measurements.
+
+The most prominent part of the time we spend in the Adapter frontend is query parsing. After the above changes:
+- for the "Simple Query" flow, parsing will be included in the `began_at` - `finished_at` interval;
+- for the "Extended Query" flow, parsing (and the processing of the bind message) will not be included in the `began_at` - `finished_at` interval. However, we'll create a metric by which we can verify that parsing and binding always take a short time.
+
+Another component of the time we spend in the Adapter frontend the wait for the Coordinator message loop to come around to start processing the `execute` message sent from the Adapter frontend. This is currently not accounted for at all, but will be after the above changes. More specifically:
+- For the "Simple Query" flow, it will be included in the `began_at` - `finished_at` interval.
+- For the "Extended Query" flow, it will be included in the `began_at` - `finished_at` interval for the `execute` message, but not for the other messages (`Parse`, `Bind`, ...). However, the planned metrics will include these.
+
+## ------ MVP up until here, medium/long term plans below ------
+
+## Success Criteria -- Long Term
+
+In the long term, we'd like as much detailed visibility into the query lifecycle as possible, so that users and Materialize engineers can understand where time is spent when executing ad hoc queries. This will be important for knowing where to focus our optimization efforts to bring down end-to-end latency
+
+Some needed lifecycle events:
+- receiving (at the `conn.recv()` in `advance_ready` in `protocol.rs`, roughly corresponding to last byte received) and when completing the processing of each message type of the Extended Query flow of pgwire;
+- parsing is finished;
+- optimization began (see [pull/32508](https://github.com/MaterializeInc/materialize/pull/32508) for why we need this one in particular).
+
+There is a much bigger list of potentially needed lifecycle events at
+[#9140](https://github.com/MaterializeInc/database-issues/issues/9140), which will be updated continuously as we are learning about exactly where we need more details.
+
+## Out of Scope -- Medium Term
+
+We won't yet measure
+- the time from the moment a query lands at the balancer to the moment it lands at envd;
+- the time it takes for the tokio event loop in `protocol.rs` to come around to processing the next incoming query and the time of the `recv` call itself.
+
+It would be great to eventually measure the above, but it would greatly complicate the implementation. We can revisit this if the need comes up.
+
+We are also not going to measure time between first byte received and last byte received.
 
 ## Solution Proposal -- Medium Term
 
