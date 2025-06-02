@@ -32,7 +32,7 @@ declare -A shortlinks=(
     [non-materialized-error]="https://materialize.com/docs/lts/sql/create-view/#querying-non-materialized-views"
     [sink-key-selection]="https://materialize.com/docs/sql/create-sink/kafka/#upsert-key-selection"
     [aws-connection-role-trust-policy]="https://materialize.com/docs/sql/create-connection/#permissions"
-    [chat]="https://join.slack.com/t/materializecommunity/shared_invite/zt-34nbpxlpy-xhWQqSeqtLTn3n_iL7AYMQ"
+    [chat]="https://join.slack.com/t/materializecommunity/shared_invite/zt-36u094n7l-M_fE43Lfpy74kCyI9Ar~7w"
     [pricing]="https://materialize.com/pdfs/pricing.pdf"
 )
 
