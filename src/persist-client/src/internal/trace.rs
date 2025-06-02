@@ -939,7 +939,7 @@ impl<T: Timestamp + Lattice + Codec64> SpineBatch<T> {
             return ApplyMergeResult::NotAppliedInvalidSince;
         }
 
-        let new_diffs_sum: D = res
+        let new_diffs_sum = res
             .output
             .parts
             .iter()
@@ -950,14 +950,13 @@ impl<T: Timestamp + Lattice + Codec64> SpineBatch<T> {
             .reduce(|mut a, b| {
                 a.plus_equals(&b);
                 a
-            })
-            .expect("new batch must have diffs sum");
+            });
 
         // If our merge result exactly matches a spine batch, we can swap it in directly
         let exact_match = res.output.desc.lower() == self.desc().lower()
             && res.output.desc.upper() == self.desc().upper();
         if exact_match {
-            let old_diffs_sum: Option<D> = self
+            let old_diffs_sum = self
                 .parts
                 .iter()
                 .flat_map(|p| p.batch.parts.iter())
@@ -973,13 +972,11 @@ impl<T: Timestamp + Lattice + Codec64> SpineBatch<T> {
 
             // This is a bit hacky, but when we are a tombstone a empty batch
             // gets applied to us, which has no parts.
-            if let Some(old_sum) = old_diffs_sum {
-                assert_eq!(
-                    old_sum, new_diffs_sum,
-                    "merge res diffs sum ({:?}) did not match spine batch diffs sum ({:?})",
-                    new_diffs_sum, old_sum
-                );
-            }
+            assert_eq!(
+                old_diffs_sum, new_diffs_sum,
+                "merge res diffs sum ({:?}) did not match spine batch diffs sum ({:?})",
+                new_diffs_sum, old_diffs_sum
+            );
 
             // Spine internally has an invariant about a batch being at some level
             // or higher based on the len. We could end up violating this invariant
@@ -1001,7 +998,7 @@ impl<T: Timestamp + Lattice + Codec64> SpineBatch<T> {
 
         // Try subset replacement
         if let Some((lower_idx, upper_idx, id_lower, id_upper)) = self.find_replacement_range(res) {
-            let old_diffs_sum: Option<D> = self
+            let old_diffs_sum = self
                 .parts
                 .iter()
                 .skip(lower_idx)
@@ -1017,13 +1014,11 @@ impl<T: Timestamp + Lattice + Codec64> SpineBatch<T> {
                 })
                 .flatten();
 
-            if let Some(old_sum) = old_diffs_sum {
-                assert_eq!(
-                    old_sum, new_diffs_sum,
-                    "merge res diffs sum ({:?}) did not match spine batch diffs sum ({:?})",
-                    new_diffs_sum, old_sum
-                );
-            }
+            assert_eq!(
+                old_diffs_sum, new_diffs_sum,
+                "merge res diffs sum ({:?}) did not match spine batch diffs sum ({:?})",
+                new_diffs_sum, old_diffs_sum
+            );
 
             self.perform_subset_replacement(res, lower_idx, upper_idx, id_lower, id_upper)
         } else {
