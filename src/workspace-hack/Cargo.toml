@@ -167,7 +167,7 @@ bitflags = { version = "2.9.0", default-features = false, features = ["std"] }
 bstr = { version = "1.10.0" }
 byteorder = { version = "1.5.0" }
 bytes = { version = "1.10.1", features = ["serde"] }
-cc = { version = "1.2.24", default-features = false, features = ["parallel"] }
+cc = { version = "1.2.25", default-features = false, features = ["parallel"] }
 chrono = { version = "0.4.39", features = ["serde"] }
 clap = { version = "4.5.23", features = ["derive", "env", "string", "wrap_help"] }
 clap_builder = { version = "4.5.23", default-features = false, features = ["color", "env", "std", "string", "suggestions", "usage", "wrap_help"] }
