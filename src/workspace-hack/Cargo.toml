@@ -131,7 +131,7 @@ toml_datetime = { version = "0.6.9", default-features = false, features = ["serd
 toml_edit = { version = "0.22.26", features = ["serde"] }
 tonic = { version = "0.12.3", features = ["gzip"] }
 tower = { version = "0.5.2", default-features = false, features = ["balance", "buffer", "filter", "limit", "load-shed", "log", "retry", "timeout"] }
-tower-http = { version = "0.6.4", features = ["auth", "cors", "map-response-body", "trace", "util"] }
+tower-http = { version = "0.6.5", features = ["auth", "cors", "map-response-body", "trace", "util"] }
 tracing = { version = "0.1.41", features = ["log"] }
 tracing-core = { version = "0.1.33" }
 tracing-subscriber = { version = "0.3.19", features = ["env-filter", "json"] }
@@ -263,7 +263,7 @@ toml_datetime = { version = "0.6.9", default-features = false, features = ["serd
 toml_edit = { version = "0.22.26", features = ["serde"] }
 tonic = { version = "0.12.3", features = ["gzip"] }
 tower = { version = "0.5.2", default-features = false, features = ["balance", "buffer", "filter", "limit", "load-shed", "log", "retry", "timeout"] }
-tower-http = { version = "0.6.4", features = ["auth", "cors", "map-response-body", "trace", "util"] }
+tower-http = { version = "0.6.5", features = ["auth", "cors", "map-response-body", "trace", "util"] }
 tracing = { version = "0.1.41", features = ["log"] }
 tracing-core = { version = "0.1.33" }
 tracing-subscriber = { version = "0.3.19", features = ["env-filter", "json"] }
@@ -284,8 +284,8 @@ linux-raw-sys-274715c4dabd11b0 = { package = "linux-raw-sys", version = "0.9.4",
 linux-raw-sys-9fbad63c4bcf4a8f = { package = "linux-raw-sys", version = "0.4.15", default-features = false, features = ["elf", "errno", "general", "if_ether", "ioctl", "net", "netlink", "no_std", "prctl", "std", "xdp"] }
 miniz_oxide = { version = "0.8.8", default-features = false, features = ["with-alloc"] }
 native-tls = { version = "0.2.14", default-features = false, features = ["vendored"] }
-openssl = { version = "0.10.72", features = ["vendored"] }
-openssl-sys = { version = "0.9.108", default-features = false, features = ["vendored"] }
+openssl = { version = "0.10.73", features = ["vendored"] }
+openssl-sys = { version = "0.9.109", default-features = false, features = ["vendored"] }
 pathdiff = { version = "0.2.3", default-features = false, features = ["camino"] }
 ring = { version = "0.17.14", features = ["std"] }
 rustix-d585fab2519d2d1 = { package = "rustix", version = "0.38.44", features = ["fs", "net", "process", "termios"] }
@@ -298,8 +298,8 @@ linux-raw-sys-274715c4dabd11b0 = { package = "linux-raw-sys", version = "0.9.4",
 linux-raw-sys-9fbad63c4bcf4a8f = { package = "linux-raw-sys", version = "0.4.15", default-features = false, features = ["elf", "errno", "general", "if_ether", "ioctl", "net", "netlink", "no_std", "prctl", "std", "xdp"] }
 miniz_oxide = { version = "0.8.8", default-features = false, features = ["with-alloc"] }
 native-tls = { version = "0.2.14", default-features = false, features = ["vendored"] }
-openssl = { version = "0.10.72", features = ["vendored"] }
-openssl-sys = { version = "0.9.108", default-features = false, features = ["vendored"] }
+openssl = { version = "0.10.73", features = ["vendored"] }
+openssl-sys = { version = "0.9.109", default-features = false, features = ["vendored"] }
 pathdiff = { version = "0.2.3", default-features = false, features = ["camino"] }
 ring = { version = "0.17.14", features = ["std"] }
 rustix-d585fab2519d2d1 = { package = "rustix", version = "0.38.44", features = ["fs", "net", "process", "termios"] }
