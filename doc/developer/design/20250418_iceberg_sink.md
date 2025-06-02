@@ -102,10 +102,10 @@ TO ICEBERG CATALOG iceberg_catalog_connection
 USING AWS CONNECTION iceberg_s3_conn
 NAMESPACE "namespace_name" TABLE "table_name"
 WITH (
-    COMMIT INTERVAL = '20m', -- commit data to the iceberg table every 20 minutes of wall clock time, optional.
+    COMMIT INTERVAL = '20m', -- commit data to the iceberg table every 20 minutes of MZ time, optional.
 );
 ```
-*Appending data to iceberg requires uploading metadata and data files, and reading data requires accessing metadata to know which data files need to be retrieved. It is inefficient to write very small updates, and very resource intensive for readers to perform the reads when there are many small updates.  To give users control over the dimensions of the appended data, Materialize will allow users to optionally specify a commit interval for the sink. Materialize will commit an update to the iceberg table after the commit interval has elapsed, with the caveat that the commit will respect frontiers.*
+*Appending data to iceberg requires uploading metadata and data files, and reading data requires accessing metadata to know which data files need to be retrieved. It is inefficient to write very small updates, and very resource intensive for readers to perform the reads when there are many small updates.  To give users control over the dimensions of the appended data, Materialize will allow users to optionally specify a commit interval for the sink. Materialize will commit an update to the iceberg table after the commit interval has elapsed.  The commit interval is given in MZ time, which is the timestamp assigned by Materialize to events, disctinct from wall clock time.*
 
 
 ### Iceberg Concepts
@@ -145,7 +145,7 @@ Materialize will utilize `Fast Append`, which avoids rewrites of manifest files 
 
 Appends to the iceberg table are performed transactionally. Data is written to one or more parquet files in the object store.  Upon completion of the writes, the append is committed to the iceberg table. Each append will reflect all updates from the last committed frontier to some later frontier. In upsert mode, every Iceberg snapshot will reflect the full contents of the upstream collection as-of some frontier.
 
-The frequency of commits is determined by the commit interval, which is a duration of wall clock time that must elapse since the last append (or start of the dataflow) before the sink attempts to commit changes to the iceberg table. If the commit interval is not set, the sink will perform an append for each event time. The actual elapsed wall clock time between appends may be greater than the commit interval, but it will not be shorter. For example, there may be a large number of updates at a given event time which must be written out before the append can be committed. Once the append is complete, the sink will publish progress to persist. There is no intention, at this time, to make the appends deterministic. In general, the recovery for a failed commit is to suspend-and-restart.  The exception is if the commit failed for a retryable reason (e.g. icberg table compaction raced with the append), in which case the commit can be retried using the same set of parquet files.
+The frequency of commits is determined by the commit interval, which is a duration of MZ time that must elapse since the last append (or start of the dataflow) before the sink attempts to commit changes to the iceberg table. If the commit interval is not set, the sink will perform an append for each event time.
 
 The append process does not attempt to delete files on a failed commit. S3Tables, for example, does not allow `DeleteObject` and returns a 403 (in my testing, but I could not find this documented). Orphaned files will be cleaned up by [iceberg maintenance tasks](#cleanup-of-orphaned-files).
 
@@ -195,13 +195,10 @@ A MVP implementation will support the following:
 - Store Materialize properties (timestamp, sink version) within iceberg metadata
     - Table `properties` field
         - The [iceberg specification](https://iceberg.apache.org/spec/#table-metadata-fields) calls out that this field intended to control table reading/writing, not for arbitrary metadata.
-- Alternatives to wall clock time for `COMMIT INTERVAL`
-    - Use mztime instead of wall clock time.
-        - This would be a step toward making uploads deterministic.
-        - For a upstream source that's running behind, this may see only 1 minute of mztime pass for every 10 minutes of wall clock time, resulting in long delays in appends.  The mztime approach would yield a larger update than a wall clock approach, but at a much longer delay.
-        - A user of Materialize would readily understand wall clock time, but the semantics of mztime would very likely require explanation, making it less user friendly.
-    - Use the number of MZ timestamps
-        - This is much like using mztime, other than a user needs to know less about mztime time, only that some number of updates will be batched together.
+- Alternatives to MZ time for `COMMIT INTERVAL`
+    - Use wall clock time instead of MZ time
+        - Doesn't require extra explanation, wall clock time is well understood, but MZ time is not.
+        - Wall clock time requires extra handling to ensure that if the commit interval has expired, all updates at the same event time are still part of the same iceberg transaction.
 - Using metadata DB and a 2PC approach for fencing and tracking write transactions (a very abridged version)
     - This approach requires maintianing a record in the form of `(GlobalId, epoch, phase, payload)`. A coordinator will condtionally upsert a new record when initiating a transaction, `(GlobalId, epoch+1, phase, payload)` for `(GlobalId, epoch)`.  If this fails to update due to a contraint or condition violation, the process(es) that failed are fenced. Phase would be either `precommit` or `commit`.  Payload, for a sink, would be `(ts, sink_version, snapshot_id)` - denoting the greatest MZ timestamp contained within the apped, the version of the sink, and the snapshot_id intended to be stored there.
     - A writer will record a message with `epoch+1` and phase `precommit`.  Start a transaction to update the record to `epoch+1` and phase`commit`, commit to iceberg, finally commit the transaction in the metadata store.
