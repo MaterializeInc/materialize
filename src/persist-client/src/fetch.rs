@@ -429,13 +429,15 @@ where
 /// Generally the state and lease are bundled together, as in [LeasedBatchPart]... but sometimes
 /// it's necessary to handle them separately, so this struct is exposed as well. Handle with care.
 #[derive(Clone, Debug)]
-pub(crate) struct Lease(Arc<SeqNo>);
+pub struct Lease(Arc<SeqNo>);
 
 impl Lease {
+    /// Creates a new [Lease] that holds the given [SeqNo].
     pub fn new(seqno: SeqNo) -> Self {
         Self(Arc::new(seqno))
     }
 
+    /// Returns the inner [SeqNo] of this [Lease].
     #[cfg(test)]
     pub fn seqno(&self) -> SeqNo {
         *self.0

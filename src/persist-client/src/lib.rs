@@ -25,7 +25,7 @@ use itertools::Itertools;
 use mz_build_info::{BuildInfo, build_info};
 use mz_dyncfg::ConfigSet;
 use mz_ore::{instrument, soft_assert_or_log};
-use mz_persist::location::{Blob, Consensus, ExternalError, SeqNo};
+use mz_persist::location::{Blob, Consensus, ExternalError};
 use mz_persist_types::schema::SchemaId;
 use mz_persist_types::{Codec, Codec64, Opaque};
 use mz_proto::{IntoRustIfSome, ProtoType};
@@ -38,7 +38,7 @@ use crate::cache::{PersistClientCache, StateCache};
 use crate::cfg::PersistConfig;
 use crate::critical::{CriticalReaderId, SinceHandle};
 use crate::error::InvalidUsage;
-use crate::fetch::{BatchFetcher, BatchFetcherConfig, Lease};
+use crate::fetch::{BatchFetcher, BatchFetcherConfig};
 use crate::internal::compact::Compactor;
 use crate::internal::encoding::parse_id;
 use crate::internal::gc::GarbageCollector;
@@ -585,6 +585,11 @@ impl PersistClient {
     /// Turns the given [`ProtoBatch`] back into a [`Batch`] which can be used
     /// to append it to the given shard or to read it via
     /// [PersistClient::read_batches_consolidated]
+    ///
+    /// CAUTION: This API allows turning a [ProtoBatch] into a [Batch] multiple
+    /// times, but if a batch is deleted the backing data goes away, so at that
+    /// point all in-memory copies of a batch become invalid and cannot be read
+    /// anymore.
     pub fn batch_from_transmittable_batch<K, V, T, D>(
         &self,
         shard_id: &ShardId,
@@ -629,26 +634,27 @@ impl PersistClient {
     /// well, this consolidates as it goes. However, note that only the
     /// serialized data is consolidated: the deserialized data will only be
     /// consolidated if your K/V codecs are one-to-one.
-    // WIP: Do we want to let callers inject sth like MFP here?
-    // WIP: This doesn't need async right now, but still might want it in the
-    // API to have the option in the future?
+    ///
+    /// CAUTION: The caller needs to make sure that the given batches are
+    /// readable and they have to remain readable for the lifetime of the
+    /// returned [Cursor]. The caller is also responsible for the lifecycle of
+    /// the batches: once the cursor and the batches are no longer needed you
+    /// must call [Cursor::into_lease] to get back the batches and delete them.
     #[allow(clippy::unused_async)]
     pub async fn read_batches_consolidated<K, V, T, D>(
         &mut self,
         shard_id: ShardId,
         as_of: Antichain<T>,
         read_schemas: Schemas<K, V>,
-        batches: &[Batch<K, V, T, D>],
+        batches: Vec<Batch<K, V, T, D>>,
         should_fetch_part: impl for<'a> Fn(Option<&'a LazyPartStats>) -> bool,
-    ) -> Result<Cursor<K, V, T, D>, Since<T>>
+    ) -> Result<Cursor<K, V, T, D, Vec<Batch<K, V, T, D>>>, Since<T>>
     where
         K: Debug + Codec + Ord,
         V: Debug + Codec + Ord,
         T: Timestamp + Lattice + Codec64 + Sync,
         D: Semigroup + Ord + Codec64 + Send + Sync,
     {
-        // WIP!
-        let lease = Lease::new(SeqNo(0));
         let shard_metrics = self.metrics.shards.shard(&shard_id, "peek_stash");
 
         let hollow_batches = batches.iter().map(|b| b.batch.clone()).collect_vec();
@@ -659,11 +665,11 @@ impl PersistClient {
             shard_metrics,
             self.metrics.read.snapshot.clone(),
             Arc::clone(&self.blob),
-            lease,
             shard_id,
             as_of,
             read_schemas,
             &hollow_batches,
+            batches,
             should_fetch_part,
         )
     }

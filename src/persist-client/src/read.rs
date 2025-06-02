@@ -865,10 +865,18 @@ pub(crate) struct UnexpiredReadHandleState {
 /// client should call `next` until it returns `None`, which signals all data has been returned...
 /// but it's also free to abandon the instance at any time if it eg. only needs a few entries.
 #[derive(Debug)]
-pub struct Cursor<K: Codec, V: Codec, T: Timestamp + Codec64, D: Codec64> {
+pub struct Cursor<K: Codec, V: Codec, T: Timestamp + Codec64, D: Codec64, L = Lease> {
     pub(crate) consolidator: CursorConsolidator<K, V, T, D>,
-    pub(crate) _lease: Lease,
+    pub(crate) _lease: L,
     pub(crate) read_schemas: Schemas<K, V>,
+}
+
+impl<K: Codec, V: Codec, T: Timestamp + Codec64, D: Codec64, L> Cursor<K, V, T, D, L> {
+    /// Extracts and returns the lease from the cursor. Allowing the caller to
+    /// do any necessary cleanup associated with the lease.
+    pub fn into_lease(self: Self) -> L {
+        self._lease
+    }
 }
 
 #[derive(Debug)]
@@ -880,7 +888,7 @@ pub(crate) enum CursorConsolidator<K: Codec, V: Codec, T: Timestamp + Codec64, D
     },
 }
 
-impl<K, V, T, D> Cursor<K, V, T, D>
+impl<K, V, T, D, L> Cursor<K, V, T, D, L>
 where
     K: Debug + Codec + Ord,
     V: Debug + Codec + Ord,
@@ -993,28 +1001,28 @@ where
             Arc::clone(&self.machine.applier.shard_metrics),
             self.metrics.read.snapshot.clone(),
             Arc::clone(&self.blob),
-            lease,
             self.shard_id(),
             as_of,
             self.read_schemas.clone(),
             &batches,
+            lease,
             should_fetch_part,
         )
     }
 
-    pub(crate) fn read_batches_consolidated(
+    pub(crate) fn read_batches_consolidated<L>(
         persist_cfg: &PersistConfig,
         metrics: Arc<Metrics>,
         shard_metrics: Arc<ShardMetrics>,
         read_metrics: ReadMetrics,
         blob: Arc<dyn Blob>,
-        lease: Lease,
         shard_id: ShardId,
         as_of: Antichain<T>,
         schemas: Schemas<K, V>,
         batches: &[HollowBatch<T>],
+        lease: L,
         should_fetch_part: impl for<'a> Fn(Option<&'a LazyPartStats>) -> bool,
-    ) -> Result<Cursor<K, V, T, D>, Since<T>> {
+    ) -> Result<Cursor<K, V, T, D, L>, Since<T>> {
         let context = format!("{}[as_of={:?}]", shard_id, as_of.elements());
         let filter = FetchBatchFilter::Snapshot {
             as_of: as_of.clone(),
