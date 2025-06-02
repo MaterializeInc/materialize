@@ -1439,6 +1439,13 @@ impl IndexPeek {
         let mut literals = peek.literal_constraints.iter().flatten();
         let mut current_literal = None;
 
+        // TODO: The contents of this arena could be maintained and reused for longer,
+        // but it wasn't clear at what interval we should flush
+        // it to ensure we don't accidentally spike our memory use.
+        // This choice is conservative, and not the end of the world
+        // from a performance perspective.
+        let arena = RowArena::new();
+
         while cursor.key_valid(&storage) {
             if has_literal_constraints {
                 loop {
@@ -1469,12 +1476,6 @@ impl IndexPeek {
             }
 
             while cursor.val_valid(&storage) {
-                // TODO: This arena could be maintained and reused for longer,
-                // but it wasn't clear at what interval we should flush
-                // it to ensure we don't accidentally spike our memory use.
-                // This choice is conservative, and not the end of the world
-                // from a performance perspective.
-                let arena = RowArena::new();
 
                 let key_item = cursor.key(&storage);
                 let key = key_item.to_datum_iter();
@@ -1576,6 +1577,7 @@ impl IndexPeek {
                     }
                 }
                 cursor.step_val(&storage);
+                arena.clear();
             }
             // The cursor doesn't have anything more to say for the current key.
 
