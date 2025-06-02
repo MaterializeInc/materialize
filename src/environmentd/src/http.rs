@@ -92,7 +92,7 @@ pub use metrics::Metrics;
 pub use sql::{SqlResponse, WebSocketAuth, WebSocketResponse};
 
 /// Maximum allowed size for a request.
-pub const MAX_REQUEST_SIZE: usize = u64_to_usize(2 * bytesize::MB);
+pub const MAX_REQUEST_SIZE: usize = u64_to_usize(5 * bytesize::MIB);
 
 #[derive(Debug, Clone)]
 pub struct HttpConfig {
