@@ -62,6 +62,8 @@ touch empty
 # NOTE(benesch): this code does not delete old shortlinks. That's fine, because
 # the whole point is that the shortlinks live forever.
 for slug in "${!shortlinks[@]}"; do
+    # Remove the potentially existing shortlink first, otherwise the redirect does not get updated
+    aws s3 rm "s3://materialize-website/s/$slug" || true
     aws s3 cp empty "s3://materialize-website/s/$slug" --website-redirect "${shortlinks[$slug]}"
 done
 
