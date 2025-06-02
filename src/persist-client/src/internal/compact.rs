@@ -777,7 +777,7 @@ where
         // the config allows BatchBuilder to do its normal pipelining of writes.
         batch_cfg.inline_writes_single_max_bytes = 0;
 
-        let parts = BatchParts::new_ordered(
+        let parts = BatchParts::new_ordered::<D>(
             batch_cfg,
             cfg.batch.preferred_order,
             Arc::clone(&metrics),
@@ -786,13 +786,6 @@ where
             Arc::clone(&blob),
             Arc::clone(&isolated_runtime),
             &metrics.compaction.batch,
-            Arc::new(Box::new(
-                |shard_id, blob, writer_key, hollow_run, metrics| {
-                    Box::pin(HollowRunRef::set::<D>(
-                        shard_id, blob, writer_key, hollow_run, metrics,
-                    ))
-                },
-            )),
         );
         let mut batch = BatchBuilderInternal::<K, V, T, D>::new(
             cfg.batch.clone(),

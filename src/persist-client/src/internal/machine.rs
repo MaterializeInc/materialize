@@ -1783,7 +1783,7 @@ pub mod datadriven {
         } else {
             RunOrder::Unordered
         };
-        let parts = BatchParts::new_ordered(
+        let parts = BatchParts::new_ordered::<i64>(
             cfg.clone(),
             run_order,
             Arc::clone(&datadriven.client.metrics),
@@ -1792,13 +1792,6 @@ pub mod datadriven {
             Arc::clone(&datadriven.client.blob),
             Arc::clone(&datadriven.client.isolated_runtime),
             &datadriven.client.metrics.user,
-            Arc::new(Box::new(
-                |shard_id, blob, writer_key, hollow_run, metrics| {
-                    Box::pin(HollowRunRef::set::<i64>(
-                        shard_id, blob, writer_key, hollow_run, metrics,
-                    ))
-                },
-            )),
         );
         let builder = BatchBuilderInternal::new(
             cfg.clone(),

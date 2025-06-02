@@ -151,30 +151,23 @@ impl<'a> DirectiveArgs<'a> {
 mod tests {
     use mz_dyncfg::ConfigUpdates;
 
-    use crate::tests::new_test_client;
-
     use super::*;
 
-    #[mz_ore::test(tokio::test)]
-    async fn trace() {
+    #[mz_ore::test]
+    fn trace() {
         use crate::internal::trace::datadriven as trace_dd;
-        let dyncfgs = ConfigUpdates::default();
-        let client = new_test_client(&dyncfgs).await;
 
         datadriven::walk("tests/trace", |f| {
             println!("running datadriven file: {}", f.filename);
             let mut state = trace_dd::TraceState::default();
             f.run({
-                let metrics = Arc::clone(&client.metrics);
                 move |tc| -> String {
                     let args = DirectiveArgs {
                         args: &tc.args,
                         input: &tc.input,
                     };
                     let res = match tc.directive.as_str() {
-                        "apply-merge-res" => {
-                            trace_dd::apply_merge_res(&mut state, args, &metrics.columnar)
-                        }
+                        "apply-merge-res" => trace_dd::apply_merge_res(&mut state, args),
                         "downgrade-since" => trace_dd::downgrade_since(&mut state, args),
                         "push-batch" => trace_dd::insert(&mut state, args),
                         "since-upper" => trace_dd::since_upper(&state, args),

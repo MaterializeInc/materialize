@@ -874,7 +874,7 @@ impl<T: Timestamp + Codec64> BatchParts<T> {
         }
     }
 
-    pub(crate) fn new_ordered(
+    pub(crate) fn new_ordered<D: Semigroup + Codec64>(
         cfg: BatchBuilderConfig,
         order: RunOrder,
         metrics: Arc<Metrics>,
@@ -883,20 +883,6 @@ impl<T: Timestamp + Codec64> BatchParts<T> {
         blob: Arc<dyn Blob>,
         isolated_runtime: Arc<IsolatedRuntime>,
         batch_metrics: &BatchWriteMetrics,
-        run_set_fn: Arc<
-            Box<
-                dyn for<'a> Fn(
-                        ShardId,
-                        &'a dyn Blob,
-                        &'a WriterKey,
-                        HollowRun<T>,
-                        &'a Metrics,
-                    )
-                        -> Pin<Box<dyn Future<Output = HollowRunRef<T>> + Send + 'a>>
-                    + Send
-                    + Sync,
-            >,
-        >,
     ) -> Self {
         let writing_runs = {
             let cfg = cfg.clone();
@@ -912,7 +898,6 @@ impl<T: Timestamp + Codec64> BatchParts<T> {
                 let blob = Arc::clone(&blob);
                 let writer_key = writer_key.clone();
                 let metrics = Arc::clone(&metrics);
-                let run_set_fn = Arc::clone(&run_set_fn);
                 let handle = mz_ore::task::spawn(
                     || "batch::spill_run",
                     async move {
@@ -920,7 +905,7 @@ impl<T: Timestamp + Codec64> BatchParts<T> {
                             .then(|p: Pending<RunPart<T>>| p.into_result())
                             .collect()
                             .await;
-                        let run_ref = run_set_fn(
+                        let run_ref = HollowRunRef::set::<D>(
                             shard_id,
                             blob.as_ref(),
                             &writer_key,

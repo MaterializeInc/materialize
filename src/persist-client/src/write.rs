@@ -757,7 +757,7 @@ where
                 self.write_schemas.clone(),
             )
         } else {
-            BatchParts::new_ordered(
+            BatchParts::new_ordered::<D>(
                 cfg.batch,
                 RunOrder::Unordered,
                 Arc::clone(&self.metrics),
@@ -766,13 +766,6 @@ where
                 Arc::clone(&self.blob),
                 Arc::clone(&self.isolated_runtime),
                 &self.metrics.user,
-                Arc::new(Box::new(
-                    |shard_id, blob, writer_key, hollow_run, metrics| {
-                        Box::pin(HollowRunRef::set::<D>(
-                            shard_id, blob, writer_key, hollow_run, metrics,
-                        ))
-                    },
-                )),
             )
         };
         let builder = BatchBuilderInternal::new(
