@@ -728,7 +728,7 @@ fn literal_domination(old: &MirScalarExpr, new: &MirScalarExpr) -> bool {
                 },
             ) => {
                 use itertools::Itertools;
-                if f0 != f1 {
+                if f0 != f1 || e0s.len() != e1s.len() {
                     return false;
                 } else {
                     todo.extend(e0s.iter().zip_eq(e1s));
