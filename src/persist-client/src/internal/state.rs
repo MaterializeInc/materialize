@@ -1724,7 +1724,7 @@ where
         Continue(merge_reqs)
     }
 
-    pub fn apply_merge_res<D: Codec64 + Semigroup + PartialEq + Debug>(
+    pub fn apply_merge_res<D: Codec64 + Semigroup + PartialEq>(
         &mut self,
         res: &FueledMergeRes<T>,
         metrics: &ColumnarMetrics,

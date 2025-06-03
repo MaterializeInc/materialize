@@ -156,7 +156,7 @@ where
     K: Debug + Codec,
     V: Debug + Codec,
     T: Timestamp + Lattice + Codec64 + Sync,
-    D: Semigroup + Ord + Codec64 + Send + Sync + Debug,
+    D: Semigroup + Ord + Codec64 + Send + Sync,
 {
     pub fn new(
         cfg: PersistConfig,

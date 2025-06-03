@@ -1088,7 +1088,7 @@ where
     K: Debug + Codec,
     V: Debug + Codec,
     T: Timestamp + Lattice + Codec64 + Sync,
-    D: Semigroup + Codec64 + PartialEq + Debug,
+    D: Semigroup + Codec64 + PartialEq,
 {
     pub async fn merge_res(
         &self,
