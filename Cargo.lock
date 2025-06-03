@@ -6288,6 +6288,7 @@ dependencies = [
  "mz-ore",
  "mz-repr",
  "mz-secrets",
+ "reqwest 0.11.24",
  "serde",
  "serde_json",
  "sha2",

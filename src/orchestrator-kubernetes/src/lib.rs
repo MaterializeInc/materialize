@@ -13,7 +13,7 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 use std::{env, fmt};
 
-use anyhow::{Context, anyhow};
+use anyhow::{Context, anyhow, bail};
 use async_trait::async_trait;
 use chrono::Utc;
 use clap::ValueEnum;
@@ -187,7 +187,6 @@ impl Orchestrator for KubernetesOrchestrator {
             let (command_tx, command_rx) = mpsc::unbounded_channel();
             let worker = OrchestratorWorker {
                 metrics_api: Api::default_namespaced(self.client.clone()),
-                custom_metrics_api: Api::default_namespaced(self.client.clone()),
                 service_api: Api::default_namespaced(self.client.clone()),
                 stateful_set_api: Api::default_namespaced(self.client.clone()),
                 pod_api: Api::default_namespaced(self.client.clone()),
@@ -287,7 +286,6 @@ struct ServiceDescription {
 /// created with `ensure_service` and not yet dropped with `drop_service`.
 struct OrchestratorWorker {
     metrics_api: Api<PodMetrics>,
-    custom_metrics_api: Api<MetricValueList>,
     service_api: Api<K8sService>,
     stateful_set_api: Api<StatefulSet>,
     pod_api: Api<Pod>,
@@ -363,34 +361,6 @@ pub struct MetricValue {
     pub timestamp: String,
     pub value: Quantity,
     // We skip `windowSeconds`, as we don't need it
-}
-
-#[derive(Deserialize, Clone, Debug)]
-pub struct MetricValueList {
-    pub metadata: ObjectMeta,
-    pub items: Vec<MetricValue>,
-}
-
-impl k8s_openapi::Resource for MetricValueList {
-    const GROUP: &'static str = "custom.metrics.k8s.io";
-    const KIND: &'static str = "MetricValueList";
-    const VERSION: &'static str = "v1beta1";
-    const API_VERSION: &'static str = "custom.metrics.k8s.io/v1beta1";
-    const URL_PATH_SEGMENT: &'static str = "persistentvolumeclaims";
-
-    type Scope = k8s_openapi::NamespaceResourceScope;
-}
-
-impl k8s_openapi::Metadata for MetricValueList {
-    type Ty = ObjectMeta;
-
-    fn metadata(&self) -> &Self::Ty {
-        &self.metadata
-    }
-
-    fn metadata_mut(&mut self) -> &mut Self::Ty {
-        &mut self.metadata
-    }
 }
 
 impl NamespacedKubernetesOrchestrator {
@@ -1459,79 +1429,30 @@ impl OrchestratorWorker {
 
             let disk_usage_fut = async {
                 if disk {
-                    Some(
-                        self_
-                            .custom_metrics_api
-                            .get_subresource(
-                                "kubelet_volume_stats_used_bytes",
-                                // The CSI provider we use sets up persistentvolumeclaim's
-                                // with `{pod name}-scratch` as the name. It also provides
-                                // the metrics, and does so under the `persistentvolumeclaims`
-                                // resource type, instead of `pods`.
-                                &format!("{name}-scratch"),
-                            )
-                            .await,
-                    )
+                    Some(get_disk_usage(self_, service_name, i).await)
                 } else {
                     None
                 }
             };
-            let disk_capacity_fut = async {
-                if disk {
-                    Some(
-                        self_
-                            .custom_metrics_api
-                            .get_subresource(
-                                "kubelet_volume_stats_capacity_bytes",
-                                &format!("{name}-scratch"),
-                            )
-                            .await,
-                    )
-                } else {
-                    None
-                }
-            };
-            let (metrics, disk_usage, disk_capacity) = match futures::future::join3(
-                self_.metrics_api.get(&name),
-                disk_usage_fut,
-                disk_capacity_fut,
-            )
-            .await
-            {
-                (Ok(metrics), disk_usage, disk_capacity) => {
-                    // TODO(guswynn): don't tolerate errors here, when we are more
-                    // comfortable with `prometheus-adapter` in production
-                    // (And we run it in ci).
+            let (metrics, disk_usage) =
+                match futures::future::join(self_.metrics_api.get(&name), disk_usage_fut).await {
+                    (Ok(metrics), disk_usage) => {
+                        let disk_usage = match disk_usage {
+                            Some(Ok(disk_usage)) => Some(disk_usage),
+                            Some(Err(e)) => {
+                                warn!("Failed to fetch disk usage for {name}: {e}");
+                                None
+                            }
+                            _ => None,
+                        };
 
-                    let disk_usage = match disk_usage {
-                        Some(Ok(disk_usage)) => Some(disk_usage),
-                        Some(Err(e)) if !matches!(&e, K8sError::Api(e) if e.code == 404) => {
-                            warn!(
-                                "Failed to fetch `kubelet_volume_stats_used_bytes` for {name}: {e}"
-                            );
-                            None
-                        }
-                        _ => None,
-                    };
-
-                    let disk_capacity = match disk_capacity {
-                        Some(Ok(disk_capacity)) => Some(disk_capacity),
-                        Some(Err(e)) if !matches!(&e, K8sError::Api(e) if e.code == 404) => {
-                            warn!(
-                                "Failed to fetch `kubelet_volume_stats_capacity_bytes` for {name}: {e}"
-                            );
-                            None
-                        }
-                        _ => None,
-                    };
-
-                    (metrics, disk_usage, disk_capacity)
-                }
-                (Err(e), _, _) => {
-                    warn!("Failed to get metrics for {name}: {e}");
-                    return ServiceProcessMetrics::default();
-                }
-            };
+                        (metrics, disk_usage)
+                    }
+                    (Err(e), _) => {
+                        warn!("Failed to get metrics for {name}: {e}");
+                        return ServiceProcessMetrics::default();
+                    }
+                };
             let Some(PodMetricsContainer {
                 usage:
                     PodMetricsContainerUsage {
@@ -1572,98 +1493,17 @@ impl OrchestratorWorker {
                 }
             };
 
-            let disk_usage = match (disk_usage, disk_capacity) {
-                (Some(disk_usage_metrics), Some(disk_capacity_metrics)) => {
-                    if !disk_usage_metrics.items.is_empty()
-                        && !disk_capacity_metrics.items.is_empty()
-                    {
-                        let disk_usage_str = &*disk_usage_metrics.items[0].value.0;
-                        let disk_usage = match parse_k8s_quantity(disk_usage_str) {
-                            Ok(q) => match q.try_to_integer(0, true) {
-                                Some(i) => Some(i),
-                                None => {
-                                    tracing::error!("Disk usage value {q:?} out of range");
-                                    None
-                                }
-                            },
-                            Err(e) => {
-                                tracing::error!(
-                                    "Failed to parse disk usage value {disk_usage_str}: {e}"
-                                );
-                                None
-                            }
-                        };
-                        let disk_capacity_str = &*disk_capacity_metrics.items[0].value.0;
-                        let disk_capacity = match parse_k8s_quantity(disk_capacity_str) {
-                            Ok(q) => match q.try_to_integer(0, true) {
-                                Some(i) => Some(i),
-                                None => {
-                                    tracing::error!("Disk capacity value {q:?} out of range");
-                                    None
-                                }
-                            },
-                            Err(e) => {
-                                tracing::error!(
-                                    "Failed to parse disk capacity value {disk_capacity_str}: {e}"
-                                );
-                                None
-                            }
-                        };
-
-                        // We only populate a `disk_usage` if we have all 5 of of:
-                        // - a disk limit (so it must be an actual managed cluster with a real limit)
-                        // - a reported disk capacity
-                        // - a reported disk usage
-                        //
-                        // There are 3 weird cases we have to handle here:
-                        // - Some instance types report a large disk capacity than the requested
-                        // limit. We clamp those capacities to the limit, which means we can
-                        // report 100% usage even if we have a bit of space left.
-                        // - Other instances report a smaller disk capacity than the limit, due to
-                        // overheads. In this case, we correct the usage by adding the overhead, so
-                        // we report a more accurate usage number.
-                        // - The disk limit can be more up-to-date (from `service_infos`) than the
-                        // reported metric. In that case, we report the minimum of the usage
-                        // and the limit, which means we can report 100% usage temporarily
-                        // if a replica is sized down.
-                        match (disk_usage, disk_capacity, disk_limit) {
-                            (
-                                Some(disk_usage),
-                                Some(disk_capacity),
-                                Some(DiskLimit(disk_limit)),
-                            ) => {
-                                let disk_capacity = if disk_limit.0 < disk_capacity {
-                                    // We issue a debug message instead
-                                    // of a warning or error because all the
-                                    // above cases are relatively common.
-                                    tracing::debug!(
-                                        "disk capacity {} is larger than the disk limit {}; \
-                                        disk usage will indicate 100% full before the disk is truly full; \
-                                        as long as the delta is small this is not a cause for concern",
-                                        disk_capacity,
-                                        disk_limit.0
-                                    );
-                                    // Clamp to the limit.
-                                    disk_limit.0
-                                } else {
-                                    disk_capacity
-                                };
-
-                                // If we overflow, just clamp to the disk limit
-                                let disk_usage = (disk_limit.0 - disk_capacity)
-                                    .checked_add(disk_usage)
-                                    .unwrap_or(disk_limit.0);
-
-                                // Clamp to the limit. Note that this can be clamped during
-                                // replica resizes of if the disk usage is ABOVE the
-                                // configured limit, as may occur on some instances.
-                                Some(std::cmp::min(disk_usage, disk_limit.0))
-                            }
-                            _ => None,
-                        }
-                    } else {
-                        None
-                    }
+            // We only populate a `disk_usage` if we have both:
+            // - a disk limit (so it must be an actual managed cluster with a real limit)
+            // - a reported disk usage
+            //
+            // The disk limit can be more up-to-date (from `service_infos`) than the
+            // reported metric. In that case, we report the minimum of the usage
+            // and the limit, which means we can report 100% usage temporarily
+            // if a replica is sized down.
+            let disk_usage = match (disk_usage, disk_limit) {
+                (Some(disk_usage), Some(DiskLimit(disk_limit))) => {
+                    Some(std::cmp::min(disk_usage, disk_limit.0))
                 }
                 _ => None,
             };
@@ -1674,6 +1514,53 @@ impl OrchestratorWorker {
                 disk_usage_bytes: disk_usage,
             }
         }
+
+        /// Get the current disk usage for a particular service and process.
+        ///
+        /// Disk usage is collected by connecting to a metrics endpoint exposed by the process. The
+        /// endpoint is assumed to be reachable at the 'internal-http' under the HTTP path
+        /// `/api/usage-metrics`.
+        async fn get_disk_usage(
+            self_: &OrchestratorWorker,
+            service_name: &str,
+            i: usize,
+        ) -> anyhow::Result<u64> {
+            #[derive(Deserialize)]
+            pub(crate) struct Usage {
+                disk_bytes: Option<u64>,
+            }
+
+            let service = self_.service_api.get(service_name).await.unwrap();
+            let namespace = service.metadata.namespace.unwrap();
+            let internal_http_port = service
+                .spec
+                .and_then(|spec| spec.ports)
+                .and_then(|ports| {
+                    ports
+                        .into_iter()
+                        .find(|p| p.name == Some("internal-http".into()))
+                })
+                .map(|p| p.port);
+            let Some(port) = internal_http_port else {
+                bail!("internal-http port missing in service spec");
+            };
+            let metrics_url = format!(
+                "http://{service_name}-{i}.{service_name}.{namespace}.svc.cluster.local:{port}\
+                 /api/usage-metrics"
+            );
+
+            let http_client = reqwest::Client::builder()
+                .timeout(Duration::from_secs(10))
+                .build()
+                .unwrap();
+            let resp = http_client.get(metrics_url).send().await?;
+            let usage: Usage = resp.json().await?;
+
+            usage
+                .disk_bytes
+                .ok_or_else(|| anyhow!("process did not provide disk usage"))
+        }
+
         let ret = futures::future::join_all(
             (0..info.scale).map(|i| get_metrics(self, name, i.into(), info.disk, info.disk_limit)),
         );
