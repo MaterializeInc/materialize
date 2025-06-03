@@ -754,7 +754,7 @@ async fn collect_table_statistics(
         .set_at(&mut stats.count_latency)
         .await?;
         match estimate_row {
-            Some(row) => match row.get("estimate_count").unwrap().parse().unwrap() {
+            Some(row) => match row.get("estimate_count").unwrap().parse::<i64>().unwrap() {
                 -1 => stats.count = 0,
                 n => stats.count = n.try_into()?,
             },
