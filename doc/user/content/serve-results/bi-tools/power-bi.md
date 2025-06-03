@@ -4,6 +4,7 @@ description: "How to create dashboards with Power BI"
 aliases:
   - /third-party/power-bi/
   - /integrations/power-bi/
+  - /serve-results/power-bi/
 menu:
   main:
     parent: "bi-tools"
