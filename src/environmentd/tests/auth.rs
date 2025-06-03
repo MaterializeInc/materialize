@@ -3112,13 +3112,19 @@ async fn test_self_managed_auth() {
             "mz_frontegg_auth=debug,info".to_string(),
         )
         .with_system_parameter_default("enable_self_managed_auth".to_string(), "true".to_string())
-        .with_password_auth()
+        .with_password_auth(Password("mz_system_password".to_owned()))
         .with_metrics_registry(metrics_registry)
         .start()
         .await;
 
-    let pg_client = server.connect().no_tls().internal().await.unwrap();
-    pg_client
+    let mz_system_client = server
+        .connect()
+        .no_tls()
+        .user("mz_system")
+        .password("mz_system_password")
+        .await
+        .unwrap();
+    mz_system_client
         .execute("CREATE ROLE foo WITH LOGIN PASSWORD 'bar'", &[])
         .await
         .unwrap();
@@ -3161,13 +3167,19 @@ async fn test_self_managed_auth_superuser() {
             "mz_frontegg_auth=debug,info".to_string(),
         )
         .with_system_parameter_default("enable_self_managed_auth".to_string(), "true".to_string())
-        .with_password_auth()
+        .with_password_auth(Password("password".to_owned()))
         .with_metrics_registry(metrics_registry)
         .start()
         .await;
 
-    let pg_client = server.connect().no_tls().internal().await.unwrap();
-    pg_client
+    let mz_system_client = server
+        .connect()
+        .no_tls()
+        .user("mz_system")
+        .password("password")
+        .await
+        .unwrap();
+    mz_system_client
         .execute("CREATE ROLE foo WITH LOGIN SUPERUSER PASSWORD 'bar'", &[])
         .await
         .unwrap();
@@ -3210,13 +3222,19 @@ async fn test_self_managed_auth_alter_role() {
             "mz_frontegg_auth=debug,info".to_string(),
         )
         .with_system_parameter_default("enable_self_managed_auth".to_string(), "true".to_string())
-        .with_password_auth()
+        .with_password_auth(Password("mz_system_password".to_owned()))
         .with_metrics_registry(metrics_registry)
         .start()
         .await;
 
-    let pg_client = server.connect().no_tls().internal().await.unwrap();
-    pg_client
+    let mz_system_client = server
+        .connect()
+        .no_tls()
+        .user("mz_system")
+        .password("mz_system_password")
+        .await
+        .unwrap();
+    mz_system_client
         .execute("CREATE ROLE foo WITH LOGIN PASSWORD 'bar'", &[])
         .await
         .unwrap();
@@ -3249,7 +3267,7 @@ async fn test_self_managed_auth_alter_role() {
         );
     }
 
-    pg_client
+    mz_system_client
         .execute("ALTER ROLE foo WITH SUPERUSER PASSWORD 'baz'", &[])
         .await
         .unwrap();
@@ -3282,7 +3300,7 @@ async fn test_self_managed_auth_alter_role() {
         );
     }
 
-    pg_client
+    mz_system_client
         .execute("ALTER ROLE foo WITH SUPERUSER PASSWORD NULL", &[])
         .await
         .unwrap();
@@ -3291,7 +3309,7 @@ async fn test_self_managed_auth_alter_role() {
         assert_err!(server.connect().no_tls().user("foo").password("baz").await);
     }
 
-    pg_client
+    mz_system_client
         .execute("ALTER ROLE foo WITH SUPERUSER PASSWORD 'baz'", &[])
         .await
         .unwrap();
@@ -3323,7 +3341,7 @@ async fn test_self_managed_auth_alter_role() {
             true
         );
     }
-    pg_client
+    mz_system_client
         .execute("ALTER ROLE foo WITH NOLOGIN", &[])
         .await
         .unwrap();

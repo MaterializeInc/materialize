@@ -32,6 +32,7 @@ use mz_adapter_types::bootstrap_builtin_cluster_config::{
     SUPPORT_CLUSTER_DEFAULT_REPLICATION_FACTOR, SYSTEM_CLUSTER_DEFAULT_REPLICATION_FACTOR,
 };
 
+use mz_auth::password::Password;
 use mz_catalog::config::ClusterReplicaSizeMap;
 use mz_controller::ControllerConfig;
 use mz_dyncfg::ConfigUpdates;
@@ -100,6 +101,7 @@ pub struct TestHarness {
     data_directory: Option<PathBuf>,
     tls: Option<TlsCertConfig>,
     frontegg: Option<FronteggAuthenticator>,
+    external_login_password_mz_system: Option<Password>,
     listeners_config: ListenersConfig,
     unsafe_mode: bool,
     workers: usize,
@@ -136,6 +138,7 @@ impl Default for TestHarness {
             data_directory: None,
             tls: None,
             frontegg: None,
+            external_login_password_mz_system: None,
             listeners_config: ListenersConfig {
                 sql: btreemap![
                     "external".to_owned() => SqlListenerConfig {
@@ -358,22 +361,16 @@ impl TestHarness {
         self
     }
 
-    pub fn with_password_auth(mut self) -> Self {
-        // TODO include mz_system password?
+    pub fn with_password_auth(mut self, mz_system_password: Password) -> Self {
+        self.external_login_password_mz_system = Some(mz_system_password);
         let enable_tls = self.tls.is_some();
         self.listeners_config = ListenersConfig {
             sql: btreemap! {
                 "external".to_owned() => SqlListenerConfig {
                     addr: SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0),
                     authenticator_kind: AuthenticatorKind::Password,
-                    allowed_roles: AllowedRoles::Normal,
-                    enable_tls,
-                },
-                "internal".to_owned() => SqlListenerConfig {
-                    addr: SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0),
-                    authenticator_kind: AuthenticatorKind::None,
                     allowed_roles: AllowedRoles::NormalAndInternal,
-                    enable_tls: false,
+                    enable_tls,
                 },
             },
             http: btreemap! {
@@ -381,18 +378,18 @@ impl TestHarness {
                     base: BaseListenerConfig {
                         addr: SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0),
                         authenticator_kind: AuthenticatorKind::Password,
-                        allowed_roles: AllowedRoles::Normal,
+                        allowed_roles: AllowedRoles::NormalAndInternal,
                         enable_tls,
                     },
                     routes: HttpRoutesEnabled{
                         base: true,
                         webhook: true,
-                        internal: false,
+                        internal: true,
                         metrics: false,
-                        profiling: false,
+                        profiling: true,
                     },
                 },
-                "internal".to_owned() => HttpListenerConfig {
+                "metrics".to_owned() => HttpListenerConfig {
                     base: BaseListenerConfig {
                         addr: SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0),
                         authenticator_kind: AuthenticatorKind::None,
@@ -400,11 +397,11 @@ impl TestHarness {
                         enable_tls: false,
                     },
                     routes: HttpRoutesEnabled{
-                        base: true,
-                        webhook: true,
-                        internal: true,
+                        base: false,
+                        webhook: false,
+                        internal: false,
                         metrics: true,
-                        profiling: true,
+                        profiling: false,
                     },
                 },
             },
@@ -744,7 +741,7 @@ impl Listeners {
                 tls_reload_certs,
                 helm_chart_version: None,
                 license_key: ValidatedLicenseKey::for_tests(),
-                external_login_password_mz_system: None,
+                external_login_password_mz_system: config.external_login_password_mz_system,
             })
             .await?;
 
