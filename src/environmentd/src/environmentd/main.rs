@@ -772,17 +772,14 @@ fn run(mut args: Args) -> Result<(), anyhow::Error> {
         let mut allowed_origins = Vec::with_capacity(listeners_config.http.len() * 6);
         for (_, listener) in &listeners_config.http {
             let port = listener.addr().port();
-            allowed_origins
-                .push(HeaderValue::from_str(&format!("http://localhost:{}", port)).unwrap());
-            allowed_origins
-                .push(HeaderValue::from_str(&format!("http://127.0.0.1:{}", port)).unwrap());
-            allowed_origins.push(HeaderValue::from_str(&format!("http://[::1]:{}", port)).unwrap());
-            allowed_origins
-                .push(HeaderValue::from_str(&format!("https://localhost:{}", port)).unwrap());
-            allowed_origins
-                .push(HeaderValue::from_str(&format!("https://127.0.0.1:{}", port)).unwrap());
-            allowed_origins
-                .push(HeaderValue::from_str(&format!("https://[::1]:{}", port)).unwrap());
+            allowed_origins.extend([
+                HeaderValue::from_str(&format!("http://localhost:{}", port)).unwrap(),
+                HeaderValue::from_str(&format!("http://127.0.0.1:{}", port)).unwrap(),
+                HeaderValue::from_str(&format!("http://[::1]:{}", port)).unwrap(),
+                HeaderValue::from_str(&format!("https://localhost:{}", port)).unwrap(),
+                HeaderValue::from_str(&format!("https://127.0.0.1:{}", port)).unwrap(),
+                HeaderValue::from_str(&format!("https://[::1]:{}", port)).unwrap(),
+            ])
         }
         allowed_origins
     };
