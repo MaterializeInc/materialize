@@ -37,7 +37,7 @@ use k8s_openapi::apimachinery::pkg::apis::meta::v1::{
     LabelSelector, LabelSelectorRequirement, OwnerReference,
 };
 use kube::ResourceExt;
-use kube::api::{Api, DeleteParams, ObjectMeta, Patch, PatchParams};
+use kube::api::{Api, DeleteParams, ListParams, ObjectMeta, Patch, PatchParams};
 use kube::client::Client;
 use kube::error::Error as K8sError;
 use kube::runtime::{WatchStreamExt, watcher};
@@ -252,6 +252,7 @@ enum WorkerCommand {
     },
     DropService {
         name: String,
+        match_labels: BTreeMap<String, String>,
     },
     ListServices {
         namespace: String,
@@ -267,10 +268,8 @@ enum WorkerCommand {
 /// A description of a service to be created by an [`OrchestratorWorker`].
 #[derive(Debug, Clone)]
 struct ServiceDescription {
-    name: String,
-    scale: u16,
     service: K8sService,
-    stateful_set: StatefulSet,
+    stateful_sets: Vec<StatefulSet>,
     pod_template_hash: String,
 }
 
@@ -400,6 +399,15 @@ impl NamespacedKubernetesOrchestrator {
             self.config.name_prefix.as_deref().unwrap_or(""),
             self.namespace
         )
+    }
+
+    /// The minimal set of labels that uniquely identifies the k8s resources (service,
+    /// statefulsets, pods) in the service with the given id.
+    fn service_match_labels(&self, id: &str) -> BTreeMap<String, String> {
+        btreemap! {
+            "environmentd.materialize.cloud/namespace".into() => self.namespace.clone(),
+            "environmentd.materialize.cloud/service-id".into() => id.into(),
+        }
     }
 
     /// Return a `watcher::Config` instance that limits results to the namespace
@@ -622,16 +630,10 @@ impl NamespacedOrchestrator for NamespacedKubernetesOrchestrator {
             user_requested_disk && !size_disables_disk
         };
 
-        let name = self.service_name(id);
-        // The match labels should be the minimal set of labels that uniquely
-        // identify the pods in the stateful set. Changing these after the
-        // `StatefulSet` is created is not permitted by Kubernetes, and we're
-        // not yet smart enough to handle deleting and recreating the
-        // `StatefulSet`.
-        let match_labels = btreemap! {
-            "environmentd.materialize.cloud/namespace".into() => self.namespace.clone(),
-            "environmentd.materialize.cloud/service-id".into() => id.into(),
-        };
+        let service_name = self.service_name(id);
+        let process_names: Vec<_> = (0..scale).map(|i| format!("{service_name}-{i}")).collect();
+
+        let match_labels = self.service_match_labels(id);
         let mut labels = match_labels.clone();
         for (key, value) in labels_in {
             labels.insert(self.make_label_key(&key), value);
@@ -663,7 +665,8 @@ impl NamespacedOrchestrator for NamespacedKubernetesOrchestrator {
         }
         let service = K8sService {
             metadata: ObjectMeta {
-                name: Some(name.clone()),
+                name: Some(service_name.clone()),
+                labels: Some(match_labels.clone()),
                 ..Default::default()
             },
             spec: Some(ServiceSpec {
@@ -684,10 +687,11 @@ impl NamespacedOrchestrator for NamespacedKubernetesOrchestrator {
             status: None,
         };
 
-        let hosts = (0..scale)
-            .map(|i| {
+        let hosts = process_names
+            .iter()
+            .map(|process_name| {
                 format!(
-                    "{name}-{i}.{name}.{}.svc.cluster.local",
+                    "{process_name}-0.{service_name}.{}.svc.cluster.local",
                     self.kubernetes_namespace
                 )
             })
@@ -1207,32 +1211,32 @@ impl NamespacedOrchestrator for NamespacedKubernetesOrchestrator {
                 pod_template_hash.clone(),
             );
 
-        let stateful_set = StatefulSet {
-            metadata: ObjectMeta {
-                name: Some(name.clone()),
-                ..Default::default()
-            },
-            spec: Some(StatefulSetSpec {
-                selector: LabelSelector {
-                    match_labels: Some(match_labels),
+        let stateful_sets = process_names
+            .iter()
+            .map(|process_name| StatefulSet {
+                metadata: ObjectMeta {
+                    name: Some(process_name.clone()),
+                    labels: Some(match_labels.clone()),
                     ..Default::default()
                 },
-                service_name: name.clone(),
-                replicas: Some(scale.into()),
-                template: pod_template_spec,
-                pod_management_policy: Some("Parallel".to_string()),
-                volume_claim_templates,
-                ..Default::default()
-            }),
-            status: None,
-        };
+                spec: Some(StatefulSetSpec {
+                    selector: LabelSelector {
+                        match_labels: Some(match_labels.clone()),
+                        ..Default::default()
+                    },
+                    service_name: service_name.clone(),
+                    template: pod_template_spec.clone(),
+                    volume_claim_templates: volume_claim_templates.clone(),
+                    ..Default::default()
+                }),
+                status: None,
+            })
+            .collect();
 
         self.send_command(WorkerCommand::EnsureService {
             desc: ServiceDescription {
-                name,
-                scale,
                 service,
-                stateful_set,
+                stateful_sets,
                 pod_template_hash,
             },
         });
@@ -1256,6 +1260,7 @@ impl NamespacedOrchestrator for NamespacedKubernetesOrchestrator {
 
         self.send_command(WorkerCommand::DropService {
             name: self.service_name(id),
+            match_labels: self.service_match_labels(id),
         });
 
         Ok(())
@@ -1275,7 +1280,7 @@ impl NamespacedOrchestrator for NamespacedKubernetesOrchestrator {
 
     fn watch_services(&self) -> BoxStream<'static, Result<ServiceEvent, anyhow::Error>> {
         fn into_service_event(pod: Pod) -> Result<ServiceEvent, anyhow::Error> {
-            let process_id = pod.name_any().split('-').next_back().unwrap().parse()?;
+            let process_id = pod.name_any().split('-').nth_back(1).unwrap().parse()?;
             let service_id_label = "environmentd.materialize.cloud/service-id";
             let service_id = pod
                 .labels()
@@ -1413,7 +1418,9 @@ impl OrchestratorWorker {
             EnsureService { desc } => {
                 retry(|| self.ensure_service(desc.clone()), "EnsureService").await
             }
-            DropService { name } => retry(|| self.drop_service(&name), "DropService").await,
+            DropService { name, match_labels } => {
+                retry(|| self.drop_service(&name, &match_labels), "DropService").await
+            }
             ListServices {
                 namespace,
                 result_tx,
@@ -1455,7 +1462,7 @@ impl OrchestratorWorker {
             disk: bool,
             disk_limit: Option<DiskLimit>,
         ) -> ServiceProcessMetrics {
-            let name = format!("{service_name}-{i}");
+            let pod_name = format!("{service_name}-{i}-0");
 
             let disk_usage_fut = async {
                 if disk {
@@ -1468,7 +1475,7 @@ impl OrchestratorWorker {
                                 // with `{pod name}-scratch` as the name. It also provides
                                 // the metrics, and does so under the `persistentvolumeclaims`
                                 // resource type, instead of `pods`.
-                                &format!("{name}-scratch"),
+                                &format!("{pod_name}-scratch"),
                             )
                             .await,
                     )
@@ -1483,7 +1490,7 @@ impl OrchestratorWorker {
                             .custom_metrics_api
                             .get_subresource(
                                 "kubelet_volume_stats_capacity_bytes",
-                                &format!("{name}-scratch"),
+                                &format!("{pod_name}-scratch"),
                             )
                             .await,
                     )
@@ -1492,7 +1499,7 @@ impl OrchestratorWorker {
                 }
             };
             let (metrics, disk_usage, disk_capacity) = match futures::future::join3(
-                self_.metrics_api.get(&name),
+                self_.metrics_api.get(&pod_name),
                 disk_usage_fut,
                 disk_capacity_fut,
             )
@@ -1507,7 +1514,7 @@ impl OrchestratorWorker {
                         Some(Ok(disk_usage)) => Some(disk_usage),
                         Some(Err(e)) if !matches!(&e, K8sError::Api(e) if e.code == 404) => {
                             warn!(
-                                "Failed to fetch `kubelet_volume_stats_used_bytes` for {name}: {e}"
+                                "Failed to fetch `kubelet_volume_stats_used_bytes` for {pod_name}: {e}"
                             );
                             None
                         }
@@ -1518,7 +1525,7 @@ impl OrchestratorWorker {
                         Some(Ok(disk_capacity)) => Some(disk_capacity),
                         Some(Err(e)) if !matches!(&e, K8sError::Api(e) if e.code == 404) => {
                             warn!(
-                                "Failed to fetch `kubelet_volume_stats_capacity_bytes` for {name}: {e}"
+                                "Failed to fetch `kubelet_volume_stats_capacity_bytes` for {pod_name}: {e}"
                             );
                             None
                         }
@@ -1528,7 +1535,7 @@ impl OrchestratorWorker {
                     (metrics, disk_usage, disk_capacity)
                 }
                 (Err(e), _, _) => {
-                    warn!("Failed to get metrics for {name}: {e}");
+                    warn!("Failed to get metrics for {pod_name}: {e}");
                     return ServiceProcessMetrics::default();
                 }
             };
@@ -1541,7 +1548,7 @@ impl OrchestratorWorker {
                 ..
             }) = metrics.containers.get(0)
             else {
-                warn!("metrics result contained no containers for {name}");
+                warn!("metrics result contained no containers for {pod_name}");
                 return ServiceProcessMetrics::default();
             };
 
@@ -1692,33 +1699,37 @@ impl OrchestratorWorker {
             .owner_references
             .get_or_insert(vec![])
             .extend(self.owner_references.iter().cloned());
-        desc.stateful_set
-            .metadata
-            .owner_references
-            .get_or_insert(vec![])
-            .extend(self.owner_references.iter().cloned());
+        for ss in &mut desc.stateful_sets {
+            ss.metadata
+                .owner_references
+                .get_or_insert(vec![])
+                .extend(self.owner_references.iter().cloned());
+        }
 
         self.service_api
             .patch(
-                &desc.name,
+                desc.service.metadata.name.as_ref().unwrap(),
                 &PatchParams::apply(FIELD_MANAGER).force(),
-                &Patch::Apply(desc.service),
+                &Patch::Apply(&desc.service),
             )
             .await?;
-        self.stateful_set_api
-            .patch(
-                &desc.name,
-                &PatchParams::apply(FIELD_MANAGER).force(),
-                &Patch::Apply(desc.stateful_set),
-            )
-            .await?;
+        for ss in &desc.stateful_sets {
+            self.stateful_set_api
+                .patch(
+                    ss.metadata.name.as_ref().unwrap(),
+                    &PatchParams::apply(FIELD_MANAGER).force(),
+                    &Patch::Apply(&ss),
+                )
+                .await?;
+        }
 
-        // Explicitly delete any pods in the stateful set that don't match the
+        // Explicitly delete any pods in the stateful sets that don't match the
         // template. In theory, Kubernetes would do this automatically, but
         // in practice we have observed that it does not.
         // See: https://github.com/kubernetes/kubernetes/issues/67250
-        for pod_id in 0..desc.scale {
-            let pod_name = format!("{}-{pod_id}", desc.name);
+        for ss in &desc.stateful_sets {
+            let process_name = ss.metadata.name.as_ref().unwrap();
+            let pod_name = format!("{process_name}-0");
             let pod = match self.pod_api.get(&pod_name).await {
                 Ok(pod) => pod,
                 // Pod already doesn't exist.
@@ -1743,10 +1754,25 @@ impl OrchestratorWorker {
         Ok(())
     }
 
-    async fn drop_service(&self, name: &str) -> Result<(), K8sError> {
+    async fn drop_service(
+        &self,
+        name: &str,
+        match_labels: &BTreeMap<String, String>,
+    ) -> Result<(), K8sError> {
+        let label_selectors: Vec<_> = match_labels
+            .iter()
+            .map(|(k, v)| format!("{k}={v}"))
+            .collect();
+        let label_selector = label_selectors.join(",");
         let res = self
             .stateful_set_api
-            .delete(name, &DeleteParams::default())
+            .delete_collection(
+                &DeleteParams::default(),
+                &ListParams {
+                    label_selector: Some(label_selector),
+                    ..Default::default()
+                },
+            )
             .await;
         match res {
             Ok(_) => (),
@@ -1766,9 +1792,9 @@ impl OrchestratorWorker {
     }
 
     async fn list_services(&self, namespace: &str) -> Result<Vec<String>, K8sError> {
-        let stateful_sets = self.stateful_set_api.list(&Default::default()).await?;
+        let services = self.service_api.list(&Default::default()).await?;
         let name_prefix = format!("{}{namespace}-", self.name_prefix);
-        Ok(stateful_sets
+        Ok(services
             .into_iter()
             .filter_map(|ss| {
                 ss.metadata
