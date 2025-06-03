@@ -35,7 +35,7 @@ use crate::internal::state::ROLLUP_THRESHOLD;
 use crate::operators::STORAGE_SOURCE_DECODE_FUEL;
 use crate::read::READER_LEASE_DURATION;
 
-const LTS_VERSIONS: &[Version] = &[
+const SELF_MANAGED_VERSIONS: &[Version] = &[
     // 25.1
     Version::new(0, 130, 0),
 ];
@@ -632,7 +632,7 @@ impl BlobKnobs for PersistConfig {
 }
 
 pub fn check_data_version(code_version: &Version, data_version: &Version) -> Result<(), String> {
-    check_data_version_with_lts_versions(code_version, data_version, LTS_VERSIONS)
+    check_data_version_with_self_managed_versions(code_version, data_version, SELF_MANAGED_VERSIONS)
 }
 
 // If persist gets some encoded ProtoState from the future (e.g. two versions of
@@ -659,12 +659,12 @@ pub fn check_data_version(code_version: &Version, data_version: &Version) -> Res
 // data we read is going to be because we fetched it using a pointer stored in
 // some persist state. If we can handle the state, we can handle the blobs it
 // references, too.
-pub(crate) fn check_data_version_with_lts_versions(
+pub(crate) fn check_data_version_with_self_managed_versions(
     code_version: &Version,
     data_version: &Version,
-    lts_versions: &[Version],
+    self_managed_versions: &[Version],
 ) -> Result<(), String> {
-    // Allow upgrades specifically between consecutive LTS releases.
+    // Allow upgrades specifically between consecutive Self-Managed releases.
     let base_code_version = Version {
         patch: 0,
         ..code_version.clone()
@@ -674,13 +674,13 @@ pub(crate) fn check_data_version_with_lts_versions(
         ..data_version.clone()
     };
     if data_version >= code_version {
-        for window in lts_versions.windows(2) {
+        for window in self_managed_versions.windows(2) {
             if base_code_version == window[0] && base_data_version <= window[1] {
                 return Ok(());
             }
         }
 
-        if let Some(last) = lts_versions.last() {
+        if let Some(last) = self_managed_versions.last() {
             if base_code_version == *last
                 // kind of arbitrary, but just ensure we don't accidentally
                 // upgrade too far (the previous check should ensure that a

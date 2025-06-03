@@ -876,8 +876,8 @@ steps:
               composition: platform-checks
               args: [--scenario=UpgradeEntireMz, "--seed=$BUILDKITE_JOB_ID"]
 
-      - id: checks-lts-upgrade
-        label: "Checks LTS upgrade, whole-Mz restart"
+      - id: checks-self-managed-upgrade
+        label: "Checks Self-Managed upgrade, whole-Mz restart"
         depends_on: build-aarch64
         timeout_in_minutes: 180
         parallelism: 3
@@ -886,7 +886,7 @@ steps:
         plugins:
           - ./ci/plugins/mzcompose:
               composition: platform-checks
-              args: [--scenario=UpgradeEntireMzFromLatestLTS, "--seed=$BUILDKITE_JOB_ID"]
+              args: [--scenario=UpgradeEntireMzFromLatestSelfManaged, "--seed=$BUILDKITE_JOB_ID"]
 
       - id: checks-preflight-check-rollback
         label: "Checks preflight-check and roll back upgrade"
@@ -1263,7 +1263,7 @@ steps:
             run: aws-temporary
             # Cleanup runs in pre-exit hook
             args: [--no-cleanup]
-      branches: "main v*.* lts-v* *aws* *tf* *terraform* *helm* *self-managed* *orchestratord*"
+      branches: "main v*.* *aws* *tf* *terraform* *helm* *self-managed* *orchestratord*"
 
     - id: terraform-aws-upgrade
       label: "Terraform + Helm Chart Upgrade on AWS"
@@ -1281,7 +1281,7 @@ steps:
             run: aws-upgrade
             # Cleanup runs in pre-exit hook
             args: [--no-cleanup]
-      branches: "main v*.* lts-v* *aws* *tf* *terraform* *helm* *self-managed* *orchestratord*"
+      branches: "main v*.* *aws* *tf* *terraform* *helm* *self-managed* *orchestratord*"
 
     - id: terraform-gcp
       label: "Terraform + Helm Chart E2E on GCP"
@@ -1298,7 +1298,7 @@ steps:
             run: gcp-temporary
             # Cleanup runs in pre-exit hook
             args: [--no-cleanup]
-      branches: "main v*.* lts-v* *gcp* *tf* *terraform* *helm* *self-managed* *orchestratord*"
+      branches: "main v*.* *gcp* *tf* *terraform* *helm* *self-managed* *orchestratord*"
 
     - id: terraform-azure
       label: "Terraform + Helm Chart E2E on Azure"
@@ -1315,7 +1315,7 @@ steps:
             run: azure-temporary
             # Cleanup runs in pre-exit hook
             args: [--no-cleanup]
-      branches: "main v*.* lts-v* *azure* *tf* *terraform* *helm* *self-managed* *orchestratord*"
+      branches: "main v*.* *azure* *tf* *terraform* *helm* *self-managed* *orchestratord*"
 
   - group: "Output consistency"
     key: output-consistency
@@ -1794,7 +1794,7 @@ steps:
         plugins:
           - ./ci/plugins/mzcompose:
               composition: legacy-upgrade
-              args: ["--versions-source=docs", "--lts-upgrade"]
+              args: ["--versions-source=docs", "--self-managed-upgrade"]
         agents:
           queue: hetzner-aarch64-4cpu-8gb
 

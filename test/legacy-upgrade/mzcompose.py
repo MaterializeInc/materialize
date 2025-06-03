@@ -31,8 +31,8 @@ from materialize.mzcompose.services.zookeeper import Zookeeper
 from materialize.version_list import (
     VersionsFromDocs,
     get_all_published_mz_versions,
-    get_lts_versions,
     get_published_minor_mz_versions,
+    get_self_managed_versions,
 )
 
 mz_options: dict[MzVersion, str] = {}
@@ -81,7 +81,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         help="from what source to fetch the versions",
     )
     parser.add_argument("--ignore-missing-version", action="store_true")
-    parser.add_argument("--lts-upgrade", action="store_true")
+    parser.add_argument("--self-managed-upgrade", action="store_true")
     args = parser.parse_args()
 
     parallelism_index = buildkite.get_parallelism_index()
@@ -152,9 +152,9 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
             zero_downtime=True,
             force_source_table_syntax=False,
         )
-        if args.lts_upgrade:
-            # Direct upgrade from latest LTS version without any inbetween versions
-            version = get_lts_versions()[-1]
+        if args.self_managed_upgrade:
+            # Direct upgrade from latest Self-Managed version without any inbetween versions
+            version = get_self_managed_versions()[-1]
             priors = [v for v in all_versions if v <= version]
             test_upgrade_from_version(
                 c,
@@ -163,7 +163,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
                 filter=args.filter,
                 zero_downtime=False,
                 force_source_table_syntax=True,
-                lts_upgrade=True,
+                self_managed_upgrade=True,
             )
     if parallelism_count == 1 or parallelism_index == 1:
         test_upgrade_from_version(
@@ -182,9 +182,9 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
             zero_downtime=False,
             force_source_table_syntax=True,
         )
-        if args.lts_upgrade:
-            # Direct upgrade from latest LTS version without any inbetween versions
-            version = get_lts_versions()[-1]
+        if args.self_managed_upgrade:
+            # Direct upgrade from latest Self-Managed version without any inbetween versions
+            version = get_self_managed_versions()[-1]
             priors = [v for v in all_versions if v <= version]
             test_upgrade_from_version(
                 c,
@@ -193,7 +193,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
                 filter=args.filter,
                 zero_downtime=False,
                 force_source_table_syntax=False,
-                lts_upgrade=True,
+                self_managed_upgrade=True,
             )
 
 
@@ -224,7 +224,7 @@ def test_upgrade_from_version(
     filter: str,
     zero_downtime: bool,
     force_source_table_syntax: bool,
-    lts_upgrade: bool = False,
+    self_managed_upgrade: bool = False,
 ) -> None:
     print(
         f"+++ Testing {'0dt upgrade' if zero_downtime else 'regular upgrade'} from Materialize {from_version} to current_source."
@@ -320,7 +320,7 @@ def test_upgrade_from_version(
         c.kill(mz_service)
         c.rm(mz_service, "testdrive")
 
-    if from_version != "current_source" and not lts_upgrade:
+    if from_version != "current_source" and not self_managed_upgrade:
         current_version = MzVersion.parse_cargo()
         # We can't skip in-between minor versions anymore, so go through all of them
         for version in [
