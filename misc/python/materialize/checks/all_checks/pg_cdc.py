@@ -179,6 +179,27 @@ class PgCdcBase:
             # Can take longer after a restart
             $ set-sql-timeout duration=600s
 
+            # Trying to narrow down whether
+            # https://github.com/MaterializeInc/database-issues/issues/8102
+            # is a problem with the source or elsewhere.
+            > WITH t AS (SELECT * FROM postgres_source_tableA{self.suffix})
+              SELECT COUNT(*)
+              FROM t
+              GROUP BY row(t.*)
+              HAVING COUNT(*) < 0;
+
+            > WITH t AS (SELECT * FROM postgres_source_tableB{self.suffix})
+              SELECT COUNT(*)
+              FROM t
+              GROUP BY row(t.*)
+              HAVING COUNT(*) < 0;
+
+            > WITH t AS (SELECT * FROM postgres_source_tableC{self.suffix})
+              SELECT COUNT(*)
+              FROM t
+              GROUP BY row(t.*)
+              HAVING COUNT(*) < 0;
+
             > SELECT f1, max(f2), SUM(LENGTH(f3)) FROM postgres_source_tableA{self.suffix} GROUP BY f1;
             A 800 {self.expects}
             B 800 {self.expects}
