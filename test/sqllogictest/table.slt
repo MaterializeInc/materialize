@@ -17,14 +17,14 @@ CREATE TABLE t (a int)
 statement ok
 INSERT INTO t VALUES (1), (2), (3)
 
-query I
+query I rowsort
 TABLE t
 ----
 1
 2
 3
 
-query I
+query I rowsort
 TABLE materialize.public.t
 ----
 1

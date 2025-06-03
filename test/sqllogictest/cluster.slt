@@ -804,7 +804,7 @@ COMPLETE 0
 statement ok
 DROP CLUSTER REPLICA t1.r2
 
-query TTTTT
+query TTTTT rowsort
 SELECT id, name, cluster_id, size, owner_id FROM mz_cluster_replicas WHERE cluster_id LIKE 'u%'
 ----
 u1  r1  u1  2  s1

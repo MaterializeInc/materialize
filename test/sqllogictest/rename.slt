@@ -43,7 +43,7 @@ CREATE TABLE materialize.b1.t (x pg_catalog.int4);
 statement ok
 INSERT INTO b1.t VALUES (1), (2), (3)
 
-query I
+query I valuesort
 SELECT x FROM b1.t
 ----
 1
@@ -66,22 +66,23 @@ alter
 schema
 {"database_name":"materialize","id":"u10","new_name":"b2","old_name":"b1"}
 
-query I
+query I valuesort
 SELECT x FROM b2.t
 ----
 1
 2
 3
 
-query TT
+mode cockroach
+
+query TT rowsort
 SELECT database_id, name FROM mz_schemas WHERE id LIKE 'u%';
 ----
-u1
-a1
-u1
-b2
-u1
-public
+u1 a1
+u1 b2
+u1 public
+
+mode standard
 
 query TT
 SHOW CREATE TABLE b2.t;
@@ -95,7 +96,7 @@ CREATE SCHEMA friend;
 statement ok
 CREATE VIEW friend.v1 AS SELECT x FROM b2.t;
 
-query I
+query I valuesort
 SELECT * FROM friend.v1;
 ----
 1
@@ -111,7 +112,7 @@ CREATE VIEW materialize.friend.v1 AS SELECT x FROM materialize.b2.t;
 statement ok
 ALTER SCHEMA b2 RENAME TO b3;
 
-query I
+query I valuesort
 SELECT * FROM friend.v1;
 ----
 1
@@ -130,7 +131,7 @@ CREATE SCHEMA grand_friend;
 statement ok
 CREATE MATERIALIZED VIEW grand_friend.mv1 AS SELECT x FROM friend.v1;
 
-query I
+query I valuesort
 SELECT x FROM grand_friend.mv1;
 ----
 1
@@ -350,18 +351,16 @@ SHOW CREATE VIEW d.qualified_columns;
 materialize.d.qualified_columns
 CREATE VIEW⏎    materialize.d.qualified_columns⏎    AS SELECT materialize.d.values.x, materialize.d.values.y, z FROM materialize.d.values;
 
-query ITI
+mode cockroach
+
+query ITI rowsort
 SELECT * FROM d.qualified_columns;
 ----
-1
-foo
-100
-2
-bar
-200
-3
-baz
-300
+1 foo 100
+2 bar 200
+3 baz 300
+
+mode standard
 
 statement ok
 ALTER SCHEMA d RENAME TO d_renamed;

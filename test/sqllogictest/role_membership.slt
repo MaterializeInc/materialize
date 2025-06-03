@@ -898,7 +898,7 @@ r2,r3,NO
 r4,r3,NO
 COMPLETE 3
 
-simple conn=r1,user=r1
+simple conn=r1,user=r1,rowsort
 SELECT * FROM information_schema.enabled_roles
 ----
 r1

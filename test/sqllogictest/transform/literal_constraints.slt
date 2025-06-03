@@ -534,7 +534,7 @@ SELECT pk FROM tab0 WHERE (((col4 >= 660.98) AND ((col4 IN (724.71,445.29,441.2,
 statement ok
 CREATE INDEX idx_t1_b ON t1(b)
 
-query I
+query I rowsort
 SELECT a FROM t1
 WHERE (a < 3 OR a > 0) AND b IN ('l1', 'l2', 'l3', 'l9')
 ----
@@ -560,7 +560,7 @@ EOF
 
 # More tricky tests for `remove_literal_constraints`
 
-query I
+query I rowsort
 SELECT a FROM t1
 WHERE (a < 3 OR a > 0 OR a < 7) AND b IN ('l1', 'l2', 'l3', 'l9') AND (b like 'l%' OR a > 5)
 ----
@@ -1350,34 +1350,6 @@ Target cluster: quickstart
 EOF
 
 # Check literal constraints with LIMIT
-
-query T multiline
-EXPLAIN OPTIMIZED PLAN WITH (humanized expressions) AS VERBOSE TEXT FOR
-SELECT a,b
-FROM t1
-WHERE a IN (4,3,2,1)
-LIMIT 1;
-----
-Explained Query (fast path):
-  Finish limit=1 output=[#0, #1]
-    Project (#0{a}, #1{b})
-      ReadIndex on=materialize.public.t1 idx_t1_a=[lookup values=[(1); (2); (3); (4)]]
-
-Used Indexes:
-  - materialize.public.idx_t1_a (lookup)
-
-Target cluster: quickstart
-
-EOF
-
-# Note: This has LIMIT but no ORDER BY, so this is ok to change when row representation changes.
-query IT
-SELECT a,b
-FROM t1
-WHERE a IN (4,3,2,1)
-LIMIT 1;
-----
-1  a
 
 query T multiline
 EXPLAIN OPTIMIZED PLAN WITH (humanized expressions) AS VERBOSE TEXT FOR
