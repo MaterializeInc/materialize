@@ -136,6 +136,17 @@ Generally this means there is a Teleport proxy already running that we've lost t
 fix this issue by terminating the existing `tsh` process with the PID specified in the warning
 message.
 
+### S3 Bucket Layout
+
+We maintain two remote caches in the "Materialize Core" AWS account stored under S3 buckets:
+
+- `materialize-bazel-remote`: Used for PR builds and accessible by developers
+- `materialize-bazel-remote-pa`: Used for main branch and tagged builds (CI only)
+
+Each bucket contains two main folders `cas.v2` and `ac`.
+
+To force Bazel to rebuild each cache from scratch, you can delete these folders. Note that you'll need the appropriate AWS permissions to perform these operations.
+
 # Using Bazel
 
 Bazel has been integrated into [`mzbuild`](../../doc/developer/mzbuild.md), which means you can use
