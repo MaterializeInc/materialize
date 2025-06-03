@@ -42,6 +42,8 @@ use tokio::runtime::Handle;
 use tower::Service;
 use tracing::{error, info};
 
+mod usage_metrics;
+
 const BUILD_INFO: BuildInfo = build_info!();
 
 pub static VERSION: LazyLock<String> = LazyLock::new(|| BUILD_INFO.human_version(None));
@@ -204,6 +206,10 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
         .await
         .context("loading secrets reader")?;
 
+    let usage_collector = Arc::new(usage_metrics::Collector {
+        disk_root: args.scratch_directory.clone(),
+    });
+
     mz_ore::task::spawn(|| "clusterd_internal_http_server", {
         let metrics_registry = metrics_registry.clone();
         tracing::info!(
@@ -248,6 +254,10 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
                         )
                     }
                 }),
+            )
+            .route(
+                "/api/usage-metrics",
+                routing::get(async move || axum::Json(usage_collector.collect())),
             )
             .into_make_service();
 
