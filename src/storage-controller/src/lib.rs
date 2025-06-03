@@ -36,7 +36,7 @@ use mz_ore::collections::CollectionExt;
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::{EpochMillis, NowFn};
 use mz_ore::task::AbortOnDropHandle;
-use mz_ore::{assert_none, instrument, soft_panic_or_log};
+use mz_ore::{assert_none, halt, instrument, soft_panic_or_log};
 use mz_persist_client::batch::ProtoBatch;
 use mz_persist_client::cache::PersistClientCache;
 use mz_persist_client::cfg::USE_CRITICAL_SINCE_SNAPSHOT;
@@ -954,6 +954,21 @@ where
                 && !is_in_txns(id, &metadata)
                 && !matches!(&data_source, DataSource::Sink { .. })
             {
+                // As the halt message says, this can happen when trying to come
+                // up in read-only mode and the current read-write
+                // environmentd/controller deletes a collection. We exit
+                // gracefully, which means we'll get restarted and get to try
+                // again.
+                if dependency_since.is_empty() {
+                    halt!(
+                        "dependency since frontier is empty while dependent upper \
+                        is not empty (dependent id={id}, write_frontier={:?}, dependency_read_holds={:?}), \
+                        this indicates concurrent deletion of a collection",
+                        write_frontier,
+                        dependency_read_holds,
+                    );
+                }
+
                 // The dependency since cannot be beyond the dependent (our)
                 // upper unless the collection is new. In practice, the
                 // depdenency is the remap shard of a source (export), and if
