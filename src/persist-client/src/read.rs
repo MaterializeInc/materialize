@@ -1380,7 +1380,7 @@ mod tests {
         offset += width;
 
         // Create machinery for subscribe + fetch
-        let mut fetcher = client
+        let fetcher = client
             .create_batch_fetcher::<String, String, u64, i64>(
                 shard_id,
                 Default::default(),
