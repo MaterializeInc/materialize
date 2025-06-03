@@ -998,7 +998,7 @@ impl<T: Timestamp + Lattice + Codec64> SpineBatch<T> {
         // Try subset replacement
         if let Some((id, range)) = self.find_replacement_range(res) {
             let old_diffs_sum = Self::diffs_sum::<D>(
-                self.parts[range.start..=range.end]
+                self.parts[range.clone()]
                     .iter()
                     .flat_map(|p| p.batch.parts.iter()),
                 metrics,
