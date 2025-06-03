@@ -1558,158 +1558,95 @@ fn create_connection_info(
         &config.default_certificate_specs.internal,
         &mz.spec.internal_certificate_spec,
     );
+    let mut listeners_config = ListenersConfig {
+        sql: btreemap! {
+            "external".to_owned() => SqlListenerConfig{
+                addr: SocketAddr::new(IpAddr::V4(Ipv4Addr::new(0,0,0,0)), config.environmentd_sql_port),
+                authenticator_kind,
+                allowed_roles: AllowedRoles::Normal,
+                enable_tls: external_enable_tls,
+            },
+            "internal".to_owned() => SqlListenerConfig{
+                addr: SocketAddr::new(IpAddr::V4(Ipv4Addr::new(0,0,0,0)), config.environmentd_internal_sql_port),
+                authenticator_kind: AuthenticatorKind::None,
+                // Should this just be Internal?
+                allowed_roles: AllowedRoles::NormalAndInternal,
+                enable_tls: false,
+            },
+        },
+        http: btreemap! {
+            "external".to_owned() => HttpListenerConfig{
+                base: BaseListenerConfig {
+                    addr: SocketAddr::new(IpAddr::V4(Ipv4Addr::new(0,0,0,0)), config.environmentd_http_port),
+                    authenticator_kind,
+                    allowed_roles: AllowedRoles::Normal,
+                    enable_tls: external_enable_tls,
+                },
+                routes: HttpRoutesEnabled{
+                    base: true,
+                    webhook: true,
+                    internal: false,
+                    metrics: false,
+                    profiling: false,
+                }
+            },
+            "internal".to_owned() => HttpListenerConfig{
+                base: BaseListenerConfig {
+                    addr: SocketAddr::new(IpAddr::V4(Ipv4Addr::new(0,0,0,0)), config.environmentd_internal_http_port),
+                    authenticator_kind: AuthenticatorKind::None,
+                    // Should this just be Internal?
+                    allowed_roles: AllowedRoles::NormalAndInternal,
+                    enable_tls: false,
+                },
+                routes: HttpRoutesEnabled{
+                    base: true,
+                    webhook: true,
+                    internal: true,
+                    metrics: true,
+                    profiling: true,
+                }
+            },
+        },
+    };
+    if authenticator_kind == AuthenticatorKind::Password {
+        listeners_config.sql.remove("internal");
+        listeners_config.http.remove("internal");
 
-    let listeners_json = serde_json::to_string(&match authenticator_kind {
-        AuthenticatorKind::Frontegg => {
-            ListenersConfig {
-                sql: btreemap! {
-                    "external".to_owned() => SqlListenerConfig{
-                        addr: SocketAddr::new(IpAddr::V4(Ipv4Addr::new(0,0,0,0)), config.environmentd_sql_port),
-                        authenticator_kind: AuthenticatorKind::Frontegg,
-                        allowed_roles: AllowedRoles::Normal,
-                        enable_tls: external_enable_tls,
-                    },
-                    "internal".to_owned() => SqlListenerConfig{
-                        addr: SocketAddr::new(IpAddr::V4(Ipv4Addr::new(0,0,0,0)), config.environmentd_internal_sql_port),
-                        authenticator_kind: AuthenticatorKind::None,
-                        // Should this just be Internal?
-                        allowed_roles: AllowedRoles::NormalAndInternal,
-                        enable_tls: false,
-                    },
+        listeners_config.sql.get_mut("external").map(|listener| {
+            listener.allowed_roles = AllowedRoles::NormalAndInternal;
+            listener
+        });
+        listeners_config.http.get_mut("external").map(|listener| {
+            listener.base.allowed_roles = AllowedRoles::NormalAndInternal;
+            listener.routes.internal = true;
+            listener.routes.profiling = true;
+            listener
+        });
+
+        listeners_config.http.insert(
+            "metrics".to_owned(),
+            HttpListenerConfig {
+                base: BaseListenerConfig {
+                    addr: SocketAddr::new(
+                        IpAddr::V4(Ipv4Addr::new(0, 0, 0, 0)),
+                        config.environmentd_internal_http_port,
+                    ),
+                    authenticator_kind: AuthenticatorKind::None,
+                    allowed_roles: AllowedRoles::NormalAndInternal,
+                    enable_tls: false,
                 },
-                http: btreemap! {
-                    "external".to_owned() => HttpListenerConfig{
-                        base: BaseListenerConfig {
-                            addr: SocketAddr::new(IpAddr::V4(Ipv4Addr::new(0,0,0,0)), config.environmentd_http_port),
-                            authenticator_kind: AuthenticatorKind::Frontegg,
-                            allowed_roles: AllowedRoles::Normal,
-                            enable_tls: external_enable_tls,
-                        },
-                        routes: HttpRoutesEnabled{
-                            base: true,
-                            webhook: true,
-                            internal: false,
-                            metrics: false,
-                            profiling: false,
-                        }
-                    },
-                    "internal".to_owned() => HttpListenerConfig{
-                        base: BaseListenerConfig {
-                            addr: SocketAddr::new(IpAddr::V4(Ipv4Addr::new(0,0,0,0)), config.environmentd_internal_http_port),
-                            authenticator_kind: AuthenticatorKind::None,
-                            // Should this just be Internal?
-                            allowed_roles: AllowedRoles::NormalAndInternal,
-                            enable_tls: false,
-                        },
-                        routes: HttpRoutesEnabled{
-                            base: true,
-                            webhook: true,
-                            internal: true,
-                            metrics: true,
-                            profiling: true,
-                        }
-                    },
+                routes: HttpRoutesEnabled {
+                    base: false,
+                    webhook: false,
+                    internal: false,
+                    metrics: true,
+                    profiling: false,
                 },
-            }
-        }
-        AuthenticatorKind::None => {
-            ListenersConfig {
-                sql: btreemap! {
-                    "external".to_owned() => SqlListenerConfig{
-                        addr: SocketAddr::new(IpAddr::V4(Ipv4Addr::new(0,0,0,0)), config.environmentd_sql_port),
-                        authenticator_kind: AuthenticatorKind::None,
-                        allowed_roles: AllowedRoles::Normal,
-                            enable_tls: external_enable_tls,
-                    },
-                    "internal".to_owned() => SqlListenerConfig{
-                        addr: SocketAddr::new(IpAddr::V4(Ipv4Addr::new(0,0,0,0)), config.environmentd_internal_sql_port),
-                        authenticator_kind: AuthenticatorKind::None,
-                        // Should this just be Internal?
-                        allowed_roles: AllowedRoles::NormalAndInternal,
-                        enable_tls: false,
-                    },
-                },
-                http: btreemap! {
-                    "external".to_owned() => HttpListenerConfig{
-                        base: BaseListenerConfig {
-                            addr: SocketAddr::new(IpAddr::V4(Ipv4Addr::new(0,0,0,0)), config.environmentd_http_port),
-                            authenticator_kind: AuthenticatorKind::None,
-                            allowed_roles: AllowedRoles::Normal,
-                            enable_tls: external_enable_tls,
-                        },
-                        routes: HttpRoutesEnabled{
-                            base: true,
-                            webhook: true,
-                            internal: false,
-                            metrics: false,
-                            profiling: false,
-                        }
-                    },
-                    "internal".to_owned() => HttpListenerConfig{
-                        base: BaseListenerConfig {
-                            addr: SocketAddr::new(IpAddr::V4(Ipv4Addr::new(0,0,0,0)), config.environmentd_internal_http_port),
-                            authenticator_kind: AuthenticatorKind::None,
-                            // Should this just be Internal?
-                            allowed_roles: AllowedRoles::NormalAndInternal,
-                            enable_tls: false,
-                        },
-                        routes: HttpRoutesEnabled{
-                            base: true,
-                            webhook: true,
-                            internal: true,
-                            metrics: true,
-                            profiling: true,
-                        }
-                    },
-                },
-            }
-        }
-        AuthenticatorKind::Password => {
-            ListenersConfig {
-                sql: btreemap! {
-                    "external".to_owned() => SqlListenerConfig{
-                        addr: SocketAddr::new(IpAddr::V4(Ipv4Addr::new(0,0,0,0)), config.environmentd_sql_port),
-                        authenticator_kind: AuthenticatorKind::Password,
-                        allowed_roles: AllowedRoles::NormalAndInternal,
-                        enable_tls: external_enable_tls,
-                    },
-                },
-                http: btreemap! {
-                    "external".to_owned() => HttpListenerConfig{
-                        base: BaseListenerConfig {
-                            addr: SocketAddr::new(IpAddr::V4(Ipv4Addr::new(0,0,0,0)), config.environmentd_http_port),
-                            authenticator_kind: AuthenticatorKind::Password,
-                            allowed_roles: AllowedRoles::NormalAndInternal,
-                            enable_tls: external_enable_tls,
-                        },
-                        routes: HttpRoutesEnabled{
-                            base: true,
-                            webhook: true,
-                            internal: true,
-                            metrics: false,
-                            profiling: true,
-                        }
-                    },
-                    "metrics".to_owned() => HttpListenerConfig{
-                        base: BaseListenerConfig {
-                            addr: SocketAddr::new(IpAddr::V4(Ipv4Addr::new(0,0,0,0)), config.environmentd_internal_http_port),
-                            authenticator_kind: AuthenticatorKind::None,
-                            allowed_roles: AllowedRoles::NormalAndInternal,
-                            enable_tls: false,
-                        },
-                        routes: HttpRoutesEnabled{
-                            base: false,
-                            webhook: false,
-                            internal: false,
-                            metrics: true,
-                            profiling: false,
-                        }
-                    },
-                },
-            }
-        }
-    })
-    .expect("known valid");
+            },
+        );
+    }
+
+    let listeners_json = serde_json::to_string(&listeners_config).expect("known valid");
     let listeners_configmap = ConfigMap {
         binary_data: None,
         data: Some(btreemap! {
