@@ -127,7 +127,7 @@ steps:
               args:
                 - --other-tag
                 # common-ancestor will default to latest if not in a PR
-                - common-ancestor
+                - v0.130.13
       - id: scalability-benchmark-dml-dql
         label: "Scalability benchmark (read & write) against merge base or 'latest'"
         depends_on: build-x86_64
@@ -142,9 +142,9 @@ steps:
                 - --target
                 - HEAD
                 - --target
-                - common-ancestor
+                - v0.130.13
                 - --regression-against
-                - common-ancestor
+                - v0.130.13
                 - --workload-group-marker
                 - "DmlDqlWorkload"
                 - --max-concurrency
@@ -163,9 +163,9 @@ steps:
                 - --target
                 - HEAD
                 - --target
-                - common-ancestor
+                - v0.130.13
                 - --regression-against
-                - common-ancestor
+                - v0.130.13
                 - --workload-group-marker
                 - "DdlWorkload"
                 - --count
@@ -188,9 +188,9 @@ steps:
                 - --target
                 - HEAD
                 - --target
-                - common-ancestor
+                - v0.130.13
                 - --regression-against
-                - common-ancestor
+                - v0.130.13
                 - --workload-group-marker
                 - "ConnectionWorkload"
                 - --exponent-base
@@ -209,7 +209,7 @@ steps:
               composition: parallel-benchmark
               args:
                 - --other-tag
-                - common-ancestor
+                - v0.130.13
 
   - group: Kafka
     key: kafka
