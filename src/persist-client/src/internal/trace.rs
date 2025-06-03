@@ -1086,7 +1086,7 @@ impl<T: Timestamp + Lattice + Codec64> SpineBatch<T> {
 
         match (lower, upper) {
             (Some((lower_idx, id_lower)), Some((upper_idx, id_upper))) => {
-                Some((SpineId(id_lower, id_upper), lower_idx..upper_idx))
+                Some((SpineId(id_lower, id_upper), lower_idx..(upper_idx + 1)))
             }
             _ => None,
         }
@@ -1113,7 +1113,7 @@ impl<T: Timestamp + Lattice + Codec64> SpineBatch<T> {
             id: spine_id,
             batch: Arc::new(res.output.clone()),
         });
-        new_parts.extend_from_slice(&parts[range.end + 1..]);
+        new_parts.extend_from_slice(&parts[range.end..]);
 
         let new_spine_batch = SpineBatch {
             id: *id,
