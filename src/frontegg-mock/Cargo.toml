@@ -25,12 +25,12 @@ serde_json = "1.0.127"
 tokio = { version = "1.44.1", default-features = false }
 tracing = "0.1.37"
 tracing-subscriber = "0.3.19"
-uuid = "1.16.0"
+uuid = "1.17.0"
 workspace-hack = { version = "0.0.0", path = "../workspace-hack", optional = true }
 
 [dev-dependencies]
 reqwest = { version = "0.11.13", features = ["json"] }
-openssl = { version = "0.10.71", features = ["vendored"] }
+openssl = { version = "0.10.73", features = ["vendored"] }
 
 [package.metadata.cargo-udeps.ignore]
 normal = ["workspace-hack"]

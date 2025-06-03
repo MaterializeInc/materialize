@@ -50,7 +50,7 @@ mz-persist-types = { path = "../persist-types" }
 mz-proto = { path = "../proto" }
 mz-timely-util = { path = "../timely-util" }
 mz-postgres-client = { path = "../postgres-client" }
-num_cpus = "1.16.0"
+num_cpus = "1.17.0"
 prometheus = { version = "0.13.4", default-features = false }
 proptest = { version = "1.6.0", default-features = false, features = ["std"] }
 proptest-derive = { version = "0.5.1", features = ["boxed_union"] }
@@ -66,14 +66,14 @@ tokio-metrics = "0.4.2"
 tokio-stream = "0.1.17"
 tonic = "0.12.1"
 tracing = "0.1.37"
-uuid = { version = "1.16.0", features = ["v4"] }
+uuid = { version = "1.17.0", features = ["v4"] }
 workspace-hack = { version = "0.0.0", path = "../workspace-hack", optional = true }
 
 [dev-dependencies]
 criterion = { version = "0.6.0", features = ["html_reports"] }
 datadriven = { version = "0.8.0", features = ["async"] }
 futures-task = "0.3.31"
-num_cpus = "1.16.0"
+num_cpus = "1.17.0"
 tempfile = "3.20.0"
 
 [build-dependencies]

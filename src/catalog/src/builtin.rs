@@ -5060,7 +5060,7 @@ pub static MZ_WALLCLOCK_GLOBAL_LAG_HISTORY: LazyLock<BuiltinView> = LazyLock::ne
     oid: oid::VIEW_MZ_WALLCLOCK_GLOBAL_LAG_HISTORY_OID,
     desc: RelationDesc::builder()
         .with_column("object_id", ScalarType::String.nullable(false))
-        .with_column("lag", ScalarType::Interval.nullable(false))
+        .with_column("lag", ScalarType::Interval.nullable(true))
         .with_column(
             "occurred_at",
             ScalarType::TimestampTz { precision: None }.nullable(false),
@@ -5093,7 +5093,7 @@ pub static MZ_WALLCLOCK_GLOBAL_LAG_RECENT_HISTORY: LazyLock<BuiltinView> =
         oid: oid::VIEW_MZ_WALLCLOCK_GLOBAL_LAG_RECENT_HISTORY_OID,
         desc: RelationDesc::builder()
             .with_column("object_id", ScalarType::String.nullable(false))
-            .with_column("lag", ScalarType::Interval.nullable(false))
+            .with_column("lag", ScalarType::Interval.nullable(true))
             .with_column(
                 "occurred_at",
                 ScalarType::TimestampTz { precision: None }.nullable(false),
@@ -5114,7 +5114,7 @@ pub static MZ_WALLCLOCK_GLOBAL_LAG: LazyLock<BuiltinView> = LazyLock::new(|| Bui
     oid: oid::VIEW_MZ_WALLCLOCK_GLOBAL_LAG_OID,
     desc: RelationDesc::builder()
         .with_column("object_id", ScalarType::String.nullable(false))
-        .with_column("lag", ScalarType::Interval.nullable(false))
+        .with_column("lag", ScalarType::Interval.nullable(true))
         .with_key(vec![0])
         .finish(),
     column_comments: BTreeMap::from_iter([
@@ -5162,7 +5162,7 @@ pub static MZ_WALLCLOCK_GLOBAL_LAG_HISTOGRAM: LazyLock<BuiltinView> =
                 ScalarType::TimestampTz { precision: None }.nullable(false),
             )
             .with_column("object_id", ScalarType::String.nullable(false))
-            .with_column("lag_seconds", ScalarType::UInt64.nullable(false))
+            .with_column("lag_seconds", ScalarType::UInt64.nullable(true))
             .with_column("labels", ScalarType::Jsonb.nullable(false))
             .with_column("count", ScalarType::Int64.nullable(false))
             .with_key(vec![0, 1, 2, 3, 4])

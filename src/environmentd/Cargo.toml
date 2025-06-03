@@ -77,8 +77,8 @@ mz-sql = { path = "../sql" }
 mz-storage-types = { path = "../storage-types" }
 mz-tracing = { path = "../tracing", optional = true }
 nix = { version = "0.30.1", features = ["signal"] }
-num_cpus = "1.16.0"
-openssl = { version = "0.10.71", features = ["vendored"] }
+num_cpus = "1.17.0"
+openssl = { version = "0.10.73", features = ["vendored"] }
 openssl-sys = { version = "0.9.108", features = ["vendored"] }
 opentelemetry = { version = "0.24.0", features = ["trace"] }
 opentelemetry_sdk = { version = "0.24.1", features = ["rt-tokio"] }
@@ -109,14 +109,14 @@ tokio = { version = "1.44.1", features = ["sync"] }
 tokio-postgres = { version = "0.7.8" }
 tokio-stream = { version = "0.1.17", features = ["net"] }
 tower = { version = "0.5.2", features = ["buffer", "limit", "load-shed"] }
-tower-http = { version = "0.6.4", features = ["cors"] }
+tower-http = { version = "0.6.5", features = ["cors"] }
 tracing = "0.1.37"
 tracing-capture = { version = "0.1.0", optional = true }
 tracing-opentelemetry = { version = "0.25.0" }
 tracing-subscriber = "0.3.19"
 tungstenite = { version = "0.21.0" }
 url = "2.3.1"
-uuid = "1.16.0"
+uuid = "1.17.0"
 workspace-hack = { version = "0.0.0", path = "../workspace-hack", optional = true }
 
 [dev-dependencies]
@@ -153,7 +153,7 @@ tokio-postgres = { version = "0.7.8", features = ["with-chrono-0_4"] }
 
 [build-dependencies]
 anyhow = "1.0.98"
-cc = "1.2.24"
+cc = "1.2.25"
 mz-npm = { path = "../npm" }
 
 [features]

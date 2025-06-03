@@ -321,7 +321,7 @@ SELECT * FROM t1, LATERAL(SELECT t2.*, ROW_NUMBER() OVER() FROM t2 WHERE t1.f2 =
 2  2  1  2  1
 2  2  2  2  2
 
-query IIIII
+query IIIII rowsort
 SELECT * FROM t2, LATERAL(SELECT t1.*, ROW_NUMBER() OVER() FROM t1 WHERE t1.f1 = t2.f1) AS foo;
 ----
 1  1  1  1  1
@@ -334,7 +334,7 @@ SELECT * FROM t2, LATERAL(SELECT t1.*, ROW_NUMBER() OVER() FROM t1 WHERE t1.f1 =
 1  1  1  1  1
 2  2  2  2  1
 
-query IIIII
+query IIIII rowsort
 SELECT * FROM t2, LATERAL(SELECT t1.*, ROW_NUMBER() OVER() FROM t1 WHERE t1.f2 = t2.f2) AS foo;
 ----
 1  1  1  1  1
@@ -514,7 +514,7 @@ ORDER BY dense_rank
 2  b
 3  a
 
-query IIT
+query IIT rowsort
 SELECT rank() OVER (ORDER BY x), dense_rank() OVER (ORDER BY x), x FROM t
 ----
 1  1  a
@@ -590,7 +590,7 @@ CREATE TABLE t(x string, y int);
 statement ok
 INSERT INTO t VALUES ('a', 98), ('b', 99), ('c', 98);
 
-query IIT
+query IIT rowsort
 SELECT rank() OVER (PARTITION BY y ORDER BY x), dense_rank() OVER (PARTITION BY y ORDER BY x), x FROM t;
 ----
 1  1  a
@@ -651,7 +651,7 @@ ORDER BY dense_rank, x;
 1  c
 2  a
 
-query IIT
+query IIT rowsort
 SELECT rank() OVER (PARTITION BY x ORDER BY x), dense_rank() OVER (PARTITION BY x ORDER BY x), x FROM t;
 ----
 1  1  a
@@ -666,7 +666,7 @@ ORDER BY dense_rank, x;
 1  b
 1  c
 
-query IIT
+query IIT rowsort
 SELECT rank() OVER (PARTITION BY NULL ORDER BY 10000), dense_rank() OVER (PARTITION BY NULL ORDER BY 10000) AS q, a1.x
 FROM t AS a1, t AS a2;
 ----

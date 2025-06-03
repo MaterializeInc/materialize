@@ -168,7 +168,7 @@ SELECT * FROM x x1, x x2, generate_series(x2.a, x2.b) WHERE x1.b = x2.b
 3  4  3  4  4
 
 # One from each.
-query IIIII
+query IIIII rowsort
 SELECT * FROM x x1, x x2, generate_series(x1.a, x2.a) WHERE x1.b = x2.b
 ----
 1  2  1  2  1
@@ -189,7 +189,7 @@ SELECT x.a, generate_series FROM x, LATERAL (SELECT * FROM generate_series(1, x.
 
 # Regression test for database-issues#1700: crash when a filter references an output column of
 # a table function
-query IIIII
+query IIIII rowsort
 SELECT * FROM x x1, x x2, generate_series(x1.a, x2.b) AS x3(b) WHERE x1.b = x2.b AND x1.a = x3.b
 ----
 1 2 1 2 1

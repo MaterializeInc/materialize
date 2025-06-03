@@ -173,7 +173,7 @@ pub static WALLCLOCK_LAG_HISTORY_DESC: LazyLock<RelationDesc> = LazyLock::new(||
     RelationDesc::builder()
         .with_column("object_id", ScalarType::String.nullable(false))
         .with_column("replica_id", ScalarType::String.nullable(true))
-        .with_column("lag", ScalarType::Interval.nullable(false))
+        .with_column("lag", ScalarType::Interval.nullable(true))
         .with_column(
             "occurred_at",
             ScalarType::TimestampTz { precision: None }.nullable(false),
@@ -192,7 +192,7 @@ pub static WALLCLOCK_GLOBAL_LAG_HISTOGRAM_RAW_DESC: LazyLock<RelationDesc> = Laz
             ScalarType::TimestampTz { precision: None }.nullable(false),
         )
         .with_column("object_id", ScalarType::String.nullable(false))
-        .with_column("lag_seconds", ScalarType::UInt64.nullable(false))
+        .with_column("lag_seconds", ScalarType::UInt64.nullable(true))
         .with_column("labels", ScalarType::Jsonb.nullable(false))
         .finish()
 });

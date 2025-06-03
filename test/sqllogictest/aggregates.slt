@@ -107,14 +107,14 @@ SELECT a, sum(b) AS a FROM t GROUP BY a
 2 3
 3 1
 
-query I
+query I rowsort
 SELECT a FROM t GROUP BY t.a, t.a
 ----
 1
 2
 3
 
-query I
+query I rowsort
 SELECT a FROM t GROUP BY t.a, public.t.a
 ----
 1

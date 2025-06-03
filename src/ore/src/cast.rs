@@ -256,6 +256,14 @@ macro_rules! cast_lossy {
     };
 }
 
+cast_lossy!(usize, f32);
+cast_lossy!(isize, f32);
+cast_lossy!(f32, usize);
+cast_lossy!(i64, f32);
+cast_lossy!(f32, i64);
+cast_lossy!(u64, f32);
+cast_lossy!(f32, u64);
+cast_lossy!(f32, u32);
 cast_lossy!(usize, f64);
 cast_lossy!(isize, f64);
 cast_lossy!(f64, usize);

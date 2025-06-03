@@ -131,7 +131,7 @@ toml_datetime = { version = "0.6.9", default-features = false, features = ["serd
 toml_edit = { version = "0.22.26", features = ["serde"] }
 tonic = { version = "0.12.3", features = ["gzip"] }
 tower = { version = "0.5.2", default-features = false, features = ["balance", "buffer", "filter", "limit", "load-shed", "log", "retry", "timeout"] }
-tower-http = { version = "0.6.4", features = ["auth", "cors", "map-response-body", "trace", "util"] }
+tower-http = { version = "0.6.5", features = ["auth", "cors", "map-response-body", "trace", "util"] }
 tracing = { version = "0.1.41", features = ["log"] }
 tracing-core = { version = "0.1.33" }
 tracing-subscriber = { version = "0.3.19", features = ["env-filter", "json"] }
@@ -139,7 +139,7 @@ uncased = { version = "0.9.10" }
 unicode-bidi = { version = "0.3.18" }
 unicode-normalization = { version = "0.1.24" }
 url = { version = "2.5.4", features = ["serde"] }
-uuid = { version = "1.16.0", features = ["serde", "v4", "v5", "v7"] }
+uuid = { version = "1.17.0", features = ["serde", "v4", "v5", "v7"] }
 zeroize = { version = "1.8.1", features = ["serde"] }
 zstd = { version = "0.13.3" }
 zstd-safe = { version = "7.2.1", default-features = false, features = ["arrays", "legacy", "std", "zdict_builder"] }
@@ -167,7 +167,7 @@ bitflags = { version = "2.9.0", default-features = false, features = ["std"] }
 bstr = { version = "1.10.0" }
 byteorder = { version = "1.5.0" }
 bytes = { version = "1.10.1", features = ["serde"] }
-cc = { version = "1.2.24", default-features = false, features = ["parallel"] }
+cc = { version = "1.2.25", default-features = false, features = ["parallel"] }
 chrono = { version = "0.4.39", features = ["serde"] }
 clap = { version = "4.5.23", features = ["derive", "env", "string", "wrap_help"] }
 clap_builder = { version = "4.5.23", default-features = false, features = ["color", "env", "std", "string", "suggestions", "usage", "wrap_help"] }
@@ -263,7 +263,7 @@ toml_datetime = { version = "0.6.9", default-features = false, features = ["serd
 toml_edit = { version = "0.22.26", features = ["serde"] }
 tonic = { version = "0.12.3", features = ["gzip"] }
 tower = { version = "0.5.2", default-features = false, features = ["balance", "buffer", "filter", "limit", "load-shed", "log", "retry", "timeout"] }
-tower-http = { version = "0.6.4", features = ["auth", "cors", "map-response-body", "trace", "util"] }
+tower-http = { version = "0.6.5", features = ["auth", "cors", "map-response-body", "trace", "util"] }
 tracing = { version = "0.1.41", features = ["log"] }
 tracing-core = { version = "0.1.33" }
 tracing-subscriber = { version = "0.3.19", features = ["env-filter", "json"] }
@@ -271,7 +271,7 @@ uncased = { version = "0.9.10" }
 unicode-bidi = { version = "0.3.18" }
 unicode-normalization = { version = "0.1.24" }
 url = { version = "2.5.4", features = ["serde"] }
-uuid = { version = "1.16.0", features = ["serde", "v4", "v5", "v7"] }
+uuid = { version = "1.17.0", features = ["serde", "v4", "v5", "v7"] }
 zeroize = { version = "1.8.1", features = ["serde"] }
 zstd = { version = "0.13.3" }
 zstd-safe = { version = "7.2.1", default-features = false, features = ["arrays", "legacy", "std", "zdict_builder"] }
@@ -280,28 +280,30 @@ zstd-sys = { version = "2.0.13", features = ["std"] }
 [target.x86_64-unknown-linux-gnu.dependencies]
 camino = { version = "1.1.9", default-features = false, features = ["serde1"] }
 hyper = { version = "0.14.27", default-features = false, features = ["runtime"] }
-linux-raw-sys = { version = "0.4.15", default-features = false, features = ["elf", "errno", "general", "if_ether", "ioctl", "net", "netlink", "no_std", "prctl", "std", "xdp"] }
+linux-raw-sys-274715c4dabd11b0 = { package = "linux-raw-sys", version = "0.9.4", default-features = false, features = ["elf", "errno", "general", "ioctl", "no_std", "prctl"] }
+linux-raw-sys-9fbad63c4bcf4a8f = { package = "linux-raw-sys", version = "0.4.15", default-features = false, features = ["elf", "errno", "general", "if_ether", "ioctl", "net", "netlink", "no_std", "prctl", "std", "xdp"] }
 miniz_oxide = { version = "0.8.8", default-features = false, features = ["with-alloc"] }
 native-tls = { version = "0.2.14", default-features = false, features = ["vendored"] }
-openssl = { version = "0.10.72", features = ["vendored"] }
-openssl-sys = { version = "0.9.108", default-features = false, features = ["vendored"] }
+openssl = { version = "0.10.73", features = ["vendored"] }
+openssl-sys = { version = "0.9.109", default-features = false, features = ["vendored"] }
 pathdiff = { version = "0.2.3", default-features = false, features = ["camino"] }
 ring = { version = "0.17.14", features = ["std"] }
-rustix-d585fab2519d2d1 = { package = "rustix", version = "0.38.44", features = ["event", "fs", "net", "pipe", "process", "termios", "time"] }
-rustix-dff4ba8e3ae991db = { package = "rustix", version = "1.0.5", features = ["fs"] }
+rustix-d585fab2519d2d1 = { package = "rustix", version = "0.38.44", features = ["fs", "net", "process", "termios"] }
+rustix-dff4ba8e3ae991db = { package = "rustix", version = "1.0.5", features = ["event", "fs", "pipe", "process", "time"] }
 
 [target.x86_64-unknown-linux-gnu.build-dependencies]
 camino = { version = "1.1.9", default-features = false, features = ["serde1"] }
 hyper = { version = "0.14.27", default-features = false, features = ["runtime"] }
-linux-raw-sys = { version = "0.4.15", default-features = false, features = ["elf", "errno", "general", "if_ether", "ioctl", "net", "netlink", "no_std", "prctl", "std", "xdp"] }
+linux-raw-sys-274715c4dabd11b0 = { package = "linux-raw-sys", version = "0.9.4", default-features = false, features = ["elf", "errno", "general", "ioctl", "no_std", "prctl"] }
+linux-raw-sys-9fbad63c4bcf4a8f = { package = "linux-raw-sys", version = "0.4.15", default-features = false, features = ["elf", "errno", "general", "if_ether", "ioctl", "net", "netlink", "no_std", "prctl", "std", "xdp"] }
 miniz_oxide = { version = "0.8.8", default-features = false, features = ["with-alloc"] }
 native-tls = { version = "0.2.14", default-features = false, features = ["vendored"] }
-openssl = { version = "0.10.72", features = ["vendored"] }
-openssl-sys = { version = "0.9.108", default-features = false, features = ["vendored"] }
+openssl = { version = "0.10.73", features = ["vendored"] }
+openssl-sys = { version = "0.9.109", default-features = false, features = ["vendored"] }
 pathdiff = { version = "0.2.3", default-features = false, features = ["camino"] }
 ring = { version = "0.17.14", features = ["std"] }
-rustix-d585fab2519d2d1 = { package = "rustix", version = "0.38.44", features = ["event", "fs", "net", "pipe", "process", "termios", "time"] }
-rustix-dff4ba8e3ae991db = { package = "rustix", version = "1.0.5", features = ["fs"] }
+rustix-d585fab2519d2d1 = { package = "rustix", version = "0.38.44", features = ["fs", "net", "process", "termios"] }
+rustix-dff4ba8e3ae991db = { package = "rustix", version = "1.0.5", features = ["event", "fs", "pipe", "process", "time"] }
 
 [target.x86_64-apple-darwin.dependencies]
 camino = { version = "1.1.9", default-features = false, features = ["serde1"] }
@@ -310,8 +312,8 @@ miniz_oxide = { version = "0.8.8", default-features = false, features = ["with-a
 native-tls = { version = "0.2.14", default-features = false, features = ["vendored"] }
 pathdiff = { version = "0.2.3", default-features = false, features = ["camino"] }
 ring = { version = "0.17.14", features = ["std"] }
-rustix-d585fab2519d2d1 = { package = "rustix", version = "0.38.44", features = ["event", "fs", "net", "pipe", "process", "termios", "time"] }
-rustix-dff4ba8e3ae991db = { package = "rustix", version = "1.0.5", features = ["fs"] }
+rustix-d585fab2519d2d1 = { package = "rustix", version = "0.38.44", features = ["fs", "net", "process", "termios"] }
+rustix-dff4ba8e3ae991db = { package = "rustix", version = "1.0.5", features = ["event", "fs", "pipe", "process", "time"] }
 security-framework = { version = "2.10.0", features = ["alpn"] }
 
 [target.x86_64-apple-darwin.build-dependencies]
@@ -321,8 +323,8 @@ miniz_oxide = { version = "0.8.8", default-features = false, features = ["with-a
 native-tls = { version = "0.2.14", default-features = false, features = ["vendored"] }
 pathdiff = { version = "0.2.3", default-features = false, features = ["camino"] }
 ring = { version = "0.17.14", features = ["std"] }
-rustix-d585fab2519d2d1 = { package = "rustix", version = "0.38.44", features = ["event", "fs", "net", "pipe", "process", "termios", "time"] }
-rustix-dff4ba8e3ae991db = { package = "rustix", version = "1.0.5", features = ["fs"] }
+rustix-d585fab2519d2d1 = { package = "rustix", version = "0.38.44", features = ["fs", "net", "process", "termios"] }
+rustix-dff4ba8e3ae991db = { package = "rustix", version = "1.0.5", features = ["event", "fs", "pipe", "process", "time"] }
 security-framework = { version = "2.10.0", features = ["alpn"] }
 
 ### END HAKARI SECTION

@@ -785,3 +785,6 @@ Source materialize.public.t1
 Target cluster: quickstart
 
 EOF
+
+statement ok
+SELECT mz_internal.mz_minimal_name_qualification(COALESCE(pg_catalog.string_to_array(pg_catalog."current_role"(), pg_catalog."user"()), COALESCE(mz_internal.mz_normalize_object_name(NULL), pg_catalog.regexp_match(CAST(0 AS text), CAST(0 AS text)))), mz_catalog.mz_version()) AS c1;

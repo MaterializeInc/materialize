@@ -37,8 +37,8 @@ mz-ore = { path = "../ore", default-features = false, features = ["id_gen"]}
 mz-server-core = { path = "../server-core" }
 mz-tracing = { path = "../tracing" }
 mz-pgwire-common = { path = "../pgwire-common" }
-num_cpus = "1.16.0"
-openssl = { version = "0.10.71", features = ["vendored"] }
+num_cpus = "1.17.0"
+openssl = { version = "0.10.73", features = ["vendored"] }
 prometheus = { version = "0.13.4", default-features = false }
 proxy-header = "0.1.2"
 semver = "1.0.26"
@@ -49,7 +49,7 @@ tokio-util = { version = "0.7.15", features = ["codec"] }
 tower = "0.5.2"
 tracing = "0.1.37"
 tracing-subscriber = "0.3.19"
-uuid = "1.16.0"
+uuid = "1.17.0"
 workspace-hack = { version = "0.0.0", path = "../workspace-hack", optional = true }
 
 [dev-dependencies]

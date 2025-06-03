@@ -31,7 +31,7 @@ serde_json = "1.0.127"
 sha2 = "0.10.9"
 snap = { version = "1.1.1", optional = true }
 tracing = "0.1.37"
-uuid = "1.16.0"
+uuid = "1.17.0"
 workspace-hack = { version = "0.0.0", path = "../workspace-hack", optional = true }
 
 [features]

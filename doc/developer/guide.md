@@ -334,6 +334,8 @@ you can use the internal port with the `mz_system` user:
 psql -U mz_system -h localhost -p 6877 materialize
 ```
 
+In order to run Materialize with large clusters and more memory available, you have to set a license key. Set `export MZ_LICENSE_KEY=$HOME/license-key` and write the `materialize dev license key` from 1Password into that file. In order to have `mzcompose` based tests pick up the license key, set `export MZ_CI_LICENSE_KEY=$(cat $MZ_LICENSE_KEY)`.
+
 ## Console UI
 
 Console can point at your local environmentd. To use this feature, pass the
