@@ -713,7 +713,6 @@ impl IntoResponse for AuthError {
     }
 }
 
-// type Auth = (Json<LoginCredentials>, towerSessions)
 // Simplified login handler
 pub async fn handle_login(
     session: Option<Extension<TowerSession>>,
@@ -721,14 +720,11 @@ pub async fn handle_login(
     Json(LoginCredentials { username, password }): Json<LoginCredentials>,
 ) -> impl IntoResponse {
     let Ok(adapter_client) = adapter_client_rx.clone().await else {
-        return (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(json!({ "status": "false" })),
-        );
+        return StatusCode::INTERNAL_SERVER_ERROR;
     };
     if let Err(err) = adapter_client.authenticate(&username, &password).await {
         warn!(?err, "HTTP login failed authentication");
-        return (StatusCode::UNAUTHORIZED, Json(json!({ "status": "false" })));
+        return StatusCode::UNAUTHORIZED;
     };
 
     // Create session data
@@ -740,17 +736,11 @@ pub async fn handle_login(
     // Store session data
     let session = session.and_then(|Extension(session)| Some(session));
     let Some(session) = session else {
-        return (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(json!({ "status": "false" })),
-        );
+        return StatusCode::INTERNAL_SERVER_ERROR;
     };
     match session.insert("data", &session_data).await {
-        Err(_) => (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(json!({"status": "failed"})),
-        ),
-        Ok(_) => (StatusCode::OK, Json(json!({ "status": "success" }))),
+        Err(_) => StatusCode::INTERNAL_SERVER_ERROR,
+        Ok(_) => StatusCode::OK,
     }
 }
 
@@ -758,18 +748,12 @@ pub async fn handle_login(
 pub async fn handle_logout(session: Option<Extension<TowerSession>>) -> impl IntoResponse {
     let session = session.and_then(|Extension(session)| Some(session));
     let Some(session) = session else {
-        return (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(json!({ "status": "false" })),
-        );
+        return StatusCode::INTERNAL_SERVER_ERROR;
     };
     // Delete session
     match session.delete().await {
-        Err(_) => (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(json!({"status": "failed"})),
-        ),
-        Ok(_) => (StatusCode::OK, Json(json!({ "status": "success" }))),
+        Err(_) => StatusCode::INTERNAL_SERVER_ERROR,
+        Ok(_) => StatusCode::OK,
     }
 }
 
