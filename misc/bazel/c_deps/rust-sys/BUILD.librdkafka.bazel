@@ -30,6 +30,7 @@ cmake(
         # Note: casing here is important.
         "OpenSSL_ROOT": "$(execpath @openssl//:openssl_root)",
     },
+    copts = ["-UNDEBUG"],
     generate_args = [
         # Features enabled by the Rust `rdkafka-sys` crate.
         "-DRDKAFKA_BUILD_STATIC=1",
@@ -55,6 +56,12 @@ cmake(
         "-DCMAKE_FIND_USE_CMAKE_ENVIRONMENT_PATH=0",
         "-DCMAKE_FIND_USE_SYSTEM_ENVIRONMENT_PATH=0",
         "-DCMAKE_FIND_USE_CMAKE_SYSTEM_PATH=0",
+        # When builing with `CMAKE_BUILD_TYPE=Release`, cmake automatically
+        # sets `-DNDEBUG` flags. This breaks librdkafka, which uses asserts for
+        # runtime error checking (confluentinc/librdkafka#5099). We unset
+        # `NDEBUG` by manually overwriting the cmake's `C_FLAGS` variables.
+        "-DCMAKE_C_FLAGS_RELEASE=-O3",
+        "-DCMAKE_CXX_FLAGS_RELEASE=-O3",
         # Uncomment this if you ever need to debug what library cmake is resolving.
         # "-DCMAKE_FIND_DEBUG_MODE=TRUE",
     ] + select({
