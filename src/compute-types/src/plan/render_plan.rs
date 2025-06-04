@@ -24,7 +24,7 @@ use proptest::prelude::*;
 use serde::{Deserialize, Serialize};
 
 use crate::plan::join::{DeltaJoinPlan, JoinPlan, LinearJoinPlan};
-use crate::plan::reduce::{BucketedPlan, HierarchicalPlan, KeyValPlan, ReducePlan};
+use crate::plan::reduce::{BucketedPlan, HierarchicalPlan, KeyValPlan, MonotonicPlan, ReducePlan};
 use crate::plan::threshold::ThresholdPlan;
 use crate::plan::top_k::{MonotonicTopKPlan, TopKPlan};
 use crate::plan::{AvailableCollections, GetPlan, LirId, Plan, PlanNode};
@@ -842,10 +842,7 @@ impl<'a, T> std::fmt::Display for RenderPlanExprHumanizer<'a, T> {
                         if keys.raw && keys.arranged.is_empty() {
                             write!(f, "Stream {id}")
                         } else {
-                            // we don't know which arrangement will be used, but one could be (so we say "Indexed")
-                            // we're not reporting on whether or not `raw` is set
-                            // we're not reporting on how many arrangements there are
-                            write!(f, "Indexed {id}")
+                            write!(f, "Arranged {id}")
                         }
                     }
                     GetPlan::Arrangement(_key, Some(val), _mfp) => write!(
@@ -853,7 +850,7 @@ impl<'a, T> std::fmt::Display for RenderPlanExprHumanizer<'a, T> {
                         "Index Lookup on {id} (val={})",
                         HumanizedExplain::new(false).expr(val, None)
                     ),
-                    GetPlan::Arrangement(_key, None, _mfp) => write!(f, "Indexed {id}"),
+                    GetPlan::Arrangement(_key, None, _mfp) => write!(f, "Arranged {id}"),
                     GetPlan::Collection(_mfp) => write!(f, "Read {id}"),
                 }
             }
@@ -918,30 +915,32 @@ impl<'a, T> std::fmt::Display for RenderPlanExprHumanizer<'a, T> {
                 plan,
                 input_key: _input_key,
                 mfp_after: _mfp_after,
-            } => {
-                write!(f, "Reduce::")?;
-
-                match plan {
-                    ReducePlan::Distinct => write!(f, "Distinct GroupAggregate"),
-                    ReducePlan::Accumulable(..) => write!(f, "Accumulable GroupAggregate"),
-                    ReducePlan::Hierarchical(HierarchicalPlan::Monotonic(..)) => {
-                        write!(f, "Monotonic Hierarchical GroupAggregate")
+            } => match plan {
+                ReducePlan::Distinct => write!(f, "Distinct GroupAggregate"),
+                ReducePlan::Accumulable(..) => write!(f, "Accumulable GroupAggregate"),
+                ReducePlan::Hierarchical(HierarchicalPlan::Monotonic(MonotonicPlan {
+                    must_consolidate,
+                    ..
+                })) => {
+                    if *must_consolidate {
+                        write!(f, "Consolidating ")?;
                     }
-                    ReducePlan::Hierarchical(HierarchicalPlan::Bucketed(BucketedPlan {
-                        buckets,
-                        ..
-                    })) => {
-                        write!(f, "Bucketed Hierarchical GroupAggregate (buckets:")?;
-
-                        for bucket in buckets {
-                            write!(f, " {bucket}")?;
-                        }
-                        write!(f, ")")
-                    }
-                    ReducePlan::Basic(..) => write!(f, "Non-incremental GroupAggregate`"),
-                    ReducePlan::Collation(..) => write!(f, "Collated Multi-GroupAggregate"),
+                    write!(f, "Monotonic GroupAggregate")
                 }
-            }
+                ReducePlan::Hierarchical(HierarchicalPlan::Bucketed(BucketedPlan {
+                    buckets,
+                    ..
+                })) => {
+                    write!(f, "Bucketed Hierarchical GroupAggregate (buckets:")?;
+
+                    for bucket in buckets {
+                        write!(f, " {bucket}")?;
+                    }
+                    write!(f, ")")
+                }
+                ReducePlan::Basic(..) => write!(f, "Non-incremental GroupAggregate`"),
+                ReducePlan::Collation(..) => write!(f, "Collated Multi-GroupAggregate"),
+            },
             TopK {
                 input: _,
                 top_k_plan,

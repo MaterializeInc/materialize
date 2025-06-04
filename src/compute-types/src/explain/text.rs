@@ -112,10 +112,9 @@ impl Plan {
                         if keys.raw && keys.arranged.is_empty() {
                             writeln!(f, "{}→Stream {id}{annotations}", ctx.indent)?;
                         } else {
-                            // we don't know which arrangement will be used, but one could be (so we say "Indexed")
                             // we're not reporting on whether or not `raw` is set
                             // we're not reporting on how many arrangements there are
-                            writeln!(f, "{}→Indexed {id}{annotations}", ctx.indent)?;
+                            writeln!(f, "{}→Arranged {id}{annotations}", ctx.indent)?;
                         }
                     }
                     GetPlan::Arrangement(key, Some(val), mfp) => {
@@ -128,7 +127,7 @@ impl Plan {
                         writeln!(f, "Value: {val}")?;
                     }
                     GetPlan::Arrangement(key, None, mfp) => {
-                        writeln!(f, "{}→Indexed {id}{annotations}", ctx.indent)?;
+                        writeln!(f, "{}→Arranged {id}{annotations}", ctx.indent)?;
                         ctx.indent += 1;
                         mode.expr(mfp, None).fmt_default_text(f, ctx)?;
                         let key = CompactScalars(mode.seq(key, None));
@@ -191,31 +190,16 @@ impl Plan {
             Mfp {
                 input,
                 mfp,
-                input_key_val,
+                input_key_val: _,
             } => {
                 writeln!(f, "{}→Map/Filter/Project{annotations}", ctx.indent)?;
                 ctx.indent.set();
 
                 ctx.indent += 1;
                 mode.expr(mfp, None).fmt_default_text(f, ctx)?;
-                let mut printed = !mfp.expressions.is_empty() || !mfp.predicates.is_empty();
-                match input_key_val {
-                    Some((key, Some(val))) => {
-                        let key = CompactScalars(mode.seq(key, None));
-                        let val = mode.expr(val, None);
-                        writeln!(f, "{}Input key: ({key}); value: {val}", ctx.indent)?;
-                        printed = true;
-                    }
-                    Some((key, None)) => {
-                        let key = CompactScalars(mode.seq(key, None));
-                        writeln!(f, "{}Input key: ({key})", ctx.indent)?;
-                        printed = true;
-                    }
-                    _ => (),
-                };
 
                 // one more nesting level if we showed anything for the MFP
-                if printed {
+                if !mfp.expressions.is_empty() || !mfp.predicates.is_empty() {
                     ctx.indent += 1;
                 }
                 input.fmt_text(f, ctx)?;
@@ -263,13 +247,8 @@ impl Plan {
                     }
                     JoinPlan::Delta(plan) => {
                         write!(f, "{}→Delta Join", ctx.indent)?;
-                        let mut first = true;
                         for dpp in &plan.path_plans {
-                            if !first {
-                                write!(f, " ")?;
-                            }
-                            first = false;
-                            write!(f, "[%{}", dpp.source_relation)?;
+                            write!(f, " [%{}", dpp.source_relation)?;
 
                             for dsp in &dpp.stage_plans {
                                 write!(f, " » %{}", dsp.lookup_relation)?;
@@ -327,7 +306,7 @@ impl Plan {
                         if *must_consolidate {
                             write!(f, "Consolidating ")?;
                         }
-                        writeln!(f, "Monotonic Hierarchical GroupAggregate{annotations}",)?;
+                        writeln!(f, "Monotonic GroupAggregate{annotations}",)?;
                         ctx.indented(|ctx| plan.fmt_text(f, ctx))?;
                     }
                     ReducePlan::Basic(plan) => {

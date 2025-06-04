@@ -34,7 +34,7 @@ operators:
 
     example: "`Get materialize.public.ordered`"
 
-  - operator: Stream, Indexed, Index Lookup, Read
+  - operator: Stream, Arranged, Index Lookup, Read
     plan_types: "LIR"
     description: |
       Produces rows from either an existing relation (source/view/materialized view/table) or from a previous
@@ -46,7 +46,7 @@ operators:
       1. `Stream` indicates that the results are not [arranged](/get-started/arrangements/#arrangements) in memory
          and will be streamed directly.
 
-      2. `Indexed` indicates that the results are [arranged](/get-started/arrangements/#arrangements) in memory.
+      2. `Arranged` indicates that the results are [arranged](/get-started/arrangements/#arrangements) in memory.
 
       2. `Index Lookup` indicates the results will be
          _looked up_ in an existing [arrangement]((/get-started/arrangements/#arrangements).
@@ -57,7 +57,7 @@ operators:
     uses_memory: False
     memory_details: ""
     expansive: False
-    example: "`→Indexed materialize.public.t`"
+    example: "`Arranged materialize.public.t`"
 
   - operator: Project
     plan_types: "optimized,raw"
