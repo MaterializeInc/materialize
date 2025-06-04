@@ -19,7 +19,8 @@ use futures::future::{BoxFuture, FutureExt, pending};
 use itertools::izip;
 use mz_adapter::client::RecordFirstRowStream;
 use mz_adapter::session::{
-    EndTransactionAction, InProgressRows, Portal, PortalState, SessionConfig, TransactionStatus,
+    EndTransactionAction, InProgressRows, LifecycleTimestamps, Portal, PortalState, SessionConfig,
+    TransactionStatus,
 };
 use mz_adapter::statement_logging::{StatementEndedExecutionReason, StatementExecutionStrategy};
 use mz_adapter::{
@@ -30,6 +31,7 @@ use mz_auth::password::Password;
 use mz_frontegg_auth::Authenticator as FronteggAuthentication;
 use mz_ore::cast::CastFrom;
 use mz_ore::netio::AsyncReady;
+use mz_ore::now::{EpochMillis, SYSTEM_TIME};
 use mz_ore::str::StrExt;
 use mz_ore::{assert_none, assert_ok, instrument};
 use mz_pgcopy::{CopyCsvFormatParams, CopyFormatParams, CopyTextFormatParams};
@@ -538,6 +540,7 @@ where
             // `recv()` is cancel-safe as per it's docs.
             message = self.conn.recv() => message?,
         };
+        let received = SYSTEM_TIME();
 
         self.adapter_client
             .remove_idle_in_transaction_session_timeout();
@@ -551,7 +554,9 @@ where
                 let query_root_span =
                     tracing::info_span!(parent: None, "advance_ready", otel.name = message_name);
                 query_root_span.follows_from(tracing::Span::current());
-                self.query(sql).instrument(query_root_span).await?
+                self.query(sql, received)
+                    .instrument(query_root_span)
+                    .await?
             }
             Some(FrontendMessage::Parse {
                 name,
@@ -593,6 +598,7 @@ where
                         None,
                         ExecuteTimeout::None,
                         None,
+                        Some(received),
                     )
                     .instrument(execute_root_span)
                     .await?;
@@ -648,8 +654,16 @@ where
         }
     }
 
+    /// Note that `lifecycle_timestamps` belongs to the whole "Simple Query", because the whole
+    /// Simple Query is received and parsed together. This means that if there are multiple
+    /// statements in a Simple Query, then all of them have the same `lifecycle_timestamps`.
     #[instrument(level = "debug")]
-    async fn one_query(&mut self, stmt: Statement<Raw>, sql: String) -> Result<State, io::Error> {
+    async fn one_query(
+        &mut self,
+        stmt: Statement<Raw>,
+        sql: String,
+        lifecycle_timestamps: LifecycleTimestamps,
+    ) -> Result<State, io::Error> {
         // Bind the portal. Note that this does not set the empty string prepared
         // statement.
         const EMPTY_PORTAL: &str = "";
@@ -660,13 +674,15 @@ where
         {
             return self.error(e.into_response(Severity::Error)).await;
         }
-
-        let stmt_desc = self
+        let portal = self
             .adapter_client
             .session()
-            .get_portal_unverified(EMPTY_PORTAL)
-            .map(|portal| portal.desc.clone())
+            .get_portal_unverified_mut(EMPTY_PORTAL)
             .expect("unnamed portal should be present");
+
+        portal.lifecycle_timestamps = Some(lifecycle_timestamps);
+
+        let stmt_desc = portal.desc.clone();
         if !stmt_desc.param_types.is_empty() {
             return self
                 .error(ErrorResponse::error(
@@ -741,11 +757,12 @@ where
         }
     }
 
-    // See "Multiple Statements in a Simple Query" which documents how implicit
-    // transactions are handled.
-    // From https://www.postgresql.org/docs/current/protocol-flow.html
+    /// Executes a "Simple Query", see
+    /// <https://www.postgresql.org/docs/current/protocol-flow.html#PROTOCOL-FLOW-SIMPLE-QUERY>
+    ///
+    /// For implicit transaction handling, see "Multiple Statements in a Simple Query" in the above.
     #[instrument(level = "debug")]
-    async fn query(&mut self, sql: String) -> Result<State, io::Error> {
+    async fn query(&mut self, sql: String, received: EpochMillis) -> Result<State, io::Error> {
         // Parse first before doing any transaction checking.
         let stmts = match self.parse_sql(&sql) {
             Ok(stmts) => stmts,
@@ -774,7 +791,10 @@ where
             // statement.
             self.ensure_transaction(num_stmts).await?;
 
-            match self.one_query(stmt, sql.to_string()).await? {
+            match self
+                .one_query(stmt, sql.to_string(), LifecycleTimestamps { received })
+                .await?
+            {
                 State::Ready => (),
                 State::Drain => break,
                 State::Done => return Ok(State::Done),
@@ -1044,6 +1064,7 @@ where
         fetch_portal_name: Option<String>,
         timeout: ExecuteTimeout,
         outer_ctx_extra: Option<ExecuteContextExtra>,
+        received: Option<EpochMillis>,
     ) -> BoxFuture<'_, Result<State, io::Error>> {
         async move {
             let aborted_txn = self.is_aborted_txn();
@@ -1068,6 +1089,8 @@ where
                         .await;
                 }
             };
+
+            portal.lifecycle_timestamps = received.map(LifecycleTimestamps::new);
 
             // In an aborted transaction, reject all commands except COMMIT/ROLLBACK.
             let txn_exit_stmt = is_txn_exit_stmt(portal.stmt.as_deref());
@@ -1363,6 +1386,7 @@ where
             fetch_portal_name,
             timeout,
             Some(ctx_extra),
+            None,
         )
         .await
     }

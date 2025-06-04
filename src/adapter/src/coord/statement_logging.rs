@@ -33,7 +33,7 @@ use tracing::debug;
 use uuid::Uuid;
 
 use crate::coord::{ConnMeta, Coordinator};
-use crate::session::Session;
+use crate::session::{LifecycleTimestamps, Session};
 use crate::statement_logging::{
     SessionHistoryEvent, StatementBeganExecutionRecord, StatementEndedExecutionReason,
     StatementEndedExecutionRecord, StatementLifecycleEvent, StatementPreparedRecord,
@@ -661,11 +661,15 @@ impl Coordinator {
     /// Possibly record the beginning of statement execution, depending on a randomly-chosen value.
     /// If the execution beginning was indeed logged, returns a `StatementLoggingId` that must be
     /// passed to `end_statement_execution` to record when it ends.
+    ///
+    /// `lifecycle_timestamps` has timestamps that come from the Adapter frontend (`mz-pgwire`) part
+    /// of the lifecycle.
     pub fn begin_statement_execution(
         &mut self,
         session: &mut Session,
         params: &Params,
         logging: &Arc<QCell<PreparedStatementLoggingInfo>>,
+        lifecycle_timestamps: Option<LifecycleTimestamps>,
     ) -> Option<StatementLoggingId> {
         let enable_internal_statement_logging = self
             .catalog()
@@ -719,12 +723,17 @@ impl Coordinator {
         }
         let (ps_record, ps_uuid) = self.log_prepared_statement(session, logging)?;
 
+        let began_at = if let Some(lifecycle_timestamps) = lifecycle_timestamps {
+            lifecycle_timestamps.received
+        } else {
+            self.now()
+        };
         let now = self.now();
         let execution_uuid = epoch_to_uuid_v7(&now);
         self.record_statement_lifecycle_event(
             &StatementLoggingId(execution_uuid),
             &StatementLifecycleEvent::ExecutionBegan,
-            now,
+            began_at,
         );
 
         let params = std::iter::zip(params.execute_types.iter(), params.datums.iter())
@@ -742,7 +751,7 @@ impl Coordinator {
             prepared_statement_id: ps_uuid,
             sample_rate,
             params,
-            began_at: self.now(),
+            began_at,
             application_name: session.application_name().to_string(),
             transaction_isolation: session.vars().transaction_isolation().to_string(),
             transaction_id: session

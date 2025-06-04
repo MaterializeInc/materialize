@@ -725,6 +725,7 @@ impl<T: TimestampManipulation> Session<T> {
                 result_formats,
                 state: PortalState::NotStarted,
                 logging,
+                lifecycle_timestamps: None,
             },
         );
         Ok(())
@@ -776,6 +777,7 @@ impl<T: TimestampManipulation> Session<T> {
                         result_formats,
                         state: PortalState::NotStarted,
                         logging,
+                        lifecycle_timestamps: None,
                     });
                     return Ok(name);
                 }
@@ -954,6 +956,8 @@ pub struct Portal {
     /// The execution state of the portal.
     #[derivative(Debug = "ignore")]
     pub state: PortalState,
+    /// Statement lifecycle timestamps coming from `mz-pgwire`.
+    pub lifecycle_timestamps: Option<LifecycleTimestamps>,
 }
 
 /// Execution states of a portal.
@@ -989,6 +993,24 @@ impl InProgressRows {
 
 /// A channel of batched rows.
 pub type RowBatchStream = UnboundedReceiver<PeekResponseUnary>;
+
+/// Part of statement lifecycle. These are timestamps that come from the Adapter frontend
+/// (`mz-pgwire`) part of the lifecycle.
+#[derive(Debug, Clone)]
+pub struct LifecycleTimestamps {
+    /// When the query was received. More specifically, when the tokio recv returned.
+    /// For a Simple Query, this is for the whole query, for the Extended Query flow, this is only
+    /// for `FrontendMessage::Execute`. (This means that this is after parsing for the
+    /// Extended Query flow.)
+    pub received: EpochMillis,
+}
+
+impl LifecycleTimestamps {
+    /// Creates a new `LifecycleTimestamps`.
+    pub fn new(received: EpochMillis) -> Self {
+        Self { received }
+    }
+}
 
 /// The transaction status of a session.
 ///
