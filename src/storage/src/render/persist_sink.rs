@@ -1287,7 +1287,6 @@ where
                             .error_retractions
                             .inc_by(batch_metrics.error_retractions);
 
-                        to_append.clear();
                         current_upper.borrow_mut().clone_from(&batch_upper);
                         upper_cap_set.downgrade(current_upper.borrow().iter());
                         break;
