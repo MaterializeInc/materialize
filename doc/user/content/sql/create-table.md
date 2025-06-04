@@ -72,8 +72,8 @@ native connector) to an external database system:
 ```mzsql
 CREATE TABLE <table_name> FROM SOURCE <source_name> (REFERENCE <ref_object>)
 [WITH (
-    TEXT COLUMNS (<fq_column_name> [, ...])
-  | EXCLUDE COLUMNS (<fq_column_name> [, ...])
+    TEXT COLUMNS (<column_name> [, ...])    -- Available for PostgreSQL and MySQL
+  | EXCLUDE COLUMNS (<column_name> [, ...]) -- Available for MySQL and SQL Server
   | PARTITION BY (<column_name> [, ...])
   [, ...]
 )]
@@ -81,10 +81,6 @@ CREATE TABLE <table_name> FROM SOURCE <source_name> (REFERENCE <ref_object>)
 ```
 
 {{% yaml-table data="syntax_options/create_table/create_table_options_source_populated_db" %}}
-
-<a name="supported-db-source-types" ></a>
-
-{{< include-md file="shared-content/create-table-supported-types.md" >}}
 
 {{</ tab >}}
 
@@ -145,8 +141,10 @@ FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION <conn_name>
 Creates a read-only table from a [Kafka source](/sql/create-source/), where the
 messages are JSON records.
 
-By default, creates a table with 1 column named `data` of type `jsonb`. You can
-include additional columns using the `INCLUDE` options.
+By default, creates a table with 1 column named `data` of type
+[`jsonb`](/sql/types/jsonb/). You can include additional columns using the
+`INCLUDE` options.
+
 
 ```mzsql
 CREATE TABLE <table_name> FROM SOURCE <source_name> [(REFERENCE <ref_object>)]
@@ -161,6 +159,46 @@ FORMAT JSON
 ```
 
 {{% yaml-table data="syntax_options/create_table/create_table_options_source_populated_kafka_json"
+%}}
+
+{{< tip >}}
+Once created, we recommend creating a view on your table that maps the
+individual fields to columns with the required data types. You can use the [JSON
+parsing widget](/sql/types/jsonb/#parsing) to generate the view definition.
+
+See [Example: Create table from Kafka source](#create-a-table-kafka-source).
+
+{{</ tip >}}
+
+{{</ tab >}}
+
+{{< tab "FORMAT TEXT/BYTES" >}}
+
+Creates a read-only table from a [Kafka source](/sql/create-source/), where the
+messages are decoded either as text (`FORMAT TEXT`) or bytes (`FORMAT BYTES`).
+
+By default, creates a table with 1 column:
+
+- If `FORMAT TEXT`, the column name is `text` of type `text`.
+
+- If `FORMAT BYTES`, the column name is `data` of type `bytea`.
+
+You can include additional columns using the `INCLUDE` options.
+
+```mzsql
+CREATE TABLE <table_name> FROM SOURCE <source_name> [(REFERENCE <ref_object>)]
+FORMAT  <TEXT | BYTES>
+[INCLUDE
+   PARTITION [AS <name>] | OFFSET [AS <name>]
+  | TIMESTAMP [AS <name>] | HEADERS [AS <name>] | HEADER <key_name> AS <name> [BYTES]
+  [, ...]
+]
+[ENVELOPE NONE]              --  Default.  Uses the append-only envelope.
+[WITH (PARTITION BY (<column_name> [, ...]))]
+;
+```
+
+{{% yaml-table data="syntax_options/create_table/create_table_options_source_populated_kafka_text"
 %}}
 
 {{</ tab >}}
@@ -195,37 +233,6 @@ FORMAT CSV WITH <num> COLUMNS [DELIMITED BY <char>]
 %}}
 {{</ tab >}}
 
-{{< tab "FORMAT TEXT/BYTES" >}}
-
-Creates a read-only table from a [Kafka source](/sql/create-source/), where the
-messages are decoded either as text (`FORMAT TEXT`) or bytes (`FORMAT BYTES`).
-
-By default, creates a table with 1 column:
-
-- If `FORMAT TEXT`, the column name is `text` of type `text`.
-
-- If `FORMAT BYTES`, the column name is `data` of type `bytea`.
-
-You can include additional columns using the `INCLUDE` options.
-
-```mzsql
-CREATE TABLE <table_name> FROM SOURCE <source_name> [(REFERENCE <ref_object>)]
-FORMAT  <TEXT | BYTES>
-[INCLUDE
-   PARTITION [AS <name>] | OFFSET [AS <name>]
-  | TIMESTAMP [AS <name>] | HEADERS [AS <name>] | HEADER <key_name> AS <name> [BYTES]
-  [, ...]
-]
-[ENVELOPE NONE]              --  Default.  Uses the append-only envelope.
-[WITH (PARTITION BY (<column_name> [, ...]))]
-;
-```
-
-{{% yaml-table data="syntax_options/create_table/create_table_options_source_populated_kafka_text"
-%}}
-
-{{</ tab >}}
-
 {{< tab "KEY FORMAT VALUE  FORMAT" >}}
 
 ```mzsql
@@ -233,10 +240,8 @@ CREATE TABLE <table_name> FROM SOURCE <source_name> [(REFERENCE <ref_object>)]
 KEY FORMAT <format1> VALUE FORMAT <format2>
 -- <format1> and <format2> can be:
    -- AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION <conn_name>
-   --     [KEY STRATEGY
-   --       INLINE <schema> | ID <schema_registry_id> | LATEST ]
-   --     [VALUE STRATEGY
-   --       INLINE <schema> | ID <schema_registry_id> | LATEST ]
+   --     [KEY STRATEGY <strategy>]
+   --     [VALUE STRATEGY <strategy>]
   -- | CSV WITH <num> COLUMNS DELIMITED BY <char>
   -- | JSON | TEXT | BYTES
 [INCLUDE
@@ -305,6 +310,8 @@ FROM WEBHOOK
 Names for tables and column(s) must follow the [naming
 guidelines](/sql/identifiers/#naming-restrictions).
 
+<a name="supported-db-source-types"></a>
+
 ### Upstream sources and supported data types
 
 {{< include-md file="shared-content/create-table-supported-types.md" >}}
@@ -342,78 +349,40 @@ The privileges required to execute the command are:
 
 ### Create a table (user-populated)
 
-The following example uses `CREATE TABLE` to create a new table `t` with two
-columns `a` and `b`:
-
-```mzsql
-CREATE TABLE t (a int, b text NOT NULL);
-```
+{{% include-example file="examples/create-table/example_user_defined_table"
+ example="create-table" %}}
 
 #### Verify table creation
 
-Once a table is created, you can:
+Once a table is created, you can inspect the table with various `SHOW` commands.
 
-- Inspect the table with various `SHOW` commands.
+For example:
 
-  For example, to verify that the table has been created, you can run [`SHOW
-  TABLES`](/sql/show-tables/) to list all tables in the current [schema](/sql/namespaces/#namespace-hierarchy):
+- [`SHOW TABLES`](/sql/show-tables/)
 
-  ```mzsql
-  SHOW TABLES;
-  ```
+  {{% include-example file="examples/create-table/example_user_defined_table"
+ example="show-tables" %}}
 
-  The results should include the table `t`:
+- [`SHOW COLUMNS`](/sql/show-columns/)
 
-  ```hc {hl_lines="3"}
-  | name | comment |
-  | ---- | ------- |
-  | t    |         |
-  ```
-
-- Inspect the table columns using [`SHOW COLUMNS`](/sql/show-tables/) command:
-
-  ```mzsql
-  SHOW COLUMNS IN t;
-  ```
-
-  The results should display information on columns `a` and `b`; these should
-  match the specification in the `CREATE TABLE` command:
-
-  ```none
-  | name | nullable | type    | comment |
-  | ---- | -------- | ------- | ------- |
-  | a    | true     | integer |         |
-  | b    | false    | text    |         |
-  ```
+  {{% include-example file="examples/create-table/example_user_defined_table"
+ example="show-columns" %}}
 
 #### Read/write to the new table
 
 Once a user-populated table is created, you can perform CRUD
-(Create/Read/Update/Write) operations. For example, the following inserts two
-rows into table `t` and reads from the table afterwards:
+(Create/Read/Update/Write) operations.
 
-```mzsql
-INSERT INTO t VALUES
-(1, 'hello'),
-(2, 'goodbye');
+{{% include-example file="examples/create-table/example_user_defined_table"
+ example="write-to-table" %}}
 
-SELECT * FROM t;
-```
-
-The results should return the two rows:
-
-```none
-| a | b       |
-| - | ------- |
-| 1 | hello   |
-| 2 | goodbye |
-```
+{{% include-example file="examples/create-table/example_user_defined_table"
+ example="read-from-table" %}}
 
 ### Create a table (PostgreSQL Source)
 
-The following example uses `CREATE TABLE FROM SOURCE` to create new
-**read-only** tables `items` and `orders` that are populated from corresponding
-`items` and `orders` tables from a PostgreSQL source.
+The following example creates a table from a PostgreSQL source using the `CREATE
+TABLE FROM SOURCE` syntax.
 
 {{< note >}}
 
@@ -437,87 +406,122 @@ guides:
 
 {{</ note >}}
 
-To create new **read-only** tables from a source, specify the table in the
-publication using the `REFERENCE` field.
-
-```mzsql
-/* This example assumes:
-   - In the upstream PostgreSQL, you have defined:
-     - replication user and password with the appropriate access.
-     - a publication named `mz_source` for the `items` and `orders` tables.
-   - In Materialize,
-     - You have defined the connection to the upstream PostgreSQL.
-     - You have used the connection to create a source.
-      CREATE SECRET pgpass AS '<replication user password>'; -- substitute
-      CREATE CONNECTION pg TO POSTGRES (
-        HOST '<hostname>',          -- substitute
-        DATABASE <db>,              -- substitute
-        USER <replication user>,    -- substitute
-        PASSWORD SECRET pgpass
-      );
-
-      CREATE SOURCE mz_source
-      FROM POSTGRES CONNECTION pg (
-      PUBLICATION 'mz_source'       -- substitute
-      );
-*/
-
-CREATE TABLE items
-FROM SOURCE mz_source(REFERENCE items)
-;
-CREATE TABLE orders
-FROM SOURCE mz_source(REFERENCE orders)
-WITH (EXCLUDE COLUMNS (receipt_png))
-;
-
-```
+{{% include-example file="examples/create-table/example_postgres_table"
+ example="create-table" %}}
 
 #### Verify table creation
 
-Once a table is created, you can:
+Once a table is created, you can inspect the table with various `SHOW`
+commands. For example:
 
-- Inspect the table with various `SHOW` commands.
+- [`SHOW TABLES`](/sql/show-tables/)
 
-  For example, to verify that the table has been created, you can run [`SHOW
-  TABLES`](/sql/show-tables/) to list all tables in the current [schema](/sql/namespaces/#namespace-hierarchy):
+  {{% include-example file="examples/create-table/example_postgres_table"
+ example="show-tables" %}}
 
-  ```mzsql
-  SHOW TABLES;
-  ```
+- [`SHOW COLUMNS`](/sql/show-tables/)
 
-  The results should include the table `t`:
-
-  ```hc {hl_lines="3-4"}
-  | name        | comment |
-  | ----------- | ------- |
-  | items       |         |
-  | orders      |         |
-  ```
-
-- Inspect the table columns using [`SHOW COLUMNS`](/sql/show-tables/) command:
-
-  ```mzsql
-  SHOW COLUMNS IN items;
-  SHOW COLUMNS IN orders;
-  ```
-
-
+  {{% include-example file="examples/create-table/example_postgres_table"
+ example="show-columns" %}}
 
 #### Query the read-only table
 
-{{< note >}}
 {{< include-md file="shared-content/create-table-from-source-readonly.md" >}}
-{{</ note >}}
-
 {{< include-md file="shared-content/create-table-from-source-snapshotting.md"
 >}}
 
-Once the snapshotting process completes, you can query from source-populated tables:
+Once the snapshotting process completes, you can:
 
-```none
-SELECT * FROM items;
-SELECT * FROM orders;
+- Query the table:
+
+  {{% include-example file="examples/create-table/example_postgres_table"
+ example="read-from-table" %}}
+
+- Join with other tables, create views on the tables, etc:
+
+  {{% include-example file="examples/create-table/example_postgres_table"
+ example="create-view-from-tables" %}}
+
+### Create a table (Kafka Source)
+
+The following example creates a table from a Kafka (or Redpanda) source using
+the `CREATE TABLE FROM SOURCE` syntax.
+
+{{< tabs  >}}
+{{< tab "FORMAT AVRO">}}
+
+**Using Confluent Schema Registry**
+
+```mzsql
+CREATE SOURCE avro_source
+  FROM KAFKA CONNECTION kafka_connection (TOPIC 'test_topic')
+  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_connection;
 ```
+
+{{< /tab >}}
+{{< tab "FORMAT JSON">}}
+
+The following example creates a read-only table from a Kafka source, where the
+messages are JSON records.
+
+```mzsql
+/* This example assumes:
+   - That you have defined a connection to Kafka.
+   - That you have created a source using that connection.
+   For example:
+
+   CREATE SECRET kafka_secret AS 'mypassword';
+   CREATE CONNECTION kafka_connection TO KAFKA (
+     BROKER 'host:port',                   -- substitute
+     SECURITY PROTOCOL = 'SASL_PLAINTEXT', -- substitute
+     SASL MECHANISMS = 'SCRAM-SHA-256',    -- substitute
+     SASL USERNAME = 'myuser',             -- substitute
+     SASL PASSWORD = SECRET kafka_secret
+   );
+
+   CREATE SOURCE kafka_json_source
+   FROM KAFKA CONNECTION kafka_connection (TOPIC 'test_topic');
+*/
+CREATE TABLE my_json_table
+FROM SOURCE kafka_json_source
+FORMAT JSON;
+```
+
+By default, creates a table `my_json_table` with 1 column named `data` of type
+[`jsonb`](/sql/types/jsonb/). You can include additional columns using the
+`INCLUDE` options.
+
+You can create a view on top of your table that parses the `data` value into
+individual columns with the required data types. To help with this task, you can
+paste a sample JSON document into [this **JSON parsing
+widget**](/sql/types/jsonb/#parsing) to create the view.
+
+{{< json-parser >}}
+
+
+{{< /tab >}}
+
+{{< tab "FORMAT TEXT/BYTES">}}
+
+```mzsql
+CREATE SOURCE text_source
+  FROM KAFKA CONNECTION kafka_connection (TOPIC 'test_topic')
+  FORMAT TEXT
+  ENVELOPE UPSERT;
+```
+
+{{< /tab >}}
+{{< tab "FORMAT CSV">}}
+
+```mzsql
+CREATE SOURCE csv_source (col_foo, col_bar, col_baz)
+  FROM KAFKA CONNECTION kafka_connection (TOPIC 'test_topic')
+  FORMAT CSV WITH 3 COLUMNS;
+```
+
+{{< /tab >}}
+{{< /tabs >}}
+
 
 ## Related pages
 
