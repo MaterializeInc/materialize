@@ -1083,6 +1083,15 @@ where
                 .iter()
                 .filter(|(lower, _upper)| !PartialOrder::less_equal(&batches_frontier, lower))
                 .cloned()
+                .sorted_by(|a, b| {
+                    if PartialOrder::less_than(a, b) {
+                        Ordering::Less
+                    } else if PartialOrder::less_than(b, a) {
+                        Ordering::Greater
+                    } else {
+                        Ordering::Equal
+                    }
+                })
                 .collect::<Vec<_>>();
 
             trace!(
@@ -1099,29 +1108,14 @@ where
                 batch_description_frontier
             );
 
-            // Append batches in order, to ensure that their `lower` and
-            // `upper` line up.
-            done_batches.sort_by(|a, b| {
-                if PartialOrder::less_than(a, b) {
-                    Ordering::Greater
-                } else if PartialOrder::less_than(b, a) {
-                    Ordering::Less
-                } else {
-                    Ordering::Equal
+            let (mut batch_lower, batch_upper) = match (done_batches.first(), done_batches.last()) {
+                (Some(first), Some(last)) => (first.0.clone(), last.1.clone()),
+                (None, None) => {
+                    upper_cap_set.downgrade(current_upper.borrow().iter());
+                    continue;
                 }
-            });
-
-            let Some(first_batch_description) = done_batches.first() else {
-                upper_cap_set.downgrade(current_upper.borrow().iter());
-                continue;
-            };
-
-            let batch_upper = first_batch_description.1.clone();
-
-            let mut batch_lower = if let Some(last_batch_description) = done_batches.last() {
-                last_batch_description.0.clone()
-            } else {
-                first_batch_description.0.clone()
+                // SAFETY(ptravers): if first exists so must last.
+                (Some(_), None) | (None, Some(_)) => unreachable!(),
             };
 
             let mut batches: Vec<FinishedBatch> = vec![];
