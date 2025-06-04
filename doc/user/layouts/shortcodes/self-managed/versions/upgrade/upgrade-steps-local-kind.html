@@ -37,8 +37,7 @@ site.Data.self_managed.latest_versions.environmentd_version }}
    --namespace=materialize \
    --version {{ $operator_version }} \
    -f upgrade-values.yaml \
-   --set observability.podMetrics.enabled=true \
-   --set operator.image.tag={{ $orchestratord_version }}
+   --set observability.podMetrics.enabled=true
    ```
 
 1. Verify that the operator is running:
@@ -50,7 +49,7 @@ site.Data.self_managed.latest_versions.environmentd_version }}
    Verify the operator upgrade by checking its events:
 
    ```bash
-   MZ_OPERATOR=$(kubectl -n materialize get pods --no-headers | grep operator | awk '{print $1}')
+   MZ_OPERATOR=$(kubectl -n materialize get pods --no-headers | grep operator  | awk '{print $1}')
    kubectl -n materialize describe pod/$MZ_OPERATOR
    ```
 
