@@ -549,6 +549,7 @@ where
         // only a few message types seem useful.
         let message_name = message.as_ref().map(|m| m.name()).unwrap_or_default();
 
+        let start = message.as_ref().map(|_| Instant::now());
         let next_state = match message {
             Some(FrontendMessage::Query { sql }) => {
                 let query_root_span =
@@ -637,6 +638,14 @@ where
             | Some(FrontendMessage::Password { .. }) => State::Drain,
             None => State::Done,
         };
+        if let Some(start) = start {
+            self.adapter_client
+                .inner()
+                .metrics()
+                .pgwire_message_processing_seconds
+                .with_label_values(&[message_name])
+                .observe(start.elapsed().as_secs_f64());
+        }
 
         Ok(next_state)
     }

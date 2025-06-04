@@ -44,6 +44,7 @@ pub struct Metrics {
     pub row_set_finishing_seconds: HistogramVec,
     pub session_startup_table_writes_seconds: HistogramVec,
     pub parse_seconds: HistogramVec,
+    pub pgwire_message_processing_seconds: HistogramVec,
 }
 
 impl Metrics {
@@ -185,6 +186,12 @@ impl Metrics {
                 name: "mz_parse_seconds",
                 help: "The time it takes to parse a SQL statement. (Works for both Simple Queries and the Extended Query protocol.)",
                 buckets: histogram_seconds_buckets(0.000_128, 4.0),
+            )),
+            pgwire_message_processing_seconds: registry.register(metric!(
+                name: "mz_pgwire_message_processing_seconds",
+                help: "The time it takes to process each of the pgwire message types, measured in the Adapter frontend",
+                var_labels: ["message_type"],
+                buckets: histogram_seconds_buckets(0.000_128, 128.0),
             ))
         }
     }
