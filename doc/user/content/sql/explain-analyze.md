@@ -83,7 +83,7 @@ The following examples reports on the memory usage of the index `wins_by_item`:
 EXPLAIN ANALYZE MEMORY FOR INDEX wins_by_item;
 ```
 
-For the index,s `EXPLAIN ANALYZE MEMORY` reports on the memory usage and the
+For the index, `EXPLAIN ANALYZE MEMORY` reports on the memory usage and the
 number of records for each operator in the dataflow:
 
 |         operator            | total_memory | total_records |
