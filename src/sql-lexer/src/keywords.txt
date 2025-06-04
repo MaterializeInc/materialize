@@ -35,7 +35,9 @@ Aggregation
 Aligned
 All
 Alter
+Analyse
 Analysis
+Analyze
 And
 Any
 Arity
@@ -106,6 +108,7 @@ Continual
 Copy
 Count
 Counter
+Cpu
 Create
 Createcluster
 Createdb
@@ -201,6 +204,7 @@ Groups
 Having
 Header
 Headers
+Hints
 History
 Hold
 Host
@@ -274,6 +278,7 @@ Materialized
 Max
 Mechanisms
 Membership
+Memory
 Message
 Metadata
 Minute
@@ -419,6 +424,7 @@ Show
 Sink
 Sinks
 Size
+Skew
 Smallint
 Snapshot
 Some

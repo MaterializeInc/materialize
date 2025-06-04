@@ -8635,6 +8635,9 @@ impl<'a> Parser<'a> {
         } else if self.parse_keywords(&[FILTER, PUSHDOWN]) {
             self.parse_explain_pushdown()
                 .map_parser_err(StatementKind::ExplainPushdown)
+        } else if self.parse_keyword(ANALYZE) || self.parse_keyword(ANALYSE) {
+            self.parse_explain_analyze()
+                .map_parser_err(StatementKind::ExplainAnalyze)
         } else if self.peek_keyword(KEY) || self.peek_keyword(VALUE) {
             self.parse_explain_schema()
                 .map_parser_err(StatementKind::ExplainSinkSchema)
@@ -8827,6 +8830,92 @@ impl<'a> Parser<'a> {
         Ok(Statement::ExplainPushdown(ExplainPushdownStatement {
             explainee,
         }))
+    }
+
+    fn parse_explain_analyze(&mut self) -> Result<Statement<Raw>, ParserError> {
+        // EXPLAIN ANALYZE ((MEMORY | CPU) [WITH SKEW] | HINTS) FOR (INDEX ... | MATERIALIZED VIEW ...) [AS SQL]
+        let mut computation_properties = vec![CPU, MEMORY];
+
+        let properties = if self.parse_keyword(HINTS) {
+            ExplainAnalyzeProperty::Hints
+        } else if let Ok((kw, property)) =
+            self.parse_explain_analyze_computation_property(&computation_properties)
+        {
+            let mut properties = vec![property];
+            computation_properties.retain(|p| p != &kw);
+
+            while self.consume_token(&Token::Comma) {
+                let (kw, property) =
+                    self.parse_explain_analyze_computation_property(&computation_properties)?;
+                computation_properties.retain(|p| p != &kw);
+                properties.push(property);
+            }
+
+            let mut skew = false;
+            if self.peek_keyword(WITH) {
+                if !self.parse_keywords(&[WITH, SKEW]) {
+                    return Err(ParserError::new(self.index, "expected WITH SKEW"));
+                }
+                skew = true;
+            }
+
+            ExplainAnalyzeProperty::Computation { properties, skew }
+        } else {
+            return Err(ParserError::new(
+                self.index,
+                "expected HINTS, MEMORY, or CPU",
+            ));
+        };
+
+        self.expect_keyword(FOR)?;
+
+        let explainee = if self.parse_keywords(&[MATERIALIZED, VIEW]) {
+            // Parse: `MATERIALIZED VIEW name`
+            Explainee::MaterializedView(self.parse_raw_name()?)
+        } else if self.parse_keyword(INDEX) {
+            // Parse: `INDEX name`
+            Explainee::Index(self.parse_raw_name()?)
+        } else {
+            return Err(ParserError::new(
+                self.index,
+                "expected INDEX or MATERIALIZED VIEW",
+            ));
+        };
+
+        let mut as_sql = false;
+        if self.parse_keywords(&[AS, SQL]) {
+            as_sql = true;
+        }
+
+        Ok(Statement::ExplainAnalyze(ExplainAnalyzeStatement {
+            properties,
+            explainee,
+            as_sql,
+        }))
+    }
+
+    fn parse_explain_analyze_computation_property(
+        &mut self,
+        properties: &[Keyword],
+    ) -> Result<(Keyword, ExplainAnalyzeComputationProperty), ParserError> {
+        if properties.is_empty() {
+            return Err(ParserError::new(
+                self.index,
+                "both CPU and MEMORY were specified, expected WITH SKEW or FOR",
+            ));
+        }
+
+        match self.parse_one_of_keywords(properties) {
+            Some(kw) if kw == CPU => Ok((kw, ExplainAnalyzeComputationProperty::Cpu)),
+            Some(kw) if kw == MEMORY => Ok((kw, ExplainAnalyzeComputationProperty::Memory)),
+            _ => Err(ParserError::new(
+                self.index,
+                format!(
+                    "expected one of {}",
+                    mz_ore::str::separated(", ", properties)
+                ),
+            )),
+        }
     }
 
     /// Parse an `EXPLAIN TIMESTAMP` statement, assuming that the `EXPLAIN

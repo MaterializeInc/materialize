@@ -49,8 +49,8 @@ use mz_repr::optimize::OptimizerFeatureOverrides;
 use mz_repr::refresh_schedule::RefreshSchedule;
 use mz_repr::role_id::RoleId;
 use mz_repr::{
-    CatalogItemId, ColumnIndex, ColumnName, ColumnType, Diff, GlobalId, RelationDesc, Row,
-    ScalarType, Timestamp, VersionedRelationDesc,
+    CatalogItemId, ColumnIndex, ColumnName, ColumnType, Diff, GlobalId, RelationDesc, RelationType,
+    Row, ScalarType, Timestamp, VersionedRelationDesc,
 };
 use mz_sql_parser::ast::{
     AlterSourceAddSubsourceOption, ClusterAlterOptionValue, ConnectionOptionName, QualifiedReplica,
@@ -291,6 +291,7 @@ impl Plan {
             StatementKind::Execute => &[PlanKind::Execute],
             StatementKind::ExplainPlan => &[PlanKind::ExplainPlan],
             StatementKind::ExplainPushdown => &[PlanKind::ExplainPushdown],
+            StatementKind::ExplainAnalyze => &[PlanKind::Select],
             StatementKind::ExplainTimestamp => &[PlanKind::ExplainTimestamp],
             StatementKind::ExplainSinkSchema => &[PlanKind::ExplainSinkSchema],
             StatementKind::Fetch => &[PlanKind::Fetch],
@@ -860,6 +861,19 @@ pub struct SelectPlan {
     pub finishing: RowSetFinishing,
     /// For `COPY TO`, the format to use.
     pub copy_to: Option<CopyFormat>,
+}
+
+impl SelectPlan {
+    pub fn immediate(rows: Vec<Row>, typ: RelationType) -> Self {
+        let arity = typ.arity();
+        SelectPlan {
+            select: None,
+            source: HirRelationExpr::Constant { rows, typ },
+            when: QueryWhen::Immediately,
+            finishing: RowSetFinishing::trivial(arity),
+            copy_to: None,
+        }
+    }
 }
 
 #[derive(Debug)]

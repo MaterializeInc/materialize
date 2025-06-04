@@ -183,7 +183,7 @@ ORDER BY fieldA, fieldZ ... ;
 ```
 
 For more information on setting `DISTINCT ON INPUT GROUP SIZE`, see
-[Optimization](/transform-data/optimization/#query-hints).
+[`EXPLAIN ANALYZE HINTS`](/sql/explain-analyze/#explain-analyze-hints).
 
 ## Examples
 
