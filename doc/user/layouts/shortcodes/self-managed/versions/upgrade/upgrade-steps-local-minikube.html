@@ -26,8 +26,8 @@ site.Data.self_managed.latest_versions.operator_helm_chart_version }}
    curl -o upgrade-values.yaml https://raw.githubusercontent.com/MaterializeInc/materialize/refs/tags/$mz_operator_version/misc/helm-charts/operator/values.yaml
    ```
 
-   If you have previously modified the `sample-values.yaml` file for your
-   deployment, include the changes into the `upgrade-values.yaml` file.
+   If you have previously modified the `values.yaml` file for your deployment,
+   include the changes into the `upgrade-values.yaml` file.
 
 1. Upgrade the Materialize Operator, specifying the new version and the updated
    configuration file. Include any additional configurations that you specify
@@ -39,8 +39,7 @@ site.Data.self_managed.latest_versions.operator_helm_chart_version }}
    --version {{ $operator_version }} \
    -f upgrade-values.yaml \
    --set operator.cloudProvider.region=minikube \
-   --set observability.podMetrics.enabled=true \
-   --set operator.image.tag={{ $orchestratord_version }}
+   --set observability.podMetrics.enabled=true
    ```
 
 1. Verify that the operator is running:
