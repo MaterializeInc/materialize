@@ -587,6 +587,7 @@ impl NamespacedOrchestrator for NamespacedKubernetesOrchestrator {
             args,
             ports: ports_in,
             memory_limit,
+            memory_request,
             cpu_limit,
             scale,
             labels: labels_in,
@@ -649,14 +650,29 @@ impl NamespacedOrchestrator for NamespacedKubernetesOrchestrator {
             labels.insert(key.clone(), value.clone());
         }
         let mut limits = BTreeMap::new();
+        let mut requests = BTreeMap::new();
         if let Some(memory_limit) = memory_limit {
             limits.insert(
                 "memory".into(),
                 Quantity(memory_limit.0.as_u64().to_string()),
             );
+            requests.insert(
+                "memory".into(),
+                Quantity(memory_limit.0.as_u64().to_string()),
+            );
+        }
+        if let Some(memory_request) = memory_request {
+            requests.insert(
+                "memory".into(),
+                Quantity(memory_request.0.as_u64().to_string()),
+            );
         }
         if let Some(cpu_limit) = cpu_limit {
             limits.insert(
+                "cpu".into(),
+                Quantity(format!("{}m", cpu_limit.as_millicpus())),
+            );
+            requests.insert(
                 "cpu".into(),
                 Quantity(format!("{}m", cpu_limit.as_millicpus())),
             );
@@ -943,10 +959,8 @@ impl NamespacedOrchestrator for NamespacedKubernetesOrchestrator {
                 image_pull_policy: Some(self.config.image_pull_policy.to_string()),
                 resources: Some(ResourceRequirements {
                     claims: None,
-                    // Set both limits and requests to the same values, to ensure a
-                    // `Guaranteed` QoS class for the pod.
                     limits: Some(limits.clone()),
-                    requests: Some(limits.clone()),
+                    requests: Some(requests.clone()),
                 }),
                 security_context: container_security_context.clone(),
                 env: Some(vec![
@@ -1145,10 +1159,8 @@ impl NamespacedOrchestrator for NamespacedKubernetesOrchestrator {
                     security_context: container_security_context.clone(),
                     resources: Some(ResourceRequirements {
                         claims: None,
-                        // Set both limits and requests to the same values, to ensure a
-                        // `Guaranteed` QoS class for the pod.
-                        limits: Some(limits.clone()),
-                        requests: Some(limits),
+                        limits: Some(limits),
+                        requests: Some(requests),
                     }),
                     volume_mounts: if !volume_mounts.is_empty() {
                         Some(volume_mounts)

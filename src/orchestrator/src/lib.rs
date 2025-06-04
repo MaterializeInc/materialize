@@ -203,6 +203,9 @@ pub struct ServiceConfig {
     pub ports: Vec<ServicePort>,
     /// An optional limit on the memory that the service can use.
     pub memory_limit: Option<MemoryLimit>,
+    /// An optional request on the memory that the service can use. If unspecified,
+    /// use the same value as `memory_limit`.
+    pub memory_request: Option<MemoryLimit>,
     /// An optional limit on the CPU that the service can use.
     pub cpu_limit: Option<CpuLimit>,
     /// The number of copies of this service to run.

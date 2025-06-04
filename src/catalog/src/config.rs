@@ -178,6 +178,7 @@ impl ClusterReplicaSizeMap {
                         name,
                         ReplicaAllocation {
                             memory_limit: memory_limit.map(|gib| MemoryLimit(ByteSize::gib(gib))),
+                            memory_request: None,
                             cpu_limit: None,
                             disk_limit: None,
                             scale: 1,
@@ -199,6 +200,7 @@ impl ClusterReplicaSizeMap {
                 format!("{scale}-1"),
                 ReplicaAllocation {
                     memory_limit: None,
+                    memory_request: None,
                     cpu_limit: None,
                     disk_limit: None,
                     scale,
@@ -215,6 +217,7 @@ impl ClusterReplicaSizeMap {
                 format!("{scale}-{scale}"),
                 ReplicaAllocation {
                     memory_limit: None,
+                    memory_request: None,
                     cpu_limit: None,
                     disk_limit: None,
                     scale,
@@ -231,6 +234,7 @@ impl ClusterReplicaSizeMap {
                 format!("mem-{scale}"),
                 ReplicaAllocation {
                     memory_limit: Some(MemoryLimit(ByteSize(u64::cast_from(scale) * (1 << 30)))),
+                    memory_request: None,
                     cpu_limit: None,
                     disk_limit: None,
                     scale: 1,
@@ -248,6 +252,7 @@ impl ClusterReplicaSizeMap {
             "2-4".to_string(),
             ReplicaAllocation {
                 memory_limit: None,
+                memory_request: None,
                 cpu_limit: None,
                 disk_limit: None,
                 scale: 2,
@@ -264,6 +269,7 @@ impl ClusterReplicaSizeMap {
             "free".to_string(),
             ReplicaAllocation {
                 memory_limit: None,
+                memory_request: None,
                 cpu_limit: None,
                 disk_limit: None,
                 scale: 0,
@@ -281,6 +287,7 @@ impl ClusterReplicaSizeMap {
                 size.to_string(),
                 ReplicaAllocation {
                     memory_limit: None,
+                    memory_request: None,
                     cpu_limit: None,
                     disk_limit: None,
                     scale: 1,
