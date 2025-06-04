@@ -11,15 +11,23 @@ menu:
 When you connect to Materialize, you must specify the name of a valid role in
 the system.
 
+```mzsql
+
+```
+
 ## Syntax
 
-{{< diagram "create-role.svg" >}}
+```mzsql
+CREATE ROLE _role_name_ [WITH [SUPERUSER | NOSUPERUSER ]
+    [ LOGIN | NOLOGIN ]
+    [ INHERIT | NOINHERIT ]
+    [ PASSWORD <text> ]]
+```
 
-| Field                           | Use                                                               |
-| ------------------------------- | ----------------------------------------------------------------- |
-| _role_name_                     | A name for the role.                                              |
-| **WITH (** _options list_ **)** | Grants the role the ability to inherit privileges of other roles. |
-| **INHERIT**                     | Grants the role the ability to inherit privileges of other roles. |
+| Field                           | Use                    |
+| ------------------------------- | ---------------------- |
+| _role_name_                     | A name for the role.   |
+| **WITH (** _options list_ **)** | See below for options. |
 
 ## Details
 
@@ -105,7 +113,3 @@ SELECT rolsuper FROM pg_authid WHERE rolname = 'super_user';
 -   [ALTER OWNER](../alter-owner)
 -   [GRANT PRIVILEGE](../grant-privilege)
 -   [REVOKE PRIVILEGE](../revoke-privilege)
-
-```
-
-```

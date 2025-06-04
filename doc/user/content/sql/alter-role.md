@@ -10,15 +10,18 @@ menu:
 
 ## Syntax
 
-{{< diagram "alter-role.svg" >}}
+```mzsql
+ALTER ROLE _role_name_ [WITH [SUPERUSER | NOSUPERUSER ]
+    [ LOGIN | NOLOGIN ]
+    [ INHERIT | NOINHERIT ]
+    [ PASSWORD <text> ]] [SET _name_ TO _value_]
+```
 
 | Field       | Use                  |
 | ----------- | -------------------- |
 | _role_name_ | A name for the role. |
 
 #### `alter_role_attributes`
-
-{{< diagram "alter-role-attributes.svg" >}}
 
 | Field         | Use                                                                                                                                              |
 | ------------- | ------------------------------------------------------------------------------------------------------------------------------------------------ |
@@ -30,8 +33,6 @@ menu:
 | `PASSWORD`    | The `PASSWORD` attribute allows you to set a password for the role. Setting the `PASSWORD` attribute to `NULL` removes the password requirement. |
 
 #### `alter_role_set`
-
-{{< diagram "alter-role-set.svg" >}}
 
 | Field       | Use                                                                                                                                  |
 | ----------- | ------------------------------------------------------------------------------------------------------------------------------------ |
