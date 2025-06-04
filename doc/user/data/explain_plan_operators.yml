@@ -184,6 +184,9 @@ operators:
 
       Returns combinations of rows from each input whenever some equality predicates are `true`.
 
+      Joins will indicate the join order of their children, starting from 0.
+      For example, `Differential Join %1 » %0` will join its second child into its first.
+
       The [two joins differ in performance characteristics](/transform-data/optimization/#join).
     uses_memory: True
     memory_details: |
