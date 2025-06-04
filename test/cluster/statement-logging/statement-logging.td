@@ -302,3 +302,7 @@ ROLLBACK
 
 > SELECT result_size, rows_returned FROM mz_internal.mz_recent_activity_log WHERE sql = 'SELECT * FROM t_offset_limit ORDER BY a DESC LIMIT 0';
 0 0
+
+> SELECT mseh.began_at, mslh.occurred_at
+  FROM mz_internal.mz_statement_execution_history mseh JOIN mz_internal.mz_statement_lifecycle_history mslh ON (mseh.id = mslh.statement_id)
+  WHERE mslh.event_type = 'execution-began' AND mseh.began_at != mslh.occurred_at;
