@@ -746,7 +746,8 @@ where
     }
 
     fn parse_sql<'b>(&self, sql: &'b str) -> Result<Vec<StatementParseResult<'b>>, ErrorResponse> {
-        match self.adapter_client.parse(sql) {
+        let parse_start = Instant::now();
+        let result = match self.adapter_client.parse(sql) {
             Ok(result) => result.map_err(|e| {
                 // Convert our 0-based byte position to pgwire's 1-based character
                 // position.
@@ -754,7 +755,14 @@ where
                 ErrorResponse::error(SqlState::SYNTAX_ERROR, e.error.message).with_position(pos)
             }),
             Err(msg) => Err(ErrorResponse::error(SqlState::PROGRAM_LIMIT_EXCEEDED, msg)),
-        }
+        };
+        self.adapter_client
+            .inner()
+            .metrics()
+            .parse_seconds
+            .with_label_values(&[])
+            .observe(parse_start.elapsed().as_secs_f64());
+        result
     }
 
     /// Executes a "Simple Query", see

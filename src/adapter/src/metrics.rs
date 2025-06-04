@@ -43,6 +43,7 @@ pub struct Metrics {
     pub handle_scheduling_decisions_seconds: HistogramVec,
     pub row_set_finishing_seconds: HistogramVec,
     pub session_startup_table_writes_seconds: HistogramVec,
+    pub parse_seconds: HistogramVec,
 }
 
 impl Metrics {
@@ -180,6 +181,11 @@ impl Metrics {
                 help: "If we had to wait for builtin table writes before processing a query, how long did we wait for.",
                 buckets: histogram_seconds_buckets(0.000_008, 4.0),
             )),
+            parse_seconds: registry.register(metric!(
+                name: "mz_parse_seconds",
+                help: "The time it takes to parse a SQL statement. (Works for both Simple Queries and the Extended Query protocol.)",
+                buckets: histogram_seconds_buckets(0.000_128, 4.0),
+            ))
         }
     }
 
