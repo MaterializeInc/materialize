@@ -1126,7 +1126,7 @@ where
 
             let mut batches: Vec<FinishedBatch> = vec![];
             let mut batch_metrics: BatchMetrics = BatchMetrics::default();
-            let num_batches = done_batches.len().try_into();
+            let num_batches = u64::cast_from(done_batches.len());
 
             for batch_metadata in done_batches.drain(..) {
                 in_flight_descriptions.remove(&batch_metadata);
@@ -1276,10 +1276,7 @@ where
                         // successful.
                         source_statistics
                             .inc_updates_committed_by(batch_metrics.inserts + batch_metrics.retractions);
-                        match num_batches {
-                            Ok(num_batches) => metrics.processed_batches.inc_by(num_batches),
-                            Err(e) => tracing::warn!("not incrementing processed batches as we failed to convert usize to u64 with {:?}", e),
-                        }
+                        metrics.processed_batches.inc_by(num_batches);
                         metrics.row_inserts.inc_by(batch_metrics.inserts);
                         metrics.row_retractions.inc_by(batch_metrics.retractions);
                         metrics.error_inserts.inc_by(batch_metrics.error_inserts);
