@@ -355,6 +355,7 @@ unportable_markdown = "allow"
 style = { level = "allow", priority = -1 }
 complexity = { level = "allow", priority = -1 }
 large_enum_variant = { level = "allow", priority = 0 }
+result_large_err = { level = "allow", priority = 0 }
 mutable_key_type = { level = "allow", priority = 0 }
 stable_sort_primitive = { level = "allow", priority = 0 }
 map_entry = { level = "allow", priority = 0 }

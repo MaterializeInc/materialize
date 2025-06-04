@@ -589,7 +589,7 @@ impl AuthenticatorInner {
             tenant_id: msg.claims.tenant_id,
             // The user is an administrator if they have the admin role that the
             // `Authenticator` has been configured with.
-            is_admin: msg.claims.roles.iter().any(|r| *r == self.admin_role),
+            is_admin: msg.claims.roles.contains(&self.admin_role),
             _private: (),
         })
     }
