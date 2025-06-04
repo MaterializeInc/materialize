@@ -6,7 +6,7 @@
 
     The following example creates **read-only** tables `items` and `orders` that
     are populated from the corresponding `items` and `orders` tables from the
-    PostgreSQL source `mz_source`.
+    MySQL source `mz_source`.
 
     {{< note >}}
 
@@ -14,7 +14,7 @@
     upstream tables, the tables in Materialize can have names that differ from
     the referenced table names.
 
-    - For supported PostgreSQL data types, refer to [supported
+    - For supported MySQL data types, refer to [supported
     types](#upstream-sources-and-supported-data-types).
 
     - You can create multiple tables that reference the same upstream table.
@@ -23,25 +23,22 @@
 
   code: |
     /* This example assumes:
-      - In the upstream PostgreSQL, you have defined:
-        - replication user and password with the appropriate access.
-        - a publication named `mz_source` for the `items` and `orders` tables.
+      - In the upstream MySQL, you have:
+        - Enabled GTID-based binlog replication
+        - Defined a replication user and password with the appropriate access.
       - In Materialize,
-        - You have defined the connection to the upstream PostgreSQL.
+        - You have defined the connection to the upstream MySQL.
         - You have used the connection to create a source; e.g.,
-          CREATE SECRET pgpass AS '<replication user password>'; -- substitute
-          CREATE CONNECTION pg TO POSTGRES (
+          CREATE SECRET mysql_password AS '<replication user password>'; -- substitute
+          CREATE CONNECTION mysql_connection TO MYSQL (
             HOST '<hostname>',          -- substitute
-            DATABASE <db>,              -- substitute
             USER <replication user>,    -- substitute
-            PASSWORD SECRET pgpass
-            -- [, AWS Privatelink <svc>| SSH TUNNEL <ssh_connection> ]
+            PASSWORD SECRET mysql_password
+            -- [, <network security configuration> ]
           );
 
           CREATE SOURCE mz_source
-          FROM POSTGRES CONNECTION pg (
-          PUBLICATION 'mz_source'       -- substitute
-          );
+          FROM MYSQL CONNECTION mysql_connection;
     */
 
     CREATE TABLE items
