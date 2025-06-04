@@ -8,20 +8,7 @@
 
 {{< include-md file="shared-content/mysql-supported-types.md" >}}
 
-Replicating tables that contain **unsupported data types** is possible via the
-[`TEXT COLUMNS`
-option](/sql/create-table/#syntax) for the
-following types:
-
-<ul style="column-count: 1">
-<li><code>enum</code></li>
-<li><code>year</code></li>
-</ul>
-
-The specified columns will be treated as `text`, and will thus not offer the
-expected MySQL type features. For any unsupported data types not listed above,
-use the [`EXCLUDE
-COLUMNS`](/sql/create-table/#syntax) option.
+{{< include-md file="shared-content/mysql-unsupported-type-handling.md" >}}
 
 ### Truncation
 

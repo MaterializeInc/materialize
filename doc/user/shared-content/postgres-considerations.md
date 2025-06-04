@@ -25,17 +25,7 @@ using the [`DROP SOURCE`](/sql/drop-source/) command.
 
 {{< include-md file="shared-content/postgres-supported-types.md" >}}
 
-Replicating tables that contain **unsupported data types** is possible via the
-[`TEXT COLUMNS`
-option](/sql/create-table/#syntax). The specified
-columns will be treated as `text`, and will thus not offer the expected
-PostgreSQL type features. For example:
-
-* [`enum`]: the implicit ordering of the original PostgreSQL `enum` type is not
-  preserved, as Materialize will sort values as `text`.
-
-* [`money`]: the resulting `text` value cannot be cast back to e.g. `numeric`,
-  since PostgreSQL adds typical currency formatting to the output.
+{{< include-md file="shared-content/postgres-unsupported-type-handling.md" >}}
 
 ### Truncation
 

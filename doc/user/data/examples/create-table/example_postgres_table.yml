@@ -1,0 +1,94 @@
+- name: "create-table"
+  description: |
+    To create new **read-only** tables from a source, in the `CREATE TABLE FROM
+    SOURCE` statement, specify the table in the publication using the
+    `REFERENCE` field.
+
+    The following example creates **read-only** tables `items` and `orders` that
+    are populated from the corresponding `items` and `orders` tables from the
+    PostgreSQL source `mz_source`.
+
+    {{< note >}}
+
+    - Although the example creates the tables with the same names as the
+    upstream tables, the tables in Materialize can have names that differ from
+    the referenced table names.
+
+    - For supported PostgreSQL data types, refer to [supported
+    types](#upstream-sources-and-supported-data-types).
+
+    - You can create multiple tables that reference the same upstream table.
+
+    {{< /note >}}
+
+  code: |
+    /* This example assumes:
+      - In the upstream PostgreSQL, you have defined:
+        - replication user and password with the appropriate access.
+        - a publication named `mz_source` for the `items` and `orders` tables.
+      - In Materialize,
+        - You have defined the connection to the upstream PostgreSQL.
+        - You have used the connection to create a source; e.g.,
+          CREATE SECRET pgpass AS '<replication user password>'; -- substitute
+          CREATE CONNECTION pg TO POSTGRES (
+            HOST '<hostname>',          -- substitute
+            DATABASE <db>,              -- substitute
+            USER <replication user>,    -- substitute
+            PASSWORD SECRET pgpass
+            -- [, AWS Privatelink <svc>| SSH TUNNEL <ssh_connection> ]
+          );
+
+          CREATE SOURCE mz_source
+          FROM POSTGRES CONNECTION pg (
+          PUBLICATION 'mz_source'       -- substitute
+          );
+    */
+
+    CREATE TABLE items
+    FROM SOURCE mz_source(REFERENCE items)
+    ;
+    CREATE TABLE orders
+    FROM SOURCE mz_source(REFERENCE orders)
+    ;
+
+- name: "show-tables"
+  description: |
+    To verify that the table has been created, you can run [`SHOW
+    TABLES`](/sql/show-tables/) to list all tables in the current [schema](/sql/namespaces/#namespace-hierarchy):
+  code: |
+    SHOW TABLES;
+  results: |
+    The results should include the tables `items` and `orders`:
+
+    ```hc {hl_lines="3-4"}
+    | name        | comment |
+    | ----------- | ------- |
+    | items       |         |
+    | orders      |         |
+    ```
+
+- name: "show-columns"
+  description: |
+    Inspect the table columns using the [`SHOW COLUMNS`](/sql/show-columns/) command:
+  code: |
+    SHOW COLUMNS FROM items;
+    SHOW COLUMNS FROM orders;
+  results: |
+    The results should display information on the table columns. The types
+    should match those from the upstream table with the exception of those that
+    were explicitly converted to `text` in the `WITH` clause.
+
+    For the list of supported PostgreSQL data types, refer to [supported
+    types](#upstream-sources-and-supported-data-types).
+
+- name: "read-from-table"
+  code: |
+    SELECT * FROM items;
+
+- name: "create-view-from-tables"
+  code: |
+    CREATE VIEW orders_view AS
+    SELECT o.*,i.price,o.quantity * i.price as subtotal
+    FROM orders as o
+    JOIN items as i
+    ON o.item = i.item;
