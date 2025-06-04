@@ -594,12 +594,15 @@ where
                 }
             }
 
-            assert!(cfg.compaction_memory_bound_bytes >= 4 * cfg.batch.blob_target_size);
-
             // Prepare memory bounds for compaction
             let in_progress_part_reserved_memory_bytes = 2 * cfg.batch.blob_target_size;
-            let run_reserved_memory_bytes =
-                cfg.compaction_memory_bound_bytes - in_progress_part_reserved_memory_bytes;
+            // - then remaining memory will go towards pulling down as many runs as we can.
+            // We'll always do at least two runs per chunk, which means we may go over this limit
+            // if parts are large or the limit is low... though we do at least increment a metric
+            // when that happens.
+            let run_reserved_memory_bytes = cfg
+                .compaction_memory_bound_bytes
+                .saturating_sub(in_progress_part_reserved_memory_bytes);
 
             // Flatten the input batches into a single list of runs
             let ordered_runs =
