@@ -15,6 +15,7 @@ expected state it can verify results for correctness.
 
 import random
 import re
+import time
 from datetime import timedelta
 from enum import Enum
 
@@ -135,7 +136,9 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         required=True,
     )
 
-    parser.add_argument("--seed", metavar="N", type=int, help="Random seed", default=1)
+    parser.add_argument(
+        "--seed", metavar="N", type=int, help="Random seed", default=int(time.time())
+    )
 
     parser.add_argument(
         "--actions",
@@ -195,6 +198,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     if args.observability:
         c.up("prometheus", "grafana")
 
+    print(f"Using seed {args.seed}")
     random.seed(args.seed)
 
     additional_system_parameter_defaults = {}
