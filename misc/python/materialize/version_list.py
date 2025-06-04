@@ -30,7 +30,7 @@ from materialize.mz_version import MzVersion
 MZ_ROOT = Path(os.environ["MZ_ROOT"])
 
 
-def get_lts_versions() -> list[MzVersion]:
+def get_self_managed_versions() -> list[MzVersion]:
     result = set()
     for entry in yaml.safe_load(
         requests.get("https://materializeinc.github.io/materialize/index.yaml").text

@@ -772,7 +772,7 @@ steps:
           composition: skip-version-upgrade
     agents:
       queue: hetzner-aarch64-4cpu-8gb
-    skip: "Version upgrade skips are allowed for LTS releases now"
+    skip: "Version upgrade skips are allowed for Self-Managed releases now"
 
   - id: mz-debug
     label: "mz-debug tool"

@@ -2134,13 +2134,22 @@ mod tests {
     }
 
     #[mz_ore::test]
-    fn check_data_versions_with_lts_versions() {
+    fn check_data_versions_with_self_managed_versions() {
         #[track_caller]
-        fn testcase(code: &str, data: &str, lts_versions: &[Version], expected: Result<(), ()>) {
+        fn testcase(
+            code: &str,
+            data: &str,
+            self_managed_versions: &[Version],
+            expected: Result<(), ()>,
+        ) {
             let code = Version::parse(code).unwrap();
             let data = Version::parse(data).unwrap();
-            let actual = cfg::check_data_version_with_lts_versions(&code, &data, lts_versions)
-                .map_err(|_| ());
+            let actual = cfg::check_data_version_with_self_managed_versions(
+                &code,
+                &data,
+                self_managed_versions,
+            )
+            .map_err(|_| ());
             assert_eq!(actual, expected);
         }
 

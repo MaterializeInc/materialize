@@ -24,7 +24,10 @@ from materialize.checks.mzcompose_actions import (
 from materialize.checks.scenarios import Scenario
 from materialize.mz_version import MzVersion
 from materialize.mzcompose.services.materialized import LEADER_STATUS_HEALTHCHECK
-from materialize.version_list import get_lts_versions, get_published_minor_mz_versions
+from materialize.version_list import (
+    get_published_minor_mz_versions,
+    get_self_managed_versions,
+)
 
 # late initialization
 _minor_versions: list[MzVersion] | None = None
@@ -82,11 +85,11 @@ def start_mz_read_only(
     )
 
 
-class UpgradeEntireMzFromLatestLTS(Scenario):
-    """Upgrade the entire Mz instance from the last LTS version without any intermediate steps. This makes sure our LTS releases for self-managed Materialize stay upgradable."""
+class UpgradeEntireMzFromLatestSelfManaged(Scenario):
+    """Upgrade the entire Mz instance from the last Self-Managed version without any intermediate steps. This makes sure our Self-Managed releases for self-managed Materialize stay upgradable."""
 
     def base_version(self) -> MzVersion:
-        return get_lts_versions()[-1]
+        return get_self_managed_versions()[-1]
 
     def actions(self) -> list[Action]:
         print(f"Upgrading from tag {self.base_version()}")
