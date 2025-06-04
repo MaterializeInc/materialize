@@ -796,7 +796,7 @@ pub fn plan_explain_analyze(
     let explainee_name = statement
         .explainee
         .name()
-        .expect("EXPLAIN ANALYZE is not supported for this explainee")
+        .ok_or_else(|| sql_err!("EXPLAIN ANALYZE on anonymous dataflows",))?
         .full_name_str();
     let explainee = plan_explainee(scx, statement.explainee, params)?;
 
