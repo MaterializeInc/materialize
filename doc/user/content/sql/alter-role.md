@@ -2,8 +2,8 @@
 title: "ALTER ROLE"
 description: "`ALTER ROLE` alters the attributes of an existing role."
 menu:
-  main:
-    parent: commands
+    main:
+        parent: commands
 ---
 
 `ALTER ROLE` alters the attributes of an existing role.
@@ -12,34 +12,34 @@ menu:
 
 {{< diagram "alter-role.svg" >}}
 
-Field               | Use
---------------------|-------------------------------------------------------------------------
-_role_name_         | A name for the role.
+| Field       | Use                  |
+| ----------- | -------------------- |
+| _role_name_ | A name for the role. |
 
 #### `alter_role_attributes`
 
 {{< diagram "alter-role-attributes.svg" >}}
 
-Field               | Use
---------------------|-------------------------------------------------------------------------
-**INHERIT**         | Grants the role the ability to inherit privileges of other roles.
+| Field         | Use                                                                                                                                              |
+| ------------- | ------------------------------------------------------------------------------------------------------------------------------------------------ |
+| **INHERIT**   | Grants the role the ability to inherit privileges of other roles.                                                                                |
+| `LOGIN`       | The `LOGIN` attribute allows a role to login via the postgresql or web endpoints                                                                 |
+| `NOLOGIN`     | The `NOLOGIN` attribute prevents a role from logging in.                                                                                         |
+| `SUPERUSER`   | The `SUPERUSER` attribute grants the role superuser privileges.                                                                                  |
+| `NOSUPERUSER` | The `NOSUPERUSER` attribute prevents the role from having superuser privileges.                                                                  |
+| `PASSWORD`    | The `PASSWORD` attribute allows you to set a password for the role. Setting the `PASSWORD` attribute to `NULL` removes the password requirement. |
 
 #### `alter_role_set`
 
 {{< diagram "alter-role-set.svg" >}}
 
-Field               | Use
---------------------|-------------------------------------------------------------------------
-_name_              | The name of the configuration parameter to modify.
-_value_             | The value to assign to the configuration parameter.
-**DEFAULT**         | Reset the value of the configuration parameter for the specified role to the system's default. Equivalent to `ALTER ROLE ... RESET`.
+| Field       | Use                                                                                                                                  |
+| ----------- | ------------------------------------------------------------------------------------------------------------------------------------ |
+| _name_      | The name of the configuration parameter to modify.                                                                                   |
+| _value_     | The value to assign to the configuration parameter.                                                                                  |
+| **DEFAULT** | Reset the value of the configuration parameter for the specified role to the system's default. Equivalent to `ALTER ROLE ... RESET`. |
 
 ## Details
-
-Unlike PostgreSQL, Materialize derives the `LOGIN` and `SUPERUSER`
-attributes for a role during authentication, every time that role tries
-to connect to Materialize. Therefore, you cannot specify either
-attribute when altering an existing role.
 
 Unlike PostgreSQL, Materialize does not currently support the `NOINHERIT` attribute and the `SET
 ROLE` command.
@@ -47,7 +47,7 @@ ROLE` command.
 You may not specify redundant or conflicting sets of options. For example,
 Materialize will reject the statement `ALTER ROLE ... INHERIT INHERIT`.
 
-Unlike PostgreSQL, Materialize does not use role attributes to determine a roles ability to create
+With the exception of the `SUPERUSER` attribute and unlike PostgreSQL, Materialize does not use role attributes to determine a roles ability to create
 top level objects such as databases and other roles. Instead, Materialize uses system level
 privileges. See [GRANT PRIVILEGE](../grant-privilege) for more details.
 
@@ -62,9 +62,11 @@ current configuration parameter defaults for a role, see [`mz_role_parameters`](
 ```mzsql
 ALTER ROLE rj INHERIT;
 ```
+
 ```mzsql
 SELECT name, inherit FROM mz_roles WHERE name = 'rj';
 ```
+
 ```nofmt
 rj  true
 ```
@@ -91,6 +93,7 @@ quickstart
 ```
 
 ##### Non-inheritance
+
 ```mzsql
 CREATE ROLE team;
 CREATE ROLE member;
@@ -103,19 +106,45 @@ SHOW cluster;
 quickstart
 ```
 
+##### Making a role a superuser
+
+```mzsql
+ALTER ROLE rj SUPERUSER;
+```
+
+```mzsql
+SELECT name, rolsuper FROM pg_authid WHERE rolname = 'rj';
+```
+
+```nofmt
+rj  t
+```
+
+##### Removing a role's password
+
+```mzsql
+ALTER ROLE rj PASSWORD NULL;
+```
+
+##### Changing a role's password
+
+```mzsql
+ALTER ROLE rj PASSWORD 'new_password';
+```
+
 ## Privileges
 
 The privileges required to execute this statement are:
 
-- `CREATEROLE` privileges on the system.
+-   `CREATEROLE` privileges on the system.
 
 ## Related pages
 
-- [CREATE ROLE](../create-role)
-- [DROP ROLE](../drop-role)
-- [DROP USER](../drop-user)
-- [GRANT ROLE](../grant-role)
-- [REVOKE ROLE](../revoke-role)
-- [ALTER OWNER](../alter-owner)
-- [GRANT PRIVILEGE](../grant-privilege)
-- [REVOKE PRIVILEGE](../revoke-privilege)
+-   [CREATE ROLE](../create-role)
+-   [DROP ROLE](../drop-role)
+-   [DROP USER](../drop-user)
+-   [GRANT ROLE](../grant-role)
+-   [REVOKE ROLE](../revoke-role)
+-   [ALTER OWNER](../alter-owner)
+-   [GRANT PRIVILEGE](../grant-privilege)
+-   [REVOKE PRIVILEGE](../revoke-privilege)
