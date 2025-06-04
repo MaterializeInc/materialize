@@ -1294,19 +1294,6 @@ pub(crate) fn validate_truncate_batch<T: Timestamp>(
         }
     }
 
-    // NB(ptravers): see `compare_and_append_batch`.
-    //let batch = &batch.desc;
-    //if !PartialOrder::less_equal(batch.lower(), truncate.lower())
-    //    || PartialOrder::less_than(batch.upper(), truncate.upper())
-    //{
-    //    return Err(InvalidUsage::InvalidBatchBounds {
-    //        batch_lower: batch.lower().clone(),
-    //        batch_upper: batch.upper().clone(),
-    //        append_lower: truncate.lower().clone(),
-    //        append_upper: truncate.upper().clone(),
-    //    });
-    //}
-
     Ok(())
 }
 
