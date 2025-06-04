@@ -29,6 +29,7 @@ from pg8000.exceptions import InterfaceError
 from psycopg import Cursor
 from psycopg.errors import OperationalError, ProgramLimitExceeded, ProgrammingError
 
+from materialize import MZ_ROOT
 from materialize.mzcompose.composition import Composition
 from materialize.mzcompose.services.balancerd import Balancerd
 from materialize.mzcompose.services.frontegg import FronteggMock
@@ -139,6 +140,7 @@ SERVICES = [
         volumes_extra=[
             "secrets:/secrets",
         ],
+        listeners_config_path=f"{MZ_ROOT}/src/materialized/ci/listener_configs/no_auth_https.json",
     ),
 ]
 
@@ -630,8 +632,12 @@ def workflow_webhook(c: Composition) -> None:
 
     c.testdrive(
         dedent(
-            """
-        > CREATE SOURCE wh FROM WEBHOOK BODY FORMAT TEXT
+            f"""
+        $ postgres-connect name=mz_system url=postgres://mz_system@materialized:6877/materialize
+        $ postgres-execute connection=mz_system
+        GRANT ALL PRIVILEGES ON SCHEMA public TO "{ADMIN_USER}";
+        GRANT ALL PRIVILEGES ON CLUSTER quickstart TO "{ADMIN_USER}";
+        > CREATE SOURCE wh FROM WEBHOOK BODY FORMAT TEXT;
         $ webhook-append database=materialize schema=public name=wh
         a
         > SELECT * FROM wh
