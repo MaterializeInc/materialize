@@ -1111,16 +1111,14 @@ where
                 }
             });
 
-            let mut done_batches_iter = done_batches.iter();
-
-            let Some(first_batch_description) = done_batches_iter.next() else {
+            let Some(first_batch_description) = done_batches.first() else {
                 upper_cap_set.downgrade(current_upper.borrow().iter());
                 continue;
             };
 
             let batch_upper = first_batch_description.1.clone();
 
-            let mut batch_lower = if let Some(last_batch_description) = done_batches_iter.last() {
+            let mut batch_lower = if let Some(last_batch_description) = done_batches.last() {
                 last_batch_description.0.clone()
             } else {
                 first_batch_description.0.clone()
