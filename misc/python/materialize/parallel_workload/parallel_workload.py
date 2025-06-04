@@ -387,9 +387,9 @@ def run(
         conn = psycopg.connect(
             host=host, port=ports["materialized"], user="materialize"
         )
-    except Exception:
+    except Exception as e:
         if scenario == Scenario.ZeroDowntimeDeploy:
-            print("Failed connecting to materialized, using materialized2: {e}")
+            print(f"Failed connecting to materialized, using materialized2: {e}")
             conn = psycopg.connect(
                 host=host, port=ports["materialized2"], user="materialize"
             )
