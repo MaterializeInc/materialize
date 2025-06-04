@@ -43,7 +43,7 @@ use crate::cfg::{COMPACTION_MEMORY_BOUND_BYTES, RetryParameters};
 use crate::fetch::{FetchBatchFilter, FetchedPart, Lease, LeasedBatchPart, fetch_leased_part};
 use crate::internal::encoding::Schemas;
 use crate::internal::machine::{ExpireFn, Machine};
-use crate::internal::metrics::Metrics;
+use crate::internal::metrics::{Metrics, ReadMetrics, ShardMetrics};
 use crate::internal::state::{BatchPart, HollowBatch};
 use crate::internal::watch::StateWatch;
 use crate::iter::{Consolidator, StructuredSort};
@@ -865,14 +865,22 @@ pub(crate) struct UnexpiredReadHandleState {
 /// client should call `next` until it returns `None`, which signals all data has been returned...
 /// but it's also free to abandon the instance at any time if it eg. only needs a few entries.
 #[derive(Debug)]
-pub struct Cursor<K: Codec, V: Codec, T: Timestamp + Codec64, D: Codec64> {
-    consolidator: CursorConsolidator<K, V, T, D>,
-    _lease: Lease,
-    read_schemas: Schemas<K, V>,
+pub struct Cursor<K: Codec, V: Codec, T: Timestamp + Codec64, D: Codec64, L = Lease> {
+    pub(crate) consolidator: CursorConsolidator<K, V, T, D>,
+    pub(crate) _lease: L,
+    pub(crate) read_schemas: Schemas<K, V>,
+}
+
+impl<K: Codec, V: Codec, T: Timestamp + Codec64, D: Codec64, L> Cursor<K, V, T, D, L> {
+    /// Extracts and returns the lease from the cursor. Allowing the caller to
+    /// do any necessary cleanup associated with the lease.
+    pub fn into_lease(self: Self) -> L {
+        self._lease
+    }
 }
 
 #[derive(Debug)]
-enum CursorConsolidator<K: Codec, V: Codec, T: Timestamp + Codec64, D: Codec64> {
+pub(crate) enum CursorConsolidator<K: Codec, V: Codec, T: Timestamp + Codec64, D: Codec64> {
     Structured {
         consolidator: Consolidator<T, D, StructuredSort<K, V, T, D>>,
         max_len: usize,
@@ -880,7 +888,7 @@ enum CursorConsolidator<K: Codec, V: Codec, T: Timestamp + Codec64, D: Codec64> 
     },
 }
 
-impl<K, V, T, D> Cursor<K, V, T, D>
+impl<K, V, T, D, L> Cursor<K, V, T, D, L>
 where
     K: Debug + Codec + Ord,
     V: Debug + Codec + Ord,
@@ -985,24 +993,52 @@ where
         should_fetch_part: impl for<'a> Fn(Option<&'a LazyPartStats>) -> bool,
     ) -> Result<Cursor<K, V, T, D>, Since<T>> {
         let batches = self.machine.snapshot(&as_of).await?;
+        let lease = self.lease_seqno();
 
-        let context = format!("{}[as_of={:?}]", self.shard_id(), as_of.elements());
+        Self::read_batches_consolidated(
+            &self.cfg,
+            Arc::clone(&self.metrics),
+            Arc::clone(&self.machine.applier.shard_metrics),
+            self.metrics.read.snapshot.clone(),
+            Arc::clone(&self.blob),
+            self.shard_id(),
+            as_of,
+            self.read_schemas.clone(),
+            &batches,
+            lease,
+            should_fetch_part,
+        )
+    }
+
+    pub(crate) fn read_batches_consolidated<L>(
+        persist_cfg: &PersistConfig,
+        metrics: Arc<Metrics>,
+        shard_metrics: Arc<ShardMetrics>,
+        read_metrics: ReadMetrics,
+        blob: Arc<dyn Blob>,
+        shard_id: ShardId,
+        as_of: Antichain<T>,
+        schemas: Schemas<K, V>,
+        batches: &[HollowBatch<T>],
+        lease: L,
+        should_fetch_part: impl for<'a> Fn(Option<&'a LazyPartStats>) -> bool,
+    ) -> Result<Cursor<K, V, T, D, L>, Since<T>> {
+        let context = format!("{}[as_of={:?}]", shard_id, as_of.elements());
         let filter = FetchBatchFilter::Snapshot {
             as_of: as_of.clone(),
         };
-        let lease = self.lease_seqno();
 
         let consolidator = {
             let mut consolidator = Consolidator::new(
                 context,
-                self.shard_id(),
-                StructuredSort::new(self.read_schemas.clone()),
-                Arc::clone(&self.blob),
-                Arc::clone(&self.metrics),
-                Arc::clone(&self.machine.applier.shard_metrics),
-                self.metrics.read.snapshot.clone(),
+                shard_id,
+                StructuredSort::new(schemas.clone()),
+                blob,
+                metrics,
+                shard_metrics,
+                read_metrics,
                 filter,
-                COMPACTION_MEMORY_BOUND_BYTES.get(&self.cfg),
+                COMPACTION_MEMORY_BOUND_BYTES.get(persist_cfg),
             );
             for batch in batches {
                 for (meta, run) in batch.runs() {
@@ -1020,15 +1056,15 @@ where
                 // This default may end up consolidating more records than previously
                 // for cases like fast-path peeks, where only the first few entries are used.
                 // If this is a noticeable performance impact, thread the max-len in from the caller.
-                max_len: self.cfg.compaction_yield_after_n_updates,
-                max_bytes: BLOB_TARGET_SIZE.get(&self.cfg).max(1),
+                max_len: persist_cfg.compaction_yield_after_n_updates,
+                max_bytes: BLOB_TARGET_SIZE.get(persist_cfg).max(1),
             }
         };
 
         Ok(Cursor {
             consolidator,
             _lease: lease,
-            read_schemas: self.read_schemas.clone(),
+            read_schemas: schemas,
         })
     }
 
