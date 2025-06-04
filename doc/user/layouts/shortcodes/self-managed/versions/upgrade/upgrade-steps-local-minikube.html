@@ -39,8 +39,7 @@ site.Data.self_managed.latest_versions.operator_helm_chart_version }}
    --version {{ $operator_version }} \
    -f upgrade-values.yaml \
    --set operator.cloudProvider.region=minikube \
-   --set observability.podMetrics.enabled=true \
-   --set operator.image.tag={{ $orchestratord_version }}
+   --set observability.podMetrics.enabled=true
    ```
 
 1. Verify that the operator is running:
