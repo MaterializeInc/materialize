@@ -386,6 +386,8 @@ impl Listeners {
         let (adapter_client_tx, adapter_client_rx) = oneshot::channel();
         let adapter_client_rx = adapter_client_rx.shared();
 
+        let metrics_registry = config.metrics_registry.clone();
+        let metrics = http::Metrics::register_into(&metrics_registry, "mz_http");
         let mut http_listener_handles = BTreeMap::new();
         for (name, listener) in self.http {
             let authenticator_kind = listener.config.authenticator_kind();
@@ -394,10 +396,6 @@ impl Listeners {
                 AuthenticatorKind::Password => authenticator_password_rx.clone(),
                 AuthenticatorKind::None => authenticator_none_rx.clone(),
             };
-            let metrics_registry = config.metrics_registry.clone();
-            let metrics_component: &'static str =
-                Box::leak(format!("mz_{}_http", &name).into_boxed_str());
-            let metrics = http::Metrics::register_into(&metrics_registry, metrics_component);
             let source: &'static str = Box::leak(name.clone().into_boxed_str());
             let tls = if listener.config.enable_tls() {
                 tls_reloading_context.clone()
@@ -414,8 +412,8 @@ impl Listeners {
                 authenticator_rx,
                 allowed_origin: config.cors_allowed_origin.clone(),
                 concurrent_webhook_req: webhook_concurrency_limit.semaphore(),
-                metrics,
-                metrics_registry,
+                metrics: metrics.clone(),
+                metrics_registry: metrics_registry.clone(),
                 allowed_roles: listener.config.allowed_roles(),
                 internal_route_config: Arc::clone(&internal_route_config),
                 routes_enabled: listener.config.routes.clone(),

@@ -2824,7 +2824,7 @@ async fn smoketest_webhook_source() {
         .metrics_registry
         .gather()
         .into_iter()
-        .find(|metric| metric.get_name() == "mz_external_http_requests_total")
+        .find(|metric| metric.get_name() == "mz_http_requests_total")
         .unwrap();
     let total_requests_metric = &total_requests_metric.get_metric()[0];
     assert_eq!(total_requests_metric.get_counter().get_value(), 100.0);
@@ -3168,26 +3168,26 @@ async fn test_http_metrics() {
     let metrics = server.metrics_registry.gather();
     let http_metrics: Vec<_> = metrics
         .into_iter()
-        .filter(|metric| metric.get_name().starts_with("mz_external_http"))
+        .filter(|metric| metric.get_name().starts_with("mz_http"))
         .collect();
 
     // Make sure the duration metric exists.
     let duration_count = http_metrics
         .iter()
-        .filter(|metric| metric.get_name() == "mz_external_http_request_duration_seconds")
+        .filter(|metric| metric.get_name() == "mz_http_request_duration_seconds")
         .count();
     assert_eq!(duration_count, 1);
     // Make sure the active count metric exists.
     let active_count = http_metrics
         .iter()
-        .filter(|metric| metric.get_name() == "mz_external_http_requests_active")
+        .filter(|metric| metric.get_name() == "mz_http_requests_active")
         .count();
     assert_eq!(active_count, 1);
 
     // Make sure our metrics capture the one successful query and the one failure.
     let mut request_metrics: Vec<_> = http_metrics
         .into_iter()
-        .filter(|metric| metric.get_name() == "mz_external_http_requests_total")
+        .filter(|metric| metric.get_name() == "mz_http_requests_total")
         .collect();
     assert_eq!(request_metrics.len(), 1);
 
