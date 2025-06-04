@@ -59,7 +59,7 @@ use timely::dataflow::{Scope, StreamCore};
 use timely::progress::timestamp::Timestamp;
 use tracing::trace;
 
-use crate::render::context::ShutdownToken;
+use crate::render::context::ShutdownProbe;
 
 /// Joins two arranged collections with the same key type.
 ///
@@ -69,7 +69,7 @@ use crate::render::context::ShutdownToken;
 pub(super) fn mz_join_core<G, Tr1, Tr2, L, I, YFn, C>(
     arranged1: &Arranged<G, Tr1>,
     arranged2: &Arranged<G, Tr2>,
-    shutdown_token: ShutdownToken,
+    shutdown_probe: ShutdownProbe,
     mut result: L,
     yield_fn: YFn,
 ) -> StreamCore<G, C>
@@ -215,7 +215,7 @@ where
 
             move |input1, input2, output| {
                 // If the dataflow is shutting down, discard all existing and future work.
-                if shutdown_token.in_shutdown() {
+                if shutdown_probe.in_shutdown() {
                     trace!(operator_id, "shutting down");
 
                     // Discard data at the inputs.

@@ -10,8 +10,9 @@
 //! Management of dataflow-local state, like arrangements, while building a
 //! dataflow.
 
+use std::cell::RefCell;
 use std::collections::BTreeMap;
-use std::rc::{Rc, Weak};
+use std::rc::Rc;
 use std::sync::mpsc;
 
 use columnar::Columnar;
@@ -31,6 +32,7 @@ use mz_repr::fixed_length::ToDatumIter;
 use mz_repr::{DatumVec, DatumVecBorrow, Diff, GlobalId, Row, RowArena, SharedRow};
 use mz_storage_types::controller::CollectionMetadata;
 use mz_storage_types::errors::DataflowError;
+use mz_timely_util::builder_async::{ButtonHandle, PressOnDropButton};
 use mz_timely_util::containers::{Col2ValBatcher, ColumnBuilder, columnar_exchange};
 use mz_timely_util::operator::{CollectionExt, StreamExt};
 use timely::Container;
@@ -86,8 +88,8 @@ where
     pub until: Antichain<T>,
     /// Bindings of identifiers to collections.
     pub bindings: BTreeMap<Id, CollectionBundle<S, T>>,
-    /// A token that operators can probe to know whether the dataflow is shutting down.
-    pub(super) shutdown_token: ShutdownToken,
+    /// A handle that operators can probe to know whether the dataflow is shutting down.
+    pub(super) shutdown_probe: ShutdownProbe,
     /// A logger that operators can use to report hydration events.
     ///
     /// `None` if no hydration events should be logged in this context.
@@ -146,7 +148,7 @@ where
             as_of_frontier,
             until,
             bindings: BTreeMap::new(),
-            shutdown_token: Default::default(),
+            shutdown_probe: Default::default(),
             hydration_logger,
             compute_logger,
             linear_join_spec: compute_state.linear_join_spec,
@@ -201,7 +203,7 @@ where
     }
 
     pub(super) fn error_logger(&self) -> ErrorLogger {
-        ErrorLogger::new(self.shutdown_token.clone(), self.debug_name.clone())
+        ErrorLogger::new(self.shutdown_probe.clone(), self.debug_name.clone())
     }
 }
 
@@ -229,7 +231,7 @@ where
             dataflow_id: self.dataflow_id.clone(),
             as_of_frontier: self.as_of_frontier.clone(),
             until: self.until.clone(),
-            shutdown_token: self.shutdown_token.clone(),
+            shutdown_probe: self.shutdown_probe.clone(),
             hydration_logger: self.hydration_logger.clone(),
             compute_logger: self.compute_logger.clone(),
             linear_join_spec: self.linear_join_spec.clone(),
@@ -240,39 +242,61 @@ where
     }
 }
 
-/// Convenient wrapper around an optional `Weak` instance that can be used to check whether a
-/// datalow is shutting down.
+pub(super) fn shutdown_token<G: Scope>(scope: &mut G) -> (ShutdownProbe, PressOnDropButton) {
+    let (button_handle, button) = mz_timely_util::builder_async::button(scope, scope.addr());
+    let probe = ShutdownProbe::new(button_handle);
+    let token = button.press_on_drop();
+    (probe, token)
+}
+
+/// Convenient wrapper around an optional `ButtonHandle` that can be used to check whether a
+/// dataflow is shutting down.
 ///
 /// Instances created through the `Default` impl act as if the dataflow never shuts down.
-/// Instances created through [`ShutdownToken::new`] defer to the wrapped token.
+/// Instances created through [`ShutdownProbe::new`] defer to the wrapped button.
 #[derive(Clone, Default)]
-pub(super) struct ShutdownToken(Option<Weak<()>>);
+pub(super) struct ShutdownProbe(Option<Rc<RefCell<ButtonHandle>>>);
 
-impl ShutdownToken {
-    /// Construct a `ShutdownToken` instance that defers to `token`.
-    pub(super) fn new(token: Weak<()>) -> Self {
-        Self(Some(token))
+impl ShutdownProbe {
+    /// Construct a `ShutdownProbe` instance that defers to `button`.
+    fn new(button: ButtonHandle) -> Self {
+        Self(Some(Rc::new(RefCell::new(button))))
     }
 
     /// Probe the token for dataflow shutdown.
     ///
     /// This method is meant to be used with the `?` operator: It returns `None` if the dataflow is
     /// in the process of shutting down and `Some` otherwise.
+    ///
+    /// The result of this method is synchronized among workers: It only returns `None` once all
+    /// workers have dropped their shutdown token.
     pub(super) fn probe(&self) -> Option<()> {
-        match &self.0 {
-            Some(t) => t.upgrade().map(|_| ()),
-            None => Some(()),
+        match self.in_shutdown() {
+            false => Some(()),
+            true => None,
         }
     }
 
     /// Returns whether the dataflow is in the process of shutting down.
+    ///
+    /// The result of this method is synchronized among workers: It only returns `true` once all
+    /// workers have dropped their shutdown token.
     pub(super) fn in_shutdown(&self) -> bool {
-        self.probe().is_none()
+        match &self.0 {
+            Some(t) => t.borrow_mut().all_pressed(),
+            None => false,
+        }
     }
 
-    /// Returns a reference to the wrapped `Weak`.
-    pub(crate) fn get_inner(&self) -> Option<&Weak<()>> {
-        self.0.as_ref()
+    /// Returns whether the dataflow is in the process of shutting down on the current worker.
+    ///
+    /// In contrast to [`ShutdownProbe::in_shutdown`], this method returns `true` as soon as the
+    /// current worker has dropped its shutdown token, without waiting for other workers.
+    pub(super) fn in_local_shutdown(&self) -> bool {
+        match &self.0 {
+            Some(t) => t.borrow_mut().local_pressed(),
+            None => false,
+        }
     }
 }
 
