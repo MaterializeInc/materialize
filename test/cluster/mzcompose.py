@@ -2521,6 +2521,14 @@ class Metrics:
         assert len(values) == 1
         return values[0]
 
+    def get_pgwire_message_processing_seconds(self, message_type: str) -> float:
+        metrics = self.with_name("mz_pgwire_message_processing_seconds_sum")
+        values = [
+            v for k, v in metrics.items() if f'message_type="{message_type}"' in k
+        ]
+        assert len(values) == 1
+        return values[0]
+
     def get_last_command_received(self, server_name: str) -> float:
         metrics = self.with_name("mz_grpc_server_last_command_received")
         values = [v for k, v in metrics.items() if server_name in k]
@@ -3045,6 +3053,61 @@ def workflow_test_optimizer_metrics(c: Composition) -> None:
     assert 0 < time < 10, f"got {time}"
     time = metrics.get_e2e_optimization_time("subscribe")
     assert 0 < time < 10, f"got {time}"
+
+
+def workflow_test_pgwire_metrics(c: Composition) -> None:
+    """Test metrics collected in the Adapter frontend, i.e., `pgwire.rs`"""
+
+    def fetch_metrics() -> Metrics:
+        resp = c.exec(
+            "materialized", "curl", "localhost:6878/metrics", capture=True
+        ).stdout
+        return Metrics(resp)
+
+    c.down(destroy_volumes=True)
+
+    with c.override(
+        Testdrive(no_reset=True),
+    ):
+        c.up("testdrive", persistent=True)
+        c.up("materialized")
+
+        c.sql(
+            """
+            CREATE TABLE t (a int);
+
+            SELECT * FROM t;
+
+            CREATE INDEX i ON t (a);
+
+            SELECT * FROM t;
+            """
+        )
+        metrics = fetch_metrics()
+
+        # `c.sql` above uses the Simple Query protocol.
+        time = metrics.get_pgwire_message_processing_seconds("query")
+        assert 0 < time < 10, f"got {time}"
+
+        # Testdrive uses the Extended Query protocol.
+        c.testdrive(
+            input=dedent(
+                """
+                > SELECT * FROM t;
+                """
+            )
+        )
+        metrics = fetch_metrics()
+
+        time = metrics.get_pgwire_message_processing_seconds("parse")
+        assert 0 < time < 10, f"got {time}"
+        time = metrics.get_pgwire_message_processing_seconds("bind")
+        assert 0 < time < 10, f"got {time}"
+        time = metrics.get_pgwire_message_processing_seconds("execute")
+        assert 0 < time < 10, f"got {time}"
+
+        time = metrics.get_value("mz_parse_seconds_sum")
+        assert 0 < time < 10, f"got {time}"
 
 
 def workflow_test_metrics_retention_across_restart(c: Composition) -> None:
