@@ -59,7 +59,7 @@ SELECT global_id, lir_id, parent_lir_id, REPEAT(' ', nesting * 2) || operator AS
 GROUP BY global_id, lir_id, operator, parent_lir_id, nesting
 ORDER BY global_id, lir_id DESC;
 ----
-u2  5  NULL  Differential␠Join␠2␠»␠4
+u2  5  NULL  Differential␠Join␠%0␠»␠%1
 u2  4  5  ␠␠Arrange
 u2  3  4  ␠␠␠␠Read␠u1
 u2  2  5  ␠␠Arrange
@@ -76,7 +76,7 @@ SELECT global_id, lir_id, parent_lir_id, repeat(' ', nesting * 2) || operator AS
 GROUP BY global_id, lir_id, operator, parent_lir_id, nesting
 ORDER BY global_id, lir_id DESC;
 ----
-u2  5  NULL  Differential␠Join␠2␠»␠4
+u2  5  NULL  Differential␠Join␠%0␠»␠%1
 u2  4  5  ␠␠Arrange
 u2  3  4  ␠␠␠␠Read␠u1
 u2  2  5  ␠␠Arrange
@@ -142,7 +142,7 @@ SELECT global_id, lir_id, parent_lir_id, REPEAT(' ', nesting * 2) || operator AS
 GROUP BY global_id, lir_id, operator, parent_lir_id, nesting
 ORDER BY global_id, lir_id DESC;
 ----
-t44  5  NULL  Differential␠Join␠2␠»␠4
+t44  5  NULL  Differential␠Join␠%0␠»␠%1
 t44  4  5  ␠␠Arrange
 t44  3  4  ␠␠␠␠Read␠u4
 t44  2  5  ␠␠Arrange
@@ -157,7 +157,7 @@ SELECT global_id, lir_id, parent_lir_id, REPEAT(' ', nesting * 2) || operator AS
 GROUP BY global_id, lir_id, operator, parent_lir_id, nesting
 ORDER BY global_id, lir_id DESC;
 ----
-t44  5  NULL  Differential␠Join␠2␠»␠4
+t44  5  NULL  Differential␠Join␠%0␠»␠%1
 t44  4  5  ␠␠Arrange
 t44  3  4  ␠␠␠␠Read␠u4
 t44  2  5  ␠␠Arrange
@@ -697,10 +697,10 @@ EOF
 query TIIIT
 EXPLAIN ANALYZE HINTS FOR INDEX v2_idx_x;
 ----
-Arrange␠3  NULL  NULL  NULL  NULL
-␠␠Get::PassArrangements␠u7  NULL  NULL  NULL  NULL
-TopK::Basic␠1  8  7  15  3808␠bytes
-␠␠Get::PassArrangements␠u6  NULL  NULL  NULL  NULL
+Arrange  NULL  NULL  NULL  NULL
+␠␠Stream␠u7  NULL  NULL  NULL  NULL
+Non-monotonic␠TopK  8  7  15  3808␠bytes
+␠␠Stream␠u6  NULL  NULL  NULL  NULL
 
 query T multiline
 EXPLAIN ANALYZE HINTS FOR INDEX v2_idx_x AS SQL;

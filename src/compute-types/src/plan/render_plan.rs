@@ -877,7 +877,7 @@ impl<'a, T> std::fmt::Display for RenderPlanExprHumanizer<'a, T> {
 
                 write!(f, "Table Function {func}({exprs})")
             }
-            Join { inputs, plan } => match plan {
+            Join { inputs: _, plan } => match plan {
                 JoinPlan::Linear(LinearJoinPlan {
                     source_relation,
                     stage_plans,
@@ -885,9 +885,9 @@ impl<'a, T> std::fmt::Display for RenderPlanExprHumanizer<'a, T> {
                 }) => {
                     write!(f, "Differential Join ")?;
 
-                    write!(f, "{}", inputs[*source_relation])?;
+                    write!(f, "%{}", source_relation)?;
                     for dsp in stage_plans {
-                        write!(f, " » {}", inputs[dsp.lookup_relation])?;
+                        write!(f, " » %{}", dsp.lookup_relation)?;
                     }
 
                     Ok(())
@@ -901,10 +901,10 @@ impl<'a, T> std::fmt::Display for RenderPlanExprHumanizer<'a, T> {
                             write!(f, " ")?;
                             first = false;
                         }
-                        write!(f, "[{}", inputs[dpp.source_relation])?;
+                        write!(f, "[%{}", dpp.source_relation)?;
 
                         for dsp in &dpp.stage_plans {
-                            write!(f, " » {}", inputs[dsp.lookup_relation])?;
+                            write!(f, " » %{}", dsp.lookup_relation)?;
                         }
                         write!(f, "]")?;
                     }
