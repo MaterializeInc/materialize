@@ -943,7 +943,7 @@ def workflow_kafka_source_rehydration(c: Composition) -> None:
         key{i}A,key{i}${{kafka-ingest.iteration}}:value{i}A,${{kafka-ingest.iteration}}
         > SELECT * FROM kafka_source_cnt
         {count*(i+1)}
-        """
+            """
             )
         )
 
@@ -959,7 +959,16 @@ def workflow_kafka_source_rehydration(c: Composition) -> None:
             restart="on-failure",
             external_metadata_store=True,
             default_replication_factor=2,
-        )
+        ),
+        Testdrive(
+            materialize_url="postgres://materialize@mz_new:6875",
+            materialize_url_internal="postgres://materialize@mz_new:6877",
+            mz_service="mz_new",
+            materialize_params={"cluster": "cluster"},
+            no_reset=True,
+            seed=1,
+            default_timeout=DEFAULT_TIMEOUT,
+        ),
     ):
         c.up("mz_new")
         start_time = time.time()
@@ -975,21 +984,189 @@ def workflow_kafka_source_rehydration(c: Composition) -> None:
         print(f"promotion took {elapsed} seconds")
 
         start_time = time.time()
+        result = c.sql_query("SELECT * FROM kafka_source_cnt", service="mz_new")
+        elapsed = time.time() - start_time
+        print(f"final check took {elapsed} seconds")
+        assert result[0][0] == count * repeats, f"Wrong result: {result}"
+        result = c.sql_query("SELECT count(*) FROM kafka_source_tbl", service="mz_new")
+        assert result[0][0] == count * repeats, f"Wrong result: {result}"
+        assert (
+            elapsed < 2
+        ), f"Took {elapsed}s to SELECT on Kafka source after 0dt upgrade, is it hydrated?"
+
+        start_time = time.time()
         result = c.sql_query("SELECT 1", service="mz_new")
         elapsed = time.time() - start_time
         print(f"bootstrapping (checked via SELECT 1) took {elapsed} seconds")
-        duration = time.time() - start_time
         assert result[0][0] == 1, f"Wrong result: {result}"
+
+        print("Ingesting again")
+        for i in range(repeats, repeats * 2):
+            c.testdrive(
+                dedent(
+                    f"""
+                $ kafka-ingest format=bytes key-format=bytes key-terminator=: topic=kafka-large repeat={count}
+                key{i}A,key{i}${{kafka-ingest.iteration}}:value{i}A,${{kafka-ingest.iteration}}
+                """
+                )
+            )
+
+        c.testdrive(
+            dedent(
+                f"""
+            > SET CLUSTER = cluster;
+            > SELECT * FROM kafka_source_cnt
+            {2*count*repeats}
+            > SELECT count(*) FROM kafka_source_tbl
+            {2*count*repeats}
+            """
+            )
+        )
+
+
+def workflow_kafka_source_rehydration_large_initial(c: Composition) -> None:
+    """Verify Kafka source rehydration in 0dt deployment"""
+    c.down(destroy_volumes=True)
+    c.up("zookeeper", "kafka", "schema-registry", "mz_old")
+    c.up("testdrive", persistent=True)
+
+    count = 1000000
+    repeats = 20
+
+    # Make sure cluster is owned by the system so it doesn't get dropped
+    # between testdrive runs.
+    c.sql(
+        """
+        DROP CLUSTER IF EXISTS cluster CASCADE;
+        CREATE CLUSTER cluster SIZE '1';
+        GRANT ALL ON CLUSTER cluster TO materialize;
+        ALTER SYSTEM SET cluster = cluster;
+        CREATE CLUSTER cluster_singlereplica SIZE '1', REPLICATION FACTOR 1;
+        GRANT ALL ON CLUSTER cluster_singlereplica TO materialize;
+    """,
+        service="mz_old",
+        port=6877,
+        user="mz_system",
+    )
+
+    start_time = time.time()
+    c.testdrive(
+        dedent(
+            """
+        $ kafka-create-topic topic=kafka-large
+            """
+        )
+    )
+    for i in range(repeats):
+        c.testdrive(
+            dedent(
+                f"""
+            $ kafka-ingest format=bytes key-format=bytes key-terminator=: topic=kafka-large repeat={count}
+            key{i}A,key{i}${{kafka-ingest.iteration}}:value{i}A,${{kafka-ingest.iteration}}
+            """
+            )
+        )
+
+    c.testdrive(
+        dedent(
+            f"""
+        > SET CLUSTER = cluster;
+
+        > CREATE CONNECTION IF NOT EXISTS kafka_conn FOR KAFKA BROKER '${{testdrive.kafka-addr}}', SECURITY PROTOCOL = 'PLAINTEXT';
+        > CREATE CONNECTION IF NOT EXISTS csr_conn FOR CONFLUENT SCHEMA REGISTRY URL '${{testdrive.schema-registry-url}}';
+
+        > CREATE SOURCE kafka_source
+          IN CLUSTER cluster
+          FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-kafka-large-${{testdrive.seed}}');
+
+        > CREATE TABLE kafka_source_tbl (key1, key2, value1, value2)
+          FROM SOURCE kafka_source (REFERENCE "testdrive-kafka-large-${{testdrive.seed}}")
+          KEY FORMAT CSV WITH 2 COLUMNS DELIMITED BY ','
+          VALUE FORMAT CSV WITH 2 COLUMNS DELIMITED BY ','
+          ENVELOPE UPSERT;
+        > CREATE VIEW kafka_source_cnt AS SELECT count(*) FROM kafka_source_tbl
+        > CREATE DEFAULT INDEX on kafka_source_cnt
+        > SELECT * FROM kafka_source_cnt
+        {count*repeats}
+        """
+        )
+    )
+
+    elapsed = time.time() - start_time
+    print(f"initial ingestion took {elapsed} seconds")
+
+    with c.override(
+        Materialized(
+            name="mz_new",
+            sanity_restart=False,
+            deploy_generation=1,
+            system_parameter_defaults=SYSTEM_PARAMETER_DEFAULTS,
+            restart="on-failure",
+            external_metadata_store=True,
+            default_replication_factor=2,
+        ),
+        Testdrive(
+            materialize_url="postgres://materialize@mz_new:6875",
+            materialize_url_internal="postgres://materialize@mz_new:6877",
+            mz_service="mz_new",
+            materialize_params={"cluster": "cluster"},
+            no_reset=True,
+            seed=1,
+            default_timeout=DEFAULT_TIMEOUT,
+        ),
+    ):
+        c.up("mz_new")
+        start_time = time.time()
+        c.await_mz_deployment_status(DeploymentStatus.READY_TO_PROMOTE, "mz_new")
+        elapsed = time.time() - start_time
+        print(f"re-hydration took {elapsed} seconds")
+        c.promote_mz("mz_new")
+        start_time = time.time()
+        c.await_mz_deployment_status(
+            DeploymentStatus.IS_LEADER, "mz_new", sleep_time=None
+        )
+        elapsed = time.time() - start_time
+        print(f"promotion took {elapsed} seconds")
 
         start_time = time.time()
         result = c.sql_query("SELECT * FROM kafka_source_cnt", service="mz_new")
         elapsed = time.time() - start_time
         print(f"final check took {elapsed} seconds")
-        duration = time.time() - start_time
+        assert result[0][0] == count * repeats, f"Wrong result: {result}"
+        result = c.sql_query("SELECT count(*) FROM kafka_source_tbl", service="mz_new")
         assert result[0][0] == count * repeats, f"Wrong result: {result}"
         assert (
-            duration < 2
-        ), f"Took {duration}s to SELECT on Kafka source after 0dt upgrade, is it hydrated?"
+            elapsed < 2
+        ), f"Took {elapsed}s to SELECT on Kafka source after 0dt upgrade, is it hydrated?"
+
+        start_time = time.time()
+        result = c.sql_query("SELECT 1", service="mz_new")
+        elapsed = time.time() - start_time
+        print(f"bootstrapping (checked via SELECT 1) took {elapsed} seconds")
+        assert result[0][0] == 1, f"Wrong result: {result}"
+
+        print("Ingesting again")
+        for i in range(repeats, repeats * 2):
+            c.testdrive(
+                dedent(
+                    f"""
+                $ kafka-ingest format=bytes key-format=bytes key-terminator=: topic=kafka-large repeat={count}
+                key{i}A,key{i}${{kafka-ingest.iteration}}:value{i}A,${{kafka-ingest.iteration}}
+                """
+                )
+            )
+
+        c.testdrive(
+            dedent(
+                f"""
+            > SET CLUSTER = cluster;
+            > SELECT * FROM kafka_source_cnt
+            {2*count*repeats}
+            > SELECT count(*) FROM kafka_source_tbl
+            {2*count*repeats}
+            """
+            )
+        )
 
 
 def workflow_pg_source_rehydration(c: Composition) -> None:
@@ -1084,7 +1261,16 @@ def workflow_pg_source_rehydration(c: Composition) -> None:
             restart="on-failure",
             external_metadata_store=True,
             default_replication_factor=2,
-        )
+        ),
+        Testdrive(
+            materialize_url="postgres://materialize@mz_new:6875",
+            materialize_url_internal="postgres://materialize@mz_new:6877",
+            mz_service="mz_new",
+            materialize_params={"cluster": "cluster"},
+            no_reset=True,
+            seed=1,
+            default_timeout=DEFAULT_TIMEOUT,
+        ),
     ):
         c.up("mz_new")
         start_time = time.time()
@@ -1102,11 +1288,37 @@ def workflow_pg_source_rehydration(c: Composition) -> None:
         result = c.sql_query("SELECT * FROM postgres_source_cnt", service="mz_new")
         elapsed = time.time() - start_time
         print(f"final check took {elapsed} seconds")
-        duration = time.time() - start_time
         assert result[0][0] == count * repeats, f"Wrong result: {result}"
         assert (
-            duration < 4
-        ), f"Took {duration}s to SELECT on Postgres source after 0dt upgrade, is it hydrated?"
+            elapsed < 4
+        ), f"Took {elapsed}s to SELECT on Postgres source after 0dt upgrade, is it hydrated?"
+
+        result = c.sql_query(
+            "SELECT count(*) FROM postgres_source_table", service="mz_new"
+        )
+        assert result[0][0] == count * repeats, f"Wrong result: {result}"
+
+        print("Ingesting again")
+        for i in range(repeats, repeats * 2):
+            c.testdrive(
+                dedent(
+                    f"""
+            $ postgres-execute connection=postgres://postgres:postgres@postgres
+            {inserts}
+            > SELECT * FROM postgres_source_cnt
+            {count*(i+1)}
+            """
+                ),
+                quiet=True,
+            )
+
+        result = c.sql_query("SELECT * FROM postgres_source_cnt", service="mz_new")
+        assert result[0][0] == 2 * count * repeats, f"Wrong result: {result}"
+
+        result = c.sql_query(
+            "SELECT count(*) FROM postgres_source_table", service="mz_new"
+        )
+        assert result[0][0] == 2 * count * repeats, f"Wrong result: {result}"
 
 
 def workflow_mysql_source_rehydration(c: Composition) -> None:
@@ -1202,7 +1414,16 @@ def workflow_mysql_source_rehydration(c: Composition) -> None:
             restart="on-failure",
             external_metadata_store=True,
             default_replication_factor=2,
-        )
+        ),
+        Testdrive(
+            materialize_url="postgres://materialize@mz_new:6875",
+            materialize_url_internal="postgres://materialize@mz_new:6877",
+            mz_service="mz_new",
+            materialize_params={"cluster": "cluster"},
+            no_reset=True,
+            seed=1,
+            default_timeout=DEFAULT_TIMEOUT,
+        ),
     ):
         c.up("mz_new")
         start_time = time.time()
@@ -1220,11 +1441,39 @@ def workflow_mysql_source_rehydration(c: Composition) -> None:
         result = c.sql_query("SELECT * FROM mysql_source_cnt", service="mz_new")
         elapsed = time.time() - start_time
         print(f"final check took {elapsed} seconds")
-        duration = time.time() - start_time
         assert result[0][0] == count * repeats, f"Wrong result: {result}"
         assert (
-            duration < 4
-        ), f"Took {duration}s to SELECT on MySQL source after 0dt upgrade, is it hydrated?"
+            elapsed < 4
+        ), f"Took {elapsed}s to SELECT on MySQL source after 0dt upgrade, is it hydrated?"
+
+        result = c.sql_query(
+            "SELECT count(*) FROM mysql_source_table", service="mz_new"
+        )
+        assert result[0][0] == count * repeats, f"Wrong result: {result}"
+
+        print("Ingesting again")
+        for i in range(repeats, repeats * 2):
+            c.testdrive(
+                dedent(
+                    f"""
+            $ mysql-connect name=mysql url=mysql://root@mysql password={MySql.DEFAULT_ROOT_PASSWORD}
+            $ mysql-execute name=mysql
+            USE public;
+            {inserts}
+            > SELECT * FROM mysql_source_cnt;
+            {count*(i+1)}
+            """
+                ),
+                quiet=True,
+            )
+
+        result = c.sql_query("SELECT * FROM mysql_source_cnt", service="mz_new")
+        assert result[0][0] == 2 * count * repeats, f"Wrong result: {result}"
+
+        result = c.sql_query(
+            "SELECT count(*) FROM mysql_source_table", service="mz_new"
+        )
+        assert result[0][0] == 2 * count * repeats, f"Wrong result: {result}"
 
 
 def workflow_kafka_source_failpoint(c: Composition) -> None:
