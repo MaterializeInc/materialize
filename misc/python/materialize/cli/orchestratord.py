@@ -256,26 +256,16 @@ def environment(args: argparse.Namespace):
                 "environmentdImageRef": environmentd_image_ref,
                 "backendSecretName": backend_secret_name,
                 "environmentId": environment_id,
+                "authenticatorKind": "None",
             },
         },
     ]
 
     if args.external_login_password_mz_system is not None:
-        mz_system_password_secret_name = f"password-mz-system-{environment_id}"
-        resources.insert(
-            0,
-            {
-                "apiVersion": "v1",
-                "kind": "Secret",
-                "metadata": {
-                    "name": mz_system_password_secret_name,
-                },
-                "stringData": {"password": args.external_login_password_mz_system},
-            },
-        )
-        resources[-1]["spec"][
-            "externalLoginSecretMzSystem"
-        ] = mz_system_password_secret_name
+        resources[0]["stringData"][
+            "external_login_password_mz_system"
+        ] = args.external_login_password_mz_system
+        resources[-1]["spec"]["authenticatorKind"] = "Password"
 
     env_kubectl("apply", "-f", "-", input=yaml.safe_dump_all(resources).encode())
 

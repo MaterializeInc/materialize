@@ -10,15 +10,17 @@
 use std::collections::BTreeMap;
 use std::net::SocketAddr;
 
+use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq)]
+#[derive(Debug, Default, Clone, Copy, Deserialize, Serialize, PartialEq, JsonSchema)]
 pub enum AuthenticatorKind {
     /// Authenticate users using Frontegg.
     Frontegg,
     /// Authenticate users using internally stored password hashes.
     Password,
     /// Do not authenticate users. Trust they are who they say they are without verification.
+    #[default]
     None,
 }
 

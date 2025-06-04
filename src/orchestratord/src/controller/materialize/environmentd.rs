@@ -16,7 +16,6 @@ use std::{
 
 use anyhow::bail;
 use k8s_openapi::{
-    ByteString,
     api::{
         apps::v1::{StatefulSet, StatefulSetSpec, StatefulSetUpdateStrategy},
         core::v1::{
@@ -96,13 +95,13 @@ pub enum DeploymentStatus {
 pub struct LoginCredentials {
     username: String,
     // TODO Password type?
-    password: ByteString,
+    password: String,
 }
 
 #[derive(Debug, Serialize)]
 pub struct ConnectionInfo {
     pub environmentd_url: String,
-    pub mz_system_secret: Option<String>,
+    pub mz_system_secret_name: Option<String>,
     pub listeners_configmap: ConfigMap,
 }
 
@@ -245,15 +244,20 @@ impl Resources {
                 return Ok(Some(retry_action));
             }
 
-            let http_client = match &self.connection_info.mz_system_secret {
-                Some(mz_system_secret) => {
+            let http_client = match &self.connection_info.mz_system_secret_name {
+                Some(mz_system_secret_name) => {
                     let http_client = reqwest::Client::builder()
                         .timeout(std::time::Duration::from_secs(10))
                         .cookie_store(true)
+                        // TODO add_root_certificate instead
+                        .danger_accept_invalid_certs(true)
                         .build()
                         .unwrap();
-                    if let Some(data) = secret_api.get(mz_system_secret).await?.data {
-                        if let Some(password) = data.get("password").cloned() {
+                    if let Some(data) = secret_api.get(mz_system_secret_name).await?.data {
+                        if let Some(password) =
+                            data.get("external_login_password_mz_system").cloned()
+                        {
+                            let password = String::from_utf8_lossy(&password.0).to_string();
                             let login_url = reqwest::Url::parse(&format!(
                                 "{}/api/login",
                                 self.connection_info.environmentd_url,
@@ -264,19 +268,23 @@ impl Resources {
                                 .body(serde_json::to_string(&LoginCredentials {
                                     username: "mz_system".to_owned(),
                                     password,
-                                }).expect("password came from a k8s response, so it is definitely utf8 and serializable"))
+                                })?)
+                                .header("Content-Type", "application/json")
                                 .send()
-                                .await {
+                                .await
+                            {
                                 Ok(response) => {
                                     if let Err(e) = response.error_for_status() {
-                                        trace!("failed to login to environmentd, retrying... ({e})");
+                                        trace!(
+                                            "failed to login to environmentd, retrying... ({e})"
+                                        );
                                         return Ok(Some(retry_action));
-                                    };
-                                },
+                                    }
+                                }
                                 Err(e) => {
                                     trace!("failed to connect to environmentd, retrying... ({e})");
                                     return Ok(Some(retry_action));
-                                },
+                                }
                             };
                         }
                     };
@@ -295,7 +303,14 @@ impl Resources {
 
             match http_client.get(status_url.clone()).send().await {
                 Ok(response) => {
-                    let response: BTreeMap<String, DeploymentStatus> = response.json().await?;
+                    let response: BTreeMap<String, DeploymentStatus> =
+                        match response.error_for_status() {
+                            Ok(response) => response.json().await?,
+                            Err(e) => {
+                                trace!("failed to get status of environmentd, retrying... ({e})");
+                                return Ok(Some(retry_action));
+                            }
+                        };
                     if force_promote {
                         trace!("skipping cluster catchup");
                         let skip_catchup_url = reqwest::Url::parse(&format!(
@@ -337,7 +352,13 @@ impl Resources {
             // !!!!!!!!!!!!!!!!!!!!!!!!!!! WARNING !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
             trace!("promoting new environmentd to leader");
             let response = http_client.post(promote_url).send().await?;
-            let response: BecomeLeaderResponse = response.json().await?;
+            let response: BecomeLeaderResponse = match response.error_for_status() {
+                Ok(response) => response.json().await?,
+                Err(e) => {
+                    trace!("failed to promote environmentd, retrying... ({e})");
+                    return Ok(Some(retry_action));
+                }
+            };
             if let BecomeLeaderResult::Failure { message } = response.result {
                 bail!("failed to promote new environmentd: {message}");
             }
@@ -515,13 +536,20 @@ fn create_environmentd_network_policies(
                             pod_selector: Some(orchestratord_label_selector),
                             ..Default::default()
                         }]),
-                        ports: Some(vec![NetworkPolicyPort {
-                            port: Some(IntOrString::Int(
-                                config.environmentd_internal_http_port.into(),
-                            )),
-                            protocol: Some("TCP".to_string()),
-                            ..Default::default()
-                        }]),
+                        ports: Some(vec![
+                            NetworkPolicyPort {
+                                port: Some(IntOrString::Int(config.environmentd_http_port.into())),
+                                protocol: Some("TCP".to_string()),
+                                ..Default::default()
+                            },
+                            NetworkPolicyPort {
+                                port: Some(IntOrString::Int(
+                                    config.environmentd_internal_http_port.into(),
+                                )),
+                                protocol: Some("TCP".to_string()),
+                                ..Default::default()
+                            },
+                        ]),
                         ..Default::default()
                     }]),
                     pod_selector: environmentd_label_selector,
@@ -1333,13 +1361,13 @@ fn create_environmentd_statefulset_object(
             ..Default::default()
         });
         args.push("--listeners-config-path=/listeners/listeners.json".to_owned());
-        if let Some(external_login_secret_mz_system) = &mz.spec.external_login_secret_mz_system {
+        if mz.spec.authenticator_kind == AuthenticatorKind::Password {
             env.push(EnvVar {
                 name: "MZ_EXTERNAL_LOGIN_PASSWORD_MZ_SYSTEM".to_string(),
                 value_from: Some(EnvVarSource {
                     secret_key_ref: Some(SecretKeySelector {
-                        name: external_login_secret_mz_system.to_owned(),
-                        key: "password".to_string(),
+                        name: mz.backend_secret_name(),
+                        key: "external_login_password_mz_system".to_string(),
                         optional: Some(false),
                     }),
                     ..Default::default()
@@ -1542,22 +1570,11 @@ fn create_connection_info(
     mz: &Materialize,
     generation: u64,
 ) -> ConnectionInfo {
-    let authenticator_kind = match (
-        mz.spec
-            .environmentd_extra_args
-            .as_ref()
-            .map(|args| args.iter().any(|arg| arg.starts_with("--frontegg"))),
-        mz.spec.external_login_secret_mz_system.is_some(),
-    ) {
-        (Some(true), _) => AuthenticatorKind::Frontegg,
-        (_, true) => AuthenticatorKind::Password,
-        (_, false) => AuthenticatorKind::None,
-    };
-
     let external_enable_tls = issuer_ref_defined(
         &config.default_certificate_specs.internal,
         &mz.spec.internal_certificate_spec,
     );
+    let authenticator_kind = mz.spec.authenticator_kind;
     let mut listeners_config = ListenersConfig {
         sql: btreemap! {
             "external".to_owned() => SqlListenerConfig{
@@ -1661,12 +1678,16 @@ fn create_connection_info(
         },
     };
 
-    let (scheme, leader_api_port) = match authenticator_kind {
+    let (scheme, leader_api_port, mz_system_secret_name) = match mz.spec.authenticator_kind {
         AuthenticatorKind::Password => {
             let scheme = if external_enable_tls { "https" } else { "http" };
-            (scheme, config.environmentd_http_port)
+            (
+                scheme,
+                config.environmentd_http_port,
+                Some(mz.spec.backend_secret_name.clone()),
+            )
         }
-        _ => ("http", config.environmentd_internal_http_port),
+        _ => ("http", config.environmentd_internal_http_port, None),
     };
     let environmentd_url = format!(
         "{}://{}.{}.svc.cluster.local:{}",
@@ -1678,7 +1699,7 @@ fn create_connection_info(
     ConnectionInfo {
         environmentd_url,
         listeners_configmap,
-        mz_system_secret: mz.spec.external_login_secret_mz_system.clone(),
+        mz_system_secret_name,
     }
 }
 

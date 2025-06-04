@@ -396,9 +396,8 @@ impl HttpServer {
                 let login_router = Router::new()
                     .route("/api/login", routing::post(handle_login))
                     .route("/api/logout", routing::post(handle_logout))
-                    .layer(Extension(adapter_client_rx))
-                    .layer(session_layer);
-                router = router.merge(login_router)
+                    .layer(Extension(adapter_client_rx));
+                router = router.merge(login_router).layer(session_layer);
             }
             AuthenticatorKind::None => {
                 base_router =

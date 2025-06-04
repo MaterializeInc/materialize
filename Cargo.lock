@@ -5334,6 +5334,7 @@ dependencies = [
  "kube",
  "mz-ore",
  "mz-repr",
+ "mz-server-core",
  "rand 0.8.5",
  "schemars",
  "semver",
