@@ -116,12 +116,12 @@ use mz_timely_util::builder_async::{
     Event, OperatorBuilder as AsyncOperatorBuilder, PressOnDropButton,
 };
 use serde::{Deserialize, Serialize};
+use timely::PartialOrder;
 use timely::container::CapacityContainerBuilder;
 use timely::dataflow::channels::pact::{Exchange, Pipeline};
 use timely::dataflow::operators::{Broadcast, Capability, CapabilitySet, Inspect};
 use timely::dataflow::{Scope, Stream};
 use timely::progress::{Antichain, Timestamp};
-use timely::{Container, PartialOrder};
 use tokio::sync::Semaphore;
 use tracing::trace;
 
@@ -1125,13 +1125,14 @@ where
             };
 
             let mut batches: Vec<FinishedBatch> = vec![];
-            let mut batch_metrics: Vec<BatchMetrics> = vec![];
+            let mut batch_metrics: BatchMetrics = BatchMetrics::default();
+            let num_batches = done_batches.len().try_into();
 
             for batch_metadata in done_batches.drain(..) {
                 in_flight_descriptions.remove(&batch_metadata);
                 let mut batch = in_flight_batches.remove(&batch_metadata).unwrap_or_default();
                 batches.append(&mut batch.finished);
-                batch_metrics.push(batch.batch_metrics);
+                batch_metrics.add_assign(&batch.batch_metrics);
             }
 
             let mut to_append = batches.iter_mut().map(|b| &mut b.batch).collect::<Vec<_>>();
@@ -1273,19 +1274,18 @@ where
                     Ok(()) => {
                         // Only update these metrics when we know that _we_ were
                         // successful.
-                        if let Some(batch_metrics) = batch_metrics.drain(..).reduce(|mut l, r| {l.add_assign(&r); l}) {
-                            source_statistics
-                                .inc_updates_committed_by(batch_metrics.inserts + batch_metrics.retractions);
-                            // FIXME(ptravers): we should increment by the total number of batches in the stored batch
-                            // to match prior behaviour.
-                            metrics.processed_batches.inc();
-                            metrics.row_inserts.inc_by(batch_metrics.inserts);
-                            metrics.row_retractions.inc_by(batch_metrics.retractions);
-                            metrics.error_inserts.inc_by(batch_metrics.error_inserts);
-                            metrics
-                                .error_retractions
-                                .inc_by(batch_metrics.error_retractions);
+                        source_statistics
+                            .inc_updates_committed_by(batch_metrics.inserts + batch_metrics.retractions);
+                        match num_batches {
+                            Ok(num_batches) => metrics.processed_batches.inc_by(num_batches),
+                            Err(e) => tracing::warn!("not incrementing processed batches as we failed to convert usize to u64 with {:?}", e),
                         }
+                        metrics.row_inserts.inc_by(batch_metrics.inserts);
+                        metrics.row_retractions.inc_by(batch_metrics.retractions);
+                        metrics.error_inserts.inc_by(batch_metrics.error_inserts);
+                        metrics
+                            .error_retractions
+                            .inc_by(batch_metrics.error_retractions);
 
                         to_append.clear();
                         current_upper.borrow_mut().clone_from(&batch_upper);
