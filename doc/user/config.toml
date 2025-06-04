@@ -186,7 +186,7 @@ unsafe = true
 [[deployment.targets]]
 name = "production"
 url = "s3://materialize-website?region=us-east-1"
-# Sync only the self-managed/v25.1/ docs to avoid deleting the marketing
+# Sync only the self-managed/v25.2/ docs to avoid deleting the marketing
 # website or other versions of the docs (e.g., cloud, other self-managed
 # versions).
-include = "docs/self-managed/v25.1/**"
+include = "docs/self-managed/v25.2/**"

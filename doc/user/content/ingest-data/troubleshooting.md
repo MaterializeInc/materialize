@@ -93,7 +93,7 @@ back down once the snapshot completes.
 For upsert sources, a larger cluster can not only speed up snapshotting, but may
 also be necessary to support increased memory usage during the process. For more
 information, see [Use a larger cluster for upsert source
-snapshotting](https://materialize.com/docs/self-managed/v25.1/ingest-data/#use-a-larger-cluster-for-upsert-source-snapshotting).
+snapshotting](/ingest-data/#use-a-larger-cluster-for-upsert-source-snapshotting).
 
 ## How do I monitor source ingestion progress?
 
