@@ -1,8 +1,8 @@
 # User docs
 
-This is the root directory of the Materialize Self-Managed v25.1 documentation,
+This is the root directory of the Materialize Self-Managed v25.2 documentation,
 which is rendered by [Hugo] locally and published by CI to
-<https://materialize.com/docs/self-managed/v25.1/>.
+<https://materialize.com/docs/self-managed/v25.2/>.
 
 For help contributing to the docs, see [`CONTRIBUTING.md`](./CONTRIBUTING.md).
 
@@ -10,13 +10,13 @@ For help contributing to the docs, see [`CONTRIBUTING.md`](./CONTRIBUTING.md).
 
 - `archetypes`: Metadata templates for new docs.
 - `assets`: Content used dynamically, i.e. JavaScript and SCSS.
-- `content`: All of the self-managed/v25.1 docs content, though this is mostly
+- `content`: All of the self-managed/v25.2 docs content, though this is mostly
   content symlinked to `/doc/user`.
 
-  The content is **not** under self-managed/v25.1/ folder in the content
+  The content is **not** under self-managed/v25.2/ folder in the content
   diretory as much of the content is ported from the main cloud docs. Instead,
   we use the `baseURL` parameter to specify the base URL that includes
-  /self-managed/v25.1/ path.
+  /self-managed/v25.2/ path.
 
 - `data`: Any JSON or YAML files you would want to use as a datastore.
 - `layouts`: All of the HTML templates for the site.
@@ -31,11 +31,11 @@ For help contributing to the docs, see [`CONTRIBUTING.md`](./CONTRIBUTING.md).
 Shipping changes to the user-facing documentation is designed to be as
 lightweight and painless as possible to encourage contributions.
 
-Merging to the `self-managed/v25.1` branch will immediately deploy the updated documentation
-to https://materialize.com/docs/self-managed/v25.1/.
+Merging to the `self-managed/v25.2` branch will immediately deploy the updated documentation
+to https://materialize.com/docs/self-managed/v25.2/.
 
 When running `hugo server` locally, specify the `--baseURL
-http://localhost:1313/docs/self-managed/v25.1/` to test the changes locally
+http://localhost:1313/docs/self-managed/v25.2/` to test the changes locally
 (including the version selector)
 Otherwise, the `hugo server` uses base URL http://localhost:1313/ (and the
 version selector assumes Cloud docs).
