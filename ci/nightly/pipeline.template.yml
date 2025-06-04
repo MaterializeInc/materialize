@@ -548,6 +548,7 @@ steps:
         label: "Zippy Cluster Replicas"
         depends_on: build-aarch64
         timeout_in_minutes: 120
+        parallelism: 30
         agents:
           queue: hetzner-aarch64-8cpu-16gb
         plugins:
