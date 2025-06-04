@@ -234,7 +234,7 @@ pub const COMPUTE_LOGICAL_BACKPRESSURE_INFLIGHT_SLACK: Config<Duration> = Config
 /// `max_result_size`.
 pub const ENABLE_PEEK_RESPONSE_STASH: Config<bool> = Config::new(
     "compute_enable_peek_response_stash",
-    true,
+    true, /* WIP: force-enabled for CI */
     "Whether to enable the peek response stash, for sending back large peek responses. Will only be used for results that exceed compute_peek_response_stash_threshold.",
 );
 
@@ -244,15 +244,14 @@ pub const ENABLE_PEEK_RESPONSE_STASH: Config<bool> = Config::new(
 pub const PEEK_RESPONSE_STASH_THRESHOLD_BYTES: Config<usize> = Config::new(
     "compute_peek_response_stash_threshold_bytes",
     // 1024 * 1024 * 300, /* 300mb */
-    0, /* force-enable, for testing */
+    0, /* WIP: force-enabled, for CI */
     "The threshold above which to use the peek response stash, for sending back large peek responses.",
 );
 
 /// The target size for batches of rows we read out of the peek stash.
 pub const PEEK_RESPONSE_STASH_READ_BATCH_SIZE_BYTES: Config<usize> = Config::new(
     "adapter_peek_response_stash_read_batch_size_bytes",
-    // 1024 * 1024 * 300, /* 300mb */
-    1024 * 1024 * 10, /* 10mb, for testing */
+    1024 * 1024 * 100, /* 100mb */
     "The target size for batches of rows we read out of the peek stash.",
 );
 
@@ -263,11 +262,12 @@ pub const PEEK_STASH_NUM_BATCHES: Config<usize> = Config::new(
     "The number of batches to pump from the peek result iterator (in one iteration through the worker loop) when stashing peek responses.",
 );
 
-/// The size of each batch pumped from the peek result iterator when stashing peek responses.
+/// The size of each batch, as number of rows, pumped from the peek result
+/// iterator when stashing peek responses.
 pub const PEEK_STASH_BATCH_SIZE: Config<usize> = Config::new(
     "compute_peek_stash_batch_size",
-    1000,
-    "The size of each batch pumped from the peek result iterator (in one iteration through the worker loop) when stashing peek responses.",
+    100000,
+    "The size, as number of rows, of each batch pumped from the peek result iterator (in one iteration through the worker loop) when stashing peek responses.",
 );
 
 /// Adds the full set of all compute `Config`s.
