@@ -8785,7 +8785,7 @@ impl<'a> Parser<'a> {
                     self.expect_keyword(TEXT)?;
                     Some(ExplainFormat::VerboseText)
                 }
-                None => return Err(ParserError::new(self.index, "exTected a format")),
+                None => return Err(ParserError::new(self.index, "expected a format")),
                 _ => unreachable!(),
             }
         } else {
