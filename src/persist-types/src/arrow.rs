@@ -178,7 +178,8 @@ fn from_proto_with_type(
 
     // Construct the builder which validates all inputs and aligns data.
     builder
-        .build_aligned()
+        .align_buffers(true)
+        .build()
         .map_err(|e| TryFromProtoError::RowConversionError(e.to_string()))
 }
 
@@ -294,14 +295,21 @@ impl RustType<proto::Field> for arrow::datatypes::Field {
 
 impl RustType<proto::Buffer> for arrow::buffer::Buffer {
     fn into_proto(&self) -> proto::Buffer {
-        // TODO(parkmycar): There is probably something better we can do here.
+        // Wrapping since arrow's buffer doesn't implement AsRef, though the deref impl exists.
+        #[repr(transparent)]
+        struct BufferWrapper(arrow::buffer::Buffer);
+        impl AsRef<[u8]> for BufferWrapper {
+            fn as_ref(&self) -> &[u8] {
+                &*self.0
+            }
+        }
         proto::Buffer {
-            data: bytes::Bytes::copy_from_slice(self.as_slice()),
+            data: bytes::Bytes::from_owner(BufferWrapper(self.clone())),
         }
     }
 
     fn from_proto(proto: proto::Buffer) -> Result<Self, TryFromProtoError> {
-        Ok(arrow::buffer::Buffer::from_bytes(proto.data.into()))
+        Ok(arrow::buffer::Buffer::from(proto.data))
     }
 }
 
