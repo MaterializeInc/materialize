@@ -10,4 +10,3 @@ rows:
   "Notable changes": |
     - Defaults to using Materialize Operator v25.1.11 (via
       `terraform-helm-materialize` v0.1.13).
-
