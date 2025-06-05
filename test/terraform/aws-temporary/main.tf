@@ -37,7 +37,7 @@ provider "helm" {
 
 variable "name_prefix" {
   type    = string
-  default = "aws-test"
+  default = "aws-test-dev"
 }
 
 variable "operator_version" {
