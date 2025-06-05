@@ -2,6 +2,10 @@
 title: "Access control"
 description: "How to configure and manage access control in Materialize."
 disable_list: true
+aliases:
+  - /manage/access-control/sso/
+  - /manage/access-control/create-service-accounts/
+  - /manage/access-control/manage-network-policies/
 menu:
   main:
     parent: manage
@@ -16,7 +20,7 @@ requires **administrator** privileges.
 {{</ note >}}
 
 Access control in Materialize is configured at two levels: access to the
-[Materialize Console](https://console.materialize.com/) and access within the
+[Materialize Console](/console/) and access within the
 database. The privileges assigned on user invitation have implications at both
 levels, so we recommend carefully evaluating your access control needs ahead of
 expanding the number of users in your Materialize organization.
@@ -46,41 +50,6 @@ More granular permissions within the database must be handled separately using
 make these more noticeable."
 
 To invite users to your Materialize organization, follow [this step-by-step guide](/manage/access-control/invite-users).
-
-### Configuring single sign-on (SSO)
-
-As an **administrator** of a Materialize organization, you can configure single
-sign-on (SSO) as an additional layer of account security using your existing
-[SAML](https://auth0.com/blog/how-saml-authentication-works/)- or
-[OpenID Connect](https://auth0.com/intro-to-iam/what-is-openid-connect-oidc)-based
-identity provider. This ensures that all users can securely log in to the
-Materialize Console using the same authentication scheme and credentials across
-all systems in your organization.
-
-To configure SSO for your Materialize organization, follow [this step-by-step guide](/manage/access-control/sso).
-
-### Configuring network policies
-
-{{< private-preview />}}
-
-By default, Materialize is available on the public internet without any
-network-layer access control. As an **administrator** of a Materialize
-organization, you can configure network policies to restrict access to a
-Materialize region using IP-based rules.
-
-To configure network policies in your Materialize organization, follow
-[this step-by-step guide](/manage/access-control/manage-network-policies).
-
-### Creating service accounts
-
-It's a best practice to use service accounts (i.e., non-human users) to connect
-external applications and services to Materialize. As an **administrator** of a
-Materialize organization, you can create service accounts manually via the
-[Materialize Console](https://console.materialize.com/), or programatically
-via [Terraform](/manage/terraform/).
-
-To create a service account in your Materialize organization, follow
-[this step-by-step guide](/manage/access-control/create-service-accounts).
 
 ### Using an external secret store
 
