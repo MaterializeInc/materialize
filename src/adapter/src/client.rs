@@ -1070,16 +1070,26 @@ impl Timeout {
     }
 }
 
-/// A wrapper around an UnboundedReceiver of PeekResponseUnary that records when it sees the
-/// first row data in the given histogram
+/// A wrapper around a Stream of PeekResponseUnary that records when it sees the
+/// first row data in the given histogram. It also keeps track of whether we have already observed
+/// the end of the underlying stream.
 #[derive(Derivative)]
 #[derivative(Debug)]
 pub struct RecordFirstRowStream {
+    /// The underlying stream of rows.
     #[derivative(Debug = "ignore")]
     pub rows: Box<dyn Stream<Item = PeekResponseUnary> + Unpin + Send + Sync>,
+    /// The Instant when execution started.
     pub execute_started: Instant,
+    /// The histogram where the time since `execute_started` will be recorded when we see the first
+    /// row.
     pub time_to_first_row_seconds: Histogram,
-    saw_rows: bool,
+    /// Whether we've seen any rows.
+    pub saw_rows: bool,
+    /// The Instant when we saw the first row.
+    pub recorded_first_row_instant: Option<Instant>,
+    /// Whether we have already observed the end of the underlying stream.
+    pub no_more_rows: bool,
 }
 
 impl RecordFirstRowStream {
@@ -1097,6 +1107,8 @@ impl RecordFirstRowStream {
             execute_started,
             time_to_first_row_seconds: histogram,
             saw_rows: false,
+            recorded_first_row_instant: None,
+            no_more_rows: false,
         }
     }
 
@@ -1145,6 +1157,10 @@ impl RecordFirstRowStream {
             self.saw_rows = true;
             self.time_to_first_row_seconds
                 .observe(self.execute_started.elapsed().as_secs_f64());
+            self.recorded_first_row_instant = Some(Instant::now());
+        }
+        if msg.is_none() {
+            self.no_more_rows = true;
         }
         msg
     }
