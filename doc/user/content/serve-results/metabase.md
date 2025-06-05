@@ -33,6 +33,10 @@ SSL mode          | Require
 For more details and troubleshooting, check the
 [Metabase documentation](https://www.metabase.com/docs/latest/administration-guide/databases/postgresql.html).
 
+## Configure a custom cluster
+
+{{% alter-cluster/configure-cluster %}}
+
 ## Refresh rate
 
 By default, the lowest [refresh rate](https://www.metabase.com/docs/latest/users-guide/07-dashboards.html#auto-refresh)
