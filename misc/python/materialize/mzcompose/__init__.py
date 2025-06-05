@@ -155,7 +155,7 @@ def get_default_system_parameters(
         # 16 MiB - large enough to avoid a big perf hit, small enough to get more coverage...
         "persist_blob_target_size": "16777216",
         # 5 times the default part size - 4 is the bare minimum.
-        "persist_compaction_memory_bound_bytes": "83886080",
+        #"persist_compaction_memory_bound_bytes": "83886080",
         "persist_stats_audit_percent": "100",
         "persist_use_critical_since_catalog": "true",
         "persist_use_critical_since_snapshot": "false" if zero_downtime else "true",

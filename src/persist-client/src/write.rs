@@ -781,7 +781,7 @@ where
                 schemas.clone(),
             )
         } else {
-            BatchParts::new_ordered(
+            BatchParts::new_ordered::<D>(
                 cfg.batch,
                 RunOrder::Unordered,
                 Arc::clone(&metrics),

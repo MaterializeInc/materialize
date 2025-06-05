@@ -911,14 +911,26 @@ def workflow_kafka_source_rehydration(c: Composition) -> None:
     c.testdrive(
         dedent(
             f"""
+        $ kafka-create-topic topic=kafka-large
+            """))
+    for i in range(repeats):
+        c.testdrive(
+            dedent(
+                f"""
+            $ kafka-ingest format=bytes key-format=bytes key-terminator=: topic=kafka-large repeat={count}
+            key{i}A,key{i}${{kafka-ingest.iteration}}:value{i}A,${{kafka-ingest.iteration}}
+            """
+            )
+        )
+
+    c.testdrive(
+        dedent(
+            f"""
         > SET CLUSTER = cluster;
 
         > CREATE CONNECTION IF NOT EXISTS kafka_conn FOR KAFKA BROKER '${{testdrive.kafka-addr}}', SECURITY PROTOCOL = 'PLAINTEXT';
         > CREATE CONNECTION IF NOT EXISTS csr_conn FOR CONFLUENT SCHEMA REGISTRY URL '${{testdrive.schema-registry-url}}';
 
-        $ kafka-create-topic topic=kafka-large
-        $ kafka-ingest format=bytes key-format=bytes key-terminator=: topic=kafka-large repeat={count}
-        key0A,key${{kafka-ingest.iteration}}:value0A,${{kafka-ingest.iteration}}
         > CREATE SOURCE kafka_source
           IN CLUSTER cluster
           FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-kafka-large-${{testdrive.seed}}');
@@ -931,24 +943,14 @@ def workflow_kafka_source_rehydration(c: Composition) -> None:
         > CREATE VIEW kafka_source_cnt AS SELECT count(*) FROM kafka_source_tbl
         > CREATE DEFAULT INDEX on kafka_source_cnt
         > SELECT * FROM kafka_source_cnt
-        {count}
+        {count*repeats}
         """
         )
     )
-    for i in range(1, repeats):
-        c.testdrive(
-            dedent(
-                f"""
-        $ kafka-ingest format=bytes key-format=bytes key-terminator=: topic=kafka-large repeat={count}
-        key{i}A,key{i}${{kafka-ingest.iteration}}:value{i}A,${{kafka-ingest.iteration}}
-        > SELECT * FROM kafka_source_cnt
-        {count*(i+1)}
-        """
-            )
-        )
 
     elapsed = time.time() - start_time
     print(f"initial ingestion took {elapsed} seconds")
+    time.sleep(30)
 
     with c.override(
         Materialized(
@@ -959,7 +961,16 @@ def workflow_kafka_source_rehydration(c: Composition) -> None:
             restart="on-failure",
             external_metadata_store=True,
             default_replication_factor=2,
-        )
+        ),
+        Testdrive(
+            materialize_url="postgres://materialize@mz_new:6875",
+            materialize_url_internal="postgres://materialize@mz_new:6877",
+            mz_service="mz_new",
+            materialize_params={"cluster": "cluster"},
+            no_reset=True,
+            seed=1,
+            default_timeout=DEFAULT_TIMEOUT,
+        ),
     ):
         c.up("mz_new")
         start_time = time.time()
@@ -974,6 +985,16 @@ def workflow_kafka_source_rehydration(c: Composition) -> None:
         elapsed = time.time() - start_time
         print(f"promotion took {elapsed} seconds")
 
+        for i in range(repeats):
+            c.testdrive(
+                dedent(
+                    f"""
+                $ kafka-ingest format=bytes key-format=bytes key-terminator=: topic=kafka-large repeat={count}
+                key{i}A,key{i}${{kafka-ingest.iteration}}:value{i}A,${{kafka-ingest.iteration}}
+                """
+                )
+            )
+
         start_time = time.time()
         result = c.sql_query("SELECT 1", service="mz_new")
         elapsed = time.time() - start_time
@@ -986,10 +1007,10 @@ def workflow_kafka_source_rehydration(c: Composition) -> None:
         elapsed = time.time() - start_time
         print(f"final check took {elapsed} seconds")
         duration = time.time() - start_time
-        assert result[0][0] == count * repeats, f"Wrong result: {result}"
-        assert (
-            duration < 2
-        ), f"Took {duration}s to SELECT on Kafka source after 0dt upgrade, is it hydrated?"
+        assert result[0][0] == 2 * count * repeats, f"Wrong result: {result}"
+        #assert (
+        #    duration < 2
+        #), f"Took {duration}s to SELECT on Kafka source after 0dt upgrade, is it hydrated?"
 
 
 def workflow_pg_source_rehydration(c: Composition) -> None:

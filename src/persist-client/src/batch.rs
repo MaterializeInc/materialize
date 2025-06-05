@@ -873,7 +873,7 @@ impl<T: Timestamp + Codec64> BatchParts<T> {
         }
     }
 
-    pub(crate) fn new_ordered(
+    pub(crate) fn new_ordered<D: Semigroup + Codec64>(
         cfg: BatchBuilderConfig,
         order: RunOrder,
         metrics: Arc<Metrics>,
@@ -904,7 +904,7 @@ impl<T: Timestamp + Codec64> BatchParts<T> {
                             .then(|p: Pending<RunPart<T>>| p.into_result())
                             .collect()
                             .await;
-                        let run_ref = HollowRunRef::set(
+                        let run_ref = HollowRunRef::set::<D>(
                             shard_id,
                             blob.as_ref(),
                             &writer_key,
