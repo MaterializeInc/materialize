@@ -1321,33 +1321,46 @@ where
 
                             batch_lower = mismatch.current.clone();
                             to_append = batches.iter_mut()
-                                .sorted_by(|l, r| Ord::cmp(&l.data_ts, &r.data_ts))
                                 .map(|batch| &mut batch.batch)
                                 .collect::<Vec<_>>();
 
                             // Best-effort attempt to delete unneeded batches.
                             future::join_all(batch_delete_futures).await;
+
+                            if bail_on_concurrent_modification {
+                                tracing::warn!(
+                                    "persist_sink({}): invalid upper! \
+                                        Tried to append batch ({:?} -> {:?}) but upper \
+                                        is {:?}. This is not a problem, it just means \
+                                        someone else was faster than us. We will try \
+                                        again with a new batch description.",
+                                    collection_id, batch_lower, batch_upper, mismatch.current,
+                                );
+                                anyhow::bail!("collection concurrently modified. Ingestion dataflow will be restarted");
+                            }
+
+                            // retry with remaining batches.
                             continue;
                         } else {
                             // Best-effort attempt to delete unneeded batches.
                             future::join_all(batches.into_iter().map(|b| b.batch.delete())).await;
                             current_upper.borrow_mut().clone_from(&mismatch.current);
                             upper_cap_set.downgrade(current_upper.borrow().iter());
-                        }
 
-                        if bail_on_concurrent_modification {
-                            tracing::warn!(
-                                "persist_sink({}): invalid upper! \
-                                    Tried to append batch ({:?} -> {:?}) but upper \
-                                    is {:?}. This is not a problem, it just means \
-                                    someone else was faster than us. We will try \
-                                    again with a new batch description.",
-                                collection_id, batch_lower, batch_upper, mismatch.current,
-                            );
-                            anyhow::bail!("collection concurrently modified. Ingestion dataflow will be restarted");
-                        }
+                            if bail_on_concurrent_modification {
+                                tracing::warn!(
+                                    "persist_sink({}): invalid upper! \
+                                        Tried to append batch ({:?} -> {:?}) but upper \
+                                        is {:?}. This is not a problem, it just means \
+                                        someone else was faster than us. We will try \
+                                        again with a new batch description.",
+                                    collection_id, batch_lower, batch_upper, mismatch.current,
+                                );
+                                anyhow::bail!("collection concurrently modified. Ingestion dataflow will be restarted");
+                            }
 
-                        break;
+                            break;
+                        }
                     }
                 }
             }
