@@ -14,6 +14,7 @@ anyhow = "1.0.98"
 async-trait = { version = "0.1.88" }
 clap = { version = "4.5.23", features = ["derive", "env"] }
 openssl = { version = "0.10.73", features = ["vendored"] }
+schemars = { version = "0.8" }
 scopeguard = "1.2.0"
 serde = { version = "1.0.219", features = ["derive"] }
 socket2 = "0.5.10"
@@ -21,7 +22,7 @@ tokio-stream = "0.1.17"
 proxy-header = "0.1.2"
 tracing = "0.1.37"
 futures = "0.3.31"
-mz-dyncfg = { path = "../dyncfg" }
+mz-dyncfg = { path = "../dyncfg", default-features = false }
 mz-ore = { path = "../ore", default-features = false, features = ["async", "network", "test"] }
 tokio = "1.44.1"
 workspace-hack = { version = "0.0.0", path = "../workspace-hack", optional = true }

@@ -24,6 +24,8 @@ use semver::Version;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
+use mz_server_core::listeners::AuthenticatorKind;
+
 use crate::crd::generated::cert_manager::certificates::{
     CertificateIssuerRef, CertificateSecretTemplate,
 };
@@ -127,7 +129,12 @@ pub mod v1alpha1 {
         #[serde(default)]
         pub in_place_rollout: bool,
         // The name of a secret containing metadata_backend_url and persist_backend_url.
+        // It may also contain external_login_password_mz_system, which will be used as
+        // the password for the mz_system user if authenticator_kind is Password.
         pub backend_secret_name: String,
+        // How to authenticate with Materialize. Valid options are Password and None.
+        // If set to Password, the backend secret must contain external_login_password_mz_system.
+        pub authenticator_kind: AuthenticatorKind,
 
         // The value used by environmentd (via the --environment-id flag) to
         // uniquely identify this instance. Must be globally unique, and
@@ -252,6 +259,10 @@ pub mod v1alpha1 {
 
         pub fn persist_pubsub_service_name(&self, generation: u64) -> String {
             self.name_prefixed(&format!("persist-pubsub-{generation}"))
+        }
+
+        pub fn listeners_configmap_name(&self, generation: u64) -> String {
+            self.name_prefixed(&format!("listeners-{generation}"))
         }
 
         pub fn name_prefixed(&self, suffix: &str) -> String {

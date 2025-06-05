@@ -29,6 +29,7 @@ from pg8000.exceptions import InterfaceError
 from psycopg import Cursor
 from psycopg.errors import OperationalError, ProgramLimitExceeded, ProgrammingError
 
+from materialize import MZ_ROOT
 from materialize.mzcompose.composition import Composition
 from materialize.mzcompose.services.balancerd import Balancerd
 from materialize.mzcompose.services.frontegg import FronteggMock
@@ -139,8 +140,21 @@ SERVICES = [
         volumes_extra=[
             "secrets:/secrets",
         ],
+        listeners_config_path=f"{MZ_ROOT}/src/materialized/ci/listener_configs/no_auth_https.json",
     ),
 ]
+
+
+def grant_all_admin_user(c: Composition):
+    # Connect once just to force the user to exist
+    sql_cursor(c)
+    mz_system_cursor = c.sql_cursor(service="materialized", port=6877, user="mz_system")
+    mz_system_cursor.execute(
+        f'GRANT ALL PRIVILEGES ON SCHEMA public TO "{ADMIN_USER}";'
+    )
+    mz_system_cursor.execute(
+        f'GRANT ALL PRIVILEGES ON CLUSTER quickstart TO "{ADMIN_USER}";'
+    )
 
 
 # Assert that contains is present in balancer metrics.
@@ -481,6 +495,8 @@ def workflow_mz_restarted(c: Composition) -> None:
     """
     c.up("balancerd", "frontegg-mock", "materialized")
 
+    grant_all_admin_user(c)
+
     cursor = sql_cursor(c)
 
     cursor.execute("CREATE TABLE restart_mz (f1 INTEGER)")
@@ -532,6 +548,8 @@ def workflow_pgwire_param_rejection(c: Composition) -> None:
 def workflow_balancerd_restarted(c: Composition) -> None:
     """Existing connections should fail if balancerd is restarted"""
     c.up("balancerd", "frontegg-mock", "materialized")
+
+    grant_all_admin_user(c)
 
     cursor = sql_cursor(c)
 
@@ -628,10 +646,12 @@ def workflow_webhook(c: Composition) -> None:
     c.up("balancerd", "frontegg-mock", "materialized")
     c.up("testdrive", persistent=True)
 
+    grant_all_admin_user(c)
+
     c.testdrive(
         dedent(
             """
-        > CREATE SOURCE wh FROM WEBHOOK BODY FORMAT TEXT
+        > CREATE SOURCE wh FROM WEBHOOK BODY FORMAT TEXT;
         $ webhook-append database=materialize schema=public name=wh
         a
         > SELECT * FROM wh

@@ -7,15 +7,20 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+use std::collections::BTreeMap;
+use std::net::SocketAddr;
+
+use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq)]
+#[derive(Debug, Default, Clone, Copy, Deserialize, Serialize, PartialEq, JsonSchema)]
 pub enum AuthenticatorKind {
     /// Authenticate users using Frontegg.
     Frontegg,
     /// Authenticate users using internally stored password hashes.
     Password,
     /// Do not authenticate users. Trust they are who they say they are without verification.
+    #[default]
     None,
 }
 
@@ -43,4 +48,70 @@ pub struct HttpRoutesEnabled {
     pub metrics: bool,
     /// Include /prof/ endpoint, and enable profiling in the / endpoint (included in base).
     pub profiling: bool,
+}
+
+/// Configuration for network listeners.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct ListenersConfig {
+    pub sql: BTreeMap<String, SqlListenerConfig>,
+    pub http: BTreeMap<String, HttpListenerConfig>,
+}
+
+/// Base configuration used by both SQL and HTTP listeners.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct BaseListenerConfig {
+    /// The IP address and port to listen for connections on.
+    pub addr: SocketAddr,
+    pub authenticator_kind: AuthenticatorKind,
+    pub allowed_roles: AllowedRoles,
+    pub enable_tls: bool,
+}
+pub type SqlListenerConfig = BaseListenerConfig;
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct HttpListenerConfig {
+    #[serde(flatten)]
+    pub base: BaseListenerConfig,
+    pub routes: HttpRoutesEnabled,
+}
+
+pub trait ListenerConfig {
+    fn addr(&self) -> SocketAddr;
+    fn authenticator_kind(&self) -> AuthenticatorKind;
+    fn allowed_roles(&self) -> AllowedRoles;
+    fn enable_tls(&self) -> bool;
+}
+impl ListenerConfig for SqlListenerConfig {
+    fn addr(&self) -> SocketAddr {
+        self.addr
+    }
+
+    fn authenticator_kind(&self) -> AuthenticatorKind {
+        self.authenticator_kind
+    }
+
+    fn allowed_roles(&self) -> AllowedRoles {
+        self.allowed_roles
+    }
+
+    fn enable_tls(&self) -> bool {
+        self.enable_tls
+    }
+}
+impl ListenerConfig for HttpListenerConfig {
+    fn addr(&self) -> SocketAddr {
+        self.base.addr
+    }
+
+    fn authenticator_kind(&self) -> AuthenticatorKind {
+        self.base.authenticator_kind
+    }
+
+    fn allowed_roles(&self) -> AllowedRoles {
+        self.base.allowed_roles
+    }
+
+    fn enable_tls(&self) -> bool {
+        self.base.enable_tls
+    }
 }

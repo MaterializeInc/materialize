@@ -11,7 +11,7 @@
 
 set -euo pipefail
 
-if environmentd --sql-listen-addr=0.0.0.0:6875 --http-listen-addr=0.0.0.0:6876 "$@"; then
+if environmentd "$@"; then
     echo "environmentd exited gracefully; sleeping forever" >&2
     sleep infinity
 else
