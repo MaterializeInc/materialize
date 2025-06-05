@@ -54,10 +54,14 @@ filegroup(
 cmake(
     name = "rocksdb",
     build_args = ["-j8"],
-    # rocksdb requires these flags to be enabled, all instances we run on support them.
-    copts = select(
+    copts = [
+        # https://github.com/facebook/rocksdb/issues/13558
+        "-Wno-nontrivial-memaccess",
+    ] + select(
         {
             "@platforms//cpu:x86_64": [
+                # rocksdb requires these flags to be enabled, all instances we
+                # run on support them.
                 "-msse4.2",
                 "-mpclmul",
             ],
