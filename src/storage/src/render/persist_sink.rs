@@ -1115,7 +1115,7 @@ where
                     continue;
                 }
                 // SAFETY(ptravers): if first exists so must last.
-                (Some(_), None) | (None, Some(_)) => unreachable!(),
+                (Some(_), None) | (None, Some(_)) => unreachable!("the list of batches must have a first and last if it is non empty."),
             };
 
             let mut batches: Vec<FinishedBatch> = vec![];
