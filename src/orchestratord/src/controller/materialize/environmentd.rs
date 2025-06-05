@@ -1034,6 +1034,10 @@ fn create_environmentd_statefulset_object(
         args.extend([
             format!("--opentelemetry-endpoint={}", endpoint),
             format!(
+                "--opentelemetry-resource=organization_id={}",
+                mz.spec.environment_id
+            ),
+            format!(
                 "--opentelemetry-resource=environment_name={}",
                 mz.name_unchecked()
             ),
