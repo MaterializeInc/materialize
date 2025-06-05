@@ -281,19 +281,19 @@ fn build_timezone_offset_second(
     spec: TimezoneSpec,
 ) -> Result<Timezone, String> {
     use TimeStrToken::*;
-    let all_formats = [
-        vec![Plus, Num(0, 1), Colon, Num(0, 1), Colon, Num(0, 1)],
-        vec![Dash, Num(0, 1), Colon, Num(0, 1), Colon, Num(0, 1)],
-        vec![Plus, Num(0, 1), Colon, Num(0, 1)],
-        vec![Dash, Num(0, 1), Colon, Num(0, 1)],
-        vec![Plus, Num(0, 1), Num(0, 1), Num(0, 1)],
-        vec![Dash, Num(0, 1), Num(0, 1), Num(0, 1)],
-        vec![Plus, Num(0, 1), Num(0, 1)],
-        vec![Dash, Num(0, 1), Num(0, 1)],
-        vec![Plus, Num(0, 1)],
-        vec![Dash, Num(0, 1)],
-        vec![TzName("".to_string())],
-        vec![Zulu],
+    static ALL_FORMATS: [&[TimeStrToken]; 12] = [
+        &[Plus, Num(0, 1), Colon, Num(0, 1), Colon, Num(0, 1)],
+        &[Dash, Num(0, 1), Colon, Num(0, 1), Colon, Num(0, 1)],
+        &[Plus, Num(0, 1), Colon, Num(0, 1)],
+        &[Dash, Num(0, 1), Colon, Num(0, 1)],
+        &[Plus, Num(0, 1), Num(0, 1), Num(0, 1)],
+        &[Dash, Num(0, 1), Num(0, 1), Num(0, 1)],
+        &[Plus, Num(0, 1), Num(0, 1)],
+        &[Dash, Num(0, 1), Num(0, 1)],
+        &[Plus, Num(0, 1)],
+        &[Dash, Num(0, 1)],
+        &[TzName(String::new())],
+        &[Zulu],
     ];
 
     let mut is_positive = true;
@@ -301,7 +301,7 @@ fn build_timezone_offset_second(
     let mut minute_offset: Option<i32> = None;
     let mut second_offset: Option<i32> = None;
 
-    for format in all_formats.iter() {
+    for format in ALL_FORMATS {
         let actual = tokens.iter();
 
         if actual.len() != format.len() {
