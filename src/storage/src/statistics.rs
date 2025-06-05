@@ -237,22 +237,22 @@ impl SourceStatisticsMetrics {
             offset_known: defs.offset_known.get_delete_on_drop_metric(vec![
                 id.to_string(),
                 worker_id.to_string(),
-                parent_source_id.to_string(),
+                shard.clone(),
             ]),
             offset_committed: defs.offset_committed.get_delete_on_drop_metric(vec![
                 id.to_string(),
                 worker_id.to_string(),
-                parent_source_id.to_string(),
+                shard.clone(),
             ]),
             snapshot_records_known: defs.snapshot_records_known.get_delete_on_drop_metric(vec![
                 id.to_string(),
                 worker_id.to_string(),
-                parent_source_id.to_string(),
+                shard.clone(),
             ]),
             snapshot_records_staged: defs.snapshot_records_staged.get_delete_on_drop_metric(vec![
                 id.to_string(),
                 worker_id.to_string(),
-                parent_source_id.to_string(),
+                shard.clone(),
             ]),
         }
     }
