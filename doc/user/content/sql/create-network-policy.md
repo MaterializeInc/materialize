@@ -70,6 +70,6 @@ ALTER SYSTEM SET network_policy = office_access_policy;
 
 ## Related pages
 
-- [ALTER NETWORK POLICY](../alter-network-policy)
-- [DROP NETWORK POLICY](../drop-network-policy)
-- [GRANT ROLE](../grant-role)
+- [`ALTER NETWORK POLICY`](../alter-network-policy)
+- [`DROP NETWORK POLICY`](../drop-network-policy)
+- [`GRANT ROLE`](../grant-role)

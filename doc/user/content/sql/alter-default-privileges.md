@@ -99,13 +99,13 @@ The privileges required to execute this statement are:
 
 ## Related pages
 
-- [SHOW DEFAULT PRIVILEGES](../show-default-privileges)
-- [CREATE ROLE](../create-role)
-- [ALTER ROLE](../alter-role)
-- [DROP ROLE](../drop-role)
-- [DROP USER](../drop-user)
-- [GRANT ROLE](../grant-role)
-- [REVOKE ROLE](../revoke-role)
-- [ALTER OWNER](../alter-owner)
-- [GRANT PRIVILEGE](../grant-privilege)
-- [REVOKE PRIVILEGE](../revoke-privilege)
+- [`SHOW DEFAULT PRIVILEGES`](../show-default-privileges)
+- [`CREATE ROLE`](../create-role)
+- [`ALTER ROLE`](../alter-role)
+- [`DROP ROLE`](../drop-role)
+- [`DROP USER`](../drop-user)
+- [`GRANT ROLE`](../grant-role)
+- [`REVOKE ROLE`](../revoke-role)
+- [`ALTER OWNER`](../alter-owner)
+- [`GRANT PRIVILEGE`](../grant-privilege)
+- [`REVOKE PRIVILEGE`](../revoke-privilege)

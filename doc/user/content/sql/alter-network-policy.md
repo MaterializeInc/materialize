@@ -87,5 +87,5 @@ ALTER SYSTEM SET network_policy = office_access_policy;
 ```
 
 ## Related pages
-- [CREATE NETWORK POLICY](../create-network-policy)
-- [DROP NETWORK POLICY](../drop-network-policy)
+- [`CREATE NETWORK POLICY`](../create-network-policy)
+- [`DROP NETWORK POLICY`](../drop-network-policy)

@@ -109,4 +109,4 @@ The privileges required to execute this statement are:
 
 - [`CREATE TABLE`](../create-table)
 - [`INSERT`](../insert)
-- [DROP OWNED](../drop-owned)
+- [`DROP OWNED`](../drop-owned)

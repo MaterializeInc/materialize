@@ -62,5 +62,5 @@ SHOW DEFAULT PRIVILEGES FOR joe;
 
 ## Related pages
 
-- [ALTER DEFAULT PRIVILEGES](../alter-default-privileges)
+- [`ALTER DEFAULT PRIVILEGES`](../alter-default-privileges)
 - [Access control](/manage/access-control/#role-based-access-control-rbac)

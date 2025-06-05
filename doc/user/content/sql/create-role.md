@@ -68,11 +68,11 @@ SELECT name FROM mz_roles;
 
 ## Related pages
 
-- [ALTER ROLE](../alter-role)
-- [DROP ROLE](../drop-role)
-- [DROP USER](../drop-user)
-- [GRANT ROLE](../grant-role)
-- [REVOKE ROLE](../revoke-role)
-- [ALTER OWNER](../alter-owner)
-- [GRANT PRIVILEGE](../grant-privilege)
-- [REVOKE PRIVILEGE](../revoke-privilege)
+- [`ALTER ROLE`](../alter-role)
+- [`DROP ROLE`](../drop-role)
+- [`DROP USER`](../drop-user)
+- [`GRANT ROLE`](../grant-role)
+- [`REVOKE ROLE`](../revoke-role)
+- [`ALTER OWNER`](../alter-owner)
+- [`GRANT PRIVILEGE`](../grant-privilege)
+- [`REVOKE PRIVILEGE`](../revoke-privilege)

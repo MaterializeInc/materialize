@@ -56,4 +56,4 @@ The privileges required to execute this statement are:
 - [`CREATE VIEW`](../create-view)
 - [`SHOW VIEWS`](../show-views)
 - [`SHOW CREATE VIEW`](../show-create-view)
-- [DROP OWNED](../drop-owned)
+- [`DROP OWNED`](../drop-owned)

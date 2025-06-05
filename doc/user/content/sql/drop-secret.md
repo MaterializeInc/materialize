@@ -67,4 +67,4 @@ The privileges required to execute this statement are:
 ## Related pages
 
 - [`SHOW SECRETS`](../show-secrets)
-- [DROP OWNED](../drop-owned)
+- [`DROP OWNED`](../drop-owned)

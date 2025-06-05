@@ -78,4 +78,4 @@ The privileges required to execute this statement are:
 - [`CREATE SOURCE`](../create-source)
 - [`SHOW SOURCES`](../show-sources)
 - [`SHOW CREATE SOURCE`](../show-create-source)
-- [DROP OWNED](../drop-owned)
+- [`DROP OWNED`](../drop-owned)

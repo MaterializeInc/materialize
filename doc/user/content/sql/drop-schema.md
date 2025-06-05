@@ -76,4 +76,4 @@ The privileges required to execute this statement are:
 
 - [`SHOW SCHEMAS`](../show-schemas)
 - [`CREATE SCHEMA`](../create-schema)
-- [DROP OWNED](../drop-owned)
+- [`DROP OWNED`](../drop-owned)

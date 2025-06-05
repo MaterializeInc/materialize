@@ -40,5 +40,5 @@ The privileges required to execute this statement are:
 
 ## Related pages
 
-- [ALTER OWNER](../alter-owner)
-- [DROP OWNED](../drop-owned)
+- [`ALTER OWNER`](../alter-owner)
+- [`DROP OWNED`](../drop-owned)

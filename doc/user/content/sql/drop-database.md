@@ -52,4 +52,4 @@ The privileges required to execute this statement are:
 
 ## Related pages
 
-- [DROP OWNED](../drop-owned)
+- [`DROP OWNED`](../drop-owned)

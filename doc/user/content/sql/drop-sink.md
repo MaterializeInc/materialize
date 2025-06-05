@@ -44,4 +44,4 @@ The privileges required to execute this statement are:
 
 - [`SHOW SINKS`](../show-sinks)
 - [`CREATE SINK`](../create-sink)
-- [DROP OWNED](../drop-owned)
+- [`DROP OWNED`](../drop-owned)
