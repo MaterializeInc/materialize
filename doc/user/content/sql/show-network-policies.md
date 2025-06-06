@@ -62,6 +62,6 @@ SELECT * FROM mz_internal.mz_network_policy_rules;
 
 ## Related pages
 
-- [CREATE NETWORK POLICY](../create-network-policy)
-- [ALTER NETWORK POLICY](../alter-network-policy)
-- [DROP NETWORK POLICY](../drop-network-policy)
+- [`CREATE NETWORK POLICY`](../create-network-policy)
+- [`ALTER NETWORK POLICY`](../alter-network-policy)
+- [`DROP NETWORK POLICY`](../drop-network-policy)

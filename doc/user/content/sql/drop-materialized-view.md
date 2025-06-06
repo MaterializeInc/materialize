@@ -55,4 +55,4 @@ The privileges required to execute this statement are:
 - [`CREATE MATERIALIZED VIEW`](../create-materialized-view)
 - [`SHOW MATERIALIZED VIEWS`](../show-materialized-views)
 - [`SHOW CREATE MATERIALIZED VIEW`](../show-create-materialized-view)
-- [DROP OWNED](../drop-owned)
+- [`DROP OWNED`](../drop-owned)

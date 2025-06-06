@@ -29,10 +29,10 @@ The privileges required to execute this statement are:
 
 ## Related pages
 
-- [ALTER ROLE](../alter-role)
-- [CREATE ROLE](../create-role)
-- [DROP ROLE](../drop-role)
-- [GRANT ROLE](../grant-role)
-- [REVOKE ROLE](../revoke-role)
-- [GRANT PRIVILEGE](../grant-privilege)
-- [REVOKE PRIVILEGE](../revoke-privilege)
+- [`ALTER ROLE`](../alter-role)
+- [`CREATE ROLE`](../create-role)
+- [`DROP ROLE`](../drop-role)
+- [`GRANT ROLE`](../grant-role)
+- [`REVOKE ROLE`](../revoke-role)
+- [`GRANT PRIVILEGE`](../grant-privilege)
+- [`REVOKE PRIVILEGE`](../revoke-privilege)

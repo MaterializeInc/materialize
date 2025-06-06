@@ -41,12 +41,12 @@ The privileges required to execute this statement are:
 
 ## Related pages
 
-- [SHOW ROLE MEMBERSHIP](../show-role-membership)
-- [CREATE ROLE](../create-role)
-- [ALTER ROLE](../alter-role)
-- [DROP ROLE](../drop-role)
-- [DROP USER](../drop-user)
-- [REVOKE ROLE](../revoke-role)
-- [ALTER OWNER](../alter-owner)
-- [GRANT PRIVILEGE](../grant-privilege)
-- [REVOKE PRIVILEGE](../revoke-privilege)
+- [`SHOW ROLE MEMBERSHIP`](../show-role-membership)
+- [`CREATE ROLE`](../create-role)
+- [`ALTER ROLE`](../alter-role)
+- [`DROP ROLE`](../drop-role)
+- [`DROP USER`](../drop-user)
+- [`REVOKE ROLE`](../revoke-role)
+- [`ALTER OWNER`](../alter-owner)
+- [`GRANT PRIVILEGE`](../grant-privilege)
+- [`REVOKE PRIVILEGE`](../revoke-privilege)

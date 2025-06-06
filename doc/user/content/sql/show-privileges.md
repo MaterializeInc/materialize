@@ -78,6 +78,6 @@ SHOW PRIVILEGES FOR materialize;
 
 ## Related pages
 
-- [GRANT PRIVILEGE](../grant-privilege)
-- [REVOKE PRIVILEGE](../revoke-privilege)
+- [`GRANT PRIVILEGE`](../grant-privilege)
+- [`REVOKE PRIVILEGE`](../revoke-privilege)
 - [Access control](/manage/access-control/#role-based-access-control-rbac)

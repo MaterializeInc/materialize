@@ -51,6 +51,6 @@ SHOW ROLE MEMBERSHIP FOR r2;
 
 ## Related pages
 
-- [GRANT ROLE](../grant-role)
-- [REVOKE ROLE](../revoke-role)
+- [`GRANT ROLE`](../grant-role)
+- [`REVOKE ROLE`](../revoke-role)
 - [Access control](/manage/access-control/#role-based-access-control-rbac)

@@ -110,4 +110,4 @@ The privileges required to execute this statement are:
 
 * [`CREATE TYPE`](../create-type)
 * [`SHOW TYPES`](../show-types)
-* [DROP OWNED](../drop-owned)
+* [`DROP OWNED`](../drop-owned)

@@ -111,11 +111,11 @@ The privileges required to execute this statement are:
 
 ## Related pages
 
-- [CREATE ROLE](../create-role)
-- [DROP ROLE](../drop-role)
-- [DROP USER](../drop-user)
-- [GRANT ROLE](../grant-role)
-- [REVOKE ROLE](../revoke-role)
-- [ALTER OWNER](../alter-owner)
-- [GRANT PRIVILEGE](../grant-privilege)
-- [REVOKE PRIVILEGE](../revoke-privilege)
+- [`CREATE ROLE`](../create-role)
+- [`DROP ROLE`](../drop-role)
+- [`DROP USER`](../drop-user)
+- [`GRANT ROLE`](../grant-role)
+- [`REVOKE ROLE`](../revoke-role)
+- [`ALTER OWNER`](../alter-owner)
+- [`GRANT PRIVILEGE`](../grant-privilege)
+- [`REVOKE PRIVILEGE`](../revoke-privilege)

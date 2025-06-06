@@ -54,4 +54,4 @@ The privileges required to execute this statement are:
 ## Related pages
 
 - [`SHOW CLUSTER REPLICAS`](../show-cluster-replicas)
-- [DROP OWNED](../drop-owned)
+- [`DROP OWNED`](../drop-owned)
