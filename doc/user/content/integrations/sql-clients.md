@@ -94,9 +94,6 @@ Materialize console.
 
 <img width="1131" alt="DataGrip Materialize Connection Details" src="https://user-images.githubusercontent.com/21223421/218108169-302c8597-35a9-4dce-b16d-050f49538b9e.png">
 
-[use the JDBC metadata
-introspector]:
-
 ### DBeaver
 
 **Minimum requirements:** DBeaver 23.1.3
