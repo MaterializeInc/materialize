@@ -186,7 +186,7 @@ pub enum ComputeCommand<T = mz_repr::Timestamp> {
     Schedule(GlobalId),
 
     /// `AllowCompaction` informs the replica about the relaxation of external read capabilities on
-    /// a compute collection exported by one of the replica's dataflow.
+    /// a compute collection exported by one of the replica's dataflows.
     ///
     /// The command names a collection and provides a frontier after which accumulations must be
     /// correct. The replica gains the liberty of compacting the corresponding maintained trace up
