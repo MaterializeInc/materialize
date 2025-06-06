@@ -22,7 +22,7 @@ Together, these concepts form the basis for understanding how Materialize enable
 
 **Freshness** measures the time it takes for a change in an upstream system to become visible in the results of a query. In other words, it captures the end-to-end latency between when data is produced and when it becomes part of the transformed, queryable state.
 
-| System         | Performance  | Explination                |
+| System         | Performance  | Explanation                |
 | -------------- | ------------ | -------------------------- |
 | OLTP Database  | Excellent    | Freshness is effectively zero. Queries run directly against the source of truth, and changes are visible immediately. |
 | Data Warehouse | Poor (stale) | Freshness is often poor due to scheduled batch ingestion. Changes may take minutes to hours to propagate.                  |
@@ -34,7 +34,7 @@ Together, these concepts form the basis for understanding how Materialize enable
 
 **Query latency** refers to the time it takes to compute and return the result of a SQL query once the data is available in the system. It is affected by the system's execution model, indexing strategies, and the complexity of the query itself.
 
-| System         | Performance  | Explination                |
+| System         | Performance  | Explanation                |
 | -------------- | ------------ | -------------------------- |
 | OLTP Database  | Poor (slow)  | Optimized for transactional workloads and point lookups. Complex analytical queries involving joins, filters, and aggregations tend to exhibit poor query latency. |
 | Data Warehouse | Excellent | Designed for analytical processing, and generally provide excellent query latency even for complex queries over large datasets. |
@@ -58,11 +58,6 @@ This is the most comprehensive measure of system responsiveness and is particula
 | Data Warehouse | High          |
 | Materialize    | Low           |
 
----
-
-That's excellent feedback. Breaking each system down into two separate bullet points—one for **data freshness** and one for **query latency/computation**—makes the comparison more scannable and explicit. Here's a revised version of the example section with that structure:
-
----
 
 ## Example
 
@@ -70,28 +65,11 @@ Consider an e-commerce application that needs to monitor order fulfillment rates
 
 Let’s compare how this plays out across three systems:
 
----
-
-### OLTP System
-
-* **Data freshness:** The order and fulfillment data is always current, as queries run directly against the transactional system.
-* **Query latency:** Computing fulfillment rates involves joins and aggregations over multiple tables, which transactional databases are not optimized for. Queries may be slow or resource-intensive.
-
----
-
-### Data Warehouse
-
-* **Data freshness:** The data is typically ingested in batches, so it may lag behind by minutes or hours. Freshness depends on the ETL schedule.
-* **Query latency:** Analytical queries, including aggregations and joins, are well-optimized and typically return quickly.
-
----
-
-### Materialize
-
-* **Data freshness:** Updates stream in continuously from the operational database. Materialize incrementally maintains the fulfillment rate as new data arrives.
-* **Query latency:** Because the computation is performed ahead of time and maintained in an indexed view, queries return promptly—even for complex logic.
-
----
+| **System**        | **Data Freshness**                                                                                                              | **Query Latency**                                                                                                                                      |
+|-------------------|-------------------------------------------------------------------------------------------------------------------------------|--------------------------------------------------------------------------------------------------------------------------------------------------------|
+| **OLTP System**   | The order and fulfillment data is always current, as queries run directly against the transactional system.                   | Computing fulfillment rates involves joins and aggregations over multiple tables, which transactional databases are not optimized for. Queries may be slow or resource-intensive. |
+| **Data Warehouse**| The data is typically ingested in batches, so it may lag behind by minutes or hours. Freshness depends on the ETL schedule.   | Analytical queries, including aggregations and joins, are well-optimized and typically return quickly.                                                |
+| **Materialize**   | Updates stream in continuously from the operational database. Materialize incrementally maintains the fulfillment rate.       | Because the computation is performed ahead of time and maintained in an indexed view, queries return promptly—even for complex logic.                 |
 
 ## Design Implications
 
