@@ -173,10 +173,10 @@ module "operator" {
   s3_bucket_arn                  = module.storage.bucket_arn
   use_self_signed_cluster_issuer = false
 
-  use_local_chart                = true
-  helm_chart                     = "materialize-operator-v25.2.0-beta.1.tgz"
-  operator_version               = var.operator_version
-  orchestratord_version          = var.orchestratord_version
+  use_local_chart       = true
+  helm_chart            = "materialize-operator-v25.2.0-beta.1.tgz"
+  operator_version      = var.operator_version
+  orchestratord_version = var.orchestratord_version
 
   depends_on = [
     module.eks,

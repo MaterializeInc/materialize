@@ -174,10 +174,10 @@ module "operator" {
   use_self_signed_cluster_issuer = false
 
   # Use local chart
-  use_local_chart                = true
-  helm_chart                     = "materialize-operator-v25.2.0-beta.1.tgz"
-  operator_version               = var.operator_version
-  orchestratord_version          = var.orchestratord_version
+  use_local_chart       = true
+  helm_chart            = "materialize-operator-v25.2.0-beta.1.tgz"
+  operator_version      = var.operator_version
+  orchestratord_version = var.orchestratord_version
 
   depends_on = [
     module.eks,
@@ -189,7 +189,7 @@ module "operator" {
 # 7. Setup dedicated database instance for Materialize
 module "database" {
   source = "git::https://github.com/MaterializeInc/terraform-aws-materialize.git//modules/database?ref=prod-ready-refactor"
-  
+
   name_prefix                = var.name_prefix
   postgres_version           = "15"
   instance_class             = "db.t3.micro"
@@ -213,7 +213,7 @@ module "database" {
 # 8. Setup S3 bucket for Materialize
 module "storage" {
   source = "git::https://github.com/MaterializeInc/terraform-aws-materialize.git//modules/storage?ref=prod-ready-refactor"
-  
+
   name_prefix            = var.name_prefix
   bucket_lifecycle_rules = []
   bucket_force_destroy   = true
