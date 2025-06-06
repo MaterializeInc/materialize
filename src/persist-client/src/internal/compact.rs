@@ -777,7 +777,7 @@ where
         // the config allows BatchBuilder to do its normal pipelining of writes.
         batch_cfg.inline_writes_single_max_bytes = 0;
 
-        let parts = BatchParts::new_ordered(
+        let parts = BatchParts::new_ordered::<D>(
             batch_cfg,
             cfg.batch.preferred_order,
             Arc::clone(&metrics),
