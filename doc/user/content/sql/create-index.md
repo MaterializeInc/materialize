@@ -8,14 +8,14 @@ menu:
     parent: 'commands'
 ---
 
-`CREATE INDEX` creates an in-memory [index](/concepts/indexes/) on a source, view, or materialized
-view.
+`CREATE INDEX` creates an in-memory [index](/concepts/indexes/) on a source, view, or materialized view.
 
-In Materialize, indexes store query results in memory within a [cluster](/concepts/clusters/),
-and keep these results incrementally updated as new data arrives. By making
-up-to-date results available in memory, indexes can help [optimize query
-performance](/transform-data/optimization/),
-both when serving results and maintaining resource-heavy operations like joins.
+In Materialize, indexes store query results in memory within a specific [cluster](/concepts/clusters/), and keep these results **incrementally updated** as new data arrives. This ensures that indexed data remains [fresh](/concepts/reaction-time), reflecting the latest changes with minimal latency.
+
+The primary use case for indexes is to accelerate direct queries issued via [`SELECT`](/sql/select/) statements.
+By maintaining fresh, up-to-date results in memory, indexes can significantly [optimize query performance](/transform-data/optimization/), reducing both response time and compute load—especially for resource-intensive operations such as joins, aggregations, and repeated subqueries.
+
+Because indexes are scoped to a single cluster, they are most useful for accelerating queries within that cluster. For results that must be shared across clusters or persisted to durable storage, consider using a [materialized view](/sql/create-materialized-view), which also maintains fresh results but is accessible system-wide.
 
 ### Usage patterns
 
