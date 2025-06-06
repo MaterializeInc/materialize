@@ -866,9 +866,11 @@ pub(crate) struct UnexpiredReadHandleState {
 /// but it's also free to abandon the instance at any time if it eg. only needs a few entries.
 #[derive(Debug)]
 pub struct Cursor<K: Codec, V: Codec, T: Timestamp + Codec64, D: Codec64, L = Lease> {
-    pub(crate) consolidator: CursorConsolidator<K, V, T, D>,
-    pub(crate) _lease: L,
-    pub(crate) read_schemas: Schemas<K, V>,
+    consolidator: Consolidator<T, D, StructuredSort<K, V, T, D>>,
+    max_len: usize,
+    max_bytes: usize,
+    _lease: L,
+    read_schemas: Schemas<K, V>,
 }
 
 impl<K: Codec, V: Codec, T: Timestamp + Codec64, D: Codec64, L> Cursor<K, V, T, D, L> {
@@ -877,15 +879,6 @@ impl<K: Codec, V: Codec, T: Timestamp + Codec64, D: Codec64, L> Cursor<K, V, T, 
     pub fn into_lease(self: Self) -> L {
         self._lease
     }
-}
-
-#[derive(Debug)]
-pub(crate) enum CursorConsolidator<K: Codec, V: Codec, T: Timestamp + Codec64, D: Codec64> {
-    Structured {
-        consolidator: Consolidator<T, D, StructuredSort<K, V, T, D>>,
-        max_len: usize,
-        max_bytes: usize,
-    },
 }
 
 impl<K, V, T, D, L> Cursor<K, V, T, D, L>
@@ -899,39 +892,39 @@ where
     pub async fn next(
         &mut self,
     ) -> Option<impl Iterator<Item = ((Result<K, String>, Result<V, String>), T, D)> + '_> {
-        match &mut self.consolidator {
-            CursorConsolidator::Structured {
-                consolidator,
-                max_len,
-                max_bytes,
-            } => {
-                let part = consolidator
-                    .next_chunk(*max_len, *max_bytes)
-                    .await
-                    .expect("fetching a leased part")?;
-                let key_decoder = self
-                    .read_schemas
-                    .key
-                    .decoder_any(part.key.as_ref())
-                    .expect("ok");
-                let val_decoder = self
-                    .read_schemas
-                    .val
-                    .decoder_any(part.val.as_ref())
-                    .expect("ok");
-                let iter = (0..part.len()).map(move |i| {
-                    let mut k = K::default();
-                    let mut v = V::default();
-                    key_decoder.decode(i, &mut k);
-                    val_decoder.decode(i, &mut v);
-                    let t = T::decode(part.time.value(i).to_le_bytes());
-                    let d = D::decode(part.diff.value(i).to_le_bytes());
-                    ((Ok(k), Ok(v)), t, d)
-                });
+        let Self {
+            consolidator,
+            max_len,
+            max_bytes,
+            _lease,
+            read_schemas: _,
+        } = self;
 
-                Some(iter)
-            }
-        }
+        let part = consolidator
+            .next_chunk(*max_len, *max_bytes)
+            .await
+            .expect("fetching a leased part")?;
+        let key_decoder = self
+            .read_schemas
+            .key
+            .decoder_any(part.key.as_ref())
+            .expect("ok");
+        let val_decoder = self
+            .read_schemas
+            .val
+            .decoder_any(part.val.as_ref())
+            .expect("ok");
+        let iter = (0..part.len()).map(move |i| {
+            let mut k = K::default();
+            let mut v = V::default();
+            key_decoder.decode(i, &mut k);
+            val_decoder.decode(i, &mut v);
+            let t = T::decode(part.time.value(i).to_le_bytes());
+            let d = D::decode(part.diff.value(i).to_le_bytes());
+            ((Ok(k), Ok(v)), t, d)
+        });
+
+        Some(iter)
     }
 }
 
@@ -1028,41 +1021,38 @@ where
             as_of: as_of.clone(),
         };
 
-        let consolidator = {
-            let mut consolidator = Consolidator::new(
-                context,
-                shard_id,
-                StructuredSort::new(schemas.clone()),
-                blob,
-                metrics,
-                shard_metrics,
-                read_metrics,
-                filter,
-                COMPACTION_MEMORY_BOUND_BYTES.get(persist_cfg),
-            );
-            for batch in batches {
-                for (meta, run) in batch.runs() {
-                    consolidator.enqueue_run(
-                        &batch.desc,
-                        meta,
-                        run.into_iter()
-                            .filter(|p| should_fetch_part(p.stats()))
-                            .cloned(),
-                    );
-                }
+        let mut consolidator = Consolidator::new(
+            context,
+            shard_id,
+            StructuredSort::new(schemas.clone()),
+            blob,
+            metrics,
+            shard_metrics,
+            read_metrics,
+            filter,
+            COMPACTION_MEMORY_BOUND_BYTES.get(persist_cfg),
+        );
+        for batch in batches {
+            for (meta, run) in batch.runs() {
+                consolidator.enqueue_run(
+                    &batch.desc,
+                    meta,
+                    run.into_iter()
+                        .filter(|p| should_fetch_part(p.stats()))
+                        .cloned(),
+                );
             }
-            CursorConsolidator::Structured {
-                consolidator,
-                // This default may end up consolidating more records than previously
-                // for cases like fast-path peeks, where only the first few entries are used.
-                // If this is a noticeable performance impact, thread the max-len in from the caller.
-                max_len: persist_cfg.compaction_yield_after_n_updates,
-                max_bytes: BLOB_TARGET_SIZE.get(persist_cfg).max(1),
-            }
-        };
+        }
+        // This default may end up consolidating more records than previously
+        // for cases like fast-path peeks, where only the first few entries are used.
+        // If this is a noticeable performance impact, thread the max-len in from the caller.
+        let max_len = persist_cfg.compaction_yield_after_n_updates;
+        let max_bytes = BLOB_TARGET_SIZE.get(persist_cfg).max(1);
 
         Ok(Cursor {
             consolidator,
+            max_len,
+            max_bytes,
             _lease: lease,
             read_schemas: schemas,
         })
