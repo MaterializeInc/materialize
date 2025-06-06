@@ -286,6 +286,17 @@ pub const ORE_OVERFLOWING_BEHAVIOR: Config<&'static str> = Config::new(
     "Overflow behavior for Overflowing types. One of 'ignore', 'panic', 'soft_panic'.",
 );
 
+/// The time after which we delete per-replica statistics (for sources and
+/// sinks) after there have been no updates.
+///
+/// This time is opportunistic, statistics are not guaranteed to be deleted
+/// after the retention time runs out.
+pub const STATISTICS_RETENTION_DURATION: Config<Duration> = Config::new(
+    "storage_statistics_retention_duration",
+    Duration::from_secs(86_400), /* one day */
+    "The time after which we delete per replica statistics (for sources and sinks) after there have been no updates.",
+);
+
 /// Adds the full set of all storage `Config`s.
 pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
     configs
@@ -325,4 +336,5 @@ pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
         .add(&crate::sources::sql_server::SNAPSHOT_MAX_LSN_WAIT)
         .add(&crate::sources::sql_server::SNAPSHOT_PROGRESS_REPORT_INTERVAL)
         .add(&crate::sources::sql_server::OFFSET_KNOWN_INTERVAL)
+        .add(&STATISTICS_RETENTION_DURATION)
 }
