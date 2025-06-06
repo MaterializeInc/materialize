@@ -171,7 +171,7 @@ module "operator" {
   oidc_provider_arn              = module.eks.oidc_provider_arn
   cluster_oidc_issuer_url        = module.eks.cluster_oidc_issuer_url
   s3_bucket_arn                  = module.storage.bucket_arn
-  use_self_signed_cluster_issuer = true
+  use_self_signed_cluster_issuer = false
 
   use_local_chart                = true
   helm_chart                     = "materialize-operator-v25.2.0-beta.1.tgz"
