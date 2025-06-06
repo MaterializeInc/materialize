@@ -154,19 +154,19 @@ fn create_balancerd_deployment_object(
 
     let ports = vec![
         ContainerPort {
-            container_port: config.balancerd_sql_port.into(),
+            container_port: config.balancerd_sql_port,
             name: Some("pgwire".into()),
             protocol: Some("TCP".into()),
             ..Default::default()
         },
         ContainerPort {
-            container_port: config.balancerd_http_port.into(),
+            container_port: config.balancerd_http_port,
             name: Some("http".into()),
             protocol: Some("TCP".into()),
             ..Default::default()
         },
         ContainerPort {
-            container_port: config.balancerd_internal_http_port.into(),
+            container_port: config.balancerd_internal_http_port,
             name: Some("internal-http".into()),
             protocol: Some("TCP".into()),
             ..Default::default()
@@ -235,7 +235,7 @@ fn create_balancerd_deployment_object(
 
     let startup_probe = Probe {
         http_get: Some(HTTPGetAction {
-            port: IntOrString::Int(config.balancerd_internal_http_port.into()),
+            port: IntOrString::Int(config.balancerd_internal_http_port),
             path: Some("/api/readyz".into()),
             ..Default::default()
         }),
@@ -248,7 +248,7 @@ fn create_balancerd_deployment_object(
     };
     let readiness_probe = Probe {
         http_get: Some(HTTPGetAction {
-            port: IntOrString::Int(config.balancerd_internal_http_port.into()),
+            port: IntOrString::Int(config.balancerd_internal_http_port),
             path: Some("/api/readyz".into()),
             ..Default::default()
         }),
@@ -260,7 +260,7 @@ fn create_balancerd_deployment_object(
     };
     let liveness_probe = Probe {
         http_get: Some(HTTPGetAction {
-            port: IntOrString::Int(config.balancerd_internal_http_port.into()),
+            port: IntOrString::Int(config.balancerd_internal_http_port),
             path: Some("/api/livez".into()),
             ..Default::default()
         }),
@@ -361,15 +361,15 @@ fn create_balancerd_service_object(
         ServicePort {
             name: Some("http".to_string()),
             protocol: Some("TCP".to_string()),
-            port: config.balancerd_http_port.into(),
-            target_port: Some(IntOrString::Int(config.balancerd_http_port.into())),
+            port: config.balancerd_http_port,
+            target_port: Some(IntOrString::Int(config.balancerd_http_port)),
             ..Default::default()
         },
         ServicePort {
             name: Some("pgwire".to_string()),
             protocol: Some("TCP".to_string()),
-            port: config.balancerd_sql_port.into(),
-            target_port: Some(IntOrString::Int(config.balancerd_sql_port.into())),
+            port: config.balancerd_sql_port,
+            target_port: Some(IntOrString::Int(config.balancerd_sql_port)),
             ..Default::default()
         },
     ];

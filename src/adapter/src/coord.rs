@@ -92,7 +92,6 @@ use mz_adapter_types::bootstrap_builtin_cluster_config::BootstrapBuiltinClusterC
 use mz_adapter_types::compaction::CompactionWindow;
 use mz_adapter_types::connection::ConnectionId;
 use mz_adapter_types::dyncfgs::WITH_0DT_DEPLOYMENT_CAUGHT_UP_CHECK_INTERVAL;
-use mz_auth::password::Password;
 use mz_build_info::BuildInfo;
 use mz_catalog::builtin::{BUILTINS, BUILTINS_STATIC, MZ_AUDIT_EVENTS, MZ_STORAGE_USAGE_BY_SHARD};
 use mz_catalog::config::{AwsPrincipalContext, BuiltinItemMigrationConfig, ClusterReplicaSizeMap};
@@ -1036,7 +1035,6 @@ pub struct Config {
 
     pub helm_chart_version: Option<String>,
     pub license_key: ValidatedLicenseKey,
-    pub external_login_password_mz_system: Option<Password>,
 }
 
 /// Soft-state metadata about a compute replica
@@ -3954,7 +3952,6 @@ pub fn serve(
         caught_up_trigger: clusters_caught_up_trigger,
         helm_chart_version,
         license_key,
-        external_login_password_mz_system,
     }: Config,
 ) -> BoxFuture<'static, Result<(Handle, Client), AdapterError>> {
     async move {
@@ -4102,7 +4099,6 @@ pub fn serve(
                 enable_expression_cache_override: None,
                 enable_0dt_deployment,
                 helm_chart_version,
-                external_login_password_mz_system,
             },
         })
         .await?;

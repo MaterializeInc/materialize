@@ -32,7 +32,6 @@ rust_library(
     version = "0.0.1",
     deps = [
         "//src/adapter-types:mz_adapter_types",
-        "//src/authenticator:mz_authenticator",
         "//src/build-info:mz_build_info",
         "//src/catalog:mz_catalog",
         "//src/controller:mz_controller",
@@ -80,7 +79,6 @@ rust_test(
     version = "0.0.1",
     deps = [
         "//src/adapter-types:mz_adapter_types",
-        "//src/authenticator:mz_authenticator",
         "//src/build-info:mz_build_info",
         "//src/catalog:mz_catalog",
         "//src/controller:mz_controller",
@@ -112,7 +110,6 @@ rust_doc_test(
     crate = ":mz_sqllogictest",
     deps = [
         "//src/adapter-types:mz_adapter_types",
-        "//src/authenticator:mz_authenticator",
         "//src/build-info:mz_build_info",
         "//src/catalog:mz_catalog",
         "//src/controller:mz_controller",
@@ -165,7 +162,6 @@ rust_test(
     deps = [
         ":mz_sqllogictest",
         "//src/adapter-types:mz_adapter_types",
-        "//src/authenticator:mz_authenticator",
         "//src/build-info:mz_build_info",
         "//src/catalog:mz_catalog",
         "//src/controller:mz_controller",
@@ -215,7 +211,6 @@ rust_binary(
     deps = [
         ":mz_sqllogictest",
         "//src/adapter-types:mz_adapter_types",
-        "//src/authenticator:mz_authenticator",
         "//src/build-info:mz_build_info",
         "//src/catalog:mz_catalog",
         "//src/controller:mz_controller",
