@@ -22,7 +22,8 @@ use mz_ore::now::EpochMillis;
 use mz_persist_types::Codec64;
 use mz_repr::{Diff, TimestampManipulation};
 use mz_repr::{GlobalId, Row};
-use mz_storage_client::statistics::{PackableStats, SourceStatisticsUpdate, WebhookStatistics};
+use mz_storage_client::statistics::ControllerSourceStatistics;
+use mz_storage_client::statistics::{PackableStats, WebhookStatistics};
 use timely::progress::ChangeBatch;
 use timely::progress::Timestamp;
 use tokio::sync::oneshot;
@@ -220,7 +221,7 @@ pub(super) struct SourceStatistics {
     /// sources must initialize the first values, but we need `None` to mark a source
     /// having been created vs dropped (particularly when a cluster can race and report
     /// statistics for a dropped source, which we must ignore).
-    pub source_statistics: BTreeMap<GlobalId, StatsState<SourceStatisticsUpdate>>,
+    pub source_statistics: BTreeMap<GlobalId, StatsState<ControllerSourceStatistics>>,
     /// A shared map with atomics for webhook appenders to update the (currently 4)
     /// statistics that can meaningfully produce. These are periodically
     /// copied into `source_statistics` [`spawn_webhook_statistics_scraper`] to avoid
@@ -228,12 +229,12 @@ pub(super) struct SourceStatistics {
     pub webhook_statistics: BTreeMap<GlobalId, Arc<WebhookStatistics>>,
 }
 
-impl AsStats<SourceStatisticsUpdate> for SourceStatistics {
-    fn as_stats(&self) -> &BTreeMap<GlobalId, StatsState<SourceStatisticsUpdate>> {
+impl AsStats<ControllerSourceStatistics> for SourceStatistics {
+    fn as_stats(&self) -> &BTreeMap<GlobalId, StatsState<ControllerSourceStatistics>> {
         &self.source_statistics
     }
 
-    fn as_mut_stats(&mut self) -> &mut BTreeMap<GlobalId, StatsState<SourceStatisticsUpdate>> {
+    fn as_mut_stats(&mut self) -> &mut BTreeMap<GlobalId, StatsState<ControllerSourceStatistics>> {
         &mut self.source_statistics
     }
 }
@@ -273,7 +274,10 @@ pub(super) fn spawn_webhook_statistics_scraper(
                         shared_stats
                             .source_statistics
                             .entry(*id)
-                            .and_modify(|current| current.stat().incorporate(ws.drain_into_update(*id)));
+                            .and_modify(|current| {
+                                let update = ws.drain_into_update(*id);
+                                current.stat().incorporate(update);
+                            });
                     }
                 }
             }

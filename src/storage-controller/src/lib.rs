@@ -65,7 +65,7 @@ use mz_storage_client::healthcheck::{
 };
 use mz_storage_client::metrics::StorageControllerMetrics;
 use mz_storage_client::statistics::{
-    SinkStatisticsUpdate, SourceStatisticsUpdate, WebhookStatistics,
+    ControllerSourceStatistics, SinkStatisticsUpdate, WebhookStatistics,
 };
 use mz_storage_client::storage_collections::StorageCollections;
 use mz_storage_types::configuration::StorageConfiguration;
@@ -1176,7 +1176,7 @@ where
                 source_statistics
                     .source_statistics
                     .entry(id)
-                    .or_insert_with(|| StatsState::new(SourceStatisticsUpdate::new(id)));
+                    .or_insert_with(|| StatsState::new(ControllerSourceStatistics::new(id)));
             }
             for id in new_webhook_statistic_entries {
                 source_statistics.webhook_statistics.entry(id).or_default();
