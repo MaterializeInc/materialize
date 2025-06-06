@@ -3662,7 +3662,7 @@ pub(crate) mod tests {
 
         // When a writer is present, non-writes don't gc.
         let writer_id = WriterId::new();
-        state.collections.compare_and_append(
+        let _ = state.collections.compare_and_append(
             &hollow(1, 2, &["key1"], 1),
             &writer_id,
             now,
@@ -3777,7 +3777,7 @@ pub(crate) mod tests {
         // When a writer is present, non-writes don't gc.
         let writer_id = WriterId::new();
         let now = SYSTEM_TIME.clone();
-        state.collections.compare_and_append(
+        let _ = state.collections.compare_and_append(
             &hollow(1, 2, &["key1"], 1),
             &writer_id,
             now(),

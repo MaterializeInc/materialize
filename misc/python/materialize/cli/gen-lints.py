@@ -46,6 +46,8 @@ ALLOW_CLIPPY_LINTS = [
     # and the suggested solution—boxing the large variant—might actually result
     # in slower code due to the allocation.
     ("large_enum_variant", 0),
+    # A specialization of `large_enum_variant`; similar arguments apply.
+    ("result_large_err", 0),
     # clippy::mutable_key_type disallows using internally mutable types as keys
     # in `HashMap`, because their order could change. This is a good lint in
     # principle, but its current implementation is too strict -- it disallows
