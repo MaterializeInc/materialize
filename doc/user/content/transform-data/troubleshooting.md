@@ -279,8 +279,6 @@ A larger size cluster will provision more memory and CPU resources.
 
 ## Which part of my query runs slowly or uses a lot of memory?
 
-{{< public-preview />}}
-
 You can [`EXPLAIN`](/sql/explain-plan/) a query to see how it will be run as a
 dataflow. In particular, `EXPLAIN PHYSICAL PLAN` (the default) will show the concrete, fully
 optimized plan that Materialize will run. That plan is written in our "low-level
