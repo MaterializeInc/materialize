@@ -1450,7 +1450,7 @@ impl<T: Timestamp + Codec64> RustType<ProtoHollowBatchPart> for HollowRunRef<T> 
             })),
             encoded_size_bytes: self.hollow_bytes.into_proto(),
             key_lower: Bytes::copy_from_slice(&self.key_lower),
-            diffs_sum: None,
+            diffs_sum: self.diffs_sum.map(i64::from_le_bytes),
             key_stats: None,
             ts_rewrite: None,
             format: None,
@@ -1474,6 +1474,7 @@ impl<T: Timestamp + Codec64> RustType<ProtoHollowBatchPart> for HollowRunRef<T> 
             max_part_bytes: run_proto.max_part_bytes.into_rust()?,
             key_lower: proto.key_lower.to_vec(),
             structured_key_lower: proto.structured_key_lower.into_rust()?,
+            diffs_sum: proto.diffs_sum.as_ref().map(|x| i64::to_le_bytes(*x)),
             _phantom_data: Default::default(),
         })
     }

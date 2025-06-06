@@ -304,6 +304,7 @@ pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
         .add(&COMPACTION_HEURISTIC_MIN_UPDATES)
         .add(&COMPACTION_MEMORY_BOUND_BYTES)
         .add(&GC_BLOB_DELETE_CONCURRENCY_LIMIT)
+        .add(&INCREMENTAL_COMPACTION_DISABLED)
         .add(&STATE_VERSIONS_RECENT_LIVE_DIFFS_LIMIT)
         .add(&USAGE_STATE_FETCH_CONCURRENCY_LIMIT)
         .add(&crate::cli::admin::CATALOG_FORCE_COMPACTION_FUEL)
@@ -512,6 +513,15 @@ pub const GC_BLOB_DELETE_CONCURRENCY_LIMIT: Config<usize> = Config::new(
     "persist_gc_blob_delete_concurrency_limit",
     32,
     "Limit the number of concurrent deletes GC can perform to this threshold.",
+);
+
+/// Whether to disable incremental compaction. This is a break-glass flag
+/// that can be toggled in case incremental compaction is causing issues
+/// for CRDB.
+pub const INCREMENTAL_COMPACTION_DISABLED: Config<bool> = Config::new(
+    "persist_incremental_compaction_disabled",
+    false,
+    "Disable incremental compaction.",
 );
 
 /// The # of diffs to initially scan when fetching the latest consensus state, to
