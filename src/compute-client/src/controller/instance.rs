@@ -40,7 +40,7 @@ use mz_ore::{soft_assert_or_log, soft_panic_or_log};
 use mz_persist_types::PersistLocation;
 use mz_repr::adt::timestamp::CheckedTimestamp;
 use mz_repr::refresh_schedule::RefreshSchedule;
-use mz_repr::{Datum, Diff, GlobalId, RelationDesc, RelationType, Row};
+use mz_repr::{Datum, Diff, GlobalId, RelationDesc, Row};
 use mz_storage_client::controller::{IntrospectionType, WallclockLag, WallclockLagHistogramPeriod};
 use mz_storage_types::read_holds::{self, ReadHold};
 use mz_storage_types::read_policy::ReadPolicy;
@@ -1679,7 +1679,7 @@ where
         literal_constraints: Option<Vec<Row>>,
         uuid: Uuid,
         timestamp: T,
-        intermediate_result_type: RelationType,
+        intermediate_result_desc: RelationDesc,
         finishing: RowSetFinishing,
         map_filter_project: mz_expr::SafeMfpPlan,
         mut read_hold: ReadHold<T>,
@@ -1704,12 +1704,6 @@ where
         }
 
         let otel_ctx = OpenTelemetryContext::obtain();
-
-        // At this stage we don't know the real column names for the result.
-        let intermediate_result_column_names =
-            (0..intermediate_result_type.arity()).map(|i| format!("peek_{i}"));
-        let intermediate_result_desc =
-            RelationDesc::new(intermediate_result_type, intermediate_result_column_names);
 
         self.peeks.insert(
             uuid,

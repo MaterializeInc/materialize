@@ -55,7 +55,7 @@ use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::NowFn;
 use mz_ore::tracing::OpenTelemetryContext;
 use mz_persist_types::PersistLocation;
-use mz_repr::{Datum, GlobalId, RelationType, Row, TimestampManipulation};
+use mz_repr::{Datum, GlobalId, RelationDesc, Row, TimestampManipulation};
 use mz_storage_client::controller::StorageController;
 use mz_storage_types::dyncfgs::ORE_OVERFLOWING_BEHAVIOR;
 use mz_storage_types::read_holds::ReadHold;
@@ -913,7 +913,7 @@ where
         literal_constraints: Option<Vec<Row>>,
         uuid: Uuid,
         timestamp: T,
-        intermediate_result_type: RelationType,
+        intermediate_result_desc: RelationDesc,
         finishing: RowSetFinishing,
         map_filter_project: mz_expr::SafeMfpPlan,
         target_replica: Option<ReplicaId>,
@@ -948,7 +948,7 @@ where
                 literal_constraints,
                 uuid,
                 timestamp,
-                intermediate_result_type,
+                intermediate_result_desc,
                 finishing,
                 map_filter_project,
                 read_hold,

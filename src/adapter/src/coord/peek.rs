@@ -41,7 +41,9 @@ use mz_persist_client::Schemas;
 use mz_persist_types::codec_impls::UnitSchema;
 use mz_repr::explain::text::DisplayText;
 use mz_repr::explain::{CompactScalars, IndexUsageType, PlanRenderingContext, UsedIndexes};
-use mz_repr::{Diff, GlobalId, IntoRowIterator, RelationType, Row, RowIterator, preserves_order};
+use mz_repr::{
+    Diff, GlobalId, IntoRowIterator, RelationDesc, RelationType, Row, RowIterator, preserves_order,
+};
 use mz_storage_types::sources::SourceData;
 use serde::{Deserialize, Serialize};
 use timely::progress::{Antichain, Timestamp};
@@ -275,6 +277,9 @@ pub struct PlannedPeek {
     /// The result type _after_ reading out of the "source" and applying any
     /// [MapFilterProject](mz_expr::MapFilterProject), but _before_ applying a
     /// [RowSetFinishing].
+    ///
+    /// This is _the_ `result_type` as far as compute is concerned and futher
+    /// changes through projections happen purely in the adapter.
     pub intermediate_result_type: RelationType,
     pub source_arity: usize,
     pub source_ids: BTreeSet<GlobalId>,
@@ -717,6 +722,13 @@ impl crate::coord::Coordinator {
             .insert(uuid, compute_instance);
         let (literal_constraints, timestamp, map_filter_project) = peek_command;
 
+        // At this stage we don't know column names for the result because we
+        // only know the peek's result type as a bare ResultType.
+        let peek_result_column_names =
+            (0..intermediate_result_type.arity()).map(|i| format!("peek_{i}"));
+        let peek_result_desc =
+            RelationDesc::new(intermediate_result_type, peek_result_column_names);
+
         self.controller
             .compute
             .peek(
@@ -725,7 +737,7 @@ impl crate::coord::Coordinator {
                 literal_constraints,
                 uuid,
                 timestamp,
-                intermediate_result_type,
+                peek_result_desc,
                 finishing.clone(),
                 map_filter_project,
                 target_replica,
