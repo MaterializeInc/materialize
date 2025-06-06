@@ -413,11 +413,9 @@ components:
      - A self-signed `ClusterIssuer`. The `ClusterIssuer` is deployed  after the
      `cert-manager` is deployed and running.
 
-
    - **Starting in v0.4.3**, you can specify addition configuration options via
      `environmentd_extra_args`.
 
-     {{% include-md file="shared-content/materialized_extra_args.md" %}}
    {{< tip >}}
    {{% self-managed/gcp-terraform-upgrade-notes %}}
 
