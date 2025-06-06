@@ -1679,7 +1679,7 @@ where
         literal_constraints: Option<Vec<Row>>,
         uuid: Uuid,
         timestamp: T,
-        intermediate_result_desc: RelationDesc,
+        result_desc: RelationDesc,
         finishing: RowSetFinishing,
         map_filter_project: mz_expr::SafeMfpPlan,
         mut read_hold: ReadHold<T>,
@@ -1729,7 +1729,7 @@ where
             // tree to forward it on to the compute worker.
             otel_ctx,
             target: peek_target,
-            result_desc: intermediate_result_desc,
+            result_desc,
         };
         self.send(ComputeCommand::Peek(Box::new(peek)));
 
