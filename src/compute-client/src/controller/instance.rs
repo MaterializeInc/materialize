@@ -37,6 +37,7 @@ use mz_ore::channel::instrumented_unbounded_channel;
 use mz_ore::now::NowFn;
 use mz_ore::tracing::OpenTelemetryContext;
 use mz_ore::{soft_assert_or_log, soft_panic_or_log};
+use mz_persist_types::PersistLocation;
 use mz_repr::adt::timestamp::CheckedTimestamp;
 use mz_repr::refresh_schedule::RefreshSchedule;
 use mz_repr::{Datum, Diff, GlobalId, RelationDesc, RelationType, Row};
@@ -63,7 +64,9 @@ use crate::controller::{
 use crate::logging::LogVariant;
 use crate::metrics::IntCounter;
 use crate::metrics::{InstanceMetrics, ReplicaCollectionMetrics, ReplicaMetrics, UIntGauge};
-use crate::protocol::command::{ComputeCommand, ComputeParameters, Peek, PeekTarget};
+use crate::protocol::command::{
+    ComputeCommand, ComputeParameters, InstanceConfig, Peek, PeekTarget,
+};
 use crate::protocol::history::ComputeCommandHistory;
 use crate::protocol::response::{
     ComputeResponse, CopyToResponse, FrontiersResponse, OperatorHydrationStatus, PeekResponse,
@@ -160,6 +163,7 @@ where
         id: ComputeInstanceId,
         build_info: &'static BuildInfo,
         storage: StorageCollections<T>,
+        peek_stash_persist_location: PersistLocation,
         arranged_logs: Vec<(LogVariant, GlobalId, SharedCollectionState<T>)>,
         envd_epoch: NonZeroI64,
         metrics: InstanceMetrics,
@@ -187,6 +191,7 @@ where
             Instance::new(
                 build_info,
                 storage,
+                peek_stash_persist_location,
                 arranged_logs,
                 envd_epoch,
                 metrics,
@@ -289,6 +294,9 @@ pub(super) struct Instance<T: ComputeControllerTimestamp> {
     metrics: InstanceMetrics,
     /// Dynamic system configuration.
     dyncfg: Arc<ConfigSet>,
+
+    /// The persist location where we can stash large peek results.
+    peek_stash_persist_location: PersistLocation,
 
     /// A function that produces the current wallclock time.
     now: NowFn,
@@ -937,6 +945,7 @@ impl<T: ComputeControllerTimestamp> Instance<T> {
         let Self {
             build_info: _,
             storage_collections: _,
+            peek_stash_persist_location: _,
             initialized,
             read_only,
             workload_class,
@@ -1018,6 +1027,7 @@ where
     fn new(
         build_info: &'static BuildInfo,
         storage: StorageCollections<T>,
+        peek_stash_persist_location: PersistLocation,
         arranged_logs: Vec<(LogVariant, GlobalId, SharedCollectionState<T>)>,
         envd_epoch: NonZeroI64,
         metrics: InstanceMetrics,
@@ -1053,6 +1063,7 @@ where
         Self {
             build_info,
             storage_collections: storage,
+            peek_stash_persist_location,
             initialized: false,
             read_only: true,
             workload_class: None,
@@ -1085,9 +1096,8 @@ where
             epoch: ClusterStartupEpoch::new(self.envd_epoch, 0),
         });
 
-        // Send a placeholder instance configuration for the replica task to fill in.
-        let dummy_instance_config = Default::default();
-        self.send(ComputeCommand::CreateInstance(dummy_instance_config));
+        let instance_config = InstanceConfig::new(self.peek_stash_persist_location.clone());
+        self.send(ComputeCommand::CreateInstance(Box::new(instance_config)));
 
         loop {
             tokio::select! {

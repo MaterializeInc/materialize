@@ -394,19 +394,17 @@ pub struct InstanceConfig {
     pub peek_stash_persist_location: PersistLocation,
 }
 
-impl Default for InstanceConfig {
-    fn default() -> Self {
+impl InstanceConfig {
+    /// Create a new instance configuration with the given persist location for
+    /// peek stash but other fields initialized to defaults.
+    pub fn new(peek_stash_persist_location: PersistLocation) -> Self {
         Self {
             logging: Default::default(),
             expiration_offset: Default::default(),
-            // This is only used as a placeholder and will be filled in with the
-            // real location when the command is being sent out to replicas.
-            peek_stash_persist_location: PersistLocation::new_in_mem(),
+            peek_stash_persist_location,
         }
     }
-}
 
-impl InstanceConfig {
     /// Check if the configuration is compatible with another configuration. This is true iff the
     /// logging configuration is equivalent, and the other configuration (non-strictly) strengthens
     /// the expiration offset.
