@@ -346,6 +346,7 @@ class State:
                     "requests": {"cpu": "100m", "memory": "256Mi"},
                 },
                 "backendSecretName": "materialize-backend",
+                "authenticatorKind": "None",
             },
         }
 
@@ -695,6 +696,7 @@ class AWS(State):
                     "requests": {"cpu": "100m", "memory": "256Mi"},
                 },
                 "backendSecretName": "materialize-backend",
+                "authenticatorKind": "None",
             },
         }
 

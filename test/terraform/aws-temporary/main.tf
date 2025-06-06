@@ -62,16 +62,16 @@ module "materialize_infrastructure" {
   # Basic settings
   # The namespace and environment variables are used to construct the names of the resources
   # e.g. ${namespace}-${environment}-eks and etc.
-  namespace    = "aws-test"
-  environment  = "dev"
+  namespace   = "aws-test"
+  environment = "dev"
 
   install_materialize_operator = true
-  use_local_chart = true
-  helm_chart = "materialize-operator-v25.2.0-beta.1.tgz"
-  operator_version = var.operator_version
-  orchestratord_version = var.orchestratord_version
+  use_local_chart              = true
+  helm_chart                   = "materialize-operator-v25.2.0-beta.1.tgz"
+  operator_version             = var.operator_version
+  orchestratord_version        = var.orchestratord_version
 
-  install_cert_manager = false
+  install_cert_manager           = false
   use_self_signed_cluster_issuer = false
 
   # TODO: Doesn't seem to work yet
@@ -141,6 +141,11 @@ resource "random_id" "suffix" {
 output "eks_cluster_endpoint" {
   description = "EKS cluster endpoint"
   value       = module.materialize_infrastructure.eks_cluster_endpoint
+}
+
+output "eks_cluster_name" {
+  description = "EKS cluster name"
+  value       = module.materialize_infrastructure.eks_cluster_name
 }
 
 output "database_endpoint" {
