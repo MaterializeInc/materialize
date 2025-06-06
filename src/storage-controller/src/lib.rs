@@ -2262,7 +2262,7 @@ where
                         soft_panic_or_log!("unexpected DroppedId for {id}");
                     }
                 }
-                (_replica_id, StorageResponse::StatisticsUpdates(source_stats, sink_stats)) => {
+                (replica_id, StorageResponse::StatisticsUpdates(source_stats, sink_stats)) => {
                     // Note we only hold the locks while moving some plain-old-data around here.
                     //
                     // We just write the whole object, as the update from storage represents the
@@ -2273,11 +2273,22 @@ where
                     {
                         let mut shared_stats = self.source_statistics.lock().expect("poisoned");
                         for stat in source_stats {
+                            // Determine if this update is from the first
+                            // replica running this source. We treat updates
+                            // differently based on that, otherwise statistics
+                            // for multi-replica sources can get "whacky", where
+                            // whacky here means that we would overcount certain
+                            // stats. Check `incorporate`, below, for the
+                            // details.
+                            let is_from_first_replica = self.is_first_replica(replica_id, stat.id);
+
                             // Don't override it if its been removed.
                             shared_stats
                                 .source_statistics
                                 .entry(stat.id)
-                                .and_modify(|current| current.stat().incorporate(stat));
+                                .and_modify(|current| {
+                                    current.stat().incorporate(is_from_first_replica, stat);
+                                });
                         }
                     }
 
@@ -3671,6 +3682,55 @@ where
         }
 
         self.wallclock_lag_last_recorded = now_trunc;
+    }
+
+    /// Returns `true` if the given replica is the "first" replica that is
+    /// running the given collection. For collections that don't "run" on a
+    /// replica (tables, webhooks, etc.) this always returns `true`.
+    fn is_first_replica(&self, replica_id: Option<ReplicaId>, collection_id: GlobalId) -> bool {
+        let replica_id = if let Some(replica_id) = replica_id {
+            replica_id
+        } else {
+            return true;
+        };
+
+        let collection = if let Some(collection) = self.collections.get(&collection_id) {
+            collection
+        } else {
+            // This should never happen, but we also shouldn't panic the
+            // controller. So long and return `false` to be on the safe-ish
+            // side.
+            tracing::warn!(%collection_id, "unknown collection id!");
+            return false;
+        };
+
+        let instance_id = match &collection.extra_state {
+            CollectionStateExtra::Ingestion(ingestion_state) => Some(ingestion_state.instance_id),
+            CollectionStateExtra::Export(export_state) => Some(export_state.cluster_id()),
+            CollectionStateExtra::None => None,
+        };
+
+        let instance_id = if let Some(instance_id) = instance_id {
+            instance_id
+        } else {
+            // No instance associated (e.g., for tables).
+            return true;
+        };
+
+        let instance = if let Some(instance) = self.instances.get(&instance_id) {
+            instance
+        } else {
+            // This should never happen, but we also shouldn't panic the
+            // controller. So long and return `false` to be on the safe-ish
+            // side.
+            tracing::warn!(%collection_id, %instance_id, "unknown instance ID!");
+            return false;
+        };
+
+        let active_replicas = instance.get_active_replicas_for_object(&collection_id);
+
+        // Check if this replica is the first (lexicographically smallest) among active replicas
+        active_replicas.iter().min() == Some(&replica_id)
     }
 
     /// Run periodic tasks.

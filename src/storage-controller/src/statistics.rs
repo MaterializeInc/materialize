@@ -276,7 +276,7 @@ pub(super) fn spawn_webhook_statistics_scraper(
                             .entry(*id)
                             .and_modify(|current| {
                                 let update = ws.drain_into_update(*id);
-                                current.stat().incorporate(update);
+                                current.stat().incorporate(true /* there is no replica, so incorporate all updates */, update);
                             });
                     }
                 }
