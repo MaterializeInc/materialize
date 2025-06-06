@@ -38,7 +38,6 @@ rust_library(
     deps = [
         "//src/ore:mz_ore",
         "//src/repr:mz_repr",
-        "//src/server-core:mz_server_core",
     ] + all_crate_deps(normal = True),
 )
 
@@ -77,7 +76,6 @@ rust_test(
     deps = [
         "//src/ore:mz_ore",
         "//src/repr:mz_repr",
-        "//src/server-core:mz_server_core",
     ] + all_crate_deps(
         normal = True,
         normal_dev = True,
@@ -90,7 +88,6 @@ rust_doc_test(
     deps = [
         "//src/ore:mz_ore",
         "//src/repr:mz_repr",
-        "//src/server-core:mz_server_core",
     ] + all_crate_deps(
         normal = True,
         normal_dev = True,

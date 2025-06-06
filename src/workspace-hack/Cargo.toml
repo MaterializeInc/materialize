@@ -75,7 +75,6 @@ hyper = { version = "0.14.27", features = ["client", "http1", "http2", "stream",
 insta = { version = "1.43.1", features = ["json"] }
 libc = { version = "0.2.172", features = ["extra_traits", "use_std"] }
 libz-sys = { version = "1.1.22", features = ["static"] }
-lock_api = { version = "0.4.12", features = ["serde"] }
 log = { version = "0.4.27", default-features = false, features = ["std"] }
 lru = { version = "0.12.5" }
 memchr = { version = "2.7.4" }
@@ -90,7 +89,6 @@ num = { version = "0.4.3" }
 num-bigint = { version = "0.4.6" }
 num-integer = { version = "0.1.46", features = ["i128"] }
 num-traits = { version = "0.2.19", features = ["i128", "libm"] }
-parking_lot = { version = "0.12.3", features = ["serde"] }
 parquet = { version = "53.3.0", default-features = false, features = ["arrow", "async", "brotli", "flate2", "lz4", "snap", "zstd"] }
 percent-encoding = { version = "2.3.1" }
 phf = { version = "0.11.3", features = ["uncased"] }
@@ -112,9 +110,8 @@ rdkafka-sys = { git = "https://github.com/MaterializeInc/rust-rdkafka.git", feat
 regex = { version = "1.11.1" }
 regex-automata = { version = "0.4.9", default-features = false, features = ["dfa", "hybrid", "meta", "nfa", "perf", "unicode"] }
 regex-syntax = { version = "0.8.5" }
-reqwest-5ef9efb8ec2df382 = { package = "reqwest", version = "0.12.15", features = ["blocking", "cookies", "json", "native-tls-vendored", "stream"] }
+reqwest-5ef9efb8ec2df382 = { package = "reqwest", version = "0.12.15", default-features = false, features = ["blocking", "charset", "http2", "json", "native-tls-vendored", "stream"] }
 reqwest-a6292c17cd707f01 = { package = "reqwest", version = "0.11.24", features = ["blocking", "json", "multipart", "native-tls-vendored", "stream"] }
-schemars = { version = "0.8.22", features = ["uuid1"] }
 scopeguard = { version = "1.2.0" }
 semver = { version = "1.0.26", features = ["serde"] }
 serde = { version = "1.0.219", features = ["alloc", "derive", "rc"] }
@@ -209,7 +206,6 @@ hyper = { version = "0.14.27", features = ["client", "http1", "http2", "stream",
 insta = { version = "1.43.1", features = ["json"] }
 libc = { version = "0.2.172", features = ["extra_traits", "use_std"] }
 libz-sys = { version = "1.1.22", features = ["static"] }
-lock_api = { version = "0.4.12", features = ["serde"] }
 log = { version = "0.4.27", default-features = false, features = ["std"] }
 lru = { version = "0.12.5" }
 memchr = { version = "2.7.4" }
@@ -224,7 +220,6 @@ num = { version = "0.4.3" }
 num-bigint = { version = "0.4.6" }
 num-integer = { version = "0.1.46", features = ["i128"] }
 num-traits = { version = "0.2.19", features = ["i128", "libm"] }
-parking_lot = { version = "0.12.3", features = ["serde"] }
 parquet = { version = "53.3.0", default-features = false, features = ["arrow", "async", "brotli", "flate2", "lz4", "snap", "zstd"] }
 percent-encoding = { version = "2.3.1" }
 phf = { version = "0.11.3", features = ["uncased"] }
@@ -247,9 +242,8 @@ rdkafka-sys = { git = "https://github.com/MaterializeInc/rust-rdkafka.git", feat
 regex = { version = "1.11.1" }
 regex-automata = { version = "0.4.9", default-features = false, features = ["dfa", "hybrid", "meta", "nfa", "perf", "unicode"] }
 regex-syntax = { version = "0.8.5" }
-reqwest-5ef9efb8ec2df382 = { package = "reqwest", version = "0.12.15", features = ["blocking", "cookies", "json", "native-tls-vendored", "stream"] }
+reqwest-5ef9efb8ec2df382 = { package = "reqwest", version = "0.12.15", default-features = false, features = ["blocking", "charset", "http2", "json", "native-tls-vendored", "stream"] }
 reqwest-a6292c17cd707f01 = { package = "reqwest", version = "0.11.24", features = ["blocking", "json", "multipart", "native-tls-vendored", "stream"] }
-schemars = { version = "0.8.22", features = ["uuid1"] }
 scopeguard = { version = "1.2.0" }
 semver = { version = "1.0.26", features = ["serde"] }
 serde = { version = "1.0.219", features = ["alloc", "derive", "rc"] }
@@ -288,7 +282,6 @@ zstd-sys = { version = "2.0.13", features = ["std"] }
 [target.x86_64-unknown-linux-gnu.dependencies]
 camino = { version = "1.1.9", default-features = false, features = ["serde1"] }
 hyper = { version = "0.14.27", default-features = false, features = ["runtime"] }
-idna = { version = "1.0.3" }
 linux-raw-sys-274715c4dabd11b0 = { package = "linux-raw-sys", version = "0.9.4", default-features = false, features = ["elf", "errno", "general", "ioctl", "no_std", "prctl"] }
 linux-raw-sys-9fbad63c4bcf4a8f = { package = "linux-raw-sys", version = "0.4.15", default-features = false, features = ["elf", "errno", "general", "if_ether", "ioctl", "net", "netlink", "no_std", "prctl", "std", "xdp"] }
 miniz_oxide = { version = "0.8.8", default-features = false, features = ["with-alloc"] }
@@ -303,7 +296,6 @@ rustix-dff4ba8e3ae991db = { package = "rustix", version = "1.0.5", features = ["
 [target.x86_64-unknown-linux-gnu.build-dependencies]
 camino = { version = "1.1.9", default-features = false, features = ["serde1"] }
 hyper = { version = "0.14.27", default-features = false, features = ["runtime"] }
-idna = { version = "1.0.3" }
 linux-raw-sys-274715c4dabd11b0 = { package = "linux-raw-sys", version = "0.9.4", default-features = false, features = ["elf", "errno", "general", "ioctl", "no_std", "prctl"] }
 linux-raw-sys-9fbad63c4bcf4a8f = { package = "linux-raw-sys", version = "0.4.15", default-features = false, features = ["elf", "errno", "general", "if_ether", "ioctl", "net", "netlink", "no_std", "prctl", "std", "xdp"] }
 miniz_oxide = { version = "0.8.8", default-features = false, features = ["with-alloc"] }
@@ -318,7 +310,6 @@ rustix-dff4ba8e3ae991db = { package = "rustix", version = "1.0.5", features = ["
 [target.x86_64-apple-darwin.dependencies]
 camino = { version = "1.1.9", default-features = false, features = ["serde1"] }
 hyper = { version = "0.14.27", default-features = false, features = ["runtime"] }
-idna = { version = "1.0.3" }
 miniz_oxide = { version = "0.8.8", default-features = false, features = ["with-alloc"] }
 native-tls = { version = "0.2.14", default-features = false, features = ["vendored"] }
 pathdiff = { version = "0.2.3", default-features = false, features = ["camino"] }
@@ -330,7 +321,6 @@ security-framework = { version = "2.10.0", features = ["alpn"] }
 [target.x86_64-apple-darwin.build-dependencies]
 camino = { version = "1.1.9", default-features = false, features = ["serde1"] }
 hyper = { version = "0.14.27", default-features = false, features = ["runtime"] }
-idna = { version = "1.0.3" }
 miniz_oxide = { version = "0.8.8", default-features = false, features = ["with-alloc"] }
 native-tls = { version = "0.2.14", default-features = false, features = ["vendored"] }
 pathdiff = { version = "0.2.3", default-features = false, features = ["camino"] }

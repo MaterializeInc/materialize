@@ -31,8 +31,8 @@ rust_library(
     rustc_flags = [],
     version = "0.1.0",
     deps = [
-        "//src/adapter:mz_adapter",
         "//src/frontegg-auth:mz_frontegg_auth",
+        "//src/server-core:mz_server_core",
     ] + all_crate_deps(normal = True),
 )
 
@@ -64,8 +64,8 @@ rust_test(
     rustc_flags = [],
     version = "0.1.0",
     deps = [
-        "//src/adapter:mz_adapter",
         "//src/frontegg-auth:mz_frontegg_auth",
+        "//src/server-core:mz_server_core",
     ] + all_crate_deps(
         normal = True,
         normal_dev = True,
@@ -76,8 +76,8 @@ rust_doc_test(
     name = "mz_authenticator_doc_test",
     crate = ":mz_authenticator",
     deps = [
-        "//src/adapter:mz_adapter",
         "//src/frontegg-auth:mz_frontegg_auth",
+        "//src/server-core:mz_server_core",
     ] + all_crate_deps(
         normal = True,
         normal_dev = True,

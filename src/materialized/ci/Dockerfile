@@ -9,7 +9,6 @@
 
 MZFROM materialized-base
 
-COPY listener_configs/ /listener_configs/
 COPY materialized entrypoint.sh /usr/local/bin/
 
 USER root

@@ -1258,12 +1258,8 @@ Trace {
                         attributes: Some(
                             RoleAttributes {
                                 inherit: true,
-                                superuser: Some(
-                                    true,
-                                ),
-                                login: Some(
-                                    true,
-                                ),
+                                superuser: None,
+                                login: None,
                             },
                         ),
                         membership: Some(

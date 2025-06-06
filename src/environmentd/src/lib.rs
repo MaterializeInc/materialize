@@ -14,6 +14,7 @@
 //! [timely dataflow]: ../timely/index.html
 
 use std::collections::BTreeMap;
+use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::panic::AssertUnwindSafe;
 use std::pin::Pin;
 use std::sync::Arc;
@@ -26,20 +27,19 @@ use futures::FutureExt;
 use ipnet::IpNet;
 use mz_adapter::config::{SystemParameterSyncConfig, system_parameter_sync};
 use mz_adapter::webhook::WebhookConcurrencyLimiter;
-use mz_adapter::{AdapterError, Client as AdapterClient, load_remote_system_parameters};
+use mz_adapter::{AdapterError, load_remote_system_parameters};
 use mz_adapter_types::bootstrap_builtin_cluster_config::BootstrapBuiltinClusterConfig;
 use mz_adapter_types::dyncfgs::{
     ENABLE_0DT_DEPLOYMENT, ENABLE_0DT_DEPLOYMENT_PANIC_AFTER_TIMEOUT,
     WITH_0DT_DEPLOYMENT_DDL_CHECK_INTERVAL, WITH_0DT_DEPLOYMENT_MAX_WAIT,
 };
-use mz_auth::password::Password;
 use mz_authenticator::Authenticator;
 use mz_build_info::{BuildInfo, build_info};
 use mz_catalog::config::ClusterReplicaSizeMap;
 use mz_catalog::durable::BootstrapArgs;
 use mz_cloud_resources::CloudResourceController;
 use mz_controller::ControllerConfig;
-use mz_frontegg_auth::Authenticator as FronteggAuthenticator;
+use mz_frontegg_auth::Authenticator as FronteggAuthentication;
 use mz_license_keys::ValidatedLicenseKey;
 use mz_ore::future::OreFutureExt;
 use mz_ore::metrics::MetricsRegistry;
@@ -49,17 +49,11 @@ use mz_ore::url::SensitiveUrl;
 use mz_ore::{instrument, task};
 use mz_persist_client::cache::PersistClientCache;
 use mz_persist_client::usage::StorageUsageClient;
-use mz_pgwire::MetricsConfig;
 use mz_pgwire_common::ConnectionCounter;
 use mz_repr::strconv;
 use mz_secrets::SecretsController;
-use mz_server_core::listeners::{
-    AuthenticatorKind, HttpListenerConfig, ListenerConfig, ListenersConfig, SqlListenerConfig,
-};
-use mz_server_core::{
-    ConnectionStream, ListenerHandle, ReloadTrigger, ReloadingSslContext, ServeConfig,
-    TlsCertConfig, TlsMode,
-};
+use mz_server_core::listeners::{AllowedRoles, AuthenticatorKind, HttpRoutesEnabled};
+use mz_server_core::{ConnectionStream, ListenerHandle, ReloadTrigger, ServeConfig, TlsCertConfig};
 use mz_sql::catalog::EnvironmentId;
 use mz_sql::session::vars::{Value, VarInput};
 use tokio::sync::oneshot;
@@ -99,10 +93,8 @@ pub struct Config {
     /// Trigger to attempt to reload TLS certififcates.
     #[derivative(Debug = "ignore")]
     pub tls_reload_certs: ReloadTrigger,
-    /// Password of the mz_system user.
-    pub external_login_password_mz_system: Option<Password>,
     /// Frontegg JWT authentication configuration.
-    pub frontegg: Option<FronteggAuthenticator>,
+    pub frontegg: Option<FronteggAuthentication>,
     /// Origins for which cross-origin resource sharing (CORS) for HTTP requests
     /// is permitted.
     pub cors_allowed_origin: AllowOrigin,
@@ -118,6 +110,10 @@ pub struct Config {
     /// The URL of the Materialize console to proxy from the /internal-console
     /// endpoint on the internal HTTP server.
     pub internal_console_redirect_url: Option<String>,
+    /// Whether to enable self hosted auth
+    pub self_hosted_auth: bool,
+    /// Whether to enable self hosted auth on the internal pg port
+    pub self_hosted_auth_internal: bool,
 
     // === Controller options. ===
     /// Storage and compute controller configuration.
@@ -204,6 +200,19 @@ pub struct Config {
     pub now: NowFn,
 }
 
+/// Configuration for network listeners.
+pub struct ListenersConfig {
+    /// The IP address and port to listen for pgwire connections on.
+    pub sql_listen_addr: SocketAddr,
+    /// The IP address and port to listen for HTTP connections on.
+    pub http_listen_addr: SocketAddr,
+    /// The IP address and port to listen for pgwire connections from the cloud
+    /// system on.
+    pub internal_sql_listen_addr: SocketAddr,
+    /// The IP address and port to serve the metrics registry from.
+    pub internal_http_listen_addr: SocketAddr,
+}
+
 /// Configuration for the Catalog.
 #[derive(Debug, Clone)]
 pub struct CatalogConfig {
@@ -213,15 +222,16 @@ pub struct CatalogConfig {
     pub metrics: Arc<mz_catalog::durable::Metrics>,
 }
 
-pub struct Listener<C> {
-    pub handle: ListenerHandle,
-    connection_stream: Pin<Box<dyn ConnectionStream>>,
-    config: C,
+/// Listeners for an `environmentd` server.
+pub struct Listeners {
+    // Drop order matters for these fields.
+    sql: (ListenerHandle, Pin<Box<dyn ConnectionStream>>),
+    http: (ListenerHandle, Pin<Box<dyn ConnectionStream>>),
+    internal_sql: (ListenerHandle, Pin<Box<dyn ConnectionStream>>),
+    internal_http: (ListenerHandle, Pin<Box<dyn ConnectionStream>>),
 }
-impl<C> Listener<C>
-where
-    C: ListenerConfig,
-{
+
+impl Listeners {
     /// Initializes network listeners for a later call to `serve` at the
     /// specified addresses.
     ///
@@ -233,104 +243,36 @@ where
     ///   * It allows the caller to communicate with the server via the internal
     ///     HTTP port while it is booting.
     ///
-    async fn bind(config: C) -> Result<Self, io::Error> {
-        let (handle, connection_stream) = mz_server_core::listen(&config.addr()).await?;
-        Ok(Self {
-            handle,
-            connection_stream,
-            config,
+    pub async fn bind(
+        ListenersConfig {
+            sql_listen_addr,
+            http_listen_addr,
+            internal_sql_listen_addr,
+            internal_http_listen_addr,
+        }: ListenersConfig,
+    ) -> Result<Listeners, io::Error> {
+        let sql = mz_server_core::listen(&sql_listen_addr).await?;
+        let http = mz_server_core::listen(&http_listen_addr).await?;
+        let internal_sql = mz_server_core::listen(&internal_sql_listen_addr).await?;
+        let internal_http = mz_server_core::listen(&internal_http_listen_addr).await?;
+        Ok(Listeners {
+            sql,
+            http,
+            internal_sql,
+            internal_http,
         })
     }
-}
 
-impl Listener<SqlListenerConfig> {
-    #[instrument(name = "environmentd::serve_sql")]
-    pub async fn serve_sql(
-        self,
-        name: String,
-        active_connection_counter: ConnectionCounter,
-        tls_reloading_context: Option<ReloadingSslContext>,
-        frontegg: Option<FronteggAuthenticator>,
-        adapter_client: AdapterClient,
-        metrics: MetricsConfig,
-        helm_chart_version: Option<String>,
-    ) -> ListenerHandle {
-        let label: &'static str = Box::leak(name.into_boxed_str());
-        let tls = tls_reloading_context.map(|context| mz_server_core::ReloadingTlsConfig {
-            context,
-            mode: if self.config.enable_tls {
-                TlsMode::Require
-            } else {
-                TlsMode::Allow
-            },
-        });
-        let authenticator = match self.config.authenticator_kind {
-            AuthenticatorKind::Frontegg => Authenticator::Frontegg(
-                frontegg.expect("Frontegg args are required with AuthenticatorKind::Frontegg"),
-            ),
-            AuthenticatorKind::Password => Authenticator::Password(adapter_client.clone()),
-            AuthenticatorKind::None => Authenticator::None,
-        };
-
-        task::spawn(|| format!("{}_sql_server", label), {
-            let sql_server = mz_pgwire::Server::new(mz_pgwire::Config {
-                label,
-                tls,
-                adapter_client,
-                authenticator,
-                metrics,
-                active_connection_counter,
-                helm_chart_version,
-                allowed_roles: self.config.allowed_roles,
-            });
-            mz_server_core::serve(ServeConfig {
-                conns: self.connection_stream,
-                server: sql_server,
-                // `environmentd` does not currently need to dynamically
-                // configure graceful termination behavior.
-                dyncfg: None,
-            })
-        });
-        self.handle
-    }
-}
-
-impl Listener<HttpListenerConfig> {
-    #[instrument(name = "environmentd::serve_http")]
-    pub async fn serve_http(self, config: HttpConfig) -> ListenerHandle {
-        let task_name = format!("{}_http_server", &config.source);
-        task::spawn(|| task_name, {
-            let http_server = HttpServer::new(config);
-            mz_server_core::serve(ServeConfig {
-                conns: self.connection_stream,
-                server: http_server,
-                // `environmentd` does not currently need to dynamically
-                // configure graceful termination behavior.
-                dyncfg: None,
-            })
-        });
-        self.handle
-    }
-}
-
-pub struct Listeners {
-    pub http: BTreeMap<String, Listener<HttpListenerConfig>>,
-    pub sql: BTreeMap<String, Listener<SqlListenerConfig>>,
-}
-
-impl Listeners {
-    pub async fn bind(config: ListenersConfig) -> Result<Self, io::Error> {
-        let mut sql = BTreeMap::new();
-        for (name, config) in config.sql {
-            sql.insert(name, Listener::bind(config).await?);
-        }
-
-        let mut http = BTreeMap::new();
-        for (name, config) in config.http {
-            http.insert(name, Listener::bind(config).await?);
-        }
-
-        Ok(Listeners { http, sql })
+    /// Like [`Listeners::bind`], but binds each ports to an arbitrary free
+    /// local address.
+    pub async fn bind_any_local() -> Result<Listeners, io::Error> {
+        Listeners::bind(ListenersConfig {
+            sql_listen_addr: SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0),
+            http_listen_addr: SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0),
+            internal_sql_listen_addr: SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0),
+            internal_http_listen_addr: SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0),
+        })
+        .await
     }
 
     /// Starts an `environmentd` server.
@@ -342,84 +284,95 @@ impl Listeners {
         info!("startup: envd serve: beginning");
         info!("startup: envd serve: preamble beginning");
 
+        let Listeners {
+            sql: (sql_listener, sql_conns),
+            http: (http_listener, http_conns),
+            internal_sql: (internal_sql_listener, internal_sql_conns),
+            internal_http: (internal_http_listener, internal_http_conns),
+        } = self;
+
         // Validate TLS configuration, if present.
-        let tls_reloading_context = match config.tls {
-            Some(tls_config) => Some(tls_config.reloading_context(config.tls_reload_certs)?),
-            None => None,
+        let (pgwire_tls, http_tls) = match &config.tls {
+            None => (None, None),
+            Some(tls_config) => {
+                let context = tls_config.reloading_context(config.tls_reload_certs)?;
+                let pgwire_tls = mz_server_core::ReloadingTlsConfig {
+                    context: context.clone(),
+                    mode: mz_server_core::TlsMode::Require,
+                };
+                let http_tls = http::ReloadingTlsConfig {
+                    context,
+                    mode: http::TlsMode::Require,
+                };
+                (Some(pgwire_tls), Some(http_tls))
+            }
         };
 
         let active_connection_counter = ConnectionCounter::default();
         let (deployment_state, deployment_state_handle) = DeploymentState::new();
 
-        // Launch HTTP servers.
-        //
-        // We start these servers before we've completed initialization so that
-        // metrics are accessible during initialization. Some HTTP
-        // endpoints require the adapter to be initialized; requests to those
-        // endpoints block until the adapter client is installed.
-        // One of these endpoints is /api/readyz,
-        // which assumes we're ready when the adapter client exists.
         let webhook_concurrency_limit = WebhookConcurrencyLimiter::default();
-        let internal_route_config = Arc::new(InternalRouteConfig {
+        let internal_route_config = InternalRouteConfig {
             deployment_state_handle,
             internal_console_redirect_url: config.internal_console_redirect_url,
-        });
+        };
 
         let (authenticator_frontegg_tx, authenticator_frontegg_rx) = oneshot::channel();
         let authenticator_frontegg_rx = authenticator_frontegg_rx.shared();
-        let (authenticator_password_tx, authenticator_password_rx) = oneshot::channel();
-        let authenticator_password_rx = authenticator_password_rx.shared();
         let (authenticator_none_tx, authenticator_none_rx) = oneshot::channel();
         let authenticator_none_rx = authenticator_none_rx.shared();
 
-        // We can only send the Frontegg and None variants immediately.
-        // The Password variant requires an adapter client.
         if let Some(frontegg) = &config.frontegg {
             authenticator_frontegg_tx
                 .send(Arc::new(Authenticator::Frontegg(frontegg.clone())))
-                .expect("rx known to be live");
+                .expect("HTTP server should not drop first");
         }
         authenticator_none_tx
             .send(Arc::new(Authenticator::None))
-            .expect("rx known to be live");
+            .expect("internal HTTP server should not drop first");
 
         let (adapter_client_tx, adapter_client_rx) = oneshot::channel();
         let adapter_client_rx = adapter_client_rx.shared();
 
-        let metrics_registry = config.metrics_registry.clone();
-        let metrics = http::Metrics::register_into(&metrics_registry, "mz_http");
-        let mut http_listener_handles = BTreeMap::new();
-        for (name, listener) in self.http {
-            let authenticator_kind = listener.config.authenticator_kind();
-            let authenticator_rx = match authenticator_kind {
-                AuthenticatorKind::Frontegg => authenticator_frontegg_rx.clone(),
-                AuthenticatorKind::Password => authenticator_password_rx.clone(),
-                AuthenticatorKind::None => authenticator_none_rx.clone(),
-            };
-            let source: &'static str = Box::leak(name.clone().into_boxed_str());
-            let tls = if listener.config.enable_tls() {
-                tls_reloading_context.clone()
-            } else {
-                None
-            };
-            let http_config = HttpConfig {
+        // Start the internal HTTP server.
+        //
+        // We start this server before we've completed initialization so that
+        // metrics are accessible during initialization. Some internal HTTP
+        // endpoints require the adapter to be initialized; requests to those
+        // endpoints block until the adapter client is installed.
+        task::spawn(|| "internal_http_server", {
+            let metrics_registry = config.metrics_registry.clone();
+            let metrics = http::Metrics::register_into(&metrics_registry, "mz_internal_http");
+            let internal_http_server = HttpServer::new(HttpConfig {
                 adapter_client_rx: adapter_client_rx.clone(),
                 active_connection_counter: active_connection_counter.clone(),
                 helm_chart_version: config.helm_chart_version.clone(),
-                source,
-                tls,
-                authenticator_kind,
-                authenticator_rx,
+                source: "internal",
+                tls: None,
+                authenticator_kind: AuthenticatorKind::None,
+                authenticator_rx: authenticator_none_rx.clone(),
                 allowed_origin: config.cors_allowed_origin.clone(),
                 concurrent_webhook_req: webhook_concurrency_limit.semaphore(),
-                metrics: metrics.clone(),
-                metrics_registry: metrics_registry.clone(),
-                allowed_roles: listener.config.allowed_roles(),
-                internal_route_config: Arc::clone(&internal_route_config),
-                routes_enabled: listener.config.routes.clone(),
-            };
-            http_listener_handles.insert(name.clone(), listener.serve_http(http_config).await);
-        }
+                metrics,
+                metrics_registry,
+                allowed_roles: AllowedRoles::NormalAndInternal,
+                internal_route_config: internal_route_config.clone(),
+                routes_enabled: HttpRoutesEnabled {
+                    base: true,
+                    webhook: true,
+                    internal: true,
+                    metrics: true,
+                    profiling: true,
+                },
+            });
+            mz_server_core::serve(ServeConfig {
+                server: internal_http_server,
+                conns: internal_http_conns,
+                // `environmentd` does not currently need to dynamically
+                // configure graceful termination behavior.
+                dyncfg: None,
+            })
+        });
 
         info!(
             "startup: envd serve: preamble complete in {:?}",
@@ -801,7 +754,6 @@ impl Listeners {
             caught_up_trigger,
             helm_chart_version: config.helm_chart_version.clone(),
             license_key: config.license_key,
-            external_login_password_mz_system: config.external_login_password_mz_system,
         })
         .instrument(info_span!("adapter::serve"))
         .await?;
@@ -814,34 +766,102 @@ impl Listeners {
         let serve_postamble_start = Instant::now();
         info!("startup: envd serve: postamble beginning");
 
-        // Send adapter client to the HTTP servers.
-        authenticator_password_tx
-            .send(Arc::new(Authenticator::Password(adapter_client.clone())))
-            .expect("rx known to be live");
+        // Install an adapter client in the internal HTTP server.
         adapter_client_tx
             .send(adapter_client.clone())
             .expect("internal HTTP server should not drop first");
 
         let metrics = mz_pgwire::MetricsConfig::register_into(&config.metrics_registry);
-
         // Launch SQL server.
-        let mut sql_listener_handles = BTreeMap::new();
-        for (name, listener) in self.sql {
-            sql_listener_handles.insert(
-                name.clone(),
-                listener
-                    .serve_sql(
-                        name,
-                        active_connection_counter.clone(),
-                        tls_reloading_context.clone(),
-                        config.frontegg.clone(),
-                        adapter_client.clone(),
-                        metrics.clone(),
-                        config.helm_chart_version.clone(),
-                    )
-                    .await,
-            );
-        }
+        task::spawn(|| "sql_server", {
+            let sql_server = mz_pgwire::Server::new(mz_pgwire::Config {
+                label: "external_pgwire",
+                tls: pgwire_tls.clone(),
+                adapter_client: adapter_client.clone(),
+                frontegg: config.frontegg.clone(),
+                use_self_hosted_auth: config.self_hosted_auth,
+                metrics: metrics.clone(),
+                internal: false,
+                active_connection_counter: active_connection_counter.clone(),
+                helm_chart_version: config.helm_chart_version.clone(),
+            });
+            mz_server_core::serve(ServeConfig {
+                conns: sql_conns,
+                server: sql_server,
+                // `environmentd` does not currently need to dynamically
+                // configure graceful termination behavior.
+                dyncfg: None,
+            })
+        });
+
+        // Launch internal SQL server.
+        task::spawn(|| "internal_sql_server", {
+            let internal_sql_server = mz_pgwire::Server::new(mz_pgwire::Config {
+                label: "internal_pgwire",
+                tls: pgwire_tls.map(|mut pgwire_tls| {
+                    // Allow, but do not require, TLS connections on the internal
+                    // port. Some users of the internal SQL server do not support
+                    // TLS, while others require it, so we allow both.
+                    //
+                    // TODO(benesch): migrate all internal applications to TLS and
+                    // remove `TlsMode::Allow`.
+                    pgwire_tls.mode = mz_server_core::TlsMode::Allow;
+                    pgwire_tls
+                }),
+                adapter_client: adapter_client.clone(),
+                frontegg: None,
+                use_self_hosted_auth: config.self_hosted_auth_internal,
+                metrics: metrics.clone(),
+                internal: true,
+                active_connection_counter: active_connection_counter.clone(),
+                helm_chart_version: config.helm_chart_version.clone(),
+            });
+            mz_server_core::serve(ServeConfig {
+                conns: internal_sql_conns,
+                server: internal_sql_server,
+                // `environmentd` does not currently need to dynamically
+                // configure graceful termination behavior.
+                dyncfg: None,
+            })
+        });
+
+        let (authenticator_kind, authenticator_rx) = match &config.frontegg {
+            Some(_) => (AuthenticatorKind::Frontegg, authenticator_frontegg_rx),
+            None => (AuthenticatorKind::None, authenticator_none_rx),
+        };
+        // Launch HTTP server.
+        let http_metrics = http::Metrics::register_into(&config.metrics_registry, "mz_http");
+        task::spawn(|| "http_server", {
+            let http_server = HttpServer::new(HttpConfig {
+                source: "external",
+                tls: http_tls,
+                authenticator_kind,
+                authenticator_rx,
+                adapter_client_rx: adapter_client_rx.clone(),
+                allowed_origin: config.cors_allowed_origin.clone(),
+                active_connection_counter: active_connection_counter.clone(),
+                helm_chart_version: config.helm_chart_version.clone(),
+                concurrent_webhook_req: webhook_concurrency_limit.semaphore(),
+                metrics: http_metrics.clone(),
+                metrics_registry: config.metrics_registry,
+                allowed_roles: AllowedRoles::Normal,
+                internal_route_config,
+                routes_enabled: HttpRoutesEnabled {
+                    base: true,
+                    webhook: true,
+                    internal: false,
+                    metrics: false,
+                    profiling: false,
+                },
+            });
+            mz_server_core::serve(ServeConfig {
+                conns: http_conns,
+                server: http_server,
+                // `environmentd` does not currently need to dynamically
+                // configure graceful termination behavior.
+                dyncfg: None,
+            })
+        });
 
         // Start telemetry reporting loop.
         if let Some(segment_client) = segment_client {
@@ -859,7 +879,7 @@ impl Listeners {
                 || "system_parameter_sync",
                 AssertUnwindSafe(system_parameter_sync(
                     system_parameter_sync_config,
-                    adapter_client.clone(),
+                    adapter_client,
                     config.config_sync_loop_interval,
                 ))
                 .ore_catch_unwind(),
@@ -876,10 +896,28 @@ impl Listeners {
         );
 
         Ok(Server {
-            sql_listener_handles,
-            http_listener_handles,
+            sql_listener,
+            http_listener,
+            internal_sql_listener,
+            internal_http_listener,
             _adapter_handle: adapter_handle,
         })
+    }
+
+    pub fn sql_local_addr(&self) -> SocketAddr {
+        self.sql.0.local_addr()
+    }
+
+    pub fn http_local_addr(&self) -> SocketAddr {
+        self.http.0.local_addr()
+    }
+
+    pub fn internal_sql_local_addr(&self) -> SocketAddr {
+        self.internal_sql.0.local_addr()
+    }
+
+    pub fn internal_http_local_addr(&self) -> SocketAddr {
+        self.internal_http.0.local_addr()
     }
 }
 
@@ -900,7 +938,27 @@ fn get_ld_value<V>(
 /// A running `environmentd` server.
 pub struct Server {
     // Drop order matters for these fields.
-    pub sql_listener_handles: BTreeMap<String, ListenerHandle>,
-    pub http_listener_handles: BTreeMap<String, ListenerHandle>,
+    sql_listener: ListenerHandle,
+    http_listener: ListenerHandle,
+    internal_sql_listener: ListenerHandle,
+    internal_http_listener: ListenerHandle,
     _adapter_handle: mz_adapter::Handle,
+}
+
+impl Server {
+    pub fn sql_local_addr(&self) -> SocketAddr {
+        self.sql_listener.local_addr()
+    }
+
+    pub fn http_local_addr(&self) -> SocketAddr {
+        self.http_listener.local_addr()
+    }
+
+    pub fn internal_sql_local_addr(&self) -> SocketAddr {
+        self.internal_sql_listener.local_addr()
+    }
+
+    pub fn internal_http_local_addr(&self) -> SocketAddr {
+        self.internal_http_listener.local_addr()
+    }
 }

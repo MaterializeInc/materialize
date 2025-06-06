@@ -127,7 +127,7 @@ fn create_network_policies(
                             .collect(),
                     ),
                     ports: Some(vec![NetworkPolicyPort {
-                        port: Some(IntOrString::Int(config.console_http_port.into())),
+                        port: Some(IntOrString::Int(config.console_http_port)),
                         protocol: Some("TCP".to_string()),
                         ..Default::default()
                     }]),
@@ -170,7 +170,7 @@ fn create_console_deployment_object(
     pod_template_labels.insert("materialize.cloud/app".to_owned(), mz.console_app_name());
 
     let ports = vec![ContainerPort {
-        container_port: config.console_http_port.into(),
+        container_port: config.console_http_port,
         name: Some("http".into()),
         protocol: Some("TCP".into()),
         ..Default::default()
@@ -239,7 +239,7 @@ ssl_certificate_key /nginx/tls/tls.key;",
     let probe = Probe {
         http_get: Some(HTTPGetAction {
             path: Some("/".to_string()),
-            port: IntOrString::Int(config.console_http_port.into()),
+            port: IntOrString::Int(config.console_http_port),
             scheme,
             ..Default::default()
         }),
@@ -348,8 +348,8 @@ fn create_console_service_object(
     let ports = vec![ServicePort {
         name: Some("http".to_string()),
         protocol: Some("TCP".to_string()),
-        port: config.console_http_port.into(),
-        target_port: Some(IntOrString::Int(config.console_http_port.into())),
+        port: config.console_http_port,
+        target_port: Some(IntOrString::Int(config.console_http_port)),
         ..Default::default()
     }];
 
