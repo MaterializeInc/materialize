@@ -505,7 +505,7 @@ impl BlobTraceUpdates {
             };
             match BinaryArray::try_new(
                 OffsetBuffer::new(offsets.into()),
-                ::arrow::buffer::Buffer::from_bytes(data.into()),
+                ::arrow::buffer::Buffer::from(data),
                 None,
             ) {
                 Ok(data) => Ok(Some(realloc_array(&data, lgbytes))),
