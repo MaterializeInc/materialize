@@ -171,8 +171,26 @@ else
   run_if_not_dry git push origin main "$TERRAFORM_HELM_VERSION"
   cd ..
 
+  echo "--- Bumping terraform-aws-materialize"
+  rm -rf terraform-aws-materialize
+  git clone https://github.com/MaterializeInc/terraform-aws-materialize.git
+  cd terraform-aws-materialize
+  # Update environmentd version in materialize-instance module
+  sed -i "s/\".*\"\(.*\) # META: mz version/\"$CI_MZ_VERSION\"\\1 # META: mz version/" modules/materialize-instance/variables.tf
+  # Update operator version in operator module
+  sed -i "s/\".*\"\(.*\) # META: helm-chart version/\"$CI_HELM_CHART_VERSION\"\\1 # META: helm-chart version/" modules/operator/variables.tf
+  # Generate docs using the custom script
+  .github/scripts/generate-docs.sh
+  git config user.email "noreply@materialize.com"
+  git config user.name "Buildkite"
+  git add modules/materialize-instance/variables.tf modules/operator/variables.tf README.md
+  git commit -m "Bump to operator $CI_HELM_CHART_VERSION, materialize $CI_MZ_VERSION"
+  git diff HEAD~
+  run_if_not_dry git push origin main
+  cd ..
+
   declare -A TERRAFORM_VERSION
-  for repo in terraform-aws-materialize terraform-azurerm-materialize terraform-google-materialize; do
+  for repo in terraform-azurerm-materialize terraform-google-materialize; do
     echo "--- Bumping $repo"
     rm -rf $repo
     git clone https://github.com/MaterializeInc/$repo.git
