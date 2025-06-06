@@ -301,8 +301,6 @@ components:
    - **Starting in v0.4.6**, you can specify addition configuration options via
      `environmentd_extra_args`.
 
-     {{% include-md file="shared-content/materialized_extra_args.md" %}}
-
    {{< tip >}}
    {{% self-managed/aws-terraform-upgrade-notes %}}
 
