@@ -1315,7 +1315,7 @@ fn create_environmentd_statefulset_object(
         },
     ];
 
-    if mz.meets_minimum_version(&V140_DEV0) {
+    if mz.meets_minimum_version(&V140_DEV0) && !config.disable_license_key_checks {
         volume_mounts.push(VolumeMount {
             name: "license-key".to_string(),
             mount_path: "/license_key".to_string(),
