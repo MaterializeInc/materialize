@@ -370,7 +370,6 @@ actually run).
 
 {{< /tabs >}}
 
-
 ## Examples
 
 For the following examples, let's assume that you have [the auction house load generator](/sql/create-source/load-generator/#creating-an-auction-load-generator) created in your current environment.
@@ -508,6 +507,10 @@ Explain the physical plan as text:
 EXPLAIN PHYSICAL PLAN FOR
 MATERIALIZED VIEW my_mat_view;
 ```
+
+## Debugging running dataflows
+
+The [`EXPLAIN ANALYZE`](/sql/explain-analyze/) statement will let you debug memory and cpu usage (optionally with information about worker skew) for existing indexes and materialized views in terms of their physical plan operators. It can also attribute [TopK hints](/transform-data/idiomatic-materialize-sql/top-k/#query-hints-1) to individual operators.
 
 ## Privileges
 
