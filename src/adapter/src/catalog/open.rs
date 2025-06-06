@@ -19,7 +19,6 @@ use futures::future::{BoxFuture, FutureExt};
 use itertools::{Either, Itertools};
 use mz_adapter_types::bootstrap_builtin_cluster_config::BootstrapBuiltinClusterConfig;
 use mz_adapter_types::dyncfgs::{ENABLE_CONTINUAL_TASK_BUILTINS, ENABLE_EXPRESSION_CACHE};
-use mz_auth::hash::scram256_hash;
 use mz_catalog::SYSTEM_CONN_ID;
 use mz_catalog::builtin::{
     BUILTIN_CLUSTER_REPLICAS, BUILTIN_CLUSTERS, BUILTIN_PREFIXES, BUILTIN_ROLES, BUILTINS, Builtin,
@@ -35,13 +34,13 @@ use mz_catalog::expr_cache::{
 };
 use mz_catalog::memory::error::{Error, ErrorKind};
 use mz_catalog::memory::objects::{
-    BootstrapStateUpdateKind, CommentsMap, DefaultPrivileges, RoleAuth, StateUpdate,
+    BootstrapStateUpdateKind, CommentsMap, DefaultPrivileges, StateUpdate,
 };
 use mz_controller::clusters::{ReplicaAllocation, ReplicaLogging};
 use mz_controller_types::ClusterId;
 use mz_ore::cast::usize_to_u64;
 use mz_ore::collections::HashSet;
-use mz_ore::now::{SYSTEM_TIME, to_datetime};
+use mz_ore::now::to_datetime;
 use mz_ore::{instrument, soft_assert_no_log};
 use mz_repr::adt::mz_acl_item::PrivilegeMap;
 use mz_repr::namespaces::is_unstable_schema;
@@ -247,18 +246,6 @@ impl Catalog {
                 };
             }
             state.create_temporary_schema(&SYSTEM_CONN_ID, MZ_SYSTEM_ROLE_ID)?;
-            if let Some(password) = config.external_login_password_mz_system {
-                state.role_auth_by_id.insert(
-                    MZ_SYSTEM_ROLE_ID,
-                    RoleAuth {
-                        role_id: MZ_SYSTEM_ROLE_ID,
-                        password_hash: Some(scram256_hash(&password).map_err(|_| {
-                            AdapterError::Internal("Failed to hash mz_system password.".to_owned())
-                        })?),
-                        updated_at: SYSTEM_TIME(),
-                    },
-                );
-            }
         }
 
         let mut builtin_table_updates = Vec::new();

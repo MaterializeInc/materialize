@@ -285,7 +285,7 @@ async fn run_tests<'a>(header: &str, server: &test_util::TestServer, tests: &[Te
                     .authority(&*format!(
                         "{}:{}",
                         Ipv4Addr::LOCALHOST,
-                        server.http_local_addr().port()
+                        server.inner.http_local_addr().port()
                     ))
                     .path_and_query("/api/sql")
                     .build()
@@ -344,7 +344,7 @@ async fn run_tests<'a>(header: &str, server: &test_util::TestServer, tests: &[Te
                     .authority(&*format!(
                         "{}:{}",
                         Ipv4Addr::LOCALHOST,
-                        server.http_local_addr().port()
+                        server.inner.http_local_addr().port()
                     ))
                     .path_and_query("/api/experimental/sql")
                     .build()
@@ -502,7 +502,7 @@ async fn test_auth_expiry() {
 
     let server = test_util::TestHarness::default()
         .with_tls(server_cert, server_key)
-        .with_frontegg_auth(&frontegg_auth)
+        .with_frontegg(&frontegg_auth)
         .with_metrics_registry(metrics_registry)
         .start()
         .await;
@@ -809,7 +809,7 @@ async fn test_auth_base_require_tls_frontegg() {
     // authentication.
     let server = test_util::TestHarness::default()
         .with_tls(server_cert, server_key)
-        .with_frontegg_auth(&frontegg_auth)
+        .with_frontegg(&frontegg_auth)
         .with_metrics_registry(metrics_registry)
         .start()
         .await;
@@ -1671,7 +1671,7 @@ async fn test_auth_admin_non_superuser() {
 
     let server = test_util::TestHarness::default()
         .with_tls(server_cert, server_key)
-        .with_frontegg_auth(&frontegg_auth)
+        .with_frontegg(&frontegg_auth)
         .with_metrics_registry(metrics_registry)
         .start()
         .await;
@@ -1816,7 +1816,7 @@ async fn test_auth_admin_superuser() {
 
     let server = test_util::TestHarness::default()
         .with_tls(server_cert, server_key)
-        .with_frontegg_auth(&frontegg_auth)
+        .with_frontegg(&frontegg_auth)
         .with_metrics_registry(metrics_registry)
         .start()
         .await;
@@ -1959,7 +1959,7 @@ async fn test_auth_admin_superuser_revoked() {
 
     let server = test_util::TestHarness::default()
         .with_tls(server_cert, server_key)
-        .with_frontegg_auth(&frontegg_auth)
+        .with_frontegg(&frontegg_auth)
         .with_metrics_registry(metrics_registry)
         .start()
         .await;
@@ -2091,7 +2091,7 @@ async fn test_auth_deduplication() {
 
     let server = test_util::TestHarness::default()
         .with_tls(server_cert, server_key)
-        .with_frontegg_auth(&frontegg_auth)
+        .with_frontegg(&frontegg_auth)
         .with_metrics_registry(metrics_registry)
         .start()
         .await;
@@ -2267,7 +2267,7 @@ async fn test_refresh_task_metrics() {
             "mz_frontegg_auth=debug,info".to_string(),
         )
         .with_tls(server_cert, server_key)
-        .with_frontegg_auth(&frontegg_auth)
+        .with_frontegg(&frontegg_auth)
         .with_metrics_registry(metrics_registry)
         .start()
         .await;
@@ -2428,7 +2428,7 @@ async fn test_superuser_can_alter_cluster() {
 
     let server = test_util::TestHarness::default()
         .with_tls(server_cert, server_key)
-        .with_frontegg_auth(&frontegg_auth)
+        .with_frontegg(&frontegg_auth)
         .with_metrics_registry(metrics_registry)
         .start()
         .await;
@@ -2555,7 +2555,7 @@ async fn test_refresh_dropped_session() {
             "mz_frontegg_auth=debug,info".to_string(),
         )
         .with_tls(server_cert, server_key)
-        .with_frontegg_auth(&frontegg_auth)
+        .with_frontegg(&frontegg_auth)
         .with_metrics_registry(metrics_registry)
         .start()
         .await;
@@ -2732,7 +2732,7 @@ async fn test_refresh_dropped_session_lru() {
             "mz_frontegg_auth=debug,info".to_string(),
         )
         .with_tls(server_cert, server_key)
-        .with_frontegg_auth(&frontegg_auth)
+        .with_frontegg(&frontegg_auth)
         .with_metrics_registry(metrics_registry)
         .start()
         .await;
@@ -2922,7 +2922,7 @@ async fn test_transient_auth_failures() {
             "mz_frontegg_auth=debug,info".to_string(),
         )
         .with_tls(server_cert, server_key)
-        .with_frontegg_auth(&frontegg_auth)
+        .with_frontegg(&frontegg_auth)
         .with_metrics_registry(metrics_registry)
         .start()
         .await;
@@ -3046,7 +3046,7 @@ async fn test_transient_auth_failure_on_refresh() {
             "mz_frontegg_auth=debug,info".to_string(),
         )
         .with_tls(server_cert, server_key)
-        .with_frontegg_auth(&frontegg_auth)
+        .with_frontegg(&frontegg_auth)
         .with_metrics_registry(metrics_registry)
         .start()
         .await;
@@ -3112,19 +3112,13 @@ async fn test_self_managed_auth() {
             "mz_frontegg_auth=debug,info".to_string(),
         )
         .with_system_parameter_default("enable_self_managed_auth".to_string(), "true".to_string())
-        .with_password_auth(Password("mz_system_password".to_owned()))
+        .with_self_hosted_auth(true)
         .with_metrics_registry(metrics_registry)
         .start()
         .await;
 
-    let mz_system_client = server
-        .connect()
-        .no_tls()
-        .user("mz_system")
-        .password("mz_system_password")
-        .await
-        .unwrap();
-    mz_system_client
+    let pg_client = server.connect().no_tls().internal().await.unwrap();
+    pg_client
         .execute("CREATE ROLE foo WITH LOGIN PASSWORD 'bar'", &[])
         .await
         .unwrap();
@@ -3167,19 +3161,13 @@ async fn test_self_managed_auth_superuser() {
             "mz_frontegg_auth=debug,info".to_string(),
         )
         .with_system_parameter_default("enable_self_managed_auth".to_string(), "true".to_string())
-        .with_password_auth(Password("password".to_owned()))
+        .with_self_hosted_auth(true)
         .with_metrics_registry(metrics_registry)
         .start()
         .await;
 
-    let mz_system_client = server
-        .connect()
-        .no_tls()
-        .user("mz_system")
-        .password("password")
-        .await
-        .unwrap();
-    mz_system_client
+    let pg_client = server.connect().no_tls().internal().await.unwrap();
+    pg_client
         .execute("CREATE ROLE foo WITH LOGIN SUPERUSER PASSWORD 'bar'", &[])
         .await
         .unwrap();
@@ -3222,19 +3210,13 @@ async fn test_self_managed_auth_alter_role() {
             "mz_frontegg_auth=debug,info".to_string(),
         )
         .with_system_parameter_default("enable_self_managed_auth".to_string(), "true".to_string())
-        .with_password_auth(Password("mz_system_password".to_owned()))
+        .with_self_hosted_auth(true)
         .with_metrics_registry(metrics_registry)
         .start()
         .await;
 
-    let mz_system_client = server
-        .connect()
-        .no_tls()
-        .user("mz_system")
-        .password("mz_system_password")
-        .await
-        .unwrap();
-    mz_system_client
+    let pg_client = server.connect().no_tls().internal().await.unwrap();
+    pg_client
         .execute("CREATE ROLE foo WITH LOGIN PASSWORD 'bar'", &[])
         .await
         .unwrap();
@@ -3267,7 +3249,7 @@ async fn test_self_managed_auth_alter_role() {
         );
     }
 
-    mz_system_client
+    pg_client
         .execute("ALTER ROLE foo WITH SUPERUSER PASSWORD 'baz'", &[])
         .await
         .unwrap();
@@ -3300,7 +3282,7 @@ async fn test_self_managed_auth_alter_role() {
         );
     }
 
-    mz_system_client
+    pg_client
         .execute("ALTER ROLE foo WITH SUPERUSER PASSWORD NULL", &[])
         .await
         .unwrap();
@@ -3309,7 +3291,7 @@ async fn test_self_managed_auth_alter_role() {
         assert_err!(server.connect().no_tls().user("foo").password("baz").await);
     }
 
-    mz_system_client
+    pg_client
         .execute("ALTER ROLE foo WITH SUPERUSER PASSWORD 'baz'", &[])
         .await
         .unwrap();
@@ -3341,7 +3323,7 @@ async fn test_self_managed_auth_alter_role() {
             true
         );
     }
-    mz_system_client
+    pg_client
         .execute("ALTER ROLE foo WITH NOLOGIN", &[])
         .await
         .unwrap();

@@ -13,7 +13,6 @@
 //! on port 6876.
 
 use std::ffi::CStr;
-use std::fs::File;
 use std::net::{IpAddr, SocketAddr};
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -35,7 +34,6 @@ use mz_adapter_types::bootstrap_builtin_cluster_config::{
     PROBE_CLUSTER_DEFAULT_REPLICATION_FACTOR, SUPPORT_CLUSTER_DEFAULT_REPLICATION_FACTOR,
     SYSTEM_CLUSTER_DEFAULT_REPLICATION_FACTOR,
 };
-use mz_auth::password::Password;
 use mz_aws_secrets_controller::AwsSecretsController;
 use mz_build_info::BuildInfo;
 use mz_catalog::builtin::{
@@ -45,7 +43,7 @@ use mz_catalog::builtin::{
 use mz_catalog::config::ClusterReplicaSizeMap;
 use mz_cloud_resources::{AwsExternalIdPrefix, CloudResourceController};
 use mz_controller::ControllerConfig;
-use mz_frontegg_auth::{Authenticator as FronteggAuthenticator, FronteggCliArgs};
+use mz_frontegg_auth::{Authenticator, FronteggCliArgs};
 use mz_license_keys::{ExpirationBehavior, ValidatedLicenseKey};
 use mz_orchestrator::Orchestrator;
 use mz_orchestrator_kubernetes::{
@@ -81,7 +79,7 @@ use tracing_opentelemetry::OpenTelemetrySpanExt;
 use url::Url;
 
 use crate::environmentd::sys;
-use crate::{BUILD_INFO, CatalogConfig, ListenerConfig, Listeners, ListenersConfig};
+use crate::{BUILD_INFO, CatalogConfig, Listeners, ListenersConfig};
 
 static VERSION: LazyLock<String> = LazyLock::new(|| BUILD_INFO.human_version(None));
 static LONG_VERSION: LazyLock<String> = LazyLock::new(|| {
@@ -110,22 +108,59 @@ pub struct Args {
     all_features: bool,
 
     // === Connection options. ===
-    /// Path to a file containing the json-formatted configuration of our
-    /// metrics, HTTP, and sql listeners.
+    /// The address on which to listen for untrusted SQL connections.
+    ///
+    /// Connections on this address are subject to encryption, authentication,
+    /// and authorization as specified by the `--tls-mode` and `--frontegg-auth`
+    /// options.
     #[clap(
         long,
-        env = "LISTENERS_CONFIG_PATH",
-        value_name = "PATH",
+        env = "SQL_LISTEN_ADDR",
+        value_name = "HOST:PORT",
+        default_value = "127.0.0.1:6875",
         action = ArgAction::Set,
     )]
-    listeners_config_path: PathBuf,
-    /// Password for the mz_system user.
+    sql_listen_addr: SocketAddr,
+    /// The address on which to listen for untrusted HTTP connections.
+    ///
+    /// Connections on this address are subject to encryption, authentication,
+    /// and authorization as specified by the `--tls-mode` and `--frontegg-auth`
+    /// options.
     #[clap(
         long,
-        env = "EXTERNAL_LOGIN_PASSWORD_MZ_SYSTEM",
+        env = "HTTP_LISTEN_ADDR",
+        value_name = "HOST:PORT",
+        default_value = "127.0.0.1:6876",
         action = ArgAction::Set,
     )]
-    external_login_password_mz_system: Option<Password>,
+    http_listen_addr: SocketAddr,
+    /// The address on which to listen for trusted SQL connections.
+    ///
+    /// Connections to this address are not subject to encryption, authentication,
+    /// or access control. Care should be taken to not expose this address to the
+    /// public internet
+    /// or other unauthorized parties.
+    #[clap(
+        long,
+        value_name = "HOST:PORT",
+        env = "INTERNAL_SQL_LISTEN_ADDR",
+        default_value = "127.0.0.1:6877",
+        action = ArgAction::Set,
+    )]
+    internal_sql_listen_addr: SocketAddr,
+    /// The address on which to listen for trusted HTTP connections.
+    ///
+    /// Connections to this address are not subject to encryption, authentication,
+    /// or access control. Care should be taken to not expose the listen address
+    /// to the public internet or other unauthorized parties.
+    #[clap(
+        long,
+        value_name = "HOST:PORT",
+        env = "INTERNAL_HTTP_LISTEN_ADDR",
+        default_value = "127.0.0.1:6878",
+        action = ArgAction::Set,
+    )]
+    internal_http_listen_addr: SocketAddr,
     /// The address on which to listen for Persist PubSub connections.
     ///
     /// Connections to this address are not subject to encryption, authentication,
@@ -175,6 +210,14 @@ pub struct Args {
     /// Frontegg arguments.
     #[clap(flatten)]
     frontegg: FronteggCliArgs,
+    // TODO(auth): we probably want to consolidate all these auth options
+    // into something cleaner.
+    /// Self hosted auth
+    #[clap(long, env = "ENABLE_SELF_HOSTED_AUTH")]
+    enable_self_hosted_auth: bool,
+    /// Self hosted auth over internal port
+    #[clap(long, env = "ENABLE_SELF_HOSTED_AUTH_INTERNAL")]
+    enable_self_hosted_auth_internal: bool,
     // === Orchestrator options. ===
     /// The service orchestrator implementation to use.
     #[structopt(long, value_enum, env = "ORCHESTRATOR")]
@@ -759,29 +802,21 @@ fn run(mut args: Args) -> Result<(), anyhow::Error> {
 
     // Configure connections.
     let tls = args.tls.into_config()?;
-    let frontegg = FronteggAuthenticator::from_args(args.frontegg, &metrics_registry)?;
-    let listeners_config: ListenersConfig = {
-        let f = File::open(args.listeners_config_path)?;
-        serde_json::from_reader(f)?
-    };
+    let frontegg = Authenticator::from_args(args.frontegg, &metrics_registry)?;
 
     // Configure CORS.
     let allowed_origins = if !args.cors_allowed_origin.is_empty() {
         args.cors_allowed_origin
     } else {
-        let mut allowed_origins = Vec::with_capacity(listeners_config.http.len() * 6);
-        for (_, listener) in &listeners_config.http {
-            let port = listener.addr().port();
-            allowed_origins.extend([
-                HeaderValue::from_str(&format!("http://localhost:{}", port)).unwrap(),
-                HeaderValue::from_str(&format!("http://127.0.0.1:{}", port)).unwrap(),
-                HeaderValue::from_str(&format!("http://[::1]:{}", port)).unwrap(),
-                HeaderValue::from_str(&format!("https://localhost:{}", port)).unwrap(),
-                HeaderValue::from_str(&format!("https://127.0.0.1:{}", port)).unwrap(),
-                HeaderValue::from_str(&format!("https://[::1]:{}", port)).unwrap(),
-            ])
-        }
-        allowed_origins
+        let port = args.http_listen_addr.port();
+        vec![
+            HeaderValue::from_str(&format!("http://localhost:{}", port)).unwrap(),
+            HeaderValue::from_str(&format!("http://127.0.0.1:{}", port)).unwrap(),
+            HeaderValue::from_str(&format!("http://[::1]:{}", port)).unwrap(),
+            HeaderValue::from_str(&format!("https://localhost:{}", port)).unwrap(),
+            HeaderValue::from_str(&format!("https://127.0.0.1:{}", port)).unwrap(),
+            HeaderValue::from_str(&format!("https://[::1]:{}", port)).unwrap(),
+        ]
     };
     let cors_allowed_origin = mz_http_util::build_cors_allowed_origin(&allowed_origins);
 
@@ -1066,7 +1101,13 @@ fn run(mut args: Args) -> Result<(), anyhow::Error> {
     let serve_start = Instant::now();
     info!("startup: envd init: serving beginning");
     let server = runtime.block_on(async {
-        let listeners = Listeners::bind(listeners_config).await?;
+        let listeners = Listeners::bind(ListenersConfig {
+            sql_listen_addr: args.sql_listen_addr,
+            http_listen_addr: args.http_listen_addr,
+            internal_sql_listen_addr: args.internal_sql_listen_addr,
+            internal_http_listen_addr: args.internal_http_listen_addr,
+        })
+        .await?;
         let catalog_config = CatalogConfig {
             persist_clients,
             metrics: Arc::new(mz_catalog::durable::Metrics::new(&metrics_registry)),
@@ -1079,12 +1120,13 @@ fn run(mut args: Args) -> Result<(), anyhow::Error> {
                 // Connection options.
                 tls,
                 tls_reload_certs: mz_server_core::default_cert_reload_ticker(),
-                external_login_password_mz_system: args.external_login_password_mz_system,
                 frontegg,
                 cors_allowed_origin,
                 egress_addresses: args.announce_egress_address,
                 http_host_name: args.http_host_name,
                 internal_console_redirect_url: args.internal_console_redirect_url,
+                self_hosted_auth: args.enable_self_hosted_auth,
+                self_hosted_auth_internal: args.enable_self_hosted_auth_internal,
                 // Controller options.
                 controller,
                 secrets_controller,
@@ -1173,13 +1215,16 @@ fn run(mut args: Args) -> Result<(), anyhow::Error> {
         "environmentd {} listening...",
         BUILD_INFO.human_version(args.helm_chart_version)
     );
-    for (name, handle) in &server.sql_listener_handles {
-        println!("{} SQL address: {}", name, handle.local_addr);
-    }
-    for (name, handle) in &server.http_listener_handles {
-        println!("{} HTTP address: {}", name, handle.local_addr);
-    }
-    // TODO move persist pubsub address like metrics address?
+    println!(" SQL address: {}", server.sql_local_addr());
+    println!(" HTTP address: {}", server.http_local_addr());
+    println!(
+        " Internal SQL address: {}",
+        server.internal_sql_local_addr()
+    );
+    println!(
+        " Internal HTTP address: {}",
+        server.internal_http_local_addr()
+    );
     println!(
         " Internal Persist PubSub address: {}",
         args.internal_persist_pubsub_listen_addr

@@ -12,7 +12,7 @@ use std::collections::BTreeMap;
 use std::net::{IpAddr, SocketAddr};
 use std::pin::pin;
 use std::sync::Arc;
-use std::time::{Duration, SystemTime};
+use std::time::Duration;
 
 use anyhow::anyhow;
 use async_trait::async_trait;
@@ -52,15 +52,11 @@ use serde::{Deserialize, Serialize};
 use tokio::{select, time};
 use tokio_postgres::error::SqlState;
 use tokio_stream::wrappers::UnboundedReceiverStream;
-use tower_sessions::Session as TowerSession;
 use tracing::{debug, error, info};
 use tungstenite::protocol::frame::coding::CloseCode;
 
 use crate::http::prometheus::PrometheusSqlQuery;
-use crate::http::{
-    AuthError, AuthedClient, AuthedUser, MAX_REQUEST_SIZE, SESSION_DURATION, TowerSessionData,
-    WsState, init_ws,
-};
+use crate::http::{AuthedClient, AuthedUser, MAX_REQUEST_SIZE, WsState, init_ws};
 
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
@@ -283,46 +279,12 @@ pub async fn handle_sql_ws(
     existing_user: Option<Extension<AuthedUser>>,
     ws: WebSocketUpgrade,
     ConnectInfo(addr): ConnectInfo<SocketAddr>,
-    tower_session: Option<Extension<TowerSession>>,
 ) -> impl IntoResponse {
     // An upstream middleware may have already provided the user for us
-    let user = match (existing_user, tower_session) {
-        (Some(Extension(user)), _) => Some(user),
-        (None, Some(session)) => {
-            if let Ok(Some(session_data)) = session.get::<TowerSessionData>("data").await {
-                // Check session expiration
-                if session_data
-                    .last_activity
-                    .elapsed()
-                    .unwrap_or(Duration::MAX)
-                    > SESSION_DURATION
-                {
-                    let _ = session.delete().await;
-                    return Err(AuthError::SessionExpired);
-                }
-                // Update last activity
-                let mut updated_data = session_data.clone();
-                updated_data.last_activity = SystemTime::now();
-                session
-                    .insert("data", &updated_data)
-                    .await
-                    .map_err(|_| AuthError::FailedToUpdateSession)?;
-                // User is authenticated via session
-                Some(AuthedUser {
-                    name: session_data.username,
-                    external_metadata_rx: None,
-                })
-            } else {
-                None
-            }
-        }
-        _ => None,
-    };
-
+    let user = existing_user.and_then(|Extension(user)| Some(user));
     let addr = Box::new(addr.ip());
-    Ok(ws
-        .max_message_size(MAX_REQUEST_SIZE)
-        .on_upgrade(|ws| async move { run_ws(&state, user, *addr, ws).await }))
+    ws.max_message_size(MAX_REQUEST_SIZE)
+        .on_upgrade(|ws| async move { run_ws(&state, user, *addr, ws).await })
 }
 
 #[derive(Serialize, Deserialize, Debug, PartialEq, Eq)]

@@ -25,8 +25,6 @@ spec:
               materialize.cloud/app: environmentd
           namespaceSelector: {}
       ports:
-        # environmentd external http
-        - port: 6876
         # environmentd internal http
         - port: 6878
 {{- end }}
