@@ -10,8 +10,8 @@ menu:
 
 In operational data systems, the performance and responsiveness of queries depend not only on how fast a query runs, but also on how current the underlying data is. This page introduces three foundational concepts for evaluating and understanding system responsiveness in Materialize:
 
-* **Freshness**: how quickly new data becomes queryable,
-* **Query latency**: how long it takes to execute a query,
+* **Freshness**: the time it takes for a change in an upstream system to become visible in the results of a query.
+* **Query latency**: the time it takes to compute and return the result of a SQL query once the data is available in the system.
 * **Reaction time**: the total delay from data change to observable result.
 
 Together, these concepts form the basis for understanding how Materialize enables timely, accurate insights across operational and analytical workloads.
@@ -20,13 +20,13 @@ Together, these concepts form the basis for understanding how Materialize enable
 
 ## Freshness
 
-**Freshness** measures the time it takes for a change in an upstream systemnto become visible in the results of a query. In other words, it captures the end-to-end latency between when data is produced and when it becomes part of the transformed, queryable state.
+**Freshness** measures the time it takes for a change in an upstream system to become visible in the results of a query. In other words, it captures the end-to-end latency between when data is produced and when it becomes part of the transformed, queryable state.
 
-### System Comparisons
-
-* **OLTP databases**: Freshness is effectively zero. Queries run directly against the source of truth, and changes are visible immediately.
-* **Data warehouses**: Freshness is often poor due to scheduled batch ingestion. Changes may take minutes to hours to propagate.
-* **Materialize**: Freshness is low, typically within milliseconds to a few seconds, due to continuous ingestion and incremental view maintenance.
+| System         | Performance  | Explination                |
+| -------------- | ------------ | -------------------------- |
+| OLTP Database  | Excellent    | Freshness is effectively zero. Queries run directly against the source of truth, and changes are visible immediately. |
+| Data Warehouse | Poor (stale) | Freshness is often poor due to scheduled batch ingestion. Changes may take minutes to hours to propagate.                  |
+| Materialize    | Excellent    | Freshness is low, typically within milliseconds to a few seconds, due to continuous ingestion and incremental view maintenance.                  |
 
 ---
 
@@ -34,11 +34,11 @@ Together, these concepts form the basis for understanding how Materialize enable
 
 **Query latency** refers to the time it takes to compute and return the result of a SQL query once the data is available in the system. It is affected by the system's execution model, indexing strategies, and the complexity of the query itself.
 
-### System Comparisons
-
-* **OLTP databases**: Optimized for transactional workloads and point lookups. Complex analytical queries involving joins, filters, and aggregations tend to exhibit poor query latency.
-* **Data warehouses**: Designed for analytical processing, and generally provide excellent query latency even for complex queries over large datasets.
-* **Materialize**: Maintains low query latency by incrementally updating and indexing the results of complex views. Queries that read from indexed views typically return results in milliseconds.
+| System         | Performance  | Explination                |
+| -------------- | ------------ | -------------------------- |
+| OLTP Database  | Poor (slow)  | Optimized for transactional workloads and point lookups. Complex analytical queries involving joins, filters, and aggregations tend to exhibit poor query latency. |
+| Data Warehouse | Excellent | Designed for analytical processing, and generally provide excellent query latency even for complex queries over large datasets. |
+| Materialize    | Excellent    | Maintains low query latency by incrementally updating and indexing the results of complex views. Queries that read from indexed views typically return results in milliseconds. |
 
 ---
 
@@ -52,23 +52,44 @@ reaction time = freshness + query latency
 
 This is the most comprehensive measure of system responsiveness and is particularly relevant for applications that depend on timely and accurate decision-making.
 
-### System Comparisons
-
-| System         | Freshness    | Query Latency              | Reaction Time |
-| -------------- | ------------ | -------------------------- | ------------- |
-| OLTP Database  | Excellent    | Poor (for complex queries) | High          |
-| Data Warehouse | Poor (stale) | Excellent                  | High          |
-| Materialize    | Excellent    | Excellent                  | Low           |
+| System         | Reaction Time |
+| -------------- | ------------- |
+| OLTP Database  | High          |
+| Data Warehouse | High          |
+| Materialize    | Low           |
 
 ---
 
-## Illustrative Example
+That's excellent feedback. Breaking each system down into two separate bullet points—one for **data freshness** and one for **query latency/computation**—makes the comparison more scannable and explicit. Here's a revised version of the example section with that structure:
 
-Consider an e-commerce application that needs to monitor order fulfillment rates in real time:
+---
 
-* In an **OLTP system**, the order and fulfillment data is current, but computing the fulfillment rate requires aggregations and joins over multiple tables, which can result in high query latency. The data is fresh, but the response is slow.
-* In a **data warehouse**, fulfillment rates can be computed quickly, but the underlying data may be hours old. The query is fast, but the result is stale.
-* With **Materialize**, updates from the operational database stream in continuously, and the fulfillment rate is computed incrementally and kept up to date. Queries over this derived state return promptly and reflect recent changes.
+## Example
+
+Consider an e-commerce application that needs to monitor order fulfillment rates in real time. This requires both timely access to new orders and the ability to compute aggregates across multiple related tables.
+
+Let’s compare how this plays out across three systems:
+
+---
+
+### OLTP System
+
+* **Data freshness:** The order and fulfillment data is always current, as queries run directly against the transactional system.
+* **Query latency:** Computing fulfillment rates involves joins and aggregations over multiple tables, which transactional databases are not optimized for. Queries may be slow or resource-intensive.
+
+---
+
+### Data Warehouse
+
+* **Data freshness:** The data is typically ingested in batches, so it may lag behind by minutes or hours. Freshness depends on the ETL schedule.
+* **Query latency:** Analytical queries, including aggregations and joins, are well-optimized and typically return quickly.
+
+---
+
+### Materialize
+
+* **Data freshness:** Updates stream in continuously from the operational database. Materialize incrementally maintains the fulfillment rate as new data arrives.
+* **Query latency:** Because the computation is performed ahead of time and maintained in an indexed view, queries return promptly—even for complex logic.
 
 ---
 

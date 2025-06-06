@@ -80,7 +80,7 @@ offending row is deleted.
 {{< private-preview />}}
 
 Materialized views in Materialize are incrementally maintained by default, meaning their results are automatically updated as soon as new data arrives.
-This guarantees that queries reflect the most up-to-date information available, with minimal delay and that results are always as [fresh](/concepts/reaction-time) as the input data itself.
+This guarantees that queries returns the most up-to-date information available with minimal delay and that results are always as [fresh](/concepts/reaction-time) as the input data itself.
 
 In most cases, this default behavior is ideal.
 However, in some very specific scenarios like reporting over slow changing historical data, it may be acceptable to relax freshness in order to reduce compute usage.
@@ -88,7 +88,7 @@ For these cases, Materialize supports refresh strategies, which allow you to con
 
 {{< note >}}
 
-The use of refresh strategies is discouraged unless you have a clear and measurable need to reduce maintenance costs on stale or archival data. For most use cases the default incremental maintenance model a better experience.
+The use of refresh strategies is discouraged unless you have a clear and measurable need to reduce maintenance costs on stale or archival data. For most use cases, the default incremental maintenance model provides a better experience.
 
 {{< /note >}}
 
@@ -96,10 +96,6 @@ The use of refresh strategies is discouraged unless you have a clear and measura
 [//]: # "TODO(morsapaes) We should add a SQL pattern that walks through a
 full-blown example of how to implement the cold, warm, hot path with refresh
 strategies."
-
-#### Refresh on commit
-
-<p style="font-size:14px"><b>Syntax:</b> <code>REFRESH ON COMMIT</code></p>
 
 #### Refresh on commit
 
@@ -117,42 +113,6 @@ Materialized views in Materialize are incrementally updated by default. This mea
 With `REFRESH ON COMMIT`, Materialize provides low-latency, up-to-date results without requiring user-defined schedules or manual refreshes. This model is ideal for most workloads, including streaming analytics, live dashboards, customer-facing queries, and applications that rely on timely, accurate results.
 
 Only in rare cases—such as batch-oriented processing or reporting over slowly changing historical datasets—might it make sense to trade off freshness for potential cost savings. In such cases, consider defining an explicit [refresh strategy](#refresh-strategies) to control when recomputation occurs.
-
-**Example**
-
-To implement this pattern, you can maintain the recent data in a regular
-materialized view that refreshes on commit, create a second materialized view
-for data that goes over a specific threshold (e.g., one week) using a
-[refresh every](#refresh-every) strategy with the desired freshness interval
-(e.g., one day), and then union these views to get the entire result set.
-
-```mzsql
-CREATE MATERIALIZED VIEW mv AS
-SELECT ...
--- Keep data newer than one week
-WHERE mz_now() <= event_ts + INTERVAL '1' WEEK;
-```
-
-```mzsql
-CREATE MATERIALIZED VIEW mv_refresh_every
-WITH (
-  -- Refresh at creation, so the view is populated ahead of
-  -- the first user-specified refresh time
-  REFRESH AT CREATION,
-  -- Refresh every day at midnight UTC
-  REFRESH EVERY '1 day' ALIGNED TO '2024-04-17 00:00:00'
-) AS
-SELECT ...
--- Keep data older than one week
-WHERE mz_now() > event_ts + INTERVAL '1' WEEK
-```
-
-```mzsql
-CREATE VIEW v_mv_results AS
-SELECT * FROM mv
-UNION ALL
-SELECT * FROM mv_refresh_every;
-```
 
 #### Refresh at
 
