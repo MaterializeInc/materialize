@@ -221,10 +221,10 @@ http_archive(
 # Version of clang/llvm we use.
 #
 # We build our own clang toolchain, see the <https://github.com/MaterializeInc/toolchains> repository.
-LLVM_VERSION = "19.1.6"
+LLVM_VERSION = "20.1.6"
 
 # We have a few variants of our clang toolchain, either improving how it's built or adding new tools.
-LLVM_VERSION_SUFFIX = "2"
+LLVM_VERSION_SUFFIX = "1"
 
 # Version of the "toolchains_llvm" rule set, _not_ the version of clang/llvm.
 #
@@ -251,10 +251,10 @@ llvm_toolchain(
     name = "llvm_toolchain",
     llvm_version = LLVM_VERSION,
     sha256 = {
-        "darwin-aarch64": "204a05a12aaa7c59791aea7c70f9c3e4c71e8a414002ae5026faaf4da0e21ef1",
-        "darwin-x86_64": "3990b08cedea77d1c72fc3ba37bde2b79493bc4214a9fa3b5bc9560338b9741a",
-        "linux-aarch64": "d5cb31841299c00e72e26a3dc1db7bd980d65e058b952c93a8f5304d1f17c325",
-        "linux-x86_64": "d0dbc6cecb7798cf5c22eb07413a0773615edfdf24d832f0096e13e88105d51b",
+        "darwin-aarch64": "02fb0842f75ec34f3df2162c27d01773bd122cf27e01e9e051bb56f9edec66f1",
+        "darwin-x86_64": "4b382146c4483cf68b730df3329a975505205dc73dc86cfe9f3bacad06e22d49",
+        "linux-aarch64": "46af59ce8c53338d90b72c401b5560d44bbb02df118f0f0daf08bf897a05f1a9",
+        "linux-x86_64": "acf8c45aaa3f012d1f140893b5760daafd5965635941a4999c68d2d04a8aae4f",
     },
     sysroot = {
         "darwin-aarch64": "@sysroot_darwin_universal//:sysroot",
@@ -335,7 +335,7 @@ rules_rust_dependencies()
 # Fetch and register the relevant Rust toolchains. We use a custom macro that
 # depends on `rules_rust` but cuts down on bloat from their defaults.
 
-RUST_VERSION = "1.86.0"
+RUST_VERSION = "1.87.0"
 
 RUST_NIGHTLY_VERSION = "nightly/2025-04-02"
 
@@ -349,11 +349,11 @@ rust_toolchains(
     {
         "aarch64-apple-darwin": {
             "stable": {
-                "cargo": "707781ebdbee7ac3622acb32d6757cf9c08dab2c2f49b6f22978f0571e3682e1",
-                "clippy": "40ab3c3cd20f946f3fc79f121d5fec8c1e1a0f3e2f21308e21c752c2152b2a80",
-                "llvm-tools": "ac5c07d387302b8bec2a4abb88ca23dfa2d55982558918e451258b388ba9a864",
-                "rust-std": "04f3b73e5bcbd5dfabed96726c0b5ba22c9e5fec6952932e01e3b89f0798f7d9",
-                "rustc": "2fd62ce8a9d0c58e92a248820d5a22a0277bdc5efd200ce731cc87e9816ec5e2",
+                "cargo": "2ca1a3985075bc8fa1638a8a7eb04905af417e3c4833604d52e012f186a4c56d",
+                "clippy": "1b15eeccb24141ab14f1aebbd7bdd33012dd6f2bbf43d947f2e0939800df42b8",
+                "llvm-tools": "cdeb364a8b4781452ec96572467b9eed81d4211cd35940b9f7f397a114af7cd2",
+                "rust-std": "6140cd97ec645291fa93ae227eb112a5a30e9b9757565d395fc93b57b30d8a1a",
+                "rustc": "bdf07b74624a35f41b6d4455062231136528ca2bc1ee2b516868ae013e281d30",
             },
             "nightly": {
                 "cargo": "0e8376dc79c840063a8cdeeff0f53e255fb91ec4ead2ca5109a5ec9c3f13cf54",
@@ -365,11 +365,11 @@ rust_toolchains(
         },
         "aarch64-unknown-linux-gnu": {
             "stable": {
-                "cargo": "73e3e8a96b044de32fc242129fef9a4d332f4a0fe7265eff4272d3f3d9abde93",
-                "clippy": "0c938032791951d5fce10d53ec35e12fba3e341b9b2cfd94bf6b6ce9582d2257",
-                "llvm-tools": "462fdcbe9d2bc048d8cf9bf6d3b7fe168471ed39500d70111c874e6f32fff4b4",
-                "rust-std": "aa0c2aff7bb69fb970e34d194830a3e9692b1299731b33228dee5f730d42e94e",
-                "rustc": "113e4123cb4a3903d72dbf44db91938e7f2c37f3e73b04d10359145e9e395eeb",
+                "cargo": "ee961f7e7ea9ea48d6d50269abfbba65ecb68ef95ffeb73cef2fc1aa73b75d06",
+                "clippy": "1cdf15a797a796a4513743d2b0d1bde54275509761cf8bfcc869c9a8d0210bb7",
+                "llvm-tools": "c723b7b1d7df57b3a175fa442454db1f764f2233d5bf8a69116e0777471e2709",
+                "rust-std": "cbbe24a9830f07d564813d629594dd9b8893ee8db2f3a02d67b4747d695cd91b",
+                "rustc": "4523e003a77db00da419685e1429315ebfc1fec8b2ab5ceaad90971e9be96b49",
             },
             "nightly": {
                 "cargo": "8f0a8b12effea97fd1930747dbd70857225a5465037844bb39ed9d17e01abfdd",
@@ -381,11 +381,11 @@ rust_toolchains(
         },
         "x86_64-apple-darwin": {
             "stable": {
-                "cargo": "85560e557f81b329407a8143281fa309e6a9d01a8104de6742081a2771f49df1",
-                "clippy": "e38499209dd7da03990cdbbf4b7abebc084e4b0191b7252be238a17f96b87c42",
-                "llvm-tools": "98e0408a0dc18bd9ba394ef40980775ab54e9b138dddd5d2141d2f0634676010",
-                "rust-std": "e4c344cbb7d6e7088941a153fd48d57cc22041905b38552e7c7dd97f5bf68259",
-                "rustc": "ff50df0bc0d1ab517746b2bf742afd13cb543cdeebb1b847f7c069cb6b3feb19",
+                "cargo": "cf12c42e436e3960ee55a19b90b575bb1f4ce73f2820871e53c21b13ceacb3b0",
+                "clippy": "47b62e75295f8a327063c5ad11c0a2d32f590f85920da7211396d267b29f5cac",
+                "llvm-tools": "aaa8fe29e325a7a7ae792b1bcf601411b89ca76dfef44e1147c23c4c18305b70",
+                "rust-std": "1595f38b5bffce3554c6603252157e2017a20f14ef16520da3bea22a9a6527a6",
+                "rustc": "0823c207629121f95087fe366ddfb0d96016cc3b50f7d1ea9e9f2d478ff391d5",
             },
             "nightly": {
                 "cargo": "d7c58810f851cb34110d5434a4f66f8bf444e896eb951e9cb744a7bef815c9a1",
@@ -397,11 +397,11 @@ rust_toolchains(
         },
         "x86_64-unknown-linux-gnu": {
             "stable": {
-                "cargo": "9dccd8fb635701a173fa74335d91837a264c0a1d7009d5f047851de217ddeeab",
-                "clippy": "9a34aefbbdf8b5bc6dbaad8555cf12577d9ef60b167211515feadbd16afdcb28",
-                "llvm-tools": "fbcc69f9c140a5fe0621c280628372233644818eb1826baadb303acdbc6e6395",
-                "rust-std": "348e96d4d5261895d6014c428b54b40fd4c210f453b889b4180e19916c6b594e",
-                "rustc": "c2c7f2b80ddd43834e53c25840ba68491671ac52af25f076059011677d922083",
+                "cargo": "f1fb338417952ea7ee7b5c4150f05b7f2d9d47d92499cd7a8859d4c78823f710",
+                "clippy": "56cc2ce095cf6fc2b680ed2527b7bf6fbe45819edb4a7258483f521f5d37c971",
+                "llvm-tools": "52cbd5a6ebedf55cc27751b1014ef636ff245f030b7fe3549bfb1660823df3da",
+                "rust-std": "f4dff0fe501a8c8e1d3fed5213096e18a8c4fefbbdfd78457a3638a449f99fdd",
+                "rustc": "923bcb7be267579a79ae9a11126739619f180a6544bcc1c0c3a752c1aecd6e7a",
             },
             "nightly": {
                 "cargo": "74dc885d2f1374ca9999c094ab411b3d0abc9616ad2ea39c5dab429f0321e15d",
@@ -436,10 +436,10 @@ rust_bindgen_dependencies()
 bindgen_toolchains(
     "{0}-{1}".format(LLVM_VERSION, LLVM_VERSION_SUFFIX),
     {
-        "darwin_aarch64": "sha256-8u9xQ+3q4SO810j6wue+lM6njkucOyChRQRTk246tSE=",
-        "darwin_x86_64": "sha256-rf03+b1xaxYpQiSkYTDazfr1jcfn5O7dTtd1rBRog7s=",
-        "linux_aarch64": "sha256-e8Wj26Md/qLdw23Eq0FxbVsTNQa/4jKmrfeUEJ078iE=",
-        "linux_x86_64": "sha256-Dgtp3+gN+Iq0POdhkl8ny/tKdV8hG/ZrtLOLYPgc/4A=",
+        "darwin_aarch64": "sha256-QxhHE2vvRcbe1ppF9ZonKWa4Y6AwnP8cVsCO0xLkZvU=",
+        "darwin_x86_64": "sha256-PcZ4VlQ8vxZP3mffLXj3vxh7VImDfIUvFdqR9z+uFNc=",
+        "linux_aarch64": "sha256-W8GBaB49peXQunPziisAWm8K6xLF/WcOijOHXlHe6Bk=",
+        "linux_x86_64": "sha256-8TXbBywRoUcZ/Aulm2Ps+FOU2RBKWA32AQDKCPoOyUw=",
     },
 )
 
