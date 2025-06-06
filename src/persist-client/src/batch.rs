@@ -503,10 +503,6 @@ where
     inline_desc: Description<T>,
     inclusive_upper: Antichain<Reverse<T>>,
 
-    // Reusable buffers for encoding data. Should be cleared after use!
-    pub(crate) key_buf: Vec<u8>,
-    pub(crate) val_buf: Vec<u8>,
-
     records_builder: PartBuilder<K, K::Schema, V, V::Schema>,
     pub(crate) builder: BatchBuilderInternal<K, V, T, D>,
 }
@@ -529,8 +525,6 @@ where
         Self {
             inline_desc,
             inclusive_upper: Antichain::new(),
-            key_buf: vec![],
-            val_buf: vec![],
             records_builder,
             builder,
         }
@@ -621,8 +615,6 @@ where
         } else {
             Added::Record
         };
-        self.key_buf.clear();
-        self.val_buf.clear();
         Ok(added)
     }
 }
