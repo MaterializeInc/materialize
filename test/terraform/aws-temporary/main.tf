@@ -173,6 +173,7 @@ module "operator" {
   s3_bucket_arn                  = module.storage.bucket_arn
   use_self_signed_cluster_issuer = false
 
+  # Use local chart
   use_local_chart       = true
   helm_chart            = "materialize-operator-v25.2.0-beta.1.tgz"
   operator_version      = var.operator_version
