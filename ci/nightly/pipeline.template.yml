@@ -1232,7 +1232,7 @@ steps:
       plugins:
         - ./ci/plugins/mzcompose:
             composition: cloud-canary
-      branches: "main v*.*"
+      branches: "main v*.* *orchestratord*"
 
     - id: mz-e2e
       label: "Mz E2E Test"

@@ -1381,11 +1381,6 @@ fn create_environmentd_statefulset_object(
         }
     } else {
         args.extend([
-            format!("--sql-listen-addr=0.0.0.0:{}", config.environmentd_sql_port),
-            format!(
-                "--http-listen-addr=0.0.0.0:{}",
-                config.environmentd_http_port
-            ),
             format!(
                 "--internal-sql-listen-addr=0.0.0.0:{}",
                 config.environmentd_internal_sql_port
