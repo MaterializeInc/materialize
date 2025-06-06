@@ -762,8 +762,9 @@ impl ControllerSourceStatistics {
 
     /// Incorporate updates from the given [SourceStatisticsUpdate] into
     /// ourselves
-    pub fn incorporate(&mut self, other: SourceStatisticsUpdate) {
+    pub fn incorporate(&mut self, is_from_first_replica: bool, update: SourceStatisticsUpdate) {
         let ControllerSourceStatistics {
+            id: _,
             messages_received,
             bytes_received,
             updates_staged,
@@ -776,22 +777,35 @@ impl ControllerSourceStatistics {
             snapshot_committed,
             offset_known,
             offset_committed,
-            ..
         } = self;
 
-        messages_received.incorporate(other.messages_received, "messages_received");
-        bytes_received.incorporate(other.bytes_received, "bytes_received");
-        updates_staged.incorporate(other.updates_staged, "updates_staged");
-        updates_committed.incorporate(other.updates_committed, "updates_committed");
-        records_indexed.incorporate(other.records_indexed, "records_indexed");
-        bytes_indexed.incorporate(other.bytes_indexed, "bytes_indexed");
-        rehydration_latency_ms.incorporate(other.rehydration_latency_ms, "rehydration_latency_ms");
-        snapshot_records_known.incorporate(other.snapshot_records_known, "snapshot_records_known");
+        if is_from_first_replica {
+            // All replicas receive all messages and try and stage them for
+            // writing to persist.
+            //
+            // We would be double/triple/etc. counting if we incorporated all
+            // these updates.
+            messages_received.incorporate(update.messages_received, "messages_received");
+            bytes_received.incorporate(update.bytes_received, "bytes_received");
+            updates_staged.incorporate(update.updates_staged, "updates_staged");
+        }
+
+        // Only one replica will manage to commit a batch of updates, so
+        // incorporate this metric from all replicas to capture the one that
+        // actually managed to commit.
+        updates_committed.incorporate(update.updates_committed, "updates_committed");
+
+        // We always incorporate Gauge metrics from all replicas, because these
+        // should be roughly the same.
+        records_indexed.incorporate(update.records_indexed, "records_indexed");
+        bytes_indexed.incorporate(update.bytes_indexed, "bytes_indexed");
+        rehydration_latency_ms.incorporate(update.rehydration_latency_ms, "rehydration_latency_ms");
+        snapshot_records_known.incorporate(update.snapshot_records_known, "snapshot_records_known");
         snapshot_records_staged
-            .incorporate(other.snapshot_records_staged, "snapshot_records_staged");
-        snapshot_committed.incorporate(other.snapshot_committed, "snapshot_committed");
-        offset_known.incorporate(other.offset_known, "offset_known");
-        offset_committed.incorporate(other.offset_committed, "offset_committed");
+            .incorporate(update.snapshot_records_staged, "snapshot_records_staged");
+        snapshot_committed.incorporate(update.snapshot_committed, "snapshot_committed");
+        offset_known.incorporate(update.offset_known, "offset_known");
+        offset_committed.incorporate(update.offset_committed, "offset_committed");
     }
 }
 
