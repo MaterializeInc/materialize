@@ -153,6 +153,45 @@ so it is executed.""",
         pipeline.setdefault("env", {})["CI_SANITIZER"] = args.sanitizer.value
 
         def visit(step: dict[str, Any]) -> None:
+            if step.get("sanitizer") == "skip":
+                step["skip"] = True
+
+            # Nightly and Rust build required for sanitizers
+            if step.get("id") in ("rust-build-x86_64", "rust-build-aarch64"):
+                step["command"] = (
+                    "bin/ci-builder run nightly bin/pyactivate -m ci.test.build"
+                )
+
+        for step in pipeline["steps"]:
+            visit(step)
+            # Groups can't be nested, so handle them explicitly here instead of recursing
+            if "group" in step:
+                for inner_step in step.get("steps", []):
+                    visit(inner_step)
+
+    else:
+
+        def visit(step: dict[str, Any]) -> None:
+            if step.get("sanitizer") == "only":
+                step["skip"] = True
+
+            # Skip the Cargo driven builds if the Sanitizers aren't specified since everything
+            # relies on the Bazel builds.
+            if step.get("id") in ("rust-build-x86_64", "rust-build-aarch64"):
+                step["skip"] = True
+
+        for step in pipeline["steps"]:
+            visit(step)
+            if "group" in step:
+                for inner_step in step.get("steps", []):
+                    visit(inner_step)
+
+    if (
+        args.sanitizer != Sanitizer.none
+        or os.getenv("CI_SYSTEM_PARAMETERS", "") == "random"
+    ):
+
+        def visit(step: dict[str, Any]) -> None:
             # ASan runs are slower ...
             if "timeout_in_minutes" in step:
                 step["timeout_in_minutes"] *= 10
@@ -196,34 +235,9 @@ so it is executed.""",
                     agent = "hetzner-x86-64-dedi-48cpu-192gb"
                 step["agents"] = {"queue": agent}
 
-            if step.get("sanitizer") == "skip":
-                step["skip"] = True
-
-            # Nightly and Rust build required for sanitizers
-            if step.get("id") in ("rust-build-x86_64", "rust-build-aarch64"):
-                step["command"] = (
-                    "bin/ci-builder run nightly bin/pyactivate -m ci.test.build"
-                )
-
         for step in pipeline["steps"]:
             visit(step)
             # Groups can't be nested, so handle them explicitly here instead of recursing
-            if "group" in step:
-                for inner_step in step.get("steps", []):
-                    visit(inner_step)
-    else:
-
-        def visit(step: dict[str, Any]) -> None:
-            if step.get("sanitizer") == "only":
-                step["skip"] = True
-
-            # Skip the Cargo driven builds if the Sanitizers aren't specified since everything
-            # relies on the Bazel builds.
-            if step.get("id") in ("rust-build-x86_64", "rust-build-aarch64"):
-                step["skip"] = True
-
-        for step in pipeline["steps"]:
-            visit(step)
             if "group" in step:
                 for inner_step in step.get("steps", []):
                     visit(inner_step)

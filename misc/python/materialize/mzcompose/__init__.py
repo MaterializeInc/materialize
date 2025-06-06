@@ -15,8 +15,11 @@ documentation][user-docs].
 [user-docs]: https://github.com/MaterializeInc/materialize/blob/main/doc/developer/mzbuild.md
 """
 
+import os
+import random
 import subprocess
 from collections.abc import Iterable
+from dataclasses import dataclass
 from typing import Any, Literal, TypeVar
 
 import psycopg
@@ -55,40 +58,20 @@ ADDITIONAL_BENCHMARKING_SYSTEM_PARAMETERS = {
 }
 
 
-def get_default_system_parameters(
-    version: MzVersion | None = None,
+def get_minimal_system_parameters(
+    version: MzVersion,
     zero_downtime: bool = False,
-    force_source_table_syntax: bool = False,
 ) -> dict[str, str]:
-    """For upgrade tests we only want parameters set when all environmentd /
-    clusterd processes have reached a specific version (or higher)
-    """
-
-    if not version:
-        version = MzVersion.parse_cargo()
+    """Settings we need in order to have tests run at all, but otherwise stay
+    with the defaults: not changing performance or increasing coverage."""
 
     return {
         # -----
         # Unsafe functions
         "unsafe_enable_unsafe_functions": "true",
         # -----
-        # To reduce CRDB load as we are struggling with it in CI (values based on load test environment):
-        "persist_next_listen_batch_retryer_clamp": "16s",
-        "persist_next_listen_batch_retryer_initial_backoff": "100ms",
-        "persist_next_listen_batch_retryer_fixed_sleep": "1200ms",
-        # -----
-        # Persist internals changes: advance coverage
-        "persist_enable_arrow_lgalloc_noncc_sizes": "true",
-        "persist_enable_s3_lgalloc_noncc_sizes": "true",
-        # -----
         # Others (ordered by name)
         "allow_real_time_recency": "true",
-        "cluster_always_use_disk": "true",
-        "compute_dataflow_max_inflight_bytes": "134217728",  # 128 MiB
-        "compute_hydration_concurrency": "2",
-        "compute_replica_expiration_offset": "3d",
-        "compute_apply_column_demands": "true",
-        "disk_cluster_replicas_default": "true",
         "enable_0dt_deployment": "true" if zero_downtime else "false",
         "enable_0dt_deployment_panic_after_timeout": "true",
         "enable_0dt_deployment_sources": (
@@ -119,61 +102,272 @@ def get_default_system_parameters(
         "enable_refresh_every_mvs": "true",
         "enable_cluster_schedule_refresh": "true",
         "enable_statement_lifecycle_logging": "true",
-        "unsafe_enable_table_keys": "true",
         "enable_variadic_left_join_lowering": "true",
         "enable_worker_core_affinity": "true",
-        "kafka_default_metadata_fetch_interval": "1s",
-        "mysql_offset_known_interval": "1s",
-        "force_source_table_syntax": "true" if force_source_table_syntax else "false",
         "ore_overflowing_behavior": "panic",
-        "persist_batch_columnar_format": (
-            "structured" if version > MzVersion.parse_mz("v0.135.0-dev") else "both_v2"
-        ),
-        "persist_batch_delete_enabled": "true",
-        "persist_batch_structured_order": "true",
-        "persist_batch_builder_structured": "true",
-        "persist_batch_structured_key_lower_len": "256",
-        "persist_batch_max_run_len": "4",
-        "persist_catalog_force_compaction_fuel": "1024",
-        "persist_catalog_force_compaction_wait": "1s",
-        "persist_encoding_enable_dictionary": "true",
-        "persist_fast_path_limit": "1000",
-        "persist_fast_path_order": "true",
-        "persist_gc_use_active_gc": (
-            "true" if version > MzVersion.parse_mz("v0.143.0-dev") else "false"
-        ),
-        "persist_inline_writes_single_max_bytes": "4096",
-        "persist_inline_writes_total_max_bytes": "1048576",
-        "persist_pubsub_client_enabled": "true",
-        "persist_pubsub_push_diff_enabled": "true",
-        "persist_record_compactions": "true",
-        "persist_record_schema_id": (
-            "true" if version > MzVersion.parse_mz("v0.127.0-dev") else "false"
-        ),
-        "persist_rollup_use_active_rollup": (
-            "true" if version > MzVersion.parse_mz("v0.143.0-dev") else "false"
-        ),
-        # 16 MiB - large enough to avoid a big perf hit, small enough to get more coverage...
-        "persist_blob_target_size": "16777216",
-        # 5 times the default part size - 4 is the bare minimum.
-        "persist_compaction_memory_bound_bytes": "83886080",
         "persist_stats_audit_percent": "100",
-        "persist_use_critical_since_catalog": "true",
-        "persist_use_critical_since_snapshot": "false" if zero_downtime else "true",
-        "persist_use_critical_since_source": "false" if zero_downtime else "true",
-        "persist_part_decode_format": "arrow",
-        "persist_blob_cache_scale_with_threads": "true",
-        "pg_offset_known_interval": "1s",
-        "statement_logging_default_sample_rate": "0.01",
-        "statement_logging_max_sample_rate": "0.01",
-        "storage_reclock_to_latest": "true",
-        "storage_source_decode_fuel": "100000",
-        "storage_statistics_collection_interval": "1000",
-        "storage_statistics_interval": "2000",
-        "storage_use_continual_feedback_upsert": "true",
+        "unsafe_enable_table_keys": "true",
         "with_0dt_deployment_max_wait": "1800s",
         # End of list (ordered by name)
     }
+
+
+@dataclass
+class VariableSystemParameter:
+    key: str
+    default: str
+    values: list[str]
+
+
+# TODO: The linter should check this too
+def get_variable_system_parameters(
+    version: MzVersion,
+    zero_downtime: bool,
+    force_source_table_syntax: bool,
+) -> list[VariableSystemParameter]:
+    return [
+        # -----
+        # To reduce CRDB load as we are struggling with it in CI (values based on load test environment):
+        VariableSystemParameter(
+            "persist_next_listen_batch_retryer_clamp",
+            "16s",
+            ["10ms", "100ms", "1s", "10s", "100s"],
+        ),
+        VariableSystemParameter(
+            "persist_next_listen_batch_retryer_initial_backoff",
+            "100ms",
+            ["10ms", "100ms", "1s", "10s"],
+        ),
+        VariableSystemParameter(
+            "persist_next_listen_batch_retryer_fixed_sleep",
+            "1200ms",
+            ["10ms", "100ms", "1s", "10s"],
+        ),
+        # -----
+        # Persist internals changes, advance coverage
+        VariableSystemParameter(
+            "persist_enable_arrow_lgalloc_noncc_sizes", "true", ["true", "false"]
+        ),
+        VariableSystemParameter(
+            "persist_enable_s3_lgalloc_noncc_sizes", "true", ["true", "false"]
+        ),
+        # -----
+        # Others (ordered by name),
+        VariableSystemParameter("cluster_always_use_disk", "true", ["true", "false"]),
+        VariableSystemParameter(
+            "compute_dataflow_max_inflight_bytes",
+            "134217728",
+            ["1048576", "4194304", "16777216", "67108864", "1073741824"],
+        ),  # 128 MiB
+        VariableSystemParameter(
+            "compute_hydration_concurrency", "2", ["1", "2", "4", "8"]
+        ),
+        VariableSystemParameter(
+            "compute_replica_expiration_offset", "3d", ["3d", "10d", "1000d"]
+        ),
+        VariableSystemParameter(
+            "compute_apply_column_demands", "true", ["true", "false"]
+        ),
+        VariableSystemParameter(
+            "disk_cluster_replicas_default", "true", ["true", "false"]
+        ),
+        VariableSystemParameter(
+            "kafka_default_metadata_fetch_interval",
+            "1s",
+            ["10ms", "100ms", "1s", "10s"],
+        ),
+        VariableSystemParameter(
+            "mysql_offset_known_interval", "1s", ["10ms", "100ms", "1s", "10s"]
+        ),
+        VariableSystemParameter(
+            "force_source_table_syntax",
+            "true" if force_source_table_syntax else "false",
+            ["true", "false"] if force_source_table_syntax else ["false"],
+        ),
+        VariableSystemParameter(
+            "persist_batch_columnar_format",
+            "structured" if version > MzVersion.parse_mz("v0.135.0-dev") else "both_v2",
+            ["row", "both_v2", "both", "structured"],
+        ),
+        VariableSystemParameter(
+            "persist_batch_delete_enabled", "true", ["true", "false"]
+        ),
+        VariableSystemParameter(
+            "persist_batch_structured_order", "true", ["true", "false"]
+        ),
+        VariableSystemParameter(
+            "persist_batch_builder_structured", "true", ["true", "false"]
+        ),
+        VariableSystemParameter(
+            "persist_batch_structured_key_lower_len",
+            "256",
+            ["0", "1", "512", "1000", "50000"],
+        ),
+        VariableSystemParameter(
+            "persist_batch_max_run_len", "4", ["2", "3", "4", "16", "1000"]
+        ),
+        VariableSystemParameter(
+            "persist_catalog_force_compaction_fuel",
+            "1024",
+            ["16", "64", "256", "1024", "4096", "16384"],
+        ),
+        VariableSystemParameter(
+            "persist_catalog_force_compaction_wait",
+            "1s",
+            ["10ms", "100ms", "1s", "10s"],
+        ),
+        VariableSystemParameter(
+            "persist_encoding_enable_dictionary", "true", ["true", "false"]
+        ),
+        VariableSystemParameter(
+            "persist_fast_path_limit",
+            "1000",
+            ["1", "10", "100", "1000", "10000", "100000"],
+        ),
+        VariableSystemParameter("persist_fast_path_order", "true", ["true", "false"]),
+        VariableSystemParameter(
+            "persist_gc_use_active_gc",
+            ("true" if version > MzVersion.parse_mz("v0.143.0-dev") else "false"),
+            (
+                ["true", "false"]
+                if version > MzVersion.parse_mz("v0.127.0-dev")
+                else ["false"]
+            ),
+        ),
+        VariableSystemParameter(
+            "persist_inline_writes_single_max_bytes",
+            "4096",
+            ["16", "64", "256", "1024", "4096", "16384"],
+        ),
+        VariableSystemParameter(
+            "persist_inline_writes_total_max_bytes",
+            "1048576",
+            ["16384", "65536", "262144", "1048576", "4194304", "16777216"],
+        ),
+        VariableSystemParameter(
+            "persist_pubsub_client_enabled", "true", ["true", "false"]
+        ),
+        VariableSystemParameter(
+            "persist_pubsub_push_diff_enabled", "true", ["true", "false"]
+        ),
+        VariableSystemParameter(
+            "persist_record_compactions", "true", ["true", "false"]
+        ),
+        VariableSystemParameter(
+            "persist_record_schema_id",
+            ("true" if version > MzVersion.parse_mz("v0.127.0-dev") else "false"),
+            (
+                ["true", "false"]
+                if version > MzVersion.parse_mz("v0.127.0-dev")
+                else ["false"]
+            ),
+        ),
+        VariableSystemParameter(
+            "persist_rollup_use_active_rollup",
+            ("true" if version > MzVersion.parse_mz("v0.143.0-dev") else "false"),
+            (
+                ["true", "false"]
+                if version > MzVersion.parse_mz("v0.127.0-dev")
+                else ["false"]
+            ),
+        ),
+        # 16 MiB - large enough to avoid a big perf hit, small enough to get more coverage...
+        VariableSystemParameter(
+            "persist_blob_target_size",
+            "16777216",
+            ["4096", "1048576", "16777216", "134217728"],
+        ),
+        # 5 times the default part size - 4 is the bare minimum.
+        VariableSystemParameter(
+            "persist_compaction_memory_bound_bytes",
+            "83886080",
+            ["67108864", "134217728", "536870912", "1073741824"],
+        ),
+        VariableSystemParameter(
+            "persist_use_critical_since_catalog", "true", ["true", "false"]
+        ),
+        VariableSystemParameter(
+            "persist_use_critical_since_snapshot",
+            "false" if zero_downtime else "true",
+            ["false"] if zero_downtime else ["true", "false"],
+        ),
+        VariableSystemParameter(
+            "persist_use_critical_since_source",
+            "false" if zero_downtime else "true",
+            ["false"] if zero_downtime else ["true", "false"],
+        ),
+        VariableSystemParameter(
+            "persist_part_decode_format", "arrow", ["arrow", "row_with_validate"]
+        ),
+        VariableSystemParameter(
+            "persist_blob_cache_scale_with_threads", "true", ["true", "false"]
+        ),
+        VariableSystemParameter(
+            "pg_offset_known_interval", "1s", ["10ms", "100ms", "1s", "10s"]
+        ),
+        VariableSystemParameter(
+            "statement_logging_default_sample_rate", "0.01", ["0", "0.01", "0.1"]
+        ),
+        VariableSystemParameter(
+            "statement_logging_max_sample_rate", "0.01", ["0", "0.01", "0.1"]
+        ),
+        VariableSystemParameter("storage_reclock_to_latest", "true", ["true", "false"]),
+        VariableSystemParameter(
+            "storage_source_decode_fuel",
+            "100000",
+            ["10", "100", "1000", "10000", "100000", "1000000"],
+        ),
+        VariableSystemParameter(
+            "storage_statistics_collection_interval",
+            "1000",
+            ["1", "10", "100", "1000", "10000"],
+        ),
+        VariableSystemParameter(
+            "storage_statistics_interval", "2000", ["10", "100", "1000", "10000"]
+        ),
+        VariableSystemParameter(
+            "storage_use_continual_feedback_upsert", "true", ["true", "false"]
+        ),
+        # End of list (ordered by name)
+    ]
+
+
+def get_default_system_parameters(
+    version: MzVersion | None = None,
+    zero_downtime: bool = False,
+    force_source_table_syntax: bool = False,
+) -> dict[str, str]:
+    """For upgrade tests we only want parameters set when all environmentd /
+    clusterd processes have reached a specific version (or higher)
+    """
+
+    if not version:
+        version = MzVersion.parse_cargo()
+
+    params = get_minimal_system_parameters(version, zero_downtime)
+
+    system_param_setting = os.getenv("CI_SYSTEM_PARAMETERS", "")
+    variable_params = get_variable_system_parameters(
+        version, zero_downtime, force_source_table_syntax
+    )
+
+    if system_param_setting == "":
+        for param in variable_params:
+            params[param.key] = param.default
+    elif system_param_setting == "random":
+        seed = os.getenv("CI_SYSTEM_PARAMETERS_SEED", os.getenv("BUILDKITE_JOB_ID", 1))
+        rng = random.Random(seed)
+        for param in variable_params:
+            params[param.key] = rng.choice(param.values)
+        print(f"System parameters with seed CI_SYSTEM_PARAMETERS_SEED={seed}: {params}")
+    elif system_param_setting == "minimal":
+        pass
+    else:
+        raise ValueError(
+            f"Unknown value for CI_SYSTEM_PARAMETERS: {system_param_setting}"
+        )
+
+    return params
 
 
 DEFAULT_CRDB_ENVIRONMENT = [
