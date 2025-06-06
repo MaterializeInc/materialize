@@ -453,7 +453,6 @@ where
     ///
     /// The clunky multi-level Result is to enable more obvious error handling
     /// in the caller. See <http://sled.rs/errors.html> for details.
-
     /// We no longer validate that every batch covers the entire range between
     /// the expected and new uppers, as we wish to allow combining batches that
     /// cover different subsets of that range, including subsets of that range
