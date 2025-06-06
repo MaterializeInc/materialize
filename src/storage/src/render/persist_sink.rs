@@ -1000,7 +1000,7 @@ where
         let mut batch_description_frontier = Antichain::from_elem(Timestamp::minimum());
         let mut batches_frontier = Antichain::from_elem(Timestamp::minimum());
 
-        loop {
+        'consumer: loop {
             // Drain both input channels as of resumption and advance frontier.
             tokio::select! {
                 Some(event) = descriptions_input.next() => {
@@ -1034,7 +1034,7 @@ where
                                 );
                             }
 
-                            continue;
+                            continue 'consumer;
                         }
                         Event::Progress(frontier) => {
                             batch_description_frontier = frontier;
@@ -1057,7 +1057,7 @@ where
                                 });
                                 batches.batch_metrics += &batch.metrics;
                             }
-                            continue;
+                            continue 'consumer;
                         }
                         Event::Progress(frontier) => {
                             batches_frontier = frontier;
@@ -1112,7 +1112,7 @@ where
                 (Some(first), Some(last)) => (first.0.clone(), last.1.clone()),
                 (None, None) => {
                     upper_cap_set.downgrade(current_upper.borrow().iter());
-                    continue;
+                    continue 'consumer;
                 }
                 // SAFETY(ptravers): if first exists so must last.
                 (Some(_), None) | (None, Some(_)) => unreachable!("the list of batches must have a first and last if it is non empty."),
@@ -1131,7 +1131,13 @@ where
 
             let mut to_append = batches.iter_mut().map(|b| &mut b.batch).collect::<Vec<_>>();
 
-            loop {
+            // NB(ptravers): We loop here to handle competing writers to the same shard.
+            // We handle failure to write in three situations:
+            //  1. the lower of the batch is greater than the current upper of shard - persist_sink exits with an error.
+            //  2. the upper of the shard is less than the upper of the batch and greater
+            //     than the lower of the batch - we retry with a truncated batch.
+            //  3. all other cases - we exit the retry loop after updating the current_upper to the upper reported in the error.
+            'retry: loop {
                 let result = {
                     let maybe_err = if *read_only_rx.borrow() {
 
@@ -1339,8 +1345,9 @@ where
                                 anyhow::bail!("collection concurrently modified. Ingestion dataflow will be restarted");
                             }
 
-                            // retry with remaining batches.
-                            continue;
+                            // continue retry with a truncated batch of batches as the upper of the batch is greater than
+                            // the shard upper.
+                            continue 'retry;
                         } else {
                             // Best-effort attempt to delete unneeded batches.
                             future::join_all(batches.into_iter().map(|b| b.batch.delete())).await;
@@ -1359,7 +1366,9 @@ where
                                 anyhow::bail!("collection concurrently modified. Ingestion dataflow will be restarted");
                             }
 
-                            break;
+                            // exit retry loop as we have nothing left to write since the upper of the shard
+                            // is greater than the upper of the batches.
+                            break 'retry;
                         }
                     }
                 }
