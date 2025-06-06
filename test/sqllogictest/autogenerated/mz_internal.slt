@@ -564,10 +564,11 @@ query ITT
 SELECT position, name, type FROM objects WHERE schema = 'mz_internal' AND object = 'mz_sink_statistics' ORDER BY position
 ----
 1  id  text
-2  messages_staged  uint8
-3  messages_committed  uint8
-4  bytes_staged  uint8
-5  bytes_committed  uint8
+2  replica_id  text
+3  messages_staged  uint8
+4  messages_committed  uint8
+5  bytes_staged  uint8
+6  bytes_committed  uint8
 
 query ITT
 SELECT position, name, type FROM objects WHERE schema = 'mz_internal' AND object = 'mz_sink_statuses' ORDER BY position
@@ -594,18 +595,19 @@ query ITT
 SELECT position, name, type FROM objects WHERE schema = 'mz_internal' AND object = 'mz_source_statistics' ORDER BY position
 ----
 1  id  text
-2  messages_received  uint8
-3  bytes_received  uint8
-4  updates_staged  uint8
-5  updates_committed  uint8
-6  records_indexed  uint8
-7  bytes_indexed  uint8
-8  rehydration_latency  interval
-9  snapshot_records_known  uint8
-10  snapshot_records_staged  uint8
-11  snapshot_committed  boolean
-12  offset_known  uint8
-13  offset_committed  uint8
+2  replica_id  text
+3  messages_received  uint8
+4  bytes_received  uint8
+5  updates_staged  uint8
+6  updates_committed  uint8
+7  records_indexed  uint8
+8  bytes_indexed  uint8
+9  rehydration_latency  interval
+10  snapshot_records_known  uint8
+11  snapshot_records_staged  uint8
+12  snapshot_committed  boolean
+13  offset_known  uint8
+14  offset_committed  uint8
 
 query ITT
 SELECT position, name, type FROM objects WHERE schema = 'mz_internal' AND object = 'mz_source_statuses' ORDER BY position

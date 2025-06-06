@@ -124,8 +124,23 @@ INSERT INTO alt VALUES ('one');
 > SELECT COUNT(*) > 0 FROM alt;
 true
 
-# Ensure snapshot stats are overridden when we add a new table
-> SELECT
+# Ensure snapshot stats are overridden when we add a new table.
+
+# We need to filter by "latest" replica because statistics for the old replica
+# might persist a while after it is dropped.
+>[version>=14800] SELECT
+    s.name,
+    SUM(u.snapshot_records_known),
+    SUM(u.snapshot_records_staged)
+  FROM mz_sources s
+  JOIN mz_internal.mz_source_statistics_raw u ON s.id = u.id
+  WHERE s.name IN ('mz_source')
+    AND u.replica_id = (SELECT MAX(u.replica_id) FROM mz_internal.mz_source_statistics_raw u JOIN mz_sources s ON s.id = u.id WHERE s.name IN ('mz_source'))
+  GROUP BY s.name
+  ORDER BY s.name
+mz_source 1 1
+
+>[version<14800] SELECT
     s.name,
     SUM(u.snapshot_records_known),
     SUM(u.snapshot_records_staged)
