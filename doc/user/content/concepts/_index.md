@@ -16,8 +16,9 @@ aliases:
 
 The pages in this section introduces some of the key concepts in Materialize:
 
-Component                                | Use
+Concept                                  | Description
 -----------------------------------------|-----
+[Reaction Time](/concepts/reaction-time) | Measures how quickly a system can reflect a change in input data and return an up-to-date query result. Defined as the sum of data freshness and query latency.
 [Clusters](/concepts/clusters/)          | Clusters are isolated pools of compute resources for sources, sinks, indexes, materialized views, and ad-hoc queries.
 [Sources](/concepts/sources/)            | Sources describe an external system you want Materialize to read data from.
 [Views](/concepts/views/)    | Views represent a named query that you want to save for repeated execution. You can use **indexed views** and **materialized views** to incrementally maintain the results of views.
