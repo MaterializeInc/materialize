@@ -134,6 +134,7 @@ pub mod v1alpha1 {
         pub backend_secret_name: String,
         // How to authenticate with Materialize. Valid options are Password and None.
         // If set to Password, the backend secret must contain external_login_password_mz_system.
+        #[serde(default)]
         pub authenticator_kind: AuthenticatorKind,
 
         // The value used by environmentd (via the --environment-id flag) to
@@ -513,6 +514,7 @@ mod tests {
         };
 
         // true cases
+        //
         assert!(mz.meets_minimum_version(&Version::parse("0.34.0").unwrap()));
         mz.spec.environmentd_image_ref = "materialize/environmentd:v0.34.0".to_owned();
         assert!(mz.meets_minimum_version(&Version::parse("0.34.0").unwrap()));
@@ -526,6 +528,11 @@ mod tests {
         assert!(mz.meets_minimum_version(&Version::parse("0.34.0").unwrap()));
         mz.spec.environmentd_image_ref = "materialize/environmentd:v0.asdf.0".to_owned();
         assert!(mz.meets_minimum_version(&Version::parse("0.34.0").unwrap()));
+
+        mz.spec.environmentd_image_ref =
+            "materialize/environmentd:v0.146.0-dev.0--pr.g5a05a9e4ba873be8adaa528644aaae6e4c7cd29b"
+                .to_owned();
+        assert!(mz.meets_minimum_version(&Version::parse("0.146.0-dev.0").unwrap()));
 
         // false cases
         mz.spec.environmentd_image_ref = "materialize/environmentd:v0.34.0-dev".to_owned();

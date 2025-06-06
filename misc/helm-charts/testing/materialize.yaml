@@ -29,6 +29,7 @@ metadata:
   namespace: materialize-environment
 spec:
   environmentdImageRef: materialize/environmentd:v0.147.0-dev.0
+  authenticatorKind: None
   backendSecretName: materialize-backend
   #balancerdExternalCertificateSpec:
   #  dnsNames:
