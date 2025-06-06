@@ -52,9 +52,6 @@ flippers. Specifically, you will:
 - If you are using the Materialize Emulator, open the Materialize Console in
   your browser at [http://localhost:6874](http://localhost:6874).
 
-- If you are running against your own [Self-managed
-  Materialize](/self-managed/), open your deployment's Materialize Console.
-
 ## Step 1. Create a schema
 
 By default, you are using the `quickstart` cluster, working in the
