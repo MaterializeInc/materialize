@@ -3881,7 +3881,7 @@ pub struct ExplainPlanStatement<T: AstInfo> {
 
 impl<T: AstInfo> ExplainPlanStatement<T> {
     pub fn stage(&self) -> ExplainStage {
-        self.stage.unwrap_or(ExplainStage::GlobalPlan)
+        self.stage.unwrap_or(ExplainStage::PhysicalPlan)
     }
 
     pub fn format(&self) -> ExplainFormat {
