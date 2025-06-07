@@ -481,7 +481,7 @@ pub(crate) fn render<G: Scope<Timestamp = GtidPartition>>(
                 *rewind_cap_set = CapabilitySet::new();
 
                 if snapshot_staged < snapshot_total {
-                    error!(%id, "timely-{worker_id} snapshot size {snapshot_total} is somehow
+                    error!(%id, "timely-{worker_id} snapshot size {snapshot_total} is somehow\
                                  bigger than records staged {snapshot_staged}");
                     snapshot_staged = snapshot_total;
                 }
