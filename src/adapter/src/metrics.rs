@@ -45,6 +45,7 @@ pub struct Metrics {
     pub session_startup_table_writes_seconds: HistogramVec,
     pub parse_seconds: HistogramVec,
     pub pgwire_message_processing_seconds: HistogramVec,
+    pub result_rows_first_to_last_byte_seconds: HistogramVec,
 }
 
 impl Metrics {
@@ -192,6 +193,12 @@ impl Metrics {
                 help: "The time it takes to process each of the pgwire message types, measured in the Adapter frontend",
                 var_labels: ["message_type"],
                 buckets: histogram_seconds_buckets(0.000_128, 128.0),
+            )),
+            result_rows_first_to_last_byte_seconds: registry.register(metric!(
+                name: "mz_result_rows_first_to_last_byte_seconds",
+                help: "The time from just before sending the first result row to sending a final response message after having successfully flushed the last result row to the connection. (This can span multiple FETCH statements.) (This is never observed for unbounded SUBSCRIBEs, i.e., which have no last result row.)",
+                var_labels: ["statement_type"],
+                buckets: histogram_seconds_buckets(0.001, 8192.0),
             ))
         }
     }
@@ -234,7 +241,7 @@ pub(crate) fn session_type_label_value(user: &User) -> &'static str {
     }
 }
 
-pub(crate) fn statement_type_label_value<T>(stmt: &Statement<T>) -> &'static str
+pub fn statement_type_label_value<T>(stmt: &Statement<T>) -> &'static str
 where
     T: AstInfo,
 {
