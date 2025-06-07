@@ -84,8 +84,6 @@
 //! Some, particularly `append_batches` could be merged with
 //! the compute version, but that requires some amount of
 //! onerous refactoring that we have chosen to skip for now.
-//!
-// TODO(guswynn): merge at least the `append_batches` operator`
 
 use std::cmp::Ordering;
 use std::collections::BTreeMap;
@@ -102,6 +100,7 @@ use futures::{StreamExt, future};
 use itertools::Itertools;
 use mz_ore::cast::CastFrom;
 use mz_ore::collections::HashMap;
+use mz_ore::vec::VecExt;
 use mz_persist_client::Diagnostics;
 use mz_persist_client::batch::{Batch, BatchBuilder, ProtoBatch};
 use mz_persist_client::cache::PersistClientCache;
@@ -1001,7 +1000,8 @@ where
         let mut batch_description_frontier = Antichain::from_elem(Timestamp::minimum());
         let mut batches_frontier = Antichain::from_elem(Timestamp::minimum());
 
-        loop {
+        'consumer: loop {
+            // Drain both input channels as of resumption and advance frontier.
             tokio::select! {
                 Some(event) = descriptions_input.next() => {
                     match event {
@@ -1034,7 +1034,7 @@ where
                                 );
                             }
 
-                            continue;
+                            continue 'consumer;
                         }
                         Event::Progress(frontier) => {
                             batch_description_frontier = frontier;
@@ -1057,7 +1057,7 @@ where
                                 });
                                 batches.batch_metrics += &batch.metrics;
                             }
-                            continue;
+                            continue 'consumer;
                         }
                         Event::Progress(frontier) => {
                             batches_frontier = frontier;
@@ -1083,57 +1083,61 @@ where
                 .iter()
                 .filter(|(lower, _upper)| !PartialOrder::less_equal(&batches_frontier, lower))
                 .cloned()
+                .sorted_by(|a, b| {
+                    if PartialOrder::less_than(a, b) {
+                        Ordering::Less
+                    } else if PartialOrder::less_than(b, a) {
+                        Ordering::Greater
+                    } else {
+                        Ordering::Equal
+                    }
+                })
                 .collect::<Vec<_>>();
 
             trace!(
                 "persist_sink {collection_id}/{shard_id}: \
-                    append_batches: in_flight: {:?}, \
-                    done: {:?}, \
+                    append_batches: in_flight_descriptions size: {:?}, \
+                    in_flight_batches size: {:?}, \
+                    done size: {:?}, \
                     batch_frontier: {:?}, \
                     batch_description_frontier: {:?}",
-                in_flight_descriptions,
-                done_batches,
+                in_flight_descriptions.len(),
+                in_flight_batches.len(),
+                done_batches.len(),
                 batches_frontier,
                 batch_description_frontier
             );
 
-            // Append batches in order, to ensure that their `lower` and
-            // `upper` line up.
-            done_batches.sort_by(|a, b| {
-                if PartialOrder::less_than(a, b) {
-                    Ordering::Less
-                } else if PartialOrder::less_than(b, a) {
-                    Ordering::Greater
-                } else {
-                    Ordering::Equal
+            let (mut batch_lower, batch_upper) = match (done_batches.first(), done_batches.last()) {
+                (Some(first), Some(last)) => (first.0.clone(), last.1.clone()),
+                (None, None) => {
+                    upper_cap_set.downgrade(current_upper.borrow().iter());
+                    continue 'consumer;
                 }
-            });
+                // SAFETY(ptravers): if first exists so must last.
+                (Some(_), None) | (None, Some(_)) => unreachable!("the list of batches must have a first and last if it is non empty."),
+            };
 
-            // Reverse, as we'll pop batches off the end of the queue.
-            done_batches.reverse();
+            let mut batches: Vec<FinishedBatch> = vec![];
+            let mut batch_metrics: BatchMetrics = BatchMetrics::default();
+            let num_batches = u64::cast_from(done_batches.len());
 
-            while let Some(done_batch_metadata) = done_batches.pop() {
-                in_flight_descriptions.remove(&done_batch_metadata);
+            for batch_metadata in done_batches.drain(..) {
+                in_flight_descriptions.remove(&batch_metadata);
+                let mut batch = in_flight_batches.remove(&batch_metadata).unwrap_or_default();
+                batches.append(&mut batch.finished);
+                batch_metrics.add_assign(&batch.batch_metrics);
+            }
 
-                let batch_set = in_flight_batches
-                    .remove(&done_batch_metadata)
-                    .unwrap_or_default();
+            let mut to_append = batches.iter_mut().map(|b| &mut b.batch).collect::<Vec<_>>();
 
-                let mut batches = batch_set.finished;
-
-                trace!(
-                    "persist_sink {collection_id}/{shard_id}: \
-                        done batch: {:?}, {:?}",
-                    done_batch_metadata,
-                    batches
-                );
-
-                let (batch_lower, batch_upper) = done_batch_metadata;
-
-                let batch_metrics = batch_set.batch_metrics;
-
-                let mut to_append = batches.iter_mut().map(|b| &mut b.batch).collect::<Vec<_>>();
-
+            // NB(ptravers): We loop here to handle competing writers to the same shard.
+            // We handle failure to write in three situations:
+            //  1. the lower of the batch is greater than the current upper of shard - persist_sink exits with an error.
+            //  2. the upper of the shard is less than the upper of the batch and greater
+            //     than the lower of the batch - we retry with a truncated batch.
+            //  3. all other cases - we exit the retry loop after updating the current_upper to the upper reported in the error.
+            'retry: loop {
                 let result = {
                     let maybe_err = if *read_only_rx.borrow() {
 
@@ -1247,7 +1251,6 @@ where
                     }
                 };
 
-
                 // These metrics are independent of whether it was _us_ or
                 // _someone_ that managed to commit a batch that advanced the
                 // upper.
@@ -1273,7 +1276,7 @@ where
                         // successful.
                         source_statistics
                             .inc_updates_committed_by(batch_metrics.inserts + batch_metrics.retractions);
-                        metrics.processed_batches.inc();
+                        metrics.processed_batches.inc_by(num_batches);
                         metrics.row_inserts.inc_by(batch_metrics.inserts);
                         metrics.row_retractions.inc_by(batch_metrics.retractions);
                         metrics.error_inserts.inc_by(batch_metrics.error_inserts);
@@ -1283,9 +1286,10 @@ where
 
                         current_upper.borrow_mut().clone_from(&batch_upper);
                         upper_cap_set.downgrade(current_upper.borrow().iter());
+                        break;
                     }
                     Err(mismatch) => {
-                        // We tried to to a non-contiguous append, that won't work.
+                        // We tried to do a non-contiguous append, that won't work.
                         if PartialOrder::less_than(&mismatch.current, &batch_lower) {
                             // Best-effort attempt to delete unneeded batches.
                             future::join_all(batches.into_iter().map(|b| b.batch.delete())).await;
@@ -1313,52 +1317,58 @@ where
                             // `!(current_upper < lower)` then it holds that
                             // `lower <= current_upper`.
 
-                            // First, construct a new batch description with the
-                            // lower advanced to the current shard upper.
-                            let new_batch_lower = mismatch.current.clone();
-                            let new_done_batch_metadata = (new_batch_lower.clone(), batch_upper.clone());
-
-                            // Re-add the new batch to the list of batches to
-                            // process.
-                            done_batches.push(new_done_batch_metadata.clone());
-
                             // Retain any batches that are still in advance of
                             // the new lower, and delete any batches that are
                             // not.
-                            //
-                            // Temporary measure: this bookkeeping is made
-                            // possible by the fact that each batch only
-                            // contains data at a single timestamp, even though
-                            // it might declare a larger lower or upper. In the
-                            // future, we'll want to use persist's `append` API
-                            // and let persist handle the truncation internally.
-                            let new_batch_set = in_flight_batches.entry(new_done_batch_metadata).or_default();
                             let mut batch_delete_futures = vec![];
-                            for batch in batches {
-                                if new_batch_lower.less_equal(&batch.data_ts) {
-                                    new_batch_set.finished.push(batch);
-                                } else {
-                                    batch_delete_futures.push(batch.batch.delete());
-                                }
+                            for batch in batches.drain_filter_swapping(|batch| !mismatch.current.less_equal(&batch.data_ts)) {
+                                batch_delete_futures.push(batch.batch.delete());
                             }
+
+                            batch_lower = mismatch.current.clone();
+                            to_append = batches.iter_mut()
+                                .map(|batch| &mut batch.batch)
+                                .collect::<Vec<_>>();
 
                             // Best-effort attempt to delete unneeded batches.
                             future::join_all(batch_delete_futures).await;
+
+                            if bail_on_concurrent_modification {
+                                tracing::warn!(
+                                    "persist_sink({}): invalid upper! \
+                                        Tried to append batch ({:?} -> {:?}) but upper \
+                                        is {:?}. This is not a problem, it just means \
+                                        someone else was faster than us. We will try \
+                                        again with a new batch description.",
+                                    collection_id, batch_lower, batch_upper, mismatch.current,
+                                );
+                                anyhow::bail!("collection concurrently modified. Ingestion dataflow will be restarted");
+                            }
+
+                            // continue retry with a truncated batch of batches as the upper of the batch is greater than
+                            // the shard upper.
+                            continue 'retry;
                         } else {
                             // Best-effort attempt to delete unneeded batches.
                             future::join_all(batches.into_iter().map(|b| b.batch.delete())).await;
-                        }
+                            current_upper.borrow_mut().clone_from(&mismatch.current);
+                            upper_cap_set.downgrade(current_upper.borrow().iter());
 
-                        if bail_on_concurrent_modification {
-                            tracing::warn!(
-                                "persist_sink({}): invalid upper! \
-                                    Tried to append batch ({:?} -> {:?}) but upper \
-                                    is {:?}. This is not a problem, it just means \
-                                    someone else was faster than us. We will try \
-                                    again with a new batch description.",
-                                collection_id, batch_lower, batch_upper, mismatch.current,
-                            );
-                            anyhow::bail!("collection concurrently modified. Ingestion dataflow will be restarted");
+                            if bail_on_concurrent_modification {
+                                tracing::warn!(
+                                    "persist_sink({}): invalid upper! \
+                                        Tried to append batch ({:?} -> {:?}) but upper \
+                                        is {:?}. This is not a problem, it just means \
+                                        someone else was faster than us. We will try \
+                                        again with a new batch description.",
+                                    collection_id, batch_lower, batch_upper, mismatch.current,
+                                );
+                                anyhow::bail!("collection concurrently modified. Ingestion dataflow will be restarted");
+                            }
+
+                            // exit retry loop as we have nothing left to write since the upper of the shard
+                            // is greater than the upper of the batches.
+                            break 'retry;
                         }
                     }
                 }
