@@ -52,7 +52,7 @@ pub async fn system_parameter_sync(
         // Fetch current parameter values from the backend
         backend.pull(&mut params).await;
 
-        if !params.enable_launchdarkly() {
+        if !params.enable_launchdarkly() && sync_config.backend_config.is_launch_darkly() {
             if frontend.is_some() {
                 tracing::info!("stopping system parameter frontend");
                 frontend = None;
@@ -62,17 +62,17 @@ pub async fn system_parameter_sync(
 
             // Don't do anything until the next loop.
             continue;
-        } else {
-            if frontend.is_none() {
-                tracing::info!("initializing system parameter frontend");
-                frontend = Some(SystemParameterFrontend::from(&sync_config).await?);
-            }
+        }
 
-            // Pull latest state from frontend and push changes to backend.
-            let frontend = frontend.as_ref().expect("frontend exists");
-            if frontend.pull(&mut params) {
-                backend.push(&mut params).await;
-            }
+        if frontend.is_none() {
+            tracing::info!("initializing system parameter frontend");
+            frontend = Some(SystemParameterFrontend::from(&sync_config).await?);
+        }
+
+        // Pull latest state from frontend and push changes to backend.
+        let frontend = frontend.as_ref().expect("frontend exists");
+        if frontend.pull(&mut params) {
+            backend.push(&mut params).await;
         }
     }
 }

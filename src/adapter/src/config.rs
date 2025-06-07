@@ -8,6 +8,7 @@
 // by the Apache License, Version 2.0.
 
 use std::collections::BTreeMap;
+use std::path::PathBuf;
 
 use mz_build_info::BuildInfo;
 use mz_ore::metric;
@@ -35,14 +36,35 @@ pub struct SystemParameterSyncConfig {
     build_info: &'static BuildInfo,
     /// Parameter sync metrics.
     metrics: Metrics,
-    /// Function to return the current time.
-    now_fn: NowFn,
-    /// The SDK key.
-    ld_sdk_key: String,
-    /// A map from parameter names to LaunchDarkly feature keys
+    ///  /// A map from parameter names to LaunchDarkly feature keys
     /// to use when populating the [SynchronizedParameters]
     /// instance in [SystemParameterFrontend::pull].
-    ld_key_map: BTreeMap<String, String>,
+    key_map: BTreeMap<String, String>,
+    /// Configuration for the parameter backend that we're syncing with.
+    backend_config: SystemParameterSyncClientConfig,
+}
+
+#[derive(Clone, Debug)]
+pub enum SystemParameterSyncClientConfig {
+    File {
+        // Path to a JSON config file that contains system parameters.
+        path: PathBuf,
+    },
+    LaunchDarkly {
+        /// The LaunchDarkly SDK key
+        sdk_key: String,
+        /// Function to return the current time.
+        now_fn: NowFn,
+    },
+}
+
+impl SystemParameterSyncClientConfig {
+    fn is_launch_darkly(&self) -> bool {
+        match &self {
+            Self::LaunchDarkly { .. } => true,
+            _ => false,
+        }
+    }
 }
 
 impl SystemParameterSyncConfig {
@@ -51,17 +73,15 @@ impl SystemParameterSyncConfig {
         env_id: EnvironmentId,
         build_info: &'static BuildInfo,
         registry: &MetricsRegistry,
-        now_fn: NowFn,
-        ld_sdk_key: String,
-        ld_key_map: BTreeMap<String, String>,
+        key_map: BTreeMap<String, String>,
+        backend_config: SystemParameterSyncClientConfig,
     ) -> Self {
         Self {
             env_id,
             build_info,
             metrics: Metrics::register_into(registry),
-            now_fn,
-            ld_sdk_key,
-            ld_key_map,
+            key_map,
+            backend_config,
         }
     }
 }

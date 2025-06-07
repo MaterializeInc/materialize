@@ -8,6 +8,8 @@
 // by the Apache License, Version 2.0.
 
 use std::collections::BTreeMap;
+use std::fs;
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -18,29 +20,45 @@ use mz_build_info::BuildInfo;
 use mz_cloud_provider::CloudProvider;
 use mz_ore::now::NowFn;
 use mz_sql::catalog::EnvironmentId;
+use serde_json::Value as JsonValue;
 use tokio::time;
+use tracing::warn;
 
-use crate::config::{Metrics, SynchronizedParameters, SystemParameterSyncConfig};
+use crate::config::{
+    Metrics, SynchronizedParameters, SystemParameterSyncClientConfig, SystemParameterSyncConfig,
+};
 
 /// A frontend client for pulling [SynchronizedParameters] from LaunchDarkly.
 #[derive(Derivative)]
 #[derivative(Debug)]
 pub struct SystemParameterFrontend {
-    /// An SDK client to mediate interactions with the LaunchDarkly client.
-    #[derivative(Debug = "ignore")]
-    ld_client: ld::Client,
-    /// The context to use when quering LaunchDarkly using the SDK.
-    /// This scopes down queries to a specific key.
-    ld_ctx: ld::Context,
+    /// An SDK client to mediate interactions with the LaunchDarkly and json config file clients.
+    client: SystemParameterFrontendClient,
     /// A map from parameter names to LaunchDarkly feature keys
     /// to use when populating the [SynchronizedParameters]
     /// instance in [SystemParameterFrontend::pull].
-    ld_key_map: BTreeMap<String, String>,
+    key_map: BTreeMap<String, String>,
     /// Frontend metrics.
-    ld_metrics: Metrics,
-    /// Function to return the current time.
-    now_fn: NowFn,
+    metrics: Metrics,
 }
+
+#[derive(Derivative)]
+#[derivative(Debug)]
+pub enum SystemParameterFrontendClient {
+    File {
+        path: PathBuf,
+    },
+    LaunchDarkly {
+        /// An SDK client to mediate interactions with the LaunchDarkly client.
+        #[derivative(Debug = "ignore")]
+        client: ld::Client,
+        /// The context to use when querying LaunchDarkly using the SDK.
+        /// This scopes down queries to a specific key.
+        ctx: ld::Context,
+    },
+}
+
+impl SystemParameterFrontendClient {}
 
 impl SystemParameterFrontend {
     /// Create a new [SystemParameterFrontend] initialize.
@@ -49,13 +67,21 @@ impl SystemParameterFrontend {
     /// [ld::Client::initialized_async] call will be attempted in a loop with an
     /// exponential backoff with power `2s` and max duration `60s`.
     pub async fn from(sync_config: &SystemParameterSyncConfig) -> Result<Self, anyhow::Error> {
-        Ok(Self {
-            ld_client: ld_client(sync_config).await?,
-            ld_ctx: ld_ctx(&sync_config.env_id, sync_config.build_info)?,
-            ld_key_map: sync_config.ld_key_map.clone(),
-            ld_metrics: sync_config.metrics.clone(),
-            now_fn: sync_config.now_fn.clone(),
-        })
+        match &sync_config.backend_config {
+            super::SystemParameterSyncClientConfig::File { path } => Ok(Self {
+                client: SystemParameterFrontendClient::File { path: path.clone() },
+                key_map: sync_config.key_map.clone(),
+                metrics: sync_config.metrics.clone(),
+            }),
+            SystemParameterSyncClientConfig::LaunchDarkly { sdk_key, now_fn } => Ok(Self {
+                client: SystemParameterFrontendClient::LaunchDarkly {
+                    client: ld_client(sdk_key, &sync_config.metrics, now_fn).await?,
+                    ctx: ld_ctx(&sync_config.env_id, sync_config.build_info)?,
+                },
+                metrics: sync_config.metrics.clone(),
+                key_map: sync_config.key_map.clone(),
+            }),
+        }
     }
 
     /// Pull the current values for all [SynchronizedParameters] from the
@@ -63,27 +89,56 @@ impl SystemParameterFrontend {
     /// value was modified.
     pub fn pull(&self, params: &mut SynchronizedParameters) -> bool {
         let mut changed = false;
-
         for param_name in params.synchronized().into_iter() {
             let flag_name = self
-                .ld_key_map
+                .key_map
                 .get(param_name)
                 .map(|flag_name| flag_name.as_str())
                 .unwrap_or(param_name);
 
-            let flag_var =
-                self.ld_client
-                    .variation(&self.ld_ctx, flag_name, params.get(param_name));
-
-            let flag_str = match flag_var {
-                ld::FlagValue::Bool(v) => v.to_string(),
-                ld::FlagValue::Str(v) => v,
-                ld::FlagValue::Number(v) => v.to_string(),
-                ld::FlagValue::Json(v) => v.to_string(),
+            let flag_str = match self.client {
+                SystemParameterFrontendClient::LaunchDarkly {
+                    ref client,
+                    ref ctx,
+                } => {
+                    let flag_var = client.variation(ctx, flag_name, params.get(param_name));
+                    match flag_var {
+                        ld::FlagValue::Bool(v) => v.to_string(),
+                        ld::FlagValue::Str(v) => v,
+                        ld::FlagValue::Number(v) => v.to_string(),
+                        ld::FlagValue::Json(v) => v.to_string(),
+                    }
+                }
+                SystemParameterFrontendClient::File { ref path } => {
+                    let file_contents = fs::read_to_string(path)
+                        .inspect_err(|e| warn!("Could not open system paraemter sync file {}", e))
+                        .unwrap_or_default();
+                    let values: BTreeMap<String, JsonValue> = serde_json::from_str(&file_contents)
+                        .inspect_err(|e| warn!("Could not open system paraemter sync file {:?}", e))
+                        .unwrap_or_default();
+                    values
+                        .get(flag_name)
+                        .and_then(|o| match o {
+                            serde_json::Value::String(v) => Some(v.to_string()),
+                            serde_json::Value::Number(v) => Some(v.to_string()),
+                            serde_json::Value::Bool(v) => Some(v.to_string()),
+                            serde_json::Value::Object(_) => Some(o.to_string()),
+                            serde_json::Value::Array(_) => Some(o.to_string()),
+                            serde_json::Value::Null => None,
+                        })
+                        .unwrap_or_else(|| params.get(param_name))
+                }
             };
 
+            let old = params.get(param_name);
             let change = params.modify(param_name, flag_str.as_str());
-            self.ld_metrics.params_changed.inc_by(u64::from(change));
+            if change {
+                tracing::debug!(
+                    %param_name, %old, new = %flag_str,
+                    "updating system param",
+                );
+            }
+            self.metrics.params_changed.inc_by(u64::from(change));
             changed |= change;
         }
 
@@ -91,13 +146,13 @@ impl SystemParameterFrontend {
     }
 }
 
-fn ld_config(sync_config: &SystemParameterSyncConfig) -> ld::Config {
-    ld::ConfigBuilder::new(&sync_config.ld_sdk_key)
+fn ld_config(api_key: &str, metrics: &Metrics) -> ld::Config {
+    ld::ConfigBuilder::new(api_key)
         .event_processor(
             ld::EventProcessorBuilder::new()
                 .https_connector(HttpsConnector::new())
                 .on_success({
-                    let last_cse_time_seconds = sync_config.metrics.last_cse_time_seconds.clone();
+                    let last_cse_time_seconds = metrics.last_cse_time_seconds.clone();
                     Arc::new(move |result| {
                         if let Ok(ts) = u64::try_from(result.time_from_server / 1000) {
                             last_cse_time_seconds.set(ts);
@@ -114,17 +169,19 @@ fn ld_config(sync_config: &SystemParameterSyncConfig) -> ld::Config {
         .expect("valid config")
 }
 
-async fn ld_client(sync_config: &SystemParameterSyncConfig) -> Result<ld::Client, anyhow::Error> {
-    let ld_client = ld::Client::build(ld_config(sync_config))?;
-
+async fn ld_client(
+    api_key: &str,
+    metrics: &Metrics,
+    now_fn: &NowFn,
+) -> Result<ld::Client, anyhow::Error> {
+    let ld_client = ld::Client::build(ld_config(api_key, metrics))?;
     tracing::info!("waiting for SystemParameterFrontend to initialize");
-
     // Start and initialize LD client for the frontend. The callback passed
     // will export the last time when an SSE event from the LD server was
     // received in a Prometheus metric.
     ld_client.start_with_default_executor_and_callback({
-        let last_sse_time_seconds = sync_config.metrics.last_sse_time_seconds.clone();
-        let now_fn = sync_config.now_fn.clone();
+        let last_sse_time_seconds = metrics.last_sse_time_seconds.clone();
+        let now_fn = now_fn.clone();
         Arc::new(move |_ev| {
             let ts = now_fn() / 1000;
             last_sse_time_seconds.set(ts);
