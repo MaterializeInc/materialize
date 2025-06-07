@@ -199,6 +199,7 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
 
     mz_alloc::register_metrics_into(&metrics_registry).await;
     mz_metrics::register_metrics_into(&metrics_registry, mz_dyncfgs::all_dyncfgs()).await;
+    mz_compute::lgalloc::register_metrics_into(&metrics_registry, args.announce_memory_limit).await;
 
     let secrets_reader = args
         .secrets
@@ -364,6 +365,7 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
         ComputeInstanceContext {
             scratch_directory: args.scratch_directory,
             worker_core_affinity: args.worker_core_affinity,
+            announce_memory_limit: args.announce_memory_limit,
             connection_context,
         },
     )?;

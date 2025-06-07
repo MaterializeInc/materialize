@@ -11,6 +11,7 @@
 
 //! Materialize's compute layer.
 
+pub mod lgalloc;
 pub mod server;
 
 mod arrangement;

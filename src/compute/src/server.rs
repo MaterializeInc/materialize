@@ -53,6 +53,8 @@ pub struct ComputeInstanceContext {
     /// Context required to connect to an external sink from compute,
     /// like the `CopyToS3OneshotSink` compute sink.
     pub connection_context: ConnectionContext,
+    /// The memory limit of the replica, if any. Used to configure lgalloc's soft memory limit.
+    pub announce_memory_limit: Option<usize>,
 }
 
 /// Configures the server with compute-specific metrics.
