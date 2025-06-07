@@ -136,17 +136,17 @@ pub fn run<T: TimestampManipulation>(
     // resulting dataflows would never hydrate. Instead we'll apply a number of soft constraints to
     // end up in a better place.
 
-    // Constrain collection as-ofs to times that are currently available in the inputs. This
-    // ensures that dataflows can immediately start hydrating. It also ensures that dataflows don't
-    // get an empty as-of, except when they exclusively depend on constant collections.
-    ctx.apply_warmup_constraints();
-
-    // Constrain as-ofs of indexes according to their read policies.
-    ctx.apply_index_read_policy_constraints();
-
-    // Constrain as-ofs of indexes to the current time. This ensures that indexes are immediately
-    // readable.
-    ctx.apply_index_current_time_constraints();
+    // // Constrain collection as-ofs to times that are currently available in the inputs. This
+    // // ensures that dataflows can immediately start hydrating. It also ensures that dataflows don't
+    // // get an empty as-of, except when they exclusively depend on constant collections.
+    // ctx.apply_warmup_constraints();
+    //
+    // // Constrain as-ofs of indexes according to their read policies.
+    // ctx.apply_index_read_policy_constraints();
+    //
+    // // Constrain as-ofs of indexes to the current time. This ensures that indexes are immediately
+    // // readable.
+    // ctx.apply_index_current_time_constraints();
 
     // Apply the derived as-of bounds to the dataflows.
     for dataflow in dataflows {
@@ -717,7 +717,7 @@ impl<'a, T: TimestampManipulation> Context<'a, T> {
     fn best_as_of(&self, id: GlobalId) -> Antichain<T> {
         if let Some(collection) = self.collections.get(&id) {
             let bounds = collection.bounds.borrow();
-            bounds.upper.clone()
+            bounds.lower.clone()
         } else {
             Antichain::new()
         }
