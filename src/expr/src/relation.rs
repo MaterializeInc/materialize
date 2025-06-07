@@ -3687,6 +3687,15 @@ impl<L> RowSetFinishing<L> {
             && self.offset == 0
             && self.project.iter().copied().eq(0..arity)
     }
+    /// True if the finishing does not require an ORDER BY.
+    ///
+    /// LIMIT and OFFSET without an ORDER BY _are_ streamable: without an
+    /// explicit ordering we will skip an arbitrary bag of elements and return
+    /// the first arbitrary elements in the remaining bag. The result semantics
+    /// are still correct but maybe surprising for some users.
+    pub fn is_streamable(&self, arity: usize) -> bool {
+        self.order_by.is_empty() && self.project.iter().copied().eq(0..arity)
+    }
 }
 
 impl RowSetFinishing {
@@ -3757,6 +3766,125 @@ impl RowSetFinishing {
         }
 
         Ok((iter, response_size))
+    }
+}
+
+/// A [RowSetFinishing] that can be repeatedly applied to batches of updates (in
+/// a [RowCollection]) and keeps track of the remaining limit, offset, and cap
+/// on query result size.
+#[derive(Debug)]
+pub struct RowSetFinishingIncremental {
+    /// Include only as many rows (after offset).
+    pub remaining_limit: Option<usize>,
+    /// Omit as many rows.
+    pub remaining_offset: usize,
+    /// The maximum allowed result size, as requested by the client.
+    pub max_returned_query_size: Option<u64>,
+    /// Tracks our remaining allowed budget for result size.
+    pub remaining_max_returned_query_size: Option<u64>,
+    /// Include only given columns.
+    pub project: Vec<usize>,
+}
+
+impl RowSetFinishingIncremental {
+    /// Turns the given [RowSetFinishing] into a [RowSetFinishingIncremental].
+    /// Can only be used when [is_streamable](RowSetFinishing::is_streamable) is
+    /// `true`.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the result is not streamable, that is it has an ORDER BY.
+    pub fn new(
+        finishing: RowSetFinishing,
+        arity: usize,
+        max_returned_query_size: Option<u64>,
+    ) -> Self {
+        assert!(finishing.is_streamable(arity));
+
+        let limit = finishing.limit.map(|l| {
+            let l = u64::from(l);
+            let l = usize::cast_from(l);
+            l
+        });
+
+        RowSetFinishingIncremental {
+            remaining_limit: limit,
+            remaining_offset: finishing.offset,
+            max_returned_query_size,
+            remaining_max_returned_query_size: max_returned_query_size,
+            project: finishing.project.clone(),
+        }
+    }
+
+    /// Applies finishing actions to the given [`RowCollection`], and reports
+    /// the total time it took to run.
+    ///
+    /// Returns a [`SortedRowCollectionIter`] that contains all of the response
+    /// data.
+    pub fn finish_incremental(
+        &mut self,
+        rows: RowCollection,
+        max_result_size: u64,
+        duration_histogram: &Histogram,
+    ) -> Result<SortedRowCollectionIter, String> {
+        let now = Instant::now();
+        let result = self.finish_incremental_inner(rows, max_result_size);
+        let duration = now.elapsed();
+        duration_histogram.observe(duration.as_secs_f64());
+
+        result
+    }
+
+    fn finish_incremental_inner(
+        &mut self,
+        rows: RowCollection,
+        max_result_size: u64,
+    ) -> Result<SortedRowCollectionIter, String> {
+        // How much additional memory is required to make a sorted view.
+        let sorted_view_mem = rows.entries().saturating_mul(std::mem::size_of::<usize>());
+        let required_memory = rows.byte_len().saturating_add(sorted_view_mem);
+
+        // Bail if creating the sorted view would require us to use too much memory.
+        if required_memory > usize::cast_from(max_result_size) {
+            let max_bytes = ByteSize::b(max_result_size);
+            return Err(format!("total result exceeds max size of {max_bytes}",));
+        }
+
+        let batch_num_rows = rows.count(0, None);
+
+        let sorted_view = rows.sorted_view(&[]);
+        let mut iter = sorted_view
+            .into_row_iter()
+            .apply_offset(self.remaining_offset)
+            .with_projection(self.project.clone());
+
+        if let Some(limit) = self.remaining_limit {
+            iter = iter.with_limit(limit);
+        };
+
+        self.remaining_offset = self.remaining_offset.saturating_sub(batch_num_rows);
+        if let Some(remaining_limit) = self.remaining_limit.as_mut() {
+            *remaining_limit -= iter.count();
+        }
+
+        // TODO(parkmycar): Re-think how we can calculate the total response size without
+        // having to iterate through the entire collection of Rows, while still
+        // respecting the LIMIT, OFFSET, and projections.
+        //
+        // Note: It feels a bit bad always calculating the response size, but we almost
+        // always need it to either check the `max_returned_query_size`, or for reporting
+        // in the query history.
+        let response_size: usize = iter.clone().map(|row| row.data().len()).sum();
+
+        // Bail if we would end up returning more data to the client than they can support.
+        if let Some(max) = self.remaining_max_returned_query_size {
+            if response_size > usize::cast_from(max) {
+                let max_bytes = ByteSize::b(self.max_returned_query_size.expect("known to exist"));
+                return Err(format!("total result exceeds max size of {max_bytes}"));
+            }
+        }
+
+        Ok(iter)
     }
 }
 

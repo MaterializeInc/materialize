@@ -10,6 +10,7 @@ use std::cell::RefCell;
 use std::cmp::Ordering;
 use std::collections::{BTreeMap, BTreeSet};
 use std::num::NonZeroUsize;
+use std::ops::ControlFlow;
 use std::rc::Rc;
 use std::sync::{Arc, mpsc};
 use std::time::{Duration, Instant};
@@ -29,6 +30,10 @@ use mz_compute_client::protocol::response::{
     StatusResponse, SubscribeResponse,
 };
 use mz_compute_types::dataflows::DataflowDescription;
+use mz_compute_types::dyncfgs::{
+    ENABLE_PEEK_RESPONSE_STASH, PEEK_RESPONSE_STASH_THRESHOLD_BYTES, PEEK_STASH_BATCH_SIZE,
+    PEEK_STASH_NUM_BATCHES,
+};
 use mz_compute_types::plan::LirId;
 use mz_compute_types::plan::render_plan::RenderPlan;
 use mz_dyncfg::ConfigSet;
@@ -44,6 +49,7 @@ use mz_persist_client::Diagnostics;
 use mz_persist_client::cache::PersistClientCache;
 use mz_persist_client::cfg::USE_CRITICAL_SINCE_SNAPSHOT;
 use mz_persist_client::read::ReadHandle;
+use mz_persist_types::PersistLocation;
 use mz_persist_types::codec_impls::UnitSchema;
 use mz_repr::fixed_length::ToDatumIter;
 use mz_repr::{DatumVec, Diff, GlobalId, Row, RowArena, Timestamp};
@@ -74,6 +80,7 @@ use crate::render::{LinearJoinSpec, StartSignal};
 use crate::server::{ComputeInstanceContext, ResponseSender};
 
 mod peek_result_iterator;
+mod peek_stash;
 
 /// Worker-local state that is maintained across dataflows.
 ///
@@ -105,6 +112,11 @@ pub struct ComputeState {
     pub copy_to_response_buffer: Rc<RefCell<Vec<(GlobalId, CopyToResponse)>>>,
     /// Peek commands that are awaiting fulfillment.
     pub pending_peeks: BTreeMap<Uuid, PendingPeek>,
+    /// Peek responses that we are stashing in persist. We do this
+    /// asynchronously and send back a handle to the batch in the PeekResponse.
+    pub pending_peek_responses: BTreeMap<Uuid, peek_stash::StashPeekResponse>,
+    /// The persist location where we can stash large peek results.
+    pub peek_stash_persist_location: Option<PersistLocation>,
     /// The logger, from Timely's logging framework, if logs are enabled.
     pub compute_logger: Option<logging::compute::Logger>,
     /// A process-global cache of (blob_uri, consensus_uri) -> PersistClient.
@@ -207,6 +219,8 @@ impl ComputeState {
             subscribe_response_buffer: Default::default(),
             copy_to_response_buffer: Default::default(),
             pending_peeks: Default::default(),
+            pending_peek_responses: Default::default(),
+            peek_stash_persist_location: None,
             compute_logger: None,
             persist_clients,
             txns_ctx,
@@ -438,6 +452,8 @@ impl<'a, A: Allocate + 'static> ActiveComputeState<'a, A> {
         }
 
         self.initialize_logging(config.logging);
+
+        self.compute_state.peek_stash_persist_location = Some(config.peek_stash_persist_location);
     }
 
     fn handle_update_configuration(&mut self, params: ComputeParameters) {
@@ -616,7 +632,7 @@ impl<'a, A: Allocate + 'static> ActiveComputeState<'a, A> {
 
         // Log the receipt of the peek.
         if let Some(logger) = self.compute_state.compute_logger.as_mut() {
-            logger.log(&pending.as_log_event(true));
+            logger.log(&peek_as_log_event(pending.peek(), true));
         }
 
         self.process_peek(&mut Antichain::new(), pending);
@@ -624,7 +640,11 @@ impl<'a, A: Allocate + 'static> ActiveComputeState<'a, A> {
 
     fn handle_cancel_peek(&mut self, uuid: Uuid) {
         if let Some(peek) = self.compute_state.pending_peeks.remove(&uuid) {
-            self.send_peek_response(peek, PeekResponse::Canceled);
+            self.send_peek_response(peek.peek(), PeekResponse::Canceled);
+        }
+        if let Some(stash_task) = self.compute_state.pending_peek_responses.remove(&uuid) {
+            // Explicitly drop the task to abort it.
+            drop(stash_task);
         }
     }
 
@@ -870,7 +890,43 @@ impl<'a, A: Allocate + 'static> ActiveComputeState<'a, A> {
     fn process_peek(&mut self, upper: &mut Antichain<Timestamp>, mut peek: PendingPeek) {
         let response = match &mut peek {
             PendingPeek::Index(peek) => {
-                peek.seek_fulfillment(upper, self.compute_state.max_result_size)
+                let peek_stash_eligible = peek
+                    .peek
+                    .finishing
+                    .is_streamable(peek.peek.result_desc.arity());
+
+                let peek_stash_enabled =
+                    ENABLE_PEEK_RESPONSE_STASH.get(&self.compute_state.worker_config);
+
+                let peek_stash_threshold_bytes =
+                    PEEK_RESPONSE_STASH_THRESHOLD_BYTES.get(&self.compute_state.worker_config);
+
+                match peek.seek_fulfillment(
+                    upper,
+                    self.compute_state.max_result_size,
+                    peek_stash_enabled && peek_stash_eligible,
+                    peek_stash_threshold_bytes,
+                ) {
+                    ControlFlow::Continue(result) => Some(result),
+                    ControlFlow::Break(PeekStatus::NotReady) => None,
+                    ControlFlow::Break(PeekStatus::UsePeekStash) => {
+                        let _span =
+                            span!(parent: &peek.span, Level::DEBUG, "process_stash_peek").entered();
+                        let stash_task = peek_stash::StashPeekResponse::start_upload(
+                            Arc::clone(&self.compute_state.persist_clients),
+                            self.compute_state
+                                .peek_stash_persist_location
+                                .as_ref()
+                                .expect("missing persist location for peek responses"),
+                            peek.peek.clone(),
+                            peek.trace_bundle.clone(),
+                        );
+                        self.compute_state
+                            .pending_peek_responses
+                            .insert(peek.peek.uuid, stash_task);
+                        return;
+                    }
+                }
             }
             PendingPeek::Persist(peek) => peek.result.try_recv().ok().map(|(result, duration)| {
                 self.compute_state
@@ -882,8 +938,8 @@ impl<'a, A: Allocate + 'static> ActiveComputeState<'a, A> {
         };
 
         if let Some(response) = response {
-            let _span = span!(parent: peek.span(), Level::DEBUG, "process_peek").entered();
-            self.send_peek_response(peek, response)
+            let _span = span!(parent: peek.span(), Level::DEBUG, "process_peek_response").entered();
+            self.send_peek_response(peek.peek(), response)
         } else {
             let uuid = peek.peek().uuid;
             self.compute_state.pending_peeks.insert(uuid, peek);
@@ -897,6 +953,27 @@ impl<'a, A: Allocate + 'static> ActiveComputeState<'a, A> {
         for (_uuid, peek) in pending_peeks {
             self.process_peek(&mut upper, peek);
         }
+
+        let pending_peeks_response = std::mem::take(&mut self.compute_state.pending_peek_responses);
+        for (uuid, mut peek_response) in pending_peeks_response {
+            let num_batches = PEEK_STASH_NUM_BATCHES.get(&self.compute_state.worker_config);
+            let batch_size = PEEK_STASH_BATCH_SIZE.get(&self.compute_state.worker_config);
+            peek_response.pump_rows(num_batches, batch_size);
+
+            if let Ok((response, duration)) = peek_response.result.try_recv() {
+                self.compute_state
+                    .metrics
+                    .stashed_peek_seconds
+                    .observe(duration.as_secs_f64());
+                tracing::trace!(?peek_response.peek, ?duration, "finished stashing peek response in persist");
+
+                self.send_peek_response(&peek_response.peek, response);
+            } else {
+                self.compute_state
+                    .pending_peek_responses
+                    .insert(uuid, peek_response);
+            }
+        }
     }
 
     /// Sends a response for this peek's resolution to the coordinator.
@@ -904,11 +981,11 @@ impl<'a, A: Allocate + 'static> ActiveComputeState<'a, A> {
     /// Note that this function takes ownership of the `PendingPeek`, which is
     /// meant to prevent multiple responses to the same peek.
     #[mz_ore::instrument(level = "debug")]
-    fn send_peek_response(&mut self, peek: PendingPeek, response: PeekResponse) {
-        let log_event = peek.as_log_event(false);
+    fn send_peek_response(&mut self, peek: &Peek, response: PeekResponse) {
+        let log_event = peek_as_log_event(peek, false);
         // Respond with the response.
         self.send_compute_response(ComputeResponse::PeekResponse(
-            peek.peek().uuid,
+            peek.uuid,
             response,
             OpenTelemetryContext::obtain(),
         ));
@@ -1042,21 +1119,20 @@ pub enum PendingPeek {
     Persist(PersistPeek),
 }
 
-impl PendingPeek {
-    /// Produces a corresponding log event.
-    pub fn as_log_event(&self, installed: bool) -> ComputeEvent {
-        let peek = self.peek();
-        let (id, peek_type) = match &peek.target {
-            PeekTarget::Index { id } => (id, logging::compute::PeekType::Index),
-            PeekTarget::Persist { id, .. } => (id, logging::compute::PeekType::Persist),
-        };
-        ComputeEvent::Peek(PeekEvent {
-            peek: logging::compute::Peek::new(*id, peek.timestamp, peek.uuid),
-            peek_type,
-            installed,
-        })
-    }
+/// Produces a corresponding log event.
+pub fn peek_as_log_event(peek: &Peek, installed: bool) -> ComputeEvent {
+    let (id, peek_type) = match &peek.target {
+        PeekTarget::Index { id } => (id, logging::compute::PeekType::Index),
+        PeekTarget::Persist { id, .. } => (id, logging::compute::PeekType::Persist),
+    };
+    ComputeEvent::Peek(PeekEvent {
+        peek: logging::compute::Peek::new(*id, peek.timestamp, peek.uuid),
+        peek_type,
+        installed,
+    })
+}
 
+impl PendingPeek {
     fn index(peek: Peek, mut trace_bundle: TraceBundle) -> Self {
         let empty_frontier = Antichain::new();
         let timestamp_frontier = Antichain::from_elem(peek.timestamp);
@@ -1331,14 +1407,16 @@ impl IndexPeek {
         &mut self,
         upper: &mut Antichain<Timestamp>,
         max_result_size: u64,
-    ) -> Option<PeekResponse> {
+        peek_stash_eligible: bool,
+        peek_stash_threshold_bytes: usize,
+    ) -> ControlFlow<PeekStatus, PeekResponse> {
         self.trace_bundle.oks_mut().read_upper(upper);
         if upper.less_equal(&self.peek.timestamp) {
-            return None;
+            return ControlFlow::Break(PeekStatus::NotReady);
         }
         self.trace_bundle.errs_mut().read_upper(upper);
         if upper.less_equal(&self.peek.timestamp) {
-            return None;
+            return ControlFlow::Break(PeekStatus::NotReady);
         }
 
         let read_frontier = self.trace_bundle.compaction_frontier();
@@ -1348,21 +1426,27 @@ impl IndexPeek {
                 read_frontier.elements(),
                 self.peek.timestamp,
             );
-            return Some(PeekResponse::Error(error));
+            return ControlFlow::Continue(PeekResponse::Error(error));
         }
 
-        let response = match self.collect_finished_data(max_result_size) {
+        let response = match self.collect_finished_data(
+            max_result_size,
+            peek_stash_eligible,
+            peek_stash_threshold_bytes,
+        )? {
             Ok(rows) => PeekResponse::Rows(RowCollection::new(rows, &self.peek.finishing.order_by)),
             Err(text) => PeekResponse::Error(text),
         };
-        Some(response)
+        ControlFlow::Continue(response)
     }
 
     /// Collects data for a known-complete peek from the ok stream.
     fn collect_finished_data(
         &mut self,
         max_result_size: u64,
-    ) -> Result<Vec<(Row, NonZeroUsize)>, String> {
+        peek_stash_eligible: bool,
+        peek_stash_threshold_bytes: usize,
+    ) -> ControlFlow<PeekStatus, Result<Vec<(Row, NonZeroUsize)>, String>> {
         // Check if there exist any errors and, if so, return whatever one we
         // find first.
         let (mut cursor, storage) = self.trace_bundle.errs_mut().cursor();
@@ -1379,19 +1463,24 @@ impl IndexPeek {
                     target = %self.peek.target.id(), diff = %copies, %error,
                     "index peek encountered negative multiplicities in error trace",
                 );
-                return Err(format!(
-                    "Invalid data in source errors, \
-                     saw retractions ({}) for row that does not exist: {}",
+                return ControlFlow::Continue(Err(format!(
+                    "Invalid data in source errors, saw retractions ({}) for row that does not exist: {}",
                     -copies, error,
-                ));
+                )));
             }
             if copies.is_positive() {
-                return Err(cursor.key(&storage).to_string());
+                return ControlFlow::Continue(Err(cursor.key(&storage).to_string()));
             }
             cursor.step_key(&storage);
         }
 
-        Self::collect_ok_finished_data(&self.peek, self.trace_bundle.oks_mut(), max_result_size)
+        Self::collect_ok_finished_data(
+            &self.peek,
+            self.trace_bundle.oks_mut(),
+            max_result_size,
+            peek_stash_eligible,
+            peek_stash_threshold_bytes,
+        )
     }
 
     /// Collects data for a known-complete peek from the ok stream.
@@ -1399,7 +1488,9 @@ impl IndexPeek {
         peek: &Peek<Timestamp>,
         oks_handle: &mut Tr,
         max_result_size: u64,
-    ) -> Result<Vec<(Row, NonZeroUsize)>, String>
+        peek_stash_eligible: bool,
+        peek_stash_threshold_bytes: usize,
+    ) -> ControlFlow<PeekStatus, Result<Vec<(Row, NonZeroUsize)>, String>>
     where
         for<'a> Tr: TraceReader<DiffGat<'a> = &'a Diff>,
         for<'a> Tr::Key<'a>: ToDatumIter + IntoOwned<'a, Owned = Row> + Eq,
@@ -1435,18 +1526,26 @@ impl IndexPeek {
         let mut r_datum_vec = DatumVec::new();
 
         while let Some(row) = peek_iterator.next() {
-            let (row, copies) = row?;
+            let row = match row {
+                Ok(row) => row,
+                Err(err) => return ControlFlow::Continue(Err(err)),
+            };
+            let (row, copies) = row;
             let copies: NonZeroUsize = NonZeroUsize::try_from(copies).expect("fits into usize");
 
             total_size = total_size
                 .saturating_add(row.byte_len())
                 .saturating_add(count_byte_size);
+            if peek_stash_eligible && total_size > peek_stash_threshold_bytes {
+                return ControlFlow::Break(PeekStatus::UsePeekStash);
+            }
             if total_size > max_result_size {
-                return Err(format!(
+                return ControlFlow::Continue(Err(format!(
                     "result exceeds max size of {}",
                     ByteSize::b(u64::cast_from(max_result_size))
-                ));
+                )));
             }
+
             results.push((row, copies));
 
             // If we hold many more than `max_results` records, we can thin down
@@ -1458,7 +1557,7 @@ impl IndexPeek {
                 if results.len() >= 2 * max_results {
                     if peek.finishing.order_by.is_empty() {
                         results.truncate(max_results);
-                        return Ok(results);
+                        return ControlFlow::Continue(Ok(results));
                     } else {
                         // We can sort `results` and then truncate to `max_results`.
                         // This has an effect similar to a priority queue, without
@@ -1489,8 +1588,19 @@ impl IndexPeek {
             }
         }
 
-        Ok(results)
+        ControlFlow::Continue(Ok(results))
     }
+}
+
+/// For keeping track of the state of pending or ready peeks, and managing
+/// control flow.
+enum PeekStatus {
+    /// The frontiers of objects are not yet advanced enough, peek is still
+    /// pending.
+    NotReady,
+    /// The result size is above the configured threshold and the peek is
+    /// eligible for using the peek result stash.
+    UsePeekStash,
 }
 
 /// The frontiers we have reported to the controller for a collection.

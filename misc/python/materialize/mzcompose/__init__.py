@@ -88,6 +88,9 @@ def get_default_system_parameters(
         "compute_hydration_concurrency": "2",
         "compute_replica_expiration_offset": "3d",
         "compute_apply_column_demands": "true",
+        "compute_enable_peek_response_stash": "true",
+        # always use result stash, when eligible
+        "compute_peek_response_stash_threshold_bytes": "0",
         "disk_cluster_replicas_default": "true",
         "enable_0dt_deployment": "true" if zero_downtime else "false",
         "enable_0dt_deployment_panic_after_timeout": "true",

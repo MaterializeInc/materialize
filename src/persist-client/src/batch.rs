@@ -272,6 +272,11 @@ where
         }
         self.batch.parts = parts;
     }
+
+    /// The sum of the encoded sizes of all parts in the batch.
+    pub fn encoded_size_bytes(&self) -> usize {
+        self.batch.encoded_size_bytes()
+    }
 }
 
 impl<K, V, T, D> Batch<K, V, T, D>

@@ -163,7 +163,7 @@ impl From<&ExecuteResponse> for StatementEndedExecutionReason {
                         execution_strategy: Some(StatementExecutionStrategy::Constant),
                     }
                 }
-                ExecuteResponse::SendingRows { .. } => {
+                ExecuteResponse::SendingRowsStreaming { .. } => {
                     panic!("SELECTs terminate on peek finalization, not here.")
                 }
                 ExecuteResponse::Subscribing { .. } => {
@@ -177,7 +177,7 @@ impl From<&ExecuteResponse> for StatementEndedExecutionReason {
             ExecuteResponse::Fetch { .. } => {
                 panic!("FETCHes terminate after a follow-up message is sent.")
             }
-            ExecuteResponse::SendingRows { .. } => {
+            ExecuteResponse::SendingRowsStreaming { .. } => {
                 panic!("SELECTs terminate on peek finalization, not here.")
             }
             ExecuteResponse::Subscribing { .. } => {

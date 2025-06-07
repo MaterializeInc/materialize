@@ -35,7 +35,7 @@ use mz_controller_types::dyncfgs::WALLCLOCK_LAG_HISTOGRAM_PERIOD_INTERVAL;
 use mz_dyncfg::ConfigSet;
 use mz_ore::soft_panic_or_log;
 use mz_persist_client::batch::ProtoBatch;
-use mz_persist_types::{Codec64, Opaque, ShardId};
+use mz_persist_types::{Codec64, Opaque, PersistLocation, ShardId};
 use mz_repr::adt::interval::Interval;
 use mz_repr::adt::timestamp::CheckedTimestamp;
 use mz_repr::{Datum, Diff, GlobalId, RelationDesc, RelationVersion, Row};
@@ -292,6 +292,9 @@ pub trait StorageController: Debug {
 
     /// Get the current configuration, including parameters updated with `update_parameters`.
     fn config(&self) -> &StorageConfiguration;
+
+    /// Return the [PersistLocation] used by this controller.
+    fn persist_location(&self) -> PersistLocation;
 
     /// Returns the [CollectionMetadata] of the collection identified by `id`.
     fn collection_metadata(
