@@ -447,8 +447,8 @@ The `mz_scheduling_parks_histogram` view describes a histogram of [dataflow] wor
 [`uint2`]: /sql/types/uint2
 [`uint8`]: /sql/types/uint8
 [`uint8 list`]: /sql/types/list
-[arrangement]: /get-started/arrangements/#arrangements
-[dataflow]: /get-started/arrangements/#dataflows
+[arrangement]: /architecture/arrangements/#arrangements
+[dataflow]: /architecture/arrangements/#dataflows
 [`MIN`]: /sql/functions/#min
 [`MAX`]: /sql/functions/#max
 [Top K]: /transform-data/patterns/top-k
