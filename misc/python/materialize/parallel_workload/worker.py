@@ -34,6 +34,7 @@ class Worker:
     weights: list[float]
     end_time: float
     num_queries: Counter[type[Action]]
+    num_failures: Counter[type[Action]]
     autocommit: bool
     system: bool
     exe: Executor | None
@@ -58,6 +59,7 @@ class Worker:
         self.weights = weights
         self.end_time = end_time
         self.num_queries = Counter()
+        self.num_failures = Counter()
         self.autocommit = autocommit
         self.system = system
         self.ignored_errors = defaultdict(Counter)
@@ -112,6 +114,7 @@ class Worker:
                     self.num_queries[type(action)] += 1
             except QueryError as e:
                 self.num_queries[type(action)] += 1
+                self.num_failures[type(action)] += 1
                 for error_to_ignore in action.errors_to_ignore(self.exe):
                     if error_to_ignore in e.msg:
                         self.ignored_errors[error_to_ignore][type(action)] += 1
