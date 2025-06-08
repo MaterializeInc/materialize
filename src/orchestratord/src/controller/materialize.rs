@@ -57,6 +57,8 @@ pub struct MaterializeControllerArgs {
     enable_prometheus_scrape_annotations: bool,
     #[clap(long)]
     disable_authentication: bool,
+    #[clap(long)]
+    disable_database_network_policies: bool,
 
     #[clap(long)]
     segment_api_key: Option<String>,

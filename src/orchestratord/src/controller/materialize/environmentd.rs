@@ -943,6 +943,10 @@ fn create_environmentd_statefulset_object(
         args.push("--system-parameter-default=enable_rbac_checks=false".into());
     }
 
+    if config.disable_database_network_policies {
+        args.push("--system-parameter-default=enable_network_policies=false".into());
+    }
+
     // Add persist arguments.
 
     // Configure the Persist Isolated Runtime to use one less thread than the total available.
