@@ -29,7 +29,7 @@ mz-orchestrator-kubernetes = { path = "../orchestrator-kubernetes", default-feat
 mz-ore = { path = "../ore", default-features = false }
 os_info = "3.11.0"
 prometheus = { version = "0.13.4", default-features = false }
-proptest = { version = "1.6.0", default-features = false, features = ["std"] }
+proptest = { version = "1.7.0", default-features = false, features = ["std"] }
 proptest-derive = { version = "0.5.1", features = ["boxed_union"] }
 prost = { version = "0.13.5", features = ["no-recursion-limit"] }
 semver = "1.0.26"
