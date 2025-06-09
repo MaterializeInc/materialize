@@ -23,6 +23,7 @@ use anyhow::anyhow;
 use futures::Future;
 use futures::future::{BoxFuture, LocalBoxFuture};
 use headers::{Header, HeaderMapExt};
+use http::Uri;
 use hyper::http::header::HeaderMap;
 use maplit::btreemap;
 use mz_adapter::TimestampExplanation;
@@ -85,7 +86,6 @@ use tracing_capture::SharedStorage;
 use tracing_subscriber::EnvFilter;
 use tungstenite::stream::MaybeTlsStream;
 use tungstenite::{Message, WebSocket};
-use url::Url;
 
 use crate::{
     CatalogConfig, FronteggAuthenticator, HttpListenerConfig, ListenersConfig, SqlListenerConfig,
@@ -778,19 +778,21 @@ impl TestServer {
         }
     }
 
-    pub fn ws_addr(&self) -> Url {
-        Url::parse(&format!(
+    pub fn ws_addr(&self) -> Uri {
+        format!(
             "ws://{}/api/experimental/sql",
-            self.inner.http_listener_handles["internal"].local_addr
-        ))
+            self.inner.http_listener_handles["external"].local_addr
+        )
+        .parse()
         .unwrap()
     }
 
-    pub fn internal_ws_addr(&self) -> Url {
-        Url::parse(&format!(
+    pub fn internal_ws_addr(&self) -> Uri {
+        format!(
             "ws://{}/api/experimental/sql",
             self.inner.http_listener_handles["internal"].local_addr
-        ))
+        )
+        .parse()
         .unwrap()
     }
 
@@ -1133,11 +1135,11 @@ impl TestServerWithRuntime {
         config
     }
 
-    pub fn ws_addr(&self) -> Url {
+    pub fn ws_addr(&self) -> Uri {
         self.server.ws_addr()
     }
 
-    pub fn internal_ws_addr(&self) -> Url {
+    pub fn internal_ws_addr(&self) -> Uri {
         self.server.internal_ws_addr()
     }
 

@@ -89,7 +89,6 @@ skip = [
 
     { name = "hyper-timeout", version = "0.4.1" },
 
-    { name = "tungstenite", version = "0.21.0" },
     { name = "tungstenite", version = "0.24.0" },
     { name = "tokio-tungstenite", version = "0.24.0" },
 

@@ -2532,9 +2532,9 @@ fn test_internal_ws_auth() {
     let ws_url = server.internal_ws_addr();
     let make_req = || {
         Request::builder()
-            .uri(ws_url.as_str())
+            .uri(ws_url.clone())
             .method("GET")
-            .header("Host", ws_url.host_str().unwrap())
+            .header("Host", ws_url.host().unwrap())
             .header("Connection", "Upgrade")
             .header("Upgrade", "websocket")
             .header("Sec-WebSocket-Version", "13")

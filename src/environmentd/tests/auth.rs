@@ -24,6 +24,7 @@ use base64::Engine;
 use base64::engine::general_purpose::{URL_SAFE, URL_SAFE_NO_PAD};
 use chrono::Utc;
 use headers::Authorization;
+use http::header::{COOKIE, SET_COOKIE};
 use http_body_util::BodyExt;
 use hyper::body::Incoming;
 use hyper::http::header::{AUTHORIZATION, HeaderMap, HeaderValue};
@@ -58,6 +59,8 @@ use serde::Deserialize;
 use serde_json::json;
 use tokio::time::sleep;
 use tungstenite::Message;
+use tungstenite::client::ClientRequestBuilder;
+use tungstenite::protocol::CloseFrame;
 use tungstenite::protocol::frame::coding::CloseCode;
 use uuid::Uuid;
 
@@ -3348,5 +3351,147 @@ async fn test_self_managed_auth_alter_role() {
 
     {
         assert_err!(server.connect().no_tls().user("foo").password("baz").await);
+    }
+}
+
+#[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 1))]
+#[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `OPENSSL_init_ssl` on OS `linux`
+async fn test_self_managed_auth_http() {
+    let metrics_registry = MetricsRegistry::new();
+
+    let server = test_util::TestHarness::default()
+        .with_system_parameter_default(
+            "log_filter".to_string(),
+            "mz_frontegg_auth=debug,info".to_string(),
+        )
+        .with_system_parameter_default("enable_self_managed_auth".to_string(), "true".to_string())
+        .with_password_auth(Password("mz_system_password".to_owned()))
+        .with_metrics_registry(metrics_registry)
+        .start()
+        .await;
+
+    let ws_url: Uri = format!("ws://{}/api/experimental/sql", server.http_local_addr())
+        .parse()
+        .unwrap();
+    let login_url: Uri = format!("http://{}/api/login", server.http_local_addr())
+        .parse()
+        .unwrap();
+    let http_url: Uri = format!("http://{}/api/sql", server.http_local_addr())
+        .parse()
+        .unwrap();
+
+    let query = r#"{"query":"SELECT current_user"}"#;
+    let ws_options_msg = Message::Text(r#"{"options": {}}"#.to_owned());
+
+    let http_client = hyper_util::client::legacy::Client::builder(TokioExecutor::new())
+        .pool_idle_timeout(Duration::from_secs(10))
+        .build_http();
+
+    // Should fail due to not being logged in.
+    assert_eq!(
+        http_client
+            .request(
+                Request::post(http_url.clone())
+                    .header("Content-Type", "application/json",)
+                    .body(query.to_owned())
+                    .unwrap()
+            )
+            .await
+            .unwrap()
+            .status(),
+        StatusCode::UNAUTHORIZED
+    );
+
+    // Should fail due to not being logged in.
+    let ws_request = ClientRequestBuilder::new(ws_url.clone());
+    let (mut ws, _resp) = tungstenite::connect(ws_request).unwrap();
+    ws.send(ws_options_msg.clone()).unwrap();
+    assert_eq!(
+        ws.read().unwrap(),
+        Message::Close(Some(CloseFrame {
+            code: CloseCode::Protocol,
+            reason: Cow::Borrowed("unauthorized"),
+        })),
+    );
+
+    // Login. Subsequent requests should be work.
+    let login_response = http_client
+        .request(
+            Request::post(login_url)
+                .header("Content-Type", "application/json")
+                .body(r#"{"username":"mz_system","password":"mz_system_password"}"#.to_owned())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    // We need to manually add the cookie header to the tungstenite request.
+    let session_cookie = login_response
+        .headers()
+        .get(SET_COOKIE)
+        .unwrap()
+        .to_str()
+        .unwrap()
+        .split("; ")
+        .find(|v| v.starts_with("mz_session="))
+        .unwrap();
+
+    #[derive(Deserialize)]
+    struct Result {
+        rows: Vec<Vec<String>>,
+    }
+    #[derive(Deserialize)]
+    struct Response {
+        results: Vec<Result>,
+    }
+    let body = http_client
+        .request(
+            Request::post(http_url)
+                .header("Content-Type", "application/json")
+                .header(COOKIE, session_cookie)
+                .body(query.to_owned())
+                .unwrap(),
+        )
+        .await
+        .unwrap()
+        .into_body()
+        .collect()
+        .await
+        .unwrap()
+        .to_bytes();
+    assert_eq!(
+        serde_json::from_slice::<Response>(&body).unwrap().results[0].rows[0][0],
+        "mz_system"
+    );
+
+    let ws_request = ClientRequestBuilder::new(ws_url).with_header("Cookie", session_cookie);
+    let (mut ws, _resp) = tungstenite::connect(ws_request).unwrap();
+    ws.send(ws_options_msg.clone()).unwrap();
+    // Websockets send a bunch of unrelated stuff before getting to the query and rows
+    let mut messages = Vec::with_capacity(100);
+    loop {
+        let resp = ws.read().unwrap();
+        match resp {
+            Message::Text(msg) => {
+                let msg: WebSocketResponse = serde_json::from_str(&msg).unwrap();
+                match msg {
+                    WebSocketResponse::ReadyForQuery(_) => {
+                        ws.send(Message::Text(query.to_owned())).unwrap();
+                    }
+                    WebSocketResponse::Row(rows) => {
+                        assert_eq!(&rows, &[serde_json::Value::from("mz_system".to_owned())]);
+                        break;
+                    }
+                    _ => {
+                        messages.push(msg);
+                        if messages.len() >= 100 {
+                            panic!("giving up after many unexpected messages: {:#?}", messages);
+                        }
+                    }
+                }
+            }
+            Message::Ping(_) => continue,
+            _ => panic!("unexpected response: {:?}", resp),
+        }
     }
 }
