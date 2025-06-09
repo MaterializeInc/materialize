@@ -1956,14 +1956,6 @@ class BackupRestoreAction(Action):
 
 
 class CreateWebhookSourceAction(Action):
-    def errors_to_ignore(self, exe: Executor) -> list[str]:
-        result = super().errors_to_ignore(exe)
-        if exe.db.scenario in (Scenario.Kill, Scenario.ZeroDowntimeDeploy):
-            result.extend(
-                ["cannot create webhook source in cluster with more than one replica"]
-            )
-        return result
-
     def run(self, exe: Executor) -> bool:
         with exe.db.lock:
             if len(exe.db.webhook_sources) >= MAX_WEBHOOK_SOURCES:
@@ -1975,7 +1967,7 @@ class CreateWebhookSourceAction(Action):
         with schema.lock, cluster.lock:
             if schema not in exe.db.schemas:
                 return False
-            if cluster not in exe.db.clusters or len(cluster.replicas) != 1:
+            if cluster not in exe.db.clusters:
                 return False
 
             source = WebhookSource(webhook_source_id, cluster, schema, self.rng)
