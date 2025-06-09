@@ -335,10 +335,15 @@ impl Coordinator {
                 plan::DataSourceDesc::Webhook { .. } => {
                     let cluster_id = plan.in_cluster.expect("webhook plans must specify cluster");
                     if let Some(cluster) = self.catalog().try_get_cluster(cluster_id) {
-                        if cluster.replica_ids().len() > 1 {
-                            return Err(AdapterError::Unsupported(
-                                "webhook sources in clusters with >1 replicas",
-                            ));
+                        let enable_multi_replica_sources = ENABLE_MULTI_REPLICA_SOURCES
+                            .get(self.catalog().system_config().dyncfgs());
+
+                        if !enable_multi_replica_sources {
+                            if cluster.replica_ids().len() > 1 {
+                                return Err(AdapterError::Unsupported(
+                                    "webhook sources in clusters with >1 replicas",
+                                ));
+                            }
                         }
                     }
                 }
