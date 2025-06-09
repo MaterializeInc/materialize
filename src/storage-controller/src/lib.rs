@@ -65,7 +65,7 @@ use mz_storage_client::healthcheck::{
 };
 use mz_storage_client::metrics::StorageControllerMetrics;
 use mz_storage_client::statistics::{
-    ControllerSourceStatistics, SinkStatisticsUpdate, WebhookStatistics,
+    ControllerSinkStatistics, ControllerSourceStatistics, WebhookStatistics,
 };
 use mz_storage_client::storage_collections::StorageCollections;
 use mz_storage_types::configuration::StorageConfiguration;
@@ -197,7 +197,8 @@ pub struct Controller<T: Timestamp + Lattice + Codec64 + From<EpochMillis> + Tim
     source_statistics: Arc<Mutex<statistics::SourceStatistics>>,
     /// Consolidated metrics updates to periodically write. We do not eagerly initialize this,
     /// and its contents are entirely driven by `StorageResponse::StatisticsUpdates`'s.
-    sink_statistics: Arc<Mutex<BTreeMap<GlobalId, statistics::StatsState<SinkStatisticsUpdate>>>>,
+    sink_statistics:
+        Arc<Mutex<BTreeMap<GlobalId, statistics::StatsState<ControllerSinkStatistics>>>>,
     /// A way to update the statistics interval in the statistics tasks.
     statistics_interval_sender: Sender<Duration>,
 
@@ -1184,7 +1185,7 @@ where
             for id in new_sink_statistic_entries {
                 sink_statistics
                     .entry(id)
-                    .or_insert_with(|| StatsState::new(SinkStatisticsUpdate::new(id)));
+                    .or_insert_with(|| StatsState::new(ControllerSinkStatistics::new(id)));
             }
         }
 
@@ -2295,10 +2296,19 @@ where
                     {
                         let mut shared_stats = self.sink_statistics.lock().expect("poisoned");
                         for stat in sink_stats {
+                            // Determine if this update is from the first
+                            // replica running this sink. We treat updates
+                            // differently based on that, otherwise statistics
+                            // for multi-replica sinks can get "whacky", where
+                            // whacky here means that we would overcount certain
+                            // stats. Check `incorporate`, below, for the
+                            // details.
+                            let is_from_first_replica = self.is_first_replica(replica_id, stat.id);
+
                             // Don't override it if its been removed.
-                            shared_stats
-                                .entry(stat.id)
-                                .and_modify(|current| current.stat().incorporate(stat));
+                            shared_stats.entry(stat.id).and_modify(|current| {
+                                current.stat().incorporate(is_from_first_replica, stat);
+                            });
                         }
                     }
                 }

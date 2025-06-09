@@ -870,6 +870,79 @@ impl PackableStats for ControllerSourceStatistics {
     }
 }
 
+/// Controller-specific sink statistics that mirror [SinkStatisticsUpdate].
+///
+/// This is for keeping metrics in the controller and we update it by
+/// incorporating [SinkStatisticsUpdate] that we get from clusters/replicas.
+#[derive(Clone, Debug, PartialEq)]
+pub struct ControllerSinkStatistics {
+    pub id: GlobalId,
+
+    pub messages_staged: Counter,
+    pub messages_committed: Counter,
+    pub bytes_staged: Counter,
+    pub bytes_committed: Counter,
+}
+
+impl ControllerSinkStatistics {
+    pub fn new(id: GlobalId) -> Self {
+        Self {
+            id,
+            messages_staged: Default::default(),
+            messages_committed: Default::default(),
+            bytes_staged: Default::default(),
+            bytes_committed: Default::default(),
+        }
+    }
+
+    /// Incorporate updates from the given [SinkStatisticsUpdate] into ourselves
+    pub fn incorporate(&mut self, is_from_first_replica: bool, update: SinkStatisticsUpdate) {
+        let ControllerSinkStatistics {
+            messages_staged,
+            messages_committed,
+            bytes_staged,
+            bytes_committed,
+            ..
+        } = self;
+
+        if is_from_first_replica {
+            // All replicas stage all messages for writing, so we would be
+            // double/triple/etc. counting if we incorporated all these updates.
+            messages_staged.incorporate(update.messages_staged, "messages_staged");
+            bytes_staged.incorporate(update.bytes_staged, "bytes_staged");
+        }
+
+        // Only one replica will manage to commit a batch of messages, so
+        // incorporate this metric from all replicas to capture the one that
+        // actually managed to commit.
+        messages_committed.incorporate(update.messages_committed, "messages_committed");
+        bytes_committed.incorporate(update.bytes_committed, "bytes_committed");
+    }
+}
+
+impl PackableStats for ControllerSinkStatistics {
+    fn pack(&self, mut packer: mz_repr::RowPacker<'_>) {
+        use mz_repr::Datum;
+        packer.push(Datum::from(self.id.to_string().as_str()));
+        packer.push(Datum::from(self.messages_staged.0));
+        packer.push(Datum::from(self.messages_committed.0));
+        packer.push(Datum::from(self.bytes_staged.0));
+        packer.push(Datum::from(self.bytes_committed.0));
+    }
+
+    fn unpack(row: Row, _metrics: &crate::metrics::StorageControllerMetrics) -> (GlobalId, Self) {
+        let mut iter = row.iter();
+        let s = Self {
+            id: iter.next().unwrap().unwrap_str().parse().unwrap(),
+            messages_staged: iter.next().unwrap().unwrap_uint64().into(),
+            messages_committed: iter.next().unwrap().unwrap_uint64().into(),
+            bytes_staged: iter.next().unwrap().unwrap_uint64().into(),
+            bytes_committed: iter.next().unwrap().unwrap_uint64().into(),
+        };
+        (s.id, s)
+    }
+}
+
 /// An update as reported from a storage instance. The semantics
 /// of each field are documented above in `MZ_SINK_STATISTICS_RAW_DESC`,
 /// and encoded in the field types.
