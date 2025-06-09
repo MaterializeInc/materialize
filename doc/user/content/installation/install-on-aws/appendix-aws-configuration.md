@@ -13,14 +13,19 @@ aliases:
 ## Required variables
 
 The following variables are required when using the [Materialize on AWS
-Terraform modules](https://github.com/MaterializeInc/terraform-aws-materialize):
+Terraform modules](https://github.com/MaterializeInc/terraform-aws-materialize) examples/simple:
+
+{{< tabs >}}
+{{< tab "versionX or greater">}}
 
 {{< yaml-table data="self_managed/aws_required_variables" >}}
 
-For a list of all variables, see the
-[README.md](https://github.com/MaterializeInc/terraform-aws-materialize?tab=readme-ov-file#inputs)
-or the [`variables.tf`
-file](https://github.com/MaterializeInc/terraform-aws-materialize/blob/main/variables.tf).
+{{</ tab >}}
+
+{{< tab "v0.4.5 or earlier">}}
+{{< yaml-table data="self_managed/aws_required_variables_v0_4_5" >}}
+{{</ tab >}}
+{{</ tabs >}}
 
 ## Required providers
 
