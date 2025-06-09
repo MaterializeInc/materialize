@@ -48,7 +48,7 @@ official [`kubernetes`] Python library to control the Kubernetes cluster.
     On Linux, use:
 
     ```
-    curl -fL https://kind.sigs.k8s.io/dl/v0.14.0/kind-linux-amd64 > kind
+    curl -fL https://kind.sigs.k8s.io/dl/v0.29.0/kind-linux-amd64 > kind
     chmod +x kind
     sudo mv kind /usr/local/bin
     ```
