@@ -4,31 +4,18 @@ site.Data.self_managed.latest_versions.environmentd_version }}
 {{ $operator_version :=
 site.Data.self_managed.latest_versions.operator_helm_chart_version }}
 
-1. Update the Materialize Operator version.
+1. Update the Materialize Operator version as needed:
+
+   - If you have upgraded your Terraform modules, the Terraform modules may have
+   updated its default Helm Chart `operator_version`. If you are satisfied with
+   the new Helm Chart version, you can skip this step.
+
+   - If you have not upgraded your Terraform modules, update the
+   `operator_version` to the new version.
 
    The Materialize Operator version is set in the `operator` module's
    [variables.tf](https://github.com/MaterializeInc/terraform-aws-materialize/blob/66fbc3a819c92d5580b5be8292ed1c13675bb3f8/modules/operator/variables.tf#L9)
    file.
-
-   The default version is `"{{ $operator_version }}"`.
-
-
-1. Update the `terraform.tfvars` to set the Materialize Operator version as
-   needed:
-   - If you have upgraded your Terraform modules, the Terraform modules may have
-     updated its default `operator_version`.
-   - If you have not upgraded your Terraform modules, update the
-     `operator_version` to the new version.
-
-   | Variable              | Description |
-   |-----------------------|-------------|
-   | `operator_version`    | New Materialize Operator version.<br> <ul><li>If the variable does not exist, add the variable and set to the new version.</li><li>If the variable exists, update the value to the new version.</li></ul> |
-
-   ```sh
-   ##... Existing content not shown for brevity
-   ##... Leave the existing variables unchanged
-   operator_version="{{ $operator_version }}"  # Set to the desired operator version
-   ```
 
 1. Initialize the terraform directory.
 
@@ -81,9 +68,15 @@ site.Data.self_managed.latest_versions.operator_helm_chart_version }}
    cp mz_instances.tfvars original_mz_instances.tfvars
    ```
 
-1. *TBD* Update the `mz_instances.tfvars` to specify the upgrade variables for
-each instance:
+1. *TBD* Update the version:
 
+   - If you have upgraded your Terraform modules, the Terraform modules may have
+   updated its default Helm Chart `operator_version`. If you are satisfied with
+   the new Helm Chart version and the associated Materialize instance version,
+   you can skip this step.
+0123456789A00BCD000E11BE12345A01
+   - If you have not upgraded your Terraform modules or you wish to override the
+   instance version, update.
 
 1. Run `terraform plan` with both the `terraform.tfvars` and your
    `mz_instances.tfvars` files and review the changes to be made.
