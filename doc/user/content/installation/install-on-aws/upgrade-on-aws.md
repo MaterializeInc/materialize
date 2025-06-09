@@ -104,7 +104,7 @@ documentation](https://helm.sh/docs/intro/install/).
 1. Configure `kubectl` to connect to your EKS cluster, replacing:
 
    - `<your-eks-cluster-name>` with the name of your EKS cluster. Your cluster
-       name has the form `{namespace}-{environment}-eks`; e.g.,
+       name has the form `{name_prefix}-eks`; e.g.,
        `my-demo-dev-eks`.
 
    - `<your-region>` with the region of your EKS cluster. The
@@ -123,4 +123,4 @@ documentation](https://helm.sh/docs/intro/install/).
    For help with `kubectl` commands, see [kubectl Quick
    reference](https://kubernetes.io/docs/reference/kubectl/quick-reference/).
 
-{{% self-managed/versions/upgrade/upgrade-steps-cloud %}}
+{{% self-managed/versions/upgrade/upgrade-steps-cloud-new %}}

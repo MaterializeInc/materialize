@@ -22,7 +22,7 @@ Materialize instance(s) to that environment.[^1]
 
 {{< warning >}}
 
-{{< include-md file="shared-content/self-managed-terraform-disclaimer.md" >}}
+{{< include-md file="shared-content/self-managed/self-managed-terraform-disclaimer.md" >}}
 
 {{< /warning >}}
 
@@ -56,9 +56,7 @@ documentation](https://helm.sh/docs/intro/install/).
 
 {{< warning >}}
 
-{{< include-md file="shared-content/self-managed-terraform-disclaimer.md" >}}
-
-{{< self-managed/tutorial-disclaimer >}}
+{{< include-md file="shared-content/self-managed/self-managed-terraform-disclaimer.md" >}}
 
 {{< /warning >}}
 
@@ -259,12 +257,12 @@ components:
 
 1. Once the Materialize operator is deployed and running, you can deploy the
    Materialize instances. To deploy Materialize instances, create  a
-   `install_mz_instances.tfvars` file and set `install_materialize_instance` to `true`.
+   `mz_instances.tfvars` file and set `install_materialize_instance` to `true`.
 
    For example, the following specifies the configuration for a `demo` instance.
 
    ```bash
-   cat <<EOF > install_mz_instances.tfvars
+   cat <<EOF > mz_instances.tfvars
    install_materialize_instance = true
    EOF
    ```
@@ -273,7 +271,7 @@ components:
    made.
 
    ```bash
-   terraform plan -var-file=terraform.tfvars -var-file=install_mz_instances.tfvars
+   terraform plan -var-file=terraform.tfvars -var-file=mz_instances.tfvars
    ```
 
    The plan should show the changes to be made, with a summary similar to the
@@ -288,7 +286,7 @@ components:
 1. If you are satisfied with the changes, apply.
 
    ```bash
-   terraform apply -var-file=terraform.tfvars -var-file=install_mz_instances.tfvars
+   terraform apply -var-file=terraform.tfvars -var-file=mz_instances.tfvars
    ```
 
    To approve the changes and apply, enter `yes`.
@@ -421,14 +419,14 @@ components:
 
   {{< tip >}}
 
-  - To delete your S3 bucket, you may need to empty the S3 bucket first. If the
-    `terraform destroy` command is unable to delete the S3 bucket and does not
-    progress beyond "Still destroying...", empty the S3 bucket first and rerun
-    the `terraform destroy` command.
+- To delete your S3 bucket, you may need to empty the S3 bucket first. If the
+   `terraform destroy` command is unable to delete the S3 bucket and does not
+   progress beyond "Still destroying...", empty the S3 bucket first and rerun
+   the `terraform destroy` command.
 
-  - Upon successful destroy, you may receive some informational messages with
-    regards to CustomResourceDefinition(CRD). You may safely ignore these
-    messages as your whole deployment has been destroyed, including the CRDs.
+- Upon successful destroy, you may receive some informational messages with
+   regards to CustomResourceDefinition(CRD). You may safely ignore these
+   messages as your whole deployment has been destroyed, including the CRDs.
 
   {{</ tip >}}
 

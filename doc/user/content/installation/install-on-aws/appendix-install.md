@@ -9,7 +9,7 @@ menu:
     weight: 95
 ---
 
-{{< note >}} 
+{{< note >}}
 
 The following instructions are use the older versions of the Terraform, v0.4.5
 or earlier. For instructions on using the more recent Materialize on AWS
@@ -98,7 +98,7 @@ components:
 {{</ tab >}}
 {{</ tabs >}}
 
-{{< note >}} 
+{{< note >}}
 
 The following instructions are use the older versions of the Terraform, v0.4.5
 or earlier. For instructions on using the more recent Materialize on AWS
