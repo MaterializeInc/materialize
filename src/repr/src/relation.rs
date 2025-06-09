@@ -1450,7 +1450,7 @@ pub fn arb_relation_desc_diff(
     let drop_columns_strat = (0..num_source_columns).prop_perturb(move |num_columns, mut rng| {
         let mut set = BTreeSet::default();
         for _ in 0..num_columns {
-            let col_idx = rng.gen_range(0..num_source_columns);
+            let col_idx = rng.random_range(0..num_source_columns);
             set.insert(source_.get_name(col_idx).clone());
         }
         set.into_iter()
@@ -1463,7 +1463,7 @@ pub fn arb_relation_desc_diff(
         (0..num_source_columns).prop_perturb(move |num_columns, mut rng| {
             let mut set = BTreeSet::default();
             for _ in 0..num_columns {
-                let col_idx = rng.gen_range(0..num_source_columns);
+                let col_idx = rng.random_range(0..num_source_columns);
                 set.insert(source_.get_name(col_idx).clone());
             }
             set.into_iter()
@@ -1476,7 +1476,7 @@ pub fn arb_relation_desc_diff(
         .prop_perturb(move |num_columns, mut rng| {
             let mut set = BTreeSet::default();
             for _ in 0..num_columns {
-                let col_idx = rng.gen_range(0..num_source_columns);
+                let col_idx = rng.random_range(0..num_source_columns);
                 set.insert(source_.get_name(col_idx).clone());
             }
             set
