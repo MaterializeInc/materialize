@@ -242,6 +242,10 @@ pub mod v1alpha1 {
             self.name_prefixed("balancerd-external-tls")
         }
 
+        pub fn console_configmap_name(&self) -> String {
+            self.name_prefixed("console")
+        }
+
         pub fn console_deployment_name(&self) -> String {
             self.name_prefixed("console")
         }
