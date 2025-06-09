@@ -865,11 +865,7 @@ fn test_http_sql() {
         }
 
         let ws_url = server.ws_addr();
-        let http_url = Url::parse(&format!(
-            "http://{}/api/sql",
-            server.inner().http_local_addr()
-        ))
-        .unwrap();
+        let http_url = Url::parse(&format!("http://{}/api/sql", server.http_local_addr())).unwrap();
         let (mut ws, _resp) = tungstenite::connect(ws_url).unwrap();
         let ws_init = test_util::auth_with_ws(&mut ws, BTreeMap::default()).unwrap();
 
@@ -1086,7 +1082,7 @@ fn test_closing_connection_cancels_dataflows(query: String) {
             &format!(
                 "postgres://{}:{}/materialize",
                 Ipv4Addr::LOCALHOST,
-                server.inner().sql_local_addr().port()
+                server.sql_local_addr().port()
             ),
         ])
         .stdin(Stdio::piped());
@@ -1700,11 +1696,7 @@ fn test_max_request_size() {
     {
         let param_size = mz_environmentd::http::MAX_REQUEST_SIZE - statement_size + 1;
         let param = std::iter::repeat("1").take(param_size).join("");
-        let http_url = Url::parse(&format!(
-            "http://{}/api/sql",
-            server.inner().http_local_addr()
-        ))
-        .unwrap();
+        let http_url = Url::parse(&format!("http://{}/api/sql", server.http_local_addr())).unwrap();
         let json = format!("{{\"queries\":[{{\"query\":\"{statement}\",\"params\":[{param}]}}]}}");
         let json: serde_json::Value = serde_json::from_str(&json).unwrap();
         let res = Client::new().post(http_url).json(&json).send().unwrap();
@@ -1760,11 +1752,7 @@ fn test_max_statement_batch_size() {
 
     // http
     {
-        let http_url = Url::parse(&format!(
-            "http://{}/api/sql",
-            server.inner().http_local_addr()
-        ))
-        .unwrap();
+        let http_url = Url::parse(&format!("http://{}/api/sql", server.http_local_addr())).unwrap();
         let json = format!("{{\"query\":\"{statements}\"}}");
         let json: serde_json::Value = serde_json::from_str(&json).unwrap();
 
@@ -1988,7 +1976,7 @@ fn test_http_options_param() {
     let make_request = |params| {
         let http_url = Url::parse(&format!(
             "http://{}/api/sql?{}",
-            server.inner().http_local_addr(),
+            server.http_local_addr(),
             params
         ))
         .unwrap();
@@ -2072,11 +2060,7 @@ fn test_max_connections_on_all_interfaces() {
     let client = server.connect(postgres::NoTls).unwrap();
 
     let ws_url = server.ws_addr();
-    let http_url = Url::parse(&format!(
-        "http://{}/api/sql",
-        server.inner().http_local_addr()
-    ))
-    .unwrap();
+    let http_url = Url::parse(&format!("http://{}/api/sql", server.http_local_addr())).unwrap();
     let json = format!("{{\"query\":\"{query}\"}}");
     let json: serde_json::Value = serde_json::from_str(&json).unwrap();
 
@@ -2250,7 +2234,7 @@ async fn test_max_connections_limits() {
 
     let server = test_util::TestHarness::default()
         .with_tls(server_cert, server_key)
-        .with_frontegg(&frontegg_auth)
+        .with_frontegg_auth(&frontegg_auth)
         .with_metrics_registry(metrics_registry)
         .start()
         .await;
@@ -2418,11 +2402,7 @@ async fn test_concurrent_id_reuse() {
             .unwrap();
     }
 
-    let http_url = Url::parse(&format!(
-        "http://{}/api/sql",
-        server.inner.http_local_addr()
-    ))
-    .unwrap();
+    let http_url = Url::parse(&format!("http://{}/api/sql", server.http_local_addr())).unwrap();
     let select_json = "{\"queries\":[{\"query\":\"SELECT * FROM t;\",\"params\":[]}]}";
     let select_json: serde_json::Value = serde_json::from_str(select_json).unwrap();
 
@@ -2472,7 +2452,7 @@ fn test_internal_console_proxy() {
         .get(
             Url::parse(&format!(
                 "http://{}/internal-console/",
-                server.inner().internal_http_local_addr()
+                server.internal_http_local_addr()
             ))
             .unwrap(),
         )
@@ -2493,7 +2473,7 @@ fn test_internal_http_auth() {
     let json = serde_json::json!({"query": "SELECT current_user;"});
     let url = Url::parse(&format!(
         "http://{}/api/sql",
-        server.inner().internal_http_local_addr()
+        server.internal_http_local_addr()
     ))
     .unwrap();
 
@@ -2645,7 +2625,7 @@ fn test_leader_promotion_always_using_deploy_generation() {
         // check that we're the leader and promotion doesn't do anything
         let status_http_url = Url::parse(&format!(
             "http://{}/api/leader/status",
-            server.inner().internal_http_local_addr()
+            server.internal_http_local_addr()
         ))
         .unwrap();
         let res = http_client.get(status_http_url).send().unwrap();
@@ -2655,7 +2635,7 @@ fn test_leader_promotion_always_using_deploy_generation() {
 
         let promote_http_url = Url::parse(&format!(
             "http://{}/api/leader/promote",
-            server.inner().internal_http_local_addr()
+            server.internal_http_local_addr()
         ))
         .unwrap();
         let res = http_client.post(promote_http_url).send().unwrap();
@@ -2683,8 +2663,8 @@ async fn test_leader_promotion_mixed_code_version() {
     client_this.simple_query("SELECT 1").await.unwrap();
 
     // Simulate a rolling upgrade and wait for the preflight checks.
-    let listeners_next = test_util::Listeners::new().await.unwrap();
-    let internal_http_addr_next = listeners_next.inner.internal_http_local_addr();
+    let listeners_next = test_util::Listeners::new(&harness).await.unwrap();
+    let internal_http_addr_next = listeners_next.inner.http["internal"].handle.local_addr;
     let config_next = harness
         .clone()
         .with_deploy_generation(2)
@@ -2819,7 +2799,7 @@ async fn smoketest_webhook_source() {
     let http_client = reqwest::Client::new();
     let webhook_url = Arc::new(format!(
         "http://{}/api/webhook/materialize/public/webhook_json",
-        server.inner.http_local_addr()
+        server.http_local_addr()
     ));
     // Send all of our events to our webhook source.
     let mut handles = Vec::with_capacity(events.len());
@@ -2911,7 +2891,7 @@ fn test_invalid_webhook_body() {
         .expect("failed to create source");
     let webhook_url = format!(
         "http://{}/api/webhook/materialize/public/webhook_text",
-        server.inner().http_local_addr()
+        server.http_local_addr()
     );
 
     // Send non-UTF8 text which will fail to get deserialized.
@@ -2934,7 +2914,7 @@ fn test_invalid_webhook_body() {
         .expect("failed to create source");
     let webhook_url = format!(
         "http://{}/api/webhook/materialize/public/webhook_json",
-        server.inner().http_local_addr()
+        server.http_local_addr()
     );
 
     // Send invalid JSON which will fail to get deserialized.
@@ -2954,7 +2934,7 @@ fn test_invalid_webhook_body() {
         .expect("failed to create source");
     let webhook_url = format!(
         "http://{}/api/webhook/materialize/public/webhook_bytes",
-        server.inner().http_local_addr()
+        server.http_local_addr()
     );
 
     // No matter what is in the body, we should always succeed.
@@ -2992,7 +2972,7 @@ fn test_webhook_duplicate_headers() {
         .expect("failed to create source");
     let webhook_url = format!(
         "http://{}/api/webhook/materialize/public/webhook_text",
-        server.inner().http_local_addr()
+        server.http_local_addr()
     );
 
     // Send a request with duplicate headers.
@@ -3142,11 +3122,7 @@ fn test_cancel_read_then_write() {
 async fn test_http_metrics() {
     let server = test_util::TestHarness::default().start().await;
 
-    let http_url = Url::parse(&format!(
-        "http://{}/api/sql",
-        server.inner.http_local_addr(),
-    ))
-    .unwrap();
+    let http_url = Url::parse(&format!("http://{}/api/sql", server.http_local_addr(),)).unwrap();
 
     // Handled query (successful)
     let json = r#"{ "query": "SHOW application_name;" }"#;
@@ -3272,7 +3248,7 @@ async fn webhook_concurrent_actions() {
     // Spin up tasks that will contiously push data to the webhook.
     let keep_sending_ = Arc::clone(&keep_sending);
     let num_requests_before_drop_ = Arc::clone(&num_requests_before_drop);
-    let addr = server.inner.http_local_addr();
+    let addr = server.http_local_addr();
 
     let poster = mz_ore::task::spawn(|| "webhook_concurrent_actions-poster", async move {
         let mut i = 0;
@@ -3432,7 +3408,7 @@ fn webhook_concurrency_limit() {
     let http_client = reqwest::Client::new();
     let webhook_url = format!(
         "http://{}/api/webhook/materialize/public/webhook_text",
-        server.inner().http_local_addr().clone(),
+        server.http_local_addr().clone(),
     );
     let mut handles = Vec::with_capacity(concurrency_limit + 5);
 
@@ -3502,7 +3478,7 @@ fn webhook_too_large_request() {
     let http_client = Client::new();
     let webhook_url = format!(
         "http://{}/api/webhook/materialize/public/webhook_bytes",
-        server.inner().http_local_addr(),
+        server.http_local_addr(),
     );
 
     // Send an event with a body larger that is exactly our max size.
@@ -3653,7 +3629,7 @@ async fn webhook_concurrent_swap() {
         .expect("failed to create source");
 
     // Spin up tasks that will contiously push data to both webhooks.
-    let addr = server.inner.http_local_addr();
+    let addr = server.http_local_addr();
     let http_client = reqwest::Client::new();
     let keep_sending = Arc::new(AtomicBool::new(true));
 
@@ -3988,7 +3964,7 @@ async fn test_webhook_source_batch_interval() {
     let http_client = reqwest::Client::new();
     let webhook_url = format!(
         "http://{}/api/webhook/materialize/public/webhook_batch_interval_test",
-        server.inner.http_local_addr()
+        server.http_local_addr()
     );
 
     // Send one event to our webhook source.
@@ -4057,11 +4033,7 @@ async fn test_startup_cluster_notice_with_http_options() {
 
     let http_client = reqwest::Client::new();
 
-    let http_url = Url::parse(&format!(
-        "http://{}/api/sql",
-        server.inner.http_local_addr(),
-    ))
-    .unwrap();
+    let http_url = Url::parse(&format!("http://{}/api/sql", server.http_local_addr(),)).unwrap();
 
     let query = serde_json::json!({
         "query": "SHOW cluster"
@@ -4305,11 +4277,7 @@ async fn test_double_encoded_json() {
         .unwrap();
 
     let http_client = reqwest::Client::new();
-    let http_url = Url::parse(&format!(
-        "http://{}/api/sql",
-        server.inner.http_local_addr(),
-    ))
-    .unwrap();
+    let http_url = Url::parse(&format!("http://{}/api/sql", server.http_local_addr(),)).unwrap();
     let query = serde_json::json!({
         "query": "SELECT a FROM t1 ORDER BY a"
     });
@@ -4468,7 +4436,7 @@ async fn test_cert_reloading() {
     let config = test_util::TestHarness::default()
         // Enable SSL on the main port. There should be a balancerd port with no SSL.
         .with_tls(server_cert.clone(), server_key.clone())
-        .with_frontegg(&frontegg_auth)
+        .with_frontegg_auth(&frontegg_auth)
         .with_metrics_registry(metrics_registry);
     let envd_server = config.start_with_trigger(reload_certs).await;
 
@@ -4484,8 +4452,8 @@ async fn test_cert_reloading() {
 
     let conn_str = Arc::new(format!(
         "user={frontegg_user} password={frontegg_password} host={} port={} sslmode=require",
-        envd_server.inner.sql_local_addr().ip(),
-        envd_server.inner.sql_local_addr().port()
+        envd_server.sql_local_addr().ip(),
+        envd_server.sql_local_addr().port()
     ));
 
     /// Asserts that the postgres connection provides the expected server-side certificate.
@@ -4527,7 +4495,7 @@ async fn test_cert_reloading() {
     // Assert the current certificate is as expected.
     let https_url = format!(
         "https://{addr}/api/sql",
-        addr = envd_server.inner.http_local_addr(),
+        addr = envd_server.http_local_addr(),
     );
     let resp = client
         .post(&https_url)

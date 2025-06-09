@@ -511,6 +511,8 @@ impl RoleAttributes {
     /// Adds all attributes except password.
     pub const fn with_all(mut self) -> RoleAttributes {
         self.inherit = true;
+        self.superuser = Some(true);
+        self.login = Some(true);
         self
     }
 

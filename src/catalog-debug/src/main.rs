@@ -655,6 +655,7 @@ async fn upgrade_check(
             enable_expression_cache_override: None,
             enable_0dt_deployment: true,
             helm_chart_version: None,
+            external_login_password_mz_system: None,
         },
         &mut storage,
     )
