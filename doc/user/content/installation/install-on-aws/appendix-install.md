@@ -1,33 +1,46 @@
 ---
-title: "Install on AWS"
-description: "Install Materialize on AWS."
-aliases:
-  - /self-hosted/install-on-aws/
+title: "Appendix: Terraform versions v0.4.5 or earlier"
+description: "Install instructions for older Materialize on AWS Terraform versions v0.4.5 or earlier."
 disable_list: true
 menu:
   main:
-    parent: "installation"
-    identifier: "install-on-aws"
-    weight: 20
+    parent: "install-on-aws"
+    identifier: "appendix-install-on-aws"
+    weight: 95
 ---
 
- {{% self-managed/materialize-components-sentence %}} This tutorial deploys
-Materialize to AWS Elastic Kubernetes Service (EKS) with a PostgreSQL RDS
-database as the metadata database and AWS S3 for blob storage.
+{{< note >}} 
 
+The following instructions are use the older versions of the Terraform, v0.4.5
+or earlier. For instructions on using the more recent Materialize on AWS
+Terraform, see [Install on AWS](/installation/install-on-aws).
+
+{{</ note >}}
+
+{{% self-managed/materialize-components-sentence %}}
+
+The tutorial deploys Materialize to AWS Elastic Kubernetes Service (EKS) with a
+PostgreSQL RDS database as the metadata database and AWS S3 for blob storage.
 The tutorial uses [Materialize on AWS Terraform
-module](https://github.com/MaterializeInc/terraform-aws-materialize) to set
-up the AWS Kubernetes environment and deploy the Materialize Operator and
-Materialize instance(s) to that environment.[^1]
+module](https://github.com/MaterializeInc/terraform-aws-materialize) to:
+
+- Set up the AWS Kubernetes environment.
+- Call
+   [terraform-helm-materialize](https://github.com/MaterializeInc/terraform-helm-materialize)
+   module to deploy Materialize Operator and Materialize instances to that EKS
+   cluster.
 
 {{< warning >}}
 
-{{< include-md file="shared-content/self-managed-terraform-disclaimer.md" >}}
+{{< self-managed/terraform-disclaimer >}}
 
 {{< /warning >}}
 
-See also [Appendix: AWS Deployment
-guidelines](/installation/install-on-aws/appendix-deployment-guidelines/).
+{{% self-managed/aws-recommended-instances %}}
+
+See [Appendix: AWS Deployment
+guidelines](/installation/install-on-aws/appendix-deployment-guidelines/) for
+more information.
 
 ## Prerequisites
 
@@ -56,7 +69,7 @@ documentation](https://helm.sh/docs/intro/install/).
 
 {{< warning >}}
 
-{{< include-md file="shared-content/self-managed-terraform-disclaimer.md" >}}
+{{< self-managed/terraform-disclaimer >}}
 
 {{< self-managed/tutorial-disclaimer >}}
 
@@ -73,6 +86,10 @@ components:
 
 {{< yaml-table data="self_managed/aws_terraform_deployed_components" >}}
 
+{{< tip >}}
+{{% self-managed/aws-terraform-configs %}}
+{{< /tip >}}
+
 {{</ tab >}}
 {{< tab "Releases" >}}
 
@@ -80,6 +97,14 @@ components:
 
 {{</ tab >}}
 {{</ tabs >}}
+
+{{< note >}} 
+
+The following instructions are use the older versions of the Terraform, v0.4.5
+or earlier. For instructions on using the more recent Materialize on AWS
+Terraform, see [Install on AWS](/installation/install-on-aws).
+
+{{</ note >}}
 
 1. Open a Terminal window.
 
@@ -103,16 +128,22 @@ components:
    `terraform.tfvars.example` file) and specify the following variables:
 
    | Variable          | Description |
-   |-------------------|-------------|
-   | `name_prefix`     | A prefix for your AWS resources. <br> **Requirements:** <br> - Maximum of 19 characters <br> - Must start with a lowercase letter <br> - Must be lowercase alphanumeric and hyphens only |
+   |--------------------|-------------|
+   | `namespace`       | A namespace (e.g., `my-demo`) that will be used to form part of the prefix for your AWS resources. <br> **Requirements:** <br> - Maximum of 12 characters <br> - Must start with a lowercase letter <br> - Must be lowercase alphanumeric and hyphens only |
+   | `environment`     | An environment name (e.g., `dev`, `test`) that will be used to form part of the prefix for your AWS resources. <br> **Requirements:** <br> - Maximum of 8 characters <br> - Must be lowercase alphanumeric only |
 
 
    ```bash
-   # The name_prefix are used to construct the names of the resources
-   # e.g. ${name_prefix}-storage, ${name_prefix}-db   etc.
+   # The namespace and environment variables are used to construct the names of   the resources
+   # e.g. ${namespace}-${environment}-storage, ${namespace}-${environment}-db   etc.
 
-   name_prefix = "enter-name-prefix"   // maximum 19 characters, start with a letter, contain lowercase alphanumeric and hyphens only (e.g. my-demo-dev)
+   namespace = "enter-namespace"   // maximum 12 characters, start with a   letter, contain lowercase alphanumeric and hyphens only (e.g. my-demo)
+   environment = "enter-environment" // maximum 8 characters, lowercase   alphanumeric only (e.g., dev, test)
    ```
+
+   {{< tip >}}
+   {{< self-managed/aws-terraform-configs >}}
+   {{< /tip >}}
 
 1. Initialize the terraform directory.
 
@@ -139,35 +170,21 @@ components:
    Upon successful completion, various fields and their values are output:
 
    ```none
-   Apply complete! Resources: 83 added, 0 changed, 0 destroyed.
+   Apply complete! Resources: 89 added, 0 changed, 0 destroyed.
 
    Outputs:
 
-   cluster_certificate_authority_data = "LS0tLS1CRUdJTiBDRVJUSUZJQ0FURS0..."
-   cluster_oidc_issuer_url = "https://oidc.eks.us-east-1.amazonaws.com/id/0123456789A00BCD000E11BE12345A01"
-   database_endpoint = "my-demo-dev-db.ctthmav6dsti.us-east-1.rds.amazonaws.com:5432"
+   cluster_certificate_authority_data = <sensitive>
+   database_endpoint = "my-demo-dev-db.abcdefg8dsto.us-east-1.rds.amazonaws.com:5432"
    eks_cluster_endpoint = "https://0123456789A00BCD000E11BE12345A01.gr7.us-east-1.eks.amazonaws.com"
    eks_cluster_name = "my-demo-dev-eks"
    materialize_s3_role_arn = "arn:aws:iam::000111222333:role/my-demo-dev-mz-role"
    metadata_backend_url = <sensitive>
-   nlb_details = {
-   "arn" = null
-   "dns_name" = null
-   }
-   oidc_provider_arn = "arn:aws:iam::000111222333:oidc-provider/oidc.eks.us-east-1.amazonaws.com/id/0123456789A00BCD000E11BE12345A01"
-   persist_backend_url = "s3://my-demo-dev-storage-63088a11/my-demo-dev:serviceaccount:materialize-environment:12345678-1234-1234-1234-123456789012"
-   private_subnet_ids = [
-   "subnet-080bc130427cfd2a4",
-   "subnet-00f88c46c26ca0fa0",
-   "subnet-0896bda06945acc26",
-   ]
-   public_subnet_ids = [
-   "subnet-07d8207c89f5e1517",
-   "subnet-083772e9e404e01b9",
-   "subnet-00b082a542ffde6e1",
-   ]
-   s3_bucket_name = "my-demo-dev-storage-63088a11"
-   vpc_id = "vpc-031776a2bb75f4a45"
+   nlb_details = []
+   oidc_provider_arn = "arn:aws:iam::000111222333:oidc-provider/oidc.eks.us-east-1.amazonaws.com/id/7D14BCA3A7AA896A836782D96A24F958"
+   persist_backend_url = "s3://my-demo-dev-storage-f2def2a9/dev:serviceaccount:materialize-environment:12345678-1234-1234-1234-12345678912"
+   s3_bucket_name = "my-demo-dev-storage-f2def2a9"
+   vpc_id = "vpc-0abc000bed1d111bd"
    ```
 
 1. Note your specific values for the following fields:
@@ -177,7 +194,7 @@ components:
 1. Configure `kubectl` to connect to your EKS cluster, replacing:
 
    - `<your-eks-cluster-name>` with the name of your EKS cluster. Your cluster
-       name has the form `{name_prefix}-eks`; e.g.,
+       name has the form `{namespace}-{environment}-eks`; e.g.,
        `my-demo-dev-eks`.
 
    - `<your-region>` with the region of your EKS cluster. The
@@ -259,36 +276,66 @@ components:
 
 1. Once the Materialize operator is deployed and running, you can deploy the
    Materialize instances. To deploy Materialize instances, create  a
-   `install_mz_instances.tfvars` file and set `install_materialize_instance` to `true`.
+   `mz_instances.tfvars` file with the [Materialize instance
+   configuration](https://github.com/MaterializeInc/terraform-aws-materialize?tab=readme-ov-file#input_materialize_instances).
 
    For example, the following specifies the configuration for a `demo` instance.
 
    ```bash
-   cat <<EOF > install_mz_instances.tfvars
-   install_materialize_instance = true
+   cat <<EOF > mz_instances.tfvars
+
+   materialize_instances = [
+       {
+         name           = "demo"
+         namespace      = "materialize-environment"
+         database_name  = "demo_db"
+         cpu_request    = "1"
+         memory_request = "2Gi"
+         memory_limit   = "2Gi"
+       }
+   ]
    EOF
    ```
+
+   Starting in v0.3.0, the Materialize on AWS Terraform module also deploys, by
+   default, Network Load Balancers (NLBs) for each Materialize instance (i.e.,
+   the
+   [`create_nlb`](https://github.com/MaterializeInc/terraform-aws-materialize?tab=readme-ov-file#input_materialize_instances)
+   flag defaults to `true`).  The NLBs, by default, are configured to be
+    internal (i.e., the
+    [`internal_nlb`](https://github.com/MaterializeInc/terraform-aws-materialize?tab=readme-ov-file#input_materialize_instances)
+   flag defaults to `true`). See [`materialize_instances`](
+   https://github.com/MaterializeInc/terraform-aws-materialize?tab=readme-ov-file#input_materialize_instances)
+   for the Materialize instance configuration options.
+
+   Starting in v0.4.0, a self-signed `ClusterIssuer` is deployed by default. The
+   `ClusterIssuer` is deployed on subsequent after the `cert-manager` is
+   running.
+
+   {{< tip >}}
+   {{% self-managed/aws-terraform-upgrade-notes %}}
+
+   See [Materialize on AWS releases](/installation/appendix-terraforms/#materialize-on-aws-terraform-module) for notable changes.
+   {{</ tip >}}
 
 1. Run `terraform plan` with both `.tfvars` files and review the changes to be
    made.
 
    ```bash
-   terraform plan -var-file=terraform.tfvars -var-file=install_mz_instances.tfvars
+   terraform plan -var-file=terraform.tfvars -var-file=mz_instances.tfvars
    ```
 
    The plan should show the changes to be made, with a summary similar to the
    following:
 
    ```
-   Plan: 16 to add, 0 to change, 0 to destroy.
-
-   ...
+   Plan: 17 to add, 1 to change, 0 to destroy.
    ```
 
 1. If you are satisfied with the changes, apply.
 
    ```bash
-   terraform apply -var-file=terraform.tfvars -var-file=install_mz_instances.tfvars
+   terraform apply -var-file=terraform.tfvars -var-file=mz_instances.tfvars
    ```
 
    To approve the changes and apply, enter `yes`.
@@ -299,7 +346,7 @@ components:
    <a name="aws-terrafrom-output"></a>
 
    ```bash
-   Apply complete! Resources: 16 added, 0 changed, 0 destroyed.
+   Apply complete! Resources: 17 added, 1 changed, 0 destroyed.
 
    Outputs:
 
@@ -439,7 +486,3 @@ components:
 - [Appendix: AWS Deployment
 guidelines](/installation/install-on-aws/appendix-deployment-guidelines/)
 - [Installation](/installation/)
-
-[^1]: The following instructions are for Materialize on AWS Terraform versionX
-    or greater. For instructions using older versions of the Terraform, see
-    [Appendix](/installation/install-on-aws/appendix-install/).
