@@ -346,6 +346,7 @@ class State:
                     "requests": {"cpu": "100m", "memory": "256Mi"},
                 },
                 "backendSecretName": "materialize-backend",
+                "authenticatorKind": "None",
             },
         }
 
@@ -632,11 +633,10 @@ class AWS(State):
             "-var",
             "operator_version=v25.2.0-beta.1",
         ]
-        if not tag:
-            vars += [
-                "-var",
-                f"orchestratord_version={get_tag(tag)}",
-            ]
+        vars += [
+            "-var",
+            f"orchestratord_version={get_tag(tag)}",
+        ]
 
         print("--- Setup")
         spawn.runv(
@@ -695,6 +695,7 @@ class AWS(State):
                     "requests": {"cpu": "100m", "memory": "256Mi"},
                 },
                 "backendSecretName": "materialize-backend",
+                "authenticatorKind": "None",
             },
         }
 
@@ -1011,11 +1012,10 @@ def workflow_gcp_temporary(c: Composition, parser: WorkflowArgumentParser) -> No
             "-var",
             "operator_version=v25.2.0-beta.1",
         ]
-        if not tag:
-            vars += [
-                "-var",
-                f"orchestratord_version={get_tag(tag)}",
-            ]
+        vars += [
+            "-var",
+            f"orchestratord_version={get_tag(tag)}",
+        ]
 
         if args.setup:
             print("--- Setup")
@@ -1123,11 +1123,10 @@ def workflow_azure_temporary(c: Composition, parser: WorkflowArgumentParser) -> 
             "-var",
             "operator_version=v25.2.0-beta.1",
         ]
-        if not tag:
-            vars += [
-                "-var",
-                f"orchestratord_version={get_tag(tag)}",
-            ]
+        vars += [
+            "-var",
+            f"orchestratord_version={get_tag(tag)}",
+        ]
 
         if args.setup:
             spawn.runv(

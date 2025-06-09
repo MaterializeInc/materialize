@@ -338,7 +338,7 @@ class EnvironmentdStatefulSet(K8sStatefulSet):
                 "--announce-egress-ip=88.77.66.55",
             ]
 
-        if self._meets_minimum_version("0.146.0-dev"):
+        if self._meets_minimum_version("0.147.0-dev"):
             args.append("--listeners-config-path=/listeners/listeners.json")
         else:
             args += [

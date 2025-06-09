@@ -300,7 +300,7 @@ class Materialized(Service):
 
         volumes = []
 
-        if image_version is None or image_version >= "v0.146.0-dev":
+        if image_version is None or image_version >= "v0.147.0-dev":
             assert os.path.exists(listeners_config_path)
             volumes.append(f"{listeners_config_path}:/listeners_config")
             environment.append("MZ_LISTENERS_CONFIG_PATH=/listeners_config")

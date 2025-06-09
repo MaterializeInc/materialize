@@ -65,10 +65,9 @@ static V140_DEV0: LazyLock<Version> = LazyLock::new(|| Version {
 });
 const V143: Version = Version::new(0, 143, 0);
 const V144: Version = Version::new(0, 144, 0);
-// TODO bump this version to whatever it ends up being
-static V146_DEV0: LazyLock<Version> = LazyLock::new(|| Version {
+static V147_DEV0: LazyLock<Version> = LazyLock::new(|| Version {
     major: 0,
-    minor: 146,
+    minor: 147,
     patch: 0,
     pre: Prerelease::new("dev.0").expect("dev.0 is valid prerelease"),
     build: BuildMetadata::new("").expect("empty string is valid buildmetadata"),
@@ -1370,7 +1369,7 @@ fn create_environmentd_statefulset_object(
     }
 
     // Add networking arguments.
-    if mz.meets_minimum_version(&V146_DEV0) {
+    if mz.meets_minimum_version(&V147_DEV0) {
         volume_mounts.push(VolumeMount {
             name: "listeners-configmap".to_string(),
             mount_path: "/listeners".to_string(),
