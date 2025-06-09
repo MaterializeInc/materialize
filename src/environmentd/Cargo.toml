@@ -109,7 +109,7 @@ tokio = { version = "1.44.1", features = ["sync"] }
 tokio-postgres = { version = "0.7.8" }
 tokio-stream = { version = "0.1.17", features = ["net"] }
 tower = { version = "0.5.2", features = ["buffer", "limit", "load-shed"] }
-tower-http = { version = "0.6.5", features = ["cors"] }
+tower-http = { version = "0.6.6", features = ["cors"] }
 tracing = "0.1.37"
 tracing-capture = { version = "0.1.0", optional = true }
 tracing-opentelemetry = { version = "0.25.0" }

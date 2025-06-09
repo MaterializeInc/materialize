@@ -47,7 +47,7 @@ prost = "0.13.5"
 reqwest = { version = "0.11.13", features = ["stream"] }
 sentry = { version = "0.38.1", default-features = false, features = [] }
 serde = { version = "1.0.219", features = ["derive"] }
-smallvec = { version = "1.15.0", features = ["union"] }
+smallvec = { version = "1.15.1", features = ["union"] }
 timely = "0.21.0"
 thiserror = "2.0.12"
 tokio = { version = "1.44.1", features = ["fs", "rt", "sync", "test-util", "time"] }
