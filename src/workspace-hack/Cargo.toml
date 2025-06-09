@@ -57,7 +57,7 @@ digest = { version = "0.10.7", features = ["mac", "std"] }
 either = { version = "1.15.0", features = ["use_std"] }
 event-listener = { version = "5.4.0" }
 event-listener-strategy = { version = "0.5.4" }
-flate2 = { version = "1.1.1", features = ["zlib"] }
+flate2 = { version = "1.1.2", features = ["zlib"] }
 form_urlencoded = { version = "1.2.1" }
 futures-channel = { version = "0.3.31", features = ["sink"] }
 futures-core = { version = "0.3.31" }
@@ -170,7 +170,7 @@ bitflags = { version = "2.9.0", default-features = false, features = ["std"] }
 bstr = { version = "1.10.0" }
 byteorder = { version = "1.5.0" }
 bytes = { version = "1.10.1", features = ["serde"] }
-cc = { version = "1.2.25", default-features = false, features = ["parallel"] }
+cc = { version = "1.2.26", default-features = false, features = ["parallel"] }
 chrono = { version = "0.4.39", features = ["serde"] }
 clap = { version = "4.5.23", features = ["derive", "env", "string", "wrap_help"] }
 clap_builder = { version = "4.5.23", default-features = false, features = ["color", "env", "std", "string", "suggestions", "usage", "wrap_help"] }
@@ -190,7 +190,7 @@ digest = { version = "0.10.7", features = ["mac", "std"] }
 either = { version = "1.15.0", features = ["use_std"] }
 event-listener = { version = "5.4.0" }
 event-listener-strategy = { version = "0.5.4" }
-flate2 = { version = "1.1.1", features = ["zlib"] }
+flate2 = { version = "1.1.2", features = ["zlib"] }
 form_urlencoded = { version = "1.2.1" }
 futures-channel = { version = "0.3.31", features = ["sink"] }
 futures-core = { version = "0.3.31" }
@@ -284,7 +284,7 @@ zstd-safe = { version = "7.2.1", default-features = false, features = ["arrays",
 zstd-sys = { version = "2.0.13", features = ["std"] }
 
 [target.x86_64-unknown-linux-gnu.dependencies]
-camino = { version = "1.1.9", default-features = false, features = ["serde1"] }
+camino = { version = "1.1.10", default-features = false, features = ["serde1"] }
 hyper = { version = "0.14.27", default-features = false, features = ["runtime"] }
 linux-raw-sys-274715c4dabd11b0 = { package = "linux-raw-sys", version = "0.9.4", default-features = false, features = ["elf", "errno", "general", "ioctl", "no_std", "prctl"] }
 linux-raw-sys-9fbad63c4bcf4a8f = { package = "linux-raw-sys", version = "0.4.15", default-features = false, features = ["elf", "errno", "general", "if_ether", "ioctl", "net", "netlink", "no_std", "prctl", "std", "xdp"] }
@@ -298,7 +298,7 @@ rustix-d585fab2519d2d1 = { package = "rustix", version = "0.38.44", features = [
 rustix-dff4ba8e3ae991db = { package = "rustix", version = "1.0.5", features = ["event", "fs", "pipe", "process", "time"] }
 
 [target.x86_64-unknown-linux-gnu.build-dependencies]
-camino = { version = "1.1.9", default-features = false, features = ["serde1"] }
+camino = { version = "1.1.10", default-features = false, features = ["serde1"] }
 hyper = { version = "0.14.27", default-features = false, features = ["runtime"] }
 linux-raw-sys-274715c4dabd11b0 = { package = "linux-raw-sys", version = "0.9.4", default-features = false, features = ["elf", "errno", "general", "ioctl", "no_std", "prctl"] }
 linux-raw-sys-9fbad63c4bcf4a8f = { package = "linux-raw-sys", version = "0.4.15", default-features = false, features = ["elf", "errno", "general", "if_ether", "ioctl", "net", "netlink", "no_std", "prctl", "std", "xdp"] }
@@ -312,7 +312,7 @@ rustix-d585fab2519d2d1 = { package = "rustix", version = "0.38.44", features = [
 rustix-dff4ba8e3ae991db = { package = "rustix", version = "1.0.5", features = ["event", "fs", "pipe", "process", "time"] }
 
 [target.x86_64-apple-darwin.dependencies]
-camino = { version = "1.1.9", default-features = false, features = ["serde1"] }
+camino = { version = "1.1.10", default-features = false, features = ["serde1"] }
 hyper = { version = "0.14.27", default-features = false, features = ["runtime"] }
 miniz_oxide = { version = "0.8.8", default-features = false, features = ["with-alloc"] }
 native-tls = { version = "0.2.14", default-features = false, features = ["vendored"] }
@@ -323,7 +323,7 @@ rustix-dff4ba8e3ae991db = { package = "rustix", version = "1.0.5", features = ["
 security-framework = { version = "2.10.0", features = ["alpn"] }
 
 [target.x86_64-apple-darwin.build-dependencies]
-camino = { version = "1.1.9", default-features = false, features = ["serde1"] }
+camino = { version = "1.1.10", default-features = false, features = ["serde1"] }
 hyper = { version = "0.14.27", default-features = false, features = ["runtime"] }
 miniz_oxide = { version = "0.8.8", default-features = false, features = ["with-alloc"] }
 native-tls = { version = "0.2.14", default-features = false, features = ["vendored"] }

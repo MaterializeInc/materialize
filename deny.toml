@@ -41,7 +41,6 @@ skip = [
     { name = "windows-sys", version = "0.52.0" },
     # Newer versions of crates like `tempfile` are held back by crates like `atty`.
     # This is very Unfortunate as we don't actually use these platforms.
-    { name = "hermit-abi", version = "0.3.9" },
     { name = "redox_syscall", version = "0.2.10" },
     { name = "redox_syscall", version = "0.4.1" },
 
@@ -155,6 +154,8 @@ skip = [
     { name = "itertools", version = "0.13.0" },
     # Used by pprof
     { name = "nix", version = "0.26.4" },
+    # Used by dynfmt
+    { name = "erased-serde", version = "0.3.26" },
 ]
 
 [[bans.deny]]
