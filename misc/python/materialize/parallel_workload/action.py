@@ -1082,7 +1082,11 @@ class FlipFlagsAction(Action):
         self.flags_with_values["enable_alter_table_add_column"] = BOOLEAN_FLAG_VALUES
 
         # If you are adding a new config flag in Materialize, consider using it
-        # here instead of just marking it as uninteresting to silence the linter.
+        # here instead of just marking it as uninteresting to silence the
+        # linter. parallel-workload randomly flips the flags in
+        # `flags_with_values` while running. If a new flag has interesting
+        # behavior, you should add it. Feature flags which turn on/off
+        # externally visible features should not be flipped.
         self.uninteresting_flags: list[str] = [
             "enable_mz_join_core",
             "enable_compute_correction_v2",
