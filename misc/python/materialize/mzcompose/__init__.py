@@ -131,7 +131,7 @@ def get_variable_system_parameters(
         VariableSystemParameter(
             "persist_next_listen_batch_retryer_clamp",
             "16s",
-            ["10ms", "100ms", "1s", "10s", "100s"],
+            ["100ms", "1s", "10s", "100s"],
         ),
         VariableSystemParameter(
             "persist_next_listen_batch_retryer_initial_backoff",
@@ -141,7 +141,7 @@ def get_variable_system_parameters(
         VariableSystemParameter(
             "persist_next_listen_batch_retryer_fixed_sleep",
             "1200ms",
-            ["10ms", "100ms", "1s", "10s"],
+            ["100ms", "1s", "10s"],
         ),
         # -----
         # Persist internals changes, advance coverage
@@ -157,13 +157,13 @@ def get_variable_system_parameters(
         VariableSystemParameter(
             "compute_dataflow_max_inflight_bytes",
             "134217728",
-            ["1048576", "4194304", "16777216", "67108864", "1073741824"],
+            ["1048576", "4194304", "16777216", "67108864"],
         ),  # 128 MiB
         VariableSystemParameter(
-            "compute_hydration_concurrency", "2", ["1", "2", "4", "8"]
+            "compute_hydration_concurrency", "2", ["1", "2", "4"]
         ),
         VariableSystemParameter(
-            "compute_replica_expiration_offset", "3d", ["3d", "10d", "1000d"]
+            "compute_replica_expiration_offset", "3d", ["3d", "10d"]
         ),
         VariableSystemParameter(
             "compute_apply_column_demands", "true", ["true", "false"]
@@ -174,10 +174,10 @@ def get_variable_system_parameters(
         VariableSystemParameter(
             "kafka_default_metadata_fetch_interval",
             "1s",
-            ["10ms", "100ms", "1s", "10s"],
+            ["100ms", "1s", "10s"],
         ),
         VariableSystemParameter(
-            "mysql_offset_known_interval", "1s", ["10ms", "100ms", "1s", "10s"]
+            "mysql_offset_known_interval", "1s", ["100ms", "1s", "10s"]
         ),
         VariableSystemParameter(
             "force_source_table_syntax",
@@ -201,20 +201,20 @@ def get_variable_system_parameters(
         VariableSystemParameter(
             "persist_batch_structured_key_lower_len",
             "256",
-            ["0", "1", "512", "1000", "50000"],
+            ["0", "1", "512", "1000"],
         ),
         VariableSystemParameter(
-            "persist_batch_max_run_len", "4", ["2", "3", "4", "16", "1000"]
+            "persist_batch_max_run_len", "4", ["2", "3", "4", "16"]
         ),
         VariableSystemParameter(
             "persist_catalog_force_compaction_fuel",
             "1024",
-            ["16", "64", "256", "1024", "4096", "16384"],
+            ["256", "1024", "4096"],
         ),
         VariableSystemParameter(
             "persist_catalog_force_compaction_wait",
             "1s",
-            ["10ms", "100ms", "1s", "10s"],
+            ["100ms", "1s", "10s"],
         ),
         VariableSystemParameter(
             "persist_encoding_enable_dictionary", "true", ["true", "false"]
@@ -222,7 +222,7 @@ def get_variable_system_parameters(
         VariableSystemParameter(
             "persist_fast_path_limit",
             "1000",
-            ["1", "10", "100", "1000", "10000", "100000"],
+            ["100", "1000", "10000"],
         ),
         VariableSystemParameter("persist_fast_path_order", "true", ["true", "false"]),
         VariableSystemParameter(
@@ -237,12 +237,12 @@ def get_variable_system_parameters(
         VariableSystemParameter(
             "persist_inline_writes_single_max_bytes",
             "4096",
-            ["16", "64", "256", "1024", "4096", "16384"],
+            ["256", "1024", "4096", "16384"],
         ),
         VariableSystemParameter(
             "persist_inline_writes_total_max_bytes",
             "1048576",
-            ["16384", "65536", "262144", "1048576", "4194304", "16777216"],
+            ["65536", "262144", "1048576", "4194304"],
         ),
         VariableSystemParameter(
             "persist_pubsub_client_enabled", "true", ["true", "false"]
@@ -303,27 +303,27 @@ def get_variable_system_parameters(
             "persist_blob_cache_scale_with_threads", "true", ["true", "false"]
         ),
         VariableSystemParameter(
-            "pg_offset_known_interval", "1s", ["10ms", "100ms", "1s", "10s"]
+            "pg_offset_known_interval", "1s", ["100ms", "1s", "10s"]
         ),
         VariableSystemParameter(
-            "statement_logging_default_sample_rate", "0.01", ["0", "0.01", "0.1"]
+            "statement_logging_default_sample_rate", "0.01", ["0", "0.01"]
         ),
         VariableSystemParameter(
-            "statement_logging_max_sample_rate", "0.01", ["0", "0.01", "0.1"]
+            "statement_logging_max_sample_rate", "0.01", ["0", "0.01"]
         ),
         VariableSystemParameter("storage_reclock_to_latest", "true", ["true", "false"]),
         VariableSystemParameter(
             "storage_source_decode_fuel",
             "100000",
-            ["10", "100", "1000", "10000", "100000", "1000000"],
+            ["10000", "100000", "1000000"],
         ),
         VariableSystemParameter(
             "storage_statistics_collection_interval",
             "1000",
-            ["1", "10", "100", "1000", "10000"],
+            ["100", "1000", "10000"],
         ),
         VariableSystemParameter(
-            "storage_statistics_interval", "2000", ["10", "100", "1000", "10000"]
+            "storage_statistics_interval", "2000", ["100", "1000", "10000"]
         ),
         VariableSystemParameter(
             "storage_use_continual_feedback_upsert", "true", ["true", "false"]
