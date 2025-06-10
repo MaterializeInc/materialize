@@ -1223,10 +1223,10 @@ async fn update_persist_with_batches(
         (Some(first), Some(last)) => (first.0.clone(), last.1.clone()),
         (None, None) => {
             upper_cap_set.downgrade(current_upper.borrow().iter());
-            //
+
             return Ok(());
         }
-        // SAFETY(ptravers): if first exists so must last.
+        // NB(ptravers): if first exists so must last.
         (Some(_), None) | (None, Some(_)) => {
             unreachable!("the list of batches must have a first and last if it is non empty.")
         }
