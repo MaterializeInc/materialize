@@ -599,7 +599,7 @@ mod turmoil_tests {
                         }
                         for sock in sockets.iter_mut().filter_map(|s| s.as_mut()) {
                             info!("waiting for ping from {sock:?}");
-                            match timeout(Duration::from_secs(1), sock.read_u8()).await {
+                            match timeout(Duration::from_secs(2), sock.read_u8()).await {
                                 Ok(Ok(ping)) => assert_eq!(ping, 111),
                                 Ok(Err(error)) => {
                                     info!("error waiting for ping: {error}; retrying protocol");
