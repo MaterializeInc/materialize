@@ -3320,6 +3320,7 @@ fn starts_with<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
 
 #[derive(Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzReflect)]
 pub enum BinaryFunc {
+    Wasm,
     AddInt16,
     AddInt32,
     AddInt64,
@@ -3516,6 +3517,111 @@ pub enum BinaryFunc {
     StartsWith,
 }
 
+fn wasm<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
+    let mut wasm_state = WasmState::new(b.unwrap_str(), "logic");
+    Ok(Datum::Int64(wasm_state.eval(a.unwrap_int64())))
+}
+
+pub struct WasmState {
+    engine: wasmtime::Engine,
+    module: wasmtime::Module,
+    store: wasmtime::Store<()>,
+    instance: wasmtime::Instance,
+    func: wasmtime::TypedFunc<i64, i64>,
+}
+
+impl WasmState {
+    fn eval(&mut self, input: i64) -> i64 {
+        self.func.call(&mut self.store, input).unwrap()
+    }
+
+    fn new(text: &str, name: &str) -> Self {
+        use wasmtime::*;
+        let engine = Engine::default();
+        let module = Module::new(&engine, text).unwrap();
+        let mut store = Store::new(&engine, ());
+        let instance = Instance::new(&mut store, &module, &[]).unwrap();
+        let func = instance
+            .get_typed_func::<i64, i64>(&mut store, name)
+            .unwrap();
+
+        Self { engine, module, store, instance, func }
+    }
+}
+
+#[derive(Serialize, Deserialize)]
+pub struct UnaryWasm2 {
+    pub text: String,
+    #[serde(skip)]
+    pub data: std::sync::Mutex<Option<WasmState>>,
+}
+
+impl<'a> EagerUnaryFunc<'a> for UnaryWasm2 {
+    type Input = i64;
+    type Output = Result<i64, EvalError>;
+
+    fn call(&self, a: i64) -> Result<i64, EvalError> {
+        let mut lock = self.data.lock().unwrap();
+        if lock.is_none() {
+            *lock = Some(WasmState::new(&self.text, "logic"));
+        }
+
+        if let Some(wasm_state) = &mut *lock {
+            Ok(wasm_state.eval(a))
+        } else {
+            unimplemented!()
+        }
+    }
+
+    fn output_type(&self, input: ColumnType) -> ColumnType {
+        ScalarType::Int64.nullable(input.nullable)
+    }
+}
+
+impl Ord for UnaryWasm2 {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        self.text.cmp(&other.text)
+    }
+}
+impl PartialOrd for UnaryWasm2 {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+impl PartialEq for UnaryWasm2 {
+    fn eq(&self, other: &Self) -> bool {
+        self.text.eq(&other.text)
+    }
+}
+impl std::cmp::Eq for UnaryWasm2 { }
+impl Clone for UnaryWasm2 {
+    fn clone(&self) -> Self {
+        Self { text: self.text.clone(), data: Default::default() }
+    }
+}
+
+
+impl fmt::Display for UnaryWasm2 {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "wasm(...)")
+    }
+}
+impl fmt::Debug for UnaryWasm2 {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "wasm(...)")
+    }
+}
+impl std::hash::Hash for UnaryWasm2 {
+    fn hash<H>(&self, state: &mut H) where H: std::hash::Hasher { 
+        self.text.hash(state) 
+    }
+}
+impl MzReflect for UnaryWasm2 {
+    fn add_to_reflected_type_info(_rti: &mut mz_lowertest::ReflectedTypeInfo) {
+    }
+}
+
+
 impl BinaryFunc {
     pub fn eval<'a>(
         &'a self,
@@ -3530,6 +3636,7 @@ impl BinaryFunc {
             return Ok(Datum::Null);
         }
         match self {
+            BinaryFunc::Wasm => wasm(a, b),
             BinaryFunc::AddInt16 => add_int16(a, b),
             BinaryFunc::AddInt32 => add_int32(a, b),
             BinaryFunc::AddInt64 => add_int64(a, b),
@@ -3823,6 +3930,7 @@ impl BinaryFunc {
             | EncodedBytesCharLength
             | SubDate => ScalarType::Int32.nullable(in_nullable),
 
+            Wasm |
             AddInt64 | SubInt64 | MulInt64 | DivInt64 | ModInt64 | BitAndInt64 | BitOrInt64
             | BitXorInt64 | BitShiftLeftInt64 | BitShiftRightInt64 => {
                 ScalarType::Int64.nullable(in_nullable)
@@ -4004,7 +4112,8 @@ impl BinaryFunc {
     pub fn introduces_nulls(&self) -> bool {
         use BinaryFunc::*;
         match self {
-            AddInt16
+            Wasm
+            | AddInt16
             | AddInt32
             | AddInt64
             | AddUInt16
@@ -4343,7 +4452,8 @@ impl BinaryFunc {
             | RangeUnion
             | RangeIntersection
             | RangeDifference => true,
-            ToCharTimestamp
+            Wasm
+            | ToCharTimestamp
             | ToCharTimestampTz
             | AgeTimestamp
             | AgeTimestampTz
@@ -4715,6 +4825,7 @@ impl BinaryFunc {
             BinaryFunc::PrettySql => (false, false),
             BinaryFunc::RegexpReplace { .. } => (false, false),
             BinaryFunc::StartsWith => (false, false),
+            BinaryFunc::Wasm => (false, false),
         }
     }
 }
@@ -4933,6 +5044,7 @@ impl fmt::Display for BinaryFunc {
                 limit
             ),
             BinaryFunc::StartsWith => f.write_str("starts_with"),
+            BinaryFunc::Wasm => f.write_str("wasm"),
         }
     }
 }
@@ -5356,6 +5468,7 @@ impl RustType<ProtoBinaryFunc> for BinaryFunc {
                 })
             }
             BinaryFunc::StartsWith => StartsWith(()),
+            BinaryFunc::Wasm => Wasm(()),
         };
         ProtoBinaryFunc { kind: Some(kind) }
     }
@@ -5570,6 +5683,7 @@ impl RustType<ProtoBinaryFunc> for BinaryFunc {
                     limit: inner.limit.into_rust()?,
                 }),
                 StartsWith(()) => Ok(BinaryFunc::StartsWith),
+                Wasm(()) => Ok(BinaryFunc::Wasm),
             }
         } else {
             Err(TryFromProtoError::missing_field("ProtoBinaryFunc::kind"))
@@ -6068,7 +6182,8 @@ derive_unary!(
     KafkaMurmur2String,
     SeahashBytes,
     SeahashString,
-    Reverse
+    Reverse,
+    UnaryWasm2
 );
 
 impl UnaryFunc {
@@ -6490,6 +6605,7 @@ impl RustType<ProtoUnaryFunc> for UnaryFunc {
         use crate::scalar::proto_unary_func::Kind::*;
         use crate::scalar::proto_unary_func::*;
         let kind = match self {
+            UnaryFunc::UnaryWasm2(stuff) => UnaryWasm(stuff.text.clone()),
             UnaryFunc::Not(_) => Not(()),
             UnaryFunc::IsNull(_) => IsNull(()),
             UnaryFunc::IsTrue(_) => IsTrue(()),
@@ -6903,6 +7019,7 @@ impl RustType<ProtoUnaryFunc> for UnaryFunc {
         use crate::scalar::proto_unary_func::Kind::*;
         if let Some(kind) = proto.kind {
             match kind {
+                UnaryWasm(text) => Ok(UnaryFunc::UnaryWasm2(UnaryWasm2 { text: text.clone(), data: Default::default() })),
                 Not(()) => Ok(impls::Not.into()),
                 IsNull(()) => Ok(impls::IsNull.into()),
                 IsTrue(()) => Ok(impls::IsTrue.into()),
