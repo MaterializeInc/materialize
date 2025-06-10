@@ -29,6 +29,7 @@ use mz_compute_client::protocol::response::{
     StatusResponse, SubscribeResponse,
 };
 use mz_compute_types::dataflows::DataflowDescription;
+use mz_compute_types::dyncfgs::ENABLE_ACTIVE_DATAFLOW_CANCELATION;
 use mz_compute_types::plan::LirId;
 use mz_compute_types::plan::render_plan::RenderPlan;
 use mz_dyncfg::ConfigSet;
@@ -478,9 +479,7 @@ impl<'a, A: Allocate + 'static> ActiveComputeState<'a, A> {
         &mut self,
         dataflow: DataflowDescription<RenderPlan, CollectionMetadata>,
     ) {
-        // Collect the exported object identifiers, paired with their associated "collection" identifier.
-        // The latter is used to extract dependency information, which is in terms of collections ids.
-        let dataflow_index = self.timely_worker.next_dataflow_index();
+        let dataflow_index = Rc::new(self.timely_worker.next_dataflow_index());
         let as_of = dataflow.as_of.clone().unwrap();
 
         let dataflow_expiration = dataflow
@@ -531,13 +530,18 @@ impl<'a, A: Allocate + 'static> ActiveComputeState<'a, A> {
         for object_id in dataflow.export_ids() {
             let is_subscribe_or_copy = subscribe_copy_ids.contains(&object_id);
             let metrics = self.compute_state.metrics.for_collection(object_id);
-            let mut collection = CollectionState::new(is_subscribe_or_copy, as_of.clone(), metrics);
+            let mut collection = CollectionState::new(
+                Rc::clone(&dataflow_index),
+                is_subscribe_or_copy,
+                as_of.clone(),
+                metrics,
+            );
 
             if let Some(logger) = self.compute_state.compute_logger.clone() {
                 let logging = CollectionLogging::new(
                     object_id,
                     logger,
-                    dataflow_index,
+                    *dataflow_index,
                     dataflow.import_ids(),
                 );
                 collection.logging = Some(logging);
@@ -656,6 +660,13 @@ impl<'a, A: Allocate + 'static> ActiveComputeState<'a, A> {
         // If the collection is unscheduled, remove it from the list of waiting collections.
         self.compute_state.suspended_collections.remove(&id);
 
+        if ENABLE_ACTIVE_DATAFLOW_CANCELATION.get(&self.compute_state.worker_config) {
+            // Drop the dataflow, if all its exports have been dropped.
+            if let Ok(index) = Rc::try_unwrap(collection.dataflow_index) {
+                self.timely_worker.drop_dataflow(index);
+            }
+        }
+
         // Remember the collection as dropped, for emission of outstanding final compute responses.
         let dropped = DroppedCollection {
             reported_frontiers: collection.reported_frontiers,
@@ -676,6 +687,7 @@ impl<'a, A: Allocate + 'static> ActiveComputeState<'a, A> {
             compute_logger: logger,
         } = logging::initialize(self.timely_worker, &config);
 
+        let dataflow_index = Rc::new(dataflow_index);
         let mut log_index_ids = config.index_logs;
         for (log, trace) in traces {
             // Install trace as maintained index.
@@ -688,10 +700,15 @@ impl<'a, A: Allocate + 'static> ActiveComputeState<'a, A> {
             let is_subscribe_or_copy = false;
             let as_of = Antichain::from_elem(Timestamp::MIN);
             let metrics = self.compute_state.metrics.for_collection(id);
-            let mut collection = CollectionState::new(is_subscribe_or_copy, as_of, metrics);
+            let mut collection = CollectionState::new(
+                Rc::clone(&dataflow_index),
+                is_subscribe_or_copy,
+                as_of,
+                metrics,
+            );
 
             let logging =
-                CollectionLogging::new(id, logger.clone(), dataflow_index, std::iter::empty());
+                CollectionLogging::new(id, logger.clone(), *dataflow_index, std::iter::empty());
             collection.logging = Some(logging);
 
             let existing = self.compute_state.collections.insert(id, collection);
@@ -1566,6 +1583,12 @@ impl ReportedFrontier {
 pub struct CollectionState {
     /// Tracks the frontiers that have been reported to the controller.
     reported_frontiers: ReportedFrontiers,
+    /// The index of the dataflow computing this collection.
+    ///
+    /// Used for dropping the dataflow when the collection is dropped.
+    /// The Dataflow index is wrapped in an `Rc`s and can be shared between collections, to reflect
+    /// the possibility that a single dataflow can export multiple collections.
+    dataflow_index: Rc<usize>,
     /// Whether this collection is a subscribe or copy-to.
     ///
     /// The compute protocol does not allow `Frontiers` responses for subscribe and copy-to
@@ -1601,12 +1624,14 @@ pub struct CollectionState {
 
 impl CollectionState {
     fn new(
+        dataflow_index: Rc<usize>,
         is_subscribe_or_copy: bool,
         as_of: Antichain<Timestamp>,
         metrics: CollectionMetrics,
     ) -> Self {
         Self {
             reported_frontiers: ReportedFrontiers::new(),
+            dataflow_index,
             is_subscribe_or_copy,
             as_of,
             sink_token: None,
