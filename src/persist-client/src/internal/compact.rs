@@ -605,13 +605,12 @@ where
                 async move {
                     while let Some(res) = incremental_rx.recv().await {
                         let now = SYSTEM_TIME.clone();
+
                         machine.checkpoint_compaction_progress(&res, now()).await;
                     }
                 }
                 .instrument(debug_span!("compact::incremental")),
             );
-
-            let mut chunk_idx = 0;
 
             for (runs, run_chunk_max_memory_usage) in chunked_runs {
                 metrics.compaction.chunks_compacted.inc();
@@ -653,7 +652,6 @@ where
                 );
 
                 if updates == 0 {
-                    chunk_idx += 1;
                     continue;
                 }
 
@@ -667,21 +665,11 @@ where
                     ),
                 };
 
-                // Every other chunk, checkpoint our progress so far.
-                if chunk_idx % 2 == 0 {
-                    let _ = incremental_tx
-                        .send(res.output.clone())
-                        .await
-                        .map_err(|_| anyhow!("failed to send incremental batch"));
-                }
-
                 let res = FueledMergeRes {
                     output: res.output,
                 };
 
                 yield Ok(res);
-
-                chunk_idx += 1;
             }
             drop(incremental_tx);
             // Wait for the incremental handle to finish processing any remaining batches.
@@ -755,22 +743,6 @@ where
         chunks
     }
 
-    /// With bounded memory where we cannot compact all runs/parts together, the groupings
-    /// in which we select runs to compact together will affect how much we're able to
-    /// consolidate updates.
-    ///
-    /// This approach orders the input runs by cycling through each batch, selecting the
-    /// head element until all are consumed. It assumes that it is generally more effective
-    /// to prioritize compacting runs from different batches, rather than runs from within
-    /// a single batch.
-    ///
-    /// ex.
-    /// ```text
-    ///        inputs                                        output
-    ///     b0 runs=[A, B]
-    ///     b1 runs=[C]                           output=[A, C, D, B, E, F]
-    ///     b2 runs=[D, E, F]
-    /// ```
     async fn order_runs<'a>(
         req: &'a CompactReq<T>,
         target_order: RunOrder,
@@ -792,7 +764,8 @@ where
         let mut ordered_runs = Vec::with_capacity(total_number_of_runs);
 
         while let Some((desc, mut runs)) = batch_runs.pop_front() {
-            if let Some((meta, run)) = runs.next() {
+            for (meta, run) in runs {
+                // If the run is empty, we can skip it.
                 let same_order = meta.order.unwrap_or(RunOrder::Codec) == target_order;
                 if same_order {
                     ordered_runs.push((desc, meta, Cow::Borrowed(run)));
@@ -817,7 +790,6 @@ where
                         }
                     }
                 }
-                batch_runs.push_back((desc, runs));
             }
         }
 
@@ -830,6 +802,10 @@ where
     ) -> HollowBatch<T> {
         // Simplifying assumption: you can't combine batches with different descriptions.
         assert_eq!(previous_batch.desc, batch.desc);
+        info!(
+            "Combining batches: previous_batch.len={} batch.len={}",
+            previous_batch.len, batch.len
+        );
         let len = previous_batch.len + batch.len;
         let mut parts = Vec::with_capacity(previous_batch.parts.len() + batch.parts.len());
         parts.extend(previous_batch.parts.clone());
@@ -1020,10 +996,6 @@ where
                 let partial_batch = batch.batch_with_finished_parts(desc.clone());
 
                 if let Some(partial_batch) = partial_batch {
-                    info!(
-                        "incremental compaction: shard_id={}, desc={:?}, len={}",
-                        shard_id, desc, partial_batch.len
-                    );
                     let hollow_batch = if let Some(batch_so_far) = batch_so_far.as_ref() {
                         Self::combine_hollow_batch_with_previous(batch_so_far, &partial_batch)
                     } else {
@@ -1582,9 +1554,11 @@ mod tests {
             .sum::<i64>();
 
         assert_eq!(first_diffs_sum, second_diffs_sum);
+        // assert_eq!(first_batch.len, second_batch.len);
 
-        first_batch.parts.pop();
-        second_batch.parts.pop();
+        let first = first_batch.parts.pop();
+        let second = second_batch.parts.pop();
+        info!("first={:?} second={:?}", first, second);
 
         assert_eq!(first_batch, second_batch);
 
