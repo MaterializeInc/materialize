@@ -79,7 +79,7 @@ sudo systemctl enable docker.service --now
 sudo sh -c 'curl -L "https://dl.k8s.io/release/v1.24.3/bin/linux/amd64/kubectl" > /usr/local/bin/kubectl'
 sudo chmod +x /usr/local/bin/kubectl
 ## kind
-sudo sh -c 'curl -L "https://kind.sigs.k8s.io/dl/v0.14.0/kind-linux-amd64" > /usr/local/bin/kind'
+sudo sh -c 'curl -L "https://kind.sigs.k8s.io/dl/v0.29.0/kind-linux-amd64" > /usr/local/bin/kind'
 sudo chmod +x /usr/local/bin/kind
 ## k9s
 curl -L 'https://github.com/derailed/k9s/releases/download/v0.26.3/k9s_Linux_x86_64.tar.gz' \
