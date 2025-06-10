@@ -4137,9 +4137,21 @@ checksum = "2c75b990324f09bef15e791606b7b7a296d02fc88a344f6eba9390970a870ad5"
 dependencies = [
  "base64 0.22.1",
  "chrono",
- "schemars",
  "serde",
  "serde-value",
+ "serde_json",
+]
+
+[[package]]
+name = "k8s-openapi"
+version = "0.25.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "aa60a41b57ae1a0a071af77dbcf89fc9819cfe66edaf2beeb204c34459dcf0b2"
+dependencies = [
+ "base64 0.22.1",
+ "chrono",
+ "schemars",
+ "serde",
  "serde_json",
 ]
 
@@ -4158,7 +4170,7 @@ version = "0.98.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "32053dc495efad4d188c7b33cc7c02ef4a6e43038115348348876efd39a53cba"
 dependencies = [
- "k8s-openapi",
+ "k8s-openapi 0.24.0",
  "kube-client",
  "kube-core",
  "kube-derive",
@@ -4185,7 +4197,7 @@ dependencies = [
  "hyper-timeout 0.5.1",
  "hyper-util",
  "jsonpath-rust",
- "k8s-openapi",
+ "k8s-openapi 0.24.0",
  "kube-core",
  "openssl",
  "pem",
@@ -4213,7 +4225,7 @@ dependencies = [
  "form_urlencoded",
  "http 1.2.0",
  "json-patch",
- "k8s-openapi",
+ "k8s-openapi 0.24.0",
  "schemars",
  "serde",
  "serde-value",
@@ -4251,7 +4263,7 @@ dependencies = [
  "hostname",
  "json-patch",
  "jsonptr",
- "k8s-openapi",
+ "k8s-openapi 0.24.0",
  "kube-client",
  "parking_lot",
  "pin-project",
@@ -5358,7 +5370,7 @@ dependencies = [
  "async-trait",
  "chrono",
  "futures",
- "k8s-openapi",
+ "k8s-openapi 0.25.0",
  "kube",
  "mz-ore",
  "mz-repr",
@@ -5629,7 +5641,7 @@ dependencies = [
  "clap",
  "csv-async",
  "futures",
- "k8s-openapi",
+ "k8s-openapi 0.25.0",
  "kube",
  "mz-build-info",
  "mz-cloud-resources",
@@ -6357,7 +6369,7 @@ dependencies = [
  "clap",
  "fail",
  "futures",
- "k8s-openapi",
+ "k8s-openapi 0.25.0",
  "kube",
  "maplit",
  "mz-cloud-resources",
@@ -6440,7 +6452,7 @@ dependencies = [
  "futures",
  "http 1.2.0",
  "k8s-controller",
- "k8s-openapi",
+ "k8s-openapi 0.25.0",
  "kube",
  "maplit",
  "mz-alloc",
