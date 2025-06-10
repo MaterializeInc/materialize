@@ -1080,6 +1080,9 @@ class FlipFlagsAction(Action):
         )
         self.flags_with_values["compute_apply_column_demands"] = BOOLEAN_FLAG_VALUES
         self.flags_with_values["enable_alter_table_add_column"] = BOOLEAN_FLAG_VALUES
+        self.flags_with_values["enable_compute_active_dataflow_cancelation"] = (
+            BOOLEAN_FLAG_VALUES
+        )
 
         # If you are adding a new config flag in Materialize, consider using it
         # here instead of just marking it as uninteresting to silence the linter.
