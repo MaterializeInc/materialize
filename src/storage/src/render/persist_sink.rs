@@ -1186,6 +1186,7 @@ async fn consume_streams_updating_persist(
     }
 }
 
+#[allow(clippy::disallowed_types)]
 async fn update_persist_with_batches(
     collection_id: GlobalId,
     worker_id: usize,
@@ -1212,6 +1213,7 @@ async fn update_persist_with_batches(
         (Antichain<mz_repr::Timestamp>, Antichain<mz_repr::Timestamp>),
         BatchSet,
     >,
+    // we cannot use BTreeSet as Antichain doesn't impl Ord and mz_ore::collections::HashSet does not implement iter().
     in_flight_descriptions: &mut std::collections::HashSet<(
         Antichain<mz_repr::Timestamp>,
         Antichain<mz_repr::Timestamp>,
