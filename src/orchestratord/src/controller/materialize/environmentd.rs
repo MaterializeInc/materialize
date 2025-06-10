@@ -7,18 +7,24 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use std::{collections::BTreeMap, sync::LazyLock, time::Duration};
+use std::{
+    collections::BTreeMap,
+    net::{IpAddr, Ipv4Addr, SocketAddr},
+    sync::LazyLock,
+    time::Duration,
+};
 
 use anyhow::bail;
 use k8s_openapi::{
     api::{
         apps::v1::{StatefulSet, StatefulSetSpec, StatefulSetUpdateStrategy},
         core::v1::{
-            Capabilities, Container, ContainerPort, EnvVar, EnvVarSource, EphemeralVolumeSource,
-            KeyToPath, PersistentVolumeClaimSpec, PersistentVolumeClaimTemplate, Pod,
-            PodSecurityContext, PodSpec, PodTemplateSpec, Probe, SeccompProfile, SecretKeySelector,
-            SecretVolumeSource, SecurityContext, Service, ServiceAccount, ServicePort, ServiceSpec,
-            TCPSocketAction, Toleration, Volume, VolumeMount, VolumeResourceRequirements,
+            Capabilities, ConfigMap, ConfigMapVolumeSource, Container, ContainerPort, EnvVar,
+            EnvVarSource, EphemeralVolumeSource, KeyToPath, PersistentVolumeClaimSpec,
+            PersistentVolumeClaimTemplate, Pod, PodSecurityContext, PodSpec, PodTemplateSpec,
+            Probe, SeccompProfile, Secret, SecretKeySelector, SecretVolumeSource, SecurityContext,
+            Service, ServiceAccount, ServicePort, ServiceSpec, TCPSocketAction, Toleration, Volume,
+            VolumeMount, VolumeResourceRequirements,
         },
         networking::v1::{
             IPBlock, NetworkPolicy, NetworkPolicyEgressRule, NetworkPolicyIngressRule,
@@ -30,6 +36,10 @@ use k8s_openapi::{
 };
 use kube::{Api, Client, ResourceExt, api::ObjectMeta, runtime::controller::Action};
 use maplit::btreemap;
+use mz_server_core::listeners::{
+    AllowedRoles, AuthenticatorKind, BaseListenerConfig, HttpListenerConfig, HttpRoutesEnabled,
+    ListenersConfig, SqlListenerConfig,
+};
 use rand::{Rng, thread_rng};
 use reqwest::StatusCode;
 use semver::{BuildMetadata, Prerelease, Version};
@@ -55,6 +65,13 @@ static V140_DEV0: LazyLock<Version> = LazyLock::new(|| Version {
 });
 const V143: Version = Version::new(0, 143, 0);
 const V144: Version = Version::new(0, 144, 0);
+static V147_DEV0: LazyLock<Version> = LazyLock::new(|| Version {
+    major: 0,
+    minor: 147,
+    patch: 0,
+    pre: Prerelease::new("dev.0").expect("dev.0 is valid prerelease"),
+    build: BuildMetadata::new("").expect("empty string is valid buildmetadata"),
+});
 
 /// Describes the status of a deployment.
 ///
@@ -73,6 +90,20 @@ pub enum DeploymentStatus {
     IsLeader,
 }
 
+#[derive(Deserialize, Serialize)]
+pub struct LoginCredentials {
+    username: String,
+    // TODO Password type?
+    password: String,
+}
+
+#[derive(Debug, Serialize)]
+pub struct ConnectionInfo {
+    pub environmentd_url: String,
+    pub mz_system_secret_name: Option<String>,
+    pub listeners_configmap: ConfigMap,
+}
+
 #[derive(Debug, Serialize)]
 pub struct Resources {
     pub generation: u64,
@@ -85,6 +116,7 @@ pub struct Resources {
     pub persist_pubsub_service: Box<Service>,
     pub environmentd_certificate: Box<Option<Certificate>>,
     pub environmentd_statefulset: Box<StatefulSet>,
+    pub connection_info: Box<ConnectionInfo>,
 }
 
 impl Resources {
@@ -109,6 +141,7 @@ impl Resources {
         let environmentd_statefulset = Box::new(create_environmentd_statefulset_object(
             config, tracing, mz, generation,
         ));
+        let connection_info = Box::new(create_connection_info(config, mz, generation));
 
         Self {
             generation,
@@ -121,6 +154,7 @@ impl Resources {
             persist_pubsub_service,
             environmentd_certificate,
             environmentd_statefulset,
+            connection_info,
         }
     }
 
@@ -128,13 +162,13 @@ impl Resources {
     pub async fn apply(
         &self,
         client: &Client,
-        args: &super::MaterializeControllerArgs,
         increment_generation: bool,
         force_promote: bool,
         namespace: &str,
     ) -> Result<Option<Action>, anyhow::Error> {
         let environmentd_network_policy_api: Api<NetworkPolicy> =
             Api::namespaced(client.clone(), namespace);
+        let secret_api: Api<Secret> = Api::namespaced(client.clone(), namespace);
         let service_api: Api<Service> = Api::namespaced(client.clone(), namespace);
         let service_account_api: Api<ServiceAccount> = Api::namespaced(client.clone(), namespace);
         let role_api: Api<Role> = Api::namespaced(client.clone(), namespace);
@@ -142,6 +176,7 @@ impl Resources {
         let statefulset_api: Api<StatefulSet> = Api::namespaced(client.clone(), namespace);
         let pod_api: Api<Pod> = Api::namespaced(client.clone(), namespace);
         let certificate_api: Api<Certificate> = Api::namespaced(client.clone(), namespace);
+        let configmap_api: Api<ConfigMap> = Api::namespaced(client.clone(), namespace);
 
         for policy in &self.environmentd_network_policies {
             trace!("applying network policy {}", policy.name_unchecked());
@@ -167,6 +202,9 @@ impl Resources {
             trace!("creating new environmentd certificate");
             apply_resource(&certificate_api, certificate).await?;
         }
+
+        trace!("applying listeners configmap");
+        apply_resource(&configmap_api, &self.connection_info.listeners_configmap).await?;
 
         trace!("creating new environmentd statefulset");
         apply_resource(&statefulset_api, &*self.environmentd_statefulset).await?;
@@ -205,25 +243,78 @@ impl Resources {
                 return Ok(Some(retry_action));
             }
 
-            let environmentd_url =
-                environmentd_internal_http_address(args, namespace, &*self.generation_service);
-
-            let http_client = reqwest::Client::builder()
-                .timeout(std::time::Duration::from_secs(10))
-                .build()
-                .unwrap();
-            let status_url =
-                reqwest::Url::parse(&format!("http://{}/api/leader/status", environmentd_url))
-                    .unwrap();
+            let http_client = match &self.connection_info.mz_system_secret_name {
+                Some(mz_system_secret_name) => {
+                    let http_client = reqwest::Client::builder()
+                        .timeout(std::time::Duration::from_secs(10))
+                        .cookie_store(true)
+                        // TODO add_root_certificate instead
+                        .danger_accept_invalid_certs(true)
+                        .build()
+                        .unwrap();
+                    if let Some(data) = secret_api.get(mz_system_secret_name).await?.data {
+                        if let Some(password) =
+                            data.get("external_login_password_mz_system").cloned()
+                        {
+                            let password = String::from_utf8_lossy(&password.0).to_string();
+                            let login_url = reqwest::Url::parse(&format!(
+                                "{}/api/login",
+                                self.connection_info.environmentd_url,
+                            ))
+                            .unwrap();
+                            match http_client
+                                .post(login_url)
+                                .body(serde_json::to_string(&LoginCredentials {
+                                    username: "mz_system".to_owned(),
+                                    password,
+                                })?)
+                                .header("Content-Type", "application/json")
+                                .send()
+                                .await
+                            {
+                                Ok(response) => {
+                                    if let Err(e) = response.error_for_status() {
+                                        trace!(
+                                            "failed to login to environmentd, retrying... ({e})"
+                                        );
+                                        return Ok(Some(retry_action));
+                                    }
+                                }
+                                Err(e) => {
+                                    trace!("failed to connect to environmentd, retrying... ({e})");
+                                    return Ok(Some(retry_action));
+                                }
+                            };
+                        }
+                    };
+                    http_client
+                }
+                None => reqwest::Client::builder()
+                    .timeout(std::time::Duration::from_secs(10))
+                    .build()
+                    .unwrap(),
+            };
+            let status_url = reqwest::Url::parse(&format!(
+                "{}/api/leader/status",
+                self.connection_info.environmentd_url,
+            ))
+            .unwrap();
 
             match http_client.get(status_url.clone()).send().await {
                 Ok(response) => {
-                    let response: BTreeMap<String, DeploymentStatus> = response.json().await?;
+                    let response: BTreeMap<String, DeploymentStatus> =
+                        match response.error_for_status() {
+                            Ok(response) => response.json().await?,
+                            Err(e) => {
+                                trace!("failed to get status of environmentd, retrying... ({e})");
+                                return Ok(Some(retry_action));
+                            }
+                        };
                     if force_promote {
                         trace!("skipping cluster catchup");
                         let skip_catchup_url = reqwest::Url::parse(&format!(
-                            "http://{}/api/leader/skip-catchup",
-                            environmentd_url
+                            "{}/api/leader/skip-catchup",
+                            self.connection_info.environmentd_url,
                         ))
                         .unwrap();
                         let response = http_client.post(skip_catchup_url).send().await?;
@@ -244,9 +335,11 @@ impl Resources {
                 }
             }
 
-            let promote_url =
-                reqwest::Url::parse(&format!("http://{}/api/leader/promote", environmentd_url))
-                    .unwrap();
+            let promote_url = reqwest::Url::parse(&format!(
+                "{}/api/leader/promote",
+                self.connection_info.environmentd_url,
+            ))
+            .unwrap();
 
             // !!!!!!!!!!!!!!!!!!!!!!!!!!! WARNING !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
             // It is absolutely critical that this promotion is done last!
@@ -258,7 +351,13 @@ impl Resources {
             // !!!!!!!!!!!!!!!!!!!!!!!!!!! WARNING !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
             trace!("promoting new environmentd to leader");
             let response = http_client.post(promote_url).send().await?;
-            let response: BecomeLeaderResponse = response.json().await?;
+            let response: BecomeLeaderResponse = match response.error_for_status() {
+                Ok(response) => response.json().await?,
+                Err(e) => {
+                    trace!("failed to promote environmentd, retrying... ({e})");
+                    return Ok(Some(retry_action));
+                }
+            };
             if let BecomeLeaderResult::Failure { message } = response.result {
                 bail!("failed to promote new environmentd: {message}");
             }
@@ -436,11 +535,20 @@ fn create_environmentd_network_policies(
                             pod_selector: Some(orchestratord_label_selector),
                             ..Default::default()
                         }]),
-                        ports: Some(vec![NetworkPolicyPort {
-                            port: Some(IntOrString::Int(config.environmentd_internal_http_port)),
-                            protocol: Some("TCP".to_string()),
-                            ..Default::default()
-                        }]),
+                        ports: Some(vec![
+                            NetworkPolicyPort {
+                                port: Some(IntOrString::Int(config.environmentd_http_port.into())),
+                                protocol: Some("TCP".to_string()),
+                                ..Default::default()
+                            },
+                            NetworkPolicyPort {
+                                port: Some(IntOrString::Int(
+                                    config.environmentd_internal_http_port.into(),
+                                )),
+                                protocol: Some("TCP".to_string()),
+                                ..Default::default()
+                            },
+                        ]),
                         ..Default::default()
                     }]),
                     pod_selector: environmentd_label_selector,
@@ -473,12 +581,12 @@ fn create_environmentd_network_policies(
                     ),
                     ports: Some(vec![
                         NetworkPolicyPort {
-                            port: Some(IntOrString::Int(config.environmentd_http_port)),
+                            port: Some(IntOrString::Int(config.environmentd_http_port.into())),
                             protocol: Some("TCP".to_string()),
                             ..Default::default()
                         },
                         NetworkPolicyPort {
-                            port: Some(IntOrString::Int(config.environmentd_sql_port)),
+                            port: Some(IntOrString::Int(config.environmentd_sql_port.into())),
                             protocol: Some("TCP".to_string()),
                             ..Default::default()
                         },
@@ -676,25 +784,25 @@ fn create_base_service_object(
 ) -> Service {
     let ports = vec![
         ServicePort {
-            port: config.environmentd_sql_port,
+            port: config.environmentd_sql_port.into(),
             protocol: Some("TCP".to_string()),
             name: Some("sql".to_string()),
             ..Default::default()
         },
         ServicePort {
-            port: config.environmentd_http_port,
+            port: config.environmentd_http_port.into(),
             protocol: Some("TCP".to_string()),
             name: Some("https".to_string()),
             ..Default::default()
         },
         ServicePort {
-            port: config.environmentd_internal_sql_port,
+            port: config.environmentd_internal_sql_port.into(),
             protocol: Some("TCP".to_string()),
             name: Some("internal-sql".to_string()),
             ..Default::default()
         },
         ServicePort {
-            port: config.environmentd_internal_http_port,
+            port: config.environmentd_internal_http_port.into(),
             protocol: Some("TCP".to_string()),
             name: Some("internal-http".to_string()),
             ..Default::default()
@@ -734,7 +842,7 @@ fn create_persist_pubsub_service(
             ports: Some(vec![ServicePort {
                 name: Some("grpc".to_string()),
                 protocol: Some("TCP".to_string()),
-                port: config.environmentd_internal_persist_pubsub_port,
+                port: config.environmentd_internal_persist_pubsub_port.into(),
                 ..Default::default()
             }]),
             ..Default::default()
@@ -885,23 +993,6 @@ fn create_environmentd_statefulset_object(
         .into_iter()
         .flatten(),
     );
-
-    // Add networking arguments.
-    args.extend([
-        format!("--sql-listen-addr=0.0.0.0:{}", config.environmentd_sql_port),
-        format!(
-            "--http-listen-addr=0.0.0.0:{}",
-            config.environmentd_http_port
-        ),
-        format!(
-            "--internal-sql-listen-addr=0.0.0.0:{}",
-            config.environmentd_internal_sql_port
-        ),
-        format!(
-            "--internal-http-listen-addr=0.0.0.0:{}",
-            config.environmentd_internal_http_port
-        ),
-    ]);
 
     args.extend(
         config
@@ -1195,7 +1286,7 @@ fn create_environmentd_statefulset_object(
         failure_threshold: Some(12),
         tcp_socket: Some(TCPSocketAction {
             host: None,
-            port: IntOrString::Int(config.environmentd_sql_port),
+            port: IntOrString::Int(config.environmentd_sql_port.into()),
         }),
         ..Default::default()
     };
@@ -1223,31 +1314,113 @@ fn create_environmentd_statefulset_object(
 
     let ports = vec![
         ContainerPort {
-            container_port: config.environmentd_sql_port,
+            container_port: config.environmentd_sql_port.into(),
             name: Some("sql".to_owned()),
             ..Default::default()
         },
         ContainerPort {
-            container_port: config.environmentd_internal_sql_port,
+            container_port: config.environmentd_internal_sql_port.into(),
             name: Some("internal-sql".to_owned()),
             ..Default::default()
         },
         ContainerPort {
-            container_port: config.environmentd_http_port,
+            container_port: config.environmentd_http_port.into(),
             name: Some("http".to_owned()),
             ..Default::default()
         },
         ContainerPort {
-            container_port: config.environmentd_internal_http_port,
+            container_port: config.environmentd_internal_http_port.into(),
             name: Some("internal-http".to_owned()),
             ..Default::default()
         },
         ContainerPort {
-            container_port: config.environmentd_internal_persist_pubsub_port,
+            container_port: config.environmentd_internal_persist_pubsub_port.into(),
             name: Some("persist-pubsub".to_owned()),
             ..Default::default()
         },
     ];
+
+    if mz.meets_minimum_version(&V140_DEV0) {
+        volume_mounts.push(VolumeMount {
+            name: "license-key".to_string(),
+            mount_path: "/license_key".to_string(),
+            ..Default::default()
+        });
+        volumes.push(Volume {
+            name: "license-key".to_string(),
+            secret: Some(SecretVolumeSource {
+                default_mode: Some(256),
+                optional: Some(false),
+                secret_name: Some(mz.backend_secret_name()),
+                items: Some(vec![KeyToPath {
+                    key: "license_key".to_string(),
+                    path: "license_key".to_string(),
+                    ..Default::default()
+                }]),
+                ..Default::default()
+            }),
+            ..Default::default()
+        });
+        env.push(EnvVar {
+            name: "MZ_LICENSE_KEY".to_string(),
+            value: Some("/license_key/license_key".to_string()),
+            ..Default::default()
+        });
+    }
+
+    // Add networking arguments.
+    if mz.meets_minimum_version(&V147_DEV0) {
+        volume_mounts.push(VolumeMount {
+            name: "listeners-configmap".to_string(),
+            mount_path: "/listeners".to_string(),
+            ..Default::default()
+        });
+        volumes.push(Volume {
+            name: "listeners-configmap".to_string(),
+            config_map: Some(ConfigMapVolumeSource {
+                name: mz.listeners_configmap_name(generation),
+                default_mode: Some(256),
+                optional: Some(false),
+                items: Some(vec![KeyToPath {
+                    key: "listeners.json".to_string(),
+                    path: "listeners.json".to_string(),
+                    ..Default::default()
+                }]),
+            }),
+            ..Default::default()
+        });
+        args.push("--listeners-config-path=/listeners/listeners.json".to_owned());
+        if mz.spec.authenticator_kind == AuthenticatorKind::Password {
+            env.push(EnvVar {
+                name: "MZ_EXTERNAL_LOGIN_PASSWORD_MZ_SYSTEM".to_string(),
+                value_from: Some(EnvVarSource {
+                    secret_key_ref: Some(SecretKeySelector {
+                        name: mz.backend_secret_name(),
+                        key: "external_login_password_mz_system".to_string(),
+                        optional: Some(false),
+                    }),
+                    ..Default::default()
+                }),
+                ..Default::default()
+            })
+        }
+    } else {
+        args.extend([
+            format!("--sql-listen-addr=0.0.0.0:{}", config.environmentd_sql_port),
+            format!(
+                "--http-listen-addr=0.0.0.0:{}",
+                config.environmentd_http_port
+            ),
+            format!(
+                "--internal-sql-listen-addr=0.0.0.0:{}",
+                config.environmentd_internal_sql_port
+            ),
+            format!(
+                "--internal-http-listen-addr=0.0.0.0:{}",
+                config.environmentd_internal_http_port
+            ),
+        ]);
+    }
 
     let container = Container {
         name: "environmentd".to_owned(),
@@ -1421,6 +1594,144 @@ fn create_environmentd_statefulset_object(
     }
 }
 
+fn create_connection_info(
+    config: &super::MaterializeControllerArgs,
+    mz: &Materialize,
+    generation: u64,
+) -> ConnectionInfo {
+    let external_enable_tls = issuer_ref_defined(
+        &config.default_certificate_specs.internal,
+        &mz.spec.internal_certificate_spec,
+    );
+    let authenticator_kind = mz.spec.authenticator_kind;
+    let mut listeners_config = ListenersConfig {
+        sql: btreemap! {
+            "external".to_owned() => SqlListenerConfig{
+                addr: SocketAddr::new(IpAddr::V4(Ipv4Addr::new(0,0,0,0)), config.environmentd_sql_port),
+                authenticator_kind,
+                allowed_roles: AllowedRoles::Normal,
+                enable_tls: external_enable_tls,
+            },
+            "internal".to_owned() => SqlListenerConfig{
+                addr: SocketAddr::new(IpAddr::V4(Ipv4Addr::new(0,0,0,0)), config.environmentd_internal_sql_port),
+                authenticator_kind: AuthenticatorKind::None,
+                // Should this just be Internal?
+                allowed_roles: AllowedRoles::NormalAndInternal,
+                enable_tls: false,
+            },
+        },
+        http: btreemap! {
+            "external".to_owned() => HttpListenerConfig{
+                base: BaseListenerConfig {
+                    addr: SocketAddr::new(IpAddr::V4(Ipv4Addr::new(0,0,0,0)), config.environmentd_http_port),
+                    authenticator_kind,
+                    allowed_roles: AllowedRoles::Normal,
+                    enable_tls: external_enable_tls,
+                },
+                routes: HttpRoutesEnabled{
+                    base: true,
+                    webhook: true,
+                    internal: false,
+                    metrics: false,
+                    profiling: false,
+                }
+            },
+            "internal".to_owned() => HttpListenerConfig{
+                base: BaseListenerConfig {
+                    addr: SocketAddr::new(IpAddr::V4(Ipv4Addr::new(0,0,0,0)), config.environmentd_internal_http_port),
+                    authenticator_kind: AuthenticatorKind::None,
+                    // Should this just be Internal?
+                    allowed_roles: AllowedRoles::NormalAndInternal,
+                    enable_tls: false,
+                },
+                routes: HttpRoutesEnabled{
+                    base: true,
+                    webhook: true,
+                    internal: true,
+                    metrics: true,
+                    profiling: true,
+                }
+            },
+        },
+    };
+    if authenticator_kind == AuthenticatorKind::Password {
+        listeners_config.sql.remove("internal");
+        listeners_config.http.remove("internal");
+
+        listeners_config.sql.get_mut("external").map(|listener| {
+            listener.allowed_roles = AllowedRoles::NormalAndInternal;
+            listener
+        });
+        listeners_config.http.get_mut("external").map(|listener| {
+            listener.base.allowed_roles = AllowedRoles::NormalAndInternal;
+            listener.routes.internal = true;
+            listener.routes.profiling = true;
+            listener
+        });
+
+        listeners_config.http.insert(
+            "metrics".to_owned(),
+            HttpListenerConfig {
+                base: BaseListenerConfig {
+                    addr: SocketAddr::new(
+                        IpAddr::V4(Ipv4Addr::new(0, 0, 0, 0)),
+                        config.environmentd_internal_http_port,
+                    ),
+                    authenticator_kind: AuthenticatorKind::None,
+                    allowed_roles: AllowedRoles::NormalAndInternal,
+                    enable_tls: false,
+                },
+                routes: HttpRoutesEnabled {
+                    base: false,
+                    webhook: false,
+                    internal: false,
+                    metrics: true,
+                    profiling: false,
+                },
+            },
+        );
+    }
+
+    let listeners_json = serde_json::to_string(&listeners_config).expect("known valid");
+    let listeners_configmap = ConfigMap {
+        binary_data: None,
+        data: Some(btreemap! {
+            "listeners.json".to_owned() => listeners_json,
+        }),
+        immutable: None,
+        metadata: ObjectMeta {
+            annotations: Some(btreemap! {
+                "materialize.cloud/generation".to_owned() => generation.to_string(),
+            }),
+            ..mz.managed_resource_meta(mz.listeners_configmap_name(generation))
+        },
+    };
+
+    let (scheme, leader_api_port, mz_system_secret_name) = match mz.spec.authenticator_kind {
+        AuthenticatorKind::Password => {
+            let scheme = if external_enable_tls { "https" } else { "http" };
+            (
+                scheme,
+                config.environmentd_http_port,
+                Some(mz.spec.backend_secret_name.clone()),
+            )
+        }
+        _ => ("http", config.environmentd_internal_http_port, None),
+    };
+    let environmentd_url = format!(
+        "{}://{}.{}.svc.cluster.local:{}",
+        scheme,
+        mz.environmentd_generation_service_name(generation),
+        mz.namespace(),
+        leader_api_port,
+    );
+    ConnectionInfo {
+        environmentd_url,
+        listeners_configmap,
+        mz_system_secret_name,
+    }
+}
+
 // see materialize/src/environmentd/src/http.rs
 #[derive(Debug, Deserialize, PartialEq, Eq)]
 struct BecomeLeaderResponse {
@@ -1436,23 +1747,6 @@ enum BecomeLeaderResult {
 #[derive(Debug, Deserialize, PartialEq, Eq)]
 struct SkipCatchupError {
     message: String,
-}
-
-fn environmentd_internal_http_address(
-    args: &super::MaterializeControllerArgs,
-    namespace: &str,
-    generation_service: &Service,
-) -> String {
-    let host = if let Some(host_override) = &args.environmentd_internal_http_host_override {
-        host_override.to_string()
-    } else {
-        format!(
-            "{}.{}.svc.cluster.local",
-            generation_service.name_unchecked(),
-            namespace,
-        )
-    };
-    format!("{}:{}", host, args.environmentd_internal_http_port)
 }
 
 fn statefulset_pod_name(statefulset: &StatefulSet, idx: u64) -> String {

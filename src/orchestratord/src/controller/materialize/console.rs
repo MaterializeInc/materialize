@@ -11,9 +11,10 @@ use k8s_openapi::{
     api::{
         apps::v1::{Deployment, DeploymentSpec},
         core::v1::{
-            Capabilities, Container, ContainerPort, EnvVar, HTTPGetAction, PodSecurityContext,
-            PodSpec, PodTemplateSpec, Probe, SeccompProfile, SecretVolumeSource, SecurityContext,
-            Service, ServicePort, ServiceSpec, Volume, VolumeMount,
+            Capabilities, ConfigMap, ConfigMapVolumeSource, Container, ContainerPort, EnvVar,
+            HTTPGetAction, KeyToPath, PodSecurityContext, PodSpec, PodTemplateSpec, Probe,
+            SeccompProfile, SecretVolumeSource, SecurityContext, Service, ServicePort, ServiceSpec,
+            Volume, VolumeMount,
         },
         networking::v1::{
             IPBlock, NetworkPolicy, NetworkPolicyIngressRule, NetworkPolicyPeer, NetworkPolicyPort,
@@ -24,6 +25,8 @@ use k8s_openapi::{
 };
 use kube::{Api, Client, api::ObjectMeta, runtime::controller::Action};
 use maplit::btreemap;
+use mz_server_core::listeners::AuthenticatorKind;
+use serde::Serialize;
 use tracing::trace;
 
 use crate::{
@@ -36,6 +39,7 @@ use mz_cloud_resources::crd::{
 
 pub struct Resources {
     network_policies: Vec<NetworkPolicy>,
+    console_configmap: Box<ConfigMap>,
     console_deployment: Box<Deployment>,
     console_service: Box<Service>,
     console_external_certificate: Box<Option<Certificate>>,
@@ -48,6 +52,8 @@ impl Resources {
         console_image_ref: &str,
     ) -> Self {
         let network_policies = create_network_policies(config, mz);
+        let console_configmap =
+            Box::new(create_console_app_configmap_object(mz, console_image_ref));
         let console_deployment = Box::new(create_console_deployment_object(
             config,
             mz,
@@ -58,6 +64,7 @@ impl Resources {
             Box::new(create_console_external_certificate(config, mz));
         Self {
             network_policies,
+            console_configmap,
             console_deployment,
             console_service,
             console_external_certificate,
@@ -70,6 +77,7 @@ impl Resources {
         namespace: &str,
     ) -> Result<Option<Action>, anyhow::Error> {
         let network_policy_api: Api<NetworkPolicy> = Api::namespaced(client.clone(), namespace);
+        let configmap_api: Api<ConfigMap> = Api::namespaced(client.clone(), namespace);
         let deployment_api: Api<Deployment> = Api::namespaced(client.clone(), namespace);
         let service_api: Api<Service> = Api::namespaced(client.clone(), namespace);
         let certificate_api: Api<Certificate> = Api::namespaced(client.clone(), namespace);
@@ -77,6 +85,9 @@ impl Resources {
         for network_policy in &self.network_policies {
             apply_resource(&network_policy_api, network_policy).await?;
         }
+
+        trace!("creating new console deployment");
+        apply_resource(&configmap_api, &self.console_configmap).await?;
 
         trace!("creating new console deployment");
         apply_resource(&deployment_api, &self.console_deployment).await?;
@@ -127,7 +138,7 @@ fn create_network_policies(
                             .collect(),
                     ),
                     ports: Some(vec![NetworkPolicyPort {
-                        port: Some(IntOrString::Int(config.console_http_port)),
+                        port: Some(IntOrString::Int(config.console_http_port.into())),
                         protocol: Some("TCP".to_string()),
                         ..Default::default()
                     }]),
@@ -156,6 +167,40 @@ fn create_console_external_certificate(
     )
 }
 
+#[derive(Serialize)]
+struct ConsoleAppConfig {
+    version: String,
+    auth: ConsoleAppConfigAuth,
+}
+
+#[derive(Serialize)]
+struct ConsoleAppConfigAuth {
+    mode: AuthenticatorKind,
+}
+
+fn create_console_app_configmap_object(mz: &Materialize, console_image_ref: &str) -> ConfigMap {
+    let version: String = console_image_ref
+        .rsplitn(2, ':')
+        .next()
+        .expect("at least one chunk, even if empty")
+        .to_owned();
+    let app_config_json = serde_json::to_string(&ConsoleAppConfig {
+        version,
+        auth: ConsoleAppConfigAuth {
+            mode: mz.spec.authenticator_kind,
+        },
+    })
+    .expect("known valid");
+    ConfigMap {
+        binary_data: None,
+        data: Some(btreemap! {
+            "app-config.json".to_owned() => app_config_json,
+        }),
+        immutable: None,
+        metadata: mz.managed_resource_meta(mz.console_configmap_name()),
+    }
+}
+
 fn create_console_deployment_object(
     config: &super::MaterializeControllerArgs,
     mz: &Materialize,
@@ -170,7 +215,7 @@ fn create_console_deployment_object(
     pod_template_labels.insert("materialize.cloud/app".to_owned(), mz.console_app_name());
 
     let ports = vec![ContainerPort {
-        container_port: config.console_http_port,
+        container_port: config.console_http_port.into(),
         name: Some("http".into()),
         protocol: Some("TCP".into()),
         ..Default::default()
@@ -195,12 +240,31 @@ fn create_console_deployment_object(
         )),
         ..Default::default()
     }];
+    let mut volumes = vec![Volume {
+        name: "app-config".to_string(),
+        config_map: Some(ConfigMapVolumeSource {
+            name: mz.console_configmap_name(),
+            default_mode: Some(256),
+            optional: Some(false),
+            items: Some(vec![KeyToPath {
+                key: "app-config.json".to_string(),
+                path: "app-config.json".to_string(),
+                ..Default::default()
+            }]),
+        }),
+        ..Default::default()
+    }];
+    let mut volume_mounts = vec![VolumeMount {
+        name: "app-config".to_string(),
+        mount_path: "/usr/share/nginx/html/app-config".to_string(),
+        ..Default::default()
+    }];
 
-    let (volumes, volume_mounts, scheme) = if issuer_ref_defined(
+    let scheme = if issuer_ref_defined(
         &config.default_certificate_specs.console_external,
         &mz.spec.console_external_certificate_spec,
     ) {
-        let volumes = Some(vec![Volume {
+        volumes.push(Volume {
             name: "external-certificate".to_owned(),
             secret: Some(SecretVolumeSource {
                 default_mode: Some(0o400),
@@ -209,13 +273,13 @@ fn create_console_deployment_object(
                 optional: Some(false),
             }),
             ..Default::default()
-        }]);
-        let volume_mounts = Some(vec![VolumeMount {
+        });
+        volume_mounts.push(VolumeMount {
             name: "external-certificate".to_owned(),
             mount_path: "/nginx/tls".to_owned(),
             read_only: Some(true),
             ..Default::default()
-        }]);
+        });
         env.push(EnvVar {
             name: "MZ_NGINX_LISTENER_CONFIG".to_string(),
             value: Some(format!(
@@ -226,20 +290,20 @@ ssl_certificate_key /nginx/tls/tls.key;",
             )),
             ..Default::default()
         });
-        (volumes, volume_mounts, Some("HTTPS".to_owned()))
+        Some("HTTPS".to_owned())
     } else {
         env.push(EnvVar {
             name: "MZ_NGINX_LISTENER_CONFIG".to_string(),
             value: Some(format!("listen {};", config.console_http_port)),
             ..Default::default()
         });
-        (None, None, Some("HTTP".to_owned()))
+        Some("HTTP".to_owned())
     };
 
     let probe = Probe {
         http_get: Some(HTTPGetAction {
             path: Some("/".to_string()),
-            port: IntOrString::Int(config.console_http_port),
+            port: IntOrString::Int(config.console_http_port.into()),
             scheme,
             ..Default::default()
         }),
@@ -289,7 +353,7 @@ ssl_certificate_key /nginx/tls/tls.key;",
         }),
         resources: mz.spec.console_resource_requirements.clone(),
         security_context,
-        volume_mounts,
+        volume_mounts: Some(volume_mounts),
         ..Default::default()
     };
 
@@ -319,7 +383,7 @@ ssl_certificate_key /nginx/tls/tls.key;",
                 tolerations: config.console_tolerations.clone(),
                 scheduler_name: config.scheduler_name.clone(),
                 service_account_name: Some(mz.service_account_name()),
-                volumes,
+                volumes: Some(volumes),
                 security_context: Some(PodSecurityContext {
                     fs_group: Some(101),
                     ..Default::default()
@@ -348,8 +412,8 @@ fn create_console_service_object(
     let ports = vec![ServicePort {
         name: Some("http".to_string()),
         protocol: Some("TCP".to_string()),
-        port: config.console_http_port,
-        target_port: Some(IntOrString::Int(config.console_http_port)),
+        port: config.console_http_port.into(),
+        target_port: Some(IntOrString::Int(config.console_http_port.into())),
         ..Default::default()
     }];
 

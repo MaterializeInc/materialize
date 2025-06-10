@@ -15,7 +15,7 @@ import tempfile
 from enum import Enum
 from typing import Any
 
-from materialize import docker
+from materialize import MZ_ROOT, docker
 from materialize.mz_version import MzVersion
 from materialize.mzcompose import (
     DEFAULT_CRDB_ENVIRONMENT,
@@ -95,6 +95,7 @@ class Materialized(Service):
         cluster_replica_size: dict[str, dict[str, Any]] | None = None,
         bootstrap_replica_size: str | None = None,
         default_replication_factor: int = 1,
+        listeners_config_path: str = f"{MZ_ROOT}/src/materialized/ci/listener_configs/no_auth.json",
     ) -> None:
         if name is None:
             name = "materialized"
@@ -119,6 +120,7 @@ class Materialized(Service):
             "MZ_ORCHESTRATOR_PROCESS_TCP_PROXY_LISTEN_ADDR=0.0.0.0",
             "MZ_ORCHESTRATOR_PROCESS_PROMETHEUS_SERVICE_DISCOVERY_DIRECTORY=/mzdata/prometheus",
             "MZ_BOOTSTRAP_ROLE=materialize",
+            # TODO move this to the listener config?
             "MZ_INTERNAL_PERSIST_PUBSUB_LISTEN_ADDR=0.0.0.0:6879",
             "MZ_AWS_CONNECTION_ROLE_ARN=arn:aws:iam::123456789000:role/MaterializeConnection",
             "MZ_AWS_EXTERNAL_ID_PREFIX=eb5cb59b-e2fe-41f3-87ca-d2176a495345",
@@ -297,6 +299,11 @@ class Materialized(Service):
             config["platform"] = platform
 
         volumes = []
+
+        if image_version is None or image_version >= "v0.147.0-dev":
+            assert os.path.exists(listeners_config_path)
+            volumes.append(f"{listeners_config_path}:/listeners_config")
+            environment.append("MZ_LISTENERS_CONFIG_PATH=/listeners_config")
 
         if image_version is None or image_version >= "v0.140.0-dev":
             if "MZ_CI_LICENSE_KEY" in os.environ:
