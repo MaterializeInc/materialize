@@ -509,7 +509,7 @@ UNINTERESTING_SYSTEM_PARAMETERS = [
     "plan_insights_notice fast_path_clusters_optimize_duration",
     "enable_continual_task_builtins",
     "enable_expression_cache",
-    "enable_self_managed_auth",
+    "enable_password_auth",
     "constraint_based_timestamp_selection",
     "mz_metrics_lgalloc_map_refresh_interval",
     "mz_metrics_lgalloc_refresh_interval",

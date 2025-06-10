@@ -1391,6 +1391,7 @@ fn create_environmentd_statefulset_object(
         });
         args.push("--listeners-config-path=/listeners/listeners.json".to_owned());
         if mz.spec.authenticator_kind == AuthenticatorKind::Password {
+            args.push("--system-parameter-default=enable_password_auth=true".into());
             env.push(EnvVar {
                 name: "MZ_EXTERNAL_LOGIN_PASSWORD_MZ_SYSTEM".to_string(),
                 value_from: Some(EnvVarSource {
