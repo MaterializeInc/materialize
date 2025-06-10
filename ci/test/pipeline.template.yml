@@ -52,7 +52,6 @@ steps:
         depends_on: [build-x86_64]
         timeout_in_minutes: 20
         priority: 50
-        if: build.tag != null || (build.env("CI_UPLOAD_DEBUG_SYMBOLS") != null && build.env("CI_UPLOAD_DEBUG_SYMBOLS") != "0")
         agents:
           queue: linux-x86_64
         coverage: skip
@@ -80,7 +79,6 @@ steps:
         depends_on: [build-aarch64]
         priority: 50
         timeout_in_minutes: 20
-        if: build.tag != null || (build.env("CI_UPLOAD_DEBUG_SYMBOLS") != null && build.env("CI_UPLOAD_DEBUG_SYMBOLS") != "0")
         agents:
           queue: linux-aarch64
         coverage: skip
