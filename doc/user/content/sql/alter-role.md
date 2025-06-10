@@ -11,10 +11,10 @@ menu:
 ## Syntax
 
 ```mzsql
-ALTER ROLE _role_name_ [WITH [SUPERUSER | NOSUPERUSER ]
+ALTER ROLE <role_name> [WITH [SUPERUSER | NOSUPERUSER ]
     [ LOGIN | NOLOGIN ]
     [ INHERIT | NOINHERIT ]
-    [ PASSWORD <text> ]] [SET _name_ TO _value_]
+    [ PASSWORD <text> ]] [SET <name> TO <value> ]
 ```
 
 | Field       | Use                  |
@@ -23,14 +23,14 @@ ALTER ROLE _role_name_ [WITH [SUPERUSER | NOSUPERUSER ]
 
 #### `alter_role_attributes`
 
-| Field         | Use                                                                                                                                              |
-| ------------- | ------------------------------------------------------------------------------------------------------------------------------------------------ |
-| **INHERIT**   | Grants the role the ability to inherit privileges of other roles.                                                                                |
-| `LOGIN`       | The `LOGIN` attribute allows a role to login via the postgresql or web endpoints                                                                 |
-| `NOLOGIN`     | The `NOLOGIN` attribute prevents a role from logging in.                                                                                         |
-| `SUPERUSER`   | The `SUPERUSER` attribute grants the role superuser privileges.                                                                                  |
-| `NOSUPERUSER` | The `NOSUPERUSER` attribute prevents the role from having superuser privileges.                                                                  |
-| `PASSWORD`    | The `PASSWORD` attribute allows you to set a password for the role. Setting the `PASSWORD` attribute to `NULL` removes the password requirement. |
+| Field         | Use                                                                                                                             |
+| ------------- | ------------------------------------------------------------------------------------------------------------------------------- |
+| `INHERIT`     | If specified, grants the role the ability to inherit privileges of other roles. (Default)                                       |
+| `LOGIN`       | If specified, allows a role to login via the PostgreSQL or web endpoints                                                        |
+| `NOLOGIN`     | If specified, prevents a role from logging in. This is the default behavior if `LOGIN` is not specified.                        |
+| `SUPERUSER`   | If specified, grants the role superuser privileges.                                                                             |
+| `NOSUPERUSER` | If specified, prevents the role from having superuser privileges. This is the default behavior if `SUPERUSER` is not specified. |
+| `PASSWORD`    | If specified, allows you to set a password for the role. Setting the password to `NULL` removes the password.                   |
 
 #### `alter_role_set`
 
@@ -121,7 +121,25 @@ SELECT name, rolsuper FROM pg_authid WHERE rolname = 'rj';
 rj  t
 ```
 
+##### Removing the superuser attribute from a role
+
+```mzsql
+ALTER ROLE rj NOSUPERUSER;
+```
+
+```mzsql
+SELECT name, rolsuper FROM pg_authid WHERE rolname = 'rj';
+```
+
+```nofmt
+rj  f
+```
+
 ##### Removing a role's password
+
+{{< warning >}}
+Setting a NULL password removes the password requirement.
+{{< /warning >}}
 
 ```mzsql
 ALTER ROLE rj PASSWORD NULL;

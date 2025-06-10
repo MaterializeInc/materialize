@@ -11,16 +11,12 @@ menu:
 When you connect to Materialize, you must specify the name of a valid role in
 the system.
 
-```mzsql
-
-```
-
 ## Syntax
 
 ```mzsql
 CREATE ROLE _role_name_ [WITH [SUPERUSER | NOSUPERUSER ]
     [ LOGIN | NOLOGIN ]
-    [ INHERIT | NOINHERIT ]
+    [ INHERIT ]
     [ PASSWORD <text> ]]
 ```
 
@@ -34,15 +30,14 @@ CREATE ROLE _role_name_ [WITH [SUPERUSER | NOSUPERUSER ]
 Materialize's support for `CREATE ROLE` is similar to that of PostgreSQL, with
 the following options exceptions:
 
-| Option        | Description                                                                                                                                              |
-| ------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `INHERIT`     | Materialize implicitly uses `INHERIT` for the `CREATE ROLE` command. That is, `CREATE ROLE <name>` and `CREATE ROLE <name> WITH INHERIT` are equivalent. |
-| `NOINHERIT`   | Materialize does not support the `NOINHERIT` option for `CREATE ROLE`.                                                                                   |
-| `LOGIN`       | The `LOGIN` attribute allows a role to login via the postgresql or web endpoints                                                                         |
-| `NOLOGIN`     | The `NOLOGIN` attribute prevents a role from logging in. This is the default behavior if `LOGIN` is not specified.                                       |
-| `SUPERUSER`   | The `SUPERUSER` attribute grants the role superuser privileges.                                                                                          |
-| `NOSUPERUSER` | The `NOSUPERUSER` attribute prevents the role from having superuser privileges. This is the default behavior if `SUPERUSER` is not specified.            |
-| `PASSWORD`    | The `PASSWORD` attribute allows you to set a password for the role.                                                                                      |
+| Option        | Description                                                                                                                     |
+| ------------- | ------------------------------------------------------------------------------------------------------------------------------- |
+| `INHERIT`     | If specified, grants the role the ability to inherit privileges of other roles. (Default)                                       |
+| `LOGIN`       | If specified, allows a role to login via the PostgreSQL or web endpoints                                                        |
+| `NOLOGIN`     | If specified, prevents a role from logging in. This is the default behavior if `LOGIN` is not specified.                        |
+| `SUPERUSER`   | If specified, grants the role superuser privileges.                                                                             |
+| `NOSUPERUSER` | If specified, prevents the role from having superuser privileges. This is the default behavior if `SUPERUSER` is not specified. |
+| `PASSWORD`    | If specified, allows you to set a password for the role.                                                                        |
 
 {{< note >}}
 
@@ -100,7 +95,7 @@ SELECT rolsuper FROM pg_authid WHERE rolname = 'super_user';
 ```
 
 ```nofmt
- t
+ true
 ```
 
 ## Related pages
