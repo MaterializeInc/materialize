@@ -1542,8 +1542,15 @@ impl OrchestratorWorker {
                 disk_bytes: Option<u64>,
             }
 
-            let service = self_.service_api.get(service_name).await.unwrap();
-            let namespace = service.metadata.namespace.unwrap();
+            let service = self_
+                .service_api
+                .get(service_name)
+                .await
+                .with_context(|| format!("failed to get service {service_name}"))?;
+            let namespace = service
+                .metadata
+                .namespace
+                .context("missing service namespace")?;
             let internal_http_port = service
                 .spec
                 .and_then(|spec| spec.ports)
@@ -1564,7 +1571,7 @@ impl OrchestratorWorker {
             let http_client = reqwest::Client::builder()
                 .timeout(Duration::from_secs(10))
                 .build()
-                .unwrap();
+                .context("error building HTTP client")?;
             let resp = http_client.get(metrics_url).send().await?;
             let usage: Usage = resp.json().await?;
 
