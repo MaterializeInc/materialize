@@ -38,16 +38,14 @@ write-batch output=nope lower=1 upper=3
 ----
 parts=0 len=0
 
-# NB(ptravers): see compare_and_append_batch.
-# truncate-batch-desc input=nope output=nope0 lower=0 upper=2
-# ----
-# error: invalid batch bounds [Antichain { elements: [1] }, Antichain { elements: [3] }) for append call with [Antichain { elements: [0] }, Antichain { elements: [2] })
+truncate-batch-desc input=nope output=nope0 lower=0 upper=2
+----
+error: invalid batch bounds [Antichain { elements: [1] }, Antichain { elements: [3] }) for append call with [Antichain { elements: [0] }, Antichain { elements: [2] })
 
 write-batch output=nope lower=0 upper=2
 ----
 parts=0 len=0
 
-# NB(ptravers): see compare_and_append_batch.
-# truncate-batch-desc input=nope output=nope1 lower=1 upper=3
-# ----
-# error: invalid batch bounds [Antichain { elements: [0] }, Antichain { elements: [2] }) for append call with [Antichain { elements: [1] }, Antichain { elements: [3] })
+truncate-batch-desc input=nope output=nope1 lower=1 upper=3
+----
+error: invalid batch bounds [Antichain { elements: [0] }, Antichain { elements: [2] }) for append call with [Antichain { elements: [1] }, Antichain { elements: [3] })

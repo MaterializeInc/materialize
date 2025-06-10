@@ -1265,6 +1265,7 @@ pub(crate) fn validate_truncate_batch<T: Timestamp>(
     batch: &HollowBatch<T>,
     truncate: &Description<T>,
     any_batch_rewrite: bool,
+    enforce_single_batch: bool,
 ) -> Result<(), InvalidUsage<T>> {
     // If rewrite_ts is used, we don't allow truncation, to keep things simpler
     // to reason about.
@@ -1291,6 +1292,20 @@ pub(crate) fn validate_truncate_batch<T: Timestamp>(
                     part_lower_bound.elements(),
                 )));
             }
+        }
+    }
+
+    if enforce_single_batch {
+        let batch = &batch.desc;
+        if !PartialOrder::less_equal(batch.lower(), truncate.lower())
+            || PartialOrder::less_than(batch.upper(), truncate.upper())
+        {
+            return Err(InvalidUsage::InvalidBatchBounds {
+                batch_lower: batch.lower().clone(),
+                batch_upper: batch.upper().clone(),
+                append_lower: truncate.lower().clone(),
+                append_upper: truncate.upper().clone(),
+            });
         }
     }
 

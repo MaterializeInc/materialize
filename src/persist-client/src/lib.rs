@@ -1307,41 +1307,39 @@ mod tests {
                 },
             );
 
-            // NB(ptravers): please see comment on `compare_and_append_batch`.
-            //
-            //let batch = write0
-            //    .batch(&ts3, Antichain::from_elem(3), Antichain::from_elem(4))
-            //    .await
-            //    .expect("invalid usage");
-            //assert_eq!(
-            //    write0
-            //        .append_batch(batch, Antichain::from_elem(4), Antichain::from_elem(5))
-            //        .await
-            //        .unwrap_err(),
-            //    InvalidUsage::InvalidBatchBounds {
-            //        batch_lower: Antichain::from_elem(3),
-            //        batch_upper: Antichain::from_elem(4),
-            //        append_lower: Antichain::from_elem(4),
-            //        append_upper: Antichain::from_elem(5),
-            //    },
-            //);
-            //
-            //let batch = write0
-            //    .batch(&ts3, Antichain::from_elem(3), Antichain::from_elem(4))
-            //    .await
-            //    .expect("invalid usage");
-            //assert_eq!(
-            //    write0
-            //        .append_batch(batch, Antichain::from_elem(2), Antichain::from_elem(3))
-            //        .await
-            //        .unwrap_err(),
-            //    InvalidUsage::InvalidBatchBounds {
-            //        batch_lower: Antichain::from_elem(3),
-            //        batch_upper: Antichain::from_elem(4),
-            //        append_lower: Antichain::from_elem(2),
-            //        append_upper: Antichain::from_elem(3),
-            //    },
-            //);
+            let batch = write0
+                .batch(&ts3, Antichain::from_elem(3), Antichain::from_elem(4))
+                .await
+                .expect("invalid usage");
+            assert_eq!(
+                write0
+                    .append_batch(batch, Antichain::from_elem(4), Antichain::from_elem(5))
+                    .await
+                    .unwrap_err(),
+                InvalidUsage::InvalidBatchBounds {
+                    batch_lower: Antichain::from_elem(3),
+                    batch_upper: Antichain::from_elem(4),
+                    append_lower: Antichain::from_elem(4),
+                    append_upper: Antichain::from_elem(5),
+                },
+            );
+
+            let batch = write0
+                .batch(&ts3, Antichain::from_elem(3), Antichain::from_elem(4))
+                .await
+                .expect("invalid usage");
+            assert_eq!(
+                write0
+                    .append_batch(batch, Antichain::from_elem(2), Antichain::from_elem(3))
+                    .await
+                    .unwrap_err(),
+                InvalidUsage::InvalidBatchBounds {
+                    batch_lower: Antichain::from_elem(3),
+                    batch_upper: Antichain::from_elem(4),
+                    append_lower: Antichain::from_elem(2),
+                    append_upper: Antichain::from_elem(3),
+                },
+            );
 
             let batch = write0
                 .batch(&ts3, Antichain::from_elem(3), Antichain::from_elem(4))

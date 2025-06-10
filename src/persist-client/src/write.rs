@@ -337,7 +337,7 @@ where
             .batch(updates, expected_upper.clone(), new_upper.clone())
             .await?;
         match self
-            .compare_and_append_batch(&mut [&mut batch], expected_upper, new_upper)
+            .compare_and_append_batch(&mut [&mut batch], expected_upper, new_upper, true)
             .await
         {
             ok @ Ok(Ok(())) => ok,
@@ -389,7 +389,7 @@ where
     {
         loop {
             let res = self
-                .compare_and_append_batch(&mut [&mut batch], lower.clone(), upper.clone())
+                .compare_and_append_batch(&mut [&mut batch], lower.clone(), upper.clone(), true)
                 .await?;
             match res {
                 Ok(()) => {
@@ -465,6 +465,7 @@ where
         batches: &mut [&mut Batch<K, V, T, D>],
         expected_upper: Antichain<T>,
         new_upper: Antichain<T>,
+        enforce_single_batch: bool,
     ) -> Result<Result<(), UpperMismatch<T>>, InvalidUsage<T>>
     where
         D: Send + Sync,
@@ -510,7 +511,12 @@ where
             let mut key_storage = None;
             let mut val_storage = None;
             for batch in batches.iter() {
-                let () = validate_truncate_batch(&batch.batch, &desc, any_batch_rewrite)?;
+                let () = validate_truncate_batch(
+                    &batch.batch,
+                    &desc,
+                    any_batch_rewrite,
+                    enforce_single_batch,
+                )?;
                 for (run_meta, run) in batch.batch.runs() {
                     let start_index = parts.len();
                     for part in run {
@@ -939,6 +945,7 @@ where
             batches,
             Antichain::from_elem(expected_upper),
             Antichain::from_elem(new_upper),
+            true,
         )
         .await
         .expect("invalid usage")
