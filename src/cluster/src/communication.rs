@@ -348,10 +348,13 @@ async fn connect_lower(
             tcp.set_nodelay(true)?;
         }
 
-        s.write_u64(u64::cast_from(my_index)).await?;
-        let peer_epoch = Epoch::read(&mut s).await?;
+        // Make sure all network calls have timeouts, so we don't get stuck when the peer goes
+        // away. Writes are buffered, so they probably don't need timeouts, but we're adding them
+        // anyway just to be safe.
+        timeout(s.write_u64(u64::cast_from(my_index))).await?;
+        let peer_epoch = timeout(Epoch::read(&mut s)).await?;
         let my_epoch = my_epoch.unwrap_or(peer_epoch);
-        my_epoch.write(&mut s).await?;
+        timeout(my_epoch.write(&mut s)).await?;
 
         Ok((peer_epoch, s))
     }
@@ -425,14 +428,19 @@ async fn accept_higher(
             tcp.set_nodelay(true)?;
         }
 
-        let peer_index = s.read_u64().await?;
+        // Make sure all network calls have timeouts, so we don't get stuck when the peer goes
+        // away.
+        let peer_index = timeout(s.read_u64()).await?;
         let peer_index = usize::cast_from(peer_index);
         Ok((peer_index, s))
     }
 
     async fn exchange_epochs(my_epoch: Epoch, s: &mut Stream) -> anyhow::Result<Epoch> {
-        my_epoch.write(s).await?;
-        let peer_epoch = Epoch::read(s).await?;
+        // Make sure all network calls have timeouts, so we don't get stuck when the peer goes
+        // away. Writes are buffered, so they probably don't need timeouts, but we're adding them
+        // anyway just to be safe.
+        timeout(my_epoch.write(s)).await?;
+        let peer_epoch = timeout(Epoch::read(s)).await?;
         Ok(peer_epoch)
     }
 
@@ -485,6 +493,21 @@ async fn accept_higher(
     }
 
     Ok(sockets.into_iter().map(|s| s.unwrap()).collect())
+}
+
+/// Helper for performing network I/O under a timeout.
+///
+/// This is meant to be used on network calls performed after a connection to a peer has been
+/// successfully established, to avoid the `create_sockets` protocol becoming stuck because a peer
+/// goes away without resetting the connection. We assume fast same-datacenter connections, so we
+/// can choose a relatively small timeout.
+async fn timeout<F, R>(fut: F) -> anyhow::Result<R>
+where
+    F: Future<Output = std::io::Result<R>>,
+{
+    let timeout = Duration::from_secs(1);
+    let result = mz_ore::future::timeout(timeout, fut).await?;
+    Ok(result)
 }
 
 #[cfg(test)]
@@ -576,7 +599,7 @@ mod turmoil_tests {
                         }
                         for sock in sockets.iter_mut().filter_map(|s| s.as_mut()) {
                             info!("waiting for ping from {sock:?}");
-                            match timeout(Duration::from_secs(1), sock.read_u8()).await {
+                            match timeout(Duration::from_secs(2), sock.read_u8()).await {
                                 Ok(Ok(ping)) => assert_eq!(ping, 111),
                                 Ok(Err(error)) => {
                                     info!("error waiting for ping: {error}; retrying protocol");
@@ -624,8 +647,8 @@ mod turmoil_tests {
             }
 
             sim.step().unwrap();
-            if sim.elapsed() > Duration::from_secs(120) {
-                panic!("simulation not finished after 120s");
+            if sim.elapsed() > Duration::from_secs(60) {
+                panic!("simulation not finished after 60s");
             }
         }
     }
