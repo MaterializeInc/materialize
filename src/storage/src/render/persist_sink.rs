@@ -1007,6 +1007,7 @@ where
 
             'consumer: loop {
                 // Drain both input channels as of resumption and advance frontier.
+                // TODO(ptravers): https://github.com/MaterializeInc/database-issues/issues/9369
                 tokio::select! {
                     Some(event) = batch_descriptions_input.next() => {
                         match event {
@@ -1062,6 +1063,7 @@ where
                                     });
                                     batches.batch_metrics += &batch.metrics;
                                 }
+
                                 continue 'consumer;
                             }
                             Event::Progress(frontier) => {
