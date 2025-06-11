@@ -1083,6 +1083,7 @@ class FlipFlagsAction(Action):
         self.flags_with_values["enable_compute_active_dataflow_cancelation"] = (
             BOOLEAN_FLAG_VALUES
         )
+        self.flags_with_values["storage_sink_write_batches_to_persist"] = BOOLEAN_FLAG_VALUES
 
         # If you are adding a new config flag in Materialize, consider using it
         # here instead of just marking it as uninteresting to silence the
