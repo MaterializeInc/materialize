@@ -34,7 +34,7 @@ START_TIME=$(date -d "$(cat step_start_timestamp)" +%s)
 END_TIME=$(date +%s)
 ELAPSED=$((END_TIME - START_TIME))
 if [ $ELAPSED -ge $((BUILDKITE_TIMEOUT * 60)) ]; then
-  printf "%s" "\n$BUILDKITE_LABEL: test timed out" >> run.log
+  printf "\n%s" "$BUILDKITE_LABEL: test timed out" >> run.log
 fi
 
 if [ -n "${CI_COVERAGE_ENABLED:-}" ]; then
