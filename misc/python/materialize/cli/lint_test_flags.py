@@ -36,7 +36,7 @@ def main() -> int:
     configs = []
 
     for path in Path("src").rglob("*.rs"):
-        if path == Path("src/dyncfg/src/lib.rs"):
+        if path in [Path("src/dyncfg/src/lib.rs"), Path("src/dyncfg-file/src/lib.rs")]:
             continue  # contains tests
         with path.open(encoding="utf-8") as file:
             content = file.read()
