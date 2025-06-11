@@ -614,6 +614,7 @@ class AWS(State):
         prefix: str,
         setup: bool,
         tag: str,
+        orchestratord_tag: str | None = None,
     ) -> None:
         if not setup:
             spawn.runv(
@@ -635,7 +636,7 @@ class AWS(State):
         ]
         vars += [
             "-var",
-            f"orchestratord_version={get_tag(tag)}",
+            f"orchestratord_version={get_tag(orchestratord_tag or tag)}",
         ]
 
         print("--- Setup")
@@ -813,7 +814,7 @@ def workflow_aws_upgrade(c: Composition, parser: WorkflowArgumentParser) -> None
     try:
         if args.run_mz_debug:
             mz_debug_build_thread = build_mz_debug_async()
-        aws.setup("aws-upgrade", args.setup, str(previous_tag))
+        aws.setup("aws-upgrade", args.setup, str(previous_tag), str(tag))
         aws.upgrade(tag)
         if args.test:
             # Try waiting a bit, otherwise connection error, should be handled better
