@@ -24,28 +24,12 @@ set -euo pipefail
 
 . misc/shlib/shlib.bash
 
-# The crates whose dependency graphs we want to lint.
-entrypoints=(
-    mz-clusterd
-    mz-environmentd
-    mz-materialized
-)
-
 # Explicitly name targets to check dependencies. We support Apple and Linux on ARM64 and x86_64.
 targets=(
     aarch64-apple-darwin
     x86_64-apple-darwin
     aarch64-unknown-linux-gnu
     x86_64-unknown-linux-gnu
-)
-
-# List of crates to include in the dependency lint, including an explanation why they're listed.
-crates=(
-    # Checks that the default allocator is jemalloc on supported platforms, but can
-    # be disabled using --no-default-features or explicitly enabled with --features=jemalloc
-    tikv_jemalloc_ctl
-    tikv_jemallocator
-    tikv_jemalloc_sys
 )
 
 if [[ "$(uname -s)" = Darwin ]]; then
@@ -90,6 +74,26 @@ function deps() {
 
 ci_uncollapsed_heading "Linting dependencies -- if the check fails, consult ci/test/lint-deps/README.md"
 
+################################################
+# Jemalloc lints
+################################################
+
+# List of crates to include in the dependency lint, including an explanation why they're listed.
+crates=(
+    # Checks that the default allocator is jemalloc on supported platforms, but can
+    # be disabled using --no-default-features or explicitly enabled with --features=jemalloc
+    tikv_jemalloc_ctl
+    tikv_jemallocator
+    tikv_jemalloc_sys
+)
+
+# The crates whose dependency graphs we want to lint.
+entrypoints=(
+    mz-clusterd
+    mz-environmentd
+    mz-materialized
+)
+
 for target in "${targets[@]}"; do
     if $rewrite; then
         deps > "$resources/$target-default"
@@ -99,6 +103,66 @@ for target in "${targets[@]}"; do
         try diff "$resources/$target-default" <(deps)
         try diff "$resources/$target-no-default-features" <(deps --no-default-features)
         try diff "$resources/$target-jemalloc" <(deps --features jemalloc)
+    fi
+done
+
+################################################
+# workspace-hack lints
+################################################
+
+# List of crates to include in the dependency lint, including an explanation why they're listed.
+crates=(
+    # Should not be included in anything that may end up in the cloud repo.
+    # Eventually, we should be able to disable this everywhere with --no-default-features.
+    workspace_hack
+)
+
+# The crates whose dependency graphs we want to lint.
+# This should include any current or potential dependencies
+# used by the cloud repo.
+entrypoints=(
+    mz-alloc
+    mz-aws-secrets-controller
+    mz-aws-util
+    mz-build-info
+    mz-build-tools
+    mz-cloud-provider
+    mz-cloud-resources
+    mz-http-util
+    mz-license-keys
+    mz-lowertest
+    mz-lowertest-derive
+    mz-npm
+    mz-orchestrator
+    mz-orchestrator-kubernetes
+    mz-orchestrator-process
+    mz-orchestrator-tracing
+    mz-orchestratord
+    mz-ore
+    mz-ore-build
+    mz-ore-proc
+    mz-persist-types
+    mz-pgrepr-consts
+    mz-pgtz
+    mz-prof
+    mz-prof-http
+    mz-proto
+    mz-repr
+    mz-secrets
+    mz-segment
+    mz-service
+    mz-sql-lexer
+    mz-sql-parser
+    mz-tls-util
+    mz-tracing
+    mz-walkabout
+)
+
+for target in "${targets[@]}"; do
+    if $rewrite; then
+        deps --no-default-features > "$resources/$target-workspace-hack-no-default-features"
+    else
+        try diff "$resources/$target-workspace-hack-no-default-features" <(deps --no-default-features)
     fi
 done
 
