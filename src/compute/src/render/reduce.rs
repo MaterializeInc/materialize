@@ -20,7 +20,6 @@ use differential_dataflow::consolidation::ConsolidatingContainerBuilder;
 use differential_dataflow::containers::{Columnation, CopyRegion};
 use differential_dataflow::difference::{IsZero, Multiply, Semigroup};
 use differential_dataflow::hashable::Hashable;
-use differential_dataflow::lattice::Lattice;
 use differential_dataflow::operators::arrange::{Arranged, TraceAgent};
 use differential_dataflow::trace::{Batch, Builder, Trace, TraceReader};
 use differential_dataflow::{Collection, Diff as _};
@@ -61,8 +60,8 @@ use crate::typedefs::{
 impl<G, T> Context<G, T>
 where
     G: Scope,
-    G::Timestamp: MzTimestamp + Lattice + Refines<T>,
-    T: MzTimestamp + Lattice,
+    G::Timestamp: MzTimestamp + Refines<T>,
+    T: MzTimestamp,
 {
     /// Renders a `MirRelationExpr::Reduce` using various non-obvious techniques to
     /// minimize worst-case incremental update times and memory footprint.

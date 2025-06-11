@@ -123,12 +123,16 @@ pub type KeyValBatcher<K, V, T, D> =
     MergeBatcher<Vec<((K, V), T, D)>, ColumnationChunker<((K, V), T, D)>, ColMerger<(K, V), T, D>>;
 
 /// Timestamp trait for rendering, constraint to support [`MzData`] and [timely::progress::Timestamp].
-pub trait MzTimestamp: MzData + timely::progress::Timestamp {}
+pub trait MzTimestamp:
+    MzData + timely::progress::Timestamp + differential_dataflow::lattice::Lattice
+{
+}
 
 impl<T> MzTimestamp for T
 where
     T: MzData,
     T: timely::progress::Timestamp,
+    T: differential_dataflow::lattice::Lattice,
 {
 }
 

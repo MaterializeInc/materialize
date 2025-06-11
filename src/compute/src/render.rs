@@ -1333,7 +1333,7 @@ where
 
 #[allow(dead_code)] // Some of the methods on this trait are unused, but useful to have.
 /// A timestamp type that can be used for operations within MZ's dataflow layer.
-pub trait RenderTimestamp: MzTimestamp + Lattice + Refines<mz_repr::Timestamp> {
+pub trait RenderTimestamp: MzTimestamp + Refines<mz_repr::Timestamp> {
     /// The system timestamp component of the timestamp.
     ///
     /// This is useful for manipulating the system time, as when delaying

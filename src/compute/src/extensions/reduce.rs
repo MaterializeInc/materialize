@@ -52,8 +52,8 @@ where
 
 impl<G, T1> MzReduce<G, T1> for Arranged<G, T1>
 where
-    G::Timestamp: Lattice + Ord,
     G: Scope,
+    G::Timestamp: Lattice,
     T1: TraceReader<Time = G::Timestamp> + Clone + 'static,
 {
     /// Applies `reduce` to arranged data, and returns an arrangement of output data.
@@ -84,9 +84,11 @@ where
 
 /// Extension trait for `ReduceCore`, currently providing a reduction based
 /// on an operator-pair approach.
-pub trait ReduceExt<G: Scope, Tr: TraceReader<Time = G::Timestamp>>
+pub trait ReduceExt<G, Tr>
 where
+    G: Scope,
     G::Timestamp: Lattice,
+    Tr: TraceReader<Time = G::Timestamp>,
 {
     /// This method produces a reduction pair based on the same input arrangement. Each reduction
     /// in the pair operates with its own logic and the two output arrangements from the reductions
@@ -124,8 +126,9 @@ where
         Arranged<G, TraceAgent<T2>>: ArrangementSize;
 }
 
-impl<G: Scope, Tr> ReduceExt<G, Tr> for Arranged<G, Tr>
+impl<G, Tr> ReduceExt<G, Tr> for Arranged<G, Tr>
 where
+    G: Scope,
     G::Timestamp: Lattice,
     Tr: TraceReader<Time = G::Timestamp> + Clone + 'static,
 {

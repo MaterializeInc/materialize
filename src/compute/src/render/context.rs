@@ -17,7 +17,6 @@ use std::sync::mpsc;
 
 use differential_dataflow::IntoOwned;
 use differential_dataflow::consolidation::ConsolidatingContainerBuilder;
-use differential_dataflow::lattice::Lattice;
 use differential_dataflow::operators::arrange::Arranged;
 use differential_dataflow::trace::{BatchReader, Cursor, TraceReader};
 use differential_dataflow::{AsCollection, Collection, Data};
@@ -66,8 +65,8 @@ use crate::typedefs::{
 /// of regions or iteration.
 pub struct Context<S: Scope, T = mz_repr::Timestamp>
 where
-    T: MzTimestamp + Lattice,
-    S::Timestamp: MzTimestamp + Lattice + Refines<T>,
+    T: MzTimestamp,
+    S::Timestamp: MzTimestamp + Refines<T>,
 {
     /// The scope within which all managed collections exist.
     ///
@@ -106,7 +105,7 @@ where
 
 impl<S: Scope> Context<S>
 where
-    S::Timestamp: MzTimestamp + Lattice + Refines<mz_repr::Timestamp>,
+    S::Timestamp: MzTimestamp + Refines<mz_repr::Timestamp>,
 {
     /// Creates a new empty Context.
     pub fn for_dataflow_in<Plan>(
@@ -159,8 +158,8 @@ where
 
 impl<S: Scope, T> Context<S, T>
 where
-    T: MzTimestamp + Lattice,
-    S::Timestamp: MzTimestamp + Lattice + Refines<T>,
+    T: MzTimestamp,
+    S::Timestamp: MzTimestamp + Refines<T>,
 {
     /// Insert a collection bundle by an identifier.
     ///
@@ -208,8 +207,8 @@ where
 
 impl<S: Scope, T> Context<S, T>
 where
-    T: MzTimestamp + Lattice,
-    S::Timestamp: MzTimestamp + Lattice + Refines<T>,
+    T: MzTimestamp,
+    S::Timestamp: MzTimestamp + Refines<T>,
 {
     /// Brings the underlying arrangements and collections into a region.
     pub fn enter_region<'a>(
@@ -330,8 +329,8 @@ impl HydrationLogger {
 #[derive(Clone)]
 pub enum ArrangementFlavor<S: Scope, T = mz_repr::Timestamp>
 where
-    T: MzTimestamp + Lattice,
-    S::Timestamp: MzTimestamp + Lattice + Refines<T>,
+    T: MzTimestamp,
+    S::Timestamp: MzTimestamp + Refines<T>,
 {
     /// A dataflow-local arrangement.
     Local(
@@ -351,8 +350,8 @@ where
 
 impl<S: Scope, T> ArrangementFlavor<S, T>
 where
-    T: MzTimestamp + Lattice,
-    S::Timestamp: MzTimestamp + Lattice + Refines<T>,
+    T: MzTimestamp,
+    S::Timestamp: MzTimestamp + Refines<T>,
 {
     /// Presents `self` as a stream of updates.
     ///
@@ -435,8 +434,8 @@ where
 }
 impl<S: Scope, T> ArrangementFlavor<S, T>
 where
-    T: MzTimestamp + Lattice,
-    S::Timestamp: MzTimestamp + Lattice + Refines<T>,
+    T: MzTimestamp,
+    S::Timestamp: MzTimestamp + Refines<T>,
 {
     /// The scope containing the collection bundle.
     pub fn scope(&self) -> S {
@@ -463,8 +462,8 @@ where
 }
 impl<'a, S: Scope, T> ArrangementFlavor<Child<'a, S, S::Timestamp>, T>
 where
-    T: MzTimestamp + Lattice,
-    S::Timestamp: MzTimestamp + Lattice + Refines<T>,
+    T: MzTimestamp,
+    S::Timestamp: MzTimestamp + Refines<T>,
 {
     /// Extracts the arrangement flavor from a region.
     pub fn leave_region(&self) -> ArrangementFlavor<S, T> {
@@ -486,8 +485,8 @@ where
 #[derive(Clone)]
 pub struct CollectionBundle<S: Scope, T = mz_repr::Timestamp>
 where
-    T: MzTimestamp + Lattice,
-    S::Timestamp: MzTimestamp + Lattice + Refines<T>,
+    T: MzTimestamp,
+    S::Timestamp: MzTimestamp + Refines<T>,
 {
     pub collection: Option<(Collection<S, Row, Diff>, Collection<S, DataflowError, Diff>)>,
     pub arranged: BTreeMap<Vec<MirScalarExpr>, ArrangementFlavor<S, T>>,
@@ -495,8 +494,8 @@ where
 
 impl<S: Scope, T> CollectionBundle<S, T>
 where
-    T: MzTimestamp + Lattice,
-    S::Timestamp: MzTimestamp + Lattice + Refines<T>,
+    T: MzTimestamp,
+    S::Timestamp: MzTimestamp + Refines<T>,
 {
     /// Construct a new collection bundle from update streams.
     pub fn from_collections(
@@ -568,8 +567,8 @@ where
 
 impl<'a, S: Scope, T> CollectionBundle<Child<'a, S, S::Timestamp>, T>
 where
-    T: MzTimestamp + Lattice,
-    S::Timestamp: MzTimestamp + Lattice + Refines<T>,
+    T: MzTimestamp,
+    S::Timestamp: MzTimestamp + Refines<T>,
 {
     /// Extracts the collection bundle from a region.
     pub fn leave_region(&self) -> CollectionBundle<S, T> {
@@ -589,8 +588,8 @@ where
 
 impl<S: Scope, T> CollectionBundle<S, T>
 where
-    T: MzTimestamp + Lattice,
-    S::Timestamp: MzTimestamp + Lattice + Refines<T>,
+    T: MzTimestamp,
+    S::Timestamp: MzTimestamp + Refines<T>,
 {
     /// Asserts that the arrangement for a specific key
     /// (or the raw collection for no key) exists,
@@ -761,7 +760,7 @@ where
 
 impl<S, T> CollectionBundle<S, T>
 where
-    T: MzTimestamp + Lattice,
+    T: MzTimestamp,
     S: Scope,
     S::Timestamp: Refines<T> + RenderTimestamp,
 {

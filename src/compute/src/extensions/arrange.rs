@@ -317,7 +317,7 @@ where
 impl<G, K, V, R> ArrangementSize for Arranged<G, KeyValAgent<K, V, G::Timestamp, R>>
 where
     G: Scope,
-    G::Timestamp: Lattice + MzTimestamp,
+    G::Timestamp: MzTimestamp,
     K: Data + MzData,
     V: Data + MzData,
     R: Semigroup + Ord + MzData + 'static,
@@ -346,7 +346,7 @@ where
 impl<G, K, R> ArrangementSize for Arranged<G, KeyAgent<K, G::Timestamp, R>>
 where
     G: Scope,
-    G::Timestamp: Lattice + MzTimestamp,
+    G::Timestamp: MzTimestamp,
     K: Data + MzArrangeData,
     R: Semigroup + Ord + MzData + 'static,
 {
@@ -372,7 +372,7 @@ where
 impl<G, V, R> ArrangementSize for Arranged<G, RowValAgent<V, G::Timestamp, R>>
 where
     G: Scope,
-    G::Timestamp: Lattice + MzTimestamp,
+    G::Timestamp: MzTimestamp,
     V: Data + MzArrangeData,
     R: Semigroup + Ord + MzArrangeData + 'static,
 {
@@ -400,7 +400,7 @@ where
 impl<G, R> ArrangementSize for Arranged<G, RowRowAgent<G::Timestamp, R>>
 where
     G: Scope,
-    G::Timestamp: Lattice + MzTimestamp,
+    G::Timestamp: MzTimestamp,
     R: Semigroup + Ord + MzArrangeData + 'static,
 {
     fn log_arrangement_size(self) -> Self {
@@ -427,7 +427,7 @@ where
 impl<G, R> ArrangementSize for Arranged<G, RowAgent<G::Timestamp, R>>
 where
     G: Scope,
-    G::Timestamp: Lattice + MzTimestamp,
+    G::Timestamp: MzTimestamp,
     R: Semigroup + Ord + MzArrangeData + 'static,
 {
     fn log_arrangement_size(self) -> Self {

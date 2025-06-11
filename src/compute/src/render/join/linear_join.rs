@@ -189,8 +189,8 @@ impl YieldSpec {
 enum JoinedFlavor<G, T>
 where
     G: Scope,
-    G::Timestamp: Lattice + Refines<T> + MzTimestamp,
-    T: MzTimestamp + Lattice,
+    G::Timestamp: Refines<T> + MzTimestamp,
+    T: MzTimestamp,
 {
     /// Streamed data as a collection.
     Collection(Collection<G, Row, Diff>),
@@ -204,7 +204,7 @@ impl<G, T> Context<G, T>
 where
     G: Scope,
     G::Timestamp: Lattice + Refines<T> + RenderTimestamp,
-    T: MzTimestamp + Lattice,
+    T: MzTimestamp,
 {
     pub(crate) fn render_join(
         &self,

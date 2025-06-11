@@ -529,7 +529,7 @@ fn build_topk_negated_stage<G, V, Bu, Tr>(
 )
 where
     G: Scope,
-    G::Timestamp: Lattice + MzTimestamp,
+    G::Timestamp: MzTimestamp,
     V: Data + MaybeValidatingRow<Row, Row>,
     Bu: Builder<Time = G::Timestamp, Output = Tr::Batch>,
     Bu::Input: Container + PushInto<((Row, V), G::Timestamp, Diff)>,

@@ -13,7 +13,6 @@
 
 use differential_dataflow::Data;
 use differential_dataflow::IntoOwned;
-use differential_dataflow::lattice::Lattice;
 use differential_dataflow::operators::arrange::{Arranged, TraceAgent};
 use differential_dataflow::trace::{Batch, Builder, Trace, TraceReader};
 use mz_compute_types::plan::threshold::{BasicThresholdPlan, ThresholdPlan};
@@ -38,7 +37,7 @@ fn threshold_arrangement<G, K, V, T1, Bu2, T2, L>(
 ) -> Arranged<G, TraceAgent<T2>>
 where
     G: Scope,
-    G::Timestamp: MzTimestamp + Lattice,
+    G::Timestamp: MzTimestamp,
     V: MzData + Data,
     T1: TraceReader<Time = G::Timestamp, Diff = Diff> + Clone + 'static,
     for<'a> T1::Key<'a>: IntoOwned<'a, Owned = K>,
@@ -75,8 +74,8 @@ pub fn build_threshold_basic<G, T>(
 ) -> CollectionBundle<G, T>
 where
     G: Scope,
-    G::Timestamp: MzTimestamp + Lattice + Refines<T>,
-    T: MzTimestamp + Lattice,
+    G::Timestamp: MzTimestamp + Refines<T>,
+    T: MzTimestamp,
 {
     let arrangement = input
         .arrangement(&key)
@@ -107,8 +106,8 @@ where
 impl<G, T> Context<G, T>
 where
     G: Scope,
-    G::Timestamp: MzTimestamp + Lattice + Refines<T>,
-    T: MzTimestamp + Lattice,
+    G::Timestamp: MzTimestamp + Refines<T>,
+    T: MzTimestamp,
 {
     pub(crate) fn render_threshold(
         &self,
