@@ -984,6 +984,9 @@ where
 
             // In flight batches that haven't been `compare_and_append`'d yet, plus metrics about
             // the batch.
+            // TODO(ptravers): Often we can use frontier semantics to encode what should happen when
+            // instead of relying on the antichains itself and the hash implementation of antichains
+            // is rather slow.
             let mut in_flight_batches =
                 HashMap::<(Antichain<mz_repr::Timestamp>, Antichain<mz_repr::Timestamp>), BatchSet>::new();
 
@@ -1161,6 +1164,105 @@ where
     (upper_stream, errors, shutdown_button.press_on_drop())
 }
 
+async fn spin_on_write_lock(
+    collection_id: GlobalId,
+    worker_id: usize,
+    shard_id: ShardId,
+    current_upper: &Rc<std::cell::RefCell<Antichain<mz_repr::Timestamp>>>,
+    batch_lower: &Antichain<mz_repr::Timestamp>,
+    batch_upper: &Antichain<mz_repr::Timestamp>,
+    read_only_rx: &mut watch::Receiver<bool>,
+    write: &mut mz_persist_client::write::WriteHandle<
+        SourceData,
+        (),
+        mz_repr::Timestamp,
+        StorageDiff,
+    >,
+) -> Result<(), UpperMismatch<mz_repr::Timestamp>> {
+    // We have to wait for either us coming out of read-only
+    // mode or someone else applying a write that covers our
+    // batch.
+    //
+    // If we didn't wait for the latter here, and just go
+    // around the loop again, we might miss a moment where
+    // _we_ have to write down a batch. For example when our
+    // input frontier advances to a state where we can
+    // write, and the read-write instance sees the same
+    // update but then crashes before it can append a batch.
+    loop {
+        if collection_id.is_user() {
+            tracing::debug!(
+                %worker_id,
+                %collection_id,
+                %shard_id,
+                ?batch_lower,
+                ?batch_upper,
+                ?current_upper,
+                "persist_sink is in read-only mode, waiting until we come out of it or the shard upper advances"
+            );
+        }
+
+        // We don't try to be smart here, and for example
+        // use `wait_for_upper_past()`. We'd have to use a
+        // select!, which would require cancel safety of
+        // `wait_for_upper_past()`, which it doesn't
+        // advertise.
+        let _ = tokio::time::timeout(Duration::from_secs(1), read_only_rx.changed()).await;
+
+        if !*read_only_rx.borrow() {
+            if collection_id.is_user() {
+                tracing::debug!(
+                    %worker_id,
+                    %collection_id,
+                    %shard_id,
+                    ?batch_lower,
+                    ?batch_upper,
+                    ?current_upper,
+                    "persist_sink has come out of read-only mode"
+                );
+            }
+
+            // It's okay to write now.
+            return Ok(());
+        }
+
+        let current_upper = write.fetch_recent_upper().await;
+
+        if PartialOrder::less_than(batch_upper, current_upper) {
+            // We synthesize an `UpperMismatch` so that we can go
+            // through the same logic below for trimming down our
+            // batches.
+            //
+            // Notably, we are not trying to be smart, and teach the
+            // write operator about read-only mode. Writing down
+            // those batches does not append anything to the persist
+            // shard, and it would be a hassle to figure out in the
+            // write workers how to trim down batches in read-only
+            // mode, when the shard upper advances.
+            //
+            // Right here, in the logic below, we have all we need
+            // for figuring out how to trim our batches.
+
+            if collection_id.is_user() {
+                tracing::debug!(
+                    %worker_id,
+                    %collection_id,
+                    %shard_id,
+                    ?batch_lower,
+                    ?batch_upper,
+                    ?current_upper,
+                    "persist_sink not appending in read-only mode"
+                );
+            }
+
+            return Err(UpperMismatch {
+                current: current_upper.clone(),
+                expected: batch_lower.clone(),
+            });
+        }
+    }
+}
+
 #[allow(clippy::disallowed_types)]
 async fn update_persist_incremental(
     collection_id: GlobalId,
@@ -1217,94 +1319,19 @@ async fn update_persist_incremental(
 
         let result = {
             let maybe_err = if *read_only_rx.borrow() {
-                // We have to wait for either us coming out of read-only
-                // mode or someone else applying a write that covers our
-                // batch.
-                //
-                // If we didn't wait for the latter here, and just go
-                // around the loop again, we might miss a moment where
-                // _we_ have to write down a batch. For example when our
-                // input frontier advances to a state where we can
-                // write, and the read-write instance sees the same
-                // update but then crashes before it can append a batch.
-
-                let maybe_err = loop {
-                    if collection_id.is_user() {
-                        tracing::debug!(
-                            %worker_id,
-                            %collection_id,
-                            %shard_id,
-                            ?batch_lower,
-                            ?batch_upper,
-                            ?current_upper,
-                            "persist_sink is in read-only mode, waiting until we come out of it or the shard upper advances"
-                        );
-                    }
-
-                    // We don't try to be smart here, and for example
-                    // use `wait_for_upper_past()`. We'd have to use a
-                    // select!, which would require cancel safety of
-                    // `wait_for_upper_past()`, which it doesn't
-                    // advertise.
-                    let _ =
-                        tokio::time::timeout(Duration::from_secs(1), read_only_rx.changed()).await;
-
-                    if !*read_only_rx.borrow() {
-                        if collection_id.is_user() {
-                            tracing::debug!(
-                                %worker_id,
-                                %collection_id,
-                                %shard_id,
-                                ?batch_lower,
-                                ?batch_upper,
-                                ?current_upper,
-                                "persist_sink has come out of read-only mode"
-                            );
-                        }
-
-                        // It's okay to write now.
-                        break Ok(());
-                    }
-
-                    let current_upper = write.fetch_recent_upper().await;
-
-                    if PartialOrder::less_than(&batch_upper, current_upper) {
-                        // We synthesize an `UpperMismatch` so that we can go
-                        // through the same logic below for trimming down our
-                        // batches.
-                        //
-                        // Notably, we are not trying to be smart, and teach the
-                        // write operator about read-only mode. Writing down
-                        // those batches does not append anything to the persist
-                        // shard, and it would be a hassle to figure out in the
-                        // write workers how to trim down batches in read-only
-                        // mode, when the shard upper advances.
-                        //
-                        // Right here, in the logic below, we have all we need
-                        // for figuring out how to trim our batches.
-
-                        if collection_id.is_user() {
-                            tracing::debug!(
-                                %worker_id,
-                                %collection_id,
-                                %shard_id,
-                                ?batch_lower,
-                                ?batch_upper,
-                                ?current_upper,
-                                "persist_sink not appending in read-only mode"
-                            );
-                        }
-
-                        break Err(UpperMismatch {
-                            current: current_upper.clone(),
-                            expected: batch_lower.clone(),
-                        });
-                    }
-                };
-
-                maybe_err
+                spin_on_write_lock(
+                    collection_id,
+                    worker_id,
+                    shard_id,
+                    current_upper,
+                    &batch_lower,
+                    &batch_upper,
+                    read_only_rx,
+                    write,
+                )
+                .await
             } else {
-                // It's okay to proceed with the write.
+                // We already hold the write lock.
                 Ok(())
             };
 
@@ -1529,94 +1556,19 @@ async fn update_persist_in_batch(
     'retry: loop {
         let result = {
             let maybe_err = if *read_only_rx.borrow() {
-                // We have to wait for either us coming out of read-only
-                // mode or someone else applying a write that covers our
-                // batch.
-                //
-                // If we didn't wait for the latter here, and just go
-                // around the loop again, we might miss a moment where
-                // _we_ have to write down a batch. For example when our
-                // input frontier advances to a state where we can
-                // write, and the read-write instance sees the same
-                // update but then crashes before it can append a batch.
-
-                let maybe_err = 'spin_on_lock: loop {
-                    if collection_id.is_user() {
-                        tracing::debug!(
-                            %worker_id,
-                            %collection_id,
-                            %shard_id,
-                            ?batch_lower,
-                            ?batch_upper,
-                            ?current_upper,
-                            "persist_sink is in read-only mode, waiting until we come out of it or the shard upper advances"
-                        );
-                    }
-
-                    // We don't try to be smart here, and for example
-                    // use `wait_for_upper_past()`. We'd have to use a
-                    // select!, which would require cancel safety of
-                    // `wait_for_upper_past()`, which it doesn't
-                    // advertise.
-                    let _ =
-                        tokio::time::timeout(Duration::from_secs(1), read_only_rx.changed()).await;
-
-                    if !*read_only_rx.borrow() {
-                        if collection_id.is_user() {
-                            tracing::debug!(
-                                %worker_id,
-                                %collection_id,
-                                %shard_id,
-                                ?batch_lower,
-                                ?batch_upper,
-                                ?current_upper,
-                                "persist_sink has come out of read-only mode"
-                            );
-                        }
-
-                        // It's okay to write now.
-                        break 'spin_on_lock Ok(());
-                    }
-
-                    let current_upper = write.fetch_recent_upper().await;
-
-                    if PartialOrder::less_than(&batch_upper, current_upper) {
-                        // We synthesize an `UpperMismatch` so that we can go
-                        // through the same logic below for trimming down our
-                        // batches.
-                        //
-                        // Notably, we are not trying to be smart, and teach the
-                        // write operator about read-only mode. Writing down
-                        // those batches does not append anything to the persist
-                        // shard, and it would be a hassle to figure out in the
-                        // write workers how to trim down batches in read-only
-                        // mode, when the shard upper advances.
-                        //
-                        // Right here, in the logic below, we have all we need
-                        // for figuring out how to trim our batches.
-
-                        if collection_id.is_user() {
-                            tracing::debug!(
-                                %worker_id,
-                                %collection_id,
-                                %shard_id,
-                                ?batch_lower,
-                                ?batch_upper,
-                                ?current_upper,
-                                "persist_sink not appending in read-only mode"
-                            );
-                        }
-
-                        break 'spin_on_lock Err(UpperMismatch {
-                            current: current_upper.clone(),
-                            expected: batch_lower.clone(),
-                        });
-                    }
-                };
-
-                maybe_err
+                spin_on_write_lock(
+                    collection_id,
+                    worker_id,
+                    shard_id,
+                    current_upper,
+                    &batch_lower,
+                    &batch_upper,
+                    read_only_rx,
+                    write,
+                )
+                .await
             } else {
-                // It's okay to proceed with the write.
+                // We already hold the write lock.
                 Ok(())
             };
 
