@@ -1548,13 +1548,13 @@ async fn update_persist_in_batch(
     let mut to_append = batches.iter_mut().map(|b| &mut b.batch).collect::<Vec<_>>();
 
     // NB(ptravers): We loop here to handle competing writers to the same shard.
-    // We handle failure to write in three situations:
+    // We handle failure to write in three situations all as a result of an `UpperMismatch`:
     //  1. the lower of the batch is greater than the current upper of shard - persist_sink exits with an error.
     //  2. the upper of the shard is less than the upper of the batch and greater
     //     than the lower of the batch - we retry with a truncated batch.
     //  3. all other cases - we exit the retry loop after updating the current_upper to the upper reported in the error.
     'retry: loop {
-        let result = {
+        let result: Result<(), UpperMismatch<mz_repr::Timestamp>> = {
             let maybe_err = if *read_only_rx.borrow() {
                 spin_on_write_lock(
                     collection_id,
