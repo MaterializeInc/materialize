@@ -312,7 +312,7 @@ def get_variable_system_parameters(
         VariableSystemParameter("storage_reclock_to_latest", "true", ["true", "false"]),
         VariableSystemParameter(
             "storage_sink_write_batches_to_persist", "true", ["true", "false"]
-        )
+        ),
         VariableSystemParameter(
             "storage_source_decode_fuel",
             "100000",
