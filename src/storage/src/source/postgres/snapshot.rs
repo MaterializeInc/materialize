@@ -153,11 +153,12 @@ use mz_storage_types::sources::{MzOffset, PostgresSourceConnection};
 use mz_timely_util::builder_async::{
     Event as AsyncEvent, OperatorBuilder as AsyncOperatorBuilder, PressOnDropButton,
 };
-use mz_timely_util::operator::StreamExt;
 use timely::container::CapacityContainerBuilder;
-use timely::dataflow::channels::pact::Pipeline;
+use timely::dataflow::channels::pact::{Exchange, Pipeline};
 use timely::dataflow::operators::core::Map;
-use timely::dataflow::operators::{Broadcast, CapabilitySet, Concat, ConnectLoop, Feedback};
+use timely::dataflow::operators::{
+    Broadcast, CapabilitySet, Concat, ConnectLoop, Feedback, Operator,
+};
 use timely::dataflow::{Scope, Stream};
 use timely::progress::Timestamp;
 use tokio_postgres::error::SqlState;
@@ -561,30 +562,38 @@ pub(crate) fn render<G: Scope<Timestamp = MzOffset>>(
     let mut text_row = Row::default();
     let mut final_row = Row::default();
     let mut datum_vec = DatumVec::new();
+    let mut next_worker = (0..u64::cast_from(scope.peers())).cycle();
+    let round_robin = Exchange::new(move |_| next_worker.next().unwrap());
     let snapshot_updates = raw_data
         .map::<Vec<_>, _, _>(Clone::clone)
-        .distribute()
-        .map(move |((oid, output_index, event), time, diff)| {
-            let output = &table_info
-                .get(&oid)
-                .and_then(|outputs| outputs.get(&output_index))
-                .expect("table_info contains all outputs");
+        .unary(round_robin, "PgCastSnapshotRows", |_, _| {
+            move |input, output| {
+                while let Some((time, data)) = input.next() {
+                    let mut session = output.session(&time);
+                    for ((oid, output_index, event), time, diff) in data.drain(..) {
+                        let output = &table_info
+                            .get(&oid)
+                            .and_then(|outputs| outputs.get(&output_index))
+                            .expect("table_info contains all outputs");
 
-            let event = event
-                .as_ref()
-                .map_err(|e: &DataflowError| e.clone())
-                .and_then(|bytes| {
-                    decode_copy_row(bytes, output.casts.len(), &mut text_row)?;
-                    let datums = datum_vec.borrow_with(&text_row);
-                    super::cast_row(&output.casts, &datums, &mut final_row)?;
-                    Ok(SourceMessage {
-                        key: Row::default(),
-                        value: final_row.clone(),
-                        metadata: Row::default(),
-                    })
-                });
+                        let event = event
+                            .as_ref()
+                            .map_err(|e: &DataflowError| e.clone())
+                            .and_then(|bytes| {
+                                decode_copy_row(bytes, output.casts.len(), &mut text_row)?;
+                                let datums = datum_vec.borrow_with(&text_row);
+                                super::cast_row(&output.casts, &datums, &mut final_row)?;
+                                Ok(SourceMessage {
+                                    key: Row::default(),
+                                    value: final_row.clone(),
+                                    metadata: Row::default(),
+                                })
+                            });
 
-            ((output_index, event), time, diff)
+                        session.give(((output_index, event), time, diff));
+                    }
+                }
+            }
         })
         .as_collection();
 

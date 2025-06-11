@@ -98,7 +98,6 @@ use mz_timely_util::builder_async::{
     AsyncOutputHandle, Event as AsyncEvent, OperatorBuilder as AsyncOperatorBuilder,
     PressOnDropButton,
 };
-use mz_timely_util::operator::StreamExt as TimelyStreamExt;
 use postgres_replication::LogicalReplicationStream;
 use postgres_replication::protocol::{LogicalReplicationMessage, ReplicationMessage, TupleData};
 use serde::{Deserialize, Serialize};
@@ -107,6 +106,7 @@ use timely::dataflow::channels::pact::{Exchange, Pipeline};
 use timely::dataflow::channels::pushers::Tee;
 use timely::dataflow::operators::Capability;
 use timely::dataflow::operators::Concat;
+use timely::dataflow::operators::Operator;
 use timely::dataflow::operators::core::Map;
 use timely::dataflow::{Scope, Stream};
 use timely::progress::Antichain;
@@ -581,29 +581,36 @@ pub(crate) fn render<G: Scope<Timestamp = MzOffset>>(
         }))
     });
 
-    // Distribute the raw slot data to all workers.
-    let data_stream = data_stream.map::<Vec<_>, _, _>(Clone::clone).distribute();
-
     // We now process the slot updates and apply the cast expressions
     let mut final_row = Row::default();
     let mut datum_vec = DatumVec::new();
+    let mut next_worker = (0..u64::cast_from(scope.peers())).cycle();
+    let round_robin = Exchange::new(move |_| next_worker.next().unwrap());
     let replication_updates = data_stream
-        .map(move |((oid, output_index, event), time, diff)| {
-            let output = &table_info
-                .get(&oid)
-                .and_then(|outputs| outputs.get(&output_index))
-                .expect("table_info contains all outputs");
-            let event = event.and_then(|row| {
-                let datums = datum_vec.borrow_with(&row);
-                super::cast_row(&output.casts, &datums, &mut final_row)?;
-                Ok(SourceMessage {
-                    key: Row::default(),
-                    value: final_row.clone(),
-                    metadata: Row::default(),
-                })
-            });
+        .map::<Vec<_>, _, _>(Clone::clone)
+        .unary(round_robin, "PgCastReplicationRows", |_, _| {
+            move |input, output| {
+                while let Some((time, data)) = input.next() {
+                    let mut session = output.session(&time);
+                    for ((oid, output_index, event), time, diff) in data.drain(..) {
+                        let output = &table_info
+                            .get(&oid)
+                            .and_then(|outputs| outputs.get(&output_index))
+                            .expect("table_info contains all outputs");
+                        let event = event.and_then(|row| {
+                            let datums = datum_vec.borrow_with(&row);
+                            super::cast_row(&output.casts, &datums, &mut final_row)?;
+                            Ok(SourceMessage {
+                                key: Row::default(),
+                                value: final_row.clone(),
+                                metadata: Row::default(),
+                            })
+                        });
 
-            ((output_index, event), time, diff)
+                        session.give(((output_index, event), time, diff));
+                    }
+                }
+            }
         })
         .as_collection();
 
