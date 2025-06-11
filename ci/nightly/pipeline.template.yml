@@ -1915,7 +1915,8 @@ steps:
   - id: 0dt
     label: Zero downtime
     depends_on: build-aarch64
-    timeout_in_minutes: 180
+    timeout_in_minutes: 240
+    parallelism: 4
     plugins:
       - ./ci/plugins/mzcompose:
           composition: 0dt
