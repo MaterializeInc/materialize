@@ -7,14 +7,15 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-$ set-arg-default replicas=1
+$ set-arg-default replicas=2
 $ set-arg-default default-storage-size=1
+
 
 # Exercises Webhook sources.
 
-> CREATE CLUSTER webhook_cluster REPLICAS (r1 (SIZE '${arg.default-storage-size}'));
+> CREATE CLUSTER webhook_cluster REPLICAS (r1 (SIZE '${arg.default-storage-size}'), r2 (SIZE '${arg.default-storage-size}'));
 
-> CREATE CLUSTER webhook_compute REPLICAS (r1 (SIZE '${arg.default-storage-size}'));
+> CREATE CLUSTER webhook_compute REPLICAS (r1 (SIZE '${arg.default-storage-size}'), r2 (SIZE '${arg.default-storage-size}'));
 
 > CREATE SOURCE webhook_text IN CLUSTER webhook_cluster FROM WEBHOOK
   BODY FORMAT TEXT;
@@ -535,10 +536,6 @@ $ check-shard-tombstone shard-id=${webhook-source-shard-id}
 
 # Cleanup.
 > DROP CLUSTER webhook_cluster CASCADE;
-
-# Creating a webhook source without specifying the cluster.
-$ skip-if
-SELECT ${arg.replicas} > 1;
 
 $ set-from-sql var=current-cluster
 SHOW cluster;

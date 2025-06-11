@@ -550,8 +550,12 @@ pub fn plan_create_webhook_source(
     // We will rewrite the cluster if one is not provided, so we must use the `in_cluster` value
     // we plan to normalize when we canonicalize the create statement.
     let in_cluster = source_sink_cluster_config(scx, &mut stmt.in_cluster)?;
-    if in_cluster.replica_ids().len() > 1 {
-        sql_bail!("cannot create webhook source in cluster with more than one replica")
+    let enable_multi_replica_sources =
+        ENABLE_MULTI_REPLICA_SOURCES.get(scx.catalog.system_vars().dyncfgs());
+    if !enable_multi_replica_sources {
+        if in_cluster.replica_ids().len() > 1 {
+            sql_bail!("cannot create webhook source in cluster with more than one replica")
+        }
     }
     let create_sql =
         normalize::create_statement(scx, Statement::CreateWebhookSource(stmt.clone()))?;

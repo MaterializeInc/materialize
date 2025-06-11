@@ -25,7 +25,8 @@ class Webhook(Check):
             schemas()
             + dedent(
                 """
-                > CREATE CLUSTER webhook_cluster REPLICAS (r1 (SIZE '1'));
+                >[version>=14700] CREATE CLUSTER webhook_cluster REPLICATION FACTOR 2, SIZE '1'
+                >[version<14700] CREATE CLUSTER webhook_cluster REPLICATION FACTOR 1, SIZE '1'
 
                 > CREATE SOURCE webhook_text IN CLUSTER webhook_cluster FROM WEBHOOK BODY FORMAT TEXT;
 
@@ -144,7 +145,7 @@ class WebhookTable(Check):
             schemas()
             + dedent(
                 """
-                > CREATE CLUSTER webhook_table_cluster REPLICAS (r1 (SIZE '1'));
+                > CREATE CLUSTER webhook_table_cluster REPLICATION FACTOR 2, SIZE '1'
                 > SET cluster = webhook_table_cluster
                 > CREATE TABLE webhook_table_text FROM WEBHOOK BODY FORMAT TEXT;
                 > SET cluster = quickstart
