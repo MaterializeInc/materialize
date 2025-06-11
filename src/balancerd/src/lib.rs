@@ -100,6 +100,7 @@ pub struct BalancerConfig {
     metrics_registry: MetricsRegistry,
     reload_certs: BoxStream<'static, Option<oneshot::Sender<Result<(), anyhow::Error>>>>,
     launchdarkly_sdk_key: Option<String>,
+    config_sync_file_path: Option<PathBuf>,
     config_sync_timeout: Duration,
     config_sync_loop_interval: Option<Duration>,
     cloud_provider: Option<String>,
@@ -122,6 +123,7 @@ impl BalancerConfig {
         metrics_registry: MetricsRegistry,
         reload_certs: ReloadTrigger,
         launchdarkly_sdk_key: Option<String>,
+        config_sync_file: Option<PathBuf>,
         config_sync_timeout: Duration,
         config_sync_loop_interval: Option<Duration>,
         cloud_provider: Option<String>,
@@ -142,6 +144,7 @@ impl BalancerConfig {
             metrics_registry,
             reload_certs,
             launchdarkly_sdk_key,
+            config_sync_file_path: config_sync_file,
             config_sync_timeout,
             config_sync_loop_interval,
             cloud_provider,
@@ -196,63 +199,95 @@ impl BalancerService {
         configs = dyncfgs::all_dyncfgs(configs);
         dyncfgs::set_defaults(&configs, cfg.default_configs.clone())?;
         let tracing_handle = cfg.tracing_handle.clone();
-        if let Err(err) = mz_dyncfg_launchdarkly::sync_launchdarkly_to_configset(
-            configs.clone(),
-            &BUILD_INFO,
-            |builder| {
-                let region = cfg
-                    .cloud_provider_region
-                    .clone()
-                    .unwrap_or_else(|| String::from("unknown"));
-                if let Some(provider) = cfg.cloud_provider.clone() {
-                    builder.add_context(
-                        ld::ContextBuilder::new(format!(
-                            "{}/{}/{}",
-                            provider, region, cfg.build_version
-                        ))
-                        .kind("balancer")
-                        .set_string("provider", provider)
-                        .set_string("region", region)
-                        .set_string("version", cfg.build_version.to_string())
-                        .build()
-                        .map_err(|e| anyhow::anyhow!(e))?,
-                    );
-                } else {
-                    builder.add_context(
-                        ld::ContextBuilder::new(format!(
-                            "{}/{}/{}",
-                            "unknown", region, cfg.build_version
-                        ))
-                        .anonymous(true) // exclude this user from the dashboard
-                        .kind("balancer")
-                        .set_string("provider", "unknown")
-                        .set_string("region", region)
-                        .set_string("version", cfg.build_version.to_string())
-                        .build()
-                        .map_err(|e| anyhow::anyhow!(e))?,
-                    );
-                }
-                Ok(())
-            },
+        // Configure dyncfg sync
+        match (
             cfg.launchdarkly_sdk_key.as_deref(),
-            cfg.config_sync_timeout,
-            cfg.config_sync_loop_interval,
-            move |updates, configs| {
-                if has_tracing_config_update(updates) {
-                    match tracing_config(configs) {
-                        Ok(parameters) => parameters.apply(&tracing_handle),
-                        Err(err) => warn!("unable to update tracing: {err}"),
-                    }
-                }
-            },
-        )
-        .await
-        {
-            // Log but continue anyway. If LD is down we have no way of fetching the previous value
-            // of the flag (unlike the adapter, but it has a durable catalog). The ConfigSet
-            // defaults have been chosen to be good enough if this is the case.
-            warn!("LaunchDarkly sync error: {err}");
-        }
+            cfg.config_sync_file_path.as_deref(),
+        ) {
+            (Some(key), None) => {
+                mz_dyncfg_launchdarkly::sync_launchdarkly_to_configset(
+                    configs.clone(),
+                    &BUILD_INFO,
+                    |builder| {
+                        let region = cfg
+                            .cloud_provider_region
+                            .clone()
+                            .unwrap_or_else(|| String::from("unknown"));
+                        if let Some(provider) = cfg.cloud_provider.clone() {
+                            builder.add_context(
+                                ld::ContextBuilder::new(format!(
+                                    "{}/{}/{}",
+                                    provider, region, cfg.build_version
+                                ))
+                                .kind("balancer")
+                                .set_string("provider", provider)
+                                .set_string("region", region)
+                                .set_string("version", cfg.build_version.to_string())
+                                .build()
+                                .map_err(|e| anyhow::anyhow!(e))?,
+                            );
+                        } else {
+                            builder.add_context(
+                                ld::ContextBuilder::new(format!(
+                                    "{}/{}/{}",
+                                    "unknown", region, cfg.build_version
+                                ))
+                                .anonymous(true) // exclude this user from the dashboard
+                                .kind("balancer")
+                                .set_string("provider", "unknown")
+                                .set_string("region", region)
+                                .set_string("version", cfg.build_version.to_string())
+                                .build()
+                                .map_err(|e| anyhow::anyhow!(e))?,
+                            );
+                        }
+                        Ok(())
+                    },
+                    Some(key),
+                    cfg.config_sync_timeout,
+                    cfg.config_sync_loop_interval,
+                    move |updates, configs| {
+                        if has_tracing_config_update(updates) {
+                            match tracing_config(configs) {
+                                Ok(parameters) => parameters.apply(&tracing_handle),
+                                Err(err) => warn!("unable to update tracing: {err}"),
+                            }
+                        }
+                    },
+                )
+                .await
+                .inspect_err(|e| warn!("LaunchDarkly sync error: {e}"))
+                .ok();
+            }
+            (None, Some(path)) => {
+                mz_dyncfg_file::sync_file_to_configset(
+                    configs.clone(),
+                    path,
+                    cfg.config_sync_timeout,
+                    cfg.config_sync_loop_interval,
+                    move |updates, configs| {
+                        if has_tracing_config_update(updates) {
+                            match tracing_config(configs) {
+                                Ok(parameters) => parameters.apply(&tracing_handle),
+                                Err(err) => warn!("unable to update tracing: {err}"),
+                            }
+                        }
+                    },
+                )
+                .await
+                // If there's an Error, log but continue anyway. If LD is down
+                // we have no way of fetching the previous value of the flag
+                // (unlike the adapter, but it has a durable catalog). The
+                // ConfigSet defaults have been chosen to be good enough if this
+                // is the case.
+                .inspect_err(|e| warn!("File config sync error: {e}"))
+                .ok();
+            }
+            (Some(_), Some(_)) => panic!(
+                "must provide either config_sync_file_path or launchdarkly_sdk_key for config syncing",
+            ),
+            (None, None) => {}
+        };
         Ok(Self {
             cfg,
             pgwire,

@@ -29,6 +29,7 @@ mz-alloc = { path = "../alloc" }
 mz-alloc-default = { path = "../alloc-default", optional = true }
 mz-build-info = { path = "../build-info" }
 mz-dyncfg-launchdarkly = { path = "../dyncfg-launchdarkly" }
+mz-dyncfg-file= { path = "../dyncfg-file" }
 mz-dyncfg = { path = "../dyncfg" }
 mz-frontegg-auth = { path = "../frontegg-auth" }
 mz-http-util = { path = "../http-util" }

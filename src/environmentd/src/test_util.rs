@@ -733,6 +733,7 @@ impl Listeners {
                 aws_privatelink_availability_zones: None,
                 launchdarkly_sdk_key: None,
                 launchdarkly_key_map: Default::default(),
+                config_sync_file_path: None,
                 config_sync_timeout: Duration::from_secs(30),
                 config_sync_loop_interval: None,
                 bootstrap_role: config.bootstrap_role,
