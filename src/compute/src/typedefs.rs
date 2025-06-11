@@ -121,3 +121,35 @@ pub type RowErrBuilder<T, R> = RowValBuilder<DataflowError, T, R>;
 pub type KeyBatcher<K, T, D> = KeyValBatcher<K, (), T, D>;
 pub type KeyValBatcher<K, V, T, D> =
     MergeBatcher<Vec<((K, V), T, D)>, ColumnationChunker<((K, V), T, D)>, ColMerger<(K, V), T, D>>;
+
+/// Timestamp trait for rendering, constraint to support [`MzData`] and [timely::progress::Timestamp].
+pub trait MzTimestamp:
+    MzData + timely::progress::Timestamp + differential_dataflow::lattice::Lattice
+{
+}
+
+impl<T> MzTimestamp for T
+where
+    T: MzData,
+    T: timely::progress::Timestamp,
+    T: differential_dataflow::lattice::Lattice,
+{
+}
+
+/// Trait for data types that can be used in Materialize's dataflow, supporting both columnar and
+/// columnation.
+pub trait MzData:
+    differential_dataflow::containers::Columnation
+    + for<'a> columnar::Columnar<Container: Clone + Send, Ref<'a>: Copy + Ord>
+{
+}
+
+impl<T> MzData for T
+where
+    T: differential_dataflow::containers::Columnation,
+    T: for<'a> columnar::Columnar<Container: Clone + Send, Ref<'a>: Copy + Ord>,
+{
+}
+
+pub trait MzArrangeData: differential_dataflow::containers::Columnation {}
+impl<T> MzArrangeData for T where T: differential_dataflow::containers::Columnation {}

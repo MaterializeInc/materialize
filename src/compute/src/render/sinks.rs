@@ -13,7 +13,6 @@ use std::any::Any;
 use std::collections::{BTreeMap, BTreeSet};
 use std::rc::{Rc, Weak};
 
-use columnar::Columnar;
 use differential_dataflow::Collection;
 use mz_compute_types::sinks::{ComputeSinkConnection, ComputeSinkDesc};
 use mz_expr::{EvalError, MapFilterProject, permutation_for_arrangement};
@@ -39,8 +38,6 @@ impl<'g, G, T> Context<Child<'g, G, T>>
 where
     G: Scope<Timestamp = mz_repr::Timestamp>,
     T: RenderTimestamp,
-    <T as Columnar>::Container: Clone + Send,
-    for<'a> <T as Columnar>::Ref<'a>: Ord + Copy,
 {
     /// Export the sink described by `sink` from the rendering context.
     pub(crate) fn export_sink(
