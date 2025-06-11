@@ -2515,8 +2515,7 @@ dependencies = [
 [[package]]
 name = "differential-dataflow"
 version = "0.15.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3b808ab85b0df005bbfed2a48f0c5a14ad05852e9acf13aafc70da114cd54688"
+source = "git+https://github.com/antiguru/differential-dataflow?branch=merge_batcher_cb2#757284e1b8ec76d3c043e3c4f7b56727e0b4b29c"
 dependencies = [
  "columnar",
  "columnation",
@@ -2529,8 +2528,7 @@ dependencies = [
 [[package]]
 name = "differential-dogs3"
 version = "0.1.13"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8027a4370cbe79c8d6deae73addaf10961250928cbf47db90d180afb62ee27b3"
+source = "git+https://github.com/antiguru/differential-dataflow?branch=merge_batcher_cb2#757284e1b8ec76d3c043e3c4f7b56727e0b4b29c"
 dependencies = [
  "differential-dataflow",
  "serde",

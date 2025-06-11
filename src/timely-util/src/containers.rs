@@ -297,17 +297,33 @@ mod builder {
                     current: &mut C::Container,
                     round: usize,
                     pending: &mut VecDeque<Column<C>>,
+                    empty: Option<Column<C>>,
                 ) where
                     C: Columnar,
                 {
-                    let mut alloc = super::alloc_aligned_zeroed(round);
+                    let mut alloc = if let Some(Column::Align(mut alloc)) = empty {
+                        if alloc.capacity() >= round {
+                            unsafe { alloc.clear() };
+                            alloc.extend(std::iter::repeat(0).take(round));
+                            alloc
+                        } else {
+                            super::alloc_aligned_zeroed(round)
+                        }
+                    } else {
+                        super::alloc_aligned_zeroed(round)
+                    };
                     let writer = std::io::Cursor::new(bytemuck::cast_slice_mut(&mut alloc[..]));
                     Indexed::write(writer, &current.borrow()).unwrap();
                     pending.push_back(Column::Align(alloc));
                     current.clear();
                 }
 
-                outlined_align(&mut self.current, round, &mut self.pending);
+                outlined_align(
+                    &mut self.current,
+                    round,
+                    &mut self.pending,
+                    self.finished.take(),
+                );
             }
         }
     }
@@ -341,8 +357,23 @@ mod builder {
         #[inline]
         fn finish(&mut self) -> Option<&mut Self::Container> {
             if !self.current.is_empty() {
-                self.pending
-                    .push_back(Column::Typed(std::mem::take(&mut self.current)));
+                use columnar::Container;
+                let words = Indexed::length_in_words(&self.current.borrow());
+                let mut alloc = if let Some(Column::Align(mut alloc)) = self.finished.take() {
+                    if alloc.capacity() >= words {
+                        unsafe { alloc.clear() };
+                        alloc.extend(std::iter::repeat(0).take(words));
+                        alloc
+                    } else {
+                        super::alloc_aligned_zeroed(words)
+                    }
+                } else {
+                    super::alloc_aligned_zeroed(words)
+                };
+                let writer = std::io::Cursor::new(bytemuck::cast_slice_mut(&mut alloc[..]));
+                Indexed::write(writer, &self.current.borrow()).unwrap();
+                self.pending.push_back(Column::Align(alloc));
+                self.current.clear();
             }
             self.finished = self.pending.pop_front();
             self.finished.as_mut()
@@ -355,13 +386,13 @@ mod builder {
 /// A batcher for columnar storage.
 pub type Col2ValBatcher<K, V, T, R> = MergeBatcher<
     Column<((K, V), T, R)>,
-    batcher::Chunker<Column<((K, V), T, R)>>,
+    batcher::Chunker<ColumnBuilder<((K, V), T, R)>>,
     merger::ColumnMerger<(K, V), T, R>,
 >;
 pub type Col2KeyBatcher<K, T, R> = Col2ValBatcher<K, (), T, R>;
 pub type Vec2Col2ValBatcher<K, V, T, R> = MergeBatcher<
     Vec<((K, V), T, R)>,
-    batcher::Chunker<Column<((K, V), T, R)>>,
+    batcher::Chunker<ColumnBuilder<((K, V), T, R)>>,
     merger::ColumnMerger<(K, V), T, R>,
 >;
 pub type Vec2Col2KeyBatcher<K, T, R> = Vec2Col2ValBatcher<K, (), T, R>;
@@ -383,70 +414,48 @@ where
 
 /// Types for consolidating, merging, and extracting columnar update collections.
 pub mod batcher {
-    use std::collections::VecDeque;
-
     use columnar::Columnar;
     use differential_dataflow::difference::Semigroup;
     use timely::Container;
-    use timely::container::{ContainerBuilder, PushInto, SizableContainer};
+    use timely::container::{ContainerBuilder, PushInto};
 
     use crate::containers::Column;
 
-    // TODO: Turn `C` into `CB: ContainerBuilder`
     #[derive(Default)]
-    pub struct Chunker<C> {
-        /// Buffer into which we'll consolidate.
-        ///
-        /// Also the buffer where we'll stage responses to `extract` and `finish`.
-        /// When these calls return, the buffer is available for reuse.
-        target: C,
-        /// Consolidated buffers ready to go.
-        ready: VecDeque<C>,
+    pub struct Chunker<CB> {
+        /// Builder to absorb sorted data.
+        builder: CB,
     }
 
-    impl<C: Container + Clone + 'static> ContainerBuilder for Chunker<C> {
-        type Container = C;
+    impl<CB: ContainerBuilder> ContainerBuilder for Chunker<CB> {
+        type Container = CB::Container;
 
         fn extract(&mut self) -> Option<&mut Self::Container> {
-            if let Some(ready) = self.ready.pop_front() {
-                self.target = ready;
-                Some(&mut self.target)
-            } else {
-                None
-            }
+            self.builder.extract()
         }
 
         fn finish(&mut self) -> Option<&mut Self::Container> {
-            self.extract()
+            self.builder.finish()
         }
     }
 
-    impl<'a, D, T, R, C2> PushInto<&'a mut Vec<(D, T, R)>> for Chunker<C2>
+    impl<'a, D, T, R, CB> PushInto<&'a mut Vec<(D, T, R)>> for Chunker<CB>
     where
         D: Columnar + Ord,
         T: Columnar + Ord,
         R: Columnar + Semigroup,
-        C2: SizableContainer + for<'b> PushInto<(&'b D, &'b T, &'b R)>,
+        CB: ContainerBuilder + for<'b> PushInto<(&'b D, &'b T, &'b R)>,
     {
         fn push_into(&mut self, container: &'a mut Vec<(D, T, R)>) {
             // Sort input data
             differential_dataflow::consolidation::consolidate_updates(container);
 
-            self.target.clear();
             for (data, time, diff) in container.drain(..) {
-                self.target.push_into((&data, &time, &diff));
-                // TODO: This should be a builder.
-                if self.target.at_capacity() {
-                    self.ready.push_back(std::mem::take(&mut self.target));
-                }
-            }
-
-            if !self.target.is_empty() {
-                self.ready.push_back(std::mem::take(&mut self.target));
+                self.builder.push_into((&data, &time, &diff));
             }
         }
     }
-    impl<'a, D, T, R, C2> PushInto<&'a mut Column<(D, T, R)>> for Chunker<C2>
+    impl<'a, D, T, R, CB> PushInto<&'a mut Column<(D, T, R)>> for Chunker<CB>
     where
         D: Columnar,
         for<'b> D::Ref<'b>: Ord + Copy,
@@ -454,7 +463,7 @@ pub mod batcher {
         for<'b> T::Ref<'b>: Ord + Copy,
         R: Columnar + Semigroup + for<'b> Semigroup<R::Ref<'b>>,
         for<'b> R::Ref<'b>: Ord,
-        C2: SizableContainer + for<'b, 'c> PushInto<(D::Ref<'b>, T::Ref<'b>, &'c R)>,
+        CB: ContainerBuilder + for<'b, 'c> PushInto<(D::Ref<'b>, T::Ref<'b>, &'c R)>,
     {
         fn push_into(&mut self, container: &'a mut Column<(D, T, R)>) {
             // Sort input data
@@ -463,7 +472,6 @@ pub mod batcher {
             permutation.extend(container.drain());
             permutation.sort();
 
-            self.target.clear();
             // Iterate over the data, accumulating diffs for like keys.
             let mut iter = permutation.drain(..);
             if let Some((data, time, diff)) = iter.next() {
@@ -476,11 +484,8 @@ pub mod batcher {
                         prev_diff.plus_equals(&diff);
                     } else {
                         if !prev_diff.is_zero() {
-                            self.target.push_into((prev_data, prev_time, &prev_diff));
-                            // TODO: This should be a builder.
-                            if self.target.at_capacity() {
-                                self.ready.push_back(std::mem::take(&mut self.target));
-                            }
+                            let tuple = (prev_data, prev_time, &prev_diff);
+                            self.builder.push_into(tuple);
                         }
                         prev_data = data;
                         prev_time = time;
@@ -489,12 +494,9 @@ pub mod batcher {
                 }
 
                 if !prev_diff.is_zero() {
-                    self.target.push_into((prev_data, prev_time, &prev_diff));
+                    let tuple = (prev_data, prev_time, &prev_diff);
+                    self.builder.push_into(tuple);
                 }
-            }
-
-            if !self.target.is_empty() {
-                self.ready.push_back(std::mem::take(&mut self.target));
             }
         }
     }
@@ -504,17 +506,20 @@ pub mod batcher {
 pub mod merger {
     use columnar::Columnar;
     use differential_dataflow::difference::Semigroup;
-    use differential_dataflow::trace::implementations::merge_batcher::container::ContainerMerger;
+    use differential_dataflow::trace::implementations::merge_batcher::container::{
+        ContainerMerger, PushAndAdd,
+    };
     use differential_dataflow::trace::implementations::merge_batcher::container::{
         ContainerQueue, MergerChunk,
     };
     use timely::Container;
-    use timely::progress::{Antichain, frontier::AntichainRef};
+    use timely::progress::{Antichain, Timestamp, frontier::AntichainRef};
 
-    use crate::containers::Column;
+    use crate::containers::{Column, ColumnBuilder};
 
     /// A `Merger` implementation backed by `Column` containers (Columnar).
-    pub type ColumnMerger<D, T, R> = ContainerMerger<Column<(D, T, R)>, ColumnQueue<(D, T, R)>>;
+    pub type ColumnMerger<D, T, R> =
+        ContainerMerger<ColumnBuilder<(D, T, R)>, ColumnQueue<(D, T, R)>>;
 
     /// TODO
     pub struct ColumnQueue<T: Columnar> {
@@ -566,40 +571,24 @@ pub mod merger {
     impl<D, T, R> MergerChunk for Column<(D, T, R)>
     where
         D: Ord + Columnar + 'static,
-        T: Ord + timely::PartialOrder + Clone + Columnar + 'static,
+        T: Timestamp + Columnar,
         for<'a> <T as Columnar>::Ref<'a>: Copy,
         R: Default + Semigroup + Columnar + 'static,
     {
         type TimeOwned = T;
-        type DiffOwned = R;
 
         fn time_kept(
             (_, time, _): &Self::Item<'_>,
             upper: &AntichainRef<Self::TimeOwned>,
             frontier: &mut Antichain<Self::TimeOwned>,
+            stash: &mut Self::TimeOwned,
         ) -> bool {
-            let time = T::into_owned(*time);
-            if upper.less_equal(&time) {
-                frontier.insert(time);
+            stash.copy_from(*time);
+            if upper.less_equal(stash) {
+                frontier.insert_ref(stash);
                 true
             } else {
                 false
-            }
-        }
-        fn push_and_add<'a>(
-            &mut self,
-            item1: Self::Item<'a>,
-            item2: Self::Item<'a>,
-            stash: &mut Self::DiffOwned,
-        ) {
-            let (data, time, diff1) = item1;
-            let (_data, _time, diff2) = item2;
-            stash.copy_from(diff1);
-            let stash2: R = R::into_owned(diff2);
-            stash.plus_equals(&stash2);
-            if !stash.is_zero() {
-                use timely::Container;
-                self.push((data, time, &*stash));
             }
         }
         // len size cap allocations
@@ -630,6 +619,32 @@ pub mod merger {
                 }
             }
             (self.len(), size, cap, 0)
+        }
+    }
+    impl<D, T, R> PushAndAdd for ColumnBuilder<(D, T, R)>
+    where
+        D: Ord + Columnar + 'static,
+        T: Ord + timely::PartialOrder + Clone + Columnar + 'static,
+        for<'a> <T as Columnar>::Ref<'a>: Copy,
+        R: Default + Semigroup + Columnar + 'static,
+    {
+        type DiffOwned = R;
+
+        fn push_and_add<'a>(
+            &mut self,
+            item1: <Self::Container as Container>::Item<'a>,
+            item2: <Self::Container as Container>::Item<'a>,
+            stash: &mut Self::DiffOwned,
+        ) {
+            let (data, time, diff1) = item1;
+            let (_data, _time, diff2) = item2;
+            stash.copy_from(diff1);
+            let stash2: R = R::into_owned(diff2);
+            stash.plus_equals(&stash2);
+            if !stash.is_zero() {
+                use timely::container::PushInto;
+                self.push_into((data, time, &*stash));
+            }
         }
     }
 }
