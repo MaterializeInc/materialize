@@ -49,7 +49,7 @@ Sink source type      | Description
 
 ### `with_options`
 
-{{< diagram "with-options-retain-history.svg" >}}
+{{< diagram "with-options.svg" >}}
 
 Field | Use
 ------|-----
