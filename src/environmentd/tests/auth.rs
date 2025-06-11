@@ -3106,7 +3106,7 @@ async fn test_transient_auth_failure_on_refresh() {
 
 #[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 1))]
 #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `OPENSSL_init_ssl` on OS `linux`
-async fn test_self_managed_auth() {
+async fn test_password_auth() {
     let metrics_registry = MetricsRegistry::new();
 
     let server = test_util::TestHarness::default()
@@ -3114,7 +3114,7 @@ async fn test_self_managed_auth() {
             "log_filter".to_string(),
             "mz_frontegg_auth=debug,info".to_string(),
         )
-        .with_system_parameter_default("enable_self_managed_auth".to_string(), "true".to_string())
+        .with_system_parameter_default("enable_password_auth".to_string(), "true".to_string())
         .with_password_auth(Password("mz_system_password".to_owned()))
         .with_metrics_registry(metrics_registry)
         .start()
@@ -3161,7 +3161,7 @@ async fn test_self_managed_auth() {
 
 #[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 1))]
 #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `OPENSSL_init_ssl` on OS `linux`
-async fn test_self_managed_auth_superuser() {
+async fn test_password_auth_superuser() {
     let metrics_registry = MetricsRegistry::new();
 
     let server = test_util::TestHarness::default()
@@ -3169,7 +3169,7 @@ async fn test_self_managed_auth_superuser() {
             "log_filter".to_string(),
             "mz_frontegg_auth=debug,info".to_string(),
         )
-        .with_system_parameter_default("enable_self_managed_auth".to_string(), "true".to_string())
+        .with_system_parameter_default("enable_password_auth".to_string(), "true".to_string())
         .with_password_auth(Password("password".to_owned()))
         .with_metrics_registry(metrics_registry)
         .start()
@@ -3216,7 +3216,7 @@ async fn test_self_managed_auth_superuser() {
 
 #[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 1))]
 #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `OPENSSL_init_ssl` on OS `linux`
-async fn test_self_managed_auth_alter_role() {
+async fn test_password_auth_alter_role() {
     let metrics_registry = MetricsRegistry::new();
 
     let server = test_util::TestHarness::default()
@@ -3224,7 +3224,7 @@ async fn test_self_managed_auth_alter_role() {
             "log_filter".to_string(),
             "mz_frontegg_auth=debug,info".to_string(),
         )
-        .with_system_parameter_default("enable_self_managed_auth".to_string(), "true".to_string())
+        .with_system_parameter_default("enable_password_auth".to_string(), "true".to_string())
         .with_password_auth(Password("mz_system_password".to_owned()))
         .with_metrics_registry(metrics_registry)
         .start()
@@ -3356,7 +3356,7 @@ async fn test_self_managed_auth_alter_role() {
 
 #[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 1))]
 #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `OPENSSL_init_ssl` on OS `linux`
-async fn test_self_managed_auth_http() {
+async fn test_password_auth_http() {
     let metrics_registry = MetricsRegistry::new();
 
     let server = test_util::TestHarness::default()
@@ -3364,7 +3364,7 @@ async fn test_self_managed_auth_http() {
             "log_filter".to_string(),
             "mz_frontegg_auth=debug,info".to_string(),
         )
-        .with_system_parameter_default("enable_self_managed_auth".to_string(), "true".to_string())
+        .with_system_parameter_default("enable_password_auth".to_string(), "true".to_string())
         .with_password_auth(Password("mz_system_password".to_owned()))
         .with_metrics_registry(metrics_registry)
         .start()

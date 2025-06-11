@@ -118,11 +118,11 @@ pub const ENABLE_MULTI_REPLICA_SOURCES: Config<bool> = Config::new(
     "Enable multi-replica sources.",
 );
 
-/// Whether to enable self-managed authentication.
-pub const ENABLE_SELF_MANAGED_AUTH: Config<bool> = Config::new(
-    "enable_self_managed_auth",
+/// Whether to enable password authentication.
+pub const ENABLE_PASSWORD_AUTH: Config<bool> = Config::new(
+    "enable_password_auth",
     false,
-    "Enable self-managed authentication.",
+    "Enable password authentication.",
 );
 
 pub const CONSTRAINT_BASED_TIMESTAMP_SELECTION: Config<&'static str> = Config::new(
@@ -155,7 +155,7 @@ pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
         .add(&ENABLE_CONTINUAL_TASK_BUILTINS)
         .add(&ENABLE_EXPRESSION_CACHE)
         .add(&ENABLE_MULTI_REPLICA_SOURCES)
-        .add(&ENABLE_SELF_MANAGED_AUTH)
+        .add(&ENABLE_PASSWORD_AUTH)
         .add(&CONSTRAINT_BASED_TIMESTAMP_SELECTION)
         .add(&PERSIST_FAST_PATH_ORDER)
 }

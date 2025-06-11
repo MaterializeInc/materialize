@@ -246,7 +246,7 @@ CREATE ROLE regress_noiseword NOLOGIN;
 db error: ERROR: SUPERUSER, PASSWORD, and LOGIN attributes is not supported in this environment. For more information consult the documentation at https://materialize.com/docs/sql/create-role/#details
 
 simple conn=mz_system,user=mz_system
-ALTER SYSTEM SET enable_self_managed_auth = true
+ALTER SYSTEM SET enable_password_auth = true
 ----
 COMPLETE 0
 

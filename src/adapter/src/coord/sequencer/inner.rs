@@ -22,7 +22,7 @@ use itertools::Itertools;
 use maplit::btreeset;
 use mz_adapter_types::compaction::CompactionWindow;
 use mz_adapter_types::connection::ConnectionId;
-use mz_adapter_types::dyncfgs::{ENABLE_MULTI_REPLICA_SOURCES, ENABLE_SELF_MANAGED_AUTH};
+use mz_adapter_types::dyncfgs::{ENABLE_MULTI_REPLICA_SOURCES, ENABLE_PASSWORD_AUTH};
 use mz_catalog::memory::objects::{
     CatalogItem, Cluster, Connection, DataSourceDesc, Sink, Source, Table, TableDataSource, Type,
 };
@@ -995,7 +995,7 @@ impl Coordinator {
 
     /// Validates the role attributes for a `CREATE ROLE` statement.
     fn validate_role_attributes(&self, attributes: &RoleAttributes) -> Result<(), AdapterError> {
-        if !ENABLE_SELF_MANAGED_AUTH.get(self.catalog().system_config().dyncfgs()) {
+        if !ENABLE_PASSWORD_AUTH.get(self.catalog().system_config().dyncfgs()) {
             if attributes.superuser.is_some()
                 || attributes.password.is_some()
                 || attributes.login.is_some()
