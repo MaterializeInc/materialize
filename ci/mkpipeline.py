@@ -162,13 +162,6 @@ so it is executed.""",
                     "bin/ci-builder run nightly bin/pyactivate -m ci.test.build"
                 )
 
-        for step in pipeline["steps"]:
-            visit(step)
-            # Groups can't be nested, so handle them explicitly here instead of recursing
-            if "group" in step:
-                for inner_step in step.get("steps", []):
-                    visit(inner_step)
-
     else:
 
         def visit(step: dict[str, Any]) -> None:
@@ -180,11 +173,11 @@ so it is executed.""",
             if step.get("id") in ("rust-build-x86_64", "rust-build-aarch64"):
                 step["skip"] = True
 
-        for step in pipeline["steps"]:
-            visit(step)
-            if "group" in step:
-                for inner_step in step.get("steps", []):
-                    visit(inner_step)
+    for step in pipeline["steps"]:
+        visit(step)
+        if "group" in step:
+            for inner_step in step.get("steps", []):
+                visit(inner_step)
 
     if (
         args.sanitizer != Sanitizer.none
@@ -192,11 +185,13 @@ so it is executed.""",
     ):
 
         def visit(step: dict[str, Any]) -> None:
-            # ASan runs are slower ...
+            # Most sanitizer runs, as well as random permutations of system
+            # parameters, are slower and need more memory. The default system
+            # parameters in CI are chosen to be efficient for execution, while
+            # a random permutation might take way longer and use more memory.
             if "timeout_in_minutes" in step:
                 step["timeout_in_minutes"] *= 10
 
-            # ... and need more memory:
             if "agents" in step:
                 agent = step["agents"].get("queue", None)
                 if agent == "linux-aarch64-small":
