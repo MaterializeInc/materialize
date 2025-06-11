@@ -154,31 +154,37 @@ nodes:
         hostPort: 32063
 
   - role: worker
+    image: kindest/node:v1.33.1
     labels:
       materialize.cloud/disk: true
       materialize.cloud/availability-zone: "1"
       topology.kubernetes.io/zone: "1"
   - role: worker
+    image: kindest/node:v1.33.1
     labels:
       materialize.cloud/disk: true
       materialize.cloud/availability-zone: "1"
       topology.kubernetes.io/zone: "1"
   - role: worker
+    image: kindest/node:v1.33.1
     labels:
       materialize.cloud/disk: true
       materialize.cloud/availability-zone: "2"
       topology.kubernetes.io/zone: "2"
   - role: worker
+    image: kindest/node:v1.33.1
     labels:
       materialize.cloud/disk: true
       materialize.cloud/availability-zone: "2"
       topology.kubernetes.io/zone: "2"
   - role: worker
+    image: kindest/node:v1.33.1
     labels:
       materialize.cloud/disk: true
       materialize.cloud/availability-zone: "3"
       topology.kubernetes.io/zone: "3"
   - role: worker
+    image: kindest/node:v1.33.1
     labels:
       materialize.cloud/disk: true
       materialize.cloud/availability-zone: "3"
@@ -186,12 +192,14 @@ nodes:
 
   # only envd (nodes will be tainted in the setup)
   - role: worker
+    image: kindest/node:v1.33.1
     labels:
       materialize.cloud/disk: true
       environmentd: true
       materialize.cloud/availability-zone: "3"
       topology.kubernetes.io/zone: "3"
   - role: worker
+    image: kindest/node:v1.33.1
     labels:
       materialize.cloud/disk: true
       environmentd: true
@@ -200,6 +208,7 @@ nodes:
 
   # for supporting services
   - role: worker
+    image: kindest/node:v1.33.1
     labels:
       supporting-services: true
       materialize.cloud/availability-zone: "3"
