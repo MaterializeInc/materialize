@@ -11,14 +11,12 @@
 //!
 //! Consult [TopKPlan] documentation for details.
 
-use columnar::Columnar;
-use differential_dataflow::IntoOwned;
-use differential_dataflow::containers::Columnation;
 use differential_dataflow::hashable::Hashable;
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::operators::arrange::{Arranged, TraceAgent};
 use differential_dataflow::trace::{Batch, Builder, Trace, TraceReader};
 use differential_dataflow::{AsCollection, Collection};
+use differential_dataflow::{Data, IntoOwned};
 use mz_compute_types::plan::top_k::{
     BasicTopKPlan, MonotonicTop1Plan, MonotonicTopKPlan, TopKPlan,
 };
@@ -46,14 +44,13 @@ use crate::render::errors::MaybeValidatingRow;
 use crate::row_spine::{
     DatumSeq, RowBatcher, RowBuilder, RowRowBatcher, RowRowBuilder, RowValBuilder, RowValSpine,
 };
-use crate::typedefs::{KeyBatcher, RowRowSpine, RowSpine};
+use crate::typedefs::{KeyBatcher, MzTimestamp, RowRowSpine, RowSpine};
 
 // The implementation requires integer timestamps to be able to delay feedback for monotonic inputs.
 impl<G> Context<G>
 where
     G: Scope,
     G::Timestamp: crate::render::RenderTimestamp,
-    <G::Timestamp as Columnar>::Container: Clone + Send,
 {
     pub(crate) fn render_topk(
         &self,
@@ -532,8 +529,8 @@ fn build_topk_negated_stage<G, V, Bu, Tr>(
 )
 where
     G: Scope,
-    G::Timestamp: Lattice + Columnation,
-    V: MaybeValidatingRow<Row, Row>,
+    G::Timestamp: Lattice + MzTimestamp,
+    V: Data + MaybeValidatingRow<Row, Row>,
     Bu: Builder<Time = G::Timestamp, Output = Tr::Batch>,
     Bu::Input: Container + PushInto<((Row, V), G::Timestamp, Diff)>,
     Tr: Trace

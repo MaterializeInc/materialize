@@ -9,10 +9,6 @@
 
 //! Helpers for handling errors encountered by operators.
 
-use std::hash::Hash;
-
-use differential_dataflow::ExchangeData;
-use differential_dataflow::containers::Columnation;
 use mz_repr::Row;
 
 use crate::render::context::ShutdownProbe;
@@ -20,7 +16,7 @@ use crate::render::context::ShutdownProbe;
 /// Used to make possibly-validating code generic: think of this as a kind of `MaybeResult`,
 /// specialized for use in compute.  Validation code will only run when the error constructor is
 /// Some.
-pub(super) trait MaybeValidatingRow<T, E>: ExchangeData + Columnation + Hash {
+pub(super) trait MaybeValidatingRow<T, E> {
     fn ok(t: T) -> Self;
     fn into_error() -> Option<fn(E) -> Self>;
 }
@@ -45,10 +41,7 @@ impl<E> MaybeValidatingRow<(), E> for () {
     }
 }
 
-impl<E, R> MaybeValidatingRow<Vec<R>, E> for Vec<R>
-where
-    R: ExchangeData + Columnation + Hash,
-{
+impl<E, R> MaybeValidatingRow<Vec<R>, E> for Vec<R> {
     fn ok(t: Vec<R>) -> Self {
         t
     }
@@ -58,11 +51,7 @@ where
     }
 }
 
-impl<T, E> MaybeValidatingRow<T, E> for Result<T, E>
-where
-    T: ExchangeData + Columnation + Hash,
-    E: ExchangeData + Columnation + Hash,
-{
+impl<T, E> MaybeValidatingRow<T, E> for Result<T, E> {
     fn ok(row: T) -> Self {
         Ok(row)
     }

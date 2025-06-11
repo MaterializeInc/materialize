@@ -13,9 +13,7 @@
 
 use std::time::{Duration, Instant};
 
-use columnar::Columnar;
 use differential_dataflow::consolidation::ConsolidatingContainerBuilder;
-use differential_dataflow::containers::Columnation;
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::operators::arrange::arrangement::Arranged;
 use differential_dataflow::trace::TraceReader;
@@ -33,14 +31,14 @@ use timely::dataflow::channels::pact::{ExchangeCore, Pipeline};
 use timely::dataflow::operators::OkErr;
 use timely::dataflow::scopes::Child;
 use timely::dataflow::{Scope, ScopeParent};
-use timely::progress::timestamp::{Refines, Timestamp};
+use timely::progress::timestamp::Refines;
 
 use crate::extensions::arrange::MzArrangeCore;
 use crate::render::RenderTimestamp;
 use crate::render::context::{ArrangementFlavor, CollectionBundle, Context, ShutdownProbe};
 use crate::render::join::mz_join_core::mz_join_core;
 use crate::row_spine::{RowRowBuilder, RowRowSpine};
-use crate::typedefs::{RowRowAgent, RowRowEnter};
+use crate::typedefs::{MzTimestamp, RowRowAgent, RowRowEnter};
 
 /// Available linear join implementations.
 ///
@@ -191,8 +189,8 @@ impl YieldSpec {
 enum JoinedFlavor<G, T>
 where
     G: Scope,
-    G::Timestamp: Lattice + Refines<T> + Columnation,
-    T: Timestamp + Lattice + Columnation,
+    G::Timestamp: Lattice + Refines<T> + MzTimestamp,
+    T: MzTimestamp + Lattice,
 {
     /// Streamed data as a collection.
     Collection(Collection<G, Row, Diff>),
@@ -206,9 +204,7 @@ impl<G, T> Context<G, T>
 where
     G: Scope,
     G::Timestamp: Lattice + Refines<T> + RenderTimestamp,
-    <G::Timestamp as Columnar>::Container: Clone + Send,
-    for<'a> <G::Timestamp as Columnar>::Ref<'a>: Ord + Copy,
-    T: Timestamp + Lattice + Columnation,
+    T: MzTimestamp + Lattice,
 {
     pub(crate) fn render_join(
         &self,

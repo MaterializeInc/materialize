@@ -15,7 +15,7 @@
 
 use differential_dataflow::Data;
 use differential_dataflow::IntoOwned;
-use differential_dataflow::difference::{Abelian, Semigroup};
+use differential_dataflow::difference::Abelian;
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::operators::arrange::{Arranged, TraceAgent};
 use differential_dataflow::trace::{Batch, Builder, Trace, TraceReader};
@@ -28,7 +28,7 @@ use crate::extensions::arrange::ArrangementSize;
 /// Extension trait for the `reduce_abelian` differential dataflow method.
 pub(crate) trait MzReduce<G: Scope, T1: TraceReader<Time = G::Timestamp>>
 where
-    G::Timestamp: Lattice + Ord,
+    G::Timestamp: Lattice,
 {
     /// Applies `reduce` to arranged data, and returns an arrangement of output data.
     fn mz_reduce_abelian<L, K, V, Bu, T2>(
@@ -55,7 +55,6 @@ where
     G::Timestamp: Lattice + Ord,
     G: Scope,
     T1: TraceReader<Time = G::Timestamp> + Clone + 'static,
-    T1::Diff: Semigroup,
 {
     /// Applies `reduce` to arranged data, and returns an arrangement of output data.
     fn mz_reduce_abelian<L, K, V, Bu, T2>(
@@ -87,7 +86,7 @@ where
 /// on an operator-pair approach.
 pub trait ReduceExt<G: Scope, Tr: TraceReader<Time = G::Timestamp>>
 where
-    G::Timestamp: Lattice + Ord,
+    G::Timestamp: Lattice,
 {
     /// This method produces a reduction pair based on the same input arrangement. Each reduction
     /// in the pair operates with its own logic and the two output arrangements from the reductions
@@ -127,9 +126,8 @@ where
 
 impl<G: Scope, Tr> ReduceExt<G, Tr> for Arranged<G, Tr>
 where
-    G::Timestamp: Lattice + Ord,
+    G::Timestamp: Lattice,
     Tr: TraceReader<Time = G::Timestamp> + Clone + 'static,
-    Tr::Diff: Semigroup,
 {
     fn reduce_pair<L1, K, V1, Bu1, T1, L2, V2, Bu2, T2>(
         &self,

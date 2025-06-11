@@ -15,10 +15,8 @@ use std::collections::BTreeMap;
 use std::rc::Rc;
 use std::sync::mpsc;
 
-use columnar::Columnar;
 use differential_dataflow::IntoOwned;
 use differential_dataflow::consolidation::ConsolidatingContainerBuilder;
-use differential_dataflow::containers::Columnation;
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::operators::arrange::Arranged;
 use differential_dataflow::trace::{BatchReader, Cursor, TraceReader};
@@ -52,7 +50,8 @@ use crate::render::errors::ErrorLogger;
 use crate::render::{LinearJoinSpec, RenderTimestamp};
 use crate::row_spine::{DatumSeq, RowRowBuilder};
 use crate::typedefs::{
-    ErrAgent, ErrBatcher, ErrBuilder, ErrEnter, ErrSpine, RowRowAgent, RowRowEnter, RowRowSpine,
+    ErrAgent, ErrBatcher, ErrBuilder, ErrEnter, ErrSpine, MzTimestamp, RowRowAgent, RowRowEnter,
+    RowRowSpine,
 };
 
 /// Dataflow-local collections and arrangements.
@@ -67,8 +66,8 @@ use crate::typedefs::{
 /// of regions or iteration.
 pub struct Context<S: Scope, T = mz_repr::Timestamp>
 where
-    T: Timestamp + Lattice + Columnation,
-    S::Timestamp: Lattice + Refines<T> + Columnation,
+    T: MzTimestamp + Lattice,
+    S::Timestamp: MzTimestamp + Lattice + Refines<T>,
 {
     /// The scope within which all managed collections exist.
     ///
@@ -107,7 +106,7 @@ where
 
 impl<S: Scope> Context<S>
 where
-    S::Timestamp: Lattice + Refines<mz_repr::Timestamp> + Columnation,
+    S::Timestamp: MzTimestamp + Lattice + Refines<mz_repr::Timestamp>,
 {
     /// Creates a new empty Context.
     pub fn for_dataflow_in<Plan>(
@@ -160,8 +159,8 @@ where
 
 impl<S: Scope, T> Context<S, T>
 where
-    T: Timestamp + Lattice + Columnation,
-    S::Timestamp: Lattice + Refines<T> + Columnation,
+    T: MzTimestamp + Lattice,
+    S::Timestamp: MzTimestamp + Lattice + Refines<T>,
 {
     /// Insert a collection bundle by an identifier.
     ///
@@ -209,8 +208,8 @@ where
 
 impl<S: Scope, T> Context<S, T>
 where
-    T: Timestamp + Lattice + Columnation,
-    S::Timestamp: Lattice + Refines<T> + Columnation,
+    T: MzTimestamp + Lattice,
+    S::Timestamp: MzTimestamp + Lattice + Refines<T>,
 {
     /// Brings the underlying arrangements and collections into a region.
     pub fn enter_region<'a>(
@@ -331,8 +330,8 @@ impl HydrationLogger {
 #[derive(Clone)]
 pub enum ArrangementFlavor<S: Scope, T = mz_repr::Timestamp>
 where
-    T: Timestamp + Lattice + Columnation,
-    S::Timestamp: Lattice + Refines<T> + Columnation,
+    T: MzTimestamp + Lattice,
+    S::Timestamp: MzTimestamp + Lattice + Refines<T>,
 {
     /// A dataflow-local arrangement.
     Local(
@@ -352,8 +351,8 @@ where
 
 impl<S: Scope, T> ArrangementFlavor<S, T>
 where
-    T: Timestamp + Lattice + Columnation,
-    S::Timestamp: Lattice + Refines<T> + Columnation,
+    T: MzTimestamp + Lattice,
+    S::Timestamp: MzTimestamp + Lattice + Refines<T>,
 {
     /// Presents `self` as a stream of updates.
     ///
@@ -436,8 +435,8 @@ where
 }
 impl<S: Scope, T> ArrangementFlavor<S, T>
 where
-    T: Timestamp + Lattice + Columnation,
-    S::Timestamp: Lattice + Refines<T> + Columnation,
+    T: MzTimestamp + Lattice,
+    S::Timestamp: MzTimestamp + Lattice + Refines<T>,
 {
     /// The scope containing the collection bundle.
     pub fn scope(&self) -> S {
@@ -464,8 +463,8 @@ where
 }
 impl<'a, S: Scope, T> ArrangementFlavor<Child<'a, S, S::Timestamp>, T>
 where
-    T: Timestamp + Lattice + Columnation,
-    S::Timestamp: Lattice + Refines<T> + Columnation,
+    T: MzTimestamp + Lattice,
+    S::Timestamp: MzTimestamp + Lattice + Refines<T>,
 {
     /// Extracts the arrangement flavor from a region.
     pub fn leave_region(&self) -> ArrangementFlavor<S, T> {
@@ -487,17 +486,17 @@ where
 #[derive(Clone)]
 pub struct CollectionBundle<S: Scope, T = mz_repr::Timestamp>
 where
-    T: Timestamp + Lattice + Columnation,
-    S::Timestamp: Lattice + Refines<T> + Columnation,
+    T: MzTimestamp + Lattice,
+    S::Timestamp: MzTimestamp + Lattice + Refines<T>,
 {
     pub collection: Option<(Collection<S, Row, Diff>, Collection<S, DataflowError, Diff>)>,
     pub arranged: BTreeMap<Vec<MirScalarExpr>, ArrangementFlavor<S, T>>,
 }
 
-impl<S: Scope, T: Lattice> CollectionBundle<S, T>
+impl<S: Scope, T> CollectionBundle<S, T>
 where
-    T: Timestamp + Lattice + Columnation,
-    S::Timestamp: Lattice + Refines<T> + Columnation,
+    T: MzTimestamp + Lattice,
+    S::Timestamp: MzTimestamp + Lattice + Refines<T>,
 {
     /// Construct a new collection bundle from update streams.
     pub fn from_collections(
@@ -569,8 +568,8 @@ where
 
 impl<'a, S: Scope, T> CollectionBundle<Child<'a, S, S::Timestamp>, T>
 where
-    T: Timestamp + Lattice + Columnation,
-    S::Timestamp: Lattice + Refines<T> + Columnation,
+    T: MzTimestamp + Lattice,
+    S::Timestamp: MzTimestamp + Lattice + Refines<T>,
 {
     /// Extracts the collection bundle from a region.
     pub fn leave_region(&self) -> CollectionBundle<S, T> {
@@ -590,8 +589,8 @@ where
 
 impl<S: Scope, T> CollectionBundle<S, T>
 where
-    T: Timestamp + Lattice + Columnation,
-    S::Timestamp: Lattice + Refines<T> + Columnation,
+    T: MzTimestamp + Lattice,
+    S::Timestamp: MzTimestamp + Lattice + Refines<T>,
 {
     /// Asserts that the arrangement for a specific key
     /// (or the raw collection for no key) exists,
@@ -762,11 +761,9 @@ where
 
 impl<S, T> CollectionBundle<S, T>
 where
-    T: Timestamp + Lattice + Columnation,
+    T: MzTimestamp + Lattice,
     S: Scope,
     S::Timestamp: Refines<T> + RenderTimestamp,
-    <S::Timestamp as Columnar>::Container: Clone + Send,
-    for<'a> <S::Timestamp as Columnar>::Ref<'a>: Ord + Copy,
 {
     /// Presents `self` as a stream of updates, having been subjected to `mfp`.
     ///
@@ -976,7 +973,6 @@ where
 struct PendingWork<C>
 where
     C: Cursor,
-    C::Time: Timestamp,
 {
     capability: Capability<C::Time>,
     cursor: C,
@@ -986,7 +982,6 @@ where
 impl<C> PendingWork<C>
 where
     C: Cursor,
-    C::Time: Timestamp,
 {
     /// Create a new bundle of pending work, from the capability, cursor, and backing storage.
     fn new(capability: Capability<C::Time>, cursor: C, batch: C::Storage) -> Self {

@@ -15,7 +15,6 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use columnar::Columnar;
 use differential_dataflow::IntoOwned;
 use differential_dataflow::consolidation::ConsolidatingContainerBuilder;
 use differential_dataflow::operators::arrange::Arranged;
@@ -43,8 +42,6 @@ impl<G> Context<G>
 where
     G: Scope,
     G::Timestamp: RenderTimestamp,
-    <G::Timestamp as Columnar>::Container: Clone + Send,
-    for<'a> <G::Timestamp as Columnar>::Ref<'a>: Ord + Copy,
 {
     /// Renders `MirRelationExpr:Join` using dogs^3 delta query dataflows.
     ///
@@ -337,8 +334,6 @@ fn build_halfjoin<G, Tr, CF>(
 where
     G: Scope,
     G::Timestamp: RenderTimestamp,
-    <G::Timestamp as Columnar>::Container: Clone + Send,
-    for<'a> <G::Timestamp as Columnar>::Ref<'a>: Ord + Copy,
     Tr: TraceReader<Time = G::Timestamp, Diff = Diff> + Clone + 'static,
     for<'a> Tr::Key<'a>: IntoOwned<'a, Owned = Row>,
     for<'a> Tr::Val<'a>: ToDatumIter,
@@ -467,8 +462,6 @@ fn build_update_stream<G, Tr>(
 where
     G: Scope,
     G::Timestamp: RenderTimestamp,
-    <G::Timestamp as Columnar>::Container: Clone + Send,
-    for<'a> <G::Timestamp as Columnar>::Ref<'a>: Ord + Copy,
     for<'a, 'b> &'a G::Timestamp: PartialEq<Tr::TimeGat<'b>>,
     Tr: for<'a> TraceReader<Time = G::Timestamp, Diff = Diff> + Clone + 'static,
     for<'a> Tr::Key<'a>: ToDatumIter,

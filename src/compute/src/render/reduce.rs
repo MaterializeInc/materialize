@@ -15,7 +15,6 @@ use std::collections::BTreeMap;
 use std::sync::LazyLock;
 
 use dec::OrderedDecimal;
-use differential_dataflow::IntoOwned;
 use differential_dataflow::collection::AsCollection;
 use differential_dataflow::consolidation::ConsolidatingContainerBuilder;
 use differential_dataflow::containers::{Columnation, CopyRegion};
@@ -25,6 +24,7 @@ use differential_dataflow::lattice::Lattice;
 use differential_dataflow::operators::arrange::{Arranged, TraceAgent};
 use differential_dataflow::trace::{Batch, Builder, Trace, TraceReader};
 use differential_dataflow::{Collection, Diff as _};
+use differential_dataflow::{Data, IntoOwned};
 use mz_compute_types::plan::reduce::{
     AccumulablePlan, BasicPlan, BucketedPlan, HierarchicalPlan, KeyValPlan, MonotonicPlan,
     ReducePlan, ReductionType, SingleBasicPlan, reduction_type,
@@ -41,7 +41,6 @@ use serde::{Deserialize, Serialize};
 use timely::Container;
 use timely::container::{CapacityContainerBuilder, PushInto};
 use timely::dataflow::Scope;
-use timely::progress::Timestamp;
 use timely::progress::timestamp::Refines;
 use tracing::warn;
 
@@ -55,15 +54,15 @@ use crate::row_spine::{
     DatumSeq, RowBatcher, RowBuilder, RowRowBatcher, RowRowBuilder, RowValBatcher, RowValBuilder,
 };
 use crate::typedefs::{
-    ErrBatcher, ErrBuilder, KeyBatcher, RowErrBuilder, RowErrSpine, RowRowAgent, RowRowArrangement,
-    RowRowSpine, RowSpine, RowValSpine,
+    ErrBatcher, ErrBuilder, KeyBatcher, MzTimestamp, RowErrBuilder, RowErrSpine, RowRowAgent,
+    RowRowArrangement, RowRowSpine, RowSpine, RowValSpine,
 };
 
 impl<G, T> Context<G, T>
 where
     G: Scope,
-    G::Timestamp: Lattice + Refines<T> + Columnation,
-    T: Timestamp + Lattice + Columnation,
+    G::Timestamp: MzTimestamp + Lattice + Refines<T>,
+    T: MzTimestamp + Lattice,
 {
     /// Renders a `MirRelationExpr::Reduce` using various non-obvious techniques to
     /// minimize worst-case incremental update times and memory footprint.
@@ -944,7 +943,7 @@ where
     ) -> Arranged<S, TraceAgent<Tr>>
     where
         S: Scope<Timestamp = G::Timestamp>,
-        V: MaybeValidatingRow<(), String>,
+        V: Data + MaybeValidatingRow<(), String>,
         Tr: Trace
             + for<'a> TraceReader<Key<'a> = DatumSeq<'a>, Time = G::Timestamp, Diff = Diff>
             + 'static,
@@ -1262,7 +1261,7 @@ where
     )
     where
         S: Scope<Timestamp = G::Timestamp>,
-        V: MaybeValidatingRow<Row, Row>,
+        V: Data + MaybeValidatingRow<Row, Row>,
         Tr: Trace
             + for<'a> TraceReader<Key<'a> = DatumSeq<'a>, Time = G::Timestamp, Diff = Diff>
             + 'static,

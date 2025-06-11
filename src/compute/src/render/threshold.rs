@@ -13,7 +13,6 @@
 
 use differential_dataflow::Data;
 use differential_dataflow::IntoOwned;
-use differential_dataflow::containers::Columnation;
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::operators::arrange::{Arranged, TraceAgent};
 use differential_dataflow::trace::{Batch, Builder, Trace, TraceReader};
@@ -23,14 +22,13 @@ use mz_repr::Diff;
 use timely::Container;
 use timely::container::PushInto;
 use timely::dataflow::Scope;
-use timely::progress::Timestamp;
 use timely::progress::timestamp::Refines;
 
 use crate::extensions::arrange::{ArrangementSize, KeyCollection, MzArrange};
 use crate::extensions::reduce::MzReduce;
 use crate::render::context::{ArrangementFlavor, CollectionBundle, Context};
 use crate::row_spine::RowRowBuilder;
-use crate::typedefs::{ErrBatcher, ErrBuilder};
+use crate::typedefs::{ErrBatcher, ErrBuilder, MzData, MzTimestamp};
 
 /// Shared function to compute an arrangement of values matching `logic`.
 fn threshold_arrangement<G, K, V, T1, Bu2, T2, L>(
@@ -40,12 +38,12 @@ fn threshold_arrangement<G, K, V, T1, Bu2, T2, L>(
 ) -> Arranged<G, TraceAgent<T2>>
 where
     G: Scope,
-    G::Timestamp: Lattice + Columnation,
-    V: Data + Columnation,
+    G::Timestamp: MzTimestamp + Lattice,
+    V: MzData + Data,
     T1: TraceReader<Time = G::Timestamp, Diff = Diff> + Clone + 'static,
     for<'a> T1::Key<'a>: IntoOwned<'a, Owned = K>,
     for<'a> T1::Val<'a>: IntoOwned<'a, Owned = V>,
-    K: Columnation + Data,
+    K: MzData + Data,
     Bu2: Builder<Time = G::Timestamp, Output = T2::Batch>,
     Bu2::Input: Container + PushInto<((K, V), G::Timestamp, Diff)>,
     T2: for<'a> Trace<
@@ -77,8 +75,8 @@ pub fn build_threshold_basic<G, T>(
 ) -> CollectionBundle<G, T>
 where
     G: Scope,
-    G::Timestamp: Lattice + Refines<T> + Columnation,
-    T: Timestamp + Lattice + Columnation,
+    G::Timestamp: MzTimestamp + Lattice + Refines<T>,
+    T: MzTimestamp + Lattice,
 {
     let arrangement = input
         .arrangement(&key)
@@ -109,8 +107,8 @@ where
 impl<G, T> Context<G, T>
 where
     G: Scope,
-    G::Timestamp: Lattice + Refines<T> + Columnation,
-    T: Timestamp + Lattice + Columnation,
+    G::Timestamp: MzTimestamp + Lattice + Refines<T>,
+    T: MzTimestamp + Lattice,
 {
     pub(crate) fn render_threshold(
         &self,
