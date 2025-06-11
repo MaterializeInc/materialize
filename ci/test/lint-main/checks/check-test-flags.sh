@@ -9,6 +9,14 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 #
-# lint-config-parallel-workload - Check that new configs are used in parallel workload
+# check-copyright.sh — check copyright headers.
 
-exec "$(dirname "$0")"/pyactivate -m materialize.cli.lint_config_parallel_workload
+set -euo pipefail
+
+cd "$(dirname "$0")/../../../.."
+
+. misc/shlib/shlib.bash
+
+try bin/lint-test-flags
+
+try_status_report
