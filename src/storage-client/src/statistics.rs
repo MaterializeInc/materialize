@@ -19,6 +19,7 @@
 use std::sync::LazyLock;
 use std::sync::atomic::{AtomicU64, Ordering};
 
+use mz_controller_types::ReplicaId;
 use serde::{Deserialize, Serialize};
 
 use mz_proto::{IntoRustIfSome, RustType, TryFromProtoError};
@@ -30,6 +31,8 @@ pub static MZ_SOURCE_STATISTICS_RAW_DESC: LazyLock<RelationDesc> = LazyLock::new
     RelationDesc::builder()
         // Id of the source (or subsource).
         .with_column("id", ScalarType::String.nullable(false))
+        // Id of the replica producing these statistics.
+        .with_column("replica_id", ScalarType::String.nullable(false))
         //
         // Counters
         //
@@ -440,7 +443,10 @@ pub trait PackableStats {
     /// Pack `self` into the `Row`.
     fn pack(&self, packer: mz_repr::RowPacker<'_>);
     /// Unpack a `Row` back into a `Self`.
-    fn unpack(row: Row, metrics: &crate::metrics::StorageControllerMetrics) -> (GlobalId, Self);
+    fn unpack(
+        row: Row,
+        metrics: &crate::metrics::StorageControllerMetrics,
+    ) -> (GlobalId, Option<ReplicaId>, Self);
 }
 
 /// An update as reported from a storage instance. The semantics
@@ -637,7 +643,10 @@ impl PackableStats for SourceStatisticsUpdate {
         packer.push(Datum::from(self.offset_committed.0.pack()));
     }
 
-    fn unpack(row: Row, metrics: &crate::metrics::StorageControllerMetrics) -> (GlobalId, Self) {
+    fn unpack(
+        row: Row,
+        metrics: &crate::metrics::StorageControllerMetrics,
+    ) -> (GlobalId, Option<ReplicaId>, Self) {
         let mut iter = row.iter();
         let mut s = Self {
             id: iter.next().unwrap().unwrap_str().parse().unwrap(),
@@ -667,7 +676,7 @@ impl PackableStats for SourceStatisticsUpdate {
         };
 
         s.offset_known.0.regressions = Some(metrics.regressed_offset_known(s.id));
-        (s.id, s)
+        (s.id, None, s)
     }
 }
 
@@ -724,6 +733,7 @@ impl RustType<ProtoSourceStatisticsUpdate> for SourceStatisticsUpdate {
 #[derive(Clone, Debug, PartialEq)]
 pub struct ControllerSourceStatistics {
     pub id: GlobalId,
+    pub replica_id: ReplicaId,
 
     pub messages_received: Counter,
     pub bytes_received: Counter,
@@ -742,9 +752,10 @@ pub struct ControllerSourceStatistics {
 }
 
 impl ControllerSourceStatistics {
-    pub fn new(id: GlobalId) -> Self {
+    pub fn new(id: GlobalId, replica_id: ReplicaId) -> Self {
         Self {
             id,
+            replica_id,
             messages_received: Default::default(),
             bytes_received: Default::default(),
             updates_staged: Default::default(),
@@ -762,9 +773,10 @@ impl ControllerSourceStatistics {
 
     /// Incorporate updates from the given [SourceStatisticsUpdate] into
     /// ourselves
-    pub fn incorporate(&mut self, is_from_first_replica: bool, update: SourceStatisticsUpdate) {
+    pub fn incorporate(&mut self, update: SourceStatisticsUpdate) {
         let ControllerSourceStatistics {
             id: _,
+            replica_id: _,
             messages_received,
             bytes_received,
             updates_staged,
@@ -779,24 +791,10 @@ impl ControllerSourceStatistics {
             offset_committed,
         } = self;
 
-        if is_from_first_replica {
-            // All replicas receive all messages and try and stage them for
-            // writing to persist.
-            //
-            // We would be double/triple/etc. counting if we incorporated all
-            // these updates.
-            messages_received.incorporate(update.messages_received, "messages_received");
-            bytes_received.incorporate(update.bytes_received, "bytes_received");
-            updates_staged.incorporate(update.updates_staged, "updates_staged");
-        }
-
-        // Only one replica will manage to commit a batch of updates, so
-        // incorporate this metric from all replicas to capture the one that
-        // actually managed to commit.
+        messages_received.incorporate(update.messages_received, "messages_received");
+        bytes_received.incorporate(update.bytes_received, "bytes_received");
+        updates_staged.incorporate(update.updates_staged, "updates_staged");
         updates_committed.incorporate(update.updates_committed, "updates_committed");
-
-        // We always incorporate Gauge metrics from all replicas, because these
-        // should be roughly the same.
         records_indexed.incorporate(update.records_indexed, "records_indexed");
         bytes_indexed.incorporate(update.bytes_indexed, "bytes_indexed");
         rehydration_latency_ms.incorporate(update.rehydration_latency_ms, "rehydration_latency_ms");
@@ -814,6 +812,7 @@ impl PackableStats for ControllerSourceStatistics {
         use mz_repr::Datum;
         // id
         packer.push(Datum::from(self.id.to_string().as_str()));
+        packer.push(Datum::from(self.replica_id.to_string().as_str()));
         // Counters.
         packer.push(Datum::from(self.messages_received.0));
         packer.push(Datum::from(self.bytes_received.0));
@@ -836,10 +835,16 @@ impl PackableStats for ControllerSourceStatistics {
         packer.push(Datum::from(self.offset_committed.0.pack()));
     }
 
-    fn unpack(row: Row, metrics: &crate::metrics::StorageControllerMetrics) -> (GlobalId, Self) {
+    fn unpack(
+        row: Row,
+        metrics: &crate::metrics::StorageControllerMetrics,
+    ) -> (GlobalId, Option<ReplicaId>, Self) {
         let mut iter = row.iter();
+        let id = iter.next().unwrap().unwrap_str().parse().unwrap();
+        let replica_id = iter.next().unwrap().unwrap_str().parse().unwrap();
         let mut s = Self {
-            id: iter.next().unwrap().unwrap_str().parse().unwrap(),
+            id,
+            replica_id,
 
             messages_received: iter.next().unwrap().unwrap_uint64().into(),
             bytes_received: iter.next().unwrap().unwrap_uint64().into(),
@@ -866,7 +871,7 @@ impl PackableStats for ControllerSourceStatistics {
         };
 
         s.offset_known.0.regressions = Some(metrics.regressed_offset_known(s.id));
-        (s.id, s)
+        (s.id, Some(replica_id), s)
     }
 }
 
@@ -930,7 +935,10 @@ impl PackableStats for ControllerSinkStatistics {
         packer.push(Datum::from(self.bytes_committed.0));
     }
 
-    fn unpack(row: Row, _metrics: &crate::metrics::StorageControllerMetrics) -> (GlobalId, Self) {
+    fn unpack(
+        row: Row,
+        _metrics: &crate::metrics::StorageControllerMetrics,
+    ) -> (GlobalId, Option<ReplicaId>, Self) {
         let mut iter = row.iter();
         let s = Self {
             id: iter.next().unwrap().unwrap_str().parse().unwrap(),
@@ -939,7 +947,8 @@ impl PackableStats for ControllerSinkStatistics {
             bytes_staged: iter.next().unwrap().unwrap_uint64().into(),
             bytes_committed: iter.next().unwrap().unwrap_uint64().into(),
         };
-        (s.id, s)
+        // TODO: replica_id!
+        (s.id, None, s)
     }
 }
 
@@ -1037,7 +1046,10 @@ impl PackableStats for SinkStatisticsUpdate {
         packer.push(Datum::from(self.bytes_committed.0));
     }
 
-    fn unpack(row: Row, _metrics: &crate::metrics::StorageControllerMetrics) -> (GlobalId, Self) {
+    fn unpack(
+        row: Row,
+        _metrics: &crate::metrics::StorageControllerMetrics,
+    ) -> (GlobalId, Option<ReplicaId>, Self) {
         let mut iter = row.iter();
         let s = Self {
             // Id
@@ -1048,8 +1060,8 @@ impl PackableStats for SinkStatisticsUpdate {
             bytes_staged: iter.next().unwrap().unwrap_uint64().into(),
             bytes_committed: iter.next().unwrap().unwrap_uint64().into(),
         };
-
-        (s.id, s)
+        // TODO: replica_id!
+        (s.id, None, s)
     }
 }
 

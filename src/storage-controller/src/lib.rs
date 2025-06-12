@@ -1165,20 +1165,20 @@ where
         }
 
         {
-            // Ensure all sources are associated with the statistics.
-            //
-            // We currently do not call `create_collections` after we have initialized the source
-            // statistics scrapers, but in the interest of safety, avoid overriding existing
-            // statistics values.
+            // // Ensure all sources are associated with the statistics.
+            // //
+            // // We currently do not call `create_collections` after we have initialized the source
+            // // statistics scrapers, but in the interest of safety, avoid overriding existing
+            // // statistics values.
             let mut source_statistics = self.source_statistics.lock().expect("poisoned");
             let mut sink_statistics = self.sink_statistics.lock().expect("poisoned");
-
-            for id in new_source_statistic_entries {
-                source_statistics
-                    .source_statistics
-                    .entry(id)
-                    .or_insert_with(|| StatsState::new(ControllerSourceStatistics::new(id)));
-            }
+            //
+            // for id in new_source_statistic_entries {
+            //     source_statistics
+            //         .source_statistics
+            //         .entry(id)
+            //         .or_insert_with(|| StatsState::new(ControllerSourceStatistics::new(id)));
+            // }
             for id in new_webhook_statistic_entries {
                 source_statistics.webhook_statistics.entry(id).or_default();
             }
@@ -2273,22 +2273,32 @@ where
                     // `StatisticsUpdates` while we were shutting down the storage object.
                     {
                         let mut shared_stats = self.source_statistics.lock().expect("poisoned");
-                        for stat in source_stats {
-                            // Determine if this update is from the first
-                            // replica running this source. We treat updates
-                            // differently based on that, otherwise statistics
-                            // for multi-replica sources can get "whacky", where
-                            // whacky here means that we would overcount certain
-                            // stats. Check `incorporate`, below, for the
-                            // details.
-                            let is_from_first_replica = self.is_first_replica(replica_id, stat.id);
 
+                        let replica_id = if let Some(replica_id) = replica_id {
+                            replica_id
+                        } else {
+                            tracing::error!(
+                                ?source_stats,
+                                "missing replica_id for source statistics update"
+                            );
+                            continue;
+                        };
+
+                        for stat in source_stats {
+                            // tracing::info!(?stat, "new stats");
+                            let collection_id = stat.id.clone();
                             // Don't override it if its been removed.
                             shared_stats
-                                .source_statistics
-                                .entry(stat.id)
+                                .per_replica_source_statistics
+                                .entry((stat.id, replica_id))
                                 .and_modify(|current| {
-                                    current.stat().incorporate(is_from_first_replica, stat);
+                                    current.stat().incorporate(stat);
+                                })
+                                .or_insert_with(|| {
+                                    StatsState::new(ControllerSourceStatistics::new(
+                                        collection_id,
+                                        replica_id,
+                                    ))
                                 });
                         }
                     }
@@ -2750,6 +2760,7 @@ where
             read_only,
             source_statistics: Arc::new(Mutex::new(statistics::SourceStatistics {
                 source_statistics: BTreeMap::new(),
+                per_replica_source_statistics: BTreeMap::new(),
                 webhook_statistics: BTreeMap::new(),
             })),
             sink_statistics: Arc::new(Mutex::new(BTreeMap::new())),

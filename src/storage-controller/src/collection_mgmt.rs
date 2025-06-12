@@ -93,7 +93,7 @@ use mz_storage_client::healthcheck::{
     WALLCLOCK_GLOBAL_LAG_HISTOGRAM_RAW_DESC, WALLCLOCK_LAG_HISTORY_DESC,
 };
 use mz_storage_client::metrics::StorageControllerMetrics;
-use mz_storage_client::statistics::{ControllerSinkStatistics, ControllerSourceStatistics};
+use mz_storage_client::statistics::ControllerSinkStatistics;
 use mz_storage_client::storage_collections::StorageCollections;
 use mz_storage_types::StorageDiff;
 use mz_storage_types::controller::InvalidUpper;
@@ -619,11 +619,7 @@ where
                 )
                 .await;
 
-                let scraper_token = statistics::spawn_statistics_scraper::<
-                    statistics::SourceStatistics,
-                    ControllerSourceStatistics,
-                    _,
-                >(
+                let scraper_token = statistics::spawn_per_replica_statistics_scraper(
                     self.id.clone(),
                     // These do a shallow copy.
                     introspection_config.collection_manager,
