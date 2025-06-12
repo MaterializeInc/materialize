@@ -21,7 +21,6 @@ use fail::fail_point;
 use futures::StreamExt;
 use futures::stream::LocalBoxStream;
 use mz_ore::soft_panic_or_log;
-use mz_ore::vec::VecExt;
 use mz_persist_client::Diagnostics;
 use mz_persist_client::cache::PersistClientCache;
 use mz_persist_client::error::UpperMismatch;
@@ -227,7 +226,7 @@ where
                     // Peel off a batch of pending data
                     let batch = self
                         .pending_batch
-                        .drain_filter_swapping(|(_, ts, _)| !new_upper.less_equal(ts))
+                        .extract_if(.., |(_, ts, _)| !new_upper.less_equal(ts))
                         .collect();
                     return Some((batch, new_upper));
                 }
