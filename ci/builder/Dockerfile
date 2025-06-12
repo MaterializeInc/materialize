@@ -204,9 +204,9 @@ RUN apt-get update --fix-missing && TZ=UTC DEBIAN_FRONTEND=noninteractive apt-ge
     jq \
     lcov \
     libc-dbg \
-    libclang-common-15-dev \
+    libclang-common-18-dev \
     libclang-dev \
-    libclang-rt-15-dev \
+    libclang-rt-18-dev \
     libpq-dev \
     lld \
     llvm \
