@@ -21,6 +21,7 @@ env:
   # a single core open when compiling. But we want to use all of CI's resources, hence setting the
   # build jobs to "default" which will use all cores.
   CARGO_BUILD_JOBS: "default"
+  CI_SANITIZER: address
 
 # When resources are constrained, run early since this might be blocking a PR from merging
 priority: 20
