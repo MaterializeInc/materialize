@@ -14,7 +14,6 @@
 use std::collections::BTreeMap;
 use std::sync::LazyLock;
 
-use columnar::Columnar;
 use dec::OrderedDecimal;
 use differential_dataflow::collection::AsCollection;
 use differential_dataflow::consolidation::ConsolidatingContainerBuilder;

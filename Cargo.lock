@@ -1854,19 +1854,18 @@ checksum = "5b63caa9aa9397e2d9480a9b13673856c78d8ac123288526c37d7839f2a86990"
 [[package]]
 name = "columnar"
 version = "0.5.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c412cb3cd9449abf2cb39dd504efb00701ab1f0c0e8b030042f8afe2e7c2adcf"
+source = "git+https://github.com/antiguru/columnar?branch=more_inline#2ad7ca5563f487ff1e907a7058049b07ad8cafec"
 dependencies = [
  "bytemuck",
  "columnar_derive",
  "serde",
+ "smallvec",
 ]
 
 [[package]]
 name = "columnar_derive"
 version = "0.2.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0d0026695363bb44b676ebef899573e46513fafd45b7ba155d4d350f88a997fb"
+source = "git+https://github.com/antiguru/columnar?branch=more_inline#2ad7ca5563f487ff1e907a7058049b07ad8cafec"
 dependencies = [
  "proc-macro2",
  "quote",
