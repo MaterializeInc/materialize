@@ -494,6 +494,13 @@ where
         let is_rollup = cmd.name == metrics.cmds.add_rollup.name;
         let is_become_tombstone = cmd.name == metrics.cmds.become_tombstone.name;
 
+        let use_active_gc = GC_USE_ACTIVE_GC.get(cfg);
+        let gc_fallback_threshold_ms = u64::cast_from(GC_FALLBACK_THRESHOLD_MS.get(cfg));
+
+        let use_active_rollup = ROLLUP_USE_ACTIVE_ROLLUP.get(cfg);
+        let rollup_threshold = ROLLUP_THRESHOLD.get(cfg);
+        let rollup_fallback_threshold_ms = u64::cast_from(ROLLUP_FALLBACK_THRESHOLD_MS.get(cfg));
+
         let expected = state.seqno;
         let was_tombstone_before = state.collections.is_tombstone();
 
@@ -524,14 +531,14 @@ where
 
         let now = (cfg.now)();
         let write_rollup = new_state.need_rollup(
-            ROLLUP_THRESHOLD.get(cfg),
-            ROLLUP_USE_ACTIVE_ROLLUP.get(cfg),
-            u64::cast_from(ROLLUP_FALLBACK_THRESHOLD_MS.get(cfg)),
+            rollup_threshold,
+            use_active_rollup,
+            rollup_fallback_threshold_ms,
             now,
         );
 
         if let Some(write_rollup_seqno) = write_rollup {
-            if ROLLUP_USE_ACTIVE_ROLLUP.get(cfg) {
+            if use_active_rollup {
                 new_state.collections.active_rollup = Some(ActiveRollup {
                     seqno: write_rollup_seqno,
                     start_ms: now,
@@ -549,15 +556,11 @@ where
         // run though the loop (i.e. no `if let Some` here). When we
         // lose a CaS race, we might discover that the winner got
         // assigned the gc.
-        let garbage_collection = new_state.maybe_gc(
-            is_write,
-            GC_USE_ACTIVE_GC.get(cfg),
-            u64::cast_from(GC_FALLBACK_THRESHOLD_MS.get(cfg)),
-            now,
-        );
+        let garbage_collection =
+            new_state.maybe_gc(is_write, use_active_gc, gc_fallback_threshold_ms, now);
 
         if let Some(gc) = garbage_collection.as_ref() {
-            if GC_USE_ACTIVE_GC.get(cfg) {
+            if use_active_gc {
                 new_state.collections.active_gc = Some(ActiveGc {
                     seqno: gc.new_seqno_since,
                     start_ms: now,
