@@ -41,6 +41,7 @@ steps:
         priority: 50
         agents:
           queue: builder-linux-x86_64
+        sanitizer: skip
 
       - id: upload-debug-symbols-x86_64
         label: "Upload debug symbols for x86_64"
@@ -55,6 +56,7 @@ steps:
         agents:
           queue: linux-x86_64
         coverage: skip
+        sanitizer: skip
 
       - id: rust-build-aarch64
         label: ":rust: Build aarch64"
@@ -68,6 +70,7 @@ steps:
         timeout_in_minutes: 60
         agents:
           queue: builder-linux-aarch64-mem
+        sanitizer: skip
 
       - id: upload-debug-symbols-aarch64
         label: "Upload debug symbols for aarch64"
@@ -82,6 +85,7 @@ steps:
         agents:
           queue: linux-aarch64
         coverage: skip
+        sanitizer: skip
 
       - id: build-x86_64
         label: ":bazel: Build x86_64"
@@ -453,6 +457,7 @@ steps:
         agents:
           # Larger agent for faster runtime
           queue: hetzner-aarch64-8cpu-16gb
+        skip: "Reenable when database-issues#9362 is fixed"
 
       - id: pg-rtr
         label: "Postgres RTR tests"
