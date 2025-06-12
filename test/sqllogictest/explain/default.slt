@@ -1,0 +1,2040 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+# this file DELIBERATELY does not specify the level or format for EXPLAIN
+
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET unsafe_enable_table_keys = true
+----
+COMPLETE 0
+
+statement ok
+CREATE TABLE t (
+  a int,
+  b int
+);
+
+statement ok
+CREATE TABLE u (
+  c int,
+  d int
+);
+
+statement ok
+CREATE TABLE v (
+  e int,
+  f int
+);
+
+statement ok
+CREATE INDEX t_a_idx ON t(a);
+
+statement ok
+CREATE VIEW ov AS SELECT * FROM t ORDER BY b asc, a desc LIMIT 5;
+
+statement ok
+CREATE VIEW iv AS
+SELECT * FROM t WHERE a IS NOT NULL;
+
+statement ok
+CREATE INDEX iv_a_idx ON iv(a);
+
+statement ok
+CREATE INDEX iv_b_idx ON iv(b);
+
+# This is an identical index to the above (on the same object, on the same key)
+statement ok
+CREATE INDEX iv_b_idx_2 ON iv(b);
+
+statement ok
+CREATE MATERIALIZED VIEW mv AS
+SELECT * FROM t WHERE a IS NOT NULL;
+
+statement ok
+CREATE MATERIALIZED VIEW non_empty_mv AS
+SELECT 1 as x, 2 as y;
+
+statement ok
+CREATE INDEX non_empty_mv_idx ON non_empty_mv(y + 7);
+
+statement ok
+CREATE MATERIALIZED VIEW empty_mv AS
+SELECT;
+
+statement ok
+CREATE INDEX empty_mv_idx ON empty_mv();
+
+mode cockroach
+
+# Test target cluster selection for mz_system tables without transactions.
+query T multiline
+EXPLAIN WITH(no fast path, humanized expressions)
+SELECT * FROM mz_views;
+----
+Explained Query:
+  →Arranged mz_catalog.mz_views
+
+Used Indexes:
+  - mz_catalog.mz_views_ind (*** full scan ***)
+
+Target cluster: mz_catalog_server
+
+EOF
+
+# Test target cluster selection for mz_system tables inside a transaction.
+statement ok
+BEGIN
+
+statement ok
+SELECT * FROM t;
+
+query T multiline
+EXPLAIN WITH(no fast path, humanized expressions)
+SELECT * FROM mz_views;
+----
+Explained Query:
+  →Stream mz_catalog.mz_views
+
+Source mz_catalog.mz_views
+
+Target cluster: quickstart
+
+EOF
+
+statement ok
+ROLLBACK
+
+# Test constant error.
+query T multiline
+EXPLAIN WITH(humanized expressions)
+SELECT 1 / 0
+----
+Explained Query (fast path):
+  →Constant (error: "division by zero")
+
+Target cluster: quickstart
+
+EOF
+
+# Test constant with two elements.
+query T multiline
+EXPLAIN WITH(humanized expressions)
+(SELECT 1, 2) UNION ALL (SELECT 1, 2) UNION ALL (SELECT 3, 4)
+----
+Explained Query (fast path):
+  →Constant (2 rows)
+
+Target cluster: mz_catalog_server
+
+EOF
+
+# Test catalog queries (index found based on cluster auto-routing).
+query T multiline
+EXPLAIN WITH (humanized expressions)
+SELECT * FROM mz_internal.mz_source_status_history
+----
+Explained Query (fast path):
+  →Map/Filter/Project
+    →Indexed mz_internal.mz_source_status_history (using mz_internal.mz_source_status_history_ind)
+
+Used Indexes:
+  - mz_internal.mz_source_status_history_ind (*** full scan ***)
+
+Target cluster: mz_catalog_server
+
+EOF
+
+# Test fast path rendering on a non-trivial index.
+query T multiline
+EXPLAIN WITH(humanized expressions)
+SELECT * FROM non_empty_mv where y + 7 = 9
+----
+Explained Query (fast path):
+  →Map/Filter/Project
+    →Index Lookup on materialize.public.non_empty_mv (using materialize.public.non_empty_mv_idx)
+      Lookup values: (9)
+
+Used Indexes:
+  - materialize.public.non_empty_mv_idx (lookup)
+
+Target cluster: quickstart
+
+EOF
+
+# Test fast path rendering on an empty index on an empty relation.
+query T multiline
+EXPLAIN WITH(humanized expressions)
+SELECT * FROM empty_mv
+----
+Explained Query (fast path):
+  →Map/Filter/Project
+    →Indexed materialize.public.empty_mv (using materialize.public.empty_mv_idx)
+
+Used Indexes:
+  - materialize.public.empty_mv_idx (*** full scan ***)
+
+Target cluster: quickstart
+
+EOF
+
+# Test basic linear chains (fast path).
+query T multiline
+EXPLAIN WITH(humanized expressions)
+SELECT 1, a + b as c FROM iv WHERE b = 5 and a < 0 and a + b > 0
+----
+Explained Query (fast path):
+  →Map/Filter/Project
+    Filter: (#1{a} < 0) AND ((#1{a} + #0{b}) > 0)
+    Map: (#1{a} + 5), 1
+      →Index Lookup on materialize.public.iv (using materialize.public.iv_b_idx_2)
+        Lookup values: (5)
+
+Used Indexes:
+  - materialize.public.iv_b_idx_2 (lookup)
+
+Target cluster: quickstart
+
+EOF
+
+# Test basic linear chains (slow path).
+query T multiline
+EXPLAIN WITH(humanized expressions)
+SELECT 1, a + b as c FROM mv WHERE a > 0 and b < 0 and a + b > 0
+----
+Explained Query:
+  →Read materialize.public.mv
+
+Source materialize.public.mv
+  project=(#3, #2)
+  filter=((#0{a} > 0) AND (#1{b} < 0) AND (#2 > 0))
+  map=((#0{a} + #1{b}), 1)
+
+Target cluster: quickstart
+
+EOF
+
+# Test table functions in the select clause (FlatMap).
+query T multiline
+EXPLAIN WITH(humanized expressions)
+SELECT generate_series(a, b) from t
+----
+Explained Query:
+  →Table Function generate_series(#0{a}, #1{b}, 1)
+    →Arranged materialize.public.t
+
+Used Indexes:
+  - materialize.public.t_a_idx (*** full scan ***)
+
+Target cluster: quickstart
+
+EOF
+
+# Test Threshold, Union, Distinct, Negate.
+query T multiline
+EXPLAIN WITH(humanized expressions)
+SELECT a FROM t EXCEPT SELECT b FROM mv
+----
+Explained Query:
+  →Threshold Diffs #0
+    →Arrange
+      Keys: 1 arrangement available, no raw stream
+        Arrangement 0: #0
+      →Consolidating Union
+        →Unarranged Raw Stream
+          →Distinct GroupAggregate
+            →Arranged materialize.public.t
+              Key: (#0{a})
+        →Negate Diffs
+          →Unarranged Raw Stream
+            →Distinct GroupAggregate
+              →Read materialize.public.mv
+
+Source materialize.public.mv
+  project=(#1)
+
+Used Indexes:
+  - materialize.public.t_a_idx (*** full scan ***)
+
+Target cluster: quickstart
+
+EOF
+
+# Test Threshold, Union, Distinct, Negate.
+query T multiline
+EXPLAIN WITH(humanized expressions)
+SELECT a FROM t EXCEPT ALL SELECT b FROM mv
+----
+Explained Query:
+  →Threshold Diffs #0
+    →Arrange
+      Keys: 1 arrangement available, no raw stream
+        Arrangement 0: #0
+      →Consolidating Union
+        →Arranged materialize.public.t
+          Key: (#0{a})
+        →Negate Diffs
+          →Read materialize.public.mv
+
+Source materialize.public.mv
+  project=(#1)
+
+Used Indexes:
+  - materialize.public.t_a_idx (*** full scan ***)
+
+Target cluster: quickstart
+
+EOF
+
+# Test TopK.
+query T multiline
+EXPLAIN WITH(humanized expressions)
+SELECT * FROM ov
+----
+Explained Query:
+  →Consolidating Monotonic TopK
+    Order By #1 asc nulls_last, #0 desc nulls_first
+    Limit 5
+    →Unarranged Raw Stream
+      →Arranged materialize.public.t
+
+Used Indexes:
+  - materialize.public.t_a_idx (*** full scan ***)
+
+Target cluster: quickstart
+
+EOF
+
+# Test Finish.
+query T multiline
+EXPLAIN WITH(humanized expressions)
+SELECT * FROM t ORDER BY b asc, a desc LIMIT 5
+----
+Explained Query (fast path):
+  Finish order_by=[#1 asc nulls_last, #0 desc nulls_first] limit=5 output=[#0, #1]
+    →Map/Filter/Project
+      →Indexed materialize.public.t (using materialize.public.t_a_idx)
+
+Used Indexes:
+  - materialize.public.t_a_idx (*** full scan ***)
+
+Target cluster: quickstart
+
+EOF
+
+# Test Reduce (global).
+query T multiline
+EXPLAIN WITH(humanized expressions)
+SELECT abs(min(a) - max(a)) FROM t
+----
+Explained Query:
+  →With
+    cte l0 =
+      →Consolidating Monotonic GroupAggregate
+        Aggregations: min, max
+        →Arranged materialize.public.t
+          Key: (#0{a})
+  →Return
+    →Map/Filter/Project
+      Map: abs((#0{"?column?"} - #1{"?column?"}))
+        →Union
+          →Unarranged Raw Stream
+            →Arranged l0
+          →Map/Filter/Project
+            Map: null, null
+              →Consolidating Union
+                →Negate Diffs
+                  →Arranged l0
+                    Key: ()
+                →Constant (1 row)
+
+Used Indexes:
+  - materialize.public.t_a_idx (*** full scan ***)
+
+Target cluster: quickstart
+
+EOF
+
+# Test Reduce (local).
+query T multiline
+EXPLAIN WITH(humanized expressions)
+SELECT abs(min(a) - max(a)) FROM t GROUP BY b
+----
+Explained Query:
+  →Map/Filter/Project
+    Map: abs((#1{"?column?"} - #2{"?column?"}))
+      →Consolidating Monotonic GroupAggregate
+        Aggregations: min, max
+        →Arranged materialize.public.t
+
+Used Indexes:
+  - materialize.public.t_a_idx (*** full scan ***)
+
+Target cluster: quickstart
+
+EOF
+
+# Test EXISTS subqueries.
+query T multiline
+EXPLAIN WITH(humanized expressions)
+SELECT * FROM t WHERE EXISTS(SELECT * FROM mv WHERE t.a < mv.a) AND EXISTS(SELECT * FROM mv WHERE t.b > mv.b)
+----
+Explained Query:
+  →With
+    cte l0 =
+      →Differential Join %1 » %0
+        Join stage 0 in %0 with lookup key #0{a}
+        →Arranged materialize.public.t
+        →Distinct GroupAggregate
+          →Differential Join %0 » %1
+            Join stage 0 in %1
+              project=(#0)
+              filter=((#0{a} < #1{a}))
+            →Arrange
+              Keys: 2 arrangements available, no raw stream
+                Arrangement 0: (empty key)
+                Arrangement 1: #0
+              →Distinct GroupAggregate
+                →Arranged materialize.public.t
+                  Key: (#0{a})
+            →Arrange
+              Keys: 1 arrangement available, plus raw stream
+                Arrangement 0: (empty key)
+              →Read materialize.public.mv
+  →Return
+    →Differential Join %1 » %0
+      Join stage 0 in %0 with lookup key #1
+      →Arrange
+        Keys: 1 arrangement available, plus raw stream
+          Arrangement 0: #1
+        →Stream l0
+      →Distinct GroupAggregate
+        →Differential Join %0 » %1
+          Join stage 0 in %1
+            project=(#0)
+            filter=((#0{b} > #1{b}))
+          →Arrange
+            Keys: 2 arrangements available, no raw stream
+              Arrangement 0: (empty key)
+              Arrangement 1: #0
+            →Distinct GroupAggregate
+              →Read l0
+          →Arrange
+            Keys: 1 arrangement available, plus raw stream
+              Arrangement 0: (empty key)
+            →Read materialize.public.mv
+
+Used Indexes:
+  - materialize.public.t_a_idx (*** full scan ***, differential join)
+
+Target cluster: quickstart
+
+EOF
+
+# Test SELECT subqueries.
+query T multiline
+EXPLAIN WITH(humanized expressions)
+SELECT (SELECT iv.a FROM iv WHERE iv.b = t.b LIMIT 1), (SELECT mv.a FROM mv WHERE mv.b = t.b LIMIT 1) FROM t
+----
+Explained Query:
+  →With
+    cte l0 =
+      →Arranged materialize.public.t
+        Key: (#0{a})
+    cte l1 =
+      →Distinct GroupAggregate
+        →Stream l0
+    cte l2 =
+      →Arranged l1
+    cte l3 =
+      →Consolidating Monotonic Top1
+        Group By#0
+        →Differential Join %0 » %1
+          Join stage 0 in %1 with lookup key #1{b}
+            filter=((#0{b}) IS NOT NULL)
+          →Arranged l2
+          →Arranged materialize.public.iv
+    cte l4 =
+      →Consolidating Monotonic Top1
+        Group By#0
+        →Differential Join %0 » %1
+          Join stage 0 in %1 with lookup key #1{b}
+          →Arranged l2
+          →Arrange
+            Keys: 1 arrangement available, plus raw stream
+              Arrangement 0: #1{b}
+            →Read materialize.public.mv
+  →Return
+    →Delta Join [%0 » %1 » %2] [%1 » %2 » %0] [%2 » %1 » %0]
+      Delta join path for input %0
+        stage 0 for %1: lookup key #0
+        stage 1 for %2: lookup key #0
+      Delta join path for input %1
+        stage 0 for %2: lookup key #0
+        stage 1 for %0: lookup key #0
+      Delta join path for input %2
+        stage 0 for %1: lookup key #0
+        stage 1 for %0: lookup key #0
+      →Arrange
+        Keys: 1 arrangement available, plus raw stream
+          Arrangement 0: #0
+        →Stream l0
+      →Arrange
+        Keys: 1 arrangement available, plus raw stream
+          Arrangement 0: #0
+        →Union
+          →Stream l3
+          →Map/Filter/Project
+            Map: null
+              →Consolidating Union
+                →Negate Diffs
+                  →Read l3
+                →Unarranged Raw Stream
+                  →Arranged l1
+      →Arrange
+        Keys: 1 arrangement available, plus raw stream
+          Arrangement 0: #0
+        →Union
+          →Stream l4
+          →Map/Filter/Project
+            Map: null
+              →Consolidating Union
+                →Negate Diffs
+                  →Read l4
+                →Unarranged Raw Stream
+                  →Arranged l1
+
+Source materialize.public.mv
+  filter=((#1{b}) IS NOT NULL)
+
+Used Indexes:
+  - materialize.public.t_a_idx (*** full scan ***)
+  - materialize.public.iv_b_idx (differential join)
+
+Target cluster: quickstart
+
+EOF
+
+# Test outer joins (ON syntax).
+query T multiline
+EXPLAIN WITH(humanized expressions)
+SELECT t1.a, t2.a
+FROM t as t1
+LEFT JOIN t as t2 ON t1.b = t2.b
+RIGHT JOIN t as t3 ON t2.b = t3.b
+----
+Explained Query:
+  →With
+    cte l0 =
+      →Fused Map/Filter/Project
+        Filter: (#1{b}) IS NOT NULL
+          →Arranged materialize.public.t
+            Key: (#0{a})
+    cte l1 =
+      →Arrange
+        Keys: 1 arrangement available, plus raw stream
+          Arrangement 0: #1{b}
+        →Stream l0
+    cte l2 =
+      →Arrange
+        Keys: 1 arrangement available, plus raw stream
+          Arrangement 0: #0{b}
+        →Read l0
+    cte l3 =
+      →Delta Join [%0 » %1 » %2] [%1 » %0 » %2] [%2 » %0 » %1]
+        Delta join path for input %0
+          stage 0 for %1: lookup key #1{b}
+          stage 1 for %2: lookup key #0{b}
+        Delta join path for input %1
+          stage 0 for %0: lookup key #1{b}
+          stage 1 for %2: lookup key #0{b}
+        Delta join path for input %2
+          stage 0 for %0: lookup key #1{b}
+          stage 1 for %1: lookup key #1{b}
+        →Arranged l1
+        →Arranged l1
+        →Arranged l2
+  →Return
+    →Union
+      →Map/Filter/Project
+        Map: null, null
+          →Consolidating Union
+            →Negate Diffs
+              →Differential Join %1 » %0
+                Join stage 0 in %0 with lookup key #0{b}
+                →Arranged l2
+                →Distinct GroupAggregate
+                  →Read l3
+            →Arranged materialize.public.t
+              Key: (#0{a})
+      →Read l3
+
+Used Indexes:
+  - materialize.public.t_a_idx (*** full scan ***)
+
+Target cluster: quickstart
+
+EOF
+
+# Test a single CTE.
+query T multiline
+EXPLAIN WITH(humanized expressions)
+WITH x AS (SELECT t.a * t.b as v from t) SELECT a.v + b.v FROM x as a, x as b
+----
+Explained Query:
+  →With
+    cte l0 =
+      →Arrange
+        Keys: 1 arrangement available, plus raw stream
+          Arrangement 0: (empty key)
+        →Fused Map/Filter/Project
+          Map: (#0{a} * #1{b})
+            →Arranged materialize.public.t
+              Key: (#0{a})
+  →Return
+    →Differential Join %0 » %1
+      Join stage 0 in %1
+        project=(#2)
+        map=((#0{v} + #1{v}))
+      →Arranged l0
+      →Arranged l0
+
+Used Indexes:
+  - materialize.public.t_a_idx (*** full scan ***)
+
+Target cluster: quickstart
+
+EOF
+
+# Test EXPLAIN INDEX for an indexed source
+query T multiline
+EXPLAIN WITH(humanized expressions)
+INDEX t_a_idx
+----
+materialize.public.t_a_idx:
+  →Arrange
+    Keys: 1 arrangement available, plus raw stream
+      Arrangement 0: #0{a}
+    →Stream materialize.public.t
+
+Source materialize.public.t
+
+Target cluster: quickstart
+
+EOF
+
+# Test EXPLAIN INDEX for an indexed view (first index)
+query T multiline
+EXPLAIN WITH(humanized expressions)
+INDEX iv_a_idx;
+----
+materialize.public.iv_a_idx:
+  →Arrange
+    Keys: 1 arrangement available, plus raw stream
+      Arrangement 0: #0{a}
+    →Stream materialize.public.iv
+
+materialize.public.iv:
+  →Fused Map/Filter/Project
+    Filter: (#0{a}) IS NOT NULL
+      →Arranged materialize.public.t
+        Key: (#0{a})
+
+Used Indexes:
+  - materialize.public.t_a_idx (*** full scan ***)
+
+Target cluster: quickstart
+
+EOF
+
+# Test EXPLAIN INDEX for an indexed view (based on a prior index)
+query T multiline
+EXPLAIN WITH(humanized expressions)
+INDEX iv_b_idx;
+----
+materialize.public.iv_b_idx:
+  →Arrange
+    Keys: 2 arrangements available, no raw stream
+      Arrangement 0: #0{a}
+      Arrangement 1: #1{b}
+    →Arranged materialize.public.iv
+
+Used Indexes:
+  - materialize.public.iv_a_idx (*** full scan ***, index export)
+
+Target cluster: quickstart
+
+EOF
+
+# Test EXPLAIN INDEX for an indexed view where the index is exactly the same as a prior index.
+query T multiline
+EXPLAIN WITH(humanized expressions)
+INDEX iv_b_idx_2;
+----
+materialize.public.iv_b_idx_2:
+  →Arranged materialize.public.iv
+
+Used Indexes:
+  - materialize.public.iv_b_idx (plan root (no new arrangement), index export)
+
+Target cluster: quickstart
+
+Notices:
+  - Notice: Index materialize.public.iv_b_idx_2 is identical to materialize.public.iv_b_idx, which is also defined on iv(b).
+    Hint: Please drop all indexes except the first index created on iv(b) and recreate all dependent objects.
+
+EOF
+
+# Test multiple CTEs: a case where we cannot pull the let statement up through
+# the join because the local l0 is correlated against the lhs of the enclosing join.
+query T multiline
+EXPLAIN WITH(humanized expressions)
+SELECT
+  *
+FROM
+  (
+    SELECT * FROM t
+  ) as r1
+  CROSS JOIN LATERAL (
+    WITH r2 as (
+      SELECT MAX(r1.a * t.a) AS m FROM t
+    )
+    SELECT * FROM r2 WHERE r2.m != r1.a
+  ) as r3
+  CROSS JOIN LATERAL (
+    WITH r4 as (
+      SELECT MAX(r1.a * t.a) AS m FROM t
+    )
+    SELECT * FROM r4 WHERE r4.m != r1.a OR (r4.m IS NOT NULL AND r1.a IS NULL)
+  ) as r5;
+----
+Explained Query:
+  →With
+    cte l0 =
+      →Arranged materialize.public.t
+        Key: (#0{a})
+    cte l1 =
+      →Arrange
+        Keys: 1 arrangement available, plus raw stream
+          Arrangement 0: (empty key)
+        →Stream l0
+    cte l2 =
+      →Differential Join %1 » %0
+        Join stage 0 in %0 with lookup key #0{a}
+          project=(#0, #2, #1)
+          filter=((#0 != #1{m}))
+        →Arranged materialize.public.t
+        →Consolidating Monotonic GroupAggregate
+          Aggregations: max
+          →Differential Join %0 » %1
+            Join stage 0 in %1
+            →Arrange
+              Keys: 2 arrangements available, no raw stream
+                Arrangement 0: (empty key)
+                Arrangement 1: #0
+              →Distinct GroupAggregate
+                →Stream l0
+            →Arranged l1
+  →Return
+    →Differential Join %1 » %0
+      Join stage 0 in %0 with lookup key #0
+        project=(#0, #2, #3, #1)
+        filter=((#0 != #1{m}))
+      →Arrange
+        Keys: 1 arrangement available, plus raw stream
+          Arrangement 0: #0
+        →Stream l2
+      →Consolidating Monotonic GroupAggregate
+        Aggregations: max
+        →Differential Join %0 » %1
+          Join stage 0 in %1
+          →Arrange
+            Keys: 2 arrangements available, no raw stream
+              Arrangement 0: (empty key)
+              Arrangement 1: #0
+            →Distinct GroupAggregate
+              →Read l2
+          →Arranged l1
+
+Used Indexes:
+  - materialize.public.t_a_idx (*** full scan ***, differential join)
+
+Target cluster: quickstart
+
+EOF
+
+# Test cross join.
+query T multiline
+EXPLAIN WITH(humanized expressions)
+SELECT t1.a, t2.a FROM t as t1, t as t2
+----
+Explained Query:
+  →With
+    cte l0 =
+      →Arrange
+        Keys: 1 arrangement available, plus raw stream
+          Arrangement 0: (empty key)
+        →Arranged materialize.public.t
+          Key: (#0{a})
+  →Return
+    →Differential Join %0 » %1
+      Join stage 0 in %1
+      →Arranged l0
+      →Arranged l0
+
+Used Indexes:
+  - materialize.public.t_a_idx (*** full scan ***)
+
+Target cluster: quickstart
+
+EOF
+
+# Test cyclic join.
+query T multiline
+EXPLAIN WITH(humanized expressions)
+SELECT t1.a, t2.a
+FROM
+  t as t1,
+  t as t2,
+  t as t3
+WHERE t1.b = t2.b AND t2.b = t3.b
+----
+Explained Query:
+  →With
+    cte l0 =
+      →Fused Map/Filter/Project
+        Filter: (#1{b}) IS NOT NULL
+          →Arranged materialize.public.t
+            Key: (#0{a})
+    cte l1 =
+      →Arrange
+        Keys: 1 arrangement available, plus raw stream
+          Arrangement 0: #1{b}
+        →Stream l0
+  →Return
+    →Delta Join [%0 » %1 » %2] [%1 » %0 » %2] [%2 » %0 » %1]
+      Delta join path for input %0
+        stage 0 for %1: lookup key #1{b}
+        stage 1 for %2: lookup key #0{b}
+      Delta join path for input %1
+        stage 0 for %0: lookup key #1{b}
+        stage 1 for %2: lookup key #0{b}
+      Delta join path for input %2
+        stage 0 for %0: lookup key #1{b}
+        stage 1 for %1: lookup key #1{b}
+      →Arranged l1
+      →Arranged l1
+      →Arrange
+        Keys: 1 arrangement available, plus raw stream
+          Arrangement 0: #0{b}
+        →Read l0
+
+Used Indexes:
+  - materialize.public.t_a_idx (*** full scan ***)
+
+Target cluster: quickstart
+
+EOF
+
+# Create indexes required for differential join tests
+
+statement ok
+CREATE INDEX u_c_idx ON U(c);
+
+statement ok
+CREATE INDEX u_d_idx ON U(d);
+
+statement ok
+CREATE INDEX v_e_idx ON V(e);
+
+# Temporarily switch off enable_eager_delta_joins
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET enable_eager_delta_joins = false
+----
+COMPLETE 0
+
+# Test a differential join.
+query T multiline
+EXPLAIN WITH(humanized expressions)
+SELECT a, b, c, d, e, f
+FROM t, u, v
+WHERE a = c and d = e and b = f
+----
+Explained Query:
+  →Delta Join [%0 » %1 » %2] [%1 » %0 » %2] [%2 » %1 » %0]
+    Delta join path for input %0
+      stage 0 for %1: lookup key #0{c}
+        filter=((#2{d}) IS NOT NULL)
+      stage 1 for %2: lookup key #0{e}
+        Equivalences: #3{f} = #2{b}
+    Delta join path for input %1
+      stage 0 for %0: lookup key #0{a}
+        project=(#0, #2, #1)
+        filter=((#0{a}) IS NOT NULL AND (#2{b}) IS NOT NULL)
+      stage 1 for %2: lookup key #0{e}
+        Equivalences: #3{f} = #2{b}
+    Delta join path for input %2
+      stage 0 for %1: lookup key #1{d}
+        project=(#2, #0, #1)
+        filter=((#0{d}) IS NOT NULL)
+      stage 1 for %0: lookup key #0{a}
+        project=(#0, #3, #1)
+        filter=((#0{a}) IS NOT NULL AND (#3{b}) IS NOT NULL)
+        Equivalences: #2{f} = #3{b}
+    →Arranged materialize.public.t
+    →Arranged materialize.public.u
+    →Arranged materialize.public.v
+
+Used Indexes:
+  - materialize.public.t_a_idx (delta join 1st input (full scan))
+  - materialize.public.u_c_idx (delta join lookup)
+  - materialize.public.u_d_idx (delta join lookup)
+  - materialize.public.v_e_idx (delta join lookup)
+
+Target cluster: quickstart
+
+EOF
+
+# Test a differential join WITH(join implementations).
+query T multiline
+EXPLAIN WITH(humanized expressions, join implementations)
+SELECT a, b, c, d, e, f
+FROM t, u, v
+WHERE a = c and d = e and b = f
+----
+Explained Query:
+  →Delta Join [%0 » %1 » %2] [%1 » %0 » %2] [%2 » %1 » %0]
+    Delta join path for input %0
+      stage 0 for %1: lookup key #0{c}
+        filter=((#2{d}) IS NOT NULL)
+      stage 1 for %2: lookup key #0{e}
+        Equivalences: #3{f} = #2{b}
+    Delta join path for input %1
+      stage 0 for %0: lookup key #0{a}
+        project=(#0, #2, #1)
+        filter=((#0{a}) IS NOT NULL AND (#2{b}) IS NOT NULL)
+      stage 1 for %2: lookup key #0{e}
+        Equivalences: #3{f} = #2{b}
+    Delta join path for input %2
+      stage 0 for %1: lookup key #1{d}
+        project=(#2, #0, #1)
+        filter=((#0{d}) IS NOT NULL)
+      stage 1 for %0: lookup key #0{a}
+        project=(#0, #3, #1)
+        filter=((#0{a}) IS NOT NULL AND (#3{b}) IS NOT NULL)
+        Equivalences: #2{f} = #3{b}
+    →Arranged materialize.public.t
+    →Arranged materialize.public.u
+    →Arranged materialize.public.v
+
+Used Indexes:
+  - materialize.public.t_a_idx (delta join 1st input (full scan))
+  - materialize.public.u_c_idx (delta join lookup)
+  - materialize.public.u_d_idx (delta join lookup)
+  - materialize.public.v_e_idx (delta join lookup)
+
+Target cluster: quickstart
+
+EOF
+
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET enable_eager_delta_joins = true
+----
+COMPLETE 0
+
+# Create indexes required for delta join tests
+
+statement ok
+CREATE INDEX t_b_idx ON T(b);
+
+# Test a delta join without WITH(join implementations).
+query T multiline
+EXPLAIN WITH(humanized expressions)
+SELECT a, b, c, d, e, f
+FROM t, u, v
+WHERE b = c and d = e
+----
+Explained Query:
+  →Delta Join [%0 » %1 » %2] [%1 » %0 » %2] [%2 » %1 » %0]
+    Delta join path for input %0
+      stage 0 for %1: lookup key #0{c}
+        project=(#1, #0, #2)
+        filter=((#2{d}) IS NOT NULL)
+      stage 1 for %2: lookup key #0{e}
+    Delta join path for input %1
+      stage 0 for %0: lookup key #1{b}
+        project=(#2, #0, #1)
+        filter=((#0{b}) IS NOT NULL)
+      stage 1 for %2: lookup key #0{e}
+    Delta join path for input %2
+      stage 0 for %1: lookup key #1{d}
+        project=(#2, #0, #1)
+        filter=((#0{d}) IS NOT NULL)
+      stage 1 for %0: lookup key #1{b}
+        project=(#3, #0..=#2)
+        filter=((#0{b}) IS NOT NULL)
+    →Arranged materialize.public.t
+    →Arranged materialize.public.u
+    →Arranged materialize.public.v
+
+Used Indexes:
+  - materialize.public.u_c_idx (delta join lookup)
+  - materialize.public.u_d_idx (delta join lookup)
+  - materialize.public.v_e_idx (delta join lookup)
+  - materialize.public.t_b_idx (delta join 1st input (full scan))
+
+Target cluster: quickstart
+
+EOF
+
+# Test a delta join WITH(join implementations).
+query T multiline
+EXPLAIN WITH(join implementations, humanized expressions)
+SELECT a, b, c, d, e, f
+FROM t, u, v
+WHERE b = c and d = e
+----
+Explained Query:
+  →Delta Join [%0 » %1 » %2] [%1 » %0 » %2] [%2 » %1 » %0]
+    Delta join path for input %0
+      stage 0 for %1: lookup key #0{c}
+        project=(#1, #0, #2)
+        filter=((#2{d}) IS NOT NULL)
+      stage 1 for %2: lookup key #0{e}
+    Delta join path for input %1
+      stage 0 for %0: lookup key #1{b}
+        project=(#2, #0, #1)
+        filter=((#0{b}) IS NOT NULL)
+      stage 1 for %2: lookup key #0{e}
+    Delta join path for input %2
+      stage 0 for %1: lookup key #1{d}
+        project=(#2, #0, #1)
+        filter=((#0{d}) IS NOT NULL)
+      stage 1 for %0: lookup key #1{b}
+        project=(#3, #0..=#2)
+        filter=((#0{b}) IS NOT NULL)
+    →Arranged materialize.public.t
+    →Arranged materialize.public.u
+    →Arranged materialize.public.v
+
+Used Indexes:
+  - materialize.public.u_c_idx (delta join lookup)
+  - materialize.public.u_d_idx (delta join lookup)
+  - materialize.public.v_e_idx (delta join lookup)
+  - materialize.public.t_b_idx (delta join 1st input (full scan))
+
+Target cluster: quickstart
+
+EOF
+
+# Test a delta join where the first input has both a full scan and a lookup.
+query T multiline
+EXPLAIN WITH(join implementations, humanized expressions)
+SELECT a, b, c, d, e, f
+FROM t, u, v
+WHERE a = c and b = e
+----
+Explained Query:
+  →Delta Join [%0 » %1 » %2] [%1 » %0 » %2] [%2 » %0 » %1]
+    Delta join path for input %0
+      stage 0 for %1: lookup key #0{c}
+      stage 1 for %2: lookup key #0{e}
+    Delta join path for input %1
+      stage 0 for %0: lookup key #0{a}
+        project=(#0, #2, #1)
+        filter=((#0{a}) IS NOT NULL AND (#2{b}) IS NOT NULL)
+      stage 1 for %2: lookup key #0{e}
+    Delta join path for input %2
+      stage 0 for %0: lookup key #1{b}
+        project=(#2, #0, #1)
+        filter=((#0{b}) IS NOT NULL AND (#2{a}) IS NOT NULL)
+      stage 1 for %1: lookup key #0{c}
+    →Arranged materialize.public.t
+    →Arranged materialize.public.u
+    →Arranged materialize.public.v
+
+Used Indexes:
+  - materialize.public.t_a_idx (delta join 1st input (full scan))
+  - materialize.public.u_c_idx (delta join lookup)
+  - materialize.public.v_e_idx (delta join lookup)
+  - materialize.public.t_b_idx (delta join lookup)
+
+Target cluster: quickstart
+
+EOF
+
+# Test an IndexedFilter join.
+query T multiline
+EXPLAIN WITH(humanized expressions)
+SELECT a, max(b)
+FROM t
+WHERE a = 0
+GROUP BY a
+----
+Explained Query:
+  →Map/Filter/Project
+    Map: 0
+      →Consolidating Monotonic GroupAggregate
+        Aggregations: max
+        →Differential Join %1 » %0
+          Join stage 0 in %0 with lookup key #0{a}
+          →Arranged materialize.public.t
+          →Arrange
+            Keys: 1 arrangement available, plus raw stream
+              Arrangement 0: #0
+            →Constant (1 row)
+
+Used Indexes:
+  - materialize.public.t_a_idx (lookup)
+
+Target cluster: quickstart
+
+EOF
+
+# Create index for IndexedFilter test
+
+statement ok
+CREATE INDEX t_a_b_idx ON T(a,b)
+
+# Test an IndexedFilter join WITH(join implementations).
+query T multiline
+EXPLAIN WITH(join implementations, humanized expressions)
+SELECT a, max(b)
+FROM t
+WHERE (a = 0 AND b = 1) OR (a = 3 AND b = 4) OR (a = 7 AND b = 8)
+GROUP BY a
+----
+Explained Query:
+  →Consolidating Monotonic GroupAggregate
+    Aggregations: max
+    →Differential Join %1 » %0
+      Join stage 0 in %0 with lookup key #0{a}, #1{b}
+      →Arranged materialize.public.t
+      →Arrange
+        Keys: 1 arrangement available, plus raw stream
+          Arrangement 0: #0, #1
+        →Constant (3 rows)
+
+Used Indexes:
+  - materialize.public.t_a_b_idx (lookup)
+
+Target cluster: quickstart
+
+EOF
+
+# Test an IndexedFilter join on fast path WITH(join implementations).
+query T multiline
+EXPLAIN WITH(join implementations, humanized expressions)
+SELECT *
+FROM t
+WHERE (a = 0 AND b = 1) OR (a = 3 AND b = 4) OR (a = 7 AND b = 8)
+----
+Explained Query (fast path):
+  →Map/Filter/Project
+    →Index Lookup on materialize.public.t (using materialize.public.t_a_b_idx)
+      Lookup values: (0, 1); (3, 4); (7, 8)
+
+Used Indexes:
+  - materialize.public.t_a_b_idx (lookup)
+
+Target cluster: quickstart
+
+EOF
+
+# Test materialize#17348.
+
+statement ok
+CREATE TABLE r(f0 INT, f1 INT, f2 INT, f3 INT, f4 INT, f5 INT, f6 INT, f7 INT, f8 INT, f9 INT, f10 INT, f11 INT, f12 INT, f13 INT, f14 INT, f15 INT, f16 INT);
+
+query T multiline
+EXPLAIN WITH (humanized expressions)
+SELECT *
+FROM r AS r0, r AS r1
+WHERE
+  r0.f0=r1.f0 AND
+  r0.f2=r1.f2 AND
+  r0.f3=r1.f3 AND
+  r0.f4=r1.f4 AND
+  r0.f6=r1.f6 AND
+  r0.f8=r1.f8 AND
+  r0.f9=r1.f9 AND
+  r0.f11=r1.f11 AND
+  r0.f12=r1.f12 AND
+  r0.f13=r1.f13 AND
+  r0.f15=r1.f15 AND
+  r0.f16=r1.f16;
+----
+Explained Query:
+  →With
+    cte l0 =
+      →Arrange
+        Keys: 1 arrangement available, plus raw stream
+          Arrangement 0: #0{f0}, #2{f2}..=#4{f4}, #6{f6}, #8{f8}, #9{f9}, #11{f11}..=#13{f13}, #15{f15}, #16{f16}
+        →Read materialize.public.r
+  →Return
+    →Differential Join %0 » %1
+      Join stage 0 in %1 with lookup key #0{f0}, #2{f2}..=#4{f4}, #6{f6}, #8{f8}, #9{f9}, #11{f11}..=#13{f13}, #15{f15}, #16{f16}
+      →Arranged l0
+      →Arranged l0
+
+Source materialize.public.r
+  filter=((#0{f0}) IS NOT NULL AND (#2{f2}) IS NOT NULL AND (#3{f3}) IS NOT NULL AND (#4{f4}) IS NOT NULL AND (#6{f6}) IS NOT NULL AND (#8{f8}) IS NOT NULL AND (#9{f9}) IS NOT NULL AND (#11{f11}) IS NOT NULL AND (#12{f12}) IS NOT NULL AND (#13{f13}) IS NOT NULL AND (#15{f15}) IS NOT NULL AND (#16{f16}) IS NOT NULL)
+
+Target cluster: quickstart
+
+EOF
+
+# Regression test for database-issues#5674: support mz_now() on select from indexed table
+# ---
+
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET enable_rbac_checks TO false;
+----
+COMPLETE 0
+
+statement ok
+DROP SCHEMA IF EXISTS public CASCADE;
+
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM RESET enable_rbac_checks;
+----
+COMPLETE 0
+
+statement ok
+CREATE SCHEMA public;
+
+statement ok
+CREATE TABLE t(a TIMESTAMP);
+
+statement ok
+CREATE DEFAULT INDEX ON t;
+
+# EXPLAIN output is time-dependent, so we don't want show the output here, just
+# assert that the query doesn't fail.
+statement ok
+EXPLAIN WITH (humanized expressions)
+SELECT * FROM t WHERE a < mz_now();
+
+# Regression test for materialize#19177
+# ---
+
+statement ok
+DROP SCHEMA IF EXISTS public CASCADE;
+
+statement ok
+CREATE SCHEMA public;
+
+statement ok
+CREATE TABLE t1(x text);
+
+statement ok
+CREATE TABLE t2(x text);
+
+statement ok
+EXPLAIN WITH (humanized expressions)
+SELECT * FROM t1, t2 WHERE t1.x || mz_internal.mz_session_id()  = t2.x || mz_internal.mz_session_id();
+
+# Regression test for the join visitation part of materialize#19177
+statement ok
+EXPLAIN WITH (humanized expressions)
+SELECT * FROM t1, t2 WHERE t1.x || mz_now()  = t2.x || mz_now();
+
+query T multiline
+EXPLAIN WITH(humanized expressions)
+SELECT lag(x, 3, 'default') IGNORE NULLS OVER (ORDER BY x || x)
+FROM t1;
+----
+Explained Query:
+  →Map/Filter/Project
+    Map: record_get[0](#0)
+      →Fused Table Function unnest_list
+        →Non-incremental GroupAggregate
+          Aggregation: lag[ignore_nulls=true, order_by=[#0 asc nulls_last]](row(row(row(#0), row(#0{x}, 3, "default")), (#0{x} || #0{x})))
+        →Stream materialize.public.t1
+
+Source materialize.public.t1
+
+Target cluster: quickstart
+
+EOF
+
+query T multiline
+EXPLAIN WITH(humanized expressions)
+SELECT first_value(x) OVER (ORDER BY x || x ROWS BETWEEN 5 preceding AND CURRENT ROW)
+FROM t1;
+----
+Explained Query:
+  →Map/Filter/Project
+    Map: record_get[0](#0)
+      →Fused Table Function unnest_list
+        →Non-incremental GroupAggregate
+          Aggregation: first_value[order_by=[#0 asc nulls_last] rows between 5 preceding and current row](row(row(row(#0), #0{x}), (#0{x} || #0{x})))
+        →Stream materialize.public.t1
+
+Source materialize.public.t1
+
+Target cluster: quickstart
+
+EOF
+
+## "Used indexes" tests
+
+statement ok
+CREATE TABLE t (
+  a int,
+  b int
+);
+
+statement ok
+CREATE TABLE u (
+  c int,
+  d int
+);
+
+# If two indexes exist on the same table, then "Used indexes" should print the one that we are actually going to use
+
+statement ok
+CREATE INDEX u_c ON u(c);
+
+statement ok
+CREATE INDEX u_d ON u(d);
+
+query T multiline
+EXPLAIN WITH(humanized expressions)
+SELECT *
+FROM t, u
+WHERE t.b = u.c;
+----
+Explained Query:
+  →Differential Join %1 » %0
+    Join stage 0 in %0 with lookup key #1{b}
+    →Arrange
+      Keys: 1 arrangement available, plus raw stream
+        Arrangement 0: #1{b}
+      →Read materialize.public.t
+    →Arranged materialize.public.u
+
+Source materialize.public.t
+  filter=((#1{b}) IS NOT NULL)
+
+Used Indexes:
+  - materialize.public.u_c (differential join)
+
+Target cluster: quickstart
+
+EOF
+
+query T multiline
+EXPLAIN WITH(humanized expressions)
+SELECT *
+FROM t, u
+WHERE t.b = u.d;
+----
+Explained Query:
+  →Differential Join %1 » %0
+    Join stage 0 in %0 with lookup key #1{b}
+    →Arrange
+      Keys: 1 arrangement available, plus raw stream
+        Arrangement 0: #1{b}
+      →Read materialize.public.t
+    →Arranged materialize.public.u
+
+Source materialize.public.t
+  filter=((#1{b}) IS NOT NULL)
+
+Used Indexes:
+  - materialize.public.u_d (differential join)
+
+Target cluster: quickstart
+
+EOF
+
+statement ok
+DROP INDEX u_c;
+
+# Let's test the weird situation that two identical indexes exist.
+
+statement ok
+CREATE INDEX t_a_idx_1 ON t(a);
+
+statement ok
+CREATE INDEX t_a_idx_2 ON t(a);
+
+query T multiline
+EXPLAIN WITH(humanized expressions)
+SELECT *
+FROM t, u
+WHERE t.a = u.c
+----
+Explained Query:
+  →Differential Join %0 » %1
+    Join stage 0 in %1 with lookup key #0{c}
+    →Arranged materialize.public.t
+    →Arrange
+      Keys: 1 arrangement available, plus raw stream
+        Arrangement 0: #0{c}
+      →Fused Map/Filter/Project
+        Filter: (#1{c}) IS NOT NULL
+          →Arranged materialize.public.u
+            Key: (#1{d})
+
+Used Indexes:
+  - materialize.public.u_d (*** full scan ***)
+  - materialize.public.t_a_idx_1 (differential join)
+
+Target cluster: quickstart
+
+EOF
+
+# An index is used two times by the same (self) join. We should show a 1st input and a non-1st input usage.
+query T multiline
+EXPLAIN WITH(humanized expressions)
+SELECT *
+FROM t AS t1, t AS t2, t AS t3
+WHERE t1.a = t2.a AND t2.a = t3.a;
+----
+Explained Query:
+  →With
+    cte l0 =
+      →Arranged materialize.public.t
+  →Return
+    →Delta Join [%0 » %1 » %2] [%1 » %0 » %2] [%2 » %0 » %1]
+      Delta join path for input %0
+        stage 0 for %1: lookup key #0{a}
+        stage 1 for %2: lookup key #0{a}
+      Delta join path for input %1
+        stage 0 for %0: lookup key #0{a}
+          project=(#0, #2, #0, #1)
+          filter=((#0{a}) IS NOT NULL)
+        stage 1 for %2: lookup key #0{a}
+      Delta join path for input %2
+        stage 0 for %0: lookup key #0{a}
+          project=(#0, #2, #0, #1)
+          filter=((#0{a}) IS NOT NULL)
+        stage 1 for %1: lookup key #0{a}
+      →Arranged l0
+      →Arranged l0
+      →Arranged l0
+
+Used Indexes:
+  - materialize.public.t_a_idx_1 (delta join lookup, delta join 1st input (full scan))
+
+Target cluster: quickstart
+
+EOF
+
+# An index is used in both a join and a full scan.
+query T multiline
+EXPLAIN WITH(humanized expressions)
+(SELECT t1.a + t2.a AS a, t1.b + t2.b AS b
+ FROM t AS t1, t AS t2
+ WHERE t1.a = t2.a)
+UNION
+(SELECT *
+ FROM t
+ WHERE b > 5)
+----
+Explained Query:
+  →With
+    cte l0 =
+      →Arranged materialize.public.t
+  →Return
+    →Distinct GroupAggregate
+      →Union
+        →Differential Join %0 » %1
+          Join stage 0 in %1 with lookup key #0{a}
+            project=(#3, #4)
+            filter=((#0{a}) IS NOT NULL)
+            map=((#0{a} + #0{a}), (#1{b} + #2{b}))
+          →Arranged l0
+          →Arranged l0
+        →Fused Map/Filter/Project
+          Filter: (#1{b} > 5)
+            →Arranged materialize.public.t
+              Key: (#0{a})
+
+Used Indexes:
+  - materialize.public.t_a_idx_1 (*** full scan ***, differential join)
+
+Target cluster: quickstart
+
+EOF
+
+# An index exists that can't be used for the join because of having the wrong key.
+query T multiline
+EXPLAIN WITH(humanized expressions)
+(SELECT t1.a + t2.a AS a, t1.b + t2.b AS b
+ FROM t AS t1, t AS t2
+ WHERE t1.b = t2.b)
+UNION
+(SELECT *
+ FROM t
+ WHERE b > 5)
+----
+Explained Query:
+  →With
+    cte l0 =
+      →Arrange
+        Keys: 1 arrangement available, plus raw stream
+          Arrangement 0: #1{b}
+        →Fused Map/Filter/Project
+          Filter: (#1{b}) IS NOT NULL
+            →Arranged materialize.public.t
+              Key: (#0{a})
+  →Return
+    →Distinct GroupAggregate
+      →Union
+        →Differential Join %0 » %1
+          Join stage 0 in %1 with lookup key #1{b}
+            project=(#3, #4)
+            map=((#1{a} + #2{a}), (#0{b} + #0{b}))
+          →Arranged l0
+          →Arranged l0
+        →Fused Map/Filter/Project
+          Filter: (#1{b} > 5)
+            →Arranged materialize.public.t
+              Key: (#0{a})
+
+Used Indexes:
+  - materialize.public.t_a_idx_1 (*** full scan ***)
+
+Target cluster: quickstart
+
+EOF
+
+# Similar to the previous test, but exercises the full scan code inside the context loop of the Get case in
+# `collect_index_reqs_inner`, where we don't have an index for the requested key.
+
+statement ok
+CREATE TABLE t_non_null (
+  a int NOT NULL,
+  b int NOT NULL
+);
+
+statement ok
+CREATE INDEX t_non_null_a_idx ON t_non_null(a);
+
+query T multiline
+EXPLAIN WITH(humanized expressions)
+(SELECT t1.a + t2.a AS a, t1.b + t2.b AS b
+ FROM t_non_null AS t1, t_non_null AS t2
+ WHERE t1.b = t2.b)
+UNION
+(SELECT *
+ FROM t_non_null
+ WHERE b > 5)
+----
+Explained Query:
+  →With
+    cte l0 =
+      →Arrange
+        Keys: 2 arrangements available, no raw stream
+          Arrangement 0: #0{a}
+          Arrangement 1: #1{b}
+        →Arranged materialize.public.t_non_null
+  →Return
+    →Distinct GroupAggregate
+      →Union
+        →Differential Join %0 » %1
+          Join stage 0 in %1 with lookup key #1{b}
+            project=(#3, #4)
+            map=((#1{a} + #2{a}), (#0{b} + #0{b}))
+          →Arranged l0
+          →Arranged l0
+        →Fused Map/Filter/Project
+          Filter: (#1{b} > 5)
+            →Arranged materialize.public.t_non_null
+              Key: (#0{a})
+
+Used Indexes:
+  - materialize.public.t_non_null_a_idx (*** full scan ***)
+
+Target cluster: quickstart
+
+EOF
+
+# This has 1 more full scan than the previous test, because the join needs 2 different arrangements.
+# (But we print only one full scan due to deduplication.)
+query T multiline
+EXPLAIN WITH(humanized expressions)
+(SELECT t1.a + t2.a AS a, t1.b + t2.b AS b
+ FROM t_non_null AS t1, t_non_null AS t2
+ WHERE t1.b = t2.b + 1)
+UNION
+(SELECT *
+ FROM t_non_null
+ WHERE b > 5)
+----
+Explained Query:
+  →Distinct GroupAggregate
+    →Union
+      →Differential Join %0 » %1
+        Join stage 0 in %1 with lookup key (#1{b} + 1)
+          project=(#4, #5)
+          map=((#1{a} + #2{a}), (#0{b} + #3{b}))
+        →Arrange
+          Keys: 2 arrangements available, no raw stream
+            Arrangement 0: #0{a}
+            Arrangement 1: #1{b}
+          →Arranged materialize.public.t_non_null
+        →Arrange
+          Keys: 2 arrangements available, no raw stream
+            Arrangement 0: #0{a}
+            Arrangement 1: (#1{b} + 1)
+          →Arranged materialize.public.t_non_null
+      →Fused Map/Filter/Project
+        Filter: (#1{b} > 5)
+          →Arranged materialize.public.t_non_null
+            Key: (#0{a})
+
+Used Indexes:
+  - materialize.public.t_non_null_a_idx (*** full scan ***)
+
+Target cluster: quickstart
+
+EOF
+
+# An index is used in both a lookup and a full scan.
+query T multiline
+EXPLAIN WITH(humanized expressions)
+SELECT * FROM t
+UNION
+SELECT * FROM t WHERE a = 5;
+----
+Explained Query:
+  →Distinct GroupAggregate
+    →Union
+      →Unarranged Raw Stream
+        →Arranged materialize.public.t
+      →Differential Join %1 » %0
+        Join stage 0 in %0 with lookup key #0{a}
+        →Arranged materialize.public.t
+        →Arrange
+          Keys: 1 arrangement available, plus raw stream
+            Arrangement 0: #0
+          →Constant (1 row)
+
+Used Indexes:
+  - materialize.public.t_a_idx_2 (*** full scan ***, lookup)
+
+Target cluster: quickstart
+
+EOF
+
+# Several lookups using different indexes
+
+statement ok
+CREATE INDEX t_b_idx ON t(b);
+
+query T multiline
+EXPLAIN WITH(humanized expressions)
+SELECT * FROM t
+UNION ALL
+SELECT * FROM t WHERE b = 7
+UNION ALL
+SELECT * FROM t WHERE a = 5
+UNION ALL
+SELECT * FROM u WHERE c = 3
+UNION ALL
+SELECT * FROM u WHERE d = 1;
+----
+Explained Query:
+  →Union
+    →Unarranged Raw Stream
+      →Arranged materialize.public.t
+    →Differential Join %1 » %0
+      Join stage 0 in %0 with lookup key #1{b}
+      →Arranged materialize.public.t
+      →Arrange
+        Keys: 1 arrangement available, plus raw stream
+          Arrangement 0: #0
+        →Constant (1 row)
+    →Differential Join %1 » %0
+      Join stage 0 in %0 with lookup key #0{a}
+      →Arranged materialize.public.t
+      →Arrange
+        Keys: 1 arrangement available, plus raw stream
+          Arrangement 0: #0
+        →Constant (1 row)
+    →Fused Map/Filter/Project
+      Filter: (#1{c} = 3)
+        →Arranged materialize.public.u
+          Key: (#1{d})
+    →Differential Join %1 » %0
+      Join stage 0 in %0 with lookup key #1{d}
+      →Arranged materialize.public.u
+      →Arrange
+        Keys: 1 arrangement available, plus raw stream
+          Arrangement 0: #0
+        →Constant (1 row)
+
+Used Indexes:
+  - materialize.public.u_d (*** full scan ***, lookup)
+  - materialize.public.t_a_idx_2 (lookup)
+  - materialize.public.t_b_idx (*** full scan ***, lookup)
+
+Target cluster: quickstart
+
+EOF
+
+# Fast path with a LIMIT and no ORDER BY. This is not a full scan.
+query T multiline
+EXPLAIN WITH(humanized expressions)
+SELECT a+b as x
+FROM t
+WHERE a < 7
+LIMIT 3;
+----
+Explained Query (fast path):
+  Finish limit=3 output=[#0]
+    →Map/Filter/Project
+      Filter: (#0{a} < 7)
+      Map: (#0{a} + #1{b})
+        →Indexed materialize.public.t (using materialize.public.t_a_idx_1)
+
+Used Indexes:
+  - materialize.public.t_a_idx_1 (fast path limit)
+
+Target cluster: quickstart
+
+EOF
+
+# Same query without a LIMIT, so full scan
+query T multiline
+EXPLAIN WITH(humanized expressions)
+SELECT a+b as x
+FROM t
+WHERE a < 7;
+----
+Explained Query (fast path):
+  →Map/Filter/Project
+    Filter: (#0{a} < 7)
+    Map: (#0{a} + #1{b})
+      →Indexed materialize.public.t (using materialize.public.t_a_idx_1)
+
+Used Indexes:
+  - materialize.public.t_a_idx_1 (*** full scan ***)
+
+Target cluster: quickstart
+
+EOF
+
+# Same query with a LIMIT + ORDER BY, so full scan
+query T multiline
+EXPLAIN WITH(humanized expressions)
+SELECT a+b as x
+FROM t
+WHERE a < 7
+ORDER BY x
+LIMIT 3;
+----
+Explained Query (fast path):
+  Finish order_by=[#0 asc nulls_last] limit=3 output=[#0]
+    →Map/Filter/Project
+      Filter: (#0{a} < 7)
+      Map: (#0{a} + #1{b})
+        →Indexed materialize.public.t (using materialize.public.t_a_idx_1)
+
+Used Indexes:
+  - materialize.public.t_a_idx_1 (*** full scan ***)
+
+Target cluster: quickstart
+
+EOF
+
+# We should choose an index whose key is a unique key (if exists)
+statement ok
+CREATE TABLE t4(
+    a int,
+    b int primary key,
+    c int
+);
+
+statement ok
+CREATE INDEX t4_idx_a ON t4(a);
+
+statement ok
+CREATE INDEX t4_idx_b ON t4(b);
+
+statement ok
+CREATE INDEX t4_idx_c ON t4(c);
+
+query T multiline
+EXPLAIN WITH(humanized expressions)
+SELECT * FROM t4;
+----
+Explained Query (fast path):
+  →Map/Filter/Project
+    →Indexed materialize.public.t4 (using materialize.public.t4_idx_b)
+
+Used Indexes:
+  - materialize.public.t4_idx_b (*** full scan ***)
+
+Target cluster: quickstart
+
+EOF
+
+# EXPLAIN should work even if there are no replicas.
+statement ok
+CREATE CLUSTER no_replicas (SIZE '1', REPLICATION FACTOR 0);
+
+statement ok
+SET CLUSTER = no_replicas;
+
+query T multiline
+EXPLAIN WITH (humanized expressions)
+SELECT * FROM t4;
+----
+Explained Query:
+  →Stream materialize.public.t4
+
+Source materialize.public.t4
+
+Target cluster: no_replicas
+
+EOF
+
+statement ok
+CREATE TABLE t5(
+    x int,
+    y int NOT NULL,
+    z int
+);
+
+statement ok
+CREATE TABLE t6(
+    a int NOT NULL,
+    b int
+);
+
+# WITH(EQUIVALENCES)
+query T multiline
+EXPLAIN WITH(EQUIVALENCES, humanized expressions)
+SELECT *
+FROM t5, t6
+WHERE x = a AND b IN (8,9);
+----
+Explained Query:
+  →Differential Join %1 » %0
+    Join stage 0 in %0 with lookup key #0{x}
+    →Arrange
+      Keys: 1 arrangement available, plus raw stream
+        Arrangement 0: #0{x}
+      →Read materialize.public.t5
+    →Arrange
+      Keys: 1 arrangement available, plus raw stream
+        Arrangement 0: #0{a}
+      →Read materialize.public.t6
+
+Source materialize.public.t5
+  filter=((#0{x}) IS NOT NULL)
+Source materialize.public.t6
+  filter=(((#1{b} = 8) OR (#1{b} = 9)))
+
+Target cluster: no_replicas
+
+EOF
+
+query T multiline
+EXPLAIN WITH(EQUIVALENCES, HUMANIZED EXPRESSIONS)
+SELECT *
+FROM t5, t6
+WHERE x = a AND b IN (8,9);
+----
+Explained Query:
+  →Differential Join %1 » %0
+    Join stage 0 in %0 with lookup key #0{x}
+    →Arrange
+      Keys: 1 arrangement available, plus raw stream
+        Arrangement 0: #0{x}
+      →Read materialize.public.t5
+    →Arrange
+      Keys: 1 arrangement available, plus raw stream
+        Arrangement 0: #0{a}
+      →Read materialize.public.t6
+
+Source materialize.public.t5
+  filter=((#0{x}) IS NOT NULL)
+Source materialize.public.t6
+  filter=(((#1{b} = 8) OR (#1{b} = 9)))
+
+Target cluster: no_replicas
+
+EOF
+
+# `count(*)` is planned as `count(true)`. We take care in EXPLAIN to show `count(true)` as `count(*)` to avoid confusing
+# users.
+query T multiline
+EXPLAIN WITH (humanized expressions)
+SELECT count(*)
+FROM t5;
+----
+Explained Query:
+  →With
+    cte l0 =
+      →Accumulable GroupAggregate
+        Simple aggregates: count(*)
+        →Read materialize.public.t5
+  →Return
+    →Union
+      →Unarranged Raw Stream
+        →Arranged l0
+      →Map/Filter/Project
+        Map: 0
+          →Consolidating Union
+            →Negate Diffs
+              →Arranged l0
+                Key: ()
+            →Constant (1 row)
+
+Source materialize.public.t5
+  project=()
+
+Target cluster: no_replicas
+
+EOF
+
+query error DISTINCT \* not supported as function args
+EXPLAIN WITH (humanized expressions)
+SELECT count(distinct *)
+FROM t5;
+
+# `count(true)` is currently also printed as `count(*)` in EXPLAIN, which I'd say is fine.
+query T multiline
+EXPLAIN WITH (humanized expressions)
+SELECT count(true)
+FROM t5;
+----
+Explained Query:
+  →With
+    cte l0 =
+      →Accumulable GroupAggregate
+        Simple aggregates: count(*)
+        →Read materialize.public.t5
+  →Return
+    →Union
+      →Unarranged Raw Stream
+        →Arranged l0
+      →Map/Filter/Project
+        Map: 0
+          →Consolidating Union
+            →Negate Diffs
+              →Arranged l0
+                Key: ()
+            →Constant (1 row)
+
+Source materialize.public.t5
+  project=()
+
+Target cluster: no_replicas
+
+EOF
+
+# But `count(DISTINCT true)` means an entirely different thing, so EXPLAIN shouldn't conflate it with `count(*)`.
+query T multiline
+EXPLAIN WITH (humanized expressions)
+SELECT count(DISTINCT true)
+FROM t5;
+----
+Explained Query:
+  →With
+    cte l0 =
+      →Accumulable GroupAggregate
+        Distinct aggregates: count(distinct true)
+        →Read materialize.public.t5
+  →Return
+    →Union
+      →Unarranged Raw Stream
+        →Arranged l0
+      →Map/Filter/Project
+        Map: 0
+          →Consolidating Union
+            →Negate Diffs
+              →Arranged l0
+                Key: ()
+            →Constant (1 row)
+
+Source materialize.public.t5
+  project=()
+
+Target cluster: no_replicas
+
+EOF
+
+# OFFSET clause in RowSetFinishing
+query T multiline
+EXPLAIN WITH (humanized expressions)
+SELECT a+b
+FROM t4
+OFFSET 1;
+----
+Explained Query:
+  Finish offset=1 output=[#0]
+    →Read materialize.public.t4
+
+Source materialize.public.t4
+  project=(#3)
+  map=((#0{a} + #1{b}))
+
+Target cluster: no_replicas
+
+EOF
+
+# OFFSET clause in TopK
+query T multiline
+EXPLAIN
+SELECT a+b, (SELECT a*b FROM t4 OFFSET 1)
+FROM t4;
+----
+Explained Query:
+  →With
+    cte l0 =
+      →Non-monotonic TopK
+        Offset 1
+        →Fused Map/Filter/Project
+          Map: (#0{a} * #1{b})
+            →Read materialize.public.t4
+    cte l1 =
+      →Union
+        →Stream l0
+        →Map/Filter/Project
+          Map: error("more than one record produced in subquery")
+            →Fused Map/Filter/Project
+              Filter: (#0 > 1)
+                →Accumulable GroupAggregate
+                  Simple aggregates: count(*)
+                  →Read l0
+  →Return
+    →Differential Join %0 » %1
+      Join stage 0 in %1
+        project=(#3, #2)
+        map=((#0{a} + #1{b}))
+      →Arrange
+        Keys: 1 arrangement available, plus raw stream
+          Arrangement 0: (empty key)
+        →Read materialize.public.t4
+      →Arrange
+        Keys: 1 arrangement available, plus raw stream
+          Arrangement 0: (empty key)
+        →Union
+          →Stream l1
+          →Map/Filter/Project
+            Map: null
+              →Consolidating Union
+                →Negate Diffs
+                  →Unarranged Raw Stream
+                    →Distinct GroupAggregate
+                      →Read l1
+                →Constant (1 row)
+
+Source materialize.public.t4
+  project=(#0, #1)
+
+Target cluster: no_replicas
+
+EOF

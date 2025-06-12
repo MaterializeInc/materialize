@@ -414,7 +414,7 @@ EXPLAIN PLAN INSIGHTS AS JSON FOR SELECT * FROM t
         }
       },
       "fast_path": {
-        "text": "Explained Query (fast path):\n  ReadIndex on=materialize.public.t t_primary_idx=[*** full scan ***]\n\nUsed Indexes:\n  - materialize.public.t_primary_idx (*** full scan ***)\n\nTarget cluster: quickstart\n",
+        "text": "Explained Query (fast path):\n  →Map/Filter/Project\n    →Indexed materialize.public.t (using materialize.public.t_primary_idx)\n\nUsed Indexes:\n  - materialize.public.t_primary_idx (*** full scan ***)\n\nTarget cluster: quickstart\n",
         "json": {
           "plans": [
             {
@@ -1235,7 +1235,7 @@ EXPLAIN PLAN INSIGHTS AS JSON FOR SELECT 'abc'
         }
       },
       "fast_path": {
-        "text": "Explained Query (fast path):\n  Constant\n    - (\"abc\")\n\nTarget cluster: mz_catalog_server\n",
+        "text": "Explained Query (fast path):\n  →Constant (1 rows)\n\nTarget cluster: mz_catalog_server\n",
         "json": {
           "plans": [
             {

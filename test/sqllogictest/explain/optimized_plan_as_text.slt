@@ -1744,23 +1744,6 @@ Target cluster: no_replicas
 
 EOF
 
-# EXPLAIN statement without an explicit stage or format, so that we test the default
-# (Currently defaults to `EXPLAIN OPTIMIZED PLAN AS TEXT FOR`.)
-query T multiline
-EXPLAIN
-SELECT a+b FROM t4;
-----
-Explained Query:
-  Project (#3)
-    Map ((#0{a} + #1{b}))
-      ReadStorage materialize.public.t4
-
-Source materialize.public.t4
-
-Target cluster: no_replicas
-
-EOF
-
 # OFFSET clause in RowSetFinishing
 query T multiline
 EXPLAIN OPTIMIZED PLAN WITH (humanized expressions) AS VERBOSE TEXT FOR
@@ -1782,7 +1765,7 @@ EOF
 
 # OFFSET clause in TopK
 query T multiline
-EXPLAIN
+EXPLAIN OPTIMIZED PLAN AS VERBOSE TEXT FOR
 SELECT a+b, (SELECT a*b FROM t4 OFFSET 1)
 FROM t4;
 ----

@@ -48,7 +48,7 @@ SELECT mz_unsafe.mz_panic('forced optimizer panic');
 
 # EXPLAIN PHYSICAL PLAN
 statement error internal error: stage `optimize/finalize_dataflow` not present
-EXPLAIN PHYSICAL PLAN FOR BROKEN
+EXPLAIN PHYSICAL PLAN AS VERBOSE TEXT FOR BROKEN
 SELECT mz_unsafe.mz_panic('forced optimizer panic');
 
 # EXPLAIN OPTIMIZER TRACE
@@ -80,7 +80,7 @@ SELECT mz_unsafe.mz_panic('forced optimizer panic');
 
 # EXPLAIN PHYSICAL PLAN
 statement error internal error: stage `optimize/finalize_dataflow` not present
-EXPLAIN PHYSICAL PLAN FOR BROKEN
+EXPLAIN PHYSICAL PLAN AS VERBOSE TEXT FOR BROKEN
 CREATE MATERIALIZED VIEW mv AS
 SELECT mz_unsafe.mz_panic('forced optimizer panic');
 
@@ -97,7 +97,7 @@ CREATE MATERIALIZED VIEW mv AS
 SELECT pg_catalog.now();
 
 statement error cannot materialize call to current_timestamp
-EXPLAIN PHYSICAL PLAN FOR
+EXPLAIN PHYSICAL PLAN AS VERBOSE TEXT FOR
 CREATE MATERIALIZED VIEW mv AS
 SELECT pg_catalog.now();
 

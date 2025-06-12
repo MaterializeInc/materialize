@@ -93,7 +93,8 @@ statement ok
 CREATE TABLE with_primary_key(a int primary key, b int)
 
 query T multiline
-explain with(types) select * from (select * from with_primary_key limit 0);
+EXPLAIN OPTIMIZED PLAN WITH(TYPES) AS VERBOSE TEXT FOR
+select * from (select * from with_primary_key limit 0);
 ----
 Explained Query (fast path):
   Constant <empty>
