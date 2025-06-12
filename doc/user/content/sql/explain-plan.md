@@ -370,6 +370,15 @@ actually run).
 
 {{< /tabs >}}
 
+Operators are sometimes marked as `Fused ...`. We write this to mean that the operator is fused with its input. That is, if you see a `Fused X` operator above a `Y` operator:
+
+```
+→Fused X
+  →Y
+```
+
+Then the `X` and `Y` operators will be combined into a single, more efficient operator.
+
 ## Examples
 
 For the following examples, let's assume that you have [the auction house load generator](/sql/create-source/load-generator/#creating-an-auction-load-generator) created in your current environment.

@@ -118,25 +118,42 @@ impl Plan {
                         }
                     }
                     GetPlan::Arrangement(key, Some(val), mfp) => {
+                        if !mfp.expressions.is_empty() || !mfp.predicates.is_empty() {
+                            writeln!(f, "{}→Fused Map/Filter/Project", ctx.indent)?;
+                            ctx.indent += 1;
+                            mode.expr(mfp, None).fmt_default_text(f, ctx)?;
+                            ctx.indent += 1;
+                        }
+
                         writeln!(f, "{}→Index Lookup on {id}{annotations}", ctx.indent)?;
                         ctx.indent += 1;
-                        mode.expr(mfp, None).fmt_default_text(f, ctx)?;
                         let key = CompactScalars(mode.seq(key, None));
                         write!(f, "{}Key: ({key}) ", ctx.indent)?;
                         let val = mode.expr(val, None);
                         writeln!(f, "Value: {val}")?;
                     }
                     GetPlan::Arrangement(key, None, mfp) => {
+                        if !mfp.expressions.is_empty() || !mfp.predicates.is_empty() {
+                            writeln!(f, "{}→Fused Map/Filter/Project", ctx.indent)?;
+                            ctx.indent += 1;
+                            mode.expr(mfp, None).fmt_default_text(f, ctx)?;
+                            ctx.indent += 1;
+                        }
+
                         writeln!(f, "{}→Arranged {id}{annotations}", ctx.indent)?;
                         ctx.indent += 1;
-                        mode.expr(mfp, None).fmt_default_text(f, ctx)?;
                         let key = CompactScalars(mode.seq(key, None));
                         writeln!(f, "{}Key: ({key})", ctx.indent)?;
                     }
                     GetPlan::Collection(mfp) => {
+                        if !mfp.expressions.is_empty() || !mfp.predicates.is_empty() {
+                            writeln!(f, "{}→Fused Map/Filter/Project", ctx.indent)?;
+                            ctx.indent += 1;
+                            mode.expr(mfp, None).fmt_default_text(f, ctx)?;
+                            ctx.indent += 1;
+                        }
+
                         writeln!(f, "{}→Read {id}{annotations}", ctx.indent)?;
-                        ctx.indent += 1;
-                        mode.expr(mfp, None).fmt_default_text(f, ctx)?;
                     }
                 }
                 ctx.indent.reset(); // reset the original indent level
@@ -184,7 +201,7 @@ impl Plan {
                     }
                     Ok(())
                 })?;
-                writeln!(f, "{}→Return{}", ctx.indent, annotations)?;
+                writeln!(f, "{}→Return{annotations}", ctx.indent)?;
                 ctx.indented(|ctx| head.fmt_text(f, ctx))?;
             }
             Mfp {
@@ -210,8 +227,16 @@ impl Plan {
                 func,
                 exprs,
                 mfp_after,
-                input_key,
+                input_key: _,
             } => {
+                ctx.indent.set();
+                if !mfp_after.expressions.is_empty() || !mfp_after.predicates.is_empty() {
+                    writeln!(f, "{}→Fused Map/Filter/Project", ctx.indent)?;
+                    ctx.indent += 1;
+                    mode.expr(mfp_after, None).fmt_default_text(f, ctx)?;
+                    ctx.indent += 1;
+                }
+
                 let exprs = mode.seq(exprs, None);
                 let exprs = CompactScalars(exprs);
                 writeln!(
@@ -219,19 +244,11 @@ impl Plan {
                     "{}→Table Function {func}({exprs}){annotations}",
                     ctx.indent
                 )?;
-                ctx.indented(|ctx| {
-                    if !mfp_after.expressions.is_empty() || !mfp_after.predicates.is_empty() {
-                        writeln!(f, "{}Post-process Map/Filter/Project", ctx.indent)?;
-                        ctx.indented(|ctx| mode.expr(mfp_after, None).fmt_default_text(f, ctx))?;
-                    }
-                    if let Some(key) = input_key {
-                        let key = mode.seq(key, None);
-                        let key = CompactScalars(key);
-                        writeln!(f, "{}Input key: ({key})", ctx.indent)?;
-                    }
+                ctx.indent += 1;
 
-                    input.fmt_text(f, ctx)
-                })?;
+                input.fmt_text(f, ctx)?;
+
+                ctx.indent.reset();
             }
             Join { inputs, plan } => {
                 use crate::plan::join::JoinPlan;
@@ -271,9 +288,17 @@ impl Plan {
                 input,
                 key_val_plan,
                 plan,
-                input_key,
+                input_key: _,
                 mfp_after,
             } => {
+                ctx.indent.set();
+                if !mfp_after.expressions.is_empty() || !mfp_after.predicates.is_empty() {
+                    writeln!(f, "{}→Fused Map/Filter/Project", ctx.indent)?;
+                    ctx.indent += 1;
+                    mode.expr(mfp_after, None).fmt_default_text(f, ctx)?;
+                    ctx.indent += 1;
+                }
+
                 use crate::plan::reduce::ReducePlan;
                 match plan {
                     ReducePlan::Distinct => {
@@ -310,12 +335,23 @@ impl Plan {
                         ctx.indented(|ctx| plan.fmt_text(f, ctx))?;
                     }
                     ReducePlan::Basic(plan) => {
+                        ctx.indent.set();
+                        if let BasicPlan::Single(SingleBasicPlan {
+                            fused_unnest_list, ..
+                        }) = &plan
+                        {
+                            if *fused_unnest_list {
+                                writeln!(f, "{}→Fused Table Function unnest_list", ctx.indent)?;
+                                ctx.indent += 1;
+                            }
+                        }
                         writeln!(
                             f,
                             "{}→Non-incremental GroupAggregate{annotations}",
                             ctx.indent
                         )?;
                         ctx.indented(|ctx| plan.fmt_text(f, ctx))?;
+                        ctx.indent.reset();
                     }
                     ReducePlan::Collation(plan) => {
                         writeln!(
@@ -330,23 +366,21 @@ impl Plan {
                 ctx.indented(|ctx| {
                     let kvp = key_val_plan.key_plan.deref();
                     if !kvp.expressions.is_empty() || !kvp.predicates.is_empty() {
-                        writeln!(f, "{}Aggregate Key Map/Filter/Project", ctx.indent)?;
+                        writeln!(
+                            f,
+                            "{}Aggregate Key Map/Filter/Project{annotations}",
+                            ctx.indent
+                        )?;
                         ctx.indented(|ctx| {
                             let key_plan = mode.expr(key_val_plan.key_plan.deref(), None);
                             key_plan.fmt_text(f, ctx)
                         })?;
                     }
-                    if let Some(key) = input_key {
-                        let key = CompactScalars(mode.seq(key, None));
-                        writeln!(f, "{}Input key: ({key})", ctx.indent)?;
-                    }
-                    if !mfp_after.expressions.is_empty() || !mfp_after.predicates.is_empty() {
-                        writeln!(f, "{}Post-process Map/Filter/Project", ctx.indent)?;
-                        ctx.indented(|ctx| mode.expr(mfp_after, None).fmt_default_text(f, ctx))?;
-                    }
 
                     input.fmt_text(f, ctx)
                 })?;
+
+                ctx.indent.reset();
             }
             TopK { input, top_k_plan } => {
                 use crate::plan::top_k::TopKPlan;
@@ -409,7 +443,10 @@ impl Plan {
                                 let limit = mode.expr(limit, None);
                                 writeln!(f, "{}Limit {limit}", ctx.indent)?;
                             }
-
+                            if plan.offset != 0 {
+                                let offset = plan.offset;
+                                writeln!(f, "{}Offset {offset}", ctx.indent)?;
+                            }
                             Ok(())
                         })?;
                     }
@@ -457,7 +494,7 @@ impl Plan {
             ArrangeBy {
                 input,
                 forms,
-                input_key,
+                input_key: _,
                 input_mfp,
             } => {
                 if forms.raw && forms.arranged.is_empty() {
@@ -466,10 +503,6 @@ impl Plan {
                     writeln!(f, "{}→Arrange{annotations}", ctx.indent)?;
                 }
                 ctx.indented(|ctx| {
-                    if let Some(key) = input_key {
-                        let key = CompactScalars(mode.seq(key, None));
-                        writeln!(f, "{}Input key: ({key})", ctx.indent)?;
-                    }
                     if !input_mfp.expressions.is_empty() || !input_mfp.predicates.is_empty() {
                         writeln!(f, "{}Pre-process Map/Filter/Project", ctx.indent)?;
                         ctx.indented(|ctx| mode.expr(input_mfp, None).fmt_default_text(f, ctx))?;
@@ -984,13 +1017,24 @@ impl LinearJoinPlan {
         ctx: &mut PlanRenderingContext<'_, Plan>,
     ) -> fmt::Result {
         for (i, plan) in self.stage_plans.iter().enumerate().rev() {
-            write!(f, "{}Join stage %{i}: ", ctx.indent)?;
             let lookup_relation = &plan.lookup_relation;
+            write!(f, "{}Join stage {i} in %{lookup_relation}", ctx.indent)?;
             if !plan.lookup_key.is_empty() {
                 let lookup_key = CompactScalarSeq(&plan.lookup_key);
-                writeln!(f, "Lookup key {lookup_key} in %{lookup_relation}",)?;
+                writeln!(f, " with lookup key {lookup_key}",)?;
             } else {
-                writeln!(f, "Lookup in %{lookup_relation}")?;
+                writeln!(f)?;
+            }
+            if plan.closure.maps_or_filters() {
+                ctx.indented(|ctx| plan.closure.fmt_default_text(f, ctx))?;
+            }
+        }
+        if let Some(final_closure) = &self.final_closure {
+            if final_closure.maps_or_filters() {
+                ctx.indented(|ctx| {
+                    writeln!(f, "{}Final closure:", ctx.indent)?;
+                    ctx.indented(|ctx| final_closure.fmt_default_text(f, ctx))
+                })?;
             }
         }
         Ok(())
@@ -1174,6 +1218,7 @@ impl DeltaPathPlan {
             DeltaStagePlan {
                 lookup_key,
                 lookup_relation,
+                closure,
                 ..
             },
         ) in self.stage_plans.iter().enumerate()
@@ -1182,11 +1227,22 @@ impl DeltaPathPlan {
                 let lookup_key = CompactScalarSeq(lookup_key);
                 writeln!(
                     f,
-                    "{}stage %{i}: lookup key {lookup_key} in %{lookup_relation}",
+                    "{}stage {i} for %{lookup_relation}: lookup key {lookup_key}",
                     ctx.indent
                 )?;
             } else {
-                writeln!(f, "{}stage %{i}: lookup in %{lookup_relation}", ctx.indent)?;
+                writeln!(f, "{}stage %{i} for  %{lookup_relation}", ctx.indent)?;
+            }
+            if closure.maps_or_filters() {
+                ctx.indented(|ctx| closure.fmt_default_text(f, ctx))?;
+            }
+        }
+        if let Some(final_closure) = &self.final_closure {
+            if final_closure.maps_or_filters() {
+                ctx.indented(|ctx| {
+                    writeln!(f, "{}Final closure:", ctx.indent)?;
+                    ctx.indented(|ctx| final_closure.fmt_default_text(f, ctx))
+                })?;
             }
         }
         Ok(())
@@ -1313,9 +1369,20 @@ impl JoinClosure {
         f: &mut fmt::Formatter<'_>,
         ctx: &mut PlanRenderingContext<'_, Plan>,
     ) -> fmt::Result {
-        // NB this code path should not be live, as fmt_default_text for
-        // `JoinClosure` is not used anywhere
-        self.fmt_verbose_text(f, ctx)
+        let mode = HumanizedExplain::new(ctx.config.redacted);
+        if !self.before.expressions.is_empty() || !self.before.predicates.is_empty() {
+            mode.expr(self.before.deref(), None).fmt_text(f, ctx)?;
+        }
+        if !self.ready_equivalences.is_empty() {
+            let equivalences = separated(
+                " AND ",
+                self.ready_equivalences
+                    .iter()
+                    .map(|equivalence| separated(" = ", mode.seq(equivalence, None))),
+            );
+            writeln!(f, "{}Equivalences: {equivalences}", ctx.indent)?;
+        }
+        Ok(())
     }
 
     fn fmt_verbose_text(
@@ -1493,14 +1560,10 @@ impl BasicPlan {
             BasicPlan::Single(SingleBasicPlan {
                 index: _,
                 expr,
-                fused_unnest_list,
+                fused_unnest_list: _,
             }) => {
                 let agg = mode.expr(expr, None);
-                write!(f, "{}Aggregation: {agg}", ctx.indent)?;
-                if *fused_unnest_list {
-                    write!(f, " (fused unnest_list)")?;
-                }
-                writeln!(f)?;
+                writeln!(f, "{}Aggregation: {agg}", ctx.indent)?;
             }
             BasicPlan::Multiple(aggs) => {
                 let mode = HumanizedExplain::new(ctx.config.redacted);

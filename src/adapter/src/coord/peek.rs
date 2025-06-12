@@ -150,12 +150,12 @@ impl FastPathPlan {
                 write!(f, "{}→Constant ", ctx.indent)?;
 
                 match rows {
-                    Ok(rows) => write!(f, "({} rows)", rows.len())?,
+                    Ok(rows) => writeln!(f, "({} rows)", rows.len())?,
                     Err(err) => {
                         if mode.redacted() {
-                            write!(f, "(error: █)")?;
+                            writeln!(f, "(error: █)")?;
                         } else {
-                            write!(f, "(error: {})", err.to_string().quoted(),)?;
+                            writeln!(f, "(error: {})", err.to_string().quoted(),)?;
                         }
                     }
                 }

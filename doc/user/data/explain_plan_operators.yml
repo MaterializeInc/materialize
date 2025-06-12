@@ -39,7 +39,7 @@ operators:
     description: |
       Produces rows from either an existing relation (source/view/materialized view/table) or from a previous
       CTE in the same plan.
-      There may be a `Map/Filter/Project` included in the lookup.
+      A `Fused Map/Filter/Project` above will be combined with this operator.
 
       There are four types of `Get`.
 
@@ -87,6 +87,8 @@ operators:
     description: |
       Computes new columns (maps), filters columns, and projects away columns. Works row-by-row.
       Maps and filters will be printed, but projects will not.
+
+      These may be marked as `Fused Map/Filter/Project`, which means they will be run efficiently as part of the operator beneath them.
     uses_memory: False
     memory_details: ""
     expansive: True
@@ -117,6 +119,11 @@ operators:
     plan_types: "LIR"
     description: |
       Appends the result of some (one-to-many) [table function](/sql/functions/#table-functions) to each row in the input.
+
+      A `Fused Table Function unnest_list` may occur combined with a `Reduce`; these are used to efficiently compile window functions from SQL to dataflows.
+
+      A `Fused Map/Filter/Project` above will be combined with this operator.
+
     uses_memory: False
     memory_details: ""
     expansive: True
@@ -246,7 +253,7 @@ operators:
       5. `Non-incremental GroupAggregate` (e.g., window functions, `list_agg`) corresponds to a single non-incremental aggregation.
          These are the most computationally intensive reductions.
 
-      These operators often include `Map/Filter/Project`s as part of their pre- and post-processing.
+      A `Fused Map/Filter/Project` above will be combined with this operator.
 
     uses_memory: True
     memory_details: |

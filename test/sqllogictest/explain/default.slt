@@ -117,6 +117,7 @@ SELECT 1 / 0
 ----
 Explained Query (fast path):
   →Constant (error: "division by zero")
+
 Target cluster: quickstart
 
 EOF
@@ -128,6 +129,7 @@ EXPLAIN WITH(humanized expressions)
 ----
 Explained Query (fast path):
   →Constant (2 rows)
+
 Target cluster: mz_catalog_server
 
 EOF
@@ -224,7 +226,6 @@ SELECT generate_series(a, b) from t
 ----
 Explained Query:
   →Table Function generate_series(#0{a}, #1{b}, 1)
-    Input key: (#0{a})
     →Arranged materialize.public.t
 
 Used Indexes:
@@ -246,13 +247,11 @@ Explained Query:
         Arrangement 0: #0
       →Consolidating Union
         →Unarranged Raw Stream
-          Input key: (#0)
           →Distinct GroupAggregate
             →Arranged materialize.public.t
               Key: (#0{a})
         →Negate Diffs
           →Unarranged Raw Stream
-            Input key: (#0)
             →Distinct GroupAggregate
               →Read materialize.public.mv
 
@@ -302,7 +301,6 @@ Explained Query:
     Order By #1 asc nulls_last, #0 desc nulls_first
     Limit 5
     →Unarranged Raw Stream
-      Input key: (#0{a})
       →Arranged materialize.public.t
 
 Used Indexes:
@@ -346,7 +344,6 @@ Explained Query:
       Map: abs((#0{"?column?"} - #1{"?column?"}))
         →Union
           →Unarranged Raw Stream
-            Input key: ()
             →Arranged l0
           →Map/Filter/Project
             Map: null, null
@@ -373,7 +370,6 @@ Explained Query:
     Map: abs((#1{"?column?"} - #2{"?column?"}))
       →Consolidating Monotonic GroupAggregate
         Aggregations: min, max
-        Input key: (#0{a})
         →Arranged materialize.public.t
 
 Used Indexes:
@@ -392,13 +388,14 @@ Explained Query:
   →With
     cte l0 =
       →Differential Join %1 » %0
-        Join stage %0: Lookup key #0{a} in %0
+        Join stage 0 in %0 with lookup key #0{a}
         →Arranged materialize.public.t
         →Distinct GroupAggregate
           →Differential Join %0 » %1
-            Join stage %0: Lookup in %1
+            Join stage 0 in %1
+              project=(#0)
+              filter=((#0{a} < #1{a}))
             →Arrange
-              Input key: (#0)
               Keys: 2 arrangements available, no raw stream
                 Arrangement 0: (empty key)
                 Arrangement 1: #0
@@ -411,16 +408,17 @@ Explained Query:
               →Read materialize.public.mv
   →Return
     →Differential Join %1 » %0
-      Join stage %0: Lookup key #1 in %0
+      Join stage 0 in %0 with lookup key #1
       →Arrange
         Keys: 1 arrangement available, plus raw stream
           Arrangement 0: #1
         →Stream l0
       →Distinct GroupAggregate
         →Differential Join %0 » %1
-          Join stage %0: Lookup in %1
+          Join stage 0 in %1
+            project=(#0)
+            filter=((#0{b} > #1{b}))
           →Arrange
-            Input key: (#0)
             Keys: 2 arrangements available, no raw stream
               Arrangement 0: (empty key)
               Arrangement 1: #0
@@ -457,14 +455,15 @@ Explained Query:
       →Consolidating Monotonic Top1
         Group By#0
         →Differential Join %0 » %1
-          Join stage %0: Lookup key #1{b} in %1
+          Join stage 0 in %1 with lookup key #1{b}
+            filter=((#0{b}) IS NOT NULL)
           →Arranged l2
           →Arranged materialize.public.iv
     cte l4 =
       →Consolidating Monotonic Top1
         Group By#0
         →Differential Join %0 » %1
-          Join stage %0: Lookup key #1{b} in %1
+          Join stage 0 in %1 with lookup key #1{b}
           →Arranged l2
           →Arrange
             Keys: 1 arrangement available, plus raw stream
@@ -473,14 +472,14 @@ Explained Query:
   →Return
     →Delta Join [%0 » %1 » %2] [%1 » %2 » %0] [%2 » %1 » %0]
       Delta join path for input %0
-        stage %0: lookup key #0 in %1
-        stage %1: lookup key #0 in %2
+        stage 0 for %1: lookup key #0
+        stage 1 for %2: lookup key #0
       Delta join path for input %1
-        stage %0: lookup key #0 in %2
-        stage %1: lookup key #0 in %0
+        stage 0 for %2: lookup key #0
+        stage 1 for %0: lookup key #0
       Delta join path for input %2
-        stage %0: lookup key #0 in %1
-        stage %1: lookup key #0 in %0
+        stage 0 for %1: lookup key #0
+        stage 1 for %0: lookup key #0
       →Arrange
         Keys: 1 arrangement available, plus raw stream
           Arrangement 0: #0
@@ -496,7 +495,6 @@ Explained Query:
                 →Negate Diffs
                   →Read l3
                 →Unarranged Raw Stream
-                  Input key: (#0)
                   →Arranged l1
       →Arrange
         Keys: 1 arrangement available, plus raw stream
@@ -509,7 +507,6 @@ Explained Query:
                 →Negate Diffs
                   →Read l4
                 →Unarranged Raw Stream
-                  Input key: (#0)
                   →Arranged l1
 
 Source materialize.public.mv
@@ -534,9 +531,10 @@ RIGHT JOIN t as t3 ON t2.b = t3.b
 Explained Query:
   →With
     cte l0 =
-      →Arranged materialize.public.t
+      →Fused Map/Filter/Project
         Filter: (#1{b}) IS NOT NULL
-        Key: (#0{a})
+          →Arranged materialize.public.t
+            Key: (#0{a})
     cte l1 =
       →Arrange
         Keys: 1 arrangement available, plus raw stream
@@ -550,14 +548,14 @@ Explained Query:
     cte l3 =
       →Delta Join [%0 » %1 » %2] [%1 » %0 » %2] [%2 » %0 » %1]
         Delta join path for input %0
-          stage %0: lookup key #1{b} in %1
-          stage %1: lookup key #0{b} in %2
+          stage 0 for %1: lookup key #1{b}
+          stage 1 for %2: lookup key #0{b}
         Delta join path for input %1
-          stage %0: lookup key #1{b} in %0
-          stage %1: lookup key #0{b} in %2
+          stage 0 for %0: lookup key #1{b}
+          stage 1 for %2: lookup key #0{b}
         Delta join path for input %2
-          stage %0: lookup key #1{b} in %0
-          stage %1: lookup key #1{b} in %1
+          stage 0 for %0: lookup key #1{b}
+          stage 1 for %1: lookup key #1{b}
         →Arranged l1
         →Arranged l1
         →Arranged l2
@@ -568,7 +566,7 @@ Explained Query:
           →Consolidating Union
             →Negate Diffs
               →Differential Join %1 » %0
-                Join stage %0: Lookup key #0{b} in %0
+                Join stage 0 in %0 with lookup key #0{b}
                 →Arranged l2
                 →Distinct GroupAggregate
                   →Read l3
@@ -594,12 +592,15 @@ Explained Query:
       →Arrange
         Keys: 1 arrangement available, plus raw stream
           Arrangement 0: (empty key)
-        →Arranged materialize.public.t
+        →Fused Map/Filter/Project
           Map: (#0{a} * #1{b})
-          Key: (#0{a})
+            →Arranged materialize.public.t
+              Key: (#0{a})
   →Return
     →Differential Join %0 » %1
-      Join stage %0: Lookup in %1
+      Join stage 0 in %1
+        project=(#2)
+        map=((#0{v} + #1{v}))
       →Arranged l0
       →Arranged l0
 
@@ -639,9 +640,10 @@ materialize.public.iv_a_idx:
     →Stream materialize.public.iv
 
 materialize.public.iv:
-  →Arranged materialize.public.t
+  →Fused Map/Filter/Project
     Filter: (#0{a}) IS NOT NULL
-    Key: (#0{a})
+      →Arranged materialize.public.t
+        Key: (#0{a})
 
 Used Indexes:
   - materialize.public.t_a_idx (*** full scan ***)
@@ -657,7 +659,6 @@ INDEX iv_b_idx;
 ----
 materialize.public.iv_b_idx:
   →Arrange
-    Input key: (#0{a})
     Keys: 2 arrangements available, no raw stream
       Arrangement 0: #0{a}
       Arrangement 1: #1{b}
@@ -724,14 +725,15 @@ Explained Query:
         →Stream l0
     cte l2 =
       →Differential Join %1 » %0
-        Join stage %0: Lookup key #0{a} in %0
+        Join stage 0 in %0 with lookup key #0{a}
+          project=(#0, #2, #1)
+          filter=((#0 != #1{m}))
         →Arranged materialize.public.t
         →Consolidating Monotonic GroupAggregate
           Aggregations: max
           →Differential Join %0 » %1
-            Join stage %0: Lookup in %1
+            Join stage 0 in %1
             →Arrange
-              Input key: (#0)
               Keys: 2 arrangements available, no raw stream
                 Arrangement 0: (empty key)
                 Arrangement 1: #0
@@ -740,7 +742,9 @@ Explained Query:
             →Arranged l1
   →Return
     →Differential Join %1 » %0
-      Join stage %0: Lookup key #0 in %0
+      Join stage 0 in %0 with lookup key #0
+        project=(#0, #2, #3, #1)
+        filter=((#0 != #1{m}))
       →Arrange
         Keys: 1 arrangement available, plus raw stream
           Arrangement 0: #0
@@ -748,9 +752,8 @@ Explained Query:
       →Consolidating Monotonic GroupAggregate
         Aggregations: max
         →Differential Join %0 » %1
-          Join stage %0: Lookup in %1
+          Join stage 0 in %1
           →Arrange
-            Input key: (#0)
             Keys: 2 arrangements available, no raw stream
               Arrangement 0: (empty key)
               Arrangement 1: #0
@@ -780,7 +783,7 @@ Explained Query:
           Key: (#0{a})
   →Return
     →Differential Join %0 » %1
-      Join stage %0: Lookup in %1
+      Join stage 0 in %1
       →Arranged l0
       →Arranged l0
 
@@ -804,9 +807,10 @@ WHERE t1.b = t2.b AND t2.b = t3.b
 Explained Query:
   →With
     cte l0 =
-      →Arranged materialize.public.t
+      →Fused Map/Filter/Project
         Filter: (#1{b}) IS NOT NULL
-        Key: (#0{a})
+          →Arranged materialize.public.t
+            Key: (#0{a})
     cte l1 =
       →Arrange
         Keys: 1 arrangement available, plus raw stream
@@ -815,14 +819,14 @@ Explained Query:
   →Return
     →Delta Join [%0 » %1 » %2] [%1 » %0 » %2] [%2 » %0 » %1]
       Delta join path for input %0
-        stage %0: lookup key #1{b} in %1
-        stage %1: lookup key #0{b} in %2
+        stage 0 for %1: lookup key #1{b}
+        stage 1 for %2: lookup key #0{b}
       Delta join path for input %1
-        stage %0: lookup key #1{b} in %0
-        stage %1: lookup key #0{b} in %2
+        stage 0 for %0: lookup key #1{b}
+        stage 1 for %2: lookup key #0{b}
       Delta join path for input %2
-        stage %0: lookup key #1{b} in %0
-        stage %1: lookup key #1{b} in %1
+        stage 0 for %0: lookup key #1{b}
+        stage 1 for %1: lookup key #1{b}
       →Arranged l1
       →Arranged l1
       →Arrange
@@ -864,14 +868,24 @@ WHERE a = c and d = e and b = f
 Explained Query:
   →Delta Join [%0 » %1 » %2] [%1 » %0 » %2] [%2 » %1 » %0]
     Delta join path for input %0
-      stage %0: lookup key #0{c} in %1
-      stage %1: lookup key #0{e} in %2
+      stage 0 for %1: lookup key #0{c}
+        filter=((#2{d}) IS NOT NULL)
+      stage 1 for %2: lookup key #0{e}
+        Equivalences: #3{f} = #2{b}
     Delta join path for input %1
-      stage %0: lookup key #0{a} in %0
-      stage %1: lookup key #0{e} in %2
+      stage 0 for %0: lookup key #0{a}
+        project=(#0, #2, #1)
+        filter=((#0{a}) IS NOT NULL AND (#2{b}) IS NOT NULL)
+      stage 1 for %2: lookup key #0{e}
+        Equivalences: #3{f} = #2{b}
     Delta join path for input %2
-      stage %0: lookup key #1{d} in %1
-      stage %1: lookup key #0{a} in %0
+      stage 0 for %1: lookup key #1{d}
+        project=(#2, #0, #1)
+        filter=((#0{d}) IS NOT NULL)
+      stage 1 for %0: lookup key #0{a}
+        project=(#0, #3, #1)
+        filter=((#0{a}) IS NOT NULL AND (#3{b}) IS NOT NULL)
+        Equivalences: #2{f} = #3{b}
     →Arranged materialize.public.t
     →Arranged materialize.public.u
     →Arranged materialize.public.v
@@ -896,14 +910,24 @@ WHERE a = c and d = e and b = f
 Explained Query:
   →Delta Join [%0 » %1 » %2] [%1 » %0 » %2] [%2 » %1 » %0]
     Delta join path for input %0
-      stage %0: lookup key #0{c} in %1
-      stage %1: lookup key #0{e} in %2
+      stage 0 for %1: lookup key #0{c}
+        filter=((#2{d}) IS NOT NULL)
+      stage 1 for %2: lookup key #0{e}
+        Equivalences: #3{f} = #2{b}
     Delta join path for input %1
-      stage %0: lookup key #0{a} in %0
-      stage %1: lookup key #0{e} in %2
+      stage 0 for %0: lookup key #0{a}
+        project=(#0, #2, #1)
+        filter=((#0{a}) IS NOT NULL AND (#2{b}) IS NOT NULL)
+      stage 1 for %2: lookup key #0{e}
+        Equivalences: #3{f} = #2{b}
     Delta join path for input %2
-      stage %0: lookup key #1{d} in %1
-      stage %1: lookup key #0{a} in %0
+      stage 0 for %1: lookup key #1{d}
+        project=(#2, #0, #1)
+        filter=((#0{d}) IS NOT NULL)
+      stage 1 for %0: lookup key #0{a}
+        project=(#0, #3, #1)
+        filter=((#0{a}) IS NOT NULL AND (#3{b}) IS NOT NULL)
+        Equivalences: #2{f} = #3{b}
     →Arranged materialize.public.t
     →Arranged materialize.public.u
     →Arranged materialize.public.v
@@ -938,14 +962,22 @@ WHERE b = c and d = e
 Explained Query:
   →Delta Join [%0 » %1 » %2] [%1 » %0 » %2] [%2 » %1 » %0]
     Delta join path for input %0
-      stage %0: lookup key #0{c} in %1
-      stage %1: lookup key #0{e} in %2
+      stage 0 for %1: lookup key #0{c}
+        project=(#1, #0, #2)
+        filter=((#2{d}) IS NOT NULL)
+      stage 1 for %2: lookup key #0{e}
     Delta join path for input %1
-      stage %0: lookup key #1{b} in %0
-      stage %1: lookup key #0{e} in %2
+      stage 0 for %0: lookup key #1{b}
+        project=(#2, #0, #1)
+        filter=((#0{b}) IS NOT NULL)
+      stage 1 for %2: lookup key #0{e}
     Delta join path for input %2
-      stage %0: lookup key #1{d} in %1
-      stage %1: lookup key #1{b} in %0
+      stage 0 for %1: lookup key #1{d}
+        project=(#2, #0, #1)
+        filter=((#0{d}) IS NOT NULL)
+      stage 1 for %0: lookup key #1{b}
+        project=(#3, #0..=#2)
+        filter=((#0{b}) IS NOT NULL)
     →Arranged materialize.public.t
     →Arranged materialize.public.u
     →Arranged materialize.public.v
@@ -970,14 +1002,22 @@ WHERE b = c and d = e
 Explained Query:
   →Delta Join [%0 » %1 » %2] [%1 » %0 » %2] [%2 » %1 » %0]
     Delta join path for input %0
-      stage %0: lookup key #0{c} in %1
-      stage %1: lookup key #0{e} in %2
+      stage 0 for %1: lookup key #0{c}
+        project=(#1, #0, #2)
+        filter=((#2{d}) IS NOT NULL)
+      stage 1 for %2: lookup key #0{e}
     Delta join path for input %1
-      stage %0: lookup key #1{b} in %0
-      stage %1: lookup key #0{e} in %2
+      stage 0 for %0: lookup key #1{b}
+        project=(#2, #0, #1)
+        filter=((#0{b}) IS NOT NULL)
+      stage 1 for %2: lookup key #0{e}
     Delta join path for input %2
-      stage %0: lookup key #1{d} in %1
-      stage %1: lookup key #1{b} in %0
+      stage 0 for %1: lookup key #1{d}
+        project=(#2, #0, #1)
+        filter=((#0{d}) IS NOT NULL)
+      stage 1 for %0: lookup key #1{b}
+        project=(#3, #0..=#2)
+        filter=((#0{b}) IS NOT NULL)
     →Arranged materialize.public.t
     →Arranged materialize.public.u
     →Arranged materialize.public.v
@@ -1002,14 +1042,18 @@ WHERE a = c and b = e
 Explained Query:
   →Delta Join [%0 » %1 » %2] [%1 » %0 » %2] [%2 » %0 » %1]
     Delta join path for input %0
-      stage %0: lookup key #0{c} in %1
-      stage %1: lookup key #0{e} in %2
+      stage 0 for %1: lookup key #0{c}
+      stage 1 for %2: lookup key #0{e}
     Delta join path for input %1
-      stage %0: lookup key #0{a} in %0
-      stage %1: lookup key #0{e} in %2
+      stage 0 for %0: lookup key #0{a}
+        project=(#0, #2, #1)
+        filter=((#0{a}) IS NOT NULL AND (#2{b}) IS NOT NULL)
+      stage 1 for %2: lookup key #0{e}
     Delta join path for input %2
-      stage %0: lookup key #1{b} in %0
-      stage %1: lookup key #0{c} in %1
+      stage 0 for %0: lookup key #1{b}
+        project=(#2, #0, #1)
+        filter=((#0{b}) IS NOT NULL AND (#2{a}) IS NOT NULL)
+      stage 1 for %1: lookup key #0{c}
     →Arranged materialize.public.t
     →Arranged materialize.public.u
     →Arranged materialize.public.v
@@ -1038,7 +1082,7 @@ Explained Query:
       →Consolidating Monotonic GroupAggregate
         Aggregations: max
         →Differential Join %1 » %0
-          Join stage %0: Lookup key #0{a} in %0
+          Join stage 0 in %0 with lookup key #0{a}
           →Arranged materialize.public.t
           →Arrange
             Keys: 1 arrangement available, plus raw stream
@@ -1069,7 +1113,7 @@ Explained Query:
   →Consolidating Monotonic GroupAggregate
     Aggregations: max
     →Differential Join %1 » %0
-      Join stage %0: Lookup key #0{a}, #1{b} in %0
+      Join stage 0 in %0 with lookup key #0{a}, #1{b}
       →Arranged materialize.public.t
       →Arrange
         Keys: 1 arrangement available, plus raw stream
@@ -1134,7 +1178,7 @@ Explained Query:
         →Read materialize.public.r
   →Return
     →Differential Join %0 » %1
-      Join stage %0: Lookup key #0{f0}, #2{f2}..=#4{f4}, #6{f6}, #8{f8}, #9{f9}, #11{f11}..=#13{f13}, #15{f15}, #16{f16} in %1
+      Join stage 0 in %1 with lookup key #0{f0}, #2{f2}..=#4{f4}, #6{f6}, #8{f8}, #9{f9}, #11{f11}..=#13{f13}, #15{f15}, #16{f16}
       →Arranged l0
       →Arranged l0
 
@@ -1208,8 +1252,9 @@ FROM t1;
 Explained Query:
   →Map/Filter/Project
     Map: record_get[0](#0)
-      →Non-incremental GroupAggregate
-        Aggregation: lag[ignore_nulls=true, order_by=[#0 asc nulls_last]](row(row(row(#0), row(#0{x}, 3, "default")), (#0{x} || #0{x}))) (fused unnest_list)
+      →Fused Table Function unnest_list
+        →Non-incremental GroupAggregate
+          Aggregation: lag[ignore_nulls=true, order_by=[#0 asc nulls_last]](row(row(row(#0), row(#0{x}, 3, "default")), (#0{x} || #0{x})))
         →Stream materialize.public.t1
 
 Source materialize.public.t1
@@ -1226,8 +1271,9 @@ FROM t1;
 Explained Query:
   →Map/Filter/Project
     Map: record_get[0](#0)
-      →Non-incremental GroupAggregate
-        Aggregation: first_value[order_by=[#0 asc nulls_last] rows between 5 preceding and current row](row(row(row(#0), #0{x}), (#0{x} || #0{x}))) (fused unnest_list)
+      →Fused Table Function unnest_list
+        →Non-incremental GroupAggregate
+          Aggregation: first_value[order_by=[#0 asc nulls_last] rows between 5 preceding and current row](row(row(row(#0), #0{x}), (#0{x} || #0{x})))
         →Stream materialize.public.t1
 
 Source materialize.public.t1
@@ -1266,7 +1312,7 @@ WHERE t.b = u.c;
 ----
 Explained Query:
   →Differential Join %1 » %0
-    Join stage %0: Lookup key #1{b} in %0
+    Join stage 0 in %0 with lookup key #1{b}
     →Arrange
       Keys: 1 arrangement available, plus raw stream
         Arrangement 0: #1{b}
@@ -1291,7 +1337,7 @@ WHERE t.b = u.d;
 ----
 Explained Query:
   →Differential Join %1 » %0
-    Join stage %0: Lookup key #1{b} in %0
+    Join stage 0 in %0 with lookup key #1{b}
     →Arrange
       Keys: 1 arrangement available, plus raw stream
         Arrangement 0: #1{b}
@@ -1327,14 +1373,15 @@ WHERE t.a = u.c
 ----
 Explained Query:
   →Differential Join %0 » %1
-    Join stage %0: Lookup key #0{c} in %1
+    Join stage 0 in %1 with lookup key #0{c}
     →Arranged materialize.public.t
     →Arrange
       Keys: 1 arrangement available, plus raw stream
         Arrangement 0: #0{c}
-      →Arranged materialize.public.u
+      →Fused Map/Filter/Project
         Filter: (#1{c}) IS NOT NULL
-        Key: (#1{d})
+          →Arranged materialize.public.u
+            Key: (#1{d})
 
 Used Indexes:
   - materialize.public.u_d (*** full scan ***)
@@ -1358,14 +1405,18 @@ Explained Query:
   →Return
     →Delta Join [%0 » %1 » %2] [%1 » %0 » %2] [%2 » %0 » %1]
       Delta join path for input %0
-        stage %0: lookup key #0{a} in %1
-        stage %1: lookup key #0{a} in %2
+        stage 0 for %1: lookup key #0{a}
+        stage 1 for %2: lookup key #0{a}
       Delta join path for input %1
-        stage %0: lookup key #0{a} in %0
-        stage %1: lookup key #0{a} in %2
+        stage 0 for %0: lookup key #0{a}
+          project=(#0, #2, #0, #1)
+          filter=((#0{a}) IS NOT NULL)
+        stage 1 for %2: lookup key #0{a}
       Delta join path for input %2
-        stage %0: lookup key #0{a} in %0
-        stage %1: lookup key #0{a} in %1
+        stage 0 for %0: lookup key #0{a}
+          project=(#0, #2, #0, #1)
+          filter=((#0{a}) IS NOT NULL)
+        stage 1 for %1: lookup key #0{a}
       →Arranged l0
       →Arranged l0
       →Arranged l0
@@ -1396,12 +1447,16 @@ Explained Query:
     →Distinct GroupAggregate
       →Union
         →Differential Join %0 » %1
-          Join stage %0: Lookup key #0{a} in %1
+          Join stage 0 in %1 with lookup key #0{a}
+            project=(#3, #4)
+            filter=((#0{a}) IS NOT NULL)
+            map=((#0{a} + #0{a}), (#1{b} + #2{b}))
           →Arranged l0
           →Arranged l0
-        →Arranged materialize.public.t
+        →Fused Map/Filter/Project
           Filter: (#1{b} > 5)
-          Key: (#0{a})
+            →Arranged materialize.public.t
+              Key: (#0{a})
 
 Used Indexes:
   - materialize.public.t_a_idx_1 (*** full scan ***, differential join)
@@ -1427,19 +1482,23 @@ Explained Query:
       →Arrange
         Keys: 1 arrangement available, plus raw stream
           Arrangement 0: #1{b}
-        →Arranged materialize.public.t
+        →Fused Map/Filter/Project
           Filter: (#1{b}) IS NOT NULL
-          Key: (#0{a})
+            →Arranged materialize.public.t
+              Key: (#0{a})
   →Return
     →Distinct GroupAggregate
       →Union
         →Differential Join %0 » %1
-          Join stage %0: Lookup key #1{b} in %1
+          Join stage 0 in %1 with lookup key #1{b}
+            project=(#3, #4)
+            map=((#1{a} + #2{a}), (#0{b} + #0{b}))
           →Arranged l0
           →Arranged l0
-        →Arranged materialize.public.t
+        →Fused Map/Filter/Project
           Filter: (#1{b} > 5)
-          Key: (#0{a})
+            →Arranged materialize.public.t
+              Key: (#0{a})
 
 Used Indexes:
   - materialize.public.t_a_idx_1 (*** full scan ***)
@@ -1474,7 +1533,6 @@ Explained Query:
   →With
     cte l0 =
       →Arrange
-        Input key: (#0{a})
         Keys: 2 arrangements available, no raw stream
           Arrangement 0: #0{a}
           Arrangement 1: #1{b}
@@ -1483,12 +1541,15 @@ Explained Query:
     →Distinct GroupAggregate
       →Union
         →Differential Join %0 » %1
-          Join stage %0: Lookup key #1{b} in %1
+          Join stage 0 in %1 with lookup key #1{b}
+            project=(#3, #4)
+            map=((#1{a} + #2{a}), (#0{b} + #0{b}))
           →Arranged l0
           →Arranged l0
-        →Arranged materialize.public.t_non_null
+        →Fused Map/Filter/Project
           Filter: (#1{b} > 5)
-          Key: (#0{a})
+            →Arranged materialize.public.t_non_null
+              Key: (#0{a})
 
 Used Indexes:
   - materialize.public.t_non_null_a_idx (*** full scan ***)
@@ -1513,22 +1574,23 @@ Explained Query:
   →Distinct GroupAggregate
     →Union
       →Differential Join %0 » %1
-        Join stage %0: Lookup key (#1{b} + 1) in %1
+        Join stage 0 in %1 with lookup key (#1{b} + 1)
+          project=(#4, #5)
+          map=((#1{a} + #2{a}), (#0{b} + #3{b}))
         →Arrange
-          Input key: (#0{a})
           Keys: 2 arrangements available, no raw stream
             Arrangement 0: #0{a}
             Arrangement 1: #1{b}
           →Arranged materialize.public.t_non_null
         →Arrange
-          Input key: (#0{a})
           Keys: 2 arrangements available, no raw stream
             Arrangement 0: #0{a}
             Arrangement 1: (#1{b} + 1)
           →Arranged materialize.public.t_non_null
-      →Arranged materialize.public.t_non_null
+      →Fused Map/Filter/Project
         Filter: (#1{b} > 5)
-        Key: (#0{a})
+          →Arranged materialize.public.t_non_null
+            Key: (#0{a})
 
 Used Indexes:
   - materialize.public.t_non_null_a_idx (*** full scan ***)
@@ -1548,10 +1610,9 @@ Explained Query:
   →Distinct GroupAggregate
     →Union
       →Unarranged Raw Stream
-        Input key: (#0{a})
         →Arranged materialize.public.t
       →Differential Join %1 » %0
-        Join stage %0: Lookup key #0{a} in %0
+        Join stage 0 in %0 with lookup key #0{a}
         →Arranged materialize.public.t
         →Arrange
           Keys: 1 arrangement available, plus raw stream
@@ -1585,27 +1646,27 @@ SELECT * FROM u WHERE d = 1;
 Explained Query:
   →Union
     →Unarranged Raw Stream
-      Input key: (#0{a})
       →Arranged materialize.public.t
     →Differential Join %1 » %0
-      Join stage %0: Lookup key #1{b} in %0
+      Join stage 0 in %0 with lookup key #1{b}
       →Arranged materialize.public.t
       →Arrange
         Keys: 1 arrangement available, plus raw stream
           Arrangement 0: #0
         →Constant (1 row)
     →Differential Join %1 » %0
-      Join stage %0: Lookup key #0{a} in %0
+      Join stage 0 in %0 with lookup key #0{a}
       →Arranged materialize.public.t
       →Arrange
         Keys: 1 arrangement available, plus raw stream
           Arrangement 0: #0
         →Constant (1 row)
-    →Arranged materialize.public.u
+    →Fused Map/Filter/Project
       Filter: (#1{c} = 3)
-      Key: (#1{d})
+        →Arranged materialize.public.u
+          Key: (#1{d})
     →Differential Join %1 » %0
-      Join stage %0: Lookup key #1{d} in %0
+      Join stage 0 in %0 with lookup key #1{d}
       →Arranged materialize.public.u
       →Arrange
         Keys: 1 arrangement available, plus raw stream
@@ -1760,7 +1821,7 @@ WHERE x = a AND b IN (8,9);
 ----
 Explained Query:
   →Differential Join %1 » %0
-    Join stage %0: Lookup key #0{x} in %0
+    Join stage 0 in %0 with lookup key #0{x}
     →Arrange
       Keys: 1 arrangement available, plus raw stream
         Arrangement 0: #0{x}
@@ -1787,7 +1848,7 @@ WHERE x = a AND b IN (8,9);
 ----
 Explained Query:
   →Differential Join %1 » %0
-    Join stage %0: Lookup key #0{x} in %0
+    Join stage 0 in %0 with lookup key #0{x}
     →Arrange
       Keys: 1 arrangement available, plus raw stream
         Arrangement 0: #0{x}
@@ -1822,7 +1883,6 @@ Explained Query:
   →Return
     →Union
       →Unarranged Raw Stream
-        Input key: ()
         →Arranged l0
       →Map/Filter/Project
         Map: 0
@@ -1859,7 +1919,6 @@ Explained Query:
   →Return
     →Union
       →Unarranged Raw Stream
-        Input key: ()
         →Arranged l0
       →Map/Filter/Project
         Map: 0
@@ -1891,7 +1950,6 @@ Explained Query:
   →Return
     →Union
       →Unarranged Raw Stream
-        Input key: ()
         →Arranged l0
       →Map/Filter/Project
         Map: 0
@@ -1937,21 +1995,25 @@ Explained Query:
   →With
     cte l0 =
       →Non-monotonic TopK
-        →Read materialize.public.t4
+        Offset 1
+        →Fused Map/Filter/Project
           Map: (#0{a} * #1{b})
+            →Read materialize.public.t4
     cte l1 =
       →Union
         →Stream l0
         →Map/Filter/Project
           Map: error("more than one record produced in subquery")
-            →Accumulable GroupAggregate
-              Simple aggregates: count(*)
-              Post-process Map/Filter/Project
-                Filter: (#0 > 1)
-              →Read l0
+            →Fused Map/Filter/Project
+              Filter: (#0 > 1)
+                →Accumulable GroupAggregate
+                  Simple aggregates: count(*)
+                  →Read l0
   →Return
     →Differential Join %0 » %1
-      Join stage %0: Lookup in %1
+      Join stage 0 in %1
+        project=(#3, #2)
+        map=((#0{a} + #1{b}))
       →Arrange
         Keys: 1 arrangement available, plus raw stream
           Arrangement 0: (empty key)
@@ -1966,7 +2028,6 @@ Explained Query:
               →Consolidating Union
                 →Negate Diffs
                   →Unarranged Raw Stream
-                    Input key: ()
                     →Distinct GroupAggregate
                       →Read l1
                 →Constant (1 row)
