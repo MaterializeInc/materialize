@@ -21,6 +21,7 @@ use differential_dataflow::lattice::Lattice;
 use differential_dataflow::trace::Description;
 use futures::{Stream, pin_mut};
 use futures_util::StreamExt;
+use itertools::Itertools;
 use mz_dyncfg::Config;
 use mz_ore::cast::CastFrom;
 use mz_ore::error::ErrorExt;
@@ -53,6 +54,8 @@ use crate::internal::trace::{ApplyMergeResult, FueledMergeRes};
 use crate::iter::{Consolidator, LowerBound, StructuredSort};
 use crate::{Metrics, PersistConfig, ShardId};
 
+use super::trace::{ActiveCompaction, IdHollowBatch, RunId};
+
 /// A request for compaction.
 ///
 /// This is similar to FueledMergeReq, but intentionally a different type. If we
@@ -66,10 +69,10 @@ pub struct CompactReq<T> {
     pub desc: Description<T>,
     /// The updates to include in the output batch. Any data in these outside of
     /// the output descriptions bounds should be ignored.
-    pub inputs: Vec<HollowBatch<T>>,
     /// If this compaction is a resume of a previously interrupted compaction
     /// then prev_batch contains the work done so far.
     pub prev_batch: Option<HollowBatch<T>>,
+    pub inputs: Vec<IdHollowBatch<T>>,
 }
 
 /// A response from compaction.
@@ -77,6 +80,8 @@ pub struct CompactReq<T> {
 pub struct CompactRes<T> {
     /// The compacted batch.
     pub output: HollowBatch<T>,
+    /// The runs that were compacted together to produce the output batch.
+    pub inputs: Vec<RunId>,
 }
 
 /// A snapshot of dynamic configs to make it easier to reason about an
@@ -276,9 +281,13 @@ where
         // (especially in aggregate). This heuristic is something we'll need to
         // tune over time.
         let should_compact = req.inputs.len() >= COMPACTION_HEURISTIC_MIN_INPUTS.get(&self.cfg)
-            || req.inputs.iter().map(|x| x.part_count()).sum::<usize>()
+            || req
+                .inputs
+                .iter()
+                .map(|x| x.batch.part_count())
+                .sum::<usize>()
                 >= COMPACTION_HEURISTIC_MIN_PARTS.get(&self.cfg)
-            || req.inputs.iter().map(|x| x.len).sum::<usize>()
+            || req.inputs.iter().map(|x| x.batch.len).sum::<usize>()
                 >= COMPACTION_HEURISTIC_MIN_UPDATES.get(&self.cfg);
         if !should_compact {
             self.metrics.compaction.skipped.inc();
@@ -322,7 +331,7 @@ where
         let total_input_bytes = req
             .inputs
             .iter()
-            .map(|batch| batch.encoded_size_bytes())
+            .map(|x| x.batch.encoded_size_bytes())
             .sum::<usize>();
         let timeout = Duration::max(
             // either our minimum timeout
@@ -335,7 +344,7 @@ where
         let compaction_schema_id = req
             .inputs
             .iter()
-            .flat_map(|batch| batch.run_meta.iter())
+            .flat_map(|x| x.batch.run_meta.iter())
             .filter_map(|run_meta| run_meta.schema)
             // It's an invariant that SchemaIds are ordered.
             .max();
@@ -466,7 +475,7 @@ where
                 }
                 metrics.compaction.noop.inc();
                 let mut part_deletes = PartDeletes::default();
-                for part in res.output.parts {
+                for part in &res.output.parts {
                     part_deletes.add(&part);
                 }
                 part_deletes
@@ -512,6 +521,20 @@ where
             all_parts.extend(parts);
             len += updates;
         }
+
+        let run_inputs = req
+            .inputs
+            .iter()
+            .map(|x| {
+                x.batch
+                    .runs()
+                    .enumerate()
+                    .map(|(i, _)| RunId(x.id, i))
+                    .collect::<Vec<_>>()
+            })
+            .flatten()
+            .collect::<Vec<_>>();
+
         Ok(CompactRes {
             output: HollowBatch::new(
                 req.desc.clone(),
@@ -520,6 +543,7 @@ where
                 all_run_meta,
                 all_run_splits,
             ),
+            inputs: run_inputs,
         })
     }
 
@@ -564,7 +588,7 @@ where
             // could be eligible for the optimization to better understand whether it's worth trying to
             // reintroduce it.
             let mut single_nonempty_batch = None;
-            for batch in &req.inputs {
+            for batch in req.inputs.iter().map(|x| &x.batch) {
                 if batch.len > 0 {
                     match single_nonempty_batch {
                         None => single_nonempty_batch = Some(batch),
@@ -593,6 +617,20 @@ where
             // Flatten the input batches into a single list of runs
             let ordered_runs =
                 Self::order_runs(&req, cfg.batch.preferred_order, &*blob, &*metrics).await?;
+
+            // There are two cases to consider here:
+            // 1. There are as many runs as there are input batches in which case we
+            //    should compact them together as space allows.
+            // 2. There are more runs than input batches, in which case we should compact them in chunks
+            //    grouped by the batch they belong to.
+            // In both cases, we should compact runs in the order they were written.
+            // This is all to make it easy to apply the compaction result incrementally.
+            // By ensuring we never write out batches that contain runs from seperate input batches
+            // (except for when each input batch has exactly one run), we can easily slot the
+            // results in to the existing batches. The special case of a single run per input batch
+            // means that each batch is, by itself, fully "compact", and the result of compaction
+            // will cleanly replace the input batches in a grouped manner.
+
 
             // Split the runs into manageable chunks
             let chunked_runs =
@@ -626,6 +664,8 @@ where
 
                 let mut run_cfg = cfg.clone();
                 run_cfg.batch.batch_builder_max_outstanding_parts = 1 + extra_outstanding_parts;
+
+                let input_runs = &runs.iter().map(|(run_id, _, _, _)| *run_id.clone()).collect::<Vec<_>>();
 
                 let batch = Self::compact_runs(
                     &run_cfg,
@@ -663,10 +703,13 @@ where
                         run_meta.clone(),
                         run_splits.clone(),
                     ),
+                    inputs: input_runs.clone(),
                 };
 
                 let res = FueledMergeRes {
                     output: res.output,
+                    new_active_compaction: None,
+                    inputs: res.inputs,
                 };
 
                 yield Ok(res);
@@ -683,61 +726,91 @@ where
     /// were written with a different target size than this build. Uses [Self::order_runs] to
     /// determine the order in which runs are selected.
     fn chunk_runs<'a>(
-        ordered_runs: &'a [(&'a Description<T>, &'a RunMeta, Cow<'a, [RunPart<T>]>)],
+        ordered_runs: &'a [(
+            RunId,
+            &'a Description<T>,
+            &'a RunMeta,
+            Cow<'a, [RunPart<T>]>,
+        )],
         cfg: &CompactConfig,
         metrics: &Metrics,
         run_reserved_memory_bytes: usize,
     ) -> Vec<(
-        Vec<(&'a Description<T>, &'a RunMeta, &'a [RunPart<T>])>,
+        Vec<(&'a RunId, &'a Description<T>, &'a RunMeta, &'a [RunPart<T>])>,
         usize,
     )> {
-        let mut ordered_runs = ordered_runs.into_iter().peekable();
+        // Group the runs by the SpineId they belong to.
+        let ordered_chunks = ordered_runs
+            .into_iter()
+            .chunk_by(|(run_id, _, _, _)| run_id.0)
+            .into_iter()
+            .map(|(id, chunk)| (id, chunk.collect()))
+            .collect::<Vec<(_, Vec<_>)>>();
+
+        let groups = if ordered_chunks.iter().all(|(_, chunk)| chunk.len() == 1) {
+            // If each chunk has only one run, we can just flatten it into a single list.
+            vec![
+                ordered_chunks
+                    .into_iter()
+                    .flat_map(|(_, chunk)| chunk)
+                    .collect::<Vec<_>>(),
+            ]
+        } else {
+            ordered_chunks
+                .into_iter()
+                .map(|(_id, chunk)| chunk)
+                .collect::<Vec<_>>()
+        };
 
         let mut chunks = vec![];
-        let mut current_chunk = vec![];
-        let mut current_chunk_max_memory_usage = 0;
-        while let Some((desc, meta, run)) = ordered_runs.next() {
-            let run_greatest_part_size = run
-                .iter()
-                .map(|x| x.max_part_bytes())
-                .max()
-                .unwrap_or(cfg.batch.blob_target_size);
-            current_chunk.push((*desc, *meta, &**run));
-            current_chunk_max_memory_usage += run_greatest_part_size;
-
-            if let Some((_next_desc, _next_meta, next_run)) = ordered_runs.peek() {
-                let next_run_greatest_part_size = next_run
+        for ordered_runs in groups {
+            let mut current_chunk = vec![];
+            let mut current_chunk_max_memory_usage = 0;
+            let mut ordered_runs = ordered_runs.into_iter().peekable();
+            while let Some((run_id, desc, meta, run)) = ordered_runs.next() {
+                let run_greatest_part_size = run
                     .iter()
                     .map(|x| x.max_part_bytes())
                     .max()
                     .unwrap_or(cfg.batch.blob_target_size);
+                current_chunk.push((run_id, *desc, *meta, &**run));
+                current_chunk_max_memory_usage += run_greatest_part_size;
 
-                // if we can fit the next run in our chunk without going over our reserved memory, we should do so
-                if current_chunk_max_memory_usage + next_run_greatest_part_size
-                    <= run_reserved_memory_bytes
+                if let Some((_next_run_id, _next_desc, _next_meta, next_run)) = ordered_runs.peek()
                 {
-                    continue;
+                    let next_run_greatest_part_size = next_run
+                        .iter()
+                        .map(|x| x.max_part_bytes())
+                        .max()
+                        .unwrap_or(cfg.batch.blob_target_size);
+
+                    // if we can fit the next run in our chunk without going over our reserved memory, we should do so
+                    if current_chunk_max_memory_usage + next_run_greatest_part_size
+                        <= run_reserved_memory_bytes
+                    {
+                        continue;
+                    }
+
+                    // NB: There's an edge case where we cannot fit at least 2 runs into a chunk
+                    // with our reserved memory. This could happen if blobs were written with a
+                    // larger target size than the current build. When this happens, we violate
+                    // our memory requirement and force chunks to be at least length 2, so that we
+                    // can be assured runs are merged and converge over time.
+                    if current_chunk.len() == 1 {
+                        // in the steady state we expect this counter to be 0, and would only
+                        // anticipate it being temporarily nonzero if we changed target blob size
+                        // or our memory requirement calculations
+                        metrics.compaction.memory_violations.inc();
+                        continue;
+                    }
                 }
 
-                // NB: There's an edge case where we cannot fit at least 2 runs into a chunk
-                // with our reserved memory. This could happen if blobs were written with a
-                // larger target size than the current build. When this happens, we violate
-                // our memory requirement and force chunks to be at least length 2, so that we
-                // can be assured runs are merged and converge over time.
-                if current_chunk.len() == 1 {
-                    // in the steady state we expect this counter to be 0, and would only
-                    // anticipate it being temporarily nonzero if we changed target blob size
-                    // or our memory requirement calculations
-                    metrics.compaction.memory_violations.inc();
-                    continue;
-                }
+                chunks.push((
+                    std::mem::take(&mut current_chunk),
+                    current_chunk_max_memory_usage,
+                ));
+                current_chunk_max_memory_usage = 0;
             }
-
-            chunks.push((
-                std::mem::take(&mut current_chunk),
-                current_chunk_max_memory_usage,
-            ));
-            current_chunk_max_memory_usage = 0;
         }
 
         chunks
@@ -748,27 +821,34 @@ where
         target_order: RunOrder,
         blob: &'a dyn Blob,
         metrics: &'a Metrics,
-    ) -> anyhow::Result<Vec<(&'a Description<T>, &'a RunMeta, Cow<'a, [RunPart<T>]>)>> {
+    ) -> anyhow::Result<
+        Vec<(
+            RunId,
+            &'a Description<T>,
+            &'a RunMeta,
+            Cow<'a, [RunPart<T>]>,
+        )>,
+    > {
         let total_number_of_runs = req
             .inputs
             .iter()
-            .map(|x| x.run_splits.len() + 1)
+            .map(|x| x.batch.run_splits.len() + 1)
             .sum::<usize>();
 
         let mut batch_runs: VecDeque<_> = req
             .inputs
             .iter()
-            .map(|batch| (&batch.desc, batch.runs()))
+            .map(|x| (x.id, &x.batch.desc, x.batch.runs()))
             .collect();
 
         let mut ordered_runs = Vec::with_capacity(total_number_of_runs);
 
-        while let Some((desc, mut runs)) = batch_runs.pop_front() {
-            for (meta, run) in runs {
-                // If the run is empty, we can skip it.
+        while let Some((spine_id, desc, runs)) = batch_runs.pop_front() {
+            for (i, (meta, run)) in runs.enumerate() {
+                let run_id = RunId(spine_id, i);
                 let same_order = meta.order.unwrap_or(RunOrder::Codec) == target_order;
                 if same_order {
-                    ordered_runs.push((desc, meta, Cow::Borrowed(run)));
+                    ordered_runs.push((run_id, desc, meta, Cow::Borrowed(run)));
                 } else {
                     // The downstream consolidation step will handle a long run that's not in
                     // the desired order by splitting it up into many single-element runs. This preserves
@@ -783,6 +863,7 @@ where
                         let mut batch_parts = pin!(part.part_stream(req.shard_id, blob, metrics));
                         while let Some(part) = batch_parts.next().await {
                             ordered_runs.push((
+                                run_id,
                                 desc,
                                 meta,
                                 Cow::Owned(vec![RunPart::Single(part?.into_owned())]),
@@ -828,7 +909,7 @@ where
         cfg: &CompactConfig,
         shard_id: &ShardId,
         desc: &Description<T>,
-        mut runs: Vec<(&Description<T>, &RunMeta, &[RunPart<T>])>,
+        mut runs: Vec<(&RunId, &Description<T>, &RunMeta, &[RunPart<T>])>,
         blob: Arc<dyn Blob>,
         metrics: Arc<Metrics>,
         shard_metrics: Arc<ShardMetrics>,
@@ -896,7 +977,7 @@ where
         };
 
         if let Some(lower_bound) = lower_bound.as_ref() {
-            for (_, _, run) in &mut runs {
+            for (_, _, _, run) in &mut runs {
                 let start = run
                     .iter()
                     .position(|part| {
@@ -949,7 +1030,7 @@ where
             prefetch_budget_bytes,
         );
 
-        for (desc, meta, parts) in runs {
+        for (_run_id, desc, meta, parts) in runs {
             consolidator.enqueue_run(desc, meta, parts.iter().cloned());
         }
 
@@ -1046,7 +1127,7 @@ where
 
     fn validate_req(req: &CompactReq<T>) -> Result<(), anyhow::Error> {
         let mut frontier = req.desc.lower();
-        for input in req.inputs.iter() {
+        for input in req.inputs.iter().map(|x| &x.batch) {
             if PartialOrder::less_than(req.desc.since(), input.desc.since()) {
                 return Err(anyhow!(
                     "output since {:?} must be at or in advance of input since {:?}",

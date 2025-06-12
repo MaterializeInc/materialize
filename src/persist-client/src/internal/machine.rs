@@ -273,11 +273,7 @@ where
             .map(|req| CompactReq {
                 shard_id: self.shard_id(),
                 desc: req.desc,
-                inputs: req
-                    .inputs
-                    .into_iter()
-                    .map(|b| Arc::unwrap_or_clone(b.batch))
-                    .collect(),
+                inputs: req.inputs,
                 prev_batch: req.active_compaction,
             })
             .collect();
@@ -496,11 +492,7 @@ where
                         let req = CompactReq {
                             shard_id: self.shard_id(),
                             desc: req.desc,
-                            inputs: req
-                                .inputs
-                                .into_iter()
-                                .map(|b| Arc::unwrap_or_clone(b.batch))
-                                .collect(),
+                            inputs: req.inputs,
                             prev_batch: req.active_compaction,
                         };
                         compact_reqs.push(req);
@@ -2012,13 +2004,14 @@ pub mod datadriven {
 
         let mut inputs = Vec::new();
         for input in args.args.get("inputs").expect("missing inputs") {
-            inputs.push(
-                datadriven
-                    .batches
-                    .get(input)
-                    .expect("unknown batch")
-                    .clone(),
-            );
+            let b = datadriven
+                .batches
+                .get(input)
+                .expect("unknown batch")
+                .clone();
+            // inputs.push(
+            //     ,
+            // );
         }
 
         let cfg = datadriven.client.cfg.clone();
@@ -2051,11 +2044,11 @@ pub mod datadriven {
 
         datadriven
             .batches
-            .insert(output.to_owned(), res.output.clone());
+            .insert(output.to_owned(), (*res.output.batch).clone());
         Ok(format!(
             "parts={} len={}\n",
-            res.output.part_count(),
-            res.output.len
+            res.output.batch.part_count(),
+            res.output.batch.len
         ))
     }
 
