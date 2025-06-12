@@ -136,6 +136,9 @@ pub mod v1alpha1 {
         // If set to Password, the backend secret must contain external_login_password_mz_system.
         #[serde(default)]
         pub authenticator_kind: AuthenticatorKind,
+        // Whether to enable role based access control. Defaults to false.
+        #[serde(default)]
+        pub enable_rbac: bool,
 
         // The value used by environmentd (via the --environment-id flag) to
         // uniquely identify this instance. Must be globally unique, and

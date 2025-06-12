@@ -68,6 +68,12 @@ def main():
     parser_environment.add_argument(
         "--external-login-password-mz-system", required=False
     )
+    parser_environment.add_argument(
+        "--enable-rbac",
+        type=bool,
+        default=False,
+        required=False,
+    )
     parser_environment.set_defaults(func=environment)
 
     parser_portforward = subparsers.add_parser("port-forward")
@@ -257,6 +263,7 @@ def environment(args: argparse.Namespace):
                 "backendSecretName": backend_secret_name,
                 "environmentId": environment_id,
                 "authenticatorKind": "None",
+                "enableRbac": args.enable_rbac,
             },
         },
     ]

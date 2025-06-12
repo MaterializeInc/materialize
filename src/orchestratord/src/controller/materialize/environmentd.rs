@@ -1030,7 +1030,7 @@ fn create_environmentd_statefulset_object(
         args.push("--system-parameter-default=statement_logging_max_sample_rate=0".into());
     }
 
-    if config.disable_authentication {
+    if !mz.spec.enable_rbac {
         args.push("--system-parameter-default=enable_rbac_checks=false".into());
     }
 
