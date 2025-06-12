@@ -8,7 +8,7 @@
 #
 # See: https://docs.github.com/en/repositories/managing-your-repositorys-settings-and-features/customizing-your-repository/about-code-owners
 
-/.cargo                             @MaterializeInc/testing @parkmycar
+/.cargo                             @MaterializeInc/testing
 /.config                            @MaterializeInc/testing
 /.github                            @MaterializeInc/testing
 /bin
@@ -18,7 +18,7 @@
 /doc/user                           @MaterializeInc/docs
 /doc/developer/reference/compute    @MaterializeInc/cluster
 /doc/developer/reference/storage    @MaterializeInc/cluster
-/misc/bazel                         @parkmycar
+/misc/bazel                         @MaterializeInc/testing @ptravers @SangJunBak @DAlperin
 /misc/dbt-materialize               @morsapaes @MaterializeInc/integrations
 /misc/python/materialize/benches    @MaterializeInc/testing
 /misc/python/materialize/buildkite_insights @MaterializeInc/testing
@@ -51,7 +51,7 @@
 /src/avro                           @MaterializeInc/cluster
 /src/avro-derive                    @MaterializeInc/cluster
 /src/build-id                       @teskje
-/src/build-info                     @MaterializeInc/testing @parkmycar
+/src/build-info                     @MaterializeInc/testing  @ptravers @SangJunBak @DAlperin
 /src/catalog                        @MaterializeInc/adapter
 /src/catalog-debug                  @MaterializeInc/adapter
 /src/ccsr                           @MaterializeInc/adapter @MaterializeInc/cluster
@@ -136,5 +136,5 @@
 /src/walkabout                      @MaterializeInc/adapter
 /src/workspace-hack                 @MaterializeInc/testing
 /test
-/MODULE.bazel                       @parkmycar
-/WORKSPACE                          @parkmycar
+/MODULE.bazel                       @MaterializeInc/testing @ptravers @SangJunBak @DAlperin
+/WORKSPACE                          @MaterializeInc/testing @ptravers @SangJunBak @DAlperin
