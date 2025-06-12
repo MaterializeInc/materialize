@@ -35,7 +35,6 @@ use mz_ore::cast::CastFrom;
 use mz_ore::collections::{CollectionExt, HashSet};
 use mz_ore::task::{self, JoinHandle, spawn};
 use mz_ore::tracing::OpenTelemetryContext;
-use mz_ore::vec::VecExt;
 use mz_ore::{assert_none, instrument};
 use mz_persist_client::stats::SnapshotPartStats;
 use mz_repr::adt::jsonb::Jsonb;
@@ -1733,7 +1732,7 @@ impl Coordinator {
             let role_membership =
                 session_catalog.collect_role_membership(session.current_role_id());
             let invalid_revokes: BTreeSet<_> = privilege_revokes
-                .drain_filter_swapping(|(_, privilege)| {
+                .extract_if(.., |(_, privilege)| {
                     !role_membership.contains(&privilege.grantor)
                 })
                 .map(|(object_id, _)| object_id)

@@ -104,7 +104,6 @@ use mz_ore::collections::CollectionExt;
 use mz_ore::error::ErrorExt;
 use mz_ore::future::InTask;
 use mz_ore::task::{self, AbortOnDropHandle};
-use mz_ore::vec::VecExt;
 use mz_persist_client::Diagnostics;
 use mz_persist_client::write::WriteHandle;
 use mz_persist_types::codec_impls::UnitSchema;
@@ -781,7 +780,7 @@ fn sink_collection<G: Scope<Timestamp = Timestamp>>(
                         deferred_updates.shrink_to(buffer_min_capacity.get());
                         extra_updates.extend(
                             deferred_updates
-                                .drain_filter_swapping(|(_, time, _)| !progress.less_equal(time)),
+                                .extract_if(.., |(_, time, _)| !progress.less_equal(time)),
                         );
                         extra_updates.sort_unstable_by(|a, b| a.1.cmp(&b.1));
 
