@@ -19,7 +19,7 @@ use mz_compute_types::dyncfgs::{
 use mz_dyncfg::ConfigSet;
 use mz_ore::cast::{CastFrom, CastLossy};
 use mz_ore::metric;
-use mz_ore::metrics::MetricsRegistry;
+use mz_ore::metrics::{MetricsRegistry, UIntGauge};
 use prometheus::Histogram;
 use tokio::sync::mpsc::{self, UnboundedReceiver, UnboundedSender};
 use tracing::{debug, error, info, warn};
@@ -132,6 +132,8 @@ struct LimiterTask {
     burst_budget_remaining: usize,
     /// The time of the last check.
     last_check: Instant,
+    /// Metrics tracked by the limiter task.
+    metrics: LimiterMetrics,
 }
 
 impl LimiterTask {
@@ -142,6 +144,7 @@ impl LimiterTask {
             config: LimiterConfig::disabled(),
             burst_budget_remaining: 0,
             last_check: Instant::now(),
+            metrics,
         };
 
         loop {
@@ -154,7 +157,7 @@ impl LimiterTask {
                     }
 
                     let elapsed = start.elapsed();
-                    metrics.duration.observe(elapsed.as_secs_f64());
+                    task.metrics.duration.observe(elapsed.as_secs_f64());
                 }
                 Some(config) = config_rx.recv() => task.apply_config(config),
             }
@@ -182,6 +185,11 @@ impl LimiterTask {
         let burst_budget_remaining = self.burst_budget_remaining;
 
         debug!(disk_usage, disk_limit, burst_budget_remaining);
+
+        self.metrics.disk_usage.set(u64::cast_from(disk_usage));
+        self.metrics
+            .burst_budget
+            .set(u64::cast_from(burst_budget_remaining));
 
         if disk_usage > disk_limit {
             // Calculate excess usage in byte-seconds.
@@ -220,11 +228,18 @@ impl LimiterTask {
         info!(?config, "applying lgalloc limiter config");
         self.config = config;
         self.burst_budget_remaining = config.burst_budget;
+
+        self.metrics
+            .disk_limit
+            .set(u64::cast_from(config.disk_limit));
     }
 }
 
 struct LimiterMetrics {
     duration: Histogram,
+    disk_limit: UIntGauge,
+    disk_usage: UIntGauge,
+    burst_budget: UIntGauge,
 }
 
 impl LimiterMetrics {
@@ -234,6 +249,18 @@ impl LimiterMetrics {
                 name: "mz_lgalloc_limiter_duration_seconds",
                 help: "A histogram of the time it took to run the lgalloc limiter.",
                 buckets: mz_ore::stats::histogram_seconds_buckets(0.000_500, 32.),
+            )),
+            disk_limit: registry.register(metric!(
+                name: "mz_lgalloc_limiter_disk_limit_bytes",
+                help: "The configured lgalloc disk limit.",
+            )),
+            disk_usage: registry.register(metric!(
+                name: "mz_lgalloc_limiter_disk_usage_bytes",
+                help: "The current lgalloc disk usage.",
+            )),
+            burst_budget: registry.register(metric!(
+                name: "mz_lgalloc_limiter_burst_budget_byteseconds",
+                help: "The remaining lgalloc burst budget.",
             )),
         }
     }
