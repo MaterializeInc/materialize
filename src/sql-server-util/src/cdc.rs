@@ -153,7 +153,6 @@ impl<'a> CdcStream<'a> {
     ) -> Result<
         (
             Lsn,
-            usize,
             impl Stream<Item = Result<tiberius::Row, SqlServerError>>,
         ),
         SqlServerError,
@@ -208,11 +207,6 @@ impl<'a> CdcStream<'a> {
         let lsn = txn.get_lsn().await?;
 
         tracing::info!(%source_id, ?lsn, "timely-{worker_id} starting snapshot");
-
-        tracing::trace!(%source_id, %table.capture_instance.name, %table.schema_name, %table.name, "timely-{worker_id} snapshot stats start");
-        let size =
-            crate::inspect::snapshot_size(txn.client, &table.schema_name, &table.name).await?;
-        tracing::trace!(%source_id, %table.capture_instance.name, %table.schema_name, %table.name, "timely-{worker_id} snapshot stats end");
         let schema_name = &*table.schema_name;
         let table_name = &*table.name;
         let rows = async_stream::try_stream! {
@@ -228,7 +222,7 @@ impl<'a> CdcStream<'a> {
             txn.rollback().await?
         };
 
-        Ok((lsn, size, rows))
+        Ok((lsn, rows))
     }
 
     /// Consume `self` returning a [`Stream`] of [`CdcEvent`]s.

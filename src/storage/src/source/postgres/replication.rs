@@ -119,9 +119,8 @@ use crate::source::RawSourceCreationConfig;
 use crate::source::postgres::verify_schema;
 use crate::source::postgres::{DefiniteError, ReplicationError, SourceOutputInfo, TransientError};
 use crate::source::probe;
-use crate::source::types::{
-    Probe, ProgressStatisticsUpdate, SignaledFuture, SourceMessage, StackedCollection,
-};
+use crate::source::types::{Probe, SignaledFuture, SourceMessage, StackedCollection};
+use crate::statistics::SourceStatistics;
 
 /// Postgres epoch is 2000-01-01T00:00:00Z
 static PG_EPOCH: LazyLock<SystemTime> =
@@ -151,7 +150,6 @@ pub(crate) fn render<G: Scope<Timestamp = MzOffset>>(
 ) -> (
     StackedCollection<G, (usize, Result<SourceMessage, DataflowError>)>,
     Stream<G, Infallible>,
-    Stream<G, ProgressStatisticsUpdate>,
     Option<Stream<G, Probe<MzOffset>>>,
     Stream<G, ReplicationError>,
     PressOnDropButton,
@@ -163,8 +161,6 @@ pub(crate) fn render<G: Scope<Timestamp = MzOffset>>(
     let (data_output, data_stream) = builder.new_output();
     let (_upper_output, upper_stream) = builder.new_output::<CapacityContainerBuilder<_>>();
     let (definite_error_handle, definite_errors) = builder.new_output();
-
-    let (stats_output, stats_stream) = builder.new_output::<CapacityContainerBuilder<_>>();
     let (probe_output, probe_stream) = builder.new_output::<CapacityContainerBuilder<_>>();
 
     let mut rewind_input =
@@ -197,19 +193,15 @@ pub(crate) fn render<G: Scope<Timestamp = MzOffset>>(
                 data_cap_set,
                 upper_cap_set,
                 definite_error_cap_set,
-                stats_cap,
                 probe_cap,
-            ]: &mut [_; 5] = caps.try_into().unwrap();
+            ]: &mut [_; 4] = caps.try_into().unwrap();
+
+            let source_statistics = config.source_statistics();
 
             if !config.responsible_for("slot") {
                 // Emit 0, to mark this worker as having started up correctly.
-                stats_output.give(
-                    &stats_cap[0],
-                    ProgressStatisticsUpdate::SteadyState {
-                        offset_known: 0,
-                        offset_committed: 0,
-                    },
-                );
+                source_statistics.set_offset_known(0);
+                source_statistics.set_offset_committed(0);
                 return Ok(());
             }
 
@@ -393,10 +385,9 @@ pub(crate) fn render<G: Scope<Timestamp = MzOffset>>(
                 &connection.publication,
                 resume_lsn,
                 committed_uppers.as_mut(),
-                &stats_output,
-                &stats_cap[0],
                 &probe_output,
                 &probe_cap[0],
+                source_statistics,
             )
             .await?;
 
@@ -617,7 +608,6 @@ pub(crate) fn render<G: Scope<Timestamp = MzOffset>>(
     (
         replication_updates,
         upper_stream,
-        stats_stream,
         Some(probe_stream),
         errors,
         button.press_on_drop(),
@@ -637,18 +627,13 @@ async fn raw_stream<'a>(
     publication: &'a str,
     resume_lsn: MzOffset,
     uppers: impl futures::Stream<Item = Antichain<MzOffset>> + 'a,
-    stats_output: &'a AsyncOutputHandle<
-        MzOffset,
-        CapacityContainerBuilder<Vec<ProgressStatisticsUpdate>>,
-        Tee<MzOffset, Vec<ProgressStatisticsUpdate>>,
-    >,
-    stats_cap: &'a Capability<MzOffset>,
     probe_output: &'a AsyncOutputHandle<
         MzOffset,
         CapacityContainerBuilder<Vec<Probe<MzOffset>>>,
         Tee<MzOffset, Vec<Probe<MzOffset>>>,
     >,
     probe_cap: &'a Capability<MzOffset>,
+    source_statistics: &'a SourceStatistics,
 ) -> Result<
     Result<
         impl AsyncStream<Item = Result<ReplicationMessage<LogicalReplicationMessage>, TransientError>>
@@ -824,7 +809,10 @@ async fn raw_stream<'a>(
                 },
                 Some(upper) = uppers.next() => match upper.into_option() {
                     Some(lsn) => {
-                        last_committed_upper = std::cmp::max(last_committed_upper, lsn);
+                        if last_committed_upper < lsn {
+                            last_committed_upper = lsn;
+                            source_statistics.set_offset_committed(last_committed_upper.offset);
+                        }
                         Ok(())
                     }
                     None => Ok(()),
@@ -832,18 +820,9 @@ async fn raw_stream<'a>(
                 Ok(()) = probe_rx.changed() => match &*probe_rx.borrow() {
                     Some(Ok(probe)) => {
                         if let Some(offset_known) = probe.upstream_frontier.as_option() {
-                            stats_output.give(
-                                stats_cap,
-                                ProgressStatisticsUpdate::SteadyState {
-                                    // Similar to the kafka source, we don't subtract 1 from the
-                                    // upper as we want to report the _number of bytes_ we have
-                                    // processed/in upstream.
-                                    offset_known: offset_known.offset,
-                                    offset_committed: last_committed_upper.offset,
-                                },
-                            );
+                            source_statistics.set_offset_known(offset_known.offset);
                         }
-                        probe_output.give(probe_cap, probe.clone());
+                        probe_output.give(probe_cap, probe);
                         Ok(())
                     },
                     Some(Err(err)) => Err(anyhow::anyhow!("{err}").into()),
@@ -882,15 +861,18 @@ fn extract_transaction<'a>(
             // commit_lsn will drive progress.
             let message = match event {
                 ReplicationMessage::XLogData(data) => data.into_data(),
-                ReplicationMessage::PrimaryKeepAlive(_) => continue,
+                ReplicationMessage::PrimaryKeepAlive(_) => {
+                    metrics.ignored.inc();
+                    continue;
+                }
                 _ => Err(TransientError::UnknownReplicationMessage)?,
             };
             metrics.total.inc();
             match message {
-                Insert(body) if !table_info.contains_key(&body.rel_id()) => continue,
-                Update(body) if !table_info.contains_key(&body.rel_id()) => continue,
-                Delete(body) if !table_info.contains_key(&body.rel_id()) => continue,
-                Relation(body) if !table_info.contains_key(&body.rel_id()) => continue,
+                Insert(body) if !table_info.contains_key(&body.rel_id()) => metrics.ignored.inc(),
+                Update(body) if !table_info.contains_key(&body.rel_id()) => metrics.ignored.inc(),
+                Delete(body) if !table_info.contains_key(&body.rel_id()) => metrics.ignored.inc(),
+                Relation(body) if !table_info.contains_key(&body.rel_id()) => metrics.ignored.inc(),
                 Insert(body) => {
                     metrics.inserts.inc();
                     let row = unpack_tuple(body.tuple().tuple_data(), &mut row);

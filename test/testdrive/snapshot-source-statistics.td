@@ -84,12 +84,13 @@ mammalmore    moose   2
     s.name,
     SUM(u.snapshot_records_known),
     SUM(u.snapshot_records_staged)
-  FROM mz_sources s
+  FROM mz_internal.mz_source_statuses s
   JOIN mz_internal.mz_source_statistics_raw u ON s.id = u.id
-  WHERE s.name IN ('upsert')
+  WHERE s.name IN ('upsert', 'upsert_tbl')
   GROUP BY s.name
   ORDER BY s.name
 upsert 9 9
+upsert_tbl 9 9
 
 $ set-from-sql var=previous-offset-known
 SELECT
@@ -108,12 +109,13 @@ $ kafka-ingest format=avro topic=upsert key-format=avro key-schema=${keyschema} 
     SUM(u.offset_known) > ${previous-offset-known},
     SUM(u.snapshot_records_known),
     SUM(u.snapshot_records_staged)
-  FROM mz_sources s
+  FROM mz_internal.mz_source_statuses s
   JOIN mz_internal.mz_source_statistics_raw u ON s.id = u.id
-  WHERE s.name IN ('upsert')
+  WHERE s.name IN ('upsert', 'upsert_tbl')
   GROUP BY s.name
   ORDER BY s.name
 upsert true 9 9
+upsert_tbl false 9 9
 
 # ...even if we restart.
 
@@ -136,11 +138,45 @@ $ kafka-ingest format=avro topic=upsert key-format=avro key-schema=${keyschema} 
     SUM(u.offset_committed) > ${pre-restart-offset-committed},
     SUM(u.snapshot_records_known),
     SUM(u.snapshot_records_staged)
-  FROM mz_sources s
+  FROM mz_internal.mz_source_statuses s
   JOIN mz_internal.mz_source_statistics_raw u ON s.id = u.id
-  WHERE s.name IN ('upsert')
+  WHERE s.name IN ('upsert', 'upsert_tbl')
   GROUP BY s.name
   ORDER BY s.name
 upsert true 9 9
+upsert_tbl false 9 9
+
+> CREATE TABLE append_tbl FROM SOURCE upsert (REFERENCE "testdrive-upsert-${testdrive.seed}")
+  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
+  INCLUDE OFFSET
+  ENVELOPE NONE
+
+> SELECT f1, f2 FROM append_tbl ORDER BY "offset"
+f1     f2
+---------
+fish   1000
+goose  1
+geese  2
+moose  1
+geese  56
+moose  42
+moose  2
+moose  100
+
+
+> SELECT
+    s.name,
+    SUM(u.offset_committed) > ${pre-restart-offset-committed},
+    SUM(u.snapshot_records_known),
+    SUM(u.snapshot_records_staged)
+  FROM mz_internal.mz_source_statuses s
+  JOIN mz_internal.mz_source_statistics_raw u ON s.id = u.id
+  WHERE s.name IN ('upsert', 'upsert_tbl', 'append_tbl')
+  GROUP BY s.name
+  ORDER BY s.name
+append_tbl false 11 11
+upsert true 11 11
+upsert_tbl false 0 0
+
 
 > DROP SOURCE upsert CASCADE

@@ -86,14 +86,17 @@ SELECT cr.id
 
 > SELECT
     s.name,
-    u.offset_committed > 0,
-    u.offset_known >= u.offset_committed,
-    u.snapshot_records_known,
-    u.snapshot_records_staged
-  FROM mz_sources s
+    SUM(u.offset_committed) > 0,
+    SUM(u.offset_known) >= SUM(u.offset_committed),
+    SUM(u.snapshot_records_known),
+    SUM(u.snapshot_records_staged)
+  FROM mz_internal.mz_source_statuses s
   JOIN mz_internal.mz_source_statistics_raw u ON s.id = u.id
-  WHERE s.name IN ('mz_source') AND u.replica_id = '${replica_id}'
+  WHERE s.name IN ('mz_source', 't1') AND u.replica_id = '${replica_id}'
+  GROUP BY s.name
+  ORDER BY s.name
 mz_source true true 2 2
+t1 false true 2 2
 
 $ set-from-sql var=previous-offset-committed
 SELECT
@@ -108,14 +111,17 @@ INSERT INTO t1 VALUES ('three');
 
 > SELECT
     s.name,
-    u.offset_committed > ${previous-offset-committed},
-    u.offset_known >= u.offset_committed,
-    u.snapshot_records_known,
-    u.snapshot_records_staged
-  FROM mz_sources s
+    SUM(u.offset_committed) > ${previous-offset-committed},
+    SUM(u.offset_known) >= SUM(u.offset_committed),
+    SUM(u.snapshot_records_known),
+    SUM(u.snapshot_records_staged)
+  FROM mz_internal.mz_source_statuses s
   JOIN mz_internal.mz_source_statistics_raw u ON s.id = u.id
-  WHERE s.name IN ('mz_source') AND u.replica_id = '${replica_id}'
+  WHERE s.name IN ('mz_source', 't1') AND u.replica_id = '${replica_id}'
+  GROUP BY s.name
+  ORDER BY s.name
 mz_source true true 2 2
+t1 false true 2 2
 
 $ set-from-sql var=pre-restart-offset-committed
 SELECT
@@ -134,14 +140,17 @@ INSERT INTO t1 VALUES ('four');
 # Ensure the snapshot stats stay there for the old replica, and don't change.
 > SELECT
     s.name,
-    u.offset_committed >= ${pre-restart-offset-committed},
-    u.offset_known >= u.offset_committed,
-    u.snapshot_records_known,
-    u.snapshot_records_staged
-  FROM mz_sources s
+    SUM(u.offset_committed) > ${previous-offset-committed},
+    SUM(u.offset_known) >= SUM(u.offset_committed),
+    SUM(u.snapshot_records_known),
+    SUM(u.snapshot_records_staged)
+  FROM mz_internal.mz_source_statuses s
   JOIN mz_internal.mz_source_statistics_raw u ON s.id = u.id
-  WHERE s.name IN ('mz_source') AND u.replica_id = '${replica_id}'
+  WHERE s.name IN ('mz_source', 't1') AND u.replica_id = '${replica_id}'
+  GROUP BY s.name
+  ORDER BY s.name
 mz_source true true 2 2
+t1 false true 2 2
 
 $ set-regex match=u\d+ replacement="<REPLICAID>"
 > SELECT cr.id
@@ -174,13 +183,14 @@ SELECT cr.id
 # and didn't read messages.
 > SELECT
     s.name,
-    u.offset_committed > ${pre-restart-offset-committed},
-    u.offset_known >= u.offset_committed,
-    u.snapshot_records_known,
-    u.snapshot_records_staged
+    SUM(u.offset_committed) > ${pre-restart-offset-committed},
+    SUM(u.offset_known) >= SUM(u.offset_committed),
+    SUM(u.snapshot_records_known),
+    SUM(u.snapshot_records_staged)
   FROM mz_sources s
   JOIN mz_internal.mz_source_statistics_raw u ON s.id = u.id
   WHERE s.name IN ('mz_source') AND u.replica_id = '${replica_id}'
+  GROUP BY s.name
 mz_source true true <null> <null>
 
 
@@ -197,12 +207,16 @@ true
 # When we add a table we snapshot that table, so now we will have snapshot stats.
 > SELECT
     s.name,
-    u.snapshot_records_known,
-    u.snapshot_records_staged
-  FROM mz_sources s
+    SUM(u.snapshot_records_known),
+    SUM(u.snapshot_records_staged)
+  FROM mz_internal.mz_source_statuses s
   JOIN mz_internal.mz_source_statistics_raw u ON s.id = u.id
-  WHERE s.name IN ('mz_source') AND u.replica_id = '${replica_id}'
+  WHERE s.name IN ('mz_source', 't1', 'alt') AND u.replica_id = '${replica_id}'
+  GROUP BY s.name
+  ORDER BY s.name
+alt 1 1
 mz_source 1 1
+t1 0 0
 
 # Ensure subsource stats show up, and then are removed when we drop subsources.
 > SELECT
@@ -210,18 +224,21 @@ mz_source 1 1
     SUM(u.updates_committed) > 0
   FROM mz_tables t
   JOIN mz_internal.mz_source_statistics_raw u ON t.id = u.id
-  WHERE t.name IN ('alt')
+  WHERE t.name IN ('alt', 't1') AND u.replica_id = '${replica_id}'
   GROUP BY t.name
   ORDER BY t.name
 alt true
+t1 true
 
 > DROP TABLE alt;
 
 > SELECT
-    count(*)
+    t.name, count(*)
   FROM mz_tables t
   JOIN mz_internal.mz_source_statistics_raw u ON t.id = u.id
-  WHERE t.name IN ('alt')
-0
+  WHERE t.name IN ('alt', 't1') AND u.replica_id = '${replica_id}'
+  GROUP BY t.name
+  ORDER BY t.name
+t1 1
 
 # TODO(guswynn): consider adding an envd restart test for pg statistics, not just kafka ones like in test/cluster.

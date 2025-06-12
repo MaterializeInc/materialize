@@ -83,7 +83,6 @@ contains:FOR SCHEMAS
 2   4
 3   4
 
-
 > SELECT MAX(key) FROM up_no_update;
 15
 
@@ -114,8 +113,10 @@ contains:FOR SCHEMAS
   JOIN mz_internal.mz_source_statistics u ON s.id = u.id
   WHERE s.name IN ('up_no_update', 'up_quick')
   GROUP BY s.name
+  ORDER BY s.name;
 up_no_update 3 3 48 48 48 16
 up_quick     6 6  0  0 48 16
+
 
 $ set-from-sql var=pre-rehydration
 SELECT
@@ -162,6 +163,7 @@ true
   JOIN mz_internal.mz_source_statistics u ON s.id = u.id
   WHERE s.name IN ('up_no_update', 'up_quick')
   GROUP BY s.name
+  ORDER BY s.name;
 up_no_update 3 3 48 48 48 16
 up_quick     6 6  0  0 48 16
 
@@ -232,6 +234,8 @@ SELECT
     key = 14
 true
 
+> DROP SOURCE up_with_update;
+
 # Test NONE-envelope
 > CREATE SOURCE kv_none
   IN CLUSTER lg_cluster
@@ -251,6 +255,8 @@ true
 1   12
 2   12
 3   12
+
+> DROP SOURCE kv_none;
 
 # Test INCLUDE OFFSET
 > CREATE SOURCE kv_offset
@@ -297,3 +303,108 @@ true
 
 > SELECT MAX(whatever) FROM kv_offset2;
 15
+
+> DROP SOURCE kv_offset;
+> DROP SOURCE kv_offset2;
+
+
+# Verify statistics for load generator and source tables created from it.
+# NOTE: statistics are not reported reliably for the load generator, so we avoid using exact count
+# matches in some places, instead opting for ensuring the results fall in a range.
+> CREATE SOURCE kv_snapshot
+  IN CLUSTER lg_cluster
+  FROM LOAD GENERATOR KEY VALUE (
+    KEYS 16,
+    PARTITIONS 4,
+    SNAPSHOT ROUNDS 3,
+    SEED 123,
+    VALUE SIZE 4,
+    BATCH SIZE 2
+  );
+
+> CREATE TABLE kv_up FROM SOURCE kv_snapshot INCLUDE KEY ENVELOPE UPSERT;
+
+> SELECT count(*) FROM kv_up;
+16
+
+> SELECT
+    s.name,
+    u.offset_known,
+    u.offset_committed,
+    u.snapshot_records_known >= 48,
+    u.snapshot_records_staged >= 48,
+    u.messages_received >= 144,
+    u.records_indexed
+  FROM mz_internal.mz_source_statuses s
+  LEFT JOIN mz_internal.mz_source_statistics u ON s.id = u.id
+  WHERE s.name IN ('kv_snapshot', 'kv_up', 'kv_none')
+  ORDER BY s.name;
+kv_snapshot 3 3 true true true 0
+kv_up 0 0 true true false 16
+
+> CREATE TABLE kv_none FROM SOURCE kv_snapshot INCLUDE KEY ENVELOPE NONE;
+
+> SELECT count(*) FROM kv_none;
+48
+
+# snapshot metrics for kv_up were cleared
+> SELECT
+    s.name,
+    u.offset_known,
+    u.offset_committed,
+    u.snapshot_records_known >= 48,
+    u.snapshot_records_staged >= 48,
+    u.messages_received >= 288,
+    u.records_indexed
+  FROM mz_internal.mz_source_statuses s
+  LEFT JOIN mz_internal.mz_source_statistics u ON s.id = u.id
+  WHERE s.name IN ('kv_snapshot', 'kv_up', 'kv_none')
+  ORDER BY s.name;
+kv_none 0 0 true true false 0
+kv_snapshot 3 3 true true true 0
+kv_up 0 0 false false false 16
+
+> DROP SOURCE kv_snapshot CASCADE;
+
+
+# Verify statistics for tables created from non-snapshot source
+> CREATE SOURCE kv_snapshot
+  IN CLUSTER lg_cluster
+  FROM LOAD GENERATOR KEY VALUE (
+    KEYS 16,
+    PARTITIONS 4,
+    SNAPSHOT ROUNDS 3,
+    SEED 123,
+    VALUE SIZE 4,
+    BATCH SIZE 2,
+    TRANSACTIONAL SNAPSHOT false
+  );
+
+> CREATE TABLE kv_up FROM SOURCE kv_snapshot INCLUDE KEY ENVELOPE UPSERT;
+
+> CREATE TABLE kv_none FROM SOURCE kv_snapshot INCLUDE KEY ENVELOPE NONE;
+
+> SELECT count(*) FROM kv_up;
+16
+
+> SELECT count(*) FROM kv_none;
+48
+
+# the snapshot metrics here should definitely all be zero
+> SELECT
+    s.name,
+    u.offset_known,
+    u.offset_committed,
+    u.snapshot_records_known,
+    u.snapshot_records_staged,
+    u.messages_received >= 288,
+    u.records_indexed
+  FROM mz_internal.mz_source_statuses s
+  LEFT JOIN mz_internal.mz_source_statistics u ON s.id = u.id
+  WHERE s.name IN ('kv_snapshot', 'kv_up', 'kv_none')
+  ORDER BY s.name;
+kv_none 0 0 0 0 false 0
+kv_snapshot 6 6 0 0 true 0
+kv_up 0 0 0 0 false 16
+
+> DROP SOURCE kv_snapshot CASCADE;
