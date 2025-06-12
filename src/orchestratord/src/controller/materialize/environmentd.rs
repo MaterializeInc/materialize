@@ -1340,34 +1340,6 @@ fn create_environmentd_statefulset_object(
         },
     ];
 
-    if mz.meets_minimum_version(&V140_DEV0) {
-        volume_mounts.push(VolumeMount {
-            name: "license-key".to_string(),
-            mount_path: "/license_key".to_string(),
-            ..Default::default()
-        });
-        volumes.push(Volume {
-            name: "license-key".to_string(),
-            secret: Some(SecretVolumeSource {
-                default_mode: Some(256),
-                optional: Some(false),
-                secret_name: Some(mz.backend_secret_name()),
-                items: Some(vec![KeyToPath {
-                    key: "license_key".to_string(),
-                    path: "license_key".to_string(),
-                    ..Default::default()
-                }]),
-                ..Default::default()
-            }),
-            ..Default::default()
-        });
-        env.push(EnvVar {
-            name: "MZ_LICENSE_KEY".to_string(),
-            value: Some("/license_key/license_key".to_string()),
-            ..Default::default()
-        });
-    }
-
     // Add networking arguments.
     if mz.meets_minimum_version(&V147_DEV0) {
         volume_mounts.push(VolumeMount {
