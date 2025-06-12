@@ -1235,7 +1235,7 @@ EXPLAIN PLAN INSIGHTS AS JSON FOR SELECT 'abc'
         }
       },
       "fast_path": {
-        "text": "Explained Query (fast path):\n  →Constant (1 rows)\nTarget cluster: mz_catalog_server\n",
+        "text": "Explained Query (fast path):\n  →Constant (1 rows)\n\nTarget cluster: mz_catalog_server\n",
         "json": {
           "plans": [
             {

@@ -39,7 +39,7 @@ operators:
     description: |
       Produces rows from either an existing relation (source/view/materialized view/table) or from a previous
       CTE in the same plan.
-      A `Fused Map/Filter/Project` above will be combined with this operator.
+      A parent `Fused Map/Filter/Project` operator can combine with this operator.
 
       There are four types of `Get`.
 
@@ -88,7 +88,7 @@ operators:
       Computes new columns (maps), filters columns, and projects away columns. Works row-by-row.
       Maps and filters will be printed, but projects will not.
 
-      These may be marked as `Fused Map/Filter/Project`, which means they will be run efficiently as part of the operator beneath them.
+      These may be marked as **`Fused`** `Map/Filter/Project`, which means they will combine with the operator beneath them to run more efficiently.
     uses_memory: False
     memory_details: ""
     expansive: True
@@ -120,9 +120,9 @@ operators:
     description: |
       Appends the result of some (one-to-many) [table function](/sql/functions/#table-functions) to each row in the input.
 
-      A `Fused Table Function unnest_list` may occur combined with a `Reduce`; these are used to efficiently compile window functions from SQL to dataflows.
+      A parent `Fused Table Function unnest_list` operator will fuse with its child `GroupAggregate` operator. Fusing these operator is part of how we efficiently compile window functions from SQL to dataflows.
 
-      A `Fused Map/Filter/Project` above will be combined with this operator.
+      A parent `Fused Map/Filter/Project` can combine with this operator.
 
     uses_memory: False
     memory_details: ""
@@ -253,7 +253,7 @@ operators:
       5. `Non-incremental GroupAggregate` (e.g., window functions, `list_agg`) corresponds to a single non-incremental aggregation.
          These are the most computationally intensive reductions.
 
-      A `Fused Map/Filter/Project` above will be combined with this operator.
+      A parent `Fused Map/Filter/Project` can combine with this operator.
 
     uses_memory: True
     memory_details: |
