@@ -36,9 +36,7 @@ use timely::progress::Antichain;
 
 use crate::healthcheck::{HealthStatusMessage, HealthStatusUpdate, StatusNamespace};
 use crate::source::RawSourceCreationConfig;
-use crate::source::types::{
-    Probe, ProgressStatisticsUpdate, SourceMessage, SourceRender, StackedCollection,
-};
+use crate::source::types::{Probe, SourceMessage, SourceRender, StackedCollection};
 
 mod progress;
 mod replication;
@@ -113,7 +111,6 @@ impl SourceRender for SqlServerSource {
         BTreeMap<GlobalId, StackedCollection<G, Result<SourceMessage, DataflowError>>>,
         TimelyStream<G, Infallible>,
         TimelyStream<G, HealthStatusMessage>,
-        TimelyStream<G, ProgressStatisticsUpdate>,
         Option<TimelyStream<G, Probe<Self::Time>>>,
         Vec<PressOnDropButton>,
     ) {
@@ -155,14 +152,14 @@ impl SourceRender for SqlServerSource {
             source_outputs.insert(*id, output_info);
         }
 
-        let (repl_updates, uppers, repl_errs, snapshot_stats, repl_token) = replication::render(
+        let (repl_updates, uppers, repl_errs, repl_token) = replication::render(
             scope.clone(),
             config.clone(),
             source_outputs.clone(),
             self.clone(),
         );
 
-        let (progress_stats, progress_errs, progress_token) = progress::render(
+        let (progress_errs, progress_token) = progress::render(
             scope.clone(),
             config.clone(),
             self.connection.clone(),
@@ -208,13 +205,10 @@ impl SourceRender for SqlServerSource {
         });
         let health = health_init.concat(&health_errs);
 
-        let stats = snapshot_stats.concat(&progress_stats);
-
         (
             data_collections,
             uppers,
             health,
-            stats,
             None,
             vec![repl_token, progress_token],
         )

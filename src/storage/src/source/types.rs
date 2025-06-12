@@ -95,7 +95,6 @@ pub trait SourceRender {
         BTreeMap<GlobalId, StackedCollection<G, Result<SourceMessage, DataflowError>>>,
         Stream<G, Infallible>,
         Stream<G, HealthStatusMessage>,
-        Stream<G, ProgressStatisticsUpdate>,
         Option<Stream<G, Probe<Self::Time>>>,
         Vec<PressOnDropButton>,
     );

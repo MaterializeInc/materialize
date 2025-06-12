@@ -41,7 +41,6 @@ use timely::dataflow::{Scope, Stream as TimelyStream};
 use timely::progress::Antichain;
 
 use crate::source::sql_server::{ReplicationError, SourceOutputInfo, TransientError};
-use crate::source::types::ProgressStatisticsUpdate;
 use crate::source::{RawSourceCreationConfig, probe};
 
 /// Used as a partition ID to determine the worker that is responsible for
@@ -54,36 +53,21 @@ pub(crate) fn render<G: Scope<Timestamp = Lsn>>(
     connection: SqlServerConnectionDetails,
     outputs: BTreeMap<GlobalId, SourceOutputInfo>,
     resume_uppers: impl futures::Stream<Item = Antichain<Lsn>> + 'static,
-) -> (
-    TimelyStream<G, ProgressStatisticsUpdate>,
-    TimelyStream<G, ReplicationError>,
-    PressOnDropButton,
-) {
+) -> (TimelyStream<G, ReplicationError>, PressOnDropButton) {
     let op_name = format!("SqlServerProgress({})", config.id);
-    let mut builder = AsyncOperatorBuilder::new(op_name, scope);
-
-    let (stats_output, stats_stream) = builder.new_output();
+    let builder = AsyncOperatorBuilder::new(op_name, scope);
 
     let (button, transient_errors) = builder.build_fallible::<TransientError, _>(move |caps| {
         Box::pin(async move {
-            let [stats_cap]: &mut [_; 1] = caps.try_into().unwrap();
+            let _ = caps;
 
-            // Small helper closure.
-            let emit_stats = |cap, known: u64, committed: u64| {
-                let update = ProgressStatisticsUpdate::SteadyState {
-                    offset_known: known,
-                    offset_committed: committed,
-                };
-                tracing::debug!(?config.id, %known, %committed, "steadystate progress");
-                stats_output.give(cap, update);
-            };
-
+            let source_statistics = config.source_statistics().clone();
             // Only a single worker is responsible for processing progress.
             if !config.responsible_for(PROGRESS_WORKER) {
                 // Emit 0 to mark this worker as having started up correctly.
-                emit_stats(&stats_cap[0], 0, 0);
+                source_statistics.set_offset_known(0);
+                source_statistics.set_offset_committed(0);
             }
-
             let conn_config = connection
                 .resolve_config(
                     &config.config.connection_context.secrets_reader,
@@ -96,10 +80,8 @@ pub(crate) fn render<G: Scope<Timestamp = Lsn>>(
             let probe_interval = OFFSET_KNOWN_INTERVAL.handle(config.config.config_set());
             let mut probe_ticker = probe::Ticker::new(|| probe_interval.get(), config.now_fn);
 
-            // Offset that is measured from the upstream SQL Server instance.
+            // Offset that is measured from the upstream SQL Server instance. Tracked to detect an offset that moves backwards.
             let mut prev_offset_known: Option<Lsn> = None;
-            // Offset that we have observed from the `resume_uppers` stream.
-            let mut prev_offset_committed: Option<Lsn> = None;
 
             // This stream of "resume uppers" tracks all of the Lsn's that we have durably
             // committed for all subsources/exports and thus we can notify the upstream that the
@@ -114,6 +96,7 @@ pub(crate) fn render<G: Scope<Timestamp = Lsn>>(
                     // TODO(sql_server2): Emit probes here.
                     _probe_ts = probe_ticker.tick() => {
                         let known_lsn = mz_sql_server_util::inspect::get_max_lsn(&mut client).await?;
+                        source_statistics.set_offset_known(known_lsn.abbreviate());
 
                         // The DB should never go backwards, but it's good to know if it does.
                         let prev_known_lsn = match prev_offset_known {
@@ -128,13 +111,6 @@ pub(crate) fn render<G: Scope<Timestamp = Lsn>>(
                                 "upstream SQL Server went backwards in time, current LSN: {known_lsn}, last known {prev_known_lsn}",
                             );
                             continue;
-                        }
-
-                        // Update any listeners with our most recently known LSN.
-                        if let Some(prev_commit_lsn) = prev_offset_committed {
-                            let known_lsn_abrv = known_lsn.abbreviate();
-                            let commit_lsn_abrv = prev_commit_lsn.abbreviate();
-                            emit_stats(&stats_cap[0], known_lsn_abrv, commit_lsn_abrv);
                         }
                         prev_offset_known = Some(known_lsn);
                     },
@@ -164,14 +140,7 @@ pub(crate) fn render<G: Scope<Timestamp = Lsn>>(
                                 }
                             }
                         }
-
-                        // Update any listeners with our most recently committed LSN.
-                        if let Some(prev_known_lsn) = prev_offset_known {
-                            let known_lsn_abrv = prev_known_lsn.abbreviate();
-                            let commit_lsn_abrv = resume_upper.abbreviate();
-                            emit_stats(&stats_cap[0], known_lsn_abrv, commit_lsn_abrv);
-                        }
-                        prev_offset_committed = Some(*resume_upper);
+                        source_statistics.set_offset_committed(resume_upper.abbreviate());
                     }
                 };
             }
@@ -180,5 +149,5 @@ pub(crate) fn render<G: Scope<Timestamp = Lsn>>(
 
     let error_stream = transient_errors.map(ReplicationError::Transient);
 
-    (stats_stream, error_stream, button.press_on_drop())
+    (error_stream, button.press_on_drop())
 }

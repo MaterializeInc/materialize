@@ -127,12 +127,12 @@ impl SourceStatisticsMetricDefs {
             snapshot_records_known: registry.register(metric!(
                 name: "mz_source_snapshot_records_known",
                 help: "The total number of records in the source's snapshot",
-                var_labels: ["source_id", "worker_id", "shard_id"],
+                var_labels: ["source_id", "worker_id", "shard_id", "parent_source_id"],
             )),
             snapshot_records_staged: registry.register(metric!(
                 name: "mz_source_snapshot_records_staged",
                 help: "The total number of records read from the source's snapshot",
-                var_labels: ["source_id", "worker_id", "shard_id"],
+                var_labels: ["source_id", "worker_id", "shard_id", "parent_source_id"],
             )),
         }
     }
@@ -248,11 +248,13 @@ impl SourceStatisticsMetrics {
                 id.to_string(),
                 worker_id.to_string(),
                 shard.clone(),
+                parent_source_id.to_string(),
             ]),
             snapshot_records_staged: defs.snapshot_records_staged.get_delete_on_drop_metric(vec![
                 id.to_string(),
                 worker_id.to_string(),
                 shard.clone(),
+                parent_source_id.to_string(),
             ]),
         }
     }
@@ -920,6 +922,14 @@ impl AggregatedStatistics {
             global_source_statistics: Default::default(),
             global_sink_statistics: Default::default(),
         }
+    }
+
+    /// Get a collection of `SourceStatistics` for all known ids.
+    pub fn get_local_source_stats(&self) -> BTreeMap<GlobalId, SourceStatistics> {
+        self.local_source_statistics
+            .iter()
+            .map(|(id, (_epoch, stats))| (id.clone(), stats.clone()))
+            .collect()
     }
 
     /// Get a `SourceStatistics` for an id, if it exists.

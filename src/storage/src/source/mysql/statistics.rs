@@ -9,8 +9,6 @@
 
 //! Renders the statistics collection of the [`MySqlSourceConnection`] ingestion dataflow.
 
-use std::cell::{Cell, RefCell};
-
 use futures::StreamExt;
 use mz_storage_types::dyncfgs::MYSQL_OFFSET_KNOWN_INTERVAL;
 use timely::dataflow::operators::Map;
@@ -23,7 +21,7 @@ use mz_storage_types::sources::MySqlSourceConnection;
 use mz_storage_types::sources::mysql::{GtidPartition, GtidState, gtid_set_frontier};
 use mz_timely_util::builder_async::{OperatorBuilder as AsyncOperatorBuilder, PressOnDropButton};
 
-use crate::source::types::{Probe, ProgressStatisticsUpdate};
+use crate::source::types::Probe;
 use crate::source::{RawSourceCreationConfig, probe};
 
 use super::{ReplicationError, TransientError};
@@ -33,11 +31,10 @@ static STATISTICS: &str = "statistics";
 /// Renders the statistics dataflow.
 pub(crate) fn render<G: Scope<Timestamp = GtidPartition>>(
     scope: G,
-    config: RawSourceCreationConfig,
+    mut config: RawSourceCreationConfig,
     connection: MySqlSourceConnection,
     resume_uppers: impl futures::Stream<Item = Antichain<GtidPartition>> + 'static,
 ) -> (
-    Stream<G, ProgressStatisticsUpdate>,
     Stream<G, ReplicationError>,
     Stream<G, Probe<GtidPartition>>,
     PressOnDropButton,
@@ -45,26 +42,25 @@ pub(crate) fn render<G: Scope<Timestamp = GtidPartition>>(
     let op_name = format!("MySqlStatistics({})", config.id);
     let mut builder = AsyncOperatorBuilder::new(op_name, scope);
 
-    let (stats_output, stats_stream) = builder.new_output();
     let (probe_output, probe_stream) = builder.new_output();
 
     // TODO: Add additional metrics
-
     let (button, transient_errors) = builder.build_fallible::<TransientError, _>(move |caps| {
         Box::pin(async move {
             let worker_id = config.worker_id;
-            let [stats_cap, probe_cap]: &mut [_; 2] = caps.try_into().unwrap();
+            // Unable to take a reference to a `SourceStatistics` because it will prevent moving now_fn further down.
+            // It's ok to remove because we are passed a clone of config, and this operator is simple.
+            let source_statistics = config
+                .statistics
+                .remove(&config.id)
+                .expect("statistics are initialized");
+            let [probe_cap]: &mut [_; 1] = caps.try_into().unwrap();
 
             // Only run the replication reader on the worker responsible for it.
             if !config.responsible_for(STATISTICS) {
                 // Emit 0, to mark this worker as having started up correctly.
-                stats_output.give(
-                    &stats_cap[0],
-                    ProgressStatisticsUpdate::SteadyState {
-                        offset_known: 0,
-                        offset_committed: 0,
-                    },
-                );
+                source_statistics.set_offset_known(0);
+                source_statistics.set_offset_committed(0);
                 return Ok(());
             }
 
@@ -85,15 +81,11 @@ pub(crate) fn render<G: Scope<Timestamp = GtidPartition>>(
                 .await?;
 
             tokio::pin!(resume_uppers);
-
-            let prev_offset_known = Cell::new(None);
-            let prev_offset_committed = Cell::new(None);
-            let stats_output = RefCell::new(stats_output);
-
             let mut probe_ticker = probe::Ticker::new(
                 || MYSQL_OFFSET_KNOWN_INTERVAL.get(config.config.config_set()),
                 config.now_fn,
             );
+
             let probe_loop = async {
                 loop {
                     let probe_ts = probe_ticker.tick().await;
@@ -106,17 +98,7 @@ pub(crate) fn render<G: Scope<Timestamp = GtidPartition>>(
                         gtid_set_frontier(&gtid_executed).map_err(TransientError::from)?;
 
                     let offset_known = aggregate_mysql_frontier(&upstream_frontier);
-                    if let Some(offset_committed) = prev_offset_committed.get() {
-                        stats_output.borrow_mut().give(
-                            &stats_cap[0],
-                            ProgressStatisticsUpdate::SteadyState {
-                                offset_known,
-                                offset_committed,
-                            },
-                        );
-                    }
-                    prev_offset_known.set(Some(offset_known));
-
+                    source_statistics.set_offset_known(offset_known);
                     probe_output.give(
                         &probe_cap[0],
                         Probe {
@@ -129,16 +111,7 @@ pub(crate) fn render<G: Scope<Timestamp = GtidPartition>>(
             let commit_loop = async {
                 while let Some(committed_frontier) = resume_uppers.next().await {
                     let offset_committed = aggregate_mysql_frontier(&committed_frontier);
-                    if let Some(offset_known) = prev_offset_known.get() {
-                        stats_output.borrow_mut().give(
-                            &stats_cap[0],
-                            ProgressStatisticsUpdate::SteadyState {
-                                offset_known,
-                                offset_committed,
-                            },
-                        );
-                    }
-                    prev_offset_committed.set(Some(offset_committed));
+                    source_statistics.set_offset_committed(offset_committed);
                 }
             };
 
@@ -147,7 +120,6 @@ pub(crate) fn render<G: Scope<Timestamp = GtidPartition>>(
     });
 
     (
-        stats_stream,
         transient_errors.map(ReplicationError::from),
         probe_stream,
         button.press_on_drop(),

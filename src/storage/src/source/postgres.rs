@@ -110,7 +110,7 @@ use tokio_postgres::error::SqlState;
 use tokio_postgres::types::PgLsn;
 
 use crate::healthcheck::{HealthStatusMessage, HealthStatusUpdate, StatusNamespace};
-use crate::source::types::{Probe, ProgressStatisticsUpdate, SourceRender, StackedCollection};
+use crate::source::types::{Probe, SourceRender, StackedCollection};
 use crate::source::{RawSourceCreationConfig, SourceMessage};
 
 mod replication;
@@ -133,7 +133,6 @@ impl SourceRender for PostgresSourceConnection {
         BTreeMap<GlobalId, StackedCollection<G, Result<SourceMessage, DataflowError>>>,
         Stream<G, Infallible>,
         Stream<G, HealthStatusMessage>,
-        Stream<G, ProgressStatisticsUpdate>,
         Option<Stream<G, Probe<MzOffset>>>,
         Vec<PressOnDropButton>,
     ) {
@@ -165,6 +164,7 @@ impl SourceRender for PostgresSourceConnection {
                 desc,
                 casts,
                 resume_upper,
+                export_id: id.clone(),
             };
             table_info
                 .entry(output.desc.oid)
@@ -174,7 +174,7 @@ impl SourceRender for PostgresSourceConnection {
 
         let metrics = config.metrics.get_postgres_source_metrics(config.id);
 
-        let (snapshot_updates, rewinds, slot_ready, snapshot_stats, snapshot_err, snapshot_token) =
+        let (snapshot_updates, rewinds, slot_ready, snapshot_err, snapshot_token) =
             snapshot::render(
                 scope.clone(),
                 config.clone(),
@@ -183,19 +183,16 @@ impl SourceRender for PostgresSourceConnection {
                 metrics.snapshot_metrics.clone(),
             );
 
-        let (repl_updates, uppers, stats_stream, probe_stream, repl_err, repl_token) =
-            replication::render(
-                scope.clone(),
-                config.clone(),
-                self,
-                table_info,
-                &rewinds,
-                &slot_ready,
-                resume_uppers,
-                metrics,
-            );
-
-        let stats_stream = stats_stream.concat(&snapshot_stats);
+        let (repl_updates, uppers, probe_stream, repl_err, repl_token) = replication::render(
+            scope.clone(),
+            config.clone(),
+            self,
+            table_info,
+            &rewinds,
+            &slot_ready,
+            resume_uppers,
+            metrics,
+        );
 
         let updates = snapshot_updates.concat(&repl_updates);
         let partition_count = u64::cast_from(config.source_exports.len());
@@ -258,7 +255,6 @@ impl SourceRender for PostgresSourceConnection {
             data_collections,
             uppers,
             health,
-            stats_stream,
             probe_stream,
             vec![snapshot_token, repl_token],
         )
@@ -270,6 +266,7 @@ struct SourceOutputInfo {
     desc: PostgresTableDesc,
     casts: Vec<(CastType, MirScalarExpr)>,
     resume_upper: Antichain<MzOffset>,
+    export_id: GlobalId,
 }
 
 #[derive(Clone, Debug, thiserror::Error)]
