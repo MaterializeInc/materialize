@@ -315,9 +315,7 @@ def main() -> int:
             ]
     elif args.program == "test":
         if args.bazel:
-            raise UIError(
-                "testing with Bazel is not yet supported, go bug Parker about it"
-            )
+            raise UIError("testing with Bazel is not yet supported")
 
         (build_retcode, _) = _cargo_build(args)
         if args.build_only:
