@@ -52,6 +52,7 @@ steps:
           queue: builder-linux-x86_64
         env:
           CI_SANITIZER: address
+        sanitizer: skip
 
       - id: build-aarch64-asan
         label: ":bazel: Build aarch64 (ASan)"
@@ -65,6 +66,7 @@ steps:
           queue: builder-linux-aarch64-mem
         env:
           CI_SANITIZER: address
+        sanitizer: skip
 
   - group: Linters
     key: linters
