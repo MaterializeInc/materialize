@@ -18,6 +18,7 @@ documentation][user-docs].
 import os
 import random
 import subprocess
+import sys
 from collections.abc import Iterable
 from dataclasses import dataclass
 from typing import Any, Literal, TypeVar
@@ -357,7 +358,10 @@ def get_default_system_parameters(
         rng = random.Random(seed)
         for param in variable_params:
             params[param.key] = rng.choice(param.values)
-        print(f"System parameters with seed CI_SYSTEM_PARAMETERS_SEED={seed}: {params}")
+        print(
+            f"System parameters with seed CI_SYSTEM_PARAMETERS_SEED={seed}: {params}",
+            file=sys.stderr,
+        )
     elif system_param_setting == "minimal":
         pass
     else:
