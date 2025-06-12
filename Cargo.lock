@@ -4902,7 +4902,6 @@ dependencies = [
  "mz-controller",
  "mz-controller-types",
  "mz-dyncfg",
- "mz-dyncfg-file",
  "mz-expr",
  "mz-kafka-util",
  "mz-license-keys",
