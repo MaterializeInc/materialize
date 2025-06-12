@@ -24,6 +24,7 @@ use differential_dataflow::trace::Description;
 use futures::Stream;
 use futures_util::{StreamExt, stream};
 use mz_dyncfg::Config;
+use mz_ore::halt;
 use mz_ore::instrument;
 use mz_ore::now::EpochMillis;
 use mz_ore::task::{AbortOnDropHandle, JoinHandle, RuntimeExt};
@@ -289,26 +290,46 @@ where
 
         // A lot of things across mz have to line up to hold the following
         // invariant and violations only show up as subtle correctness errors,
-        // so explictly validate it here. Better to panic and roll back a
+        // so explicitly validate it here. Better to panic and roll back a
         // release than be incorrect (also potentially corrupting a sink).
         //
         // Note that the since check is intentionally less_than, not less_equal.
         // If a batch's since is X, that means we can no longer distinguish X
         // (beyond self.frontier) from X-1 (not beyond self.frontier) to keep
         // former and filter out the latter.
-        assert!(
-            PartialOrder::less_than(batch.desc.since(), &self.frontier)
-                // Special case when the frontier == the as_of (i.e. the first
-                // time this is called on a new Listen). Because as_of is
-                // _exclusive_, we don't need to be able to distinguish X from
-                // X-1.
-                || (self.frontier == self.as_of
-                    && PartialOrder::less_equal(batch.desc.since(), &self.frontier)),
-            "Listen on {} received a batch {:?} advanced past the listen frontier {:?}",
-            self.handle.machine.shard_id(),
-            batch.desc,
-            self.frontier
-        );
+        let acceptable_desc = PartialOrder::less_than(batch.desc.since(), &self.frontier)
+            // Special case when the frontier == the as_of (i.e. the first
+            // time this is called on a new Listen). Because as_of is
+            // _exclusive_, we don't need to be able to distinguish X from
+            // X-1.
+            || (self.frontier == self.as_of
+            && PartialOrder::less_equal(batch.desc.since(), &self.frontier));
+        if !acceptable_desc {
+            let lease_state = self
+                .handle
+                .machine
+                .applier
+                .reader_lease(self.handle.reader_id.clone());
+            if let Some(lease) = lease_state {
+                panic!(
+                    "Listen on {} received a batch {:?} advanced past the listen frontier {:?}, but the lease has not expired: {:?}",
+                    self.handle.machine.shard_id(),
+                    batch.desc,
+                    self.frontier,
+                    lease
+                )
+            } else {
+                // Ideally we'd percolate this error up, so callers could eg. restart a dataflow
+                // instead of restarting a process...
+                halt!(
+                    "Listen on {} received a batch {:?} advanced past the listen frontier {:?} after the reader has expired. \
+                     This can happen in exceptional cases: a machine goes to sleep or is running out of memory or CPU, for example.",
+                    self.handle.machine.shard_id(),
+                    batch.desc,
+                    self.frontier
+                )
+            }
+        }
 
         let new_frontier = batch.desc.upper().clone();
 
