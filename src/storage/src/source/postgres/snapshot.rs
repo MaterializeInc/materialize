@@ -149,6 +149,7 @@ use mz_postgres_util::{Client, PostgresError, simple_query_opt};
 use mz_repr::{Datum, DatumVec, Diff, Row};
 use mz_sql_parser::ast::{Ident, display::AstDisplay};
 use mz_storage_types::errors::DataflowError;
+use mz_storage_types::parameters::PgSourceSnapshotConfig;
 use mz_storage_types::sources::{MzOffset, PostgresSourceConnection};
 use mz_timely_util::builder_async::{
     Event as AsyncEvent, OperatorBuilder as AsyncOperatorBuilder, PressOnDropButton,
@@ -517,21 +518,12 @@ pub(crate) fn render<G: Scope<Timestamp = MzOffset>>(
             }
             *rewind_cap_set = CapabilitySet::new();
 
-            let strict_count = config.config.parameters.pg_snapshot_config.collect_strict_count;
-            if strict_count {
-                mz_ore::soft_assert_eq_or_log!(
-                    snapshot_staged,
-                    snapshot_total,
-                    "timely-{worker_id} size mimatch for snapshot of source {id}. \
-                        expected: {snapshot_total} actual: {snapshot_staged}"
-                );
-            }
             // Report the same known and staged records to signify that the snapshot is complete.
             stats_output.give(
                 &stats_cap[0],
                 ProgressStatisticsUpdate::Snapshot {
-                    records_known: snapshot_total,
-                    records_staged: snapshot_total,
+                    records_known: snapshot_staged,
+                    records_staged: snapshot_staged,
                 },
             );
 
@@ -717,14 +709,8 @@ async fn fetch_snapshot_size(
 
     let mut total = 0;
     for (table, oid, output_count) in tables {
-        let stats =
-            collect_table_statistics(client, snapshot_config.collect_strict_count, &table, oid)
-                .await?;
-        metrics.record_table_count_latency(
-            table,
-            stats.count_latency,
-            snapshot_config.collect_strict_count,
-        );
+        let stats = collect_table_statistics(client, snapshot_config, &table, oid).await?;
+        metrics.record_table_count_latency(table, stats.count_latency);
         total += stats.count * u64::cast_from(output_count);
     }
     Ok(total)
@@ -738,41 +724,38 @@ struct TableStatistics {
 
 async fn collect_table_statistics(
     client: &Client,
-    strict: bool,
+    config: PgSourceSnapshotConfig,
     table: &str,
     oid: u32,
 ) -> Result<TableStatistics, anyhow::Error> {
     use mz_ore::metrics::MetricsFutureExt;
     let mut stats = TableStatistics::default();
 
-    if strict {
+    let estimate_row = simple_query_opt(
+        client,
+        &format!("SELECT reltuples::bigint AS estimate_count FROM pg_class WHERE oid = '{oid}'"),
+    )
+    .wall_time()
+    .set_at(&mut stats.count_latency)
+    .await?;
+    stats.count = match estimate_row {
+        Some(row) => row.get("estimate_count").unwrap().parse().unwrap_or(0),
+        None => bail!("failed to get estimate count for {table}"),
+    };
+
+    // If the estimate is low enough we can attempt to get an exact count. Note that not yet
+    // vacuumed tables will report zero rows here and there is a possibility that they are very
+    // large. We accept this risk and we offer the feature flag as an escape hatch if it becomes
+    // problematic.
+    if config.collect_strict_count && stats.count < 1_000_000 {
         let count_row = simple_query_opt(client, &format!("SELECT count(*) as count from {table}"))
             .wall_time()
             .set_at(&mut stats.count_latency)
             .await?;
-        match count_row {
-            Some(row) => {
-                let count: i64 = row.get("count").unwrap().parse().unwrap();
-                stats.count = count.try_into()?;
-            }
+        stats.count = match count_row {
+            Some(row) => row.get("count").unwrap().parse().unwrap(),
             None => bail!("failed to get count for {table}"),
         }
-    } else {
-        let estimate_row = simple_query_opt(
-            client,
-            &format!(
-                "SELECT reltuples::bigint AS estimate_count FROM pg_class WHERE oid = '{oid}'"
-            ),
-        )
-        .wall_time()
-        .set_at(&mut stats.count_latency)
-        .await?;
-        match estimate_row {
-            Some(row) => {
-                stats.count = row.get("estimate_count").unwrap().parse().unwrap_or(0);
-            }
-            None => bail!("failed to get estimate count for {table}"),
-        };
     }
 
     Ok(stats)

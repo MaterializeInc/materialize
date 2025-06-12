@@ -435,15 +435,8 @@ impl RustType<ProtoStorageParameters> for StorageParameters {
 pub struct PgSourceSnapshotConfig {
     /// Whether or not to collect a strict `count(*)` for each table during snapshotting.
     /// This is more accurate but way more expensive compared to an estimate in `pg_class`.
+    /// For this reason it is only attempted when the estimated count is low enough.
     pub collect_strict_count: bool,
-    /// If a table is not vacuumed or analyzed (usually if it has a low number of writes, or low
-    /// number of rows in general) in postgres, the estimate count in `pg_class` is just `-1.
-    /// This config controls whether we should fallback to `count(*)` in that case. It does
-    /// nothing if `collect_strict_count=true`.
-    pub fallback_to_strict_count: bool,
-    /// Whether or not we wait for `count(*)` to finish before beginning to read the snapshot for
-    /// the given table.
-    pub wait_for_count: bool,
 }
 
 impl PgSourceSnapshotConfig {
@@ -451,9 +444,6 @@ impl PgSourceSnapshotConfig {
         PgSourceSnapshotConfig {
             // We want accurate values, if its not too expensive.
             collect_strict_count: true,
-            fallback_to_strict_count: true,
-            // For now, wait to start snapshotting until after we have the count.
-            wait_for_count: true,
         }
     }
 }
@@ -468,16 +458,12 @@ impl RustType<ProtoPgSourceSnapshotConfig> for PgSourceSnapshotConfig {
     fn into_proto(&self) -> ProtoPgSourceSnapshotConfig {
         ProtoPgSourceSnapshotConfig {
             collect_strict_count: self.collect_strict_count,
-            fallback_to_strict_count: self.fallback_to_strict_count,
-            wait_for_count: self.wait_for_count,
         }
     }
 
     fn from_proto(proto: ProtoPgSourceSnapshotConfig) -> Result<Self, TryFromProtoError> {
         Ok(PgSourceSnapshotConfig {
             collect_strict_count: proto.collect_strict_count,
-            fallback_to_strict_count: proto.fallback_to_strict_count,
-            wait_for_count: proto.wait_for_count,
         })
     }
 }

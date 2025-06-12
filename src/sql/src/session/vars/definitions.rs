@@ -1024,26 +1024,6 @@ pub static PG_SOURCE_SNAPSHOT_COLLECT_STRICT_COUNT: VarDefinition = VarDefinitio
     false,
 );
 
-/// Please see `PgSourceSnapshotConfig`.
-pub static PG_SOURCE_SNAPSHOT_FALLBACK_TO_STRICT_COUNT: VarDefinition = VarDefinition::new(
-    "pg_source_snapshot_fallback_to_strict_count",
-    value!(bool; mz_storage_types::parameters::PgSourceSnapshotConfig::new().fallback_to_strict_count),
-    "Please see <https://dev.materialize.com/api/rust-private\
-        /mz_storage_types/parameters\
-        /struct.PgSourceSnapshotConfig.html#structfield.fallback_to_strict_count>",
-    false,
-);
-
-/// Please see `PgSourceSnapshotConfig`.
-pub static PG_SOURCE_SNAPSHOT_WAIT_FOR_COUNT: VarDefinition = VarDefinition::new(
-    "pg_source_snapshot_wait_for_count",
-    value!(bool; mz_storage_types::parameters::PgSourceSnapshotConfig::new().wait_for_count),
-    "Please see <https://dev.materialize.com/api/rust-private\
-        /mz_storage_types/parameters\
-        /struct.PgSourceSnapshotConfig.html#structfield.wait_for_count>",
-    false,
-);
-
 /// Sets the time between TCP keepalive probes when connecting to MySQL via `mz_mysql_util`.
 pub static MYSQL_SOURCE_TCP_KEEPALIVE: VarDefinition = VarDefinition::new(
     "mysql_source_tcp_keepalive",
