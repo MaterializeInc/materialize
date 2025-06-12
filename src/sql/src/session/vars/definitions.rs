@@ -1613,6 +1613,18 @@ pub mod cluster_scheduling {
         false,
     );
 
+    // `minDomains`, like maxSkew, is used to spread across a topology
+    // key. Unlike max skew, minDomains will force node creation to ensure
+    // distribution across a minimum number of keys.
+    // https://kubernetes.io/docs/concepts/scheduling-eviction/topology-spread-constraints/#spread-constraint-definition
+    pub static CLUSTER_TOPOLOGY_SPREAD_MIN_DOMAINS: VarDefinition = VarDefinition::new(
+        "cluster_topology_spread_min_domains",
+        value!(Option<i32>; None),
+        "`minDomains` for replica topology spread constraints. \
+            Should be set to the number of Availability Zones (Materialize).",
+        false,
+    );
+
     pub static CLUSTER_TOPOLOGY_SPREAD_SOFT: VarDefinition = VarDefinition::new(
         "cluster_topology_spread_soft",
         value!(bool; DEFAULT_TOPOLOGY_SPREAD_SOFT),

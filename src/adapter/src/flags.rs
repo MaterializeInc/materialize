@@ -204,6 +204,7 @@ pub fn orchestrator_scheduling_config(config: &SystemVars) -> ServiceSchedulingC
             enabled: config.cluster_enable_topology_spread(),
             ignore_non_singular_scale: config.cluster_topology_spread_ignore_non_singular_scale(),
             max_skew: config.cluster_topology_spread_max_skew(),
+            min_domains: config.cluster_topology_spread_set_min_domains(),
             soft: config.cluster_topology_spread_soft(),
         },
         soften_az_affinity: config.cluster_soften_az_affinity(),

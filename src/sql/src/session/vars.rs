@@ -39,7 +39,7 @@
 //! important.
 //!
 //! ## Structure
-//! Thw most meaningful exports from this module are:
+//! The most meaningful exports from this module are:
 //!
 //! - [`SessionVars`] represent per-session parameters, which each user can
 //!   access independently of one another, and are accessed via `SET`.
@@ -1180,6 +1180,7 @@ impl SystemVars {
             &cluster_scheduling::CLUSTER_ENABLE_TOPOLOGY_SPREAD,
             &cluster_scheduling::CLUSTER_TOPOLOGY_SPREAD_IGNORE_NON_SINGULAR_SCALE,
             &cluster_scheduling::CLUSTER_TOPOLOGY_SPREAD_MAX_SKEW,
+            &cluster_scheduling::CLUSTER_TOPOLOGY_SPREAD_MIN_DOMAINS,
             &cluster_scheduling::CLUSTER_TOPOLOGY_SPREAD_SOFT,
             &cluster_scheduling::CLUSTER_SOFTEN_AZ_AFFINITY,
             &cluster_scheduling::CLUSTER_SOFTEN_AZ_AFFINITY_WEIGHT,
@@ -2081,6 +2082,10 @@ impl SystemVars {
 
     pub fn cluster_topology_spread_max_skew(&self) -> i32 {
         *self.expect_value(&cluster_scheduling::CLUSTER_TOPOLOGY_SPREAD_MAX_SKEW)
+    }
+
+    pub fn cluster_topology_spread_set_min_domains(&self) -> Option<i32> {
+        *self.expect_value(&cluster_scheduling::CLUSTER_TOPOLOGY_SPREAD_MIN_DOMAINS)
     }
 
     pub fn cluster_topology_spread_soft(&self) -> bool {

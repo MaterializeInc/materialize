@@ -783,7 +783,7 @@ impl NamespacedOrchestrator for NamespacedKubernetesOrchestrator {
 
                 let constraint = TopologySpreadConstraint {
                     label_selector: Some(ls),
-                    min_domains: None,
+                    min_domains: config.min_domains,
                     max_skew: config.max_skew,
                     topology_key: "topology.kubernetes.io/zone".to_string(),
                     when_unsatisfiable: if config.soft {
