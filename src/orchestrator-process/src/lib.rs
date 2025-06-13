@@ -611,13 +611,24 @@ impl OrchestratorWorker {
             None
         };
 
+        // The service might already exist. If it has the same config as requested (currently we
+        // check only the scale), we have nothing to do. Otherwise we need to drop and recreate it.
+        let old_scale = {
+            let services = self.services.lock().expect("poisoned");
+            services.get(&id).map(|states| states.len())
+        };
+        match old_scale {
+            Some(old) if old == usize::from(scale) => return Ok(()),
+            Some(_) => self.drop_service(&id).await?,
+            None => (),
+        }
+
         {
             let mut services = self.services.lock().expect("lock poisoned");
-            let process_states = services.entry(id.clone()).or_default();
 
             // Create the state for new processes.
-            let mut new_process_states = vec![];
-            for i in process_states.len()..scale.into() {
+            let mut process_states = vec![];
+            for i in 0..scale.into() {
                 let listen_addrs = ports_in
                     .iter()
                     .map(|p| {
@@ -688,7 +699,7 @@ impl OrchestratorWorker {
                     }),
                 );
 
-                new_process_states.push(ProcessState {
+                process_states.push(ProcessState {
                     _handle: handle.abort_on_drop(),
                     status: ProcessStatus::NotReady,
                     status_time: Utc::now(),
@@ -699,8 +710,7 @@ impl OrchestratorWorker {
 
             // Update the in-memory process state. We do this after we've created
             // all process states to avoid partially updating our in-memory state.
-            process_states.truncate(scale.into());
-            process_states.extend(new_process_states);
+            services.insert(id, process_states);
         }
 
         self.maybe_write_prometheus_service_discovery_file().await;
