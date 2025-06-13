@@ -172,11 +172,9 @@ def get_variable_system_parameters(
         VariableSystemParameter(
             "kafka_default_metadata_fetch_interval",
             "1s",
-            ["100ms", "1s", "10s"],
+            ["100ms", "1s"],
         ),
-        VariableSystemParameter(
-            "mysql_offset_known_interval", "1s", ["100ms", "1s", "10s"]
-        ),
+        VariableSystemParameter("mysql_offset_known_interval", "1s", ["100ms", "1s"]),
         VariableSystemParameter(
             "force_source_table_syntax",
             "true" if force_source_table_syntax else "false",
@@ -300,9 +298,7 @@ def get_variable_system_parameters(
         VariableSystemParameter(
             "persist_blob_cache_scale_with_threads", "true", ["true", "false"]
         ),
-        VariableSystemParameter(
-            "pg_offset_known_interval", "1s", ["100ms", "1s", "10s"]
-        ),
+        VariableSystemParameter("pg_offset_known_interval", "1s", ["100ms", "1s"]),
         VariableSystemParameter(
             "statement_logging_default_sample_rate", "0.01", ["0", "0.01"]
         ),
