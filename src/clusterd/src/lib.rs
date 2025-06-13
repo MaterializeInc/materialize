@@ -341,8 +341,18 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
     let grpc_host = args.grpc_host.and_then(|h| (!h.is_empty()).then_some(h));
     let grpc_server_metrics = GrpcServerMetrics::register_with(&metrics_registry);
 
+    let storage_timely_config = args.storage_timely_config.map(|mut cfg| {
+        cfg.process = args.process.expect("process index required");
+        cfg
+    });
+    let compute_timely_config = args.compute_timely_config.map(|mut cfg| {
+        cfg.process = args.process.expect("process index required");
+        cfg
+    });
+
     // Start storage server.
     let storage_client_builder = mz_storage::serve(
+        storage_timely_config,
         &metrics_registry,
         Arc::clone(&persist_clients),
         txns_ctx.clone(),
@@ -350,7 +360,8 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
         SYSTEM_TIME.clone(),
         connection_context.clone(),
         StorageInstanceContext::new(args.scratch_directory.clone(), args.announce_memory_limit)?,
-    )?;
+    )
+    .await?;
     info!(
         "listening for storage controller connections on {}",
         args.storage_controller_listen_addr
@@ -369,6 +380,7 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
 
     // Start compute server.
     let compute_client_builder = mz_compute::server::serve(
+        compute_timely_config,
         &metrics_registry,
         persist_clients,
         txns_ctx,
@@ -378,7 +390,8 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
             worker_core_affinity: args.worker_core_affinity,
             connection_context,
         },
-    )?;
+    )
+    .await?;
     info!(
         "listening for compute controller connections on {}",
         args.compute_controller_listen_addr
