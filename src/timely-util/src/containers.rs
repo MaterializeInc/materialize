@@ -106,6 +106,7 @@ mod container {
                 }
             }
         }
+        #[inline(always)]
         pub fn get(&self, index: usize) -> C::Ref<'_> {
             self.borrow().get(index)
         }
@@ -329,6 +330,7 @@ mod builder {
     }
 
     impl<C: Columnar> Default for ColumnBuilder<C> {
+        #[inline(always)]
         fn default() -> Self {
             ColumnBuilder {
                 current: Default::default(),
@@ -430,10 +432,12 @@ pub mod batcher {
     impl<CB: ContainerBuilder> ContainerBuilder for Chunker<CB> {
         type Container = CB::Container;
 
+        #[inline(always)]
         fn extract(&mut self) -> Option<&mut Self::Container> {
             self.builder.extract()
         }
 
+        #[inline(always)]
         fn finish(&mut self) -> Option<&mut Self::Container> {
             self.builder.finish()
         }
@@ -534,6 +538,7 @@ pub mod merger {
         T: for<'a> Columnar<Ref<'a>: Ord>,
         R: Columnar,
     {
+        #[inline(always)]
         fn next_or_alloc(&mut self) -> Result<<(D, T, R) as Columnar>::Ref<'_>, Column<(D, T, R)>> {
             if self.is_empty() {
                 Err(std::mem::take(&mut self.list))
@@ -541,15 +546,18 @@ pub mod merger {
                 Ok(self.pop())
             }
         }
+        #[inline(always)]
         fn is_empty(&self) -> bool {
             self.head == self.len
         }
+        #[inline(always)]
         fn cmp_heads(&self, other: &Self) -> std::cmp::Ordering {
             let (data1, time1, _) = self.peek();
             let (data2, time2, _) = other.peek();
 
             (data1, time1).cmp(&(data2, time2))
         }
+        #[inline(always)]
         fn from(list: Column<(D, T, R)>) -> Self {
             let len = list.len();
             ColumnQueue { list, head: 0, len }
@@ -557,11 +565,13 @@ pub mod merger {
     }
 
     impl<T: Columnar> ColumnQueue<T> {
+        #[inline(always)]
         fn pop(&mut self) -> T::Ref<'_> {
             self.head += 1;
             self.list.get(self.head - 1)
         }
 
+        #[inline(always)]
         fn peek(&self) -> T::Ref<'_> {
             self.list.get(self.head)
         }
@@ -575,6 +585,7 @@ pub mod merger {
     {
         type TimeOwned = T;
 
+        #[inline(always)]
         fn time_kept(
             (_, time, _): &Self::Item<'_>,
             upper: &AntichainRef<Self::TimeOwned>,
@@ -590,6 +601,7 @@ pub mod merger {
             }
         }
         // len size cap allocations
+        #[inline(always)]
         fn account(&self) -> (usize, usize, usize, usize) {
             let (mut size, mut cap) = (0, 0);
             match self {
@@ -627,6 +639,7 @@ pub mod merger {
     {
         type DiffOwned = R;
 
+        #[inline(always)]
         fn push_and_add<'a>(
             &mut self,
             item1: <Self::Container as Container>::Item<'a>,

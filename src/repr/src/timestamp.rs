@@ -105,6 +105,7 @@ mod columnar_timestamp {
     impl Columnar for Timestamp {
         type Ref<'a> = Timestamp;
 
+        #[inline(always)]
         fn into_owned<'a>(other: Self::Ref<'a>) -> Self {
             other
         }
@@ -117,6 +118,7 @@ mod columnar_timestamp {
             = TimestampVec<&'a [Timestamp]>
         where
             Self: 'a;
+        #[inline(always)]
         fn borrow<'a>(&'a self) -> Self::Borrowed<'a> {
             TimestampVec(self.0.as_slice())
         }
@@ -134,6 +136,7 @@ mod columnar_timestamp {
         }
     }
     impl<'a> columnar::FromBytes<'a> for TimestampVec<&'a [Timestamp]> {
+        #[inline(always)]
         fn from_bytes(bytes: &mut impl Iterator<Item = &'a [u8]>) -> Self {
             // We use `unwrap()` here in order to panic with the `bytemuck` error, which may be informative.
             TimestampVec(
