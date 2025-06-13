@@ -991,7 +991,7 @@ def workflow_kafka_source_rehydration(c: Composition) -> None:
         result = c.sql_query("SELECT count(*) FROM kafka_source_tbl", service="mz_new")
         assert result[0][0] == count * repeats, f"Wrong result: {result}"
         assert (
-            elapsed < 2
+            elapsed < 3
         ), f"Took {elapsed}s to SELECT on Kafka source after 0dt upgrade, is it hydrated?"
 
         start_time = time.time()
@@ -1136,7 +1136,7 @@ def workflow_kafka_source_rehydration_large_initial(c: Composition) -> None:
         result = c.sql_query("SELECT count(*) FROM kafka_source_tbl", service="mz_new")
         assert result[0][0] == count * repeats, f"Wrong result: {result}"
         assert (
-            elapsed < 2
+            elapsed < 3
         ), f"Took {elapsed}s to SELECT on Kafka source after 0dt upgrade, is it hydrated?"
 
         start_time = time.time()

@@ -327,7 +327,7 @@ steps:
           composition: sqllogictest
           run: fast-tests
     agents:
-      queue: hetzner-aarch64-8cpu-16gb
+      queue: hetzner-aarch64-16cpu-32gb
 
   - id: restarts
     label: "Restart test"
