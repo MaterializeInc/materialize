@@ -2186,6 +2186,11 @@ impl SystemVars {
         *self.expect_value(&OPTIMIZER_E2E_LATENCY_WARNING_THRESHOLD)
     }
 
+    /// Returns whether the named variable is a controller configuration parameter.
+    pub fn is_controller_config_var(&self, name: &str) -> bool {
+        self.is_dyncfg_var(name)
+    }
+
     /// Returns whether the named variable is a compute configuration parameter
     /// (things that go in `ComputeParameters` and are sent to replicas via `UpdateConfiguration`
     /// commands).

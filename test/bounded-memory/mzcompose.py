@@ -757,9 +757,7 @@ SCENARIOS = [
 
             > CREATE CLUSTER REPLICA clusterd.r1
               STORAGECTL ADDRESSES ['clusterd:2100'],
-              STORAGE ADDRESSES ['clusterd:2103'],
-              COMPUTECTL ADDRESSES ['clusterd:2101'],
-              COMPUTE ADDRESSES ['clusterd:2102'];
+              COMPUTECTL ADDRESSES ['clusterd:2101'];
 
             > SET CLUSTER = clusterd
 
@@ -854,9 +852,7 @@ SCENARIOS = [
             f"""
             > CREATE CLUSTER REPLICA clusterd.r1
               STORAGECTL ADDRESSES ['clusterd:2100'],
-              STORAGE ADDRESSES ['clusterd:2103'],
-              COMPUTECTL ADDRESSES ['clusterd:2101'],
-              COMPUTE ADDRESSES ['clusterd:2102'];
+              COMPUTECTL ADDRESSES ['clusterd:2101'];
 
             > SET CLUSTER = clusterd;
 
@@ -1503,9 +1499,7 @@ def run_scenario(
             """
             CREATE CLUSTER clusterd REPLICAS (r1 (
                 STORAGECTL ADDRESSES ['clusterd:2100'],
-                STORAGE ADDRESSES ['clusterd:2103'],
-                COMPUTECTL ADDRESSES ['clusterd:2101'],
-                COMPUTE ADDRESSES ['clusterd:2102']
+                COMPUTECTL ADDRESSES ['clusterd:2101']
             ))
         """
         )
