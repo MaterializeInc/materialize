@@ -613,7 +613,7 @@ steps:
           - ./ci/plugins/mzcompose:
               composition: mysql-cdc-resumption-old-syntax
         agents:
-          queue: hetzner-aarch64-4cpu-8gb
+          queue: hetzner-aarch64-8cpu-16gb
 
       - id: mysql-rtr-old-syntax
         label: MySQL RTR tests (before source versioning)
@@ -655,7 +655,7 @@ steps:
           - ./ci/plugins/mzcompose:
               composition: pg-cdc-resumption-old-syntax
         agents:
-          queue: hetzner-aarch64-4cpu-8gb
+          queue: hetzner-aarch64-8cpu-16gb
 
       - id: pg-rtr-old-syntax
         label: Postgres RTR tests (before source versioning)
