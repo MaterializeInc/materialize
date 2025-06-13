@@ -514,6 +514,7 @@ UNINTERESTING_SYSTEM_PARAMETERS = [
     "mz_metrics_lgalloc_map_refresh_interval",
     "mz_metrics_lgalloc_refresh_interval",
     "mz_metrics_rusage_refresh_interval",
+    "enable_timely_init_at_process_startup",
 ]
 
 
