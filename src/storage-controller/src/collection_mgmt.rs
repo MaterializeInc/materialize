@@ -757,6 +757,7 @@ where
                 &mut [],
                 Antichain::from_elem(self.current_upper.clone()),
                 Antichain::from_elem(now.clone()),
+                true,
             )
             .await
             .expect("valid usage");

@@ -103,7 +103,12 @@ impl<C: DurableCacheCodec> DurableCache<C> {
             .expect("shard codecs should not change");
         // Ensure that at least one ts is immediately readable, for convenience.
         let res = write
-            .compare_and_append_batch(&mut [], Antichain::from_elem(0), Antichain::from_elem(1))
+            .compare_and_append_batch(
+                &mut [],
+                Antichain::from_elem(0),
+                Antichain::from_elem(1),
+                true,
+            )
             .await
             .expect("usage was valid");
         match res {

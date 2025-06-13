@@ -1326,7 +1326,7 @@ mod append {
             loop {
                 let result = self
                     .persist_writer
-                    .compare_and_append_batch(&mut to_append, lower.clone(), upper.clone())
+                    .compare_and_append_batch(&mut to_append, lower.clone(), upper.clone(), true)
                     .await
                     .expect("valid usage");
 

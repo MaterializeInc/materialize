@@ -999,7 +999,7 @@ mod tests {
 
         // Now finalize the shard to writes.
         let () = d0_write
-            .compare_and_append_batch(&mut [], Antichain::from_elem(6), Antichain::new())
+            .compare_and_append_batch(&mut [], Antichain::from_elem(6), Antichain::new(), true)
             .await
             .unwrap()
             .unwrap();
