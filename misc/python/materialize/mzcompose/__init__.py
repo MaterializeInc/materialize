@@ -55,6 +55,10 @@ ADDITIONAL_BENCHMARKING_SYSTEM_PARAMETERS = {
     # This would increase the memory usage of many tests, making it harder to
     # tell small memory increase regressions
     "persist_blob_cache_scale_with_threads": "false",
+    # The peek response stash kicks in when results get larger, and it
+    # increases query latency. Which in turn makes benchmarking more
+    # unpredictable.
+    "enable_compute_peek_response_stash": "false",
 }
 
 
