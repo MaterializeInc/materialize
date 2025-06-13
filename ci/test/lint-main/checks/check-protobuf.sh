@@ -21,6 +21,7 @@ cd "$(dirname "$0")/../../../.."
 if ! buf --version >/dev/null 2>/dev/null; then
   echo "lint: buf is not installed"
   echo "hint: refer to https://buf.build/docs/installation for install instructions"
+  exit 1
 fi
 
 CURRENT_GIT_BRANCH=$(try git branch --show-current)
