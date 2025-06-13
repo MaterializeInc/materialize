@@ -180,6 +180,356 @@ SELECT COUNT(*) FROM mz_internal.mz_lir_mapping;
 ----
 0
 
+# checking in on bindings
+
+statement ok
+CREATE TABLE Person (
+    creationDate timestamp with time zone NOT NULL,
+    id bigint,
+    firstName text NOT NULL,
+    lastName text NOT NULL,
+    gender text NOT NULL,
+    birthday date NOT NULL,
+    locationIP text NOT NULL,
+    browserUsed text NOT NULL,
+    LocationCityId bigint NOT NULL,
+    speaks text NOT NULL,
+    email text NOT NULL
+)
+
+statement ok
+CREATE INDEX Person_id ON Person (id)
+
+statement ok
+CREATE INDEX Person_LocationCityId ON Person (LocationCityId)
+
+statement ok
+CREATE TABLE Person_knows_Person (
+    creationDate timestamp with time zone NOT NULL,
+    Person1id bigint NOT NULL,
+    Person2id bigint NOT NULL
+)
+
+statement ok
+CREATE INDEX Person_knows_Person_Person1id ON Person_knows_Person (Person1id)
+
+statement ok
+CREATE INDEX Person_knows_Person_Person2id ON person_knows_person (Person2id)
+
+statement ok
+CREATE INDEX Person_knows_Person_Person1id_Person2id ON Person_knows_Person (Person1id, Person2id)
+
+statement ok
+CREATE TABLE Post (
+    creationDate timestamp with time zone NOT NULL,
+    id bigint NOT NULL,
+    imageFile text,
+    locationIP text NOT NULL,
+    browserUsed text NOT NULL,
+    language text,
+    content text,
+    length int NOT NULL,
+    CreatorPersonId bigint NOT NULL,
+    ContainerForumId bigint NOT NULL,
+    LocationCountryId bigint NOT NULL
+)
+
+statement ok
+CREATE INDEX Post_id ON Post (id)
+
+statement ok
+CREATE TABLE Comment (
+    creationDate timestamp with time zone NOT NULL,
+    id bigint NOT NULL,
+    locationIP text NOT NULL,
+    browserUsed text NOT NULL,
+    content text NOT NULL,
+    length int NOT NULL,
+    CreatorPersonId bigint NOT NULL,
+    LocationCountryId bigint NOT NULL,
+    ParentPostId bigint,
+    ParentCommentId bigint
+)
+
+statement ok
+CREATE INDEX Comment_id ON Comment (id)
+
+statement ok
+CREATE OR REPLACE MATERIALIZED VIEW Message AS
+WITH MUTUALLY RECURSIVE
+  -- compute the transitive closure (with root information) using minimnal info
+  roots (MessageId bigint, RootPostId bigint, RootPostLanguage text, ContainerForumId bigint, ParentMessageId bigint) AS
+    (      SELECT id AS MessageId, id AS RootPostId, language AS RootPostLanguage, ContainerForumId, NULL::bigint AS ParentMessageId FROM Post
+     UNION SELECT
+              Comment.id AS MessageId,
+         ParentPostId AS RootPostId,
+         language AS RootPostLanguage,
+         Post.ContainerForumId AS ContainerForumId,
+         ParentPostId AS ParentMessageId
+           FROM Comment
+       JOIN Post
+       ON Comment.ParentPostId = Post.id),
+  ms (MessageId bigint, RootPostId bigint, RootPostLanguage text, ContainerForumId bigint, ParentMessageId bigint) AS
+    (      SELECT *
+           FROM roots
+     UNION SELECT
+              Comment.id AS MessageId,
+         ms.RootPostId AS RootPostId,
+         ms.RootPostLanguage AS RootPostLanguage,
+         ms.ContainerForumId AS ContainerForumId,
+         ParentCommentId AS ParentMessageId
+           FROM Comment
+       JOIN ms
+       ON ParentCommentId = ms.MessageId)
+  -- now do the late materialization
+  (     SELECT
+          creationDate,
+          id AS MessageId,
+          id AS RootPostId,
+          language AS RootPostLanguage,
+          content,
+          imageFile,
+          locationIP,
+          browserUsed,
+          length,
+          CreatorPersonId,
+          ContainerForumId,
+          LocationCountryId,
+          NULL::bigint AS ParentMessageId
+        FROM Post
+  UNION (SELECT
+          Comment.creationDate AS creationDate,
+          Comment.id AS MessageId,
+          ms.RootPostId AS RootPostId,
+          ms.RootPostLanguage AS RootPostLanguage,
+          Comment.content AS content,
+          NULL::text AS imageFile,
+          Comment.locationIP AS locationIP,
+          Comment.browserUsed AS browserUsed,
+          Comment.length AS length,
+          Comment.CreatorPersonId AS CreatorPersonId,
+          ms.ContainerForumId AS ContainerForumId,
+          Comment.LocationCountryId AS LocationCityId,
+          ms.ParentMessageId AS ParentMessageId
+    FROM Comment
+    JOIN ms
+    ON Comment.id = ms.MessageId))
+
+statement ok
+CREATE INDEX Message_MessageId ON Message (MessageId)
+
+statement ok
+CREATE INDEX Message_ParentMessageId ON Message (ParentMessageId)
+
+statement ok
+CREATE INDEX Message_CreatorPersonId ON Message (CreatorPersonId)
+
+statement ok
+CREATE VIEW PathQ19 AS
+WITH
+  -- asymmetrize...
+  knows_asymmetric AS (
+    SELECT person1id, person2id
+      FROM Person_knows_person
+     WHERE person1id < person2id
+  ),
+  -- compute interaction scores (no interactions means we ignore that 'knows' relationship)
+  weights(src, dst, w) AS (
+    SELECT
+        person1id AS src,
+        person2id AS dst,
+        greatest(round(40 - sqrt(count(*)))::bigint, 1) AS w
+    FROM Message m1,
+         Message m2,
+         knows_asymmetric pp
+    WHERE pp.person1id = least(m1.creatorpersonid, m2.creatorpersonid)
+      AND pp.person2id = greatest(m1.creatorpersonid, m2.creatorpersonid)
+      AND m1.parentmessageid = m2.messageid
+      AND m1.creatorpersonid <> m2.creatorpersonid
+ GROUP BY src, dst
+)
+-- resymmetrize
+SELECT src, dst, w FROM weights
+UNION ALL
+SELECT dst, src, w FROM weights;
+
+statement ok
+CREATE INDEX PathQ19_src ON PathQ19 (src);
+
+statement ok
+CREATE VIEW ldbc_q19 AS
+WITH MUTUALLY RECURSIVE
+  -- Source and destination identifiers, which do not evolve recursively.
+  srcs (f bigint) AS (SELECT id FROM Person WHERE locationcityid = 655::bigint),
+  dsts (t bigint) AS (SELECT id FROM Person WHERE locationcityid = 1138::bigint),
+  -- Only work off of nodes not more than half a viable path.
+  active_forward(src bigint, dst bigint, w double precision) AS (
+    SELECT * FROM forward WHERE coalesce (w < (SELECT w/2 FROM shortest), true)
+  ),
+  forward (src bigint, dst bigint, w double precision) AS (
+    SELECT DISTINCT ON (src, dst) src, dst, w
+    FROM (
+      SELECT f as src, f as dst, 0.0 as w FROM srcs
+      UNION ALL
+      SELECT f.src, p.dst, f.w + p.w
+      FROM active_forward f, PathQ19 p
+      WHERE f.dst = p.src
+    )
+    ORDER BY src, dst, w
+  ),
+  -- Only work off of nodes not more than half a viable path.
+  active_reverse(src bigint, dst bigint, w double precision) AS (
+    SELECT * FROM reverse WHERE coalesce (w < (SELECT w/2 FROM shortest), true)
+  ),
+  reverse (src bigint, dst bigint, w double precision) AS (
+    SELECT DISTINCT ON (src, dst) src, dst, w
+    FROM (
+      SELECT t as src, t as dst, 0.0 as w FROM dsts
+      UNION ALL
+      SELECT r.src, p.dst, r.w + p.w
+      FROM active_reverse r, PathQ19 p
+      WHERE r.dst = p.src
+    )
+    ORDER BY src, dst, w
+  ),
+  -- Once we find a path from `f` to `t` it appears here.
+  paths (f bigint, t bigint, w double precision) AS (
+    SELECT l.src as f, r.src as t, min(l.w + r.w) AS w
+    FROM forward l, reverse r
+    WHERE l.dst = r.dst
+    GROUP BY l.src, r.src
+  ),
+  shortest (w double precision) AS (
+    SELECT min(w) FROM paths
+  )
+SELECT f, t, w
+FROM paths
+WHERE w = (SELECT MIN(w) FROM paths);
+
+statement ok
+CREATE INDEX ldbc_q19_idx ON ldbc_q19 (f);
+
+statement ok
+SELECT mz_unsafe.mz_sleep(2)
+
+query TT
+SELECT global_id, REPEAT(' ', nesting * 2) || operator AS operator
+FROM mz_internal.mz_lir_mapping mlm
+ORDER BY global_id, lir_id DESC;
+----
+t69  Returning␠Distinct␠GroupAggregate
+t69  ␠␠Union
+t69  ␠␠␠␠Differential␠Join␠%0␠»␠%1
+t69  ␠␠␠␠␠␠Arrange
+t69  ␠␠␠␠␠␠␠␠Stream␠l0
+t69  ␠␠␠␠␠␠Arranged␠u15
+t69  ␠␠␠␠Arranged␠u13
+t69  With␠Recursive␠l0␠=␠Unarranged␠Raw␠Stream
+t69  ␠␠Distinct␠GroupAggregate
+t69  ␠␠␠␠Union
+t69  ␠␠␠␠␠␠Differential␠Join␠%0␠»␠%1
+t69  ␠␠␠␠␠␠␠␠Arrange
+t69  ␠␠␠␠␠␠␠␠␠␠Read␠l0
+t69  ␠␠␠␠␠␠␠␠Arrange
+t69  ␠␠␠␠␠␠␠␠␠␠Arranged␠u15
+t69  ␠␠␠␠␠␠Differential␠Join␠%1␠»␠%0
+t69  ␠␠␠␠␠␠␠␠Arranged␠u13
+t69  ␠␠␠␠␠␠␠␠Arrange
+t69  ␠␠␠␠␠␠␠␠␠␠Arranged␠u15
+t69  ␠␠␠␠␠␠Arranged␠u13
+u10  Arrange
+u10  ␠␠Stream␠u9
+u11  Arrange
+u11  ␠␠Arranged␠u9
+u12  Arrange
+u12  ␠␠Arranged␠u9
+u14  Arrange
+u14  ␠␠Stream␠u13
+u16  Arrange
+u16  ␠␠Stream␠u15
+u18  Arrange
+u18  ␠␠Stream␠u17
+u19  Arrange
+u19  ␠␠Arranged␠u17
+u20  Arrange
+u20  ␠␠Arranged␠u17
+u21  Returning␠Union
+u21  ␠␠Read␠l0
+u21  ␠␠Stream␠l0
+u21  With␠l0␠=␠Map/Filter/Project
+u21  ␠␠Accumulable␠GroupAggregate
+u21  ␠␠␠␠Delta␠Join␠[%0␠»␠%1␠»␠%2][%1␠»␠%0␠»␠%2][%2␠»␠%0␠»␠%1]
+u21  ␠␠␠␠␠␠Arranged␠u9
+u21  ␠␠␠␠␠␠Arranged␠u17
+u21  ␠␠␠␠␠␠Arrange
+u21  ␠␠␠␠␠␠␠␠Arranged␠u17
+u22  Arrange
+u22  ␠␠Stream␠u21
+u23  Returning␠Differential␠Join␠%1␠»␠%0
+u23  ␠␠Arrange
+u23  ␠␠␠␠Bucketed␠Hierarchical␠GroupAggregate␠(buckets:␠268435456␠16777216␠1048576␠65536␠4096␠256␠16)
+u23  ␠␠␠␠␠␠Read␠l5
+u23  ␠␠Arrange
+u23  ␠␠␠␠Stream␠l5
+u23  With␠Recursive␠l7␠=␠Union
+u23  ␠␠Map/Filter/Project
+u23  ␠␠␠␠Consolidating␠Union
+u23  ␠␠␠␠␠␠Constant␠(1␠rows)
+u23  ␠␠␠␠␠␠Negate␠Diffs
+u23  ␠␠␠␠␠␠␠␠Arranged␠l6
+u23  ␠␠Arranged␠l6
+u23  l6␠=␠Unarranged␠Raw␠Stream
+u23  ␠␠Bucketed␠Hierarchical␠GroupAggregate␠(buckets:␠268435456␠16777216␠1048576␠65536␠4096␠256␠16)
+u23  ␠␠␠␠Arranged␠l5
+u23  l5␠=␠Unarranged␠Raw␠Stream
+u23  ␠␠Bucketed␠Hierarchical␠GroupAggregate␠(buckets:␠268435456␠16777216␠1048576␠65536␠4096␠256␠16)
+u23  ␠␠␠␠Differential␠Join␠%0␠»␠%1
+u23  ␠␠␠␠␠␠Arrange
+u23  ␠␠␠␠␠␠␠␠Read␠l4
+u23  ␠␠␠␠␠␠Arrange
+u23  ␠␠␠␠␠␠␠␠Read␠l3
+u23  l4␠=␠Non-monotonic␠TopK
+u23  ␠␠Union
+u23  ␠␠␠␠Delta␠Join␠[%0␠»␠%2␠»␠%1][%1␠»␠%0␠»␠%2][%2␠»␠%0␠»␠%1]
+u23  ␠␠␠␠␠␠Arranged␠l1
+u23  ␠␠␠␠␠␠Arranged␠l2
+u23  ␠␠␠␠␠␠Arrange
+u23  ␠␠␠␠␠␠␠␠Read␠l4
+u23  ␠␠␠␠Differential␠Join␠%1␠»␠%0
+u23  ␠␠␠␠␠␠Arrange
+u23  ␠␠␠␠␠␠␠␠Constant␠(1␠rows)
+u23  ␠␠␠␠␠␠Arranged␠l0
+u23  l3␠=␠Non-monotonic␠TopK
+u23  ␠␠Union
+u23  ␠␠␠␠Delta␠Join␠[%0␠»␠%2␠»␠%1][%1␠»␠%0␠»␠%2][%2␠»␠%0␠»␠%1]
+u23  ␠␠␠␠␠␠Arranged␠l1
+u23  ␠␠␠␠␠␠Arranged␠l2
+u23  ␠␠␠␠␠␠Arrange
+u23  ␠␠␠␠␠␠␠␠Read␠l3
+u23  ␠␠␠␠Differential␠Join␠%1␠»␠%0
+u23  ␠␠␠␠␠␠Arrange
+u23  ␠␠␠␠␠␠␠␠Constant␠(1␠rows)
+u23  ␠␠␠␠␠␠Arranged␠l0
+u23  l2␠=␠Arrange
+u23  ␠␠Union
+u23  ␠␠␠␠Map/Filter/Project
+u23  ␠␠␠␠␠␠Consolidating␠Union
+u23  ␠␠␠␠␠␠␠␠Constant␠(1␠rows)
+u23  ␠␠␠␠␠␠␠␠Negate␠Diffs
+u23  ␠␠␠␠␠␠␠␠␠␠Read␠l7
+u23  ␠␠␠␠Read␠l7
+u23  With␠l1␠=␠Arranged␠u21
+u23  l0␠=␠Arranged␠u6
+u24  Arrange
+u24  ␠␠Stream␠u23
+u7  Arrange
+u7  ␠␠Stream␠u6
+u8  Arrange
+u8  ␠␠Arranged␠u6
+
+statement ok
+DROP TABLE Person, Person_knows_Person, Post, Comment CASCADE;
+
 # ATTRIBUTING TOP K HINTS
 
 statement ok
@@ -204,10 +554,10 @@ SELECT mlm.global_id AS global_id, lir_id, parent_lir_id, REPEAT(' ', nesting * 
              mlm.operator_id_start <= megsa.region_id AND megsa.region_id < mlm.operator_id_end)
 ORDER BY mlm.global_id, lir_id DESC;
 ----
-u7  2  NULL  Non-monotonic␠TopK  8  7  3808  15.000
-u7  1  2  ␠␠Stream␠u6  NULL  NULL  NULL  NULL
-u8  4  NULL  Arrange  NULL  NULL  NULL  NULL
-u8  3  4  ␠␠Stream␠u7  NULL  NULL  NULL  NULL
+u26  2  NULL  Non-monotonic␠TopK  8  7  3808  15.000
+u26  1  2  ␠␠Stream␠u25  NULL  NULL  NULL  NULL
+u27  4  NULL  Arrange  NULL  NULL  NULL  NULL
+u27  3  4  ␠␠Stream␠u26  NULL  NULL  NULL  NULL
 
 # rebuild everything other stuff, make sure it all shows up as mappable objects
 
@@ -238,11 +588,11 @@ FROM mz_introspection.mz_mappable_objects LEFT JOIN mz_introspection.mz_lir_mapp
 USING (global_id)
 GROUP BY name, global_id;
 ----
-materialize.public.v2_idx_x  u7  2
-materialize.public.v2_idx_x  u8  2
-materialize.public.v_idx_x  u10  2
-materialize.public.v_idx_x  u9  5
-materialize.public.w  t75  5
+materialize.public.v2_idx_x  u26  2
+materialize.public.v2_idx_x  u27  2
+materialize.public.v_idx_x  u28  5
+materialize.public.v_idx_x  u29  2
+materialize.public.w  t82  5
 
 # explain analyze SQL generate
 
@@ -698,9 +1048,9 @@ query TIIIT
 EXPLAIN ANALYZE HINTS FOR INDEX v2_idx_x;
 ----
 Arrange  NULL  NULL  NULL  NULL
-␠␠Stream␠u7  NULL  NULL  NULL  NULL
+␠␠Stream␠u26  NULL  NULL  NULL  NULL
 Non-monotonic␠TopK  8  7  15  3808␠bytes
-␠␠Stream␠u6  NULL  NULL  NULL  NULL
+␠␠Stream␠u25  NULL  NULL  NULL  NULL
 
 query T multiline
 EXPLAIN ANALYZE HINTS FOR INDEX v2_idx_x AS SQL;
