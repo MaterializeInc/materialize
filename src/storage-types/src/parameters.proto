@@ -53,8 +53,6 @@ message ProtoStorageParameters {
 
 message ProtoPgSourceSnapshotConfig {
   bool collect_strict_count = 1;
-  bool fallback_to_strict_count = 2;
-  bool wait_for_count = 3;
 }
 
 message ProtoMySqlSourceTimeouts {

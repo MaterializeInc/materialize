@@ -143,8 +143,6 @@ pub fn storage_config(config: &SystemVars) -> StorageParameters {
         statistics_collection_interval: config.storage_statistics_collection_interval(),
         pg_snapshot_config: PgSourceSnapshotConfig {
             collect_strict_count: config.pg_source_snapshot_collect_strict_count(),
-            fallback_to_strict_count: config.pg_source_snapshot_fallback_to_strict_count(),
-            wait_for_count: config.pg_source_snapshot_wait_for_count(),
         },
         user_storage_managed_collections_batch_duration: config
             .user_storage_managed_collections_batch_duration(),

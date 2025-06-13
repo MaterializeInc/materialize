@@ -1135,8 +1135,6 @@ impl SystemVars {
             &PG_SOURCE_SNAPSHOT_STATEMENT_TIMEOUT,
             &PG_SOURCE_WAL_SENDER_TIMEOUT,
             &PG_SOURCE_SNAPSHOT_COLLECT_STRICT_COUNT,
-            &PG_SOURCE_SNAPSHOT_FALLBACK_TO_STRICT_COUNT,
-            &PG_SOURCE_SNAPSHOT_WAIT_FOR_COUNT,
             &MYSQL_SOURCE_TCP_KEEPALIVE,
             &MYSQL_SOURCE_SNAPSHOT_MAX_EXECUTION_TIME,
             &MYSQL_SOURCE_SNAPSHOT_LOCK_WAIT_TIMEOUT,
@@ -1785,14 +1783,6 @@ impl SystemVars {
     pub fn pg_source_snapshot_collect_strict_count(&self) -> bool {
         *self.expect_value(&PG_SOURCE_SNAPSHOT_COLLECT_STRICT_COUNT)
     }
-    /// Returns the `pg_source_snapshot_fallback_to_strict_count` configuration parameter.
-    pub fn pg_source_snapshot_fallback_to_strict_count(&self) -> bool {
-        *self.expect_value(&PG_SOURCE_SNAPSHOT_FALLBACK_TO_STRICT_COUNT)
-    }
-    /// Returns the `pg_source_snapshot_collect_strict_count` configuration parameter.
-    pub fn pg_source_snapshot_wait_for_count(&self) -> bool {
-        *self.expect_value(&PG_SOURCE_SNAPSHOT_WAIT_FOR_COUNT)
-    }
 
     /// Returns the `mysql_source_tcp_keepalive` configuration parameter.
     pub fn mysql_source_tcp_keepalive(&self) -> Duration {
@@ -2219,8 +2209,6 @@ impl SystemVars {
             || name == PG_SOURCE_SNAPSHOT_STATEMENT_TIMEOUT.name()
             || name == PG_SOURCE_WAL_SENDER_TIMEOUT.name()
             || name == PG_SOURCE_SNAPSHOT_COLLECT_STRICT_COUNT.name()
-            || name == PG_SOURCE_SNAPSHOT_FALLBACK_TO_STRICT_COUNT.name()
-            || name == PG_SOURCE_SNAPSHOT_WAIT_FOR_COUNT.name()
             || name == MYSQL_SOURCE_TCP_KEEPALIVE.name()
             || name == MYSQL_SOURCE_SNAPSHOT_MAX_EXECUTION_TIME.name()
             || name == MYSQL_SOURCE_SNAPSHOT_LOCK_WAIT_TIMEOUT.name()
