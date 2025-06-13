@@ -678,6 +678,28 @@ impl<T: Timestamp + Codec64 + Sync> RunPart<T> {
             }
         }
     }
+
+    pub async fn last_part<'a>(
+        &'a self,
+        shard_id: ShardId,
+        blob: &'a dyn Blob,
+        metrics: &'a Metrics,
+    ) -> Result<Box<BatchPart<T>>, MissingBlob> {
+        match self {
+            RunPart::Single(p) => Ok(Box::new(p.clone())),
+            RunPart::Many(r) => {
+                let fetched = r
+                    .get(shard_id, blob, metrics)
+                    .await
+                    .ok_or_else(|| MissingBlob(r.key.complete(&shard_id)))?;
+                let last_part = fetched
+                    .parts
+                    .last()
+                    .ok_or_else(|| MissingBlob(r.key.complete(&shard_id)))?;
+                Ok(Box::pin(last_part.last_part(shard_id, blob, metrics)).await?)
+            }
+        }
+    }
 }
 
 impl<T: Ord> PartialOrd for BatchPart<T> {
@@ -921,6 +943,20 @@ impl<T: Timestamp + Codec64 + Sync> HollowBatch<T> {
                     yield part;
                 }
             }
+        }
+    }
+
+    pub async fn last_part<'a>(
+        &'a self,
+        shard_id: ShardId,
+        blob: &'a dyn Blob,
+        metrics: &'a Metrics,
+    ) -> Option<BatchPart<T>> {
+        let last_part = self.parts.last()?;
+        let last_part = last_part.last_part(shard_id, blob, metrics).await;
+        match last_part {
+            Ok(part) => Some(*part),
+            Err(MissingBlob(_)) => None,
         }
     }
 }
@@ -1698,6 +1734,7 @@ where
                 req.id,
                 ActiveCompaction {
                     start_ms: heartbeat_timestamp_ms,
+                    batch_so_far: None,
                 },
             )
         }
@@ -1724,7 +1761,29 @@ where
         Continue(merge_reqs)
     }
 
-    pub fn apply_merge_res<D: Codec64 + Semigroup + PartialEq>(
+    /// This is a best effort attempt to apply incremental compaction
+    /// to the spine.
+    pub fn apply_compaction_progress(
+        &mut self,
+        batch_so_far: &HollowBatch<T>,
+        new_ts: u64,
+    ) -> ControlFlow<NoOpStateTransition<()>, ()> {
+        if self.is_tombstone() {
+            return Break(NoOpStateTransition(()));
+        }
+
+        let new_active_compaction = ActiveCompaction {
+            start_ms: new_ts,
+            batch_so_far: Some(batch_so_far.clone()),
+        };
+
+        self.trace
+            .apply_incremental_compaction(&new_active_compaction);
+
+        Continue(())
+    }
+
+    pub fn apply_merge_res<D: Semigroup + Codec64 + PartialEq>(
         &mut self,
         res: &FueledMergeRes<T>,
         metrics: &ColumnarMetrics,
