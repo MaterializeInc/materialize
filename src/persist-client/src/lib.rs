@@ -30,6 +30,7 @@ use mz_persist_types::schema::SchemaId;
 use mz_persist_types::{Codec, Codec64, Opaque};
 use mz_proto::{IntoRustIfSome, ProtoType};
 use semver::Version;
+use timely::order::TotalOrder;
 use timely::progress::{Antichain, Timestamp};
 
 use crate::async_runtime::IsolatedRuntime;
@@ -290,7 +291,7 @@ impl PersistClient {
     where
         K: Debug + Codec,
         V: Debug + Codec,
-        T: Timestamp + Lattice + Codec64 + Sync,
+        T: Timestamp + TotalOrder + Lattice + Codec64 + Sync,
         D: Semigroup + Ord + Codec64 + Send + Sync,
     {
         Ok((
@@ -332,7 +333,7 @@ impl PersistClient {
     where
         K: Debug + Codec,
         V: Debug + Codec,
-        T: Timestamp + Lattice + Codec64 + Sync,
+        T: Timestamp + TotalOrder + Lattice + Codec64 + Sync,
         D: Semigroup + Codec64 + Send + Sync,
     {
         let machine = self.make_machine(shard_id, diagnostics.clone()).await?;
@@ -504,7 +505,7 @@ impl PersistClient {
     where
         K: Debug + Codec,
         V: Debug + Codec,
-        T: Timestamp + Lattice + Codec64 + Sync,
+        T: Timestamp + TotalOrder + Lattice + Codec64 + Sync,
         D: Semigroup + Ord + Codec64 + Send + Sync,
     {
         let machine = self.make_machine(shard_id, diagnostics.clone()).await?;
@@ -566,7 +567,7 @@ impl PersistClient {
     where
         K: Debug + Codec,
         V: Debug + Codec,
-        T: Timestamp + Lattice + Codec64 + Sync,
+        T: Timestamp + Lattice + Codec64 + TotalOrder + Sync,
         D: Semigroup + Ord + Codec64 + Send + Sync,
     {
         WriteHandle::builder_inner(
@@ -652,7 +653,7 @@ impl PersistClient {
     where
         K: Debug + Codec + Ord,
         V: Debug + Codec + Ord,
-        T: Timestamp + Lattice + Codec64 + Sync,
+        T: Timestamp + Lattice + Codec64 + TotalOrder + Sync,
         D: Semigroup + Ord + Codec64 + Send + Sync,
     {
         let shard_metrics = self.metrics.shards.shard(&shard_id, "peek_stash");
@@ -839,7 +840,7 @@ impl PersistClient {
     where
         K: Debug + Codec,
         V: Debug + Codec,
-        T: Timestamp + Lattice + Codec64 + Sync,
+        T: Timestamp + TotalOrder + Lattice + Codec64 + Sync,
         D: Semigroup + Ord + Codec64 + Send + Sync,
         K::Schema: Default,
         V::Schema: Default,

@@ -503,10 +503,6 @@ where
     inline_desc: Description<T>,
     inclusive_upper: Antichain<Reverse<T>>,
 
-    // Reusable buffers for encoding data. Should be cleared after use!
-    pub(crate) key_buf: Vec<u8>,
-    pub(crate) val_buf: Vec<u8>,
-
     records_builder: PartBuilder<K, K::Schema, V, V::Schema>,
     pub(crate) builder: BatchBuilderInternal<K, V, T, D>,
 }
@@ -529,8 +525,6 @@ where
         Self {
             inline_desc,
             inclusive_upper: Antichain::new(),
-            key_buf: vec![],
-            val_buf: vec![],
             records_builder,
             builder,
         }
@@ -621,8 +615,6 @@ where
         } else {
             Added::Record
         };
-        self.key_buf.clear();
-        self.val_buf.clear();
         Ok(added)
     }
 }
@@ -1414,7 +1406,6 @@ fn diffs_sum<D: Semigroup + Codec64>(updates: &Int64Array) -> Option<D> {
 #[cfg(test)]
 mod tests {
     use mz_dyncfg::ConfigUpdates;
-    use timely::order::Product;
 
     use super::*;
     use crate::PersistLocation;
@@ -1594,50 +1585,6 @@ mod tests {
 
         let part_bytes = client.blob.get(&part_key).await.expect("invalid usage");
         assert!(part_bytes.is_none());
-    }
-
-    #[mz_ore::test(tokio::test)]
-    #[cfg_attr(miri, ignore)] // unsupported operation: returning ready events from epoll_wait is not yet implemented
-    async fn batch_builder_partial_order() {
-        let cache = PersistClientCache::new_no_metrics();
-        // Set blob_target_size to 0 so that each row gets forced into its own batch part
-        cache.cfg.set_config(&BLOB_TARGET_SIZE, 0);
-        // Otherwise fails: expected hollow part!
-        cache.cfg.set_config(&STRUCTURED_KEY_LOWER_LEN, 0);
-        cache.cfg.set_config(&INLINE_WRITES_SINGLE_MAX_BYTES, 0);
-        cache.cfg.set_config(&INLINE_WRITES_TOTAL_MAX_BYTES, 0);
-        let client = cache
-            .open(PersistLocation::new_in_mem())
-            .await
-            .expect("client construction failed");
-        let shard_id = ShardId::new();
-        let (mut write, _) = client
-            .expect_open::<String, String, Product<u32, u32>, i64>(shard_id)
-            .await;
-
-        let batch = write
-            .batch(
-                &[
-                    (("1".to_owned(), "one".to_owned()), Product::new(0, 10), 1),
-                    (("2".to_owned(), "two".to_owned()), Product::new(10, 0), 1),
-                ],
-                Antichain::from_elem(Product::new(0, 0)),
-                Antichain::from_iter([Product::new(0, 11), Product::new(10, 1)]),
-            )
-            .await
-            .expect("invalid usage");
-
-        assert_eq!(batch.batch.part_count(), 2);
-        for part in &batch.batch.parts {
-            let part = part.expect_hollow_part();
-            match BlobKey::parse_ids(&part.key.complete(&shard_id)) {
-                Ok((shard, PartialBlobKey::Batch(writer, _))) => {
-                    assert_eq!(shard.to_string(), shard_id.to_string());
-                    assert_eq!(writer, WriterKey::for_version(&cache.cfg.build_version));
-                }
-                _ => panic!("unparseable blob key"),
-            }
-        }
     }
 
     #[mz_ore::test]

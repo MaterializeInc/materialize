@@ -3194,7 +3194,7 @@ async fn finalize_shards_task<T>(
         read_only,
     }: FinalizeShardsTaskConfig,
 ) where
-    T: TimelyTimestamp + Lattice + Codec64 + Sync,
+    T: TimelyTimestamp + TotalOrder + Lattice + Codec64 + Sync,
 {
     if read_only {
         info!("disabling shard finalization in read only mode");
