@@ -23,6 +23,7 @@ use std::time::{Duration, Instant};
 use anyhow::Error;
 use crossbeam_channel::SendError;
 use mz_cluster::client::{ClusterClient, ClusterSpec};
+use mz_cluster_client::client::TimelyConfig;
 use mz_compute_client::protocol::command::ComputeCommand;
 use mz_compute_client::protocol::history::ComputeCommandHistory;
 use mz_compute_client::protocol::response::ComputeResponse;
@@ -71,7 +72,8 @@ struct Config {
 }
 
 /// Initiates a timely dataflow computation, processing compute commands.
-pub fn serve(
+pub async fn serve(
+    timely_config: Option<TimelyConfig>,
     metrics_registry: &MetricsRegistry,
     persist_clients: Arc<PersistClientCache>,
     txns_ctx: TxnsContext,
@@ -86,7 +88,16 @@ pub fn serve(
         context,
     };
     let tokio_executor = tokio::runtime::Handle::current();
-    let timely_container = Arc::new(tokio::sync::Mutex::new(None));
+
+    let timely_container = if let Some(timely_config) = timely_config {
+        let timely = config
+            .build_cluster(timely_config, tokio_executor.clone())
+            .await?;
+        Some(timely)
+    } else {
+        None
+    };
+    let timely_container = Arc::new(tokio::sync::Mutex::new(timely_container));
 
     let client_builder = move || {
         let client = ClusterClient::new(
