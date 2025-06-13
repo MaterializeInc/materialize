@@ -551,11 +551,6 @@ where
         // GarbageCollector to delete eligible blobs and truncate the
         // state history. This is dependant both on `maybe_gc` returning
         // Some _and_ on this state being successfully compare_and_set.
-        //
-        // NB: Make sure this overwrites `garbage_collection` on every
-        // run though the loop (i.e. no `if let Some` here). When we
-        // lose a CaS race, we might discover that the winner got
-        // assigned the gc.
         let garbage_collection =
             new_state.maybe_gc(is_write, use_active_gc, gc_fallback_threshold_ms, now);
 
@@ -568,10 +563,8 @@ where
             }
         }
 
-        // NB: Make sure this is the very last thing before the
-        // `try_compare_and_set_current` call. (In particular, it needs
-        // to come after anything that might modify new_state, such as
-        // `maybe_gc`.)
+        // Make sure `new_state` is not modified after this point!
+        // The new state and the diff must be consistent with each other for correctness.
         let diff = StateDiff::from_diff(&state.state, &new_state);
         // Sanity check that our diff logic roundtrips and adds back up
         // correctly.
