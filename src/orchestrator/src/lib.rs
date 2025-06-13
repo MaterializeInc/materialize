@@ -198,7 +198,7 @@ pub struct ServiceConfig {
     /// A function that generates the arguments for each process of the service
     /// given the assigned listen addresses for each named port.
     #[derivative(Debug = "ignore")]
-    pub args: Box<dyn Fn(&BTreeMap<String, String>) -> Vec<String> + Send + Sync>,
+    pub args: Box<dyn Fn(ServiceAssignments) -> Vec<String> + Send + Sync>,
     /// Ports to expose.
     pub ports: Vec<ServicePort>,
     /// An optional limit on the memory that the service can use.
@@ -253,6 +253,18 @@ pub struct ServicePort {
     ///
     /// Not all orchestrator backends will make use of the hint.
     pub port_hint: u16,
+}
+
+/// Assignments that the orchestrator has made for a process in a service.
+#[derive(Clone, Debug)]
+pub struct ServiceAssignments<'a> {
+    /// For each specified [`ServicePort`] name, a listen address.
+    pub listen_addrs: &'a BTreeMap<String, String>,
+    /// The listen addresses of each peer in the service.
+    ///
+    /// The order of peers is significant. Each peer is uniquely identified by its position in the
+    /// list.
+    pub peer_addrs: &'a [BTreeMap<String, String>],
 }
 
 /// Describes a limit on memory.

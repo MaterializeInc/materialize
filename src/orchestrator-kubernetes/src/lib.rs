@@ -46,8 +46,8 @@ use mz_cloud_resources::AwsExternalIdPrefix;
 use mz_cloud_resources::crd::vpc_endpoint::v1::VpcEndpoint;
 use mz_orchestrator::{
     DiskLimit, LabelSelectionLogic, LabelSelector as MzLabelSelector, NamespacedOrchestrator,
-    OfflineReason, Orchestrator, Service, ServiceConfig, ServiceEvent, ServiceProcessMetrics,
-    ServiceStatus, scheduling_config::*,
+    OfflineReason, Orchestrator, Service, ServiceAssignments, ServiceConfig, ServiceEvent,
+    ServiceProcessMetrics, ServiceStatus, scheduling_config::*,
 };
 use mz_ore::retry::Retry;
 use mz_ore::task::AbortOnDropHandle;
@@ -682,11 +682,19 @@ impl NamespacedOrchestrator for NamespacedKubernetesOrchestrator {
             .iter()
             .map(|p| (p.name.clone(), p.port_hint))
             .collect::<BTreeMap<_, _>>();
-        let listen_addrs = ports_in
-            .iter()
-            .map(|p| (p.name.clone(), format!("0.0.0.0:{}", p.port_hint)))
-            .collect::<BTreeMap<_, _>>();
-        let mut args = args(&listen_addrs);
+
+        let mut listen_addrs = BTreeMap::new();
+        let mut peer_addrs = vec![BTreeMap::new(); hosts.len()];
+        for (name, port) in &ports {
+            listen_addrs.insert(name.clone(), format!("0.0.0.0:{port}"));
+            for (i, host) in hosts.iter().enumerate() {
+                peer_addrs[i].insert(name.clone(), format!("{host}:{port}"));
+            }
+        }
+        let mut args = args(ServiceAssignments {
+            listen_addrs: &listen_addrs,
+            peer_addrs: &peer_addrs,
+        });
 
         // This constrains the orchestrator (for those orchestrators that support
         // anti-affinity, today just k8s) to never schedule pods for different replicas
