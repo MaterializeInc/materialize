@@ -525,10 +525,14 @@ pub mod merger {
     pub struct ColumnQueue<T: Columnar> {
         list: Column<T>,
         head: usize,
+        len: usize,
     }
 
-    impl<D: Ord + Columnar, T: Ord + Columnar, R: Columnar> ContainerQueue<Column<(D, T, R)>>
-        for ColumnQueue<(D, T, R)>
+    impl<D, T, R> ContainerQueue<Column<(D, T, R)>> for ColumnQueue<(D, T, R)>
+    where
+        D: for<'a> Columnar<Ref<'a>: Ord>,
+        T: for<'a> Columnar<Ref<'a>: Ord>,
+        R: Columnar,
     {
         fn next_or_alloc(&mut self) -> Result<<(D, T, R) as Columnar>::Ref<'_>, Column<(D, T, R)>> {
             if self.is_empty() {
@@ -538,22 +542,17 @@ pub mod merger {
             }
         }
         fn is_empty(&self) -> bool {
-            use timely::Container;
-            self.head == self.list.len()
+            self.head == self.len
         }
         fn cmp_heads(&self, other: &Self) -> std::cmp::Ordering {
             let (data1, time1, _) = self.peek();
             let (data2, time2, _) = other.peek();
 
-            let data1 = <D as Columnar>::into_owned(data1);
-            let data2 = <D as Columnar>::into_owned(data2);
-            let time1 = <T as Columnar>::into_owned(time1);
-            let time2 = <T as Columnar>::into_owned(time2);
-
             (data1, time1).cmp(&(data2, time2))
         }
         fn from(list: Column<(D, T, R)>) -> Self {
-            ColumnQueue { list, head: 0 }
+            let len = list.len();
+            ColumnQueue { list, head: 0, len }
         }
     }
 
@@ -570,10 +569,9 @@ pub mod merger {
 
     impl<D, T, R> MergerChunk for Column<(D, T, R)>
     where
-        D: Ord + Columnar + 'static,
-        T: Timestamp + Columnar,
-        for<'a> <T as Columnar>::Ref<'a>: Copy,
-        R: Default + Semigroup + Columnar + 'static,
+        D: Columnar,
+        T: for<'a> Columnar<Ref<'a>: Copy> + Timestamp,
+        R: Columnar + Default,
     {
         type TimeOwned = T;
 
@@ -623,10 +621,9 @@ pub mod merger {
     }
     impl<D, T, R> PushAndAdd for ColumnBuilder<(D, T, R)>
     where
-        D: Ord + Columnar + 'static,
-        T: Ord + timely::PartialOrder + Clone + Columnar + 'static,
-        for<'a> <T as Columnar>::Ref<'a>: Copy,
-        R: Default + Semigroup + Columnar + 'static,
+        D: Columnar,
+        T: Columnar,
+        R: Columnar + Default + Semigroup,
     {
         type DiffOwned = R;
 
