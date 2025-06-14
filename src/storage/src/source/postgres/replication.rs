@@ -92,7 +92,6 @@ use mz_repr::{Datum, DatumVec, Diff, Row};
 use mz_sql_parser::ast::{Ident, display::AstDisplay};
 use mz_storage_types::dyncfgs::{PG_OFFSET_KNOWN_INTERVAL, PG_SCHEMA_VALIDATION_INTERVAL};
 use mz_storage_types::errors::DataflowError;
-use mz_storage_types::sources::SourceTimestamp;
 use mz_storage_types::sources::{MzOffset, PostgresSourceConnection};
 use mz_timely_util::builder_async::{
     AsyncOutputHandle, Event as AsyncEvent, OperatorBuilder as AsyncOperatorBuilder,
@@ -177,22 +176,11 @@ pub(crate) fn render<G: Scope<Timestamp = MzOffset>>(
     let mut rewind_input =
         builder.new_disconnected_input(rewind_stream, Exchange::new(move |_| slot_reader));
     let mut slot_ready_input = builder.new_disconnected_input(slot_ready_stream, Pipeline);
-    let mut output_uppers = table_info
+    let output_uppers = table_info
         .iter()
         .flat_map(|(_, outputs)| outputs.values().map(|o| o.resume_upper.clone()))
         .collect::<Vec<_>>();
     metrics.tables.set(u64::cast_from(output_uppers.len()));
-
-    // Include the upper of the main source output for use in calculating the initial
-    // resume upper.
-    output_uppers.push(Antichain::from_iter(
-        config
-            .source_resume_uppers
-            .get(&config.id)
-            .expect("id exists")
-            .iter()
-            .map(MzOffset::decode_row),
-    ));
 
     let reader_table_info = table_info.clone();
     let (button, transient_errors) = builder.build_fallible(move |caps| {
