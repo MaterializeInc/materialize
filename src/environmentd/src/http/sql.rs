@@ -607,43 +607,89 @@ pub enum SqlResult {
 impl SqlResult {
     /// Convert adapter Row results into the web row result format. Error if the row format does not
     /// match the expected descriptor.
-    fn rows(
+    // TODO(aljoscha): Bail when max_result_size is exceeded.
+    async fn rows<S>(
+        sender: &mut S,
         client: &mut SessionClient,
-        mut sql_rows: Box<dyn RowIterator>,
+        mut rows_stream: RecordFirstRowStream,
+        max_query_result_size: usize,
         desc: &RelationDesc,
-    ) -> SqlResult {
-        if let Err(err) = verify_datum_desc(desc, &mut sql_rows) {
-            return SqlResult::Err {
-                error: err.into(),
-                notices: make_notices(client),
-            };
-        }
-
+    ) -> Result<SqlResult, Error>
+    where
+        S: ResultSender,
+    {
         let mut rows: Vec<Vec<serde_json::Value>> = vec![];
         let mut datum_vec = mz_repr::DatumVec::new();
         let types = &desc.typ().column_types;
 
-        while let Some(row) = sql_rows.next() {
-            let datums = datum_vec.borrow_with(row);
-            rows.push(
-                datums
-                    .iter()
-                    .enumerate()
-                    .map(|(i, d)| {
-                        TypedDatum::new(*d, &types[i])
-                            .json(&JsonNumberPolicy::ConvertNumberToString)
-                    })
-                    .collect(),
-            );
+        let mut query_result_size = 0;
+
+        loop {
+            let peek_response = tokio::select! {
+                notice = client.session().recv_notice(), if S::SUPPORTS_STREAMING_NOTICES => {
+                    sender.emit_streaming_notices(vec![notice]).await?;
+                    continue;
+                }
+                e = sender.connection_error() => return Err(e),
+                r = rows_stream.recv() => {
+                    match r {
+                        Some(r) => r,
+                        None => break,
+                    }
+                },
+            };
+
+            let mut sql_rows = match peek_response {
+                PeekResponseUnary::Rows(rows) => rows,
+                PeekResponseUnary::Error(e) => {
+                    return Ok(SqlResult::err(client, Error::Unstructured(anyhow!(e))));
+                }
+                PeekResponseUnary::Canceled => {
+                    return Ok(SqlResult::err(client, AdapterError::Canceled));
+                }
+            };
+
+            if let Err(err) = verify_datum_desc(desc, &mut sql_rows) {
+                return Ok(SqlResult::Err {
+                    error: err.into(),
+                    notices: make_notices(client),
+                });
+            }
+
+            while let Some(row) = sql_rows.next() {
+                query_result_size += row.byte_len();
+                if query_result_size > max_query_result_size {
+                    use bytesize::ByteSize;
+                    return Ok(SqlResult::err(
+                        client,
+                        AdapterError::ResultSize(format!(
+                            "result exceeds max size of {}",
+                            ByteSize::b(u64::cast_from(max_query_result_size))
+                        )),
+                    ));
+                }
+
+                let datums = datum_vec.borrow_with(row);
+                rows.push(
+                    datums
+                        .iter()
+                        .enumerate()
+                        .map(|(i, d)| {
+                            TypedDatum::new(*d, &types[i])
+                                .json(&JsonNumberPolicy::ConvertNumberToString)
+                        })
+                        .collect(),
+                );
+            }
         }
 
         let tag = format!("SELECT {}", rows.len());
-        SqlResult::Rows {
+        Ok(SqlResult::Rows {
             tag,
             rows,
             desc: Description::from(desc),
             notices: make_notices(client),
-        }
+        })
     }
 
     fn err(client: &mut SessionClient, error: impl Into<SqlError>) -> SqlResult {
@@ -1501,41 +1547,50 @@ async fn execute_stmt<S: ResultSender>(
             )
             .into()
         }
-        ExecuteResponse::SendingRows {
-            future: mut rows,
+        ExecuteResponse::SendingRowsStreaming {
+            rows,
             instance_id,
             strategy,
         } => {
-            let rows = match await_rows(sender, client, &mut rows).await? {
-                PeekResponseUnary::Rows(rows) => {
-                    RecordFirstRowStream::record(
-                        execute_started,
-                        client,
-                        Some(instance_id),
-                        Some(strategy),
-                    );
-                    rows
-                }
-                PeekResponseUnary::Error(e) => {
-                    return Ok(SqlResult::err(client, Error::Unstructured(anyhow!(e))).into());
-                }
-                PeekResponseUnary::Canceled => {
-                    return Ok(SqlResult::err(client, AdapterError::Canceled).into());
-                }
-            };
-            SqlResult::rows(
+            let max_query_result_size =
+                usize::cast_from(client.get_system_vars().await.max_result_size());
+
+            let rows_stream = RecordFirstRowStream::new(
+                Box::new(rows),
+                execute_started,
                 client,
-                rows,
+                Some(instance_id),
+                Some(strategy),
+            );
+
+            SqlResult::rows(
+                sender,
+                client,
+                rows_stream,
+                max_query_result_size,
                 &desc.relation_desc.expect("RelationDesc must exist"),
             )
+            .await?
             .into()
         }
-        ExecuteResponse::SendingRowsImmediate { rows } => SqlResult::rows(
-            client,
-            rows,
-            &desc.relation_desc.expect("RelationDesc must exist"),
-        )
-        .into(),
+        ExecuteResponse::SendingRowsImmediate { rows } => {
+            let max_query_result_size =
+                usize::cast_from(client.get_system_vars().await.max_result_size());
+
+            let rows = futures::stream::once(futures::future::ready(PeekResponseUnary::Rows(rows)));
+            let rows_stream =
+                RecordFirstRowStream::new(Box::new(rows), execute_started, client, None, None);
+
+            SqlResult::rows(
+                sender,
+                client,
+                rows_stream,
+                max_query_result_size,
+                &desc.relation_desc.expect("RelationDesc must exist"),
+            )
+            .await?
+            .into()
+        }
         ExecuteResponse::Subscribing {
             rx,
             ctx_extra,

@@ -422,6 +422,12 @@ public
 query error db error: ERROR: SHOW variable in subqueries not yet supported
 SELECT * FROM (show client_encoding)
 
+# Need to disable the result stash, so that we actually exceed max result size
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET enable_compute_peek_response_stash = false
+----
+COMPLETE 0
+
 statement ok
 SET max_query_result_size = 100
 
@@ -449,6 +455,11 @@ select 1 from (select array_agg(generate_series) x from generate_series(1, 10000
 
 statement ok
 RESET max_query_result_size
+
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM RESET enable_compute_peek_response_stash
+----
+COMPLETE 0
 
 statement ok
 CREATE ROLE parker;

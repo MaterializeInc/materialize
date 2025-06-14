@@ -2815,7 +2815,7 @@ def workflow_test_compute_controller_metrics(c: Composition) -> None:
     assert count >= 2, f"got {count}"
 
     # mz_compute_peeks_total
-    count = metrics.get_peeks_total("rows")
+    count = metrics.get_peeks_total("rows") + metrics.get_peeks_total("rows_stashed")
     assert count == 2, f"got {count}"
     count = metrics.get_peeks_total("error")
     assert count == 0, f"got {count}"

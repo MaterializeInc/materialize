@@ -1083,6 +1083,14 @@ class FlipFlagsAction(Action):
         self.flags_with_values["enable_compute_active_dataflow_cancelation"] = (
             BOOLEAN_FLAG_VALUES
         )
+        self.flags_with_values["enable_compute_peek_response_stash"] = (
+            BOOLEAN_FLAG_VALUES
+        )
+        self.flags_with_values["compute_peek_response_stash_threshold_bytes"] = [
+            "0",  # "force enabled"
+            "1048576",  # 1 MiB, an in-between value
+            "314572800",  # 300 MiB, the production value
+        ]
 
         # If you are adding a new config flag in Materialize, consider using it
         # here instead of just marking it as uninteresting to silence the
@@ -1265,6 +1273,11 @@ class FlipFlagsAction(Action):
             "mz_metrics_lgalloc_map_refresh_interval",
             "mz_metrics_lgalloc_refresh_interval",
             "mz_metrics_rusage_refresh_interval",
+            "compute_peek_stash_num_batches",
+            "compute_peek_stash_batch_size",
+            "compute_peek_response_stash_batch_max_runs",
+            "compute_peek_response_stash_read_batch_size_bytes",
+            "compute_peek_response_stash_read_memory_budget_bytes",
         ]
 
     def run(self, exe: Executor) -> bool:

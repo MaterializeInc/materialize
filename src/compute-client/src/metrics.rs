@@ -632,6 +632,7 @@ where
 #[derive(Debug)]
 pub struct PeekMetrics<M> {
     rows: M,
+    rows_stashed: M,
     error: M,
     canceled: M,
 }
@@ -643,6 +644,7 @@ impl<M> PeekMetrics<M> {
     {
         Self {
             rows: build_metric("rows"),
+            rows_stashed: build_metric("rows_stashed"),
             error: build_metric("error"),
             canceled: build_metric("canceled"),
         }
@@ -653,6 +655,7 @@ impl<M> PeekMetrics<M> {
 
         match response {
             Rows(_) => &self.rows,
+            Stashed(_) => &self.rows_stashed,
             Error(_) => &self.error,
             Canceled => &self.canceled,
         }

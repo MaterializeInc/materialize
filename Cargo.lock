@@ -4864,6 +4864,7 @@ version = "0.0.0"
 dependencies = [
  "anyhow",
  "arrow",
+ "async-stream",
  "async-trait",
  "bytes",
  "bytesize",
@@ -4941,6 +4942,7 @@ dependencies = [
  "timely",
  "tokio",
  "tokio-postgres",
+ "tokio-stream",
  "tracing",
  "tracing-core",
  "tracing-opentelemetry",

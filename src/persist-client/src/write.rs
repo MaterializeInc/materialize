@@ -739,6 +739,7 @@ where
     pub fn builder(&self, lower: Antichain<T>) -> BatchBuilder<K, V, T, D> {
         Self::builder_inner(
             &self.cfg,
+            CompactConfig::new(&self.cfg, self.shard_id()),
             Arc::clone(&self.metrics),
             Arc::clone(&self.machine.applier.shard_metrics),
             &self.metrics.user,
@@ -754,6 +755,7 @@ where
     /// implementation in `PersistClient`.
     pub(crate) fn builder_inner(
         persist_cfg: &PersistConfig,
+        compact_cfg: CompactConfig,
         metrics: Arc<Metrics>,
         shard_metrics: Arc<ShardMetrics>,
         user_batch_metrics: &BatchWriteMetrics,
@@ -763,10 +765,9 @@ where
         schemas: Schemas<K, V>,
         lower: Antichain<T>,
     ) -> BatchBuilder<K, V, T, D> {
-        let cfg = CompactConfig::new(persist_cfg, shard_id);
-        let parts = if let Some(max_runs) = cfg.batch.max_runs {
+        let parts = if let Some(max_runs) = compact_cfg.batch.max_runs {
             BatchParts::new_compacting::<K, V, D>(
-                cfg,
+                compact_cfg,
                 Description::new(
                     lower.clone(),
                     Antichain::new(),
@@ -783,7 +784,7 @@ where
             )
         } else {
             BatchParts::new_ordered::<D>(
-                cfg.batch,
+                compact_cfg.batch,
                 RunOrder::Unordered,
                 Arc::clone(&metrics),
                 shard_metrics,

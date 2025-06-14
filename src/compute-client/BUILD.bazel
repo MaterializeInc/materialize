@@ -144,6 +144,7 @@ filegroup(
         "//src/compute-types:all_protos",
         "//src/dyncfg:all_protos",
         "//src/expr:all_protos",
+        "//src/persist-client:all_protos",
         "//src/proto:all_protos",
         "//src/repr:all_protos",
         "//src/service:all_protos",

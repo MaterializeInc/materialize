@@ -17,7 +17,7 @@ use std::time::{Duration, Instant};
 use anyhow::anyhow;
 use futures::future::{BoxFuture, FutureExt};
 use futures::stream::FuturesOrdered;
-use futures::{Future, future};
+use futures::{Future, StreamExt, future};
 use itertools::Itertools;
 use maplit::btreeset;
 use mz_adapter_types::compaction::CompactionWindow;
@@ -3021,6 +3021,7 @@ impl Coordinator {
             session,
             Default::default(),
         );
+
         self.sequence_peek(
             peek_ctx,
             plan::SelectPlan {
@@ -3039,6 +3040,7 @@ impl Coordinator {
         let strict_serializable_reads_tx = self.strict_serializable_reads_tx.clone();
         let catalog = self.owned_catalog();
         let max_result_size = self.catalog().system_config().max_result_size();
+
         task::spawn(|| format!("sequence_read_then_write:{id}"), async move {
             let (peek_response, session) = match peek_rx.await {
                 Ok(Response {
@@ -3081,7 +3083,7 @@ impl Coordinator {
             }
 
             let make_diffs =
-                move |mut rows: Box<dyn RowIterator>| -> Result<Vec<(Row, Diff)>, AdapterError> {
+                move |mut rows: Box<dyn RowIterator>| -> Result<(Vec<(Row, Diff)>, u64), AdapterError> {
                     let arena = RowArena::new();
                     let mut diffs = Vec::new();
                     let mut datum_vec = mz_repr::DatumVec::new();
@@ -3117,49 +3119,77 @@ impl Coordinator {
                             MutationKind::Insert => diffs.push((row.to_owned(), Diff::ONE)),
                         }
                     }
+
+                    // Sum of all the rows' byte size, for checking if we go
+                    // above the max_result_size threshold.
+                    let mut byte_size: u64 = 0;
                     for (row, diff) in &diffs {
+                        byte_size = byte_size.saturating_add(u64::cast_from(row.byte_len()));
                         if diff.is_positive() {
                             for (idx, datum) in row.iter().enumerate() {
                                 desc.constraints_met(idx, &datum)?;
                             }
                         }
                     }
-                    Ok(diffs)
+                    Ok((diffs, byte_size))
                 };
+
             let diffs = match peek_response {
-                ExecuteResponse::SendingRows { future: batch, .. } => {
-                    // TODO(jkosh44): This timeout should be removed;
-                    // we should instead periodically ensure clusters are
-                    // healthy and actively cancel any work waiting on unhealthy
-                    // clusters.
-                    match tokio::time::timeout(timeout_dur, batch).await {
-                        Ok(res) => match res {
-                            PeekResponseUnary::Rows(rows) => make_diffs(rows),
-                            PeekResponseUnary::Canceled => Err(AdapterError::Canceled),
-                            PeekResponseUnary::Error(e) => {
-                                Err(AdapterError::Unstructured(anyhow!(e)))
+                ExecuteResponse::SendingRowsStreaming {
+                    rows: mut rows_stream,
+                    ..
+                } => {
+                    let mut byte_size: u64 = 0;
+                    let mut diffs = Vec::new();
+                    let result = loop {
+                        match tokio::time::timeout(timeout_dur, rows_stream.next()).await {
+                            Ok(Some(res)) => match res {
+                                PeekResponseUnary::Rows(new_rows) => {
+                                    match make_diffs(new_rows) {
+                                        Ok((mut new_diffs, new_byte_size)) => {
+                                            byte_size = byte_size.saturating_add(new_byte_size);
+                                            if byte_size > max_result_size {
+                                                break Err(AdapterError::ResultSize(format!(
+                                                    "result exceeds max size of {max_result_size}"
+                                                )));
+                                            }
+                                            diffs.append(&mut new_diffs)
+                                        }
+                                        Err(e) => break Err(e),
+                                    };
+                                }
+                                PeekResponseUnary::Canceled => break Err(AdapterError::Canceled),
+                                PeekResponseUnary::Error(e) => {
+                                    break Err(AdapterError::Unstructured(anyhow!(e)));
+                                }
+                            },
+                            Ok(None) => break Ok(diffs),
+                            Err(_) => {
+                                // We timed out, so remove the pending peek. This is
+                                // best-effort and doesn't guarantee we won't
+                                // receive a response.
+                                // It is not an error for this timeout to occur after `internal_cmd_rx` has been dropped.
+                                let result = internal_cmd_tx.send(Message::CancelPendingPeeks {
+                                    conn_id: ctx.session().conn_id().clone(),
+                                });
+                                if let Err(e) = result {
+                                    warn!("internal_cmd_rx dropped before we could send: {:?}", e);
+                                }
+                                break Err(AdapterError::StatementTimeout);
                             }
-                        },
-                        Err(_) => {
-                            // We timed out, so remove the pending peek. This is
-                            // best-effort and doesn't guarantee we won't
-                            // receive a response.
-                            // It is not an error for this timeout to occur after `internal_cmd_rx` has been dropped.
-                            let result = internal_cmd_tx.send(Message::CancelPendingPeeks {
-                                conn_id: ctx.session().conn_id().clone(),
-                            });
-                            if let Err(e) = result {
-                                warn!("internal_cmd_rx dropped before we could send: {:?}", e);
-                            }
-                            Err(AdapterError::StatementTimeout)
                         }
-                    }
+                    };
+
+                    result
                 }
-                ExecuteResponse::SendingRowsImmediate { rows } => make_diffs(rows),
+                ExecuteResponse::SendingRowsImmediate { rows } => {
+                    make_diffs(rows).map(|(diffs, _byte_size)| diffs)
+                }
                 resp => Err(AdapterError::Unstructured(anyhow!(
                     "unexpected peek response: {resp:?}"
                 ))),
             };
+
             let mut returning_rows = Vec::new();
             let mut diff_err: Option<AdapterError> = None;
             if let (false, Ok(diffs)) = (returning.is_empty(), &diffs) {

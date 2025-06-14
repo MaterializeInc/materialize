@@ -11,7 +11,7 @@ use std::borrow::Cow;
 use std::collections::BTreeMap;
 use std::fmt::{Debug, Display, Formatter};
 use std::future::Future;
-use std::pin;
+use std::pin::{self, Pin};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -33,7 +33,7 @@ use mz_ore::result::ResultExt;
 use mz_ore::task::AbortOnDropHandle;
 use mz_ore::thread::JoinOnDropHandle;
 use mz_ore::tracing::OpenTelemetryContext;
-use mz_repr::{CatalogItemId, ColumnIndex, Row, RowIterator, ScalarType};
+use mz_repr::{CatalogItemId, ColumnIndex, Row, ScalarType};
 use mz_sql::ast::{Raw, Statement};
 use mz_sql::catalog::{EnvironmentId, SessionCatalog};
 use mz_sql::session::hint::ApplicationNameHint;
@@ -376,7 +376,7 @@ Issue a SQL query to get started. Need help?
     pub async fn support_execute_one(
         &self,
         sql: &str,
-    ) -> Result<Box<dyn RowIterator>, anyhow::Error> {
+    ) -> Result<Pin<Box<dyn Stream<Item = PeekResponseUnary> + Send + Sync>>, anyhow::Error> {
         // Connect to the coordinator.
         let conn_id = self.new_conn_id()?;
         let session = self.new_session(SessionConfig {
@@ -406,11 +406,7 @@ Issue a SQL query to get started. Need help?
             .execute(EMPTY_PORTAL.into(), futures::future::pending(), None)
             .await?
         {
-            (ExecuteResponse::SendingRows { future, .. }, _) => match future.await {
-                PeekResponseUnary::Rows(rows) => Ok(rows),
-                PeekResponseUnary::Canceled => bail!("query canceled"),
-                PeekResponseUnary::Error(e) => bail!(e),
-            },
+            (ExecuteResponse::SendingRowsStreaming { rows, .. }, _) => Ok(rows),
             r => bail!("unsupported response type: {r:?}"),
         }
     }
