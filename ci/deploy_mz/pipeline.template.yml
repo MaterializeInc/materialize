@@ -44,14 +44,7 @@ steps:
 
   - command: bin/pyactivate -m ci.deploy_mz.macos
     agents:
-      queue: mac-x86_64
-    timeout_in_minutes: 30
-    concurrency: 1
-    concurrency_group: deploy-mz/macos/x86_64
-
-  - command: bin/pyactivate -m ci.deploy_mz.macos
-    agents:
-      queue: mac-aarch64
+      queue: buildkite-hosted-macos
     timeout_in_minutes: 30
     concurrency: 1
     concurrency_group: deploy-mz/macos/aarch64
