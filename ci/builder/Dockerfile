@@ -44,6 +44,7 @@ RUN apt-get update --fix-missing && TZ=UTC DEBIAN_FRONTEND=noninteractive apt-ge
     git \
     gnupg2 \
     libxml2 \
+    pigz \
     python3 \
     python3.12-venv \
     && rm -rf /var/lib/apt/lists/*
@@ -404,6 +405,11 @@ RUN curl -fsSL https://github.com/mikefarah/yq/releases/download/v4.45.1/yq_linu
     && if [ $ARCH_GO = arm64 ]; then echo 'ceea73d4c86f2e5c91926ee0639157121f5360da42beeb8357783d79c2cc6a1d yq' | sha256sum --check; fi \
     && chmod +x yq \
     && mv yq /usr/local/bin
+
+RUN curl -fsSL https://github.com/trufflesecurity/trufflehog/releases/download/v3.89.1/trufflehog_3.89.1_linux_$ARCH_GO.tar.gz > trufflehog.tar.gz \
+    && if [ $ARCH_GO = amd64 ]; then echo 'c187e25dd1a68ba24a47cc15f334625cb5a7b77f4c75837398950accfc752d59 trufflehog.tar.gz' | sha256sum --check; fi \
+    && if [ $ARCH_GO = arm64 ]; then echo '5c3786dec219d17c1f3a5f2f97ef8fa16b029ce7df19ca2389e667eca492f78d trufflehog.tar.gz' | sha256sum --check; fi \
+    && tar -xzf trufflehog.tar.gz -C /usr/local/bin trufflehog
 
 # Hardcode some known SSH hosts, or else SSH will ask whether the host is
 # trustworthy on the first connection.

@@ -97,8 +97,11 @@ kubectl -n kube-system describe all > kubectl-describe-all-kube-system.log || tr
 # shellcheck disable=SC2024
 sudo journalctl --merge --since "$(cat step_start_timestamp)" > journalctl-merge.log
 
-mapfile -t artifacts < <(printf "run.log\nkubectl-get-logs.log\nkubectl-get-logs-previous.log\nkubectl-get-events.log\nkubectl-get-all.log\nkubectl-describe-all.log\nkubectl-pods-with-nodes.log\nkubectl-get-events-kube-system.log\nkubectl-get-all-kube-system.log\nkubectl-describe-all-kube-system.log\njournalctl-merge.log\nkail-output.log\n"; find . -name 'junit_*.xml')
+mapfile -t artifacts < <(printf "run.log\nkubectl-get-logs.log\nkubectl-get-logs-previous.log\nkubectl-get-events.log\nkubectl-get-all.log\nkubectl-describe-all.log\nkubectl-pods-with-nodes.log\nkubectl-get-events-kube-system.log\nkubectl-get-all-kube-system.log\nkubectl-describe-all-kube-system.log\njournalctl-merge.log\nkail-output.log\ntrufflehog.log\n"; find . -name 'junit_*.xml')
 artifacts_str=$(IFS=";"; echo "${artifacts[*]}")
+
+bin/ci-builder run stable trufflehog --no-update --no-verification --json filesystem "${artifacts[@]}" | trufflehog_jq_filter > trufflehog.log
+
 unset CI_EXTRA_ARGS # We don't want extra args for the annotation
 # Continue even if ci-annotate-errors fails
 CI_ANNOTATE_ERRORS_RESULT=0
@@ -110,13 +113,14 @@ buildkite-agent artifact upload "ci-annotate-errors.log"
 # File should not be empty, see database-issues#7569
 test -s kubectl-get-logs-previous.log
 
-if [ "$CI_ANNOTATE_ERRORS_RESULT" -ne 0 ]; then
-  echo "+++ ci-annotate-errors failed, which indicates that an unknown error was found"
-  exit "$CI_ANNOTATE_ERRORS_RESULT"
-fi
 ci_unimportant_heading "cloudtest: Resetting..."
 bin/ci-builder run stable test/cloudtest/reset
 
 ci_collapsed_heading ":docker: Purging all existing docker containers and volumes, regardless of origin"
 sudo systemctl restart docker
 docker ps --all --quiet | xargs --no-run-if-empty docker rm --force --volumes
+
+if [ "$CI_ANNOTATE_ERRORS_RESULT" -ne 0 ]; then
+  echo "+++ ci-annotate-errors failed, which indicates that an unknown error was found"
+  exit "$CI_ANNOTATE_ERRORS_RESULT"
+fi
