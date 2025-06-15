@@ -37,7 +37,7 @@ use crate::extensions::arrange::MzArrangeCore;
 use crate::render::RenderTimestamp;
 use crate::render::context::{ArrangementFlavor, CollectionBundle, Context, ShutdownProbe};
 use crate::render::join::mz_join_core::mz_join_core;
-use crate::row_spine::{RowRowBuilder, RowRowSpine};
+use crate::row_spine::{RowRowBuilderColumn, RowRowSpine};
 use crate::typedefs::{MzTimestamp, RowRowAgent, RowRowEnter};
 
 /// Available linear join implementations.
@@ -396,7 +396,7 @@ where
             errors.push(errs.as_collection());
 
             let arranged = keyed
-                .mz_arrange_core::<_, Col2ValBatcher<_, _,_, _>, RowRowBuilder<_, _>, RowRowSpine<_, _>>(
+                .mz_arrange_core::<_, Col2ValBatcher<_, _,_, _>, RowRowBuilderColumn<_, _>, RowRowSpine<_, _>>(
                     ExchangeCore::<ColumnBuilder<_>, _>::new_core(columnar_exchange::<Row, Row, S::Timestamp, Diff>),"JoinStage"
                 );
             joined = JoinedFlavor::Local(arranged);
