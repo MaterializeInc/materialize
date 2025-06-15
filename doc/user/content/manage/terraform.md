@@ -4,7 +4,7 @@ description: "Create and manage Materialize resources with Terraform"
 menu:
   main:
     parent: "manage"
-    weight: 11
+    weight: 12
     name: "Use Terraform to manage Materialize"
 ---
 
