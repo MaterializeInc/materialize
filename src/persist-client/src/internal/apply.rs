@@ -24,6 +24,10 @@ use mz_persist_types::{Codec, Codec64};
 use timely::progress::{Antichain, Timestamp};
 use tracing::debug;
 
+use super::state::{
+    ActiveGc, ActiveRollup, GC_FALLBACK_THRESHOLD_MS, GC_USE_ACTIVE_GC, LeasedReaderState,
+    ROLLUP_FALLBACK_THRESHOLD_MS, ROLLUP_USE_ACTIVE_ROLLUP,
+};
 use crate::cache::{LockingTypedState, StateCache};
 use crate::error::{CodecMismatch, InvalidUsage};
 use crate::internal::gc::GcReq;
@@ -38,14 +42,10 @@ use crate::internal::state_diff::StateDiff;
 use crate::internal::state_versions::{EncodedRollup, StateVersions};
 use crate::internal::trace::FueledMergeReq;
 use crate::internal::watch::StateWatch;
+use crate::read::LeasedReaderId;
 use crate::rpc::{PUBSUB_PUSH_DIFF_ENABLED, PubSubSender};
 use crate::schema::SchemaCache;
 use crate::{Diagnostics, PersistConfig, ShardId};
-
-use super::state::{
-    ActiveGc, ActiveRollup, GC_FALLBACK_THRESHOLD_MS, GC_USE_ACTIVE_GC,
-    ROLLUP_FALLBACK_THRESHOLD_MS, ROLLUP_USE_ACTIVE_ROLLUP,
-};
 
 /// An applier of persist commands.
 ///
@@ -183,6 +183,19 @@ where
         self.state
             .read_lock(&self.metrics.locks.applier_read_cacheable, |state| {
                 state.since().clone()
+            })
+    }
+
+    /// Does a lease for the provided reader exist in the current state?
+    ///
+    /// This is useful when we encounter a condition that should only be possible when the lease
+    /// has expired, so we can distinguish between scary bugs and expected-but-unusual cases.
+    /// This returns whatever lease is present in the latest version of state - so to avoid false
+    /// positives, this should be checked only after the surprising condition has occurred.
+    pub fn reader_lease(&self, id: LeasedReaderId) -> Option<LeasedReaderState<T>> {
+        self.state
+            .read_lock(&self.metrics.locks.applier_read_cacheable, |state| {
+                state.state.collections.leased_readers.get(&id).cloned()
             })
     }
 
