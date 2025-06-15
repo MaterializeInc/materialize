@@ -5,10 +5,10 @@
 # wheels for a wide variety of platforms, including M1 Macs.
 
 black==24.4.2
-boto3-stubs[ec2,iam,kinesis,s3,sqs,ssm,sts]==1.38.32
-boto3==1.38.32
+boto3-stubs[ec2,iam,kinesis,s3,sqs,ssm,sts]==1.38.36
+boto3==1.38.36
 click==8.1.3
-cryptography==45.0.3
+cryptography==45.0.4
 colored==2.3.0
 docker==7.1.0
 ec2instanceconnectcli==1.0.3
@@ -49,8 +49,8 @@ PyMySQL==1.1.1
 pytest==8.4.0
 pytest-split==0.10.0
 pyyaml==6.0.2
-requests==2.32.3
-ruamel.yaml==0.18.13
+requests==2.32.4
+ruamel.yaml==0.18.14
 ruff==0.0.292
 scipy==1.15.2
 semver==3.0.4
@@ -63,10 +63,10 @@ types-prettytable==3.4.2.6
 types-psutil==7.0.0.20250601
 types-PyMYSQL==1.1.0.20250516
 types-PyYAML==6.0.12.20250516
-types-requests==2.32.0.20250602
+types-requests==2.32.4.20250611
 types-setuptools==80.9.0.20250529
 types-toml==0.10.8.20240310
-typing-extensions==4.13.2
+typing-extensions==4.14.0
 xxhash==3.5.0
 yamllint==1.37.1
 confluent-kafka==2.6.1
