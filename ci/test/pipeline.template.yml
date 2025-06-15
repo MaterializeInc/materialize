@@ -457,7 +457,6 @@ steps:
         agents:
           # Larger agent for faster runtime
           queue: hetzner-aarch64-8cpu-16gb
-        skip: "Reenable when database-issues#9362 is fixed"
 
       - id: pg-rtr
         label: "Postgres RTR tests"
