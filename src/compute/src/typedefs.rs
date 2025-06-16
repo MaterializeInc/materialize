@@ -140,14 +140,17 @@ where
 /// columnation.
 pub trait MzData:
     differential_dataflow::containers::Columnation
-    + for<'a> columnar::Columnar<Container: Clone + Send, Ref<'a>: Copy + Ord>
+    + for<'a> columnar::Columnar<Container: Clone + Send + columnar::HeapSize, Ref<'a>: Copy + Ord>
 {
 }
 
 impl<T> MzData for T
 where
     T: differential_dataflow::containers::Columnation,
-    T: for<'a> columnar::Columnar<Container: Clone + Send, Ref<'a>: Copy + Ord>,
+    T: for<'a> columnar::Columnar<
+            Container: Clone + Send + columnar::HeapSize,
+            Ref<'a>: Copy + Ord,
+        >,
 {
 }
 

@@ -311,6 +311,7 @@ incremental = true
 # merged), after which point it becomes impossible to build that historical
 # version of Materialize.
 [patch.crates-io]
+timely = { git = "https://github.com/antiguru/timely-dataflow", branch = "exchange_flush" }
 differential-dataflow = { git = "https://github.com/antiguru/differential-dataflow", branch = "merge_batcher_cb2" }
 differential-dogs3 = { git = "https://github.com/antiguru/differential-dataflow", branch = "merge_batcher_cb2" }
 columnar = { git = "https://github.com/antiguru/columnar", branch = "more_inline" }

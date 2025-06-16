@@ -380,6 +380,11 @@ mod builder {
             self.finished = self.pending.pop_front();
             self.finished.as_mut()
         }
+
+        #[inline]
+        fn flush(&mut self) {
+            *self = Self::default();
+        }
     }
 
     impl<C: Columnar> LengthPreservingContainerBuilder for ColumnBuilder<C> where C::Container: Clone {}
@@ -508,7 +513,7 @@ pub mod batcher {
 
 /// Implementations of `ContainerQueue` and `MergerChunk` for `Column` containers (columnar).
 pub mod merger {
-    use columnar::Columnar;
+    use columnar::{Columnar, HeapSize};
     use differential_dataflow::difference::Semigroup;
     use differential_dataflow::trace::implementations::merge_batcher::container::{
         ContainerMerger, PushAndAdd,
@@ -579,9 +584,9 @@ pub mod merger {
 
     impl<D, T, R> MergerChunk for Column<(D, T, R)>
     where
-        D: Columnar,
-        T: for<'a> Columnar<Ref<'a>: Copy> + Timestamp,
-        R: Columnar + Default,
+        D: Columnar<Container: HeapSize>,
+        T: for<'a> Columnar<Container: HeapSize, Ref<'a>: Copy> + Timestamp,
+        R: Columnar<Container: HeapSize> + Default,
     {
         type TimeOwned = T;
 
@@ -605,19 +610,17 @@ pub mod merger {
         fn account(&self) -> (usize, usize, usize, usize) {
             let (mut size, mut cap) = (0, 0);
             match self {
-                Column::Typed((_data, _time, _diff)) => {
-                    // I don't want to push the `<.. as Columnar>::Container: HeapSize` constraint
-                    // everywhere, so let's just pretend it takes no space.
-                    // use columnar::HeapSize;
-                    // let size_cap = data.heap_size();
-                    // size += size_cap.0;
-                    // cap += size_cap.1;
-                    // let size_cap = time.heap_size();
-                    // size += size_cap.0;
-                    // cap += size_cap.1;
-                    // let size_cap = diff.heap_size();
-                    // size += size_cap.0;
-                    // cap += size_cap.1;
+                Column::Typed((data, time, diff)) => {
+                    use columnar::HeapSize;
+                    let size_cap = data.heap_size();
+                    size += size_cap.0;
+                    cap += size_cap.1;
+                    let size_cap = time.heap_size();
+                    size += size_cap.0;
+                    cap += size_cap.1;
+                    let size_cap = diff.heap_size();
+                    size += size_cap.0;
+                    cap += size_cap.1;
                 }
                 Column::Bytes(bytes) => {
                     size += bytes.len();
