@@ -41,7 +41,7 @@ use crate::batch::{BatchBuilderConfig, BatchBuilderInternal, BatchParts, PartDel
 use crate::cfg::{
     COMPACTION_HEURISTIC_MIN_INPUTS, COMPACTION_HEURISTIC_MIN_PARTS,
     COMPACTION_HEURISTIC_MIN_UPDATES, COMPACTION_MEMORY_BOUND_BYTES,
-    GC_BLOB_DELETE_CONCURRENCY_LIMIT, MiB,
+    GC_BLOB_DELETE_CONCURRENCY_LIMIT, INCREMENTAL_COMPACTIONS_SINGLE_RUN_ENABLED, MiB,
 };
 use crate::fetch::{EncodedPart, FetchBatchFilter};
 use crate::internal::encoding::Schemas;
@@ -407,10 +407,26 @@ where
                             &machine_clone,
                         );
 
-                        let maintenance = {
+                        let maintenance = if INCREMENTAL_COMPACTIONS_SINGLE_RUN_ENABLED
+                            .get(&machine_clone.applier.cfg)
+                        {
+                            let mut maintenance = RoutineMaintenance::default();
+                            pin_mut!(stream);
+                            while let Some(res) = stream.next().await {
+                                let res = res?;
+                                let new_maintenance =
+                                    Self::apply(res, &metrics_clone, &machine_clone).await?;
+                                maintenance = std::cmp::max(maintenance, new_maintenance);
+                            }
+                            maintenance
+                        } else {
                             let res = Self::compact_all(stream, req.clone()).await?;
                             Self::apply(
-                                FueledMergeRes { output: res.output },
+                                FueledMergeRes {
+                                    output: res.output,
+                                    inputs: res.inputs,
+                                    new_active_compaction: None,
+                                },
                                 &metrics_clone,
                                 &machine_clone,
                             )
@@ -614,9 +630,12 @@ where
             let run_reserved_memory_bytes =
                 cfg.compaction_memory_bound_bytes - in_progress_part_reserved_memory_bytes;
 
+            info!("input runs: {:?}", req.inputs.iter().map(|x| x.id).collect::<Vec<_>>());
             // Flatten the input batches into a single list of runs
             let ordered_runs =
                 Self::order_runs(&req, cfg.batch.preferred_order, &*blob, &*metrics).await?;
+
+            info!("ordered runs: {:?}", ordered_runs.iter().map(|(run_id, _, _, _)| run_id).collect::<Vec<_>>());
 
             // There are two cases to consider here:
             // 1. There are as many runs as there are input batches in which case we
@@ -651,6 +670,7 @@ where
             );
 
             for (runs, run_chunk_max_memory_usage) in chunked_runs {
+                info!("compacting runs for chunk: {:?}", runs.iter().map(|(run_id, _, _, _)| run_id).collect::<Vec<_>>());
                 metrics.compaction.chunks_compacted.inc();
                 metrics
                     .compaction
@@ -666,6 +686,9 @@ where
                 run_cfg.batch.batch_builder_max_outstanding_parts = 1 + extra_outstanding_parts;
 
                 let input_runs = &runs.iter().map(|(run_id, _, _, _)| *run_id.clone()).collect::<Vec<_>>();
+                let runs = runs.iter()
+                    .map(|(_, desc, meta, run)| (desc.clone(), meta.clone(), run.clone()))
+                    .collect::<Vec<_>>();
 
                 let batch = Self::compact_runs(
                     &run_cfg,
@@ -909,7 +932,7 @@ where
         cfg: &CompactConfig,
         shard_id: &ShardId,
         desc: &Description<T>,
-        mut runs: Vec<(&RunId, &Description<T>, &RunMeta, &[RunPart<T>])>,
+        mut runs: Vec<(&Description<T>, &RunMeta, &[RunPart<T>])>,
         blob: Arc<dyn Blob>,
         metrics: Arc<Metrics>,
         shard_metrics: Arc<ShardMetrics>,
@@ -977,7 +1000,7 @@ where
         };
 
         if let Some(lower_bound) = lower_bound.as_ref() {
-            for (_, _, _, run) in &mut runs {
+            for (_, _, run) in &mut runs {
                 let start = run
                     .iter()
                     .position(|part| {
@@ -1030,7 +1053,7 @@ where
             prefetch_budget_bytes,
         );
 
-        for (_run_id, desc, meta, parts) in runs {
+        for (desc, meta, parts) in runs {
             consolidator.enqueue_run(desc, meta, parts.iter().cloned());
         }
 
@@ -1184,6 +1207,7 @@ impl Timings {
 
 #[cfg(test)]
 mod tests {
+    use clap::Id;
     use mz_dyncfg::ConfigUpdates;
     use mz_ore::{assert_contains, assert_err};
     use mz_persist_types::codec_impls::StringSchema;
@@ -1193,6 +1217,7 @@ mod tests {
     use crate::PersistLocation;
     use crate::batch::BLOB_TARGET_SIZE;
     use crate::cfg::BATCH_BUILDER_MAX_OUTSTANDING_PARTS;
+    use crate::internal::trace::SpineId;
     use crate::tests::{all_ok, expect_fetch_part, new_test_client_cache};
 
     use super::*;
@@ -1233,7 +1258,16 @@ mod tests {
                 b1.desc.upper().clone(),
                 Antichain::from_elem(10u64),
             ),
-            inputs: vec![b0, b1],
+            inputs: vec![
+                IdHollowBatch {
+                    batch: Arc::new(b0),
+                    id: SpineId(0, 1),
+                },
+                IdHollowBatch {
+                    batch: Arc::new(b1),
+                    id: SpineId(1, 2),
+                },
+            ],
             prev_batch: None,
         };
         let schemas = Schemas {
@@ -1314,7 +1348,16 @@ mod tests {
                 b1.desc.upper().clone(),
                 Antichain::from_elem(Product::new(10, 0)),
             ),
-            inputs: vec![b0, b1],
+            inputs: vec![
+                IdHollowBatch {
+                    batch: Arc::new(b0),
+                    id: SpineId(0, 1),
+                },
+                IdHollowBatch {
+                    batch: Arc::new(b1),
+                    id: SpineId(1, 2),
+                },
+            ],
             prev_batch: None,
         };
         let schemas = Schemas {
@@ -1386,7 +1429,16 @@ mod tests {
                 b1.desc.upper().clone(),
                 Antichain::from_elem(10u64),
             ),
-            inputs: vec![b0, b1],
+            inputs: vec![
+                IdHollowBatch {
+                    batch: Arc::new(b0),
+                    id: SpineId(0, 1),
+                },
+                IdHollowBatch {
+                    batch: Arc::new(b1),
+                    id: SpineId(1, 2),
+                },
+            ],
             prev_batch: None,
         };
         write.cfg.set_config(&COMPACTION_HEURISTIC_MIN_INPUTS, 1);
@@ -1432,7 +1484,16 @@ mod tests {
                 b3.desc.upper().clone(),
                 Antichain::from_elem(20u64),
             ),
-            inputs: vec![b2, b3],
+            inputs: vec![
+                IdHollowBatch {
+                    batch: Arc::new(b2),
+                    id: SpineId(0, 1),
+                },
+                IdHollowBatch {
+                    batch: Arc::new(b3),
+                    id: SpineId(1, 2),
+                },
+            ],
             prev_batch: None,
         };
         let compactor = write.compact.as_ref().expect("compaction hard disabled");
@@ -1486,6 +1547,10 @@ mod tests {
                 .expect_batch(&data[lower..upper], lower as u64, upper as u64)
                 .await
                 .into_hollow_batch();
+            let batch = IdHollowBatch {
+                batch: Arc::new(batch),
+                id: SpineId(lower, upper),
+            };
             batches.push(batch);
             lower = upper;
         }
@@ -1493,8 +1558,8 @@ mod tests {
         let req = CompactReq {
             shard_id: write.machine.shard_id(),
             desc: Description::new(
-                batches.first().unwrap().desc.lower().clone(),
-                batches.last().unwrap().desc.upper().clone(),
+                batches.first().unwrap().batch.desc.lower().clone(),
+                batches.last().unwrap().batch.desc.upper().clone(),
                 Antichain::from_elem(10u64),
             ),
             inputs: batches.clone(),
@@ -1540,6 +1605,10 @@ mod tests {
         let chunked_runs_clone = chunked_runs.clone();
 
         for (runs, _max_memory) in chunked_runs_clone.iter() {
+            let runs = runs
+                .iter()
+                .map(|(_, desc, meta, run)| (desc.clone(), meta.clone(), run.clone()))
+                .collect::<Vec<_>>();
             let (incremental_tx, mut incremental_rx) = tokio::sync::mpsc::channel(1);
             let shard_id = write.shard_id();
 
@@ -1576,6 +1645,10 @@ mod tests {
         }
 
         for (runs, _max_memory) in chunked_runs.iter() {
+            let runs = runs
+                .iter()
+                .map(|(_, desc, meta, run)| (desc.clone(), meta.clone(), run.clone()))
+                .collect::<Vec<_>>();
             let (incremental_tx, mut incremental_rx) = tokio::sync::mpsc::channel(1);
             let shard_id = write.shard_id();
 

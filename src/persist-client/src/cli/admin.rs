@@ -42,7 +42,7 @@ use crate::internal::encoding::Schemas;
 use crate::internal::gc::{GarbageCollector, GcReq};
 use crate::internal::machine::Machine;
 use crate::internal::state::HollowBatch;
-use crate::internal::trace::FueledMergeRes;
+use crate::internal::trace::{FueledMergeRes, RunId};
 use crate::rpc::{NoopPubSubSender, PubSubSender};
 use crate::write::{WriteHandle, WriterId};
 use crate::{
@@ -457,18 +457,18 @@ where
             let req = CompactReq {
                 shard_id,
                 desc: req.desc,
-                inputs: req
-                    .inputs
-                    .into_iter()
-                    .map(|b| Arc::unwrap_or_clone(b.batch))
-                    .collect(),
+                inputs: req.inputs,
                 prev_batch: None,
             };
-            let parts = req.inputs.iter().map(|x| x.part_count()).sum::<usize>();
+            let parts = req
+                .inputs
+                .iter()
+                .map(|x| x.batch.part_count())
+                .sum::<usize>();
             let bytes = req
                 .inputs
                 .iter()
-                .map(|x| x.encoded_size_bytes())
+                .map(|x| x.batch.encoded_size_bytes())
                 .sum::<usize>();
             let start = Instant::now();
             info!(
@@ -527,8 +527,22 @@ where
                 len += updates;
             }
 
+            let run_inputs = req
+                .inputs
+                .iter()
+                .map(|x| {
+                    x.batch
+                        .runs()
+                        .enumerate()
+                        .map(|(i, _)| RunId(x.id, i))
+                        .collect::<Vec<_>>()
+                })
+                .flatten()
+                .collect::<Vec<_>>();
+
             let res = CompactRes {
                 output: HollowBatch::new(req.desc, all_parts, len, all_run_meta, all_run_splits),
+                inputs: run_inputs,
             };
 
             metrics.compaction.admin_count.inc();
@@ -541,7 +555,11 @@ where
                 start.elapsed(),
             );
             let (apply_res, maintenance) = machine
-                .merge_res(&FueledMergeRes { output: res.output })
+                .merge_res(&FueledMergeRes {
+                    output: res.output,
+                    inputs: res.inputs,
+                    new_active_compaction: None,
+                })
                 .await;
             if !maintenance.is_empty() {
                 info!("ignoring non-empty requested maintenance: {maintenance:?}")
@@ -775,10 +793,10 @@ pub async fn dangerous_force_compaction_and_break_pushdown<K, V, T, D>(
                 machine.applier.shard_metrics.name,
                 machine.applier.shard_metrics.shard_id,
                 req.inputs.len(),
-                req.inputs.iter().flat_map(|x| &x.parts).count(),
+                req.inputs.iter().flat_map(|x| &x.batch.parts).count(),
                 req.inputs
                     .iter()
-                    .flat_map(|x| &x.parts)
+                    .flat_map(|x| &x.batch.parts)
                     .map(|x| x.encoded_size_bytes())
                     .sum::<usize>(),
                 req.desc.lower().elements(),

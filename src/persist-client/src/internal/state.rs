@@ -819,6 +819,7 @@ pub struct HollowBatchPart<T> {
 ///
 /// [Batch]: differential_dataflow::trace::BatchReader
 #[derive(Clone, PartialEq, Eq)]
+
 pub struct HollowBatch<T> {
     /// Describes the times of the updates in the batch.
     pub desc: Description<T>,
@@ -1044,6 +1045,42 @@ impl<T> HollowBatch<T> {
             .map(|range| &self.parts[range]);
         run_metas.zip(run_parts)
     }
+    // pub(crate) fn runs(&self) -> impl Iterator<Item = (&RunMeta, &[RunPart<T>])> + '_ {
+    //     info!("runs(): run_splits={:?}", self.run_splits);
+    //     let run_ends = self
+    //         .run_splits
+    //         .iter()
+    //         .copied()
+    //         .chain(std::iter::once(self.parts.len()));
+    //     info!("runs(): run_ends={:?}", run_ends);
+    //     let run_metas = self.run_meta.iter();
+
+    //     let mut start = 0;
+    //     let run_parts = run_ends
+    //     .map(move |end| {
+    //         let range = start..end;
+    //         start = end;
+    //         range
+    //     })
+    //     .inspect(|range| {
+    //         if range.is_empty() {
+    //             tracing::info!(
+    //                 "runs(): skipping empty run range: {:?} (run_splits may have duplicates or gaps)",
+    //                 range
+    //             );
+    //         } else {
+    //             tracing::info!(
+    //                 "runs(): yielding run range: {:?} (run_splits={:?})",
+    //                 range,
+    //                 self.run_splits
+    //             );
+    //         }
+    //     })
+    //     .filter(|range| !range.is_empty())
+    //     .map(|range| &self.parts[range]);
+
+    //     run_metas.zip(run_parts)
+    // }
 
     pub(crate) fn inline_bytes(&self) -> usize {
         self.parts.iter().map(|x| x.inline_bytes()).sum()
@@ -2150,6 +2187,8 @@ where
             // able to append that batch in the first place.
             let fake_merge = FueledMergeRes {
                 output: HollowBatch::empty(desc),
+                inputs: Vec::new(),
+                new_active_compaction: None,
             };
             let result = self.trace.apply_tombstone_merge(&fake_merge);
             assert!(

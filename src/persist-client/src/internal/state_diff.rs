@@ -857,7 +857,11 @@ fn apply_diffs_spine<T: Timestamp + Lattice + Codec64>(
 
     // Fast-path: compaction
     if let Some((_inputs, output)) = sniff_compaction(&diffs) {
-        let res = FueledMergeRes { output };
+        let res = FueledMergeRes {
+            output,
+            inputs: Vec::new(),
+            new_active_compaction: None,
+        };
         // We can't predict how spine will arrange the batches when it's
         // hydrated. This means that something that is maintaining a Spine
         // starting at some seqno may not exactly match something else
