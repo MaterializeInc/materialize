@@ -126,6 +126,13 @@ mod columnar_timestamp {
 
     impl columnar::HeapSize for Timestamp {}
 
+    impl<T: columnar::HeapSize> columnar::HeapSize for TimestampVec<T> {
+        #[inline(always)]
+        fn heap_size(&self) -> (usize, usize) {
+            self.0.heap_size()
+        }
+    }
+
     impl<'a> columnar::AsBytes<'a> for TimestampVec<&'a [Timestamp]> {
         #[inline(always)]
         fn as_bytes(&self) -> impl Iterator<Item = (u64, &'a [u8])> {
