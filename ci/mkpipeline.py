@@ -428,32 +428,52 @@ def switch_jobs_to_aws(pipeline: Any, priority: int) -> None:
     if not stuck:
         return
 
-    print(f"Queue prefixes stuck in Hetzner, switching to AWS: {stuck}")
+    print(f"Queue prefixes stuck in Hetzner, switching to AWS or another arch: {stuck}")
 
     def visit(config: Any) -> None:
         if "agents" in config:
             agent = config["agents"].get("queue", None)
             if "aarch64" in stuck:
-                if agent in ("hetzner-aarch64-4cpu-8gb", "hetzner-aarch64-2cpu-4gb"):
-                    config["agents"]["queue"] = "linux-aarch64"
-                if agent in ("hetzner-aarch64-8cpu-16gb", "hetzner-aarch64-16cpu-32gb"):
-                    config["agents"]["queue"] = "linux-aarch64-medium"
+                if "x86-64" not in stuck:
+                    if agent == "hetzner-aarch64-2cpu-4gb":
+                        config["agents"]["queue"] = "hetzner-x86-64-2cpu-4gb"
+                        config["depends_on"] = "build-x86_64"
+                    elif agent == "hetzner-aarch64-4cpu-8gb":
+                        config["agents"]["queue"] = "hetzner-x86-64-4cpu-8gb"
+                        config["depends_on"] = "build-x86_64"
+                    elif agent == "hetzner-aarch64-8cpu-16gb":
+                        config["agents"]["queue"] = "hetzner-x86-64-8cpu-16gb"
+                        config["depends_on"] = "build-x86_64"
+                    elif agent == "hetzner-aarch64-16cpu-32gb":
+                        config["agents"]["queue"] = "hetzner-x86-64-16cpu-32gb"
+                        config["depends_on"] = "build-x86_64"
+                else:
+                    if agent in (
+                        "hetzner-aarch64-4cpu-8gb",
+                        "hetzner-aarch64-2cpu-4gb",
+                    ):
+                        config["agents"]["queue"] = "linux-aarch64"
+                    elif agent in (
+                        "hetzner-aarch64-8cpu-16gb",
+                        "hetzner-aarch64-16cpu-32gb",
+                    ):
+                        config["agents"]["queue"] = "linux-aarch64-medium"
             if "x86-64" in stuck:
                 if agent in ("hetzner-x86-64-4cpu-8gb", "hetzner-x86-64-2cpu-4gb"):
                     config["agents"]["queue"] = "linux-x86_64"
-                if agent in ("hetzner-x86-64-8cpu-16gb", "hetzner-x86-64-16cpu-32gb"):
+                elif agent in ("hetzner-x86-64-8cpu-16gb", "hetzner-x86-64-16cpu-32gb"):
                     config["agents"]["queue"] = "linux-x86_64-medium"
             if "x86-64-dedi" in stuck:
                 if agent == "hetzner-x86-64-dedi-2cpu-8gb":
                     config["agents"]["queue"] = "linux-x86_64"
-                if agent == "hetzner-x86-64-dedi-4cpu-16gb":
+                elif agent == "hetzner-x86-64-dedi-4cpu-16gb":
                     config["agents"]["queue"] = "linux-x86_64-medium"
-                if agent in (
+                elif agent in (
                     "hetzner-x86-64-dedi-8cpu-32gb",
                     "hetzner-x86-64-dedi-16cpu-64gb",
                 ):
                     config["agents"]["queue"] = "linux-x86_64-large"
-                if agent in (
+                elif agent in (
                     "hetzner-x86-64-dedi-32cpu-128gb",
                     "hetzner-x86-64-dedi-48cpu-192gb",
                 ):
