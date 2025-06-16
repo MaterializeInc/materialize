@@ -234,6 +234,13 @@ impl HttpServer {
                     webhook_cache,
                 })
                 .layer(
+                    tower_http::decompression::RequestDecompressionLayer::new()
+                        .gzip(true)
+                        .deflate(true)
+                        .br(true)
+                        .zstd(true),
+                )
+                .layer(
                     CorsLayer::new()
                         .allow_methods(Method::POST)
                         .allow_origin(AllowOrigin::mirror_request())
