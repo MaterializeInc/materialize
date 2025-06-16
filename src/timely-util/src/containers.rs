@@ -608,30 +608,31 @@ pub mod merger {
         // len size cap allocations
         #[inline(always)]
         fn account(&self) -> (usize, usize, usize, usize) {
-            let (mut size, mut cap) = (0, 0);
+            let (mut size, mut cap, mut count) = (0, 0, 0);
             match self {
                 Column::Typed((data, time, diff)) => {
                     use columnar::HeapSize;
-                    let size_cap = data.heap_size();
-                    size += size_cap.0;
-                    cap += size_cap.1;
-                    let size_cap = time.heap_size();
-                    size += size_cap.0;
-                    cap += size_cap.1;
-                    let size_cap = diff.heap_size();
-                    size += size_cap.0;
-                    cap += size_cap.1;
+                    let mut cb = |s, c| {
+                        size += s;
+                        cap += c;
+                        count += 1;
+                    };
+                    data.heap_size(&mut cb);
+                    time.heap_size(&mut cb);
+                    diff.heap_size(&mut cb);
                 }
                 Column::Bytes(bytes) => {
                     size += bytes.len();
                     cap += bytes.len();
+                    count += 1;
                 }
                 Column::Align(align) => {
                     size += align.len() * 8; // 8 bytes per u64
                     cap += align.len() * 8; // 8 bytes per u64
+                    count += 1;
                 }
             }
-            (self.len(), size, cap, 0)
+            (self.len(), size, cap, count)
         }
     }
     impl<D, T, R> PushAndAdd for ColumnBuilder<(D, T, R)>

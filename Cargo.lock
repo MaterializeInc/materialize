@@ -1853,8 +1853,8 @@ checksum = "5b63caa9aa9397e2d9480a9b13673856c78d8ac123288526c37d7839f2a86990"
 
 [[package]]
 name = "columnar"
-version = "0.5.0"
-source = "git+https://github.com/antiguru/columnar?branch=more_inline#2ad7ca5563f487ff1e907a7058049b07ad8cafec"
+version = "0.5.1"
+source = "git+https://github.com/antiguru/columnar?branch=heap_size#6dc937046c40baa141b2455012e16a664a72d9a8"
 dependencies = [
  "bytemuck",
  "columnar_derive",
@@ -1864,8 +1864,8 @@ dependencies = [
 
 [[package]]
 name = "columnar_derive"
-version = "0.2.3"
-source = "git+https://github.com/antiguru/columnar?branch=more_inline#2ad7ca5563f487ff1e907a7058049b07ad8cafec"
+version = "0.2.4"
+source = "git+https://github.com/antiguru/columnar?branch=heap_size#6dc937046c40baa141b2455012e16a664a72d9a8"
 dependencies = [
  "proc-macro2",
  "quote",
