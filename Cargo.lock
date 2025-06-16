@@ -4926,7 +4926,7 @@ dependencies = [
  "mz-timestamp-oracle",
  "mz-tracing",
  "mz-transform",
- "opentelemetry",
+ "opentelemetry 0.30.0",
  "prometheus",
  "prost",
  "qcell",
@@ -5820,7 +5820,7 @@ dependencies = [
  "num_cpus",
  "openssl",
  "openssl-sys",
- "opentelemetry",
+ "opentelemetry 0.30.0",
  "opentelemetry_sdk",
  "pin-project",
  "postgres",
@@ -6433,7 +6433,7 @@ dependencies = [
  "mz-repr",
  "mz-service",
  "mz-tracing",
- "opentelemetry",
+ "opentelemetry 0.30.0",
  "opentelemetry_sdk",
  "sentry-tracing",
  "tracing",
@@ -6516,7 +6516,7 @@ dependencies = [
  "num",
  "num-traits",
  "openssl",
- "opentelemetry",
+ "opentelemetry 0.30.0",
  "opentelemetry-otlp",
  "opentelemetry_sdk",
  "parquet",
@@ -8409,6 +8409,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "opentelemetry"
+version = "0.30.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "aaf416e4cb72756655126f7dd7bb0af49c674f4c1b9903e80c009e0c37e552e6"
+dependencies = [
+ "futures-core",
+ "futures-sink",
+ "js-sys",
+ "pin-project-lite",
+ "thiserror 2.0.12",
+ "tracing",
+]
+
+[[package]]
 name = "opentelemetry-otlp"
 version = "0.17.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -8417,7 +8431,7 @@ dependencies = [
  "async-trait",
  "futures-core",
  "http 1.2.0",
- "opentelemetry",
+ "opentelemetry 0.24.0",
  "opentelemetry-proto",
  "opentelemetry_sdk",
  "prost",
@@ -8432,7 +8446,7 @@ version = "0.7.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "30ee9f20bff9c984511a02f082dc8ede839e4a9bf15cc2487c8d6fea5ad850d9"
 dependencies = [
- "opentelemetry",
+ "opentelemetry 0.24.0",
  "opentelemetry_sdk",
  "prost",
  "tonic",
@@ -8450,7 +8464,7 @@ dependencies = [
  "futures-util",
  "glob",
  "once_cell",
- "opentelemetry",
+ "opentelemetry 0.24.0",
  "percent-encoding",
  "rand 0.8.5",
  "serde_json",
@@ -11756,7 +11770,7 @@ source = "git+https://github.com/MaterializeInc/tracing-opentelemetry.git#09f0cc
 dependencies = [
  "js-sys",
  "once_cell",
- "opentelemetry",
+ "opentelemetry 0.24.0",
  "opentelemetry_sdk",
  "smallvec",
  "tracing",
