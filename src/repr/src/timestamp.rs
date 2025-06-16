@@ -128,8 +128,8 @@ mod columnar_timestamp {
 
     impl<T: columnar::HeapSize> columnar::HeapSize for TimestampVec<T> {
         #[inline(always)]
-        fn heap_size(&self) -> (usize, usize) {
-            self.0.heap_size()
+        fn heap_size<F: FnMut(usize, usize)>(&self, callback: &mut F) {
+            self.0.heap_size(callback);
         }
     }
 

@@ -314,7 +314,7 @@ incremental = true
 timely = { git = "https://github.com/antiguru/timely-dataflow", branch = "exchange_flush" }
 differential-dataflow = { git = "https://github.com/antiguru/differential-dataflow", branch = "merge_batcher_cb2" }
 differential-dogs3 = { git = "https://github.com/antiguru/differential-dataflow", branch = "merge_batcher_cb2" }
-columnar = { git = "https://github.com/antiguru/columnar", branch = "more_inline" }
+columnar = { git = "https://github.com/antiguru/columnar", branch = "heap_size" }
 # Waiting on https://github.com/sfackler/rust-postgres/pull/752.
 postgres = { git = "https://github.com/MaterializeInc/rust-postgres" }
 tokio-postgres = { git = "https://github.com/MaterializeInc/rust-postgres" }

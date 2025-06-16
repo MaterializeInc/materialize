@@ -556,10 +556,9 @@ mod columnar {
     }
     impl<BC: HeapSize, VC: HeapSize> HeapSize for Rows<BC, VC> {
         #[inline(always)]
-        fn heap_size(&self) -> (usize, usize) {
-            let (l0, c0) = self.bounds.heap_size();
-            let (l1, c1) = self.values.heap_size();
-            (l0 + l1, c0 + c1)
+        fn heap_size<F: FnMut(usize, usize)>(&self, callback: &mut F) {
+            self.bounds.heap_size(callback);
+            self.values.heap_size(callback);
         }
     }
 }
