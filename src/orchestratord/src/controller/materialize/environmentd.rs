@@ -1122,18 +1122,19 @@ fn create_environmentd_statefulset_object(
     // Add logging and tracing arguments.
     args.extend(["--log-format=json".into()]);
     if let Some(endpoint) = &tracing.opentelemetry_endpoint {
-        args.extend([
-            format!("--opentelemetry-endpoint={}", endpoint),
-            format!(
-                "--opentelemetry-resource=organization_id={}",
-                mz.spec.environment_id
-            ),
-            format!(
-                "--opentelemetry-resource=environment_name={}",
-                mz.name_unchecked()
-            ),
-        ]);
+        args.push(format!("--opentelemetry-endpoint={}", endpoint));
     }
+    // --opentelemetry-resource also configures sentry tags
+    args.extend([
+        format!(
+            "--opentelemetry-resource=organization_id={}",
+            mz.spec.environment_id
+        ),
+        format!(
+            "--opentelemetry-resource=environment_name={}",
+            mz.name_unchecked()
+        ),
+    ]);
 
     if let Some(segment_api_key) = &config.segment_api_key {
         args.push(format!("--segment-api-key={}", segment_api_key));
