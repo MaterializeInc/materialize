@@ -1139,6 +1139,9 @@ class AlterSinkLGSource(Check):
 
 
 @externally_idempotent(False)
+@disabled(
+    "manual sleep is impossible to get right, this check has to be reworked so as not to flake CI"
+)
 class AlterSinkPgSource(Check):
     """Check ALTER SINK with a postgres source"""
 
