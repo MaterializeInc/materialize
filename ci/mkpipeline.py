@@ -405,11 +405,7 @@ def switch_jobs_to_aws(pipeline: Any, priority: int) -> None:
                     if queue_prefix in stuck:
                         continue
 
-                    priority = job.get("priority", {}).get("number", 0)
-                    if priority < 0:
-                        continue
-
-                    if not job.get("state") == "scheduled":
+                    if job.get("state") != "scheduled":
                         continue
 
                     runnable = job.get("runnable_at")
