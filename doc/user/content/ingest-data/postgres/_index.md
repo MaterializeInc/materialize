@@ -35,12 +35,6 @@ Materialize gives you the following benefits:
 
 ## Supported versions and services
 
-{{< note >}}
-PostgreSQL-compatible database systems are not guaranteed to work with the
-PostgreSQL source out-of-the-box. [Yugabyte](https://www.yugabyte.com/) is
-currently supported with **limitations**.
-{{< /note >}}
-
 The PostgreSQL source requires **PostgreSQL 11+** and is compatible with most
 common PostgreSQL hosted services.
 
