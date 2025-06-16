@@ -1395,7 +1395,7 @@ steps:
         plugins:
           - ./ci/plugins/mzcompose:
               composition: sqlsmith
-              args: [--max-joins=2, --runtime=1500]
+              args: [--max-joins=5, --runtime=1500]
 
       - id: sqlsmith-explain
         label: "SQLsmith explain"
@@ -1708,7 +1708,6 @@ steps:
         depends_on: build-aarch64
         artifact_paths: [parallel-workload-queries.log.zst]
         timeout_in_minutes: 90
-        skip: "TODO(def-): Reenable when database-issues#835 is fixed"
         agents:
           queue: hetzner-aarch64-8cpu-16gb
         plugins:

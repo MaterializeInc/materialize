@@ -1813,8 +1813,7 @@ class CancelAction(Action):
             extra_info=f"Canceling {worker}",
             http=Http.RANDOM,
         )
-        # Sleep less often to work around materialize#22228 / database-issues#835
-        time.sleep(self.rng.uniform(1, 10))
+        time.sleep(self.rng.uniform(0.1, 10))
         return True
 
 
