@@ -643,13 +643,16 @@ where
                     let mut args = vec![
                         format!(
                             "--storage-controller-listen-addr={}",
-                            assigned["storagectl"]
+                            assigned.listen_addrs["storagectl"]
                         ),
                         format!(
                             "--compute-controller-listen-addr={}",
-                            assigned["computectl"]
+                            assigned.listen_addrs["computectl"]
                         ),
-                        format!("--internal-http-listen-addr={}", assigned["internal-http"]),
+                        format!(
+                            "--internal-http-listen-addr={}",
+                            assigned.listen_addrs["internal-http"]
+                        ),
                         format!("--opentelemetry-resource=cluster_id={}", cluster_id),
                         format!("--opentelemetry-resource=replica_id={}", replica_id),
                         format!("--persist-pubsub-url={}", persist_pubsub_url),
