@@ -59,6 +59,7 @@ use std::mem;
 use std::ops::Range;
 use std::sync::Arc;
 use tracing::info;
+use uuid::Uuid;
 
 use crate::internal::paths::WriterKey;
 use differential_dataflow::lattice::Lattice;
@@ -726,7 +727,7 @@ enum SpineLog<'a, T> {
 /// A RunId uniquely identifies a run within a hollow batch.
 /// It is a pair of `SpineId` and an index within that batch.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub struct RunId(pub SpineId, pub usize);
+pub struct RunId(pub SpineId, pub Option<Uuid>);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct SpineId(pub usize, pub usize);
@@ -1012,7 +1013,7 @@ impl<T: Timestamp + Lattice + Codec64> SpineBatch<T> {
 
     fn diffs_sum_for_runs<D: Semigroup + Codec64>(
         batch: &HollowBatch<T>,
-        run_ids: &[usize],
+        run_ids: &[Uuid],
         metrics: &ColumnarMetrics,
     ) -> Option<D> {
         if run_ids.is_empty() {
@@ -1021,17 +1022,20 @@ impl<T: Timestamp + Lattice + Codec64> SpineBatch<T> {
 
         let mut parts = Vec::new();
         for &run_id in run_ids {
-            let start = if run_id == 0 {
-                0
-            } else {
-                batch.run_splits[run_id - 1]
-            };
-            let end = batch
-                .run_splits
-                .get(run_id)
-                .copied()
-                .unwrap_or(batch.parts.len());
-            parts.extend_from_slice(&batch.parts[start..end]);
+            for (i, meta) in batch.run_meta.iter().enumerate() {
+                if meta.uuid == Some(run_id) {
+                    // If the run_id is found, we use its index.
+                    // If the run_id is not found, we skip it.
+                    if i == 0 {
+                        // If it's the first run, we start from the beginning.
+                        parts.extend_from_slice(&batch.parts[..batch.run_splits[0]]);
+                    } else {
+                        // Otherwise, we start from the previous run's split.
+                        let start = batch.run_splits[i - 1];
+                        parts.extend_from_slice(&batch.parts[start..batch.run_splits[i]]);
+                    }
+                }
+            }
         }
 
         Self::diffs_sum(parts.iter(), metrics)
@@ -1039,21 +1043,33 @@ impl<T: Timestamp + Lattice + Codec64> SpineBatch<T> {
 
     fn construct_batch_with_runs_replaced(
         original: &HollowBatch<T>,
-        run_ids: &[usize],
+        run_ids: &[Uuid],
         replacement: &HollowBatch<T>,
     ) -> Result<HollowBatch<T>, ApplyMergeResult> {
         if run_ids.is_empty() {
             return Err(ApplyMergeResult::NotAppliedNoMatch);
         }
 
-        assert!(
-            run_ids.windows(2).all(|w| w[0] + 1 == w[1]),
-            "run_ids must be contiguous: {:?}",
-            run_ids
-        );
+        // assert!(
+        //     run_ids.windows(2).all(|w| w[0] + 1 == w[1]),
+        //     "run_ids must be contiguous: {:?}",
+        //     run_ids
+        // );
 
-        let start_run = run_ids[0];
-        let end_run = *run_ids.last().unwrap();
+        let start_id = run_ids[0];
+        let end_id = *run_ids.last().unwrap();
+
+        // Find the indices of the runs in the original batch
+        let mut start_run = 0;
+        let mut end_run = 0;
+        for (i, meta) in original.run_meta.iter().enumerate() {
+            if meta.uuid == Some(start_id) {
+                start_run = i;
+            }
+            if meta.uuid == Some(end_id) {
+                end_run = i;
+            }
+        }
 
         // 1. Determine part index range to replace
         let start_part = if start_run == 0 {
@@ -1224,23 +1240,23 @@ impl<T: Timestamp + Lattice + Codec64> SpineBatch<T> {
                 );
             }
             let run_ids = run_indices.iter().map(|r| r.1).sorted().collect::<Vec<_>>();
-            if let Some(last) = run_ids.last() {
-                assert!(
-                    *last < part.batch.run_meta.len(),
-                    "merge result for spine batch {:?} has runs {:?}, but spine batch has {} runs",
-                    spine_id,
-                    run_ids,
-                    part.batch.run_meta.len()
-                );
-            }
+            // if let Some(last) = run_ids.last() {
+            //     assert!(
+            //         *last < part.batch.run_meta.len(),
+            //         "merge result for spine batch {:?} has runs {:?}, but spine batch has {} runs",
+            //         spine_id,
+            //         run_ids,
+            //         part.batch.run_meta.len()
+            //     );
+            // }
 
-            let continuous = run_ids.windows(2).all(|w| w[0] + 1 == w[1]);
+            // let continuous = run_ids.windows(2).all(|w| w[0] + 1 == w[1]);
 
-            assert!(
-                continuous,
-                "merge result for spine batch {:?} has non-continuous runs {:?}",
-                spine_id, run_ids
-            );
+            // assert!(
+            //     continuous,
+            //     "merge result for spine batch {:?} has non-continuous runs {:?}",
+            //     spine_id, run_ids
+            // );
         }
 
         range.sort_unstable();
@@ -1290,12 +1306,18 @@ impl<T: Timestamp + Lattice + Codec64> SpineBatch<T> {
                 .next()
                 .unwrap()
                 .iter()
-                .map(|id| id.1)
+                .filter_map(|id| id.1)
                 .sorted()
                 .collect::<Vec<_>>();
 
+            // backwards compatibility: if the run_ids are empty, we assume we want to replace all runs
             let old_batch_diff_sum = Self::diffs_sum::<D>(batch.parts.iter(), metrics);
-            let old_diffs_sum = Self::diffs_sum_for_runs::<D>(batch, &run_ids, metrics);
+            let old_diffs_sum = if run_ids.is_empty() {
+                old_batch_diff_sum.clone()
+            } else {
+                // If we have run_ids, we need to compute the diffs sum for those runs only
+                Self::diffs_sum_for_runs::<D>(batch, &run_ids, metrics)
+            };
 
             if let (Some(old_diffs_sum), Some(new_diffs_sum)) = (old_diffs_sum, new_diffs_sum) {
                 assert_eq!(
@@ -1309,10 +1331,7 @@ impl<T: Timestamp + Lattice + Codec64> SpineBatch<T> {
             let id = SpineId(parts.first().unwrap().id.0, parts.last().unwrap().id.1);
 
             // Fast path: all runs replaced
-            if run_ids.len() == batch.run_meta.len()
-                && run_ids[0] == 0
-                && run_ids[run_ids.len() - 1] == batch.run_meta.len() - 1
-            {
+            if run_ids.len() == batch.run_meta.len() {
                 info!(
                     "maybe_replace_checked: replacing all runs in part {:?}",
                     range[0]
@@ -1363,6 +1382,13 @@ impl<T: Timestamp + Lattice + Codec64> SpineBatch<T> {
                     .iter()
                     .flat_map(|p| p.batch.parts.iter()),
                 metrics,
+            );
+
+            assert!(
+                self.parts[replacement_range.clone()]
+                    .iter()
+                    .all(|p| p.batch.run_meta.len() <= 1),
+                "all parts in the range must have at most one run"
             );
 
             if let (Some(old_diffs_sum), Some(new_diffs_sum)) = (old_diffs_sum, new_diffs_sum) {

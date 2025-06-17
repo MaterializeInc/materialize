@@ -1407,6 +1407,7 @@ impl RustType<ProtoRunMeta> for RunMeta {
             order: order.into(),
             schema_id: self.schema.into_proto(),
             deprecated_schema_id: self.deprecated_schema.into_proto(),
+            uuid: self.uuid.into_proto(),
         }
     }
 
@@ -1421,6 +1422,7 @@ impl RustType<ProtoRunMeta> for RunMeta {
             order,
             schema: proto.schema_id.into_rust()?,
             deprecated_schema: proto.deprecated_schema_id.into_rust()?,
+            uuid: proto.uuid.into_rust()?,
         })
     }
 }

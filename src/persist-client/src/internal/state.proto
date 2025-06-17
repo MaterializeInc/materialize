@@ -21,6 +21,7 @@ package mz_persist_client.internal.state;
 import "google/protobuf/empty.proto";
 import "persist-types/src/arrow.proto";
 import "persist/src/persist.proto";
+import "proto/src/proto.proto";
 
 message ProtoU64Antichain {
   repeated int64 elements = 1;
@@ -91,6 +92,7 @@ message ProtoRunMeta {
   optional uint64 schema_id = 3;
 
   optional uint64 deprecated_schema_id = 2;
+  optional string uuid = 4;
 }
 
 message ProtoHollowRun {

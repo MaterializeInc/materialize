@@ -533,8 +533,7 @@ where
                 .map(|x| {
                     x.batch
                         .runs()
-                        .enumerate()
-                        .map(|(i, _)| RunId(x.id, i))
+                        .map(|(meta, _)| RunId(x.id, meta.uuid))
                         .collect::<Vec<_>>()
                 })
                 .flatten()

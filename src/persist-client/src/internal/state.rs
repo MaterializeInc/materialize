@@ -764,6 +764,9 @@ pub struct RunMeta {
 
     /// ID of a schema that has since been deprecated and exists only to cleanly roundtrip.
     pub(crate) deprecated_schema: Option<SchemaId>,
+
+    /// If set, a UUID that uniquely identifies this run.
+    pub(crate) uuid: Option<Uuid>,
 }
 
 /// A subset of a [HollowBatch] corresponding 1:1 to a blob.
