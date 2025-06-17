@@ -9,6 +9,6 @@ menu:
     weight: 10
 ---
 
-You can integrate Materialize with various external BI/data collaboration tools.
+Materialize uses the PostgreSQL wire protocol, which allows it to integrate out-of-the-box with various BI/data collaboration tools that support PostgreSQL.
 
-Available guides in this section:
+To help you get started, the following guides are available:

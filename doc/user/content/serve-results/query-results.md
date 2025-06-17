@@ -8,6 +8,11 @@ menu:
     weight: 5
 ---
 
+You can query results from Materialize using `SELECT` and `SUBSCRIBE` SQL
+statements. Because Materialize uses the PostgreSQL wire protocol, it works
+out-of-the-box with a wide range of SQL clients and tools that support
+PostgreSQL.
+
 ## SELECT
 
 You can query data in Materialize using the [`SELECT` statement](/sql/select/).
