@@ -140,7 +140,7 @@ impl Metrics {
                 name: "mz_slow_message_handling",
                 help: "Latency for ALL coordinator messages. 'slow' is in the name for legacy reasons, but is not accurate.",
                 var_labels: ["message_kind"],
-                buckets: histogram_seconds_buckets(0.000_128, 32.0),
+                buckets: histogram_seconds_buckets(0.000_128, 512.0),
             )),
             optimization_notices: registry.register(metric!(
                 name: "mz_optimization_notices",
@@ -186,13 +186,13 @@ impl Metrics {
             parse_seconds: registry.register(metric!(
                 name: "mz_parse_seconds",
                 help: "The time it takes to parse a SQL statement. (Works for both Simple Queries and the Extended Query protocol.)",
-                buckets: histogram_seconds_buckets(0.000_128, 4.0),
+                buckets: histogram_seconds_buckets(0.001, 8.0),
             )),
             pgwire_message_processing_seconds: registry.register(metric!(
                 name: "mz_pgwire_message_processing_seconds",
                 help: "The time it takes to process each of the pgwire message types, measured in the Adapter frontend",
                 var_labels: ["message_type"],
-                buckets: histogram_seconds_buckets(0.000_128, 128.0),
+                buckets: histogram_seconds_buckets(0.001, 512.0),
             )),
             result_rows_first_to_last_byte_seconds: registry.register(metric!(
                 name: "mz_result_rows_first_to_last_byte_seconds",
