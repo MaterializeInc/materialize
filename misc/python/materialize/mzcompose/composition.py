@@ -316,7 +316,16 @@ class Composition:
         """
 
         if not self.silent and not silent:
-            print(f"$ docker compose {' '.join(args)}", file=sys.stderr)
+            # Don't print out secrets in test logs
+            filtered_args = [
+                (
+                    "[REDACTED]"
+                    if "mzp_" in arg or "-----BEGIN PRIVATE KEY-----" in arg
+                    else arg
+                )
+                for arg in args
+            ]
+            print(f"$ docker compose {' '.join(filtered_args)}", file=sys.stderr)
 
         stdout = None
         if capture:

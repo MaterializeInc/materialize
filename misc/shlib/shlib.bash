@@ -236,3 +236,60 @@ is_truthy() {
     fi
     return 0
 }
+
+# trufflehog_jq_filter
+#
+# Filters out secrets we expect in both source code and logs
+trufflehog_jq_filter() {
+  jq -c '
+    select(
+      .Raw != "postgres://mz_system:materialize@materialized:5432" and
+      .Raw != "postgres://materialize:materialize@materialized:6875" and
+      .Raw != "postgres://mz_system:materialize@materialized:6877" and
+      .Raw != "postgres://superuser_login:some_bogus_password@materialized2:6875" and
+      .Raw != "jdbc:postgresql://127.0.0.1:26257/defaultdb?sslmode=disable" and
+      .Raw != "postgres://any:user@materialized:6875" and
+      .Raw != "https://materialize:sekurity@schema-registry:8081" and
+      .Raw != "postgresql://postgres:postgres@postgres:5432" and
+      .Raw != "postgres://postgres:postgres@postgres:5432" and
+      .Raw != "sub-c-4377ab04-f100-11e3-bffd-02ee2ddab7fe" and
+      .Raw != "jdbc:postgresql://localhost:6875/materialize" and
+      .Raw != "postgres://yugabyte:yugabyte@yugabyte:5433" and
+      .Raw != "postgres://materialize_user:materialize_pass@postgres.materialize.svc.cluster.local:5432" and
+      .Raw != "jdbc:postgresql://%s:%s/materialize" and
+      .Raw != "postgres://postgres:$MATERIALIZE_PROD_SANDBOX_RDS_PASSWORD@$MATERIALIZE_PROD_SANDBOX_RDS_HOSTNAME:5432" and
+      .Raw != "http://user:pass@example.com" and
+      .Raw != "-----BEGIN PRIVATE KEY-----\nMIIEvAIBADANBgkqhkiG9w0BAQEFAASCBKYwggSiAgEAAoIBAQDDC5MP3v1BHOgI\n5SsmrW8mjxzQGOz0IlC5jp1muW/kpEoE9TG317TEnO5Uye6zZudkFCP8YGEiN3Mc\nFbTM7eX6PjAPdnGU7khuUt/20ZM+NX5kWZPrmPTh4WQaDCL7ah1LqzBaUAMaSXq8\niuy7LGJNF8wdx8L5BjDiGTTxZXOg0Haxknc7Mbiwc9z8eb7omvzQzsOwyqocrF2u\nz86TzX1jtHP48i5CxoRHKxE94De3tNxjT/Y3OZlS4QS7iekAOQ04DVV3GIHvRUXN\n2H8ayy4+yOdhHn6ER5Jn3lti1Q5XSrxkrYn7L1Vcj6IwZQhhF5vc+ovxOYb+8ert\nEo97tIkLAgMBAAECggEAQteHHRPKz9Mzs8Sxvo4GPv0hnzFDl0DhUE4PJCKdtYoV\n8dADq2DJiu3LAZS4cJPt7Y63bGitMRg2oyPPM8G9pD5Goy3wq9zjRqexKDlXUCTt\n/T7zofRny7c94m1RWb7ablGq/vBXt90BqnajvVtvDsN+iKAqccQM4ZdI3QdrEmt1\ncHex924itzG/mqbFTAfAmVj1ZsRnJp55Txy2gqq7jX00xDM8+H49SRvUu49N64LQ\n6BUWCgWCJePRtgjSHjboAzPqSkMdaTE/WDY2zgGF3Qfq4f6JCHKfm4QylCH4gYUU\n1Kf7ttmhu9NoZO+hczobKkxP9RtXfyTRH2bsJXy2HQKBgQDhHgavxk/ln5mdMGGw\nrQud2vF9n7UwFiysYxocIC5/CWD0GAhnawchjPypbW/7vKM5Z9zhW3eH1U9P13sa\n2xHfrU5BZ16rxoBbKNpcr7VeEbUBAsDoGV24xjoecp7rB2hZ+mGik5/5Ig1Rk1KH\ndcvYy2KSi1h4Sm+mXwimmA4VDQKBgQDdzW+5FPbdM2sUB2gLMQtn3ICjDSu6IQ+k\nd0p3WlTIT51RUsPXXKkk96O5anUbeB3syY8tSKPGggsaXaeL3o09yIamtERgCnn3\nd9IS+4VKPWQlFUICU1KrD+TO7IYIX04iXBuVE5ihv0q3mslhDotmX4kS38NtKEFF\njLjA2RvAdwKBgAFkIxxw+Ett+hALnX7vAtRd5wIku4TpjisejanA1Si50RyRDXQ+\nKBQf/+u4HmoK12Nibe4Cl7GCMvRGW59l3S1pr8MdtWsQVfi6Puc1usQzDdBMyQ5m\nIbsjlnZbtPm02QM9Vd8gVGvAtx5a77aglrrnPtuy+r/7jccUbURCSkv9AoGAH9m3\nWGmVRZBzqO2jWDATxjdY1ZE3nUPQHjrvG5KCKD2ehqYO72cj9uYEwcRyyp4GFhGf\nmM4cjo3wEDowrBoqSBv6kgfC5dO7TfkL1qP9sPp93gFeeD0E2wGuRrSaTqt46eA2\nKcMloNx6W0FD98cB55KCeY5eXtdwAA/EHBVRMeMCgYAd3n6PcL6rVXyE3+wRTKK4\n+zvx5sjTAnljr5ttbEnpZafzrYIfDpB8NNjexy83AeC0O13LvSHIFoTwP8sywJRO\nRxbPMjhEBdVZ5NxlxYer7yKN+h5OBJfrLswPku7y4vdFYK3x/lMuNQO61hb1VFHc\nT2BDTbF0QSlPxFsv18B9zg==\n-----END PRIVATE KEY-----\n" and
+      .Raw != "postgres://materialize:materialize@environmentd:6875" and
+      .Raw != "postgres://MATERIALIZE_USERNAME:APP_SPECIFIC_PASSWORD@MATERIALIZE_HOST:6875" and
+      .Raw != "jdbc:postgresql://MATERIALIZE_HOST:6875/materialize" and
+      .Raw != "postgres://user:password@host:6875" and
+      .Raw != "postgres" and
+      .Raw != "slt" and
+      .Raw != "e6d5833015b170e23ae819e8c5d7eaedb472ca98" and
+      .Raw != "postgresql://materialize:AbC123dEf@ep-cool-darkness-123456.us-east-2.aws.neon.tech:5432"
+    )'
+}
+
+# trufflehog_jq_filter_logs
+#
+# Filters out secrets we expect only in logs during CI runs
+trufflehog_jq_filter_logs() {
+  trufflehog_jq_filter | jq -c '
+  select(
+    (.Raw | contains("mz_system:materialize") | not) and
+    .Raw != "jdbc:postgresql://postgres:5432/postgres" and
+    (.Raw | contains("mz_analytics:materialize") | not) and
+    (.Raw | contains("mz_support:materialize") | not) and
+    .Raw != "jdbc:mysql://mysql:3306/?useInformationSchema=true" and
+    (.Raw | contains("superuser_login:some_bogus_password") | not) and
+    (.Raw | contains("postgres:postgres") | not) and
+    (.Raw | contains("jdbc:postgresql://127.0.0") | not) and
+    .Raw != "jdbc:postgresql://cockroach0:26257/defaultdb?sslmode=disable" and
+    .Raw != "jdbc:postgresql://cockroach1:26257/defaultdb?sslmode=disable" and
+    .Raw != "jdbc:postgresql://cockroach2:26257/defaultdb?sslmode=disable" and
+    .Raw != "jdbc:postgresql://cockroach3:26257/defaultdb?sslmode=disable" and
+    (.Raw | contains("materialize:materialize") | not) and
+    .Raw != "[REDACTED]"
+  )'
+}

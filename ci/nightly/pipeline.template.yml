@@ -517,7 +517,7 @@ steps:
         depends_on: build-aarch64
         timeout_in_minutes: 120
         agents:
-          queue: hetzner-aarch64-8cpu-16gb
+          queue: hetzner-aarch64-16cpu-32gb
         plugins:
           - ./ci/plugins/mzcompose:
               composition: zippy
@@ -1164,7 +1164,7 @@ steps:
         depends_on: build-aarch64
         timeout_in_minutes: 40
         agents:
-          queue: hetzner-aarch64-4cpu-8gb
+          queue: hetzner-aarch64-8cpu-16gb
         artifact_paths: [test/persist/maelstrom/**/*.log]
         plugins:
           - ./ci/plugins/mzcompose:
@@ -1176,7 +1176,7 @@ steps:
         depends_on: build-aarch64
         timeout_in_minutes: 40
         agents:
-          queue: hetzner-aarch64-4cpu-8gb
+          queue: hetzner-aarch64-8cpu-16gb
         artifact_paths: [test/persist/maelstrom/**/*.log]
         plugins:
           - ./ci/plugins/mzcompose:
@@ -1940,7 +1940,7 @@ steps:
     parallelism: 10
     agents:
       # Runs faster/more consistently on larger agent
-      queue: hetzner-aarch64-8cpu-16gb
+      queue: hetzner-aarch64-16cpu-32gb
     plugins:
       - ./ci/plugins/mzcompose:
           composition: sqllogictest

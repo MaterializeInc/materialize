@@ -123,7 +123,8 @@ def test_credentials(c: Composition, ctx: TestContext):
             ACCESS KEY ID = '{access_key_id}',
             SECRET ACCESS KEY = SECRET aws_secret_access_key
         );
-    """
+    """,
+        print_statement=False,
     )
     # Wait for IAM to propagate.
     c.sleep(ctx.iam_propagation_seconds)
@@ -132,7 +133,10 @@ def test_credentials(c: Composition, ctx: TestContext):
     # Corrupting the secret access key should cause authentication to fail with
     # an invalid signature error.
     bad_secret_access_key = codecs.encode(secret_access_key, "rot13")
-    c.sql(f"ALTER SECRET aws_secret_access_key AS '{bad_secret_access_key}'")
+    c.sql(
+        f"ALTER SECRET aws_secret_access_key AS '{bad_secret_access_key}'",
+        print_statement=False,
+    )
     try:
         c.sql("VALIDATE CONNECTION aws_credentials")
     except SystemError as e:
@@ -145,7 +149,8 @@ def test_credentials(c: Composition, ctx: TestContext):
     # Changing the access key to a nonexistent access key should fail with an
     # invalid client ID error.
     c.sql(
-        "ALTER CONNECTION aws_credentials SET (ACCESS KEY ID = 'AKIAV2KIV5LP3RAKAZUY')"
+        "ALTER CONNECTION aws_credentials SET (ACCESS KEY ID = 'AKIAV2KIV5LP3RAKAZUY')",
+        print_statement=False,
     )
     try:
         c.sql("VALIDATE CONNECTION aws_credentials")
