@@ -10,6 +10,11 @@ menu:
 
 ## v25.2
 
+### Authentication + RBAC
+
+[Password authentication is now available](/manage/authentication).
+
+[Role Based Access Control](/manage/access-control/#role-based-access-control-rbac).
 
 ## Self-managed versioning and lifecycle
 

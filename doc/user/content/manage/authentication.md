@@ -9,27 +9,33 @@ menu:
     parent: manage
     name: Authentication
     identifier: authentication
-    weight: 10
+    weight: 14
 ---
 
 ## Configuring Authentication
 
-Self-managed Materialize has two authenticator kinds:
-1. `None` does no authentication. The user is trusted to be who they identify as without verification.
-1. `Password` requires the user to provide a password for verification.
+To configure authentication for self-managed Materialize, use the `spec.authenticatorKind` setting. This setting determines which authentication method is used:
 
-Which authenticator to be used can be set in `spec.authenticatorKind` of the Materialize Kubernetes resource.
-If unset, the default is `None`.
+- `None`: Disables authentication. All users are trusted based on their claimed
+  identity **without** any verification.
+- `Password`: Requires users to authenticate using a password.
+
+If `spec.authenticatorKind` is not set, the default is **None**.
 
 ### Password authentication
 
-In addition to setting `spec.authenticatorKind: Password` in the Materialize Kubernetes resource, it is necessary to also configure a password for the internal `mz_system` user.
+Password authentication requires users to authenticate with a password. To
+use password authentication, set `spec.authenticatorKind` to `Password` and
+configure a password for the internal `mz_system` user.
 
-To configure the password of the `mz_system` user, add an `external_login_password_mz_system` key to the Kubernetes `Secret` referenced in `spec.backendSecretName` of the Materialize Kubernetes resource.
+
+#### Configure the password for `mz_system`
+To configure the password for the internal `mz_system` user, add an
+`external_login_password_mz_system` key to the Kubernetes `Secret` referenced in
+`spec.backendSecretName` of the Materialize Kubernetes resource.
 
 #### Logging in and creating users
 
-After enabling password authentication, only the `mz_system` user will initially be functional.
-This user may be used to create other users and by the Materialize Operator when performing upgrades and other maintenance tasks.
+Once password authentication is enabled, only the `mz_system` user will be initially available. This user is used by the Materialize Operator for upgrades and maintenance tasks and can also be used to create additional users.
 
 See [CREATE ROLE](/sql/create-role) for details on creating additional users.
