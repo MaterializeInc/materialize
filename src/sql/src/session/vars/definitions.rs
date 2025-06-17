@@ -458,7 +458,7 @@ pub static MAX_SQL_SERVER_CONNECTIONS: VarDefinition = VarDefinition::new(
 
 pub static MAX_AWS_PRIVATELINK_CONNECTIONS: VarDefinition = VarDefinition::new(
     "max_aws_privatelink_connections",
-    value!(u32; 0),
+    value!(u32; 4),
     "The maximum number of AWS PrivateLink connections in the region, across all schemas (Materialize).",
     true,
 );
@@ -486,14 +486,14 @@ pub static MAX_SINKS: VarDefinition = VarDefinition::new(
 
 pub static MAX_MATERIALIZED_VIEWS: VarDefinition = VarDefinition::new(
     "max_materialized_views",
-    value!(u32; 100),
+    value!(u32; 500),
     "The maximum number of materialized views in the region, across all schemas (Materialize).",
     true,
 );
 
 pub static MAX_CLUSTERS: VarDefinition = VarDefinition::new(
     "max_clusters",
-    value!(u32; 10),
+    value!(u32; 25),
     "The maximum number of clusters in the region (Materialize).",
     true,
 );
@@ -1174,7 +1174,7 @@ pub static STORAGE_SHRINK_UPSERT_UNUSED_BUFFERS_BY_RATIO: VarDefinition = VarDef
 pub static STORAGE_DATAFLOW_MAX_INFLIGHT_BYTES_TO_CLUSTER_SIZE_FRACTION: VarDefinition =
     VarDefinition::new_lazy(
         "storage_dataflow_max_inflight_bytes_to_cluster_size_fraction",
-        lazy_value!(Option<Numeric>; || Some(0.0025.into())),
+        lazy_value!(Option<Numeric>; || Some(0.01.into())),
         "The fraction of the cluster replica size to be used as the maximum number of \
             in-flight bytes emitted by persist_sources feeding storage dataflows. \
             If not configured, the storage_dataflow_max_inflight_bytes value will be used.",
@@ -1459,7 +1459,7 @@ pub static ENABLE_CONSOLIDATE_AFTER_UNION_NEGATE: VarDefinition = VarDefinition:
 
 pub static ENABLE_REDUCE_REDUCTION: VarDefinition = VarDefinition::new(
     "enable_reduce_reduction",
-    value!(bool; true),
+    value!(bool; false),
     "split complex reductions in to simpler ones and a join (Materialize).",
     true,
 );
@@ -1537,7 +1537,7 @@ pub mod grpc_client {
 
     pub static HTTP2_KEEP_ALIVE_TIMEOUT: VarDefinition = VarDefinition::new(
         "grpc_client_http2_keep_alive_timeout",
-        value!(Duration; Duration::from_secs(5)),
+        value!(Duration; Duration::from_secs(60)),
         "Time to wait for HTTP/2 pong response before terminating a gRPC client connection.",
         false,
     );
@@ -1660,7 +1660,7 @@ pub mod cluster_scheduling {
         false,
     );
 
-    const DEFAULT_CLUSTER_REFRESH_MV_COMPACTION_ESTIMATE: Duration = Duration::from_secs(60);
+    const DEFAULT_CLUSTER_REFRESH_MV_COMPACTION_ESTIMATE: Duration = Duration::from_secs(1200);
 
     pub static CLUSTER_REFRESH_MV_COMPACTION_ESTIMATE: VarDefinition = VarDefinition::new(
         "cluster_refresh_mv_compaction_estimate",
@@ -2080,7 +2080,7 @@ feature_flags!(
     {
         name: enable_variadic_left_join_lowering,
         desc: "Enable joint HIR ⇒ MIR lowering of stacks of left joins",
-        default: false,
+        default: true,
         enable_for_item_parsing: false,
     },
     {
@@ -2110,7 +2110,7 @@ feature_flags!(
     {
         name: enable_envelope_upsert_inline_errors,
         desc: "The VALUE DECODING ERRORS = INLINE option on ENVELOPE UPSERT",
-        default: false,
+        default: true,
         enable_for_item_parsing: true,
     },
     {
@@ -2128,7 +2128,7 @@ feature_flags!(
     {
         name: enable_aws_msk_iam_auth,
         desc: "Enable AWS MSK IAM authentication for Kafka connections",
-        default: false,
+        default: true,
         enable_for_item_parsing: true,
     },
     {
@@ -2182,7 +2182,7 @@ feature_flags!(
     {
         name: enable_join_prioritize_arranged,
         desc: "Whether join planning should prioritize already-arranged keys over keys with more fields.",
-        default: true,
+        default: false,
         enable_for_item_parsing: false,
     },
     {

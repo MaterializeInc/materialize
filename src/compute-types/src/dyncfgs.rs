@@ -65,21 +65,21 @@ pub const LGALLOC_BACKGROUND_INTERVAL: Config<Duration> = Config::new(
 /// Enable lgalloc's eager memory return/reclamation feature.
 pub const LGALLOC_FILE_GROWTH_DAMPENER: Config<usize> = Config::new(
     "lgalloc_file_growth_dampener",
-    0,
+    2,
     "Lgalloc's file growth dampener parameter.",
 );
 
 /// Enable lgalloc's eager memory return/reclamation feature.
 pub const LGALLOC_LOCAL_BUFFER_BYTES: Config<usize> = Config::new(
     "lgalloc_local_buffer_bytes",
-    32 << 20,
+    64 << 20,
     "Lgalloc's local buffer bytes parameter.",
 );
 
 /// The bytes to reclaim (slow path) per size class, for each background thread activation.
 pub const LGALLOC_SLOW_CLEAR_BYTES: Config<usize> = Config::new(
     "lgalloc_slow_clear_bytes",
-    32 << 20,
+    128 << 20,
     "Clear byte size per size class for every invocation",
 );
 
@@ -127,7 +127,7 @@ pub const DATAFLOW_MAX_INFLIGHT_BYTES_CC: Config<Option<usize>> = Config::new(
 /// The smallest value `0` corresponds to the greatest allowed growth, of doubling.
 pub const CONSOLIDATING_VEC_GROWTH_DAMPENER: Config<usize> = Config::new(
     "consolidating_vec_growth_dampener",
-    0,
+    1,
     "Dampener in growth rate for consolidating vector size",
 );
 
