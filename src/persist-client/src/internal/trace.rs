@@ -1132,13 +1132,17 @@ impl<T: Timestamp + Lattice + Codec64> SpineBatch<T> {
             };
 
             cursor += run_len;
-            run_splits.push(cursor);
+            // If this is the first run, we don't push a split.
+            // This feels a bit odd, but it matches the original behavior.
+            if i != 0 {
+                run_splits.push(cursor);
+            }
         }
 
         assert_eq!(
             run_splits.len(),
-            run_meta.len(),
-            "run_splits and run_meta must have the same length"
+            run_meta.len().saturating_sub(1),
+            "run_splits must have one fewer element than run_meta"
         );
 
         info!(
