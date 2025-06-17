@@ -57,9 +57,9 @@ use tracing::{Instrument, Level, event, info_span, warn};
 
 use crate::active_compute_sink::{ActiveComputeSink, ActiveComputeSinkRetireReason};
 use crate::catalog::{DropObjectInfo, Op, ReplicaCreateDropReason, TransactionResult};
+use crate::coord::Coordinator;
 use crate::coord::appends::BuiltinTableAppendNotify;
 use crate::coord::timeline::{TimelineContext, TimelineState};
-use crate::coord::{Coordinator, ReplicaMetadata};
 use crate::session::{Session, Transaction, TransactionOps};
 use crate::statement_logging::StatementEndedExecutionReason;
 use crate::telemetry::{EventDetails, SegmentClientExt};
@@ -868,26 +868,6 @@ impl Coordinator {
     }
 
     fn drop_replica(&mut self, cluster_id: ClusterId, replica_id: ReplicaId) {
-        if let Some(Some(ReplicaMetadata { metrics })) =
-            self.transient_replica_metadata.insert(replica_id, None)
-        {
-            let mut updates = vec![];
-            if let Some(metrics) = metrics {
-                let retractions = self.catalog().state().pack_replica_metric_updates(
-                    replica_id,
-                    &metrics,
-                    Diff::MINUS_ONE,
-                );
-                let retractions = self
-                    .catalog()
-                    .state()
-                    .resolve_builtin_table_updates(retractions);
-                updates.extend(retractions);
-            }
-            // We don't care about when the write finishes.
-            let _notify = self.builtin_table_update().background(updates);
-        }
-
         self.drop_introspection_subscribes(replica_id);
 
         self.controller

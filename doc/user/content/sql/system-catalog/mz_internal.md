@@ -155,7 +155,7 @@ The `mz_cluster_schedules` table shows the `SCHEDULE` option specified for each 
 
 ## `mz_cluster_replica_metrics`
 
-The `mz_cluster_replica_metrics` table gives the last known CPU and RAM utilization statistics
+The `mz_cluster_replica_metrics` view gives the last known CPU and RAM utilization statistics
 for all processes of all extant cluster replicas.
 
 At this time, we do not make any guarantees about the exactness or freshness of these numbers.

@@ -121,8 +121,6 @@ pub enum ControllerResponse<T = mz_repr::Timestamp> {
     SubscribeResponse(GlobalId, SubscribeBatch<T>),
     /// The worker's next response to a specified copy to.
     CopyToResponse(GlobalId, Result<u64, anyhow::Error>),
-    /// Notification that new resource usage metrics are available for a given replica.
-    ComputeReplicaMetrics(ReplicaId, Vec<ServiceProcessMetrics>),
     /// Notification that a watch set has finished. See
     /// [`Controller::install_compute_watch_set`] and
     /// [`Controller::install_storage_watch_set`] for details.
@@ -571,7 +569,7 @@ where
         metrics: Vec<ServiceProcessMetrics>,
     ) -> Result<Option<ControllerResponse<T>>, anyhow::Error> {
         self.record_replica_metrics(id, &metrics);
-        Ok(Some(ControllerResponse::ComputeReplicaMetrics(id, metrics)))
+        Ok(None)
     }
 
     fn record_replica_metrics(&mut self, replica_id: ReplicaId, metrics: &[ServiceProcessMetrics]) {

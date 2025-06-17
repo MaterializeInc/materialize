@@ -206,7 +206,6 @@ COMMIT execution-finished
 "SELECT count(*) > 0 FROM mz_internal.mz_cluster_replica_metrics" execution-began
 "SELECT count(*) > 0 FROM mz_internal.mz_cluster_replica_metrics" execution-finished
 "SELECT count(*) > 0 FROM mz_internal.mz_cluster_replica_metrics" optimization-finished
-"SELECT count(*) > 0 FROM mz_internal.mz_cluster_replica_metrics" storage-dependencies-finished
 "SELECT count(*) FROM t" compute-dependencies-finished
 "SELECT count(*) FROM t" compute-dependencies-finished
 "SELECT count(*) FROM t" execution-began
