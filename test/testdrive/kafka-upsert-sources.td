@@ -676,6 +676,9 @@ val2:[1,2,
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-inline-value-errors-1-${testdrive.seed}');
 
 # should error without the feature flag enabled
+$ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
+ALTER SYSTEM SET enable_envelope_upsert_inline_errors = false
+
 ! CREATE TABLE value_decode_error_tbl FROM SOURCE value_decode_error (REFERENCE "testdrive-inline-value-errors-1-${testdrive.seed}")
   KEY FORMAT TEXT
   VALUE FORMAT JSON

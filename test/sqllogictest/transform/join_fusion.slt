@@ -120,20 +120,21 @@ Explained Query:
     Filter (#5{l_shipdate} != #11{o_orderdate}) AND (#14{c_acctbal} >= #10{o_totalprice}) // { arity: 15 }
       Join on=(#0{l_orderkey} = #8{o_orderkey} AND date_to_timestamp(#11{o_orderdate}) = (#5{l_shipdate} - 9 months)) type=delta // { arity: 15 }
         implementation
-          %0:lineitem » %1:orders[#0{o_orderkey}]KA » %2:customer[×]
-          %1:orders » %0:lineitem[#0{l_orderkey}]KA » %2:customer[×]
-          %2:customer » %0:lineitem[×] » %1:orders[#0{o_orderkey}]KA
-        ArrangeBy keys=[[], [#0{l_orderkey}]] // { arity: 8 }
-          ReadIndex on=lineitem fk_lineitem_orderkey=[*** full scan ***, delta join lookup] // { arity: 8 }
-        ArrangeBy keys=[[#0{o_orderkey}]] // { arity: 4 }
-          ReadIndex on=orders pk_orders_orderkey=[delta join lookup] // { arity: 4 }
+          %0:lineitem » %1:orders[#0{o_orderkey}, date_to_timestamp(#3{o_orderdate})]KK » %2:customer[×]
+          %1:orders » %0:lineitem[#0{l_orderkey}, (#5{l_shipdate} - 9 months)]KK » %2:customer[×]
+          %2:customer » %0:lineitem[×] » %1:orders[#0{o_orderkey}, date_to_timestamp(#3{o_orderdate})]KK
+        ArrangeBy keys=[[], [#0{l_orderkey}, (#5{l_shipdate} - 9 months)]] // { arity: 8 }
+          ReadIndex on=lineitem pk_lineitem_orderkey_linenumber=[*** full scan ***] // { arity: 8 }
+        ArrangeBy keys=[[#0{o_orderkey}, date_to_timestamp(#3{o_orderdate})]] // { arity: 4 }
+          Filter (#0{o_orderkey}) IS NOT NULL // { arity: 4 }
+            ReadIndex on=orders pk_orders_orderkey=[*** full scan ***] // { arity: 4 }
         ArrangeBy keys=[[]] // { arity: 3 }
           ReadIndex on=customer pk_customer_custkey=[*** full scan ***] // { arity: 3 }
 
 Used Indexes:
   - materialize.public.pk_customer_custkey (*** full scan ***)
-  - materialize.public.pk_orders_orderkey (delta join lookup)
-  - materialize.public.fk_lineitem_orderkey (*** full scan ***, delta join lookup)
+  - materialize.public.pk_orders_orderkey (*** full scan ***)
+  - materialize.public.pk_lineitem_orderkey_linenumber (*** full scan ***)
 
 Target cluster: quickstart
 

@@ -87,7 +87,7 @@ steps:
         depends_on: []
         timeout_in_minutes: 45
         agents:
-          queue: hetzner-aarch64-4cpu-8gb
+          queue: hetzner-aarch64-8cpu-16gb
         sanitizer: skip
 
       - id: cargo-deny-check-advisories

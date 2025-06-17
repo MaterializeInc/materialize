@@ -11150,7 +11150,7 @@ WHERE a = c AND d = e AND f = a
     {
       "id": "Explained Query",
       "plan": {
-        "lir_id": 4,
+        "lir_id": 6,
         "node": {
           "Join": {
             "inputs": [
@@ -11200,16 +11200,124 @@ WHERE a = c AND d = e AND f = a
                 }
               },
               {
-                "lir_id": 2,
+                "lir_id": 3,
                 "node": {
-                  "Get": {
-                    "id": {
-                      "Global": {
-                        "User": 2
+                  "ArrangeBy": {
+                    "input": {
+                      "lir_id": 2,
+                      "node": {
+                        "Get": {
+                          "id": {
+                            "Global": {
+                              "User": 2
+                            }
+                          },
+                          "keys": {
+                            "raw": false,
+                            "arranged": [
+                              [
+                                [
+                                  {
+                                    "Column": [
+                                      0,
+                                      "c"
+                                    ]
+                                  }
+                                ],
+                                [
+                                  0,
+                                  1
+                                ],
+                                [
+                                  1
+                                ]
+                              ]
+                            ],
+                            "types": [
+                              {
+                                "scalar_type": "Int32",
+                                "nullable": true
+                              },
+                              {
+                                "scalar_type": "Int32",
+                                "nullable": true
+                              }
+                            ]
+                          },
+                          "plan": {
+                            "Arrangement": [
+                              [
+                                {
+                                  "Column": [
+                                    0,
+                                    "c"
+                                  ]
+                                }
+                              ],
+                              null,
+                              {
+                                "expressions": [],
+                                "predicates": [
+                                  [
+                                    1,
+                                    {
+                                      "CallUnary": {
+                                        "func": {
+                                          "Not": null
+                                        },
+                                        "expr": {
+                                          "CallUnary": {
+                                            "func": {
+                                              "IsNull": null
+                                            },
+                                            "expr": {
+                                              "Column": [
+                                                0,
+                                                "c"
+                                              ]
+                                            }
+                                          }
+                                        }
+                                      }
+                                    }
+                                  ],
+                                  [
+                                    2,
+                                    {
+                                      "CallUnary": {
+                                        "func": {
+                                          "Not": null
+                                        },
+                                        "expr": {
+                                          "CallUnary": {
+                                            "func": {
+                                              "IsNull": null
+                                            },
+                                            "expr": {
+                                              "Column": [
+                                                1,
+                                                "d"
+                                              ]
+                                            }
+                                          }
+                                        }
+                                      }
+                                    }
+                                  ]
+                                ],
+                                "projection": [
+                                  0,
+                                  1
+                                ],
+                                "input_arity": 2
+                              }
+                            ]
+                          }
+                        }
                       }
                     },
-                    "keys": {
-                      "raw": false,
+                    "forms": {
+                      "raw": true,
                       "arranged": [
                         [
                           [
@@ -11232,46 +11340,167 @@ WHERE a = c AND d = e AND f = a
                           [
                             {
                               "Column": [
+                                0,
+                                "c"
+                              ]
+                            },
+                            {
+                              "Column": [
                                 1,
                                 "d"
                               ]
                             }
                           ],
                           [
-                            1,
-                            0
+                            0,
+                            1
                           ],
-                          [
-                            0
-                          ]
+                          []
                         ]
                       ],
                       "types": [
                         {
                           "scalar_type": "Int32",
-                          "nullable": true
+                          "nullable": false
                         },
                         {
                           "scalar_type": "Int32",
-                          "nullable": true
+                          "nullable": false
                         }
                       ]
                     },
-                    "plan": "PassArrangements"
+                    "input_key": null,
+                    "input_mfp": {
+                      "expressions": [],
+                      "predicates": [],
+                      "projection": [
+                        0,
+                        1
+                      ],
+                      "input_arity": 2
+                    }
                   }
                 }
               },
               {
-                "lir_id": 3,
+                "lir_id": 5,
                 "node": {
-                  "Get": {
-                    "id": {
-                      "Global": {
-                        "User": 3
+                  "ArrangeBy": {
+                    "input": {
+                      "lir_id": 4,
+                      "node": {
+                        "Get": {
+                          "id": {
+                            "Global": {
+                              "User": 3
+                            }
+                          },
+                          "keys": {
+                            "raw": false,
+                            "arranged": [
+                              [
+                                [
+                                  {
+                                    "Column": [
+                                      0,
+                                      "e"
+                                    ]
+                                  }
+                                ],
+                                [
+                                  0,
+                                  1
+                                ],
+                                [
+                                  1
+                                ]
+                              ]
+                            ],
+                            "types": [
+                              {
+                                "scalar_type": "Int32",
+                                "nullable": true
+                              },
+                              {
+                                "scalar_type": "Int32",
+                                "nullable": true
+                              }
+                            ]
+                          },
+                          "plan": {
+                            "Arrangement": [
+                              [
+                                {
+                                  "Column": [
+                                    0,
+                                    "e"
+                                  ]
+                                }
+                              ],
+                              null,
+                              {
+                                "expressions": [],
+                                "predicates": [
+                                  [
+                                    1,
+                                    {
+                                      "CallUnary": {
+                                        "func": {
+                                          "Not": null
+                                        },
+                                        "expr": {
+                                          "CallUnary": {
+                                            "func": {
+                                              "IsNull": null
+                                            },
+                                            "expr": {
+                                              "Column": [
+                                                0,
+                                                "e"
+                                              ]
+                                            }
+                                          }
+                                        }
+                                      }
+                                    }
+                                  ],
+                                  [
+                                    2,
+                                    {
+                                      "CallUnary": {
+                                        "func": {
+                                          "Not": null
+                                        },
+                                        "expr": {
+                                          "CallUnary": {
+                                            "func": {
+                                              "IsNull": null
+                                            },
+                                            "expr": {
+                                              "Column": [
+                                                1,
+                                                "f"
+                                              ]
+                                            }
+                                          }
+                                        }
+                                      }
+                                    }
+                                  ]
+                                ],
+                                "projection": [
+                                  0,
+                                  1
+                                ],
+                                "input_arity": 2
+                              }
+                            ]
+                          }
+                        }
                       }
                     },
-                    "keys": {
-                      "raw": false,
+                    "forms": {
+                      "raw": true,
                       "arranged": [
                         [
                           [
@@ -11280,29 +11509,42 @@ WHERE a = c AND d = e AND f = a
                                 0,
                                 "e"
                               ]
+                            },
+                            {
+                              "Column": [
+                                1,
+                                "f"
+                              ]
                             }
                           ],
                           [
                             0,
                             1
                           ],
-                          [
-                            1
-                          ]
+                          []
                         ]
                       ],
                       "types": [
                         {
                           "scalar_type": "Int32",
-                          "nullable": true
+                          "nullable": false
                         },
                         {
                           "scalar_type": "Int32",
-                          "nullable": true
+                          "nullable": false
                         }
                       ]
                     },
-                    "plan": "PassArrangements"
+                    "input_key": null,
+                    "input_mfp": {
+                      "expressions": [],
+                      "predicates": [],
+                      "projection": [
+                        0,
+                        1
+                      ],
+                      "input_arity": 2
+                    }
                   }
                 }
               }
@@ -11325,31 +11567,7 @@ WHERE a = c AND d = e AND f = a
                       "before": {
                         "mfp": {
                           "expressions": [],
-                          "predicates": [
-                            [
-                              1,
-                              {
-                                "CallUnary": {
-                                  "func": {
-                                    "Not": null
-                                  },
-                                  "expr": {
-                                    "CallUnary": {
-                                      "func": {
-                                        "IsNull": null
-                                      },
-                                      "expr": {
-                                        "Column": [
-                                          0,
-                                          "a"
-                                        ]
-                                      }
-                                    }
-                                  }
-                                }
-                              }
-                            ]
-                          ],
+                          "predicates": [],
                           "projection": [
                             0,
                             1
@@ -11385,31 +11603,7 @@ WHERE a = c AND d = e AND f = a
                           "before": {
                             "mfp": {
                               "expressions": [],
-                              "predicates": [
-                                [
-                                  3,
-                                  {
-                                    "CallUnary": {
-                                      "func": {
-                                        "Not": null
-                                      },
-                                      "expr": {
-                                        "CallUnary": {
-                                          "func": {
-                                            "IsNull": null
-                                          },
-                                          "expr": {
-                                            "Column": [
-                                              2,
-                                              "d"
-                                            ]
-                                          }
-                                        }
-                                      }
-                                    }
-                                  }
-                                ]
-                              ],
+                              "predicates": [],
                               "projection": [
                                 0,
                                 1,
@@ -11428,10 +11622,15 @@ WHERE a = c AND d = e AND f = a
                               2,
                               "d"
                             ]
+                          },
+                          {
+                            "Column": [
+                              0,
+                              "a"
+                            ]
                           }
                         ],
                         "stream_thinning": [
-                          0,
                           1
                         ],
                         "lookup_key": [
@@ -11440,25 +11639,16 @@ WHERE a = c AND d = e AND f = a
                               0,
                               "e"
                             ]
+                          },
+                          {
+                            "Column": [
+                              1,
+                              "f"
+                            ]
                           }
                         ],
                         "closure": {
-                          "ready_equivalences": [
-                            [
-                              {
-                                "Column": [
-                                  3,
-                                  "f"
-                                ]
-                              },
-                              {
-                                "Column": [
-                                  1,
-                                  "a"
-                                ]
-                              }
-                            ]
-                          ],
+                          "ready_equivalences": [],
                           "before": {
                             "mfp": {
                               "expressions": [],
@@ -11468,7 +11658,7 @@ WHERE a = c AND d = e AND f = a
                                 2,
                                 0
                               ],
-                              "input_arity": 4
+                              "input_arity": 3
                             }
                           }
                         }
@@ -11508,31 +11698,7 @@ WHERE a = c AND d = e AND f = a
                       "before": {
                         "mfp": {
                           "expressions": [],
-                          "predicates": [
-                            [
-                              2,
-                              {
-                                "CallUnary": {
-                                  "func": {
-                                    "Not": null
-                                  },
-                                  "expr": {
-                                    "CallUnary": {
-                                      "func": {
-                                        "IsNull": null
-                                      },
-                                      "expr": {
-                                        "Column": [
-                                          1,
-                                          "d"
-                                        ]
-                                      }
-                                    }
-                                  }
-                                }
-                              }
-                            ]
-                          ],
+                          "predicates": [],
                           "projection": [
                             0,
                             1
@@ -11542,6 +11708,52 @@ WHERE a = c AND d = e AND f = a
                       }
                     },
                     "stage_plans": [
+                      {
+                        "lookup_relation": 2,
+                        "stream_key": [
+                          {
+                            "Column": [
+                              1,
+                              "d"
+                            ]
+                          },
+                          {
+                            "Column": [
+                              0,
+                              "c"
+                            ]
+                          }
+                        ],
+                        "stream_thinning": [],
+                        "lookup_key": [
+                          {
+                            "Column": [
+                              0,
+                              "e"
+                            ]
+                          },
+                          {
+                            "Column": [
+                              1,
+                              "f"
+                            ]
+                          }
+                        ],
+                        "closure": {
+                          "ready_equivalences": [],
+                          "before": {
+                            "mfp": {
+                              "expressions": [],
+                              "predicates": [],
+                              "projection": [
+                                1,
+                                0
+                              ],
+                              "input_arity": 2
+                            }
+                          }
+                        }
+                      },
                       {
                         "lookup_relation": 0,
                         "stream_key": [
@@ -11568,92 +11780,13 @@ WHERE a = c AND d = e AND f = a
                           "before": {
                             "mfp": {
                               "expressions": [],
-                              "predicates": [
-                                [
-                                  1,
-                                  {
-                                    "CallUnary": {
-                                      "func": {
-                                        "Not": null
-                                      },
-                                      "expr": {
-                                        "CallUnary": {
-                                          "func": {
-                                            "IsNull": null
-                                          },
-                                          "expr": {
-                                            "Column": [
-                                              0,
-                                              "a"
-                                            ]
-                                          }
-                                        }
-                                      }
-                                    }
-                                  }
-                                ]
-                              ],
+                              "predicates": [],
                               "projection": [
                                 0,
                                 2,
-                                0,
                                 1
                               ],
                               "input_arity": 3
-                            }
-                          }
-                        }
-                      },
-                      {
-                        "lookup_relation": 2,
-                        "stream_key": [
-                          {
-                            "Column": [
-                              3,
-                              "d"
-                            ]
-                          }
-                        ],
-                        "stream_thinning": [
-                          0,
-                          1,
-                          2
-                        ],
-                        "lookup_key": [
-                          {
-                            "Column": [
-                              0,
-                              "e"
-                            ]
-                          }
-                        ],
-                        "closure": {
-                          "ready_equivalences": [
-                            [
-                              {
-                                "Column": [
-                                  4,
-                                  "f"
-                                ]
-                              },
-                              {
-                                "Column": [
-                                  3,
-                                  "c"
-                                ]
-                              }
-                            ]
-                          ],
-                          "before": {
-                            "mfp": {
-                              "expressions": [],
-                              "predicates": [],
-                              "projection": [
-                                1,
-                                2,
-                                0
-                              ],
-                              "input_arity": 5
                             }
                           }
                         }
@@ -11686,6 +11819,12 @@ WHERE a = c AND d = e AND f = a
                           0,
                           "e"
                         ]
+                      },
+                      {
+                        "Column": [
+                          1,
+                          "f"
+                        ]
                       }
                     ],
                     "initial_closure": {
@@ -11703,6 +11842,52 @@ WHERE a = c AND d = e AND f = a
                       }
                     },
                     "stage_plans": [
+                      {
+                        "lookup_relation": 1,
+                        "stream_key": [
+                          {
+                            "Column": [
+                              1,
+                              "f"
+                            ]
+                          },
+                          {
+                            "Column": [
+                              0,
+                              "e"
+                            ]
+                          }
+                        ],
+                        "stream_thinning": [],
+                        "lookup_key": [
+                          {
+                            "Column": [
+                              0,
+                              "c"
+                            ]
+                          },
+                          {
+                            "Column": [
+                              1,
+                              "d"
+                            ]
+                          }
+                        ],
+                        "closure": {
+                          "ready_equivalences": [],
+                          "before": {
+                            "mfp": {
+                              "expressions": [],
+                              "predicates": [],
+                              "projection": [
+                                1,
+                                0
+                              ],
+                              "input_arity": 2
+                            }
+                          }
+                        }
+                      },
                       {
                         "lookup_relation": 0,
                         "stream_key": [
@@ -11729,116 +11914,13 @@ WHERE a = c AND d = e AND f = a
                           "before": {
                             "mfp": {
                               "expressions": [],
-                              "predicates": [
-                                [
-                                  1,
-                                  {
-                                    "CallUnary": {
-                                      "func": {
-                                        "Not": null
-                                      },
-                                      "expr": {
-                                        "CallUnary": {
-                                          "func": {
-                                            "IsNull": null
-                                          },
-                                          "expr": {
-                                            "Column": [
-                                              0,
-                                              "a"
-                                            ]
-                                          }
-                                        }
-                                      }
-                                    }
-                                  }
-                                ]
-                              ],
+                              "predicates": [],
                               "projection": [
                                 0,
                                 2,
-                                1,
-                                0
+                                1
                               ],
                               "input_arity": 3
-                            }
-                          }
-                        }
-                      },
-                      {
-                        "lookup_relation": 1,
-                        "stream_key": [
-                          {
-                            "Column": [
-                              2,
-                              "e"
-                            ]
-                          }
-                        ],
-                        "stream_thinning": [
-                          0,
-                          1,
-                          3
-                        ],
-                        "lookup_key": [
-                          {
-                            "Column": [
-                              1,
-                              "d"
-                            ]
-                          }
-                        ],
-                        "closure": {
-                          "ready_equivalences": [
-                            [
-                              {
-                                "Column": [
-                                  3,
-                                  "f"
-                                ]
-                              },
-                              {
-                                "Column": [
-                                  4,
-                                  "c"
-                                ]
-                              }
-                            ]
-                          ],
-                          "before": {
-                            "mfp": {
-                              "expressions": [],
-                              "predicates": [
-                                [
-                                  1,
-                                  {
-                                    "CallUnary": {
-                                      "func": {
-                                        "Not": null
-                                      },
-                                      "expr": {
-                                        "CallUnary": {
-                                          "func": {
-                                            "IsNull": null
-                                          },
-                                          "expr": {
-                                            "Column": [
-                                              0,
-                                              "d"
-                                            ]
-                                          }
-                                        }
-                                      }
-                                    }
-                                  }
-                                ]
-                              ],
-                              "projection": [
-                                1,
-                                2,
-                                0
-                              ],
-                              "input_arity": 5
                             }
                           }
                         }

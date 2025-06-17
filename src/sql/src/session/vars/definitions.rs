@@ -458,7 +458,7 @@ pub static MAX_SQL_SERVER_CONNECTIONS: VarDefinition = VarDefinition::new(
 
 pub static MAX_AWS_PRIVATELINK_CONNECTIONS: VarDefinition = VarDefinition::new(
     "max_aws_privatelink_connections",
-    value!(u32; 4),
+    value!(u32; 0),
     "The maximum number of AWS PrivateLink connections in the region, across all schemas (Materialize).",
     true,
 );
@@ -1459,7 +1459,7 @@ pub static ENABLE_CONSOLIDATE_AFTER_UNION_NEGATE: VarDefinition = VarDefinition:
 
 pub static ENABLE_REDUCE_REDUCTION: VarDefinition = VarDefinition::new(
     "enable_reduce_reduction",
-    value!(bool; false),
+    value!(bool; true),
     "split complex reductions in to simpler ones and a join (Materialize).",
     true,
 );
