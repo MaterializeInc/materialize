@@ -4860,33 +4860,6 @@ pub static MZ_AWS_CONNECTIONS: LazyLock<BuiltinTable> = LazyLock::new(|| Builtin
     access: vec![PUBLIC_SELECT],
 });
 
-// TODO(teskje) Remove this table in favor of `MZ_CLUSTER_REPLICA_METRICS_HISTORY`, once the latter
-//              has been backfilled to 30 days worth of data.
-pub static MZ_CLUSTER_REPLICA_METRICS: LazyLock<BuiltinTable> = LazyLock::new(|| BuiltinTable {
-    name: "mz_cluster_replica_metrics",
-    schema: MZ_INTERNAL_SCHEMA,
-    oid: oid::TABLE_MZ_CLUSTER_REPLICA_METRICS_OID,
-    desc: RelationDesc::builder()
-        .with_column("replica_id", ScalarType::String.nullable(false))
-        .with_column("process_id", ScalarType::UInt64.nullable(false))
-        .with_column("cpu_nano_cores", ScalarType::UInt64.nullable(true))
-        .with_column("memory_bytes", ScalarType::UInt64.nullable(true))
-        .with_column("disk_bytes", ScalarType::UInt64.nullable(true))
-        .finish(),
-    column_comments: BTreeMap::from_iter([
-        ("replica_id", "The ID of a cluster replica."),
-        ("process_id", "The ID of a process within the replica."),
-        (
-            "cpu_nano_cores",
-            "Approximate CPU usage, in billionths of a vCPU core.",
-        ),
-        ("memory_bytes", "Approximate RAM usage, in bytes."),
-        ("disk_bytes", "Approximate disk usage in bytes."),
-    ]),
-    is_retained_metrics_object: true,
-    access: vec![PUBLIC_SELECT],
-});
-
 pub static MZ_CLUSTER_REPLICA_METRICS_HISTORY: LazyLock<BuiltinSource> =
     LazyLock::new(|| BuiltinSource {
         name: "mz_cluster_replica_metrics_history",
@@ -4929,6 +4902,42 @@ ON INPUT mz_internal.mz_cluster_replica_metrics_history AS (
         }
     },
 );
+
+pub static MZ_CLUSTER_REPLICA_METRICS: LazyLock<BuiltinView> = LazyLock::new(|| BuiltinView {
+    name: "mz_cluster_replica_metrics",
+    schema: MZ_INTERNAL_SCHEMA,
+    oid: oid::VIEW_MZ_CLUSTER_REPLICA_METRICS_OID,
+    desc: RelationDesc::builder()
+        .with_column("replica_id", ScalarType::String.nullable(false))
+        .with_column("process_id", ScalarType::UInt64.nullable(false))
+        .with_column("cpu_nano_cores", ScalarType::UInt64.nullable(true))
+        .with_column("memory_bytes", ScalarType::UInt64.nullable(true))
+        .with_column("disk_bytes", ScalarType::UInt64.nullable(true))
+        .with_key(vec![0, 1])
+        .finish(),
+    column_comments: BTreeMap::from_iter([
+        ("replica_id", "The ID of a cluster replica."),
+        ("process_id", "The ID of a process within the replica."),
+        (
+            "cpu_nano_cores",
+            "Approximate CPU usage, in billionths of a vCPU core.",
+        ),
+        ("memory_bytes", "Approximate RAM usage, in bytes."),
+        ("disk_bytes", "Approximate disk usage in bytes."),
+    ]),
+    sql: "
+SELECT
+    DISTINCT ON (replica_id, process_id)
+    replica_id,
+    process_id,
+    cpu_nano_cores,
+    memory_bytes,
+    disk_bytes
+FROM mz_internal.mz_cluster_replica_metrics_history
+JOIN mz_cluster_replicas r ON r.id = replica_id
+ORDER BY replica_id, process_id, occurred_at DESC",
+    access: vec![PUBLIC_SELECT],
+});
 
 pub static MZ_CLUSTER_REPLICA_FRONTIERS: LazyLock<BuiltinSource> =
     LazyLock::new(|| BuiltinSource {
@@ -13221,7 +13230,7 @@ pub const MZ_CLUSTER_REPLICA_METRICS_IND: BuiltinIndex = BuiltinIndex {
     oid: oid::INDEX_MZ_CLUSTER_REPLICA_METRICS_IND_OID,
     sql: "IN CLUSTER mz_catalog_server
 ON mz_internal.mz_cluster_replica_metrics (replica_id)",
-    is_retained_metrics_object: true,
+    is_retained_metrics_object: false,
 };
 
 pub const MZ_CLUSTER_REPLICA_METRICS_HISTORY_IND: BuiltinIndex = BuiltinIndex {
@@ -13678,8 +13687,8 @@ pub static BUILTINS_STATIC: LazyLock<Vec<Builtin<NameReference>>> = LazyLock::ne
         Builtin::Table(&MZ_CONNECTIONS),
         Builtin::Table(&MZ_SSH_TUNNEL_CONNECTIONS),
         Builtin::Table(&MZ_CLUSTER_REPLICAS),
-        Builtin::Table(&MZ_CLUSTER_REPLICA_METRICS),
         Builtin::Source(&MZ_CLUSTER_REPLICA_METRICS_HISTORY),
+        Builtin::View(&MZ_CLUSTER_REPLICA_METRICS),
         Builtin::Table(&MZ_CLUSTER_REPLICA_SIZES),
         Builtin::Table(&MZ_CLUSTER_REPLICA_STATUSES),
         Builtin::Source(&MZ_CLUSTER_REPLICA_STATUS_HISTORY),

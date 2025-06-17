@@ -113,7 +113,7 @@ use mz_controller::clusters::{ClusterConfig, ClusterEvent, ClusterStatus, Proces
 use mz_controller_types::{ClusterId, ReplicaId, WatchSetId};
 use mz_expr::{MapFilterProject, OptimizedMirRelationExpr, RowSetFinishing};
 use mz_license_keys::ValidatedLicenseKey;
-use mz_orchestrator::{OfflineReason, ServiceProcessMetrics};
+use mz_orchestrator::OfflineReason;
 use mz_ore::cast::{CastFrom, CastInto, CastLossy};
 use mz_ore::channel::trigger::Trigger;
 use mz_ore::future::TimeoutError;
@@ -1040,13 +1040,6 @@ pub struct Config {
     pub external_login_password_mz_system: Option<Password>,
 }
 
-/// Soft-state metadata about a compute replica
-#[derive(Clone, Default, Debug, Eq, PartialEq)]
-pub struct ReplicaMetadata {
-    /// The last known CPU and memory metrics
-    pub metrics: Option<Vec<ServiceProcessMetrics>>,
-}
-
 /// Metadata about an active connection.
 #[derive(Debug, Serialize)]
 pub struct ConnMeta {
@@ -1727,13 +1720,6 @@ pub struct Coordinator {
     /// Handle to a manager that can create and delete kubernetes resources
     /// (ie: VpcEndpoint objects)
     cloud_resource_controller: Option<Arc<dyn CloudResourceController>>,
-
-    /// Metadata about replicas that doesn't need to be persisted.
-    /// Intended for inclusion in system tables.
-    ///
-    /// `None` is used as a tombstone value for replicas that have been
-    /// dropped and for which no further updates should be recorded.
-    transient_replica_metadata: BTreeMap<ReplicaId, Option<ReplicaMetadata>>,
 
     /// Persist client for fetching storage metadata such as size metrics.
     storage_usage_client: StorageUsageClient,
@@ -4285,7 +4271,6 @@ pub fn serve(
                     secrets_controller,
                     caching_secrets_reader,
                     cloud_resource_controller,
-                    transient_replica_metadata: BTreeMap::new(),
                     storage_usage_client,
                     storage_usage_collection_interval,
                     segment_client,

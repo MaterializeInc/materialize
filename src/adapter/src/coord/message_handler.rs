@@ -406,46 +406,6 @@ impl Coordinator {
                     }
                 }
             }
-            ControllerResponse::ComputeReplicaMetrics(replica_id, new) => {
-                let m = match self
-                    .transient_replica_metadata
-                    .entry(replica_id)
-                    .or_insert_with(|| Some(Default::default()))
-                {
-                    // `None` is the tombstone for a removed replica
-                    None => return,
-                    Some(md) => &mut md.metrics,
-                };
-                let old = std::mem::replace(m, Some(new.clone()));
-                if old.as_ref() != Some(&new) {
-                    let retractions = old.map(|old| {
-                        self.catalog().state().pack_replica_metric_updates(
-                            replica_id,
-                            &old,
-                            Diff::MINUS_ONE,
-                        )
-                    });
-                    let insertions = self.catalog().state().pack_replica_metric_updates(
-                        replica_id,
-                        &new,
-                        Diff::ONE,
-                    );
-                    let updates = if let Some(retractions) = retractions {
-                        retractions
-                            .into_iter()
-                            .chain(insertions.into_iter())
-                            .collect()
-                    } else {
-                        insertions
-                    };
-                    let updates = self
-                        .catalog()
-                        .state()
-                        .resolve_builtin_table_updates(updates);
-                    // We don't care about when the write finishes.
-                    let _notify = self.builtin_table_update().background(updates);
-                }
-            }
             ControllerResponse::WatchSetFinished(ws_ids) => {
                 let now = self.now();
                 for ws_id in ws_ids {

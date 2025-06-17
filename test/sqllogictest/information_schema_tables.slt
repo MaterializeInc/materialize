@@ -290,7 +290,7 @@ VIEW
 materialize
 mz_internal
 mz_cluster_replica_metrics
-BASE TABLE
+VIEW
 materialize
 mz_internal
 mz_cluster_replica_metrics_history
