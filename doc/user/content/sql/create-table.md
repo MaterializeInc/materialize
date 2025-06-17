@@ -9,8 +9,9 @@ menu:
     parent: 'commands'
 ---
 
-`CREATE TABLE` defines a table that is persisted in durable storage. In
-Materialize, you can create:
+`CREATE TABLE` defines a table that is persisted in durable storage.
+
+In Materialize, you can create:
 
 - User-populated tables. User-populated tables can be written to (i.e.,
   [`INSERT`]/[`UPDATE`]/[`DELETE`]) by the user.
@@ -24,9 +25,12 @@ Materialize, you can create:
   the associated **public** webhook URL, which is automatically created with the
   table creation.
 
-Tables can be joined with other tables, materialized views, and views. Tables in
-Materialize are similar to tables in standard relational databases: they consist
-of rows and columns where the columns are fixed when the table is created.
+Tables in Materialize are similar to tables in standard relational databases:
+they consist of rows and columns where the columns are fixed when the table is
+created.
+
+Tables can be joined with other tables, materialized views, and views; and you
+can create views/materialized views/indexes on tables.
 
 ## Syntax
 
@@ -59,7 +63,6 @@ CREATE [TEMP|TEMPORARY] TABLE <table_name> (
 To create a table from a [source](/sql/create-source/) connected (via
 native connector) to an external database system:
 
-
 {{< note >}}
 
 - {{< include-md file="shared-content/create-table-from-source-readonly.md" >}}
@@ -70,7 +73,7 @@ native connector) to an external database system:
 {{</ note >}}
 
 ```mzsql
-CREATE TABLE <table_name> FROM SOURCE <source_name> (REFERENCE <ref_object>)
+CREATE TABLE <table_name> FROM SOURCE <source_name> (REFERENCE <upstream_table>)
 [WITH (
     TEXT COLUMNS (<column_name> [, ...])    -- Available for PostgreSQL and MySQL
   | EXCLUDE COLUMNS (<column_name> [, ...]) -- Available for MySQL and SQL Server
@@ -316,6 +319,11 @@ guidelines](/sql/identifiers/#naming-restrictions).
 
 {{< include-md file="shared-content/create-table-supported-types.md" >}}
 
+### Source-populated tables and snapshotting
+
+{{< include-md file="shared-content/create-table-from-source-snapshotting.md"
+>}}
+
 ### Known limitations
 
 Tables do not currently support:
@@ -352,10 +360,7 @@ The privileges required to execute the command are:
 {{% include-example file="examples/create-table/example_user_defined_table"
  example="create-table" %}}
 
-#### Verify table creation
-
 Once a table is created, you can inspect the table with various `SHOW` commands.
-
 For example:
 
 - [`SHOW TABLES`](/sql/show-tables/)
@@ -371,7 +376,7 @@ For example:
 #### Read/write to the new table
 
 Once a user-populated table is created, you can perform CRUD
-(Create/Read/Update/Write) operations.
+(Create/Read/Update/Write) operations on it.
 
 {{% include-example file="examples/create-table/example_user_defined_table"
  example="write-to-table" %}}
@@ -381,35 +386,19 @@ Once a user-populated table is created, you can perform CRUD
 
 ### Create a table (PostgreSQL Source)
 
-The following example creates a table from a PostgreSQL source using the `CREATE
-TABLE FROM SOURCE` syntax.
-
 {{< note >}}
 
 The example assumes you have configured your upstream PostgreSQL 11+ (i.e.,
 enabled logical replication, created the publication for the various tables and
 replication user, and updated the network configuration).
 
-For details about configuring your upstream system, see the integration
-guides:
-
-<ul style="column-count:2">
-
-- [AlloyDB for PostgreSQL](/ingest-data/postgres/alloydb/)
-- [Amazon Aurora for PostgreSQL](/ingest-data/postgres/amazon-aurora/)
-- [Amazon RDS for PostgreSQL](/ingest-data/postgres/amazon-rds/)
-- [Azure DB for PostgreSQL](/ingest-data/postgres/azure-db/)
-- [Google Cloud SQL for PostgreSQL](/ingest-data/postgres/cloud-sql/)
-- [Neon](/ingest-data/postgres/neon/)
-- [Self-hosted PostgreSQL](/ingest-data/postgres/self-hosted/)
-</ul>
+For details about configuring your upstream system, see the [PostgreSQL
+integration guides](/ingest-data/postgres/#supported-versions-and-services).
 
 {{</ note >}}
 
 {{% include-example file="examples/create-table/example_postgres_table"
  example="create-table" %}}
-
-#### Verify table creation
 
 Once a table is created, you can inspect the table with various `SHOW`
 commands. For example:
@@ -427,78 +416,127 @@ commands. For example:
 #### Query the read-only table
 
 {{< include-md file="shared-content/create-table-from-source-readonly.md" >}}
+
 {{< include-md file="shared-content/create-table-from-source-snapshotting.md"
 >}}
 
-Once the snapshotting process completes, you can:
+Once the snapshotting process completes, you can query the table:
 
-- Query the table:
-
-  {{% include-example file="examples/create-table/example_postgres_table"
+{{% include-example file="examples/create-table/example_postgres_table"
  example="read-from-table" %}}
 
-- Join with other tables, create views on the tables, etc:
+### Create a table (MySQL Source)
 
-  {{% include-example file="examples/create-table/example_postgres_table"
- example="create-view-from-tables" %}}
+{{< note >}}
+
+The example assumes you have configured your upstream MySQL 5.7+ (i.e.,
+enabled GTID-based binlog replication, created the
+replication user, and updated the network configuration as needed).
+
+For details about configuring your upstream system, see the [MySQL
+integration guides](/ingest-data/mysql/#supported-versions-and-services).
+
+{{</ note >}}
+
+{{% include-example file="examples/create-table/example_mysql_table"
+ example="create-table" %}}
+
+Once a table is created, you can inspect the table with various `SHOW`
+commands. For example:
+
+- [`SHOW TABLES`](/sql/show-tables/)
+
+  {{% include-example file="examples/create-table/example_mysql_table"
+ example="show-tables" %}}
+
+- [`SHOW COLUMNS`](/sql/show-tables/)
+
+  {{% include-example file="examples/create-table/example_mysql_table"
+ example="show-columns" %}}
+
+#### Query the read-only table
+
+{{< include-md file="shared-content/create-table-from-source-readonly.md" >}}
+
+{{< include-md file="shared-content/create-table-from-source-snapshotting.md"
+>}}
+
+Once the snapshotting process completes, you can query the table:
+
+{{% include-example file="examples/create-table/example_mysql_table"
+ example="read-from-table" %}}
 
 ### Create a table (Kafka Source)
 
-The following example creates a table from a Kafka (or Redpanda) source using
-the `CREATE TABLE FROM SOURCE` syntax.
+{{< tip >}}
+The same syntax may be used for Redpanda.
+{{</ tip >}}
 
 {{< tabs  >}}
 {{< tab "FORMAT AVRO">}}
 
-**Using Confluent Schema Registry**
+{{% include-example file="examples/create-table/example_kafka_table_avro"
+ example="create-table" %}}
 
-```mzsql
-CREATE SOURCE avro_source
-  FROM KAFKA CONNECTION kafka_connection (TOPIC 'test_topic')
-  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_connection;
-```
+Once a table is created, you can inspect the table with various `SHOW`
+commands. For example:
+
+- [`SHOW TABLES`](/sql/show-tables/)
+
+  {{% include-example file="examples/create-table/example_kafka_table_avro"
+ example="show-tables" %}}
+
+- [`SHOW COLUMNS`](/sql/show-tables/)
+
+  {{% include-example file="examples/create-table/example_kafka_table_avro"
+ example="show-columns" %}}
+
+#### Query the read-only table
+
+{{< include-md file="shared-content/create-table-from-source-readonly.md" >}}
+
+{{< include-md file="shared-content/create-table-from-source-snapshotting.md"
+>}}
+
+{{% include-example file="examples/create-table/example_kafka_table_avro"
+ example="read-from-table" %}}
 
 {{< /tab >}}
 {{< tab "FORMAT JSON">}}
 
-The following example creates a read-only table from a Kafka source, where the
-messages are JSON records.
+{{% include-example file="examples/create-table/example_kafka_table_json"
+ example="create-table" %}}
 
-```mzsql
-/* This example assumes:
-   - That you have defined a connection to Kafka.
-   - That you have created a source using that connection.
-   For example:
+Once a table is created, you can inspect the table with various `SHOW`
+commands. For example:
 
-   CREATE SECRET kafka_secret AS 'mypassword';
-   CREATE CONNECTION kafka_connection TO KAFKA (
-     BROKER 'host:port',                   -- substitute
-     SECURITY PROTOCOL = 'SASL_PLAINTEXT', -- substitute
-     SASL MECHANISMS = 'SCRAM-SHA-256',    -- substitute
-     SASL USERNAME = 'myuser',             -- substitute
-     SASL PASSWORD = SECRET kafka_secret
-   );
+- [`SHOW TABLES`](/sql/show-tables/)
 
-   CREATE SOURCE kafka_json_source
-   FROM KAFKA CONNECTION kafka_connection (TOPIC 'test_topic');
-*/
-CREATE TABLE my_json_table
-FROM SOURCE kafka_json_source
-FORMAT JSON;
-```
+  {{% include-example file="examples/create-table/example_kafka_table_json"
+ example="show-tables" %}}
 
-By default, creates a table `my_json_table` with 1 column named `data` of type
-[`jsonb`](/sql/types/jsonb/). You can include additional columns using the
-`INCLUDE` options.
+- [`SHOW COLUMNS`](/sql/show-tables/)
 
-You can create a view on top of your table that parses the `data` value into
-individual columns with the required data types. To help with this task, you can
-paste a sample JSON document into [this **JSON parsing
-widget**](/sql/types/jsonb/#parsing) to create the view.
+  {{% include-example file="examples/create-table/example_kafka_table_json"
+ example="show-columns" %}}
 
-{{< json-parser >}}
+#### Query the read-only table
 
+{{< include-md file="shared-content/create-table-from-source-readonly.md" >}}
 
+{{< include-md file="shared-content/create-table-from-source-snapshotting.md"
+>}}
+
+Once the snapshotting process completes, you can query the table:
+
+{{% include-example file="examples/create-table/example_kafka_table_json"
+ example="read-from-table" %}}
+
+#### Create a view from table
+
+{{% include-example file="examples/create-table/example_kafka_table_json"
+ example="create-a-view-from-table" %}}
+ 
 {{< /tab >}}
 
 {{< tab "FORMAT TEXT/BYTES">}}

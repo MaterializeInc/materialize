@@ -1,10 +1,8 @@
 - name: "create-table"
   description: |
-
     To create new **read-only** tables from a source table, use the `CREATE
-    TABLE ... FROM SOURCE ... (REFERENCE <upstream_table>)` statement. The
-    following example creates **read-only** tables `items` and `orders` from the
-    PostgreSQL source `mz_source`'s `items` and `orders` tables.
+    TABLE ... FROM SOURCE ... (REFERENCE <upstream_table>)` statement. The following example creates **read-only** tables `items` and `orders` from
+    the MySQL source `mz_source`'s `items` and `orders` tables.
 
     {{< note >}}
 
@@ -12,7 +10,7 @@
     upstream tables, the tables in Materialize can have names that differ from
     the referenced table names.
 
-    - For supported PostgreSQL data types, refer to [supported
+    - For supported MySQL data types, refer to [supported
     types](#upstream-sources-and-supported-data-types).
 
     - You can create multiple tables that reference the same upstream table.
@@ -21,28 +19,25 @@
 
   code: |
     /* This example assumes:
-      - In the upstream PostgreSQL, you have defined:
-        - replication user and password with the appropriate access.
-        - a publication named `mz_source` for the `items` and `orders` tables.
-      - In Materialize:
-        - You have created a secret for the PostgreSQL password.
-        - You have defined the connection to the upstream PostgreSQL.
+      - In the upstream MySQL, you have:
+        - Enabled GTID-based binlog replication
+        - Defined a replication user and password with the appropriate access.
+      - In Materialize,
+        - You have created a secret for the MySQL password.
+        - You have defined the connection to the upstream MySQL.
         - You have used the connection to create a source.
-       
-       For example (substitute with your configuration):
-          CREATE SECRET pgpass AS '<replication user password>'; -- substitute
-          CREATE CONNECTION pg TO POSTGRES (
+
+        For example (substitute with your configuration):
+          CREATE SECRET mysql_password AS '<replication user password>'; -- substitute
+          CREATE CONNECTION mysql_connection TO MYSQL (
             HOST '<hostname>',          -- substitute
-            DATABASE <db>,              -- substitute
             USER <replication user>,    -- substitute
-            PASSWORD SECRET pgpass
+            PASSWORD SECRET mysql_password
             -- [, <network security configuration> ]
           );
 
           CREATE SOURCE mz_source
-          FROM POSTGRES CONNECTION pg (
-          PUBLICATION 'mz_source'       -- substitute
-          );
+          FROM MYSQL CONNECTION mysql_connection;
     */
 
     CREATE TABLE items
@@ -80,7 +75,7 @@
     upstream table only contains columns with data types that are supported in
     Materialize.
 
-    For the list of supported PostgreSQL data types, refer to [supported
+    For the list of supported MySQL data types, refer to [supported
     types](#upstream-sources-and-supported-data-types).
 
 - name: "read-from-table"

@@ -1,8 +1,8 @@
 - name: "create-table"
   description: |
-    The following example uses `CREATE TABLE` to create a new table `mytable`
-    with two columns `a` (of type `int`) and `b` (of type `text` and not
-    nullable):
+    The following example uses `CREATE TABLE` to create a new read-write table
+    `mytable` with two columns `a` (of type `int`) and `b` (of type `text` and
+    not nullable):
   code: |
     CREATE TABLE mytable (a int, b text NOT NULL);
 
@@ -54,7 +54,7 @@
   results: |
     The results should display the two rows inserted:
 
-    ```none
+    ```hc {hl_lines="3-4"}
     | a | b       |
     | - | ------- |
     | 1 | hello   |
