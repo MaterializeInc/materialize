@@ -742,7 +742,12 @@ where
         result
     }
 
-    async fn ensure_transaction(&mut self, num_stmts: usize) -> Result<(), io::Error> {
+    async fn ensure_transaction(
+        &mut self,
+        num_stmts: usize,
+        message_type: &str,
+    ) -> Result<(), io::Error> {
+        let start = Instant::now();
         if self.txn_needs_commit {
             self.commit_transaction().await?;
         }
@@ -750,6 +755,12 @@ where
         // the future.
         let res = self.adapter_client.start_transaction(Some(num_stmts));
         assert_ok!(res);
+        self.adapter_client
+            .inner()
+            .metrics()
+            .pgwire_ensure_transaction_seconds
+            .with_label_values(&[message_type])
+            .observe(start.elapsed().as_secs_f64());
         Ok(())
     }
 
@@ -805,7 +816,7 @@ where
             // This needs to be done in the loop instead of once at the top because
             // a COMMIT/ROLLBACK statement needs to start a new transaction on next
             // statement.
-            self.ensure_transaction(num_stmts).await?;
+            self.ensure_transaction(num_stmts, "query").await?;
 
             match self
                 .one_query(stmt, sql.to_string(), LifecycleTimestamps { received })
@@ -839,7 +850,7 @@ where
         param_oids: Vec<u32>,
     ) -> Result<State, io::Error> {
         // Start a transaction if we aren't in one.
-        self.ensure_transaction(1).await?;
+        self.ensure_transaction(1, "parse").await?;
 
         let mut param_types = vec![];
         for oid in param_oids {
@@ -937,7 +948,7 @@ where
         result_formats: Vec<Format>,
     ) -> Result<State, io::Error> {
         // Start a transaction if we aren't in one.
-        self.ensure_transaction(1).await?;
+        self.ensure_transaction(1, "bind").await?;
 
         let aborted_txn = self.is_aborted_txn();
         let stmt = match self
@@ -1126,7 +1137,7 @@ where
             match &mut portal.state {
                 PortalState::NotStarted => {
                     // Start a transaction if we aren't in one.
-                    self.ensure_transaction(1).await?;
+                    self.ensure_transaction(1, "execute").await?;
                     match self
                         .adapter_client
                         .execute(
@@ -1263,7 +1274,7 @@ where
     #[instrument(level = "debug")]
     async fn describe_statement(&mut self, name: &str) -> Result<State, io::Error> {
         // Start a transaction if we aren't in one.
-        self.ensure_transaction(1).await?;
+        self.ensure_transaction(1, "describe_statement").await?;
 
         let stmt = match self.adapter_client.get_prepared_statement(name).await {
             Ok(stmt) => stmt,
@@ -1289,7 +1300,7 @@ where
     #[instrument(level = "debug")]
     async fn describe_portal(&mut self, name: &str) -> Result<State, io::Error> {
         // Start a transaction if we aren't in one.
-        self.ensure_transaction(1).await?;
+        self.ensure_transaction(1, "describe_portal").await?;
 
         let session = self.adapter_client.session();
         let row_desc = session

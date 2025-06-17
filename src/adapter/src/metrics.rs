@@ -46,6 +46,7 @@ pub struct Metrics {
     pub parse_seconds: HistogramVec,
     pub pgwire_message_processing_seconds: HistogramVec,
     pub result_rows_first_to_last_byte_seconds: HistogramVec,
+    pub pgwire_ensure_transaction_seconds: HistogramVec,
 }
 
 impl Metrics {
@@ -199,6 +200,12 @@ impl Metrics {
                 help: "The time from just before sending the first result row to sending a final response message after having successfully flushed the last result row to the connection. (This can span multiple FETCH statements.) (This is never observed for unbounded SUBSCRIBEs, i.e., which have no last result row.)",
                 var_labels: ["statement_type"],
                 buckets: histogram_seconds_buckets(0.001, 8192.0),
+            )),
+            pgwire_ensure_transaction_seconds: registry.register(metric!(
+                name: "mz_pgwire_ensure_transaction_seconds",
+                help: "The time it takes to run `ensure_transactions` when processing pgwire messages.",
+                var_labels: ["message_type"],
+                buckets: histogram_seconds_buckets(0.001, 512.0),
             ))
         }
     }
