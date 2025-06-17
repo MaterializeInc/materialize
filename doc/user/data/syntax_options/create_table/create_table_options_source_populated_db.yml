@@ -14,14 +14,13 @@ rows:
       The name of the [source](/sql/create-source/) associated with the
       reference object from which to create the table.
 
-  - "Parameter": "**(REFERENCE <ref_object>)**"
+  - "Parameter": "**(REFERENCE <upstream_table>)**"
     "Description": |
 
-      The name of the reference object from which to create the table. Reference
-      objects are the names of the tables in the upstream database. You can
-      create multiple tables from the same reference object.
+      The name of the upstream table from which to create the
+      table. You can create multiple tables from the same upstream table.
 
-      To find the reference objects available in your
+      To find the upstream tables available in your
       [source](/sql/create-source/), you can use the following query,
       substituting your source name for `<source_name>`:
 
