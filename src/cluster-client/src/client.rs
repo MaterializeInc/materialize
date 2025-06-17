@@ -10,6 +10,7 @@
 //! Types for commands to clusters.
 
 use std::num::NonZeroI64;
+use std::str::FromStr;
 
 use mz_proto::{ProtoType, RustType, TryFromProtoError};
 use proptest::prelude::{Arbitrary, any};
@@ -160,6 +161,20 @@ pub struct TimelyConfig {
     pub enable_zero_copy_lgalloc: bool,
     /// Optional limit on the number of empty buffers retained by the zero copy allocator.
     pub zero_copy_limit: Option<usize>,
+}
+
+impl ToString for TimelyConfig {
+    fn to_string(&self) -> String {
+        serde_json::to_string(self).unwrap()
+    }
+}
+
+impl FromStr for TimelyConfig {
+    type Err = serde_json::Error;
+
+    fn from_str(s: &str) -> serde_json::Result<Self> {
+        serde_json::from_str(s)
+    }
 }
 
 impl RustType<ProtoTimelyConfig> for TimelyConfig {
