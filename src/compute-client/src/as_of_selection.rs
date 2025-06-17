@@ -77,7 +77,7 @@
 //! |     The proof is equivalent to Case 1.
 
 use std::cell::RefCell;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 use std::rc::Rc;
 
@@ -91,7 +91,7 @@ use mz_storage_types::read_holds::ReadHold;
 use mz_storage_types::read_policy::ReadPolicy;
 use timely::PartialOrder;
 use timely::progress::{Antichain, Timestamp};
-use tracing::info;
+use tracing::{info, warn};
 
 /// Runs as-of selection for the given dataflows.
 ///
@@ -103,6 +103,7 @@ pub fn run<T: TimestampManipulation>(
     read_policies: &BTreeMap<GlobalId, ReadPolicy<T>>,
     storage_collections: &dyn StorageCollections<Timestamp = T>,
     current_time: T,
+    read_only_mode: bool,
 ) -> BTreeMap<GlobalId, ReadHold<T>> {
     // Get read holds for the storage inputs of the dataflows.
     // This ensures that storage frontiers don't advance past the selected as-ofs.
@@ -125,6 +126,14 @@ pub fn run<T: TimestampManipulation>(
     // need to be installed at all. So we can apply an optimization where we prune them here and
     // assign them an empty as-of at the end.
     ctx.prune_sealed_persist_sinks();
+
+    // During 0dt upgrades, it can happen that the leader environment drops collections, making the
+    // read-only environment observe inconsistent read frontiers (database-issues#8836). To avoid
+    // hard-constraint failures, we prune these dropped collections and all collections depending
+    // on them.
+    if read_only_mode {
+        ctx.prune_dropped_collections();
+    }
 
     // Apply hard constraints from upstream and downstream storage collections.
     ctx.apply_upstream_storage_constraints(&storage_read_holds);
@@ -313,6 +322,15 @@ struct Collection<'a, T> {
     bounds: Rc<RefCell<AsOfBounds<T>>>,
     /// Whether this collection is an index.
     is_index: bool,
+}
+
+impl<T> Collection<'_, T> {
+    /// Enumerate the IDs of all input collections.
+    fn inputs(&self) -> impl Iterator<Item = GlobalId> {
+        let storage = self.storage_inputs.iter().copied();
+        let compute = self.compute_inputs.iter().copied();
+        storage.chain(compute)
+    }
 }
 
 /// The as-of selection context.
@@ -737,6 +755,48 @@ impl<'a, T: TimestampManipulation> Context<'a, T> {
                 .map_or(true, |f| !f.write_frontier.is_empty())
         });
     }
+
+    /// Removes storage collections with empty read frontiers, and collections depending on them.
+    ///
+    /// The dataflows of these collections will get an empty default as-of assigned at the end of
+    /// the as-of selection process, ensuring that they won't get installed.
+    ///
+    /// This exists only to work around database-issues#8836.
+    fn prune_dropped_collections(&mut self) {
+        // Remove dropped dropped storage collections.
+        let mut pruned = BTreeSet::new();
+        self.collections.retain(|id, _c| {
+            let empty = self
+                .storage_collections
+                .collection_frontiers(*id)
+                .is_ok_and(|f| f.read_capabilities.is_empty());
+
+            if empty {
+                pruned.insert(*id);
+                false
+            } else {
+                true
+            }
+        });
+
+        warn!(?pruned, "pruned storage collections with empty frontier");
+
+        // Removed (transitive) dependants of dropped storage collections.
+        while !pruned.is_empty() {
+            let pruned_inputs = std::mem::take(&mut pruned);
+
+            self.collections.retain(|id, c| {
+                if c.inputs().any(|id| pruned_inputs.contains(&id)) {
+                    pruned.insert(*id);
+                    false
+                } else {
+                    true
+                }
+            });
+
+            warn!(?pruned, "pruned collections with pruned inputs");
+        }
+    }
 }
 
 /// Runs `step` in a loop until it stops reporting changes.
@@ -1146,6 +1206,7 @@ mod tests {
                     &read_policies,
                     &storage_frontiers,
                     $current_time.into(),
+                    false,
                 );
 
                 let actual_as_ofs: Vec<_> = dataflows

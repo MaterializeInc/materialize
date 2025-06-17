@@ -3241,6 +3241,7 @@ impl Coordinator {
             &read_policies,
             &*self.controller.storage_collections,
             read_ts,
+            self.controller.read_only(),
         );
 
         let catalog = self.catalog_mut();
