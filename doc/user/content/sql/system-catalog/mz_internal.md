@@ -189,7 +189,7 @@ At this time, we do not make any guarantees about the exactness or freshness of 
 
 ## `mz_cluster_replica_statuses`
 
-The `mz_cluster_replica_statuses` table contains a row describing the status
+The `mz_cluster_replica_statuses` view contains a row describing the status
 of each process in each cluster replica in the system.
 
 <!-- RELATION_SPEC mz_internal.mz_cluster_replica_statuses -->

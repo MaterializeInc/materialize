@@ -1596,17 +1596,6 @@ impl ClusterReplicaStatuses {
     }
 
     /// Gets the statuses of the given cluster.
-    ///
-    /// Panics if the cluster does not exist
-    pub(crate) fn get_cluster_statuses(
-        &self,
-        cluster_id: ClusterId,
-    ) -> &BTreeMap<ReplicaId, BTreeMap<ProcessId, ClusterReplicaProcessStatus>> {
-        self.try_get_cluster_statuses(cluster_id)
-            .unwrap_or_else(|| panic!("unknown cluster: {cluster_id}"))
-    }
-
-    /// Gets the statuses of the given cluster.
     pub(crate) fn try_get_cluster_statuses(
         &self,
         cluster_id: ClusterId,
@@ -1838,24 +1827,6 @@ impl Coordinator {
                         num_processes,
                         now,
                     );
-            }
-        }
-        for replica_statuses in self.cluster_replica_statuses.0.values() {
-            for (replica_id, processes_statuses) in replica_statuses {
-                for (process_id, status) in processes_statuses {
-                    let builtin_table_update =
-                        self.catalog().state().pack_cluster_replica_status_update(
-                            *replica_id,
-                            *process_id,
-                            status,
-                            Diff::ONE,
-                        );
-                    let builtin_table_update = self
-                        .catalog()
-                        .state()
-                        .resolve_builtin_table_update(builtin_table_update);
-                    builtin_table_updates.push(builtin_table_update);
-                }
             }
         }
 
