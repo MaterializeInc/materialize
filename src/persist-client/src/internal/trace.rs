@@ -1186,8 +1186,6 @@ impl<T: Timestamp + Lattice + Codec64> SpineBatch<T> {
 
         let inputs = res.inputs.clone();
 
-        info!("maybe_replace_checked pre: inputs={:?}", inputs);
-
         let inputs = inputs
             .into_iter()
             .sorted()
@@ -1195,13 +1193,6 @@ impl<T: Timestamp + Lattice + Codec64> SpineBatch<T> {
             .into_iter()
             .map(|(id, batch)| (id, batch.collect::<Vec<_>>()))
             .collect::<BTreeMap<_, _>>();
-
-        info!("maybe_replace_checked post: inputs={:?}", inputs);
-
-        info!(
-            "parts={:?}",
-            self.parts.iter().map(|p| p.id).collect::<Vec<_>>()
-        );
 
         // Either parts within a single HollowBatch can be replaced, or
         // entire contiguous batches can be replaced.
@@ -1294,10 +1285,6 @@ impl<T: Timestamp + Lattice + Codec64> SpineBatch<T> {
         let replacement_range = start..end;
 
         if range.len() == 1 {
-            info!(
-                "maybe_replace_checked: replacing single part {:?}",
-                range[0]
-            );
             // We only need to replace a single part. Here we still care about the run_indices
             // because we only want to replace the runs that are in the merge result.
             let batch = &self.parts[range[0]].batch;
@@ -1332,10 +1319,6 @@ impl<T: Timestamp + Lattice + Codec64> SpineBatch<T> {
 
             // Fast path: all runs replaced
             if run_ids.len() == batch.run_meta.len() {
-                info!(
-                    "maybe_replace_checked: replacing all runs in part {:?}",
-                    range[0]
-                );
                 return self.perform_subset_replacement(
                     &res.output,
                     id,
@@ -1343,10 +1326,6 @@ impl<T: Timestamp + Lattice + Codec64> SpineBatch<T> {
                     res.new_active_compaction.clone(),
                 );
             } else {
-                info!(
-                    "maybe_replace_checked: replacing runs {:?} in part {:?}",
-                    run_ids, range[0]
-                );
                 match Self::construct_batch_with_runs_replaced(batch, &run_ids, &res.output) {
                     Ok(new_batch) => {
                         let new_batch_diff_sum =
@@ -1371,10 +1350,6 @@ impl<T: Timestamp + Lattice + Codec64> SpineBatch<T> {
                 }
             }
         } else {
-            info!(
-                "maybe_replace_checked: replacing multiple parts {:?}",
-                replacement_range
-            );
             // We need to replace a range of parts. Here we don't care about the run_indices
             // because we are replacing the entire part(s) this is checked above.
             let old_diffs_sum = Self::diffs_sum::<D>(
@@ -1412,7 +1387,6 @@ impl<T: Timestamp + Lattice + Codec64> SpineBatch<T> {
 
     /// Unchecked variant that skips diff sum assertions
     fn maybe_replace_unchecked(&mut self, res: &FueledMergeRes<T>) -> ApplyMergeResult {
-        info!("maybe_replace_unchecked");
         // The spine's and merge res's sinces don't need to match (which could occur if Spine
         // has been reloaded from state due to compare_and_set mismatch), but if so, the Spine
         // since must be in advance of the merge res since.
@@ -1508,13 +1482,6 @@ impl<T: Timestamp + Lattice + Codec64> SpineBatch<T> {
             active_compaction: _,
             len: _,
         } = self;
-
-        info!(
-            "perform_subset_replacement: replacing parts {:?}..{:?}",
-            range.start, range.end,
-        );
-        info!("existing desc: {:?}", desc);
-        info!("new desc: {:?}", res.desc);
 
         let orig_num_parts = parts.len();
 

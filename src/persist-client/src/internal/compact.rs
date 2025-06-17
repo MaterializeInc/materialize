@@ -634,12 +634,9 @@ where
             let run_reserved_memory_bytes =
                 cfg.compaction_memory_bound_bytes - in_progress_part_reserved_memory_bytes;
 
-            info!("input runs: {:?}", req.inputs.iter().map(|x| x.id).collect::<Vec<_>>());
             // Flatten the input batches into a single list of runs
             let ordered_runs =
                 Self::order_runs(&req, cfg.batch.preferred_order, &*blob, &*metrics).await?;
-
-            info!("ordered runs: {:?}", ordered_runs.iter().map(|(run_id, _, _, _)| run_id).collect::<Vec<_>>());
 
             // There are two cases to consider here:
             // 1. There are as many runs as there are input batches in which case we
@@ -675,7 +672,6 @@ where
             );
             let mut applied = 0;
             for (runs, run_chunk_max_memory_usage) in chunked_runs {
-                info!("compacting runs for chunk: {:?}", runs.iter().map(|(run_id, _, _, _)| run_id).collect::<Vec<_>>());
                 metrics.compaction.chunks_compacted.inc();
                 metrics
                     .compaction
@@ -694,7 +690,6 @@ where
                 let descriptions = runs.iter()
                     .map(|(_, desc, _, _)| desc.clone())
                     .collect::<Vec<_>>();
-                info!("descriptions: {:?}", descriptions);
                 let desc_lower = descriptions
                     .iter()
                     .map(|desc| desc.lower())
@@ -806,14 +801,6 @@ where
             .into_iter()
             .map(|(id, chunk)| (id, chunk.collect()))
             .collect::<Vec<(_, Vec<_>)>>();
-
-        info!(
-            "number of runs per chunk: {:?}",
-            ordered_chunks
-                .iter()
-                .map(|(id, chunk)| (id, chunk.len()))
-                .collect::<Vec<_>>()
-        );
 
         let groups = if ordered_chunks.iter().all(|(_, chunk)| chunk.len() == 1) {
             // If each chunk has only one run, we can just flatten it into a single list.
@@ -1031,10 +1018,6 @@ where
     ) -> HollowBatch<T> {
         // Simplifying assumption: you can't combine batches with different descriptions.
         assert_eq!(previous_batch.desc, batch.desc);
-        info!(
-            "Combining batches: previous_batch.len={} batch.len={}",
-            previous_batch.len, batch.len
-        );
         let len = previous_batch.len + batch.len;
         let mut parts = Vec::with_capacity(previous_batch.parts.len() + batch.parts.len());
         parts.extend(previous_batch.parts.clone());
