@@ -1027,8 +1027,13 @@ impl<T: Timestamp + Lattice + Codec64> SpineBatch<T> {
                     // If the run_id is found, we use its index.
                     // If the run_id is not found, we skip it.
                     if i == 0 {
-                        // If it's the first run, we start from the beginning.
-                        parts.extend_from_slice(&batch.parts[..batch.run_splits[0]]);
+                        if batch.run_splits.is_empty() {
+                            // If there are no splits, we take all parts.
+                            parts.extend_from_slice(&batch.parts);
+                        } else {
+                            // If there are splits, we take the first split.
+                            parts.extend_from_slice(&batch.parts[..batch.run_splits[0]]);
+                        }
                     } else {
                         // Otherwise, we start from the previous run's split.
                         let start = batch.run_splits[i - 1];
@@ -1055,6 +1060,12 @@ impl<T: Timestamp + Lattice + Codec64> SpineBatch<T> {
         //     "run_ids must be contiguous: {:?}",
         //     run_ids
         // );
+
+        assert_eq!(
+            replacement.run_meta.len(),
+            1,
+            "replacement must have exactly one run"
+        );
 
         let start_id = run_ids[0];
         let end_id = *run_ids.last().unwrap();
@@ -1088,7 +1099,7 @@ impl<T: Timestamp + Lattice + Codec64> SpineBatch<T> {
         // 3. Replace run_meta
         let mut run_meta = Vec::new();
         run_meta.extend_from_slice(&original.run_meta[..start_run]);
-        run_meta.push(replacement.run_meta.get(0).cloned().unwrap_or_default());
+        run_meta.extend_from_slice(&replacement.run_meta);
         run_meta.extend_from_slice(&original.run_meta[end_run + 1..]);
 
         // 4. Rebuild run_splits
@@ -1123,6 +1134,20 @@ impl<T: Timestamp + Lattice + Codec64> SpineBatch<T> {
             cursor += run_len;
             run_splits.push(cursor);
         }
+
+        assert_eq!(
+            run_splits.len(),
+            run_meta.len(),
+            "run_splits and run_meta must have the same length"
+        );
+
+        info!(
+            "Constructed batch with runs replaced: start_run={}, end_run={}, parts_len={}, run_meta_len={}",
+            start_run,
+            end_run,
+            parts.len(),
+            run_meta.len()
+        );
 
         Ok(HollowBatch {
             desc: original.desc.clone(),
