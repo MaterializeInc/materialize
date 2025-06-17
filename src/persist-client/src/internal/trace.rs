@@ -53,7 +53,7 @@ use itertools::Itertools;
 use mz_persist::metrics::ColumnarMetrics;
 use mz_persist_types::Codec64;
 use std::cmp::Ordering;
-use std::collections::{BTreeMap, HashMap};
+use std::collections::BTreeMap;
 use std::fmt::Debug;
 use std::mem;
 use std::ops::Range;
@@ -277,6 +277,7 @@ impl<T: Timestamp + Lattice> Trace<T> {
             merges,
         }
     }
+
     pub(crate) fn unflatten(value: FlatTrace<T>) -> Result<Self, String> {
         let FlatTrace {
             since,
@@ -1137,7 +1138,12 @@ impl<T: Timestamp + Lattice + Codec64> SpineBatch<T> {
         }
 
         if let Some((id, range)) = self.find_replacement_range(res) {
-            self.perform_subset_replacement(&res.output, id, range)
+            self.perform_subset_replacement(
+                &res.output,
+                id,
+                range,
+                res.new_active_compaction.clone(),
+            )
         } else {
             ApplyMergeResult::NotAppliedNoMatch
         }
@@ -1250,8 +1256,26 @@ impl<T: Timestamp + Lattice + Codec64> SpineBatch<T> {
         );
 
         let min = *range.iter().min().unwrap();
-        let max = *range.iter().max().unwrap() + 1;
-        let replacement_range = min..max;
+        let max = *range.iter().max().unwrap();
+        // Include empty parts at the start and end of the range
+        let mut start = min;
+        while start > 0 {
+            let part = &self.parts[start - 1];
+            if part.batch.runs().next().is_some() {
+                break;
+            }
+            start -= 1;
+        }
+
+        let mut end = max + 1;
+        while end < self.parts.len() {
+            let part = &self.parts[end];
+            if part.batch.runs().next().is_some() {
+                break;
+            }
+            end += 1;
+        }
+        let replacement_range = start..end;
 
         if range.len() == 1 {
             info!(
@@ -1293,7 +1317,12 @@ impl<T: Timestamp + Lattice + Codec64> SpineBatch<T> {
                     "maybe_replace_checked: replacing all runs in part {:?}",
                     range[0]
                 );
-                return self.perform_subset_replacement(&res.output, id, replacement_range);
+                return self.perform_subset_replacement(
+                    &res.output,
+                    id,
+                    replacement_range,
+                    res.new_active_compaction.clone(),
+                );
             } else {
                 info!(
                     "maybe_replace_checked: replacing runs {:?} in part {:?}",
@@ -1312,7 +1341,12 @@ impl<T: Timestamp + Lattice + Codec64> SpineBatch<T> {
                                 new_diffs_sum, old_diffs_sum
                             );
                         }
-                        self.perform_subset_replacement(&new_batch, id, replacement_range)
+                        self.perform_subset_replacement(
+                            &new_batch,
+                            id,
+                            replacement_range,
+                            res.new_active_compaction.clone(),
+                        )
                     }
                     Err(err) => err,
                 }
@@ -1341,7 +1375,12 @@ impl<T: Timestamp + Lattice + Codec64> SpineBatch<T> {
 
             let parts = &self.parts[replacement_range.clone()];
             let id = SpineId(parts.first().unwrap().id.0, parts.last().unwrap().id.1);
-            return self.perform_subset_replacement(&res.output, id, replacement_range);
+            return self.perform_subset_replacement(
+                &res.output,
+                id,
+                replacement_range,
+                res.new_active_compaction.clone(),
+            );
         }
     }
 
@@ -1383,7 +1422,12 @@ impl<T: Timestamp + Lattice + Codec64> SpineBatch<T> {
 
         // Try subset replacement
         if let Some((id, range)) = self.find_replacement_range(res) {
-            self.perform_subset_replacement(&res.output, id, range)
+            self.perform_subset_replacement(
+                &res.output,
+                id,
+                range,
+                res.new_active_compaction.clone(),
+            )
         } else {
             ApplyMergeResult::NotAppliedNoMatch
         }
@@ -1429,6 +1473,7 @@ impl<T: Timestamp + Lattice + Codec64> SpineBatch<T> {
         res: &HollowBatch<T>,
         spine_id: SpineId,
         range: Range<usize>,
+        new_active_compaction: Option<ActiveCompaction<T>>,
     ) -> ApplyMergeResult {
         let SpineBatch {
             id,
@@ -1460,7 +1505,7 @@ impl<T: Timestamp + Lattice + Codec64> SpineBatch<T> {
             desc: desc.to_owned(),
             len: new_parts.iter().map(|x| x.batch.len).sum(),
             parts: new_parts,
-            active_compaction: None,
+            active_compaction: new_active_compaction,
         };
 
         if new_spine_batch.len() > self.len() {
