@@ -455,7 +455,7 @@ where
     /// The clunky multi-level Result is to enable more obvious error handling
     /// in the caller. See <http://sled.rs/errors.html> for details.
     ///
-    /// If the `enforce_single_batch` flag is set to `false`:
+    /// If the `enforce_matching_batch_boundaries` flag is set to `false`:
     /// We no longer validate that every batch covers the entire range between
     /// the expected and new uppers, as we wish to allow combining batches that
     /// cover different subsets of that range, including subsets of that range
@@ -468,7 +468,7 @@ where
         batches: &mut [&mut Batch<K, V, T, D>],
         expected_upper: Antichain<T>,
         new_upper: Antichain<T>,
-        enforce_single_batch: bool,
+        enforce_matching_batch_boundaries: bool,
     ) -> Result<Result<(), UpperMismatch<T>>, InvalidUsage<T>>
     where
         D: Send + Sync,
@@ -518,7 +518,7 @@ where
                     &batch.batch,
                     &desc,
                     any_batch_rewrite,
-                    enforce_single_batch,
+                    enforce_matching_batch_boundaries,
                 )?;
                 for (run_meta, run) in batch.batch.runs() {
                     let start_index = parts.len();
