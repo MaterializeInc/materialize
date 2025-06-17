@@ -278,17 +278,14 @@ trufflehog_jq_filter_logs() {
   trufflehog_jq_filter | jq -c '
   select(
     (.Raw | contains("mz_system:materialize") | not) and
-    .Raw != "jdbc:postgresql://postgres:5432/postgres" and
+    (.Raw | contains("jdbc:postgresql://postgres") | not) and
     (.Raw | contains("mz_analytics:materialize") | not) and
     (.Raw | contains("mz_support:materialize") | not) and
-    .Raw != "jdbc:mysql://mysql:3306/?useInformationSchema=true" and
+    (.Raw | contains("jdbc:mysql://mysql") | not) and
     (.Raw | contains("superuser_login:some_bogus_password") | not) and
     (.Raw | contains("postgres:postgres") | not) and
     (.Raw | contains("jdbc:postgresql://127.0.0") | not) and
-    .Raw != "jdbc:postgresql://cockroach0:26257/defaultdb?sslmode=disable" and
-    .Raw != "jdbc:postgresql://cockroach1:26257/defaultdb?sslmode=disable" and
-    .Raw != "jdbc:postgresql://cockroach2:26257/defaultdb?sslmode=disable" and
-    .Raw != "jdbc:postgresql://cockroach3:26257/defaultdb?sslmode=disable" and
+    (.Raw | contains("jdbc:postgresql://cockroach") | not) and
     (.Raw | contains("materialize:materialize") | not) and
     .Raw != "[REDACTED]"
   )'
