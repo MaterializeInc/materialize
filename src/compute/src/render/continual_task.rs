@@ -545,6 +545,7 @@ fn continual_task_sink<G: Scope<Timestamp = Timestamp>>(
                     &mut [],
                     Antichain::from_elem(Timestamp::minimum()),
                     as_of.clone(),
+                    true,
                 )
                 .await
                 .expect("usage was valid");

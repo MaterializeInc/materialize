@@ -1147,7 +1147,7 @@ mod tests {
 
         // Close shard to writes
         d0_write
-            .compare_and_append_batch(&mut [], d0_write.shared_upper(), Antichain::new())
+            .compare_and_append_batch(&mut [], d0_write.shared_upper(), Antichain::new(), true)
             .await
             .unwrap()
             .unwrap();
@@ -1160,7 +1160,7 @@ mod tests {
 
             // Close shards to writes
             di_write
-                .compare_and_append_batch(&mut [], di_write.shared_upper(), Antichain::new())
+                .compare_and_append_batch(&mut [], di_write.shared_upper(), Antichain::new(), true)
                 .await
                 .unwrap()
                 .unwrap();
