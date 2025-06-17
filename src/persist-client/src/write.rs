@@ -338,7 +338,7 @@ where
             .batch(updates, expected_upper.clone(), new_upper.clone())
             .await?;
         match self
-            .compare_and_append_batch(&mut [&mut batch], expected_upper, new_upper)
+            .compare_and_append_batch(&mut [&mut batch], expected_upper, new_upper, true)
             .await
         {
             ok @ Ok(Ok(())) => ok,
@@ -390,7 +390,7 @@ where
     {
         loop {
             let res = self
-                .compare_and_append_batch(&mut [&mut batch], lower.clone(), upper.clone())
+                .compare_and_append_batch(&mut [&mut batch], lower.clone(), upper.clone(), true)
                 .await?;
             match res {
                 Ok(()) => {
@@ -454,12 +454,21 @@ where
     ///
     /// The clunky multi-level Result is to enable more obvious error handling
     /// in the caller. See <http://sled.rs/errors.html> for details.
+    ///
+    /// If the `enforce_matching_batch_boundaries` flag is set to `false`:
+    /// We no longer validate that every batch covers the entire range between
+    /// the expected and new uppers, as we wish to allow combining batches that
+    /// cover different subsets of that range, including subsets of that range
+    /// that include no data at all. The caller is responsible for guaranteeing
+    /// that the set of batches provided collectively include all updates for
+    /// the entire range between the expected and new upper.
     #[instrument(level = "debug", fields(shard = %self.machine.shard_id()))]
     pub async fn compare_and_append_batch(
         &mut self,
         batches: &mut [&mut Batch<K, V, T, D>],
         expected_upper: Antichain<T>,
         new_upper: Antichain<T>,
+        enforce_matching_batch_boundaries: bool,
     ) -> Result<Result<(), UpperMismatch<T>>, InvalidUsage<T>>
     where
         D: Send + Sync,
@@ -505,7 +514,12 @@ where
             let mut key_storage = None;
             let mut val_storage = None;
             for batch in batches.iter() {
-                let () = validate_truncate_batch(&batch.batch, &desc, any_batch_rewrite)?;
+                let () = validate_truncate_batch(
+                    &batch.batch,
+                    &desc,
+                    any_batch_rewrite,
+                    enforce_matching_batch_boundaries,
+                )?;
                 for (run_meta, run) in batch.batch.runs() {
                     let start_index = parts.len();
                     for part in run {
@@ -935,6 +949,7 @@ where
             batches,
             Antichain::from_elem(expected_upper),
             Antichain::from_elem(new_upper),
+            true,
         )
         .await
         .expect("invalid usage")

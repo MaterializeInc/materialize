@@ -1235,6 +1235,7 @@ where
                                 &mut to_append[..],
                                 batch_lower.clone(),
                                 batch_upper.clone(),
+                                true,
                             )
                             .await
                             .expect("Invalid usage")
