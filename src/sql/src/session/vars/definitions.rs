@@ -1863,7 +1863,7 @@ feature_flags!(
     {
         name: enable_collection_partition_by,
         desc: "PARTITION BY",
-        default: false,
+        default: true,
         enable_for_item_parsing: true,
     },
     {
@@ -2164,7 +2164,7 @@ feature_flags!(
     {
         name: enable_network_policies,
         desc: "ENABLE NETWORK POLICIES",
-        default: false,
+        default: true,
         enable_for_item_parsing: true,
     },
     {
@@ -2188,7 +2188,7 @@ feature_flags!(
     {
         name: enable_sql_server_source,
         desc: "Creating a SQL SERVER source",
-        default: false,
+        default: true,
         enable_for_item_parsing: false,
     },
     {
