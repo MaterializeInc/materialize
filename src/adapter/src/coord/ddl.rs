@@ -34,7 +34,7 @@ use mz_ore::str::StrExt;
 use mz_ore::task;
 use mz_postgres_util::tunnel::PostgresFlavor;
 use mz_repr::adt::numeric::Numeric;
-use mz_repr::{CatalogItemId, Diff, GlobalId, Timestamp};
+use mz_repr::{CatalogItemId, GlobalId, Timestamp};
 use mz_sql::catalog::{CatalogCluster, CatalogClusterReplica, CatalogSchema};
 use mz_sql::names::ResolvedDatabaseSpecifier;
 use mz_sql::plan::ConnectionDetails;
@@ -542,7 +542,7 @@ impl Coordinator {
         let conn = conn_id.map(|id| active_conns.get(id).expect("connection must exist"));
 
         let TransactionResult {
-            mut builtin_table_updates,
+            builtin_table_updates,
             audit_events,
         } = catalog
             .transact(
@@ -553,60 +553,14 @@ impl Coordinator {
             )
             .await?;
 
-        // Update in-memory cluster replica statuses.
-        // TODO(jkosh44) All these builtin table updates should be handled as a builtin source
-        // updates elsewhere.
         for (cluster_id, replica_id) in &cluster_replicas_to_drop {
-            let replica_statuses =
-                cluster_replica_statuses.remove_cluster_replica_statuses(cluster_id, replica_id);
-            for (process_id, status) in replica_statuses {
-                let builtin_table_update = catalog.state().pack_cluster_replica_status_update(
-                    *replica_id,
-                    process_id,
-                    &status,
-                    Diff::MINUS_ONE,
-                );
-                let builtin_table_update = catalog
-                    .state()
-                    .resolve_builtin_table_update(builtin_table_update);
-                builtin_table_updates.push(builtin_table_update);
-            }
+            cluster_replica_statuses.remove_cluster_replica_statuses(cluster_id, replica_id);
         }
         for cluster_id in &clusters_to_drop {
-            let cluster_statuses = cluster_replica_statuses.remove_cluster_statuses(cluster_id);
-            for (replica_id, replica_statuses) in cluster_statuses {
-                for (process_id, status) in replica_statuses {
-                    let builtin_table_update = catalog.state().pack_cluster_replica_status_update(
-                        replica_id,
-                        process_id,
-                        &status,
-                        Diff::MINUS_ONE,
-                    );
-                    let builtin_table_update = catalog
-                        .state()
-                        .resolve_builtin_table_update(builtin_table_update);
-                    builtin_table_updates.push(builtin_table_update);
-                }
-            }
+            cluster_replica_statuses.remove_cluster_statuses(cluster_id);
         }
         for cluster_id in clusters_to_create {
             cluster_replica_statuses.initialize_cluster_statuses(cluster_id);
-            for (replica_id, replica_statuses) in
-                cluster_replica_statuses.get_cluster_statuses(cluster_id)
-            {
-                for (process_id, status) in replica_statuses {
-                    let builtin_table_update = catalog.state().pack_cluster_replica_status_update(
-                        *replica_id,
-                        *process_id,
-                        status,
-                        Diff::ONE,
-                    );
-                    let builtin_table_update = catalog
-                        .state()
-                        .resolve_builtin_table_update(builtin_table_update);
-                    builtin_table_updates.push(builtin_table_update);
-                }
-            }
         }
         let now = to_datetime((catalog.config().now)());
         for (cluster_id, replica_name, num_processes) in cluster_replicas_to_create {
@@ -620,20 +574,6 @@ impl Coordinator {
                 num_processes,
                 now,
             );
-            for (process_id, status) in
-                cluster_replica_statuses.get_cluster_replica_statuses(cluster_id, replica_id)
-            {
-                let builtin_table_update = catalog.state().pack_cluster_replica_status_update(
-                    replica_id,
-                    *process_id,
-                    status,
-                    Diff::ONE,
-                );
-                let builtin_table_update = catalog
-                    .state()
-                    .resolve_builtin_table_update(builtin_table_update);
-                builtin_table_updates.push(builtin_table_update);
-            }
         }
 
         // Append our builtin table updates, then return the notify so we can run other tasks in
