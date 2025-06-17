@@ -61,9 +61,13 @@ The privileges required to execute this statement are:
 
 ## Examples
 
+### Create a role with login and password
+
 ```mzsql
 CREATE ROLE db_reader WITH LOGIN PASSWORD 'password';
 ```
+
+You can verify that the role was created by querying the `mz_roles` system catalog:
 
 ```mzsql
 SELECT name FROM mz_roles;
@@ -75,9 +79,15 @@ SELECT name FROM mz_roles;
  mz_support
 ```
 
+### Create a superuser role
+
+Unlike regular roles, superusers have unrestricted access to all objects in the system and can perform any action on them.
+
 ```mzsql
 CREATE ROLE super_user WITH SUPERUSER LOGIN PASSWORD 'password';
 ```
+
+You can verify that the superuser role was created by querying the `mz_roles` system catalog:
 
 ```mzsql
 SELECT name FROM mz_roles;
@@ -89,6 +99,8 @@ SELECT name FROM mz_roles;
  mz_support
  super_user
 ```
+
+You can also verify that the role has superuser privileges by checking the `pg_authid` system catalog:
 
 ```mzsql
 SELECT rolsuper FROM pg_authid WHERE rolname = 'super_user';

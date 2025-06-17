@@ -109,9 +109,13 @@ quickstart
 
 ##### Making a role a superuser
 
+Unlike regular roles, superusers have unrestricted access to all objects in the system and can perform any action on them.
+
 ```mzsql
 ALTER ROLE rj SUPERUSER;
 ```
+
+To verify that the role has superuser privileges, you can query the `pg_authid` system catalog:
 
 ```mzsql
 SELECT name, rolsuper FROM pg_authid WHERE rolname = 'rj';
@@ -122,6 +126,8 @@ rj  t
 ```
 
 ##### Removing the superuser attribute from a role
+
+NOSUPERUSER will remove the superuser attribute from a role, preventing it from having unrestricted access to all objects in the system.
 
 ```mzsql
 ALTER ROLE rj NOSUPERUSER;
