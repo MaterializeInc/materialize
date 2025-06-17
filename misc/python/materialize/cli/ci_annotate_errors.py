@@ -679,7 +679,7 @@ def annotate_logged_errors(
 
             handle_error(
                 f"Secret found on line {error.line}: {error.secret}",
-                f"Detector: {error.detector_name}. Don't print out secrets in tests/logs and revoke them immediately. Mark false positives in misc/shlib/shlib.bash's trufflehog_jq_filter(|_logs)",
+                f"Detector: {error.detector_name}. Don't print out secrets in tests/logs and revoke them immediately. Mark false positives in misc/shlib/shlib.bash's trufflehog_jq_filter_(logs|common)",
                 location,
                 location_url,
             )

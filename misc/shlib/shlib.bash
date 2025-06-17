@@ -237,10 +237,10 @@ is_truthy() {
     return 0
 }
 
-# trufflehog_jq_filter
+# trufflehog_jq_filter_common
 #
-# Filters out secrets we expect in both source code and logs
-trufflehog_jq_filter() {
+# Filters out secrets we expect in both checked in files and logs
+trufflehog_jq_filter_common() {
   jq -c '
     select(
       .Raw != "postgres://mz_system:materialize@materialized:5432" and
@@ -271,11 +271,21 @@ trufflehog_jq_filter() {
     )'
 }
 
+# trufflehog_jq_filter_files
+#
+# Filters out secrets we expect only in checked in files
+trufflehog_jq_filter_files() {
+  trufflehog_jq_filter_common | jq -c '
+  select(
+    .Raw != "ghp_9fK8sL3x7TqR1vEzYm2pDaN4WjXbQzUtV0aN"
+  )'
+}
+
 # trufflehog_jq_filter_logs
 #
 # Filters out secrets we expect only in logs during CI runs
 trufflehog_jq_filter_logs() {
-  trufflehog_jq_filter | jq -c '
+  trufflehog_jq_filter_common | jq -c '
   select(
     (.Raw | contains("mz_system:materialize") | not) and
     (.Raw | contains("jdbc:postgresql://postgres") | not) and

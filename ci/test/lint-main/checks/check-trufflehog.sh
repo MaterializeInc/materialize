@@ -24,14 +24,14 @@ cd "$(dirname "$0")/../../../.."
 #  exit 1
 #fi
 #
-#git ls-files -z | xargs -0 trufflehog --no-fail --no-update --no-verification --json filesystem | trufflehog_jq_filter > trufflehog.log
+#git ls-files -z | xargs -0 trufflehog --no-fail --no-update --no-verification --json filesystem | trufflehog_jq_filter_files > trufflehog.log
 #
 #try [ ! -s trufflehog.log ]
 #
 #if try_last_failed; then
 #    echo "lint: $(red error:) new secrets found:"
 #    echo "lint: $(green hint:) don't check in secrets and revoke them immediately"
-#    echo "lint: $(green hint:) mark false positives in misc/shlib/shlib.bash's trufflehog_jq_filter"
+#    echo "lint: $(green hint:) mark false positives in misc/shlib/shlib.bash's trufflehog_jq_filter_(files|common)"
 #fi
 #
 #jq -c -r '. | "\(.SourceMetadata.Data.Filesystem.file):\(.SourceMetadata.Data.Filesystem.line): Secret found: \(.Raw)"' trufflehog.log
