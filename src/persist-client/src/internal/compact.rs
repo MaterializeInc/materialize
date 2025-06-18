@@ -8,7 +8,7 @@
 // by the Apache License, Version 2.0.
 
 use std::borrow::Cow;
-use std::collections::VecDeque;
+use std::collections::{BTreeMap, VecDeque};
 use std::fmt::Debug;
 use std::marker::PhantomData;
 use std::pin::pin;
@@ -21,7 +21,6 @@ use differential_dataflow::lattice::Lattice;
 use differential_dataflow::trace::Description;
 use futures::{Stream, pin_mut};
 use futures_util::StreamExt;
-use itertools::Itertools;
 use mz_dyncfg::Config;
 use mz_ore::cast::CastFrom;
 use mz_ore::error::ErrorExt;
@@ -50,7 +49,7 @@ use crate::internal::machine::Machine;
 use crate::internal::maintenance::RoutineMaintenance;
 use crate::internal::metrics::ShardMetrics;
 use crate::internal::state::{HollowBatch, RunMeta, RunOrder, RunPart};
-use crate::internal::trace::{ApplyMergeResult, FueledMergeRes};
+use crate::internal::trace::{ApplyMergeResult, FueledMergeRes, SpineId};
 use crate::iter::{Consolidator, LowerBound, StructuredSort};
 use crate::{Metrics, PersistConfig, ShardId};
 
@@ -794,77 +793,86 @@ where
         Vec<(&'a RunId, &'a Description<T>, &'a RunMeta, &'a [RunPart<T>])>,
         usize,
     )> {
-        // Group the runs by the SpineId they belong to.
-        let ordered_chunks = ordered_runs
-            .into_iter()
-            .chunk_by(|(run_id, _, _, _)| run_id.0)
-            .into_iter()
-            .map(|(id, chunk)| (id, chunk.collect()))
-            .collect::<Vec<(_, Vec<_>)>>();
+        // Group runs by SpineId
+        let grouped: BTreeMap<SpineId, Vec<_>> = ordered_runs
+            .iter()
+            .map(|(run_id, desc, meta, parts)| (run_id.0, (run_id, *desc, *meta, &**parts)))
+            .fold(BTreeMap::new(), |mut acc, item| {
+                acc.entry(item.0).or_default().push(item.1);
+                acc
+            });
 
-        let groups = if ordered_chunks.iter().all(|(_, chunk)| chunk.len() == 1) {
-            // If each chunk has only one run, we can just flatten it into a single list.
-            vec![
-                ordered_chunks
-                    .into_iter()
-                    .flat_map(|(_, chunk)| chunk)
-                    .collect::<Vec<_>>(),
-            ]
-        } else {
-            ordered_chunks
-                .into_iter()
-                .map(|(_id, chunk)| chunk)
-                .collect::<Vec<_>>()
-        };
+        let all_batches_have_one_run = grouped.values().all(|runs| runs.len() <= 1);
 
-        let mut chunks = vec![];
-        for ordered_runs in groups {
-            let mut current_chunk = vec![];
-            let mut current_chunk_max_memory_usage = 0;
-            let mut ordered_runs = ordered_runs.into_iter().peekable();
-            while let Some((run_id, desc, meta, run)) = ordered_runs.next() {
-                let run_greatest_part_size = run
+        let mut chunks = Vec::new();
+
+        if all_batches_have_one_run {
+            // All batches have ≤1 run — compact across batches
+            let mut current_chunk = Vec::new();
+            let mut current_memory = 0;
+
+            for (_spine_id, mut runs) in grouped.into_iter() {
+                let (run_id, desc, meta, parts) = runs.pop().unwrap(); // safe: len <= 1
+
+                let run_size = parts
                     .iter()
-                    .map(|x| x.max_part_bytes())
+                    .map(|p| p.max_part_bytes())
                     .max()
                     .unwrap_or(cfg.batch.blob_target_size);
-                current_chunk.push((run_id, *desc, *meta, &**run));
-                current_chunk_max_memory_usage += run_greatest_part_size;
 
-                if let Some((_next_run_id, _next_desc, _next_meta, next_run)) = ordered_runs.peek()
+                if !current_chunk.is_empty()
+                    && current_memory + run_size > run_reserved_memory_bytes
                 {
-                    let next_run_greatest_part_size = next_run
+                    chunks.push((std::mem::take(&mut current_chunk), current_memory));
+                    current_memory = 0;
+                }
+
+                current_chunk.push((run_id, desc, meta, &*parts));
+                current_memory += run_size;
+
+                if current_chunk.len() == 1 && current_memory > run_reserved_memory_bytes {
+                    metrics.compaction.memory_violations.inc();
+                    chunks.push((std::mem::take(&mut current_chunk), current_memory));
+                    current_memory = 0;
+                }
+            }
+
+            if !current_chunk.is_empty() {
+                chunks.push((current_chunk, current_memory));
+            }
+        } else {
+            // Some batches have >1 run — compact only within each batch
+            for (_spine_id, runs) in grouped.into_iter() {
+                let mut current_chunk = Vec::new();
+                let mut current_memory = 0;
+
+                for (run_id, desc, meta, parts) in runs {
+                    let run_size = parts
                         .iter()
-                        .map(|x| x.max_part_bytes())
+                        .map(|p| p.max_part_bytes())
                         .max()
                         .unwrap_or(cfg.batch.blob_target_size);
 
-                    // if we can fit the next run in our chunk without going over our reserved memory, we should do so
-                    if current_chunk_max_memory_usage + next_run_greatest_part_size
-                        <= run_reserved_memory_bytes
+                    if !current_chunk.is_empty()
+                        && current_memory + run_size > run_reserved_memory_bytes
                     {
-                        continue;
+                        chunks.push((std::mem::take(&mut current_chunk), current_memory));
+                        current_memory = 0;
                     }
 
-                    // NB: There's an edge case where we cannot fit at least 2 runs into a chunk
-                    // with our reserved memory. This could happen if blobs were written with a
-                    // larger target size than the current build. When this happens, we violate
-                    // our memory requirement and force chunks to be at least length 2, so that we
-                    // can be assured runs are merged and converge over time.
-                    if current_chunk.len() == 1 {
-                        // in the steady state we expect this counter to be 0, and would only
-                        // anticipate it being temporarily nonzero if we changed target blob size
-                        // or our memory requirement calculations
+                    current_chunk.push((run_id, desc, meta, &*parts));
+                    current_memory += run_size;
+
+                    if current_chunk.len() == 1 && current_memory > run_reserved_memory_bytes {
                         metrics.compaction.memory_violations.inc();
-                        continue;
+                        chunks.push((std::mem::take(&mut current_chunk), current_memory));
+                        current_memory = 0;
                     }
                 }
 
-                chunks.push((
-                    std::mem::take(&mut current_chunk),
-                    current_chunk_max_memory_usage,
-                ));
-                current_chunk_max_memory_usage = 0;
+                if !current_chunk.is_empty() {
+                    chunks.push((current_chunk, current_memory));
+                }
             }
         }
 
@@ -1161,6 +1169,7 @@ where
             prefetch_budget_bytes,
         );
 
+        //TODO: Sanity check this desc
         for (desc, meta, parts) in runs {
             consolidator.enqueue_run(desc, meta, parts.iter().cloned());
         }
@@ -1200,6 +1209,7 @@ where
                 break;
             };
 
+            // I think this desc might be wrong(?)
             batch.flush_part(desc.clone(), updates).await;
 
             if let Some(tx) = incremental_tx.as_ref() {
