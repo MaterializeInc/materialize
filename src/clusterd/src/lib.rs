@@ -41,7 +41,7 @@ use mz_storage_types::connections::ConnectionContext;
 use mz_txn_wal::operator::TxnsContext;
 use tokio::runtime::Handle;
 use tower::Service;
-use tracing::{error, info};
+use tracing::{error, info, warn};
 
 mod usage_metrics;
 
@@ -211,6 +211,12 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
 
     mz_alloc::register_metrics_into(&metrics_registry).await;
     mz_metrics::register_metrics_into(&metrics_registry, mz_dyncfgs::all_dyncfgs()).await;
+
+    if let Some(memory_limit) = args.announce_memory_limit {
+        mz_compute::lgalloc::start_limiter(memory_limit, &metrics_registry);
+    } else {
+        warn!("no memory limit announced; disabling lgalloc limiter");
+    }
 
     let secrets_reader = args
         .secrets
