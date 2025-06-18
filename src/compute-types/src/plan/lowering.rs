@@ -11,6 +11,7 @@
 
 use std::collections::BTreeMap;
 
+use columnar::Len;
 use mz_expr::JoinImplementation::{DeltaQuery, Differential, IndexedFilter, Unimplemented};
 use mz_expr::{
     AggregateExpr, Id, JoinInputMapper, MapFilterProject, MirRelationExpr, MirScalarExpr,
@@ -19,6 +20,7 @@ use mz_expr::{
 use mz_ore::{assert_none, soft_assert_eq_or_log, soft_panic_or_log};
 use mz_repr::GlobalId;
 use mz_repr::optimize::OptimizerFeatures;
+use timely::Container;
 use timely::progress::Timestamp;
 
 use crate::dataflows::{BuildDesc, DataflowDescription, IndexImport};
@@ -859,10 +861,19 @@ This is not expected to cause incorrect results, but could indicate a performanc
                 if new_keys.is_empty() {
                     (input, input_keys)
                 } else {
-                    let new_keys = new_keys.iter().cloned().map(|k| {
-                        let (permutation, thinning) = permutation_for_arrangement(&k, arity);
-                        (k, permutation, thinning)
-                    });
+                    let mut new_keys = new_keys
+                        .iter()
+                        .cloned()
+                        .map(|k| {
+                            let (permutation, thinning) = permutation_for_arrangement(&k, arity);
+                            (k, permutation, thinning)
+                        })
+                        .collect::<Vec<_>>();
+                    let forms = AvailableCollections {
+                        raw: input_keys.raw,
+                        arranged: new_keys.clone(),
+                        types: Some(input_types.clone()),
+                    };
                     let (input_key, input_mfp) = if let Some((input_key, permutation, thinning)) =
                         input_keys.arbitrary_arrangement()
                     {
@@ -872,7 +883,7 @@ This is not expected to cause incorrect results, but could indicate a performanc
                     } else {
                         (None, MapFilterProject::new(arity))
                     };
-                    input_keys.arranged.extend(new_keys);
+                    input_keys.arranged.append(&mut new_keys);
                     input_keys.arranged.sort_by(|k1, k2| k1.0.cmp(&k2.0));
 
                     // Return the plan and extended keys.
@@ -880,7 +891,7 @@ This is not expected to cause incorrect results, but could indicate a performanc
                     (
                         PlanNode::ArrangeBy {
                             input: Box::new(input),
-                            forms: input_keys.clone(),
+                            forms,
                             input_key,
                             input_mfp,
                         }
@@ -1096,6 +1107,7 @@ This is not expected to cause incorrect results, but could indicate a performanc
                 (None, MapFilterProject::new(arity))
             };
             let lir_id = self.allocate_lir_id();
+
             PlanNode::ArrangeBy {
                 input: Box::new(plan),
                 forms: collections,
