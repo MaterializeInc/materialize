@@ -1394,6 +1394,19 @@ impl<T: Timestamp + Lattice + Codec64> SpineBatch<T> {
                     .all(|p| p.batch.run_meta.len() <= 1),
                 "all parts in the range must have at most one run"
             );
+            if !self.parts[replacement_range.clone()]
+                .iter()
+                .all(|p| p.batch.run_meta.len() <= 1)
+            {
+                info!("all parts in the range must have at most one run");
+                //log the parts for debugging
+                for (i, part) in self.parts[replacement_range.clone()].iter().enumerate() {
+                    info!(
+                        "part {}: {:?} with runs {:?}",
+                        i, part.batch.desc, part.batch.run_meta
+                    );
+                }
+            }
 
             if let (Some(old_diffs_sum), Some(new_diffs_sum)) = (old_diffs_sum, new_diffs_sum) {
                 assert_eq!(
