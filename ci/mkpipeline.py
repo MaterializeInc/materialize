@@ -355,7 +355,7 @@ def prioritize_pipeline(pipeline: Any, priority: int) -> None:
 def switch_jobs_to_aws(pipeline: Any, priority: int) -> None:
     """Switch jobs to AWS if Hetzner is currently overloaded"""
 
-    branch = os.getenv("BUILDKITE_BRANCH")
+    # branch = os.getenv("BUILDKITE_BRANCH")
 
     # If Hetzner is entirely broken, you have to take these actions to switch everything back to AWS:
     # - CI_FORCE_SWITCH_TO_AWS env variable to 1
@@ -363,16 +363,19 @@ def switch_jobs_to_aws(pipeline: Any, priority: int) -> None:
     # - Reconfigure the agent from hetzner-aarch64-4cpu-8gb to linux-aarch64-small in ci/mkpipeline.sh
 
     stuck: set[str] = set()
+    # TODO(def-): Remove me when Hetzner fixes its aarch64 availability
+    stuck.add("aarch64")
 
     if ui.env_is_truthy("CI_FORCE_SWITCH_TO_AWS", "0"):
         stuck = set(["x86-64", "x86-64-dedi", "aarch64"])
     else:
+        # TODO(def-): Reenable me when Hetzner fixes its aarch64 availability
         # If priority has manually been set to be low, or on main branch, we can
         # wait for agents to become available
-        if branch == "main" or priority < 0:
-            return
+        # if branch == "main" or priority < 0:
+        #     return
 
-        # Consider Hetzner to be overloaded/broken when an important job is stuck waiting for an agent for > 30 minutes, once for x86-64 and once for aarch64
+        # Consider Hetzner to be overloaded/broken when an important job is stuck waiting for an agent for > 60 minutes, per arch (x86-64/x86-64-dedi/aarch64)
         try:
             builds = generic_api.get_multiple(
                 "builds",
