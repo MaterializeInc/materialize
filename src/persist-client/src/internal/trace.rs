@@ -1024,21 +1024,13 @@ impl<T: Timestamp + Lattice + Codec64> SpineBatch<T> {
         for &run_id in run_ids {
             for (i, meta) in batch.run_meta.iter().enumerate() {
                 if meta.uuid == Some(run_id) {
-                    // If the run_id is found, we use its index.
-                    // If the run_id is not found, we skip it.
-                    if i == 0 {
-                        if batch.run_splits.is_empty() {
-                            // If there are no splits, we take all parts.
-                            parts.extend_from_slice(&batch.parts);
-                        } else {
-                            // If there are splits, we take the first split.
-                            parts.extend_from_slice(&batch.parts[..batch.run_splits[0]]);
-                        }
-                    } else {
-                        // Otherwise, we start from the previous run's split.
-                        let start = batch.run_splits[i - 1];
-                        parts.extend_from_slice(&batch.parts[start..batch.run_splits[i]]);
-                    }
+                    let start = if i == 0 { 0 } else { batch.run_splits[i - 1] };
+                    let end = batch
+                        .run_splits
+                        .get(i)
+                        .copied()
+                        .unwrap_or(batch.parts.len());
+                    parts.extend_from_slice(&batch.parts[start..end]);
                 }
             }
         }
@@ -1547,7 +1539,11 @@ impl<T: Timestamp + Lattice + Codec64> SpineBatch<T> {
             return ApplyMergeResult::NotAppliedTooManyUpdates;
         }
 
+        // info!("original hollow batch {:#?}", self);
+
         *self = new_spine_batch;
+
+        // info!("new hollow batch {:#?}", self);
 
         if range.start == 0 && range.end == orig_num_parts {
             ApplyMergeResult::AppliedExact
