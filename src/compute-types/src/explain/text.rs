@@ -26,6 +26,7 @@ use std::ops::Deref;
 use itertools::{Itertools, izip};
 use mz_expr::explain::{HumanizedExplain, HumanizerMode, fmt_text_constant_rows};
 use mz_expr::{Id, MirScalarExpr};
+use mz_ore::soft_assert_or_log;
 use mz_ore::str::{IndentLike, StrExt, separated};
 use mz_repr::explain::text::DisplayText;
 use mz_repr::explain::{
@@ -498,17 +499,30 @@ impl Plan {
                 input_mfp,
             } => {
                 if forms.raw && forms.arranged.is_empty() {
+                    soft_assert_or_log!(forms.raw, "raw stream with no arrangements");
                     writeln!(f, "{}→Unarranged Raw Stream{annotations}", ctx.indent)?;
                 } else {
-                    writeln!(f, "{}→Arrange{annotations}", ctx.indent)?;
+                    write!(f, "{}→Arrange", ctx.indent)?;
+
+                    if forms.arranged.len() > 0 {
+                        let mode = HumanizedExplain::new(ctx.config.redacted);
+                        for (key, _, _) in &forms.arranged {
+                            if !key.is_empty() {
+                                let key = mode.seq(key, None);
+                                let key = CompactScalars(key);
+                                write!(f, " ({key})")?;
+                            } else {
+                                write!(f, " (empty key)")?;
+                            }
+                        }
+                        writeln!(f, "{annotations}")?;
+                    }
                 }
+
                 ctx.indented(|ctx| {
                     if !input_mfp.expressions.is_empty() || !input_mfp.predicates.is_empty() {
                         writeln!(f, "{}Pre-process Map/Filter/Project", ctx.indent)?;
                         ctx.indented(|ctx| mode.expr(input_mfp, None).fmt_default_text(f, ctx))?;
-                    }
-                    if !forms.arranged.is_empty() {
-                        forms.fmt_text(f, ctx)?;
                     }
 
                     input.fmt_text(f, ctx)

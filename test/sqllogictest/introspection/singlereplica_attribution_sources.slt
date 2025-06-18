@@ -60,11 +60,11 @@ GROUP BY global_id, lir_id, operator, parent_lir_id, nesting
 ORDER BY global_id, lir_id DESC;
 ----
 u2  5  NULL  Differential␠Join␠%0␠»␠%1
-u2  4  5  ␠␠Arrange
+u2  4  5  ␠␠Arrange␠(#0)
 u2  3  4  ␠␠␠␠Read␠u1
-u2  2  5  ␠␠Arrange
+u2  2  5  ␠␠Arrange␠(#0)
 u2  1  2  ␠␠␠␠Read␠u1
-u3  7  NULL  Arrange
+u3  7  NULL  Arrange␠(#0)
 u3  6  7  ␠␠Stream␠u2
 
 # omitting pg_size_pretty(sum(size)) as size
@@ -77,11 +77,11 @@ GROUP BY global_id, lir_id, operator, parent_lir_id, nesting
 ORDER BY global_id, lir_id DESC;
 ----
 u2  5  NULL  Differential␠Join␠%0␠»␠%1
-u2  4  5  ␠␠Arrange
+u2  4  5  ␠␠Arrange␠(#0)
 u2  3  4  ␠␠␠␠Read␠u1
-u2  2  5  ␠␠Arrange
+u2  2  5  ␠␠Arrange␠(#0)
 u2  1  2  ␠␠␠␠Read␠u1
-u3  7  NULL  Arrange
+u3  7  NULL  Arrange␠(#0)
 u3  6  7  ␠␠Stream␠u2
 
 statement ok
@@ -143,9 +143,9 @@ GROUP BY global_id, lir_id, operator, parent_lir_id, nesting
 ORDER BY global_id, lir_id DESC;
 ----
 t44  5  NULL  Differential␠Join␠%0␠»␠%1
-t44  4  5  ␠␠Arrange
+t44  4  5  ␠␠Arrange␠(#0)
 t44  3  4  ␠␠␠␠Read␠u4
-t44  2  5  ␠␠Arrange
+t44  2  5  ␠␠Arrange␠(#0)
 t44  1  2  ␠␠␠␠Read␠u4
 
 # omitting pg_size_pretty(sum(size)) as size
@@ -158,9 +158,9 @@ GROUP BY global_id, lir_id, operator, parent_lir_id, nesting
 ORDER BY global_id, lir_id DESC;
 ----
 t44  5  NULL  Differential␠Join␠%0␠»␠%1
-t44  4  5  ␠␠Arrange
+t44  4  5  ␠␠Arrange␠(#0)
 t44  3  4  ␠␠␠␠Read␠u4
-t44  2  5  ␠␠Arrange
+t44  2  5  ␠␠Arrange␠(#0)
 t44  1  2  ␠␠␠␠Read␠u4
 
 statement ok
@@ -420,7 +420,7 @@ ORDER BY global_id, lir_id DESC;
 t69  Returning␠Distinct␠GroupAggregate
 t69  ␠␠Union
 t69  ␠␠␠␠Differential␠Join␠%0␠»␠%1
-t69  ␠␠␠␠␠␠Arrange
+t69  ␠␠␠␠␠␠Arrange␠(#0)
 t69  ␠␠␠␠␠␠␠␠Stream␠l0
 t69  ␠␠␠␠␠␠Arranged␠u15
 t69  ␠␠␠␠Arranged␠u13
@@ -428,30 +428,30 @@ t69  With␠Recursive␠l0␠=␠Unarranged␠Raw␠Stream
 t69  ␠␠Distinct␠GroupAggregate
 t69  ␠␠␠␠Union
 t69  ␠␠␠␠␠␠Differential␠Join␠%0␠»␠%1
-t69  ␠␠␠␠␠␠␠␠Arrange
+t69  ␠␠␠␠␠␠␠␠Arrange␠(#0)
 t69  ␠␠␠␠␠␠␠␠␠␠Read␠l0
-t69  ␠␠␠␠␠␠␠␠Arrange
+t69  ␠␠␠␠␠␠␠␠Arrange␠(#1)
 t69  ␠␠␠␠␠␠␠␠␠␠Arranged␠u15
 t69  ␠␠␠␠␠␠Differential␠Join␠%1␠»␠%0
 t69  ␠␠␠␠␠␠␠␠Arranged␠u13
-t69  ␠␠␠␠␠␠␠␠Arrange
+t69  ␠␠␠␠␠␠␠␠Arrange␠(#1)
 t69  ␠␠␠␠␠␠␠␠␠␠Arranged␠u15
 t69  ␠␠␠␠␠␠Arranged␠u13
-u10  Arrange
+u10  Arrange␠(#1)
 u10  ␠␠Stream␠u9
-u11  Arrange
+u11  Arrange␠(#2)
 u11  ␠␠Arranged␠u9
-u12  Arrange
+u12  Arrange␠(#1,␠#2)
 u12  ␠␠Arranged␠u9
-u14  Arrange
+u14  Arrange␠(#1)
 u14  ␠␠Stream␠u13
-u16  Arrange
+u16  Arrange␠(#1)
 u16  ␠␠Stream␠u15
-u18  Arrange
+u18  Arrange␠(#1)
 u18  ␠␠Stream␠u17
-u19  Arrange
+u19  Arrange␠(#12)
 u19  ␠␠Arranged␠u17
-u20  Arrange
+u20  Arrange␠(#9)
 u20  ␠␠Arranged␠u17
 u21  Returning␠Union
 u21  ␠␠Read␠l0
@@ -461,15 +461,15 @@ u21  ␠␠Accumulable␠GroupAggregate
 u21  ␠␠␠␠Delta␠Join␠[%0␠»␠%1␠»␠%2][%1␠»␠%0␠»␠%2][%2␠»␠%0␠»␠%1]
 u21  ␠␠␠␠␠␠Arranged␠u9
 u21  ␠␠␠␠␠␠Arranged␠u17
-u21  ␠␠␠␠␠␠Arrange
+u21  ␠␠␠␠␠␠Arrange␠(empty␠key)␠(#1)
 u21  ␠␠␠␠␠␠␠␠Arranged␠u17
-u22  Arrange
+u22  Arrange␠(#0)
 u22  ␠␠Stream␠u21
 u23  Returning␠Differential␠Join␠%1␠»␠%0
-u23  ␠␠Arrange
+u23  ␠␠Arrange␠(#0)
 u23  ␠␠␠␠Bucketed␠Hierarchical␠GroupAggregate␠(buckets:␠268435456␠16777216␠1048576␠65536␠4096␠256␠16)
 u23  ␠␠␠␠␠␠Read␠l5
-u23  ␠␠Arrange
+u23  ␠␠Arrange␠(#2)
 u23  ␠␠␠␠Stream␠l5
 u23  With␠Recursive␠l7␠=␠Union
 u23  ␠␠Map/Filter/Project
@@ -484,19 +484,19 @@ u23  ␠␠␠␠Arranged␠l5
 u23  l5␠=␠Unarranged␠Raw␠Stream
 u23  ␠␠Bucketed␠Hierarchical␠GroupAggregate␠(buckets:␠268435456␠16777216␠1048576␠65536␠4096␠256␠16)
 u23  ␠␠␠␠Differential␠Join␠%0␠»␠%1
-u23  ␠␠␠␠␠␠Arrange
+u23  ␠␠␠␠␠␠Arrange␠(#1)
 u23  ␠␠␠␠␠␠␠␠Read␠l4
-u23  ␠␠␠␠␠␠Arrange
+u23  ␠␠␠␠␠␠Arrange␠(#1)
 u23  ␠␠␠␠␠␠␠␠Read␠l3
 u23  l4␠=␠Non-monotonic␠TopK
 u23  ␠␠Union
 u23  ␠␠␠␠Delta␠Join␠[%0␠»␠%2␠»␠%1][%1␠»␠%0␠»␠%2][%2␠»␠%0␠»␠%1]
 u23  ␠␠␠␠␠␠Arranged␠l1
 u23  ␠␠␠␠␠␠Arranged␠l2
-u23  ␠␠␠␠␠␠Arrange
+u23  ␠␠␠␠␠␠Arrange␠(empty␠key)␠(#1)
 u23  ␠␠␠␠␠␠␠␠Read␠l4
 u23  ␠␠␠␠Differential␠Join␠%1␠»␠%0
-u23  ␠␠␠␠␠␠Arrange
+u23  ␠␠␠␠␠␠Arrange␠(#0)
 u23  ␠␠␠␠␠␠␠␠Constant␠(1␠rows)
 u23  ␠␠␠␠␠␠Arranged␠l0
 u23  l3␠=␠Non-monotonic␠TopK
@@ -504,13 +504,13 @@ u23  ␠␠Union
 u23  ␠␠␠␠Delta␠Join␠[%0␠»␠%2␠»␠%1][%1␠»␠%0␠»␠%2][%2␠»␠%0␠»␠%1]
 u23  ␠␠␠␠␠␠Arranged␠l1
 u23  ␠␠␠␠␠␠Arranged␠l2
-u23  ␠␠␠␠␠␠Arrange
+u23  ␠␠␠␠␠␠Arrange␠(empty␠key)␠(#1)
 u23  ␠␠␠␠␠␠␠␠Read␠l3
 u23  ␠␠␠␠Differential␠Join␠%1␠»␠%0
-u23  ␠␠␠␠␠␠Arrange
+u23  ␠␠␠␠␠␠Arrange␠(#0)
 u23  ␠␠␠␠␠␠␠␠Constant␠(1␠rows)
 u23  ␠␠␠␠␠␠Arranged␠l0
-u23  l2␠=␠Arrange
+u23  l2␠=␠Arrange␠(empty␠key)
 u23  ␠␠Union
 u23  ␠␠␠␠Map/Filter/Project
 u23  ␠␠␠␠␠␠Consolidating␠Union
@@ -520,11 +520,11 @@ u23  ␠␠␠␠␠␠␠␠␠␠Read␠l7
 u23  ␠␠␠␠Read␠l7
 u23  With␠l1␠=␠Arranged␠u21
 u23  l0␠=␠Arranged␠u6
-u24  Arrange
+u24  Arrange␠(#0)
 u24  ␠␠Stream␠u23
-u7  Arrange
+u7  Arrange␠(#1)
 u7  ␠␠Stream␠u6
-u8  Arrange
+u8  Arrange␠(#8)
 u8  ␠␠Arranged␠u6
 
 statement ok
@@ -556,7 +556,7 @@ ORDER BY mlm.global_id, lir_id DESC;
 ----
 u26  2  NULL  Non-monotonic␠TopK  8  7  3808  15.000
 u26  1  2  ␠␠Stream␠u25  NULL  NULL  NULL  NULL
-u27  4  NULL  Arrange  NULL  NULL  NULL  NULL
+u27  4  NULL  Arrange␠(#0)  NULL  NULL  NULL  NULL
 u27  3  4  ␠␠Stream␠u26  NULL  NULL  NULL  NULL
 
 # rebuild everything other stuff, make sure it all shows up as mappable objects
@@ -1047,7 +1047,7 @@ EOF
 query TIIIT
 EXPLAIN ANALYZE HINTS FOR INDEX v2_idx_x;
 ----
-Arrange  NULL  NULL  NULL  NULL
+Arrange␠(#0)  NULL  NULL  NULL  NULL
 ␠␠Stream␠u26  NULL  NULL  NULL  NULL
 Non-monotonic␠TopK  8  7  15  3808␠bytes
 ␠␠Stream␠u25  NULL  NULL  NULL  NULL

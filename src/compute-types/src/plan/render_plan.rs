@@ -17,6 +17,7 @@ use mz_expr::explain::{HumanizedExplain, HumanizerMode};
 use mz_expr::{
     CollectionPlan, EvalError, Id, LetRecLimit, LocalId, MapFilterProject, MirScalarExpr, TableFunc,
 };
+use mz_ore::soft_assert_or_log;
 use mz_proto::{IntoRustIfSome, ProtoMapEntry, ProtoType, RustType, TryFromProtoError};
 use mz_repr::explain::{CompactScalars, ExprHumanizer};
 use mz_repr::{Diff, GlobalId, Row};
@@ -985,10 +986,24 @@ impl<'a, T> std::fmt::Display for RenderPlanExprHumanizer<'a, T> {
                 input_key: _,
                 input_mfp: _,
             } => {
-                if forms.raw && forms.arranged.is_empty() {
+                if forms.arranged.is_empty() {
+                    soft_assert_or_log!(forms.raw, "raw stream with no arrangements");
                     write!(f, "Unarranged Raw Stream")
                 } else {
-                    write!(f, "Arrange")
+                    write!(f, "Arrange")?;
+                    if forms.arranged.len() > 0 {
+                        let mode = HumanizedExplain::new(false);
+                        for (key, _, _) in &forms.arranged {
+                            if !key.is_empty() {
+                                let key = mode.seq(key, None);
+                                let key = CompactScalars(key);
+                                write!(f, " ({key})")?;
+                            } else {
+                                write!(f, " (empty key)")?;
+                            }
+                        }
+                    }
+                    Ok(())
                 }
             }
         }
