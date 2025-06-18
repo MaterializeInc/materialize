@@ -130,8 +130,6 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
             "cargo",
             "llvm-cov",
             "nextest",
-            "--build-jobs",
-            str(multiprocessing.cpu_count() // 2),
             "--release",
             "--no-clean",
             "--workspace",
@@ -217,8 +215,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
                         "-Zbuild-std",
                         "--target",
                         SANITIZER_TARGET,
-                        # The ci target fails to find any tests because of https://github.com/nextest-rs/nextest/issues/910
-                        "--profile=dev",
+                        "--profile=ci",
                     ],
                 )
             else:
@@ -233,9 +230,6 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
                     ],
                     env=env,
                 )
-
-            cpu_count = os.cpu_count()
-            assert cpu_count
 
             partition = buildkite.get_parallelism_index() + 1
             total = buildkite.get_parallelism_count()
@@ -267,8 +261,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
                                 pkg["name"],
                                 "--no-default-features",
                                 "--profile=sanitizer",
-                                # The ci target fails to find any tests because of https://github.com/nextest-rs/nextest/issues/910
-                                "--cargo-profile=dev",
+                                "--cargo-profile=ci",
                                 f"--partition=count:{partition}/{total}",
                                 # We want all tests to run
                                 "--no-fail-fast",
@@ -292,6 +285,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
                         "--all-features",
                         "--profile=ci",
                         "--cargo-profile=ci",
+                        f"--test-threads={multiprocessing.cpu_count() * 2}",
                         f"--partition=count:{partition}/{total}",
                         *args.args,
                     ],
