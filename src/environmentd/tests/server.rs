@@ -251,33 +251,39 @@ fn test_statement_logging_immediate() {
         thread::sleep(Duration::from_millis(10));
     }
 
-    // Statement logging happens async, give it a chance to catch up
-    thread::sleep(Duration::from_secs(10));
-
     let mut client = server.connect_internal(postgres::NoTls).unwrap();
-    let sl = client
-        .query(
-            "
-SELECT
-    mseh.sample_rate,
-    mseh.began_at,
-    mseh.finished_at,
-    mseh.finished_status,
-    mst.sql,
-    mpsh.prepared_at,
-    mst.redacted_sql
-FROM
-    mz_internal.mz_statement_execution_history AS mseh
+    let seh_query = "
+        SELECT
+            mseh.sample_rate,
+            mseh.began_at,
+            mseh.finished_at,
+            mseh.finished_status,
+            mst.sql,
+            mpsh.prepared_at,
+            mst.redacted_sql
+        FROM mz_internal.mz_statement_execution_history AS mseh
         LEFT JOIN
             mz_internal.mz_prepared_statement_history AS mpsh
             ON mseh.prepared_statement_id = mpsh.id
         JOIN
             (SELECT DISTINCT sql, sql_hash, redacted_sql FROM mz_internal.mz_sql_text) mst
             ON mpsh.sql_hash = mst.sql_hash
-ORDER BY mseh.began_at;",
-            &[],
-        )
-        .unwrap();
+        WHERE mst.sql !~~ '%mz_statement_execution_history%'
+        ORDER BY mseh.began_at";
+
+    // Statement logging happens async, retry until we get the expected number of logged
+    // statements.
+    let mut sl = Vec::new();
+    for _ in 0..10 {
+        thread::sleep(Duration::from_secs(1));
+        sl = client.query(seh_query, &[]).unwrap();
+        if sl.len() >= successful_immediates.len() {
+            break;
+        }
+    }
+
+    assert_eq!(sl.len(), successful_immediates.len());
+
     #[derive(Debug)]
     struct Record {
         sample_rate: f64,
@@ -288,7 +294,6 @@ ORDER BY mseh.began_at;",
         prepared_at: DateTime<Utc>,
         redacted_sql: String,
     }
-    assert_eq!(sl.len(), successful_immediates.len());
     for (r, stmt) in std::iter::zip(sl.iter(), successful_immediates) {
         let r = Record {
             sample_rate: r.get(0),
@@ -577,9 +582,37 @@ fn test_statement_logging_subscribes() {
     }
     handle.join().unwrap();
 
-    // Statement logging happens async, give it a chance to catch up
-    thread::sleep(Duration::from_secs(5));
     let mut client = server.connect_internal(postgres::NoTls).unwrap();
+    let seh_query = "
+        SELECT
+            mseh.sample_rate,
+            mseh.began_at,
+            mseh.finished_at,
+            mseh.finished_status,
+            mpsh.prepared_at,
+            mseh.execution_strategy
+        FROM mz_internal.mz_statement_execution_history AS mseh
+        LEFT JOIN
+            mz_internal.mz_prepared_statement_history AS mpsh
+            ON mseh.prepared_statement_id = mpsh.id
+        JOIN
+            mz_internal.mz_sql_text AS mst
+            ON mpsh.sql_hash = mst.sql_hash
+        WHERE mst.sql ~~ 'SUBSCRIBE%'
+        ORDER BY mseh.began_at";
+
+    // Statement logging happens async, retry until we get the expected number of logged
+    // statements.
+    let mut sl = Vec::new();
+    for _ in 0..10 {
+        thread::sleep(Duration::from_secs(1));
+        sl = client.query(seh_query, &[]).unwrap();
+        if sl.len() >= 2 {
+            break;
+        }
+    }
+
+    assert_eq!(sl.len(), 2);
 
     struct Record {
         sample_rate: f64,
@@ -589,28 +622,8 @@ fn test_statement_logging_subscribes() {
         prepared_at: DateTime<Utc>,
         execution_strategy: Option<String>,
     }
-    let sl_subscribes = client
-        .query(
-            "SELECT
-    mseh.sample_rate,
-    mseh.began_at,
-    mseh.finished_at,
-    mseh.finished_status,
-    mpsh.prepared_at,
-    mseh.execution_strategy
-FROM
-    mz_internal.mz_statement_execution_history AS mseh
-        LEFT JOIN
-            mz_internal.mz_prepared_statement_history AS mpsh
-            ON mseh.prepared_statement_id = mpsh.id
-        JOIN
-            mz_internal.mz_sql_text AS mst
-            ON mpsh.sql_hash = mst.sql_hash
-WHERE mst.sql ~~ 'SUBSCRIBE%'
-ORDER BY mseh.began_at",
-            &[],
-        )
-        .unwrap()
+
+    let sl_subscribes = sl
         .into_iter()
         .map(|r| Record {
             sample_rate: r.get(0),
@@ -621,10 +634,6 @@ ORDER BY mseh.began_at",
             execution_strategy: r.get(5),
         })
         .collect::<Vec<_>>();
-    assert_eq!(
-        sl_subscribes.len(), // 3
-        2
-    );
     for r in &sl_subscribes {
         assert_eq!(r.sample_rate, 1.0);
         assert!(r.prepared_at <= r.began_at);
@@ -650,28 +659,7 @@ fn test_statement_logging_sampling_inner(
         // of logged statements non-deterministic when we retrieve them below.
         thread::sleep(Duration::from_millis(10));
     }
-    // Statement logging happens async, give it a chance to catch up
-    thread::sleep(Duration::from_secs(5));
-    let mut internal_client = server.connect_internal(postgres::NoTls).unwrap();
-    let sqls: Vec<String> = internal_client
-        .query(
-            "SELECT mst.sql
-FROM
-    mz_internal.mz_statement_execution_history AS mseh
-        JOIN
-            mz_internal.mz_prepared_statement_history AS mpsh
-            ON mseh.prepared_statement_id = mpsh.id
-        JOIN
-            mz_internal.mz_sql_text AS mst
-            ON mpsh.sql_hash = mst.sql_hash
-WHERE mst.sql ~~ 'SELECT%'
-ORDER BY mseh.began_at ASC;",
-            &[],
-        )
-        .unwrap()
-        .into_iter()
-        .map(|r| r.get(0))
-        .collect();
+
     // 23 randomly sampled out of 50 with 50% sampling. Seems legit!
     let expected_sqls = [
         2, 4, 5, 6, 9, 15, 17, 18, 19, 20, 21, 23, 24, 25, 31, 32, 33, 36, 37, 42, 46,
@@ -679,11 +667,36 @@ ORDER BY mseh.began_at ASC;",
     .into_iter()
     .map(|i| format!("SELECT {i}"))
     .collect::<Vec<_>>();
+
+    let mut internal_client = server.connect_internal(postgres::NoTls).unwrap();
+    let seh_query = "
+        SELECT mst.sql
+        FROM mz_internal.mz_statement_execution_history AS mseh
+        JOIN
+            mz_internal.mz_prepared_statement_history AS mpsh
+            ON mseh.prepared_statement_id = mpsh.id
+        JOIN
+            mz_internal.mz_sql_text AS mst
+            ON mpsh.sql_hash = mst.sql_hash
+        WHERE mst.sql ~~ 'SELECT%' AND mst.sql !~~ '%mz_statement_execution_history%'
+        ORDER BY mseh.began_at ASC";
+
+    // Statement logging happens async, retry until we get the expected number of logged
+    // statements.
+    let mut sl = Vec::new();
+    for _ in 0..10 {
+        thread::sleep(Duration::from_secs(1));
+        sl = internal_client.query(seh_query, &[]).unwrap();
+        if sl.len() >= expected_sqls.len() {
+            break;
+        }
+    }
+
+    let sqls: Vec<String> = sl.into_iter().map(|r| r.get(0)).collect();
     assert_eq!(sqls, expected_sqls);
 }
 
 #[mz_ore::test]
-#[ignore] // TODO: Reenable when database-issues#8967 is fixed
 fn test_statement_logging_sampling() {
     let (server, client) = setup_statement_logging(1.0, 0.5);
     test_statement_logging_sampling_inner(server, client);
@@ -692,7 +705,6 @@ fn test_statement_logging_sampling() {
 /// Test that we are not allowed to set `statement_logging_sample_rate`
 /// arbitrarily high, but that it is constrained by `statement_logging_max_sample_rate`.
 #[mz_ore::test]
-#[ignore] // TODO: Reenable when database-issues#8967 is fixed
 fn test_statement_logging_sampling_constrained() {
     let (server, client) = setup_statement_logging(0.5, 1.0);
     test_statement_logging_sampling_inner(server, client);
