@@ -15,9 +15,8 @@ from datetime import datetime, timedelta
 
 from pg8000.exceptions import InterfaceError
 
-from materialize.cloudtest.app.cloudtest_application_base import (
-    CloudtestApplicationBase,
-)
+from materialize import MZ_ROOT, mzbuild, ui
+from materialize.cloudtest import DEFAULT_K8S_CLUSTER_NAME, DEFAULT_K8S_CONTEXT_NAME
 from materialize.cloudtest.k8s.api.k8s_resource import K8sResource
 from materialize.cloudtest.k8s.cockroach import cockroach_resources
 from materialize.cloudtest.k8s.debezium import debezium_resources
@@ -37,12 +36,13 @@ from materialize.cloudtest.k8s.role_binding import AdminRoleBinding
 from materialize.cloudtest.k8s.ssh import ssh_resources
 from materialize.cloudtest.k8s.testdrive import TestdrivePod
 from materialize.cloudtest.k8s.vpc_endpoints_cluster_role import VpcEndpointsClusterRole
+from materialize.cloudtest.util.common import log_subprocess_error
 from materialize.cloudtest.util.wait import wait
 
 LOGGER = logging.getLogger(__name__)
 
 
-class MaterializeApplication(CloudtestApplicationBase):
+class MaterializeApplication(object):
     def __init__(
         self,
         release_mode: bool = True,
@@ -62,7 +62,12 @@ class MaterializeApplication(CloudtestApplicationBase):
             apply_node_selectors=apply_node_selectors,
         )
         self.apply_node_selectors = apply_node_selectors
-        super().__init__(release_mode, aws_region, log_filter)
+        self.release_mode = release_mode
+        self.aws_region = aws_region
+        self.mz_root = MZ_ROOT
+
+        self.resources = self.get_resources(log_filter)
+        self.images = self.get_images()
 
         # Register the VpcEndpoint CRD.
         self.register_vpc_endpoint()
@@ -246,3 +251,69 @@ class MaterializeApplication(CloudtestApplicationBase):
         assert result.returncode == 0, f"Got return code {result.returncode}"
 
         print(f"Node {node_name} is running again.")
+
+    def coverage_mode(self) -> bool:
+        return ui.env_is_truthy("CI_COVERAGE_ENABLED")
+
+    def sanitizer_mode(self) -> str:
+        return os.getenv("CI_SANITIZER", "none")
+
+    def bazel(self) -> bool:
+        return ui.env_is_truthy("CI_BAZEL_BUILD")
+
+    def bazel_remote_cache(self) -> str | None:
+        return os.getenv("CI_BAZEL_REMOTE_CACHE")
+
+    def kubectl(self, *args: str, namespace: str | None = None) -> str:
+        try:
+            cmd = ["kubectl", "--context", self.context(), *args]
+
+            if namespace is not None:
+                cmd.extend(["--namespace", namespace])
+
+            return subprocess.check_output(cmd, text=True)
+        except subprocess.CalledProcessError as e:
+            log_subprocess_error(e)
+            raise e
+
+    def context(self) -> str:
+        return DEFAULT_K8S_CONTEXT_NAME
+
+    def cluster_name(self) -> str:
+        return DEFAULT_K8S_CLUSTER_NAME
+
+    def acquire_images(self) -> None:
+        repo = mzbuild.Repository(
+            self.mz_root,
+            profile=(
+                mzbuild.Profile.RELEASE if self.release_mode else mzbuild.Profile.DEV
+            ),
+            coverage=self.coverage_mode(),
+            bazel=self.bazel(),
+            bazel_remote_cache=self.bazel_remote_cache(),
+        )
+        for image in self.images:
+            self._acquire_image(repo, image)
+
+    def _acquire_image(self, repo: mzbuild.Repository, image: str) -> None:
+        deps = repo.resolve_dependencies([repo.images[image]])
+        deps.acquire()
+        for dep in deps:
+            subprocess.check_call(
+                [
+                    "kind",
+                    "load",
+                    "docker-image",
+                    f"--name={self.cluster_name()}",
+                    dep.spec(),
+                ]
+            )
+
+    def create_resources(self) -> None:
+        self.acquire_images()
+        for resource in self.resources:
+            resource.create()
+
+    def create_resources_and_wait(self) -> None:
+        self.create_resources()
+        self.wait_resource_creation_completed()
