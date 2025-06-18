@@ -1380,12 +1380,6 @@ impl<T: Timestamp + Lattice + Codec64> SpineBatch<T> {
                 metrics,
             );
 
-            assert!(
-                self.parts[replacement_range.clone()]
-                    .iter()
-                    .all(|p| p.batch.run_meta.len() <= 1),
-                "all parts in the range must have at most one run"
-            );
             if !self.parts[replacement_range.clone()]
                 .iter()
                 .all(|p| p.batch.run_meta.len() <= 1)
@@ -1399,6 +1393,13 @@ impl<T: Timestamp + Lattice + Codec64> SpineBatch<T> {
                     );
                 }
             }
+
+            assert!(
+                self.parts[replacement_range.clone()]
+                    .iter()
+                    .all(|p| p.batch.run_meta.len() <= 1),
+                "all parts in the range must have at most one run"
+            );
 
             if let (Some(old_diffs_sum), Some(new_diffs_sum)) = (old_diffs_sum, new_diffs_sum) {
                 assert_eq!(
@@ -1539,11 +1540,11 @@ impl<T: Timestamp + Lattice + Codec64> SpineBatch<T> {
             return ApplyMergeResult::NotAppliedTooManyUpdates;
         }
 
-        // info!("original hollow batch {:#?}", self);
+        info!("original hollow batch {:#?}", self);
 
         *self = new_spine_batch;
 
-        // info!("new hollow batch {:#?}", self);
+        info!("new hollow batch {:#?}", self);
 
         if range.start == 0 && range.end == orig_num_parts {
             ApplyMergeResult::AppliedExact
