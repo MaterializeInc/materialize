@@ -749,6 +749,8 @@ where
                     None
                 };
 
+                assert_eq!(batch.desc, desc);
+
                 let res = CompactRes {
                     output: HollowBatch::new(
                         batch.desc,
@@ -1180,6 +1182,7 @@ where
             metrics.compaction.not_all_prefetched.inc();
         }
 
+        info!("beginning compaction for desc: {:?}", desc);
         loop {
             let mut chunks = vec![];
             let mut total_bytes = 0;
@@ -1211,6 +1214,7 @@ where
             };
 
             // I think this desc might be wrong(?)
+            info!("writing part with desc: {:?}", desc);
             batch.flush_part(desc.clone(), updates).await;
 
             if let Some(tx) = incremental_tx.as_ref() {
@@ -1236,7 +1240,9 @@ where
                 }
             }
         }
+        info!("writing batch with desc: {:?}", desc);
         let mut batch = batch.finish(desc.clone()).await?;
+        assert_eq!(batch.batch.desc, desc.clone());
 
         // We use compaction as a method of getting inline writes out of state,
         // to make room for more inline writes. This happens in
