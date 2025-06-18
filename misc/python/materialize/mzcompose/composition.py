@@ -808,6 +808,7 @@ class Composition:
         *args: str,
         rm: bool = False,
         mz_service: str | None = None,
+        quiet: bool = False,
     ) -> subprocess.CompletedProcess:
         if mz_service is not None:
             args = tuple(
@@ -823,7 +824,9 @@ class Composition:
             *args,
             rm=rm,
             # needed for sufficient error information in the junit.xml while still printing to stdout during execution
-            capture_and_print=True,
+            capture_and_print=not quiet,
+            capture=quiet,
+            capture_stderr=quiet,
             env_extra=environment,
         )
 

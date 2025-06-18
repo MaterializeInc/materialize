@@ -786,6 +786,16 @@ steps:
       # Faster agent since it currently compiles mz-debug itself
       queue: hetzner-aarch64-8cpu-16gb
 
+  - id: secrets-logging
+    label: "Secrets Logging"
+    depends_on: build-aarch64
+    timeout_in_minutes: 45
+    plugins:
+      - ./ci/plugins/mzcompose:
+          composition: secrets-logging
+    agents:
+      queue: hetzner-aarch64-4cpu-8gb
+
   - id: deploy-website
     label: Deploy website
     depends_on: lint-docs
