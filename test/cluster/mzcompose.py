@@ -1406,7 +1406,7 @@ def workflow_pg_snapshot_resumption(c: Composition) -> None:
         c.run_testdrive_files("pg-snapshot-resumption/03-ensure-source-down.td")
 
         # Temporarily disabled because it is timing out.
-        # https://github.com/MaterializeInc/database-issues/issues/4145
+        # TODO: Reenable when https://github.com/MaterializeInc/database-issues/issues/4145 is fixed
         # # clusterd should crash
         # c.run_testdrive_files("pg-snapshot-resumption/04-while-clusterd-down.td")
 
