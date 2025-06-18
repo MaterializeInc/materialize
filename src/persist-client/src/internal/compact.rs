@@ -1082,9 +1082,10 @@ where
         batch_cfg.inline_writes_single_max_bytes = 0;
 
         if let Some(batch_so_far) = batch_so_far.as_ref() {
-            let last_part = batch_so_far
-                .last_part(shard_id.clone(), &*blob, &metrics)
-                .await;
+            // let last_part = batch_so_far
+            //     .last_part(shard_id.clone(), &*blob, &metrics)
+            //     .await;
+            let last_part = None;
             if let Some(last_part) = last_part {
                 let fetched = EncodedPart::fetch(
                     shard_id,
