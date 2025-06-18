@@ -31,12 +31,8 @@ docker ps --all --quiet | xargs --no-run-if-empty docker inspect | jq '
   .[]
   | .Config.Env = ["[REDACTED]"]
   | .Config.Cmd = ["[REDACTED]"]
-  | .Args? |= map(
-      if contains("BEGIN PRIVATE KEY")
-      then "[REDACTED]"
-      else .
-      end
-    )' > docker-inspect.log
+  | .Config.Entrypoint = ["[REDACTED]"]
+  | .Args = ["[REDACTED]"]' > docker-inspect.log
 # services.log might already exist and contain logs from before composition was downed
 time=0
 if [ -f services.log ]; then

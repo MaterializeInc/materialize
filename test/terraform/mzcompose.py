@@ -1105,7 +1105,7 @@ def workflow_azure_temporary(c: Composition, parser: WorkflowArgumentParser) -> 
             assert username, "AZURE_SERVICE_ACCOUNT_USERNAME has to be set"
             assert password, "AZURE_SERVICE_ACCOUNT_PASSWORD has to be set"
             assert tenant, "AZURE_SERVICE_ACOUNT_TENANT has to be set"
-            spawn.runv(
+            subprocess.run(
                 [
                     "az",
                     "login",
