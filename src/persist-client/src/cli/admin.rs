@@ -501,6 +501,7 @@ where
                 req.clone(),
                 schemas,
                 &machine,
+                false, // incremental_enabled
             );
             pin_mut!(stream);
 

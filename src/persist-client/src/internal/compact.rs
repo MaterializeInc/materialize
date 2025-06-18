@@ -396,6 +396,10 @@ where
                             .inputs
                             .iter()
                             .all(|x| x.batch.runs().all(|(meta, _)| meta.uuid.is_some()));
+                        let incremental_enabled = INCREMENTAL_COMPACTIONS_SINGLE_RUN_ENABLED
+                            .get(&machine_clone.applier.cfg)
+                            && all_runs_have_uuids;
+
                         let stream = Self::compact_stream(
                             CompactConfig::new(
                                 &machine_clone.applier.cfg,
@@ -408,12 +412,10 @@ where
                             req.clone(),
                             compaction_schema,
                             &machine_clone,
+                            incremental_enabled,
                         );
 
-                        let maintenance = if INCREMENTAL_COMPACTIONS_SINGLE_RUN_ENABLED
-                            .get(&machine_clone.applier.cfg)
-                            && all_runs_have_uuids
-                        {
+                        let maintenance = if incremental_enabled {
                             let mut maintenance = RoutineMaintenance::default();
                             pin_mut!(stream);
                             while let Some(res) = stream.next().await {
@@ -598,6 +600,7 @@ where
         req: CompactReq<T>,
         write_schemas: Schemas<K, V>,
         machine: &Machine<K, V, T, D>,
+        incremental_enabled: bool,
     ) -> impl Stream<Item = Result<FueledMergeRes<T>, anyhow::Error>> {
         async_stream::stream! {
             let _ = Self::validate_req(&req)?;
@@ -656,6 +659,8 @@ where
                 Self::chunk_runs(&ordered_runs, &cfg, &*metrics, run_reserved_memory_bytes);
             let total_chunked_runs = chunked_runs.len();
 
+            info!("chunked_runs: {:?}", chunked_runs);
+
             let (incremental_tx, mut incremental_rx) = mpsc::channel(1);
 
             let machine = machine.clone();
@@ -690,27 +695,32 @@ where
                 let descriptions = runs.iter()
                     .map(|(_, desc, _, _)| desc.clone())
                     .collect::<Vec<_>>();
-                let desc_lower = descriptions
-                    .iter()
-                    .map(|desc| desc.lower())
-                    .cloned()
-                    .reduce(|a, b| a.meet(&b))
-                    .unwrap_or_else(|| req.desc.lower().clone());
-                let desc_upper = descriptions
-                    .iter()
-                    .map(|desc| desc.upper())
-                    .cloned()
-                    .reduce(|a, b| a.join(&b))
-                    .unwrap_or_else(|| req.desc.upper().clone());
                 let runs = runs.iter()
                     .map(|(_, desc, meta, run)| (desc.clone(), meta.clone(), run.clone()))
                     .collect::<Vec<_>>();
 
-                let desc = Description::new(
-                    desc_lower.clone(),
-                    desc_upper.clone(),
-                    req.desc.since().clone(),
-                );
+                let desc = if incremental_enabled {
+                    let desc_lower = descriptions
+                        .iter()
+                        .map(|desc| desc.lower())
+                        .cloned()
+                        .reduce(|a, b| a.meet(&b))
+                        .unwrap_or_else(|| req.desc.lower().clone());
+                    let desc_upper = descriptions
+                        .iter()
+                        .map(|desc| desc.upper())
+                        .cloned()
+                        .reduce(|a, b| a.join(&b))
+                        .unwrap_or_else(|| req.desc.upper().clone());
+
+                    Description::new(
+                        desc_lower.clone(),
+                        desc_upper.clone(),
+                        req.desc.since().clone(),
+                    )
+                } else {
+                    req.desc.clone()
+                };
 
                 let batch = Self::compact_runs(
                     &run_cfg,
@@ -882,87 +892,6 @@ where
 
         chunks
     }
-
-    // fn chunk_runs<'a>(
-    //     ordered_runs: &'a [(
-    //         RunId,
-    //         &'a Description<T>,
-    //         &'a RunMeta,
-    //         Cow<'a, [RunPart<T>]>,
-    //     )],
-    //     cfg: &CompactConfig,
-    //     metrics: &Metrics,
-    //     run_reserved_memory_bytes: usize,
-    // ) -> Vec<(
-    //     Vec<(&'a RunId, &'a Description<T>, &'a RunMeta, &'a [RunPart<T>])>,
-    //     usize,
-    // )> {
-    //     let ordered_chunks = ordered_runs
-    //         .iter()
-    //         .chunk_by(|(run_id, _, _, _)| run_id.0)
-    //         .into_iter()
-    //         .map(|(_id, group)| group.collect::<Vec<_>>())
-    //         .collect::<Vec<_>>();
-
-    //     let groups = if ordered_chunks.iter().all(|g| g.len() == 1) {
-    //         vec![ordered_chunks.into_iter().flatten().collect()]
-    //     } else {
-    //         ordered_chunks
-    //     };
-
-    //     let mut result = Vec::new();
-
-    //     for group in groups {
-    //         let mut chunk = Vec::new();
-    //         let mut mem_usage = 0;
-
-    //         let mut iter = group.into_iter().peekable();
-    //         while let Some((run_id, desc, meta, parts)) = iter.next() {
-    //             let part_size = parts
-    //                 .iter()
-    //                 .map(|x| x.max_part_bytes())
-    //                 .max()
-    //                 .unwrap_or(cfg.batch.blob_target_size);
-
-    //             chunk.push((run_id, *desc, *meta, &**parts));
-    //             mem_usage += part_size;
-
-    //             let next_fits = iter
-    //                 .peek()
-    //                 .map(|(_, _, _, next_parts)| {
-    //                     let next_size = next_parts
-    //                         .iter()
-    //                         .map(|x| x.max_part_bytes())
-    //                         .max()
-    //                         .unwrap_or(cfg.batch.blob_target_size);
-    //                     mem_usage + next_size <= run_reserved_memory_bytes
-    //                 })
-    //                 .unwrap_or(false);
-
-    //             let next_chunk_might_be_legal = iter.peek().is_some();
-
-    //             // Flush if either:
-    //             // - we can't fit the next run, and this chunk has at least 2 runs
-    //             // - we *could* fit the next run, but this chunk is already legal (2+ runs), so flush to get more chunks
-    //             if chunk.len() >= 2 && (!next_fits || next_chunk_might_be_legal) {
-    //                 result.push((std::mem::take(&mut chunk), mem_usage));
-    //                 mem_usage = 0;
-    //             }
-    //             // If this chunk is just one run and next doesn't fit, we must emit it anyway, even if it breaks memory rules
-    //             else if chunk.len() == 1 && !next_fits {
-    //                 metrics.compaction.memory_violations.inc();
-    //                 result.push((std::mem::take(&mut chunk), mem_usage));
-    //                 mem_usage = 0;
-    //             }
-    //         }
-
-    //         if !chunk.is_empty() {
-    //             result.push((chunk, mem_usage));
-    //         }
-    //     }
-
-    //     result
-    // }
 
     async fn order_runs<'a>(
         req: &'a CompactReq<T>,
@@ -1410,6 +1339,7 @@ mod tests {
             req.clone(),
             schemas.clone(),
             &write.machine,
+            false, // incremental_enabled
         );
 
         let res = Compactor::<String, String, u64, i64>::compact_all(stream, req.clone())
@@ -1500,6 +1430,7 @@ mod tests {
             req.clone(),
             schemas.clone(),
             &write.machine,
+            false, // incremental_enabled
         );
 
         let res =
