@@ -1251,24 +1251,6 @@ impl<T: Timestamp + Lattice + Codec64> SpineBatch<T> {
                     part.batch.run_meta.len()
                 );
             }
-            let run_ids = run_indices.iter().map(|r| r.1).sorted().collect::<Vec<_>>();
-            // if let Some(last) = run_ids.last() {
-            //     assert!(
-            //         *last < part.batch.run_meta.len(),
-            //         "merge result for spine batch {:?} has runs {:?}, but spine batch has {} runs",
-            //         spine_id,
-            //         run_ids,
-            //         part.batch.run_meta.len()
-            //     );
-            // }
-
-            // let continuous = run_ids.windows(2).all(|w| w[0] + 1 == w[1]);
-
-            // assert!(
-            //     continuous,
-            //     "merge result for spine batch {:?} has non-continuous runs {:?}",
-            //     spine_id, run_ids
-            // );
         }
 
         range.sort_unstable();
@@ -1379,27 +1361,6 @@ impl<T: Timestamp + Lattice + Codec64> SpineBatch<T> {
                     .flat_map(|p| p.batch.parts.iter()),
                 metrics,
             );
-
-            if !self.parts[replacement_range.clone()]
-                .iter()
-                .all(|p| p.batch.run_meta.len() <= 1)
-            {
-                info!("all parts in the range must have at most one run");
-                //log the parts for debugging
-                for (i, part) in self.parts[replacement_range.clone()].iter().enumerate() {
-                    info!(
-                        "part {}: {:?} with runs {:?}",
-                        i, part.batch.desc, part.batch.run_meta
-                    );
-                }
-            }
-
-            // assert!(
-            //     self.parts[replacement_range.clone()]
-            //         .iter()
-            //         .all(|p| p.batch.run_meta.len() <= 1),
-            //     "all parts in the range must have at most one run"
-            // );
 
             if let (Some(old_diffs_sum), Some(new_diffs_sum)) = (old_diffs_sum, new_diffs_sum) {
                 assert_eq!(
