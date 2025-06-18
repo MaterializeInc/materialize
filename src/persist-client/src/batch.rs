@@ -371,7 +371,7 @@ pub(crate) const BATCH_DELETE_ENABLED: Config<bool> = Config::new(
 
 pub(crate) const ENCODING_ENABLE_DICTIONARY: Config<bool> = Config::new(
     "persist_encoding_enable_dictionary",
-    false,
+    true,
     "A feature flag to enable dictionary encoding for Parquet data (Materialize).",
 );
 

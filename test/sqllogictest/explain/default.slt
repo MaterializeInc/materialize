@@ -866,35 +866,24 @@ FROM t, u, v
 WHERE a = c and d = e and b = f
 ----
 Explained Query:
-  →Delta Join [%0 » %1 » %2] [%1 » %0 » %2] [%2 » %1 » %0]
-    Delta join path for input %0
-      stage 0 for %1: lookup key #0{c}
-        filter=((#2{d}) IS NOT NULL)
-      stage 1 for %2: lookup key #0{e}
-        Equivalences: #3{f} = #2{b}
-    Delta join path for input %1
-      stage 0 for %0: lookup key #0{a}
-        project=(#0, #2, #1)
-        filter=((#0{a}) IS NOT NULL AND (#2{b}) IS NOT NULL)
-      stage 1 for %2: lookup key #0{e}
-        Equivalences: #3{f} = #2{b}
-    Delta join path for input %2
-      stage 0 for %1: lookup key #1{d}
-        project=(#2, #0, #1)
-        filter=((#0{d}) IS NOT NULL)
-      stage 1 for %0: lookup key #0{a}
-        project=(#0, #3, #1)
-        filter=((#0{a}) IS NOT NULL AND (#3{b}) IS NOT NULL)
-        Equivalences: #2{f} = #3{b}
+  →Differential Join %0 » %1 » %2
+    Join stage 1 in %2 with lookup key #0{e}, #1{f}
+    Join stage 0 in %1 with lookup key #0{c}
+      filter=((#0{a}) IS NOT NULL)
     →Arranged materialize.public.t
     →Arranged materialize.public.u
-    →Arranged materialize.public.v
+    →Arrange
+      Keys: 1 arrangement available, plus raw stream
+        Arrangement 0: #0{e}, #1{f}
+      →Fused Map/Filter/Project
+        Filter: (#0{e}) IS NOT NULL AND (#1{f}) IS NOT NULL
+          →Arranged materialize.public.v
+            Key: (#0{e})
 
 Used Indexes:
-  - materialize.public.t_a_idx (delta join 1st input (full scan))
-  - materialize.public.u_c_idx (delta join lookup)
-  - materialize.public.u_d_idx (delta join lookup)
-  - materialize.public.v_e_idx (delta join lookup)
+  - materialize.public.t_a_idx (differential join)
+  - materialize.public.u_c_idx (differential join)
+  - materialize.public.v_e_idx (*** full scan ***)
 
 Target cluster: quickstart
 
@@ -908,35 +897,24 @@ FROM t, u, v
 WHERE a = c and d = e and b = f
 ----
 Explained Query:
-  →Delta Join [%0 » %1 » %2] [%1 » %0 » %2] [%2 » %1 » %0]
-    Delta join path for input %0
-      stage 0 for %1: lookup key #0{c}
-        filter=((#2{d}) IS NOT NULL)
-      stage 1 for %2: lookup key #0{e}
-        Equivalences: #3{f} = #2{b}
-    Delta join path for input %1
-      stage 0 for %0: lookup key #0{a}
-        project=(#0, #2, #1)
-        filter=((#0{a}) IS NOT NULL AND (#2{b}) IS NOT NULL)
-      stage 1 for %2: lookup key #0{e}
-        Equivalences: #3{f} = #2{b}
-    Delta join path for input %2
-      stage 0 for %1: lookup key #1{d}
-        project=(#2, #0, #1)
-        filter=((#0{d}) IS NOT NULL)
-      stage 1 for %0: lookup key #0{a}
-        project=(#0, #3, #1)
-        filter=((#0{a}) IS NOT NULL AND (#3{b}) IS NOT NULL)
-        Equivalences: #2{f} = #3{b}
+  →Differential Join %0 » %1 » %2
+    Join stage 1 in %2 with lookup key #0{e}, #1{f}
+    Join stage 0 in %1 with lookup key #0{c}
+      filter=((#0{a}) IS NOT NULL)
     →Arranged materialize.public.t
     →Arranged materialize.public.u
-    →Arranged materialize.public.v
+    →Arrange
+      Keys: 1 arrangement available, plus raw stream
+        Arrangement 0: #0{e}, #1{f}
+      →Fused Map/Filter/Project
+        Filter: (#0{e}) IS NOT NULL AND (#1{f}) IS NOT NULL
+          →Arranged materialize.public.v
+            Key: (#0{e})
 
 Used Indexes:
-  - materialize.public.t_a_idx (delta join 1st input (full scan))
-  - materialize.public.u_c_idx (delta join lookup)
-  - materialize.public.u_d_idx (delta join lookup)
-  - materialize.public.v_e_idx (delta join lookup)
+  - materialize.public.t_a_idx (differential join)
+  - materialize.public.u_c_idx (differential join)
+  - materialize.public.v_e_idx (*** full scan ***)
 
 Target cluster: quickstart
 

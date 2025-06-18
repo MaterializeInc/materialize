@@ -640,6 +640,9 @@ val2:[1,2,
 > CREATE CLUSTER inline_error_cluster SIZE '${arg.default-storage-size}';
 
 # should error without the feature flag enabled
+$ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
+ALTER SYSTEM SET enable_envelope_upsert_inline_errors = false
+
 ! CREATE SOURCE value_decode_error
   IN CLUSTER inline_error_cluster
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-inline-value-errors-1-${testdrive.seed}')

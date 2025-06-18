@@ -255,11 +255,10 @@ EXPLAIN PLAN INSIGHTS AS JSON FOR SELECT * FROM t t1, t t2
                             0,
                             [],
                             {
-                              "V2": {
+                              "V1": {
                                 "unique_key": false,
-                                "not_cross": false,
-                                "arranged": false,
                                 "key_length": 0,
+                                "arranged": false,
                                 "cardinality": null,
                                 "filters": {
                                   "literal_equality": false,
@@ -277,11 +276,10 @@ EXPLAIN PLAN INSIGHTS AS JSON FOR SELECT * FROM t t1, t t2
                               1,
                               [],
                               {
-                                "V2": {
+                                "V1": {
                                   "unique_key": false,
-                                  "not_cross": false,
-                                  "arranged": false,
                                   "key_length": 0,
+                                  "arranged": false,
                                   "cardinality": null,
                                   "filters": {
                                     "literal_equality": false,
@@ -625,11 +623,10 @@ EXPLAIN PLAN INSIGHTS AS JSON FOR SELECT * FROM t t1, t t2
                             0,
                             [],
                             {
-                              "V2": {
+                              "V1": {
                                 "unique_key": false,
-                                "not_cross": false,
-                                "arranged": false,
                                 "key_length": 0,
+                                "arranged": false,
                                 "cardinality": null,
                                 "filters": {
                                   "literal_equality": false,
@@ -647,11 +644,10 @@ EXPLAIN PLAN INSIGHTS AS JSON FOR SELECT * FROM t t1, t t2
                               1,
                               [],
                               {
-                                "V2": {
+                                "V1": {
                                   "unique_key": false,
-                                  "not_cross": false,
-                                  "arranged": false,
                                   "key_length": 0,
+                                  "arranged": false,
                                   "cardinality": null,
                                   "filters": {
                                     "literal_equality": false,

@@ -305,10 +305,10 @@ Explained Query:
   Return
     Project (#0{a}, #1{array_agg})
       Join on=(#0{a} = #2{a} AND #1{array_agg} = #3{array_agg}) type=differential
-        ArrangeBy keys=[[#0{a}]]
+        ArrangeBy keys=[[#0{a}, #1{array_agg}]]
           Reduce group_by=[#0{a}] aggregates=[array_agg[order_by=[#0{a} asc nulls_last]](row(array[#1{b}], #1{b}))]
             Get l0
-        ArrangeBy keys=[[#0{a}]]
+        ArrangeBy keys=[[#0{a}, #1{array_agg}]]
           Reduce group_by=[#0{a}] aggregates=[array_agg[order_by=[#0{a} desc nulls_first]](row(array[#1{b}], #1{b}))]
             Get l0
 

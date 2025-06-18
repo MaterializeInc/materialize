@@ -77,6 +77,7 @@ def get_minimal_system_parameters(
         # -----
         # Others (ordered by name)
         "allow_real_time_recency": "true",
+        "constraint_based_timestamp_selection": "verify",
         "enable_compute_peek_response_stash": "true",
         "enable_0dt_deployment": "true" if zero_downtime else "false",
         "enable_0dt_deployment_panic_after_timeout": "true",
@@ -110,6 +111,7 @@ def get_minimal_system_parameters(
         "enable_statement_lifecycle_logging": "true",
         "enable_variadic_left_join_lowering": "true",
         "enable_worker_core_affinity": "true",
+        "grpc_client_http2_keep_alive_timeout": "5",
         "ore_overflowing_behavior": "panic",
         "persist_stats_audit_percent": "100",
         "unsafe_enable_table_keys": "true",
@@ -522,7 +524,6 @@ UNINTERESTING_SYSTEM_PARAMETERS = [
     "enable_continual_task_builtins",
     "enable_expression_cache",
     "enable_password_auth",
-    "constraint_based_timestamp_selection",
     "mz_metrics_lgalloc_map_refresh_interval",
     "mz_metrics_lgalloc_refresh_interval",
     "mz_metrics_rusage_refresh_interval",

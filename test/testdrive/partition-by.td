@@ -19,7 +19,10 @@ ALTER SYSTEM SET enable_create_table_from_source = true
   FROM LOAD GENERATOR AUCTION
   FOR TABLES (accounts);
 
-# First, check that the flag is disabled by default.
+# First, check that disabling the flag works.
+
+$ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
+ALTER SYSTEM SET enable_collection_partition_by = false
 
 ! CREATE MATERIALIZED VIEW integers (n) WITH (PARTITION BY (n)) AS VALUES (3), (2), (1);
 contains:PARTITION BY

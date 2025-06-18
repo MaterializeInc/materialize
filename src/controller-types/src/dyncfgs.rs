@@ -22,7 +22,7 @@ pub const CONTROLLER_PAST_GENERATION_REPLICA_CLEANUP_RETRY_INTERVAL: Config<Dura
 
 pub const ENABLE_0DT_DEPLOYMENT_SOURCES: Config<bool> = Config::new(
     "enable_0dt_deployment_sources",
-    false,
+    true,
     "Whether to enable zero-downtime deployments for sources that support it (experimental).",
 );
 

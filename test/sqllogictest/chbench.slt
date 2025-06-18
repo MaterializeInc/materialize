@@ -314,30 +314,32 @@ Explained Query:
             Filter like["EUROP%"](padchar(#1{r_name})) // { arity: 3 }
               ReadStorage materialize.public.region // { arity: 3 }
     Return // { arity: 8 }
-      Project (#2{su_suppkey}, #3{su_name}, #27{n_name}, #0{i_id}, #1{i_name}, #4{su_address}, #6{su_phone}, #7{su_comment}) // { arity: 8 }
-        Filter (#10{s_quantity}) IS NOT NULL // { arity: 32 }
-          Join on=(#0{i_id} = #8{s_i_id} = #30{s_i_id} AND #2{su_suppkey} = #25{s_su_suppkey} AND #5{su_nationkey} = #26{n_nationkey} AND #10{s_quantity} = #31{min_s_quantity} AND #28{n_regionkey} = #29{r_regionkey}) type=delta // { arity: 32 }
-            implementation
-              %0:item » %5[#0]UKA » %2:stock[#0{s_i_id}]KA » %1:supplier[#0{su_suppkey}]UK » %3:nation[#0{n_nationkey}]UK » %4:l0[#0{r_regionkey}]UKlf
-              %1:supplier » %3:nation[#0{n_nationkey}]UK » %4:l0[#0{r_regionkey}]UKlf » %2:stock[#17{s_su_suppkey}]KA » %5[#0]UKA » %0:item[#0{i_id}]UKlf
-              %2:stock » %5[#0]UKA » %0:item[#0{i_id}]UKlf » %1:supplier[#0{su_suppkey}]UK » %3:nation[#0{n_nationkey}]UK » %4:l0[#0{r_regionkey}]UKlf
-              %3:nation » %4:l0[#0{r_regionkey}]UKlf » %1:supplier[#3{su_nationkey}]KA » %2:stock[#17{s_su_suppkey}]KA » %5[#0]UKA » %0:item[#0{i_id}]UKlf
-              %4:l0 » %3:nation[#2{n_regionkey}]KA » %1:supplier[#3{su_nationkey}]KA » %2:stock[#17{s_su_suppkey}]KA » %5[#0]UKA » %0:item[#0{i_id}]UKlf
-              %5 » %0:item[#0{i_id}]UKlf » %2:stock[#0{s_i_id}]KA » %1:supplier[#0{su_suppkey}]UK » %3:nation[#0{n_nationkey}]UK » %4:l0[#0{r_regionkey}]UKlf
-            ArrangeBy keys=[[#0{i_id}]] // { arity: 2 }
-              Project (#0{i_id}, #2{i_name}) // { arity: 2 }
-                Filter like["%b"](padchar(#4{i_data})) // { arity: 5 }
-                  ReadStorage materialize.public.item // { arity: 5 }
-            ArrangeBy keys=[[#0{su_suppkey}], [#3{su_nationkey}]] // { arity: 6 }
-              Project (#0{su_suppkey}..=#4{su_phone}, #6{su_comment}) // { arity: 6 }
-                ReadIndex on=supplier fk_supplier_nationkey=[*** full scan ***] // { arity: 7 }
-            ArrangeBy keys=[[#0{s_i_id}], [#17{s_su_suppkey}]] // { arity: 18 }
-              ReadIndex on=stock fk_stock_item=[delta join lookup] fk_stock_supplier=[delta join lookup] // { arity: 18 }
-            ArrangeBy keys=[[#0{n_nationkey}], [#2{n_regionkey}]] // { arity: 3 }
-              Project (#0{n_nationkey}..=#2{n_regionkey}) // { arity: 3 }
-                ReadIndex on=nation fk_nation_regionkey=[*** full scan ***] // { arity: 4 }
-            Get l0 // { arity: 1 }
-            ArrangeBy keys=[[#0{s_i_id}]] // { arity: 2 }
+      Project (#2{su_suppkey}, #3{su_name}, #12{n_name}, #0{i_id}, #1{i_name}, #4{su_address}, #6{su_phone}, #7{su_comment}) // { arity: 8 }
+        Join on=(#0{i_id} = #8{s_i_id} = #15{s_i_id} AND #2{su_suppkey} = #10{s_su_suppkey} AND #5{su_nationkey} = #11{n_nationkey} AND #9{s_quantity} = #16{min_s_quantity} AND #13{n_regionkey} = #14{r_regionkey}) type=delta // { arity: 17 }
+          implementation
+            %0:item » %5[#0]UKA » %2:stock[#0{s_i_id}, #1{s_quantity}]KK » %1:supplier[#0{su_suppkey}]UK » %3:nation[#0{n_nationkey}]UK » %4:l0[#0{r_regionkey}]UKlf
+            %1:supplier » %3:nation[#0{n_nationkey}]UK » %4:l0[#0{r_regionkey}]UKlf » %2:stock[#2{s_su_suppkey}]KA » %5[#0{m_i_id}, #1{m_s_quantity}]UKK » %0:item[#0{i_id}]UKlf
+            %2:stock » %5[#0{m_i_id}, #1{m_s_quantity}]UKK » %0:item[#0{i_id}]UKlf » %1:supplier[#0{su_suppkey}]UK » %3:nation[#0{n_nationkey}]UK » %4:l0[#0{r_regionkey}]UKlf
+            %3:nation » %4:l0[#0{r_regionkey}]UKlf » %1:supplier[#3{su_nationkey}]KA » %2:stock[#2{s_su_suppkey}]KA » %5[#0{m_i_id}, #1{m_s_quantity}]UKK » %0:item[#0{i_id}]UKlf
+            %4:l0 » %3:nation[#2{n_regionkey}]KA » %1:supplier[#3{su_nationkey}]KA » %2:stock[#2{s_su_suppkey}]KA » %5[#0{m_i_id}, #1{m_s_quantity}]UKK » %0:item[#0{i_id}]UKlf
+            %5 » %0:item[#0{i_id}]UKlf » %2:stock[#0{s_i_id}, #1{s_quantity}]KK » %1:supplier[#0{su_suppkey}]UK » %3:nation[#0{n_nationkey}]UK » %4:l0[#0{r_regionkey}]UKlf
+          ArrangeBy keys=[[#0{i_id}]] // { arity: 2 }
+            Project (#0{i_id}, #2{i_name}) // { arity: 2 }
+              Filter like["%b"](padchar(#4{i_data})) // { arity: 5 }
+                ReadStorage materialize.public.item // { arity: 5 }
+          ArrangeBy keys=[[#0{su_suppkey}], [#3{su_nationkey}]] // { arity: 6 }
+            Project (#0{su_suppkey}..=#4{su_phone}, #6{su_comment}) // { arity: 6 }
+              ReadIndex on=supplier fk_supplier_nationkey=[*** full scan ***] // { arity: 7 }
+          ArrangeBy keys=[[#0{s_i_id}, #1{s_quantity}], [#2{s_su_suppkey}]] // { arity: 3 }
+            Project (#0{s_i_id}, #2{s_quantity}, #17{s_su_suppkey}) // { arity: 3 }
+              Filter (#2{s_quantity}) IS NOT NULL // { arity: 18 }
+                ReadIndex on=stock fk_stock_supplier=[*** full scan ***] // { arity: 18 }
+          ArrangeBy keys=[[#0{n_nationkey}], [#2{n_regionkey}]] // { arity: 3 }
+            Project (#0{n_nationkey}..=#2{n_regionkey}) // { arity: 3 }
+              ReadIndex on=nation fk_nation_regionkey=[*** full scan ***] // { arity: 4 }
+          Get l0 // { arity: 1 }
+          ArrangeBy keys=[[#0{s_i_id}], [#0{s_i_id}, #1{min_s_quantity}]] // { arity: 2 }
+            Filter (#1{min_s_quantity}) IS NOT NULL // { arity: 2 }
               Reduce group_by=[#0{s_i_id}] aggregates=[min(#1{s_quantity})] // { arity: 2 }
                 Project (#0{s_i_id}, #2{s_quantity}) // { arity: 2 }
                   Join on=(#17{s_su_suppkey} = #18{su_suppkey} AND #19{su_nationkey} = #20{n_nationkey} AND #21{n_regionkey} = #22{r_regionkey}) type=delta // { arity: 23 }
@@ -362,8 +364,7 @@ Source materialize.public.region
   filter=(like["EUROP%"](padchar(#1{r_name})))
 
 Used Indexes:
-  - materialize.public.fk_stock_item (delta join lookup)
-  - materialize.public.fk_stock_supplier (delta join lookup, delta join 1st input (full scan))
+  - materialize.public.fk_stock_supplier (*** full scan ***, delta join 1st input (full scan))
   - materialize.public.fk_nation_regionkey (*** full scan ***)
   - materialize.public.fk_supplier_nationkey (*** full scan ***)
 
@@ -507,17 +508,17 @@ ORDER BY revenue DESC
 Explained Query:
   Finish order_by=[#1{sum_ol_amount} desc nulls_first] output=[#0, #1]
     Reduce group_by=[#1{n_name}] aggregates=[sum(#0{ol_amount})] // { arity: 2 }
-      Project (#16{ol_amount}, #24{n_name}) // { arity: 2 }
-        Join on=(#0{c_id} = #7{o_c_id} AND #1{c_d_id} = #5{o_d_id} = #9{ol_d_id} AND #2{c_w_id} = #6{o_w_id} = #10{ol_w_id} = #19{s_w_id} AND #3{c_n_nationkey} = #22{su_nationkey} = #23{n_nationkey} AND #4{o_id} = #8{ol_o_id} AND #12{ol_i_id} = #18{s_i_id} AND #20{s_su_suppkey} = #21{su_suppkey} AND #25{n_regionkey} = #26{r_regionkey}) type=delta // { arity: 27 }
+      Project (#12{ol_amount}, #19{n_name}) // { arity: 2 }
+        Join on=(#0{c_id} = #7{o_c_id} AND #1{c_d_id} = #5{o_d_id} = #9{ol_d_id} AND #2{c_w_id} = #6{o_w_id} = #10{ol_w_id} = #14{s_w_id} AND #3{c_n_nationkey} = #17{su_nationkey} = #18{n_nationkey} AND #4{o_id} = #8{ol_o_id} AND #11{ol_i_id} = #13{s_i_id} AND #15{s_su_suppkey} = #16{su_suppkey} AND #20{n_regionkey} = #21{r_regionkey}) type=delta // { arity: 22 }
           implementation
             %0:customer » %5:nation[#0{n_nationkey}]UK » %6:region[#0{r_regionkey}]UKef » %1:order[#2{o_w_id}, #1{o_d_id}, #3{o_c_id}]KKKAif » %2:orderline[#2{ol_w_id}, #1{ol_d_id}, #0{ol_o_id}]KKKA » %3:stock[#0{s_i_id}, #1{s_w_id}]UKK » %4:supplier[#0{su_suppkey}, #1{su_nationkey}]UKK
             %1:order » %0:customer[#0{c_id}..=#2{c_w_id}]UKKK » %5:nation[#0{n_nationkey}]UK » %6:region[#0{r_regionkey}]UKef » %2:orderline[#2{ol_w_id}, #1{ol_d_id}, #0{ol_o_id}]KKKA » %3:stock[#0{s_i_id}, #1{s_w_id}]UKK » %4:supplier[#0{su_suppkey}, #1{su_nationkey}]UKK
             %2:orderline » %1:order[#0{o_id}..=#2{o_w_id}]UKKKif » %0:customer[#0{c_id}..=#2{c_w_id}]UKKK » %3:stock[#0{s_i_id}, #1{s_w_id}]UKK » %4:supplier[#0{su_suppkey}, #1{su_nationkey}]UKK » %5:nation[#0{n_nationkey}]UK » %6:region[#0{r_regionkey}]UKef
-            %3:stock » %4:supplier[#0{su_suppkey}]UK » %5:nation[#0{n_nationkey}]UK » %6:region[#0{r_regionkey}]UKef » %0:customer[#3{c_n_nationkey}]KA » %1:order[#2{o_w_id}, #1{o_d_id}, #3{o_c_id}]KKKAif » %2:orderline[#2{ol_w_id}, #1{ol_d_id}, #0{ol_o_id}]KKKA
+            %3:stock » %4:supplier[#0{su_suppkey}]UK » %5:nation[#0{n_nationkey}]UK » %6:region[#0{r_regionkey}]UKef » %0:customer[#2{c_w_id}, #3{c_n_nationkey}]KK » %1:order[#2{o_w_id}, #1{o_d_id}, #3{o_c_id}]KKKAif » %2:orderline[#0{ol_o_id}..=#3{ol_i_id}]KKKK
             %4:supplier » %5:nation[#0{n_nationkey}]UK » %6:region[#0{r_regionkey}]UKef » %0:customer[#3{c_n_nationkey}]KA » %1:order[#2{o_w_id}, #1{o_d_id}, #3{o_c_id}]KKKAif » %2:orderline[#2{ol_w_id}, #1{ol_d_id}, #0{ol_o_id}]KKKA » %3:stock[#0{s_i_id}..=#2{s_su_suppkey}]UKKK
             %5:nation » %6:region[#0{r_regionkey}]UKef » %0:customer[#3{c_n_nationkey}]KA » %1:order[#2{o_w_id}, #1{o_d_id}, #3{o_c_id}]KKKAif » %2:orderline[#2{ol_w_id}, #1{ol_d_id}, #0{ol_o_id}]KKKA » %3:stock[#0{s_i_id}, #1{s_w_id}]UKK » %4:supplier[#0{su_suppkey}, #1{su_nationkey}]UKK
             %6:region » %5:nation[#2{n_regionkey}]KA » %0:customer[#3{c_n_nationkey}]KA » %1:order[#2{o_w_id}, #1{o_d_id}, #3{o_c_id}]KKKAif » %2:orderline[#2{ol_w_id}, #1{ol_d_id}, #0{ol_o_id}]KKKA » %3:stock[#0{s_i_id}, #1{s_w_id}]UKK » %4:supplier[#0{su_suppkey}, #1{su_nationkey}]UKK
-          ArrangeBy keys=[[#0{c_id}..=#2{c_w_id}], [#3{c_n_nationkey}]] // { arity: 4 }
+          ArrangeBy keys=[[#0{c_id}..=#2{c_w_id}], [#2{c_w_id}, #3{c_n_nationkey}], [#3{c_n_nationkey}]] // { arity: 4 }
             Project (#0{c_id}..=#2{c_w_id}, #21{c_n_nationkey}) // { arity: 4 }
               Filter (#21{c_n_nationkey}) IS NOT NULL // { arity: 22 }
                 ReadIndex on=customer fk_customer_district=[*** full scan ***] // { arity: 22 }
@@ -525,8 +526,10 @@ Explained Query:
             Project (#0{o_id}..=#3{o_c_id}) // { arity: 4 }
               Filter (#3{o_c_id}) IS NOT NULL AND (date_to_timestamp(#4{o_entry_d}) >= 2007-01-02 00:00:00) // { arity: 8 }
                 ReadIndex on=order fk_order_customer=[*** full scan ***] // { arity: 8 }
-          ArrangeBy keys=[[#2{ol_w_id}, #1{ol_d_id}, #0{ol_o_id}]] // { arity: 10 }
-            ReadIndex on=orderline fk_orderline_order=[delta join lookup] // { arity: 10 }
+          ArrangeBy keys=[[#0{ol_o_id}..=#3{ol_i_id}], [#2{ol_w_id}, #1{ol_d_id}, #0{ol_o_id}]] // { arity: 5 }
+            Project (#0{ol_o_id}..=#2{ol_w_id}, #4{ol_i_id}, #8{ol_amount}) // { arity: 5 }
+              Filter (#4{ol_i_id}) IS NOT NULL // { arity: 10 }
+                ReadIndex on=orderline fk_orderline_order=[*** full scan ***] // { arity: 10 }
           ArrangeBy keys=[[#0{s_i_id}, #1{s_w_id}], [#0{s_i_id}..=#2{s_su_suppkey}]] // { arity: 3 }
             Project (#0{s_i_id}, #1{s_w_id}, #17{s_su_suppkey}) // { arity: 3 }
               ReadIndex on=stock fk_stock_warehouse=[*** full scan ***] // { arity: 18 }
@@ -547,7 +550,7 @@ Source materialize.public.region
 Used Indexes:
   - materialize.public.fk_customer_district (*** full scan ***)
   - materialize.public.fk_order_customer (*** full scan ***)
-  - materialize.public.fk_orderline_order (delta join lookup)
+  - materialize.public.fk_orderline_order (*** full scan ***)
   - materialize.public.fk_stock_warehouse (*** full scan ***)
   - materialize.public.fk_nation_regionkey (*** full scan ***)
   - materialize.public.fk_supplier_nationkey (*** full scan ***)
@@ -1524,20 +1527,22 @@ Explained Query:
   Finish order_by=[#1{count} desc nulls_first, #0{su_name} asc nulls_last] output=[#0, #1]
     With
       cte l0 =
-        Project (#1{su_name}, #3{ol_o_id}..=#5{ol_w_id}, #9{ol_delivery_d}) // { arity: 5 }
-          Filter (#9{ol_delivery_d} > #16{o_entry_d}) // { arity: 21 }
-            Join on=(#0{su_suppkey} = #19{s_su_suppkey} AND #2{su_nationkey} = #20{n_nationkey} AND #3{ol_o_id} = #13{o_id} AND #4{ol_d_id} = #14{o_d_id} AND #5{ol_w_id} = #15{o_w_id} = #18{s_w_id} AND #7{ol_i_id} = #17{s_i_id}) type=delta // { arity: 21 }
+        Project (#1{su_name}, #3{ol_o_id}..=#5{ol_w_id}, #7{ol_delivery_d}) // { arity: 5 }
+          Filter (#7{ol_delivery_d} > #11{o_entry_d}) // { arity: 16 }
+            Join on=(#0{su_suppkey} = #14{s_su_suppkey} AND #2{su_nationkey} = #15{n_nationkey} AND #3{ol_o_id} = #8{o_id} AND #4{ol_d_id} = #9{o_d_id} AND #5{ol_w_id} = #10{o_w_id} = #13{s_w_id} AND #6{ol_i_id} = #12{s_i_id}) type=delta // { arity: 16 }
               implementation
-                %0:supplier » %4:nation[#0{n_nationkey}]UKef » %3:stock[#2{s_su_suppkey}]KA » %1:orderline[#4{ol_i_id}]KA » %2:order[#0{o_id}..=#2{o_w_id}]UKKK
+                %0:supplier » %4:nation[#0{n_nationkey}]UKef » %3:stock[#2{s_su_suppkey}]KA » %1:orderline[#2{ol_w_id}, #3{ol_i_id}]KK » %2:order[#0{o_id}..=#2{o_w_id}]UKKK
                 %1:orderline » %2:order[#0{o_id}..=#2{o_w_id}]UKKK » %3:stock[#0{s_i_id}, #1{s_w_id}]UKK » %0:supplier[#0{su_suppkey}]UK » %4:nation[#0{n_nationkey}]UKef
                 %2:order » %1:orderline[#2{ol_w_id}, #1{ol_d_id}, #0{ol_o_id}]KKKA » %3:stock[#0{s_i_id}, #1{s_w_id}]UKK » %0:supplier[#0{su_suppkey}]UK » %4:nation[#0{n_nationkey}]UKef
-                %3:stock » %0:supplier[#0{su_suppkey}]UK » %4:nation[#0{n_nationkey}]UKef » %1:orderline[#4{ol_i_id}]KA » %2:order[#0{o_id}..=#2{o_w_id}]UKKK
-                %4:nation » %0:supplier[#2{su_nationkey}]KA » %3:stock[#2{s_su_suppkey}]KA » %1:orderline[#4{ol_i_id}]KA » %2:order[#0{o_id}..=#2{o_w_id}]UKKK
+                %3:stock » %0:supplier[#0{su_suppkey}]UK » %4:nation[#0{n_nationkey}]UKef » %1:orderline[#2{ol_w_id}, #3{ol_i_id}]KK » %2:order[#0{o_id}..=#2{o_w_id}]UKKK
+                %4:nation » %0:supplier[#2{su_nationkey}]KA » %3:stock[#2{s_su_suppkey}]KA » %1:orderline[#2{ol_w_id}, #3{ol_i_id}]KK » %2:order[#0{o_id}..=#2{o_w_id}]UKKK
               ArrangeBy keys=[[#0{su_suppkey}], [#2{su_nationkey}]] // { arity: 3 }
                 Project (#0{su_suppkey}, #1{su_name}, #3{su_nationkey}) // { arity: 3 }
                   ReadIndex on=supplier fk_supplier_nationkey=[*** full scan ***] // { arity: 7 }
-              ArrangeBy keys=[[#2{ol_w_id}, #1{ol_d_id}, #0{ol_o_id}], [#4{ol_i_id}]] // { arity: 10 }
-                ReadIndex on=orderline fk_orderline_order=[delta join lookup] fk_orderline_item=[delta join lookup] // { arity: 10 }
+              ArrangeBy keys=[[#2{ol_w_id}, #1{ol_d_id}, #0{ol_o_id}], [#2{ol_w_id}, #3{ol_i_id}]] // { arity: 5 }
+                Project (#0{ol_o_id}..=#2{ol_w_id}, #4{ol_i_id}, #6{ol_delivery_d}) // { arity: 5 }
+                  Filter (#4{ol_i_id}) IS NOT NULL // { arity: 10 }
+                    ReadIndex on=orderline fk_orderline_order=[*** full scan ***] // { arity: 10 }
               ArrangeBy keys=[[#0{o_id}..=#2{o_w_id}]] // { arity: 4 }
                 Project (#0{o_id}..=#2{o_w_id}, #4{o_entry_d}) // { arity: 4 }
                   ReadIndex on=order fk_order_customer=[*** full scan ***] // { arity: 8 }
@@ -1577,8 +1582,7 @@ Explained Query:
 
 Used Indexes:
   - materialize.public.fk_order_customer (*** full scan ***)
-  - materialize.public.fk_orderline_order (differential join, delta join lookup)
-  - materialize.public.fk_orderline_item (delta join lookup)
+  - materialize.public.fk_orderline_order (*** full scan ***, differential join)
   - materialize.public.fk_stock_warehouse (*** full scan ***)
   - materialize.public.fk_nation_regionkey (*** full scan ***)
   - materialize.public.fk_supplier_nationkey (*** full scan ***)
