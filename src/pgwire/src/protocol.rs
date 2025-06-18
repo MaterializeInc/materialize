@@ -10,8 +10,9 @@
 use std::collections::BTreeMap;
 use std::convert::TryFrom;
 use std::future::Future;
+use std::ops::Deref;
 use std::sync::Arc;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 use std::{iter, mem};
 
 use byteorder::{ByteOrder, NetworkEndian};
@@ -24,7 +25,7 @@ use mz_adapter::session::{
 };
 use mz_adapter::statement_logging::{StatementEndedExecutionReason, StatementExecutionStrategy};
 use mz_adapter::{
-    AdapterError, AdapterNotice, ExecuteContextExtra, ExecuteResponse, PeekResponseUnary,
+    AdapterError, AdapterNotice, ExecuteContextExtra, ExecuteResponse, PeekResponseUnary, metrics,
     verify_datum_desc,
 };
 use mz_auth::password::Password;
@@ -2024,6 +2025,10 @@ where
             .get_portal_unverified_mut(&portal_name)
             .expect("valid portal name for send rows");
 
+        let saw_rows = rows.remaining.saw_rows;
+        let no_more_rows = rows.no_more_rows();
+        let recorded_first_row_instant = rows.remaining.recorded_first_row_instant;
+
         // Always return rows back, even if it's empty. This prevents an unclosed
         // portal from re-executing after it has been emptied.
         portal.state = PortalState::InProgress(Some(rows));
@@ -2036,6 +2041,38 @@ where
         });
         let response_message = get_response(max_rows, total_sent_rows, fetch_portal);
         self.send(response_message).await?;
+
+        // Attend to metrics if there are no more rows.
+        if no_more_rows {
+            let statement_type = if let Some(stmt) = &self
+                .adapter_client
+                .session()
+                .get_portal_unverified(&portal_name)
+                .expect("valid portal name for send_rows")
+                .stmt
+            {
+                metrics::statement_type_label_value(stmt.deref())
+            } else {
+                "no-statement"
+            };
+            let duration = if saw_rows {
+                recorded_first_row_instant
+                    .expect("recorded_first_row_instant because saw_rows")
+                    .elapsed()
+            } else {
+                // If the result is empty, then we define time from first to last row as 0.
+                // (Note that, currently, an empty result involves a PeekResponse with 0 rows, which
+                // does flip `saw_rows`, so this code path is currently not exercised.)
+                Duration::ZERO
+            };
+            self.adapter_client
+                .inner()
+                .metrics()
+                .result_rows_first_to_last_byte_seconds
+                .with_label_values(&[statement_type])
+                .observe(duration.as_secs_f64());
+        }
+
         Ok((
             State::Ready,
             SendRowsEndedReason::Success {
