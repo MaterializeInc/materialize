@@ -72,7 +72,7 @@ use timely::PartialOrder;
 use timely::progress::frontier::AntichainRef;
 use timely::progress::{Antichain, Timestamp};
 
-use crate::internal::state::{HollowBatch, RunMeta};
+use crate::internal::state::HollowBatch;
 
 use super::state::RunPart;
 
@@ -1080,7 +1080,11 @@ impl<T: Timestamp + Lattice + Codec64> SpineBatch<T> {
         } else {
             original.run_splits[start_run - 1]
         };
-        let end_part = original.run_splits[end_run];
+        let end_part = original
+            .run_splits
+            .get(start_run)
+            .copied()
+            .unwrap_or(original.parts.len());
 
         // 2. Replace parts
         let mut parts = Vec::new();
