@@ -45,6 +45,18 @@ SET cluster = <cluster name>;
 Materialize will remove the dataflow as soon as it has returned the query
 results to you.
 
+For more information, see [`SELECT`](/sql/select/) reference page.  See
+also the following client library guides:
+
+{{< multicolumn-list columns="2" >}}
+- [Go](/integrations/client-libraries/golang/#query)</li>
+- [Java](/integrations/client-libraries/java-jdbc/#query)</li>
+- [Node.js](/integrations/client-libraries/node-js/#query)</li>
+- [PHP](/integrations/client-libraries/php/#query)</li>
+- [Python](/integrations/client-libraries/python/#query)</li>
+- [Ruby](/integrations/client-libraries/ruby/#query)</li>
+- [Rust](/integrations/client-libraries/rust/#query)</li>
+{{</ multicolumn-list >}}
 
 ## SUBSCRIBE
 
