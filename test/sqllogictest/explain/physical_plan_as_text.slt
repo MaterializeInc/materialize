@@ -1022,8 +1022,7 @@ materialize.public.ov_b_idx:
   ArrangeBy
     input_key=[#0{a}]
     raw=false
-    arrangements[0]={ key=[#0{a}], permutation=id, thinning=(#1) }
-    arrangements[1]={ key=[#1{b}], permutation={#0: #1, #1: #0}, thinning=(#0) }
+    arrangements[0]={ key=[#1{b}], permutation={#0: #1, #1: #0}, thinning=(#0) }
     types=[integer?, integer?]
     Get::PassArrangements materialize.public.ov
       raw=false
