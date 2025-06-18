@@ -19,157 +19,29 @@ Configuring and managing access control in Materialize
 requires **administrator** privileges.
 {{</ note >}}
 
-Access control in Materialize is configured at two levels: access to the
-[Materialize Console](/console/) and access within the
-database. The privileges assigned on user invitation have implications at both
-levels, so we recommend carefully evaluating your access control needs ahead of
-expanding the number of users in your Materialize organization.
+## Role-based Access Control (RBAC)
 
-## Account management
+### Enabling RBAC
 
-### Inviting users
+Role-Based Access Control (RBAC) may be enabled in one of the following ways;
+either:
 
-As an **administrator**, you can invite new users via the Materialize Console.
-Depending on the level of access each user should have, you can assign them
-`Organization Admin` or `Organization Member` privileges.
+- Set `spec.enableRbac: true` when instantiating the Materialize object in
+  Kubernetes
 
-   - `Organization Admin`: can perform adminstration tasks in the console, like
-     inviting new users, editing account and security information, or managing
-     billing. Admins have _superuser_ privileges in the database.
+- Or, after the Materialize instance is running, run the following command:
+  ```mzsql
+  ALTER SYSTEM SET enable_rbac_checks TO TRUE;
+  ```
 
-   - `Organization Member`: can log in to the console and has restricted access
-     to the database, depending  on the privileges defined via
-     [role-based access control (RBAC)](#role-based-access-control-rbac).
+If both are used, the `ALTER SYSTEM` command will take precedence over the
+Kubernetes configuration.
 
-These privileges primarily determine a user's **access level to the console**,
-but also have implications in the **default access level to the database**.
-More granular permissions within the database must be handled separately using
-[role-based access control (RBAC)](#role-based-access-control-rbac).
+You may view the currently active value with `SHOW enable_rbac_checks;`.
 
-[//]: # "TODO(morsapaes) Add a specific anotation for tutorial call-outs, to
-make these more noticeable."
+If RBAC is not enabled, all users will behave as if they were _superuser_.
 
-To invite users to your Materialize organization, follow [this step-by-step guide](/manage/access-control/invite-users).
-
-### Using an external secret store
-
-[//]: # "NOTE(morsapaes) This sits kind of awkward in here, but feels like the
-best place to plug it. Need to add some more meat if we keep it."
-
-Although Materialize does not integrate directly with external secret stores,
-it’s possible to manage this integration via [Terraform](/manage/terraform).
-
-Check the [Terraform documentation](/manage/terraform/#external-secret-stores)
-for more details on how to integrate with common external secret stores, like
-HashiCorp Vault or AWS Secrets Manager.
-
-## Role-based access control (RBAC)
-
-[//]: # "NOTE(morsapaes) These instructions assume that RBAC is enabled at the
-time of region creation. For existing regions, we assume that migration to RBAC
-is whitegloved."
-
-The default level of access to the database is determined by the
-organization-level role a user is assigned on invitation (`Organization Admin`
-or `Organization Member`). When an invited user logs in for the first time
-(and only then), a [role](./rbac/#roles) with the same name as their e-mail
-address is created.
-
-The first user in an organization, and subsequently any user that is assigned
-`Organization Admin`, is a database _superuser_, and has unrestricted access to
-all resources in a Materialize region. Users that are assigned `Organization
-Member` are restricted to a [default set of basic privileges](#modifying-default-privileges)
-that need to be configured and modified via role-based access control (RBAC).
-
-RBAC allows you to configure granular access control to the resources in your
-Materialize region through a hierarchy of [roles](/sql/grant-role/) and
-[privileges](/sql/grant-privilege/). For a deep-dive into how RBAC works in
-Materialize, check [Role-based access control (RBAC)](./rbac).
-
-### Configuring basic RBAC
-
-{{< warning >}}
-Here be dragons. 🐉 This setup is **not recommended** unless you are trialing
-Materialize.
-{{< /warning >}}
-
-If you're just getting started and haven't yet decided on an [RBAC strategy](#configuring-advanced-rbac)
-for your organization, we recommend [modifying default privileges](#modifying-default-privileges)
-or — if you just need to move fast and break things — [inviting users as administrators](#inviting-users-as-administrators).
-
-#### Modifying default privileges
-
-Every Materialize region has a `PUBLIC` system role that determines the default
-privileges available to all other roles. On creation, users are automatically
-granted membership in `PUBLIC`, and inherit the privileges assigned to it. By
-default, members of this role (and therefore **all users**) have the following
-[privileges](/sql/grant-privilege/#privilege):
-
-Privilege                            | Scope     |
--------------------------------------|-----------|
-`USAGE`                              | All types, all system catalog schemas, the `materialize.public` schema, the `materialize` database, and the `quickstart` cluster.|
-`SELECT`                             | All system catalog objects.  |
-
-This means that new, non-administrator users have limited access to resources in
-a Materialize region, and don't have the ability to e.g., create new clusters,
-databases, or schemas. To modify the default privileges available to all other
-roles in a Materialize region, you can use the [`ALTER DEFAULT PRIVILEGES`](/sql/alter-default-privileges/)
-command.
-
-```mzsql
-# Use SHOW ROLES to list existing roles in the system, which are 1:1 with invited users
-SHOW ROLES;
-
--- Example: grant read-only access to all object types, to all roles in the
--- system via the PUBLIC role For PostgreSQL compatibility reasons, TABLE is
--- the object type for sources, views, tables and materialized views
-ALTER DEFAULT PRIVILEGES FOR ALL ROLES GRANT SELECT ON TABLES TO PUBLIC;
-ALTER DEFAULT PRIVILEGES FOR ALL ROLES GRANT USAGE ON DATABASES TO PUBLIC;
-ALTER DEFAULT PRIVILEGES FOR ALL ROLES GRANT USAGE ON SCHEMAS TO PUBLIC;
-```
-
-#### Inviting users as administrators
-
-The path of least resistance to setting up RBAC is...not setting it up. If you
-invite all users as `Organization Admin`, all users will have the _superuser_
-role.
-
-Keep in mind that you will be giving all users unrestricted access to all
-resources in your Materialize region, as well as all features in the
-Materialize console. While this might be a viable solution when trialing
-Materialize with a small number of users, it can be **hard to revert** once you
-decide to roll out a RBAC strategy for your Materialize organization.
-
-As an alternative, you can approximate the set of privileges of a _superuser_ by
-instead modifying the default privileges to be wildly permissive:
-
-```mzsql
--- Use SHOW ROLES to list existing roles in the system, which are 1:1 with invited users
-SHOW ROLES;
-
--- Example: approximate full-blown admin access by modifying the default
--- privileges inherited by all roles via the PUBLIC role
-GRANT ALL PRIVILEGES ON SCHEMA materialize.public TO PUBLIC;
-GRANT ALL PRIVILEGES ON DATABASE materialize TO PUBLIC;
-GRANT ALL PRIVILEGES ON SCHEMA materialize.public TO PUBLIC;
-GRANT ALL PRIVILEGES ON CLUSTER default TO PUBLIC;
-
-GRANT ALL PRIVILEGES ON ALL TABLES IN SCHEMA materialize.public TO PUBLIC;
-GRANT ALL PRIVILEGES ON ALL TYPES IN SCHEMA materialize.public TO PUBLIC;
-GRANT ALL PRIVILEGES ON ALL SECRETS IN SCHEMA materialize.public TO PUBLIC;
-GRANT ALL PRIVILEGES ON ALL CONNECTIONS IN SCHEMA materialize.public TO PUBLIC;
-
-ALTER DEFAULT PRIVILEGES FOR ALL ROLES IN SCHEMA materialize.public GRANT ALL PRIVILEGES ON TABLES TO PUBLIC;
-ALTER DEFAULT PRIVILEGES FOR ALL ROLES IN SCHEMA materialize.public GRANT ALL PRIVILEGES ON TYPES TO PUBLIC;
-ALTER DEFAULT PRIVILEGES FOR ALL ROLES IN SCHEMA materialize.public GRANT ALL PRIVILEGES ON SECRETS TO PUBLIC;
-ALTER DEFAULT PRIVILEGES FOR ALL ROLES IN SCHEMA materialize.public GRANT ALL PRIVILEGES ON CONNECTIONS TO PUBLIC;
-```
-
-It's important to note that, while [`GRANT ALL PRIVILEGES`](/sql/grant-privilege/)
-applies to all objects that exist when the grant is run, [`ALTER DEFAULT PRIVILEGES`](/sql/alter-default-privileges/)
-applies to objects created in the future (aka future grants).
-
-### Configuring advanced RBAC
+### Configuring RBAC
 
 There is no one-size-fits-all solution for RBAC: the right strategy will depend
 on your team size, and existing security policies. Being able to create an
