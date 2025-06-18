@@ -204,10 +204,6 @@ pub trait DateLike: chrono::Datelike {
         self.year().div_euclid(10)
     }
 
-    fn quarter(&self) -> f64 {
-        (f64::from(self.month()) / 3.0).ceil()
-    }
-
     /// Extract the iso week of the year
     ///
     /// Note that because isoweeks are defined in terms of January 4th, Jan 1 is only in week
@@ -648,8 +644,7 @@ impl<T: TimestampLike> CheckedTimestamp<T> {
                 DateTimePart::Quarter => {
                     let years = i64::cast_from(a.year()).checked_sub(i64::cast_from(b.year()))?;
                     let quarters = years.checked_mul(QUARTERS_PER_YEAR)?;
-                    #[allow(clippy::as_conversions)]
-                    let diff = (a.quarter() - b.quarter()) as i64;
+                    let diff = i64::cast_from(a.quarter()) - i64::cast_from(b.quarter());
                     quarters.checked_add(diff)
                 }
                 DateTimePart::Month => {

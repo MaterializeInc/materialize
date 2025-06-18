@@ -143,8 +143,6 @@ pub fn storage_config(config: &SystemVars) -> StorageParameters {
         statistics_collection_interval: config.storage_statistics_collection_interval(),
         pg_snapshot_config: PgSourceSnapshotConfig {
             collect_strict_count: config.pg_source_snapshot_collect_strict_count(),
-            fallback_to_strict_count: config.pg_source_snapshot_fallback_to_strict_count(),
-            wait_for_count: config.pg_source_snapshot_wait_for_count(),
         },
         user_storage_managed_collections_batch_duration: config
             .user_storage_managed_collections_batch_duration(),
@@ -204,6 +202,7 @@ pub fn orchestrator_scheduling_config(config: &SystemVars) -> ServiceSchedulingC
             enabled: config.cluster_enable_topology_spread(),
             ignore_non_singular_scale: config.cluster_topology_spread_ignore_non_singular_scale(),
             max_skew: config.cluster_topology_spread_max_skew(),
+            min_domains: config.cluster_topology_spread_set_min_domains(),
             soft: config.cluster_topology_spread_soft(),
         },
         soften_az_affinity: config.cluster_soften_az_affinity(),

@@ -15,9 +15,11 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 use std::num::NonZeroUsize;
+use std::ops::Deref;
+use std::sync::Arc;
 
 use differential_dataflow::consolidation::consolidate;
-use futures::TryFutureExt;
+use itertools::Itertools;
 use mz_adapter_types::compaction::CompactionWindow;
 use mz_adapter_types::connection::ConnectionId;
 use mz_cluster_client::ReplicaId;
@@ -31,16 +33,21 @@ use mz_expr::explain::{HumanizedExplain, HumanizerMode, fmt_text_constant_rows};
 use mz_expr::row::RowCollection;
 use mz_expr::{
     EvalError, Id, MirRelationExpr, MirScalarExpr, OptimizedMirRelationExpr, RowSetFinishing,
-    permutation_for_arrangement,
+    RowSetFinishingIncremental, permutation_for_arrangement,
 };
 use mz_ore::cast::CastFrom;
 use mz_ore::str::{StrExt, separated};
 use mz_ore::tracing::OpenTelemetryContext;
+use mz_persist_client::Schemas;
+use mz_persist_types::codec_impls::UnitSchema;
 use mz_repr::explain::text::DisplayText;
 use mz_repr::explain::{CompactScalars, IndexUsageType, PlanRenderingContext, UsedIndexes};
-use mz_repr::{Diff, GlobalId, IntoRowIterator, RelationType, Row, RowIterator, preserves_order};
+use mz_repr::{
+    Diff, GlobalId, IntoRowIterator, RelationDesc, RelationType, Row, RowIterator, preserves_order,
+};
+use mz_storage_types::sources::SourceData;
 use serde::{Deserialize, Serialize};
-use timely::progress::Timestamp;
+use timely::progress::{Antichain, Timestamp};
 use uuid::Uuid;
 
 use crate::coord::timestamp_selection::TimestampDetermination;
@@ -128,8 +135,107 @@ impl<'a, T: 'a> DisplayText<PlanRenderingContext<'a, T>> for FastPathPlan {
         f: &mut fmt::Formatter<'_>,
         ctx: &mut PlanRenderingContext<'a, T>,
     ) -> fmt::Result {
-        let redacted = ctx.config.redacted;
+        if ctx.config.verbose_syntax {
+            self.fmt_verbose_text(f, ctx)
+        } else {
+            self.fmt_default_text(f, ctx)
+        }
+    }
+}
+
+impl FastPathPlan {
+    pub fn fmt_default_text<'a, T>(
+        &self,
+        f: &mut fmt::Formatter<'_>,
+        ctx: &mut PlanRenderingContext<'a, T>,
+    ) -> fmt::Result {
         let mode = HumanizedExplain::new(ctx.config.redacted);
+
+        match self {
+            FastPathPlan::Constant(rows, _) => {
+                write!(f, "{}→Constant ", ctx.indent)?;
+
+                match rows {
+                    Ok(rows) => writeln!(f, "({} rows)", rows.len())?,
+                    Err(err) => {
+                        if mode.redacted() {
+                            writeln!(f, "(error: █)")?;
+                        } else {
+                            writeln!(f, "(error: {})", err.to_string().quoted(),)?;
+                        }
+                    }
+                }
+            }
+            FastPathPlan::PeekExisting(coll_id, idx_id, literal_constraints, mfp) => {
+                let coll = ctx
+                    .humanizer
+                    .humanize_id(*coll_id)
+                    .unwrap_or_else(|| coll_id.to_string());
+                let idx = ctx
+                    .humanizer
+                    .humanize_id(*idx_id)
+                    .unwrap_or_else(|| idx_id.to_string());
+                writeln!(f, "{}→Map/Filter/Project", ctx.indent)?;
+                ctx.indent.set();
+
+                ctx.indent += 1;
+
+                mode.expr(mfp.deref(), None).fmt_default_text(f, ctx)?;
+                let printed = !mfp.expressions.is_empty() || !mfp.predicates.is_empty();
+
+                if printed {
+                    ctx.indent += 1;
+                }
+                if let Some(literal_constraints) = literal_constraints {
+                    writeln!(f, "{}→Index Lookup on {coll} (using {idx})", ctx.indent)?;
+                    ctx.indent += 1;
+                    let values = separated("; ", mode.seq(literal_constraints, None));
+                    writeln!(f, "{}Lookup values: {values}", ctx.indent)?;
+                } else {
+                    writeln!(f, "{}→Indexed {coll} (using {idx})", ctx.indent)?;
+                }
+
+                ctx.indent.reset();
+            }
+            FastPathPlan::PeekPersist(global_id, literal_constraint, mfp) => {
+                let coll = ctx
+                    .humanizer
+                    .humanize_id(*global_id)
+                    .unwrap_or_else(|| global_id.to_string());
+                writeln!(f, "{}→Map/Filter/Project", ctx.indent)?;
+                ctx.indent.set();
+
+                ctx.indent += 1;
+
+                mode.expr(mfp.deref(), None).fmt_default_text(f, ctx)?;
+                let printed = !mfp.expressions.is_empty() || !mfp.predicates.is_empty();
+
+                if printed {
+                    ctx.indent += 1;
+                }
+                if let Some(literal_constraint) = literal_constraint {
+                    writeln!(f, "{}→Index Lookup on {coll} (from storage)", ctx.indent)?;
+                    ctx.indent += 1;
+                    let value = mode.expr(literal_constraint, None);
+                    writeln!(f, "{}Lookup value: {value}", ctx.indent)?;
+                } else {
+                    writeln!(f, "{}→Indexed {coll} (from storage)", ctx.indent)?;
+                }
+
+                ctx.indent.reset();
+            }
+        }
+
+        Ok(())
+    }
+
+    pub fn fmt_verbose_text<'a, T>(
+        &self,
+        f: &mut fmt::Formatter<'_>,
+        ctx: &mut PlanRenderingContext<'a, T>,
+    ) -> fmt::Result {
+        let redacted = ctx.config.redacted;
+        let mode = HumanizedExplain::new(redacted);
 
         // TODO(aalexandrov): factor out common PeekExisting and PeekPersist
         // code.
@@ -268,6 +374,13 @@ pub struct PlannedPeek {
     pub plan: PeekPlan,
     pub determination: TimestampDetermination<mz_repr::Timestamp>,
     pub conn_id: ConnectionId,
+    /// The result type _after_ reading out of the "source" and applying any
+    /// [MapFilterProject](mz_expr::MapFilterProject), but _before_ applying a
+    /// [RowSetFinishing].
+    ///
+    /// This is _the_ `result_type` as far as compute is concerned and futher
+    /// changes through projections happen purely in the adapter.
+    pub intermediate_result_type: RelationType,
     pub source_arity: usize,
     pub source_ids: BTreeSet<GlobalId>,
 }
@@ -522,6 +635,7 @@ impl crate::coord::Coordinator {
             plan: fast_path,
             determination,
             conn_id,
+            intermediate_result_type,
             source_arity,
             source_ids,
         } = plan;
@@ -666,6 +780,7 @@ impl crate::coord::Coordinator {
                     index_key.len() + index_thinned_arity,
                 );
                 let map_filter_project = mfp_to_safe_plan(map_filter_project)?;
+
                 (
                     (None, timestamp, map_filter_project),
                     Some(index_id),
@@ -707,6 +822,13 @@ impl crate::coord::Coordinator {
             .insert(uuid, compute_instance);
         let (literal_constraints, timestamp, map_filter_project) = peek_command;
 
+        // At this stage we don't know column names for the result because we
+        // only know the peek's result type as a bare ResultType.
+        let peek_result_column_names =
+            (0..intermediate_result_type.arity()).map(|i| format!("peek_{i}"));
+        let peek_result_desc =
+            RelationDesc::new(intermediate_result_type, peek_result_column_names);
+
         self.controller
             .compute
             .peek(
@@ -715,18 +837,72 @@ impl crate::coord::Coordinator {
                 literal_constraints,
                 uuid,
                 timestamp,
+                peek_result_desc,
                 finishing.clone(),
                 map_filter_project,
                 target_replica,
                 rows_tx,
             )
             .unwrap_or_terminate("cannot fail to peek");
+
         let duration_histogram = self.metrics.row_set_finishing_seconds();
 
-        // Prepare the receiver to return as a response.
-        let rows_rx = rows_rx.map_ok_or_else(
-            |e| PeekResponseUnary::Error(e.to_string()),
-            move |resp| match resp {
+        // If a dataflow was created, drop it once the peek command is sent.
+        if let Some(index_id) = drop_dataflow {
+            self.remove_compute_ids_from_timeline(vec![(compute_instance, index_id)]);
+            self.drop_indexes(vec![(compute_instance, index_id)]);
+        }
+
+        let persist_client = self.persist_client.clone();
+        let peek_stash_read_batch_size_bytes =
+            mz_compute_types::dyncfgs::PEEK_RESPONSE_STASH_READ_BATCH_SIZE_BYTES
+                .get(self.catalog().system_config().dyncfgs());
+        let peek_stash_read_memory_budget_bytes =
+            mz_compute_types::dyncfgs::PEEK_RESPONSE_STASH_READ_MEMORY_BUDGET_BYTES
+                .get(self.catalog().system_config().dyncfgs());
+
+        let peek_response_stream = Self::create_peek_response_stream(
+            rows_rx,
+            finishing,
+            max_result_size,
+            max_returned_query_size,
+            duration_histogram,
+            persist_client,
+            peek_stash_read_batch_size_bytes,
+            peek_stash_read_memory_budget_bytes,
+        );
+
+        Ok(crate::ExecuteResponse::SendingRowsStreaming {
+            rows: Box::pin(peek_response_stream),
+            instance_id: compute_instance,
+            strategy,
+        })
+    }
+
+    /// Creates an async stream that processes peek responses and yields rows.
+    #[mz_ore::instrument(level = "debug")]
+    fn create_peek_response_stream(
+        rows_rx: tokio::sync::oneshot::Receiver<PeekResponse>,
+        finishing: RowSetFinishing,
+        max_result_size: u64,
+        max_returned_query_size: Option<u64>,
+        duration_histogram: prometheus::Histogram,
+        mut persist_client: mz_persist_client::PersistClient,
+        peek_stash_read_batch_size_bytes: usize,
+        peek_stash_read_memory_budget_bytes: usize,
+    ) -> impl futures::Stream<Item = PeekResponseUnary> {
+        async_stream::stream!({
+            let result = rows_rx.await;
+
+            let rows = match result {
+                Ok(rows) => rows,
+                Err(e) => {
+                    yield PeekResponseUnary::Error(e.to_string());
+                    return;
+                }
+            };
+
+            match rows {
                 PeekResponse::Rows(rows) => {
                     match finishing.finish(
                         rows,
@@ -734,25 +910,182 @@ impl crate::coord::Coordinator {
                         max_returned_query_size,
                         &duration_histogram,
                     ) {
-                        Ok((rows, _size_bytes)) => PeekResponseUnary::Rows(Box::new(rows)),
-                        Err(e) => PeekResponseUnary::Error(e),
+                        Ok((rows, _size_bytes)) => yield PeekResponseUnary::Rows(Box::new(rows)),
+                        Err(e) => yield PeekResponseUnary::Error(e),
                     }
                 }
-                PeekResponse::Canceled => PeekResponseUnary::Canceled,
-                PeekResponse::Error(e) => PeekResponseUnary::Error(e),
-            },
-        );
+                PeekResponse::Stashed(response) => {
+                    let response = *response;
 
-        // If it was created, drop the dataflow once the peek command is sent.
-        if let Some(index_id) = drop_dataflow {
-            self.remove_compute_ids_from_timeline(vec![(compute_instance, index_id)]);
-            self.drop_indexes(vec![(compute_instance, index_id)]);
-        }
+                    let shard_id = response.shard_id;
 
-        Ok(crate::ExecuteResponse::SendingRows {
-            future: Box::pin(rows_rx),
-            instance_id: compute_instance,
-            strategy,
+                    let mut batches = Vec::new();
+                    for proto_batch in response.batches.into_iter() {
+                        let batch =
+                            persist_client.batch_from_transmittable_batch(&shard_id, proto_batch);
+
+                        batches.push(batch);
+                    }
+                    tracing::trace!(?batches, "stashed peek response");
+
+                    let as_of = Antichain::from_elem(mz_repr::Timestamp::default());
+                    let read_schemas: Schemas<SourceData, ()> = Schemas {
+                        id: None,
+                        key: Arc::new(response.relation_desc.clone()),
+                        val: Arc::new(UnitSchema),
+                    };
+
+                    let mut row_cursor = persist_client
+                        .read_batches_consolidated::<_, _, _, i64>(
+                            response.shard_id,
+                            as_of,
+                            read_schemas,
+                            batches,
+                            |_stats| true,
+                            peek_stash_read_memory_budget_bytes,
+                        )
+                        .await
+                        .expect("invalid usage");
+
+                    // NOTE: Using the cursor creates Futures that are not Sync,
+                    // so we can't drive them on the main Coordinator loop.
+                    // Spawning a task has the additional benefit that we get to
+                    // delete batches once we're done.
+                    //
+                    // Batch deletion is best-effort, though, and there are
+                    // multiple known ways in which they can leak, among them:
+                    //
+                    // - ProtoBatch is lost in flight
+                    // - ProtoBatch is lost because when combining PeekResponse
+                    // from workers a cancellation or error "overrides" other
+                    // results, meaning we drop them
+                    // - This task here is not run to completion before it can
+                    // delete all batches
+                    //
+                    // This is semi-ok, because persist needs a reaper of leaked
+                    // batches already, and so we piggy-back on that, even if it
+                    // might not exist as of today.
+                    let (tx, mut rx) = tokio::sync::mpsc::channel(1);
+                    mz_ore::task::spawn(|| "read_peek_batches", async move {
+                        // We always send our inline rows first. Ordering
+                        // doesn't matter because we can only be in this case
+                        // when there is no ORDER BY.
+                        //
+                        // We _could_ write these out as a Batch, and include it
+                        // in the batches we read via the Consolidator. If we
+                        // wanted to get a consistent ordering. That's not
+                        // needed for correctness! But might be nice for more
+                        // aesthetic reasons.
+                        let result = tx.send(response.inline_rows).await;
+                        if result.is_err() {
+                            tracing::error!("receiver went away");
+                        }
+
+                        let mut current_batch = Vec::new();
+                        let mut current_batch_size: usize = 0;
+
+                        'outer: while let Some(rows) = row_cursor.next().await {
+                            for ((key, _val), _ts, diff) in rows {
+                                let source_data = key.expect("decoding error");
+
+                                let row = source_data
+                                    .0
+                                    .expect("we are not sending errors on this code path");
+
+                                let diff = usize::try_from(diff)
+                                    .expect("peek responses cannot have negative diffs");
+
+                                if diff > 0 {
+                                    let diff =
+                                        NonZeroUsize::new(diff).expect("checked to be non-zero");
+                                    current_batch_size =
+                                        current_batch_size.saturating_add(row.byte_len());
+                                    current_batch.push((row, diff));
+                                }
+
+                                if current_batch_size > peek_stash_read_batch_size_bytes {
+                                    // We're re-encoding the rows as a RowCollection
+                                    // here, for which we pay in CPU time. We're in a
+                                    // slow path already, since we're returning a big
+                                    // stashed result so this is worth the convenience
+                                    // of that for now.
+                                    let result = tx
+                                        .send(RowCollection::new(
+                                            current_batch.drain(..).collect_vec(),
+                                            &[],
+                                        ))
+                                        .await;
+                                    if result.is_err() {
+                                        tracing::error!("receiver went away");
+                                        // Don't return but break so we fall out to the
+                                        // batch delete logic below.
+                                        break 'outer;
+                                    }
+
+                                    current_batch_size = 0;
+                                }
+                            }
+                        }
+
+                        if current_batch.len() > 0 {
+                            let result = tx.send(RowCollection::new(current_batch, &[])).await;
+                            if result.is_err() {
+                                tracing::error!("receiver went away");
+                            }
+                        }
+
+                        let batches = row_cursor.into_lease();
+                        tracing::trace!(?response.shard_id, "cleaning up batches of peek result");
+                        for batch in batches {
+                            batch.delete().await;
+                        }
+                    });
+
+                    assert!(
+                        finishing.is_streamable(response.relation_desc.arity()),
+                        "can only get stashed responses when the finishing is streamable"
+                    );
+
+                    tracing::trace!("query result is streamable!");
+
+                    assert!(finishing.is_streamable(response.relation_desc.arity()));
+                    let mut incremental_finishing = RowSetFinishingIncremental::new(
+                        finishing.offset,
+                        finishing.limit,
+                        finishing.project,
+                        max_returned_query_size,
+                    );
+
+                    let mut got_zero_rows = true;
+                    while let Some(rows) = rx.recv().await {
+                        got_zero_rows = false;
+
+                        let result_rows = incremental_finishing.finish_incremental(
+                            rows,
+                            max_result_size,
+                            &duration_histogram,
+                        );
+
+                        match result_rows {
+                            Ok(result_rows) => yield PeekResponseUnary::Rows(Box::new(result_rows)),
+                            Err(e) => yield PeekResponseUnary::Error(e),
+                        }
+                    }
+
+                    // Even when there's zero rows, clients still expect an
+                    // empty PeekResponse.
+                    if got_zero_rows {
+                        let row_iter = vec![].into_row_iter();
+                        yield PeekResponseUnary::Rows(Box::new(row_iter));
+                    }
+                }
+                PeekResponse::Canceled => {
+                    yield PeekResponseUnary::Canceled;
+                }
+                PeekResponse::Error(e) => {
+                    yield PeekResponseUnary::Error(e);
+                }
+            }
         })
     }
 
@@ -914,6 +1247,7 @@ mod tests {
         let humanizer = DummyHumanizer;
         let config = ExplainConfig {
             redacted: false,
+            verbose_syntax: true,
             ..Default::default()
         };
         let ctx_gen = || {

@@ -22,6 +22,7 @@ futures = "0.3.31"
 itertools = "0.14.0"
 lgalloc = "0.6"
 mz-cluster = { path = "../cluster" }
+mz-cluster-client = { path = "../cluster-client" }
 mz-compute-client = { path = "../compute-client" }
 mz-compute-types = { path = "../compute-types" }
 mz-dyncfg = { path = "../dyncfg" }
@@ -39,7 +40,7 @@ mz-txn-wal = { path = "../txn-wal" }
 prometheus = { version = "0.13.4", default-features = false }
 scopeguard = "1.2.0"
 serde = { version = "1.0.219", features = ["derive"] }
-smallvec = { version = "1.15.0", features = ["serde", "union"] }
+smallvec = { version = "1.15.1", features = ["serde", "union"] }
 timely = "0.21.0"
 tokio = { version = "1.44.1", features = ["fs", "rt", "sync", "net"] }
 tracing = "0.1.37"

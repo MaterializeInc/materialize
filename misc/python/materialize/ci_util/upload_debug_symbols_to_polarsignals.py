@@ -56,6 +56,7 @@ def collect_and_upload_debug_data_to_polarsignals(
     print(f"Considered images are: {relevant_images_by_name.keys()}")
 
     for image_name, image in relevant_images_by_name.items():
+        remove_docker_container_if_exists(image_name)
         container_name = create_docker_container(image_name, image)
         print(
             f"Created docker container from image {image_name} (spec: {image.spec()})"
@@ -94,6 +95,13 @@ def get_build_images(
         resolved_images[image_name] = dependency_set[image_name]
 
     return resolved_images
+
+
+def remove_docker_container_if_exists(image_name: str) -> None:
+    try:
+        subprocess.run(["docker", "rm", image_name], check=True)
+    except subprocess.CalledProcessError as e:
+        print(f"Removing container failed, ignoring: {e}")
 
 
 def create_docker_container(image_name: str, image: ResolvedImage) -> str:

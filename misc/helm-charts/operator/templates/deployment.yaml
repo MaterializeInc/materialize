@@ -85,9 +85,6 @@ spec:
         {{- range $key, $value := .Values.console.imageTagMapOverride }}
         - "--console-image-tag-map={{ $key }}={{ $value }}"
         {{- end }}
-        {{- if not .Values.operator.features.authentication }}
-        - "--disable-authentication"
-        {{- end }}
 
         {{/* Cluster Configuration */}}
         {{- if .Values.operator.clusters }}

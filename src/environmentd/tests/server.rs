@@ -22,6 +22,8 @@ use std::{iter, thread};
 
 use anyhow::bail;
 use chrono::{DateTime, Utc};
+use flate2::Compression;
+use flate2::write::GzEncoder;
 use futures::FutureExt;
 use http::Request;
 use itertools::Itertools;
@@ -54,7 +56,7 @@ use rdkafka::ClientConfig;
 use rdkafka::admin::{AdminClient, AdminOptions, NewTopic, TopicReplication};
 use rdkafka_sys::RDKafkaErrorCode;
 use reqwest::blocking::Client;
-use reqwest::header::CONTENT_TYPE;
+use reqwest::header::{CONTENT_ENCODING, CONTENT_TYPE};
 use reqwest::{StatusCode, Url};
 use serde::{Deserialize, Serialize};
 use tempfile::TempDir;
@@ -198,7 +200,6 @@ fn setup_statement_logging(
 
 // Test that we log various kinds of statement whose execution terminates in the coordinator.
 #[mz_ore::test]
-#[cfg_attr(coverage, ignore)] // https://github.com/MaterializeInc/database-issues/issues/6487
 fn test_statement_logging_immediate() {
     let (server, mut client) = setup_statement_logging(1.0, 1.0);
 
@@ -244,35 +245,45 @@ fn test_statement_logging_immediate() {
 
     for &statement in successful_immediates {
         client.execute(statement, &[]).unwrap();
+
+        // Enforce a small delay to avoid duplicate `began_at` times, which would make the ordering
+        // of logged statements non-deterministic when we retrieve them below.
+        thread::sleep(Duration::from_millis(10));
     }
 
-    // Statement logging happens async, give it a chance to catch up
-    thread::sleep(Duration::from_secs(10));
-
     let mut client = server.connect_internal(postgres::NoTls).unwrap();
-    let sl = client
-        .query(
-            "
-SELECT
-    mseh.sample_rate,
-    mseh.began_at,
-    mseh.finished_at,
-    mseh.finished_status,
-    mst.sql,
-    mpsh.prepared_at,
-    mst.redacted_sql
-FROM
-    mz_internal.mz_statement_execution_history AS mseh
+    let seh_query = "
+        SELECT
+            mseh.sample_rate,
+            mseh.began_at,
+            mseh.finished_at,
+            mseh.finished_status,
+            mst.sql,
+            mpsh.prepared_at,
+            mst.redacted_sql
+        FROM mz_internal.mz_statement_execution_history AS mseh
         LEFT JOIN
             mz_internal.mz_prepared_statement_history AS mpsh
             ON mseh.prepared_statement_id = mpsh.id
         JOIN
             (SELECT DISTINCT sql, sql_hash, redacted_sql FROM mz_internal.mz_sql_text) mst
             ON mpsh.sql_hash = mst.sql_hash
-ORDER BY mseh.began_at;",
-            &[],
-        )
-        .unwrap();
+        WHERE mst.sql !~~ '%mz_statement_execution_history%'
+        ORDER BY mseh.began_at";
+
+    // Statement logging happens async, retry until we get the expected number of logged
+    // statements.
+    let mut sl = Vec::new();
+    for _ in 0..10 {
+        thread::sleep(Duration::from_secs(1));
+        sl = client.query(seh_query, &[]).unwrap();
+        if sl.len() >= successful_immediates.len() {
+            break;
+        }
+    }
+
+    assert_eq!(sl.len(), successful_immediates.len());
+
     #[derive(Debug)]
     struct Record {
         sample_rate: f64,
@@ -283,7 +294,6 @@ ORDER BY mseh.began_at;",
         prepared_at: DateTime<Utc>,
         redacted_sql: String,
     }
-    assert_eq!(sl.len(), successful_immediates.len());
     for (r, stmt) in std::iter::zip(sl.iter(), successful_immediates) {
         let r = Record {
             sample_rate: r.get(0),
@@ -572,9 +582,37 @@ fn test_statement_logging_subscribes() {
     }
     handle.join().unwrap();
 
-    // Statement logging happens async, give it a chance to catch up
-    thread::sleep(Duration::from_secs(5));
     let mut client = server.connect_internal(postgres::NoTls).unwrap();
+    let seh_query = "
+        SELECT
+            mseh.sample_rate,
+            mseh.began_at,
+            mseh.finished_at,
+            mseh.finished_status,
+            mpsh.prepared_at,
+            mseh.execution_strategy
+        FROM mz_internal.mz_statement_execution_history AS mseh
+        LEFT JOIN
+            mz_internal.mz_prepared_statement_history AS mpsh
+            ON mseh.prepared_statement_id = mpsh.id
+        JOIN
+            mz_internal.mz_sql_text AS mst
+            ON mpsh.sql_hash = mst.sql_hash
+        WHERE mst.sql ~~ 'SUBSCRIBE%'
+        ORDER BY mseh.began_at";
+
+    // Statement logging happens async, retry until we get the expected number of logged
+    // statements.
+    let mut sl = Vec::new();
+    for _ in 0..10 {
+        thread::sleep(Duration::from_secs(1));
+        sl = client.query(seh_query, &[]).unwrap();
+        if sl.len() >= 2 {
+            break;
+        }
+    }
+
+    assert_eq!(sl.len(), 2);
 
     struct Record {
         sample_rate: f64,
@@ -584,28 +622,8 @@ fn test_statement_logging_subscribes() {
         prepared_at: DateTime<Utc>,
         execution_strategy: Option<String>,
     }
-    let sl_subscribes = client
-        .query(
-            "SELECT
-    mseh.sample_rate,
-    mseh.began_at,
-    mseh.finished_at,
-    mseh.finished_status,
-    mpsh.prepared_at,
-    mseh.execution_strategy
-FROM
-    mz_internal.mz_statement_execution_history AS mseh
-        LEFT JOIN
-            mz_internal.mz_prepared_statement_history AS mpsh
-            ON mseh.prepared_statement_id = mpsh.id
-        JOIN
-            mz_internal.mz_sql_text AS mst
-            ON mpsh.sql_hash = mst.sql_hash
-WHERE mst.sql ~~ 'SUBSCRIBE%'
-ORDER BY mseh.began_at",
-            &[],
-        )
-        .unwrap()
+
+    let sl_subscribes = sl
         .into_iter()
         .map(|r| Record {
             sample_rate: r.get(0),
@@ -616,10 +634,6 @@ ORDER BY mseh.began_at",
             execution_strategy: r.get(5),
         })
         .collect::<Vec<_>>();
-    assert_eq!(
-        sl_subscribes.len(), // 3
-        2
-    );
     for r in &sl_subscribes {
         assert_eq!(r.sample_rate, 1.0);
         assert!(r.prepared_at <= r.began_at);
@@ -640,29 +654,12 @@ fn test_statement_logging_sampling_inner(
 ) {
     for i in 0..50 {
         client.execute(&format!("SELECT {i}"), &[]).unwrap();
+
+        // Enforce a small delay to avoid duplicate `began_at` times, which would make the ordering
+        // of logged statements non-deterministic when we retrieve them below.
+        thread::sleep(Duration::from_millis(10));
     }
-    // Statement logging happens async, give it a chance to catch up
-    thread::sleep(Duration::from_secs(5));
-    let mut internal_client = server.connect_internal(postgres::NoTls).unwrap();
-    let sqls: Vec<String> = internal_client
-        .query(
-            "SELECT mst.sql
-FROM
-    mz_internal.mz_statement_execution_history AS mseh
-        JOIN
-            mz_internal.mz_prepared_statement_history AS mpsh
-            ON mseh.prepared_statement_id = mpsh.id
-        JOIN
-            mz_internal.mz_sql_text AS mst
-            ON mpsh.sql_hash = mst.sql_hash
-WHERE mst.sql ~~ 'SELECT%'
-ORDER BY mseh.began_at ASC;",
-            &[],
-        )
-        .unwrap()
-        .into_iter()
-        .map(|r| r.get(0))
-        .collect();
+
     // 23 randomly sampled out of 50 with 50% sampling. Seems legit!
     let expected_sqls = [
         2, 4, 5, 6, 9, 15, 17, 18, 19, 20, 21, 23, 24, 25, 31, 32, 33, 36, 37, 42, 46,
@@ -670,11 +667,36 @@ ORDER BY mseh.began_at ASC;",
     .into_iter()
     .map(|i| format!("SELECT {i}"))
     .collect::<Vec<_>>();
+
+    let mut internal_client = server.connect_internal(postgres::NoTls).unwrap();
+    let seh_query = "
+        SELECT mst.sql
+        FROM mz_internal.mz_statement_execution_history AS mseh
+        JOIN
+            mz_internal.mz_prepared_statement_history AS mpsh
+            ON mseh.prepared_statement_id = mpsh.id
+        JOIN
+            mz_internal.mz_sql_text AS mst
+            ON mpsh.sql_hash = mst.sql_hash
+        WHERE mst.sql ~~ 'SELECT%' AND mst.sql !~~ '%mz_statement_execution_history%'
+        ORDER BY mseh.began_at ASC";
+
+    // Statement logging happens async, retry until we get the expected number of logged
+    // statements.
+    let mut sl = Vec::new();
+    for _ in 0..10 {
+        thread::sleep(Duration::from_secs(1));
+        sl = internal_client.query(seh_query, &[]).unwrap();
+        if sl.len() >= expected_sqls.len() {
+            break;
+        }
+    }
+
+    let sqls: Vec<String> = sl.into_iter().map(|r| r.get(0)).collect();
     assert_eq!(sqls, expected_sqls);
 }
 
 #[mz_ore::test]
-#[ignore] // TODO: Reenable when database-issues#8967 is fixed
 fn test_statement_logging_sampling() {
     let (server, client) = setup_statement_logging(1.0, 0.5);
     test_statement_logging_sampling_inner(server, client);
@@ -683,7 +705,6 @@ fn test_statement_logging_sampling() {
 /// Test that we are not allowed to set `statement_logging_sample_rate`
 /// arbitrarily high, but that it is constrained by `statement_logging_max_sample_rate`.
 #[mz_ore::test]
-#[ignore] // TODO: Reenable when database-issues#8967 is fixed
 fn test_statement_logging_sampling_constrained() {
     let (server, client) = setup_statement_logging(0.5, 1.0);
     test_statement_logging_sampling_inner(server, client);
@@ -865,11 +886,7 @@ fn test_http_sql() {
         }
 
         let ws_url = server.ws_addr();
-        let http_url = Url::parse(&format!(
-            "http://{}/api/sql",
-            server.inner().http_local_addr()
-        ))
-        .unwrap();
+        let http_url = Url::parse(&format!("http://{}/api/sql", server.http_local_addr())).unwrap();
         let (mut ws, _resp) = tungstenite::connect(ws_url).unwrap();
         let ws_init = test_util::auth_with_ws(&mut ws, BTreeMap::default()).unwrap();
 
@@ -1086,7 +1103,7 @@ fn test_closing_connection_cancels_dataflows(query: String) {
             &format!(
                 "postgres://{}:{}/materialize",
                 Ipv4Addr::LOCALHOST,
-                server.inner().sql_local_addr().port()
+                server.sql_local_addr().port()
             ),
         ])
         .stdin(Stdio::piped());
@@ -1700,11 +1717,7 @@ fn test_max_request_size() {
     {
         let param_size = mz_environmentd::http::MAX_REQUEST_SIZE - statement_size + 1;
         let param = std::iter::repeat("1").take(param_size).join("");
-        let http_url = Url::parse(&format!(
-            "http://{}/api/sql",
-            server.inner().http_local_addr()
-        ))
-        .unwrap();
+        let http_url = Url::parse(&format!("http://{}/api/sql", server.http_local_addr())).unwrap();
         let json = format!("{{\"queries\":[{{\"query\":\"{statement}\",\"params\":[{param}]}}]}}");
         let json: serde_json::Value = serde_json::from_str(&json).unwrap();
         let res = Client::new().post(http_url).json(&json).send().unwrap();
@@ -1760,11 +1773,7 @@ fn test_max_statement_batch_size() {
 
     // http
     {
-        let http_url = Url::parse(&format!(
-            "http://{}/api/sql",
-            server.inner().http_local_addr()
-        ))
-        .unwrap();
+        let http_url = Url::parse(&format!("http://{}/api/sql", server.http_local_addr())).unwrap();
         let json = format!("{{\"query\":\"{statements}\"}}");
         let json: serde_json::Value = serde_json::from_str(&json).unwrap();
 
@@ -1988,7 +1997,7 @@ fn test_http_options_param() {
     let make_request = |params| {
         let http_url = Url::parse(&format!(
             "http://{}/api/sql?{}",
-            server.inner().http_local_addr(),
+            server.http_local_addr(),
             params
         ))
         .unwrap();
@@ -2072,11 +2081,7 @@ fn test_max_connections_on_all_interfaces() {
     let client = server.connect(postgres::NoTls).unwrap();
 
     let ws_url = server.ws_addr();
-    let http_url = Url::parse(&format!(
-        "http://{}/api/sql",
-        server.inner().http_local_addr()
-    ))
-    .unwrap();
+    let http_url = Url::parse(&format!("http://{}/api/sql", server.http_local_addr())).unwrap();
     let json = format!("{{\"query\":\"{query}\"}}");
     let json: serde_json::Value = serde_json::from_str(&json).unwrap();
 
@@ -2250,7 +2255,7 @@ async fn test_max_connections_limits() {
 
     let server = test_util::TestHarness::default()
         .with_tls(server_cert, server_key)
-        .with_frontegg(&frontegg_auth)
+        .with_frontegg_auth(&frontegg_auth)
         .with_metrics_registry(metrics_registry)
         .start()
         .await;
@@ -2418,11 +2423,7 @@ async fn test_concurrent_id_reuse() {
             .unwrap();
     }
 
-    let http_url = Url::parse(&format!(
-        "http://{}/api/sql",
-        server.inner.http_local_addr()
-    ))
-    .unwrap();
+    let http_url = Url::parse(&format!("http://{}/api/sql", server.http_local_addr())).unwrap();
     let select_json = "{\"queries\":[{\"query\":\"SELECT * FROM t;\",\"params\":[]}]}";
     let select_json: serde_json::Value = serde_json::from_str(select_json).unwrap();
 
@@ -2472,7 +2473,7 @@ fn test_internal_console_proxy() {
         .get(
             Url::parse(&format!(
                 "http://{}/internal-console/",
-                server.inner().internal_http_local_addr()
+                server.internal_http_local_addr()
             ))
             .unwrap(),
         )
@@ -2493,7 +2494,7 @@ fn test_internal_http_auth() {
     let json = serde_json::json!({"query": "SELECT current_user;"});
     let url = Url::parse(&format!(
         "http://{}/api/sql",
-        server.inner().internal_http_local_addr()
+        server.internal_http_local_addr()
     ))
     .unwrap();
 
@@ -2552,9 +2553,9 @@ fn test_internal_ws_auth() {
     let ws_url = server.internal_ws_addr();
     let make_req = || {
         Request::builder()
-            .uri(ws_url.as_str())
+            .uri(ws_url.clone())
             .method("GET")
-            .header("Host", ws_url.host_str().unwrap())
+            .header("Host", ws_url.host().unwrap())
             .header("Connection", "Upgrade")
             .header("Upgrade", "websocket")
             .header("Sec-WebSocket-Version", "13")
@@ -2645,7 +2646,7 @@ fn test_leader_promotion_always_using_deploy_generation() {
         // check that we're the leader and promotion doesn't do anything
         let status_http_url = Url::parse(&format!(
             "http://{}/api/leader/status",
-            server.inner().internal_http_local_addr()
+            server.internal_http_local_addr()
         ))
         .unwrap();
         let res = http_client.get(status_http_url).send().unwrap();
@@ -2655,7 +2656,7 @@ fn test_leader_promotion_always_using_deploy_generation() {
 
         let promote_http_url = Url::parse(&format!(
             "http://{}/api/leader/promote",
-            server.inner().internal_http_local_addr()
+            server.internal_http_local_addr()
         ))
         .unwrap();
         let res = http_client.post(promote_http_url).send().unwrap();
@@ -2683,8 +2684,8 @@ async fn test_leader_promotion_mixed_code_version() {
     client_this.simple_query("SELECT 1").await.unwrap();
 
     // Simulate a rolling upgrade and wait for the preflight checks.
-    let listeners_next = test_util::Listeners::new().await.unwrap();
-    let internal_http_addr_next = listeners_next.inner.internal_http_local_addr();
+    let listeners_next = test_util::Listeners::new(&harness).await.unwrap();
+    let internal_http_addr_next = listeners_next.inner.http["internal"].handle.local_addr;
     let config_next = harness
         .clone()
         .with_deploy_generation(2)
@@ -2819,7 +2820,7 @@ async fn smoketest_webhook_source() {
     let http_client = reqwest::Client::new();
     let webhook_url = Arc::new(format!(
         "http://{}/api/webhook/materialize/public/webhook_json",
-        server.inner.http_local_addr()
+        server.http_local_addr()
     ));
     // Send all of our events to our webhook source.
     let mut handles = Vec::with_capacity(events.len());
@@ -2911,7 +2912,7 @@ fn test_invalid_webhook_body() {
         .expect("failed to create source");
     let webhook_url = format!(
         "http://{}/api/webhook/materialize/public/webhook_text",
-        server.inner().http_local_addr()
+        server.http_local_addr()
     );
 
     // Send non-UTF8 text which will fail to get deserialized.
@@ -2934,7 +2935,7 @@ fn test_invalid_webhook_body() {
         .expect("failed to create source");
     let webhook_url = format!(
         "http://{}/api/webhook/materialize/public/webhook_json",
-        server.inner().http_local_addr()
+        server.http_local_addr()
     );
 
     // Send invalid JSON which will fail to get deserialized.
@@ -2954,7 +2955,7 @@ fn test_invalid_webhook_body() {
         .expect("failed to create source");
     let webhook_url = format!(
         "http://{}/api/webhook/materialize/public/webhook_bytes",
-        server.inner().http_local_addr()
+        server.http_local_addr()
     );
 
     // No matter what is in the body, we should always succeed.
@@ -2992,7 +2993,7 @@ fn test_webhook_duplicate_headers() {
         .expect("failed to create source");
     let webhook_url = format!(
         "http://{}/api/webhook/materialize/public/webhook_text",
-        server.inner().http_local_addr()
+        server.http_local_addr()
     );
 
     // Send a request with duplicate headers.
@@ -3142,11 +3143,7 @@ fn test_cancel_read_then_write() {
 async fn test_http_metrics() {
     let server = test_util::TestHarness::default().start().await;
 
-    let http_url = Url::parse(&format!(
-        "http://{}/api/sql",
-        server.inner.http_local_addr(),
-    ))
-    .unwrap();
+    let http_url = Url::parse(&format!("http://{}/api/sql", server.http_local_addr(),)).unwrap();
 
     // Handled query (successful)
     let json = r#"{ "query": "SHOW application_name;" }"#;
@@ -3272,7 +3269,7 @@ async fn webhook_concurrent_actions() {
     // Spin up tasks that will contiously push data to the webhook.
     let keep_sending_ = Arc::clone(&keep_sending);
     let num_requests_before_drop_ = Arc::clone(&num_requests_before_drop);
-    let addr = server.inner.http_local_addr();
+    let addr = server.http_local_addr();
 
     let poster = mz_ore::task::spawn(|| "webhook_concurrent_actions-poster", async move {
         let mut i = 0;
@@ -3432,7 +3429,7 @@ fn webhook_concurrency_limit() {
     let http_client = reqwest::Client::new();
     let webhook_url = format!(
         "http://{}/api/webhook/materialize/public/webhook_text",
-        server.inner().http_local_addr().clone(),
+        server.http_local_addr().clone(),
     );
     let mut handles = Vec::with_capacity(concurrency_limit + 5);
 
@@ -3502,7 +3499,7 @@ fn webhook_too_large_request() {
     let http_client = Client::new();
     let webhook_url = format!(
         "http://{}/api/webhook/materialize/public/webhook_bytes",
-        server.inner().http_local_addr(),
+        server.http_local_addr(),
     );
 
     // Send an event with a body larger that is exactly our max size.
@@ -3653,7 +3650,7 @@ async fn webhook_concurrent_swap() {
         .expect("failed to create source");
 
     // Spin up tasks that will contiously push data to both webhooks.
-    let addr = server.inner.http_local_addr();
+    let addr = server.http_local_addr();
     let http_client = reqwest::Client::new();
     let keep_sending = Arc::new(AtomicBool::new(true));
 
@@ -3988,7 +3985,7 @@ async fn test_webhook_source_batch_interval() {
     let http_client = reqwest::Client::new();
     let webhook_url = format!(
         "http://{}/api/webhook/materialize/public/webhook_batch_interval_test",
-        server.inner.http_local_addr()
+        server.http_local_addr()
     );
 
     // Send one event to our webhook source.
@@ -4057,11 +4054,7 @@ async fn test_startup_cluster_notice_with_http_options() {
 
     let http_client = reqwest::Client::new();
 
-    let http_url = Url::parse(&format!(
-        "http://{}/api/sql",
-        server.inner.http_local_addr(),
-    ))
-    .unwrap();
+    let http_url = Url::parse(&format!("http://{}/api/sql", server.http_local_addr(),)).unwrap();
 
     let query = serde_json::json!({
         "query": "SHOW cluster"
@@ -4305,11 +4298,7 @@ async fn test_double_encoded_json() {
         .unwrap();
 
     let http_client = reqwest::Client::new();
-    let http_url = Url::parse(&format!(
-        "http://{}/api/sql",
-        server.inner.http_local_addr(),
-    ))
-    .unwrap();
+    let http_url = Url::parse(&format!("http://{}/api/sql", server.http_local_addr(),)).unwrap();
     let query = serde_json::json!({
         "query": "SELECT a FROM t1 ORDER BY a"
     });
@@ -4468,7 +4457,7 @@ async fn test_cert_reloading() {
     let config = test_util::TestHarness::default()
         // Enable SSL on the main port. There should be a balancerd port with no SSL.
         .with_tls(server_cert.clone(), server_key.clone())
-        .with_frontegg(&frontegg_auth)
+        .with_frontegg_auth(&frontegg_auth)
         .with_metrics_registry(metrics_registry);
     let envd_server = config.start_with_trigger(reload_certs).await;
 
@@ -4484,8 +4473,8 @@ async fn test_cert_reloading() {
 
     let conn_str = Arc::new(format!(
         "user={frontegg_user} password={frontegg_password} host={} port={} sslmode=require",
-        envd_server.inner.sql_local_addr().ip(),
-        envd_server.inner.sql_local_addr().port()
+        envd_server.sql_local_addr().ip(),
+        envd_server.sql_local_addr().port()
     ));
 
     /// Asserts that the postgres connection provides the expected server-side certificate.
@@ -4527,7 +4516,7 @@ async fn test_cert_reloading() {
     // Assert the current certificate is as expected.
     let https_url = format!(
         "https://{addr}/api/sql",
-        addr = envd_server.inner.http_local_addr(),
+        addr = envd_server.http_local_addr(),
     );
     let resp = client
         .post(&https_url)
@@ -4689,4 +4678,63 @@ fn test_builtin_connection_alterations_are_preserved_across_restarts() {
             "CREATE CONNECTION \"mz_internal\".\"mz_analytics\" TO AWS (ASSUME ROLE ARN = 'foo')"
         );
     }
+}
+
+#[mz_ore::test]
+#[cfg_attr(miri, ignore)] // too slow
+fn test_webhook_request_compression() {
+    let server = test_util::TestHarness::default().start_blocking();
+    let mut client = server.connect(postgres::NoTls).unwrap();
+
+    // Create a webhook source.
+    client
+        .execute(
+            "CREATE CLUSTER webhook_cluster REPLICAS (r1 (SIZE '1'));",
+            &[],
+        )
+        .expect("failed to create cluster");
+    client
+        .execute(
+            "CREATE SOURCE webhook_text IN CLUSTER webhook_cluster FROM WEBHOOK BODY FORMAT TEXT",
+            &[],
+        )
+        .expect("failed to create source");
+
+    let http_client = Client::new();
+    let webhook_url = format!(
+        "http://{}/api/webhook/materialize/public/webhook_text",
+        server.http_local_addr(),
+    );
+
+    let og_body = "hello world!";
+
+    let mut encoder = GzEncoder::new(Vec::new(), Compression::default());
+    encoder.write_all(og_body.as_bytes()).unwrap();
+    let compressed_body = encoder.finish().unwrap();
+
+    assert!(og_body.as_bytes().len() < compressed_body.len());
+
+    let resp = http_client
+        .post(&webhook_url)
+        .header(CONTENT_ENCODING, "gzip")
+        .body(compressed_body)
+        .send()
+        .expect("failed to POST event");
+    assert!(resp.status().is_success(), "{resp:?}");
+
+    // Wait for up to 10s for the webhook to get appended.
+    let mut row = None;
+    for _ in 0..10 {
+        std::thread::sleep(std::time::Duration::from_secs(1));
+
+        row = client
+            .query_opt("SELECT body FROM webhook_text", &[])
+            .unwrap();
+        if row.is_some() {
+            break;
+        }
+    }
+
+    let rnd_body = row.as_ref().map(|r| r.get("body"));
+    assert_eq!(rnd_body, Some(og_body));
 }

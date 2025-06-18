@@ -19,6 +19,7 @@ use futures::future;
 use hyper_util::rt::TokioIo;
 use mz_build_info::{BuildInfo, build_info};
 use mz_cloud_resources::AwsExternalIdPrefix;
+use mz_cluster_client::client::TimelyConfig;
 use mz_compute::server::ComputeInstanceContext;
 use mz_compute_client::service::proto_compute_server::ProtoComputeServer;
 use mz_http_util::DynamicFilterTarget;
@@ -40,7 +41,7 @@ use mz_storage_types::connections::ConnectionContext;
 use mz_txn_wal::operator::TxnsContext;
 use tokio::runtime::Handle;
 use tower::Service;
-use tracing::{error, info};
+use tracing::{error, info, warn};
 
 mod usage_metrics;
 
@@ -85,6 +86,17 @@ struct Args {
     /// GRPC requests.
     #[clap(long, env = "GRPC_HOST", value_name = "NAME")]
     grpc_host: Option<String>,
+
+    // === Timely cluster options. ===
+    /// Configuration for the storage Timely cluster.
+    #[clap(long, env = "STORAGE_TIMELY_CONFIG")]
+    storage_timely_config: Option<TimelyConfig>,
+    /// Configuration for the compute Timely cluster.
+    #[clap(long, env = "COMPUTE_TIMELY_CONFIG")]
+    compute_timely_config: Option<TimelyConfig>,
+    /// The index of the process in both Timely clusters.
+    #[clap(long, env = "PROCESS")]
+    process: Option<usize>,
 
     // === Storage options. ===
     /// The URL for the Persist PubSub service.
@@ -199,6 +211,12 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
 
     mz_alloc::register_metrics_into(&metrics_registry).await;
     mz_metrics::register_metrics_into(&metrics_registry, mz_dyncfgs::all_dyncfgs()).await;
+
+    if let Some(memory_limit) = args.announce_memory_limit {
+        mz_compute::lgalloc::start_limiter(memory_limit, &metrics_registry);
+    } else {
+        warn!("no memory limit announced; disabling lgalloc limiter");
+    }
 
     let secrets_reader = args
         .secrets
@@ -329,8 +347,18 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
     let grpc_host = args.grpc_host.and_then(|h| (!h.is_empty()).then_some(h));
     let grpc_server_metrics = GrpcServerMetrics::register_with(&metrics_registry);
 
+    let storage_timely_config = args.storage_timely_config.map(|mut cfg| {
+        cfg.process = args.process.expect("process index required");
+        cfg
+    });
+    let compute_timely_config = args.compute_timely_config.map(|mut cfg| {
+        cfg.process = args.process.expect("process index required");
+        cfg
+    });
+
     // Start storage server.
     let storage_client_builder = mz_storage::serve(
+        storage_timely_config,
         &metrics_registry,
         Arc::clone(&persist_clients),
         txns_ctx.clone(),
@@ -338,7 +366,8 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
         SYSTEM_TIME.clone(),
         connection_context.clone(),
         StorageInstanceContext::new(args.scratch_directory.clone(), args.announce_memory_limit)?,
-    )?;
+    )
+    .await?;
     info!(
         "listening for storage controller connections on {}",
         args.storage_controller_listen_addr
@@ -357,6 +386,7 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
 
     // Start compute server.
     let compute_client_builder = mz_compute::server::serve(
+        compute_timely_config,
         &metrics_registry,
         persist_clients,
         txns_ctx,
@@ -366,7 +396,8 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
             worker_core_affinity: args.worker_core_affinity,
             connection_context,
         },
-    )?;
+    )
+    .await?;
     info!(
         "listening for compute controller connections on {}",
         args.compute_controller_listen_addr

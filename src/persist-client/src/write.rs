@@ -29,6 +29,7 @@ use proptest_derive::Arbitrary;
 use semver::Version;
 use serde::{Deserialize, Serialize};
 use timely::PartialOrder;
+use timely::order::TotalOrder;
 use timely::progress::{Antichain, Timestamp};
 use tokio::runtime::Handle;
 use tracing::{Instrument, debug_span, info, warn};
@@ -136,7 +137,7 @@ impl<K, V, T, D> WriteHandle<K, V, T, D>
 where
     K: Debug + Codec,
     V: Debug + Codec,
-    T: Timestamp + Lattice + Codec64 + Sync,
+    T: Timestamp + TotalOrder + Lattice + Codec64 + Sync,
     D: Semigroup + Ord + Codec64 + Send + Sync,
 {
     pub(crate) fn new(
@@ -337,7 +338,7 @@ where
             .batch(updates, expected_upper.clone(), new_upper.clone())
             .await?;
         match self
-            .compare_and_append_batch(&mut [&mut batch], expected_upper, new_upper)
+            .compare_and_append_batch(&mut [&mut batch], expected_upper, new_upper, true)
             .await
         {
             ok @ Ok(Ok(())) => ok,
@@ -389,7 +390,7 @@ where
     {
         loop {
             let res = self
-                .compare_and_append_batch(&mut [&mut batch], lower.clone(), upper.clone())
+                .compare_and_append_batch(&mut [&mut batch], lower.clone(), upper.clone(), true)
                 .await?;
             match res {
                 Ok(()) => {
@@ -453,12 +454,21 @@ where
     ///
     /// The clunky multi-level Result is to enable more obvious error handling
     /// in the caller. See <http://sled.rs/errors.html> for details.
+    ///
+    /// If the `enforce_matching_batch_boundaries` flag is set to `false`:
+    /// We no longer validate that every batch covers the entire range between
+    /// the expected and new uppers, as we wish to allow combining batches that
+    /// cover different subsets of that range, including subsets of that range
+    /// that include no data at all. The caller is responsible for guaranteeing
+    /// that the set of batches provided collectively include all updates for
+    /// the entire range between the expected and new upper.
     #[instrument(level = "debug", fields(shard = %self.machine.shard_id()))]
     pub async fn compare_and_append_batch(
         &mut self,
         batches: &mut [&mut Batch<K, V, T, D>],
         expected_upper: Antichain<T>,
         new_upper: Antichain<T>,
+        enforce_matching_batch_boundaries: bool,
     ) -> Result<Result<(), UpperMismatch<T>>, InvalidUsage<T>>
     where
         D: Send + Sync,
@@ -504,7 +514,12 @@ where
             let mut key_storage = None;
             let mut val_storage = None;
             for batch in batches.iter() {
-                let () = validate_truncate_batch(&batch.batch, &desc, any_batch_rewrite)?;
+                let () = validate_truncate_batch(
+                    &batch.batch,
+                    &desc,
+                    any_batch_rewrite,
+                    enforce_matching_batch_boundaries,
+                )?;
                 for (run_meta, run) in batch.batch.runs() {
                     let start_index = parts.len();
                     for part in run {
@@ -738,6 +753,7 @@ where
     pub fn builder(&self, lower: Antichain<T>) -> BatchBuilder<K, V, T, D> {
         Self::builder_inner(
             &self.cfg,
+            CompactConfig::new(&self.cfg, self.shard_id()),
             Arc::clone(&self.metrics),
             Arc::clone(&self.machine.applier.shard_metrics),
             &self.metrics.user,
@@ -753,6 +769,7 @@ where
     /// implementation in `PersistClient`.
     pub(crate) fn builder_inner(
         persist_cfg: &PersistConfig,
+        compact_cfg: CompactConfig,
         metrics: Arc<Metrics>,
         shard_metrics: Arc<ShardMetrics>,
         user_batch_metrics: &BatchWriteMetrics,
@@ -762,10 +779,9 @@ where
         schemas: Schemas<K, V>,
         lower: Antichain<T>,
     ) -> BatchBuilder<K, V, T, D> {
-        let cfg = CompactConfig::new(persist_cfg, shard_id);
-        let parts = if let Some(max_runs) = cfg.batch.max_runs {
+        let parts = if let Some(max_runs) = compact_cfg.batch.max_runs {
             BatchParts::new_compacting::<K, V, D>(
-                cfg,
+                compact_cfg,
                 Description::new(
                     lower.clone(),
                     Antichain::new(),
@@ -782,7 +798,7 @@ where
             )
         } else {
             BatchParts::new_ordered::<D>(
-                cfg.batch,
+                compact_cfg.batch,
                 RunOrder::Unordered,
                 Arc::clone(&metrics),
                 shard_metrics,
@@ -933,6 +949,7 @@ where
             batches,
             Antichain::from_elem(expected_upper),
             Antichain::from_elem(new_upper),
+            true,
         )
         .await
         .expect("invalid usage")

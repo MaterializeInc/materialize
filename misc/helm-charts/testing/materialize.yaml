@@ -30,6 +30,7 @@ metadata:
 spec:
   environmentdImageRef: materialize/environmentd:v0.147.0-dev.0
   backendSecretName: materialize-backend
+  authenticatorKind: None
   #balancerdExternalCertificateSpec:
   #  dnsNames:
   #    - balancerd

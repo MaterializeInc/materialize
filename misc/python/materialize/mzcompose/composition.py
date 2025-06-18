@@ -316,7 +316,16 @@ class Composition:
         """
 
         if not self.silent and not silent:
-            print(f"$ docker compose {' '.join(args)}", file=sys.stderr)
+            # Don't print out secrets in test logs
+            filtered_args = [
+                (
+                    "[REDACTED]"
+                    if "mzp_" in arg or "-----BEGIN PRIVATE KEY-----" in arg
+                    else arg
+                )
+                for arg in args
+            ]
+            print(f"$ docker compose {' '.join(filtered_args)}", file=sys.stderr)
 
         stdout = None
         if capture:
@@ -799,6 +808,7 @@ class Composition:
         *args: str,
         rm: bool = False,
         mz_service: str | None = None,
+        quiet: bool = False,
     ) -> subprocess.CompletedProcess:
         if mz_service is not None:
             args = tuple(
@@ -814,7 +824,9 @@ class Composition:
             *args,
             rm=rm,
             # needed for sufficient error information in the junit.xml while still printing to stdout during execution
-            capture_and_print=True,
+            capture_and_print=not quiet,
+            capture=quiet,
+            capture_stderr=quiet,
             env_extra=environment,
         )
 

@@ -399,7 +399,7 @@ EOF
 # see later a similar situation, but with a LEFT JOIN, where RedundantJoin wouldn't be able to eliminate a join.)
 # With materialize#27389 this stopped testing a thing; see issue database-issues#8294.
 query T multiline
-explain with(keys)
+EXPLAIN OPTIMIZED PLAN WITH (keys) AS VERBOSE TEXT FOR
 with mutually recursive
   c0(a int4, b int8, u text, key int4) as (
     select distinct on (1) * from (
@@ -510,7 +510,7 @@ EOF
 # incorrectly transforms this plan.
 # With materialize#27389 this stopped testing a thing; see issue database-issues#8294.
 query T multiline
-explain with(keys)
+EXPLAIN OPTIMIZED PLAN WITH (keys) AS VERBOSE TEXT FOR
 with mutually recursive
   keys(a int4) as (
     select distinct c0.a from c0, (select distinct on(a) * from bar2) as bar3 where c0.a = bar3.a

@@ -359,7 +359,7 @@ async fn test_conn_startup() {
     {
         use postgres_protocol::message::backend::Message;
 
-        let mut stream = TcpStream::connect(server.inner.sql_local_addr()).unwrap();
+        let mut stream = TcpStream::connect(server.sql_local_addr()).unwrap();
 
         // Send a startup packet for protocol version two, which Materialize
         // does not support.

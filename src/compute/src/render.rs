@@ -110,9 +110,7 @@ use std::rc::{Rc, Weak};
 use std::sync::Arc;
 use std::task::Poll;
 
-use columnar::Columnar;
 use differential_dataflow::IntoOwned;
-use differential_dataflow::containers::Columnation;
 use differential_dataflow::dynamic::pointstamp::PointStamp;
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::operators::arrange::{Arranged, ShutdownButton};
@@ -129,7 +127,7 @@ use mz_compute_types::plan::LirId;
 use mz_compute_types::plan::render_plan::{
     self, BindStage, LetBind, LetFreePlan, RecBind, RenderPlan,
 };
-use mz_expr::{EvalError, Id};
+use mz_expr::{EvalError, Id, LocalId};
 use mz_persist_client::operators::shard_source::{ErrorHandler, SnapshotMode};
 use mz_repr::explain::DummyHumanizer;
 use mz_repr::{Datum, Diff, GlobalId, Row, SharedRow};
@@ -161,7 +159,7 @@ use crate::logging::compute::{
 use crate::render::context::{ArrangementFlavor, Context, ShutdownProbe, shutdown_token};
 use crate::render::continual_task::ContinualTaskCtx;
 use crate::row_spine::{RowRowBatcher, RowRowBuilder};
-use crate::typedefs::{ErrBatcher, ErrBuilder, ErrSpine, KeyBatcher};
+use crate::typedefs::{ErrBatcher, ErrBuilder, ErrSpine, KeyBatcher, MzTimestamp};
 
 pub mod context;
 pub(crate) mod continual_task;
@@ -396,9 +394,16 @@ pub fn build_compute_dataflow<A: Allocate>(
                         &format!("BuildingObject({:?})", object.id),
                         |region| {
                             let depends = object.plan.depends();
+                            let in_let = object.plan.is_recursive();
                             context
                                 .enter_region(region, Some(&depends))
-                                .render_recursive_plan(object.id, 0, object.plan)
+                                .render_recursive_plan(
+                                    object.id,
+                                    0,
+                                    object.plan,
+                                    // recursive plans _must_ have bodies in a let
+                                    BindingInfo::Body { in_let },
+                                )
                                 .leave_region()
                         },
                     );
@@ -537,7 +542,6 @@ impl<'g, G, T> Context<Child<'g, G, T>>
 where
     G: Scope<Timestamp = mz_repr::Timestamp>,
     T: Refines<G::Timestamp> + RenderTimestamp,
-    <T as Columnar>::Container: Clone + Send,
 {
     pub(crate) fn import_index(
         &mut self,
@@ -688,7 +692,6 @@ impl<'g, G, T> Context<Child<'g, G, T>>
 where
     G: Scope<Timestamp = mz_repr::Timestamp>,
     T: RenderTimestamp,
-    <T as Columnar>::Container: Clone + Send,
 {
     pub(crate) fn export_index_iterative(
         &self,
@@ -781,6 +784,17 @@ where
     }
 }
 
+/// Information about bindings, tracked in `render_recursive_plan` and
+/// `render_plan`, to be passed to `render_letfree_plan`.
+///
+/// `render_letfree_plan` uses these to produce nice output (e.g., `With ...
+/// Returning ...`) for local bindings in the `mz_lir_mapping` output.
+enum BindingInfo {
+    Body { in_let: bool },
+    Let { id: LocalId, last: bool },
+    LetRec { id: LocalId, last: bool },
+}
+
 impl<G> Context<G>
 where
     G: Scope<Timestamp = Product<mz_repr::Timestamp, PointStamp<u64>>>,
@@ -797,22 +811,26 @@ where
     ///
     /// The method requires that all variables conclude with a physical representation that
     /// contains a collection (i.e. a non-arrangement), and it will panic otherwise.
-    pub fn render_recursive_plan(
+    fn render_recursive_plan(
         &mut self,
         object_id: GlobalId,
         level: usize,
         plan: RenderPlan,
+        binding: BindingInfo,
     ) -> CollectionBundle<G> {
         for BindStage { lets, recs } in plan.binds {
             // Render the let bindings in order.
-            for LetBind { id, value } in lets {
+            let mut let_iter = lets.into_iter().peekable();
+            while let Some(LetBind { id, value }) = let_iter.next() {
                 let bundle =
                     self.scope
                         .clone()
                         .region_named(&format!("Binding({:?})", id), |region| {
                             let depends = value.depends();
+                            let last = let_iter.peek().is_none();
+                            let binding = BindingInfo::Let { id, last };
                             self.enter_region(region, Some(&depends))
-                                .render_letfree_plan(object_id, value)
+                                .render_letfree_plan(object_id, value, binding)
                                 .leave_region()
                         });
                 self.insert_id(Id::Local(id), bundle);
@@ -841,8 +859,11 @@ where
                 variables.insert(Id::Local(*id), (oks_v, err_v));
             }
             // Now render each of the rec bindings.
-            for RecBind { id, value, limit } in recs {
-                let bundle = self.render_recursive_plan(object_id, level + 1, value);
+            let mut rec_iter = recs.into_iter().peekable();
+            while let Some(RecBind { id, value, limit }) = rec_iter.next() {
+                let last = rec_iter.peek().is_none();
+                let binding = BindingInfo::LetRec { id, last };
+                let bundle = self.render_recursive_plan(object_id, level + 1, value, binding);
                 // We need to ensure that the raw collection exists, but do not have enough information
                 // here to cause that to happen.
                 let (oks, mut err) = bundle.collection.clone().unwrap();
@@ -910,7 +931,7 @@ where
             }
         }
 
-        self.render_letfree_plan(object_id, plan.body)
+        self.render_letfree_plan(object_id, plan.body, binding)
     }
 }
 
@@ -918,8 +939,6 @@ impl<G> Context<G>
 where
     G: Scope,
     G::Timestamp: RenderTimestamp,
-    <G::Timestamp as Columnar>::Container: Clone + Send,
-    for<'a> <G::Timestamp as Columnar>::Ref<'a>: Ord + Copy,
 {
     /// Renders a non-recursive plan to a differential dataflow, producing the collection of
     /// results.
@@ -931,18 +950,24 @@ where
     ///
     /// Panics if the given plan contains any [`RecBind`]s. Recursive plans must be rendered using
     /// `render_recursive_plan` instead.
-    pub fn render_plan(&mut self, object_id: GlobalId, plan: RenderPlan) -> CollectionBundle<G> {
+    fn render_plan(&mut self, object_id: GlobalId, plan: RenderPlan) -> CollectionBundle<G> {
+        let mut in_let = false;
         for BindStage { lets, recs } in plan.binds {
             assert!(recs.is_empty());
 
-            for LetBind { id, value } in lets {
+            let mut let_iter = lets.into_iter().peekable();
+            while let Some(LetBind { id, value }) = let_iter.next() {
+                // if we encounter a single let, the body is in a let
+                in_let = true;
                 let bundle =
                     self.scope
                         .clone()
                         .region_named(&format!("Binding({:?})", id), |region| {
                             let depends = value.depends();
+                            let last = let_iter.peek().is_none();
+                            let binding = BindingInfo::Let { id, last };
                             self.enter_region(region, Some(&depends))
-                                .render_letfree_plan(object_id, value)
+                                .render_letfree_plan(object_id, value, binding)
                                 .leave_region()
                         });
                 self.insert_id(Id::Local(id), bundle);
@@ -952,7 +977,7 @@ where
         self.scope.clone().region_named("Main Body", |region| {
             let depends = plan.body.depends();
             self.enter_region(region, Some(&depends))
-                .render_letfree_plan(object_id, plan.body)
+                .render_letfree_plan(object_id, plan.body, BindingInfo::Body { in_let })
                 .leave_region()
         })
     }
@@ -962,6 +987,7 @@ where
         &mut self,
         object_id: GlobalId,
         plan: LetFreePlan,
+        binding: BindingInfo,
     ) -> CollectionBundle<G> {
         let (mut nodes, root_id, topological_order) = plan.destruct();
 
@@ -980,7 +1006,8 @@ where
             None
         };
 
-        for lir_id in topological_order {
+        let mut topo_iter = topological_order.into_iter().peekable();
+        while let Some(lir_id) = topo_iter.next() {
             let node = nodes.remove(&lir_id).unwrap();
 
             // TODO(mgree) need ExprHumanizer in DataflowDescription to get nice column names
@@ -988,6 +1015,29 @@ where
             // in some other structure and have that structure impl ExprHumanizer
             let metadata = if should_compute_lir_metadata {
                 let operator = node.expr.humanize(&DummyHumanizer);
+
+                // mark the last operator in topo order with any binding decoration
+                let operator = if topo_iter.peek().is_none() {
+                    match &binding {
+                        BindingInfo::Body { in_let: true } => format!("Returning {operator}"),
+                        BindingInfo::Body { in_let: false } => operator,
+                        BindingInfo::Let { id, last: true } => {
+                            format!("With {id} = {operator}")
+                        }
+                        BindingInfo::Let { id, last: false } => {
+                            format!("{id} = {operator}")
+                        }
+                        BindingInfo::LetRec { id, last: true } => {
+                            format!("With Recursive {id} = {operator}")
+                        }
+                        BindingInfo::LetRec { id, last: false } => {
+                            format!("{id} = {operator}")
+                        }
+                    }
+                } else {
+                    operator
+                };
+
                 let operator_id_start = self.scope.peek_identifier();
                 Some((operator, operator_id_start))
             } else {
@@ -1339,11 +1389,7 @@ where
 
 #[allow(dead_code)] // Some of the methods on this trait are unused, but useful to have.
 /// A timestamp type that can be used for operations within MZ's dataflow layer.
-pub trait RenderTimestamp:
-    Timestamp + Lattice + Refines<mz_repr::Timestamp> + Columnation + Columnar
-where
-    <Self as Columnar>::Container: Clone + Send,
-{
+pub trait RenderTimestamp: MzTimestamp + Refines<mz_repr::Timestamp> {
     /// The system timestamp component of the timestamp.
     ///
     /// This is useful for manipulating the system time, as when delaying
@@ -1479,7 +1525,6 @@ impl<S, Tr> WithStartSignal for Arranged<S, Tr>
 where
     S: Scope,
     S::Timestamp: RenderTimestamp,
-    <S::Timestamp as Columnar>::Container: Clone + Send,
     Tr: TraceReader + Clone,
 {
     fn with_start_signal(self, signal: StartSignal) -> Self {

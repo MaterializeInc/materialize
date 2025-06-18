@@ -22,12 +22,14 @@ def main() -> None:
     bazel_remote_cache = os.getenv("CI_BAZEL_REMOTE_CACHE")
 
     mz_version = ci_util.get_mz_version()
+    sanitizer = Sanitizer[os.getenv("CI_SANITIZER", "none")]
+
     repos = [
         mzbuild.Repository(
             Path("."),
             Arch.X86_64,
             coverage=False,
-            sanitizer=Sanitizer.none,
+            sanitizer=sanitizer,
             bazel=bazel,
             bazel_remote_cache=bazel_remote_cache,
         ),
@@ -35,7 +37,7 @@ def main() -> None:
             Path("."),
             Arch.AARCH64,
             coverage=False,
-            sanitizer=Sanitizer.none,
+            sanitizer=sanitizer,
             bazel=bazel,
             bazel_remote_cache=bazel_remote_cache,
         ),
@@ -47,8 +49,9 @@ def main() -> None:
     ]
     # Ideally we'd use SemVer metadata (e.g., `v1.0.0+metadata`), but `+` is not
     # a valid character in Docker tags, so we use `--` instead.
+    suffix = "pr" if sanitizer == Sanitizer.none else f"pr-{sanitizer}"
     mzbuild.publish_multiarch_images(
-        f'v{mz_version}--pr.g{git.rev_parse("HEAD")}', deps
+        f'v{mz_version}--{suffix}.g{git.rev_parse("HEAD")}', deps
     )
 
 

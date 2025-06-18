@@ -346,6 +346,7 @@ class State:
                     "requests": {"cpu": "100m", "memory": "256Mi"},
                 },
                 "backendSecretName": "materialize-backend",
+                "authenticatorKind": "None",
             },
         }
 
@@ -613,6 +614,7 @@ class AWS(State):
         prefix: str,
         setup: bool,
         tag: str,
+        orchestratord_tag: str | None = None,
     ) -> None:
         if not setup:
             spawn.runv(
@@ -632,11 +634,10 @@ class AWS(State):
             "-var",
             "operator_version=v25.2.0-beta.1",
         ]
-        if not tag:
-            vars += [
-                "-var",
-                f"orchestratord_version={get_tag(tag)}",
-            ]
+        vars += [
+            "-var",
+            f"orchestratord_version={get_tag(orchestratord_tag or tag)}",
+        ]
 
         print("--- Setup")
         spawn.runv(
@@ -695,6 +696,7 @@ class AWS(State):
                     "requests": {"cpu": "100m", "memory": "256Mi"},
                 },
                 "backendSecretName": "materialize-backend",
+                "authenticatorKind": "None",
             },
         }
 
@@ -812,7 +814,7 @@ def workflow_aws_upgrade(c: Composition, parser: WorkflowArgumentParser) -> None
     try:
         if args.run_mz_debug:
             mz_debug_build_thread = build_mz_debug_async()
-        aws.setup("aws-upgrade", args.setup, str(previous_tag))
+        aws.setup("aws-upgrade", args.setup, str(previous_tag), str(tag))
         aws.upgrade(tag)
         if args.test:
             # Try waiting a bit, otherwise connection error, should be handled better
@@ -1011,11 +1013,10 @@ def workflow_gcp_temporary(c: Composition, parser: WorkflowArgumentParser) -> No
             "-var",
             "operator_version=v25.2.0-beta.1",
         ]
-        if not tag:
-            vars += [
-                "-var",
-                f"orchestratord_version={get_tag(tag)}",
-            ]
+        vars += [
+            "-var",
+            f"orchestratord_version={get_tag(tag)}",
+        ]
 
         if args.setup:
             print("--- Setup")
@@ -1104,7 +1105,7 @@ def workflow_azure_temporary(c: Composition, parser: WorkflowArgumentParser) -> 
             assert username, "AZURE_SERVICE_ACCOUNT_USERNAME has to be set"
             assert password, "AZURE_SERVICE_ACCOUNT_PASSWORD has to be set"
             assert tenant, "AZURE_SERVICE_ACOUNT_TENANT has to be set"
-            spawn.runv(
+            subprocess.run(
                 [
                     "az",
                     "login",
@@ -1123,11 +1124,10 @@ def workflow_azure_temporary(c: Composition, parser: WorkflowArgumentParser) -> 
             "-var",
             "operator_version=v25.2.0-beta.1",
         ]
-        if not tag:
-            vars += [
-                "-var",
-                f"orchestratord_version={get_tag(tag)}",
-            ]
+        vars += [
+            "-var",
+            f"orchestratord_version={get_tag(tag)}",
+        ]
 
         if args.setup:
             spawn.runv(

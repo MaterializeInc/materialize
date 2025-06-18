@@ -22,12 +22,17 @@ START_TIME=$(date -d "$(cat step_start_timestamp)" +%s)
 END_TIME=$(date +%s)
 ELAPSED=$((END_TIME - START_TIME))
 if [ $ELAPSED -ge $((BUILDKITE_TIMEOUT * 60)) ]; then
-  printf "%s" "\n$BUILDKITE_LABEL: test timed out" >> run.log
+  printf "\n%s" "$BUILDKITE_LABEL: test timed out" >> run.log
 fi
 
 echo "Collecting logs"
 # Run before potential "run down" in coverage
-docker ps --all --quiet | xargs --no-run-if-empty docker inspect > docker-inspect.log
+docker ps --all --quiet | xargs --no-run-if-empty docker inspect | jq '
+  .[]
+  | .Config.Env = ["[REDACTED]"]
+  | .Config.Cmd = ["[REDACTED]"]
+  | .Config.Entrypoint = ["[REDACTED]"]
+  | .Args = ["[REDACTED]"]' > docker-inspect.log
 # services.log might already exist and contain logs from before composition was downed
 time=0
 if [ -f services.log ]; then
@@ -44,8 +49,7 @@ mv services-sorted.log services.log
 sudo journalctl --merge --since "$(cat step_start_timestamp)" > journalctl-merge.log
 netstat -ant > netstat-ant.log
 netstat -panelot > netstat-panelot.log
-ps aux > ps-aux.log
-docker ps -a --no-trunc > docker-ps-a.log
+ps aux | sed -E "s/\S*mzp_\S*/[REDACTED]/g" > ps-aux.log
 docker stats --all --no-stream > docker-stats.log
 
 mv "$HOME"/cores .
@@ -82,9 +86,13 @@ rm -rf cores
 echo "Compressing parallel-workload-queries.log"
 bin/ci-builder run stable zstd --rm parallel-workload-queries.log || true
 
-echo "Uploading log artifacts"
-mapfile -t artifacts < <(printf "run.log\nservices.log\njournalctl-merge.log\nnetstat-ant.log\nnetstat-panelot.log\nps-aux.log\ndocker-ps-a.log\ndocker-inspect.log\n"; find . -name 'junit_*.xml'; find mz_debug_* -name '*.log')
+mapfile -t artifacts < <(printf "run.log\nservices.log\njournalctl-merge.log\nnetstat-ant.log\nnetstat-panelot.log\nps-aux.log\ndocker-inspect.log\ntrufflehog.log\n"; find . -name 'junit_*.xml'; find mz_debug_* -name '*.log')
 artifacts_str=$(IFS=";"; echo "${artifacts[*]}")
+
+echo "--- Running trufflehog to scan artifacts for secrets"
+bin/ci-builder run stable trufflehog --no-update --no-verification --json --exclude-detectors=coda,dockerhub,box,npmtoken filesystem "${artifacts[@]}" | trufflehog_jq_filter_logs > trufflehog.log
+
+echo "Uploading log artifacts"
 unset CI_EXTRA_ARGS # We don't want extra args for the annotation
 # Continue even if ci-annotate-errors fails
 CI_ANNOTATE_ERRORS_RESULT=0

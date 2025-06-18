@@ -212,6 +212,7 @@ impl Coordinator {
         let mut cluster_replicas_to_create = vec![];
         let mut update_metrics_config = false;
         let mut update_tracing_config = false;
+        let mut update_controller_config = false;
         let mut update_compute_config = false;
         let mut update_storage_config = false;
         let mut update_pg_timestamp_oracle_config = false;
@@ -315,6 +316,11 @@ impl Coordinator {
                         .system_config()
                         .is_metrics_config_var(name);
                     update_tracing_config |= vars::is_tracing_var(name);
+                    update_controller_config |= self
+                        .catalog
+                        .state()
+                        .system_config()
+                        .is_controller_config_var(name);
                     update_compute_config |= self
                         .catalog
                         .state()
@@ -337,6 +343,7 @@ impl Coordinator {
                     // We could see if the config's have actually changed, but
                     // this is simpler.
                     update_tracing_config = true;
+                    update_controller_config = true;
                     update_compute_config = true;
                     update_storage_config = true;
                     update_pg_timestamp_oracle_config = true;
@@ -794,6 +801,9 @@ impl Coordinator {
 
             if update_metrics_config {
                 mz_metrics::update_dyncfg(&self.catalog().system_config().dyncfg_updates());
+            }
+            if update_controller_config {
+                self.update_controller_config();
             }
             if update_compute_config {
                 self.update_compute_config();
@@ -1287,6 +1297,12 @@ impl Coordinator {
             .collect::<Vec<_>>();
         self.update_storage_read_policies(storage_policies);
         self.update_compute_read_policies(compute_policies);
+    }
+
+    fn update_controller_config(&mut self) {
+        let sys_config = self.catalog().system_config();
+        self.controller
+            .update_configuration(sys_config.dyncfg_updates());
     }
 
     fn update_http_config(&mut self) {

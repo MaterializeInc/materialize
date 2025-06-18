@@ -22,7 +22,7 @@ pub const CONTROLLER_PAST_GENERATION_REPLICA_CLEANUP_RETRY_INTERVAL: Config<Dura
 
 pub const ENABLE_0DT_DEPLOYMENT_SOURCES: Config<bool> = Config::new(
     "enable_0dt_deployment_sources",
-    false,
+    true,
     "Whether to enable zero-downtime deployments for sources that support it (experimental).",
 );
 
@@ -68,6 +68,12 @@ pub const ARRANGEMENT_EXERT_PROPORTIONALITY: Config<u32> = Config::new(
     "Value that controls how much merge effort to exert on arrangements.",
 );
 
+pub const ENABLE_TIMELY_INIT_AT_PROCESS_STARTUP: Config<bool> = Config::new(
+    "enable_timely_init_at_process_startup",
+    false,
+    "Whether to initialize the Timely runtime at clusterd process startup.",
+);
+
 /// Adds the full set of all controller `Config`s.
 pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
     configs
@@ -80,4 +86,5 @@ pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
         .add(&ENABLE_TIMELY_ZERO_COPY_LGALLOC)
         .add(&TIMELY_ZERO_COPY_LIMIT)
         .add(&ARRANGEMENT_EXERT_PROPORTIONALITY)
+        .add(&ENABLE_TIMELY_INIT_AT_PROCESS_STARTUP)
 }

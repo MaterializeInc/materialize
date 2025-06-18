@@ -10,8 +10,9 @@
 use std::collections::BTreeMap;
 use std::convert::TryFrom;
 use std::future::Future;
+use std::ops::Deref;
 use std::sync::Arc;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 use std::{iter, mem};
 
 use byteorder::{ByteOrder, NetworkEndian};
@@ -24,11 +25,11 @@ use mz_adapter::session::{
 };
 use mz_adapter::statement_logging::{StatementEndedExecutionReason, StatementExecutionStrategy};
 use mz_adapter::{
-    AdapterError, AdapterNotice, ExecuteContextExtra, ExecuteResponse, PeekResponseUnary,
-    RowsFuture, verify_datum_desc,
+    AdapterError, AdapterNotice, ExecuteContextExtra, ExecuteResponse, PeekResponseUnary, metrics,
+    verify_datum_desc,
 };
 use mz_auth::password::Password;
-use mz_frontegg_auth::Authenticator as FronteggAuthentication;
+use mz_authenticator::Authenticator;
 use mz_ore::cast::CastFrom;
 use mz_ore::netio::AsyncReady;
 use mz_ore::now::{EpochMillis, SYSTEM_TIME};
@@ -44,6 +45,7 @@ use mz_repr::{
     ScalarType,
 };
 use mz_server_core::TlsMode;
+use mz_server_core::listeners::AllowedRoles;
 use mz_sql::ast::display::AstDisplay;
 use mz_sql::ast::{CopyDirection, CopyStatement, FetchDirection, Ident, Raw, Statement};
 use mz_sql::parse::StatementParseResult;
@@ -54,7 +56,6 @@ use mz_sql::session::vars::{MAX_COPY_FROM_SIZE, Var, VarInput};
 use postgres::error::SqlState;
 use tokio::io::{self, AsyncRead, AsyncWrite};
 use tokio::select;
-use tokio::sync::mpsc::UnboundedReceiver;
 use tokio::time::{self};
 use tokio_stream::wrappers::UnboundedReceiverStream;
 use tracing::{Instrument, debug, debug_span, warn};
@@ -97,17 +98,14 @@ pub struct RunParams<'a, A> {
     pub version: i32,
     /// The parameters that the client provided in the startup message.
     pub params: BTreeMap<String, String>,
-    /// Frontegg authentication.
-    pub frontegg: Option<&'a FronteggAuthentication>,
-    /// Whether to use self hosted auth.
-    pub use_self_hosted_auth: bool,
-    /// Whether this is an internal server that permits access to restricted
-    /// system resources.
-    pub internal: bool,
+    /// Authentication method to use. Frontegg, Password, or None.
+    pub authenticator: Authenticator,
     /// Global connection limit and count
     pub active_connection_counter: ConnectionCounter,
     /// Helm chart version
     pub helm_chart_version: Option<String>,
+    /// Whether to allow reserved users (ie: mz_system).
+    pub allowed_roles: AllowedRoles,
 }
 
 /// Runs a pgwire connection to completion.
@@ -128,11 +126,10 @@ pub async fn run<'a, A>(
         conn_uuid,
         version,
         mut params,
-        frontegg,
-        use_self_hosted_auth,
-        internal,
+        authenticator,
         active_connection_counter,
         helm_chart_version,
+        allowed_roles,
     }: RunParams<'a, A>,
 ) -> Result<(), io::Error>
 where
@@ -149,130 +146,132 @@ where
 
     let user = params.remove("user").unwrap_or_else(String::new);
 
-    if internal {
-        // The internal server can only be used to connect to the internal users.
-        if !INTERNAL_USER_NAMES.contains(&user) {
-            let msg = format!("unauthorized login to user '{user}'");
-            return conn
-                .send(ErrorResponse::fatal(SqlState::INSUFFICIENT_PRIVILEGE, msg))
-                .await;
-        }
-    } else {
-        // The external server cannot be used to connect to any system users.
-        if mz_adapter::catalog::is_reserved_role_name(user.as_str()) {
-            let msg = format!("unauthorized login to user '{user}'");
-            return conn
-                .send(ErrorResponse::fatal(SqlState::INSUFFICIENT_PRIVILEGE, msg))
-                .await;
-        }
+    // TODO move this somewhere it can be shared with HTTP
+    let is_internal_user = INTERNAL_USER_NAMES.contains(&user);
+    // this is a superset of internal users
+    let is_reserved_user = mz_adapter::catalog::is_reserved_role_name(user.as_str());
+    let role_allowed = match allowed_roles {
+        AllowedRoles::Normal => !is_reserved_user,
+        AllowedRoles::Internal => is_internal_user,
+        AllowedRoles::NormalAndInternal => !is_reserved_user || is_internal_user,
+    };
+    if !role_allowed {
+        let msg = format!("unauthorized login to user '{user}'");
+        return conn
+            .send(ErrorResponse::fatal(SqlState::INSUFFICIENT_PRIVILEGE, msg))
+            .await;
     }
 
     if let Err(err) = conn.inner().ensure_tls_compatibility(&tls_mode) {
         return conn.send(err).await;
     }
 
-    let (mut session, expired) = if let Some(frontegg) = frontegg {
-        conn.send(BackendMessage::AuthenticationCleartextPassword)
-            .await?;
-        conn.flush().await?;
-        let password = match conn.recv().await? {
-            Some(FrontendMessage::Password { password }) => password,
-            _ => {
-                return conn
-                    .send(ErrorResponse::fatal(
-                        SqlState::INVALID_AUTHORIZATION_SPECIFICATION,
-                        "expected Password message",
-                    ))
-                    .await;
-            }
-        };
+    let (mut session, expired) = match authenticator {
+        Authenticator::Frontegg(frontegg) => {
+            conn.send(BackendMessage::AuthenticationCleartextPassword)
+                .await?;
+            conn.flush().await?;
+            let password = match conn.recv().await? {
+                Some(FrontendMessage::Password { password }) => password,
+                _ => {
+                    return conn
+                        .send(ErrorResponse::fatal(
+                            SqlState::INVALID_AUTHORIZATION_SPECIFICATION,
+                            "expected Password message",
+                        ))
+                        .await;
+                }
+            };
 
-        let auth_response = frontegg.authenticate(&user, &password).await;
-        match auth_response {
-            Ok(mut auth_session) => {
-                // Create a session based on the auth session.
-                //
-                // In particular, it's important that the username come from the
-                // auth session, as Frontegg may return an email address with
-                // different casing than the user supplied via the pgwire
-                // username field. We want to use the Frontegg casing as
-                // canonical.
-                let session = adapter_client.new_session(SessionConfig {
-                    conn_id: conn.conn_id().clone(),
-                    uuid: conn_uuid,
-                    user: auth_session.user().into(),
-                    client_ip: conn.peer_addr().clone(),
-                    external_metadata_rx: Some(auth_session.external_metadata_rx()),
-                    internal_user_metadata: None,
-                    helm_chart_version,
-                });
-                let expired = async move { auth_session.expired().await };
-                (session, expired.left_future())
-            }
-            Err(err) => {
-                warn!(?err, "pgwire connection failed authentication");
-                return conn
-                    .send(ErrorResponse::fatal(
-                        SqlState::INVALID_PASSWORD,
-                        "invalid password",
-                    ))
-                    .await;
+            let auth_response = frontegg.authenticate(&user, &password).await;
+            match auth_response {
+                Ok(mut auth_session) => {
+                    // Create a session based on the auth session.
+                    //
+                    // In particular, it's important that the username come from the
+                    // auth session, as Frontegg may return an email address with
+                    // different casing than the user supplied via the pgwire
+                    // username field. We want to use the Frontegg casing as
+                    // canonical.
+                    let session = adapter_client.new_session(SessionConfig {
+                        conn_id: conn.conn_id().clone(),
+                        uuid: conn_uuid,
+                        user: auth_session.user().into(),
+                        client_ip: conn.peer_addr().clone(),
+                        external_metadata_rx: Some(auth_session.external_metadata_rx()),
+                        internal_user_metadata: None,
+                        helm_chart_version,
+                    });
+                    let expired = async move { auth_session.expired().await };
+                    (session, expired.left_future())
+                }
+                Err(err) => {
+                    warn!(?err, "pgwire connection failed authentication");
+                    return conn
+                        .send(ErrorResponse::fatal(
+                            SqlState::INVALID_PASSWORD,
+                            "invalid password",
+                        ))
+                        .await;
+                }
             }
         }
-    } else if use_self_hosted_auth {
-        conn.send(BackendMessage::AuthenticationCleartextPassword)
-            .await?;
-        conn.flush().await?;
-        let password = match conn.recv().await? {
-            Some(FrontendMessage::Password { password }) => Password(password),
-            _ => {
-                return conn
-                    .send(ErrorResponse::fatal(
-                        SqlState::INVALID_AUTHORIZATION_SPECIFICATION,
-                        "expected Password message",
-                    ))
-                    .await;
-            }
-        };
-        let auth_response = match adapter_client.authenticate(&user, &password).await {
-            Ok(resp) => resp,
-            Err(err) => {
-                warn!(?err, "pgwire connection failed authentication");
-                return conn
-                    .send(ErrorResponse::fatal(
-                        SqlState::INVALID_PASSWORD,
-                        "invalid password",
-                    ))
-                    .await;
-            }
-        };
-        let session = adapter_client.new_session(SessionConfig {
-            conn_id: conn.conn_id().clone(),
-            uuid: conn_uuid,
-            user,
-            client_ip: conn.peer_addr().clone(),
-            external_metadata_rx: None,
-            internal_user_metadata: Some(InternalUserMetadata {
-                superuser: auth_response.superuser,
-            }),
-            helm_chart_version,
-        });
-        // No frontegg check, so auth session lasts indefinitely.
-        let auth_session = pending().right_future();
-        (session, auth_session)
-    } else {
-        let session = adapter_client.new_session(SessionConfig {
-            conn_id: conn.conn_id().clone(),
-            uuid: conn_uuid,
-            user,
-            client_ip: conn.peer_addr().clone(),
-            external_metadata_rx: None,
-            internal_user_metadata: None,
-            helm_chart_version,
-        });
-        // No frontegg check, so auth session lasts indefinitely.
-        let auth_session = pending().right_future();
-        (session, auth_session)
+        Authenticator::Password(adapter_client) => {
+            conn.send(BackendMessage::AuthenticationCleartextPassword)
+                .await?;
+            conn.flush().await?;
+            let password = match conn.recv().await? {
+                Some(FrontendMessage::Password { password }) => Password(password),
+                _ => {
+                    return conn
+                        .send(ErrorResponse::fatal(
+                            SqlState::INVALID_AUTHORIZATION_SPECIFICATION,
+                            "expected Password message",
+                        ))
+                        .await;
+                }
+            };
+            let auth_response = match adapter_client.authenticate(&user, &password).await {
+                Ok(resp) => resp,
+                Err(err) => {
+                    warn!(?err, "pgwire connection failed authentication");
+                    return conn
+                        .send(ErrorResponse::fatal(
+                            SqlState::INVALID_PASSWORD,
+                            "invalid password",
+                        ))
+                        .await;
+                }
+            };
+            let session = adapter_client.new_session(SessionConfig {
+                conn_id: conn.conn_id().clone(),
+                uuid: conn_uuid,
+                user,
+                client_ip: conn.peer_addr().clone(),
+                external_metadata_rx: None,
+                internal_user_metadata: Some(InternalUserMetadata {
+                    superuser: auth_response.superuser,
+                }),
+                helm_chart_version,
+            });
+            // No frontegg check, so auth session lasts indefinitely.
+            let auth_session = pending().right_future();
+            (session, auth_session)
+        }
+        Authenticator::None => {
+            let session = adapter_client.new_session(SessionConfig {
+                conn_id: conn.conn_id().clone(),
+                uuid: conn_uuid,
+                user,
+                client_ip: conn.peer_addr().clone(),
+                external_metadata_rx: None,
+                internal_user_metadata: None,
+                helm_chart_version,
+            });
+            // No frontegg check, so auth session lasts indefinitely.
+            let auth_session = pending().right_future();
+            (session, auth_session)
+        }
     };
 
     let system_vars = adapter_client.get_system_vars().await;
@@ -743,7 +742,12 @@ where
         result
     }
 
-    async fn ensure_transaction(&mut self, num_stmts: usize) -> Result<(), io::Error> {
+    async fn ensure_transaction(
+        &mut self,
+        num_stmts: usize,
+        message_type: &str,
+    ) -> Result<(), io::Error> {
+        let start = Instant::now();
         if self.txn_needs_commit {
             self.commit_transaction().await?;
         }
@@ -751,6 +755,12 @@ where
         // the future.
         let res = self.adapter_client.start_transaction(Some(num_stmts));
         assert_ok!(res);
+        self.adapter_client
+            .inner()
+            .metrics()
+            .pgwire_ensure_transaction_seconds
+            .with_label_values(&[message_type])
+            .observe(start.elapsed().as_secs_f64());
         Ok(())
     }
 
@@ -806,7 +816,7 @@ where
             // This needs to be done in the loop instead of once at the top because
             // a COMMIT/ROLLBACK statement needs to start a new transaction on next
             // statement.
-            self.ensure_transaction(num_stmts).await?;
+            self.ensure_transaction(num_stmts, "query").await?;
 
             match self
                 .one_query(stmt, sql.to_string(), LifecycleTimestamps { received })
@@ -840,7 +850,7 @@ where
         param_oids: Vec<u32>,
     ) -> Result<State, io::Error> {
         // Start a transaction if we aren't in one.
-        self.ensure_transaction(1).await?;
+        self.ensure_transaction(1, "parse").await?;
 
         let mut param_types = vec![];
         for oid in param_oids {
@@ -938,7 +948,7 @@ where
         result_formats: Vec<Format>,
     ) -> Result<State, io::Error> {
         // Start a transaction if we aren't in one.
-        self.ensure_transaction(1).await?;
+        self.ensure_transaction(1, "bind").await?;
 
         let aborted_txn = self.is_aborted_txn();
         let stmt = match self
@@ -1127,7 +1137,7 @@ where
             match &mut portal.state {
                 PortalState::NotStarted => {
                     // Start a transaction if we aren't in one.
-                    self.ensure_transaction(1).await?;
+                    self.ensure_transaction(1, "execute").await?;
                     match self
                         .adapter_client
                         .execute(
@@ -1264,7 +1274,7 @@ where
     #[instrument(level = "debug")]
     async fn describe_statement(&mut self, name: &str) -> Result<State, io::Error> {
         // Start a transaction if we aren't in one.
-        self.ensure_transaction(1).await?;
+        self.ensure_transaction(1, "describe_statement").await?;
 
         let stmt = match self.adapter_client.get_prepared_statement(name).await {
             Ok(stmt) => stmt,
@@ -1290,7 +1300,7 @@ where
     #[instrument(level = "debug")]
     async fn describe_portal(&mut self, name: &str) -> Result<State, io::Error> {
         // Start a transaction if we aren't in one.
-        self.ensure_transaction(1).await?;
+        self.ensure_transaction(1, "describe_portal").await?;
 
         let session = self.adapter_client.session();
         let row_desc = session
@@ -1468,40 +1478,6 @@ where
         self.flush().await
     }
 
-    // Converts a RowsFuture to a stream while also checking for connection close.
-    #[instrument(level = "debug")]
-    async fn row_future_to_stream<'s, 'p>(
-        &'s mut self,
-        parent: &'p tracing::Span,
-        mut rows: RowsFuture,
-    ) -> Result<UnboundedReceiver<PeekResponseUnary>, io::Error>
-    where
-        'p: 's,
-    {
-        // select is safe to use because if close finishes, rows is canceled,
-        // which is the intended behavior.
-        let span = tracing::debug_span!(parent: parent, "row_future_to_stream");
-        async move {
-            loop {
-                tokio::select! {
-                    err = self.conn.wait_closed() => return Err(err),
-                    rows = &mut rows => {
-                        let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
-                        tx.send(rows).expect("send must succeed");
-                        return Ok(rx);
-                    }
-                    notice = self.adapter_client.session().recv_notice() => {
-                        self.send(notice.into_response())
-                            .await?;
-                        self.conn.flush().await?;
-                    }
-                }
-            }
-        }
-        .instrument(span)
-        .await
-    }
-
     #[allow(clippy::too_many_arguments)]
     #[instrument(level = "debug")]
     async fn send_execute_response(
@@ -1558,22 +1534,21 @@ where
                 )
                 .await
             }
-            ExecuteResponse::SendingRows {
-                future: rx,
+            ExecuteResponse::SendingRowsStreaming {
+                rows,
                 instance_id,
                 strategy,
             } => {
-                let row_desc =
-                    row_desc.expect("missing row description for ExecuteResponse::SendingRows");
+                let row_desc = row_desc
+                    .expect("missing row description for ExecuteResponse::SendingRowsStreaming");
 
-                let span = tracing::debug_span!("sending_rows");
-                let rows = self.row_future_to_stream(&span, rx).await?;
+                let span = tracing::debug_span!("sending_rows_streaming");
 
                 self.send_rows(
                     row_desc,
                     portal_name,
                     InProgressRows::new(RecordFirstRowStream::new(
-                        Box::new(UnboundedReceiverStream::new(rows)),
+                        Box::new(rows),
                         execute_started,
                         &self.adapter_client,
                         Some(instance_id),
@@ -1757,13 +1732,11 @@ where
                             .retire_execute(ctx_extra, statement_ended_execution_reason);
                         return result;
                     }
-                    ExecuteResponse::SendingRows {
-                        future: rows_rx,
+                    ExecuteResponse::SendingRowsStreaming {
+                        rows,
                         instance_id,
                         strategy,
                     } => {
-                        let span = tracing::debug_span!("sending_rows");
-                        let rows = self.row_future_to_stream(&span, rows_rx).await?;
                         // We don't need to finalize execution here;
                         // it was already done in the
                         // coordinator. Just extract the state and
@@ -1773,7 +1746,7 @@ where
                                 format,
                                 row_desc,
                                 RecordFirstRowStream::new(
-                                    Box::new(UnboundedReceiverStream::new(rows)),
+                                    Box::new(rows),
                                     execute_started,
                                     &self.adapter_client,
                                     Some(instance_id),
@@ -2063,6 +2036,10 @@ where
             .get_portal_unverified_mut(&portal_name)
             .expect("valid portal name for send rows");
 
+        let saw_rows = rows.remaining.saw_rows;
+        let no_more_rows = rows.no_more_rows();
+        let recorded_first_row_instant = rows.remaining.recorded_first_row_instant;
+
         // Always return rows back, even if it's empty. This prevents an unclosed
         // portal from re-executing after it has been emptied.
         portal.state = PortalState::InProgress(Some(rows));
@@ -2075,6 +2052,38 @@ where
         });
         let response_message = get_response(max_rows, total_sent_rows, fetch_portal);
         self.send(response_message).await?;
+
+        // Attend to metrics if there are no more rows.
+        if no_more_rows {
+            let statement_type = if let Some(stmt) = &self
+                .adapter_client
+                .session()
+                .get_portal_unverified(&portal_name)
+                .expect("valid portal name for send_rows")
+                .stmt
+            {
+                metrics::statement_type_label_value(stmt.deref())
+            } else {
+                "no-statement"
+            };
+            let duration = if saw_rows {
+                recorded_first_row_instant
+                    .expect("recorded_first_row_instant because saw_rows")
+                    .elapsed()
+            } else {
+                // If the result is empty, then we define time from first to last row as 0.
+                // (Note that, currently, an empty result involves a PeekResponse with 0 rows, which
+                // does flip `saw_rows`, so this code path is currently not exercised.)
+                Duration::ZERO
+            };
+            self.adapter_client
+                .inner()
+                .metrics()
+                .result_rows_first_to_last_byte_seconds
+                .with_label_values(&[statement_type])
+                .observe(duration.as_secs_f64());
+        }
+
         Ok((
             State::Ready,
             SendRowsEndedReason::Success {

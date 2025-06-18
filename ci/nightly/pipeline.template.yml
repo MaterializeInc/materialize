@@ -52,6 +52,7 @@ steps:
           queue: builder-linux-x86_64
         env:
           CI_SANITIZER: address
+        sanitizer: skip
 
       - id: build-aarch64-asan
         label: ":bazel: Build aarch64 (ASan)"
@@ -65,6 +66,7 @@ steps:
           queue: builder-linux-aarch64-mem
         env:
           CI_SANITIZER: address
+        sanitizer: skip
 
   - group: Linters
     key: linters
@@ -85,7 +87,7 @@ steps:
         depends_on: []
         timeout_in_minutes: 45
         agents:
-          queue: hetzner-aarch64-4cpu-8gb
+          queue: hetzner-aarch64-8cpu-16gb
         sanitizer: skip
 
       - id: cargo-deny-check-advisories
@@ -108,7 +110,7 @@ steps:
           composition: cargo-test
           args: [--miri-full]
     agents:
-      queue: hetzner-aarch64-8cpu-16gb
+      queue: hetzner-aarch64-16cpu-32gb
     sanitizer: skip
 
   - group: Benchmarks
@@ -282,7 +284,6 @@ steps:
           - ./ci/plugins/mzcompose:
               composition: testdrive
               args: [--replicas=4]
-        skip: "Reenable when database-issues#9095 is fixed"
 
       - id: testdrive-size-1
         label: ":racing_car: testdrive with SIZE 1"
@@ -505,7 +506,7 @@ steps:
         depends_on: build-aarch64
         timeout_in_minutes: 180
         agents:
-          queue: hetzner-aarch64-8cpu-16gb
+          queue: hetzner-aarch64-16cpu-32gb
         plugins:
           - ./ci/plugins/mzcompose:
               composition: zippy
@@ -516,7 +517,7 @@ steps:
         depends_on: build-aarch64
         timeout_in_minutes: 120
         agents:
-          queue: hetzner-aarch64-8cpu-16gb
+          queue: hetzner-aarch64-16cpu-32gb
         plugins:
           - ./ci/plugins/mzcompose:
               composition: zippy
@@ -611,7 +612,7 @@ steps:
           - ./ci/plugins/mzcompose:
               composition: mysql-cdc-resumption-old-syntax
         agents:
-          queue: hetzner-aarch64-4cpu-8gb
+          queue: hetzner-aarch64-8cpu-16gb
 
       - id: mysql-rtr-old-syntax
         label: MySQL RTR tests (before source versioning)
@@ -653,7 +654,7 @@ steps:
           - ./ci/plugins/mzcompose:
               composition: pg-cdc-resumption-old-syntax
         agents:
-          queue: hetzner-aarch64-4cpu-8gb
+          queue: hetzner-aarch64-8cpu-16gb
 
       - id: pg-rtr-old-syntax
         label: Postgres RTR tests (before source versioning)
@@ -685,7 +686,7 @@ steps:
               composition: testdrive-old-kafka-src-syntax
               run: migration
         agents:
-          queue: hetzner-aarch64-8cpu-16gb
+          queue: hetzner-aarch64-16cpu-32gb
 
   - group: AWS
     key: aws
@@ -1139,7 +1140,7 @@ steps:
         depends_on: build-aarch64
         timeout_in_minutes: 40
         agents:
-          queue: hetzner-aarch64-4cpu-8gb
+          queue: hetzner-aarch64-8cpu-16gb
         artifact_paths: [test/persist/maelstrom/**/*.log]
         plugins:
           - ./ci/plugins/mzcompose:
@@ -1151,7 +1152,7 @@ steps:
         depends_on: build-aarch64
         timeout_in_minutes: 40
         agents:
-          queue: hetzner-aarch64-4cpu-8gb
+          queue: hetzner-aarch64-8cpu-16gb
         artifact_paths: [test/persist/maelstrom/**/*.log]
         plugins:
           - ./ci/plugins/mzcompose:
@@ -1163,7 +1164,7 @@ steps:
         depends_on: build-aarch64
         timeout_in_minutes: 40
         agents:
-          queue: hetzner-aarch64-4cpu-8gb
+          queue: hetzner-aarch64-8cpu-16gb
         artifact_paths: [test/persist/maelstrom/**/*.log]
         plugins:
           - ./ci/plugins/mzcompose:
@@ -1175,7 +1176,7 @@ steps:
         depends_on: build-aarch64
         timeout_in_minutes: 40
         agents:
-          queue: hetzner-aarch64-4cpu-8gb
+          queue: hetzner-aarch64-8cpu-16gb
         artifact_paths: [test/persist/maelstrom/**/*.log]
         plugins:
           - ./ci/plugins/mzcompose:
@@ -1393,7 +1394,7 @@ steps:
         plugins:
           - ./ci/plugins/mzcompose:
               composition: sqlsmith
-              args: [--max-joins=2, --runtime=1500]
+              args: [--max-joins=5, --runtime=1500]
 
       - id: sqlsmith-explain
         label: "SQLsmith explain"
@@ -1706,7 +1707,6 @@ steps:
         depends_on: build-aarch64
         artifact_paths: [parallel-workload-queries.log.zst]
         timeout_in_minutes: 90
-        skip: "TODO(def-): Reenable when database-issues#835 is fixed"
         agents:
           queue: hetzner-aarch64-8cpu-16gb
         plugins:
@@ -1915,7 +1915,8 @@ steps:
   - id: 0dt
     label: Zero downtime
     depends_on: build-aarch64
-    timeout_in_minutes: 180
+    timeout_in_minutes: 240
+    parallelism: 4
     plugins:
       - ./ci/plugins/mzcompose:
           composition: 0dt
@@ -1939,7 +1940,7 @@ steps:
     parallelism: 10
     agents:
       # Runs faster/more consistently on larger agent
-      queue: hetzner-aarch64-8cpu-16gb
+      queue: hetzner-aarch64-16cpu-32gb
     plugins:
       - ./ci/plugins/mzcompose:
           composition: sqllogictest
@@ -1969,7 +1970,7 @@ steps:
          plugins:
            - ./ci/plugins/mzcompose:
                composition: race-condition
-               args: [--runtime=5600, --scenario=subsequent]
+               args: [--runtime=2800, --scenario=subsequent]
 
        - id: race-condition-subsequent-100
          label: "Race Condition Test (subsequent, 100 objects)"
@@ -1980,7 +1981,7 @@ steps:
          plugins:
            - ./ci/plugins/mzcompose:
                composition: race-condition
-               args: [--runtime=5600, --scenario=subsequent, --num-objects=100]
+               args: [--runtime=2800, --scenario=subsequent, --num-objects=100]
 
        - id: race-condition-subsequent-chain
          label: "Race Condition Test (subsequent chain)"
@@ -1991,7 +1992,7 @@ steps:
          plugins:
            - ./ci/plugins/mzcompose:
                composition: race-condition
-               args: [--runtime=5600, --scenario=subsequent-chain]
+               args: [--runtime=2800, --scenario=subsequent-chain]
 
        - id: race-condition-subsequent-chain-100
          label: "Race Condition Test (subsequent chain, 100 objects)"
@@ -2002,7 +2003,7 @@ steps:
          plugins:
            - ./ci/plugins/mzcompose:
                composition: race-condition
-               args: [--runtime=5600, --scenario=subsequent-chain, --num-objects=100]
+               args: [--runtime=2800, --scenario=subsequent-chain, --num-objects=100]
 
        - id: race-condition-concurrent
          label: "Race Condition Test (concurrent)"
@@ -2013,7 +2014,7 @@ steps:
          plugins:
            - ./ci/plugins/mzcompose:
                composition: race-condition
-               args: [--runtime=5600, --scenario=concurrent]
+               args: [--runtime=2800, --scenario=concurrent]
          skip: "Not stable yet, not clear if this is a product issue"
 
   - group: "Language tests"

@@ -42,6 +42,7 @@ use chrono::{DateTime, NaiveDateTime, NaiveTime, Utc};
 use fallible_iterator::FallibleIterator;
 use futures::sink::SinkExt;
 use itertools::Itertools;
+use maplit::btreemap;
 use md5::{Digest, Md5};
 use mz_adapter_types::bootstrap_builtin_cluster_config::{
     ANALYTICS_CLUSTER_DEFAULT_REPLICATION_FACTOR, BootstrapBuiltinClusterConfig,
@@ -76,6 +77,10 @@ use mz_repr::adt::date::Date;
 use mz_repr::adt::mz_acl_item::{AclItem, MzAclItem};
 use mz_repr::adt::numeric;
 use mz_secrets::SecretsController;
+use mz_server_core::listeners::{
+    AllowedRoles, AuthenticatorKind, BaseListenerConfig, HttpListenerConfig, HttpRoutesEnabled,
+    ListenersConfig, SqlListenerConfig,
+};
 use mz_sql::ast::{Expr, Raw, Statement};
 use mz_sql::catalog::EnvironmentId;
 use mz_sql_parser::ast::display::AstDisplay;
@@ -1006,8 +1011,59 @@ impl<'a> RunnerInner<'a> {
             orchestrator,
             config.tracing.clone(),
         ));
-        let listeners = mz_environmentd::Listeners::bind_any_local().await?;
-        let host_name = format!("localhost:{}", listeners.http_local_addr().port());
+        let listeners_config = ListenersConfig {
+            sql: btreemap! {
+                "external".to_owned() => SqlListenerConfig {
+                    addr: SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0),
+                    authenticator_kind: AuthenticatorKind::None,
+                    allowed_roles: AllowedRoles::Normal,
+                    enable_tls: false,
+                },
+                "internal".to_owned() => SqlListenerConfig {
+                    addr: SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0),
+                    authenticator_kind: AuthenticatorKind::None,
+                    allowed_roles: AllowedRoles::Internal,
+                    enable_tls: false,
+                },
+            },
+            http: btreemap![
+                "external".to_owned() => HttpListenerConfig {
+                    base: BaseListenerConfig {
+                        addr: SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0),
+                        authenticator_kind: AuthenticatorKind::None,
+                        allowed_roles: AllowedRoles::Normal,
+                        enable_tls: false
+                    },
+                    routes: HttpRoutesEnabled {
+                        base: true,
+                        webhook: true,
+                        internal: false,
+                        metrics: false,
+                        profiling: false,
+                    },
+                },
+                "internal".to_owned() => HttpListenerConfig {
+                    base: BaseListenerConfig {
+                        addr: SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0),
+                        authenticator_kind: AuthenticatorKind::None,
+                        allowed_roles: AllowedRoles::NormalAndInternal,
+                        enable_tls: false
+                    },
+                    routes: HttpRoutesEnabled {
+                        base: true,
+                        webhook: true,
+                        internal: true,
+                        metrics: true,
+                        profiling: true,
+                    },
+                },
+            ],
+        };
+        let listeners = mz_environmentd::Listeners::bind(listeners_config).await?;
+        let host_name = format!(
+            "localhost:{}",
+            listeners.http["external"].handle.local_addr.port()
+        );
         let catalog_config = CatalogConfig {
             persist_clients: Arc::clone(&persist_clients),
             metrics: Arc::new(mz_catalog::durable::Metrics::new(&MetricsRegistry::new())),
@@ -1047,8 +1103,6 @@ impl<'a> RunnerInner<'a> {
             cloud_resource_controller: None,
             tls: None,
             frontegg: None,
-            self_hosted_auth: false,
-            self_hosted_auth_internal: false,
             cors_allowed_origin: AllowOrigin::list([]),
             unsafe_mode: true,
             all_features: false,
@@ -1098,6 +1152,7 @@ impl<'a> RunnerInner<'a> {
             aws_privatelink_availability_zones: None,
             launchdarkly_sdk_key: None,
             launchdarkly_key_map: Default::default(),
+            config_sync_file_path: None,
             config_sync_timeout: Duration::from_secs(30),
             config_sync_loop_interval: None,
             bootstrap_role: Some("materialize".into()),
@@ -1106,6 +1161,7 @@ impl<'a> RunnerInner<'a> {
             tls_reload_certs: mz_server_core::cert_reload_never_reload(),
             helm_chart_version: None,
             license_key: ValidatedLicenseKey::for_tests(),
+            external_login_password_mz_system: None,
         };
         // We need to run the server on its own Tokio runtime, which in turn
         // requires its own thread, so that we can wait for any tasks spawned
@@ -1137,13 +1193,13 @@ impl<'a> RunnerInner<'a> {
                 }
             };
             server_addr_tx
-                .send(Ok(server.sql_local_addr()))
+                .send(Ok(server.sql_listener_handles["external"].local_addr))
                 .expect("receiver should not drop first");
             internal_server_addr_tx
-                .send(server.internal_sql_local_addr())
+                .send(server.sql_listener_handles["internal"].local_addr)
                 .expect("receiver should not drop first");
             internal_http_server_addr_tx
-                .send(server.internal_http_local_addr())
+                .send(server.http_listener_handles["internal"].local_addr)
                 .expect("receiver should not drop first");
             let _ = runtime.block_on(shutdown_trigger_rx);
         });

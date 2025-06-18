@@ -24,6 +24,7 @@ use differential_dataflow::trace::Description;
 use futures::Stream;
 use futures_util::{StreamExt, stream};
 use mz_dyncfg::Config;
+use mz_ore::halt;
 use mz_ore::instrument;
 use mz_ore::now::EpochMillis;
 use mz_ore::task::{AbortOnDropHandle, JoinHandle, RuntimeExt};
@@ -33,6 +34,7 @@ use mz_persist_types::{Codec, Codec64};
 use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
 use timely::PartialOrder;
+use timely::order::TotalOrder;
 use timely::progress::{Antichain, Timestamp};
 use tokio::runtime::Handle;
 use tracing::{Instrument, debug_span, warn};
@@ -113,7 +115,7 @@ impl<K, V, T, D> Subscribe<K, V, T, D>
 where
     K: Debug + Codec,
     V: Debug + Codec,
-    T: Timestamp + Lattice + Codec64 + Sync,
+    T: Timestamp + TotalOrder + Lattice + Codec64 + Sync,
     D: Semigroup + Codec64 + Send + Sync,
 {
     fn new(snapshot_parts: Vec<LeasedBatchPart<T>>, listen: Listen<K, V, T, D>) -> Self {
@@ -150,7 +152,7 @@ impl<K, V, T, D> Subscribe<K, V, T, D>
 where
     K: Debug + Codec,
     V: Debug + Codec,
-    T: Timestamp + Lattice + Codec64 + Sync,
+    T: Timestamp + TotalOrder + Lattice + Codec64 + Sync,
     D: Semigroup + Codec64 + Send + Sync,
 {
     /// Equivalent to `next`, but rather than returning a [`LeasedBatchPart`],
@@ -195,7 +197,7 @@ impl<K, V, T, D> Subscribe<K, V, T, D>
 where
     K: Debug + Codec,
     V: Debug + Codec,
-    T: Timestamp + Lattice + Codec64 + Sync,
+    T: Timestamp + TotalOrder + Lattice + Codec64 + Sync,
     D: Semigroup + Codec64 + Send + Sync,
 {
     /// Politely expires this subscribe, releasing its lease.
@@ -238,7 +240,7 @@ impl<K, V, T, D> Listen<K, V, T, D>
 where
     K: Debug + Codec,
     V: Debug + Codec,
-    T: Timestamp + Lattice + Codec64 + Sync,
+    T: Timestamp + TotalOrder + Lattice + Codec64 + Sync,
     D: Semigroup + Codec64 + Send + Sync,
 {
     async fn new(mut handle: ReadHandle<K, V, T, D>, as_of: Antichain<T>) -> Self {
@@ -288,26 +290,46 @@ where
 
         // A lot of things across mz have to line up to hold the following
         // invariant and violations only show up as subtle correctness errors,
-        // so explictly validate it here. Better to panic and roll back a
+        // so explicitly validate it here. Better to panic and roll back a
         // release than be incorrect (also potentially corrupting a sink).
         //
         // Note that the since check is intentionally less_than, not less_equal.
         // If a batch's since is X, that means we can no longer distinguish X
         // (beyond self.frontier) from X-1 (not beyond self.frontier) to keep
         // former and filter out the latter.
-        assert!(
-            PartialOrder::less_than(batch.desc.since(), &self.frontier)
-                // Special case when the frontier == the as_of (i.e. the first
-                // time this is called on a new Listen). Because as_of is
-                // _exclusive_, we don't need to be able to distinguish X from
-                // X-1.
-                || (self.frontier == self.as_of
-                    && PartialOrder::less_equal(batch.desc.since(), &self.frontier)),
-            "Listen on {} received a batch {:?} advanced past the listen frontier {:?}",
-            self.handle.machine.shard_id(),
-            batch.desc,
-            self.frontier
-        );
+        let acceptable_desc = PartialOrder::less_than(batch.desc.since(), &self.frontier)
+            // Special case when the frontier == the as_of (i.e. the first
+            // time this is called on a new Listen). Because as_of is
+            // _exclusive_, we don't need to be able to distinguish X from
+            // X-1.
+            || (self.frontier == self.as_of
+            && PartialOrder::less_equal(batch.desc.since(), &self.frontier));
+        if !acceptable_desc {
+            let lease_state = self
+                .handle
+                .machine
+                .applier
+                .reader_lease(self.handle.reader_id.clone());
+            if let Some(lease) = lease_state {
+                panic!(
+                    "Listen on {} received a batch {:?} advanced past the listen frontier {:?}, but the lease has not expired: {:?}",
+                    self.handle.machine.shard_id(),
+                    batch.desc,
+                    self.frontier,
+                    lease
+                )
+            } else {
+                // Ideally we'd percolate this error up, so callers could eg. restart a dataflow
+                // instead of restarting a process...
+                halt!(
+                    "Listen on {} received a batch {:?} advanced past the listen frontier {:?} after the reader has expired. \
+                     This can happen in exceptional cases: a machine goes to sleep or is running out of memory or CPU, for example.",
+                    self.handle.machine.shard_id(),
+                    batch.desc,
+                    self.frontier
+                )
+            }
+        }
 
         let new_frontier = batch.desc.upper().clone();
 
@@ -328,8 +350,7 @@ where
         // batch the last time we called this) that are strictly less_than the
         // batch upper to compute a new since. For totally ordered times
         // (currently always the case in mz) self.frontier will always have a
-        // single element and it will be less_than upper, but the following
-        // logic is (hopefully) correct for partially order times as well. We
+        // single element and it will be less_than upper. We
         // could also abuse the fact that every time we actually emit is
         // guaranteed by definition to be less_than upper to be a bit more
         // prompt, but this would involve a lot more temporary antichains and
@@ -365,7 +386,7 @@ impl<K, V, T, D> Listen<K, V, T, D>
 where
     K: Debug + Codec,
     V: Debug + Codec,
-    T: Timestamp + Lattice + Codec64 + Sync,
+    T: Timestamp + TotalOrder + Lattice + Codec64 + Sync,
     D: Semigroup + Codec64 + Send + Sync,
 {
     /// Attempt to pull out the next values of this subscription.
@@ -440,7 +461,7 @@ impl<K, V, T, D> Listen<K, V, T, D>
 where
     K: Debug + Codec,
     V: Debug + Codec,
-    T: Timestamp + Lattice + Codec64 + Sync,
+    T: Timestamp + TotalOrder + Lattice + Codec64 + Sync,
     D: Semigroup + Codec64 + Send + Sync,
 {
     /// Fetches the contents of `part` and returns its lease.
@@ -525,7 +546,7 @@ impl<K, V, T, D> ReadHandle<K, V, T, D>
 where
     K: Debug + Codec,
     V: Debug + Codec,
-    T: Timestamp + Lattice + Codec64 + Sync,
+    T: Timestamp + TotalOrder + Lattice + Codec64 + Sync,
     D: Semigroup + Codec64 + Send + Sync,
 {
     pub(crate) async fn new(
@@ -866,9 +887,11 @@ pub(crate) struct UnexpiredReadHandleState {
 /// but it's also free to abandon the instance at any time if it eg. only needs a few entries.
 #[derive(Debug)]
 pub struct Cursor<K: Codec, V: Codec, T: Timestamp + Codec64, D: Codec64, L = Lease> {
-    pub(crate) consolidator: CursorConsolidator<K, V, T, D>,
-    pub(crate) _lease: L,
-    pub(crate) read_schemas: Schemas<K, V>,
+    consolidator: Consolidator<T, D, StructuredSort<K, V, T, D>>,
+    max_len: usize,
+    max_bytes: usize,
+    _lease: L,
+    read_schemas: Schemas<K, V>,
 }
 
 impl<K: Codec, V: Codec, T: Timestamp + Codec64, D: Codec64, L> Cursor<K, V, T, D, L> {
@@ -877,15 +900,6 @@ impl<K: Codec, V: Codec, T: Timestamp + Codec64, D: Codec64, L> Cursor<K, V, T, 
     pub fn into_lease(self: Self) -> L {
         self._lease
     }
-}
-
-#[derive(Debug)]
-pub(crate) enum CursorConsolidator<K: Codec, V: Codec, T: Timestamp + Codec64, D: Codec64> {
-    Structured {
-        consolidator: Consolidator<T, D, StructuredSort<K, V, T, D>>,
-        max_len: usize,
-        max_bytes: usize,
-    },
 }
 
 impl<K, V, T, D, L> Cursor<K, V, T, D, L>
@@ -899,39 +913,39 @@ where
     pub async fn next(
         &mut self,
     ) -> Option<impl Iterator<Item = ((Result<K, String>, Result<V, String>), T, D)> + '_> {
-        match &mut self.consolidator {
-            CursorConsolidator::Structured {
-                consolidator,
-                max_len,
-                max_bytes,
-            } => {
-                let part = consolidator
-                    .next_chunk(*max_len, *max_bytes)
-                    .await
-                    .expect("fetching a leased part")?;
-                let key_decoder = self
-                    .read_schemas
-                    .key
-                    .decoder_any(part.key.as_ref())
-                    .expect("ok");
-                let val_decoder = self
-                    .read_schemas
-                    .val
-                    .decoder_any(part.val.as_ref())
-                    .expect("ok");
-                let iter = (0..part.len()).map(move |i| {
-                    let mut k = K::default();
-                    let mut v = V::default();
-                    key_decoder.decode(i, &mut k);
-                    val_decoder.decode(i, &mut v);
-                    let t = T::decode(part.time.value(i).to_le_bytes());
-                    let d = D::decode(part.diff.value(i).to_le_bytes());
-                    ((Ok(k), Ok(v)), t, d)
-                });
+        let Self {
+            consolidator,
+            max_len,
+            max_bytes,
+            _lease,
+            read_schemas: _,
+        } = self;
 
-                Some(iter)
-            }
-        }
+        let part = consolidator
+            .next_chunk(*max_len, *max_bytes)
+            .await
+            .expect("fetching a leased part")?;
+        let key_decoder = self
+            .read_schemas
+            .key
+            .decoder_any(part.key.as_ref())
+            .expect("ok");
+        let val_decoder = self
+            .read_schemas
+            .val
+            .decoder_any(part.val.as_ref())
+            .expect("ok");
+        let iter = (0..part.len()).map(move |i| {
+            let mut k = K::default();
+            let mut v = V::default();
+            key_decoder.decode(i, &mut k);
+            val_decoder.decode(i, &mut v);
+            let t = T::decode(part.time.value(i).to_le_bytes());
+            let d = D::decode(part.diff.value(i).to_le_bytes());
+            ((Ok(k), Ok(v)), t, d)
+        });
+
+        Some(iter)
     }
 }
 
@@ -939,7 +953,7 @@ impl<K, V, T, D> ReadHandle<K, V, T, D>
 where
     K: Debug + Codec + Ord,
     V: Debug + Codec + Ord,
-    T: Timestamp + Lattice + Codec64 + Sync,
+    T: Timestamp + TotalOrder + Lattice + Codec64 + Sync,
     D: Semigroup + Ord + Codec64 + Send + Sync,
 {
     /// Generates a [Self::snapshot], and fetches all of the batches it
@@ -1007,6 +1021,7 @@ where
             &batches,
             lease,
             should_fetch_part,
+            COMPACTION_MEMORY_BOUND_BYTES.get(&self.cfg),
         )
     }
 
@@ -1022,48 +1037,46 @@ where
         batches: &[HollowBatch<T>],
         lease: L,
         should_fetch_part: impl for<'a> Fn(Option<&'a LazyPartStats>) -> bool,
+        memory_budget_bytes: usize,
     ) -> Result<Cursor<K, V, T, D, L>, Since<T>> {
         let context = format!("{}[as_of={:?}]", shard_id, as_of.elements());
         let filter = FetchBatchFilter::Snapshot {
             as_of: as_of.clone(),
         };
 
-        let consolidator = {
-            let mut consolidator = Consolidator::new(
-                context,
-                shard_id,
-                StructuredSort::new(schemas.clone()),
-                blob,
-                metrics,
-                shard_metrics,
-                read_metrics,
-                filter,
-                None,
-                COMPACTION_MEMORY_BOUND_BYTES.get(persist_cfg),
-            );
-            for batch in batches {
-                for (meta, run) in batch.runs() {
-                    consolidator.enqueue_run(
-                        &batch.desc,
-                        meta,
-                        run.into_iter()
-                            .filter(|p| should_fetch_part(p.stats()))
-                            .cloned(),
-                    );
-                }
+        let mut consolidator = Consolidator::new(
+            context,
+            shard_id,
+            StructuredSort::new(schemas.clone()),
+            blob,
+            metrics,
+            shard_metrics,
+            read_metrics,
+            filter,
+            None,
+            memory_budget_bytes,
+        );
+        for batch in batches {
+            for (meta, run) in batch.runs() {
+                consolidator.enqueue_run(
+                    &batch.desc,
+                    meta,
+                    run.into_iter()
+                        .filter(|p| should_fetch_part(p.stats()))
+                        .cloned(),
+                );
             }
-            CursorConsolidator::Structured {
-                consolidator,
-                // This default may end up consolidating more records than previously
-                // for cases like fast-path peeks, where only the first few entries are used.
-                // If this is a noticeable performance impact, thread the max-len in from the caller.
-                max_len: persist_cfg.compaction_yield_after_n_updates,
-                max_bytes: BLOB_TARGET_SIZE.get(persist_cfg).max(1),
-            }
-        };
+        }
+        // This default may end up consolidating more records than previously
+        // for cases like fast-path peeks, where only the first few entries are used.
+        // If this is a noticeable performance impact, thread the max-len in from the caller.
+        let max_len = persist_cfg.compaction_yield_after_n_updates;
+        let max_bytes = BLOB_TARGET_SIZE.get(persist_cfg).max(1);
 
         Ok(Cursor {
             consolidator,
+            max_len,
+            max_bytes,
             _lease: lease,
             read_schemas: schemas,
         })
@@ -1136,7 +1149,7 @@ impl<K, V, T, D> ReadHandle<K, V, T, D>
 where
     K: Debug + Codec + Ord,
     V: Debug + Codec + Ord,
-    T: Timestamp + Lattice + Codec64 + Sync,
+    T: Timestamp + TotalOrder + Lattice + Codec64 + Sync,
     D: Semigroup + Codec64 + Send + Sync,
 {
     /// Generates a [Self::snapshot], and streams out all of the updates
@@ -1189,7 +1202,7 @@ impl<K, V, T, D> ReadHandle<K, V, T, D>
 where
     K: Debug + Codec + Ord,
     V: Debug + Codec + Ord,
-    T: Timestamp + Lattice + Codec64 + Ord + Sync,
+    T: Timestamp + TotalOrder + Lattice + Codec64 + Sync,
     D: Semigroup + Ord + Codec64 + Send + Sync,
 {
     /// Test helper to generate a [Self::snapshot] call that is expected to

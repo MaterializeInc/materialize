@@ -45,6 +45,8 @@ pub struct Metrics {
     pub session_startup_table_writes_seconds: HistogramVec,
     pub parse_seconds: HistogramVec,
     pub pgwire_message_processing_seconds: HistogramVec,
+    pub result_rows_first_to_last_byte_seconds: HistogramVec,
+    pub pgwire_ensure_transaction_seconds: HistogramVec,
 }
 
 impl Metrics {
@@ -139,7 +141,7 @@ impl Metrics {
                 name: "mz_slow_message_handling",
                 help: "Latency for ALL coordinator messages. 'slow' is in the name for legacy reasons, but is not accurate.",
                 var_labels: ["message_kind"],
-                buckets: histogram_seconds_buckets(0.000_128, 32.0),
+                buckets: histogram_seconds_buckets(0.000_128, 512.0),
             )),
             optimization_notices: registry.register(metric!(
                 name: "mz_optimization_notices",
@@ -185,13 +187,25 @@ impl Metrics {
             parse_seconds: registry.register(metric!(
                 name: "mz_parse_seconds",
                 help: "The time it takes to parse a SQL statement. (Works for both Simple Queries and the Extended Query protocol.)",
-                buckets: histogram_seconds_buckets(0.000_128, 4.0),
+                buckets: histogram_seconds_buckets(0.001, 8.0),
             )),
             pgwire_message_processing_seconds: registry.register(metric!(
                 name: "mz_pgwire_message_processing_seconds",
                 help: "The time it takes to process each of the pgwire message types, measured in the Adapter frontend",
                 var_labels: ["message_type"],
-                buckets: histogram_seconds_buckets(0.000_128, 128.0),
+                buckets: histogram_seconds_buckets(0.001, 512.0),
+            )),
+            result_rows_first_to_last_byte_seconds: registry.register(metric!(
+                name: "mz_result_rows_first_to_last_byte_seconds",
+                help: "The time from just before sending the first result row to sending a final response message after having successfully flushed the last result row to the connection. (This can span multiple FETCH statements.) (This is never observed for unbounded SUBSCRIBEs, i.e., which have no last result row.)",
+                var_labels: ["statement_type"],
+                buckets: histogram_seconds_buckets(0.001, 8192.0),
+            )),
+            pgwire_ensure_transaction_seconds: registry.register(metric!(
+                name: "mz_pgwire_ensure_transaction_seconds",
+                help: "The time it takes to run `ensure_transactions` when processing pgwire messages.",
+                var_labels: ["message_type"],
+                buckets: histogram_seconds_buckets(0.001, 512.0),
             ))
         }
     }
@@ -234,7 +248,7 @@ pub(crate) fn session_type_label_value(user: &User) -> &'static str {
     }
 }
 
-pub(crate) fn statement_type_label_value<T>(stmt: &Statement<T>) -> &'static str
+pub fn statement_type_label_value<T>(stmt: &Statement<T>) -> &'static str
 where
     T: AstInfo,
 {

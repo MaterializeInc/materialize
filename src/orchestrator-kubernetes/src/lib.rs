@@ -46,8 +46,8 @@ use mz_cloud_resources::AwsExternalIdPrefix;
 use mz_cloud_resources::crd::vpc_endpoint::v1::VpcEndpoint;
 use mz_orchestrator::{
     DiskLimit, LabelSelectionLogic, LabelSelector as MzLabelSelector, NamespacedOrchestrator,
-    OfflineReason, Orchestrator, Service, ServiceConfig, ServiceEvent, ServiceProcessMetrics,
-    ServiceStatus, scheduling_config::*,
+    OfflineReason, Orchestrator, Service, ServiceAssignments, ServiceConfig, ServiceEvent,
+    ServiceProcessMetrics, ServiceStatus, scheduling_config::*,
 };
 use mz_ore::retry::Retry;
 use mz_ore::task::AbortOnDropHandle;
@@ -682,11 +682,19 @@ impl NamespacedOrchestrator for NamespacedKubernetesOrchestrator {
             .iter()
             .map(|p| (p.name.clone(), p.port_hint))
             .collect::<BTreeMap<_, _>>();
-        let listen_addrs = ports_in
-            .iter()
-            .map(|p| (p.name.clone(), format!("0.0.0.0:{}", p.port_hint)))
-            .collect::<BTreeMap<_, _>>();
-        let mut args = args(&listen_addrs);
+
+        let mut listen_addrs = BTreeMap::new();
+        let mut peer_addrs = vec![BTreeMap::new(); hosts.len()];
+        for (name, port) in &ports {
+            listen_addrs.insert(name.clone(), format!("0.0.0.0:{port}"));
+            for (i, host) in hosts.iter().enumerate() {
+                peer_addrs[i].insert(name.clone(), format!("{host}:{port}"));
+            }
+        }
+        let mut args = args(ServiceAssignments {
+            listen_addrs: &listen_addrs,
+            peer_addrs: &peer_addrs,
+        });
 
         // This constrains the orchestrator (for those orchestrators that support
         // anti-affinity, today just k8s) to never schedule pods for different replicas
@@ -783,7 +791,7 @@ impl NamespacedOrchestrator for NamespacedKubernetesOrchestrator {
 
                 let constraint = TopologySpreadConstraint {
                     label_selector: Some(ls),
-                    min_domains: None,
+                    min_domains: config.min_domains,
                     max_skew: config.max_skew,
                     topology_key: "topology.kubernetes.io/zone".to_string(),
                     when_unsatisfiable: if config.soft {
@@ -1278,12 +1286,14 @@ impl NamespacedOrchestrator for NamespacedKubernetesOrchestrator {
                         let last_state = cs.last_state.as_ref().and_then(|s| s.terminated.as_ref());
                         let termination_state = current_state.or(last_state);
 
-                        // The interesting exit codes are 135 (SIGBUS) and 137 (SIGKILL). SIGKILL
-                        // occurs when the OOM killer terminates the container, SIGBUS occurs when
-                        // the container runs out of disk. We treat the latter as an OOM condition
-                        // too since we only use disk for spilling memory.
+                        // The interesting exit codes are:
+                        //  * 135 (SIGBUS): occurs when lgalloc runs out of disk
+                        //  * 137 (SIGKILL): occurs when the OOM killer terminates the container
+                        //  * 167: occurs when the lgalloc limiter terminates the process
+                        // We treat the all of these as OOM conditions since lgalloc uses disk only
+                        // for spilling memory.
                         let exit_code = termination_state.map(|s| s.exit_code);
-                        exit_code == Some(135) || exit_code == Some(137)
+                        exit_code.is_some_and(|e| [135, 137, 167].contains(&e))
                     })
                 })
                 .unwrap_or(false);
@@ -1542,8 +1552,15 @@ impl OrchestratorWorker {
                 disk_bytes: Option<u64>,
             }
 
-            let service = self_.service_api.get(service_name).await.unwrap();
-            let namespace = service.metadata.namespace.unwrap();
+            let service = self_
+                .service_api
+                .get(service_name)
+                .await
+                .with_context(|| format!("failed to get service {service_name}"))?;
+            let namespace = service
+                .metadata
+                .namespace
+                .context("missing service namespace")?;
             let internal_http_port = service
                 .spec
                 .and_then(|spec| spec.ports)
@@ -1564,7 +1581,7 @@ impl OrchestratorWorker {
             let http_client = reqwest::Client::builder()
                 .timeout(Duration::from_secs(10))
                 .build()
-                .unwrap();
+                .context("error building HTTP client")?;
             let resp = http_client.get(metrics_url).send().await?;
             let usage: Usage = resp.json().await?;
 

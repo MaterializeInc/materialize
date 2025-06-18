@@ -225,11 +225,22 @@ COMPLETE 0
 statement ok
 SELECT * FROM large_rows LIMIT 1;
 
+# Need to disable the result stash, so that we actually exceed max result size
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET enable_compute_peek_response_stash = false
+----
+COMPLETE 0
+
 query error db error: ERROR: result exceeds max size of 1048.6 KB
 SELECT * FROM large_rows LIMIT 99;
 
 simple conn=mz_system,user=mz_system
 ALTER SYSTEM RESET max_result_size
+----
+COMPLETE 0
+
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM RESET enable_compute_peek_response_stash
 ----
 COMPLETE 0
 

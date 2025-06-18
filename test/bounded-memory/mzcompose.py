@@ -244,12 +244,19 @@ SCENARIOS = [
             f"""
             > SELECT * FROM v1; /* expect {ITERATIONS * 10 * REPEAT} */
             {ITERATIONS * 10 * REPEAT}
+
+            > SELECT COUNT(*) FROM t1; /* expect {ITERATIONS * 10 * REPEAT} */
+            {ITERATIONS * 10 * REPEAT}
             """
         ),
         post_restart=dedent(
             f"""
-            # We do not do DELETE post-restart, as it will cause OOM for clusterd
+            # We do not do DELETE post-restart, as it will cause postgres to go out of disk
+
             > SELECT * FROM v1; /* expect {ITERATIONS * 10 * REPEAT} */
+            {ITERATIONS * 10 * REPEAT}
+
+            > SELECT COUNT(*) FROM t1; /* expect {ITERATIONS * 10 * REPEAT} */
             {ITERATIONS * 10 * REPEAT}
             """
         ),
@@ -285,6 +292,9 @@ SCENARIOS = [
 
             > SELECT * FROM v1 /* expect: {REPEAT + 2} */;
             {REPEAT + 2}
+
+            > SELECT COUNT(*) FROM t1 /* expect: {REPEAT + 2} */;
+            {REPEAT + 2}
             """
         ),
         post_restart=dedent(
@@ -293,6 +303,9 @@ SCENARIOS = [
             DELETE FROM t1;
 
             > SELECT * FROM v1;
+            0
+
+            > SELECT COUNT(*) FROM t1;
             0
             """
         ),
@@ -344,6 +357,8 @@ SCENARIOS = [
 
             > SELECT * FROM v2;
             17
+
+            > SELECT COUNT(*) FROM t2;
             """
         ),
         post_restart=dedent(
@@ -351,10 +366,16 @@ SCENARIOS = [
             > SELECT * FROM v2;
             17
 
+            > SELECT COUNT(*) FROM t2;
+            0
+
             $ postgres-execute connection=postgres://postgres:postgres@postgres
             DELETE FROM t1;
 
             > SELECT * FROM v2;
+            0
+
+            > SELECT COUNT(*) FROM t2;
             0
             """
         ),
@@ -383,13 +404,27 @@ SCENARIOS = [
             f"""
             > SELECT * FROM v1; /* expect {int(ITERATIONS * 20 * REPEAT / 16)} */
             {int(ITERATIONS * 20 * REPEAT / 16)}
+
+            > SELECT COUNT(*) FROM t1; /* expect {int(ITERATIONS * 20 * REPEAT / 16)} */
+            {int(ITERATIONS * 20 * REPEAT / 16)}
             """
         ),
         post_restart=dedent(
             f"""
-            # We do not do DELETE post-restart, as it will cause OOM for clusterd
             > SELECT * FROM v1; /* expect {int(ITERATIONS * 20 * REPEAT / 16)} */
             {int(ITERATIONS * 20 * REPEAT / 16)}
+
+            > SELECT COUNT(*) FROM t1; /* expect {int(ITERATIONS * 20 * REPEAT / 16)} */
+            {int(ITERATIONS * 20 * REPEAT / 16)}
+
+            $ postgres-execute connection=postgres://postgres:postgres@postgres
+            DELETE FROM t1;
+
+            > SELECT * FROM v1;
+            0
+
+            > SELECT COUNT(*) FROM t1;
+            0
             """
         ),
         materialized_memory="4.5Gb",
@@ -414,13 +449,29 @@ SCENARIOS = [
             f"""
             > SELECT * FROM v1; /* expect {ITERATIONS * REPEAT} */
             {ITERATIONS * REPEAT}
+
+            > SELECT COUNT(*) FROM t1; /* expect {ITERATIONS * REPEAT} */
+            {ITERATIONS * REPEAT}
             """
         ),
         post_restart=dedent(
             f"""
-            # We do not do DELETE post-restart, as it will cause OOM for clusterd
             > SELECT * FROM v1; /* expect {ITERATIONS * REPEAT} */
             {ITERATIONS * REPEAT}
+
+            > SELECT COUNT(*) FROM t1; /* expect {ITERATIONS * REPEAT} */
+            {ITERATIONS * REPEAT}
+
+            $ mysql-connect name=mysql url=mysql://root@mysql password=${{arg.mysql-root-password}}
+            $ mysql-execute name=mysql
+            USE public;
+            DELETE FROM t1;
+
+            > SELECT * FROM v1;
+            0
+
+            > SELECT COUNT(*) FROM t1;
+            0
             """
         ),
         materialized_memory="4.5Gb",
@@ -455,6 +506,9 @@ SCENARIOS = [
 
             > SELECT * FROM v1 /* expect: {REPEAT + 2} */;
             {REPEAT + 2}
+
+            > SELECT COUNT(*) FROM t1 /* expect: {REPEAT + 2} */;
+            {REPEAT + 2}
             """
         ),
         post_restart=dedent(
@@ -465,6 +519,9 @@ SCENARIOS = [
             DELETE FROM t1;
 
             > SELECT * FROM v1;
+            0
+
+            > SELECT COUNT(*) FROM t1;
             0
             """
         ),
@@ -492,13 +549,29 @@ SCENARIOS = [
             f"""
             > SELECT * FROM v1; /* expect {int(ITERATIONS * 10) * int(REPEAT / 128)} */
             {int(ITERATIONS * 10) * int(REPEAT / 128)}
+
+            > SELECT COUNT(*) FROM t1; /* expect {int(ITERATIONS * 10) * int(REPEAT / 128)} */
+            {int(ITERATIONS * 10) * int(REPEAT / 128)}
             """
         ),
         post_restart=dedent(
             f"""
-            # We do not do DELETE post-restart, as it will cause OOM for clusterd
             > SELECT * FROM v1; /* expect {int(ITERATIONS * 10) * int(REPEAT / 128)} */
             {int(ITERATIONS * 10) * int(REPEAT / 128)}
+
+            > SELECT COUNT(*) FROM t1; /* expect {int(ITERATIONS * 10) * int(REPEAT / 128)} */
+            {int(ITERATIONS * 10) * int(REPEAT / 128)}
+
+            $ mysql-connect name=mysql url=mysql://root@mysql password=${{arg.mysql-root-password}}
+            $ mysql-execute name=mysql
+            USE public;
+            DELETE FROM t1;
+
+            > SELECT * FROM v1;
+            0
+
+            > SELECT COUNT(*) FROM t1;
+            0
             """
         ),
         materialized_memory="3.5Gb",
@@ -534,6 +607,9 @@ SCENARIOS = [
             # Expect all ingested data + two MARKERs
             > SELECT * FROM v1;
             3
+
+            > SELECT COUNT(*) FROM s1_tbl;
+            3
             """
         ),
         post_restart=KafkaScenario.SCHEMAS + KafkaScenario.POST_RESTART,
@@ -562,6 +638,9 @@ SCENARIOS = [
             f"""
             # Expect all ingested data + two MARKERs
             > SELECT * FROM v1;
+            {REPEAT + 2}
+
+            > SELECT COUNT(*) FROM s1_tbl;
             {REPEAT + 2}
             """
         ),
@@ -594,6 +673,9 @@ SCENARIOS = [
             """
             # Expect just the two MARKERs
             > SELECT * FROM v1;
+            2
+
+            > SELECT COUNT(*) FROM s1_tbl;
             2
             """
         ),
@@ -628,11 +710,17 @@ SCENARIOS = [
             """
             > SELECT * FROM v1;
             0
+
+            > SELECT COUNT(*) FROM t1;
+            0
             """
         ),
         post_restart=dedent(
             """
            > SELECT * FROM v1;
+           0
+
+           > SELECT COUNT(*) FROM t1;
            0
            """
         ),
@@ -675,7 +763,7 @@ SCENARIOS = [
 
             > SET CLUSTER = clusterd
 
-            > SELECT count(*) FROM t;
+            > SELECT COUNT(*) FROM t;
             2000000
             """
         ),
@@ -683,7 +771,7 @@ SCENARIOS = [
             """
             > SET CLUSTER = clusterd
 
-            > SELECT count(*) FROM t;
+            > SELECT COUNT(*) FROM t;
             2000000
             """
         ),
@@ -711,8 +799,8 @@ SCENARIOS = [
             > CREATE VIEW accumulable AS
               SELECT
                 a,
-                sum(a) AS sum_a, count(a) as cnt_a,
-                sum(b) AS sum_b, count(b) as cnt_b
+                sum(a) AS sum_a, COUNT(a) as cnt_a,
+                sum(b) AS sum_b, COUNT(b) as cnt_b
               FROM data
               GROUP BY a;
 
@@ -720,7 +808,7 @@ SCENARIOS = [
 
             > SET CLUSTER = idx_cluster;
 
-            > SELECT count(*) FROM accumulable;
+            > SELECT COUNT(*) FROM accumulable;
             10000001
             """
         ),
@@ -728,7 +816,7 @@ SCENARIOS = [
             """
             > SET CLUSTER = idx_cluster;
 
-            > SELECT count(*) FROM accumulable;
+            > SELECT COUNT(*) FROM accumulable;
             10000001
             """
         ),
@@ -772,7 +860,7 @@ SCENARIOS = [
 
             > SET CLUSTER = clusterd;
 
-            > SELECT count(*) FROM s1_tbl;
+            > SELECT COUNT(*) FROM s1_tbl;
             {90 * REPEAT + 2}
             # Delete all rows except markers
             $ kafka-ingest format=avro key-format=avro topic=topic1 schema=${{value-schema}} key-schema=${{key-schema}} repeat={REPEAT}
@@ -1236,7 +1324,7 @@ SCENARIOS = [
             > CREATE MATERIALIZED VIEW cv WITH (RETAIN HISTORY FOR '10d') AS SELECT counter FROM counter, t;
 
             # Wait until counter is fully ingested.
-            > SELECT count(*) FROM counter;
+            > SELECT COUNT(*) FROM counter;
             512
 
             > CREATE CLUSTER REPLICA clusterd.r1
@@ -1257,7 +1345,7 @@ SCENARIOS = [
                     cv c2,
                     cv c3;
             > CREATE DEFAULT INDEX ON v WITH (RETAIN HISTORY FOR '10d');
-            > SELECT count(*) > 0 FROM v;
+            > SELECT COUNT(*) > 0 FROM v;
             true
             """
         ),
@@ -1265,7 +1353,7 @@ SCENARIOS = [
             """
             > SET CLUSTER = clusterd
 
-            > SELECT count(*) > 0 FROM v;
+            > SELECT COUNT(*) > 0 FROM v;
             true
             """
         ),

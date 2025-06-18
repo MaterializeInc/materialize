@@ -198,7 +198,7 @@ pub struct ServiceConfig {
     /// A function that generates the arguments for each process of the service
     /// given the assigned listen addresses for each named port.
     #[derivative(Debug = "ignore")]
-    pub args: Box<dyn Fn(&BTreeMap<String, String>) -> Vec<String> + Send + Sync>,
+    pub args: Box<dyn Fn(ServiceAssignments) -> Vec<String> + Send + Sync>,
     /// Ports to expose.
     pub ports: Vec<ServicePort>,
     /// An optional limit on the memory that the service can use.
@@ -253,6 +253,25 @@ pub struct ServicePort {
     ///
     /// Not all orchestrator backends will make use of the hint.
     pub port_hint: u16,
+}
+
+/// Assignments that the orchestrator has made for a process in a service.
+#[derive(Clone, Debug)]
+pub struct ServiceAssignments<'a> {
+    /// For each specified [`ServicePort`] name, a listen address.
+    pub listen_addrs: &'a BTreeMap<String, String>,
+    /// The listen addresses of each peer in the service.
+    ///
+    /// The order of peers is significant. Each peer is uniquely identified by its position in the
+    /// list.
+    pub peer_addrs: &'a [BTreeMap<String, String>],
+}
+
+impl ServiceAssignments<'_> {
+    /// Return the peer addresses for the specified [`ServicePort`] name.
+    pub fn peer_addresses(&self, name: &str) -> Vec<String> {
+        self.peer_addrs.iter().map(|a| a[name].clone()).collect()
+    }
 }
 
 /// Describes a limit on memory.
@@ -418,6 +437,13 @@ pub mod scheduling_config {
         ///
         /// Defaults to `1`.
         pub max_skew: i32,
+        /// The `minDomains` for spread constraints.
+        /// See
+        /// <https://kubernetes.io/docs/concepts/scheduling-eviction/topology-spread-constraints/>
+        /// for more details.
+        ///
+        /// Defaults to None.
+        pub min_domains: Option<i32>,
         /// If `true`, make the spread constraints into a preference.
         ///
         /// Defaults to `false`.
@@ -466,6 +492,7 @@ pub mod scheduling_config {
     pub const DEFAULT_TOPOLOGY_SPREAD_ENABLED: bool = true;
     pub const DEFAULT_TOPOLOGY_SPREAD_IGNORE_NON_SINGULAR_SCALE: bool = true;
     pub const DEFAULT_TOPOLOGY_SPREAD_MAX_SKEW: i32 = 1;
+    pub const DEFAULT_TOPOLOGY_SPREAD_MIN_DOMAIN: Option<i32> = None;
     pub const DEFAULT_TOPOLOGY_SPREAD_SOFT: bool = false;
 
     pub const DEFAULT_SOFTEN_AZ_AFFINITY: bool = false;
@@ -484,6 +511,7 @@ pub mod scheduling_config {
                     enabled: DEFAULT_TOPOLOGY_SPREAD_ENABLED,
                     ignore_non_singular_scale: DEFAULT_TOPOLOGY_SPREAD_IGNORE_NON_SINGULAR_SCALE,
                     max_skew: DEFAULT_TOPOLOGY_SPREAD_MAX_SKEW,
+                    min_domains: DEFAULT_TOPOLOGY_SPREAD_MIN_DOMAIN,
                     soft: DEFAULT_TOPOLOGY_SPREAD_SOFT,
                 },
                 soften_az_affinity: DEFAULT_SOFTEN_AZ_AFFINITY,

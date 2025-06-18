@@ -28,9 +28,9 @@ REDPANDA_VERSIONS = [
     "v23.1.21",
     "v23.2.29",
     "v23.3.21",
-    "v24.1.19",
-    "v24.2.22",
-    "v24.3.11",
+    "v24.1.21",
+    "v24.2.24",
+    "v24.3.14",
     REDPANDA_VERSION,
     "latest",
 ]
@@ -46,7 +46,10 @@ CONFLUENT_PLATFORM_VERSIONS = [
     "7.7.3",
     "7.8.2",
     DEFAULT_CONFLUENT_PLATFORM_VERSION,
-    "latest",
+    # There is currently a mismatch in the latest versions between zookeeper
+    # (7.9.0) and cp-kafka (8.0.0), making running them in combination
+    # impossible
+    # "latest",
 ]
 
 SERVICES = [

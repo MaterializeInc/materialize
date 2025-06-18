@@ -86,8 +86,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     parser.add_argument("--num-sqlsmith", default=len(MZ_SERVERS), type=int)
     # parser.add_argument("--queries", default=10000, type=int)
     parser.add_argument("--runtime", default=600, type=int)
-    # https://github.com/MaterializeInc/database-issues/issues/835
-    parser.add_argument("--max-joins", default=2, type=int)
+    parser.add_argument("--max-joins", default=5, type=int)
     parser.add_argument("--explain-only", action="store_true")
     parser.add_argument("--exclude-catalog", default=False, type=bool)
     parser.add_argument("--seed", default=None, type=int)

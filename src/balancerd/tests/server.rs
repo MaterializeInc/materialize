@@ -118,7 +118,7 @@ async fn test_balancer() {
     let config = test_util::TestHarness::default()
         // Enable SSL on the main port. There should be a balancerd port with no SSL.
         .with_tls(server_cert.clone(), server_key.clone())
-        .with_frontegg(&frontegg_auth)
+        .with_frontegg_auth(&frontegg_auth)
         .with_metrics_registry(metrics_registry);
     let envid = config.environment_id.clone();
     let envd_server = config.start().await;
@@ -129,7 +129,7 @@ async fn test_balancer() {
         cancel_dir.path().join(cancel_name),
         format!(
             "{}\n{}",
-            envd_server.inner.sql_local_addr(),
+            envd_server.sql_local_addr(),
             // Ensure that multiline files and non-existent addresses both work.
             "non-existent-addr:1234",
         ),
@@ -138,13 +138,13 @@ async fn test_balancer() {
 
     let resolvers = vec![
         (
-            Resolver::Static(envd_server.inner.sql_local_addr().to_string()),
-            CancellationResolver::Static(envd_server.inner.sql_local_addr().to_string()),
+            Resolver::Static(envd_server.sql_local_addr().to_string()),
+            CancellationResolver::Static(envd_server.sql_local_addr().to_string()),
         ),
         (
             Resolver::Frontegg(FronteggResolver {
                 auth: frontegg_auth,
-                addr_template: envd_server.inner.sql_local_addr().to_string(),
+                addr_template: envd_server.sql_local_addr().to_string(),
             }),
             CancellationResolver::Directory(cancel_dir.path().to_owned()),
         ),
@@ -175,11 +175,12 @@ async fn test_balancer() {
             SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0),
             cancellation_resolver,
             resolver,
-            envd_server.inner.http_local_addr().to_string(),
+            envd_server.http_local_addr().to_string(),
             cert_config.clone(),
             true,
             MetricsRegistry::new(),
             ticker,
+            None,
             None,
             Duration::ZERO,
             None,

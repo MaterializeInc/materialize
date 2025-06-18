@@ -83,24 +83,22 @@ The following examples reports on the memory usage of the index `wins_by_item`:
 EXPLAIN ANALYZE MEMORY FOR INDEX wins_by_item;
 ```
 
-For the index,s `EXPLAIN ANALYZE MEMORY` reports on the memory usage and the
+For the index, `EXPLAIN ANALYZE MEMORY` reports on the memory usage and the
 number of records for each operator in the dataflow:
 
-
-| operator                         | total_memory | total_records |
-| :------------------------------- | -----------: | ------------: |
-| Arrange 7                        | 1116 kB      | 39976         |
-|   Get::PassArrangements u274     | null         | null          |
-| **TopK::Basic 5**                | **100 MB**   | **1899733**   |
-|   Join::Differential 2 » 4       | null         | null          |
-|     Arrange 3                    | 5672 kB      | 220375        |
-|       Get::PassArrangements u271 | null         | null          |
-|     Arrange 1                    | 3501 kB      | 188785        |
-|       Get::Collection u270       | null         | null          |
+|         operator            | total_memory | total_records |
+|-----------------------------|-------------:|--------------:|
+| Arrange                     | 386 kB       |         15409 |
+|   Stream u8                 |              |               |
+| **Non-monotonic TopK**      | **36 MB**    |    **731975** |
+|   Differential Join %0 » %1 |              |               |
+|     Arrange                 | 2010 kB      |         84622 |
+|       Stream u5             |              |               |
+|     Arrange                 | 591 kB       |         15410 |
+|       Read u4               |              |               |
 
 The results show the `TopK` operator is overwhelmingly responsible for memory
 usage.
-
 
 ### `EXPLAIN ANALYZE CPU`
 
@@ -113,16 +111,17 @@ EXPLAIN ANALYZE CPU FOR INDEX wins_by_item;
 For the index, `EXPLAIN ANALYZE CPU` reports on total time spent in each
 operator (not inclusive of its child operators) in the dataflow:
 
-| operator                         | total_elapsed   |
-| :------------------------------- | --------------: |
-| Arrange 7                        | 00:00:03.14266  |
-|   Get::PassArrangements u274     | null            |
-| TopK::Basic 5                    | 00:00:44.079592 |
-|   Join::Differential 2 » 4       | 00:00:06.372705 |
-|     Arrange 3                    | 00:00:21.49465  |
-|       Get::PassArrangements u271 | 00:00:00.066236 |
-|     Arrange 1                    | 00:00:11.212331 |
-|       Get::Collection u270       | 00:00:00.190449 |
+|         operator            |  total_elapsed  |
+|:----------------------------|----------------:|
+| Arrange                     | 00:00:00.161341 |
+|   Stream u8                 |                 |
+| Non-monotonic TopK          | 00:00:15.153963 |
+|   Differential Join %0 » %1 | 00:00:00.978381 |
+|     Arrange                 | 00:00:00.536282 |
+|       Stream u5             |                 |
+|     Arrange                 | 00:00:00.171586 |
+|       Read u4               |                 |
+
 
 ### `EXPLAIN ANALYZE CPU, MEMORY`
 
@@ -140,17 +139,16 @@ For example, in the above example where the `CPU` was listed before `MEMORY`,
 the CPU time (`total_elasped`) column is listed before the `MEMORY` information
 `total_memory` and `total_records`.
 
-| operator                         | total_elapsed   | total_memory | total_records |
-| :------------------------------- | --------------: | -----------: | ------------: |
-| Arrange 7                        | 00:00:03.151386 | 1234 kB      | 42359         |
-|   Get::PassArrangements u274     | null            | null         |               |
-| TopK::Basic 5                    | 00:00:44.347959 | 105 MB       | 2013547       |
-|   Join::Differential 2 » 4       | 00:00:06.389385 | null         | null          |
-|     Arrange 3                    | 00:00:21.558754 | 5431 kB      | 233533        |
-|       Get::PassArrangements u271 | 00:00:00.06644  | null         | null          |
-|     Arrange 1                    | 00:00:11.246103 | 3546 kB      | 191168        |
-|       Get::Collection u270       | 00:00:00.190935 | null         | null          |
-
+|         operator            |  total_elapsed  | total_memory | total_records |
+|:----------------------------|----------------:|-------------:|--------------:|
+| Arrange                     | 00:00:00.190801 | 389 kB       |         15435 |
+|   Stream u8                 |                 |              |               |
+| Non-monotonic TopK          | 00:00:16.193381 | 36 MB        |        733457 |
+|   Differential Join %0 » %1 | 00:00:01.107056 |              |               |
+|     Arrange                 | 00:00:00.592818 | 2017 kB      |         84793 |
+|       Stream u5             |                 |              |               |
+|     Arrange                 | 00:00:00.214064 | 595 kB       |         15436 |
+|       Read u4               |                 |              |               |
 
 ### `EXPLAIN ANALYZE ... WITH SKEW`
 
@@ -181,20 +179,28 @@ EXPLAIN ANALYZE MEMORY WITH SKEW FOR INDEX wins_by_item;
 The results include the per worker and average worker performance numbers for
 each operator, along with each worker's ratio compared to the average:
 
-| operator                         | worker_id | memory_ratio | worker_memory | avg_memory | total_memory | records_ratio | worker_records | avg_records | total_records |
-| :------------------------------- | --------: | -----------: | ------------: | ---------: | -----------: | ------------: | -------------: | ----------: | ------------: |
-| Arrange 7                        | 0         | 1.24         | 768 kB        | 619 kB     | 1238 kB      | 1.2           | 25485          | 21246       | 42492         |
-| Arrange 7                        | 1         | 0.76         | 470 kB        | 619 kB     | 1238 kB      | 0.8           | 17007          | 21246       | 42492         |
-|   Get::PassArrangements u274     | null      | null         | null          | null       | null         | null          | null           | null        | null          |
-| TopK::Basic 5                    | 0         | 1            | 53 MB         | 53 MB      | 105 MB       | 1             | 1011624        | 1010259.5   | 2020519       |
-| TopK::Basic 5                    | 1         | 1            | 52 MB         | 53 MB      | 105 MB       | 1             | 1008895        | 1010259.5   | 2020519       |
-|   Join::Differential 2 » 4       | null      | null         | null          | null       | null         | null          | null           | null        | null          |
-|     Arrange 3                    | 0         | 1            | 2726 kB       | 2724 kB    | 5448 kB      | 1             | 117297         | 117167.5    | 234335        |
-|     Arrange 3                    | 1         | 1            | 2722 kB       | 2724 kB    | 5448 kB      | 1             | 117038         | 117167.5    | 234335        |
-|       Get::PassArrangements u271 | null      | null         | null          | null       | null         | null          | null           | null        | null          |
-|     Arrange 1                    | 0         | 1            | 1779 kB       | 1778 kB    | 3556 kB      | 1             | 95955          | 95750       | 191500        |
-|     Arrange 1                    | 1         | 1            | 1778 kB       | 1778 kB    | 3556 kB      | 1             | 95545          | 95750       | 191500        |
-|       Get::Collection u270       | null      | null         | null          | null       | null         | null          | null           | null        | null          |
+|         operator            | worker_id | memory_ratio | worker_memory | avg_memory | total_memory | records_ratio | worker_records | avg_records | total_records |
+|:----------------------------|----------:|-------------:|--------------:|-----------:|-------------:|--------------:|---------------:|------------:|--------------:|
+| Arrange                     | 0         |          0.8 | 78 kB         | 97 kB      | 389 kB       |           0.8 |           3099 |        3862 |         15448 |
+| Arrange                     | 1         |         1.59 | 154 kB        | 97 kB      | 389 kB       |          1.58 |           6113 |        3862 |         15448 |
+| Arrange                     | 2         |         1.61 | 157 kB        | 97 kB      | 389 kB       |          1.61 |           6236 |        3862 |         15448 |
+| **Arrange**                 | **3**     |        **0** | **272 bytes** | **97 kB**  | **389 kB**   |         **0** |          **0** |    **3862** |     **15448** |
+|   Stream u8                 |           |              |               |            |              |               |                |             |               |
+| Non-monotonic TopK          | 0         |            1 | 9225 kB       | 9261 kB    | 36 MB        |             1 |         183148 |   183486.75 |        733947 |
+| Non-monotonic TopK          | 1         |            1 | 9222 kB       | 9261 kB    | 36 MB        |             1 |         183319 |   183486.75 |        733947 |
+| Non-monotonic TopK          | 2         |            1 | 9301 kB       | 9261 kB    | 36 MB        |             1 |         183585 |   183486.75 |        733947 |
+| Non-monotonic TopK          | 3         |            1 | 9293 kB       | 9261 kB    | 36 MB        |             1 |         183895 |   183486.75 |        733947 |
+|   Differential Join %0 » %1 |           |              |               |            |              |               |                |             |               |
+|     Arrange                 | 0         |         0.97 | 487 kB        | 505 kB     | 2019 kB      |             1 |          21165 |     21213.5 |         84854 |
+|     Arrange                 | 1         |         0.97 | 489 kB        | 505 kB     | 2019 kB      |             1 |          21274 |     21213.5 |         84854 |
+|     Arrange                 | 2         |          1.1 | 555 kB        | 505 kB     | 2019 kB      |             1 |          21298 |     21213.5 |         84854 |
+|     Arrange                 | 3         |         0.96 | 487 kB        | 505 kB     | 2019 kB      |             1 |          21117 |     21213.5 |         84854 |
+|       Stream u5             |           |              |               |            |              |               |                |             |               |
+|     Arrange                 | 0         |            1 | 149 kB        | 149 kB     | 595 kB       |             1 |           3862 |      3862.5 |         15450 |
+|     Arrange                 | 1         |            1 | 148 kB        | 149 kB     | 595 kB       |             1 |           3862 |      3862.5 |         15450 |
+|     Arrange                 | 2         |            1 | 149 kB        | 149 kB     | 595 kB       |             1 |           3863 |      3862.5 |         15450 |
+|     Arrange                 | 3         |            1 | 149 kB        | 149 kB     | 595 kB       |             1 |           3863 |      3862.5 |         15450 |
+|       Read u4               |           |              |               |            |              |               |                |             |               |
 
 The `ratio` column tells you whether a worker is particularly over- or
 under-loaded:
@@ -204,8 +210,8 @@ under-loaded:
 - a `ratio` above 1 indicates a worker doing an above average amount of work.
 
 While there will always be some amount of variation, very high ratios indicate a
-skewed workload. Here the memory ratios are close to 1, indicating there is very
-little worker skew.
+skewed workload. Here the memory ratios are mostly close to 1, indicating there is very
+little worker skew everywhere but at the top level arrangement, where worker 3 has no records.
 
 ### `EXPLAIN ANALYZE HINTS`
 
@@ -223,16 +229,17 @@ EXPLAIN ANALYZE HINTS FOR INDEX wins_by_item;
 The result shows that the `wins_by_item` index has only one `TopK` operator and
 suggests the hint (i.e, the `DISTINCT ON INPUT GROUP SIZE=` value) of `255.0`.
 
-| operator                         | levels | to_cut | hint  | savings |
-| :------------------------------- | -----: | -----: | ----: | ------: |
-| Arrange 7                        | null   | null   | null  | null    |
-|   Get::PassArrangements u274     | null   | null   | null  | null    |
-| TopK::Basic 5                    | 8      | 6      | 255.0 | 75 MB   |
-|   Join::Differential 2 » 4       | null   | null   | null  | null    |
-|     Arrange 3                    | null   | null   | null  | null    |
-|       Get::PassArrangements u271 | null   | null   | null  | null    |
-|     Arrange 1                    | null   | null   | null  | null    |
-|       Get::Collection u270       | null   | null   | null  | null    |
+|         operator            | levels | to_cut | hint | savings |
+|:----------------------------|-------:|-------:|-----:|--------:|
+| Arrange                     |        |        |      |         |
+|   Stream u8                 |        |        |      |         |
+| Non-monotonic TopK          |      8 |      6 |  255 | 26 MB   |
+|   Differential Join %0 » %1 |        |        |      |         |
+|     Arrange                 |        |        |      |         |
+|       Stream u5             |        |        |      |         |
+|     Arrange                 |        |        |      |         |
+|       Read u4               |        |        |      |         |
+
 
 With the hint information, you can recreate the view and index to improve memory
 usage:
@@ -263,22 +270,22 @@ To see if the indexe's memory usage has improved with the hint, rerun the
 following `EXPLAIN ANALYZE MEMORY` command:
 
 ```mzsql
-EXPLAIN ANALYZE MEMORY FOR INDEX wins_by_item`;
+EXPLAIN ANALYZE MEMORY FOR INDEX wins_by_item;
 ```
 
-The results show that the `TopK` operator uses `30MB` of memory, a third of the
-[~100MB of memory it was using before](#explain-analyze-memory):
+The results show that the `TopK` operator uses `11MB` of memory, less than a third of the
+[~36MB of memory it was using before](#explain-analyze-memory):
 
-| operator                         | total_memory | total_records |
-| -------------------------------- | ------------ | ------------- |
-| Arrange 7                        | 1093 kB      | 42720         |
-|   Get::PassArrangements u286     | null         | null          |
-| **TopK::Basic 5**                | **30 MB**    | **625638**    |
-|   Join::Differential 2 » 4       | null         | null          |
-|     Arrange 3                    | 5447 kB      | 235570        |
-|       Get::PassArrangements u271 | null         | null          |
-|     Arrange 1                    | 3485 kB      | 191730        |
-|       Get::Collection u270       | null         | null          |
+|         operator            | total_memory | total_records |
+|:----------------------------|-------------:|--------------:|
+| Arrange                     | 391 kB       |         15501 |
+|   Stream u10                |              |               |
+| **Non-monotonic TopK**      | **11 MB**    |    **226706** |
+|   Differential Join %0 » %1 |              |               |
+|     Arrange                 | 1994 kB      |         85150 |
+|       Stream u5             |              |               |
+|     Arrange                 | 601 kB       |         15502 |
+|       Read u4               |              |               |
 
 ### `EXPLAIN ANALYZE ... AS SQL`
 

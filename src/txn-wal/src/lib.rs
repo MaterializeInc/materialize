@@ -493,6 +493,7 @@ async fn apply_caa<K, V, T, D>(
                 batches.as_mut_slice(),
                 Antichain::from_elem(upper.clone()),
                 Antichain::from_elem(commit_ts.step_forward()),
+                true,
             )
             .await
             .expect("usage was valid");

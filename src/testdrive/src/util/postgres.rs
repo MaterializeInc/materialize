@@ -63,7 +63,11 @@ pub async fn postgres_client(
         })
         .await?;
 
-    println!("Connecting to PostgreSQL server at {}...", url);
+    if url.contains("mzp_") {
+        println!("Connecting to PostgreSQL server at [REDACTED]...");
+    } else {
+        println!("Connecting to PostgreSQL server at {}...", url);
+    }
     let handle = task::spawn(|| "postgres_client_task", connection);
 
     Ok((client, handle))

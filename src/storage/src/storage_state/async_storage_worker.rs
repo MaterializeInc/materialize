@@ -32,7 +32,7 @@ use mz_storage_types::sources::{
     LoadGeneratorSourceConnection, MySqlSourceConnection, PostgresSourceConnection,
     SourceConnection, SourceData, SourceEnvelope, SourceTimestamp, SqlServerSource,
 };
-use timely::order::PartialOrder;
+use timely::order::{PartialOrder, TotalOrder};
 use timely::progress::frontier::MutableAntichain;
 use timely::progress::{Antichain, Timestamp};
 use tokio::sync::mpsc;
@@ -92,7 +92,7 @@ async fn reclock_resume_uppers<C, IntoTime>(
 ) -> BTreeMap<GlobalId, Antichain<C::Time>>
 where
     C: SourceConnection + SourceRender,
-    IntoTime: Timestamp + Lattice + Codec64 + Display + Sync,
+    IntoTime: Timestamp + TotalOrder + Lattice + Codec64 + Display + Sync,
 {
     let metadata = &ingestion_description.ingestion_metadata;
 

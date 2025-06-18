@@ -19,8 +19,10 @@ fallible-iterator = "0.2.0"
 futures = "0.3.31"
 itertools = "0.14.0"
 junit-report = "0.8.3"
+maplit = "1.0.2"
 md-5 = "0.10.6"
 mz-adapter-types = { path = "../adapter-types" }
+mz-authenticator = { path = "../authenticator", default-features = false }
 mz-build-info = { path = "../build-info" }
 mz-catalog = { path = "../catalog" }
 mz-controller = { path = "../controller" }
@@ -56,7 +58,7 @@ tokio-postgres = { version = "0.7.8", features = [
     "with-serde_json-1",
 ] }
 tokio-stream = { version = "0.1.17", features = ["net"] }
-tower-http = { version = "0.6.5", features = ["cors"] }
+tower-http = { version = "0.6.6", features = ["cors"] }
 uuid = "1.17.0"
 walkdir = "2.5.0"
 workspace-hack = { version = "0.0.0", path = "../workspace-hack", optional = true }

@@ -77,6 +77,9 @@
 // environment in real time:
 // https://app.segment.com/materializeinc/sources/cloud_dev/debugger.
 
+use anyhow::bail;
+use futures::StreamExt;
+use mz_adapter::PeekResponseUnary;
 use mz_adapter::telemetry::{EventDetails, SegmentClientExt};
 use mz_ore::retry::Retry;
 use mz_ore::{assert_none, task};
@@ -135,7 +138,7 @@ async fn report_loop(
                     .active_subscribes
                     .with_label_values(&["user"])
                     .get();
-                let mut rows = adapter_client.support_execute_one(&format!("
+                let mut rows_stream = adapter_client.support_execute_one(&format!("
                     SELECT jsonb_build_object(
                         'active_aws_privatelink_connections', (SELECT count(*) FROM mz_connections WHERE id LIKE 'u%' AND type = 'aws-privatelink')::int4,
                         'active_clusters', (SELECT count(*) FROM mz_clusters WHERE id LIKE 'u%')::int4,
@@ -166,6 +169,19 @@ async fn report_loop(
                         'active_subscribes', {active_subscribes}
                     )",
                 )).await?;
+
+                // The introspection query returns only one row, and that should
+                // easily fit into our max_result_size and not go through the
+                // peek stash, which would lead to a result that streams back
+                // multiple batches of rows.
+                let rows = rows_stream.next().await.expect("expected at least one result batch");
+                assert_none!(rows_stream.next().await, "expected at most one result batch");
+
+                let mut rows = match rows {
+                    PeekResponseUnary::Rows(rows) => rows,
+                    PeekResponseUnary::Canceled => bail!("query canceled"),
+                    PeekResponseUnary::Error(e) => bail!(e),
+                };
 
                 let row = rows.next().expect("expected at least one row").to_owned();
                 assert_none!(rows.next(), "introspection query had more than one row?");

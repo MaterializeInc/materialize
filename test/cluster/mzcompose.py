@@ -1406,7 +1406,7 @@ def workflow_pg_snapshot_resumption(c: Composition) -> None:
         c.run_testdrive_files("pg-snapshot-resumption/03-ensure-source-down.td")
 
         # Temporarily disabled because it is timing out.
-        # https://github.com/MaterializeInc/database-issues/issues/4145
+        # TODO: Reenable when https://github.com/MaterializeInc/database-issues/issues/4145 is fixed
         # # clusterd should crash
         # c.run_testdrive_files("pg-snapshot-resumption/04-while-clusterd-down.td")
 
@@ -2529,6 +2529,14 @@ class Metrics:
         assert len(values) == 1
         return values[0]
 
+    def get_result_rows_first_to_last_byte_seconds(self, statement_type: str) -> float:
+        metrics = self.with_name("mz_result_rows_first_to_last_byte_seconds_sum")
+        values = [
+            v for k, v in metrics.items() if f'statement_type="{statement_type}"' in k
+        ]
+        assert len(values) == 1
+        return values[0]
+
     def get_last_command_received(self, server_name: str) -> float:
         metrics = self.with_name("mz_grpc_server_last_command_received")
         values = [v for k, v in metrics.items() if server_name in k]
@@ -2815,7 +2823,7 @@ def workflow_test_compute_controller_metrics(c: Composition) -> None:
     assert count >= 2, f"got {count}"
 
     # mz_compute_peeks_total
-    count = metrics.get_peeks_total("rows")
+    count = metrics.get_peeks_total("rows") + metrics.get_peeks_total("rows_stashed")
     assert count == 2, f"got {count}"
     count = metrics.get_peeks_total("error")
     assert count == 0, f"got {count}"
@@ -3075,6 +3083,7 @@ def workflow_test_pgwire_metrics(c: Composition) -> None:
         c.sql(
             """
             CREATE TABLE t (a int);
+            INSERT INTO t VALUES (7);
 
             SELECT * FROM t;
 
@@ -3094,6 +3103,7 @@ def workflow_test_pgwire_metrics(c: Composition) -> None:
             input=dedent(
                 """
                 > SELECT * FROM t;
+                7
                 """
             )
         )
@@ -3108,6 +3118,151 @@ def workflow_test_pgwire_metrics(c: Composition) -> None:
 
         time = metrics.get_value("mz_parse_seconds_sum")
         assert 0 < time < 10, f"got {time}"
+
+        rrftlbs_select_1 = metrics.get_result_rows_first_to_last_byte_seconds("select")
+        assert 0 < rrftlbs_select_1 < 10, f"got {time}"
+
+        # We run a SELECT (as a Simple Query), and then expect the metric to have increased.
+        c.sql(
+            """
+            SELECT * FROM t;
+            """
+        )
+        metrics = fetch_metrics()
+        rrftlbs_select_2 = metrics.get_result_rows_first_to_last_byte_seconds("select")
+        assert rrftlbs_select_2 > rrftlbs_select_1, f"got {rrftlbs_select_2}"
+
+        # We run a SELECT (as an Extended Query via Testdrive), and then expect the metric to have increased.
+        c.testdrive(
+            input=dedent(
+                """
+                > SELECT * FROM t;
+                7
+                """
+            )
+        )
+        metrics = fetch_metrics()
+        rrftlbs_select_3 = metrics.get_result_rows_first_to_last_byte_seconds("select")
+        assert rrftlbs_select_3 > rrftlbs_select_2, f"got {rrftlbs_select_3}"
+
+        c.sql(
+            """
+            INSERT INTO t VALUES (8);
+            """
+        )
+
+        # Declare a cursor and fetch 1 row. The SELECT will have 2 result rows in total, so the metric should _not_
+        # change after fetching just 1 row.
+        c.sql(
+            """
+            BEGIN;
+            DECLARE c1 CURSOR FOR (SELECT * FROM t);
+            FETCH 1 c1;
+            """
+        )
+        metrics = fetch_metrics()
+        rrftlbs_select_4 = metrics.get_result_rows_first_to_last_byte_seconds("select")
+        assert (
+            rrftlbs_select_4 == rrftlbs_select_3
+        ), f"got {rrftlbs_select_4} vs. {rrftlbs_select_3}"
+
+        # Still no change after one more FETCH, because we need to read _past_ the last row.
+        # (This is a separate session.)
+        c.sql(
+            """
+            BEGIN;
+            DECLARE c1 CURSOR FOR (SELECT * FROM t);
+            FETCH 1 c1;
+            FETCH 1 c1;
+            """
+        )
+        metrics = fetch_metrics()
+        rrftlbs_select_5 = metrics.get_result_rows_first_to_last_byte_seconds("select")
+        assert (
+            rrftlbs_select_5 == rrftlbs_select_4
+        ), f"got {rrftlbs_select_5} vs. {rrftlbs_select_4}"
+
+        # Now it should change, because we consume all the rows, and then try to consume one more, so the cursor ends.
+        c.sql(
+            """
+            BEGIN;
+            DECLARE c1 CURSOR FOR (SELECT * FROM t);
+            FETCH 1 c1;
+            FETCH 1 c1;
+            FETCH 1 c1;
+            """
+        )
+        metrics = fetch_metrics()
+        rrftlbs_select_6 = metrics.get_result_rows_first_to_last_byte_seconds("select")
+        assert (
+            rrftlbs_select_6 > rrftlbs_select_5
+        ), f"got {rrftlbs_select_6} vs. {rrftlbs_select_5}"
+
+        # FETCH ALL
+        c.sql(
+            """
+            BEGIN;
+            DECLARE c1 CURSOR FOR (SELECT * FROM t);
+            FETCH ALL c1;
+            """
+        )
+        metrics = fetch_metrics()
+        rrftlbs_select_7 = metrics.get_result_rows_first_to_last_byte_seconds("select")
+        assert (
+            rrftlbs_select_7 > rrftlbs_select_6
+        ), f"got {rrftlbs_select_7} vs. {rrftlbs_select_6}"
+
+        # SUBSCRIBE should show up if it's on a constant collection.
+        # We need two FETCHes, because the first one won't observe that there are no more rows, due to
+        # `ExecuteTimeout::WaitOnce`.
+        c.sql(
+            """
+            CREATE VIEW v1 AS SELECT 3;
+            BEGIN;
+            DECLARE c1 CURSOR FOR SUBSCRIBE (SELECT * FROM v1);
+            FETCH ALL c1;
+            FETCH ALL c1;
+            """
+        )
+        metrics = fetch_metrics()
+        rrftlbs_subscribe_1 = metrics.get_result_rows_first_to_last_byte_seconds(
+            "subscribe"
+        )
+        assert 0 < rrftlbs_subscribe_1 < 10, f"got {rrftlbs_subscribe_1}"
+
+        # ... and should increase
+        c.sql(
+            """
+            BEGIN;
+            DECLARE c1 CURSOR FOR SUBSCRIBE (SELECT * FROM v1);
+            FETCH ALL c1;
+            FETCH ALL c1;
+            """
+        )
+        metrics = fetch_metrics()
+        rrftlbs_subscribe_2 = metrics.get_result_rows_first_to_last_byte_seconds(
+            "subscribe"
+        )
+        assert (
+            rrftlbs_subscribe_2 > rrftlbs_subscribe_1
+        ), f"got {rrftlbs_subscribe_2} vs. {rrftlbs_subscribe_1}"
+
+        # Shouldn't increase for a non-const SUBSCRIBE, because there is no last row, ever.
+        c.sql(
+            """
+            BEGIN;
+            DECLARE c1 CURSOR FOR SUBSCRIBE (SELECT * FROM t);
+            FETCH ALL c1;
+            FETCH ALL c1 WITH (TIMEOUT = INTERVAL '1500 milliseconds');
+            """
+        )
+        metrics = fetch_metrics()
+        rrftlbs_subscribe_3 = metrics.get_result_rows_first_to_last_byte_seconds(
+            "subscribe"
+        )
+        assert (
+            rrftlbs_subscribe_3 == rrftlbs_subscribe_2
+        ), f"got {rrftlbs_subscribe_3} vs. {rrftlbs_subscribe_3}"
 
 
 def workflow_test_metrics_retention_across_restart(c: Composition) -> None:
@@ -5438,3 +5593,118 @@ def workflow_test_constant_sink(c: Composition) -> None:
                 """
             )
         )
+
+
+def workflow_test_lgalloc_limiter(c: Composition) -> None:
+    """
+    Test that the lgalloc disk usage limiter functions as expected.
+
+    We run a workload whose disk usage is roughly known and then assert that it
+    does, or does not, manage to hydrate with various limiter configurations.
+    """
+
+    c.down(destroy_volumes=True)
+
+    with c.override(
+        Materialized(
+            additional_system_parameter_defaults={
+                "unsafe_enable_unorchestrated_cluster_replicas": "true",
+                "enable_compute_correction_v2": "true",
+                "lgalloc_limiter_interval": "100ms",
+            },
+        ),
+        Clusterd(
+            name="clusterd1",
+            # Announce an (unenforced) memory limit of 1GiB. Disk limits are
+            # derived from this memory limit.
+            options=["--announce-memory-limit=1073741824"],
+        ),
+        Testdrive(no_reset=True),
+    ):
+        c.up("materialized")
+        c.up("testdrive", persistent=True)
+
+        c.sql(
+            """
+            CREATE CLUSTER test REPLICAS (
+                r1 (
+                    STORAGECTL ADDRESSES ['clusterd1:2100'],
+                    STORAGE ADDRESSES ['clusterd1:2103'],
+                    COMPUTECTL ADDRESSES ['clusterd1:2101'],
+                    COMPUTE ADDRESSES ['clusterd1:2102'],
+                    WORKERS 1
+                )
+            )
+            """
+        )
+
+        def setup_workload():
+            """
+            For our workload we use a large MV, which we obtain by performing a cross
+            join. We make sure that the rows are large, so they spill to disk well.
+            """
+            c.sql(
+                """
+                DROP TABLE IF EXISTS t CASCADE;
+                CREATE TABLE t (i int, x text);
+                INSERT INTO t
+                    SELECT generate_series, repeat('a', 100) FROM generate_series(1, 1000);
+                CREATE MATERIALIZED VIEW mv IN CLUSTER test AS
+                    SELECT t1.i i1, t1.x x1, t2.i i2, t2.x x2 FROM t t1, t t2;
+                """
+            )
+
+        # Test 1: The MV should be able to hydrate with a disk limit of 1 GiB.
+        c.sql(
+            """
+            ALTER SYSTEM SET lgalloc_limiter_usage_factor = 1;
+            ALTER SYSTEM SET lgalloc_limiter_burst_factor = 0;
+            """,
+            port=6877,
+            user="mz_system",
+        )
+        setup_workload()
+        c.up("clusterd1")
+
+        c.testdrive("> SELECT count(*) FROM mv\n1000000")
+
+        c.kill("clusterd1")
+
+        # Test 2: The MV should be unable to hydrate with a disk limit of 10 MiB.
+        c.sql(
+            """
+            ALTER SYSTEM SET lgalloc_limiter_usage_factor = 0.01;
+            ALTER SYSTEM SET lgalloc_limiter_burst_factor = 0;
+            """,
+            port=6877,
+            user="mz_system",
+        )
+        setup_workload()
+        c.up("clusterd1")
+
+        for _ in range(100):
+            time.sleep(1)
+            ps = c.invoke("ps", "clusterd1", "-a", capture=True, silent=True).stdout
+            if "Exited (167)" in ps:
+                break
+        else:
+            raise RuntimeError("replica did not exit with code 167")
+
+        c.kill("clusterd1")
+
+        # Test 3: The MV should be able to hydrate with a disk limit of 10 MiB
+        # and a burst budget of 10 GiB-seconds.
+        c.sql(
+            """
+            ALTER SYSTEM SET lgalloc_limiter_usage_factor = 0.01;
+            ALTER SYSTEM SET lgalloc_limiter_burst_factor = 1000;
+            """,
+            port=6877,
+            user="mz_system",
+        )
+        setup_workload()
+        c.up("clusterd1")
+
+        c.testdrive("> SELECT count(*) FROM mv\n1000000")
+
+        c.kill("clusterd1")

@@ -225,6 +225,14 @@ class ErrorLog:
 
 
 @dataclass
+class Secret:
+    secret: str
+    file: str
+    line: int
+    detector_name: str
+
+
+@dataclass
 class JunitError:
     testclass: str
     testcase: str
@@ -659,6 +667,22 @@ def annotate_logged_errors(
                     additional_collapsed_error_details_header=additional_collapsed_error_details_header,
                     additional_collapsed_error_details=additional_collapsed_error_details,
                 )
+        elif isinstance(error, Secret):
+            for artifact in artifacts:
+                if artifact["job_id"] == job and artifact["path"] == error.file:
+                    location: str = error.file
+                    location_url = get_artifact_url(artifact)
+                    break
+            else:
+                location: str = error.file
+                location_url = None
+
+            handle_error(
+                f"Secret found on line {error.line}: {error.secret}",
+                f"Detector: {error.detector_name}. Don't print out secrets in tests/logs and revoke them immediately. Mark false positives in misc/shlib/shlib.bash's trufflehog_jq_filter_(logs|common)",
+                location,
+                location_url,
+            )
         else:
             raise RuntimeError(f"Unexpected error type: {type(error)}")
 
@@ -710,11 +734,13 @@ def annotate_logged_errors(
     return len(unknown_errors)
 
 
-def get_errors(log_file_names: list[str]) -> list[ErrorLog | JunitError]:
+def get_errors(log_file_names: list[str]) -> list[ErrorLog | JunitError | Secret]:
     error_logs = []
     for log_file_name in log_file_names:
         if "junit_" in log_file_name:
             error_logs.extend(_get_errors_from_junit_file(log_file_name))
+        elif log_file_name == "trufflehog.log":
+            error_logs.extend(_get_errors_from_trufflehog(log_file_name))
         else:
             error_logs.extend(_get_errors_from_log_file(log_file_name))
 
@@ -742,6 +768,27 @@ def _get_errors_from_junit_file(log_file_name: str) -> list[JunitError]:
                         testcase.name,
                         (result.message or "").replace("&#10;", "\n"),
                         result.text or "",
+                    )
+                )
+    return error_logs
+
+
+def _get_errors_from_trufflehog(log_file_name: str) -> list[Secret]:
+    error_logs = []
+    with open(log_file_name) as f:
+        for line in f:
+            data = json.loads(line)
+            # Only report each secret once
+            for error_log in error_logs:
+                if error_log.secret == data["Raw"]:
+                    break
+            else:
+                error_logs.append(
+                    Secret(
+                        data["Raw"],
+                        data["SourceMetadata"]["Data"]["Filesystem"]["file"],
+                        data["SourceMetadata"]["Data"]["Filesystem"]["line"],
+                        data["DetectorName"],
                     )
                 )
     return error_logs

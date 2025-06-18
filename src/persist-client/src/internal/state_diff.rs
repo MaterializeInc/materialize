@@ -1037,9 +1037,6 @@ fn sniff_compaction<'a, T: Timestamp + Lattice>(
 ///
 /// This can only happen when the batch needing to be split is empty, so error
 /// out if it isn't because that means something unexpected is going on.
-///
-/// TODO: This implementation is certainly not correct if T is actually only
-/// partially ordered.
 fn apply_compaction_lenient<'a, T: Timestamp + Lattice>(
     metrics: &Metrics,
     mut trace: Vec<HollowBatch<T>>,

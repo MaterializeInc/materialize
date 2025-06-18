@@ -20,7 +20,7 @@ statement ok
 INSERT INTO t VALUES (1, '10', 'x'), (2, '20', NULL), (3, '30', NULL), (4, '40', 'x'), (5, '50a', 'x'), (5, '50b', 'y'), (5, '50c', 'z');
 
 query T multiline
-EXPLAIN PHYSICAL PLAN AS TEXT FOR SELECT a, array_agg(b) FROM t GROUP BY a;
+EXPLAIN PHYSICAL PLAN AS VERBOSE TEXT FOR SELECT a, array_agg(b) FROM t GROUP BY a;
 ----
 Explained Query:
   Reduce::Basic
@@ -41,7 +41,7 @@ Target cluster: quickstart
 EOF
 
 query T multiline
-EXPLAIN PHYSICAL PLAN AS TEXT FOR SELECT a, array_agg(b), array_agg(c) FROM t GROUP BY a;
+EXPLAIN PHYSICAL PLAN AS VERBOSE TEXT FOR SELECT a, array_agg(b), array_agg(c) FROM t GROUP BY a;
 ----
 Explained Query:
   Join::Linear
@@ -75,7 +75,7 @@ Target cluster: quickstart
 EOF
 
 query T multiline
-EXPLAIN PHYSICAL PLAN AS TEXT FOR SELECT a, array_agg(b), string_agg(c, ',') FROM t GROUP BY a;
+EXPLAIN PHYSICAL PLAN AS VERBOSE TEXT FOR SELECT a, array_agg(b), string_agg(c, ',') FROM t GROUP BY a;
 ----
 Explained Query:
   Join::Linear
@@ -109,7 +109,7 @@ Target cluster: quickstart
 EOF
 
 query T multiline
-EXPLAIN PHYSICAL PLAN AS TEXT FOR SELECT a, array_agg(b), string_agg(c, ',' ORDER BY b DESC) FROM t GROUP BY a;
+EXPLAIN PHYSICAL PLAN AS VERBOSE TEXT FOR SELECT a, array_agg(b), string_agg(c, ',' ORDER BY b DESC) FROM t GROUP BY a;
 ----
 Explained Query:
   Join::Linear
@@ -144,7 +144,7 @@ Target cluster: quickstart
 EOF
 
 query T multiline
-EXPLAIN PHYSICAL PLAN AS TEXT FOR SELECT a, array_agg(b), max(c) FROM t WHERE c <> 'x' GROUP BY a;
+EXPLAIN PHYSICAL PLAN AS VERBOSE TEXT FOR SELECT a, array_agg(b), max(c) FROM t WHERE c <> 'x' GROUP BY a;
 ----
 Explained Query:
   With
@@ -190,7 +190,7 @@ Target cluster: quickstart
 EOF
 
 query T multiline
-EXPLAIN PHYSICAL PLAN AS TEXT FOR SELECT a, array_agg(b), max(b) FROM t GROUP BY a HAVING count(a) > 1;
+EXPLAIN PHYSICAL PLAN AS VERBOSE TEXT FOR SELECT a, array_agg(b), max(b) FROM t GROUP BY a HAVING count(a) > 1;
 ----
 Explained Query:
   With
@@ -276,7 +276,7 @@ Target cluster: quickstart
 EOF
 
 query T multiline
-EXPLAIN PHYSICAL PLAN AS TEXT FOR SELECT a, min(b), max(b) FROM t GROUP BY a;
+EXPLAIN PHYSICAL PLAN AS VERBOSE TEXT FOR SELECT a, min(b), max(b) FROM t GROUP BY a;
 ----
 Explained Query:
   Reduce::Hierarchical
@@ -299,7 +299,7 @@ Target cluster: quickstart
 EOF
 
 query T multiline
-EXPLAIN PHYSICAL PLAN AS TEXT FOR SELECT a, array_agg(b ORDER BY b ASC), array_agg(b ORDER BY b DESC) FROM t GROUP BY a;
+EXPLAIN PHYSICAL PLAN AS VERBOSE TEXT FOR SELECT a, array_agg(b ORDER BY b ASC), array_agg(b ORDER BY b DESC) FROM t GROUP BY a;
 ----
 Explained Query:
   With
@@ -339,7 +339,7 @@ Target cluster: quickstart
 EOF
 
 query T multiline
-EXPLAIN PHYSICAL PLAN AS TEXT FOR SELECT array_agg(b ORDER BY b ASC), array_agg(b ORDER BY b DESC), bool_or(b IS NOT NULL) FROM t;
+EXPLAIN PHYSICAL PLAN AS VERBOSE TEXT FOR SELECT array_agg(b ORDER BY b ASC), array_agg(b ORDER BY b DESC), bool_or(b IS NOT NULL) FROM t;
 ----
 Explained Query:
   With
@@ -432,7 +432,7 @@ Target cluster: quickstart
 EOF
 
 query T multiline
-EXPLAIN PHYSICAL PLAN AS TEXT FOR SELECT t1.a, array_agg(t1.c), array_agg(t2.c) FROM t t1 INNER JOIN t t2 ON t1.c = t2.c WHERE t1.c IS NOT NULL GROUP BY t1.a;
+EXPLAIN PHYSICAL PLAN AS VERBOSE TEXT FOR SELECT t1.a, array_agg(t1.c), array_agg(t2.c) FROM t t1 INNER JOIN t t2 ON t1.c = t2.c WHERE t1.c IS NOT NULL GROUP BY t1.a;
 ----
 Explained Query:
   With
@@ -480,7 +480,7 @@ Target cluster: quickstart
 EOF
 
 query T multiline
-EXPLAIN PHYSICAL PLAN AS TEXT FOR SELECT sum(a), jsonb_agg(b), array_agg(b), array_agg(b) FROM t;
+EXPLAIN PHYSICAL PLAN AS VERBOSE TEXT FOR SELECT sum(a), jsonb_agg(b), array_agg(b), array_agg(b) FROM t;
 ----
 Explained Query:
   With
@@ -571,7 +571,7 @@ Target cluster: quickstart
 EOF
 
 query T multiline
-EXPLAIN PHYSICAL PLAN AS TEXT FOR SELECT a, array_agg(b ORDER BY b) FROM t GROUP BY a HAVING array_agg(b ORDER BY b) = array_agg(b ORDER BY b DESC);
+EXPLAIN PHYSICAL PLAN AS VERBOSE TEXT FOR SELECT a, array_agg(b ORDER BY b) FROM t GROUP BY a HAVING array_agg(b ORDER BY b) = array_agg(b ORDER BY b DESC);
 ----
 Explained Query:
   With
@@ -581,30 +581,39 @@ Explained Query:
   Return
     Join::Linear
       linear_stage[0]
-        closure
-          project=(#0, #1)
-          ready_equivalences=#2{"?column?"} = #1{"?column?"}
-        lookup={ relation=1, key=[#0] }
-        stream={ key=[#0], thinning=(#1) }
-      source={ relation=0, key=[#0] }
-      Reduce::Basic
-        aggr=(0, array_agg[order_by=[#0 asc nulls_last]](row(array[#1{b}], #1{b})))
-        val_plan
-          project=(#2)
-          map=(row(array[#1{b}], #1{b}))
-        key_plan
-          project=(#0)
-        Get::PassArrangements l0
-          raw=true
-      Reduce::Basic
-        aggr=(0, array_agg[order_by=[#0 desc nulls_first]](row(array[#1{b}], #1{b})))
-        val_plan
-          project=(#2)
-          map=(row(array[#1{b}], #1{b}))
-        key_plan
-          project=(#0)
-        Get::PassArrangements l0
-          raw=true
+        lookup={ relation=1, key=[#0, #1{"?column?"}] }
+        stream={ key=[#0, #1{"?column?"}], thinning=() }
+      source={ relation=0, key=[#0, #1{"?column?"}] }
+      ArrangeBy
+        input_key=[#0]
+        raw=false
+        arrangements[0]={ key=[#0], permutation=id, thinning=(#1) }
+        arrangements[1]={ key=[#0, #1{"?column?"}], permutation=id, thinning=() }
+        types=[integer, text[]]
+        Reduce::Basic
+          aggr=(0, array_agg[order_by=[#0 asc nulls_last]](row(array[#1{b}], #1{b})))
+          val_plan
+            project=(#2)
+            map=(row(array[#1{b}], #1{b}))
+          key_plan
+            project=(#0)
+          Get::PassArrangements l0
+            raw=true
+      ArrangeBy
+        input_key=[#0]
+        raw=false
+        arrangements[0]={ key=[#0], permutation=id, thinning=(#1) }
+        arrangements[1]={ key=[#0, #1{"?column?"}], permutation=id, thinning=() }
+        types=[integer, text[]]
+        Reduce::Basic
+          aggr=(0, array_agg[order_by=[#0 desc nulls_first]](row(array[#1{b}], #1{b})))
+          val_plan
+            project=(#2)
+            map=(row(array[#1{b}], #1{b}))
+          key_plan
+            project=(#0)
+          Get::PassArrangements l0
+            raw=true
 
 Source materialize.public.t
   project=(#0, #1)
@@ -614,7 +623,7 @@ Target cluster: quickstart
 EOF
 
 query T multiline
-EXPLAIN PHYSICAL PLAN AS TEXT FOR SELECT a, array_agg(b), array_agg(sha256(b::BYTEA)) FROM t GROUP BY a;
+EXPLAIN PHYSICAL PLAN AS VERBOSE TEXT FOR SELECT a, array_agg(b), array_agg(sha256(b::BYTEA)) FROM t GROUP BY a;
 
 ----
 Explained Query:
@@ -658,7 +667,7 @@ EOF
 
 
 query T multiline
-EXPLAIN PHYSICAL PLAN AS TEXT FOR SELECT a, array_agg(b), array_agg(CASE WHEN a = 1 THEN 'ooo' ELSE b END) FROM t GROUP BY a;
+EXPLAIN PHYSICAL PLAN AS VERBOSE TEXT FOR SELECT a, array_agg(b), array_agg(CASE WHEN a = 1 THEN 'ooo' ELSE b END) FROM t GROUP BY a;
 ----
 Explained Query:
   With
@@ -698,7 +707,7 @@ Target cluster: quickstart
 EOF
 
 query T multiline
-EXPLAIN PHYSICAL PLAN AS TEXT FOR SELECT a, dense_rank() OVER (ORDER BY a), array_agg(b) FROM t GROUP BY a;
+EXPLAIN PHYSICAL PLAN AS VERBOSE TEXT FOR SELECT a, dense_rank() OVER (ORDER BY a), array_agg(b) FROM t GROUP BY a;
 ----
 Explained Query:
   Mfp

@@ -20,8 +20,8 @@ use bytesize::ByteSize;
 use differential_dataflow::consolidation::consolidate_updates;
 use differential_dataflow::lattice::Lattice;
 use mz_expr::row::RowCollection;
-use mz_ore::assert_none;
 use mz_ore::cast::CastFrom;
+use mz_ore::{assert_none, soft_assert_eq_or_log};
 use mz_repr::{Diff, GlobalId, Row};
 use mz_service::client::{GenericClient, Partitionable, PartitionedState};
 use mz_service::grpc::{GrpcClient, GrpcServer, ProtoServiceTypes, ResponseStream};
@@ -35,7 +35,7 @@ use crate::metrics::ReplicaMetrics;
 use crate::protocol::command::{ComputeCommand, ProtoComputeCommand};
 use crate::protocol::response::{
     ComputeResponse, CopyToResponse, FrontiersResponse, PeekResponse, ProtoComputeResponse,
-    SubscribeBatch, SubscribeResponse,
+    StashedPeekResponse, SubscribeBatch, SubscribeResponse,
 };
 use crate::service::proto_compute_server::ProtoCompute;
 
@@ -316,6 +316,26 @@ where
                             (PeekResponse::Canceled, _) => PeekResponse::Canceled,
                             (_, PeekResponse::Error(e)) => PeekResponse::Error(e),
                             (PeekResponse::Error(e), _) => PeekResponse::Error(e),
+                            (PeekResponse::Rows(rows), PeekResponse::Stashed(mut stashed))
+                            | (PeekResponse::Stashed(mut stashed), PeekResponse::Rows(rows)) => {
+                                let total_inlined_size = rows
+                                    .byte_len()
+                                    .saturating_add(stashed.inline_rows.byte_len());
+
+                                if total_inlined_size > usize::cast_from(self.max_result_size) {
+                                    // Note: We match on this specific error message in tests
+                                    // so it's important that nothing else returns the same
+                                    // string.
+                                    let err = format!(
+                                        "total result exceeds max size of {}",
+                                        ByteSize::b(self.max_result_size)
+                                    );
+                                    PeekResponse::Error(err)
+                                } else {
+                                    stashed.inline_rows.merge(&rows);
+                                    PeekResponse::Stashed(stashed)
+                                }
+                            }
                             (PeekResponse::Rows(mut rows), PeekResponse::Rows(other)) => {
                                 let total_byte_size =
                                     rows.byte_len().saturating_add(other.byte_len());
@@ -332,6 +352,75 @@ where
                                 } else {
                                     rows.merge(&other);
                                     PeekResponse::Rows(rows)
+                                }
+                            }
+                            (PeekResponse::Stashed(stashed), PeekResponse::Stashed(other)) => {
+                                // Deconstruct so we don't miss adding new
+                                // fields. We need to be careful about merging
+                                // everything!
+                                let StashedPeekResponse {
+                                    num_rows_batches: self_num_rows_batches,
+                                    encoded_size_bytes: self_encoded_size_bytes,
+                                    relation_desc: self_relation_desc,
+                                    shard_id: self_shard_id,
+                                    batches: mut self_batches,
+                                    inline_rows: mut self_inline_rows,
+                                } = *stashed;
+                                let StashedPeekResponse {
+                                    num_rows_batches: other_num_rows_batches,
+                                    encoded_size_bytes: other_encoded_size_bytes,
+                                    relation_desc: other_relation_desc,
+                                    shard_id: other_shard_id,
+                                    batches: mut other_batches,
+                                    inline_rows: other_inline_rows,
+                                } = *other;
+
+                                soft_assert_eq_or_log!(self_shard_id, other_shard_id);
+                                soft_assert_eq_or_log!(self_relation_desc, other_relation_desc);
+
+                                let total_inlined_size = self_inline_rows
+                                    .byte_len()
+                                    .saturating_add(other_inline_rows.byte_len());
+
+                                if self_shard_id != other_shard_id {
+                                    let err = format!(
+                                        "internal error: shard IDs of stashed response do not match, got {self_shard_id} and {other_shard_id}",
+                                    );
+                                    PeekResponse::Error(err)
+                                } else if self_relation_desc != other_relation_desc {
+                                    let err = format!(
+                                        "internal error: RelationDesc of stashed response do not match, got {:?} and {:?}",
+                                        self_relation_desc, other_relation_desc,
+                                    );
+                                    PeekResponse::Error(err)
+                                } else if total_inlined_size
+                                    > usize::cast_from(self.max_result_size)
+                                {
+                                    // Note: We match on this specific error message in tests
+                                    // so it's important that nothing else returns the same
+                                    // string.
+                                    let err = format!(
+                                        "total result exceeds max size of {}",
+                                        ByteSize::b(self.max_result_size)
+                                    );
+                                    PeekResponse::Error(err)
+                                } else {
+                                    self_inline_rows.merge(&other_inline_rows);
+
+                                    self_batches.append(&mut other_batches);
+
+                                    let merged_response = StashedPeekResponse {
+                                        num_rows_batches: self_num_rows_batches
+                                            + other_num_rows_batches,
+                                        encoded_size_bytes: self_encoded_size_bytes
+                                            + other_encoded_size_bytes,
+                                        relation_desc: self_relation_desc,
+                                        shard_id: self_shard_id,
+                                        batches: self_batches,
+                                        inline_rows: self_inline_rows,
+                                    };
+
+                                    PeekResponse::Stashed(Box::new(merged_response))
                                 }
                             }
                         };

@@ -30,6 +30,7 @@ use mz_persist_types::schema::SchemaId;
 use mz_persist_types::{Codec, Codec64, Opaque};
 use mz_proto::{IntoRustIfSome, ProtoType};
 use semver::Version;
+use timely::order::TotalOrder;
 use timely::progress::{Antichain, Timestamp};
 
 use crate::async_runtime::IsolatedRuntime;
@@ -39,7 +40,7 @@ use crate::cfg::PersistConfig;
 use crate::critical::{CriticalReaderId, SinceHandle};
 use crate::error::InvalidUsage;
 use crate::fetch::{BatchFetcher, BatchFetcherConfig};
-use crate::internal::compact::Compactor;
+use crate::internal::compact::{CompactConfig, Compactor};
 use crate::internal::encoding::parse_id;
 use crate::internal::gc::GarbageCollector;
 use crate::internal::machine::{Machine, retry_external};
@@ -290,7 +291,7 @@ impl PersistClient {
     where
         K: Debug + Codec,
         V: Debug + Codec,
-        T: Timestamp + Lattice + Codec64 + Sync,
+        T: Timestamp + TotalOrder + Lattice + Codec64 + Sync,
         D: Semigroup + Ord + Codec64 + Send + Sync,
     {
         Ok((
@@ -332,7 +333,7 @@ impl PersistClient {
     where
         K: Debug + Codec,
         V: Debug + Codec,
-        T: Timestamp + Lattice + Codec64 + Sync,
+        T: Timestamp + TotalOrder + Lattice + Codec64 + Sync,
         D: Semigroup + Codec64 + Send + Sync,
     {
         let machine = self.make_machine(shard_id, diagnostics.clone()).await?;
@@ -504,7 +505,7 @@ impl PersistClient {
     where
         K: Debug + Codec,
         V: Debug + Codec,
-        T: Timestamp + Lattice + Codec64 + Sync,
+        T: Timestamp + TotalOrder + Lattice + Codec64 + Sync,
         D: Semigroup + Ord + Codec64 + Send + Sync,
     {
         let machine = self.make_machine(shard_id, diagnostics.clone()).await?;
@@ -562,15 +563,19 @@ impl PersistClient {
         shard_id: ShardId,
         write_schemas: Schemas<K, V>,
         lower: Antichain<T>,
+        max_runs: Option<usize>,
     ) -> BatchBuilder<K, V, T, D>
     where
         K: Debug + Codec,
         V: Debug + Codec,
-        T: Timestamp + Lattice + Codec64 + Sync,
+        T: Timestamp + Lattice + Codec64 + TotalOrder + Sync,
         D: Semigroup + Ord + Codec64 + Send + Sync,
     {
+        let mut compact_cfg = CompactConfig::new(&self.cfg, shard_id);
+        compact_cfg.batch.max_runs = max_runs;
         WriteHandle::builder_inner(
             &self.cfg,
+            compact_cfg,
             Arc::clone(&self.metrics),
             self.metrics.shards.shard(&shard_id, "peek_stash"),
             &self.metrics.user,
@@ -648,11 +653,12 @@ impl PersistClient {
         read_schemas: Schemas<K, V>,
         batches: Vec<Batch<K, V, T, D>>,
         should_fetch_part: impl for<'a> Fn(Option<&'a LazyPartStats>) -> bool,
+        memory_budget_bytes: usize,
     ) -> Result<Cursor<K, V, T, D, Vec<Batch<K, V, T, D>>>, Since<T>>
     where
         K: Debug + Codec + Ord,
         V: Debug + Codec + Ord,
-        T: Timestamp + Lattice + Codec64 + Sync,
+        T: Timestamp + Lattice + Codec64 + TotalOrder + Sync,
         D: Semigroup + Ord + Codec64 + Send + Sync,
     {
         let shard_metrics = self.metrics.shards.shard(&shard_id, "peek_stash");
@@ -671,6 +677,7 @@ impl PersistClient {
             &hollow_batches,
             batches,
             should_fetch_part,
+            memory_budget_bytes,
         )
     }
 
@@ -839,7 +846,7 @@ impl PersistClient {
     where
         K: Debug + Codec,
         V: Debug + Codec,
-        T: Timestamp + Lattice + Codec64 + Sync,
+        T: Timestamp + TotalOrder + Lattice + Codec64 + Sync,
         D: Semigroup + Ord + Codec64 + Send + Sync,
         K::Schema: Default,
         V::Schema: Default,

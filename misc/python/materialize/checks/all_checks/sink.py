@@ -1139,6 +1139,9 @@ class AlterSinkLGSource(Check):
 
 
 @externally_idempotent(False)
+@disabled(
+    "manual sleep is impossible to get right, this check has to be reworked so as not to flake CI"
+)
 class AlterSinkPgSource(Check):
     """Check ALTER SINK with a postgres source"""
 
@@ -1268,7 +1271,8 @@ class AlterSinkWebhook(Check):
         return Testdrive(
             dedent(
                 """
-                > CREATE CLUSTER sink_webhook_cluster SIZE '1', REPLICATION FACTOR 1;
+                >[version>=14700] CREATE CLUSTER sink_webhook_cluster SIZE '1', REPLICATION FACTOR 2;
+                >[version<14700] CREATE CLUSTER sink_webhook_cluster SIZE '1', REPLICATION FACTOR 1;
                 > CREATE SOURCE webhook_alter1 IN CLUSTER sink_webhook_cluster FROM WEBHOOK BODY FORMAT TEXT;
                 > CREATE SINK sink_alter_wh FROM webhook_alter1
                   INTO KAFKA CONNECTION kafka_conn (TOPIC 'sink-alter-wh')

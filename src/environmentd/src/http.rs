@@ -22,7 +22,7 @@ use std::fmt::Debug;
 use std::net::{IpAddr, SocketAddr};
 use std::pin::Pin;
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, SystemTime};
 
 use anyhow::Context;
 use async_trait::async_trait;
@@ -40,7 +40,7 @@ use http::{Method, StatusCode};
 use hyper_openssl::SslStream;
 use hyper_openssl::client::legacy::MaybeHttpsStream;
 use hyper_util::rt::TokioIo;
-use mz_adapter::session::{Session, SessionConfig};
+use mz_adapter::session::{Session as AdapterSession, SessionConfig as AdapterSessionConfig};
 use mz_adapter::{AdapterError, AdapterNotice, Client, SessionClient, WebhookAppenderCache};
 use mz_auth::password::Password;
 use mz_authenticator::Authenticator;
@@ -63,7 +63,7 @@ use openssl::ssl::Ssl;
 use prometheus::{
     COMPUTE_METRIC_QUERIES, FRONTIER_METRIC_QUERIES, STORAGE_METRIC_QUERIES, USAGE_METRIC_QUERIES,
 };
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use serde_json::json;
 use thiserror::Error;
 use tokio::io::AsyncWriteExt;
@@ -72,6 +72,10 @@ use tokio::sync::{oneshot, watch};
 use tower::limit::GlobalConcurrencyLimitLayer;
 use tower::{Service, ServiceBuilder};
 use tower_http::cors::{AllowOrigin, Any, CorsLayer};
+use tower_sessions::{
+    MemoryStore as TowerSessionMemoryStore, Session as TowerSession,
+    SessionManagerLayer as TowerSessionManagerLayer,
+};
 use tracing::{error, warn};
 
 use crate::BUILD_INFO;
@@ -94,10 +98,12 @@ pub use sql::{SqlResponse, WebSocketAuth, WebSocketResponse};
 /// Maximum allowed size for a request.
 pub const MAX_REQUEST_SIZE: usize = u64_to_usize(5 * bytesize::MIB);
 
-#[derive(Debug, Clone)]
+const SESSION_DURATION: Duration = Duration::from_secs(3600); // 1 hour
+
+#[derive(Debug)]
 pub struct HttpConfig {
     pub source: &'static str,
-    pub tls: Option<ReloadingTlsConfig>,
+    pub tls: Option<ReloadingSslContext>,
     pub authenticator_kind: AuthenticatorKind,
     pub authenticator_rx: Shared<Receiver<Arc<Authenticator>>>,
     pub adapter_client_rx: Shared<Receiver<Client>>,
@@ -108,7 +114,7 @@ pub struct HttpConfig {
     pub metrics: Metrics,
     pub metrics_registry: MetricsRegistry,
     pub allowed_roles: AllowedRoles,
-    pub internal_route_config: InternalRouteConfig,
+    pub internal_route_config: Arc<InternalRouteConfig>,
     pub routes_enabled: HttpRoutesEnabled,
 }
 
@@ -116,18 +122,6 @@ pub struct HttpConfig {
 pub struct InternalRouteConfig {
     pub deployment_state_handle: DeploymentStateHandle,
     pub internal_console_redirect_url: Option<String>,
-}
-
-#[derive(Debug, Clone)]
-pub struct ReloadingTlsConfig {
-    pub context: ReloadingSslContext,
-    pub mode: TlsMode,
-}
-
-#[derive(Debug, Clone, Copy)]
-pub enum TlsMode {
-    Disable,
-    Require,
 }
 
 #[derive(Clone)]
@@ -147,7 +141,7 @@ pub struct WebhookState {
 
 #[derive(Debug)]
 pub struct HttpServer {
-    tls: Option<ReloadingTlsConfig>,
+    tls: Option<ReloadingSslContext>,
     router: Router,
 }
 
@@ -170,8 +164,17 @@ impl HttpServer {
             routes_enabled,
         }: HttpConfig,
     ) -> HttpServer {
-        let tls_mode = tls.as_ref().map(|tls| tls.mode).unwrap_or(TlsMode::Disable);
+        let tls_enabled = tls.is_some();
         let webhook_cache = WebhookAppenderCache::new();
+
+        // Create secure session store and manager
+        let session_store = TowerSessionMemoryStore::default();
+        let session_layer = TowerSessionManagerLayer::new(session_store)
+            .with_secure(tls_enabled) // Enforce HTTPS
+            .with_same_site(tower_sessions::cookie::SameSite::Strict) // Prevent CSRF
+            .with_http_only(true) // Prevent XSS
+            .with_name("mz_session") // Custom cookie name
+            .with_path("/"); // Set cookie path
 
         let auth_middleware_authenticator_rx = authenticator_rx.clone();
         let auth_middleware = middleware::from_fn(move |req, next| {
@@ -180,7 +183,7 @@ impl HttpServer {
                 let authenticator = authenticator_rx
                     .await
                     .expect("sender not dropped before sending once");
-                http_auth(req, next, tls_mode, authenticator, allowed_roles).await
+                http_auth(req, next, tls_enabled, authenticator, allowed_roles).await
             }
         });
 
@@ -230,6 +233,13 @@ impl HttpServer {
                     adapter_client_rx: adapter_client_rx.clone(),
                     webhook_cache,
                 })
+                .layer(
+                    tower_http::decompression::RequestDecompressionLayer::new()
+                        .gzip(true)
+                        .deflate(true)
+                        .br(true)
+                        .zstd(true),
+                )
                 .layer(
                     CorsLayer::new()
                         .allow_methods(Method::POST)
@@ -387,8 +397,18 @@ impl HttpServer {
             );
 
         match authenticator_kind {
+            AuthenticatorKind::Password => {
+                base_router = base_router.layer(session_layer.clone());
+
+                let login_router = Router::new()
+                    .route("/api/login", routing::post(handle_login))
+                    .route("/api/logout", routing::post(handle_logout))
+                    .layer(Extension(adapter_client_rx));
+                router = router.merge(login_router).layer(session_layer);
+            }
             AuthenticatorKind::None => {
-                base_router = base_router.layer(middleware::from_fn(x_materialize_user_header_auth))
+                base_router =
+                    base_router.layer(middleware::from_fn(x_materialize_user_header_auth));
             }
             _ => {}
         }
@@ -406,8 +426,9 @@ impl Server for HttpServer {
 
     fn handle_connection(&self, conn: Connection) -> ConnectionHandler {
         let router = self.router.clone();
-        let tls_config = self.tls.clone();
+        let tls_context = self.tls.clone();
         let mut conn = TokioIo::new(conn);
+
         Box::pin(async {
             let direct_peer_addr = conn.inner().peer_addr().context("fetching peer addr")?;
             let peer_addr = conn
@@ -417,10 +438,9 @@ impl Server for HttpServer {
                 .map(|a| a.source)
                 .unwrap_or(direct_peer_addr);
 
-            let (conn, conn_protocol) = match tls_config {
-                Some(tls_config) => {
-                    let mut ssl_stream =
-                        SslStream::new(Ssl::new(&tls_config.context.get())?, conn)?;
+            let (conn, conn_protocol) = match tls_context {
+                Some(tls_context) => {
+                    let mut ssl_stream = SslStream::new(Ssl::new(&tls_context.get())?, conn)?;
                     if let Err(e) = Pin::new(&mut ssl_stream).accept().await {
                         let _ = ssl_stream.get_mut().inner_mut().shutdown().await;
                         return Err(e.into());
@@ -491,8 +511,7 @@ pub async fn handle_leader_skip_catchup(
 }
 
 async fn x_materialize_user_header_auth(mut req: Request, next: Next) -> impl IntoResponse {
-    // TODO integrate this into the single auth flow
-    // or migrate teleport to basic auth.
+    // TODO migrate teleport to basic auth and remove this.
     if let Some(username) = req.headers().get("x-materialize-user").map(|h| h.to_str()) {
         let username = match username {
             Ok(name @ (SUPPORT_USER_NAME | SYSTEM_USER_NAME)) => name.to_string(),
@@ -541,10 +560,10 @@ impl AuthedClient {
         now: NowFn,
     ) -> Result<Self, AdapterError>
     where
-        F: FnOnce(&mut Session),
+        F: FnOnce(&mut AdapterSession),
     {
         let conn_id = adapter_client.new_conn_id()?;
-        let mut session = adapter_client.new_session(SessionConfig {
+        let mut session = adapter_client.new_session(AdapterSessionConfig {
             conn_id,
             uuid: epoch_to_uuid_v7(&(now)()),
             user: user.name,
@@ -676,6 +695,10 @@ enum AuthError {
     MissingHttpAuthentication,
     #[error("{0}")]
     MismatchedUser(String),
+    #[error("session expired")]
+    SessionExpired,
+    #[error("failed to update session")]
+    FailedToUpdateSession,
 }
 
 impl IntoResponse for AuthError {
@@ -696,21 +719,95 @@ impl IntoResponse for AuthError {
     }
 }
 
+// Simplified login handler
+pub async fn handle_login(
+    session: Option<Extension<TowerSession>>,
+    Extension(adapter_client_rx): Extension<Delayed<Client>>,
+    Json(LoginCredentials { username, password }): Json<LoginCredentials>,
+) -> impl IntoResponse {
+    let Ok(adapter_client) = adapter_client_rx.clone().await else {
+        return StatusCode::INTERNAL_SERVER_ERROR;
+    };
+    if let Err(err) = adapter_client.authenticate(&username, &password).await {
+        warn!(?err, "HTTP login failed authentication");
+        return StatusCode::UNAUTHORIZED;
+    };
+
+    // Create session data
+    let session_data = TowerSessionData {
+        username,
+        created_at: SystemTime::now(),
+        last_activity: SystemTime::now(),
+    };
+    // Store session data
+    let session = session.and_then(|Extension(session)| Some(session));
+    let Some(session) = session else {
+        return StatusCode::INTERNAL_SERVER_ERROR;
+    };
+    match session.insert("data", &session_data).await {
+        Err(_) => StatusCode::INTERNAL_SERVER_ERROR,
+        Ok(_) => StatusCode::OK,
+    }
+}
+
+// Simplified logout handler
+pub async fn handle_logout(session: Option<Extension<TowerSession>>) -> impl IntoResponse {
+    let session = session.and_then(|Extension(session)| Some(session));
+    let Some(session) = session else {
+        return StatusCode::INTERNAL_SERVER_ERROR;
+    };
+    // Delete session
+    match session.delete().await {
+        Err(_) => StatusCode::INTERNAL_SERVER_ERROR,
+        Ok(_) => StatusCode::OK,
+    }
+}
+
 async fn http_auth(
     mut req: Request,
     next: Next,
-    tls_mode: TlsMode,
+    tls_enabled: bool,
     authenticator: Arc<Authenticator>,
     allowed_roles: AllowedRoles,
 ) -> impl IntoResponse + use<> {
+    // First check for session authentication
+    if let Some(session) = req.extensions().get::<TowerSession>() {
+        if let Ok(Some(session_data)) = session.get::<TowerSessionData>("data").await {
+            // Check session expiration
+            if session_data
+                .last_activity
+                .elapsed()
+                .unwrap_or(Duration::MAX)
+                > SESSION_DURATION
+            {
+                let _ = session.delete().await;
+                return Err(AuthError::SessionExpired);
+            }
+            // Update last activity
+            let mut updated_data = session_data.clone();
+            updated_data.last_activity = SystemTime::now();
+            session
+                .insert("data", &updated_data)
+                .await
+                .map_err(|_| AuthError::FailedToUpdateSession)?;
+            // User is authenticated via session
+            req.extensions_mut().insert(AuthedUser {
+                name: session_data.username,
+                external_metadata_rx: None,
+            });
+            return Ok(next.run(req).await);
+        }
+    }
+
     // First, extract the username from the certificate, validating that the
     // connection matches the TLS configuration along the way.
+    // Fall back to existing authentication methods.
     let conn_protocol = req.extensions().get::<ConnProtocol>().unwrap();
-    match (tls_mode, &conn_protocol) {
-        (TlsMode::Disable, ConnProtocol::Http) => {}
-        (TlsMode::Disable, ConnProtocol::Https { .. }) => unreachable!(),
-        (TlsMode::Require, ConnProtocol::Http) => return Err(AuthError::HttpsRequired),
-        (TlsMode::Require, ConnProtocol::Https { .. }) => {}
+    match (tls_enabled, &conn_protocol) {
+        (false, ConnProtocol::Http) => {}
+        (false, ConnProtocol::Https { .. }) => unreachable!(),
+        (true, ConnProtocol::Http) => return Err(AuthError::HttpsRequired),
+        (true, ConnProtocol::Https { .. }) => {}
     }
     // If we've already passed some other auth, just use that.
     if req.extensions().get::<AuthedUser>().is_some() {
@@ -835,6 +932,7 @@ async fn auth(
     creds: Option<Credentials>,
     allowed_roles: AllowedRoles,
 ) -> Result<AuthedUser, AuthError> {
+    // TODO pass session data here?
     let (name, external_metadata_rx) = match authenticator {
         Authenticator::Frontegg(frontegg) => match creds {
             Some(Credentials::Password { username, password }) => {
@@ -853,6 +951,11 @@ async fn auth(
             }
             None => return Err(AuthError::MissingHttpAuthentication),
         },
+        Authenticator::Password(_) => {
+            warn!("self hosted auth only, but somehow missing session data");
+            // TODO tell the user to login here?
+            return Err(AuthError::MissingHttpAuthentication);
+        }
         Authenticator::None => {
             // If no authentication, use whatever is in the HTTP auth
             // header (without checking the password), or fall back to the
@@ -923,6 +1026,19 @@ async fn handle_load_error(error: tower::BoxError) -> impl IntoResponse {
         StatusCode::INTERNAL_SERVER_ERROR,
         Cow::from(format!("Unhandled internal error: {}", error)),
     )
+}
+
+#[derive(Debug, Deserialize, Serialize, PartialEq)]
+pub struct LoginCredentials {
+    username: String,
+    password: Password,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TowerSessionData {
+    username: String,
+    created_at: SystemTime,
+    last_activity: SystemTime,
 }
 
 #[cfg(test)]

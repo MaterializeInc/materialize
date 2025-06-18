@@ -22,7 +22,7 @@ from io import StringIO
 from textwrap import dedent
 from urllib.parse import quote
 
-from materialize import buildkite
+from materialize import MZ_ROOT, buildkite
 from materialize.mzcompose.composition import Composition, WorkflowArgumentParser
 from materialize.mzcompose.services.balancerd import Balancerd
 from materialize.mzcompose.services.clusterd import Clusterd
@@ -91,6 +91,16 @@ class Generator:
         print("DROP SCHEMA IF EXISTS public CASCADE;")
         print(f"CREATE SCHEMA public /* {cls} */;")
         print("GRANT ALL PRIVILEGES ON SCHEMA public TO materialize")
+        print(f'GRANT ALL PRIVILEGES ON SCHEMA public TO "{ADMIN_USER}"')
+        print(
+            f'GRANT ALL PRIVILEGES ON CLUSTER single_replica_cluster TO "{ADMIN_USER}";',
+        )
+        print(
+            f'GRANT ALL PRIVILEGES ON CLUSTER single_worker_cluster TO "{ADMIN_USER}";',
+        )
+        print(
+            f'GRANT ALL PRIVILEGES ON CLUSTER quickstart TO "{ADMIN_USER}";',
+        )
 
     @classmethod
     def body(cls) -> None:
@@ -1811,6 +1821,7 @@ SERVICES = [
         sanity_restart=False,
         external_metadata_store=True,
         metadata_store="cockroach",
+        listeners_config_path=f"{MZ_ROOT}/src/materialized/ci/listener_configs/no_auth_https.json",
     ),
     Mz(app_password=""),
 ]
@@ -1850,6 +1861,13 @@ def setup(c: Composition, workers: int) -> None:
         "ALTER SYSTEM SET unsafe_enable_unorchestrated_cluster_replicas = true;",
         port=6877,
         user="mz_system",
+    )
+    # Ensure the admin user exists
+    c.sql(
+        "SELECT 1;",
+        port=6875,
+        user=ADMIN_USER,
+        password=app_password(ADMIN_USER),
     )
 
     c.sql(
@@ -1893,6 +1911,8 @@ def setup(c: Composition, workers: int) -> None:
             )
         );
         GRANT ALL PRIVILEGES ON CLUSTER single_replica_cluster TO materialize;
+        GRANT ALL PRIVILEGES ON CLUSTER single_replica_cluster TO "{ADMIN_USER}";
+        GRANT ALL PRIVILEGES ON CLUSTER quickstart TO "{ADMIN_USER}";
     """,
         port=6877,
         user="mz_system",
@@ -2178,6 +2198,8 @@ def workflow_instance_size(c: Composition, parser: WorkflowArgumentParser) -> No
 
                 CREATE CLUSTER single_replica_cluster SIZE = '4';
                 GRANT ALL ON CLUSTER single_replica_cluster TO materialize;
+                GRANT ALL ON CLUSTER single_replica_cluster TO "{ADMIN_USER}";
+                GRANT ALL PRIVILEGES ON SCHEMA public TO "{ADMIN_USER}";
                 """
             )
         )
@@ -2241,6 +2263,11 @@ def workflow_instance_size(c: Composition, parser: WorkflowArgumentParser) -> No
             )
             c.sql(
                 f"GRANT ALL PRIVILEGES ON CLUSTER cluster_u{cluster_id} TO materialize",
+                port=6877,
+                user="mz_system",
+            )
+            c.sql(
+                f'GRANT ALL PRIVILEGES ON CLUSTER cluster_u{cluster_id} TO "{ADMIN_USER}"',
                 port=6877,
                 user="mz_system",
             )

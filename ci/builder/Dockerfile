@@ -44,6 +44,7 @@ RUN apt-get update --fix-missing && TZ=UTC DEBIAN_FRONTEND=noninteractive apt-ge
     git \
     gnupg2 \
     libxml2 \
+    pigz \
     python3 \
     python3.12-venv \
     && rm -rf /var/lib/apt/lists/*
@@ -204,9 +205,9 @@ RUN apt-get update --fix-missing && TZ=UTC DEBIAN_FRONTEND=noninteractive apt-ge
     jq \
     lcov \
     libc-dbg \
-    libclang-common-15-dev \
+    libclang-common-18-dev \
     libclang-dev \
-    libclang-rt-15-dev \
+    libclang-rt-18-dev \
     libpq-dev \
     lld \
     llvm \
@@ -356,10 +357,10 @@ RUN if [ $ARCH_GCC = x86_64 ]; then \
 
 # Install KinD, kubectl, helm & helm-docs
 
-RUN curl -fsSL https://kind.sigs.k8s.io/dl/v0.14.0/kind-linux-$ARCH_GO > /usr/local/bin/kind \
+RUN curl -fsSL https://kind.sigs.k8s.io/dl/v0.29.0/kind-linux-$ARCH_GO > /usr/local/bin/kind \
     && chmod +x /usr/local/bin/kind \
-    && if [ $ARCH_GO = amd64 ]; then echo 'af5e8331f2165feab52ec2ae07c427c7b66f4ad044d09f253004a20252524c8b /usr/local/bin/kind' | sha256sum --check; fi \
-    && if [ $ARCH_GO = arm64 ]; then echo '95c9601f21fdb2c286442339d5e370149b4fe2fc7c49f615647e4e27bdfb17e2 /usr/local/bin/kind' | sha256sum --check; fi
+    && if [ $ARCH_GO = amd64 ]; then echo 'c72eda46430f065fb45c5f70e7c957cc9209402ef309294821978677c8fb3284 /usr/local/bin/kind' | sha256sum --check; fi \
+    && if [ $ARCH_GO = arm64 ]; then echo '03d45095dbd9cc1689f179a3e5e5da24b77c2d1b257d7645abf1b4174bebcf2a /usr/local/bin/kind' | sha256sum --check; fi
 
 RUN curl -fsSL https://dl.k8s.io/release/v1.24.3/bin/linux/$ARCH_GO/kubectl > /usr/local/bin/kubectl \
     && chmod +x /usr/local/bin/kubectl \
@@ -404,6 +405,11 @@ RUN curl -fsSL https://github.com/mikefarah/yq/releases/download/v4.45.1/yq_linu
     && if [ $ARCH_GO = arm64 ]; then echo 'ceea73d4c86f2e5c91926ee0639157121f5360da42beeb8357783d79c2cc6a1d yq' | sha256sum --check; fi \
     && chmod +x yq \
     && mv yq /usr/local/bin
+
+RUN curl -fsSL https://github.com/trufflesecurity/trufflehog/releases/download/v3.89.1/trufflehog_3.89.1_linux_$ARCH_GO.tar.gz > trufflehog.tar.gz \
+    && if [ $ARCH_GO = amd64 ]; then echo 'c187e25dd1a68ba24a47cc15f334625cb5a7b77f4c75837398950accfc752d59 trufflehog.tar.gz' | sha256sum --check; fi \
+    && if [ $ARCH_GO = arm64 ]; then echo '5c3786dec219d17c1f3a5f2f97ef8fa16b029ce7df19ca2389e667eca492f78d trufflehog.tar.gz' | sha256sum --check; fi \
+    && tar -xzf trufflehog.tar.gz -C /usr/local/bin trufflehog
 
 # Hardcode some known SSH hosts, or else SSH will ask whether the host is
 # trustworthy on the first connection.

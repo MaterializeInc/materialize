@@ -503,6 +503,15 @@ fn test_subscribe_basic() {
 
     server.enable_feature_flags(&["enable_index_options", "enable_logical_compaction_window"]);
 
+    let mut sys_client = server.connect_internal(postgres::NoTls).unwrap();
+
+    sys_client
+        .execute(
+            "ALTER SYSTEM SET constraint_based_timestamp_selection = 'verify'",
+            &[],
+        )
+        .unwrap();
+
     // Create a table with disabled compaction.
     client_writes
         .batch_execute("CREATE TABLE t (data text) WITH (RETAIN HISTORY FOR '1000 hours')")

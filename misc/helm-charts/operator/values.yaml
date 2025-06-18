@@ -23,11 +23,6 @@ operator:
     startupLogFilter: "INFO,mz_orchestratord=TRACE"
     enableInternalStatementLogging: true
 
-  features:
-    # -- Whether to enable environmentd rbac checks
-    # TODO: this is not yet supported in the helm chart
-    authentication: false
-
   # Cloud provider configuration
   cloudProvider:
     # -- Specifies cloud provider. Valid values are 'aws', 'gcp', 'azure' , 'generic', or 'local'

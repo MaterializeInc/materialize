@@ -25,6 +25,7 @@ from materialize.cloudtest.k8s.environmentd import (
     EnvironmentdSecret,
     EnvironmentdService,
     EnvironmentdStatefulSet,
+    ListenersConfigMap,
     MaterializedAliasService,
 )
 from materialize.cloudtest.k8s.minio import Minio
@@ -52,6 +53,7 @@ class MaterializeApplication(CloudtestApplicationBase):
     ) -> None:
         self.tag = tag
         self.secret = EnvironmentdSecret()
+        self.listeners_configmap = ListenersConfigMap()
         self.environmentd = EnvironmentdService()
         self.materialized_alias = MaterializedAliasService()
         self.testdrive = TestdrivePod(
@@ -82,6 +84,7 @@ class MaterializeApplication(CloudtestApplicationBase):
             VpcEndpointsClusterRole(),
             AdminRoleBinding(),
             self.secret,
+            self.listeners_configmap,
             EnvironmentdStatefulSet(
                 release_mode=self.release_mode,
                 tag=self.tag,

@@ -65,22 +65,50 @@ pub const LGALLOC_BACKGROUND_INTERVAL: Config<Duration> = Config::new(
 /// Enable lgalloc's eager memory return/reclamation feature.
 pub const LGALLOC_FILE_GROWTH_DAMPENER: Config<usize> = Config::new(
     "lgalloc_file_growth_dampener",
-    0,
+    2,
     "Lgalloc's file growth dampener parameter.",
 );
 
 /// Enable lgalloc's eager memory return/reclamation feature.
 pub const LGALLOC_LOCAL_BUFFER_BYTES: Config<usize> = Config::new(
     "lgalloc_local_buffer_bytes",
-    32 << 20,
+    64 << 20,
     "Lgalloc's local buffer bytes parameter.",
 );
 
 /// The bytes to reclaim (slow path) per size class, for each background thread activation.
 pub const LGALLOC_SLOW_CLEAR_BYTES: Config<usize> = Config::new(
     "lgalloc_slow_clear_bytes",
-    32 << 20,
+    128 << 20,
     "Clear byte size per size class for every invocation",
+);
+
+/// Interval to run the lgalloc limiter. A zero duration disables the limiter.
+pub const LGALLOC_LIMITER_INTERVAL: Config<Duration> = Config::new(
+    "lgalloc_limiter_interval",
+    Duration::from_secs(10),
+    "Interval to run the lgalloc limiter. A zero duration disables the limiter.",
+);
+
+/// Factor of the memory limit that lgalloc will be permitted to use before terminating the process.
+pub const LGALLOC_LIMITER_USAGE_FACTOR: Config<f64> = Config::new(
+    "lgalloc_limiter_usage_factor",
+    2.,
+    "Factor of the memory limit that lgalloc will use before terminating the process.",
+);
+
+/// Bias to the lgalloc limiter usage factor.
+pub const LGALLOC_LIMITER_USAGE_BIAS: Config<f64> = Config::new(
+    "lgalloc_limiter_usage_bias",
+    1.,
+    "Multiplicative bias to lgalloc_limiter_usage_factor.",
+);
+
+/// Burst factor to disk limit.
+pub const LGALLOC_LIMITER_BURST_FACTOR: Config<f64> = Config::new(
+    "lgalloc_limiter_burst_factor",
+    0.,
+    "Multiplicative burst factor to disk limit.",
 );
 
 /// Enable lgalloc for columnation.
@@ -127,7 +155,7 @@ pub const DATAFLOW_MAX_INFLIGHT_BYTES_CC: Config<Option<usize>> = Config::new(
 /// The smallest value `0` corresponds to the greatest allowed growth, of doubling.
 pub const CONSOLIDATING_VEC_GROWTH_DAMPENER: Config<usize> = Config::new(
     "consolidating_vec_growth_dampener",
-    0,
+    1,
     "Dampener in growth rate for consolidating vector size",
 );
 
@@ -229,6 +257,75 @@ pub const COMPUTE_LOGICAL_BACKPRESSURE_INFLIGHT_SLACK: Config<Duration> = Config
     "Round observed timestamps to slack.",
 );
 
+/// Whether to use `drop_dataflow` to actively cancel dataflows.
+pub const ENABLE_ACTIVE_DATAFLOW_CANCELATION: Config<bool> = Config::new(
+    "enable_compute_active_dataflow_cancelation",
+    false,
+    "Whether to use `drop_dataflow` to actively cancel compute dataflows.",
+);
+
+/// Whether to enable the peek response stash, for sending back large peek
+/// responses. The response stash will only be used for results that exceed
+/// `compute_peek_response_stash_threshold_bytes`.
+pub const ENABLE_PEEK_RESPONSE_STASH: Config<bool> = Config::new(
+    "enable_compute_peek_response_stash",
+    false,
+    "Whether to enable the peek response stash, for sending back large peek responses. Will only be used for results that exceed compute_peek_response_stash_threshold_bytes.",
+);
+
+/// The threshold for peek response size above which we should use the peek
+/// response stash. Only used if the peek response stash is enabled _and_ if the
+/// query is "streamable" (roughly: doesn't have an ORDER BY).
+pub const PEEK_RESPONSE_STASH_THRESHOLD_BYTES: Config<usize> = Config::new(
+    "compute_peek_response_stash_threshold_bytes",
+    1024 * 1024 * 300, /* 300mb */
+    "The threshold above which to use the peek response stash, for sending back large peek responses.",
+);
+
+/// The target number of maximum runs in the batches written to the stash.
+///
+/// Setting this reasonably low will make it so batches get consolidated/sorted
+/// concurrently with data being written. Which will in turn make it so that we
+/// have to do less work when reading/consolidating those batches in
+/// `environmentd`.
+pub const PEEK_RESPONSE_STASH_BATCH_MAX_RUNS: Config<usize> = Config::new(
+    "compute_peek_response_stash_batch_max_runs",
+    // The lowest possible setting, do as much work as possible on the
+    // `clusterd` side.
+    2,
+    "The target number of maximum runs in the batches written to the stash.",
+);
+
+/// The target size for batches of rows we read out of the peek stash.
+pub const PEEK_RESPONSE_STASH_READ_BATCH_SIZE_BYTES: Config<usize> = Config::new(
+    "compute_peek_response_stash_read_batch_size_bytes",
+    1024 * 1024 * 100, /* 100mb */
+    "The target size for batches of rows we read out of the peek stash.",
+);
+
+/// The memory budget for consolidating stashed peek responses in
+/// `environmentd`.
+pub const PEEK_RESPONSE_STASH_READ_MEMORY_BUDGET_BYTES: Config<usize> = Config::new(
+    "compute_peek_response_stash_read_memory_budget_bytes",
+    1024 * 1024 * 64, /* 64mb */
+    "The memory budget for consolidating stashed peek responses in environmentd.",
+);
+
+/// The number of batches to pump from the peek result iterator when stashing peek responses.
+pub const PEEK_STASH_NUM_BATCHES: Config<usize> = Config::new(
+    "compute_peek_stash_num_batches",
+    100,
+    "The number of batches to pump from the peek result iterator (in one iteration through the worker loop) when stashing peek responses.",
+);
+
+/// The size of each batch, as number of rows, pumped from the peek result
+/// iterator when stashing peek responses.
+pub const PEEK_STASH_BATCH_SIZE: Config<usize> = Config::new(
+    "compute_peek_stash_batch_size",
+    100000,
+    "The size, as number of rows, of each batch pumped from the peek result iterator (in one iteration through the worker loop) when stashing peek responses.",
+);
+
 /// Adds the full set of all compute `Config`s.
 pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
     configs
@@ -241,6 +338,10 @@ pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
         .add(&LGALLOC_FILE_GROWTH_DAMPENER)
         .add(&LGALLOC_LOCAL_BUFFER_BYTES)
         .add(&LGALLOC_SLOW_CLEAR_BYTES)
+        .add(&LGALLOC_LIMITER_INTERVAL)
+        .add(&LGALLOC_LIMITER_USAGE_FACTOR)
+        .add(&LGALLOC_LIMITER_USAGE_BIAS)
+        .add(&LGALLOC_LIMITER_BURST_FACTOR)
         .add(&ENABLE_LGALLOC_EAGER_RECLAMATION)
         .add(&ENABLE_COLUMNATION_LGALLOC)
         .add(&ENABLE_COLUMNAR_LGALLOC)
@@ -259,4 +360,12 @@ pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
         .add(&ENABLE_COMPUTE_LOGICAL_BACKPRESSURE)
         .add(&COMPUTE_LOGICAL_BACKPRESSURE_MAX_RETAINED_CAPABILITIES)
         .add(&COMPUTE_LOGICAL_BACKPRESSURE_INFLIGHT_SLACK)
+        .add(&ENABLE_ACTIVE_DATAFLOW_CANCELATION)
+        .add(&ENABLE_PEEK_RESPONSE_STASH)
+        .add(&PEEK_RESPONSE_STASH_THRESHOLD_BYTES)
+        .add(&PEEK_RESPONSE_STASH_BATCH_MAX_RUNS)
+        .add(&PEEK_RESPONSE_STASH_READ_BATCH_SIZE_BYTES)
+        .add(&PEEK_RESPONSE_STASH_READ_MEMORY_BUDGET_BYTES)
+        .add(&PEEK_STASH_NUM_BATCHES)
+        .add(&PEEK_STASH_BATCH_SIZE)
 }

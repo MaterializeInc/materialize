@@ -1,3 +1,5 @@
+#!/usr/bin/env bash
+
 # Copyright Materialize, Inc. and contributors. All rights reserved.
 #
 # Use of this software is governed by the Business Source License
@@ -6,15 +8,15 @@
 # As of the Change Date specified in that file, in accordance with
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
+#
+# check-copyright.sh — check copyright headers.
 
-> DROP CLUSTER IF EXISTS storage_cluster CASCADE;
+set -euo pipefail
 
-> CREATE CLUSTER storage_cluster REPLICAS (
-    r1 (
-      STORAGECTL ADDRESSES ['clusterd1:2100'],
-      STORAGE ADDRESSES ['clusterd1:2103'],
-      COMPUTECTL ADDRESSES ['clusterd1:2101'],
-      COMPUTE ADDRESSES ['clusterd1:2102'],
-      WORKERS 4
-    )
-  )
+cd "$(dirname "$0")/../../../.."
+
+. misc/shlib/shlib.bash
+
+try bin/lint-test-flags
+
+try_status_report

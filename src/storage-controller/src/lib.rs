@@ -2387,9 +2387,10 @@ where
                                 // Send the results down our channel.
                                 (pending.result_tx)(batches)
                             }
-                            // TODO(cf2): When we support running COPY FROM on multiple
-                            // replicas we can probably just ignore the case of `None`.
-                            None => mz_ore::soft_panic_or_log!("no sender for {ingestion_id}!"),
+                            None => {
+                                // We might not be tracking this oneshot ingestion anymore because
+                                // it was canceled.
+                            }
                         }
                     }
                 }

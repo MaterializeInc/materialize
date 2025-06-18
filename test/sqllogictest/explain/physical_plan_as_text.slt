@@ -104,7 +104,7 @@ mode cockroach
 
 # Test constant error.
 query T multiline
-EXPLAIN PHYSICAL PLAN WITH(no fast path) AS TEXT FOR
+EXPLAIN PHYSICAL PLAN WITH(no fast path) AS VERBOSE TEXT FOR
 SELECT 1 / 0
 ----
 Explained Query:
@@ -116,7 +116,7 @@ EOF
 
 # Test constant with two elements.
 query T multiline
-EXPLAIN PHYSICAL PLAN WITH(no fast path) AS TEXT FOR
+EXPLAIN PHYSICAL PLAN WITH(no fast path) AS VERBOSE TEXT FOR
 (SELECT 1, 2) UNION ALL (SELECT 1, 2) UNION ALL (SELECT 3, 4)
 ----
 Explained Query:
@@ -130,7 +130,7 @@ EOF
 
 # FastPathPlan is show instead of PHYSICAL PLAN if present.
 query T multiline
-EXPLAIN PHYSICAL PLAN AS TEXT FOR
+EXPLAIN PHYSICAL PLAN AS VERBOSE TEXT FOR
 SELECT * FROM t where a = 5
 ----
 Explained Query (fast path):
@@ -148,7 +148,7 @@ EOF
 
 # PassArrangements plan (identity transform on an arranged input).
 query T multiline
-EXPLAIN PHYSICAL PLAN WITH(no fast path) AS TEXT FOR
+EXPLAIN PHYSICAL PLAN WITH(no fast path) AS VERBOSE TEXT FOR
 SELECT * FROM t
 ----
 Explained Query:
@@ -166,7 +166,7 @@ EOF
 
 # PassArrangements plan (identity transform on a raw input).
 query T multiline
-EXPLAIN PHYSICAL PLAN WITH(no fast path) AS TEXT FOR
+EXPLAIN PHYSICAL PLAN WITH(no fast path) AS VERBOSE TEXT FOR
 SELECT * FROM u
 ----
 Explained Query:
@@ -181,7 +181,7 @@ EOF
 
 # GetArrangement plan (linear transform of an arranged input).
 query T multiline
-EXPLAIN PHYSICAL PLAN WITH(no fast path) AS TEXT FOR
+EXPLAIN PHYSICAL PLAN WITH(no fast path) AS VERBOSE TEXT FOR
 SELECT a + b, 1 FROM t
 ----
 Explained Query:
@@ -202,7 +202,7 @@ EOF
 
 # GetCollection plan (linear transform of a raw input).
 query T multiline
-EXPLAIN PHYSICAL PLAN WITH(no fast path) AS TEXT FOR
+EXPLAIN PHYSICAL PLAN WITH(no fast path) AS VERBOSE TEXT FOR
 SELECT c + d, 1 FROM u
 ----
 Explained Query:
@@ -219,7 +219,7 @@ EOF
 
 # TopKBasic plan.
 query T multiline
-EXPLAIN PHYSICAL PLAN WITH(no fast path) AS TEXT FOR
+EXPLAIN PHYSICAL PLAN WITH(no fast path) AS VERBOSE TEXT FOR
 INDEX ov_a_idx
 ----
 materialize.public.ov_a_idx:
@@ -249,7 +249,7 @@ EOF
 
 # MonotonicTopK plan.
 query T multiline
-EXPLAIN PHYSICAL PLAN WITH(no fast path) AS TEXT FOR
+EXPLAIN PHYSICAL PLAN WITH(no fast path) AS VERBOSE TEXT FOR
 SELECT * FROM (SELECT * FROM t ORDER BY b asc, a desc LIMIT 5)
 ----
 Explained Query:
@@ -271,7 +271,7 @@ EOF
 
 # Test Threshold, Union, Distinct, Negate.
 query T multiline
-EXPLAIN PHYSICAL PLAN AS TEXT FOR
+EXPLAIN PHYSICAL PLAN AS VERBOSE TEXT FOR
 SELECT a FROM t EXCEPT ALL SELECT b FROM mv
 ----
 Explained Query:
@@ -303,7 +303,7 @@ EOF
 
 # Test CTEs.
 query T multiline
-EXPLAIN PHYSICAL PLAN AS TEXT FOR
+EXPLAIN PHYSICAL PLAN AS VERBOSE TEXT FOR
 WITH cte(x) as (SELECT a FROM t EXCEPT ALL SELECT b FROM mv)
 (SELECT x + 1 FROM cte UNION ALL SELECT x - 1 FROM cte)
 ----
@@ -354,7 +354,7 @@ EOF
 
 # Test Mfp.
 query T multiline
-EXPLAIN PHYSICAL PLAN AS TEXT FOR
+EXPLAIN PHYSICAL PLAN AS VERBOSE TEXT FOR
 WITH cte(x) as (SELECT a FROM t EXCEPT ALL SELECT b FROM mv)
 SELECT x * 5 FROM cte WHERE x = 5
 ----
@@ -403,7 +403,7 @@ EOF
 
 # Test FlatMap.
 query T multiline
-EXPLAIN PHYSICAL PLAN AS TEXT FOR
+EXPLAIN PHYSICAL PLAN AS VERBOSE TEXT FOR
 SELECT generate_series(a, b) from t
 ----
 Explained Query:
@@ -425,7 +425,7 @@ EOF
 
 # Test Reduce::Distinct.
 query T multiline
-EXPLAIN PHYSICAL PLAN AS TEXT FOR
+EXPLAIN PHYSICAL PLAN AS VERBOSE TEXT FOR
 SELECT DISTINCT a, b FROM t
 ----
 Explained Query:
@@ -448,7 +448,7 @@ EOF
 
 # Test Reduce::Accumulable (with GROUP BY).
 query T multiline
-EXPLAIN PHYSICAL PLAN AS TEXT FOR
+EXPLAIN PHYSICAL PLAN AS VERBOSE TEXT FOR
 SELECT
   a,
   SUM(b),
@@ -479,7 +479,7 @@ EOF
 
 # Test Reduce::Accumulable (global aggregate).
 query T multiline
-EXPLAIN PHYSICAL PLAN AS TEXT FOR
+EXPLAIN PHYSICAL PLAN AS VERBOSE TEXT FOR
 SELECT
   SUM(b),
   COUNT(DISTINCT b)
@@ -531,7 +531,7 @@ EOF
 
 # Test Reduce::Hierarchical (with GROUP BY).
 query T multiline
-EXPLAIN PHYSICAL PLAN AS TEXT FOR
+EXPLAIN PHYSICAL PLAN AS VERBOSE TEXT FOR
 MATERIALIZED VIEW hierarchical_group_by_mv
 ----
 materialize.public.hierarchical_group_by_mv:
@@ -558,7 +558,7 @@ EOF
 
 # Test Reduce::Hierarchical (with GROUP BY, one-shot).
 query T multiline
-EXPLAIN PHYSICAL PLAN AS TEXT FOR
+EXPLAIN PHYSICAL PLAN AS VERBOSE TEXT FOR
 SELECT * FROM hierarchical_group_by
 ----
 Explained Query:
@@ -586,7 +586,7 @@ EOF
 
 # Test Reduce::Hierarchical (global aggregate).
 query T multiline
-EXPLAIN PHYSICAL PLAN AS TEXT FOR
+EXPLAIN PHYSICAL PLAN AS VERBOSE TEXT FOR
 MATERIALIZED VIEW hierarchical_global_mv
 ----
 materialize.public.hierarchical_global_mv:
@@ -636,7 +636,7 @@ EOF
 
 # Test Reduce::Hierarchical (global aggregate, one-shot).
 query T multiline
-EXPLAIN PHYSICAL PLAN AS TEXT FOR
+EXPLAIN PHYSICAL PLAN AS VERBOSE TEXT FOR
 SELECT * FROM hierarchical_global
 ----
 Explained Query:
@@ -687,7 +687,7 @@ EOF
 
 # Test Reduce::Basic (with GROUP BY).
 query T multiline
-EXPLAIN PHYSICAL PLAN AS TEXT FOR
+EXPLAIN PHYSICAL PLAN AS VERBOSE TEXT FOR
 SELECT
   a,
   STRING_AGG(b::text || '1',  ','),
@@ -735,7 +735,7 @@ EOF
 
 # Test Reduce::Basic (global aggregate).
 query T multiline
-EXPLAIN PHYSICAL PLAN AS TEXT FOR
+EXPLAIN PHYSICAL PLAN AS VERBOSE TEXT FOR
 SELECT
   STRING_AGG(b::text || '1',  ','),
   STRING_AGG(b::text || '2',  ',')
@@ -798,7 +798,7 @@ EOF
 
 # Test Reduce::Collated (with GROUP BY).
 query T multiline
-EXPLAIN PHYSICAL PLAN AS TEXT FOR
+EXPLAIN PHYSICAL PLAN AS VERBOSE TEXT FOR
 MATERIALIZED VIEW collated_group_by_mv
 ----
 materialize.public.collated_group_by_mv:
@@ -926,7 +926,7 @@ EOF
 
 # Test Reduce::Collated (with GROUP BY, one-shot).
 query T multiline
-EXPLAIN PHYSICAL PLAN AS TEXT FOR
+EXPLAIN PHYSICAL PLAN AS VERBOSE TEXT FOR
 SELECT * FROM collated_group_by
 ----
 Explained Query:
@@ -1055,7 +1055,7 @@ EOF
 
 # Test Reduce::Collated (global aggregate).
 query T multiline
-EXPLAIN PHYSICAL PLAN AS TEXT FOR
+EXPLAIN PHYSICAL PLAN AS VERBOSE TEXT FOR
 MATERIALIZED VIEW collated_global_mv
 ----
 materialize.public.collated_global_mv:
@@ -1187,7 +1187,7 @@ EOF
 
 # Test Reduce::Collated (global aggregate, one-shot).
 query T multiline
-EXPLAIN PHYSICAL PLAN AS TEXT FOR
+EXPLAIN PHYSICAL PLAN AS VERBOSE TEXT FOR
 SELECT * FROM collated_global
 ----
 Explained Query:
@@ -1322,7 +1322,7 @@ EOF
 
 # Test EXPLAIN INDEX for an indexed source
 query T multiline
-EXPLAIN PHYSICAL PLAN AS TEXT FOR
+EXPLAIN PHYSICAL PLAN AS VERBOSE TEXT FOR
 INDEX t_a_idx
 ----
 materialize.public.t_a_idx:
@@ -1341,7 +1341,7 @@ EOF
 
 # Test EXPLAIN INDEX for an indexed view (first index)
 query T multiline
-EXPLAIN PHYSICAL PLAN AS TEXT FOR
+EXPLAIN PHYSICAL PLAN AS VERBOSE TEXT FOR
 INDEX ov_a_idx;
 ----
 materialize.public.ov_a_idx:
@@ -1371,7 +1371,7 @@ EOF
 
 # Test EXPLAIN INDEX for an indexed view (based on a prior index)
 query T multiline
-EXPLAIN PHYSICAL PLAN AS TEXT FOR
+EXPLAIN PHYSICAL PLAN AS VERBOSE TEXT FOR
 INDEX ov_b_idx;
 ----
 materialize.public.ov_b_idx:
@@ -1396,7 +1396,7 @@ EOF
 
 # Test Join::Differential (acyclic).
 query T multiline
-EXPLAIN PHYSICAL PLAN WITH(non negative) AS TEXT FOR
+EXPLAIN PHYSICAL PLAN WITH(non negative) AS VERBOSE TEXT FOR
 SELECT b + d, c + e, a + e
 FROM t, u, v
 WHERE a = c AND d = e AND b + d > 42
@@ -1495,7 +1495,7 @@ CREATE INDEX v_e_idx ON V(e);
 
 # Test Join::Differential (cyclic).
 query T multiline
-EXPLAIN PHYSICAL PLAN WITH(non negative) AS TEXT FOR
+EXPLAIN PHYSICAL PLAN WITH(non negative) AS VERBOSE TEXT FOR
 SELECT a, b, c, d, e, f
 FROM t, u, v
 WHERE a = c AND d = e AND f = a
@@ -1508,71 +1508,70 @@ Explained Query:
       delta_stage[1]
         closure
           project=(#1, #2, #0)
-          ready_equivalences=#3{f} = #1{a}
-        lookup={ relation=2, key=[#0{e}] }
-        stream={ key=[#2{d}], thinning=(#0, #1) }
+        lookup={ relation=2, key=[#0{e}, #1{f}] }
+        stream={ key=[#2{d}, #0{a}], thinning=(#1) }
       delta_stage[0]
-        closure
-          filter=((#2{d}) IS NOT NULL)
         lookup={ relation=1, key=[#0{c}] }
         stream={ key=[#0{a}], thinning=(#1) }
-      initial_closure
-        filter=((#0{a}) IS NOT NULL)
       source={ relation=0, key=[#0{a}] }
     plan_path[1]
       final_closure
         project=(#0, #1, #0, #2, #2, #0)
       delta_stage[1]
         closure
-          project=(#1, #2, #0)
-          ready_equivalences=#4{f} = #3{c}
-        lookup={ relation=2, key=[#0{e}] }
-        stream={ key=[#3{d}], thinning=(#0..=#2) }
-      delta_stage[0]
-        closure
-          project=(#0, #2, #0, #1)
-          filter=((#0{a}) IS NOT NULL)
+          project=(#0, #2, #1)
         lookup={ relation=0, key=[#0{a}] }
         stream={ key=[#0{c}], thinning=(#1) }
-      initial_closure
-        filter=((#1{d}) IS NOT NULL)
+      delta_stage[0]
+        closure
+          project=(#1, #0)
+        lookup={ relation=2, key=[#0{e}, #1{f}] }
+        stream={ key=[#1{d}, #0{c}], thinning=() }
       source={ relation=1, key=[#0{c}] }
     plan_path[2]
       final_closure
         project=(#0, #1, #0, #2, #2, #0)
       delta_stage[1]
         closure
-          project=(#1, #2, #0)
-          filter=((#0{d}) IS NOT NULL)
-          ready_equivalences=#3{f} = #4{c}
-        lookup={ relation=1, key=[#1{d}] }
-        stream={ key=[#2{e}], thinning=(#0, #1, #3) }
-      delta_stage[0]
-        closure
-          project=(#0, #2, #1, #0)
-          filter=((#0{a}) IS NOT NULL)
+          project=(#0, #2, #1)
         lookup={ relation=0, key=[#0{a}] }
         stream={ key=[#1{f}], thinning=(#0) }
-      source={ relation=2, key=[#0{e}] }
+      delta_stage[0]
+        closure
+          project=(#1, #0)
+        lookup={ relation=1, key=[#0{c}, #1{d}] }
+        stream={ key=[#1{f}, #0{e}], thinning=() }
+      source={ relation=2, key=[#0{e}, #1{f}] }
     Get::PassArrangements materialize.public.t
       raw=false
       arrangements[0]={ key=[#0{a}], permutation=id, thinning=(#1) }
       types=[integer?, integer?]
-    Get::PassArrangements materialize.public.u
-      raw=false
+    ArrangeBy
+      raw=true
       arrangements[0]={ key=[#0{c}], permutation=id, thinning=(#1) }
-      arrangements[1]={ key=[#1{d}], permutation={#0: #1, #1: #0}, thinning=(#0) }
-      types=[integer?, integer?]
-    Get::PassArrangements materialize.public.v
-      raw=false
-      arrangements[0]={ key=[#0{e}], permutation=id, thinning=(#1) }
-      types=[integer?, integer?]
+      arrangements[1]={ key=[#0{c}, #1{d}], permutation=id, thinning=() }
+      types=[integer, integer]
+      Get::Arrangement materialize.public.u
+        filter=((#0{c}) IS NOT NULL AND (#1{d}) IS NOT NULL)
+        key=#0{c}
+        raw=false
+        arrangements[0]={ key=[#0{c}], permutation=id, thinning=(#1) }
+        types=[integer?, integer?]
+    ArrangeBy
+      raw=true
+      arrangements[0]={ key=[#0{e}, #1{f}], permutation=id, thinning=() }
+      types=[integer, integer]
+      Get::Arrangement materialize.public.v
+        filter=((#0{e}) IS NOT NULL AND (#1{f}) IS NOT NULL)
+        key=#0{e}
+        raw=false
+        arrangements[0]={ key=[#0{e}], permutation=id, thinning=(#1) }
+        types=[integer?, integer?]
 
 Used Indexes:
   - materialize.public.t_a_idx (delta join 1st input (full scan))
-  - materialize.public.u_c_idx (delta join lookup)
-  - materialize.public.u_d_idx (delta join lookup)
-  - materialize.public.v_e_idx (delta join lookup)
+  - materialize.public.u_c_idx (*** full scan ***)
+  - materialize.public.v_e_idx (*** full scan ***)
 
 Target cluster: quickstart
 
@@ -1580,7 +1579,7 @@ EOF
 
 # Test Join::Delta (star).
 query T multiline
-EXPLAIN PHYSICAL PLAN WITH(non negative) AS TEXT FOR
+EXPLAIN PHYSICAL PLAN WITH(non negative) AS VERBOSE TEXT FOR
 SELECT a, b, c, d, e, f
 FROM t, u, v
 WHERE a = c and a = e
@@ -1695,7 +1694,7 @@ EOF
 # Test `LetRec` printing, with and without RECURSION LIMIT
 # With materialize#27389 this stopped testing a thing; see issue database-issues#8294.
 query T multiline
-EXPLAIN PHYSICAL PLAN AS TEXT FOR
+EXPLAIN PHYSICAL PLAN AS VERBOSE TEXT FOR
 SELECT * FROM (
     WITH MUTUALLY RECURSIVE (RECURSION LIMIT 5)
         foo (a int8) AS (SELECT DISTINCT a FROM foo)
@@ -1716,7 +1715,7 @@ Target cluster: mz_catalog_server
 EOF
 
 query T multiline
-EXPLAIN PHYSICAL PLAN AS TEXT FOR
+EXPLAIN PHYSICAL PLAN AS VERBOSE TEXT FOR
 SELECT lead(b, 3, -5) IGNORE NULLS OVER () as l
 FROM t;
 ----
@@ -1746,7 +1745,7 @@ Target cluster: quickstart
 EOF
 
 query T multiline
-EXPLAIN PHYSICAL PLAN AS TEXT FOR
+EXPLAIN PHYSICAL PLAN AS VERBOSE TEXT FOR
 SELECT lag(b, 3, -5) IGNORE NULLS OVER (PARTITION BY b, a ORDER BY b+8, a-7) as l
 FROM t;
 ----
@@ -1777,7 +1776,7 @@ EOF
 
 # Test annotation of node IDs.
 query T multiline
-EXPLAIN PHYSICAL PLAN WITH (node identifiers) AS TEXT FOR
+EXPLAIN PHYSICAL PLAN WITH (node identifiers) AS VERBOSE TEXT FOR
 WITH cte(x) as (SELECT a FROM t EXCEPT ALL SELECT b FROM mv)
 SELECT x * 5 FROM cte WHERE x = 5
 ----
@@ -1831,7 +1830,7 @@ COMPLETE 0
 
 # Test Reduce::Basic (global aggregate).
 query T multiline
-EXPLAIN PHYSICAL PLAN AS TEXT FOR
+EXPLAIN PHYSICAL PLAN AS VERBOSE TEXT FOR
 SELECT
   STRING_AGG(b::text || '1',  ','),
   STRING_AGG(b::text || '2',  ',')

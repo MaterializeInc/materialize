@@ -1966,7 +1966,7 @@ pub mod datadriven {
             .expect("unknown batch")
             .clone();
         let truncated_desc = Description::new(lower, upper, batch.desc.since().clone());
-        let () = validate_truncate_batch(&batch, &truncated_desc, false)?;
+        let () = validate_truncate_batch(&batch, &truncated_desc, false, true)?;
         batch.desc = truncated_desc;
         datadriven.batches.insert(output.to_owned(), batch.clone());
         Ok(format!("parts={} len={}\n", batch.part_count(), batch.len))
@@ -2372,7 +2372,7 @@ pub mod datadriven {
         let mut batch_refs: Vec<_> = batches.iter_mut().collect();
 
         let () = writer
-            .compare_and_append_batch(batch_refs.as_mut_slice(), expected_upper, new_upper)
+            .compare_and_append_batch(batch_refs.as_mut_slice(), expected_upper, new_upper, true)
             .await?
             .map_err(|err| anyhow!("upper mismatch: {:?}", err))?;
 

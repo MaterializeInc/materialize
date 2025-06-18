@@ -37,6 +37,10 @@ $ sleep-is-probably-flaky-i-have-justified-my-need-with-a-comment duration="1s"
 $ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
 ALTER SYSTEM SET enable_rbac_checks = false
 
+# No peek result stash for large results, so that result sizes match the expectations below.
+$ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
+ALTER SYSTEM SET enable_compute_peek_response_stash = false
+
 # Now the real test begins
 
 # This will be executed on `mz_catalog_server`, due to auto-routing of "simple" queries.

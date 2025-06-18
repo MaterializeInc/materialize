@@ -32,7 +32,7 @@ proptest = { version = "1.7.0", default-features = false, features = ["std"] }
 proptest-derive = { version = "0.5.1", features = ["boxed_union"] }
 prost = { version = "0.13.5", features = ["no-recursion-limit"] }
 serde = { version = "1.0.218", features = ["derive"] }
-smallvec = { version = "1.15.0", features = ["union"] }
+smallvec = { version = "1.15.1", features = ["union"] }
 static_assertions = "1.1"
 thiserror = "2.0.11"
 tiberius = { version = "0.12", features = ["chrono", "sql-browser-tokio", "tds73"], default-features = false }

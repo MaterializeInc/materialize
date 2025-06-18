@@ -989,6 +989,12 @@ impl InProgressRows {
             remaining,
         }
     }
+
+    /// Determines whether the underlying stream has ended and there are also no more rows
+    /// stashed in `current`.
+    pub fn no_more_rows(&self) -> bool {
+        self.remaining.no_more_rows && self.current.is_none()
+    }
 }
 
 /// A channel of batched rows.

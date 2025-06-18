@@ -20,13 +20,13 @@ pub enum ConstraintBasedTimestampSelection {
 
 impl Default for ConstraintBasedTimestampSelection {
     fn default() -> Self {
-        Self::Verify
+        Self::Enabled
     }
 }
 
 impl ConstraintBasedTimestampSelection {
     pub const fn const_default() -> Self {
-        Self::Verify
+        Self::Enabled
     }
 
     pub fn from_str(s: &str) -> Self {

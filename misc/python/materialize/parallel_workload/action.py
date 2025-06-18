@@ -1080,9 +1080,24 @@ class FlipFlagsAction(Action):
         )
         self.flags_with_values["compute_apply_column_demands"] = BOOLEAN_FLAG_VALUES
         self.flags_with_values["enable_alter_table_add_column"] = BOOLEAN_FLAG_VALUES
+        self.flags_with_values["enable_compute_active_dataflow_cancelation"] = (
+            BOOLEAN_FLAG_VALUES
+        )
+        self.flags_with_values["enable_compute_peek_response_stash"] = (
+            BOOLEAN_FLAG_VALUES
+        )
+        self.flags_with_values["compute_peek_response_stash_threshold_bytes"] = [
+            "0",  # "force enabled"
+            "1048576",  # 1 MiB, an in-between value
+            "314572800",  # 300 MiB, the production value
+        ]
 
         # If you are adding a new config flag in Materialize, consider using it
-        # here instead of just marking it as uninteresting to silence the linter.
+        # here instead of just marking it as uninteresting to silence the
+        # linter. parallel-workload randomly flips the flags in
+        # `flags_with_values` while running. If a new flag has interesting
+        # behavior, you should add it. Feature flags which turn on/off
+        # externally visible features should not be flipped.
         self.uninteresting_flags: list[str] = [
             "enable_mz_join_core",
             "enable_compute_correction_v2",
@@ -1094,6 +1109,10 @@ class FlipFlagsAction(Action):
             "lgalloc_file_growth_dampener",
             "lgalloc_local_buffer_bytes",
             "lgalloc_slow_clear_bytes",
+            "lgalloc_limiter_interval",
+            "lgalloc_limiter_usage_factor",
+            "lgalloc_limiter_usage_bias",
+            "lgalloc_limiter_burst_factor",
             "enable_columnation_lgalloc",
             "enable_columnar_lgalloc",
             "compute_server_maintenance_interval",
@@ -1252,12 +1271,18 @@ class FlipFlagsAction(Action):
             "enable_continual_task_builtins",
             "enable_expression_cache",
             "enable_multi_replica_sources",
-            "enable_self_managed_auth",
+            "enable_password_auth",
             "constraint_based_timestamp_selection",
             "persist_fast_path_order",
             "mz_metrics_lgalloc_map_refresh_interval",
             "mz_metrics_lgalloc_refresh_interval",
             "mz_metrics_rusage_refresh_interval",
+            "compute_peek_stash_num_batches",
+            "compute_peek_stash_batch_size",
+            "compute_peek_response_stash_batch_max_runs",
+            "compute_peek_response_stash_read_batch_size_bytes",
+            "compute_peek_response_stash_read_memory_budget_bytes",
+            "enable_timely_init_at_process_startup",
         ]
 
     def run(self, exe: Executor) -> bool:
@@ -1793,8 +1818,7 @@ class CancelAction(Action):
             extra_info=f"Canceling {worker}",
             http=Http.RANDOM,
         )
-        # Sleep less often to work around materialize#22228 / database-issues#835
-        time.sleep(self.rng.uniform(1, 10))
+        time.sleep(self.rng.uniform(0.1, 10))
         return True
 
 
@@ -1956,14 +1980,6 @@ class BackupRestoreAction(Action):
 
 
 class CreateWebhookSourceAction(Action):
-    def errors_to_ignore(self, exe: Executor) -> list[str]:
-        result = super().errors_to_ignore(exe)
-        if exe.db.scenario in (Scenario.Kill, Scenario.ZeroDowntimeDeploy):
-            result.extend(
-                ["cannot create webhook source in cluster with more than one replica"]
-            )
-        return result
-
     def run(self, exe: Executor) -> bool:
         with exe.db.lock:
             if len(exe.db.webhook_sources) >= MAX_WEBHOOK_SOURCES:
@@ -1975,7 +1991,7 @@ class CreateWebhookSourceAction(Action):
         with schema.lock, cluster.lock:
             if schema not in exe.db.schemas:
                 return False
-            if cluster not in exe.db.clusters or len(cluster.replicas) != 1:
+            if cluster not in exe.db.clusters:
                 return False
 
             source = WebhookSource(webhook_source_id, cluster, schema, self.rng)

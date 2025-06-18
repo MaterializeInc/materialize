@@ -21,11 +21,7 @@ operators:
     uses_memory: False
     memory_details: ""
     expansive: False
-
-    example: |
-      ```mzsql
-      Constant 2 rows
-      ```
+    example: "`→Constant (2 rows)`"
 
   - operator: Get
     plan_types: "optimized,raw"
@@ -38,28 +34,30 @@ operators:
 
     example: "`Get materialize.public.ordered`"
 
-  - operator: Get::~
+  - operator: Stream, Arranged, Index Lookup, Read
     plan_types: "LIR"
     description: |
       Produces rows from either an existing relation (source/view/materialized view/table) or from a previous
       CTE in the same plan.
-      There may be a `MapFilterProject` included in the lookup.
+      A parent `Fused Map/Filter/Project` operator can combine with this operator.
 
-      There are three types of `Get`.
+      There are four types of `Get`.
 
-      1. `Get::PassArrangements`, which means the plan will use an
-         existing [arrangement](/get-started/arrangements/#arrangements).
+      1. `Stream` indicates that the results are not [arranged](/get-started/arrangements/#arrangements) in memory
+         and will be streamed directly.
 
-      2. `Get::Arrangement`, which means that the results will be
-         _looked up_ in an existing arrangement.
+      2. `Arranged` indicates that the results are [arranged](/get-started/arrangements/#arrangements) in memory.
 
-      3. `Get::Collection`, which means that the results are
-         unarranged, and will be processed as they arrive.
+      2. `Index Lookup` indicates the results will be
+         _looked up_ in an existing [arrangement]((/get-started/arrangements/#arrangements).
+
+      3. `Read` indicates that the results are unarranged,
+          and will be processed as they arrive.
 
     uses_memory: False
     memory_details: ""
     expansive: False
-    example: "`Get::PassArrangements materialize.public.ordered`"
+    example: "`Arranged materialize.public.t`"
 
   - operator: Project
     plan_types: "optimized,raw"
@@ -84,12 +82,13 @@ operators:
       Each row has more data (i.e., longer rows but same number of rows).
     example: "`Map (((#1 * 10000000dec) / #2) * 1000dec)`"
 
-  - operator: MapFilterProject
+  - operator: Map/Filter/Project
     plan_types: "LIR"
     description: |
-      The number after the operator is the input operator's `lir_id`.
+      Computes new columns (maps), filters columns, and projects away columns. Works row-by-row.
+      Maps and filters will be printed, but projects will not.
 
-      Computes new columns, filters columns, and projects away columns. Works row-by-row.
+      These may be marked as **`Fused`** `Map/Filter/Project`, which means they will combine with the operator beneath them to run more efficiently.
     uses_memory: False
     memory_details: ""
     expansive: True
@@ -98,7 +97,12 @@ operators:
       Each row may also have less data, from the `Project`.
       There may be fewer rows, from the `Filter`.
 
-    example: "`MapFilterProject 5`"
+    example: |
+      ```mzsql
+      →Map/Filter/Project
+        Filter: (#0{a} < 7)
+        Map: (#0{a} + #1{b})
+      ```
 
   - operator: FlatMap
     plan_types: "optimized"
@@ -111,18 +115,25 @@ operators:
       Depends on the [table function](/sql/functions/#table-functions) used.
     example: "`FlatMap jsonb_foreach(#3)`"
 
-  - operator: FlatMap
+  - operator: Table Function
     plan_types: "LIR"
     description: |
-      The number after the operator is the input operator's `lir_id`.
-
       Appends the result of some (one-to-many) [table function](/sql/functions/#table-functions) to each row in the input.
+
+      A parent `Fused Table Function unnest_list` operator will fuse with its child `GroupAggregate` operator. Fusing these operator is part of how we efficiently compile window functions from SQL to dataflows.
+
+      A parent `Fused Map/Filter/Project` can combine with this operator.
+
     uses_memory: False
     memory_details: ""
     expansive: True
     expansive_details: |
       Depends on the [table function](/sql/functions/#table-functions) used.
-    example: "`FlatMap 3 (jsonb_foreach)`"
+    example: |
+      ```mzsql
+      →Table Function generate_series(#0{a}, #1{b}, 1)
+        Input key: (#0{a})
+      ```
 
   - operator: CallTable
     plan_types: "raw"
@@ -173,22 +184,28 @@ operators:
       Depends on the join order and facts about the joined collections.
     example: "`Join on=(#1 = #2) type=delta`"
 
-  - operator: Join::~
+  - operator: Differential Join, Delta Join
     plan_types: "LIR"
     description: |
-      The input operators are listed in the order performed by the join.
+      Both join operators indicate the join ordering selected.
 
       Returns combinations of rows from each input whenever some equality predicates are `true`.
 
-      There are two types of `Join`: `Join::Differential` (also called linear join) and `Join::Delta`, with [documented differences](/transform-data/optimization/#join).
+      Joins will indicate the join order of their children, starting from 0.
+      For example, `Differential Join %1 » %0` will join its second child into its first.
+
+      The [two joins differ in performance characteristics](/transform-data/optimization/#join).
     uses_memory: True
     memory_details: |
       Uses memory for 3-way or more differential joins.
     expansive: True
     expansive_details: |
       Depends on the join order and facts about the joined collections.
-    example: "`Join::Differential 6 » 7`"
-
+    example: |
+      ```mzsql
+      →Differential Join %1 » %0
+        Join stage %0: Lookup key #0{a} in %0
+      ```
 
   - operator: CrossJoin
     plan_types: "optimized"
@@ -216,34 +233,43 @@ operators:
     expansive: False
     example: "`Reduce group_by=[#0] aggregates=[max((#0 * #1))]`"
 
-  - operator: Reduce::~
+  - operator: GroupAggregate
     plan_types: "LIR"
     description: |
-      The number after the operator is the input operator's `lir_id`.
-
       Groups the input rows by some scalar expressions, reduces each group using some aggregate functions, and produces rows containing the group key and aggregate outputs.
 
-      There are five types of `Reduce`, ordered by increasing complexity:
+      There are five types of `GroupAggregate`, ordered by increasing complexity:
 
-      1. `Reduce::Distinct` corresponds to the SQL `DISTINCT` operator.
+      1. `Distinct GroupAggregate` corresponds to the SQL `DISTINCT` operator.
 
-      2. `Reduce::Accumulable` (e.g., `SUM`, `COUNT`) corresponds to several easy to implement aggregations that can be executed simultaneously and efficiently.
+      2. `Accumulable GroupAggregate` (e.g., `SUM`, `COUNT`) corresponds to several easy to implement aggregations that can be executed simultaneously and efficiently.
 
-      3. `Reduce::Hierarchical` (e.g., `MIN`, `MAX`) corresponds to an aggregation requiring a tower of arrangements. These can be either monotonic (more efficient) or bucketed. These may benefit from a hint; [see `mz_introspection.mz_expected_group_size_advice`](/sql/system-catalog/mz_introspection/#mz_expected_group_size_advice).
+      3. `Hierarchical GroupAggregate` (e.g., `MIN`, `MAX`) corresponds to an aggregation requiring a tower of arrangements. These can be either monotonic (more efficient) or bucketed. These may benefit from a hint; [see `mz_introspection.mz_expected_group_size_advice`](/sql/system-catalog/mz_introspection/#mz_expected_group_size_advice).
+         These may either be bucketed or monotonic (more efficient).
+         These may consolidate their output, which will increase memory usage.
 
-      4. `Reduce::Collation` corresponds to an arbitrary mix of reductions of different types, which will be performed separately and then joined together.
+      4. `Collated Multi-GroupAggregate` corresponds to an arbitrary mix of reductions of different types, which will be performed separately and then joined together.
 
-      5. `Reduce::Basic` (e.g., window functions, `list_agg`) corresponds to a single non-incremental aggregation.
+      5. `Non-incremental GroupAggregate` (e.g., window functions, `list_agg`) corresponds to a single non-incremental aggregation.
+         These are the most computationally intensive reductions.
+
+      A parent `Fused Map/Filter/Project` can combine with this operator.
 
     uses_memory: True
     memory_details: |
       `Distinct` and `Accumulable` aggregates use a moderate amount of memory (proportional to twice the output size).
       `MIN` and `MAX` aggregates can use significantly more memory. This can be improved by including group size hints in the query, see
       [`mz_introspection.mz_expected_group_size_advice`](/sql/system-catalog/mz_introspection/#mz_expected_group_size_advice).
-      `Basic` aggregates use memory proportional to the input + output size.
-      `Collation` aggregates use memory that is the sum of their constituents, plus some memory for the join at the end.
+      `Non-incremental` aggregates use memory proportional to the input + output size.
+      `Collated` aggregates use memory that is the sum of their constituents, plus some memory for the join at the end.
     expansive: False
-    example: "`Reduce::Accumulable 8`"
+    example: |
+      ```mzsql
+      →Accumulable GroupAggregate
+        Simple aggregates: count(*)
+        Post-process Map/Filter/Project
+          Filter: (#0 > 1)
+      ```
 
   - operator: Reduce
     plan_types: "raw"
@@ -293,26 +319,30 @@ operators:
     expansive: False
     example: "`TopK order_by=[#1 asc nulls_last, #0 desc nulls_first] limit=5`"
 
-  - operator: TopK::~
+  - operator: TopK
     plan_types: "LIR"
     description: |
-      The number after the operator is the input operator's `lir_id`.
-
       Groups the input rows, sorts them according to some ordering, and returns at most `K` rows at some offset from the top of the list, where `K` is some (possibly computed) limit.
 
       There are three types of `TopK`. Two are special cased for monotonic inputs (i.e., inputs which never retract data).
 
-      1. `TopK::MonotonicTop1`.
-      2. `TopK::MonotonicTopK`, which may give an expression indicating the limit.
-      3. `TopK::Basic`, a generic `TopK` plan.
+      1. `Monotonic Top1`.
+      2. `Monotonic TopK`, which may give an expression indicating the limit.
+      3. `Non-monotonic TopK`, a generic `TopK` plan.
+
+      Each version of the `TopK` operator may include grouping, ordering, and limit directives.
     uses_memory: True
     memory_details: |
-      `MonotonicTop1` or `MonotonicTopK` uses a moderate amount of memory. Other TopKs use significantly more memory as the operator can significantly overestimate
+      `Monotonic Top1` and `Monotonic TopK` use a moderate amount of memory. `Non-monotonic TopK` uses significantly more memory as the operator can significantly overestimate
       the group sizes. Consult
       [`mz_introspection.mz_expected_group_size_advice`](/sql/system-catalog/mz_introspection/#mz_expected_group_size_advice).
     expansive: False
-    example: "`TopK::Basic 10`"
-
+    example: |
+      ```mzsql
+      →Consolidating Monotonic TopK
+        Order By #1 asc nulls_last, #0 desc nulls_first
+        Limit 5
+      ```
 
   - operator: Negate
     plan_types: "optimized,raw"
@@ -323,14 +353,14 @@ operators:
     expansive: False
     example: "`Negate`"
 
-  - operator: Negate
+  - operator: Negate Diffs
     plan_types: "LIR"
     description: |
       Negates the row counts of the input. This is usually used in combination with union to remove rows from the other union input.
     uses_memory: False
     memory_details: ""
     expansive: False
-    example: "`Negate 17`"
+    example: "`→Negate Diffs`"
 
   - operator: Threshold
     plan_types: "optimized,raw"
@@ -342,7 +372,7 @@ operators:
     expansive: False
     example: "`Threshold`"
 
-  - operator: Threshold
+  - operator: Threshold Diffs
     plan_types: "LIR"
     description: |
       Removes any rows with negative counts.
@@ -350,7 +380,7 @@ operators:
     memory_details: |
       Uses memory proportional to the input and output size, twice.
     expansive: False
-    example: "`Threshold 47`"
+    example: "`→Threshold Diffs`"
 
   - operator: Union
     plan_types: "optimized,raw"
@@ -368,9 +398,9 @@ operators:
       Combines its inputs into a unified output, emitting one row for each row on any input. (Corresponds to `UNION ALL` rather than `UNION`/`UNION DISTINCT`.)
     uses_memory: True
     memory_details: |
-      If the union "consolidates output", it will make moderate use of memory, particularly at hydration time. If the union is not marked with "consolidates output", it will not consume memory.
+      A `Consolidating Union` will make moderate use of memory, particularly at hydration time. A `Union` that is not `Consolidating` will not consume memory.
     expansive: False
-    example: "`Union 7 10 11 14 (consolidates output)`"
+    example: "`→Consolidating Union`"
 
   - operator: ArrangeBy
     plan_types: "optimized"
@@ -390,10 +420,23 @@ operators:
     memory_details: |
       Uses memory proportional to the input size. Note that in the LIR / physical plan, `Arrange`/`ArrangeBy` almost always means that an arrangement will actually be created. (This is in contrast to the "optimized" plan, where an `ArrangeBy` being present in the plan often does not mean that an arrangement will actually be created.)
     expansive: False
-    example: "`Arrange 12`"
+    example: |
+      ```mzsql
+      →Arrange
+          Keys: 1 arrangement available, plus raw stream
+            Arrangement 0: #0
+      ```
+  - operator: Unarranged Raw Stream
+    plan_types: "LIR"
+    description: |
+      Indicates a point where data will be streamed (even if it is somehow already arranged).
+    uses_memory: False
+    expansive: False
+    example: "`→Unarranged Raw Stream`"
+
 
   - operator: With ... Return ...
-    plan_types: "optimized,raw"
+    plan_types: "optimized,raw,LIR"
     description: |
       Introduces CTEs, i.e., makes it possible for sub-plans to be consumed multiple times by downstream operators.
     uses_memory: False

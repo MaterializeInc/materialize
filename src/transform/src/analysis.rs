@@ -970,7 +970,7 @@ mod column_names {
         }
 
         /// Humanize the column to a [`String`], returns an empty [`String`] for
-        /// unknown columns.
+        /// unknown columns (or columns named `"?column?"`).
         pub fn humanize(&self, humanizer: &dyn ExprHumanizer) -> String {
             match self {
                 Self::Global(id, c) => humanizer.humanize_column(*id, *c).unwrap_or_default(),
@@ -995,6 +995,7 @@ mod column_names {
                 Self::Global(..) | Self::Aggregate(..) | Self::Annotated(..) => self.clone(),
                 Self::Unknown => name
                     .as_ref()
+                    .filter(|name| name.as_ref() != "\"?column?\"")
                     .map_or_else(|| Self::Unknown, |name| Self::Annotated(Arc::clone(name))),
             }
         }

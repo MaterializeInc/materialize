@@ -337,7 +337,7 @@ rules_rust_dependencies()
 
 RUST_VERSION = "1.87.0"
 
-RUST_NIGHTLY_VERSION = "nightly/2025-04-02"
+RUST_NIGHTLY_VERSION = "nightly/2025-06-04"
 
 load("//misc/bazel/toolchains:rust.bzl", "bindgen_toolchains", "rust_toolchains")
 
@@ -356,11 +356,11 @@ rust_toolchains(
                 "rustc": "bdf07b74624a35f41b6d4455062231136528ca2bc1ee2b516868ae013e281d30",
             },
             "nightly": {
-                "cargo": "0e8376dc79c840063a8cdeeff0f53e255fb91ec4ead2ca5109a5ec9c3f13cf54",
-                "clippy": "d1c40f30ccba46ce9802c10ff5e02034e8209ad2033f7b2a3a549f5c63ee7aed",
-                "llvm-tools": "e036730779756e79c73db930e3fbf4e1f11a9a6d30041205ab906ffff15cc203",
-                "rust-std": "937ee38916b93e1d6309f7ef709da0120aa3ee62c8e39f0241d90187aafa1df3",
-                "rustc": "6a78b11a4740b7a90926dae1f2c8c43259077599ac50b8dd752814cea6959f96",
+                "cargo": "f6d8abf91b0aad5ced38bddf42042f76ddd3d191f59a4490a709a7d6149f21f4",
+                "clippy": "0560eb77cc1574cdbd3a281b5c752f4bd22e5960d93edfefeaa0704b4b5f7e58",
+                "llvm-tools": "f4caae6c32115f7409c8131e86fc602552cd7a6b759d8c3e9fa374a652dd9635",
+                "rust-std": "5ffd6aba88685980c0f6fadcf6d073c8b0293afc05d9aa781ad0ef9ed677200f",
+                "rustc": "1174cdaa16831009e72c95b5c7aab0e1537d8bf3fed934c6f0ae18230f462bd0",
             },
         },
         "aarch64-unknown-linux-gnu": {
@@ -372,11 +372,11 @@ rust_toolchains(
                 "rustc": "4523e003a77db00da419685e1429315ebfc1fec8b2ab5ceaad90971e9be96b49",
             },
             "nightly": {
-                "cargo": "8f0a8b12effea97fd1930747dbd70857225a5465037844bb39ed9d17e01abfdd",
-                "clippy": "0a4bce6ad740405802d4c56d7ab9935825cc60bcc5f04bd1cc8896554a29833b",
-                "llvm-tools": "331d5dd0330447734e05d184ba59b310d075c889b2aa1a3003b7b24db30572e4",
-                "rust-std": "8f87d8e883cdca26233ead24eca0c62a39d0ff14b9813e8846f91f189ae635c2",
-                "rustc": "f5e2ad3ec85851fc9b24f331bde0d4985ab99f42c12a995853baed0bae64ef3c",
+                "cargo": "0c1ef992b461962902c2128206b30ff8432e8942becec48e112257de5717744a",
+                "clippy": "bdac515d1da8a11ec648456fc5d9ad0fbc8f2dd5b58d074b5227dbfb09f56c1e",
+                "llvm-tools": "f7ffbfae0cbcf2b4818f1421cdbaea3a0e4a1bc4d582c4f65e51a3e4938320ff",
+                "rust-std": "01032e1657b5ad397be7bc88ff41ac53f08ec4d5d0eb5817045abfc3e72e29cf",
+                "rustc": "1c9a4568b073a4722bc4e1a788093b0830bee094ab79ac83e942959349128321",
             },
         },
         "x86_64-apple-darwin": {
@@ -388,11 +388,11 @@ rust_toolchains(
                 "rustc": "0823c207629121f95087fe366ddfb0d96016cc3b50f7d1ea9e9f2d478ff391d5",
             },
             "nightly": {
-                "cargo": "d7c58810f851cb34110d5434a4f66f8bf444e896eb951e9cb744a7bef815c9a1",
-                "clippy": "e8e38063a4b66393c5c3b4da95651bcb2e0ba8bbb25ac944f72713de2daabf1f",
-                "llvm-tools": "93c5e0e64363b3e8a222df2703096731431abf1b08023a0737354e567c90988c",
-                "rust-std": "67c0251a6d798a0990f7700f672a4c86b09ffad24d215860f84cfa32c4c81a5c",
-                "rustc": "3c1228f40db684108cb5ff2e0b12adf5f1b5a1c3fa930bcbc6465eeacd55f3a9",
+                "cargo": "0d5ed7f93a482e8cc0d90592e1d2e893946079a7aa897f9ce281ccdf1be97ee1",
+                "clippy": "3c124247341985c50d9b4e9c414e1b165e48f7b21c298c78b6b922dd1715cace",
+                "llvm-tools": "52f0a178ccff6ecd693849bf2e6a4dda329ae0a08997a9ad78d75a90137afc08",
+                "rust-std": "d1d2feeb1c19f2e37a83aa0547305e848b066248d960c2e7258d26ab679eb92d",
+                "rustc": "05e0932f511d547ae4d320163e61762cfe98d203b30d7a84ecc5883312c70c0f",
             },
         },
         "x86_64-unknown-linux-gnu": {
@@ -404,11 +404,11 @@ rust_toolchains(
                 "rustc": "923bcb7be267579a79ae9a11126739619f180a6544bcc1c0c3a752c1aecd6e7a",
             },
             "nightly": {
-                "cargo": "74dc885d2f1374ca9999c094ab411b3d0abc9616ad2ea39c5dab429f0321e15d",
-                "clippy": "ecafbe40e08b2c4557494544d1402364e3cfc6e729435fe41188e0ea147dc093",
-                "llvm-tools": "4fb508d652140eb8d607f8d65f99f0dacc93b444645f634b02d9d18cae425cf1",
-                "rust-std": "dfc87df7be3ed8ee35500272e0b87c472b1331578bf5c24f73f5344aa426c294",
-                "rustc": "7207b8a852d82c3c396bf4374db808b5fa1bfec268cf02183db2a564f14d41af",
+                "cargo": "ab913b6c917006457eae204d8bbf4d5b82b83de5523e07c82bf56a6d1a0ac220",
+                "clippy": "4b0b69758ff1178d6986ff1ffc898a13ef83095006e176be1b0fb9a6c325c20c",
+                "llvm-tools": "331db10a12c2145b480aa3945c48e4b7b1a935a42d1782b42c82a7d0cfb1655a",
+                "rust-std": "11d0e186cdad492347448b96710c97060f9f4bc38789b0c51601b5b17a2e837c",
+                "rustc": "2d2a74da9ab9ca8e77600c76dad5d04e1e004ffc3f0557a4670a1536e1150b24",
             },
         },
     },
@@ -621,6 +621,7 @@ crates_repository(
         "//:src/controller/Cargo.toml",
         "//:src/durable-cache/Cargo.toml",
         "//:src/dyncfg/Cargo.toml",
+        "//:src/dyncfg-file/Cargo.toml",
         "//:src/dyncfg-launchdarkly/Cargo.toml",
         "//:src/dyncfgs/Cargo.toml",
         "//:src/environmentd/Cargo.toml",

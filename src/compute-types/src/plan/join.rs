@@ -277,6 +277,13 @@ impl JoinClosure {
         self.ready_equivalences.is_empty() && self.before.is_identity()
     }
 
+    /// True iff the closure does more than projections.
+    pub fn maps_or_filters(&self) -> bool {
+        !self.before.expressions.is_empty()
+            || !self.before.predicates.is_empty()
+            || !self.ready_equivalences.is_empty()
+    }
+
     /// Returns true if evaluation could introduce an error on non-error inputs.
     pub fn could_error(&self) -> bool {
         self.before.could_error()

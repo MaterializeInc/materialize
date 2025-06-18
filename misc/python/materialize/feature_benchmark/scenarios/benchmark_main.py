@@ -672,6 +672,11 @@ true
 class AccumulateReductions(Dataflow):
     """Benchmark the accumulation of reductions."""
 
+    SCALE = 5
+
+    def version(self) -> ScenarioVersion:
+        return ScenarioVersion.create(1, 1, 0)
+
     def before(self) -> Action:
         return TdAction(
             """
@@ -1428,13 +1433,13 @@ class ManyKafkaSourcesOnSameCluster(Scenario):
     """Measure the time it takes to ingest data from many Kafka sources"""
 
     # Runs ~2 hours with 300 sources
-    SCALE = 2  # 100 sources
+    SCALE = 1.7  # 50 sources
     FIXED_SCALE = True
 
     COUNT_SOURCE_ENTRIES = 100000
 
     def version(self) -> ScenarioVersion:
-        return ScenarioVersion.create(1, 1, 0)
+        return ScenarioVersion.create(1, 2, 0)
 
     def shared(self) -> Action:
         create_topics = "\n".join(

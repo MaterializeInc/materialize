@@ -14,6 +14,8 @@ import urllib.parse
 from collections.abc import Callable
 
 from kubernetes.client import (
+    V1ConfigMap,
+    V1ConfigMapVolumeSource,
     V1Container,
     V1ContainerPort,
     V1EnvVar,
@@ -39,7 +41,9 @@ from kubernetes.client import (
     V1VolumeMount,
 )
 
+from materialize import MZ_ROOT
 from materialize.cloudtest import DEFAULT_K8S_NAMESPACE
+from materialize.cloudtest.k8s.api.k8s_configmap import K8sConfigMap
 from materialize.cloudtest.k8s.api.k8s_secret import K8sSecret
 from materialize.cloudtest.k8s.api.k8s_service import K8sService
 from materialize.cloudtest.k8s.api.k8s_stateful_set import K8sStatefulSet
@@ -58,6 +62,19 @@ class EnvironmentdSecret(K8sSecret):
             metadata=V1ObjectMeta(name="license-key"),
             string_data={
                 "license_key": os.environ["MZ_CI_LICENSE_KEY"],
+            },
+        )
+
+
+class ListenersConfigMap(K8sConfigMap):
+    def __init__(self, namespace: str = DEFAULT_K8S_NAMESPACE) -> None:
+        super().__init__(namespace)
+        with open(f"{MZ_ROOT}/src/materialized/ci/listener_configs/no_auth.json") as f:
+            data = f.read()
+        self.configmap = V1ConfigMap(
+            metadata=V1ObjectMeta(name="listeners-config"),
+            data={
+                "listeners.json": data,
             },
         )
 
@@ -128,7 +145,16 @@ class EnvironmentdStatefulSet(K8sStatefulSet):
 
         ports = [V1ContainerPort(container_port=5432, name="sql")]
 
-        volume_mounts = [V1VolumeMount(name="license-key", mount_path="/license_key")]
+        volume_mounts = [
+            V1VolumeMount(
+                name="license-key",
+                mount_path="/license_key",
+            ),
+            V1VolumeMount(
+                name="listeners-configmap",
+                mount_path="/listeners",
+            ),
+        ]
 
         if self.coverage_mode:
             volume_mounts.append(V1VolumeMount(name="coverage", mount_path="/coverage"))
@@ -171,7 +197,21 @@ class EnvironmentdStatefulSet(K8sStatefulSet):
                         )
                     ],
                 ),
-            )
+            ),
+            V1Volume(
+                name="listeners-configmap",
+                config_map=V1ConfigMapVolumeSource(
+                    name="listeners-config",
+                    default_mode=292,
+                    optional=False,
+                    items=[
+                        V1KeyToPath(
+                            key="listeners.json",
+                            path="listeners.json",
+                        )
+                    ],
+                ),
+            ),
         ]
 
         pod_spec = V1PodSpec(
@@ -230,8 +270,6 @@ class EnvironmentdStatefulSet(K8sStatefulSet):
             "--orchestrator-kubernetes-image-pull-policy=if-not-present",
             "--orchestrator-kubernetes-service-fs-group=999",
             f"--persist-consensus-url=postgres://root@cockroach.{self.cockroach_namespace}:26257?options=--search_path=consensus",
-            "--internal-sql-listen-addr=0.0.0.0:6877",
-            "--internal-http-listen-addr=0.0.0.0:6878",
             "--unsafe-mode",
             # cloudtest may be called upon to spin up older versions of
             # Materialize too! If you are adding a command-line option that is
@@ -298,6 +336,14 @@ class EnvironmentdStatefulSet(K8sStatefulSet):
             args += [
                 "--announce-egress-ip=1.2.3.4",
                 "--announce-egress-ip=88.77.66.55",
+            ]
+
+        if self._meets_minimum_version("0.147.0-dev"):
+            args.append("--listeners-config-path=/listeners/listeners.json")
+        else:
+            args += [
+                "--internal-sql-listen-addr=0.0.0.0:6877",
+                "--internal-http-listen-addr=0.0.0.0:6878",
             ]
 
         return args + self.extra_args

@@ -78,7 +78,7 @@ impl PgSourceMetricDefs {
             table_count_latency: registry.register(metric!(
                 name: "mz_postgres_snapshot_count_latency",
                 help: "The wall time used to obtain snapshot sizes.",
-                var_labels: ["source_id", "table_name", "strict"],
+                var_labels: ["source_id", "table_name"],
             )),
         }
     }
@@ -95,20 +95,11 @@ pub(crate) struct PgSnapshotMetrics {
 }
 
 impl PgSnapshotMetrics {
-    pub(crate) fn record_table_count_latency(
-        &self,
-        table_name: String,
-        latency: f64,
-        strict: bool,
-    ) {
+    pub(crate) fn record_table_count_latency(&self, table_name: String, latency: f64) {
         let latency_gauge = self
             .defs
             .table_count_latency
-            .get_delete_on_drop_metric(vec![
-                self.source_id.to_string(),
-                table_name,
-                strict.to_string(),
-            ]);
+            .get_delete_on_drop_metric(vec![self.source_id.to_string(), table_name]);
         latency_gauge.set(latency);
         self.gauges.lock().expect("poisoned").push(latency_gauge)
     }

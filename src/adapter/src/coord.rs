@@ -92,6 +92,7 @@ use mz_adapter_types::bootstrap_builtin_cluster_config::BootstrapBuiltinClusterC
 use mz_adapter_types::compaction::CompactionWindow;
 use mz_adapter_types::connection::ConnectionId;
 use mz_adapter_types::dyncfgs::WITH_0DT_DEPLOYMENT_CAUGHT_UP_CHECK_INTERVAL;
+use mz_auth::password::Password;
 use mz_build_info::BuildInfo;
 use mz_catalog::builtin::{BUILTINS, BUILTINS_STATIC, MZ_AUDIT_EVENTS, MZ_STORAGE_USAGE_BY_SHARD};
 use mz_catalog::config::{AwsPrincipalContext, BuiltinItemMigrationConfig, ClusterReplicaSizeMap};
@@ -126,6 +127,7 @@ use mz_ore::vec::VecExt;
 use mz_ore::{
     assert_none, instrument, soft_assert_eq_or_log, soft_assert_or_log, soft_panic_or_log, stack,
 };
+use mz_persist_client::PersistClient;
 use mz_persist_client::batch::ProtoBatch;
 use mz_persist_client::usage::{ShardsUsageReferenced, StorageUsageClient};
 use mz_repr::explain::{ExplainConfig, ExplainFormat};
@@ -1035,6 +1037,7 @@ pub struct Config {
 
     pub helm_chart_version: Option<String>,
     pub license_key: ValidatedLicenseKey,
+    pub external_login_password_mz_system: Option<Password>,
 }
 
 /// Soft-state metadata about a compute replica
@@ -1635,6 +1638,10 @@ pub struct Coordinator {
     /// to be a pTVC, but for now this is sufficient.
     catalog: Arc<Catalog>,
 
+    /// A client for persist. Initially, this is only used for reading stashed
+    /// peek responses out of batches.
+    persist_client: PersistClient,
+
     /// Channel to manage internal commands from the coordinator to itself.
     internal_cmd_tx: mpsc::UnboundedSender<Message>,
     /// Notification that triggers a group commit.
@@ -1875,10 +1882,12 @@ impl Coordinator {
         let compute_config = flags::compute_config(system_config);
         let storage_config = flags::storage_config(system_config);
         let scheduling_config = flags::orchestrator_scheduling_config(system_config);
+        let dyncfg_updates = system_config.dyncfg_updates();
         self.controller.compute.update_configuration(compute_config);
         self.controller.storage.update_parameters(storage_config);
         self.controller
             .update_orchestrator_scheduling_config(scheduling_config);
+        self.controller.update_configuration(dyncfg_updates);
 
         let mut policies_to_set: BTreeMap<CompactionWindow, CollectionIdBundle> =
             Default::default();
@@ -3232,6 +3241,7 @@ impl Coordinator {
             &read_policies,
             &*self.controller.storage_collections,
             read_ts,
+            self.controller.read_only(),
         );
 
         let catalog = self.catalog_mut();
@@ -3952,6 +3962,7 @@ pub fn serve(
         caught_up_trigger: clusters_caught_up_trigger,
         helm_chart_version,
         license_key,
+        external_login_password_mz_system,
     }: Config,
 ) -> BoxFuture<'static, Result<(Handle, Client), AdapterError>> {
     async move {
@@ -4099,6 +4110,7 @@ pub fn serve(
                 enable_expression_cache_override: None,
                 enable_0dt_deployment,
                 helm_chart_version,
+                external_login_password_mz_system,
             },
         })
         .await?;
@@ -4293,6 +4305,7 @@ pub fn serve(
                     read_only_controllers,
                     buffered_builtin_table_updates: Some(Vec::new()),
                     license_key,
+                    persist_client,
                 };
                 let bootstrap = handle.block_on(async {
                     coord
