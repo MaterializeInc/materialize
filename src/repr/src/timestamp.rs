@@ -104,13 +104,18 @@ mod columnar_timestamp {
 
     impl Columnar for Timestamp {
         type Ref<'a> = Timestamp;
-
         #[inline(always)]
         fn into_owned<'a>(other: Self::Ref<'a>) -> Self {
             other
         }
-
         type Container = TimestampVec<Vec<Timestamp>>;
+        #[inline(always)]
+        fn reborrow<'b, 'a: 'b>(thing: Self::Ref<'a>) -> Self::Ref<'b>
+        where
+            Self: 'a,
+        {
+            thing
+        }
     }
 
     impl columnar::Container<Timestamp> for TimestampVec<Vec<Timestamp>> {
@@ -122,14 +127,24 @@ mod columnar_timestamp {
         fn borrow<'a>(&'a self) -> Self::Borrowed<'a> {
             TimestampVec(self.0.as_slice())
         }
+        #[inline(always)]
+        fn reborrow<'b, 'a: 'b>(item: Self::Borrowed<'a>) -> Self::Borrowed<'b>
+        where
+            Self: 'a,
+        {
+            TimestampVec(item.0)
+        }
     }
 
     impl columnar::HeapSize for Timestamp {}
 
     impl<T: columnar::HeapSize> columnar::HeapSize for TimestampVec<T> {
         #[inline(always)]
-        fn heap_size<F: FnMut(usize, usize)>(&self, callback: &mut F) {
-            self.0.heap_size(callback);
+        // fn heap_size<F: FnMut(usize, usize)>(&self, callback: &mut F) {
+        //     self.0.heap_size(callback);
+        // }
+        fn heap_size(&self) -> (usize, usize) {
+            self.0.heap_size()
         }
     }
 

@@ -20,6 +20,7 @@ use std::hash::Hash;
 use columnar::Columnar;
 use differential_dataflow::Hashable;
 use differential_dataflow::trace::implementations::merge_batcher::MergeBatcher;
+use differential_dataflow::trace::implementations::merge_batcher::container::ContainerMerger;
 
 pub mod stack;
 
@@ -68,7 +69,7 @@ mod container {
     use mz_ore::region::Region;
     use timely::Container;
     use timely::bytes::arc::Bytes;
-    use timely::container::{PushInto, SizableContainer};
+    use timely::container::PushInto;
     use timely::dataflow::channels::ContainerBytes;
 
     /// A container based on a columnar store, encoded in aligned bytes.
@@ -91,7 +92,7 @@ mod container {
     impl<C: Columnar> Column<C> {
         /// Borrows the container as a reference.
         #[inline(always)]
-        fn borrow(&self) -> <C::Container as columnar::Container<C>>::Borrowed<'_> {
+        pub(crate) fn borrow(&self) -> <C::Container as columnar::Container<C>>::Borrowed<'_> {
             match self {
                 Column::Typed(t) => t.borrow(),
                 Column::Bytes(b) => {
@@ -177,20 +178,6 @@ mod container {
         }
     }
 
-    impl<C: Columnar> SizableContainer for Column<C> {
-        fn at_capacity(&self) -> bool {
-            match self {
-                Self::Typed(t) => {
-                    let length_in_bytes = Indexed::length_in_bytes(&t.borrow());
-                    length_in_bytes >= (1 << 20)
-                }
-                Self::Bytes(_) => true,
-                Self::Align(_) => true,
-            }
-        }
-        fn ensure_capacity(&mut self, _stash: &mut Option<Self>) {}
-    }
-
     impl<C: Columnar, T> PushInto<T> for Column<C>
     where
         C::Container: columnar::Push<T>,
@@ -246,7 +233,7 @@ mod container {
             }
         }
 
-        fn into_bytes<W: ::std::io::Write>(&self, writer: &mut W) {
+        fn into_bytes<W: std::io::Write>(&self, writer: &mut W) {
             match self {
                 Column::Typed(t) => Indexed::write(writer, &t.borrow()).unwrap(),
                 Column::Bytes(b) => writer.write_all(b).unwrap(),
@@ -394,13 +381,13 @@ mod builder {
 pub type Col2ValBatcher<K, V, T, R> = MergeBatcher<
     Column<((K, V), T, R)>,
     batcher::Chunker<ColumnBuilder<((K, V), T, R)>>,
-    merger::ColumnMerger<(K, V), T, R>,
+    ContainerMerger<ColumnBuilder<((K, V), T, R)>>,
 >;
 pub type Col2KeyBatcher<K, T, R> = Col2ValBatcher<K, (), T, R>;
 pub type Vec2Col2ValBatcher<K, V, T, R> = MergeBatcher<
     Vec<((K, V), T, R)>,
     batcher::Chunker<ColumnBuilder<((K, V), T, R)>>,
-    merger::ColumnMerger<(K, V), T, R>,
+    ContainerMerger<ColumnBuilder<((K, V), T, R)>>,
 >;
 pub type Vec2Col2KeyBatcher<K, T, R> = Vec2Col2ValBatcher<K, (), T, R>;
 
@@ -513,11 +500,9 @@ pub mod batcher {
 
 /// Implementations of `ContainerQueue` and `MergerChunk` for `Column` containers (columnar).
 pub mod merger {
-    use columnar::{Columnar, HeapSize};
+    use columnar::{Columnar, Index};
     use differential_dataflow::difference::Semigroup;
-    use differential_dataflow::trace::implementations::merge_batcher::container::{
-        ContainerMerger, PushAndAdd,
-    };
+    use differential_dataflow::trace::implementations::merge_batcher::container::PushAndAdd;
     use differential_dataflow::trace::implementations::merge_batcher::container::{
         ContainerQueue, MergerChunk,
     };
@@ -526,76 +511,68 @@ pub mod merger {
 
     use crate::containers::{Column, ColumnBuilder};
 
-    /// A `Merger` implementation backed by `Column` containers (Columnar).
-    pub type ColumnMerger<D, T, R> =
-        ContainerMerger<ColumnBuilder<(D, T, R)>, ColumnQueue<(D, T, R)>>;
-
-    /// TODO
-    pub struct ColumnQueue<T: Columnar> {
-        list: Column<T>,
+    /// A queue for extracting items from a `Column` container.
+    pub struct ColumnQueue<'a, T: Columnar> {
+        list: <T::Container as columnar::Container<T>>::Borrowed<'a>,
         head: usize,
-        len: usize,
     }
 
-    impl<D, T, R> ContainerQueue<Column<(D, T, R)>> for ColumnQueue<(D, T, R)>
+    impl<'a, D, T, R> ContainerQueue<'a, Column<(D, T, R)>> for ColumnQueue<'a, (D, T, R)>
     where
-        D: for<'a> Columnar<Ref<'a>: Ord>,
-        T: for<'a> Columnar<Ref<'a>: Ord>,
+        D: for<'b> Columnar<Ref<'b>: Ord>,
+        T: for<'b> Columnar<Ref<'b>: Ord>,
         R: Columnar,
     {
-        #[inline(always)]
-        fn next_or_alloc(&mut self) -> Result<<(D, T, R) as Columnar>::Ref<'_>, Column<(D, T, R)>> {
-            if self.is_empty() {
-                Err(std::mem::take(&mut self.list))
-            } else {
-                Ok(self.pop())
-            }
-        }
-        #[inline(always)]
-        fn is_empty(&self) -> bool {
-            self.head == self.len
-        }
-        #[inline(always)]
-        fn cmp_heads(&self, other: &Self) -> std::cmp::Ordering {
-            let (data1, time1, _) = self.peek();
-            let (data2, time2, _) = other.peek();
-
-            (data1, time1).cmp(&(data2, time2))
-        }
-        #[inline(always)]
-        fn from(list: Column<(D, T, R)>) -> Self {
-            let len = list.len();
-            ColumnQueue { list, head: 0, len }
-        }
-    }
-
-    impl<T: Columnar> ColumnQueue<T> {
-        #[inline(always)]
-        fn pop(&mut self) -> T::Ref<'_> {
+        type Item = <(D, T, R) as Columnar>::Ref<'a>;
+        type SelfGAT<'b> = ColumnQueue<'b, (D, T, R)>;
+        fn pop(&mut self) -> Self::Item {
             self.head += 1;
             self.list.get(self.head - 1)
         }
+        fn is_empty(&mut self) -> bool {
+            use columnar::Len;
+            self.head == self.list.len()
+        }
+        fn cmp_heads<'b>(&mut self, other: &mut ColumnQueue<'b, (D, T, R)>) -> std::cmp::Ordering {
+            let (data1, time1, _) = self.peek();
+            let (data2, time2, _) = other.peek();
 
-        #[inline(always)]
-        fn peek(&self) -> T::Ref<'_> {
+            let data1 = D::reborrow(data1);
+            let time1 = T::reborrow(time1);
+            let data2 = D::reborrow(data2);
+            let time2 = T::reborrow(time2);
+
+            (data1, time1).cmp(&(data2, time2))
+        }
+        fn new(list: &'a mut Column<(D, T, R)>) -> ColumnQueue<'a, (D, T, R)> {
+            ColumnQueue {
+                list: list.borrow(),
+                head: 0,
+            }
+        }
+    }
+
+    impl<'a, T: Columnar> ColumnQueue<'a, T> {
+        fn peek(&self) -> T::Ref<'a> {
             self.list.get(self.head)
         }
     }
 
     impl<D, T, R> MergerChunk for Column<(D, T, R)>
     where
-        D: Columnar<Container: HeapSize>,
-        T: for<'a> Columnar<Container: HeapSize, Ref<'a>: Copy> + Timestamp,
-        R: Columnar<Container: HeapSize> + Default,
+        D: for<'a> Columnar<Ref<'a>: Ord>,
+        T: for<'a> Columnar<Ref<'a>: Ord> + Timestamp,
+        for<'a> <T as Columnar>::Ref<'a>: Copy,
+        R: Default + Semigroup + Columnar,
     {
+        type ContainerQueue<'a> = ColumnQueue<'a, (D, T, R)>;
         type TimeOwned = T;
 
-        #[inline(always)]
         fn time_kept(
             (_, time, _): &Self::Item<'_>,
             upper: &AntichainRef<Self::TimeOwned>,
             frontier: &mut Antichain<Self::TimeOwned>,
-            stash: &mut Self::TimeOwned,
+            stash: &mut T,
         ) -> bool {
             stash.copy_from(*time);
             if upper.less_equal(stash) {
@@ -605,21 +582,19 @@ pub mod merger {
                 false
             }
         }
-        // len size cap allocations
-        #[inline(always)]
         fn account(&self) -> (usize, usize, usize, usize) {
             let (mut size, mut cap, mut count) = (0, 0, 0);
             match self {
-                Column::Typed((data, time, diff)) => {
-                    use columnar::HeapSize;
-                    let mut cb = |s, c| {
-                        size += s;
-                        cap += c;
-                        count += 1;
-                    };
-                    data.heap_size(&mut cb);
-                    time.heap_size(&mut cb);
-                    diff.heap_size(&mut cb);
+                Column::Typed((_data, _time, _diff)) => {
+                    // use columnar::HeapSize;
+                    // let mut cb = |s, c| {
+                    //     size += s;
+                    //     cap += c;
+                    //     count += 1;
+                    // };
+                    // data.heap_size(&mut cb);
+                    // time.heap_size(&mut cb);
+                    // diff.heap_size(&mut cb);
                 }
                 Column::Bytes(bytes) => {
                     size += bytes.len();
@@ -638,20 +613,18 @@ pub mod merger {
     impl<D, T, R> PushAndAdd for ColumnBuilder<(D, T, R)>
     where
         D: Columnar,
-        T: Columnar,
-        R: Columnar + Default + Semigroup,
+        T: timely::PartialOrder + Columnar,
+        R: Default + Semigroup + Columnar,
     {
+        type Item<'a> = <(D, T, R) as Columnar>::Ref<'a>;
         type DiffOwned = R;
 
-        #[inline(always)]
-        fn push_and_add<'a>(
+        fn push_and_add(
             &mut self,
-            item1: <Self::Container as Container>::Item<'a>,
-            item2: <Self::Container as Container>::Item<'a>,
+            (data, time, diff1): Self::Item<'_>,
+            (_, _, diff2): Self::Item<'_>,
             stash: &mut Self::DiffOwned,
         ) {
-            let (data, time, diff1) = item1;
-            let (_data, _time, diff2) = item2;
             stash.copy_from(diff1);
             let stash2: R = R::into_owned(diff2);
             stash.plus_equals(&stash2);
