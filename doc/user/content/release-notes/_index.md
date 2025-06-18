@@ -12,9 +12,11 @@ menu:
 
 ### Authentication + RBAC
 
-[Password authentication is now available](/manage/authentication).
+Starting in v25.2, password authentication and role-based access control are available in self-managed Materialize. For details, see:
 
-[Role Based Access Control](/manage/access-control/#role-based-access-control-rbac).
+- [Password authentication](/manage/authentication).
+- [Role-Based Access
+  Control](/manage/access-control/#role-based-access-control-rbac).
 
 ## Self-managed versioning and lifecycle
 
