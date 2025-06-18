@@ -200,7 +200,6 @@ fn setup_statement_logging(
 
 // Test that we log various kinds of statement whose execution terminates in the coordinator.
 #[mz_ore::test]
-#[cfg_attr(coverage, ignore)] // https://github.com/MaterializeInc/database-issues/issues/6487
 fn test_statement_logging_immediate() {
     let (server, mut client) = setup_statement_logging(1.0, 1.0);
 
@@ -246,6 +245,10 @@ fn test_statement_logging_immediate() {
 
     for &statement in successful_immediates {
         client.execute(statement, &[]).unwrap();
+
+        // Enforce a small delay to avoid duplicate `began_at` times, which would make the ordering
+        // of logged statements non-deterministic when we retrieve them below.
+        thread::sleep(Duration::from_millis(10));
     }
 
     // Statement logging happens async, give it a chance to catch up
@@ -642,6 +645,10 @@ fn test_statement_logging_sampling_inner(
 ) {
     for i in 0..50 {
         client.execute(&format!("SELECT {i}"), &[]).unwrap();
+
+        // Enforce a small delay to avoid duplicate `began_at` times, which would make the ordering
+        // of logged statements non-deterministic when we retrieve them below.
+        thread::sleep(Duration::from_millis(10));
     }
     // Statement logging happens async, give it a chance to catch up
     thread::sleep(Duration::from_secs(5));
