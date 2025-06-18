@@ -174,15 +174,30 @@ steps:
         coverage: skip
         sanitizer: skip
 
-      - id: lint-slow
+      - id: lint-clippy-doc
         label: Clippy and doctests
-        command: bin/ci-builder run stable ci/test/lint-slow.sh
+        command: bin/ci-builder run stable ci/test/lint-clippy-doc.sh
         inputs:
           - Cargo.lock
           - Cargo.toml
           - "**/Cargo.toml"
           - "**/*.rs"
           - misc/helm-charts
+        depends_on: []
+        timeout_in_minutes: 40
+        agents:
+          queue: hetzner-x86-64-dedi-32cpu-128gb
+        coverage: skip
+        sanitizer: skip
+
+      - id: lint-cargo-doc-test
+        label: Cargo doc tests
+        command: bin/ci-builder run stable ci/test/lint-cargo-doc-test.sh
+        inputs:
+          - Cargo.lock
+          - Cargo.toml
+          - "**/Cargo.toml"
+          - "**/*.rs"
         depends_on: []
         timeout_in_minutes: 40
         agents:
