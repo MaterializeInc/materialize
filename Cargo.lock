@@ -1854,7 +1854,7 @@ checksum = "5b63caa9aa9397e2d9480a9b13673856c78d8ac123288526c37d7839f2a86990"
 [[package]]
 name = "columnar"
 version = "0.5.1"
-source = "git+https://github.com/antiguru/columnar?branch=heap_size#6dc937046c40baa141b2455012e16a664a72d9a8"
+source = "git+https://github.com/antiguru/columnar?branch=reborrow#9da2e8bf279787438a92ad04dfa07909953b91ee"
 dependencies = [
  "bytemuck",
  "columnar_derive",
@@ -1865,7 +1865,7 @@ dependencies = [
 [[package]]
 name = "columnar_derive"
 version = "0.2.4"
-source = "git+https://github.com/antiguru/columnar?branch=heap_size#6dc937046c40baa141b2455012e16a664a72d9a8"
+source = "git+https://github.com/antiguru/columnar?branch=reborrow#9da2e8bf279787438a92ad04dfa07909953b91ee"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -2514,7 +2514,7 @@ dependencies = [
 [[package]]
 name = "differential-dataflow"
 version = "0.15.2"
-source = "git+https://github.com/antiguru/differential-dataflow?branch=merge_batcher_cb2#757284e1b8ec76d3c043e3c4f7b56727e0b4b29c"
+source = "git+https://github.com/antiguru/differential-dataflow?branch=merge_batcher_cb2#9957bd5cc65ea73f6f8f6474e0258ac083f40e7c"
 dependencies = [
  "columnar",
  "columnation",
@@ -2527,7 +2527,7 @@ dependencies = [
 [[package]]
 name = "differential-dogs3"
 version = "0.1.13"
-source = "git+https://github.com/antiguru/differential-dataflow?branch=merge_batcher_cb2#757284e1b8ec76d3c043e3c4f7b56727e0b4b29c"
+source = "git+https://github.com/antiguru/differential-dataflow?branch=merge_batcher_cb2#9957bd5cc65ea73f6f8f6474e0258ac083f40e7c"
 dependencies = [
  "differential-dataflow",
  "serde",

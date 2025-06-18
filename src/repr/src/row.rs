@@ -450,6 +450,13 @@ mod columnar {
             other.to_owned()
         }
         type Container = Rows;
+        #[inline(always)]
+        fn reborrow<'b, 'a: 'b>(thing: Self::Ref<'a>) -> Self::Ref<'b>
+        where
+            Self: 'a,
+        {
+            thing
+        }
     }
 
     impl<'b, BC: Container<u64>> Container<Row> for Rows<BC, &'b [u8]> {
@@ -464,6 +471,16 @@ mod columnar {
                 values: self.values,
             }
         }
+        #[inline(always)]
+        fn reborrow<'c, 'a: 'c>(item: Self::Borrowed<'a>) -> Self::Borrowed<'c>
+        where
+            Self: 'a,
+        {
+            Rows {
+                bounds: BC::reborrow(item.bounds),
+                values: item.values,
+            }
+        }
     }
     impl<BC: Container<u64>> Container<Row> for Rows<BC, Vec<u8>> {
         type Borrowed<'a>
@@ -475,6 +492,16 @@ mod columnar {
             Rows {
                 bounds: self.bounds.borrow(),
                 values: self.values.borrow(),
+            }
+        }
+        #[inline(always)]
+        fn reborrow<'b, 'a: 'b>(item: Self::Borrowed<'a>) -> Self::Borrowed<'b>
+        where
+            Self: 'a,
+        {
+            Rows {
+                bounds: BC::reborrow(item.bounds),
+                values: item.values,
             }
         }
     }
@@ -556,9 +583,14 @@ mod columnar {
     }
     impl<BC: HeapSize, VC: HeapSize> HeapSize for Rows<BC, VC> {
         #[inline(always)]
-        fn heap_size<F: FnMut(usize, usize)>(&self, callback: &mut F) {
-            self.bounds.heap_size(callback);
-            self.values.heap_size(callback);
+        // fn heap_size<F: FnMut(usize, usize)>(&self, callback: &mut F) {
+        //     self.bounds.heap_size(callback);
+        //     self.values.heap_size(callback);
+        // }
+        fn heap_size(&self) -> (usize, usize) {
+            let (l, c) = self.bounds.heap_size();
+            let (l2, c2) = self.values.heap_size();
+            (l + l2, c + c2)
         }
     }
 }
