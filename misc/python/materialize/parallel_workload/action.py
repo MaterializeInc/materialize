@@ -1118,6 +1118,7 @@ class FlipFlagsAction(Action):
             "compute_server_maintenance_interval",
             "compute_dataflow_max_inflight_bytes",
             "compute_dataflow_max_inflight_bytes_cc",
+            "compute_flat_map_fuel",
             "consolidating_vec_growth_dampener",
             "compute_hydration_concurrency",
             "copy_to_s3_parquet_row_group_file_ratio",

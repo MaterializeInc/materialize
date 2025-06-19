@@ -218,6 +218,14 @@ pub const COMPUTE_APPLY_COLUMN_DEMANDS: Config<bool> = Config::new(
     "When enabled, passes applys column demands to the RelationDesc used to read out of Persist.",
 );
 
+/// The amount of output the flat-map operator produces before yielding. Set to a high value to
+/// avoid yielding, or to a low value to yield frequently.
+pub const COMPUTE_FLAT_MAP_FUEL: Config<usize> = Config::new(
+    "compute_flat_map_fuel",
+    1_000_000,
+    "The amount of output the flat-map operator produces before yielding.",
+);
+
 /// Whether to render `as_specific_collection` using a fueled flat-map operator.
 pub const ENABLE_COMPUTE_RENDER_FUELED_AS_SPECIFIC_COLLECTION: Config<bool> = Config::new(
     "enable_compute_render_fueled_as_specific_collection",
@@ -355,6 +363,7 @@ pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
         .add(&ENABLE_COMPUTE_REPLICA_EXPIRATION)
         .add(&COMPUTE_REPLICA_EXPIRATION_OFFSET)
         .add(&COMPUTE_APPLY_COLUMN_DEMANDS)
+        .add(&COMPUTE_FLAT_MAP_FUEL)
         .add(&CONSOLIDATING_VEC_GROWTH_DAMPENER)
         .add(&ENABLE_COMPUTE_RENDER_FUELED_AS_SPECIFIC_COLLECTION)
         .add(&ENABLE_COMPUTE_LOGICAL_BACKPRESSURE)
