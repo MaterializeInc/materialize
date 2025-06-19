@@ -724,13 +724,19 @@ where
                             // beginning or end of the input that don't have runs, but we shouldn't
                             // "lose" their description.
 
-                            let spine_id = runs.first().map(|(id, _, _, _)| id.0);
-                            req.inputs.iter().find(|x| {
-                                Some(x.id) == spine_id
-                            }).map_or(false, |input_batch| {
-                                let runs_from_batch = input_batch.batch.runs().collect::<Vec<_>>();
-                                runs_from_batch == runs.iter().map(|(_, _, meta, parts)| (meta.clone(), parts.clone())).collect::<Vec<_>>()
-                            })
+                            let number_of_runs_in_req = req.inputs.iter()
+                                .flat_map(|x| x.batch.runs())
+                                .count();
+                            let number_of_runs_in_parts = runs.len();
+                            number_of_runs_in_req == number_of_runs_in_parts
+                            // let spine_id = runs.first().map(|(id, _, _, _)| id.0);
+                            // let part = req.inputs.iter().find(|x| {
+                            //     Some(x.id) == spine_id
+                            // });
+                            // part.map_or(false, |input_batch| {
+                            //     let runs_from_batch = input_batch.batch.runs().collect::<Vec<_>>();
+                            //     runs_from_batch == runs.iter().map(|(_, _, meta, parts)| (meta.clone(), parts.clone())).collect::<Vec<_>>()
+                            // })
                         };
                         if parts_cover_whole_batch {
                             info!("Parts cover the whole batch, using request description");
