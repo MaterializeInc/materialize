@@ -693,32 +693,54 @@ where
                 let descriptions = runs.iter()
                     .map(|(_, desc, _, _)| desc.clone())
                     .collect::<Vec<_>>();
-                let runs = runs.iter()
-                    .map(|(_, desc, meta, run)| (desc.clone(), meta.clone(), run.clone()))
-                    .collect::<Vec<_>>();
 
                 let desc = if incremental_enabled {
-                    let desc_lower = descriptions
-                        .iter()
-                        .map(|desc| desc.lower())
-                        .cloned()
-                        .reduce(|a, b| a.meet(&b))
-                        .unwrap_or_else(|| req.desc.lower().clone());
-                    let desc_upper = descriptions
-                        .iter()
-                        .map(|desc| desc.upper())
-                        .cloned()
-                        .reduce(|a, b| a.join(&b))
-                        .unwrap_or_else(|| req.desc.upper().clone());
+                    let multiple_batches = {
+                        let first_batch = runs.first().map(|(id, _, _, _)| id.0);
+                        runs.iter().skip(1).any(|(id, _, _, _)| Some(id.0) != first_batch)
+                    };
+                    if multiple_batches {
+                        // Our chunk_runs function guarantees that we will never chunk
+                        // across batches unless we are fully replacing the batches.
+                        // In that case, we can use the description from the request.
+                        // It is frequently possible that there are empty batches at the
+                        // beginning or end of the input. Since they have no runs, we
+                        // don't get a description from them in order_runs/chunk_runs.
+                        // This means that if we just naively calculated the new description
+                        // from the runs, our new description might have a tighter lower and
+                        // upper bound than the description in the request which would be an issue
+                        // when we try to apply the compaction result incrementally.
+                        // For example, if the request desc is [1, 10] and the runs
+                        // are [2, 3], [4, 5], and [6, 7], then the new desc would be
+                        // [2, 7] which is a problem because the request desc is [1, 10].
+                        req.desc.clone()
+                    } else {
+                        let desc_lower = descriptions
+                            .iter()
+                            .map(|desc| desc.lower())
+                            .cloned()
+                            .reduce(|a, b| a.meet(&b))
+                            .unwrap_or_else(|| req.desc.lower().clone());
+                        let desc_upper = descriptions
+                            .iter()
+                            .map(|desc| desc.upper())
+                            .cloned()
+                            .reduce(|a, b| a.join(&b))
+                            .unwrap_or_else(|| req.desc.upper().clone());
 
-                    Description::new(
-                        desc_lower.clone(),
-                        desc_upper.clone(),
-                        req.desc.since().clone(),
-                    )
+                        Description::new(
+                            desc_lower.clone(),
+                            desc_upper.clone(),
+                            req.desc.since().clone(),
+                        )
+                    }
                 } else {
                     req.desc.clone()
                 };
+
+                let runs = runs.iter()
+                    .map(|(_, desc, meta, run)| (desc.clone(), meta.clone(), run.clone()))
+                    .collect::<Vec<_>>();
 
                 let batch = Self::compact_runs(
                     &run_cfg,

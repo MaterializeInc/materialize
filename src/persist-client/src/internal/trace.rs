@@ -1273,7 +1273,26 @@ impl<T: Timestamp + Lattice + Codec64> SpineBatch<T> {
 
         let min = *range.iter().min().unwrap();
         let max = *range.iter().max().unwrap();
-        let replacement_range = min..max + 1;
+        // Include empty parts at the start and end of the range
+        let mut start = min;
+        while start > 0 {
+            let part = &self.parts[start - 1];
+            if part.batch.runs().next().is_some() {
+                break;
+            }
+            start -= 1;
+        }
+
+        let mut end = max + 1;
+        while end < self.parts.len() {
+            let part = &self.parts[end];
+            if part.batch.runs().next().is_some() {
+                break;
+            }
+            end += 1;
+        }
+        let replacement_range = start..end;
+        // let replacement_range = min..max + 1;
 
         if range.len() == 1 {
             // We only need to replace a single part. Here we still care about the run_indices
@@ -1369,10 +1388,7 @@ impl<T: Timestamp + Lattice + Codec64> SpineBatch<T> {
                 id,
                 replacement_range,
                 res.new_active_compaction.clone(),
-                // This might be narrower than the current spine batch.
-                // This can happen when there are empty parts at the beginning or end
-                // of the spine batch, and the merge result is for a narrower range.
-                &res.output.desc,
+                &self.desc.clone(),
             );
         }
     }
