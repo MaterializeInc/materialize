@@ -8,6 +8,7 @@
 // by the Apache License, Version 2.0.
 
 use differential_dataflow::consolidation::ConsolidatingContainerBuilder;
+use mz_compute_types::dyncfgs::COMPUTE_FLAT_MAP_FUEL;
 use mz_expr::MfpPlan;
 use mz_expr::{MapFilterProject, MirScalarExpr, TableFunc};
 use mz_repr::{DatumVec, RowArena, SharedRow};
@@ -42,6 +43,13 @@ where
             input.as_specific_collection(input_key.as_deref(), &self.config_set);
         let stream = ok_collection.inner;
         let scope = input.scope();
+
+        // Budget to limit the number of rows processed in a single invocation.
+        //
+        // The current implementation can only yield between input batches, but not from within
+        // a batch. A `generate_series` can still cause unavailability if it generates many rows.
+        let budget = COMPUTE_FLAT_MAP_FUEL.get(&self.config_set);
+
         let (oks, errs) = stream.unary_fallible(Pipeline, "FlatMapStage", move |_, info| {
             let activator = scope.activator_for(info.address);
             Box::new(move |input, ok_output, err_output| {
@@ -51,7 +59,7 @@ where
                 // Buffer for extensions to `input_row`.
                 let mut table_func_output = Vec::new();
 
-                let mut budget = 1_000_000;
+                let mut budget = budget;
 
                 while let Some((cap, data)) = input.next() {
                     let mut ok_session = ok_output.session_with_builder(&cap);
