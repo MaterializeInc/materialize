@@ -700,6 +700,7 @@ where
                         runs.iter().skip(1).any(|(id, _, _, _)| Some(id.0) != first_batch)
                     };
                     if multiple_batches {
+                        info!("Compacting across multiple batches: {:?}", input_runs);
                         // Our chunk_runs function guarantees that we will never chunk
                         // across batches unless we are fully replacing the batches.
                         // In that case, we can use the description from the request.
@@ -715,6 +716,27 @@ where
                         // [2, 7] which is a problem because the request desc is [1, 10].
                         req.desc.clone()
                     } else {
+                        info!("Compacting a single batch: {:?}", input_runs);
+                        let parts_cover_whole_batch = {
+                            // If the parts cover the whole batch, we should use the description
+                            // from the request, otherwise we should calculate a new description.
+                            // Again, this is because there might be empty batches at the
+                            // beginning or end of the input that don't have runs, but we shouldn't
+                            // "lose" their description.
+
+                            let spine_id = runs.first().map(|(id, _, _, _)| id.0);
+                            req.inputs.iter().find(|x| {
+                                Some(x.id) == spine_id
+                            }).map_or(false, |input_batch| {
+                                let runs_from_batch = input_batch.batch.runs().collect::<Vec<_>>();
+                                runs_from_batch == runs.iter().map(|(_, _, meta, parts)| (meta.clone(), parts.clone())).collect::<Vec<_>>()
+                            })
+                        };
+                        if parts_cover_whole_batch {
+                            info!("Parts cover the whole batch, using request description");
+                            req.desc.clone()
+                        } else {
+                            info!("Parts do not cover the whole batch, calculating new description");
                         let desc_lower = descriptions
                             .iter()
                             .map(|desc| desc.lower())
@@ -733,6 +755,7 @@ where
                             desc_upper.clone(),
                             req.desc.since().clone(),
                         )
+                    }
                     }
                 } else {
                     req.desc.clone()
