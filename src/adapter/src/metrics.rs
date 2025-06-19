@@ -47,6 +47,7 @@ pub struct Metrics {
     pub pgwire_message_processing_seconds: HistogramVec,
     pub result_rows_first_to_last_byte_seconds: HistogramVec,
     pub pgwire_ensure_transaction_seconds: HistogramVec,
+    pub tokio_canary_delay_ms: HistogramVec,
 }
 
 impl Metrics {
@@ -206,7 +207,12 @@ impl Metrics {
                 help: "The time it takes to run `ensure_transactions` when processing pgwire messages.",
                 var_labels: ["message_type"],
                 buckets: histogram_seconds_buckets(0.001, 512.0),
-            ))
+            )),
+            tokio_canary_delay_ms: registry.register(metric!(
+                name: "mz_tokio_canary_delay_ms",
+                help: "How much later was the tokio canary task woken up than the requested time.",
+                buckets: histogram_milliseconds_buckets(1., 512000.),
+            )),
         }
     }
 
