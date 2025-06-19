@@ -70,7 +70,7 @@ pub const ARRANGEMENT_EXERT_PROPORTIONALITY: Config<u32> = Config::new(
 
 pub const ENABLE_TIMELY_INIT_AT_PROCESS_STARTUP: Config<bool> = Config::new(
     "enable_timely_init_at_process_startup",
-    false,
+    true,
     "Whether to initialize the Timely runtime at clusterd process startup.",
 );
 
