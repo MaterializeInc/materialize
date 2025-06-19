@@ -659,8 +659,6 @@ where
                 Self::chunk_runs(&ordered_runs, &cfg, &*metrics, run_reserved_memory_bytes);
             let total_chunked_runs = chunked_runs.len();
 
-            info!("chunked_runs: {:?}", chunked_runs);
-
             let (incremental_tx, mut incremental_rx) = mpsc::channel(1);
 
             let machine = machine.clone();
@@ -1112,7 +1110,6 @@ where
             metrics.compaction.not_all_prefetched.inc();
         }
 
-        info!("beginning compaction for desc: {:?}", desc);
         loop {
             let mut chunks = vec![];
             let mut total_bytes = 0;
@@ -1143,8 +1140,6 @@ where
                 break;
             };
 
-            // I think this desc might be wrong(?)
-            info!("writing part with desc: {:?}", desc);
             batch.flush_part(desc.clone(), updates).await;
 
             if let Some(tx) = incremental_tx.as_ref() {
@@ -1170,7 +1165,6 @@ where
                 }
             }
         }
-        info!("writing batch with desc: {:?}", desc);
         let mut batch = batch.finish(desc.clone()).await?;
         assert_eq!(batch.batch.desc, desc.clone());
 

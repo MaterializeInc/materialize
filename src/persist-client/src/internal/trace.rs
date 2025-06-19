@@ -1271,25 +1271,7 @@ impl<T: Timestamp + Lattice + Codec64> SpineBatch<T> {
 
         let min = *range.iter().min().unwrap();
         let max = *range.iter().max().unwrap();
-        // Include empty parts at the start and end of the range
-        let mut start = min;
-        while start > 0 {
-            let part = &self.parts[start - 1];
-            if part.batch.runs().next().is_some() {
-                break;
-            }
-            start -= 1;
-        }
-
-        let mut end = max + 1;
-        while end < self.parts.len() {
-            let part = &self.parts[end];
-            if part.batch.runs().next().is_some() {
-                break;
-            }
-            end += 1;
-        }
-        let replacement_range = start..end;
+        let replacement_range = min..max + 1;
 
         if range.len() == 1 {
             // We only need to replace a single part. Here we still care about the run_indices
@@ -1505,11 +1487,7 @@ impl<T: Timestamp + Lattice + Codec64> SpineBatch<T> {
             return ApplyMergeResult::NotAppliedTooManyUpdates;
         }
 
-        info!("original hollow batch {:#?}", self);
-
         *self = new_spine_batch;
-
-        info!("new hollow batch {:#?}", self);
 
         if range.start == 0 && range.end == orig_num_parts {
             ApplyMergeResult::AppliedExact
