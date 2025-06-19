@@ -404,6 +404,7 @@ UNINTERESTING_SYSTEM_PARAMETERS = [
     "enable_columnar_lgalloc",
     "compute_server_maintenance_interval",
     "compute_dataflow_max_inflight_bytes_cc",
+    "compute_flat_map_fuel",
     "consolidating_vec_growth_dampener",
     "copy_to_s3_parquet_row_group_file_ratio",
     "copy_to_s3_arrow_builder_buffer_ratio",
