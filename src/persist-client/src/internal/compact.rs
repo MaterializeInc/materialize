@@ -1230,6 +1230,7 @@ where
                 ));
             }
             if frontier != input.desc.lower() {
+                info!("non-consecutive batches: {:#?}", req);
                 return Err(anyhow!(
                     "invalid merge of non-consecutive batches {:?} vs {:?}",
                     frontier,
@@ -1239,6 +1240,7 @@ where
             frontier = input.desc.upper();
         }
         if frontier != req.desc.upper() {
+            info!("non-consecutive batches: {:#?}", req);
             return Err(anyhow!(
                 "invalid merge of non-consecutive batches {:?} vs {:?}",
                 frontier,
