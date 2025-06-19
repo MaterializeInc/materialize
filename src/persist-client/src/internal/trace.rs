@@ -1179,11 +1179,13 @@ impl<T: Timestamp + Lattice + Codec64> SpineBatch<T> {
         }
 
         if let Some((id, range)) = self.find_replacement_range(res) {
+            let desc = self.desc.clone();
             self.perform_subset_replacement(
                 &res.output,
                 id,
                 range,
                 res.new_active_compaction.clone(),
+                &desc,
             )
         } else {
             ApplyMergeResult::NotAppliedNoMatch
@@ -1308,11 +1310,13 @@ impl<T: Timestamp + Lattice + Codec64> SpineBatch<T> {
 
             // Fast path: all runs replaced
             if run_ids.len() == batch.run_meta.len() {
+                let desc = self.desc.clone();
                 return self.perform_subset_replacement(
                     &res.output,
                     id,
                     replacement_range,
                     res.new_active_compaction.clone(),
+                    &desc,
                 );
             } else {
                 match Self::construct_batch_with_runs_replaced(batch, &run_ids, &res.output) {
@@ -1328,11 +1332,13 @@ impl<T: Timestamp + Lattice + Codec64> SpineBatch<T> {
                                 new_diffs_sum, old_diffs_sum
                             );
                         }
+                        let desc = self.desc.clone();
                         self.perform_subset_replacement(
                             &new_batch,
                             id,
                             replacement_range,
                             res.new_active_compaction.clone(),
+                            &desc,
                         )
                     }
                     Err(err) => err,
@@ -1363,6 +1369,10 @@ impl<T: Timestamp + Lattice + Codec64> SpineBatch<T> {
                 id,
                 replacement_range,
                 res.new_active_compaction.clone(),
+                // This might be narrower than the current spine batch.
+                // This can happen when there are empty parts at the beginning or end
+                // of the spine batch, and the merge result is for a narrower range.
+                &res.output.desc,
             );
         }
     }
@@ -1404,11 +1414,13 @@ impl<T: Timestamp + Lattice + Codec64> SpineBatch<T> {
 
         // Try subset replacement
         if let Some((id, range)) = self.find_replacement_range(res) {
+            let desc = self.desc.clone();
             self.perform_subset_replacement(
                 &res.output,
                 id,
                 range,
                 res.new_active_compaction.clone(),
+                &desc,
             )
         } else {
             ApplyMergeResult::NotAppliedNoMatch
@@ -1456,11 +1468,12 @@ impl<T: Timestamp + Lattice + Codec64> SpineBatch<T> {
         spine_id: SpineId,
         range: Range<usize>,
         new_active_compaction: Option<ActiveCompaction<T>>,
+        desc: &Description<T>,
     ) -> ApplyMergeResult {
         let SpineBatch {
             id,
             parts,
-            desc,
+            desc: _,
             active_compaction: _,
             len: _,
         } = self;
