@@ -9,27 +9,7 @@ in the PR, GitHub will have already added its commit message above.
 ### Motivation
 
 <!--
-Which of the following best describes the motivation behind this PR?
+If this PR fixes a recognized bug or adds a known-desirable feature, add the link here.
 
-  * This PR fixes a recognized bug.
-
-    [Ensure issue is linked somewhere.]
-
-  * This PR adds a known-desirable feature.
-
-    [Ensure issue is linked somewhere.]
-
-  * This PR fixes a previously unreported bug.
-
-    [Describe the bug in detail, as if you were filing a bug report.]
-
-  * This PR adds a feature that has not yet been specified.
-
-    [Write a brief specification for the feature, including justification
-     for its inclusion in Materialize, as if you were writing the original
-     feature specification.]
-
-   * This PR refactors existing code.
-
-    [Describe what was wrong with the existing code, if it is not obvious.]
+If not, write a brief specification for the feature or description of the bug here. (If the feature or bug needs more than a brief description, create an issue and link it here.
 -->
