@@ -1098,10 +1098,10 @@ impl<T: Timestamp + Lattice + Codec64> SpineBatch<T> {
             info!("original batch {:#?}", original);
             info!("replacement batch {:#?}", replacement);
         }
-        info!(
-            "Replacing runs in batch: start_id={}, end_id={}, start_run={}, end_run={}",
-            start_id, end_id, start_run, end_run
-        );
+        // info!(
+        //     "Replacing runs in batch: start_id={}, end_id={}, start_run={}, end_run={}",
+        //     start_id, end_id, start_run, end_run
+        // );
         if replacement.run_meta.len() != 1 {
             info!(
                 "Replacement batch must have exactly one run, but has {}: {:#?}",
@@ -1128,10 +1128,10 @@ impl<T: Timestamp + Lattice + Codec64> SpineBatch<T> {
         //     .copied()
         //     .unwrap_or(original.parts.len());
 
-        info!(
-            "Replacing parts from {} to {} (inclusive)",
-            start_part, end_part
-        );
+        // info!(
+        //     "Replacing parts from {} to {} (inclusive)",
+        //     start_part, end_part
+        // );
 
         // 2. Replace parts
         let mut parts = Vec::new();
