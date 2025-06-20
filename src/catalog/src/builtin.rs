@@ -13173,12 +13173,13 @@ pub static MZ_SINK_STATISTICS: LazyLock<BuiltinView> = LazyLock::new(|| BuiltinV
     sql: "
 SELECT
     id,
+    replica_id,
     SUM(messages_staged)::uint8 AS messages_staged,
     SUM(messages_committed)::uint8 AS messages_committed,
     SUM(bytes_staged)::uint8 AS bytes_staged,
     SUM(bytes_committed)::uint8 AS bytes_committed
 FROM mz_internal.mz_sink_statistics_raw
-GROUP BY id",
+GROUP BY id, replica_id",
     access: vec![PUBLIC_SELECT],
 });
 
