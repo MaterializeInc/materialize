@@ -18,6 +18,11 @@ More granular permissions for the service account can then be configured using
 
 ## Materialize Console
 
+{{< important >}}
+For a new service account, after creating the new app password, you
+must connect with the service account to complete the account creation.
+{{</ important >}}
+
 1. [Log in to the Materialize Console](https://console.materialize.com/).
 
 1. In the side navigation bar, click **+ Create New** > **App Password**.
@@ -34,10 +39,49 @@ create and associate with the new app password.
     - `Organization Member`: has restricted access to the database, depending on
       the privileges defined via [role-based access control (RBAC)](/manage/access-control/#role-based-access-control-rbac).
 
-1. Click **Create Password** to create the new service account.
+1. Click **Create Password** to generate a new password for your service
+   account.
 
-For general guidance on using the Materialize Console for admin tasks, see the
-[reference documentation](/console/admin/).
+1. Store the new password securely.
+
+   {{< note >}}
+
+   Do not reload or navigate away from the screen before storing the
+   password. This information is not displayed again.
+
+   {{</ note >}}
+
+1. Connect with the new service account to finish creating the new
+   account.
+
+   1. Find your new service account in the **App Passwords** table.
+
+   1. Click on the **Connect** button to get details on connecting with the new
+      account.
+
+      {{< tabs >}}
+      {{< tab "psql" >}}
+If you have `psql` installed:
+
+1. Click on the **Terminal** tab.
+1. From a terminal, connect using the psql command displayed.
+1. When prompted for the password, enter the app's password.
+
+Once connected, the service account creation is complete and you can grant roles
+to the new service account.
+
+      {{</ tab >}}
+      {{< tab "Other clients" >}}
+To use a different client to connect,
+
+1. Click on the **External tools** tab to get the connection details.
+
+1. Update the client to use these details and connect.
+
+Once connected, the service account creation is complete and you can grant roles
+to the new service account.
+      {{</ tab >}}
+      {{</ tabs >}}
 
 ## Terraform
 
