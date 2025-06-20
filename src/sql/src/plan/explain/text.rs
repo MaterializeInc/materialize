@@ -297,6 +297,7 @@ impl HirRelationExpr {
     }
 }
 
+/// WARNING: This does not redact yet. Don't use this in prod to print log msgs!
 impl fmt::Display for HirScalarExpr {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         use HirRelationExpr::Get;
