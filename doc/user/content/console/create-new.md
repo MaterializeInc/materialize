@@ -103,7 +103,6 @@ application password")
    | **Type** | Select **Personal** |
    | **Name** | Specify a descriptive name. |
 
-
    {{</ tab >}}
    {{< tab "Service account" >}}
 
@@ -125,7 +124,51 @@ application password")
    {{</ tab >}}
    {{</ tabs >}}
 
-1. Click **Create password** to create the app password.
 
-To view the created application passwords, go to [Admin > App
+1. Click **Create password** to generate the app password.
+
+1. Store the new password securely.
+
+   {{< note >}}
+
+   Do not reload or navigate away from the screen before storing the
+   password. This information is not displayed again.
+
+   {{</ note >}}
+
+1. **For a new service account only**.
+
+   For a new service account, after creating the new app password, you must
+   connect with the service account to complete the account creation. To connect:
+
+   1. Find your new service account in the **App Passwords** table.
+
+   1. Click on the **Connect** button to get details on connecting with the new
+      account.
+
+      {{< tabs >}}
+      {{< tab "psql" >}}
+If you have `psql` installed:
+
+1. Click on the **Terminal** tab.
+1. From a terminal, connect using the psql command displayed.
+1. When prompted for the password, enter the app's password.
+
+Once connected, the service account creation is complete and you can grant roles
+to the new service account.
+
+      {{</ tab >}}
+      {{< tab "Other clients" >}}
+To use a non-psql client to connect,
+
+1. Click on the **External tools** tab to get the connection details.
+
+1. Update the client to use these details and connect.
+
+Once connected, the service account creation is complete and you can grant roles
+to the new service account.
+      {{</ tab >}}
+      {{</ tabs >}}
+
+To view the created app accounts, go to [Admin > App
 Passwords](/console/admin/).
