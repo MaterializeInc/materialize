@@ -10,6 +10,7 @@
 //! Logic related to applying updates from a [`mz_catalog::durable::DurableCatalogState`] to a
 //! [`CatalogState`].
 
+use core::panic;
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::fmt::Debug;
 use std::iter;
@@ -1936,22 +1937,25 @@ fn sort_updates_inner(updates: Vec<StateUpdate>) -> Vec<StateUpdate> {
         }
     }
 
-    /// Sort `CONNECTION` items.
+    type ConnectionKey = (mz_catalog::durable::Item, Timestamp, StateDiff);
+
+    /// Topologically sort `CONNECTION` items by dependencies.
     ///
     /// `CONNECTION`s can depend on one another, e.g. a `KAFKA CONNECTION` contains
     /// a list of `BROKERS` and these broker definitions can themselves reference other
     /// connections. This `BROKERS` list can also be `ALTER`ed and thus it's possible
     /// for a connection to depend on another with an ID greater than its own.
-    fn sort_connections(connections: &mut Vec<(mz_catalog::durable::Item, Timestamp, StateDiff)>) {
-        let mut topo: BTreeMap<
-            (mz_catalog::durable::Item, Timestamp, StateDiff),
-            BTreeSet<CatalogItemId>,
-        > = BTreeMap::default();
+    fn sort_connections(connections: &mut Vec<ConnectionKey>) {
+        let mut topo: BTreeMap<CatalogItemId, BTreeSet<CatalogItemId>> = BTreeMap::default();
+        let mut connection_in_degree: BTreeMap<CatalogItemId, (ConnectionKey, usize)> = connections
+            .iter()
+            .map(|conn| (conn.0.id, (conn.clone(), 0)))
+            .collect();
         let existing_connections: BTreeSet<_> = connections.iter().map(|item| item.0.id).collect();
 
         // Initialize our set of topological sort.
         tracing::info!(?connections, "sorting connections");
-        for (connection, ts, diff) in connections.drain(..) {
+        for (connection, _, _) in connections.drain(..) {
             let statement = mz_sql::parse::parse(&connection.create_sql)
                 .expect("valid CONNECTION create_sql")
                 .into_element()
@@ -1964,41 +1968,41 @@ fn sort_updates_inner(updates: Vec<StateUpdate>) -> Vec<StateUpdate> {
             // dependency already exists and thus it's not in `connections`.
             dependencies.retain(|dep| existing_connections.contains(dep));
 
+            for dep in dependencies.iter() {
+                connection_in_degree
+                    .entry(*dep)
+                    .and_modify(|(_, in_degree)| *in_degree += 1);
+            }
+
             // Be defensive and ensure we're not clobbering any items.
-            assert_none!(topo.insert((connection, ts, diff), dependencies));
+            assert_none!(topo.insert(connection.id, dependencies));
         }
-        tracing::info!(?topo, ?existing_connections, "built topological sort");
+
+        let mut to_sort: VecDeque<ConnectionKey> = VecDeque::new();
+        for (conn, in_degree) in connection_in_degree.values().cloned() {
+            if in_degree == 0 {
+                to_sort.push_back(conn);
+            }
+        }
 
         // Do a topological sort, pushing back into the provided Vec.
-        while !topo.is_empty() {
-            // Get all of the connections with no dependencies.
-            let no_deps: Vec<_> = topo
-                .iter()
-                .filter_map(|(item, deps)| {
-                    if deps.is_empty() {
-                        Some(item.clone())
-                    } else {
-                        None
-                    }
-                })
-                .collect();
+        while !to_sort.is_empty() {
+            let Some(current) = to_sort.pop_front() else {
+                panic!(
+                    "Programming error, impossible situation nothing in queue after checking it is not empty."
+                )
+            };
+            let Some(outgoing_conns) = topo.get(&current.0.id) else {
+                panic!("Programming error, could not find dependencies for connection.")
+            };
 
-            // Cycle in our graph!
-            if no_deps.is_empty() {
-                panic!("programming error, cycle in Connections");
+            for outgoing_conn in outgoing_conns.iter() {
+                connection_in_degree
+                    .entry(*outgoing_conn)
+                    .and_modify(|(_, in_degree)| *in_degree -= 1);
             }
 
-            // Process all of the items with no dependencies.
-            for item in no_deps {
-                // Remove the item from our topological sort.
-                topo.remove(&item);
-                // Remove this item from anything that depends on it.
-                topo.values_mut().for_each(|deps| {
-                    deps.remove(&item.0.id);
-                });
-                // Push it back into our list as "completed".
-                connections.push(item);
-            }
+            connections.push(current);
         }
     }
 
