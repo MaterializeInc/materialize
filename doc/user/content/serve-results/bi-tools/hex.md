@@ -4,6 +4,7 @@ description: "How to create collaborative data notebooks with Hex"
 aliases:
   - /third-party/hex/
   - /integrations/hex/
+  - /serve-results/hex/
 menu:
   main:
     parent: "bi-tools"

@@ -4,6 +4,7 @@ description: "How to create real-time dashboards with Tableau"
 aliases:
   - /third-party/tableau/
   - /integrations/tableau/
+  - /serve-results/tableau/
 menu:
   main:
     parent: "bi-tools"
