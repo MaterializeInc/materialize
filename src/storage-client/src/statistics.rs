@@ -728,10 +728,11 @@ impl RustType<ProtoSourceStatisticsUpdate> for SourceStatisticsUpdate {
     }
 }
 
-/// Controller-specific source statistics that mirror [SourceStatisticsUpdate].
+/// Statistics that we keep in the controller about a given collection
+/// (identified by id) on a given replica (identified by replica_id).
 ///
-/// This is for keeping metrics in the controller and we update it by
-/// incorporating [SourceStatisticsUpdate] that we get from clusters/replicas.
+/// This mirrors [SourceStatisticsUpdate] and we update ourselve by
+/// incorporating them using [ControllerSourceStatistics::incorporate]
 #[derive(Clone, Debug, PartialEq)]
 pub struct ControllerSourceStatistics {
     pub id: GlobalId,
@@ -877,10 +878,11 @@ impl PackableStats for ControllerSourceStatistics {
     }
 }
 
-/// Controller-specific sink statistics that mirror [SinkStatisticsUpdate].
+/// Statistics that we keep in the controller about a given collection
+/// (identified by id) on a given replica (identified by replica_id).
 ///
-/// This is for keeping metrics in the controller and we update it by
-/// incorporating [SinkStatisticsUpdate] that we get from clusters/replicas.
+/// This mirrors [SinkStatisticsUpdate] and we update ourselve by incorporating
+/// them using [ControllerSinkStatistics::incorporate]
 #[derive(Clone, Debug, PartialEq)]
 pub struct ControllerSinkStatistics {
     pub id: GlobalId,
@@ -945,8 +947,7 @@ impl PackableStats for ControllerSinkStatistics {
             bytes_staged: iter.next().unwrap().unwrap_uint64().into(),
             bytes_committed: iter.next().unwrap().unwrap_uint64().into(),
         };
-        // TODO: replica_id!
-        (s.id, None, s)
+        (s.id, Some(s.replica_id), s)
     }
 }
 
