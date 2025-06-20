@@ -10,6 +10,7 @@
 //! Implementation of the storage controller trait.
 
 use std::any::Any;
+use std::collections::btree_map;
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::{Debug, Display};
 use std::num::NonZeroI64;
@@ -2287,21 +2288,23 @@ where
                             // tracing::info!(?stat, "new stats");
                             let collection_id = stat.id.clone();
 
-                            shared_stats
+                            let entry = shared_stats
                                 .source_statistics
-                                .entry((stat.id, Some(replica_id)))
-                                .and_modify(|current| {
-                                    current.stat().incorporate(stat);
-                                })
-                                .or_insert_with(|| {
-                                    let stats = StatsState::new(ControllerSourceStatistics::new(
-                                        collection_id,
-                                        replica_id,
-                                    ));
+                                .entry((stat.id, Some(replica_id)));
+
+                            match entry {
+                                btree_map::Entry::Vacant(vacant_entry) => {
+                                    let mut stats = StatsState::new(
+                                        ControllerSourceStatistics::new(collection_id, replica_id),
+                                    );
                                     stats.stat().incorporate(stat);
 
-                                    stats
-                                });
+                                    vacant_entry.insert(stats);
+                                }
+                                btree_map::Entry::Occupied(mut occupied_entry) => {
+                                    occupied_entry.get_mut().stat().incorporate(stat);
+                                }
+                            }
                         }
                     }
 
@@ -2321,20 +2324,22 @@ where
                         for stat in sink_stats {
                             let collection_id = stat.id.clone();
 
-                            shared_stats
-                                .entry((stat.id, Some(replica_id)))
-                                .and_modify(|current| {
-                                    current.stat().incorporate(stat);
-                                })
-                                .or_insert_with(|| {
-                                    let stats = StatsState::new(ControllerSinkStatistics::new(
+                            let entry = shared_stats.entry((stat.id, Some(replica_id)));
+
+                            match entry {
+                                btree_map::Entry::Vacant(vacant_entry) => {
+                                    let mut stats = StatsState::new(ControllerSinkStatistics::new(
                                         collection_id,
                                         replica_id,
                                     ));
                                     stats.stat().incorporate(stat);
 
-                                    stats
-                                });
+                                    vacant_entry.insert(stats);
+                                }
+                                btree_map::Entry::Occupied(mut occupied_entry) => {
+                                    occupied_entry.get_mut().stat().incorporate(stat);
+                                }
+                            }
                         }
                     }
                 }
