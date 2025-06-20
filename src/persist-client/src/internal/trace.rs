@@ -1102,6 +1102,14 @@ impl<T: Timestamp + Lattice + Codec64> SpineBatch<T> {
             "Replacing runs in batch: start_id={}, end_id={}, start_run={}, end_run={}",
             start_id, end_id, start_run, end_run
         );
+        if replacement.run_meta.len() != 1 {
+            info!(
+                "Replacement batch must have exactly one run, but has {}: {:#?}",
+                replacement.run_meta.len(),
+                replacement
+            );
+            info!("Original batch: {:#?}", original);
+        }
 
         // 1. Determine part index range to replace
         let start_part = if start_run == 0 {
@@ -1156,7 +1164,7 @@ impl<T: Timestamp + Lattice + Codec64> SpineBatch<T> {
                 replacement.parts.len()
             } else {
                 // Shifted original
-                let orig_idx = i + (end_run - start_run);
+                let orig_idx = end_run + 1 + (i - (start_run + replacement.run_meta.len()));
                 let start = if orig_idx == 0 {
                     0
                 } else {
