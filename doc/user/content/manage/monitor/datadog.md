@@ -4,6 +4,7 @@ description: "How to monitor the performance and overall health of your Material
 menu:
   main:
     parent: "monitor"
+    weight: 5
 ---
 
 This guide walks you through the steps required to monitor the performance and

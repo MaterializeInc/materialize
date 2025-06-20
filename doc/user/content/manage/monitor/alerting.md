@@ -4,6 +4,7 @@ description: "Alerting thresholds to use for monitoring."
 menu:
   main:
     parent: "monitor"
+    weight: 15
 ---
 
 After setting up a monitoring tool, it is important to configure alert rules. Alert rules send a notification when a metric surpasses a threshold. This will help you prevent operational incidents.
