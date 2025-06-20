@@ -72,7 +72,7 @@ See also [Cluster architecture](#cluster-architecture).
 ### Separate sinks from sources
 
 Avoid putting sinks on the same cluster that hosts sources to allow for
-[blue/green deployment](/manage/dbt/development-workflows/#bluegreen-deployments).
+[blue/green deployment](/manage/dbt/blue-green-deployments/).
 
 See also [Cluster architecture](#cluster-architecture).
 

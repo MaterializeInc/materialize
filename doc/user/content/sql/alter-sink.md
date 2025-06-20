@@ -8,7 +8,7 @@ menu:
 
 `ALTER SINK` allows cutting a sink over to a new upstream relation without
 causing disruption to downstream consumers. This is useful in the context
-of [blue/green deployments](/manage/dbt/development-workflows/#bluegreen-deployments).
+of [blue/green deployments](/manage/dbt/blue-green-deployments/).
 
 ## Syntax
 

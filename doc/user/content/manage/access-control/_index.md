@@ -7,7 +7,7 @@ menu:
     parent: manage
     name: Access control
     identifier: 'access-control'
-    weight: 15
+    weight: 10
 ---
 
 {{< note >}}
@@ -88,7 +88,7 @@ best place to plug it. Need to add some more meat if we keep it."
 Although Materialize does not integrate directly with external secret stores,
 it’s possible to manage this integration via [Terraform](/manage/terraform).
 
-Check the [Terraform documentation](/manage/terraform/#external-secret-stores)
+Check the [Terraform documentation](/manage/terraform/appendix-secret-stores/)
 for more details on how to integrate with common external secret stores, like
 HashiCorp Vault or AWS Secrets Manager.
 
