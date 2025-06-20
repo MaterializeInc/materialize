@@ -2286,7 +2286,7 @@ where
                         for stat in source_stats {
                             // tracing::info!(?stat, "new stats");
                             let collection_id = stat.id.clone();
-                            // Don't override it if its been removed.
+
                             shared_stats
                                 .source_statistics
                                 .entry((stat.id, Some(replica_id)))
@@ -2294,10 +2294,13 @@ where
                                     current.stat().incorporate(stat);
                                 })
                                 .or_insert_with(|| {
-                                    StatsState::new(ControllerSourceStatistics::new(
+                                    let stats = StatsState::new(ControllerSourceStatistics::new(
                                         collection_id,
                                         replica_id,
-                                    ))
+                                    ));
+                                    stats.stat().incorporate(stat);
+
+                                    stats
                                 });
                         }
                     }
@@ -2317,17 +2320,20 @@ where
 
                         for stat in sink_stats {
                             let collection_id = stat.id.clone();
-                            // Don't override it if its been removed.
+
                             shared_stats
                                 .entry((stat.id, Some(replica_id)))
                                 .and_modify(|current| {
                                     current.stat().incorporate(stat);
                                 })
                                 .or_insert_with(|| {
-                                    StatsState::new(ControllerSinkStatistics::new(
+                                    let stats = StatsState::new(ControllerSinkStatistics::new(
                                         collection_id,
                                         replica_id,
-                                    ))
+                                    ));
+                                    stats.stat().incorporate(stat);
+
+                                    stats
                                 });
                         }
                     }
