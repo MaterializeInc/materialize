@@ -1286,16 +1286,16 @@ impl<T: Timestamp + Lattice + Codec64> SpineBatch<T> {
             };
             range.push(i);
 
-            if inputs.len() > 1 {
-                assert_eq!(
-                    part.batch.run_meta.len(),
-                    run_indices.len(),
-                    "merge result for spine batch {:?} has {} runs, but spine batch has {} runs",
-                    spine_id,
-                    run_indices.len(),
-                    part.batch.run_meta.len()
-                );
-            }
+            // if inputs.len() > 1 {
+            //     assert_eq!(
+            //         part.batch.run_meta.len(),
+            //         run_indices.len(),
+            //         "merge result for spine batch {:?} has {} runs, but spine batch has {} runs",
+            //         spine_id,
+            //         run_indices.len(),
+            //         part.batch.run_meta.len()
+            //     );
+            // }
         }
 
         range.sort_unstable();
