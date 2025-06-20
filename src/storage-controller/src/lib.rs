@@ -197,8 +197,14 @@ pub struct Controller<T: Timestamp + Lattice + Codec64 + From<EpochMillis> + Tim
     source_statistics: Arc<Mutex<statistics::SourceStatistics>>,
     /// Consolidated metrics updates to periodically write. We do not eagerly initialize this,
     /// and its contents are entirely driven by `StorageResponse::StatisticsUpdates`'s.
-    sink_statistics:
-        Arc<Mutex<BTreeMap<GlobalId, statistics::StatsState<ControllerSinkStatistics>>>>,
+    sink_statistics: Arc<
+        Mutex<
+            BTreeMap<
+                (GlobalId, Option<ReplicaId>),
+                statistics::StatsState<ControllerSinkStatistics>,
+            >,
+        >,
+    >,
     /// A way to update the statistics interval in the statistics tasks.
     statistics_interval_sender: Sender<Duration>,
 
@@ -1165,27 +1171,12 @@ where
         }
 
         {
-            // // Ensure all sources are associated with the statistics.
-            // //
-            // // We currently do not call `create_collections` after we have initialized the source
-            // // statistics scrapers, but in the interest of safety, avoid overriding existing
-            // // statistics values.
             let mut source_statistics = self.source_statistics.lock().expect("poisoned");
-            let mut sink_statistics = self.sink_statistics.lock().expect("poisoned");
-            //
-            // for id in new_source_statistic_entries {
-            //     source_statistics
-            //         .source_statistics
-            //         .entry(id)
-            //         .or_insert_with(|| StatsState::new(ControllerSourceStatistics::new(id)));
-            // }
+
+            // Webhooks don't run on clusters/replicas, so we initialize their
+            // statistics collection here.
             for id in new_webhook_statistic_entries {
                 source_statistics.webhook_statistics.entry(id).or_default();
-            }
-            for id in new_sink_statistic_entries {
-                sink_statistics
-                    .entry(id)
-                    .or_insert_with(|| StatsState::new(ControllerSinkStatistics::new(id)));
             }
         }
 
@@ -2003,8 +1994,12 @@ where
         {
             let mut source_statistics = self.source_statistics.lock().expect("poisoned");
             for id in source_statistics_to_drop {
-                source_statistics.source_statistics.remove(&id);
-                source_statistics.webhook_statistics.remove(&id);
+                source_statistics
+                    .source_statistics
+                    .retain(|(stats_id, _), _| stats_id != &id);
+                source_statistics
+                    .webhook_statistics
+                    .retain(|stats_id, _| stats_id != &id);
             }
         }
 
@@ -2107,7 +2102,7 @@ where
             let mut sink_statistics = self.sink_statistics.lock().expect("poisoned");
             for id in sinks_to_drop.iter() {
                 status_updates.push(StatusUpdate::new(*id, status_now, Status::Dropped));
-                sink_statistics.remove(id);
+                sink_statistics.retain(|(stats_id, _), _| stats_id != id);
             }
         }
 
@@ -2289,8 +2284,8 @@ where
                             let collection_id = stat.id.clone();
                             // Don't override it if its been removed.
                             shared_stats
-                                .per_replica_source_statistics
-                                .entry((stat.id, replica_id))
+                                .source_statistics
+                                .entry((stat.id, Some(replica_id)))
                                 .and_modify(|current| {
                                     current.stat().incorporate(stat);
                                 })
@@ -2305,20 +2300,31 @@ where
 
                     {
                         let mut shared_stats = self.sink_statistics.lock().expect("poisoned");
-                        for stat in sink_stats {
-                            // Determine if this update is from the first
-                            // replica running this sink. We treat updates
-                            // differently based on that, otherwise statistics
-                            // for multi-replica sinks can get "whacky", where
-                            // whacky here means that we would overcount certain
-                            // stats. Check `incorporate`, below, for the
-                            // details.
-                            let is_from_first_replica = self.is_first_replica(replica_id, stat.id);
 
+                        let replica_id = if let Some(replica_id) = replica_id {
+                            replica_id
+                        } else {
+                            tracing::error!(
+                                ?sink_stats,
+                                "missing replica_id for sink statistics update"
+                            );
+                            continue;
+                        };
+
+                        for stat in sink_stats {
+                            let collection_id = stat.id.clone();
                             // Don't override it if its been removed.
-                            shared_stats.entry(stat.id).and_modify(|current| {
-                                current.stat().incorporate(is_from_first_replica, stat);
-                            });
+                            shared_stats
+                                .entry((stat.id, Some(replica_id)))
+                                .and_modify(|current| {
+                                    current.stat().incorporate(stat);
+                                })
+                                .or_insert_with(|| {
+                                    StatsState::new(ControllerSinkStatistics::new(
+                                        collection_id,
+                                        replica_id,
+                                    ))
+                                });
                         }
                     }
                 }
@@ -2760,7 +2766,6 @@ where
             read_only,
             source_statistics: Arc::new(Mutex::new(statistics::SourceStatistics {
                 source_statistics: BTreeMap::new(),
-                per_replica_source_statistics: BTreeMap::new(),
                 webhook_statistics: BTreeMap::new(),
             })),
             sink_statistics: Arc::new(Mutex::new(BTreeMap::new())),
@@ -3171,11 +3176,11 @@ where
             .expect("poisoned")
             .source_statistics
             // collections should also contain subsources.
-            .retain(|k, _| self.storage_collections.check_exists(*k).is_ok());
+            .retain(|(k, _replica_id), _| self.storage_collections.check_exists(*k).is_ok());
         self.sink_statistics
             .lock()
             .expect("poisoned")
-            .retain(|k, _| self.export(*k).is_ok());
+            .retain(|(k, _replica_id), _| self.export(*k).is_ok());
     }
 
     /// Appends a new global ID, shard ID pair to the appropriate collection.
@@ -3704,55 +3709,6 @@ where
         }
 
         self.wallclock_lag_last_recorded = now_trunc;
-    }
-
-    /// Returns `true` if the given replica is the "first" replica that is
-    /// running the given collection. For collections that don't "run" on a
-    /// replica (tables, webhooks, etc.) this always returns `true`.
-    fn is_first_replica(&self, replica_id: Option<ReplicaId>, collection_id: GlobalId) -> bool {
-        let replica_id = if let Some(replica_id) = replica_id {
-            replica_id
-        } else {
-            return true;
-        };
-
-        let collection = if let Some(collection) = self.collections.get(&collection_id) {
-            collection
-        } else {
-            // This should never happen, but we also shouldn't panic the
-            // controller. So long and return `false` to be on the safe-ish
-            // side.
-            tracing::warn!(%collection_id, "unknown collection id!");
-            return false;
-        };
-
-        let instance_id = match &collection.extra_state {
-            CollectionStateExtra::Ingestion(ingestion_state) => Some(ingestion_state.instance_id),
-            CollectionStateExtra::Export(export_state) => Some(export_state.cluster_id()),
-            CollectionStateExtra::None => None,
-        };
-
-        let instance_id = if let Some(instance_id) = instance_id {
-            instance_id
-        } else {
-            // No instance associated (e.g., for tables).
-            return true;
-        };
-
-        let instance = if let Some(instance) = self.instances.get(&instance_id) {
-            instance
-        } else {
-            // This should never happen, but we also shouldn't panic the
-            // controller. So long and return `false` to be on the safe-ish
-            // side.
-            tracing::warn!(%collection_id, %instance_id, "unknown instance ID!");
-            return false;
-        };
-
-        let active_replicas = instance.get_active_replicas_for_object(&collection_id);
-
-        // Check if this replica is the first (lexicographically smallest) among active replicas
-        active_replicas.iter().min() == Some(&replica_id)
     }
 
     /// Run periodic tasks.

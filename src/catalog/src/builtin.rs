@@ -12981,6 +12981,7 @@ pub static MZ_SOURCE_STATISTICS_WITH_HISTORY: LazyLock<BuiltinView> =
         oid: oid::VIEW_MZ_SOURCE_STATISTICS_WITH_HISTORY_OID,
         desc: RelationDesc::builder()
             .with_column("id", ScalarType::String.nullable(false))
+            .with_column("replica_id", ScalarType::String.nullable(true))
             .with_column("messages_received", ScalarType::UInt64.nullable(false))
             .with_column("bytes_received", ScalarType::UInt64.nullable(false))
             .with_column("updates_staged", ScalarType::UInt64.nullable(false))
@@ -12999,6 +13000,7 @@ pub static MZ_SOURCE_STATISTICS_WITH_HISTORY: LazyLock<BuiltinView> =
         sql: "
 SELECT
     id,
+    replica_id,
     -- Counters
     SUM(messages_received)::uint8 AS messages_received,
     SUM(bytes_received)::uint8 AS bytes_received,
@@ -13019,7 +13021,7 @@ SELECT
     SUM(offset_known)::uint8 AS offset_known,
     SUM(offset_committed)::uint8 AS offset_committed
 FROM mz_internal.mz_source_statistics_raw
-GROUP BY id",
+GROUP BY id, replica_id",
         access: vec![PUBLIC_SELECT],
     });
 
@@ -13028,7 +13030,7 @@ pub const MZ_SOURCE_STATISTICS_WITH_HISTORY_IND: BuiltinIndex = BuiltinIndex {
     schema: MZ_INTERNAL_SCHEMA,
     oid: oid::INDEX_MZ_SOURCE_STATISTICS_WITH_HISTORY_IND_OID,
     sql: "IN CLUSTER mz_catalog_server
-ON mz_internal.mz_source_statistics_with_history (id)",
+ON mz_internal.mz_source_statistics_with_history (id, replica_id)",
     is_retained_metrics_object: true,
 };
 
@@ -13042,6 +13044,7 @@ pub static MZ_SOURCE_STATISTICS: LazyLock<BuiltinView> = LazyLock::new(|| {
         // We need to add a redundant where clause for a new dataflow to be created.
         desc: RelationDesc::builder()
             .with_column("id", ScalarType::String.nullable(false))
+            .with_column("replica_id", ScalarType::String.nullable(true))
             .with_column("messages_received", ScalarType::UInt64.nullable(false))
             .with_column("bytes_received", ScalarType::UInt64.nullable(false))
             .with_column("updates_staged", ScalarType::UInt64.nullable(false))
@@ -13060,6 +13063,10 @@ pub static MZ_SOURCE_STATISTICS: LazyLock<BuiltinView> = LazyLock::new(|| {
             (
                 "id",
                 "The ID of the source. Corresponds to `mz_catalog.mz_sources.id`.",
+            ),
+            (
+                "replica_id",
+                "The ID of a replica running the source. Corresponds to `mz_catalog.mz_cluster_replicas.id`.",
             ),
             (
                 "messages_received",
@@ -13130,6 +13137,7 @@ pub static MZ_SINK_STATISTICS: LazyLock<BuiltinView> = LazyLock::new(|| BuiltinV
     oid: oid::VIEW_MZ_SINK_STATISTICS_OID,
     desc: RelationDesc::builder()
         .with_column("id", ScalarType::String.nullable(false))
+        .with_column("replica_id", ScalarType::String.nullable(true))
         .with_column("messages_staged", ScalarType::UInt64.nullable(false))
         .with_column("messages_committed", ScalarType::UInt64.nullable(false))
         .with_column("bytes_staged", ScalarType::UInt64.nullable(false))
@@ -13140,6 +13148,10 @@ pub static MZ_SINK_STATISTICS: LazyLock<BuiltinView> = LazyLock::new(|| BuiltinV
         (
             "id",
             "The ID of the sink. Corresponds to `mz_catalog.mz_sources.id`.",
+        ),
+        (
+            "replica_id",
+            "The ID of a replica running the sink. Corresponds to `mz_catalog.mz_cluster_replicas.id`.",
         ),
         (
             "messages_staged",
@@ -13175,7 +13187,7 @@ pub const MZ_SINK_STATISTICS_IND: BuiltinIndex = BuiltinIndex {
     schema: MZ_INTERNAL_SCHEMA,
     oid: oid::INDEX_MZ_SINK_STATISTICS_IND_OID,
     sql: "IN CLUSTER mz_catalog_server
-ON mz_internal.mz_sink_statistics (id)",
+ON mz_internal.mz_sink_statistics (id, replica_id)",
     is_retained_metrics_object: true,
 };
 

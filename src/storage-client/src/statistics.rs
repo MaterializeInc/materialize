@@ -32,7 +32,7 @@ pub static MZ_SOURCE_STATISTICS_RAW_DESC: LazyLock<RelationDesc> = LazyLock::new
         // Id of the source (or subsource).
         .with_column("id", ScalarType::String.nullable(false))
         // Id of the replica producing these statistics.
-        .with_column("replica_id", ScalarType::String.nullable(false))
+        .with_column("replica_id", ScalarType::String.nullable(true))
         //
         // Counters
         //
@@ -100,6 +100,8 @@ pub static MZ_SINK_STATISTICS_RAW_DESC: LazyLock<RelationDesc> = LazyLock::new(|
     RelationDesc::builder()
         // Id of the sink.
         .with_column("id", ScalarType::String.nullable(false))
+        // Id of the replica producing these statistics.
+        .with_column("replica_id", ScalarType::String.nullable(true))
         //
         // Counters
         //
@@ -882,6 +884,7 @@ impl PackableStats for ControllerSourceStatistics {
 #[derive(Clone, Debug, PartialEq)]
 pub struct ControllerSinkStatistics {
     pub id: GlobalId,
+    pub replica_id: ReplicaId,
 
     pub messages_staged: Counter,
     pub messages_committed: Counter,
@@ -890,9 +893,10 @@ pub struct ControllerSinkStatistics {
 }
 
 impl ControllerSinkStatistics {
-    pub fn new(id: GlobalId) -> Self {
+    pub fn new(id: GlobalId, replica_id: ReplicaId) -> Self {
         Self {
             id,
+            replica_id,
             messages_staged: Default::default(),
             messages_committed: Default::default(),
             bytes_staged: Default::default(),
@@ -901,7 +905,7 @@ impl ControllerSinkStatistics {
     }
 
     /// Incorporate updates from the given [SinkStatisticsUpdate] into ourselves
-    pub fn incorporate(&mut self, is_from_first_replica: bool, update: SinkStatisticsUpdate) {
+    pub fn incorporate(&mut self, update: SinkStatisticsUpdate) {
         let ControllerSinkStatistics {
             messages_staged,
             messages_committed,
@@ -910,16 +914,8 @@ impl ControllerSinkStatistics {
             ..
         } = self;
 
-        if is_from_first_replica {
-            // All replicas stage all messages for writing, so we would be
-            // double/triple/etc. counting if we incorporated all these updates.
-            messages_staged.incorporate(update.messages_staged, "messages_staged");
-            bytes_staged.incorporate(update.bytes_staged, "bytes_staged");
-        }
-
-        // Only one replica will manage to commit a batch of messages, so
-        // incorporate this metric from all replicas to capture the one that
-        // actually managed to commit.
+        messages_staged.incorporate(update.messages_staged, "messages_staged");
+        bytes_staged.incorporate(update.bytes_staged, "bytes_staged");
         messages_committed.incorporate(update.messages_committed, "messages_committed");
         bytes_committed.incorporate(update.bytes_committed, "bytes_committed");
     }
@@ -929,6 +925,7 @@ impl PackableStats for ControllerSinkStatistics {
     fn pack(&self, mut packer: mz_repr::RowPacker<'_>) {
         use mz_repr::Datum;
         packer.push(Datum::from(self.id.to_string().as_str()));
+        packer.push(Datum::from(self.replica_id.to_string().as_str()));
         packer.push(Datum::from(self.messages_staged.0));
         packer.push(Datum::from(self.messages_committed.0));
         packer.push(Datum::from(self.bytes_staged.0));
@@ -942,6 +939,7 @@ impl PackableStats for ControllerSinkStatistics {
         let mut iter = row.iter();
         let s = Self {
             id: iter.next().unwrap().unwrap_str().parse().unwrap(),
+            replica_id: iter.next().unwrap().unwrap_str().parse().unwrap(),
             messages_staged: iter.next().unwrap().unwrap_uint64().into(),
             messages_committed: iter.next().unwrap().unwrap_uint64().into(),
             bytes_staged: iter.next().unwrap().unwrap_uint64().into(),

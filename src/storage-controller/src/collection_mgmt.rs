@@ -463,8 +463,14 @@ where
     pub(crate) storage_collections: Arc<dyn StorageCollections<Timestamp = T> + Send + Sync>,
     pub(crate) collection_manager: collection_mgmt::CollectionManager<T>,
     pub(crate) source_statistics: Arc<Mutex<statistics::SourceStatistics>>,
-    pub(crate) sink_statistics:
-        Arc<Mutex<BTreeMap<GlobalId, statistics::StatsState<ControllerSinkStatistics>>>>,
+    pub(crate) sink_statistics: Arc<
+        Mutex<
+            BTreeMap<
+                (GlobalId, Option<ReplicaId>),
+                statistics::StatsState<ControllerSinkStatistics>,
+            >,
+        >,
+    >,
     pub(crate) statistics_interval: Duration,
     pub(crate) statistics_interval_receiver: watch::Receiver<Duration>,
     pub(crate) metrics: StorageControllerMetrics,
@@ -619,7 +625,7 @@ where
                 )
                 .await;
 
-                let scraper_token = statistics::spawn_per_replica_statistics_scraper(
+                let scraper_token = statistics::spawn_statistics_scraper(
                     self.id.clone(),
                     // These do a shallow copy.
                     introspection_config.collection_manager,
