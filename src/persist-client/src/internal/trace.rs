@@ -1058,7 +1058,22 @@ impl<T: Timestamp + Lattice + Codec64> SpineBatch<T> {
             1,
             "replacement must have exactly one run"
         );
-        let run_ids = run_ids.iter().map(|x| *x).rev().collect::<Vec<_>>();
+        // let run_ids = run_ids.iter().map(|x| *x).rev().collect::<Vec<_>>();
+        let mut run_ids = run_ids.to_vec();
+        run_ids.sort_by(|a, b| {
+            original
+                .run_meta
+                .iter()
+                .position(|m| m.uuid == Some(*a))
+                .unwrap_or(usize::MAX)
+                .cmp(
+                    &original
+                        .run_meta
+                        .iter()
+                        .position(|m| m.uuid == Some(*b))
+                        .unwrap_or(usize::MAX),
+                )
+        });
 
         let start_id = run_ids[0];
         let end_id = *run_ids.last().unwrap();
@@ -1328,7 +1343,6 @@ impl<T: Timestamp + Lattice + Codec64> SpineBatch<T> {
                 .unwrap()
                 .iter()
                 .filter_map(|id| id.1)
-                .sorted()
                 .collect::<Vec<_>>();
 
             // backwards compatibility: if the run_ids are empty, we assume we want to replace all runs
