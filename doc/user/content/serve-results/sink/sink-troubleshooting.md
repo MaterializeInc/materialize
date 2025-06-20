@@ -1,6 +1,8 @@
 ---
 title: "Troubleshooting sinks"
 description: ""
+aliases:
+  - /serve-results/sink-troubleshooting/
 menu:
   main:
     parent: sink
