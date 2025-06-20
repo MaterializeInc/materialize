@@ -23,6 +23,7 @@ use futures::{Stream, pin_mut};
 use futures_util::StreamExt;
 use mz_dyncfg::Config;
 use mz_ore::cast::CastFrom;
+use mz_ore::collections::CollectionExt;
 use mz_ore::error::ErrorExt;
 use mz_ore::now::SYSTEM_TIME;
 use mz_persist::location::Blob;
@@ -768,61 +769,32 @@ where
                         //     req.desc.clone()
                         // };
         let desc = if incremental_enabled {
-            let multiple_batches = {
-                let first_batch = runs.first().map(|(id, _, _, _)| id.0);
-                runs.iter().skip(1).any(|(id, _, _, _)| Some(id.0) != first_batch)
-            };
-            if multiple_batches {
-                info!("Compacting across multiple batches: {:?}", input_runs);
-                req.desc.clone()
-            } else {
+            // let multiple_batches = {
+            //     let first_batch = runs.first().map(|(id, _, _, _)| id.0);
+            //     runs.iter().skip(1).any(|(id, _, _, _)| Some(id.0) != first_batch)
+            // };
+            // if multiple_batches {
+            //     info!("Compacting across multiple batches: {:?}", input_runs);
+            //     req.desc.clone()
+            // } else {
                 info!("Compacting a single batch: {:?}", input_runs);
 
-                let parts_cover_whole_batch = {
-                    let number_of_runs_in_req = req.inputs.iter()
-                        .flat_map(|x| x.batch.runs())
-                        .count();
-                    let number_of_runs_in_parts = runs.len();
-                    number_of_runs_in_req == number_of_runs_in_parts
-                };
-
-                if parts_cover_whole_batch {
-                    info!("Parts cover the whole batch, using request description");
-                    req.desc.clone()
-                } else {
-                    info!("Parts do not cover the whole batch, calculating new description");
-
-                    let mut desc_lower = descriptions
+                    let desc_lower = descriptions
                         .iter()
                         .map(|desc| desc.lower())
                         .cloned()
                         .reduce(|a, b| a.meet(&b))
                         .unwrap_or_else(|| req.desc.lower().clone());
 
-                    let mut desc_upper = descriptions
+                    let desc_upper = descriptions
                         .iter()
                         .map(|desc| desc.upper())
                         .cloned()
                         .reduce(|a, b| a.join(&b))
                         .unwrap_or_else(|| req.desc.upper().clone());
 
-                    // Include skipped (empty) batches at the start
-                    if let Some(first_run_id) = runs.first().map(|(id, _, _, _)| id.0) {
-                        for input in req.inputs.iter().take_while(|input| input.id != first_run_id && input.batch.run_meta.is_empty()) {
-                            desc_lower = desc_lower.meet(input.batch.desc.lower());
-                        }
-                    }
-
-                    // Include skipped (empty) batches at the end
-                    if let Some(last_run_id) = runs.last().map(|(id, _, _, _)| id.0) {
-                        for input in req.inputs.iter().rev().take_while(|input| input.id != last_run_id && input.batch.run_meta.is_empty()) {
-                            desc_upper = desc_upper.join(input.batch.desc.upper());
-                        }
-                    }
-
                     Description::new(desc_lower, desc_upper, req.desc.since().clone())
-                }
-            }
+            // }
         } else {
             req.desc.clone()
         };

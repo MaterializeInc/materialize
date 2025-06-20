@@ -58,7 +58,7 @@ use std::fmt::Debug;
 use std::mem;
 use std::ops::Range;
 use std::sync::Arc;
-use tracing::info;
+use tracing::{info, warn};
 use uuid::Uuid;
 
 use crate::internal::paths::WriterKey;
@@ -1058,6 +1058,7 @@ impl<T: Timestamp + Lattice + Codec64> SpineBatch<T> {
             1,
             "replacement must have exactly one run"
         );
+        let run_ids = run_ids.iter().map(|x| *x).rev().collect::<Vec<_>>();
 
         let start_id = run_ids[0];
         let end_id = *run_ids.last().unwrap();
@@ -1073,6 +1074,19 @@ impl<T: Timestamp + Lattice + Codec64> SpineBatch<T> {
                 end_run = i;
             }
         }
+        if end_run < start_run {
+            info!(
+                "Run IDs are not in order: start_run={}, end_run={}",
+                start_run, end_run
+            );
+            info!("Run IDs: {:?}", run_ids);
+            info!("original batch {:#?}", original);
+            info!("replacement batch {:#?}", replacement);
+        }
+        info!(
+            "Replacing runs in batch: start_id={}, end_id={}, start_run={}, end_run={}",
+            start_id, end_id, start_run, end_run
+        );
 
         // 1. Determine part index range to replace
         let start_part = if start_run == 0 {
@@ -1080,11 +1094,21 @@ impl<T: Timestamp + Lattice + Codec64> SpineBatch<T> {
         } else {
             original.run_splits[start_run - 1]
         };
-        let end_part = original
-            .run_splits
-            .get(start_run)
-            .copied()
-            .unwrap_or(original.parts.len());
+        let end_part = if end_run == original.run_meta.len() - 1 {
+            original.parts.len()
+        } else {
+            original.run_splits[end_run]
+        };
+        // let end_part = original
+        //     .run_splits
+        //     .get(start_run)
+        //     .copied()
+        //     .unwrap_or(original.parts.len());
+
+        info!(
+            "Replacing parts from {} to {} (inclusive)",
+            start_part, end_part
+        );
 
         // 2. Replace parts
         let mut parts = Vec::new();
@@ -1150,7 +1174,7 @@ impl<T: Timestamp + Lattice + Codec64> SpineBatch<T> {
         );
 
         Ok(HollowBatch {
-            desc: original.desc.clone(),
+            desc: replacement.desc.clone(),
             //FIXME: actually compute a len somehow
             len: replacement.len,
             parts,
@@ -1274,25 +1298,25 @@ impl<T: Timestamp + Lattice + Codec64> SpineBatch<T> {
         let min = *range.iter().min().unwrap();
         let max = *range.iter().max().unwrap();
         // Include empty parts at the start and end of the range
-        let mut start = min;
-        while start > 0 {
-            let part = &self.parts[start - 1];
-            if part.batch.runs().next().is_some() {
-                break;
-            }
-            start -= 1;
-        }
+        // let mut start = min;
+        // while start > 0 {
+        //     let part = &self.parts[start - 1];
+        //     if part.batch.runs().next().is_some() {
+        //         break;
+        //     }
+        //     start -= 1;
+        // }
 
-        let mut end = max + 1;
-        while end < self.parts.len() {
-            let part = &self.parts[end];
-            if part.batch.runs().next().is_some() {
-                break;
-            }
-            end += 1;
-        }
-        let replacement_range = start..end;
-        // let replacement_range = min..max + 1;
+        // let mut end = max + 1;
+        // while end < self.parts.len() {
+        //     let part = &self.parts[end];
+        //     if part.batch.runs().next().is_some() {
+        //         break;
+        //     }
+        //     end += 1;
+        // }
+        // let replacement_range = start..end;
+        let replacement_range = min..max + 1;
 
         if range.len() == 1 {
             // We only need to replace a single part. Here we still care about the run_indices
@@ -1328,44 +1352,53 @@ impl<T: Timestamp + Lattice + Codec64> SpineBatch<T> {
             let id = SpineId(parts.first().unwrap().id.0, parts.last().unwrap().id.1);
 
             // Fast path: all runs replaced
-            if run_ids.len() == batch.run_meta.len() {
-                let desc = self.desc.clone();
-                return self.perform_subset_replacement(
-                    &res.output,
-                    id,
-                    replacement_range,
-                    res.new_active_compaction.clone(),
-                    &desc,
-                );
-            } else {
-                match Self::construct_batch_with_runs_replaced(batch, &run_ids, &res.output) {
-                    Ok(new_batch) => {
-                        let new_batch_diff_sum =
-                            Self::diffs_sum::<D>(new_batch.parts.iter(), metrics);
-                        if let (Some(old_diffs_sum), Some(new_diffs_sum)) =
-                            (old_batch_diff_sum, new_batch_diff_sum)
-                        {
-                            assert_eq!(
-                                old_diffs_sum, new_diffs_sum,
-                                "merge res diffs sum ({:?}) did not match spine batch diffs sum ({:?})",
-                                new_diffs_sum, old_diffs_sum
+            // if run_ids.len() == batch.run_meta.len() {
+            //     let desc = self.desc.clone();
+            //     return self.perform_subset_replacement(
+            //         &res.output,
+            //         id,
+            //         replacement_range,
+            //         res.new_active_compaction.clone(),
+            //         &desc,
+            //     );
+            // } else {
+            match Self::construct_batch_with_runs_replaced(batch, &run_ids, &res.output) {
+                Ok(new_batch) => {
+                    let new_batch_diff_sum = Self::diffs_sum::<D>(new_batch.parts.iter(), metrics);
+                    if let (Some(old_diffs_sum), Some(new_diffs_sum)) =
+                        (old_batch_diff_sum, new_batch_diff_sum)
+                    {
+                        if old_diffs_sum != new_diffs_sum {
+                            warn!(
+                                "diffs sum for replacement batch did not match: old={:?}, new={:?}",
+                                old_diffs_sum, new_diffs_sum
                             );
+                            warn!("run ids: {:?}", run_ids);
+                            warn!("replacement batch: {:#?}", res.output);
+                            warn!("original batch: {:#?}", batch);
+                            warn!("new batch: {:#?}", new_batch);
                         }
-                        let desc = self.desc.clone();
-                        self.perform_subset_replacement(
-                            &new_batch,
-                            id,
-                            replacement_range,
-                            res.new_active_compaction.clone(),
-                            &desc,
-                        )
+                        assert_eq!(
+                            old_diffs_sum, new_diffs_sum,
+                            "merge res diffs sum ({:?}) did not match spine batch diffs sum ({:?})",
+                            new_diffs_sum, old_diffs_sum
+                        );
                     }
-                    Err(err) => err,
+                    let desc = self.desc.clone();
+                    self.perform_subset_replacement(
+                        &new_batch,
+                        id,
+                        replacement_range,
+                        res.new_active_compaction.clone(),
+                        &desc,
+                    )
                 }
+                Err(err) => err,
             }
+            // }
         } else {
             // We need to replace a range of parts. Here we don't care about the run_indices
-            // because we are replacing the entire part(s) this is checked above.
+            // because we are replacing the entire part(s)
             let old_diffs_sum = Self::diffs_sum::<D>(
                 self.parts[replacement_range.clone()]
                     .iter()
@@ -1516,7 +1549,9 @@ impl<T: Timestamp + Lattice + Codec64> SpineBatch<T> {
             return ApplyMergeResult::NotAppliedTooManyUpdates;
         }
 
+        // info!("old spine batch: {:#?}", self);
         *self = new_spine_batch;
+        // info!("new spine batch: {:#?}", self);
 
         if range.start == 0 && range.end == orig_num_parts {
             ApplyMergeResult::AppliedExact
