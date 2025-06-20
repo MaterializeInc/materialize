@@ -61,21 +61,6 @@ weight = 12
 
 
 #
-# Manage Materialize
-#
-
-[[menu.main]]
-identifier = "manage"
-name = "Manage Materialize"
-weight = 14
-
-[[menu.main]]
-name = "Monitoring"
-identifier = "monitor"
-weight = 5
-parent = "manage"
-
-#
 # Reference
 #
 
