@@ -698,7 +698,7 @@ where
                     .collect::<Vec<_>>();
 
                 let desc = if incremental_enabled {
-                    info!("Compacting a single batch: {:?}", input_runs);
+                    // info!("Compacting a single batch: {:?}", input_runs);
                     let desc_lower = descriptions
                         .iter()
                         .map(|desc| desc.lower())
@@ -718,10 +718,10 @@ where
                     req.desc.clone()
                 };
 
-                info!(
-                    "Compacting runs {:?} with description {:?}",
-                    input_runs, desc
-                );
+                // info!(
+                //     "Compacting runs {:?} with description {:?}",
+                //     input_runs, desc
+                // );
 
                 let runs = runs.iter()
                     .map(|(_, desc, meta, run)| (desc.clone(), meta.clone(), run.clone()))
