@@ -603,239 +603,304 @@ where
         incremental_enabled: bool,
     ) -> impl Stream<Item = Result<FueledMergeRes<T>, anyhow::Error>> {
         async_stream::stream! {
-            let _ = Self::validate_req(&req)?;
+                    let _ = Self::validate_req(&req)?;
 
-            // We introduced a fast-path optimization in https://github.com/MaterializeInc/materialize/pull/15363
-            // but had to revert it due to a very scary bug. Here we count how many of our compaction reqs
-            // could be eligible for the optimization to better understand whether it's worth trying to
-            // reintroduce it.
-            let mut single_nonempty_batch = None;
-            for batch in req.inputs.iter().map(|x| &x.batch) {
-                if batch.len > 0 {
-                    match single_nonempty_batch {
-                        None => single_nonempty_batch = Some(batch),
-                        Some(_previous_nonempty_batch) => {
-                            single_nonempty_batch = None;
-                            break;
+                    // We introduced a fast-path optimization in https://github.com/MaterializeInc/materialize/pull/15363
+                    // but had to revert it due to a very scary bug. Here we count how many of our compaction reqs
+                    // could be eligible for the optimization to better understand whether it's worth trying to
+                    // reintroduce it.
+                    let mut single_nonempty_batch = None;
+                    for batch in req.inputs.iter().map(|x| &x.batch) {
+                        if batch.len > 0 {
+                            match single_nonempty_batch {
+                                None => single_nonempty_batch = Some(batch),
+                                Some(_previous_nonempty_batch) => {
+                                    single_nonempty_batch = None;
+                                    break;
+                                }
+                            }
                         }
                     }
-                }
-            }
-            if let Some(single_nonempty_batch) = single_nonempty_batch {
-                if single_nonempty_batch.run_splits.len() == 0
-                    && single_nonempty_batch.desc.since() != &Antichain::from_elem(T::minimum())
-                {
-                    metrics.compaction.fast_path_eligible.inc();
-                }
-            }
-
-            assert!(cfg.compaction_memory_bound_bytes >= 4 * cfg.batch.blob_target_size);
-
-            // Prepare memory bounds for compaction
-            let in_progress_part_reserved_memory_bytes = 2 * cfg.batch.blob_target_size;
-            let run_reserved_memory_bytes =
-                cfg.compaction_memory_bound_bytes - in_progress_part_reserved_memory_bytes;
-
-            // Flatten the input batches into a single list of runs
-            let ordered_runs =
-                Self::order_runs(&req, cfg.batch.preferred_order, &*blob, &*metrics).await?;
-
-            // There are two cases to consider here:
-            // 1. There are as many runs as there are input batches in which case we
-            //    should compact them together as space allows.
-            // 2. There are more runs than input batches, in which case we should compact them in chunks
-            //    grouped by the batch they belong to.
-            // In both cases, we should compact runs in the order they were written.
-            // This is all to make it easy to apply the compaction result incrementally.
-            // By ensuring we never write out batches that contain runs from seperate input batches
-            // (except for when each input batch has exactly one run), we can easily slot the
-            // results in to the existing batches. The special case of a single run per input batch
-            // means that each batch is, by itself, fully "compact", and the result of compaction
-            // will cleanly replace the input batches in a grouped manner.
-
-
-            // Split the runs into manageable chunks
-            let chunked_runs =
-                Self::chunk_runs(&ordered_runs, &cfg, &*metrics, run_reserved_memory_bytes);
-            let total_chunked_runs = chunked_runs.len();
-
-            let (incremental_tx, mut incremental_rx) = mpsc::channel(1);
-
-            let machine = machine.clone();
-            let incremental_handle = tokio::spawn(
-                async move {
-                    while let Some(res) = incremental_rx.recv().await {
-                        // let now = SYSTEM_TIME.clone();
-
-                        // machine.checkpoint_compaction_progress(&res, now()).await;
-                        //Do nothing for now for testing purposes
+                    if let Some(single_nonempty_batch) = single_nonempty_batch {
+                        if single_nonempty_batch.run_splits.len() == 0
+                            && single_nonempty_batch.desc.since() != &Antichain::from_elem(T::minimum())
+                        {
+                            metrics.compaction.fast_path_eligible.inc();
+                        }
                     }
-                }
-                .instrument(debug_span!("compact::incremental")),
-            );
-            let mut applied = 0;
-            for (runs, run_chunk_max_memory_usage) in chunked_runs {
-                metrics.compaction.chunks_compacted.inc();
-                metrics
-                    .compaction
-                    .runs_compacted
-                    .inc_by(u64::cast_from(runs.len()));
 
-                // Adjust parallelism based on how much memory we have left
-                let extra_outstanding_parts = (run_reserved_memory_bytes
-                    .saturating_sub(run_chunk_max_memory_usage))
-                    / cfg.batch.blob_target_size;
+                    assert!(cfg.compaction_memory_bound_bytes >= 4 * cfg.batch.blob_target_size);
 
-                let mut run_cfg = cfg.clone();
-                run_cfg.batch.batch_builder_max_outstanding_parts = 1 + extra_outstanding_parts;
+                    // Prepare memory bounds for compaction
+                    let in_progress_part_reserved_memory_bytes = 2 * cfg.batch.blob_target_size;
+                    let run_reserved_memory_bytes =
+                        cfg.compaction_memory_bound_bytes - in_progress_part_reserved_memory_bytes;
 
-                let input_runs = &runs.iter().map(|(run_id, _, _, _)| *run_id.clone()).collect::<Vec<_>>();
-                let descriptions = runs.iter()
-                    .map(|(_, desc, _, _)| desc.clone())
-                    .collect::<Vec<_>>();
+                    // Flatten the input batches into a single list of runs
+                    let ordered_runs =
+                        Self::order_runs(&req, cfg.batch.preferred_order, &*blob, &*metrics).await?;
 
-                let desc = if incremental_enabled {
-                    let multiple_batches = {
-                        let first_batch = runs.first().map(|(id, _, _, _)| id.0);
-                        runs.iter().skip(1).any(|(id, _, _, _)| Some(id.0) != first_batch)
-                    };
-                    if multiple_batches {
-                        info!("Compacting across multiple batches: {:?}", input_runs);
-                        // Our chunk_runs function guarantees that we will never chunk
-                        // across batches unless we are fully replacing the batches.
-                        // In that case, we can use the description from the request.
-                        // It is frequently possible that there are empty batches at the
-                        // beginning or end of the input. Since they have no runs, we
-                        // don't get a description from them in order_runs/chunk_runs.
-                        // This means that if we just naively calculated the new description
-                        // from the runs, our new description might have a tighter lower and
-                        // upper bound than the description in the request which would be an issue
-                        // when we try to apply the compaction result incrementally.
-                        // For example, if the request desc is [1, 10] and the runs
-                        // are [2, 3], [4, 5], and [6, 7], then the new desc would be
-                        // [2, 7] which is a problem because the request desc is [1, 10].
-                        req.desc.clone()
-                    } else {
-                        info!("Compacting a single batch: {:?}", input_runs);
-                        let parts_cover_whole_batch = {
-                            // If the parts cover the whole batch, we should use the description
-                            // from the request, otherwise we should calculate a new description.
-                            // Again, this is because there might be empty batches at the
-                            // beginning or end of the input that don't have runs, but we shouldn't
-                            // "lose" their description.
+                    // There are two cases to consider here:
+                    // 1. There are as many runs as there are input batches in which case we
+                    //    should compact them together as space allows.
+                    // 2. There are more runs than input batches, in which case we should compact them in chunks
+                    //    grouped by the batch they belong to.
+                    // In both cases, we should compact runs in the order they were written.
+                    // This is all to make it easy to apply the compaction result incrementally.
+                    // By ensuring we never write out batches that contain runs from seperate input batches
+                    // (except for when each input batch has exactly one run), we can easily slot the
+                    // results in to the existing batches. The special case of a single run per input batch
+                    // means that each batch is, by itself, fully "compact", and the result of compaction
+                    // will cleanly replace the input batches in a grouped manner.
 
-                            let number_of_runs_in_req = req.inputs.iter()
-                                .flat_map(|x| x.batch.runs())
-                                .count();
-                            let number_of_runs_in_parts = runs.len();
-                            number_of_runs_in_req == number_of_runs_in_parts
-                            // let spine_id = runs.first().map(|(id, _, _, _)| id.0);
-                            // let part = req.inputs.iter().find(|x| {
-                            //     Some(x.id) == spine_id
-                            // });
-                            // part.map_or(false, |input_batch| {
-                            //     let runs_from_batch = input_batch.batch.runs().collect::<Vec<_>>();
-                            //     runs_from_batch == runs.iter().map(|(_, _, meta, parts)| (meta.clone(), parts.clone())).collect::<Vec<_>>()
-                            // })
-                        };
-                        if parts_cover_whole_batch {
-                            info!("Parts cover the whole batch, using request description");
-                            req.desc.clone()
-                        } else {
-                            info!("Parts do not cover the whole batch, calculating new description");
-                        let desc_lower = descriptions
-                            .iter()
-                            .map(|desc| desc.lower())
-                            .cloned()
-                            .reduce(|a, b| a.meet(&b))
-                            .unwrap_or_else(|| req.desc.lower().clone());
-                        let desc_upper = descriptions
-                            .iter()
-                            .map(|desc| desc.upper())
-                            .cloned()
-                            .reduce(|a, b| a.join(&b))
-                            .unwrap_or_else(|| req.desc.upper().clone());
 
-                        Description::new(
-                            desc_lower.clone(),
-                            desc_upper.clone(),
-                            req.desc.since().clone(),
-                        )
-                    }
-                    }
-                } else {
+                    // Split the runs into manageable chunks
+                    let chunked_runs =
+                        Self::chunk_runs(&ordered_runs, &cfg, &*metrics, run_reserved_memory_bytes);
+                    let total_chunked_runs = chunked_runs.len();
+
+                    let (incremental_tx, mut incremental_rx) = mpsc::channel(1);
+
+                    let machine = machine.clone();
+                    let incremental_handle = tokio::spawn(
+                        async move {
+                            while let Some(res) = incremental_rx.recv().await {
+                                // let now = SYSTEM_TIME.clone();
+
+                                // machine.checkpoint_compaction_progress(&res, now()).await;
+                                //Do nothing for now for testing purposes
+                            }
+                        }
+                        .instrument(debug_span!("compact::incremental")),
+                    );
+                    let mut applied = 0;
+                    for (runs, run_chunk_max_memory_usage) in chunked_runs {
+                        metrics.compaction.chunks_compacted.inc();
+                        metrics
+                            .compaction
+                            .runs_compacted
+                            .inc_by(u64::cast_from(runs.len()));
+
+                        // Adjust parallelism based on how much memory we have left
+                        let extra_outstanding_parts = (run_reserved_memory_bytes
+                            .saturating_sub(run_chunk_max_memory_usage))
+                            / cfg.batch.blob_target_size;
+
+                        let mut run_cfg = cfg.clone();
+                        run_cfg.batch.batch_builder_max_outstanding_parts = 1 + extra_outstanding_parts;
+
+                        let input_runs = &runs.iter().map(|(run_id, _, _, _)| *run_id.clone()).collect::<Vec<_>>();
+                        let descriptions = runs.iter()
+                            .map(|(_, desc, _, _)| desc.clone())
+                            .collect::<Vec<_>>();
+
+                        // let desc = if incremental_enabled {
+                        //     let multiple_batches = {
+                        //         let first_batch = runs.first().map(|(id, _, _, _)| id.0);
+                        //         runs.iter().skip(1).any(|(id, _, _, _)| Some(id.0) != first_batch)
+                        //     };
+                        //     if multiple_batches {
+                        //         info!("Compacting across multiple batches: {:?}", input_runs);
+                        //         // Our chunk_runs function guarantees that we will never chunk
+                        //         // across batches unless we are fully replacing the batches.
+                        //         // In that case, we can use the description from the request.
+                        //         // It is frequently possible that there are empty batches at the
+                        //         // beginning or end of the input. Since they have no runs, we
+                        //         // don't get a description from them in order_runs/chunk_runs.
+                        //         // This means that if we just naively calculated the new description
+                        //         // from the runs, our new description might have a tighter lower and
+                        //         // upper bound than the description in the request which would be an issue
+                        //         // when we try to apply the compaction result incrementally.
+                        //         // For example, if the request desc is [1, 10] and the runs
+                        //         // are [2, 3], [4, 5], and [6, 7], then the new desc would be
+                        //         // [2, 7] which is a problem because the request desc is [1, 10].
+                        //         req.desc.clone()
+                        //     } else {
+                        //         info!("Compacting a single batch: {:?}", input_runs);
+                        //         let parts_cover_whole_batch = {
+                        //             // If the parts cover the whole batch, we should use the description
+                        //             // from the request, otherwise we should calculate a new description.
+                        //             // Again, this is because there might be empty batches at the
+                        //             // beginning or end of the input that don't have runs, but we shouldn't
+                        //             // "lose" their description.
+
+                        //             let number_of_runs_in_req = req.inputs.iter()
+                        //                 .flat_map(|x| x.batch.runs())
+                        //                 .count();
+                        //             let number_of_runs_in_parts = runs.len();
+                        //             number_of_runs_in_req == number_of_runs_in_parts
+                        //             // let spine_id = runs.first().map(|(id, _, _, _)| id.0);
+                        //             // let part = req.inputs.iter().find(|x| {
+                        //             //     Some(x.id) == spine_id
+                        //             // });
+                        //             // part.map_or(false, |input_batch| {
+                        //             //     let runs_from_batch = input_batch.batch.runs().collect::<Vec<_>>();
+                        //             //     runs_from_batch == runs.iter().map(|(_, _, meta, parts)| (meta.clone(), parts.clone())).collect::<Vec<_>>()
+                        //             // })
+                        //         };
+                        //         if parts_cover_whole_batch {
+                        //             info!("Parts cover the whole batch, using request description");
+                        //             req.desc.clone()
+                        //         } else {
+                        //             info!("Parts do not cover the whole batch, calculating new description");
+                        //             // this is still broken I think
+                        //         let desc_lower = descriptions
+                        //             .iter()
+                        //             .map(|desc| desc.lower())
+                        //             .cloned()
+                        //             .reduce(|a, b| a.meet(&b))
+                        //             .unwrap_or_else(|| req.desc.lower().clone());
+                        //         let desc_upper = descriptions
+                        //             .iter()
+                        //             .map(|desc| desc.upper())
+                        //             .cloned()
+                        //             .reduce(|a, b| a.join(&b))
+                        //             .unwrap_or_else(|| req.desc.upper().clone());
+
+                        //         Description::new(
+                        //             desc_lower.clone(),
+                        //             desc_upper.clone(),
+                        //             req.desc.since().clone(),
+                        //         )
+                        //     }
+                        //     }
+                        // } else {
+                        //     req.desc.clone()
+                        // };
+        let desc = if incremental_enabled {
+            let multiple_batches = {
+                let first_batch = runs.first().map(|(id, _, _, _)| id.0);
+                runs.iter().skip(1).any(|(id, _, _, _)| Some(id.0) != first_batch)
+            };
+            if multiple_batches {
+                info!("Compacting across multiple batches: {:?}", input_runs);
+                req.desc.clone()
+            } else {
+                info!("Compacting a single batch: {:?}", input_runs);
+
+                let parts_cover_whole_batch = {
+                    let number_of_runs_in_req = req.inputs.iter()
+                        .flat_map(|x| x.batch.runs())
+                        .count();
+                    let number_of_runs_in_parts = runs.len();
+                    number_of_runs_in_req == number_of_runs_in_parts
+                };
+
+                if parts_cover_whole_batch {
+                    info!("Parts cover the whole batch, using request description");
                     req.desc.clone()
-                };
-
-                let runs = runs.iter()
-                    .map(|(_, desc, meta, run)| (desc.clone(), meta.clone(), run.clone()))
-                    .collect::<Vec<_>>();
-
-                let batch = Self::compact_runs(
-                    &run_cfg,
-                    &req.shard_id,
-                    &desc,
-                    runs,
-                    Arc::clone(&blob),
-                    Arc::clone(&metrics),
-                    Arc::clone(&shard_metrics),
-                    Arc::clone(&isolated_runtime),
-                    write_schemas.clone(),
-                    &None,
-                    // &req.prev_batch,
-                    Some(incremental_tx.clone())
-                ).await?;
-
-                let (parts, run_splits, run_meta, updates) =
-                    (batch.parts, batch.run_splits, batch.run_meta, batch.len);
-
-                assert!(
-                    (updates == 0 && parts.is_empty()) || (updates > 0 && !parts.is_empty()),
-                    "updates={}, parts={}",
-                    updates,
-                    parts.len(),
-                );
-
-                if updates == 0 {
-                    applied += 1;
-                    continue;
-                }
-
-                // Set up active compaction metadata
-                let clock = SYSTEM_TIME.clone();
-                let active_compaction = if applied < total_chunked_runs - 1 {
-                    Some(ActiveCompaction { start_ms: clock(), batch_so_far: None })
                 } else {
-                    None
-                };
+                    info!("Parts do not cover the whole batch, calculating new description");
 
-                assert_eq!(batch.desc, desc);
+                    let mut desc_lower = descriptions
+                        .iter()
+                        .map(|desc| desc.lower())
+                        .cloned()
+                        .reduce(|a, b| a.meet(&b))
+                        .unwrap_or_else(|| req.desc.lower().clone());
 
-                let res = CompactRes {
-                    output: HollowBatch::new(
-                        batch.desc,
-                        parts.clone(),
-                        updates,
-                        run_meta.clone(),
-                        run_splits.clone(),
-                    ),
-                    inputs: input_runs.clone(),
-                };
+                    let mut desc_upper = descriptions
+                        .iter()
+                        .map(|desc| desc.upper())
+                        .cloned()
+                        .reduce(|a, b| a.join(&b))
+                        .unwrap_or_else(|| req.desc.upper().clone());
 
-                let res = FueledMergeRes {
-                    output: res.output,
-                    new_active_compaction: active_compaction,
-                    inputs: res.inputs,
-                };
+                    // Include skipped (empty) batches at the start
+                    if let Some(first_run_id) = runs.first().map(|(id, _, _, _)| id.0) {
+                        for input in req.inputs.iter().take_while(|input| input.id != first_run_id && input.batch.run_meta.is_empty()) {
+                            desc_lower = desc_lower.meet(input.batch.desc.lower());
+                        }
+                    }
 
-                yield Ok(res);
-                applied += 1;
+                    // Include skipped (empty) batches at the end
+                    if let Some(last_run_id) = runs.last().map(|(id, _, _, _)| id.0) {
+                        for input in req.inputs.iter().rev().take_while(|input| input.id != last_run_id && input.batch.run_meta.is_empty()) {
+                            desc_upper = desc_upper.join(input.batch.desc.upper());
+                        }
+                    }
+
+                    Description::new(desc_lower, desc_upper, req.desc.since().clone())
+                }
             }
-            drop(incremental_tx);
-            // Wait for the incremental handle to finish processing any remaining batches.
-            // TODO: perhaps we should have a way to cancel this handle once we reach this point?
-            let _ = incremental_handle.await;
-        }
+        } else {
+            req.desc.clone()
+        };
+
+                        info!(
+                            "Compacting runs {:?} with description {:?}",
+                            input_runs, desc
+                        );
+
+                        let runs = runs.iter()
+                            .map(|(_, desc, meta, run)| (desc.clone(), meta.clone(), run.clone()))
+                            .collect::<Vec<_>>();
+
+                        let batch = Self::compact_runs(
+                            &run_cfg,
+                            &req.shard_id,
+                            &desc,
+                            runs,
+                            Arc::clone(&blob),
+                            Arc::clone(&metrics),
+                            Arc::clone(&shard_metrics),
+                            Arc::clone(&isolated_runtime),
+                            write_schemas.clone(),
+                            &None,
+                            // &req.prev_batch,
+                            Some(incremental_tx.clone())
+                        ).await?;
+
+                        let (parts, run_splits, run_meta, updates) =
+                            (batch.parts, batch.run_splits, batch.run_meta, batch.len);
+
+                        assert!(
+                            (updates == 0 && parts.is_empty()) || (updates > 0 && !parts.is_empty()),
+                            "updates={}, parts={}",
+                            updates,
+                            parts.len(),
+                        );
+
+                        if updates == 0 {
+                            applied += 1;
+                            continue;
+                        }
+
+                        // Set up active compaction metadata
+                        let clock = SYSTEM_TIME.clone();
+                        let active_compaction = if applied < total_chunked_runs - 1 {
+                            Some(ActiveCompaction { start_ms: clock(), batch_so_far: None })
+                        } else {
+                            None
+                        };
+
+                        assert_eq!(batch.desc, desc);
+
+                        let res = CompactRes {
+                            output: HollowBatch::new(
+                                batch.desc,
+                                parts.clone(),
+                                updates,
+                                run_meta.clone(),
+                                run_splits.clone(),
+                            ),
+                            inputs: input_runs.clone(),
+                        };
+
+                        let res = FueledMergeRes {
+                            output: res.output,
+                            new_active_compaction: active_compaction,
+                            inputs: res.inputs,
+                        };
+
+                        yield Ok(res);
+                        applied += 1;
+                    }
+                    drop(incremental_tx);
+                    // Wait for the incremental handle to finish processing any remaining batches.
+                    // TODO: perhaps we should have a way to cancel this handle once we reach this point?
+                    let _ = incremental_handle.await;
+                }
     }
 
     /// Sorts and groups all runs from the inputs into chunks, each of which has been determined
