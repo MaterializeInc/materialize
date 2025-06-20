@@ -1178,6 +1178,10 @@ where
             for id in new_webhook_statistic_entries {
                 source_statistics.webhook_statistics.entry(id).or_default();
             }
+
+            // Sources and sinks only have statistics in the collection when
+            // there is a replica that is reporting them. No need to initialize
+            // here.
         }
 
         // Register the tables all in one batch.
