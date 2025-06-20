@@ -12994,7 +12994,7 @@ pub static MZ_SOURCE_STATISTICS_WITH_HISTORY: LazyLock<BuiltinView> =
             .with_column("snapshot_committed", ScalarType::Bool.nullable(false))
             .with_column("offset_known", ScalarType::UInt64.nullable(true))
             .with_column("offset_committed", ScalarType::UInt64.nullable(true))
-            .with_key(vec![0])
+            .with_key(vec![0, 1])
             .finish(),
         column_comments: BTreeMap::new(),
         sql: "
@@ -13057,7 +13057,7 @@ pub static MZ_SOURCE_STATISTICS: LazyLock<BuiltinView> = LazyLock::new(|| {
             .with_column("snapshot_committed", ScalarType::Bool.nullable(false))
             .with_column("offset_known", ScalarType::UInt64.nullable(true))
             .with_column("offset_committed", ScalarType::UInt64.nullable(true))
-            .with_key(vec![0])
+            .with_key(vec![0, 1])
             .finish(),
         column_comments: BTreeMap::from_iter([
             (
@@ -13142,7 +13142,7 @@ pub static MZ_SINK_STATISTICS: LazyLock<BuiltinView> = LazyLock::new(|| BuiltinV
         .with_column("messages_committed", ScalarType::UInt64.nullable(false))
         .with_column("bytes_staged", ScalarType::UInt64.nullable(false))
         .with_column("bytes_committed", ScalarType::UInt64.nullable(false))
-        .with_key(vec![0])
+        .with_key(vec![0, 1])
         .finish(),
     column_comments: BTreeMap::from_iter([
         (
