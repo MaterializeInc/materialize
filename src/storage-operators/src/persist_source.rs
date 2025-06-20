@@ -483,6 +483,7 @@ where
             let mut output = updates_output.activate();
             while !pending_work.is_empty() && !yield_fn(start_time, work) {
                 let done = pending_work.front_mut().unwrap().do_work(
+                    &cfg,
                     &mut work,
                     &name,
                     start_time,
@@ -528,12 +529,17 @@ impl PendingPart {
     /// Also returns a bool, which is true if the part is known (from pushdown
     /// stats) to be free of `SourceData(Err(_))`s. It will be false if the part
     /// is known to contain errors or if it's unknown.
-    fn part_mut(&mut self) -> &mut FetchedPart<SourceData, (), Timestamp, StorageDiff> {
+    fn part_mut(
+        &mut self,
+        cfg: &PersistConfig,
+    ) -> &mut FetchedPart<SourceData, (), Timestamp, StorageDiff> {
         match self {
             PendingPart::Unparsed(x) => {
-                *self = PendingPart::Parsed { part: x.parse() };
+                *self = PendingPart::Parsed {
+                    part: x.parse(cfg.clone()),
+                };
                 // Won't recurse any further.
-                self.part_mut()
+                self.part_mut(cfg)
             }
             PendingPart::Parsed { part } => &mut part.part,
         }
@@ -545,6 +551,7 @@ impl PendingWork {
     /// `yield_fn` whether more fuel is available.
     fn do_work<P, YFn>(
         &mut self,
+        cfg: &PersistConfig,
         work: &mut usize,
         name: &str,
         start_time: Instant,
@@ -580,7 +587,7 @@ impl PendingWork {
         YFn: Fn(Instant, usize) -> bool,
     {
         let mut session = output.session_with_builder(&self.capability);
-        let fetched_part = self.part.part_mut();
+        let fetched_part = self.part.part_mut(cfg);
         let is_filter_pushdown_audit = fetched_part.is_filter_pushdown_audit();
         let mut row_buf = None;
         while let Some(((key, val), time, diff)) =

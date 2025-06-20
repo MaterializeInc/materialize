@@ -46,6 +46,7 @@ use tracing::{Instrument, debug, debug_span, trace_span};
 use crate::ShardId;
 use crate::cfg::PersistConfig;
 use crate::error::InvalidUsage;
+use crate::internal::compact::CompactConfig;
 use crate::internal::encoding::{LazyInlineBatchPart, LazyPartStats, LazyProto, Schemas};
 use crate::internal::machine::retry_external;
 use crate::internal::metrics::{Metrics, MetricsPermits, ReadMetrics, ShardMetrics};
@@ -91,6 +92,31 @@ pub(crate) const OPTIMIZE_IGNORED_DATA_FETCH: Config<bool> = Config::new(
     "CYA to allow opt-out of a performance optimization to skip fetching ignored data",
 );
 
+pub(crate) const FETCH_VALIDATE_PART_LOWER_BOUNDS_ON_READ: Config<bool> = Config::new(
+    "persist_validate_part_lower_bounds_on_read",
+    true,
+    "Validate that the lower of the part is less than or equal to the lower of the batch containing that part.",
+);
+
+#[derive(Debug, Clone)]
+pub(crate) struct FetchConfig {
+    pub(crate) validate_lower_bounds_on_read: bool,
+}
+
+impl FetchConfig {
+    pub fn from_persist_config(cfg: &PersistConfig) -> Self {
+        Self {
+            validate_lower_bounds_on_read: FETCH_VALIDATE_PART_LOWER_BOUNDS_ON_READ.get(cfg),
+        }
+    }
+
+    pub fn from_compact_config(cfg: &CompactConfig) -> Self {
+        Self {
+            validate_lower_bounds_on_read: cfg.fetch_validate_lower_bounds_on_read,
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub(crate) struct BatchFetcherConfig {
     pub(crate) part_decode_format: ConfigValHandle<String>,
@@ -98,7 +124,7 @@ pub(crate) struct BatchFetcherConfig {
 
 impl BatchFetcherConfig {
     pub fn new(value: &PersistConfig) -> Self {
-        BatchFetcherConfig {
+        Self {
             part_decode_format: PART_DECODE_FORMAT.handle(value),
         }
     }
@@ -306,7 +332,9 @@ where
     T: Timestamp + Lattice + Codec64 + Sync,
     D: Semigroup + Codec64 + Send + Sync,
 {
+    let fetch_config = FetchConfig::from_persist_config(cfg);
     let encoded_part = EncodedPart::fetch(
+        &fetch_config,
         &part.shard_id,
         blob,
         &metrics,
@@ -377,6 +405,7 @@ pub(crate) async fn fetch_batch_part_blob<T>(
 }
 
 pub(crate) fn decode_batch_part_blob<T>(
+    cfg: &FetchConfig,
     metrics: &Metrics,
     read_metrics: &ReadMetrics,
     registered_desc: Description<T>,
@@ -400,11 +429,12 @@ where
         read_metrics
             .part_goodbytes
             .inc_by(u64::cast_from(parsed.updates.goodbytes()));
-        EncodedPart::from_hollow(read_metrics.clone(), registered_desc, part, parsed)
+        EncodedPart::from_hollow(cfg, read_metrics.clone(), registered_desc, part, parsed)
     })
 }
 
 pub(crate) async fn fetch_batch_part<T>(
+    cfg: &FetchConfig,
     shard_id: &ShardId,
     blob: &dyn Blob,
     metrics: &Metrics,
@@ -418,7 +448,14 @@ where
 {
     let buf =
         fetch_batch_part_blob(shard_id, blob, metrics, shard_metrics, read_metrics, part).await?;
-    let part = decode_batch_part_blob(metrics, read_metrics, registered_desc.clone(), part, &buf);
+    let part = decode_batch_part_blob(
+        cfg,
+        metrics,
+        read_metrics,
+        registered_desc.clone(),
+        part,
+        &buf,
+    );
     Ok(part)
 }
 
@@ -690,10 +727,16 @@ where
 
 impl<K: Codec, V: Codec, T: Timestamp + Lattice + Codec64, D> FetchedBlob<K, V, T, D> {
     /// Partially decodes this blob into a [FetchedPart].
-    pub fn parse(&self) -> ShardSourcePart<K, V, T, D> {
+    pub fn parse(&self, cfg: PersistConfig) -> ShardSourcePart<K, V, T, D> {
+        self.parse_internal(&FetchConfig::from_persist_config(&cfg))
+    }
+
+    /// Partially decodes this blob into a [FetchedPart].
+    pub(crate) fn parse_internal(&self, cfg: &FetchConfig) -> ShardSourcePart<K, V, T, D> {
         let (part, stats) = match &self.buf {
             FetchedBlobBuf::Hollow { buf, part } => {
                 let parsed = decode_batch_part_blob(
+                    cfg,
                     &self.metrics,
                     &self.read_metrics,
                     self.registered_desc.clone(),
@@ -708,6 +751,7 @@ impl<K: Codec, V: Codec, T: Timestamp + Lattice + Codec64, D> FetchedBlob<K, V, 
                 ts_rewrite,
             } => {
                 let parsed = EncodedPart::from_inline(
+                    cfg,
                     &self.metrics,
                     self.read_metrics.clone(),
                     desc.clone(),
@@ -1128,6 +1172,7 @@ where
     T: Timestamp + Lattice + Codec64,
 {
     pub async fn fetch(
+        cfg: &FetchConfig,
         shard_id: &ShardId,
         blob: &dyn Blob,
         metrics: &Metrics,
@@ -1139,6 +1184,7 @@ where
         match part {
             BatchPart::Hollow(x) => {
                 fetch_batch_part(
+                    cfg,
                     shard_id,
                     blob,
                     metrics,
@@ -1154,6 +1200,7 @@ where
                 ts_rewrite,
                 ..
             } => Ok(EncodedPart::from_inline(
+                cfg,
                 metrics,
                 read_metrics.clone(),
                 registered_desc.clone(),
@@ -1164,6 +1211,7 @@ where
     }
 
     pub(crate) fn from_inline(
+        cfg: &FetchConfig,
         metrics: &Metrics,
         read_metrics: ReadMetrics,
         desc: Description<T>,
@@ -1171,16 +1219,18 @@ where
         ts_rewrite: Option<&Antichain<T>>,
     ) -> Self {
         let parsed = x.decode(&metrics.columnar).expect("valid inline part");
-        Self::new(read_metrics, desc, "inline", ts_rewrite, parsed)
+        Self::new(cfg, read_metrics, desc, "inline", ts_rewrite, parsed)
     }
 
     pub(crate) fn from_hollow(
+        cfg: &FetchConfig,
         metrics: ReadMetrics,
         registered_desc: Description<T>,
         part: &HollowBatchPart<T>,
         parsed: BlobTraceBatchPart<T>,
     ) -> Self {
         Self::new(
+            cfg,
             metrics,
             registered_desc,
             &part.key.0,
@@ -1190,6 +1240,7 @@ where
     }
 
     pub(crate) fn new(
+        cfg: &FetchConfig,
         metrics: ReadMetrics,
         registered_desc: Description<T>,
         printable_name: &str,
@@ -1211,13 +1262,15 @@ where
         let needs_truncation = inline_desc.lower() != registered_desc.lower()
             || inline_desc.upper() != registered_desc.upper();
         if needs_truncation {
-            assert!(
-                PartialOrder::less_equal(inline_desc.lower(), registered_desc.lower()),
-                "key={} inline={:?} registered={:?}",
-                printable_name,
-                inline_desc,
-                registered_desc
-            );
+            if cfg.validate_lower_bounds_on_read {
+                assert!(
+                    PartialOrder::less_equal(inline_desc.lower(), registered_desc.lower()),
+                    "key={} inline={:?} registered={:?}",
+                    printable_name,
+                    inline_desc,
+                    registered_desc
+                );
+            }
             if ts_rewrite.is_none() {
                 // The ts rewrite feature allows us to advance the registered
                 // upper of a batch that's already been staged (the inline

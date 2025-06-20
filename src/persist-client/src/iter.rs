@@ -37,7 +37,7 @@ use timely::progress::Timestamp;
 use tracing::{Instrument, debug_span};
 
 use crate::ShardId;
-use crate::fetch::{EncodedPart, FetchBatchFilter};
+use crate::fetch::{EncodedPart, FetchBatchFilter, FetchConfig};
 use crate::internal::encoding::Schemas;
 use crate::internal::metrics::{ReadMetrics, ShardMetrics};
 use crate::internal::state::{HollowRun, RunMeta, RunOrder, RunPart};
@@ -197,6 +197,7 @@ type FetchResult<T> = Result<EncodedPart<T>, HollowRun<T>>;
 impl<T: Codec64 + Timestamp + Lattice> FetchData<T> {
     async fn fetch(
         self,
+        cfg: &FetchConfig,
         shard_id: ShardId,
         blob: &dyn Blob,
         metrics: &Metrics,
@@ -206,6 +207,7 @@ impl<T: Codec64 + Timestamp + Lattice> FetchData<T> {
         match self.part {
             RunPart::Single(part) => {
                 let part = EncodedPart::fetch(
+                    cfg,
                     &shard_id,
                     &*blob,
                     metrics,
@@ -334,6 +336,7 @@ impl<T: Timestamp + Codec64 + Lattice, D: Codec64> ConsolidationPart<T, D> {
 #[derive(Debug)]
 pub(crate) struct Consolidator<T, D, Sort: RowSort<T, D>> {
     context: String,
+    cfg: FetchConfig,
     shard_id: ShardId,
     sort: Sort,
     blob: Arc<dyn Blob>,
@@ -362,6 +365,7 @@ where
     /// limit, but may burst above it if that's necessary to make progress.
     pub fn new(
         context: String,
+        cfg: FetchConfig,
         shard_id: ShardId,
         sort: Sort,
         blob: Arc<dyn Blob>,
@@ -373,6 +377,7 @@ where
     ) -> Self {
         Self {
             context,
+            cfg,
             metrics,
             shard_id,
             sort,
@@ -560,6 +565,7 @@ where
                         None => {
                             data.clone()
                                 .fetch(
+                                    &self.cfg,
                                     self.shard_id,
                                     &*self.blob,
                                     &*self.metrics,
@@ -739,10 +745,18 @@ where
                         let metrics = Arc::clone(&self.metrics);
                         let shard_metrics = Arc::clone(&self.shard_metrics);
                         let read_metrics = Arc::clone(&self.read_metrics);
+                        let fetch_config = self.cfg.clone();
                         async move {
-                            data.fetch(shard_id, &*blob, &*metrics, &*shard_metrics, &*read_metrics)
-                                .instrument(span)
-                                .await
+                            data.fetch(
+                                &fetch_config,
+                                shard_id,
+                                &*blob,
+                                &*metrics,
+                                &*shard_metrics,
+                                &*read_metrics,
+                            )
+                            .instrument(span)
+                            .await
                         }
                     });
                     *task = Some(handle);
@@ -1037,7 +1051,11 @@ mod tests {
                 StructuredSort::new(schemas.clone());
             let streaming = {
                 // Toy compaction loop!
+                let fetch_cfg = FetchConfig {
+                    validate_lower_bounds_on_read: true,
+                };
                 let mut consolidator = Consolidator {
+                    cfg: fetch_cfg.clone(),
                     context: "test".to_string(),
                     shard_id: ShardId::new(),
                     sort: sort.clone(),
@@ -1065,6 +1083,7 @@ mod tests {
                                         )));
                                     }
                                     let part = EncodedPart::new(
+                                        &fetch_cfg,
                                         metrics.read.snapshot.clone(),
                                         desc.clone(),
                                         "part",
@@ -1152,9 +1171,15 @@ mod tests {
                 key: Arc::new(VecU8Schema),
                 val: Arc::new(VecU8Schema),
             });
+
+            let fetch_cfg = FetchConfig {
+                validate_lower_bounds_on_read: true,
+            };
+
             let mut consolidator: Consolidator<u64, i64, StructuredSort<_, _, _, _>> =
                 Consolidator::new(
                     "test".to_string(),
+                    fetch_cfg,
                     shard_id,
                     sort,
                     blob,

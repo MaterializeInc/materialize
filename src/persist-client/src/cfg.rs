@@ -312,6 +312,7 @@ pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
         .add(&crate::cli::admin::EXPRESSION_CACHE_FORCE_COMPACTION_WAIT)
         .add(&crate::fetch::FETCH_SEMAPHORE_COST_ADJUSTMENT)
         .add(&crate::fetch::FETCH_SEMAPHORE_PERMIT_ADJUSTMENT)
+        .add(&crate::fetch::FETCH_VALIDATE_PART_LOWER_BOUNDS_ON_READ)
         .add(&crate::fetch::OPTIMIZE_IGNORED_DATA_FETCH)
         .add(&crate::internal::cache::BLOB_CACHE_MEM_LIMIT_BYTES)
         .add(&crate::internal::cache::BLOB_CACHE_SCALE_WITH_THREADS)

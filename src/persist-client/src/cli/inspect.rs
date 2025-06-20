@@ -36,7 +36,7 @@ use crate::async_runtime::IsolatedRuntime;
 use crate::cache::StateCache;
 use crate::cli::args::{NO_COMMIT, READ_ALL_BUILD_INFO, StateArgs, make_blob, make_consensus};
 use crate::error::CodecConcreteType;
-use crate::fetch::EncodedPart;
+use crate::fetch::{EncodedPart, FetchConfig};
 use crate::internal::encoding::{Rollup, UntypedState};
 use crate::internal::paths::{
     BlobKey, BlobKeyPrefix, PartialBatchKey, PartialBlobKey, PartialRollupKey, WriterKey,
@@ -338,6 +338,7 @@ pub async fn blob_batch_part(
     let desc = parsed.desc.clone();
 
     let encoded_part = EncodedPart::new(
+        &FetchConfig::from_persist_config(&cfg),
         metrics.read.snapshot.clone(),
         parsed.desc.clone(),
         &key.0,
@@ -369,6 +370,7 @@ pub async fn blob_batch_part(
 }
 
 async fn consolidated_size(args: &StateArgs) -> Result<(), anyhow::Error> {
+    let cfg = PersistConfig::new_default_configs(&READ_ALL_BUILD_INFO, SYSTEM_TIME.clone());
     let shard_id = args.shard_id();
     let state_versions = args.open().await?;
     let versions = state_versions
@@ -389,6 +391,7 @@ async fn consolidated_size(args: &StateArgs) -> Result<(), anyhow::Error> {
         while let Some(part) = part_stream.try_next().await? {
             tracing::info!("fetching {}", part.printable_name());
             let encoded_part = EncodedPart::fetch(
+                &FetchConfig::from_persist_config(&cfg),
                 &shard_id,
                 &*state_versions.blob,
                 &state_versions.metrics,

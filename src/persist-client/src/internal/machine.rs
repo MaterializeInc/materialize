@@ -1430,7 +1430,7 @@ pub mod datadriven {
         BatchParts, validate_truncate_batch,
     };
     use crate::cfg::COMPACTION_MEMORY_BOUND_BYTES;
-    use crate::fetch::EncodedPart;
+    use crate::fetch::{EncodedPart, FetchConfig};
     use crate::internal::compact::{CompactConfig, CompactReq, Compactor};
     use crate::internal::datadriven::DirectiveArgs;
     use crate::internal::encoding::Schemas;
@@ -1894,6 +1894,7 @@ pub mod datadriven {
                 BatchPart::Inline { .. } => {}
             };
             let part = EncodedPart::fetch(
+                &FetchConfig::from_persist_config(&datadriven.client.cfg),
                 &datadriven.shard_id,
                 datadriven.client.blob.as_ref(),
                 datadriven.client.metrics.as_ref(),
@@ -2151,6 +2152,7 @@ pub mod datadriven {
                     writeln!(result, "<part {idx}>");
 
                     let part = EncodedPart::fetch(
+                        &FetchConfig::from_persist_config(&datadriven.client.cfg),
                         &datadriven.shard_id,
                         datadriven.client.blob.as_ref(),
                         datadriven.client.metrics.as_ref(),

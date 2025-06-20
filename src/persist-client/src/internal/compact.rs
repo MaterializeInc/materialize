@@ -39,7 +39,7 @@ use crate::cfg::{
     COMPACTION_HEURISTIC_MIN_UPDATES, COMPACTION_MEMORY_BOUND_BYTES,
     GC_BLOB_DELETE_CONCURRENCY_LIMIT, MiB,
 };
-use crate::fetch::FetchBatchFilter;
+use crate::fetch::{FETCH_VALIDATE_PART_LOWER_BOUNDS_ON_READ, FetchBatchFilter, FetchConfig};
 use crate::internal::encoding::Schemas;
 use crate::internal::gc::GarbageCollector;
 use crate::internal::machine::Machine;
@@ -81,6 +81,7 @@ pub struct CompactConfig {
     pub(crate) compaction_yield_after_n_updates: usize,
     pub(crate) version: semver::Version,
     pub(crate) batch: BatchBuilderConfig,
+    pub(crate) fetch_validate_lower_bounds_on_read: bool,
 }
 
 impl CompactConfig {
@@ -91,6 +92,8 @@ impl CompactConfig {
             compaction_yield_after_n_updates: value.compaction_yield_after_n_updates,
             version: value.build_version.clone(),
             batch: BatchBuilderConfig::new(value, shard_id),
+            fetch_validate_lower_bounds_on_read: FETCH_VALIDATE_PART_LOWER_BOUNDS_ON_READ
+                .get(value),
         }
     }
 }
@@ -804,6 +807,7 @@ where
                 desc.lower().elements(),
                 desc.upper().elements()
             ),
+            FetchConfig::from_compact_config(cfg),
             *shard_id,
             StructuredSort::<K, V, T, D>::new(write_schemas.clone()),
             blob,

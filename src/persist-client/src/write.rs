@@ -544,6 +544,7 @@ where
                             .expect("schemas for inline user part");
 
                             let encoded_part = EncodedPart::from_inline(
+                                &crate::fetch::FetchConfig::from_persist_config(&self.cfg),
                                 &*self.metrics,
                                 self.metrics.read.compaction.clone(),
                                 desc.clone(),
