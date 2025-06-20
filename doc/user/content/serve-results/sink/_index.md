@@ -25,8 +25,7 @@ During creation, sinks need to load an entire snapshot of the data in memory.
 ### Operational guideline
 
 - Avoid putting sinks on the same cluster that hosts sources to allow for
-[blue/green
-deployment](/manage/dbt/development-workflows/#bluegreen-deployments).
+[blue/green deployment](/manage/dbt/blue-green-deployments).
 
 ### Available guides
 
