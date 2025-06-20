@@ -14,6 +14,7 @@ to prevent regressions in basic functionality for larger installations.
 
 import contextlib
 import json
+import re
 import sys
 import time
 import traceback
@@ -2043,7 +2044,13 @@ def workflow_main(c: Composition, parser: WorkflowArgumentParser) -> None:
                             if i > 10:
                                 raise
                             i += 1
-                            traceback.print_exc()
+                            print(
+                                re.sub(
+                                    r"mzp_[a-z1-9]*",
+                                    "[REDACTED]",
+                                    traceback.format_exc(),
+                                )
+                            )
                             print("Retrying in a minute...")
                             time.sleep(60)
                     setup(c, args.workers)
