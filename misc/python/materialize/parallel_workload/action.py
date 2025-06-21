@@ -1086,6 +1086,9 @@ class FlipFlagsAction(Action):
         self.flags_with_values["enable_compute_peek_response_stash"] = (
             BOOLEAN_FLAG_VALUES
         )
+        self.flags_with_values["storage_sink_bulk_write_to_persist"] = (
+            BOOLEAN_FLAG_VALUES
+        )
         self.flags_with_values["compute_peek_response_stash_threshold_bytes"] = [
             "0",  # "force enabled"
             "1048576",  # 1 MiB, an in-between value

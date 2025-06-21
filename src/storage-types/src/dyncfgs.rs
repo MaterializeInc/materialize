@@ -256,6 +256,13 @@ pub const STORAGE_USE_CONTINUAL_FEEDBACK_UPSERT: Config<bool> = Config::new(
     "Whether to use the new continual feedback upsert operator.",
 );
 
+/// Whether to use the new bulk write to persist or append batch by batch.
+pub const STORAGE_SINK_BULK_WRITE_TO_PERSIT: Config<bool> = Config::new(
+    "storage_sink_bulk_write_to_persist",
+    false,
+    "If true then write all available batches in bulk to persist.",
+);
+
 /// The interval at which the storage server performs maintenance tasks.
 pub const STORAGE_SERVER_MAINTENANCE_INTERVAL: Config<Duration> = Config::new(
     "storage_server_maintenance_interval",
@@ -325,4 +332,5 @@ pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
         .add(&crate::sources::sql_server::SNAPSHOT_MAX_LSN_WAIT)
         .add(&crate::sources::sql_server::SNAPSHOT_PROGRESS_REPORT_INTERVAL)
         .add(&crate::sources::sql_server::OFFSET_KNOWN_INTERVAL)
+        .add(&STORAGE_SINK_BULK_WRITE_TO_PERSIT)
 }
