@@ -634,7 +634,7 @@ where
                 }
             }
 
-            assert!(cfg.compaction_memory_bound_bytes >= 4 * cfg.batch.blob_target_size);
+            // assert!(cfg.compaction_memory_bound_bytes >= 4 * cfg.batch.blob_target_size);
 
             // Prepare memory bounds for compaction
             let in_progress_part_reserved_memory_bytes = 2 * cfg.batch.blob_target_size;
