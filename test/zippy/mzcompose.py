@@ -90,7 +90,7 @@ SERVICES = [
     Mc(),
     Balancerd(),
     *create_mzs(azurite=False, transaction_isolation=False),
-    Clusterd(name="storaged"),
+    Clusterd(name="storaged", workers=4),
     Grafana(),
     Prometheus(),
     SshBastionHost(),
