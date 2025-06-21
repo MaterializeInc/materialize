@@ -827,9 +827,8 @@ impl<T: Timestamp + Lattice> SpineBatch<T> {
     }
 
     pub fn is_compact(&self) -> bool {
-        // This definition is extremely likely to change, but for now, we consider a batch
-        // "compact" if it has at most one hollow batch with at most one run.
-        self.parts.len() <= 1 && self.parts.iter().all(|p| p.batch.run_splits.is_empty())
+        // A compact batch has at most one run
+        self.parts.iter().all(|p| p.batch.run_splits.is_empty())
     }
 
     pub fn is_merging(&self) -> bool {
@@ -1340,8 +1339,9 @@ impl<T: Timestamp + Lattice + Codec64> SpineBatch<T> {
         // }
         // let replacement_range = start..end;
         let replacement_range = min..max + 1;
+        let num_batches = self.parts.len();
 
-        if range.len() == 1 {
+        let res = if range.len() == 1 {
             // We only need to replace a single part. Here we still care about the run_indices
             // because we only want to replace the runs that are in the merge result.
             let batch = &self.parts[range[0]].batch;
@@ -1438,14 +1438,20 @@ impl<T: Timestamp + Lattice + Codec64> SpineBatch<T> {
 
             let parts = &self.parts[replacement_range.clone()];
             let id = SpineId(parts.first().unwrap().id.0, parts.last().unwrap().id.1);
-            return self.perform_subset_replacement(
+            self.perform_subset_replacement(
                 &res.output,
                 id,
                 replacement_range,
                 res.new_active_compaction.clone(),
                 &self.desc.clone(),
-            );
-        }
+            )
+        };
+        let num_batches_after = self.parts.len();
+        assert!(
+            num_batches_after <= num_batches,
+            "replacing parts should not increase the number of batches"
+        );
+        res
     }
 
     /// Unchecked variant that skips diff sum assertions

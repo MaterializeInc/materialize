@@ -241,7 +241,7 @@ where
                 compact_span.follows_from(&Span::current());
                 let gc = gc.clone();
                 mz_ore::task::spawn(|| "PersistCompactionWorker", async move {
-                    let res = Self::compact_and_apply(&machine, req, write_schemas)
+                    let res = Self::compact_and_apply(&machine, req, write_schemas, false)
                         .instrument(compact_span)
                         .await;
                     let res = res.map(|maintenance| {
@@ -321,6 +321,7 @@ where
         machine: &Machine<K, V, T, D>,
         req: CompactReq<T>,
         write_schemas: Schemas<K, V>,
+        force_full_compaction: bool,
     ) -> Result<RoutineMaintenance, anyhow::Error> {
         let metrics = Arc::clone(&machine.applier.metrics);
         metrics.compaction.started.inc();
@@ -399,7 +400,8 @@ where
                             .all(|x| x.batch.runs().all(|(meta, _)| meta.uuid.is_some()));
                         let incremental_enabled = INCREMENTAL_COMPACTIONS_SINGLE_RUN_ENABLED
                             .get(&machine_clone.applier.cfg)
-                            && all_runs_have_uuids;
+                            && all_runs_have_uuids
+                            && !force_full_compaction;
 
                         let stream = Self::compact_stream(
                             CompactConfig::new(

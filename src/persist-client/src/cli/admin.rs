@@ -809,6 +809,7 @@ pub async fn dangerous_force_compaction_and_break_pushdown<K, V, T, D>(
                 &machine,
                 req,
                 write.write_schemas.clone(),
+                false,
             )
             .await;
             let apply_maintenance = match res {
@@ -841,13 +842,18 @@ pub async fn dangerous_force_compaction_and_break_pushdown<K, V, T, D>(
 
         // NB: This check is intentionally at the end so that it's safe to call
         // this method in a loop.
-        let num_batches = machine.applier.all_batches().len();
-        if num_batches < 2 {
+        let num_parts = machine
+            .applier
+            .all_batches()
+            .iter()
+            .flat_map(|x| x.parts.clone())
+            .count();
+        if num_parts < 2 {
             info!(
-                "force_compaction {} {} exiting with {} batches",
+                "force_compaction {} {} exiting with {} parts",
                 machine.applier.shard_metrics.name,
                 machine.applier.shard_metrics.shard_id,
-                num_batches
+                num_parts
             );
             return;
         }
