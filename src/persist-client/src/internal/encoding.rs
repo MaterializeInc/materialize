@@ -12,6 +12,7 @@ use std::collections::BTreeMap;
 use std::fmt::Debug;
 use std::hash::{Hash, Hasher};
 use std::marker::PhantomData;
+use std::str::FromStr;
 use std::sync::Arc;
 
 use bytes::{Buf, Bytes};
@@ -49,7 +50,7 @@ use crate::internal::state::{
     ProtoLeasedReaderState, ProtoMerge, ProtoRollup, ProtoRunMeta, ProtoRunOrder, ProtoSpineBatch,
     ProtoSpineId, ProtoStateDiff, ProtoStateField, ProtoStateFieldDiffType, ProtoStateFieldDiffs,
     ProtoTrace, ProtoU64Antichain, ProtoU64Description, ProtoVersionedData, ProtoWriterState,
-    RunMeta, RunOrder, RunPart, State, StateCollections, TypedState, WriterState,
+    RunId, RunMeta, RunOrder, RunPart, State, StateCollections, TypedState, WriterState,
     proto_hollow_batch_part,
 };
 use crate::internal::state_diff::{
@@ -1393,6 +1394,18 @@ impl<T: Timestamp + Codec64> RustType<ProtoHollowBatch> for HollowBatch<T> {
     }
 }
 
+impl RustType<String> for RunId {
+    fn into_proto(&self) -> String {
+        self.to_string()
+    }
+
+    fn from_proto(proto: String) -> Result<Self, TryFromProtoError> {
+        RunId::from_str(&proto).map_err(|_| {
+            TryFromProtoError::InvalidPersistState(format!("invalid RunId: {}", proto))
+        })
+    }
+}
+
 impl RustType<ProtoRunMeta> for RunMeta {
     fn into_proto(&self) -> ProtoRunMeta {
         let order = match self.order {
@@ -1405,6 +1418,7 @@ impl RustType<ProtoRunMeta> for RunMeta {
             order: order.into(),
             schema_id: self.schema.into_proto(),
             deprecated_schema_id: self.deprecated_schema.into_proto(),
+            id: self.id.into_proto(),
         }
     }
 
@@ -1419,6 +1433,7 @@ impl RustType<ProtoRunMeta> for RunMeta {
             order,
             schema: proto.schema_id.into_rust()?,
             deprecated_schema: proto.deprecated_schema_id.into_rust()?,
+            id: proto.id.into_rust()?,
         })
     }
 }

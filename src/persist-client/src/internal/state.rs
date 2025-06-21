@@ -122,6 +122,12 @@ pub(crate) const GC_USE_ACTIVE_GC: Config<bool> = Config::new(
     "Whether to use the new active GC tracking mechanism.",
 );
 
+pub(crate) const ENABLE_INCREMENTAL_COMPACTION: Config<bool> = Config::new(
+    "persist_enable_incremental_compaction",
+    false,
+    "Whether to enable incremental compaction.",
+);
+
 /// A token to disambiguate state commands that could not otherwise be
 /// idempotent.
 #[derive(Arbitrary, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
@@ -732,6 +738,41 @@ pub(crate) enum RunOrder {
     Structured,
 }
 
+#[derive(Clone, PartialEq, Eq, Ord, PartialOrd, Serialize)]
+pub struct RunId(pub(crate) [u8; 16]);
+
+impl std::fmt::Display for RunId {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(f, "ri{}", Uuid::from_bytes(self.0))
+    }
+}
+
+impl std::fmt::Debug for RunId {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(f, "RunId({})", Uuid::from_bytes(self.0))
+    }
+}
+
+impl std::str::FromStr for RunId {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        parse_id('r', "RunId", s).map(RunId)
+    }
+}
+
+impl From<RunId> for String {
+    fn from(x: RunId) -> Self {
+        x.to_string()
+    }
+}
+
+impl RunId {
+    pub(crate) fn new() -> Self {
+        RunId(*Uuid::new_v4().as_bytes())
+    }
+}
+
 /// Metadata shared across a run.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Ord, PartialOrd, Serialize)]
 pub struct RunMeta {
@@ -742,6 +783,9 @@ pub struct RunMeta {
 
     /// ID of a schema that has since been deprecated and exists only to cleanly roundtrip.
     pub(crate) deprecated_schema: Option<SchemaId>,
+
+    /// If set, a UUID that uniquely identifies this run.
+    pub(crate) id: Option<RunId>,
 }
 
 /// A subset of a [HollowBatch] corresponding 1:1 to a blob.

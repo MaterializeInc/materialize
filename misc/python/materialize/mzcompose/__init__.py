@@ -537,6 +537,7 @@ UNINTERESTING_SYSTEM_PARAMETERS = [
     "compute_peek_stash_num_batches",
     "compute_peek_stash_batch_size",
     "enable_timely_init_at_process_startup",
+    "persist_enable_incremental_compaction",
 ]
 
 
