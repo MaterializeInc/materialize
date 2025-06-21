@@ -1175,6 +1175,10 @@ impl<T: Timestamp + Lattice + Codec64> SpineBatch<T> {
 
         // 3. Suffix runs (original runs after end_run)
         for i in (end_run + 1)..original.run_meta.len() {
+            if i >= original.run_splits.len() {
+                // this must be the final run, skip pushing a split for it
+                break;
+            }
             info!(
                 "Adding run split for run {}: {}",
                 i,
