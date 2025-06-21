@@ -1110,6 +1110,9 @@ impl<T: Timestamp + Lattice + Codec64> SpineBatch<T> {
             info!("Original batch: {:#?}", original);
         }
 
+        info!("original batch {:#?}", original);
+        info!("replacement batch {:#?}", replacement);
+
         // 1. Determine part index range to replace
         let start_part = if start_run == 0 {
             0
@@ -1127,10 +1130,10 @@ impl<T: Timestamp + Lattice + Codec64> SpineBatch<T> {
         //     .copied()
         //     .unwrap_or(original.parts.len());
 
-        // info!(
-        //     "Replacing parts from {} to {} (inclusive)",
-        //     start_part, end_part
-        // );
+        info!(
+            "Replacing parts from {} to {} (inclusive)",
+            start_part, end_part
+        );
 
         // 2. Replace parts
         let mut parts = Vec::new();
@@ -1143,6 +1146,9 @@ impl<T: Timestamp + Lattice + Codec64> SpineBatch<T> {
         run_meta.extend_from_slice(&original.run_meta[..start_run]);
         run_meta.extend_from_slice(&replacement.run_meta);
         run_meta.extend_from_slice(&original.run_meta[end_run + 1..]);
+
+        info!("new parts: {:#?}", parts);
+        info!("new run_meta: {:#?}", run_meta);
 
         // 4. Rebuild run_splits
         let mut run_splits = Vec::with_capacity(run_meta.len());
@@ -1169,6 +1175,11 @@ impl<T: Timestamp + Lattice + Codec64> SpineBatch<T> {
 
         // 3. Suffix runs (original runs after end_run)
         for i in (end_run + 1)..original.run_meta.len() {
+            info!(
+                "Adding run split for run {}: {}",
+                i,
+                original.run_meta[i].uuid.unwrap_or(Uuid::nil())
+            );
             let start = if i == 0 {
                 0
             } else {
