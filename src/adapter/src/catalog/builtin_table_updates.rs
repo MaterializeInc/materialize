@@ -16,8 +16,7 @@ use mz_audit_log::{EventDetails, EventType, ObjectType, VersionedEvent, Versione
 use mz_catalog::SYSTEM_CONN_ID;
 use mz_catalog::builtin::{
     BuiltinTable, MZ_AGGREGATES, MZ_ARRAY_TYPES, MZ_AUDIT_EVENTS, MZ_AWS_CONNECTIONS,
-    MZ_AWS_PRIVATELINK_CONNECTIONS, MZ_BASE_TYPES, MZ_CLUSTER_REPLICA_METRICS,
-    MZ_CLUSTER_REPLICA_SIZES, MZ_CLUSTER_REPLICA_STATUSES, MZ_CLUSTER_REPLICAS,
+    MZ_AWS_PRIVATELINK_CONNECTIONS, MZ_BASE_TYPES, MZ_CLUSTER_REPLICA_SIZES, MZ_CLUSTER_REPLICAS,
     MZ_CLUSTER_SCHEDULES, MZ_CLUSTER_WORKLOAD_CLASSES, MZ_CLUSTERS, MZ_COLUMNS, MZ_COMMENTS,
     MZ_CONNECTIONS, MZ_CONTINUAL_TASKS, MZ_DATABASES, MZ_DEFAULT_PRIVILEGES, MZ_EGRESS_IPS,
     MZ_FUNCTIONS, MZ_HISTORY_RETENTION_STRATEGIES, MZ_INDEX_COLUMNS, MZ_INDEXES,
@@ -35,16 +34,15 @@ use mz_catalog::config::AwsPrincipalContext;
 use mz_catalog::durable::SourceReferences;
 use mz_catalog::memory::error::{Error, ErrorKind};
 use mz_catalog::memory::objects::{
-    CatalogItem, ClusterReplicaProcessStatus, ClusterVariant, Connection, ContinualTask,
-    DataSourceDesc, Func, Index, MaterializedView, Sink, Table, TableDataSource, Type, View,
+    CatalogItem, ClusterVariant, Connection, ContinualTask, DataSourceDesc, Func, Index,
+    MaterializedView, Sink, Table, TableDataSource, Type, View,
 };
 use mz_controller::clusters::{
-    ClusterStatus, ManagedReplicaAvailabilityZones, ManagedReplicaLocation, ProcessId,
-    ReplicaAllocation, ReplicaLocation,
+    ManagedReplicaAvailabilityZones, ManagedReplicaLocation, ReplicaAllocation, ReplicaLocation,
 };
-use mz_controller_types::{ClusterId, ReplicaId};
+use mz_controller_types::ClusterId;
 use mz_expr::MirScalarExpr;
-use mz_orchestrator::{CpuLimit, DiskLimit, MemoryLimit, ServiceProcessMetrics};
+use mz_orchestrator::{CpuLimit, DiskLimit, MemoryLimit};
 use mz_ore::cast::CastFrom;
 use mz_ore::collections::CollectionExt;
 use mz_persist_client::batch::ProtoBatch;
@@ -435,35 +433,6 @@ impl CatalogState {
         }
 
         updates
-    }
-
-    // TODO(jkosh44) This should not be a builtin table, it should be a builtin source.
-    pub(crate) fn pack_cluster_replica_status_update(
-        &self,
-        replica_id: ReplicaId,
-        process_id: ProcessId,
-        event: &ClusterReplicaProcessStatus,
-        diff: Diff,
-    ) -> BuiltinTableUpdate<&'static BuiltinTable> {
-        let status = event.status.as_kebab_case_str();
-
-        let offline_reason = match event.status {
-            ClusterStatus::Online => None,
-            ClusterStatus::Offline(None) => None,
-            ClusterStatus::Offline(Some(reason)) => Some(reason.to_string()),
-        };
-
-        BuiltinTableUpdate::row(
-            &*MZ_CLUSTER_REPLICA_STATUSES,
-            Row::pack_slice(&[
-                Datum::String(&replica_id.to_string()),
-                Datum::UInt64(process_id),
-                Datum::String(status),
-                Datum::from(offline_reason.as_deref()),
-                Datum::TimestampTz(event.time.try_into().expect("must fit")),
-            ]),
-            diff,
-        )
     }
 
     pub(crate) fn pack_network_policy_update(
@@ -2014,37 +1983,6 @@ impl CatalogState {
             Datum::String(&format!("{}/{}", addr, ip.prefix_len())),
         ]);
         Ok(BuiltinTableUpdate::row(id, row, Diff::ONE))
-    }
-
-    pub fn pack_replica_metric_updates(
-        &self,
-        replica_id: ReplicaId,
-        updates: &[ServiceProcessMetrics],
-        diff: Diff,
-    ) -> Vec<BuiltinTableUpdate<&'static BuiltinTable>> {
-        let id = &*MZ_CLUSTER_REPLICA_METRICS;
-        let rows = updates.iter().enumerate().map(
-            |(
-                process_id,
-                ServiceProcessMetrics {
-                    cpu_nano_cores,
-                    memory_bytes,
-                    disk_usage_bytes,
-                },
-            )| {
-                Row::pack_slice(&[
-                    Datum::String(&replica_id.to_string()),
-                    u64::cast_from(process_id).into(),
-                    (*cpu_nano_cores).into(),
-                    (*memory_bytes).into(),
-                    (*disk_usage_bytes).into(),
-                ])
-            },
-        );
-        let updates = rows
-            .map(|row| BuiltinTableUpdate::row(id, row, diff))
-            .collect();
-        updates
     }
 
     pub fn pack_all_replica_size_updates(&self) -> Vec<BuiltinTableUpdate<&'static BuiltinTable>> {

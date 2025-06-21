@@ -113,7 +113,7 @@ use mz_controller::clusters::{ClusterConfig, ClusterEvent, ClusterStatus, Proces
 use mz_controller_types::{ClusterId, ReplicaId, WatchSetId};
 use mz_expr::{MapFilterProject, OptimizedMirRelationExpr, RowSetFinishing};
 use mz_license_keys::ValidatedLicenseKey;
-use mz_orchestrator::{OfflineReason, ServiceProcessMetrics};
+use mz_orchestrator::OfflineReason;
 use mz_ore::cast::{CastFrom, CastInto, CastLossy};
 use mz_ore::channel::trigger::Trigger;
 use mz_ore::future::TimeoutError;
@@ -1040,13 +1040,6 @@ pub struct Config {
     pub external_login_password_mz_system: Option<Password>,
 }
 
-/// Soft-state metadata about a compute replica
-#[derive(Clone, Default, Debug, Eq, PartialEq)]
-pub struct ReplicaMetadata {
-    /// The last known CPU and memory metrics
-    pub metrics: Option<Vec<ServiceProcessMetrics>>,
-}
-
 /// Metadata about an active connection.
 #[derive(Debug, Serialize)]
 pub struct ConnMeta {
@@ -1603,17 +1596,6 @@ impl ClusterReplicaStatuses {
     }
 
     /// Gets the statuses of the given cluster.
-    ///
-    /// Panics if the cluster does not exist
-    pub(crate) fn get_cluster_statuses(
-        &self,
-        cluster_id: ClusterId,
-    ) -> &BTreeMap<ReplicaId, BTreeMap<ProcessId, ClusterReplicaProcessStatus>> {
-        self.try_get_cluster_statuses(cluster_id)
-            .unwrap_or_else(|| panic!("unknown cluster: {cluster_id}"))
-    }
-
-    /// Gets the statuses of the given cluster.
     pub(crate) fn try_get_cluster_statuses(
         &self,
         cluster_id: ClusterId,
@@ -1727,13 +1709,6 @@ pub struct Coordinator {
     /// Handle to a manager that can create and delete kubernetes resources
     /// (ie: VpcEndpoint objects)
     cloud_resource_controller: Option<Arc<dyn CloudResourceController>>,
-
-    /// Metadata about replicas that doesn't need to be persisted.
-    /// Intended for inclusion in system tables.
-    ///
-    /// `None` is used as a tombstone value for replicas that have been
-    /// dropped and for which no further updates should be recorded.
-    transient_replica_metadata: BTreeMap<ReplicaId, Option<ReplicaMetadata>>,
 
     /// Persist client for fetching storage metadata such as size metrics.
     storage_usage_client: StorageUsageClient,
@@ -1852,24 +1827,6 @@ impl Coordinator {
                         num_processes,
                         now,
                     );
-            }
-        }
-        for replica_statuses in self.cluster_replica_statuses.0.values() {
-            for (replica_id, processes_statuses) in replica_statuses {
-                for (process_id, status) in processes_statuses {
-                    let builtin_table_update =
-                        self.catalog().state().pack_cluster_replica_status_update(
-                            *replica_id,
-                            *process_id,
-                            status,
-                            Diff::ONE,
-                        );
-                    let builtin_table_update = self
-                        .catalog()
-                        .state()
-                        .resolve_builtin_table_update(builtin_table_update);
-                    builtin_table_updates.push(builtin_table_update);
-                }
             }
         }
 
@@ -4285,7 +4242,6 @@ pub fn serve(
                     secrets_controller,
                     caching_secrets_reader,
                     cloud_resource_controller,
-                    transient_replica_metadata: BTreeMap::new(),
                     storage_usage_client,
                     storage_usage_collection_interval,
                     segment_client,

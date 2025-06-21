@@ -1002,7 +1002,7 @@ ArrangeBy[[Column(0),␠Column(1)]]  2
 ArrangeBy[[Column(0),␠Column(2)]]  4
 ArrangeBy[[Column(0),␠Column(3)]]  4
 ArrangeBy[[Column(0),␠Column(4)]]  1
-ArrangeBy[[Column(0)]]  155
+ArrangeBy[[Column(0)]]  157
 ArrangeBy[[Column(0)]]-errors  44
 ArrangeBy[[Column(1),␠Column(0)]]  1
 ArrangeBy[[Column(1),␠Column(2)]]  2
@@ -1028,7 +1028,7 @@ ArrangeBy[[]]  11
 Arranged␠DistinctBy  47
 Arranged␠MinsMaxesHierarchical␠input  14
 Arranged␠ReduceInaccumulable  3
-Arranged␠TopK␠input  92
+Arranged␠TopK␠input  108
 Distinct␠recursive␠err  3
 DistinctBy  47
 DistinctByErrorCheck  47
@@ -1038,7 +1038,7 @@ ReduceInaccumulable␠Error␠Check  3
 ReduceMinsMaxes  3
 ReduceMinsMaxes␠Error␠Check  1
 Reduced␠Fallibly␠MinsMaxesHierarchical  14
-Reduced␠TopK␠input  92
+Reduced␠TopK␠input  108
 Threshold␠local  10
 
 statement ok

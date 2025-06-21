@@ -3274,7 +3274,7 @@ async fn test_explain_as_of() {
     let client = server.connect().await.unwrap();
 
     // Retry until we are able to explain plan and timestamp for a few seconds ago.
-    // mz_cluster_replica_statuses is a retained metrics table which is why a historical AS OF
+    // mz_object_dependencies is a retained metrics table which is why a historical AS OF
     // works.
     Retry::default()
         .clamp_backoff(Duration::from_secs(1))
@@ -3286,7 +3286,7 @@ async fn test_explain_as_of() {
                 .get(0);
             let now: u64 = now.parse().unwrap();
             let ts = now - 3000;
-            let query = format!("mz_internal.mz_cluster_replica_statuses AS OF {ts}");
+            let query = format!("mz_internal.mz_object_dependencies AS OF {ts}");
             let query_ts = try_get_explain_timestamp(&query, &client).await?;
             assert_eq!(ts, query_ts);
             client

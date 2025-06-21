@@ -596,8 +596,6 @@ name                                     comment
 ------------------------------------------------
 mz_aggregates                            ""
 mz_aws_connections                       ""
-mz_cluster_replica_metrics               ""
-mz_cluster_replica_statuses              ""
 mz_cluster_schedules                     ""
 mz_cluster_workload_classes              ""
 mz_comments                              ""
@@ -628,7 +626,9 @@ name                                     comment
 mz_activity_log_thinned                  ""
 mz_cluster_deployment_lineage            ""
 mz_cluster_replica_history               ""
+mz_cluster_replica_metrics               ""
 mz_cluster_replica_name_history          ""
+mz_cluster_replica_statuses              ""
 mz_cluster_replica_utilization           ""
 mz_cluster_replica_utilization_history   ""
 mz_compute_hydration_statuses            ""
@@ -801,7 +801,7 @@ test_table ""
 
 # `SHOW TABLES` and `mz_tables` should agree.
 > SELECT COUNT(*) FROM mz_tables WHERE id LIKE 's%'
-62
+60
 
 # There is one entry in mz_indexes for each field_number/expression of the index.
 > SELECT COUNT(id) FROM mz_indexes WHERE id LIKE 's%'

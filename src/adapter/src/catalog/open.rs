@@ -872,11 +872,28 @@ fn add_new_remove_old_builtin_items_migration(
     // the catalog.
     let mut deleted_system_objects = BTreeSet::new();
     let mut deleted_runtime_alterable_system_ids = BTreeSet::new();
-    for (_, mapping) in system_object_mappings {
+    let mut deleted_comments = BTreeSet::new();
+    for (desc, mapping) in system_object_mappings {
         deleted_system_objects.insert(mapping.description);
         if mapping.unique_identifier.fingerprint == RUNTIME_ALTERABLE_FINGERPRINT_SENTINEL {
             deleted_runtime_alterable_system_ids.insert(mapping.unique_identifier.catalog_id);
         }
+
+        let id = mapping.unique_identifier.catalog_id;
+        let comment_id = match desc.object_type {
+            CatalogItemType::Table => CommentObjectId::Table(id),
+            CatalogItemType::Source => CommentObjectId::Source(id),
+            CatalogItemType::View => CommentObjectId::View(id),
+            CatalogItemType::Sink
+            | CatalogItemType::MaterializedView
+            | CatalogItemType::Index
+            | CatalogItemType::Type
+            | CatalogItemType::Func
+            | CatalogItemType::Secret
+            | CatalogItemType::Connection
+            | CatalogItemType::ContinualTask => continue,
+        };
+        deleted_comments.insert(comment_id);
     }
     // If you are 100% positive that it is safe to delete a system object outside any of the
     // unstable schemas, then add it to this set. Make sure that no prod environments are
@@ -899,6 +916,7 @@ fn add_new_remove_old_builtin_items_migration(
         "only objects in unstable schemas can be deleted, deleted objects: {:?}",
         deleted_system_objects
     );
+    txn.drop_comments(&deleted_comments)?;
     txn.remove_items(&deleted_runtime_alterable_system_ids)?;
     txn.remove_system_object_mappings(deleted_system_objects)?;
 
