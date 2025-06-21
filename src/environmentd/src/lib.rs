@@ -885,6 +885,8 @@ impl Listeners {
             );
         }
 
+        start_tokio_canary(adapter_client);
+
         info!(
             "startup: envd serve: postamble complete in {:?}",
             serve_postamble_start.elapsed()
@@ -900,6 +902,22 @@ impl Listeners {
             _adapter_handle: adapter_handle,
         })
     }
+}
+
+/// Starts a canary task, whose job is just to measure how overloaded tokio is.
+fn start_tokio_canary(adapter_client: mz_adapter::client::Client) {
+    task::spawn(|| "tokio_canary", async move {
+        let sleep_interval = Duration::from_secs(1);
+        loop {
+            let before_sleep = Instant::now();
+            tokio::time::sleep(sleep_interval).await;
+            adapter_client
+                .metrics()
+                .tokio_canary_delay_ms
+                .with_label_values(&[])
+                .observe((before_sleep.elapsed() - sleep_interval).as_secs_f64() * 1000.);
+        }
+    });
 }
 
 fn get_ld_value<V>(
