@@ -93,7 +93,7 @@ use mz_storage_client::healthcheck::{
     WALLCLOCK_GLOBAL_LAG_HISTOGRAM_RAW_DESC, WALLCLOCK_LAG_HISTORY_DESC,
 };
 use mz_storage_client::metrics::StorageControllerMetrics;
-use mz_storage_client::statistics::{SinkStatisticsUpdate, SourceStatisticsUpdate};
+use mz_storage_client::statistics::ControllerSinkStatistics;
 use mz_storage_client::storage_collections::StorageCollections;
 use mz_storage_types::StorageDiff;
 use mz_storage_types::controller::InvalidUpper;
@@ -463,8 +463,14 @@ where
     pub(crate) storage_collections: Arc<dyn StorageCollections<Timestamp = T> + Send + Sync>,
     pub(crate) collection_manager: collection_mgmt::CollectionManager<T>,
     pub(crate) source_statistics: Arc<Mutex<statistics::SourceStatistics>>,
-    pub(crate) sink_statistics:
-        Arc<Mutex<BTreeMap<GlobalId, statistics::StatsState<SinkStatisticsUpdate>>>>,
+    pub(crate) sink_statistics: Arc<
+        Mutex<
+            BTreeMap<
+                (GlobalId, Option<ReplicaId>),
+                statistics::StatsState<ControllerSinkStatistics>,
+            >,
+        >,
+    >,
     pub(crate) statistics_interval: Duration,
     pub(crate) statistics_interval_receiver: watch::Receiver<Duration>,
     pub(crate) metrics: StorageControllerMetrics,
@@ -619,11 +625,7 @@ where
                 )
                 .await;
 
-                let scraper_token = statistics::spawn_statistics_scraper::<
-                    statistics::SourceStatistics,
-                    SourceStatisticsUpdate,
-                    _,
-                >(
+                let scraper_token = statistics::spawn_statistics_scraper(
                     self.id.clone(),
                     // These do a shallow copy.
                     introspection_config.collection_manager,
@@ -656,7 +658,7 @@ where
                 .await;
 
                 let scraper_token =
-                    statistics::spawn_statistics_scraper::<_, SinkStatisticsUpdate, _>(
+                    statistics::spawn_statistics_scraper::<_, ControllerSinkStatistics, _>(
                         self.id.clone(),
                         introspection_config.collection_manager,
                         Arc::clone(&introspection_config.sink_statistics),

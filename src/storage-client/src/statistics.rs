@@ -19,6 +19,7 @@
 use std::sync::LazyLock;
 use std::sync::atomic::{AtomicU64, Ordering};
 
+use mz_controller_types::ReplicaId;
 use serde::{Deserialize, Serialize};
 
 use mz_proto::{IntoRustIfSome, RustType, TryFromProtoError};
@@ -30,6 +31,8 @@ pub static MZ_SOURCE_STATISTICS_RAW_DESC: LazyLock<RelationDesc> = LazyLock::new
     RelationDesc::builder()
         // Id of the source (or subsource).
         .with_column("id", ScalarType::String.nullable(false))
+        // Id of the replica producing these statistics.
+        .with_column("replica_id", ScalarType::String.nullable(true))
         //
         // Counters
         //
@@ -97,6 +100,8 @@ pub static MZ_SINK_STATISTICS_RAW_DESC: LazyLock<RelationDesc> = LazyLock::new(|
     RelationDesc::builder()
         // Id of the sink.
         .with_column("id", ScalarType::String.nullable(false))
+        // Id of the replica producing these statistics.
+        .with_column("replica_id", ScalarType::String.nullable(true))
         //
         // Counters
         //
@@ -440,7 +445,10 @@ pub trait PackableStats {
     /// Pack `self` into the `Row`.
     fn pack(&self, packer: mz_repr::RowPacker<'_>);
     /// Unpack a `Row` back into a `Self`.
-    fn unpack(row: Row, metrics: &crate::metrics::StorageControllerMetrics) -> (GlobalId, Self);
+    fn unpack(
+        row: Row,
+        metrics: &crate::metrics::StorageControllerMetrics,
+    ) -> (GlobalId, Option<ReplicaId>, Self);
 }
 
 /// An update as reported from a storage instance. The semantics
@@ -637,7 +645,10 @@ impl PackableStats for SourceStatisticsUpdate {
         packer.push(Datum::from(self.offset_committed.0.pack()));
     }
 
-    fn unpack(row: Row, metrics: &crate::metrics::StorageControllerMetrics) -> (GlobalId, Self) {
+    fn unpack(
+        row: Row,
+        metrics: &crate::metrics::StorageControllerMetrics,
+    ) -> (GlobalId, Option<ReplicaId>, Self) {
         let mut iter = row.iter();
         let mut s = Self {
             id: iter.next().unwrap().unwrap_str().parse().unwrap(),
@@ -667,7 +678,7 @@ impl PackableStats for SourceStatisticsUpdate {
         };
 
         s.offset_known.0.regressions = Some(metrics.regressed_offset_known(s.id));
-        (s.id, s)
+        (s.id, None, s)
     }
 }
 
@@ -714,6 +725,229 @@ impl RustType<ProtoSourceStatisticsUpdate> for SourceStatisticsUpdate {
             offset_known: Gauge::gauge(proto.offset_known),
             offset_committed: Gauge::gauge(proto.offset_committed),
         })
+    }
+}
+
+/// Statistics that we keep in the controller about a given collection
+/// (identified by id) on a given replica (identified by replica_id).
+///
+/// This mirrors [SourceStatisticsUpdate] and we update ourselve by
+/// incorporating them using [ControllerSourceStatistics::incorporate]
+#[derive(Clone, Debug, PartialEq)]
+pub struct ControllerSourceStatistics {
+    pub id: GlobalId,
+    pub replica_id: ReplicaId,
+
+    pub messages_received: Counter,
+    pub bytes_received: Counter,
+    pub updates_staged: Counter,
+    pub updates_committed: Counter,
+
+    pub records_indexed: Gauge<ResettingTotal>,
+    pub bytes_indexed: Gauge<ResettingTotal>,
+    pub rehydration_latency_ms: Gauge<ResettingLatency>,
+    pub snapshot_records_known: Gauge<ResettingNullableTotal>,
+    pub snapshot_records_staged: Gauge<ResettingNullableTotal>,
+
+    pub snapshot_committed: Gauge<Boolean>,
+    pub offset_known: Gauge<Total>,
+    pub offset_committed: Gauge<Total>,
+}
+
+impl ControllerSourceStatistics {
+    pub fn new(id: GlobalId, replica_id: ReplicaId) -> Self {
+        Self {
+            id,
+            replica_id,
+            messages_received: Default::default(),
+            bytes_received: Default::default(),
+            updates_staged: Default::default(),
+            updates_committed: Default::default(),
+            records_indexed: Default::default(),
+            bytes_indexed: Default::default(),
+            rehydration_latency_ms: Default::default(),
+            snapshot_records_known: Default::default(),
+            snapshot_records_staged: Default::default(),
+            snapshot_committed: Default::default(),
+            offset_known: Default::default(),
+            offset_committed: Default::default(),
+        }
+    }
+
+    /// Incorporate updates from the given [SourceStatisticsUpdate] into
+    /// ourselves
+    pub fn incorporate(&mut self, update: SourceStatisticsUpdate) {
+        let ControllerSourceStatistics {
+            id: _,
+            replica_id: _,
+            messages_received,
+            bytes_received,
+            updates_staged,
+            updates_committed,
+            records_indexed,
+            bytes_indexed,
+            rehydration_latency_ms,
+            snapshot_records_known,
+            snapshot_records_staged,
+            snapshot_committed,
+            offset_known,
+            offset_committed,
+        } = self;
+
+        messages_received.incorporate(update.messages_received, "messages_received");
+        bytes_received.incorporate(update.bytes_received, "bytes_received");
+        updates_staged.incorporate(update.updates_staged, "updates_staged");
+        updates_committed.incorporate(update.updates_committed, "updates_committed");
+        records_indexed.incorporate(update.records_indexed, "records_indexed");
+        bytes_indexed.incorporate(update.bytes_indexed, "bytes_indexed");
+        rehydration_latency_ms.incorporate(update.rehydration_latency_ms, "rehydration_latency_ms");
+        snapshot_records_known.incorporate(update.snapshot_records_known, "snapshot_records_known");
+        snapshot_records_staged
+            .incorporate(update.snapshot_records_staged, "snapshot_records_staged");
+        snapshot_committed.incorporate(update.snapshot_committed, "snapshot_committed");
+        offset_known.incorporate(update.offset_known, "offset_known");
+        offset_committed.incorporate(update.offset_committed, "offset_committed");
+    }
+}
+
+impl PackableStats for ControllerSourceStatistics {
+    fn pack(&self, mut packer: mz_repr::RowPacker<'_>) {
+        use mz_repr::Datum;
+        // id
+        packer.push(Datum::from(self.id.to_string().as_str()));
+        packer.push(Datum::from(self.replica_id.to_string().as_str()));
+        // Counters.
+        packer.push(Datum::from(self.messages_received.0));
+        packer.push(Datum::from(self.bytes_received.0));
+        packer.push(Datum::from(self.updates_staged.0));
+        packer.push(Datum::from(self.updates_committed.0));
+        // Resetting gauges.
+        packer.push(Datum::from(self.records_indexed.0.0));
+        packer.push(Datum::from(self.bytes_indexed.0.0));
+        let rehydration_latency = self
+            .rehydration_latency_ms
+            .0
+            .0
+            .map(|ms| mz_repr::adt::interval::Interval::new(0, 0, ms * 1000));
+        packer.push(Datum::from(rehydration_latency));
+        packer.push(Datum::from(self.snapshot_records_known.0.0));
+        packer.push(Datum::from(self.snapshot_records_staged.0.0));
+        // Gauges
+        packer.push(Datum::from(self.snapshot_committed.0.0));
+        packer.push(Datum::from(self.offset_known.0.pack()));
+        packer.push(Datum::from(self.offset_committed.0.pack()));
+    }
+
+    fn unpack(
+        row: Row,
+        metrics: &crate::metrics::StorageControllerMetrics,
+    ) -> (GlobalId, Option<ReplicaId>, Self) {
+        let mut iter = row.iter();
+        let id = iter.next().unwrap().unwrap_str().parse().unwrap();
+        let replica_id = iter.next().unwrap().unwrap_str().parse().unwrap();
+        let mut s = Self {
+            id,
+            replica_id,
+
+            messages_received: iter.next().unwrap().unwrap_uint64().into(),
+            bytes_received: iter.next().unwrap().unwrap_uint64().into(),
+            updates_staged: iter.next().unwrap().unwrap_uint64().into(),
+            updates_committed: iter.next().unwrap().unwrap_uint64().into(),
+
+            records_indexed: Gauge::gauge(iter.next().unwrap().unwrap_uint64()),
+            bytes_indexed: Gauge::gauge(iter.next().unwrap().unwrap_uint64()),
+            rehydration_latency_ms: Gauge::gauge(
+                <Option<mz_repr::adt::interval::Interval>>::try_from(iter.next().unwrap())
+                    .unwrap()
+                    .map(|int| int.micros / 1000),
+            ),
+            snapshot_records_known: Gauge::gauge(
+                <Option<u64>>::try_from(iter.next().unwrap()).unwrap(),
+            ),
+            snapshot_records_staged: Gauge::gauge(
+                <Option<u64>>::try_from(iter.next().unwrap()).unwrap(),
+            ),
+
+            snapshot_committed: Gauge::gauge(iter.next().unwrap().unwrap_bool()),
+            offset_known: Gauge::gauge(Some(iter.next().unwrap().unwrap_uint64())),
+            offset_committed: Gauge::gauge(Some(iter.next().unwrap().unwrap_uint64())),
+        };
+
+        s.offset_known.0.regressions = Some(metrics.regressed_offset_known(s.id));
+        (s.id, Some(replica_id), s)
+    }
+}
+
+/// Statistics that we keep in the controller about a given collection
+/// (identified by id) on a given replica (identified by replica_id).
+///
+/// This mirrors [SinkStatisticsUpdate] and we update ourselve by incorporating
+/// them using [ControllerSinkStatistics::incorporate]
+#[derive(Clone, Debug, PartialEq)]
+pub struct ControllerSinkStatistics {
+    pub id: GlobalId,
+    pub replica_id: ReplicaId,
+
+    pub messages_staged: Counter,
+    pub messages_committed: Counter,
+    pub bytes_staged: Counter,
+    pub bytes_committed: Counter,
+}
+
+impl ControllerSinkStatistics {
+    pub fn new(id: GlobalId, replica_id: ReplicaId) -> Self {
+        Self {
+            id,
+            replica_id,
+            messages_staged: Default::default(),
+            messages_committed: Default::default(),
+            bytes_staged: Default::default(),
+            bytes_committed: Default::default(),
+        }
+    }
+
+    /// Incorporate updates from the given [SinkStatisticsUpdate] into ourselves
+    pub fn incorporate(&mut self, update: SinkStatisticsUpdate) {
+        let ControllerSinkStatistics {
+            messages_staged,
+            messages_committed,
+            bytes_staged,
+            bytes_committed,
+            ..
+        } = self;
+
+        messages_staged.incorporate(update.messages_staged, "messages_staged");
+        bytes_staged.incorporate(update.bytes_staged, "bytes_staged");
+        messages_committed.incorporate(update.messages_committed, "messages_committed");
+        bytes_committed.incorporate(update.bytes_committed, "bytes_committed");
+    }
+}
+
+impl PackableStats for ControllerSinkStatistics {
+    fn pack(&self, mut packer: mz_repr::RowPacker<'_>) {
+        use mz_repr::Datum;
+        packer.push(Datum::from(self.id.to_string().as_str()));
+        packer.push(Datum::from(self.replica_id.to_string().as_str()));
+        packer.push(Datum::from(self.messages_staged.0));
+        packer.push(Datum::from(self.messages_committed.0));
+        packer.push(Datum::from(self.bytes_staged.0));
+        packer.push(Datum::from(self.bytes_committed.0));
+    }
+
+    fn unpack(
+        row: Row,
+        _metrics: &crate::metrics::StorageControllerMetrics,
+    ) -> (GlobalId, Option<ReplicaId>, Self) {
+        let mut iter = row.iter();
+        let s = Self {
+            id: iter.next().unwrap().unwrap_str().parse().unwrap(),
+            replica_id: iter.next().unwrap().unwrap_str().parse().unwrap(),
+            messages_staged: iter.next().unwrap().unwrap_uint64().into(),
+            messages_committed: iter.next().unwrap().unwrap_uint64().into(),
+            bytes_staged: iter.next().unwrap().unwrap_uint64().into(),
+            bytes_committed: iter.next().unwrap().unwrap_uint64().into(),
+        };
+        (s.id, Some(s.replica_id), s)
     }
 }
 
@@ -811,7 +1045,10 @@ impl PackableStats for SinkStatisticsUpdate {
         packer.push(Datum::from(self.bytes_committed.0));
     }
 
-    fn unpack(row: Row, _metrics: &crate::metrics::StorageControllerMetrics) -> (GlobalId, Self) {
+    fn unpack(
+        row: Row,
+        _metrics: &crate::metrics::StorageControllerMetrics,
+    ) -> (GlobalId, Option<ReplicaId>, Self) {
         let mut iter = row.iter();
         let s = Self {
             // Id
@@ -822,8 +1059,8 @@ impl PackableStats for SinkStatisticsUpdate {
             bytes_staged: iter.next().unwrap().unwrap_uint64().into(),
             bytes_committed: iter.next().unwrap().unwrap_uint64().into(),
         };
-
-        (s.id, s)
+        // TODO: replica_id!
+        (s.id, None, s)
     }
 }
 

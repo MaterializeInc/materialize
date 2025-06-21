@@ -10,6 +10,7 @@
 //! Implementation of the storage controller trait.
 
 use std::any::Any;
+use std::collections::btree_map;
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::{Debug, Display};
 use std::num::NonZeroI64;
@@ -65,7 +66,7 @@ use mz_storage_client::healthcheck::{
 };
 use mz_storage_client::metrics::StorageControllerMetrics;
 use mz_storage_client::statistics::{
-    SinkStatisticsUpdate, SourceStatisticsUpdate, WebhookStatistics,
+    ControllerSinkStatistics, ControllerSourceStatistics, WebhookStatistics,
 };
 use mz_storage_client::storage_collections::StorageCollections;
 use mz_storage_types::configuration::StorageConfiguration;
@@ -197,7 +198,14 @@ pub struct Controller<T: Timestamp + Lattice + Codec64 + From<EpochMillis> + Tim
     source_statistics: Arc<Mutex<statistics::SourceStatistics>>,
     /// Consolidated metrics updates to periodically write. We do not eagerly initialize this,
     /// and its contents are entirely driven by `StorageResponse::StatisticsUpdates`'s.
-    sink_statistics: Arc<Mutex<BTreeMap<GlobalId, statistics::StatsState<SinkStatisticsUpdate>>>>,
+    sink_statistics: Arc<
+        Mutex<
+            BTreeMap<
+                (GlobalId, Option<ReplicaId>),
+                statistics::StatsState<ControllerSinkStatistics>,
+            >,
+        >,
+    >,
     /// A way to update the statistics interval in the statistics tasks.
     statistics_interval_sender: Sender<Duration>,
 
@@ -1164,28 +1172,17 @@ where
         }
 
         {
-            // Ensure all sources are associated with the statistics.
-            //
-            // We currently do not call `create_collections` after we have initialized the source
-            // statistics scrapers, but in the interest of safety, avoid overriding existing
-            // statistics values.
             let mut source_statistics = self.source_statistics.lock().expect("poisoned");
-            let mut sink_statistics = self.sink_statistics.lock().expect("poisoned");
 
-            for id in new_source_statistic_entries {
-                source_statistics
-                    .source_statistics
-                    .entry(id)
-                    .or_insert_with(|| StatsState::new(SourceStatisticsUpdate::new(id)));
-            }
+            // Webhooks don't run on clusters/replicas, so we initialize their
+            // statistics collection here.
             for id in new_webhook_statistic_entries {
                 source_statistics.webhook_statistics.entry(id).or_default();
             }
-            for id in new_sink_statistic_entries {
-                sink_statistics
-                    .entry(id)
-                    .or_insert_with(|| StatsState::new(SinkStatisticsUpdate::new(id)));
-            }
+
+            // Sources and sinks only have statistics in the collection when
+            // there is a replica that is reporting them. No need to initialize
+            // here.
         }
 
         // Register the tables all in one batch.
@@ -2002,8 +1999,12 @@ where
         {
             let mut source_statistics = self.source_statistics.lock().expect("poisoned");
             for id in source_statistics_to_drop {
-                source_statistics.source_statistics.remove(&id);
-                source_statistics.webhook_statistics.remove(&id);
+                source_statistics
+                    .source_statistics
+                    .retain(|(stats_id, _), _| stats_id != &id);
+                source_statistics
+                    .webhook_statistics
+                    .retain(|stats_id, _| stats_id != &id);
             }
         }
 
@@ -2106,7 +2107,7 @@ where
             let mut sink_statistics = self.sink_statistics.lock().expect("poisoned");
             for id in sinks_to_drop.iter() {
                 status_updates.push(StatusUpdate::new(*id, status_now, Status::Dropped));
-                sink_statistics.remove(id);
+                sink_statistics.retain(|(stats_id, _), _| stats_id != id);
             }
         }
 
@@ -2262,7 +2263,7 @@ where
                         soft_panic_or_log!("unexpected DroppedId for {id}");
                     }
                 }
-                (_replica_id, StorageResponse::StatisticsUpdates(source_stats, sink_stats)) => {
+                (replica_id, StorageResponse::StatisticsUpdates(source_stats, sink_stats)) => {
                     // Note we only hold the locks while moving some plain-old-data around here.
                     //
                     // We just write the whole object, as the update from storage represents the
@@ -2272,22 +2273,73 @@ where
                     // `StatisticsUpdates` while we were shutting down the storage object.
                     {
                         let mut shared_stats = self.source_statistics.lock().expect("poisoned");
+
+                        let replica_id = if let Some(replica_id) = replica_id {
+                            replica_id
+                        } else {
+                            tracing::error!(
+                                ?source_stats,
+                                "missing replica_id for source statistics update"
+                            );
+                            continue;
+                        };
+
                         for stat in source_stats {
-                            // Don't override it if its been removed.
-                            shared_stats
+                            // tracing::info!(?stat, "new stats");
+                            let collection_id = stat.id.clone();
+
+                            let entry = shared_stats
                                 .source_statistics
-                                .entry(stat.id)
-                                .and_modify(|current| current.stat().incorporate(stat));
+                                .entry((stat.id, Some(replica_id)));
+
+                            match entry {
+                                btree_map::Entry::Vacant(vacant_entry) => {
+                                    let mut stats = StatsState::new(
+                                        ControllerSourceStatistics::new(collection_id, replica_id),
+                                    );
+                                    stats.stat().incorporate(stat);
+
+                                    vacant_entry.insert(stats);
+                                }
+                                btree_map::Entry::Occupied(mut occupied_entry) => {
+                                    occupied_entry.get_mut().stat().incorporate(stat);
+                                }
+                            }
                         }
                     }
 
                     {
                         let mut shared_stats = self.sink_statistics.lock().expect("poisoned");
+
+                        let replica_id = if let Some(replica_id) = replica_id {
+                            replica_id
+                        } else {
+                            tracing::error!(
+                                ?sink_stats,
+                                "missing replica_id for sink statistics update"
+                            );
+                            continue;
+                        };
+
                         for stat in sink_stats {
-                            // Don't override it if its been removed.
-                            shared_stats
-                                .entry(stat.id)
-                                .and_modify(|current| current.stat().incorporate(stat));
+                            let collection_id = stat.id.clone();
+
+                            let entry = shared_stats.entry((stat.id, Some(replica_id)));
+
+                            match entry {
+                                btree_map::Entry::Vacant(vacant_entry) => {
+                                    let mut stats = StatsState::new(ControllerSinkStatistics::new(
+                                        collection_id,
+                                        replica_id,
+                                    ));
+                                    stats.stat().incorporate(stat);
+
+                                    vacant_entry.insert(stats);
+                                }
+                                btree_map::Entry::Occupied(mut occupied_entry) => {
+                                    occupied_entry.get_mut().stat().incorporate(stat);
+                                }
+                            }
                         }
                     }
                 }
@@ -3139,11 +3191,11 @@ where
             .expect("poisoned")
             .source_statistics
             // collections should also contain subsources.
-            .retain(|k, _| self.storage_collections.check_exists(*k).is_ok());
+            .retain(|(k, _replica_id), _| self.storage_collections.check_exists(*k).is_ok());
         self.sink_statistics
             .lock()
             .expect("poisoned")
-            .retain(|k, _| self.export(*k).is_ok());
+            .retain(|(k, _replica_id), _| self.export(*k).is_ok());
     }
 
     /// Appends a new global ID, shard ID pair to the appropriate collection.

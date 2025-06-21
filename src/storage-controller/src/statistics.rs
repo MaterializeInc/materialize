@@ -18,11 +18,13 @@ use std::time::Duration;
 use differential_dataflow::consolidation;
 use differential_dataflow::lattice::Lattice;
 use itertools::Itertools;
+use mz_cluster_client::ReplicaId;
 use mz_ore::now::EpochMillis;
 use mz_persist_types::Codec64;
 use mz_repr::{Diff, TimestampManipulation};
 use mz_repr::{GlobalId, Row};
-use mz_storage_client::statistics::{PackableStats, SourceStatisticsUpdate, WebhookStatistics};
+use mz_storage_client::statistics::ControllerSourceStatistics;
+use mz_storage_client::statistics::{PackableStats, WebhookStatistics};
 use timely::progress::ChangeBatch;
 use timely::progress::Timestamp;
 use tokio::sync::oneshot;
@@ -31,7 +33,7 @@ use tokio::sync::watch::Receiver;
 use crate::collection_mgmt::CollectionManager;
 use StatsState::*;
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub(super) enum StatsState<Stat> {
     /// This stat is fully initialized.
     Initialized(Stat),
@@ -81,16 +83,16 @@ impl<Stat: Clone> StatsState<Stat> {
 
 /// Conversion trait to allow multiple shapes of data in [`spawn_statistics_scraper`].
 pub(super) trait AsStats<Stats> {
-    fn as_stats(&self) -> &BTreeMap<GlobalId, StatsState<Stats>>;
-    fn as_mut_stats(&mut self) -> &mut BTreeMap<GlobalId, StatsState<Stats>>;
+    fn as_stats(&self) -> &BTreeMap<(GlobalId, Option<ReplicaId>), StatsState<Stats>>;
+    fn as_mut_stats(&mut self) -> &mut BTreeMap<(GlobalId, Option<ReplicaId>), StatsState<Stats>>;
 }
 
-impl<Stats> AsStats<Stats> for BTreeMap<GlobalId, StatsState<Stats>> {
-    fn as_stats(&self) -> &BTreeMap<GlobalId, StatsState<Stats>> {
+impl<Stats> AsStats<Stats> for BTreeMap<(GlobalId, Option<ReplicaId>), StatsState<Stats>> {
+    fn as_stats(&self) -> &BTreeMap<(GlobalId, Option<ReplicaId>), StatsState<Stats>> {
         self
     }
 
-    fn as_mut_stats(&mut self) -> &mut BTreeMap<GlobalId, StatsState<Stats>> {
+    fn as_mut_stats(&mut self) -> &mut BTreeMap<(GlobalId, Option<ReplicaId>), StatsState<Stats>> {
         self
     }
 }
@@ -126,11 +128,12 @@ where
         {
             let mut shared_stats = shared_stats.lock().expect("poisoned");
             for row in previous_values {
-                let current = Stats::unpack(row, &metrics);
+                let (collection_id, replica_id, current_stats) = Stats::unpack(row, &metrics);
 
-                shared_stats
-                    .as_mut_stats()
-                    .insert(current.0, StatsState::Initialized(current.1));
+                shared_stats.as_mut_stats().insert(
+                    (collection_id, replica_id),
+                    StatsState::Initialized(current_stats),
+                );
             }
 
             let mut row_buf = Row::default();
@@ -143,7 +146,6 @@ where
         }
 
         tracing::debug!(%statistics_collection_id, ?correction, "seeding stats collection");
-
         // Make sure that the desired state matches what is already there, when
         // we start up!
         if !correction.is_empty() {
@@ -220,7 +222,8 @@ pub(super) struct SourceStatistics {
     /// sources must initialize the first values, but we need `None` to mark a source
     /// having been created vs dropped (particularly when a cluster can race and report
     /// statistics for a dropped source, which we must ignore).
-    pub source_statistics: BTreeMap<GlobalId, StatsState<SourceStatisticsUpdate>>,
+    pub source_statistics:
+        BTreeMap<(GlobalId, Option<ReplicaId>), StatsState<ControllerSourceStatistics>>,
     /// A shared map with atomics for webhook appenders to update the (currently 4)
     /// statistics that can meaningfully produce. These are periodically
     /// copied into `source_statistics` [`spawn_webhook_statistics_scraper`] to avoid
@@ -228,12 +231,16 @@ pub(super) struct SourceStatistics {
     pub webhook_statistics: BTreeMap<GlobalId, Arc<WebhookStatistics>>,
 }
 
-impl AsStats<SourceStatisticsUpdate> for SourceStatistics {
-    fn as_stats(&self) -> &BTreeMap<GlobalId, StatsState<SourceStatisticsUpdate>> {
+impl AsStats<ControllerSourceStatistics> for SourceStatistics {
+    fn as_stats(
+        &self,
+    ) -> &BTreeMap<(GlobalId, Option<ReplicaId>), StatsState<ControllerSourceStatistics>> {
         &self.source_statistics
     }
 
-    fn as_mut_stats(&mut self) -> &mut BTreeMap<GlobalId, StatsState<SourceStatisticsUpdate>> {
+    fn as_mut_stats(
+        &mut self,
+    ) -> &mut BTreeMap<(GlobalId, Option<ReplicaId>), StatsState<ControllerSourceStatistics>> {
         &mut self.source_statistics
     }
 }
@@ -272,8 +279,11 @@ pub(super) fn spawn_webhook_statistics_scraper(
                         // Don't override it if its been removed.
                         shared_stats
                             .source_statistics
-                            .entry(*id)
-                            .and_modify(|current| current.stat().incorporate(ws.drain_into_update(*id)));
+                            .entry((*id, None))
+                            .and_modify(|current| {
+                                let update = ws.drain_into_update(*id);
+                                current.stat().incorporate(update);
+                            });
                     }
                 }
             }
