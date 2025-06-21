@@ -46,6 +46,7 @@ use timely::PartialOrder;
 use timely::order::TotalOrder;
 use timely::progress::{Antichain, Timestamp};
 use tracing::{Instrument, debug_span, trace_span, warn};
+use uuid::Uuid;
 
 use crate::async_runtime::IsolatedRuntime;
 use crate::cfg::{BATCH_BUILDER_MAX_OUTSTANDING_PARTS, MiB};
@@ -701,6 +702,7 @@ where
                 schema: self.write_schemas.id,
                 // Field has been deprecated but kept around to roundtrip state.
                 deprecated_schema: None,
+                uuid: Some(Uuid::new_v4()),
             });
             run_parts.extend(parts);
         }
@@ -818,6 +820,7 @@ impl<T: Timestamp + Codec64> BatchParts<T> {
                                         // Field has been deprecated but kept around to
                                         // roundtrip state.
                                         deprecated_schema: None,
+                                        uuid: Some(Uuid::new_v4()),
                                     },
                                     parts.into_result().await,
                                 )
