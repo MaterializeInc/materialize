@@ -353,6 +353,8 @@ pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
         .add(&crate::stats::STATS_UNTRIMMABLE_COLUMNS_SUFFIX)
         .add(&crate::fetch::PART_DECODE_FORMAT)
         .add(&crate::write::COMBINE_INLINE_WRITES)
+        .add(&INCREMENTAL_COMPACTIONS_SINGLE_RUN_ENABLED)
+        .add(&INCREMENTAL_COMPACTION_MULTIPLE_RUNS_ENABLED)
 }
 
 impl PersistConfig {
@@ -534,6 +536,18 @@ pub const USAGE_STATE_FETCH_CONCURRENCY_LIMIT: Config<usize> = Config::new(
     "persist_usage_state_fetch_concurrency_limit",
     8,
     "Limit the concurrency in of fetching in the perioding Persist-storage-usage calculation.",
+);
+
+pub const INCREMENTAL_COMPACTION_MULTIPLE_RUNS_ENABLED: Config<bool> = Config::new(
+    "persist_incremental_compaction_multiple_runs_enabled",
+    true,
+    "Whether to attempt to incrementally apply a chunk of updates to a batch.",
+);
+
+pub const INCREMENTAL_COMPACTIONS_SINGLE_RUN_ENABLED: Config<bool> = Config::new(
+    "persist_incremental_compactions_single_run_enabled",
+    true,
+    "Whether to incrementally store information about a single compact_runs call.",
 );
 
 impl PostgresClientKnobs for PersistConfig {

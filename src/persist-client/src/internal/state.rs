@@ -678,6 +678,28 @@ impl<T: Timestamp + Codec64 + Sync> RunPart<T> {
             }
         }
     }
+
+    pub async fn last_part<'a>(
+        &'a self,
+        shard_id: ShardId,
+        blob: &'a dyn Blob,
+        metrics: &'a Metrics,
+    ) -> Result<Box<BatchPart<T>>, MissingBlob> {
+        match self {
+            RunPart::Single(p) => Ok(Box::new(p.clone())),
+            RunPart::Many(r) => {
+                let fetched = r
+                    .get(shard_id, blob, metrics)
+                    .await
+                    .ok_or_else(|| MissingBlob(r.key.complete(&shard_id)))?;
+                let last_part = fetched
+                    .parts
+                    .last()
+                    .ok_or_else(|| MissingBlob(r.key.complete(&shard_id)))?;
+                Ok(Box::pin(last_part.last_part(shard_id, blob, metrics)).await?)
+            }
+        }
+    }
 }
 
 impl<T: Ord> PartialOrd for BatchPart<T> {
@@ -742,6 +764,9 @@ pub struct RunMeta {
 
     /// ID of a schema that has since been deprecated and exists only to cleanly roundtrip.
     pub(crate) deprecated_schema: Option<SchemaId>,
+
+    /// If set, a UUID that uniquely identifies this run.
+    pub(crate) uuid: Option<Uuid>,
 }
 
 /// A subset of a [HollowBatch] corresponding 1:1 to a blob.
@@ -797,6 +822,7 @@ pub struct HollowBatchPart<T> {
 ///
 /// [Batch]: differential_dataflow::trace::BatchReader
 #[derive(Clone, PartialEq, Eq)]
+
 pub struct HollowBatch<T> {
     /// Describes the times of the updates in the batch.
     pub desc: Description<T>,
@@ -923,6 +949,20 @@ impl<T: Timestamp + Codec64 + Sync> HollowBatch<T> {
             }
         }
     }
+
+    pub async fn last_part<'a>(
+        &'a self,
+        shard_id: ShardId,
+        blob: &'a dyn Blob,
+        metrics: &'a Metrics,
+    ) -> Option<BatchPart<T>> {
+        let last_part = self.parts.last()?;
+        let last_part = last_part.last_part(shard_id, blob, metrics).await;
+        match last_part {
+            Ok(part) => Some(*part),
+            Err(MissingBlob(_)) => None,
+        }
+    }
 }
 impl<T> HollowBatch<T> {
     /// Construct an in-memory hollow batch from the given metadata.
@@ -1008,6 +1048,42 @@ impl<T> HollowBatch<T> {
             .map(|range| &self.parts[range]);
         run_metas.zip(run_parts)
     }
+    // pub(crate) fn runs(&self) -> impl Iterator<Item = (&RunMeta, &[RunPart<T>])> + '_ {
+    //     info!("runs(): run_splits={:?}", self.run_splits);
+    //     let run_ends = self
+    //         .run_splits
+    //         .iter()
+    //         .copied()
+    //         .chain(std::iter::once(self.parts.len()));
+    //     info!("runs(): run_ends={:?}", run_ends);
+    //     let run_metas = self.run_meta.iter();
+
+    //     let mut start = 0;
+    //     let run_parts = run_ends
+    //     .map(move |end| {
+    //         let range = start..end;
+    //         start = end;
+    //         range
+    //     })
+    //     .inspect(|range| {
+    //         if range.is_empty() {
+    //             tracing::info!(
+    //                 "runs(): skipping empty run range: {:?} (run_splits may have duplicates or gaps)",
+    //                 range
+    //             );
+    //         } else {
+    //             tracing::info!(
+    //                 "runs(): yielding run range: {:?} (run_splits={:?})",
+    //                 range,
+    //                 self.run_splits
+    //             );
+    //         }
+    //     })
+    //     .filter(|range| !range.is_empty())
+    //     .map(|range| &self.parts[range]);
+
+    //     run_metas.zip(run_parts)
+    // }
 
     pub(crate) fn inline_bytes(&self) -> usize {
         self.parts.iter().map(|x| x.inline_bytes()).sum()
@@ -1698,6 +1774,7 @@ where
                 req.id,
                 ActiveCompaction {
                     start_ms: heartbeat_timestamp_ms,
+                    batch_so_far: None,
                 },
             )
         }
@@ -1724,7 +1801,29 @@ where
         Continue(merge_reqs)
     }
 
-    pub fn apply_merge_res<D: Codec64 + Semigroup + PartialEq>(
+    /// This is a best effort attempt to apply incremental compaction
+    /// to the spine.
+    pub fn apply_compaction_progress(
+        &mut self,
+        batch_so_far: &HollowBatch<T>,
+        new_ts: u64,
+    ) -> ControlFlow<NoOpStateTransition<()>, ()> {
+        if self.is_tombstone() {
+            return Break(NoOpStateTransition(()));
+        }
+
+        let new_active_compaction = ActiveCompaction {
+            start_ms: new_ts,
+            batch_so_far: Some(batch_so_far.clone()),
+        };
+
+        self.trace
+            .apply_incremental_compaction(&new_active_compaction);
+
+        Continue(())
+    }
+
+    pub fn apply_merge_res<D: Semigroup + Codec64 + PartialEq>(
         &mut self,
         res: &FueledMergeRes<T>,
         metrics: &ColumnarMetrics,
@@ -2091,6 +2190,8 @@ where
             // able to append that batch in the first place.
             let fake_merge = FueledMergeRes {
                 output: HollowBatch::empty(desc),
+                inputs: Vec::new(),
+                new_active_compaction: None,
             };
             let result = self.trace.apply_tombstone_merge(&fake_merge);
             assert!(

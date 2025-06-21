@@ -1053,6 +1053,7 @@ where
             shard_metrics,
             read_metrics,
             filter,
+            None,
             memory_budget_bytes,
         );
         for batch in batches {

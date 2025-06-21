@@ -1108,16 +1108,18 @@ impl<T: Timestamp + Codec64> ProtoMapEntry<SpineId, ThinSpineBatch<T>> for Proto
     }
 }
 
-impl RustType<ProtoCompaction> for ActiveCompaction {
+impl<T: Timestamp + Codec64> RustType<ProtoCompaction> for ActiveCompaction<T> {
     fn into_proto(&self) -> ProtoCompaction {
         ProtoCompaction {
             start_ms: self.start_ms,
+            batch_so_far: self.batch_so_far.as_ref().map(|x| x.into_proto()),
         }
     }
 
     fn from_proto(proto: ProtoCompaction) -> Result<Self, TryFromProtoError> {
         Ok(Self {
             start_ms: proto.start_ms,
+            batch_so_far: proto.batch_so_far.map(|x| x.into_rust()).transpose()?,
         })
     }
 }
@@ -1405,6 +1407,7 @@ impl RustType<ProtoRunMeta> for RunMeta {
             order: order.into(),
             schema_id: self.schema.into_proto(),
             deprecated_schema_id: self.deprecated_schema.into_proto(),
+            uuid: self.uuid.into_proto(),
         }
     }
 
@@ -1419,6 +1422,7 @@ impl RustType<ProtoRunMeta> for RunMeta {
             order,
             schema: proto.schema_id.into_rust()?,
             deprecated_schema: proto.deprecated_schema_id.into_rust()?,
+            uuid: proto.uuid.into_rust()?,
         })
     }
 }
