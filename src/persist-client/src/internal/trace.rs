@@ -1148,37 +1148,36 @@ impl<T: Timestamp + Lattice + Codec64> SpineBatch<T> {
         let mut run_splits = Vec::with_capacity(run_meta.len());
         let mut cursor = 0;
 
-        for i in 0..run_meta.len() {
-            let run_len = if i < start_run {
-                // Original run
-                let start = if i == 0 {
-                    0
-                } else {
-                    original.run_splits[i - 1]
-                };
-                let end = original.run_splits[i];
-                end - start
-            } else if i == start_run {
-                // Replacement
-                replacement.parts.len()
+        // 1. Prefix runs (unchanged from original)
+        for i in 0..start_run {
+            let start = if i == 0 {
+                0
             } else {
-                // Shifted original
-                let orig_idx = end_run + 1 + (i - (start_run + replacement.run_meta.len()));
-                let start = if orig_idx == 0 {
-                    0
-                } else {
-                    original.run_splits[orig_idx - 1]
-                };
-                let end = original.run_splits[orig_idx];
-                end - start
+                original.run_splits[i - 1]
             };
+            let end = original.run_splits[i];
+            let len = end - start;
+            cursor += len;
+            run_splits.push(cursor);
+        }
 
-            cursor += run_len;
-            // If this is the first run, we don't push a split.
-            // This feels a bit odd, but it matches the original behavior.
-            if i != 0 {
-                run_splits.push(cursor);
-            }
+        // 2. Replacement run
+        cursor += replacement.parts.len();
+        if start_run != 0 || !run_splits.is_empty() {
+            run_splits.push(cursor);
+        }
+
+        // 3. Suffix runs (original runs after end_run)
+        for i in (end_run + 1)..original.run_meta.len() {
+            let start = if i == 0 {
+                0
+            } else {
+                original.run_splits[i - 1]
+            };
+            let end = original.run_splits[i];
+            let len = end - start;
+            cursor += len;
+            run_splits.push(cursor);
         }
 
         assert_eq!(
