@@ -274,6 +274,21 @@ impl Transactor {
                 .await
                 .expect("codecs should match");
 
+            if !PartialOrder::less_equal(read.since(), &snap_as_of) {
+                // The desired snapshot as-of is before the actual critical since;
+                // refresh our state and try again.
+                info!(
+                    "read handle since {:?} is not before as_of {}, fetching a new read_ts and trying again",
+                    read.since().elements(),
+                    snap_ts,
+                );
+                self.advance_since().await?;
+
+                let recent_upper = self.write.fetch_recent_upper().await;
+                self.read_ts = Self::extract_ts(recent_upper)? - 1;
+                continue;
+            }
+
             let updates_res = read.snapshot_and_fetch(snap_as_of.clone()).await;
             let mut updates = match updates_res {
                 Ok(x) => x,
