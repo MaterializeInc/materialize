@@ -542,6 +542,7 @@ pub struct PeekStageFinish {
     plan_insights_optimizer_trace: Option<OptimizerTrace>,
     insights_ctx: Option<Box<PlanInsightsContext>>,
     global_lir_plan: optimize::peek::GlobalLirPlan,
+    optimization_began_at: EpochMillis,
     optimization_finished_at: EpochMillis,
 }
 
@@ -550,6 +551,7 @@ pub struct PeekStageCopyTo {
     validity: PlanValidity,
     optimizer: optimize::copy_to::Optimizer,
     global_lir_plan: optimize::copy_to::GlobalLirPlan,
+    optimization_began_at: EpochMillis,
     optimization_finished_at: EpochMillis,
     source_ids: BTreeSet<GlobalId>,
 }
