@@ -146,7 +146,6 @@ Explained Query:
             input_key=[#0]
             raw=false
             arrangements[0]={ key=[], permutation=id, thinning=(#0) }
-            arrangements[1]={ key=[#0], permutation=id, thinning=() }
             types=[integer]
             Reduce::Distinct
               val_plan
