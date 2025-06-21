@@ -2027,9 +2027,8 @@ Explained Query:
                 Project (#0{rootpostlanguage}) // { arity: 1 }
                   Filter (#0{rootpostlanguage} = varchar_to_text(#1{right_col0_0})) // { arity: 2 }
                     FlatMap unnest_array({"es", "ta", "pt"}) // { arity: 2 }
-                      Distinct project=[#0{rootpostlanguage}] // { arity: 1 }
-                        Project (#13{rootpostlanguage}) // { arity: 1 }
-                          Get l0 // { arity: 17 }
+                      Project (#13{rootpostlanguage}) // { arity: 1 }
+                        Get l0 // { arity: 17 }
     Return // { arity: 2 }
       Reduce group_by=[#0{count_messageid}] aggregates=[count(*)] // { arity: 2 }
         Project (#1{count_messageid}) // { arity: 1 }
@@ -3873,43 +3872,42 @@ Explained Query:
                       Get l1 // { arity: 5 }
         cte l4 =
           TopK group_by=[#0, #1, #2{dst}] order_by=[#3 asc nulls_last, #4 desc nulls_first] limit=1 // { arity: 5 }
-            Distinct project=[#0..=#4] // { arity: 5 }
-              Union // { arity: 5 }
-                Project (#3, #4, #1{dst}, #7, #8) // { arity: 5 }
-                  Map ((#6{w} + bigint_to_double(#2{w})), false) // { arity: 9 }
-                    Join on=(#0{src} = #5{dst}) type=differential // { arity: 7 }
-                      implementation
-                        %0:pathq19[#0{src}]KA » %1:l1[#2{dst}]K
-                      ArrangeBy keys=[[#0{src}]] // { arity: 3 }
-                        ReadIndex on=pathq19 pathq19_src=[differential join] // { arity: 3 }
-                      ArrangeBy keys=[[#2{dst}]] // { arity: 4 }
-                        Project (#0..=#3) // { arity: 4 }
-                          Filter (#2{dst}) IS NOT NULL // { arity: 5 }
-                            Get l1 // { arity: 5 }
-                Project (#0..=#3, #9) // { arity: 5 }
-                  Map ((#4{dead} OR #8)) // { arity: 10 }
-                    Join on=(#0 = #5 AND #1 = #6 AND #2 = #7) type=differential // { arity: 9 }
-                      implementation
-                        %0:l7[#0..=#2]KKK » %1[#0..=#2]KKK
-                      ArrangeBy keys=[[#0..=#2]] // { arity: 5 }
-                        Project (#0..=#4) // { arity: 5 }
-                          Get l7 // { arity: 6 }
-                      ArrangeBy keys=[[#0..=#2]] // { arity: 4 }
-                        Union // { arity: 4 }
-                          Map (true) // { arity: 4 }
-                            Get l3 // { arity: 3 }
-                          Project (#0..=#2, #6) // { arity: 4 }
-                            Map (false) // { arity: 7 }
-                              Join on=(#0 = #3 AND #1 = #4 AND #2 = #5) type=differential // { arity: 6 }
-                                implementation
-                                  %1:l2[#0..=#2]UKKK » %0[#0..=#2]KKK
-                                ArrangeBy keys=[[#0..=#2]] // { arity: 3 }
-                                  Union // { arity: 3 }
-                                    Negate // { arity: 3 }
-                                      Get l3 // { arity: 3 }
-                                    Get l2 // { arity: 3 }
-                                ArrangeBy keys=[[#0..=#2]] // { arity: 3 }
+            Union // { arity: 5 }
+              Project (#3, #4, #1{dst}, #7, #8) // { arity: 5 }
+                Map ((#6{w} + bigint_to_double(#2{w})), false) // { arity: 9 }
+                  Join on=(#0{src} = #5{dst}) type=differential // { arity: 7 }
+                    implementation
+                      %0:pathq19[#0{src}]KA » %1:l1[#2{dst}]K
+                    ArrangeBy keys=[[#0{src}]] // { arity: 3 }
+                      ReadIndex on=pathq19 pathq19_src=[differential join] // { arity: 3 }
+                    ArrangeBy keys=[[#2{dst}]] // { arity: 4 }
+                      Project (#0..=#3) // { arity: 4 }
+                        Filter (#2{dst}) IS NOT NULL // { arity: 5 }
+                          Get l1 // { arity: 5 }
+              Project (#0..=#3, #9) // { arity: 5 }
+                Map ((#4{dead} OR #8)) // { arity: 10 }
+                  Join on=(#0 = #5 AND #1 = #6 AND #2 = #7) type=differential // { arity: 9 }
+                    implementation
+                      %0:l7[#0..=#2]KKK » %1[#0..=#2]KKK
+                    ArrangeBy keys=[[#0..=#2]] // { arity: 5 }
+                      Project (#0..=#4) // { arity: 5 }
+                        Get l7 // { arity: 6 }
+                    ArrangeBy keys=[[#0..=#2]] // { arity: 4 }
+                      Union // { arity: 4 }
+                        Map (true) // { arity: 4 }
+                          Get l3 // { arity: 3 }
+                        Project (#0..=#2, #6) // { arity: 4 }
+                          Map (false) // { arity: 7 }
+                            Join on=(#0 = #3 AND #1 = #4 AND #2 = #5) type=differential // { arity: 6 }
+                              implementation
+                                %1:l2[#0..=#2]UKKK » %0[#0..=#2]KKK
+                              ArrangeBy keys=[[#0..=#2]] // { arity: 3 }
+                                Union // { arity: 3 }
+                                  Negate // { arity: 3 }
+                                    Get l3 // { arity: 3 }
                                   Get l2 // { arity: 3 }
+                              ArrangeBy keys=[[#0..=#2]] // { arity: 3 }
+                                Get l2 // { arity: 3 }
         cte l5 =
           Reduce aggregates=[min((#0{w} + #1{w}))] // { arity: 1 }
             Project (#1, #3) // { arity: 2 }

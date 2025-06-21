@@ -262,37 +262,41 @@ Explained Query:
                                     Constant // { arity: 0 }
                                       - ()
     cte l2 =
-      Distinct project=[#0] // { arity: 1 }
-        Project (#2) // { arity: 1 }
-          Get l1 // { arity: 3 }
-    cte l3 =
-      Distinct project=[#0] // { arity: 1 }
-        Project (#0) // { arity: 1 }
-          Filter (#0{symbol} = #1{right_col0_0}) // { arity: 2 }
-            FlatMap wrap1("0", "1", "2", "3", "4", "5", "6", "7", "8", "9") // { arity: 2 }
-              Get l2 // { arity: 1 }
-    cte l4 =
       ArrangeBy keys=[[#2]] // { arity: 3 }
         Get l1 // { arity: 3 }
-    cte l5 =
+    cte l3 =
+      Project (#2) // { arity: 1 }
+        Get l1 // { arity: 3 }
+    cte l4 =
       Project (#0..=#2) // { arity: 3 }
         Join on=(#2 = #3) type=differential // { arity: 4 }
           implementation
-            %1:l3[#0]UKA » %0:l4[#2]K
-          Get l4 // { arity: 3 }
+            %1[#0]UKA » %0:l2[#2]K
+          Get l2 // { arity: 3 }
           ArrangeBy keys=[[#0]] // { arity: 1 }
-            Get l3 // { arity: 1 }
+            Distinct project=[#0] // { arity: 1 }
+              Project (#0) // { arity: 1 }
+                Filter (#0{symbol} = #1{right_col0_0}) // { arity: 2 }
+                  FlatMap wrap1("0", "1", "2", "3", "4", "5", "6", "7", "8", "9") // { arity: 2 }
+                    Get l3 // { arity: 1 }
+    cte l5 =
+      Distinct project=[#0] // { arity: 1 }
+        Get l3 // { arity: 1 }
     cte l6 =
       Project (#0..=#2) // { arity: 3 }
         Join on=(#2 = #3) type=differential // { arity: 4 }
           implementation
-            %0:l4[#2]K » %1[#0]K
-          Get l4 // { arity: 3 }
+            %0:l2[#2]K » %1[#0]K
+          Get l2 // { arity: 3 }
           ArrangeBy keys=[[#0]] // { arity: 1 }
             Union // { arity: 1 }
               Negate // { arity: 1 }
-                Get l3 // { arity: 1 }
-              Get l2 // { arity: 1 }
+                Distinct project=[#0] // { arity: 1 }
+                  Project (#0) // { arity: 1 }
+                    Filter (#0{symbol} = #1{right_col0_2}) // { arity: 2 }
+                      FlatMap wrap1("0", "1", "2", "3", "4", "5", "6", "7", "8", "9") // { arity: 2 }
+                        Get l5 // { arity: 1 }
+              Get l5 // { arity: 1 }
     cte l7 =
       ArrangeBy keys=[[]] // { arity: 1 }
         Constant // { arity: 1 }
@@ -301,7 +305,7 @@ Explained Query:
           - (1)
     cte l8 =
       ArrangeBy keys=[[#0{row_idx}, #1{col_idx}]] // { arity: 3 }
-        Get l5 // { arity: 3 }
+        Get l4 // { arity: 3 }
   Return // { arity: 2 }
     With Mutually Recursive
       cte l9 =
@@ -313,12 +317,12 @@ Explained Query:
                   Map (1) // { arity: 8 }
                     Join on=(#0{row_idx} = (#3{row_idx} + #5{row_off}) AND #1{col_idx} = (#4{col_idx} + #6{col_off})) type=delta // { arity: 7 }
                       implementation
-                        %0:l5 » %1:l6[×] » %2:l7[×] » %3:l7[×]
-                        %1:l6 » %0:l5[×] » %2:l7[×] » %3:l7[×]
-                        %2:l7 » %0:l5[×] » %1:l6[×] » %3:l7[×]
-                        %3:l7 » %0:l5[×] » %1:l6[×] » %2:l7[×]
+                        %0:l4 » %1:l6[×] » %2:l7[×] » %3:l7[×]
+                        %1:l6 » %0:l4[×] » %2:l7[×] » %3:l7[×]
+                        %2:l7 » %0:l4[×] » %1:l6[×] » %3:l7[×]
+                        %3:l7 » %0:l4[×] » %1:l6[×] » %2:l7[×]
                       ArrangeBy keys=[[]] // { arity: 3 }
-                        Get l5 // { arity: 3 }
+                        Get l4 // { arity: 3 }
                       ArrangeBy keys=[[]] // { arity: 2 }
                         Project (#0, #1) // { arity: 2 }
                           Get l6 // { arity: 3 }
@@ -349,7 +353,7 @@ Explained Query:
         cte l11 =
           ArrangeBy keys=[[#0{right_col0_4}, #1{right_col1_5}]] // { arity: 2 }
             Project (#0, #1) // { arity: 2 }
-              Get l5 // { arity: 3 }
+              Get l4 // { arity: 3 }
         cte l12 =
           Project (#0..=#3) // { arity: 4 }
             Join on=(#1 = #4 AND #2 = #5) type=differential // { arity: 6 }
