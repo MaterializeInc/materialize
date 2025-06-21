@@ -1428,7 +1428,11 @@ mod tests {
                             leader
                                 .collections
                                 .trace
-                                .apply_merge_res_unchecked(&FueledMergeRes { output });
+                                .apply_merge_res_unchecked(&FueledMergeRes {
+                                    output,
+                                    inputs: vec![],
+                                    new_active_compaction: None,
+                                });
                         }
                     }
                 }

@@ -2038,17 +2038,18 @@ pub mod datadriven {
             req_clone,
             SCHEMAS.clone(),
             &datadriven.machine,
+            true,
         );
 
         let res = Compactor::<String, (), u64, i64>::compact_all(stream, req.clone()).await?;
 
         datadriven
             .batches
-            .insert(output.to_owned(), (*res.output.batch).clone());
+            .insert(output.to_owned(), (res.output).clone());
         Ok(format!(
             "parts={} len={}\n",
-            res.output.batch.part_count(),
-            res.output.batch.len
+            res.output.part_count(),
+            res.output.len
         ))
     }
 
@@ -2487,7 +2488,11 @@ pub mod datadriven {
             .clone();
         let (merge_res, maintenance) = datadriven
             .machine
-            .merge_res(&FueledMergeRes { output: batch })
+            .merge_res(&FueledMergeRes {
+                output: batch,
+                inputs: vec![],
+                new_active_compaction: None,
+            })
             .await;
         datadriven.routine.push(maintenance);
         Ok(format!(

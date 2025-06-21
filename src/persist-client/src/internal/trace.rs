@@ -1110,10 +1110,9 @@ impl<T: Timestamp + Lattice + Codec64> SpineBatch<T> {
             info!("Original batch: {:#?}", original);
         }
 
-        info!("original batch {:#?}", original);
-        info!("replacement batch {:#?}", replacement);
+        // info!("original batch {:#?}", original);
+        // info!("replacement batch {:#?}", replacement);
 
-        // 1. Determine part index range to replace
         let start_part = if start_run == 0 {
             0
         } else {
@@ -1124,16 +1123,11 @@ impl<T: Timestamp + Lattice + Codec64> SpineBatch<T> {
         } else {
             original.run_splits[end_run]
         };
-        // let end_part = original
-        //     .run_splits
-        //     .get(start_run)
-        //     .copied()
-        //     .unwrap_or(original.parts.len());
 
-        info!(
-            "Replacing parts from {} to {} (inclusive)",
-            start_part, end_part
-        );
+        // info!(
+        //     "Replacing parts from {} to {} (inclusive)",
+        //     start_part, end_part
+        // );
 
         // 2. Replace parts
         let mut parts = Vec::new();
@@ -1147,52 +1141,42 @@ impl<T: Timestamp + Lattice + Codec64> SpineBatch<T> {
         run_meta.extend_from_slice(&replacement.run_meta);
         run_meta.extend_from_slice(&original.run_meta[end_run + 1..]);
 
-        info!("new parts: {:#?}", parts);
-        info!("new run_meta: {:#?}", run_meta);
+        // info!("new parts: {:#?}", parts);
+        // info!("new run_meta: {:#?}", run_meta);
 
         // 4. Rebuild run_splits
+
         let mut run_splits = Vec::with_capacity(run_meta.len());
-        let mut cursor = 0;
+        let replaced_start = if start_run == 0 {
+            0
+        } else {
+            original.run_splits[start_run - 1]
+        };
+        let replaced_end = if end_run < original.run_splits.len() {
+            original.run_splits[end_run]
+        } else {
+            original.parts.len()
+        };
+        let replaced_len = replaced_end - replaced_start;
+        let replacement_len = replacement.parts.len();
 
-        // 1. Prefix runs (unchanged from original)
-        for i in 0..start_run {
-            let start = if i == 0 {
-                0
-            } else {
-                original.run_splits[i - 1]
-            };
-            let end = original.run_splits[i];
-            let len = end - start;
-            cursor += len;
-            run_splits.push(cursor);
+        let prefix = &original.run_splits[..start_run];
+        run_splits.extend_from_slice(prefix);
+
+        // Only push the replacement split if it's not the final run
+        let replacement_idx = start_run;
+        let replacement_is_last = replacement_idx + replacement.run_meta.len() == run_meta.len();
+
+        if !replacement_is_last {
+            run_splits.push(replaced_start + replacement_len);
         }
 
-        // 2. Replacement run
-        cursor += replacement.parts.len();
-        if start_run != 0 || !run_splits.is_empty() {
-            run_splits.push(cursor);
-        }
-
-        // 3. Suffix runs (original runs after end_run)
-        for i in (end_run + 1)..original.run_meta.len() {
-            if i >= original.run_splits.len() {
-                // this must be the final run, skip pushing a split for it
-                break;
+        // Adjust suffix splits
+        if end_run + 1 < original.run_splits.len() {
+            for &split in &original.run_splits[(end_run + 1)..] {
+                let adjusted = split - replaced_len + replacement_len;
+                run_splits.push(adjusted);
             }
-            info!(
-                "Adding run split for run {}: {}",
-                i,
-                original.run_meta[i].uuid.unwrap_or(Uuid::nil())
-            );
-            let start = if i == 0 {
-                0
-            } else {
-                original.run_splits[i - 1]
-            };
-            let end = original.run_splits[i];
-            let len = end - start;
-            cursor += len;
-            run_splits.push(cursor);
         }
 
         assert_eq!(
@@ -1201,13 +1185,14 @@ impl<T: Timestamp + Lattice + Codec64> SpineBatch<T> {
             "run_splits must have one fewer element than run_meta"
         );
 
-        // info!(
-        //     "Constructed batch with runs replaced: start_run={}, end_run={}, parts_len={}, run_meta_len={}",
-        //     start_run,
-        //     end_run,
-        //     parts.len(),
-        //     run_meta.len()
-        // );
+        info!(
+            "Constructed batch with runs replaced: start_run={}, end_run={}, parts_len={}, run_meta_len={}, run_splits={:?}",
+            start_run,
+            end_run,
+            parts.len(),
+            run_meta.len(),
+            run_splits,
+        );
 
         Ok(HollowBatch {
             desc: replacement.desc.clone(),
@@ -2369,6 +2354,8 @@ impl<T: Timestamp + Lattice> MergeState<T> {
 
 #[cfg(test)]
 pub mod datadriven {
+    use differential_dataflow::trace::implementations::merge_batcher::container::vec;
+
     use crate::internal::datadriven::DirectiveArgs;
 
     use super::*;
@@ -2458,6 +2445,8 @@ pub mod datadriven {
     ) -> Result<String, anyhow::Error> {
         let res = FueledMergeRes {
             output: DirectiveArgs::parse_hollow_batch(args.input),
+            inputs: vec![],
+            new_active_compaction: None,
         };
         match datadriven.trace.apply_merge_res_unchecked(&res) {
             ApplyMergeResult::AppliedExact => Ok("applied exact\n".into()),
@@ -2476,7 +2465,10 @@ pub(crate) mod tests {
     use proptest::prelude::*;
     use semver::Version;
 
-    use crate::internal::state::tests::any_hollow_batch;
+    use crate::internal::{
+        paths::{PartId, PartialBatchKey},
+        state::{HollowBatchPart, RunMeta, tests::any_hollow_batch},
+    };
 
     use super::*;
 
