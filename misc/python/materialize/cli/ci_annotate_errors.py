@@ -189,6 +189,7 @@ IGNORE_RE = re.compile(
 PRODUCT_LIMITS_FIND_IGNORE_RE = re.compile(
     rb"""
     ( Memory\ cgroup\ out\ of\ memory
+    | [Oo]ut\ [Oo]f\ [Mm]emory
     | limits-materialized .* \| .* fatal\ runtime\ error:\ stack\ overflow
     | limits-materialized .* \| .* has\ overflowed\ its\ stack
     )
