@@ -527,6 +527,16 @@ impl RustType<ProtoU128> for Uuid {
     }
 }
 
+impl RustType<String> for Uuid {
+    fn into_proto(&self) -> String {
+        self.to_string()
+    }
+
+    fn from_proto(proto: String) -> Result<Self, TryFromProtoError> {
+        Uuid::parse_str(&proto).map_err(|_| TryFromProtoError::InvalidFieldError(proto))
+    }
+}
+
 impl RustType<u64> for std::num::NonZeroUsize {
     fn into_proto(&self) -> u64 {
         usize::from(*self).into_proto()
