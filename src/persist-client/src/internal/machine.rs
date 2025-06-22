@@ -601,7 +601,7 @@ where
         current_ts: u64,
     ) {
         let metrics = Arc::clone(&self.applier.metrics);
-        info!("checkpoint_compaction_progress at {}", current_ts);
+        // info!("checkpoint_compaction_progress at {}", current_ts);
 
         //TODO(dov): new metric
         let _ = self

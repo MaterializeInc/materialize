@@ -1165,14 +1165,14 @@ impl<T: Timestamp + Lattice + Codec64> SpineBatch<T> {
             "run_splits must have one fewer element than run_meta"
         );
 
-        info!(
-            "Constructed batch with runs replaced: start_run={}, end_run={}, parts_len={}, run_meta_len={}, run_splits={:?}",
-            start_run,
-            end_run,
-            parts.len(),
-            run_meta.len(),
-            run_splits,
-        );
+        // info!(
+        //     "Constructed batch with runs replaced: start_run={}, end_run={}, parts_len={}, run_meta_len={}, run_splits={:?}",
+        //     start_run,
+        //     end_run,
+        //     parts.len(),
+        //     run_meta.len(),
+        //     run_splits,
+        // );
 
         Ok(HollowBatch {
             desc: replacement.desc.clone(),
