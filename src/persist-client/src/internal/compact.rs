@@ -670,10 +670,9 @@ where
             let incremental_handle = tokio::spawn(
                 async move {
                     while let Some(res) = incremental_rx.recv().await {
-                        // let now = SYSTEM_TIME.clone();
+                        let now = SYSTEM_TIME.clone();
 
-                        // machine.checkpoint_compaction_progress(&res, now()).await;
-                        //Do nothing for now for testing purposes
+                        machine.checkpoint_compaction_progress(&res, now()).await;
                     }
                 }
                 .instrument(debug_span!("compact::incremental")),
