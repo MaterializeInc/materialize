@@ -1839,13 +1839,14 @@ checksum = "5b63caa9aa9397e2d9480a9b13673856c78d8ac123288526c37d7839f2a86990"
 
 [[package]]
 name = "columnar"
-version = "0.5.0"
+version = "0.5.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c412cb3cd9449abf2cb39dd504efb00701ab1f0c0e8b030042f8afe2e7c2adcf"
+checksum = "a9933b9f6e95b2189bd11ad5576ea9aef2f7f7dd93558361d0cd91c8a2122176"
 dependencies = [
  "bytemuck",
  "columnar_derive",
  "serde",
+ "smallvec",
 ]
 
 [[package]]
@@ -4399,9 +4400,9 @@ dependencies = [
 
 [[package]]
 name = "libc"
-version = "0.2.173"
+version = "0.2.174"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d8cfeafaffdbc32176b64fb251369d52ea9f0a8fbc6f8759edffef7b525d64bb"
+checksum = "1171693293099992e19cddea4e8b849964e9846f4acee11b3948bcc337be8776"
 
 [[package]]
 name = "libloading"
