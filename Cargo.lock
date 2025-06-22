@@ -1927,7 +1927,7 @@ dependencies = [
  "futures-core",
  "prost",
  "prost-types",
- "tonic",
+ "tonic 0.12.3",
  "tracing-core",
 ]
 
@@ -1951,7 +1951,7 @@ dependencies = [
  "thread_local",
  "tokio",
  "tokio-stream",
- "tonic",
+ "tonic 0.12.3",
  "tracing",
  "tracing-core",
  "tracing-subscriber",
@@ -4926,7 +4926,7 @@ dependencies = [
  "mz-timestamp-oracle",
  "mz-tracing",
  "mz-transform",
- "opentelemetry",
+ "opentelemetry 0.24.0",
  "prometheus",
  "prost",
  "qcell",
@@ -5413,7 +5413,7 @@ dependencies = [
  "serde",
  "serde_json",
  "tokio-stream",
- "tonic",
+ "tonic 0.12.3",
  "tonic-build",
  "workspace-hack",
 ]
@@ -5545,7 +5545,7 @@ dependencies = [
  "timely",
  "tokio",
  "tokio-stream",
- "tonic",
+ "tonic 0.12.3",
  "tonic-build",
  "tracing",
  "uuid",
@@ -5826,8 +5826,8 @@ dependencies = [
  "num_cpus",
  "openssl",
  "openssl-sys",
- "opentelemetry",
- "opentelemetry_sdk",
+ "opentelemetry 0.24.0",
+ "opentelemetry_sdk 0.24.1",
  "pin-project",
  "postgres",
  "postgres-openssl",
@@ -6020,7 +6020,7 @@ dependencies = [
  "tokio-postgres",
  "tokio-stream",
  "tokio-util",
- "tonic",
+ "tonic 0.12.3",
  "tonic-build",
  "tracing",
  "tracing-core",
@@ -6439,8 +6439,8 @@ dependencies = [
  "mz-repr",
  "mz-service",
  "mz-tracing",
- "opentelemetry",
- "opentelemetry_sdk",
+ "opentelemetry 0.24.0",
+ "opentelemetry_sdk 0.24.1",
  "sentry-tracing",
  "tracing",
  "tracing-capture",
@@ -6522,9 +6522,9 @@ dependencies = [
  "num",
  "num-traits",
  "openssl",
- "opentelemetry",
+ "opentelemetry 0.24.0",
  "opentelemetry-otlp",
- "opentelemetry_sdk",
+ "opentelemetry_sdk 0.24.1",
  "parquet",
  "paste",
  "pin-project",
@@ -6545,7 +6545,7 @@ dependencies = [
  "tokio-native-tls",
  "tokio-openssl",
  "tokio-test",
- "tonic",
+ "tonic 0.12.3",
  "tracing",
  "tracing-capture",
  "tracing-opentelemetry",
@@ -6678,7 +6678,7 @@ dependencies = [
  "tokio",
  "tokio-metrics",
  "tokio-stream",
- "tonic",
+ "tonic 0.12.3",
  "tonic-build",
  "tracing",
  "uuid",
@@ -7196,7 +7196,7 @@ dependencies = [
  "timely",
  "tokio",
  "tokio-stream",
- "tonic",
+ "tonic 0.12.3",
  "tonic-build",
  "tower 0.5.2",
  "tracing",
@@ -7576,7 +7576,7 @@ dependencies = [
  "timely",
  "tokio",
  "tokio-stream",
- "tonic",
+ "tonic 0.12.3",
  "tonic-build",
  "tracing",
  "uuid",
@@ -7834,7 +7834,7 @@ dependencies = [
  "tokio-postgres",
  "tokio-stream",
  "tokio-util",
- "tonic",
+ "tonic 0.12.3",
  "tonic-build",
  "tracing",
  "tracing-subscriber",
@@ -8416,33 +8416,59 @@ dependencies = [
 ]
 
 [[package]]
-name = "opentelemetry-otlp"
-version = "0.17.0"
+name = "opentelemetry"
+version = "0.30.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6b925a602ffb916fb7421276b86756027b37ee708f9dce2dbdcc51739f07e727"
+checksum = "aaf416e4cb72756655126f7dd7bb0af49c674f4c1b9903e80c009e0c37e552e6"
+dependencies = [
+ "futures-core",
+ "futures-sink",
+ "js-sys",
+ "pin-project-lite",
+ "thiserror 2.0.12",
+ "tracing",
+]
+
+[[package]]
+name = "opentelemetry-http"
+version = "0.30.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "50f6639e842a97dbea8886e3439710ae463120091e2e064518ba8e716e6ac36d"
 dependencies = [
  "async-trait",
- "futures-core",
+ "bytes",
  "http 1.2.0",
- "opentelemetry",
+ "opentelemetry 0.30.0",
+ "reqwest 0.12.15",
+]
+
+[[package]]
+name = "opentelemetry-otlp"
+version = "0.30.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "dbee664a43e07615731afc539ca60c6d9f1a9425e25ca09c57bc36c87c55852b"
+dependencies = [
+ "http 1.2.0",
+ "opentelemetry 0.30.0",
+ "opentelemetry-http",
  "opentelemetry-proto",
- "opentelemetry_sdk",
+ "opentelemetry_sdk 0.30.0",
  "prost",
- "thiserror 1.0.69",
- "tokio",
- "tonic",
+ "reqwest 0.12.15",
+ "thiserror 2.0.12",
+ "tracing",
 ]
 
 [[package]]
 name = "opentelemetry-proto"
-version = "0.7.0"
+version = "0.30.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "30ee9f20bff9c984511a02f082dc8ede839e4a9bf15cc2487c8d6fea5ad850d9"
+checksum = "2e046fd7660710fe5a05e8748e70d9058dc15c94ba914e7c4faa7c728f0e8ddc"
 dependencies = [
- "opentelemetry",
- "opentelemetry_sdk",
+ "opentelemetry 0.30.0",
+ "opentelemetry_sdk 0.30.0",
  "prost",
- "tonic",
+ "tonic 0.13.1",
 ]
 
 [[package]]
@@ -8457,13 +8483,29 @@ dependencies = [
  "futures-util",
  "glob",
  "once_cell",
- "opentelemetry",
+ "opentelemetry 0.24.0",
  "percent-encoding",
  "rand 0.8.5",
  "serde_json",
  "thiserror 1.0.69",
  "tokio",
  "tokio-stream",
+]
+
+[[package]]
+name = "opentelemetry_sdk"
+version = "0.30.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "11f644aa9e5e31d11896e024305d7e3c98a88884d9f8919dbf37a9991bc47a4b"
+dependencies = [
+ "futures-channel",
+ "futures-executor",
+ "futures-util",
+ "opentelemetry 0.30.0",
+ "percent-encoding",
+ "rand 0.9.0",
+ "serde_json",
+ "thiserror 2.0.12",
 ]
 
 [[package]]
@@ -11514,6 +11556,27 @@ dependencies = [
 ]
 
 [[package]]
+name = "tonic"
+version = "0.13.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7e581ba15a835f4d9ea06c55ab1bd4dce26fc53752c69a04aac00703bfb49ba9"
+dependencies = [
+ "async-trait",
+ "base64 0.22.1",
+ "bytes",
+ "http 1.2.0",
+ "http-body 1.0.1",
+ "http-body-util",
+ "percent-encoding",
+ "pin-project",
+ "prost",
+ "tokio-stream",
+ "tower-layer",
+ "tower-service",
+ "tracing",
+]
+
+[[package]]
 name = "tonic-build"
 version = "0.12.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -11768,8 +11831,8 @@ source = "git+https://github.com/MaterializeInc/tracing-opentelemetry.git#09f0cc
 dependencies = [
  "js-sys",
  "once_cell",
- "opentelemetry",
- "opentelemetry_sdk",
+ "opentelemetry 0.24.0",
+ "opentelemetry_sdk 0.24.1",
  "smallvec",
  "tracing",
  "tracing-core",
@@ -12878,7 +12941,7 @@ dependencies = [
  "tokio-util",
  "toml_datetime",
  "toml_edit 0.22.26",
- "tonic",
+ "tonic 0.12.3",
  "tower 0.5.2",
  "tower-http",
  "tracing",
