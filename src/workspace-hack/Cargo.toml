@@ -36,7 +36,7 @@ bit-set = { version = "0.8.0" }
 bit-vec = { version = "0.8.0" }
 bitflags = { version = "2.9.0", default-features = false, features = ["std"] }
 brotli = { version = "7.0.0" }
-bstr = { version = "1.10.0" }
+bstr = { version = "1.12.0" }
 byteorder = { version = "1.5.0" }
 bytes = { version = "1.10.1", features = ["serde"] }
 chrono = { version = "0.4.41", features = ["serde"] }
@@ -173,7 +173,7 @@ bit-set = { version = "0.8.0" }
 bit-vec = { version = "0.8.0" }
 bitflags = { version = "2.9.0", default-features = false, features = ["std"] }
 brotli = { version = "7.0.0" }
-bstr = { version = "1.10.0" }
+bstr = { version = "1.12.0" }
 byteorder = { version = "1.5.0" }
 bytes = { version = "1.10.1", features = ["serde"] }
 cc = { version = "1.2.27", default-features = false, features = ["parallel"] }
