@@ -17,7 +17,7 @@ humanize==4.12.3
 ipympl==0.9.7
 ipywidgets==8.1.7
 junit-xml==1.9
-junitparser==3.2.0
+junitparser==4.0.0
 jupyterlab==4.4.3
 jupyter-black==0.4.0
 kubernetes==25.3.0
