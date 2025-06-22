@@ -813,6 +813,7 @@ where
             FetchBatchFilter::Compaction {
                 since: desc.since().clone(),
             },
+            None,
             prefetch_budget_bytes,
         );
 
