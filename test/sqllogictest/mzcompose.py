@@ -81,7 +81,7 @@ def workflow_selection(c: Composition, parser: WorkflowArgumentParser) -> None:
 def run_sqllogictest(
     c: Composition, parser: WorkflowArgumentParser, run_config: SltRunConfig
 ) -> None:
-    parser.add_argument("--replicas", default=2, type=int)
+    parser.add_argument("--replica-size", default=2, type=int)
     args = parser.parse_args()
 
     c.up(c.metadata_store())
@@ -100,7 +100,7 @@ def run_sqllogictest(
             # Since we run multiple commands, generate a unique junit report for each
             junit_report_path = ci_util.junit_report_filename(f"{c.name}-{i}-{j}")
             cmd = step.to_command(
-                file, args.replicas, junit_report_path, c.metadata_store()
+                file, args.replica_size, junit_report_path, c.metadata_store()
             )
             try:
                 c.run(container_name, *cmd)
@@ -134,7 +134,7 @@ class SltRunStepConfig:
     def to_command(
         self,
         file: str,
-        replicas: int,
+        replica_size: int,
         junit_report_path: Path,
         metadata_store: str,
         metadata_store_port: int = COCKROACH_DEFAULT_PORT,
@@ -142,7 +142,7 @@ class SltRunStepConfig:
         sqllogictest_config = [
             f"--junit-report={junit_report_path}",
             f"--postgres-url=postgres://root@{metadata_store}:{metadata_store_port}",
-            f"--replicas={replicas}",
+            f"--replica-size={replica_size}",
         ]
         command = [
             "sqllogictest",
