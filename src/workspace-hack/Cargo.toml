@@ -91,7 +91,7 @@ num = { version = "0.4.3" }
 num-bigint = { version = "0.4.6" }
 num-integer = { version = "0.1.46", features = ["i128"] }
 num-traits = { version = "0.2.19", features = ["i128", "libm"] }
-parking_lot = { version = "0.12.3", features = ["serde"] }
+parking_lot = { version = "0.12.4", features = ["serde"] }
 parquet = { version = "54.3.1", default-features = false, features = ["arrow", "async", "brotli", "flate2", "lz4", "snap", "zstd"] }
 percent-encoding = { version = "2.3.1" }
 phf = { version = "0.11.3", features = ["uncased"] }
@@ -127,15 +127,15 @@ similar = { version = "2.7.0", features = ["inline", "unicode"] }
 smallvec = { version = "1.15.1", default-features = false, features = ["const_new", "serde", "union"] }
 subtle = { version = "2.6.1" }
 syn-dff4ba8e3ae991db = { package = "syn", version = "1.0.107", features = ["extra-traits", "full", "visit", "visit-mut"] }
-syn-f595c2ba2a3f28df = { package = "syn", version = "2.0.101", features = ["extra-traits", "full", "visit", "visit-mut"] }
+syn-f595c2ba2a3f28df = { package = "syn", version = "2.0.104", features = ["extra-traits", "full", "visit", "visit-mut"] }
 time = { version = "0.3.37", features = ["local-offset", "macros", "quickcheck", "serde-well-known"] }
-timely = { version = "0.21.0" }
+timely = { version = "0.21.1" }
 tokio = { version = "1.44.2", features = ["full", "test-util", "tracing"] }
 tokio-postgres = { git = "https://github.com/MaterializeInc/rust-postgres", features = ["serde", "with-chrono-0_4", "with-serde_json-1", "with-uuid-1"] }
 tokio-stream = { version = "0.1.17", features = ["net", "sync"] }
 tokio-util = { version = "0.7.15", features = ["codec", "compat", "io", "time"] }
 toml_datetime = { version = "0.6.11", default-features = false, features = ["serde"] }
-toml_edit = { version = "0.22.26", features = ["serde"] }
+toml_edit = { version = "0.22.27", features = ["serde"] }
 tonic = { version = "0.12.3", features = ["gzip"] }
 tower = { version = "0.5.2", default-features = false, features = ["balance", "buffer", "filter", "limit", "load-shed", "log", "retry", "timeout"] }
 tower-http = { version = "0.6.6", features = ["auth", "cors", "decompression-br", "decompression-deflate", "decompression-gzip", "decompression-zstd", "map-response-body", "trace", "util"] }
@@ -151,7 +151,7 @@ uuid = { version = "1.17.0", features = ["serde", "v4", "v5", "v7"] }
 zeroize = { version = "1.8.1", features = ["serde"] }
 zstd = { version = "0.13.3" }
 zstd-safe = { version = "7.2.1", default-features = false, features = ["arrays", "legacy", "std", "zdict_builder"] }
-zstd-sys = { version = "2.0.13", features = ["std"] }
+zstd-sys = { version = "2.0.15", features = ["std"] }
 
 [build-dependencies]
 ahash = { version = "0.8.12" }
@@ -178,6 +178,7 @@ byteorder = { version = "1.5.0" }
 bytes = { version = "1.10.1", features = ["serde"] }
 cc = { version = "1.2.27", default-features = false, features = ["parallel"] }
 chrono = { version = "0.4.41", features = ["serde"] }
+clang-sys = { version = "1.3.0", default-features = false, features = ["clang_11_0", "runtime"] }
 clap = { version = "4.5.23", features = ["derive", "env", "string", "wrap_help"] }
 clap_builder = { version = "4.5.23", default-features = false, features = ["color", "env", "std", "string", "suggestions", "usage", "wrap_help"] }
 concurrent-queue = { version = "2.5.0" }
@@ -229,7 +230,7 @@ num = { version = "0.4.3" }
 num-bigint = { version = "0.4.6" }
 num-integer = { version = "0.1.46", features = ["i128"] }
 num-traits = { version = "0.2.19", features = ["i128", "libm"] }
-parking_lot = { version = "0.12.3", features = ["serde"] }
+parking_lot = { version = "0.12.4", features = ["serde"] }
 parquet = { version = "54.3.1", default-features = false, features = ["arrow", "async", "brotli", "flate2", "lz4", "snap", "zstd"] }
 percent-encoding = { version = "2.3.1" }
 phf = { version = "0.11.3", features = ["uncased"] }
@@ -266,16 +267,16 @@ similar = { version = "2.7.0", features = ["inline", "unicode"] }
 smallvec = { version = "1.15.1", default-features = false, features = ["const_new", "serde", "union"] }
 subtle = { version = "2.6.1" }
 syn-dff4ba8e3ae991db = { package = "syn", version = "1.0.107", features = ["extra-traits", "full", "visit", "visit-mut"] }
-syn-f595c2ba2a3f28df = { package = "syn", version = "2.0.101", features = ["extra-traits", "full", "visit", "visit-mut"] }
+syn-f595c2ba2a3f28df = { package = "syn", version = "2.0.104", features = ["extra-traits", "full", "visit", "visit-mut"] }
 time = { version = "0.3.37", features = ["local-offset", "macros", "quickcheck", "serde-well-known"] }
 time-macros = { version = "0.2.19", default-features = false, features = ["formatting", "parsing", "serde"] }
-timely = { version = "0.21.0" }
+timely = { version = "0.21.1" }
 tokio = { version = "1.44.2", features = ["full", "test-util", "tracing"] }
 tokio-postgres = { git = "https://github.com/MaterializeInc/rust-postgres", features = ["serde", "with-chrono-0_4", "with-serde_json-1", "with-uuid-1"] }
 tokio-stream = { version = "0.1.17", features = ["net", "sync"] }
 tokio-util = { version = "0.7.15", features = ["codec", "compat", "io", "time"] }
 toml_datetime = { version = "0.6.11", default-features = false, features = ["serde"] }
-toml_edit = { version = "0.22.26", features = ["serde"] }
+toml_edit = { version = "0.22.27", features = ["serde"] }
 tonic = { version = "0.12.3", features = ["gzip"] }
 tower = { version = "0.5.2", default-features = false, features = ["balance", "buffer", "filter", "limit", "load-shed", "log", "retry", "timeout"] }
 tower-http = { version = "0.6.6", features = ["auth", "cors", "decompression-br", "decompression-deflate", "decompression-gzip", "decompression-zstd", "map-response-body", "trace", "util"] }
@@ -291,7 +292,7 @@ uuid = { version = "1.17.0", features = ["serde", "v4", "v5", "v7"] }
 zeroize = { version = "1.8.1", features = ["serde"] }
 zstd = { version = "0.13.3" }
 zstd-safe = { version = "7.2.1", default-features = false, features = ["arrays", "legacy", "std", "zdict_builder"] }
-zstd-sys = { version = "2.0.13", features = ["std"] }
+zstd-sys = { version = "2.0.15", features = ["std"] }
 
 [target.x86_64-unknown-linux-gnu.dependencies]
 camino = { version = "1.1.10", default-features = false, features = ["serde1"] }
