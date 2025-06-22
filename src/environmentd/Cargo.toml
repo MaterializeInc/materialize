@@ -36,7 +36,7 @@ include_dir = "0.7.4"
 ipnet = "2.11.0"
 itertools = "0.14.0"
 jsonwebtoken = "9.3.1"
-libc = "0.2.173"
+libc = "0.2.174"
 maplit = "1.0.2"
 mime = "0.3.16"
 mz-alloc = { path = "../alloc" }
