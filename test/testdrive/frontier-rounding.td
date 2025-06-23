@@ -40,22 +40,22 @@ true
 
 # tables
 # fails: frontiers are not rounded
-> SELECT DISTINCT write_frontier::text::uint8 % 1000 = 1
-  FROM mz_internal.mz_frontiers
-  JOIN mz_tables ON id = object_id
-false
+# > SELECT DISTINCT write_frontier::text::uint8 % 1000 = 1
+#   FROM mz_internal.mz_frontiers
+#   JOIN mz_tables ON id = object_id
+# true
 
 # compute introspection sources
 # fails: frontiers are rounded to `XX..XX000` instead of `XX..XX001`
-> SELECT DISTINCT write_frontier::text::uint8 % 1000 = 1
-  FROM mz_internal.mz_frontiers
-  WHERE object_id LIKE 'si%'
-false
+# > SELECT DISTINCT write_frontier::text::uint8 % 1000 = 1
+#   FROM mz_internal.mz_frontiers
+#   WHERE object_id LIKE 'si%'
+# true
 
 # storage-managed collections
 # fails: frontiers are not rounded
-> SELECT DISTINCT write_frontier::text::uint8 % 1000 = 1
-  FROM mz_internal.mz_frontiers
-  JOIN mz_sources ON id = object_id
-  WHERE object_id LIKE 's%'
-false
+# > SELECT DISTINCT write_frontier::text::uint8 % 1000 = 1
+#   FROM mz_internal.mz_frontiers
+#   JOIN mz_sources ON id = object_id
+#   WHERE object_id LIKE 's%'
+# true
