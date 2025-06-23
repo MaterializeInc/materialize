@@ -38,6 +38,8 @@ use crate::read::READER_LEASE_DURATION;
 const SELF_MANAGED_VERSIONS: &[Version] = &[
     // 25.1
     Version::new(0, 130, 0),
+    // 25.2
+    Version::new(0, 147, 0),
 ];
 
 /// The tunable knobs for persist.
