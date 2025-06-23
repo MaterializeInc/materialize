@@ -329,7 +329,7 @@ steps:
       - ./ci/plugins/mzcompose:
           composition: cluster
     agents:
-      queue: hetzner-aarch64-8cpu-16gb
+      queue: hetzner-aarch64-16cpu-32gb
 
   - id: sqllogictest-fast
     label: "Fast SQL logic tests"
