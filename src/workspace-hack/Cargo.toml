@@ -74,7 +74,7 @@ hashbrown-3575ec1268b04181 = { package = "hashbrown", version = "0.15.3" }
 hashbrown-582f2526e08bb6a0 = { package = "hashbrown", version = "0.14.5", default-features = false, features = ["raw"] }
 hyper = { version = "0.14.27", features = ["client", "http1", "http2", "stream", "tcp"] }
 insta = { version = "1.43.1", features = ["json"] }
-libc = { version = "0.2.173", features = ["extra_traits", "use_std"] }
+libc = { version = "0.2.174", features = ["extra_traits", "use_std"] }
 libz-sys = { version = "1.1.22", features = ["static"] }
 lock_api = { version = "0.4.13", features = ["serde"] }
 log = { version = "0.4.27", default-features = false, features = ["std"] }
@@ -91,7 +91,7 @@ num = { version = "0.4.3" }
 num-bigint = { version = "0.4.6" }
 num-integer = { version = "0.1.46", features = ["i128"] }
 num-traits = { version = "0.2.19", features = ["i128", "libm"] }
-parking_lot = { version = "0.12.3", features = ["serde"] }
+parking_lot = { version = "0.12.4", features = ["serde"] }
 parquet = { version = "54.3.1", default-features = false, features = ["arrow", "async", "brotli", "flate2", "lz4", "snap", "zstd"] }
 percent-encoding = { version = "2.3.1" }
 phf = { version = "0.11.3", features = ["uncased"] }
@@ -127,9 +127,9 @@ similar = { version = "2.7.0", features = ["inline", "unicode"] }
 smallvec = { version = "1.15.1", default-features = false, features = ["const_new", "serde", "union"] }
 subtle = { version = "2.6.1" }
 syn-dff4ba8e3ae991db = { package = "syn", version = "1.0.107", features = ["extra-traits", "full", "visit", "visit-mut"] }
-syn-f595c2ba2a3f28df = { package = "syn", version = "2.0.101", features = ["extra-traits", "full", "visit", "visit-mut"] }
+syn-f595c2ba2a3f28df = { package = "syn", version = "2.0.104", features = ["extra-traits", "full", "visit", "visit-mut"] }
 time = { version = "0.3.37", features = ["local-offset", "macros", "quickcheck", "serde-well-known"] }
-timely = { version = "0.21.0" }
+timely = { version = "0.21.1" }
 tokio = { version = "1.44.2", features = ["full", "test-util", "tracing"] }
 tokio-postgres = { git = "https://github.com/MaterializeInc/rust-postgres", features = ["serde", "with-chrono-0_4", "with-serde_json-1", "with-uuid-1"] }
 tokio-stream = { version = "0.1.17", features = ["net", "sync"] }
@@ -212,7 +212,7 @@ hashbrown-3575ec1268b04181 = { package = "hashbrown", version = "0.15.3" }
 hashbrown-582f2526e08bb6a0 = { package = "hashbrown", version = "0.14.5", default-features = false, features = ["raw"] }
 hyper = { version = "0.14.27", features = ["client", "http1", "http2", "stream", "tcp"] }
 insta = { version = "1.43.1", features = ["json"] }
-libc = { version = "0.2.173", features = ["extra_traits", "use_std"] }
+libc = { version = "0.2.174", features = ["extra_traits", "use_std"] }
 libz-sys = { version = "1.1.22", features = ["static"] }
 lock_api = { version = "0.4.13", features = ["serde"] }
 log = { version = "0.4.27", default-features = false, features = ["std"] }
@@ -229,7 +229,7 @@ num = { version = "0.4.3" }
 num-bigint = { version = "0.4.6" }
 num-integer = { version = "0.1.46", features = ["i128"] }
 num-traits = { version = "0.2.19", features = ["i128", "libm"] }
-parking_lot = { version = "0.12.3", features = ["serde"] }
+parking_lot = { version = "0.12.4", features = ["serde"] }
 parquet = { version = "54.3.1", default-features = false, features = ["arrow", "async", "brotli", "flate2", "lz4", "snap", "zstd"] }
 percent-encoding = { version = "2.3.1" }
 phf = { version = "0.11.3", features = ["uncased"] }
@@ -266,10 +266,10 @@ similar = { version = "2.7.0", features = ["inline", "unicode"] }
 smallvec = { version = "1.15.1", default-features = false, features = ["const_new", "serde", "union"] }
 subtle = { version = "2.6.1" }
 syn-dff4ba8e3ae991db = { package = "syn", version = "1.0.107", features = ["extra-traits", "full", "visit", "visit-mut"] }
-syn-f595c2ba2a3f28df = { package = "syn", version = "2.0.101", features = ["extra-traits", "full", "visit", "visit-mut"] }
+syn-f595c2ba2a3f28df = { package = "syn", version = "2.0.104", features = ["extra-traits", "full", "visit", "visit-mut"] }
 time = { version = "0.3.37", features = ["local-offset", "macros", "quickcheck", "serde-well-known"] }
 time-macros = { version = "0.2.19", default-features = false, features = ["formatting", "parsing", "serde"] }
-timely = { version = "0.21.0" }
+timely = { version = "0.21.1" }
 tokio = { version = "1.44.2", features = ["full", "test-util", "tracing"] }
 tokio-postgres = { git = "https://github.com/MaterializeInc/rust-postgres", features = ["serde", "with-chrono-0_4", "with-serde_json-1", "with-uuid-1"] }
 tokio-stream = { version = "0.1.17", features = ["net", "sync"] }
