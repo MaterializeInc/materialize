@@ -842,18 +842,18 @@ pub async fn dangerous_force_compaction_and_break_pushdown<K, V, T, D>(
 
         // NB: This check is intentionally at the end so that it's safe to call
         // this method in a loop.
-        let num_parts = machine
+        let num_runs: usize = machine
             .applier
             .all_batches()
             .iter()
-            .flat_map(|x| x.parts.clone())
-            .count();
-        if num_parts < 2 {
+            .map(|x| x.runs().count())
+            .sum();
+        if num_runs == 1 {
             info!(
-                "force_compaction {} {} exiting with {} parts",
+                "force_compaction {} {} exiting with {} runs",
                 machine.applier.shard_metrics.name,
                 machine.applier.shard_metrics.shard_id,
-                num_parts
+                num_runs
             );
             return;
         }
