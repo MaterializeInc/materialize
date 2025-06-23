@@ -45,7 +45,6 @@ use timely::progress::{Antichain, Timestamp};
 use timely::worker::Worker;
 use timely::{Data, PartialOrder, WorkerConfig};
 use tracing::debug;
-use tracing::instrument::WithSubscriber;
 
 use crate::TxnsCodecDefault;
 use crate::txn_cache::TxnsCache;
