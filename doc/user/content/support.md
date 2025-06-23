@@ -13,10 +13,12 @@ menu:
 
 If you run into a snag or need support during the trial period, join the [Materialize Slack community](https://materialize.com/s/chat) or [open a discussion](https://github.com/MaterializeInc/materialize/discussions). Slack is the best place to get timely help from Materialize employees and other users!
 
-### Customers
+### On Demand Customers
+If you’re a paying customer utilizing our On Demand plan, you can contact Materialize at support@materialize.com for assistance with your account.
 
-If you're a paying customer, you can access Materialize support via a shared
-channel within your company's Slack or Microsoft Teams workspace.
+### Enterprise Customers
+
+If you’re an enterprise customer, you can access Materialize support via a shared channel within your company’s Slack or Microsoft Teams workspace.
 
 To file a support ticket:
 

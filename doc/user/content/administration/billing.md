@@ -97,6 +97,11 @@ From the [Materialize console](https://console.materialize.com/) (`Admin` >
 `Usage & Billing`), administrators can access their invoice. The invoice
 provides Compute and Storage usage and cost information.
 
+## On Demand
+Materialize Cloud administrators can sign up for an On Demand plan within the billing section of the [Materialize console](https://console.materialize.com/). Pricing is usage-based and is billed on a monthly basis. Invoices will be sent to the account email and paid via the card on file on the first of the month. If you have questions about billing or are interested in converting to an annual enterprise contract, please [contact us](https://materialize.com/docs/support/) to discuss further.
+
+If you’d like to cancel your account with Materialize, please email cancellations@materialize.com to terminate services per the On Demand [Terms and Conditions](https://materialize.com/pdfs/on-demand-terms.pdf).
+
 ## Additional references
 
 - https://materialize.com/pricing/
