@@ -23,23 +23,7 @@ requires **administrator** privileges.
 
 ### Enabling RBAC
 
-Role-Based Access Control (RBAC) may be enabled in one of the following ways;
-either:
-
-- Set `spec.enableRbac: true` when instantiating the Materialize object in
-  Kubernetes
-
-- Or, after the Materialize instance is running, run the following command:
-  ```mzsql
-  ALTER SYSTEM SET enable_rbac_checks TO TRUE;
-  ```
-
-If both are used, the `ALTER SYSTEM` command will take precedence over the
-Kubernetes configuration.
-
-You may view the currently active value with `SHOW enable_rbac_checks;`.
-
-If RBAC is not enabled, all users will behave as if they were _superuser_.
+{{< include-md file="shared-content/enable-rbac.md" >}}
 
 ### Configuring RBAC
 
