@@ -7,34 +7,39 @@ menu:
     weight: 10
 ---
 
-## Getting help
+## Getting Help with Materialize
 
-### Self-managed Materialize (Community Edition)
-
-For the Community Edition, join the [Materialize Slack
-community](https://materialize.com/s/chat) or [open a
-discussion](https://github.com/MaterializeInc/materialize/discussions). Slack is
-the best place to get timely help from Materialize employees and other users!
-
-### Self-managed Materialize (Enterprise Edition)
-
-If you're an Enterprise customer, you can access Materialize support via a
-shared channel within your company's Slack or Microsoft Teams workspace.
-
-To file a support ticket:
-
-1. Send a message to the shared channel describing your issue.
-2. Apply the `:ticket:` (🎫) emoji to your message.
-3. Click the **File a ticket** button that appears.
-4. Select the priority that corresponds to the severity of the issue you are
-   experiencing. Consult the table below for definitions of error severities.
-5. Materialize will respond to the ticket within the response time specified
-   in your support contract.
+Whether you're building, scaling, or debugging, we're here to help. 
 
 {{< note >}}
-Materialize only guarantees response times if you follow the above steps to
-convert a message into a support ticket.
+We’re retiring access to Slack and Microsoft Teams workspaces. We’ve introduced the messenger app to streamline and scale how users engage with support — starting with AI-first assistance and seamless escalation paths when needed.
 {{< /note >}}
+
+### Materialize Support
+
+We offer multiple support pathways depending on your platform and plan:
+
+**Messenger App**
+
+You can reach us directly from:
+- **materialize.com**
+- **Materialize Console** (for Cloud customers)
+
+Our messenger now features Matty, our AI-powered support agent. Matty can help answer questions, suggest documentation, and assist with troubleshooting. If your issue requires human assistance, you can request to “Talk to a human” at any time. Just look for the messenger widget on the bottom right.
+
+**Email**
+
+You can also email us your questions at support@materialize.com. 
+
+**Join the Materialize Slack community**
+
+Connect with other users, share ideas, and get informal help from the [Materialize user community](https://materialize.com/s/chat) on Slack.
+
+**For SLA Supported Customers Only:** 
+
+If you're experiencing an urgent issue, use the messenger’s “Report Production Outage” option for fastest response. 
+
+Alternatively, you can email us (using your Materialize login email address). To ensure priority handling, include “urgent” in the subject line.
 
 Use the following definitions to determine what priority to assign to
 your support ticket:
@@ -79,16 +84,14 @@ your support ticket:
 </tbody>
 </table>
 
-The following screen recording demonstrates the process of filing a support
-ticket:
+### Share your feedback
 
-<div style="padding: 2em">
-<img
-    src="https://github.com/MaterializeInc/materialize/assets/882976/1c8acb98-35a6-4f4b-bace-cf454c8193c8"
-    alt="Instructions for filing a support ticket"
-    style="box-shadow: 0 0 10px #333; border-radius: 3px;">
-</div>
+Have ideas to improve Materialize? Use the messenger to start a conversation — you'll be guided to submit feature requests or report bugs. Your input goes straight to our Product and Engineering teams.
 
-## Requesting a feature
+### Questions about your support plan?
 
-To request a new feature in Materialize, please submit a [feature request](https://github.com/MaterializeInc/materialize/discussions/new?category=feature-requests).
+We tailor support experiences based on your workspace and plan. To learn more about what’s available to your team, reach out via the messenger or email us.
+
+### Checking service status
+
+Check the current status of our services on the [status page](https://status.materialize.com).
