@@ -46,6 +46,7 @@ use timely::PartialOrder;
 use timely::order::TotalOrder;
 use timely::progress::{Antichain, Timestamp};
 use tracing::{Instrument, debug_span, trace_span, warn};
+use uuid::Uuid;
 
 use crate::async_runtime::IsolatedRuntime;
 use crate::cfg::{BATCH_BUILDER_MAX_OUTSTANDING_PARTS, MiB};
@@ -673,6 +674,51 @@ where
         }
     }
 
+    pub fn batch_with_finished_parts(
+        &self,
+        registered_desc: Description<T>,
+    ) -> Option<HollowBatch<T>> {
+        let runs = self.parts.finish_completed_runs();
+
+        if runs.is_empty() {
+            return None;
+        }
+
+        let mut run_parts = vec![];
+        let mut run_splits = vec![];
+        let mut run_meta = vec![];
+        for (order, parts) in runs {
+            if parts.is_empty() {
+                continue;
+            }
+            if run_parts.len() != 0 {
+                run_splits.push(run_parts.len());
+            }
+            run_meta.push(RunMeta {
+                order: Some(order),
+                schema: self.write_schemas.id,
+                // Field has been deprecated but kept around to roundtrip state.
+                deprecated_schema: None,
+                uuid: Some(Uuid::new_v4()),
+            });
+            run_parts.extend(parts);
+        }
+        let desc = registered_desc;
+
+        let len = run_parts.iter().fold(0, |len, part| {
+            let stats = part.stats();
+            if let Some(stats) = stats {
+                len + stats.decode().key.len
+            } else {
+                len
+            }
+        });
+
+        let batch = HollowBatch::new(desc, run_parts, len, run_meta, run_splits);
+
+        Some(batch)
+    }
+
     /// Finish writing this batch and return a handle to the written batch.
     ///
     /// This fails if any of the updates in this batch are beyond the given
@@ -701,6 +747,7 @@ where
                 schema: self.write_schemas.id,
                 // Field has been deprecated but kept around to roundtrip state.
                 deprecated_schema: None,
+                uuid: Some(Uuid::new_v4()),
             });
             run_parts.extend(parts);
         }
@@ -818,6 +865,7 @@ impl<T: Timestamp + Codec64> BatchParts<T> {
                                         // Field has been deprecated but kept around to
                                         // roundtrip state.
                                         deprecated_schema: None,
+                                        uuid: Some(Uuid::new_v4()),
                                     },
                                     parts.into_result().await,
                                 )
@@ -840,6 +888,8 @@ impl<T: Timestamp + Codec64> BatchParts<T> {
                             shard_metrics,
                             isolated_runtime,
                             write_schemas,
+                            &None,
+                            None,
                         )
                         .await
                         .expect("successful compaction");
@@ -1016,14 +1066,15 @@ impl<T: Timestamp + Codec64> BatchParts<T> {
                 let part = Pending::new(mz_ore::task::spawn(|| name, write_future));
                 run.push(part);
 
+                let take_num = run
+                    .iter()
+                    .filter(|p| !p.is_finished())
+                    .count()
+                    .saturating_sub(self.cfg.batch_builder_max_outstanding_parts);
+
                 // If there are more than the max outstanding parts, block on all but the
-                //  most recent.
-                for part in run
-                    .iter_mut()
-                    .rev()
-                    .skip(self.cfg.batch_builder_max_outstanding_parts)
-                    .take_while(|p| !p.is_finished())
-                {
+                // most recent.
+                for part in run.iter_mut().filter(|p| !p.is_finished()).take(take_num) {
                     self.batch_metrics.write_stalls.inc();
                     part.block_until_ready().await;
                 }
@@ -1224,6 +1275,38 @@ impl<T: Timestamp + Codec64> BatchParts<T> {
             // Field has been deprecated but kept around to roundtrip state.
             deprecated_schema_id: None,
         })
+    }
+
+    pub(crate) fn finish_completed_runs(&self) -> Vec<(RunOrder, Vec<RunPart<T>>)> {
+        match &self.writing_runs {
+            WritingRuns::Ordered(RunOrder::Unordered, tree) => tree
+                .iter()
+                .take_while(|part| matches!(part, Pending::Finished(_)))
+                .map(|part| match part {
+                    Pending::Finished(p) => (RunOrder::Unordered, vec![p.clone()]),
+                    _ => (RunOrder::Unordered, vec![]),
+                })
+                .collect(),
+            WritingRuns::Ordered(order, tree) => {
+                let parts = tree
+                    .iter()
+                    .take_while(|part| matches!(part, Pending::Finished(_)))
+                    .filter_map(|part| match part {
+                        Pending::Finished(p) => Some(p.clone()),
+                        _ => None,
+                    })
+                    .collect();
+                vec![(order.clone(), parts)]
+            }
+            WritingRuns::Compacting(tree) => tree
+                .iter()
+                .take_while(|(_, run)| matches!(run, Pending::Finished(_)))
+                .map(|(order, run)| match run {
+                    Pending::Finished(parts) => (order.clone(), parts.clone()),
+                    _ => (order.clone(), vec![]),
+                })
+                .collect(),
+        }
     }
 
     #[instrument(level = "debug", name = "batch::finish_upload", fields(shard = %self.shard_id))]

@@ -49,6 +49,7 @@
 
 use arrayvec::ArrayVec;
 use differential_dataflow::difference::Semigroup;
+use itertools::Itertools;
 use mz_persist::metrics::ColumnarMetrics;
 use mz_persist_types::Codec64;
 use std::cmp::Ordering;
@@ -57,6 +58,8 @@ use std::fmt::Debug;
 use std::mem;
 use std::ops::Range;
 use std::sync::Arc;
+use tracing::{info, warn};
+use uuid::Uuid;
 
 use crate::internal::paths::WriterKey;
 use differential_dataflow::lattice::Lattice;
@@ -78,11 +81,14 @@ pub struct FueledMergeReq<T> {
     pub id: SpineId,
     pub desc: Description<T>,
     pub inputs: Vec<IdHollowBatch<T>>,
+    pub active_compaction: Option<HollowBatch<T>>,
 }
 
 #[derive(Debug)]
 pub struct FueledMergeRes<T> {
     pub output: HollowBatch<T>,
+    pub inputs: Vec<RunId>,
+    pub new_active_compaction: Option<ActiveCompaction<T>>,
 }
 
 /// An append-only collection of compactable update batches.
@@ -145,7 +151,7 @@ impl<T: PartialEq> PartialEq for ThinSpineBatch<T> {
 pub struct ThinMerge<T> {
     pub(crate) since: Antichain<T>,
     pub(crate) remaining_work: usize,
-    pub(crate) active_compaction: Option<ActiveCompaction>,
+    pub(crate) active_compaction: Option<ActiveCompaction<T>>,
 }
 
 impl<T: Clone> ThinMerge<T> {
@@ -272,6 +278,7 @@ impl<T: Timestamp + Lattice> Trace<T> {
             merges,
         }
     }
+
     pub(crate) fn unflatten(value: FlatTrace<T>) -> Result<Self, String> {
         let FlatTrace {
             since,
@@ -522,7 +529,7 @@ impl<T: Timestamp + Lattice> Trace<T> {
         Self::remove_redundant_merge_reqs(merge_reqs)
     }
 
-    pub fn claim_compaction(&mut self, id: SpineId, compaction: ActiveCompaction) {
+    pub fn claim_compaction(&mut self, id: SpineId, compaction: ActiveCompaction<T>) {
         // TODO: we ought to be able to look up the id for a batch by binary searching the levels.
         // In the meantime, search backwards, since most compactions are for recent batches.
         for batch in self.spine.spine_batches_mut().rev() {
@@ -568,6 +575,15 @@ impl<T: Timestamp + Lattice> Trace<T> {
         self.spine.validate()
     }
 
+    pub fn apply_incremental_compaction(&mut self, compaction: &ActiveCompaction<T>) {
+        for batch in self.spine.spine_batches_mut().rev() {
+            let result = batch.maybe_update_active_compaction(compaction);
+            if result.matched() {
+                return;
+            }
+        }
+    }
+
     /// Obtain all fueled merge reqs that either have no active compaction, or the previous
     /// compaction was started at or before the threshold time, in order from oldest to newest.
     pub(crate) fn fueled_merge_reqs_before_ms(
@@ -596,10 +612,23 @@ impl<T: Timestamp + Lattice> Trace<T> {
                     .as_ref()
                     .map_or(true, move |c| c.start_ms <= threshold_ms)
             })
-            .map(|b| FueledMergeReq {
-                id: b.id,
-                desc: b.desc.clone(),
-                inputs: b.parts.clone(),
+            .map(|b| {
+                let inputs = b
+                    .active_compaction
+                    .as_ref()
+                    .and_then(|ac| ac.batch_so_far.as_ref())
+                    .map_or_else(|| b.parts.clone(), |bsf| b.filtered_batches(&bsf.desc));
+                let active_compaction_hollow_batch = b
+                    .active_compaction
+                    .as_ref()
+                    .and_then(|ac| ac.batch_so_far.clone())
+                    .map_or_else(|| None, Some);
+                FueledMergeReq {
+                    id: b.id,
+                    desc: b.desc.clone(),
+                    inputs,
+                    active_compaction: active_compaction_hollow_batch,
+                }
             })
     }
 
@@ -695,7 +724,12 @@ enum SpineLog<'a, T> {
     Disabled,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+/// A RunId uniquely identifies a run within a hollow batch.
+/// It is a pair of `SpineId` and an index within that batch.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct RunId(pub SpineId, pub Option<Uuid>);
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct SpineId(pub usize, pub usize);
 
 impl Serialize for SpineId {
@@ -721,8 +755,9 @@ pub struct IdHollowBatch<T> {
 }
 
 #[derive(Debug, Clone, Eq, PartialEq, Serialize)]
-pub struct ActiveCompaction {
+pub struct ActiveCompaction<T> {
     pub start_ms: u64,
+    pub batch_so_far: Option<HollowBatch<T>>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -730,13 +765,13 @@ struct SpineBatch<T> {
     id: SpineId,
     desc: Description<T>,
     parts: Vec<IdHollowBatch<T>>,
-    active_compaction: Option<ActiveCompaction>,
+    active_compaction: Option<ActiveCompaction<T>>,
     // A cached version of parts.iter().map(|x| x.len).sum()
     len: usize,
 }
 
 impl<T> SpineBatch<T> {
-    fn merged(batch: IdHollowBatch<T>) -> Self
+    fn merged(batch: IdHollowBatch<T>, active_compaction: Option<ActiveCompaction<T>>) -> Self
     where
         T: Clone,
     {
@@ -745,7 +780,7 @@ impl<T> SpineBatch<T> {
             desc: batch.batch.desc.clone(),
             len: batch.batch.len,
             parts: vec![batch],
-            active_compaction: None,
+            active_compaction,
         }
     }
 }
@@ -792,9 +827,8 @@ impl<T: Timestamp + Lattice> SpineBatch<T> {
     }
 
     pub fn is_compact(&self) -> bool {
-        // This definition is extremely likely to change, but for now, we consider a batch
-        // "compact" if it has at most one hollow batch with at most one run.
-        self.parts.len() <= 1 && self.parts.iter().all(|p| p.batch.run_splits.is_empty())
+        // A compact batch has at most one run
+        self.parts.iter().all(|p| p.batch.run_splits.is_empty())
     }
 
     pub fn is_merging(&self) -> bool {
@@ -825,10 +859,13 @@ impl<T: Timestamp + Lattice> SpineBatch<T> {
         upper: Antichain<T>,
         since: Antichain<T>,
     ) -> Self {
-        SpineBatch::merged(IdHollowBatch {
-            id,
-            batch: Arc::new(HollowBatch::empty(Description::new(lower, upper, since))),
-        })
+        SpineBatch::merged(
+            IdHollowBatch {
+                id,
+                batch: Arc::new(HollowBatch::empty(Description::new(lower, upper, since))),
+            },
+            None,
+        )
     }
 
     pub fn begin_merge(
@@ -854,6 +891,61 @@ impl<T: Timestamp + Lattice> SpineBatch<T> {
                 remaining_work,
             },
         })
+    }
+
+    fn maybe_update_active_compaction(
+        &mut self,
+        active_compaction: &ActiveCompaction<T>,
+    ) -> ApplyMergeResult {
+        let batch = match active_compaction.batch_so_far.as_ref() {
+            Some(batch) => batch,
+            None => return ApplyMergeResult::NotAppliedNoMatch,
+        };
+
+        // The spine's and merge res's sinces don't need to match (which could occur if Spine
+        // has been reloaded from state due to compare_and_set mismatch), but if so, the Spine
+        // since must be in advance of the merge res since.
+        if !PartialOrder::less_equal(batch.desc.since(), self.desc().since()) {
+            return ApplyMergeResult::NotAppliedInvalidSince;
+        }
+
+        // If our merge result exactly matches a spine batch, we can swap it in directly
+        let exact_match =
+            batch.desc.lower() == self.desc().lower() && batch.desc.upper() == self.desc().upper();
+        if exact_match {
+            self.active_compaction = Some(active_compaction.clone());
+
+            return ApplyMergeResult::AppliedExact;
+        }
+
+        let SpineBatch {
+            id: _,
+            parts: _,
+            desc,
+            active_compaction: _,
+            len: _,
+        } = self;
+
+        if PartialOrder::less_equal(desc.lower(), batch.desc.lower())
+            && PartialOrder::less_equal(batch.desc.upper(), desc.upper())
+        {
+            self.active_compaction = Some(active_compaction.clone());
+            ApplyMergeResult::AppliedSubset
+        } else {
+            ApplyMergeResult::NotAppliedNoMatch
+        }
+    }
+
+    fn filtered_batches(&self, desc: &Description<T>) -> Vec<IdHollowBatch<T>> {
+        self.parts
+            .iter()
+            .filter(|b| {
+                let part_desc = &b.batch.desc;
+                PartialOrder::less_equal(part_desc.lower(), desc.lower())
+                    && PartialOrder::less_equal(desc.upper(), part_desc.upper())
+            })
+            .cloned()
+            .collect()
     }
 
     #[cfg(test)]
@@ -918,6 +1010,180 @@ impl<T: Timestamp + Lattice + Codec64> SpineBatch<T> {
             .flatten()
     }
 
+    fn diffs_sum_for_runs<D: Semigroup + Codec64>(
+        batch: &HollowBatch<T>,
+        run_ids: &[Uuid],
+        metrics: &ColumnarMetrics,
+    ) -> Option<D> {
+        if run_ids.is_empty() {
+            return None;
+        }
+
+        let mut parts = Vec::new();
+        for &run_id in run_ids {
+            for (i, meta) in batch.run_meta.iter().enumerate() {
+                if meta.uuid == Some(run_id) {
+                    let start = if i == 0 { 0 } else { batch.run_splits[i - 1] };
+                    let end = batch
+                        .run_splits
+                        .get(i)
+                        .copied()
+                        .unwrap_or(batch.parts.len());
+                    parts.extend_from_slice(&batch.parts[start..end]);
+                }
+            }
+        }
+
+        Self::diffs_sum(parts.iter(), metrics)
+    }
+
+    fn construct_batch_with_runs_replaced(
+        original: &HollowBatch<T>,
+        run_ids: &[Uuid],
+        replacement: &HollowBatch<T>,
+    ) -> Result<HollowBatch<T>, ApplyMergeResult> {
+        if run_ids.is_empty() {
+            return Err(ApplyMergeResult::NotAppliedNoMatch);
+        }
+
+        assert_eq!(
+            replacement.run_meta.len(),
+            1,
+            "replacement must have exactly one run"
+        );
+
+        let mut run_ids = run_ids.to_vec();
+        run_ids.sort_by(|a, b| {
+            original
+                .run_meta
+                .iter()
+                .position(|m| m.uuid == Some(*a))
+                .unwrap_or(usize::MAX)
+                .cmp(
+                    &original
+                        .run_meta
+                        .iter()
+                        .position(|m| m.uuid == Some(*b))
+                        .unwrap_or(usize::MAX),
+                )
+        });
+
+        let start_id = run_ids[0];
+        let end_id = *run_ids.last().unwrap();
+
+        // Find the indices of the runs in the original batch
+        let mut start_run = 0;
+        let mut end_run = 0;
+        for (i, meta) in original.run_meta.iter().enumerate() {
+            if meta.uuid == Some(start_id) {
+                start_run = i;
+            }
+            if meta.uuid == Some(end_id) {
+                end_run = i;
+            }
+        }
+
+        if end_run < start_run {
+            info!(
+                "Run IDs are not in order: start_run={}, end_run={}",
+                start_run, end_run
+            );
+            info!("Run IDs: {:?}", run_ids);
+            info!("original batch {:#?}", original);
+            info!("replacement batch {:#?}", replacement);
+        }
+
+        if replacement.run_meta.len() != 1 {
+            info!(
+                "Replacement batch must have exactly one run, but has {}: {:#?}",
+                replacement.run_meta.len(),
+                replacement
+            );
+            info!("Original batch: {:#?}", original);
+        }
+
+        let start_part = if start_run == 0 {
+            0
+        } else {
+            original.run_splits[start_run - 1]
+        };
+        let end_part = if end_run == original.run_meta.len() - 1 {
+            original.parts.len()
+        } else {
+            original.run_splits[end_run]
+        };
+
+        // 2. Replace parts
+        let mut parts = Vec::new();
+        parts.extend_from_slice(&original.parts[..start_part]);
+        parts.extend_from_slice(&replacement.parts);
+        parts.extend_from_slice(&original.parts[end_part..]);
+
+        // 3. Replace run_meta
+        let mut run_meta = Vec::new();
+        run_meta.extend_from_slice(&original.run_meta[..start_run]);
+        run_meta.extend_from_slice(&replacement.run_meta);
+        run_meta.extend_from_slice(&original.run_meta[end_run + 1..]);
+
+        // 4. Rebuild run_splits
+        let mut run_splits = Vec::with_capacity(run_meta.len());
+        let replaced_start = if start_run == 0 {
+            0
+        } else {
+            original.run_splits[start_run - 1]
+        };
+        let replaced_end = if end_run < original.run_splits.len() {
+            original.run_splits[end_run]
+        } else {
+            original.parts.len()
+        };
+        let replaced_len = replaced_end - replaced_start;
+        let replacement_len = replacement.parts.len();
+
+        let prefix = &original.run_splits[..start_run];
+        run_splits.extend_from_slice(prefix);
+
+        // Only push the replacement split if it's not the final run
+        let replacement_idx = start_run;
+        let replacement_is_last = replacement_idx + replacement.run_meta.len() == run_meta.len();
+
+        if !replacement_is_last {
+            run_splits.push(replaced_start + replacement_len);
+        }
+
+        // Adjust suffix splits
+        if end_run + 1 < original.run_splits.len() {
+            for &split in &original.run_splits[(end_run + 1)..] {
+                let adjusted = split - replaced_len + replacement_len;
+                run_splits.push(adjusted);
+            }
+        }
+
+        assert_eq!(
+            run_splits.len(),
+            run_meta.len().saturating_sub(1),
+            "run_splits must have one fewer element than run_meta"
+        );
+
+        // info!(
+        //     "Constructed batch with runs replaced: start_run={}, end_run={}, parts_len={}, run_meta_len={}, run_splits={:?}",
+        //     start_run,
+        //     end_run,
+        //     parts.len(),
+        //     run_meta.len(),
+        //     run_splits,
+        // );
+
+        Ok(HollowBatch {
+            desc: replacement.desc.clone(),
+            //FIXME: actually compute a len somehow
+            len: replacement.len,
+            parts,
+            run_meta,
+            run_splits,
+        })
+    }
+
     fn maybe_replace_with_tombstone(&mut self, res: &FueledMergeRes<T>) -> ApplyMergeResult {
         assert!(
             res.output.parts.is_empty(),
@@ -927,15 +1193,25 @@ impl<T: Timestamp + Lattice + Codec64> SpineBatch<T> {
             && res.output.desc.upper() == self.desc().upper();
 
         if exact_match {
-            *self = SpineBatch::merged(IdHollowBatch {
-                id: self.id(),
-                batch: Arc::new(res.output.clone()),
-            });
+            *self = SpineBatch::merged(
+                IdHollowBatch {
+                    id: self.id(),
+                    batch: Arc::new(res.output.clone()),
+                },
+                None,
+            );
             return ApplyMergeResult::AppliedExact;
         }
 
         if let Some((id, range)) = self.find_replacement_range(res) {
-            self.perform_subset_replacement(res, id, range)
+            let desc = self.desc.clone();
+            self.perform_subset_replacement(
+                &res.output,
+                id,
+                range,
+                res.new_active_compaction.clone(),
+                &desc,
+            )
         } else {
             ApplyMergeResult::NotAppliedNoMatch
         }
@@ -960,14 +1236,91 @@ impl<T: Timestamp + Lattice + Codec64> SpineBatch<T> {
 
         let new_diffs_sum = Self::diffs_sum(res.output.parts.iter(), metrics);
 
-        // If our merge result exactly matches a spine batch, we can swap it in directly
-        let exact_match = res.output.desc.lower() == self.desc().lower()
-            && res.output.desc.upper() == self.desc().upper();
-        if exact_match {
-            let old_diffs_sum = Self::diffs_sum::<D>(
-                self.parts.iter().flat_map(|p| p.batch.parts.iter()),
-                metrics,
-            );
+        let inputs = res.inputs.clone();
+
+        let inputs = inputs
+            .into_iter()
+            .sorted()
+            .chunk_by(|RunId(spine, _)| spine.clone())
+            .into_iter()
+            .map(|(id, batch)| (id, batch.collect::<Vec<_>>()))
+            .collect::<BTreeMap<_, _>>();
+
+        // Either parts within a single HollowBatch can be replaced, or
+        // entire contiguous batches can be replaced.
+        // For example if the SpineBatch has parts [0,1,2,3,4] and the parts have runs
+        // 0: 0,1,2,3,4
+        // 1: 0,1,2
+        // 2: 0,1
+        // etc...
+        // If the merge result covers (1,(0,1,2)) and (2,(0,1)), then we can swap in the merge result
+        // as long as the diffs sum matches since it covers two contiguous batches.
+        // If the merge result covers (1,(1,2)) and (2,(0,1)), then we cannot swap in the merge result
+        // because the merge result doesn't cover the first run in part 1, which is 0.
+        // If the merge result covers (0,(1,2,3)) then we can swap in the merge result
+        // as long as the diffs sum matches since parts within a single batch can be replaced.
+
+        let mut range = Vec::new();
+        for (spine_id, run_indices) in inputs.iter() {
+            let part = self
+                .parts
+                .iter()
+                .enumerate()
+                .find(|(_, p)| p.id == *spine_id);
+            let Some((i, part)) = part else {
+                return ApplyMergeResult::NotAppliedNoMatch;
+            };
+            range.push(i);
+
+            // if inputs.len() > 1 {
+            //     assert_eq!(
+            //         part.batch.run_meta.len(),
+            //         run_indices.len(),
+            //         "merge result for spine batch {:?} has {} runs, but spine batch has {} runs",
+            //         spine_id,
+            //         run_indices.len(),
+            //         part.batch.run_meta.len()
+            //     );
+            // }
+        }
+
+        range.sort_unstable();
+        let is_contiguous = range.windows(2).all(|w| {
+            let [a, b] = [w[0], w[1]];
+            let skipped = &self.parts[a + 1..b];
+            skipped.iter().all(|p| p.batch.runs().next().is_none())
+        });
+        assert!(
+            is_contiguous,
+            "parts to replace are not contiguous: {:?}",
+            range
+        );
+
+        let min = *range.iter().min().unwrap();
+        let max = *range.iter().max().unwrap();
+        let replacement_range = min..max + 1;
+        let num_batches = self.parts.len();
+
+        let res = if range.len() == 1 {
+            // We only need to replace a single part. Here we still care about the run_indices
+            // because we only want to replace the runs that are in the merge result.
+            let batch = &self.parts[range[0]].batch;
+            let run_ids = inputs
+                .values()
+                .next()
+                .unwrap()
+                .iter()
+                .filter_map(|id| id.1)
+                .collect::<Vec<_>>();
+
+            // backwards compatibility: if the run_ids are empty, we assume we want to replace all runs
+            let old_batch_diff_sum = Self::diffs_sum::<D>(batch.parts.iter(), metrics);
+            let old_diffs_sum = if run_ids.is_empty() {
+                old_batch_diff_sum.clone()
+            } else {
+                // If we have run_ids, we need to compute the diffs sum for those runs only
+                Self::diffs_sum_for_runs::<D>(batch, &run_ids, metrics)
+            };
 
             if let (Some(old_diffs_sum), Some(new_diffs_sum)) = (old_diffs_sum, new_diffs_sum) {
                 assert_eq!(
@@ -977,28 +1330,47 @@ impl<T: Timestamp + Lattice + Codec64> SpineBatch<T> {
                 );
             }
 
-            // Spine internally has an invariant about a batch being at some level
-            // or higher based on the len. We could end up violating this invariant
-            // if we increased the length of the batch.
-            //
-            // A res output with length greater than the existing spine batch implies
-            // a compaction has already been applied to this range, and with a higher
-            // rate of consolidation than this one. This could happen as a result of
-            // compaction's memory bound limiting the amount of consolidation possible.
-            if res.output.len > self.len() {
-                return ApplyMergeResult::NotAppliedTooManyUpdates;
-            }
-            *self = SpineBatch::merged(IdHollowBatch {
-                id: self.id(),
-                batch: Arc::new(res.output.clone()),
-            });
-            return ApplyMergeResult::AppliedExact;
-        }
+            let parts = &self.parts[replacement_range.clone()];
+            let id = SpineId(parts.first().unwrap().id.0, parts.last().unwrap().id.1);
 
-        // Try subset replacement
-        if let Some((id, range)) = self.find_replacement_range(res) {
+            match Self::construct_batch_with_runs_replaced(batch, &run_ids, &res.output) {
+                Ok(new_batch) => {
+                    let new_batch_diff_sum = Self::diffs_sum::<D>(new_batch.parts.iter(), metrics);
+                    if let (Some(old_diffs_sum), Some(new_diffs_sum)) =
+                        (old_batch_diff_sum, new_batch_diff_sum)
+                    {
+                        if old_diffs_sum != new_diffs_sum {
+                            warn!(
+                                "diffs sum for replacement batch did not match: old={:?}, new={:?}",
+                                old_diffs_sum, new_diffs_sum
+                            );
+                            warn!("run ids: {:?}", run_ids);
+                            warn!("replacement batch: {:#?}", res.output);
+                            warn!("original batch: {:#?}", batch);
+                            warn!("new batch: {:#?}", new_batch);
+                        }
+                        assert_eq!(
+                            old_diffs_sum, new_diffs_sum,
+                            "merge res diffs sum ({:?}) did not match spine batch diffs sum ({:?})",
+                            new_diffs_sum, old_diffs_sum
+                        );
+                    }
+                    let desc = self.desc.clone();
+                    self.perform_subset_replacement(
+                        &new_batch,
+                        id,
+                        replacement_range,
+                        res.new_active_compaction.clone(),
+                        &desc,
+                    )
+                }
+                Err(err) => err,
+            }
+        } else {
+            // We need to replace a range of parts. Here we don't care about the run_indices
+            // because we are replacing the entire part(s)
             let old_diffs_sum = Self::diffs_sum::<D>(
-                self.parts[range.clone()]
+                self.parts[replacement_range.clone()]
                     .iter()
                     .flat_map(|p| p.batch.parts.iter()),
                 metrics,
@@ -1012,10 +1384,22 @@ impl<T: Timestamp + Lattice + Codec64> SpineBatch<T> {
                 );
             }
 
-            self.perform_subset_replacement(res, id, range)
-        } else {
-            ApplyMergeResult::NotAppliedNoMatch
-        }
+            let parts = &self.parts[replacement_range.clone()];
+            let id = SpineId(parts.first().unwrap().id.0, parts.last().unwrap().id.1);
+            self.perform_subset_replacement(
+                &res.output,
+                id,
+                replacement_range,
+                res.new_active_compaction.clone(),
+                &self.desc.clone(),
+            )
+        };
+        let num_batches_after = self.parts.len();
+        assert!(
+            num_batches_after <= num_batches,
+            "replacing parts should not increase the number of batches"
+        );
+        res
     }
 
     /// Unchecked variant that skips diff sum assertions
@@ -1043,16 +1427,26 @@ impl<T: Timestamp + Lattice + Codec64> SpineBatch<T> {
                 return ApplyMergeResult::NotAppliedTooManyUpdates;
             }
 
-            *self = SpineBatch::merged(IdHollowBatch {
-                id: self.id(),
-                batch: Arc::new(res.output.clone()),
-            });
+            *self = SpineBatch::merged(
+                IdHollowBatch {
+                    id: self.id(),
+                    batch: Arc::new(res.output.clone()),
+                },
+                None,
+            );
             return ApplyMergeResult::AppliedExact;
         }
 
         // Try subset replacement
         if let Some((id, range)) = self.find_replacement_range(res) {
-            self.perform_subset_replacement(res, id, range)
+            let desc = self.desc.clone();
+            self.perform_subset_replacement(
+                &res.output,
+                id,
+                range,
+                res.new_active_compaction.clone(),
+                &desc,
+            )
         } else {
             ApplyMergeResult::NotAppliedNoMatch
         }
@@ -1095,23 +1489,27 @@ impl<T: Timestamp + Lattice + Codec64> SpineBatch<T> {
     /// Perform the actual subset replacement
     fn perform_subset_replacement(
         &mut self,
-        res: &FueledMergeRes<T>,
+        res: &HollowBatch<T>,
         spine_id: SpineId,
         range: Range<usize>,
+        new_active_compaction: Option<ActiveCompaction<T>>,
+        desc: &Description<T>,
     ) -> ApplyMergeResult {
         let SpineBatch {
             id,
             parts,
-            desc,
+            desc: _,
             active_compaction: _,
             len: _,
         } = self;
+
+        let orig_num_parts = parts.len();
 
         let mut new_parts = vec![];
         new_parts.extend_from_slice(&parts[..range.start]);
         new_parts.push(IdHollowBatch {
             id: spine_id,
-            batch: Arc::new(res.output.clone()),
+            batch: Arc::new(res.clone()),
         });
         new_parts.extend_from_slice(&parts[range.end..]);
 
@@ -1120,15 +1518,22 @@ impl<T: Timestamp + Lattice + Codec64> SpineBatch<T> {
             desc: desc.to_owned(),
             len: new_parts.iter().map(|x| x.batch.len).sum(),
             parts: new_parts,
-            active_compaction: None,
+            active_compaction: new_active_compaction,
         };
 
         if new_spine_batch.len() > self.len() {
             return ApplyMergeResult::NotAppliedTooManyUpdates;
         }
 
+        // info!("old spine batch: {:#?}", self);
         *self = new_spine_batch;
-        ApplyMergeResult::AppliedSubset
+        // info!("new spine batch: {:#?}", self);
+
+        if range.start == 0 && range.end == orig_num_parts {
+            ApplyMergeResult::AppliedExact
+        } else {
+            ApplyMergeResult::AppliedSubset
+        }
     }
 }
 
@@ -1201,6 +1606,7 @@ impl<T: Timestamp + Lattice> FuelingMerge<T> {
                 id,
                 desc: desc.clone(),
                 inputs: merged_parts.clone(),
+                active_compaction: None,
             });
         }
 
@@ -1392,10 +1798,13 @@ impl<T: Timestamp + Lattice> Spine<T> {
         assert_eq!(batch.desc.lower(), &self.upper);
 
         let id = self.next_id();
-        let batch = SpineBatch::merged(IdHollowBatch {
-            id,
-            batch: Arc::new(batch),
-        });
+        let batch = SpineBatch::merged(
+            IdHollowBatch {
+                id,
+                batch: Arc::new(batch),
+            },
+            None,
+        );
 
         self.upper.clone_from(batch.upper());
 
@@ -1894,6 +2303,8 @@ impl<T: Timestamp + Lattice> MergeState<T> {
 
 #[cfg(test)]
 pub mod datadriven {
+    use differential_dataflow::trace::implementations::merge_batcher::container::vec;
+
     use crate::internal::datadriven::DirectiveArgs;
 
     use super::*;
@@ -1983,6 +2394,8 @@ pub mod datadriven {
     ) -> Result<String, anyhow::Error> {
         let res = FueledMergeRes {
             output: DirectiveArgs::parse_hollow_batch(args.input),
+            inputs: vec![],
+            new_active_compaction: None,
         };
         match datadriven.trace.apply_merge_res_unchecked(&res) {
             ApplyMergeResult::AppliedExact => Ok("applied exact\n".into()),
@@ -2001,7 +2414,10 @@ pub(crate) mod tests {
     use proptest::prelude::*;
     use semver::Version;
 
-    use crate::internal::state::tests::any_hollow_batch;
+    use crate::internal::{
+        paths::{PartId, PartialBatchKey},
+        state::{HollowBatchPart, RunMeta, tests::any_hollow_batch},
+    };
 
     use super::*;
 
@@ -2040,7 +2456,13 @@ pub(crate) mod tests {
                     .fueled_merge_reqs_before_ms(timeout_ms, None)
                     .collect();
                 for req in reqs {
-                    trace.claim_compaction(req.id, ActiveCompaction { start_ms: 0 })
+                    trace.claim_compaction(
+                        req.id,
+                        ActiveCompaction {
+                            start_ms: 0,
+                            batch_so_far: None,
+                        },
+                    )
                 }
                 trace.roundtrip_structure = roundtrip_structure;
                 trace
@@ -2110,6 +2532,7 @@ pub(crate) mod tests {
                     Antichain::new(),
                 ),
                 inputs: vec![],
+                active_compaction: None,
             }
         }
 
@@ -2179,6 +2602,7 @@ pub(crate) mod tests {
                 Antichain::from_elem(5),
             ),
             inputs: vec![],
+            active_compaction: None,
         };
         assert_eq!(
             Trace::remove_redundant_merge_reqs(vec![req(0, 1), req015.clone()]),

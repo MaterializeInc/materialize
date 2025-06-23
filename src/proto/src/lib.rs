@@ -22,6 +22,7 @@ use mz_ore::num::{NonNeg, NonNegError};
 use num::Signed;
 use proptest::prelude::Strategy;
 use prost::UnknownEnumValue;
+use serde::Deserialize;
 use uuid::Uuid;
 
 #[cfg(feature = "chrono")]
@@ -524,6 +525,16 @@ impl RustType<ProtoU128> for Uuid {
 
     fn from_proto(proto: ProtoU128) -> Result<Self, TryFromProtoError> {
         Ok(Uuid::from_u128(u128::from_proto(proto)?))
+    }
+}
+
+impl RustType<String> for Uuid {
+    fn into_proto(&self) -> String {
+        self.to_string()
+    }
+
+    fn from_proto(proto: String) -> Result<Self, TryFromProtoError> {
+        Uuid::parse_str(&proto).map_err(|_| TryFromProtoError::InvalidFieldError(proto))
     }
 }
 

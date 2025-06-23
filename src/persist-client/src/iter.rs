@@ -34,7 +34,7 @@ use mz_persist_types::part::Part;
 use mz_persist_types::{Codec, Codec64};
 use semver::Version;
 use timely::progress::Timestamp;
-use tracing::{Instrument, debug_span};
+use tracing::{Instrument, debug_span, info};
 
 use crate::ShardId;
 use crate::fetch::{EncodedPart, FetchBatchFilter};
@@ -157,7 +157,7 @@ impl<K: Codec, V: Codec, T, D> StructuredSort<K, V, T, D> {
     }
 }
 
-type SortKV<'a> = (ArrayIdx<'a>, Option<ArrayIdx<'a>>);
+pub type SortKV<'a> = (ArrayIdx<'a>, Option<ArrayIdx<'a>>);
 
 fn kv_lower<T>(data: &FetchData<T>) -> Option<SortKV<'_>> {
     let key_idx = data.structured_lower.as_ref().map(|l| l.get())?;
@@ -343,12 +343,29 @@ pub(crate) struct Consolidator<T, D, Sort: RowSort<T, D>> {
     runs: Vec<VecDeque<(ConsolidationPart<T, D>, usize)>>,
     filter: FetchBatchFilter<T>,
     budget: usize,
+    lower_bound: Option<LowerBound<T>>,
     // NB: this is the tricky part!
     // One hazard of streaming consolidation is that we may start consolidating a particular KVT,
     // but not be able to finish, because some other part that might also contain the same KVT
     // may not have been fetched yet. The `drop_stash` gives us somewhere
     // to store the streaming iterator's work-in-progress state between runs.
     drop_stash: Option<StructuredUpdates>,
+}
+
+#[derive(Debug)]
+pub struct LowerBound<T> {
+    pub(crate) key_bound: ArrayBound,
+    pub(crate) val_bound: ArrayBound,
+    pub(crate) t: T,
+}
+
+impl<T: Clone> LowerBound<T> {
+    pub fn kvt_bound(&self) -> (SortKV<'_>, T) {
+        (
+            (self.key_bound.get(), Some(self.val_bound.get())),
+            self.t.clone(),
+        )
+    }
 }
 
 impl<T, D, Sort> Consolidator<T, D, Sort>
@@ -369,6 +386,7 @@ where
         shard_metrics: Arc<ShardMetrics>,
         read_metrics: ReadMetrics,
         filter: FetchBatchFilter<T>,
+        lower_bound: Option<LowerBound<T>>,
         prefetch_budget_bytes: usize,
     ) -> Self {
         Self {
@@ -383,6 +401,7 @@ where
             filter,
             budget: prefetch_budget_bytes,
             drop_stash: None,
+            lower_bound,
         }
     }
 }
@@ -485,7 +504,9 @@ where
             return None;
         }
 
-        let mut iter = ConsolidatingIter::new(&self.context, &self.filter, &mut self.drop_stash);
+        let bound = self.lower_bound.as_ref().map(|b| b.kvt_bound());
+        let mut iter =
+            ConsolidatingIter::new(&self.context, &self.filter, bound, &mut self.drop_stash);
 
         for run in &mut self.runs {
             let last_in_run = run.len() < 2;
@@ -837,6 +858,7 @@ where
     parts: Vec<&'a StructuredUpdates>,
     heap: BinaryHeap<PartRef<'a, T, D>>,
     upper_bound: Option<(SortKV<'a>, T)>,
+    lower_bound: Option<(SortKV<'a>, T)>,
     state: Option<(Indices, SortKV<'a>, T, D)>,
     drop_stash: &'a mut Option<StructuredUpdates>,
 }
@@ -849,6 +871,7 @@ where
     fn new(
         context: &'a str,
         filter: &'a FetchBatchFilter<T>,
+        lower_bound: Option<(SortKV<'a>, T)>,
         drop_stash: &'a mut Option<StructuredUpdates>,
     ) -> Self {
         Self {
@@ -859,6 +882,7 @@ where
             upper_bound: None,
             state: None,
             drop_stash,
+            lower_bound,
         }
     }
 
@@ -923,6 +947,17 @@ where
                     if let Some((kv0, t0)) = &self.upper_bound {
                         if (kv0, t0) <= (kv1, t1) {
                             return None;
+                        }
+                    }
+
+                    // This code checks our inclusive lower bound against
+                    if let Some((kv_lower, t_lower)) = &self.lower_bound {
+                        if (kv_lower, t_lower) >= (kv1, t1) {
+                            // Discard this item from the part, since it's past our lower bound.
+                            let _ = part.pop(&self.parts, self.filter);
+
+                            // Continue to the next part, since it might still be relevant.
+                            continue;
                         }
                     }
 
@@ -1045,6 +1080,7 @@ mod tests {
                     metrics: Arc::clone(metrics),
                     shard_metrics: metrics.shards.shard(&ShardId::new(), "test"),
                     read_metrics: Arc::new(metrics.read.snapshot.clone()),
+                    lower_bound: None,
                     // Generated runs of data that are sorted, but not necessarily consolidated.
                     // This is because timestamp-advancement may cause us to have duplicate KVTs,
                     // including those that span runs.
@@ -1164,6 +1200,7 @@ mod tests {
                     FetchBatchFilter::Compaction {
                         since: desc.since().clone(),
                     },
+                    None,
                     budget,
                 );
 
