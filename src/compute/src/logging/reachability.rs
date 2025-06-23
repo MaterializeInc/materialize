@@ -14,20 +14,22 @@ use std::convert::TryInto;
 use std::rc::Rc;
 use std::time::Duration;
 
+use columnar::Columnar;
 use mz_compute_client::logging::LoggingConfig;
 use mz_ore::cast::CastFrom;
 use mz_repr::{Datum, Diff, Row, Timestamp};
 use mz_timely_util::containers::{Col2ValBatcher, Column, ColumnBuilder, columnar_exchange};
 use mz_timely_util::replay::MzReplay;
 use timely::Container;
+use timely::container::CapacityContainerBuilder;
 use timely::dataflow::Scope;
 use timely::dataflow::channels::pact::ExchangeCore;
 
 use crate::extensions::arrange::MzArrangeCore;
 use crate::logging::initialize::ReachabilityEvent;
 use crate::logging::{EventQueue, LogCollection, LogVariant, TimelyLog, consolidate_and_pack};
-use crate::row_spine::RowRowBuilder;
-use crate::typedefs::RowRowSpine;
+use crate::row_spine::RowRowBuilderColumn;
+use crate::typedefs::{KeyBatcher, KeyValBatcher, RowRowSpine};
 
 /// The return type of [`construct`].
 pub(super) struct Return {
@@ -51,7 +53,7 @@ pub(super) fn construct<G: Scope<Timestamp = Timestamp>>(
         let interval_ms = std::cmp::max(1, config.interval.as_millis());
         type UpdatesKey = (bool, usize, usize, usize, Timestamp);
 
-        type CB = ColumnBuilder<((UpdatesKey, ()), Timestamp, Diff)>;
+        type CB = CapacityContainerBuilder<Vec<((UpdatesKey, ()), Timestamp, Diff)>>;
         let (updates, token) = event_queue.links.mz_replay::<_, CB, _>(
             scope,
             "reachability logs",
@@ -78,7 +80,7 @@ pub(super) fn construct<G: Scope<Timestamp = Timestamp>>(
         let logs_active = [LogVariant::Timely(TimelyLog::Reachability)];
         let worker_id = scope.index();
 
-        let updates = consolidate_and_pack::<_, Col2ValBatcher<UpdatesKey, _, _, _>, ColumnBuilder<_>, _, _>(
+        let updates = consolidate_and_pack::<_, KeyValBatcher<UpdatesKey,_, _, _>, ColumnBuilder<_>, _, _>(
             &updates,
             TimelyLog::Reachability,
             move |((datum, ()), time, diff), packer, session| {
@@ -90,7 +92,7 @@ pub(super) fn construct<G: Scope<Timestamp = Timestamp>>(
                     Datum::UInt64(u64::cast_from(*source)),
                     Datum::UInt64(u64::cast_from(*port)),
                     Datum::String(update_type),
-                    Datum::from(*ts),
+                    Datum::from(Timestamp::into_owned(*ts)),
                 ]);
                 session.give((data, time, diff));
             }
@@ -100,7 +102,7 @@ pub(super) fn construct<G: Scope<Timestamp = Timestamp>>(
         for variant in logs_active {
             if config.index_logs.contains_key(&variant) {
                 let trace = updates
-                    .mz_arrange_core::<_, Col2ValBatcher<_, _, _, _>, RowRowBuilder<_, _>, RowRowSpine<_, _>>(
+                    .mz_arrange_core::<_, Col2ValBatcher<_, _, _, _>, RowRowBuilderColumn<_, _>, RowRowSpine<_, _>>(
                         ExchangeCore::<ColumnBuilder<_>, _>::new_core(columnar_exchange::<Row, Row, Timestamp, Diff>),
                         &format!("Arrange {variant:?}"),
                     )

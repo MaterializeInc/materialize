@@ -19,8 +19,8 @@ use std::hash::Hash;
 
 use columnar::Columnar;
 use differential_dataflow::Hashable;
-use differential_dataflow::containers::TimelyStack;
-use differential_dataflow::trace::implementations::merge_batcher::{ColMerger, MergeBatcher};
+use differential_dataflow::trace::implementations::merge_batcher::MergeBatcher;
+use differential_dataflow::trace::implementations::merge_batcher::container::ContainerMerger;
 
 pub mod stack;
 
@@ -63,9 +63,10 @@ mod alloc {
 mod container {
     use columnar::Columnar;
     use columnar::Container as _;
-    use columnar::bytes::{EncodeDecode, Sequence};
+    use columnar::bytes::{EncodeDecode, Indexed};
     use columnar::common::IterOwn;
     use columnar::{Clear, FromBytes, Index, Len};
+    use mz_ore::cast::CastFrom;
     use mz_ore::region::Region;
     use timely::Container;
     use timely::bytes::arc::Bytes;
@@ -87,28 +88,34 @@ mod container {
         /// Reasons could include misalignment, cloning of data, or wanting
         /// to release the `Bytes` as a scarce resource.
         Align(Region<u64>),
+        CompressedBlock(usize, Vec<u8>),
     }
 
     impl<C: Columnar> Column<C> {
         /// Borrows the container as a reference.
-        fn borrow(&self) -> <C::Container as columnar::Container<C>>::Borrowed<'_> {
+        #[inline(always)]
+        pub(crate) fn borrow(&self) -> <C::Container as columnar::Container<C>>::Borrowed<'_> {
             match self {
                 Column::Typed(t) => t.borrow(),
                 Column::Bytes(b) => {
                     <<C::Container as columnar::Container<C>>::Borrowed<'_>>::from_bytes(
-                        &mut Sequence::decode(bytemuck::cast_slice(b)),
+                        &mut Indexed::decode(bytemuck::cast_slice(b)),
                     )
                 }
                 Column::Align(a) => {
                     <<C::Container as columnar::Container<C>>::Borrowed<'_>>::from_bytes(
-                        &mut Sequence::decode(a),
+                        &mut Indexed::decode(a),
                     )
+                }
+                _ => {
+                    panic!("Compressed columns cannot be borrowed directly");
                 }
             }
         }
     }
 
     impl<C: Columnar> Default for Column<C> {
+        #[inline(always)]
         fn default() -> Self {
             Self::Typed(Default::default())
         }
@@ -135,6 +142,15 @@ mod container {
                     alloc[..a.len()].copy_from_slice(a);
                     Column::Align(alloc)
                 }
+                Column::CompressedBlock(len, region) => {
+                    // let mut alloc = super::alloc_aligned_zeroed(*len);
+                    // alloc[..*len].copy_from_slice(region);
+                    Column::CompressedBlock(*len, region.clone())
+                } // Column::CompressedFrame(length_in_words, region) => {
+                  //     let mut alloc = super::alloc_aligned_zeroed(region.len());
+                  //     alloc[..region.len()].copy_from_slice(region);
+                  //     Column::CompressedFrame(*length_in_words, alloc)
+                  // }
             }
         }
     }
@@ -143,26 +159,33 @@ mod container {
         type ItemRef<'a> = C::Ref<'a>;
         type Item<'a> = C::Ref<'a>;
 
+        #[inline(always)]
         fn len(&self) -> usize {
             self.borrow().len()
         }
 
         // This sets the `Bytes` variant to be an empty `Typed` variant, appropriate for pushing into.
+        #[inline(always)]
         fn clear(&mut self) {
             match self {
                 Column::Typed(t) => t.clear(),
-                Column::Bytes(_) | Column::Align(_) => *self = Column::Typed(Default::default()),
+                Column::Bytes(_)
+                | Column::Align(_)
+                // | Column::CompressedBlock(_, _)
+                | Column::CompressedBlock(_, _) => *self = Column::Typed(Default::default()),
             }
         }
 
         type Iter<'a> = IterOwn<<C::Container as columnar::Container<C>>::Borrowed<'a>>;
 
+        #[inline(always)]
         fn iter(&self) -> Self::Iter<'_> {
             self.borrow().into_index_iter()
         }
 
         type DrainIter<'a> = IterOwn<<C::Container as columnar::Container<C>>::Borrowed<'a>>;
 
+        #[inline(always)]
         fn drain(&mut self) -> Self::DrainIter<'_> {
             self.borrow().into_index_iter()
         }
@@ -176,8 +199,21 @@ mod container {
         fn push_into(&mut self, item: T) {
             use columnar::Push;
             match self {
-                Column::Typed(t) => t.push(item),
-                Column::Align(_) | Column::Bytes(_) => {
+                Column::Typed(t) => {
+                    t.push(item);
+                    let length_in_bytes = Indexed::length_in_bytes(&t.borrow());
+
+                    if length_in_bytes >= (1 << 20) {
+                        let mut alloc = super::alloc_aligned_zeroed(length_in_bytes);
+                        let writer = std::io::Cursor::new(bytemuck::cast_slice_mut(&mut alloc[..]));
+                        Indexed::write(writer, &t.borrow()).unwrap();
+                        *self = Column::Align(alloc);
+                    }
+                }
+                Column::Align(_)
+                | Column::Bytes(_)
+                // | Column::CompressedBlock(_, _)
+                | Column::CompressedBlock(_, _) => {
                     // We really oughtn't be calling this in this case.
                     // We could convert to owned, but need more constraints on `C`.
                     unimplemented!("Pushing into Column::Bytes without first clearing");
@@ -207,17 +243,166 @@ mod container {
 
         fn length_in_bytes(&self) -> usize {
             match self {
-                Column::Typed(t) => Sequence::length_in_bytes(&t.borrow()),
+                Column::Typed(t) => Indexed::length_in_bytes(&t.borrow()),
                 Column::Bytes(b) => b.len(),
                 Column::Align(a) => 8 * a.len(),
+                Column::CompressedBlock(len, region) => *len,
+                // Column::CompressedFrame(len, region) => *len,
             }
         }
 
-        fn into_bytes<W: ::std::io::Write>(&self, writer: &mut W) {
+        fn into_bytes<W: std::io::Write>(&self, writer: &mut W) {
             match self {
-                Column::Typed(t) => Sequence::write(writer, &t.borrow()).unwrap(),
+                Column::Typed(t) => Indexed::write(writer, &t.borrow()).unwrap(),
                 Column::Bytes(b) => writer.write_all(b).unwrap(),
                 Column::Align(a) => writer.write_all(bytemuck::cast_slice(a)).unwrap(),
+                Column::CompressedBlock(_, _) => {
+                    panic!("Cannot convert compressed columns into bytes directly");
+                }
+            }
+        }
+    }
+
+    impl<C: Columnar> Column<C> {
+        fn get_region(size: usize, empty: &mut Column<C>) -> Vec<u8> {
+            let mut region = match empty {
+                Column::CompressedBlock(_, region) if region.capacity() >= size => {
+                    region.clear();
+                    std::mem::take(region)
+                }
+                _ => Vec::with_capacity(size),
+            };
+            region.resize(size, 0);
+            region
+        }
+
+        pub fn compress(&mut self, buffer: &mut Vec<u8>, empty: &mut Column<C>) {
+            match self {
+                Column::Align(align) => {
+                    *self = Self::compress_aligned(align, buffer, empty);
+                }
+                Column::Bytes(_) => {}
+                // Column::Typed(typed) => *self = Self::compress_columnar(&typed, buffer, empty),
+                Column::Typed(_) => {}
+                Column::CompressedBlock(_, _) => {} // Column::CompressedFrame(_, _) => {}
+            }
+        }
+
+        fn compress_aligned(align: &[u64], buffer: &mut Vec<u8>, empty: &mut Column<C>) -> Self {
+            let max_size = lz4_flex::block::get_maximum_output_size(align.len() * 8);
+            buffer.clear();
+            if buffer.capacity() < max_size {
+                buffer.reserve(max_size - buffer.len());
+            }
+            buffer.resize(max_size, 0);
+            let len = lz4_flex::compress_into(bytemuck::cast_slice(&*align), buffer).unwrap();
+            let mut region = Self::get_region(len, empty);
+
+            region[..len].copy_from_slice(&buffer[..len]);
+            assert_eq!(
+                bytemuck::cast_slice::<_, u8>(&*align),
+                &*lz4_flex::decompress(&region[..len], max_size + 4).unwrap()
+            );
+            println!(
+                "CompressedBlock: {} bytes into {len} bytes",
+                align.len() * 8
+            );
+            Column::CompressedBlock(align.len() * 8, region)
+        }
+
+        // pub fn compress_columnar(
+        //     container: &C::Container,
+        //     buffer: &mut Vec<u8>,
+        //     empty: &mut Column<C>,
+        // ) -> Self {
+        //     let length_in_bytes = Indexed::length_in_bytes(&t.borrow());
+        //     let mut alloc = super::alloc_aligned_zeroed(length_in_bytes);
+        //     let writer = std::io::Cursor::new(bytemuck::cast_slice_mut(&mut alloc[..]));
+        //     Indexed::write(writer, &t.borrow()).unwrap();
+        //     *self = Column::Align(alloc);
+        //     let length_in_bytes = Indexed::length_in_bytes(&container.borrow());
+        //     let max_size = lz4_flex::block::get_maximum_output_size(length_in_bytes);
+        //     if buffer.capacity() < max_size {
+        //         buffer.reserve(max_size - buffer.len());
+        //     }
+        //     buffer.clear();
+        //
+        //     let mut writer = lz4_flex::frame::FrameEncoder::new(std::io::Cursor::new(&mut *buffer));
+        //     Indexed::write(&mut writer, &container.borrow()).unwrap();
+        //     let len = usize::cast_from(writer.finish().unwrap().position());
+        //     let mut region = Self::get_region(len, empty);
+        //     region[..len].copy_from_slice(&buffer[..len]);
+        //     {
+        //         let reader = std::io::Cursor::new(&region[..]);
+        //         let mut writer2 = std::io::Cursor::new(Vec::new());
+        //         let mut reader = lz4_flex::frame::FrameDecoder::new(reader);
+        //         std::io::copy(&mut reader, &mut writer2).expect("Failed to decompress frame");
+        //         assert_eq!(&**buffer, &*writer2.get_ref());
+        //         println!("CompressedFrame: {length_in_bytes} bytes into {len} bytes");
+        //     }
+        //     Self::CompressedFrame(length_in_bytes, region)
+        // }
+
+        pub fn decompress(&mut self, _buffer: &mut Vec<u8>, empty: &mut Column<C>) {
+            match self {
+                Column::Typed(_) | Column::Bytes(_) | Column::Align(_) => {}
+                Column::CompressedBlock(len, region) => {
+                    println!(
+                        "Decompressing CompressedBlock: {} bytes into {len} bytes",
+                        region.len()
+                    );
+                    let region = std::mem::take(region);
+                    // let (length_in_bytes, bytes) =
+                    //     lz4_flex::block::uncompressed_size(&region[..*len]).unwrap();
+                    let length_in_words = (*len + 7) / 8;
+                    let mut target_region = match empty {
+                        Column::Align(alloc) => {
+                            if alloc.capacity() >= length_in_words {
+                                unsafe { alloc.clear() };
+                                alloc.extend(std::iter::repeat(0).take(length_in_words));
+                                std::mem::take(alloc)
+                            } else {
+                                super::alloc_aligned_zeroed(length_in_words)
+                            }
+                        }
+                        _ => super::alloc_aligned_zeroed(length_in_words),
+                    };
+                    lz4_flex::block::decompress_into(
+                        &region,
+                        &mut bytemuck::cast_slice_mut(&mut target_region),
+                    )
+                    .expect("Failed to decompress block");
+                    *self = Column::Align(target_region);
+                    self.borrow();
+                    *empty = Column::CompressedBlock(0, region);
+                } // Column::CompressedFrame(length_in_bytes, region) => {
+                  //     println!(
+                  //         "Decompressing CompressedFrame: {} bytes into {length_in_bytes} bytes",
+                  //         region.len()
+                  //     );
+                  //     let length_in_words = *length_in_bytes / 8;
+                  //     let region = std::mem::take(region);
+                  //     let mut target_region = match empty {
+                  //         Column::Align(alloc) => {
+                  //             if alloc.capacity() >= length_in_words {
+                  //                 unsafe { alloc.clear() };
+                  //                 alloc.extend(std::iter::repeat(0).take(length_in_words));
+                  //                 std::mem::take(alloc)
+                  //             } else {
+                  //                 super::alloc_aligned_zeroed(length_in_words)
+                  //             }
+                  //         }
+                  //         _ => super::alloc_aligned_zeroed(length_in_words),
+                  //     };
+                  //     let reader = std::io::Cursor::new(&region[..]);
+                  //     let mut reader = lz4_flex::frame::FrameDecoder::new(reader);
+                  //     let mut writer =
+                  //         std::io::Cursor::new(bytemuck::cast_slice_mut(&mut target_region));
+                  //     std::io::copy(&mut reader, &mut writer).expect("Failed to decompress frame");
+                  //     *self = Column::Align(target_region);
+                  //     self.borrow();
+                  //     *empty = Column::CompressedBlock(0, region);
+                  // }
             }
         }
     }
@@ -226,7 +411,7 @@ mod container {
 mod builder {
     use std::collections::VecDeque;
 
-    use columnar::bytes::{EncodeDecode, Sequence};
+    use columnar::bytes::{EncodeDecode, Indexed};
     use columnar::{Clear, Columnar, Len, Push};
     use timely::container::PushInto;
     use timely::container::{ContainerBuilder, LengthPreservingContainerBuilder};
@@ -255,7 +440,7 @@ mod builder {
             self.current.push(item);
             // If there is less than 10% slop with 2MB backing allocations, mint a container.
             use columnar::Container;
-            let words = Sequence::length_in_words(&self.current.borrow());
+            let words = Indexed::length_in_words(&self.current.borrow());
             let round = (words + ((1 << 18) - 1)) & !((1 << 18) - 1);
             if round - words < round / 10 {
                 /// Move the contents from `current` to an aligned allocation, and push it to `pending`.
@@ -265,22 +450,39 @@ mod builder {
                     current: &mut C::Container,
                     round: usize,
                     pending: &mut VecDeque<Column<C>>,
+                    empty: Option<Column<C>>,
                 ) where
                     C: Columnar,
                 {
-                    let mut alloc = super::alloc_aligned_zeroed(round);
+                    let mut alloc = if let Some(Column::Align(mut alloc)) = empty {
+                        if alloc.capacity() >= round {
+                            unsafe { alloc.clear() };
+                            alloc.extend(std::iter::repeat(0).take(round));
+                            alloc
+                        } else {
+                            super::alloc_aligned_zeroed(round)
+                        }
+                    } else {
+                        super::alloc_aligned_zeroed(round)
+                    };
                     let writer = std::io::Cursor::new(bytemuck::cast_slice_mut(&mut alloc[..]));
-                    Sequence::write(writer, &current.borrow()).unwrap();
+                    Indexed::write(writer, &current.borrow()).unwrap();
                     pending.push_back(Column::Align(alloc));
                     current.clear();
                 }
 
-                outlined_align(&mut self.current, round, &mut self.pending);
+                outlined_align(
+                    &mut self.current,
+                    round,
+                    &mut self.pending,
+                    self.finished.take(),
+                );
             }
         }
     }
 
     impl<C: Columnar> Default for ColumnBuilder<C> {
+        #[inline(always)]
         fn default() -> Self {
             ColumnBuilder {
                 current: Default::default(),
@@ -309,24 +511,102 @@ mod builder {
         #[inline]
         fn finish(&mut self) -> Option<&mut Self::Container> {
             if !self.current.is_empty() {
-                self.pending
-                    .push_back(Column::Typed(std::mem::take(&mut self.current)));
+                use columnar::Container;
+                let words = Indexed::length_in_words(&self.current.borrow());
+                let mut alloc = if let Some(Column::Align(mut alloc)) = self.finished.take() {
+                    if alloc.capacity() >= words {
+                        unsafe { alloc.clear() };
+                        alloc.extend(std::iter::repeat(0).take(words));
+                        alloc
+                    } else {
+                        super::alloc_aligned_zeroed(words)
+                    }
+                } else {
+                    super::alloc_aligned_zeroed(words)
+                };
+                let writer = std::io::Cursor::new(bytemuck::cast_slice_mut(&mut alloc[..]));
+                Indexed::write(writer, &self.current.borrow()).unwrap();
+                self.pending.push_back(Column::Align(alloc));
+                self.current.clear();
             }
             self.finished = self.pending.pop_front();
             self.finished.as_mut()
         }
+
+        #[inline]
+        fn flush(&mut self) {
+            *self = Self::default();
+        }
     }
 
     impl<C: Columnar> LengthPreservingContainerBuilder for ColumnBuilder<C> where C::Container: Clone {}
+
+    // struct CompressedColumnBuilder<C: Columnar> {
+    //     /// The builder that we are using to build the columns.
+    //     builder: ColumnBuilder<C>,
+    //     /// Empty column
+    //     empty: Option<CompressedColumn<C>>,
+    //     /// The pending columns that we have built so far.
+    //     pending: VecDeque<CompressedColumn<C>>,
+    // }
+    //
+    // impl<C: Columnar> Default for CompressedColumnBuilder<C> {
+    //     fn default() -> Self {
+    //         CompressedColumnBuilder {
+    //             builder: ColumnBuilder::default(),
+    //             empty: None,
+    //             pending: VecDeque::new(),
+    //         }
+    //     }
+    // }
+    //
+    // impl<C: Columnar> ContainerBuilder for CompressedColumnBuilder<C>
+    // where
+    //     C::Container: Push<CompressedColumn<C>>,
+    // {
+    //     type Container = CompressedColumn<C>;
+    //
+    //     #[inline]
+    //     fn extract(&mut self) -> Option<&mut Self::Container> {
+    //         if let Some(column) = self.builder.extract() {}
+    //         if let Some(column) = self.pending.pop_front() {
+    //             self.empty = Some(column);
+    //             self.empty.as_mut()
+    //         } else {
+    //             None
+    //         }
+    //     }
+    //
+    //     #[inline]
+    //     fn finish(&mut self) -> Option<&mut Self::Container> {
+    //         if !self.builder.current.is_empty() {
+    //             let mut compressed = CompressedColumn::Uncompressed(Column::default());
+    //             compressed.compress(&mut Vec::new(), None);
+    //             self.pending.push_back(compressed);
+    //         }
+    //         self.pending.pop_front()
+    //     }
+    //
+    //     #[inline]
+    //     fn flush(&mut self) {
+    //         *self = Self::default();
+    //     }
+    // }
 }
 
 /// A batcher for columnar storage.
 pub type Col2ValBatcher<K, V, T, R> = MergeBatcher<
     Column<((K, V), T, R)>,
-    batcher::Chunker<TimelyStack<((K, V), T, R)>>,
-    ColMerger<(K, V), T, R>,
+    batcher::Chunker<ColumnBuilder<((K, V), T, R)>>,
+    ContainerMerger<ColumnBuilder<((K, V), T, R)>>,
 >;
 pub type Col2KeyBatcher<K, T, R> = Col2ValBatcher<K, (), T, R>;
+pub type Vec2Col2ValBatcher<K, V, T, R> = MergeBatcher<
+    Vec<((K, V), T, R)>,
+    batcher::Chunker<ColumnBuilder<((K, V), T, R)>>,
+    ContainerMerger<ColumnBuilder<((K, V), T, R)>>,
+>;
+pub type Vec2Col2KeyBatcher<K, T, R> = Vec2Col2ValBatcher<K, (), T, R>;
 
 /// An exchange function for columnar tuples of the form `((K, V), T, D)`. Rust has a hard
 /// time to figure out the lifetimes of the elements when specified as a closure, so we rather
@@ -345,8 +625,6 @@ where
 
 /// Types for consolidating, merging, and extracting columnar update collections.
 pub mod batcher {
-    use std::collections::VecDeque;
-
     use columnar::Columnar;
     use differential_dataflow::difference::Semigroup;
     use timely::Container;
@@ -355,34 +633,42 @@ pub mod batcher {
     use crate::containers::Column;
 
     #[derive(Default)]
-    pub struct Chunker<C> {
-        /// Buffer into which we'll consolidate.
-        ///
-        /// Also the buffer where we'll stage responses to `extract` and `finish`.
-        /// When these calls return, the buffer is available for reuse.
-        target: C,
-        /// Consolidated buffers ready to go.
-        ready: VecDeque<C>,
+    pub struct Chunker<CB> {
+        /// Builder to absorb sorted data.
+        builder: CB,
     }
 
-    impl<C: Container + Clone + 'static> ContainerBuilder for Chunker<C> {
-        type Container = C;
+    impl<CB: ContainerBuilder> ContainerBuilder for Chunker<CB> {
+        type Container = CB::Container;
 
+        #[inline(always)]
         fn extract(&mut self) -> Option<&mut Self::Container> {
-            if let Some(ready) = self.ready.pop_front() {
-                self.target = ready;
-                Some(&mut self.target)
-            } else {
-                None
+            self.builder.extract()
+        }
+
+        #[inline(always)]
+        fn finish(&mut self) -> Option<&mut Self::Container> {
+            self.builder.finish()
+        }
+    }
+
+    impl<'a, D, T, R, CB> PushInto<&'a mut Vec<(D, T, R)>> for Chunker<CB>
+    where
+        D: Columnar + Ord,
+        T: Columnar + Ord,
+        R: Columnar + Semigroup,
+        CB: ContainerBuilder + for<'b> PushInto<(&'b D, &'b T, &'b R)>,
+    {
+        fn push_into(&mut self, container: &'a mut Vec<(D, T, R)>) {
+            // Sort input data
+            differential_dataflow::consolidation::consolidate_updates(container);
+
+            for (data, time, diff) in container.drain(..) {
+                self.builder.push_into((&data, &time, &diff));
             }
         }
-
-        fn finish(&mut self) -> Option<&mut Self::Container> {
-            self.extract()
-        }
     }
-
-    impl<'a, D, T, R, C2> PushInto<&'a mut Column<(D, T, R)>> for Chunker<C2>
+    impl<'a, D, T, R, CB> PushInto<&'a mut Column<(D, T, R)>> for Chunker<CB>
     where
         D: Columnar,
         for<'b> D::Ref<'b>: Ord + Copy,
@@ -390,7 +676,7 @@ pub mod batcher {
         for<'b> T::Ref<'b>: Ord + Copy,
         R: Columnar + Semigroup + for<'b> Semigroup<R::Ref<'b>>,
         for<'b> R::Ref<'b>: Ord,
-        C2: Container + for<'b> PushInto<&'b (D, T, R)>,
+        CB: ContainerBuilder + for<'b, 'c> PushInto<(D::Ref<'b>, T::Ref<'b>, &'c R)>,
     {
         fn push_into(&mut self, container: &'a mut Column<(D, T, R)>) {
             // Sort input data
@@ -399,13 +685,9 @@ pub mod batcher {
             permutation.extend(container.drain());
             permutation.sort();
 
-            self.target.clear();
             // Iterate over the data, accumulating diffs for like keys.
             let mut iter = permutation.drain(..);
             if let Some((data, time, diff)) = iter.next() {
-                let mut owned_data = D::into_owned(data);
-                let mut owned_time = T::into_owned(time);
-
                 let mut prev_data = data;
                 let mut prev_time = time;
                 let mut prev_diff = <R as Columnar>::into_owned(diff);
@@ -415,11 +697,8 @@ pub mod batcher {
                         prev_diff.plus_equals(&diff);
                     } else {
                         if !prev_diff.is_zero() {
-                            D::copy_from(&mut owned_data, prev_data);
-                            T::copy_from(&mut owned_time, prev_time);
-                            let tuple = (owned_data, owned_time, prev_diff);
-                            self.target.push_into(&tuple);
-                            (owned_data, owned_time, prev_diff) = tuple;
+                            let tuple = (prev_data, prev_time, &prev_diff);
+                            self.builder.push_into(tuple);
                         }
                         prev_data = data;
                         prev_time = time;
@@ -428,16 +707,380 @@ pub mod batcher {
                 }
 
                 if !prev_diff.is_zero() {
-                    D::copy_from(&mut owned_data, prev_data);
-                    T::copy_from(&mut owned_time, prev_time);
-                    let tuple = (owned_data, owned_time, prev_diff);
-                    self.target.push_into(&tuple);
+                    let tuple = (prev_data, prev_time, &prev_diff);
+                    self.builder.push_into(tuple);
                 }
             }
+        }
+    }
+}
 
-            if !self.target.is_empty() {
-                self.ready.push_back(std::mem::take(&mut self.target));
+/// Implementations of `ContainerQueue` and `MergerChunk` for `Column` containers (columnar).
+pub mod merger {
+    use crate::containers::{Column, ColumnBuilder};
+    use columnar::{Columnar, Index, Len};
+    use differential_dataflow::difference::Semigroup;
+    use differential_dataflow::trace::implementations::merge_batcher::container::PushAndAdd;
+    use differential_dataflow::trace::implementations::merge_batcher::container::{
+        ContainerQueue, MergerChunk,
+    };
+    use mz_ore::region::Region;
+    use timely::Container;
+    use timely::progress::{Antichain, Timestamp, frontier::AntichainRef};
+
+    /// A queue for extracting items from a `Column` container.
+    pub struct ColumnQueue<'a, T: Columnar> {
+        list: <T::Container as columnar::Container<T>>::Borrowed<'a>,
+        head: usize,
+    }
+
+    impl<'a, D, T, R> ContainerQueue<'a, Column<(D, T, R)>> for ColumnQueue<'a, (D, T, R)>
+    where
+        D: for<'b> Columnar<Ref<'b>: Ord>,
+        T: for<'b> Columnar<Ref<'b>: Ord>,
+        R: Columnar,
+    {
+        type Item = <(D, T, R) as Columnar>::Ref<'a>;
+        type SelfGAT<'b> = ColumnQueue<'b, (D, T, R)>;
+        fn pop(&mut self) -> Self::Item {
+            self.head += 1;
+            self.list.get(self.head - 1)
+        }
+        fn is_empty(&mut self) -> bool {
+            use columnar::Len;
+            self.head == self.list.len()
+        }
+        fn cmp_heads<'b>(&mut self, other: &mut ColumnQueue<'b, (D, T, R)>) -> std::cmp::Ordering {
+            let (data1, time1, _) = self.peek();
+            let (data2, time2, _) = other.peek();
+
+            let data1 = D::reborrow(data1);
+            let time1 = T::reborrow(time1);
+            let data2 = D::reborrow(data2);
+            let time2 = T::reborrow(time2);
+
+            (data1, time1).cmp(&(data2, time2))
+        }
+        fn new(list: &'a mut Column<(D, T, R)>) -> ColumnQueue<'a, (D, T, R)> {
+            ColumnQueue {
+                list: list.borrow(),
+                head: 0,
             }
+        }
+    }
+
+    impl<'a, T: Columnar> ColumnQueue<'a, T> {
+        fn peek(&self) -> T::Ref<'a> {
+            self.list.get(self.head)
+        }
+    }
+
+    impl<D, T, R> MergerChunk for Column<(D, T, R)>
+    where
+        D: for<'a> Columnar<Ref<'a>: Ord>,
+        T: for<'a> Columnar<Ref<'a>: Ord> + Timestamp,
+        for<'a> <T as Columnar>::Ref<'a>: Copy,
+        R: Default + Semigroup + Columnar,
+    {
+        type ContainerQueue<'a> = ColumnQueue<'a, (D, T, R)>;
+        type TimeOwned = T;
+
+        fn time_kept(
+            (_, time, _): &Self::Item<'_>,
+            upper: &AntichainRef<Self::TimeOwned>,
+            frontier: &mut Antichain<Self::TimeOwned>,
+            stash: &mut T,
+        ) -> bool {
+            stash.copy_from(*time);
+            if upper.less_equal(stash) {
+                frontier.insert_ref(stash);
+                true
+            } else {
+                false
+            }
+        }
+
+        fn account(&self) -> (usize, usize, usize, usize) {
+            let (mut len, mut size, mut cap, mut count) = (0, 0, 0, 0);
+            match self {
+                Column::Typed((data, _time, _diff)) => {
+                    len += data.len();
+                    // use columnar::HeapSize;
+                    // let mut cb = |s, c| {
+                    //     size += s;
+                    //     cap += c;
+                    //     count += 1;
+                    // };
+                    // data.heap_size(&mut cb);
+                    // time.heap_size(&mut cb);
+                    // diff.heap_size(&mut cb);
+                }
+                Column::Bytes(bytes) => {
+                    len += self.borrow().len();
+                    size += bytes.len();
+                    cap += bytes.len();
+                    count += 1;
+                }
+                Column::Align(align) => {
+                    len += self.borrow().len();
+                    size += align.len() * 8; // 8 bytes per u64
+                    cap += align.len() * 8; // 8 bytes per u64
+                    count += 1;
+                }
+                Column::CompressedBlock(_, region) => {
+                    size += region.len() * 8; // 8 bytes per u64
+                    cap += region.len() * 8; // 8 bytes per u64
+                    count += 1;
+                }
+            }
+            (len, size, cap, count)
+        }
+    }
+    impl<D, T, R> PushAndAdd for ColumnBuilder<(D, T, R)>
+    where
+        D: Clone + 'static + Columnar,
+        T: Clone + 'static + timely::PartialOrder + Columnar,
+        R: Clone + 'static + Default + Semigroup + Columnar,
+    {
+        type Item<'a> = <(D, T, R) as Columnar>::Ref<'a>;
+        type DiffOwned = R;
+
+        fn push_and_add(
+            &mut self,
+            (data, time, diff1): Self::Item<'_>,
+            (_, _, diff2): Self::Item<'_>,
+            stash: &mut Self::DiffOwned,
+        ) {
+            stash.copy_from(diff1);
+            let stash2: R = R::into_owned(diff2);
+            stash.plus_equals(&stash2);
+            if !stash.is_zero() {
+                use timely::container::PushInto;
+                self.push_into((data, time, &*stash));
+            }
+        }
+
+        type State = (Vec<u8>, Column<(D, T, R)>);
+
+        fn unpack(&mut self, container: &mut Self::Container, state: &mut Self::State) {
+            container.decompress(&mut state.0, &mut state.1);
+        }
+
+        fn pack(&mut self, container: &mut Self::Container, state: &mut Self::State) {
+            container.compress(&mut state.0, &mut state.1);
+        }
+    }
+}
+
+pub use dd_builder::{ColKeyBuilder as ColumnKeyBuilder, OrdValBuilder as ColumnValBuilder};
+
+pub mod dd_builder {
+    use columnar::Columnar;
+    use differential_dataflow::IntoOwned;
+    use differential_dataflow::trace::Builder;
+    use differential_dataflow::trace::Description;
+    use differential_dataflow::trace::implementations::BatchContainer;
+    use differential_dataflow::trace::implementations::Layout;
+    use differential_dataflow::trace::implementations::TStack;
+    use differential_dataflow::trace::implementations::Update;
+    use differential_dataflow::trace::implementations::ord_neu::{
+        OrdValBatch, val_batch::OrdValStorage,
+    };
+    use differential_dataflow::trace::rc_blanket_impls::RcBuilder;
+    use timely::container::PushInto;
+
+    use crate::containers::Column;
+
+    pub type ColValBuilder<K, V, T, R> = RcBuilder<OrdValBuilder<TStack<((K, V), T, R)>>>;
+    pub type ColKeyBuilder<K, T, R> = RcBuilder<OrdValBuilder<TStack<((K, ()), T, R)>>>;
+
+    type OwnedKey<L> = <<L as Layout>::KeyContainer as BatchContainer>::Owned;
+    type ReadItemKey<'a, L> = <<L as Layout>::KeyContainer as BatchContainer>::ReadItem<'a>;
+    type OwnedVal<L> = <<L as Layout>::ValContainer as BatchContainer>::Owned;
+    type ReadItemVal<'a, L> = <<L as Layout>::ValContainer as BatchContainer>::ReadItem<'a>;
+    type OwnedTime<L> = <<L as Layout>::TimeContainer as BatchContainer>::Owned;
+    type ReadItemTime<'a, L> = <<L as Layout>::TimeContainer as BatchContainer>::ReadItem<'a>;
+    type OwnedDiff<L> = <<L as Layout>::DiffContainer as BatchContainer>::Owned;
+    type ReadItemDiff<'a, L> = <<L as Layout>::DiffContainer as BatchContainer>::ReadItem<'a>;
+
+    /// A builder for creating layers from unsorted update tuples.
+    pub struct OrdValBuilder<L: Layout> {
+        /// The in-progress result.
+        ///
+        /// This is public to allow container implementors to set and inspect their container.
+        pub result: OrdValStorage<L>,
+        singleton: Option<(<L::Target as Update>::Time, <L::Target as Update>::Diff)>,
+        /// Counts the number of singleton optimizations we performed.
+        ///
+        /// This number allows us to correctly gauge the total number of updates reflected in a batch,
+        /// even though `updates.len()` may be much shorter than this amount.
+        singletons: usize,
+    }
+
+    impl<L: Layout> OrdValBuilder<L> {
+        /// Pushes a single update, which may set `self.singleton` rather than push.
+        ///
+        /// This operation is meant to be equivalent to `self.results.updates.push((time, diff))`.
+        /// However, for "clever" reasons it does not do this. Instead, it looks for opportunities
+        /// to encode a singleton update with an "absert" update: repeating the most recent offset.
+        /// This otherwise invalid state encodes "look back one element".
+        ///
+        /// When `self.singleton` is `Some`, it means that we have seen one update and it matched the
+        /// previously pushed update exactly. In that case, we do not push the update into `updates`.
+        /// The update tuple is retained in `self.singleton` in case we see another update and need
+        /// to recover the singleton to push it into `updates` to join the second update.
+        fn push_update(
+            &mut self,
+            time: <L::Target as Update>::Time,
+            diff: <L::Target as Update>::Diff,
+        ) {
+            // If a just-pushed update exactly equals `(time, diff)` we can avoid pushing it.
+            let last_time = self.result.times.last();
+            let last_diff = self.result.diffs.last();
+            if last_time.map_or(false, |t| t == ReadItemTime::<L>::borrow_as(&time))
+                && last_diff.map_or(false, |d| d == ReadItemDiff::<L>::borrow_as(&diff))
+            {
+                assert!(self.singleton.is_none());
+                self.singleton = Some((time, diff));
+            } else {
+                // If we have pushed a single element, we need to copy it out to meet this one.
+                if let Some((time, diff)) = self.singleton.take() {
+                    self.result.times.push(time);
+                    self.result.diffs.push(diff);
+                }
+                self.result.times.push(time);
+                self.result.diffs.push(diff);
+            }
+        }
+    }
+
+    // The layout `L` determines the key, val, time, and diff types.
+    impl<L> Builder for OrdValBuilder<L>
+    where
+        L: Layout,
+        OwnedKey<L>: Columnar,
+        OwnedVal<L>: Columnar,
+        OwnedTime<L>: Columnar,
+        OwnedDiff<L>: Columnar,
+        // These two constraints seem .. like we could potentially replace by `Columnar::Ref<'a>`.
+        for<'a> L::KeyContainer: PushInto<&'a OwnedKey<L>>,
+        for<'a> L::ValContainer: PushInto<&'a OwnedVal<L>>,
+        for<'a> <L::TimeContainer as BatchContainer>::ReadItem<'a>:
+            IntoOwned<'a, Owned = <L::Target as Update>::Time>,
+        for<'a> <L::DiffContainer as BatchContainer>::ReadItem<'a>:
+            IntoOwned<'a, Owned = <L::Target as Update>::Diff>,
+    {
+        type Input = Column<((OwnedKey<L>, OwnedVal<L>), OwnedTime<L>, OwnedDiff<L>)>;
+        type Time = <L::Target as Update>::Time;
+        type Output = OrdValBatch<L>;
+
+        fn with_capacity(keys: usize, vals: usize, upds: usize) -> Self {
+            // We don't introduce zero offsets as they will be introduced by the first `push` call.
+            Self {
+                result: OrdValStorage {
+                    keys: L::KeyContainer::with_capacity(keys),
+                    keys_offs: L::OffsetContainer::with_capacity(keys + 1),
+                    vals: L::ValContainer::with_capacity(vals),
+                    vals_offs: L::OffsetContainer::with_capacity(vals + 1),
+                    times: L::TimeContainer::with_capacity(upds),
+                    diffs: L::DiffContainer::with_capacity(upds),
+                },
+                singleton: None,
+                singletons: 0,
+            }
+        }
+
+        #[inline]
+        fn push(&mut self, chunk: &mut Self::Input) {
+            use timely::Container;
+
+            // NB: Maintaining owned key and val across iterations to track the "last", which we clone into,
+            // is somewhat appealing from an ease point of view. Might still allocate, do work we don't need,
+            // but avoids e.g. calls into `last()` and breaks horrid trait requirements.
+            // Owned key and val would need to be members of `self`, as this method can be called multiple times,
+            // and we need to correctly cache last for reasons of correctness, not just performance.
+
+            let mut owned_key = None;
+            let mut owned_val = None;
+
+            for ((key, val), time, diff) in chunk.drain() {
+                let key = if let Some(owned_key) = owned_key.as_mut() {
+                    OwnedKey::<L>::copy_from(owned_key, key);
+                    owned_key
+                } else {
+                    owned_key.insert(OwnedKey::<L>::into_owned(key))
+                };
+                let val = if let Some(owned_val) = owned_val.as_mut() {
+                    OwnedVal::<L>::copy_from(owned_val, val);
+                    owned_val
+                } else {
+                    owned_val.insert(OwnedVal::<L>::into_owned(val))
+                };
+
+                let time = OwnedTime::<L>::into_owned(time);
+                let diff = OwnedDiff::<L>::into_owned(diff);
+
+                // Perhaps this is a continuation of an already received key.
+                let last_key = self.result.keys.last();
+                if last_key.map_or(false, |k| ReadItemKey::<L>::borrow_as(key).eq(&k)) {
+                    // Perhaps this is a continuation of an already received value.
+                    let last_val = self.result.vals.last();
+                    if last_val.map_or(false, |v| ReadItemVal::<L>::borrow_as(val).eq(&v)) {
+                        self.push_update(time, diff);
+                    } else {
+                        // New value; complete representation of prior value.
+                        self.result.vals_offs.push(self.result.times.len());
+                        if self.singleton.take().is_some() {
+                            self.singletons += 1;
+                        }
+                        self.push_update(time, diff);
+                        self.result.vals.push(val);
+                    }
+                } else {
+                    // New key; complete representation of prior key.
+                    self.result.vals_offs.push(self.result.times.len());
+                    if self.singleton.take().is_some() {
+                        self.singletons += 1;
+                    }
+                    self.result.keys_offs.push(self.result.vals.len());
+                    self.push_update(time, diff);
+                    self.result.vals.push(val);
+                    self.result.keys.push(key);
+                }
+            }
+        }
+
+        #[inline(never)]
+        fn done(mut self, description: Description<Self::Time>) -> OrdValBatch<L> {
+            // Record the final offsets
+            self.result.vals_offs.push(self.result.times.len());
+            // Remove any pending singleton, and if it was set increment our count.
+            if self.singleton.take().is_some() {
+                self.singletons += 1;
+            }
+            self.result.keys_offs.push(self.result.vals.len());
+            OrdValBatch {
+                updates: self.result.times.len() + self.singletons,
+                storage: self.result,
+                description,
+            }
+        }
+
+        fn seal(
+            chain: &mut Vec<Self::Input>,
+            description: Description<Self::Time>,
+        ) -> Self::Output {
+            // let (keys, vals, upds) = Self::Input::key_val_upd_counts(&chain[..]);
+            // let mut builder = Self::with_capacity(keys, vals, upds);
+            let mut builder = Self::with_capacity(0, 0, 0);
+            let mut buffer = Vec::new();
+            let mut empty = Column::default();
+            for mut chunk in chain.drain(..) {
+                chunk.decompress(&mut buffer, &mut empty);
+                builder.push(&mut chunk);
+            }
+
+            builder.done(description)
         }
     }
 }
@@ -489,7 +1132,8 @@ mod tests {
     /// Produce some bytes that are in columnar format.
     fn raw_columnar_bytes() -> Vec<u8> {
         let mut raw = Vec::new();
-        raw.extend(12_u64.to_le_bytes()); // length
+        raw.extend(16_u64.to_le_bytes()); // length
+        raw.extend(28_u64.to_le_bytes()); // length
         raw.extend(1_i32.to_le_bytes());
         raw.extend(2_i32.to_le_bytes());
         raw.extend(3_i32.to_le_bytes());
