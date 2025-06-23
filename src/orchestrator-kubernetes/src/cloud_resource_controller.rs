@@ -11,16 +11,19 @@
 
 use std::collections::BTreeMap;
 use std::sync::Arc;
+use std::time::Duration;
 
 use async_trait::async_trait;
 use chrono::Utc;
-use futures::StreamExt;
 use futures::stream::BoxStream;
+use futures::{StreamExt, TryFutureExt};
 use kube::api::{DeleteParams, ListParams, ObjectMeta, Patch, PatchParams};
 use kube::runtime::{WatchStreamExt, watcher};
 use kube::{Api, ResourceExt};
 use maplit::btreemap;
+use mz_ore::retry::Retry;
 use mz_repr::CatalogItemId;
+use tracing::warn;
 
 use mz_cloud_resources::crd::vpc_endpoint::v1::{
     VpcEndpoint, VpcEndpointSpec, VpcEndpointState, VpcEndpointStatus,
@@ -62,36 +65,47 @@ impl CloudResourceController for KubernetesOrchestrator {
             },
             status: None,
         };
-        self.vpc_endpoint_api
-            .patch(
+
+        call_api(&self.vpc_endpoint_api, async |api| {
+            let endpoint = vpc_endpoint.clone();
+            api.patch(
                 &name,
                 &PatchParams::apply(FIELD_MANAGER).force(),
-                &Patch::Apply(vpc_endpoint),
+                &Patch::Apply(endpoint),
             )
-            .await?;
+            .await
+        })
+        .await?;
+
         Ok(())
     }
 
     async fn delete_vpc_endpoint(&self, id: CatalogItemId) -> Result<(), anyhow::Error> {
-        match self
-            .vpc_endpoint_api
-            .delete(
-                &mz_cloud_resources::vpc_endpoint_name(id),
-                &DeleteParams::default(),
-            )
-            .await
-        {
-            Ok(_) => Ok(()),
-            // Ignore already deleted endpoints.
-            Err(kube::Error::Api(resp)) if resp.code == 404 => Ok(()),
-            Err(e) => Err(e.into()),
-        }
+        call_api(&self.vpc_endpoint_api, async |api| {
+            match api
+                .delete(
+                    &mz_cloud_resources::vpc_endpoint_name(id),
+                    &DeleteParams::default(),
+                )
+                .await
+            {
+                Ok(_) => Ok(()),
+                // Ignore already deleted endpoints.
+                Err(kube::Error::Api(resp)) if resp.code == 404 => Ok(()),
+                Err(e) => Err(e.into()),
+            }
+        })
+        .await
     }
 
     async fn list_vpc_endpoints(
         &self,
     ) -> Result<BTreeMap<CatalogItemId, VpcEndpointStatus>, anyhow::Error> {
-        let objects = self.vpc_endpoint_api.list(&ListParams::default()).await?;
+        let objects = call_api(&self.vpc_endpoint_api, async |api| {
+            api.list(&ListParams::default()).await
+        })
+        .await?;
+
         let mut endpoints = BTreeMap::new();
         for object in objects {
             let id = match mz_cloud_resources::id_from_vpc_endpoint_name(&object.name_any()) {
@@ -189,7 +203,21 @@ impl KubernetesResourceReader {
 impl CloudResourceReader for KubernetesResourceReader {
     async fn read(&self, id: CatalogItemId) -> Result<VpcEndpointStatus, anyhow::Error> {
         let name = mz_cloud_resources::vpc_endpoint_name(id);
-        let endpoint = self.vpc_endpoint_api.get(&name).await?;
+        let endpoint = call_api(&self.vpc_endpoint_api, |api| api.get(&name)).await?;
         Ok(endpoint.status.unwrap_or_default())
     }
+}
+
+/// Helper for calling a kube API with (limited) retry.
+async fn call_api<'a, K, F, U, T, E>(api: &'a Api<K>, f: F) -> Result<T, E>
+where
+    F: Fn(&'a Api<K>) -> U + 'a,
+    U: Future<Output = Result<T, E>>,
+    E: std::fmt::Display,
+{
+    Retry::default()
+        .clamp_backoff(Duration::from_secs(10))
+        .max_duration(Duration::from_secs(60 * 10))
+        .retry_async(|_| f(api).inspect_err(|e| warn!("VPC endpoint API call failed: {e}")))
+        .await
 }
