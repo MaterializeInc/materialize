@@ -837,8 +837,8 @@ impl<'a> Runner<'a> {
             .batch_execute("CREATE DATABASE materialize")
             .await?;
 
-        // Ensure quickstart cluster exists with one replica of size '1'. We don't
-        // destroy the existing quickstart cluster replica if it exists, as turning
+        // Ensure quickstart cluster exists with one replica of size `self.config.replica_size`.
+        // We don't destroy the existing quickstart cluster replica if it exists, as turning
         // on a cluster replica is exceptionally slow.
         let mut needs_default_cluster = true;
         for row in inner
@@ -874,7 +874,7 @@ impl<'a> Runner<'a> {
         {
             let name: &str = row.get("name");
             let size: &str = row.get("size");
-            if name == "r1" && size == self.config.replicas.to_string() {
+            if name == "r1" && size == self.config.replica_size.to_string() {
                 needs_default_replica = false;
             } else {
                 inner
@@ -888,7 +888,7 @@ impl<'a> Runner<'a> {
                 .system_client
                 .batch_execute(&format!(
                     "CREATE CLUSTER REPLICA quickstart.r1 SIZE '{}'",
-                    self.config.replicas
+                    self.config.replica_size
                 ))
                 .await?;
         }
@@ -915,7 +915,7 @@ impl<'a> Runner<'a> {
             .batch_execute("GRANT CREATE ON CLUSTER quickstart TO materialize")
             .await?;
 
-        // Some sqllogic tests require more than the default amount of tables, so we increase the
+        // Some sqllogictests require more than the default amount of tables, so we increase the
         // limit for all tests.
         inner
             .system_client
@@ -1140,27 +1140,27 @@ impl<'a> RunnerInner<'a> {
             now,
             environment_id,
             cluster_replica_sizes: ClusterReplicaSizeMap::for_tests(),
-            bootstrap_default_cluster_replica_size: config.replicas.to_string(),
+            bootstrap_default_cluster_replica_size: config.replica_size.to_string(),
             bootstrap_default_cluster_replication_factor: 1,
             bootstrap_builtin_system_cluster_config: BootstrapBuiltinClusterConfig {
                 replication_factor: SYSTEM_CLUSTER_DEFAULT_REPLICATION_FACTOR,
-                size: config.replicas.to_string(),
+                size: config.replica_size.to_string(),
             },
             bootstrap_builtin_catalog_server_cluster_config: BootstrapBuiltinClusterConfig {
                 replication_factor: CATALOG_SERVER_CLUSTER_DEFAULT_REPLICATION_FACTOR,
-                size: config.replicas.to_string(),
+                size: config.replica_size.to_string(),
             },
             bootstrap_builtin_probe_cluster_config: BootstrapBuiltinClusterConfig {
                 replication_factor: PROBE_CLUSTER_DEFAULT_REPLICATION_FACTOR,
-                size: config.replicas.to_string(),
+                size: config.replica_size.to_string(),
             },
             bootstrap_builtin_support_cluster_config: BootstrapBuiltinClusterConfig {
                 replication_factor: SUPPORT_CLUSTER_DEFAULT_REPLICATION_FACTOR,
-                size: config.replicas.to_string(),
+                size: config.replica_size.to_string(),
             },
             bootstrap_builtin_analytics_cluster_config: BootstrapBuiltinClusterConfig {
                 replication_factor: ANALYTICS_CLUSTER_DEFAULT_REPLICATION_FACTOR,
-                size: config.replicas.to_string(),
+                size: config.replica_size.to_string(),
             },
             system_parameter_defaults: {
                 let mut params = BTreeMap::new();
@@ -1910,10 +1910,10 @@ pub struct RunConfig<'a> {
     pub system_parameter_defaults: BTreeMap<String, String>,
     /// Persist state is handled specially because:
     /// - Persist background workers do not necessarily shut down immediately once the server is
-    ///   shut down, and may panic if their storage is delete out from under them.
+    ///   shut down, and may panic if their storage is deleted out from under them.
     /// - It's safe for different databases to reference the same state: all data is scoped by UUID.
     pub persist_dir: TempDir,
-    pub replicas: usize,
+    pub replica_size: usize,
 }
 
 fn print_record(config: &RunConfig<'_>, record: &Record) {
