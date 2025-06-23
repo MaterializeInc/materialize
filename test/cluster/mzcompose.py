@@ -5680,7 +5680,7 @@ def workflow_test_lgalloc_limiter(c: Composition) -> None:
             user="mz_system",
         )
         setup_workload()
-        c.up("clusterd1")
+        c.up("clusterd1", wait=False)
 
         for _ in range(100):
             time.sleep(1)
