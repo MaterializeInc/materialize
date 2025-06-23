@@ -39,3 +39,11 @@ To configure the password for the internal `mz_system` user, add an
 Once password authentication is enabled, only the `mz_system` user will be initially available. This user is used by the Materialize Operator for upgrades and maintenance tasks and can also be used to create additional users.
 
 See [CREATE ROLE](/sql/create-role) for details on creating additional users.
+
+
+#### Enabling RBAC
+By default, role based authorization checks are not enabled when turning on password authentication. To turn on RBAC you can set the system parater
+`enable_rbac_checks` to `on`. This should be done as mz_system, or provided via environmentdExtraArgs in the environment CR.
+`ALTER SYSTEM SET enable_rbac_checks = 'on'`
+
+See [CREATE ROLE](/sql/rbac) for details on role based authorization.
