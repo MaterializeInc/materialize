@@ -82,6 +82,7 @@ def run_sqllogictest(
     c: Composition, parser: WorkflowArgumentParser, run_config: SltRunConfig
 ) -> None:
     parser.add_argument("--replica-size", default=2, type=int)
+    parser.add_argument("--replicas", default=1, type=int)
     args = parser.parse_args()
 
     c.up(c.metadata_store())
@@ -97,10 +98,18 @@ def run_sqllogictest(
 
         def process(file: str) -> None:
             nonlocal j
+
+            if "singlereplica_" in file and args.replicas > 1:
+                return
+
             # Since we run multiple commands, generate a unique junit report for each
             junit_report_path = ci_util.junit_report_filename(f"{c.name}-{i}-{j}")
             cmd = step.to_command(
-                file, args.replica_size, junit_report_path, c.metadata_store()
+                file,
+                args.replicas,
+                args.replica_size,
+                junit_report_path,
+                c.metadata_store(),
             )
             try:
                 c.run(container_name, *cmd)
@@ -134,6 +143,7 @@ class SltRunStepConfig:
     def to_command(
         self,
         file: str,
+        replicas: int,
         replica_size: int,
         junit_report_path: Path,
         metadata_store: str,
@@ -143,6 +153,7 @@ class SltRunStepConfig:
             f"--junit-report={junit_report_path}",
             f"--postgres-url=postgres://root@{metadata_store}:{metadata_store_port}",
             f"--replica-size={replica_size}",
+            f"--replicas={replicas}",
         ]
         command = [
             "sqllogictest",
@@ -210,7 +221,7 @@ def compileFastSltConfig() -> SltRunConfig:
         "test/sqllogictest/array_fill.slt",
         "test/sqllogictest/arrays.slt",
         "test/sqllogictest/as_of.slt",
-        "test/sqllogictest/audit_log.slt",
+        "test/sqllogictest/singlereplica_audit_log.slt",
         "test/sqllogictest/boolean.slt",
         "test/sqllogictest/bytea.slt",
         "test/sqllogictest/cast.slt",
@@ -535,7 +546,7 @@ def compileFastSltConfig() -> SltRunConfig:
         "test/sqllogictest/postgres/subselect.slt",
         "test/sqllogictest/postgres/pgcrypto/*.slt",
         "test/sqllogictest/introspection/cluster_log_compaction.slt",
-        "test/sqllogictest/introspection/attribution_sources.slt",
+        "test/sqllogictest/introspection/singlereplica_attribution_sources.slt",
     }
 
     tests = file_util.resolve_paths_with_wildcard(tests)
@@ -583,7 +594,7 @@ def compileSlowSltConfig() -> SltRunConfig:
         "test/sqllogictest/distinct_arrangements.slt",
         "test/sqllogictest/github-3374.slt",
         "test/sqllogictest/introspection/cluster_log_compaction.slt",
-        "test/sqllogictest/introspection/attribution_sources.slt",
+        "test/sqllogictest/introspection/singlereplica_attribution_sources.slt",
         "test/sqllogictest/timedomain.slt",
         "test/sqllogictest/transactions.slt",
         # depends on unmaterializable functions
@@ -592,7 +603,7 @@ def compileSlowSltConfig() -> SltRunConfig:
         "test/sqllogictest/regtype.slt",
         # different outputs:
         # seems expected for audit log to be different
-        "test/sqllogictest/audit_log.slt",
+        "test/sqllogictest/singlereplica_audit_log.slt",
         # different indexes auto-created
         "test/sqllogictest/cluster.slt",
         # different indexes auto-created

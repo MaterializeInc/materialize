@@ -862,34 +862,61 @@ impl<'a> Runner<'a> {
                 .batch_execute("CREATE CLUSTER quickstart REPLICAS ()")
                 .await?;
         }
-        let mut needs_default_replica = true;
-        for row in inner
+        let mut needs_default_replica = false;
+        let rows = inner
             .system_client
             .query(
                 "SELECT name, size FROM mz_cluster_replicas
-                 WHERE cluster_id = (SELECT id FROM mz_clusters WHERE name = 'quickstart')",
+                 WHERE cluster_id = (SELECT id FROM mz_clusters WHERE name = 'quickstart')
+                 ORDER BY name",
                 &[],
             )
-            .await?
-        {
-            let name: &str = row.get("name");
-            let size: &str = row.get("size");
-            if name == "r1" && size == self.config.replica_size.to_string() {
-                needs_default_replica = false;
-            } else {
+            .await?;
+        if rows.len() != self.config.replicas {
+            needs_default_replica = true;
+        } else {
+            for (i, row) in rows.iter().enumerate() {
+                let name: &str = row.get("name");
+                let size: &str = row.get("size");
+                if name != format!("r{i}") || size != self.config.replica_size.to_string() {
+                    needs_default_replica = true;
+                    break;
+                }
+            }
+        }
+
+        if needs_default_replica {
+            inner
+                .system_client
+                .batch_execute("ALTER CLUSTER quickstart SET (MANAGED = false)")
+                .await?;
+            for row in inner
+                .system_client
+                .query(
+                    "SELECT name FROM mz_cluster_replicas
+                     WHERE cluster_id = (SELECT id FROM mz_clusters WHERE name = 'quickstart')",
+                    &[],
+                )
+                .await?
+            {
+                let name: &str = row.get("name");
                 inner
                     .system_client
                     .batch_execute(&format!("DROP CLUSTER REPLICA quickstart.{}", name))
                     .await?;
             }
-        }
-        if needs_default_replica {
+            for i in 1..=self.config.replicas {
+                inner
+                    .system_client
+                    .batch_execute(&format!(
+                        "CREATE CLUSTER REPLICA quickstart.r{i} SIZE '{}'",
+                        self.config.replica_size
+                    ))
+                    .await?;
+            }
             inner
                 .system_client
-                .batch_execute(&format!(
-                    "CREATE CLUSTER REPLICA quickstart.r1 SIZE '{}'",
-                    self.config.replica_size
-                ))
+                .batch_execute("ALTER CLUSTER quickstart SET (MANAGED = true)")
                 .await?;
         }
 
@@ -1141,7 +1168,10 @@ impl<'a> RunnerInner<'a> {
             environment_id,
             cluster_replica_sizes: ClusterReplicaSizeMap::for_tests(),
             bootstrap_default_cluster_replica_size: config.replica_size.to_string(),
-            bootstrap_default_cluster_replication_factor: 1,
+            bootstrap_default_cluster_replication_factor: config
+                .replicas
+                .try_into()
+                .expect("replicas must fit"),
             bootstrap_builtin_system_cluster_config: BootstrapBuiltinClusterConfig {
                 replication_factor: SYSTEM_CLUSTER_DEFAULT_REPLICATION_FACTOR,
                 size: config.replica_size.to_string(),
@@ -1913,6 +1943,7 @@ pub struct RunConfig<'a> {
     ///   shut down, and may panic if their storage is deleted out from under them.
     /// - It's safe for different databases to reference the same state: all data is scoped by UUID.
     pub persist_dir: TempDir,
+    pub replicas: usize,
     pub replica_size: usize,
 }
 
