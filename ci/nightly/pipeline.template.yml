@@ -1472,7 +1472,8 @@ steps:
       - id: rqg-db3-joins
         label: "RQG dbt3-joins workload"
         depends_on: build-aarch64
-        timeout_in_minutes: 60
+        # Some queries run very slow on Postgres, set a higher timeout to give them a chance to finish
+        timeout_in_minutes: 120
         agents:
           # Runs into timeout/OoM on small agents
           queue: hetzner-aarch64-8cpu-16gb
