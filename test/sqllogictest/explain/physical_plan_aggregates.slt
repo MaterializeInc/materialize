@@ -587,8 +587,7 @@ Explained Query:
       ArrangeBy
         input_key=[#0]
         raw=false
-        arrangements[0]={ key=[#0], permutation=id, thinning=(#1) }
-        arrangements[1]={ key=[#0, #1{"?column?"}], permutation=id, thinning=() }
+        arrangements[0]={ key=[#0, #1{"?column?"}], permutation=id, thinning=() }
         types=[integer, text[]]
         Reduce::Basic
           aggr=(0, array_agg[order_by=[#0 asc nulls_last]](row(array[#1{b}], #1{b})))
@@ -602,8 +601,7 @@ Explained Query:
       ArrangeBy
         input_key=[#0]
         raw=false
-        arrangements[0]={ key=[#0], permutation=id, thinning=(#1) }
-        arrangements[1]={ key=[#0, #1{"?column?"}], permutation=id, thinning=() }
+        arrangements[0]={ key=[#0, #1{"?column?"}], permutation=id, thinning=() }
         types=[integer, text[]]
         Reduce::Basic
           aggr=(0, array_agg[order_by=[#0 desc nulls_first]](row(array[#1{b}], #1{b})))
