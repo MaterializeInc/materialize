@@ -313,6 +313,9 @@ def get_variable_system_parameters(
         VariableSystemParameter(
             "persist_blob_cache_scale_with_threads", "true", ["true", "false"]
         ),
+        VariableSystemParameter(
+            "persist_validate_part_lower_bounds_on_read", "true", ["true", "false"]
+        ),
         VariableSystemParameter("pg_offset_known_interval", "1s", ["100ms", "1s"]),
         VariableSystemParameter(
             "statement_logging_default_sample_rate", "0.01", ["0", "0.01"]
