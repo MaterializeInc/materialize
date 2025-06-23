@@ -66,6 +66,7 @@ mod container {
     use columnar::bytes::{EncodeDecode, Indexed};
     use columnar::common::IterOwn;
     use columnar::{Clear, FromBytes, Index, Len};
+    use mz_ore::cast::CastFrom;
     use mz_ore::region::Region;
     use timely::Container;
     use timely::bytes::arc::Bytes;
@@ -87,6 +88,7 @@ mod container {
         /// Reasons could include misalignment, cloning of data, or wanting
         /// to release the `Bytes` as a scarce resource.
         Align(Region<u64>),
+        CompressedBlock(usize, Vec<u8>),
     }
 
     impl<C: Columnar> Column<C> {
@@ -105,11 +107,10 @@ mod container {
                         &mut Indexed::decode(a),
                     )
                 }
+                _ => {
+                    panic!("Compressed columns cannot be borrowed directly");
+                }
             }
-        }
-        #[inline(always)]
-        pub fn get(&self, index: usize) -> C::Ref<'_> {
-            self.borrow().get(index)
         }
     }
 
@@ -141,6 +142,15 @@ mod container {
                     alloc[..a.len()].copy_from_slice(a);
                     Column::Align(alloc)
                 }
+                Column::CompressedBlock(len, region) => {
+                    // let mut alloc = super::alloc_aligned_zeroed(*len);
+                    // alloc[..*len].copy_from_slice(region);
+                    Column::CompressedBlock(*len, region.clone())
+                } // Column::CompressedFrame(length_in_words, region) => {
+                  //     let mut alloc = super::alloc_aligned_zeroed(region.len());
+                  //     alloc[..region.len()].copy_from_slice(region);
+                  //     Column::CompressedFrame(*length_in_words, alloc)
+                  // }
             }
         }
     }
@@ -159,7 +169,10 @@ mod container {
         fn clear(&mut self) {
             match self {
                 Column::Typed(t) => t.clear(),
-                Column::Bytes(_) | Column::Align(_) => *self = Column::Typed(Default::default()),
+                Column::Bytes(_)
+                | Column::Align(_)
+                // | Column::CompressedBlock(_, _)
+                | Column::CompressedBlock(_, _) => *self = Column::Typed(Default::default()),
             }
         }
 
@@ -197,7 +210,10 @@ mod container {
                         *self = Column::Align(alloc);
                     }
                 }
-                Column::Align(_) | Column::Bytes(_) => {
+                Column::Align(_)
+                | Column::Bytes(_)
+                // | Column::CompressedBlock(_, _)
+                | Column::CompressedBlock(_, _) => {
                     // We really oughtn't be calling this in this case.
                     // We could convert to owned, but need more constraints on `C`.
                     unimplemented!("Pushing into Column::Bytes without first clearing");
@@ -230,6 +246,8 @@ mod container {
                 Column::Typed(t) => Indexed::length_in_bytes(&t.borrow()),
                 Column::Bytes(b) => b.len(),
                 Column::Align(a) => 8 * a.len(),
+                Column::CompressedBlock(len, region) => *len,
+                // Column::CompressedFrame(len, region) => *len,
             }
         }
 
@@ -238,6 +256,153 @@ mod container {
                 Column::Typed(t) => Indexed::write(writer, &t.borrow()).unwrap(),
                 Column::Bytes(b) => writer.write_all(b).unwrap(),
                 Column::Align(a) => writer.write_all(bytemuck::cast_slice(a)).unwrap(),
+                Column::CompressedBlock(_, _) => {
+                    panic!("Cannot convert compressed columns into bytes directly");
+                }
+            }
+        }
+    }
+
+    impl<C: Columnar> Column<C> {
+        fn get_region(size: usize, empty: &mut Column<C>) -> Vec<u8> {
+            let mut region = match empty {
+                Column::CompressedBlock(_, region) if region.capacity() >= size => {
+                    region.clear();
+                    std::mem::take(region)
+                }
+                _ => Vec::with_capacity(size),
+            };
+            region.resize(size, 0);
+            region
+        }
+
+        pub fn compress(&mut self, buffer: &mut Vec<u8>, empty: &mut Column<C>) {
+            match self {
+                Column::Align(align) => {
+                    *self = Self::compress_aligned(align, buffer, empty);
+                }
+                Column::Bytes(_) => {}
+                // Column::Typed(typed) => *self = Self::compress_columnar(&typed, buffer, empty),
+                Column::Typed(_) => {}
+                Column::CompressedBlock(_, _) => {} // Column::CompressedFrame(_, _) => {}
+            }
+        }
+
+        fn compress_aligned(align: &[u64], buffer: &mut Vec<u8>, empty: &mut Column<C>) -> Self {
+            let max_size = lz4_flex::block::get_maximum_output_size(align.len() * 8);
+            buffer.clear();
+            if buffer.capacity() < max_size {
+                buffer.reserve(max_size - buffer.len());
+            }
+            buffer.resize(max_size, 0);
+            let len = lz4_flex::compress_into(bytemuck::cast_slice(&*align), buffer).unwrap();
+            let mut region = Self::get_region(len, empty);
+
+            region[..len].copy_from_slice(&buffer[..len]);
+            assert_eq!(
+                bytemuck::cast_slice::<_, u8>(&*align),
+                &*lz4_flex::decompress(&region[..len], max_size + 4).unwrap()
+            );
+            println!(
+                "CompressedBlock: {} bytes into {len} bytes",
+                align.len() * 8
+            );
+            Column::CompressedBlock(align.len() * 8, region)
+        }
+
+        // pub fn compress_columnar(
+        //     container: &C::Container,
+        //     buffer: &mut Vec<u8>,
+        //     empty: &mut Column<C>,
+        // ) -> Self {
+        //     let length_in_bytes = Indexed::length_in_bytes(&t.borrow());
+        //     let mut alloc = super::alloc_aligned_zeroed(length_in_bytes);
+        //     let writer = std::io::Cursor::new(bytemuck::cast_slice_mut(&mut alloc[..]));
+        //     Indexed::write(writer, &t.borrow()).unwrap();
+        //     *self = Column::Align(alloc);
+        //     let length_in_bytes = Indexed::length_in_bytes(&container.borrow());
+        //     let max_size = lz4_flex::block::get_maximum_output_size(length_in_bytes);
+        //     if buffer.capacity() < max_size {
+        //         buffer.reserve(max_size - buffer.len());
+        //     }
+        //     buffer.clear();
+        //
+        //     let mut writer = lz4_flex::frame::FrameEncoder::new(std::io::Cursor::new(&mut *buffer));
+        //     Indexed::write(&mut writer, &container.borrow()).unwrap();
+        //     let len = usize::cast_from(writer.finish().unwrap().position());
+        //     let mut region = Self::get_region(len, empty);
+        //     region[..len].copy_from_slice(&buffer[..len]);
+        //     {
+        //         let reader = std::io::Cursor::new(&region[..]);
+        //         let mut writer2 = std::io::Cursor::new(Vec::new());
+        //         let mut reader = lz4_flex::frame::FrameDecoder::new(reader);
+        //         std::io::copy(&mut reader, &mut writer2).expect("Failed to decompress frame");
+        //         assert_eq!(&**buffer, &*writer2.get_ref());
+        //         println!("CompressedFrame: {length_in_bytes} bytes into {len} bytes");
+        //     }
+        //     Self::CompressedFrame(length_in_bytes, region)
+        // }
+
+        pub fn decompress(&mut self, _buffer: &mut Vec<u8>, empty: &mut Column<C>) {
+            match self {
+                Column::Typed(_) | Column::Bytes(_) | Column::Align(_) => {}
+                Column::CompressedBlock(len, region) => {
+                    println!(
+                        "Decompressing CompressedBlock: {} bytes into {len} bytes",
+                        region.len()
+                    );
+                    let region = std::mem::take(region);
+                    // let (length_in_bytes, bytes) =
+                    //     lz4_flex::block::uncompressed_size(&region[..*len]).unwrap();
+                    let length_in_words = (*len + 7) / 8;
+                    let mut target_region = match empty {
+                        Column::Align(alloc) => {
+                            if alloc.capacity() >= length_in_words {
+                                unsafe { alloc.clear() };
+                                alloc.extend(std::iter::repeat(0).take(length_in_words));
+                                std::mem::take(alloc)
+                            } else {
+                                super::alloc_aligned_zeroed(length_in_words)
+                            }
+                        }
+                        _ => super::alloc_aligned_zeroed(length_in_words),
+                    };
+                    lz4_flex::block::decompress_into(
+                        &region,
+                        &mut bytemuck::cast_slice_mut(&mut target_region),
+                    )
+                    .expect("Failed to decompress block");
+                    *self = Column::Align(target_region);
+                    self.borrow();
+                    *empty = Column::CompressedBlock(0, region);
+                } // Column::CompressedFrame(length_in_bytes, region) => {
+                  //     println!(
+                  //         "Decompressing CompressedFrame: {} bytes into {length_in_bytes} bytes",
+                  //         region.len()
+                  //     );
+                  //     let length_in_words = *length_in_bytes / 8;
+                  //     let region = std::mem::take(region);
+                  //     let mut target_region = match empty {
+                  //         Column::Align(alloc) => {
+                  //             if alloc.capacity() >= length_in_words {
+                  //                 unsafe { alloc.clear() };
+                  //                 alloc.extend(std::iter::repeat(0).take(length_in_words));
+                  //                 std::mem::take(alloc)
+                  //             } else {
+                  //                 super::alloc_aligned_zeroed(length_in_words)
+                  //             }
+                  //         }
+                  //         _ => super::alloc_aligned_zeroed(length_in_words),
+                  //     };
+                  //     let reader = std::io::Cursor::new(&region[..]);
+                  //     let mut reader = lz4_flex::frame::FrameDecoder::new(reader);
+                  //     let mut writer =
+                  //         std::io::Cursor::new(bytemuck::cast_slice_mut(&mut target_region));
+                  //     std::io::copy(&mut reader, &mut writer).expect("Failed to decompress frame");
+                  //     *self = Column::Align(target_region);
+                  //     self.borrow();
+                  //     *empty = Column::CompressedBlock(0, region);
+                  // }
             }
         }
     }
@@ -375,6 +540,58 @@ mod builder {
     }
 
     impl<C: Columnar> LengthPreservingContainerBuilder for ColumnBuilder<C> where C::Container: Clone {}
+
+    // struct CompressedColumnBuilder<C: Columnar> {
+    //     /// The builder that we are using to build the columns.
+    //     builder: ColumnBuilder<C>,
+    //     /// Empty column
+    //     empty: Option<CompressedColumn<C>>,
+    //     /// The pending columns that we have built so far.
+    //     pending: VecDeque<CompressedColumn<C>>,
+    // }
+    //
+    // impl<C: Columnar> Default for CompressedColumnBuilder<C> {
+    //     fn default() -> Self {
+    //         CompressedColumnBuilder {
+    //             builder: ColumnBuilder::default(),
+    //             empty: None,
+    //             pending: VecDeque::new(),
+    //         }
+    //     }
+    // }
+    //
+    // impl<C: Columnar> ContainerBuilder for CompressedColumnBuilder<C>
+    // where
+    //     C::Container: Push<CompressedColumn<C>>,
+    // {
+    //     type Container = CompressedColumn<C>;
+    //
+    //     #[inline]
+    //     fn extract(&mut self) -> Option<&mut Self::Container> {
+    //         if let Some(column) = self.builder.extract() {}
+    //         if let Some(column) = self.pending.pop_front() {
+    //             self.empty = Some(column);
+    //             self.empty.as_mut()
+    //         } else {
+    //             None
+    //         }
+    //     }
+    //
+    //     #[inline]
+    //     fn finish(&mut self) -> Option<&mut Self::Container> {
+    //         if !self.builder.current.is_empty() {
+    //             let mut compressed = CompressedColumn::Uncompressed(Column::default());
+    //             compressed.compress(&mut Vec::new(), None);
+    //             self.pending.push_back(compressed);
+    //         }
+    //         self.pending.pop_front()
+    //     }
+    //
+    //     #[inline]
+    //     fn flush(&mut self) {
+    //         *self = Self::default();
+    //     }
+    // }
 }
 
 /// A batcher for columnar storage.
@@ -500,16 +717,16 @@ pub mod batcher {
 
 /// Implementations of `ContainerQueue` and `MergerChunk` for `Column` containers (columnar).
 pub mod merger {
-    use columnar::{Columnar, Index};
+    use crate::containers::{Column, ColumnBuilder};
+    use columnar::{Columnar, Index, Len};
     use differential_dataflow::difference::Semigroup;
     use differential_dataflow::trace::implementations::merge_batcher::container::PushAndAdd;
     use differential_dataflow::trace::implementations::merge_batcher::container::{
         ContainerQueue, MergerChunk,
     };
+    use mz_ore::region::Region;
     use timely::Container;
     use timely::progress::{Antichain, Timestamp, frontier::AntichainRef};
-
-    use crate::containers::{Column, ColumnBuilder};
 
     /// A queue for extracting items from a `Column` container.
     pub struct ColumnQueue<'a, T: Columnar> {
@@ -582,10 +799,12 @@ pub mod merger {
                 false
             }
         }
+
         fn account(&self) -> (usize, usize, usize, usize) {
-            let (mut size, mut cap, mut count) = (0, 0, 0);
+            let (mut len, mut size, mut cap, mut count) = (0, 0, 0, 0);
             match self {
-                Column::Typed((_data, _time, _diff)) => {
+                Column::Typed((data, _time, _diff)) => {
+                    len += data.len();
                     // use columnar::HeapSize;
                     // let mut cb = |s, c| {
                     //     size += s;
@@ -597,24 +816,31 @@ pub mod merger {
                     // diff.heap_size(&mut cb);
                 }
                 Column::Bytes(bytes) => {
+                    len += self.borrow().len();
                     size += bytes.len();
                     cap += bytes.len();
                     count += 1;
                 }
                 Column::Align(align) => {
+                    len += self.borrow().len();
                     size += align.len() * 8; // 8 bytes per u64
                     cap += align.len() * 8; // 8 bytes per u64
                     count += 1;
                 }
+                Column::CompressedBlock(_, region) => {
+                    size += region.len() * 8; // 8 bytes per u64
+                    cap += region.len() * 8; // 8 bytes per u64
+                    count += 1;
+                }
             }
-            (self.len(), size, cap, count)
+            (len, size, cap, count)
         }
     }
     impl<D, T, R> PushAndAdd for ColumnBuilder<(D, T, R)>
     where
-        D: Columnar,
-        T: timely::PartialOrder + Columnar,
-        R: Default + Semigroup + Columnar,
+        D: Clone + 'static + Columnar,
+        T: Clone + 'static + timely::PartialOrder + Columnar,
+        R: Clone + 'static + Default + Semigroup + Columnar,
     {
         type Item<'a> = <(D, T, R) as Columnar>::Ref<'a>;
         type DiffOwned = R;
@@ -632,6 +858,16 @@ pub mod merger {
                 use timely::container::PushInto;
                 self.push_into((data, time, &*stash));
             }
+        }
+
+        type State = (Vec<u8>, Column<(D, T, R)>);
+
+        fn unpack(&mut self, container: &mut Self::Container, state: &mut Self::State) {
+            container.decompress(&mut state.0, &mut state.1);
+        }
+
+        fn pack(&mut self, container: &mut Self::Container, state: &mut Self::State) {
+            container.compress(&mut state.0, &mut state.1);
         }
     }
 }
@@ -837,7 +1073,10 @@ pub mod dd_builder {
             // let (keys, vals, upds) = Self::Input::key_val_upd_counts(&chain[..]);
             // let mut builder = Self::with_capacity(keys, vals, upds);
             let mut builder = Self::with_capacity(0, 0, 0);
+            let mut buffer = Vec::new();
+            let mut empty = Column::default();
             for mut chunk in chain.drain(..) {
+                chunk.decompress(&mut buffer, &mut empty);
                 builder.push(&mut chunk);
             }
 

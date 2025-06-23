@@ -21,6 +21,7 @@ use mz_repr::{Datum, Diff, Row, Timestamp};
 use mz_timely_util::containers::{Col2ValBatcher, Column, ColumnBuilder, columnar_exchange};
 use mz_timely_util::replay::MzReplay;
 use timely::Container;
+use timely::container::CapacityContainerBuilder;
 use timely::dataflow::Scope;
 use timely::dataflow::channels::pact::ExchangeCore;
 
@@ -28,7 +29,7 @@ use crate::extensions::arrange::MzArrangeCore;
 use crate::logging::initialize::ReachabilityEvent;
 use crate::logging::{EventQueue, LogCollection, LogVariant, TimelyLog, consolidate_and_pack};
 use crate::row_spine::RowRowBuilderColumn;
-use crate::typedefs::RowRowSpine;
+use crate::typedefs::{KeyBatcher, KeyValBatcher, RowRowSpine};
 
 /// The return type of [`construct`].
 pub(super) struct Return {
@@ -52,7 +53,7 @@ pub(super) fn construct<G: Scope<Timestamp = Timestamp>>(
         let interval_ms = std::cmp::max(1, config.interval.as_millis());
         type UpdatesKey = (bool, usize, usize, usize, Timestamp);
 
-        type CB = ColumnBuilder<((UpdatesKey, ()), Timestamp, Diff)>;
+        type CB = CapacityContainerBuilder<Vec<((UpdatesKey, ()), Timestamp, Diff)>>;
         let (updates, token) = event_queue.links.mz_replay::<_, CB, _>(
             scope,
             "reachability logs",
@@ -79,19 +80,19 @@ pub(super) fn construct<G: Scope<Timestamp = Timestamp>>(
         let logs_active = [LogVariant::Timely(TimelyLog::Reachability)];
         let worker_id = scope.index();
 
-        let updates = consolidate_and_pack::<_, Col2ValBatcher<UpdatesKey, _, _, _>, ColumnBuilder<_>, _, _>(
+        let updates = consolidate_and_pack::<_, KeyValBatcher<UpdatesKey,_, _, _>, ColumnBuilder<_>, _, _>(
             &updates,
             TimelyLog::Reachability,
             move |((datum, ()), time, diff), packer, session| {
                 let (update_type, operator_id, source, port, ts) = datum;
-                let update_type = if update_type { "source" } else { "target" };
+                let update_type = if *update_type { "source" } else { "target" };
                 let data = packer.pack_slice(&[
-                    Datum::UInt64(u64::cast_from(operator_id)),
+                    Datum::UInt64(u64::cast_from(*operator_id)),
                     Datum::UInt64(u64::cast_from(worker_id)),
-                    Datum::UInt64(u64::cast_from(source)),
-                    Datum::UInt64(u64::cast_from(port)),
+                    Datum::UInt64(u64::cast_from(*source)),
+                    Datum::UInt64(u64::cast_from(*port)),
                     Datum::String(update_type),
-                    Datum::from(Timestamp::into_owned(ts)),
+                    Datum::from(Timestamp::into_owned(*ts)),
                 ]);
                 session.give((data, time, diff));
             }

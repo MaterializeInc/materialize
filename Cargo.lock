@@ -2514,7 +2514,6 @@ dependencies = [
 [[package]]
 name = "differential-dataflow"
 version = "0.15.2"
-source = "git+https://github.com/antiguru/differential-dataflow?branch=merge_batcher_cb2#9957bd5cc65ea73f6f8f6474e0258ac083f40e7c"
 dependencies = [
  "columnar",
  "columnation",
@@ -2527,7 +2526,6 @@ dependencies = [
 [[package]]
 name = "differential-dogs3"
 version = "0.1.13"
-source = "git+https://github.com/antiguru/differential-dataflow?branch=merge_batcher_cb2#9957bd5cc65ea73f6f8f6474e0258ac083f40e7c"
 dependencies = [
  "differential-dataflow",
  "serde",
@@ -7869,6 +7867,7 @@ dependencies = [
  "either",
  "futures-util",
  "lgalloc",
+ "lz4_flex",
  "mz-ore",
  "num-traits",
  "proptest",
@@ -12879,7 +12878,6 @@ dependencies = [
  "syn 2.0.101",
  "time",
  "time-macros",
- "timely",
  "tokio",
  "tokio-postgres",
  "tokio-stream",

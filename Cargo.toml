@@ -314,8 +314,10 @@ incremental = true
 timely = { git = "https://github.com/antiguru/timely-dataflow", branch = "exchange_flush" }
 [patch.crates-io]
 timely = { git = "https://github.com/antiguru/timely-dataflow", branch = "exchange_flush" }
-differential-dataflow = { git = "https://github.com/antiguru/differential-dataflow", branch = "merge_batcher_cb2" }
-differential-dogs3 = { git = "https://github.com/antiguru/differential-dataflow", branch = "merge_batcher_cb2" }
+# differential-dataflow = { git = "https://github.com/antiguru/differential-dataflow", branch = "merge_batcher_cb2" }
+# differential-dogs3 = { git = "https://github.com/antiguru/differential-dataflow", branch = "merge_batcher_cb2" }
+differential-dataflow = { path = "../differential-dataflow/differential-dataflow" }
+differential-dogs3 = { path = "../differential-dataflow/dogsdogsdogs" }
 columnar = { git = "https://github.com/antiguru/columnar", branch = "reborrow" }
 # Waiting on https://github.com/sfackler/rust-postgres/pull/752.
 postgres = { git = "https://github.com/MaterializeInc/rust-postgres" }
