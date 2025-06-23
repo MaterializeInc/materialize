@@ -1598,7 +1598,7 @@ class PostgresTables(Generator):
 
 
 class PostgresTablesOldSyntax(Generator):
-    MAX_COUNT = 1500  # Too long-running with count=1800
+    MAX_COUNT = 1500  # Too long-running with count=1800, TODO: reset to count=2000 when database-issues#9272 is fixed
 
     @classmethod
     def body(cls) -> None:
