@@ -28,20 +28,26 @@ answer questions, suggest documentation, and assist with troubleshooting. If
 your issue requires human assistance, you can request to **Talk to a human**
 at any time. Just look for the messenger widget on the bottom right.
 
+{{< tip >}}
+If you are an SLA Supported Customer who is experiencing an [**urgent** issue](#urgent-issues-for-sla-supported-customers-only),
+you can use the **Report Production Outage** option for fastest response.
+{{</ tip >}}
+
 ### Email
 
-You can also email us your questions at `support@materialize.com`.
+You can also email us your questions at `support@materialize.com` from your
+Materialize login email address.
 
 ### Join the Materialize Slack community
 
 Connect with other users, share ideas, and get informal help from the [Materialize user community](https://materialize.com/s/chat) on Slack.
 
-**For SLA Supported Customers Only:**
+## Urgent Issues (For SLA Supported Customers Only)
 
-If you're experiencing an urgent issue,
+If you are an SLA Supported Customer who is experiencing an **urgent** issue,
 
-- *Recommended*. Use the messenger's **Report Production Outage** option for
-  fastest response.
+- *Recommended*. Use the [messenger's **Report Production
+  Outage** option](#messenger-app) for fastest response.
 
 - Alternatively, you can email `support@materialize.com` from your Materialize
   login email address. To ensure priority handling, include **urgent** in the
