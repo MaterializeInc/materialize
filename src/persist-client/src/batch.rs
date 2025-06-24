@@ -57,8 +57,8 @@ use crate::internal::merge::{MergeTree, Pending};
 use crate::internal::metrics::{BatchWriteMetrics, Metrics, RetryMetrics, ShardMetrics};
 use crate::internal::paths::{PartId, PartialBatchKey, WriterKey};
 use crate::internal::state::{
-    BatchPart, HollowBatch, HollowBatchPart, HollowRun, HollowRunRef, ProtoInlineBatchPart,
-    RunMeta, RunOrder, RunPart,
+    BatchPart, ENABLE_INCREMENTAL_COMPACTION, HollowBatch, HollowBatchPart, HollowRun,
+    HollowRunRef, ProtoInlineBatchPart, RunId, RunMeta, RunOrder, RunPart,
 };
 use crate::stats::{STATS_BUDGET_BYTES, STATS_COLLECTION_ENABLED, untrimmable_columns};
 use crate::{PersistConfig, ShardId};
@@ -356,6 +356,7 @@ pub struct BatchBuilderConfig {
     pub(crate) preferred_order: RunOrder,
     pub(crate) structured_key_lower_len: usize,
     pub(crate) run_length_limit: usize,
+    pub(crate) enable_incremental_compaction: bool,
     /// The number of runs to cap the built batch at, or None if we should
     /// continue to generate one run per part for unordered batches.
     /// See the config definition for details.
@@ -456,6 +457,7 @@ impl BatchBuilderConfig {
                 limit @ 2.. => Some(limit),
                 _ => None,
             },
+            enable_incremental_compaction: ENABLE_INCREMENTAL_COMPACTION.get(value),
         }
     }
 }
@@ -682,6 +684,7 @@ where
         self,
         registered_desc: Description<T>,
     ) -> Result<Batch<K, V, T, D>, InvalidUsage<T>> {
+        let write_run_ids = self.parts.cfg.enable_incremental_compaction;
         let batch_delete_enabled = self.parts.cfg.batch_delete_enabled;
         let shard_metrics = Arc::clone(&self.parts.shard_metrics);
         let runs = self.parts.finish().await;
@@ -701,6 +704,11 @@ where
                 schema: self.write_schemas.id,
                 // Field has been deprecated but kept around to roundtrip state.
                 deprecated_schema: None,
+                id: if write_run_ids {
+                    Some(RunId::new())
+                } else {
+                    None
+                },
             });
             run_parts.extend(parts);
         }
@@ -818,6 +826,11 @@ impl<T: Timestamp + Codec64> BatchParts<T> {
                                         // Field has been deprecated but kept around to
                                         // roundtrip state.
                                         deprecated_schema: None,
+                                        id: if cfg.incremental_compaction {
+                                            Some(RunId::new())
+                                        } else {
+                                            None
+                                        },
                                     },
                                     parts.into_result().await,
                                 )

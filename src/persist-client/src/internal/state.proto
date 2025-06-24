@@ -91,6 +91,7 @@ message ProtoRunMeta {
   optional uint64 schema_id = 3;
 
   optional uint64 deprecated_schema_id = 2;
+  optional string id = 4;
 }
 
 message ProtoHollowRun {

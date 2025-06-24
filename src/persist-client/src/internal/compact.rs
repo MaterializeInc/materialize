@@ -45,7 +45,9 @@ use crate::internal::gc::GarbageCollector;
 use crate::internal::machine::Machine;
 use crate::internal::maintenance::RoutineMaintenance;
 use crate::internal::metrics::ShardMetrics;
-use crate::internal::state::{HollowBatch, RunMeta, RunOrder, RunPart};
+use crate::internal::state::{
+    ENABLE_INCREMENTAL_COMPACTION, HollowBatch, RunMeta, RunOrder, RunPart,
+};
 use crate::internal::trace::{ApplyMergeResult, FueledMergeRes};
 use crate::iter::{Consolidator, StructuredSort};
 use crate::{Metrics, PersistConfig, ShardId};
@@ -79,6 +81,7 @@ pub struct CompactRes<T> {
 pub struct CompactConfig {
     pub(crate) compaction_memory_bound_bytes: usize,
     pub(crate) compaction_yield_after_n_updates: usize,
+    pub(crate) incremental_compaction: bool,
     pub(crate) version: semver::Version,
     pub(crate) batch: BatchBuilderConfig,
 }
@@ -89,6 +92,7 @@ impl CompactConfig {
         CompactConfig {
             compaction_memory_bound_bytes: COMPACTION_MEMORY_BOUND_BYTES.get(value),
             compaction_yield_after_n_updates: value.compaction_yield_after_n_updates,
+            incremental_compaction: ENABLE_INCREMENTAL_COMPACTION.get(value),
             version: value.build_version.clone(),
             batch: BatchBuilderConfig::new(value, shard_id),
         }

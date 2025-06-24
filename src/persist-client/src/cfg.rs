@@ -333,6 +333,7 @@ pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
         .add(&crate::internal::state::GC_FALLBACK_THRESHOLD_MS)
         .add(&crate::internal::state::GC_USE_ACTIVE_GC)
         .add(&crate::internal::state::ROLLUP_FALLBACK_THRESHOLD_MS)
+        .add(&crate::internal::state::ENABLE_INCREMENTAL_COMPACTION)
         .add(&crate::operators::STORAGE_SOURCE_DECODE_FUEL)
         .add(&crate::read::READER_LEASE_DURATION)
         .add(&crate::rpc::PUBSUB_CLIENT_ENABLED)
