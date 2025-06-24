@@ -1147,6 +1147,8 @@ impl<'a> RunnerInner<'a> {
             storage_usage_retention_period: None,
             segment_api_key: None,
             segment_client_side: false,
+            // SLT doesn't like eternally running tasks since it waits for them to finish inbetween SLT files
+            test_only_dummy_segment_client: false,
             egress_addresses: vec![],
             aws_account_id: None,
             aws_privatelink_availability_zones: None,
