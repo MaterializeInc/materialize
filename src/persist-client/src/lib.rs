@@ -231,11 +231,6 @@ impl PersistClient {
         &self.cfg.configs
     }
 
-    /// Returns persist's [PersistConfig].
-    pub fn cfg(&self) -> &PersistConfig {
-        &self.cfg
-    }
-
     async fn make_machine<K, V, T, D>(
         &self,
         shard_id: ShardId,

@@ -46,7 +46,6 @@ use tracing::{Instrument, debug, debug_span, trace_span};
 use crate::ShardId;
 use crate::cfg::PersistConfig;
 use crate::error::InvalidUsage;
-use crate::internal::compact::CompactConfig;
 use crate::internal::encoding::{LazyInlineBatchPart, LazyPartStats, LazyProto, Schemas};
 use crate::internal::machine::retry_external;
 use crate::internal::metrics::{Metrics, MetricsPermits, ReadMetrics, ShardMetrics};
@@ -109,23 +108,19 @@ impl FetchConfig {
             validate_lower_bounds_on_read: FETCH_VALIDATE_PART_LOWER_BOUNDS_ON_READ.get(cfg),
         }
     }
-
-    pub fn from_compact_config(cfg: &CompactConfig) -> Self {
-        Self {
-            validate_lower_bounds_on_read: cfg.fetch_validate_lower_bounds_on_read,
-        }
-    }
 }
 
 #[derive(Debug, Clone)]
 pub(crate) struct BatchFetcherConfig {
     pub(crate) part_decode_format: ConfigValHandle<String>,
+    pub(crate) fetch_config: FetchConfig,
 }
 
 impl BatchFetcherConfig {
     pub fn new(value: &PersistConfig) -> Self {
         Self {
             part_decode_format: PART_DECODE_FORMAT.handle(value),
+            fetch_config: FetchConfig::from_persist_config(value),
         }
     }
 
@@ -255,6 +250,7 @@ where
             structured_part_audit: self.cfg.part_decode_format(),
             fetch_permit,
             _phantom: PhantomData,
+            batch_fetcher_config: self.cfg.clone(),
         };
         Ok(Ok(fetched_blob))
     }
@@ -668,6 +664,7 @@ pub struct FetchedBlob<K: Codec, V: Codec, T, D> {
     filter_pushdown_audit: bool,
     structured_part_audit: PartDecodeFormat,
     fetch_permit: Option<Arc<MetricsPermits>>,
+    batch_fetcher_config: BatchFetcherConfig,
     _phantom: PhantomData<fn() -> D>,
 }
 
@@ -696,6 +693,7 @@ impl<K: Codec, V: Codec, T: Clone, D> Clone for FetchedBlob<K, V, T, D> {
             filter_pushdown_audit: self.filter_pushdown_audit.clone(),
             fetch_permit: self.fetch_permit.clone(),
             structured_part_audit: self.structured_part_audit.clone(),
+            batch_fetcher_config: self.batch_fetcher_config.clone(),
             _phantom: self._phantom.clone(),
         }
     }
@@ -727,8 +725,8 @@ where
 
 impl<K: Codec, V: Codec, T: Timestamp + Lattice + Codec64, D> FetchedBlob<K, V, T, D> {
     /// Partially decodes this blob into a [FetchedPart].
-    pub fn parse(&self, cfg: PersistConfig) -> ShardSourcePart<K, V, T, D> {
-        self.parse_internal(&FetchConfig::from_persist_config(&cfg))
+    pub fn parse(&self) -> ShardSourcePart<K, V, T, D> {
+        self.parse_internal(&self.batch_fetcher_config.fetch_config)
     }
 
     /// Partially decodes this blob into a [FetchedPart].

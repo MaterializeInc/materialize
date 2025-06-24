@@ -646,7 +646,6 @@ impl DataSubscribe {
             Some(std::time::Instant::now()),
         );
         let (data, txns, capture, tokens) = worker.dataflow::<u64, _, _>(|scope| {
-            let persist_cfg = client.cfg().clone();
             let (data_stream, shard_source_token) = scope.scoped::<u64, _, _>("hybrid", |scope| {
                 let client = client.clone();
                 let (data_stream, token) = shard_source::<String, (), u64, i64, _, _, _>(
@@ -669,7 +668,7 @@ impl DataSubscribe {
             });
             let (data, txns) = (ProbeHandle::new(), ProbeHandle::new());
             let data_stream = data_stream.flat_map(move |part| {
-                let part = part.parse(persist_cfg.clone());
+                let part = part.parse();
                 part.part.map(|((k, v), t, d)| {
                     let (k, ()) = (k.unwrap(), v.unwrap());
                     (k, t, d)
