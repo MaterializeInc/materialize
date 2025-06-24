@@ -402,11 +402,24 @@ Issue a SQL query to get started. Need help?
         session_client
             .declare(EMPTY_PORTAL.into(), stmt, sql.to_string())
             .await?;
+
         match session_client
             .execute(EMPTY_PORTAL.into(), futures::future::pending(), None)
             .await?
         {
-            (ExecuteResponse::SendingRowsStreaming { rows, .. }, _) => Ok(rows),
+            (ExecuteResponse::SendingRowsStreaming { mut rows, .. }, _) => {
+                // We have to only drop the session client _after_ we read the
+                // result. Otherwise the peek will get cancelled right when we
+                // drop the session client. So we wrap it up in an extra stream
+                // like this, which owns the client and can return it.
+                let owning_response_stream = async_stream::stream! {
+                    while let Some(rows) = rows.next().await {
+                        yield rows;
+                    }
+                    drop(session_client);
+                };
+                Ok(Box::pin(owning_response_stream))
+            }
             r => bail!("unsupported response type: {r:?}"),
         }
     }

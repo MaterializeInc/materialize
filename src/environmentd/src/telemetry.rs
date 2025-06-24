@@ -82,12 +82,11 @@ use futures::StreamExt;
 use mz_adapter::PeekResponseUnary;
 use mz_adapter::telemetry::{EventDetails, SegmentClientExt};
 use mz_ore::retry::Retry;
-use mz_ore::{assert_none, task};
+use mz_ore::{assert_none, soft_panic_or_log, task};
 use mz_repr::adt::jsonb::Jsonb;
 use mz_sql::catalog::EnvironmentId;
 use serde_json::json;
 use tokio::time::{self, Duration};
-use tracing::warn;
 
 /// How frequently to send a summary to Segment.
 const REPORT_INTERVAL: Duration = Duration::from_secs(3600);
@@ -194,7 +193,7 @@ async fn report_loop(
         let traits = match traits {
             Ok(traits) => traits,
             Err(e) => {
-                warn!("unable to collect telemetry traits: {e}");
+                soft_panic_or_log!("unable to collect telemetry traits: {e}");
                 continue;
             }
         };
