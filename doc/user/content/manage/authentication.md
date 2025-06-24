@@ -1,9 +1,6 @@
 ---
 title: "Authentication"
 description: "Authentication"
-aliases:
-  - /self-hosted/authentication/
-  - /manage/authentication/
 menu:
   main:
     parent: manage
@@ -39,3 +36,10 @@ To configure the password for the internal `mz_system` user, add an
 Once password authentication is enabled, only the `mz_system` user will be initially available. This user is used by the Materialize Operator for upgrades and maintenance tasks and can also be used to create additional users.
 
 See [CREATE ROLE](/sql/create-role) for details on creating additional users.
+
+
+### Enabling RBAC
+
+{{< include-md file="shared-content/enable-rbac.md" >}}
+
+See [Authorization](/manage/access-control/) for details on role based authorization.
