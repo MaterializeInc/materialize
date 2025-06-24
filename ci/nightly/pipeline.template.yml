@@ -1934,9 +1934,9 @@ steps:
       queue: hetzner-aarch64-4cpu-8gb
 
   - id: sqllogictest
-    label: ":bulb: SQL logic tests"
+    label: ":bulb: SQL logic tests (4 replicas)"
     depends_on: build-aarch64
-    timeout_in_minutes: 240
+    timeout_in_minutes: 480
     parallelism: 10
     agents:
       # Runs faster/more consistently on larger agent
@@ -1945,6 +1945,7 @@ steps:
       - ./ci/plugins/mzcompose:
           composition: sqllogictest
           run: slow-tests
+          args: [--replicas=4]
 
   - id: cluster-tests-azurite
     label: "Cluster tests with :azure: blob store"

@@ -7363,6 +7363,9 @@ ORDER BY x5_simple;
 4  NULL  NULL  NULL
 
 # Regression test for https://github.com/MaterializeInc/materialize/pull/22270#issuecomment-1761432124
+statement ok
+SET cluster_replica = r1
+
 statement error db error: ERROR: Evaluation error: "4294967295 \* 2" uint4 out of range
 select max(1) over (partition by 1 order by 1, 1)
 from

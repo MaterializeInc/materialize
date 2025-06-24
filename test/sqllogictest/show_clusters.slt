@@ -26,7 +26,7 @@ statement ok
 CREATE CLUSTER bar REPLICAS (r1 (SIZE '1'), r2 (SIZE '1'))
 
 query TT rowsort
-SELECT name, replicas FROM (SHOW CLUSTERS)
+SELECT name, replicas FROM (SHOW CLUSTERS) WHERE name != 'quickstart'
 ----
 bar
 r1 (1), r2 (1)
@@ -41,6 +41,4 @@ r1 (2)
 mz_support
 NULL
 mz_system
-r1 (2)
-quickstart
 r1 (2)

@@ -442,7 +442,10 @@ ALTER CLUSTER quickstart OWNER TO materialize
 COMPLETE 0
 
 statement ok
-ALTER CLUSTER quickstart SET (MANAGED = false);
+DROP CLUSTER quickstart;
+
+statement ok
+CREATE CLUSTER quickstart REPLICAS (r1 (SIZE '2')), MANAGED = false;
 
 statement error invalid SIZE: must provide a string value
 CREATE CLUSTER REPLICA quickstart.size_1 SIZE;
@@ -688,7 +691,7 @@ reset-server
 # Tests for BILLED AS replicas
 
 statement ok
-CREATE CLUSTER t1 SIZE '1'
+CREATE CLUSTER t1 SIZE '1', REPLICATION FACTOR 1
 
 simple conn=mz_system,user=mz_system
 CREATE CLUSTER REPLICA t1.free SIZE '2', BILLED AS 'free'
@@ -723,28 +726,27 @@ CREATE CLUSTER REPLICA t1.invalid SIZE '2'
 db error: ERROR: cannot modify managed cluster t1
 
 query TTTT
-SELECT event_type, object_type, details, user FROM mz_audit_events ORDER BY occurred_at DESC LIMIT 1;
+SELECT event_type, object_type, regexp_replace(details::text, '"replica_id":"u[^"]*"', '"replica_id":"u%"'), user FROM mz_audit_events ORDER BY occurred_at DESC LIMIT 1;
 ----
-create  cluster-replica  {"billed_as":"free","cluster_id":"u2","cluster_name":"t1","disk":true,"internal":true,"logical_size":"2","reason":"manual","replica_id":"u4","replica_name":"free"}  mz_system
+create  cluster-replica  {"billed_as":"free","cluster_id":"u2","cluster_name":"t1","disk":true,"internal":true,"logical_size":"2","reason":"manual","replica_id":"u%","replica_name":"free"}  mz_system
 
 simple conn=mz_system,user=mz_system
 CREATE CLUSTER REPLICA t1.r123 SIZE '2', BILLED AS 'free'
 ----
 db error: ERROR: cannot modify managed cluster t1
 
-query TTTTT rowsort
-SELECT id, name, cluster_id, size, owner_id FROM mz_cluster_replicas WHERE cluster_id LIKE 'u%'
+query TTTT rowsort
+SELECT name, cluster_id, size, owner_id FROM mz_cluster_replicas WHERE cluster_id = 'u2'
 ----
-u1  r1  u1  2  s1
-u2  r1  u2  1  u1
-u4  free  u2  2  u1
-u3  billed  u2  2  u1
+free  u2  2  u1
+billed  u2  2  u1
+r1  u2  1  u1
 
 query T
-SELECT id FROM mz_internal.mz_internal_cluster_replicas WHERE id LIKE 'u%'
+SELECT regexp_replace(id::text, 'u.*', 'u%') FROM mz_internal.mz_internal_cluster_replicas WHERE id LIKE 'u%'
 ----
-u3
-u4
+u%
+u%
 
 statement error db error: ERROR: cannot modify managed cluster t1
 CREATE CLUSTER REPLICA t1.free2 SIZE '2', BILLED AS 'free'
@@ -784,9 +786,9 @@ CREATE CLUSTER REPLICA t1.free SIZE '2', BILLED AS 'free', INTERNAL
 COMPLETE 0
 
 query TTTT
-SELECT event_type, object_type, details, user FROM mz_audit_events ORDER BY occurred_at DESC LIMIT 1;
+SELECT event_type, object_type, regexp_replace(details::text, '"replica_id":"u[^"]*"', '"replica_id":"u%"'), user FROM mz_audit_events ORDER BY occurred_at DESC LIMIT 1;
 ----
-create  cluster-replica  {"billed_as":"free","cluster_id":"u4","cluster_name":"t1","disk":true,"internal":true,"logical_size":"2","reason":"manual","replica_id":"u8","replica_name":"free"}  mz_system
+create  cluster-replica  {"billed_as":"free","cluster_id":"u4","cluster_name":"t1","disk":true,"internal":true,"logical_size":"2","reason":"manual","replica_id":"u%","replica_name":"free"}  mz_system
 
 simple conn=mz_system,user=mz_system
 CREATE CLUSTER REPLICA t1.internal_r2 SIZE '2', INTERNAL
@@ -804,12 +806,11 @@ COMPLETE 0
 statement ok
 DROP CLUSTER REPLICA t1.r2
 
-query TTTTT rowsort
-SELECT id, name, cluster_id, size, owner_id FROM mz_cluster_replicas WHERE cluster_id LIKE 'u%'
+query TTTT rowsort
+SELECT name, cluster_id, size, owner_id FROM mz_cluster_replicas WHERE cluster_id = 'u4'
 ----
-u1  r1  u1  2  s1
-u7  r1  u4  1  u1
-u8  free  u4  2  u1
+r1  u4  1  u1
+free  u4  2  u1
 
 simple conn=mz_system,user=mz_system
 CREATE CLUSTER REPLICA t1.r3 SIZE '2', BILLED AS 'free'

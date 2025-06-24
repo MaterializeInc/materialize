@@ -489,6 +489,9 @@ statement ok
 CREATE TABLE t (a int2, b int4, c int8, d uint2, e uint4, f uint8, g text);
 
 statement ok
+SET cluster_replica = r1
+
+statement ok
 EXPLAIN OPTIMIZED PLAN WITH (humanized expressions) AS VERBOSE TEXT FOR
 select
   subq_0."c2" as c0,

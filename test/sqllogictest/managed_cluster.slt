@@ -48,14 +48,13 @@ statement error db error: ERROR: unknown cluster 'foo'
 ALTER CLUSTER foo SET (REPLICATION FACTOR 2)
 
 query TTTTT rowsort
-SELECT id, name, managed, replication_factor, size FROM mz_clusters
+SELECT id, name, managed, replication_factor, size FROM mz_clusters WHERE name != 'quickstart'
 ----
 s1  mz_system  true  1  2
 s2  mz_catalog_server  true  1  2
 s3  mz_probe  true  1  2
 s4  mz_support  true  0  2
 s5  mz_analytics  true  0  2
-u1  quickstart  true  1  2
 
 
 query T rowsort
@@ -122,12 +121,11 @@ statement error db error: ERROR: INTROSPECTION INTERVAL not supported for unmana
 CREATE CLUSTER baz REPLICAS (), INTROSPECTION INTERVAL 1
 
 query TTT
-SELECT cluster, replica, size FROM (SHOW CLUSTER REPLICAS) ORDER BY 1, 2, 3
+SELECT cluster, replica, size FROM (SHOW CLUSTER REPLICAS) WHERE cluster != 'quickstart' ORDER BY 1, 2, 3
 ----
 mz_catalog_server  r1  2
 mz_probe  r1  2
 mz_system  r1  2
-quickstart  r1  2
 
 statement error db error: ERROR: unknown cluster replica size abc
 CREATE CLUSTER foo SIZE 'abc', REPLICATION FACTOR 3
@@ -136,7 +134,7 @@ statement ok
 CREATE CLUSTER foo SIZE '1', REPLICATION FACTOR 3
 
 query TTT
-SELECT cluster, replica, size FROM (SHOW CLUSTER REPLICAS) ORDER BY 1, 2, 3
+SELECT cluster, replica, size FROM (SHOW CLUSTER REPLICAS) WHERE cluster != 'quickstart' ORDER BY 1, 2, 3
 ----
 foo  r1  1
 foo  r2  1
@@ -144,7 +142,6 @@ foo  r3  1
 mz_catalog_server  r1  2
 mz_probe  r1  2
 mz_system  r1  2
-quickstart  r1  2
 
 query TTTTT rowsort
 SELECT id, name, managed, replication_factor, size FROM mz_clusters WHERE name LIKE 'foo'
@@ -155,7 +152,7 @@ statement ok
 ALTER CLUSTER foo SET (MANAGED = false)
 
 query TTT
-SELECT cluster, replica, size FROM (SHOW CLUSTER REPLICAS) ORDER BY 1, 2, 3
+SELECT cluster, replica, size FROM (SHOW CLUSTER REPLICAS) WHERE cluster != 'quickstart' ORDER BY 1, 2, 3
 ----
 foo  r1  1
 foo  r2  1
@@ -163,7 +160,6 @@ foo  r3  1
 mz_catalog_server  r1  2
 mz_probe  r1  2
 mz_system  r1  2
-quickstart  r1  2
 
 query TTTTT rowsort
 SELECT id, name, managed, replication_factor, size FROM mz_clusters WHERE name LIKE 'foo'
@@ -183,7 +179,7 @@ statement ok
 ALTER CLUSTER foo SET (MANAGED, SIZE '1')
 
 query TTT
-SELECT cluster, replica, size FROM (SHOW CLUSTER REPLICAS) ORDER BY 1, 2, 3
+SELECT cluster, replica, size FROM (SHOW CLUSTER REPLICAS WHERE cluster != 'quickstart') ORDER BY 1, 2, 3
 ----
 foo  r1  1
 foo  r2  1
@@ -191,23 +187,21 @@ foo  r3  1
 mz_catalog_server  r1  2
 mz_probe  r1  2
 mz_system  r1  2
-quickstart  r1  2
 
 query TTTTT rowsort
 SELECT id, name, managed, replication_factor, size FROM mz_clusters WHERE name LIKE 'foo'
 ----
 u5  foo  true  3  1
 
-query TTT
-SELECT mz_clusters.name, mz_cluster_replicas.name, mz_cluster_replicas.id FROM mz_cluster_replicas JOIN mz_clusters ON mz_cluster_replicas.cluster_id = mz_clusters.id ORDER BY 1, 2
+query TT
+SELECT mz_clusters.name, mz_cluster_replicas.name FROM mz_cluster_replicas JOIN mz_clusters ON mz_cluster_replicas.cluster_id = mz_clusters.id WHERE mz_clusters.name != 'quickstart' ORDER BY 1, 2
 ----
-foo  r1  u3
-foo  r2  u4
-foo  r3  u5
-mz_catalog_server  r1  s2
-mz_probe  r1  s3
-mz_system  r1  s1
-quickstart  r1  u1
+foo  r1
+foo  r2
+foo  r3
+mz_catalog_server  r1
+mz_probe  r1
+mz_system  r1
 
 statement error db error: ERROR: cannot drop replica of managed cluster
 DROP CLUSTER REPLICA foo.r1
@@ -219,13 +213,12 @@ statement ok
 ALTER CLUSTER foo SET (REPLICATION FACTOR 1)
 
 query TTT
-SELECT cluster, replica, size FROM (SHOW CLUSTER REPLICAS) ORDER BY 1, 2, 3
+SELECT cluster, replica, size FROM (SHOW CLUSTER REPLICAS) WHERE cluster != 'quickstart' ORDER BY 1, 2, 3
 ----
 foo  r1  1
 mz_catalog_server  r1  2
 mz_probe  r1  2
 mz_system  r1  2
-quickstart  r1  2
 
 query TTTTT rowsort
 SELECT id, name, managed, replication_factor, size FROM mz_clusters WHERE name LIKE 'foo'
@@ -236,14 +229,13 @@ statement ok
 ALTER CLUSTER foo SET (REPLICATION FACTOR 2)
 
 query TTT
-SELECT cluster, replica, size FROM (SHOW CLUSTER REPLICAS) ORDER BY 1, 2, 3
+SELECT cluster, replica, size FROM (SHOW CLUSTER REPLICAS) WHERE cluster != 'quickstart' ORDER BY 1, 2, 3
 ----
 foo  r1  1
 foo  r2  1
 mz_catalog_server  r1  2
 mz_probe  r1  2
 mz_system  r1  2
-quickstart  r1  2
 
 query TTTTT rowsort
 SELECT id, name, managed, replication_factor, size FROM mz_clusters WHERE name LIKE 'foo'
@@ -254,13 +246,12 @@ statement ok
 ALTER CLUSTER foo RESET (REPLICATION FACTOR)
 
 query TTT
-SELECT cluster, replica, size FROM (SHOW CLUSTER REPLICAS) ORDER BY 1, 2, 3
+SELECT cluster, replica, size FROM (SHOW CLUSTER REPLICAS) WHERE cluster != 'quickstart' ORDER BY 1, 2, 3
 ----
 foo  r1  1
 mz_catalog_server  r1  2
 mz_probe  r1  2
 mz_system  r1  2
-quickstart  r1  2
 
 query TTTTT rowsort
 SELECT id, name, managed, replication_factor, size FROM mz_clusters WHERE name LIKE 'foo'
@@ -271,13 +262,12 @@ statement ok
 ALTER CLUSTER foo SET (SIZE '2')
 
 query TTT
-SELECT cluster, replica, size FROM (SHOW CLUSTER REPLICAS) ORDER BY 1, 2, 3
+SELECT cluster, replica, size FROM (SHOW CLUSTER REPLICAS) WHERE cluster != 'quickstart' ORDER BY 1, 2, 3
 ----
 foo  r1  2
 mz_catalog_server  r1  2
 mz_probe  r1  2
 mz_system  r1  2
-quickstart  r1  2
 
 query TTTTT rowsort
 SELECT id, name, managed, replication_factor, size FROM mz_clusters WHERE name LIKE 'foo'
@@ -288,13 +278,12 @@ statement ok
 ALTER CLUSTER foo SET (SIZE '1', REPLICATION FACTOR 1)
 
 query TTT
-SELECT cluster, replica, size FROM (SHOW CLUSTER REPLICAS) ORDER BY 1, 2, 3
+SELECT cluster, replica, size FROM (SHOW CLUSTER REPLICAS) WHERE cluster != 'quickstart' ORDER BY 1, 2, 3
 ----
 foo  r1  1
 mz_catalog_server  r1  2
 mz_probe  r1  2
 mz_system  r1  2
-quickstart  r1  2
 
 query TTTTT rowsort
 SELECT id, name, managed, replication_factor, size FROM mz_clusters WHERE name LIKE 'foo'
@@ -324,17 +313,15 @@ DROP CLUSTER REPLICA foo.r1
 
 
 query TTT
-SELECT cluster, replica, size FROM (SHOW CLUSTER REPLICAS) ORDER BY 1, 2, 3
+SELECT cluster, replica, size FROM (SHOW CLUSTER REPLICAS) WHERE cluster != 'quickstart' ORDER BY 1, 2, 3
 ----
 mz_catalog_server  r1  2
 mz_probe  r1  2
 mz_system  r1  2
-quickstart  r1  2
 
 query TTTTTTT
-SELECT r.name, r.size, s.processes, s.cpu_nano_cores, s.memory_bytes, s.workers, s.credits_per_hour FROM mz_cluster_replicas r JOIN mz_catalog.mz_cluster_replica_sizes s ON r.size = s.size ORDER BY r.name
+SELECT r.name, r.size, s.processes, s.cpu_nano_cores, s.memory_bytes, s.workers, s.credits_per_hour FROM mz_cluster_replicas r JOIN mz_catalog.mz_cluster_replica_sizes s ON r.size = s.size JOIN mz_clusters ON r.cluster_id = mz_clusters.id WHERE mz_clusters.name != 'quickstart' ORDER BY r.name
 ----
-r1  2  1  18446744073709000000  18446744073709551615  2  1
 r1  2  1  18446744073709000000  18446744073709551615  2  1
 r1  2  1  18446744073709000000  18446744073709551615  2  1
 r1  2  1  18446744073709000000  18446744073709551615  2  1
