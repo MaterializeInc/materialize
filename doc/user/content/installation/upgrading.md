@@ -4,7 +4,6 @@ description: "Upgrading Helm chart and Materialize."
 menu:
   main:
     parent: "installation"
-draft: true
 ---
 
 The following provides steps for upgrading the Materialize operator and
@@ -24,11 +23,17 @@ When upgrading:
 
 ### Upgrading the Helm Chart
 
-{{< important >}}
 
-Upgrade the operator first.
-
-{{</ important >}}
+To determine if there's a new Materialize version first, find the current
+materialize version deployed
+```shell
+helm list -n materialize
+```
+then, find the newest version of the materialize helm chart.
+```shell
+ helm search repo materialize
+ helm list -n materialize
+```
 
 To upgrade the Materialize operator to a new version:
 
@@ -42,14 +47,14 @@ If you have custom values, make sure to include your values file:
 helm upgrade my-materialize-operator materialize/misc/helm-charts/operator -f my-values.yaml
 ```
 
-### Upgrading Materialize Instances
-
 {{< important >}}
 
-Always upgrade your Materialize instances after upgrading the operator to
-ensure compatibility.
+To ensure compatibility always upgrade the Materialize Operator before upgrading Materialize Instance custom resources.
 
 {{</ important >}}
+
+
+### Upgrading Materialize Instances
 
 To upgrade your Materialize instances, you'll need to update the Materialize custom resource and trigger a rollout.
 
@@ -69,11 +74,11 @@ Or check the `Chart.yaml` file in the `misc/helm-charts/operator` directory:
 apiVersion: v2
 name: materialize-operator
 # ...
-version: 25.1.0-beta.1
-appVersion: v0.125.2  # Use this version for your Materialize instances
+version: 25.2.0
+appVersion: v0.147.2  # Use this version for your Materialize instances
 ```
 
-Use the `appVersion` (`v0.125.2` in this case) when updating your Materialize instances to ensure compatibility.
+Use the `appVersion` (`v0.147.2` in this case) when updating your Materialize instances to ensure compatibility.
 
 #### Using `kubectl` patch
 
@@ -84,7 +89,7 @@ For standard upgrades such as image updates:
 kubectl patch materialize <instance-name> \
   -n <materialize-instance-namespace> \
   --type='merge' \
-  -p "{\"spec\": {\"environmentdImageRef\": \"materialize/environmentd:v0.125.2\"}}"
+  -p "{\"spec\": {\"environmentdImageRef\": \"materialize/environmentd:v0.147.2\"}}"
 
 # Then trigger the rollout with a new UUID
 kubectl patch materialize <instance-name> \
@@ -99,7 +104,7 @@ You can combine both operations in a single command if preferred:
 kubectl patch materialize 12345678-1234-1234-1234-123456789012 \
   -n materialize-environment \
   --type='merge' \
-  -p "{\"spec\": {\"environmentdImageRef\": \"materialize/environmentd:v0.125.2\", \"requestRollout\": \"$(uuidgen)\"}}"
+  -p "{\"spec\": {\"environmentdImageRef\": \"materialize/environmentd:v0.147.2\", \"requestRollout\": \"$(uuidgen)\"}}"
 ```
 
 #### Using YAML Definition
@@ -113,7 +118,7 @@ metadata:
   name: 12345678-1234-1234-1234-123456789012
   namespace: materialize-environment
 spec:
-  environmentdImageRef: materialize/environmentd:v0.125.2 # Update version as needed
+  environmentdImageRef: materialize/environmentd:v0.147.2 # Update version as needed
   requestRollout: 22222222-2222-2222-2222-222222222222    # Generate new UUID
   forceRollout: 33333333-3333-3333-3333-333333333333      # Optional: for forced rollouts
   inPlaceRollout: false                                   # When false, performs a rolling upgrade rather than in-place
