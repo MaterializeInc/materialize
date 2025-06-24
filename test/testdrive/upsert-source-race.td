@@ -58,10 +58,6 @@ $ set schema={
 
 $ kafka-create-topic topic=dbzupsert partitions=1
 
-# Create some background load
-#> CREATE SOURCE counter FROM LOAD GENERATOR COUNTER (TICK INTERVAL '1ms')
-#> CREATE MATERIALIZED VIEW counter_mv AS SELECT max(counter) FROM counter;
-
 $ kafka-ingest format=avro topic=dbzupsert key-format=avro key-schema=${keyschema} schema=${schema} repeat=1000000
 {"b": "bdata", "a": ${kafka-ingest.iteration}} {"before": {"row": {"a": ${kafka-ingest.iteration}, "data": "fish", "b": "bdata"}}, "after": {"row": {"a": ${kafka-ingest.iteration}, "data": "fish2", "b": "bdata"}}}
 
