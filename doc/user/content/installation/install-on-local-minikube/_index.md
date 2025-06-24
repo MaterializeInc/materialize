@@ -34,18 +34,6 @@ This tutorial is for local evaluation/testing purposes only.
 
 ## Prerequisites
 
-{{< important >}}
-
-The following procedure performs an in-place upgrade, which incurs downtime.
-
-To perform a rolling upgrade(where both the old and new Materialize instances
-are running before the the old instances are removed), you can specify
-`inPlaceRollout` to false. When performing a rolling upgrade, ensure you have
-enough resources to support having both the old and new Materialize instances
-running.
-
-{{</ important >}}
-
 ### minikube
 
 Install [`minikube`](https://minikube.sigs.k8s.io/docs/start/).
