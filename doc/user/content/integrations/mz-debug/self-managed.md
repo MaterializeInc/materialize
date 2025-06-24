@@ -61,6 +61,10 @@ Each resource type directory also contains a `describe.txt` file with the output
 
 {{% integrations/mz-debug/system-catalog-files %}}
 
+{{% integrations/mz-debug/prometheus-files %}}
+
+{{% integrations/mz-debug/memory-profiles %}}
+
 ## Examples
 
 ### Debug the `materialize-environment` namespace
