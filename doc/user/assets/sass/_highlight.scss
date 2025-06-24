@@ -349,3 +349,11 @@
 .chroma .cpf {
     color: #633820;
 }
+
+body.dark .content .chroma code.language-hc {
+    .n,
+    .o,
+    .p {
+      color: var(--orange);
+    }
+}
