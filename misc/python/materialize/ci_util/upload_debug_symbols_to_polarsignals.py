@@ -43,8 +43,8 @@ def main() -> None:
     parser.add_argument(
         "--arch",
         help="the architecture of the binaries to upload",
-        choices=[Arch.X86_64, Arch.AARCH64],
-        default=Arch.host(),
+        choices=[str(Arch.X86_64), str(Arch.AARCH64)],
+        default=str(Arch.host()),
     )
     parser.add_argument(
         "--protocol",
@@ -70,7 +70,7 @@ def main() -> None:
         sanitizer=sanitizer,
         bazel=bazel,
         bazel_remote_cache=bazel_remote_cache,
-        arch=args.arch,
+        arch=Arch(args.arch),
     )
 
     collect_and_upload_debug_data_to_polarsignals(
