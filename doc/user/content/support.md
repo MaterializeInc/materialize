@@ -20,17 +20,19 @@ We offer multiple support pathways depending on your platform and plan:
 ### Messenger App
 
 You can reach us directly from:
+
 - **materialize.com**
-- **Materialize Console** (for Cloud customers)
 
 Our messenger now features Matty, our AI-powered support agent. Matty can help
-answer questions, suggest documentation, and assist with troubleshooting. If
-your issue requires human assistance, you can request to **Talk to a human**
-at any time. Just look for the messenger widget on the bottom right.
+answer questions, suggest documentation, and assist with troubleshooting. You
+can also submit a request to **Talk to a human**. Just look for the messenger
+widget on the bottom right.
 
 {{< tip >}}
-If you are an SLA Supported Customer who is experiencing an [**urgent** issue](#urgent-issues-for-sla-supported-customers-only),
-you can use the **Report Production Outage** option for fastest response.
+If you are an Enterprise customer with SLA support and are experiencing an
+**urgent** issue, you can use the [**Report Production
+Outage**](#report-production-outage-for-sla-supported-customers-only) option for
+fastest response.
 {{</ tip >}}
 
 ### Email
@@ -42,9 +44,10 @@ Materialize login email address.
 
 Connect with other users, share ideas, and get informal help from the [Materialize user community](https://materialize.com/s/chat) on Slack.
 
-## Urgent Issues (For SLA Supported Customers Only)
+## Report Production Outage (For SLA Supported Customers Only)
 
-If you are an SLA Supported Customer who is experiencing an **urgent** issue,
+If you are an SLA Supported Enterprise Customer who is experiencing an
+**urgent** issue,
 
 - *Recommended*. Use the [messenger's **Report Production
   Outage** option](#messenger-app) for fastest response.
@@ -103,7 +106,3 @@ Have ideas to improve Materialize? Use the messenger to start a conversation —
 ## Questions about your support plan?
 
 We tailor support experiences based on your workspace and plan. To learn more about what's available to your team, reach out via the messenger or email us.
-
-## Checking service status
-
-Check the current status of our services on the [status page](https://status.materialize.com).
