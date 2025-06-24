@@ -88,7 +88,6 @@ try() {
         echo "^^^ 🚨 Failed: $*"
     fi
     ((++ci_try_total))
-    return $result
 }
 try_last_failed=false
 

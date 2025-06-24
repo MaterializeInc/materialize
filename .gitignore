@@ -43,6 +43,7 @@ misc/mcp-materialize/dist
 misc/wasm/target
 parallel-benchmark.db
 license_key
+/trufflehog.log
 
 # This is un-orthodox, but adding it to the repo would "tie" it to each user's
 # local version of nixpkgs. This way, we can all use the flake and have a

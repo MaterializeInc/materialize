@@ -120,7 +120,7 @@ steps:
         timeout_in_minutes: 20
         agents:
           # Error: no prebuilt wasm-opt binaries are available for this platform: Unrecognized target!
-          queue: linux-x86_64-small
+          queue: hetzner-x86-64-4cpu-8gb
         coverage: skip
         sanitizer: skip
 
@@ -169,8 +169,8 @@ steps:
         depends_on: []
         timeout_in_minutes: 20
         agents:
-          # Use AWS machines so we have access to the Bazel remote cache.
-          queue: linux-aarch64-small
+          # TODO: Revert to aarch64 when https://github.com/trufflesecurity/trufflehog/issues/4229 is solved
+          queue: hetzner-x86-64-16cpu-32gb
         coverage: skip
         sanitizer: skip
 
