@@ -24,9 +24,9 @@ You can reach us directly from:
 - **Materialize Console** (for Cloud customers)
 
 Our messenger now features Matty, our AI-powered support agent. Matty can help
-answer questions, suggest documentation, and assist with troubleshooting. If
-your issue requires human assistance, you can request to **Talk to a human**
-at any time. Just look for the messenger widget on the bottom right.
+answer questions, suggest documentation, and assist with troubleshooting. You
+can also submit a request to **Talk to a human**. Just look for the messenger
+widget on the bottom right.
 
 {{< tip >}}
 If you are an SLA Supported Customer who is experiencing an [**urgent** issue](#urgent-issues-for-sla-supported-customers-only),
