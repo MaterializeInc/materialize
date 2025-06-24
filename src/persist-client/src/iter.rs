@@ -343,12 +343,34 @@ pub(crate) struct Consolidator<T, D, Sort: RowSort<T, D>> {
     runs: Vec<VecDeque<(ConsolidationPart<T, D>, usize)>>,
     filter: FetchBatchFilter<T>,
     budget: usize,
+    /// An optional exclusive lower bound for the KVTs that this consolidator will return.
+    /// This can be used to filter out KVTs that are not strictly larger than the bound
+    /// when "resuming" a consolidation run during incremental compaction.
+    lower_bound: Option<LowerBound<T>>,
     // NB: this is the tricky part!
     // One hazard of streaming consolidation is that we may start consolidating a particular KVT,
     // but not be able to finish, because some other part that might also contain the same KVT
     // may not have been fetched yet. The `drop_stash` gives us somewhere
     // to store the streaming iterator's work-in-progress state between runs.
     drop_stash: Option<StructuredUpdates>,
+}
+
+#[derive(Debug)]
+/// An owned lower bound type that can be exchanged for a SortKV and a timestamp.
+pub struct LowerBound<T> {
+    pub(crate) key_bound: ArrayBound,
+    pub(crate) val_bound: ArrayBound,
+    pub(crate) t: T,
+}
+
+impl<T: Clone> LowerBound<T> {
+    /// Get a reference to the key and value bounds, along with the timestamp.
+    pub fn kvt_bound(&self) -> (SortKV<'_>, T) {
+        (
+            (self.key_bound.get(), Some(self.val_bound.get())),
+            self.t.clone(),
+        )
+    }
 }
 
 impl<T, D, Sort> Consolidator<T, D, Sort>
@@ -369,6 +391,7 @@ where
         shard_metrics: Arc<ShardMetrics>,
         read_metrics: ReadMetrics,
         filter: FetchBatchFilter<T>,
+        lower_bound: Option<LowerBound<T>>,
         prefetch_budget_bytes: usize,
     ) -> Self {
         Self {
@@ -383,6 +406,7 @@ where
             filter,
             budget: prefetch_budget_bytes,
             drop_stash: None,
+            lower_bound,
         }
     }
 }
@@ -485,7 +509,9 @@ where
             return None;
         }
 
-        let mut iter = ConsolidatingIter::new(&self.context, &self.filter, &mut self.drop_stash);
+        let bound = self.lower_bound.as_ref().map(|b| b.kvt_bound());
+        let mut iter =
+            ConsolidatingIter::new(&self.context, &self.filter, bound, &mut self.drop_stash);
 
         for run in &mut self.runs {
             let last_in_run = run.len() < 2;
@@ -837,6 +863,7 @@ where
     parts: Vec<&'a StructuredUpdates>,
     heap: BinaryHeap<PartRef<'a, T, D>>,
     upper_bound: Option<(SortKV<'a>, T)>,
+    lower_bound: Option<(SortKV<'a>, T)>,
     state: Option<(Indices, SortKV<'a>, T, D)>,
     drop_stash: &'a mut Option<StructuredUpdates>,
 }
@@ -849,6 +876,7 @@ where
     fn new(
         context: &'a str,
         filter: &'a FetchBatchFilter<T>,
+        lower_bound: Option<(SortKV<'a>, T)>,
         drop_stash: &'a mut Option<StructuredUpdates>,
     ) -> Self {
         Self {
@@ -859,6 +887,7 @@ where
             upper_bound: None,
             state: None,
             drop_stash,
+            lower_bound,
         }
     }
 
@@ -926,6 +955,18 @@ where
                         }
                     }
 
+                    // Discard this KVT if it does not strictly exceed the lower bound.
+
+                    if let Some((kv_lower, t_lower)) = &self.lower_bound {
+                        if (kv_lower, t_lower) >= (kv1, t1) {
+                            // Discard this item from the part, since it's past our lower bound.
+                            let _ = part.pop(&self.parts, self.filter);
+
+                            // Continue to the next part, since it might still be relevant.
+                            continue;
+                        }
+                    }
+
                     self.state = part.pop(&self.parts, self.filter);
                 }
             } else {
@@ -986,6 +1027,7 @@ mod tests {
     use crate::internal::paths::PartialBatchKey;
     use crate::internal::state::{BatchPart, HollowBatchPart};
     use crate::metrics::Metrics;
+    use arrow::array::BinaryArray;
     use differential_dataflow::consolidation::consolidate_updates;
     use differential_dataflow::trace::Description;
     use mz_ore::metrics::MetricsRegistry;
@@ -1005,7 +1047,11 @@ mod tests {
         // Check that output consolidated via this logic matches output consolidated via timely's!
         type Rows = Vec<((Vec<u8>, Vec<u8>), u64, i64)>;
 
-        fn check(metrics: &Arc<Metrics>, parts: Vec<(Rows, usize)>) {
+        fn check(
+            metrics: &Arc<Metrics>,
+            parts: Vec<(Rows, usize)>,
+            lower_bound: (Vec<u8>, Vec<u8>, u64),
+        ) {
             let schemas = Schemas {
                 id: None,
                 key: Arc::new(VecU8Schema),
@@ -1015,6 +1061,11 @@ mod tests {
                 let mut rows = parts
                     .iter()
                     .flat_map(|(p, _)| p.clone())
+                    .filter(|((k, v), t, _)| {
+                        let (k_lower, v_lower, t_lower) = &lower_bound;
+                        // Discard any row not strictly past the lower bound.
+                        ((k_lower, v_lower), t_lower) < ((k, v), t)
+                    })
                     .collect::<Vec<_>>();
 
                 consolidate_updates(&mut rows);
@@ -1033,6 +1084,13 @@ mod tests {
                 Antichain::new(),
                 Antichain::from_elem(0),
             );
+            let key_lower_bound_array = BinaryArray::from_vec(vec![&lower_bound.0]);
+            let val_lower_bound_array = BinaryArray::from_vec(vec![&lower_bound.1]);
+            let lower_bound = LowerBound {
+                key_bound: ArrayBound::new(Arc::new(key_lower_bound_array), 0),
+                val_bound: ArrayBound::new(Arc::new(val_lower_bound_array), 0),
+                t: lower_bound.2,
+            };
             let sort: StructuredSort<Vec<u8>, Vec<u8>, u64, i64> =
                 StructuredSort::new(schemas.clone());
             let streaming = {
@@ -1093,6 +1151,7 @@ mod tests {
                     filter,
                     budget: 0,
                     drop_stash: None,
+                    lower_bound: Some(lower_bound),
                 };
 
                 let mut out = vec![];
@@ -1122,9 +1181,10 @@ mod tests {
             ((key_gen.clone(), key_gen.clone()), 0..10u64, -3..=3i64),
             0..10,
         );
+        let kvt_gen = (key_gen.clone(), key_gen.clone(), 0..10u64);
         let run_gen = vec((part_gen, 0..10usize), 0..5);
-        proptest!(|(state in run_gen)| {
-            check(&metrics, state)
+        proptest!(|(state in run_gen, bound in kvt_gen)| {
+            check(&metrics, state, bound)
         });
     }
 
@@ -1164,6 +1224,7 @@ mod tests {
                     FetchBatchFilter::Compaction {
                         since: desc.since().clone(),
                     },
+                    None,
                     budget,
                 );
 
