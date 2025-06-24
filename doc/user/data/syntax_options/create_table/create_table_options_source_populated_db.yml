@@ -1,0 +1,44 @@
+columns:
+  - column: "Parameter"
+  - column: "Description"
+rows:
+  - "Parameter": "`<table_name>`"
+    "Description": |
+
+      The name of the table to create. Names for tables must follow the [naming
+      guidelines](/sql/identifiers/#naming-restrictions).
+
+  - "Parameter": "`<source_name>`"
+    "Description": |
+
+      The name of the [source](/sql/create-source/) associated with the
+      reference object from which to create the table.
+
+  - "Parameter": "**(REFERENCE <upstream_table>)**"
+    "Description": |
+
+      The name of the upstream table from which to create the
+      table. You can create multiple tables from the same upstream table.
+
+      To find the upstream tables available in your
+      [source](/sql/create-source/), you can use the following query,
+      substituting your source name for `<source_name>`:
+
+      <br>
+
+      ```mzsql
+      SELECT refs.*
+      FROM mz_internal.mz_source_references refs, mz_sources s
+      WHERE s.name = '<source_name>' -- substitute with your source name
+      AND refs.source_id = s.id;
+      ```
+
+  - "Parameter": "**WITH (<with_option>[,...])**"
+    "Description": |
+      The following `<with_option>`s are supported:
+
+      | Option | Description |
+      |--------|-------------|
+      | <a name="text-columns"></a>`TEXT COLUMNS (<column_name> [, ...])` | *Optional.* If specified, decode data as `text` for the listed column(s), such as for **certain** unsupported data types. See also [supported types](#upstream-sources-and-supported-data-types). **Available for PostgreSQL and MySQL source only**. |
+      | <a name="exclude-columns"></a>`EXCLUDE COLUMNS (<column_name> [, ...])` | *Optional.* If specified, exclude the listed column(s) from the table. **Available for MySQL and SQL Server source only**. |
+      | <a name="partition-by"></a>`PARTITION BY (<column_name> [, ...])` | {{< include-md file="shared-content/partition-by-option-description.md" >}} |
