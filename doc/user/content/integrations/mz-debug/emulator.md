@@ -53,10 +53,6 @@ sub-directory,  the following Docker resource debug files are generated:
 
 {{% integrations/mz-debug/system-catalog-files %}}
 
-{{% integrations/mz-debug/prometheus-files %}}
-
-{{% integrations/mz-debug/memory-profiles %}}
-
 ## Example
 
 ### Debug a running local emulator container
