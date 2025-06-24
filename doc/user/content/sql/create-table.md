@@ -536,7 +536,7 @@ Once the snapshotting process completes, you can query the table:
 
 {{% include-example file="examples/create-table/example_kafka_table_json"
  example="create-a-view-from-table" %}}
- 
+
 {{< /tab >}}
 
 {{< tab "FORMAT TEXT/BYTES">}}

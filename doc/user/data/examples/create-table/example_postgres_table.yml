@@ -28,7 +28,7 @@
         - You have created a secret for the PostgreSQL password.
         - You have defined the connection to the upstream PostgreSQL.
         - You have used the connection to create a source.
-       
+
        For example (substitute with your configuration):
           CREATE SECRET pgpass AS '<replication user password>'; -- substitute
           CREATE CONNECTION pg TO POSTGRES (
