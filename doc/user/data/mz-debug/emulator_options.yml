@@ -2,24 +2,16 @@ columns:
   - column: "Option"
   - column: "Description"
 rows:
+  - Option: "`--docker-container-id <ID>`"
+    Description: |
+
+      <a name="docker-container-id"></a> The Docker container to dump.
+
+      Required.
+
   - Option: "`--dump-docker <boolean>`"
     Description: |
 
       <a name="dump-docker"></a> If `true`, dump debug information from the Docker container.
 
       Defaults to `true`.
-
-  - Option: "`--docker-container-id <ID>`"
-    Description: |
-
-      <a name="docker-container-id"></a> The Docker container to dump.
-
-      Required if [`--dump-docker`](#dump-docker) is true.
-
-  - Option: "`--mz-connection-url <URL>`"
-    Description: |
-
-      <a name="mz-connection-url"></a>The URL of the Materialize's SQL
-      connection.
-
-      Defaults to `postgres://127.0.0.1:6875/materialize?sslmode=prefer`.
