@@ -103,6 +103,13 @@ mod columnar {
             other
         }
         type Container = Overflows<T, Vec<T>>;
+        #[inline(always)]
+        fn reborrow<'b, 'a: 'b>(thing: Self::Ref<'a>) -> Self::Ref<'b>
+        where
+            Self: 'a,
+        {
+            thing
+        }
     }
 
     /// Columnar container for [`Overflowing`].
@@ -129,6 +136,13 @@ mod columnar {
         #[inline(always)]
         fn borrow<'a>(&'a self) -> Self::Borrowed<'a> {
             Overflows(self.0.borrow(), std::marker::PhantomData)
+        }
+        #[inline(always)]
+        fn reborrow<'b, 'a: 'b>(item: Self::Borrowed<'a>) -> Self::Borrowed<'b>
+        where
+            Self: 'a,
+        {
+            Overflows(TC::reborrow(item.0), std::marker::PhantomData)
         }
     }
 

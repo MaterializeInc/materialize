@@ -440,14 +440,23 @@ mod columnar {
 
     impl Columnar for Row {
         type Ref<'a> = &'a RowRef;
+        #[inline(always)]
         fn copy_from(&mut self, other: Self::Ref<'_>) {
             self.clear();
             self.data.extend_from_slice(other.data());
         }
+        #[inline(always)]
         fn into_owned(other: Self::Ref<'_>) -> Self {
             other.to_owned()
         }
         type Container = Rows;
+        #[inline(always)]
+        fn reborrow<'b, 'a: 'b>(thing: Self::Ref<'a>) -> Self::Ref<'b>
+        where
+            Self: 'a,
+        {
+            thing
+        }
     }
 
     impl<'b, BC: Container<u64>> Container<Row> for Rows<BC, &'b [u8]> {
@@ -455,10 +464,21 @@ mod columnar {
             = Rows<BC::Borrowed<'a>, &'a [u8]>
         where
             Self: 'a;
+        #[inline(always)]
         fn borrow<'a>(&'a self) -> Self::Borrowed<'a> {
             Rows {
                 bounds: self.bounds.borrow(),
                 values: self.values,
+            }
+        }
+        #[inline(always)]
+        fn reborrow<'c, 'a: 'c>(item: Self::Borrowed<'a>) -> Self::Borrowed<'c>
+        where
+            Self: 'a,
+        {
+            Rows {
+                bounds: BC::reborrow(item.bounds),
+                values: item.values,
             }
         }
     }
@@ -467,20 +487,33 @@ mod columnar {
             = Rows<BC::Borrowed<'a>, &'a [u8]>
         where
             BC: 'a;
+        #[inline(always)]
         fn borrow<'a>(&'a self) -> Self::Borrowed<'a> {
             Rows {
                 bounds: self.bounds.borrow(),
                 values: self.values.borrow(),
             }
         }
+        #[inline(always)]
+        fn reborrow<'c, 'a: 'c>(item: Self::Borrowed<'a>) -> Self::Borrowed<'c>
+        where
+            Self: 'a,
+        {
+            Rows {
+                bounds: BC::reborrow(item.bounds),
+                values: item.values,
+            }
+        }
     }
 
     impl<'a, BC: AsBytes<'a>, VC: AsBytes<'a>> AsBytes<'a> for Rows<BC, VC> {
+        #[inline(always)]
         fn as_bytes(&self) -> impl Iterator<Item = (u64, &'a [u8])> {
             self.bounds.as_bytes().chain(self.values.as_bytes())
         }
     }
     impl<'a, BC: FromBytes<'a>, VC: FromBytes<'a>> FromBytes<'a> for Rows<BC, VC> {
+        #[inline(always)]
         fn from_bytes(bytes: &mut impl Iterator<Item = &'a [u8]>) -> Self {
             Self {
                 bounds: FromBytes::from_bytes(bytes),
@@ -535,18 +568,21 @@ mod columnar {
         }
     }
     impl<BC: Push<u64>> Push<&RowRef> for Rows<BC> {
+        #[inline(always)]
         fn push(&mut self, item: &RowRef) {
             self.values.extend_from_slice(item.data());
             self.bounds.push(u64::cast_from(self.values.len()));
         }
     }
     impl<BC: Clear, VC: Clear> Clear for Rows<BC, VC> {
+        #[inline(always)]
         fn clear(&mut self) {
             self.bounds.clear();
             self.values.clear();
         }
     }
     impl<BC: HeapSize, VC: HeapSize> HeapSize for Rows<BC, VC> {
+        #[inline(always)]
         fn heap_size(&self) -> (usize, usize) {
             let (l0, c0) = self.bounds.heap_size();
             let (l1, c1) = self.values.heap_size();
