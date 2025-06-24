@@ -1850,14 +1850,10 @@ def workflow_test_compute_reconciliation_reuse(c: Composition) -> None:
     )
 
     reused, replaced = fetch_reconciliation_metrics("clusterd1")
-
-    assert reused == 15
-    assert replaced == 0
+    assert reused == 15 and replaced == 0, f"{reused=}, {replaced=}"
 
     reused, replaced = fetch_reconciliation_metrics("clusterd2")
-
-    assert reused > 10
-    assert replaced == 0
+    assert reused > 10 and replaced == 0, f"{reused=}, {replaced=}"
 
 
 def workflow_test_compute_reconciliation_replace(c: Composition) -> None:
@@ -1943,9 +1939,7 @@ def workflow_test_compute_reconciliation_replace(c: Composition) -> None:
     )
 
     reused, replaced = fetch_reconciliation_metrics("clusterd1")
-
-    assert reused == 0
-    assert replaced == 4
+    assert reused == 0 and replaced == 4, f"{reused=}, {replaced=}"
 
 
 def workflow_test_compute_reconciliation_no_errors(c: Composition) -> None:
