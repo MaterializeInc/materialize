@@ -20,8 +20,7 @@
 #     https://github.com/contributor-assistant/github-action/blob/master/README.md
 
 # Check if PR authors have signed the Materialize CLA, and if not have them sign
-# and record their signature. The CLA and signatures are stored in
-# https://github.com/MaterializeInc/cla
+# and record their signature. The CLA and signatures are stored in https://github.com/MaterializeInc/cla
 
 name: CLA Assistant
 on:
