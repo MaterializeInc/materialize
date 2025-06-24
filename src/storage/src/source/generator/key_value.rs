@@ -191,6 +191,8 @@ pub fn render<G: Scope<Timestamp = MzOffset>>(
                 for stats in snapshot_export_stats.iter() {
                     stats.set_snapshot_records_known(local_snapshot_size);
                 }
+                // output_map can contain no outputs, which would leave output_indexes empty
+                let num_outputs = u64::cast_from(output_indexes.len()).max(1);
                 while local_partitions.iter().any(|si| !si.finished()) {
                     for sp in local_partitions.iter_mut() {
                         let mut emitted_all_exports = 0;
@@ -198,8 +200,8 @@ pub fn render<G: Scope<Timestamp = MzOffset>>(
                             data_output.give_fueled(&cap, u).await;
                             emitted_all_exports += 1;
                         }
-                        // emitted_all_indexes is going to be 0 or batch_size * output_indexes.len()
-                        emitted += emitted_all_exports / u64::cast_from(output_indexes.len());
+                        // emitted_all_indexes is going to be some multiple of num_outputs;
+                        emitted += emitted_all_exports / num_outputs;
                         emitted_total += emitted_all_exports;
                     }
                     source_statistics.set_snapshot_records_staged(emitted_total);
