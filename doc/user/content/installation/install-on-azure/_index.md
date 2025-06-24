@@ -336,12 +336,12 @@ deploys a sample infrastructure on Azure with the following components:
    EOF
    ```
 
-   Starting in v0.3.0, the Materialize on Azure Terraform module also deploys,
-   by default, a self-signed `ClusterIssuer`. The `ClusterIssuer` is deployed
-   after the `cert-manager` is deployed and running.
+   - **Starting in v0.3.0**, the Materialize on Azure Terraform module also
+     deploys, by default, a self-signed `ClusterIssuer`. The `ClusterIssuer` is
+     deployed after the `cert-manager` is deployed and running.
 
-   Starting in v0.3.1, the Materialize on Azure Terraform module also deploys,
-   by default, [Load
+   - **Starting in v0.3.1**, the Materialize on Azure Terraform module also
+   deploys, by default, [Load
    balancers](https://github.com/MaterializeInc/terraform-azurerm-materialize?tab=readme-ov-file#input_materialize_instances)
    for Materialize instances (i.e., the
    [`create_load_balancer`](https://github.com/MaterializeInc/terraform-azurerm-materialize?tab=readme-ov-file#input_materialize_instances)
@@ -349,6 +349,9 @@ deploys a sample infrastructure on Azure with the following components:
    be internal (i.e., the
    [`internal_load_balancer`](https://github.com/MaterializeInc/terraform-azurerm-materialize?tab=readme-ov-file#input_materialize_instances)
    flag defaults to `true`).
+
+   - **Starting in v0.4.3**, you can specify addition configuration options via
+     `environmentd_extra_args`.
 
    {{< tip >}}
    {{% self-managed/azure-terraform-upgrade-notes %}}
