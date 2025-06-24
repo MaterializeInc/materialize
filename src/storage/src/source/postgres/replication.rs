@@ -393,7 +393,7 @@ pub(crate) fn render<G: Scope<Timestamp = MzOffset>>(
                 committed_uppers.as_mut(),
                 &probe_output,
                 &probe_cap[0],
-                &source_statistics,
+                source_statistics,
             )
             .await?;
 
