@@ -370,9 +370,9 @@ pub async fn blob_batch_part(
 }
 
 async fn consolidated_size(args: &StateArgs) -> Result<(), anyhow::Error> {
-    let cfg = PersistConfig::new_default_configs(&READ_ALL_BUILD_INFO, SYSTEM_TIME.clone());
     let shard_id = args.shard_id();
     let state_versions = args.open().await?;
+    let cfg = &state_versions.cfg;
     let versions = state_versions
         .fetch_recent_live_diffs::<u64>(&shard_id)
         .await;
@@ -391,7 +391,7 @@ async fn consolidated_size(args: &StateArgs) -> Result<(), anyhow::Error> {
         while let Some(part) = part_stream.try_next().await? {
             tracing::info!("fetching {}", part.printable_name());
             let encoded_part = EncodedPart::fetch(
-                &FetchConfig::from_persist_config(&cfg),
+                &FetchConfig::from_persist_config(cfg),
                 &shard_id,
                 &*state_versions.blob,
                 &state_versions.metrics,
