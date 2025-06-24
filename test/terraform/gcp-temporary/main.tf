@@ -48,7 +48,7 @@ provider "helm" {
 }
 
 module "materialize" {
-  source = "github.com/MaterializeInc/terraform-google-materialize?ref=v0.4.2"
+  source = "github.com/MaterializeInc/terraform-google-materialize?ref=v0.4.3"
 
   project_id = var.project_id
   region     = var.region
