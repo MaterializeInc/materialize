@@ -314,6 +314,10 @@ true
     BATCH SIZE 2
   );
 
+
+> SELECT count(*) FROM kv_snapshot;
+48
+
 > CREATE TABLE kv_up FROM SOURCE kv_snapshot INCLUDE KEY ENVELOPE UPSERT;
 
 > SELECT count(*) FROM kv_up;
@@ -371,6 +375,9 @@ kv_up 0 0 0 0 0 16 16
     BATCH SIZE 2,
     TRANSACTIONAL SNAPSHOT false
   );
+
+> SELECT count(*) FROM kv_snapshot;
+48
 
 > CREATE TABLE kv_up FROM SOURCE kv_snapshot INCLUDE KEY ENVELOPE UPSERT;
 
