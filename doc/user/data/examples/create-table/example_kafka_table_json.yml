@@ -72,7 +72,7 @@
   results: |
     The results should display information on the table column(s). For JSON
     messages, the command creates a table `purchases` with 1 column named
-    `data` of type [`jsonb`](/sql/types/jsonb/). 
+    `data` of type [`jsonb`](/sql/types/jsonb/).
 
     {{< tip >}}
     You can create a view on the table to parse the JSON data into a more structured
@@ -92,10 +92,10 @@
     | {"customerid":"xyz123","purchaseDetails":{"item":"eraser","purchaseDate":"2025-04-01T17:00:00.000Z","units":100},"shipped":true}  |
     ```
 
-    {{< tip >}} 
+    {{< tip >}}
     You can create a view on the table to parse the JSON data into a
     more structured format. See [Create a view from JSON
-    data](#create-a-view-from-table). 
+    data](#create-a-view-from-table).
     {{</ tip >}}
 
 - name: "create-a-view-from-table"
@@ -103,9 +103,9 @@
     You can create a view on the table to parse the JSON data into a more
     structured format. That is, create a view that parses each field into a
     separate column.
-    
+
     For example, if `data` column contains records like:
-    
+
     ```
     {"customerid":"abc123","purchaseDetails":{"item":"marker","purchaseDate":"2025-02-01T17:00:00.000Z","units":500},"shipped":false}
     ```
@@ -132,4 +132,3 @@
     ```mzsql
     SELECT * FROM my_parsed_json_view;
     ```
-

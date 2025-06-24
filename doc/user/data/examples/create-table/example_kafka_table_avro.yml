@@ -1,7 +1,7 @@
 - name: "create-table"
   description: |
     Materialize supports ingesting Kafka messages encoded in
-    Avro using the schema from the Confluent Schema Registry. 
+    Avro using the schema from the Confluent Schema Registry.'
 
     To create new **read-only** tables from Kafka messages encoded in Avro, use
     the `CREATE TABLE ... FROM SOURCE ... FORMAT AVRO USING CONFLUENT SCHEMA
