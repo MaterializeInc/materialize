@@ -110,6 +110,17 @@ table.inline-headings {
     }
 }
 
+/*
+ Theme override for the Algolia Docsearch modal
+*/
+
+
+.DocSearch-Modal {
+    --docsearch-primary-color: #{$purple-v2};
+    --docsearch-highlight-color: #{$purple-v2};
+    --docsearch-searchbox-shadow: inset 0 0 0 2px var(--docsearch-primary-color);
+}
+
 .backdrop {
     position: fixed;
     height: 100vh;
