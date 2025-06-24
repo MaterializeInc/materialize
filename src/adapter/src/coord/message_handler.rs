@@ -406,46 +406,6 @@ impl Coordinator {
                     }
                 }
             }
-            ControllerResponse::ComputeReplicaMetrics(replica_id, new) => {
-                let m = match self
-                    .transient_replica_metadata
-                    .entry(replica_id)
-                    .or_insert_with(|| Some(Default::default()))
-                {
-                    // `None` is the tombstone for a removed replica
-                    None => return,
-                    Some(md) => &mut md.metrics,
-                };
-                let old = std::mem::replace(m, Some(new.clone()));
-                if old.as_ref() != Some(&new) {
-                    let retractions = old.map(|old| {
-                        self.catalog().state().pack_replica_metric_updates(
-                            replica_id,
-                            &old,
-                            Diff::MINUS_ONE,
-                        )
-                    });
-                    let insertions = self.catalog().state().pack_replica_metric_updates(
-                        replica_id,
-                        &new,
-                        Diff::ONE,
-                    );
-                    let updates = if let Some(retractions) = retractions {
-                        retractions
-                            .into_iter()
-                            .chain(insertions.into_iter())
-                            .collect()
-                    } else {
-                        insertions
-                    };
-                    let updates = self
-                        .catalog()
-                        .state()
-                        .resolve_builtin_table_updates(updates);
-                    // We don't care about when the write finishes.
-                    let _notify = self.builtin_table_update().background(updates);
-                }
-            }
             ControllerResponse::WatchSetFinished(ws_ids) => {
                 let now = self.now();
                 for ws_id in ws_ids {
@@ -730,45 +690,17 @@ impl Coordinator {
 
             let old_replica_status =
                 ClusterReplicaStatuses::cluster_replica_status(replica_statues);
-            let old_process_status = replica_statues
-                .get(&event.process_id)
-                .expect("Process exists");
-            let builtin_table_retraction =
-                self.catalog().state().pack_cluster_replica_status_update(
-                    event.replica_id,
-                    event.process_id,
-                    old_process_status,
-                    Diff::MINUS_ONE,
-                );
-            let builtin_table_retraction = self
-                .catalog()
-                .state()
-                .resolve_builtin_table_update(builtin_table_retraction);
 
             let new_process_status = ClusterReplicaProcessStatus {
                 status: event.status,
                 time: event.time,
             };
-            let builtin_table_addition = self.catalog().state().pack_cluster_replica_status_update(
-                event.replica_id,
-                event.process_id,
-                &new_process_status,
-                Diff::ONE,
-            );
-            let builtin_table_addition = self
-                .catalog()
-                .state()
-                .resolve_builtin_table_update(builtin_table_addition);
             self.cluster_replica_statuses.ensure_cluster_status(
                 event.cluster_id,
                 event.replica_id,
                 event.process_id,
                 new_process_status,
             );
-
-            let builtin_table_updates = vec![builtin_table_retraction, builtin_table_addition];
-            // Returns a Future that completes when the Builtin Table write is completed.
-            let builtin_table_completion = self.builtin_table_update().defer(builtin_table_updates);
 
             let cluster = self.catalog().get_cluster(event.cluster_id);
             let replica = cluster.replica(event.replica_id).expect("Replica exists");
@@ -784,17 +716,7 @@ impl Coordinator {
                     status: new_replica_status,
                     time: event.time,
                 };
-                // In a separate task, so we don't block the Coordinator, wait for the builtin
-                // table update to complete, and then notify active sessions.
-                mz_ore::task::spawn(
-                    || format!("cluster_event-{}-{}", event.cluster_id, event.replica_id),
-                    async move {
-                        // Wait for the builtin table updates to complete.
-                        builtin_table_completion.await;
-                        // Notify all sessions that were active at the time the cluster status changed.
-                        (notifier)(notice)
-                    },
-                );
+                notifier(notice);
             }
         }
     }
