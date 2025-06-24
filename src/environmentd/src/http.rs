@@ -710,12 +710,7 @@ impl IntoResponse for AuthError {
             AuthError::HttpsRequired => self.to_string(),
             _ => "unauthorized".into(),
         };
-        (
-            StatusCode::UNAUTHORIZED,
-            [(http::header::WWW_AUTHENTICATE, "Basic realm=Materialize")],
-            message,
-        )
-            .into_response()
+        (StatusCode::UNAUTHORIZED, message).into_response()
     }
 }
 
