@@ -237,12 +237,14 @@ class State:
     path: Path
     environmentd_port_forward_process: subprocess.Popen[bytes] | None
     balancerd_port_forward_process: subprocess.Popen[bytes] | None
+    version: int
 
     def __init__(self, path: Path):
         self.materialize_environment = None
         self.path = path
         self.environmentd_port_forward_process = None
         self.balancerd_port_forward_process = None
+        self.version = 0
 
     def kubectl_setup(
         self, tag: str, metadata_backend_url: str, persist_backend_url: str
@@ -673,7 +675,7 @@ class AWS(State):
         self.kubectl_setup(tag, metadata_backend_url, persist_backend_url)
 
     def upgrade(self, tag: str) -> None:
-        print("--- Upgrading")
+        print(f"--- Upgrading to {tag}")
         # Following https://materialize.com/docs/self-managed/v25.1/installation/install-on-aws/upgrade-on-aws/
         self.materialize_environment = {
             "apiVersion": "materialize.cloud/v1alpha1",
@@ -684,7 +686,7 @@ class AWS(State):
             },
             "spec": {
                 "inPlaceRollout": True,
-                "requestRollout": "12345678-9012-3456-7890-123456789013",
+                "requestRollout": f"12345678-9012-3456-7890-12345678901{self.version+3}",
                 "environmentdImageRef": f"materialize/environmentd:{tag}",
                 "environmentdResourceRequirements": {
                     "limits": {"memory": "4Gi"},
@@ -699,6 +701,7 @@ class AWS(State):
             },
         }
 
+        self.version += 1
         spawn.runv(
             ["kubectl", "apply", "-f", "-"],
             cwd=self.path,
@@ -805,7 +808,7 @@ def workflow_aws_upgrade(c: Composition, parser: WorkflowArgumentParser) -> None
     add_arguments_temporary_test(parser)
     args = parser.parse_args()
 
-    previous_tag = get_self_managed_versions()[-1]
+    previous_tags = get_self_managed_versions()
     tag = get_tag(args.tag)
     path = MZ_ROOT / "test" / "terraform" / "aws-upgrade"
     aws = AWS(path)
@@ -813,7 +816,9 @@ def workflow_aws_upgrade(c: Composition, parser: WorkflowArgumentParser) -> None
     try:
         if args.run_mz_debug:
             mz_debug_build_thread = build_mz_debug_async()
-        aws.setup("aws-upgrade", args.setup, str(previous_tag), str(tag))
+        aws.setup("aws-upgrade", args.setup, str(previous_tags[0]), str(tag))
+        for previous_tag in previous_tags[1:]:
+            aws.upgrade(str(previous_tag))
         aws.upgrade(tag)
         if args.test:
             # Try waiting a bit, otherwise connection error, should be handled better
