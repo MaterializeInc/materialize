@@ -86,9 +86,6 @@ use serde_json::json;
 use tokio::time::{self, Duration};
 use tracing::warn;
 
-/// How frequently to send a summary to Segment.
-const REPORT_INTERVAL: Duration = Duration::from_secs(3600);
-
 /// Telemetry configuration.
 #[derive(Clone)]
 pub struct Config {
@@ -98,6 +95,8 @@ pub struct Config {
     pub adapter_client: mz_adapter::Client,
     /// The ID of the environment for which to report data.
     pub environment_id: EnvironmentId,
+    /// How frequently to send a summary to Segment.
+    pub report_interval: Duration,
 }
 
 /// Starts reporting telemetry events to Segment.
@@ -110,6 +109,7 @@ async fn report_loop(
         segment_client,
         adapter_client,
         environment_id,
+        report_interval,
     }: Config,
 ) {
     struct Stats {
@@ -122,7 +122,7 @@ async fn report_loop(
 
     let mut last_stats: Option<Stats> = None;
 
-    let mut interval = time::interval(REPORT_INTERVAL);
+    let mut interval = time::interval(report_interval);
     loop {
         interval.tick().await;
 
