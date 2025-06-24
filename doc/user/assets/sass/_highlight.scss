@@ -357,3 +357,7 @@ body.dark .content .chroma code.language-hc {
       color: var(--orange);
     }
 }
+
+body.dark .content .chroma .hl {
+    background-color: #292925;
+}
