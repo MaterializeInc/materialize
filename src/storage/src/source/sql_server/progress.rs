@@ -12,15 +12,14 @@
 //! The operator does the following:
 //!
 //! * At some cadence [`OFFSET_KNOWN_INTERVAL`] will probe the source for the max
-//!   [`Lsn`] and emit a [`ProgressStatisticsUpdate`] to notify listeners of a
-//!   new "known LSN".
+//!   [`Lsn`], emit the upstream known offset, and update `SourceStatistics`.
 //! * Listen to a provided [`futures::Stream`] of resume uppers, which represents
 //!   the durably committed upper for _all_ of the subsources/exports associated
 //!   with this source. As the source makes progress this operator does two
 //!   things:
 //!     1. If [`CDC_CLEANUP_CHANGE_TABLE`] is enabled, will delete entries from
 //!        the upstream change table that we've already ingested.
-//!     2. Emit a [`ProgressStatisticsUpdate`] to notify listeners of a new
+//!     2. Update `SourceStatistics` to notify listeners of a new
 //!        "committed LSN".
 //!
 //! [`SqlServerSource`]: mz_storage_types::sources::SqlServerSource
