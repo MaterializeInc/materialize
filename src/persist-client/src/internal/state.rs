@@ -2342,6 +2342,12 @@ where
     }
 }
 
+#[derive(Copy, Clone, Debug)]
+pub struct GcConfig {
+    pub use_active_gc: bool,
+    pub fallback_threshold_ms: u64,
+}
+
 impl<T> State<T>
 where
     T: Timestamp + Lattice + Codec64,
@@ -2421,13 +2427,11 @@ where
     // them being executed in the order they are given. But it is expected that
     // gc assignments are best-effort respected. In practice, cmds like
     // register_foo or expire_foo, where it would be awkward, ignore gc.
-    pub fn maybe_gc(
-        &mut self,
-        is_write: bool,
-        use_active_gc: bool,
-        fallback_threshold_ms: u64,
-        now: u64,
-    ) -> Option<GcReq> {
+    pub fn maybe_gc(&mut self, is_write: bool, now: u64, cfg: GcConfig) -> Option<GcReq> {
+        let GcConfig {
+            use_active_gc,
+            fallback_threshold_ms,
+        } = cfg;
         // This is an arbitrary-ish threshold that scales with seqno, but never
         // gets particularly big. It probably could be much bigger and certainly
         // could use a tuning pass at some point.
@@ -3718,8 +3722,10 @@ pub(crate) mod tests {
 
     #[mz_ore::test]
     fn maybe_gc_active_gc() {
-        const GC_USE_ACTIVE_GC: bool = true;
-        const GC_FALLBACK_THRESHOLD_MS: u64 = 5000;
+        const GC_CONFIG: GcConfig = GcConfig {
+            use_active_gc: true,
+            fallback_threshold_ms: 5000,
+        };
         let now_fn = SYSTEM_TIME.clone();
 
         let mut state = TypedState::<String, String, u64, i64>::new(
@@ -3731,14 +3737,8 @@ pub(crate) mod tests {
 
         let now = now_fn();
         // Empty state doesn't need gc, regardless of is_write.
-        assert_eq!(
-            state.maybe_gc(true, GC_USE_ACTIVE_GC, GC_FALLBACK_THRESHOLD_MS, now),
-            None
-        );
-        assert_eq!(
-            state.maybe_gc(false, GC_USE_ACTIVE_GC, GC_FALLBACK_THRESHOLD_MS, now),
-            None
-        );
+        assert_eq!(state.maybe_gc(true, now, GC_CONFIG), None);
+        assert_eq!(state.maybe_gc(false, now, GC_CONFIG), None);
 
         // Artificially advance the seqno so the seqno_since advances past our
         // internal gc_threshold.
@@ -3758,14 +3758,11 @@ pub(crate) mod tests {
             100,
             None,
         );
-        assert_eq!(
-            state.maybe_gc(false, GC_USE_ACTIVE_GC, GC_FALLBACK_THRESHOLD_MS, now),
-            None
-        );
+        assert_eq!(state.maybe_gc(false, now, GC_CONFIG), None);
 
         // A write will gc though.
         assert_eq!(
-            state.maybe_gc(true, GC_USE_ACTIVE_GC, GC_FALLBACK_THRESHOLD_MS, now),
+            state.maybe_gc(true, now, GC_CONFIG),
             Some(GcReq {
                 shard_id: state.shard_id,
                 new_seqno_since: SeqNo(100)
@@ -3781,17 +3778,14 @@ pub(crate) mod tests {
         state.seqno = SeqNo(200);
         assert_eq!(state.seqno_since(), SeqNo(200));
 
-        assert_eq!(
-            state.maybe_gc(true, GC_USE_ACTIVE_GC, GC_FALLBACK_THRESHOLD_MS, now),
-            None
-        );
+        assert_eq!(state.maybe_gc(true, now, GC_CONFIG), None);
 
         state.seqno = SeqNo(300);
         assert_eq!(state.seqno_since(), SeqNo(300));
         // But if we advance the time past the threshold, we will gc.
-        let new_now = now + GC_FALLBACK_THRESHOLD_MS + 1;
+        let new_now = now + GC_CONFIG.fallback_threshold_ms + 1;
         assert_eq!(
-            state.maybe_gc(true, GC_USE_ACTIVE_GC, GC_FALLBACK_THRESHOLD_MS, new_now),
+            state.maybe_gc(true, new_now, GC_CONFIG),
             Some(GcReq {
                 shard_id: state.shard_id,
                 new_seqno_since: SeqNo(300)
@@ -3804,7 +3798,7 @@ pub(crate) mod tests {
         state.seqno = SeqNo(301);
         assert_eq!(state.seqno_since(), SeqNo(301));
         assert_eq!(
-            state.maybe_gc(true, GC_USE_ACTIVE_GC, GC_FALLBACK_THRESHOLD_MS, new_now),
+            state.maybe_gc(true, new_now, GC_CONFIG),
             Some(GcReq {
                 shard_id: state.shard_id,
                 new_seqno_since: SeqNo(301)
@@ -3823,7 +3817,7 @@ pub(crate) mod tests {
         // If there are no writers, even a non-write will gc.
         let _ = state.collections.expire_writer(&writer_id);
         assert_eq!(
-            state.maybe_gc(false, GC_USE_ACTIVE_GC, GC_FALLBACK_THRESHOLD_MS, now),
+            state.maybe_gc(false, now, GC_CONFIG),
             Some(GcReq {
                 shard_id: state.shard_id,
                 new_seqno_since: SeqNo(400)
@@ -3833,8 +3827,10 @@ pub(crate) mod tests {
 
     #[mz_ore::test]
     fn maybe_gc_classic() {
-        const GC_USE_ACTIVE_GC: bool = false;
-        const GC_FALLBACK_THRESHOLD_MS: u64 = 5000;
+        const GC_CONFIG: GcConfig = GcConfig {
+            use_active_gc: false,
+            fallback_threshold_ms: 5000,
+        };
         const NOW_MS: u64 = 0;
 
         let mut state = TypedState::<String, String, u64, i64>::new(
@@ -3845,14 +3841,8 @@ pub(crate) mod tests {
         );
 
         // Empty state doesn't need gc, regardless of is_write.
-        assert_eq!(
-            state.maybe_gc(true, GC_USE_ACTIVE_GC, GC_FALLBACK_THRESHOLD_MS, NOW_MS),
-            None
-        );
-        assert_eq!(
-            state.maybe_gc(false, GC_USE_ACTIVE_GC, GC_FALLBACK_THRESHOLD_MS, NOW_MS),
-            None
-        );
+        assert_eq!(state.maybe_gc(true, NOW_MS, GC_CONFIG), None);
+        assert_eq!(state.maybe_gc(false, NOW_MS, GC_CONFIG), None);
 
         // Artificially advance the seqno so the seqno_since advances past our
         // internal gc_threshold.
@@ -3873,14 +3863,11 @@ pub(crate) mod tests {
             100,
             None,
         );
-        assert_eq!(
-            state.maybe_gc(false, GC_USE_ACTIVE_GC, GC_FALLBACK_THRESHOLD_MS, NOW_MS),
-            None
-        );
+        assert_eq!(state.maybe_gc(false, NOW_MS, GC_CONFIG), None);
 
         // A write will gc though.
         assert_eq!(
-            state.maybe_gc(true, GC_USE_ACTIVE_GC, GC_FALLBACK_THRESHOLD_MS, NOW_MS),
+            state.maybe_gc(true, NOW_MS, GC_CONFIG),
             Some(GcReq {
                 shard_id: state.shard_id,
                 new_seqno_since: SeqNo(100)
@@ -3895,7 +3882,7 @@ pub(crate) mod tests {
         // If there are no writers, even a non-write will gc.
         let _ = state.collections.expire_writer(&writer_id);
         assert_eq!(
-            state.maybe_gc(false, GC_USE_ACTIVE_GC, GC_FALLBACK_THRESHOLD_MS, NOW_MS),
+            state.maybe_gc(false, NOW_MS, GC_CONFIG),
             Some(GcReq {
                 shard_id: state.shard_id,
                 new_seqno_since: SeqNo(200)

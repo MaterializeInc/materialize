@@ -32,7 +32,7 @@ use crate::internal::metrics::{CmdMetrics, Metrics, ShardMetrics};
 use crate::internal::paths::{PartialRollupKey, RollupId};
 use crate::internal::state::{
     ActiveGc, ActiveRollup, EncodedSchemas, ExpiryMetrics, GC_FALLBACK_THRESHOLD_MS,
-    GC_USE_ACTIVE_GC, HollowBatch, LeasedReaderState, ROLLUP_FALLBACK_THRESHOLD_MS,
+    GC_USE_ACTIVE_GC, GcConfig, HollowBatch, LeasedReaderState, ROLLUP_FALLBACK_THRESHOLD_MS,
     ROLLUP_THRESHOLD, ROLLUP_USE_ACTIVE_ROLLUP, Since, SnapshotErr, StateCollections, TypedState,
     Upper,
 };
@@ -494,8 +494,10 @@ where
         let is_rollup = cmd.name == metrics.cmds.add_rollup.name;
         let is_become_tombstone = cmd.name == metrics.cmds.become_tombstone.name;
 
-        let use_active_gc = GC_USE_ACTIVE_GC.get(cfg);
-        let gc_fallback_threshold_ms = u64::cast_from(GC_FALLBACK_THRESHOLD_MS.get(cfg));
+        let gc_config = GcConfig {
+            use_active_gc: GC_USE_ACTIVE_GC.get(cfg),
+            fallback_threshold_ms: u64::cast_from(GC_FALLBACK_THRESHOLD_MS.get(cfg)),
+        };
 
         let use_active_rollup = ROLLUP_USE_ACTIVE_ROLLUP.get(cfg);
         let rollup_threshold = ROLLUP_THRESHOLD.get(cfg);
@@ -551,11 +553,10 @@ where
         // GarbageCollector to delete eligible blobs and truncate the
         // state history. This is dependant both on `maybe_gc` returning
         // Some _and_ on this state being successfully compare_and_set.
-        let garbage_collection =
-            new_state.maybe_gc(is_write, use_active_gc, gc_fallback_threshold_ms, now);
+        let garbage_collection = new_state.maybe_gc(is_write, now, gc_config);
 
         if let Some(gc) = garbage_collection.as_ref() {
-            if use_active_gc {
+            if gc_config.use_active_gc {
                 new_state.collections.active_gc = Some(ActiveGc {
                     seqno: gc.new_seqno_since,
                     start_ms: now,
