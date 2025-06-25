@@ -91,21 +91,22 @@ pub(crate) const OPTIMIZE_IGNORED_DATA_FETCH: Config<bool> = Config::new(
     "CYA to allow opt-out of a performance optimization to skip fetching ignored data",
 );
 
-pub(crate) const FETCH_VALIDATE_PART_LOWER_BOUNDS_ON_READ: Config<bool> = Config::new(
-    "persist_validate_part_lower_bounds_on_read",
+pub(crate) const FETCH_VALIDATE_PART_BOUNDS_ON_READ: Config<bool> = Config::new(
+    "persist_validate_part_bounds_on_read",
     true,
-    "Validate that the lower of the part is less than or equal to the lower of the batch containing that part.",
+    "Validate the part lower <= the batch lower and the part upper <= batch upper,\
+    for the batch containing that part",
 );
 
 #[derive(Debug, Clone)]
 pub(crate) struct FetchConfig {
-    pub(crate) validate_lower_bounds_on_read: bool,
+    pub(crate) validate_bounds_on_read: bool,
 }
 
 impl FetchConfig {
     pub fn from_persist_config(cfg: &PersistConfig) -> Self {
         Self {
-            validate_lower_bounds_on_read: FETCH_VALIDATE_PART_LOWER_BOUNDS_ON_READ.get(cfg),
+            validate_bounds_on_read: FETCH_VALIDATE_PART_BOUNDS_ON_READ.get(cfg),
         }
     }
 }
@@ -1260,7 +1261,7 @@ where
         let needs_truncation = inline_desc.lower() != registered_desc.lower()
             || inline_desc.upper() != registered_desc.upper();
         if needs_truncation {
-            if cfg.validate_lower_bounds_on_read {
+            if cfg.validate_bounds_on_read {
                 assert!(
                     PartialOrder::less_equal(inline_desc.lower(), registered_desc.lower()),
                     "key={} inline={:?} registered={:?}",
@@ -1268,19 +1269,20 @@ where
                     inline_desc,
                     registered_desc
                 );
-            }
-            if ts_rewrite.is_none() {
-                // The ts rewrite feature allows us to advance the registered
-                // upper of a batch that's already been staged (the inline
-                // upper), so if it's been used, then there's no useful
-                // invariant that we can assert here.
-                assert!(
-                    PartialOrder::less_equal(registered_desc.upper(), inline_desc.upper()),
-                    "key={} inline={:?} registered={:?}",
-                    printable_name,
-                    inline_desc,
-                    registered_desc
-                );
+
+                if ts_rewrite.is_none() {
+                    // The ts rewrite feature allows us to advance the registered
+                    // upper of a batch that's already been staged (the inline
+                    // upper), so if it's been used, then there's no useful
+                    // invariant that we can assert here.
+                    assert!(
+                        PartialOrder::less_equal(registered_desc.upper(), inline_desc.upper()),
+                        "key={} inline={:?} registered={:?}",
+                        printable_name,
+                        inline_desc,
+                        registered_desc
+                    );
+                }
             }
             // As mentioned above, batches that needs truncation will always have a
             // since of the minimum timestamp. Technically we could truncate any

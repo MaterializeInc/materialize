@@ -314,7 +314,7 @@ def get_variable_system_parameters(
             "persist_blob_cache_scale_with_threads", "true", ["true", "false"]
         ),
         VariableSystemParameter(
-            "persist_validate_part_lower_bounds_on_read", "true", ["true", "false"]
+            "persist_validate_part_bounds_on_read", "true", ["true", "false"]
         ),
         VariableSystemParameter("pg_offset_known_interval", "1s", ["100ms", "1s"]),
         VariableSystemParameter(

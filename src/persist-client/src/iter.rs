@@ -1052,7 +1052,7 @@ mod tests {
             let streaming = {
                 // Toy compaction loop!
                 let fetch_cfg = FetchConfig {
-                    validate_lower_bounds_on_read: true,
+                    validate_bounds_on_read: true,
                 };
                 let mut consolidator = Consolidator {
                     cfg: fetch_cfg.clone(),
@@ -1173,7 +1173,7 @@ mod tests {
             });
 
             let fetch_cfg = FetchConfig {
-                validate_lower_bounds_on_read: true,
+                validate_bounds_on_read: true,
             };
 
             let mut consolidator: Consolidator<u64, i64, StructuredSort<_, _, _, _>> =
