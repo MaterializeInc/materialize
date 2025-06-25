@@ -37,12 +37,26 @@ class SmallClusters(Scenario):
             for i in range(self.n())
         )
 
+        # We wait until all clusters are booted and connected before starting
+        # the time measurement. This is to avoid flakiness caused by the retry
+        # backoff the controller uses on replica connection attempts.
+        wait = "\n".join(
+            dedent(
+                f"""
+                > SET CLUSTER = cluster{i}
+                > SELECT * FROM v{i}
+                0
+                """
+            )
+            for i in range(self.n())
+        )
+
         select = "\n".join(
             dedent(
                 f"""
                 > SET CLUSTER = cluster{i}
                 > SELECT * FROM v{i}
-                100000
+                1000000
                 """
             )
             for i in range(self.n())
@@ -59,10 +73,11 @@ class SmallClusters(Scenario):
                 """
             )
             + create
+            + wait
             + dedent(
                 """
                 > INSERT INTO t1
-                  SELECT * FROM generate_series(1, 100000)
+                  SELECT * FROM generate_series(1, 1000000)
                   /* A */
                 """
             )
