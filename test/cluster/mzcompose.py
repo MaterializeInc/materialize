@@ -235,25 +235,29 @@ def workflow_test_github_3553(c: Composition) -> None:
     c.down(destroy_volumes=True)
     c.up("materialized")
 
+    c.sql(
+        """
+        CREATE TABLE IF NOT EXISTS log_table (f1 TEXT);
+        CREATE TABLE IF NOT EXISTS panic_table (f1 TEXT);
+        INSERT INTO panic_table VALUES ('forced panic');
+        """
+    )
+
     start_time = time.time()
     try:
         c.sql(
             """
-        SET statement_timeout = '1 s';
-        CREATE TABLE IF NOT EXISTS log_table (f1 TEXT);
-        CREATE TABLE IF NOT EXISTS panic_table (f1 TEXT);
-        INSERT INTO panic_table VALUES ('forced panic');
-        -- Crash loop the cluster with the table's index
-        INSERT INTO log_table SELECT mz_unsafe.mz_panic(f1) FROM panic_table;
-        """
+            SET statement_timeout = '1 s';
+            -- Crash loop the cluster.
+            INSERT INTO log_table SELECT mz_unsafe.mz_panic(f1) FROM panic_table;
+            """
         )
     except QueryCanceled as e:
         # Ensure we received the correct error message
         assert "statement timeout" in str(e)
         # Ensure the statement_timeout setting is ~honored
-        assert (
-            time.time() - start_time < 2
-        ), "idle_in_transaction_session_timeout not respected"
+        elapsed = time.time() - start_time
+        assert elapsed < 2, f"statement_timeout not respected ({elapsed=})"
     else:
         raise RuntimeError("unexpected success in test_github_3553")
 
