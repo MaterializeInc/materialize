@@ -116,7 +116,7 @@ Conditions](https://materialize.com/pdfs/on-demand-terms.pdf).
 
 - https://materialize.com/pricing/
 
-- [How Materialized can lower the cost of freshness for data teams](https://materialize.com/promotions/cost-of-freshness/?utm_campaign=General&utm_source=documentation)
+- [How Materialize can lower the cost of freshness for data teams](https://materialize.com/promotions/cost-of-freshness/?utm_campaign=General&utm_source=documentation)
 
 <style>
 redb { color: Red; font-weight: 500; }
