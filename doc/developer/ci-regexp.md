@@ -19,3 +19,5 @@ Examples:
 ci-apply-to: SQLsmith
 ci-apply-to: sqlsmith explain
 ```
+
+When a test issue is discovered and the GitHub issue is still open, you may want the failure to not cause a test failure, so that CI does not become flaky, but still add an annotation and record the failure into https://ci-failures.dev.materialize.com. You can use `ci-ignore-failure: true` for that.

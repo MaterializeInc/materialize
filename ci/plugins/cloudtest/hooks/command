@@ -18,6 +18,21 @@ run_args=(
     "--junitxml=junit_cloudtest_$BUILDKITE_JOB_ID.xml"
 )
 
+kubectl() {
+    bin/ci-builder run stable kubectl --context="$K8S_CONTEXT" "$@"
+}
+
+export_cov() {
+    bin/ci-builder run stable rust-cov export \
+      --ignore-filename-regex=.cargo/ \
+      --ignore-filename-regex=target/release/ \
+      --ignore-filename-regex=/cargo/ \
+      --ignore-filename-regex=/mnt/build/ \
+      --ignore-filename-regex=/rustc/ \
+      --format=lcov "$1" --instr-profile=coverage/"$BUILDKITE_JOB_ID".profdata src/ \
+      > coverage/"$BUILDKITE_JOB_ID"-"$(basename "$1")".lcov
+}
+
 test_parallelism=true
 if read_list BUILDKITE_PLUGIN_CLOUDTEST_ARGS; then
     for arg in "${result[@]}"; do
@@ -36,7 +51,7 @@ if [[ "$test_parallelism" == true ]]; then
     )
 fi
 
-date +"%Y-%m-%d %H:%M:%S" > step_start_timestamp
+STEP_START_TIMESTAMP=$(date +"%Y-%m-%d %H:%M:%S")
 
 ci_collapsed_heading "kind: Increase system limits..."
 sudo sysctl fs.inotify.max_user_watches=524288
@@ -55,7 +70,127 @@ ci_collapsed_heading "kail: Start a new instance"
 NO_COLOR=1 bin/ci-builder run stable --detach --name "kail" kail --context "$K8S_CONTEXT" --log-level info
 
 TEST_CMD="bin/pytest ${run_args[*]}"
-echo "$TEST_CMD" > test_cmd
 
 ci_uncollapsed_heading "cloudtest: Running \`$TEST_CMD\`"
-stdbuf --output=L --error=L bin/ci-builder run stable bin/pytest "${run_args[@]}" |& tee run.log
+TEST_RESULT=0
+
+cleanup() {
+  echo "--- Post command steps"
+  # Buildkite exposes no way to check if a test timed out (and wasn't cancelled manually), so we have to calculate it ourselves
+  START_TIME=$(date -d "$STEP_START_TIMESTAMP" +%s)
+  END_TIME=$(date +%s)
+  ELAPSED=$((END_TIME - START_TIME))
+  if [ $ELAPSED -ge $((BUILDKITE_TIMEOUT * 60)) ]; then
+    printf "\n%s" "$BUILDKITE_LABEL: test timed out" >> run.log
+  fi
+
+  if [ -n "${CI_COVERAGE_ENABLED:-}" ]; then
+      ci_uncollapsed_heading "cloudtest: Fetching binaries for coverage"
+      mkdir -p coverage/
+      chmod 777 coverage/
+      kubectl cp environmentd-0:/usr/local/bin/environmentd coverage/environmentd
+      kubectl cp environmentd-0:/coverage coverage/
+      for pod in $(kubectl get pods -o name | grep -E 'cluster-'); do
+        kubectl cp "$pod":/coverage coverage/ || true # Could get deleted
+        kubectl cp "$pod":/usr/local/bin/clusterd coverage/clusterd || true
+      done
+
+      ci_unimportant_heading "cloudtest: Generate coverage information"
+      if [ -n "$(find . -name '*.profraw')" ]; then
+          find . -name '*.profraw' -exec bin/ci-builder run stable rust-profdata merge -sparse -o coverage/"$BUILDKITE_JOB_ID".profdata {} +
+          find . -name '*.profraw' -delete
+
+          ARGS=()
+          for program in clusterd environmentd; do
+              if [ -f coverage/"$program" ]; then
+                export_cov coverage/"$program"
+                ARGS+=("-a" coverage/"$BUILDKITE_JOB_ID"-"$program".lcov)
+              fi
+          done
+          rm coverage/"$BUILDKITE_JOB_ID".profdata
+          if [ "${#ARGS[@]}" != 0 ]; then
+            bin/ci-builder run stable lcov "${ARGS[@]}" -o coverage/"$BUILDKITE_JOB_ID".lcov
+            rm coverage/"$BUILDKITE_JOB_ID"-*.lcov
+            bin/ci-builder run stable zstd coverage/"$BUILDKITE_JOB_ID".lcov
+            buildkite-agent artifact upload coverage/"$BUILDKITE_JOB_ID".lcov.zst
+            rm -rf coverage
+          fi
+      fi
+  fi
+
+  ci_unimportant_heading "cloudtest: Cleaning up mz_debug files from test/cloudtest/test_mz_debug_tool.py"
+  if find mz_debug*; then
+      rm -rf mz_debug*
+  fi
+
+  ci_unimportant_heading "kail: Stopping instance..."
+  docker logs kail > kail-output.log 2>&1
+  docker stop kail
+
+  ci_unimportant_heading "cloudtest: Uploading logs..."
+  for pod in $(kubectl get pods -o name | grep -v -E 'kubernetes|minio|cockroach|redpanda'); do
+    kubectl logs --prefix=true "$pod" &>> kubectl-get-logs.log || true
+    kubectl logs --previous --prefix=true "$pod" &>> kubectl-get-logs-previous.log || true
+  done
+  kubectl get events > kubectl-get-events.log || true
+  kubectl get all > kubectl-get-all.log || true
+  kubectl describe all | awk '
+    BEGIN { redact=0 }
+    /^[[:space:]]*Environment:/ {
+      indent = match($0, /[^ ]/) - 1
+      print substr($0, 1, indent) "Environment: [REDACTED]"
+      redact = 1
+      next
+    }
+    redact {
+      current_indent = match($0, /[^ ]/) - 1
+      if (current_indent <= indent || NF == 0) {
+        redact = 0
+      } else {
+        next
+      }
+    }
+    { print }
+  ' > kubectl-describe-all.log || true
+  kubectl get pods -o wide > kubectl-pods-with-nodes.log || true
+
+  kubectl -n kube-system get events > kubectl-get-events-kube-system.log || true
+  kubectl -n kube-system get all > kubectl-get-all-kube-system.log || true
+  kubectl -n kube-system describe all > kubectl-describe-all-kube-system.log || true
+
+  # shellcheck disable=SC2024
+  sudo journalctl --merge --since "$STEP_START_TIMESTAMP" > journalctl-merge.log
+
+  mapfile -t artifacts < <(printf "run.log\nkubectl-get-logs.log\nkubectl-get-logs-previous.log\nkubectl-get-events.log\nkubectl-get-all.log\nkubectl-describe-all.log\nkubectl-pods-with-nodes.log\nkubectl-get-events-kube-system.log\nkubectl-get-all-kube-system.log\nkubectl-describe-all-kube-system.log\njournalctl-merge.log\nkail-output.log\n"; find . -name 'junit_*.xml')
+  artifacts_str=$(IFS=";"; echo "${artifacts[*]}")
+
+  bin/ci-builder run stable trufflehog --no-update --no-verification --json --exclude-detectors=coda,dockerhub,box,npmtoken,github filesystem "${artifacts[@]}" | trufflehog_jq_filter_logs > trufflehog.log
+
+  unset CI_EXTRA_ARGS # We don't want extra args for the annotation
+  # Continue even if ci-annotate-errors fails
+  CI_ANNOTATE_ERRORS_RESULT=0
+  # We have to upload artifacts before ci-annotate-errors, so that the annotations can link to the artifacts
+  buildkite-agent artifact upload "$artifacts_str"
+  bin/ci-builder run stable bin/ci-annotate-errors --test-cmd="$TEST_CMD" --test-result="$TEST_RESULT" "${artifacts[@]}" > ci-annotate-errors.log || CI_ANNOTATE_ERRORS_RESULT=$?
+  buildkite-agent artifact upload "ci-annotate-errors.log"
+
+  # File should not be empty, see database-issues#7569
+  test -s kubectl-get-logs-previous.log
+
+  ci_unimportant_heading "cloudtest: Resetting..."
+  bin/ci-builder run stable test/cloudtest/reset
+
+  ci_collapsed_heading ":docker: Purging all existing docker containers and volumes, regardless of origin"
+  sudo systemctl restart docker
+  docker ps --all --quiet | xargs --no-run-if-empty docker rm --force --volumes
+
+  exit "$CI_ANNOTATE_ERRORS_RESULT"
+}
+
+trap cleanup EXIT SIGTERM SIGINT
+
+{ stdbuf --output=L --error=L bin/ci-builder run stable bin/pytest "${run_args[@]}" |& tee run.log; } || TEST_RESULT=$?
+if [ "$TEST_RESULT" != "0" ]; then
+    # Give the logs some time to log panics, otherwise they might be missing later
+    sleep 10
+fi
