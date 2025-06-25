@@ -250,7 +250,7 @@ where
             structured_part_audit: self.cfg.part_decode_format(),
             fetch_permit,
             _phantom: PhantomData,
-            batch_fetcher_config: self.cfg.clone(),
+            fetch_config: self.cfg.fetch_config.clone(),
         };
         Ok(Ok(fetched_blob))
     }
@@ -664,7 +664,7 @@ pub struct FetchedBlob<K: Codec, V: Codec, T, D> {
     filter_pushdown_audit: bool,
     structured_part_audit: PartDecodeFormat,
     fetch_permit: Option<Arc<MetricsPermits>>,
-    batch_fetcher_config: BatchFetcherConfig,
+    fetch_config: FetchConfig,
     _phantom: PhantomData<fn() -> D>,
 }
 
@@ -693,7 +693,7 @@ impl<K: Codec, V: Codec, T: Clone, D> Clone for FetchedBlob<K, V, T, D> {
             filter_pushdown_audit: self.filter_pushdown_audit.clone(),
             fetch_permit: self.fetch_permit.clone(),
             structured_part_audit: self.structured_part_audit.clone(),
-            batch_fetcher_config: self.batch_fetcher_config.clone(),
+            fetch_config: self.fetch_config.clone(),
             _phantom: self._phantom.clone(),
         }
     }
@@ -726,7 +726,7 @@ where
 impl<K: Codec, V: Codec, T: Timestamp + Lattice + Codec64, D> FetchedBlob<K, V, T, D> {
     /// Partially decodes this blob into a [FetchedPart].
     pub fn parse(&self) -> ShardSourcePart<K, V, T, D> {
-        self.parse_internal(&self.batch_fetcher_config.fetch_config)
+        self.parse_internal(&self.fetch_config)
     }
 
     /// Partially decodes this blob into a [FetchedPart].
