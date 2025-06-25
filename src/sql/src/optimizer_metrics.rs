@@ -12,7 +12,6 @@
 use std::cell::RefCell;
 use std::time::Duration;
 
-use mz_ore::assert::soft_assertions_enabled;
 use mz_ore::metric;
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::stats::histogram_seconds_buckets;
@@ -68,7 +67,7 @@ impl OptimizerMetrics {
             .with_label_values(&[object_type])
             .observe(duration.as_secs_f64());
         // Also log it when it's big.
-        let debug_threshold = soft_assertions_enabled();
+        let debug_threshold = cfg!(debug_assertions);
         let threshold = if debug_threshold {
             // Debug builds are much slower to optimize (despite mz-transform being built
             // with `opt-level = 3` even in debug builds), so we have a larger threshold.
