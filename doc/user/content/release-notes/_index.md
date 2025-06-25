@@ -37,6 +37,14 @@ workloads.
 For details, see [Partioning and filter
 pushdown](/transform-data/patterns/partition-by/).
 
+## Console Improvements
+
+Self-managed v25.2 also includes various improvements to the Console:
+
+- Consolidating source lag under Freshness metrics
+- Copy button for queries
+- Syntax error highlighting
+
 ## Improved `EXPLAIN`
 
 The following improvements to `EXPLAIN` are now available in v25.2:

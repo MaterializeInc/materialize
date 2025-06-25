@@ -247,8 +247,8 @@ p+p {
 
         &::before {
             content: "";
-            width: 48px;
-            height: 48px;
+            width: 32px;
+            height: 32px;
             position: absolute;
             top: rem(2);
             background-size: contain;
@@ -263,7 +263,7 @@ p+p {
         }
 
         &.materialize::before {
-            background-image: url("../images/materialize_logo.svg");
+            background-image: url("../images/materialize_favicon_32.png");
             margin-left: -10px;
         }
 
