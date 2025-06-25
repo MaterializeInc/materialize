@@ -16,11 +16,12 @@ to transform, deliver, and act on fast changing data.
 
 ## What's new!
 
-- [Self-managed Materialize](/self-managed/). With Self-managed Materialize, you
-  can deploy and operate Materialize in your Kubernetes environment.
-  Self-managed Materialize is available in both Enterprise and Community
-  editions. For more information, see the [Self-managed
-  Materialize](/self-managed/) documentation.
+- [Self-managed Materialize v25.2], which includes support for password
+  authentication (private preview), RBAC, and more! With Self-managed
+  Materialize, you can deploy and operate Materialize in your Kubernetes
+  environment. Self-managed Materialize is available in both Enterprise and
+  Community editions. For more information, see the [Self-managed Materialize]
+  documentation.
 
 - [Materialize MCP Server](https://materialize.com/blog/materialize-turns-views-into-tools-for-agents/).
   The Materialize MCP Server bridges SQL and AI by transforming indexed views into well-typed tools
@@ -28,6 +29,8 @@ to transform, deliver, and act on fast changing data.
   data products automatically and reliably. For more information, see the
   [Materialize MCP Server](/integrations/llm/) documentation.
 
+[Self-managed Materialize]: https://materialize.com/docs/self-managed/v25.2/
+[Self-managed Materialize v25.2]: https://materialize.com/docs/self-managed/v25.2/
 {{</ callout >}}
 
 {{< callout
@@ -40,10 +43,11 @@ primary_text="Get Started">}}
    account](https://materialize.com/register/?utm_campaign=General&utm_source=documentation)
    on Materialize Cloud. Alternatively, both the [Materialize Emulator Docker
    image](/get-started/install-materialize-emulator/) and the [Self-managed
-   Materialize](/self-managed/) are also available.
+   Materialize] are also available.
 2. Follow the quickstart guide to learn the basics.
 3. Connect your own data sources and start building.
 
+[Self-managed Materialize]: https://materialize.com/docs/self-managed/v25.2/
 {{</ callout >}}
 
 {{< multilinkbox >}}

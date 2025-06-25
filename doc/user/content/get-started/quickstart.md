@@ -53,7 +53,9 @@ Alternatively:
 Emulator](/get-started/install-materialize-emulator/). However, the Materialize
 Emulator does not provide the full experience of using Materialize.
 
-- You can run against your [Self-managed Materialize](/self-managed/).
+- You can run against your [Self-managed Materialize].
+
+[Self-managed Materialize]: https://materialize.com/docs/self-managed/v25.2/
 
 ## Step 0. Open the SQL Shell
 
@@ -65,7 +67,7 @@ Emulator does not provide the full experience of using Materialize.
   your browser at [http://localhost:6874](http://localhost:6874).
 
 - If you are running against your own [Self-managed
-  Materialize](/self-managed/), open your deployment's Materialize Console.
+  Materialize], open your deployment's Materialize Console.
 
 ## Step 1. Create a schema
 
