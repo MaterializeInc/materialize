@@ -1,8 +1,6 @@
 ---
 title: "Upgrading"
 description: "Upgrading Helm chart and Materialize."
-aliases:
-  - /self-managed/upgrading/
 suppress_breadcrumb: true
 ---
 
