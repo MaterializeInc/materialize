@@ -151,6 +151,8 @@ pub struct Config {
     /// Whether the Segment client is being used on the client side
     /// (rather than the server side).
     pub segment_client_side: bool,
+    /// Only create a dummy segment client, only to get more testing coverage.
+    pub test_only_dummy_segment_client: bool,
     /// An SDK key for LaunchDarkly. Enables system parameter synchronization
     /// with LaunchDarkly.
     pub launchdarkly_sdk_key: Option<String>,
@@ -868,6 +870,21 @@ impl Listeners {
                 segment_client,
                 adapter_client: adapter_client.clone(),
                 environment_id: config.environment_id,
+                report_interval: Duration::from_secs(3600),
+            });
+        } else if config.test_only_dummy_segment_client {
+            // We only have access to a segment client in production but we
+            // still want to exercise the telemetry reporting code to a degree.
+            // So we create a dummy client and report telemetry into the void.
+            // This way we at least run the telemetry queries the way a
+            // production environment would.
+            tracing::debug!("starting telemetry reporting with a dummy segment client");
+            let segment_client = mz_segment::Client::new_dummy_client();
+            telemetry::start_reporting(telemetry::Config {
+                segment_client,
+                adapter_client: adapter_client.clone(),
+                environment_id: config.environment_id,
+                report_interval: Duration::from_secs(180),
             });
         }
 

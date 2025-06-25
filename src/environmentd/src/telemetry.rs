@@ -81,15 +81,13 @@ use anyhow::bail;
 use futures::StreamExt;
 use mz_adapter::PeekResponseUnary;
 use mz_adapter::telemetry::{EventDetails, SegmentClientExt};
+use mz_ore::collections::CollectionExt;
 use mz_ore::retry::Retry;
-use mz_ore::{assert_none, soft_panic_or_log, task};
+use mz_ore::{soft_panic_or_log, task};
 use mz_repr::adt::jsonb::Jsonb;
 use mz_sql::catalog::EnvironmentId;
 use serde_json::json;
 use tokio::time::{self, Duration};
-
-/// How frequently to send a summary to Segment.
-const REPORT_INTERVAL: Duration = Duration::from_secs(3600);
 
 /// Telemetry configuration.
 #[derive(Clone)]
@@ -100,6 +98,8 @@ pub struct Config {
     pub adapter_client: mz_adapter::Client,
     /// The ID of the environment for which to report data.
     pub environment_id: EnvironmentId,
+    /// How frequently to send a summary to Segment.
+    pub report_interval: Duration,
 }
 
 /// Starts reporting telemetry events to Segment.
@@ -112,6 +112,7 @@ async fn report_loop(
         segment_client,
         adapter_client,
         environment_id,
+        report_interval,
     }: Config,
 ) {
     struct Stats {
@@ -124,7 +125,7 @@ async fn report_loop(
 
     let mut last_stats: Option<Stats> = None;
 
-    let mut interval = time::interval(REPORT_INTERVAL);
+    let mut interval = time::interval(report_interval);
     loop {
         interval.tick().await;
 
@@ -169,21 +170,25 @@ async fn report_loop(
                     )",
                 )).await?;
 
-                // The introspection query returns only one row, and that should
-                // easily fit into our max_result_size and not go through the
-                // peek stash, which would lead to a result that streams back
-                // multiple batches of rows.
-                let rows = rows_stream.next().await.expect("expected at least one result batch");
-                assert_none!(rows_stream.next().await, "expected at most one result batch");
+                let mut row_iters = Vec::new();
 
-                let mut rows = match rows {
-                    PeekResponseUnary::Rows(rows) => rows,
-                    PeekResponseUnary::Canceled => bail!("query canceled"),
-                    PeekResponseUnary::Error(e) => bail!(e),
-                };
+                while let Some(rows) = rows_stream.next().await {
+                    match rows {
+                        PeekResponseUnary::Rows(rows) => row_iters.push(rows),
+                        PeekResponseUnary::Canceled => bail!("query canceled"),
+                        PeekResponseUnary::Error(e) => bail!(e),
+                    }
+                }
 
-                let row = rows.next().expect("expected at least one row").to_owned();
-                assert_none!(rows.next(), "introspection query had more than one row?");
+                let mut rows = Vec::new();
+                for mut row_iter in row_iters {
+                    while let Some(row) = row_iter.next() {
+                        rows.push(row.to_owned());
+                    }
+                }
+
+                assert_eq!(1, rows.len(), "expected one row but got: {:?}", rows);
+                let row = rows.into_first();
 
                 let jsonb = Jsonb::from_row(row);
                 Ok::<_, anyhow::Error>(jsonb.as_ref().to_serde_json())
@@ -197,6 +202,8 @@ async fn report_loop(
                 continue;
             }
         };
+
+        tracing::info!(?traits, "telemetry traits");
 
         segment_client.group(
             // We use the organization ID as the user ID for events

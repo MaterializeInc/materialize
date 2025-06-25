@@ -417,6 +417,10 @@ pub struct Args {
     /// which the event was sent.
     #[clap(long, env = "SEGMENT_CLIENT_SIDE")]
     segment_client_side: bool,
+    /// Only create a dummy segment client when no segment api key is provided, only to get more
+    /// testing coverage.
+    #[clap(long, env = "TEST_ONLY_DUMMY_SEGMENT_CLIENT")]
+    test_only_dummy_segment_client: bool,
     /// An SDK key for LaunchDarkly.
     ///
     /// Setting this in combination with [`Self::config_sync_loop_interval`]
@@ -1103,6 +1107,7 @@ fn run(mut args: Args) -> Result<(), anyhow::Error> {
                 timestamp_oracle_url,
                 segment_api_key: args.segment_api_key,
                 segment_client_side: args.segment_client_side,
+                test_only_dummy_segment_client: args.test_only_dummy_segment_client,
                 launchdarkly_sdk_key: args.launchdarkly_sdk_key,
                 launchdarkly_key_map: args
                     .launchdarkly_key_map
