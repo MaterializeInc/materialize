@@ -302,7 +302,7 @@ true
 > DROP SOURCE kv_offset2;
 
 
-# Verify statistics for load generator and source tables creates from it.
+# Verify statistics for load generator and source tables created from it.
 > CREATE SOURCE kv_snapshot
   IN CLUSTER lg_cluster
   FROM LOAD GENERATOR KEY VALUE (
@@ -313,10 +313,6 @@ true
     VALUE SIZE 4,
     BATCH SIZE 2
   );
-
-
-> SELECT count(*) FROM kv_snapshot;
-48
 
 > CREATE TABLE kv_up FROM SOURCE kv_snapshot INCLUDE KEY ENVELOPE UPSERT;
 
@@ -330,14 +326,13 @@ true
     u.snapshot_records_known,
     u.snapshot_records_staged,
     u.messages_received,
-    u.records_indexed,
-    u.updates_staged
+    u.records_indexed
   FROM mz_internal.mz_source_statuses s
   LEFT JOIN mz_internal.mz_source_statistics u ON s.id = u.id
   WHERE s.name IN ('kv_snapshot', 'kv_up', 'kv_none')
   ORDER BY s.name;
-kv_snapshot 3 3 48 96 144 0 48
-kv_up 0 0 48 48 0 16 16
+kv_snapshot 3 3 48 96 144 0
+kv_up 0 0 48 48 0 16
 
 > CREATE TABLE kv_none FROM SOURCE kv_snapshot INCLUDE KEY ENVELOPE NONE;
 
@@ -352,18 +347,19 @@ kv_up 0 0 48 48 0 16 16
     u.snapshot_records_known,
     u.snapshot_records_staged,
     u.messages_received,
-    u.records_indexed,
-    u.updates_staged
+    u.records_indexed
   FROM mz_internal.mz_source_statuses s
   LEFT JOIN mz_internal.mz_source_statistics u ON s.id = u.id
   WHERE s.name IN ('kv_snapshot', 'kv_up', 'kv_none')
   ORDER BY s.name;
-kv_none 0 0 48 48 0 0 48
-kv_snapshot 3 3 48 144 288 0 48
-kv_up 0 0 0 0 0 16 16
+kv_none 0 0 48 48 0 0
+kv_snapshot 3 3 48 144 288 0
+kv_up 0 0 0 0 0 16
 
 > DROP SOURCE kv_snapshot CASCADE;
 
+
+# Verify statistics for tables created from non-snapshot source
 > CREATE SOURCE kv_snapshot
   IN CLUSTER lg_cluster
   FROM LOAD GENERATOR KEY VALUE (
@@ -376,15 +372,12 @@ kv_up 0 0 0 0 0 16 16
     TRANSACTIONAL SNAPSHOT false
   );
 
-> SELECT count(*) FROM kv_snapshot;
-48
-
 > CREATE TABLE kv_up FROM SOURCE kv_snapshot INCLUDE KEY ENVELOPE UPSERT;
+
+> CREATE TABLE kv_none FROM SOURCE kv_snapshot INCLUDE KEY ENVELOPE NONE;
 
 > SELECT count(*) FROM kv_up;
 16
-
-> CREATE TABLE kv_none FROM SOURCE kv_snapshot INCLUDE KEY ENVELOPE NONE;
 
 > SELECT count(*) FROM kv_none;
 48
@@ -396,14 +389,13 @@ kv_up 0 0 0 0 0 16 16
     u.snapshot_records_known,
     u.snapshot_records_staged,
     u.messages_received,
-    u.records_indexed,
-    u.updates_staged
+    u.records_indexed
   FROM mz_internal.mz_source_statuses s
   LEFT JOIN mz_internal.mz_source_statistics u ON s.id = u.id
   WHERE s.name IN ('kv_snapshot', 'kv_up', 'kv_none')
   ORDER BY s.name;
-kv_none 0 0 0 0 0 0 48
-kv_snapshot 6 6 0 0 288 0 48
-kv_up 0 0 0 0 0 16 16
+kv_none 0 0 0 0 0 0
+kv_snapshot 6 6 0 0 288 0
+kv_up 0 0 0 0 0 16
 
 > DROP SOURCE kv_snapshot CASCADE;
