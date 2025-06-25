@@ -22,7 +22,7 @@ For more information, see [Ingest data: SQL Server](/ingest-data/sql-server/).
 
 Starting in v25.2, password authentication and role-based access control are available in self-managed Materialize. For details, see:
 
-- [Password authentication](/manage/authentication).
+- [Password authentication](/manage/authentication), now in public preview.
 - [Role-Based Access
   Control](/manage/access-control/#role-based-access-control-rbac).
 

@@ -144,7 +144,7 @@ rj  f
 ##### Removing a role's password
 
 {{< warning >}}
-Setting a NULL password removes the password requirement.
+Setting a NULL password removes the password.
 {{< /warning >}}
 
 ```mzsql
