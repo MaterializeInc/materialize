@@ -10,10 +10,6 @@
 $ set-sql-timeout duration=1s
 $ set-max-tries max-tries=20
 
-# TODO(def-) Reenable when database-issues#7900 is fixed
-$ skip-if
-SELECT true
-
 #
 # Test ALTER TABLE -- source will error out for tables which existed when the source was created
 #
@@ -165,9 +161,8 @@ $ mysql-execute name=mysql
 ALTER TABLE alter_column_type_2 MODIFY f1 int;
 INSERT INTO alter_column_type_2 VALUES (2048);
 
-# TODO(def-): Reenable when database-issues#7655 is fixed
-# ! select * from alter_column_type_2;
-# contains:incompatible schema change
+! select * from alter_column_type_2;
+contains:incompatible schema change
 
 #
 # Drop NOT NULL
@@ -357,20 +352,19 @@ INSERT INTO alter_table_rename_column (f1, f2) VALUES ('f1_renamed', 'f2_renamed
 contains:incompatible schema change
 
 
-# TODO: database-issues#7655 (column drop & recreate detection)
 # Change column attnum
 
-# > SELECT * from alter_table_change_attnum;
-# f1_orig f2_orig
+> SELECT * from alter_table_change_attnum;
+f1_orig f2_orig
 
 # Ensure simpl name swap doesn't fool schema detection
-# $ mysql-execute name=mysql
-# ALTER TABLE alter_table_change_attnum DROP COLUMN f2;
-# ALTER TABLE alter_table_change_attnum ADD COLUMN f2 VARCHAR(10);
-# INSERT INTO alter_table_change_attnum (f1, f2) VALUES ('f1_changed', 'f2_changed');
+$ mysql-execute name=mysql
+ALTER TABLE alter_table_change_attnum DROP COLUMN f2;
+ALTER TABLE alter_table_change_attnum ADD COLUMN f2 VARCHAR(10);
+INSERT INTO alter_table_change_attnum (f1, f2) VALUES ('f1_changed', 'f2_changed');
 
-# ! SELECT * FROM alter_table_change_attnum;
-# contains:incompatible schema change
+! SELECT * FROM alter_table_change_attnum;
+contains:incompatible schema change
 
 > SELECT * from alter_table_supported;
 1 1

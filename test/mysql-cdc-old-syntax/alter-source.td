@@ -44,23 +44,16 @@ $ mysql-execute name=mysql
 CREATE TABLE table_a (pk INTEGER PRIMARY KEY, f2 TEXT);
 INSERT INTO table_a VALUES (9, 'nine');
 
-# TODO: database-issues#8127 (expected table was dropped)
-$ skip-if
-SELECT true
-
 ! SELECT * FROM table_a;
 contains:table was dropped
 
 # table names must be fully qualified
-! ALTER SOURCE mz_source ADD SUBSOURCE table_a;
-contains:Invalid MySQL table reference: table_a
+! ALTER SOURCE mz_source ADD SUBSOURCE table_abc;
+contains:reference to table_abc not found in source
 
 # We are not aware that the new table_a is different
 ! ALTER SOURCE mz_source ADD SUBSOURCE public.table_a;
 contains:catalog item 'table_a' already exists
-
-# TODO: database-issues#8127 (expected table was dropped)
-$ skip-end
 
 > DROP SOURCE mz_source CASCADE;
 

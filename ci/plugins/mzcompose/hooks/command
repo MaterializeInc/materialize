@@ -134,7 +134,7 @@ cleanup() {
   ps aux | sed -E "s/\S*mzp_\S*/[REDACTED]/g" > ps-aux.log
   docker stats --all --no-stream > docker-stats.log
 
-  mv $cores . || true
+  mv "$cores" . || true
 
   if find cores -name 'core.*' | grep -q .; then
       # Best effort attempt to fetch interesting executables to get backtrace of core files
