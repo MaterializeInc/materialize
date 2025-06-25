@@ -36,7 +36,8 @@ use futures::future::{Shared, TryFutureExt};
 use headers::authorization::{Authorization, Basic, Bearer};
 use headers::{HeaderMapExt, HeaderName};
 use http::header::{AUTHORIZATION, CONTENT_TYPE};
-use http::{Method, StatusCode};
+use http::uri::Scheme;
+use http::{Method, StatusCode, Uri};
 use hyper_openssl::SslStream;
 use hyper_openssl::client::legacy::MaybeHttpsStream;
 use hyper_util::rt::TokioIo;
@@ -685,8 +686,6 @@ where
 
 #[derive(Debug, Error)]
 enum AuthError {
-    #[error("HTTPS is required")]
-    HttpsRequired,
     #[error("invalid username in client certificate")]
     InvalidLogin(String),
     #[error("{0}")]
@@ -706,11 +705,7 @@ impl IntoResponse for AuthError {
         warn!("HTTP request failed authentication: {}", self);
         // We omit most detail from the error message we send to the client, to
         // avoid giving attackers unnecessary information.
-        let message = match self {
-            AuthError::HttpsRequired => self.to_string(),
-            _ => "unauthorized".into(),
-        };
-        (StatusCode::UNAUTHORIZED, message).into_response()
+        (StatusCode::UNAUTHORIZED, "unauthorized").into_response()
     }
 }
 
@@ -801,7 +796,16 @@ async fn http_auth(
     match (tls_enabled, &conn_protocol) {
         (false, ConnProtocol::Http) => {}
         (false, ConnProtocol::Https { .. }) => unreachable!(),
-        (true, ConnProtocol::Http) => return Err(AuthError::HttpsRequired),
+        (true, ConnProtocol::Http) => {
+            let mut parts = req.uri().clone().into_parts();
+            parts.scheme = Some(Scheme::HTTPS);
+            return Ok(Redirect::permanent(
+                &Uri::from_parts(parts)
+                    .expect("it was already a URI, just changed the scheme")
+                    .to_string(),
+            )
+            .into_response());
+        }
         (true, ConnProtocol::Https { .. }) => {}
     }
     // If we've already passed some other auth, just use that.
