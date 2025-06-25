@@ -40,7 +40,7 @@ use crate::cfg::{
     COMPACTION_HEURISTIC_MIN_UPDATES, COMPACTION_MEMORY_BOUND_BYTES,
     GC_BLOB_DELETE_CONCURRENCY_LIMIT, MiB,
 };
-use crate::fetch::FetchBatchFilter;
+use crate::fetch::{FetchBatchFilter, FetchConfig};
 use crate::internal::encoding::Schemas;
 use crate::internal::gc::GarbageCollector;
 use crate::internal::machine::Machine;
@@ -85,6 +85,7 @@ pub struct CompactConfig {
     pub(crate) incremental_compaction: bool,
     pub(crate) version: semver::Version,
     pub(crate) batch: BatchBuilderConfig,
+    pub(crate) fetch_config: FetchConfig,
 }
 
 impl CompactConfig {
@@ -96,6 +97,7 @@ impl CompactConfig {
             incremental_compaction: ENABLE_INCREMENTAL_COMPACTION.get(value),
             version: value.build_version.clone(),
             batch: BatchBuilderConfig::new(value, shard_id),
+            fetch_config: FetchConfig::from_persist_config(value),
         }
     }
 }
@@ -855,6 +857,7 @@ where
                 desc.lower().elements(),
                 desc.upper().elements()
             ),
+            cfg.fetch_config.clone(),
             *shard_id,
             StructuredSort::<K, V, T, D>::new(write_schemas.clone()),
             blob,

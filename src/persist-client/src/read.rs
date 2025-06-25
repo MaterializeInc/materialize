@@ -42,6 +42,7 @@ use uuid::Uuid;
 
 use crate::batch::BLOB_TARGET_SIZE;
 use crate::cfg::{COMPACTION_MEMORY_BOUND_BYTES, RetryParameters};
+use crate::fetch::FetchConfig;
 use crate::fetch::{FetchBatchFilter, FetchedPart, Lease, LeasedBatchPart, fetch_leased_part};
 use crate::internal::encoding::Schemas;
 use crate::internal::machine::{ExpireFn, Machine};
@@ -1046,6 +1047,7 @@ where
 
         let mut consolidator = Consolidator::new(
             context,
+            FetchConfig::from_persist_config(persist_cfg),
             shard_id,
             StructuredSort::new(schemas.clone()),
             blob,
