@@ -114,6 +114,20 @@ pub(crate) const GC_FALLBACK_THRESHOLD_MS: Config<usize> = Config::new(
     "The number of milliseconds before a worker claims an already claimed GC.",
 );
 
+/// See the config description string.
+pub(crate) const GC_MIN_VERSIONS: Config<usize> = Config::new(
+    "persist_gc_min_versions",
+    32,
+    "The number of un-GCd versions that may exist in state before we'll trigger a GC.",
+);
+
+/// See the config description string.
+pub(crate) const GC_MAX_VERSIONS: Config<usize> = Config::new(
+    "persist_gc_max_versions",
+    128_000,
+    "The maximum number of versions to GC in a single GC run.",
+);
+
 /// Feature flag the new active GC tracking mechanism.
 /// We musn't enable this until we are fully deployed on the new version.
 pub(crate) const GC_USE_ACTIVE_GC: Config<bool> = Config::new(
@@ -2346,6 +2360,8 @@ where
 pub struct GcConfig {
     pub use_active_gc: bool,
     pub fallback_threshold_ms: u64,
+    pub min_versions: usize,
+    pub max_versions: usize,
 }
 
 impl<T> State<T>
@@ -2431,15 +2447,29 @@ where
         let GcConfig {
             use_active_gc,
             fallback_threshold_ms,
+            min_versions,
+            max_versions,
         } = cfg;
         // This is an arbitrary-ish threshold that scales with seqno, but never
         // gets particularly big. It probably could be much bigger and certainly
         // could use a tuning pass at some point.
-        let gc_threshold = std::cmp::max(
-            1,
-            u64::from(self.seqno.0.next_power_of_two().trailing_zeros()),
-        );
+        let gc_threshold = if use_active_gc {
+            u64::cast_from(min_versions)
+        } else {
+            std::cmp::max(
+                1,
+                u64::cast_from(self.seqno.0.next_power_of_two().trailing_zeros()),
+            )
+        };
         let new_seqno_since = self.seqno_since();
+        // Collect until the new seqno since... or the old since plus the max number of versions,
+        // whatever is less.
+        let gc_until_seqno = new_seqno_since.min(SeqNo(
+            self.collections
+                .last_gc_req
+                .0
+                .saturating_add(u64::cast_from(max_versions)),
+        ));
         let should_gc = new_seqno_since
             .0
             .saturating_sub(self.collections.last_gc_req.0)
@@ -2477,10 +2507,10 @@ where
             should_gc
         };
         if should_gc {
-            self.collections.last_gc_req = new_seqno_since;
+            self.collections.last_gc_req = gc_until_seqno;
             Some(GcReq {
                 shard_id: self.shard_id,
-                new_seqno_since,
+                new_seqno_since: gc_until_seqno,
             })
         } else {
             None
@@ -3725,6 +3755,8 @@ pub(crate) mod tests {
         const GC_CONFIG: GcConfig = GcConfig {
             use_active_gc: true,
             fallback_threshold_ms: 5000,
+            min_versions: 99,
+            max_versions: 500,
         };
         let now_fn = SYSTEM_TIME.clone();
 
@@ -3823,6 +3855,19 @@ pub(crate) mod tests {
                 new_seqno_since: SeqNo(400)
             })
         );
+
+        // Upper-bound the number of seqnos we'll attempt to collect in one go.
+        state.seqno = SeqNo(10_000);
+        assert_eq!(state.seqno_since(), SeqNo(10_000));
+
+        let now = now_fn();
+        assert_eq!(
+            state.maybe_gc(true, now, GC_CONFIG),
+            Some(GcReq {
+                shard_id: state.shard_id,
+                new_seqno_since: SeqNo(900)
+            })
+        );
     }
 
     #[mz_ore::test]
@@ -3830,6 +3875,8 @@ pub(crate) mod tests {
         const GC_CONFIG: GcConfig = GcConfig {
             use_active_gc: false,
             fallback_threshold_ms: 5000,
+            min_versions: 16,
+            max_versions: 128,
         };
         const NOW_MS: u64 = 0;
 

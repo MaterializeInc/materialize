@@ -32,9 +32,9 @@ use crate::internal::metrics::{CmdMetrics, Metrics, ShardMetrics};
 use crate::internal::paths::{PartialRollupKey, RollupId};
 use crate::internal::state::{
     ActiveGc, ActiveRollup, EncodedSchemas, ExpiryMetrics, GC_FALLBACK_THRESHOLD_MS,
-    GC_USE_ACTIVE_GC, GcConfig, HollowBatch, LeasedReaderState, ROLLUP_FALLBACK_THRESHOLD_MS,
-    ROLLUP_THRESHOLD, ROLLUP_USE_ACTIVE_ROLLUP, Since, SnapshotErr, StateCollections, TypedState,
-    Upper,
+    GC_MAX_VERSIONS, GC_MIN_VERSIONS, GC_USE_ACTIVE_GC, GcConfig, HollowBatch, LeasedReaderState,
+    ROLLUP_FALLBACK_THRESHOLD_MS, ROLLUP_THRESHOLD, ROLLUP_USE_ACTIVE_ROLLUP, Since, SnapshotErr,
+    StateCollections, TypedState, Upper,
 };
 use crate::internal::state_diff::StateDiff;
 use crate::internal::state_versions::{EncodedRollup, StateVersions};
@@ -497,6 +497,8 @@ where
         let gc_config = GcConfig {
             use_active_gc: GC_USE_ACTIVE_GC.get(cfg),
             fallback_threshold_ms: u64::cast_from(GC_FALLBACK_THRESHOLD_MS.get(cfg)),
+            min_versions: GC_MIN_VERSIONS.get(cfg),
+            max_versions: GC_MAX_VERSIONS.get(cfg),
         };
 
         let use_active_rollup = ROLLUP_USE_ACTIVE_ROLLUP.get(cfg);
