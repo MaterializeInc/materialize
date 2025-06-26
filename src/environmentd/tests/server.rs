@@ -1696,6 +1696,7 @@ fn test_default_cluster_sizes() {
 }
 
 #[mz_ore::test]
+#[ignore] // TODO: Reenable when https://github.com/MaterializeInc/database-issues/issues/6931 is fixed
 fn test_max_request_size() {
     let statement = "SELECT $1::text";
     let statement_size = statement.bytes().count();
