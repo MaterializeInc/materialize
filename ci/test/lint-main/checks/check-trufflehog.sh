@@ -17,25 +17,24 @@ cd "$(dirname "$0")/../../../.."
 
 . misc/shlib/shlib.bash
 
-# Currently blocked by https://github.com/trufflesecurity/trufflehog/issues/4229
-#if ! trufflehog --version >/dev/null 2>/dev/null; then
-#  echo "lint: trufflehog is not installed"
-#  echo "hint: refer to https://github.com/trufflesecurity/trufflehog?tab=readme-ov-file#floppy_disk-installation for install instructions"
-#  exit 1
-#fi
-#
-#git ls-files -z | xargs -0 trufflehog --no-fail --no-update --no-verification --json filesystem | trufflehog_jq_filter_files > trufflehog.log
-#
-#try [ ! -s trufflehog.log ]
-#
-#if try_last_failed; then
-#    echo "lint: $(red error:) new secrets found:"
-#    echo "lint: $(green hint:) don't check in secrets and revoke them immediately"
-#    echo "lint: $(green hint:) mark false positives in misc/shlib/shlib.bash's trufflehog_jq_filter_(files|common)"
-#fi
-#
-#jq -c -r '. | "\(.SourceMetadata.Data.Filesystem.file):\(.SourceMetadata.Data.Filesystem.line): Secret found: \(.Raw)"' trufflehog.log
-#
-#rm -f trufflehog.log
-#
-#try_status_report
+if ! trufflehog --version >/dev/null 2>/dev/null; then
+  echo "lint: trufflehog is not installed"
+  echo "hint: refer to https://github.com/trufflesecurity/trufflehog?tab=readme-ov-file#floppy_disk-installation for install instructions"
+  exit 1
+fi
+
+git ls-files -z | grep -zv '^misc/shlib/shlib\.bash$' | xargs -0 trufflehog --no-fail --no-update --no-verification --json filesystem | trufflehog_jq_filter_files > trufflehog.log
+
+try test ! -s trufflehog.log
+
+if try_last_failed; then
+    printf "%s\n" "lint: $(red error:) new secrets found"
+    printf "%s\n" "lint: $(green hint:) don't check in secrets and revoke them immediately"
+    printf "%s\n" "lint: $(green hint:) mark false positives in misc/shlib/shlib.bash's trufflehog_jq_filter_(files|common)"
+fi
+
+jq -c -r '. | "\(.SourceMetadata.Data.Filesystem.file):\(.SourceMetadata.Data.Filesystem.line): Secret found: \(.Raw)"' trufflehog.log
+
+rm -f trufflehog.log
+
+try_status_report
