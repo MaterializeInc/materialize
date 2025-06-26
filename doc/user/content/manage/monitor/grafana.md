@@ -1,6 +1,7 @@
 ---
 title: "Grafana"
 description: "How to monitor the performance and overall health of your Materialize region using Grafana."
+draft: true # TODO(cloud#10992): Remove and replace with prometheus.md
 menu:
   main:
     parent: "monitor"

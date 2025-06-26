@@ -1,6 +1,7 @@
 ---
 title: "Datadog"
 description: "How to monitor the performance and overall health of your Materialize region using Datadog."
+draft: true # TODO(cloud#10992): Update to not use Prometheus SQL exporter and un-hide.
 menu:
   main:
     parent: "monitor"
