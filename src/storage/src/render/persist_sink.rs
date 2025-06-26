@@ -932,8 +932,6 @@ where
     // from our input frontiers that we have seen all batches for a given batch
     // description.
 
-    let storage_config_set = Arc::clone(storage_state.storage_configuration.config_set());
-
     let (shutdown_button, errors) = append_op.build_fallible(move |caps| Box::pin(async move {
         let [upper_cap_set]: &mut [_; 1] = caps.try_into().unwrap();
 
@@ -1111,7 +1109,7 @@ where
                 }
             });
 
-            let use_bulk_writing = write.validate_part_bounds_on_write() == false;
+            let use_bulk_writing = !write.validate_part_bounds_on_write();
             let mut todo = VecDeque::new();
 
             if use_bulk_writing {
