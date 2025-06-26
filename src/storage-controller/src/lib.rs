@@ -398,8 +398,15 @@ where
     fn collections_hydrated_on_replicas(
         &self,
         target_replica_ids: Option<Vec<ReplicaId>>,
+        target_cluster_id: &StorageInstanceId,
         exclude_collections: &BTreeSet<GlobalId>,
     ) -> Result<bool, StorageError<Self::Timestamp>> {
+        // If an empty set of replicas is provided there can be
+        // no collections on them, we'll count this as hydrated.
+        if target_replica_ids.as_ref().is_some_and(|v| v.is_empty()) {
+            return Ok(true);
+        }
+
         // If target_replica_ids is provided, use it as the set of target
         // replicas. Otherwise check for hydration on any replica.
         let target_replicas: Option<BTreeSet<ReplicaId>> =
@@ -410,14 +417,20 @@ where
             if collection_id.is_transient() || exclude_collections.contains(collection_id) {
                 continue;
             }
-            let hydrated = match &collection_state.extra_state {
+            let hydrated_or_untargeted = match &collection_state.extra_state {
                 CollectionStateExtra::Ingestion(state) => {
-                    match &target_replicas {
-                        Some(target_replicas) => !state.hydrated_on.is_disjoint(target_replicas),
-                        None => {
-                            // Not target replicas, so check that it's hydrated
-                            // on at least one replica.
-                            state.hydrated_on.len() >= 1
+                    if &state.instance_id != target_cluster_id {
+                        true
+                    } else {
+                        match &target_replicas {
+                            Some(target_replicas) => {
+                                !state.hydrated_on.is_disjoint(target_replicas)
+                            }
+                            None => {
+                                // Not target replicas, so check that it's hydrated
+                                // on at least one replica.
+                                state.hydrated_on.len() >= 1
+                            }
                         }
                     }
                 }
@@ -435,7 +448,7 @@ where
                     true
                 }
             };
-            if !hydrated {
+            if !hydrated_or_untargeted {
                 tracing::info!(%collection_id, "collection is not hydrated on any replica");
                 all_hydrated = false;
                 // We continue with our loop instead of breaking out early, so
