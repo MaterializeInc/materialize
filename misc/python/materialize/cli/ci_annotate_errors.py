@@ -301,6 +301,7 @@ class ObservedError(ObservedBaseError):
 @dataclass(kw_only=True, unsafe_hash=True)
 class ObservedErrorWithIssue(ObservedError, WithIssue):
     issue_is_closed: bool
+    issue_ignore_failure: bool
 
     def _get_issue_presentation(self) -> str:
         issue_presentation = f"#{self.issue_number}"
@@ -344,6 +345,7 @@ class Annotation:
     suite_name: str
     buildkite_job_id: str
     is_failure: bool
+    ignore_failure: bool
     build_history_on_main: BuildHistory
     test_cmd: str
     test_desc: str
@@ -357,7 +359,11 @@ class Annotation:
         wrap_in_summary = only_known_errors
 
         build_link = f'<a href="#{self.buildkite_job_id}">{self.suite_name}</a>'
-        outcome = "failed" if self.is_failure else "succeeded"
+        outcome = (
+            ("would have failed" if self.ignore_failure else "failed")
+            if self.is_failure
+            else "succeeded"
+        )
 
         title = f"{build_link} {outcome}"
 
@@ -419,6 +425,7 @@ and finds associated open GitHub issues in Materialize repository.""",
     parser.add_argument("--cloud-hostname", type=str)
     parser.add_argument("--test-cmd", type=str)
     parser.add_argument("--test-desc", type=str, default="")
+    parser.add_argument("--test-result", type=int, default=0)
     parser.add_argument("log_files", nargs="+", help="log files to search in")
     args = parser.parse_args()
 
@@ -433,7 +440,7 @@ and finds associated open GitHub issues in Materialize repository.""",
             was_successful=has_successful_buildkite_status()
         )
 
-        number_of_unknown_errors = annotate_logged_errors(
+        number_of_unknown_errors, ignore_failure = annotate_logged_errors(
             args.log_files, test_analytics, args.test_cmd, args.test_desc
         )
     except Exception as e:
@@ -450,7 +457,21 @@ and finds associated open GitHub issues in Materialize repository.""",
         # An error during an upload must never cause the build to fail
         test_analytics.on_upload_failed(e)
 
-    return 1 if number_of_unknown_errors > 0 else 0
+    if ignore_failure and args.test_result:
+        print(
+            "+++ IGNORING TEST FAILURE: Caused by a known issue annotated with `ci-ignore-failure: true`",
+            file=sys.stderr,
+        )
+        return 0
+
+    if not args.test_result and number_of_unknown_errors:
+        print(
+            "+++ Test succeeded, but unknown errors found in logs, marking as failed",
+            file=sys.stderr,
+        )
+        return 1
+
+    return args.test_result
 
 
 def annotate_errors(
@@ -460,6 +481,7 @@ def annotate_errors(
     test_analytics_db: TestAnalyticsDb,
     test_cmd: str,
     test_desc: str,
+    ignore_failure: bool,
 ) -> None:
     assert len(unknown_errors) > 0 or len(known_errors) > 0
     annotation_style = "info" if not unknown_errors else "error"
@@ -471,6 +493,7 @@ def annotate_errors(
         suite_name=get_suite_name(),
         buildkite_job_id=os.getenv("BUILDKITE_JOB_ID", ""),
         is_failure=is_failure,
+        ignore_failure=ignore_failure,
         build_history_on_main=build_history_on_main,
         unknown_errors=unknown_errors,
         known_errors=known_errors,
@@ -502,17 +525,18 @@ def group_identical_errors(
 
 def annotate_logged_errors(
     log_files: list[str], test_analytics: TestAnalyticsDb, test_cmd: str, test_desc: str
-) -> int:
+) -> tuple[int, bool]:
     """
     Returns the number of unknown errors, 0 when all errors are known or there
-    were no errors logged. This will be used to fail a test even if the test
-    itself succeeded, as long as it had any unknown error logs.
+    were no errors logged as well as whether to ignore the test having failed.
+    This will be used to fail a test even if the test itself succeeded, as long
+    as it had any unknown error logs.
     """
 
     errors = get_errors(log_files)
 
     if not errors:
-        return 0
+        return (0, False)
 
     step_key: str = os.getenv("BUILDKITE_STEP_KEY", "")
     buildkite_label: str = os.getenv("BUILDKITE_LABEL", "")
@@ -528,6 +552,7 @@ def annotate_logged_errors(
     job = os.getenv("BUILDKITE_JOB_ID")
 
     known_errors: list[ObservedBaseError] = []
+    ignore_failure: bool = False
 
     # Keep track of known errors so we log each only once
     already_reported_issue_numbers: set[int] = set()
@@ -564,6 +589,7 @@ def annotate_logged_errors(
                             issue_title=issue.info["title"],
                             issue_number=issue.info["number"],
                             issue_is_closed=False,
+                            issue_ignore_failure=issue.ignore_failure,
                             location=location,
                             location_url=location_url,
                             additional_collapsed_error_details=additional_collapsed_error_details,
@@ -593,6 +619,7 @@ def annotate_logged_errors(
                                 issue_title=issue.info["title"],
                                 issue_number=issue.info["number"],
                                 issue_is_closed=True,
+                                issue_ignore_failure=False,  # Never ignore regressions
                                 location=location,
                                 location_url=location_url,
                                 additional_collapsed_error_details=additional_collapsed_error_details,
@@ -687,6 +714,18 @@ def annotate_logged_errors(
         else:
             raise RuntimeError(f"Unexpected error type: {type(error)}")
 
+    ignore_failure = True
+    if len(unknown_errors) > 0:
+        ignore_failure = False
+    else:
+        for error in known_errors:
+            if not isinstance(error, ObservedErrorWithIssue):
+                ignore_failure = False
+                break
+            elif error.issue_ignore_failure == False:
+                ignore_failure = False
+                break
+
     build_history_on_main = get_failures_on_main(test_analytics)
     annotate_errors(
         unknown_errors,
@@ -695,13 +734,8 @@ def annotate_logged_errors(
         test_analytics,
         test_cmd,
         test_desc,
+        ignore_failure,
     )
-
-    if unknown_errors:
-        print(
-            f"+++ Failing test because of {len(unknown_errors)} unknown error{'s' if len(unknown_errors) != 1 else ''}",
-            file=sys.stderr,
-        )
 
     # No need for rest of the logic as no error logs were found, but since
     # this script was called the test still failed, so showing the current
@@ -725,6 +759,7 @@ def annotate_logged_errors(
             known_errors=[],
             test_cmd=test_cmd,
             test_desc=test_desc,
+            ignore_failure=False,
         )
         add_annotation_raw(style="error", markdown=annotation.to_markdown())
 
@@ -732,7 +767,7 @@ def annotate_logged_errors(
 
     store_known_issues_in_test_analytics(test_analytics, known_issues)
 
-    return len(unknown_errors)
+    return (len(unknown_errors), ignore_failure)
 
 
 def get_errors(log_file_names: list[str]) -> list[ErrorLog | JunitError | Secret]:

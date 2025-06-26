@@ -1598,8 +1598,6 @@ class PostgresTables(Generator):
 
 
 class PostgresTablesOldSyntax(Generator):
-    MAX_COUNT = 1500  # Too long-running with count=1800, TODO: reset to count=2000 when database-issues#9272 is fixed
-
     @classmethod
     def body(cls) -> None:
         print("> SET statement_timeout='300s'")
@@ -1634,6 +1632,7 @@ class PostgresTablesOldSyntax(Generator):
           FROM POSTGRES CONNECTION pg (PUBLICATION 'mz_source') FOR SCHEMAS (public)
           """
         )
+        print("> SET TRANSACTION_ISOLATION TO 'SERIALIZABLE';")
         for i in cls.all():
             print("$ set-sql-timeout duration=300s")
             cls.store_explain_and_run(f"SELECT * FROM t{i}")

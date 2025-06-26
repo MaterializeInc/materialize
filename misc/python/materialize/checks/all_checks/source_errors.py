@@ -112,14 +112,14 @@ class SourceErrors(Check):
                 # take precedence over errors. To fix this, we might want to
                 # rewrite this test to look at mz_source_status_history
                 # instead, which contains the full history.
-                # TODO: Reenable check when database-issues#9223 is fixed: bool_and(status IN ('stalled', 'created', 'paused')) as is_stalled
                 """
                 > SELECT
-                        coalesce(bool_and(error ~* 'publication .+ does not exist'), true) as matches
+                        coalesce(bool_and(error ~* 'publication .+ does not exist'), true) as matches,
+                        bool_and(status IN ('stalled', 'created', 'paused')) as is_stalled
                     FROM mz_internal.mz_source_statuses
                     WHERE
                         name IN ('source_errors_sourcea', 'source_errors_sourceb', 'source_errors_tablea', 'source_errors_tableb');
-                true
+                true true
                 """
             )
         )

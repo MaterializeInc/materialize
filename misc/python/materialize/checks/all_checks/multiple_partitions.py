@@ -108,9 +108,8 @@ class MultiplePartitions(Check):
                 > SELECT SUM(p.offset) FROM multiple_partitions_source_src_progress p;
                 420
 
-                # TODO: Reenable when database-issues#7695 is fixed
-                # > SELECT status FROM mz_internal.mz_source_statuses WHERE name = 'multiple_partitions_source';
-                # running
+                > SELECT status FROM mz_internal.mz_source_statuses WHERE name = 'multiple_partitions_source';
+                running
 
                 > SELECT LEFT(f1, 1), COUNT(*) FROM multiple_partitions_source GROUP BY LEFT(f1, 1);
                 A 50

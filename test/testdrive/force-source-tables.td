@@ -46,15 +46,8 @@ ALTER SYSTEM SET force_source_table_syntax = true
 > SELECT count(*) FROM bids
 255
 
-# TODO(def-) Reenable when database-issues#8703 is fixed
-$ skip-if
-SELECT true
-
 > SELECT status FROM mz_internal.mz_source_statuses WHERE name = 'bids';
 running
-
-# TODO(def-) Reenable when database-issues#8703 is fixed
-$ skip-end
 
 # Create another table from the same bids upstream using a less qualified reference
 > CREATE TABLE bids2 FROM SOURCE auction_house (REFERENCE "bids");

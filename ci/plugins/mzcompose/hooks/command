@@ -29,7 +29,7 @@ if read_list BUILDKITE_PLUGIN_MZCOMPOSE_ARGS; then
     done
 fi
 
-date +"%Y-%m-%d %H:%M:%S" > step_start_timestamp
+STEP_START_TIMESTAMP=$(date +"%Y-%m-%d %H:%M:%S")
 
 ci_collapsed_heading ":docker: Rebuilding non-mzbuild containers"
 # First time we are using ci-builder, allow retrying a few times in case dockerhub has network problems
@@ -93,17 +93,182 @@ elif [ "${CI_SYSTEM_PARAMETERS:-}" = "minimal" ]; then
     TEST_CMD+="CI_SYSTEM_PARAMETERS=$CI_SYSTEM_PARAMETERS "
 fi
 TEST_CMD+="bin/mzcompose --find $BUILDKITE_PLUGIN_MZCOMPOSE_COMPOSITION run ${run_args[*]} $EXTRA_ARGS"
-echo "$TEST_CMD" > test_cmd
 TEST_DESC="$(mzcompose description)"
-echo "$TEST_DESC" > test_desc
 
 ci_uncollapsed_heading ":docker: Running \`$TEST_CMD\`"
 echo "$TEST_DESC"
 
-mzcompose run "${run_args[@]}" |& tee run.log
-RESULT=$?
-if [ "$RESULT" != "0" ]; then
+cleanup() {
+  # Buildkite exposes no way to check if a test timed out (and wasn't cancelled manually), so we have to calculate it ourselves
+  START_TIME=$(date -d "$STEP_START_TIMESTAMP" +%s)
+  END_TIME=$(date +%s)
+  ELAPSED=$((END_TIME - START_TIME))
+  if [ $ELAPSED -ge $((BUILDKITE_TIMEOUT * 60)) ]; then
+    printf "\n%s" "$BUILDKITE_LABEL: test timed out" >> run.log
+  fi
+
+  echo "--- Post command steps"
+  # Run before potential "run down" in coverage
+  docker ps --all --quiet | xargs --no-run-if-empty docker inspect | jq '
+    .[]
+    | .Config.Env = ["[REDACTED]"]
+    | .Config.Cmd = ["[REDACTED]"]
+    | .Config.Entrypoint = ["[REDACTED]"]
+    | .Args = ["[REDACTED]"]' > docker-inspect.log
+  # services.log might already exist and contain logs from before composition was downed
+  time=0
+  if [ -f services.log ]; then
+      # Don't capture log lines we received already
+      time=$(date +%s -r services.log)
+  fi
+  mzcompose logs --no-color --timestamps --since "$time" >> services.log
+  # Sort services.log and remove the timestamps we added to prevent having duplicate timestamps in output. For reference:
+  # https://github.com/moby/moby/issues/33673
+  # https://github.com/moby/moby/issues/31706
+  sort -t"|" -k2 < services.log | sed -E "s/ \| [0-9]{4}-[01][0-9]-[0-3][0-9]T[0-2][0-9]\:[0-5][0-9]:[0-6][0-9]\.[0-9]{9}Z / \| /" > services-sorted.log
+  mv services-sorted.log services.log
+  # shellcheck disable=SC2024
+  sudo journalctl --merge --since "$STEP_START_TIMESTAMP" > journalctl-merge.log
+  netstat -ant > netstat-ant.log
+  netstat -panelot > netstat-panelot.log
+  ps aux | sed -E "s/\S*mzp_\S*/[REDACTED]/g" > ps-aux.log
+  docker stats --all --no-stream > docker-stats.log
+
+  mv "$cores" . || true
+
+  if find cores -name 'core.*' | grep -q .; then
+      # Best effort attempt to fetch interesting executables to get backtrace of core files
+      bin/ci-builder mzcompose stable cp /mnt/build/debug/clusterd cores/ || true
+      bin/ci-builder mzcompose stable cp /mnt/build/debug/environmentd cores/ || true
+      bin/ci-builder mzcompose stable cp /mnt/build/debug/materialized cores/ || true
+      bin/ci-builder mzcompose stable cp /mnt/build/debug/mz-balancerd cores/balancerd || true
+      bin/ci-builder mzcompose stable cp /mnt/build/debug/sqllogictest cores/ || true
+      mzcompose cp sqllogictest:/usr/local/bin/sqllogictest cores/ || true
+      mzcompose cp sqllogictest:/usr/local/bin/clusterd cores/ || true
+      mzcompose cp materialized:/usr/local/bin/environmentd cores/ || true
+      mzcompose cp materialized:/usr/local/bin/clusterd cores/ || true
+      mzcompose cp materialized:/usr/local/bin/materialized cores/ || true
+      mzcompose cp balancerd:/usr/local/bin/balancerd cores/ || true
+      mzcompose cp testdrive:/usr/local/bin/testdrive cores/ || true
+  fi
+
+  echo "Downing docker containers"
+  mzcompose down --volumes || true  # Ignore failures, we still want the rest of the cleanup
+
+  echo "Finding core files"
+  find cores -name 'core.*' | while read -r core; do
+      exe=$(echo "$core" | sed -e "s/core\.\(.*\)\.[0-9]*/\1/" -e "s/.*\!//")
+      # Core dumps can take a while to be written, so if extracting the info fails, try again later
+      bin/ci-builder run stable gdb --batch -ex "bt full" -ex "thread apply all bt" -ex "quit" cores/"$exe" "$core" > "$core".txt || (sleep 2m; bin/ci-builder run stable gdb --batch -ex "bt full" -ex "thread apply all bt" -ex "quit" cores/"$exe" "$core" > "$core".txt || true)
+      buildkite-agent artifact upload "$core".txt
+  done
+  # can be huge, clean up
+  rm -rf cores
+
+  echo "Compressing parallel-workload-queries.log"
+  bin/ci-builder run stable zstd --rm parallel-workload-queries.log || true
+
+  mapfile -t artifacts < <(printf "run.log\nservices.log\njournalctl-merge.log\nnetstat-ant.log\nnetstat-panelot.log\nps-aux.log\ndocker-inspect.log\n"; find . -name 'junit_*.xml'; find mz_debug_* -name '*.log')
+  artifacts_str=$(IFS=";"; echo "${artifacts[*]}")
+
+  echo "--- Running trufflehog to scan artifacts for secrets"
+  bin/ci-builder run stable trufflehog --no-update --no-verification --json --exclude-detectors=coda,dockerhub,box,npmtoken,github filesystem "${artifacts[@]}" | trufflehog_jq_filter_logs > trufflehog.log
+
+  echo "Uploading log artifacts"
+  unset CI_EXTRA_ARGS # We don't want extra args for the annotation
+  # Continue even if ci-annotate-errors fails
+  CI_ANNOTATE_ERRORS_RESULT=0
+  # We have to upload artifacts before ci-annotate-errors, so that the annotations can link to the artifacts
+  buildkite-agent artifact upload "$artifacts_str" || true
+  bin/ci-builder run stable bin/ci-annotate-errors --test-cmd="$TEST_CMD" --test-desc="$TEST_DESC" --test-result="$TEST_RESULT" "${artifacts[@]}" > ci-annotate-errors.log || CI_ANNOTATE_ERRORS_RESULT=$?
+  buildkite-agent artifact upload "ci-annotate-errors.log"
+
+  export_cov() {
+      bin/ci-builder run stable rust-cov export \
+        --ignore-filename-regex=.cargo/ \
+        --ignore-filename-regex=target/release/ \
+        --ignore-filename-regex=/cargo/ \
+        --ignore-filename-regex=/mnt/build/ \
+        --ignore-filename-regex=/rustc/ \
+        --format=lcov "$1" --instr-profile=coverage/"$BUILDKITE_JOB_ID".profdata src/ \
+        > coverage/"$BUILDKITE_JOB_ID"-"$(basename "$1")".lcov
+  }
+
+  if [ -n "${CI_COVERAGE_ENABLED:-}" ] && [ -z "${BUILDKITE_MZCOMPOSE_PLUGIN_SKIP_COVERAGE:-}" ];  then
+      echo "Generating coverage information"
+      if [ -n "$(find . -name '*.profraw')" ]; then
+          # Workaround for "invalid instrumentation profile data (file header is corrupt)"
+          rm -rf profraws
+          mkdir profraws
+          find . -name '*.profraw' | while read -r i; do
+              cp "$i" profraws
+              rm "$i"
+              bin/ci-builder run stable rust-profdata show profraws/"$(basename "$i")" > /dev/null || rm profraws/"$(basename "$i")"
+          done
+          find profraws -name '*.profraw' -exec bin/ci-builder run stable rust-profdata merge -sparse -o coverage/"$BUILDKITE_JOB_ID".profdata {} +
+          find . -name '*.profraw' -delete
+
+          ARGS=()
+          for program in clusterd environmentd balancerd sqllogictest testdrive; do
+              if [ -f coverage/"$program" ]; then
+                  export_cov coverage/"$program"
+                  ARGS+=("-a" coverage/"$BUILDKITE_JOB_ID"-"$program".lcov)
+              fi
+          done
+          rm coverage/"$BUILDKITE_JOB_ID".profdata
+          if [ "${#ARGS[@]}" != 0 ]; then
+              bin/ci-builder run stable lcov "${ARGS[@]}" -o coverage/"$BUILDKITE_JOB_ID".lcov
+              rm coverage/"$BUILDKITE_JOB_ID"-*.lcov
+              bin/ci-builder run stable zstd coverage/"$BUILDKITE_JOB_ID".lcov
+              buildkite-agent artifact upload coverage/"$BUILDKITE_JOB_ID".lcov.zst
+          fi
+      fi
+  fi
+
+  ci_unimportant_heading ":docker: Cleaning up after mzcompose"
+
+  # docker-compose kill may fail attempting to kill containers
+  # that have just exited on their own because of the
+  # "shared-fate" mechanism employed by Mz clusters
+  sudo systemctl restart docker
+  killall -9 clusterd || true # There might be remaining processes from a cargo-test run
+  if [ -n "${CI_COVERAGE_ENABLED:-}" ]; then
+    find . -name '*.profraw' -delete # Remove remaining profraw files from coverage runs
+  fi
+
+  ci_collapsed_heading ":docker: Purging all existing docker containers and volumes, regardless of origin"
+  docker ps --all --quiet | xargs --no-run-if-empty docker rm --force --volumes
+
+  if [ "$BUILDKITE_STEP_KEY" = "terraform-aws" ]; then
+    mzcompose run aws-temporary --no-setup --no-test --no-run-mz-debug || CI_ANNOTATE_ERRORS_RESULT=1
+  elif [ "$BUILDKITE_STEP_KEY" = "terraform-aws-upgrade" ]; then
+    mzcompose run aws-upgrade --no-setup --no-test --no-run-mz-debug || CI_ANNOTATE_ERRORS_RESULT=1
+  elif [ "$BUILDKITE_STEP_KEY" = "terraform-gcp" ]; then
+    mzcompose run gcp-temporary --no-setup --no-test --no-run-mz-debug || CI_ANNOTATE_ERRORS_RESULT=1
+  elif [ "$BUILDKITE_STEP_KEY" = "terraform-azure" ]; then
+    mzcompose run azure-temporary --no-setup --no-test --no-run-mz-debug || CI_ANNOTATE_ERRORS_RESULT=1
+  fi
+  rm -rf ~/.kube # Remove potential state from E2E Terraform tests
+
+  echo "Removing mz-debug files"
+  if find mz_debug*; then
+      rm -rf mz_debug*
+  fi
+
+  if [ ! -s services.log ] && [ "$BUILDKITE_LABEL" != "Maelstrom coverage of persist" ] && [ "$BUILDKITE_LABEL" != "Long single-node Maelstrom coverage of persist" ] && [ "$BUILDKITE_LABEL" != "Maelstrom coverage of txn-wal" ] && [ "$BUILDKITE_LABEL" != "Mz E2E Test" ] && [ "$BUILDKITE_LABEL" != "Output consistency (version for DFR)" ] && [ "$BUILDKITE_LABEL" != "Output consistency (version for CTF)" ] && [ "$BUILDKITE_LABEL" != "QA Canary Environment Base Load" ] && [ "$BUILDKITE_LABEL" != "Parallel Benchmark against QA Canary Environment" ] && [ "$BUILDKITE_LABEL" != "Parallel Benchmark against QA Benchmarking Staging Environment" ] && [[ ! "$BUILDKITE_LABEL" =~ Terraform\ .* ]]; then
+      echo "+++ services.log is empty, failing"
+      exit 1
+  fi
+  rm -f services.log
+
+  exit "$CI_ANNOTATE_ERRORS_RESULT"
+}
+
+trap cleanup EXIT SIGTERM SIGINT
+
+TEST_RESULT=0
+{ mzcompose run "${run_args[@]}" |& tee run.log; } || TEST_RESULT=$?
+if [ "$TEST_RESULT" != "0" ]; then
     # Give the logs some time to log panics, otherwise they might be missing later
     sleep 10
 fi
-exit $RESULT

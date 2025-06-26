@@ -20,6 +20,7 @@ from materialize.observed_error import ObservedBaseError, WithIssue
 
 CI_RE = re.compile("ci-regexp: (.*)")
 CI_APPLY_TO = re.compile("ci-apply-to: (.*)")
+CI_IGNORE_FAILURE = re.compile("ci-ignore-failure: (.*)")
 
 
 @dataclass
@@ -27,6 +28,7 @@ class KnownGitHubIssue:
     regex: re.Pattern[Any]
     apply_to: str | None
     info: dict[str, Any]
+    ignore_failure: bool
 
 
 @dataclass(kw_only=True, unsafe_hash=True)
@@ -82,6 +84,7 @@ def get_known_issues_from_github(
     for issue in issues_json["items"]:
         matches = CI_RE.findall(issue["body"])
         matches_apply_to = CI_APPLY_TO.findall(issue["body"])
+        matches_ignore_failure = CI_IGNORE_FAILURE.findall(issue["body"])
 
         if len(matches) > 1:
             issues_with_invalid_regex.append(
@@ -95,8 +98,24 @@ def get_known_issues_from_github(
             )
             continue
 
+        if len(matches_ignore_failure) > 1:
+            issues_with_invalid_regex.append(
+                GitHubIssueWithInvalidRegexp(
+                    internal_error_type="GITHUB_INVALID_IGNORE_FAILURE",
+                    issue_url=issue["html_url"],
+                    issue_title=issue["title"],
+                    issue_number=issue["number"],
+                    regex_pattern=f"Multiple ignore-failures, but only one supported: {[match.strip() for match in matches_ignore_failure]}",
+                )
+            )
+            continue
+
         if len(matches) == 0:
             continue
+
+        ignore_failure = len(matches_ignore_failure) == 1 and matches_ignore_failure[
+            0
+        ].strip() in ("true", "yes", "1")
 
         try:
             regex_pattern = re.compile(matches[0].strip().encode())
@@ -116,11 +135,16 @@ def get_known_issues_from_github(
             for match_apply_to in matches_apply_to:
                 known_issues.append(
                     KnownGitHubIssue(
-                        regex_pattern, match_apply_to.strip().lower(), issue
+                        regex_pattern,
+                        match_apply_to.strip().lower(),
+                        issue,
+                        ignore_failure,
                     )
                 )
         else:
-            known_issues.append(KnownGitHubIssue(regex_pattern, None, issue))
+            known_issues.append(
+                KnownGitHubIssue(regex_pattern, None, issue, ignore_failure)
+            )
 
     return (known_issues, issues_with_invalid_regex)
 

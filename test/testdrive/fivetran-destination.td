@@ -121,10 +121,6 @@ $ file-append container=fivetran path=d.csv compression=gzip header=a,b,c,d repe
 # Note: Both 'c.csv' and 'd.csv' are individually under the 'max_copy_from_size', but together
 # they exceed it. We want to make sure the write_batch still succeeds in this case.
 
-# TODO(def-) Reenable when database-issues#8373 is fixed
-$ skip-if
-SELECT true
-
 $ fivetran-destination action=write_batch
 {
     "schema_name": "foo",
@@ -162,12 +158,10 @@ $ fivetran-destination action=write_batch
     "update_files": [],
     "delete_files": [],
     "file_params": {
-        "Csv": {
-            "compression": 2,
-            "encryption": 0,
-            "null_string": "null-123",
-            "unmodified_string": "unmodified-123"
-        }
+        "compression": 2,
+        "encryption": 0,
+        "null_string": "null-123",
+        "unmodified_string": "unmodified-123"
     }
 }
 {
@@ -221,17 +215,15 @@ $ fivetran-destination action=write_batch
     "update_files": [],
     "delete_files": [],
     "file_params": {
-        "Csv": {
-            "compression": 2,
-            "encryption": 0,
-            "null_string": "null-123",
-            "unmodified_string": "unmodified-123"
-        }
+        "compression": 2,
+        "encryption": 0,
+        "null_string": "null-123",
+        "unmodified_string": "unmodified-123"
     }
 }
 {
     "response": {
-        "Failure": "error when calling Materialize: Error { kind: Db, cause: Some(DbError { severity: \"ERROR\", parsed_severity: None, code: SqlState(E53000), message: \"COPY FROM STDIN too large\", detail: None, hint: None, position: None, where_: None, schema: None, table: None, column: None, datatype: None, constraint: None, file: None, line: None, routine: None }) }: closing sink: replace_files: replace files: write_batch"
+        "Warning": {"message": "error when calling Materialize: Error { kind: Db, cause: Some(DbError { severity: \"ERROR\", parsed_severity: None, code: SqlState(E53000), message: \"COPY FROM STDIN too large\", detail: None, hint: None, position: None, where_: None, schema: None, table: None, column: None, datatype: None, constraint: None, file: None, line: None, routine: None }) }: closing sink: replace_files: replace files: write_batch"}
     }
 }
 

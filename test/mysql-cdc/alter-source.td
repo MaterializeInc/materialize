@@ -44,19 +44,12 @@ $ mysql-execute name=mysql
 CREATE TABLE table_a (pk INTEGER PRIMARY KEY, f2 TEXT);
 INSERT INTO table_a VALUES (9, 'nine');
 
-# TODO: database-issues#8127 (expected table was dropped)
-$ skip-if
-SELECT true
-
 ! SELECT * FROM table_a;
 contains:table was dropped
 
 # We are not aware that the new table_a is different
 ! CREATE TABLE table_a FROM SOURCE mz_source (REFERENCE public.table_a);
 contains:catalog item 'table_a' already exists
-
-# TODO: database-issues#8127 (expected table was dropped)
-$ skip-end
 
 > DROP SOURCE mz_source CASCADE;
 

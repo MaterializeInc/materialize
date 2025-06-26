@@ -77,9 +77,5 @@ $ mysql-execute name=mysql
 ALTER TABLE enum_type CHANGE f1 f1 ENUM ('val2', 'val1', 'val3', 'val4');
 INSERT INTO enum_type VALUES ('val1', 'val1');
 
-# TODO: database-issues#7776 (expected incompatible schema change)
-$ skip-if
-SELECT true
-
 ! SELECT * FROM enum_type;
 contains:incompatible schema change: column f1 in table enum_type has been altered

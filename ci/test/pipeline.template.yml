@@ -775,8 +775,7 @@ steps:
       - ./ci/plugins/mzcompose:
           composition: rtr-combined
     agents:
-      queue: hetzner-aarch64-4cpu-8gb
-    skip: "Flakes because of database-issues#8489"
+      queue: hetzner-aarch64-16cpu-32gb
 
   - id: skip-version-upgrade
     label: "Skip Version Upgrade"

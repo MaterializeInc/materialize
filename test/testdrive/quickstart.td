@@ -10,10 +10,6 @@
 # This test verifies the Quickstart page works: https://materialize.com/docs/get-started/quickstart/
 # Uses shared compute+storage cluster
 
-# TODO: Reenable when database-issues#8581 is fixed
-$ skip-if
-SELECT true
-
 > CREATE CLUSTER quickstart_tutorial REPLICAS (r1 (SIZE '4-4'));
 
 > SET CLUSTER = quickstart_tutorial
