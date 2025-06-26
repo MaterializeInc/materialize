@@ -28,7 +28,7 @@ production cluster.
 
 ## Step 1. Invite a new user
 
-1. [Login to the Materialize console](https://console.materialize.com/) and navigate to Account > Account
+1. [Login to the Materialize console](/console/) and navigate to Account > Account
 Settings > Users.
 
 1. Click **Invite User** and fill in the user information.
@@ -39,7 +39,7 @@ example.
 
 ## Step 2. Create a new role
 
-1. In the [SQL Shell](https://console.materialize.com/), or your preferred SQL
+1. In the [SQL Shell](/console/), or your preferred SQL
    client connected to Materialize, create a new role:
 
     ```mzsql

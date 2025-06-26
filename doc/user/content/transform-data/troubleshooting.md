@@ -37,7 +37,7 @@ This is how Materialize ensures consistent results for all queries.
 To check if any materialized views or indexes are lagging, use the workflow
 graphs in the Materialize console.
 
-1. Go to https://console.materialize.com/.
+1. Go to the Materialize console.
 2. Click on the **"Clusters"** tab in the side navigation bar.
 3. Click on the cluster that contains your upstream materialized view or index.
 4. Go to the **"Materialized Views"** or **"Indexes"** section, and click on the
@@ -249,7 +249,7 @@ down. As an example, if you issue a lot of resource-intensive queries at once,
 that might spike the CPU.
 
 To see memory and CPU usage for your cluster in the Materialize console, go to
-https://console.materialize.com/, click the **“Clusters”** tab in the
+Console, click the **“Clusters”** tab in the
 navigation bar, and click on the cluster name.
 
 #### Address

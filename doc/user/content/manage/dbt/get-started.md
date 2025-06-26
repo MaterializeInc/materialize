@@ -30,7 +30,7 @@ need to:
     The `dbt-materialize` adapter can only be used with **dbt Core**. Making the
     adapter available in dbt Cloud depends on prioritization by dbt Labs. If you
     require dbt Cloud support, please [reach out to the dbt Labs team](https://www.getdbt.com/community/join-the-community/).
-  {{</ note >}}
+   {{</ note >}}
 
     ```bash
     python3 -m venv dbt-venv                  # create the virtual environment
@@ -69,11 +69,6 @@ create a `profiles.yml` file, if it doesn't exist. To help you get started, the
 `dbt init` project includes sample models to run the [Materialize quickstart](/get-started/quickstart/).
 
 ### Connect to Materialize
-
-{{< note >}}
-As a best practice, we strongly recommend using [service accounts](/manage/access-control/create-service-accounts)
-to connect external applications, like dbt, to Materialize.
-{{</ note >}}
 
 dbt manages all your connection configurations (or, profiles) in a file called
 [`profiles.yml`](https://docs.getdbt.com/dbt-cli/configure-your-profile). By
@@ -778,7 +773,7 @@ SELECT NULL AS col_with_constraints,
     the compiled statements under `/target/run` and `target/compiled` in the
     dbt project folder.
 
-1. Using the [SQL Shell](https://console.materialize.com/), or your preferred
+1. Using the [SQL Shell](/console/), or your preferred
    SQL client connected to Materialize, double-check that all objects have been
    created:
 
@@ -893,7 +888,7 @@ trigger **real-time alerts** downstream.
     This guarantees that your tests keep running in the background as views that
     are automatically updated as soon as an assertion fails.
 
-1. Using the [SQL Shell](https://console.materialize.com/), or your preferred
+1. Using the [SQL Shell](/console/), or your preferred
    SQL client connected to Materialize, that the schema storing the tests has been
    created, as well as the test materialized views:
 
