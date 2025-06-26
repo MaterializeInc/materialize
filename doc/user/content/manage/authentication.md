@@ -6,7 +6,7 @@ menu:
     parent: manage
     name: Authentication
     identifier: authentication
-    weight: 14
+    weight: 8
 ---
 
 ## Configuring Authentication

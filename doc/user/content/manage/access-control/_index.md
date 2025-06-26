@@ -11,7 +11,7 @@ menu:
     parent: manage
     name: Access control
     identifier: 'access-control'
-    weight: 15
+    weight: 10
 ---
 
 {{< note >}}
