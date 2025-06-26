@@ -46,7 +46,7 @@ Connect with other users, share ideas, and get informal help from the [Materiali
 
 If you are an SLA Supported Customer who is experiencing an **urgent** issue,
 
-- *Recommended*. Use the [messenger's **Report Production
+- Use the [messenger's **Report Production
   Outage** option](#messenger-app) for fastest response.
 
 - Alternatively, you can email `support@materialize.com` from your Materialize
