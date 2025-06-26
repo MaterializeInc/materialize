@@ -686,8 +686,8 @@ where
 
 #[derive(Debug, Error)]
 enum AuthError {
-    #[error("invalid username in client certificate")]
-    InvalidLogin(String),
+    #[error("role dissallowed")]
+    RoleDisallowed(String),
     #[error("{0}")]
     Frontegg(#[from] FronteggError),
     #[error("missing authorization header")]
@@ -698,6 +698,8 @@ enum AuthError {
     SessionExpired,
     #[error("failed to update session")]
     FailedToUpdateSession,
+    #[error("invalid credentials")]
+    InvalidCredentials,
 }
 
 impl IntoResponse for AuthError {
@@ -950,11 +952,15 @@ async fn auth(
             }
             None => return Err(AuthError::MissingHttpAuthentication),
         },
-        Authenticator::Password(_) => {
-            warn!("self hosted auth only, but somehow missing session data");
-            // TODO tell the user to login here?
-            return Err(AuthError::MissingHttpAuthentication);
-        }
+        Authenticator::Password(adapter_client) => match creds {
+            Some(Credentials::Password { username, password }) => {
+                if let Err(_) = adapter_client.authenticate(&username, &password).await {
+                    return Err(AuthError::InvalidCredentials);
+                }
+                (username, None)
+            }
+            _ => return Err(AuthError::MissingHttpAuthentication),
+        },
         Authenticator::None => {
             // If no authentication, use whatever is in the HTTP auth
             // header (without checking the password), or fall back to the
@@ -988,7 +994,7 @@ fn check_role_allowed(name: &str, allowed_roles: AllowedRoles) -> Result<(), Aut
     if role_allowed {
         Ok(())
     } else {
-        Err(AuthError::InvalidLogin(name.to_owned()))
+        Err(AuthError::RoleDisallowed(name.to_owned()))
     }
 }
 
