@@ -738,7 +738,7 @@ pub(crate) enum RunOrder {
     Structured,
 }
 
-#[derive(Clone, PartialEq, Eq, Ord, PartialOrd, Serialize)]
+#[derive(Clone, PartialEq, Eq, Ord, PartialOrd, Serialize, Copy, Hash)]
 pub struct RunId(pub(crate) [u8; 16]);
 
 impl std::fmt::Display for RunId {
@@ -2135,6 +2135,8 @@ where
             // able to append that batch in the first place.
             let fake_merge = FueledMergeRes {
                 output: HollowBatch::empty(desc),
+                inputs: Vec::new(),
+                new_active_compaction: None,
             };
             let result = self.trace.apply_tombstone_merge(&fake_merge);
             assert!(
