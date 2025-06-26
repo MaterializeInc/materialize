@@ -9,6 +9,7 @@
 
 use std::time::Duration;
 
+use k8s_openapi::apiextensions_apiserver::pkg::apis::apiextensions::v1::CustomResourceColumnDefinition;
 use kube::{
     Api, Client, CustomResourceExt, Resource, ResourceExt,
     api::{DeleteParams, Patch, PatchParams},
@@ -66,14 +67,28 @@ where
     }
 }
 
-pub async fn register_crds(client: Client) -> Result<(), anyhow::Error> {
+pub async fn register_crds(
+    client: Client,
+    additional_crd_columns: Vec<CustomResourceColumnDefinition>,
+) -> Result<(), anyhow::Error> {
+    let mut mz_crd = crd::materialize::v1alpha1::Materialize::crd();
+    let default_columns = mz_crd.spec.versions[0]
+        .additional_printer_columns
+        .take()
+        .expect("should contain ImageRef and UpToDate columns");
+    mz_crd.spec.versions[0].additional_printer_columns = Some(
+        additional_crd_columns
+            .into_iter()
+            .chain(default_columns)
+            .collect(),
+    );
     tokio::time::timeout(
         Duration::from_secs(120),
         register_versioned_crds(
             client.clone(),
             vec![
                 VersionedCrd {
-                    crds: vec![crd::materialize::v1alpha1::Materialize::crd()],
+                    crds: vec![mz_crd],
                     stored_version: String::from("v1alpha1"),
                 },
                 VersionedCrd {
