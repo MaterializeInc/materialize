@@ -12,6 +12,7 @@
 use std::fmt;
 use std::thread::Thread;
 
+use anyhow::anyhow;
 use async_trait::async_trait;
 use crossbeam_channel::Sender;
 use itertools::Itertools;
@@ -37,10 +38,7 @@ where
     R: fmt::Debug + Send,
 {
     async fn send(&mut self, cmd: C) -> Result<(), anyhow::Error> {
-        self.tx
-            .send(cmd)
-            .expect("worker command receiver should not drop first");
-
+        self.tx.send(cmd).map_err(|_| anyhow!("receiver dropped"))?;
         self.thread.unpark();
 
         Ok(())
