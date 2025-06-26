@@ -9,6 +9,7 @@
 
 use std::time::Duration;
 
+use k8s_openapi::apiextensions_apiserver::pkg::apis::apiextensions::v1::CustomResourceColumnDefinition;
 use kube::{
     Api, Client, CustomResourceExt, Resource, ResourceExt,
     api::{DeleteParams, Patch, PatchParams},
@@ -66,14 +67,34 @@ where
     }
 }
 
-pub async fn register_crds(client: Client) -> Result<(), anyhow::Error> {
+pub async fn register_crds(client: Client, saas_columns: bool) -> Result<(), anyhow::Error> {
+    let mut mz_crd = crd::materialize::v1alpha1::Materialize::crd();
+    if saas_columns {
+        mz_crd.spec.versions[0]
+            .additional_printer_columns
+            .as_mut()
+            .map(|columns| {
+                columns.insert(
+                    0,
+                    CustomResourceColumnDefinition {
+                        description: Some("Metadata from the context annotator".to_owned()),
+                        format: None,
+                        json_path: ".metadata.annotations['materialize\\.cloud/analytics-context']"
+                            .to_owned(),
+                        name: "OrgContext".to_owned(),
+                        priority: Some(2),
+                        type_: "string".to_owned(),
+                    },
+                )
+            });
+    }
     tokio::time::timeout(
         Duration::from_secs(120),
         register_versioned_crds(
             client.clone(),
             vec![
                 VersionedCrd {
-                    crds: vec![crd::materialize::v1alpha1::Materialize::crd()],
+                    crds: vec![mz_crd],
                     stored_version: String::from("v1alpha1"),
                 },
                 VersionedCrd {
