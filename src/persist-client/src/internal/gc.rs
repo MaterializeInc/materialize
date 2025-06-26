@@ -43,7 +43,7 @@ use crate::internal::paths::{BlobKey, PartialBlobKey, PartialRollupKey};
 use crate::internal::state::HollowBlobRef;
 use crate::internal::state_versions::{InspectDiff, StateVersionsIter};
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub struct GcReq {
     pub shard_id: ShardId,
     pub new_seqno_since: SeqNo,

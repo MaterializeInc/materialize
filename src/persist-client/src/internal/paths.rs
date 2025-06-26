@@ -41,7 +41,7 @@ impl FromStr for PartId {
     type Err = String;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        parse_id('p', "PartId", s).map(PartId)
+        parse_id("p", "PartId", s).map(PartId)
     }
 }
 
@@ -169,7 +169,7 @@ impl FromStr for RollupId {
     type Err = String;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        parse_id('r', "RollupId", s).map(RollupId)
+        parse_id("r", "RollupId", s).map(RollupId)
     }
 }
 

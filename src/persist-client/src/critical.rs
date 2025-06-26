@@ -49,7 +49,7 @@ impl std::str::FromStr for CriticalReaderId {
     type Err = String;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        parse_id('c', "CriticalReaderId", s).map(CriticalReaderId)
+        parse_id("c", "CriticalReaderId", s).map(CriticalReaderId)
     }
 }
 
