@@ -37,8 +37,7 @@ fastest response.
 
 ### Email
 
-You can also email us your questions at `support@materialize.com` from your
-Materialize login email address.
+You can also email us your questions at `support@materialize.com`.
 
 ### Join the Materialize Slack community
 
@@ -49,12 +48,11 @@ Connect with other users, share ideas, and get informal help from the [Materiali
 If you are an SLA Supported Enterprise Customer who is experiencing an
 **urgent** issue,
 
-- *Recommended*. Use the [messenger's **Report Production
-  Outage** option](#messenger-app) for fastest response.
+- Use the [messenger's **Report Production Outage** option](#messenger-app) for
+  fastest response.
 
-- Alternatively, you can email `support@materialize.com` from your Materialize
-  login email address. To ensure priority handling, include **urgent** in the
-  subject line.
+- Alternatively, you can email `support@materialize.com`. To ensure priority
+  handling, include **urgent** in the subject line.
 
 Use the following definitions to determine what priority to assign to
 your support ticket:
