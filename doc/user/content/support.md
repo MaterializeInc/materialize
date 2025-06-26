@@ -29,10 +29,11 @@ can also submit a request to **Talk to a human**. Just look for the messenger
 widget on the bottom right.
 
 {{< tip >}}
+
 If you are an Enterprise customer with SLA support and are experiencing an
-**urgent** issue, you can use the [**Report Production
-Outage**](#report-production-outage-for-sla-supported-customers-only) option for
-fastest response.
+[**urgent** issue](#urgent-issues-for-sla-supported-customers-only), you can use
+the messenger's **Report Production Outage** option for fastest response.
+
 {{</ tip >}}
 
 ### Email
@@ -43,12 +44,12 @@ You can also email us your questions at `support@materialize.com`.
 
 Connect with other users, share ideas, and get informal help from the [Materialize user community](https://materialize.com/s/chat) on Slack.
 
-## Report Production Outage (For SLA Supported Customers Only)
+## Urgent Issues (For SLA Supported Customers Only)
 
 If you are an SLA Supported Enterprise Customer who is experiencing an
 **urgent** issue,
 
-- Use the [messenger's **Report Production Outage** option](#messenger-app) for
+- Use the [messenger's](#messenger-app) **Report Production Outage** option for
   fastest response.
 
 - Alternatively, you can email `support@materialize.com`. To ensure priority
