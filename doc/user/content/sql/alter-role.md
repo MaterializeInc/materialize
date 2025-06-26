@@ -30,7 +30,7 @@ ALTER ROLE <role_name> [WITH [SUPERUSER | NOSUPERUSER ]
 | `NOLOGIN`     | If specified, prevents a role from logging in. This is the default behavior if `LOGIN` is not specified.                        |
 | `SUPERUSER`   | If specified, grants the role superuser privileges.                                                                             |
 | `NOSUPERUSER` | If specified, prevents the role from having superuser privileges. This is the default behavior if `SUPERUSER` is not specified. |
-| `PASSWORD`    | If specified, allows you to set a password for the role. Setting the password to `NULL` removes the password.                   |
+| `PASSWORD`    | ***Public Preview*** This feature may have minor stability issues. If specified, allows you to set a password for the role. Setting the password to `NULL` removes the password.                   |
 
 #### `alter_role_set`
 
@@ -144,7 +144,7 @@ rj  f
 ##### Removing a role's password
 
 {{< warning >}}
-Setting a NULL password removes the password requirement.
+Setting a NULL password removes the password.
 {{< /warning >}}
 
 ```mzsql

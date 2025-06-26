@@ -21,6 +21,8 @@ If `spec.authenticatorKind` is not set, the default is **None**.
 
 ### Password authentication
 
+***Public Preview*** This feature may have minor stability issues.
+
 Password authentication requires users to authenticate with a password. To
 use password authentication, set `spec.authenticatorKind` to `Password` and
 configure a password for the internal `mz_system` user.

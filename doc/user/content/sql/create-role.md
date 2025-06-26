@@ -37,7 +37,7 @@ the following options exceptions:
 | `NOLOGIN`     | If specified, prevents a role from logging in. This is the default behavior if `LOGIN` is not specified.                        |
 | `SUPERUSER`   | If specified, grants the role superuser privileges.                                                                             |
 | `NOSUPERUSER` | If specified, prevents the role from having superuser privileges. This is the default behavior if `SUPERUSER` is not specified. |
-| `PASSWORD`    | If specified, allows you to set a password for the role.                                                                        |
+| `PASSWORD`    | ***Public Preview*** This feature may have minor stability issues. If specified, allows you to set a password for the role.                                                                        |
 
 {{< note >}}
 
