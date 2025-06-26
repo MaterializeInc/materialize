@@ -318,8 +318,10 @@ impl<MCB: PushAndAdd> ContainerMerger<MCB> {
     ) {
         while let Some(chunk) = builder.extract() {
             let mut chunk = std::mem::replace(chunk, stash.pop().unwrap_or_default());
-            builder.pack(&mut chunk, state);
-            output.push_into(chunk);
+            if output.len() > 2 {
+                builder.pack(&mut chunk, state);
+            }
+            output.push(chunk);
         }
     }
 
@@ -332,8 +334,7 @@ impl<MCB: PushAndAdd> ContainerMerger<MCB> {
         state: &mut MCB::State,
     ) {
         while let Some(chunk) = builder.finish() {
-            let mut chunk = std::mem::replace(chunk, stash.pop().unwrap_or_default());
-            builder.pack(&mut chunk, state);
+            let chunk = std::mem::replace(chunk, stash.pop().unwrap_or_default());
             output.push_into(chunk);
         }
     }
