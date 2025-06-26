@@ -57,10 +57,10 @@ SERVICES = [
     Kafka(),
     SchemaRegistry(),
     Localstack(),
-    Clusterd(name="clusterd1"),
-    Clusterd(name="clusterd2"),
-    Clusterd(name="clusterd3"),
-    Clusterd(name="clusterd4"),
+    Clusterd(name="clusterd1", workers=2),
+    Clusterd(name="clusterd2", workers=2),
+    Clusterd(name="clusterd3", workers=2),
+    Clusterd(name="clusterd4", workers=2),
     Mz(app_password=""),
     Minio(),
     Materialized(
@@ -113,69 +113,92 @@ def workflow_test_smoke(c: Composition, parser: WorkflowArgumentParser) -> None:
     args = parser.parse_args()
 
     c.down(destroy_volumes=True)
-    c.up("zookeeper", "kafka", "schema-registry", "localstack")
-    c.up("materialized")
 
-    # Create a cluster and verify that tests pass.
-    c.up("clusterd1")
-    c.up("clusterd2")
+    with c.override(
+        Clusterd(
+            name="clusterd1",
+            workers=2,
+            process_names=["clusterd1", "clusterd2"],
+        ),
+        Clusterd(
+            name="clusterd2",
+            workers=2,
+            process_names=["clusterd1", "clusterd2"],
+        ),
+        Clusterd(
+            name="clusterd3",
+            workers=2,
+            process_names=["clusterd3", "clusterd4"],
+        ),
+        Clusterd(
+            name="clusterd4",
+            workers=2,
+            process_names=["clusterd3", "clusterd4"],
+        ),
+    ):
+        c.up("zookeeper", "kafka", "schema-registry", "localstack")
+        c.up("materialized")
 
-    # Make sure cluster1 is owned by the system so it doesn't get dropped
-    # between testdrive runs.
-    c.sql(
-        """
-        ALTER SYSTEM SET unsafe_enable_unorchestrated_cluster_replicas = true;
+        # Create a cluster and verify that tests pass.
+        c.up("clusterd1")
+        c.up("clusterd2")
 
-        DROP CLUSTER IF EXISTS cluster1 CASCADE;
+        # Make sure cluster1 is owned by the system so it doesn't get dropped
+        # between testdrive runs.
+        c.sql(
+            """
+            ALTER SYSTEM SET unsafe_enable_unorchestrated_cluster_replicas = true;
 
-        CREATE CLUSTER cluster1 REPLICAS (
-            replica1 (
-                STORAGECTL ADDRESSES ['clusterd1:2100', 'clusterd2:2100'],
-                STORAGE ADDRESSES ['clusterd1:2103', 'clusterd2:2103'],
-                COMPUTECTL ADDRESSES ['clusterd1:2101', 'clusterd2:2101'],
-                COMPUTE ADDRESSES ['clusterd1:2102', 'clusterd2:2102'],
-                WORKERS 2
-            )
-        );
+            DROP CLUSTER IF EXISTS cluster1 CASCADE;
 
-        GRANT ALL ON CLUSTER cluster1 TO materialize;
+            CREATE CLUSTER cluster1 REPLICAS (
+                replica1 (
+                    STORAGECTL ADDRESSES ['clusterd1:2100', 'clusterd2:2100'],
+                    STORAGE ADDRESSES ['clusterd1:2103', 'clusterd2:2103'],
+                    COMPUTECTL ADDRESSES ['clusterd1:2101', 'clusterd2:2101'],
+                    COMPUTE ADDRESSES ['clusterd1:2102', 'clusterd2:2102'],
+                    WORKERS 2
+                )
+            );
+
+            GRANT ALL ON CLUSTER cluster1 TO materialize;
+            """,
+            port=6877,
+            user="mz_system",
+        )
+
+        c.run_testdrive_files(*args.glob)
+
+        # Add a replica to that cluster and verify that tests still pass.
+        c.up("clusterd3")
+        c.up("clusterd4")
+
+        c.sql(
+            """
+            ALTER SYSTEM SET unsafe_enable_unorchestrated_cluster_replicas = true;
+
+            CREATE CLUSTER REPLICA cluster1.replica2
+                STORAGECTL ADDRESSES ['clusterd3:2100', 'clusterd4:2100'],
+                STORAGE ADDRESSES ['clusterd3:2103', 'clusterd4:2103'],
+                COMPUTECTL ADDRESSES ['clusterd3:2101', 'clusterd4:2101'],
+                COMPUTE ADDRESSES ['clusterd3:2102', 'clusterd4:2102'],
+                WORKERS 2;
         """,
-        port=6877,
-        user="mz_system",
-    )
+            port=6877,
+            user="mz_system",
+        )
+        c.run_testdrive_files(*args.glob)
 
-    c.run_testdrive_files(*args.glob)
+        # Kill one of the nodes in the first replica of the compute cluster and
+        # verify that tests still pass.
+        c.kill("clusterd1")
+        c.run_testdrive_files(*args.glob)
 
-    # Add a replica to that cluster and verify that tests still pass.
-    c.up("clusterd3")
-    c.up("clusterd4")
+        # Leave only replica 2 up and verify that tests still pass.
+        c.sql("DROP CLUSTER REPLICA cluster1.replica1", port=6877, user="mz_system")
+        c.run_testdrive_files(*args.glob)
 
-    c.sql(
-        """
-        ALTER SYSTEM SET unsafe_enable_unorchestrated_cluster_replicas = true;
-
-        CREATE CLUSTER REPLICA cluster1.replica2
-            STORAGECTL ADDRESSES ['clusterd3:2100', 'clusterd4:2100'],
-            STORAGE ADDRESSES ['clusterd3:2103', 'clusterd4:2103'],
-            COMPUTECTL ADDRESSES ['clusterd3:2101', 'clusterd4:2101'],
-            COMPUTE ADDRESSES ['clusterd3:2102', 'clusterd4:2102'],
-            WORKERS 2;
-    """,
-        port=6877,
-        user="mz_system",
-    )
-    c.run_testdrive_files(*args.glob)
-
-    # Kill one of the nodes in the first replica of the compute cluster and
-    # verify that tests still pass.
-    c.kill("clusterd1")
-    c.run_testdrive_files(*args.glob)
-
-    # Leave only replica 2 up and verify that tests still pass.
-    c.sql("DROP CLUSTER REPLICA cluster1.replica1", port=6877, user="mz_system")
-    c.run_testdrive_files(*args.glob)
-
-    c.sql("DROP CLUSTER cluster1 CASCADE", port=6877, user="mz_system")
+        c.sql("DROP CLUSTER cluster1 CASCADE", port=6877, user="mz_system")
 
 
 def workflow_test_invalid_compute_reuse(c: Composition) -> None:
@@ -273,170 +296,177 @@ def workflow_test_github_4443(c: Composition) -> None:
     """
 
     c.down(destroy_volumes=True)
-    c.up("materialized")
-    c.up("clusterd1")
 
-    # helper function to get command history metrics
-    def find_command_history_metrics(c: Composition) -> tuple[int, int, int, int]:
-        controller_metrics = c.exec(
-            "materialized", "curl", "localhost:6878/metrics", capture=True
-        ).stdout
-        replica_metrics = c.exec(
-            "clusterd1", "curl", "localhost:6878/metrics", capture=True
-        ).stdout
-        metrics = controller_metrics + replica_metrics
+    with c.override(Clusterd(name="clusterd1", workers=1)):
+        c.up("materialized", "clusterd1")
 
-        controller_command_count, controller_command_count_found = 0, False
-        controller_dataflow_count, controller_dataflow_count_found = 0, False
-        replica_command_count, replica_command_count_found = 0, False
-        replica_dataflow_count, replica_dataflow_count_found = 0, False
-        for metric in metrics.splitlines():
-            if (
-                metric.startswith("mz_compute_controller_history_command_count")
-                and 'instance_id="u2"' in metric
-            ):
-                controller_command_count += int(metric.split()[1])
-                controller_command_count_found = True
-            elif (
-                metric.startswith("mz_compute_controller_history_dataflow_count")
-                and 'instance_id="u2"' in metric
-            ):
-                controller_dataflow_count += int(metric.split()[1])
-                controller_dataflow_count_found = True
-            elif metric.startswith("mz_compute_replica_history_command_count"):
-                replica_command_count += int(metric.split()[1])
-                replica_command_count_found = True
-            elif metric.startswith("mz_compute_replica_history_dataflow_count"):
-                replica_dataflow_count += int(metric.split()[1])
-                replica_dataflow_count_found = True
+        # helper function to get command history metrics
+        def find_command_history_metrics(c: Composition) -> tuple[int, int, int, int]:
+            controller_metrics = c.exec(
+                "materialized", "curl", "localhost:6878/metrics", capture=True
+            ).stdout
+            replica_metrics = c.exec(
+                "clusterd1", "curl", "localhost:6878/metrics", capture=True
+            ).stdout
+            metrics = controller_metrics + replica_metrics
 
-        assert (
-            controller_command_count_found
-        ), "command count not found in controller metrics"
-        assert (
-            controller_dataflow_count_found
-        ), "dataflow count not found in controller metrics"
-        assert replica_command_count_found, "command count not found in replica metrics"
-        assert (
-            replica_dataflow_count_found
-        ), "dataflow count not found in replica metrics"
+            controller_command_count, controller_command_count_found = 0, False
+            controller_dataflow_count, controller_dataflow_count_found = 0, False
+            replica_command_count, replica_command_count_found = 0, False
+            replica_dataflow_count, replica_dataflow_count_found = 0, False
+            for metric in metrics.splitlines():
+                if (
+                    metric.startswith("mz_compute_controller_history_command_count")
+                    and 'instance_id="u2"' in metric
+                ):
+                    controller_command_count += int(metric.split()[1])
+                    controller_command_count_found = True
+                elif (
+                    metric.startswith("mz_compute_controller_history_dataflow_count")
+                    and 'instance_id="u2"' in metric
+                ):
+                    controller_dataflow_count += int(metric.split()[1])
+                    controller_dataflow_count_found = True
+                elif metric.startswith("mz_compute_replica_history_command_count"):
+                    replica_command_count += int(metric.split()[1])
+                    replica_command_count_found = True
+                elif metric.startswith("mz_compute_replica_history_dataflow_count"):
+                    replica_dataflow_count += int(metric.split()[1])
+                    replica_dataflow_count_found = True
 
-        return (
+            assert (
+                controller_command_count_found
+            ), "command count not found in controller metrics"
+            assert (
+                controller_dataflow_count_found
+            ), "dataflow count not found in controller metrics"
+            assert (
+                replica_command_count_found
+            ), "command count not found in replica metrics"
+            assert (
+                replica_dataflow_count_found
+            ), "dataflow count not found in replica metrics"
+
+            return (
+                controller_command_count,
+                controller_dataflow_count,
+                replica_command_count,
+                replica_dataflow_count,
+            )
+
+        c.sql(
+            "ALTER SYSTEM SET unsafe_enable_unorchestrated_cluster_replicas = true;",
+            port=6877,
+            user="mz_system",
+        )
+
+        # Set up a cluster with an indexed table and an unindexed one.
+        c.sql(
+            """
+            CREATE CLUSTER cluster1 REPLICAS (replica1 (
+                STORAGECTL ADDRESSES ['clusterd1:2100'],
+                STORAGE ADDRESSES ['clusterd1:2103'],
+                COMPUTECTL ADDRESSES ['clusterd1:2101'],
+                COMPUTE ADDRESSES ['clusterd1:2102'],
+                WORKERS 1
+            ));
+            SET cluster = cluster1;
+            -- table for fast-path peeks
+            CREATE TABLE t (a int);
+            CREATE DEFAULT INDEX ON t;
+            INSERT INTO t VALUES (42);
+            -- table for slow-path peeks
+            CREATE TABLE t2 (a int);
+            INSERT INTO t2 VALUES (84);
+
+            -- Wait for the cluster to be ready.
+            SELECT * FROM t;
+            SELECT * FROM t2;
+            """
+        )
+
+        # Wait a bit to let the metrics refresh.
+        time.sleep(2)
+
+        # Obtain initial history size and dataflow count.
+        # Dataflow count can plausibly be more than 1, if compaction is delayed.
+        (
             controller_command_count,
             controller_dataflow_count,
             replica_command_count,
             replica_dataflow_count,
-        )
+        ) = find_command_history_metrics(c)
+        assert controller_command_count > 0, "controller history cannot be empty"
+        assert (
+            controller_dataflow_count > 0
+        ), "at least one dataflow expected in controller history"
+        assert (
+            controller_dataflow_count < 5
+        ), "more dataflows than expected in controller history"
+        assert replica_command_count > 0, "replica history cannot be empty"
+        assert (
+            replica_dataflow_count > 0
+        ), "at least one dataflow expected in replica history"
+        assert (
+            replica_dataflow_count < 5
+        ), "more dataflows than expected in replica history"
 
-    c.sql(
-        "ALTER SYSTEM SET unsafe_enable_unorchestrated_cluster_replicas = true;",
-        port=6877,
-        user="mz_system",
-    )
+        # execute 400 fast- and slow-path peeks
+        for _ in range(20):
+            c.sql(
+                """
+                SELECT * FROM t;
+                SELECT * FROM t2;
+                SELECT * FROM t;
+                SELECT * FROM t2;
+                SELECT * FROM t;
+                SELECT * FROM t2;
+                SELECT * FROM t;
+                SELECT * FROM t2;
+                SELECT * FROM t;
+                SELECT * FROM t2;
+                SELECT * FROM t;
+                SELECT * FROM t2;
+                SELECT * FROM t;
+                SELECT * FROM t2;
+                SELECT * FROM t;
+                SELECT * FROM t2;
+                SELECT * FROM t;
+                SELECT * FROM t2;
+                SELECT * FROM t;
+                SELECT * FROM t2;
+                """
+            )
 
-    # Set up a cluster with an indexed table and an unindexed one.
-    c.sql(
-        """
-        CREATE CLUSTER cluster1 REPLICAS (replica1 (
-            STORAGECTL ADDRESSES ['clusterd1:2100'],
-            STORAGE ADDRESSES ['clusterd1:2103'],
-            COMPUTECTL ADDRESSES ['clusterd1:2101'],
-            COMPUTE ADDRESSES ['clusterd1:2102'],
-            WORKERS 1
-        ));
-        SET cluster = cluster1;
-        -- table for fast-path peeks
-        CREATE TABLE t (a int);
-        CREATE DEFAULT INDEX ON t;
-        INSERT INTO t VALUES (42);
-        -- table for slow-path peeks
-        CREATE TABLE t2 (a int);
-        INSERT INTO t2 VALUES (84);
+        # Wait a bit to let the metrics refresh.
+        time.sleep(2)
 
-        -- Wait for the cluster to be ready.
-        SELECT * FROM t;
-        SELECT * FROM t2;
-        """
-    )
-
-    # Wait a bit to let the metrics refresh.
-    time.sleep(2)
-
-    # Obtain initial history size and dataflow count.
-    # Dataflow count can plausibly be more than 1, if compaction is delayed.
-    (
-        controller_command_count,
-        controller_dataflow_count,
-        replica_command_count,
-        replica_dataflow_count,
-    ) = find_command_history_metrics(c)
-    assert controller_command_count > 0, "controller history cannot be empty"
-    assert (
-        controller_dataflow_count > 0
-    ), "at least one dataflow expected in controller history"
-    assert (
-        controller_dataflow_count < 5
-    ), "more dataflows than expected in controller history"
-    assert replica_command_count > 0, "replica history cannot be empty"
-    assert (
-        replica_dataflow_count > 0
-    ), "at least one dataflow expected in replica history"
-    assert replica_dataflow_count < 5, "more dataflows than expected in replica history"
-
-    # execute 400 fast- and slow-path peeks
-    for _ in range(20):
-        c.sql(
-            """
-            SELECT * FROM t;
-            SELECT * FROM t2;
-            SELECT * FROM t;
-            SELECT * FROM t2;
-            SELECT * FROM t;
-            SELECT * FROM t2;
-            SELECT * FROM t;
-            SELECT * FROM t2;
-            SELECT * FROM t;
-            SELECT * FROM t2;
-            SELECT * FROM t;
-            SELECT * FROM t2;
-            SELECT * FROM t;
-            SELECT * FROM t2;
-            SELECT * FROM t;
-            SELECT * FROM t2;
-            SELECT * FROM t;
-            SELECT * FROM t2;
-            SELECT * FROM t;
-            SELECT * FROM t2;
-            """
-        )
-
-    # Wait a bit to let the metrics refresh.
-    time.sleep(2)
-
-    # Check that history size and dataflow count are well-behaved.
-    # Dataflow count can plausibly be more than 1, if compaction is delayed.
-    (
-        controller_command_count,
-        controller_dataflow_count,
-        replica_command_count,
-        replica_dataflow_count,
-    ) = find_command_history_metrics(c)
-    assert (
-        controller_command_count < 100
-    ), "controller history grew more than expected after peeks"
-    assert (
-        controller_dataflow_count > 0
-    ), "at least one dataflow expected in controller history"
-    assert (
-        controller_dataflow_count < 5
-    ), "more dataflows than expected in controller history"
-    assert (
-        replica_command_count < 100
-    ), "replica history grew more than expected after peeks"
-    assert (
-        replica_dataflow_count > 0
-    ), "at least one dataflow expected in replica history"
-    assert replica_dataflow_count < 5, "more dataflows than expected in replica history"
+        # Check that history size and dataflow count are well-behaved.
+        # Dataflow count can plausibly be more than 1, if compaction is delayed.
+        (
+            controller_command_count,
+            controller_dataflow_count,
+            replica_command_count,
+            replica_dataflow_count,
+        ) = find_command_history_metrics(c)
+        assert (
+            controller_command_count < 100
+        ), "controller history grew more than expected after peeks"
+        assert (
+            controller_dataflow_count > 0
+        ), "at least one dataflow expected in controller history"
+        assert (
+            controller_dataflow_count < 5
+        ), "more dataflows than expected in controller history"
+        assert (
+            replica_command_count < 100
+        ), "replica history grew more than expected after peeks"
+        assert (
+            replica_dataflow_count > 0
+        ), "at least one dataflow expected in replica history"
+        assert (
+            replica_dataflow_count < 5
+        ), "more dataflows than expected in replica history"
 
 
 def workflow_test_github_4444(c: Composition) -> None:
@@ -529,8 +559,8 @@ def workflow_test_github_4545(c: Composition) -> None:
                 WORKERS 2
             ),
             logging_off (
-                STORAGECTL ADDRESSES ['clusterd1:2100'],
-                STORAGE ADDRESSES ['clusterd1:2103'],
+                STORAGECTL ADDRESSES ['clusterd2:2100'],
+                STORAGE ADDRESSES ['clusterd2:2103'],
                 COMPUTECTL ADDRESSES ['clusterd2:2101'],
                 COMPUTE ADDRESSES ['clusterd2:2102'],
                 WORKERS 2,
@@ -663,6 +693,7 @@ def workflow_test_github_4433(c: Composition) -> None:
             environment_extra=[
                 "MZ_SOFT_ASSERTIONS=0",
             ],
+            workers=2,
         ),
         Testdrive(no_reset=True),
     ):
@@ -976,6 +1007,7 @@ def workflow_test_github_5086(c: Composition) -> None:
             environment_extra=[
                 "MZ_SOFT_ASSERTIONS=0",
             ],
+            workers=2,
         ),
         Testdrive(no_reset=True),
     ):
@@ -1070,6 +1102,7 @@ def workflow_test_github_5831(c: Composition) -> None:
             environment_extra=[
                 "MZ_PERSIST_COMPACTION_DISABLED=true",
             ],
+            workers=4,
         ),
         Testdrive(no_reset=True),
     ):
@@ -1178,6 +1211,7 @@ def workflow_test_single_time_monotonicity_enforcers(c: Composition) -> None:
             environment_extra=[
                 "MZ_PERSIST_COMPACTION_DISABLED=true",
             ],
+            workers=4,
         ),
         Testdrive(no_reset=True),
     ):
@@ -1332,6 +1366,16 @@ def workflow_test_remote_storage(c: Composition) -> None:
 
     with c.override(
         Testdrive(no_reset=True, consistent_seed=True),
+        Clusterd(
+            name="clusterd1",
+            workers=4,
+            process_names=["clusterd1", "clusterd2"],
+        ),
+        Clusterd(
+            name="clusterd2",
+            workers=4,
+            process_names=["clusterd1", "clusterd2"],
+        ),
     ):
         c.up(
             "materialized",
@@ -1401,6 +1445,7 @@ def workflow_pg_snapshot_resumption(c: Composition) -> None:
         Clusterd(
             name="clusterd1",
             environment_extra=["FAILPOINTS=pg_snapshot_failure=return"],
+            workers=4,
         ),
     ):
         c.up("materialized", "postgres", "clusterd1")
@@ -1416,7 +1461,7 @@ def workflow_pg_snapshot_resumption(c: Composition) -> None:
 
         with c.override(
             # turn off the failpoint
-            Clusterd(name="clusterd1")
+            Clusterd(name="clusterd1", workers=4)
         ):
             c.up("clusterd1")
             c.run_testdrive_files("pg-snapshot-resumption/05-verify-data.td")
@@ -1433,6 +1478,7 @@ def workflow_sink_failure(c: Composition) -> None:
         Clusterd(
             name="clusterd1",
             environment_extra=["FAILPOINTS=kafka_sink_creation_error=return"],
+            workers=4,
         ),
     ):
         c.up("materialized", "zookeeper", "kafka", "schema-registry", "clusterd1")
@@ -1442,7 +1488,7 @@ def workflow_sink_failure(c: Composition) -> None:
 
         with c.override(
             # turn off the failpoint
-            Clusterd(name="clusterd1")
+            Clusterd(name="clusterd1", workers=4)
         ):
             c.up("clusterd1")
             c.run_testdrive_files("sink-failure/03-verify-data.td")
@@ -1722,142 +1768,146 @@ def workflow_test_compute_reconciliation_reuse(c: Composition) -> None:
 
     c.down(destroy_volumes=True)
 
-    c.up("materialized")
-    c.up("clusterd1")
-    c.up("clusterd2")
+    with c.override(
+        Clusterd(name="clusterd1", workers=1),
+        Clusterd(name="clusterd2", workers=1),
+    ):
+        c.up("materialized", "clusterd1", "clusterd2")
 
-    c.sql(
-        "ALTER SYSTEM SET unsafe_enable_unorchestrated_cluster_replicas = true;",
-        port=6877,
-        user="mz_system",
-    )
+        c.sql(
+            "ALTER SYSTEM SET unsafe_enable_unorchestrated_cluster_replicas = true;",
+            port=6877,
+            user="mz_system",
+        )
 
-    # Helper function to get reconciliation metrics for clusterd.
-    def fetch_reconciliation_metrics(process: str) -> tuple[int, int]:
-        metrics = c.exec(process, "curl", "localhost:6878/metrics", capture=True).stdout
+        # Helper function to get reconciliation metrics for clusterd.
+        def fetch_reconciliation_metrics(process: str) -> tuple[int, int]:
+            metrics = c.exec(
+                process, "curl", "localhost:6878/metrics", capture=True
+            ).stdout
 
-        reused = 0
-        replaced = 0
-        for metric in metrics.splitlines():
-            if metric.startswith(
-                "mz_compute_reconciliation_reused_dataflows_count_total"
-            ):
-                reused += int(metric.split()[1])
-            elif metric.startswith(
-                "mz_compute_reconciliation_replaced_dataflows_count_total"
-            ):
-                replaced += int(metric.split()[1])
+            reused = 0
+            replaced = 0
+            for metric in metrics.splitlines():
+                if metric.startswith(
+                    "mz_compute_reconciliation_reused_dataflows_count_total"
+                ):
+                    reused += int(metric.split()[1])
+                elif metric.startswith(
+                    "mz_compute_reconciliation_replaced_dataflows_count_total"
+                ):
+                    replaced += int(metric.split()[1])
 
-        return reused, replaced
+            return reused, replaced
 
-    # Run a slow-path SELECT to allocate a transient ID. This ensures that
-    # after the restart dataflows get different internal transient IDs
-    # assigned, which is something we want reconciliation to be able to handle.
-    c.sql("SELECT * FROM mz_views JOIN mz_indexes USING (id)")
+        # Run a slow-path SELECT to allocate a transient ID. This ensures that
+        # after the restart dataflows get different internal transient IDs
+        # assigned, which is something we want reconciliation to be able to handle.
+        c.sql("SELECT * FROM mz_views JOIN mz_indexes USING (id)")
 
-    # Set up a cluster and a number of dataflows that can be reconciled.
-    c.sql(
-        """
-        CREATE CLUSTER cluster1 REPLICAS (replica1 (
-            STORAGECTL ADDRESSES ['clusterd1:2100'],
-            STORAGE ADDRESSES ['clusterd1:2103'],
-            COMPUTECTL ADDRESSES ['clusterd1:2101'],
-            COMPUTE ADDRESSES ['clusterd1:2102'],
-            WORKERS 1
-        ));
-        SET cluster = cluster1;
+        # Set up a cluster and a number of dataflows that can be reconciled.
+        c.sql(
+            """
+            CREATE CLUSTER cluster1 REPLICAS (replica1 (
+                STORAGECTL ADDRESSES ['clusterd1:2100'],
+                STORAGE ADDRESSES ['clusterd1:2103'],
+                COMPUTECTL ADDRESSES ['clusterd1:2101'],
+                COMPUTE ADDRESSES ['clusterd1:2102'],
+                WORKERS 1
+            ));
+            SET cluster = cluster1;
 
-        -- index on table
-        CREATE TABLE t1 (a int);
-        CREATE DEFAULT INDEX ON t1;
+            -- index on table
+            CREATE TABLE t1 (a int);
+            CREATE DEFAULT INDEX ON t1;
 
-        -- index on index
-        CREATE VIEW v1 AS SELECT a + 1 AS a FROM t1;
-        CREATE DEFAULT INDEX ON v1;
+            -- index on index
+            CREATE VIEW v1 AS SELECT a + 1 AS a FROM t1;
+            CREATE DEFAULT INDEX ON v1;
 
-        -- index on index on index
-        CREATE VIEW v2 AS SELECT a + 1 AS a FROM v1;
-        CREATE DEFAULT INDEX ON v2;
+            -- index on index on index
+            CREATE VIEW v2 AS SELECT a + 1 AS a FROM v1;
+            CREATE DEFAULT INDEX ON v2;
 
-        -- materialized view on table
-        CREATE TABLE t2 (a int);
-        CREATE MATERIALIZED VIEW mv1 AS SELECT a + 1 AS a FROM t2;
+            -- materialized view on table
+            CREATE TABLE t2 (a int);
+            CREATE MATERIALIZED VIEW mv1 AS SELECT a + 1 AS a FROM t2;
 
-        -- materialized view on index
-        CREATE MATERIALIZED VIEW mv2 AS SELECT a + 1 AS a FROM t1;
+            -- materialized view on index
+            CREATE MATERIALIZED VIEW mv2 AS SELECT a + 1 AS a FROM t1;
 
-        -- materialized view on index on index
-        CREATE MATERIALIZED VIEW mv3 AS SELECT a + 1 AS a FROM v1;
+            -- materialized view on index on index
+            CREATE MATERIALIZED VIEW mv3 AS SELECT a + 1 AS a FROM v1;
 
-        -- materialized view on index on index on index
-        CREATE MATERIALIZED VIEW mv4 AS SELECT a + 1 AS a FROM v2;
+            -- materialized view on index on index on index
+            CREATE MATERIALIZED VIEW mv4 AS SELECT a + 1 AS a FROM v2;
 
-        -- REFRESH materialized view on table
-        CREATE MATERIALIZED VIEW rmv1 WITH (REFRESH EVERY '1m') AS SELECT a + 1 AS a FROM t2;
+            -- REFRESH materialized view on table
+            CREATE MATERIALIZED VIEW rmv1 WITH (REFRESH EVERY '1m') AS SELECT a + 1 AS a FROM t2;
 
-        -- REFRESH materialized view on index
-        CREATE MATERIALIZED VIEW rmv2 WITH (REFRESH EVERY '1m') AS SELECT a + 1 AS a FROM t1;
+            -- REFRESH materialized view on index
+            CREATE MATERIALIZED VIEW rmv2 WITH (REFRESH EVERY '1m') AS SELECT a + 1 AS a FROM t1;
 
-        -- REFRESH materialized view on index on index
-        CREATE MATERIALIZED VIEW rmv3 WITH (REFRESH EVERY '1m') AS SELECT a + 1 AS a FROM v1;
+            -- REFRESH materialized view on index on index
+            CREATE MATERIALIZED VIEW rmv3 WITH (REFRESH EVERY '1m') AS SELECT a + 1 AS a FROM v1;
 
-        -- REFRESH materialized view on index on index on index
-        CREATE MATERIALIZED VIEW rmv4 WITH (REFRESH EVERY '1m') AS SELECT a + 1 AS a FROM v2;
+            -- REFRESH materialized view on index on index on index
+            CREATE MATERIALIZED VIEW rmv4 WITH (REFRESH EVERY '1m') AS SELECT a + 1 AS a FROM v2;
 
-        -- REFRESH materialized view on materialized view
-        CREATE MATERIALIZED VIEW rmv5 WITH (REFRESH EVERY '1m') AS SELECT a + 1 AS a FROM mv1;
+            -- REFRESH materialized view on materialized view
+            CREATE MATERIALIZED VIEW rmv5 WITH (REFRESH EVERY '1m') AS SELECT a + 1 AS a FROM mv1;
 
-        -- REFRESH materialized view on REFRESH materialized view
-        CREATE MATERIALIZED VIEW rmv6 WITH (REFRESH EVERY '1m') AS SELECT a + 1 AS a FROM rmv1;
+            -- REFRESH materialized view on REFRESH materialized view
+            CREATE MATERIALIZED VIEW rmv6 WITH (REFRESH EVERY '1m') AS SELECT a + 1 AS a FROM rmv1;
 
-        -- materialized view on REFRESH materialized view
-        CREATE MATERIALIZED VIEW mv5 AS SELECT a + 1 AS a FROM rmv1;
+            -- materialized view on REFRESH materialized view
+            CREATE MATERIALIZED VIEW mv5 AS SELECT a + 1 AS a FROM rmv1;
 
-        -- index on REFRESH materialized view
-        CREATE DEFAULT INDEX ON rmv1;
-        """
-    )
+            -- index on REFRESH materialized view
+            CREATE DEFAULT INDEX ON rmv1;
+            """
+        )
 
-    # Replace the `mz_catalog_server` replica with an unorchestrated one so we
-    # can test reconciliation of system indexes too.
-    c.sql(
-        """
-        ALTER CLUSTER mz_catalog_server SET (MANAGED = false);
-        DROP CLUSTER REPLICA mz_catalog_server.r1;
-        CREATE CLUSTER REPLICA mz_catalog_server.r1 (
-            STORAGECTL ADDRESSES ['clusterd2:2100'],
-            STORAGE ADDRESSES ['clusterd2:2103'],
-            COMPUTECTL ADDRESSES ['clusterd2:2101'],
-            COMPUTE ADDRESSES ['clusterd2:2102'],
-            WORKERS 1
-        );
-        """,
-        port=6877,
-        user="mz_system",
-    )
+        # Replace the `mz_catalog_server` replica with an unorchestrated one so we
+        # can test reconciliation of system indexes too.
+        c.sql(
+            """
+            ALTER CLUSTER mz_catalog_server SET (MANAGED = false);
+            DROP CLUSTER REPLICA mz_catalog_server.r1;
+            CREATE CLUSTER REPLICA mz_catalog_server.r1 (
+                STORAGECTL ADDRESSES ['clusterd2:2100'],
+                STORAGE ADDRESSES ['clusterd2:2103'],
+                COMPUTECTL ADDRESSES ['clusterd2:2101'],
+                COMPUTE ADDRESSES ['clusterd2:2102'],
+                WORKERS 1
+            );
+            """,
+            port=6877,
+            user="mz_system",
+        )
 
-    # Give the dataflows some time to make progress and get compacted.
-    # This is done to trigger the bug described in database-issues#5113.
-    time.sleep(10)
+        # Give the dataflows some time to make progress and get compacted.
+        # This is done to trigger the bug described in database-issues#5113.
+        time.sleep(10)
 
-    # Restart environmentd to trigger a reconciliation.
-    c.kill("materialized")
-    c.up("materialized")
+        # Restart environmentd to trigger a reconciliation.
+        c.kill("materialized")
+        c.up("materialized")
 
-    # Perform queries to ensure reconciliation has finished.
-    c.sql(
-        """
-        SET cluster = cluster1;
-        SELECT * FROM v1; -- cluster1
-        SHOW INDEXES;     -- mz_catalog_server
-        """
-    )
+        # Perform queries to ensure reconciliation has finished.
+        c.sql(
+            """
+            SET cluster = cluster1;
+            SELECT * FROM v1; -- cluster1
+            SHOW INDEXES;     -- mz_catalog_server
+            """
+        )
 
-    reused, replaced = fetch_reconciliation_metrics("clusterd1")
-    assert reused == 15 and replaced == 0, f"{reused=}, {replaced=}"
+        reused, replaced = fetch_reconciliation_metrics("clusterd1")
+        assert reused == 15 and replaced == 0, f"{reused=}, {replaced=}"
 
-    reused, replaced = fetch_reconciliation_metrics("clusterd2")
-    assert reused > 10 and replaced == 0, f"{reused=}, {replaced=}"
+        reused, replaced = fetch_reconciliation_metrics("clusterd2")
+        assert reused > 10 and replaced == 0, f"{reused=}, {replaced=}"
 
 
 def workflow_test_compute_reconciliation_replace(c: Composition) -> None:
@@ -1870,80 +1920,84 @@ def workflow_test_compute_reconciliation_replace(c: Composition) -> None:
 
     c.down(destroy_volumes=True)
 
-    c.up("materialized")
-    c.up("clusterd1")
+    with c.override(
+        Clusterd(name="clusterd1", workers=1),
+    ):
+        c.up("materialized", "clusterd1")
 
-    c.sql(
-        "ALTER SYSTEM SET unsafe_enable_unorchestrated_cluster_replicas = true;",
-        port=6877,
-        user="mz_system",
-    )
+        c.sql(
+            "ALTER SYSTEM SET unsafe_enable_unorchestrated_cluster_replicas = true;",
+            port=6877,
+            user="mz_system",
+        )
 
-    # Helper function to get reconciliation metrics for clusterd.
-    def fetch_reconciliation_metrics(process: str) -> tuple[int, int]:
-        metrics = c.exec(process, "curl", "localhost:6878/metrics", capture=True).stdout
+        # Helper function to get reconciliation metrics for clusterd.
+        def fetch_reconciliation_metrics(process: str) -> tuple[int, int]:
+            metrics = c.exec(
+                process, "curl", "localhost:6878/metrics", capture=True
+            ).stdout
 
-        reused = 0
-        replaced = 0
-        for metric in metrics.splitlines():
-            if metric.startswith(
-                "mz_compute_reconciliation_reused_dataflows_count_total"
-            ):
-                reused += int(metric.split()[1])
-            elif metric.startswith(
-                "mz_compute_reconciliation_replaced_dataflows_count_total"
-            ):
-                replaced += int(metric.split()[1])
+            reused = 0
+            replaced = 0
+            for metric in metrics.splitlines():
+                if metric.startswith(
+                    "mz_compute_reconciliation_reused_dataflows_count_total"
+                ):
+                    reused += int(metric.split()[1])
+                elif metric.startswith(
+                    "mz_compute_reconciliation_replaced_dataflows_count_total"
+                ):
+                    replaced += int(metric.split()[1])
 
-        return reused, replaced
+            return reused, replaced
 
-    # Set up a cluster and a number of dataflows that can be reconciled.
-    c.sql(
-        """
-        CREATE CLUSTER cluster1 REPLICAS (replica1 (
-            STORAGECTL ADDRESSES ['clusterd1:2100'],
-            STORAGE ADDRESSES ['clusterd1:2103'],
-            COMPUTECTL ADDRESSES ['clusterd1:2101'],
-            COMPUTE ADDRESSES ['clusterd1:2102'],
-            WORKERS 1
-        ));
-        SET cluster = cluster1;
+        # Set up a cluster and a number of dataflows that can be reconciled.
+        c.sql(
+            """
+            CREATE CLUSTER cluster1 REPLICAS (replica1 (
+                STORAGECTL ADDRESSES ['clusterd1:2100'],
+                STORAGE ADDRESSES ['clusterd1:2103'],
+                COMPUTECTL ADDRESSES ['clusterd1:2101'],
+                COMPUTE ADDRESSES ['clusterd1:2102'],
+                WORKERS 1
+            ));
+            SET cluster = cluster1;
 
-        CREATE TABLE t (a int);
-        CREATE INDEX idx ON t (a);
+            CREATE TABLE t (a int);
+            CREATE INDEX idx ON t (a);
 
-        CREATE MATERIALIZED VIEW mv AS SELECT * FROM t;
+            CREATE MATERIALIZED VIEW mv AS SELECT * FROM t;
 
-        CREATE VIEW v1 AS SELECT a + 1 AS b FROM t;
-        CREATE INDEX idx1 ON v1 (b);
-        CREATE VIEW v2 AS SELECT b + 1 AS c FROM v1;
-        CREATE INDEX idx2 ON v2 (c);
-        CREATE VIEW v3 AS SELECT c + 1 AS d FROM v2;
-        CREATE INDEX idx3 ON v3 (d);
+            CREATE VIEW v1 AS SELECT a + 1 AS b FROM t;
+            CREATE INDEX idx1 ON v1 (b);
+            CREATE VIEW v2 AS SELECT b + 1 AS c FROM v1;
+            CREATE INDEX idx2 ON v2 (c);
+            CREATE VIEW v3 AS SELECT c + 1 AS d FROM v2;
+            CREATE INDEX idx3 ON v3 (d);
 
-        SELECT * FROM v3;
-        """
-    )
+            SELECT * FROM v3;
+            """
+        )
 
-    # Drop the index on the base table. This will change the plan of `mv1` the
-    # next time it is replanned, which should cause reconciliation to replace
-    # it, as well as the other dataflows that depend on `mv1`.
-    c.sql("DROP INDEX idx")
+        # Drop the index on the base table. This will change the plan of `mv1` the
+        # next time it is replanned, which should cause reconciliation to replace
+        # it, as well as the other dataflows that depend on `mv1`.
+        c.sql("DROP INDEX idx")
 
-    # Restart environmentd to trigger a replanning and reconciliation.
-    c.kill("materialized")
-    c.up("materialized")
+        # Restart environmentd to trigger a replanning and reconciliation.
+        c.kill("materialized")
+        c.up("materialized")
 
-    # Perform queries to ensure reconciliation has finished.
-    c.sql(
-        """
-        SET cluster = cluster1;
-        SELECT * FROM v3;
-        """
-    )
+        # Perform queries to ensure reconciliation has finished.
+        c.sql(
+            """
+            SET cluster = cluster1;
+            SELECT * FROM v3;
+            """
+        )
 
-    reused, replaced = fetch_reconciliation_metrics("clusterd1")
-    assert reused == 0 and replaced == 4, f"{reused=}, {replaced=}"
+        reused, replaced = fetch_reconciliation_metrics("clusterd1")
+        assert reused == 0 and replaced == 4, f"{reused=}, {replaced=}"
 
 
 def workflow_test_compute_reconciliation_no_errors(c: Composition) -> None:
@@ -1975,7 +2029,7 @@ def workflow_test_compute_reconciliation_no_errors(c: Composition) -> None:
             STORAGE ADDRESSES ['clusterd1:2103'],
             COMPUTECTL ADDRESSES ['clusterd1:2101'],
             COMPUTE ADDRESSES ['clusterd1:2102'],
-            WORKERS 1
+            WORKERS 2
         ));
         SET cluster = cluster1;
 
@@ -2069,9 +2123,9 @@ def workflow_test_drop_during_reconciliation(c: Composition) -> None:
         c.up("materialized", "clusterd1", "toxiproxy")
         c.up("testdrive", persistent=True)
 
-        # Set up toxi-proxies for all clusterd endpoints.
+        # Set up toxi-proxies for clusterd GRPC endpoints.
         toxi_url = "http://toxiproxy:8474/proxies"
-        for port in range(2100, 2104):
+        for port in (2100, 2101):
             c.testdrive(
                 dedent(
                     f"""
@@ -2091,9 +2145,9 @@ def workflow_test_drop_during_reconciliation(c: Composition) -> None:
             """
             CREATE CLUSTER cluster1 REPLICAS (replica1 (
                 STORAGECTL ADDRESSES ['toxiproxy:2100'],
-                STORAGE ADDRESSES ['toxiproxy:2103'],
+                STORAGE ADDRESSES ['clusterd1:2103'],
                 COMPUTECTL ADDRESSES ['toxiproxy:2101'],
-                COMPUTE ADDRESSES ['toxiproxy:2102'],
+                COMPUTE ADDRESSES ['clusterd1:2102'],
                 WORKERS 1
             ));
             SET cluster = cluster1;
@@ -2108,7 +2162,7 @@ def workflow_test_drop_during_reconciliation(c: Composition) -> None:
         c.sql("SELECT * FROM mv")
 
         # Sever the connection between envd and clusterd.
-        for port in range(2100, 2104):
+        for port in (2100, 2101):
             c.testdrive(
                 dedent(
                     f"""
@@ -2123,7 +2177,7 @@ def workflow_test_drop_during_reconciliation(c: Composition) -> None:
 
         # Restore the connection between envd and clusterd, causing a
         # reconciliation.
-        for port in range(2100, 2104):
+        for port in (2100, 2101):
             c.testdrive(
                 dedent(
                     f"""
@@ -2164,11 +2218,11 @@ def workflow_test_mz_subscriptions(c: Composition) -> None:
     c.sql(
         """
         CREATE CLUSTER cluster1 REPLICAS (r (
-                STORAGECTL ADDRESSES ['clusterd1:2100'],
-                STORAGE ADDRESSES ['clusterd1:2103'],
-                COMPUTECTL ADDRESSES ['clusterd1:2101'],
-                COMPUTE ADDRESSES ['clusterd1:2102'],
-                WORKERS 1
+            STORAGECTL ADDRESSES ['clusterd1:2100'],
+            STORAGE ADDRESSES ['clusterd1:2103'],
+            COMPUTECTL ADDRESSES ['clusterd1:2101'],
+            COMPUTE ADDRESSES ['clusterd1:2102'],
+            WORKERS 2
         ));
 
         CREATE TABLE t1 (a int);
@@ -2355,27 +2409,11 @@ def workflow_test_clusterd_death_detection(c: Composition) -> None:
                   "enabled": true
                 }
 
-                $ http-request method=POST url=http://toxiproxy:8474/proxies content-type=application/json
-                {
-                  "name": "clusterd3",
-                  "listen": "0.0.0.0:2102",
-                  "upstream": "clusterd1:2102",
-                  "enabled": true
-                }
-
-                $ http-request method=POST url=http://toxiproxy:8474/proxies content-type=application/json
-                {
-                  "name": "clusterd4",
-                  "listen": "0.0.0.0:2103",
-                  "upstream": "clusterd1:2103",
-                  "enabled": true
-                }
-
                 > CREATE CLUSTER cluster1 REPLICAS (replica1 (
                     STORAGECTL ADDRESSES ['toxiproxy:2100'],
-                    STORAGE ADDRESSES ['toxiproxy:2103'],
+                    STORAGE ADDRESSES ['clusterd1:2103'],
                     COMPUTECTL ADDRESSES ['toxiproxy:2101'],
-                    COMPUTE ADDRESSES ['toxiproxy:2102'],
+                    COMPUTE ADDRESSES ['clusterd1:2102'],
                     WORKERS 2));
 
                 $ sleep-is-probably-flaky-i-have-justified-my-need-with-a-comment duration="1s"
@@ -2390,20 +2428,6 @@ def workflow_test_clusterd_death_detection(c: Composition) -> None:
                 $ http-request method=POST url=http://toxiproxy:8474/proxies/clusterd2/toxics content-type=application/json
                 {
                   "name": "clusterd2",
-                  "type": "timeout",
-                  "attributes": {"timeout": 0}
-                }
-
-                $ http-request method=POST url=http://toxiproxy:8474/proxies/clusterd3/toxics content-type=application/json
-                {
-                  "name": "clusterd3",
-                  "type": "timeout",
-                  "attributes": {"timeout": 0}
-                }
-
-                $ http-request method=POST url=http://toxiproxy:8474/proxies/clusterd4/toxics content-type=application/json
-                {
-                  "name": "clusterd4",
                   "type": "timeout",
                   "attributes": {"timeout": 0}
                 }
@@ -2556,132 +2580,135 @@ def workflow_test_replica_metrics(c: Composition) -> None:
     """Test metrics exposed by replicas."""
 
     c.down(destroy_volumes=True)
-    c.up("materialized")
-    c.up("clusterd1")
 
-    def fetch_metrics() -> Metrics:
-        resp = c.exec(
-            "clusterd1", "curl", "localhost:6878/metrics", capture=True
-        ).stdout
-        return Metrics(resp)
+    with c.override(Clusterd(name="clusterd1", workers=1)):
+        c.up("materialized", "clusterd1")
 
-    c.sql(
-        "ALTER SYSTEM SET unsafe_enable_unorchestrated_cluster_replicas = true;",
-        port=6877,
-        user="mz_system",
-    )
+        def fetch_metrics() -> Metrics:
+            resp = c.exec(
+                "clusterd1", "curl", "localhost:6878/metrics", capture=True
+            ).stdout
+            return Metrics(resp)
 
-    metrics = fetch_metrics()
+        c.sql(
+            "ALTER SYSTEM SET unsafe_enable_unorchestrated_cluster_replicas = true;",
+            port=6877,
+            user="mz_system",
+        )
 
-    # The cluster should not report the time that the last command was received
-    # as 0 until environmentd connects.
-    assert metrics.get_last_command_received("compute") == 0
-    assert metrics.get_last_command_received("storage") == 0
+        metrics = fetch_metrics()
 
-    before_connection_time = time.time()
+        # The cluster should not report the time that the last command was received
+        # as 0 until environmentd connects.
+        assert metrics.get_last_command_received("compute") == 0
+        assert metrics.get_last_command_received("storage") == 0
 
-    # Set up a cluster with a couple dataflows.
-    c.sql(
-        """
-        CREATE CLUSTER cluster1 REPLICAS (replica1 (
-            STORAGECTL ADDRESSES ['clusterd1:2100'],
-            STORAGE ADDRESSES ['clusterd1:2103'],
-            COMPUTECTL ADDRESSES ['clusterd1:2101'],
-            COMPUTE ADDRESSES ['clusterd1:2102'],
-            WORKERS 1
-        ));
-        SET cluster = cluster1;
+        before_connection_time = time.time()
 
-        CREATE TABLE t (a int);
-        INSERT INTO t SELECT generate_series(1, 10);
+        # Set up a cluster with a couple dataflows.
+        c.sql(
+            """
+            CREATE CLUSTER cluster1 REPLICAS (replica1 (
+                STORAGECTL ADDRESSES ['clusterd1:2100'],
+                STORAGE ADDRESSES ['clusterd1:2103'],
+                COMPUTECTL ADDRESSES ['clusterd1:2101'],
+                COMPUTE ADDRESSES ['clusterd1:2102'],
+                WORKERS 1
+            ));
+            SET cluster = cluster1;
 
-        CREATE INDEX idx ON t (a);
-        CREATE MATERIALIZED VIEW mv AS SELECT * FROM t;
+            CREATE TABLE t (a int);
+            INSERT INTO t SELECT generate_series(1, 10);
 
-        SELECT * FROM t;
-        SELECT * FROM mv;
-        """
-    )
+            CREATE INDEX idx ON t (a);
+            CREATE MATERIALIZED VIEW mv AS SELECT * FROM t;
 
-    # Can take a few seconds, don't request the metrics too quickly
-    time.sleep(2)
-    # Check that expected metrics exist and have sensible values.
-    metrics = fetch_metrics()
+            SELECT * FROM t;
+            SELECT * FROM mv;
+            """
+        )
 
-    count = metrics.get_replica_history_command_count("create_timely")
-    assert count == 0, f"unexpected create_timely count: {count}"
-    count = metrics.get_replica_history_command_count("create_instance")
-    assert count == 1, f"unexpected create_instance count: {count}"
-    count = metrics.get_replica_history_command_count("allow_compaction")
-    assert count > 0, f"unexpected allow_compaction count: {count}"
-    count = metrics.get_replica_history_command_count("create_dataflow")
-    assert count > 0, f"unexpected create_dataflow count: {count}"
-    count = metrics.get_replica_history_command_count("peek")
-    assert count <= 2, f"unexpected peek count: {count}"
-    count = metrics.get_replica_history_command_count("cancel_peek")
-    assert count <= 2, f"unexpected cancel_peek count: {count}"
-    count = metrics.get_replica_history_command_count("initialization_complete")
-    assert count == 0, f"unexpected initialization_complete count: {count}"
-    count = metrics.get_replica_history_command_count("update_configuration")
-    assert count == 1, f"unexpected update_configuration count: {count}"
+        # Can take a few seconds, don't request the metrics too quickly
+        time.sleep(2)
+        # Check that expected metrics exist and have sensible values.
+        metrics = fetch_metrics()
 
-    count = metrics.get_value("mz_compute_replica_history_dataflow_count")
-    assert count >= 2, f"unexpected dataflow count: {count}"
+        count = metrics.get_replica_history_command_count("create_timely")
+        assert count == 0, f"unexpected create_timely count: {count}"
+        count = metrics.get_replica_history_command_count("create_instance")
+        assert count == 1, f"unexpected create_instance count: {count}"
+        count = metrics.get_replica_history_command_count("allow_compaction")
+        assert count > 0, f"unexpected allow_compaction count: {count}"
+        count = metrics.get_replica_history_command_count("create_dataflow")
+        assert count > 0, f"unexpected create_dataflow count: {count}"
+        count = metrics.get_replica_history_command_count("peek")
+        assert count <= 2, f"unexpected peek count: {count}"
+        count = metrics.get_replica_history_command_count("cancel_peek")
+        assert count <= 2, f"unexpected cancel_peek count: {count}"
+        count = metrics.get_replica_history_command_count("initialization_complete")
+        assert count == 0, f"unexpected initialization_complete count: {count}"
+        count = metrics.get_replica_history_command_count("update_configuration")
+        assert count == 1, f"unexpected update_configuration count: {count}"
 
-    maintenance = metrics.get_value("mz_arrangement_maintenance_seconds_total")
-    assert maintenance > 0, f"unexpected arrangement maintanence time: {maintenance}"
+        count = metrics.get_value("mz_compute_replica_history_dataflow_count")
+        assert count >= 2, f"unexpected dataflow count: {count}"
 
-    mv_correction_insertions = metrics.get_value(
-        "mz_persist_sink_correction_insertions_total"
-    )
-    assert (
-        mv_correction_insertions > 0
-    ), f"unexpected persist sink correction insertions: {mv_correction_insertions}"
-    mv_correction_cap_increases = metrics.get_value(
-        "mz_persist_sink_correction_capacity_increases_total"
-    )
-    assert (
-        mv_correction_cap_increases > 0
-    ), f"unexpected persist sink correction capacity increases: {mv_correction_cap_increases}"
-    mv_correction_max_len_per_worker = metrics.get_value(
-        "mz_persist_sink_correction_max_per_sink_worker_len_updates"
-    )
-    assert (
-        mv_correction_max_len_per_worker > 0
-    ), f"unexpected persist max correction len per worker: {mv_correction_max_len_per_worker}"
-    mv_correction_max_cap_per_worker = metrics.get_value(
-        "mz_persist_sink_correction_max_per_sink_worker_capacity_updates"
-    )
-    assert (
-        mv_correction_max_cap_per_worker > 0
-    ), f"unexpected persist sink max correction capacity per worker: {mv_correction_max_cap_per_worker}"
+        maintenance = metrics.get_value("mz_arrangement_maintenance_seconds_total")
+        assert (
+            maintenance > 0
+        ), f"unexpected arrangement maintenance time: {maintenance}"
 
-    assert metrics.get_last_command_received("compute") >= before_connection_time
+        mv_correction_insertions = metrics.get_value(
+            "mz_persist_sink_correction_insertions_total"
+        )
+        assert (
+            mv_correction_insertions > 0
+        ), f"unexpected persist sink correction insertions: {mv_correction_insertions}"
+        mv_correction_cap_increases = metrics.get_value(
+            "mz_persist_sink_correction_capacity_increases_total"
+        )
+        assert (
+            mv_correction_cap_increases > 0
+        ), f"unexpected persist sink correction capacity increases: {mv_correction_cap_increases}"
+        mv_correction_max_len_per_worker = metrics.get_value(
+            "mz_persist_sink_correction_max_per_sink_worker_len_updates"
+        )
+        assert (
+            mv_correction_max_len_per_worker > 0
+        ), f"unexpected persist max correction len per worker: {mv_correction_max_len_per_worker}"
+        mv_correction_max_cap_per_worker = metrics.get_value(
+            "mz_persist_sink_correction_max_per_sink_worker_capacity_updates"
+        )
+        assert (
+            mv_correction_max_cap_per_worker > 0
+        ), f"unexpected persist sink max correction capacity per worker: {mv_correction_max_cap_per_worker}"
 
-    count = metrics.get_compute_collection_count("log", "0")
-    assert count == 0, "unexpected number of unhydrated log collections"
-    count = metrics.get_compute_collection_count("log", "1")
-    assert count > 0, "unexpected number of hydrated log collections"
-    count = metrics.get_compute_collection_count("user", "0")
-    assert count == 0, "unexpected number of unhydrated user collections"
-    count = metrics.get_compute_collection_count("user", "1")
-    assert count == 2, "unexpected number of hydrated user collections"
+        assert metrics.get_last_command_received("compute") >= before_connection_time
 
-    # Check that collection metrics update when collections are dropped.
-    c.sql(
-        """
-        DROP INDEX idx;
-        DROP MATERIALIZED VIEW mv;
-        """
-    )
+        count = metrics.get_compute_collection_count("log", "0")
+        assert count == 0, "unexpected number of unhydrated log collections"
+        count = metrics.get_compute_collection_count("log", "1")
+        assert count > 0, "unexpected number of hydrated log collections"
+        count = metrics.get_compute_collection_count("user", "0")
+        assert count == 0, "unexpected number of unhydrated user collections"
+        count = metrics.get_compute_collection_count("user", "1")
+        assert count == 2, "unexpected number of hydrated user collections"
 
-    time.sleep(2)
-    metrics = fetch_metrics()
+        # Check that collection metrics update when collections are dropped.
+        c.sql(
+            """
+            DROP INDEX idx;
+            DROP MATERIALIZED VIEW mv;
+            """
+        )
 
-    count = metrics.get_compute_collection_count("user", "0")
-    assert count == 0, "unexpected number of unhydrated user collections"
-    count = metrics.get_compute_collection_count("user", "1")
-    assert count == 0, "unexpected number of hydrated user collections"
+        time.sleep(2)
+        metrics = fetch_metrics()
+
+        count = metrics.get_compute_collection_count("user", "0")
+        assert count == 0, "unexpected number of unhydrated user collections"
+        count = metrics.get_compute_collection_count("user", "1")
+        assert count == 0, "unexpected number of hydrated user collections"
 
 
 def workflow_test_compute_controller_metrics(c: Composition) -> None:
@@ -2944,7 +2971,7 @@ def workflow_test_storage_controller_metrics(c: Composition) -> None:
     count = metrics_u2.get_summed_value("mz_storage_messages_received_bytes")
     assert count > 0, f"got {count}"
 
-    # mz_compute_controller_history_command_count
+    # mz_storage_controller_history_command_count
     count = metrics_u2.get_storage_controller_history_command_count("create_timely")
     assert count == 1, f"got {count}"
     count = metrics_u2.get_storage_controller_history_command_count("allow_compaction")
@@ -3853,8 +3880,20 @@ def workflow_blue_green_deployment(
         Testdrive(
             no_reset=True, default_timeout="300s"
         ),  # pending dataflows can take a while
-        Clusterd(name="clusterd1"),
-        Clusterd(name="clusterd2"),
+        Clusterd(
+            name="clusterd1",
+            workers=1,
+        ),
+        Clusterd(
+            name="clusterd2",
+            workers=2,
+            process_names=["clusterd2", "clusterd3"],
+        ),
+        Clusterd(
+            name="clusterd3",
+            workers=2,
+            process_names=["clusterd2", "clusterd3"],
+        ),
         Materialized(
             additional_system_parameter_defaults={
                 "unsafe_enable_unsafe_functions": "true",
@@ -4670,7 +4709,7 @@ def workflow_test_github_7798(c: Composition, parser: WorkflowArgumentParser) ->
                     STORAGE ADDRESSES ['clusterd1:2103'],
                     COMPUTECTL ADDRESSES ['clusterd1:2101'],
                     COMPUTE ADDRESSES ['clusterd1:2102'],
-                    WORKERS 1
+                    WORKERS 2
                 )
             );
 
@@ -5081,7 +5120,7 @@ def workflow_test_unified_introspection_during_replica_disconnect(c: Composition
                     STORAGE ADDRESSES ['clusterd1:2103'],
                     COMPUTECTL ADDRESSES ['clusterd1:2101'],
                     COMPUTE ADDRESSES ['clusterd1:2102'],
-                    WORKERS 1
+                    WORKERS 2
                 )
             );
             SET cluster = test;

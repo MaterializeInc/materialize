@@ -200,6 +200,7 @@ def workflow_rehydration(c: Composition) -> None:
                 options=[
                     "--announce-memory-limit=1048376000",  # 1GiB
                 ],
+                workers=4,
             ),
         ),
         (
@@ -233,6 +234,7 @@ def workflow_rehydration(c: Composition) -> None:
                 options=[
                     "--announce-memory-limit=1048376000",  # 1GiB
                 ],
+                workers=4,
             ),
         ),
         (
@@ -256,6 +258,7 @@ def workflow_rehydration(c: Composition) -> None:
             ),
             Clusterd(
                 name="clusterd1",
+                workers=4,
             ),
         ),
     ]:
@@ -310,6 +313,7 @@ def run_one_failpoint(c: Composition, failpoint: str, error_message: str) -> Non
     c.run_testdrive_files("failpoint/00-reset.td")
     with c.override(
         Testdrive(no_reset=True, consistent_seed=True),
+        Clusterd(name="clusterd1", workers=4),
     ):
         c.run_testdrive_files("failpoint/01-setup.td")
         c.up("clusterd1")
@@ -321,6 +325,7 @@ def run_one_failpoint(c: Composition, failpoint: str, error_message: str) -> Non
             Clusterd(
                 name="clusterd1",
                 environment_extra=[f"FAILPOINTS={failpoint}=return"],
+                workers=4,
             ),
         ):
             c.up("clusterd1")
