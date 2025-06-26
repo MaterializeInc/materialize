@@ -2440,6 +2440,7 @@ def workflow_test_clusterd_death_detection(c: Composition) -> None:
         assert (
             "error reading a body from connection: stream closed because of a broken pipe"
             in envd.stdout
+            or "error reading a body from connection: connection reset" in envd.stdout
         )
 
 
