@@ -261,13 +261,13 @@ pub trait MergerChunk: Container {
     /// Account the allocations behind the chunk.
     // TODO: Find a more universal home for this: `Container`?
     fn account(&self) -> (usize, usize, usize, usize) {
-        let (size, capacity, allocations) = (0, 0, 0);
-        (self.len(), size, capacity, allocations)
+        let (len, size, capacity, allocations) = (0, 0, 0, 0);
+        (len, size, capacity, allocations)
     }
 }
 
 /// Push and add two items together, if their summed diff is non-zero.
-pub trait PushAndAdd {
+pub trait PushAndAdd: ContainerBuilder {
     /// The item type that can be pushed into the container.
     type Item<'a>;
     /// The owned diff type.
@@ -286,6 +286,16 @@ pub trait PushAndAdd {
         item2: Self::Item<'_>,
         stash: &mut Self::DiffOwned,
     );
+
+    /// State for packing and unpacking the container.
+    type State: Default;
+
+    fn pack(&self, _container: &mut Self::Container, _state: &mut Self::State) {
+        // Default implementation does nothing.
+    }
+    fn unpack(&self, _container: &mut Self::Container, _state: &mut Self::State) {
+        // Default implementation does nothing.
+    }
 }
 
 /// A merger for arbitrary containers.
@@ -297,16 +307,18 @@ pub struct ContainerMerger<MCB> {
     builder: MCB,
 }
 
-impl<MCB: ContainerBuilder> ContainerMerger<MCB> {
+impl<MCB: PushAndAdd> ContainerMerger<MCB> {
     /// Helper to extract chunks from the builder and push them into the output.
     #[inline(always)]
     fn extract_chunks(
         builder: &mut MCB,
         output: &mut Vec<MCB::Container>,
         stash: &mut Vec<MCB::Container>,
+        state: &mut MCB::State,
     ) {
         while let Some(chunk) = builder.extract() {
-            let chunk = std::mem::replace(chunk, stash.pop().unwrap_or_default());
+            let mut chunk = std::mem::replace(chunk, stash.pop().unwrap_or_default());
+            builder.pack(&mut chunk, state);
             output.push_into(chunk);
         }
     }
@@ -317,9 +329,11 @@ impl<MCB: ContainerBuilder> ContainerMerger<MCB> {
         builder: &mut MCB,
         output: &mut Vec<MCB::Container>,
         stash: &mut Vec<MCB::Container>,
+        state: &mut MCB::State,
     ) {
         while let Some(chunk) = builder.finish() {
-            let chunk = std::mem::replace(chunk, stash.pop().unwrap_or_default());
+            let mut chunk = std::mem::replace(chunk, stash.pop().unwrap_or_default());
+            builder.pack(&mut chunk, state);
             output.push_into(chunk);
         }
     }
@@ -360,9 +374,13 @@ where
         let mut list1 = list1.into_iter();
         let mut list2 = list2.into_iter();
 
+        let mut state = Default::default();
+
         let mut head1 = list1.next().unwrap_or_default();
+        self.builder.unpack(&mut head1, &mut state);
         let mut borrow1 = CQ::<MCB>::new(&mut head1);
         let mut head2 = list2.next().unwrap_or_default();
+        self.builder.unpack(&mut head2, &mut state);
         let mut borrow2 = CQ::<MCB>::new(&mut head2);
 
         let mut diff_owned = Default::default();
@@ -389,13 +407,14 @@ where
                 }
             }
 
-            Self::extract_chunks(&mut self.builder, output, stash);
+            Self::extract_chunks(&mut self.builder, output, stash, &mut state);
 
             if borrow1.is_empty() {
                 drop(borrow1);
                 let chunk = head1;
                 stash.push(chunk);
                 head1 = list1.next().unwrap_or_default();
+                self.builder.unpack(&mut head1, &mut state);
                 borrow1 = CQ::<MCB>::new(&mut head1);
             }
             if borrow2.is_empty() {
@@ -403,22 +422,23 @@ where
                 let chunk = head2;
                 stash.push(chunk);
                 head2 = list2.next().unwrap_or_default();
+                self.builder.unpack(&mut head2, &mut state);
                 borrow2 = CQ::<MCB>::new(&mut head2);
             }
         }
 
         while !borrow1.is_empty() {
             self.builder.push_into(borrow1.pop());
-            Self::extract_chunks(&mut self.builder, output, stash);
+            Self::extract_chunks(&mut self.builder, output, stash, &mut state);
         }
-        Self::finish_chunks(&mut self.builder, output, stash);
+        Self::finish_chunks(&mut self.builder, output, stash, &mut state);
         output.extend(list1);
 
         while !borrow2.is_empty() {
             self.builder.push_into(borrow2.pop());
-            Self::extract_chunks(&mut self.builder, output, stash);
+            Self::extract_chunks(&mut self.builder, output, stash, &mut state);
         }
-        Self::finish_chunks(&mut self.builder, output, stash);
+        Self::finish_chunks(&mut self.builder, output, stash, &mut state);
         output.extend(list2);
     }
 
@@ -431,11 +451,13 @@ where
         kept: &mut Vec<Self::Chunk>,
         stash: &mut Vec<Self::Chunk>,
     ) {
+        let mut state = Default::default();
         let mut keep = MCB::default();
 
         let mut time_stash = Self::Time::minimum();
 
         for mut buffer in merged {
+            self.builder.unpack(&mut buffer, &mut state);
             for item in buffer.drain() {
                 if <MCB::Container as MergerChunk>::time_kept(
                     &item,
@@ -444,18 +466,18 @@ where
                     &mut time_stash,
                 ) {
                     keep.push_into(item);
-                    Self::extract_chunks(&mut keep, kept, stash);
+                    Self::extract_chunks(&mut keep, kept, stash, &mut state);
                 } else {
                     self.builder.push_into(item);
-                    Self::extract_chunks(&mut self.builder, readied, stash);
+                    Self::extract_chunks(&mut self.builder, readied, stash, &mut state);
                 }
             }
             // Recycling buffer.
             stash.push(buffer);
         }
         // Finish the kept and readied data.
-        Self::finish_chunks(&mut keep, kept, stash);
-        Self::finish_chunks(&mut self.builder, readied, stash);
+        Self::finish_chunks(&mut keep, kept, stash, &mut state);
+        Self::finish_chunks(&mut self.builder, readied, stash, &mut state);
     }
 
     /// Account the allocations behind the chunk.
@@ -467,6 +489,7 @@ where
 /// Implementations of `ContainerQueue` and `MergerChunk` for `Vec` containers.
 pub mod vec {
     use differential_dataflow::difference::Semigroup;
+    use timely::Data;
     use timely::container::{CapacityContainerBuilder, PushInto};
     use timely::progress::{Antichain, Timestamp, frontier::AntichainRef};
 
@@ -475,7 +498,12 @@ pub mod vec {
     /// A `Merger` implementation backed by vector containers.
     pub type VecMerger<D, T, R> = ContainerMerger<CapacityContainerBuilder<Vec<(D, T, R)>>>;
 
-    impl<D, T, R: Semigroup> PushAndAdd for CapacityContainerBuilder<Vec<(D, T, R)>> {
+    impl<D, T, R> PushAndAdd for CapacityContainerBuilder<Vec<(D, T, R)>>
+    where
+        D: Data,
+        T: Data,
+        R: Data + Semigroup,
+    {
         type Item<'a> = (D, T, R);
         type DiffOwned = ();
 
@@ -490,6 +518,8 @@ pub mod vec {
                 self.push_into((data, time, diff1));
             }
         }
+
+        type State = ();
     }
 
     impl<'a, D, T, R> ContainerQueue<'a, Vec<(D, T, R)>>
@@ -549,6 +579,7 @@ pub mod columnation {
     use columnation::Columnation;
     use differential_dataflow::containers::TimelyStack;
     use differential_dataflow::difference::Semigroup;
+    use timely::Data;
     use timely::container::{ContainerBuilder, PushInto, SizableContainer};
     use timely::progress::{Antichain, Timestamp, frontier::AntichainRef};
 
@@ -688,9 +719,9 @@ pub mod columnation {
 
     impl<D, T, R> PushAndAdd for TimelyStackBuilder<(D, T, R)>
     where
-        D: Columnation + 'static,
-        T: Columnation + 'static,
-        R: Columnation + Default + Semigroup + 'static,
+        D: Data + Columnation,
+        T: Data + Columnation,
+        R: Data + Columnation + Default + Semigroup,
     {
         type Item<'a> = &'a (D, T, R);
         type DiffOwned = R;
@@ -716,5 +747,7 @@ pub mod columnation {
                 }
             }
         }
+
+        type State = ();
     }
 }

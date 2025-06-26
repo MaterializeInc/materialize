@@ -29,6 +29,7 @@ pub use container::Column;
 pub use dd_builder::{ColKeyBuilder as ColumnKeyBuilder, OrdValBuilder as ColumnValBuilder};
 pub use provided_builder::ProvidedBuilder;
 
+mod compressed;
 mod merger;
 pub mod stack;
 
@@ -62,7 +63,34 @@ mod alloc {
     }
 }
 
+pub trait PackedContainer: timely::Container {
+    type State: Default;
+
+    #[inline(always)]
+    fn pack(&mut self, _state: &mut Self::State) {
+        // Default implementation does nothing.
+    }
+
+    #[inline(always)]
+    fn unpack(&mut self, _state: &mut Self::State) {
+        // Default implementation does nothing.
+    }
+}
+
+mod packed_container {
+    use columnation::Columnation;
+    use differential_dataflow::containers::TimelyStack;
+
+    use crate::containers::PackedContainer;
+
+    impl<T: Columnation> PackedContainer for TimelyStack<T> {
+        type State = ();
+    }
+}
+
 mod container {
+    use crate::containers::PackedContainer;
+    use crate::containers::compressed::CompressedColumn;
     use columnar::Columnar;
     use columnar::Container as _;
     use columnar::bytes::{EncodeDecode, Indexed};
@@ -89,29 +117,92 @@ mod container {
         /// Reasons could include misalignment, cloning of data, or wanting
         /// to release the `Bytes` as a scarce resource.
         Align(Region<u64>),
+        Compressed(CompressedColumn),
+    }
+
+    #[derive(Default)]
+    pub struct PackState {
+        /// Buffer to write into.
+        buffer: Vec<u8>,
+        /// Empty aligned allocation, used to store the aligned data.
+        empty_aligned: Region<u64>,
+        /// Empty compressed column, used to store the compressed data.
+        empty_compressed: CompressedColumn,
     }
 
     impl<C: Columnar> Column<C> {
         /// Borrows the container as a reference.
         #[inline(always)]
         pub(crate) fn borrow(&self) -> <C::Container as columnar::Container<C>>::Borrowed<'_> {
+            type Borrowed<'a, C> =
+                <<C as Columnar>::Container as columnar::Container<C>>::Borrowed<'a>;
             match self {
                 Column::Typed(t) => t.borrow(),
                 Column::Bytes(b) => {
-                    <<C::Container as columnar::Container<C>>::Borrowed<'_>>::from_bytes(
-                        &mut Indexed::decode(bytemuck::cast_slice(b)),
-                    )
+                    Borrowed::<C>::from_bytes(&mut Indexed::decode(bytemuck::cast_slice(b)))
                 }
-                Column::Align(a) => {
-                    <<C::Container as columnar::Container<C>>::Borrowed<'_>>::from_bytes(
-                        &mut Indexed::decode(a),
-                    )
-                }
+                Column::Align(a) => Borrowed::<C>::from_bytes(&mut Indexed::decode(a)),
+                Column::Compressed(_) => panic!("Cannot borrow compressed column"),
             }
         }
         #[inline(always)]
         pub fn get(&self, index: usize) -> C::Ref<'_> {
             self.borrow().get(index)
+        }
+    }
+    impl<C: Columnar> PackedContainer for Column<C> {
+        type State = PackState;
+
+        fn pack(&mut self, state: &mut PackState) {
+            // container.compress(&mut state.0, &mut state.1);
+            let len = if let Column::Align(_) = &self {
+                self.len()
+            } else {
+                0
+            };
+            match self {
+                Column::Typed(_) => {}
+                Column::Bytes(_) => {}
+                Column::Align(aligned) => {
+                    let aligned = std::mem::take(aligned);
+                    *self = Column::Compressed(CompressedColumn::compress_aligned(
+                        len,
+                        &aligned,
+                        &mut state.buffer,
+                        &mut state.empty_compressed,
+                    ));
+                    state.empty_aligned = aligned;
+                }
+                Column::Compressed(_) => {}
+            }
+        }
+        fn unpack(&mut self, state: &mut PackState) {
+            // container.decompress(&mut state.0, &mut state.1);
+            match self {
+                Column::Typed(_) => {}
+                Column::Bytes(_) => {}
+                Column::Align(_) => {}
+                Column::Compressed(compressed) => {
+                    let compressed = std::mem::take(compressed);
+                    let elements = compressed.elements();
+                    let uncompressed_size = compressed.uncompressed_size() / 8;
+                    let mut aligned = std::mem::take(&mut state.empty_aligned);
+                    if aligned.capacity() < compressed.uncompressed_size() {
+                        aligned = super::alloc_aligned_zeroed(uncompressed_size);
+                    } else {
+                        unsafe { aligned.clear() };
+                        aligned.extend(std::iter::repeat(0).take(uncompressed_size));
+                    }
+                    compressed.decompress(&mut aligned[..uncompressed_size]);
+                    *self = Column::Align(aligned);
+                    *&mut state.empty_compressed = compressed;
+                    assert_eq!(
+                        self.len(),
+                        elements,
+                        "Decompressed length does not match expected length"
+                    );
+                }
+            }
         }
     }
 
@@ -140,6 +231,7 @@ mod container {
                     alloc[..a.len()].copy_from_slice(a);
                     Column::Align(alloc)
                 }
+                Column::Compressed(compressed) => Column::Compressed(compressed.clone()),
             }
         }
     }
@@ -150,15 +242,20 @@ mod container {
 
         #[inline(always)]
         fn len(&self) -> usize {
-            self.borrow().len()
+            use Column::*;
+            match self {
+                Typed(_) | Bytes(_) | Align(_) => self.borrow().len(),
+                Compressed(c) => c.elements(),
+            }
         }
 
         // This sets the `Bytes` variant to be an empty `Typed` variant, appropriate for pushing into.
         #[inline(always)]
         fn clear(&mut self) {
+            use Column::*;
             match self {
-                Column::Typed(t) => t.clear(),
-                Column::Bytes(_) | Column::Align(_) => *self = Column::Typed(Default::default()),
+                Typed(t) => t.clear(),
+                Bytes(_) | Align(_) | Compressed(_) => *self = Typed(Default::default()),
             }
         }
 
@@ -177,15 +274,16 @@ mod container {
         }
     }
 
-    impl<C: Columnar, T> PushInto<T> for Column<C>
+    impl<C, T> PushInto<T> for Column<C>
     where
-        C::Container: columnar::Push<T>,
+        C: Columnar<Container: columnar::Push<T>>,
     {
         #[inline]
         fn push_into(&mut self, item: T) {
+            use Column::*;
             use columnar::Push;
             match self {
-                Column::Typed(t) => {
+                Typed(t) => {
                     t.push(item);
                     let length_in_bytes = Indexed::length_in_bytes(&t.borrow());
 
@@ -196,7 +294,7 @@ mod container {
                         *self = Column::Align(alloc);
                     }
                 }
-                Column::Align(_) | Column::Bytes(_) => {
+                Align(_) | Bytes(_) | Compressed(_) => {
                     // We really oughtn't be calling this in this case.
                     // We could convert to owned, but need more constraints on `C`.
                     unimplemented!("Pushing into Column::Bytes without first clearing");
@@ -229,6 +327,7 @@ mod container {
                 Column::Typed(t) => Indexed::length_in_bytes(&t.borrow()),
                 Column::Bytes(b) => b.len(),
                 Column::Align(a) => 8 * a.len(),
+                Column::Compressed(c) => c.uncompressed_size(),
             }
         }
 
@@ -237,6 +336,7 @@ mod container {
                 Column::Typed(t) => Indexed::write(writer, &t.borrow()).unwrap(),
                 Column::Bytes(b) => writer.write_all(b).unwrap(),
                 Column::Align(a) => writer.write_all(bytemuck::cast_slice(a)).unwrap(),
+                Column::Compressed(_) => panic!("Cannot write compressed column directly"),
             }
         }
     }
@@ -489,13 +589,13 @@ pub mod batcher {
 
 /// Implementations of `ContainerQueue` and `MergerChunk` for `Column` containers (columnar).
 pub mod column_merger {
+    use crate::containers::container::PackState;
+    use crate::containers::merger::{ContainerQueue, MergerChunk, PushAndAdd};
+    use crate::containers::{Column, ColumnBuilder, PackedContainer};
     use columnar::{Columnar, Index};
     use differential_dataflow::difference::Semigroup;
-    use timely::Container;
     use timely::progress::{Antichain, Timestamp, frontier::AntichainRef};
-
-    use crate::containers::merger::{ContainerQueue, MergerChunk, PushAndAdd};
-    use crate::containers::{Column, ColumnBuilder};
+    use timely::{Container, Data};
 
     /// A queue for extracting items from a `Column` container.
     pub struct ColumnQueue<'a, T: Columnar> {
@@ -592,15 +692,21 @@ pub mod column_merger {
                     cap += align.len() * 8; // 8 bytes per u64
                     count += 1;
                 }
+                Column::Compressed(compressed) => {
+                    size += compressed.uncompressed_size();
+                    cap += compressed.capacity();
+                    count += 1;
+                }
             }
             (self.len(), size, cap, count)
         }
     }
+
     impl<D, T, R> PushAndAdd for ColumnBuilder<(D, T, R)>
     where
-        D: Columnar,
-        T: timely::PartialOrder + Columnar,
-        R: Default + Semigroup + Columnar,
+        D: Data + Columnar,
+        T: Data + timely::PartialOrder + Columnar,
+        R: Data + Default + Semigroup + Columnar,
     {
         type Item<'a> = <(D, T, R) as Columnar>::Ref<'a>;
         type DiffOwned = R;
@@ -618,6 +724,16 @@ pub mod column_merger {
                 use timely::container::PushInto;
                 self.push_into((data, time, &*stash));
             }
+        }
+
+        type State = PackState;
+        #[inline(always)]
+        fn pack(&self, container: &mut Self::Container, state: &mut Self::State) {
+            container.pack(state);
+        }
+        #[inline(always)]
+        fn unpack(&self, container: &mut Self::Container, state: &mut Self::State) {
+            container.unpack(state);
         }
     }
 }
@@ -637,7 +753,7 @@ pub mod dd_builder {
     use differential_dataflow::trace::rc_blanket_impls::RcBuilder;
     use timely::container::PushInto;
 
-    use crate::containers::Column;
+    use crate::containers::{Column, PackedContainer};
 
     pub type ColValBuilder<K, V, T, R> = RcBuilder<OrdValBuilder<TStack<((K, V), T, R)>>>;
     pub type ColKeyBuilder<K, T, R> = RcBuilder<OrdValBuilder<TStack<((K, ()), T, R)>>>;
@@ -821,7 +937,9 @@ pub mod dd_builder {
             // let (keys, vals, upds) = Self::Input::key_val_upd_counts(&chain[..]);
             // let mut builder = Self::with_capacity(keys, vals, upds);
             let mut builder = Self::with_capacity(0, 0, 0);
+            let mut state = Default::default();
             for mut chunk in chain.drain(..) {
+                chunk.unpack(&mut state);
                 builder.push(&mut chunk);
             }
 

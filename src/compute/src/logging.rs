@@ -36,7 +36,7 @@ use mz_compute_client::logging::{ComputeLog, DifferentialLog, LogVariant, Timely
 use mz_expr::{MirScalarExpr, permutation_for_arrangement};
 use mz_repr::{Datum, Diff, Row, RowPacker, RowRef, Timestamp};
 use mz_timely_util::activator::RcActivator;
-use mz_timely_util::containers::ColumnBuilder;
+use mz_timely_util::containers::{ColumnBuilder, PackedContainer};
 use mz_timely_util::operator::consolidate_pact;
 
 use crate::logging::compute::Logger as ComputeLogger;
@@ -244,7 +244,7 @@ where
     G: ::timely::dataflow::Scope<Timestamp = Timestamp>,
     B: Batcher<Time = G::Timestamp> + 'static,
     B::Input: Container + Clone + 'static,
-    B::Output: Container + Clone + 'static,
+    B::Output: PackedContainer + Clone + 'static,
     CB: ContainerBuilder,
     L: Into<LogVariant>,
     F: for<'a> FnMut(
@@ -261,9 +261,13 @@ where
     let consolidated = consolidate_pact::<B, _, _>(input, Pipeline, c_name);
     consolidated.unary::<CB, _, _, _>(Pipeline, u_name, |_, _| {
         move |input, output| {
+            let mut state = Default::default();
             while let Some((time, data)) = input.next() {
                 let mut session = output.session_with_builder(&time);
-                for item in data.iter().flatten().flat_map(|chunk| chunk.iter()) {
+                for item in data.into_iter().flatten().flat_map(|chunk| {
+                    chunk.unpack(&mut state);
+                    chunk.iter()
+                }) {
                     logic(item, &mut packer, &mut session);
                 }
             }
