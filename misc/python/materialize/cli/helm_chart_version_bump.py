@@ -39,6 +39,7 @@ def main() -> int:
 
     yaml = YAML()
     yaml.preserve_quotes = True
+    yaml.width = 4096  # Don't introduce line breaks
 
     mods = [
         (
