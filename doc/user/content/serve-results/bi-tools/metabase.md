@@ -4,6 +4,7 @@ description: "How to create real-time dashboards with Metabase"
 aliases:
   - /third-party/metabase/
   - /integrations/metabase/
+  - /serve-results/metabase/
 menu:
   main:
     parent: "bi-tools"

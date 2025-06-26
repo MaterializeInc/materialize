@@ -4,6 +4,7 @@ description: "How to create dashboards with Looker"
 aliases:
   - /third-party/looker/
   - /integrations/looker/
+  - /serve-results/looker/
 menu:
   main:
     parent: "bi-tools"

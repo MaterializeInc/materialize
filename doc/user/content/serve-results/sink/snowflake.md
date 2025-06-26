@@ -1,6 +1,8 @@
 ---
 title: "Snowflake"
 description: "How to export results from Materialize to Snowflake."
+aliases:
+  - /serve-results/snowflake/
 menu:
   main:
     parent: sink
