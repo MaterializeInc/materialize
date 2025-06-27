@@ -12,6 +12,9 @@ $ set-arg-default single-replica-cluster=quickstart
 
 # This test verifies the get started page works.
 
+$ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
+ALTER SYSTEM SET enable_create_table_from_source = true
+
 > SET cluster TO ${arg.single-replica-cluster}
 
 > CREATE SOURCE demo
