@@ -74,26 +74,26 @@ mod columnar_timestamp {
 
     /// A newtype wrapper for a vector of `Timestamp` values.
     #[derive(Clone, Copy, Default, Debug)]
-    pub struct TimestampVec<T>(T);
-    impl<D, T: columnar::Push<D>> columnar::Push<D> for TimestampVec<T> {
+    pub struct Timestamps<T>(T);
+    impl<D, T: columnar::Push<D>> columnar::Push<D> for Timestamps<T> {
         #[inline(always)]
         fn push(&mut self, item: D) {
             self.0.push(item)
         }
     }
-    impl<T: columnar::Clear> columnar::Clear for TimestampVec<T> {
+    impl<T: columnar::Clear> columnar::Clear for Timestamps<T> {
         #[inline(always)]
         fn clear(&mut self) {
             self.0.clear()
         }
     }
-    impl<T: columnar::Len> columnar::Len for TimestampVec<T> {
+    impl<T: columnar::Len> columnar::Len for Timestamps<T> {
         #[inline(always)]
         fn len(&self) -> usize {
             self.0.len()
         }
     }
-    impl<'a> columnar::Index for TimestampVec<&'a [Timestamp]> {
+    impl<'a> columnar::Index for Timestamps<&'a [Timestamp]> {
         type Ref = Timestamp;
 
         #[inline(always)]
@@ -108,7 +108,7 @@ mod columnar_timestamp {
         fn into_owned<'a>(other: Self::Ref<'a>) -> Self {
             other
         }
-        type Container = TimestampVec<Vec<Timestamp>>;
+        type Container = Timestamps<Vec<Timestamp>>;
         #[inline(always)]
         fn reborrow<'b, 'a: 'b>(thing: Self::Ref<'a>) -> Self::Ref<'b>
         where
@@ -118,34 +118,34 @@ mod columnar_timestamp {
         }
     }
 
-    impl columnar::Container<Timestamp> for TimestampVec<Vec<Timestamp>> {
+    impl columnar::Container<Timestamp> for Timestamps<Vec<Timestamp>> {
         type Borrowed<'a>
-            = TimestampVec<&'a [Timestamp]>
+            = Timestamps<&'a [Timestamp]>
         where
             Self: 'a;
         #[inline(always)]
         fn borrow<'a>(&'a self) -> Self::Borrowed<'a> {
-            TimestampVec(self.0.as_slice())
+            Timestamps(self.0.as_slice())
         }
         #[inline(always)]
         fn reborrow<'b, 'a: 'b>(item: Self::Borrowed<'a>) -> Self::Borrowed<'b>
         where
             Self: 'a,
         {
-            TimestampVec(item.0)
+            Timestamps(item.0)
         }
     }
 
     impl columnar::HeapSize for Timestamp {}
 
-    impl<T: columnar::HeapSize> columnar::HeapSize for TimestampVec<T> {
+    impl<T: columnar::HeapSize> columnar::HeapSize for Timestamps<T> {
         #[inline(always)]
         fn heap_size(&self) -> (usize, usize) {
             self.0.heap_size()
         }
     }
 
-    impl<'a> columnar::AsBytes<'a> for TimestampVec<&'a [Timestamp]> {
+    impl<'a> columnar::AsBytes<'a> for Timestamps<&'a [Timestamp]> {
         #[inline(always)]
         fn as_bytes(&self) -> impl Iterator<Item = (u64, &'a [u8])> {
             std::iter::once((
@@ -154,10 +154,10 @@ mod columnar_timestamp {
             ))
         }
     }
-    impl<'a> columnar::FromBytes<'a> for TimestampVec<&'a [Timestamp]> {
+    impl<'a> columnar::FromBytes<'a> for Timestamps<&'a [Timestamp]> {
         #[inline(always)]
         fn from_bytes(bytes: &mut impl Iterator<Item = &'a [u8]>) -> Self {
-            TimestampVec(bytemuck::cast_slice(
+            Timestamps(bytemuck::cast_slice(
                 bytes.next().expect("Iterator exhausted prematurely"),
             ))
         }
