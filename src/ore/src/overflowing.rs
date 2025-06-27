@@ -198,6 +198,13 @@ mod columnar {
             self.0.push(item.0);
         }
     }
+
+    impl<T, TC: columnar::HeapSize> columnar::HeapSize for Overflows<T, TC> {
+        #[inline(always)]
+        fn heap_size(&self) -> (usize, usize) {
+            self.0.heap_size()
+        }
+    }
 }
 
 macro_rules! impl_overflowing {

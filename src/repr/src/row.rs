@@ -509,7 +509,7 @@ mod columnar {
     impl<'a, BC: AsBytes<'a>, VC: AsBytes<'a>> AsBytes<'a> for Rows<BC, VC> {
         #[inline(always)]
         fn as_bytes(&self) -> impl Iterator<Item = (u64, &'a [u8])> {
-            self.bounds.as_bytes().chain(self.values.as_bytes())
+            columnar::chain(self.bounds.as_bytes(), self.values.as_bytes())
         }
     }
     impl<'a, BC: FromBytes<'a>, VC: FromBytes<'a>> FromBytes<'a> for Rows<BC, VC> {
