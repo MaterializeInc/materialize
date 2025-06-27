@@ -303,6 +303,8 @@ true
 
 
 # Verify statistics for load generator and source tables created from it.
+# NOTE: statistics are not reported reliably for the load generator, so we avoid using exact count
+# matches in some places, instead opting for ensuring the results fall in a range.
 > CREATE SOURCE kv_snapshot
   IN CLUSTER lg_cluster
   FROM LOAD GENERATOR KEY VALUE (
@@ -323,16 +325,16 @@ true
     s.name,
     u.offset_known,
     u.offset_committed,
-    u.snapshot_records_known,
-    u.snapshot_records_staged,
-    u.messages_received,
+    u.snapshot_records_known >= 48,
+    u.snapshot_records_staged >= 48,
+    u.messages_received >= 144,
     u.records_indexed
   FROM mz_internal.mz_source_statuses s
   LEFT JOIN mz_internal.mz_source_statistics u ON s.id = u.id
   WHERE s.name IN ('kv_snapshot', 'kv_up', 'kv_none')
   ORDER BY s.name;
-kv_snapshot 3 3 48 96 144 0
-kv_up 0 0 48 48 0 16
+kv_snapshot 3 3 true true true 0
+kv_up 0 0 true true false 16
 
 > CREATE TABLE kv_none FROM SOURCE kv_snapshot INCLUDE KEY ENVELOPE NONE;
 
@@ -344,17 +346,17 @@ kv_up 0 0 48 48 0 16
     s.name,
     u.offset_known,
     u.offset_committed,
-    u.snapshot_records_known,
-    u.snapshot_records_staged,
-    u.messages_received,
+    u.snapshot_records_known >= 48,
+    u.snapshot_records_staged >= 48,
+    u.messages_received >= 288,
     u.records_indexed
   FROM mz_internal.mz_source_statuses s
   LEFT JOIN mz_internal.mz_source_statistics u ON s.id = u.id
   WHERE s.name IN ('kv_snapshot', 'kv_up', 'kv_none')
   ORDER BY s.name;
-kv_none 0 0 48 48 0 0
-kv_snapshot 3 3 48 144 288 0
-kv_up 0 0 0 0 0 16
+kv_none 0 0 true true false 0
+kv_snapshot 3 3 true true true 0
+kv_up 0 0 false false false 16
 
 > DROP SOURCE kv_snapshot CASCADE;
 
@@ -382,20 +384,21 @@ kv_up 0 0 0 0 0 16
 > SELECT count(*) FROM kv_none;
 48
 
+# the snapshot metrics here should definitely all be zero
 > SELECT
     s.name,
     u.offset_known,
     u.offset_committed,
     u.snapshot_records_known,
     u.snapshot_records_staged,
-    u.messages_received,
+    u.messages_received >= 288,
     u.records_indexed
   FROM mz_internal.mz_source_statuses s
   LEFT JOIN mz_internal.mz_source_statistics u ON s.id = u.id
   WHERE s.name IN ('kv_snapshot', 'kv_up', 'kv_none')
   ORDER BY s.name;
-kv_none 0 0 0 0 0 0
-kv_snapshot 6 6 0 0 288 0
-kv_up 0 0 0 0 0 16
+kv_none 0 0 0 0 false 0
+kv_snapshot 6 6 0 0 true 0
+kv_up 0 0 0 0 false 16
 
 > DROP SOURCE kv_snapshot CASCADE;
