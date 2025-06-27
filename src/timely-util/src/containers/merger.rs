@@ -270,17 +270,17 @@ where
 
         let mut head1 = list1.next().unwrap_or_default();
         head1.unpack(&mut state);
-        let mut borrow1 = ColumnQueue::new(&mut head1);
+        let mut borrow1 = ColumnQueue::new(&head1);
         let mut head2 = list2.next().unwrap_or_default();
         head2.unpack(&mut state);
-        let mut borrow2 = ColumnQueue::new(&mut head2);
+        let mut borrow2 = ColumnQueue::new(&head2);
 
         let mut diff_owned = R::default();
 
         // while we have valid data in each input, merge.
         while !borrow1.is_empty() && !borrow2.is_empty() {
             while !borrow1.is_empty() && !borrow2.is_empty() {
-                let cmp = borrow1.cmp_heads(&mut borrow2);
+                let cmp = borrow1.cmp_heads(&borrow2);
                 // TODO: The following less/greater branches could plausibly be a good moment for
                 // `copy_range`, on account of runs of records that might benefit more from a
                 // `memcpy`.
@@ -309,20 +309,18 @@ where
             self.extract_chunks(builder, output, &mut state);
 
             if borrow1.is_empty() {
-                drop(borrow1);
                 let chunk = head1;
                 self.stash.push(chunk);
                 head1 = list1.next().unwrap_or_default();
                 head1.unpack(&mut state);
-                borrow1 = ColumnQueue::new(&mut head1);
+                borrow1 = ColumnQueue::new(&head1);
             }
             if borrow2.is_empty() {
-                drop(borrow2);
                 let chunk = head2;
                 self.stash.push(chunk);
                 head2 = list2.next().unwrap_or_default();
                 head2.unpack(&mut state);
-                borrow2 = ColumnQueue::new(&mut head2);
+                borrow2 = ColumnQueue::new(&head2);
             }
         }
 
@@ -373,6 +371,7 @@ where
         self.finish_chunks(&mut done, readied);
     }
 
+    #[inline]
     fn time_kept(
         (_, time, _): &<(D, T, R) as Columnar>::Ref<'_>,
         upper: &AntichainRef<T>,
@@ -413,17 +412,18 @@ where
     T: for<'b> Columnar<Ref<'b>: Ord>,
     R: Columnar,
 {
-    // type Item = <(D, T, R) as Columnar>::Ref<'a>;
-    // type SelfGAT<'b> = ColumnQueue<'b, (D, T, R)>;
+    #[inline]
     fn pop(&mut self) -> <(D, T, R) as Columnar>::Ref<'a> {
         self.head += 1;
         self.list.get(self.head - 1)
     }
-    fn is_empty(&mut self) -> bool {
+    #[inline]
+    fn is_empty(&self) -> bool {
         use columnar::Len;
         self.head == self.list.len()
     }
-    fn cmp_heads<'b>(&mut self, other: &mut ColumnQueue<'b, (D, T, R)>) -> std::cmp::Ordering {
+    #[inline]
+    fn cmp_heads<'b>(&self, other: &ColumnQueue<'b, (D, T, R)>) -> Ordering {
         let (data1, time1, _) = self.peek();
         let (data2, time2, _) = other.peek();
 
@@ -434,12 +434,14 @@ where
 
         (data1, time1).cmp(&(data2, time2))
     }
-    fn new(list: &'a mut Column<(D, T, R)>) -> ColumnQueue<'a, (D, T, R)> {
+    #[inline]
+    fn new(list: &'a Column<(D, T, R)>) -> ColumnQueue<'a, (D, T, R)> {
         ColumnQueue {
             list: list.borrow(),
             head: 0,
         }
     }
+    #[inline]
     fn peek(&self) -> <(D, T, R) as Columnar>::Ref<'a> {
         self.list.get(self.head)
     }
