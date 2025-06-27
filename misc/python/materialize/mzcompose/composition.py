@@ -63,7 +63,6 @@ from materialize.ui import (
     CommandFailureCausedUIError,
     UIError,
 )
-from materialize.xcompile import Arch
 
 
 class UnknownCompositionError(UIError):
@@ -206,22 +205,6 @@ class Composition:
                 if image_name not in self.repo.images:
                     raise UIError(f"mzcompose: unknown image {image_name}")
                 image = self.repo.images[image_name]
-                if "platform" in config:
-                    # Intentionally not copying the image.rd so that the
-                    # repository details of dependencies are also switched to
-                    # the wanted architecture. An alternative would be to
-                    # iterate over all the dependencies and change their arch
-                    # too, but this is messy. Architecting a cleaner approach
-                    # is probably not worth it since the platform-checks
-                    # scenarios for the x86-64-aarch64 migration are supposed
-                    # to be temporary.
-                    # image.rd = copy.deepcopy(image.rd)
-                    if config["platform"] == "linux/amd64":
-                        image.rd.arch = Arch.X86_64
-                    elif config["platform"] == "linux/arm64/v8":
-                        image.rd.arch = Arch.AARCH64
-                    else:
-                        raise ValueError(f"Unknown platform {config['platform']}")
                 if config.get("publish") is not None:
                     # Override whether an image is expected to be published, so
                     # that we will build it in CI instead of failing.

@@ -30,9 +30,6 @@ class SqlServer(Service):
             name=name,
             config={
                 "image": image,
-                # WARNING: The requested image's platform (linux/amd64) does not match the detected host platform (linux/arm64/v8) and no specific platform was requested
-                # See See https://github.com/microsoft/mssql-docker/issues/802 for current status
-                "platform": "linux/amd64",
                 "ports": [1433],
                 "environment": [
                     "ACCEPT_EULA=Y",
