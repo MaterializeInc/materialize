@@ -1014,10 +1014,10 @@ impl<T: Timestamp + Lattice + Codec64> SpineBatch<T> {
         } else {
             original.run_splits[start_run - 1]
         };
-        let end_part = if end_run == original.run_meta.len() - 1 {
-            original.parts.len()
-        } else {
+        let end_part = if end_run < original.run_splits.len() {
             original.run_splits[end_run]
+        } else {
+            original.parts.len()
         };
 
         // 2. Replace parts
