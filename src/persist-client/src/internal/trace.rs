@@ -58,6 +58,7 @@ use std::fmt::Debug;
 use std::mem;
 use std::ops::Range;
 use std::sync::Arc;
+use tracing::{info, warn};
 
 use crate::internal::paths::WriterKey;
 use differential_dataflow::lattice::Lattice;
@@ -968,6 +969,12 @@ impl<T: Timestamp + Lattice + Codec64> SpineBatch<T> {
             return Err(ApplyMergeResult::NotAppliedNoMatch);
         }
 
+        if replacement.run_meta.len() < 1 || original.run_meta.len() < 1 {
+            warn!("replacement or original batch has no runs");
+            warn!("original batch: {original:#?}");
+            warn!("replacement batch: {replacement:#?}");
+        }
+
         assert!(
             replacement.run_meta.len() <= 1,
             "replacement must have exactly 0 or 1 runs"
@@ -999,13 +1006,26 @@ impl<T: Timestamp + Lattice + Codec64> SpineBatch<T> {
         // 0. Find the indices of the runs in the original batch.
         let mut start_run = 0;
         let mut end_run = 0;
+        let mut found_start = false;
+        let mut found_end = false;
         for (i, meta) in original.run_meta.iter().enumerate() {
             if meta.id == Some(start_id) {
+                found_start = true;
                 start_run = i;
             }
             if meta.id == Some(end_id) {
+                found_end = true;
                 end_run = i;
             }
+        }
+
+        if !found_start || !found_end {
+            warn!(
+                "Failed to find run IDs in original batch: start_id={start_id:?}, end_id={end_id:?}"
+            );
+            warn!("original batch: {original:#?}");
+            warn!("replacement batch: {replacement:#?}");
+            return Err(ApplyMergeResult::NotAppliedNoMatch);
         }
 
         // 1. Determine the parts to replace.
