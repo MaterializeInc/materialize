@@ -15,7 +15,7 @@ use std::time::{Duration, Instant};
 
 use anyhow::bail;
 use mz_build_info::BuildInfo;
-use mz_cluster_client::client::{ClusterReplicaLocation, ClusterStartupEpoch, TimelyConfig};
+use mz_cluster_client::client::{ClusterReplicaLocation, ClusterStartupEpoch};
 use mz_compute_types::dyncfgs::ENABLE_COMPUTE_REPLICA_EXPIRATION;
 use mz_dyncfg::ConfigSet;
 use mz_ore::channel::InstrumentedUnboundedSender;
@@ -278,20 +278,6 @@ where
     /// contain replica-specific fields that must be adjusted before sending.
     fn specialize_command(&self, command: &mut ComputeCommand<T>) {
         match command {
-            ComputeCommand::CreateTimely { config, epoch } => {
-                **config = TimelyConfig {
-                    workers: self.config.location.workers,
-                    process: 0,
-                    addresses: self.config.location.dataflow_addrs.clone(),
-                    arrangement_exert_proportionality: self
-                        .config
-                        .arrangement_exert_proportionality,
-                    enable_zero_copy: self.config.enable_zero_copy,
-                    enable_zero_copy_lgalloc: self.config.enable_zero_copy_lgalloc,
-                    zero_copy_limit: self.config.zero_copy_limit,
-                };
-                *epoch = self.epoch;
-            }
             ComputeCommand::CreateInstance(config) => {
                 config.logging = self.config.logging.clone();
                 if ENABLE_COMPUTE_REPLICA_EXPIRATION.get(&self.dyncfg) {

@@ -53,12 +53,8 @@
 //!
 //! The creation stage is the first stage of the compute protocol. It is initiated by the
 //! successful establishment of a gRPC connection between compute controller and replica. In this
-//! stage, the compute controller must send two creation commands in order:
-//!
-//!   1. A [`CreateTimely`] command, which instructs the replica to create the timely dataflow
-//!      runtime.
-//!   2. A [`CreateInstance`] command, which instructs the replica to initialize the rest of its
-//!      state.
+//! stage, the compute controller must send a single [`CreateInstance`] command, which instructs
+//! the replica to initialize its compute state.
 //!
 //! The replica must not send any responses.
 //!
@@ -114,7 +110,6 @@
 //! The replica cannot transition back to the read-only computation stage from the read-write stage.
 //!
 //! [`ComputeCommand`]: self::command::ComputeCommand
-//! [`CreateTimely`]: self::command::ComputeCommand::CreateTimely
 //! [`CreateInstance`]: self::command::ComputeCommand::CreateInstance
 //! [`InitializationComplete`]: self::command::ComputeCommand::InitializationComplete
 //! [`CreateDataflow`]: self::command::ComputeCommand::CreateDataflow

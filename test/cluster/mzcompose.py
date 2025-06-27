@@ -2633,8 +2633,6 @@ def workflow_test_replica_metrics(c: Composition) -> None:
         # Check that expected metrics exist and have sensible values.
         metrics = fetch_metrics()
 
-        count = metrics.get_replica_history_command_count("create_timely")
-        assert count == 0, f"unexpected create_timely count: {count}"
         count = metrics.get_replica_history_command_count("create_instance")
         assert count == 1, f"unexpected create_instance count: {count}"
         count = metrics.get_replica_history_command_count("allow_compaction")
@@ -2751,8 +2749,6 @@ def workflow_test_compute_controller_metrics(c: Composition) -> None:
     metrics = fetch_metrics()
 
     # mz_compute_commands_total
-    count = metrics.get_commands_total("create_timely")
-    assert count == 1, f"got {count}"
     count = metrics.get_commands_total("create_instance")
     assert count == 1, f"got {count}"
     count = metrics.get_commands_total("allow_compaction")
@@ -2769,8 +2765,6 @@ def workflow_test_compute_controller_metrics(c: Composition) -> None:
     assert count == 1, f"got {count}"
 
     # mz_compute_command_message_bytes_total
-    count = metrics.get_command_bytes_total("create_timely")
-    assert count > 0, f"got {count}"
     count = metrics.get_command_bytes_total("create_instance")
     assert count > 0, f"got {count}"
     count = metrics.get_command_bytes_total("allow_compaction")
@@ -2823,8 +2817,6 @@ def workflow_test_compute_controller_metrics(c: Composition) -> None:
     assert count == 0, f"got {count}"
 
     # mz_compute_controller_history_command_count
-    count = metrics.get_compute_controller_history_command_count("create_timely")
-    assert count == 1, f"got {count}"
     count = metrics.get_compute_controller_history_command_count("create_instance")
     assert count == 1, f"got {count}"
     count = metrics.get_compute_controller_history_command_count("allow_compaction")
@@ -2972,8 +2964,6 @@ def workflow_test_storage_controller_metrics(c: Composition) -> None:
     assert count > 0, f"got {count}"
 
     # mz_storage_controller_history_command_count
-    count = metrics_u2.get_storage_controller_history_command_count("create_timely")
-    assert count == 1, f"got {count}"
     count = metrics_u2.get_storage_controller_history_command_count("allow_compaction")
     assert count > 0, f"got {count}"
     count = metrics_u2.get_storage_controller_history_command_count("run_ingestions")

@@ -1091,11 +1091,6 @@ where
     }
 
     async fn run(mut self) {
-        self.send(ComputeCommand::CreateTimely {
-            config: Default::default(),
-            epoch: ClusterStartupEpoch::new(self.envd_epoch, 0),
-        });
-
         let instance_config = InstanceConfig {
             peek_stash_persist_location: self.peek_stash_persist_location.clone(),
             // The remaining fields are replica-specific and will be set in `ReplicaTask::specialize_command`.
