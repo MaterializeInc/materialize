@@ -969,11 +969,11 @@ impl<T: Timestamp + Lattice + Codec64> SpineBatch<T> {
             return Err(ApplyMergeResult::NotAppliedNoMatch);
         }
 
-        if replacement.run_meta.len() < 1 || original.run_meta.len() < 1 {
-            warn!("replacement or original batch has no runs");
-            warn!("original batch: {original:#?}");
-            warn!("replacement batch: {replacement:#?}");
-        }
+        // if replacement.run_meta.len() < 1 || original.run_meta.len() < 1 {
+        //     warn!("replacement or original batch has no runs");
+        //     warn!("original batch: {original:#?}");
+        //     warn!("replacement batch: {replacement:#?}");
+        // }
 
         assert!(
             replacement.run_meta.len() <= 1,
@@ -1091,8 +1091,18 @@ impl<T: Timestamp + Lattice + Codec64> SpineBatch<T> {
             "run_splits must have one fewer element than run_meta"
         );
 
+        let desc = if replacement.run_meta.is_empty() {
+            original.desc.clone()
+        } else {
+            info!(
+                "using replacement desc: {:?} instead of the original {:?}",
+                replacement.desc, original.desc
+            );
+            replacement.desc.clone()
+        };
+
         Ok(HollowBatch {
-            desc: replacement.desc.clone(),
+            desc: desc.clone(),
             //FIXME (dov): actually compute a len somehow
             len: replacement.len,
             parts,
@@ -1180,7 +1190,10 @@ impl<T: Timestamp + Lattice + Codec64> SpineBatch<T> {
         let res = if range.len() == 1 {
             // We only need to replace a single part. Here we still care about the run_indices
             // because we only want to replace the runs that are in the merge result.
-            let batch = &self.parts[range[0]].batch;
+            let batch = &self.parts[range[0]];
+            info!("Replacing parts in batch: {:?}", batch.id);
+            info!("Replacement inputs: {:?}", inputs);
+            let batch = &batch.batch;
             let run_ids = inputs
                 .values()
                 .next()
