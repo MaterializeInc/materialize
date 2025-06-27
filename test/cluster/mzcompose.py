@@ -2414,7 +2414,7 @@ def workflow_test_clusterd_death_detection(c: Composition) -> None:
                     STORAGE ADDRESSES ['clusterd1:2103'],
                     COMPUTECTL ADDRESSES ['toxiproxy:2101'],
                     COMPUTE ADDRESSES ['clusterd1:2102'],
-                    WORKERS 2));
+                    WORKERS 1));
 
                 $ sleep-is-probably-flaky-i-have-justified-my-need-with-a-comment duration="1s"
 
