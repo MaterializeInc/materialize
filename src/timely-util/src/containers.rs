@@ -196,7 +196,7 @@ mod container {
                     }
                     compressed.decompress(&mut aligned[..uncompressed_size]);
                     *self = Column::Align(aligned);
-                    *&mut state.empty_compressed = compressed;
+                    state.empty_compressed = compressed;
                     assert_eq!(
                         self.len(),
                         elements,
@@ -367,7 +367,7 @@ mod builder {
     }
 
     impl<C: Columnar<Container: Push<T>>, T> PushInto<T> for ColumnBuilder<C> {
-        #[inline]
+        #[inline(always)]
         fn push_into(&mut self, item: T) {
             self.current.push(item);
             // If there is less than 10% slop with 2MB backing allocations, mint a container.

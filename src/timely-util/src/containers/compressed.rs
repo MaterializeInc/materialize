@@ -46,7 +46,7 @@ impl CompressedColumn {
         let max_size = lz4_flex::block::get_maximum_output_size(align.len() * 8);
         buffer.resize(max_size, 0);
         let len = lz4_flex::block::compress_into(bytemuck::cast_slice(&*align), buffer).unwrap();
-        let mut region = Vec::from(std::mem::take(&mut empty.data));
+        let mut region = std::mem::take(&mut empty.data);
         region.clear();
         region.extend_from_slice(&buffer[..len]);
         Self {
@@ -61,7 +61,7 @@ impl CompressedColumn {
         assert_eq!(self.uncompressed_size, aligned.len() * 8);
         lz4_flex::block::decompress_into(
             &self.data[..self.valid],
-            &mut bytemuck::cast_slice_mut(aligned),
+            bytemuck::cast_slice_mut(aligned),
         )
         .expect("Failed to decompress block");
     }
