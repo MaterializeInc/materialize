@@ -968,10 +968,9 @@ impl<T: Timestamp + Lattice + Codec64> SpineBatch<T> {
             return Err(ApplyMergeResult::NotAppliedNoMatch);
         }
 
-        assert_eq!(
-            replacement.run_meta.len(),
-            1,
-            "replacement must have exactly one run"
+        assert!(
+            replacement.run_meta.len() <= 1,
+            "replacement must have exactly 0 or 1 runs"
         );
 
         let mut run_ids = run_ids.to_vec();
