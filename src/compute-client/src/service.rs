@@ -81,9 +81,10 @@ impl ProtoServiceTypes for ComputeProtoServiceTypes {
 pub type ComputeGrpcClient = GrpcClient<ComputeProtoServiceTypes>;
 
 #[async_trait]
-impl<F, G> ProtoCompute for GrpcServer<F>
+impl<F, U, G> ProtoCompute for GrpcServer<F>
 where
-    F: Fn() -> G + Send + Sync + 'static,
+    F: Fn() -> U + Send + Sync + 'static,
+    U: Future<Output = G> + Send,
     G: ComputeClient + 'static,
 {
     type CommandResponseStreamStream = ResponseStream<ProtoComputeResponse>;

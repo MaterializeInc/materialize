@@ -11,6 +11,7 @@
 
 use std::sync::Arc;
 
+use futures::future::{BoxFuture, FutureExt};
 use mz_cluster::client::{ClusterClient, ClusterSpec};
 use mz_cluster_client::client::TimelyConfig;
 use mz_ore::metrics::MetricsRegistry;
@@ -52,7 +53,7 @@ struct Config {
 
 /// Initiates a timely dataflow computation, processing storage commands.
 pub async fn serve(
-    timely_config: Option<TimelyConfig>,
+    timely_config: TimelyConfig,
     metrics_registry: &MetricsRegistry,
     persist_clients: Arc<PersistClientCache>,
     txns_ctx: TxnsContext,
@@ -60,7 +61,7 @@ pub async fn serve(
     now: NowFn,
     connection_context: ConnectionContext,
     instance_context: StorageInstanceContext,
-) -> Result<impl Fn() -> Box<dyn StorageClient> + use<>, anyhow::Error> {
+) -> anyhow::Result<impl Fn() -> BoxFuture<'static, Box<dyn StorageClient>> + use<>> {
     let config = Config {
         persist_clients,
         txns_ctx,
@@ -75,25 +76,17 @@ pub async fn serve(
         shared_rocksdb_write_buffer_manager: Default::default(),
     };
     let tokio_executor = tokio::runtime::Handle::current();
-
-    let timely_container = if let Some(timely_config) = timely_config {
-        let timely = config
-            .build_cluster(timely_config, tokio_executor.clone())
-            .await?;
-        Some(timely)
-    } else {
-        None
-    };
+    let timely_container = config.build_cluster(timely_config, tokio_executor).await?;
     let timely_container = Arc::new(tokio::sync::Mutex::new(timely_container));
 
     let client_builder = move || {
-        let client = ClusterClient::new(
-            Arc::clone(&timely_container),
-            tokio_executor.clone(),
-            config.clone(),
-        );
-        let client: Box<dyn StorageClient> = Box::new(client);
-        client
+        let timely_container = Arc::clone(&timely_container);
+        async {
+            let client = ClusterClient::connect(timely_container).await;
+            let client: Box<dyn StorageClient> = Box::new(client);
+            client
+        }
+        .boxed()
     };
 
     Ok(client_builder)

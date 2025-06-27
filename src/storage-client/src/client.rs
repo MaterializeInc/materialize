@@ -91,9 +91,10 @@ impl ProtoServiceTypes for StorageProtoServiceTypes {
 pub type StorageGrpcClient = GrpcClient<StorageProtoServiceTypes>;
 
 #[async_trait]
-impl<F, G> ProtoStorage for GrpcServer<F>
+impl<F, U, G> ProtoStorage for GrpcServer<F>
 where
-    F: Fn() -> G + Send + Sync + 'static,
+    F: Fn() -> U + Send + Sync + 'static,
+    U: Future<Output = G> + Send,
     G: StorageClient + 'static,
 {
     type CommandResponseStreamStream = ResponseStream<ProtoStorageResponse>;
