@@ -29,7 +29,6 @@
 //! recover each dataflow to its current state in case of failure or other reconfiguration.
 
 use std::collections::{BTreeMap, BTreeSet};
-use std::num::NonZeroI64;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -43,10 +42,6 @@ use mz_compute_types::ComputeInstanceId;
 use mz_compute_types::config::ComputeReplicaConfig;
 use mz_compute_types::dataflows::DataflowDescription;
 use mz_compute_types::dyncfgs::COMPUTE_REPLICA_EXPIRATION_OFFSET;
-use mz_controller_types::dyncfgs::{
-    ARRANGEMENT_EXERT_PROPORTIONALITY, ENABLE_TIMELY_ZERO_COPY, ENABLE_TIMELY_ZERO_COPY_LGALLOC,
-    TIMELY_ZERO_COPY_LIMIT,
-};
 use mz_dyncfg::ConfigSet;
 use mz_expr::RowSetFinishing;
 use mz_ore::cast::CastFrom;
@@ -204,8 +199,6 @@ pub struct ComputeController<T: ComputeControllerTimestamp> {
     peek_stash_persist_location: PersistLocation,
     /// A controller response to be returned on the next call to [`ComputeController::process`].
     stashed_response: Option<ComputeControllerResponse<T>>,
-    /// A number that increases on every `environmentd` restart.
-    envd_epoch: NonZeroI64,
     /// The compute controller metrics.
     metrics: ComputeControllerMetrics,
     /// A function that produces the current wallclock time.
@@ -241,7 +234,6 @@ impl<T: ComputeControllerTimestamp> ComputeController<T> {
     pub fn new(
         build_info: &'static BuildInfo,
         storage_collections: StorageCollections<T>,
-        envd_epoch: NonZeroI64,
         read_only: bool,
         metrics_registry: &MetricsRegistry,
         peek_stash_persist_location: PersistLocation,
@@ -309,7 +301,6 @@ impl<T: ComputeControllerTimestamp> ComputeController<T> {
             config: Default::default(),
             peek_stash_persist_location,
             stashed_response: None,
-            envd_epoch,
             metrics,
             now,
             wallclock_lag,
@@ -499,7 +490,6 @@ impl<T: ComputeControllerTimestamp> ComputeController<T> {
             config: _,
             peek_stash_persist_location: _,
             stashed_response,
-            envd_epoch,
             metrics: _,
             now: _,
             wallclock_lag: _,
@@ -539,7 +529,6 @@ impl<T: ComputeControllerTimestamp> ComputeController<T> {
             field("initialized", initialized)?,
             field("read_only", read_only)?,
             field("stashed_response", format!("{stashed_response:?}"))?,
-            field("envd_epoch", envd_epoch)?,
             field("maintenance_scheduled", maintenance_scheduled)?,
         ]);
         Ok(serde_json::Value::Object(map))
@@ -577,7 +566,6 @@ where
             Arc::clone(&self.storage_collections),
             self.peek_stash_persist_location.clone(),
             logs,
-            self.envd_epoch,
             self.metrics.for_instance(id),
             self.now.clone(),
             self.wallclock_lag.clone(),
@@ -759,10 +747,6 @@ where
             },
             grpc_client: self.config.grpc_client.clone(),
             expiration_offset: (!expiration_offset.is_zero()).then_some(expiration_offset),
-            arrangement_exert_proportionality: ARRANGEMENT_EXERT_PROPORTIONALITY.get(&self.dyncfg),
-            enable_zero_copy: ENABLE_TIMELY_ZERO_COPY.get(&self.dyncfg),
-            enable_zero_copy_lgalloc: ENABLE_TIMELY_ZERO_COPY_LGALLOC.get(&self.dyncfg),
-            zero_copy_limit: TIMELY_ZERO_COPY_LIMIT.get(&self.dyncfg),
         };
 
         let instance = self.instance_mut(instance_id).expect("validated");

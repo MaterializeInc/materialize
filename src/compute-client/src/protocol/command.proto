@@ -13,7 +13,6 @@ syntax = "proto3";
 
 package mz_compute_client.protocol.command;
 
-import "cluster-client/src/client.proto";
 import "compute-client/src/logging.proto";
 import "compute-types/src/dataflows.proto";
 import "dyncfg/src/dyncfg.proto";

@@ -39,7 +39,6 @@ fn main() {
         .extern_path(".mz_repr.row", "::mz_repr")
         .extern_path(".mz_repr.url", "::mz_repr::url")
         .extern_path(".mz_rocksdb_types", "::mz_rocksdb_types")
-        .extern_path(".mz_cluster_client", "::mz_cluster_client")
         .extern_path(".mz_tracing", "::mz_tracing")
         .extern_path(".mz_service", "::mz_service")
         .extern_path(".mz_storage_types", "::mz_storage_types")

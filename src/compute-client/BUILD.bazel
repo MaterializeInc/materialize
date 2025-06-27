@@ -140,7 +140,6 @@ filegroup(
         "src/protocol/command.proto",
         "src/protocol/response.proto",
         "src/service.proto",
-        "//src/cluster-client:all_protos",
         "//src/compute-types:all_protos",
         "//src/dyncfg:all_protos",
         "//src/expr:all_protos",
