@@ -95,7 +95,6 @@ COMPATIBLE_TESTDRIVE_FILES = [
     "oid.td",
     "orms.td",
     "pg-catalog.td",
-    "quickstart.td",
     "runtime-errors.td",
     "search_path.td",
     "self-test.td",
