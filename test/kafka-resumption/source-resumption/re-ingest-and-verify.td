@@ -21,3 +21,9 @@ three        2
 four         3
 five         4
 six          5
+
+> select * from topic_progress
+partition  offset
+--------------------
+(0,)    0
+[0,0]   6
