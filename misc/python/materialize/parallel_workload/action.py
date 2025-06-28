@@ -1288,6 +1288,7 @@ class FlipFlagsAction(Action):
             "compute_peek_response_stash_read_memory_budget_bytes",
             "enable_timely_init_at_process_startup",
             "persist_enable_incremental_compaction",
+            "storage_statistics_retention_duration",
         ]
 
     def run(self, exe: Executor) -> bool:
