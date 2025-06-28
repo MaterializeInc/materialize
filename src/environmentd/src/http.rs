@@ -36,7 +36,8 @@ use futures::future::{Shared, TryFutureExt};
 use headers::authorization::{Authorization, Basic, Bearer};
 use headers::{HeaderMapExt, HeaderName};
 use http::header::{AUTHORIZATION, CONTENT_TYPE};
-use http::{Method, StatusCode};
+use http::uri::Scheme;
+use http::{HeaderMap, HeaderValue, Method, StatusCode, Uri};
 use hyper_openssl::SslStream;
 use hyper_openssl::client::legacy::MaybeHttpsStream;
 use hyper_util::rt::TokioIo;
@@ -685,32 +686,42 @@ where
 
 #[derive(Debug, Error)]
 enum AuthError {
-    #[error("HTTPS is required")]
-    HttpsRequired,
-    #[error("invalid username in client certificate")]
-    InvalidLogin(String),
+    #[error("role dissallowed")]
+    RoleDisallowed(String),
     #[error("{0}")]
     Frontegg(#[from] FronteggError),
     #[error("missing authorization header")]
-    MissingHttpAuthentication,
+    MissingHttpAuthentication {
+        include_www_authenticate_header: bool,
+    },
     #[error("{0}")]
     MismatchedUser(String),
     #[error("session expired")]
     SessionExpired,
     #[error("failed to update session")]
     FailedToUpdateSession,
+    #[error("invalid credentials")]
+    InvalidCredentials,
 }
 
 impl IntoResponse for AuthError {
     fn into_response(self) -> Response {
         warn!("HTTP request failed authentication: {}", self);
+        let mut headers = HeaderMap::new();
+        match self {
+            AuthError::MissingHttpAuthentication {
+                include_www_authenticate_header,
+            } if include_www_authenticate_header => {
+                headers.insert(
+                    http::header::WWW_AUTHENTICATE,
+                    HeaderValue::from_static("Basic realm=Materialize"),
+                );
+            }
+            _ => {}
+        };
         // We omit most detail from the error message we send to the client, to
         // avoid giving attackers unnecessary information.
-        let message = match self {
-            AuthError::HttpsRequired => self.to_string(),
-            _ => "unauthorized".into(),
-        };
-        (StatusCode::UNAUTHORIZED, message).into_response()
+        (StatusCode::UNAUTHORIZED, headers, "unauthorized").into_response()
     }
 }
 
@@ -801,7 +812,16 @@ async fn http_auth(
     match (tls_enabled, &conn_protocol) {
         (false, ConnProtocol::Http) => {}
         (false, ConnProtocol::Https { .. }) => unreachable!(),
-        (true, ConnProtocol::Http) => return Err(AuthError::HttpsRequired),
+        (true, ConnProtocol::Http) => {
+            let mut parts = req.uri().clone().into_parts();
+            parts.scheme = Some(Scheme::HTTPS);
+            return Ok(Redirect::permanent(
+                &Uri::from_parts(parts)
+                    .expect("it was already a URI, just changed the scheme")
+                    .to_string(),
+            )
+            .into_response());
+        }
         (true, ConnProtocol::Https { .. }) => {}
     }
     // If we've already passed some other auth, just use that.
@@ -821,7 +841,18 @@ async fn http_auth(
         None
     };
 
-    let user = auth(&authenticator, creds, allowed_roles).await?;
+    let path = req.uri().path();
+    let include_www_authenticate_header = path == "/"
+        || ["/memory", "/hierarchical-memory", "/prof/"]
+            .iter()
+            .any(|prefix| path.starts_with(prefix));
+    let user = auth(
+        &authenticator,
+        creds,
+        allowed_roles,
+        include_www_authenticate_header,
+    )
+    .await?;
 
     // Add the authenticated user as an extension so downstream handlers can
     // inspect it if necessary.
@@ -893,7 +924,7 @@ async fn init_ws(
                 anyhow::bail!("expected auth information");
             }
         };
-        let user = auth(&authenticator, Some(creds), *allowed_roles).await?;
+        let user = auth(&authenticator, Some(creds), *allowed_roles, false).await?;
         (user, options)
     };
 
@@ -926,6 +957,7 @@ async fn auth(
     authenticator: &Authenticator,
     creds: Option<Credentials>,
     allowed_roles: AllowedRoles,
+    include_www_authenticate_header: bool,
 ) -> Result<AuthedUser, AuthError> {
     // TODO pass session data here?
     let (name, external_metadata_rx) = match authenticator {
@@ -944,13 +976,25 @@ async fn auth(
                 });
                 (claims.user, Some(external_metadata_rx))
             }
-            None => return Err(AuthError::MissingHttpAuthentication),
+            None => {
+                return Err(AuthError::MissingHttpAuthentication {
+                    include_www_authenticate_header,
+                });
+            }
         },
-        Authenticator::Password(_) => {
-            warn!("self hosted auth only, but somehow missing session data");
-            // TODO tell the user to login here?
-            return Err(AuthError::MissingHttpAuthentication);
-        }
+        Authenticator::Password(adapter_client) => match creds {
+            Some(Credentials::Password { username, password }) => {
+                if let Err(_) = adapter_client.authenticate(&username, &password).await {
+                    return Err(AuthError::InvalidCredentials);
+                }
+                (username, None)
+            }
+            _ => {
+                return Err(AuthError::MissingHttpAuthentication {
+                    include_www_authenticate_header,
+                });
+            }
+        },
         Authenticator::None => {
             // If no authentication, use whatever is in the HTTP auth
             // header (without checking the password), or fall back to the
@@ -984,7 +1028,7 @@ fn check_role_allowed(name: &str, allowed_roles: AllowedRoles) -> Result<(), Aut
     if role_allowed {
         Ok(())
     } else {
-        Err(AuthError::InvalidLogin(name.to_owned()))
+        Err(AuthError::RoleDisallowed(name.to_owned()))
     }
 }
 
