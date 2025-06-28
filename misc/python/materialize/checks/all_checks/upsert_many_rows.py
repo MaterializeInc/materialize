@@ -11,10 +11,16 @@ from textwrap import dedent
 from materialize.checks.actions import Testdrive
 from materialize.checks.checks import Check
 from materialize.checks.common import KAFKA_SCHEMA_WITH_SINGLE_STRING_FIELD
+from materialize.checks.executors import Executor
+from materialize.mz_version import MzVersion
 
 
 class UpsertManyRows(Check):
     """Upsert 1M rows"""
+
+    def _can_run(self, e: Executor) -> bool:
+        # Was broken in v0.144, see https://github.com/MaterializeInc/database-issues/issues/8106#issuecomment-3013859893
+        return self.base_version >= MzVersion.parse_mz("v0.146.0")
 
     def initialize(self) -> Testdrive:
         return Testdrive(
