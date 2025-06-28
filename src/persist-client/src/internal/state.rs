@@ -2757,6 +2757,7 @@ pub struct Upper<T>(pub Antichain<T>);
 #[cfg(test)]
 pub(crate) mod tests {
     use std::ops::Range;
+    use std::str::FromStr;
 
     use bytes::Bytes;
     use mz_build_info::DUMMY_BUILD_INFO;
@@ -4280,5 +4281,15 @@ pub(crate) mod tests {
         // Downgrade to v0.9.0 is _NOT_ allowed.
         let res = open_and_write(&mut clients, Version::new(0, 9, 0), shard_id).await;
         assert!(res.unwrap_err().is_panic());
+    }
+
+    #[mz_ore::test]
+    fn runid_parse() {
+        let runid = "rif00c21f0-6907-4035-84d9-0cd07ae4f8c3";
+        let parsed = RunId::from_str(runid);
+
+        println!("Parsed RunId: {:?}", parsed);
+
+        assert!(parsed.is_ok());
     }
 }

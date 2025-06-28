@@ -32,7 +32,7 @@ use timely::PartialOrder;
 use timely::progress::{Antichain, Timestamp};
 use tokio::sync::mpsc::Sender;
 use tokio::sync::{TryAcquireError, mpsc, oneshot};
-use tracing::{Instrument, Span, debug, debug_span, error, trace, warn};
+use tracing::{Instrument, Span, debug, debug_span, error, info, trace, warn};
 
 use crate::async_runtime::IsolatedRuntime;
 use crate::batch::{BatchBuilderConfig, BatchBuilderInternal, BatchParts, PartDeletes};
@@ -643,6 +643,7 @@ where
 
             let ordered_runs =
                 Self::flatten_runs(&req, cfg.batch.preferred_order, &*blob, &*metrics).await?;
+            info!("ordered runs: {ordered_runs:?}");
 
             let chunked_runs = Self::chunk_runs(
                 &ordered_runs,
@@ -650,6 +651,7 @@ where
                 &*metrics,
                 run_reserved_memory_bytes,
             );
+            info!("chunked runs: {chunked_runs:?}");
 
             let total_chunked_runs = chunked_runs.len();
 
@@ -695,6 +697,10 @@ where
                 } else {
                     req.desc.clone()
                 };
+
+                info!("request description: {:?}. Used description: {:?}",
+                    req.desc, desc);
+
 
                 let runs = runs.iter()
                     .map(|(_, desc, meta, run)| (*desc, *meta, *run))
