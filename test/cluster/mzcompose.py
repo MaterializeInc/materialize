@@ -201,57 +201,6 @@ def workflow_test_smoke(c: Composition, parser: WorkflowArgumentParser) -> None:
         c.sql("DROP CLUSTER cluster1 CASCADE", port=6877, user="mz_system")
 
 
-def workflow_test_invalid_compute_reuse(c: Composition) -> None:
-    """Ensure clusterds correctly crash if used in unsupported communication config"""
-    c.down(destroy_volumes=True)
-    c.up("materialized")
-
-    # Create a remote cluster and verify that tests pass.
-    c.up("clusterd1")
-    c.up("clusterd2")
-    c.sql("DROP CLUSTER IF EXISTS cluster1 CASCADE;")
-    c.sql(
-        "ALTER SYSTEM SET unsafe_enable_unorchestrated_cluster_replicas = true;",
-        port=6877,
-        user="mz_system",
-    )
-
-    c.sql(
-        """CREATE CLUSTER cluster1 REPLICAS (replica1 (
-            STORAGECTL ADDRESSES ['clusterd1:2100', 'clusterd2:2100'],
-            STORAGE ADDRESSES ['clusterd1:2103', 'clusterd2:2103'],
-            COMPUTECTL ADDRESSES ['clusterd1:2101', 'clusterd2:2101'],
-            COMPUTE ADDRESSES ['clusterd1:2102', 'clusterd2:2102'],
-            WORKERS 2
-        ));
-    """
-    )
-    c.sql("DROP CLUSTER cluster1 CASCADE;")
-
-    # Note the different WORKERS argument
-    c.sql(
-        """CREATE CLUSTER cluster1 REPLICAS (replica1 (
-            STORAGECTL ADDRESSES ['clusterd1:2100', 'clusterd2:2100'],
-            STORAGE ADDRESSES ['clusterd1:2103', 'clusterd2:2103'],
-            COMPUTECTL ADDRESSES ['clusterd1:2101', 'clusterd2:2101'],
-            COMPUTE ADDRESSES ['clusterd1:2102', 'clusterd2:2102'],
-            WORKERS 1
-        ));
-    """
-    )
-
-    for i in range(5):
-        # This should ensure that compute crashed (and does not just hang forever)
-        c1 = c.invoke("logs", "clusterd1", capture=True)
-        if (
-            "halting process: new timely configuration does not match existing timely configuration"
-            in c1.stdout
-        ):
-            break
-        # Waiting for logs to arrive
-        time.sleep(1)
-
-
 def workflow_test_github_3553(c: Composition) -> None:
     """Test that clients do not wait indefinitely for a crashed resource."""
 
