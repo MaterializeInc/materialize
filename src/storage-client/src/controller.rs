@@ -319,6 +319,7 @@ pub trait StorageController: Debug {
     fn collections_hydrated_on_replicas(
         &self,
         target_replica_ids: Option<Vec<ReplicaId>>,
+        target_cluster_ids: &StorageInstanceId,
         exclude_collections: &BTreeSet<GlobalId>,
     ) -> Result<bool, StorageError<Self::Timestamp>>;
 
