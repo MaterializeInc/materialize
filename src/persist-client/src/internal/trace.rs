@@ -1091,7 +1091,11 @@ impl<T: Timestamp + Lattice + Codec64> SpineBatch<T> {
             "run_splits must have one fewer element than run_meta"
         );
 
-        let desc = if replacement.run_meta.is_empty() {
+        let desc = if parts.is_empty() && run_splits.is_empty() {
+            info!(
+                "replacement batch is empty, using original desc: {:?} instead of the replacement {:?}",
+                original.desc, replacement.desc
+            );
             original.desc.clone()
         } else {
             info!(
