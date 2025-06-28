@@ -590,6 +590,7 @@ impl Coordinator {
                         }
                     };
 
+                    let optimization_began_at = now();
                     let pipeline_result = pipeline();
                     let optimization_finished_at = now();
 
@@ -649,6 +650,7 @@ impl Coordinator {
                                         finishing: optimizer.finishing().clone(),
                                         plan_insights_optimizer_trace: Some(optimizer_trace),
                                         global_lir_plan,
+                                        optimization_began_at,
                                         optimization_finished_at,
                                         insights_ctx,
                                     })
@@ -665,6 +667,7 @@ impl Coordinator {
                                     finishing: optimizer.finishing().clone(),
                                     plan_insights_optimizer_trace: None,
                                     global_lir_plan,
+                                    optimization_began_at,
                                     optimization_finished_at,
                                     insights_ctx,
                                 }),
@@ -695,6 +698,7 @@ impl Coordinator {
                                 validity,
                                 optimizer,
                                 global_lir_plan,
+                                optimization_began_at,
                                 optimization_finished_at,
                                 source_ids,
                             })
@@ -819,11 +823,17 @@ impl Coordinator {
             finishing,
             plan_insights_optimizer_trace,
             global_lir_plan,
+            optimization_began_at,
             optimization_finished_at,
             insights_ctx,
         }: PeekStageFinish,
     ) -> Result<StageResult<Box<PeekStage>>, AdapterError> {
         if let Some(id) = ctx.extra.contents() {
+            self.record_statement_lifecycle_event(
+                &id,
+                &StatementLifecycleEvent::OptimizationBegan,
+                optimization_began_at,
+            );
             self.record_statement_lifecycle_event(
                 &id,
                 &StatementLifecycleEvent::OptimizationFinished,
@@ -998,11 +1008,17 @@ impl Coordinator {
             validity: _,
             optimizer,
             global_lir_plan,
+            optimization_began_at,
             optimization_finished_at,
             source_ids,
         }: PeekStageCopyTo,
     ) -> Result<StageResult<Box<PeekStage>>, AdapterError> {
         if let Some(id) = ctx.extra.contents() {
+            self.record_statement_lifecycle_event(
+                &id,
+                &StatementLifecycleEvent::OptimizationBegan,
+                optimization_began_at,
+            );
             self.record_statement_lifecycle_event(
                 &id,
                 &StatementLifecycleEvent::OptimizationFinished,
