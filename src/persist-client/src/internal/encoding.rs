@@ -1400,8 +1400,11 @@ impl RustType<String> for RunId {
     }
 
     fn from_proto(proto: String) -> Result<Self, TryFromProtoError> {
-        RunId::from_str(&proto).map_err(|_| {
-            TryFromProtoError::InvalidPersistState(format!("invalid RunId: {}", proto))
+        RunId::from_str(&proto).map_err(|e| {
+            TryFromProtoError::InvalidPersistState(format!(
+                "invalid RunId: {}, because {}",
+                proto, e
+            ))
         })
     }
 }
