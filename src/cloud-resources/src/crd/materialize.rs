@@ -72,6 +72,7 @@ pub mod v1alpha1 {
         plural = "materializes",
         shortname = "mzs",
         status = "MaterializeStatus",
+        printcolumn = r#"{"name": "OrgContext", "type": "string", "description": "Metadata from the context annotator", "jsonPath": ".metadata.annotations['materialize\\.cloud/analytics-context']", "priority": 1}"#,
         printcolumn = r#"{"name": "ImageRef", "type": "string", "description": "Reference to the Docker image.", "jsonPath": ".spec.environmentdImageRef", "priority": 1}"#,
         printcolumn = r#"{"name": "UpToDate", "type": "string", "description": "Whether the spec has been applied", "jsonPath": ".status.conditions[?(@.type==\"UpToDate\")].status", "priority": 1}"#
     )]
