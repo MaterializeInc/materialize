@@ -1070,10 +1070,18 @@ impl<T: Timestamp + Lattice + Codec64> SpineBatch<T> {
         let prefix = &original.run_splits[..start_run];
         run_splits.extend_from_slice(prefix);
 
-        // Only push the replacement split if it's not the final run
         let replacement_idx = start_run;
         let replacement_is_last = replacement_idx + replacement.run_meta.len() == run_meta.len();
-        if !replacement_is_last {
+
+        // If we deleted runs, and the replacement is the last run,
+        // we can remove the last split.
+        if replacement.run_meta.is_empty() && replacement_is_last {
+            run_splits.pop();
+        }
+
+        // Only push the replacement split if it's not the final run and the replacement
+        // has runs to add.
+        if !replacement.run_meta.is_empty() && !replacement_is_last {
             run_splits.push(replaced_start + replacement_len);
         }
 
