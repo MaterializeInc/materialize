@@ -46,6 +46,7 @@ fi
 hugo deploy --maxDeletes -1
 
 touch empty
+export AWS_PAGER=
 
 # Make the alias redirects into server-side redirects rather than client side
 # redirects.
@@ -55,20 +56,30 @@ touch empty
         src=${src#./}
         dst=$(sed -nE 's/<!-- #HUGOALIAS# (.*) -->/\1/p' "$src")
         echo "Installing server-side redirect $src => $dst"
-        aws s3 cp ../empty "s3://materialize-website/$src" --website-redirect "$dst"
+        aws s3api put-object --bucket materialize-website --key "$src" --website-redirect-location "$dst" --body ../empty
     done
 )
 
 # NOTE(benesch): this code does not delete old shortlinks. That's fine, because
 # the whole point is that the shortlinks live forever.
 for slug in "${!shortlinks[@]}"; do
-    # Remove the potentially existing shortlink first, otherwise the redirect does not get updated
-    aws s3 rm "s3://materialize-website/s/$slug" || true
-    aws s3 cp empty "s3://materialize-website/s/$slug" --website-redirect "${shortlinks[$slug]}"
+    echo "Installing shortlink s/$slug => ${shortlinks[$slug]}"
+    for version_id in $(aws s3api list-object-versions \
+      --bucket materialize-website \
+      --prefix "s/$slug" \
+      --query "Versions[].VersionId" \
+      --output text); do
+      echo "Deleting version id $version_id"
+      aws s3api delete-object \
+        --bucket materialize-website \
+        --key "s/$slug" \
+        --version-id "$version_id"
+    done
+    aws s3api put-object --bucket materialize-website --key "s/$slug" --website-redirect-location "${shortlinks[$slug]}" --body empty
 done
 
 # Hugo's CloudFront invalidation feature doesn't do anything smarter than
 # invalidating the entire distribution (and has bugs fetching AWS credentials in
 # recent versions), so we just do it here to make it clear that we're
 # invalidating the shortlinks too.
-AWS_PAGER="" aws cloudfront create-invalidation --distribution-id E1F8Q2NUUC41QE --paths "/*"
+aws cloudfront create-invalidation --distribution-id E1F8Q2NUUC41QE --paths "/*"
