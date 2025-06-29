@@ -49,5 +49,6 @@ class SqlLogicTest(Service):
                 "depends_on": depends_on,
                 "propagate_uid_gid": True,
                 "init": True,
+                "ulimits": {"core": 99999999999},
             },
         )

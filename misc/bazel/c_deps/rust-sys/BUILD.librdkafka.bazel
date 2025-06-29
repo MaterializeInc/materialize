@@ -46,6 +46,8 @@ cmake(
         "-DWITH_CURL=0",
         "-DWITH_SASL=0",
         "-DENABLE_LZ4_EXT=0",
+        # Required for hwasan to work. Otherwise it segfaults in rdkafka threads.
+        "-DWITH_C11THREADS=0",
         # `cmake` tries _very_ hard to find libraries to link against, and it
         # generally prefers dynamic libraries in the sysroot, which is exactly
         # what we don't want because it breaks hermeticity.
