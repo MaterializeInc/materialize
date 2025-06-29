@@ -11,8 +11,8 @@ pub use self::container::DatumContainer;
 pub use self::container::DatumSeq;
 pub use self::offset_opt::OffsetOptimized;
 pub use self::spines::{
-    RowBatcher, RowBuilder, RowRowBatcher, RowRowBuilder, RowRowSpine, RowSpine, RowValBatcher,
-    RowValBuilder, RowValSpine,
+    RowBatcher, RowBuilder, RowRowBuilder, RowRowBuilderColumn, RowRowSpine, RowSpine,
+    RowValBatcher, RowValBuilder, RowValSpine,
 };
 use differential_dataflow::trace::implementations::OffsetList;
 
@@ -28,14 +28,16 @@ mod spines {
     use differential_dataflow::trace::implementations::spine_fueled::Spine;
     use differential_dataflow::trace::rc_blanket_impls::RcBuilder;
     use mz_repr::Row;
+    use mz_timely_util::containers::ColumnValBuilder;
 
     use crate::row_spine::{DatumContainer, OffsetOptimized};
     use crate::typedefs::{KeyBatcher, KeyValBatcher};
 
     pub type RowRowSpine<T, R> = Spine<Rc<OrdValBatch<RowRowLayout<((Row, Row), T, R)>>>>;
-    pub type RowRowBatcher<T, R> = KeyValBatcher<Row, Row, T, R>;
     pub type RowRowBuilder<T, R> =
         RcBuilder<OrdValBuilder<RowRowLayout<((Row, Row), T, R)>, TimelyStack<((Row, Row), T, R)>>>;
+    pub type RowRowBuilderColumn<T, R> =
+        RcBuilder<ColumnValBuilder<RowRowLayout<((Row, Row), T, R)>>>;
 
     pub type RowValSpine<V, T, R> = Spine<Rc<OrdValBatch<RowValLayout<((Row, V), T, R)>>>>;
     pub type RowValBatcher<V, T, R> = KeyValBatcher<Row, V, T, R>;
