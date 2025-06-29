@@ -1297,10 +1297,31 @@ where
                 registered_desc
             );
         } else {
-            assert_eq!(
-                inline_desc, &registered_desc,
+            // Due to incremental compaction, we may have a batch that has an inline
+            // desc that has the same lower and upper as the registered desc,
+            // but an older since.
+            assert!(
+                PartialOrder::less_equal(inline_desc.since(), registered_desc.since()),
                 "key={} inline={:?} registered={:?}",
-                printable_name, inline_desc, registered_desc
+                printable_name,
+                inline_desc,
+                registered_desc
+            );
+            assert_eq!(
+                inline_desc.lower(),
+                registered_desc.lower(),
+                "key={} inline={:?} registered={:?}",
+                printable_name,
+                inline_desc,
+                registered_desc
+            );
+            assert_eq!(
+                inline_desc.upper(),
+                registered_desc.upper(),
+                "key={} inline={:?} registered={:?}",
+                printable_name,
+                inline_desc,
+                registered_desc
             );
         }
 

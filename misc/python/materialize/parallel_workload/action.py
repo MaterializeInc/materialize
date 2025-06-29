@@ -1094,6 +1094,9 @@ class FlipFlagsAction(Action):
             "1048576",  # 1 MiB, an in-between value
             "314572800",  # 300 MiB, the production value
         ]
+        self.flags_with_values["persist_enable_incremental_compaction"] = (
+            BOOLEAN_FLAG_VALUES
+        )
 
         # If you are adding a new config flag in Materialize, consider using it
         # here instead of just marking it as uninteresting to silence the
@@ -1287,7 +1290,6 @@ class FlipFlagsAction(Action):
             "compute_peek_response_stash_read_batch_size_bytes",
             "compute_peek_response_stash_read_memory_budget_bytes",
             "enable_timely_init_at_process_startup",
-            "persist_enable_incremental_compaction",
         ]
 
     def run(self, exe: Executor) -> bool:

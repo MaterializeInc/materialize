@@ -150,7 +150,7 @@ impl std::str::FromStr for IdempotencyToken {
     type Err = String;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        parse_id('i', "IdempotencyToken", s).map(IdempotencyToken)
+        parse_id("i", "IdempotencyToken", s).map(IdempotencyToken)
     }
 }
 
@@ -738,7 +738,7 @@ pub(crate) enum RunOrder {
     Structured,
 }
 
-#[derive(Clone, PartialEq, Eq, Ord, PartialOrd, Serialize)]
+#[derive(Clone, PartialEq, Eq, Ord, PartialOrd, Serialize, Copy, Hash)]
 pub struct RunId(pub(crate) [u8; 16]);
 
 impl std::fmt::Display for RunId {
@@ -757,7 +757,7 @@ impl std::str::FromStr for RunId {
     type Err = String;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        parse_id('r', "RunId", s).map(RunId)
+        parse_id("ri", "RunId", s).map(RunId)
     }
 }
 
@@ -2135,6 +2135,8 @@ where
             // able to append that batch in the first place.
             let fake_merge = FueledMergeRes {
                 output: HollowBatch::empty(desc),
+                inputs: Vec::new(),
+                new_active_compaction: None,
             };
             let result = self.trace.apply_tombstone_merge(&fake_merge);
             assert!(
@@ -2755,6 +2757,7 @@ pub struct Upper<T>(pub Antichain<T>);
 #[cfg(test)]
 pub(crate) mod tests {
     use std::ops::Range;
+    use std::str::FromStr;
 
     use bytes::Bytes;
     use mz_build_info::DUMMY_BUILD_INFO;
@@ -4278,5 +4281,15 @@ pub(crate) mod tests {
         // Downgrade to v0.9.0 is _NOT_ allowed.
         let res = open_and_write(&mut clients, Version::new(0, 9, 0), shard_id).await;
         assert!(res.unwrap_err().is_panic());
+    }
+
+    #[mz_ore::test]
+    fn runid_parse() {
+        let runid = "rif00c21f0-6907-4035-84d9-0cd07ae4f8c3";
+        let parsed = RunId::from_str(runid);
+
+        println!("Parsed RunId: {:?}", parsed);
+
+        assert!(parsed.is_ok());
     }
 }
