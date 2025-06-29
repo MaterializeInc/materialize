@@ -253,9 +253,10 @@ struct GrpcServerState<F> {
     metrics: PerGrpcServerMetrics,
 }
 
-impl<F, G> GrpcServer<F>
+impl<F, U, G> GrpcServer<F>
 where
-    F: Fn() -> G + Send + Sync + 'static,
+    F: Fn() -> U + Send + Sync + 'static,
+    U: Future<Output = G> + Send,
 {
     /// Starts the server, listening for gRPC connections on `listen_addr`.
     ///
@@ -272,7 +273,7 @@ where
         host: Option<String>,
         client_builder: F,
         service_builder: Fs,
-    ) -> impl Future<Output = Result<(), anyhow::Error>> + use<S, Fs, F, G>
+    ) -> impl Future<Output = Result<(), anyhow::Error>> + use<S, Fs, F, U, G>
     where
         S: Service<
                 http::Request<BoxBody>,
@@ -349,7 +350,7 @@ where
         let mut request = request.into_inner();
         let state = Arc::clone(&self.state);
         let stream = stream! {
-            let mut client = (state.client_builder)();
+            let mut client = (state.client_builder)().await;
             loop {
                 select! {
                     command = request.next() => {

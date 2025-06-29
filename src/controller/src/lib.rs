@@ -683,7 +683,6 @@ where
             config.now.clone(),
             wallclock_lag_fn.clone(),
             Arc::clone(&txns_metrics),
-            envd_epoch,
             read_only,
             &config.metrics_registry,
             controller_metrics.clone(),
@@ -697,7 +696,6 @@ where
         let compute_controller = ComputeController::new(
             config.build_info,
             storage_collections,
-            envd_epoch,
             read_only,
             &config.metrics_registry,
             config.persist_location,

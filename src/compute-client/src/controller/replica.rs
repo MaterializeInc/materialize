@@ -15,7 +15,7 @@ use std::time::{Duration, Instant};
 
 use anyhow::bail;
 use mz_build_info::BuildInfo;
-use mz_cluster_client::client::{ClusterReplicaLocation, ClusterStartupEpoch, TimelyConfig};
+use mz_cluster_client::client::ClusterReplicaLocation;
 use mz_compute_types::dyncfgs::ENABLE_COMPUTE_REPLICA_EXPIRATION;
 use mz_dyncfg::ConfigSet;
 use mz_ore::channel::InstrumentedUnboundedSender;
@@ -48,10 +48,6 @@ pub(super) struct ReplicaConfig {
     pub grpc_client: GrpcClientParameters,
     /// The offset to use for replica expiration, if any.
     pub expiration_offset: Option<Duration>,
-    pub arrangement_exert_proportionality: u32,
-    pub enable_zero_copy: bool,
-    pub enable_zero_copy_lgalloc: bool,
-    pub zero_copy_limit: Option<usize>,
 }
 
 /// A client for a replica task.
@@ -78,7 +74,7 @@ where
         id: ReplicaId,
         build_info: &'static BuildInfo,
         config: ReplicaConfig,
-        epoch: ClusterStartupEpoch,
+        epoch: u64,
         metrics: ReplicaMetrics,
         dyncfg: Arc<ConfigSet>,
         response_tx: InstrumentedUnboundedSender<ReplicaResponse<T>, IntCounter>,
@@ -149,9 +145,9 @@ struct ReplicaTask<T> {
     command_rx: UnboundedReceiver<ComputeCommand<T>>,
     /// A channel upon which responses from the replica are delivered.
     response_tx: InstrumentedUnboundedSender<ReplicaResponse<T>, IntCounter>,
-    /// A number (technically, pair of numbers) identifying this incarnation of the replica.
+    /// A number identifying this incarnation of the replica.
     /// The semantics of this don't matter, except that it must strictly increase.
-    epoch: ClusterStartupEpoch,
+    epoch: u64,
     /// Replica metrics.
     metrics: ReplicaMetrics,
     /// Flag to report successful replica connection.
@@ -239,7 +235,6 @@ where
         ComputeGrpcClient: ComputeClient<T>,
     {
         let id = self.replica_id;
-        let incarnation = self.epoch.replica();
         loop {
             select! {
                 // Command from controller to forward to replica.
@@ -261,7 +256,7 @@ where
 
                     self.observe_response(&response);
 
-                    if self.response_tx.send((id, incarnation, response)).is_err() {
+                    if self.response_tx.send((id, self.epoch, response)).is_err() {
                         // Controller is no longer interested in this replica. Shut down.
                         break;
                     }
@@ -278,20 +273,6 @@ where
     /// contain replica-specific fields that must be adjusted before sending.
     fn specialize_command(&self, command: &mut ComputeCommand<T>) {
         match command {
-            ComputeCommand::CreateTimely { config, epoch } => {
-                **config = TimelyConfig {
-                    workers: self.config.location.workers,
-                    process: 0,
-                    addresses: self.config.location.dataflow_addrs.clone(),
-                    arrangement_exert_proportionality: self
-                        .config
-                        .arrangement_exert_proportionality,
-                    enable_zero_copy: self.config.enable_zero_copy,
-                    enable_zero_copy_lgalloc: self.config.enable_zero_copy_lgalloc,
-                    zero_copy_limit: self.config.zero_copy_limit,
-                };
-                *epoch = self.epoch;
-            }
             ComputeCommand::CreateInstance(config) => {
                 config.logging = self.config.logging.clone();
                 if ENABLE_COMPUTE_REPLICA_EXPIRATION.get(&self.dyncfg) {

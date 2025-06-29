@@ -12,7 +12,6 @@
 use std::any::Any;
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::{Debug, Display};
-use std::num::NonZeroI64;
 use std::str::FromStr;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -137,8 +136,6 @@ pub struct Controller<T: Timestamp + Lattice + Codec64 + From<EpochMillis> + Tim
     build_info: &'static BuildInfo,
     /// A function that returns the current time.
     now: NowFn,
-    /// The fencing token for this instance of the controller.
-    envd_epoch: NonZeroI64,
 
     /// Whether or not this controller is in read-only mode.
     ///
@@ -511,7 +508,6 @@ where
         let metrics = self.metrics.for_instance(id);
         let mut instance = Instance::new(
             workload_class,
-            self.envd_epoch,
             metrics,
             Arc::clone(self.config().config_set()),
             self.now.clone(),
@@ -2637,7 +2633,6 @@ where
         now: NowFn,
         wallclock_lag: WallclockLagFn<T>,
         txns_metrics: Arc<TxnMetrics>,
-        envd_epoch: NonZeroI64,
         read_only: bool,
         metrics_registry: &MetricsRegistry,
         controller_metrics: ControllerMetrics,
@@ -2725,7 +2720,6 @@ where
             introspection_ids,
             introspection_tokens,
             now,
-            envd_epoch,
             read_only,
             source_statistics: Arc::new(Mutex::new(statistics::SourceStatistics {
                 source_statistics: BTreeMap::new(),

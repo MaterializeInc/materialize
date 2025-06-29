@@ -164,7 +164,6 @@ impl InstanceMetrics {
         };
 
         HistoryMetrics {
-            create_timely_count: command_gauge("create_timely"),
             run_ingestions_count: command_gauge("run_ingestions"),
             run_sinks_count: command_gauge("run_sinks"),
             allow_compaction_count: command_gauge("allow_compaction"),
@@ -231,8 +230,6 @@ impl StatsCollector<ProtoStorageCommand, ProtoStorageResponse> for ReplicaMetric
 /// Metrics tracked by the command history.
 #[derive(Debug)]
 pub struct HistoryMetrics {
-    /// Number of `CreateTimely` commands.
-    pub create_timely_count: UIntGauge,
     /// Number of `RunIngestion` commands.
     pub run_ingestions_count: UIntGauge,
     /// Number of `RunSink` commands.
@@ -249,7 +246,6 @@ pub struct HistoryMetrics {
 
 impl HistoryMetrics {
     pub fn reset(&self) {
-        self.create_timely_count.set(0);
         self.run_ingestions_count.set(0);
         self.run_sinks_count.set(0);
         self.allow_compaction_count.set(0);
