@@ -47,19 +47,19 @@ CREATE PUBLICATION mz_source FOR ALL TABLES;
 > SELECT COUNT(*) > 0 FROM t1;
 true
 
-
 > SELECT
     s.name,
     SUM(u.offset_committed) > 0,
     SUM(u.offset_known) >= SUM(u.offset_committed),
     SUM(u.snapshot_records_known),
     SUM(u.snapshot_records_staged)
-  FROM mz_sources s
+  FROM mz_internal.mz_source_statuses s
   JOIN mz_internal.mz_source_statistics_raw u ON s.id = u.id
-  WHERE s.name IN ('mz_source')
+  WHERE s.name IN ('mz_source', 't1')
   GROUP BY s.name
   ORDER BY s.name
 mz_source true true 2 2
+t1 false true 2 2
 
 $ set-from-sql var=previous-offset-committed
 SELECT
@@ -78,12 +78,13 @@ INSERT INTO t1 VALUES ('three');
     SUM(u.offset_known) >= SUM(u.offset_committed),
     SUM(u.snapshot_records_known),
     SUM(u.snapshot_records_staged)
-  FROM mz_sources s
+  FROM mz_internal.mz_source_statuses s
   JOIN mz_internal.mz_source_statistics_raw u ON s.id = u.id
-  WHERE s.name IN ('mz_source')
+  WHERE s.name IN ('mz_source', 't1')
   GROUP BY s.name
   ORDER BY s.name
 mz_source true true 2 2
+t1 false true 2 2
 
 $ set-from-sql var=pre-restart-offset-committed
 SELECT
@@ -102,17 +103,17 @@ INSERT INTO t1 VALUES ('four');
 # Ensure the snapshot stats stay there, and don't change.
 > SELECT
     s.name,
-    SUM(u.offset_committed) > ${pre-restart-offset-committed},
+    SUM(u.offset_committed) > ${previous-offset-committed},
     SUM(u.offset_known) >= SUM(u.offset_committed),
     SUM(u.snapshot_records_known),
     SUM(u.snapshot_records_staged)
-  FROM mz_sources s
+  FROM mz_internal.mz_source_statuses s
   JOIN mz_internal.mz_source_statistics_raw u ON s.id = u.id
-  WHERE s.name IN ('mz_source')
+  WHERE s.name IN ('mz_source', 't1')
   GROUP BY s.name
   ORDER BY s.name
 mz_source true true 2 2
-
+t1 false true 2 2
 
 $ postgres-execute connection=postgres://postgres:postgres@postgres
 CREATE TABLE alt (f1 TEXT);
@@ -129,12 +130,14 @@ true
     s.name,
     SUM(u.snapshot_records_known),
     SUM(u.snapshot_records_staged)
-  FROM mz_sources s
+  FROM mz_internal.mz_source_statuses s
   JOIN mz_internal.mz_source_statistics_raw u ON s.id = u.id
-  WHERE s.name IN ('mz_source')
+  WHERE s.name IN ('mz_source', 't1', 'alt')
   GROUP BY s.name
   ORDER BY s.name
+alt 1 1
 mz_source 1 1
+t1 0 0
 
 # Ensure subsource stats show up, and then are removed when we drop subsources.
 > SELECT
@@ -142,18 +145,21 @@ mz_source 1 1
     SUM(u.updates_committed) > 0
   FROM mz_tables t
   JOIN mz_internal.mz_source_statistics_raw u ON t.id = u.id
-  WHERE t.name IN ('alt')
+  WHERE t.name IN ('alt', 't1')
   GROUP BY t.name
   ORDER BY t.name
 alt true
+t1 true
 
 > DROP TABLE alt;
 
 > SELECT
-    count(*)
+    t.name, count(*)
   FROM mz_tables t
   JOIN mz_internal.mz_source_statistics_raw u ON t.id = u.id
-  WHERE t.name IN ('alt')
-0
+  WHERE t.name IN ('alt', 't1')
+  GROUP BY t.name
+  ORDER BY t.name
+t1 1
 
 # TODO(guswynn): consider adding an envd restart test for pg statistics, not just kafka ones like in test/cluster.
