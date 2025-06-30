@@ -32,6 +32,7 @@ use timely::worker::Worker as TimelyWorker;
 use tokio::runtime::Handle;
 use tokio::sync::mpsc;
 use tracing::{info, warn};
+use uuid::Uuid;
 
 use crate::communication::initialize_networking;
 
@@ -59,6 +60,7 @@ pub struct TimelyContainer<C: ClusterSpec> {
     /// Channels over which to send endpoints for wiring up a new Client
     client_txs: Vec<
         crossbeam_channel::Sender<(
+            Uuid,
             crossbeam_channel::Receiver<C::Command>,
             mpsc::UnboundedSender<C::Response>,
         )>,
@@ -105,7 +107,7 @@ where
         }
     }
 
-    async fn build(&mut self, config: TimelyConfig) -> Result<(), Error> {
+    async fn build(&mut self, config: TimelyConfig, nonce: Uuid) -> Result<(), Error> {
         let workers = config.workers;
 
         // Check if we can reuse the existing timely instance.
@@ -145,7 +147,7 @@ where
             let (resp_tx, resp_rx) = mpsc::unbounded_channel();
 
             client_tx
-                .send((cmd_rx, resp_tx))
+                .send((nonce, cmd_rx, resp_tx))
                 .expect("worker not dropped");
 
             command_txs.push(cmd_tx);
@@ -183,7 +185,7 @@ where
         // Changing this debug statement requires changing the replica-isolation test
         tracing::debug!("ClusterClient send={:?}", &cmd);
         match cmd.try_into_timely_config() {
-            Ok((config, _epoch)) => self.build(config).await,
+            Ok((config, nonce)) => self.build(config, nonce).await,
             Err(cmd) => self.inner.as_mut().expect("initialized").send(cmd).await,
         }
     }
@@ -219,6 +221,7 @@ pub trait ClusterSpec: Clone + Send + Sync + 'static {
         &self,
         timely_worker: &mut TimelyWorker<A>,
         client_rx: crossbeam_channel::Receiver<(
+            Uuid,
             crossbeam_channel::Receiver<Self::Command>,
             mpsc::UnboundedSender<Self::Response>,
         )>,

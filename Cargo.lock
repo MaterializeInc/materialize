@@ -5406,6 +5406,7 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
  "turmoil",
+ "uuid",
  "workspace-hack",
 ]
 

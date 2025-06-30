@@ -10,7 +10,6 @@
 //! An interactive dataflow server.
 
 use std::cell::RefCell;
-use std::cmp::Ordering;
 use std::collections::{BTreeMap, BTreeSet};
 use std::convert::Infallible;
 use std::fmt::Debug;
@@ -39,6 +38,7 @@ use timely::progress::Antichain;
 use timely::worker::Worker as TimelyWorker;
 use tokio::sync::mpsc;
 use tracing::{info, trace, warn};
+use uuid::Uuid;
 
 use crate::command_channel;
 use crate::compute_state::{ActiveComputeState, ComputeState, ReportedFrontier};
@@ -112,22 +112,22 @@ pub async fn serve(
     Ok(client_builder)
 }
 
-/// Error type returned on connection epoch changes.
+/// Error type returned on connection nonce changes.
 ///
-/// An epoch change informs workers that subsequent commands come a from a new client connection
+/// A nonce change informs workers that subsequent commands come a from a new client connection
 /// and therefore require reconciliation.
-struct EpochChange(u64);
+struct NonceChange(Uuid);
 
 /// Endpoint used by workers to receive compute commands.
 ///
-/// Observes epoch changes in the command stream and converts them into receive errors.
+/// Observes nonce changes in the command stream and converts them into receive errors.
 struct CommandReceiver {
     /// The channel supplying commands.
     inner: command_channel::Receiver,
     /// The ID of the Timely worker.
     worker_id: usize,
-    /// The epoch identifying the current cluster protocol incarnation.
-    epoch: Option<u64>,
+    /// The nonce identifying the current cluster protocol incarnation.
+    nonce: Option<Uuid>,
     /// A stash to enable peeking the next command, used in `try_recv`.
     stashed_command: Option<ComputeCommand>,
 }
@@ -137,76 +137,69 @@ impl CommandReceiver {
         Self {
             inner,
             worker_id,
-            epoch: None,
+            nonce: None,
             stashed_command: None,
         }
     }
 
     /// Receive the next pending command, if any.
     ///
-    /// If the next command is at a different epoch, this method instead returns an `Err`
-    /// containing the new epoch.
-    fn try_recv(&mut self) -> Result<Option<ComputeCommand>, EpochChange> {
+    /// If the next command has a different nonce, this method instead returns an `Err`
+    /// containing the new nonce.
+    fn try_recv(&mut self) -> Result<Option<ComputeCommand>, NonceChange> {
         if let Some(command) = self.stashed_command.take() {
             return Ok(Some(command));
         }
-        let Some((command, epoch)) = self.inner.try_recv() else {
+        let Some((command, nonce)) = self.inner.try_recv() else {
             return Ok(None);
         };
 
-        trace!(worker = self.worker_id, %epoch, ?command, "received command");
+        trace!(worker = self.worker_id, %nonce, ?command, "received command");
 
-        match self.epoch.cmp(&Some(epoch)) {
-            Ordering::Less => {
-                self.epoch = Some(epoch);
-                self.stashed_command = Some(command);
-                Err(EpochChange(epoch))
-            }
-            Ordering::Equal => Ok(Some(command)),
-            Ordering::Greater => panic!("epoch regression: {epoch} < {}", self.epoch.unwrap()),
+        if Some(nonce) == self.nonce {
+            Ok(Some(command))
+        } else {
+            self.nonce = Some(nonce);
+            self.stashed_command = Some(command);
+            Err(NonceChange(nonce))
         }
     }
 }
 
 /// Endpoint used by workers to send sending compute responses.
 ///
-/// Tags responses with the current epoch, allowing receivers to filter out responses intended for
+/// Tags responses with the current nonce, allowing receivers to filter out responses intended for
 /// previous client connections.
 pub(crate) struct ResponseSender {
     /// The channel consuming responses.
-    inner: crossbeam_channel::Sender<(ComputeResponse, u64)>,
+    inner: crossbeam_channel::Sender<(ComputeResponse, Uuid)>,
     /// The ID of the Timely worker.
     worker_id: usize,
-    /// The epoch identifying the current cluster protocol incarnation.
-    epoch: Option<u64>,
+    /// The nonce identifying the current cluster protocol incarnation.
+    nonce: Option<Uuid>,
 }
 
 impl ResponseSender {
-    fn new(inner: crossbeam_channel::Sender<(ComputeResponse, u64)>, worker_id: usize) -> Self {
+    fn new(inner: crossbeam_channel::Sender<(ComputeResponse, Uuid)>, worker_id: usize) -> Self {
         Self {
             inner,
             worker_id,
-            epoch: None,
+            nonce: None,
         }
     }
 
-    /// Advance to the given epoch.
-    fn advance_epoch(&mut self, epoch: u64) {
-        assert!(
-            Some(epoch) > self.epoch,
-            "epoch regression: {epoch} <= {}",
-            self.epoch.unwrap(),
-        );
-        self.epoch = Some(epoch);
+    /// Set the cluster protocol nonce.
+    fn set_nonce(&mut self, nonce: Uuid) {
+        self.nonce = Some(nonce);
     }
 
     /// Send a compute response.
     pub fn send(&self, response: ComputeResponse) -> Result<(), SendError<ComputeResponse>> {
-        let epoch = self.epoch.expect("epoch must be initialized");
+        let nonce = self.nonce.expect("nonce must be initialized");
 
-        trace!(worker = self.worker_id, %epoch, ?response, "sending response");
+        trace!(worker = self.worker_id, %nonce, ?response, "sending response");
         self.inner
-            .send((response, epoch))
+            .send((response, nonce))
             .map_err(|SendError((resp, _))| SendError(resp))
     }
 }
@@ -243,6 +236,7 @@ impl ClusterSpec for Config {
         &self,
         timely_worker: &mut TimelyWorker<A>,
         client_rx: crossbeam_channel::Receiver<(
+            Uuid,
             crossbeam_channel::Receiver<ComputeCommand>,
             mpsc::UnboundedSender<ComputeResponse>,
         )>,
@@ -325,23 +319,23 @@ fn set_core_affinity(_worker_id: usize) {
 impl<'w, A: Allocate + 'static> Worker<'w, A> {
     /// Runs a compute worker.
     pub fn run(&mut self) {
-        // The command receiver is initialized without an epoch, so receiving the first command
-        // always triggers an epoch change.
-        let EpochChange(epoch) = self.recv_command().expect_err("change to first epoch");
-        self.advance_epoch(epoch);
+        // The command receiver is initialized without an nonce, so receiving the first command
+        // always triggers a nonce change.
+        let NonceChange(nonce) = self.recv_command().expect_err("change to first nonce");
+        self.set_nonce(nonce);
 
         loop {
-            let Err(EpochChange(epoch)) = self.run_client();
-            self.advance_epoch(epoch);
+            let Err(NonceChange(nonce)) = self.run_client();
+            self.set_nonce(nonce);
         }
     }
 
-    fn advance_epoch(&mut self, epoch: u64) {
-        self.response_tx.advance_epoch(epoch);
+    fn set_nonce(&mut self, nonce: Uuid) {
+        self.response_tx.set_nonce(nonce);
     }
 
-    /// Handles commands for a client connection, returns when the epoch changes.
-    fn run_client(&mut self) -> Result<Infallible, EpochChange> {
+    /// Handles commands for a client connection, returns when the nonce changes.
+    fn run_client(&mut self) -> Result<Infallible, NonceChange> {
         self.reconcile()?;
 
         // The last time we did periodic maintenance.
@@ -397,7 +391,7 @@ impl<'w, A: Allocate + 'static> Worker<'w, A> {
         }
     }
 
-    fn handle_pending_commands(&mut self) -> Result<(), EpochChange> {
+    fn handle_pending_commands(&mut self) -> Result<(), NonceChange> {
         while let Some(cmd) = self.command_rx.try_recv()? {
             self.handle_command(cmd);
         }
@@ -436,7 +430,7 @@ impl<'w, A: Allocate + 'static> Worker<'w, A> {
     ///
     /// This method blocks if no command is currently available, but takes care to step the Timely
     /// worker while doing so.
-    fn recv_command(&mut self) -> Result<ComputeCommand, EpochChange> {
+    fn recv_command(&mut self) -> Result<ComputeCommand, NonceChange> {
         loop {
             if let Some(cmd) = self.command_rx.try_recv()? {
                 return Ok(cmd);
@@ -468,7 +462,7 @@ impl<'w, A: Allocate + 'static> Worker<'w, A> {
     /// Some additional tidying happens, cleaning up pending peeks, reported frontiers, and creating a new
     /// subscribe response buffer. We will need to be vigilant with future modifications to `ComputeState` to
     /// line up changes there with clean resets here.
-    fn reconcile(&mut self) -> Result<(), EpochChange> {
+    fn reconcile(&mut self) -> Result<(), NonceChange> {
         // To initialize the connection, we want to drain all commands until we receive a
         // `ComputeCommand::InitializationComplete` command to form a target command state.
         let mut new_commands = Vec::new();
@@ -751,11 +745,12 @@ impl<'w, A: Allocate + 'static> Worker<'w, A> {
 /// while the [`ClusterClient`] provides a new pair of channels on each reconnect.
 fn spawn_channel_adapter(
     client_rx: crossbeam_channel::Receiver<(
+        Uuid,
         crossbeam_channel::Receiver<ComputeCommand>,
         mpsc::UnboundedSender<ComputeResponse>,
     )>,
     command_tx: command_channel::Sender,
-    response_rx: crossbeam_channel::Receiver<(ComputeResponse, u64)>,
+    response_rx: crossbeam_channel::Receiver<(ComputeResponse, Uuid)>,
     worker_id: usize,
 ) {
     thread::Builder::new()
@@ -764,26 +759,36 @@ fn spawn_channel_adapter(
         .name(format!("cca-{worker_id}"))
         .spawn(move || {
             // To make workers aware of the individual client connections, we tag forwarded
-            // commands with an epoch that increases on every new client connection. Additionally,
-            // we use the epoch to filter out responses with a different epoch, which were intended
-            // for previous clients.
-            let mut epoch = 0;
+            // commands with the client nonce. Additionally, we use the nonce to filter out
+            // responses with a different nonce, which are intended for different client
+            // connections.
+            //
+            // It's possible that we receive responses with nonces from the past but also from the
+            // future: Worker 0 might have received a new nonce before us and broadcasted it to our
+            // Timely cluster. When we receive a response with a future nonce, we need to wait with
+            // forwarding it until we have received the same nonce from a client connection.
+            //
+            // Nonces are not ordered so we don't know whether a response nonce is from the past or
+            // the future. We thus assume that every response with an unknown nonce might be from
+            // the future and stash them all. Every time we reconnect, we immediately send all
+            // stashed responses with a matching nonce. Every time we receive a new response with a
+            // nonce that matches our current one, we can discard the entire response stash as we
+            // know that all stashed responses must be from the past.
+            let mut stashed_responses = BTreeMap::<Uuid, Vec<ComputeResponse>>::new();
 
-            // It's possible that we receive responses with epochs from the future: Worker 0 might
-            // have increased its epoch before us and broadcasted it to our Timely cluster. When we
-            // receive a response with a future epoch, we need to wait with forwarding it until we
-            // have increased our own epoch sufficiently (by observing new client connections). We
-            // need to stash the response in the meantime.
-            let mut stashed_response = None;
-
-            while let Ok((command_rx, response_tx)) = client_rx.recv() {
-                epoch += 1;
+            while let Ok((nonce, command_rx, response_tx)) = client_rx.recv() {
+                // Send stashed responses for this client.
+                if let Some(resps) = stashed_responses.remove(&nonce) {
+                    for resp in resps {
+                        let _ = response_tx.send(resp);
+                    }
+                }
 
                 // Wait for a new response while forwarding received commands.
                 let serve_rx_channels = || loop {
                     crossbeam_channel::select! {
                         recv(command_rx) -> msg => match msg {
-                            Ok(cmd) => command_tx.send((cmd, epoch)),
+                            Ok(cmd) => command_tx.send((cmd, nonce)),
                             Err(_) => return Err(()),
                         },
                         recv(response_rx) -> msg => {
@@ -794,26 +799,20 @@ fn spawn_channel_adapter(
 
                 // Serve this connection until we see any of the channels disconnect.
                 loop {
-                    let (resp, resp_epoch) = match stashed_response.take() {
-                        Some(stashed) => stashed,
-                        None => match serve_rx_channels() {
-                            Ok(response) => response,
-                            Err(()) => break,
-                        },
+                    let Ok((resp, resp_nonce)) = serve_rx_channels() else {
+                        break;
                     };
 
-                    if resp_epoch < epoch {
-                        // Response for a previous connection; discard it.
-                        continue;
-                    } else if resp_epoch > epoch {
-                        // Response for a future connection; stash it and reconnect.
-                        stashed_response = Some((resp, resp_epoch));
-                        break;
-                    } else {
+                    if resp_nonce == nonce {
                         // Response for the current connection; forward it.
+                        stashed_responses.clear();
                         if response_tx.send(resp).is_err() {
                             break;
                         }
+                    } else {
+                        // Response for a past or future connection; stash it.
+                        let stash = stashed_responses.entry(resp_nonce).or_default();
+                        stash.push(resp);
                     }
                 }
             }
