@@ -7,6 +7,7 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
+import logging
 from textwrap import dedent
 from typing import Any
 
@@ -15,14 +16,16 @@ from materialize.checks.executors import Executor
 from materialize.cloudtest.app.materialize_application import MaterializeApplication
 from materialize.cloudtest.k8s.environmentd import EnvironmentdStatefulSet
 from materialize.mz_version import MzVersion
+from materialize.cloudtest.util.wait import wait
 
+LOGGER = logging.getLogger(__name__)
 
 class ReplaceEnvironmentdStatefulSet(Action):
     """Change the image tag of the environmentd stateful set, re-create the definition and replace the existing one."""
 
     new_tag: str | None
 
-    def __init__(self, new_tag: str | None = None) -> None:
+    def __init__(self, new_tag: str | None) -> None:
         self.new_tag = new_tag
 
     def execute(self, e: Executor) -> None:
@@ -32,19 +35,25 @@ class ReplaceEnvironmentdStatefulSet(Action):
             else MzVersion.parse_cargo()
         )
         print(
-            f"Replacing environmentd stateful set from version {e.current_mz_version} to version {new_version}"
+            f"Upgrading Materialize CR from version {e.current_mz_version} to version {new_version}"
         )
         mz = e.cloudtest_application()
-        stateful_set = [
-            resource
-            for resource in mz.resources
-            if type(resource) == EnvironmentdStatefulSet
-        ]
-        assert len(stateful_set) == 1
-        stateful_set = stateful_set[0]
+        mz.tag = self.new_tag
+        mz.materialize.tag = self.new_tag
+        mz.materialize.apply()
 
-        stateful_set.tag = self.new_tag
-        stateful_set.replace()
+        # TODO wait for envd to be caught up
+        #stateful_set = [
+        #    resource
+        #    for resource in mz.resources
+        #    if type(resource) == EnvironmentdStatefulSet
+        #]
+        #assert len(stateful_set) == 1
+        #stateful_set = stateful_set[0]
+
+        #stateful_set.tag = self.new_tag
+        #stateful_set.replace()
+
         e.current_mz_version = new_version
 
     def join(self, e: Executor) -> None:
@@ -60,6 +69,7 @@ class SetupSshTunnels(Action):
         self.mz = mz
 
     def execute(self, e: Executor) -> None:
+        LOGGER.info("SetupSshTunnels")
         connection_count = 4
         self.handle = e.testdrive(
             "\n".join(

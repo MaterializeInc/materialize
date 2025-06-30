@@ -1,0 +1,565 @@
+operator:
+  cloudProvider:
+    # Lying and saying we're in AWS to test some AWS-only features?
+    type: "aws"
+    region: "minio"
+    providers:
+      aws:
+        enabled: true
+        accountID: 123456789000
+        iam:
+          roles:
+            connection: "arn:aws:iam::123456789000:role/MaterializeConnection"
+            environment: "arn:aws:iam::123456789000:role/MaterializeEnvironment"
+  clusters:
+    sizes:
+      bootstrap:
+        cpu_exclusive: false
+        cpu_limit: null
+        credits_per_hour: '1'
+        disabled: false
+        disk_limit: null
+        is_cc: true
+        memory_limit: 4Gi
+        scale: 1
+        workers: 1
+      2-4:
+        cpu_exclusive: false
+        cpu_limit: null
+        credits_per_hour: '8'
+        disabled: false
+        disk_limit: null
+        is_cc: true
+        memory_limit: 4Gi
+        scale: 2
+        workers: 4
+      free:
+        cpu_exclusive: false
+        cpu_limit: null
+        credits_per_hour: '0'
+        disabled: true
+        disk_limit: null
+        is_cc: true
+        memory_limit: 4Gi
+        scale: 0
+        workers: 0
+      1cc:
+        cpu_exclusive: false
+        cpu_limit: null
+        credits_per_hour: '1'
+        disabled: false
+        disk_limit: null
+        is_cc: true
+        memory_limit: 4Gi
+        scale: 1
+        workers: 1
+      1C:
+        cpu_exclusive: false
+        cpu_limit: null
+        credits_per_hour: '1'
+        disabled: false
+        disk_limit: null
+        is_cc: true
+        memory_limit: 4Gi
+        scale: 1
+        workers: 1
+      1-no-disk:
+        cpu_exclusive: false
+        cpu_limit: null
+        credits_per_hour: '1'
+        disabled: false
+        disk_limit: null
+        is_cc: false
+        memory_limit: 4Gi
+        scale: 1
+        workers: 1
+      2-no-disk:
+        cpu_exclusive: false
+        cpu_limit: null
+        credits_per_hour: '2'
+        disabled: false
+        disk_limit: null
+        is_cc: false
+        memory_limit: 4Gi
+        scale: 1
+        workers: 2
+      '1':
+        cpu_exclusive: false
+        cpu_limit: null
+        credits_per_hour: '1'
+        disabled: false
+        disk_limit: null
+        is_cc: true
+        memory_limit: 4Gi
+        scale: 1
+        workers: 1
+      1-4G:
+        cpu_exclusive: false
+        cpu_limit: null
+        credits_per_hour: '1'
+        disabled: false
+        disk_limit: null
+        is_cc: true
+        memory_limit: 4 GiB
+        scale: 1
+        workers: 1
+      1-8G:
+        cpu_exclusive: false
+        cpu_limit: null
+        credits_per_hour: '1'
+        disabled: false
+        disk_limit: null
+        is_cc: true
+        memory_limit: 8 GiB
+        scale: 1
+        workers: 1
+      1-16G:
+        cpu_exclusive: false
+        cpu_limit: null
+        credits_per_hour: '1'
+        disabled: false
+        disk_limit: null
+        is_cc: true
+        memory_limit: 16 GiB
+        scale: 1
+        workers: 1
+      1-32G:
+        cpu_exclusive: false
+        cpu_limit: null
+        credits_per_hour: '1'
+        disabled: false
+        disk_limit: null
+        is_cc: true
+        memory_limit: 32 GiB
+        scale: 1
+        workers: 1
+      1-1:
+        cpu_exclusive: false
+        cpu_limit: null
+        credits_per_hour: '1'
+        disabled: false
+        disk_limit: null
+        is_cc: true
+        memory_limit: 4Gi
+        scale: 1
+        workers: 1
+      mem-1:
+        cpu_exclusive: false
+        cpu_limit: null
+        credits_per_hour: '1'
+        disabled: false
+        disk_limit: null
+        is_cc: true
+        memory_limit: 1 GiB
+        scale: 1
+        workers: 1
+      '2':
+        cpu_exclusive: false
+        cpu_limit: null
+        credits_per_hour: '2'
+        disabled: false
+        disk_limit: null
+        is_cc: true
+        memory_limit: 4Gi
+        scale: 1
+        workers: 2
+      2-4G:
+        cpu_exclusive: false
+        cpu_limit: null
+        credits_per_hour: '2'
+        disabled: false
+        disk_limit: null
+        is_cc: true
+        memory_limit: 4 GiB
+        scale: 1
+        workers: 2
+      2-8G:
+        cpu_exclusive: false
+        cpu_limit: null
+        credits_per_hour: '2'
+        disabled: false
+        disk_limit: null
+        is_cc: true
+        memory_limit: 8 GiB
+        scale: 1
+        workers: 2
+      2-16G:
+        cpu_exclusive: false
+        cpu_limit: null
+        credits_per_hour: '2'
+        disabled: false
+        disk_limit: null
+        is_cc: true
+        memory_limit: 16 GiB
+        scale: 1
+        workers: 2
+      2-32G:
+        cpu_exclusive: false
+        cpu_limit: null
+        credits_per_hour: '2'
+        disabled: false
+        disk_limit: null
+        is_cc: true
+        memory_limit: 32 GiB
+        scale: 1
+        workers: 2
+      2-1:
+        cpu_exclusive: false
+        cpu_limit: null
+        credits_per_hour: '2'
+        disabled: false
+        disk_limit: null
+        is_cc: true
+        memory_limit: 4Gi
+        scale: 2
+        workers: 1
+      2-2:
+        cpu_exclusive: false
+        cpu_limit: null
+        credits_per_hour: '4'
+        disabled: false
+        disk_limit: null
+        is_cc: true
+        memory_limit: 4Gi
+        scale: 2
+        workers: 2
+      mem-2:
+        cpu_exclusive: false
+        cpu_limit: null
+        credits_per_hour: '2'
+        disabled: false
+        disk_limit: null
+        is_cc: true
+        memory_limit: 2 GiB
+        scale: 1
+        workers: 2
+      '4':
+        cpu_exclusive: false
+        cpu_limit: null
+        credits_per_hour: '4'
+        disabled: false
+        disk_limit: null
+        is_cc: true
+        memory_limit: 4Gi
+        scale: 1
+        workers: 4
+      4-4G:
+        cpu_exclusive: false
+        cpu_limit: null
+        credits_per_hour: '4'
+        disabled: false
+        disk_limit: null
+        is_cc: true
+        memory_limit: 4 GiB
+        scale: 1
+        workers: 4
+      4-8G:
+        cpu_exclusive: false
+        cpu_limit: null
+        credits_per_hour: '4'
+        disabled: false
+        disk_limit: null
+        is_cc: true
+        memory_limit: 8 GiB
+        scale: 1
+        workers: 4
+      4-16G:
+        cpu_exclusive: false
+        cpu_limit: null
+        credits_per_hour: '4'
+        disabled: false
+        disk_limit: null
+        is_cc: true
+        memory_limit: 16 GiB
+        scale: 1
+        workers: 4
+      4-32G:
+        cpu_exclusive: false
+        cpu_limit: null
+        credits_per_hour: '4'
+        disabled: false
+        disk_limit: null
+        is_cc: true
+        memory_limit: 32 GiB
+        scale: 1
+        workers: 4
+      4-1:
+        cpu_exclusive: false
+        cpu_limit: null
+        credits_per_hour: '4'
+        disabled: false
+        disk_limit: null
+        is_cc: true
+        memory_limit: 4Gi
+        scale: 4
+        workers: 1
+      4-4:
+        cpu_exclusive: false
+        cpu_limit: null
+        credits_per_hour: '16'
+        disabled: false
+        disk_limit: null
+        is_cc: true
+        memory_limit: 4Gi
+        scale: 4
+        workers: 4
+      mem-4:
+        cpu_exclusive: false
+        cpu_limit: null
+        credits_per_hour: '4'
+        disabled: false
+        disk_limit: null
+        is_cc: true
+        memory_limit: 4 GiB
+        scale: 1
+        workers: 4
+      '8':
+        cpu_exclusive: false
+        cpu_limit: null
+        credits_per_hour: '8'
+        disabled: false
+        disk_limit: null
+        is_cc: true
+        memory_limit: 4Gi
+        scale: 1
+        workers: 8
+      8-4G:
+        cpu_exclusive: false
+        cpu_limit: null
+        credits_per_hour: '8'
+        disabled: false
+        disk_limit: null
+        is_cc: true
+        memory_limit: 4 GiB
+        scale: 1
+        workers: 8
+      8-8G:
+        cpu_exclusive: false
+        cpu_limit: null
+        credits_per_hour: '8'
+        disabled: false
+        disk_limit: null
+        is_cc: true
+        memory_limit: 8 GiB
+        scale: 1
+        workers: 8
+      8-16G:
+        cpu_exclusive: false
+        cpu_limit: null
+        credits_per_hour: '8'
+        disabled: false
+        disk_limit: null
+        is_cc: true
+        memory_limit: 16 GiB
+        scale: 1
+        workers: 8
+      8-32G:
+        cpu_exclusive: false
+        cpu_limit: null
+        credits_per_hour: '8'
+        disabled: false
+        disk_limit: null
+        is_cc: true
+        memory_limit: 32 GiB
+        scale: 1
+        workers: 8
+      8-1:
+        cpu_exclusive: false
+        cpu_limit: null
+        credits_per_hour: '8'
+        disabled: false
+        disk_limit: null
+        is_cc: true
+        memory_limit: 4Gi
+        scale: 8
+        workers: 1
+      8-8:
+        cpu_exclusive: false
+        cpu_limit: null
+        credits_per_hour: '64'
+        disabled: false
+        disk_limit: null
+        is_cc: true
+        memory_limit: 4Gi
+        scale: 8
+        workers: 8
+      mem-8:
+        cpu_exclusive: false
+        cpu_limit: null
+        credits_per_hour: '8'
+        disabled: false
+        disk_limit: null
+        is_cc: true
+        memory_limit: 8 GiB
+        scale: 1
+        workers: 8
+      '16':
+        cpu_exclusive: false
+        cpu_limit: null
+        credits_per_hour: '16'
+        disabled: false
+        disk_limit: null
+        is_cc: true
+        memory_limit: 4Gi
+        scale: 1
+        workers: 16
+      16-4G:
+        cpu_exclusive: false
+        cpu_limit: null
+        credits_per_hour: '16'
+        disabled: false
+        disk_limit: null
+        is_cc: true
+        memory_limit: 4 GiB
+        scale: 1
+        workers: 16
+      16-8G:
+        cpu_exclusive: false
+        cpu_limit: null
+        credits_per_hour: '16'
+        disabled: false
+        disk_limit: null
+        is_cc: true
+        memory_limit: 8 GiB
+        scale: 1
+        workers: 16
+      16-16G:
+        cpu_exclusive: false
+        cpu_limit: null
+        credits_per_hour: '16'
+        disabled: false
+        disk_limit: null
+        is_cc: true
+        memory_limit: 16 GiB
+        scale: 1
+        workers: 16
+      16-32G:
+        cpu_exclusive: false
+        cpu_limit: null
+        credits_per_hour: '16'
+        disabled: false
+        disk_limit: null
+        is_cc: true
+        memory_limit: 32 GiB
+        scale: 1
+        workers: 16
+      16-1:
+        cpu_exclusive: false
+        cpu_limit: null
+        credits_per_hour: '16'
+        disabled: false
+        disk_limit: null
+        is_cc: true
+        memory_limit: 4Gi
+        scale: 16
+        workers: 1
+      16-16:
+        cpu_exclusive: false
+        cpu_limit: null
+        credits_per_hour: '256'
+        disabled: false
+        disk_limit: null
+        is_cc: true
+        memory_limit: 4Gi
+        scale: 16
+        workers: 16
+      mem-16:
+        cpu_exclusive: false
+        cpu_limit: null
+        credits_per_hour: '16'
+        disabled: false
+        disk_limit: null
+        is_cc: true
+        memory_limit: 16 GiB
+        scale: 1
+        workers: 16
+      '32':
+        cpu_exclusive: false
+        cpu_limit: null
+        credits_per_hour: '32'
+        disabled: false
+        disk_limit: null
+        is_cc: true
+        memory_limit: 4Gi
+        scale: 1
+        workers: 32
+      32-4G:
+        cpu_exclusive: false
+        cpu_limit: null
+        credits_per_hour: '32'
+        disabled: false
+        disk_limit: null
+        is_cc: true
+        memory_limit: 4 GiB
+        scale: 1
+        workers: 32
+      32-8G:
+        cpu_exclusive: false
+        cpu_limit: null
+        credits_per_hour: '32'
+        disabled: false
+        disk_limit: null
+        is_cc: true
+        memory_limit: 8 GiB
+        scale: 1
+        workers: 32
+      32-16G:
+        cpu_exclusive: false
+        cpu_limit: null
+        credits_per_hour: '32'
+        disabled: false
+        disk_limit: null
+        is_cc: true
+        memory_limit: 16 GiB
+        scale: 1
+        workers: 32
+      32-32G:
+        cpu_exclusive: false
+        cpu_limit: null
+        credits_per_hour: '32'
+        disabled: false
+        disk_limit: null
+        is_cc: true
+        memory_limit: 32 GiB
+        scale: 1
+        workers: 32
+      32-1:
+        cpu_exclusive: false
+        cpu_limit: null
+        credits_per_hour: '32'
+        disabled: false
+        disk_limit: null
+        is_cc: true
+        memory_limit: 4Gi
+        scale: 32
+        workers: 1
+      32-32:
+        cpu_exclusive: false
+        cpu_limit: null
+        credits_per_hour: '1024'
+        disabled: false
+        disk_limit: null
+        is_cc: true
+        memory_limit: 4Gi
+        scale: 32
+        workers: 32
+      mem-32:
+        cpu_exclusive: false
+        cpu_limit: null
+        credits_per_hour: '32'
+        disabled: false
+        disk_limit: null
+        is_cc: true
+        memory_limit: 32 GiB
+        scale: 1
+        workers: 32
+    defaultSizes:
+      default: bootstrap
+      system: bootstrap
+      probe: bootstrap
+      support: bootstrap
+      catalogServer: bootstrap
+      analytics: bootstrap
+storage:
+  storageClass:
+    name: standard

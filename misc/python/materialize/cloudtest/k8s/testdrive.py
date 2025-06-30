@@ -29,24 +29,18 @@ from materialize.ui import CommandFailureCausedUIError
 class TestdriveBase:
     def __init__(
         self,
+        materialize_url: str,
+        materialize_internal_url: str,
         aws_region: str | None = None,
-        materialize_url: str | None = None,
-        materialize_internal_url: str | None = None,
         kafka_addr: str | None = None,
         schema_registry_url: str | None = None,
     ) -> None:
         self.aws_region = aws_region
-        self.materialize_url = (
-            materialize_url
-            or "postgres://materialize:materialize@environmentd:6875/materialize"
-        )
-        self.materialize_internal_url = (
-            materialize_internal_url
-            or "postgres://mz_system@environmentd:6877/materialize"
-        )
+        self.materialize_url = materialize_url
+        self.materialize_internal_url = materialize_internal_url
         self.kafka_addr = kafka_addr or "redpanda:9092"
         self.schema_registry_url = schema_registry_url or "http://redpanda:8081"
-        self.aws_endpoint = "http://minio-service.default:9000"
+        self.aws_endpoint = f"http://minio-service.{DEFAULT_K8S_NAMESPACE}:9000"
 
     def run(
         self,
@@ -112,10 +106,10 @@ class TestdrivePod(K8sPod, TestdriveBase):
     def __init__(
         self,
         release_mode: bool,
-        aws_region: str | None = None,
+        materialize_url: str,
+        materialize_internal_url: str,
         namespace: str = DEFAULT_K8S_NAMESPACE,
-        materialize_url: str | None = None,
-        materialize_internal_url: str | None = None,
+        aws_region: str | None = None,
         kafka_addr: str | None = None,
         schema_registry_url: str | None = None,
         apply_node_selectors: bool = False,

@@ -12,6 +12,8 @@ import operator
 import os
 import urllib.parse
 from collections.abc import Callable
+from typing import Literal
+from uuid import uuid4
 
 from kubernetes.client import (
     V1ConfigMap,
@@ -40,10 +42,12 @@ from kubernetes.client import (
     V1Volume,
     V1VolumeMount,
 )
+from kubernetes.config import new_client_from_config  # type: ignore
 
 from materialize import MZ_ROOT
 from materialize.cloudtest import DEFAULT_K8S_NAMESPACE
 from materialize.cloudtest.k8s.api.k8s_configmap import K8sConfigMap
+from materialize.cloudtest.k8s.api.k8s_resource import K8sResource
 from materialize.cloudtest.k8s.api.k8s_secret import K8sSecret
 from materialize.cloudtest.k8s.api.k8s_service import K8sService
 from materialize.cloudtest.k8s.api.k8s_stateful_set import K8sStatefulSet
@@ -53,14 +57,165 @@ from materialize.mzcompose import (
     cluster_replica_size_map,
     get_default_system_parameters,
 )
+from materialize.cloudtest.util.wait import wait
+
+BACKEND_SECRET_NAME="materialize-backend-secret"
+
+class K8sMaterialize(K8sResource):
+
+    def __init__(
+        self,
+        tag: str | None,
+        coverage_mode: bool = False,
+        sanitizer_mode: str = "none",
+        log_filter: str | None = None,
+        release_mode: bool = True,
+        #name: str,
+        #namespace: str,
+        #environmentd_image_ref: str,
+        #environmentd_extra_args: list[str] | None,
+        #environmentd_extra_env: list[str] | None,
+        #environment_id: str | None,
+        #authenticator_kind: Literal["None"] | Literal["Password"],
+        #enable_rbac: bool,
+    ):
+        #super().__init__(namespace)
+        super().__init__(DEFAULT_K8S_NAMESPACE)
+        self.tag = tag
+        self.release_mode = release_mode
+        self.group = "materialize.cloud"
+        self.version = "v1alpha1"
+        self.name = "cloudtest"
+        self.coverage_mode = coverage_mode
+        self.sanitizer_mode = sanitizer_mode
+        self.log_filter = log_filter
+
+        self.system_parameter_defaults = get_default_system_parameters()
+        self.system_parameter_defaults["upsert_rocksdb_auto_spill_to_disk"] = "false"
+        if self.log_filter:
+            self.system_parameter_defaults["log_filter"] = self.log_filter
+
+        self.extra_env = [
+            {
+                "name": "MZ_SOFT_ASSERTIONS",
+                "value": "1",
+            },
+        ]
+        if self.coverage_mode:
+            self.extra_env.extend(
+                [
+                    {
+                        "name": "LLVM_PROFILE_FILE",
+                        "value": "/coverage/environmentd-%p-%9m%c.profraw",
+                    },
+                    {
+                        "name": "CI_COVERAGE_ENABLED",
+                        "value": "1",
+                    },
+                    {
+                        "name": "MZ_ORCHESTRATOR_KUBERNETES_COVERAGE",
+                        "value": "1",
+                    },
+                ]
+            )
+        if self.sanitizer_mode != "none":
+            self.extra_env.extend(
+                [
+                    {
+                        "name": "CI_SANITIZER_MODE",
+                        "value": self.sanitizer_mode,
+                    },
+                ]
+            )
+
+        self.generate()
+
+    def generate(self):
+        request_rollout = str(uuid4())
+        clusterd_image = self.image(
+            "clusterd",
+            tag=self.tag,
+            release_mode=self.release_mode,
+        )
+        self.resource = {
+            "apiVersion": f"{self.group}/{self.version}",
+            "kind": "Materialize",
+            #"spec": {
+            #    "environmentdImageRef": environmentd_image_ref,
+            #    "environmentdExtraArgs": environmentd_extra_args,
+            #    "environmentdExtraEnv": environmentd_extra_env,
+            #    "backendSecretName": BACKEND_SECRET_NAME,
+            #    "environmentId": environment_id,
+            #    "authenticatorKind": authenticator_kind,
+            #    "enableRbac": enable_rbac,
+            #},
+            "metadata": {
+                "name": self.name,
+                "namespace": DEFAULT_K8S_NAMESPACE,
+            },
+            "spec": {
+                #"environmentdImageRef": f"materialize/environmentd:{self.tag}",
+                "environmentdImageRef": self.image(
+                    "environmentd",
+                    tag=self.tag,
+                    release_mode=self.release_mode,
+                ),
+                "backendSecretName": BACKEND_SECRET_NAME,
+                "authenticatorKind": "None",
+                "enableRbac": False,
+                "environmentdExtraArgs": [
+                    #f"--cluster-replica-sizes={json.dumps(cluster_replica_size_map())}",
+                    #f"--bootstrap-default-cluster-replica-size={bootstrap_cluster_replica_size()}",
+                    #f"--bootstrap-builtin-system-cluster-replica-size={bootstrap_cluster_replica_size()}",
+                    #f"--bootstrap-builtin-probe-cluster-replica-size={bootstrap_cluster_replica_size()}",
+                    #f"--bootstrap-builtin-support-cluster-replica-size={bootstrap_cluster_replica_size()}",
+                    #f"--bootstrap-builtin-catalog-server-cluster-replica-size={bootstrap_cluster_replica_size()}",
+                    #f"--bootstrap-builtin-analytics-cluster-replica-size={bootstrap_cluster_replica_size()}",
+                    f"--aws-external-id-prefix=eb5cb59b-e2fe-41f3-87ca-d2176a495345",
+                    f"--aws-privatelink-availability-zones=use1-az1,use1-az2",
+                    #f"--aws-connection-role-arn=arn:aws:iam::123456789000:role/MaterializeConnection",
+                    *[
+                        f"--system-parameter-default={key}={value}"
+                        for key, value in self.system_parameter_defaults.items()
+                    ],
+                    "--announce-egress-address=1.2.3.4/32,88.77.66.0/28,2001:db8::/60",
+                    f"--clusterd-image={clusterd_image}",
+                ],
+                "environmentdExtraEnv": self.extra_env,
+                "inPlaceRollout": True,
+                "requestRollout": request_rollout,
+            },
+        }
+
+    def create(self) -> None:
+        self.apply()
+
+    def apply(self) -> None:
+        self.generate()
+        self.kubectl("apply", "-f", "-", input=json.dumps(self.resource))
+        wait(
+            condition=f"jsonpath={{.status.lastCompletedRolloutRequest}}={self.resource['spec']['requestRollout']}",
+            resource=f"materialize/{self.name}",
+        )
+        wait(
+            condition="condition=Ready",
+            resource="pod",
+            label="app=environmentd",
+        )
+        #mz = self.kubectl("get", "materialize", self.name)
 
 
-class EnvironmentdSecret(K8sSecret):
-    def __init__(self, namespace: str = DEFAULT_K8S_NAMESPACE) -> None:
-        super().__init__(namespace)
+class BackendSecret(K8sSecret):
+    def __init__(self) -> None:
+        super().__init__(DEFAULT_K8S_NAMESPACE)
         self.secret = V1Secret(
-            metadata=V1ObjectMeta(name="license-key"),
+            metadata=V1ObjectMeta(
+                name=BACKEND_SECRET_NAME,
+                namespace=DEFAULT_K8S_NAMESPACE,
+            ),
             string_data={
+                "metadata_backend_url": f"postgres://root@cockroach.{DEFAULT_K8S_NAMESPACE}:26257",
+                "persist_backend_url": f"s3://minio:minio123@persist/persist?endpoint=http://minio-service.{DEFAULT_K8S_NAMESPACE}:9000&region=minio",
                 "license_key": os.environ["MZ_CI_LICENSE_KEY"],
             },
         )
@@ -89,7 +244,11 @@ class EnvironmentdService(K8sService):
         self.service = V1Service(
             api_version="v1",
             kind="Service",
-            metadata=V1ObjectMeta(name="environmentd", labels={"app": "environmentd"}),
+            metadata=V1ObjectMeta(
+                name="environmentd",
+                namespace=DEFAULT_K8S_NAMESPACE,
+                labels={"app": "environmentd"},
+            ),
             spec=V1ServiceSpec(
                 type="NodePort",
                 ports=[service_port, internal_port, http_port, internal_http_port],

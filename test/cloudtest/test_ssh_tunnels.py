@@ -9,6 +9,7 @@
 
 from textwrap import dedent
 
+from materialize.cloudtest import DEFAULT_K8S_NAMESPACE
 from materialize.cloudtest.app.materialize_application import MaterializeApplication
 from materialize.cloudtest.util.wait import wait
 
@@ -44,6 +45,7 @@ def test_ssh_tunnels(mz: MaterializeApplication) -> None:
         "bash",
         "-c",
         f"echo '{public_key}' > /etc/authorized_keys/mz",
+        namespace=DEFAULT_K8S_NAMESPACE,
     )
 
     mz.testdrive.run(

@@ -10,6 +10,7 @@
 
 from __future__ import annotations
 
+import logging
 import os
 from collections.abc import Callable
 from pathlib import Path
@@ -28,6 +29,7 @@ from materialize.git import get_version_tags
 from materialize.mz_version import MzVersion
 
 MZ_ROOT = Path(os.environ["MZ_ROOT"])
+LOGGER = logging.getLogger(__name__)
 
 
 def get_self_managed_versions() -> list[MzVersion]:
@@ -279,6 +281,7 @@ def get_previous_published_version(
 ) -> MzVersion:
     """Get the highest preceding mz version to the specified version for which an image is published."""
     excluded_versions = set()
+    LOGGER.info("get_previous_published_version")
 
     while True:
         previous_published_version = get_previous_mz_version(

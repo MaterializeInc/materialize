@@ -11,7 +11,7 @@ import logging
 import subprocess
 
 from materialize import ui
-from materialize.cloudtest import DEFAULT_K8S_CONTEXT_NAME
+from materialize.cloudtest import DEFAULT_K8S_CONTEXT_NAME, DEFAULT_K8S_NAMESPACE
 from materialize.cloudtest.util.print_pods import print_pods
 from materialize.ui import UIError
 
@@ -25,7 +25,7 @@ def wait(
     context: str = DEFAULT_K8S_CONTEXT_NAME,
     *,
     label: str | None = None,
-    namespace: str | None = None,
+    namespace: str | None = DEFAULT_K8S_NAMESPACE,
 ) -> None:
     cmd = [
         "kubectl",
