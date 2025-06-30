@@ -565,7 +565,6 @@ def workflow_load_test(c: Composition, parser: WorkflowArgumentParser) -> None:
     backpressure_bytes = 50 * 1024 * 1024  # 50MB
 
     c.down(destroy_volumes=True)
-    c.up("redpanda", "materialized", "clusterd1")
     # initial hydration
     with c.override(
         Testdrive(no_reset=True, consistent_seed=True, default_timeout=f"{5 * 60}s"),
@@ -576,6 +575,7 @@ def workflow_load_test(c: Composition, parser: WorkflowArgumentParser) -> None:
             additional_system_parameter_defaults={
                 "disk_cluster_replicas_default": "true",
                 "enable_disk_cluster_replicas": "true",
+                "unsafe_enable_unorchestrated_cluster_replicas": "true",
                 "upsert_rocksdb_auto_spill_threshold_bytes": "250",
                 # Force backpressure to be enabled.
                 "storage_dataflow_max_inflight_bytes": f"{backpressure_bytes}",
@@ -588,6 +588,7 @@ def workflow_load_test(c: Composition, parser: WorkflowArgumentParser) -> None:
             name="clusterd1",
         ),
     ):
+        c.up("redpanda", "materialized", "clusterd1")
         c.up("testdrive", persistent=True)
         c.exec("testdrive", "load-test/setup.td")
         c.testdrive(
@@ -630,6 +631,7 @@ def workflow_load_test(c: Composition, parser: WorkflowArgumentParser) -> None:
                 {
                     "disk_cluster_replicas_default": "true",
                     "enable_disk_cluster_replicas": "true",
+                    "unsafe_enable_unorchestrated_cluster_replicas": "true",
                     "upsert_rocksdb_auto_spill_threshold_bytes": "250",
                     # Force backpressure to be enabled.
                     "storage_dataflow_max_inflight_bytes": f"{backpressure_bytes}",
@@ -642,6 +644,7 @@ def workflow_load_test(c: Composition, parser: WorkflowArgumentParser) -> None:
                     "storage_rocksdb_use_merge_operator": "true",
                     "disk_cluster_replicas_default": "true",
                     "enable_disk_cluster_replicas": "true",
+                    "unsafe_enable_unorchestrated_cluster_replicas": "true",
                     "upsert_rocksdb_auto_spill_threshold_bytes": "250",
                     # Force backpressure to be enabled.
                     "storage_dataflow_max_inflight_bytes": f"{backpressure_bytes}",
@@ -653,6 +656,7 @@ def workflow_load_test(c: Composition, parser: WorkflowArgumentParser) -> None:
                 {
                     "disk_cluster_replicas_default": "true",
                     "enable_disk_cluster_replicas": "true",
+                    "unsafe_enable_unorchestrated_cluster_replicas": "true",
                     "upsert_rocksdb_auto_spill_threshold_bytes": "250",
                     # Force backpressure to be enabled.
                     "storage_dataflow_max_inflight_bytes": f"{backpressure_bytes}",
@@ -675,8 +679,8 @@ def workflow_load_test(c: Composition, parser: WorkflowArgumentParser) -> None:
                 },
             ),
         ]
-        last_latency = None
         for scenario_name, mz_configs in scenarios:
+            last_latency = None
             with c.override(
                 Materialized(
                     options=[
@@ -690,33 +694,16 @@ def workflow_load_test(c: Composition, parser: WorkflowArgumentParser) -> None:
                 c.kill("materialized", "clusterd1")
                 print(f"Running rehydration for scenario {scenario_name}")
                 c.up("materialized", "clusterd1")
-                c.testdrive(
-                    dedent(
-                        f"""
-                > select sum(records_indexed)
-                  from mz_internal.mz_source_statistics_raw st
-                  join mz_sources s on s.id = st.id
-                  where name = 's1';
-                {repeat + 2}
-
-                > select bool_and(rehydration_latency IS NOT NULL)
-                  from mz_internal.mz_source_statistics_raw st
-                  join mz_sources s on s.id = st.id
-                  where name = 's1';
-                true
-                """
-                    )
-                )
                 # ensure we wait till the stat is updated
                 rehydration_latency = last_latency
-                while rehydration_latency == last_latency:
+                while rehydration_latency is None or rehydration_latency != last_latency:
+                    last_latency = rehydration_latency
                     rehydration_latency = c.sql_query(
                         """select max(rehydration_latency)
                         from mz_internal.mz_source_statistics_raw st
                         join mz_sources s on s.id = st.id
                         where name = 's1';"""
-                    )[0]
-                last_latency = rehydration_latency
+                    )[0][0]
                 print(f"Scenario {scenario_name} took {rehydration_latency} ms")
 
 
