@@ -2101,7 +2101,7 @@ impl SqlServerConnectionDetails<InlinedConnection> {
         inner_config.port(self.port);
         inner_config.database(self.database.clone());
         // TODO(sql_server1): Figure out the right settings for encryption.
-        // inner_config.encryption(self.encryption.into());
+        inner_config.encryption(self.encryption.into());
         inner_config.application_name("materialize");
 
         // Read our auth settings from
