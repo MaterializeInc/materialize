@@ -58,7 +58,7 @@ use std::fmt::Debug;
 use std::mem;
 use std::ops::Range;
 use std::sync::Arc;
-use tracing::{info, warn};
+use tracing::warn;
 
 use crate::internal::paths::WriterKey;
 use differential_dataflow::lattice::Lattice;
@@ -1105,19 +1105,7 @@ impl<T: Timestamp + Lattice + Codec64> SpineBatch<T> {
             "run_splits must have one fewer element than run_meta"
         );
 
-        // let desc = if parts.is_empty() && run_splits.is_empty() {
-        //     info!(
-        //         "replacement batch is empty, using original desc: {:?} instead of the replacement {:?}",
-        //         original.desc, replacement.desc
-        //     );
-        //     original.desc.clone()
-        // } else {
-        info!(
-            "using replacement desc: {:?} instead of the original {:?}",
-            replacement.desc, original.desc
-        );
         let desc = replacement.desc.clone();
-        // };
 
         Ok(HollowBatch {
             desc: desc.clone(),
@@ -1209,8 +1197,6 @@ impl<T: Timestamp + Lattice + Codec64> SpineBatch<T> {
             // We only need to replace a single part. Here we still care about the run_indices
             // because we only want to replace the runs that are in the merge result.
             let batch = &self.parts[range[0]];
-            info!("Replacing parts in batch: {:?}", batch.id);
-            info!("Replacement inputs: {:?}", inputs);
             let batch = &batch.batch;
             let run_ids = inputs
                 .values()
@@ -1230,6 +1216,16 @@ impl<T: Timestamp + Lattice + Codec64> SpineBatch<T> {
             };
 
             if let (Some(old_diffs_sum), Some(new_diffs_sum)) = (old_diffs_sum, new_diffs_sum) {
+                if old_diffs_sum != new_diffs_sum {
+                    warn!(
+                        "merge res diffs sum ({:?}) did not match spine batch diffs sum ({:?})",
+                        new_diffs_sum, old_diffs_sum
+                    );
+                    warn!("merge res: {res:#?}");
+                    warn!("spine batch: {batch:#?}");
+                    warn!("run_ids: {run_ids:?}");
+                    warn!("replacement_range: {replacement_range:?}");
+                }
                 assert_eq!(
                     old_diffs_sum, new_diffs_sum,
                     "merge res diffs sum ({:?}) did not match spine batch diffs sum ({:?})",
