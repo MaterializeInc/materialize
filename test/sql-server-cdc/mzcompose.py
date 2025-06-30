@@ -32,7 +32,7 @@ SERVICES = [
     SqlServer(
         volumes_extra=[
             "secrets:/var/opt/mssql/certs",
-            f"{TLS_CONF_PATH}:/var/opt/mssql/mssconfig.conf",
+            f"{TLS_CONF_PATH}:/var/opt/mssql/mssql.conf",
         ]
     ),
 ]
