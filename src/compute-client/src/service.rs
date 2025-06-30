@@ -235,7 +235,7 @@ where
         //  * Forward `CreateTimely` and `UpdateConfiguration` commands to all shards.
         //  * Forward all other commands to the first shard only.
         match command {
-            ComputeCommand::CreateTimely { config, epoch } => {
+            ComputeCommand::CreateTimely { config, nonce } => {
                 let timely_cmds = config.split_command(self.parts);
 
                 timely_cmds
@@ -243,7 +243,7 @@ where
                     .map(|config| {
                         Some(ComputeCommand::CreateTimely {
                             config: Box::new(config),
-                            epoch,
+                            nonce,
                         })
                     })
                     .collect()

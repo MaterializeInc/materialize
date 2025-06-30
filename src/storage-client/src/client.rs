@@ -22,7 +22,7 @@ use async_trait::async_trait;
 use differential_dataflow::difference::Semigroup;
 use differential_dataflow::lattice::Lattice;
 use mz_cluster_client::ReplicaId;
-use mz_cluster_client::client::{ClusterStartupEpoch, TimelyConfig, TryIntoTimelyConfig};
+use mz_cluster_client::client::{TimelyConfig, TryIntoTimelyConfig};
 use mz_ore::assert_none;
 use mz_persist_client::batch::{BatchBuilder, ProtoBatch};
 use mz_persist_client::write::WriteHandle;
@@ -113,7 +113,7 @@ pub enum StorageCommand<T = mz_repr::Timestamp> {
     /// we want created, before other commands are sent.
     CreateTimely {
         config: Box<TimelyConfig>,
-        epoch: ClusterStartupEpoch,
+        nonce: Uuid,
     },
     /// Indicates that the controller has sent all commands reflecting its
     /// initial state.
@@ -298,9 +298,9 @@ impl RustType<ProtoStorageCommand> for StorageCommand<mz_repr::Timestamp> {
         use proto_storage_command::*;
         ProtoStorageCommand {
             kind: Some(match self {
-                StorageCommand::CreateTimely { config, epoch } => CreateTimely(ProtoCreateTimely {
+                StorageCommand::CreateTimely { config, nonce } => CreateTimely(ProtoCreateTimely {
                     config: Some(*config.into_proto()),
-                    epoch: Some(epoch.into_proto()),
+                    nonce: Some(nonce.into_proto()),
                 }),
                 StorageCommand::InitializationComplete => InitializationComplete(()),
                 StorageCommand::AllowWrites => AllowWrites(()),
@@ -327,10 +327,10 @@ impl RustType<ProtoStorageCommand> for StorageCommand<mz_repr::Timestamp> {
         use proto_storage_command::Kind::*;
         use proto_storage_command::*;
         match proto.kind {
-            Some(CreateTimely(ProtoCreateTimely { config, epoch })) => {
+            Some(CreateTimely(ProtoCreateTimely { config, nonce })) => {
                 let config = Box::new(config.into_rust_if_some("ProtoCreateTimely::config")?);
-                let epoch = epoch.into_rust_if_some("ProtoCreateTimely::epoch")?;
-                Ok(StorageCommand::CreateTimely { config, epoch })
+                let nonce = nonce.into_rust_if_some("ProtoCreateTimely::nonce")?;
+                Ok(StorageCommand::CreateTimely { config, nonce })
             }
             Some(InitializationComplete(())) => Ok(StorageCommand::InitializationComplete),
             Some(AllowWrites(())) => Ok(StorageCommand::AllowWrites),
@@ -854,7 +854,7 @@ where
         self.observe_command(&command);
 
         match command {
-            StorageCommand::CreateTimely { config, epoch } => {
+            StorageCommand::CreateTimely { config, nonce } => {
                 let timely_cmds = config.split_command(self.parts);
 
                 let timely_cmds = timely_cmds
@@ -862,7 +862,7 @@ where
                     .map(|config| {
                         Some(StorageCommand::CreateTimely {
                             config: Box::new(config),
-                            epoch,
+                            nonce,
                         })
                     })
                     .collect();
@@ -1080,9 +1080,9 @@ impl RustType<ProtoCompaction> for (GlobalId, Antichain<mz_repr::Timestamp>) {
 }
 
 impl TryIntoTimelyConfig for StorageCommand {
-    fn try_into_timely_config(self) -> Result<(TimelyConfig, ClusterStartupEpoch), Self> {
+    fn try_into_timely_config(self) -> Result<(TimelyConfig, Uuid), Self> {
         match self {
-            StorageCommand::CreateTimely { config, epoch } => Ok((*config, epoch)),
+            StorageCommand::CreateTimely { config, nonce } => Ok((*config, nonce)),
             cmd => Err(cmd),
         }
     }

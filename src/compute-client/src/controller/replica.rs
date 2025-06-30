@@ -27,6 +27,7 @@ use tokio::select;
 use tokio::sync::mpsc::error::SendError;
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender, unbounded_channel};
 use tracing::{debug, info, trace, warn};
+use uuid::Uuid;
 
 use crate::controller::instance::ReplicaResponse;
 use crate::controller::sequential_hydration::SequentialHydration;
@@ -278,7 +279,7 @@ where
     /// contain replica-specific fields that must be adjusted before sending.
     fn specialize_command(&self, command: &mut ComputeCommand<T>) {
         match command {
-            ComputeCommand::CreateTimely { config, epoch } => {
+            ComputeCommand::CreateTimely { config, nonce } => {
                 **config = TimelyConfig {
                     workers: self.config.location.workers,
                     process: 0,
@@ -290,7 +291,7 @@ where
                     enable_zero_copy_lgalloc: self.config.enable_zero_copy_lgalloc,
                     zero_copy_limit: self.config.zero_copy_limit,
                 };
-                *epoch = self.epoch;
+                *nonce = Uuid::new_v4();
             }
             ComputeCommand::CreateInstance(config) => {
                 config.logging = self.config.logging.clone();

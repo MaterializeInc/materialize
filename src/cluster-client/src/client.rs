@@ -17,6 +17,7 @@ use proptest::prelude::{Arbitrary, any};
 use proptest::strategy::{BoxedStrategy, Strategy};
 use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
+use uuid::Uuid;
 
 include!(concat!(env!("OUT_DIR"), "/mz_cluster_client.client.rs"));
 
@@ -218,9 +219,9 @@ impl TimelyConfig {
 /// A trait for specific cluster commands that can be unpacked into
 /// `CreateTimely` variants.
 pub trait TryIntoTimelyConfig {
-    /// Attempt to unpack `self` into a `(TimelyConfig, ClusterStartupEpoch)`. Otherwise,
+    /// Attempt to unpack `self` into a `(TimelyConfig, Uuid)`. Otherwise,
     /// fail and return `self` back.
-    fn try_into_timely_config(self) -> Result<(TimelyConfig, ClusterStartupEpoch), Self>
+    fn try_into_timely_config(self) -> Result<(TimelyConfig, Uuid), Self>
     where
         Self: Sized;
 }
