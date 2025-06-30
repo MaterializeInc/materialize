@@ -18,7 +18,7 @@
 //! broadcasts them to other workers through the Timely fabric, taking care of the correct
 //! sequencing.
 //!
-//! Commands in the command channel are tagged with an epoch identifying the incarnation of the
+//! Commands in the command channel are tagged with a nonce identifying the incarnation of the
 //! compute protocol the command belongs to, allowing workers to recognize client reconnects that
 //! require a reconciliation.
 
@@ -34,16 +34,17 @@ use timely::dataflow::operators::Operator;
 use timely::dataflow::operators::generic::source;
 use timely::scheduling::{Scheduler, SyncActivator};
 use timely::worker::Worker as TimelyWorker;
+use uuid::Uuid;
 
 /// A sender pushing commands onto the command channel.
 pub struct Sender {
-    tx: crossbeam_channel::Sender<(ComputeCommand, u64)>,
+    tx: crossbeam_channel::Sender<(ComputeCommand, Uuid)>,
     activator: Arc<Mutex<Option<SyncActivator>>>,
 }
 
 impl Sender {
     /// Broadcasts the given command to all workers.
-    pub fn send(&self, message: (ComputeCommand, u64)) {
+    pub fn send(&self, message: (ComputeCommand, Uuid)) {
         if self.tx.send(message).is_err() {
             unreachable!("command channel never shuts down");
         }
@@ -58,7 +59,7 @@ impl Sender {
 
 /// A receiver reading commands from the command channel.
 pub struct Receiver {
-    rx: crossbeam_channel::Receiver<(ComputeCommand, u64)>,
+    rx: crossbeam_channel::Receiver<(ComputeCommand, Uuid)>,
 }
 
 impl Receiver {
@@ -66,7 +67,7 @@ impl Receiver {
     ///
     /// This returns `None` when there are currently no commands but there might be commands again
     /// in the future.
-    pub fn try_recv(&self) -> Option<(ComputeCommand, u64)> {
+    pub fn try_recv(&self) -> Option<(ComputeCommand, Uuid)> {
         match self.rx.try_recv() {
             Ok(msg) => Some(msg),
             Err(TryRecvError::Empty) => None,
@@ -104,7 +105,7 @@ pub fn render<A: Allocate>(timely_worker: &mut TimelyWorker<A>) -> (Sender, Rece
                     let Some(cap) = &mut capability else {
                         // Non-leader workers will still receive `UpdateConfiguration` commands and
                         // we must drain those to not leak memory.
-                        while let Ok((cmd, _epoch)) = input_rx.try_recv() {
+                        while let Ok((cmd, _nonce)) = input_rx.try_recv() {
                             assert_ne!(worker_id, 0);
                             assert!(matches!(cmd, ComputeCommand::UpdateConfiguration(_)));
                         }
@@ -114,9 +115,9 @@ pub fn render<A: Allocate>(timely_worker: &mut TimelyWorker<A>) -> (Sender, Rece
                     assert_eq!(worker_id, 0);
 
                     let input: Vec<_> = input_rx.try_iter().collect();
-                    for (cmd, epoch) in input {
+                    for (cmd, nonce) in input {
                         let worker_cmds =
-                            split_command(cmd, peers).map(|(idx, cmd)| (idx, cmd, epoch));
+                            split_command(cmd, peers).map(|(idx, cmd)| (idx, cmd, nonce));
                         output.session(&cap).give_iterator(worker_cmds);
 
                         cap.downgrade(&(cap.time() + 1));
@@ -128,8 +129,8 @@ pub fn render<A: Allocate>(timely_worker: &mut TimelyWorker<A>) -> (Sender, Rece
                 "command_channel::sink",
                 move |input| {
                     while let Some((_cap, data)) = input.next() {
-                        for (_idx, cmd, epoch) in data.drain(..) {
-                            let _ = output_tx.send((cmd, epoch));
+                        for (_idx, cmd, nonce) in data.drain(..) {
+                            let _ = output_tx.send((cmd, nonce));
                         }
                     }
                 },

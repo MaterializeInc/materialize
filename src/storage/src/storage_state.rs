@@ -138,7 +138,7 @@ pub struct Worker<'w, A: Allocate> {
     pub timely_worker: &'w mut TimelyWorker<A>,
     /// The channel over which communication handles for newly connected clients
     /// are delivered.
-    pub client_rx: crossbeam_channel::Receiver<(CommandReceiver, ResponseSender)>,
+    pub client_rx: crossbeam_channel::Receiver<(Uuid, CommandReceiver, ResponseSender)>,
     /// The state associated with collection ingress and egress.
     pub storage_state: StorageState,
 }
@@ -147,7 +147,7 @@ impl<'w, A: Allocate> Worker<'w, A> {
     /// Creates new `Worker` state from the given components.
     pub fn new(
         timely_worker: &'w mut TimelyWorker<A>,
-        client_rx: crossbeam_channel::Receiver<(CommandReceiver, ResponseSender)>,
+        client_rx: crossbeam_channel::Receiver<(Uuid, CommandReceiver, ResponseSender)>,
         metrics: StorageMetrics,
         now: NowFn,
         connection_context: ConnectionContext,
@@ -418,7 +418,7 @@ impl StorageInstanceContext {
 impl<'w, A: Allocate> Worker<'w, A> {
     /// Waits for client connections and runs them to completion.
     pub fn run(&mut self) {
-        while let Ok((rx, tx)) = self.client_rx.recv() {
+        while let Ok((_nonce, rx, tx)) = self.client_rx.recv() {
             self.run_client(rx, tx);
         }
     }

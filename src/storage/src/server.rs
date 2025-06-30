@@ -24,6 +24,7 @@ use mz_txn_wal::operator::TxnsContext;
 use timely::communication::Allocate;
 use timely::worker::Worker as TimelyWorker;
 use tokio::sync::mpsc;
+use uuid::Uuid;
 
 use crate::metrics::StorageMetrics;
 use crate::storage_state::{StorageInstanceContext, Worker};
@@ -107,6 +108,7 @@ impl ClusterSpec for Config {
         &self,
         timely_worker: &mut TimelyWorker<A>,
         client_rx: crossbeam_channel::Receiver<(
+            Uuid,
             crossbeam_channel::Receiver<StorageCommand>,
             mpsc::UnboundedSender<StorageResponse>,
         )>,
