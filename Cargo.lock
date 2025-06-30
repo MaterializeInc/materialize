@@ -11102,7 +11102,7 @@ dependencies = [
 [[package]]
 name = "tiberius"
 version = "0.12.3"
-source = "git+https://github.com/MaterializeInc/tiberius?branch=support-ca-pem-string#64ca594cc22ed67d072c2d0110455da50539e1cd"
+source = "git+https://github.com/MaterializeInc/tiberius?rev=64ca594cc22ed67d072c2d0110455da50539e1cd#64ca594cc22ed67d072c2d0110455da50539e1cd"
 dependencies = [
  "async-trait",
  "asynchronous-codec",
