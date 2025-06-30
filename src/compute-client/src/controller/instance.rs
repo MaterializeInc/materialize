@@ -1093,7 +1093,7 @@ where
     async fn run(mut self) {
         self.send(ComputeCommand::CreateTimely {
             config: Default::default(),
-            epoch: ClusterStartupEpoch::new(self.envd_epoch, 0),
+            nonce: Uuid::default(),
         });
 
         let instance_config = InstanceConfig {

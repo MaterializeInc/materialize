@@ -43,6 +43,7 @@ use timely::progress::{Antichain, Timestamp};
 use tokio::select;
 use tokio::sync::mpsc;
 use tracing::{debug, info, warn};
+use uuid::Uuid;
 
 use crate::history::CommandHistory;
 
@@ -142,7 +143,7 @@ where
 
         instance.send(StorageCommand::CreateTimely {
             config: Default::default(),
-            epoch,
+            nonce: Default::default(),
         });
 
         instance
@@ -161,7 +162,7 @@ where
 
         self.epoch.bump_replica();
         let metrics = self.metrics.for_replica(id);
-        let replica = Replica::new(id, config, self.epoch, metrics, self.response_tx.clone());
+        let replica = Replica::new(id, config, metrics, self.response_tx.clone());
 
         self.replicas.insert(id, replica);
 
@@ -780,7 +781,6 @@ where
     fn new(
         id: ReplicaId,
         config: ReplicaConfig,
-        epoch: ClusterStartupEpoch,
         metrics: ReplicaMetrics,
         response_tx: mpsc::UnboundedSender<(Option<ReplicaId>, StorageResponse<T>)>,
     ) -> Self {
@@ -792,7 +792,6 @@ where
             ReplicaTask {
                 replica_id: id,
                 config: config.clone(),
-                epoch,
                 metrics: metrics.clone(),
                 connected: Arc::clone(&connected),
                 command_rx,
@@ -835,8 +834,6 @@ struct ReplicaTask<T> {
     replica_id: ReplicaId,
     /// Replica configuration.
     config: ReplicaConfig,
-    /// The epoch identifying this incarnation of the replica.
-    epoch: ClusterStartupEpoch,
     /// Replica metrics.
     metrics: ReplicaMetrics,
     /// Flag to report successful replica connection.
@@ -955,7 +952,7 @@ where
     /// Most [`StorageCommand`]s are independent of the target replica, but some contain
     /// replica-specific fields that must be adjusted before sending.
     fn specialize_command(&self, command: &mut StorageCommand<T>) {
-        if let StorageCommand::CreateTimely { config, epoch } = command {
+        if let StorageCommand::CreateTimely { config, nonce } = command {
             **config = TimelyConfig {
                 workers: self.config.location.workers,
                 // Overridden by the storage `PartitionedState` implementation.
@@ -972,7 +969,7 @@ where
                 // No limit; zero-copy is disabled.
                 zero_copy_limit: None,
             };
-            *epoch = self.epoch;
+            *nonce = Uuid::new_v4();
         }
     }
 }

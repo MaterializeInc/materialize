@@ -5429,6 +5429,7 @@ dependencies = [
  "tokio-stream",
  "tonic",
  "tonic-build",
+ "uuid",
  "workspace-hack",
 ]
 
