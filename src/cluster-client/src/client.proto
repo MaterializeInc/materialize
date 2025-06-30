@@ -13,11 +13,6 @@ syntax = "proto3";
 
 package mz_cluster_client.client;
 
-message ProtoClusterStartupEpoch {
-  int64 envd = 1;
-  uint64 replica = 2;
-}
-
 message ProtoTimelyConfig {
   uint64 workers = 1;
   uint64 process = 2;

@@ -15,7 +15,7 @@ use std::time::{Duration, Instant};
 
 use anyhow::bail;
 use mz_build_info::BuildInfo;
-use mz_cluster_client::client::{ClusterReplicaLocation, ClusterStartupEpoch, TimelyConfig};
+use mz_cluster_client::client::{ClusterReplicaLocation, TimelyConfig};
 use mz_compute_types::dyncfgs::ENABLE_COMPUTE_REPLICA_EXPIRATION;
 use mz_dyncfg::ConfigSet;
 use mz_ore::channel::InstrumentedUnboundedSender;
@@ -79,7 +79,7 @@ where
         id: ReplicaId,
         build_info: &'static BuildInfo,
         config: ReplicaConfig,
-        epoch: ClusterStartupEpoch,
+        epoch: u64,
         metrics: ReplicaMetrics,
         dyncfg: Arc<ConfigSet>,
         response_tx: InstrumentedUnboundedSender<ReplicaResponse<T>, IntCounter>,
@@ -150,9 +150,9 @@ struct ReplicaTask<T> {
     command_rx: UnboundedReceiver<ComputeCommand<T>>,
     /// A channel upon which responses from the replica are delivered.
     response_tx: InstrumentedUnboundedSender<ReplicaResponse<T>, IntCounter>,
-    /// A number (technically, pair of numbers) identifying this incarnation of the replica.
+    /// A number identifying this incarnation of the replica.
     /// The semantics of this don't matter, except that it must strictly increase.
-    epoch: ClusterStartupEpoch,
+    epoch: u64,
     /// Replica metrics.
     metrics: ReplicaMetrics,
     /// Flag to report successful replica connection.
@@ -239,8 +239,6 @@ where
         T: ComputeControllerTimestamp,
         ComputeGrpcClient: ComputeClient<T>,
     {
-        let id = self.replica_id;
-        let incarnation = self.epoch.replica();
         loop {
             select! {
                 // Command from controller to forward to replica.
@@ -262,7 +260,7 @@ where
 
                     self.observe_response(&response);
 
-                    if self.response_tx.send((id, incarnation, response)).is_err() {
+                    if self.response_tx.send((self.replica_id, self.epoch, response)).is_err() {
                         // Controller is no longer interested in this replica. Shut down.
                         break;
                     }

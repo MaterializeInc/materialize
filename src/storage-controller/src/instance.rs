@@ -11,7 +11,6 @@
 
 use crate::CollectionMetadata;
 use std::collections::{BTreeMap, BTreeSet};
-use std::num::NonZeroI64;
 use std::sync::atomic::AtomicBool;
 use std::sync::{Arc, atomic};
 use std::time::{Duration, Instant};
@@ -21,7 +20,7 @@ use differential_dataflow::lattice::Lattice;
 use itertools::Itertools;
 use mz_build_info::BuildInfo;
 use mz_cluster_client::ReplicaId;
-use mz_cluster_client::client::{ClusterReplicaLocation, ClusterStartupEpoch, TimelyConfig};
+use mz_cluster_client::client::{ClusterReplicaLocation, TimelyConfig};
 use mz_dyncfg::ConfigSet;
 use mz_ore::cast::CastFrom;
 use mz_ore::now::NowFn;
@@ -81,11 +80,6 @@ pub(crate) struct Instance<T> {
     /// The command history, used to replay past commands when introducing new replicas or
     /// reconnecting to existing replicas.
     history: CommandHistory<T>,
-    /// The current cluster startup epoch.
-    ///
-    /// The `replica` value of the epoch is increased every time a replica is (re)connected,
-    /// allowing the distinction of different replica incarnations.
-    epoch: ClusterStartupEpoch,
     /// Metrics tracked for this storage instance.
     metrics: InstanceMetrics,
     /// A function that returns the current time.
@@ -118,7 +112,6 @@ where
     /// Creates a new [`Instance`].
     pub fn new(
         workload_class: Option<String>,
-        envd_epoch: NonZeroI64,
         metrics: InstanceMetrics,
         dyncfg: Arc<ConfigSet>,
         now: NowFn,
@@ -126,7 +119,6 @@ where
     ) -> Self {
         let enable_snapshot_frontier = STORAGE_SINK_SNAPSHOT_FRONTIER.handle(&dyncfg);
         let history = CommandHistory::new(metrics.for_history(), enable_snapshot_frontier);
-        let epoch = ClusterStartupEpoch::new(envd_epoch, 0);
 
         let mut instance = Self {
             workload_class,
@@ -135,7 +127,6 @@ where
             ingestion_exports: Default::default(),
             active_exports: BTreeMap::new(),
             history,
-            epoch,
             metrics,
             now,
             response_tx: instance_response_tx,
@@ -160,7 +151,6 @@ where
         // enable the `objects_installed` assert below.
         self.history.reduce();
 
-        self.epoch.bump_replica();
         let metrics = self.metrics.for_replica(id);
         let replica = Replica::new(id, config, metrics, self.response_tx.clone());
 

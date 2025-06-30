@@ -11,14 +11,12 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Debug;
-use std::num::NonZeroI64;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use chrono::{DateTime, DurationRound, TimeDelta, Utc};
 use mz_build_info::BuildInfo;
 use mz_cluster_client::WallclockLagFn;
-use mz_cluster_client::client::ClusterStartupEpoch;
 use mz_compute_types::ComputeInstanceId;
 use mz_compute_types::dataflows::{BuildDesc, DataflowDescription};
 use mz_compute_types::plan::LirId;
@@ -165,7 +163,6 @@ where
         storage: StorageCollections<T>,
         peek_stash_persist_location: PersistLocation,
         arranged_logs: Vec<(LogVariant, GlobalId, SharedCollectionState<T>)>,
-        envd_epoch: NonZeroI64,
         metrics: InstanceMetrics,
         now: NowFn,
         wallclock_lag: WallclockLagFn<T>,
@@ -193,7 +190,6 @@ where
                 storage,
                 peek_stash_persist_location,
                 arranged_logs,
-                envd_epoch,
                 metrics,
                 now,
                 wallclock_lag,
@@ -286,8 +282,6 @@ pub(super) struct Instance<T: ComputeControllerTimestamp> {
     response_tx: mpsc::UnboundedSender<ComputeControllerResponse<T>>,
     /// Sender for introspection updates to be recorded.
     introspection_tx: mpsc::UnboundedSender<IntrospectionUpdates>,
-    /// A number that increases with each restart of `environmentd`.
-    envd_epoch: NonZeroI64,
     /// Numbers that increase with each restart of a replica.
     replica_epochs: BTreeMap<ReplicaId, u64>,
     /// The registry the controller uses to report metrics.
@@ -426,7 +420,7 @@ impl<T: ComputeControllerTimestamp> Instance<T> {
         id: ReplicaId,
         client: ReplicaClient<T>,
         config: ReplicaConfig,
-        epoch: ClusterStartupEpoch,
+        epoch: u64,
     ) {
         let log_ids: BTreeSet<_> = config.logging.index_logs.values().copied().collect();
 
@@ -959,7 +953,6 @@ impl<T: ComputeControllerTimestamp> Instance<T> {
             command_rx: _,
             response_tx: _,
             introspection_tx: _,
-            envd_epoch,
             replica_epochs,
             metrics: _,
             dyncfg: _,
@@ -1011,7 +1004,6 @@ impl<T: ComputeControllerTimestamp> Instance<T> {
             field("peeks", peeks)?,
             field("subscribes", subscribes)?,
             field("copy_tos", copy_tos)?,
-            field("envd_epoch", envd_epoch)?,
             field("replica_epochs", replica_epochs)?,
             field("wallclock_lag_last_recorded", wallclock_lag_last_recorded)?,
         ]);
@@ -1029,7 +1021,6 @@ where
         storage: StorageCollections<T>,
         peek_stash_persist_location: PersistLocation,
         arranged_logs: Vec<(LogVariant, GlobalId, SharedCollectionState<T>)>,
-        envd_epoch: NonZeroI64,
         metrics: InstanceMetrics,
         now: NowFn,
         wallclock_lag: WallclockLagFn<T>,
@@ -1077,7 +1068,6 @@ where
             command_rx,
             response_tx,
             introspection_tx,
-            envd_epoch,
             replica_epochs: Default::default(),
             metrics,
             dyncfg,
@@ -1227,8 +1217,9 @@ where
 
         let replica_epoch = self.replica_epochs.entry(id).or_default();
         *replica_epoch += 1;
+        let epoch = *replica_epoch;
+
         let metrics = self.metrics.for_replica(id);
-        let epoch = ClusterStartupEpoch::new(self.envd_epoch, *replica_epoch);
         let client = ReplicaClient::spawn(
             id,
             self.build_info,
@@ -1941,19 +1932,19 @@ where
     }
 
     /// Handles a response from a replica. Replica IDs are re-used across replica restarts, so we
-    /// use the replica incarnation to drop stale responses.
-    fn handle_response(&mut self, (replica_id, incarnation, response): ReplicaResponse<T>) {
+    /// use the replica epoch to drop stale responses.
+    fn handle_response(&mut self, (replica_id, epoch, response): ReplicaResponse<T>) {
         // Filter responses from non-existing or stale replicas.
         if self
             .replicas
             .get(&replica_id)
-            .filter(|replica| replica.epoch.replica() == incarnation)
+            .filter(|replica| replica.epoch == epoch)
             .is_none()
         {
             return;
         }
 
-        // Invariant: the replica exists and has the expected incarnation.
+        // Invariant: the replica exists and has the expected epoch.
 
         match response {
             ComputeResponse::Frontiers(id, frontiers) => {
@@ -2839,7 +2830,7 @@ struct ReplicaState<T: ComputeControllerTimestamp> {
     /// Per-replica collection state.
     collections: BTreeMap<GlobalId, ReplicaCollectionState<T>>,
     /// The epoch of the replica.
-    epoch: ClusterStartupEpoch,
+    epoch: u64,
 }
 
 impl<T: ComputeControllerTimestamp> ReplicaState<T> {
@@ -2849,7 +2840,7 @@ impl<T: ComputeControllerTimestamp> ReplicaState<T> {
         config: ReplicaConfig,
         metrics: ReplicaMetrics,
         introspection_tx: mpsc::UnboundedSender<IntrospectionUpdates>,
-        epoch: ClusterStartupEpoch,
+        epoch: u64,
     ) -> Self {
         Self {
             id,
