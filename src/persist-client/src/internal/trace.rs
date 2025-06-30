@@ -227,8 +227,13 @@ impl<T: Timestamp + Lattice> Trace<T> {
                 // them down recently there's no backwards compatibility risk.
                 if batch.desc.lower() == batch.desc.upper() {
                     hollow_batches.insert(*id, Arc::clone(batch));
+                    assert_eq!(
+                        hollow_batches.get(id).map(|b| b.desc.clone()),
+                        descs.last().cloned()
+                    );
                 } else {
                     legacy_batches.insert(Arc::clone(batch), ());
+                    assert_eq!(batch.desc, descs.last().unwrap().clone());
                 }
             }
 
@@ -277,6 +282,7 @@ impl<T: Timestamp + Lattice> Trace<T> {
         }
     }
     pub(crate) fn unflatten(value: FlatTrace<T>) -> Result<Self, String> {
+        let flat_trace_clone = value.clone();
         let FlatTrace {
             since,
             legacy_batches,
@@ -362,7 +368,7 @@ impl<T: Timestamp + Lattice> Trace<T> {
                     batch = Arc::new(HollowBatch::empty(Description::new(
                         batch.desc.lower().clone(),
                         new_upper,
-                        expected_desc.since().clone(),
+                        batch.desc.since().clone(),
                     )))
                 }
 
@@ -1099,19 +1105,19 @@ impl<T: Timestamp + Lattice + Codec64> SpineBatch<T> {
             "run_splits must have one fewer element than run_meta"
         );
 
-        let desc = if parts.is_empty() && run_splits.is_empty() {
-            info!(
-                "replacement batch is empty, using original desc: {:?} instead of the replacement {:?}",
-                original.desc, replacement.desc
-            );
-            original.desc.clone()
-        } else {
-            info!(
-                "using replacement desc: {:?} instead of the original {:?}",
-                replacement.desc, original.desc
-            );
-            replacement.desc.clone()
-        };
+        // let desc = if parts.is_empty() && run_splits.is_empty() {
+        //     info!(
+        //         "replacement batch is empty, using original desc: {:?} instead of the replacement {:?}",
+        //         original.desc, replacement.desc
+        //     );
+        //     original.desc.clone()
+        // } else {
+        info!(
+            "using replacement desc: {:?} instead of the original {:?}",
+            replacement.desc, original.desc
+        );
+        let desc = replacement.desc.clone();
+        // };
 
         Ok(HollowBatch {
             desc: desc.clone(),
