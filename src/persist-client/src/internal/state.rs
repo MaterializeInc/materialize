@@ -1217,10 +1217,11 @@ pub struct HollowRollup {
 }
 
 /// A pointer to a blob stored externally.
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq)]
 pub enum HollowBlobRef<'a, T> {
     Batch(&'a HollowBatch<T>),
     Rollup(&'a HollowRollup),
+    Part(&'a RunPart<T>),
 }
 
 /// A rollup that is currently being computed.
@@ -2392,6 +2393,10 @@ where
             HollowBlobRef::Rollup(x) => {
                 ret.state_rollup_count += 1;
                 ret.state_rollups_bytes += x.encoded_size_bytes.unwrap_or_default()
+            }
+            HollowBlobRef::Part(_) => {
+                // We don't count parts in the state size metrics, since they
+                // are not stored in the state itself.
             }
         });
         ret

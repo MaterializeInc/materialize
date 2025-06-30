@@ -264,12 +264,56 @@ impl<T: Timestamp + Lattice + Codec64> StateDiff<T> {
     }
 
     pub(crate) fn blob_deletes(&self) -> impl Iterator<Item = HollowBlobRef<T>> {
-        let batches = self
+        // Ok heres the situation. With the introduction of incremental compaction, we
+        // need to be more careful about what we consider "deleted".
+        // If there is a HollowBatch that we replace 2 out of the 4 runs of,
+        // we need to ensure that we only delete the runs that are actually
+        // no longer referenced.
+
+        let removed: Vec<_> = self
             .referenced_batches()
             .filter_map(|spine_diff| match spine_diff {
                 Insert(_) => None,
-                Update(a, _) | Delete(a) => Some(HollowBlobRef::Batch(a)),
-            });
+                Update(a, _) | Delete(a) => Some(
+                    a.parts
+                        .iter()
+                        .map(|part| HollowBlobRef::Part(part))
+                        .collect::<Vec<_>>(),
+                ),
+            })
+            .collect();
+        let added: Vec<_> = self
+            .referenced_batches()
+            .filter_map(|spine_diff| match spine_diff {
+                Insert(a) => Some(
+                    a.parts
+                        .iter()
+                        .map(|part| HollowBlobRef::Part(part))
+                        .collect::<Vec<_>>(),
+                ),
+                Update(_, a) => Some(
+                    a.parts
+                        .iter()
+                        .map(|part| HollowBlobRef::Part(part))
+                        .collect::<Vec<_>>(),
+                ),
+                Delete(_) => None,
+            })
+            .collect();
+
+        // We only want to delete the parts that are not in the added set.
+        let removed = removed.into_iter().flat_map(|x| x).filter(move |part| {
+            !added
+                .iter()
+                .any(|y| y.iter().any(|added_part| added_part == part))
+        });
+
+        // let batches = self
+        //     .referenced_batches()
+        //     .filter_map(|spine_diff| match spine_diff {
+        //         Insert(_) => None,
+        //         Update(a, _) | Delete(a) => Some(HollowBlobRef::Batch(a)),
+        //     });
         let rollups = self
             .rollups
             .iter()
@@ -277,7 +321,7 @@ impl<T: Timestamp + Lattice + Codec64> StateDiff<T> {
                 Insert(_) => None,
                 Update(a, _) | Delete(a) => Some(HollowBlobRef::Rollup(a)),
             });
-        batches.chain(rollups)
+        removed.chain(rollups)
     }
 
     #[cfg(any(test, debug_assertions))]
