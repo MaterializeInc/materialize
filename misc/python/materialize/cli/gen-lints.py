@@ -27,10 +27,7 @@ ALLOW_RUST_LINTS = [
     "non_local_definitions",
 ]
 
-ALLOW_RUST_DOC_LINTS = [
-    # Allows us to use footnotes in rustdoc.
-    "unportable_markdown"
-]
+ALLOW_RUST_DOC_LINTS = []
 
 
 ALLOW_CLIPPY_LINTS = [
