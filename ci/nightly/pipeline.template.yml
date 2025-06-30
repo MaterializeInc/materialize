@@ -1025,6 +1025,8 @@ steps:
           automatic:
             - exit_status: 1
               limit: 2
+            - exit_status: 143 # SIGTERM
+              limit: 2
             - exit_status: 255
               limit: 2
         agents:
@@ -1050,6 +1052,8 @@ steps:
         retry:
           automatic:
             - exit_status: 1
+              limit: 2
+            - exit_status: 143 # SIGTERM
               limit: 2
             - exit_status: 255
               limit: 2
@@ -1077,6 +1081,8 @@ steps:
           automatic:
             - exit_status: 1
               limit: 2
+            - exit_status: 143 # SIGTERM
+              limit: 2
             - exit_status: 255
               limit: 2
         agents:
@@ -1102,6 +1108,8 @@ steps:
         retry:
           automatic:
             - exit_status: 1
+              limit: 2
+            - exit_status: 143 # SIGTERM
               limit: 2
             - exit_status: 255
               limit: 2
