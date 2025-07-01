@@ -19,13 +19,22 @@ from materialize.mzcompose.composition import Composition, WorkflowArgumentParse
 from materialize.mzcompose.services.materialized import Materialized
 from materialize.mzcompose.services.mz import Mz
 from materialize.mzcompose.services.sql_server import SqlServer
+from materialize.mzcompose.services.test_certs import TestCerts
 from materialize.mzcompose.services.testdrive import Testdrive
+
+TLS_CONF_PATH = MZ_ROOT / "test" / "sql-server-cdc" / "tls-mssconfig.conf"
 
 SERVICES = [
     Mz(app_password=""),
     Materialized(),
     Testdrive(),
-    SqlServer(),
+    TestCerts(),
+    SqlServer(
+        volumes_extra=[
+            "secrets:/var/opt/mssql/certs",
+            f"{TLS_CONF_PATH}:/var/opt/mssql/mssql.conf",
+        ]
+    ),
 ]
 
 
@@ -55,7 +64,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     c.kill("materialized")
     c.rm("materialized")
 
-    c.up("materialized", "sql-server")
+    c.up("materialized", "test-certs", "sql-server")
     seed = random.getrandbits(16)
 
     c.test_parts(
