@@ -19,7 +19,6 @@ from materialize.cloudtest.app.materialize_application import (
     LOGGER,
     MaterializeApplication,
 )
-from materialize.cloudtest.util.cluster import cluster_pod_name
 from materialize.cloudtest.util.wait import wait
 
 
@@ -63,7 +62,7 @@ def test_managed_cluster_sizing(mz: MaterializeApplication) -> None:
 
     for compute_id in range(0, SIZE):
         for replica in replicas:
-            compute_pod = cluster_pod_name(cluster_id, replica[1], compute_id)
+            compute_pod = mz.cluster_pod_name(cluster_id, replica[1], compute_id)
             wait(condition="condition=Ready", resource=compute_pod)
 
     mz.environmentd.sql("ALTER CLUSTER sized1 SET (REPLICATION FACTOR 1)")
@@ -75,7 +74,7 @@ def test_managed_cluster_sizing(mz: MaterializeApplication) -> None:
 
     for compute_id in range(0, SIZE):
         for replica in replicas:
-            compute_pod = cluster_pod_name(cluster_id, replica[1], compute_id)
+            compute_pod = mz.cluster_pod_name(cluster_id, replica[1], compute_id)
             wait(condition="condition=Ready", resource=compute_pod)
 
     mz.environmentd.sql("DROP CLUSTER sized1 CASCADE")

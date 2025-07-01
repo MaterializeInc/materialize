@@ -220,6 +220,14 @@ class MaterializeApplication(object):
     def prefixed(self, name: str) -> str:
         return f"mz{self.resource_id}-{name}"
 
+    def cluster_pod_name(self, cluster_id: str, replica_id: str, process: int = 0) -> str:
+        pod_name = f"cluster-{cluster_id}-replica-{replica_id}-gen-0-{process}"
+        return f"pod/{self.prefixed(pod_name)}"
+
+    def cluster_service_name(self, cluster_id: str, replica_id: str) -> str:
+        service_name = f"cluster-{cluster_id}-replica-{replica_id}-gen-0"
+        return f"service/{self.prefixed(service_name)}"
+
     def get_resources(self, log_filter: str | None) -> list[K8sResource]:
         return [
             # Run first so it's available for Debezium, which gives up too quickly otherwise

@@ -14,7 +14,6 @@ import pytest
 from pg8000.exceptions import InterfaceError
 
 from materialize.cloudtest.app.materialize_application import MaterializeApplication
-from materialize.cloudtest.util.cluster import cluster_pod_name
 from materialize.cloudtest.util.wait import wait
 
 
@@ -178,7 +177,7 @@ def test_missing_secret(mz: MaterializeApplication) -> None:
     cluster_id, replica_id = mz.environmentd.sql_query(
         "SELECT cluster_id, id FROM mz_cluster_replicas WHERE name = 'to_be_killed'"
     )[0]
-    pod_name = cluster_pod_name(cluster_id, replica_id, 0)
+    pod_name = mz.cluster_pod_name(cluster_id, replica_id, 0)
 
     # wait for the cluster to be ready first before attempting to kill it
     wait(condition="condition=Ready", resource=f"{pod_name}")

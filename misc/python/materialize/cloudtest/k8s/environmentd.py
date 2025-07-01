@@ -180,6 +180,7 @@ class K8sMaterialize(K8sResource):
                     ],
                     "--announce-egress-address=1.2.3.4/32,88.77.66.0/28,2001:db8::/60",
                     f"--clusterd-image={clusterd_image}",
+                    "--bootstrap-role=materialize",
                 ],
                 "environmentdExtraEnv": self.extra_env,
                 "inPlaceRollout": True,
