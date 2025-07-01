@@ -150,7 +150,7 @@ impl std::str::FromStr for IdempotencyToken {
     type Err = String;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        parse_id('i', "IdempotencyToken", s).map(IdempotencyToken)
+        parse_id("i", "IdempotencyToken", s).map(IdempotencyToken)
     }
 }
 
@@ -757,7 +757,7 @@ impl std::str::FromStr for RunId {
     type Err = String;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        parse_id('r', "RunId", s).map(RunId)
+        parse_id("ri", "RunId", s).map(RunId)
     }
 }
 

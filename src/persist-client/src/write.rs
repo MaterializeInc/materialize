@@ -77,7 +77,7 @@ impl std::str::FromStr for WriterId {
     type Err = String;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        parse_id('w', "WriterId", s).map(WriterId)
+        parse_id("w", "WriterId", s).map(WriterId)
     }
 }
 
