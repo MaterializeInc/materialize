@@ -1540,7 +1540,6 @@ steps:
       - id: rqg-wmr
         label: "RQG WMR workload"
         depends_on: build-aarch64
-        skip: "flaky until database-issues#7433 is fixed"
         timeout_in_minutes: 45
         agents:
           queue: hetzner-aarch64-4cpu-8gb
