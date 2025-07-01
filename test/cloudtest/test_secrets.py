@@ -42,7 +42,7 @@ def test_secrets(mz: MaterializeApplication) -> None:
     ][0]
     assert id is not None
 
-    secret = f"user-managed-{id}"
+    secret = mz.prefixed(f"user-managed-{id}")
 
     #    wait(condition="condition=Ready", resource=f"secret/{secret}")
 
@@ -75,7 +75,7 @@ def test_orphaned_secrets(mz: MaterializeApplication) -> None:
         0
     ][0]
     assert id is not None
-    secret = f"user-managed-{id}"
+    secret = mz.prefixed(f"user-managed-{id}")
 
     # The failpoint should cause this to fail.
     try:
@@ -150,7 +150,7 @@ def test_missing_secret(mz: MaterializeApplication) -> None:
         "SELECT id FROM mz_secrets WHERE name = 'to_be_deleted'"
     )[0][0]
     assert id is not None
-    secret = f"user-managed-{id}"
+    secret = mz.prefixed(f"user-managed-{id}")
 
     mz.kubectl("delete", "secret", secret)
     wait(condition="delete", resource=f"secret/{secret}")
