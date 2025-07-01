@@ -6,7 +6,7 @@ operator:
     providers:
       aws:
         enabled: true
-        accountID: 123456789000
+        accountID: "123456789000"
         iam:
           roles:
             connection: "arn:aws:iam::123456789000:role/MaterializeConnection"
