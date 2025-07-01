@@ -5406,6 +5406,7 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
  "turmoil",
+ "uuid",
  "workspace-hack",
 ]
 
@@ -5429,6 +5430,7 @@ dependencies = [
  "tokio-stream",
  "tonic",
  "tonic-build",
+ "uuid",
  "workspace-hack",
 ]
 
