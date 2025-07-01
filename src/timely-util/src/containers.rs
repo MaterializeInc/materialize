@@ -33,6 +33,9 @@ mod compressed;
 mod merger;
 pub mod stack;
 
+pub static ENABLE_COLUMNAR_COMPRESSION: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
 mod alloc {
     use mz_ore::region::Region;
 
@@ -100,8 +103,8 @@ mod container {
     use timely::container::PushInto;
     use timely::dataflow::channels::ContainerBytes;
 
-    use crate::containers::PackedContainer;
     use crate::containers::compressed::CompressedColumn;
+    use crate::containers::{ENABLE_COLUMNAR_COMPRESSION, PackedContainer};
 
     /// A container based on a columnar store, encoded in aligned bytes.
     ///
@@ -165,6 +168,9 @@ mod container {
                 Column::Typed(_) => {}
                 Column::Bytes(_) => {}
                 Column::Align(aligned) => {
+                    if !ENABLE_COLUMNAR_COMPRESSION.load(std::sync::atomic::Ordering::Relaxed) {
+                        return;
+                    }
                     let aligned = std::mem::take(aligned);
                     *self = Column::Compressed(CompressedColumn::compress_aligned(
                         len,

@@ -125,6 +125,13 @@ pub const ENABLE_COLUMNAR_LGALLOC: Config<bool> = Config::new(
     "Enable allocating aligned regions in columnar from lgalloc.",
 );
 
+/// Enable compression for columnar.
+pub const ENABLE_COLUMNAR_COMPRESSION: Config<bool> = Config::new(
+    "enable_columnar_compression",
+    false,
+    "Enable compression in columnar.",
+);
+
 /// The interval at which the compute server performs maintenance tasks.
 pub const COMPUTE_SERVER_MAINTENANCE_INTERVAL: Config<Duration> = Config::new(
     "compute_server_maintenance_interval",
@@ -338,6 +345,7 @@ pub const PEEK_STASH_BATCH_SIZE: Config<usize> = Config::new(
 pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
     configs
         .add(&ENABLE_MZ_JOIN_CORE)
+        .add(&ENABLE_COLUMNAR_COMPRESSION)
         .add(&ENABLE_CORRECTION_V2)
         .add(&ENABLE_MV_APPEND_SMEARING)
         .add(&LINEAR_JOIN_YIELDING)
