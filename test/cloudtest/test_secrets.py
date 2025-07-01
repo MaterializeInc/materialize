@@ -212,15 +212,16 @@ def test_missing_secret(mz: MaterializeApplication) -> None:
 
     # Kill the environmentd and confirm the same
 
+    environmentd_pod = f"pod/{mz.prefixed('environmentd-0-0')}"
     mz.kubectl(
         "exec",
-        "pod/environmentd-0",
+        environmentd_pod,
         "--",
         "bash",
         "-c",
         "kill -9 `pidof environmentd`",
     )
-    wait(condition="condition=Ready", resource="pod/environmentd-0")
+    wait(condition="condition=Ready", resource=environmentd_pod)
 
     mz.testdrive.run(
         input=dedent(
