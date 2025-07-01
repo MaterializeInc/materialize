@@ -401,9 +401,15 @@ where
                         .inputs
                         .iter()
                         .all(|x| x.batch.runs().all(|(meta, _)| meta.id.is_some()));
+                    let all_runs_have_len = req
+                        .inputs
+                        .iter()
+                        .all(|x| x.batch.runs().all(|(meta, _)| meta.len.is_some()));
+
                     let incremental_enabled = ENABLE_INCREMENTAL_COMPACTION
                         .get(&machine_clone.applier.cfg)
-                        && all_runs_have_uuids;
+                        && all_runs_have_uuids
+                        && all_runs_have_len;
 
                     let stream = Self::compact_stream(
                         CompactConfig::new(&machine_clone.applier.cfg, machine_clone.shard_id()),

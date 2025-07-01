@@ -743,7 +743,7 @@ pub async fn dangerous_force_compaction_and_break_pushdown<K, V, T, D>(
         let (reqs, mut maintenance) = machine.spine_exert(fuel).await;
         for req in reqs {
             info!(
-                "force_compaction {} {} compacting {} batches in {} runs with {} runs totaling {} bytes: lower={:?} upper={:?} since={:?}",
+                "force_compaction {} {} compacting {} batches in {} parts with {} runs totaling {} bytes: lower={:?} upper={:?} since={:?}",
                 machine.applier.shard_metrics.name,
                 machine.applier.shard_metrics.shard_id,
                 req.inputs.len(),

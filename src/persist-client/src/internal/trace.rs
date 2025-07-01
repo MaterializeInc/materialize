@@ -1034,6 +1034,13 @@ impl<T: Timestamp + Lattice + Codec64> SpineBatch<T> {
             return Err(ApplyMergeResult::NotAppliedNoMatch);
         }
 
+        let replaced_runs_num_updates = original
+            .run_meta
+            .iter()
+            .filter(|meta| run_ids.contains(&meta.id.expect("id should be present at this point")))
+            .filter_map(|meta| meta.len)
+            .sum::<usize>();
+
         // 1. Determine the parts to replace.
         let start_part = if start_run == 0 {
             0
@@ -1107,10 +1114,15 @@ impl<T: Timestamp + Lattice + Codec64> SpineBatch<T> {
 
         let desc = replacement.desc.clone();
 
+        warn!(
+            "recalculating len: original len={}, replaced runs len={} replacement len={}",
+            original.len, replaced_runs_num_updates, replacement.len,
+        );
+        let len = original.len - replaced_runs_num_updates + replacement.len;
+
         Ok(HollowBatch {
             desc: desc.clone(),
-            //FIXME (dov): actually compute a len somehow
-            len: replacement.len,
+            len,
             parts,
             run_meta,
             run_splits,
