@@ -7738,7 +7738,6 @@ dependencies = [
  "serde_json",
  "thiserror 2.0.12",
  "tiberius",
- "timely",
  "tokio",
  "tokio-postgres",
  "tonic-build",
@@ -8464,6 +8463,20 @@ dependencies = [
  "thiserror 1.0.69",
  "tokio",
  "tokio-stream",
+]
+
+[[package]]
+name = "opentls"
+version = "0.2.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6f561874f8d6ecfb674fc08863414040c93cc90c0b6963fe679895fab8b65560"
+dependencies = [
+ "futures-util",
+ "log",
+ "openssl",
+ "openssl-probe",
+ "openssl-sys",
+ "url",
 ]
 
 [[package]]
@@ -11071,7 +11084,7 @@ dependencies = [
 [[package]]
 name = "tiberius"
 version = "0.12.3"
-source = "git+https://github.com/MaterializeInc/tiberius?rev=555076bc80087d21addb929948508c4e1a3c1fa7#555076bc80087d21addb929948508c4e1a3c1fa7"
+source = "git+https://github.com/MaterializeInc/tiberius?rev=64ca594cc22ed67d072c2d0110455da50539e1cd#64ca594cc22ed67d072c2d0110455da50539e1cd"
 dependencies = [
  "async-trait",
  "asynchronous-codec",
@@ -11084,6 +11097,7 @@ dependencies = [
  "futures-util",
  "num-traits",
  "once_cell",
+ "opentls",
  "pin-project-lite",
  "pretty-hex",
  "thiserror 1.0.69",

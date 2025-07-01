@@ -203,6 +203,7 @@ wrappers = [
     "launchdarkly-server-sdk",
     "launchdarkly-server-sdk-evaluation",
     "native-tls",
+    "opentls",
     "os_info",
     "postgres",
     "pprof",
