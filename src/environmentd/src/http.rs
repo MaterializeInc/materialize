@@ -101,6 +101,8 @@ pub const MAX_REQUEST_SIZE: usize = u64_to_usize(5 * bytesize::MIB);
 
 const SESSION_DURATION: Duration = Duration::from_secs(3600); // 1 hour
 
+const PROFILING_API_ENDPOINTS: &[&str] = &["/memory", "/hierarchical-memory", "/prof/"];
+
 #[derive(Debug)]
 pub struct HttpConfig {
     pub source: &'static str,
@@ -843,7 +845,7 @@ async fn http_auth(
 
     let path = req.uri().path();
     let include_www_authenticate_header = path == "/"
-        || ["/memory", "/hierarchical-memory", "/prof/"]
+        || PROFILING_API_ENDPOINTS
             .iter()
             .any(|prefix| path.starts_with(prefix));
     let user = auth(
