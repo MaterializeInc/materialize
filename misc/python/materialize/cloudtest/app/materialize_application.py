@@ -155,7 +155,7 @@ class MaterializeApplication(object):
     def __init__(
         self,
         release_mode: bool,
-        tag: str | None,
+        tag: str | None = None,
         aws_region: str | None = None,
         log_filter: str | None = None,
         apply_node_selectors: bool = False,
