@@ -560,6 +560,11 @@ operator:
       support: bootstrap
       catalogServer: bootstrap
       analytics: bootstrap
+    defaultReplicationFactor:
+      system: null
+      probe: null
+      support: null
+      analytics: null
 storage:
   storageClass:
     name: standard
