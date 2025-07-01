@@ -93,7 +93,7 @@ use mz_storage_client::healthcheck::{
     WALLCLOCK_GLOBAL_LAG_HISTOGRAM_RAW_DESC, WALLCLOCK_LAG_HISTORY_DESC,
 };
 use mz_storage_client::metrics::StorageControllerMetrics;
-use mz_storage_client::statistics::{SinkStatisticsUpdate, SourceStatisticsUpdate};
+use mz_storage_client::statistics::ControllerSinkStatistics;
 use mz_storage_client::storage_collections::StorageCollections;
 use mz_storage_types::StorageDiff;
 use mz_storage_types::controller::InvalidUpper;
@@ -464,9 +464,10 @@ where
     pub(crate) collection_manager: collection_mgmt::CollectionManager<T>,
     pub(crate) source_statistics: Arc<Mutex<statistics::SourceStatistics>>,
     pub(crate) sink_statistics:
-        Arc<Mutex<BTreeMap<GlobalId, statistics::StatsState<SinkStatisticsUpdate>>>>,
+        Arc<Mutex<BTreeMap<(GlobalId, Option<ReplicaId>), ControllerSinkStatistics>>>,
     pub(crate) statistics_interval: Duration,
     pub(crate) statistics_interval_receiver: watch::Receiver<Duration>,
+    pub(crate) statistics_retention_duration: Duration,
     pub(crate) metrics: StorageControllerMetrics,
     pub(crate) introspection_tokens: Arc<Mutex<BTreeMap<GlobalId, Box<dyn Any + Send + Sync>>>>,
 }
@@ -619,11 +620,7 @@ where
                 )
                 .await;
 
-                let scraper_token = statistics::spawn_statistics_scraper::<
-                    statistics::SourceStatistics,
-                    SourceStatisticsUpdate,
-                    _,
-                >(
+                let scraper_token = statistics::spawn_statistics_scraper(
                     self.id.clone(),
                     // These do a shallow copy.
                     introspection_config.collection_manager,
@@ -631,6 +628,7 @@ where
                     prev,
                     introspection_config.statistics_interval.clone(),
                     introspection_config.statistics_interval_receiver.clone(),
+                    introspection_config.statistics_retention_duration,
                     introspection_config.metrics,
                 );
                 let web_token = statistics::spawn_webhook_statistics_scraper(
@@ -655,16 +653,16 @@ where
                 )
                 .await;
 
-                let scraper_token =
-                    statistics::spawn_statistics_scraper::<_, SinkStatisticsUpdate, _>(
-                        self.id.clone(),
-                        introspection_config.collection_manager,
-                        Arc::clone(&introspection_config.sink_statistics),
-                        prev,
-                        introspection_config.statistics_interval,
-                        introspection_config.statistics_interval_receiver,
-                        introspection_config.metrics,
-                    );
+                let scraper_token = statistics::spawn_statistics_scraper(
+                    self.id.clone(),
+                    introspection_config.collection_manager,
+                    Arc::clone(&introspection_config.sink_statistics),
+                    prev,
+                    introspection_config.statistics_interval,
+                    introspection_config.statistics_interval_receiver,
+                    introspection_config.statistics_retention_duration,
+                    introspection_config.metrics,
+                );
 
                 // Make sure this is dropped when the controller is
                 // dropped, so that the internal task will stop.

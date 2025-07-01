@@ -1021,13 +1021,14 @@ Note that:
 - The non-rate values themselves are not directly comparable, because they are collected and aggregated across multiple threads/processes.
 
 <!-- RELATION_SPEC mz_internal.mz_sink_statistics -->
-| Field                | Type      | Meaning                                                                                                             |
-|----------------------|-----------| --------                                                                                                            |
-| `id`                 | [`text`]  | The ID of the sink. Corresponds to [`mz_catalog.mz_sources.id`](../mz_catalog#mz_sinks).                            |
-| `messages_staged`    | [`uint8`] | The number of messages staged but possibly not committed to the sink.                                               |
-| `messages_committed` | [`uint8`] | The number of messages committed to the sink.                                                                       |
-| `bytes_staged`       | [`uint8`] | The number of bytes staged but possibly not committed to the sink. This counts both keys and values, if applicable. |
-| `bytes_committed`    | [`uint8`] | The number of bytes committed to the sink. This counts both keys and values, if applicable.                         |
+| Field                | Type      | Meaning                                                                                                                        |
+|----------------------|-----------| --------                                                                                                                       |
+| `id`                 | [`text`]  | The ID of the sink. Corresponds to [`mz_catalog.mz_sinks.id`](../mz_catalog#mz_sinks).                                       |
+| `replica_id`         | [`text`]  | The ID of a replica running the sink. Corresponds to [`mz_catalog.mz_cluster_replicas.id`](../mz_catalog#mz_cluster_replicas). |
+| `messages_staged`    | [`uint8`] | The number of messages staged but possibly not committed to the sink.                                                          |
+| `messages_committed` | [`uint8`] | The number of messages committed to the sink.                                                                                  |
+| `bytes_staged`       | [`uint8`] | The number of bytes staged but possibly not committed to the sink. This counts both keys and values, if applicable.            |
+| `bytes_committed`    | [`uint8`] | The number of bytes committed to the sink. This counts both keys and values, if applicable.                                    |
 
 ## `mz_sink_statuses`
 
@@ -1072,6 +1073,7 @@ The `mz_source_statistics` view contains statistics about each source.
 | Field                     | Type         | Meaning |
 | --------------------------|--------------|---------|
 | `id`                      | [`text`]     | The ID of the source. Corresponds to [`mz_catalog.mz_sources.id`](../mz_catalog#mz_sources). |
+| `replica_id`              | [`text`]     | The ID of a replica running the source. Corresponds to [`mz_catalog.mz_cluster_replicas.id`](../mz_catalog#mz_cluster_replicas). |
 | `messages_received`       | [`uint8`]    | The number of messages the source has received from the external system. Messages are counted in a source type-specific manner. Messages do not correspond directly to updates: some messages produce multiple updates, while other messages may be coalesced into a single update. |
 | `bytes_received`          | [`uint8`]    | The number of bytes the source has read from the external system. Bytes are counted in a source type-specific manner and may or may not include protocol overhead. |
 | `updates_staged`          | [`uint8`]    | The number of updates (insertions plus deletions) the source has written but not yet committed to the storage layer. |

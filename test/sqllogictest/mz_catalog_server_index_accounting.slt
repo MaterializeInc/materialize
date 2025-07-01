@@ -108,12 +108,12 @@ mz_show_sources_ind  CREATE␠INDEX␠"mz_show_sources_ind"␠IN␠CLUSTER␠[s2
 mz_show_tables_ind  CREATE␠INDEX␠"mz_show_tables_ind"␠IN␠CLUSTER␠[s2]␠ON␠[s576␠AS␠"mz_internal"."mz_show_tables"]␠("schema_id")
 mz_show_types_ind  CREATE␠INDEX␠"mz_show_types_ind"␠IN␠CLUSTER␠[s2]␠ON␠[s578␠AS␠"mz_internal"."mz_show_types"]␠("schema_id")
 mz_show_views_ind  CREATE␠INDEX␠"mz_show_views_ind"␠IN␠CLUSTER␠[s2]␠ON␠[s577␠AS␠"mz_internal"."mz_show_views"]␠("schema_id")
-mz_sink_statistics_ind  CREATE␠INDEX␠"mz_sink_statistics_ind"␠IN␠CLUSTER␠[s2]␠ON␠[s698␠AS␠"mz_internal"."mz_sink_statistics"]␠("id")
+mz_sink_statistics_ind  CREATE␠INDEX␠"mz_sink_statistics_ind"␠IN␠CLUSTER␠[s2]␠ON␠[s698␠AS␠"mz_internal"."mz_sink_statistics"]␠("id",␠"replica_id")
 mz_sink_status_history_ind  CREATE␠INDEX␠"mz_sink_status_history_ind"␠IN␠CLUSTER␠[s2]␠ON␠[s670␠AS␠"mz_internal"."mz_sink_status_history"]␠("sink_id")
 mz_sink_statuses_ind  CREATE␠INDEX␠"mz_sink_statuses_ind"␠IN␠CLUSTER␠[s2]␠ON␠[s671␠AS␠"mz_internal"."mz_sink_statuses"]␠("id")
 mz_sinks_ind  CREATE␠INDEX␠"mz_sinks_ind"␠IN␠CLUSTER␠[s2]␠ON␠[s473␠AS␠"mz_catalog"."mz_sinks"]␠("id")
-mz_source_statistics_ind  CREATE␠INDEX␠"mz_source_statistics_ind"␠IN␠CLUSTER␠[s2]␠ON␠[s696␠AS␠"mz_internal"."mz_source_statistics"]␠("id")
-mz_source_statistics_with_history_ind  CREATE␠INDEX␠"mz_source_statistics_with_history_ind"␠IN␠CLUSTER␠[s2]␠ON␠[s694␠AS␠"mz_internal"."mz_source_statistics_with_history"]␠("id")
+mz_source_statistics_ind  CREATE␠INDEX␠"mz_source_statistics_ind"␠IN␠CLUSTER␠[s2]␠ON␠[s696␠AS␠"mz_internal"."mz_source_statistics"]␠("id",␠"replica_id")
+mz_source_statistics_with_history_ind  CREATE␠INDEX␠"mz_source_statistics_with_history_ind"␠IN␠CLUSTER␠[s2]␠ON␠[s694␠AS␠"mz_internal"."mz_source_statistics_with_history"]␠("id",␠"replica_id")
 mz_source_status_history_ind  CREATE␠INDEX␠"mz_source_status_history_ind"␠IN␠CLUSTER␠[s2]␠ON␠[s672␠AS␠"mz_internal"."mz_source_status_history"]␠("source_id")
 mz_source_statuses_ind  CREATE␠INDEX␠"mz_source_statuses_ind"␠IN␠CLUSTER␠[s2]␠ON␠[s689␠AS␠"mz_internal"."mz_source_statuses"]␠("id")
 mz_sources_ind  CREATE␠INDEX␠"mz_sources_ind"␠IN␠CLUSTER␠[s2]␠ON␠[s466␠AS␠"mz_catalog"."mz_sources"]␠("id")
@@ -644,11 +644,13 @@ mz_sink_statistics  bytes_staged
 mz_sink_statistics  id
 mz_sink_statistics  messages_committed
 mz_sink_statistics  messages_staged
+mz_sink_statistics  replica_id
 mz_sink_statistics_raw  bytes_committed
 mz_sink_statistics_raw  bytes_staged
 mz_sink_statistics_raw  id
 mz_sink_statistics_raw  messages_committed
 mz_sink_statistics_raw  messages_staged
+mz_sink_statistics_raw  replica_id
 mz_sink_status_history  details
 mz_sink_status_history  error
 mz_sink_status_history  occurred_at
@@ -685,6 +687,7 @@ mz_source_statistics  offset_committed
 mz_source_statistics  offset_known
 mz_source_statistics  records_indexed
 mz_source_statistics  rehydration_latency
+mz_source_statistics  replica_id
 mz_source_statistics  snapshot_committed
 mz_source_statistics  snapshot_records_known
 mz_source_statistics  snapshot_records_staged
@@ -698,6 +701,7 @@ mz_source_statistics_raw  offset_committed
 mz_source_statistics_raw  offset_known
 mz_source_statistics_raw  records_indexed
 mz_source_statistics_raw  rehydration_latency
+mz_source_statistics_raw  replica_id
 mz_source_statistics_raw  snapshot_committed
 mz_source_statistics_raw  snapshot_records_known
 mz_source_statistics_raw  snapshot_records_staged
@@ -711,6 +715,7 @@ mz_source_statistics_with_history  offset_committed
 mz_source_statistics_with_history  offset_known
 mz_source_statistics_with_history  records_indexed
 mz_source_statistics_with_history  rehydration_latency
+mz_source_statistics_with_history  replica_id
 mz_source_statistics_with_history  snapshot_committed
 mz_source_statistics_with_history  snapshot_records_known
 mz_source_statistics_with_history  snapshot_records_staged
