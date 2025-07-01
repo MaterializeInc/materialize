@@ -1,5 +1,5 @@
 ---
-title: "Grafana"
+title: "Grafana using Prometheus SQL Exporter"
 description: "How to monitor the performance and overall health of your Materialize region using Grafana."
 menu:
   main:
