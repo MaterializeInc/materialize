@@ -117,6 +117,9 @@ ERROR_RE = re.compile(
 PANIC_IN_SERVICE_START_RE = re.compile(
     rb"^(\[)?(?P<service>[^ ]*)(\s*\||\]) \d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{6}Z  thread '.*' panicked at "
 )
+
+TIMESTAMP_IN_PANIC_RE = re.compile(rb" \d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{6}Z ")
+
 # Example 1: launchdarkly-materialized-1  | global timestamp must always go up
 # Example 2: [pod/environmentd-0/environmentd] Unknown collection identifier u2082
 SERVICES_LOG_LINE_RE = re.compile(rb"^(\[)?(?P<service>[^ ]*)(\s*\||\]) (?P<msg>.*)$")
@@ -936,11 +939,14 @@ def _collect_service_panics_in_logs(data: Any, log_file_name: str) -> list[Error
                 # handle only the ones which are currently in a panic
                 # handler:
                 if panic_start := open_panics.get(match.group("service")):
+                    panic_without_ts = TIMESTAMP_IN_PANIC_RE.sub(b"", panic_start)
                     del open_panics[match.group("service")]
                     if IGNORE_RE.search(match.group(0)):
                         continue
                     collected_panics.append(
-                        ErrorLog(panic_start + b" " + match.group("msg"), log_file_name)
+                        ErrorLog(
+                            panic_without_ts + b" " + match.group("msg"), log_file_name
+                        )
                     )
     assert not open_panics, f"Panic log never finished: {open_panics}"
 
