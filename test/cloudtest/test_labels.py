@@ -31,13 +31,13 @@ def test_roles(mz: MaterializeApplication) -> None:
     )
     n_replica_pods = 0
     for name, role in names_roles:
-        if name.startswith("cluster-s1"):
+        if name.startswith(mz.prefixed("cluster-s1")):
             assert role == "system-critical"
             n_replica_pods += 1
-        elif name.startswith("cluster-s2"):
+        elif name.startswith(mz.prefixed("cluster-s2")):
             assert role == "system"
             n_replica_pods += 1
-        elif name.startswith("cluster-u"):
+        elif name.startswith(mz.prefixed("cluster-u")):
             assert role == "user"
             n_replica_pods += 1
     assert n_replica_pods >= 3
