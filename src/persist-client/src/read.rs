@@ -78,7 +78,7 @@ impl std::str::FromStr for LeasedReaderId {
     type Err = String;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        parse_id('r', "LeasedReaderId", s).map(LeasedReaderId)
+        parse_id("r", "LeasedReaderId", s).map(LeasedReaderId)
     }
 }
 
