@@ -214,7 +214,10 @@ class MaterializeApplication(object):
             materialize_internal_url=f"postgres://mz_system@{self.prefixed('environmentd')}:6877/materialize",
         )
         self.testdrive.create()
-        # TODO wait for testdrive pod to be up
+        wait(
+            condition="condition=Ready",
+            resource="pod/testdrive",
+        )
         #self.run_materialize()
 
     def prefixed(self, name: str) -> str:
