@@ -17,10 +17,6 @@ cd "$(dirname "$0")/../.."
 . test/cloudtest/config.bash
 
 set +e
-errors=0
 run kubectl --context="$K8S_CONTEXT" --namespace materialize delete materialize cloudtest
-errors=$(($errors+$?))
 run kubectl --context="$K8S_CONTEXT" delete namespace materialize
-errors=$(($errors+$?))
-
-exit $errors
+exit 0
