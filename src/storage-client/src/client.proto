@@ -13,7 +13,6 @@ syntax = "proto3";
 
 package mz_storage_client.client;
 
-import "cluster-client/src/client.proto";
 import "google/protobuf/empty.proto";
 import "persist-client/src/batch.proto";
 import "proto/src/chrono.proto";
