@@ -32,7 +32,7 @@ def test_ssh_tunnels(mz: MaterializeApplication) -> None:
     )[0]
     assert id is not None
 
-    secret = f"user-managed-{id}"
+    secret = mz.prefixed(f"user-managed-{id}")
 
     # If the secret didn't exist, this would throw an exception
     mz.kubectl("describe", "secret", secret)
