@@ -64,7 +64,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     c.kill("materialized")
     c.rm("materialized")
 
-    c.up("materialized", "sql-server")
+    c.up("materialized", "test-certs", "sql-server")
     seed = random.getrandbits(16)
 
     c.test_parts(
