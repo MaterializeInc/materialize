@@ -17,7 +17,7 @@ use anyhow::{Error, anyhow};
 use async_trait::async_trait;
 use differential_dataflow::trace::ExertionLogic;
 use futures::future;
-use mz_cluster_client::client::{TimelyConfig, TryIntoTimelyConfig};
+use mz_cluster_client::client::{TimelyConfig, TryIntoProtocolNonce};
 use mz_service::client::{GenericClient, Partitionable, Partitioned};
 use mz_service::local::LocalClient;
 use timely::WorkerConfig;
@@ -140,8 +140,8 @@ where
         // Changing this debug statement requires changing the replica-isolation test
         tracing::debug!("ClusterClient send={:?}", &cmd);
 
-        match cmd.try_into_timely_config() {
-            Ok((_config, nonce)) => self.connect(nonce),
+        match cmd.try_into_protocol_nonce() {
+            Ok(nonce) => self.connect(nonce),
             Err(cmd) => self.inner.as_mut().expect("initialized").send(cmd).await,
         }
     }
@@ -168,7 +168,7 @@ where
 #[async_trait]
 pub trait ClusterSpec: Clone + Send + Sync + 'static {
     /// The cluster command type.
-    type Command: fmt::Debug + Send + TryIntoTimelyConfig;
+    type Command: fmt::Debug + Send + TryIntoProtocolNonce;
     /// The cluster response type.
     type Response: fmt::Debug + Send;
 

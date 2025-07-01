@@ -70,7 +70,7 @@ impl<T: timely::progress::Timestamp + TotalOrder> CommandHistory<T> {
             let command = self.commands.last().expect("pushed above");
             let metrics = &self.metrics;
             match command {
-                CreateTimely { .. } => metrics.create_timely_count.inc(),
+                Hello { .. } => metrics.hello_count.inc(),
                 InitializationComplete => metrics.initialization_complete_count.inc(),
                 AllowWrites => metrics.allow_writes_count.inc(),
                 UpdateConfiguration(_) => metrics.update_configuration_count.inc(),
@@ -88,7 +88,7 @@ impl<T: timely::progress::Timestamp + TotalOrder> CommandHistory<T> {
     pub fn reduce(&mut self) {
         use StorageCommand::*;
 
-        let mut create_timely_command = None;
+        let mut hello_command = None;
         let mut initialization_complete = false;
         let mut allow_writes = false;
         let mut final_compactions = BTreeMap::new();
@@ -110,7 +110,7 @@ impl<T: timely::progress::Timestamp + TotalOrder> CommandHistory<T> {
 
         for command in self.commands.drain(..) {
             match command {
-                cmd @ CreateTimely { .. } => create_timely_command = Some(cmd),
+                cmd @ Hello { .. } => hello_command = Some(cmd),
                 InitializationComplete => initialization_complete = true,
                 AllowWrites => allow_writes = true,
                 UpdateConfiguration(params) => final_configuration.update(*params),
@@ -181,10 +181,10 @@ impl<T: timely::progress::Timestamp + TotalOrder> CommandHistory<T> {
         // `metrics.reset()` here, since otherwise the command history would appear empty for a
         // brief amount of time.
 
-        let count = u64::from(create_timely_command.is_some());
-        self.metrics.create_timely_count.set(count);
-        if let Some(create_timely_command) = create_timely_command {
-            self.commands.push(create_timely_command);
+        let count = u64::from(hello_command.is_some());
+        self.metrics.hello_count.set(count);
+        if let Some(hello) = hello_command {
+            self.commands.push(hello);
         }
 
         let count = u64::from(!final_configuration.all_unset());

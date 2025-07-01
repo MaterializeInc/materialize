@@ -96,12 +96,10 @@ impl TimelyConfig {
     }
 }
 
-/// A trait for specific cluster commands that can be unpacked into
-/// `CreateTimely` variants.
-pub trait TryIntoTimelyConfig {
-    /// Attempt to unpack `self` into a `(TimelyConfig, Uuid)`. Otherwise,
-    /// fail and return `self` back.
-    fn try_into_timely_config(self) -> Result<(TimelyConfig, Uuid), Self>
+/// A trait for cluster commands that provide a protocol nonce.
+pub trait TryIntoProtocolNonce {
+    /// Attempt to unpack `self` into a nonce. Otherwise, fail and return `self` back.
+    fn try_into_protocol_nonce(self) -> Result<Uuid, Self>
     where
         Self: Sized;
 }
