@@ -26,10 +26,11 @@ use mz_ore::metrics::{
 use mz_ore::stats::histogram_seconds_buckets;
 use mz_repr::GlobalId;
 use mz_service::codec::StatsCollector;
+use mz_service::transport;
 use prometheus::core::{AtomicF64, AtomicU64};
 
 use crate::protocol::command::{ComputeCommand, ProtoComputeCommand};
-use crate::protocol::response::{PeekResponse, ProtoComputeResponse};
+use crate::protocol::response::{ComputeResponse, PeekResponse, ProtoComputeResponse};
 
 pub(crate) type Counter = DeleteOnDropCounter<AtomicF64, Vec<String>>;
 pub(crate) type IntCounter = DeleteOnDropCounter<AtomicU64, Vec<String>>;
@@ -86,7 +87,7 @@ impl ComputeControllerMetrics {
             command_message_bytes_total: metrics_registry.register(metric!(
                 name: "mz_compute_command_message_bytes_total",
                 help: "The total number of bytes sent in compute command messages.",
-                var_labels: ["instance_id", "replica_id", "command_type"],
+                var_labels: ["instance_id", "replica_id"],
             )),
             responses_total: metrics_registry.register(metric!(
                 name: "mz_compute_responses_total",
@@ -96,7 +97,7 @@ impl ComputeControllerMetrics {
             response_message_bytes_total: metrics_registry.register(metric!(
                 name: "mz_compute_response_message_bytes_total",
                 help: "The total number of bytes sent in compute response messages.",
-                var_labels: ["instance_id", "replica_id", "response_type"],
+                var_labels: ["instance_id", "replica_id"],
             )),
             replica_count: metrics_registry.register(metric!(
                 name: "mz_compute_controller_replica_count",
@@ -301,24 +302,21 @@ impl InstanceMetrics {
                 .commands_total
                 .get_delete_on_drop_metric(labels)
         });
-        let command_message_bytes_total = CommandMetrics::build(|typ| {
-            let labels = extended_labels(typ);
-            self.metrics
-                .command_message_bytes_total
-                .get_delete_on_drop_metric(labels)
-        });
         let responses_total = ResponseMetrics::build(|typ| {
             let labels = extended_labels(typ);
             self.metrics
                 .responses_total
                 .get_delete_on_drop_metric(labels)
         });
-        let response_message_bytes_total = ResponseMetrics::build(|typ| {
-            let labels = extended_labels(typ);
-            self.metrics
-                .response_message_bytes_total
-                .get_delete_on_drop_metric(labels)
-        });
+
+        let command_message_bytes_total = self
+            .metrics
+            .command_message_bytes_total
+            .get_delete_on_drop_metric(labels.clone());
+        let response_message_bytes_total = self
+            .metrics
+            .response_message_bytes_total
+            .get_delete_on_drop_metric(labels.clone());
 
         let command_queue_size = self
             .metrics
@@ -399,9 +397,9 @@ pub struct ReplicaMetrics {
 #[derive(Debug)]
 pub struct ReplicaMetricsInner {
     commands_total: CommandMetrics<IntCounter>,
-    command_message_bytes_total: CommandMetrics<IntCounter>,
+    command_message_bytes_total: IntCounter,
     responses_total: ResponseMetrics<IntCounter>,
-    response_message_bytes_total: ResponseMetrics<IntCounter>,
+    response_message_bytes_total: IntCounter,
 
     /// Gauge tracking the size of the compute command queue.
     pub command_queue_size: UIntGauge,
@@ -455,7 +453,6 @@ impl StatsCollector<ProtoComputeCommand, ProtoComputeResponse> for ReplicaMetric
         self.inner.commands_total.for_proto_command(item).inc();
         self.inner
             .command_message_bytes_total
-            .for_proto_command(item)
             .inc_by(u64::cast_from(size));
     }
 
@@ -463,8 +460,29 @@ impl StatsCollector<ProtoComputeCommand, ProtoComputeResponse> for ReplicaMetric
         self.inner.responses_total.for_proto_response(item).inc();
         self.inner
             .response_message_bytes_total
-            .for_proto_response(item)
             .inc_by(u64::cast_from(size));
+    }
+}
+
+impl<T> transport::Metrics<ComputeCommand<T>, ComputeResponse<T>> for ReplicaMetrics {
+    fn bytes_sent(&mut self, len: usize) {
+        self.inner
+            .command_message_bytes_total
+            .inc_by(u64::cast_from(len));
+    }
+
+    fn bytes_received(&mut self, len: usize) {
+        self.inner
+            .response_message_bytes_total
+            .inc_by(u64::cast_from(len));
+    }
+
+    fn message_sent(&mut self, msg: &ComputeCommand<T>) {
+        self.inner.commands_total.for_command(msg).inc();
+    }
+
+    fn message_received(&mut self, msg: &ComputeResponse<T>) {
+        self.inner.responses_total.for_response(msg).inc();
     }
 }
 
@@ -592,6 +610,18 @@ impl<M> ResponseMetrics<M> {
             subscribe_response: build_metric("subscribe_response"),
             copy_to_response: build_metric("copy_to_response"),
             status: build_metric("status"),
+        }
+    }
+
+    fn for_response<T>(&self, response: &ComputeResponse<T>) -> &M {
+        use ComputeResponse::*;
+
+        match response {
+            Frontiers(..) => &self.frontiers,
+            PeekResponse(..) => &self.peek_response,
+            SubscribeResponse(..) => &self.subscribe_response,
+            CopyToResponse(..) => &self.copy_to_response,
+            Status(..) => &self.status,
         }
     }
 
