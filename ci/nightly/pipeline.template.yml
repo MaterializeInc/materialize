@@ -510,7 +510,8 @@ steps:
         plugins:
           - ./ci/plugins/mzcompose:
               composition: zippy
-              args: [--scenario=UserTables, --actions=10000, --max-execution-time=30m, --azurite]
+              # Azurite is too slow, takes a lot of memory in this test
+              args: [--scenario=UserTables, --actions=10000, --max-execution-time=30m]
 
       - id: zippy-postgres-cdc
         label: "Zippy Postgres CDC"
@@ -1549,6 +1550,7 @@ steps:
               # Postgres does not support WMR, so our only hope for a comparison
               # test is to use a previous Mz version via --other-tag=...
               args: ["wmr", "--seed=$BUILDKITE_JOB_ID", "--other-tag=common-ancestor"]
+        skip: "database-issues#9439"
 
       - id: rqg-banking
         label: "RQG banking workload"

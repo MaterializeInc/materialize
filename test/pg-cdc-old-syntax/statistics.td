@@ -128,7 +128,7 @@ true
 
 # We need to filter by "latest" replica because statistics for the old replica
 # might persist a while after it is dropped.
->[version>=14800] SELECT
+>[version>=14900] SELECT
     s.name,
     SUM(u.snapshot_records_known),
     SUM(u.snapshot_records_staged)
@@ -140,7 +140,7 @@ true
   ORDER BY s.name
 mz_source 1 1
 
->[version<14800] SELECT
+>[version<14900] SELECT
     s.name,
     SUM(u.snapshot_records_known),
     SUM(u.snapshot_records_staged)

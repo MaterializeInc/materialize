@@ -120,6 +120,10 @@ PANIC_IN_SERVICE_START_RE = re.compile(
 
 TIMESTAMP_IN_PANIC_RE = re.compile(rb" \d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{6}Z ")
 
+JOURNALCTL_LOG_LINE_RE = re.compile(
+    rb"^[A-Z][a-z]{2} \d{2} \d{2}:\d{2}:\d{2} [^\s]+ (?P<msg>.+)"
+)
+
 # Example 1: launchdarkly-materialized-1  | global timestamp must always go up
 # Example 2: [pod/environmentd-0/environmentd] Unknown collection identifier u2082
 SERVICES_LOG_LINE_RE = re.compile(rb"^(\[)?(?P<service>[^ ]*)(\s*\||\]) (?P<msg>.*)$")
@@ -198,27 +202,6 @@ PRODUCT_LIMITS_FIND_IGNORE_RE = re.compile(
     )
     """,
     re.VERBOSE | re.MULTILINE,
-)
-
-# We don't want any plaintext passwords in our logs, fail the test if it contains any
-PASSWORD_RE = re.compile(
-    rb"""
-    ( password:\ Some\("(?P<pw_config_some>[^"]*)"\) # From a Rust config object being dumped
-    | password:\ "(?P<pw_config_plain>[^"]*)"        # From a Rust config object being dumped
-    | ://[^:@\s]+:(?P<pw_url>[^:@\s]+)@              # Inside a URL string
-    )
-    """,
-    re.VERBOSE,
-)
-
-PASSWORD_IGNORE_RE = re.compile(
-    # We actually want this to be the exact ignored string, but unfortunately
-    # log lines from clusterd and environmentd can interfer when they are
-    # running in the same materialized container. Example:
-    # > password: Some("%3C2024-10-18T17:11:36.445784450Z redacted%3E")
-    # rb"^ ( < | %3[Cc] ) redacted ( > | %3[Ee] ) $",
-    rb".*r.*e.*d.*a.*c.*t.*e.*d.*",
-    re.VERBOSE,
 )
 
 
@@ -845,77 +828,36 @@ def _get_errors_from_log_file(log_file_name: str) -> list[ErrorLog]:
         error_logs.extend(_collect_errors_in_logs(data, log_file_name))
         data.seek(0)
         error_logs.extend(_collect_service_panics_in_logs(data, log_file_name))
-        # TODO(def-) Figure out a way to reenable, currently log lines in the
-        # same container can intersect in any way, so there is no reliable way
-        # to detect if a password is in the logs or not
-        # Passwords are expected in these files, ignore them
-        # if log_file_name not in {
-        #     "run.log",
-        #     "docker-inspect.log",
-        #     "docker-ps-a.log",
-        #     "ps-aux.log",
-        #     "kubectl-describe-all.log",
-        #     # TODO(def-): Remove when we have 4 versions released without leaking passwords to logs
-        # } and os.getenv("BUILDKITE_STEP_KEY") not in {
-        #     "checks-upgrade-clusterd-compute-first",
-        #     "checks-upgrade-clusterd-compute-last",
-        #     "checks-upgrade-entire-mz-two-versions",
-        #     "checks-upgrade-entire-mz-four-versions",
-        #     "checks-preflight-check-rollback",
-        #     "checks-0dt-upgrade-entire-mz-two-versions",
-        #     "checks-0dt-upgrade-entire-mz-four-versions",
-        #     "cloudtest-upgrade",
-        #     "feature-benchmark",
-        # }:
-        #     data.seek(0)
-        #     error_logs.extend(_collect_passwords_in_logs(data, log_file_name))
 
     return error_logs
-
-
-def _collect_passwords_in_logs(data: Any, log_file_name: str) -> list[ErrorLog]:
-    collected_passwords = []
-
-    for match in PASSWORD_RE.finditer(data):
-        password = (
-            match.group("pw_config_some")
-            or match.group("pw_config_plain")
-            or match.group("pw_url")
-        )
-        if PASSWORD_IGNORE_RE.match(password):
-            continue
-        collected_passwords.append(
-            ErrorLog(
-                b'Plain-text password "' + password + b'"',
-                log_file_name,
-            )
-        )
-
-    return collected_passwords
 
 
 def _collect_errors_in_logs(data: Any, log_file_name: str) -> list[ErrorLog]:
     collected_errors = []
 
     for match in ERROR_RE.finditer(data):
-        if IGNORE_RE.search(match.group(0)):
+        error = match.group(0)
+        if IGNORE_RE.search(error):
             continue
         label = os.getenv("BUILDKITE_LABEL")
         if (
             label
             and label.startswith("Product limits (finding new limits) ")
-            and PRODUCT_LIMITS_FIND_IGNORE_RE.search(match.group(0))
+            and PRODUCT_LIMITS_FIND_IGNORE_RE.search(error)
         ):
             continue
         # environmentd segfaults during normal shutdown in coverage builds, see database-issues#5980
         # Ignoring this in regular ways would still be quite spammy.
         if (
-            b"environmentd" in match.group(0)
-            and b"segfault at" in match.group(0)
+            b"environmentd" in error
+            and b"segfault at" in error
             and ui.env_is_truthy("CI_COVERAGE_ENABLED")
         ):
             continue
-        collected_errors.append(ErrorLog(match.group(0), log_file_name))
+        if log_file_name == "journalctl-merge.log":
+            if journalctl_match := JOURNALCTL_LOG_LINE_RE.match(error):
+                error = journalctl_match.group("msg")
+        collected_errors.append(ErrorLog(error, log_file_name))
 
     return collected_errors
 

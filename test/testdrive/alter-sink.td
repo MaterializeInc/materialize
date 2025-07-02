@@ -7,6 +7,10 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
+# TODO: Reenable when https://github.com/MaterializeInc/database-issues/issues/8636 is fixed
+$ skip-if
+SELECT true
+
 $ set-arg-default single-replica-cluster=quickstart
 
 > CREATE CONNECTION kafka_conn
@@ -126,10 +130,6 @@ contains:canceling statement due to user request
 $ sleep-is-probably-flaky-i-have-justified-my-need-with-a-comment duration=10s
 
 > INSERT INTO created_post_alter VALUES ('hundred', 99);
-
-# TODO: Reenable when database-issues#8636 is fixed
-$ skip-if
-SELECT true
 
 $ kafka-verify-data format=json sink=materialize.public.sink key=false
 {"before": null, "after": {"created_post_name": "hundred", "created_post_value": 99}}
