@@ -8,31 +8,31 @@ scrape_configs:
   - role: pod
   relabel_configs:
   - action: keep
-    regex: true
+    regex: 'true'
     source_labels:
     - __meta_kubernetes_pod_annotation_prometheus_io_scrape
   - action: replace
-    regex: (https?)
+    regex: '(https?)'
     source_labels:
     - __meta_kubernetes_pod_annotation_prometheus_io_scheme
     target_label: __scheme__
   - action: replace
-    regex: (.+)
+    regex: '(.+)'
     source_labels:
     - __meta_kubernetes_pod_annotation_prometheus_io_path
     target_label: __metrics_path__
   - action: replace
-    regex: ([^:]+)(?::\d+)?;(\d+)
+    regex: '([^:]+)(?::\d+)?;(\d+)'
     replacement: $1:$2
     source_labels:
     - __address__
     - __meta_kubernetes_pod_annotation_prometheus_io_port
     target_label: __address__
   - action: labelmap
-    regex: __meta_kubernetes_pod_annotation_prometheus_io_param_(.+)
+    regex: '__meta_kubernetes_pod_annotation_prometheus_io_param_(.+)'
     replacement: __param_$1
   - action: labelmap
-    regex: __meta_kubernetes_pod_label_(.+)
+    regex: '__meta_kubernetes_pod_label_(.+)'
   - action: replace
     source_labels:
     - __meta_kubernetes_namespace
@@ -42,6 +42,6 @@ scrape_configs:
     - __meta_kubernetes_pod_name
     target_label: kubernetes_pod_name
   - action: drop
-    regex: Pending|Succeeded|Failed|Completed
+    regex: 'Pending|Succeeded|Failed|Completed'
     source_labels:
     - __meta_kubernetes_pod_phase
