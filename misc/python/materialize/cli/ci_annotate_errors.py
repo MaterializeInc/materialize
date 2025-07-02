@@ -439,12 +439,14 @@ and finds associated open GitHub issues in Materialize repository.""",
 
     try:
         # always insert a build job regardless whether it has annotations or not
-        test_analytics.builds.add_build_job(
-            was_successful=has_successful_buildkite_status()
-        )
+        test_analytics.builds.add_build_job(was_successful=args.test_result == 0)
 
         number_of_unknown_errors, ignore_failure = annotate_logged_errors(
-            args.log_files, test_analytics, args.test_cmd, args.test_desc
+            args.log_files,
+            test_analytics,
+            args.test_cmd,
+            args.test_desc,
+            args.test_result,
         )
     except Exception as e:
         test_analytics.on_upload_failed(e)
@@ -484,13 +486,14 @@ def annotate_errors(
     test_analytics_db: TestAnalyticsDb,
     test_cmd: str,
     test_desc: str,
+    test_result: int,
     ignore_failure: bool,
 ) -> None:
     assert len(unknown_errors) > 0 or len(known_errors) > 0
     annotation_style = "info" if not unknown_errors else "error"
     unknown_errors = group_identical_errors(unknown_errors)
     known_errors = group_identical_errors(known_errors)
-    is_failure = len(unknown_errors) > 0 or not has_successful_buildkite_status()
+    is_failure = len(unknown_errors) > 0 or test_result != 0
 
     annotation = Annotation(
         suite_name=get_suite_name(),
@@ -527,7 +530,11 @@ def group_identical_errors(
 
 
 def annotate_logged_errors(
-    log_files: list[str], test_analytics: TestAnalyticsDb, test_cmd: str, test_desc: str
+    log_files: list[str],
+    test_analytics: TestAnalyticsDb,
+    test_cmd: str,
+    test_desc: str,
+    test_result: int,
 ) -> tuple[int, bool]:
     """
     Returns the number of unknown errors, 0 when all errors are known or there
@@ -737,6 +744,7 @@ def annotate_logged_errors(
         test_analytics,
         test_cmd,
         test_desc,
+        test_result,
         ignore_failure,
     )
 
@@ -750,7 +758,7 @@ def annotate_logged_errors(
         and len(known_errors) == 0
         and ui.env_is_truthy("BUILDKITE")
         and os.getenv("BUILDKITE_BRANCH") != "main"
-        and not has_successful_buildkite_status()
+        and test_result != 0
         and get_job_state() not in ("canceling", "canceled")
     ):
         annotation = Annotation(
@@ -1091,10 +1099,6 @@ def get_suite_name(include_retry_info: bool = True) -> str:
 
 def get_retry_count() -> int:
     return int(os.getenv("BUILDKITE_RETRY_COUNT", "0"))
-
-
-def has_successful_buildkite_status() -> bool:
-    return os.getenv("BUILDKITE_COMMAND_EXIT_STATUS") == "0"
 
 
 def format_message_as_code_block(
