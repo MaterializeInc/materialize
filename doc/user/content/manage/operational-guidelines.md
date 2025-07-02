@@ -6,6 +6,7 @@ menu:
     parent: "manage"
     weight: 4
     name: "Operational guidelines"
+    identifier: "operational-guidelines"
 ---
 
 The following provides some general guidelines for production.
@@ -17,34 +18,18 @@ The following provides some general guidelines for production.
 Use production cluster(s) for production workloads only. That is, avoid using
 production cluster(s) to run development workloads or non-production tasks.
 
-### Cluster architecture
+### Three-tier architecture
 
 {{% best-practices/architecture/three-tier %}}
 
-#### Upsert source consideration
-
-{{% best-practices/architecture/upsert-source %}}
-
 #### Alternatives
 
-Alternatively, if a three-tier architecture is not feasible or unnecessary due
-to low volume or a non-production setup, a two cluster or a single cluster
-architecture may suffice.
+If a three-tier architecture is infeasible or unnecessary due to low volume or a
+non-production setup, a two cluster or a single cluster architecture may
+suffice.
 
-{{<tabs>}}
-{{< tab "Two cluster architecture" >}}
-
-{{< best-practices/architecture/two-cluster >}}
-
-{{</ tab >}}
-
-{{< tab "Single cluster architecture" >}}
-
-{{< best-practices/architecture/one-cluster >}}
-
-{{</ tab >}}
-
-{{</ tabs >}}
+See [Appendix: Alternative cluster
+architectures](/manage/appendix-alternative-cluster-architectures/) for details.
 
 ## Sources
 
@@ -54,27 +39,22 @@ architecture may suffice.
 
 ### Separate cluster(s) for sources
 
-In production,
+In production, if possible, use a dedicated cluster for
+[sources](/concepts/sources/); i.e., avoid putting sources on the same cluster
+that hosts compute objects, sinks, and/or serves queries.
 
-- If possible, use a dedicated cluster for [sources](/concepts/sources/); i.e.,
-  avoid putting sources on the same cluster that hosts compute objects, sinks,
-  and/or serves queries.
+{{% best-practices/architecture/upsert-source %}}
 
-- Separate upsert sources from other sources. Upsert sources have higher
-  resource requirements (since, for upsert sources, Materialize maintains each
-  key and the key's last value as well as performs deduplication). As such, if
-  possible, use a separate source cluster for upsert sources.
-
-See also [Cluster architecture](#cluster-architecture).
+See also [Production cluster architecture](#three-tier-architecture).
 
 ## Sinks
 
 ### Separate sinks from sources
 
-Avoid putting sinks on the same cluster that hosts sources to allow for
-[blue/green deployment](/manage/dbt/blue-green-deployments/).
+To allow for [blue/green deployment](/manage/dbt/blue-green-deployments/), avoid
+putting sinks on the same cluster that hosts sources .
 
-See also [Cluster architecture](#cluster-architecture).
+See also [Cluster architecture](#three-tier-architecture).
 
 ## Snapshotting and hydration considerations
 

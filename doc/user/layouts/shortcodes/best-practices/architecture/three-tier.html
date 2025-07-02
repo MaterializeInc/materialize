@@ -1,7 +1,13 @@
 {{ $data := $.Site.Data.best_practices.three_tier_architecture }}
+{{ $cluster_considerations  := $.Site.Data.cluster_considerations }}
 
-In production, use a three-tier architecture, if feasible. A three-tier
-architecture consists of:
+In production, use a three-tier architecture, if feasible.
+
+![Image of the 3-tier architecture: Source cluster(s), Compute/Transform
+cluster(s), Serving cluster(s)](/images/3-tier-architecture.svg "3-tier
+architecture")
+
+A three-tier architecture consists of:
 
 {{ partial "yaml-tables/generic-table.html" (dict "rows" $data.rows "columns"
 $data.columns) }}

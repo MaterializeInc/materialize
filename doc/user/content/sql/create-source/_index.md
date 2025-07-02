@@ -20,24 +20,7 @@ Like other relations, sources are [namespaced](../namespaces/) by a database and
 
 Materialize bundles **native connectors** that allow ingesting data from the following external systems:
 
-{{< multilinkbox >}}
-{{< linkbox title="Message Brokers" >}}
-- [Kafka](/sql/create-source/kafka)
-- [Redpanda](/sql/create-source/kafka)
-{{</ linkbox >}}
-{{< linkbox title="Databases (CDC)" >}}
-- [PostgreSQL](/ingest-data/postgres/)
-- [MySQL](/ingest-data/mysql/)
-- [SQL Server](/ingest-data/sql-server/)
-- [MongoDB](https://github.com/MaterializeIncLabs/materialize-mongodb-debezium)
-- [CockroachDB](/ingest-data/cdc-cockroachdb/)
-{{</ linkbox >}}
-{{< linkbox title="Webhooks" >}}
-- [Amazon EventBridge](/ingest-data/webhooks/amazon-eventbridge/)
-- [Segment](/ingest-data/webhooks/segment/)
-- [Other webhooks](/sql/create-source/webhook)
-{{</ linkbox >}}
-{{</ multilinkbox >}}
+{{< include-md file="shared-content/multilink-box-native-connectors.md" >}}
 
 For details on the syntax, supported formats and features of each connector, check out the dedicated `CREATE SOURCE` documentation pages.
 
