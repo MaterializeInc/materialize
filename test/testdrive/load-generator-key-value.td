@@ -99,17 +99,21 @@ contains:FOR SCHEMAS
 # 48 values produced (3 snapshot rounds with 16 keys).
 # For the `TRANSACTIONAL SNAPSHOT = false` source, we produce 48 updates from the 3 rounds.
 # We expect and 6 quick round offsets (based on the batch size)
+#
+# NOTE: For these statistics queries, we take the MAX, because we will have
+# statistics per replica that is (or was) running the source.
 > SELECT
     s.name,
-    u.offset_known,
-    u.offset_committed,
-    u.snapshot_records_known,
-    u.snapshot_records_staged,
-    u.messages_received,
-    u.records_indexed
+    MAX(u.offset_known),
+    MAX(u.offset_committed),
+    MAX(u.snapshot_records_known),
+    MAX(u.snapshot_records_staged),
+    MAX(u.messages_received),
+    MAX(u.records_indexed)
   FROM mz_sources s
   JOIN mz_internal.mz_source_statistics u ON s.id = u.id
   WHERE s.name IN ('up_no_update', 'up_quick')
+  GROUP BY s.name
 up_no_update 3 3 48 48 48 16
 up_quick     6 6  0  0 48 16
 
@@ -148,15 +152,16 @@ true
 
 > SELECT
     s.name,
-    u.offset_known,
-    u.offset_committed,
-    u.snapshot_records_known,
-    u.snapshot_records_staged,
-    u.messages_received,
-    u.records_indexed
+    MAX(u.offset_known),
+    MAX(u.offset_committed),
+    MAX(u.snapshot_records_known),
+    MAX(u.snapshot_records_staged),
+    MAX(u.messages_received),
+    MAX(u.records_indexed)
   FROM mz_sources s
   JOIN mz_internal.mz_source_statistics u ON s.id = u.id
   WHERE s.name IN ('up_no_update', 'up_quick')
+  GROUP BY s.name
 up_no_update 3 3 48 48 48 16
 up_quick     6 6  0  0 48 16
 
@@ -188,15 +193,16 @@ up_quick     6 6  0  0 48 16
 # Higher offsets than before, as we produce more values.
 # > SELECT
 #     s.name,
-#     u.offset_known > 3,
-#     u.offset_committed = u.offset_known,
-#     u.snapshot_records_known,
-#     u.snapshot_records_staged,
-#     u.messages_received > 48,
-#     u.records_indexed
+#     MAX(u.offset_known) > 3,
+#     MAX(u.offset_committed) = MAX(u.offset_known),
+#     MAX(u.snapshot_records_known),
+#     MAX(u.snapshot_records_staged),
+#     MAX(u.messages_received) > 48,
+#     MAX(u.records_indexed)
 #   FROM mz_sources s
 #   JOIN mz_internal.mz_source_statistics u ON s.id = u.id
 #   WHERE s.name IN ('up_with_update')
+#   GROUP BY s.name
 # up_with_update true true 48 48 true 16
 
 # Also, despite the same seed, values should be different than the snapshot-only source.
