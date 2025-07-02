@@ -98,21 +98,35 @@ pub async fn run_sql(mut cmd: SqlCommand, state: &mut State) -> Result<ControlFl
                 let epoch = SystemTime::UNIX_EPOCH;
                 let ts = now.duration_since(epoch).unwrap().as_secs_f64();
                 let delay = now.duration_since(start).unwrap().as_secs_f64();
-                if retry_state.i != 0 {
+                if retry_state.i != 0 && retry_state.next_backoff.is_some() {
                     println!();
                 }
                 println!("rows match; continuing at ts {ts}, took {delay}s");
                 (state, Ok(()))
             }
             Err(e) => {
-                if retry_state.i == 0 && should_retry {
-                    print!("rows didn't match; sleeping to see if dataflow catches up");
-                }
                 if let Some(backoff) = retry_state.next_backoff {
                     if !backoff.is_zero() {
-                        print!(" {:.0?}", backoff);
+                        // Remove old status lines so as not to spam the output
+                        for _ in 0..state.error_line_count {
+                            print!("\x1B[1A\x1B[2K");
+                        }
+                        io::stdout().flush().unwrap();
+                        let error_string = format!("{:?}", e);
+                        state.error_line_count = error_string.lines().count() + 1;
+                        // Contains a newline already, so don't print an additional one
+                        print!("{}", error_string);
+                        println!(
+                            "rows didn't match; sleeping to see if dataflow catches up 🕑 {:.0?}",
+                            retry_state.next_backoff.unwrap_or_default()
+                        );
                         io::stdout().flush().unwrap();
                     }
+                } else {
+                    for _ in 0..state.error_line_count {
+                        print!("\x1B[1A\x1B[2K");
+                    }
+                    io::stdout().flush().unwrap();
                 }
                 (state, Err(e))
             }
@@ -120,7 +134,6 @@ pub async fn run_sql(mut cmd: SqlCommand, state: &mut State) -> Result<ControlFl
     })
     .await;
     if let Err(e) = res {
-        println!();
         return Err(e);
     }
     if state.consistency_checks == super::consistency::Level::Statement {
@@ -307,6 +320,7 @@ async fn try_run_sql(
     }
 }
 
+#[derive(Clone)]
 enum ErrorMatcher {
     Contains(String),
     Exact(String),
@@ -352,7 +366,7 @@ impl ErrorMatcher {
 
 pub async fn run_fail_sql(
     cmd: FailSqlCommand,
-    state: &State,
+    state: &mut State,
 ) -> Result<ControlFlow, anyhow::Error> {
     use Statement::{AlterSink, Commit, CreateConnection, Fetch, Rollback};
 
@@ -397,7 +411,6 @@ pub async fn run_fail_sql(
         Some(_) => true,
     };
 
-    let state = &state;
     let res = match should_retry {
         true => Retry::default()
             .initial_backoff(state.initial_backoff)
@@ -406,15 +419,15 @@ pub async fn run_fail_sql(
             .max_tries(state.max_tries),
         false => Retry::default().max_duration(state.timeout).max_tries(1),
     }
-    .retry_async_canceling(|retry_state| {
-        let expected_error = &expected_error;
-        let expected_detail = &expected_detail;
-        let expected_hint = &expected_hint;
+    .retry_async_with_state_canceling(state, |retry_state, state| {
+        let expected_error = expected_error.clone();
+        let expected_detail = expected_detail.clone();
+        let expected_hint = expected_hint.clone();
         async move {
             match try_run_fail_sql(
                 state,
                 query,
-                expected_error,
+                &expected_error,
                 expected_detail.as_ref(),
                 expected_hint.as_ref(),
             )
@@ -425,26 +438,32 @@ pub async fn run_fail_sql(
                         println!();
                     }
                     println!("query error matches; continuing");
-                    Ok(())
+                    (state, Ok(()))
                 }
                 Err(e) => {
-                    if retry_state.i == 0 && should_retry {
-                        print!(
-                            "query error didn't match; \
-                                sleeping to see if dataflow produces error shortly"
-                        );
-                    }
                     if let Some(backoff) = retry_state.next_backoff {
-                        print!(" {:.0?}", backoff);
-                        io::stdout().flush().unwrap();
+                        if !backoff.is_zero() {
+                            // Remove old status lines so as not to spam the output
+                            for _ in 0..state.error_line_count {
+                                print!("\x1B[1A\x1B[2K");
+                            }
+                            io::stdout().flush().unwrap();
+                            let error_string = format!("{:?}", e);
+                            state.error_line_count = error_string.lines().count() + 1;
+                            println!("{}", error_string);
+                            println!("query error didn't match; sleeping to see if dataflow produces error shortly 🕑 {:.0?}", retry_state.next_backoff.unwrap_or_default());
+                            io::stdout().flush().unwrap();
+                        }
                     } else {
-                        println!();
+                        for _ in 0..state.error_line_count {
+                            print!("\x1B[1A\x1B[2K");
+                        }
+                        io::stdout().flush().unwrap();
                     }
-                    Err(e)
+                    (state, Err(e))
                 }
             }
-        }
-    })
+        }})
     .await;
 
     // If a timeout was expected, check whether the retry operation timed

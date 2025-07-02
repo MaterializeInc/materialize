@@ -314,6 +314,44 @@ impl Retry {
         )
     }
 
+    /// Combines [`Retry::retry_async_canceling`] and [`Retry::retry_async_with_state`], so that
+    /// both timeouts are respected and user state can be passed in (bot not be read out).
+    pub async fn retry_async_with_state_canceling<F, S, U, R, T, E>(
+        self,
+        mut user_state: S,
+        mut f: F,
+    ) -> Result<T, E>
+    where
+        F: FnMut(RetryState, S) -> U,
+        U: Future<Output = (S, R)>,
+        R: Into<RetryResult<T, E>>,
+        E: From<Elapsed> + std::fmt::Debug,
+    {
+        let start = Instant::now();
+        let max_duration = self.max_duration;
+        let stream = self.into_retry_stream();
+        tokio::pin!(stream);
+        let mut err = None;
+        while let Some(retry_state) = stream.next().await {
+            let fut = time::timeout(
+                max_duration.saturating_sub(start.elapsed()),
+                f(retry_state, user_state),
+            );
+            match fut.await {
+                Ok((s, r)) => match r.into() {
+                    RetryResult::Ok(t) => return Ok(t),
+                    RetryResult::FatalErr(e) => return Err(e),
+                    RetryResult::RetryableErr(e) => {
+                        err = Some(e);
+                        user_state = s;
+                    }
+                },
+                Err(e) => return Err(err.unwrap_or_else(|| e.into())),
+            }
+        }
+        Err(err.expect("retry produces at least one element"))
+    }
+
     /// Convert into [`RetryStream`]
     pub fn into_retry_stream(self) -> RetryStream {
         RetryStream {
