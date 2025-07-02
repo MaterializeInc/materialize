@@ -560,6 +560,7 @@ UNINTERESTING_SYSTEM_PARAMETERS = [
     "enable_timely_init_at_process_startup",
     "persist_enable_incremental_compaction",
     "storage_statistics_retention_duration",
+    "enable_ctp_cluster_protocols",
 ]
 
 
