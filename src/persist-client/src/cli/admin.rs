@@ -805,7 +805,7 @@ pub async fn dangerous_force_compaction_and_break_pushdown<K, V, T, D>(
             .iter()
             .map(|x| x.runs().count())
             .sum();
-        if num_runs == 1 {
+        if num_runs <= 1 {
             info!(
                 "force_compaction {} {} exiting with {} runs",
                 machine.applier.shard_metrics.name,
