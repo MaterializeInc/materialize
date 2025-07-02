@@ -212,6 +212,7 @@ use mz_timely_util::antichain::AntichainExt;
 use timely::communication::Allocate;
 use timely::dataflow::Scope;
 use timely::dataflow::operators::{Concatenate, ConnectLoop, Feedback, Leave, Map};
+use timely::dataflow::scopes::Child;
 use timely::progress::Antichain;
 use timely::worker::{AsWorker, Worker as TimelyWorker};
 use tokio::sync::Semaphore;
@@ -242,6 +243,7 @@ pub fn build_ingestion_dataflow<A: Allocate>(
     let debug_name = primary_source_id.to_string();
     let name = format!("Source dataflow: {debug_name}");
     timely_worker.dataflow_core(&name, worker_logging, Box::new(()), |_, root_scope| {
+        let root_scope: &mut Child<_, ()> = root_scope;
         // Here we need to create two scopes. One timestamped with `()`, which is the root scope,
         // and one timestamped with `mz_repr::Timestamp` which is the final scope of the dataflow.
         // Refer to the module documentation for an explanation of this structure.
@@ -348,7 +350,8 @@ pub fn build_ingestion_dataflow<A: Allocate>(
             tokens.extend(source_tokens);
 
             let mut upper_streams = vec![];
-            let mut health_streams = vec![source_health];
+            let mut health_streams = Vec::with_capacity(source_health.len() + outputs.len());
+            health_streams.extend(source_health);
             for (export_id, (ok, err)) in outputs {
                 let export = &description.source_exports[&export_id];
                 let source_data = ok.map(Ok).concat(&err.map(Err));
@@ -396,7 +399,7 @@ pub fn build_ingestion_dataflow<A: Allocate>(
 
             let health_stream = root_scope.concatenate(health_streams);
             let health_token = crate::healthcheck::health_operator(
-                mz_scope,
+                root_scope,
                 storage_state.now.clone(),
                 resume_uppers
                     .iter()
@@ -444,12 +447,7 @@ pub fn build_export_dataflow<A: Allocate>(
         // We build a region here to establish a pattern of a scope inside the dataflow
         // so that other similar uses (e.g. with iterative scopes) do not require weird
         // alternate type signatures.
-        root_scope.clone().scoped(&name, |scope| {
-            let _debug_name = format!("{debug_name}-sinks");
-            let _: &mut timely::dataflow::scopes::Child<
-                timely::dataflow::scopes::Child<TimelyWorker<A>, _>,
-                mz_repr::Timestamp,
-            > = scope;
+        root_scope.region_named(&name, |scope| {
             let mut tokens = vec![];
             let (health_stream, sink_tokens) =
                 crate::render::sinks::render_sink(scope, storage_state, id, &description);

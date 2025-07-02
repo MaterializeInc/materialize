@@ -27,7 +27,6 @@ use mz_storage_types::errors::DataflowError;
 use mz_storage_types::sinks::{StorageSinkConnection, StorageSinkDesc};
 use mz_timely_util::builder_async::PressOnDropButton;
 use timely::dataflow::operators::Leave;
-use timely::dataflow::scopes::Child;
 use timely::dataflow::{Scope, Stream};
 use tracing::warn;
 
@@ -37,16 +36,15 @@ use crate::storage_state::StorageState;
 /// _Renders_ complete _differential_ [`Collection`]s
 /// that represent the sink and its errors as requested
 /// by the original `CREATE SINK` statement.
-pub(crate) fn render_sink<'g, G: Scope<Timestamp = ()>>(
-    scope: &mut Child<'g, G, mz_repr::Timestamp>,
+pub(crate) fn render_sink<G>(
+    scope: &mut G,
     storage_state: &mut StorageState,
     sink_id: GlobalId,
     sink: &StorageSinkDesc<CollectionMetadata, mz_repr::Timestamp>,
-) -> (Stream<G, HealthStatusMessage>, Vec<PressOnDropButton>) {
-    let sink_render = get_sink_render_for(&sink.connection);
-
-    let mut tokens = vec![];
-
+) -> (Stream<G, HealthStatusMessage>, Vec<PressOnDropButton>)
+where
+    G: Scope<Timestamp = ()>,
+{
     let snapshot_mode = if sink.with_snapshot {
         SnapshotMode::Include
     } else {
@@ -55,38 +53,43 @@ pub(crate) fn render_sink<'g, G: Scope<Timestamp = ()>>(
 
     let error_handler = storage_state.error_handler("storage_sink", sink_id);
 
-    let (ok_collection, err_collection, persist_tokens) = persist_source::persist_source(
-        scope,
-        sink.from,
-        Arc::clone(&storage_state.persist_clients),
-        &storage_state.txns_ctx,
-        storage_state.storage_configuration.config_set(),
-        sink.from_storage_metadata.clone(),
-        None,
-        Some(sink.as_of.clone()),
-        snapshot_mode,
-        timely::progress::Antichain::new(),
-        None,
-        None,
-        async {},
-        error_handler,
-    );
-    tokens.extend(persist_tokens);
+    let name = format!("{sink_id}-sinks");
 
-    let ok_collection =
-        zip_into_diff_pairs(sink_id, sink, &*sink_render, ok_collection.as_collection());
+    scope.scoped(&name, |scope| {
+        let mut tokens = vec![];
+        let sink_render = get_sink_render_for(&sink.connection);
 
-    let (health, sink_tokens) = sink_render.render_sink(
-        storage_state,
-        sink,
-        sink_id,
-        ok_collection,
-        err_collection.as_collection(),
-    );
+        let (ok_collection, err_collection, persist_tokens) = persist_source::persist_source(
+            scope,
+            sink.from,
+            Arc::clone(&storage_state.persist_clients),
+            &storage_state.txns_ctx,
+            storage_state.storage_configuration.config_set(),
+            sink.from_storage_metadata.clone(),
+            None,
+            Some(sink.as_of.clone()),
+            snapshot_mode,
+            timely::progress::Antichain::new(),
+            None,
+            None,
+            async {},
+            error_handler,
+        );
+        tokens.extend(persist_tokens);
 
-    tokens.extend(sink_tokens);
+        let ok_collection =
+            zip_into_diff_pairs(sink_id, sink, &*sink_render, ok_collection.as_collection());
 
-    (health.leave(), tokens)
+        let (health, sink_tokens) = sink_render.render_sink(
+            storage_state,
+            sink,
+            sink_id,
+            ok_collection,
+            err_collection.as_collection(),
+        );
+        tokens.extend(sink_tokens);
+        (health.leave(), tokens)
+    })
 }
 
 /// Zip the input to a sink so that updates to the same key appear as

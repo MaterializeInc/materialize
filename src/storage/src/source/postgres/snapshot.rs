@@ -214,7 +214,7 @@ pub(crate) fn render<G: Scope<Timestamp = MzOffset>>(
     // feedback edge specifically having a default conncetion would result in a loop.
     let mut snapshot_input = builder.new_disconnected_input(&feedback_data, Pipeline);
 
-    // The export id must be sent to all workes, so we broadcast the feedback connection
+    // The export id must be sent to all workers, so we broadcast the feedback connection
     snapshot.broadcast().connect_loop(feedback_handle);
 
     let is_snapshot_leader = config.responsible_for("snapshot_leader");

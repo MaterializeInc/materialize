@@ -49,10 +49,10 @@ use mz_timely_util::builder_async::{
     Event as AsyncEvent, OperatorBuilder as AsyncOperatorBuilder, PressOnDropButton,
 };
 use mz_timely_util::capture::PusherCapture;
+use mz_timely_util::operator::ConcatenateFlatten;
 use mz_timely_util::reclock::reclock;
 use timely::container::CapacityContainerBuilder;
 use timely::dataflow::channels::pact::Pipeline;
-use timely::dataflow::operators::Concatenate;
 use timely::dataflow::operators::capture::capture::Capture;
 use timely::dataflow::operators::capture::{Event, EventPusher};
 use timely::dataflow::operators::core::Map as _;
@@ -428,7 +428,7 @@ where
     (
         export_collections,
         progress,
-        health.concatenate(health_streams),
+        health.concatenate_flatten::<_, CapacityContainerBuilder<_>>(health_streams),
         tokens,
     )
 }
