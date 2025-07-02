@@ -1550,7 +1550,6 @@ steps:
               # Postgres does not support WMR, so our only hope for a comparison
               # test is to use a previous Mz version via --other-tag=...
               args: ["wmr", "--seed=$BUILDKITE_JOB_ID", "--other-tag=common-ancestor"]
-        skip: "database-issues#9439"
 
       - id: rqg-banking
         label: "RQG banking workload"
