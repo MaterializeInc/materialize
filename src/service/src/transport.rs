@@ -21,27 +21,26 @@
 //! is already established, the previous connection is canceled.
 
 use std::convert::Infallible;
-use std::marker::PhantomData;
-use std::pin::pin;
 use std::time::Duration;
-use std::{fmt, mem};
+use std::{fmt, io, mem};
 
 use anyhow::{anyhow, bail};
 use async_trait::async_trait;
+use bytes::BytesMut;
 use flate2::Compression;
 use flate2::read::DeflateDecoder;
 use flate2::write::DeflateEncoder;
-use futures::stream::StreamExt;
 use futures::{FutureExt, future};
 use mz_ore::cast::{CastFrom, CastInto};
 use mz_ore::netio::{Listener, SocketAddr, Stream};
-use mz_ore::task::{JoinHandle, JoinHandleExt};
+use mz_ore::task::{AbortOnDropHandle, JoinHandle, JoinHandleExt};
 use semver::Version;
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use tokio::sync::{mpsc, oneshot};
-use tracing::{info, trace};
+use tokio::time::MissedTickBehavior;
+use tracing::{info, trace, warn};
 
 use crate::client::{GenericClient, Partitionable, Partitioned};
 
@@ -51,12 +50,7 @@ impl<T: fmt::Debug + Send + Serialize + DeserializeOwned + 'static> Payload for 
 /// A client for a CTP connection.
 #[derive(Debug)]
 pub struct Client<Out, In> {
-    /// Sender for outbound messages.
-    out_tx: mpsc::UnboundedSender<Out>,
-    /// Receiver for inbound messages.
-    in_rx: mpsc::UnboundedReceiver<In>,
-    /// Channel that receives the error if the connection fails.
-    error_rx: Option<oneshot::Receiver<anyhow::Error>>,
+    connection: Connection<Out, In>,
 }
 
 impl<Out: Payload, In: Payload> Client<Out, In> {
@@ -75,40 +69,10 @@ impl<Out: Payload, In: Payload> Client<Out, In> {
         let stream = mz_ore::future::timeout(connect_timeout, Stream::connect(address)).await?;
         info!(%address, "ctp: connected to server");
 
-        let (out_tx, out_rx) = mpsc::unbounded_channel();
-        let (in_tx, in_rx) = mpsc::unbounded_channel();
-        let (error_tx, error_rx) = oneshot::channel();
+        let mut connection = Connection::start(stream, keepalive_timeout, metrics);
+        connection.handshake(version, dest_host).await?;
 
-        mz_ore::task::spawn(|| "ctp::client-connection", async move {
-            let conn = Connection::new(stream, version, dest_host, keepalive_timeout, metrics);
-            let handler = ChannelHandler::new(in_tx, out_rx);
-            let cancel_signal = futures::future::pending();
-
-            let Err(error) = conn.serve(handler, cancel_signal).await;
-            info!("ctp: connection failed: {error}");
-            let _ = error_tx.send(error);
-        });
-
-        Ok(Self {
-            out_tx,
-            in_rx,
-            error_rx: Some(error_rx),
-        })
-    }
-
-    /// Return the connection error reported by the connection task.
-    ///
-    /// # Panics
-    ///
-    /// Panics if no error has been reported.
-    fn expect_error(&mut self) -> anyhow::Error {
-        if let Some(mut rx) = self.error_rx.take() {
-            rx.try_recv().expect("expected connection error")
-        } else {
-            // An error was reported but we have already taken it in a previous call.
-            // Return a default error instead.
-            anyhow!("connection closed")
-        }
+        Ok(Self { connection })
     }
 }
 
@@ -159,20 +123,15 @@ where
 #[async_trait]
 impl<Out: Payload, In: Payload> GenericClient<Out, In> for Client<Out, In> {
     async fn send(&mut self, cmd: Out) -> anyhow::Result<()> {
-        self.out_tx.send(cmd).map_err(|_| self.expect_error())
+        self.connection.send_payload(cmd).await
     }
 
     /// # Cancel safety
     ///
-    /// This method is cancel safe. If `recv` is used as the event in a [`tokio::select!`]
-    /// statement and some other branch completes first, it is guaranteed that no messages were
-    /// received by this client.
+    /// This method is cancel safe.
     async fn recv(&mut self) -> anyhow::Result<Option<In>> {
-        // `mpsc::UnboundedReceiver::recv` is cancel safe.
-        match self.in_rx.recv().await {
-            Some(resp) => Ok(Some(resp)),
-            None => Err(self.expect_error()),
-        }
+        // `Connection::recv_payload` is documented to be cancel safe.
+        self.connection.recv_payload().await.map(Some)
     }
 }
 
@@ -191,11 +150,11 @@ where
     H: GenericClient<In, Out> + 'static,
 {
     // Keep a handle to the task serving the current connection, as well as a cancelation token, so
-    // we can canel it when a new client connects.
+    // we can cancel it when a new client connects.
     //
     // Note that we cannot simply abort the previous connection task because its future isn't known
-    // to be cancel safe. Instead we pass the connection tasks a cancelation token and wait for
-    // them to shut themselves down gracefully once the token gets dropped.
+    // to be cancel safe. Instead we pass the connection task a cancelation token and wait for it
+    // to shut itself down gracefully once the token gets dropped.
     let mut connection_task: Option<(JoinHandle<()>, oneshot::Sender<()>)> = None;
 
     let listener = Listener::bind(&address).await?;
@@ -211,21 +170,53 @@ where
             task.wait_and_assert_finished().await;
         }
 
+        let conn = Connection::start(stream, keepalive_timeout, metrics.clone());
         let handler = handler_fn();
         let version = version.clone();
         let server_fqdn = server_fqdn.clone();
-        let metrics = metrics.clone();
 
         let (cancel_tx, cancel_rx) = oneshot::channel();
         let cancel_signal = cancel_rx.map(|_| ());
 
-        let handle = mz_ore::task::spawn(|| "ctp::server-connection", async move {
-            let conn = Connection::new(stream, version, server_fqdn, keepalive_timeout, metrics);
-
-            let Err(error) = conn.serve(handler, cancel_signal).await;
+        let handle = mz_ore::task::spawn(|| "ctp::connection", async move {
+            let Err(error) =
+                serve_connection(conn, handler, version, server_fqdn, cancel_signal).await;
             info!("ctp: connection failed: {error}");
         });
         connection_task = Some((handle, cancel_tx));
+    }
+}
+
+async fn serve_connection<In, Out, H>(
+    mut conn: Connection<Out, In>,
+    mut handler: H,
+    version: Version,
+    server_fqdn: Option<String>,
+    cancel_signal: impl Future<Output = ()>,
+) -> anyhow::Result<Infallible>
+where
+    In: Payload,
+    Out: Payload,
+    H: GenericClient<In, Out>,
+{
+    conn.handshake(version, server_fqdn).await?;
+
+    let mut cancel_signal = Some(Box::pin(cancel_signal));
+
+    loop {
+        tokio::select! {
+            // `Connection::recv_payload` is documented to be cancel safe.
+            inbound = conn.recv_payload() => {
+                let payload = inbound?;
+                handler.send(payload).await?;
+            },
+            // `GenericClient::recv` is documented to be cancel safe.
+            outbound = handler.recv() => match outbound? {
+                Some(payload) => conn.send_payload(payload).await?,
+                None => bail!("client disconnected"),
+            },
+            _ = cancel_signal.as_mut().unwrap() => bail!("connection canceled"),
+        }
     }
 }
 
@@ -246,105 +237,104 @@ impl<Out, In> Metrics<Out, In> for NoopMetrics {
 
 /// An active CTP connection.
 #[derive(Debug)]
-struct Connection<Out, In, M> {
-    /// The underlying connection to the peer.
-    stream: Stream,
-    /// The version of this connection endpoint.
-    ///
-    /// Used during the protocol handshake. Both endpoints are required to have the same version
-    /// for the connection to be successfully established.
-    version: Version,
-    /// The FQDN of the server endpoint, if known.
-    ///
-    /// Used during the protcol handshake. If both endpoints know a server FQDN, it must match for
-    /// the connection to be successfully established.
-    server_fqdn: Option<String>,
-    /// The timeout for all network operations.
-    timeout: Duration,
-    /// Metrics tracked for this connection.
-    metrics: M,
-    _payloads: PhantomData<(Out, In)>,
+struct Connection<Out, In> {
+    /// Sender connected to the send task.
+    tx: mpsc::Sender<Message<Out>>,
+    /// Receiver connected to the receive task.
+    rx: mpsc::Receiver<Message<In>>,
+
+    send_task: AbortOnDropHandle<anyhow::Result<()>>,
+    recv_task: AbortOnDropHandle<anyhow::Result<()>>,
+    _keepalive_task: AbortOnDropHandle<()>,
 }
 
-impl<Out, In, M> Connection<Out, In, M>
+impl<Out, In> Connection<Out, In>
 where
     Out: Payload,
     In: Payload,
-    M: Metrics<Out, In>,
 {
+    const KEEPALIVE_INTERVAL: Duration = Duration::from_secs(1);
+
     /// Create a new connection wrapping the given stream.
-    fn new(
-        stream: Stream,
-        version: Version,
-        server_fqdn: Option<String>,
-        timeout: Duration,
-        metrics: M,
-    ) -> Self {
+    fn start(stream: Stream, mut timeout: Duration, metrics: impl Metrics<Out, In>) -> Self {
+        let min_timeout = Self::KEEPALIVE_INTERVAL * 2;
+        if timeout < min_timeout {
+            warn!(
+                ?timeout,
+                ?min_timeout,
+                "ctp: configured timeout less than minimum timeout",
+            );
+            timeout = min_timeout;
+        }
+
+        let (stream_rx, stream_tx) = stream.split();
+        let (out_tx, out_rx) = mpsc::channel(1024);
+        let (in_tx, in_rx) = mpsc::channel(1024);
+
+        let send_task = mz_ore::task::spawn(
+            || "ctp::send",
+            Self::run_send_task(stream_tx, out_rx, timeout, metrics.clone()),
+        );
+        let recv_task = mz_ore::task::spawn(
+            || "ctp::recv",
+            Self::run_recv_task(stream_rx, in_tx, timeout, metrics),
+        );
+        let keepalive_task = mz_ore::task::spawn(
+            || "ctp::keepalive",
+            Self::run_keepalive_task(out_tx.clone()),
+        );
+
         Self {
-            stream,
-            version,
-            server_fqdn,
-            timeout,
-            metrics,
-            _payloads: PhantomData,
+            tx: out_tx,
+            rx: in_rx,
+            send_task: send_task.abort_on_drop(),
+            recv_task: recv_task.abort_on_drop(),
+            _keepalive_task: keepalive_task.abort_on_drop(),
         }
     }
 
-    /// Serve this connection until it fails or is canceled.
-    async fn serve<H>(
-        mut self,
-        mut handler: H,
-        cancel_signal: impl Future<Output = ()>,
-    ) -> anyhow::Result<Infallible>
-    where
-        H: GenericClient<In, Out>,
-    {
-        self.handshake().await?;
+    async fn send(&mut self, message: Message<Out>) -> anyhow::Result<()> {
+        self.tx.send(message).await.map_err(|_| self.expect_error())
+    }
 
-        // Send a `Keepalive` message every second on idle connections. We reset the interval every
-        // time we send a message, to avoid sending superfluous keepalives on busy connections.
-        let mut keepalive_interval = tokio::time::interval(Duration::from_secs(1));
-        keepalive_interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
-        keepalive_interval.reset();
+    /// # Cancel safety
+    ///
+    /// This method is cancel safe.
+    async fn recv(&mut self) -> anyhow::Result<Message<In>> {
+        // `mpcs::Receiver::recv` is documented to be cancel safe.
+        self.rx.recv().await.ok_or_else(|| self.expect_error())
+    }
 
-        // `Connection::recv` is not cancel safe, so we can't use it in a `select!` directly.
-        // Instead we wrap it into an async stream and select on `Stream::next`, which is cancel
-        // safe.
-        let (mut stream_rx, mut stream_tx) = self.stream.split();
-        let mut metrics = self.metrics.clone();
-        let mut inbound = pin!(async_stream::stream! {
-            loop {
-                yield Self::recv(&mut stream_rx, self.timeout, &mut metrics).await;
-            }
-        });
+    async fn send_payload(&mut self, payload: Out) -> anyhow::Result<()> {
+        self.send(Message::Payload(payload)).await
+    }
 
-        let mut cancel_signal = Some(Box::pin(cancel_signal));
-
+    /// # Cancel safety
+    ///
+    /// This method is cancel safe.
+    async fn recv_payload(&mut self) -> anyhow::Result<In> {
         loop {
-            tokio::select! {
-                // `Stream::next` is cancel safe: The returned future only holds a reference to the
-                // underlying stream, so dropping it will never lose a value.
-                Some(inbound) = inbound.next() => match inbound? {
-                    Message::Payload(p) => handler.send(p).await?,
-                    Message::Keepalive => (),
-                    Message::Hello { .. } => bail!("received Hello message after handshake"),
-                },
-                // `GenericClient::recv` is documented to be cancel safe.
-                outbound = handler.recv() => match outbound? {
-                    Some(p) => {
-                        let msg = Message::Payload(p);
-                        Self::send(&mut stream_tx, msg, self.timeout, &mut self.metrics).await?;
-                        keepalive_interval.reset();
-                    }
-                    None => bail!("client disconnected"),
-                },
-                // `Interval::tick` is documented to be cancel safe.
-                _ = keepalive_interval.tick() => {
-                    let msg = Message::Keepalive;
-                    Self::send(&mut stream_tx, msg, self.timeout, &mut self.metrics).await?;
-                }
-                _ = cancel_signal.as_mut().unwrap() => bail!("connection canceled"),
+            // `Connection::recv` is documented to be cancel safe.
+            match self.recv().await? {
+                Message::Payload(payload) => break Ok(payload),
+                Message::Keepalive => (),
+                Message::Hello { .. } => bail!("received Hello message after handshake"),
             }
+        }
+    }
+
+    /// Return the connection error reported by a connection task.
+    ///
+    /// # Panics
+    ///
+    /// Panics if no task has encountered an error has been reported.
+    fn expect_error(&mut self) -> anyhow::Error {
+        if let Some(Ok(Err(error))) = (&mut self.send_task).now_or_never() {
+            error
+        } else if let Some(Ok(Err(error))) = (&mut self.recv_task).now_or_never() {
+            error
+        } else {
+            panic!("expected connection error");
         }
     }
 
@@ -354,26 +344,32 @@ where
     /// return. The `Hello` message contains information about the originating endpoint that is
     /// used by the receiver to validate compatibility with its peer. Only if both endpoints
     /// determine that they are compatible does the handshake succeed.
-    async fn handshake(&mut self) -> anyhow::Result<()> {
-        let hello = Message::Hello {
-            version: self.version.clone(),
-            server_fqdn: self.server_fqdn.clone(),
-        };
-        Self::send(&mut self.stream, hello, self.timeout, &mut self.metrics).await?;
+    async fn handshake(
+        &mut self,
+        version: Version,
+        server_fqdn: Option<String>,
+    ) -> anyhow::Result<()> {
+        self.send(Message::Hello {
+            version: version.clone(),
+            server_fqdn: server_fqdn.clone(),
+        })
+        .await?;
 
-        let msg = Self::recv(&mut self.stream, self.timeout, &mut self.metrics).await?;
-        let Message::Hello {
-            version,
-            server_fqdn,
-        } = msg
-        else {
-            bail!("expected Hello message, got {msg:?}");
+        let (peer_version, peer_server_fqdn) = loop {
+            match self.recv().await? {
+                Message::Hello {
+                    version,
+                    server_fqdn,
+                } => break (version, server_fqdn),
+                Message::Keepalive => (),
+                msg => bail!("expected Hello message, got {msg:?}"),
+            }
         };
 
-        if version != self.version {
-            bail!("version mismatch: {version} != {}", self.version);
+        if peer_version != version {
+            bail!("version mismatch: {peer_version} != {version}");
         }
-        if let (Some(other), Some(mine)) = (&server_fqdn, &self.server_fqdn) {
+        if let (Some(other), Some(mine)) = (&peer_server_fqdn, &server_fqdn) {
             if other != mine {
                 bail!("server FQDN mismatch: {other} != {mine}");
             }
@@ -382,44 +378,96 @@ where
         Ok(())
     }
 
-    /// Send a message to the peer.
-    async fn send<W: AsyncWrite + Unpin>(
+    async fn run_send_task<W: AsyncWrite + Unpin>(
         mut writer: W,
-        message: Message<Out>,
+        mut rx: mpsc::Receiver<Message<Out>>,
         timeout: Duration,
-        metrics: &mut impl Metrics<Out, In>,
+        mut metrics: impl Metrics<Out, In>,
     ) -> anyhow::Result<()> {
-        trace!(?message, "ctp: sending message");
+        let mut send = async |msg: Message<Out>| -> anyhow::Result<()> {
+            let bytes = msg.wire_encode()?;
 
-        let bytes = message.wire_encode()?;
-        let len = bytes.len().cast_into();
+            let len = bytes.len().cast_into();
+            mz_ore::future::timeout(timeout, writer.write_u64(len)).await?;
 
-        mz_ore::future::timeout(timeout, writer.write_u64(len)).await?;
-        mz_ore::future::timeout(timeout, writer.write_all(&bytes)).await?;
+            let mut bytes = &bytes[..];
+            while !bytes.is_empty() {
+                let n = mz_ore::future::timeout(timeout, writer.write(bytes)).await?;
+                if n == 0 {
+                    Err(io::Error::from(io::ErrorKind::WriteZero))?;
+                }
+                bytes = &bytes[n..];
+            }
 
-        let bytes_sent = u64::cast_from(mem::size_of::<u64>()) + len;
-        metrics.message_sent(bytes_sent, message.payload());
+            let bytes_sent = u64::cast_from(mem::size_of::<u64>()) + len;
+            metrics.message_sent(bytes_sent, msg.payload());
+
+            Ok(())
+        };
+
+        while let Some(message) = rx.recv().await {
+            trace!(?message, "ctp: sending message");
+
+            send(message).await.inspect_err(|error| {
+                info!("ctp: send error: {error}");
+            })?;
+        }
 
         Ok(())
     }
 
-    /// Receive a message from the peer.
-    async fn recv<R: AsyncRead + Unpin>(
+    async fn run_recv_task<R: AsyncRead + Unpin>(
         mut reader: R,
+        tx: mpsc::Sender<Message<In>>,
         timeout: Duration,
-        metrics: &mut impl Metrics<Out, In>,
-    ) -> anyhow::Result<Message<In>> {
-        let len = mz_ore::future::timeout(timeout, reader.read_u64()).await?;
-        let mut bytes = vec![0; len.cast_into()];
-        mz_ore::future::timeout(timeout, reader.read_exact(&mut bytes)).await?;
+        mut metrics: impl Metrics<Out, In>,
+    ) -> anyhow::Result<()> {
+        let mut recv = async || -> anyhow::Result<Message<In>> {
+            let len = mz_ore::future::timeout(timeout, reader.read_u64()).await?;
+            let len: usize = len.cast_into();
 
-        let message = Message::wire_decode(&bytes)?;
-        trace!(?message, "ctp: received message");
+            let mut bytes = BytesMut::with_capacity(len);
+            while bytes.len() < len {
+                let n = mz_ore::future::timeout(timeout, reader.read_buf(&mut bytes)).await?;
+                if n == 0 {
+                    Err(io::Error::from(io::ErrorKind::UnexpectedEof))?;
+                }
+            }
 
-        let bytes_received = u64::cast_from(mem::size_of::<u64>()) + len;
-        metrics.message_received(bytes_received, message.payload());
+            let msg = Message::wire_decode(&bytes)?;
 
-        Ok(message)
+            let bytes_received = u64::cast_from(mem::size_of::<u64>() + len);
+            metrics.message_received(bytes_received, msg.payload());
+
+            Ok(msg)
+        };
+
+        loop {
+            let message = recv().await.inspect_err(|error| {
+                info!("ctp: recv error: {error}");
+            })?;
+
+            trace!(?message, "ctp: received message");
+
+            if tx.send(message).await.is_err() {
+                break;
+            }
+        }
+
+        Ok(())
+    }
+
+    async fn run_keepalive_task(tx: mpsc::Sender<Message<Out>>) {
+        let mut interval = tokio::time::interval(Duration::from_secs(1));
+        interval.set_missed_tick_behavior(MissedTickBehavior::Skip);
+        interval.reset();
+
+        loop {
+            interval.tick().await;
+            if tx.send(Message::Keepalive).await.is_err() {
+                break;
+            }
+        }
     }
 }
 
@@ -445,11 +493,9 @@ impl<In: Payload, Out: Payload> GenericClient<In, Out> for ChannelHandler<In, Ou
 
     /// # Cancel safety
     ///
-    /// This method is cancel safe. If `recv` is used as the event in a [`tokio::select!`]
-    /// statement and some other branch completes first, it is guaranteed that no messages were
-    /// received by this client.
+    /// This method is cancel safe.
     async fn recv(&mut self) -> anyhow::Result<Option<Out>> {
-        // `mpsc::UnboundedReceiver::recv` is cancel safe.
+        // `mpsc::UnboundedReceiver::recv` is documented to be cancel safe.
         match self.rx.recv().await {
             Some(resp) => Ok(Some(resp)),
             None => bail!("client channel disconnected"),

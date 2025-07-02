@@ -7186,6 +7186,7 @@ dependencies = [
  "async-stream",
  "async-trait",
  "bincode",
+ "bytes",
  "clap",
  "crossbeam-channel",
  "flate2",
