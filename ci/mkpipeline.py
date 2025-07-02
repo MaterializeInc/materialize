@@ -440,16 +440,20 @@ def switch_jobs_to_aws(pipeline: Any, priority: int) -> None:
                 if "x86-64" not in stuck:
                     if agent == "hetzner-aarch64-2cpu-4gb":
                         config["agents"]["queue"] = "hetzner-x86-64-2cpu-4gb"
-                        config["depends_on"] = "build-x86_64"
+                        if config.get("depends_on") == "build-aarch64":
+                            config["depends_on"] = "build-x86_64"
                     elif agent == "hetzner-aarch64-4cpu-8gb":
                         config["agents"]["queue"] = "hetzner-x86-64-4cpu-8gb"
-                        config["depends_on"] = "build-x86_64"
+                        if config.get("depends_on") == "build-aarch64":
+                            config["depends_on"] = "build-x86_64"
                     elif agent == "hetzner-aarch64-8cpu-16gb":
                         config["agents"]["queue"] = "hetzner-x86-64-8cpu-16gb"
-                        config["depends_on"] = "build-x86_64"
+                        if config.get("depends_on") == "build-aarch64":
+                            config["depends_on"] = "build-x86_64"
                     elif agent == "hetzner-aarch64-16cpu-32gb":
                         config["agents"]["queue"] = "hetzner-x86-64-16cpu-32gb"
-                        config["depends_on"] = "build-x86_64"
+                        if config.get("depends_on") == "build-aarch64":
+                            config["depends_on"] = "build-x86_64"
                 else:
                     if agent in (
                         "hetzner-aarch64-4cpu-8gb",
