@@ -36,6 +36,7 @@ class Clusterd(Service):
         environment = [
             "CLUSTERD_LOG_FILTER",
             f"CLUSTERD_GRPC_HOST={name}",
+            "CLUSTERD_USE_CTP=true",
             "MZ_SOFT_ASSERTIONS=1",
             "MZ_EAT_MY_DATA=1",
             *environment_extra,

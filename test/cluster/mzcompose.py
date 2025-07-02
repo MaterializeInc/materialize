@@ -2379,13 +2379,11 @@ def workflow_test_clusterd_death_detection(c: Composition) -> None:
             """
             )
         )
-        # Should detect broken connection after a few seconds, works with c.kill("clusterd1")
+        # Should detect broken connection after a few seconds.
         time.sleep(10)
         envd = c.invoke("logs", "materialized", capture=True)
-        assert (
-            "error reading a body from connection: stream closed because of a broken pipe"
-            in envd.stdout
-        )
+        print(envd.stdout)
+        assert "replica task failed: timed out" in envd.stdout
 
 
 class Metrics:
