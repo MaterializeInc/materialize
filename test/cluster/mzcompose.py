@@ -2455,18 +2455,8 @@ class Metrics:
     def get_commands_total(self, command_type: str) -> float:
         return self.get_command_count("mz_compute_commands_total", command_type)
 
-    def get_command_bytes_total(self, command_type: str) -> float:
-        return self.get_command_count(
-            "mz_compute_command_message_bytes_total", command_type
-        )
-
     def get_responses_total(self, response_type: str) -> float:
         return self.get_response_count("mz_compute_responses_total", response_type)
-
-    def get_response_bytes_total(self, response_type: str) -> float:
-        return self.get_response_count(
-            "mz_compute_response_message_bytes_total", response_type
-        )
 
     def get_peeks_total(self, result: str) -> float:
         metrics = self.with_name("mz_compute_peeks_total")
@@ -2712,24 +2702,6 @@ def workflow_test_compute_controller_metrics(c: Composition) -> None:
     count = metrics.get_commands_total("update_configuration")
     assert count == 1, f"got {count}"
 
-    # mz_compute_command_message_bytes_total
-    count = metrics.get_command_bytes_total("hello")
-    assert count > 0, f"got {count}"
-    count = metrics.get_command_bytes_total("create_instance")
-    assert count > 0, f"got {count}"
-    count = metrics.get_command_bytes_total("allow_compaction")
-    assert count > 0, f"got {count}"
-    count = metrics.get_command_bytes_total("create_dataflow")
-    assert count > 0, f"got {count}"
-    count = metrics.get_command_bytes_total("peek")
-    assert count > 0, f"got {count}"
-    count = metrics.get_command_bytes_total("cancel_peek")
-    assert count > 0, f"got {count}"
-    count = metrics.get_command_bytes_total("initialization_complete")
-    assert count > 0, f"got {count}"
-    count = metrics.get_command_bytes_total("update_configuration")
-    assert count > 0, f"got {count}"
-
     # mz_compute_responses_total
     count = metrics.get_responses_total("frontiers")
     assert count > 0, f"got {count}"
@@ -2738,14 +2710,10 @@ def workflow_test_compute_controller_metrics(c: Composition) -> None:
     count = metrics.get_responses_total("subscribe_response")
     assert count > 0, f"got {count}"
 
-    # mz_compute_response_message_bytes_total
-    count = metrics.get_response_bytes_total("frontiers")
+    count = metrics.get_value("mz_compute_command_message_bytes_total")
     assert count > 0, f"got {count}"
-    count = metrics.get_response_bytes_total("peek_response")
+    count = metrics.get_value("mz_compute_response_message_bytes_total")
     assert count > 0, f"got {count}"
-    count = metrics.get_response_bytes_total("subscribe_response")
-    assert count > 0, f"got {count}"
-
     count = metrics.get_value("mz_compute_controller_replica_count")
     assert count == 1, f"got {count}"
     count = metrics.get_value("mz_compute_controller_collection_count")

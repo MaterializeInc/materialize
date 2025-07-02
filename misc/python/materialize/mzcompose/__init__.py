@@ -561,6 +561,7 @@ UNINTERESTING_SYSTEM_PARAMETERS = [
     "compute_peek_stash_batch_size",
     "persist_enable_incremental_compaction",
     "storage_statistics_retention_duration",
+    "enable_ctp_cluster_protocols",
 ]
 
 
