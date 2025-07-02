@@ -26,10 +26,11 @@ use mz_ore::metrics::{
 use mz_ore::stats::histogram_seconds_buckets;
 use mz_repr::GlobalId;
 use mz_service::codec::StatsCollector;
+use mz_service::transport;
 use prometheus::core::{AtomicF64, AtomicU64};
 
 use crate::protocol::command::{ComputeCommand, ProtoComputeCommand};
-use crate::protocol::response::{PeekResponse, ProtoComputeResponse};
+use crate::protocol::response::{ComputeResponse, PeekResponse, ProtoComputeResponse};
 
 pub(crate) type Counter = DeleteOnDropCounter<AtomicF64, Vec<String>>;
 pub(crate) type IntCounter = DeleteOnDropCounter<AtomicU64, Vec<String>>;
@@ -468,6 +469,28 @@ impl StatsCollector<ProtoComputeCommand, ProtoComputeResponse> for ReplicaMetric
     }
 }
 
+impl<T> transport::Metrics<ComputeCommand<T>, ComputeResponse<T>> for ReplicaMetrics {
+    fn message_sent(&mut self, bytes: u64, payload: Option<&ComputeCommand<T>>) {
+        if let Some(cmd) = payload {
+            self.inner.commands_total.for_command(cmd).inc();
+            self.inner
+                .command_message_bytes_total
+                .for_command(cmd)
+                .inc_by(u64::cast_from(bytes));
+        };
+    }
+
+    fn message_received(&mut self, bytes: u64, payload: Option<&ComputeResponse<T>>) {
+        if let Some(resp) = payload {
+            self.inner.responses_total.for_response(resp).inc();
+            self.inner
+                .response_message_bytes_total
+                .for_response(resp)
+                .inc_by(u64::cast_from(bytes));
+        }
+    }
+}
+
 /// Per-replica-and-collection metrics.
 #[derive(Debug)]
 pub(crate) struct ReplicaCollectionMetrics {
@@ -592,6 +615,18 @@ impl<M> ResponseMetrics<M> {
             subscribe_response: build_metric("subscribe_response"),
             copy_to_response: build_metric("copy_to_response"),
             status: build_metric("status"),
+        }
+    }
+
+    fn for_response<T>(&self, response: &ComputeResponse<T>) -> &M {
+        use ComputeResponse::*;
+
+        match response {
+            Frontiers(..) => &self.frontiers,
+            PeekResponse(..) => &self.peek_response,
+            SubscribeResponse(..) => &self.subscribe_response,
+            CopyToResponse(..) => &self.copy_to_response,
+            Status(..) => &self.status,
         }
     }
 
