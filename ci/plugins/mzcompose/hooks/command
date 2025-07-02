@@ -267,7 +267,8 @@ cleanup() {
 trap cleanup EXIT SIGTERM SIGINT
 
 TEST_RESULT=0
-{ mzcompose run "${run_args[@]}" |& tee run.log; } || TEST_RESULT=$?
+# sed command to filter out ANSI command codes in run.log, while keeping them in Buildkite's view
+{ mzcompose run "${run_args[@]}" |& tee >(sed -r "s/\x1B\[[0-9;]*[A-Za-z]//g" > run.log); } || TEST_RESULT=$?
 if [ "$TEST_RESULT" != "0" ]; then
     # Give the logs some time to log panics, otherwise they might be missing later
     sleep 10

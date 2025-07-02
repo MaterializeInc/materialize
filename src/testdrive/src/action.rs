@@ -213,6 +213,7 @@ pub struct State {
     consistency_checks_adhoc_skip: bool,
     regex: Option<Regex>,
     regex_replacement: String,
+    error_line_count: usize,
 
     // === Materialize state. ===
     materialize: MaterializeState,
@@ -1037,6 +1038,7 @@ pub async fn create_state(
         regex: None,
         regex_replacement: set::DEFAULT_REGEX_REPLACEMENT.into(),
         rewrite_results: config.rewrite_results,
+        error_line_count: 0,
 
         // === Materialize state. ===
         materialize: materialize_state,
