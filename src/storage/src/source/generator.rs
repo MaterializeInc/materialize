@@ -34,9 +34,7 @@ use timely::progress::Antichain;
 use tokio::time::{Instant, interval_at};
 
 use crate::healthcheck::{HealthStatusMessage, HealthStatusUpdate, StatusNamespace};
-use crate::source::types::{
-    Probe, ProgressStatisticsUpdate, SignaledFuture, SourceRender, StackedCollection,
-};
+use crate::source::types::{Probe, SignaledFuture, SourceRender, StackedCollection};
 use crate::source::{RawSourceCreationConfig, SourceMessage};
 
 mod auction;
@@ -143,16 +141,17 @@ impl GeneratorKind {
         BTreeMap<GlobalId, StackedCollection<G, Result<SourceMessage, DataflowError>>>,
         Stream<G, Infallible>,
         Stream<G, HealthStatusMessage>,
-        Stream<G, ProgressStatisticsUpdate>,
         Vec<PressOnDropButton>,
     ) {
         // figure out which output types from the generator belong to which output indexes
         let mut output_map = BTreeMap::new();
+        // Maps the output index to export_id for statistics.
+        let mut idx_to_exportid = BTreeMap::new();
         // Make sure that there's an entry for the default output, even if there are no exports
         // that need data output. Certain implementations rely on it (at the time of this comment
         // that includes the key-value load gen source).
         output_map.insert(LoadGeneratorOutput::Default, Vec::new());
-        for (idx, (_, export)) in config.source_exports.iter().enumerate() {
+        for (idx, (export_id, export)) in config.source_exports.iter().enumerate() {
             let output_type = match &export.details {
                 SourceExportDetails::LoadGenerator(details) => details.output,
                 // This is an export that doesn't need any data output to it.
@@ -163,6 +162,7 @@ impl GeneratorKind {
                 .entry(output_type)
                 .or_insert_with(Vec::new)
                 .push(idx);
+            idx_to_exportid.insert(idx, export_id.clone());
         }
 
         match self {
@@ -188,6 +188,7 @@ impl GeneratorKind {
                 committed_uppers,
                 start_signal,
                 output_map,
+                idx_to_exportid,
             ),
         }
     }
@@ -208,7 +209,6 @@ impl SourceRender for LoadGeneratorSourceConnection {
         BTreeMap<GlobalId, StackedCollection<G, Result<SourceMessage, DataflowError>>>,
         Stream<G, Infallible>,
         Stream<G, HealthStatusMessage>,
-        Stream<G, ProgressStatisticsUpdate>,
         Option<Stream<G, Probe<MzOffset>>>,
         Vec<PressOnDropButton>,
     ) {
@@ -218,10 +218,10 @@ impl SourceRender for LoadGeneratorSourceConnection {
             self.as_of,
             self.up_to,
         );
-        let (updates, uppers, health, stats, button) =
+        let (updates, uppers, health, button) =
             generator_kind.render(scope, config, committed_uppers, start_signal);
 
-        (updates, uppers, health, stats, None, button)
+        (updates, uppers, health, None, button)
     }
 }
 
@@ -238,7 +238,6 @@ fn render_simple_generator<G: Scope<Timestamp = MzOffset>>(
     BTreeMap<GlobalId, StackedCollection<G, Result<SourceMessage, DataflowError>>>,
     Stream<G, Infallible>,
     Stream<G, HealthStatusMessage>,
-    Stream<G, ProgressStatisticsUpdate>,
     Vec<PressOnDropButton>,
 ) {
     let mut builder = AsyncOperatorBuilder::new(config.name.clone(), scope.clone());
@@ -263,27 +262,22 @@ fn render_simple_generator<G: Scope<Timestamp = MzOffset>>(
 
     let (_progress_output, progress_stream) = builder.new_output::<CapacityContainerBuilder<_>>();
     let (health_output, health_stream) = builder.new_output();
-    let (stats_output, stats_stream) = builder.new_output();
 
     let busy_signal = Arc::clone(&config.busy_signal);
     let source_resume_uppers = config.source_resume_uppers.clone();
     let is_active_worker = config.responsible_for(());
+    let source_statistics = config.source_statistics().clone();
     let button = builder.build(move |caps| {
         SignaledFuture::new(busy_signal, async move {
-            let [mut cap, mut progress_cap, health_cap, stats_cap] = caps.try_into().unwrap();
+            let [mut cap, mut progress_cap, health_cap] = caps.try_into().unwrap();
 
             // We only need this until we reported ourselves as Running.
             let mut health_cap = Some(health_cap);
 
             if !is_active_worker {
                 // Emit 0, to mark this worker as having started up correctly.
-                stats_output.give(
-                    &stats_cap,
-                    ProgressStatisticsUpdate::SteadyState {
-                        offset_known: 0,
-                        offset_committed: 0,
-                    },
-                );
+                source_statistics.set_offset_known(0);
+                source_statistics.set_offset_committed(0);
                 return;
             }
 
@@ -426,17 +420,12 @@ fn render_simple_generator<G: Scope<Timestamp = MzOffset>>(
                             // we are not going to implement snapshot progress statistics for them
                             // right now, but will come back to it.
                             if let Some(offset_committed) = offset_committed {
-                                stats_output.give(
-                                    &stats_cap,
-                                    ProgressStatisticsUpdate::SteadyState {
-                                        // technically we could have _known_ a larger offset
-                                        // than the one that has been committed, but we can
-                                        // never recover that known amount on restart, so we
-                                        // just advance these in lock step.
-                                        offset_known: offset_committed,
-                                        offset_committed,
-                                    },
-                                );
+                                source_statistics.set_offset_committed(offset_committed);
+                                // technically we could have _known_ a larger offset
+                                // than the one that has been committed, but we can
+                                // never recover that known amount on restart, so we
+                                // just advance these in lock step.
+                                source_statistics.set_offset_known(offset_committed);
                             }
                         }
                     }
@@ -450,7 +439,6 @@ fn render_simple_generator<G: Scope<Timestamp = MzOffset>>(
         data_collections,
         progress_stream,
         health_stream,
-        stats_stream,
         vec![button.press_on_drop()],
     )
 }
