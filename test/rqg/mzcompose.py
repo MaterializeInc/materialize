@@ -138,6 +138,8 @@ WORKLOADS = [
         # test is to use a previous Mz version via --other-tag=...
         reference_implementation=ReferenceImplementation.MATERIALIZE,
         validator="ResultsetComparatorSimplify",
+        # See https://github.com/MaterializeInc/database-issues/issues/9439
+        threads=1,
     ),
     Workload(
         # A workload that performs DML that preserve the dataset's invariants
