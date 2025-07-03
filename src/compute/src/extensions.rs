@@ -10,5 +10,5 @@
 //! Operator extensions to Timely and Differential
 
 pub(crate) mod arrange;
-pub(crate) mod delay;
 pub(crate) mod reduce;
+pub(crate) mod temporal_bucket;

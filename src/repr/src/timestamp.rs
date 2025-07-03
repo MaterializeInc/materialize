@@ -166,7 +166,7 @@ mod columnar_timestamp {
 }
 
 impl BucketTimestamp for Timestamp {
-    fn advance_by_exponent(&self, exponent: usize) -> Option<Self> {
+    fn advance_by_power_of_two(&self, exponent: usize) -> Option<Self> {
         let rhs = 1_u64.checked_shl(exponent.try_into().expect("must fit"))?;
         Some(self.internal.checked_add(rhs)?.into())
     }

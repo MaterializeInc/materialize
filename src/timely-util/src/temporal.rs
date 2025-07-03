@@ -15,19 +15,20 @@
 
 //! Utilities to efficiently store future updates.
 
-use timely::order::TotalOrder;
-use timely::progress::frontier::AntichainRef;
-use timely::progress::Timestamp;
 use timely::PartialOrder;
+use timely::order::TotalOrder;
+use timely::progress::Timestamp;
+use timely::progress::frontier::AntichainRef;
 
 /// Timestamp extension for totally ordered timestamps that can advance by `2^exponent`.
 pub trait BucketTimestamp: TotalOrder + Timestamp {
     /// The number of bits in the timestamp.
     const DOMAIN: usize = size_of::<Self>() * 8;
     /// Advance this timestamp by `2^exponent`.
-    fn advance_by_exponent(&self, exponent: usize) -> Option<Self>;
+    fn advance_by_power_of_two(&self, exponent: usize) -> Option<Self>;
 }
 
+/// A type that can be split into two parts based on a timestamp.
 pub trait Storage: Sized {
     /// The timestamp type associated with this storage.
     type Timestamp: BucketTimestamp;
@@ -98,17 +99,37 @@ impl<S: Storage> BucketChain<S> {
         Some(&self.storage[index])
     }
 
+    /// Find the index for the bucket that contains data for time `timestamp`. Returns an
+    /// index of the bucket, or `None` if there is no bucket for the requested time.
+    ///
+    /// The index is only valid until the next call to `peel` or `restore`.
+    ///
+    /// Only times that haven't been peeled can still be found.
+    #[inline]
+    pub fn index_of(&self, timestamp: &S::Timestamp) -> Option<usize> {
+        self.offsets
+            .iter()
+            .position(|offset| offset.less_equal(timestamp))
+    }
+
+    /// Returns a reference to the bucket at `index`.
+    ///
+    /// The index is only valid if it was obtained from a previous call to `index_of` and while
+    /// the chain is not modified by `peel` or `restore`. All other indeces result in undefined
+    /// behavior, including panics.
+    #[inline]
+    pub fn index_mut(&mut self, index: usize) -> &mut S {
+        &mut self.storage[index]
+    }
+
     /// Find the bucket that contains data for time `timestamp`. Returns a mutable reference to
     /// the bucket, or `None` if there is no bucket for the requested time.
     ///
     /// Only times that haven't been peeled can still be found.
     #[inline]
     pub fn find_mut(&mut self, timestamp: &S::Timestamp) -> Option<&mut S> {
-        let index = self
-            .offsets
-            .iter()
-            .position(|offset| offset.less_equal(timestamp))?;
-        Some(&mut self.storage[index])
+        self.index_of(timestamp)
+            .map(|index| &mut self.storage[index])
     }
 
     /// Peel off all data up to `frontier`, where the returned buckets contain all
@@ -119,7 +140,7 @@ impl<S: Storage> BucketChain<S> {
         // While there are buckets, and the frontier is not less than the lowest offset, peel off
         while !self.is_empty() && !frontier.less_equal(self.offsets.last().expect("must exist")) {
             let (bits, offset, storage) = self.remove(self.len() - 1);
-            let upper = offset.advance_by_exponent(bits);
+            let upper = offset.advance_by_power_of_two(bits);
 
             // Split the bucket if it spans the frontier.
             if upper.is_none() && !frontier.is_empty()
@@ -202,7 +223,7 @@ impl<S: Storage> BucketChain<S> {
         storage: S,
     ) {
         let bits = bits - 1;
-        let midpoint = offset.advance_by_exponent(bits).expect("must exist");
+        let midpoint = offset.advance_by_power_of_two(bits).expect("must exist");
         let (bot, top) = storage.split(&midpoint, fuel);
         self.bits.splice(index..index, [bits, bits]);
         self.offsets.splice(index..index, [midpoint, offset]);
@@ -215,13 +236,13 @@ mod tests {
     use super::*;
 
     impl BucketTimestamp for u8 {
-        fn advance_by_exponent(&self, bits: usize) -> Option<Self> {
+        fn advance_by_power_of_two(&self, bits: usize) -> Option<Self> {
             self.checked_add(1_u8.checked_shl(bits.try_into().unwrap())?)
         }
     }
 
     impl BucketTimestamp for u64 {
-        fn advance_by_exponent(&self, bits: usize) -> Option<Self> {
+        fn advance_by_power_of_two(&self, bits: usize) -> Option<Self> {
             self.checked_add(1_u64.checked_shl(bits.try_into().unwrap())?)
         }
     }
@@ -289,8 +310,7 @@ mod tests {
         assert!(collect_and_sort(peeled).into_iter().eq(65..=255));
     }
 
-    /// Test a chain with 10M disjoint elements. The same with a vector would take too long for a
-    /// test.
+    /// Test a chain with 10M disjoint elements.
     #[mz_ore::test]
     fn test_bucket_10m() {
         let limit = 10_000_000;
@@ -317,9 +337,11 @@ mod tests {
         let step = 1000;
         while offset < now + limit {
             let peeled = chain.peel(AntichainRef::new(&[offset + step]));
-            assert!(collect_and_sort(peeled)
-                .into_iter()
-                .eq(offset..offset + step));
+            assert!(
+                collect_and_sort(peeled)
+                    .into_iter()
+                    .eq(offset..offset + step)
+            );
             offset += step;
             let mut fuel = 1000;
             chain.restore(&mut fuel);
