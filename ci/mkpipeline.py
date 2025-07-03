@@ -258,32 +258,44 @@ so it is executed.""",
             if step.get("coverage") == "only":
                 step["skip"] = True
 
+    print("--- Prioritizing pipeline")
     prioritize_pipeline(pipeline, args.priority)
 
+    print("--- Switching jobs to AWS/Hetzner")
     switch_jobs_to_aws(pipeline, args.priority)
 
+    print("--- Permit rerunning successful steps")
     permit_rerunning_successful_steps(pipeline)
 
+    print('--- Set retry on "agent lost"')
     set_retry_on_agent_lost(pipeline)
 
+    print("--- Set default agents queue")
     set_default_agents_queue(pipeline)
 
+    print("--- Set parallelism name")
     set_parallelism_name(pipeline)
 
+    print("--- Trim test selection")
     if test_selection := os.getenv("CI_TEST_IDS"):
         trim_test_selection_id(pipeline, {int(i) for i in test_selection.split(",")})
     elif test_selection := os.getenv("CI_TEST_SELECTION"):
         trim_test_selection_name(pipeline, set(test_selection.split(",")))
 
+    print("--- Check depends_on")
     check_depends_on(pipeline, args.pipeline)
 
+    print("--- Add version to preflight tests")
     add_version_to_preflight_tests(pipeline)
 
+    print("--- Trim builds")
     trim_builds(pipeline, args.coverage, args.sanitizer, args.bazel_remote_cache)
+    print("--- Add Cargo Test dependency")
     add_cargo_test_dependency(
         pipeline, args.coverage, args.sanitizer, args.bazel_remote_cache
     )
 
+    print("--- Removing Mz-specific keys")
     # Remove the Materialize-specific keys from the configuration that are
     # only used to inform how to trim the pipeline and for coverage runs.
     for step in steps(pipeline):
@@ -305,7 +317,7 @@ so it is executed.""",
                 f"Every step should have an explicit timeout_in_minutes value, missing in: {step}"
             )
 
-    print("Uploading new pipeline:")
+    print("--- Uploading new pipeline:")
     print(yaml.dump(pipeline))
     spawn.runv(
         ["buildkite-agent", "pipeline", "upload"], stdin=yaml.dump(pipeline).encode()
@@ -695,6 +707,7 @@ def trim_tests_pipeline(
     A step is trimmed if a) none of its inputs have changed, and b) there are
     no other untrimmed steps that depend on it.
     """
+    print("--- Resolving dependencies")
     repo = mzbuild.Repository(
         Path("."),
         coverage=coverage,
@@ -705,6 +718,8 @@ def trim_tests_pipeline(
     deps = repo.resolve_dependencies(image for image in repo)
 
     steps = OrderedDict()
+
+    print("--- Adding dependencies")
 
     def to_step(config: dict[str, Any]) -> PipelineStep | None:
         if "wait" in config or "group" in config:
