@@ -29,34 +29,6 @@ steps:
   - group: Builds
     key: builds
     steps:
-      - id: rust-build-x86_64
-        label: ":rust: Build x86_64"
-        env:
-          CI_BAZEL_BUILD: 0
-        command: bin/ci-builder run stable bin/pyactivate -m ci.test.build
-        inputs:
-          - "*"
-        depends_on: []
-        timeout_in_minutes: 60
-        priority: 50
-        agents:
-          queue: builder-linux-x86_64
-        sanitizer: skip
-
-      - id: rust-build-aarch64
-        label: ":rust: Build aarch64"
-        env:
-          CI_BAZEL_BUILD: 0
-        command: bin/ci-builder run stable bin/pyactivate -m ci.test.build
-        inputs:
-          - "*"
-        depends_on: []
-        priority: 50
-        timeout_in_minutes: 60
-        agents:
-          queue: builder-linux-aarch64-mem
-        sanitizer: skip
-
       - id: build-x86_64
         label: ":bazel: Build x86_64"
         env:

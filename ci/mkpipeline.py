@@ -25,9 +25,11 @@ import hashlib
 import os
 import subprocess
 import sys
+import threading
 import traceback
 from collections import OrderedDict
 from collections.abc import Iterable, Iterator
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
@@ -112,12 +114,42 @@ so it is executed.""",
         raw = f.read()
     raw = raw.replace("$RUST_VERSION", rust_version())
 
+    bazel = ui.env_is_truthy("CI_BAZEL_BUILD", "1")
+
     # On 'main' or tagged branches, we use a separate remote cache that only CI can write to.
     if os.environ["BUILDKITE_BRANCH"] == "main" or os.environ["BUILDKITE_TAG"]:
         bazel_remote_cache = "https://bazel-remote-pa.dev.materialize.com"
     else:
         bazel_remote_cache = "https://bazel-remote.dev.materialize.com"
     raw = raw.replace("$BAZEL_REMOTE_CACHE", bazel_remote_cache)
+
+    hash_check: dict[Arch, tuple[str, bool]] = {}
+
+    def hash(deps: mzbuild.DependencySet) -> str:
+        h = hashlib.sha1()
+        for dep in deps:
+            h.update(dep.spec().encode())
+        return h.hexdigest()
+
+    def get_hashes(arch: Arch, bazel: bool = False) -> tuple[str, bool]:
+        repo = mzbuild.Repository(
+            Path("."),
+            arch=arch,
+            coverage=args.coverage,
+            sanitizer=args.sanitizer,
+            bazel=bazel,
+            bazel_remote_cache=bazel_remote_cache,
+        )
+        deps = repo.resolve_dependencies(image for image in repo if image.publish)
+        check = deps.check()
+        return (hash(deps), check)
+
+    def fetch_hashes() -> None:
+        for arch in [Arch.AARCH64, Arch.X86_64]:
+            hash_check[arch] = get_hashes(arch, bazel=True)
+
+    trim_builds_prep_thread = threading.Thread(target=fetch_hashes)
+    trim_builds_prep_thread.start()
 
     pipeline = yaml.safe_load(raw)
 
@@ -137,7 +169,7 @@ so it is executed.""",
                 copy.deepcopy(pipeline),
                 args.coverage,
                 args.sanitizer,
-                ui.env_is_truthy("CI_BAZEL_BUILD", "1"),
+                bazel,
                 args.bazel_remote_cache,
             )
         else:
@@ -146,7 +178,7 @@ so it is executed.""",
                 pipeline,
                 args.coverage,
                 args.sanitizer,
-                ui.env_is_truthy("CI_BAZEL_BUILD", "1"),
+                bazel,
                 args.bazel_remote_cache,
             )
 
@@ -157,21 +189,10 @@ so it is executed.""",
             if step.get("sanitizer") == "skip":
                 step["skip"] = True
 
-            # Nightly and Rust build required for sanitizers
-            if step.get("id") in ("rust-build-x86_64", "rust-build-aarch64"):
-                step["command"] = (
-                    "bin/ci-builder run nightly bin/pyactivate -m ci.test.build"
-                )
-
     else:
 
         def visit(step: dict[str, Any]) -> None:
             if step.get("sanitizer") == "only":
-                step["skip"] = True
-
-            # Skip the Cargo driven builds if the Sanitizers aren't specified since everything
-            # relies on the Bazel builds.
-            if step.get("id") in ("rust-build-x86_64", "rust-build-aarch64"):
                 step["skip"] = True
 
     for step in pipeline["steps"]:
@@ -289,7 +310,10 @@ so it is executed.""",
     add_version_to_preflight_tests(pipeline)
 
     print("--- Trim builds")
-    trim_builds(pipeline, args.coverage, args.sanitizer, args.bazel_remote_cache)
+    trim_builds_prep_thread.join()
+    trim_builds(
+        pipeline, args.coverage, args.sanitizer, args.bazel_remote_cache, hash_check
+    )
     print("--- Add Cargo Test dependency")
     add_cargo_test_dependency(
         pipeline, args.coverage, args.sanitizer, args.bazel_remote_cache
@@ -655,8 +679,6 @@ def trim_test_selection_id(pipeline: Any, step_ids_to_run: set[int]) -> None:
                 "analyze",
                 "build-x86_64",
                 "build-aarch64",
-                "rust-build-x86_64",
-                "rust-build-aarch64",
                 "build-wasm",
             )
             and not step.get("async")
@@ -678,8 +700,6 @@ def trim_test_selection_name(pipeline: Any, steps_to_run: set[str]) -> None:
                 "analyze",
                 "build-x86_64",
                 "build-aarch64",
-                "rust-build-x86_64",
-                "rust-build-aarch64",
                 "build-wasm",
             )
             and not step.get("async")
@@ -719,7 +739,40 @@ def trim_tests_pipeline(
 
     steps = OrderedDict()
 
-    print("--- Adding dependencies")
+    composition_paths: set[str] = set()
+
+    for config in pipeline["steps"]:
+        if "plugins" in config:
+            for plugin in config["plugins"]:
+                for plugin_name, plugin_config in plugin.items():
+                    if plugin_name != "./ci/plugins/mzcompose":
+                        continue
+                    name = plugin_config["composition"]
+                    composition_paths.add(str(repo.compositions[name]))
+        if "group" in config:
+            for inner_config in config.get("steps", []):
+                if not "plugins" in inner_config:
+                    continue
+                for plugin in inner_config["plugins"]:
+                    for plugin_name, plugin_config in plugin.items():
+                        if plugin_name != "./ci/plugins/mzcompose":
+                            continue
+                        name = plugin_config["composition"]
+                        composition_paths.add(str(repo.compositions[name]))
+
+    imported_files: dict[str, list[str]] = {}
+
+    with ThreadPoolExecutor(max_workers=len(composition_paths)) as executor:
+        futures = {
+            executor.submit(get_imported_files, path): path
+            for path in composition_paths
+        }
+        for future in futures:
+            path = futures[future]
+            files = future.result()
+            imported_files[path] = files
+
+    print(f"Imported files: {imported_files}")
 
     def to_step(config: dict[str, Any]) -> PipelineStep | None:
         if "wait" in config or "group" in config:
@@ -744,9 +797,10 @@ def trim_tests_pipeline(
                         composition = Composition(repo, name)
                         for dep in composition.dependencies:
                             step.image_dependencies.add(dep)
-                        step.extra_inputs.add(str(repo.compositions[name]))
+                        composition_path = str(repo.compositions[name])
+                        step.extra_inputs.add(composition_path)
                         # All (transitively) imported python modules are also implicitly dependencies
-                        for file in get_imported_files(str(repo.compositions[name])):
+                        for file in imported_files[composition_path]:
                             step.extra_inputs.add(file)
                     elif plugin_name == "./ci/plugins/cloudtest":
                         step.image_dependencies.add(deps["environmentd"])
@@ -851,60 +905,24 @@ def trim_builds(
     coverage: bool,
     sanitizer: Sanitizer,
     bazel_remote_cache: str,
+    hash_check: dict[Arch, tuple[str, bool]],
 ) -> None:
     """Trim unnecessary x86-64/aarch64 builds if all artifacts already exist. Also mark remaining builds with a unique concurrency group for the code state so that the same build doesn't happen multiple times."""
-
-    def get_deps(arch: Arch, bazel: bool = False) -> tuple[mzbuild.DependencySet, bool]:
-        repo = mzbuild.Repository(
-            Path("."),
-            arch=arch,
-            coverage=coverage,
-            sanitizer=sanitizer,
-            bazel=bazel,
-            bazel_remote_cache=bazel_remote_cache,
-        )
-        deps = repo.resolve_dependencies(image for image in repo if image.publish)
-        check = deps.check()
-        return (deps, check)
-
-    def hash(deps: mzbuild.DependencySet) -> str:
-        h = hashlib.sha1()
-        for dep in deps:
-            h.update(dep.spec().encode())
-        return h.hexdigest()
-
     for step in steps(pipeline):
-        if step.get("id") == "rust-build-x86_64":
-            (deps, check) = get_deps(Arch.X86_64)
-            if check:
-                step["skip"] = True
-            else:
-                # Make sure that builds in different pipelines for the same
-                # hash at least don't run concurrently, leading to wasted
-                # resources.
-                step["concurrency"] = 1
-                step["concurrency_group"] = f"rust-build-x86_64/{hash(deps)}"
-        elif step.get("id") == "rust-build-aarch64":
-            (deps, check) = get_deps(Arch.AARCH64)
-            if check:
+        if step.get("id") == "build-x86_64":
+            if hash_check[Arch.X86_64][1]:
                 step["skip"] = True
             else:
                 step["concurrency"] = 1
-                step["concurrency_group"] = f"rust-build-aarch64/{hash(deps)}"
-        elif step.get("id") == "build-x86_64":
-            (deps, check) = get_deps(Arch.X86_64, bazel=True)
-            if check:
-                step["skip"] = True
-            else:
-                step["concurrency"] = 1
-                step["concurrency_group"] = f"build-x86_64/{hash(deps)}"
+                step["concurrency_group"] = f"build-x86_64/{hash_check[Arch.X86_64][0]}"
         elif step.get("id") == "build-aarch64":
-            (deps, check) = get_deps(Arch.AARCH64, bazel=True)
-            if check:
+            if hash_check[Arch.AARCH64][1]:
                 step["skip"] = True
             else:
                 step["concurrency"] = 1
-                step["concurrency_group"] = f"build-aarch64/{hash(deps)}"
+                step["concurrency_group"] = (
+                    f"build-aarch64/{hash_check[Arch.AARCH64][0]}"
+                )
 
 
 def have_paths_changed(globs: Iterable[str]) -> bool:
