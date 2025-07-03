@@ -975,12 +975,6 @@ impl<T: Timestamp + Lattice + Codec64> SpineBatch<T> {
             return Err(ApplyMergeResult::NotAppliedNoMatch);
         }
 
-        // if replacement.run_meta.len() < 1 || original.run_meta.len() < 1 {
-        //     warn!("replacement or original batch has no runs");
-        //     warn!("original batch: {original:#?}");
-        //     warn!("replacement batch: {replacement:#?}");
-        // }
-
         assert!(
             replacement.run_meta.len() <= 1,
             "replacement must have exactly 0 or 1 runs"

@@ -295,15 +295,6 @@ def get_variable_system_parameters(
             ["67108864", "134217728", "536870912", "1073741824"],
         ),
         VariableSystemParameter(
-            "persist_enable_incremental_compaction",
-            "true" if version >= MzVersion.parse_mz("v0.147.3-dev") else "false",
-            (
-                ["false"]
-                if version < MzVersion.parse_mz("v0.147.3-dev")
-                else ["true", "false"]
-            ),
-        ),
-        VariableSystemParameter(
             "persist_use_critical_since_catalog", "true", ["true", "false"]
         ),
         VariableSystemParameter(

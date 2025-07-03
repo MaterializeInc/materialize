@@ -1255,8 +1255,11 @@ where
         //   truncated bounds must be ignored. Not every user batch is
         //   truncated.
         // - Batches written by compaction. These always have an inline desc
-        //   that exactly matches the one they are registered with. The since
-        //   can be anything.
+        //   lower and upper that matches the registered desc lower and upper,
+        //   and a since that is less than or equal to the registered desc.
+        //   The inline since may be less than the registered desc since,
+        //   this is because of incremental compaction, where we might rewrite
+        //   certain runs in a batch but not others.
         let inline_desc = &parsed.desc;
         let needs_truncation = inline_desc.lower() != registered_desc.lower()
             || inline_desc.upper() != registered_desc.upper();

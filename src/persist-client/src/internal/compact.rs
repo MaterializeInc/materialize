@@ -429,7 +429,7 @@ where
                             let res = res?;
                             let new_maintenance =
                                 Self::apply(res, &metrics_clone, &machine_clone).await?;
-                            maintenance = std::cmp::max(maintenance, new_maintenance);
+                            maintenance.merge(new_maintenance);
                         }
                         maintenance
                     } else {

@@ -264,12 +264,11 @@ impl<T: Timestamp + Lattice + Codec64> StateDiff<T> {
     }
 
     pub(crate) fn blob_deletes(&self) -> impl Iterator<Item = HollowBlobRef<T>> {
-        // Ok heres the situation. With the introduction of incremental compaction, we
+        // With the introduction of incremental compaction, we
         // need to be more careful about what we consider "deleted".
         // If there is a HollowBatch that we replace 2 out of the 4 runs of,
         // we need to ensure that we only delete the runs that are actually
         // no longer referenced.
-
         let removed: Vec<_> = self
             .referenced_batches()
             .filter_map(|spine_diff| match spine_diff {
@@ -308,12 +307,6 @@ impl<T: Timestamp + Lattice + Codec64> StateDiff<T> {
                 .any(|y| y.iter().any(|added_part| added_part == part))
         });
 
-        // let batches = self
-        //     .referenced_batches()
-        //     .filter_map(|spine_diff| match spine_diff {
-        //         Insert(_) => None,
-        //         Update(a, _) | Delete(a) => Some(HollowBlobRef::Batch(a)),
-        //     });
         let rollups = self
             .rollups
             .iter()
