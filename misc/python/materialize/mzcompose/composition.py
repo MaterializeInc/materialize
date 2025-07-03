@@ -1567,23 +1567,21 @@ class Composition:
     T = TypeVar("T")
 
     def test_parts(self, parts: list[T], process_func: Callable[[T], Any]) -> None:
-        from materialize.test_analytics.config.test_analytics_db_config import (
-            create_test_analytics_config,
-        )
         from materialize.test_analytics.test_analytics_db import TestAnalyticsDb
 
         priority: dict[str, int] = {}
         test_analytics: TestAnalyticsDb | None = None
 
-        if buildkite.is_in_buildkite():
-            print("~~~ Fetching part priorities")
-            test_analytics_config = create_test_analytics_config(self)
-            test_analytics = TestAnalyticsDb(test_analytics_config)
-            try:
-                priority = test_analytics.builds.get_part_priorities(timeout=15)
-                print(f"Priorities: {priority}")
-            except Exception as e:
-                print(f"Failed to fetch part priorities, using default order: {e}")
+        # TODO(def-): Revisit if this is worth enabling, currently adds ~15 seconds to each run
+        # if buildkite.is_in_buildkite():
+        #     print("~~~ Fetching part priorities")
+        #     test_analytics_config = create_test_analytics_config(self)
+        #     test_analytics = TestAnalyticsDb(test_analytics_config)
+        #     try:
+        #         priority = test_analytics.builds.get_part_priorities(timeout=15)
+        #         print(f"Priorities: {priority}")
+        #     except Exception as e:
+        #         print(f"Failed to fetch part priorities, using default order: {e}")
 
         sorted_parts = sorted(
             parts, key=lambda part: priority.get(str(part), 0), reverse=True

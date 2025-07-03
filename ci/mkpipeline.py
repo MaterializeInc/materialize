@@ -772,7 +772,7 @@ def trim_tests_pipeline(
             files = future.result()
             imported_files[path] = files
 
-    print(f"Imported files: {imported_files}")
+    compositions: dict[str, Composition] = {}
 
     def to_step(config: dict[str, Any]) -> PipelineStep | None:
         if "wait" in config or "group" in config:
@@ -794,8 +794,9 @@ def trim_tests_pipeline(
                 for plugin_name, plugin_config in plugin.items():
                     if plugin_name == "./ci/plugins/mzcompose":
                         name = plugin_config["composition"]
-                        composition = Composition(repo, name)
-                        for dep in composition.dependencies:
+                        if name not in compositions:
+                            compositions[name] = Composition(repo, name)
+                        for dep in compositions[name].dependencies:
                             step.image_dependencies.add(dep)
                         composition_path = str(repo.compositions[name])
                         step.extra_inputs.add(composition_path)

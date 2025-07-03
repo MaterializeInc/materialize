@@ -186,7 +186,7 @@ build:release-tagged --config=release --config=release-lto --config=release-stam
 # PRs in CI.
 #
 # Not doing a full stamp nor omitting full debug info, greatly speeds up compile times.
-build:release-dev --config=release --config=release-lto --config=debuginfo-limited
+build:release-dev --config=release --config=optimized --config=debuginfo-limited
 
 # "Optimized" Build.
 #
