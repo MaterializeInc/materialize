@@ -10,6 +10,7 @@
 # by the Apache License, Version 2.0.
 
 import os
+from concurrent.futures import ThreadPoolExecutor, wait
 from pathlib import Path
 
 from materialize import bazel, mzbuild, spawn, ui
@@ -27,6 +28,7 @@ def main() -> None:
     sanitizer = Sanitizer[os.getenv("CI_SANITIZER", "none")]
     bazel = ui.env_is_truthy("CI_BAZEL_BUILD")
     bazel_remote_cache = os.getenv("CI_BAZEL_REMOTE_CACHE")
+    bazel_lto = ui.env_is_truthy("CI_BAZEL_LTO")
 
     repo = mzbuild.Repository(
         Path("."),
@@ -34,6 +36,7 @@ def main() -> None:
         sanitizer=sanitizer,
         bazel=bazel,
         bazel_remote_cache=bazel_remote_cache,
+        bazel_lto=bazel_lto,
     )
 
     # Build and push any images that are not already available on Docker Hub,
@@ -42,8 +45,15 @@ def main() -> None:
     built_images = set()
     deps = repo.resolve_dependencies(image for image in repo if image.publish)
     deps.ensure(post_build=lambda image: built_images.add(image))
-    maybe_upload_debuginfo(repo, built_images)
-    annotate_buildkite_with_tags(repo.rd.arch, deps)
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        futures = [
+            executor.submit(maybe_upload_debuginfo, repo, built_images),
+            executor.submit(annotate_buildkite_with_tags, repo.rd.arch, deps),
+        ]
+
+        # Wait until all tasks are complete
+        wait(futures)
 
 
 def annotate_buildkite_with_tags(arch: Arch, deps: mzbuild.DependencySet) -> None:
