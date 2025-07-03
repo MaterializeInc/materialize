@@ -367,8 +367,6 @@ where
     let operator_name = format!("healthcheck({})", healthcheck_worker_id);
     let mut health_op = AsyncOperatorBuilder::new(operator_name, scope.clone());
 
-    // let health = health_stream.enter(scope);
-
     let mut input = health_op.new_disconnected_input(
         &health_stream,
         Exchange::new(move |_| u64::cast_from(chosen_worker_id)),

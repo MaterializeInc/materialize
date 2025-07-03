@@ -956,7 +956,7 @@ where
         I: IntoIterator<Item = StreamCore<G, C>>,
         CB: ContainerBuilder + for<'a> PushInto<C::Item<'a>>,
     {
-        let mut builder = OperatorBuilder::new("Concatenate".to_string(), self.clone());
+        let mut builder = OperatorBuilder::new("ConcatenateFlatten".to_string(), self.clone());
         builder.set_notify(false);
 
         // create new input handles for each input stream.
