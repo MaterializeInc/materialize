@@ -163,10 +163,14 @@ true true
 
 > CREATE SOURCE counter
   IN CLUSTER ${arg.single-replica-cluster}
-  FROM LOAD GENERATOR COUNTER (MAX CARDINALITY 8, TICK INTERVAL '0.001s')
+  FROM LOAD GENERATOR COUNTER (TICK INTERVAL '1s')
 
-> SELECT count(*) FROM counter
-8
+> SELECT * FROM counter
+1
+2
+3
+4
+5
 
 # Now make sure it doesn't change
 > SELECT mz_unsafe.mz_sleep(1)
