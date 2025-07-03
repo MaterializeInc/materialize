@@ -85,7 +85,7 @@ steps:
         label: "Upload debug symbols for x86_64"
         env:
           CI_BAZEL_BUILD: 0
-        command: bin/ci-builder run stable bin/pyactivate -m materialize.ci_util.upload_debug_symbols_to_polarsignals
+        command: bin/ci-builder run min bin/pyactivate -m materialize.ci_util.upload_debug_symbols_to_polarsignals
         inputs:
           - "*"
         depends_on: [build-x86_64]
@@ -100,7 +100,7 @@ steps:
         label: "Upload debug symbols for aarch64"
         env:
           CI_BAZEL_BUILD: 0
-        command: bin/ci-builder run stable bin/pyactivate -m materialize.ci_util.upload_debug_symbols_to_polarsignals
+        command: bin/ci-builder run min bin/pyactivate -m materialize.ci_util.upload_debug_symbols_to_polarsignals
         inputs:
           - "*"
         depends_on: [build-aarch64]
@@ -113,7 +113,7 @@ steps:
 
       - id: build-wasm
         label: Build WASM
-        command: bin/ci-builder run stable bin/pyactivate -m ci.deploy.npm --no-release
+        command: bin/ci-builder run min bin/pyactivate -m ci.deploy.npm --no-release
         inputs:
           - "*"
         depends_on: []
