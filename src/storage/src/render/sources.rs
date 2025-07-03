@@ -15,7 +15,7 @@ use std::collections::BTreeMap;
 use std::iter;
 use std::sync::Arc;
 
-use differential_dataflow::{AsCollection, Collection, collection};
+use differential_dataflow::{AsCollection, Collection};
 use mz_ore::cast::CastLossy;
 use mz_persist_client::operators::shard_source::SnapshotMode;
 use mz_repr::{Datum, Diff, GlobalId, Row, RowPacker};
@@ -35,8 +35,7 @@ use mz_timely_util::order::refine_antichain;
 use serde::{Deserialize, Serialize};
 use timely::container::CapacityContainerBuilder;
 use timely::dataflow::Stream;
-use timely::dataflow::operators::generic::operator::empty;
-use timely::dataflow::operators::{Concat, ConnectLoop, Feedback, Leave, Map, OkErr};
+use timely::dataflow::operators::{ConnectLoop, Feedback, Leave, Map, OkErr};
 use timely::dataflow::scopes::{Child, Scope};
 use timely::progress::{Antichain, Timestamp};
 
@@ -73,7 +72,7 @@ pub fn render_source<'g, G, C>(
             Collection<Child<'g, G, mz_repr::Timestamp>, DataflowError, Diff>,
         ),
     >,
-    Stream<G, HealthStatusMessage>,
+    Vec<Stream<G, HealthStatusMessage>>,
     Vec<PressOnDropButton>,
 )
 where
@@ -102,7 +101,7 @@ where
 
     // Build the _raw_ ok and error sources using `create_raw_source` and the
     // correct `SourceReader` implementations
-    let (exports, mut health, source_tokens) = source::create_raw_source(
+    let (exports, health, source_tokens) = source::create_raw_source(
         scope,
         storage_state,
         resume_stream,
@@ -113,6 +112,9 @@ where
 
     needed_tokens.extend(source_tokens);
 
+    let mut health_streams = Vec::with_capacity(exports.len() + 1);
+    health_streams.push(health);
+
     let mut outputs = BTreeMap::new();
     for (export_id, export) in exports {
         type CB<C> = CapacityContainerBuilder<C>;
@@ -122,29 +124,36 @@ where
         // All sources should push their various error streams into this vector,
         // whose contents will be concatenated and inserted along the collection.
         // All subsources include the non-definite errors of the ingestion
-        let error_collections = vec![err_stream.map(DataflowError::from)];
+        let mut error_collections = Vec::new();
 
         let data_config = base_source_config.source_exports[&export_id]
             .data_config
             .clone();
-        let (ok, err, extra_tokens, health_stream) = render_source_stream(
+        let (ok, extra_tokens, health_stream) = render_source_stream(
             scope,
             dataflow_debug_name,
             export_id,
             ok_stream,
             data_config,
             &description,
-            error_collections,
+            &mut error_collections,
             storage_state,
             &base_source_config,
             starter.clone(),
         );
         needed_tokens.extend(extra_tokens);
-        outputs.insert(export_id, (ok, err));
 
-        health = health.concat(&health_stream.leave());
+        // Flatten the error collections.
+        let err_collection = match error_collections.len() {
+            0 => err_stream,
+            _ => err_stream.concatenate(error_collections),
+        };
+
+        outputs.insert(export_id, (ok, err_collection));
+
+        health_streams.extend(health_stream.into_iter().map(|s| s.leave()));
     }
-    (outputs, health, needed_tokens)
+    (outputs, health_streams, needed_tokens)
 }
 
 /// Completes the rendering of a particular source stream by applying decoding and envelope
@@ -156,15 +165,14 @@ fn render_source_stream<G, FromTime>(
     ok_source: Collection<G, SourceOutput<FromTime>, Diff>,
     data_config: SourceExportDataConfig,
     description: &IngestionDescription<CollectionMetadata>,
-    mut error_collections: Vec<Collection<G, DataflowError, Diff>>,
+    error_collections: &mut Vec<Collection<G, DataflowError, Diff>>,
     storage_state: &crate::storage_state::StorageState,
     base_source_config: &RawSourceCreationConfig,
     rehydrated_token: impl std::any::Any + 'static,
 ) -> (
     Collection<G, Row, Diff>,
-    Collection<G, DataflowError, Diff>,
     Vec<PressOnDropButton>,
-    Stream<G, HealthStatusMessage>,
+    Vec<Stream<G, HealthStatusMessage>>,
 )
 where
     G: Scope<Timestamp = mz_repr::Timestamp>,
@@ -197,20 +205,23 @@ where
                 metadata: r.metadata,
                 from_time: r.from_time,
             }),
-            empty(scope),
+            None,
         ),
-        Some(encoding) => render_decode_delimited(
-            &ok_source,
-            encoding.key,
-            encoding.value,
-            dataflow_debug_name.clone(),
-            storage_state.metrics.decode_defs.clone(),
-            storage_state.storage_configuration.clone(),
-        ),
+        Some(encoding) => {
+            let (decoded_stream, decode_health) = render_decode_delimited(
+                &ok_source,
+                encoding.key,
+                encoding.value,
+                dataflow_debug_name.clone(),
+                storage_state.metrics.decode_defs.clone(),
+                storage_state.storage_configuration.clone(),
+            );
+            (decoded_stream, Some(decode_health))
+        }
     };
 
     // render envelopes
-    let (envelope_ok, envelope_err, envelope_health) = match &envelope {
+    let (envelope_ok, envelope_health) = match &envelope {
         SourceEnvelope::Upsert(upsert_envelope) => {
             let upsert_input = upsert_commands(decoded_stream, upsert_envelope.clone());
 
@@ -360,13 +371,9 @@ where
 
                     // If backpressure from persist is enabled, we connect the upsert operator's
                     // snapshot progress to the persist source feedback handle.
-                    let upsert = match feedback_handle {
-                        Some(feedback_handle) => {
-                            snapshot_progress.connect_loop(feedback_handle);
-                            upsert
-                        }
-                        None => upsert,
-                    };
+                    if let Some(feedback_handle) = feedback_handle {
+                        snapshot_progress.connect_loop(feedback_handle);
+                    }
 
                     (
                         upsert.leave(),
@@ -382,12 +389,9 @@ where
             );
 
             let (upsert_ok, upsert_err) = upsert.inner.ok_err(split_ok_err);
+            error_collections.push(upsert_err.as_collection());
 
-            (
-                upsert_ok.as_collection(),
-                Some(upsert_err.as_collection()),
-                health_update,
-            )
+            (upsert_ok.as_collection(), Some(health_update))
         }
         SourceEnvelope::None(none_envelope) => {
             let results = append_metadata_to_value(decoded_stream);
@@ -396,35 +400,19 @@ where
 
             let (stream, errors) = flattened_stream.inner.ok_err(split_ok_err);
 
-            let errors = errors.as_collection();
-            (stream.as_collection(), Some(errors), empty(scope))
+            error_collections.push(errors.as_collection());
+            (stream.as_collection(), None)
         }
         SourceEnvelope::CdcV2 => {
             let (oks, token) = render_decode_cdcv2(&decoded_stream);
             needed_tokens.push(token);
-            (oks, None, empty(scope))
+            (oks, None)
         }
     };
 
-    let (collection, errors, health) = (
-        envelope_ok,
-        envelope_err,
-        decode_health.concat(&envelope_health),
-    );
-
-    if let Some(errors) = errors {
-        error_collections.push(errors);
-    }
-
-    // Flatten the error collections.
-    let err_collection = match error_collections.len() {
-        0 => Collection::empty(scope),
-        1 => error_collections.pop().unwrap(),
-        _ => collection::concatenate(scope, error_collections),
-    };
-
     // Return the collections and any needed tokens.
-    (collection, err_collection, needed_tokens, health)
+    let health = decode_health.into_iter().chain(envelope_health).collect();
+    (envelope_ok, needed_tokens, health)
 }
 
 // Returns the maximum limit of inflight bytes for backpressure based on given config

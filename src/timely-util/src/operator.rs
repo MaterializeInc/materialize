@@ -31,7 +31,9 @@ use timely::dataflow::channels::ContainerBytes;
 use timely::dataflow::channels::pact::{Exchange, ParallelizationContract, Pipeline};
 use timely::dataflow::channels::pushers::Tee;
 use timely::dataflow::operators::Capability;
-use timely::dataflow::operators::generic::builder_rc::OperatorBuilder as OperatorBuilderRc;
+use timely::dataflow::operators::generic::builder_rc::{
+    OperatorBuilder as OperatorBuilderRc, OperatorBuilder,
+};
 use timely::dataflow::operators::generic::operator::{self, Operator};
 use timely::dataflow::operators::generic::{InputHandleCore, OperatorInfo, OutputHandleCore};
 use timely::dataflow::{Scope, Stream, StreamCore};
@@ -898,5 +900,87 @@ where
 
     fn seal(chain: &mut Vec<Self::Input>, _description: Description<Self::Time>) -> Self::Output {
         std::mem::take(chain)
+    }
+}
+
+/// Merge the contents of multiple streams and combine the containers using a container builder.
+pub trait ConcatenateFlatten<G: Scope, C: Container> {
+    /// Merge the contents of multiple streams and use the provided container builder to form
+    /// output containers.
+    ///
+    /// # Examples
+    /// ```
+    /// use timely::container::CapacityContainerBuilder;
+    /// use timely::dataflow::operators::{ToStream, Inspect};
+    /// use mz_timely_util::operator::ConcatenateFlatten;
+    ///
+    /// timely::example(|scope| {
+    ///
+    ///     let streams = vec![(0..10).to_stream(scope),
+    ///                        (0..10).to_stream(scope),
+    ///                        (0..10).to_stream(scope)];
+    ///
+    ///     scope.concatenate_flatten::<_, CapacityContainerBuilder<Vec<_>>>(streams)
+    ///          .inspect(|x| println!("seen: {:?}", x));
+    /// });
+    /// ```
+    fn concatenate_flatten<I, CB>(&self, sources: I) -> StreamCore<G, CB::Container>
+    where
+        I: IntoIterator<Item = StreamCore<G, C>>,
+        CB: ContainerBuilder + for<'a> PushInto<C::Item<'a>>;
+}
+
+impl<G, C> ConcatenateFlatten<G, C> for StreamCore<G, C>
+where
+    G: Scope,
+    C: Container + 'static,
+{
+    fn concatenate_flatten<I, CB>(&self, sources: I) -> StreamCore<G, CB::Container>
+    where
+        I: IntoIterator<Item = StreamCore<G, C>>,
+        CB: ContainerBuilder + for<'a> PushInto<C::Item<'a>>,
+    {
+        let clone = self.clone();
+        self.scope()
+            .concatenate_flatten::<_, CB>(Some(clone).into_iter().chain(sources))
+    }
+}
+
+impl<G, C> ConcatenateFlatten<G, C> for G
+where
+    G: Scope,
+    C: Container + 'static,
+{
+    fn concatenate_flatten<I, CB>(&self, sources: I) -> StreamCore<G, CB::Container>
+    where
+        I: IntoIterator<Item = StreamCore<G, C>>,
+        CB: ContainerBuilder + for<'a> PushInto<C::Item<'a>>,
+    {
+        let mut builder = OperatorBuilder::new("ConcatenateFlatten".to_string(), self.clone());
+        builder.set_notify(false);
+
+        // create new input handles for each input stream.
+        let mut handles = sources
+            .into_iter()
+            .map(|s| builder.new_input(&s, Pipeline))
+            .collect::<Vec<_>>();
+
+        // create one output handle for the concatenated results.
+        let (mut output, result) = builder.new_output::<CB>();
+
+        builder.build(move |_capability| {
+            move |_frontier| {
+                let mut output = output.activate();
+                for handle in handles.iter_mut() {
+                    handle.for_each(|time, data| {
+                        output
+                            .session_with_builder(&time)
+                            .give_iterator(data.drain());
+                    })
+                }
+            }
+        });
+
+        result
     }
 }

@@ -28,8 +28,7 @@ use mz_timely_util::builder_async::{
     Event as AsyncEvent, OperatorBuilder as AsyncOperatorBuilder, PressOnDropButton,
 };
 use timely::dataflow::channels::pact::Exchange;
-use timely::dataflow::operators::{Enter, Map};
-use timely::dataflow::scopes::Child;
+use timely::dataflow::operators::Map;
 use timely::dataflow::{Scope, Stream};
 use tracing::{error, info};
 
@@ -324,8 +323,8 @@ pub struct HealthStatusMessage {
 ///
 /// The `OutputIndex` values that come across `health_stream` must be a strict subset of those in
 /// `configs`'s keys.
-pub(crate) fn health_operator<'g, G, P>(
-    scope: &Child<'g, G, mz_repr::Timestamp>,
+pub(crate) fn health_operator<G, P>(
+    scope: &G,
     now: NowFn,
     // A set of id's that should be marked as `HealthStatusUpdate::starting()` during startup.
     mark_starting: BTreeSet<GlobalId>,
@@ -345,7 +344,7 @@ pub(crate) fn health_operator<'g, G, P>(
     suspend_and_restart_delay: Duration,
 ) -> PressOnDropButton
 where
-    G: Scope<Timestamp = ()>,
+    G: Scope,
     P: HealthOperator + 'static,
 {
     // Derived config options
@@ -368,10 +367,8 @@ where
     let operator_name = format!("healthcheck({})", healthcheck_worker_id);
     let mut health_op = AsyncOperatorBuilder::new(operator_name, scope.clone());
 
-    let health = health_stream.enter(scope);
-
     let mut input = health_op.new_disconnected_input(
-        &health,
+        &health_stream,
         Exchange::new(move |_| u64::cast_from(chosen_worker_id)),
     );
 
@@ -961,6 +958,7 @@ mod tests {
     use mz_ore::assert_err;
     use timely::container::CapacityContainerBuilder;
     use timely::dataflow::Scope;
+    use timely::dataflow::operators::Enter;
     use timely::dataflow::operators::exchange::Exchange;
     use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender, unbounded_channel};
 
@@ -1086,7 +1084,7 @@ mod tests {
                     root_scope
                         .clone()
                         .scoped::<mz_repr::Timestamp, _, _>("gus", |scope| {
-                            let input = producer(root_scope.clone(), in_rx);
+                            let input = producer(root_scope.clone(), in_rx).enter(scope);
                             Box::leak(Box::new(health_operator(
                                 scope,
                                 mz_ore::now::SYSTEM_TIME.clone(),
