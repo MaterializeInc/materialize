@@ -29,10 +29,11 @@ import stat
 import subprocess
 import sys
 import tarfile
+import threading
 import time
 from collections import OrderedDict
 from collections.abc import Callable, Iterable, Iterator, Sequence
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ThreadPoolExecutor, as_completed, wait
 from enum import Enum, auto
 from functools import cache
 from pathlib import Path
@@ -1081,8 +1082,11 @@ class DependencySet:
                 sys.exit(5)
 
         prep = self._prepare_batch(deps_to_build)
-        for dep in deps_to_build:
-            dep.build(prep)
+
+        if deps_to_build:
+            with ThreadPoolExecutor(max_workers=len(deps_to_build)) as executor:
+                futures = [executor.submit(dep.build, prep) for dep in deps_to_build]
+                wait(futures)
 
     def ensure(self, post_build: Callable[[ResolvedImage], None] | None = None):
         """Ensure all publishable images in this dependency set exist on Docker
@@ -1098,12 +1102,22 @@ class DependencySet:
         prep = self._prepare_batch(deps_to_build)
 
         images_to_push = []
-        for dep in deps_to_build:
+        lock = threading.Lock()
+
+        def build_dep(dep):
             dep.build(prep)
             if post_build:
                 post_build(dep)
             if dep.publish:
-                images_to_push.append(dep.spec())
+                spec = dep.spec()
+                with lock:
+                    images_to_push.append(spec)
+
+        if deps_to_build:
+            with ThreadPoolExecutor(max_workers=len(deps_to_build)) as executor:
+                futures = [executor.submit(build_dep, dep) for dep in deps_to_build]
+                for future in as_completed(futures):
+                    future.result()
 
         # Push all Docker images in parallel to minimize build time.
         ui.section("Pushing images")
