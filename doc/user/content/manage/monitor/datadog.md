@@ -1,5 +1,5 @@
 ---
-title: "Datadog"
+title: "Datadog using Prometheus SQL Exporter"
 description: "How to monitor the performance and overall health of your Materialize region using Datadog."
 menu:
   main:
