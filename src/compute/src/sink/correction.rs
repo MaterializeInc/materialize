@@ -425,11 +425,6 @@ impl<D: Ord> ConsolidatingVec<D> {
         self.data.capacity()
     }
 
-    /// Return the growth dampener of the vector.
-    pub fn growth_dampener(&self) -> usize {
-        self.growth_dampener
-    }
-
     /// Pushes `item` into the vector.
     ///
     /// If the vector does not have sufficient capacity, we'll first consolidate and then increase
