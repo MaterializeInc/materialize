@@ -146,15 +146,6 @@ def workflow_source_resumption(c: Composition, parser: WorkflowArgumentParser) -
         c.run_testdrive_files("source-resumption/setup.td")
         c.run_testdrive_files("source-resumption/verify.td")
 
-        # Disabled due to https://github.com/MaterializeInc/database-issues/issues/6271
-        # assert (
-        #    find_source_resume_upper(
-        #        c,
-        #        "0",
-        #    )
-        #    == None
-        # )
-
         c.kill("clusterd")
         c.up("clusterd")
         c.sleep(10)
@@ -162,35 +153,6 @@ def workflow_source_resumption(c: Composition, parser: WorkflowArgumentParser) -
         # Verify the same data is query-able, and that we can make forward progress
         c.run_testdrive_files("source-resumption/verify.td")
         c.run_testdrive_files("source-resumption/re-ingest-and-verify.td")
-
-        # the first clusterd instance ingested 3 messages, so our
-        # upper is at the 4th offset (0-indexed)
-
-        # Disabled due to https://github.com/MaterializeInc/database-issues/issues/6271
-        # assert (
-        #    find_source_resume_upper(
-        #        c,
-        #        "0",
-        #    )
-        #    == 3
-        # )
-
-
-def find_source_resume_upper(c: Composition, partition_id: str) -> int | None:
-    metrics = c.exec("clusterd", "curl", "localhost:6878/metrics", capture=True).stdout
-
-    if metrics is None:
-        return None
-
-    for metric in metrics.splitlines():
-        if metric.startswith("mz_source_resume_upper"):
-            labels, value = metric[len("mz_source_resume_upper") :].split(" ", 2)
-
-            # prometheus doesn't use real json, so we do some hacky nonsense here :(
-            if labels[len("{partition_id=") :].startswith(f'"{partition_id}"'):
-                return int(value)
-
-    return None
 
 
 def workflow_sink_queue_full(c: Composition, parser: WorkflowArgumentParser) -> None:

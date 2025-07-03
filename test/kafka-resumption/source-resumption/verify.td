@@ -18,3 +18,9 @@ data         offset
 one          0
 two          1
 three        2
+
+> select * from topic_progress
+partition  offset
+--------------------
+(0,)    0
+[0,0]   3
