@@ -78,11 +78,10 @@ class Td(MeasurementSource):
         matched_line_id = None
         for id, line in enumerate(lines):
             if f"/* {marker} */" in line:
-                if "rows match" in lines[id + 1]:
-                    matched_line_id = id + 1
-                elif "rows match" in lines[id + 2]:
-                    assert "rows didn't match" in lines[id + 1]
-                    matched_line_id = id + 2
+                for id2 in range(id + 1, len(lines)):
+                    if "rows match" in lines[id2]:
+                        matched_line_id = id2
+                        break
                 else:
                     raise RuntimeError("row match not found")
 
