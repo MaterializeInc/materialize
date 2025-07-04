@@ -94,6 +94,9 @@ contains:MAX FILE SIZE cannot be less than 16MB
 > CREATE CLUSTER c1 REPLICAS (r1 (size '2'), r2 (size '2'));
 > SET cluster = c1;
 
+$ set-from-sql var=key-1
+SELECT TO_CHAR(now(), 'YYYY-MM-DD')
+
 # functions like now() should work in the s3 path
 > COPY t TO 's3://copytos3/test/1/' || TO_CHAR(now(), 'YYYY-MM-DD')
   WITH (
@@ -101,6 +104,13 @@ contains:MAX FILE SIZE cannot be less than 16MB
     MAX FILE SIZE = "100MB",
     FORMAT = 'csv'
   );
+
+$ set-from-sql var=key-2
+SELECT TO_CHAR(now(), 'YYYY-MM-DD')
+
+# The test depends on the day not changing at this specific time
+> SELECT '${key-1}' = '${key-2}'
+true
 
 > SELECT a FROM t
 1
@@ -164,9 +174,6 @@ contains:S3 bucket path is not empty
     FORMAT = 'csv'
   );
 
-$ set-from-sql var=key-1
-SELECT TO_CHAR(now(), 'YYYY-MM-DD')
-
 $ s3-verify-data bucket=copytos3 key=test/1/${key-1} sort-rows=true
 1
 2
@@ -203,12 +210,22 @@ $ s3-verify-keys bucket=copytos3 prefix-path=test/5 key-pattern=^test/5/mz.*\.cs
 
 # Test with parquet formatting
 
+$ set-from-sql var=key-1
+SELECT TO_CHAR(now(), 'YYYY-MM-DD')
+
 > COPY t TO 's3://copytos3/parquet_test/1/' || TO_CHAR(now(), 'YYYY-MM-DD')
   WITH (
     AWS CONNECTION = aws_conn,
     MAX FILE SIZE = "100MB",
     FORMAT = 'parquet'
   );
+
+$ set-from-sql var=key-2
+SELECT TO_CHAR(now(), 'YYYY-MM-DD')
+
+# The test depends on the day not changing at this specific time
+> SELECT '${key-1}' = '${key-2}'
+true
 
 > COPY (SELECT a FROM t) TO 's3://copytos3/parquet_test/2'
   WITH (
