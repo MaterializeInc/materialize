@@ -19,6 +19,7 @@ import sys
 import traceback
 import urllib.parse
 from collections.abc import Sequence
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from itertools import chain
 from textwrap import dedent
@@ -525,6 +526,8 @@ def annotate_logged_errors(
     This will be used to fail a test even if the test itself succeeded, as long
     as it had any unknown error logs.
     """
+    executor = ThreadPoolExecutor()
+    artifacts_future = executor.submit(ci_util.get_artifacts)
 
     errors = get_errors(log_files)
 
@@ -541,7 +544,6 @@ def annotate_logged_errors(
     unknown_errors: list[ObservedBaseError] = []
     unknown_errors.extend(issues_with_invalid_regex)
 
-    artifacts = ci_util.get_artifacts()
     job = os.getenv("BUILDKITE_JOB_ID")
 
     known_errors: list[ObservedBaseError] = []
@@ -635,77 +637,79 @@ def annotate_logged_errors(
                     )
                 )
 
-    for error in errors:
-        if isinstance(error, ErrorLog):
-            for artifact in artifacts:
-                if artifact["job_id"] == job and artifact["path"] == error.file:
-                    location: str = error.file
-                    location_url = get_artifact_url(artifact)
-                    break
-            else:
-                location: str = error.file
-                location_url = None
-
-            handle_error(error.match.decode("utf-8"), None, location, location_url)
-        elif isinstance(error, JunitError):
-            if "in Code Coverage" in error.text or "covered" in error.message:
-                msg = "\n".join(filter(None, [error.message, error.text]))
-                # Don't bother looking up known issues for code coverage report, just print it verbatim as an info message
-                known_errors.append(
-                    FailureInCoverageRun(
-                        error_type="Failure",
-                        internal_error_type="FAILURE_IN_COVERAGE_MODE",
-                        error_message=msg,
-                        location=error.testcase,
-                    )
-                )
-            else:
-                # JUnit error
-                all_error_details_raw = error.text
-                all_error_detail_parts = all_error_details_raw.split(
-                    JUNIT_ERROR_DETAILS_SEPARATOR
-                )
-                error_details = all_error_detail_parts[0]
-
-                if len(all_error_detail_parts) == 3:
-                    additional_collapsed_error_details_header = all_error_detail_parts[
-                        1
-                    ]
-                    additional_collapsed_error_details = all_error_detail_parts[2]
-                elif len(all_error_detail_parts) == 1:
-                    additional_collapsed_error_details_header = None
-                    additional_collapsed_error_details = None
+    if errors:
+        artifacts = artifacts_future.result()
+        for error in errors:
+            if isinstance(error, ErrorLog):
+                for artifact in artifacts:
+                    if artifact["job_id"] == job and artifact["path"] == error.file:
+                        location: str = error.file
+                        location_url = get_artifact_url(artifact)
+                        break
                 else:
-                    raise RuntimeError(
-                        f"Unexpected error details format: {all_error_details_raw}"
+                    location: str = error.file
+                    location_url = None
+
+                handle_error(error.match.decode("utf-8"), None, location, location_url)
+            elif isinstance(error, JunitError):
+                if "in Code Coverage" in error.text or "covered" in error.message:
+                    msg = "\n".join(filter(None, [error.message, error.text]))
+                    # Don't bother looking up known issues for code coverage report, just print it verbatim as an info message
+                    known_errors.append(
+                        FailureInCoverageRun(
+                            error_type="Failure",
+                            internal_error_type="FAILURE_IN_COVERAGE_MODE",
+                            error_message=msg,
+                            location=error.testcase,
+                        )
                     )
+                else:
+                    # JUnit error
+                    all_error_details_raw = error.text
+                    all_error_detail_parts = all_error_details_raw.split(
+                        JUNIT_ERROR_DETAILS_SEPARATOR
+                    )
+                    error_details = all_error_detail_parts[0]
+
+                    if len(all_error_detail_parts) == 3:
+                        additional_collapsed_error_details_header = (
+                            all_error_detail_parts[1]
+                        )
+                        additional_collapsed_error_details = all_error_detail_parts[2]
+                    elif len(all_error_detail_parts) == 1:
+                        additional_collapsed_error_details_header = None
+                        additional_collapsed_error_details = None
+                    else:
+                        raise RuntimeError(
+                            f"Unexpected error details format: {all_error_details_raw}"
+                        )
+
+                    handle_error(
+                        error_message=error.message,
+                        error_details=error_details,
+                        location=error.testcase,
+                        location_url=None,
+                        additional_collapsed_error_details_header=additional_collapsed_error_details_header,
+                        additional_collapsed_error_details=additional_collapsed_error_details,
+                    )
+            elif isinstance(error, Secret):
+                for artifact in artifacts:
+                    if artifact["job_id"] == job and artifact["path"] == error.file:
+                        location: str = error.file
+                        location_url = get_artifact_url(artifact)
+                        break
+                else:
+                    location: str = error.file
+                    location_url = None
 
                 handle_error(
-                    error_message=error.message,
-                    error_details=error_details,
-                    location=error.testcase,
-                    location_url=None,
-                    additional_collapsed_error_details_header=additional_collapsed_error_details_header,
-                    additional_collapsed_error_details=additional_collapsed_error_details,
+                    f"Secret found on line {error.line}: {error.secret}",
+                    f"Detector: {error.detector_name}. Don't print out secrets in tests/logs and revoke them immediately. Mark false positives in misc/shlib/shlib.bash's trufflehog_jq_filter_(logs|common)",
+                    location,
+                    location_url,
                 )
-        elif isinstance(error, Secret):
-            for artifact in artifacts:
-                if artifact["job_id"] == job and artifact["path"] == error.file:
-                    location: str = error.file
-                    location_url = get_artifact_url(artifact)
-                    break
             else:
-                location: str = error.file
-                location_url = None
-
-            handle_error(
-                f"Secret found on line {error.line}: {error.secret}",
-                f"Detector: {error.detector_name}. Don't print out secrets in tests/logs and revoke them immediately. Mark false positives in misc/shlib/shlib.bash's trufflehog_jq_filter_(logs|common)",
-                location,
-                location_url,
-            )
-        else:
-            raise RuntimeError(f"Unexpected error type: {type(error)}")
+                raise RuntimeError(f"Unexpected error type: {type(error)}")
 
     ignore_failure = True
     if len(unknown_errors) > 0:
