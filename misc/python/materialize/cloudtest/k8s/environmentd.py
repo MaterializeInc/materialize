@@ -262,6 +262,7 @@ class EnvironmentdStatefulSet(K8sStatefulSet):
             "--availability-zone=1",
             "--availability-zone=2",
             "--availability-zone=3",
+            "--availability-zone=quickstart",
             "--aws-account-id=123456789000",
             "--aws-external-id-prefix=eb5cb59b-e2fe-41f3-87ca-d2176a495345",
             "--environment-id=cloudtest-test-00000000-0000-0000-0000-000000000000-0",

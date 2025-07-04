@@ -69,6 +69,15 @@ def populate(
     compute_cluster: ClusterDefinition,
     storage_cluster: ClusterDefinition,
 ) -> None:
+    # Make sure the `quickstart` cluster replica gets is scheduled on its own
+    # node, so queries still work when a node running a compute/storage replica
+    # is suspended.
+    mz.environmentd.sql(
+        "ALTER CLUSTER quickstart SET (AVAILABILITY ZONES ('quickstart'))",
+        port="internal",
+        user="mz_system",
+    )
+
     all_clusters = [compute_cluster, storage_cluster]
 
     drop_cluster_statements = [
@@ -127,7 +136,6 @@ def validate_state(
     timeout_in_sec: int,
     expected_state: str,
     isolation_level: str = "STRICT SERIALIZABLE",
-    cluster: str = "quickstart",
 ) -> None:
     comparison_operator = ">" if must_exceed_reached_index else ">="
     print(f"Expect '{expected_state}' within timeout of {timeout_in_sec}s")
@@ -149,7 +157,6 @@ def validate_state(
                 input=dedent(
                     f"""
                     > SET TRANSACTION_ISOLATION TO '{isolation_level}';
-                    > SET cluster TO '{cluster}';
 
                     > SELECT COUNT(*) {comparison_operator} {reached_index} FROM source; -- validate source with isolation {isolation_level}
                     true
@@ -234,7 +241,6 @@ def test_unreplicated_storage_cluster_on_failing_node(
         timeout_in_sec=TD_TIMEOUT_SHORT,
         expected_state="stale data being delivered timely",
         isolation_level="SERIALIZABLE",
-        cluster=compute_cluster.name,
     )
 
     # with STRICT SERIALIZABLE
@@ -245,7 +251,6 @@ def test_unreplicated_storage_cluster_on_failing_node(
         timeout_in_sec=TD_TIMEOUT_FULL_RECOVERY,
         expected_state="data being delivered",
         isolation_level="STRICT SERIALIZABLE",
-        cluster=compute_cluster.name,
     )
 
     # only request this index because the previous validation succeeded / did not block
@@ -258,7 +263,6 @@ def test_unreplicated_storage_cluster_on_failing_node(
         must_exceed_reached_index=True,
         timeout_in_sec=TD_TIMEOUT_FULL_RECOVERY,
         expected_state="live data after to node recovery",
-        cluster=compute_cluster.name,
     )
 
     recovered_index = get_current_counter_index(mz)
@@ -271,7 +275,6 @@ def test_unreplicated_storage_cluster_on_failing_node(
         must_exceed_reached_index=True,
         timeout_in_sec=TD_TIMEOUT_SHORT,
         expected_state="no issues after node recovery",
-        cluster=compute_cluster.name,
     )
 
 
@@ -358,7 +361,6 @@ def test_replicated_compute_cluster_on_failing_node(mz: MaterializeApplication) 
         timeout_in_sec=TD_TIMEOUT_SHORT,
         expected_state="live data without disruption in latency",
         isolation_level="SERIALIZABLE",
-        cluster=compute_cluster.name,
     )
 
     reached_index = get_current_counter_index(mz)
@@ -371,7 +373,6 @@ def test_replicated_compute_cluster_on_failing_node(mz: MaterializeApplication) 
         must_exceed_reached_index=True,
         timeout_in_sec=TD_TIMEOUT_SHORT,
         expected_state="no issues after node recovery",
-        cluster=compute_cluster.name,
     )
 
 
