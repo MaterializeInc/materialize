@@ -11,7 +11,7 @@ workspace = true
 
 [dependencies]
 anyhow = "1.0.98"
-axum = "0.7.5"
+axum = "0.8.4"
 axum-extra = { version = "0.9.3", features = ["typed-header"] }
 base64 = "0.22.1"
 chrono = { version = "0.4.39", default-features = false, features = ["serde"] }
