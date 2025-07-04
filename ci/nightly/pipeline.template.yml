@@ -1935,14 +1935,15 @@ steps:
 
   - id: 0dt
     label: Zero downtime
-    depends_on: build-aarch64
+    depends_on: build-x86_64
     timeout_in_minutes: 240
-    parallelism: 4
+    parallelism: 2
     plugins:
       - ./ci/plugins/mzcompose:
           composition: 0dt
     agents:
-      queue: hetzner-aarch64-16cpu-32gb
+      # More consistent results
+      queue: hetzner-x86-64-dedi-16cpu-64gb
 
   - id: emulator
     label: Materialize Emulator
