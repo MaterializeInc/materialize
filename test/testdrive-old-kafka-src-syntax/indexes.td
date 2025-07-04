@@ -379,7 +379,7 @@ pg_description_all_databases_ind                            pg_description_all_d
 pg_namespace_all_databases_ind                              pg_namespace_all_databases                   mz_catalog_server    {nspname}                                   ""
 pg_type_all_databases_ind                                   pg_type_all_databases                        mz_catalog_server    {oid}                                       ""
 
-?[13100<version<14900] SHOW INDEXES IN CLUSTER mz_catalog_server
+>[13100<version<14900] SHOW INDEXES IN CLUSTER mz_catalog_server
 mz_active_peeks_per_worker_s2_primary_idx                   mz_active_peeks_per_worker                   mz_catalog_server    {id,worker_id}                              ""
 mz_arrangement_batches_raw_s2_primary_idx                   mz_arrangement_batches_raw                   mz_catalog_server    {operator_id,worker_id}                     ""
 mz_arrangement_records_raw_s2_primary_idx                   mz_arrangement_records_raw                   mz_catalog_server    {operator_id,worker_id}                     ""
