@@ -1323,6 +1323,9 @@ class AlterSinkWebhook(Check):
         return Testdrive(
             dedent(
                 """
+                # Can be slow in 0dt upgrade scenarios
+                $ set-sql-timeout duration=480s
+
                 > CREATE SOURCE sink_alter_wh_source_src
                   FROM KAFKA CONNECTION kafka_conn (TOPIC 'sink-alter-wh')
                 > CREATE TABLE sink_alter_wh_source FROM SOURCE sink_alter_wh_source_src (REFERENCE "sink-alter-wh")
