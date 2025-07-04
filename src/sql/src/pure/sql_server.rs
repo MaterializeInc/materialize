@@ -311,16 +311,16 @@ pub fn generate_create_subsource_statements(
     Ok(subsources)
 }
 
-struct SqlServerExportStatementValues {
-    pub columns: Vec<ColumnDef<Aug>>,
-    pub constraints: Vec<TableConstraint<Aug>>,
-    pub text_columns: Option<Vec<WithOptionValue<Aug>>>,
-    pub excl_columns: Option<Vec<WithOptionValue<Aug>>>,
-    pub details: SourceExportStatementDetails,
-    pub external_reference: UnresolvedItemName,
+pub(super) struct SqlServerExportStatementValues {
+    pub(super) columns: Vec<ColumnDef<Aug>>,
+    pub(super) constraints: Vec<TableConstraint<Aug>>,
+    pub(super) text_columns: Option<Vec<WithOptionValue<Aug>>>,
+    pub(super) excl_columns: Option<Vec<WithOptionValue<Aug>>>,
+    pub(super) details: SourceExportStatementDetails,
+    pub(super) external_reference: UnresolvedItemName,
 }
 
-fn generate_source_export_statement_values(
+pub(super) fn generate_source_export_statement_values(
     scx: &StatementContext,
     purified_export: PurifiedSourceExport,
 ) -> Result<SqlServerExportStatementValues, PlanError> {
