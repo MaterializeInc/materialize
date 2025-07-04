@@ -39,7 +39,7 @@ steps:
         depends_on: []
         timeout_in_minutes: 60
         agents:
-          queue: builder-linux-x86_64
+          queue: xxl-builder-linux-x86_64
 
       - id: build-aarch64
         label: ":bazel: Build aarch64"
@@ -51,7 +51,7 @@ steps:
         depends_on: []
         timeout_in_minutes: 60
         agents:
-          queue: builder-linux-aarch64-mem
+          queue: xxl-builder-linux-aarch64-mem
 
       - id: upload-debug-symbols-x86_64
         label: "Upload debug symbols for x86_64"
