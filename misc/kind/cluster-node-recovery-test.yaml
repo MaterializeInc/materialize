@@ -190,6 +190,14 @@ nodes:
       materialize.cloud/availability-zone: "3"
       topology.kubernetes.io/zone: "3"
 
+  # node for the `quickstart` cluster replica
+  - role: worker
+    image: kindest/node:v1.33.1
+    labels:
+      materialize.cloud/disk: true
+      materialize.cloud/availability-zone: "quickstart"
+      topology.kubernetes.io/zone: "quickstart"
+
   # only envd (nodes will be tainted in the setup)
   - role: worker
     image: kindest/node:v1.33.1
