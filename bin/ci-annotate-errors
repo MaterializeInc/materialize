@@ -12,23 +12,24 @@
 # ci-annotate-errors - Detect errors in junit xml as well as log files during
 # CI and find associated open GitHub issues in Materialize repository.
 
-OUTPUT=$(exec "$(dirname "$0")"/ci-builder run stable "$(dirname "$0")"/mzcompose --mz-quiet --find get-cloud-hostname run default --app-password-env-var "PRODUCTION_ANALYTICS_APP_PASSWORD")
-
-if [[ $OUTPUT == *"CalledProcessError"* ]]; then
-  OUTPUT="unknown"
-else
-  # shellcheck disable=SC2181,SC2319
-  if [ $? -eq 0 ]; then
-    # Discard all but the last two lines, previous content can be retries when docker pull has problems
-    OUTPUT=$(echo "$OUTPUT" | tail -n 2)
-
-    # keep only the remaining first line because there is a further line containing the mzcompose result summary
-    HOSTNAME=$(echo "$OUTPUT" | head -n 1)
-  else
-    # TODO: Remove when database-issues#8592 is fixed
-    echo "Failed to get cloud hostname, using fallback value"
-    HOSTNAME="7vifiksqeftxc6ld3r6zvc8n2.lb.us-east-1.aws.materialize.cloud"
-  fi
-fi
+HOSTNAME="7vifiksqeftxc6ld3r6zvc8n2.lb.us-east-1.aws.materialize.cloud"
+# TODO: Reenable when database-issues#8592 is fixed
+# OUTPUT=$(exec "$(dirname "$0")"/ci-builder run stable "$(dirname "$0")"/mzcompose --mz-quiet --find get-cloud-hostname run default --app-password-env-var "PRODUCTION_ANALYTICS_APP_PASSWORD")
+#
+# if [[ $OUTPUT == *"CalledProcessError"* ]]; then
+#   OUTPUT="unknown"
+# else
+#   # shellcheck disable=SC2181,SC2319
+#   if [ $? -eq 0 ]; then
+#     # Discard all but the last two lines, previous content can be retries when docker pull has problems
+#     OUTPUT=$(echo "$OUTPUT" | tail -n 2)
+#
+#     # keep only the remaining first line because there is a further line containing the mzcompose result summary
+#     HOSTNAME=$(echo "$OUTPUT" | head -n 1)
+#   else
+#     echo "Failed to get cloud hostname, using fallback value"
+#     HOSTNAME="7vifiksqeftxc6ld3r6zvc8n2.lb.us-east-1.aws.materialize.cloud"
+#   fi
+# fi
 
 exec "$(dirname "$0")"/pyactivate -m materialize.cli.ci_annotate_errors --cloud-hostname "$HOSTNAME" "$@"

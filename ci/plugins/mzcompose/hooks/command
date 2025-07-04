@@ -171,16 +171,21 @@ cleanup() {
   mapfile -t artifacts < <(printf "run.log\nservices.log\njournalctl-merge.log\nnetstat-ant.log\nnetstat-panelot.log\nps-aux.log\ndocker-inspect.log\n"; find . -name 'junit_*.xml'; find mz_debug_* -name '*.log')
   artifacts_str=$(IFS=";"; echo "${artifacts[*]}")
 
-  echo "--- Running trufflehog to scan artifacts for secrets"
-  bin/ci-builder run stable trufflehog --no-update --no-verification --json --exclude-detectors=coda,dockerhub,box,npmtoken,github,snykkey,eightxeight filesystem "${artifacts[@]}" | trufflehog_jq_filter_logs > trufflehog.log
+  echo "--- Running trufflehog to scan artifacts for secrets & uploading artifacts"
+  {
+    bin/ci-builder run stable trufflehog --no-update --no-verification --json --exclude-detectors=coda,dockerhub,box,npmtoken,github,snykkey,eightxeight,sumologickey filesystem "${artifacts[@]}" | trufflehog_jq_filter_logs > trufflehog.log
+  } &
 
-  echo "Uploading log artifacts"
   unset CI_EXTRA_ARGS # We don't want extra args for the annotation
   # Continue even if ci-annotate-errors fails
   CI_ANNOTATE_ERRORS_RESULT=0
   # We have to upload artifacts before ci-annotate-errors, so that the annotations can link to the artifacts
-  buildkite-agent artifact upload "$artifacts_str" || true
-  bin/ci-builder run stable bin/ci-annotate-errors --test-cmd="$TEST_CMD" --test-desc="$TEST_DESC" --test-result="$TEST_RESULT" "${artifacts[@]}" > ci-annotate-errors.log || CI_ANNOTATE_ERRORS_RESULT=$?
+  {
+    buildkite-agent artifact upload "$artifacts_str" || true
+  } &
+  wait
+  echo "--- Annotating errors"
+  bin/ci-builder run stable bin/ci-annotate-errors --test-cmd="$TEST_CMD" --test-desc="$TEST_DESC" --test-result="$TEST_RESULT" "${artifacts[@]}" trufflehog.log > ci-annotate-errors.log || CI_ANNOTATE_ERRORS_RESULT=$?
   buildkite-agent artifact upload "ci-annotate-errors.log"
 
   export_cov() {
