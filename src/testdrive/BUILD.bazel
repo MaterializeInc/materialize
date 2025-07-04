@@ -30,7 +30,7 @@ rust_library(
     proc_macro_deps = [] + all_crate_deps(proc_macro = True),
     rustc_env = {},
     rustc_flags = [],
-    version = "0.149.0-dev.0",
+    version = "0.150.0-dev.0",
     deps = [
         ":mz_testdrive_build_script",
         "//src/adapter:mz_adapter",
@@ -78,7 +78,7 @@ rust_test(
     ),
     rustc_env = {},
     rustc_flags = [],
-    version = "0.149.0-dev.0",
+    version = "0.150.0-dev.0",
     deps = [
         "//src/adapter:mz_adapter",
         "//src/avro:mz_avro",
@@ -169,7 +169,7 @@ rust_binary(
         "@//misc/bazel/platforms:xlang_lto_enabled": ["-Clinker-plugin-lto"],
         "//conditions:default": [],
     }),
-    version = "0.149.0-dev.0",
+    version = "0.150.0-dev.0",
     deps = [
         ":mz_testdrive",
         "//src/adapter:mz_adapter",
