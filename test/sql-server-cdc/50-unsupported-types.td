@@ -78,6 +78,8 @@ good true "character varying" ""
 "i work"
 "maybe me"
 
+> DROP SOURCE table_text_source CASCADE;
+
 ! CREATE SOURCE table_image_source
   FROM SQL SERVER CONNECTION sql_server_test_50_connection
   FOR TABLES (dbo.table_image);
@@ -97,3 +99,45 @@ contains: SQL SERVER source validation: column dbo.table_geometry.bad of type ge
   FROM SQL SERVER CONNECTION sql_server_test_50_connection
   FOR TABLES (dbo.table_varchar_max);
 contains: SQL SERVER source validation: column dbo.table_varchar_max.bad of type varchar is not supported
+
+
+## same tests for source tables
+
+# Creating a source with no subsources should succeed
+> CREATE SOURCE ms_src
+  FROM SQL SERVER CONNECTION sql_server_test_50_connection;
+
+! CREATE TABLE table_text
+  FROM SOURCE ms_src (REFERENCE dbo.table_text);
+contains: SQL SERVER source validation: column dbo.table_text.bad of type text is not supported
+
+> CREATE TABLE table_text
+  FROM SOURCE ms_src (REFERENCE dbo.table_text)
+  WITH (
+    EXCLUDE COLUMNS (bad)
+  );
+
+> SHOW COLUMNS FROM table_text;
+good true "character varying" ""
+
+> SELECT * FROM table_text;
+"i work"
+"maybe me"
+
+! CREATE TABLE table_image
+  FROM SOURCE ms_src (REFERENCE dbo.table_image);
+contains: SQL SERVER source validation: column dbo.table_image.bad of type image is not supported
+
+! CREATE TABLE table_geography
+  FROM SOURCE ms_src (REFERENCE dbo.table_geography);
+contains: SQL SERVER source validation: column dbo.table_geography.bad of type geography is not supported
+
+! CREATE TABLE table_geometry
+  FROM SOURCE ms_src (REFERENCE dbo.table_geometry);
+contains: SQL SERVER source validation: column dbo.table_geometry.bad of type geometry is not supported
+
+! CREATE TABLE table_varchar_max
+  FROM SOURCE ms_src (REFERENCE dbo.table_varchar_max);
+contains: SQL SERVER source validation: column dbo.table_varchar_max.bad of type varchar is not supported
+
+> DROP SOURCE ms_src CASCADE;
