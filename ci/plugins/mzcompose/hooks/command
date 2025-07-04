@@ -251,9 +251,7 @@ cleanup() {
   rm -rf ~/.kube # Remove potential state from E2E Terraform tests
 
   echo "Removing mz-debug files"
-  if find mz_debug*; then
-      rm -rf mz_debug*
-  fi
+  find . -maxdepth 1 -type d -name 'mz_debug*' -exec rm -r {} +
 
   if [ ! -s services.log ] && [ "$BUILDKITE_LABEL" != "Maelstrom coverage of persist" ] && [ "$BUILDKITE_LABEL" != "Long single-node Maelstrom coverage of persist" ] && [ "$BUILDKITE_LABEL" != "Maelstrom coverage of txn-wal" ] && [ "$BUILDKITE_LABEL" != "Mz E2E Test" ] && [ "$BUILDKITE_LABEL" != "Output consistency (version for DFR)" ] && [ "$BUILDKITE_LABEL" != "Output consistency (version for CTF)" ] && [ "$BUILDKITE_LABEL" != "QA Canary Environment Base Load" ] && [ "$BUILDKITE_LABEL" != "Parallel Benchmark against QA Canary Environment" ] && [ "$BUILDKITE_LABEL" != "Parallel Benchmark against QA Benchmarking Staging Environment" ] && [[ ! "$BUILDKITE_LABEL" =~ Terraform\ .* ]]; then
       echo "+++ services.log is empty, failing"
