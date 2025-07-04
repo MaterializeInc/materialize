@@ -15,7 +15,7 @@ harness = false
 
 [dependencies]
 anyhow = "1.0.98"
-arrow = { version = "54.3.1", default-features = false }
+arrow = { version = "55.2.0", default-features = false }
 async-trait = "0.1.88"
 aws-config = { version = "1.2.0", default-features = false, features = ["sso"] }
 aws-credential-types = { version = "1.2.3", features = ["hardcoded-credentials"] }
