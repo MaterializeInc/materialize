@@ -353,18 +353,18 @@ EXPLAIN ANALYZE MEMORY, CPU, CPU WITH SKEW FOR MATERIALIZED VIEW w
 ----
 error: both CPU and MEMORY were specified, expected WITH SKEW or FOR
 EXPLAIN ANALYZE MEMORY, CPU, CPU WITH SKEW FOR MATERIALIZED VIEW w
-      ^
+                             ^
 
 parse-statement
 EXPLAIN ANALYZE HINTS FOR SELECT 1
 ----
-error: expected INDEX or MATERIALIZED VIEW
+error: Expected one of INDEX or MATERIALIZED, found SELECT
 EXPLAIN ANALYZE HINTS FOR SELECT 1
-    ^
+                          ^
 
 parse-statement
 EXPLAIN ANALYZE HINTS FOR idx_top_buyers
 ----
-error: expected INDEX or MATERIALIZED VIEW
+error: Expected one of INDEX or MATERIALIZED, found identifier "idx_top_buyers"
 EXPLAIN ANALYZE HINTS FOR idx_top_buyers
-    ^
+                          ^

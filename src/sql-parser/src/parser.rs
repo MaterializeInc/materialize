@@ -8834,13 +8834,13 @@ impl<'a> Parser<'a> {
 
     fn parse_explain_analyze(&mut self) -> Result<Statement<Raw>, ParserError> {
         // EXPLAIN ANALYZE ((MEMORY | CPU) [WITH SKEW] | HINTS) FOR (INDEX ... | MATERIALIZED VIEW ...) [AS SQL]
-        let mut computation_properties = vec![CPU, MEMORY];
 
         let properties = if self.parse_keyword(HINTS) {
             ExplainAnalyzeProperty::Hints
-        } else if let Ok((kw, property)) =
-            self.parse_explain_analyze_computation_property(&computation_properties)
-        {
+        } else {
+            let mut computation_properties = vec![CPU, MEMORY];
+            let (kw, property) =
+                self.parse_explain_analyze_computation_property(&computation_properties)?;
             let mut properties = vec![property];
             computation_properties.retain(|p| p != &kw);
 
@@ -8851,41 +8851,23 @@ impl<'a> Parser<'a> {
                 properties.push(property);
             }
 
-            let mut skew = false;
-            if self.peek_keyword(WITH) {
-                if !self.parse_keywords(&[WITH, SKEW]) {
-                    return Err(ParserError::new(self.index, "expected WITH SKEW"));
-                }
-                skew = true;
-            }
+            let skew = self.parse_keywords(&[WITH, SKEW]);
 
             ExplainAnalyzeProperty::Computation { properties, skew }
-        } else {
-            return Err(ParserError::new(
-                self.index,
-                "expected HINTS, MEMORY, or CPU",
-            ));
         };
 
         self.expect_keyword(FOR)?;
 
-        let explainee = if self.parse_keywords(&[MATERIALIZED, VIEW]) {
-            // Parse: `MATERIALIZED VIEW name`
-            Explainee::MaterializedView(self.parse_raw_name()?)
-        } else if self.parse_keyword(INDEX) {
-            // Parse: `INDEX name`
-            Explainee::Index(self.parse_raw_name()?)
-        } else {
-            return Err(ParserError::new(
-                self.index,
-                "expected INDEX or MATERIALIZED VIEW",
-            ));
+        let explainee = match self.expect_one_of_keywords(&[INDEX, MATERIALIZED])? {
+            INDEX => Explainee::Index(self.parse_raw_name()?),
+            MATERIALIZED => {
+                self.expect_keyword(VIEW)?;
+                Explainee::MaterializedView(self.parse_raw_name()?)
+            }
+            _ => unreachable!(),
         };
 
-        let mut as_sql = false;
-        if self.parse_keywords(&[AS, SQL]) {
-            as_sql = true;
-        }
+        let as_sql = self.parse_keywords(&[AS, SQL]);
 
         Ok(Statement::ExplainAnalyze(ExplainAnalyzeStatement {
             properties,
@@ -8900,21 +8882,15 @@ impl<'a> Parser<'a> {
     ) -> Result<(Keyword, ExplainAnalyzeComputationProperty), ParserError> {
         if properties.is_empty() {
             return Err(ParserError::new(
-                self.index,
+                self.peek_pos(),
                 "both CPU and MEMORY were specified, expected WITH SKEW or FOR",
             ));
         }
 
-        match self.parse_one_of_keywords(properties) {
-            Some(kw) if kw == CPU => Ok((kw, ExplainAnalyzeComputationProperty::Cpu)),
-            Some(kw) if kw == MEMORY => Ok((kw, ExplainAnalyzeComputationProperty::Memory)),
-            _ => Err(ParserError::new(
-                self.index,
-                format!(
-                    "expected one of {}",
-                    mz_ore::str::separated(", ", properties)
-                ),
-            )),
+        match self.expect_one_of_keywords(properties)? {
+            CPU => Ok((CPU, ExplainAnalyzeComputationProperty::Cpu)),
+            MEMORY => Ok((MEMORY, ExplainAnalyzeComputationProperty::Memory)),
+            _ => unreachable!(),
         }
     }
 
@@ -9280,7 +9256,7 @@ impl<'a> Parser<'a> {
                 "one of TABLES or TYPES or SECRETS or CONNECTIONS or SCHEMAS or DATABASES or CLUSTERS",
                 self.peek_token(),
             )
-            .unwrap_err()
+                .unwrap_err()
         })?;
         self.expect_grant_revoke_object_type_inner(statement_type, object_type)?;
         Ok(object_type)
