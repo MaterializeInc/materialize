@@ -111,7 +111,7 @@ def get_minimal_system_parameters(
         "enable_statement_lifecycle_logging": "true",
         "enable_variadic_left_join_lowering": "true",
         "enable_worker_core_affinity": "true",
-        "grpc_client_http2_keep_alive_timeout": "5",
+        "grpc_client_http2_keep_alive_timeout": "5s",
         "ore_overflowing_behavior": "panic",
         "persist_stats_audit_percent": "100",
         "unsafe_enable_table_keys": "true",
@@ -543,6 +543,7 @@ UNINTERESTING_SYSTEM_PARAMETERS = [
     "enable_timely_init_at_process_startup",
     "persist_enable_incremental_compaction",
     "storage_statistics_retention_duration",
+    "enable_ctp_cluster_protocols",
 ]
 
 

@@ -74,6 +74,12 @@ pub const ENABLE_TIMELY_INIT_AT_PROCESS_STARTUP: Config<bool> = Config::new(
     "Whether to initialize the Timely runtime at clusterd process startup.",
 );
 
+pub const ENABLE_CTP_CLUSTER_PROTOCOLS: Config<bool> = Config::new(
+    "enable_ctp_cluster_protocols",
+    true,
+    "Enable CTP (instead of gRPC) for the compute and storage cluster protocols.",
+);
+
 /// Adds the full set of all controller `Config`s.
 pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
     configs
@@ -87,4 +93,5 @@ pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
         .add(&TIMELY_ZERO_COPY_LIMIT)
         .add(&ARRANGEMENT_EXERT_PROPORTIONALITY)
         .add(&ENABLE_TIMELY_INIT_AT_PROCESS_STARTUP)
+        .add(&ENABLE_CTP_CLUSTER_PROTOCOLS)
 }
