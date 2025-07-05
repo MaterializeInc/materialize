@@ -43,7 +43,7 @@ use crate::internal::paths::{BlobKey, PartialBlobKey, PartialRollupKey};
 use crate::internal::state::HollowBlobRef;
 use crate::internal::state_versions::{InspectDiff, StateVersionsIter};
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub struct GcReq {
     pub shard_id: ShardId,
     pub new_seqno_since: SeqNo,
@@ -340,6 +340,9 @@ where
                     HollowBlobRef::Batch(batch) => {
                         seqno_held_parts += batch.part_count();
                     }
+                    HollowBlobRef::Part(_) => {
+                        seqno_held_parts += 1;
+                    }
                     HollowBlobRef::Rollup(_) => {}
                 });
             }
@@ -479,6 +482,12 @@ where
                         }
                     }
                 }
+                HollowBlobRef::Part(_) => {
+                    warn!(
+                        "unexpected part in state blobs during GC: {:?}. This should never happen.",
+                        blob
+                    );
+                }
             });
 
             gc_results.truncated_consensus_to.push(truncate_lt);
@@ -523,6 +532,12 @@ where
                             // have a logic error or our diffs are incorrect (!)
                             assert!(batch_parts_to_delete.add(part));
                         }
+                    }
+                    HollowBlobRef::Part(part) => {
+                        // we use BTreeSets for fast lookups elsewhere, but we should never
+                        // see repeat blob insertions within a single GC run, otherwise we
+                        // have a logic error or our diffs are incorrect (!)
+                        assert!(batch_parts_to_delete.add(part));
                     }
                     HollowBlobRef::Rollup(rollup) => {
                         assert!(rollups_to_delete.insert(rollup.key.to_owned()));

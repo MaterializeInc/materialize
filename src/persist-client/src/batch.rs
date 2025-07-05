@@ -639,7 +639,7 @@ where
     metrics: Arc<Metrics>,
 
     write_schemas: Schemas<K, V>,
-    num_updates: usize,
+    num_updates: Vec<usize>,
     parts: BatchParts<T>,
 
     // These provide a bit more safety against appending a batch with the wrong
@@ -667,7 +667,7 @@ where
             blob,
             metrics,
             write_schemas,
-            num_updates: 0,
+            num_updates: vec![],
             parts,
             shard_id,
             version,
@@ -692,6 +692,7 @@ where
         let mut run_parts = vec![];
         let mut run_splits = vec![];
         let mut run_meta = vec![];
+        let mut part_cursor = 0;
         for (order, parts) in runs {
             if parts.is_empty() {
                 continue;
@@ -699,6 +700,9 @@ where
             if run_parts.len() != 0 {
                 run_splits.push(run_parts.len());
             }
+            let num_updates = self.num_updates[part_cursor..part_cursor + parts.len()]
+                .iter()
+                .sum();
             run_meta.push(RunMeta {
                 order: Some(order),
                 schema: self.write_schemas.id,
@@ -709,10 +713,17 @@ where
                 } else {
                     None
                 },
+                len: if write_run_ids {
+                    Some(num_updates)
+                } else {
+                    None
+                },
             });
+            part_cursor += parts.len();
             run_parts.extend(parts);
         }
         let desc = registered_desc;
+        let num_updates = self.num_updates.iter().sum();
 
         let batch = Batch::new(
             batch_delete_enabled,
@@ -720,7 +731,7 @@ where
             self.blob,
             shard_metrics,
             self.version,
-            HollowBatch::new(desc, run_parts, self.num_updates, run_meta, run_splits),
+            HollowBatch::new(desc, run_parts, num_updates, run_meta, run_splits),
         );
 
         Ok(batch)
@@ -748,7 +759,7 @@ where
             .step_part_writing
             .inc_by(start.elapsed().as_secs_f64());
 
-        self.num_updates += num_updates;
+        self.num_updates.push(num_updates);
     }
 }
 
@@ -831,6 +842,7 @@ impl<T: Timestamp + Codec64> BatchParts<T> {
                                         } else {
                                             None
                                         },
+                                        len: None,
                                     },
                                     parts.into_result().await,
                                 )

@@ -738,7 +738,7 @@ pub(crate) enum RunOrder {
     Structured,
 }
 
-#[derive(Clone, PartialEq, Eq, Ord, PartialOrd, Serialize)]
+#[derive(Clone, PartialEq, Eq, Ord, PartialOrd, Serialize, Copy, Hash)]
 pub struct RunId(pub(crate) [u8; 16]);
 
 impl std::fmt::Display for RunId {
@@ -786,6 +786,8 @@ pub struct RunMeta {
 
     /// If set, a UUID that uniquely identifies this run.
     pub(crate) id: Option<RunId>,
+
+    pub(crate) len: Option<usize>,
 }
 
 /// A subset of a [HollowBatch] corresponding 1:1 to a blob.
@@ -1217,10 +1219,11 @@ pub struct HollowRollup {
 }
 
 /// A pointer to a blob stored externally.
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq)]
 pub enum HollowBlobRef<'a, T> {
     Batch(&'a HollowBatch<T>),
     Rollup(&'a HollowRollup),
+    Part(&'a RunPart<T>),
 }
 
 /// A rollup that is currently being computed.
@@ -2135,6 +2138,8 @@ where
             // able to append that batch in the first place.
             let fake_merge = FueledMergeRes {
                 output: HollowBatch::empty(desc),
+                inputs: Vec::new(),
+                new_active_compaction: None,
             };
             let result = self.trace.apply_tombstone_merge(&fake_merge);
             assert!(
@@ -2390,6 +2395,10 @@ where
             HollowBlobRef::Rollup(x) => {
                 ret.state_rollup_count += 1;
                 ret.state_rollups_bytes += x.encoded_size_bytes.unwrap_or_default()
+            }
+            HollowBlobRef::Part(_) => {
+                // We don't count parts in the state size metrics, since they
+                // are not stored in the state itself.
             }
         });
         ret
@@ -2755,6 +2764,7 @@ pub struct Upper<T>(pub Antichain<T>);
 #[cfg(test)]
 pub(crate) mod tests {
     use std::ops::Range;
+    use std::str::FromStr;
 
     use bytes::Bytes;
     use mz_build_info::DUMMY_BUILD_INFO;
@@ -4278,5 +4288,15 @@ pub(crate) mod tests {
         // Downgrade to v0.9.0 is _NOT_ allowed.
         let res = open_and_write(&mut clients, Version::new(0, 9, 0), shard_id).await;
         assert!(res.unwrap_err().is_panic());
+    }
+
+    #[mz_ore::test]
+    fn runid_parse() {
+        let runid = "rif00c21f0-6907-4035-84d9-0cd07ae4f8c3";
+        let parsed = RunId::from_str(runid);
+
+        println!("Parsed RunId: {:?}", parsed);
+
+        assert!(parsed.is_ok());
     }
 }
