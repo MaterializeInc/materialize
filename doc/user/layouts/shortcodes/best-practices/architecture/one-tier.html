@@ -1,0 +1,33 @@
+{{ $data := $.Site.Data.best_practices.one_tier_architecture }}
+
+If the [recommended three-tier
+architecture](/manage/operational-guidelines/#three-tier-architecture)
+is infeasible or unnecessary due to low volume or a **non**-production setup, a
+one-tier architecture may suffice for your sources, compute objects,
+and query serving needs.
+
+![Image of the 1-cluster-architecture
+architecture](/images/1-tier-architecture.svg)
+
+{{ partial "yaml-tables/generic-table.html" (dict "rows" $data.rows "columns"
+$data.columns) }}
+
+**Benefits of a one-tier architecture** include:
+
+- Cost effective
+
+**Limitations of a one-tier architecture** include:
+
+- Sources, compute objects, and queries compete for cluster resources.
+
+- [Blue/green
+  deployment](/manage/dbt/blue-green-deployments/) is
+  unsupported since sources would need to be dropped and recreated, putting strain on your upstream system during source recreation.
+
+  To support blue/green deployments, use a two-tier architecture by moving
+  compute objects to a new cluster (i.e., recreating compute objects in a new cluster).
+
+- Cluster restarts require rehydration of the indexes on views.
+
+- Clusters containing sources or sinks can only have a replication factor of 0
+or 1.
