@@ -246,6 +246,16 @@ def get_variable_system_parameters(
             ),
         ),
         VariableSystemParameter(
+            "persist_gc_min_versions",
+            "16",
+            ["16", "256", "1024"],
+        ),
+        VariableSystemParameter(
+            "persist_gc_max_versions",
+            "128000",
+            ["256", "128000"],
+        ),
+        VariableSystemParameter(
             "persist_inline_writes_single_max_bytes",
             "4096",
             ["256", "1024", "4096", "16384"],

@@ -32,9 +32,9 @@ use crate::internal::metrics::{CmdMetrics, Metrics, ShardMetrics};
 use crate::internal::paths::{PartialRollupKey, RollupId};
 use crate::internal::state::{
     ActiveGc, ActiveRollup, EncodedSchemas, ExpiryMetrics, GC_FALLBACK_THRESHOLD_MS,
-    GC_USE_ACTIVE_GC, HollowBatch, LeasedReaderState, ROLLUP_FALLBACK_THRESHOLD_MS,
-    ROLLUP_THRESHOLD, ROLLUP_USE_ACTIVE_ROLLUP, Since, SnapshotErr, StateCollections, TypedState,
-    Upper,
+    GC_MAX_VERSIONS, GC_MIN_VERSIONS, GC_USE_ACTIVE_GC, GcConfig, HollowBatch, LeasedReaderState,
+    ROLLUP_FALLBACK_THRESHOLD_MS, ROLLUP_THRESHOLD, ROLLUP_USE_ACTIVE_ROLLUP, Since, SnapshotErr,
+    StateCollections, TypedState, Upper,
 };
 use crate::internal::state_diff::StateDiff;
 use crate::internal::state_versions::{EncodedRollup, StateVersions};
@@ -494,6 +494,17 @@ where
         let is_rollup = cmd.name == metrics.cmds.add_rollup.name;
         let is_become_tombstone = cmd.name == metrics.cmds.become_tombstone.name;
 
+        let gc_config = GcConfig {
+            use_active_gc: GC_USE_ACTIVE_GC.get(cfg),
+            fallback_threshold_ms: u64::cast_from(GC_FALLBACK_THRESHOLD_MS.get(cfg)),
+            min_versions: GC_MIN_VERSIONS.get(cfg),
+            max_versions: GC_MAX_VERSIONS.get(cfg),
+        };
+
+        let use_active_rollup = ROLLUP_USE_ACTIVE_ROLLUP.get(cfg);
+        let rollup_threshold = ROLLUP_THRESHOLD.get(cfg);
+        let rollup_fallback_threshold_ms = u64::cast_from(ROLLUP_FALLBACK_THRESHOLD_MS.get(cfg));
+
         let expected = state.seqno;
         let was_tombstone_before = state.collections.is_tombstone();
 
@@ -524,14 +535,14 @@ where
 
         let now = (cfg.now)();
         let write_rollup = new_state.need_rollup(
-            ROLLUP_THRESHOLD.get(cfg),
-            ROLLUP_USE_ACTIVE_ROLLUP.get(cfg),
-            u64::cast_from(ROLLUP_FALLBACK_THRESHOLD_MS.get(cfg)),
+            rollup_threshold,
+            use_active_rollup,
+            rollup_fallback_threshold_ms,
             now,
         );
 
         if let Some(write_rollup_seqno) = write_rollup {
-            if ROLLUP_USE_ACTIVE_ROLLUP.get(cfg) {
+            if use_active_rollup {
                 new_state.collections.active_rollup = Some(ActiveRollup {
                     seqno: write_rollup_seqno,
                     start_ms: now,
@@ -544,20 +555,10 @@ where
         // GarbageCollector to delete eligible blobs and truncate the
         // state history. This is dependant both on `maybe_gc` returning
         // Some _and_ on this state being successfully compare_and_set.
-        //
-        // NB: Make sure this overwrites `garbage_collection` on every
-        // run though the loop (i.e. no `if let Some` here). When we
-        // lose a CaS race, we might discover that the winner got
-        // assigned the gc.
-        let garbage_collection = new_state.maybe_gc(
-            is_write,
-            GC_USE_ACTIVE_GC.get(cfg),
-            u64::cast_from(GC_FALLBACK_THRESHOLD_MS.get(cfg)),
-            now,
-        );
+        let garbage_collection = new_state.maybe_gc(is_write, now, gc_config);
 
         if let Some(gc) = garbage_collection.as_ref() {
-            if GC_USE_ACTIVE_GC.get(cfg) {
+            if gc_config.use_active_gc {
                 new_state.collections.active_gc = Some(ActiveGc {
                     seqno: gc.new_seqno_since,
                     start_ms: now,
@@ -565,10 +566,8 @@ where
             }
         }
 
-        // NB: Make sure this is the very last thing before the
-        // `try_compare_and_set_current` call. (In particular, it needs
-        // to come after anything that might modify new_state, such as
-        // `maybe_gc`.)
+        // Make sure `new_state` is not modified after this point!
+        // The new state and the diff must be consistent with each other for correctness.
         let diff = StateDiff::from_diff(&state.state, &new_state);
         // Sanity check that our diff logic roundtrips and adds back up
         // correctly.
