@@ -111,7 +111,7 @@ def get_minimal_system_parameters(
         "enable_statement_lifecycle_logging": "true",
         "enable_variadic_left_join_lowering": "true",
         "enable_worker_core_affinity": "true",
-        "grpc_client_http2_keep_alive_timeout": "5",
+        "grpc_client_http2_keep_alive_timeout": "5s",
         "ore_overflowing_behavior": "panic",
         "persist_stats_audit_percent": "100",
         "unsafe_enable_table_keys": "true",
