@@ -142,6 +142,8 @@ message ProtoSqlServerConnectionDetails {
   mz_repr.catalog_item_id.ProtoCatalogItemId password = 5;
   ProtoTunnel tunnel = 6;
   ProtoSqlServerEncryptionLevel encryption = 7;
+  ProtoSqlServerCertificateValidationPolicy certificate_validation_policy = 8;
+  string_or_secret.ProtoStringOrSecret tls_root_cert = 9;
 }
 
 enum ProtoSqlServerEncryptionLevel {
@@ -149,4 +151,10 @@ enum ProtoSqlServerEncryptionLevel {
   SQL_SERVER_LOGIN = 1;
   SQL_SERVER_PREFERRED = 2;
   SQL_SERVER_REQUIRED = 3;
+}
+
+enum ProtoSqlServerCertificateValidationPolicy {
+  SQL_SERVER_TRUST_ALL = 0;
+  SQL_SERVER_VERIFY_SYSTEM = 1;
+  SQL_SERVER_VERIFY_CA = 2;
 }

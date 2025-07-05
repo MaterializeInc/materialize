@@ -26,7 +26,11 @@ TLS_CONF_PATH = MZ_ROOT / "test" / "sql-server-cdc" / "tls-mssconfig.conf"
 
 SERVICES = [
     Mz(app_password=""),
-    Materialized(),
+    Materialized(
+        additional_system_parameter_defaults={
+            "log_filter": "mz_storage::source::sql-server=debug,mz_sql_server_util=debug,info"
+        },
+    ),
     Testdrive(),
     TestCerts(),
     SqlServer(
@@ -64,8 +68,17 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     c.kill("materialized")
     c.rm("materialized")
 
+    # must start test-certs, otherwise the certificates needed by sql-server may not be avaiable
+    # in the secrets volume when it starts up
     c.up("materialized", "test-certs", "sql-server")
     seed = random.getrandbits(16)
+
+    ssl_ca = c.exec(
+        "sql-server", "cat", "/var/opt/mssql/certs/ca.crt", capture=True
+    ).stdout
+    alt_ssl_ca = c.exec(
+        "sql-server", "cat", "/var/opt/mssql/certs/ca-selective.crt", capture=True
+    ).stdout
 
     c.test_parts(
         matching_files,
@@ -73,6 +86,8 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
             "--no-reset",
             "--max-errors=1",
             f"--seed={seed}",
+            f"--var=ssl-ca={ssl_ca}",
+            f"--var=alt-ssl-ca={alt_ssl_ca}",
             f"--var=default-replica-size={Materialized.Size.DEFAULT_SIZE}-{Materialized.Size.DEFAULT_SIZE}",
             f"--var=default-sql-server-user={SqlServer.DEFAULT_USER}",
             f"--var=default-sql-server-password={SqlServer.DEFAULT_SA_PASSWORD}",
