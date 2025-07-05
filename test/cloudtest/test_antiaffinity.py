@@ -11,7 +11,6 @@
 import pytest
 
 from materialize.cloudtest.app.materialize_application import MaterializeApplication
-from materialize.cloudtest.util.cluster import cluster_pod_name
 from materialize.cloudtest.util.wait import wait
 
 
@@ -41,7 +40,7 @@ def zones_used(
         )[0][0]
         assert replica_id is not None
 
-        cluster_pod = cluster_pod_name(cluster_id, replica_id)
+        cluster_pod = mz.cluster_pod_name(cluster_id, replica_id)
 
         wait(condition="condition=Ready", resource=cluster_pod)
 

@@ -23,6 +23,9 @@ kubeadmConfigPatches:
 nodes:
   - role: control-plane
     image: kindest/node:v1.31.6
+    extraMounts:
+      - containerPath: /var/lib/kubelet/config.json
+        hostPath: "/home/alex/.docker/config.json"
     extraPortMappings:
       - containerPort: 32000
         hostPort: 32000
@@ -159,18 +162,27 @@ nodes:
       materialize.cloud/disk: true
       materialize.cloud/availability-zone: "1"
       topology.kubernetes.io/zone: "1"
+    extraMounts:
+      - containerPath: /var/lib/kubelet/config.json
+        hostPath: "/home/alex/.docker/config.json"
   - role: worker
     image: kindest/node:v1.31.6
     labels:
       materialize.cloud/disk: true
       materialize.cloud/availability-zone: "2"
       topology.kubernetes.io/zone: "2"
+    extraMounts:
+      - containerPath: /var/lib/kubelet/config.json
+        hostPath: "/home/alex/.docker/config.json"
   - role: worker
     image: kindest/node:v1.31.6
     labels:
       materialize.cloud/disk: true
       materialize.cloud/availability-zone: "3"
       topology.kubernetes.io/zone: "3"
+    extraMounts:
+      - containerPath: /var/lib/kubelet/config.json
+        hostPath: "/home/alex/.docker/config.json"
 
   # no-disk
   - role: worker
@@ -179,6 +191,9 @@ nodes:
       materialize.cloud/disk: false
       materialize.cloud/availability-zone: "1"
       topology.kubernetes.io/zone: "1"
+    extraMounts:
+      - containerPath: /var/lib/kubelet/config.json
+        hostPath: "/home/alex/.docker/config.json"
 
   # others
   - role: worker
@@ -187,9 +202,15 @@ nodes:
       materialize.cloud/disk: true
       materialize.cloud/availability-zone: "3"
       topology.kubernetes.io/zone: "3"
+    extraMounts:
+      - containerPath: /var/lib/kubelet/config.json
+        hostPath: "/home/alex/.docker/config.json"
   - role: worker
     image: kindest/node:v1.31.6
     labels:
       materialize.cloud/disk: true
       materialize.cloud/availability-zone: "3"
       topology.kubernetes.io/zone: "3"
+    extraMounts:
+      - containerPath: /var/lib/kubelet/config.json
+        hostPath: "/home/alex/.docker/config.json"

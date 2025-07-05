@@ -9,6 +9,7 @@
 
 from textwrap import dedent
 
+from materialize.cloudtest import DEFAULT_K8S_NAMESPACE
 from materialize.cloudtest.app.materialize_application import MaterializeApplication
 from materialize.cloudtest.util.wait import wait
 
@@ -31,7 +32,7 @@ def test_ssh_tunnels(mz: MaterializeApplication) -> None:
     )[0]
     assert id is not None
 
-    secret = f"user-managed-{id}"
+    secret = mz.prefixed(f"user-managed-{id}")
 
     # If the secret didn't exist, this would throw an exception
     mz.kubectl("describe", "secret", secret)
@@ -44,6 +45,7 @@ def test_ssh_tunnels(mz: MaterializeApplication) -> None:
         "bash",
         "-c",
         f"echo '{public_key}' > /etc/authorized_keys/mz",
+        namespace=DEFAULT_K8S_NAMESPACE,
     )
 
     mz.testdrive.run(
@@ -95,7 +97,7 @@ def test_ssh_tunnels(mz: MaterializeApplication) -> None:
         no_reset=True,
     )
 
-    environmentd_pod_name = "pod/environmentd-0"
+    environmentd_pod_name = f"pod/{mz.prefixed('environmentd-0-0')}"
 
     # Kill environmentd to force a restart, to test reloading secrets on restart
     mz.kubectl(

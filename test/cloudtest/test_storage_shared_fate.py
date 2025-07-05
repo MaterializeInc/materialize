@@ -15,7 +15,6 @@ from textwrap import dedent
 import pytest
 
 from materialize.cloudtest.app.materialize_application import MaterializeApplication
-from materialize.cloudtest.util.cluster import cluster_pod_name
 
 LOGGER = logging.getLogger(__name__)
 
@@ -140,7 +139,7 @@ def kill_clusterd(
         "SELECT cluster_id, id FROM mz_cluster_replicas WHERE name = 'storage_shared_fate_replica'"
     )[0]
 
-    pod_name = cluster_pod_name(cluster_id, replica_id, compute_id)
+    pod_name = mz.cluster_pod_name(cluster_id, replica_id, compute_id)
 
     LOGGER.info(f"sending signal {signal} to pod {pod_name}...")
 
