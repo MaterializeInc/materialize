@@ -13,7 +13,6 @@ syntax = "proto3";
 
 package mz_compute_client.protocol.command;
 
-import "cluster-client/src/client.proto";
 import "compute-client/src/logging.proto";
 import "compute-types/src/dataflows.proto";
 import "dyncfg/src/dyncfg.proto";
@@ -30,13 +29,12 @@ import "storage-types/src/controller.proto";
 import "tracing/src/params.proto";
 
 message ProtoComputeCommand {
-  message ProtoCreateTimely {
-    mz_cluster_client.client.ProtoTimelyConfig config = 1;
-    mz_proto.ProtoU128 nonce = 2;
+  message ProtoHello {
+    mz_proto.ProtoU128 nonce = 1;
   }
 
   oneof kind {
-    ProtoCreateTimely create_timely = 1;
+    ProtoHello hello = 1;
     ProtoInstanceConfig create_instance = 2;
     mz_compute_types.dataflows.ProtoDataflowDescription create_dataflow = 3;
     mz_storage_client.client.ProtoCompaction allow_compaction = 4;

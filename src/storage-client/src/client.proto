@@ -13,7 +13,6 @@ syntax = "proto3";
 
 package mz_storage_client.client;
 
-import "cluster-client/src/client.proto";
 import "google/protobuf/empty.proto";
 import "persist-client/src/batch.proto";
 import "proto/src/chrono.proto";
@@ -60,13 +59,12 @@ message ProtoRunSinkCommand {
 }
 
 message ProtoStorageCommand {
-  message ProtoCreateTimely {
-    mz_cluster_client.client.ProtoTimelyConfig config = 1;
-    mz_proto.ProtoU128 nonce = 2;
+  message ProtoHello {
+    mz_proto.ProtoU128 nonce = 1;
   }
 
   oneof kind {
-    ProtoCreateTimely create_timely = 6;
+    ProtoHello hello = 6;
     ProtoRunIngestionCommand run_ingestion = 1;
     ProtoCompaction allow_compaction = 2;
     google.protobuf.Empty initialization_complete = 3;

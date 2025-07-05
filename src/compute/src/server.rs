@@ -15,7 +15,7 @@ use std::convert::Infallible;
 use std::fmt::Debug;
 use std::path::PathBuf;
 use std::rc::Rc;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -73,7 +73,7 @@ struct Config {
 
 /// Initiates a timely dataflow computation, processing compute commands.
 pub async fn serve(
-    timely_config: Option<TimelyConfig>,
+    timely_config: TimelyConfig,
     metrics_registry: &MetricsRegistry,
     persist_clients: Arc<PersistClientCache>,
     txns_ctx: TxnsContext,
@@ -89,22 +89,11 @@ pub async fn serve(
     };
     let tokio_executor = tokio::runtime::Handle::current();
 
-    let timely_container = if let Some(timely_config) = timely_config {
-        let timely = config
-            .build_cluster(timely_config, tokio_executor.clone())
-            .await?;
-        Some(timely)
-    } else {
-        None
-    };
-    let timely_container = Arc::new(tokio::sync::Mutex::new(timely_container));
+    let timely_container = config.build_cluster(timely_config, tokio_executor).await?;
+    let timely_container = Arc::new(Mutex::new(timely_container));
 
     let client_builder = move || {
-        let client = ClusterClient::new(
-            Arc::clone(&timely_container),
-            tokio_executor.clone(),
-            config.clone(),
-        );
+        let client = ClusterClient::new(Arc::clone(&timely_container));
         let client: Box<dyn ComputeClient> = Box::new(client);
         client
     };
