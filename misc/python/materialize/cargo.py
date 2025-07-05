@@ -15,6 +15,7 @@ necessary to support this repository are implemented.
 [Cargo]: https://doc.rust-lang.org/cargo/
 """
 
+from functools import cache
 from pathlib import Path
 
 import toml
@@ -231,6 +232,7 @@ class Workspace:
         """
         deps = set()
 
+        @cache
         def visit(c: Crate) -> None:
             deps.add(c)
             for d in c.path_dependencies:
