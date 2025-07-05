@@ -7874,6 +7874,7 @@ dependencies = [
  "either",
  "futures-util",
  "lgalloc",
+ "lz4_flex",
  "mz-ore",
  "num-traits",
  "proptest",

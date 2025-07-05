@@ -185,6 +185,9 @@ def get_variable_system_parameters(
             "disk_cluster_replicas_default", "true", ["true", "false"]
         ),
         VariableSystemParameter(
+            "enable_columnar_compression", "true", ["true", "false"]
+        ),
+        VariableSystemParameter(
             "kafka_default_metadata_fetch_interval",
             "1s",
             ["100ms", "1s"],
