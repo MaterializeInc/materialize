@@ -49,6 +49,9 @@ pub struct Args {
 
     #[clap(flatten)]
     tracing: TracingCliArgs,
+
+    #[clap(long, hide = true)]
+    saas_crd_columns: bool,
 }
 
 #[tokio::main]
@@ -80,7 +83,7 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
     let metrics = Arc::new(Metrics::register_into(&metrics_registry));
 
     let (client, namespace) = create_client(args.kubernetes_context.clone()).await?;
-    register_crds(client.clone()).await?;
+    register_crds(client.clone(), args.saas_crd_columns).await?;
 
     {
         let router = mz_prof_http::router(&BUILD_INFO);
