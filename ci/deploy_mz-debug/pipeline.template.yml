@@ -29,20 +29,11 @@ steps:
     concurrency: 1
     concurrency_group: deploy-mz-debug/linux/aarch64
 
-  - id: deploy_mz-debug-macos-x86_64
-    label: "Deploy mz-debug for macOS x86-64"
-    command: bin/pyactivate -m ci.deploy_mz-debug.macos
-    agents:
-      queue: mac-x86_64
-    timeout_in_minutes: 30
-    concurrency: 1
-    concurrency_group: deploy-mz-debug/macos/x86_64
-
   - id: deploy_mz-debug-macos-aarch64
     label: "Deploy mz-debug for macOS aarch64"
     command: bin/pyactivate -m ci.deploy_mz-debug.macos
     agents:
-      queue: mac-aarch64
+      queue: buildkite-hosted-macos
     timeout_in_minutes: 30
     concurrency: 1
     concurrency_group: deploy-mz-debug/macos/aarch64
