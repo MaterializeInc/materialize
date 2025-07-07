@@ -313,6 +313,8 @@ impl ComputeState {
             lgalloc::lgalloc_set_config(lgalloc::LgAlloc::new().disable());
         }
 
+        crate::memory_limiter::apply_limiter_config(config);
+
         mz_ore::region::ENABLE_LGALLOC_REGION.store(
             ENABLE_COLUMNATION_LGALLOC.get(config),
             std::sync::atomic::Ordering::Relaxed,
