@@ -120,35 +120,58 @@ toCSS | fingerprint }}
 
 {{/* Tabs */}}
 <script>
-  $(document).ready(function () {
-    // make nav-tab lists from tab-panes
-    $(".tab-content").each(function (idx, tab) {
-      $(tab)
-        .find(".tab-pane")
-        .each(function (item) {
-          var navTabs = $(this).closest(".code-tabs").find(".nav-tabs"),
-            title = $(this).attr("title"),
-            id = title
-              .toLowerCase()
-              .replace(/ /g, "-")
-              .replace(/[^\w-]+/g, "");
-          navTabs.append(`<li><a href="#${id}-t${idx}">${title}</a></li>`);
-        });
+document.addEventListener("DOMContentLoaded", function () {
+  const currentHash = window.location.hash;
+
+  document.querySelectorAll(".code-tabs").forEach(function (tabGroup, groupIndex) {
+    const navTabs = tabGroup.querySelector(".nav-tabs");
+    const tabContent = tabGroup.querySelector(".tab-content");
+    const tabPanes = Array.from(tabContent.children).filter(child =>
+      child.classList.contains("tab-pane")
+    );
+
+    // Create tab headers from panes
+    tabPanes.forEach(function (pane, tabIndex) {
+      const title = pane.getAttribute("title") || `Tab ${tabIndex + 1}`;
+      const id =  pane.getAttribute("id");
+
+      const tabItem = document.createElement("li");
+      const link = document.createElement("a");
+      link.setAttribute("href", `#${id}`);
+      link.textContent = title;
+      tabItem.appendChild(link);
+      navTabs.appendChild(tabItem);
     });
 
-    // handle click events
-    $(".nav-tabs a").click(function (e) {
-      var tab = $(this).parent(),
-        tabIndex = tab.index(),
-        tabPanel = $(this).closest(".code-tabs"),
-        tabPane = tabPanel.find(".tab-pane").eq(tabIndex);
-      tabPanel.find(".active").removeClass("active");
-      tab.addClass("active");
-      tabPane.addClass("active");
+    // Handle tab click events
+    navTabs.querySelectorAll("a").forEach(function (link, index) {
+      link.addEventListener("click", function (e) {
+        e.preventDefault();
+
+        // Deactivate all tabs and panes
+        navTabs.querySelectorAll("li").forEach(li => li.classList.remove("active"));
+        tabPanes.forEach(pane => pane.classList.remove("active"));
+
+        // Activate clicked tab and corresponding pane
+        link.parentElement.classList.add("active");
+        const targetPane = tabContent.querySelector(link.getAttribute("href"));
+        if (targetPane) {
+          targetPane.classList.add("active");
+        }
+      });
     });
 
-    // activate first tab
-    $(".nav-tabs li:first-child a").click();
+    const matchingLink = currentHash
+      ? navTabs.querySelector(`a[href="${currentHash}"]`)
+      : null;
 
+    if (matchingLink) {
+      matchingLink.click();
+    } else {
+      const firstLink = navTabs.querySelector("a");
+      if (firstLink) firstLink.click();
+    }
   });
+});
+
 </script>
