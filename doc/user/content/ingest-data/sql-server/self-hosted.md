@@ -34,6 +34,14 @@ EXEC sys.sp_cdc_enable_db;
 
 For guidance on enabling Change Data Capture, see the [SQL Server documentation](https://learn.microsoft.com/en-us/sql/relational-databases/system-stored-procedures/sys-sp-cdc-enable-db-transact-sql).
 
+Note, on AWS the following command is required:
+
+```sql
+EXEC msdb.dbo.rds_cdc_enable_db '<DATABASE_NAME>';
+```
+
+For further guidance see the [AWS documentation](https://docs.aws.amazon.com/AmazonRDS/latest/UserGuide/Appendix.SQLServer.CommonDBATasks.CDC.html).
+
 ### 2. Enable `SNAPSHOT` transaction isolation.
 
 In addition to enabling Change-Data-Capture you **must** also enable your
