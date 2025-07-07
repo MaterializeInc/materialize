@@ -8,7 +8,7 @@
 // by the Apache License, Version 2.0.
 
 use std::borrow::Cow;
-use std::collections::{BTreeMap, VecDeque};
+use std::collections::BTreeMap;
 use std::fmt::Debug;
 use std::marker::PhantomData;
 use std::pin::pin;
@@ -32,7 +32,7 @@ use timely::PartialOrder;
 use timely::progress::{Antichain, Timestamp};
 use tokio::sync::mpsc::Sender;
 use tokio::sync::{TryAcquireError, mpsc, oneshot};
-use tracing::{Instrument, Span, debug, debug_span, error, info, trace, warn};
+use tracing::{Instrument, Span, debug, debug_span, error, trace, warn};
 
 use crate::async_runtime::IsolatedRuntime;
 use crate::batch::{BatchBuilderConfig, BatchBuilderInternal, BatchParts, PartDeletes};
@@ -816,13 +816,13 @@ where
         let mut chunks = Vec::new();
 
         // There are two cases to consider here:
-        // 1. There are as many runs as there are input batches in which case we
-        //    should compact them together as space allows.
-        // 2. There are more runs than input batches, in which case we should compact them in chunks
-        //    grouped by the batch they belong to.
+        // 1. All input batches have ≤1 run each, in which case we can compact runs
+        //    from different batches together as memory allows.
+        // 2. Some input batches have >1 run, in which case we must compact runs only
+        //    within each individual batch to maintain batch boundaries.
         // In both cases, we should compact runs in the order they were written.
         // This is all to make it easy to apply the compaction result incrementally.
-        // By ensuring we never write out batches that contain runs from seperate input batches
+        // By ensuring we never write out batches that contain runs from separate input batches
         // (except for when each input batch has exactly one run), we can easily slot the
         // results in to the existing batches. The special case of a single run per input batch
         // means that each batch is, by itself, fully "compact", and the result of compaction
@@ -927,14 +927,14 @@ where
             .map(|x| x.batch.run_splits.len() + 1)
             .sum::<usize>();
 
-        let mut batch_runs: VecDeque<_> = req
+        let batch_runs: Vec<_> = req
             .inputs
             .iter()
             .map(|x| (x.id, &x.batch.desc, x.batch.runs()))
             .collect();
 
         let mut ordered_runs = Vec::with_capacity(total_number_of_runs);
-        while let Some((spine_id, desc, runs)) = batch_runs.pop_front() {
+        for (spine_id, desc, runs) in batch_runs {
             for (meta, run) in runs {
                 let run_id = RunLocation(spine_id, meta.id);
                 let same_order = meta.order.unwrap_or(RunOrder::Codec) == target_order;
