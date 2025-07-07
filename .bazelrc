@@ -141,6 +141,7 @@ build:debuginfo-none --@rules_rust//:extra_rustc_flag=-Cstrip=symbols
 build --linkopt="-fuse-ld=lld"
 build --@rules_rust//:extra_rustc_flag="-Clink-arg=-fuse-ld=lld"
 build --@rules_rust//:extra_rustc_flag="-Csymbol-mangling-version=v0"
+build --@rules_rust//:extra_rustc_flag="-Coverflow-checks=true"
 # We use 64 because it's enough to totally saturate a CI builder so our builds
 # are as fast as possible, and it's less than the default of 256 used with
 # Cargo when incremental compilation is enabled.
