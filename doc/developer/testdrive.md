@@ -941,23 +941,35 @@ SELECT mz_version_num() < 2601;
 1
 ```
 
-The `[version>=13000]` property allows running the action or query only when we are connected to a Materialize instance with a compatible version. The supported comparison operators are `>`, `>=`, `=`, `<=` and `<`. The version number is the same as returned from [`mz_version_num()`](https://materialize.com/docs/sql/functions/#system-information-func) and has the same format `XXXYYYZZ`, where `XX` is the major version, `YYY` is the minor version and `ZZ` is the patch version. So in the example we are only running the `SELECT 1` query if the Materialize instance is of version `v0.130.0` or higher. For lower versions no query is run and no comparison of results is performed subsequently.
+The `[version>=13000]` property allows running the action or query only when we are connected to a Materialize instance with a compatible version. The supported comparison operators are `>`, `>=`, `=`, `<=` and `<`. The version number is the same as returned from [`mz_version_num()`](https://materialize.com/docs/sql/functions/#system-information-functions) and has the same format `XXYYYZZ`, where `XX` is the major version, `YYY` is the minor version and `ZZ` is the patch version. So in the example we are only running the `SELECT 1` query if the Materialize instance is of version `v0.130.0` or higher. For lower versions no query is run and no comparison of results is performed subsequently.
 
 You can bound the version above and below using the following syntax:
 
 ```
-?[13500<=version<14300] SELECT 1;
+>[13500<=version<14300] SELECT 1;
 1
 ```
 
 You can use `<` or `<=` freely. The following are equivalent:
 
 ```
-?[version>14300] SELECT 1;
+>[version>14300] SELECT 1;
 1
-?[14300<version] SELECT 1;
+>[14300<version] SELECT 1;
 1
 ```
+
+If you change the result of a query in version `v0.148.0-dev` for example, you have to keep the old version working in Platform Checks as well as Testdrive/MySQL CDC/Postgres CDC with old syntax for migration tests, since they may run the code with both an older Materialize version and the currently tested one. To do that, you can duplicate the query and version-gate it accordingly:
+
+```
+?[version<14800] EXPLAIN SELECT * FROM t1 AS a1, t1 AS a2 WHERE a1.f1 IS NOT NULL;
+[OLD QUERY PLAN HERE]
+
+?[version>=14800] EXPLAIN SELECT * FROM t1 AS a1, t1 AS a2 WHERE a1.f1 IS NOT NULL;
+[NEW QUERY PLAN HERE]
+```
+
+This often happens with `EXPLAIN`s as well as introspection queries.
 
 [confluent-arm]: https://github.com/confluentinc/common-docker/issues/117#issuecomment-948789717
 [aws-creds]: https://github.com/MaterializeInc/i2/blob/main/doc/aws-access.md
