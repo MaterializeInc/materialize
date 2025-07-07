@@ -45,6 +45,11 @@ build-backend = "hatchling.build"
 [tool.hatch.build.targets.wheel]
 packages = ["mcp_materialize"]
 
+[tool.hatch.build]
+include = [
+    "mcp_materialize/sql/*.sql"
+]
+
 [dependency-groups]
 dev = [
     "pytest-asyncio>=0.26.0",
