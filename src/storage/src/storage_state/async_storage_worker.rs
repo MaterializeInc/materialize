@@ -19,6 +19,7 @@ use std::sync::Arc;
 use std::thread::Thread;
 
 use differential_dataflow::lattice::Lattice;
+use mz_ore::collections::CollectionExt;
 use mz_persist_client::Diagnostics;
 use mz_persist_client::cache::PersistClientCache;
 use mz_persist_client::read::ListenEvent;
@@ -287,8 +288,8 @@ impl<T: Timestamp + TimestampManipulation + Lattice + Codec64 + Display + Sync>
                             )
                             .await
                             .expect("error creating persist client");
-                        let read_handle = client
-                            .open_leased_reader::<SourceData, (), T, StorageDiff>(
+                        let (write_handle, read_handle) = client
+                            .open::<SourceData, (), T, StorageDiff>(
                                 seen_remap_shard,
                                 Arc::new(ingestion_description.desc.connection.timestamp_desc()),
                                 Arc::new(UnitSchema),
@@ -302,18 +303,38 @@ impl<T: Timestamp + TimestampManipulation + Lattice + Codec64 + Display + Sync>
                             )
                             .await
                             .unwrap();
+
                         let remap_since = read_handle.since().clone();
+                        let snapshot_resume_upper: Antichain<_> = write_handle
+                            .shared_upper()
+                            .into_iter()
+                            .map(|mut t| {
+                                t.advance_by(remap_since.borrow());
+                                t.step_back().unwrap_or_else(|| T::minimum())
+                            })
+                            .collect();
+
                         mz_ore::task::spawn(move || "deferred_expire", async move {
                             tokio::time::sleep(std::time::Duration::from_secs(300)).await;
+                            write_handle.expire().await;
                             read_handle.expire().await;
                         });
                         let mut as_of = Antichain::new();
+
                         for upper in resume_uppers.values() {
                             for t in upper.elements() {
-                                let mut t_prime = t.step_back().unwrap_or_else(T::minimum);
-                                if !remap_since.is_empty() {
-                                    t_prime.advance_by(remap_since.borrow());
-                                    as_of.insert(t_prime);
+                                if let Some(mut t_prime) = t.step_back() {
+                                    if !remap_since.is_empty() {
+                                        t_prime.advance_by(remap_since.borrow());
+                                        as_of.insert(t_prime);
+                                    }
+                                } else {
+                                    // t cannot be stepped back, so it must be T::minimum()
+                                    // As this subsource has never been snapshot, choose remap_upper - 1
+                                    // in case there is a subsource holding back the read frontier,
+                                    // which would cause us to choose a very early as_of, resulting in a large
+                                    // history being loaded into the reclock operator
+                                    as_of.extend(snapshot_resume_upper.clone());
                                 }
                             }
                         }
