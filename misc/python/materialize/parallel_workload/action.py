@@ -1200,6 +1200,8 @@ class FlipFlagsAction(Action):
             "persist_rollup_use_active_rollup",
             "persist_gc_fallback_threshold_ms",
             "persist_gc_use_active_gc",
+            "persist_gc_min_versions",
+            "persist_gc_max_versions",
             "persist_compaction_minimum_timeout",
             "persist_compaction_use_most_recent_schema",
             "persist_compaction_check_process_flag",
