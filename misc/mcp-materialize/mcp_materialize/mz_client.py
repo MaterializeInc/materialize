@@ -47,8 +47,10 @@ class MzTool:
         schema,
         object_name,
         cluster,
+        title,
         description,
         input_schema,
+        output_schema,
         output_columns,
     ):
         self.name = name
@@ -56,8 +58,10 @@ class MzTool:
         self.schema = schema
         self.object_name = object_name
         self.cluster = cluster
+        self.title = title
         self.description = description
         self.input_schema = input_schema
+        self.output_schema = output_schema
         self.output_columns = output_columns
 
     def as_tool(self) -> Tool:
@@ -65,7 +69,8 @@ class MzTool:
             name=self.name,
             description=self.description,
             inputSchema=self.input_schema,
-            annotations=ToolAnnotations(readOnlyHint=True),
+            outputSchema=self.output_schema,
+            annotations=ToolAnnotations(title=self.title, readOnlyHint=True),
         )
 
 
@@ -151,8 +156,10 @@ class MzClient:
                         schema=row["schema"],
                         object_name=row["object_name"],
                         cluster=row["cluster"],
+                        title=row["title"],
                         description=row["description"],
                         input_schema=row["input_schema"],
+                        output_schema=row["output_schema"],
                         output_columns=row["output_columns"],
                     )
                     new_tools[tool.name] = tool
