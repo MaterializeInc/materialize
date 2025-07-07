@@ -91,7 +91,7 @@ pub(crate) const OPTIMIZE_IGNORED_DATA_FETCH: Config<bool> = Config::new(
     "CYA to allow opt-out of a performance optimization to skip fetching ignored data",
 );
 
-pub(crate) const FETCH_VALIDATE_PART_BOUNDS_ON_READ: Config<bool> = Config::new(
+pub(crate) const VALIDATE_PART_BOUNDS_ON_READ: Config<bool> = Config::new(
     "persist_validate_part_bounds_on_read",
     true,
     "Validate the part lower <= the batch lower and the part upper <= batch upper,\
@@ -106,7 +106,7 @@ pub(crate) struct FetchConfig {
 impl FetchConfig {
     pub fn from_persist_config(cfg: &PersistConfig) -> Self {
         Self {
-            validate_bounds_on_read: FETCH_VALIDATE_PART_BOUNDS_ON_READ.get(cfg),
+            validate_bounds_on_read: VALIDATE_PART_BOUNDS_ON_READ.get(cfg),
         }
     }
 }

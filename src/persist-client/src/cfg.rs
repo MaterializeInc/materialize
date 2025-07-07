@@ -315,7 +315,7 @@ pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
         .add(&crate::cli::admin::EXPRESSION_CACHE_FORCE_COMPACTION_WAIT)
         .add(&crate::fetch::FETCH_SEMAPHORE_COST_ADJUSTMENT)
         .add(&crate::fetch::FETCH_SEMAPHORE_PERMIT_ADJUSTMENT)
-        .add(&crate::fetch::FETCH_VALIDATE_PART_BOUNDS_ON_READ)
+        .add(&crate::fetch::VALIDATE_PART_BOUNDS_ON_READ)
         .add(&crate::fetch::OPTIMIZE_IGNORED_DATA_FETCH)
         .add(&crate::internal::cache::BLOB_CACHE_MEM_LIMIT_BYTES)
         .add(&crate::internal::cache::BLOB_CACHE_SCALE_WITH_THREADS)
@@ -358,6 +358,7 @@ pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
         .add(&crate::stats::STATS_UNTRIMMABLE_COLUMNS_SUFFIX)
         .add(&crate::fetch::PART_DECODE_FORMAT)
         .add(&crate::write::COMBINE_INLINE_WRITES)
+        .add(&crate::write::VALIDATE_PART_BOUNDS_ON_WRITE)
 }
 
 impl PersistConfig {

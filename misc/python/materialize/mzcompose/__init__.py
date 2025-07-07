@@ -316,6 +316,9 @@ def get_variable_system_parameters(
         VariableSystemParameter(
             "persist_validate_part_bounds_on_read", "true", ["true", "false"]
         ),
+        VariableSystemParameter(
+            "persist_validate_part_bounds_on_write", "true", ["true", "false"]
+        ),
         VariableSystemParameter("pg_offset_known_interval", "1s", ["100ms", "1s"]),
         VariableSystemParameter(
             "statement_logging_default_sample_rate", "0.01", ["0", "0.01"]
