@@ -42,14 +42,13 @@ from collections.abc import AsyncIterator, Sequence
 from contextlib import asynccontextmanager
 from typing import Any
 
-
 from mcp.server import NotificationOptions, Server
 from mcp.types import EmbeddedResource, ImageContent, TextContent, Tool
 from psycopg.rows import dict_row
 from psycopg_pool import AsyncConnectionPool
 
+from mcp_materialize.transports import http_transport, sse_transport, stdio_transport
 
-from mcp_materialize.transports import stdio_transport, sse_transport, http_transport
 from .config import load_config
 from .mz_client import MzClient
 
