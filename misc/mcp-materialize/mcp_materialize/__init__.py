@@ -49,7 +49,7 @@ from psycopg.rows import dict_row
 from psycopg_pool import AsyncConnectionPool
 
 
-from mcp_materialize.transports import stdio_transport, sse_transport
+from mcp_materialize.transports import stdio_transport, sse_transport, http_transport
 from .config import load_config
 from .mz_client import MzClient
 
@@ -146,6 +146,9 @@ async def run():
         case "stdio":
             logger.info("Starting server in stdio mode...")
             await stdio_transport(server, options)
+        case "http":
+            logger.info("Starting server in HTTP mode...")
+            await http_transport(server, cfg)
         case "sse":
             logger.info(f"Starting SSE server on {cfg.host}:{cfg.port}...")
             await sse_transport(server, options, cfg)
