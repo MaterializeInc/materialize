@@ -13,6 +13,8 @@ set -euo pipefail
 
 . misc/shlib/shlib.bash
 
+ulimit -c unlimited
+
 mzcompose() {
     stdbuf --output=L --error=L bin/ci-builder run stable bin/mzcompose --find "$BUILDKITE_PLUGIN_MZCOMPOSE_COMPOSITION" "$@"
 }
