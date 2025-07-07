@@ -549,7 +549,7 @@ impl SessionClient {
         &mut self,
         name: &str,
     ) -> Result<&PreparedStatement, AdapterError> {
-        let catalog = self.catalog_snapshot().await;
+        let catalog = self.catalog_snapshot("get_prepared_statement").await;
         Coordinator::verify_prepared_statement(&catalog, self.session(), name)?;
         Ok(self
             .session()
@@ -568,7 +568,7 @@ impl SessionClient {
         sql: String,
         param_types: Vec<Option<ScalarType>>,
     ) -> Result<(), AdapterError> {
-        let catalog = self.catalog_snapshot().await;
+        let catalog = self.catalog_snapshot("prepare").await;
 
         // Note: This failpoint is used to simulate a request outliving the external connection
         // that made it.
@@ -603,7 +603,7 @@ impl SessionClient {
         stmt: Statement<Raw>,
         sql: String,
     ) -> Result<(), AdapterError> {
-        let catalog = self.catalog_snapshot().await;
+        let catalog = self.catalog_snapshot("declare").await;
         let param_types = vec![];
         let desc =
             Coordinator::describe(&catalog, self.session(), Some(stmt.clone()), param_types)?;
@@ -704,10 +704,16 @@ impl SessionClient {
 
     /// Fetches the catalog.
     #[instrument(level = "debug")]
-    pub async fn catalog_snapshot(&self) -> Arc<Catalog> {
+    pub async fn catalog_snapshot(&self, context: &str) -> Arc<Catalog> {
+        let start = std::time::Instant::now();
         let CatalogSnapshot { catalog } = self
             .send_without_session(|tx| Command::CatalogSnapshot { tx })
             .await;
+        self.inner()
+            .metrics()
+            .catalog_snapshot_seconds
+            .with_label_values(&[context])
+            .observe(start.elapsed().as_secs_f64());
         catalog
     }
 
@@ -716,7 +722,7 @@ impl SessionClient {
     /// No authorization is performed, so access to this function must be limited to internal
     /// servers or superusers.
     pub async fn dump_catalog(&self) -> Result<CatalogDump, AdapterError> {
-        let catalog = self.catalog_snapshot().await;
+        let catalog = self.catalog_snapshot("dump_catalog").await;
         catalog.dump().map_err(AdapterError::from)
     }
 
@@ -726,7 +732,7 @@ impl SessionClient {
     /// No authorization is performed, so access to this function must be limited to internal
     /// servers or superusers.
     pub async fn check_catalog(&self) -> Result<(), serde_json::Value> {
-        let catalog = self.catalog_snapshot().await;
+        let catalog = self.catalog_snapshot("check_catalog").await;
         catalog.check_consistency()
     }
 
@@ -774,7 +780,7 @@ impl SessionClient {
         // self.session returns a mut ref, so we can't call it twice.
         let pcx = self.session().pcx().clone();
 
-        let catalog = self.catalog_snapshot().await;
+        let catalog = self.catalog_snapshot("insert_rows").await;
         let conn_catalog = catalog.for_session(self.session());
 
         // Collect optimizer parameters.

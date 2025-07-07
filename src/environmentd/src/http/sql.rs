@@ -232,7 +232,7 @@ async fn handle_promsql_query(
         return;
     }
 
-    let catalog = client.client.catalog_snapshot().await;
+    let catalog = client.client.catalog_snapshot("handle_promsql_query").await;
     let clusters: Vec<&Cluster> = catalog.clusters().collect();
 
     for cluster in clusters {
