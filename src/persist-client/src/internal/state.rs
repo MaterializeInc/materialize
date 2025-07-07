@@ -11,6 +11,7 @@ use anyhow::ensure;
 use async_stream::{stream, try_stream};
 use differential_dataflow::difference::Semigroup;
 use mz_persist::metrics::ColumnarMetrics;
+use proptest::prelude::{Arbitrary, Strategy};
 use std::borrow::Cow;
 use std::cmp::Ordering;
 use std::collections::BTreeMap;
@@ -770,6 +771,17 @@ impl From<RunId> for String {
 impl RunId {
     pub(crate) fn new() -> Self {
         RunId(*Uuid::new_v4().as_bytes())
+    }
+}
+
+impl Arbitrary for RunId {
+    type Parameters = ();
+    type Strategy = proptest::strategy::BoxedStrategy<Self>;
+    fn arbitrary_with(_args: Self::Parameters) -> Self::Strategy {
+        Strategy::prop_map(proptest::prelude::any::<u128>(), |n| {
+            RunId(*Uuid::from_u128(n).as_bytes())
+        })
+        .boxed()
     }
 }
 
@@ -4291,12 +4303,11 @@ pub(crate) mod tests {
     }
 
     #[mz_ore::test]
-    fn runid_parse() {
-        let runid = "rif00c21f0-6907-4035-84d9-0cd07ae4f8c3";
-        let parsed = RunId::from_str(runid);
-
-        println!("Parsed RunId: {:?}", parsed);
-
-        assert!(parsed.is_ok());
+    fn runid_roundtrip() {
+        proptest!(|(runid: RunId)| {
+            let runid_str = runid.to_string();
+            let parsed = RunId::from_str(&runid_str);
+            prop_assert_eq!(parsed, Ok(runid));
+        });
     }
 }
