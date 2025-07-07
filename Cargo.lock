@@ -828,9 +828,9 @@ dependencies = [
 
 [[package]]
 name = "aws-sigv4"
-version = "1.3.2"
+version = "1.3.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3734aecf9ff79aa401a6ca099d076535ab465ff76b46440cf567c8e70b65dc13"
+checksum = "ddfb9021f581b71870a17eac25b52335b82211cdc092e02b6876b2bcefa61666"
 dependencies = [
  "aws-credential-types",
  "aws-smithy-eventstream",
@@ -883,9 +883,9 @@ dependencies = [
 
 [[package]]
 name = "aws-smithy-eventstream"
-version = "0.60.8"
+version = "0.60.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7c45d3dddac16c5c59d553ece225a88870cf81b7b813c9cc17b78cf4685eac7a"
+checksum = "338a3642c399c0a5d157648426110e199ca7fd1c689cc395676b81aa563700c4"
 dependencies = [
  "aws-smithy-types",
  "bytes",
@@ -942,7 +942,7 @@ dependencies = [
  "aws-smithy-async",
  "aws-smithy-runtime-api",
  "aws-smithy-types",
- "h2 0.4.10",
+ "h2 0.4.11",
  "http 0.2.9",
  "http-body 0.4.5",
  "hyper 0.14.27",
@@ -1666,9 +1666,9 @@ checksum = "37b2a672a2cb129a2e41c10b1224bb368f9f37a2b16b612598138befd7b37eb5"
 
 [[package]]
 name = "cc"
-version = "1.2.27"
+version = "1.2.29"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d487aa071b5f64da6f19a3e848e3578944b726ee5a4854b82172f02aa876bfdc"
+checksum = "5c1599538de2394445747c8cf7935946e3cc27e9625f889d979bfb2aaf569362"
 dependencies = [
  "jobserver",
  "libc",
@@ -3388,9 +3388,9 @@ dependencies = [
 
 [[package]]
 name = "h2"
-version = "0.4.10"
+version = "0.4.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a9421a676d1b147b16b82c9225157dc629087ef8ec4d5e2960f9437a90dac0a5"
+checksum = "17da50a276f1e01e0ba6c029e47b7100754904ee8a278f886546e98575380785"
 dependencies = [
  "atomic-waker",
  "bytes",
@@ -3671,7 +3671,7 @@ dependencies = [
  "bytes",
  "futures-channel",
  "futures-util",
- "h2 0.4.10",
+ "h2 0.4.11",
  "http 1.2.0",
  "http-body 1.0.1",
  "httparse",
@@ -6665,7 +6665,7 @@ dependencies = [
  "futures",
  "futures-task",
  "futures-util",
- "h2 0.4.10",
+ "h2 0.4.11",
  "hex",
  "itertools 0.14.0",
  "mz-build-info",
@@ -9790,7 +9790,7 @@ dependencies = [
  "futures-channel",
  "futures-core",
  "futures-util",
- "h2 0.4.10",
+ "h2 0.4.11",
  "http 1.2.0",
  "http-body 1.0.1",
  "http-body-util",
@@ -11527,7 +11527,7 @@ dependencies = [
  "base64 0.22.1",
  "bytes",
  "flate2",
- "h2 0.4.10",
+ "h2 0.4.11",
  "http 1.2.0",
  "http-body 1.0.1",
  "http-body-util",
