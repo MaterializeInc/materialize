@@ -3857,6 +3857,7 @@ pub(crate) mod tests {
         );
 
         // Upper-bound the number of seqnos we'll attempt to collect in one go.
+        let previous_seqno = state.seqno;
         state.seqno = SeqNo(10_000);
         assert_eq!(state.seqno_since(), SeqNo(10_000));
 
@@ -3865,7 +3866,7 @@ pub(crate) mod tests {
             state.maybe_gc(true, now, GC_CONFIG),
             Some(GcReq {
                 shard_id: state.shard_id,
-                new_seqno_since: SeqNo(900)
+                new_seqno_since: SeqNo(previous_seqno.0 + u64::cast_from(GC_CONFIG.max_versions))
             })
         );
     }
