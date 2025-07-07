@@ -1208,6 +1208,7 @@ class FlipFlagsAction(Action):
             "balancerd_log_filter_defaults",
             "balancerd_opentelemetry_filter_defaults",
             "balancerd_sentry_filters",
+            "balancerd_max_copy_buffer_size",
             "persist_enable_s3_lgalloc_cc_sizes",
             "persist_enable_s3_lgalloc_noncc_sizes",
             "persist_enable_arrow_lgalloc_cc_sizes",

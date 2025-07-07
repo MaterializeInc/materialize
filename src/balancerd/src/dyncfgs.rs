@@ -43,6 +43,13 @@ pub const INJECT_PROXY_PROTOCOL_HEADER_HTTP: Config<bool> = Config::new(
     "Whether to inject tcp proxy protocol headers to downstream http servers.",
 );
 
+/// Maximum buffer size per connection for bidirectional copying to limit memory usage.
+pub const MAX_COPY_BUFFER_SIZE: Config<usize> = Config::new(
+    "balancerd_max_copy_buffer_size",
+    64 * 1024, // 64KB default
+    "Maximum buffer size per connection for bidirectional copying to limit memory usage.",
+);
+
 /// Sets the filter to apply to stderr logging.
 pub const LOGGING_FILTER: Config<&str> = Config::new(
     "balancerd_log_filter",
@@ -98,6 +105,7 @@ pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
         .add(&SIGTERM_CONNECTION_WAIT)
         .add(&SIGTERM_LISTEN_WAIT)
         .add(&INJECT_PROXY_PROTOCOL_HEADER_HTTP)
+        .add(&MAX_COPY_BUFFER_SIZE)
         .add(&LOGGING_FILTER)
         .add(&OPENTELEMETRY_FILTER)
         .add(&LOGGING_FILTER_DEFAULTS)

@@ -74,8 +74,8 @@ use uuid::Uuid;
 
 use crate::codec::{BackendMessage, FramedConn};
 use crate::dyncfgs::{
-    INJECT_PROXY_PROTOCOL_HEADER_HTTP, SIGTERM_CONNECTION_WAIT, SIGTERM_LISTEN_WAIT,
-    has_tracing_config_update, tracing_config,
+    INJECT_PROXY_PROTOCOL_HEADER_HTTP, MAX_COPY_BUFFER_SIZE, SIGTERM_CONNECTION_WAIT,
+    SIGTERM_LISTEN_WAIT, has_tracing_config_update, tracing_config,
 };
 
 /// Balancer build information.
@@ -329,6 +329,7 @@ impl BalancerService {
                 internal_tls: self.cfg.internal_tls,
                 metrics: ServerMetrics::new(metrics.clone(), "pgwire"),
                 now: SYSTEM_TIME.clone(),
+                configs: self.configs.clone(),
             };
             let (handle, stream) = self.pgwire;
             server_handles.push(handle);
@@ -611,6 +612,7 @@ struct PgwireBalancer {
     resolver: Arc<Resolver>,
     metrics: ServerMetrics,
     now: NowFn,
+    configs: ConfigSet,
 }
 
 impl PgwireBalancer {
@@ -623,6 +625,7 @@ impl PgwireBalancer {
         tls_mode: Option<TlsMode>,
         internal_tls: bool,
         metrics: &ServerMetrics,
+        configs: &ConfigSet,
     ) -> Result<(), io::Error>
     where
         A: AsyncRead + AsyncWrite + AsyncReady + Send + Sync + Unpin,
@@ -681,9 +684,15 @@ impl PgwireBalancer {
 
         let mut client_counter = CountingConn::new(conn.inner_mut());
 
-        // Now blindly shuffle bytes back and forth until closed.
-        // TODO: Limit total memory use.
-        let res = tokio::io::copy_bidirectional(&mut client_counter, &mut mz_stream).await;
+        // Now shuffle bytes back and forth until closed, with bounded memory usage.
+        let max_buf_size = MAX_COPY_BUFFER_SIZE.get(configs);
+        let res = tokio::io::copy_bidirectional_with_sizes(
+            &mut client_counter,
+            &mut mz_stream,
+            max_buf_size,
+            max_buf_size,
+        )
+        .await;
         if let Some(tenant) = &resolved.tenant {
             metrics
                 .tenant_connections_tx(tenant)
@@ -789,6 +798,7 @@ impl mz_server_core::Server for PgwireBalancer {
         let cancellation_resolver = Arc::clone(&self.cancellation_resolver);
         let conn_uuid = epoch_to_uuid_v7(&(self.now)());
         let peer_addr = conn.peer_addr();
+        let configs = self.configs.clone();
         conn.uuid_handle().set(conn_uuid);
         Box::pin(async move {
             // TODO: Try to merge this with pgwire/server.rs to avoid the duplication. May not be
@@ -850,6 +860,7 @@ impl mz_server_core::Server for PgwireBalancer {
                                 tls.map(|tls| tls.mode),
                                 internal_tls,
                                 &inner_metrics,
+                                &configs,
                             )
                             .await?;
                             conn.flush().await?;
@@ -1160,7 +1171,8 @@ impl mz_server_core::Server for HttpsBalancer {
         let inner_metrics = Arc::clone(&self.metrics);
         let outer_metrics = Arc::clone(&self.metrics);
         let peer_addr = conn.peer_addr();
-        let inject_proxy_headers = INJECT_PROXY_PROTOCOL_HEADER_HTTP.get(&self.configs);
+        let configs = self.configs.clone();
+        let inject_proxy_headers = INJECT_PROXY_PROTOCOL_HEADER_HTTP.get(&configs);
         Box::pin(async move {
             let active_guard = inner_metrics.active_connections();
             let result: Result<_, anyhow::Error> = Box::pin(async move {
@@ -1224,10 +1236,16 @@ impl mz_server_core::Server for HttpsBalancer {
 
                 let mut client_counter = CountingConn::new(client_stream);
 
-                // Now blindly shuffle bytes back and forth until closed.
-                // TODO: Limit total memory use.
+                // Now shuffle bytes back and forth until closed, with bounded memory usage.
+                let max_buf_size = MAX_COPY_BUFFER_SIZE.get(&configs);
                 // See corresponding comment in pgwire implementation about ignoring the error.
-                let _ = tokio::io::copy_bidirectional(&mut client_counter, &mut mz_stream).await;
+                let _ = tokio::io::copy_bidirectional_with_sizes(
+                    &mut client_counter,
+                    &mut mz_stream,
+                    max_buf_size,
+                    max_buf_size,
+                )
+                .await;
                 if let Some(tenant) = &resolved.tenant {
                     inner_metrics
                         .tenant_connections_tx(tenant)
