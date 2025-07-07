@@ -1148,10 +1148,6 @@ impl<T: Timestamp + Lattice + Codec64> ReferencedBlobValidator<T> {
                 "non-empty batches should only be appended once; duplicate: {x:?}"
             ),
             HollowBlobRef::Rollup(x) => assert!(self.inc_rollups.insert(x.clone())),
-            HollowBlobRef::Part(_) => {
-                // Parts are not stored loose in the full copy of state, so we don't
-                // validate them.
-            }
         }
     }
     fn validate_against_state(&mut self, x: &State<T>) {
@@ -1168,10 +1164,6 @@ impl<T: Timestamp + Lattice + Codec64> ReferencedBlobValidator<T> {
             }
             HollowBlobRef::Rollup(x) => {
                 self.full_rollups.insert(x.clone());
-            }
-            HollowBlobRef::Part(_) => {
-                // Parts are not stored loose in the full copy of state, so we don't
-                // validate them.
             }
         });
 

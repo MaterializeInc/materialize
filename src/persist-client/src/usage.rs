@@ -218,11 +218,6 @@ impl StorageUsageClient {
                 HollowBlobRef::Rollup(rollup) => {
                     rollup_bytes += rollup.encoded_size_bytes.unwrap_or(1);
                 }
-                HollowBlobRef::Part(_) => {
-                    // Parts are not stored in the full copy of state, so we don't
-                    // validate them. They are only used for batch parts, which are
-                    // already counted in batches_bytes.
-                }
             })
         }) {}
 
@@ -468,11 +463,6 @@ impl StorageUsageClient {
                     referenced_other_bytes +=
                         u64::cast_from(x.encoded_size_bytes.unwrap_or_default());
                 }
-                HollowBlobRef::Part(_) => {
-                    // Parts are not stored in the full copy of state, so we don't
-                    // validate them. They are only used for batch parts, which are
-                    // already counted in batches_bytes.
-                }
             })
         }) {}
 
@@ -487,11 +477,6 @@ impl StorageUsageClient {
             HollowBlobRef::Rollup(x) => {
                 current_state_rollups_bytes +=
                     u64::cast_from(x.encoded_size_bytes.unwrap_or_default());
-            }
-            HollowBlobRef::Part(_) => {
-                // Parts are not stored in the full copy of state, so we don't
-                // validate them. They are only used for batch parts, which are
-                // already counted in batches_bytes.
             }
         });
         let current_state_bytes = current_state_batches_bytes + current_state_rollups_bytes;

@@ -336,15 +336,7 @@ where
         while let Some(_) = states.next(|diff| match diff {
             InspectDiff::FromInitial(_) => {}
             InspectDiff::Diff(diff) => {
-                diff.blob_deletes().for_each(|blob| match blob {
-                    HollowBlobRef::Batch(batch) => {
-                        seqno_held_parts += batch.part_count();
-                    }
-                    HollowBlobRef::Part(_) => {
-                        seqno_held_parts += 1;
-                    }
-                    HollowBlobRef::Rollup(_) => {}
-                });
+                seqno_held_parts += diff.part_deletes().count();
             }
         }) {}
 
@@ -482,12 +474,6 @@ where
                         }
                     }
                 }
-                HollowBlobRef::Part(_) => {
-                    warn!(
-                        "unexpected part in state blobs during GC: {:?}. This should never happen.",
-                        blob
-                    );
-                }
             });
 
             gc_results.truncated_consensus_to.push(truncate_lt);
@@ -524,24 +510,14 @@ where
         while let Some(state) = states.next(|diff| match diff {
             InspectDiff::FromInitial(_) => {}
             InspectDiff::Diff(diff) => {
-                diff.blob_deletes().for_each(|blob| match blob {
-                    HollowBlobRef::Batch(batch) => {
-                        for part in &batch.parts {
-                            // we use BTreeSets for fast lookups elsewhere, but we should never
-                            // see repeat blob insertions within a single GC run, otherwise we
-                            // have a logic error or our diffs are incorrect (!)
-                            assert!(batch_parts_to_delete.add(part));
-                        }
-                    }
-                    HollowBlobRef::Part(part) => {
-                        // we use BTreeSets for fast lookups elsewhere, but we should never
-                        // see repeat blob insertions within a single GC run, otherwise we
-                        // have a logic error or our diffs are incorrect (!)
-                        assert!(batch_parts_to_delete.add(part));
-                    }
-                    HollowBlobRef::Rollup(rollup) => {
-                        assert!(rollups_to_delete.insert(rollup.key.to_owned()));
-                    }
+                diff.rollup_deletes().for_each(|rollup| {
+                    // we use BTreeSets for fast lookups elsewhere, but we should never
+                    // see repeat rollup insertions within a single GC run, otherwise we
+                    // have a logic error or our diffs are incorrect (!)
+                    assert!(rollups_to_delete.insert(rollup.key.to_owned()));
+                });
+                diff.part_deletes().for_each(|part| {
+                    assert!(batch_parts_to_delete.add(part));
                 });
             }
         }) {
