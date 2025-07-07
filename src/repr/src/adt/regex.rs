@@ -9,6 +9,7 @@
 
 //! Regular expressions.
 
+use std::borrow::Cow;
 use std::cmp::Ordering;
 use std::fmt;
 use std::hash::{Hash, Hasher};
@@ -226,7 +227,7 @@ impl<'de> Deserialize<'de> for Regex {
                 V: de::SeqAccess<'de>,
             {
                 let pattern = seq
-                    .next_element()?
+                    .next_element::<Cow<str>>()?
                     .ok_or_else(|| de::Error::invalid_length(0, &self))?;
                 let case_insensitive = seq
                     .next_element()?
@@ -234,7 +235,7 @@ impl<'de> Deserialize<'de> for Regex {
                 let dot_matches_new_line = seq
                     .next_element()?
                     .ok_or_else(|| de::Error::invalid_length(2, &self))?;
-                Regex::new_dot_matches_new_line(pattern, case_insensitive, dot_matches_new_line)
+                Regex::new_dot_matches_new_line(&pattern, case_insensitive, dot_matches_new_line)
                     .map_err(|err| {
                         V::Error::custom(format!(
                             "Unable to recreate regex during deserialization: {}",
@@ -247,7 +248,7 @@ impl<'de> Deserialize<'de> for Regex {
             where
                 V: de::MapAccess<'de>,
             {
-                let mut pattern: Option<&str> = None;
+                let mut pattern: Option<Cow<str>> = None;
                 let mut case_insensitive: Option<bool> = None;
                 let mut dot_matches_new_line: Option<bool> = None;
                 while let Some(key) = map.next_key()? {
@@ -277,7 +278,7 @@ impl<'de> Deserialize<'de> for Regex {
                     case_insensitive.ok_or_else(|| de::Error::missing_field("case_insensitive"))?;
                 let dot_matches_new_line = dot_matches_new_line
                     .ok_or_else(|| de::Error::missing_field("dot_matches_new_line"))?;
-                Regex::new_dot_matches_new_line(pattern, case_insensitive, dot_matches_new_line)
+                Regex::new_dot_matches_new_line(&pattern, case_insensitive, dot_matches_new_line)
                     .map_err(|err| {
                         V::Error::custom(format!(
                             "Unable to recreate regex during deserialization: {}",
@@ -382,5 +383,25 @@ mod tests {
             assert_eq!(roundtrip_result.regex.is_match("axxx\nxxxb"), true);
             assert_eq!(pattern, roundtrip_result.pattern());
         }
+    }
+
+    #[mz_ore::test]
+    fn regex_serde_from_reader() {
+        let pattern = "A.*B";
+        let orig_regex = Regex::new_dot_matches_new_line(pattern, true, true).unwrap();
+
+        let serialized: String = serde_json::to_string(&orig_regex).unwrap();
+        let roundtrip_result: Regex = serde_json::from_reader(serialized.as_bytes()).unwrap();
+
+        assert_eq!(orig_regex.regex.is_match("axxx\nxxxb"), true);
+        assert_eq!(roundtrip_result.regex.is_match("axxx\nxxxb"), true);
+        assert_eq!(pattern, roundtrip_result.pattern());
+
+        let serialized = bincode::serialize(&orig_regex).unwrap();
+        let roundtrip_result: Regex = bincode::deserialize_from(&*serialized).unwrap();
+
+        assert_eq!(orig_regex.regex.is_match("axxx\nxxxb"), true);
+        assert_eq!(roundtrip_result.regex.is_match("axxx\nxxxb"), true);
+        assert_eq!(pattern, roundtrip_result.pattern());
     }
 }
