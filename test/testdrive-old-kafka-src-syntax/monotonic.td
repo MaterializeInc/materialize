@@ -295,54 +295,28 @@ Target cluster: quickstart
 # in memory consumptions and should be understood before adapting the values.
 > SET cluster_replica = r1
 
->[version>=13800] SELECT mdod.dataflow_name, mdod.name
+>[version>=15000] SELECT mdod.dataflow_name, mdod.name
   FROM mz_introspection.mz_arrangement_sharing mash
   JOIN mz_introspection.mz_dataflow_operator_dataflows mdod ON mash.operator_id = mdod.id
   JOIN mz_introspection.mz_compute_exports USING (dataflow_id)
   WHERE export_id LIKE 'u%'
-"Dataflow: materialize.public.i1_primary_idx" "ArrangeBy[[Column(0)]]"
-"Dataflow: materialize.public.i1_primary_idx" "ArrangeBy[[Column(0)]]-errors"
-"Dataflow: materialize.public.i4_primary_idx" "ArrangeBy[[Column(0)]]"
-"Dataflow: materialize.public.i4_primary_idx" "ArrangeBy[[Column(0)]]-errors"
-"Dataflow: materialize.public.i6_primary_idx" "ArrangeBy[[Column(0)]]"
-"Dataflow: materialize.public.i6_primary_idx" "ArrangeBy[[Column(0)]]-errors"
+"Dataflow: materialize.public.i1_primary_idx" "ArrangeBy[[Column(0, \"b\")]]"
+"Dataflow: materialize.public.i1_primary_idx" "ArrangeBy[[Column(0, \"b\")]]-errors"
+"Dataflow: materialize.public.i4_primary_idx" "ArrangeBy[[Column(0, \"c\")]]"
+"Dataflow: materialize.public.i4_primary_idx" "ArrangeBy[[Column(0, \"c\")]]-errors"
+"Dataflow: materialize.public.i6_primary_idx" "ArrangeBy[[Column(0, \"c\")]]"
+"Dataflow: materialize.public.i6_primary_idx" "ArrangeBy[[Column(0, \"c\")]]-errors"
 "Dataflow: materialize.public.i6_primary_idx" "Arranged TopK input"
 "Dataflow: materialize.public.i6_primary_idx" "Reduced TopK input"
-"Dataflow: materialize.public.i8_primary_idx" "ArrangeBy[[Column(0)]]"
-"Dataflow: materialize.public.i8_primary_idx" "ArrangeBy[[Column(0)]]-errors"
-"Dataflow: materialize.public.i9_primary_idx" "ArrangeBy[[Column(0)]]"
-"Dataflow: materialize.public.i9_primary_idx" "ArrangeBy[[Column(0)]]-errors"
+"Dataflow: materialize.public.i8_primary_idx" "ArrangeBy[[Column(0, \"b\")]]"
+"Dataflow: materialize.public.i8_primary_idx" "ArrangeBy[[Column(0, \"b\")]]-errors"
+"Dataflow: materialize.public.i9_primary_idx" "ArrangeBy[[Column(0, \"b\")]]"
+"Dataflow: materialize.public.i9_primary_idx" "ArrangeBy[[Column(0, \"b\")]]-errors"
 "Dataflow: materialize.public.monotonic_fused" "ArrangeMonotonic [val: empty]"
 "Dataflow: materialize.public.monotonic_fused" ReduceMonotonic
 "Dataflow: materialize.public.monotonic_max" "ArrangeMonotonic [val: empty]"
 "Dataflow: materialize.public.monotonic_max" ReduceMonotonic
 "Dataflow: materialize.public.monotonic_min" "ArrangeMonotonic [val: empty]"
 "Dataflow: materialize.public.monotonic_min" ReduceMonotonic
-"Dataflow: materialize.public.non_dbz_data_indexed_primary_idx" "ArrangeBy[[Column(0), Column(1)]]"
-"Dataflow: materialize.public.non_dbz_data_indexed_primary_idx" "ArrangeBy[[Column(0), Column(1)]]-errors"
-
->[version<13800] SELECT mdod.dataflow_name, mdod.name
-  FROM mz_introspection.mz_arrangement_sharing mash
-  JOIN mz_introspection.mz_dataflow_operator_dataflows mdod ON mash.operator_id = mdod.id
-  JOIN mz_introspection.mz_compute_exports USING (dataflow_id)
-  WHERE export_id LIKE 'u%'
-"Dataflow: materialize.public.i1_primary_idx" ArrangeBy[[Column(0)]]
-"Dataflow: materialize.public.i1_primary_idx" ArrangeBy[[Column(0)]]-errors
-"Dataflow: materialize.public.i4_primary_idx" ArrangeBy[[Column(0)]]
-"Dataflow: materialize.public.i4_primary_idx" ArrangeBy[[Column(0)]]-errors
-"Dataflow: materialize.public.i6_primary_idx" ArrangeBy[[Column(0)]]
-"Dataflow: materialize.public.i6_primary_idx" ArrangeBy[[Column(0)]]-errors
-"Dataflow: materialize.public.i6_primary_idx" "Arranged TopK input"
-"Dataflow: materialize.public.i6_primary_idx" "Reduced TopK input"
-"Dataflow: materialize.public.i8_primary_idx" ArrangeBy[[Column(0)]]
-"Dataflow: materialize.public.i8_primary_idx" ArrangeBy[[Column(0)]]-errors
-"Dataflow: materialize.public.i9_primary_idx" ArrangeBy[[Column(0)]]
-"Dataflow: materialize.public.i9_primary_idx" ArrangeBy[[Column(0)]]-errors
-"Dataflow: materialize.public.monotonic_fused" "ArrangeMonotonic [val: empty]"
-"Dataflow: materialize.public.monotonic_fused" ReduceMonotonic
-"Dataflow: materialize.public.monotonic_max" "ArrangeMonotonic [val: empty]"
-"Dataflow: materialize.public.monotonic_max" ReduceMonotonic
-"Dataflow: materialize.public.monotonic_min" "ArrangeMonotonic [val: empty]"
-"Dataflow: materialize.public.monotonic_min" ReduceMonotonic
-"Dataflow: materialize.public.non_dbz_data_indexed_primary_idx" "ArrangeBy[[Column(0), Column(1)]]"
-"Dataflow: materialize.public.non_dbz_data_indexed_primary_idx" "ArrangeBy[[Column(0), Column(1)]]-errors"
+"Dataflow: materialize.public.non_dbz_data_indexed_primary_idx" "ArrangeBy[[Column(0, \"a\"), Column(1, \"b\")]]"
+"Dataflow: materialize.public.non_dbz_data_indexed_primary_idx" "ArrangeBy[[Column(0, \"a\"), Column(1, \"b\")]]-errors"

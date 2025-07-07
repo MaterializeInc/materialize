@@ -121,8 +121,8 @@ SELECT mz_unsafe.mz_sleep(4)
 query T
 SELECT mdo.name FROM mz_introspection.mz_arrangement_sharing mash JOIN mz_introspection.mz_dataflow_operators mdo ON mash.operator_id = mdo.id ORDER BY mdo.name;
 ----
-ArrangeBy[[Column(0), Column(1)]]
-ArrangeBy[[Column(0), Column(1)]]-errors
+ArrangeBy[[Column(0, "a"), Column(1, "b")]]
+ArrangeBy[[Column(0, "a"), Column(1, "b")]]-errors
 Arranged TopK input
 Arranged TopK input
 Arranged TopK input
@@ -159,8 +159,8 @@ SELECT mz_unsafe.mz_sleep(4)
 query T
 SELECT mdo.name FROM mz_introspection.mz_arrangement_sharing mash JOIN mz_introspection.mz_dataflow_operators mdo ON mash.operator_id = mdo.id ORDER BY mdo.name;
 ----
-ArrangeBy[[Column(0), Column(1), Column(2), Column(3), Column(4), Column(5), Column(6), Column(7), Column(8), Column(9), Column(10)]]
-ArrangeBy[[Column(0), Column(1), Column(2), Column(3), Column(4), Column(5), Column(6), Column(7), Column(8), Column(9), Column(10)]]-errors
+ArrangeBy[[Column(0, "f1"), Column(1, "f2"), Column(2, "f3"), Column(3, "f4"), Column(4, "f5"), Column(5, "f6"), Column(6, "f7"), Column(7, "f8"), Column(8, "n"), Column(9, "m"), Column(10, "l")]]
+ArrangeBy[[Column(0, "f1"), Column(1, "f2"), Column(2, "f3"), Column(3, "f4"), Column(4, "f5"), Column(5, "f6"), Column(6, "f7"), Column(7, "f8"), Column(8, "n"), Column(9, "m"), Column(10, "l")]]-errors
 
 statement ok
 DROP TABLE t3 CASCADE
@@ -380,10 +380,10 @@ Arrange ReduceMinsMaxes
 Arrange ReduceMinsMaxes
 Arrange recursive err
 ArrangeAccumulable [val: empty]
-ArrangeBy[[Column(0)]]
-ArrangeBy[[Column(0)]]
-ArrangeBy[[Column(0)]]
-ArrangeBy[[Column(2)]]
+ArrangeBy[[Column(0, "user_id")]]
+ArrangeBy[[Column(0, "user_id")]]
+ArrangeBy[[Column(0, "user_id")]]
+ArrangeBy[[Column(2, "user_id")]]
 Arranged DistinctBy
 Arranged MinsMaxesHierarchical input
 Arranged MinsMaxesHierarchical input
@@ -523,8 +523,8 @@ SELECT mz_unsafe.mz_sleep(4)
 query T
 SELECT mdo.name FROM mz_introspection.mz_arrangement_sharing mash JOIN mz_introspection.mz_dataflow_operators mdo ON mash.operator_id = mdo.id ORDER BY mdo.name;
 ----
-ArrangeBy[[Column(0)]]
-ArrangeBy[[Column(0)]]-errors
+ArrangeBy[[Column(0, "f1")]]
+ArrangeBy[[Column(0, "f1")]]-errors
 
 statement ok
 DROP TABLE t1 CASCADE
@@ -633,18 +633,18 @@ AccumulableErrorCheck
 AccumulableErrorCheck
 ArrangeAccumulable [val: empty]
 ArrangeAccumulable [val: empty]
-ArrangeBy[[Column(0), Column(1)]]
-ArrangeBy[[Column(0), Column(1)]]-errors
-ArrangeBy[[Column(0)]]
-ArrangeBy[[Column(0)]]
-ArrangeBy[[Column(0)]]
-ArrangeBy[[Column(0)]]
-ArrangeBy[[Column(0)]]
-ArrangeBy[[Column(0)]]
-ArrangeBy[[Column(0)]]
-ArrangeBy[[Column(0)]]-errors
-ArrangeBy[[Column(0)]]-errors
-ArrangeBy[[Column(0)]]-errors
+ArrangeBy[[Column(0, "a"), Column(1, "b")]]
+ArrangeBy[[Column(0, "a"), Column(1, "b")]]-errors
+ArrangeBy[[Column(0, "a")]]
+ArrangeBy[[Column(0, "a")]]
+ArrangeBy[[Column(0, "a")]]
+ArrangeBy[[Column(0, "a")]]-errors
+ArrangeBy[[Column(0, "b")]]
+ArrangeBy[[Column(0, "b")]]
+ArrangeBy[[Column(0, "c")]]
+ArrangeBy[[Column(0, "c")]]-errors
+ArrangeBy[[Column(0, "sum")]]
+ArrangeBy[[Column(0, "sum")]]-errors
 ArrangeBy[[]]
 ArrangeBy[[]]
 ReduceAccumulable
@@ -732,24 +732,24 @@ SELECT mz_unsafe.mz_sleep(4)
 query T
 SELECT mdo.name FROM mz_introspection.mz_arrangement_sharing mash JOIN mz_introspection.mz_dataflow_operators mdo ON mash.operator_id = mdo.id ORDER BY mdo.name;
 ----
-ArrangeBy[[Column(0)]]
-ArrangeBy[[Column(0)]]
-ArrangeBy[[Column(0)]]
-ArrangeBy[[Column(0)]]
-ArrangeBy[[Column(0)]]
-ArrangeBy[[Column(0)]]
-ArrangeBy[[Column(0)]]
-ArrangeBy[[Column(0)]]
-ArrangeBy[[Column(0)]]
-ArrangeBy[[Column(0)]]
-ArrangeBy[[Column(0)]]
-ArrangeBy[[Column(0)]]
-ArrangeBy[[Column(0)]]
-ArrangeBy[[Column(0)]]
-ArrangeBy[[Column(0)]]
-ArrangeBy[[Column(0)]]
-ArrangeBy[[Column(0)]]
-ArrangeBy[[Column(0)]]
+ArrangeBy[[Column(0, "num")]]
+ArrangeBy[[Column(0, "num")]]
+ArrangeBy[[Column(0, "num")]]
+ArrangeBy[[Column(0, "num")]]
+ArrangeBy[[Column(0, "num")]]
+ArrangeBy[[Column(0, "num")]]
+ArrangeBy[[Column(0, "num")]]
+ArrangeBy[[Column(0, "num")]]
+ArrangeBy[[Column(0, "num")]]
+ArrangeBy[[Column(0, "num")]]
+ArrangeBy[[Column(0, "num")]]
+ArrangeBy[[Column(0, "num")]]
+ArrangeBy[[Column(0, "num")]]
+ArrangeBy[[Column(0, "num")]]
+ArrangeBy[[Column(0, "num")]]
+ArrangeBy[[Column(0, "num")]]
+ArrangeBy[[Column(0, "num")]]
+ArrangeBy[[Column(0, "num")]]
 ArrangeBy[[]]
 ArrangeBy[[]]
 ArrangeBy[[]]
@@ -792,8 +792,8 @@ SELECT mdo.name FROM mz_introspection.mz_arrangement_sharing mash JOIN mz_intros
 ----
 AccumulableErrorCheck
 ArrangeAccumulable [val: empty]
-ArrangeBy[[Column(0)]]
-ArrangeBy[[Column(0)]]-errors
+ArrangeBy[[Column(0, "sum")]]
+ArrangeBy[[Column(0, "sum")]]-errors
 ArrangeBy[[]]
 ReduceAccumulable
 
@@ -866,15 +866,15 @@ Arrange ReduceMinsMaxes
 ArrangeAccumulable [val: empty]
 ArrangeAccumulable [val: empty]
 ArrangeAccumulable [val: empty]
-ArrangeBy[[CallBinary(ModInt64, Column(0), Literal(Ok(Row{[Int64(2)]}), ColumnType { scalar_type: Int64, nullable: false }))]]
-ArrangeBy[[CallUnary(CastInt32ToInt64(CastInt32ToInt64), Column(0))]]
+ArrangeBy[[CallBinary(ModInt64, Column(0, "data"), Literal(Ok(Row{[Int64(2)]}), ColumnType { scalar_type: Int64, nullable: false }))]]
+ArrangeBy[[CallUnary(CastInt32ToInt64(CastInt32ToInt64), Column(0, "id"))]]
 ArrangeBy[[Column(0)]]
-ArrangeBy[[Column(0)]]
-ArrangeBy[[Column(0)]]
-ArrangeBy[[Column(0)]]
-ArrangeBy[[Column(0)]]-errors
-ArrangeBy[[Column(0)]]-errors
-ArrangeBy[[Column(0)]]-errors
+ArrangeBy[[Column(0, "data")]]
+ArrangeBy[[Column(0, "data")]]-errors
+ArrangeBy[[Column(0, "id")]]
+ArrangeBy[[Column(0, "id")]]-errors
+ArrangeBy[[Column(0, "max")]]
+ArrangeBy[[Column(0, "max")]]-errors
 Arranged Accumulable Distinct [val: empty]
 Arranged MinsMaxesHierarchical input
 Arranged MinsMaxesHierarchical input
@@ -952,10 +952,10 @@ SELECT mz_unsafe.mz_sleep(4)
 query T
 SELECT mdo.name FROM mz_introspection.mz_arrangement_sharing mash JOIN mz_introspection.mz_dataflow_operators mdo ON mash.operator_id = mdo.id ORDER BY mdo.name;
 ----
-ArrangeBy[[CallUnary(CastStringToVarChar(CastStringToVarChar { length: None, fail_on_len: false }), Column(1)), CallUnary(CastInt64ToString(CastInt64ToString), Column(0))]]
-ArrangeBy[[CallUnary(CastStringToVarChar(CastStringToVarChar { length: None, fail_on_len: false }), Column(1)), CallUnary(CastInt64ToString(CastInt64ToString), Column(0))]]-errors
-ArrangeBy[[Column(0), Column(1)]]
-ArrangeBy[[Column(0), Column(1)]]-errors
+ArrangeBy[[CallUnary(CastStringToVarChar(CastStringToVarChar { length: None, fail_on_len: false }), Column(1, "t")), CallUnary(CastInt64ToString(CastInt64ToString), Column(0, "i"))]]
+ArrangeBy[[CallUnary(CastStringToVarChar(CastStringToVarChar { length: None, fail_on_len: false }), Column(1, "t")), CallUnary(CastInt64ToString(CastInt64ToString), Column(0, "i"))]]-errors
+ArrangeBy[[Column(0, "i"), Column(1, "t")]]
+ArrangeBy[[Column(0, "i"), Column(1, "t")]]-errors
 
 statement ok
 DROP TABLE t CASCADE
@@ -984,47 +984,124 @@ Arrange␠export␠iterative  2
 Arrange␠export␠iterative␠err  2
 Arrange␠recursive␠err  3
 ArrangeAccumulable␠[val:␠empty]  10
-ArrangeBy[[CallBinary(JsonbGetStringStringify,␠Column(1),␠Literal(Ok(Row{[String("id")]}),␠ColumnType␠{␠scalar_type:␠String,␠nullable:␠false␠}))]]  2
-ArrangeBy[[CallBinary(JsonbGetStringStringify,␠Column(2),␠Literal(Ok(Row{[String("id")]}),␠ColumnType␠{␠scalar_type:␠String,␠nullable:␠false␠}))]]  1
-ArrangeBy[[CallVariadic(Coalesce,␠[Column(2),␠Column(3)])]]  2
-ArrangeBy[[Column(0),␠CallUnary(CastInt32ToNumeric(CastInt32ToNumeric(None)),␠Column(1))]]  1
-ArrangeBy[[Column(0),␠CallUnary(CastUint64ToNumeric(CastUint64ToNumeric(None)),␠Column(2))]]  1
-ArrangeBy[[Column(0),␠CallUnary(Lower(Lower),␠Column(1))]]  1
-ArrangeBy[[Column(0),␠CallUnary(Lower(Lower),␠Column(2))]]  1
+ArrangeBy[[CallBinary(JsonbGetStringStringify,␠Column(1,␠"details"),␠Literal(Ok(Row{[String("id")]}),␠ColumnType␠{␠scalar_type:␠String,␠nullable:␠false␠}))]]  2
+ArrangeBy[[CallBinary(JsonbGetStringStringify,␠Column(2,␠"details"),␠Literal(Ok(Row{[String("id")]}),␠ColumnType␠{␠scalar_type:␠String,␠nullable:␠false␠}))]]  1
+ArrangeBy[[CallVariadic(Coalesce,␠[Column(2,␠"parent"),␠Column(3,␠"parent")])]]  2
 ArrangeBy[[Column(0),␠Column(1),␠Column(2),␠Column(3),␠Column(4),␠Column(5),␠Column(6),␠Column(7),␠Column(8),␠Column(9),␠Column(10),␠Column(11),␠Column(12),␠Column(13),␠Column(14),␠Column(15),␠Column(16),␠Column(17),␠Column(18),␠Column(19),␠Column(20),␠Column(21),␠Column(22),␠Column(23),␠Column(24),␠Column(25),␠Column(26),␠Column(27)]]  2
-ArrangeBy[[Column(0),␠Column(1),␠Column(2),␠Column(3),␠Column(4),␠Column(5),␠Column(6),␠Column(7),␠Column(8),␠Column(9),␠Column(10),␠Column(11),␠Column(12),␠Column(13)]]  1
-ArrangeBy[[Column(0),␠Column(1),␠Column(2),␠Column(3),␠Column(4),␠Column(5),␠Column(6),␠Column(7),␠Column(8),␠Column(9),␠Column(10),␠Column(11),␠Column(12),␠Column(13)]]-errors  1
-ArrangeBy[[Column(0),␠Column(1),␠Column(2),␠Column(3),␠Column(4),␠Column(5)]]  1
-ArrangeBy[[Column(0),␠Column(1),␠Column(2),␠Column(3),␠Column(4),␠Column(5)]]-errors  1
-ArrangeBy[[Column(0),␠Column(1),␠Column(2),␠Column(3),␠Column(4)]]  1
-ArrangeBy[[Column(0),␠Column(1),␠Column(2),␠Column(3),␠Column(4)]]-errors  1
-ArrangeBy[[Column(0),␠Column(1)]]  5
-ArrangeBy[[Column(0),␠Column(1)]]-errors  3
-ArrangeBy[[Column(0),␠Column(2)]]  4
-ArrangeBy[[Column(0),␠Column(3)]]  4
-ArrangeBy[[Column(0),␠Column(4)]]  1
-ArrangeBy[[Column(0)]]  154
-ArrangeBy[[Column(0)]]-errors  41
+ArrangeBy[[Column(0),␠Column(1)]]  1
+ArrangeBy[[Column(0),␠Column(3)]]  1
+ArrangeBy[[Column(0)]]  34
+ArrangeBy[[Column(0,␠"attrelid"),␠Column(1,␠"attname"),␠Column(2,␠"atttypid"),␠Column(3,␠"attlen"),␠Column(4,␠"attnum"),␠Column(5,␠"atttypmod"),␠Column(6,␠"attnotnull"),␠Column(7,␠"atthasdef"),␠Column(8,␠"attidentity"),␠Column(9,␠"attgenerated"),␠Column(10,␠"attisdropped"),␠Column(11,␠"attcollation"),␠Column(12,␠"database_name"),␠Column(13,␠"pg_type_database_name")]]  1
+ArrangeBy[[Column(0,␠"attrelid"),␠Column(1,␠"attname"),␠Column(2,␠"atttypid"),␠Column(3,␠"attlen"),␠Column(4,␠"attnum"),␠Column(5,␠"atttypmod"),␠Column(6,␠"attnotnull"),␠Column(7,␠"atthasdef"),␠Column(8,␠"attidentity"),␠Column(9,␠"attgenerated"),␠Column(10,␠"attisdropped"),␠Column(11,␠"attcollation"),␠Column(12,␠"database_name"),␠Column(13,␠"pg_type_database_name")]]-errors  1
+ArrangeBy[[Column(0,␠"cluster")]]  1
+ArrangeBy[[Column(0,␠"cluster")]]-errors  1
+ArrangeBy[[Column(0,␠"cluster_id"),␠Column(2,␠"cluster_name")]]  1
+ArrangeBy[[Column(0,␠"database_id")]]  1
+ArrangeBy[[Column(0,␠"database_id")]]-errors  1
+ArrangeBy[[Column(0,␠"id"),␠CallUnary(CastInt32ToNumeric(CastInt32ToNumeric(None)),␠Column(1,␠"object_sub_id"))]]  1
+ArrangeBy[[Column(0,␠"id"),␠CallUnary(CastUint64ToNumeric(CastUint64ToNumeric(None)),␠Column(2,␠"position"))]]  1
+ArrangeBy[[Column(0,␠"id"),␠CallUnary(Lower(Lower),␠Column(1,␠"object_type"))]]  1
+ArrangeBy[[Column(0,␠"id"),␠CallUnary(Lower(Lower),␠Column(2,␠"type"))]]  1
+ArrangeBy[[Column(0,␠"id"),␠Column(1,␠"replica_id")]]  3
+ArrangeBy[[Column(0,␠"id"),␠Column(1,␠"replica_id")]]-errors  3
+ArrangeBy[[Column(0,␠"id"),␠Column(2,␠"id")]]  1
+ArrangeBy[[Column(0,␠"id"),␠Column(2,␠"position")]]  1
+ArrangeBy[[Column(0,␠"id")]]  81
+ArrangeBy[[Column(0,␠"id")]]-errors  17
+ArrangeBy[[Column(0,␠"index_id")]]  1
+ArrangeBy[[Column(0,␠"name")]]  3
+ArrangeBy[[Column(0,␠"name")]]-errors  3
+ArrangeBy[[Column(0,␠"object_id"),␠Column(1,␠"replica_id")]]  1
+ArrangeBy[[Column(0,␠"object_id")]]  8
+ArrangeBy[[Column(0,␠"object_id")]]-errors  5
+ArrangeBy[[Column(0,␠"objoid"),␠Column(1,␠"classoid"),␠Column(2,␠"objsubid"),␠Column(3,␠"description"),␠Column(4,␠"oid_database_name"),␠Column(5,␠"class_database_name")]]  1
+ArrangeBy[[Column(0,␠"objoid"),␠Column(1,␠"classoid"),␠Column(2,␠"objsubid"),␠Column(3,␠"description"),␠Column(4,␠"oid_database_name"),␠Column(5,␠"class_database_name")]]-errors  1
+ArrangeBy[[Column(0,␠"oid"),␠Column(1,␠"adrelid"),␠Column(2,␠"adnum"),␠Column(3,␠"adbin"),␠Column(4,␠"adsrc")]]  1
+ArrangeBy[[Column(0,␠"oid"),␠Column(1,␠"adrelid"),␠Column(2,␠"adnum"),␠Column(3,␠"adbin"),␠Column(4,␠"adsrc")]]-errors  1
+ArrangeBy[[Column(0,␠"oid")]]  2
+ArrangeBy[[Column(0,␠"oid")]]-errors  1
+ArrangeBy[[Column(0,␠"replica_id"),␠Column(3,␠"bucket_start")]]  3
+ArrangeBy[[Column(0,␠"replica_id"),␠Column(4,␠"bucket_start")]]  1
+ArrangeBy[[Column(0,␠"replica_id")]]  11
+ArrangeBy[[Column(0,␠"replica_id")]]-errors  5
+ArrangeBy[[Column(0,␠"schema_id")]]  6
+ArrangeBy[[Column(0,␠"schema_id")]]-errors  6
+ArrangeBy[[Column(0,␠"self")]]  1
+ArrangeBy[[Column(0,␠"session_id")]]  1
+ArrangeBy[[Column(0,␠"shard_id"),␠Column(2,␠"collection_timestamp")]]  1
+ArrangeBy[[Column(0,␠"size")]]  1
+ArrangeBy[[Column(0,␠"size")]]-errors  1
+ArrangeBy[[Column(0,␠"source_id")]]  1
+ArrangeBy[[Column(0,␠"sql_hash")]]  1
+ArrangeBy[[Column(0,␠"sql_hash")]]-errors  1
+ArrangeBy[[Column(0,␠"y")]]  1
 ArrangeBy[[Column(1),␠Column(0)]]  1
-ArrangeBy[[Column(1),␠Column(2)]]  2
-ArrangeBy[[Column(1),␠Column(3)]]  1
-ArrangeBy[[Column(1)]]  26
-ArrangeBy[[Column(1)]]-errors  7
-ArrangeBy[[Column(13)]]  1
-ArrangeBy[[Column(15)]]  1
-ArrangeBy[[Column(15)]]-errors  1
-ArrangeBy[[Column(2)]]  20
-ArrangeBy[[Column(2)]]-errors  7
-ArrangeBy[[Column(21)]]  1
-ArrangeBy[[Column(21)]]-errors  1
-ArrangeBy[[Column(3)]]  6
-ArrangeBy[[Column(3)]]-errors  2
-ArrangeBy[[Column(4)]]  5
-ArrangeBy[[Column(4)]]-errors  2
-ArrangeBy[[Column(5)]]  2
-ArrangeBy[[Column(6)]]  3
-ArrangeBy[[Column(6)]]-errors  2
-ArrangeBy[[Column(9)]]  1
+ArrangeBy[[Column(1)]]  2
+ArrangeBy[[Column(1,␠"cluster_id"),␠Column(2,␠"cluster_name")]]  1
+ArrangeBy[[Column(1,␠"cluster_id")]]  3
+ArrangeBy[[Column(1,␠"database_id")]]  1
+ArrangeBy[[Column(1,␠"dependency_id")]]  1
+ArrangeBy[[Column(1,␠"dependency_id")]]-errors  1
+ArrangeBy[[Column(1,␠"element_id")]]  1
+ArrangeBy[[Column(1,␠"id")]]  1
+ArrangeBy[[Column(1,␠"id")]]-errors  1
+ArrangeBy[[Column(1,␠"id_to_use")]]  1
+ArrangeBy[[Column(1,␠"name")]]  1
+ArrangeBy[[Column(1,␠"name")]]-errors  1
+ArrangeBy[[Column(1,␠"nspname")]]  1
+ArrangeBy[[Column(1,␠"nspname")]]-errors  1
+ArrangeBy[[Column(1,␠"oid")]]  1
+ArrangeBy[[Column(1,␠"on_id"),␠Column(3,␠"on_position")]]  1
+ArrangeBy[[Column(1,␠"on_id")]]  1
+ArrangeBy[[Column(1,␠"prepared_statement_id")]]  1
+ArrangeBy[[Column(1,␠"referenced_object_id")]]  1
+ArrangeBy[[Column(1,␠"relname")]]  1
+ArrangeBy[[Column(1,␠"relname")]]-errors  1
+ArrangeBy[[Column(1,␠"replica_id")]]  2
+ArrangeBy[[Column(1,␠"session_id")]]  1
+ArrangeBy[[Column(1,␠"shard_id"),␠Column(2,␠"collection_timestamp")]]  1
+ArrangeBy[[Column(1,␠"shard_id")]]  1
+ArrangeBy[[Column(1,␠"sink_id")]]  1
+ArrangeBy[[Column(1,␠"sink_id")]]-errors  1
+ArrangeBy[[Column(1,␠"size")]]  1
+ArrangeBy[[Column(1,␠"source_id")]]  2
+ArrangeBy[[Column(1,␠"source_id")]]-errors  1
+ArrangeBy[[Column(1,␠"y")]]  1
+ArrangeBy[[Column(13,␠"database_id")]]  1
+ArrangeBy[[Column(15,␠"cluster_id")]]  1
+ArrangeBy[[Column(15,␠"cluster_id")]]-errors  1
+ArrangeBy[[Column(2)]]  1
+ArrangeBy[[Column(2,␠"cluster_id")]]  1
+ArrangeBy[[Column(2,␠"database_id")]]  1
+ArrangeBy[[Column(2,␠"database_id")]]-errors  1
+ArrangeBy[[Column(2,␠"id")]]  1
+ArrangeBy[[Column(2,␠"name")]]  1
+ArrangeBy[[Column(2,␠"name")]]-errors  1
+ArrangeBy[[Column(2,␠"on_id")]]  6
+ArrangeBy[[Column(2,␠"owner_id")]]  1
+ArrangeBy[[Column(2,␠"schema_id")]]  8
+ArrangeBy[[Column(2,␠"schema_id")]]-errors  5
+ArrangeBy[[Column(21,␠"sql_hash")]]  1
+ArrangeBy[[Column(21,␠"sql_hash")]]-errors  1
+ArrangeBy[[Column(3,␠"cluster_id")]]  2
+ArrangeBy[[Column(3,␠"name")]]  1
+ArrangeBy[[Column(3,␠"name")]]-errors  1
+ArrangeBy[[Column(3,␠"on_id")]]  2
+ArrangeBy[[Column(3,␠"schema_id")]]  1
+ArrangeBy[[Column(3,␠"schema_id")]]-errors  1
+ArrangeBy[[Column(4)]]  1
+ArrangeBy[[Column(4,␠"cluster_id")]]  1
+ArrangeBy[[Column(4,␠"owner_id")]]  1
+ArrangeBy[[Column(4,␠"schema_id")]]  2
+ArrangeBy[[Column(4,␠"schema_id")]]-errors  2
+ArrangeBy[[Column(5,␠"owner_id")]]  1
+ArrangeBy[[Column(5,␠"type_oid")]]  1
+ArrangeBy[[Column(6,␠"database_id")]]  1
+ArrangeBy[[Column(6,␠"dropped_at")]]  1
+ArrangeBy[[Column(6,␠"dropped_at")]]-errors  1
+ArrangeBy[[Column(6,␠"schema_id")]]  1
+ArrangeBy[[Column(6,␠"schema_id")]]-errors  1
+ArrangeBy[[Column(9,␠"database_id")]]  1
 ArrangeBy[[]]  11
 Arranged␠DistinctBy  47
 Arranged␠MinsMaxesHierarchical␠input  14

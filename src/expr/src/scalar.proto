@@ -33,6 +33,11 @@ import "repr/src/row.proto";
 import "repr/src/strconv.proto";
 
 message ProtoMirScalarExpr {
+  message ProtoColumn {
+    uint64 index = 1;
+    optional string name = 2;
+  }
+
   message ProtoLiteral {
     message ProtoLiteralData {
       oneof result {
@@ -67,7 +72,7 @@ message ProtoMirScalarExpr {
   }
 
   oneof kind {
-    uint64 column = 1;
+    ProtoColumn column = 1;
     ProtoLiteral literal = 2;
     ProtoUnmaterializableFunc call_unmaterializable = 3;
     ProtoCallUnary call_unary = 4;

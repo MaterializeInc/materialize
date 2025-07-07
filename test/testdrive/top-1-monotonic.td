@@ -276,7 +276,11 @@ $ kafka-ingest format=avro topic=top1 schema=${schema} timestamp=5
 # in memory consumptions and should be understood before adapting the values.
 > SET cluster_replica = r1
 
-> SELECT mdod.dataflow_name, mdod.name
+> SELECT
+    mdod.dataflow_name,
+    -- Simplify Column descriptions to avoid unnecessary test breakage when the
+    -- optimizer evolves.
+    regexp_replace(mdod.name, 'Column\((\d+), .+\)', 'Column($1)')
   FROM mz_introspection.mz_arrangement_sharing mash
   JOIN mz_introspection.mz_dataflow_operator_dataflows mdod ON mash.operator_id = mdod.id
   JOIN mz_introspection.mz_compute_exports USING (dataflow_id)

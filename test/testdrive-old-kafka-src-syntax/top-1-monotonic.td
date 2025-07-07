@@ -281,7 +281,11 @@ $ kafka-ingest format=avro topic=top1 schema=${schema} timestamp=5
 # in memory consumptions and should be understood before adapting the values.
 > SET cluster_replica = r1
 
->[version>=13800] SELECT mdod.dataflow_name, mdod.name
+>[version>=15000] SELECT
+    mdod.dataflow_name,
+    -- Simplify Column descriptions to avoid unnecessary test breakage when the
+    -- optimizer evolves.
+    regexp_replace(mdod.name, 'Column\((\d+), .+\)', 'Column($1)')
   FROM mz_introspection.mz_arrangement_sharing mash
   JOIN mz_introspection.mz_dataflow_operator_dataflows mdod ON mash.operator_id = mdod.id
   JOIN mz_introspection.mz_compute_exports USING (dataflow_id)
@@ -305,42 +309,6 @@ $ kafka-ingest format=avro topic=top1 schema=${schema} timestamp=5
 "Dataflow: group_by_order_by_in_top_1" "ArrangeBy[[Column(0)]]"
 "Dataflow: group_by_order_by_in_top_1" "ArrangeBy[[Column(0)]]"
 "Dataflow: group_by_order_by_in_top_1" "ArrangeBy[[Column(0)]]"
-"Dataflow: group_by_order_by_in_top_1" "Arranged DistinctBy"
-"Dataflow: group_by_order_by_in_top_1" "Arranged MonotonicTop1 partial [val: empty]"
-"Dataflow: group_by_order_by_in_top_1" DistinctBy
-"Dataflow: group_by_order_by_in_top_1" DistinctByErrorCheck
-"Dataflow: group_by_order_by_in_top_1" MonotonicTop1
-"Dataflow: limit_only" "Arranged MonotonicTop1 partial [val: empty]"
-"Dataflow: limit_only" MonotonicTop1
-"Dataflow: order_by_desc_limit" "Arranged MonotonicTop1 partial [val: empty]"
-"Dataflow: order_by_desc_limit" MonotonicTop1
-"Dataflow: order_by_limit" "Arranged MonotonicTop1 partial [val: empty]"
-"Dataflow: order_by_limit" MonotonicTop1
-
->[version<13800] SELECT mdod.dataflow_name, mdod.name
-  FROM mz_introspection.mz_arrangement_sharing mash
-  JOIN mz_introspection.mz_dataflow_operator_dataflows mdod ON mash.operator_id = mdod.id
-  JOIN mz_introspection.mz_compute_exports USING (dataflow_id)
-  WHERE export_id LIKE 'u%'
-"Dataflow: group_by_in_top_1" ArrangeBy[[Column(0)]]
-"Dataflow: group_by_in_top_1" ArrangeBy[[Column(0)]]
-"Dataflow: group_by_in_top_1" ArrangeBy[[Column(0)]]
-"Dataflow: group_by_in_top_1" "Arranged DistinctBy"
-"Dataflow: group_by_in_top_1" "Arranged DistinctBy"
-"Dataflow: group_by_in_top_1" "Arranged MonotonicTop1 partial [val: empty]"
-"Dataflow: group_by_in_top_1" DistinctBy
-"Dataflow: group_by_in_top_1" DistinctBy
-"Dataflow: group_by_in_top_1" DistinctByErrorCheck
-"Dataflow: group_by_in_top_1" DistinctByErrorCheck
-"Dataflow: group_by_in_top_1" MonotonicTop1
-"Dataflow: group_by_limit" "Arranged DistinctBy"
-"Dataflow: group_by_limit" "Arranged MonotonicTop1 partial [val: empty]"
-"Dataflow: group_by_limit" DistinctBy
-"Dataflow: group_by_limit" DistinctByErrorCheck
-"Dataflow: group_by_limit" MonotonicTop1
-"Dataflow: group_by_order_by_in_top_1" ArrangeBy[[Column(0)]]
-"Dataflow: group_by_order_by_in_top_1" ArrangeBy[[Column(0)]]
-"Dataflow: group_by_order_by_in_top_1" ArrangeBy[[Column(0)]]
 "Dataflow: group_by_order_by_in_top_1" "Arranged DistinctBy"
 "Dataflow: group_by_order_by_in_top_1" "Arranged MonotonicTop1 partial [val: empty]"
 "Dataflow: group_by_order_by_in_top_1" DistinctBy
