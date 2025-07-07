@@ -14,10 +14,11 @@ menu:
 
 You can monitor the performance and overall health of your Materialize region.
 To help you get started, the following guides are available:
+- [Prometheus Community Helm Chart](/manage/monitor/prometheus-community/)
 
-- [Datadog](/manage/monitor/datadog/)
+- [Datadog using Prometheus SQL Exporter](/manage/monitor/datadog/)
 
-- [Grafana](/manage/monitor/grafana/)
+- [Grafana using Prometheus SQL Exporter](/manage/monitor/grafana/)
 
 ### Alerting
 
