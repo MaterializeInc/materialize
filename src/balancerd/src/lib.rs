@@ -649,7 +649,7 @@ impl PgwireBalancer {
             return conn.send(err).await;
         }
 
-        let resolved = match resolver.resolve(conn, user).await {
+        let resolved = match resolver.resolve(conn, user, metrics).await {
             Ok(v) => v,
             Err(err) => {
                 return conn
@@ -660,14 +660,6 @@ impl PgwireBalancer {
                     .await;
             }
         };
-
-        // Count the # of pgwire connections that have SNI available / unavailable
-        // per tenant. In the future we may want to remove non-SNI connections.
-        if let Conn::Ssl(ssl_stream) = conn.inner() {
-            let tenant = resolved.tenant.as_deref().unwrap_or("unknown");
-            let has_sni = ssl_stream.ssl().servername(NameType::HOST_NAME).is_some();
-            metrics.tenant_pgwire_sni_count(tenant, has_sni).inc();
-        }
 
         let _active_guard = resolved
             .tenant
@@ -1082,7 +1074,7 @@ impl HttpsBalancer {
         // supported.
 
         // Attempt to get a tenant.
-        let tenant = Self::tenant(resolver, &addr).await;
+        let tenant = resolver.tenant(&addr).await;
 
         // Now do the regular ip lookup, regardless of if there was a CNAME.
         let envd_addr = lookup(&format!("{addr}:{port}")).await?;
@@ -1093,15 +1085,21 @@ impl HttpsBalancer {
             tenant,
         })
     }
+}
 
+trait StubResolverExt {
+    async fn tenant(&self, addr: &str) -> Option<String>;
+}
+
+impl StubResolverExt for StubResolver {
     /// Finds the tenant of a DNS address. Errors or lack of cname resolution here are ok, because
     /// this is only used for metrics.
-    async fn tenant(resolver: &StubResolver, addr: &str) -> Option<String> {
+    async fn tenant(&self, addr: &str) -> Option<String> {
         let Ok(dname) = Dname::<Vec<_>>::from_str(addr) else {
             return None;
         };
         // Lookup the CNAME. If there's a CNAME, find the tenant.
-        let lookup = resolver.query((dname, Rtype::Cname)).await;
+        let lookup = self.query((dname, Rtype::Cname)).await;
         if let Ok(lookup) = lookup {
             if let Ok(answer) = lookup.answer() {
                 let res = answer.limit_to::<AllRecordData<_, _>>();
@@ -1115,36 +1113,36 @@ impl HttpsBalancer {
                     let cname = record.data();
                     let cname = cname.to_string();
                     debug!("cname: {cname}");
-                    return Self::extract_tenant_from_cname(&cname);
+                    return extract_tenant_from_cname(&cname);
                 }
             }
         }
         None
     }
+}
 
-    /// Extracts the tenant from a CNAME.
-    fn extract_tenant_from_cname(cname: &str) -> Option<String> {
-        let mut parts = cname.split('.');
-        let _service = parts.next();
-        let Some(namespace) = parts.next() else {
-            return None;
-        };
-        // Trim off the starting `environmentd-`.
-        let Some((_, namespace)) = namespace.split_once('-') else {
-            return None;
-        };
-        // Trim off the ending `-0` (or some other number).
-        let Some((tenant, _)) = namespace.rsplit_once('-') else {
-            return None;
-        };
-        // Convert to a Uuid so that this tenant matches the frontegg resolver exactly, because it
-        // also uses Uuid::to_string.
-        let Ok(tenant) = Uuid::parse_str(tenant) else {
-            error!("cname tenant not a uuid: {tenant}");
-            return None;
-        };
-        Some(tenant.to_string())
-    }
+/// Extracts the tenant from a CNAME.
+fn extract_tenant_from_cname(cname: &str) -> Option<String> {
+    let mut parts = cname.split('.');
+    let _service = parts.next();
+    let Some(namespace) = parts.next() else {
+        return None;
+    };
+    // Trim off the starting `environmentd-`.
+    let Some((_, namespace)) = namespace.split_once('-') else {
+        return None;
+    };
+    // Trim off the ending `-0` (or some other number).
+    let Some((tenant, _)) = namespace.rsplit_once('-') else {
+        return None;
+    };
+    // Convert to a Uuid so that this tenant matches the frontegg resolver exactly, because it
+    // also uses Uuid::to_string.
+    let Ok(tenant) = Uuid::parse_str(tenant) else {
+        error!("cname tenant not a uuid: {tenant}");
+        return None;
+    };
+    Some(tenant.to_string())
 }
 
 impl mz_server_core::Server for HttpsBalancer {
@@ -1256,7 +1254,7 @@ impl<T: AsyncRead + AsyncWrite + Unpin + Send> ClientStream for T {}
 #[derive(Debug)]
 pub enum Resolver {
     Static(String),
-    Frontegg(FronteggResolver),
+    Frontegg(FronteggResolver, StubResolver),
 }
 
 impl Resolver {
@@ -1264,40 +1262,73 @@ impl Resolver {
         &self,
         conn: &mut FramedConn<A>,
         user: &str,
+        metrics: &ServerMetrics,
     ) -> Result<ResolvedAddr, anyhow::Error>
     where
         A: AsyncRead + AsyncWrite + Unpin,
     {
         match self {
-            Resolver::Frontegg(FronteggResolver {
-                auth,
-                addr_template,
-            }) => {
-                conn.send(BackendMessage::AuthenticationCleartextPassword)
-                    .await?;
-                conn.flush().await?;
-                let password = match conn.recv().await? {
-                    Some(FrontendMessage::Password { password }) => password,
-                    _ => anyhow::bail!("expected Password message"),
+            Resolver::Frontegg(
+                FronteggResolver {
+                    auth,
+                    addr_template,
+                },
+                stub_resolver,
+            ) => {
+                let servername = match conn.inner() {
+                    Conn::Ssl(ssl_stream) => ssl_stream.ssl().servername(NameType::HOST_NAME),
+                    Conn::Unencrypted(_) => None,
                 };
+                let has_sni = servername.is_some();
+                let resolved_addr = match servername {
+                    Some(servername) => {
+                        let sni_addr = addr_template.replace("{}", servername);
+                        let tenant = stub_resolver.tenant(&sni_addr).await;
+                        let addr = lookup(&sni_addr).await?;
+                        ResolvedAddr {
+                            addr,
+                            password: None,
+                            tenant,
+                        }
+                    }
+                    None => {
+                        conn.send(BackendMessage::AuthenticationCleartextPassword)
+                            .await?;
+                        conn.flush().await?;
+                        let password = match conn.recv().await? {
+                            Some(FrontendMessage::Password { password }) => password,
+                            _ => anyhow::bail!("expected Password message"),
+                        };
 
-                let auth_response = auth.authenticate(user, &password).await;
-                let auth_session = match auth_response {
-                    Ok(auth_session) => auth_session,
-                    Err(e) => {
-                        warn!("pgwire connection failed authentication: {}", e);
-                        // TODO: fix error codes.
-                        anyhow::bail!("invalid password");
+                        let auth_response = auth.authenticate(user, &password).await;
+                        let auth_session = match auth_response {
+                            Ok(auth_session) => auth_session,
+                            Err(e) => {
+                                warn!("pgwire connection failed authentication: {}", e);
+                                // TODO: fix error codes.
+                                anyhow::bail!("invalid password");
+                            }
+                        };
+
+                        let addr =
+                            addr_template.replace("{}", &auth_session.tenant_id().to_string());
+                        let addr = lookup(&addr).await?;
+                        let tenant = Some(auth_session.tenant_id().to_string());
+                        ResolvedAddr {
+                            addr,
+                            password: Some(password),
+                            tenant,
+                        }
                     }
                 };
+                metrics
+                    .tenant_pgwire_sni_count(
+                        resolved_addr.tenant.as_deref().unwrap_or("unknown"),
+                        has_sni,
+                    )
+                    .inc();
 
-                let addr = addr_template.replace("{}", &auth_session.tenant_id().to_string());
-                let addr = lookup(&addr).await?;
-                Ok(ResolvedAddr {
-                    addr,
-                    password: Some(password),
-                    tenant: Some(auth_session.tenant_id().to_string()),
-                })
+                Ok(resolved_addr)
             }
             Resolver::Static(addr) => {
                 let addr = lookup(addr).await?;
@@ -1385,7 +1416,7 @@ mod tests {
             ),
         ];
         for (name, expect) in tests {
-            let cname = HttpsBalancer::extract_tenant_from_cname(name);
+            let cname = extract_tenant_from_cname(name);
             assert_eq!(
                 cname.as_deref(),
                 expect,
