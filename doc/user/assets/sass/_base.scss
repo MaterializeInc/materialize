@@ -68,7 +68,7 @@ $rem-scale: 0.585;
 }
 
 body.dark {
-    --bg: var(--black);
+    --bg: var(--black-mid);
     --bg-nav: var(--nav-dark);
     --bg-sub: var(--black-light);
     --card: var(--black-mid);
@@ -105,6 +105,7 @@ body.dark {
 
     --annotation: #e9f7fb;
     --annotation-border: #c0d3d8;
+    --annotation-bg: #242424;
     --annotation-after: #c0d3d8;
 
     // NOTE(benesch): please ensure these colors stay blueish. Public preview
@@ -154,6 +155,7 @@ body.light {
 
     --annotation-border: #c0d3d8;
     --annotation-after: #c0d3d8;
+    --annotation-bg: #e7ebf1;
 
     // NOTE(benesch): please ensure these colors stay blueish. Public preview
     // requires a mild amount of caution. Importantly, green is not the right

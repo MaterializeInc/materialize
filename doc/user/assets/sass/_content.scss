@@ -542,7 +542,8 @@ p+p {
     }
 
     .annotation {
-        border: 1px solid var(--annotation-border);
+        border: 4px solid var(--annotation-border);
+        background: var(--annotation-bg);
 
         a {
             &:hover,
