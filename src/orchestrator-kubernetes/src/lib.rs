@@ -379,7 +379,8 @@ impl NamespacedKubernetesOrchestrator {
             "environmentd.materialize.cloud/namespace={}",
             self.namespace
         );
-        watcher::Config::default().labels(&ns_selector)
+        // This watcher timeout must be shorter than the client read timeout.
+        watcher::Config::default().timeout(59).labels(&ns_selector)
     }
 
     /// Convert a higher-level label key to the actual one we
