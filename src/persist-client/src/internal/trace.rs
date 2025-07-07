@@ -282,7 +282,6 @@ impl<T: Timestamp + Lattice> Trace<T> {
         }
     }
     pub(crate) fn unflatten(value: FlatTrace<T>) -> Result<Self, String> {
-        let flat_trace_clone = value.clone();
         let FlatTrace {
             since,
             legacy_batches,
@@ -704,8 +703,14 @@ enum SpineLog<'a, T> {
     },
     Disabled,
 }
-/// A RunId uniquely identifies a run within a hollow batch.
-/// It is a pair of `SpineId` and an index within that batch.
+
+/// A RunLocation uniquely identifies a run within a hollow batch.
+/// It is a pair of `SpineId` and a RunId, where the `SpineId` identifies the
+/// hollow batch and the `RunId` identifies the run within that batch.
+/// The `RunId` can be `None` when referencing a hollow batch that was
+/// written with a version of persist that did not write run ids.
+/// We generally intepret a `RunLocation` without a `RunId` as
+/// referencing the entire hollow batch, which may contain multiple runs.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct RunLocation(pub SpineId, pub Option<RunId>);
 
@@ -1020,11 +1025,6 @@ impl<T: Timestamp + Lattice + Codec64> SpineBatch<T> {
         }
 
         if !found_start || !found_end {
-            warn!(
-                "Failed to find run IDs in original batch: start_id={start_id:?}, end_id={end_id:?}"
-            );
-            warn!("original batch: {original:#?}");
-            warn!("replacement batch: {replacement:#?}");
             return Err(ApplyMergeResult::NotAppliedNoMatch);
         }
 
@@ -1106,21 +1106,15 @@ impl<T: Timestamp + Lattice + Codec64> SpineBatch<T> {
             "run_splits must have one fewer element than run_meta"
         );
 
-        let desc = replacement.desc.clone();
-
-        warn!(
-            "recalculating len: original len={}, replaced runs len={} replacement len={}",
-            original.len, replaced_runs_num_updates, replacement.len,
-        );
         let len = original.len - replaced_runs_num_updates + replacement.len;
 
-        Ok(HollowBatch {
-            desc: desc.clone(),
-            len,
+        Ok(HollowBatch::new(
+            replacement.desc.clone(),
             parts,
+            len,
             run_meta,
             run_splits,
-        })
+        ))
     }
 
     fn maybe_replace_checked<D>(
