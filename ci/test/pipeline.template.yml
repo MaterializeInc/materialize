@@ -266,6 +266,7 @@ steps:
       - "**/*.rs"
       - "**/*.proto"
       - "**/testdata/**"
+    parallelism: 2
     depends_on: []
     env:
       AWS_DEFAULT_REGION: "us-east-1"
