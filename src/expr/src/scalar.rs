@@ -176,7 +176,10 @@ impl RustType<ProtoMirScalarExpr> for MirScalarExpr {
         use proto_mir_scalar_expr::Kind::*;
         ProtoMirScalarExpr {
             kind: Some(match self {
-                MirScalarExpr::Column(i, _) => Column(i.into_proto()),
+                MirScalarExpr::Column(index, name) => Column(ProtoColumn {
+                    index: index.into_proto(),
+                    name: name.0.as_ref().map(ToString::to_string),
+                }),
                 MirScalarExpr::Literal(lit, typ) => Literal(ProtoLiteral {
                     lit: Some(lit.into_proto()),
                     typ: Some(typ.into_proto()),
@@ -214,7 +217,13 @@ impl RustType<ProtoMirScalarExpr> for MirScalarExpr {
             .kind
             .ok_or_else(|| TryFromProtoError::missing_field("ProtoMirScalarExpr::kind"))?;
         Ok(match kind {
-            Column(i) => MirScalarExpr::column(usize::from_proto(i)?),
+            Column(ProtoColumn { index, name }) => {
+                let index = usize::from_proto(index)?;
+                match name {
+                    Some(name) => MirScalarExpr::named_column(index, name.into()),
+                    None => MirScalarExpr::column(index),
+                }
+            }
             Literal(ProtoLiteral { lit, typ }) => MirScalarExpr::Literal(
                 lit.into_rust_if_some("ProtoLiteral::lit")?,
                 typ.into_rust_if_some("ProtoLiteral::typ")?,
