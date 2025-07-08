@@ -182,7 +182,9 @@ impl StatementLogging {
         max_data_credit: Option<u64>,
     ) -> Option<usize> {
         let ts = (self.now)() / 1000;
-        let elapsed = ts - self.last_logged_ts_seconds;
+        // We use saturating_sub here because system time isn't monotonic, causing cases
+        // when last_logged_ts_seconds is greater than ts.
+        let elapsed = ts.saturating_sub(self.last_logged_ts_seconds);
         self.last_logged_ts_seconds = ts;
         self.tokens = self
             .tokens
