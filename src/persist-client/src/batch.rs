@@ -690,6 +690,10 @@ where
         let mut run_parts = vec![];
         let mut run_splits = vec![];
         let mut run_meta = vec![];
+        let total_updates = runs
+            .iter()
+            .map(|(_, _, update_counts)| update_counts.iter().sum::<usize>())
+            .sum();
         for (order, parts, update_counts) in runs {
             if parts.is_empty() {
                 continue;
@@ -717,7 +721,6 @@ where
             run_parts.extend(parts);
         }
         let desc = registered_desc;
-        let num_updates = run_meta.iter().filter_map(|m| m.len).sum();
 
         let batch = Batch::new(
             batch_delete_enabled,
@@ -725,7 +728,7 @@ where
             self.blob,
             shard_metrics,
             self.version,
-            HollowBatch::new(desc, run_parts, num_updates, run_meta, run_splits),
+            HollowBatch::new(desc, run_parts, total_updates, run_meta, run_splits),
         );
 
         Ok(batch)
