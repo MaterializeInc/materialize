@@ -127,10 +127,10 @@ pub fn run<T: TimestampManipulation>(
     // assign them an empty as-of at the end.
     ctx.prune_sealed_persist_sinks();
 
-    // During 0dt upgrades, it can happen that the leader environment drops collections, making the
-    // read-only environment observe inconsistent read frontiers (database-issues#8836). To avoid
-    // hard-constraint failures, we prune these dropped collections and all collections depending
-    // on them.
+    // During 0dt upgrades, it can happen that the leader environment drops storage collections,
+    // making the read-only environment observe inconsistent read frontiers (database-issues#8836).
+    // To avoid hard-constraint failures, we prune all collections depending on these dropped
+    // storage collections.
     if read_only_mode {
         ctx.prune_dropped_collections();
     }
@@ -322,15 +322,6 @@ struct Collection<'a, T> {
     bounds: Rc<RefCell<AsOfBounds<T>>>,
     /// Whether this collection is an index.
     is_index: bool,
-}
-
-impl<T> Collection<'_, T> {
-    /// Enumerate the IDs of all input collections.
-    fn inputs(&self) -> impl Iterator<Item = GlobalId> {
-        let storage = self.storage_inputs.iter().copied();
-        let compute = self.compute_inputs.iter().copied();
-        storage.chain(compute)
-    }
 }
 
 /// The as-of selection context.
@@ -756,22 +747,25 @@ impl<'a, T: TimestampManipulation> Context<'a, T> {
         });
     }
 
-    /// Removes storage collections with empty read frontiers, and collections depending on them.
+    /// Removes collections depending on storage collections with empty read frontiers.
     ///
     /// The dataflows of these collections will get an empty default as-of assigned at the end of
     /// the as-of selection process, ensuring that they won't get installed.
     ///
     /// This exists only to work around database-issues#8836.
     fn prune_dropped_collections(&mut self) {
-        // Remove dropped dropped storage collections.
+        // Remove collections with dropped storage inputs.
         let mut pruned = BTreeSet::new();
-        self.collections.retain(|id, _c| {
-            let empty = self
-                .storage_collections
-                .collection_frontiers(*id)
-                .is_ok_and(|f| f.read_capabilities.is_empty());
+        self.collections.retain(|id, c| {
+            let input_dropped = c.storage_inputs.iter().any(|id| {
+                let frontiers = self
+                    .storage_collections
+                    .collection_frontiers(*id)
+                    .expect("storage collection exists");
+                frontiers.read_capabilities.is_empty()
+            });
 
-            if empty {
+            if input_dropped {
                 pruned.insert(*id);
                 false
             } else {
@@ -779,14 +773,14 @@ impl<'a, T: TimestampManipulation> Context<'a, T> {
             }
         });
 
-        warn!(?pruned, "pruned storage collections with empty frontier");
+        warn!(?pruned, "pruned dependants of dropped storage collections");
 
-        // Removed (transitive) dependants of dropped storage collections.
+        // Remove (transitive) dependants of pruned collections.
         while !pruned.is_empty() {
             let pruned_inputs = std::mem::take(&mut pruned);
 
             self.collections.retain(|id, c| {
-                if c.inputs().any(|id| pruned_inputs.contains(&id)) {
+                if c.compute_inputs.iter().any(|id| pruned_inputs.contains(id)) {
                     pruned.insert(*id);
                     false
                 } else {
@@ -1177,6 +1171,7 @@ mod tests {
             dataflows: [ $( $export_id:literal <- $inputs:expr => $as_of:expr, )* ],
             current_time: $current_time:literal,
             $( read_policies: { $( $policy_id:literal: $policy:expr, )* }, )?
+            $( read_only: $read_only:expr, )?
         }) => {
             #[mz_ore::test]
             fn $name() {
@@ -1201,12 +1196,16 @@ mod tests {
                     $($( ($policy_id.parse().unwrap(), $policy), )*)?
                 ]);
 
+                #[allow(unused_variables)]
+                let read_only = false;
+                $( let read_only = $read_only; )?
+
                 super::run(
                     &mut dataflows,
                     &read_policies,
                     &storage_frontiers,
                     $current_time.into(),
-                    false,
+                    read_only,
                 );
 
                 let actual_as_ofs: Vec<_> = dataflows
@@ -1318,5 +1317,21 @@ mod tests {
             "u1" <- ["s1"] => SEALED,
         ],
         current_time: 100,
+    });
+
+    testcase!(read_only_dropped_storage_inputs, {
+        storage: {
+            "s1": (10, 20),
+            "s2": (SEALED, SEALED),
+            "u4": (10, 20),
+        },
+        dataflows: [
+            "u1" <- ["s1"] => 15,
+            "u2" <- ["s2"] => SEALED,
+            "u3" <- ["s1", "s2"] => SEALED,
+            "u4" <- ["u2"] => SEALED,
+        ],
+        current_time: 15,
+        read_only: true,
     });
 }
