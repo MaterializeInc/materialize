@@ -305,6 +305,8 @@ impl<T: Timestamp + TimestampManipulation + Lattice + Codec64 + Display + Sync>
 
                         let remap_since = read_handle.since().clone();
                         let remap_upper = write_handle.fetch_recent_upper().await.clone();
+                        // calculate the resume_upper to use for new subsources as
+                        // remap_upper.advance_by(remap_since) - 1
                         let snapshot_resume_upper: Antichain<_> = remap_upper
                             .into_iter()
                             .map(|mut t| {
@@ -329,10 +331,11 @@ impl<T: Timestamp + TimestampManipulation + Lattice + Codec64 + Display + Sync>
                                     }
                                 } else {
                                     // t cannot be stepped back, so it must be T::minimum().
-                                    // As this subsource has never been snapshot, choose remap_upper - 1
-                                    // in case there is a subsource holding back the read frontier,
-                                    // which would cause us to choose a very early as_of, resulting in a large
-                                    // history being loaded into the reclock operator.
+                                    // As this subsource has never been snapshot, choose an as_of based
+                                    // based on remap_upper in case there is a subsource holding back the read frontier.
+                                    // A held back read frontier would cause us to choose a very early as_of,
+                                    // resulting in a large history being loaded into the reclock operator.
+                                    //
                                     // The remap_upper may be `[]`, e.g. for load generators, in which case
                                     // there is no choice but to use the remap_since.
                                     if !snapshot_resume_upper.is_empty() {
