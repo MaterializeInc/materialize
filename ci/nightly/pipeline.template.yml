@@ -840,24 +840,6 @@ steps:
               composition: platform-checks
               args: [--scenario=DropCreateDefaultReplica, --execution-mode=parallel, "--seed=$BUILDKITE_JOB_ID"]
 
-      - id: checks-parallel-drop-create-default-replica-x86_64
-        label: "Checks parallel + DROP/CREATE replica (x86_64)"
-        depends_on: build-x86_64
-        timeout_in_minutes: 180
-        parallelism: 3
-        agents:
-          queue: hetzner-x86-64-8cpu-16gb
-        plugins:
-          - ./ci/plugins/mzcompose:
-              composition: platform-checks
-              args:
-                [
-                  --scenario=DropCreateDefaultReplica,
-                  --execution-mode=parallel,
-                  --features=sql_server,
-                  "--seed=$BUILDKITE_JOB_ID",
-                ]
-
       - id: checks-parallel-restart-clusterd-compute
         label: "Checks parallel + restart compute clusterd"
         depends_on: build-aarch64
