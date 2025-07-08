@@ -2048,6 +2048,10 @@ pub struct SqlServerConnectionDetails<C: ConnectionAccess = InlinedConnection> {
     pub tunnel: Tunnel<C>,
     /// Level of encryption to use for the connection.
     pub encryption: mz_sql_server_util::config::EncryptionLevel,
+    /// Certificate validation policy
+    pub certificate_validation_policy: mz_sql_server_util::config::CertificateValidationPolicy,
+    /// TLS CA Certifiecate in PEM format
+    pub tls_root_cert: Option<StringOrSecret>,
 }
 
 impl<C: ConnectionAccess> SqlServerConnectionDetails<C> {
@@ -2100,8 +2104,24 @@ impl SqlServerConnectionDetails<InlinedConnection> {
         inner_config.host(&self.host);
         inner_config.port(self.port);
         inner_config.database(self.database.clone());
-        // TODO(sql_server1): Figure out the right settings for encryption.
         inner_config.encryption(self.encryption.into());
+        match self.certificate_validation_policy {
+            mz_sql_server_util::config::CertificateValidationPolicy::TrustAll => {
+                inner_config.trust_cert()
+            }
+            mz_sql_server_util::config::CertificateValidationPolicy::VerifyCA => {
+                inner_config.trust_cert_ca_pem(
+                    self.tls_root_cert
+                        .as_ref()
+                        .unwrap()
+                        .get_string(in_task, secrets_reader)
+                        .await
+                        .context("ca certificate")?,
+                );
+            }
+            mz_sql_server_util::config::CertificateValidationPolicy::VerifySystem => (), // no-op
+        }
+
         inner_config.application_name("materialize");
 
         // Read our auth settings from
@@ -2117,12 +2137,6 @@ impl SqlServerConnectionDetails<InlinedConnection> {
         // TODO(sql_server3): Support other methods of authentication besides
         // username and password.
         inner_config.authentication(tiberius::AuthMethod::sql_server(user, password));
-
-        // TODO(sql_server2): Fork the tiberius library and add support for
-        // specifying a cert bundle from a binary blob.
-        //
-        // See: <https://github.com/prisma/tiberius/pull/290>
-        inner_config.trust_cert();
 
         // Prevent users from probing our internal network ports by trying to
         // connect to localhost, or another non-external IP.
@@ -2190,6 +2204,8 @@ impl<R: ConnectionResolver> IntoInlineConnection<SqlServerConnectionDetails, R>
             password,
             tunnel,
             encryption,
+            certificate_validation_policy,
+            tls_root_cert,
         } = self;
 
         SqlServerConnectionDetails {
@@ -2200,6 +2216,8 @@ impl<R: ConnectionResolver> IntoInlineConnection<SqlServerConnectionDetails, R>
             password,
             tunnel: tunnel.into_inline_connection(&r),
             encryption,
+            certificate_validation_policy,
+            tls_root_cert,
         }
     }
 }
@@ -2219,6 +2237,8 @@ impl<C: ConnectionAccess> AlterCompatible for SqlServerConnectionDetails<C> {
             user: _,
             password: _,
             encryption: _,
+            certificate_validation_policy: _,
+            tls_root_cert: _,
         } = self;
 
         let compatibility_checks = [(tunnel.alter_compatible(id, &other.tunnel).is_ok(), "tunnel")];
@@ -2248,6 +2268,8 @@ impl RustType<ProtoSqlServerConnectionDetails> for SqlServerConnectionDetails {
             password: Some(self.password.into_proto()),
             tunnel: Some(self.tunnel.into_proto()),
             encryption: self.encryption.into_proto().into(),
+            certificate_validation_policy: self.certificate_validation_policy.into_proto().into(),
+            tls_root_cert: self.tls_root_cert.into_proto(),
         }
     }
 
@@ -2266,6 +2288,11 @@ impl RustType<ProtoSqlServerConnectionDetails> for SqlServerConnectionDetails {
                 .tunnel
                 .into_rust_if_some("ProtoSqlServerConnectionDetails::tunnel")?,
             encryption: ProtoSqlServerEncryptionLevel::try_from(proto.encryption)?.into_rust()?,
+            certificate_validation_policy: ProtoSqlServerCertificateValidationPolicy::try_from(
+                proto.certificate_validation_policy,
+            )?
+            .into_rust()?,
+            tls_root_cert: proto.tls_root_cert.into_rust()?,
         })
     }
 }
@@ -2293,6 +2320,40 @@ impl RustType<ProtoSqlServerEncryptionLevel> for mz_sql_server_util::config::Enc
             }
             ProtoSqlServerEncryptionLevel::SqlServerRequired => {
                 mz_sql_server_util::config::EncryptionLevel::Required
+            }
+        })
+    }
+}
+
+impl RustType<ProtoSqlServerCertificateValidationPolicy>
+    for mz_sql_server_util::config::CertificateValidationPolicy
+{
+    fn into_proto(&self) -> ProtoSqlServerCertificateValidationPolicy {
+        match self {
+            mz_sql_server_util::config::CertificateValidationPolicy::TrustAll => {
+                ProtoSqlServerCertificateValidationPolicy::SqlServerTrustAll
+            }
+            mz_sql_server_util::config::CertificateValidationPolicy::VerifySystem => {
+                ProtoSqlServerCertificateValidationPolicy::SqlServerVerifySystem
+            }
+            mz_sql_server_util::config::CertificateValidationPolicy::VerifyCA => {
+                ProtoSqlServerCertificateValidationPolicy::SqlServerVerifyCa
+            }
+        }
+    }
+
+    fn from_proto(
+        proto: ProtoSqlServerCertificateValidationPolicy,
+    ) -> Result<Self, TryFromProtoError> {
+        Ok(match proto {
+            ProtoSqlServerCertificateValidationPolicy::SqlServerTrustAll => {
+                mz_sql_server_util::config::CertificateValidationPolicy::TrustAll
+            }
+            ProtoSqlServerCertificateValidationPolicy::SqlServerVerifySystem => {
+                mz_sql_server_util::config::CertificateValidationPolicy::VerifySystem
+            }
+            ProtoSqlServerCertificateValidationPolicy::SqlServerVerifyCa => {
+                mz_sql_server_util::config::CertificateValidationPolicy::VerifyCA
             }
         })
     }
