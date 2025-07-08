@@ -10,7 +10,7 @@
 # Stage 1: Build a minimum CI Builder image that we can use for the initial
 # steps like `mkpipeline` and `Build`, as well as any tests that are self
 # contained and use other Docker images.
-FROM ubuntu:noble-20250619 AS ci-builder-min
+FROM ubuntu:oracular-20250619 AS ci-builder-min
 
 WORKDIR /workdir
 
@@ -154,6 +154,7 @@ RUN apt-get update --fix-missing && TZ=UTC DEBIAN_FRONTEND=noninteractive apt-ge
     lld \
     llvm \
     make \
+    npm \
     openssh-client \
     pkg-config \
     postgresql-client \
