@@ -276,6 +276,7 @@ steps:
     plugins:
       - ./ci/plugins/mzcompose:
           composition: cargo-test
+          ci-builder: stable
     agents:
       queue: hetzner-x86-64-dedi-48cpu-192gb
 
@@ -768,6 +769,7 @@ steps:
     plugins:
       - ./ci/plugins/mzcompose:
           composition: mz-debug
+          ci-builder: stable
     agents:
       # Faster agent since it currently compiles mz-debug itself
       queue: hetzner-aarch64-8cpu-16gb

@@ -1036,6 +1036,7 @@ steps:
           - ./ci/plugins/mzcompose:
               composition: platform-checks
               args: [--scenario=ZeroDowntimeBumpedVersion, "--seed=$BUILDKITE_JOB_ID"]
+              ci-builder: stable
 
       - id: cloudtest-upgrade
         label: "Platform checks upgrade in Cloudtest/K8s"

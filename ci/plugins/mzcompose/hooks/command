@@ -13,8 +13,10 @@ set -euo pipefail
 
 . misc/shlib/shlib.bash
 
+builder=${BUILDKITE_PLUGIN_MZCOMPOSE_CI_BUILDER:-min}
+
 mzcompose() {
-    stdbuf --output=L --error=L bin/ci-builder run stable bin/mzcompose --find "$BUILDKITE_PLUGIN_MZCOMPOSE_COMPOSITION" "$@"
+    stdbuf --output=L --error=L bin/ci-builder run "$builder" bin/mzcompose --find "$BUILDKITE_PLUGIN_MZCOMPOSE_COMPOSITION" "$@"
 }
 
 faketty() {
@@ -30,10 +32,6 @@ if read_list BUILDKITE_PLUGIN_MZCOMPOSE_ARGS; then
 fi
 
 STEP_START_TIMESTAMP=$(date +"%Y-%m-%d %H:%M:%S")
-
-ci_collapsed_heading ":docker: Rebuilding non-mzbuild containers"
-# First time we are using ci-builder, allow retrying a few times in case dockerhub has network problems
-mzcompose --mz-quiet build || mzcompose --mz-quiet build || mzcompose --mz-quiet build
 
 # Clean up cores here so that just killed processes' core files are ignored
 cores="$HOME"/cores
