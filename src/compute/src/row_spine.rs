@@ -225,14 +225,17 @@ mod container {
     }
     impl<'a> IntoOwned<'a> for DatumSeq<'a> {
         type Owned = Row;
+        #[inline(always)]
         fn into_owned(self) -> Self::Owned {
             // SAFETY: `bytes` contains a valid row.
             unsafe { Row::from_bytes_unchecked(self.bytes) }
         }
+        #[inline]
         fn clone_onto(self, other: &mut Self::Owned) {
             let mut packer = other.packer();
             self.copy_into(&mut packer);
         }
+        #[inline(always)]
         fn borrow_as(other: &'a Self::Owned) -> Self {
             Self {
                 bytes: other.data(),
@@ -395,10 +398,12 @@ mod bytes_container {
             }
         }
 
+        #[inline(always)]
         fn reborrow<'b, 'a: 'b>(item: Self::ReadItem<'a>) -> Self::ReadItem<'b> {
             item
         }
 
+        #[inline]
         fn index(&self, mut index: usize) -> Self::ReadItem<'_> {
             for batch in self.batches.iter() {
                 if index < batch.len() {
@@ -416,6 +421,7 @@ mod bytes_container {
     }
 
     impl PushInto<&[u8]> for BytesContainer {
+        #[inline]
         fn push_into(&mut self, item: &[u8]) {
             self.length += 1;
             if let Some(batch) = self.batches.last_mut() {
