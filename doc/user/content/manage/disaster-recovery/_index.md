@@ -34,19 +34,28 @@ business' risk tolerance.
 
 ## Level 2:  Multi-replica clusters (High availability across AZs)
 
-Materialize supports multi-replica clusters, which enable compute objects to run
-across multiple availability zones (AZs):
+{{< note >}}
+The hybrid strategy is available if your deployment uses a [three-tier or a
+two-tier architecture](/manage/operational-guidelines/).
+{{</ note >}}
+
+Materialize supports multi-replica clusters, allowing for distribution across
+Availability Zones (AZs):
 
 {{< include-md file="shared-content/multi-replica-az.md" >}}
 
-Multi-replica clusters provides DR resilience against:
+Multi-replica **compute clusters** and multi-replica **serving clusters**
+(excluding sink clusters) with replicas distributed across AZs provide DR
+resilience against: machine-level failures; rack and building-level outages; and
+AZ level failures for those clusters:
 
-- Machine-level failures,
-- Rack and building-level outages, and
-- AZ level failures.
+- With multi-replica **compute clusters**, each replica performs the same work.
 
-That is, your clusters will continue to serve data uninterrupted in the case of
-a replica failure.
+- With multi-replica **serving clusters** (excluding sink clusters), each
+  replica processes the same queries.
+
+As such, your compute and serving clusters will continue to serve up-to-date
+data uninterrupted in the case of a replica failure.
 
 {{< annotation type="💡 Cost and work capacity" >}}
 
