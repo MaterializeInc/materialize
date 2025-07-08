@@ -49,7 +49,8 @@ RUN apt-get update --fix-missing && TZ=UTC DEBIAN_FRONTEND=noninteractive apt-ge
     python3.12-venv \
     zstd \
     && apt-get clean \
-    && rm -rf /var/lib/apt/lists/*
+    && rm -rf /var/lib/apt/lists/* \
+    && rm -rf /usr/share/doc/* /usr/share/man/* /usr/share/info/* /usr/share/locale/* /var/cache/* /var/log/*
 
 RUN curl -fsSL https://github.com/trufflesecurity/trufflehog/releases/download/v3.89.1/trufflehog_3.89.1_linux_$ARCH_GO.tar.gz > trufflehog.tar.gz \
     && if [ $ARCH_GO = amd64 ]; then echo 'c187e25dd1a68ba24a47cc15f334625cb5a7b77f4c75837398950accfc752d59 trufflehog.tar.gz' | sha256sum --check; fi \
@@ -109,10 +110,6 @@ RUN \
     && rust/install.sh --components=cargo \
     && rm -rf rust.asc rust.tar.gz rust
 
-# Make the image as small as possible.
-RUN rm -rf /usr/share/doc/* /usr/share/man/* /usr/share/info/* /usr/share/locale/* /var/cache/* /var/log/*
-RUN find /workdir /root -mindepth 1 -maxdepth 1 -exec rm -rf {} +
-
 # Remove Ubuntu user causing UID collisions.
 # https://bugs.launchpad.net/cloud-images/+bug/2005129
 RUN userdel -r ubuntu
@@ -169,7 +166,8 @@ RUN apt-get update --fix-missing && TZ=UTC DEBIAN_FRONTEND=noninteractive apt-ge
     xz-utils \
     yamllint \
     && apt-get clean \
-    && rm -rf /var/lib/apt/lists/*
+    && rm -rf /var/lib/apt/lists/* \
+    && rm -rf /usr/share/doc/* /usr/share/man/* /usr/share/info/* /usr/share/locale/* /var/cache/* /var/log/*
 
 # Install Node.js LTS, for our Python typechecker. This is up here because we don't
 # expect it to change often.
@@ -351,19 +349,11 @@ RUN curl -fsSL https://github.com/mikefarah/yq/releases/download/v4.45.1/yq_linu
 
 COPY ssh_known_hosts /etc/ssh/ssh_known_hosts
 
-ENV CXXSTDLIB=static=stdc++
 ENV LDFLAGS="-fuse-ld=lld -static-libstdc++"
 ENV RUSTFLAGS="-Clink-arg=-Wl,--compress-debug-sections=zlib -Clink-arg=-Wl,-O3 -Clink-arg=-fuse-ld=lld -Csymbol-mangling-version=v0 --cfg=tokio_unstable"
-ENV TARGET_AR=$AR
-ENV TARGET_CC=$CC
-ENV TARGET_CXX=$CXX
-ENV TARGET_CXXSTDLIB=static=stdc++
-ENV TARGET_RANLIB=$RANLIB
 ENV PATH=/opt/google-cloud-sdk/bin:$PATH
-ENV CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER=x86_64-unknown-linux-gnu-cc
-ENV CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER=aarch64-unknown-linux-gnu-cc
 ENV CARGO_TARGET_DIR=/mnt/build
-ENV CARGO_INCREMENTAL=0
+ENV CARGO_INCREMENTAL=1
 ENV HELM_PLUGINS=/usr/local/share/helm/plugins
 
 # Set up for a persistent volume to hold Cargo metadata, so that crate metadata
@@ -371,7 +361,3 @@ ENV HELM_PLUGINS=/usr/local/share/helm/plugins
 ENV CARGO_HOME=/cargo
 RUN mkdir /cargo && chmod 777 /cargo
 VOLUME /cargo
-
-# Make the image as small as possible.
-RUN rm -rf /usr/share/doc/* /usr/share/man/* /usr/share/info/* /usr/share/locale/* /var/cache/* /var/log/*
-RUN find /workdir /root -mindepth 1 -maxdepth 1 -exec rm -rf {} +

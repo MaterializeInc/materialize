@@ -19,7 +19,9 @@ RUN apt-get update && TZ=UTC DEBIAN_FRONTEND=noninteractive apt-get install -y -
     git \
     gnuplot \
     graphviz \
-    openjdk-11-jre
+    openjdk-11-jre \
+    && apt-get clean \
+    && rm -rf /var/lib/apt/lists/*
 
 RUN mkdir -p /usr/local/share/java \
     && curl -fsSL https://github.com/jepsen-io/maelstrom/releases/download/v0.2.1/maelstrom.tar.bz2 \

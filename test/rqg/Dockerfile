@@ -12,23 +12,23 @@
 MZFROM ubuntu-base
 
 # Git dependencies
-RUN apt-get update && apt-get install -y --no-install-recommends \
+RUN apt-get update && TZ=UTC DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
     build-essential \
     ca-certificates \
     git \
     libdbi-perl \
     libdbd-pg-perl \
     libparse-yapp-perl \
-    postgresql-client
+    postgresql-client \
+    && apt-get clean \
+    && rm -rf /var/lib/apt/lists/*
 
 RUN perl -MCPAN -e 'install DBIx::MyParsePP'
 
-# Rebuild if the RQG repo has changed
-ADD https://api.github.com/repos/MaterializeInc/RQG/git/refs/heads/main version.json
-
 RUN git clone --single-branch https://github.com/MaterializeInc/RQG.git \
     && cd RQG \
-    && git checkout 4fe4e6f09f9599ce9f8ffd3f75d593b20518cc50
+    && git checkout 4fe4e6f09f9599ce9f8ffd3f75d593b20518cc50 \
+    && rm -rf .git
 
 ENTRYPOINT ["/usr/bin/perl"]
 

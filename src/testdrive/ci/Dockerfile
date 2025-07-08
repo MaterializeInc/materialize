@@ -9,6 +9,8 @@
 
 MZFROM ubuntu-base
 
+RUN apt-get update && TZ=UTC DEBIAN_FRONTEND=noninteractive apt-get -y install --no-install-recommends postgresql-client && apt-get clean && rm -rf /var/lib/apt/lists/*
+
 COPY testdrive /usr/local/bin/
 
 # Install the Protobuf compiler from protobuf-src.
