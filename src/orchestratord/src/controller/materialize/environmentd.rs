@@ -1547,7 +1547,7 @@ fn create_environmentd_statefulset_object(
             rolling_update: None,
             type_: Some("OnDelete".to_owned()),
         }),
-        service_name: mz.environmentd_service_name(),
+        service_name: Some(mz.environmentd_service_name()),
         selector: LabelSelector {
             match_expressions: None,
             match_labels: Some(match_labels),

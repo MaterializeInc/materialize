@@ -1208,7 +1208,7 @@ impl NamespacedOrchestrator for NamespacedKubernetesOrchestrator {
                     match_labels: Some(match_labels),
                     ..Default::default()
                 },
-                service_name: name.clone(),
+                service_name: Some(name.clone()),
                 replicas: Some(scale.into()),
                 template: pod_template_spec,
                 pod_management_policy: Some("Parallel".to_string()),
