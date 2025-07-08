@@ -58,6 +58,12 @@ If you require resilience beyond a single region, consider the Level 3 strategy.
 
 ## Level 3: A duplicate Materialize environment (Inter-region resilience)
 
+{{< note >}}
+
+{{< include-md file="/shared-content/regional-dr-infrastructure-as-code.md" >}}
+
+{{</ note >}}
+
 For region-level fault tolerance, you can choose to have a second Materialize
 environment in another region. With this strategy:
 
@@ -85,8 +91,11 @@ variation](#hybrid-variation).
 ### Hybrid variation
 
 {{< note >}}
-The hybrid strategy is available if your deployment uses a
-[three-tier or a two-tier architecture](/manage/operational-guidelines/).
+
+- The hybrid strategy is available if your deployment uses a [three-tier or a
+two-tier architecture](/manage/operational-guidelines/).
+
+- {{< include-md file="/shared-content/regional-dr-infrastructure-as-code.md" >}}
 {{</ note >}}
 
 For a more cost-effective variation to the duplicate Materialize environment in
