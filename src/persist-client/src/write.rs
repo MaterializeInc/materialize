@@ -606,8 +606,7 @@ where
             let any_batch_rewrite = batches
                 .iter()
                 .any(|x| x.batch.parts.iter().any(|x| x.ts_rewrite().is_some()));
-            let (mut parts, mut num_updates, mut run_splits, mut run_metas) =
-                (vec![], 0, vec![], vec![]);
+            let mut combined_batch = HollowBatch::empty(desc.clone());
             let mut key_storage = None;
             let mut val_storage = None;
             for batch in batches.iter() {
@@ -618,7 +617,7 @@ where
                     validate_part_bounds_on_write,
                 )?;
                 for (run_meta, run) in batch.batch.runs() {
-                    let start_index = parts.len();
+                    let mut run_parts = Vec::with_capacity(run.len());
                     for part in run {
                         if let (
                             RunPart::Single(
@@ -669,23 +668,12 @@ where
                                     .expect("re-encoding just-decoded data");
                             }
                         } else {
-                            parts.push(part.clone())
+                            run_parts.push(part.clone())
                         }
                     }
-
-                    let end_index = parts.len();
-
-                    if start_index == end_index {
-                        continue;
-                    }
-
-                    // Mark the boundary if this is not the first run in the batch.
-                    if start_index != 0 {
-                        run_splits.push(start_index);
-                    }
-                    run_metas.push(run_meta.clone());
+                    combined_batch.push_run(run_meta.clone(), run_parts);
                 }
-                num_updates += batch.batch.len;
+                combined_batch.len += batch.batch.len;
             }
 
             let mut flushed_inline_batch = if let Some((_, builder)) = inline_batch_builder.take() {
@@ -709,18 +697,10 @@ where
 
             if let Some(batch) = &flushed_inline_batch {
                 for (run_meta, run) in batch.batch.runs() {
-                    assert!(run.len() > 0);
-                    let start_index = parts.len();
-                    if start_index != 0 {
-                        run_splits.push(start_index);
-                    }
-                    run_metas.push(run_meta.clone());
-                    parts.extend(run.iter().cloned())
+                    combined_batch.push_run(run_meta.clone(), run.iter().cloned());
                 }
+                combined_batch.len += batch.batch.len;
             }
-
-            let mut combined_batch =
-                HollowBatch::new(desc.clone(), parts, num_updates, run_metas, run_splits);
 
             // The batch may have been written by a writer without a registered schema.
             // Ensure we have a schema ID in the batch metadata before we append, to avoid type
