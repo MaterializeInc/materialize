@@ -39,7 +39,9 @@ from tempfile import TemporaryFile
 from threading import Lock
 from typing import IO, Any, cast
 
+import requests
 import yaml
+from requests.auth import HTTPBasicAuth
 
 from materialize import bazel as bazel_utils
 from materialize import cargo, git, rustc_flags, spawn, ui, xcompile
@@ -206,18 +208,60 @@ def docker_images() -> set[str]:
     )
 
 
+_docker_hub_token: str | None = None
+
+
+def _get_docker_hub_token(image: str) -> str:
+    global _docker_hub_token
+    if _docker_hub_token is None:
+        _docker_hub_token = requests.get(
+            "https://auth.docker.io/token",
+            params={
+                "service": "registry.docker.io",
+                "scope": f"repository:{image}:pull",
+            },
+        ).json()["token"]
+    assert _docker_hub_token
+    return _docker_hub_token
+
+
 def is_docker_image_pushed(name: str) -> bool:
     """Check whether the named image is pushed to Docker Hub.
 
     Note that this operation requires a rather slow network request.
     """
-    proc = subprocess.run(
-        ["docker", "manifest", "inspect", name],
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
-        env=dict(os.environ, DOCKER_CLI_EXPERIMENTAL="enabled"),
-    )
-    return proc.returncode == 0
+    if ":" not in name:
+        image, tag = name, "latest"
+    else:
+        image, tag = name.rsplit(":", 1)
+
+    dockerhub_username = os.getenv("DOCKERHUB_USERNAME")
+    dockerhub_token = os.getenv("DOCKERHUB_ACCESS_TOKEN")
+
+    try:
+        if dockerhub_username and dockerhub_token:
+            response = requests.head(
+                f"https://registry-1.docker.io/v2/{image}/manifests/{tag}",
+                headers={
+                    "Accept": "application/vnd.docker.distribution.manifest.v2+json",
+                },
+                auth=HTTPBasicAuth(dockerhub_username, dockerhub_token),
+            )
+        else:
+            token = _get_docker_hub_token(image)
+            response = requests.head(
+                f"https://registry-1.docker.io/v2/{image}/manifests/{tag}",
+                headers={
+                    "Accept": "application/vnd.docker.distribution.manifest.v2+json",
+                    "Authorization": f"Bearer {token}",
+                },
+            )
+
+        return response.status_code == 200
+
+    except Exception as e:
+        print(f"Error checking Docker image: {e}")
+        return False
 
 
 def chmod_x(path: Path) -> None:
