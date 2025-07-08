@@ -689,17 +689,9 @@ where
         let shard_metrics = Arc::clone(&self.parts.shard_metrics);
         let runs = self.parts.finish().await;
 
-        let mut run_parts = vec![];
-        let mut run_splits = vec![];
-        let mut run_meta = vec![];
+        let mut hollow_batch = HollowBatch::empty(registered_desc);
         for (order, parts) in runs {
-            if parts.is_empty() {
-                continue;
-            }
-            if run_parts.len() != 0 {
-                run_splits.push(run_parts.len());
-            }
-            run_meta.push(RunMeta {
+            let meta = RunMeta {
                 order: Some(order),
                 schema: self.write_schemas.id,
                 // Field has been deprecated but kept around to roundtrip state.
@@ -709,10 +701,10 @@ where
                 } else {
                     None
                 },
-            });
-            run_parts.extend(parts);
+            };
+            hollow_batch.push_run(meta, parts);
         }
-        let desc = registered_desc;
+        hollow_batch.len += self.num_updates;
 
         let batch = Batch::new(
             batch_delete_enabled,
@@ -720,7 +712,7 @@ where
             self.blob,
             shard_metrics,
             self.version,
-            HollowBatch::new(desc, run_parts, self.num_updates, run_meta, run_splits),
+            hollow_batch,
         );
 
         Ok(batch)
