@@ -21,9 +21,9 @@ pipeline.template.yml and the docstring on `trim_tests_pipeline` below.
 
 import argparse
 import copy
+import fnmatch
 import hashlib
 import os
-import subprocess
 import sys
 import threading
 import traceback
@@ -34,6 +34,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
+import requests
 import yaml
 
 from materialize import mzbuild, spawn, ui
@@ -105,10 +106,6 @@ so it is executed.""",
 
     # Make sure we have an up to date view of main.
     spawn.runv(["git", "fetch", "origin", "main"])
-
-    # Print out a summary of all changes.
-    os.environ["GIT_PAGER"] = ""
-    spawn.runv(["git", "diff", "--stat", "origin/main..."])
 
     with open(Path(__file__).parent / args.pipeline / "pipeline.template.yml") as f:
         raw = f.read()
@@ -954,18 +951,30 @@ def trim_builds(
                 )
 
 
+_github_changed_files: list[str] | None = None
+
+
 def have_paths_changed(globs: Iterable[str]) -> bool:
     """Reports whether the specified globs have diverged from origin/main."""
-    diff = subprocess.run(
-        ["git", "diff", "--no-patch", "--quiet", "origin/main...", "--", *globs]
-    )
-    if diff.returncode == 0:
-        return False
-    elif diff.returncode == 1:
-        return True
-    else:
-        diff.check_returncode()
-        raise RuntimeError("unreachable")
+    global _github_changed_files
+    if not _github_changed_files:
+        head = spawn.capture(["git", "rev-parse", "HEAD"]).strip()
+        headers = {"Accept": "application/vnd.github+json"}
+        if token := os.getenv("GITHUB_TOKEN"):
+            headers["Authorization"] = f"Bearer {token}"
+
+        resp = requests.get(
+            f"https://api.github.com/repos/materializeinc/materialize/compare/main...{head}",
+            headers=headers,
+        )
+        resp.raise_for_status()
+        _github_changed_files = [f["filename"] for f in resp.json().get("files", [])]
+
+    for pattern in globs:
+        for changed in _github_changed_files:
+            if fnmatch.fnmatch(changed, pattern):
+                return True
+    return False
 
 
 if __name__ == "__main__":
