@@ -12,6 +12,7 @@
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
+use anyhow::Context;
 use mz_compute_types::dyncfgs::{
     MEMORY_LIMITER_BURST_FACTOR, MEMORY_LIMITER_INTERVAL, MEMORY_LIMITER_USAGE_BIAS,
     MEMORY_LIMITER_USAGE_FACTOR,
@@ -171,7 +172,7 @@ impl LimiterTask {
         tokio::time::sleep(duration).await
     }
 
-    fn current_utilization() -> std::io::Result<ProcStatus> {
+    fn current_utilization() -> anyhow::Result<ProcStatus> {
         match ProcStatus::from_proc() {
             Ok(status) => Ok(status),
             #[cfg(target_os = "linux")]
@@ -189,7 +190,7 @@ impl LimiterTask {
 
     /// Perform a memory usage check, terminating the process if the configured limits are exceeded.
     fn check(&mut self) -> Result<(), anyhow::Error> {
-        debug!("checking limiter limits");
+        debug!("checking memory limits");
 
         let ProcStatus { vm_rss, vm_swap } = Self::current_utilization()?;
 
@@ -303,7 +304,7 @@ struct ProcStatus {
 }
 
 impl ProcStatus {
-    fn from_proc() -> std::io::Result<Self> {
+    fn from_proc() -> anyhow::Result<Self> {
         let contents = std::fs::read_to_string("/proc/self/status")?;
         let mut vm_rss = 0;
         let mut vm_swap = 0;
@@ -313,15 +314,17 @@ impl ProcStatus {
                 vm_rss = line
                     .split_whitespace()
                     .nth(1)
-                    .and_then(|s| s.parse().ok())
-                    .unwrap_or(0)
-                    * 1024;
+                    .ok_or_else(|| anyhow::anyhow!("failed to parse VmRSS"))?
+                    .parse::<usize>()
+                    .context("failed to parse VmRSS")?
+                    * 1024
             } else if line.starts_with("VmSwap:") {
                 vm_swap = line
                     .split_whitespace()
                     .nth(1)
-                    .and_then(|s| s.parse().ok())
-                    .unwrap_or(0)
+                    .ok_or_else(|| anyhow::anyhow!("failed to parse VmSwap"))?
+                    .parse::<usize>()
+                    .context("failed to parse VmSwap")?
                     * 1024;
             }
         }

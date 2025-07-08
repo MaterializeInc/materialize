@@ -1290,9 +1290,9 @@ impl NamespacedOrchestrator for NamespacedKubernetesOrchestrator {
                         // The interesting exit codes are:
                         //  * 135 (SIGBUS): occurs when lgalloc runs out of disk
                         //  * 137 (SIGKILL): occurs when the OOM killer terminates the container
-                        //  * 167: occurs when the lgalloc limiter terminates the process
-                        // We treat the all of these as OOM conditions since lgalloc uses disk only
-                        // for spilling memory.
+                        //  * 167: occurs when the lgalloc or memory limiter terminates the process
+                        // We treat the all of these as OOM conditions since swap and lgalloc use
+                        // disk only for spilling memory.
                         let exit_code = termination_state.map(|s| s.exit_code);
                         exit_code.is_some_and(|e| [135, 137, 167].contains(&e))
                     })

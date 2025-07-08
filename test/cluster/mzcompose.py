@@ -5745,3 +5745,119 @@ def workflow_test_lgalloc_limiter(c: Composition) -> None:
         c.testdrive("> SELECT count(*) FROM mv\n1000000")
 
         c.kill("clusterd1")
+
+
+def workflow_test_memory_limiter(c: Composition) -> None:
+    """
+    Test that the lgalloc disk usage limiter functions as expected.
+
+    We run a workload whose disk usage is roughly known and then assert that it
+    does, or does not, manage to hydrate with various limiter configurations.
+    """
+
+    c.down(destroy_volumes=True)
+
+    with c.override(
+        Materialized(
+            additional_system_parameter_defaults={
+                "enable_compute_correction_v2": "true",
+                "enable_lgalloc": "false",
+                "memory_limiter_interval": "100ms",
+                "unsafe_enable_unorchestrated_cluster_replicas": "true",
+            },
+        ),
+        Clusterd(
+            name="clusterd1",
+            # Announce an (unenforced) memory limit of 1GiB. Memory limits are
+            # derived from this memory limit.
+            options=["--announce-memory-limit=1073741824"],
+        ),
+        Testdrive(no_reset=True),
+    ):
+        c.up("materialized")
+        c.up("testdrive", persistent=True)
+
+        c.sql(
+            """
+            CREATE CLUSTER test REPLICAS (
+                r1 (
+                    STORAGECTL ADDRESSES ['clusterd1:2100'],
+                    STORAGE ADDRESSES ['clusterd1:2103'],
+                    COMPUTECTL ADDRESSES ['clusterd1:2101'],
+                    COMPUTE ADDRESSES ['clusterd1:2102'],
+                    WORKERS 1
+                )
+            )
+            """
+        )
+
+        def setup_workload():
+            """
+            For our workload we use a large MV, which we obtain by performing a cross
+            join. We make sure that the rows are large, so they spill to disk well.
+            """
+            c.sql(
+                """
+                DROP TABLE IF EXISTS t CASCADE;
+                CREATE TABLE t (i int, x text);
+                INSERT INTO t
+                    SELECT generate_series, repeat('a', 100) FROM generate_series(1, 1000);
+                CREATE MATERIALIZED VIEW mv IN CLUSTER test AS
+                    SELECT t1.i i1, t1.x x1, t2.i i2, t2.x x2 FROM t t1, t t2;
+                """
+            )
+
+        # Test 1: The MV should be able to hydrate with a disk limit of 1 GiB.
+        c.sql(
+            """
+            ALTER SYSTEM SET memory_limiter_usage_factor = 2;
+            ALTER SYSTEM SET memory_limiter_burst_factor = 0;
+            """,
+            port=6877,
+            user="mz_system",
+        )
+        setup_workload()
+        c.up("clusterd1")
+
+        c.testdrive("> SELECT count(*) FROM mv\n1000000")
+
+        c.kill("clusterd1")
+
+        # Test 2: The MV should be unable to hydrate with a disk limit of 10 MiB.
+        c.sql(
+            """
+            ALTER SYSTEM SET memory_limiter_usage_factor = 0.20;
+            ALTER SYSTEM SET memory_limiter_burst_factor = 0;
+            """,
+            port=6877,
+            user="mz_system",
+        )
+        setup_workload()
+        c.up("clusterd1", wait=False)
+
+        for _ in range(100):
+            time.sleep(1)
+            ps = c.invoke("ps", "clusterd1", "-a", capture=True, silent=True).stdout
+            if "Exited (167)" in ps:
+                break
+        else:
+            raise RuntimeError("replica did not exit with code 167")
+
+        # Test 3: The MV should be able to hydrate with a disk limit of 10 MiB
+        # and a burst budget of 10 GiB-seconds.
+        c.sql(
+            """
+            ALTER SYSTEM SET memory_limiter_usage_factor = 1;
+            ALTER SYSTEM SET memory_limiter_burst_factor = 1000;
+            """,
+            port=6877,
+            user="mz_system",
+        )
+        c.kill("clusterd1")
+
+        setup_workload()
+        c.up("clusterd1")
+
+        c.testdrive("> SELECT count(*) FROM mv\n1000000")
+
+        c.kill("clusterd1")

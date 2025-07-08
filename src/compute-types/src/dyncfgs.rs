@@ -104,7 +104,7 @@ pub const MEMORY_LIMITER_USAGE_BIAS: Config<f64> = Config::new(
     "Multiplicative bias to memory_limiter_usage_factor.",
 );
 
-/// Burst factor to disk limit.
+/// Burst factor to memory limit.
 pub const MEMORY_LIMITER_BURST_FACTOR: Config<f64> = Config::new(
     "memory_limiter_burst_factor",
     0.,
