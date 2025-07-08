@@ -120,3 +120,14 @@ impl From<EncryptionLevel> for tiberius::EncryptionLevel {
         }
     }
 }
+
+/// Policy that dictates validation of the SQL-SERVER certificate.
+#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash, Arbitrary, Serialize, Deserialize)]
+pub enum CertificateValidationPolicy {
+    /// Don't validate the server's certificate; trust all certificates.
+    TrustAll,
+    /// Validate server's certificate using system certificates.
+    VerifySystem,
+    /// Validate server's certifiacte using provided CA certificate.
+    VerifyCA,
+}

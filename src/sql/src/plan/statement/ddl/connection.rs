@@ -547,8 +547,39 @@ impl ConnectionOptionExtracted {
                     });
                 }
 
-                // TODO(sql_server2): Parse the encryption level from the create SQL.
-                let encryption = mz_sql_server_util::config::EncryptionLevel::Preferred;
+                let (encryption, certificate_validation_policy) = match self
+                    .ssl_mode
+                    .map(|mode| mode.to_uppercase())
+                    .as_ref()
+                    .map(|mode| mode.as_str())
+                {
+                    None | Some("DISABLED") => (
+                        mz_sql_server_util::config::EncryptionLevel::None,
+                        mz_sql_server_util::config::CertificateValidationPolicy::TrustAll,
+                    ),
+                    Some("REQUIRED") => (
+                        mz_sql_server_util::config::EncryptionLevel::Required,
+                        mz_sql_server_util::config::CertificateValidationPolicy::TrustAll,
+                    ),
+                    Some("VERIFY") => (
+                        mz_sql_server_util::config::EncryptionLevel::Required,
+                        mz_sql_server_util::config::CertificateValidationPolicy::VerifySystem,
+                    ),
+                    Some("VERIFY_CA") => {
+                        if self.ssl_certificate_authority.is_none() {
+                            sql_bail!(
+                                "invalid CONNECTION: SSL MODE 'verify_ca' requires SSL CERTIFICATE AUTHORITY"
+                            );
+                        }
+                        (
+                            mz_sql_server_util::config::EncryptionLevel::Required,
+                            mz_sql_server_util::config::CertificateValidationPolicy::VerifyCA,
+                        )
+                    }
+                    Some(mode) => {
+                        sql_bail!("invalid CONNECTION: unknown SSL MODE {}", mode.quoted())
+                    }
+                };
 
                 // 1433 is the default port for SQL Server instances running over TCP.
                 //
@@ -573,6 +604,8 @@ impl ConnectionOptionExtracted {
                         .map(|pass| pass.into())?,
                     tunnel,
                     encryption,
+                    certificate_validation_policy,
+                    tls_root_cert: self.ssl_certificate_authority,
                 })
             }
         };
