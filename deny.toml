@@ -270,8 +270,6 @@ ignore = [
     "RUSTSEC-2024-0388",
     # `instant` is unmaintained, and the author recommends using the maintained [`web-time`] crate instead.
     "RUSTSEC-2024-0384",
-    # The [backoff](https://crates.io/crates/backoff) crate is no longer actively maintained. For exponential backoffs/retrying, you can use the [backon](https://crates.io/crates/backon) crate.
-    "RUSTSEC-2025-0012",
     # The creator of the crate `paste` has stated in the [`README.md`](https://github.com/dtolnay/paste/blob/master/README.md) that this project is not longer maintained as well as archived the repository
     "RUSTSEC-2024-0436",
 ]
