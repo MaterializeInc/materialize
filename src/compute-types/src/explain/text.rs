@@ -504,7 +504,7 @@ impl Plan {
                 } else {
                     write!(f, "{}→Arrange", ctx.indent)?;
 
-                    if forms.arranged.len() > 0 {
+                    if !forms.arranged.is_empty() {
                         let mode = HumanizedExplain::new(ctx.config.redacted);
                         for (key, _, _) in &forms.arranged {
                             if !key.is_empty() {
@@ -515,8 +515,8 @@ impl Plan {
                                 write!(f, " (empty key)")?;
                             }
                         }
-                        writeln!(f, "{annotations}")?;
                     }
+                    writeln!(f, "{annotations}")?;
                 }
 
                 ctx.indented(|ctx| {
