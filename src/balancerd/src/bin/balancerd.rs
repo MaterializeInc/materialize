@@ -20,7 +20,8 @@ use std::time::Duration;
 use anyhow::Context;
 use jsonwebtoken::DecodingKey;
 use mz_balancerd::{
-    BUILD_INFO, BalancerConfig, BalancerService, CancellationResolver, FronteggResolver, Resolver,
+    BUILD_INFO, BackendResolverConfig, BalancerConfig, BalancerService, CancellationResolver,
+    FronteggResolverConfig,
 };
 use mz_frontegg_auth::{
     Authenticator, AuthenticatorConfig, DEFAULT_REFRESH_DROP_FACTOR,
@@ -80,8 +81,18 @@ pub struct ServiceArgs {
     /// HTTPS resolver address template. `{}` is replaced with the first subdomain of the HTTPS SNI
     /// host address to get a DNS address. The first IP that address resolves to is the proxy
     /// destinations.
-    #[clap(long, value_name = "HOST.{}.NAME:PORT")]
-    https_resolver_template: String,
+    #[clap(
+        long,
+        value_name = "HOST.{}.NAME",
+        visible_alias = "https-resolver-template"
+    )]
+    sni_resolver_template: Option<String>,
+    /// Backend port for PgWire connections
+    #[clap(long, default_value = "6875")]
+    pgwire_backend_port: u16,
+    /// Backend port for HTTPS connections
+    #[clap(long, default_value = "443")]
+    https_backend_port: u16,
     /// Cancellation resolver configmap directory. The org id part of the incoming connection id
     /// (the 12 bits after (and excluding) the first bit) converted to a 3-char UUID string is
     /// appended to this to make a file path. That file is read, and every newline-delimited line
@@ -195,53 +206,60 @@ fn main() {
 
 pub async fn run(args: ServiceArgs, tracing_handle: TracingHandle) -> Result<(), anyhow::Error> {
     let metrics_registry = MetricsRegistry::new();
-    let (resolver, cancellation_resolver) = match (
-        args.static_resolver_addr,
-        args.frontegg_resolver_template,
-    ) {
-        (None, Some(addr_template)) => {
-            let auth = Authenticator::new(
-                AuthenticatorConfig {
-                    admin_api_token_url: args.frontegg_api_token_url.expect("clap enforced"),
-                    decoding_key: match (args.frontegg_jwk, args.frontegg_jwk_file) {
-                        (None, Some(path)) => {
-                            let jwk = std::fs::read(&path).with_context(|| {
-                                format!("read {path:?} for --frontegg-jwk-file")
-                            })?;
-                            DecodingKey::from_rsa_pem(&jwk)?
-                        }
-                        (Some(jwk), None) => DecodingKey::from_rsa_pem(jwk.as_bytes())?,
-                        _ => anyhow::bail!(
-                            "exactly one of --frontegg-jwk or --frontegg-jwk-file must be present"
-                        ),
+
+    // Build the resolver configuration
+    let static_resolver_addr = args.static_resolver_addr.clone();
+    let resolver_config = BackendResolverConfig {
+        static_resolver: static_resolver_addr.clone(),
+        sni_resolver: args.sni_resolver_template.map(|template|
+            // to make sni_http_resolver compatible with https_resolver_template
+            // we must strip any potential ports
+            template.split(":").take(1).collect()),
+        frontegg_resolver: match args.frontegg_resolver_template {
+            Some(addr_template) => {
+                let auth = Authenticator::new(
+                    AuthenticatorConfig {
+                        admin_api_token_url: args.frontegg_api_token_url.expect("clap enforced"),
+                        decoding_key: match (args.frontegg_jwk, args.frontegg_jwk_file) {
+                            (None, Some(path)) => {
+                                let jwk = std::fs::read(&path).with_context(|| {
+                                    format!("read {path:?} for --frontegg-jwk-file")
+                                })?;
+                                DecodingKey::from_rsa_pem(&jwk)?
+                            }
+                            (Some(jwk), None) => DecodingKey::from_rsa_pem(jwk.as_bytes())?,
+                            _ => anyhow::bail!(
+                                "exactly one of --frontegg-jwk or --frontegg-jwk-file must be present"
+                            ),
+                        },
+                        tenant_id: None,
+                        now: mz_ore::now::SYSTEM_TIME.clone(),
+                        admin_role: args.frontegg_admin_role.expect("clap enforced"),
+                        refresh_drop_lru_size: DEFAULT_REFRESH_DROP_LRU_CACHE_SIZE,
+                        refresh_drop_factor: DEFAULT_REFRESH_DROP_FACTOR,
                     },
-                    tenant_id: None,
-                    now: mz_ore::now::SYSTEM_TIME.clone(),
-                    admin_role: args.frontegg_admin_role.expect("clap enforced"),
-                    refresh_drop_lru_size: DEFAULT_REFRESH_DROP_LRU_CACHE_SIZE,
-                    refresh_drop_factor: DEFAULT_REFRESH_DROP_FACTOR,
-                },
-                mz_frontegg_auth::Client::environmentd_default(),
-                &metrics_registry,
-            );
-            let cancellation_resolver_dir = args
-                .cancellation_resolver_dir
-                .expect("required unless static resolver present");
-            if !cancellation_resolver_dir.is_dir() {
-                anyhow::bail!("{cancellation_resolver_dir:?} is not a directory");
-            }
-            (
-                Resolver::Frontegg(FronteggResolver {
+                    mz_frontegg_auth::Client::environmentd_default(),
+                    &metrics_registry,
+                );
+                Some(FronteggResolverConfig {
                     auth,
                     addr_template,
-                }),
-                CancellationResolver::Directory(cancellation_resolver_dir),
-            )
-        }
+                })
+            }
+            None => None,
+        },
+        pgwire_backend_port: args.pgwire_backend_port,
+        https_backend_port: args.https_backend_port,
+    };
+
+    let cancellation_resolver = match (
+        static_resolver_addr.as_ref(),
+        args.cancellation_resolver_dir,
+    ) {
         (Some(addr), None) => {
             // As a typo-check, verify that the passed address resolves to at least one IP. This
             // result isn't recorded anywhere: we re-resolve on each request in case DNS changes.
-            // Here only to cause startup to crash if mis-typed.
+            // Here only to cause startup to crash if mistyped.
             let mut addrs = tokio::net::lookup_host(&addr)
                 .await
                 .unwrap_or_else(|_| panic!("could not resolve {addr}"));
@@ -250,23 +268,26 @@ pub async fn run(args: ServiceArgs, tracing_handle: TracingHandle) -> Result<(),
             };
             drop(addrs);
 
-            (
-                Resolver::Static(addr.clone()),
-                CancellationResolver::Static(addr),
-            )
+            CancellationResolver::Static(addr.clone())
+        }
+        (None, Some(dir)) => {
+            if !dir.is_dir() {
+                anyhow::bail!("{dir:?} is not a directory");
+            }
+            CancellationResolver::Directory(dir)
         }
         _ => anyhow::bail!(
-            "exactly one of --static-resolver-addr or --frontegg-resolver-template must be present"
+            "exactly one of --static-resolver-addr or --cancellation-resolver-dir must be present"
         ),
     };
+
     let config = BalancerConfig::new(
         &BUILD_INFO,
         args.internal_http_listen_addr,
         args.pgwire_listen_addr,
         args.https_listen_addr,
         cancellation_resolver,
-        resolver,
-        args.https_resolver_template,
+        resolver_config,
         args.tls.into_config()?,
         args.internal_tls,
         metrics_registry,
