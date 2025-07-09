@@ -1043,7 +1043,7 @@ where
             log_sources.insert(log, id);
         }
 
-        let history = ComputeCommandHistory::new(metrics.for_history());
+        let history = ComputeCommandHistory::new(Some(metrics.for_history()));
 
         let send_count = metrics.response_send_count.clone();
         let recv_count = metrics.response_recv_count.clone();
