@@ -23,7 +23,7 @@ to Materialize using the [SQL Server source](/sql/create-source/sql-server/).
 
 ## A. Configure SQL Server
 
-{{% sql-server-direct/ingesting-data/enable-data %}}
+{{% sql-server-direct/ingesting-data/enable-cdc %}}
 
 ## B. (Optional) Configure network security
 
