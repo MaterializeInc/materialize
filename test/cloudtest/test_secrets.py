@@ -14,7 +14,6 @@ import pytest
 from pg8000.exceptions import InterfaceError
 
 from materialize.cloudtest.app.materialize_application import MaterializeApplication
-from materialize.cloudtest.util.cluster import cluster_pod_name
 from materialize.cloudtest.util.wait import wait
 
 
@@ -43,7 +42,7 @@ def test_secrets(mz: MaterializeApplication) -> None:
     ][0]
     assert id is not None
 
-    secret = f"user-managed-{id}"
+    secret = mz.prefixed(f"user-managed-{id}")
 
     #    wait(condition="condition=Ready", resource=f"secret/{secret}")
 
@@ -76,7 +75,7 @@ def test_orphaned_secrets(mz: MaterializeApplication) -> None:
         0
     ][0]
     assert id is not None
-    secret = f"user-managed-{id}"
+    secret = mz.prefixed(f"user-managed-{id}")
 
     # The failpoint should cause this to fail.
     try:
@@ -151,7 +150,7 @@ def test_missing_secret(mz: MaterializeApplication) -> None:
         "SELECT id FROM mz_secrets WHERE name = 'to_be_deleted'"
     )[0][0]
     assert id is not None
-    secret = f"user-managed-{id}"
+    secret = mz.prefixed(f"user-managed-{id}")
 
     mz.kubectl("delete", "secret", secret)
     wait(condition="delete", resource=f"secret/{secret}")
@@ -178,7 +177,7 @@ def test_missing_secret(mz: MaterializeApplication) -> None:
     cluster_id, replica_id = mz.environmentd.sql_query(
         "SELECT cluster_id, id FROM mz_cluster_replicas WHERE name = 'to_be_killed'"
     )[0]
-    pod_name = cluster_pod_name(cluster_id, replica_id, 0)
+    pod_name = mz.cluster_pod_name(cluster_id, replica_id, 0)
 
     # wait for the cluster to be ready first before attempting to kill it
     wait(condition="condition=Ready", resource=f"{pod_name}")
@@ -213,15 +212,16 @@ def test_missing_secret(mz: MaterializeApplication) -> None:
 
     # Kill the environmentd and confirm the same
 
+    environmentd_pod = f"pod/{mz.prefixed('environmentd-0-0')}"
     mz.kubectl(
         "exec",
-        "pod/environmentd-0",
+        environmentd_pod,
         "--",
         "bash",
         "-c",
         "kill -9 `pidof environmentd`",
     )
-    wait(condition="condition=Ready", resource="pod/environmentd-0")
+    wait(condition="condition=Ready", resource=environmentd_pod)
 
     mz.testdrive.run(
         input=dedent(

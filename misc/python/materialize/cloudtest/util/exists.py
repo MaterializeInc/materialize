@@ -11,14 +11,14 @@
 import subprocess
 
 from materialize import ui
-from materialize.cloudtest import DEFAULT_K8S_CONTEXT_NAME
+from materialize.cloudtest import DEFAULT_K8S_CONTEXT_NAME, DEFAULT_K8S_NAMESPACE
 from materialize.ui import UIError
 
 
 def exists(
     resource: str,
     context: str = DEFAULT_K8S_CONTEXT_NAME,
-    namespace: str | None = None,
+    namespace: str | None = DEFAULT_K8S_NAMESPACE,
 ) -> None:
     _exists(resource, True, context, namespace)
 
@@ -26,7 +26,7 @@ def exists(
 def not_exists(
     resource: str,
     context: str = DEFAULT_K8S_CONTEXT_NAME,
-    namespace: str | None = None,
+    namespace: str | None = DEFAULT_K8S_NAMESPACE,
 ) -> None:
     _exists(resource, False, context, namespace)
 

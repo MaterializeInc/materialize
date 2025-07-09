@@ -16,5 +16,7 @@ cd "$(dirname "$0")/../.."
 . misc/shlib/shlib.bash
 . test/cloudtest/config.bash
 
-run kubectl --context="$K8S_CONTEXT" delete all --all
-run kubectl --context="$K8S_CONTEXT" delete pvc --all
+set +e
+run kubectl --context="$K8S_CONTEXT" --namespace materialize delete materialize cloudtest
+run kubectl --context="$K8S_CONTEXT" delete namespace materialize
+exit 0

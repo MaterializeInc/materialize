@@ -81,9 +81,11 @@ def test_upgrade(aws_region: str | None, log_filter: str | None, dev: bool) -> N
         label="cluster.environmentd.materialize.cloud/cluster-id=u1",
     )
 
+    LOGGER.info("Creating executor")
     executor = CloudtestExecutor(application=mz, version=last_released_version)
     # KafkaProtocols: No shared secrets directory
     # AlterConnection*: No second SSH host (other_ssh_bastion) set up
+    LOGGER.info("list of checks")
     checks = list(
         all_subclasses(Check)
         - {
@@ -98,5 +100,7 @@ def test_upgrade(aws_region: str | None, log_filter: str | None, dev: bool) -> N
         print(
             f"Checks in shard with index {buildkite.get_parallelism_index()}: {[c.__name__ for c in checks]}"
         )
+    LOGGER.info("Creating scenario")
     scenario = CloudtestUpgrade(checks=checks, executor=executor, features=Features([]))
+    LOGGER.info("Running scenario")
     scenario.run()

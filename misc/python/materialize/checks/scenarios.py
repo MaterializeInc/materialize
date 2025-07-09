@@ -7,6 +7,7 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
+import logging
 from dataclasses import dataclass
 from random import Random
 
@@ -42,6 +43,8 @@ from materialize.checks.mzcompose_actions import (
     SystemVarChange as SystemVarChangeAction,
 )
 from materialize.mz_version import MzVersion
+
+LOGGER = logging.getLogger(__name__)
 
 
 class Scenario:
@@ -83,12 +86,14 @@ class Scenario:
         return self._base_version
 
     def run(self) -> None:
+        LOGGER.info("collecting actions")
         actions = self.actions()
         # Configure implicitly for cloud scenarios
         if not isinstance(actions[0], StartMz):
             actions.insert(0, ConfigureMz(self))
 
         for index, action in enumerate(actions):
+            LOGGER.info(f"configuring action {action}")
             # Implicitly call configure to raise version-dependent limits
             if isinstance(action, StartMz) and not action.deploy_generation:
                 actions.insert(
@@ -98,6 +103,7 @@ class Scenario:
                 actions.insert(index + 1, ConfigureMz(self))
 
         for action in actions:
+            LOGGER.info(f"Running action: {action}")
             action.execute(self.executor)
             action.join(self.executor)
 

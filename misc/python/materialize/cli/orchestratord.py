@@ -14,6 +14,7 @@ import json
 import os
 import socket
 import subprocess
+import sys
 import threading
 from collections.abc import Callable, Sequence
 from time import sleep
@@ -24,15 +25,14 @@ from uuid import uuid4
 import yaml
 
 from materialize import MZ_ROOT, ui
+from materialize.cloudtest import DEFAULT_K8S_NAMESPACE
 
 DEV_IMAGE_TAG = "local-dev"
-DEFAULT_POSTGRES = (
-    "postgres://root@postgres.materialize.svc.cluster.local:5432/materialize"
-)
-DEFAULT_MINIO = "s3://minio:minio123@persist/persist?endpoint=http%3A%2F%2Fminio.materialize.svc.cluster.local%3A9000&region=minio"
+DEFAULT_POSTGRES = "postgres://postgres:postgres@postgres.default.svc.cluster.local:5432"
+DEFAULT_MINIO = "s3://minio:minio123@persist/persist?endpoint=http%3A%2F%2Fminio-service.default.svc.cluster.local%3A9000&region=minio"
 
 
-def main():
+def main(argv: list[str]):
     os.chdir(MZ_ROOT)
 
     parser = argparse.ArgumentParser(
@@ -47,24 +47,24 @@ def main():
 
     parser_run = subparsers.add_parser("run")
     parser_run.add_argument("--dev", action="store_true")
-    parser_run.add_argument("--namespace", default="materialize")
+    parser_run.add_argument("--namespace", default=DEFAULT_K8S_NAMESPACE)
     parser_run.add_argument("--values")
     parser_run.set_defaults(func=run)
 
     parser_reset = subparsers.add_parser("reset")
-    parser_reset.add_argument("--namespace", default="materialize")
+    parser_reset.add_argument("--namespace", default="default")
     parser_reset.set_defaults(func=reset)
 
     parser_environment = subparsers.add_parser("environment")
     parser_environment.add_argument("--dev", action="store_true")
-    parser_environment.add_argument("--namespace", default="materialize")
+    parser_environment.add_argument("--namespace", default=DEFAULT_K8S_NAMESPACE)
     parser_environment.add_argument(
         "--environment-name",
         default="12345678-1234-1234-1234-123456789012",
     )
     parser_environment.add_argument("--postgres-url", default=DEFAULT_POSTGRES)
     parser_environment.add_argument("--s3-bucket", default=DEFAULT_MINIO)
-    parser_environment.add_argument("--license-key-file", required=True)
+    parser_environment.add_argument("--license-key-file", required=False)
     parser_environment.add_argument(
         "--external-login-password-mz-system", required=False
     )
@@ -77,14 +77,14 @@ def main():
     parser_environment.set_defaults(func=environment)
 
     parser_portforward = subparsers.add_parser("port-forward")
-    parser_portforward.add_argument("--namespace", default="materialize")
+    parser_portforward.add_argument("--namespace", default=DEFAULT_K8S_NAMESPACE)
     parser_portforward.add_argument(
         "--environment-name",
         default="12345678-1234-1234-1234-123456789012",
     )
     parser_portforward.set_defaults(func=portforward)
 
-    args = parser.parse_args()
+    args = parser.parse_args(argv)
     args.func(args)
 
 
@@ -192,6 +192,7 @@ def environment(args: argparse.Namespace):
     environment_id = str(uuid4())
 
     def root_psql(cmd: str):
+        print(f"Running root_psql command: {cmd}")
         env_kubectl(
             "run",
             "psql-setup",
@@ -209,16 +210,16 @@ def environment(args: argparse.Namespace):
         )
         env_kubectl("wait", "--for=delete", "pod/psql-setup")
 
-    pg_user = f"materialize_{environment_id}"
+    pg_user = f"materialize_{environment_id}".replace("-", "")
     pg_pass = "password"
-    pg_db = f"materialize_{environment_id}"
+    pg_db = pg_user
 
-    try:
-        root_psql(f"""create role "{pg_user}" with nologin""")
-        root_psql(f"""alter role "{pg_user}" with login password '{pg_pass}'""")
-        root_psql(f"""create database "{pg_db}" with owner "{pg_user}" """)
-    except subprocess.CalledProcessError:
-        pass
+    #try:
+    root_psql(f"""create role "{pg_user}" with nologin""")
+    root_psql(f"""alter role "{pg_user}" with login password '{pg_pass}'""")
+    root_psql(f"""create database "{pg_db}" with owner "{pg_user}" """)
+    #except subprocess.CalledProcessError:
+    #    pass
 
     postgres_url_parts = urlparse(args.postgres_url)
     metadata_backend_url = urlunparse(
@@ -234,9 +235,6 @@ def environment(args: argparse.Namespace):
         )
     )
 
-    with open(args.license_key_file) as f:
-        license_key = f.read()
-
     backend_secret_name = f"materialize-backend-{environment_id}"
 
     resources = [
@@ -249,7 +247,6 @@ def environment(args: argparse.Namespace):
             "stringData": {
                 "metadata_backend_url": metadata_backend_url,
                 "persist_backend_url": persist_backend_url,
-                "license_key": license_key,
             },
         },
         {
@@ -267,6 +264,10 @@ def environment(args: argparse.Namespace):
             },
         },
     ]
+    if args.license_key_file is not None:
+        with open(args.license_key_file) as f:
+            license_key = f.read()
+        resources[0]["stringData"]["license_key"] = license_key
 
     if args.external_login_password_mz_system is not None:
         resources[0]["stringData"][
@@ -457,4 +458,4 @@ def retry(
 
 if __name__ == "__main__":
     with ui.error_handler("orchestratord"):
-        main()
+        main(sys.argv[1:])

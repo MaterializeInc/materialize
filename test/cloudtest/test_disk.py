@@ -10,7 +10,6 @@
 from textwrap import dedent
 
 from materialize.cloudtest.app.materialize_application import MaterializeApplication
-from materialize.cloudtest.util.cluster import cluster_pod_name
 
 
 def test_disk_replica(mz: MaterializeApplication) -> None:
@@ -71,7 +70,7 @@ def test_disk_replica(mz: MaterializeApplication) -> None:
     # verify that the replica's scratch directory contains data files for source1
     on_disk_sources = mz.kubectl(
         "exec",
-        cluster_pod_name(cluster_id, replica_id),
+        mz.cluster_pod_name(cluster_id, replica_id),
         "-c",
         "clusterd",
         "--",
@@ -144,7 +143,7 @@ def test_always_use_disk_replica(mz: MaterializeApplication) -> None:
     # verify that the replica's scratch directory contains data files for source1
     on_disk_sources = mz.kubectl(
         "exec",
-        cluster_pod_name(cluster_id, replica_id),
+        mz.cluster_pod_name(cluster_id, replica_id),
         "-c",
         "clusterd",
         "--",
