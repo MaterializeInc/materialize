@@ -26,6 +26,7 @@ use mz_ore::cast::CastFrom;
 use mz_ore::soft_assert_or_log;
 use mz_repr::{Datum, DatumVec, Diff, Row, ScalarType, SharedRow};
 use mz_storage_types::errors::DataflowError;
+use mz_timely_util::containers::Vec2Col2ValBatcher;
 use mz_timely_util::operator::CollectionExt;
 use std::cell::RefCell;
 use std::collections::BTreeMap;
@@ -42,7 +43,8 @@ use crate::render::Pairer;
 use crate::render::context::{CollectionBundle, Context};
 use crate::render::errors::MaybeValidatingRow;
 use crate::row_spine::{
-    DatumSeq, RowBatcher, RowBuilder, RowRowBatcher, RowRowBuilder, RowValBuilder, RowValSpine,
+    DatumSeq, RowBatcher, RowBuilder, RowRowBuilder, RowRowBuilderColumn, RowValBuilder,
+    RowValSpine,
 };
 use crate::typedefs::{KeyBatcher, MzTimestamp, RowRowSpine, RowSpine};
 
@@ -546,9 +548,10 @@ where
     // such that `input.concat(&negated_output)` yields the correct TopK
     // NOTE(vmarcos): The arranged input operator name below is used in the tuning advice
     // built-in view mz_introspection.mz_expected_group_size_advice.
-    let arranged = input.mz_arrange::<RowRowBatcher<_, _>, RowRowBuilder<_, _>, RowRowSpine<_, _>>(
-        "Arranged TopK input",
-    );
+    let arranged = input
+        .mz_arrange::<Vec2Col2ValBatcher<_, _, _, _>, RowRowBuilderColumn<_, _>, RowRowSpine<_, _>>(
+            "Arranged TopK input",
+        );
 
     let reduced = arranged.mz_reduce_abelian::<_, _, _, Bu, Tr>("Reduced TopK input", {
         move |mut hash_key, source, target: &mut Vec<(V, Diff)>| {

@@ -14,6 +14,7 @@ use std::convert::TryInto;
 use std::rc::Rc;
 use std::time::Duration;
 
+use columnar::Columnar;
 use mz_compute_client::logging::LoggingConfig;
 use mz_ore::cast::CastFrom;
 use mz_repr::{Datum, Diff, Row, Timestamp};
@@ -26,7 +27,7 @@ use timely::dataflow::channels::pact::ExchangeCore;
 use crate::extensions::arrange::MzArrangeCore;
 use crate::logging::initialize::ReachabilityEvent;
 use crate::logging::{EventQueue, LogCollection, LogVariant, TimelyLog, consolidate_and_pack};
-use crate::row_spine::RowRowBuilder;
+use crate::row_spine::RowRowBuilderColumn;
 use crate::typedefs::RowRowSpine;
 
 /// The return type of [`construct`].
@@ -83,14 +84,14 @@ pub(super) fn construct<G: Scope<Timestamp = Timestamp>>(
             TimelyLog::Reachability,
             move |((datum, ()), time, diff), packer, session| {
                 let (update_type, operator_id, source, port, ts) = datum;
-                let update_type = if *update_type { "source" } else { "target" };
+                let update_type = if update_type { "source" } else { "target" };
                 let data = packer.pack_slice(&[
-                    Datum::UInt64(u64::cast_from(*operator_id)),
+                    Datum::UInt64(u64::cast_from(operator_id)),
                     Datum::UInt64(u64::cast_from(worker_id)),
-                    Datum::UInt64(u64::cast_from(*source)),
-                    Datum::UInt64(u64::cast_from(*port)),
+                    Datum::UInt64(u64::cast_from(source)),
+                    Datum::UInt64(u64::cast_from(port)),
                     Datum::String(update_type),
-                    Datum::from(*ts),
+                    Datum::from(Timestamp::into_owned(ts)),
                 ]);
                 session.give((data, time, diff));
             }
@@ -100,7 +101,7 @@ pub(super) fn construct<G: Scope<Timestamp = Timestamp>>(
         for variant in logs_active {
             if config.index_logs.contains_key(&variant) {
                 let trace = updates
-                    .mz_arrange_core::<_, Col2ValBatcher<_, _, _, _>, RowRowBuilder<_, _>, RowRowSpine<_, _>>(
+                    .mz_arrange_core::<_, Col2ValBatcher<_, _, _, _>, RowRowBuilderColumn<_, _>, RowRowSpine<_, _>>(
                         ExchangeCore::<ColumnBuilder<_>, _>::new_core(columnar_exchange::<Row, Row, Timestamp, Diff>),
                         &format!("Arrange {variant:?}"),
                     )
