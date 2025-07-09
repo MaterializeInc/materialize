@@ -1,5 +1,5 @@
 ---
-title: "Manage Naterialize resources with the Materialize provider"
+title: "Manage Materialize resources with the Materialize provider"
 description: ""
 menu:
   main:
