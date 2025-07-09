@@ -571,23 +571,24 @@ class DockerComposeCommand(Command):
             return
 
         composition = load_composition(args)
-        ui.section("Collecting mzbuild images")
-        for d in composition.dependencies:
-            ui.say(d.spec())
+        if not ui.env_is_truthy("CI"):
+            ui.section("Collecting mzbuild images")
+            for d in composition.dependencies:
+                ui.say(d.spec())
 
-        if self.runs_containers:
-            if args.coverage:
-                # If the user has requested coverage information, create the
-                # coverage directory as the current user, so Docker doesn't create
-                # it as root.
-                (composition.path / "coverage").mkdir(exist_ok=True)
-                # Need materialize user to be able to write to coverage
-                os.chmod(composition.path / "coverage", 0o777)
-            self.check_docker_resource_limits()
-            composition.dependencies.acquire()
+            if self.runs_containers:
+                if args.coverage:
+                    # If the user has requested coverage information, create the
+                    # coverage directory as the current user, so Docker doesn't create
+                    # it as root.
+                    (composition.path / "coverage").mkdir(exist_ok=True)
+                    # Need materialize user to be able to write to coverage
+                    os.chmod(composition.path / "coverage", 0o777)
+                self.check_docker_resource_limits()
+                composition.dependencies.acquire()
 
-            if "services" in composition.compose:
-                composition.pull_if_variable(composition.compose["services"].keys())
+                if "services" in composition.compose:
+                    composition.pull_if_variable(composition.compose["services"].keys())
 
         self.handle_composition(args, composition)
 

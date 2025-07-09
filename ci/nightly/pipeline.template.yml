@@ -27,7 +27,7 @@ steps:
         depends_on: []
         timeout_in_minutes: 60
         agents:
-          queue: builder-linux-x86_64
+          queue: l-builder-linux-x86_64
 
       - id: build-aarch64
         label: ":bazel: Build aarch64"
@@ -38,7 +38,35 @@ steps:
         depends_on: []
         timeout_in_minutes: 60
         agents:
-          queue: builder-linux-aarch64-mem
+          queue: l-builder-linux-aarch64
+
+      - id: build-x86_64-lto
+        label: ":bazel: Build x86_64 (LTO)"
+        command: bin/ci-builder run min bin/pyactivate -m ci.test.build
+        inputs:
+          - "*"
+        artifact_paths: bazel-explain.log
+        depends_on: []
+        timeout_in_minutes: 60
+        agents:
+          queue: l-builder-linux-x86_64
+        env:
+          CI_BAZEL_LTO: true
+        sanitizer: skip
+
+      - id: build-aarch64-lto
+        label: ":bazel: Build aarch64 (LTO)"
+        command: bin/ci-builder run min bin/pyactivate -m ci.test.build
+        inputs:
+          - "*"
+        artifact_paths: bazel-explain.log
+        depends_on: []
+        timeout_in_minutes: 60
+        agents:
+          queue: l-builder-linux-aarch64
+        env:
+          CI_BAZEL_LTO: true
+        sanitizer: skip
 
       - id: build-x86_64-asan
         label: ":bazel: Build x86_64 (ASan)"
@@ -49,10 +77,11 @@ steps:
         depends_on: []
         timeout_in_minutes: 60
         agents:
-          queue: builder-linux-x86_64
+          queue: l-builder-linux-x86_64
         env:
           CI_SANITIZER: address
         sanitizer: skip
+        branches: "main"
 
       - id: build-aarch64-asan
         label: ":bazel: Build aarch64 (ASan)"
@@ -63,10 +92,11 @@ steps:
         depends_on: []
         timeout_in_minutes: 60
         agents:
-          queue: builder-linux-aarch64-mem
+          queue: l-builder-linux-aarch64
         env:
           CI_SANITIZER: address
         sanitizer: skip
+        branches: "main"
 
   - group: Linters
     key: linters
@@ -118,11 +148,13 @@ steps:
     steps:
       - id: feature-benchmark
         label: "Feature benchmark against merge base or 'latest'"
-        depends_on: build-x86_64
+        depends_on: build-x86_64-lto
         timeout_in_minutes: 720
         parallelism: 8
         agents:
           queue: hetzner-x86-64-dedi-16cpu-64gb
+        env:
+          CI_BAZEL_LTO: true
         plugins:
           - ./ci/plugins/mzcompose:
               composition: feature-benchmark
@@ -132,11 +164,13 @@ steps:
                 - common-ancestor
       - id: scalability-benchmark-dml-dql
         label: "Scalability benchmark (read & write) against merge base or 'latest'"
-        depends_on: build-x86_64
+        depends_on: build-x86_64-lto
         timeout_in_minutes: 240
         agents:
           # Larger instance is more stable in performance
           queue: hetzner-x86-64-dedi-16cpu-64gb
+        env:
+          CI_BAZEL_LTO: true
         plugins:
           - ./ci/plugins/mzcompose:
               composition: scalability
@@ -153,11 +187,13 @@ steps:
                 - "256"
       - id: scalability-benchmark-ddl
         label: "Scalability benchmark (DDL) against merge base or 'latest'"
-        depends_on: build-x86_64
+        depends_on: build-x86_64-lto
         timeout_in_minutes: 1200
         agents:
           # Larger instance is more stable in performance
           queue: hetzner-x86-64-dedi-16cpu-64gb
+        env:
+          CI_BAZEL_LTO: true
         plugins:
           - ./ci/plugins/mzcompose:
               composition: scalability
@@ -178,11 +214,13 @@ steps:
                 - "64"
       - id: scalability-benchmark-connection
         label: "Scalability benchmark (connection) against merge base or 'latest'"
-        depends_on: build-x86_64
+        depends_on: build-x86_64-lto
         timeout_in_minutes: 180
         agents:
           # Larger instance is more stable in performance
           queue: hetzner-x86-64-dedi-16cpu-64gb
+        env:
+          CI_BAZEL_LTO: true
         plugins:
           - ./ci/plugins/mzcompose:
               composition: scalability
@@ -201,11 +239,13 @@ steps:
                 - "2048"
       - id: parallel-benchmark
         label: "Parallel Benchmark"
-        depends_on: build-x86_64
+        depends_on: build-x86_64-lto
         timeout_in_minutes: 120
         agents:
           # Larger instance is more stable in performance
           queue: hetzner-x86-64-dedi-16cpu-64gb
+        env:
+          CI_BAZEL_LTO: true
         plugins:
           - ./ci/plugins/mzcompose:
               composition: parallel-benchmark

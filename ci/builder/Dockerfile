@@ -88,6 +88,8 @@ RUN \
     && chmod +x /usr/local/lib/docker/cli-plugins/docker-compose \
     && curl -fsSL https://github.com/christian-korneck/docker-pushrm/releases/download/v1.9.0/docker-pushrm_linux_$ARCH_GO > /usr/local/lib/docker/cli-plugins/docker-pushrm \
     && chmod +x /usr/local/lib/docker/cli-plugins/docker-pushrm \
+    && curl -fsSL https://github.com/docker/buildx/releases/download/v0.25.0/buildx-v0.25.0.linux-$ARCH_GO > /usr/local/lib/docker/cli-plugins/docker-buildx \
+    && chmod +x /usr/local/lib/docker/cli-plugins/docker-buildx \
     # 4. Cargo
     #
     # Some parts of our stack use 'cargo' to read metadata, so we install just that. Importantly we

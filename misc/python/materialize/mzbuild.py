@@ -23,13 +23,11 @@ import json
 import multiprocessing
 import os
 import re
-import shlex
 import shutil
 import stat
 import subprocess
 import sys
 import tarfile
-import threading
 import time
 from collections import OrderedDict
 from collections.abc import Callable, Iterable, Iterator, Sequence
@@ -84,6 +82,7 @@ class RepositoryDetails:
         image_prefix: A prefix to apply to all Docker image names.
         bazel: Whether or not to use Bazel as the build system instead of Cargo.
         bazel_remote_cache: URL of a Bazel Remote Cache that we can build with.
+        bazel_lto: Force LTO build
     """
 
     def __init__(
@@ -97,6 +96,7 @@ class RepositoryDetails:
         image_prefix: str,
         bazel: bool,
         bazel_remote_cache: str | None,
+        bazel_lto: bool,
     ):
         self.root = root
         self.arch = arch
@@ -108,6 +108,7 @@ class RepositoryDetails:
         self.image_prefix = image_prefix
         self.bazel = bazel
         self.bazel_remote_cache = bazel_remote_cache
+        self.bazel_lto = bazel_lto
 
     def build(
         self,
@@ -157,7 +158,7 @@ class RepositoryDetails:
             # If we're a tagged build, then we'll use stamping to update our
             # build info, otherwise we'll use our side channel/best-effort
             # approach to update it.
-            if ui.env_is_truthy("BUILDKITE_TAG"):
+            if ui.env_is_truthy("BUILDKITE_TAG") or self.bazel_lto:
                 flags.append("--config=release-tagged")
             else:
                 flags.append("--config=release-dev")
@@ -676,6 +677,7 @@ class CargoBuild(CargoPreImage):
         super().run(prep)
         self.build(prep)
 
+    @cache
     def inputs(self) -> set[str]:
         deps = set()
 
@@ -687,6 +689,7 @@ class CargoBuild(CargoPreImage):
             deps |= self.rd.cargo_workspace.transitive_path_dependencies(
                 crate, dev=True
             )
+
         inputs = super().inputs() | set(inp for dep in deps for inp in dep.inputs())
         # Even though we are not always building with Bazel, consider its
         # inputs so that developers with CI_BAZEL_BUILD=0 can still
@@ -813,6 +816,7 @@ class ResolvedImage:
         """Whether the underlying image should be pushed to Docker Hub."""
         return self.image.publish
 
+    @cache
     def spec(self) -> str:
         """Return the "spec" for the image.
 
@@ -840,7 +844,7 @@ class ResolvedImage:
         f.seek(0)
         return f
 
-    def build(self, prep: dict[type[PreImage], Any]) -> None:
+    def build(self, prep: dict[type[PreImage], Any], push: bool = False) -> None:
         """Build the image from source.
 
         Requires that the caller has already acquired all dependencies and
@@ -860,6 +864,7 @@ class ResolvedImage:
         f = self.write_dockerfile()
         cmd: Sequence[str] = [
             "docker",
+            "buildx",
             "build",
             "-f",
             "-",
@@ -868,6 +873,7 @@ class ResolvedImage:
             self.spec(),
             f"--platform=linux/{self.image.rd.arch.go_str()}",
             str(self.image.path),
+            *(("--push",) if push else ()),
         ]
         spawn.runv(cmd, stdin=f, stdout=sys.stderr.buffer)
 
@@ -945,6 +951,7 @@ class ResolvedImage:
                 out |= dep.list_dependencies(transitive)
         return out
 
+    @cache
     def inputs(self, transitive: bool = False) -> set[str]:
         """List the files tracked as inputs to the image.
 
@@ -1101,58 +1108,21 @@ class DependencySet:
         deps_to_build = [dep for dep in self if not dep.is_published_if_necessary()]
         prep = self._prepare_batch(deps_to_build)
 
-        images_to_push = []
-        lock = threading.Lock()
-
         def build_dep(dep):
-            dep.build(prep)
+            for attempts_remaining in reversed(range(3)):
+                try:
+                    dep.build(prep, push=dep.publish)
+                except Exception:
+                    if not dep.publish or attempts_remaining == 0:
+                        raise
             if post_build:
                 post_build(dep)
-            if dep.publish:
-                spec = dep.spec()
-                with lock:
-                    images_to_push.append(spec)
 
         if deps_to_build:
             with ThreadPoolExecutor(max_workers=len(deps_to_build)) as executor:
                 futures = [executor.submit(build_dep, dep) for dep in deps_to_build]
                 for future in as_completed(futures):
                     future.result()
-
-        # Push all Docker images in parallel to minimize build time.
-        ui.section("Pushing images")
-        # Attempt to upload images a maximum of 3 times before giving up.
-        for attempts_remaining in reversed(range(3)):
-            pushes: list[subprocess.Popen] = []
-            for image in images_to_push:
-                # Piping through `cat` disables terminal control codes, and so the
-                # interleaved progress output from multiple pushes is less hectic.
-                # We don't use `docker push --quiet`, as that disables progress
-                # output entirely. Use `set -o pipefail` so the return code of
-                # `docker push` is passed through.
-                push = subprocess.Popen(
-                    [
-                        "/bin/bash",
-                        "-c",
-                        f"set -o pipefail; docker push {shlex.quote(image)} | cat",
-                    ]
-                )
-                pushes.append(push)
-
-            for i, push in reversed(list(enumerate(pushes))):
-                returncode = push.wait()
-                if returncode:
-                    if attempts_remaining == 0:
-                        # Last attempt, fail
-                        raise subprocess.CalledProcessError(returncode, push.args)
-                    else:
-                        print(f"docker push {push.args} failed: {returncode}")
-                else:
-                    del images_to_push[i]
-
-            if images_to_push:
-                time.sleep(10)
-                print("Retrying in 10 seconds")
 
     def check(self) -> bool:
         """Check all publishable images in this dependency set exist on Docker
@@ -1208,6 +1178,7 @@ class Repository:
         image_prefix: str = "",
         bazel: bool = False,
         bazel_remote_cache: str | None = None,
+        bazel_lto: bool = False,
     ):
         self.rd = RepositoryDetails(
             root,
@@ -1219,6 +1190,7 @@ class Repository:
             image_prefix,
             bazel,
             bazel_remote_cache,
+            bazel_lto,
         )
         self.images: dict[str, Image] = {}
         self.compositions: dict[str, Path] = {}
@@ -1328,6 +1300,11 @@ class Repository:
             default=os.getenv("CI_BAZEL_REMOTE_CACHE"),
             action="store",
         )
+        parser.add_argument(
+            "--bazel-lto",
+            default=os.getenv("CI_BAZEL_LTO"),
+            action="store",
+        )
 
     @classmethod
     def from_arguments(cls, root: Path, args: argparse.Namespace) -> "Repository":
@@ -1355,6 +1332,7 @@ class Repository:
             arch=args.arch,
             bazel=args.bazel,
             bazel_remote_cache=args.bazel_remote_cache,
+            bazel_lto=args.bazel_lto,
         )
 
     @property
