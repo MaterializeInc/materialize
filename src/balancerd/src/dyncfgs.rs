@@ -60,7 +60,7 @@ pub const PGWIRE_FRONTEGG_TENANT_RESOLUTION: Config<bool> = Config::new(
 /// TTL for DNS tenant resolution cache entries.
 pub const TENANT_CACHE_TTL: Config<Duration> = Config::new(
     "balancerd_tenant_cache_ttl",
-    Duration::from_secs(10), // 10 seconds - DOS prevention
+    Duration::from_secs(60), // 60 seconds - DOS prevention
     "TTL for DNS tenant resolution cache entries.",
 );
 

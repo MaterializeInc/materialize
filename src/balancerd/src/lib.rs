@@ -94,9 +94,8 @@ pub struct BalancerConfig {
     https_listen_addr: SocketAddr,
     /// DNS resolver for pgwire cancellation requests
     cancellation_resolver: CancellationResolver,
-    /// DNS resolver.
-    resolver: Resolver,
-    https_addr_template: String,
+    /// Resolver configuration for all protocols
+    backend_resolver_config: BackendResolverConfig,
     tls: Option<TlsCertConfig>,
     internal_tls: bool,
     metrics_registry: MetricsRegistry,
@@ -118,8 +117,7 @@ impl BalancerConfig {
         pgwire_listen_addr: SocketAddr,
         https_listen_addr: SocketAddr,
         cancellation_resolver: CancellationResolver,
-        resolver: Resolver,
-        https_addr_template: String,
+        backend_resolver_config: BackendResolverConfig,
         tls: Option<TlsCertConfig>,
         internal_tls: bool,
         metrics_registry: MetricsRegistry,
@@ -139,8 +137,7 @@ impl BalancerConfig {
             pgwire_listen_addr,
             https_listen_addr,
             cancellation_resolver,
-            resolver,
-            https_addr_template,
+            backend_resolver_config,
             tls,
             internal_tls,
             metrics_registry,
@@ -333,7 +330,7 @@ impl BalancerService {
                 tls: pgwire_tls,
                 internal_tls: self.cfg.internal_tls,
                 cancellation_resolver: Arc::new(self.cfg.cancellation_resolver),
-                resolver: Arc::new(self.cfg.resolver),
+                backend_resolver_config: Arc::new(self.cfg.backend_resolver_config.clone()),
                 dns_resolver: Arc::new(StubResolver::new()),
                 tenant_resolver: Arc::clone(&tenant_resolver),
                 metrics: ServerMetrics::new(metrics.clone(), "pgwire"),
@@ -359,16 +356,15 @@ impl BalancerService {
             });
         }
         {
-            let Some((addr, port)) = self.cfg.https_addr_template.split_once(':') else {
-                panic!("expected port in https_addr_template");
-            };
-            let port: u16 = port.parse().expect("unexpected port");
-            let resolver = StubResolver::new();
+            // The https resolver deosn't support frontegg backend resolvers.
+            // Currently it won't even try it, but for good measure we're
+            // going to remove the frontegg resolver.
+            let mut backend_resolver_config = self.cfg.backend_resolver_config.clone();
+            backend_resolver_config.frontegg_resolver = None;
             let https = HttpsBalancer {
-                resolver: Arc::from(resolver),
+                resolver: Arc::new(StubResolver::new()),
                 tls: https_tls,
-                resolve_template: Arc::from(addr),
-                port,
+                backend_resolver_config: Arc::new(backend_resolver_config),
                 tenant_resolver: Arc::clone(&tenant_resolver),
                 metrics: Arc::from(ServerMetrics::new(metrics, "https")),
                 configs: self.configs.clone(),
@@ -674,27 +670,27 @@ impl TenantResolver {
 
     /// Resolves tenant information from SNI hostname using DNS CNAME lookup with port.
     /// Used by HTTPS balancer which needs to append port to the lookup address.
-    async fn resolve_from_tenant_id(
+    async fn resolve_addr_from_tenant_public_id(
         &self,
         dns_resolver: &StubResolver,
         tenant_public_id: &str,
         resolve_template: &str,
         port: Option<u16>,
-    ) -> Result<ResolvedAddr, anyhow::Error> {
+    ) -> Result<ResolvedBackend, anyhow::Error> {
         let addr = resolve_template.replace("{}", tenant_public_id);
-        debug!("https address: {addr}");
+        debug!("sni templated address: {addr}");
 
         // Attempt to get tenant from DNS CNAME lookup (cached)
         let tenant = self.resolve_tenant_from_dns(dns_resolver, &addr).await;
 
-        // Do the regular IP lookup with port (cached)
+        // Do the IP lookup with port
         let addr_with_port = match port {
             Some(p) => format!("{addr}:{p}"),
             None => addr,
         };
         let envd_addr = self.lookup_addr(&addr_with_port).await?;
 
-        Ok(ResolvedAddr {
+        Ok(ResolvedBackend {
             addr: envd_addr,
             password: None,
             tenant,
@@ -709,6 +705,8 @@ impl TenantResolver {
             debug!("tenant cache hit for {addr}: {cached_tenant:?}");
             self.cache_metrics.tenant_cache_hits.inc();
             return cached_tenant;
+        } else {
+            debug!("tenant cache miss for {addr}");
         }
 
         self.cache_metrics.tenant_cache_misses.inc();
@@ -716,7 +714,7 @@ impl TenantResolver {
 
         // Cache the result if Some
         // for now we don't cache negative results
-        if TENANT_RESOLUTION_NEGATIVE_CACHING.get(&self.configs) && result.is_some() {
+        if TENANT_RESOLUTION_NEGATIVE_CACHING.get(&self.configs) || result.is_some() {
             self.tenant_cache
                 .insert(addr.to_string(), result.clone())
                 .await;
@@ -766,6 +764,8 @@ impl TenantResolver {
             debug!("addr cache hit for {name}: {cached_addr}");
             self.cache_metrics.addr_cache_hits.inc();
             return Ok(cached_addr);
+        } else {
+            debug!("addr cache miss for {name}");
         }
 
         self.cache_metrics.addr_cache_misses.inc();
@@ -814,45 +814,12 @@ struct PgwireBalancer {
     tls: Option<ReloadingTlsConfig>,
     internal_tls: bool,
     cancellation_resolver: Arc<CancellationResolver>,
-    resolver: Arc<Resolver>,
+    backend_resolver_config: Arc<BackendResolverConfig>,
     dns_resolver: Arc<StubResolver>,
     tenant_resolver: Arc<TenantResolver>,
     metrics: ServerMetrics,
     configs: ConfigSet,
     now: NowFn,
-}
-
-impl Resolver {
-    /// Attempts to resolve tenant information from SNI hostname using DNS CNAME lookup.
-    /// Returns None if SNI is not available, DNS lookup fails, or tenant cannot be determined.
-    async fn try_resolve_from_sni<A>(
-        conn: &FramedConn<A>,
-        resolve_template: &str,
-        dns_resolver: &StubResolver,
-        tenant_resolver: &TenantResolver,
-    ) -> Option<ResolvedAddr>
-    where
-        A: AsyncRead + AsyncWrite + AsyncReady + Send + Sync + Unpin,
-    {
-        // Extract SNI hostname if this is an SSL connection
-        let tenant_id = match conn.inner() {
-            Conn::Ssl(ssl_stream) => ssl_stream.ssl().servername(NameType::HOST_NAME).map(|sn| {
-                match sn.split_once('.') {
-                    Some((left, _right)) => left,
-                    None => sn,
-                }
-                .to_string()
-            }),
-            _ => None,
-        }?;
-
-        // Use shared tenant resolver
-        tenant_resolver
-            .resolve_from_tenant_id(dns_resolver, &tenant_id, resolve_template, None)
-            .await
-            .inspect_err(|e| warn!("Error resolving tenant: {}", e))
-            .ok()
-    }
 }
 
 impl PgwireBalancer {
@@ -861,12 +828,12 @@ impl PgwireBalancer {
         conn: &'a mut FramedConn<A>,
         version: i32,
         params: BTreeMap<String, String>,
-        resolver: &Resolver,
+        resolver_config: &BackendResolverConfig,
         tls_mode: Option<TlsMode>,
         internal_tls: bool,
         metrics: &ServerMetrics,
-        dns_resolver: Option<&Arc<StubResolver>>,
-        tenant_resolver: Option<&Arc<TenantResolver>>,
+        dns_resolver: &StubResolver,
+        tenant_resolver: &TenantResolver,
         configs: &ConfigSet,
     ) -> Result<(), io::Error>
     where
@@ -894,9 +861,16 @@ impl PgwireBalancer {
             return conn.send(err).await;
         }
 
-        let resolved = match resolver
-            .resolve(conn, user, dns_resolver, tenant_resolver, configs)
-            .await
+        // resolve the backend
+        let resolved = match Self::resolve(
+            conn,
+            user,
+            dns_resolver,
+            tenant_resolver,
+            configs,
+            resolver_config,
+        )
+        .await
         {
             Ok(v) => v,
             Err(err) => {
@@ -1023,6 +997,108 @@ impl PgwireBalancer {
 
         Ok(mz_stream)
     }
+
+    /// Attempts to find a ResolvedBackend.
+    /// Must take a mut FramedConn to perform authentication based
+    /// tenant resolution with frontegg.
+    async fn resolve<A>(
+        conn: &mut FramedConn<A>,
+        user: &str,
+        dns_resolver: &StubResolver,
+        tenant_resolver: &TenantResolver,
+        configs: &ConfigSet,
+        resolver_config: &BackendResolverConfig,
+    ) -> Result<ResolvedBackend, anyhow::Error>
+    where
+        A: AsyncRead + AsyncWrite + AsyncReady + Send + Sync + Unpin,
+    {
+        // Try Static resolution first
+        if let Some(static_addr) = &resolver_config.static_resolver {
+            let addr = lookup(static_addr).await?;
+            return Ok(ResolvedBackend {
+                addr,
+                password: None,
+                tenant: None,
+            });
+        }
+
+        // Try SNI-based resolution if enabled and available
+        if PGWIRE_SNI_TENANT_RESOLUTION.get(configs) {
+            if let Some(sni_resolver) = &resolver_config.sni_resolver {
+                // Extract SNI hostname if this is an SSL connection
+                let tenant_public_id = match conn.inner() {
+                    Conn::Ssl(ssl_stream) => {
+                        ssl_stream.ssl().servername(NameType::HOST_NAME).map(|sn| {
+                            match sn.split_once('.') {
+                                Some((left, _right)) => left,
+                                None => sn,
+                            }
+                            .to_string()
+                        })
+                    }
+                    _ => None,
+                };
+                match tenant_public_id {
+                    Some(tenant_public_id) => {
+                        // Use shared tenant resolver
+                        let resolved = tenant_resolver
+                            .resolve_addr_from_tenant_public_id(
+                                dns_resolver,
+                                &tenant_public_id,
+                                sni_resolver,
+                                Some(resolver_config.pgwire_backend_port),
+                            )
+                            .await
+                            .inspect_err(|e| warn!("Error resolving tenant: {}", e))?;
+                        debug!(
+                            "successfully resolved tenant from SNI: {:?}",
+                            resolved.tenant
+                        );
+                        return Ok(resolved);
+                    }
+                    None => debug!("Failed to find tenant id via SNI for"),
+                }
+            }
+        }
+
+        // Fall back to Frontegg authentication if enabled
+        if PGWIRE_FRONTEGG_TENANT_RESOLUTION.get(configs) {
+            if let Some(frontegg_resolver) = &resolver_config.frontegg_resolver {
+                conn.send(BackendMessage::AuthenticationCleartextPassword)
+                    .await?;
+                conn.flush().await?;
+                let password = match conn.recv().await? {
+                    Some(FrontendMessage::Password { password }) => password,
+                    _ => anyhow::bail!("expected Password message"),
+                };
+
+                let auth_response = frontegg_resolver.auth.authenticate(user, &password).await;
+                let auth_session = match auth_response {
+                    Ok(auth_session) => auth_session,
+                    Err(e) => {
+                        warn!("pgwire connection failed authentication: {}", e);
+                        // TODO: fix error codes.
+                        anyhow::bail!("invalid password");
+                    }
+                };
+                let addr = frontegg_resolver
+                    .addr_template
+                    .replace("{}", &auth_session.tenant_id().to_string());
+                let addr = lookup(&addr).await?;
+                return Ok(ResolvedBackend {
+                    addr,
+                    password: Some(password),
+                    tenant: Some(auth_session.tenant_id().to_string()),
+                });
+            } else {
+                anyhow::bail!(
+                    "Frontegg authentication is enabled but no Frontegg resolver configured"
+                );
+            }
+        }
+
+        anyhow::bail!("No resolution method available or all methods failed");
+    }
 }
 
 impl mz_server_core::Server for PgwireBalancer {
@@ -1031,7 +1107,7 @@ impl mz_server_core::Server for PgwireBalancer {
     fn handle_connection(&self, conn: Connection) -> mz_server_core::ConnectionHandler {
         let tls = self.tls.clone();
         let internal_tls = self.internal_tls;
-        let resolver = Arc::clone(&self.resolver);
+        let resolver_config = Arc::clone(&self.backend_resolver_config);
         let dns_resolver = Arc::clone(&self.dns_resolver);
         let tenant_resolver = Arc::clone(&self.tenant_resolver);
         let inner_metrics = self.metrics.clone();
@@ -1097,12 +1173,12 @@ impl mz_server_core::Server for PgwireBalancer {
                                 &mut conn,
                                 version,
                                 params,
-                                &resolver,
+                                &resolver_config,
                                 tls.map(|tls| tls.mode),
                                 internal_tls,
                                 &inner_metrics,
-                                Some(&dns_resolver),
-                                Some(&tenant_resolver),
+                                &dns_resolver,
+                                &tenant_resolver,
                                 &configs,
                             )
                             .await?;
@@ -1304,8 +1380,7 @@ async fn cancel_request(
 struct HttpsBalancer {
     resolver: Arc<StubResolver>,
     tls: Option<ReloadingSslContext>,
-    resolve_template: Arc<str>,
-    port: u16,
+    backend_resolver_config: Arc<BackendResolverConfig>,
     tenant_resolver: Arc<TenantResolver>,
     metrics: Arc<ServerMetrics>,
     configs: ConfigSet,
@@ -1314,31 +1389,47 @@ struct HttpsBalancer {
 
 impl HttpsBalancer {
     async fn resolve(
-        resolver: &StubResolver,
-        resolve_template: &str,
-        port: u16,
+        dns_resolver: &StubResolver,
+        resolver_config: &BackendResolverConfig,
         servername: Option<&str>,
         tenant_resolver: &TenantResolver,
-    ) -> Result<ResolvedAddr, anyhow::Error> {
-        match servername {
-            Some(servername) => {
-                // Use shared tenant resolver for SNI-based resolution if enabled
-                tenant_resolver
-                    .resolve_from_tenant_id(resolver, servername, resolve_template, Some(port))
-                    .await
-            }
-            _ => {
-                // No SNI or SNI disabled, construct address with template as-is
-                let addr = resolve_template.to_string();
-                debug!("https address (no SNI or SNI disabled): {addr}");
-                let envd_addr = lookup(&format!("{addr}:{port}")).await?;
-                Ok(ResolvedAddr {
-                    addr: envd_addr,
-                    password: None,
-                    tenant: None,
-                })
+        _configs: &ConfigSet,
+    ) -> Result<ResolvedBackend, anyhow::Error> {
+        // Try Static resolution first
+        if let Some(static_addr) = &resolver_config.static_resolver {
+            let addr = lookup(&format!(
+                "{}:{}",
+                static_addr, resolver_config.https_backend_port
+            ))
+            .await?;
+            return Ok(ResolvedBackend {
+                addr,
+                password: None,
+                tenant: None,
+            });
+        }
+
+        // Try SNI-based resolution if enabled and available
+        if let Some(sni_resolver) = &resolver_config.sni_resolver {
+            match servername {
+                Some(servername) => {
+                    // Use shared tenant resolver
+                    tenant_resolver
+                        .resolve_addr_from_tenant_public_id(
+                            dns_resolver,
+                            servername,
+                            sni_resolver,
+                            Some(resolver_config.https_backend_port),
+                        )
+                        .await
+                        .inspect_err(|e| warn!("Error resolving tenant: {}", e))
+                        .ok();
+                }
+                None => anyhow::bail!("Failed to resolve tenant"),
             }
         }
+
+        anyhow::bail!("No resolution method available for HTTPS");
     }
 }
 
@@ -1350,12 +1441,12 @@ impl mz_server_core::Server for HttpsBalancer {
         let tls_context = self.tls.clone();
         let internal_tls = self.internal_tls.clone();
         let resolver = Arc::clone(&self.resolver);
-        let resolve_template = Arc::clone(&self.resolve_template);
-        let port = self.port;
+        let resolver_config = Arc::clone(&self.backend_resolver_config);
         let tenant_resolver = Arc::clone(&self.tenant_resolver);
         let inner_metrics = Arc::clone(&self.metrics);
         let outer_metrics = Arc::clone(&self.metrics);
         let peer_addr = conn.peer_addr();
+        let configs = self.configs.clone();
         let inject_proxy_headers = INJECT_PROXY_PROTOCOL_HEADER_HTTP.get(&self.configs);
         Box::pin(async move {
             let active_guard = inner_metrics.active_connections();
@@ -1385,10 +1476,10 @@ impl mz_server_core::Server for HttpsBalancer {
                     };
                 let resolved = Self::resolve(
                     &resolver,
-                    &resolve_template,
-                    port,
+                    &resolver_config,
                     servername.as_deref(),
                     &tenant_resolver,
+                    &configs,
                 )
                 .await?;
                 let inner_active_guard = resolved
@@ -1454,95 +1545,26 @@ impl mz_server_core::Server for HttpsBalancer {
 trait ClientStream: AsyncRead + AsyncWrite + Unpin + Send {}
 impl<T: AsyncRead + AsyncWrite + Unpin + Send> ClientStream for T {}
 
-#[derive(Debug)]
-pub enum Resolver {
-    Static(String),
-    Frontegg(FronteggResolver),
+// ResolverConfig currently takes settings for all configured
+// resolvers which are resolved with slight variation for each
+// service in part because they use different connection types
+// resolution will happen in the order listed in this struct
+// if a resolver is some.
+// TODO an improvement on this would be to make Resolver
+// a trait and have the ResolverConfig take in an ordered list of resolvers.
+#[derive(Debug, Clone)]
+pub struct BackendResolverConfig {
+    pub static_resolver: Option<String>,
+    pub sni_resolver: Option<String>,
+    pub frontegg_resolver: Option<FronteggResolverConfig>,
+    pub pgwire_backend_port: u16,
+    pub https_backend_port: u16,
 }
 
-impl Resolver {
-    async fn resolve<A>(
-        &self,
-        conn: &mut FramedConn<A>,
-        user: &str,
-        dns_resolver: Option<&Arc<StubResolver>>,
-        tenant_resolver: Option<&Arc<TenantResolver>>,
-        configs: &ConfigSet,
-    ) -> Result<ResolvedAddr, anyhow::Error>
-    where
-        A: AsyncRead + AsyncWrite + AsyncReady + Send + Sync + Unpin,
-    {
-        match self {
-            Resolver::Frontegg(FronteggResolver {
-                auth,
-                addr_template,
-            }) => {
-                // Try SNI-based resolution first if enabled and we have access to the DNS resolver
-                if PGWIRE_SNI_TENANT_RESOLUTION.get(configs) {
-                    if let (Some(dns_resolver), Some(tenant_resolver)) =
-                        (dns_resolver, tenant_resolver)
-                    {
-                        if let Some(resolved) = Self::try_resolve_from_sni(
-                            conn,
-                            addr_template,
-                            dns_resolver,
-                            tenant_resolver,
-                        )
-                        .await
-                        {
-                            debug!(
-                                "successfully resolved tenant from SNI: {:?}",
-                                resolved.tenant
-                            );
-                            return Ok(resolved);
-                        }
-                        debug!(
-                            "SNI-based resolution failed, falling back to Frontegg authentication"
-                        );
-                    }
-                }
-
-                // Fall back to Frontegg authentication if enabled
-                if PGWIRE_FRONTEGG_TENANT_RESOLUTION.get(configs) {
-                    conn.send(BackendMessage::AuthenticationCleartextPassword)
-                        .await?;
-                    conn.flush().await?;
-                    let password = match conn.recv().await? {
-                        Some(FrontendMessage::Password { password }) => password,
-                        _ => anyhow::bail!("expected Password message"),
-                    };
-
-                    let auth_response = auth.authenticate(user, &password).await;
-                    let auth_session = match auth_response {
-                        Ok(auth_session) => auth_session,
-                        Err(e) => {
-                            warn!("pgwire connection failed authentication: {}", e);
-                            // TODO: fix error codes.
-                            anyhow::bail!("invalid password");
-                        }
-                    };
-
-                    let addr = addr_template.replace("{}", &auth_session.tenant_id().to_string());
-                    let addr = lookup(&addr).await?;
-                    Ok(ResolvedAddr {
-                        addr,
-                        password: Some(password),
-                        tenant: Some(auth_session.tenant_id().to_string()),
-                    })
-                } else {
-                    anyhow::bail!("Frontegg authentication is disabled");
-                }
-            }
-            Resolver::Static(addr) => {
-                let addr = lookup(addr).await?;
-                Ok(ResolvedAddr {
-                    addr,
-                    password: None,
-                    tenant: None,
-                })
-            }
-        }
-    }
+#[derive(Debug, Clone)]
+pub struct FronteggResolverConfig {
+    pub auth: FronteggAuthentication,
+    pub addr_template: String,
 }
 
 /// Returns the first IP address resolved from the provided hostname.
@@ -1558,13 +1580,7 @@ async fn lookup(name: &str) -> Result<SocketAddr, anyhow::Error> {
 }
 
 #[derive(Debug)]
-pub struct FronteggResolver {
-    pub auth: FronteggAuthentication,
-    pub addr_template: String,
-}
-
-#[derive(Debug)]
-struct ResolvedAddr {
+pub struct ResolvedBackend {
     addr: SocketAddr,
     password: Option<String>,
     tenant: Option<String>,
@@ -1626,53 +1642,5 @@ mod tests {
                 "{name} got {cname:?} expected {expect:?}"
             );
         }
-    }
-
-    #[tokio::test]
-    async fn test_tenant_resolver_caching() {
-        use mz_dyncfg::ConfigSet;
-
-        // Create a ConfigSet with test values
-        let mut configs = ConfigSet::default();
-        configs = crate::dyncfgs::all_dyncfgs(configs);
-
-        // Create a TenantResolver with short cache TTLs for testing
-        let metrics = ServerMetricsConfig::register_into(&MetricsRegistry::new());
-        let cache_metrics = CacheMetrics::new(&metrics);
-        let tenant_resolver = TenantResolver::new(configs.clone(), &cache_metrics);
-
-        // Test that the tenant resolver properly extracts tenant from CNAME
-        let test_cname =
-            "environmentd.environment-58cd23ff-a4d7-4bd0-ad85-a6ff29cc86c3-0.svc.cluster.local";
-        let expected_tenant = "58cd23ff-a4d7-4bd0-ad85-a6ff29cc86c3";
-
-        let result = TenantResolver::extract_tenant_from_cname(test_cname);
-        assert_eq!(result.as_deref(), Some(expected_tenant));
-
-        // Test that cache keys are properly formatted
-        let cache_key = "test-hostname";
-        let test_addr = "127.0.0.1:8080".parse().unwrap();
-
-        // Insert a test entry into the address cache
-        tenant_resolver
-            .addr_cache
-            .insert(cache_key.to_string(), test_addr)
-            .await;
-
-        // Verify we can retrieve it
-        let cached_addr = tenant_resolver.addr_cache.get(cache_key).await;
-        assert_eq!(cached_addr, Some(test_addr));
-
-        // Test tenant cache functionality
-        let tenant_cache_key = "test-tenant-hostname";
-        let test_tenant = Some("test-tenant".to_string());
-
-        tenant_resolver
-            .tenant_cache
-            .insert(tenant_cache_key.to_string(), test_tenant.clone())
-            .await;
-
-        let cached_tenant = tenant_resolver.tenant_cache.get(tenant_cache_key).await;
-        assert_eq!(cached_tenant, Some(test_tenant));
     }
 }
