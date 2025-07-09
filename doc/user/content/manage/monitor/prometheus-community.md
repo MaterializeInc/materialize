@@ -12,7 +12,7 @@ overall health of your Materialize instance using the [`prometheus-community/pro
 
 ## Before you begin
 
-Ensure you have: 
+Ensure you have:
 
 - A self-managed instance of Materialize installed with helm values `observability.enabled=true`, `observability.podMetrics.enabled=true`, and `prometheus.scrapeAnnotations.enabled=true`
 - [Helm](https://helm.sh/docs/intro/install/) version 3.2.0+ installed
@@ -47,7 +47,7 @@ This guide assumes you have administrative access to your Kubernetes cluster and
    kubectl create namespace prometheus
    ```
 4. Install the operator with the scrape configuration
-   ```bash   
+   ```bash
    helm repo add prometheus-community https://prometheus-community.github.io/helm-charts
    helm repo update
    helm install --namespace prometheus prometheus prometheus-community/prometheus \
@@ -68,4 +68,5 @@ The port forwarding method described below is for testing purposes only. For pro
    kubectl port-forward pod/$MZ_POD_PROMETHEUS 9090:9090 -n prometheus
    ```
 
-2. Access the Prometheus UI by navigating to `localhost:9090` in your web browser.
+2. Access the Prometheus UI by navigating to `localhost:9090` in your web
+   browser.
