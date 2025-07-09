@@ -18,10 +18,12 @@
 use std::collections::BTreeMap;
 use std::fmt::Formatter;
 
+use mz_expr::canonicalize::canonicalize_equivalence_classes;
 use mz_expr::explain::{HumanizedExplain, HumanizerMode};
 use mz_expr::{AggregateFunc, Id, MirRelationExpr, MirScalarExpr};
 use mz_ore::str::{bracketed, separated};
 use mz_repr::{ColumnType, Datum};
+use tracing::info;
 
 use crate::analysis::{Analysis, Lattice};
 use crate::analysis::{Arity, RelationType};
@@ -337,6 +339,111 @@ pub struct EquivalenceClasses {
     /// appending to `self.classes`. This will be corrected in the next call to `self.refresh()`,
     /// but until then `remap` could be arbitrarily wrong. This should be improved in the future.
     remap: BTreeMap<MirScalarExpr, MirScalarExpr>,
+}
+
+/// A wrapper struct for equivalence classes that can not contain any errors.
+#[derive(Clone, Eq, PartialEq, Ord, PartialOrd, Default, Debug)]
+pub struct EquivalenceClassesWithoutErrors {
+    /// The underlying equivalence classes.
+    pub equivalence_classes: EquivalenceClasses,
+    /// A map of errors that have been encountered related to their equivalence classes.
+    // pub errors: BTreeMap<MirScalarExpr, MirScalarExpr>,
+    pub held_back_classes: Vec<Vec<MirScalarExpr>>,
+}
+
+impl EquivalenceClassesWithoutErrors {
+    /// Create a new instance of `EquivalenceClassesWithoutErrors` with the given equivalence classes.
+    pub fn new(equivalence_classes: EquivalenceClasses) -> Self {
+        Self {
+            equivalence_classes,
+            held_back_classes: Vec::new(),
+        }
+    }
+
+    /// Push some new predicate that we expect to be true
+    pub fn push_predicate(&mut self, predicate: MirScalarExpr) {
+        if predicate.contains_err() {
+            self.held_back_classes
+                .push(vec![predicate, MirScalarExpr::literal_true()]);
+        } else {
+            self.equivalence_classes
+                .classes
+                .push(vec![predicate, MirScalarExpr::literal_true()]);
+        }
+    }
+
+    /// Extend the equivalence classes with new equivalences.
+    pub fn extend_equivalences(&mut self, equivalences: Vec<Vec<MirScalarExpr>>) {
+        for class in equivalences {
+            self.push_equivalences(class);
+        }
+    }
+
+    /// Push a new equivalence class, which may contain errors.
+    pub fn push_equivalences(&mut self, equivalences: Vec<MirScalarExpr>) {
+        let mut with_errs = equivalences
+            .iter()
+            .filter(|e| e.contains_err())
+            .cloned()
+            .collect::<Vec<_>>();
+        // info!("Equivalence class with errors: {:?}", with_errs);
+        let without_errs = equivalences
+            .iter()
+            .filter(|e| !e.contains_err())
+            .cloned()
+            .collect::<Vec<_>>();
+        if let Some(expr) = without_errs.first()
+            && !with_errs.is_empty()
+        {
+            with_errs.push(expr.clone());
+            info!("Holding back equivalence class with errors {:?}", with_errs);
+            self.held_back_classes.push(with_errs);
+        }
+        if without_errs.len() > 1 {
+            self.equivalence_classes.classes.push(without_errs);
+        }
+    }
+
+    /// Subject the constraints to the column projection, reworking and removing equivalences.
+    /// This method should also introduce equivalences representing any repeated columns.
+    pub fn project<I>(&mut self, output_columns: I)
+    where
+        I: IntoIterator<Item = usize> + Clone,
+    {
+        self.equivalence_classes.project(output_columns.clone());
+    }
+
+    /// Minimize the equivalence classes, and return the result, reintroducing any held back classes.
+    pub fn extract_equivalences(
+        &mut self,
+        columns: Option<&[ColumnType]>,
+    ) -> Vec<Vec<MirScalarExpr>> {
+        self.equivalence_classes.minimize(columns);
+
+        if self.held_back_classes.is_empty() {
+            // info!(
+            //     "No held back classes, returning equivalence classes {:?}",
+            //     self.equivalence_classes.classes
+            // );
+            self.equivalence_classes.classes.clone()
+        } else {
+            let reducer = self.equivalence_classes.reducer();
+            for class in self.held_back_classes.iter_mut() {
+                class.iter_mut().for_each(|e| {
+                    reducer.reduce_expr(e);
+                });
+            }
+            let mut classes = self.equivalence_classes.classes.clone();
+            // info!("before held back classes: {:?}", classes);
+            classes.extend(self.held_back_classes.iter().cloned());
+            canonicalize_equivalence_classes(&mut classes);
+            // info!(
+            //     "Held back classes, returning equivalence classes with held back classes: {:?}",
+            //     classes
+            // );
+            classes
+        }
+    }
 }
 
 /// Raw printing of [`EquivalenceClasses`] with default expression humanization.
@@ -696,7 +803,12 @@ impl EquivalenceClasses {
             for expr in class.iter_mut() {
                 self.remap.reduce_child(expr);
                 if let Some(columns) = columns {
+                    let orig_expr = expr.clone();
                     expr.reduce(columns);
+                    if expr.contains_err() {
+                        // Rollback to the original expression if it contains an error.
+                        *expr = orig_expr;
+                    }
                 }
             }
         }
