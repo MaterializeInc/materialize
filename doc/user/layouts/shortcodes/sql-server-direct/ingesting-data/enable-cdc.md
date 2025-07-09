@@ -5,7 +5,10 @@ Create a user with permissions to read the table for which you will enable Chang
 ```sql
   CREATE LOGIN materialize WITH PASSWORD = 'AStrongPassword',
     DEFAULT_DATABASE = <DATABASE_NAME>,
-    CHECK_EXPIRATION = OFF, -- OR ensure that you rotate the password after it expires.   
+    -- Either disable password expiry OR
+    -- ensure that you rotate the password after it expires
+    -- to ensure that the `Source` will continue to work.
+    CHECK_EXPIRATION = OFF,
     CHECK_POLICY = ON;
   GO
 ```
