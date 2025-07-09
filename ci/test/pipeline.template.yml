@@ -376,7 +376,7 @@ steps:
           - ./ci/plugins/mzcompose:
               composition: ssh-connection
         agents:
-          queue: hetzner-aarch64-4cpu-8gb
+          queue: hetzner-aarch64-8cpu-16gb
 
       - id: fivetran-destination-tests
         label: Fivetran Destination tests

@@ -129,7 +129,7 @@ so it is executed.""",
             h.update(dep.spec().encode())
         return h.hexdigest()
 
-    def get_hashes(arch: Arch, bazel: bool = False) -> tuple[str, bool]:
+    def get_hashes(arch: Arch, lto: bool) -> tuple[str, bool]:
         repo = mzbuild.Repository(
             Path("."),
             arch=arch,
@@ -137,7 +137,7 @@ so it is executed.""",
             sanitizer=args.sanitizer,
             bazel=bazel,
             bazel_remote_cache=bazel_remote_cache,
-            bazel_lto=bazel_lto,
+            bazel_lto=lto,
         )
         deps = repo.resolve_dependencies(image for image in repo if image.publish)
         check = deps.check()
@@ -147,7 +147,7 @@ so it is executed.""",
         for arch in [Arch.AARCH64, Arch.X86_64]:
             for lto in [False, True]:
                 if not lto or args.pipeline in ["nightly", "release-qualification"]:
-                    hash_check[(arch, lto)] = get_hashes(arch, bazel=True)
+                    hash_check[(arch, lto)] = get_hashes(arch, lto)
 
     trim_builds_prep_thread = threading.Thread(target=fetch_hashes)
     trim_builds_prep_thread.start()
