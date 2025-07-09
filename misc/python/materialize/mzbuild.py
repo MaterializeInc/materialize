@@ -161,7 +161,11 @@ class RepositoryDetails:
             # If we're a tagged build, then we'll use stamping to update our
             # build info, otherwise we'll use our side channel/best-effort
             # approach to update it.
-            if ui.env_is_truthy("BUILDKITE_TAG") or self.bazel_lto:
+            if (
+                ui.env_is_truthy("BUILDKITE_TAG")
+                or ui.env_is_truthy("CI_RELEASE_LTO_BUILD")
+                or self.bazel_lto
+            ):
                 flags.append("--config=release-tagged")
             else:
                 flags.append("--config=release-dev")
