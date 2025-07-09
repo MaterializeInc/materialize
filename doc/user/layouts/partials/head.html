@@ -75,27 +75,31 @@
 toCSS | fingerprint }}
 <link rel="stylesheet" href="{{ $style.RelPermalink }}" />
 
-{{/* Kapa.ai */}}
-<script
-  async
-  src="https://widget.kapa.ai/kapa-widget.bundle.js"
-  data-website-id="c9f86179-22af-46ef-8196-289a621ef96c"
-  data-project-name="Materialize"
-  data-project-color="#472E85"
-  data-project-logo="https://avatars.githubusercontent.com/u/47674186?s=200&v=4"
-  data-modal-title="Materialize"
-  data-modal-disclaimer="This AI bot is experimental and might provide inaccurate or incomplete answers. Always consult the official Materialize documentation to verify any answers provided here. __To search the docs instead__, switch to the __Search__ mode (upper-right hand corner).
+{{/* Intercom */}}
+<script>
+  const APP_ID = "r8661p0d";
+  window.intercomSettings = {
+    api_base: "https://api-iam.intercom.io",
+    app_id: APP_ID
+  };
+</script>
+<script>
+  (function(){var w=window;var ic=w.Intercom;if(typeof ic==="function"){ic('update',w.intercomSettings);}else{var d=document;var i=function(){i.c(arguments);};i.q=[];i.c=function(args){i.q.push(args);};w.Intercom=i;var l=function(){var s=d.createElement('script');s.type='text/javascript';s.async=true;s.src='https://widget.intercom.io/widget/' + APP_ID;var x=d.getElementsByTagName('script')[0];x.parentNode.insertBefore(s, x);};if(document.readyState==='complete'){l();}else if(w.attachEvent){w.attachEvent('onload',l);}else{w.addEventListener('load',l,false);}}})();
+</script>
 
-  Interactions with this AI bot may be monitored or recorded. By submitting your information on this form, you agree to our [website terms](https://materialize.com/site-terms-of-service/) and [privacy policy](https://materialize.com/privacy-policy/)."
-  data-modal-example-questions="Why is my query slow?,How do I check my source's status?"
-  data-search-mode-enabled="true"
-  data-modal-override-open-class-search="docs-search-button"
-  data-user-analytics-fingerprint-enabled="true"
-  data-modal-open-on-command-k="true"
-  data-modal-command-k-search-mode-default="true"
-  data-search-result-link-target="_self"
-  data-search-include-source-names='["Documentation Self-managed"]'
-  >
+{{/* Algolia DocSearch */}}
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@docsearch/css@3" />
+<script src="https://cdn.jsdelivr.net/npm/@docsearch/js@3"></script>
+<script defer>
+  addEventListener("DOMContentLoaded", () => {
+    docsearch({
+      appId: "MB06X1VH88",
+      apiKey: "eee636ad1283d7ab634257ac1b61d429",
+      indexName: "Self-Managed-25.2",
+      insights: true,
+      container: "#docsearch",
+    });
+  });
 </script>
 
 {{if hugo.IsProduction}} {{/* Google Tag Manager */}}
