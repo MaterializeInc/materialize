@@ -142,7 +142,7 @@ class RepositoryDetails:
         if self.bazel:
             return ["bazel", "run", f"@//misc/bazel/tools:{name}", "--"]
         else:
-            return xcompile.tool(self.arch, name)
+            return ["bin/ci-builder", "run", "stable", name]
 
     def cargo_target_dir(self) -> Path:
         """Determine the path to the target directory for Cargo."""
