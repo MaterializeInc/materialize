@@ -222,6 +222,7 @@ steps:
       - "**/*.proto"
       - "**/testdata/**"
     depends_on: []
+    parallelism: 2
     env:
       AWS_DEFAULT_REGION: "us-east-1"
       # cargo-test's coverage is handled separately by cargo-llvm-cov
