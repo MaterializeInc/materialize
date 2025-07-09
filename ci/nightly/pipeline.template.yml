@@ -1525,10 +1525,13 @@ steps:
         timeout_in_minutes: 45
         agents:
           queue: hetzner-aarch64-4cpu-8gb
+        env:
+          CI_ALLOW_LOCAL_BUILD: true
         plugins:
           - ./ci/plugins/mzcompose:
               composition: rqg
               args: ["simple-aggregates", "--seed=$BUILDKITE_JOB_ID"]
+              ci-builder: stable
 
       - id: rqg-db3-joins
         label: "RQG dbt3-joins workload"
@@ -1538,10 +1541,13 @@ steps:
         agents:
           # Runs into timeout/OoM on small agents
           queue: hetzner-aarch64-8cpu-16gb
+        env:
+          CI_ALLOW_LOCAL_BUILD: true
         plugins:
           - ./ci/plugins/mzcompose:
               composition: rqg
               args: ["dbt3-joins", "--seed=$BUILDKITE_JOB_ID"]
+              ci-builder: stable
 
       - id: rqg-lateral-joins
         label: "RQG lateral-joins workload"
@@ -1550,10 +1556,13 @@ steps:
         timeout_in_minutes: 45
         agents:
           queue: hetzner-aarch64-4cpu-8gb
+        env:
+          CI_ALLOW_LOCAL_BUILD: true
         plugins:
           - ./ci/plugins/mzcompose:
               composition: rqg
               args: ["lateral-joins", "--seed=$BUILDKITE_JOB_ID"]
+              ci-builder: stable
 
       - id: rqg-subqueries
         label: "RQG subqueries workload"
@@ -1561,10 +1570,13 @@ steps:
         timeout_in_minutes: 45
         agents:
           queue: hetzner-aarch64-4cpu-8gb
+        env:
+          CI_ALLOW_LOCAL_BUILD: true
         plugins:
           - ./ci/plugins/mzcompose:
               composition: rqg
               args: ["subqueries", "--seed=$BUILDKITE_JOB_ID"]
+              ci-builder: stable
 
       - id: rqg-window-functions
         label: "RQG window functions workload"
@@ -1573,10 +1585,13 @@ steps:
         timeout_in_minutes: 45
         agents:
           queue: hetzner-aarch64-4cpu-8gb
+        env:
+          CI_ALLOW_LOCAL_BUILD: true
         plugins:
           - ./ci/plugins/mzcompose:
               composition: rqg
               args: ["window-functions", "--seed=$BUILDKITE_JOB_ID"]
+              ci-builder: stable
 
       - id: rqg-wmr
         label: "RQG WMR workload"
@@ -1584,12 +1599,15 @@ steps:
         timeout_in_minutes: 45
         agents:
           queue: hetzner-aarch64-4cpu-8gb
+        env:
+          CI_ALLOW_LOCAL_BUILD: true
         plugins:
           - ./ci/plugins/mzcompose:
               composition: rqg
               # Postgres does not support WMR, so our only hope for a comparison
               # test is to use a previous Mz version via --other-tag=...
               args: ["wmr", "--seed=$BUILDKITE_JOB_ID", "--other-tag=common-ancestor"]
+              ci-builder: stable
 
       - id: rqg-banking
         label: "RQG banking workload"
@@ -1597,10 +1615,13 @@ steps:
         timeout_in_minutes: 60
         agents:
           queue: hetzner-aarch64-4cpu-8gb
+        env:
+          CI_ALLOW_LOCAL_BUILD: true
         plugins:
           - ./ci/plugins/mzcompose:
               composition: rqg
               args: ["banking", "--seed=$BUILDKITE_JOB_ID"]
+              ci-builder: stable
 
       - id: rqg-left-join-stacks
         label: "RQG left join stacks workload"
@@ -1608,10 +1629,13 @@ steps:
         timeout_in_minutes: 45
         agents:
           queue: hetzner-aarch64-4cpu-8gb
+        env:
+          CI_ALLOW_LOCAL_BUILD: true
         plugins:
           - ./ci/plugins/mzcompose:
               composition: rqg
               args: ["left-join-stacks", "--seed=$BUILDKITE_JOB_ID"]
+              ci-builder: stable
 
   - id: crdb-restarts
     label: "CRDB rolling restarts"
