@@ -789,9 +789,10 @@ class Composition:
     def run_testdrive_files(
         self,
         *args: str,
-        rm: bool = False,
+        service: str = "testdrive",
         mz_service: str | None = None,
         quiet: bool = False,
+        persistent: bool = True,
     ) -> subprocess.CompletedProcess:
         if mz_service is not None:
             args = tuple(
@@ -802,16 +803,30 @@ class Composition:
                 ]
             )
         environment = {"CLUSTER_REPLICA_SIZES": json.dumps(cluster_replica_size_map())}
-        return self.run(
-            "testdrive",
-            *args,
-            rm=rm,
-            # needed for sufficient error information in the junit.xml while still printing to stdout during execution
-            capture_and_print=not quiet,
-            capture=quiet,
-            capture_stderr=quiet,
-            env_extra=environment,
-        )
+
+        if persistent:
+            if not self.is_running(service):
+                self.up(service, persistent=True)
+
+            return self.exec(
+                service,
+                *args,
+                # needed for sufficient error information in the junit.xml while still printing to stdout during execution
+                capture_and_print=not quiet,
+                capture=quiet,
+                capture_stderr=quiet,
+                env_extra=environment,
+            )
+        else:
+            return self.run(
+                service,
+                *args,
+                # needed for sufficient error information in the junit.xml while still printing to stdout during execution
+                capture_and_print=not quiet,
+                capture=quiet,
+                capture_stderr=quiet,
+                env_extra=environment,
+            )
 
     def exec(
         self,
@@ -1344,7 +1359,6 @@ class Composition:
         self,
         input: str,
         service: str = "testdrive",
-        persistent: bool = True,
         args: list[str] = [],
         caller: Traceback | None = None,
         mz_service: str | None = None,
@@ -1371,27 +1385,17 @@ class Composition:
                 f"--persist-consensus-url=postgres://root@{mz_service}:26257?options=--search_path=consensus",
             ]
 
-        if persistent:
-            return self.exec(
-                service,
-                *args,
-                stdin=input,
-                capture_and_print=not quiet,
-                capture=quiet,
-                capture_stderr=quiet,
-            )
-        else:
-            assert (
-                mz_service is None
-            ), "testdrive(mz_service = ...) can only be used with persistent Testdrive containers."
-            return self.run(
-                service,
-                *args,
-                stdin=input,
-                capture_and_print=not quiet,
-                capture=quiet,
-                capture_stderr=quiet,
-            )
+        if not self.is_running(service):
+            self.up(service, persistent=True)
+
+        return self.exec(
+            service,
+            *args,
+            stdin=input,
+            capture_and_print=not quiet,
+            capture=quiet,
+            capture_stderr=quiet,
+        )
 
     def enable_minio_versioning(self) -> None:
         self.up("minio")

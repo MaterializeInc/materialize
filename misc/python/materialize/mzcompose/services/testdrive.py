@@ -67,8 +67,6 @@ class Testdrive(Service):
         set_persist_urls: bool = True,
         backoff_factor: float = 1.0,
     ) -> None:
-        depends_graph: dict[str, ServiceDependency] = {}
-
         if cluster_replica_size is None:
             cluster_replica_size = cluster_replica_size_map()
 
@@ -160,7 +158,6 @@ class Testdrive(Service):
             entrypoint.append("--consistency-checks=disable")
 
         if fivetran_destination:
-            depends_graph["fivetran-destination"] = {"condition": "service_started"}
             entrypoint.append(f"--fivetran-destination-url={fivetran_destination_url}")
             entrypoint.append(
                 f"--fivetran-destination-files-path={fivetran_destination_files_path}"
@@ -182,7 +179,6 @@ class Testdrive(Service):
                 entrypoint.append("--persist-blob-url=file:///mzdata/persist/blob")
 
             if external_metadata_store:
-                depends_graph[metadata_store] = {"condition": "service_healthy"}
                 entrypoint.append(
                     "--persist-consensus-url=postgres://root@cockroach:26257?options=--search_path=consensus"
                 )
@@ -194,7 +190,6 @@ class Testdrive(Service):
         entrypoint.extend(entrypoint_extra)
 
         config: ServiceConfig = {
-            "depends_on": depends_graph,
             "mzbuild": mzbuild,
             "entrypoint": entrypoint,
             "environment": environment,
