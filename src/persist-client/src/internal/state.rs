@@ -1799,6 +1799,25 @@ where
         Continue(apply_merge_result)
     }
 
+    pub fn apply_merge_res_classic<D: Codec64 + Semigroup + PartialEq>(
+        &mut self,
+        res: &FueledMergeRes<T>,
+        metrics: &ColumnarMetrics,
+    ) -> ControlFlow<NoOpStateTransition<ApplyMergeResult>, ApplyMergeResult> {
+        // We expire all writers if the upper and since both advance to the
+        // empty antichain. Gracefully handle this. At the same time,
+        // short-circuit the cmd application so we don't needlessly create new
+        // SeqNos.
+        if self.is_tombstone() {
+            return Break(NoOpStateTransition(ApplyMergeResult::NotAppliedNoMatch));
+        }
+
+        let apply_merge_result = self
+            .trace
+            .apply_merge_res_checked_classic::<D>(res, metrics);
+        Continue(apply_merge_result)
+    }
+
     pub fn spine_exert(
         &mut self,
         fuel: usize,

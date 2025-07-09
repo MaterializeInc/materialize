@@ -674,6 +674,20 @@ impl<T: Timestamp + Lattice + Codec64> Trace<T> {
         ApplyMergeResult::NotAppliedNoMatch
     }
 
+    pub fn apply_merge_res_checked_classic<D: Codec64 + Semigroup + PartialEq>(
+        &mut self,
+        res: &FueledMergeRes<T>,
+        metrics: &ColumnarMetrics,
+    ) -> ApplyMergeResult {
+        for batch in self.spine.spine_batches_mut().rev() {
+            let result = batch.maybe_replace_checked_classic::<D>(res, metrics);
+            if result.matched() {
+                return result;
+            }
+        }
+        ApplyMergeResult::NotAppliedNoMatch
+    }
+
     pub fn apply_merge_res_unchecked(&mut self, res: &FueledMergeRes<T>) -> ApplyMergeResult {
         for batch in self.spine.spine_batches_mut().rev() {
             let result = batch.maybe_replace_unchecked(res);
@@ -1115,6 +1129,89 @@ impl<T: Timestamp + Lattice + Codec64> SpineBatch<T> {
             run_meta,
             run_splits,
         ))
+    }
+
+    fn maybe_replace_checked_classic<D>(
+        &mut self,
+        res: &FueledMergeRes<T>,
+        metrics: &ColumnarMetrics,
+    ) -> ApplyMergeResult
+    where
+        D: Semigroup + Codec64 + PartialEq + Debug,
+    {
+        // The spine's and merge res's sinces don't need to match (which could occur if Spine
+        // has been reloaded from state due to compare_and_set mismatch), but if so, the Spine
+        // since must be in advance of the merge res since.
+        if !PartialOrder::less_equal(res.output.desc.since(), self.desc().since()) {
+            return ApplyMergeResult::NotAppliedInvalidSince;
+        }
+
+        let new_diffs_sum = Self::diffs_sum(res.output.parts.iter(), metrics);
+
+        // If our merge result exactly matches a spine batch, we can swap it in directly
+        let exact_match = res.output.desc.lower() == self.desc().lower()
+            && res.output.desc.upper() == self.desc().upper();
+        if exact_match {
+            let old_diffs_sum = Self::diffs_sum::<D>(
+                self.parts.iter().flat_map(|p| p.batch.parts.iter()),
+                metrics,
+            );
+
+            if let (Some(old_diffs_sum), Some(new_diffs_sum)) = (old_diffs_sum, new_diffs_sum) {
+                assert_eq!(
+                    old_diffs_sum, new_diffs_sum,
+                    "merge res diffs sum ({:?}) did not match spine batch diffs sum ({:?})",
+                    new_diffs_sum, old_diffs_sum
+                );
+            }
+
+            // Spine internally has an invariant about a batch being at some level
+            // or higher based on the len. We could end up violating this invariant
+            // if we increased the length of the batch.
+            //
+            // A res output with length greater than the existing spine batch implies
+            // a compaction has already been applied to this range, and with a higher
+            // rate of consolidation than this one. This could happen as a result of
+            // compaction's memory bound limiting the amount of consolidation possible.
+            if res.output.len > self.len() {
+                return ApplyMergeResult::NotAppliedTooManyUpdates;
+            }
+            *self = SpineBatch::merged(
+                IdHollowBatch {
+                    id: self.id(),
+                    batch: Arc::new(res.output.clone()),
+                },
+                res.new_active_compaction.clone(),
+            );
+            return ApplyMergeResult::AppliedExact;
+        }
+
+        // Try subset replacement
+        if let Some((id, range)) = self.find_replacement_range(res) {
+            let old_diffs_sum = Self::diffs_sum::<D>(
+                self.parts[range.clone()]
+                    .iter()
+                    .flat_map(|p| p.batch.parts.iter()),
+                metrics,
+            );
+
+            if let (Some(old_diffs_sum), Some(new_diffs_sum)) = (old_diffs_sum, new_diffs_sum) {
+                assert_eq!(
+                    old_diffs_sum, new_diffs_sum,
+                    "merge res diffs sum ({:?}) did not match spine batch diffs sum ({:?})",
+                    new_diffs_sum, old_diffs_sum
+                );
+            }
+
+            self.perform_subset_replacement(
+                &res.output,
+                id,
+                range,
+                res.new_active_compaction.clone(),
+            )
+        } else {
+            ApplyMergeResult::NotAppliedNoMatch
+        }
     }
 
     fn maybe_replace_checked<D>(
