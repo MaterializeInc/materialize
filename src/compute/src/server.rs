@@ -729,7 +729,7 @@ impl<'w, A: Allocate + 'static> Worker<'w, A> {
         // Overwrite `self.command_history` to reflect `new_commands`.
         // It is possible that there still isn't a compute state yet.
         if let Some(compute_state) = &mut self.compute_state {
-            let mut command_history = ComputeCommandHistory::new(self.metrics.for_history());
+            let mut command_history = ComputeCommandHistory::new(Some(self.metrics.for_history()));
             for command in new_commands.iter() {
                 command_history.push(command.clone());
             }
