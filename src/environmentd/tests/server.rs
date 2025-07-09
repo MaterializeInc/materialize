@@ -306,7 +306,11 @@ fn test_statement_logging_immediate() {
         };
         assert_eq!(r.sample_rate, 1.0);
 
-        let expected_sql = if r.sql.contains("SECRET") {
+        let expected_sql = if r.sql.contains("SECRET")
+            || r.sql.contains("INSERT")
+            || r.sql.contains("UPDATE")
+            || r.sql.contains("EXECUTE")
+        {
             mz_sql::parse::parse(&r.sql)
                 .unwrap()
                 .into_element()

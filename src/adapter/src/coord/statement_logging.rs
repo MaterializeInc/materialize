@@ -86,13 +86,17 @@ impl PreparedStatementLoggingInfo {
     ) -> Self {
         let kind = stmt.map(StatementKind::from);
         let sql = match kind {
-            // We __always__ want to redact SQL statements that might contain secret values.
-            Some(StatementKind::CreateSecret | StatementKind::AlterSecret) => {
-                stmt.map(|s| s.to_ast_string_redacted()).unwrap_or_default()
-            }
-            // INSERT statements can contain a lot of data and is proportional to the
-            // amount of data being inserted, so at a byte limit, we omit the rest of the statement.
-            Some(StatementKind::Insert) => Self::insert_omitted_at_byte_limit(&raw_sql, 100),
+            // Always redact SQL statements that may contain sensitive information.
+            // CREATE SECRET and ALTER SECRET statements can contain secret values, so we redact them.
+            // INSERT, UPDATE, and EXECUTE statements can include large amounts of user data, so we redact them for both
+            // data privacy and to avoid logging excessive data.
+            Some(
+                StatementKind::CreateSecret
+                | StatementKind::AlterSecret
+                | StatementKind::Insert
+                | StatementKind::Update
+                | StatementKind::Execute,
+            ) => stmt.map(|s| s.to_ast_string_redacted()).unwrap_or_default(),
             _ => raw_sql,
         };
 
@@ -106,27 +110,6 @@ impl PreparedStatementLoggingInfo {
             kind,
             _sealed: sealed::Private,
         }
-    }
-
-    fn insert_omitted_at_byte_limit(s: &str, byte_limit: usize) -> String {
-        if s.len() <= byte_limit {
-            return s.to_string();
-        }
-
-        // Find the character boundary just before or at `byte_limit`
-        let cutoff = s
-            .char_indices()
-            .take_while(|(i, _)| *i <= byte_limit)
-            .map(|(i, _)| i)
-            .last()
-            .unwrap_or(0);
-
-        let omitted_str = " <OMITTED>";
-
-        let mut result = String::with_capacity(byte_limit + omitted_str.len());
-        result.push_str(&s[..(cutoff)]);
-        result.push_str(omitted_str);
-        result
     }
 }
 
@@ -866,49 +849,4 @@ mod sealed {
     /// enum.
     #[derive(Debug, Copy, Clone)]
     pub struct Private;
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[mz_ore::test]
-    fn test_insert_omitted_at_byte_limit() {
-        // Test case 1: String shorter than limit
-        assert_eq!(
-            PreparedStatementLoggingInfo::insert_omitted_at_byte_limit("hello", 10),
-            "hello"
-        );
-
-        // Test case 2: String exactly at limit
-        assert_eq!(
-            PreparedStatementLoggingInfo::insert_omitted_at_byte_limit("hello", 5),
-            "hello"
-        );
-
-        // Test case 3: String longer than limit
-        assert_eq!(
-            PreparedStatementLoggingInfo::insert_omitted_at_byte_limit("hello world", 5),
-            "hello <OMITTED>"
-        );
-
-        // Test case 4: Multi-byte UTF-8 characters
-        let s = "Hello 世界"; // 世 and 界 are each 3 bytes
-        assert_eq!(
-            PreparedStatementLoggingInfo::insert_omitted_at_byte_limit(s, 7),
-            "Hello  <OMITTED>" // Cuts off before 世 since it would exceed the byte limit
-        );
-
-        // Test case 5: Empty string
-        assert_eq!(
-            PreparedStatementLoggingInfo::insert_omitted_at_byte_limit("", 5),
-            ""
-        );
-
-        // Test case 6: Zero byte limit
-        assert_eq!(
-            PreparedStatementLoggingInfo::insert_omitted_at_byte_limit("hello", 0),
-            " <OMITTED>"
-        );
-    }
 }
