@@ -85,6 +85,13 @@ SERVICES = [
 
 
 def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
+    parser.add_argument(
+        "--slow",
+        action="store_true",
+        help="Include slow tests (usually only in Nightly)",
+    )
+    args = parser.parse_args()
+
     def process(name: str) -> None:
         # incident-70 requires more memory, runs in separate CI step
         # concurrent-connections is too flaky
@@ -93,6 +100,8 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
             "test-incident-70",
             "test-concurrent-connections",
         ):
+            return
+        if not args.slow and name == "test-refresh-mv-restart":
             return
         with c.test_case(name):
             c.workflow(name)

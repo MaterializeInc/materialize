@@ -620,10 +620,46 @@ steps:
               composition: zippy
               args: [--scenario=AlterConnectionWithKafkaSources, --actions=10000, --max-execution-time=30m]
 
+  - group: Source Resumption tests
+    key: source-resumption-tests
+    steps:
+      - id: kafka-resumption
+        label: Kafka resumption tests
+        depends_on: build-aarch64
+        timeout_in_minutes: 30
+        plugins:
+          - ./ci/plugins/mzcompose:
+              composition: kafka-resumption
+        agents:
+          queue: hetzner-aarch64-8cpu-16gb
+
+      - id: mysql-cdc-resumption
+        label: "MySQL CDC resumption tests"
+        parallelism: 2
+        depends_on: build-aarch64
+        timeout_in_minutes: 60
+        inputs: [test/mysql-cdc-resumption]
+        plugins:
+          - ./ci/plugins/mzcompose:
+              composition: mysql-cdc-resumption
+        agents:
+          queue: hetzner-aarch64-8cpu-16gb
+
+      - id: pg-cdc-resumption
+        label: "Postgres CDC resumption tests"
+        parallelism: 2
+        depends_on: build-aarch64
+        timeout_in_minutes: 60
+        inputs: [test/pg-cdc-resumption]
+        plugins:
+          - ./ci/plugins/mzcompose:
+              composition: pg-cdc-resumption
+        agents:
+          queue: hetzner-aarch64-8cpu-16gb
+
   - group: CDC with old source syntax
     key: cdc-old-source-syntax
     steps:
-
       - id: mysql-cdc-old-syntax
         label: MySQL CDC tests (before source versioning)
         depends_on: build-aarch64
@@ -797,6 +833,24 @@ steps:
           - ./ci/plugins/mzcompose:
               composition: platform-checks
               args: [--scenario=RestartEntireMz, "--seed=$BUILDKITE_JOB_ID", --features=azurite]
+
+      - id: checks-restart-environmentd-clusterd-storage
+        label: "Checks + restart of environmentd & storage clusterd"
+        depends_on: build-aarch64
+        inputs: [misc/python/materialize/checks]
+        timeout_in_minutes: 45
+        parallelism: 3
+        agents:
+          queue: hetzner-aarch64-8cpu-16gb
+        plugins:
+          - ./ci/plugins/mzcompose:
+              composition: platform-checks
+              args:
+                [
+                  --scenario=RestartEnvironmentdClusterdStorage,
+                  --default-replication-factor=1, # faster
+                  "--seed=$BUILDKITE_JOB_ID",
+                ]
 
       - id: checks-restart-environmentd-clusterd-storage-azurite
         label: "Checks + restart of environmentd & storage clusterd with :azure: blob store"
@@ -2024,7 +2078,7 @@ steps:
     plugins:
       - ./ci/plugins/mzcompose:
           composition: cluster
-          args: ["--azurite"]
+          args: ["--azurite", "--slow"]
     agents:
       queue: hetzner-aarch64-8cpu-16gb
 

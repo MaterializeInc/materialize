@@ -214,6 +214,14 @@ def compileFastSltConfig() -> SltRunConfig:
         "test/sqllogictest/advent-of-code/2023/*.slt",
     }
 
+    # Too slow
+    tests_exclude = {
+        "test/sqllogictest/default_privileges.slt",
+        "test/sqllogictest/distinct_arrangements.slt",
+        "test/sqllogictest/privilege_grants.slt",
+        "test/sqllogictest/introspection/singlereplica_attribution_sources.slt",
+    }
+
     tests_without_views = {
         "test/sqllogictest/alter.slt",
         "test/sqllogictest/ambiguous_rename.slt",
@@ -238,10 +246,8 @@ def compileFastSltConfig() -> SltRunConfig:
         "test/sqllogictest/cursor.slt",
         "test/sqllogictest/datediff.slt",
         "test/sqllogictest/dates-times.slt",
-        "test/sqllogictest/default_privileges.slt",
         "test/sqllogictest/degenerate.slt",
         "test/sqllogictest/disambiguate_columns.slt",
-        "test/sqllogictest/distinct_arrangements.slt",
         "test/sqllogictest/distinct_from.slt",
         "test/sqllogictest/distinct_on.slt",
         "test/sqllogictest/encode.slt",
@@ -316,7 +322,6 @@ def compileFastSltConfig() -> SltRunConfig:
         "test/sqllogictest/postgres-incompatibility.slt",
         "test/sqllogictest/pretty.slt",
         "test/sqllogictest/privilege_checks.slt",
-        "test/sqllogictest/privilege_grants.slt",
         "test/sqllogictest/privileges_pg.slt",
         "test/sqllogictest/quote_ident.slt",
         "test/sqllogictest/quoting.slt",
@@ -546,12 +551,11 @@ def compileFastSltConfig() -> SltRunConfig:
         "test/sqllogictest/postgres/subselect.slt",
         "test/sqllogictest/postgres/pgcrypto/*.slt",
         "test/sqllogictest/introspection/cluster_log_compaction.slt",
-        "test/sqllogictest/introspection/singlereplica_attribution_sources.slt",
     }
 
     tests = file_util.resolve_paths_with_wildcard(tests)
     tests_without_views = file_util.resolve_paths_with_wildcard(tests_without_views)
-    tests_with_views = tests - tests_without_views
+    tests_with_views = tests - tests_without_views - tests_exclude
 
     config = SltRunConfig()
     config.steps.append(DefaultSltRunStepConfig(tests_without_views))

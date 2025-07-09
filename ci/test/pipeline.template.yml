@@ -221,7 +221,6 @@ steps:
       - "**/*.rs"
       - "**/*.proto"
       - "**/testdata/**"
-    parallelism: 2
     depends_on: []
     env:
       AWS_DEFAULT_REGION: "us-east-1"
@@ -241,7 +240,7 @@ steps:
     depends_on: build-aarch64
     timeout_in_minutes: 40
     inputs: [test/testdrive]
-    parallelism: 12
+    parallelism: 10
     plugins:
       - ./ci/plugins/mzcompose:
           composition: testdrive
@@ -253,12 +252,12 @@ steps:
     depends_on: build-aarch64
     timeout_in_minutes: 30
     inputs: [test/cluster]
-    parallelism: 6
+    parallelism: 8
     plugins:
       - ./ci/plugins/mzcompose:
           composition: cluster
     agents:
-      queue: hetzner-aarch64-8cpu-16gb
+      queue: hetzner-aarch64-16cpu-32gb
 
   - id: sqllogictest-fast
     label: "Fast SQL logic tests"
@@ -281,7 +280,7 @@ steps:
       - ./ci/plugins/mzcompose:
           composition: restart
     agents:
-      queue: hetzner-aarch64-4cpu-8gb
+      queue: hetzner-aarch64-8cpu-16gb
 
   - group: "MySQL tests"
     key: mysql-tests
@@ -297,18 +296,6 @@ steps:
               composition: mysql-cdc
         agents:
           queue: hetzner-aarch64-4cpu-8gb
-
-      - id: mysql-cdc-resumption
-        label: "MySQL CDC resumption tests"
-        parallelism: 6
-        depends_on: build-aarch64
-        timeout_in_minutes: 30
-        inputs: [test/mysql-cdc-resumption]
-        plugins:
-          - ./ci/plugins/mzcompose:
-              composition: mysql-cdc-resumption
-        agents:
-          queue: hetzner-aarch64-16cpu-32gb
 
       - id: mysql-rtr
         label: "MySQL RTR tests"
@@ -326,7 +313,7 @@ steps:
     steps:
       - id: pg-cdc
         label: "Postgres CDC tests"
-        parallelism: 3
+        parallelism: 4
         depends_on: build-aarch64
         timeout_in_minutes: 30
         inputs: [test/pg-cdc]
@@ -334,21 +321,8 @@ steps:
           - ./ci/plugins/mzcompose:
               composition: pg-cdc
         agents:
-          queue: hetzner-aarch64-4cpu-8gb
-        # the mzbuild postgres version will be used, which depends on the Dockerfile specification
-
-      - id: pg-cdc-resumption
-        label: "Postgres CDC resumption tests"
-        parallelism: 5
-        depends_on: build-aarch64
-        timeout_in_minutes: 30
-        inputs: [test/pg-cdc-resumption]
-        plugins:
-          - ./ci/plugins/mzcompose:
-              composition: pg-cdc-resumption
-        agents:
-          # Larger agent for faster runtime
           queue: hetzner-aarch64-16cpu-32gb
+        # the mzbuild postgres version will be used, which depends on the Dockerfile specification
 
       - id: pg-rtr
         label: "Postgres RTR tests"
@@ -417,16 +391,6 @@ steps:
   - group: "Kafka tests"
     key: kafka-tests
     steps:
-      - id: kafka-resumption
-        label: Kafka resumption tests
-        depends_on: build-aarch64
-        timeout_in_minutes: 30
-        plugins:
-          - ./ci/plugins/mzcompose:
-              composition: kafka-resumption
-        agents:
-          queue: hetzner-aarch64-4cpu-8gb
-
       - id: kafka-auth
         label: Kafka auth test
         depends_on: build-aarch64
@@ -436,7 +400,7 @@ steps:
           - ./ci/plugins/mzcompose:
               composition: kafka-auth
         agents:
-          queue: hetzner-aarch64-4cpu-8gb
+          queue: hetzner-aarch64-8cpu-16gb
 
       - id: kafka-exactly-once
         label: Kafka exactly-once tests
@@ -471,43 +435,22 @@ steps:
           composition: zippy
           args: [--scenario=KafkaSources, --actions=100]
 
-  - group: "Platform checks"
-    key: platform-checks
-    steps:
-      - id: checks-restart-environmentd-clusterd-storage
-        label: "Checks + restart of environmentd & storage clusterd"
-        depends_on: build-aarch64
-        inputs: [misc/python/materialize/checks]
-        timeout_in_minutes: 45
-        parallelism: 8
-        agents:
-          queue: hetzner-aarch64-8cpu-16gb
-        plugins:
-          - ./ci/plugins/mzcompose:
-              composition: platform-checks
-              args:
-                [
-                  --scenario=RestartEnvironmentdClusterdStorage,
-                  --default-replication-factor=1, # faster
-                  "--seed=$BUILDKITE_JOB_ID",
-                ]
-
-      - id: checks-no-restart-no-upgrade
-        label: "Checks without restart or upgrade"
-        depends_on: build-aarch64
-        inputs: [misc/python/materialize/checks]
-        timeout_in_minutes: 45
-        parallelism: 8
-        agents:
-          queue: hetzner-aarch64-8cpu-16gb
-        plugins:
-          - ./ci/plugins/mzcompose:
-              composition: platform-checks
-              args: [
-                  --scenario=NoRestartNoUpgrade,
-                  --default-replication-factor=1, # faster
-                  "--seed=$BUILDKITE_JOB_ID"
-              ]
+  - id: checks-no-restart-no-upgrade
+    label: "Checks without restart or upgrade"
+    depends_on: build-aarch64
+    inputs: [misc/python/materialize/checks]
+    timeout_in_minutes: 45
+    parallelism: 8
+    agents:
+      queue: hetzner-aarch64-8cpu-16gb
+    plugins:
+      - ./ci/plugins/mzcompose:
+          composition: platform-checks
+          args: [
+              --scenario=NoRestartNoUpgrade,
+              --default-replication-factor=1, # faster
+              "--seed=$BUILDKITE_JOB_ID"
+          ]
 
   - id: source-sink-errors
     label: "Source/Sink Error Reporting"
@@ -648,7 +591,7 @@ steps:
           ci-builder: stable
     agents:
       # Faster agent since it currently compiles mz-debug itself
-      queue: hetzner-aarch64-8cpu-16gb
+      queue: hetzner-aarch64-16cpu-32gb
 
   - id: secrets-logging
     label: "Secrets Logging"
