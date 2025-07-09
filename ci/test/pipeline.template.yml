@@ -277,6 +277,7 @@ steps:
     label: "Restart test"
     depends_on: build-aarch64
     timeout_in_minutes: 30
+    parallelism: 2
     plugins:
       - ./ci/plugins/mzcompose:
           composition: restart
@@ -314,7 +315,7 @@ steps:
     steps:
       - id: pg-cdc
         label: "Postgres CDC tests"
-        parallelism: 3
+        parallelism: 4
         depends_on: build-aarch64
         timeout_in_minutes: 30
         inputs: [test/pg-cdc]

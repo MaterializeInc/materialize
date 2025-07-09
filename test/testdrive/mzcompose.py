@@ -209,7 +209,10 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         # without mzcompose
 
         def process(file: str) -> None:
-            if not args.slow and file == "materialized-view-refresh-options.td":
+            if not args.slow and file in (
+                "materialized-view-refresh-options.td",
+                "upsert-source-race.td",
+            ):
                 return
             junit_report = ci_util.junit_report_filename(f"{c.name}_{file}")
             try:
