@@ -20,7 +20,6 @@ from materialize import MZ_ROOT, buildkite, rustc_flags, spawn, ui
 from materialize.cli.run import SANITIZER_TARGET
 from materialize.mzcompose.composition import Composition, WorkflowArgumentParser
 from materialize.mzcompose.services.azure import Azurite
-from materialize.mzcompose.services.clusterd import Clusterd
 from materialize.mzcompose.services.kafka import Kafka
 from materialize.mzcompose.services.minio import Minio
 from materialize.mzcompose.services.postgres import (
@@ -58,7 +57,6 @@ SERVICES = [
         ports=["40111:10000"],
         allow_host_ports=True,
     ),
-    Clusterd(),  # Only to attempt to download the binary
 ]
 
 
@@ -221,39 +219,17 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
                     ],
                 )
             else:
-                clusterd = c.compose["services"]["clusterd"]
-                try:
-                    subprocess.run(
-                        ["docker", "pull", clusterd["image"]],
-                        check=True,
-                        capture_output=True,
-                    )
-                    container_id = subprocess.check_output(
-                        ["docker", "create", clusterd["image"]], text=True
-                    ).strip()
-                    os.makedirs("target/ci", exist_ok=True)
-                    subprocess.run(
-                        [
-                            "docker",
-                            "cp",
-                            f"{container_id}:/usr/local/bin/clusterd",
-                            "target/ci",
-                        ],
-                        check=True,
-                    )
-                except subprocess.CalledProcessError as e:
-                    print(f"Failed to get clusterd image: {e}")
-                    spawn.runv(
-                        [
-                            "cargo",
-                            "build",
-                            "--workspace",
-                            "--bin",
-                            "clusterd",
-                            "--profile=ci",
-                        ],
-                        env=env,
-                    )
+                spawn.runv(
+                    [
+                        "cargo",
+                        "build",
+                        "--workspace",
+                        "--bin",
+                        "clusterd",
+                        "--profile=ci",
+                    ],
+                    env=env,
+                )
 
             partition = buildkite.get_parallelism_index() + 1
             total = buildkite.get_parallelism_count()
