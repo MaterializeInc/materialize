@@ -314,7 +314,7 @@ steps:
     steps:
       - id: pg-cdc
         label: "Postgres CDC tests"
-        parallelism: 4
+        parallelism: 3
         depends_on: build-aarch64
         timeout_in_minutes: 30
         inputs: [test/pg-cdc]
@@ -347,22 +347,19 @@ steps:
     agents:
       queue: hetzner-aarch64-4cpu-8gb
 
-  - group: "SQL Server tests"
-    key: sql-server-tests
-    steps:
-      - id: sql-server-cdc
-        label: "SQL Server CDC tests"
-        depends_on: build-x86_64
-        timeout_in_minutes: 30
-        inputs: [test/sql-server-cdc]
-        plugins:
-          - ./ci/plugins/mzcompose:
-              composition: sql-server-cdc
-        agents:
-          # The SQL Server Docker image isn't available on ARM.
-          #
-          # See: <https://github.com/microsoft/mssql-docker/issues/864>
-          queue: hetzner-x86-64-4cpu-8gb
+  - id: sql-server-cdc
+    label: "SQL Server CDC tests"
+    depends_on: build-x86_64
+    timeout_in_minutes: 30
+    inputs: [test/sql-server-cdc]
+    plugins:
+      - ./ci/plugins/mzcompose:
+          composition: sql-server-cdc
+    agents:
+      # The SQL Server Docker image isn't available on ARM.
+      #
+      # See: <https://github.com/microsoft/mssql-docker/issues/864>
+      queue: hetzner-x86-64-4cpu-8gb
 
   - group: "Connection tests"
     key: connection-tests

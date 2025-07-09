@@ -14,6 +14,12 @@ slow-timeout = { period = "300s", terminate-after = 2 }
 priority = 100
 
 [[profile.default.overrides]]
+filter = "package(mz-environmentd) and test(test_pgtest_mz)"
+threads-required = 8
+slow-timeout = { period = "300s", terminate-after = 2 }
+priority = 100
+
+[[profile.default.overrides]]
 filter = "package(mz-environmentd) and test(test_storage_usage_collection_interval)"
 slow-timeout = { period = "300s", terminate-after = 2 }
 priority = 90

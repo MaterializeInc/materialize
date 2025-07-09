@@ -239,7 +239,7 @@ RUN mkdir rust \
     && cargo install --root /usr/local --version "=0.18.3" --locked cargo-deny \
     && cargo install --root /usr/local --version "=0.1.0" --locked cargo-deplint \
     && cargo install --root /usr/local --version "=0.9.36" --locked cargo-hakari \
-    && cargo install --root /usr/local --version "=0.9.72" --locked cargo-nextest \
+    && cargo install --root /usr/local --version "=0.9.100" --locked cargo-nextest \
     && cargo install --root /usr/local --version "=0.6.17" --locked cargo-llvm-cov \
     && cargo install --root /usr/local --version "=0.1.57" --locked --features=vendored-openssl cargo-udeps \
     && cargo install --root /usr/local --version "=0.10.0" --locked --no-default-features --features=s3,openssl/vendored sccache \
