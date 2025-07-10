@@ -181,10 +181,10 @@ impl LimiterTask {
                 Err(err)
             }
             #[cfg(not(target_os = "linux"))]
-            Err(_err) => ProcStatus {
+            Err(_err) => Ok(ProcStatus {
                 vm_rss: 0,
                 vm_swap: 0,
-            },
+            }),
         }
     }
 
