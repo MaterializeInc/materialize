@@ -86,10 +86,17 @@ impl PreparedStatementLoggingInfo {
     ) -> Self {
         let kind = stmt.map(StatementKind::from);
         let sql = match kind {
-            // We __always__ want to redact SQL statements that might contain secret values.
-            Some(StatementKind::CreateSecret | StatementKind::AlterSecret) => {
-                stmt.map(|s| s.to_ast_string_redacted()).unwrap_or_default()
-            }
+            // Always redact SQL statements that may contain sensitive information.
+            // CREATE SECRET and ALTER SECRET statements can contain secret values, so we redact them.
+            // INSERT, UPDATE, and EXECUTE statements can include large amounts of user data, so we redact them for both
+            // data privacy and to avoid logging excessive data.
+            Some(
+                StatementKind::CreateSecret
+                | StatementKind::AlterSecret
+                | StatementKind::Insert
+                | StatementKind::Update
+                | StatementKind::Execute,
+            ) => stmt.map(|s| s.to_ast_string_redacted()).unwrap_or_default(),
             _ => raw_sql,
         };
 
