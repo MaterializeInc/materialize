@@ -214,6 +214,7 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
 
     if let Some(memory_limit) = args.announce_memory_limit {
         mz_compute::lgalloc::start_limiter(memory_limit, &metrics_registry);
+        mz_compute::memory_limiter::start_limiter(memory_limit, &metrics_registry);
     } else {
         warn!("no memory limit announced; disabling lgalloc limiter");
     }

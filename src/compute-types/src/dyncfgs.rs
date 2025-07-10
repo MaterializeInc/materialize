@@ -83,6 +83,34 @@ pub const LGALLOC_SLOW_CLEAR_BYTES: Config<usize> = Config::new(
     "Clear byte size per size class for every invocation",
 );
 
+/// Interval to run the memory limiter. A zero duration disables the limiter.
+pub const MEMORY_LIMITER_INTERVAL: Config<Duration> = Config::new(
+    "memory_limiter_interval",
+    Duration::from_secs(10),
+    "Interval to run the memory limiter. A zero duration disables the limiter.",
+);
+
+/// Factor of the memory limit that the process will be permitted to use before terminating the process.
+pub const MEMORY_LIMITER_USAGE_FACTOR: Config<f64> = Config::new(
+    "memory_limiter_usage_factor",
+    2.,
+    "Factor of the memory limit that the process will use before terminating the process.",
+);
+
+/// Bias to the memory limiter usage factor.
+pub const MEMORY_LIMITER_USAGE_BIAS: Config<f64> = Config::new(
+    "memory_limiter_usage_bias",
+    1.,
+    "Multiplicative bias to memory_limiter_usage_factor.",
+);
+
+/// Burst factor to memory limit.
+pub const MEMORY_LIMITER_BURST_FACTOR: Config<f64> = Config::new(
+    "memory_limiter_burst_factor",
+    0.,
+    "Multiplicative burst factor to memory limit.",
+);
+
 /// Interval to run the lgalloc limiter. A zero duration disables the limiter.
 pub const LGALLOC_LIMITER_INTERVAL: Config<Duration> = Config::new(
     "lgalloc_limiter_interval",
@@ -346,6 +374,10 @@ pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
         .add(&LGALLOC_FILE_GROWTH_DAMPENER)
         .add(&LGALLOC_LOCAL_BUFFER_BYTES)
         .add(&LGALLOC_SLOW_CLEAR_BYTES)
+        .add(&MEMORY_LIMITER_INTERVAL)
+        .add(&MEMORY_LIMITER_USAGE_FACTOR)
+        .add(&MEMORY_LIMITER_USAGE_BIAS)
+        .add(&MEMORY_LIMITER_BURST_FACTOR)
         .add(&LGALLOC_LIMITER_INTERVAL)
         .add(&LGALLOC_LIMITER_USAGE_FACTOR)
         .add(&LGALLOC_LIMITER_USAGE_BIAS)
