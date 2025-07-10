@@ -182,7 +182,7 @@ an SSH bastion server to accept connections from Materialize, check
 
 ### Creating a source {#create-source-example}
 
-You **must** enable Change Data Capture, see [Enable Change Data Capture SQL Server Instructions](sql-server-direct/ingesting-data/enable-cdc).
+You **must** enable Change Data Capture, see [Enable Change Data Capture SQL Server Instructions](../../../layouts/shortcodes/sql-server-direct/ingesting-data/enable-cdc).
 
 Once CDC is enabled for all of the relevant tables, you can create a `SOURCE` in
 Materialize to begin replicating data!
