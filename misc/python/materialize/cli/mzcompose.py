@@ -571,7 +571,7 @@ class DockerComposeCommand(Command):
             return
 
         composition = load_composition(args)
-        if not ui.env_is_truthy("CI"):
+        if not ui.env_is_truthy("CI") or ui.env_is_truthy("CI_ALLOW_LOCAL_BUILD"):
             ui.section("Collecting mzbuild images")
             for d in composition.dependencies:
                 ui.say(d.spec())
