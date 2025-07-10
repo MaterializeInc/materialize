@@ -12,9 +12,11 @@
 
 use std::cmp::Ordering;
 use std::collections::{BTreeMap, BTreeSet};
+use std::rc::Rc;
 
 use mz_ore::soft_assert_or_log;
 use mz_repr::{ColumnType, ScalarType};
+use timely::Container;
 
 use crate::visit::Visit;
 use crate::{MirScalarExpr, UnaryFunc, VariadicFunc, func};
@@ -126,22 +128,35 @@ pub fn canonicalize_equivalences<'a, I>(
 /// assert_eq!(expected, equivalences)
 /// ````
 pub fn canonicalize_equivalence_classes(equivalences: &mut Vec<Vec<MirScalarExpr>>) {
-    // Fuse equivalence classes containing the same expression.
-    for index in 1..equivalences.len() {
-        for inner in 0..index {
-            if equivalences[index]
-                .iter()
-                .any(|pair| equivalences[inner].contains(pair))
-            {
-                let to_extend = std::mem::replace(&mut equivalences[index], Vec::new());
-                equivalences[inner].extend(to_extend);
+    let mut uf = BTreeMap::new();
+    for class in equivalences.iter_mut() {
+        let mut iter = class.drain(..);
+        if let Some(first) = iter.next() {
+            let head = Rc::new(first);
+            for rest in iter {
+                uf.union(&head, &Rc::new(rest));
             }
         }
     }
-    for equivalence in equivalences.iter_mut() {
-        equivalence.sort();
-        equivalence.dedup();
+
+    let mut eqs: BTreeMap<Rc<MirScalarExpr>, BTreeSet<Rc<MirScalarExpr>>> = BTreeMap::new();
+    for (k, v) in uf {
+        eqs.entry(v).or_default().insert(k.clone());
     }
+
+    let classes = eqs.into_values().collect::<Vec<_>>();
+    equivalences.resize(classes.len(), Vec::new());
+    equivalences
+        .iter_mut()
+        .zip(classes)
+        .for_each(|(equivalence, class)| {
+            equivalence.extend(
+                class
+                    .into_iter()
+                    .map(|e| Rc::try_unwrap(e).expect("there to be only one strong ref")),
+            );
+        });
+
     equivalences.retain(|es| es.len() > 1);
     equivalences.sort();
 }
@@ -490,4 +505,54 @@ pub fn get_canonicalizer_map(
         }
     }
     canonicalizer_map
+}
+
+/// A trait for a union-find data structure.
+pub trait UnionFind<T> {
+    /// Sets `self[x]` to the root from `x`, and returns a reference to the root.
+    fn find<'a>(&'a mut self, x: &T) -> Option<&'a T>;
+    /// Ensures that `x` and `y` have the same root.
+    fn union(&mut self, x: &T, y: &T);
+}
+
+impl<T: Clone + Ord> UnionFind<T> for BTreeMap<T, T> {
+    fn find<'a>(&'a mut self, x: &T) -> Option<&'a T> {
+        if !self.contains_key(x) {
+            None
+        } else {
+            if self[x] != self[&self[x]] {
+                // Path halving
+                let mut y = self[x].clone();
+                while y != self[&y] {
+                    let grandparent = self[&self[&y]].clone();
+                    *self.get_mut(&y).unwrap() = grandparent;
+                    y.clone_from(&self[&y]);
+                }
+                *self.get_mut(x).unwrap() = y;
+            }
+            Some(&self[x])
+        }
+    }
+
+    fn union(&mut self, x: &T, y: &T) {
+        match (self.find(x).is_some(), self.find(y).is_some()) {
+            (true, true) => {
+                if self[x] != self[y] {
+                    let root_x = self[x].clone();
+                    let root_y = self[y].clone();
+                    self.insert(root_x, root_y);
+                }
+            }
+            (false, true) => {
+                self.insert(x.clone(), self[y].clone());
+            }
+            (true, false) => {
+                self.insert(y.clone(), self[x].clone());
+            }
+            (false, false) => {
+                self.insert(x.clone(), x.clone());
+                self.insert(y.clone(), x.clone());
+            }
+        }
+    }
 }

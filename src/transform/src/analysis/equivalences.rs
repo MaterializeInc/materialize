@@ -18,12 +18,11 @@
 use std::collections::BTreeMap;
 use std::fmt::Formatter;
 
-use mz_expr::canonicalize::canonicalize_equivalence_classes;
+use mz_expr::canonicalize::{UnionFind, canonicalize_equivalence_classes};
 use mz_expr::explain::{HumanizedExplain, HumanizerMode};
 use mz_expr::{AggregateFunc, Id, MirRelationExpr, MirScalarExpr};
 use mz_ore::str::{bracketed, separated};
 use mz_repr::{ColumnType, Datum};
-use tracing::debug;
 
 use crate::analysis::{Analysis, Lattice};
 use crate::analysis::{Arity, RelationType};
@@ -393,29 +392,15 @@ impl EquivalenceClassesWithholdingErrors {
         } else {
             let reducer = self.equivalence_classes.reducer();
             let mut classes = self.equivalence_classes.classes.clone();
-            for (anchor, class) in self.held_back_classes.iter_mut() {
-                if let Some(anchor) = anchor {
+            for (anchor, mut class) in self.held_back_classes.drain(..) {
+                if let Some(mut anchor) = anchor {
                     // Reduce the anchor expression to its canonical form.
-                    reducer.reduce_expr(anchor);
-                    // Find the class that contains the anchor at the head.
-                    if let Some(class) = classes.iter_mut().find(|c| c.first() == Some(anchor)) {
-                        // If we found the class, we can push the rest of the held back class into it.
-                        class.extend(class.clone());
-                    } else {
-                        // If we did not find the class, we can push the whole class into the classes.
-                        class.push(anchor.clone());
-                        classes.push(class.clone());
-                        for equivalence in classes.iter_mut() {
-                            equivalence.sort();
-                            equivalence.dedup();
-                        }
-                        classes.retain(|es| es.len() > 1);
-                        classes.sort();
-                    }
-                } else {
-                    classes.push(class.clone());
+                    reducer.reduce_expr(&mut anchor);
+                    class.push(anchor.clone());
                 }
+                classes.push(class.clone());
             }
+            canonicalize_equivalence_classes(&mut classes);
             classes
         }
     }
@@ -1129,55 +1114,6 @@ impl ExpressionReducer for BTreeMap<MirScalarExpr, MirScalarExpr> {
             }
         }
         false
-    }
-}
-
-trait UnionFind<T> {
-    /// Sets `self[x]` to the root from `x`, and returns a reference to the root.
-    fn find<'a>(&'a mut self, x: &T) -> Option<&'a T>;
-    /// Ensures that `x` and `y` have the same root.
-    fn union(&mut self, x: &T, y: &T);
-}
-
-impl<T: Clone + Ord> UnionFind<T> for BTreeMap<T, T> {
-    fn find<'a>(&'a mut self, x: &T) -> Option<&'a T> {
-        if !self.contains_key(x) {
-            None
-        } else {
-            if self[x] != self[&self[x]] {
-                // Path halving
-                let mut y = self[x].clone();
-                while y != self[&y] {
-                    let grandparent = self[&self[&y]].clone();
-                    *self.get_mut(&y).unwrap() = grandparent;
-                    y.clone_from(&self[&y]);
-                }
-                *self.get_mut(x).unwrap() = y;
-            }
-            Some(&self[x])
-        }
-    }
-
-    fn union(&mut self, x: &T, y: &T) {
-        match (self.find(x).is_some(), self.find(y).is_some()) {
-            (true, true) => {
-                if self[x] != self[y] {
-                    let root_x = self[x].clone();
-                    let root_y = self[y].clone();
-                    self.insert(root_x, root_y);
-                }
-            }
-            (false, true) => {
-                self.insert(x.clone(), self[y].clone());
-            }
-            (true, false) => {
-                self.insert(y.clone(), self[x].clone());
-            }
-            (false, false) => {
-                self.insert(x.clone(), x.clone());
-                self.insert(y.clone(), x.clone());
-            }
-        }
     }
 }
 
