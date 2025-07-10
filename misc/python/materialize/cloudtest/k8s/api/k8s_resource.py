@@ -90,6 +90,7 @@ class K8sResource:
             sanitizer = Sanitizer[os.getenv("CI_SANITIZER", "none")]
             bazel = ui.env_is_truthy("CI_BAZEL_BUILD")
             bazel_remote_cache = os.getenv("CI_BAZEL_REMOTE_CACHE")
+            bazel_lto = ui.env_is_truthy("CI_BAZEL_LTO")
 
             repo = mzbuild.Repository(
                 MZ_ROOT,
@@ -100,6 +101,7 @@ class K8sResource:
                 sanitizer=sanitizer,
                 bazel=bazel,
                 bazel_remote_cache=bazel_remote_cache,
+                bazel_lto=bazel_lto,
             )
             deps = repo.resolve_dependencies([repo.images[service]])
             rimage = deps[service]

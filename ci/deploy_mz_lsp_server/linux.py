@@ -23,6 +23,7 @@ from .deploy_util import MZ_LSP_SERVER_VERSION
 def main() -> None:
     bazel = ui.env_is_truthy("CI_BAZEL_BUILD")
     bazel_remote_cache = os.getenv("CI_BAZEL_REMOTE_CACHE")
+    bazel_lto = ui.env_is_truthy("CI_BAZEL_LTO")
 
     repo = mzbuild.Repository(
         Path("."),
@@ -30,6 +31,7 @@ def main() -> None:
         sanitizer=Sanitizer.none,
         bazel=bazel,
         bazel_remote_cache=bazel_remote_cache,
+        bazel_lto=bazel_lto,
     )
     target = f"{repo.rd.arch}-unknown-linux-gnu"
 

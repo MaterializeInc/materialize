@@ -31,11 +31,12 @@ import tarfile
 import time
 from collections import OrderedDict
 from collections.abc import Callable, Iterable, Iterator, Sequence
-from concurrent.futures import ThreadPoolExecutor, as_completed, wait
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from enum import Enum, auto
 from functools import cache
 from pathlib import Path
 from tempfile import TemporaryFile
+from threading import Lock
 from typing import IO, Any, cast
 
 import yaml
@@ -866,6 +867,7 @@ class ResolvedImage:
             "docker",
             "buildx",
             "build",
+            "--progress=plain",  # less noisy
             "-f",
             "-",
             *(f"--build-arg={k}={v}" for k, v in build_args.items()),
@@ -1019,6 +1021,11 @@ class ResolvedImage:
         self_hash.update(f"coverage={self.image.rd.coverage}".encode())
         self_hash.update(f"sanitizer={self.image.rd.sanitizer}".encode())
 
+        lto = self.image.rd.profile == Profile.RELEASE and (
+            ui.env_is_truthy("BUILDKITE_TAG") or self.image.rd.bazel_lto
+        )
+        self_hash.update(f"lto={lto}".encode())
+
         full_hash = hashlib.sha1()
         full_hash.update(self_hash.digest())
         for dep in sorted(self.dependencies.values(), key=lambda d: d.name):
@@ -1089,11 +1096,8 @@ class DependencySet:
                 sys.exit(5)
 
         prep = self._prepare_batch(deps_to_build)
-
-        if deps_to_build:
-            with ThreadPoolExecutor(max_workers=len(deps_to_build)) as executor:
-                futures = [executor.submit(dep.build, prep) for dep in deps_to_build]
-                wait(futures)
+        for dep in deps_to_build:
+            dep.build(prep)
 
     def ensure(self, post_build: Callable[[ResolvedImage], None] | None = None):
         """Ensure all publishable images in this dependency set exist on Docker
@@ -1107,11 +1111,28 @@ class DependencySet:
         """
         deps_to_build = [dep for dep in self if not dep.is_published_if_necessary()]
         prep = self._prepare_batch(deps_to_build)
+        lock = Lock()
+        built_deps: set[str] = set([dep.name for dep in self]) - set(
+            [dep.name for dep in deps_to_build]
+        )
 
         def build_dep(dep):
+            end_time = time.time() + 600
+            while True:
+                if time.time() > end_time:
+                    raise TimeoutError(
+                        f"Timed out in {dep.name} waiting for {[dep2.name for dep2 in dep.dependencies if dep2 not in built_deps]}"
+                    )
+                with lock:
+                    if all(dep2 in built_deps for dep2 in dep.dependencies):
+                        break
+                time.sleep(0.01)
             for attempts_remaining in reversed(range(3)):
                 try:
                     dep.build(prep, push=dep.publish)
+                    with lock:
+                        built_deps.add(dep.name)
+                    break
                 except Exception:
                     if not dep.publish or attempts_remaining == 0:
                         raise
@@ -1302,7 +1323,7 @@ class Repository:
         )
         parser.add_argument(
             "--bazel-lto",
-            default=os.getenv("CI_BAZEL_LTO"),
+            default=ui.env_is_truthy("CI_BAZEL_LTO"),
             action="store",
         )
 

@@ -51,6 +51,7 @@ class CloudtestApplicationBase(Application):
             coverage=self.coverage_mode(),
             bazel=self.bazel(),
             bazel_remote_cache=self.bazel_remote_cache(),
+            bazel_lto=self.bazel_lto(),
         )
         for image in self.images:
             self._acquire_image(repo, image)
