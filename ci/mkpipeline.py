@@ -121,7 +121,7 @@ so it is executed.""",
         bazel_remote_cache = "https://bazel-remote.dev.materialize.com"
     raw = raw.replace("$BAZEL_REMOTE_CACHE", bazel_remote_cache)
 
-    hash_check: dict[tuple[Arch, bool], tuple[str, bool]] = {}
+    hash_check: dict[Arch, tuple[str, bool]] = {}
 
     def hash(deps: mzbuild.DependencySet) -> str:
         h = hashlib.sha1()
@@ -129,7 +129,7 @@ so it is executed.""",
             h.update(dep.spec().encode())
         return h.hexdigest()
 
-    def get_hashes(arch: Arch, lto: bool) -> tuple[str, bool]:
+    def get_hashes(arch: Arch) -> tuple[str, bool]:
         repo = mzbuild.Repository(
             Path("."),
             arch=arch,
@@ -137,7 +137,7 @@ so it is executed.""",
             sanitizer=args.sanitizer,
             bazel=bazel,
             bazel_remote_cache=bazel_remote_cache,
-            bazel_lto=lto,
+            bazel_lto=bazel_lto,
         )
         deps = repo.resolve_dependencies(image for image in repo if image.publish)
         check = deps.check()
@@ -145,9 +145,7 @@ so it is executed.""",
 
     def fetch_hashes() -> None:
         for arch in [Arch.AARCH64, Arch.X86_64]:
-            for lto in [False, True]:
-                if not lto or args.pipeline in ["nightly", "release-qualification"]:
-                    hash_check[(arch, lto)] = get_hashes(arch, lto)
+            hash_check[arch] = get_hashes(arch)
 
     trim_builds_prep_thread = threading.Thread(target=fetch_hashes)
     trim_builds_prep_thread.start()
@@ -913,41 +911,23 @@ def add_cargo_test_dependency(
 
 def trim_builds(
     pipeline: Any,
-    hash_check: dict[tuple[Arch, bool], tuple[str, bool]],
+    hash_check: dict[Arch, tuple[str, bool]],
 ) -> None:
     """Trim unnecessary x86-64/aarch64 builds if all artifacts already exist. Also mark remaining builds with a unique concurrency group for the code state so that the same build doesn't happen multiple times."""
     for step in steps(pipeline):
         if step.get("id") in ("build-x86_64", "upload-debug-symbols-x86_64"):
-            if hash_check[(Arch.X86_64, False)][1]:
+            if hash_check[Arch.X86_64][1]:
                 step["skip"] = True
             else:
                 step["concurrency"] = 1
-                step["concurrency_group"] = (
-                    f"build-x86_64/{hash_check[(Arch.X86_64, False)][0]}"
-                )
+                step["concurrency_group"] = f"build-x86_64/{hash_check[Arch.X86_64][0]}"
         elif step.get("id") in ("build-aarch64", "upload-debug-symbols-aarch64"):
-            if hash_check[(Arch.AARCH64, False)][1]:
+            if hash_check[Arch.AARCH64][1]:
                 step["skip"] = True
             else:
                 step["concurrency"] = 1
                 step["concurrency_group"] = (
-                    f"build-aarch64/{hash_check[(Arch.AARCH64, False)][0]}"
-                )
-        elif step.get("id") == "build-x86_64-lto":
-            if hash_check[(Arch.X86_64, True)][1]:
-                step["skip"] = True
-            else:
-                step["concurrency"] = 1
-                step["concurrency_group"] = (
-                    f"build-x86_64/{hash_check[(Arch.X86_64, True)][0]}"
-                )
-        elif step.get("id") == "build-aarch64-lto":
-            if hash_check[(Arch.AARCH64, True)][1]:
-                step["skip"] = True
-            else:
-                step["concurrency"] = 1
-                step["concurrency_group"] = (
-                    f"build-aarch64/{hash_check[(Arch.AARCH64, True)][0]}"
+                    f"build-aarch64/{hash_check[Arch.AARCH64][0]}"
                 )
 
 
