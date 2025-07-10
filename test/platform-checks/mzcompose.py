@@ -9,8 +9,8 @@
 
 """
 Write a single set of .td fragments for a particular feature or functionality
-and then have Zippy execute them in upgrade, 0dt-upgrade, restart, recovery and
-failure contexts.
+and then execute them in upgrade, 0dt-upgrade, restart, recovery and failure
+contexts.
 """
 
 import os
