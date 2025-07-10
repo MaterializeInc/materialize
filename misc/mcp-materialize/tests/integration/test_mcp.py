@@ -83,7 +83,14 @@ async def test_basic_tool(materialize_pool):
                 "required": ["id"],
                 "properties": {"id": {"type": "number"}},
             },
-            annotations=ToolAnnotations(readOnlyHint=True),
+            outputSchema={
+                "type": "object",
+                "required": ["result"],
+                "properties": {"result": {"type": "string"}},
+            },
+            annotations=ToolAnnotations(
+                title="materialize::tools::my_tool(id)", readOnlyHint=True
+            ),
         )
 
         result = await client.call_tool("materialize_tools_my_tool_id_idx", {"id": 1})

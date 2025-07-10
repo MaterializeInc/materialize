@@ -42,13 +42,12 @@ from collections.abc import AsyncIterator, Sequence
 from contextlib import asynccontextmanager
 from typing import Any
 
-import uvicorn
-from mcp import stdio_server
 from mcp.server import NotificationOptions, Server
-from mcp.server.sse import SseServerTransport
 from mcp.types import EmbeddedResource, ImageContent, TextContent, Tool
 from psycopg.rows import dict_row
 from psycopg_pool import AsyncConnectionPool
+
+from mcp_materialize.transports import http_transport, sse_transport, stdio_transport
 
 from .config import load_config
 from .mz_client import MzClient
@@ -145,47 +144,13 @@ async def run():
     match cfg.transport:
         case "stdio":
             logger.info("Starting server in stdio mode...")
-            async with stdio_server() as (read_stream, write_stream):
-                await server.run(
-                    read_stream,
-                    write_stream,
-                    options,
-                )
+            await stdio_transport(server, options)
+        case "http":
+            logger.info("Starting server in HTTP mode...")
+            await http_transport(server, cfg)
         case "sse":
             logger.info(f"Starting SSE server on {cfg.host}:{cfg.port}...")
-            from starlette.applications import Starlette
-            from starlette.routing import Mount, Route
-            from starlette.types import Receive, Scope, Send
-
-            sse = SseServerTransport("/messages/")
-
-            async def handle_sse(scope: Scope, receive: Receive, send: Send):
-                try:
-                    async with sse.connect_sse(scope, receive, send) as (
-                        read_stream,
-                        write_stream,
-                    ):
-                        await server.run(read_stream, write_stream, options)
-                except Exception as e:
-                    logger.error(f"Error handling SSE connection: {str(e)}")
-                    raise
-
-            starlette_app = Starlette(
-                routes=[
-                    Route("/sse", endpoint=handle_sse, methods=["GET"]),
-                    Mount("/messages/", app=sse.handle_post_message),
-                ],
-            )
-
-            uv_server = uvicorn.Server(
-                uvicorn.Config(
-                    starlette_app,
-                    host=cfg.host,
-                    port=cfg.port,
-                    log_level=cfg.log_level.lower(),
-                )
-            )
-            await uv_server.serve()
+            await sse_transport(server, options, cfg)
         case t:
             raise ValueError(f"Unknown transport: {t}")
 

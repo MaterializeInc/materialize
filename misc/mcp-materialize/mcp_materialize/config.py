@@ -33,7 +33,7 @@ def load_config() -> Config:
     parser = argparse.ArgumentParser(description="Run Materialize MCP server")
     parser.add_argument(
         "--transport",
-        choices=["stdio", "sse"],
+        choices=["stdio", "http", "sse"],
         default=os.getenv("MCP_TRANSPORT", "stdio"),
         help="Communication transport (default: stdio)",
     )
