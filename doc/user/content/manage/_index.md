@@ -18,4 +18,5 @@ This section contains various resources for managing Materialize.
 | [Monitoring and alerting](/manage/monitor/) | Guides to set up monitoring and alerting |
 | [Using dbt to manage Materialize](/manage/dbt/) | Guides for using dbt to manage Materialize |
 | [Using Terraform to manage Materialize](/manage/terraform/) | Guides for using Terraform to manage Materialize |
+| [Disaster Recovery](/manage/disaster-recovery/) | Disaster recovery strategies |
 | [**Usage & billing**](/administration/billing/) | Understand the billing model of Materialize |
