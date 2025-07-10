@@ -182,18 +182,7 @@ an SSH bastion server to accept connections from Materialize, check
 
 ### Creating a source {#create-source-example}
 
-Once Change Data Capture and `SNAPSHOT` transaction isolation are enabled for
-the database in your SQL Server instance, you also need to enable [Change Data
-capture for the specific tables](https://learn.microsoft.com/en-us/sql/relational-databases/system-stored-procedures/sys-sp-cdc-enable-table-transact-sql) you want to replicate.
-
-```sql
--- In SQL Server.
-EXEC sys.sp_cdc_enable_table
-  @source_schema = '<SCHEMA_NAME>',
-  @source_name = '<TABLE_NAME>',
-  @role_name = '<ROLE_FROM_MZ_CONNECTION>',
-  @supports_net_changes = 0;
-```
+You **must** enable Change Data Capture, see [Enable Change Data Capture SQL Server Instructions](sql-server-direct/ingesting-data/enable-cdc).
 
 Once CDC is enabled for all of the relevant tables, you can create a `SOURCE` in
 Materialize to begin replicating data!
