@@ -32,10 +32,10 @@ use std::collections::BTreeMap;
 
 use mz_expr::{Id, MirRelationExpr, MirScalarExpr};
 use mz_repr::Datum;
-use tracing::info;
+use tracing::{debug, info};
 
 use crate::analysis::equivalences::{
-    EquivalenceClasses, EquivalenceClassesWithoutErrors, Equivalences, ExpressionReducer,
+    EquivalenceClasses, EquivalenceClassesWitholdingErrors, Equivalences, ExpressionReducer,
 };
 use crate::analysis::{Arity, DerivedView, RelationType};
 
@@ -448,7 +448,7 @@ impl EquivalencePropagation {
                 }
 
                 // Form the equivalences we will use to replace `equivalences`.
-                let mut join_equivalences = EquivalenceClassesWithoutErrors::default();
+                let mut join_equivalences = EquivalenceClassesWitholdingErrors::default();
                 join_equivalences.extend_equivalences(equivalences.clone());
 
                 // // Optionally, introduce `outer_equivalences` into `equivalences`.
@@ -519,14 +519,12 @@ impl EquivalencePropagation {
                 let extracted_equivalences =
                     join_equivalences.extract_equivalences(input_types.as_ref().map(|x| &x[..]));
 
-                info!(
+                debug!(
                     ?inputs,
                     ?extracted_equivalences,
                     "Join equivalences extracted"
                 );
-                equivalences.clone_from(
-                    &join_equivalences.extract_equivalences(input_types.as_ref().map(|x| &x[..])),
-                );
+                equivalences.clone_from(&extracted_equivalences);
             }
             MirRelationExpr::Reduce {
                 input,

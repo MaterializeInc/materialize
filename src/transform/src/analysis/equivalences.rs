@@ -23,7 +23,7 @@ use mz_expr::explain::{HumanizedExplain, HumanizerMode};
 use mz_expr::{AggregateFunc, Id, MirRelationExpr, MirScalarExpr};
 use mz_ore::str::{bracketed, separated};
 use mz_repr::{ColumnType, Datum};
-use tracing::info;
+use tracing::debug;
 
 use crate::analysis::{Analysis, Lattice};
 use crate::analysis::{Arity, RelationType};
@@ -341,37 +341,18 @@ pub struct EquivalenceClasses {
     remap: BTreeMap<MirScalarExpr, MirScalarExpr>,
 }
 
-/// A wrapper struct for equivalence classes that can not contain any errors.
+/// A wrapper struct for equivalence classes that witholds errors
+/// from the underlying equivalence classes, reintroducing them
+/// when extracting equivalences.
 #[derive(Clone, Eq, PartialEq, Ord, PartialOrd, Default, Debug)]
-pub struct EquivalenceClassesWithoutErrors {
+pub struct EquivalenceClassesWitholdingErrors {
     /// The underlying equivalence classes.
     pub equivalence_classes: EquivalenceClasses,
-    /// A map of errors that have been encountered related to their equivalence classes.
-    // pub errors: BTreeMap<MirScalarExpr, MirScalarExpr>,
+    /// A list of equivalence classes that contain errors, which we hold back
     pub held_back_classes: Vec<Vec<MirScalarExpr>>,
 }
 
-impl EquivalenceClassesWithoutErrors {
-    /// Create a new instance of `EquivalenceClassesWithoutErrors` with the given equivalence classes.
-    pub fn new(equivalence_classes: EquivalenceClasses) -> Self {
-        Self {
-            equivalence_classes,
-            held_back_classes: Vec::new(),
-        }
-    }
-
-    /// Push some new predicate that we expect to be true
-    pub fn push_predicate(&mut self, predicate: MirScalarExpr) {
-        if predicate.contains_err() {
-            self.held_back_classes
-                .push(vec![predicate, MirScalarExpr::literal_true()]);
-        } else {
-            self.equivalence_classes
-                .classes
-                .push(vec![predicate, MirScalarExpr::literal_true()]);
-        }
-    }
-
+impl EquivalenceClassesWitholdingErrors {
     /// Extend the equivalence classes with new equivalences.
     pub fn extend_equivalences(&mut self, equivalences: Vec<Vec<MirScalarExpr>>) {
         for class in equivalences {
@@ -381,24 +362,14 @@ impl EquivalenceClassesWithoutErrors {
 
     /// Push a new equivalence class, which may contain errors.
     pub fn push_equivalences(&mut self, equivalences: Vec<MirScalarExpr>) {
-        let mut with_errs = equivalences
-            .iter()
-            .filter(|e| e.contains_err())
-            .cloned()
-            .collect::<Vec<_>>();
-        // info!("Equivalence class with errors: {:?}", with_errs);
-        let without_errs = equivalences
-            .iter()
-            .filter(|e| !e.contains_err())
-            .cloned()
-            .collect::<Vec<_>>();
+        let (mut with_errs, without_errs): (Vec<_>, Vec<_>) =
+            equivalences.into_iter().partition(|e| e.contains_err());
         if let Some(expr) = without_errs.first()
             && !with_errs.is_empty()
         {
             with_errs.push(expr.clone());
-            info!("Holding back equivalence class with errors {:?}", with_errs);
-            self.held_back_classes.push(with_errs);
         }
+        self.held_back_classes.push(with_errs);
         if without_errs.len() > 1 {
             self.equivalence_classes.classes.push(without_errs);
         }
@@ -406,6 +377,7 @@ impl EquivalenceClassesWithoutErrors {
 
     /// Subject the constraints to the column projection, reworking and removing equivalences.
     /// This method should also introduce equivalences representing any repeated columns.
+    /// This notably does not project the held back classes.
     pub fn project<I>(&mut self, output_columns: I)
     where
         I: IntoIterator<Item = usize> + Clone,
@@ -421,10 +393,6 @@ impl EquivalenceClassesWithoutErrors {
         self.equivalence_classes.minimize(columns);
 
         if self.held_back_classes.is_empty() {
-            // info!(
-            //     "No held back classes, returning equivalence classes {:?}",
-            //     self.equivalence_classes.classes
-            // );
             self.equivalence_classes.classes.clone()
         } else {
             let reducer = self.equivalence_classes.reducer();
@@ -434,13 +402,8 @@ impl EquivalenceClassesWithoutErrors {
                 });
             }
             let mut classes = self.equivalence_classes.classes.clone();
-            // info!("before held back classes: {:?}", classes);
             classes.extend(self.held_back_classes.iter().cloned());
             canonicalize_equivalence_classes(&mut classes);
-            // info!(
-            //     "Held back classes, returning equivalence classes with held back classes: {:?}",
-            //     classes
-            // );
             classes
         }
     }
