@@ -5749,9 +5749,9 @@ def workflow_test_lgalloc_limiter(c: Composition) -> None:
 
 def workflow_test_memory_limiter(c: Composition) -> None:
     """
-    Test that the lgalloc disk usage limiter functions as expected.
+    Test that the memory limiter functions as expected.
 
-    We run a workload whose disk usage is roughly known and then assert that it
+    We run a workload whose memory usage is roughly known and then assert that it
     does, or does not, manage to hydrate with various limiter configurations.
     """
 
@@ -5760,7 +5760,6 @@ def workflow_test_memory_limiter(c: Composition) -> None:
     with c.override(
         Materialized(
             additional_system_parameter_defaults={
-                "enable_compute_correction_v2": "true",
                 "enable_lgalloc": "false",
                 "memory_limiter_interval": "100ms",
                 "unsafe_enable_unorchestrated_cluster_replicas": "true",
@@ -5794,7 +5793,7 @@ def workflow_test_memory_limiter(c: Composition) -> None:
         def setup_workload():
             """
             For our workload we use a large MV, which we obtain by performing a cross
-            join. We make sure that the rows are large, so they spill to disk well.
+            join. We make sure that the rows are large, so consume some memory.
             """
             c.sql(
                 """
@@ -5807,7 +5806,7 @@ def workflow_test_memory_limiter(c: Composition) -> None:
                 """
             )
 
-        # Test 1: The MV should be able to hydrate with a disk limit of 1 GiB.
+        # Test 1: The MV should be able to hydrate with a memory limit of 2 GiB.
         c.sql(
             """
             ALTER SYSTEM SET memory_limiter_usage_factor = 2;
@@ -5823,7 +5822,7 @@ def workflow_test_memory_limiter(c: Composition) -> None:
 
         c.kill("clusterd1")
 
-        # Test 2: The MV should be unable to hydrate with a disk limit of 10 MiB.
+        # Test 2: The MV should be unable to hydrate with a memory limit of 205 MiB.
         c.sql(
             """
             ALTER SYSTEM SET memory_limiter_usage_factor = 0.20;
@@ -5843,12 +5842,12 @@ def workflow_test_memory_limiter(c: Composition) -> None:
         else:
             raise RuntimeError("replica did not exit with code 167")
 
-        # Test 3: The MV should be able to hydrate with a disk limit of 10 MiB
+        # Test 3: The MV should be able to hydrate with a memory limit of 1 GiB
         # and a burst budget of 10 GiB-seconds.
         c.sql(
             """
             ALTER SYSTEM SET memory_limiter_usage_factor = 1;
-            ALTER SYSTEM SET memory_limiter_burst_factor = 1000;
+            ALTER SYSTEM SET memory_limiter_burst_factor = 10;
             """,
             port=6877,
             user="mz_system",
