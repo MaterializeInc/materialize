@@ -465,7 +465,16 @@ impl Consensus for PostgresConsensus {
                 limit
             )));
         };
-        let rows = {
+        let rows = if self.postgres_tuned() {
+            // In serializable mode, postgres behaves better when read-only mode is explicitly
+            // declared, which requires explicitly initializing a transaction.
+            let mut client = self.get_connection().await?;
+            let txn = client.build_transaction().read_only(true).start().await?;
+            let statement = txn.prepare_cached(q).await?;
+            let result = txn.query(&statement, &[&key, &from, &limit]).await?;
+            txn.commit().await?;
+            result
+        } else {
             let client = self.get_connection().await?;
             let statement = client.prepare_cached(q).await?;
             client.query(&statement, &[&key, &from, &limit]).await?
