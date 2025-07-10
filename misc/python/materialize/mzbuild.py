@@ -1019,6 +1019,11 @@ class ResolvedImage:
         self_hash.update(f"coverage={self.image.rd.coverage}".encode())
         self_hash.update(f"sanitizer={self.image.rd.sanitizer}".encode())
 
+        lto = self.image.rd.profile == Profile.RELEASE and (
+            ui.env_is_truthy("BUILDKITE_TAG") or self.image.rd.bazel_lto
+        )
+        self_hash.update(f"lto={lto}".encode())
+
         full_hash = hashlib.sha1()
         full_hash.update(self_hash.digest())
         for dep in sorted(self.dependencies.values(), key=lambda d: d.name):
@@ -1302,7 +1307,7 @@ class Repository:
         )
         parser.add_argument(
             "--bazel-lto",
-            default=os.getenv("CI_BAZEL_LTO"),
+            default=ui.env_is_truthy("CI_BAZEL_LTO"),
             action="store",
         )
 

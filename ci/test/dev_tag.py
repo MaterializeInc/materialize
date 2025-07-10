@@ -20,6 +20,7 @@ from materialize.xcompile import Arch
 def main() -> None:
     bazel = ui.env_is_truthy("CI_BAZEL_BUILD")
     bazel_remote_cache = os.getenv("CI_BAZEL_REMOTE_CACHE")
+    bazel_lto = ui.env_is_truthy("CI_BAZEL_LTO")
 
     mz_version = ci_util.get_mz_version()
     sanitizer = Sanitizer[os.getenv("CI_SANITIZER", "none")]
@@ -32,6 +33,7 @@ def main() -> None:
             sanitizer=sanitizer,
             bazel=bazel,
             bazel_remote_cache=bazel_remote_cache,
+            bazel_lto=bazel_lto,
         ),
         mzbuild.Repository(
             Path("."),
@@ -40,6 +42,7 @@ def main() -> None:
             sanitizer=sanitizer,
             bazel=bazel,
             bazel_remote_cache=bazel_remote_cache,
+            bazel_lto=bazel_lto,
         ),
     ]
     print("--- Tagging development Docker images")

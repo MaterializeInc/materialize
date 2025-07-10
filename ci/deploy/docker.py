@@ -20,6 +20,7 @@ from materialize.xcompile import Arch
 def main() -> None:
     bazel = ui.env_is_truthy("CI_BAZEL_BUILD")
     bazel_remote_cache = os.getenv("CI_BAZEL_REMOTE_CACHE")
+    bazel_lto = ui.env_is_truthy("CI_BAZEL_LTO")
 
     repos = [
         mzbuild.Repository(
@@ -29,6 +30,7 @@ def main() -> None:
             sanitizer=Sanitizer.none,
             bazel=bazel,
             bazel_remote_cache=bazel_remote_cache,
+            bazel_lto=bazel_lto,
         ),
         mzbuild.Repository(
             Path("."),
@@ -37,6 +39,7 @@ def main() -> None:
             sanitizer=Sanitizer.none,
             bazel=bazel,
             bazel_remote_cache=bazel_remote_cache,
+            bazel_lto=bazel_lto,
         ),
     ]
     buildkite_tag = os.environ["BUILDKITE_TAG"]

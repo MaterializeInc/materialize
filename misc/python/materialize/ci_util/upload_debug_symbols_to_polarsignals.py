@@ -63,6 +63,7 @@ def main() -> None:
     sanitizer = Sanitizer[os.getenv("CI_SANITIZER", "none")]
     bazel = ui.env_is_truthy("CI_BAZEL_BUILD")
     bazel_remote_cache = os.getenv("CI_BAZEL_REMOTE_CACHE")
+    bazel_lto = ui.env_is_truthy("CI_BAZEL_LTO")
 
     repo = mzbuild.Repository(
         Path("."),
@@ -70,6 +71,7 @@ def main() -> None:
         sanitizer=sanitizer,
         bazel=bazel,
         bazel_remote_cache=bazel_remote_cache,
+        bazel_lto=bazel_lto,
         arch=Arch(args.arch),
     )
 

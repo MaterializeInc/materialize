@@ -115,6 +115,7 @@ so it is executed.""",
     raw = raw.replace("$RUST_VERSION", rust_version())
 
     bazel = ui.env_is_truthy("CI_BAZEL_BUILD", "1")
+    bazel_lto = ui.env_is_truthy("CI_BAZEL_LTO")
 
     # On 'main' or tagged branches, we use a separate remote cache that only CI can write to.
     if os.environ["BUILDKITE_BRANCH"] == "main" or os.environ["BUILDKITE_TAG"]:
@@ -139,6 +140,7 @@ so it is executed.""",
             sanitizer=args.sanitizer,
             bazel=bazel,
             bazel_remote_cache=bazel_remote_cache,
+            bazel_lto=bazel_lto,
         )
         deps = repo.resolve_dependencies(image for image in repo if image.publish)
         check = deps.check()
@@ -171,6 +173,7 @@ so it is executed.""",
                 args.sanitizer,
                 bazel,
                 args.bazel_remote_cache,
+                bazel_lto,
             )
         else:
             print("--- Trimming unchanged steps from pipeline")
@@ -180,6 +183,7 @@ so it is executed.""",
                 args.sanitizer,
                 bazel,
                 args.bazel_remote_cache,
+                bazel_lto,
             )
 
     if args.sanitizer != Sanitizer.none:
@@ -311,12 +315,10 @@ so it is executed.""",
 
     print("--- Trim builds")
     trim_builds_prep_thread.join()
-    trim_builds(
-        pipeline, args.coverage, args.sanitizer, args.bazel_remote_cache, hash_check
-    )
+    trim_builds(pipeline, hash_check)
     print("--- Add Cargo Test dependency")
     add_cargo_test_dependency(
-        pipeline, args.coverage, args.sanitizer, args.bazel_remote_cache
+        pipeline, args.coverage, args.sanitizer, args.bazel_remote_cache, bazel_lto
     )
 
     print("--- Removing Mz-specific keys")
@@ -713,6 +715,7 @@ def trim_tests_pipeline(
     sanitizer: Sanitizer,
     bazel: bool,
     bazel_remote_cache: str,
+    bazel_lto: bool,
 ) -> None:
     """Trim pipeline steps whose inputs have not changed in this branch.
 
@@ -734,6 +737,7 @@ def trim_tests_pipeline(
         sanitizer=sanitizer,
         bazel=bazel,
         bazel_remote_cache=bazel_remote_cache,
+        bazel_lto=bazel_lto,
     )
     deps = repo.resolve_dependencies(image for image in repo)
 
@@ -878,6 +882,7 @@ def add_cargo_test_dependency(
     coverage: bool,
     sanitizer: Sanitizer,
     bazel_remote_cache: str,
+    bazel_lto: bool,
 ) -> None:
     """Cargo Test normally doesn't have to wait for the build to complete, but it requires a few images (ubuntu-base, postgres), which are rarely changed. So only add a dependency when those images are not on Dockerhub yet."""
     repo = mzbuild.Repository(
@@ -887,6 +892,7 @@ def add_cargo_test_dependency(
         sanitizer=sanitizer,
         bazel=True,
         bazel_remote_cache=bazel_remote_cache,
+        bazel_lto=bazel_lto,
     )
     composition = Composition(repo, name="cargo-test")
     deps = composition.dependencies
@@ -903,9 +909,6 @@ def add_cargo_test_dependency(
 
 def trim_builds(
     pipeline: Any,
-    coverage: bool,
-    sanitizer: Sanitizer,
-    bazel_remote_cache: str,
     hash_check: dict[Arch, tuple[str, bool]],
 ) -> None:
     """Trim unnecessary x86-64/aarch64 builds if all artifacts already exist. Also mark remaining builds with a unique concurrency group for the code state so that the same build doesn't happen multiple times."""
