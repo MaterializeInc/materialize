@@ -713,5 +713,15 @@
       ]
     }
   },
-  "merges": {}
+  "merges": {
+    "0-6": {
+      "since": {
+        "elements": []
+      },
+      "remaining_work": 0,
+      "active_compaction": {
+        "start_ms": 0
+      }
+    }
+  }
 }

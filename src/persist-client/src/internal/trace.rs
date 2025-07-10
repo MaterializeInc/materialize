@@ -58,7 +58,7 @@ use std::fmt::Debug;
 use std::mem;
 use std::ops::Range;
 use std::sync::Arc;
-use tracing::{info, warn};
+use tracing::warn;
 
 use crate::internal::paths::WriterKey;
 use differential_dataflow::lattice::Lattice;
@@ -831,7 +831,11 @@ impl<T: Timestamp + Lattice> SpineBatch<T> {
         // Incremental compaction can result in a batch with a single run, but multiple empty
         // hollow batches, which we still consider compact. As levels are merged, we
         // will eventually clean up the empty hollow batches.
-        self.parts.iter().all(|p| p.batch.run_splits.is_empty())
+        self.parts
+            .iter()
+            .map(|p| p.batch.run_meta.len())
+            .sum::<usize>()
+            <= 1
     }
 
     pub fn is_merging(&self) -> bool {
@@ -2410,7 +2414,6 @@ pub(crate) mod tests {
 
     use proptest::prelude::*;
     use semver::Version;
-    use tracing::info;
 
     use crate::internal::state::tests::any_hollow_batch;
 
@@ -2419,7 +2422,6 @@ pub(crate) mod tests {
     pub fn any_trace<T: Arbitrary + Timestamp + Lattice>(
         num_batches: Range<usize>,
     ) -> impl Strategy<Value = Trace<T>> {
-        info!("Generating trace with {:?} batches", num_batches);
         Strategy::prop_map(
             (
                 any::<Option<T>>(),
@@ -2451,7 +2453,6 @@ pub(crate) mod tests {
                 let reqs: Vec<_> = trace
                     .fueled_merge_reqs_before_ms(timeout_ms, None)
                     .collect();
-                info!("Generated {} merge requests: {:?}", reqs.len(), reqs);
                 for req in reqs {
                     trace.claim_compaction(req.id, ActiveCompaction { start_ms: 0 })
                 }

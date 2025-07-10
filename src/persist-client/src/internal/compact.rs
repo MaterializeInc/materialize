@@ -24,7 +24,7 @@ use futures_util::StreamExt;
 use mz_dyncfg::Config;
 use mz_ore::cast::CastFrom;
 use mz_ore::error::ErrorExt;
-use mz_ore::now::{NowFn, SYSTEM_TIME};
+use mz_ore::now::NowFn;
 use mz_persist::location::Blob;
 use mz_persist_types::part::Part;
 use mz_persist_types::{Codec, Codec64};
