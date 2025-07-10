@@ -293,17 +293,17 @@ RUN mkdir rust \
     && gpg --verify rust.asc rust.tar.gz \
     && tar -xzf rust.tar.gz -C /usr/local/lib/rustlib/ --strip-components=4 \
     && rm -rf rust.asc rust.tar.gz rust \
-    && cargo install --root /usr/local --version "=0.6.6" --locked cargo-about \
-    && cargo install --root /usr/local --version "=2.0.2" --locked cargo-deb \
-    && cargo install --root /usr/local --version "=0.14.21" --locked cargo-deny \
+    && cargo install --root /usr/local --version "=0.7.1" --locked cargo-about \
+    && cargo install --root /usr/local --version "=3.2.0" --locked cargo-deb \
+    && cargo install --root /usr/local --version "=0.18.3" --locked cargo-deny \
     && cargo install --root /usr/local --version "=0.1.0" --locked cargo-deplint \
-    && cargo install --root /usr/local --version ="0.9.28" --locked cargo-hakari \
+    && cargo install --root /usr/local --version "=0.9.36" --locked cargo-hakari \
     && cargo install --root /usr/local --version "=0.9.72" --locked cargo-nextest \
-    && cargo install --root /usr/local --version "=0.6.11" --locked cargo-llvm-cov \
-    && cargo install --root /usr/local --version "=0.1.55" --locked --features=vendored-openssl cargo-udeps \
-    && cargo install --root /usr/local --version "=0.2.15" --locked --no-default-features --features=s3,openssl/vendored sccache \
+    && cargo install --root /usr/local --version "=0.6.17" --locked cargo-llvm-cov \
+    && cargo install --root /usr/local --version "=0.1.57" --locked --features=vendored-openssl cargo-udeps \
+    && cargo install --root /usr/local --version "=0.10.0" --locked --no-default-features --features=s3,openssl/vendored sccache \
     && cargo install --root /usr/local --version "=0.3.6" --locked cargo-binutils \
-    && cargo install --root /usr/local --version "=0.13.0" --locked wasm-pack
+    && cargo install --root /usr/local --version "=0.13.1" --locked wasm-pack
 
 # Link the system lld into the cross-compiling sysroot.
 
