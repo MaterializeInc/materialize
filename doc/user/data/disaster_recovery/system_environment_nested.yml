@@ -1,0 +1,38 @@
+columns:
+  - column: "Component"
+  - column: "Failure Characteristics"
+rows:
+  - "Component": |
+      **Egress gateway**
+
+    "Failure Characteristics": |
+      The egress gateway runs on a single node in a single AZ. Although no data
+      is lost if the egress gateway becomes unavailable, sources and sinks are
+      impacted during this time.
+
+      The component has the following failure characteristics:
+
+      {{< yaml-table data="disaster_recovery/egress_gateway" >}}
+
+  - "Component": |
+      **Metadata store and the data durability consensus layer**
+
+    "Failure Characteristics": |
+
+      The metadata store and the data durability consensus layer component runs
+      across multiple AZs, providing high availability.
+
+      The component has the following failure characteristics:
+
+      {{< yaml-table data="disaster_recovery/metadata_store" >}}
+
+  - "Component": |
+      **Everything else**
+
+    "Failure Characteristics": |
+      The remaining components run across multiple AZs, providing high
+      availability; however, some failure events may impact the UI.
+
+      The remaining components have the following failure characteristics:
+
+      {{< yaml-table data="disaster_recovery/system_environment_everything_else" >}}

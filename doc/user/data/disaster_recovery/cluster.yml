@@ -1,0 +1,65 @@
+columns:
+  - column: "Failure Type"
+  - column: "RPO"
+  - column: "RTO (RF1 - single AZ)"
+  - column: "RTO (RF2 - multiple AZs)"
+
+rows:
+  - Failure Type: "**Machine failure**"
+    RPO: 0
+    RTO (RF1 - single AZ): |
+      Time to spin up new machine + possible rehydration time, depending on the
+      objects on the machine:
+
+      - If sources, no additional time (i.e., does not require rehydration).
+      - If sinks, no additional time (i.e., does not require rehydration).
+      - If compute, rehydration time.
+      - If serving, rehydration time.
+
+      To reduce rehydration time, scale up the cluster.
+    RTO (RF2 - multiple AZs): |
+      Can be:
+
+      - 0 if only compute and serving objects are on the machine.
+
+      - Time to spin up new machine if sources or sinks are on the machine.
+
+      In addition, cluster RTO is affected if the [`environmentd` is
+      down](#dr-environmentd) (seconds to minutes).
+
+  - Failure Type: "**Single AZ failure**"
+    RPO: 0
+    RTO (RF1 - single AZ): |
+
+      *For managed clusters*
+
+      Time to spin up new machine + possible rehydration time, depending on the
+      objects on the machine:
+
+      - If sources, no additional time (i.e., does not require rehydration).
+      - If sinks, no additional time (i.e., does not require rehydration).
+      - If compute, rehydration time.
+      - If serving, rehydration time.
+
+      To reduce rehydration time, scale up the cluster.
+
+      During downtime, single AZ PrivateLinks are impacted.
+    RTO (RF2 - multiple AZs): |
+
+      Can be:
+
+      - 0 if only compute and serving objects are on the machine.
+
+      - Time to spin up new machine if sources or sinks are on the machine.
+
+      In addition, cluster RTO is affected if the [`environmentd` is
+      down](#dr-environmentd) (seconds to minutes).
+
+  - Failure Type: "**Regional failure (or 2 AZs failures)**"
+    RPO: |
+      At most, 1 hour (time since last backup, based on hourly backups).<br>
+
+    RTO (RF1 - single AZ): |
+      ~1 hour (time to check pointers).
+    RTO (RF2 - multiple AZs): |
+      High/Significant. Consider using a [regional failover strategy](/manage/disaster-recovery/#level-3-a-duplicate-materialize-environment-inter-region-resilience).

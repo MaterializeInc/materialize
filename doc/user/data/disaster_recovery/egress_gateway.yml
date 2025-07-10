@@ -1,0 +1,27 @@
+columns:
+  - column: "Failure Type"
+  - column: "RPO"
+  - column: "RTO (RF1 - single AZ)"
+  - column: "RTO (RF2 - multiple AZs)"
+rows:
+  - Failure Type: "**Machine failure**"
+    RPO: 0
+    RTO (RF1 - single AZ): |
+      Time to spin up a new machine <br>(i.e., seconds to minutes).
+    RTO (RF2 - multiple AZs): |
+      N/A
+
+  - Failure Type: "**Single AZ failure**"
+    RPO: 0
+    RTO (RF1 - single AZ): |
+      Time for the AZ to come back or
+      manual failover to a new AZ(~30–60 min)
+    RTO (RF2 - multiple AZs): |
+      N/A
+
+  - Failure Type: "**Regional failure (or 2 AZ failures)**"
+    RPO: 0
+    RTO (RF1 - single AZ): |
+      High/Significant. Consider using a [regional failover strategy](/manage/disaster-recovery/#level-3-a-duplicate-materialize-environment-inter-region-resilience).
+    RTO (RF2 - multiple AZs): |
+      N/A
