@@ -153,6 +153,13 @@ so it is executed.""",
 
     pipeline = yaml.safe_load(raw)
 
+    # This has to run before other cutting steps because it depends on the id numbers
+    print("--- Trim test selection")
+    if test_selection := os.getenv("CI_TEST_IDS"):
+        trim_test_selection_id(pipeline, {int(i) for i in test_selection.split(",")})
+    elif test_selection := os.getenv("CI_TEST_SELECTION"):
+        trim_test_selection_name(pipeline, set(test_selection.split(",")))
+
     if args.pipeline == "test":
         if args.coverage or args.sanitizer != Sanitizer.none:
             print("Coverage/Sanitizer build, not trimming pipeline")
@@ -296,12 +303,6 @@ so it is executed.""",
 
     print("--- Set parallelism name")
     set_parallelism_name(pipeline)
-
-    print("--- Trim test selection")
-    if test_selection := os.getenv("CI_TEST_IDS"):
-        trim_test_selection_id(pipeline, {int(i) for i in test_selection.split(",")})
-    elif test_selection := os.getenv("CI_TEST_SELECTION"):
-        trim_test_selection_name(pipeline, set(test_selection.split(",")))
 
     print("--- Check depends_on")
     check_depends_on(pipeline, args.pipeline)
