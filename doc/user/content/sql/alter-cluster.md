@@ -132,10 +132,9 @@ any time. You should not rely on them for any kind of capacity planning.
 
 #### Downtime
 
-It's possible to avoid downtime by performing a [zero-downtime cluster
-resizing](#zero-downtime-cluster-resizing).
-
-TODO: Remove this section in favour of what we have just below?
+Resizing operation can incur downtime unless used with WAIT UNTIL READY option.
+See [zero-downtime cluster resizing](#zero-downtime-cluster-resizing) for
+details.
 
 #### Zero-downtime cluster resizing
 
@@ -255,6 +254,10 @@ running the `ALTER CLUSTER` command:
 ```mzsql
 ALTER CLUSTER c1 SET (SIZE '100cc');
 ```
+
+This will incur downtime when the cluster contains objects that need
+re-hydration before they are ready. This includes indexes, materialized views,
+and some types of sources.
 
 ### Schedule
 

@@ -92,8 +92,6 @@ resources available and can therefore process data faster and handle larger data
 volumes.
 
 As your workload changes, you can [resize a cluster](/sql/alter-cluster/).
-Depending on the type of objects in the cluster, this operation might incur
-downtime. See [Resizing downtime](/sql/alter-cluster/#downtime) for more details.
 
 {{< tip >}}
 

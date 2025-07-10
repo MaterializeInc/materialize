@@ -115,7 +115,7 @@ See [Monitoring hydration/data freshness status](/ingest-data/monitoring-data-in
 
 ## Hydration
 
-When a cluster is restarted (such as after resizing), certain objectson that
+When a cluster is restarted (such as after resizing), certain objects on that
 cluster  (such as sources, indexes, materialized views, and sinks) undergo
 hydration. Hydration refers to the reconstruction of in-memory state by reading
 data from Materialize's storage layer; hydration **does not** require reading
@@ -197,7 +197,7 @@ size](/sql/alter-cluster/#alter-cluster-size) to complete the operation.
 #### Right-size the cluster for steady-state
 
 Once the initial snapshot has completed, you can
-[resize](/sql/alter-cluster/#alter-cluster-size)  the cluster
+[resize](/sql/alter-cluster/#resizing)  the cluster
 to align with the volume of changes being replicated from your upstream in
 steady-state.
 
@@ -210,6 +210,11 @@ ALTER CLUSTER <cluster_name> SET ( SIZE = <new_size> );
 Resizing a cluster with sources requires the cluster to restart. This operation
 incurs downtime for the duration it takes for all objects in the cluster to
 [hydrate](#hydration).
+
+You might want to let the new-sized replica hydrate before shutting down the
+current replica. See [zero-downtime cluster
+resizing](/sql/alter-cluster/#zero-downtime-cluster-resizing) about automating
+this process.
 
 {{% /note %}}
 
