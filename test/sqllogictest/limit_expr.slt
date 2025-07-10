@@ -272,12 +272,11 @@ Explained Query:
       cte l2 =
         Union // { arity: 2 }
           Get l1 // { arity: 2 }
-          Map (error("more than one record produced in subquery")) // { arity: 2 }
-            Project (#0{state}) // { arity: 1 }
-              Filter (#1{count} > 1) // { arity: 2 }
-                Reduce group_by=[#0{state}] aggregates=[count(*)] // { arity: 2 }
-                  Project (#0{state}) // { arity: 1 }
-                    Get l1 // { arity: 2 }
+          Project (#0{state}, #2) // { arity: 2 }
+            FlatMap guard_subquery_size(#1{count}) // { arity: 3 }
+              Reduce group_by=[#0{state}] aggregates=[count(*)] // { arity: 2 }
+                Project (#0{state}) // { arity: 1 }
+                  Get l1 // { arity: 2 }
     Return // { arity: 2 }
       Project (#1{state}, #0{name}) // { arity: 2 }
         TopK group_by=[#1{state}, #2{l}] order_by=[#0{name} asc nulls_last] limit=integer_to_bigint(#2{l}) // { arity: 3 }
