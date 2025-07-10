@@ -35,7 +35,7 @@ use mz_repr::Datum;
 use tracing::{debug, info};
 
 use crate::analysis::equivalences::{
-    EquivalenceClasses, EquivalenceClassesWitholdingErrors, Equivalences, ExpressionReducer,
+    EquivalenceClasses, EquivalenceClassesWithholdingErrors, Equivalences, ExpressionReducer,
 };
 use crate::analysis::{Arity, DerivedView, RelationType};
 
@@ -448,7 +448,7 @@ impl EquivalencePropagation {
                 }
 
                 // Form the equivalences we will use to replace `equivalences`.
-                let mut join_equivalences = EquivalenceClassesWitholdingErrors::default();
+                let mut join_equivalences = EquivalenceClassesWithholdingErrors::default();
                 join_equivalences.extend_equivalences(equivalences.clone());
 
                 // // Optionally, introduce `outer_equivalences` into `equivalences`.

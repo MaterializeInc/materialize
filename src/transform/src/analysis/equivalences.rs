@@ -345,14 +345,14 @@ pub struct EquivalenceClasses {
 /// from the underlying equivalence classes, reintroducing them
 /// when extracting equivalences.
 #[derive(Clone, Eq, PartialEq, Ord, PartialOrd, Default, Debug)]
-pub struct EquivalenceClassesWitholdingErrors {
+pub struct EquivalenceClassesWithholdingErrors {
     /// The underlying equivalence classes.
     pub equivalence_classes: EquivalenceClasses,
     /// A list of equivalence classes that contain errors, which we hold back
-    pub held_back_classes: Vec<Vec<MirScalarExpr>>,
+    pub held_back_classes: Vec<(Option<MirScalarExpr>, Vec<MirScalarExpr>)>,
 }
 
-impl EquivalenceClassesWitholdingErrors {
+impl EquivalenceClassesWithholdingErrors {
     /// Extend the equivalence classes with new equivalences.
     pub fn extend_equivalences(&mut self, equivalences: Vec<Vec<MirScalarExpr>>) {
         for class in equivalences {
@@ -362,14 +362,10 @@ impl EquivalenceClassesWitholdingErrors {
 
     /// Push a new equivalence class, which may contain errors.
     pub fn push_equivalences(&mut self, equivalences: Vec<MirScalarExpr>) {
-        let (mut with_errs, without_errs): (Vec<_>, Vec<_>) =
+        let (with_errs, without_errs): (Vec<_>, Vec<_>) =
             equivalences.into_iter().partition(|e| e.contains_err());
-        if let Some(expr) = without_errs.first()
-            && !with_errs.is_empty()
-        {
-            with_errs.push(expr.clone());
-        }
-        self.held_back_classes.push(with_errs);
+        self.held_back_classes
+            .push((without_errs.first().cloned(), with_errs));
         if without_errs.len() > 1 {
             self.equivalence_classes.classes.push(without_errs);
         }
@@ -396,14 +392,30 @@ impl EquivalenceClassesWitholdingErrors {
             self.equivalence_classes.classes.clone()
         } else {
             let reducer = self.equivalence_classes.reducer();
-            for class in self.held_back_classes.iter_mut() {
-                class.iter_mut().for_each(|e| {
-                    reducer.reduce_expr(e);
-                });
-            }
             let mut classes = self.equivalence_classes.classes.clone();
-            classes.extend(self.held_back_classes.iter().cloned());
-            canonicalize_equivalence_classes(&mut classes);
+            for (anchor, class) in self.held_back_classes.iter_mut() {
+                if let Some(anchor) = anchor {
+                    // Reduce the anchor expression to its canonical form.
+                    reducer.reduce_expr(anchor);
+                    // Find the class that contains the anchor at the head.
+                    if let Some(class) = classes.iter_mut().find(|c| c.first() == Some(anchor)) {
+                        // If we found the class, we can push the rest of the held back class into it.
+                        class.extend(class.clone());
+                    } else {
+                        // If we did not find the class, we can push the whole class into the classes.
+                        class.push(anchor.clone());
+                        classes.push(class.clone());
+                        for equivalence in classes.iter_mut() {
+                            equivalence.sort();
+                            equivalence.dedup();
+                        }
+                        classes.retain(|es| es.len() > 1);
+                        classes.sort();
+                    }
+                } else {
+                    classes.push(class.clone());
+                }
+            }
             classes
         }
     }
