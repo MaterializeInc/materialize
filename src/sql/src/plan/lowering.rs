@@ -1957,15 +1957,17 @@ fn apply_scalar_subquery(
                 );
                 // Errors should result from counts > 1.
                 let errors = counts
-                    .filter(vec![MirScalarExpr::column(inner_arity).call_binary(
-                        MirScalarExpr::literal_ok(Datum::Int64(1), ScalarType::Int64),
-                        mz_expr::BinaryFunc::Gt,
-                    )])
-                    .project((0..inner_arity).collect::<Vec<_>>())
-                    .map_one(MirScalarExpr::literal(
-                        Err(mz_expr::EvalError::MultipleRowsFromSubquery),
-                        col_type.clone().scalar_type,
-                    ));
+                    .flat_map(
+                        mz_expr::TableFunc::GuardSubquerySize {
+                            column_type: col_type.clone().scalar_type,
+                        },
+                        vec![MirScalarExpr::column(inner_arity)],
+                    )
+                    .project(
+                        (0..inner_arity)
+                            .chain(Some(inner_arity + 1))
+                            .collect::<Vec<_>>(),
+                    );
                 // Return `get_select` and any errors added in.
                 Ok::<_, PlanError>(get_select.union(errors))
             })?;

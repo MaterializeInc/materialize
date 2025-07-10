@@ -3734,6 +3734,19 @@ pub enum TableFunc {
     GenerateSeriesInt64,
     GenerateSeriesTimestamp,
     GenerateSeriesTimestampTz,
+    /// Supplied with an input count,
+    ///   1. Adds an error column announcing too many results,
+    ///   2. Filters the row away if the count is only one.
+    /// This logic could nearly be achieved with map, filter, project logic,
+    /// but has been challenging to do in a way that respects the vagaries of
+    /// SQL and our semantics.
+    /// Before replacing this by an `MirScalarExpr`, quadruple check that it
+    /// would not result in misoptimizations due to expression evaluation order
+    /// being utterly undefined, and predicate pushdown trimming any fragements
+    /// that might produce columns that will not be needed.
+    GuardSubquerySize {
+        column_type: ScalarType,
+    },
     Repeat,
     UnnestArray {
         el_typ: ScalarType,
@@ -3779,6 +3792,9 @@ impl RustType<ProtoTableFunc> for TableFunc {
                 TableFunc::GenerateSeriesInt64 => Kind::GenerateSeriesInt64(()),
                 TableFunc::GenerateSeriesTimestamp => Kind::GenerateSeriesTimestamp(()),
                 TableFunc::GenerateSeriesTimestampTz => Kind::GenerateSeriesTimestampTz(()),
+                TableFunc::GuardSubquerySize { column_type } => {
+                    Kind::GuardSubquerySize(column_type.into_proto())
+                }
                 TableFunc::Repeat => Kind::Repeat(()),
                 TableFunc::UnnestArray { el_typ } => Kind::UnnestArray(el_typ.into_proto()),
                 TableFunc::UnnestList { el_typ } => Kind::UnnestList(el_typ.into_proto()),
@@ -3818,6 +3834,9 @@ impl RustType<ProtoTableFunc> for TableFunc {
             Kind::GenerateSeriesInt64(()) => TableFunc::GenerateSeriesInt64,
             Kind::GenerateSeriesTimestamp(()) => TableFunc::GenerateSeriesTimestamp,
             Kind::GenerateSeriesTimestampTz(()) => TableFunc::GenerateSeriesTimestampTz,
+            Kind::GuardSubquerySize(x) => TableFunc::GuardSubquerySize {
+                column_type: x.into_rust()?,
+            },
             Kind::Repeat(()) => TableFunc::Repeat,
             Kind::UnnestArray(x) => TableFunc::UnnestArray {
                 el_typ: x.into_rust()?,
@@ -3909,6 +3928,16 @@ impl TableFunc {
             }
             TableFunc::GenerateSubscriptsArray => {
                 generate_subscripts_array(datums[0], datums[1].unwrap_int32())
+            }
+            TableFunc::GuardSubquerySize { column_type: _ } => {
+                // We error if the count is greater than one,
+                // or produce no rows if not greater than one.
+                let count = datums[0].unwrap_int64();
+                if count > 1 {
+                    Err(EvalError::MultipleRowsFromSubquery)
+                } else {
+                    Ok(Box::new([].into_iter()))
+                }
             }
             TableFunc::Repeat => Ok(Box::new(repeat(datums[0]).into_iter())),
             TableFunc::UnnestArray { .. } => Ok(Box::new(unnest_array(datums[0]))),
@@ -4017,6 +4046,11 @@ impl TableFunc {
                 let keys = vec![vec![0]];
                 (column_types, keys)
             }
+            TableFunc::GuardSubquerySize { column_type } => {
+                let column_types = vec![column_type.clone().nullable(false)];
+                let keys = vec![];
+                (column_types, keys)
+            }
             TableFunc::Repeat => {
                 let column_types = vec![];
                 let keys = vec![];
@@ -4078,6 +4112,7 @@ impl TableFunc {
             TableFunc::GenerateSeriesTimestamp => 1,
             TableFunc::GenerateSeriesTimestampTz => 1,
             TableFunc::GenerateSubscriptsArray => 1,
+            TableFunc::GuardSubquerySize { .. } => 1,
             TableFunc::Repeat => 0,
             TableFunc::UnnestArray { .. } => 1,
             TableFunc::UnnestList { .. } => 1,
@@ -4107,6 +4142,7 @@ impl TableFunc {
             | TableFunc::UnnestList { .. }
             | TableFunc::UnnestMap { .. }
             | TableFunc::RegexpMatches => true,
+            TableFunc::GuardSubquerySize { .. } => false,
             TableFunc::Wrap { .. } => false,
             TableFunc::TabletizedScalar { .. } => false,
         }
@@ -4136,6 +4172,7 @@ impl TableFunc {
             TableFunc::Wrap { .. } => true,
             TableFunc::TabletizedScalar { .. } => true,
             TableFunc::RegexpMatches => true,
+            TableFunc::GuardSubquerySize { .. } => false,
         }
     }
 }
@@ -4155,6 +4192,7 @@ impl fmt::Display for TableFunc {
             TableFunc::GenerateSeriesTimestamp => f.write_str("generate_series"),
             TableFunc::GenerateSeriesTimestampTz => f.write_str("generate_series"),
             TableFunc::GenerateSubscriptsArray => f.write_str("generate_subscripts"),
+            TableFunc::GuardSubquerySize { .. } => f.write_str("guard_subquery_size"),
             TableFunc::Repeat => f.write_str("repeat_row"),
             TableFunc::UnnestArray { .. } => f.write_str("unnest_array"),
             TableFunc::UnnestList { .. } => f.write_str("unnest_list"),
