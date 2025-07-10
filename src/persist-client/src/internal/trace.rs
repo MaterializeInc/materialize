@@ -58,7 +58,7 @@ use std::fmt::Debug;
 use std::mem;
 use std::ops::Range;
 use std::sync::Arc;
-use tracing::warn;
+use tracing::{info, warn};
 
 use crate::internal::paths::WriterKey;
 use differential_dataflow::lattice::Lattice;
@@ -1303,25 +1303,24 @@ impl<T: Timestamp + Lattice + Codec64> SpineBatch<T> {
                 .filter_map(|id| id.1)
                 .collect::<Vec<_>>();
 
-            // backwards compatibility: if the run_ids are empty, we assume we want to replace all runs
+            if run_ids.is_empty() {
+                return ApplyMergeResult::NotAppliedNoMatch;
+            }
+
             let old_batch_diff_sum = Self::diffs_sum::<D>(batch.parts.iter(), metrics);
-            let old_diffs_sum = if run_ids.is_empty() {
-                old_batch_diff_sum.clone()
-            } else {
-                // If we have run_ids, we need to compute the diffs sum for those runs only
-                Self::diffs_sum_for_runs::<D>(batch, &run_ids, metrics)
-            };
+            let old_diffs_sum = Self::diffs_sum_for_runs::<D>(batch, &run_ids, metrics);
 
             if let (Some(old_diffs_sum), Some(new_diffs_sum)) = (old_diffs_sum, new_diffs_sum) {
                 if old_diffs_sum != new_diffs_sum {
                     warn!(
-                        "merge res diffs sum ({:?}) did not match spine batch diffs sum ({:?})",
-                        new_diffs_sum, old_diffs_sum
+                        ?old_diffs_sum,
+                        ?new_diffs_sum,
+                        ?res,
+                        ?batch,
+                        ?run_ids,
+                        ?replacement_range,
+                        "diffs sum mismatch"
                     );
-                    warn!("merge res: {res:#?}");
-                    warn!("spine batch: {batch:#?}");
-                    warn!("run_ids: {run_ids:?}");
-                    warn!("replacement_range: {replacement_range:?}");
                 }
                 assert_eq!(
                     old_diffs_sum, new_diffs_sum,
@@ -2411,6 +2410,7 @@ pub(crate) mod tests {
 
     use proptest::prelude::*;
     use semver::Version;
+    use tracing::info;
 
     use crate::internal::state::tests::any_hollow_batch;
 
@@ -2419,6 +2419,7 @@ pub(crate) mod tests {
     pub fn any_trace<T: Arbitrary + Timestamp + Lattice>(
         num_batches: Range<usize>,
     ) -> impl Strategy<Value = Trace<T>> {
+        info!("Generating trace with {:?} batches", num_batches);
         Strategy::prop_map(
             (
                 any::<Option<T>>(),
@@ -2450,6 +2451,7 @@ pub(crate) mod tests {
                 let reqs: Vec<_> = trace
                     .fueled_merge_reqs_before_ms(timeout_ms, None)
                     .collect();
+                info!("Generated {} merge requests: {:?}", reqs.len(), reqs);
                 for req in reqs {
                     trace.claim_compaction(req.id, ActiveCompaction { start_ms: 0 })
                 }

@@ -685,23 +685,22 @@ where
         let write_run_ids = self.parts.cfg.enable_incremental_compaction;
         let batch_delete_enabled = self.parts.cfg.batch_delete_enabled;
         let shard_metrics = Arc::clone(&self.parts.shard_metrics);
-        let runs = self.parts.finish().await; // Now returns update counts too
+        let runs = self.parts.finish().await;
 
         let mut run_parts = vec![];
         let mut run_splits = vec![];
         let mut run_meta = vec![];
         let total_updates = runs
             .iter()
-            .map(|(_, _, update_counts)| update_counts.iter().sum::<usize>())
-            .sum();
-        for (order, parts, update_counts) in runs {
+            .map(|(_, _, num_updates)| num_updates)
+            .sum::<usize>();
+        for (order, parts, num_updates) in runs {
             if parts.is_empty() {
                 continue;
             }
             if run_parts.len() != 0 {
                 run_splits.push(run_parts.len());
             }
-            let num_updates: usize = update_counts.iter().sum();
             run_meta.push(RunMeta {
                 order: Some(order),
                 schema: self.write_schemas.id,
@@ -1300,7 +1299,7 @@ impl<T: Timestamp + Codec64> BatchParts<T> {
     }
 
     #[instrument(level = "debug", name = "batch::finish_upload", fields(shard = %self.shard_id))]
-    pub(crate) async fn finish(self) -> Vec<(RunOrder, Vec<RunPart<T>>, Vec<usize>)> {
+    pub(crate) async fn finish(self) -> Vec<(RunOrder, Vec<RunPart<T>>, usize)> {
         match self.writing_runs {
             WritingRuns::Ordered(RunOrder::Unordered, run) => {
                 let completed_runs = run.finish();
@@ -1309,11 +1308,7 @@ impl<T: Timestamp + Codec64> BatchParts<T> {
                     let completed_run = completed_run.into_result().await;
                     // Each part becomes its own run for unordered case
                     for part in completed_run.parts {
-                        output.push((
-                            RunOrder::Unordered,
-                            vec![part],
-                            vec![completed_run.num_updates],
-                        ));
+                        output.push((RunOrder::Unordered, vec![part], completed_run.num_updates));
                     }
                 }
                 output
@@ -1321,11 +1316,11 @@ impl<T: Timestamp + Codec64> BatchParts<T> {
             WritingRuns::Ordered(order, run) => {
                 let completed_runs = run.finish();
                 let mut all_parts = Vec::new();
-                let mut all_update_counts = Vec::new();
+                let mut all_update_counts = 0;
                 for completed_run in completed_runs {
                     let completed_run = completed_run.into_result().await;
                     all_parts.extend(completed_run.parts);
-                    all_update_counts.push(completed_run.num_updates);
+                    all_update_counts += completed_run.num_updates;
                 }
                 vec![(order, all_parts, all_update_counts)]
             }
@@ -1334,15 +1329,8 @@ impl<T: Timestamp + Codec64> BatchParts<T> {
                 let mut output = Vec::new();
                 for (order, run) in runs {
                     let completed_run = run.into_result().await;
-                    // For compacting, each CompletedRun represents one logical run.
-                    // The update count is for the entire run, not per part.
-                    // We store the total update count only once in the first position,
-                    // and zeros for the remaining parts to avoid redundant storage.
-                    let mut update_counts = vec![0; completed_run.parts.len()];
-                    if !update_counts.is_empty() {
-                        update_counts[0] = completed_run.num_updates;
-                    }
-                    output.push((order, completed_run.parts, update_counts));
+
+                    output.push((order, completed_run.parts, completed_run.num_updates));
                 }
                 output
             }

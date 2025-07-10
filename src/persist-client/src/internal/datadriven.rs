@@ -190,7 +190,7 @@ mod tests {
     async fn machine(dyncfgs: ConfigUpdates) {
         use crate::internal::machine::datadriven as machine_dd;
 
-        ::datadriven::walk_async("tests/adhoc", |mut f| {
+        ::datadriven::walk_async("tests/machine", |mut f| {
             let initial_state_fut = machine_dd::MachineState::new(&dyncfgs);
             async move {
                 println!("running datadriven file: {}", f.filename);

@@ -24,7 +24,7 @@ use futures_util::StreamExt;
 use mz_dyncfg::Config;
 use mz_ore::cast::CastFrom;
 use mz_ore::error::ErrorExt;
-use mz_ore::now::SYSTEM_TIME;
+use mz_ore::now::{NowFn, SYSTEM_TIME};
 use mz_persist::location::Blob;
 use mz_persist_types::part::Part;
 use mz_persist_types::{Codec, Codec64};
@@ -91,6 +91,7 @@ pub struct CompactConfig {
     pub(crate) version: semver::Version,
     pub(crate) batch: BatchBuilderConfig,
     pub(crate) fetch_config: FetchConfig,
+    pub(crate) now: NowFn,
 }
 
 impl CompactConfig {
@@ -103,6 +104,7 @@ impl CompactConfig {
             version: value.build_version.clone(),
             batch: BatchBuilderConfig::new(value, shard_id),
             fetch_config: FetchConfig::from_persist_config(value),
+            now: value.now.clone(),
         }
     }
 }
@@ -727,7 +729,7 @@ where
                 );
 
                 // Set up active compaction metadata
-                let clock = SYSTEM_TIME.clone();
+                let clock = cfg.now.clone();
                 let active_compaction = if applied < total_chunked_runs - 1 {
                     Some(ActiveCompaction { start_ms: clock() })
                 } else {
