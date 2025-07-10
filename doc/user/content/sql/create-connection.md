@@ -887,7 +887,7 @@ Field                       | Value            | Required | Description
 `disabled` - no encryption.
 `required` - encryption required, no certificate validation.
 `verify` - encryption required, validate server certificate using OS configured CA.
-`verify_ca` - encryption required, validate server certificate using provided CA certificate (requires `SSL CERTIFICATE AUTHORITY`).
+`verify_ca` - encryption required, validate server certificate using provided CA certificates (requires `SSL CERTIFICATE AUTHORITY`).
 
 #### `WITH` options {#sql-server-with-options}
 
