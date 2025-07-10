@@ -70,6 +70,7 @@ use thiserror::Error;
 use tokio::io::AsyncWriteExt;
 use tokio::sync::oneshot::Receiver;
 use tokio::sync::{oneshot, watch};
+use tokio_metrics::TaskMetrics;
 use tower::limit::GlobalConcurrencyLimitLayer;
 use tower::{Service, ServiceBuilder};
 use tower_http::cors::{AllowOrigin, Any, CorsLayer};
@@ -427,7 +428,11 @@ impl HttpServer {
 impl Server for HttpServer {
     const NAME: &'static str = "http";
 
-    fn handle_connection(&self, conn: Connection) -> ConnectionHandler {
+    fn handle_connection(
+        &self,
+        conn: Connection,
+        _tokio_metrics_intervals: impl Iterator<Item = TaskMetrics> + Send + 'static,
+    ) -> ConnectionHandler {
         let router = self.router.clone();
         let tls_context = self.tls.clone();
         let mut conn = TokioIo::new(conn);

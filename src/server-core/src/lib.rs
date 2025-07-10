@@ -39,6 +39,7 @@ use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, Interest, ReadBuf, Ready};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::oneshot;
 use tokio::task::JoinSet;
+use tokio_metrics::TaskMetrics;
 use tokio_stream::wrappers::{IntervalStream, TcpListenerStream};
 use tracing::{debug, error, warn};
 use uuid::Uuid;
@@ -202,7 +203,11 @@ pub trait Server {
     const NAME: &'static str;
 
     /// Handles a single connection.
-    fn handle_connection(&self, conn: Connection) -> ConnectionHandler;
+    fn handle_connection(
+        &self,
+        conn: Connection,
+        tokio_metrics_intervals: impl Iterator<Item = TaskMetrics> + Send + 'static,
+    ) -> ConnectionHandler;
 }
 
 /// A stream of incoming connections.
@@ -322,8 +327,10 @@ where
                 }
                 let conn = Connection::new(conn);
                 let conn_uuid = conn.uuid_handle();
-                let fut = server.handle_connection(conn);
-                set.spawn_named(|| &task_name, async move {
+                let metrics_monitor = tokio_metrics::TaskMonitor::new();
+                let tokio_metrics_intervals = metrics_monitor.intervals();
+                let fut = server.handle_connection(conn, tokio_metrics_intervals);
+                set.spawn_named(|| &task_name, metrics_monitor.instrument(async move {
                     let guard = scopeguard::guard((), |_| {
                         debug!(
                             server = S::NAME,
@@ -351,7 +358,7 @@ where
                     }
 
                     let () = ScopeGuard::into_inner(guard);
-                });
+                }));
             }
             // Actively cull completed tasks from the JoinSet so it does not grow unbounded. This
             // method is cancel safe.

@@ -25,6 +25,7 @@ futures = "0.3.31"
 mz-dyncfg = { path = "../dyncfg", default-features = false }
 mz-ore = { path = "../ore", default-features = false, features = ["async", "network", "test"] }
 tokio = "1.44.1"
+tokio-metrics = "0.4.2"
 workspace-hack = { version = "0.0.0", path = "../workspace-hack", optional = true }
 uuid = { version = "1.17.0", features = ["v4"] }
 
