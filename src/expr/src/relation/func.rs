@@ -3737,7 +3737,7 @@ pub enum TableFunc {
     GenerateSeriesTimestamp,
     GenerateSeriesTimestampTz,
     /// Supplied with an input count,
-    ///   1. Adds an column as if a typed subquery result,
+    ///   1. Adds a column as if a typed subquery result,
     ///   2. Filters the row away if the count is only one,
     ///   3. Errors if the count is not exactly one.
     /// The intent is that this presents as if a subquery result with too many
@@ -3749,12 +3749,12 @@ pub enum TableFunc {
     /// SQL and our semantics. If we reveal a constant value in the column we
     /// risk the optimizer pruning the branch; if we reveal that this will not
     /// produce rows we risk the optimizer pruning the branch; if we reveal that
-    /// the only possible value is an error we risk the optimizer propogating that
+    /// the only possible value is an error we risk the optimizer propagating that
     /// error without guards.
     ///
     /// Before replacing this by an `MirScalarExpr`, quadruple check that it
     /// would not result in misoptimizations due to expression evaluation order
-    /// being utterly undefined, and predicate pushdown trimming any fragements
+    /// being utterly undefined, and predicate pushdown trimming any fragments
     /// that might produce columns that will not be needed.
     GuardSubquerySize {
         column_type: ScalarType,
