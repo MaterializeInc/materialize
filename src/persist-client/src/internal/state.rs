@@ -983,59 +983,38 @@ impl<T: Timestamp + Codec64 + Sync> HollowBatch<T> {
     }
 }
 impl<T> HollowBatch<T> {
-    /// Construct an in-memory hollow batch from the given metadata.
-    ///
-    /// This method checks that `runs` is a sequence of valid indices into `parts`. The caller
-    /// is responsible for ensuring that the defined runs are valid.
-    ///
-    /// `len` should represent the number of valid updates in the referenced parts.
-    pub(crate) fn new(
-        desc: Description<T>,
-        parts: Vec<RunPart<T>>,
-        len: usize,
-        run_meta: Vec<RunMeta>,
-        run_splits: Vec<usize>,
-    ) -> Self {
+    pub(crate) fn check_invariants(&self) {
+        let Self {
+            desc: _,
+            len: _,
+            parts,
+            run_splits,
+            run_meta,
+        } = self;
         debug_assert!(
             run_splits.is_strictly_sorted(),
             "run indices should be strictly increasing"
         );
-        debug_assert!(
+        assert!(
             run_splits.first().map_or(true, |i| *i > 0),
             "run indices should be positive"
         );
-        debug_assert!(
+        assert!(
             run_splits.last().map_or(true, |i| *i < parts.len()),
             "run indices should be valid indices into parts"
         );
-        debug_assert!(
+        assert!(
             parts.is_empty() || run_meta.len() == run_splits.len() + 1,
             "all metadata should correspond to a run"
         );
-
-        Self {
-            desc,
-            len,
-            parts,
-            run_splits,
-            run_meta,
-        }
     }
 
     /// Construct a batch of a single run with default metadata. Mostly interesting for tests.
     pub(crate) fn new_run(desc: Description<T>, parts: Vec<RunPart<T>>, len: usize) -> Self {
-        let run_meta = if parts.is_empty() {
-            vec![]
-        } else {
-            vec![RunMeta::default()]
-        };
-        Self {
-            desc,
-            len,
-            parts,
-            run_splits: vec![],
-            run_meta,
-        }
+        let mut out = Self::empty(desc);
+        out.push_run(RunMeta::default(), parts);
+        out.len = len;
+        out
     }
 
     /// An empty hollow batch, representing no updates over the given desc.
@@ -1047,6 +1026,35 @@ impl<T> HollowBatch<T> {
             run_splits: vec![],
             run_meta: vec![],
         }
+    }
+
+    /// Push a run onto the given batch.
+    ///
+    /// NB: This does not currently increment the batch len, since we don't currently track the update
+    /// count per run. Callers will need to explicitly update the batch len when appending runs.
+    pub(crate) fn push_run(&mut self, meta: RunMeta, parts: impl IntoIterator<Item = RunPart<T>>) {
+        let Self {
+            desc: _,
+            len: _,
+            parts: self_parts,
+            run_splits,
+            run_meta,
+        } = self;
+
+        let old_part_count = self_parts.len();
+        self_parts.extend(parts);
+        let new_part_count = self_parts.len();
+        if old_part_count == new_part_count {
+            // This was a zero-part run; return.
+            return;
+        }
+        if old_part_count != 0 {
+            run_splits.push(old_part_count);
+        }
+        run_meta.push(meta);
+        // This call means that pushing runs one-at-a-time _in debug mode_ is quadratic
+        // in the number of runs. If this is too slow even in tests, we can remove the check.
+        self.check_invariants();
     }
 
     pub(crate) fn runs(&self) -> impl Iterator<Item = (&RunMeta, &[RunPart<T>])> {
@@ -2827,25 +2835,23 @@ pub(crate) mod tests {
                 any::<usize>(),
                 any::<bool>(),
             ),
-            |(t0, t1, since, parts, len, runs)| {
+            |(t0, t1, since, mut parts, len, runs)| {
                 let (lower, upper) = if t0 <= t1 {
                     (Antichain::from_elem(t0), Antichain::from_elem(t1))
                 } else {
                     (Antichain::from_elem(t1), Antichain::from_elem(t0))
                 };
                 let since = Antichain::from_elem(since);
+                let mut batch = HollowBatch::empty(Description::new(lower, upper, since));
+                batch.len += len % 10;
                 if runs && parts.len() > 2 {
                     let split_at = parts.len() / 2;
-                    HollowBatch::new(
-                        Description::new(lower, upper, since),
-                        parts,
-                        len % 10,
-                        vec![RunMeta::default(), RunMeta::default()],
-                        vec![split_at],
-                    )
+                    batch.push_run(RunMeta::default(), parts.split_off(split_at));
+                    batch.push_run(RunMeta::default(), parts);
                 } else {
-                    HollowBatch::new_run(Description::new(lower, upper, since), parts, len % 10)
-                }
+                    batch.push_run(RunMeta::default(), parts);
+                };
+                batch
             },
         )
     }
