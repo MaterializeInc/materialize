@@ -28,7 +28,7 @@ impl crate::Transform for FlatMapElimination {
     #[mz_ore::instrument(
         target = "optimizer",
         level = "debug",
-        fields(path.segment = "flatmap_to_map")
+        fields(path.segment = "flat_map_elimination")
     )]
     fn actually_perform_transform(
         &self,
