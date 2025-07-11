@@ -13,7 +13,7 @@ workspace = true
 [dependencies]
 anyhow = "1.0.98"
 humantime = "2.2.0"
-hyper-tls = "0.5.0"
+hyper-tls = "0.6.0"
 launchdarkly-server-sdk = { version = "2.5.1", default-features = false }
 mz-build-info = { path = "../build-info" }
 mz-dyncfg = { path = "../dyncfg" }
