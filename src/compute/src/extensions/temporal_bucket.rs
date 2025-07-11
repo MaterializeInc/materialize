@@ -49,7 +49,7 @@ where
         let scope = self.scope();
         let logger = scope.logger_for("differential/arrange").map(Into::into);
 
-        self.unary_frontier::<CB, _, _, _>(Pipeline, "Delay", |cap, info| {
+        self.unary_frontier::<CB, _, _, _>(Pipeline, "Temporal delay", |cap, info| {
             let mut chain = BucketChain::new(MergeBatcherWrapper::new(logger, info.global_id));
             let activator = scope.activator_for(info.address);
             // Cap tracking the lower bound of potentially outstanding data.
@@ -57,26 +57,37 @@ where
             let mut buffer = Vec::new();
             move |input, output| {
                 while let Some((_time, data)) = input.next() {
-                    // Sort data by time, then iterate and
+                    // Sort data by time, then drain it into a buffer that contains data for a
+                    // single bucket.
                     data.sort_by(|(_, t, _), (_, t2, _)| t.cmp(t2));
-                    let mut index = None;
+
+                    let mut range = None;
+
                     for (datum, time, diff) in data.drain(..) {
-                        let this_index = chain.index_of(&time).unwrap();
-                        if let Some(index) = index
-                            && index != this_index
+                        // If we have a range, check if the time is not within it.
+                        if let Some((start, end)) = &range
+                            && (time < *start || time >= *end)
                         {
-                            chain.index_mut(index).inner.push_container(&mut buffer);
+                            // If the time is outside the range, push the current buffer
+                            // to the chain and reset the range.
+                            if !buffer.is_empty() {
+                                let wrapper = chain.find_mut(start).expect("Must exist");
+                                wrapper.inner.push_container(&mut buffer);
+                                buffer.clear();
+                            }
+                            range = None;
                         }
-                        index = Some(this_index);
+                        if range.is_none() {
+                            range = chain.range_of(&time);
+                        }
                         buffer.push((datum, time, diff));
                     }
                     // Handle leftover data in the buffer.
-                    if let Some(index) = index
-                        && !buffer.is_empty()
-                    {
-                        chain.index_mut(index).inner.push_container(&mut buffer);
+                    if !buffer.is_empty() {
+                        let (start, _) = range.as_ref().expect("Must exist");
+                        let wrapper = chain.find_mut(start).expect("Must exist");
+                        wrapper.inner.push_container(&mut buffer);
                     }
-                    buffer.clear();
                 }
 
                 // Check for data that is ready to be revealed.
@@ -84,10 +95,16 @@ where
                 if let Some(cap) = cap.as_ref() {
                     let mut session = output.session_with_builder(cap);
                     for stack in peeled.into_iter().flat_map(|x| x.done()) {
+                        // TODO: If we have a columnar merge batcher, cloning won't be necessary.
                         session.give_iterator(stack.iter().cloned());
                     }
                 } else {
-                    assert_eq!(peeled.into_iter().flat_map(|x| x.done()).next(), None);
+                    // If we don't have a cap, we should not have any data to reveal.
+                    assert_eq!(
+                        peeled.into_iter().flat_map(|x| x.done()).next(),
+                        None,
+                        "Unexpected data revealed without a cap."
+                    );
                 }
 
                 // Downgrade the cap to the current frontier.
@@ -98,7 +115,7 @@ where
                 }
 
                 // Maintain the bucket chain by restoring it with fuel.
-                let mut fuel = 1000;
+                let mut fuel = 1_000_000;
                 chain.restore(&mut fuel);
                 if fuel <= 0 {
                     // If we run out of fuel, we activate the operator to continue processing.
@@ -152,12 +169,15 @@ where
 
     fn split(mut self, timestamp: &Self::Timestamp, fuel: &mut isize) -> (Self, Self) {
         // The implementation isn't tuned for performance. We should not bounce in and out of
-        // different containers when not needed.
+        // different containers when not needed. The merge batcher we use can only accept
+        // vectors as inputs, but not any other container type.
+        // TODO: Allow the merge batcher to accept more generic containers.
         let upper = Antichain::from_elem(timestamp.clone());
         let mut lower = Self::new(self.logger.clone(), self.operator_id);
         let mut buffer = Vec::new();
         for chunk in self.inner.seal::<CapturingBuilder<_, _>>(upper) {
             *fuel = fuel.saturating_sub(chunk.len().try_into().expect("must fit"));
+            // TODO: Avoid this cloning.
             buffer.extend(chunk.into_iter().cloned());
             lower.inner.push_container(&mut buffer);
             buffer.clear();

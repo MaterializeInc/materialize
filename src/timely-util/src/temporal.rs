@@ -15,17 +15,20 @@
 
 //! Utilities to efficiently store future updates.
 
-use timely::PartialOrder;
-use timely::order::TotalOrder;
+use std::collections::BTreeMap;
+
+use mz_ore::cast::CastFrom;
 use timely::progress::Timestamp;
 use timely::progress::frontier::AntichainRef;
 
-/// Timestamp extension for totally ordered timestamps that can advance by `2^exponent`.
-pub trait BucketTimestamp: TotalOrder + Timestamp {
+/// Timestamp extension for timestamps that can advance by `2^exponent`.
+///
+/// Most likely, this is only relevant for totally ordered timestamps.
+pub trait BucketTimestamp: Timestamp {
     /// The number of bits in the timestamp.
     const DOMAIN: usize = size_of::<Self>() * 8;
     /// Advance this timestamp by `2^exponent`.
-    fn advance_by_power_of_two(&self, exponent: usize) -> Option<Self>;
+    fn advance_by_power_of_two(&self, exponent: u32) -> Option<Self>;
 }
 
 /// A type that can be split into two parts based on a timestamp.
@@ -49,7 +52,7 @@ pub trait Storage: Sized {
 /// most factor 4 different.
 ///
 /// A bucket chain is well-formed if all buckets are within two bits of each other, with an imaginary
-/// bucket of -1 bits at the start. A chain does not need to be well-formed at all times, and supports
+/// bucket of -2 bits at the start. A chain does not need to be well-formed at all times, and supports
 /// peeling and finding even if not well-formed. However, `peel` might need to split more buckets to
 /// extract the desired data.
 ///
@@ -57,33 +60,40 @@ pub trait Storage: Sized {
 /// with a positive amount of fuel while the remaining fuel after the call is non-positive. This
 /// allows the caller to control the amount of work done in a single call and interleave it with
 /// other work.
-///
-/// ## Implementation detail
-///
-/// We store buckets as (bits, offset, storage) in separate vectors, sorted in reverse order by
-/// offset.
 #[derive(Debug)]
 pub struct BucketChain<S: Storage> {
-    /// Bits in reverse order.
-    bits: Vec<usize>,
-    /// Offsets in reverse order.
-    offsets: Vec<S::Timestamp>,
-    /// Storage in reverse order.
-    storage: Vec<S>,
+    content: BTreeMap<S::Timestamp, (u32, S)>,
 }
 
 impl<S: Storage> BucketChain<S> {
     /// Construct a new bucket chain. Spans the whole time domain.
     #[inline]
     pub fn new(storage: S) -> Self {
-        let bits = vec![S::Timestamp::DOMAIN];
-        let offsets = vec![Timestamp::minimum()];
-        let storage = vec![storage];
+        let bits = S::Timestamp::DOMAIN.try_into().expect("Must fit");
         Self {
-            bits,
-            offsets,
-            storage,
+            // The initial bucket starts at the minimum timestamp and spans the whole domain.
+            content: BTreeMap::from([(Timestamp::minimum(), (bits, storage))]),
         }
+    }
+
+    /// Find the time range for the bucket that contains data for time `timestamp`.
+    /// Returns the lower (inclusive) and upper (exclusive) time bound of the bucket,
+    /// or `None` if there is no bucket for the requested time. Only times that haven't
+    /// been peeled can still be found.
+    ///
+    /// The bounds are only valid until the next call to `peel` or `restore`.
+    #[inline]
+    pub fn range_of(&self, timestamp: &S::Timestamp) -> Option<(S::Timestamp, S::Timestamp)> {
+        self.content
+            .range(..=timestamp)
+            .next_back()
+            .map(|(time, (bits, _))| {
+                (
+                    time.clone(),
+                    time.advance_by_power_of_two(bits.saturating_sub(1))
+                        .expect("must exist"),
+                )
+            })
     }
 
     /// Find the bucket that contains data for time `timestamp`. Returns a reference to the bucket,
@@ -92,34 +102,10 @@ impl<S: Storage> BucketChain<S> {
     /// Only times that haven't been peeled can still be found.
     #[inline]
     pub fn find(&self, timestamp: &S::Timestamp) -> Option<&S> {
-        let index = self
-            .offsets
-            .iter()
-            .position(|offset| offset.less_equal(timestamp))?;
-        Some(&self.storage[index])
-    }
-
-    /// Find the index for the bucket that contains data for time `timestamp`. Returns an
-    /// index of the bucket, or `None` if there is no bucket for the requested time.
-    ///
-    /// The index is only valid until the next call to `peel` or `restore`.
-    ///
-    /// Only times that haven't been peeled can still be found.
-    #[inline]
-    pub fn index_of(&self, timestamp: &S::Timestamp) -> Option<usize> {
-        self.offsets
-            .iter()
-            .position(|offset| offset.less_equal(timestamp))
-    }
-
-    /// Returns a reference to the bucket at `index`.
-    ///
-    /// The index is only valid if it was obtained from a previous call to `index_of` and while
-    /// the chain is not modified by `peel` or `restore`. All other indeces result in undefined
-    /// behavior, including panics.
-    #[inline]
-    pub fn index_mut(&mut self, index: usize) -> &mut S {
-        &mut self.storage[index]
+        self.content
+            .range(..=timestamp)
+            .next_back()
+            .map(|(_, (_, storage))| storage)
     }
 
     /// Find the bucket that contains data for time `timestamp`. Returns a mutable reference to
@@ -128,8 +114,10 @@ impl<S: Storage> BucketChain<S> {
     /// Only times that haven't been peeled can still be found.
     #[inline]
     pub fn find_mut(&mut self, timestamp: &S::Timestamp) -> Option<&mut S> {
-        self.index_of(timestamp)
-            .map(|index| &mut self.storage[index])
+        self.content
+            .range_mut(..=timestamp)
+            .next_back()
+            .map(|(_, (_, storage))| storage)
     }
 
     /// Peel off all data up to `frontier`, where the returned buckets contain all
@@ -138,8 +126,10 @@ impl<S: Storage> BucketChain<S> {
     pub fn peel(&mut self, frontier: AntichainRef<S::Timestamp>) -> Vec<S> {
         let mut peeled = vec![];
         // While there are buckets, and the frontier is not less than the lowest offset, peel off
-        while !self.is_empty() && !frontier.less_equal(self.offsets.last().expect("must exist")) {
-            let (bits, offset, storage) = self.remove(self.len() - 1);
+        while let Some(min_entry) = self.content.first_entry()
+            && !frontier.less_equal(min_entry.key())
+        {
+            let (offset, (bits, storage)) = self.content.pop_first().expect("must exist");
             let upper = offset.advance_by_power_of_two(bits);
 
             // Split the bucket if it spans the frontier.
@@ -147,7 +137,7 @@ impl<S: Storage> BucketChain<S> {
                 || upper.is_some() && frontier.less_than(&upper.unwrap())
             {
                 // We need to splice the bucket, no matter how much fuel we have.
-                self.splice(self.len(), &mut 0, bits, offset, storage);
+                self.splice(&mut 0, bits, offset, storage);
             } else {
                 // Bucket is ready to go.
                 peeled.push(storage);
@@ -159,75 +149,53 @@ impl<S: Storage> BucketChain<S> {
     /// Restore the chain property by splitting buckets as necessary.
     ///
     /// The chain is well-formed if all buckets are within two bits of each other, with an imaginary
-    /// bucket of -1 bits at the end.
+    /// bucket of -2 bits just before the smallest bucket.
     #[inline]
     pub fn restore(&mut self, fuel: &mut isize) {
-        // Start at the biggest bucket, work towards the smallest.
-        let mut index = 0;
-        // While the index points at a valid bucket, and we have fuel, try to restore the chain.
-        while index < self.len() && *fuel > 0 {
-            // The maximum number of bits the current bucket can have is the number of bits of the
-            // next bucket plus two, or 1 if there is no next bucket. This ensures the end of the
-            // chain is terminated with a small bucket.
-            let max_bits = if index < self.len() - 1 {
-                self.bits[index + 1] + 2
+        // We could write this in terms of a cursor API, but it's not stable yet. Instead, we
+        // allocate a new map and move elements over.
+        let mut new = BTreeMap::default();
+        let mut last_bits = -2;
+        while *fuel > 0
+            && let Some((time, (bits, storage))) = self.content.pop_first()
+        {
+            // Insert bucket if the size is correct.
+            if isize::cast_from(bits) <= last_bits + 2 {
+                new.insert(time, (bits, storage));
+                last_bits = isize::cast_from(bits);
             } else {
-                1
-            };
-            if self.bits[index] > max_bits {
-                let (bits, offset, storage) = self.remove(index);
-                self.splice(index, fuel, bits, offset, storage);
-                // Move pointer back as after splitting the bucket at `index`, we might now
-                // violate the chain property at `index - 1`.
-                index = index.saturating_sub(1);
-            } else {
-                // Bucket
-                index += 1;
+                // Otherwise, we need to splice it.
+                self.splice(fuel, bits, time, storage);
             }
         }
+        // Move remaining elements if we ran out of fuel.
+        new.append(&mut self.content);
+        self.content = new;
     }
 
     /// Returns `true` if the chain is empty. This means there are no outstanding times left.
     #[inline(always)]
     pub fn is_empty(&self) -> bool {
-        self.bits.is_empty()
+        self.content.is_empty()
     }
 
     /// The number of buckets in the chain.
     #[inline(always)]
     pub fn len(&self) -> usize {
-        self.bits.len()
+        self.content.len()
     }
 
-    /// Removes the bucket at `index` and returns its components as `(bits, offset, storage)`.
-    #[inline(always)]
-    fn remove(&mut self, index: usize) -> (usize, S::Timestamp, S) {
-        (
-            self.bits.remove(index),
-            self.offsets.remove(index),
-            self.storage.remove(index),
-        )
-    }
-
-    /// Split the bucket specified by `(bits, offset, storage)` and splice the result
-    /// at `index`. Updates `fuel`.
+    /// Split the bucket specified by `(bits, offset, storage)` and insert the new buckets.
+    /// Updates `fuel`.
     ///
     /// Panics if the bucket cannot be split, i.e, it covers 0 bits.
     #[inline(always)]
-    fn splice(
-        &mut self,
-        index: usize,
-        fuel: &mut isize,
-        bits: usize,
-        offset: S::Timestamp,
-        storage: S,
-    ) {
+    fn splice(&mut self, fuel: &mut isize, bits: u32, offset: S::Timestamp, storage: S) {
         let bits = bits - 1;
         let midpoint = offset.advance_by_power_of_two(bits).expect("must exist");
         let (bot, top) = storage.split(&midpoint, fuel);
-        self.bits.splice(index..index, [bits, bits]);
-        self.offsets.splice(index..index, [midpoint, offset]);
-        self.storage.splice(index..index, [top, bot]);
+        self.content.insert(offset, (bits, bot));
+        self.content.insert(midpoint, (bits, top));
     }
 }
 
@@ -236,20 +204,25 @@ mod tests {
     use super::*;
 
     impl BucketTimestamp for u8 {
-        fn advance_by_power_of_two(&self, bits: usize) -> Option<Self> {
-            self.checked_add(1_u8.checked_shl(bits.try_into().unwrap())?)
+        fn advance_by_power_of_two(&self, bits: u32) -> Option<Self> {
+            self.checked_add(1_u8.checked_shl(bits)?)
         }
     }
 
     impl BucketTimestamp for u64 {
-        fn advance_by_power_of_two(&self, bits: usize) -> Option<Self> {
-            self.checked_add(1_u64.checked_shl(bits.try_into().unwrap())?)
+        fn advance_by_power_of_two(&self, bits: u32) -> Option<Self> {
+            self.checked_add(1_u64.checked_shl(bits)?)
         }
     }
 
-    #[derive(Debug)]
     struct TestStorage<T> {
         inner: Vec<T>,
+    }
+
+    impl<T: std::fmt::Debug> std::fmt::Debug for TestStorage<T> {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            self.inner.fmt(f)
+        }
     }
 
     impl<T: BucketTimestamp> Storage for TestStorage<T> {
@@ -282,10 +255,15 @@ mod tests {
     }
 
     #[mz_ore::test]
-    fn test_bucket_chain() {
+    fn test_bucket_chain_u8() {
         let mut chain = BucketChain::new(TestStorage::<u8> {
             inner: (0..=255).collect(),
         });
+        let mut fuel = -1;
+        while fuel < 0 {
+            fuel = 100;
+            chain.restore(&mut fuel);
+        }
         let peeled = chain.peel(AntichainRef::new(&[1]));
         assert_eq!(peeled.len(), 1);
         assert_eq!(peeled[0].inner[0], 0);
