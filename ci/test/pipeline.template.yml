@@ -107,7 +107,7 @@ steps:
         depends_on: []
         timeout_in_minutes: 45
         agents:
-          queue: hetzner-aarch64-8cpu-16gb
+          queue: hetzner-aarch64-16cpu-32gb
         if: "build.pull_request.id != null"
         coverage: skip
         sanitizer: skip
@@ -339,14 +339,15 @@ steps:
 
   - id: yugabyte-cdc
     label: "Yugabyte CDC tests"
-    depends_on: build-aarch64
+    depends_on: build-x86_64
     timeout_in_minutes: 30
     inputs: [test/yugabyte-cdc]
     plugins:
       - ./ci/plugins/mzcompose:
           composition: yugabyte-cdc
     agents:
-      queue: hetzner-aarch64-4cpu-8gb
+      # Too slow on aarch64
+      queue: hetzner-x86-64-4cpu-8gb
 
   - id: sql-server-cdc
     label: "SQL Server CDC tests"
