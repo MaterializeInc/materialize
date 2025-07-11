@@ -132,7 +132,7 @@ subtle = { version = "2.6.1" }
 syn-dff4ba8e3ae991db = { package = "syn", version = "1.0.107", features = ["extra-traits", "full", "visit", "visit-mut"] }
 syn-f595c2ba2a3f28df = { package = "syn", version = "2.0.104", features = ["extra-traits", "full", "visit", "visit-mut"] }
 time = { version = "0.3.37", features = ["local-offset", "macros", "quickcheck", "serde-well-known"] }
-timely = { version = "0.21.3" }
+timely = { version = "0.21.4" }
 tokio = { version = "1.44.2", features = ["full", "test-util", "tracing"] }
 tokio-postgres = { git = "https://github.com/MaterializeInc/rust-postgres", features = ["serde", "with-chrono-0_4", "with-serde_json-1", "with-uuid-1"] }
 tokio-stream = { version = "0.1.17", features = ["net", "sync"] }
@@ -154,7 +154,7 @@ uuid = { version = "1.17.0", features = ["serde", "v4", "v5", "v7"] }
 zeroize = { version = "1.8.1", features = ["serde"] }
 zstd = { version = "0.13.3" }
 zstd-safe = { version = "7.2.1", default-features = false, features = ["arrays", "legacy", "std", "zdict_builder"] }
-zstd-sys = { version = "2.0.13", features = ["std"] }
+zstd-sys = { version = "2.0.15", features = ["std"] }
 
 [build-dependencies]
 ahash = { version = "0.8.12" }
@@ -275,7 +275,7 @@ syn-dff4ba8e3ae991db = { package = "syn", version = "1.0.107", features = ["extr
 syn-f595c2ba2a3f28df = { package = "syn", version = "2.0.104", features = ["extra-traits", "full", "visit", "visit-mut"] }
 time = { version = "0.3.37", features = ["local-offset", "macros", "quickcheck", "serde-well-known"] }
 time-macros = { version = "0.2.19", default-features = false, features = ["formatting", "parsing", "serde"] }
-timely = { version = "0.21.3" }
+timely = { version = "0.21.4" }
 tokio = { version = "1.44.2", features = ["full", "test-util", "tracing"] }
 tokio-postgres = { git = "https://github.com/MaterializeInc/rust-postgres", features = ["serde", "with-chrono-0_4", "with-serde_json-1", "with-uuid-1"] }
 tokio-stream = { version = "0.1.17", features = ["net", "sync"] }
@@ -297,7 +297,7 @@ uuid = { version = "1.17.0", features = ["serde", "v4", "v5", "v7"] }
 zeroize = { version = "1.8.1", features = ["serde"] }
 zstd = { version = "0.13.3" }
 zstd-safe = { version = "7.2.1", default-features = false, features = ["arrays", "legacy", "std", "zdict_builder"] }
-zstd-sys = { version = "2.0.13", features = ["std"] }
+zstd-sys = { version = "2.0.15", features = ["std"] }
 
 [target.x86_64-unknown-linux-gnu.dependencies]
 camino = { version = "1.1.10", default-features = false, features = ["serde1"] }
