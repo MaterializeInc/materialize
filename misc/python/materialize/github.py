@@ -20,6 +20,7 @@ from materialize.observed_error import ObservedBaseError, WithIssue
 
 CI_RE = re.compile("ci-regexp: (.*)")
 CI_APPLY_TO = re.compile("ci-apply-to: (.*)")
+CI_LOCATION = re.compile("ci-location: (.*)")
 CI_IGNORE_FAILURE = re.compile("ci-ignore-failure: (.*)")
 
 
@@ -29,6 +30,7 @@ class KnownGitHubIssue:
     apply_to: str | None
     info: dict[str, Any]
     ignore_failure: bool
+    location: str | None
 
 
 @dataclass(kw_only=True, unsafe_hash=True)
@@ -84,6 +86,7 @@ def get_known_issues_from_github(
     for issue in issues_json["items"]:
         matches = CI_RE.findall(issue["body"])
         matches_apply_to = CI_APPLY_TO.findall(issue["body"])
+        matches_location = CI_LOCATION.findall(issue["body"])
         matches_ignore_failure = CI_IGNORE_FAILURE.findall(issue["body"])
 
         if len(matches) > 1:
@@ -105,13 +108,29 @@ def get_known_issues_from_github(
                     issue_url=issue["html_url"],
                     issue_title=issue["title"],
                     issue_number=issue["number"],
-                    regex_pattern=f"Multiple ignore-failures, but only one supported: {[match.strip() for match in matches_ignore_failure]}",
+                    regex_pattern=f"Multiple ci-ignore-failures, but only one supported: {[match.strip() for match in matches_ignore_failure]}",
                 )
             )
             continue
 
         if len(matches) == 0:
             continue
+
+        if len(matches_location) >= 2:
+            issues_with_invalid_regex.append(
+                GitHubIssueWithInvalidRegexp(
+                    internal_error_type="GITHUB_INVALID_IGNORE_FAILURE",
+                    issue_url=issue["html_url"],
+                    issue_title=issue["title"],
+                    issue_number=issue["number"],
+                    regex_pattern=f"Multiple ci-locations, but only one supported: {[match.strip() for match in matches_location]}",
+                )
+            )
+            continue
+
+        location: str | None = (
+            matches_location[0] if len(matches_location) == 1 else None
+        )
 
         ignore_failure = len(matches_ignore_failure) == 1 and matches_ignore_failure[
             0
@@ -139,11 +158,12 @@ def get_known_issues_from_github(
                         match_apply_to.strip().lower(),
                         issue,
                         ignore_failure,
+                        location,
                     )
                 )
         else:
             known_issues.append(
-                KnownGitHubIssue(regex_pattern, None, issue, ignore_failure)
+                KnownGitHubIssue(regex_pattern, None, issue, ignore_failure, location)
             )
 
     return (known_issues, issues_with_invalid_regex)

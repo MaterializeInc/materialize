@@ -20,4 +20,13 @@ ci-apply-to: SQLsmith
 ci-apply-to: sqlsmith explain
 ```
 
+Use `ci-location` to specify the file or test fragment in which a test failure occurs. When the Buildkite annotation says `Unknown error in test-read-frontier-advancement`, then `test-read-frontier-advancement` is the location. When it says `Unknown error in services.log`, then `services.log` is the location.
+
+Examples:
+
+```
+ci-location: test-read-frontier-advancement
+ci-location: services.log
+```
+
 When a test issue is discovered and the GitHub issue is still open, you may want the failure to not cause a test failure, so that CI does not become flaky, but still add an annotation and record the failure into https://ci-failures.dev.materialize.com. You can use `ci-ignore-failure: true` for that.

@@ -572,6 +572,8 @@ def annotate_logged_errors(
                     buildkite_label.lower().rstrip("01234567889 "),
                 ):
                     continue
+                if issue.location and issue.location != location:
+                    continue
 
                 if issue.info["number"] not in already_reported_issue_numbers:
                     known_errors.append(
