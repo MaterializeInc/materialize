@@ -86,12 +86,13 @@ SERVICES = [
 
 def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     def process(name: str) -> None:
-        # incident-70 requires more memory, runs in separate CI step
+        # incident-70 and refresh-mv-restart are slow, run in separate CI step
         # concurrent-connections is too flaky
         if name in (
             "default",
             "test-incident-70",
             "test-concurrent-connections",
+            "test-refresh-mv-restart",
         ):
             return
         with c.test_case(name):

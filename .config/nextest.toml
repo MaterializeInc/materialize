@@ -11,43 +11,85 @@ slow-timeout = { period = "1200s", terminate-after = 2 }
 filter = "package(mz-environmentd) and test(test_pgtest)"
 threads-required = 8
 slow-timeout = { period = "300s", terminate-after = 2 }
+priority = 100
+
+[[profile.default.overrides]]
+filter = "package(mz-environmentd) and test(test_pgtest_mz)"
+threads-required = 8
+slow-timeout = { period = "300s", terminate-after = 2 }
+priority = 100
 
 [[profile.default.overrides]]
 filter = "package(mz-environmentd) and test(test_storage_usage_collection_interval)"
 slow-timeout = { period = "300s", terminate-after = 2 }
+priority = 90
 
 [[profile.default.overrides]]
 filter = "package(mz-catalog) and test(global_expr_cache_roundtrip)"
 slow-timeout = { period = "300s", terminate-after = 2 }
+priority = 90
 
 [[profile.default.overrides]]
 filter = "package(mz-catalog) and test(local_expr_cache_roundtrip)"
 slow-timeout = { period = "300s", terminate-after = 2 }
+priority = 90
 
 [[profile.default.overrides]]
 filter = "package(mz-catalog) and test(expression_cache)"
 slow-timeout = { period = "300s", terminate-after = 2 }
+priority = 90
+
+[[profile.default.overrides]]
+filter = "package(mz-catalog) and test(proptest_wire_compat_v68_source_references_value_to_v67_source_references_value)"
+slow-timeout = { period = "300s", terminate-after = 2 }
+priority = 90
+
+[[profile.default.overrides]]
+filter = "package(mz-catalog) and test(proptest_wire_compat_v67_source_references_value_to_v68_source_references_value)"
+slow-timeout = { period = "300s", terminate-after = 2 }
+priority = 90
 
 [[profile.default.overrides]]
 filter = "package(mz-environmentd)"
 threads-required = 8
 slow-timeout = { period = "120s", terminate-after = 2 }
+priority = 80
 
 [[profile.default.overrides]]
 filter = "package(mz-storage-types) and test(all_datums_parquet_roundtrip)"
 slow-timeout = { period = "120s", terminate-after = 2 }
+priority = 70
 
 [[profile.default.overrides]]
 filter = "package(mz-storage-types) and test(all_datums_produce_valid_stats)"
 slow-timeout = { period = "450s", terminate-after = 2 }
+priority = 70
 
 [[profile.default.overrides]]
 filter = "package(mz-storage-types) and test(all_source_data_roundtrips)"
 slow-timeout = { period = "300s", terminate-after = 2 }
+priority = 70
 
 [[profile.default.overrides]]
 filter = "package(mz-adapter) and test(test_smoketest_all_builtins)"
 slow-timeout = { period = "300s", terminate-after = 2 }
+priority = 70
+
+[[profile.default.overrides]]
+filter = "package(mz-expr) and test(proptest_row_collection)"
+priority = 60
+
+[[profile.default.overrides]]
+filter = "package(mz-expr) and test(proptest_sort)"
+priority = 60
+
+[[profile.default.overrides]]
+filter = "package(mz-expr) and test(proptest_merge)"
+priority = 60
+
+[[profile.default.overrides]]
+filter = "package(mz-repr) and test(row_packing_roundtrips_single_valued)"
+priority = 60
 
 [profile.ci]
 junit = { path = "junit_cargo-test.xml" }

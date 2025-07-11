@@ -16,7 +16,9 @@ RUN apt-get update \
         ca-certificates \
         curl \
         git \
-        libxml2-dev
+        libxml2-dev \
+    && apt-get clean \
+    && rm -rf /var/lib/apt/lists/*
 
 # Bazelisk is a Bazel runner that reads the version from our .bazelversion file.
 ENV BAZELISK_VERSION="1.25.0"

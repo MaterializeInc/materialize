@@ -9,7 +9,7 @@
 
 MZFROM ubuntu-base
 
-RUN apt-get update && apt-get install -y openjdk-11-jdk openssl
+RUN apt-get update && TZ=UTC DEBIAN_FRONTEND=noninteractive apt-get install -y openjdk-11-jdk openssl && apt-get clean && rm -rf /var/lib/apt/lists/*
 
 COPY create-certs.sh /
 

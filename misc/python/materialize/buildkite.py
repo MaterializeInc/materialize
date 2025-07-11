@@ -9,7 +9,6 @@
 
 """Buildkite utilities."""
 
-import hashlib
 import os
 from collections.abc import Callable
 from enum import Enum, auto
@@ -181,25 +180,6 @@ def get_parallelism_count() -> int:
     return int(get_var(BuildkiteEnvVar.BUILDKITE_PARALLEL_JOB_COUNT, 1))
 
 
-def _accepted_by_shard(
-    identifier: str,
-    parallelism_index: int | None = None,
-    parallelism_count: int | None = None,
-) -> bool:
-    if parallelism_index is None:
-        parallelism_index = get_parallelism_index()
-    if parallelism_count is None:
-        parallelism_count = get_parallelism_count()
-
-    if parallelism_count == 1:
-        return True
-
-    hash_value = int.from_bytes(
-        hashlib.md5(identifier.encode()).digest(), byteorder="big"
-    )
-    return hash_value % parallelism_count == parallelism_index
-
-
 def _upload_shard_info_metadata(items: list[str]) -> None:
     label = get_var(BuildkiteEnvVar.BUILDKITE_LABEL) or get_var(
         BuildkiteEnvVar.BUILDKITE_STEP_KEY
@@ -244,8 +224,8 @@ def shard_list(items: list[T], to_identifier: Callable[[T], str]) -> list[T]:
 
     accepted_items = [
         item
-        for item in items
-        if _accepted_by_shard(to_identifier(item), parallelism_index, parallelism_count)
+        for i, item in enumerate(items)
+        if i % parallelism_count == parallelism_index
     ]
 
     if is_in_buildkite() and accepted_items:

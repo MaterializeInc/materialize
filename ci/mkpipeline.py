@@ -21,9 +21,9 @@ pipeline.template.yml and the docstring on `trim_tests_pipeline` below.
 
 import argparse
 import copy
+import fnmatch
 import hashlib
 import os
-import subprocess
 import sys
 import threading
 import traceback
@@ -34,6 +34,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
+import requests
 import yaml
 
 from materialize import mzbuild, spawn, ui
@@ -106,10 +107,6 @@ so it is executed.""",
     # Make sure we have an up to date view of main.
     spawn.runv(["git", "fetch", "origin", "main"])
 
-    # Print out a summary of all changes.
-    os.environ["GIT_PAGER"] = ""
-    spawn.runv(["git", "diff", "--stat", "origin/main..."])
-
     with open(Path(__file__).parent / args.pipeline / "pipeline.template.yml") as f:
         raw = f.read()
     raw = raw.replace("$RUST_VERSION", rust_version())
@@ -124,7 +121,7 @@ so it is executed.""",
         bazel_remote_cache = "https://bazel-remote.dev.materialize.com"
     raw = raw.replace("$BAZEL_REMOTE_CACHE", bazel_remote_cache)
 
-    hash_check: dict[tuple[Arch, bool], tuple[str, bool]] = {}
+    hash_check: dict[Arch, tuple[str, bool]] = {}
 
     def hash(deps: mzbuild.DependencySet) -> str:
         h = hashlib.sha1()
@@ -132,7 +129,7 @@ so it is executed.""",
             h.update(dep.spec().encode())
         return h.hexdigest()
 
-    def get_hashes(arch: Arch, bazel: bool = False) -> tuple[str, bool]:
+    def get_hashes(arch: Arch) -> tuple[str, bool]:
         repo = mzbuild.Repository(
             Path("."),
             arch=arch,
@@ -148,9 +145,7 @@ so it is executed.""",
 
     def fetch_hashes() -> None:
         for arch in [Arch.AARCH64, Arch.X86_64]:
-            for lto in [False, True]:
-                if not lto or args.pipeline in ["nightly", "release-qualification"]:
-                    hash_check[(arch, lto)] = get_hashes(arch, bazel=True)
+            hash_check[arch] = get_hashes(arch)
 
     trim_builds_prep_thread = threading.Thread(target=fetch_hashes)
     trim_builds_prep_thread.start()
@@ -916,56 +911,50 @@ def add_cargo_test_dependency(
 
 def trim_builds(
     pipeline: Any,
-    hash_check: dict[tuple[Arch, bool], tuple[str, bool]],
+    hash_check: dict[Arch, tuple[str, bool]],
 ) -> None:
     """Trim unnecessary x86-64/aarch64 builds if all artifacts already exist. Also mark remaining builds with a unique concurrency group for the code state so that the same build doesn't happen multiple times."""
     for step in steps(pipeline):
         if step.get("id") in ("build-x86_64", "upload-debug-symbols-x86_64"):
-            if hash_check[(Arch.X86_64, False)][1]:
+            if hash_check[Arch.X86_64][1]:
                 step["skip"] = True
             else:
                 step["concurrency"] = 1
-                step["concurrency_group"] = (
-                    f"build-x86_64/{hash_check[(Arch.X86_64, False)][0]}"
-                )
+                step["concurrency_group"] = f"build-x86_64/{hash_check[Arch.X86_64][0]}"
         elif step.get("id") in ("build-aarch64", "upload-debug-symbols-aarch64"):
-            if hash_check[(Arch.AARCH64, False)][1]:
+            if hash_check[Arch.AARCH64][1]:
                 step["skip"] = True
             else:
                 step["concurrency"] = 1
                 step["concurrency_group"] = (
-                    f"build-aarch64/{hash_check[(Arch.AARCH64, False)][0]}"
+                    f"build-aarch64/{hash_check[Arch.AARCH64][0]}"
                 )
-        elif step.get("id") == "build-x86_64-lto":
-            if hash_check[(Arch.X86_64, True)][1]:
-                step["skip"] = True
-            else:
-                step["concurrency"] = 1
-                step["concurrency_group"] = (
-                    f"build-x86_64/{hash_check[(Arch.X86_64, True)][0]}"
-                )
-        elif step.get("id") == "build-aarch64-lto":
-            if hash_check[(Arch.AARCH64, True)][1]:
-                step["skip"] = True
-            else:
-                step["concurrency"] = 1
-                step["concurrency_group"] = (
-                    f"build-aarch64/{hash_check[(Arch.AARCH64, True)][0]}"
-                )
+
+
+_github_changed_files: list[str] | None = None
 
 
 def have_paths_changed(globs: Iterable[str]) -> bool:
     """Reports whether the specified globs have diverged from origin/main."""
-    diff = subprocess.run(
-        ["git", "diff", "--no-patch", "--quiet", "origin/main...", "--", *globs]
-    )
-    if diff.returncode == 0:
-        return False
-    elif diff.returncode == 1:
-        return True
-    else:
-        diff.check_returncode()
-        raise RuntimeError("unreachable")
+    global _github_changed_files
+    if not _github_changed_files:
+        head = spawn.capture(["git", "rev-parse", "HEAD"]).strip()
+        headers = {"Accept": "application/vnd.github+json"}
+        if token := os.getenv("GITHUB_TOKEN"):
+            headers["Authorization"] = f"Bearer {token}"
+
+        resp = requests.get(
+            f"https://api.github.com/repos/materializeinc/materialize/compare/main...{head}",
+            headers=headers,
+        )
+        resp.raise_for_status()
+        _github_changed_files = [f["filename"] for f in resp.json().get("files", [])]
+
+    for pattern in globs:
+        for changed in _github_changed_files:
+            if fnmatch.fnmatch(changed, pattern):
+                return True
+    return False
 
 
 if __name__ == "__main__":

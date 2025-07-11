@@ -21,23 +21,32 @@ set -euo pipefail
 
 pipeline=${1:-test}
 bootstrap_steps=
+tmpfile=$(mktemp)
 
 for arch in x86_64 aarch64; do
-    for flavor in stable nightly min; do
-        if ! MZ_DEV_CI_BUILDER_ARCH=$arch bin/ci-builder exists $flavor; then
-            queue=builder-linux-x86_64
-            if [[ $arch = aarch64 ]]; then
-                queue=builder-linux-aarch64-mem
-            fi
-            bootstrap_steps+="
+  for flavor in stable nightly min; do
+    (
+      if ! MZ_DEV_CI_BUILDER_ARCH=$arch bin/ci-builder exists $flavor; then
+        echo "$arch:$flavor" >> "$tmpfile"
+      fi
+    ) &
+  done
+done
+wait
+
+while IFS=: read -r arch flavor; do
+    queue=builder-linux-x86_64
+    if [[ $arch == aarch64 ]]; then
+        queue=builder-linux-aarch64-mem
+    fi
+    bootstrap_steps+="
   - label: bootstrap $flavor $arch
     command: bin/ci-builder push $flavor
     agents:
       queue: $queue
 "
-        fi
-    done
-done
+done < "$tmpfile"
+rm "$tmpfile"
 
 exec buildkite-agent pipeline upload <<EOF
 steps:

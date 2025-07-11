@@ -13,18 +13,18 @@ MZFROM ubuntu-base
 
 WORKDIR /workdir
 
-RUN apt-get update && apt-get install -y --no-install-recommends \
+RUN apt-get update && TZ=UTC DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
     ca-certificates \
     git \
     default-jdk \
-    maven
-
-# Rebuild since SQLancer repo might have changed
-ADD https://api.github.com/repos/sqlancer/sqlancer/git/refs/heads/main version.json
+    maven \
+    && apt-get clean \
+    && rm -rf /var/lib/apt/lists/*
 
 # Build SQLancer
 RUN git clone --depth=1 --single-branch https://github.com/sqlancer/sqlancer \
     && cd sqlancer \
+    && rm -rf .git \
     && mvn package -DskipTests
 
 ENTRYPOINT ["/usr/bin/java", "-jar", "sqlancer/target/sqlancer-2.0.0.jar"]

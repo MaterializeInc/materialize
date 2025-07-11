@@ -13,6 +13,7 @@ priority: 0
 env:
   CI_BAZEL_BUILD: 1
   CI_BAZEL_REMOTE_CACHE: $BAZEL_REMOTE_CACHE
+  CI_BAZEL_LTO: 1
 
 steps:
   - group: Builds
@@ -39,34 +40,6 @@ steps:
         timeout_in_minutes: 60
         agents:
           queue: l-builder-linux-aarch64
-
-      - id: build-x86_64-lto
-        label: ":bazel: Build x86_64 (LTO)"
-        command: bin/ci-builder run min bin/pyactivate -m ci.test.build
-        inputs:
-          - "*"
-        artifact_paths: bazel-explain.log
-        depends_on: []
-        timeout_in_minutes: 60
-        agents:
-          queue: l-builder-linux-x86_64
-        env:
-          CI_BAZEL_LTO: true
-        sanitizer: skip
-
-      - id: build-aarch64-lto
-        label: ":bazel: Build aarch64 (LTO)"
-        command: bin/ci-builder run min bin/pyactivate -m ci.test.build
-        inputs:
-          - "*"
-        artifact_paths: bazel-explain.log
-        depends_on: []
-        timeout_in_minutes: 60
-        agents:
-          queue: l-builder-linux-aarch64
-        env:
-          CI_BAZEL_LTO: true
-        sanitizer: skip
 
       - id: build-x86_64-asan
         label: ":bazel: Build x86_64 (ASan)"
@@ -148,13 +121,11 @@ steps:
     steps:
       - id: feature-benchmark
         label: "Feature benchmark against merge base or 'latest'"
-        depends_on: build-x86_64-lto
+        depends_on: build-x86_64
         timeout_in_minutes: 720
         parallelism: 8
         agents:
           queue: hetzner-x86-64-dedi-16cpu-64gb
-        env:
-          CI_BAZEL_LTO: true
         plugins:
           - ./ci/plugins/mzcompose:
               composition: feature-benchmark
@@ -164,13 +135,11 @@ steps:
                 - common-ancestor
       - id: scalability-benchmark-dml-dql
         label: "Scalability benchmark (read & write) against merge base or 'latest'"
-        depends_on: build-x86_64-lto
+        depends_on: build-x86_64
         timeout_in_minutes: 240
         agents:
           # Larger instance is more stable in performance
           queue: hetzner-x86-64-dedi-16cpu-64gb
-        env:
-          CI_BAZEL_LTO: true
         plugins:
           - ./ci/plugins/mzcompose:
               composition: scalability
@@ -187,13 +156,11 @@ steps:
                 - "256"
       - id: scalability-benchmark-ddl
         label: "Scalability benchmark (DDL) against merge base or 'latest'"
-        depends_on: build-x86_64-lto
+        depends_on: build-x86_64
         timeout_in_minutes: 1200
         agents:
           # Larger instance is more stable in performance
           queue: hetzner-x86-64-dedi-16cpu-64gb
-        env:
-          CI_BAZEL_LTO: true
         plugins:
           - ./ci/plugins/mzcompose:
               composition: scalability
@@ -214,13 +181,11 @@ steps:
                 - "64"
       - id: scalability-benchmark-connection
         label: "Scalability benchmark (connection) against merge base or 'latest'"
-        depends_on: build-x86_64-lto
+        depends_on: build-x86_64
         timeout_in_minutes: 180
         agents:
           # Larger instance is more stable in performance
           queue: hetzner-x86-64-dedi-16cpu-64gb
-        env:
-          CI_BAZEL_LTO: true
         plugins:
           - ./ci/plugins/mzcompose:
               composition: scalability
@@ -239,13 +204,11 @@ steps:
                 - "2048"
       - id: parallel-benchmark
         label: "Parallel Benchmark"
-        depends_on: build-x86_64-lto
+        depends_on: build-x86_64
         timeout_in_minutes: 120
         agents:
           # Larger instance is more stable in performance
           queue: hetzner-x86-64-dedi-16cpu-64gb
-        env:
-          CI_BAZEL_LTO: true
         plugins:
           - ./ci/plugins/mzcompose:
               composition: parallel-benchmark
@@ -620,10 +583,46 @@ steps:
               composition: zippy
               args: [--scenario=AlterConnectionWithKafkaSources, --actions=10000, --max-execution-time=30m]
 
+  - group: Source Resumption tests
+    key: source-resumption-tests
+    steps:
+      - id: kafka-resumption
+        label: Kafka resumption tests
+        depends_on: build-aarch64
+        timeout_in_minutes: 30
+        plugins:
+          - ./ci/plugins/mzcompose:
+              composition: kafka-resumption
+        agents:
+          queue: hetzner-aarch64-8cpu-16gb
+
+      - id: mysql-cdc-resumption
+        label: "MySQL CDC resumption tests"
+        parallelism: 2
+        depends_on: build-aarch64
+        timeout_in_minutes: 60
+        inputs: [test/mysql-cdc-resumption]
+        plugins:
+          - ./ci/plugins/mzcompose:
+              composition: mysql-cdc-resumption
+        agents:
+          queue: hetzner-aarch64-8cpu-16gb
+
+      - id: pg-cdc-resumption
+        label: "Postgres CDC resumption tests"
+        parallelism: 2
+        depends_on: build-aarch64
+        timeout_in_minutes: 60
+        inputs: [test/pg-cdc-resumption]
+        plugins:
+          - ./ci/plugins/mzcompose:
+              composition: pg-cdc-resumption
+        agents:
+          queue: hetzner-aarch64-8cpu-16gb
+
   - group: CDC with old source syntax
     key: cdc-old-source-syntax
     steps:
-
       - id: mysql-cdc-old-syntax
         label: MySQL CDC tests (before source versioning)
         depends_on: build-aarch64
@@ -798,6 +797,24 @@ steps:
               composition: platform-checks
               args: [--scenario=RestartEntireMz, "--seed=$BUILDKITE_JOB_ID", --features=azurite]
 
+      - id: checks-restart-environmentd-clusterd-storage
+        label: "Checks + restart of environmentd & storage clusterd"
+        depends_on: build-aarch64
+        inputs: [misc/python/materialize/checks]
+        timeout_in_minutes: 45
+        parallelism: 3
+        agents:
+          queue: hetzner-aarch64-8cpu-16gb
+        plugins:
+          - ./ci/plugins/mzcompose:
+              composition: platform-checks
+              args:
+                [
+                  --scenario=RestartEnvironmentdClusterdStorage,
+                  --default-replication-factor=1, # faster
+                  "--seed=$BUILDKITE_JOB_ID",
+                ]
+
       - id: checks-restart-environmentd-clusterd-storage-azurite
         label: "Checks + restart of environmentd & storage clusterd with :azure: blob store"
         depends_on: build-aarch64
@@ -839,24 +856,6 @@ steps:
           - ./ci/plugins/mzcompose:
               composition: platform-checks
               args: [--scenario=DropCreateDefaultReplica, --execution-mode=parallel, "--seed=$BUILDKITE_JOB_ID"]
-
-      - id: checks-parallel-drop-create-default-replica-x86_64
-        label: "Checks parallel + DROP/CREATE replica (x86_64)"
-        depends_on: build-x86_64
-        timeout_in_minutes: 180
-        parallelism: 3
-        agents:
-          queue: hetzner-x86-64-8cpu-16gb
-        plugins:
-          - ./ci/plugins/mzcompose:
-              composition: platform-checks
-              args:
-                [
-                  --scenario=DropCreateDefaultReplica,
-                  --execution-mode=parallel,
-                  --features=sql_server,
-                  "--seed=$BUILDKITE_JOB_ID",
-                ]
 
       - id: checks-parallel-restart-clusterd-compute
         label: "Checks parallel + restart compute clusterd"
@@ -1036,6 +1035,7 @@ steps:
           - ./ci/plugins/mzcompose:
               composition: platform-checks
               args: [--scenario=ZeroDowntimeBumpedVersion, "--seed=$BUILDKITE_JOB_ID"]
+              ci-builder: stable
 
       - id: cloudtest-upgrade
         label: "Platform checks upgrade in Cloudtest/K8s"
@@ -1836,16 +1836,30 @@ steps:
               composition: parallel-workload
               args: [--runtime=1500, --scenario=0dt-deploy, --threads=16]
 
-  - id: incident-70
-    label: "Test for incident 70"
-    depends_on: build-aarch64
-    timeout_in_minutes: 60
-    agents:
-      queue: hetzner-aarch64-4cpu-8gb
-    plugins:
-      - ./ci/plugins/mzcompose:
-          composition: cluster
-          run: test-incident-70
+  - group: Slow cluster tests
+    key: slow-cluster
+    steps:
+      - id: incident-70
+        label: "Test for incident 70"
+        depends_on: build-aarch64
+        timeout_in_minutes: 60
+        agents:
+          queue: hetzner-aarch64-4cpu-8gb
+        plugins:
+          - ./ci/plugins/mzcompose:
+              composition: cluster
+              run: test-incident-70
+
+      - id: refresh-mv-restart
+        label: "Refresh MV restart"
+        depends_on: build-aarch64
+        timeout_in_minutes: 60
+        agents:
+          queue: hetzner-aarch64-4cpu-8gb
+        plugins:
+          - ./ci/plugins/mzcompose:
+              composition: cluster
+              run: test-refresh-mv-restart
 
   - id: balancerd
     label: "Tests for balancerd"
@@ -2032,18 +2046,6 @@ steps:
           composition: sqllogictest
           run: slow-tests
           args: [--replicas=4]
-
-  - id: cluster-tests-azurite
-    label: "Cluster tests with :azure: blob store"
-    depends_on: build-aarch64
-    timeout_in_minutes: 120
-    inputs: [test/cluster]
-    plugins:
-      - ./ci/plugins/mzcompose:
-          composition: cluster
-          args: ["--azurite"]
-    agents:
-      queue: hetzner-aarch64-8cpu-16gb
 
   - group: "Race Condition"
     key: race-condition

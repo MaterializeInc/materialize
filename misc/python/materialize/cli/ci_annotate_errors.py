@@ -569,7 +569,7 @@ def annotate_logged_errors(
             if match and issue.info["state"] == "open":
                 if issue.apply_to and issue.apply_to not in (
                     step_key.lower(),
-                    buildkite_label.lower(),
+                    buildkite_label.lower().rstrip("01234567889 "),
                 ):
                     continue
 

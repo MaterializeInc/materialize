@@ -13,8 +13,10 @@ set -euo pipefail
 
 . misc/shlib/shlib.bash
 
+builder=${BUILDKITE_PLUGIN_MZCOMPOSE_CI_BUILDER:-min}
+
 mzcompose() {
-    stdbuf --output=L --error=L bin/ci-builder run stable bin/mzcompose --find "$BUILDKITE_PLUGIN_MZCOMPOSE_COMPOSITION" "$@"
+    stdbuf --output=L --error=L bin/ci-builder run "$builder" bin/mzcompose --find "$BUILDKITE_PLUGIN_MZCOMPOSE_COMPOSITION" "$@"
 }
 
 faketty() {
@@ -31,10 +33,6 @@ fi
 
 STEP_START_TIMESTAMP=$(date +"%Y-%m-%d %H:%M:%S")
 
-ci_collapsed_heading ":docker: Rebuilding non-mzbuild containers"
-# First time we are using ci-builder, allow retrying a few times in case dockerhub has network problems
-mzcompose --mz-quiet build || mzcompose --mz-quiet build || mzcompose --mz-quiet build
-
 # Clean up cores here so that just killed processes' core files are ignored
 cores="$HOME"/cores
 rm -rf "$cores" parallel-workload-queries.log parallel-workload-queries.log.zst
@@ -42,6 +40,9 @@ mkdir -m 777 "$cores"
 # Max 128 characters, so don't use $PWD which will make it too long
 # Ignore SIGABRT
 sudo sysctl -w kernel.core_pattern="|/usr/bin/ci-filter-core.sh %s $cores/core.%E.%t"
+
+# 3 attempts to download the ci-builder
+bin/ci-builder run "$builder" echo || bin/ci-builder run "$builder" echo || bin/ci-builder run "$builder" echo
 
 # Start dependencies under a different heading so that the main heading is less
 # noisy. But not if the service is actually a workflow, in which case it will
@@ -138,11 +139,6 @@ cleanup() {
 
   if find cores -name 'core.*' | grep -q .; then
       # Best effort attempt to fetch interesting executables to get backtrace of core files
-      bin/ci-builder mzcompose stable cp /mnt/build/debug/clusterd cores/ || true
-      bin/ci-builder mzcompose stable cp /mnt/build/debug/environmentd cores/ || true
-      bin/ci-builder mzcompose stable cp /mnt/build/debug/materialized cores/ || true
-      bin/ci-builder mzcompose stable cp /mnt/build/debug/mz-balancerd cores/balancerd || true
-      bin/ci-builder mzcompose stable cp /mnt/build/debug/sqllogictest cores/ || true
       mzcompose cp sqllogictest:/usr/local/bin/sqllogictest cores/ || true
       mzcompose cp sqllogictest:/usr/local/bin/clusterd cores/ || true
       mzcompose cp materialized:/usr/local/bin/environmentd cores/ || true
@@ -159,21 +155,21 @@ cleanup() {
   find cores -name 'core.*' | while read -r core; do
       exe=$(echo "$core" | sed -e "s/core\.\(.*\)\.[0-9]*/\1/" -e "s/.*\!//")
       # Core dumps can take a while to be written, so if extracting the info fails, try again later
-      bin/ci-builder run stable gdb --batch -ex "bt full" -ex "thread apply all bt" -ex "quit" cores/"$exe" "$core" > "$core".txt || (sleep 2m; bin/ci-builder run stable gdb --batch -ex "bt full" -ex "thread apply all bt" -ex "quit" cores/"$exe" "$core" > "$core".txt || true)
+      bin/ci-builder run min gdb --batch -ex "bt full" -ex "thread apply all bt" -ex "quit" cores/"$exe" "$core" > "$core".txt || (sleep 2m; bin/ci-builder run min gdb --batch -ex "bt full" -ex "thread apply all bt" -ex "quit" cores/"$exe" "$core" > "$core".txt || true)
       buildkite-agent artifact upload "$core".txt
   done
   # can be huge, clean up
   rm -rf cores
 
   echo "Compressing parallel-workload-queries.log"
-  bin/ci-builder run stable zstd --rm parallel-workload-queries.log || true
+  bin/ci-builder run min zstd --rm parallel-workload-queries.log || true
 
   mapfile -t artifacts < <(printf "run.log\nservices.log\njournalctl-merge.log\nnetstat-ant.log\nnetstat-panelot.log\nps-aux.log\ndocker-inspect.log\n"; find . -name 'junit_*.xml'; find mz_debug_* -name '*.log')
   artifacts_str=$(IFS=";"; echo "${artifacts[*]}")
 
   echo "--- Running trufflehog to scan artifacts for secrets & uploading artifacts"
   {
-    bin/ci-builder run stable trufflehog --no-update --no-verification --json --exclude-detectors=coda,dockerhub,box,npmtoken,github,snykkey,eightxeight,sumologickey,miro filesystem "${artifacts[@]}" | trufflehog_jq_filter_logs > trufflehog.log
+    bin/ci-builder run min trufflehog --no-update --no-verification --json --exclude-detectors=coda,dockerhub,box,npmtoken,github,snykkey,eightxeight,sumologickey,miro filesystem "${artifacts[@]}" | trufflehog_jq_filter_logs > trufflehog.log
   } &
 
   unset CI_EXTRA_ARGS # We don't want extra args for the annotation
@@ -185,7 +181,7 @@ cleanup() {
   } &
   wait
   echo "--- Annotating errors"
-  bin/ci-builder run stable bin/ci-annotate-errors --test-cmd="$TEST_CMD" --test-desc="$TEST_DESC" --test-result="$TEST_RESULT" "${artifacts[@]}" trufflehog.log > ci-annotate-errors.log || CI_ANNOTATE_ERRORS_RESULT=$?
+  bin/ci-builder run min bin/ci-annotate-errors --test-cmd="$TEST_CMD" --test-desc="$TEST_DESC" --test-result="$TEST_RESULT" "${artifacts[@]}" trufflehog.log > ci-annotate-errors.log || CI_ANNOTATE_ERRORS_RESULT=$?
   buildkite-agent artifact upload "ci-annotate-errors.log"
 
   export_cov() {

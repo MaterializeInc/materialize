@@ -50,6 +50,11 @@ SERVICES = [
 def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     """Run testdrive."""
     parser.add_argument(
+        "--slow",
+        action="store_true",
+        help="include slow tests (usually only in Nightly)",
+    )
+    parser.add_argument(
         "--redpanda",
         action="store_true",
         help="run against Redpanda instead of the Confluent Platform",
@@ -204,6 +209,11 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         # without mzcompose
 
         def process(file: str) -> None:
+            if not args.slow and file in (
+                "materialized-view-refresh-options.td",
+                "upsert-source-race.td",
+            ):
+                return
             junit_report = ci_util.junit_report_filename(f"{c.name}_{file}")
             try:
                 c.run_testdrive_files(

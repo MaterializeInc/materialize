@@ -39,6 +39,7 @@ from tempfile import TemporaryFile
 from threading import Lock
 from typing import IO, Any, cast
 
+import requests
 import yaml
 
 from materialize import bazel as bazel_utils
@@ -141,7 +142,7 @@ class RepositoryDetails:
         if self.bazel:
             return ["bazel", "run", f"@//misc/bazel/tools:{name}", "--"]
         else:
-            return xcompile.tool(self.arch, name)
+            return ["bin/ci-builder", "run", "stable", name]
 
     def cargo_target_dir(self) -> Path:
         """Determine the path to the target directory for Cargo."""
@@ -159,7 +160,11 @@ class RepositoryDetails:
             # If we're a tagged build, then we'll use stamping to update our
             # build info, otherwise we'll use our side channel/best-effort
             # approach to update it.
-            if ui.env_is_truthy("BUILDKITE_TAG") or self.bazel_lto:
+            if (
+                ui.env_is_truthy("BUILDKITE_TAG")
+                or ui.env_is_truthy("CI_RELEASE_LTO_BUILD")
+                or self.bazel_lto
+            ):
                 flags.append("--config=release-tagged")
             else:
                 flags.append("--config=release-dev")
@@ -206,11 +211,62 @@ def docker_images() -> set[str]:
     )
 
 
+_docker_hub_token: str | None = None
+
+
+def _get_docker_hub_token(image: str) -> str:
+    global _docker_hub_token
+    if _docker_hub_token is None:
+        _docker_hub_token = requests.get(
+            "https://auth.docker.io/token",
+            params={
+                "service": "registry.docker.io",
+                "scope": f"repository:{image}:pull",
+            },
+        ).json()["token"]
+    assert _docker_hub_token
+    return _docker_hub_token
+
+
 def is_docker_image_pushed(name: str) -> bool:
     """Check whether the named image is pushed to Docker Hub.
 
     Note that this operation requires a rather slow network request.
     """
+    if ":" not in name:
+        image, tag = name, "latest"
+    else:
+        image, tag = name.rsplit(":", 1)
+
+    # TODO(def-) Investigate why this is not working properly, would speed us up by a factor of 5
+    # dockerhub_username = os.getenv("DOCKERHUB_USERNAME")
+    # dockerhub_token = os.getenv("DOCKERHUB_ACCESS_TOKEN")
+
+    # try:
+    #     if dockerhub_username and dockerhub_token:
+    #         response = requests.head(
+    #             f"https://registry-1.docker.io/v2/{image}/manifests/{tag}",
+    #             headers={
+    #                 "Accept": "application/vnd.docker.distribution.manifest.v2+json",
+    #             },
+    #             auth=HTTPBasicAuth(dockerhub_username, dockerhub_token),
+    #         )
+    #     else:
+    #         token = _get_docker_hub_token(image)
+    #         response = requests.head(
+    #             f"https://registry-1.docker.io/v2/{image}/manifests/{tag}",
+    #             headers={
+    #                 "Accept": "application/vnd.docker.distribution.manifest.v2+json",
+    #                 "Authorization": f"Bearer {token}",
+    #             },
+    #         )
+
+    #     return response.status_code == 200
+
+    # except Exception as e:
+    #     print(f"Error checking Docker image: {e}")
+    #     return False
+
     proc = subprocess.run(
         ["docker", "manifest", "inspect", name],
         stdout=subprocess.DEVNULL,
