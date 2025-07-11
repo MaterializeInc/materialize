@@ -3943,6 +3943,12 @@ impl TableFunc {
                 // We error if the count is not one,
                 // and produce no rows if equal to one.
                 let count = datums[0].unwrap_int64();
+                // Note that we can't get a 0 count here, since the `Reduce count` below us is not
+                // an SQL `count`, but an MIR `count`, which has an empty output on an empty input.
+                // If we get a negative count, then we have a negative accumulation error somewhere.
+                if count < 1 {
+                    tracing::error!("GuardSubquerySize encountered invalid count: {}", count);
+                }
                 if count != 1 {
                     Err(EvalError::MultipleRowsFromSubquery)
                 } else {
