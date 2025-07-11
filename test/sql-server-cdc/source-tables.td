@@ -54,9 +54,9 @@ ALTER SYSTEM SET enable_sql_server_source = true;
   );
 
 # Create a SQL Server Source.
-
-> CREATE SOURCE ms_src
-  FROM SQL SERVER CONNECTION ms_conn;
+> CREATE CLUSTER src_tables (SIZE = '1', REPLICATION FACTOR = 1);
+> SET CLUSTER TO src_tables;
+> CREATE SOURCE ms_src FROM SQL SERVER CONNECTION ms_conn;
 
 # Can't create tables from SQL server source where it doesn't EXISTS
 ! CREATE TABLE does_not_exist FROM SOURCE ms_src (REFERENCE does_not_exist);
@@ -157,6 +157,51 @@ INSERT INTO t1_pk(key_col, val_col) VALUES ('d', 'dogs'), ('e', 'elephant');
 "elephant"
 
 > DROP TABLE exclude_cols;
+
+# Ensure that rewinds are correctly processed
+> CREATE TABLE t1 FROM SOURCE ms_src (REFERENCE t1_pk);
+
+> SELECT * FROM t1;
+b "beer"
+c "anotha one"
+d "dogs"
+e "elephant"
+😊 "lets see what happens"
+
+> ALTER CLUSTER src_tables SET (REPLICATION FACTOR = 0);
+
+$ sql-server-execute name=sql-server
+INSERT INTO t1_pk VALUES ('x', 'xeon'), ('y', 'yellow'), ('z', 'zion');
+
+# CDC is asynchronous, and LSN selection at snapshot time is incorrect, we we give
+# CDC time to process the previous update.
+# https://github.com/MaterializeInc/database-issues/issues/9476
+$ sleep-is-probably-flaky-i-have-justified-my-need-with-a-comment duration=5s
+
+> CREATE TABLE t2 FROM SOURCE ms_src (REFERENCE t1_pk);
+
+> ALTER CLUSTER src_tables SET (REPLICATION FACTOR = 1);
+
+> SELECT * FROM t1;
+b "beer"
+c "anotha one"
+d "dogs"
+e "elephant"
+x "xeon"
+y "yellow"
+z "zion"
+😊 "lets see what happens"
+
+> SELECT * FROM t2;
+b "beer"
+c "anotha one"
+d "dogs"
+e "elephant"
+x "xeon"
+y "yellow"
+z "zion"
+😊 "lets see what happens"
+
 
 # create source table after adding a column to upstream table
 # !!! disabled for now as we don't handle the capture instance switch gracefully.
