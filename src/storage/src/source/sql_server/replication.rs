@@ -219,7 +219,6 @@ pub(crate) fn render<G: Scope<Timestamp = Lsn>>(
 
                 snapshot_lsn
             };
-            export_ids_to_snapshot.clear();
 
             // Start replicating from the LSN __after__ we took the snapshot.
             let replication_start_lsn = snapshot_lsn.increment();
@@ -227,6 +226,10 @@ pub(crate) fn render<G: Scope<Timestamp = Lsn>>(
                 .values()
                 .flat_map(|export_ids| export_ids.iter().map(|idx| (*idx, replication_start_lsn)))
                 .collect();
+
+            tracing::debug!("rewinds to process: {rewinds:?}");
+
+            export_ids_to_snapshot.clear();
 
 
             // Resumption point is the minimum LSN that has been observed.
