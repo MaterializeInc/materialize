@@ -7231,8 +7231,11 @@ dependencies = [
  "anyhow",
  "async-stream",
  "async-trait",
+ "bincode",
+ "bytes",
  "clap",
  "crossbeam-channel",
+ "flate2",
  "futures",
  "http 1.2.0",
  "hyper-util",
@@ -7252,6 +7255,7 @@ dependencies = [
  "proptest-derive",
  "prost",
  "prost-build",
+ "rand 0.8.5",
  "semver",
  "sentry-tracing",
  "serde",
@@ -7263,6 +7267,8 @@ dependencies = [
  "tonic-build",
  "tower 0.5.2",
  "tracing",
+ "tracing-subscriber",
+ "turmoil",
  "workspace-hack",
 ]
 
