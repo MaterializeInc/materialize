@@ -319,29 +319,19 @@ EXPLAIN OPTIMIZED PLAN WITH(types, no fast path, humanized expressions) AS VERBO
 Explained Query:
   With
     cte l0 =
-      Project (#1{col_not_null}) // { types: "(integer)" }
-        ReadStorage materialize.public.int_table // { types: "(integer?, integer)" }
-    cte l1 =
-      CrossJoin type=delta // { types: "(integer, integer, bigint, bigint, numeric, numeric, bigint, integer list)" }
-        ArrangeBy keys=[[]] // { types: "(integer, integer)" }
-          Reduce aggregates=[min(#0{col_not_null}), max(#0{col_not_null})] // { types: "(integer, integer)" }
-            Get l0 // { types: "(integer)" }
-        ArrangeBy keys=[[]] // { types: "(bigint, bigint, numeric, numeric, bigint)" }
-          Reduce aggregates=[sum(#0{col_not_null}), count(*), sum((integer_to_numeric(#0{col_not_null}) * integer_to_numeric(#0{col_not_null}))), sum(integer_to_numeric(#0{col_not_null})), count(integer_to_numeric(#0{col_not_null}))] // { types: "(bigint, bigint, numeric, numeric, bigint)" }
-            Get l0 // { types: "(integer)" }
-        ArrangeBy keys=[[]] // { types: "(integer list)" }
-          Reduce aggregates=[list_agg[order_by=[]](row(list[#0{col_not_null}]))] // { types: "(integer list)" }
-            Get l0 // { types: "(integer)" }
+      Reduce aggregates=[min(#0{col_not_null}), max(#0{col_not_null}), sum(#0{col_not_null}), count(*), sum((integer_to_numeric(#0{col_not_null}) * integer_to_numeric(#0{col_not_null}))), sum(integer_to_numeric(#0{col_not_null})), count(integer_to_numeric(#0{col_not_null})), list_agg[order_by=[]](row(list[#0{col_not_null}]))] // { types: "(integer, integer, bigint, bigint, numeric, numeric, bigint, integer list)" }
+        Project (#1{col_not_null}) // { types: "(integer)" }
+          ReadStorage materialize.public.int_table // { types: "(integer?, integer)" }
   Return // { types: "(integer?, integer?, numeric?, numeric?, integer list?)" }
     Project (#0{min_col_not_null}, #1{max_col_not_null}, #8, #9, #7{list_agg}) // { types: "(integer?, integer?, numeric?, numeric?, integer list?)" }
       Map ((bigint_to_numeric(#2{sum_col_not_null}) / bigint_to_numeric(case when (#3{count} = 0) then null else #3{count} end)), sqrtnumeric(case when ((#4{sum}) IS NULL OR (#5{sum}) IS NULL OR (case when (#6{count} = 0) then null else #6{count} end) IS NULL OR (case when (0 = (#6{count} - 1)) then null else (#6{count} - 1) end) IS NULL) then null else greatest(((#4{sum} - ((#5{sum} * #5{sum}) / bigint_to_numeric(case when (#6{count} = 0) then null else #6{count} end))) / bigint_to_numeric(case when (0 = (#6{count} - 1)) then null else (#6{count} - 1) end)), 0) end)) // { types: "(integer?, integer?, bigint?, bigint, numeric?, numeric?, bigint, integer list?, numeric?, numeric?)" }
         Union // { types: "(integer?, integer?, bigint?, bigint, numeric?, numeric?, bigint, integer list?)" }
-          Get l1 // { types: "(integer, integer, bigint, bigint, numeric, numeric, bigint, integer list)" }
+          Get l0 // { types: "(integer, integer, bigint, bigint, numeric, numeric, bigint, integer list)" }
           Map (null, null, null, 0, null, null, 0, null) // { types: "(integer?, integer?, bigint?, bigint, numeric?, numeric?, bigint, integer list?)" }
             Union // { types: "()" }
               Negate // { types: "()" }
                 Project () // { types: "()" }
-                  Get l1 // { types: "(integer, integer, bigint, bigint, numeric, numeric, bigint, integer list)" }
+                  Get l0 // { types: "(integer, integer, bigint, bigint, numeric, numeric, bigint, integer list)" }
               Constant // { types: "()" }
                 - ()
 

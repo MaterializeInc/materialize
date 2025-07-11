@@ -96,14 +96,9 @@ EXPLAIN OPTIMIZED PLAN WITH(arity, humanized expressions) AS VERBOSE TEXT FOR
 SELECT sum(e * f), max(f) FROM v GROUP BY mod(e, 5)
 ----
 Explained Query:
-  Project (#3{sum}, #1{max_f}) // { arity: 2 }
-    Join on=(#0 = #2) type=differential // { arity: 4 }
-      ArrangeBy keys=[[#0]] // { arity: 2 }
-        Reduce group_by=[(#0{e} % 5)] aggregates=[max(#1{f})] // { arity: 2 }
-          ReadStorage materialize.public.v // { arity: 2 }
-      ArrangeBy keys=[[#0]] // { arity: 2 }
-        Reduce group_by=[(#0{e} % 5)] aggregates=[sum((#0{e} * #1{f}))] // { arity: 2 }
-          ReadStorage materialize.public.v // { arity: 2 }
+  Project (#1{sum}, #2{max_f}) // { arity: 2 }
+    Reduce group_by=[(#0{e} % 5)] aggregates=[sum((#0{e} * #1{f})), max(#1{f})] // { arity: 3 }
+      ReadStorage materialize.public.v // { arity: 2 }
 
 Source materialize.public.v
 
