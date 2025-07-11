@@ -3735,11 +3735,21 @@ pub enum TableFunc {
     GenerateSeriesTimestamp,
     GenerateSeriesTimestampTz,
     /// Supplied with an input count,
-    ///   1. Adds an error column announcing too many results,
-    ///   2. Filters the row away if the count is only one.
+    ///   1. Adds an column as if a typed subquery result,
+    ///   2. Filters the row away if the count is only one,
+    ///   3. Errors if the count is not exactly one.
+    /// The intent is that this presents as if a subquery result with too many
+    /// records contributing. The error column has the same type as the result
+    /// should have, but we only produce it if the count exceeds one.
+    ///
     /// This logic could nearly be achieved with map, filter, project logic,
     /// but has been challenging to do in a way that respects the vagaries of
-    /// SQL and our semantics.
+    /// SQL and our semantics. If we reveal a constant value in the column we
+    /// risk the optimizer pruning the branch; if we reveal that this will not
+    /// produce rows we risk the optimizer pruning the branch; if we reveal that
+    /// the only possible value is an error we risk the optimizer propogating that
+    /// error without guards.
+    ///
     /// Before replacing this by an `MirScalarExpr`, quadruple check that it
     /// would not result in misoptimizations due to expression evaluation order
     /// being utterly undefined, and predicate pushdown trimming any fragements
@@ -3933,7 +3943,7 @@ impl TableFunc {
                 // We error if the count is greater than one,
                 // or produce no rows if not greater than one.
                 let count = datums[0].unwrap_int64();
-                if count > 1 {
+                if count != 1 {
                     Err(EvalError::MultipleRowsFromSubquery)
                 } else {
                     Ok(Box::new([].into_iter()))
