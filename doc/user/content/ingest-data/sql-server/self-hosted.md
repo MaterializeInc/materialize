@@ -23,28 +23,7 @@ to Materialize using the [SQL Server source](/sql/create-source/sql-server/).
 
 ## A. Configure SQL Server
 
-### 1. Enable Change-Data-Capture for the database
-
-Before creating a source in Materialize, you **must** configure your SQL Server
-database for change data capture. This requires running the following stored procedures:
-
-```sql
-EXEC sys.sp_cdc_enable_db;
-```
-
-For guidance on enabling Change Data Capture, see the [SQL Server documentation](https://learn.microsoft.com/en-us/sql/relational-databases/system-stored-procedures/sys-sp-cdc-enable-db-transact-sql).
-
-### 2. Enable `SNAPSHOT` transaction isolation.
-
-In addition to enabling Change-Data-Capture you **must** also enable your
-`SNAPSHOT` transaction isolation in your SQL Server database. This requires running
-the following SQL:
-
-```sql
-ALTER DATABASE <DATABASE_NAME> SET ALLOW_SNAPSHOT_ISOLATION ON;
-```
-
-For guidance on enabling `SNAPSHOT` transaction isolation, see the [SQL Server documentation](https://learn.microsoft.com/en-us/dotnet/framework/data/adonet/sql/snapshot-isolation-in-sql-server).
+{{% sql-server-direct/ingesting-data/enable-cdc %}}
 
 ## B. (Optional) Configure network security
 
