@@ -121,3 +121,8 @@ have:
 - Immediate failover during an AZ failure.
 
 - Downtime equal to hydration time during intra-region failover.
+
+## See also
+
+- [Materialize DR
+  characteristics](/manage/disaster-recovery/recovery-characteristics)

@@ -1,0 +1,23 @@
+columns:
+  - column: "Failure Type"
+  - column: "RPO"
+  - column: "RTO (RF1/RF2)"
+rows:
+  - Failure Type: "**Accidental source drop (and dependent objects)**"
+    RPO: |
+      100% data loss.
+
+      Consider using [RBAC](/manage/access-control/rbac/) to reduce the risk of
+      accidentally dropping sources.
+
+    "RTO (RF1/RF2)": |
+      Time to recreate the source and snapshot + time to recreate the dependent objects and rehydrate.
+
+      Consider using [RBAC](/manage/access-control/rbac/) to reduce the risk of
+      accidentally dropping sources.
+
+  - Failure Type: "**Accidental materialized view/index drop**"
+    RPO: |
+      0
+    "RTO (RF1/RF2)": |
+      Time to rehydrate.
