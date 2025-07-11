@@ -43,37 +43,18 @@ Component      | Use                                                            
 
 Materialize bundles native connectors for the following external systems:
 
-- [Kafka](/sql/create-source/kafka)
-- [Redpanda](/sql/create-source/kafka)
-- [PostgreSQL](/sql/create-source/postgres)
-- [MySQL](/sql/create-source/mysql/)
-- [SQL Server](/sql/create-source/sql-server)
-- [Webhooks](/sql/create-source/webhook/)
+{{< include-md file="shared-content/multilink-box-native-connectors.md" >}}
 
 For details on the syntax, supported formats and features of each connector, check out the dedicated `CREATE SOURCE` documentation pages.
 
-### Formats
 
-Materialize can decode incoming bytes of data from several formats:
+## Sources and clusters
 
-- Avro
-- Protobuf
-- Regex
-- CSV
-- Plain text
-- Raw bytes
-- JSON
+Sources require compute resources in Materialize, and so need to be associated
+with a [cluster](/concepts/clusters/). If possible, dedicate a cluster just for
+sources.
 
-### Envelopes
-
-What Materialize actually does with the data it receives depends on the
-"envelope" your data provides:
-
-Envelope | Action
----------|-------
-**Append-only** | Inserts all received data; does not support updates or deletes.
-**Debezium** | Treats data as wrapped in a "diff envelope" that indicates whether the record is an insertion, deletion, or update. The Debezium envelope is only supported by sources published to Kafka by [Debezium].<br/><br/>For more information, see [`CREATE SOURCE`: Kafka&mdash;Using Debezium](/sql/create-source/kafka/#using-debezium).
-**Upsert** | Treats data as having a key and a value. New records with non-null value that have the same key as a preexisting record in the dataflow will replace the preexisting record. New records with null value that have the same key as preexisting record will cause the preexisting record to be deleted. <br/><br/>For more information, see [`CREATE SOURCE`: &mdash;Handling upserts](/sql/create-source/kafka/#handling-upserts).
+See also [Operational guidelines](/manage/operational-guidelines/).
 
 ## Related pages
 

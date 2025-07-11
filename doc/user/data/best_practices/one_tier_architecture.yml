@@ -1,0 +1,19 @@
+columns:
+  - column: "Tier"
+  - column: "Description"
+rows:
+  - "Tier": "**All-in-one cluster**"
+    Description: |
+      **A cluster** for [sources](/concepts/sources/), compute/transformation
+      and serving queries:
+
+      - Sources to ingest data.
+
+      - Views that define the transformations.
+
+      - Indexes on views to maintain up-to-date results in memory and serve queries.
+
+      With a 1-tier single-cluster architecture, sources, compute, and queries
+      compete for the same cluster resources.
+
+      {{< include-md file="shared-content/shared-cluster-indexed-view-tip.md" >}}

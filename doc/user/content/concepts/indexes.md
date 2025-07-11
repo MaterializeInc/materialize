@@ -216,6 +216,7 @@ CREATE INDEX idx_orders_view_qty_price on orders_view (quantity, price);
 
 {{% views-indexes/table-usage-pattern-intro %}}
 {{% views-indexes/table-usage-pattern %}}
+{{% include-md file="shared-content/mat-view-use-cases.md" %}}
 
 ### Indexes and query optimizations
 
