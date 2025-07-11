@@ -28,7 +28,7 @@ anyhow = "1.0.98"
 chrono-tz = { version = "0.8.1", features = ["serde", "case-insensitive"] }
 mz-build-tools = { path = "../build-tools", default-features = false, features = ["protobuf-src"] }
 mz-ore-build = { path = "../ore-build", default-features = false }
-phf_codegen = "0.11.3"
+phf_codegen = "0.12.1"
 prost-build = "0.13.5"
 uncased = "0.9.7"
 
