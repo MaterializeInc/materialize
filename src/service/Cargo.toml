@@ -35,7 +35,7 @@ prost = { version = "0.13.5", features = ["no-recursion-limit"] }
 semver = "1.0.26"
 serde = { version = "1.0.219", features = ["derive"] }
 sysinfo = "0.29.11"
-timely = "0.21.3"
+timely = "0.21.4"
 tokio = "1.44.1"
 tokio-stream = "0.1.17"
 tonic = "0.12.1"
