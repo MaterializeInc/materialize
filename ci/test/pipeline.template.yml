@@ -15,8 +15,8 @@
 dag: true
 
 env:
-  CI_BAZEL_BUILD: 1
-  CI_BAZEL_REMOTE_CACHE: $BAZEL_REMOTE_CACHE
+  CI_BUILDER_SCCACHE: 1
+  CI_BAZEL_BUILD: 0
   # Note: In .cargo/config we set the default build jobs to -1 so on developer machines we keep
   # a single core open when compiling. But we want to use all of CI's resources, hence setting the
   # build jobs to "default" which will use all cores.
@@ -30,24 +30,22 @@ steps:
     key: builds
     steps:
       - id: build-x86_64
-        label: ":bazel: Build x86_64"
+        label: "Build x86_64"
         env:
         command: bin/ci-builder run min bin/pyactivate -m ci.test.build
         inputs:
           - "*"
-        artifact_paths: bazel-explain.log
         depends_on: []
         timeout_in_minutes: 60
         agents:
           queue: l-builder-linux-x86_64
 
       - id: build-aarch64
-        label: ":bazel: Build aarch64"
+        label: "Build aarch64"
         env:
         command: bin/ci-builder run min bin/pyactivate -m ci.test.build
         inputs:
           - "*"
-        artifact_paths: bazel-explain.log
         depends_on: []
         timeout_in_minutes: 60
         agents:
@@ -55,8 +53,6 @@ steps:
 
       - id: upload-debug-symbols-x86_64
         label: "Upload debug symbols for x86_64"
-        env:
-          CI_BAZEL_BUILD: 0
         command: bin/ci-builder run stable bin/pyactivate -m materialize.ci_util.upload_debug_symbols_to_polarsignals
         inputs:
           - "*"
@@ -70,8 +66,6 @@ steps:
 
       - id: upload-debug-symbols-aarch64
         label: "Upload debug symbols for aarch64"
-        env:
-          CI_BAZEL_BUILD: 0
         command: bin/ci-builder run stable bin/pyactivate -m materialize.ci_util.upload_debug_symbols_to_polarsignals
         inputs:
           - "*"

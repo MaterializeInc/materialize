@@ -11,9 +11,8 @@
 priority: 40
 
 env:
-  CI_BAZEL_BUILD: 1
-  CI_BAZEL_REMOTE_CACHE: $BAZEL_REMOTE_CACHE
-  CI_BAZEL_LTO: 1
+  CI_BUILDER_SCCACHE: 1
+  CI_BAZEL_BUILD: 0
 
 steps:
   - group: Builds
@@ -37,9 +36,7 @@ steps:
         if: build.source == "ui" || build.source == "schedule" || build.source == "api"
 
       - id: build-x86_64
-        label: ":bazel: Build x86_64"
-        env:
-          CI_BAZEL_BUILD: "1"
+        label: "Build x86_64"
         command: bin/ci-builder run min bin/pyactivate -m ci.test.build
         inputs:
           - "*"
