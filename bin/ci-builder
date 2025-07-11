@@ -318,6 +318,9 @@ case "$cmd" in
             args+=(
                 --env "RUSTC_WRAPPER=sccache"
                 --env SCCACHE_BUCKET
+                --env "SCCACHE_REGION=us-east-1"
+                --env "SCCACHE_LOG=info"
+                --env "CARGO_INCREMENTAL=0"
             )
         fi
         if [[ "${CI_BAZEL_BUILD:-}" ]]; then

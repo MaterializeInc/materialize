@@ -265,6 +265,10 @@ rust-version = "1.88.0"
 [profile.dev]
 split-debuginfo = "unpacked"
 
+[profile.ci]
+debug = false
+incremental = false
+
 [profile.dev.package]
 # Compile the backtrace crate and its dependencies with all optimizations, even
 # in dev builds, since otherwise backtraces can take 20s+ to symbolize. With
