@@ -3940,8 +3940,8 @@ impl TableFunc {
                 generate_subscripts_array(datums[0], datums[1].unwrap_int32())
             }
             TableFunc::GuardSubquerySize { column_type: _ } => {
-                // We error if the count is greater than one,
-                // or produce no rows if not greater than one.
+                // We error if the count is not one,
+                // and produce no rows if equal to one.
                 let count = datums[0].unwrap_int64();
                 if count != 1 {
                     Err(EvalError::MultipleRowsFromSubquery)
