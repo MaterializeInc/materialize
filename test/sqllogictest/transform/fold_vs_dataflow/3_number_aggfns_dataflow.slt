@@ -55,27 +55,19 @@ FROM t_using_dataflow_rendering;
 Explained Query:
   With
     cte l0 =
-      Project (#0{real1}..=#2{numeric1})
-        ReadStorage materialize.public.t_using_dataflow_rendering
-    cte l1 =
-      CrossJoin type=differential
-        ArrangeBy keys=[[]]
-          Reduce aggregates=[min(#0{real1}), min(#1{double1}), min(#2{numeric1}), min((#0{real1} + #0{real1})), min((#1{double1} + #1{double1})), min((#2{numeric1} + #2{numeric1})), max(#0{real1}), max(#1{double1}), max(#2{numeric1}), max((#0{real1} + #0{real1})), max((#1{double1} + #1{double1})), max((#2{numeric1} + #2{numeric1}))]
-            Get l0
-        ArrangeBy keys=[[]]
-          Reduce aggregates=[sum(#0{real1}), sum(#1{double1}), sum(#2{numeric1}), sum((#0{real1} + #0{real1})), sum((#1{double1} + #1{double1})), sum((#2{numeric1} + #2{numeric1})), count(#0{real1}), count(#1{double1}), count(#2{numeric1}), count((#0{real1} + #0{real1})), count((#1{double1} + #1{double1})), count((#2{numeric1} + #2{numeric1}))]
-            Get l0
+      Reduce aggregates=[sum(#0{real1}), sum(#1{double1}), sum(#2{numeric1}), sum((#0{real1} + #0{real1})), sum((#1{double1} + #1{double1})), sum((#2{numeric1} + #2{numeric1})), min(#0{real1}), min(#1{double1}), min(#2{numeric1}), min((#0{real1} + #0{real1})), min((#1{double1} + #1{double1})), min((#2{numeric1} + #2{numeric1})), max(#0{real1}), max(#1{double1}), max(#2{numeric1}), max((#0{real1} + #0{real1})), max((#1{double1} + #1{double1})), max((#2{numeric1} + #2{numeric1})), count(#0{real1}), count(#1{double1}), count(#2{numeric1}), count((#0{real1} + #0{real1})), count((#1{double1} + #1{double1})), count((#2{numeric1} + #2{numeric1}))]
+        Project (#0{real1}..=#2{numeric1})
+          ReadStorage materialize.public.t_using_dataflow_rendering
   Return
     Project (#0{sum_real1}..=#17{max}, #24..=#29)
       Map ((#0{sum_real1} / bigint_to_real(case when (#18{count_real1} = 0) then null else #18{count_real1} end)), (#1{sum_double1} / bigint_to_double(case when (#19{count_double1} = 0) then null else #19{count_double1} end)), (#2{sum_numeric1} / bigint_to_numeric(case when (#20{count_numeric1} = 0) then null else #20{count_numeric1} end)), (#3{sum} / bigint_to_real(case when (#21{count} = 0) then null else #21{count} end)), (#4{sum} / bigint_to_double(case when (#22{count} = 0) then null else #22{count} end)), (#5{sum} / bigint_to_numeric(case when (#23{count} = 0) then null else #23{count} end)))
         Union
-          Project (#12{sum_real1}..=#17{sum}, #0{min_real1}..=#11{max}, #18{count_real1}..=#23{count})
-            Get l1
+          Get l0
           Map (null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, 0, 0, 0, 0, 0, 0)
             Union
               Negate
                 Project ()
-                  Get l1
+                  Get l0
               Constant
                 - ()
 
