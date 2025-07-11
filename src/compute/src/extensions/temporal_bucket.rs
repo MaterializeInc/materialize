@@ -16,17 +16,20 @@ use differential_dataflow::difference::Semigroup;
 use differential_dataflow::trace::implementations::chunker::ColumnationChunker;
 use differential_dataflow::trace::implementations::merge_batcher::{ColMerger, MergeBatcher};
 use differential_dataflow::trace::{Batcher, Builder, Description};
-use mz_timely_util::temporal::{BucketChain, BucketTimestamp, Storage};
+use mz_timely_util::temporal::{Bucket, BucketChain, BucketTimestamp};
 use timely::container::{ContainerBuilder, PushInto};
 use timely::dataflow::channels::pact::Pipeline;
 use timely::dataflow::operators::Operator;
 use timely::dataflow::{Scope, StreamCore};
+use timely::order::TotalOrder;
 use timely::progress::{Antichain, Timestamp};
 use timely::{Data, PartialOrder};
 
 use crate::typedefs::MzData;
 
-/// Sort outstanding updates into a [`BucketChain`], and reveal data not in advance of the frontier.
+/// Sort outstanding updates into a [`BucketChain`], and reveal data not in advance of the input
+/// frontier. Retains a capability at the last input frontier to retain the right to produce data
+/// at times between the last input frontier and the current input frontier.
 pub trait TemporalBucketing<G: Scope, O> {
     /// Construct a new stream that stores updates into a [`BucketChain`] and reveals data
     /// not in advance of the frontier.
@@ -35,11 +38,12 @@ pub trait TemporalBucketing<G: Scope, O> {
         CB: ContainerBuilder + PushInto<O>;
 }
 
+/// Implementation for streams in scopes where timestamps define a total order.
 impl<G, D> TemporalBucketing<G, (D, G::Timestamp, mz_repr::Diff)>
     for StreamCore<G, Vec<(D, G::Timestamp, mz_repr::Diff)>>
 where
     G: Scope,
-    G::Timestamp: Data + MzData + BucketTimestamp,
+    G::Timestamp: Data + MzData + BucketTimestamp + TotalOrder,
     D: Data + MzData + Ord + std::fmt::Debug,
 {
     fn bucket<CB>(&self) -> StreamCore<G, CB::Container>
@@ -107,7 +111,7 @@ where
                     );
                 }
 
-                // Downgrade the cap to the current frontier.
+                // Downgrade the cap to the current input frontier.
                 if input.frontier().is_empty() {
                     cap = None;
                 } else if let Some(cap) = cap.as_mut() {
@@ -159,7 +163,7 @@ where
     }
 }
 
-impl<D, T, R> Storage for MergeBatcherWrapper<D, T, R>
+impl<D, T, R> Bucket for MergeBatcherWrapper<D, T, R>
 where
     D: MzData + Ord + Data,
     T: MzData + Ord + PartialOrder + Data + BucketTimestamp,
@@ -167,7 +171,7 @@ where
 {
     type Timestamp = T;
 
-    fn split(mut self, timestamp: &Self::Timestamp, fuel: &mut isize) -> (Self, Self) {
+    fn split(mut self, timestamp: &Self::Timestamp, fuel: &mut i64) -> (Self, Self) {
         // The implementation isn't tuned for performance. We should not bounce in and out of
         // different containers when not needed. The merge batcher we use can only accept
         // vectors as inputs, but not any other container type.

@@ -27,18 +27,19 @@ use timely::progress::frontier::AntichainRef;
 pub trait BucketTimestamp: Timestamp {
     /// The number of bits in the timestamp.
     const DOMAIN: usize = size_of::<Self>() * 8;
-    /// Advance this timestamp by `2^exponent`.
+    /// Advance this timestamp by `2^exponent`. Returns `None` if the
+    /// timestamp would overflow.
     fn advance_by_power_of_two(&self, exponent: u32) -> Option<Self>;
 }
 
 /// A type that can be split into two parts based on a timestamp.
-pub trait Storage: Sized {
+pub trait Bucket: Sized {
     /// The timestamp type associated with this storage.
     type Timestamp: BucketTimestamp;
-    /// Split self in two, based on the timestamp. The result a pair of self, where the first
+    /// Split self in two, based on the timestamp. The result is a pair of self, where the first
     /// element contains all data with a timestamp strictly less than `timestamp`, and the second
     /// all other data.
-    fn split(self, timestamp: &Self::Timestamp, fuel: &mut isize) -> (Self, Self);
+    fn split(self, timestamp: &Self::Timestamp, fuel: &mut i64) -> (Self, Self);
 }
 
 /// A sorted list of buckets, representing data bucketed by timestamp.
@@ -49,7 +50,9 @@ pub trait Storage: Sized {
 ///
 /// We achieve this by storing buckets of increasing size for timestamps that are further out
 /// in the future. At the same time, in a well-formed chain, adjacent buckets span a time range at
-/// most factor 4 different.
+/// most factor 4 different. Factor 4 means that we can skip at most one bucket size for adjacent
+/// buckets, limiting the amount of work we need to do when peeling off buckets or restoring the
+/// chain property.
 ///
 /// A bucket chain is well-formed if all buckets are within two bits of each other, with an imaginary
 /// bucket of -2 bits at the start. A chain does not need to be well-formed at all times, and supports
@@ -61,11 +64,11 @@ pub trait Storage: Sized {
 /// allows the caller to control the amount of work done in a single call and interleave it with
 /// other work.
 #[derive(Debug)]
-pub struct BucketChain<S: Storage> {
+pub struct BucketChain<S: Bucket> {
     content: BTreeMap<S::Timestamp, (u32, S)>,
 }
 
-impl<S: Storage> BucketChain<S> {
+impl<S: Bucket> BucketChain<S> {
     /// Construct a new bucket chain. Spans the whole time domain.
     #[inline]
     pub fn new(storage: S) -> Self {
@@ -136,8 +139,8 @@ impl<S: Storage> BucketChain<S> {
             if upper.is_none() && !frontier.is_empty()
                 || upper.is_some() && frontier.less_than(&upper.unwrap())
             {
-                // We need to splice the bucket, no matter how much fuel we have.
-                self.splice(&mut 0, bits, offset, storage);
+                // We need to split the bucket, no matter how much fuel we have.
+                self.split_and_insert(&mut 0, bits, offset, storage);
             } else {
                 // Bucket is ready to go.
                 peeled.push(storage);
@@ -151,7 +154,7 @@ impl<S: Storage> BucketChain<S> {
     /// The chain is well-formed if all buckets are within two bits of each other, with an imaginary
     /// bucket of -2 bits just before the smallest bucket.
     #[inline]
-    pub fn restore(&mut self, fuel: &mut isize) {
+    pub fn restore(&mut self, fuel: &mut i64) {
         // We could write this in terms of a cursor API, but it's not stable yet. Instead, we
         // allocate a new map and move elements over.
         let mut new = BTreeMap::default();
@@ -164,8 +167,8 @@ impl<S: Storage> BucketChain<S> {
                 new.insert(time, (bits, storage));
                 last_bits = isize::cast_from(bits);
             } else {
-                // Otherwise, we need to splice it.
-                self.splice(fuel, bits, time, storage);
+                // Otherwise, we need to split it.
+                self.split_and_insert(fuel, bits, time, storage);
             }
         }
         // Move remaining elements if we ran out of fuel.
@@ -190,7 +193,7 @@ impl<S: Storage> BucketChain<S> {
     ///
     /// Panics if the bucket cannot be split, i.e, it covers 0 bits.
     #[inline(always)]
-    fn splice(&mut self, fuel: &mut isize, bits: u32, offset: S::Timestamp, storage: S) {
+    fn split_and_insert(&mut self, fuel: &mut i64, bits: u32, offset: S::Timestamp, storage: S) {
         let bits = bits - 1;
         let midpoint = offset.advance_by_power_of_two(bits).expect("must exist");
         let (bot, top) = storage.split(&midpoint, fuel);
@@ -225,9 +228,9 @@ mod tests {
         }
     }
 
-    impl<T: BucketTimestamp> Storage for TestStorage<T> {
+    impl<T: BucketTimestamp> Bucket for TestStorage<T> {
         type Timestamp = T;
-        fn split(self, timestamp: &T, fuel: &mut isize) -> (Self, Self) {
+        fn split(self, timestamp: &T, fuel: &mut i64) -> (Self, Self) {
             *fuel = fuel.saturating_sub(self.inner.len().try_into().expect("must fit"));
             let (left, right) = self.inner.into_iter().partition(|d| *d < *timestamp);
             (Self { inner: left }, Self { inner: right })
@@ -260,7 +263,7 @@ mod tests {
             inner: (0..=255).collect(),
         });
         let mut fuel = -1;
-        while fuel < 0 {
+        while fuel <= 0 {
             fuel = 100;
             chain.restore(&mut fuel);
         }
