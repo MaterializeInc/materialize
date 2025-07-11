@@ -11,6 +11,7 @@ use anyhow::ensure;
 use async_stream::{stream, try_stream};
 use differential_dataflow::difference::Semigroup;
 use mz_persist::metrics::ColumnarMetrics;
+use proptest::prelude::{Arbitrary, Strategy};
 use std::borrow::Cow;
 use std::cmp::Ordering;
 use std::collections::BTreeMap;
@@ -752,7 +753,7 @@ pub(crate) enum RunOrder {
     Structured,
 }
 
-#[derive(Clone, PartialEq, Eq, Ord, PartialOrd, Serialize)]
+#[derive(Clone, PartialEq, Eq, Ord, PartialOrd, Serialize, Copy, Hash)]
 pub struct RunId(pub(crate) [u8; 16]);
 
 impl std::fmt::Display for RunId {
@@ -787,6 +788,17 @@ impl RunId {
     }
 }
 
+impl Arbitrary for RunId {
+    type Parameters = ();
+    type Strategy = proptest::strategy::BoxedStrategy<Self>;
+    fn arbitrary_with(_args: Self::Parameters) -> Self::Strategy {
+        Strategy::prop_map(proptest::prelude::any::<u128>(), |n| {
+            RunId(*Uuid::from_u128(n).as_bytes())
+        })
+        .boxed()
+    }
+}
+
 /// Metadata shared across a run.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Ord, PartialOrd, Serialize)]
 pub struct RunMeta {
@@ -800,6 +812,8 @@ pub struct RunMeta {
 
     /// If set, a UUID that uniquely identifies this run.
     pub(crate) id: Option<RunId>,
+
+    pub(crate) len: Option<usize>,
 }
 
 /// A subset of a [HollowBatch] corresponding 1:1 to a blob.
@@ -1231,7 +1245,7 @@ pub struct HollowRollup {
 }
 
 /// A pointer to a blob stored externally.
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq)]
 pub enum HollowBlobRef<'a, T> {
     Batch(&'a HollowBatch<T>),
     Rollup(&'a HollowRollup),
@@ -1799,6 +1813,25 @@ where
         Continue(apply_merge_result)
     }
 
+    pub fn apply_merge_res_classic<D: Codec64 + Semigroup + PartialEq>(
+        &mut self,
+        res: &FueledMergeRes<T>,
+        metrics: &ColumnarMetrics,
+    ) -> ControlFlow<NoOpStateTransition<ApplyMergeResult>, ApplyMergeResult> {
+        // We expire all writers if the upper and since both advance to the
+        // empty antichain. Gracefully handle this. At the same time,
+        // short-circuit the cmd application so we don't needlessly create new
+        // SeqNos.
+        if self.is_tombstone() {
+            return Break(NoOpStateTransition(ApplyMergeResult::NotAppliedNoMatch));
+        }
+
+        let apply_merge_result = self
+            .trace
+            .apply_merge_res_checked_classic::<D>(res, metrics);
+        Continue(apply_merge_result)
+    }
+
     pub fn spine_exert(
         &mut self,
         fuel: usize,
@@ -2149,6 +2182,8 @@ where
             // able to append that batch in the first place.
             let fake_merge = FueledMergeRes {
                 output: HollowBatch::empty(desc),
+                inputs: Vec::new(),
+                new_active_compaction: None,
             };
             let result = self.trace.apply_tombstone_merge(&fake_merge);
             assert!(
@@ -2789,6 +2824,7 @@ pub struct Upper<T>(pub Antichain<T>);
 #[cfg(test)]
 pub(crate) mod tests {
     use std::ops::Range;
+    use std::str::FromStr;
 
     use bytes::Bytes;
     use mz_build_info::DUMMY_BUILD_INFO;
@@ -4313,5 +4349,14 @@ pub(crate) mod tests {
         // Downgrade to v0.9.0 is _NOT_ allowed.
         let res = open_and_write(&mut clients, Version::new(0, 9, 0), shard_id).await;
         assert!(res.unwrap_err().is_panic());
+    }
+
+    #[mz_ore::test]
+    fn runid_roundtrip() {
+        proptest!(|(runid: RunId)| {
+            let runid_str = runid.to_string();
+            let parsed = RunId::from_str(&runid_str);
+            prop_assert_eq!(parsed, Ok(runid));
+        });
     }
 }
