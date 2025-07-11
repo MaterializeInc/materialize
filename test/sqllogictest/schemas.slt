@@ -77,8 +77,17 @@ SELECT current_schemas(true)
 statement ok
 SET cluster = quickstart
 
-statement error no schema has been selected to create in
+statement error no valid schema selected
 CREATE TABLE t (i INT)
+
+statement error no valid schema selected
+SHOW SOURCES;
+
+statement error no valid schema selected
+SHOW SINKS;
+
+statement error no valid schema selected
+SHOW INDEXES;
 
 statement ok
 CREATE SCHEMA foo
