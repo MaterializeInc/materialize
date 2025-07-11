@@ -46,9 +46,9 @@ pub fn histogram_seconds_buckets(from: f64, to: f64) -> Vec<f64> {
 /// see `histogram_seconds_buckets` below.
 ///
 /// Note that any changes to this range may modify buckets for existing metrics.
-const HISTOGRAM_MILLISECOND_BUCKETS: [f64; 19] = [
+const HISTOGRAM_MILLISECOND_BUCKETS: [f64; 23] = [
     0.128, 0.256, 0.512, 1., 2., 4., 8., 16., 32., 64., 128., 256., 512., 1000., 2000., 4000.,
-    8000., 16000., 32000.,
+    8000., 16000., 32000., 64000., 128000., 256000., 512000.,
 ];
 
 /// Returns a `Vec` of time buckets that are both present in our standard

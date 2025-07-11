@@ -24,6 +24,7 @@ use mz_server_core::listeners::AllowedRoles;
 use mz_server_core::{Connection, ConnectionHandler, ReloadingTlsConfig};
 use openssl::ssl::Ssl;
 use tokio::io::AsyncWriteExt;
+use tokio_metrics::TaskMetrics;
 use tokio_openssl::SslStream;
 use tracing::{debug, error, trace};
 
@@ -70,11 +71,19 @@ pub struct Server {
 impl mz_server_core::Server for Server {
     const NAME: &'static str = "pgwire";
 
-    fn handle_connection(&self, conn: Connection) -> ConnectionHandler {
+    fn handle_connection(
+        &self,
+        conn: Connection,
+        tokio_metrics_intervals: impl Iterator<Item = TaskMetrics> + Send + 'static,
+    ) -> ConnectionHandler {
         // Using fully-qualified syntax means we won't accidentally call
         // ourselves (i.e., silently infinitely recurse) if the name or type of
         // `crate::Server::handle_connection` changes.
-        Box::pin(crate::Server::handle_connection(self, conn))
+        Box::pin(crate::Server::handle_connection(
+            self,
+            conn,
+            tokio_metrics_intervals,
+        ))
     }
 }
 
@@ -96,7 +105,8 @@ impl Server {
     pub fn handle_connection(
         &self,
         conn: Connection,
-    ) -> impl Future<Output = Result<(), anyhow::Error>> + 'static + Send {
+        tokio_metrics_intervals: impl Iterator<Item = TaskMetrics> + Send + 'static,
+    ) -> impl Future<Output = Result<(), anyhow::Error>> + Send + 'static {
         let adapter_client = self.adapter_client.clone();
         let authenticator = self.authenticator.clone();
         let tls = self.tls.clone();
@@ -178,6 +188,7 @@ impl Server {
                                     active_connection_counter,
                                     helm_chart_version,
                                     allowed_roles,
+                                    tokio_metrics_intervals,
                                 })
                                 .await?;
                                 conn.flush().await?;

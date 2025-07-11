@@ -57,6 +57,7 @@ use postgres::error::SqlState;
 use tokio::io::{self, AsyncRead, AsyncWrite};
 use tokio::select;
 use tokio::time::{self};
+use tokio_metrics::TaskMetrics;
 use tokio_stream::wrappers::UnboundedReceiverStream;
 use tracing::{Instrument, debug, debug_span, warn};
 use uuid::Uuid;
@@ -85,7 +86,10 @@ pub fn match_handshake(buf: &[u8]) -> bool {
 }
 
 /// Parameters for the [`run`] function.
-pub struct RunParams<'a, A> {
+pub struct RunParams<'a, A, I>
+where
+    I: Iterator<Item = TaskMetrics> + Send,
+{
     /// The TLS mode of the pgwire server.
     pub tls_mode: Option<TlsMode>,
     /// A client for the adapter.
@@ -106,6 +110,8 @@ pub struct RunParams<'a, A> {
     pub helm_chart_version: Option<String>,
     /// Whether to allow reserved users (ie: mz_system).
     pub allowed_roles: AllowedRoles,
+    /// Tokio metrics
+    pub tokio_metrics_intervals: I,
 }
 
 /// Runs a pgwire connection to completion.
@@ -118,7 +124,7 @@ pub struct RunParams<'a, A> {
 /// while communicating with the client, e.g., if the connection is severed in
 /// the middle of a request.
 #[mz_ore::instrument(level = "debug")]
-pub async fn run<'a, A>(
+pub async fn run<'a, A, I>(
     RunParams {
         tls_mode,
         adapter_client,
@@ -130,10 +136,12 @@ pub async fn run<'a, A>(
         active_connection_counter,
         helm_chart_version,
         allowed_roles,
-    }: RunParams<'a, A>,
+        tokio_metrics_intervals,
+    }: RunParams<'a, A, I>,
 ) -> Result<(), io::Error>
 where
     A: AsyncRead + AsyncWrite + AsyncReady + Send + Sync + Unpin,
+    I: Iterator<Item = TaskMetrics> + Send,
 {
     if version != VERSION_3 {
         return conn
@@ -350,6 +358,7 @@ where
         conn,
         adapter_client,
         txn_needs_commit: false,
+        tokio_metrics_intervals,
     };
 
     select! {
@@ -466,10 +475,14 @@ enum State {
     Done,
 }
 
-struct StateMachine<'a, A> {
+struct StateMachine<'a, A, I>
+where
+    I: Iterator<Item = TaskMetrics> + Send + 'a,
+{
     conn: &'a mut FramedConn<A>,
     adapter_client: mz_adapter::SessionClient,
     txn_needs_commit: bool,
+    tokio_metrics_intervals: I,
 }
 
 enum SendRowsEndedReason {
@@ -486,9 +499,10 @@ enum SendRowsEndedReason {
 const ABORTED_TXN_MSG: &str =
     "current transaction is aborted, commands ignored until end of transaction block";
 
-impl<'a, A> StateMachine<'a, A>
+impl<'a, A, I> StateMachine<'a, A, I>
 where
     A: AsyncRead + AsyncWrite + AsyncReady + Send + Sync + Unpin + 'a,
+    I: Iterator<Item = TaskMetrics> + Send + 'a,
 {
     // Manually desugar this (don't use `async fn run`) here because a much better
     // error message is produced if there are problems with Send or other traits
@@ -513,6 +527,11 @@ where
 
     #[instrument(level = "debug")]
     async fn advance_ready(&mut self) -> Result<State, io::Error> {
+        // Start a new metrics interval before the `recv()` call.
+        self.tokio_metrics_intervals
+            .next()
+            .expect("infinite iterator");
+
         // Handle timeouts first so we don't execute any statements when there's a pending timeout.
         let message = select! {
             biased;
@@ -539,6 +558,17 @@ where
             // `recv()` is cancel-safe as per it's docs.
             message = self.conn.recv() => message?,
         };
+
+        // Take the metrics since just before the `recv`.
+        let interval = self
+            .tokio_metrics_intervals
+            .next()
+            .expect("infinite iterator");
+        let recv_scheduling_delay_ms = interval.total_scheduled_duration.as_secs_f64() * 1000.0;
+
+        // TODO(ggevay): Consider subtracting the scheduling delay from `received`. It's not obvious
+        // whether we should do this, because the result wouldn't exactly correspond to either first
+        // byte received or last byte received (for msgs that arrive in more than one network packet).
         let received = SYSTEM_TIME();
 
         self.adapter_client
@@ -637,6 +667,7 @@ where
             | Some(FrontendMessage::Password { .. }) => State::Drain,
             None => State::Done,
         };
+
         if let Some(start) = start {
             self.adapter_client
                 .inner()
@@ -645,6 +676,12 @@ where
                 .with_label_values(&[message_name])
                 .observe(start.elapsed().as_secs_f64());
         }
+        self.adapter_client
+            .inner()
+            .metrics()
+            .pgwire_recv_scheduling_delay_ms
+            .with_label_values(&[message_name])
+            .observe(recv_scheduling_delay_ms);
 
         Ok(next_state)
     }
