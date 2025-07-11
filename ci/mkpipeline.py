@@ -500,7 +500,7 @@ def switch_jobs_to_aws(pipeline: Any, priority: int) -> None:
                 config["agents"]["queue"] = "linux-aarch64-medium"
 
         elif agent == "hetzner-aarch64-16cpu-32gb":
-            if "hetzner-aarch64-16cpu-32gb" not in stuck:
+            if "hetzner-x86-64-16cpu-32gb" not in stuck:
                 config["agents"]["queue"] = "hetzner-x86-64-16cpu-32gb"
                 if config.get("depends_on") == "build-aarch64":
                     config["depends_on"] = "build-x86_64"
