@@ -153,12 +153,11 @@ Explained Query:
                 Filter (#0{d}) IS NOT NULL // { types: "(integer, double precision?)" }
                   Map (integer_to_double(#0{d})) // { types: "(integer?, double precision?)" }
                     ReadStorage materialize.public.u // { types: "(integer?)" }
-              Map (error("more than one record produced in subquery")) // { types: "(double precision)" }
-                Project () // { types: "()" }
-                  Filter (#0{count} > 1) // { types: "(bigint)" }
-                    Reduce aggregates=[count(*)] // { types: "(bigint)" }
-                      Project () // { types: "()" }
-                        ReadStorage materialize.public.u // { types: "(integer?)" }
+              Project (#1) // { types: "(double precision)" }
+                FlatMap guard_subquery_size(#0{count}) // { types: "(bigint, double precision)" }
+                  Reduce aggregates=[count(*)] // { types: "(bigint)" }
+                    Project () // { types: "()" }
+                      ReadStorage materialize.public.u // { types: "(integer?)" }
   Return // { types: "(boolean?, bigint)" }
     Threshold // { types: "(boolean?, bigint)" }
       Union // { types: "(boolean?, bigint)" }
