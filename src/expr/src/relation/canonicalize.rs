@@ -141,7 +141,7 @@ pub fn canonicalize_equivalence_classes(equivalences: &mut Vec<Vec<MirScalarExpr
 
     let mut eqs: BTreeMap<Rc<MirScalarExpr>, BTreeSet<Rc<MirScalarExpr>>> = BTreeMap::new();
     for (k, v) in uf {
-        eqs.entry(v).or_default().insert(k.clone());
+        eqs.entry(v).or_default().insert(Rc::clone(&k));
     }
 
     let classes = eqs.into_values().collect::<Vec<_>>();

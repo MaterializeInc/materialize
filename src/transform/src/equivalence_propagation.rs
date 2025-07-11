@@ -32,7 +32,7 @@ use std::collections::BTreeMap;
 
 use mz_expr::{Id, MirRelationExpr, MirScalarExpr};
 use mz_repr::Datum;
-use tracing::{debug, info};
+use tracing::debug;
 
 use crate::analysis::equivalences::{
     EquivalenceClasses, EquivalenceClassesWithholdingErrors, Equivalences, ExpressionReducer,
