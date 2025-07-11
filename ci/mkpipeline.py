@@ -21,7 +21,6 @@ pipeline.template.yml and the docstring on `trim_tests_pipeline` below.
 
 import argparse
 import copy
-import fnmatch
 import hashlib
 import os
 import subprocess
@@ -105,9 +104,6 @@ so it is executed.""",
 
     print(f"Pipeline is: {args.pipeline}")
 
-    # Make sure we have an up to date view of main.
-    spawn.runv(["git", "fetch", "origin", "main"])
-
     with open(Path(__file__).parent / args.pipeline / "pipeline.template.yml") as f:
         raw = f.read()
     raw = raw.replace("$RUST_VERSION", rust_version())
@@ -154,13 +150,12 @@ so it is executed.""",
     pipeline = yaml.safe_load(raw)
 
     # This has to run before other cutting steps because it depends on the id numbers
-    print("--- Trim test selection")
     if test_selection := os.getenv("CI_TEST_IDS"):
         trim_test_selection_id(pipeline, {int(i) for i in test_selection.split(",")})
     elif test_selection := os.getenv("CI_TEST_SELECTION"):
         trim_test_selection_name(pipeline, set(test_selection.split(",")))
 
-    if args.pipeline == "test":
+    if args.pipeline == "test" and not os.getenv("CI_TEST_IDS"):
         if args.coverage or args.sanitizer != Sanitizer.none:
             print("Coverage/Sanitizer build, not trimming pipeline")
         elif os.environ["BUILDKITE_BRANCH"] == "main" or os.environ["BUILDKITE_TAG"]:
@@ -168,181 +163,45 @@ so it is executed.""",
         elif have_paths_changed(CI_GLUE_GLOBS):
             # We still execute pipeline trimming on a copy of the pipeline to
             # protect against bugs in the pipeline trimming itself.
-            print("--- [DRY RUN] Trimming unchanged steps from pipeline")
+            print("[DRY RUN] Trimming unchanged steps from pipeline")
             print(
                 "Repository glue code has changed, so the trimmed pipeline below does not apply"
             )
-            if not os.getenv("CI_TEST_IDS"):
-                trim_tests_pipeline(
-                    copy.deepcopy(pipeline),
-                    args.coverage,
-                    args.sanitizer,
-                    bazel,
-                    args.bazel_remote_cache,
-                    bazel_lto,
-                )
+            trim_tests_pipeline(
+                copy.deepcopy(pipeline),
+                args.coverage,
+                args.sanitizer,
+                bazel,
+                args.bazel_remote_cache,
+                bazel_lto,
+            )
         else:
-            print("--- Trimming unchanged steps from pipeline")
-            if not os.getenv("CI_TEST_IDS"):
-                trim_tests_pipeline(
-                    pipeline,
-                    args.coverage,
-                    args.sanitizer,
-                    bazel,
-                    args.bazel_remote_cache,
-                    bazel_lto,
-                )
+            print("Trimming unchanged steps from pipeline")
+            trim_tests_pipeline(
+                pipeline,
+                args.coverage,
+                args.sanitizer,
+                bazel,
+                args.bazel_remote_cache,
+                bazel_lto,
+            )
 
-    if args.sanitizer != Sanitizer.none:
-        pipeline.setdefault("env", {})["CI_SANITIZER"] = args.sanitizer.value
-
-        def visit(step: dict[str, Any]) -> None:
-            if step.get("sanitizer") == "skip":
-                step["skip"] = True
-
-    else:
-
-        def visit(step: dict[str, Any]) -> None:
-            if step.get("sanitizer") == "only":
-                step["skip"] = True
-
-    for step in pipeline["steps"]:
-        visit(step)
-        if "group" in step:
-            for inner_step in step.get("steps", []):
-                visit(inner_step)
-
-    if (
-        args.sanitizer != Sanitizer.none
-        or os.getenv("CI_SYSTEM_PARAMETERS", "") == "random"
-    ):
-
-        def visit(step: dict[str, Any]) -> None:
-            # Most sanitizer runs, as well as random permutations of system
-            # parameters, are slower and need more memory. The default system
-            # parameters in CI are chosen to be efficient for execution, while
-            # a random permutation might take way longer and use more memory.
-            if "timeout_in_minutes" in step:
-                step["timeout_in_minutes"] *= 10
-
-            if "agents" in step:
-                agent = step["agents"].get("queue", None)
-                if agent == "linux-aarch64-small":
-                    agent = "linux-aarch64"
-                elif agent == "linux-aarch64":
-                    agent = "linux-aarch64-medium"
-                elif agent == "linux-aarch64-medium":
-                    agent = "linux-aarch64-large"
-                elif agent == "linux-aarch64-large":
-                    agent = "builder-linux-aarch64-mem"
-                elif agent == "linux-x86_64-small":
-                    agent = "linux-x86_64"
-                elif agent == "linux-x86_64":
-                    agent = "linux-x86_64-medium"
-                elif agent == "linux-x86_64-medium":
-                    agent = "linux-x86_64-large"
-                elif agent == "linux-x86_64-large":
-                    agent = "builder-linux-x86_64"
-                elif agent == "hetzner-aarch64-2cpu-4gb":
-                    agent = "hetzner-aarch64-4cpu-8gb"
-                elif agent == "hetzner-aarch64-4cpu-8gb":
-                    agent = "hetzner-aarch64-8cpu-16gb"
-                elif agent == "hetzner-aarch64-8cpu-16gb":
-                    agent = "hetzner-aarch64-16cpu-32gb"
-                elif agent == "hetzner-x86-64-2cpu-4gb":
-                    agent = "hetzner-x86-64-4cpu-8gb"
-                elif agent == "hetzner-x86-64-4cpu-8gb":
-                    agent = "hetzner-x86-64-8cpu-16gb"
-                elif agent == "hetzner-x86-64-8cpu-16gb":
-                    agent = "hetzner-x86-64-16cpu-32gb"
-                elif agent == "hetzner-x86-64-16cpu-32gb":
-                    agent = "hetzner-x86-64-dedi-16cpu-64gb"
-                elif agent == "hetzner-x86-64-16cpu-64gb":
-                    agent = "hetzner-x86-64-dedi-32cpu-128gb"
-                elif agent == "hetzner-x86-64-dedi-32cpu-128gb":
-                    agent = "hetzner-x86-64-dedi-48cpu-192gb"
-                step["agents"] = {"queue": agent}
-
-        for step in pipeline["steps"]:
-            visit(step)
-            # Groups can't be nested, so handle them explicitly here instead of recursing
-            if "group" in step:
-                for inner_step in step.get("steps", []):
-                    visit(inner_step)
-
-    if args.coverage:
-        pipeline["env"]["CI_BUILDER_SCCACHE"] = 1
-        pipeline["env"]["CI_COVERAGE_ENABLED"] = 1
-
-        for step in steps(pipeline):
-            # Coverage runs are slower
-            if "timeout_in_minutes" in step:
-                step["timeout_in_minutes"] *= 3
-
-            if step.get("coverage") == "skip":
-                step["skip"] = True
-            if step.get("id") == "build-x86_64":
-                step["name"] = "Build x86_64 with coverage"
-            if step.get("id") == "build-aarch":
-                step["name"] = "Build aarch64 with coverage"
-    else:
-        for step in steps(pipeline):
-            if step.get("coverage") == "only":
-                step["skip"] = True
-
-    print("--- Prioritizing pipeline")
+    handle_sanitizer_skip(pipeline, args.sanitizer)
+    increase_agents_timeouts(pipeline, args.sanitizer, args.coverage)
     prioritize_pipeline(pipeline, args.priority)
-
-    print("--- Switching jobs to AWS/Hetzner")
     switch_jobs_to_aws(pipeline, args.priority)
-
-    print("--- Permit rerunning successful steps")
     permit_rerunning_successful_steps(pipeline)
-
-    print('--- Set retry on "agent lost"')
     set_retry_on_agent_lost(pipeline)
-
-    print("--- Set default agents queue")
     set_default_agents_queue(pipeline)
-
-    print("--- Set parallelism name")
     set_parallelism_name(pipeline)
-
-    print("--- Check depends_on")
     check_depends_on(pipeline, args.pipeline)
-
-    print("--- Add version to preflight tests")
     add_version_to_preflight_tests(pipeline)
-
-    print("--- Trim builds")
     trim_builds_prep_thread.join()
     trim_builds(pipeline, hash_check)
-    print("--- Add Cargo Test dependency")
     add_cargo_test_dependency(
         pipeline, args.coverage, args.sanitizer, args.bazel_remote_cache, bazel_lto
     )
-
-    print("--- Removing Mz-specific keys")
-    # Remove the Materialize-specific keys from the configuration that are
-    # only used to inform how to trim the pipeline and for coverage runs.
-    for step in steps(pipeline):
-        if "inputs" in step:
-            del step["inputs"]
-        if "coverage" in step:
-            del step["coverage"]
-        if "sanitizer" in step:
-            del step["sanitizer"]
-        if (
-            "timeout_in_minutes" not in step
-            and "prompt" not in step
-            and "wait" not in step
-            and "group" not in step
-            and "trigger" not in step
-            and not step.get("async")
-        ):
-            raise UIError(
-                f"Every step should have an explicit timeout_in_minutes value, missing in: {step}"
-            )
+    remove_mz_specific_keys(pipeline)
 
     print("--- Uploading new pipeline:")
     print(yaml.dump(pipeline))
@@ -410,6 +269,106 @@ def prioritize_pipeline(pipeline: Any, priority: int) -> None:
                 visit(inner_config)
             continue
         visit(config)
+
+
+def handle_sanitizer_skip(pipeline: Any, sanitizer: Sanitizer) -> None:
+    if sanitizer != Sanitizer.none:
+        pipeline.setdefault("env", {})["CI_SANITIZER"] = sanitizer.value
+
+        def visit(step: dict[str, Any]) -> None:
+            if step.get("sanitizer") == "skip":
+                step["skip"] = True
+
+    else:
+
+        def visit(step: dict[str, Any]) -> None:
+            if step.get("sanitizer") == "only":
+                step["skip"] = True
+
+    for step in pipeline["steps"]:
+        visit(step)
+        if "group" in step:
+            for inner_step in step.get("steps", []):
+                visit(inner_step)
+
+
+def increase_agents_timeouts(
+    pipeline: Any, sanitizer: Sanitizer, coverage: bool
+) -> None:
+    if sanitizer != Sanitizer.none or os.getenv("CI_SYSTEM_PARAMETERS", "") == "random":
+
+        def visit(step: dict[str, Any]) -> None:
+            # Most sanitizer runs, as well as random permutations of system
+            # parameters, are slower and need more memory. The default system
+            # parameters in CI are chosen to be efficient for execution, while
+            # a random permutation might take way longer and use more memory.
+            if "timeout_in_minutes" in step:
+                step["timeout_in_minutes"] *= 10
+
+            if "agents" in step:
+                agent = step["agents"].get("queue", None)
+                if agent == "linux-aarch64-small":
+                    agent = "linux-aarch64"
+                elif agent == "linux-aarch64":
+                    agent = "linux-aarch64-medium"
+                elif agent == "linux-aarch64-medium":
+                    agent = "linux-aarch64-large"
+                elif agent == "linux-aarch64-large":
+                    agent = "builder-linux-aarch64-mem"
+                elif agent == "linux-x86_64-small":
+                    agent = "linux-x86_64"
+                elif agent == "linux-x86_64":
+                    agent = "linux-x86_64-medium"
+                elif agent == "linux-x86_64-medium":
+                    agent = "linux-x86_64-large"
+                elif agent == "linux-x86_64-large":
+                    agent = "builder-linux-x86_64"
+                elif agent == "hetzner-aarch64-2cpu-4gb":
+                    agent = "hetzner-aarch64-4cpu-8gb"
+                elif agent == "hetzner-aarch64-4cpu-8gb":
+                    agent = "hetzner-aarch64-8cpu-16gb"
+                elif agent == "hetzner-aarch64-8cpu-16gb":
+                    agent = "hetzner-aarch64-16cpu-32gb"
+                elif agent == "hetzner-x86-64-2cpu-4gb":
+                    agent = "hetzner-x86-64-4cpu-8gb"
+                elif agent == "hetzner-x86-64-4cpu-8gb":
+                    agent = "hetzner-x86-64-8cpu-16gb"
+                elif agent == "hetzner-x86-64-8cpu-16gb":
+                    agent = "hetzner-x86-64-16cpu-32gb"
+                elif agent == "hetzner-x86-64-16cpu-32gb":
+                    agent = "hetzner-x86-64-dedi-16cpu-64gb"
+                elif agent == "hetzner-x86-64-16cpu-64gb":
+                    agent = "hetzner-x86-64-dedi-32cpu-128gb"
+                elif agent == "hetzner-x86-64-dedi-32cpu-128gb":
+                    agent = "hetzner-x86-64-dedi-48cpu-192gb"
+                step["agents"] = {"queue": agent}
+
+        for step in pipeline["steps"]:
+            visit(step)
+            # Groups can't be nested, so handle them explicitly here instead of recursing
+            if "group" in step:
+                for inner_step in step.get("steps", []):
+                    visit(inner_step)
+
+    if coverage:
+        pipeline["env"]["CI_BUILDER_SCCACHE"] = 1
+        pipeline["env"]["CI_COVERAGE_ENABLED"] = 1
+
+        for step in steps(pipeline):
+            # Coverage runs are slower
+            if "timeout_in_minutes" in step:
+                step["timeout_in_minutes"] *= 3
+
+            if step.get("coverage") == "skip":
+                step["skip"] = True
+            if step.get("id") == "build-x86_64":
+                step["name"] = "Build x86_64 with coverage"
+            if step.get("id") == "build-aarch":
+                step["name"] = "Build aarch64 with coverage"
+    else:
+        for step in steps(pipeline):
+            if step.get("coverage") == "only":
+                step["skip"] = True
 
 
 def switch_jobs_to_aws(pipeline: Any, priority: int) -> None:
@@ -934,7 +893,7 @@ def trim_builds(
                 )
 
 
-_github_changed_files: list[str] | None = None
+_github_changed_files: set[str] | None = None
 
 
 def have_paths_changed(globs: Iterable[str]) -> bool:
@@ -952,18 +911,21 @@ def have_paths_changed(globs: Iterable[str]) -> bool:
                 headers=headers,
             )
             resp.raise_for_status()
-            _github_changed_files = [
+            _github_changed_files = {
                 f["filename"] for f in resp.json().get("files", [])
-            ]
+            }
 
-        for pattern in globs:
-            for changed in _github_changed_files:
-                if fnmatch.fnmatch(changed, f"{pattern}/*"):
-                    return True
+        for file in spawn.capture(["git", "ls-files", *globs]).splitlines():
+            if file in _github_changed_files:
+                return True
         return False
     except Exception as e:
         # Try locally if Github is down or the change has not been pushed yet when running locally
         print(f"Failed to get changed files from Github, running locally: {e}")
+
+        # Make sure we have an up to date view of main.
+        spawn.runv(["git", "fetch", "origin", "main"])
+
         diff = subprocess.run(
             ["git", "diff", "--no-patch", "--quiet", "origin/main...", "--", *globs]
         )
@@ -974,6 +936,28 @@ def have_paths_changed(globs: Iterable[str]) -> bool:
         else:
             diff.check_returncode()
             raise RuntimeError("unreachable")
+
+
+def remove_mz_specific_keys(pipeline: Any) -> None:
+    """Remove the Materialize-specific keys from the configuration that are only used to inform how to trim the pipeline and for coverage runs."""
+    for step in steps(pipeline):
+        if "inputs" in step:
+            del step["inputs"]
+        if "coverage" in step:
+            del step["coverage"]
+        if "sanitizer" in step:
+            del step["sanitizer"]
+        if (
+            "timeout_in_minutes" not in step
+            and "prompt" not in step
+            and "wait" not in step
+            and "group" not in step
+            and "trigger" not in step
+            and not step.get("async")
+        ):
+            raise UIError(
+                f"Every step should have an explicit timeout_in_minutes value, missing in: {step}"
+            )
 
 
 if __name__ == "__main__":
