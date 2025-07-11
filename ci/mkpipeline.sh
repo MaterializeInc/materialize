@@ -48,7 +48,8 @@ while IFS=: read -r arch flavor; do
 done < "$tmpfile"
 rm "$tmpfile"
 
-exec buildkite-agent pipeline upload <<EOF
+if [ -n "$bootstrap_steps" ]; then
+  exec buildkite-agent pipeline upload <<EOF
 steps:
   $bootstrap_steps
   - wait
@@ -68,3 +69,6 @@ steps:
         - signal_reason: agent_stop
           limit: 2
 EOF
+else
+  exec bin/ci-builder run min bin/pyactivate -m ci.mkpipeline "$pipeline" "$@"
+fi
