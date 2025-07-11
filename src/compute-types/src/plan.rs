@@ -390,9 +390,8 @@ pub enum PlanNode<T = mz_repr::Timestamp> {
         /// The input collection.
         input: Box<Plan<T>>,
         /// A list of arrangement keys, and possibly a raw collection,
-        /// that will be added to those of the input.
-        ///
-        /// If any of these collection forms are already present in the input, they have no effect.
+        /// that will be added to those of the input. Does not include
+        /// any other existing arrangements.
         forms: AvailableCollections,
         /// The key that must be used to access the input.
         input_key: Option<Vec<MirScalarExpr>>,

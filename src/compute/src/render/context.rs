@@ -25,6 +25,7 @@ use mz_compute_types::dyncfgs::ENABLE_COMPUTE_RENDER_FUELED_AS_SPECIFIC_COLLECTI
 use mz_compute_types::plan::{AvailableCollections, LirId};
 use mz_dyncfg::ConfigSet;
 use mz_expr::{Id, MapFilterProject, MirScalarExpr};
+use mz_ore::soft_assert_or_log;
 use mz_repr::fixed_length::ToDatumIter;
 use mz_repr::{DatumVec, DatumVecBorrow, Diff, GlobalId, Row, RowArena, SharedRow};
 use mz_storage_types::controller::CollectionMetadata;
@@ -872,6 +873,13 @@ where
         //
         // Note(btv): If we ever do that, we would then only need to make the raw collection here
         // if `collections.raw` is true.
+
+        for (key, _, _) in collections.arranged.iter() {
+            soft_assert_or_log!(
+                !self.arranged.contains_key(key),
+                "LIR ArrangeBy tried to create an existing arrangement"
+            );
+        }
 
         // We need the collection if either (1) it is explicitly demanded, or (2) we are going to render any arrangement
         let form_raw_collection = collections.raw
