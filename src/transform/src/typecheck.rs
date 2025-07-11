@@ -78,7 +78,7 @@ pub enum TypeError<'a> {
         source: &'a MirRelationExpr,
         /// The column types we found (`sub` type)
         got: Vec<ColumnType>,
-        /// The solumn types we expected (`sup` type)
+        /// The column types we expected (`sup` type)
         expected: Vec<ColumnType>,
         /// The difference between these types
         diffs: Vec<RelationTypeDifference>,
@@ -460,7 +460,7 @@ impl Typecheck {
 
     /// New non-transient global IDs will be treated as an error
     ///
-    /// Only turn this on after the context has been appropraitely populated by, e.g., an earlier run
+    /// Only turn this on after the context has been appropriately populated by, e.g., an earlier run
     pub fn disallow_new_globals(mut self) -> Self {
         self.disallow_new_globals = true;
         self
