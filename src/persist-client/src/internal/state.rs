@@ -800,6 +800,9 @@ pub struct RunMeta {
 
     /// If set, a UUID that uniquely identifies this run.
     pub(crate) id: Option<RunId>,
+
+    /// The number of updates in this run.
+    pub(crate) len: Option<usize>,
 }
 
 /// A subset of a [HollowBatch] corresponding 1:1 to a blob.
