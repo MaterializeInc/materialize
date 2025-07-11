@@ -211,11 +211,11 @@ Schema registry URL [default: http://localhost:8081]
 
 ## Resource sharing and reuse across tests
 
-By default, `testdrive` will clean up the environment and Mz prior to running each test. In certain situations, two or more testdrive invocations need to run consequtively while being able to operate on the same database objects. The options below help to ensure successful cooperation.
+By default, `testdrive` will clean up the environment and Mz prior to running each test. In certain situations, two or more testdrive invocations need to run consecutively while being able to operate on the same database objects. The options below help to ensure successful cooperation.
 
 #### `--no-reset`
 
-By default, `testdrive` will clean up its environment as much as it can before the start of the test, which includes Mz databases, etc. If two consequtive invocations of `testdrive` need to be able to operate on the same objects, e.g. database tables, the second invocation needs to run with `--no-reset`
+By default, `testdrive` will clean up its environment as much as it can before the start of the test, which includes Mz databases, etc. If two consecutive invocations of `testdrive` need to be able to operate on the same objects, e.g. database tables, the second invocation needs to run with `--no-reset`
 
 #### `--seed <seed>`
 
@@ -223,7 +223,7 @@ Unless specified, each `testdrive` invocation will use random names for certain 
 
 #### `--temp-dir <temp-dir>`
 
-Force the use of the specfied temporary directory rather than creating one with a random name. This allows multiple `testdrive` instances to be able to find the same files at the same location.
+Force the use of the specified temporary directory rather than creating one with a random name. This allows multiple `testdrive` instances to be able to find the same files at the same location.
 
 ## Controlling test suite execution
 
@@ -242,6 +242,8 @@ Max number of tests to run before terminating. This is useful in conjunction wit
 Shuffle the list of tests before running them (using the value from --seed, if any). This is useful when attempting to use `testdrive` in randomized scenarios or when applying background workload to the database.
 
 #### `--rewrite-results`
+
+Note that this option is currently buggy!
 
 Automatically rewrite the testdrive file with the correct results when they are not as expected. Consider setting a lower `--default-max-tries` value too to get a result faster.
 
