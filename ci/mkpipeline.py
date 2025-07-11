@@ -24,6 +24,7 @@ import copy
 import fnmatch
 import hashlib
 import os
+import subprocess
 import sys
 import threading
 import traceback
@@ -171,24 +172,26 @@ so it is executed.""",
             print(
                 "Repository glue code has changed, so the trimmed pipeline below does not apply"
             )
-            trim_tests_pipeline(
-                copy.deepcopy(pipeline),
-                args.coverage,
-                args.sanitizer,
-                bazel,
-                args.bazel_remote_cache,
-                bazel_lto,
-            )
+            if not os.getenv("CI_TEST_IDS"):
+                trim_tests_pipeline(
+                    copy.deepcopy(pipeline),
+                    args.coverage,
+                    args.sanitizer,
+                    bazel,
+                    args.bazel_remote_cache,
+                    bazel_lto,
+                )
         else:
             print("--- Trimming unchanged steps from pipeline")
-            trim_tests_pipeline(
-                pipeline,
-                args.coverage,
-                args.sanitizer,
-                bazel,
-                args.bazel_remote_cache,
-                bazel_lto,
-            )
+            if not os.getenv("CI_TEST_IDS"):
+                trim_tests_pipeline(
+                    pipeline,
+                    args.coverage,
+                    args.sanitizer,
+                    bazel,
+                    args.bazel_remote_cache,
+                    bazel_lto,
+                )
 
     if args.sanitizer != Sanitizer.none:
         pipeline.setdefault("env", {})["CI_SANITIZER"] = args.sanitizer.value
@@ -937,24 +940,40 @@ _github_changed_files: list[str] | None = None
 def have_paths_changed(globs: Iterable[str]) -> bool:
     """Reports whether the specified globs have diverged from origin/main."""
     global _github_changed_files
-    if not _github_changed_files:
-        head = spawn.capture(["git", "rev-parse", "HEAD"]).strip()
-        headers = {"Accept": "application/vnd.github+json"}
-        if token := os.getenv("GITHUB_TOKEN"):
-            headers["Authorization"] = f"Bearer {token}"
+    try:
+        if not _github_changed_files:
+            head = spawn.capture(["git", "rev-parse", "HEAD"]).strip()
+            headers = {"Accept": "application/vnd.github+json"}
+            if token := os.getenv("GITHUB_TOKEN"):
+                headers["Authorization"] = f"Bearer {token}"
 
-        resp = requests.get(
-            f"https://api.github.com/repos/materializeinc/materialize/compare/main...{head}",
-            headers=headers,
+            resp = requests.get(
+                f"https://api.github.com/repos/materializeinc/materialize/compare/main...{head}",
+                headers=headers,
+            )
+            resp.raise_for_status()
+            _github_changed_files = [
+                f["filename"] for f in resp.json().get("files", [])
+            ]
+
+        for pattern in globs:
+            for changed in _github_changed_files:
+                if fnmatch.fnmatch(changed, f"{pattern}/*"):
+                    return True
+        return False
+    except Exception as e:
+        # Try locally if Github is down or the change has not been pushed yet when running locally
+        print(f"Failed to get changed files from Github, running locally: {e}")
+        diff = subprocess.run(
+            ["git", "diff", "--no-patch", "--quiet", "origin/main...", "--", *globs]
         )
-        resp.raise_for_status()
-        _github_changed_files = [f["filename"] for f in resp.json().get("files", [])]
-
-    for pattern in globs:
-        for changed in _github_changed_files:
-            if fnmatch.fnmatch(changed, pattern):
-                return True
-    return False
+        if diff.returncode == 0:
+            return False
+        elif diff.returncode == 1:
+            return True
+        else:
+            diff.check_returncode()
+            raise RuntimeError("unreachable")
 
 
 if __name__ == "__main__":
