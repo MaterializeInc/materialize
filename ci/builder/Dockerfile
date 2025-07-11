@@ -353,7 +353,7 @@ ENV LDFLAGS="-fuse-ld=lld -static-libstdc++"
 ENV RUSTFLAGS="-Clink-arg=-Wl,--compress-debug-sections=zlib -Clink-arg=-Wl,-O3 -Clink-arg=-fuse-ld=lld -Csymbol-mangling-version=v0 --cfg=tokio_unstable"
 ENV PATH=/opt/google-cloud-sdk/bin:$PATH
 ENV CARGO_TARGET_DIR=/mnt/build
-ENV CARGO_INCREMENTAL=1
+ENV CARGO_INCREMENTAL=0
 ENV HELM_PLUGINS=/usr/local/share/helm/plugins
 
 # Set up for a persistent volume to hold Cargo metadata, so that crate metadata

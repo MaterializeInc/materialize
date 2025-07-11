@@ -107,6 +107,7 @@ steps:
     timeout_in_minutes: 600
     env:
       CI_BAZEL_BUILD: 0
+      CI_BUILDER_SCCACHE: true
     plugins:
       - ./ci/plugins/mzcompose:
           composition: cargo-test

@@ -97,6 +97,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         MZ_S3_UPLOADER_TEST_S3_BUCKET="mz-test-1d-lifecycle-delete",
         MZ_PERSIST_EXTERNAL_STORAGE_TEST_AZURE_CONTAINER="mz-test-azure",
         MZ_PERSIST_EXTERNAL_STORAGE_TEST_POSTGRES_URL=cockroach_url,
+        CARGO_INCREMENTAL="0",
     )
 
     coverage = ui.env_is_truthy("CI_COVERAGE_ENABLED")
