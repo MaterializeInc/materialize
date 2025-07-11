@@ -15,7 +15,6 @@
 
 //! Common operator transformations on timely streams and differential collections.
 
-use std::future::Future;
 use std::hash::{BuildHasher, Hash, Hasher};
 use std::marker::PhantomData;
 use std::rc::Weak;
@@ -27,7 +26,6 @@ use differential_dataflow::lattice::Lattice;
 use differential_dataflow::trace::{Batcher, Builder, Description};
 use differential_dataflow::{AsCollection, Collection, Hashable};
 use timely::container::{ContainerBuilder, PushInto};
-use timely::dataflow::channels::ContainerBytes;
 use timely::dataflow::channels::pact::{Exchange, ParallelizationContract, Pipeline};
 use timely::dataflow::channels::pushers::Tee;
 use timely::dataflow::operators::Capability;
@@ -39,11 +37,6 @@ use timely::dataflow::operators::generic::{InputHandleCore, OperatorInfo, Output
 use timely::dataflow::{Scope, Stream, StreamCore};
 use timely::progress::{Antichain, Timestamp};
 use timely::{Container, Data, PartialOrder};
-
-use crate::builder_async::{
-    AsyncInputHandle, AsyncOutputHandle, ConnectedToOne, Disconnected,
-    OperatorBuilder as OperatorBuilderAsync,
-};
 
 /// Extension methods for timely [`StreamCore`]s.
 pub trait StreamExt<G, C1>
@@ -82,77 +75,6 @@ where
         >,
         P: ParallelizationContract<G::Timestamp, C1>;
 
-    /// Creates a new dataflow operator that partitions its input stream by a parallelization
-    /// strategy pact, and repeatedly schedules logic, the future returned by the function passed
-    /// as constructor. logic can read from the input stream, and write to the output stream.
-    fn unary_async<CB, P, B, BFut>(
-        &self,
-        pact: P,
-        name: String,
-        constructor: B,
-    ) -> StreamCore<G, CB::Container>
-    where
-        CB: ContainerBuilder,
-        B: FnOnce(
-            Capability<G::Timestamp>,
-            OperatorInfo,
-            AsyncInputHandle<G::Timestamp, C1, ConnectedToOne>,
-            AsyncOutputHandle<G::Timestamp, CB, Tee<G::Timestamp, CB::Container>>,
-        ) -> BFut,
-        BFut: Future + 'static,
-        P: ParallelizationContract<G::Timestamp, C1>;
-
-    /// Creates a new dataflow operator that partitions its input streams by a parallelization
-    /// strategy pact, and repeatedly schedules logic, the future returned by the function passed
-    /// as constructor. logic can read from the input streams, and write to the output stream.
-    fn binary_async<C2, CB, P1, P2, B, BFut>(
-        &self,
-        other: &StreamCore<G, C2>,
-        pact1: P1,
-        pact2: P2,
-        name: String,
-        constructor: B,
-    ) -> StreamCore<G, CB::Container>
-    where
-        C2: Container + 'static,
-        CB: ContainerBuilder,
-        B: FnOnce(
-            Capability<G::Timestamp>,
-            OperatorInfo,
-            AsyncInputHandle<G::Timestamp, C1, ConnectedToOne>,
-            AsyncInputHandle<G::Timestamp, C2, ConnectedToOne>,
-            AsyncOutputHandle<G::Timestamp, CB, Tee<G::Timestamp, CB::Container>>,
-        ) -> BFut,
-        BFut: Future + 'static,
-        P1: ParallelizationContract<G::Timestamp, C1>,
-        P2: ParallelizationContract<G::Timestamp, C2>;
-
-    /// Creates a new dataflow operator that partitions its input stream by a parallelization
-    /// strategy pact, and repeatedly schedules logic which can read from the input stream and
-    /// inspect the frontier at the input.
-    fn sink_async<P, B, BFut>(&self, pact: P, name: String, constructor: B)
-    where
-        B: FnOnce(OperatorInfo, AsyncInputHandle<G::Timestamp, C1, Disconnected>) -> BFut,
-        BFut: Future + 'static,
-        P: ParallelizationContract<G::Timestamp, C1>;
-
-    /// Like [`timely::dataflow::operators::map::Map::map`], but `logic`
-    /// is allowed to fail. The first returned stream will contain the
-    /// successful applications of `logic`, while the second returned stream
-    /// will contain the failed applications.
-    fn map_fallible<DCB, ECB, D2, E, L>(
-        &self,
-        name: &str,
-        mut logic: L,
-    ) -> (StreamCore<G, DCB::Container>, StreamCore<G, ECB::Container>)
-    where
-        DCB: ContainerBuilder + PushInto<D2>,
-        ECB: ContainerBuilder + PushInto<E>,
-        L: for<'a> FnMut(C1::Item<'a>) -> Result<D2, E> + 'static,
-    {
-        self.flat_map_fallible::<DCB, ECB, _, _, _, _>(name, move |record| Some(logic(record)))
-    }
-
     /// Like [`timely::dataflow::operators::map::Map::flat_map`], but `logic`
     /// is allowed to fail. The first returned stream will contain the
     /// successful applications of `logic`, while the second returned stream
@@ -175,18 +97,6 @@ where
         expiration: G::Timestamp,
         token: Weak<()>,
     ) -> StreamCore<G, C1>;
-
-    /// Take a Timely stream and convert it to a Differential stream, where each diff is "1"
-    /// and each time is the current Timely timestamp.
-    fn pass_through<CB, R>(&self, name: &str, unit: R) -> StreamCore<G, CB::Container>
-    where
-        CB: ContainerBuilder + for<'a> PushInto<(C1::Item<'a>, G::Timestamp, R)>,
-        R: Data;
-
-    /// Distributes the data of the stream to all workers in a round-robin fashion.
-    fn distribute(&self) -> StreamCore<G, C1>
-    where
-        C1: ContainerBytes + Send;
 }
 
 /// Extension methods for differential [`Collection`]s.
@@ -348,93 +258,6 @@ where
         (ok_stream, err_stream)
     }
 
-    fn unary_async<CB, P, B, BFut>(
-        &self,
-        pact: P,
-        name: String,
-        constructor: B,
-    ) -> StreamCore<G, CB::Container>
-    where
-        CB: ContainerBuilder,
-        B: FnOnce(
-            Capability<G::Timestamp>,
-            OperatorInfo,
-            AsyncInputHandle<G::Timestamp, C1, ConnectedToOne>,
-            AsyncOutputHandle<G::Timestamp, CB, Tee<G::Timestamp, CB::Container>>,
-        ) -> BFut,
-        BFut: Future + 'static,
-        P: ParallelizationContract<G::Timestamp, C1>,
-    {
-        let mut builder = OperatorBuilderAsync::new(name, self.scope());
-        let operator_info = builder.operator_info();
-
-        let (output, stream) = builder.new_output();
-        let input = builder.new_input_for(self, pact, &output);
-
-        builder.build(move |mut capabilities| {
-            // `capabilities` should be a single-element vector.
-            let capability = capabilities.pop().unwrap();
-            constructor(capability, operator_info, input, output)
-        });
-
-        stream
-    }
-
-    fn binary_async<C2, CB, P1, P2, B, BFut>(
-        &self,
-        other: &StreamCore<G, C2>,
-        pact1: P1,
-        pact2: P2,
-        name: String,
-        constructor: B,
-    ) -> StreamCore<G, CB::Container>
-    where
-        C2: Container + 'static,
-        CB: ContainerBuilder,
-        B: FnOnce(
-            Capability<G::Timestamp>,
-            OperatorInfo,
-            AsyncInputHandle<G::Timestamp, C1, ConnectedToOne>,
-            AsyncInputHandle<G::Timestamp, C2, ConnectedToOne>,
-            AsyncOutputHandle<G::Timestamp, CB, Tee<G::Timestamp, CB::Container>>,
-        ) -> BFut,
-        BFut: Future + 'static,
-        P1: ParallelizationContract<G::Timestamp, C1>,
-        P2: ParallelizationContract<G::Timestamp, C2>,
-    {
-        let mut builder = OperatorBuilderAsync::new(name, self.scope());
-        let operator_info = builder.operator_info();
-
-        let (output, stream) = builder.new_output();
-        let input1 = builder.new_input_for(self, pact1, &output);
-        let input2 = builder.new_input_for(other, pact2, &output);
-
-        builder.build(move |mut capabilities| {
-            // `capabilities` should be a single-element vector.
-            let capability = capabilities.pop().unwrap();
-            constructor(capability, operator_info, input1, input2, output)
-        });
-
-        stream
-    }
-
-    /// Creates a new dataflow operator that partitions its input stream by a parallelization
-    /// strategy pact, and repeatedly schedules logic which can read from the input stream and
-    /// inspect the frontier at the input.
-    fn sink_async<P, B, BFut>(&self, pact: P, name: String, constructor: B)
-    where
-        B: FnOnce(OperatorInfo, AsyncInputHandle<G::Timestamp, C1, Disconnected>) -> BFut,
-        BFut: Future + 'static,
-        P: ParallelizationContract<G::Timestamp, C1>,
-    {
-        let mut builder = OperatorBuilderAsync::new(name, self.scope());
-        let operator_info = builder.operator_info();
-
-        let input = builder.new_disconnected_input(self, pact);
-
-        builder.build(move |_capabilities| constructor(operator_info, input));
-    }
-
     // XXX(guswynn): file an minimization bug report for the logic flat_map
     // false positive here
     // TODO(guswynn): remove this after https://github.com/rust-lang/rust-clippy/issues/8098 is
@@ -507,37 +330,6 @@ where
                 input.for_each(|time, data| {
                     let mut session = output.session(&time);
                     session.give_container(data);
-                });
-            }
-        })
-    }
-
-    fn pass_through<CB, R>(&self, name: &str, unit: R) -> StreamCore<G, CB::Container>
-    where
-        CB: ContainerBuilder + for<'a> PushInto<(C1::Item<'a>, G::Timestamp, R)>,
-        R: Data,
-    {
-        self.unary::<CB, _, _, _>(Pipeline, name, move |_, _| {
-            move |input, output| {
-                input.for_each(|cap, data| {
-                    let mut session = output.session_with_builder(&cap);
-                    session.give_iterator(
-                        data.drain()
-                            .map(|payload| (payload, cap.time().clone(), unit.clone())),
-                    );
-                });
-            }
-        })
-    }
-
-    fn distribute(&self) -> StreamCore<G, C1>
-    where
-        C1: ContainerBytes + Send,
-    {
-        self.unary(crate::pact::Distribute, "Distribute", move |_, _| {
-            move |input, output| {
-                input.for_each(|time, data| {
-                    output.session(&time).give_container(data);
                 });
             }
         })
@@ -736,39 +528,6 @@ where
             })
             .as_collection()
     }
-}
-
-/// Creates a new async data stream source for a scope.
-///
-/// The source is defined by a name, and a constructor which takes a default capability and an
-/// output handle to a future. The future is then repeatedly scheduled, and is expected to
-/// eventually send data and downgrade and release capabilities.
-pub fn source_async<G: Scope, CB, B, BFut>(
-    scope: &G,
-    name: String,
-    constructor: B,
-) -> StreamCore<G, CB::Container>
-where
-    CB: ContainerBuilder,
-    B: FnOnce(
-        Capability<G::Timestamp>,
-        OperatorInfo,
-        AsyncOutputHandle<G::Timestamp, CB, Tee<G::Timestamp, CB::Container>>,
-    ) -> BFut,
-    BFut: Future + 'static,
-{
-    let mut builder = OperatorBuilderAsync::new(name, scope.clone());
-    let operator_info = builder.operator_info();
-
-    let (output, stream) = builder.new_output();
-
-    builder.build(move |mut capabilities| {
-        // `capabilities` should be a single-element vector.
-        let capability = capabilities.pop().unwrap();
-        constructor(capability, operator_info, output)
-    });
-
-    stream
 }
 
 /// Aggregates the weights of equal records into at most one record.
