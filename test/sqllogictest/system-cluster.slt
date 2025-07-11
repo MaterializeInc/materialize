@@ -494,22 +494,12 @@ LIMIT 10;
 ----
 Explained Query:
   Finish order_by=[#0{max} desc nulls_first] limit=10 output=[#0..=#2]
-    With
-      cte l0 =
+    Project (#1{max}, #0{error}, #2{count})
+      Reduce group_by=[#1{error}] aggregates=[max((extract_epoch_tstz(#0{occurred_at}) * 1000)), count(*)]
         Project (#0{occurred_at}, #3{error})
           Filter (#7 <= 100) AND (#7 >= 0) AND (#3{error}) IS NOT NULL
             Map (timestamp_tz_to_mz_timestamp(#0{occurred_at}))
               ReadIndex on=mz_internal.mz_source_status_history mz_source_status_history_ind=[lookup value=("u6")]
-    Return
-      Project (#1{max}, #0{error}, #3{count})
-        Join on=(#0{error} = #2{error}) type=differential
-          ArrangeBy keys=[[#0{error}]]
-            Reduce group_by=[#1{error}] aggregates=[max((extract_epoch_tstz(#0{occurred_at}) * 1000))]
-              Get l0
-          ArrangeBy keys=[[#0{error}]]
-            Reduce group_by=[#0{error}] aggregates=[count(*)]
-              Project (#1{error})
-                Get l0
 
 Used Indexes:
   - mz_internal.mz_source_status_history_ind (lookup)

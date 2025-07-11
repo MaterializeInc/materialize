@@ -306,8 +306,8 @@ GROUP BY 1,
          2
 ----
 Explained Query:
-  With
-    cte l0 =
+  Project (#0{l_partkey}..=#4{min_l_orderkey}, #3{min_c_nationkey}) // { arity: 6 }
+    Reduce group_by=[#1{l_partkey}, #2{c_nationkey}] aggregates=[count(*), min(#2{c_nationkey}), min(#0{l_orderkey})] // { arity: 5 }
       Project (#0{l_orderkey}, #1{l_partkey}, #28{c_nationkey}) // { arity: 3 }
         Filter (#10{l_shipdate} <= 1995-11-14) AND (#30{c_acctbal} <= 12907776) AND (#10{l_shipdate} >= 1995-04-19) AND (#30{c_acctbal} >= #5{l_extendedprice}) // { arity: 33 }
           Join on=(#0{l_orderkey} = #16{o_orderkey} AND #17{o_custkey} = #25{c_custkey}) type=delta // { arity: 33 }
@@ -321,18 +321,6 @@ Explained Query:
               ReadIndex on=orders pk_orders_orderkey=[delta join lookup] fk_orders_custkey=[delta join lookup] // { arity: 9 }
             ArrangeBy keys=[[#0{c_custkey}]] // { arity: 8 }
               ReadIndex on=customer pk_customer_custkey=[delta join lookup] // { arity: 8 }
-  Return // { arity: 6 }
-    Project (#0{l_partkey}, #1{c_nationkey}, #6{count}, #2{min_c_nationkey}, #3{min_l_orderkey}, #2{min_c_nationkey}) // { arity: 6 }
-      Join on=(#0{l_partkey} = #4{l_partkey} AND #1{c_nationkey} = #5{c_nationkey}) type=differential // { arity: 7 }
-        implementation
-          %0[#0, #1]UKKA » %1[#0, #1]UKKA
-        ArrangeBy keys=[[#0{l_partkey}, #1{c_nationkey}]] // { arity: 4 }
-          Reduce group_by=[#1{l_partkey}, #2{c_nationkey}] aggregates=[min(#2{c_nationkey}), min(#0{l_orderkey})] // { arity: 4 }
-            Get l0 // { arity: 3 }
-        ArrangeBy keys=[[#0{l_partkey}, #1{c_nationkey}]] // { arity: 3 }
-          Reduce group_by=[#0{l_partkey}, #1{c_nationkey}] aggregates=[count(*)] // { arity: 3 }
-            Project (#1{l_partkey}, #2{c_nationkey}) // { arity: 2 }
-              Get l0 // { arity: 3 }
 
 Used Indexes:
   - materialize.public.pk_customer_custkey (delta join lookup)
@@ -622,8 +610,8 @@ GROUP BY 1,
          2
 ----
 Explained Query:
-  With
-    cte l0 =
+  Project (#0{o_custkey}, #0{o_custkey}..=#2{count}) // { arity: 4 }
+    Reduce group_by=[#1{o_custkey}] aggregates=[min(#0{o_orderkey}), count(*)] // { arity: 3 }
       Project (#2{o_orderkey}, #3{o_custkey}) // { arity: 2 }
         Filter (#1{l_shipdate} < #5{o_orderdate}) AND (#11{c_acctbal} > #4{o_totalprice}) AND (#11{c_acctbal} >= #0{l_extendedprice}) // { arity: 14 }
           Join on=(#3{o_custkey} = #6{c_custkey}) type=delta // { arity: 14 }
@@ -640,18 +628,6 @@ Explained Query:
                 ReadIndex on=orders pk_orders_orderkey=[*** full scan ***] // { arity: 9 }
             ArrangeBy keys=[[#0{c_custkey}]] // { arity: 8 }
               ReadIndex on=customer pk_customer_custkey=[delta join lookup] // { arity: 8 }
-  Return // { arity: 4 }
-    Project (#0{o_custkey}, #0{o_custkey}, #1{min_o_orderkey}, #3{count}) // { arity: 4 }
-      Join on=(#0{o_custkey} = #2{o_custkey}) type=differential // { arity: 4 }
-        implementation
-          %0[#0]UKA » %1[#0]UKA
-        ArrangeBy keys=[[#0{o_custkey}]] // { arity: 2 }
-          Reduce group_by=[#1{o_custkey}] aggregates=[min(#0{o_orderkey})] // { arity: 2 }
-            Get l0 // { arity: 2 }
-        ArrangeBy keys=[[#0{o_custkey}]] // { arity: 2 }
-          Reduce group_by=[#0{o_custkey}] aggregates=[count(*)] // { arity: 2 }
-            Project (#1{o_custkey}) // { arity: 1 }
-              Get l0 // { arity: 2 }
 
 Used Indexes:
   - materialize.public.pk_customer_custkey (delta join lookup)

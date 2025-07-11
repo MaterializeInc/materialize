@@ -73,16 +73,9 @@ Explained Query:
   Threshold // { types: "(bigint?, text?, date?)" }
     Union // { types: "(bigint?, text?, date?)" }
       Negate // { types: "(bigint?, text?, date?)" }
-        Project (#3{sum_a}, #1{max_b}, #0{c}) // { types: "(bigint?, text?, date?)" }
-          Join on=(#0{c} = #2{c}) type=differential // { types: "(date?, text?, date?, bigint?)" }
-            ArrangeBy keys=[[#0{c}]] // { types: "(date?, text?)" }
-              Reduce group_by=[#1{c}] aggregates=[max(#0{b})] // { types: "(date?, text?)" }
-                Project (#1{b}, #2{c}) // { types: "(text?, date?)" }
-                  ReadStorage materialize.public.t // { types: "(integer?, text?, date?)" }
-            ArrangeBy keys=[[#0{c}]] // { types: "(date?, bigint?)" }
-              Reduce group_by=[#1{c}] aggregates=[sum(#0{a})] // { types: "(date?, bigint?)" }
-                Project (#0{a}, #2{c}) // { types: "(integer?, date?)" }
-                  ReadStorage materialize.public.t // { types: "(integer?, text?, date?)" }
+        Project (#1{sum_a}, #2{max_b}, #0{c}) // { types: "(bigint?, text?, date?)" }
+          Reduce group_by=[#2{c}] aggregates=[sum(#0{a}), max(#1{b})] // { types: "(date?, bigint?, text?)" }
+            ReadStorage materialize.public.t // { types: "(integer?, text?, date?)" }
       Constant // { types: "(bigint, text, date?)" }
         - (1, "hello", null)
 
@@ -140,41 +133,31 @@ EXPLAIN OPTIMIZED PLAN WITH(types, humanized expressions) AS VERBOSE TEXT FOR
 (SELECT null::boolean as f1, 10 as f2) EXCEPT (SELECT min(f), count(*) FROM v WHERE (select d::double FROM u) = v.e GROUP BY e LIMIT 1)
 ----
 Explained Query:
-  With
-    cte l0 =
-      Project (#0{e}, #1{f}) // { types: "(double precision, boolean?)" }
-        Join on=(#0{e} = #2) type=differential // { types: "(double precision, boolean?, double precision)" }
-          ArrangeBy keys=[[#0{e}]] // { types: "(double precision, boolean?)" }
-            Filter (#0{e}) IS NOT NULL // { types: "(double precision, boolean?)" }
-              ReadStorage materialize.public.v // { types: "(double precision?, boolean?)" }
-          ArrangeBy keys=[[#0]] // { types: "(double precision?)" }
-            Union // { types: "(double precision?)" }
-              Project (#1) // { types: "(double precision?)" }
-                Filter (#0{d}) IS NOT NULL // { types: "(integer, double precision?)" }
-                  Map (integer_to_double(#0{d})) // { types: "(integer?, double precision?)" }
-                    ReadStorage materialize.public.u // { types: "(integer?)" }
-              Map (error("more than one record produced in subquery")) // { types: "(double precision)" }
-                Project () // { types: "()" }
-                  Filter (#0{count} > 1) // { types: "(bigint)" }
-                    Reduce aggregates=[count(*)] // { types: "(bigint)" }
-                      Project () // { types: "()" }
-                        ReadStorage materialize.public.u // { types: "(integer?)" }
-  Return // { types: "(boolean?, bigint)" }
-    Threshold // { types: "(boolean?, bigint)" }
-      Union // { types: "(boolean?, bigint)" }
-        Negate // { types: "(boolean?, bigint)" }
-          TopK limit=1 // { types: "(boolean?, bigint)" }
-            Project (#1{min_f}, #3{count}) // { types: "(boolean?, bigint)" }
-              Join on=(#0{e} = #2{e}) type=differential // { types: "(double precision, boolean?, double precision, bigint)" }
-                ArrangeBy keys=[[#0{e}]] // { types: "(double precision, boolean?)" }
-                  Reduce group_by=[#0{e}] aggregates=[min(#1{f})] // { types: "(double precision, boolean?)" }
-                    Get l0 // { types: "(double precision, boolean?)" }
-                ArrangeBy keys=[[#0{e}]] // { types: "(double precision, bigint)" }
-                  Reduce group_by=[#0{e}] aggregates=[count(*)] // { types: "(double precision, bigint)" }
-                    Project (#0{e}) // { types: "(double precision)" }
-                      Get l0 // { types: "(double precision, boolean?)" }
-        Constant // { types: "(boolean?, bigint)" }
-          - (null, 10)
+  Threshold // { types: "(boolean?, bigint)" }
+    Union // { types: "(boolean?, bigint)" }
+      Negate // { types: "(boolean?, bigint)" }
+        TopK limit=1 // { types: "(boolean?, bigint)" }
+          Project (#1{min_f}, #2{count}) // { types: "(boolean?, bigint)" }
+            Reduce group_by=[#0{e}] aggregates=[min(#1{f}), count(*)] // { types: "(double precision, boolean?, bigint)" }
+              Project (#0{e}, #1{f}) // { types: "(double precision, boolean?)" }
+                Join on=(#0{e} = #2) type=differential // { types: "(double precision, boolean?, double precision)" }
+                  ArrangeBy keys=[[#0{e}]] // { types: "(double precision, boolean?)" }
+                    Filter (#0{e}) IS NOT NULL // { types: "(double precision, boolean?)" }
+                      ReadStorage materialize.public.v // { types: "(double precision?, boolean?)" }
+                  ArrangeBy keys=[[#0]] // { types: "(double precision?)" }
+                    Union // { types: "(double precision?)" }
+                      Project (#1) // { types: "(double precision?)" }
+                        Filter (#0{d}) IS NOT NULL // { types: "(integer, double precision?)" }
+                          Map (integer_to_double(#0{d})) // { types: "(integer?, double precision?)" }
+                            ReadStorage materialize.public.u // { types: "(integer?)" }
+                      Map (error("more than one record produced in subquery")) // { types: "(double precision)" }
+                        Project () // { types: "()" }
+                          Filter (#0{count} > 1) // { types: "(bigint)" }
+                            Reduce aggregates=[count(*)] // { types: "(bigint)" }
+                              Project () // { types: "()" }
+                                ReadStorage materialize.public.u // { types: "(integer?)" }
+      Constant // { types: "(boolean?, bigint)" }
+        - (null, 10)
 
 Source materialize.public.u
 Source materialize.public.v
