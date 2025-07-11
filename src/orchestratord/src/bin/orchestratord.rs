@@ -13,6 +13,7 @@ use std::{
     sync::{Arc, LazyLock},
 };
 
+use k8s_openapi::apiextensions_apiserver::pkg::apis::apiextensions::v1::CustomResourceColumnDefinition;
 use kube::runtime::watcher;
 use tracing::info;
 
@@ -49,6 +50,13 @@ pub struct Args {
 
     #[clap(flatten)]
     tracing: TracingCliArgs,
+
+    #[clap(long, hide = true, value_parser(parse_crd_columns))]
+    additional_crd_columns: std::vec::Vec<CustomResourceColumnDefinition>,
+}
+
+fn parse_crd_columns(val: &str) -> Result<Vec<CustomResourceColumnDefinition>, serde_json::Error> {
+    serde_json::from_str(val)
 }
 
 #[tokio::main]
@@ -80,7 +88,7 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
     let metrics = Arc::new(Metrics::register_into(&metrics_registry));
 
     let (client, namespace) = create_client(args.kubernetes_context.clone()).await?;
-    register_crds(client.clone()).await?;
+    register_crds(client.clone(), args.additional_crd_columns).await?;
 
     {
         let router = mz_prof_http::router(&BUILD_INFO);

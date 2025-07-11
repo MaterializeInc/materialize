@@ -220,5 +220,10 @@ spec:
         {{- if .Values.schedulerName }}
         - "--scheduler-name={{ .Values.schedulerName }}"
         {{- end }}
+
+        {{- if .Values.operator.additionalMaterializeCRDColumns }}
+        - >
+          --additional-crd-columns={{ toJson .Values.operator.additionalMaterializeCRDColumns }}
+        {{- end }}
         resources:
           {{- toYaml .Values.operator.resources | nindent 10 }}

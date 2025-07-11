@@ -129,6 +129,7 @@ The following table lists the configurable parameters of the Materialize operato
 | `observability.enabled` | Whether to enable observability features | ``true`` |
 | `observability.podMetrics.enabled` | Whether to enable the pod metrics scraper which populates the Environment Overview Monitoring tab in the web console (requires metrics-server to be installed) | ``false`` |
 | `observability.prometheus.scrapeAnnotations.enabled` | Whether to annotate pods with common keys used for prometheus scraping. | ``true`` |
+| `operator.additionalMaterializeCRDColumns` | Additional columns to display when printing the Materialize CRD in table format. | ``nil`` |
 | `operator.affinity` | Affinity to use for the operator pod | ``nil`` |
 | `operator.args.enableInternalStatementLogging` |  | ``true`` |
 | `operator.args.startupLogFilter` | Log filtering settings for startup logs | ``"INFO,mz_orchestratord=TRACE"`` |

@@ -23,6 +23,15 @@ operator:
     startupLogFilter: "INFO,mz_orchestratord=TRACE"
     enableInternalStatementLogging: true
 
+  # -- Additional columns to display when printing the Materialize CRD in table format.
+  additionalMaterializeCRDColumns: null
+    ## Example:
+    #- description: "Metadata from the context annotator"
+    #  jsonPath: ".metadata.annotations['materialize\\.cloud/analytics-context']"
+    #  name: "OrgContext"
+    #  priority: 2
+    #  type: "string"
+
   # Cloud provider configuration
   cloudProvider:
     # -- Specifies cloud provider. Valid values are 'aws', 'gcp', 'azure' , 'generic', or 'local'
