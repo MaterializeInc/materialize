@@ -21,7 +21,7 @@ rows:
 
   - Failure Type: "**Single Region System Resources**"
     Impact: |
-      
+
       There are metadata resources running in HA in **us-east-1**. An outage in
       **us-east-1** may result in issues viewing the console for other regions.
       This does **not** affect database access, up-time, or performance.

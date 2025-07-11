@@ -25,7 +25,7 @@ rows:
       - Time to spin up new machine if sources or sinks are on the machine.
 
       In addition, cluster RTO is affected if the [`environmentd` is
-      down](#dr-environmentd) (seconds to minutes).
+      down](#environmentd) (seconds to minutes).
 
   - Failure Type: "**Single AZ failure**"
     RPO: 0
@@ -58,7 +58,7 @@ rows:
       - Time to spin up new machine if sources or sinks are on the machine.
 
       In addition, cluster RTO is affected if the [`environmentd` is
-      down](#dr-environmentd) (seconds to minutes).
+      down](#environmentd) (seconds to minutes).
 
   - Failure Type: "**Regional failure (or 2 AZs failures)**"
     RPO: |
