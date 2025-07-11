@@ -1,0 +1,27 @@
+columns:
+  - column: "Failure Type"
+  - column: "Impact"
+rows:
+  - Failure Type: "**Single Availability Zone (AZ)**"
+    Impact: |
+      - Connection issues using single-AZ Privatelink and sources/sinks.
+
+      - Brief `pgwire` and `https` connection drops as network rebalances.
+
+  - Failure Type: "**Two Availability Zones**"
+    Impact: |
+      - Temporary issues with cluster provisioning.
+      - Temporary issues with Console access.
+
+  - Failure Type: "**Three or More Availability Zones**"
+    Impact: |
+      - Partial to no access to the database.
+
+      - May require point-in-time recovery (PITR) of environments.
+
+  - Failure Type: "**Single Region System Resources**"
+    Impact: |
+      
+      There are metadata resources running in HA in **us-east-1**. An outage in
+      **us-east-1** may result in issues viewing the console for other regions.
+      This does **not** affect database access, up-time, or performance.
