@@ -171,24 +171,26 @@ so it is executed.""",
             print(
                 "Repository glue code has changed, so the trimmed pipeline below does not apply"
             )
-            trim_tests_pipeline(
-                copy.deepcopy(pipeline),
-                args.coverage,
-                args.sanitizer,
-                bazel,
-                args.bazel_remote_cache,
-                bazel_lto,
-            )
+            if not os.getenv("CI_TEST_IDS"):
+                trim_tests_pipeline(
+                    copy.deepcopy(pipeline),
+                    args.coverage,
+                    args.sanitizer,
+                    bazel,
+                    args.bazel_remote_cache,
+                    bazel_lto,
+                )
         else:
             print("--- Trimming unchanged steps from pipeline")
-            trim_tests_pipeline(
-                pipeline,
-                args.coverage,
-                args.sanitizer,
-                bazel,
-                args.bazel_remote_cache,
-                bazel_lto,
-            )
+            if not os.getenv("CI_TEST_IDS"):
+                trim_tests_pipeline(
+                    pipeline,
+                    args.coverage,
+                    args.sanitizer,
+                    bazel,
+                    args.bazel_remote_cache,
+                    bazel_lto,
+                )
 
     if args.sanitizer != Sanitizer.none:
         pipeline.setdefault("env", {})["CI_SANITIZER"] = args.sanitizer.value

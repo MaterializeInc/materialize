@@ -101,7 +101,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
 
     coverage = ui.env_is_truthy("CI_COVERAGE_ENABLED")
     sanitizer = Sanitizer[os.getenv("CI_SANITIZER", "none")]
-    extra_env = {}
+    extra_env = {"CARGO_INCREMENTAL": "0"}
 
     if coverage:
         # TODO(def-): For coverage inside of clusterd called from unit tests need
