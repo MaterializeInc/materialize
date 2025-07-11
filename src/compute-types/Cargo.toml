@@ -10,7 +10,7 @@ publish = false
 workspace = true
 
 [dependencies]
-columnar = "0.6.0"
+columnar = "0.8.0"
 columnation = "0.1.0"
 differential-dataflow = "0.15.3"
 itertools = "0.14.0"
