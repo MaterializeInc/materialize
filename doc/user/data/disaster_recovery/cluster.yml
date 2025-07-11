@@ -11,10 +11,15 @@ rows:
       Time to spin up new machine + possible rehydration time, depending on the
       objects on the machine:
 
-      - If sources, no additional time (i.e., does not require rehydration).
-      - If sinks, no additional time (i.e., does not require rehydration).
+      - If non-upsert sources, no rehydration time(i.e., does not require
+        rehydration).
+      - If upsert sources, rehydration time.
+      - If sinks, no rehydration time (i.e., does not require rehydration).
       - If compute, rehydration time.
       - If serving, rehydration time.
+
+      Additionally, there may be some time to catch up with changes that may
+      have occurred during the downtime.
 
       To reduce rehydration time, scale up the cluster.
     RTO (RF2 - multiple AZs): |
@@ -43,8 +48,8 @@ rows:
       - If compute, rehydration time.
       - If serving, rehydration time.
 
-      Additionally, sources may require time to catch up with changes in the
-      upstream system.
+      Additionally, there may be some time to catch up with changes that may
+      have occurred during the downtime.
 
       To reduce rehydration time, you can scale up the cluster.
 
