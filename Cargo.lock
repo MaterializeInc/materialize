@@ -4774,9 +4774,12 @@ version = "0.12.10"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a9321642ca94a4282428e6ea4af8cc2ca4eac48ac7a6a4ea8f33f76d0ce70926"
 dependencies = [
+ "async-lock",
  "crossbeam-channel",
  "crossbeam-epoch",
  "crossbeam-utils",
+ "event-listener 5.4.0",
+ "futures-util",
  "loom 0.7.2",
  "parking_lot",
  "portable-atomic",
@@ -5184,6 +5187,7 @@ dependencies = [
  "hyper-util",
  "jsonwebtoken",
  "launchdarkly-server-sdk",
+ "moka",
  "mz-alloc",
  "mz-alloc-default",
  "mz-build-info",
