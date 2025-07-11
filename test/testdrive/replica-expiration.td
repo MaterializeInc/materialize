@@ -24,7 +24,8 @@ ALTER SYSTEM SET compute_replica_expiration_offset = '30d'
   WHERE mz_now() <= event_ts + INTERVAL '20 days';
 > CREATE DEFAULT INDEX ON events_view;
 > INSERT INTO events SELECT x::text, now() FROM generate_series(1, 1000) AS x;
-> SELECT records FROM mz_introspection.mz_dataflow_arrangement_sizes
+> SELECT SUM(records) FROM mz_introspection.mz_dataflow_arrangement_sizes
+  JOIN mz_introspection.mz_dataflow_operator_sizes USING (dataflow_id)
   WHERE name LIKE '%events_view_primary_idx';
 2000
 > DROP TABLE events CASCADE;
