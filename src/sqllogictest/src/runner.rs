@@ -1975,7 +1975,7 @@ const INCONSISTENT_VIEW_OUTCOME_WARNING_REGEXPS: [&str; 9] = [
     "SHOW commands are not allowed in views",
     "cannot create view with unstable dependencies",
     "cannot use wildcard expansions or NATURAL JOINs in a view that depends on system objects",
-    "no schema has been selected to create in",
+    "no valid schema selected",
     r#"system schema '\w+' cannot be modified"#,
     r#"permission denied for (SCHEMA|CLUSTER) "(\w+\.)?\w+""#,
     // NOTE(vmarcos): Column ambiguity that could not be eliminated by our

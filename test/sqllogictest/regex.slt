@@ -817,7 +817,7 @@ simple
 SELECT regexp_matches(bar, '(b[^b]+)(b[^b]+)(b[^b]+)', 'ig') FROM foo2;
 ----
 db error: ERROR: function regexp_matches(smallint, unknown, unknown) does not exist
-HINT: No function matches the given name and argument types. You might need to add explicit type casts.
+HINT: No function matches the given name and argument types.  You might need to add explicit type casts.
 
 statement ok
 DROP CLUSTER multiprocess;

@@ -414,15 +414,15 @@ impl PlanError {
                 None
             }
             Self::InvalidOptionValue { err, .. } => err.hint(),
-            Self::UnknownFunction { ..} => Some("No function matches the given name and argument types. You might need to add explicit type casts.".into()),
+            Self::UnknownFunction { ..} => Some("No function matches the given name and argument types.  You might need to add explicit type casts.".into()),
             Self::IndistinctFunction {..} => {
-                Some("Could not choose a best candidate function. You might need to add explicit type casts.".into())
+                Some("Could not choose a best candidate function.  You might need to add explicit type casts.".into())
             }
             Self::UnknownOperator {..} => {
-                Some("No operator matches the given name and argument types. You might need to add explicit type casts.".into())
+                Some("No operator matches the given name and argument types.  You might need to add explicit type casts.".into())
             }
             Self::IndistinctOperator {..} => {
-                Some("Could not choose a best candidate operator. You might need to add explicit type casts.".into())
+                Some("Could not choose a best candidate operator.  You might need to add explicit type casts.".into())
             },
             Self::InvalidPrivatelinkAvailabilityZone { supported_azs, ..} => {
                 let supported_azs_str = supported_azs.iter().join("\n  ");
@@ -481,7 +481,10 @@ impl PlanError {
                 Some("Use ALTER SYSTEM SET 'network_policy' to change the default network policy.".into())
             }
             Self::WrongParameterType(_, _, _) => {
-                Some("EXECUTE automatically inserts only such casts that are allowed in an assignment cast context. Try adding an explicit cast.".into())
+                Some("EXECUTE automatically inserts only such casts that are allowed in an assignment cast context.  Try adding an explicit cast.".into())
+            }
+            Self::InvalidSchemaName => {
+                Some("Use SET schema = name to select a schema.  Use SHOW SCHEMAS to list available schemas.  Use SHOW search_path to show the schema names that we looked for, but none of them existed.".into())
             }
             _ => None,
         }
@@ -705,7 +708,7 @@ impl fmt::Display for PlanError {
             },
             Self::InvalidPrivatelinkAvailabilityZone { name, ..} => write!(f, "invalid AWS PrivateLink availability zone {}", name.quoted()),
             Self::DuplicatePrivatelinkAvailabilityZone {..} =>   write!(f, "connection cannot contain duplicate availability zones"),
-            Self::InvalidSchemaName => write!(f, "no schema has been selected to create in"),
+            Self::InvalidSchemaName => write!(f, "no valid schema selected"),
             Self::ItemAlreadyExists { name, item_type } => write!(f, "{item_type} {} already exists", name.quoted()),
             Self::ManagedCluster {cluster_name} => write!(f, "cannot modify managed cluster {cluster_name}"),
             Self::InvalidKeysInSubscribeEnvelopeUpsert => {
