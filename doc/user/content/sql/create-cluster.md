@@ -335,11 +335,6 @@ Any commands attributed to scheduled refreshes will be marked with
 
 Clusters have several known limitations:
 
-* Clusters containing sources and sinks can only have a replication factor of
-  `0` or `1`.
-
-* Clusters containing sources and sinks cannot be resized without downtime.
-
 * When a cluster of size `3200cc` or larger uses multiple replicas, those
   replicas are not guaranteed to be spread evenly across the underlying cloud
   provider's availability zones.
