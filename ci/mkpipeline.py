@@ -112,7 +112,7 @@ so it is executed.""",
         raw = f.read()
     raw = raw.replace("$RUST_VERSION", rust_version())
 
-    bazel = ui.env_is_truthy("CI_BAZEL_BUILD", "1")
+    bazel = ui.env_is_truthy("CI_BAZEL_BUILD", "0")
     bazel_lto = ui.env_is_truthy("CI_BAZEL_LTO")
 
     # On 'main' or tagged branches, we use a separate remote cache that only CI can write to.
@@ -895,7 +895,7 @@ def add_cargo_test_dependency(
         arch=Arch.X86_64,
         coverage=coverage,
         sanitizer=sanitizer,
-        bazel=True,
+        bazel=False,
         bazel_remote_cache=bazel_remote_cache,
         bazel_lto=bazel_lto,
     )
