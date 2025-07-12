@@ -166,7 +166,7 @@ fn handle_apply(
             let transform = EquivalencePropagation::default();
             apply_transform(transform, catalog, input)
         }
-        "flatmap_to_map" => {
+        "flat_map_elimination" => {
             use mz_transform::canonicalization::FlatMapElimination;
             let transform = FlatMapElimination;
             apply_transform(transform, catalog, input)
