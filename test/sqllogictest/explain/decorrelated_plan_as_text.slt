@@ -331,10 +331,11 @@ With
   cte l4 =
     Union
       Get l3
-      Project (#0, #2)
-        FlatMap guard_subquery_size(#1)
-          Reduce group_by=[#0] aggregates=[count(*)]
-            Get l3
+      Map (error("more than one record produced in subquery"))
+        Project (#0)
+          Filter (#1 > 1)
+            Reduce group_by=[#0] aggregates=[count(*)]
+              Get l3
   cte l5 =
     Distinct project=[#0, #1]
       Get l0
@@ -351,10 +352,11 @@ With
   cte l8 =
     Union
       Get l7
-      Project (#0, #2)
-        FlatMap guard_subquery_size(#1)
-          Reduce group_by=[#0] aggregates=[count(*)]
-            Get l7
+      Map (error("more than one record produced in subquery"))
+        Project (#0)
+          Filter (#1 > 1)
+            Reduce group_by=[#0] aggregates=[count(*)]
+              Get l7
 Return
   Project (#8, #9)
     Map (#4, #7)

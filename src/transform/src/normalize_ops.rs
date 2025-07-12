@@ -37,7 +37,7 @@ impl crate::Transform for NormalizeOps {
         relation.try_visit_mut_post::<_, crate::TransformError>(
             &mut |expr: &mut MirRelationExpr| {
                 // (a) Might enable fusion in the next step.
-                crate::canonicalization::FlatMapElimination::action(expr);
+                crate::canonicalization::FlatMapToMap::action(expr);
                 crate::canonicalization::TopKElision::action(expr);
                 // (b) Fuse various like-kinded operators. Might enable further canonicalization.
                 crate::fusion::Fusion::action(expr);

@@ -287,9 +287,7 @@ mod tests {
             "FoldConstants" => Ok(Box::new(mz_transform::fold_constants::FoldConstants {
                 limit: None,
             })),
-            "FlatMapElimination" => {
-                Ok(Box::new(mz_transform::canonicalization::FlatMapElimination))
-            }
+            "FlatMapToMap" => Ok(Box::new(mz_transform::canonicalization::FlatMapToMap)),
             "JoinFusion" => Ok(Box::new(mz_transform::fusion::join::Join)),
             "LiteralLifting" => Ok(Box::new(
                 mz_transform::literal_lifting::LiteralLifting::default(),

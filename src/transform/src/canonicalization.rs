@@ -18,7 +18,7 @@ mod flatmap_to_map;
 mod projection_extraction;
 mod topk_elision;
 
-pub use flatmap_to_map::FlatMapElimination;
+pub use flatmap_to_map::FlatMapToMap;
 pub use projection_extraction::ProjectionExtraction;
 pub use topk_elision::TopKElision;
 

@@ -40,11 +40,12 @@ Explained Query:
     cte l1 =
       Union // { arity: 1 }
         Get l0 // { arity: 1 }
-        Project (#1) // { arity: 1 }
-          FlatMap guard_subquery_size(#0{count}) // { arity: 2 }
-            Reduce aggregates=[count(*)] // { arity: 1 }
-              Project () // { arity: 0 }
-                Get l0 // { arity: 1 }
+        Map (error("more than one record produced in subquery")) // { arity: 1 }
+          Project () // { arity: 0 }
+            Filter (#0{count} > 1) // { arity: 1 }
+              Reduce aggregates=[count(*)] // { arity: 1 }
+                Project () // { arity: 0 }
+                  Get l0 // { arity: 1 }
   Return // { arity: 3 }
     CrossJoin type=differential // { arity: 3 }
       implementation

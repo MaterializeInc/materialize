@@ -1980,10 +1980,13 @@ Explained Query:
     cte l1 =
       →Union
         →Stream l0
-        →Table Function guard_subquery_size(#0)
-          →Accumulable GroupAggregate
-            Simple aggregates: count(*)
-            →Read l0
+        →Map/Filter/Project
+          Map: error("more than one record produced in subquery")
+            →Fused Map/Filter/Project
+              Filter: (#0 > 1)
+                →Accumulable GroupAggregate
+                  Simple aggregates: count(*)
+                  →Read l0
   →Return
     →Differential Join %0 » %1
       Join stage 0 in %1

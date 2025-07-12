@@ -18,11 +18,11 @@ use crate::TransformCtx;
 
 /// Turns `FlatMap` into `Map` if only one row is produced by flatmap.
 #[derive(Debug)]
-pub struct FlatMapElimination;
+pub struct FlatMapToMap;
 
-impl crate::Transform for FlatMapElimination {
+impl crate::Transform for FlatMapToMap {
     fn name(&self) -> &'static str {
-        "FlatMapElimination"
+        "FlatMapToMap"
     }
 
     #[mz_ore::instrument(
@@ -41,15 +41,11 @@ impl crate::Transform for FlatMapElimination {
     }
 }
 
-impl FlatMapElimination {
+impl FlatMapToMap {
     /// Turns `FlatMap` into `Map` if only one row is produced by flatmap.
     pub fn action(relation: &mut MirRelationExpr) {
         if let MirRelationExpr::FlatMap { func, exprs, input } = relation {
-            if let TableFunc::GuardSubquerySize { .. } = func {
-                if let Some(1) = exprs[0].as_literal_int64() {
-                    relation.take_safely(None);
-                }
-            } else if let TableFunc::Wrap { width, .. } = func {
+            if let TableFunc::Wrap { width, .. } = func {
                 if *width >= exprs.len() {
                     *relation = input.take_dangerous().map(std::mem::take(exprs));
                 }
@@ -82,7 +78,7 @@ impl FlatMapElimination {
     }
 }
 
-/// Returns `true` for `unnest_~` variants supported by [`FlatMapElimination`].
+/// Returns `true` for `unnest_~` variants supported by [`FlatMapToMap`].
 fn is_supported_unnest(func: &TableFunc) -> bool {
     use TableFunc::*;
     matches!(func, UnnestArray { .. } | UnnestList { .. })

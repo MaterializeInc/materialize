@@ -3057,87 +3057,119 @@ SELECT (SELECT v.a FROM v WHERE v.b = t.b LIMIT 1), (SELECT mv.a FROM mv WHERE m
                                                     },
                                                     "inputs": [
                                                       {
-                                                        "Project": {
+                                                        "Map": {
                                                           "input": {
-                                                            "FlatMap": {
+                                                            "Project": {
                                                               "input": {
-                                                                "Reduce": {
+                                                                "Filter": {
                                                                   "input": {
-                                                                    "Get": {
-                                                                      "id": {
-                                                                        "Local": 4
-                                                                      },
-                                                                      "typ": {
-                                                                        "column_types": [
-                                                                          {
-                                                                            "scalar_type": "Int32",
-                                                                            "nullable": false
+                                                                    "Reduce": {
+                                                                      "input": {
+                                                                        "Get": {
+                                                                          "id": {
+                                                                            "Local": 4
                                                                           },
-                                                                          {
-                                                                            "scalar_type": "Int32",
-                                                                            "nullable": false
-                                                                          }
-                                                                        ],
-                                                                        "keys": [
-                                                                          [
-                                                                            0
-                                                                          ]
-                                                                        ]
+                                                                          "typ": {
+                                                                            "column_types": [
+                                                                              {
+                                                                                "scalar_type": "Int32",
+                                                                                "nullable": false
+                                                                              },
+                                                                              {
+                                                                                "scalar_type": "Int32",
+                                                                                "nullable": false
+                                                                              }
+                                                                            ],
+                                                                            "keys": [
+                                                                              [
+                                                                                0
+                                                                              ]
+                                                                            ]
+                                                                          },
+                                                                          "access_strategy": "UnknownOrLocal"
+                                                                        }
                                                                       },
-                                                                      "access_strategy": "UnknownOrLocal"
+                                                                      "group_key": [
+                                                                        {
+                                                                          "Column": [
+                                                                            0,
+                                                                            null
+                                                                          ]
+                                                                        }
+                                                                      ],
+                                                                      "aggregates": [
+                                                                        {
+                                                                          "func": "Count",
+                                                                          "expr": {
+                                                                            "Literal": [
+                                                                              {
+                                                                                "Ok": {
+                                                                                  "data": [
+                                                                                    2
+                                                                                  ]
+                                                                                }
+                                                                              },
+                                                                              {
+                                                                                "scalar_type": "Bool",
+                                                                                "nullable": false
+                                                                              }
+                                                                            ]
+                                                                          },
+                                                                          "distinct": false
+                                                                        }
+                                                                      ],
+                                                                      "monotonic": false,
+                                                                      "expected_group_size": null
                                                                     }
                                                                   },
-                                                                  "group_key": [
+                                                                  "predicates": [
                                                                     {
-                                                                      "Column": [
-                                                                        0,
-                                                                        null
-                                                                      ]
-                                                                    }
-                                                                  ],
-                                                                  "aggregates": [
-                                                                    {
-                                                                      "func": "Count",
-                                                                      "expr": {
-                                                                        "Literal": [
-                                                                          {
-                                                                            "Ok": {
-                                                                              "data": [
-                                                                                2
-                                                                              ]
+                                                                      "CallBinary": {
+                                                                        "func": "Gt",
+                                                                        "expr1": {
+                                                                          "Column": [
+                                                                            1,
+                                                                            null
+                                                                          ]
+                                                                        },
+                                                                        "expr2": {
+                                                                          "Literal": [
+                                                                            {
+                                                                              "Ok": {
+                                                                                "data": [
+                                                                                  50,
+                                                                                  1
+                                                                                ]
+                                                                              }
+                                                                            },
+                                                                            {
+                                                                              "scalar_type": "Int64",
+                                                                              "nullable": false
                                                                             }
-                                                                          },
-                                                                          {
-                                                                            "scalar_type": "Bool",
-                                                                            "nullable": false
-                                                                          }
-                                                                        ]
-                                                                      },
-                                                                      "distinct": false
+                                                                          ]
+                                                                        }
+                                                                      }
                                                                     }
-                                                                  ],
-                                                                  "monotonic": false,
-                                                                  "expected_group_size": null
-                                                                }
-                                                              },
-                                                              "func": {
-                                                                "GuardSubquerySize": {
-                                                                  "column_type": "Int32"
-                                                                }
-                                                              },
-                                                              "exprs": [
-                                                                {
-                                                                  "Column": [
-                                                                    1,
-                                                                    null
                                                                   ]
                                                                 }
+                                                              },
+                                                              "outputs": [
+                                                                0
                                                               ]
                                                             }
                                                           },
-                                                          "outputs": [
-                                                            0,
-                                                            2
+                                                          "scalars": [
+                                                            {
+                                                              "Literal": [
+                                                                {
+                                                                  "Err": "MultipleRowsFromSubquery"
+                                                                },
+                                                                {
+                                                                  "scalar_type": "Int32",
+                                                                  "nullable": false
+                                                                }
+                                                              ]
+                                                            }
                                                           ]
                                                         }
                                                       }
@@ -3637,87 +3669,119 @@ SELECT (SELECT v.a FROM v WHERE v.b = t.b LIMIT 1), (SELECT mv.a FROM mv WHERE m
                                                     },
                                                     "inputs": [
                                                       {
-                                                        "Project": {
+                                                        "Map": {
                                                           "input": {
-                                                            "FlatMap": {
+                                                            "Project": {
                                                               "input": {
-                                                                "Reduce": {
+                                                                "Filter": {
                                                                   "input": {
-                                                                    "Get": {
-                                                                      "id": {
-                                                                        "Local": 8
-                                                                      },
-                                                                      "typ": {
-                                                                        "column_types": [
-                                                                          {
-                                                                            "scalar_type": "Int32",
-                                                                            "nullable": false
+                                                                    "Reduce": {
+                                                                      "input": {
+                                                                        "Get": {
+                                                                          "id": {
+                                                                            "Local": 8
                                                                           },
-                                                                          {
-                                                                            "scalar_type": "Int32",
-                                                                            "nullable": false
-                                                                          }
-                                                                        ],
-                                                                        "keys": [
-                                                                          [
-                                                                            0
-                                                                          ]
-                                                                        ]
+                                                                          "typ": {
+                                                                            "column_types": [
+                                                                              {
+                                                                                "scalar_type": "Int32",
+                                                                                "nullable": false
+                                                                              },
+                                                                              {
+                                                                                "scalar_type": "Int32",
+                                                                                "nullable": false
+                                                                              }
+                                                                            ],
+                                                                            "keys": [
+                                                                              [
+                                                                                0
+                                                                              ]
+                                                                            ]
+                                                                          },
+                                                                          "access_strategy": "UnknownOrLocal"
+                                                                        }
                                                                       },
-                                                                      "access_strategy": "UnknownOrLocal"
+                                                                      "group_key": [
+                                                                        {
+                                                                          "Column": [
+                                                                            0,
+                                                                            null
+                                                                          ]
+                                                                        }
+                                                                      ],
+                                                                      "aggregates": [
+                                                                        {
+                                                                          "func": "Count",
+                                                                          "expr": {
+                                                                            "Literal": [
+                                                                              {
+                                                                                "Ok": {
+                                                                                  "data": [
+                                                                                    2
+                                                                                  ]
+                                                                                }
+                                                                              },
+                                                                              {
+                                                                                "scalar_type": "Bool",
+                                                                                "nullable": false
+                                                                              }
+                                                                            ]
+                                                                          },
+                                                                          "distinct": false
+                                                                        }
+                                                                      ],
+                                                                      "monotonic": false,
+                                                                      "expected_group_size": null
                                                                     }
                                                                   },
-                                                                  "group_key": [
+                                                                  "predicates": [
                                                                     {
-                                                                      "Column": [
-                                                                        0,
-                                                                        null
-                                                                      ]
-                                                                    }
-                                                                  ],
-                                                                  "aggregates": [
-                                                                    {
-                                                                      "func": "Count",
-                                                                      "expr": {
-                                                                        "Literal": [
-                                                                          {
-                                                                            "Ok": {
-                                                                              "data": [
-                                                                                2
-                                                                              ]
+                                                                      "CallBinary": {
+                                                                        "func": "Gt",
+                                                                        "expr1": {
+                                                                          "Column": [
+                                                                            1,
+                                                                            null
+                                                                          ]
+                                                                        },
+                                                                        "expr2": {
+                                                                          "Literal": [
+                                                                            {
+                                                                              "Ok": {
+                                                                                "data": [
+                                                                                  50,
+                                                                                  1
+                                                                                ]
+                                                                              }
+                                                                            },
+                                                                            {
+                                                                              "scalar_type": "Int64",
+                                                                              "nullable": false
                                                                             }
-                                                                          },
-                                                                          {
-                                                                            "scalar_type": "Bool",
-                                                                            "nullable": false
-                                                                          }
-                                                                        ]
-                                                                      },
-                                                                      "distinct": false
+                                                                          ]
+                                                                        }
+                                                                      }
                                                                     }
-                                                                  ],
-                                                                  "monotonic": false,
-                                                                  "expected_group_size": null
-                                                                }
-                                                              },
-                                                              "func": {
-                                                                "GuardSubquerySize": {
-                                                                  "column_type": "Int32"
-                                                                }
-                                                              },
-                                                              "exprs": [
-                                                                {
-                                                                  "Column": [
-                                                                    1,
-                                                                    null
                                                                   ]
                                                                 }
+                                                              },
+                                                              "outputs": [
+                                                                0
                                                               ]
                                                             }
                                                           },
-                                                          "outputs": [
-                                                            0,
-                                                            2
+                                                          "scalars": [
+                                                            {
+                                                              "Literal": [
+                                                                {
+                                                                  "Err": "MultipleRowsFromSubquery"
+                                                                },
+                                                                {
+                                                                  "scalar_type": "Int32",
+                                                                  "nullable": false
+                                                                }
+                                                              ]
+                                                            }
                                                           ]
                                                         }
                                                       }

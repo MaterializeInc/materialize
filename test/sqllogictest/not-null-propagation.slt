@@ -695,10 +695,11 @@ Explained Query:
       Union // { types: "(integer)" }
         Project (#1{col_not_null}) // { types: "(integer)" }
           ReadStorage materialize.public.int_table // { types: "(integer?, integer)" }
-        Project (#1) // { types: "(integer)" }
-          FlatMap guard_subquery_size(#0{count}) // { types: "(bigint, integer)" }
-            Reduce aggregates=[count(*)] // { types: "(bigint)" }
-              Get l0 // { types: "()" }
+        Map (error("more than one record produced in subquery")) // { types: "(integer)" }
+          Project () // { types: "()" }
+            Filter (#0{count} > 1) // { types: "(bigint)" }
+              Reduce aggregates=[count(*)] // { types: "(bigint)" }
+                Get l0 // { types: "()" }
   Return // { types: "(integer?)" }
     CrossJoin type=differential // { types: "(integer?)" }
       ArrangeBy keys=[[]] // { types: "()" }

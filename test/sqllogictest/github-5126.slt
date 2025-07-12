@@ -68,10 +68,11 @@ With
   cte l4 =
     Union // { arity: 4 }
       Get l3 // { arity: 4 }
-      Project (#0..=#2, #4) // { arity: 4 }
-        FlatMap guard_subquery_size(#3) // { arity: 5 }
-          Reduce group_by=[#0..=#2] aggregates=[count(*)] // { arity: 4 }
-            Get l3 // { arity: 4 }
+      Map (error("more than one record produced in subquery")) // { arity: 4 }
+        Project (#0..=#2) // { arity: 3 }
+          Filter (#3 > 1) // { arity: 4 }
+            Reduce group_by=[#0..=#2] aggregates=[count(*)] // { arity: 4 }
+              Get l3 // { arity: 4 }
 Return // { arity: 3 }
   Project (#3..=#5) // { arity: 3 }
     Project (#0..=#2, #4..=#6) // { arity: 6 }

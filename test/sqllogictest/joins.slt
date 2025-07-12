@@ -562,11 +562,12 @@ Explained Query:
         ArrangeBy keys=[[#0{name}]] // { arity: 1 }
           Union // { arity: 1 }
             Get l0 // { arity: 1 }
-            Project (#1) // { arity: 1 }
-              FlatMap guard_subquery_size(#0{count}) // { arity: 2 }
-                Reduce aggregates=[count(*)] // { arity: 1 }
-                  Project () // { arity: 0 }
-                    Get l0 // { arity: 1 }
+            Map (error("more than one record produced in subquery")) // { arity: 1 }
+              Project () // { arity: 0 }
+                Filter (#0{count} > 1) // { arity: 1 }
+                  Reduce aggregates=[count(*)] // { arity: 1 }
+                    Project () // { arity: 0 }
+                      Get l0 // { arity: 1 }
 
 Source materialize.public.t4362
 
@@ -1171,11 +1172,12 @@ Explained Query:
         Project (#2) // { arity: 1 }
           Map (null) // { arity: 3 }
             ReadStorage materialize.public.a // { arity: 2 }
-        Project (#1) // { arity: 1 }
-          FlatMap guard_subquery_size(#0{count}) // { arity: 2 }
-            Reduce aggregates=[count(*)] // { arity: 1 }
-              Project () // { arity: 0 }
-                ReadStorage materialize.public.a // { arity: 2 }
+        Map (error("more than one record produced in subquery")) // { arity: 1 }
+          Project () // { arity: 0 }
+            Filter (#0{count} > 1) // { arity: 1 }
+              Reduce aggregates=[count(*)] // { arity: 1 }
+                Project () // { arity: 0 }
+                  ReadStorage materialize.public.a // { arity: 2 }
   Return // { arity: 2 }
     Map (4) // { arity: 2 }
       CrossJoin type=differential // { arity: 1 }

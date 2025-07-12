@@ -164,11 +164,12 @@ Explained Query:
     cte l1 =
       Union // { keys: "()" }
         Get l0 // { keys: "()" }
-        Project (#1) // { keys: "()" }
-          FlatMap guard_subquery_size(#0{count}) // { keys: "()" }
-            Reduce aggregates=[count(*)] // { keys: "([])" }
-              Project () // { keys: "()" }
-                Get l0 // { keys: "()" }
+        Map (error("more than one record produced in subquery")) // { keys: "([])" }
+          Project () // { keys: "([])" }
+            Filter (#0{count} > 1) // { keys: "([])" }
+              Reduce aggregates=[count(*)] // { keys: "([])" }
+                Project () // { keys: "()" }
+                  Get l0 // { keys: "()" }
   Return // { keys: "()" }
     Project (#1) // { keys: "()" }
       Map ((#0 = 1)) // { keys: "()" }

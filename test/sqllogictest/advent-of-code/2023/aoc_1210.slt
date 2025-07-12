@@ -537,11 +537,12 @@ Explained Query:
       cte l16 =
         Union // { arity: 2 }
           Get l15 // { arity: 2 }
-          Project (#0, #2) // { arity: 2 }
-            FlatMap guard_subquery_size(#1{count}) // { arity: 3 }
-              Reduce group_by=[#0] aggregates=[count(*)] // { arity: 2 }
-                Project (#0) // { arity: 1 }
-                  Get l15 // { arity: 2 }
+          Map (error("more than one record produced in subquery")) // { arity: 2 }
+            Project (#0) // { arity: 1 }
+              Filter (#1{count} > 1) // { arity: 2 }
+                Reduce group_by=[#0] aggregates=[count(*)] // { arity: 2 }
+                  Project (#0) // { arity: 1 }
+                    Get l15 // { arity: 2 }
       cte l17 =
         Distinct project=[#0..=#2] // { arity: 3 }
           Union // { arity: 3 }

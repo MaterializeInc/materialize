@@ -202,6 +202,5 @@ message ProtoTableFunc {
     google.protobuf.Empty mz_acl_explode = 17;
     mz_repr.relation_and_scalar.ProtoScalarType unnest_map = 18;
     google.protobuf.Empty regexp_matches = 19;
-    mz_repr.relation_and_scalar.ProtoScalarType guard_subquery_size = 20;
   }
 }

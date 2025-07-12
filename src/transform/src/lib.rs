@@ -611,7 +611,7 @@ impl Default for FuseAndCollapse {
                 Box::new(canonicalization::ProjectionExtraction),
                 Box::new(movement::ProjectionLifting::default()),
                 Box::new(fusion::Fusion),
-                Box::new(canonicalization::FlatMapElimination),
+                Box::new(canonicalization::FlatMapToMap),
                 Box::new(fusion::join::Join),
                 Box::new(NormalizeLets::new(false)),
                 Box::new(fusion::reduce::Reduce),

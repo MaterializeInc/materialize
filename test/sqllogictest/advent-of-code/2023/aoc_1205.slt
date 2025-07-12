@@ -1355,9 +1355,9 @@ Explained Query:
                   Union // { arity: 6 }
                     Filter (#4 < #5) // { arity: 6 }
                       Get l15 // { arity: 6 }
-                    Project (#0..=#4, #6) // { arity: 6 }
-                      Filter (#4 < #6) // { arity: 7 }
-                        FlatMap guard_subquery_size(#5{count}) // { arity: 7 }
+                    Map (error("more than one record produced in subquery")) // { arity: 6 }
+                      Project (#0..=#4) // { arity: 5 }
+                        Filter error("more than one record produced in subquery") AND (#5{count} > 1) // { arity: 6 }
                           Reduce group_by=[#0..=#4] aggregates=[count(*)] // { arity: 6 }
                             Project (#0..=#4) // { arity: 5 }
                               Get l15 // { arity: 6 }
@@ -1374,9 +1374,9 @@ Explained Query:
                     Union // { arity: 5 }
                       Filter (#2 < #4) // { arity: 5 }
                         Get l18 // { arity: 5 }
-                      Project (#0..=#3, #5) // { arity: 5 }
-                        Filter (#2 < #5) // { arity: 6 }
-                          FlatMap guard_subquery_size(#4{count}) // { arity: 6 }
+                      Map (error("more than one record produced in subquery")) // { arity: 5 }
+                        Project (#0..=#3) // { arity: 4 }
+                          Filter error("more than one record produced in subquery") AND (#4{count} > 1) // { arity: 5 }
                             Reduce group_by=[#0..=#3] aggregates=[count(*)] // { arity: 5 }
                               Project (#0..=#3) // { arity: 4 }
                                 Get l18 // { arity: 5 }

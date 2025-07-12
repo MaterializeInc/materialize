@@ -164,11 +164,10 @@ Explained Query:
               Filter (#1{f} = 1) // { arity: 2 }
                 Get l0 // { arity: 2 }
             Project (#0{d}) // { arity: 1 }
-              Filter (#2 = 1) // { arity: 3 }
-                FlatMap guard_subquery_size(#1{count}) // { arity: 3 }
-                  Reduce group_by=[#0{d}] aggregates=[count(*)] // { arity: 2 }
-                    Project (#0{d}) // { arity: 1 }
-                      Get l0 // { arity: 2 }
+              Filter error("more than one record produced in subquery") AND (#1{count} > 1) // { arity: 2 }
+                Reduce group_by=[#0{d}] aggregates=[count(*)] // { arity: 2 }
+                  Project (#0{d}) // { arity: 1 }
+                    Get l0 // { arity: 2 }
 
 Source materialize.public.v
   filter=((#0{e}) IS NOT NULL)

@@ -51,11 +51,12 @@ Explained Query:
         ArrangeBy keys=[[]]
           Union
             ReadStorage materialize.public.t_operator
-            Project (#1)
-              FlatMap guard_subquery_size(#0{count})
-                Reduce aggregates=[count(*)]
-                  Project ()
-                    ReadStorage materialize.public.t_operator
+            Map (error("more than one record produced in subquery"))
+              Project ()
+                Filter (#0{count} > 1)
+                  Reduce aggregates=[count(*)]
+                    Project ()
+                      ReadStorage materialize.public.t_operator
 
 Source materialize.public.t_data
 Source materialize.public.t_operator
