@@ -732,6 +732,17 @@ impl MirScalarExpr {
         false
     }
 
+    pub fn contains_err(&self) -> bool {
+        let mut worklist = vec![self];
+        while let Some(expr) = worklist.pop() {
+            if expr.is_literal_err() {
+                return true;
+            }
+            worklist.extend(expr.children());
+        }
+        false
+    }
+
     /// A very crude approximation for scalar expressions that might produce an
     /// error.
     ///
