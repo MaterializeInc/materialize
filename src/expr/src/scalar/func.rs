@@ -2198,6 +2198,9 @@ fn range_difference<'a>(
     propagates_nulls = true
 )]
 fn eq<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
+    // SQL equality demands that if either input is null, then the result should be null. However,
+    // we don't need to handle this case here; it is handled when `BinaryFunc::eval` checks
+    // `propagates_nulls`.
     Datum::from(a == b)
 }
 

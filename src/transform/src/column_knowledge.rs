@@ -783,8 +783,6 @@ fn optimize(
     #[allow(deprecated)]
     expr.visit_mut_pre_post(
         &mut |e| {
-            // We should not eagerly memoize `if` branches that might not be taken.
-            // TODO: Memoize expressions in the intersection of `then` and `els`.
             if let MirScalarExpr::If { then, els, .. } = e {
                 Some(vec![then, els])
             } else {

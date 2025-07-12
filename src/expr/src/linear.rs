@@ -1502,8 +1502,8 @@ pub fn memoize_expr(
                     // updated if they reference a column reference themselves.
                     if *col > input_arity {
                         if let MirScalarExpr::Column(col2, _) = memoized_parts[*col - input_arity] {
-                            // We do _not_ propagate column names, since mis-associationg names and column
-                            // references will be very confusing (and possibly bug inducing).
+                            // We do _not_ propagate column names, since mis-associating names and column
+                            // references will be very confusing (and possibly bug-inducing).
                             *col = col2;
                         }
                     }

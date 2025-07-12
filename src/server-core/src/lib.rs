@@ -191,7 +191,7 @@ impl ConnectionUuidHandle {
         *self.0.lock().expect("lock poisoned") = Some(conn_uuid);
     }
 
-    /// Returns a displayble that renders a possibly missing connection UUID.
+    /// Returns a displayable that renders a possibly missing connection UUID.
     pub fn display(&self) -> impl fmt::Display {
         self.get().display_or("<unknown>")
     }

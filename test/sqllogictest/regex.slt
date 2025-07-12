@@ -434,7 +434,6 @@ INSERT INTO T VALUES ('this is gonna be an invalid regex', '', '\');
 query error db error: ERROR: Evaluation error: invalid regular expression: regex parse error:
 SELECT replace(s, E'\n', '<newline>') FROM t WHERE s ~* regex_pat;
 
-# TODO: multiline literal errors should be printed somehow differently in EXPLAIN
 query T multiline
 EXPLAIN OPTIMIZED PLAN WITH (humanized expressions) AS VERBOSE TEXT FOR
 SELECT *, s~'\' FROM t;

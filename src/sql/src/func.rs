@@ -4956,6 +4956,7 @@ pub static OP_IMPLS: LazyLock<BTreeMap<&'static str, Func>> = LazyLock::new(|| {
         //   same type in planning. However, it's possible that we will perform
         //   equality on types not listed here (e.g. `Varchar`) due to decisions
         //   made in the optimizer.
+        // - Null inputs are handled by `BinaryFunc::eval` checking `propagates_nulls`.
         "=" => Scalar {
             params!(Numeric, Numeric) => BinaryFunc::Eq => Bool, 1752;
             params!(Bool, Bool) => BinaryFunc::Eq => Bool, 91;
