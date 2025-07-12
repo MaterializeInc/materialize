@@ -1325,6 +1325,7 @@ steps:
             run: aws-temporary
             # Cleanup runs in pre-exit hook
             args: [--no-cleanup]
+            ci-builder: stable
       branches: "main v*.* *aws* *tf* *terraform* *helm* *self-managed* *orchestratord*"
 
     - id: terraform-aws-upgrade
@@ -1343,6 +1344,7 @@ steps:
             run: aws-upgrade
             # Cleanup runs in pre-exit hook
             args: [--no-cleanup]
+            ci-builder: stable
       branches: "main v*.* *aws* *tf* *terraform* *helm* *self-managed* *orchestratord*"
 
     - id: terraform-gcp
@@ -1360,6 +1362,7 @@ steps:
             run: gcp-temporary
             # Cleanup runs in pre-exit hook
             args: [--no-cleanup]
+            ci-builder: stable
       branches: "main v*.* *gcp* *tf* *terraform* *helm* *self-managed* *orchestratord*"
 
     - id: terraform-azure
@@ -1377,6 +1380,7 @@ steps:
             run: azure-temporary
             # Cleanup runs in pre-exit hook
             args: [--no-cleanup]
+            ci-builder: stable
       branches: "main v*.* *azure* *tf* *terraform* *helm* *self-managed* *orchestratord*"
 
   - group: "Output consistency"
