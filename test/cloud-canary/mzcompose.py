@@ -424,9 +424,8 @@ def td(
 
     with c.override(testdrive):
         if text:
-            c.testdrive(text, persistent=False)
+            c.testdrive(text)
         if filename:
             c.run_testdrive_files(
                 filename,
-                rm=True,
             )
