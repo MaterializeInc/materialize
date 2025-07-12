@@ -61,6 +61,16 @@ Like all system variables, it is also possible to set a log filter default when 
 Note that this value is passed through to all compute and storage instances when running locally.
 In the future, it is possible to add per-service filtering, if deemed useful.
 
+### Log filtering in tests
+
+When running environmentd tests (i.e `bin/cargo-test environmentd`), the test harness is used to initialize environmentd. To configure log filtering in tests, you'll need to override the `--system-parameter-default` when initializing the test harness. For example:
+```rs
+let server = test_util::TestHarness::default()
+  .with_system_parameter_default("log_filter".to_string(), "my_interesting_module::sub_module=trace,error".to_string())
+  .start()
+  .await;
+```
+
 ## Spans
 
 **Please see [the tracing docs](https://docs.rs/tracing/latest/tracing/index.html#spans) for more information about spans**
