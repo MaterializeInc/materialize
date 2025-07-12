@@ -29,6 +29,7 @@ steps:
           composition: terraform
           run: aws-temporary
           args: ["--tag=$CI_MZ_VERSION", --no-run-testdrive-files]
+          ci-builder: stable
 
   - id: terraform-gcp-tag
     label: "Terraform + Helm Chart E2E on GCP (tagged)"
@@ -43,6 +44,7 @@ steps:
           composition: terraform
           run: gcp-temporary
           args: ["--tag=$CI_MZ_VERSION", --no-run-testdrive-files]
+          ci-builder: stable
 
   - id: terraform-azure-tag
     label: "Terraform + Helm Chart E2E on Azure (tagged)"
@@ -57,6 +59,7 @@ steps:
           composition: terraform
           run: azure-temporary
           args: ["--tag=$CI_MZ_VERSION", --no-run-testdrive-files]
+          ci-builder: stable
 
   - wait: ~
 
