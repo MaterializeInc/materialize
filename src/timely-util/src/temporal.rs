@@ -293,6 +293,7 @@ mod tests {
 
     /// Test a chain with 10M disjoint elements.
     #[mz_ore::test]
+    #[cfg_attr(miri, ignore)] // slow
     fn test_bucket_10m() {
         let limit = 10_000_000;
 
