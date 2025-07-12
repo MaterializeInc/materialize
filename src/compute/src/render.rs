@@ -122,7 +122,6 @@ use mz_compute_types::dataflows::{DataflowDescription, IndexDesc};
 use mz_compute_types::dyncfgs::{
     COMPUTE_APPLY_COLUMN_DEMANDS, COMPUTE_LOGICAL_BACKPRESSURE_INFLIGHT_SLACK,
     COMPUTE_LOGICAL_BACKPRESSURE_MAX_RETAINED_CAPABILITIES, ENABLE_COMPUTE_LOGICAL_BACKPRESSURE,
-    ENABLE_TEMPORAL_BUCKETING,
 };
 use mz_compute_types::plan::LirId;
 use mz_compute_types::plan::render_plan::{
@@ -139,7 +138,6 @@ use mz_timely_util::operator::{CollectionExt, StreamExt};
 use mz_timely_util::probe::{Handle as MzProbeHandle, ProbeNotify};
 use timely::PartialOrder;
 use timely::communication::Allocate;
-use timely::container::CapacityContainerBuilder;
 use timely::dataflow::channels::pact::Pipeline;
 use timely::dataflow::operators::to_stream::ToStream;
 use timely::dataflow::operators::{BranchWhen, Capability, Operator, Probe, probe};
@@ -155,7 +153,6 @@ use crate::arrangement::manager::TraceBundle;
 use crate::compute_state::ComputeState;
 use crate::extensions::arrange::{KeyCollection, MzArrange};
 use crate::extensions::reduce::MzReduce;
-use crate::extensions::temporal_bucket::TemporalBucketing;
 use crate::logging::compute::{
     ComputeEvent, DataflowGlobal, LirMapping, LirMetadata, LogDataflowErrors,
 };
@@ -460,13 +457,6 @@ pub fn build_compute_dataflow<A: Allocate>(
                 );
 
                 for (id, (oks, errs)) in imported_sources.into_iter() {
-                    let oks = if ENABLE_TEMPORAL_BUCKETING.get(&compute_state.worker_config) {
-                        oks.inner
-                            .bucket::<CapacityContainerBuilder<_>>()
-                            .as_collection()
-                    } else {
-                        oks
-                    };
                     let bundle = crate::render::CollectionBundle::from_collections(
                         oks.enter_region(region),
                         errs.enter_region(region),

@@ -24,13 +24,9 @@ ALTER SYSTEM SET compute_replica_expiration_offset = '30d'
   WHERE mz_now() <= event_ts + INTERVAL '20 days';
 > CREATE DEFAULT INDEX ON events_view;
 > INSERT INTO events SELECT x::text, now() FROM generate_series(1, 1000) AS x;
-# TODO: The following query should return 2000, but it returns 1000 because the
-# the arrangement sizes does not account for the temporal bucket. It is part of
-# a different operator, and we only reveal counts associated with arrangement
-# operators.
 > SELECT records FROM mz_introspection.mz_dataflow_arrangement_sizes
   WHERE name LIKE '%events_view_primary_idx';
-1000
+2000
 > DROP TABLE events CASCADE;
 > DROP CLUSTER test;
 
@@ -216,12 +212,9 @@ ALTER SYSTEM SET compute_replica_expiration_offset = 0;
   WHERE mz_now() <= event_ts + INTERVAL '30 days';
 > CREATE DEFAULT INDEX ON events_view;
 > INSERT INTO events SELECT x::text, now() FROM generate_series(1, 1000) AS x;
-# TODO: The following query should return 2000, but it returns 1000 because the
-# the arrangement sizes does not account for the temporal bucket. It is part of
-# a different operator.
 > SELECT records FROM mz_introspection.mz_dataflow_arrangement_sizes
   WHERE name LIKE '%events_view_primary_idx';
-1000
+2000
 > DROP TABLE events CASCADE;
 > DROP CLUSTER test;
 

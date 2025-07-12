@@ -110,7 +110,11 @@ class RepositoryDetails:
         self.image_prefix = image_prefix
         self.bazel = bazel
         self.bazel_remote_cache = bazel_remote_cache
-        self.bazel_lto = bazel_lto
+        self.bazel_lto = (
+            bazel_lto
+            or ui.env_is_truthy("BUILDKITE_TAG")
+            or ui.env_is_truthy("CI_RELEASE_LTO_BUILD")
+        )
 
     def build(
         self,
@@ -160,11 +164,7 @@ class RepositoryDetails:
             # If we're a tagged build, then we'll use stamping to update our
             # build info, otherwise we'll use our side channel/best-effort
             # approach to update it.
-            if (
-                ui.env_is_truthy("BUILDKITE_TAG")
-                or ui.env_is_truthy("CI_RELEASE_LTO_BUILD")
-                or self.bazel_lto
-            ):
+            if self.bazel_lto:
                 flags.append("--config=release-tagged")
             else:
                 flags.append("--config=release-dev")
@@ -1078,7 +1078,9 @@ class ResolvedImage:
         self_hash.update(f"sanitizer={self.image.rd.sanitizer}".encode())
 
         lto = self.image.rd.profile == Profile.RELEASE and (
-            ui.env_is_truthy("BUILDKITE_TAG") or self.image.rd.bazel_lto
+            ui.env_is_truthy("BUILDKITE_TAG")
+            or ui.env_is_truthy("CI_RELEASE_LTO_BUILD")
+            or self.image.rd.bazel_lto
         )
         self_hash.update(f"lto={lto}".encode())
 

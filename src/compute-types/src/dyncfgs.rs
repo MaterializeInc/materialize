@@ -35,13 +35,6 @@ pub const ENABLE_MV_APPEND_SMEARING: Config<bool> = Config::new(
     "Whether the MV sink should distribute appends among workers.",
 );
 
-/// Whether to enable temporal bucketing in compute.
-pub const ENABLE_TEMPORAL_BUCKETING: Config<bool> = Config::new(
-    "enable_compute_temporal_bucketing",
-    false,
-    "Whether to enable temporal bucketing in compute.",
-);
-
 /// The yielding behavior with which linear joins should be rendered.
 pub const LINEAR_JOIN_YIELDING: Config<&str> = Config::new(
     "linear_join_yielding",
@@ -375,7 +368,6 @@ pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
         .add(&ENABLE_MZ_JOIN_CORE)
         .add(&ENABLE_CORRECTION_V2)
         .add(&ENABLE_MV_APPEND_SMEARING)
-        .add(&ENABLE_TEMPORAL_BUCKETING)
         .add(&LINEAR_JOIN_YIELDING)
         .add(&ENABLE_LGALLOC)
         .add(&LGALLOC_BACKGROUND_INTERVAL)

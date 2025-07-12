@@ -108,15 +108,16 @@ so it is executed.""",
         raw = f.read()
     raw = raw.replace("$RUST_VERSION", rust_version())
 
-    bazel = ui.env_is_truthy("CI_BAZEL_BUILD", "1")
-    bazel_lto = ui.env_is_truthy("CI_BAZEL_LTO")
-
     # On 'main' or tagged branches, we use a separate remote cache that only CI can write to.
     if os.environ["BUILDKITE_BRANCH"] == "main" or os.environ["BUILDKITE_TAG"]:
         bazel_remote_cache = "https://bazel-remote-pa.dev.materialize.com"
     else:
         bazel_remote_cache = "https://bazel-remote.dev.materialize.com"
     raw = raw.replace("$BAZEL_REMOTE_CACHE", bazel_remote_cache)
+    pipeline = yaml.safe_load(raw)
+
+    bazel = pipeline.get("env", {}).get("CI_BAZEL_BUILD", 1) == 1
+    bazel_lto = pipeline.get("env", {}).get("CI_BAZEL_LTO", 1) == 1
 
     hash_check: dict[Arch, tuple[str, bool]] = {}
 
@@ -146,8 +147,6 @@ so it is executed.""",
 
     trim_builds_prep_thread = threading.Thread(target=fetch_hashes)
     trim_builds_prep_thread.start()
-
-    pipeline = yaml.safe_load(raw)
 
     # This has to run before other cutting steps because it depends on the id numbers
     if test_selection := os.getenv("CI_TEST_IDS"):
