@@ -11,4 +11,3 @@
 
 pub(crate) mod arrange;
 pub(crate) mod reduce;
-pub(crate) mod temporal_bucket;
