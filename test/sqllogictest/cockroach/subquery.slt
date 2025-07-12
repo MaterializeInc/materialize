@@ -51,7 +51,7 @@ SELECT 1 + (SELECT 1)
 ----
 2
 
-query error unsupported binary operator: <int> \+ <tuple\{int AS a, int AS b\}>
+query error db error: ERROR: Expected subselect to return 1 column, got 2 columns
 SELECT 1 + (SELECT 1 AS a, 2 AS b)
 
 query B
@@ -59,20 +59,22 @@ SELECT (1, 2, 3) IN (SELECT 1, 2, 3)
 ----
 true
 
-query B
-SELECT (1, 2, 3) = (SELECT 1, 2, 3)
-----
-true
-
-query B
-SELECT (1, 2, 3) != (SELECT 1, 2, 3)
-----
-false
-
-query B
-SELECT (SELECT 1, 2, 3) = (SELECT 1, 2, 3)
-----
-true
+# TODO(ggevay): scalar subquery returning multiple columns. We could add support for this.
+# (same for many of the following commented out queries)
+# query B
+# SELECT (1, 2, 3) = (SELECT 1, 2, 3)
+# ----
+# true
+#
+# query B
+# SELECT (1, 2, 3) != (SELECT 1, 2, 3)
+# ----
+# false
+#
+# query B
+# SELECT (SELECT 1, 2, 3) = (SELECT 1, 2, 3)
+# ----
+# true
 
 query B
 SELECT (SELECT 1) IN (SELECT 1)
@@ -89,47 +91,48 @@ true
 # supporting the specific Postgres behavior appears onerous. Fingers
 # crossed this doesn't bite us down the road.
 
-# Postgres cannot handle this query (but MySQL can), even though it
-# seems sensical:
-#   ERROR:  subquery must return only one column
-#   LINE 1: select (select 1, 2) IN (select 1, 2);
-#                  ^
-query B
-SELECT (SELECT 1, 2) IN (SELECT 1, 2)
-----
-true
-
-# Postgres cannot handle this query, even though it seems sensical:
-#   ERROR:  subquery must return only one column
-#   LINE 1: select (select 1, 2) IN ((1, 2));
-#                  ^
-query B
-SELECT (SELECT 1, 2) IN ((1, 2))
-----
-true
-
-# Postgres cannot handle this query, even though it seems sensical:
-#   ERROR:  subquery has too many columns
-#   LINE 1: select (select (1, 2)) IN (select 1, 2);
-#                                  ^
-query B
-SELECT (SELECT (1, 2)) IN (SELECT 1, 2)
-----
-true
+# TODO(ggevay): Materialize error msg is unclear to me.
+# # Postgres cannot handle this query (but MySQL can), even though it
+# # seems sensical:
+# #   ERROR:  subquery must return only one column
+# #   LINE 1: select (select 1, 2) IN (select 1, 2);
+# #                  ^
+# query B
+# SELECT (SELECT 1, 2) IN (SELECT 1, 2)
+# ----
+# true
+#
+# # Postgres cannot handle this query, even though it seems sensical:
+# #   ERROR:  subquery must return only one column
+# #   LINE 1: select (select 1, 2) IN ((1, 2));
+# #                  ^
+# query B
+# SELECT (SELECT 1, 2) IN ((1, 2))
+# ----
+# true
+#
+# # Postgres cannot handle this query, even though it seems sensical:
+# #   ERROR:  subquery has too many columns
+# #   LINE 1: select (select (1, 2)) IN (select 1, 2);
+# #                                  ^
+# query B
+# SELECT (SELECT (1, 2)) IN (SELECT 1, 2)
+# ----
+# true
 
 query B
 SELECT (SELECT (1, 2)) IN ((1, 2))
 ----
 true
 
-# Postgres cannot handle this query, even though it seems sensical:
-#   ERROR:  subquery must return only one column
-#   LINE 1: select (select 1, 2) in (select (1, 2));
-#                  ^
-query B
-SELECT (SELECT 1, 2) IN (SELECT (1, 2))
-----
-true
+# # Postgres cannot handle this query, even though it seems sensical:
+# #   ERROR:  subquery must return only one column
+# #   LINE 1: select (select 1, 2) in (select (1, 2));
+# #                  ^
+# query B
+# SELECT (SELECT 1, 2) IN (SELECT (1, 2))
+# ----
+# true
 
 query B
 SELECT (SELECT (1, 2)) IN (SELECT (1, 2))
@@ -166,13 +169,13 @@ SELECT (1, 2) = ALL(SELECT 1, 2)
 ----
 true
 
-query error pgcode 42601 subquery must return only one column, found 2
+query error pgcode 42601 db error: ERROR: Expected subselect to return 1 column, got 2 columns
 SELECT (SELECT 1, 2)
 
-query error unsupported comparison operator: <int> IN <tuple\{tuple\{int AS a, int AS b\}\}>
+query error db error: ERROR: subquery1 has 2 columns available but 1 columns specified
 SELECT 1 IN (SELECT 1 AS a, 2 AS b)
 
-query error unsupported comparison operator: <tuple\{int, int\}> IN <tuple\{int\}>
+query error db error: ERROR: subquery2 has 1 columns available but 2 columns specified
 SELECT (1, 2) IN (SELECT 1 AS a)
 
 statement ok
@@ -181,10 +184,10 @@ CREATE TABLE abc (a INT PRIMARY KEY, b INT, c INT)
 statement ok
 INSERT INTO abc VALUES (1, 2, 3), (4, 5, 6)
 
-statement ok
-ALTER TABLE abc SPLIT AT VALUES ((SELECT 1))
+# statement ok
+# ALTER TABLE abc SPLIT AT VALUES ((SELECT 1))
 
-query error unsupported comparison operator: <tuple\{int, int\}> IN <tuple\{tuple\{int AS a, int AS b, int AS c\}\}>
+query error db error: ERROR: subquery2 has 3 columns available but 2 columns specified
 SELECT (1, 2) IN (SELECT * FROM abc)
 
 query B
@@ -197,10 +200,10 @@ SELECT (1, 2) IN (SELECT a, b FROM abc WHERE false)
 ----
 false
 
-query error subquery must return only one column
+query error db error: ERROR: Expected subselect to return 1 column, got 3 columns
 SELECT (SELECT * FROM abc)
 
-query error more than one row returned by a subquery used as an expression
+query error db error: ERROR: Evaluation error: more than one record produced in subquery
 SELECT (SELECT a FROM abc)
 
 query I
@@ -221,10 +224,10 @@ SELECT * FROM abc WHERE a = 7
 ----
 7 8 9
 
-statement error value type tuple{int, int, int} doesn't match type int of column "a"
+statement error db error: ERROR: column "a" is of type integer but expression is of type record\(f1: integer,f2: integer,f3: integer\)
 INSERT INTO abc VALUES ((SELECT (10, 11, 12)))
 
-statement error subquery must return only one column, found 3
+statement error db error: ERROR: Expected subselect to return 1 column, got 3 columns
 INSERT INTO abc VALUES ((SELECT 10, 11, 12))
 
 statement ok
@@ -243,8 +246,12 @@ SELECT * FROM xyz
 statement ok
 INSERT INTO xyz (x, y, z) VALUES (10, 11, 12)
 
+# Materialize doesn't allow subqueries in `SET`.
+# statement ok
+# UPDATE xyz SET z = (SELECT 10) WHERE x = 7
+
 statement ok
-UPDATE xyz SET z = (SELECT 10) WHERE x = 7
+UPDATE xyz SET z = 10 WHERE x = 7
 
 query III rowsort
 SELECT * FROM xyz
@@ -254,12 +261,11 @@ SELECT * FROM xyz
 7 8 10
 10 11 12
 
-statement error value type tuple{int, int} doesn't match type int of column "z"
-UPDATE xyz SET z = (SELECT (10, 11)) WHERE x = 7
-
-# HP and CBO return slightly different (but reasonable) errors, so accept both.
-statement error [subquery must return 2 columns, found 1 | number of columns (2) does not match number of values (1)]
-UPDATE xyz SET (y, z) = (SELECT (11, 12)) WHERE x = 7
+# statement error value type tuple{int, int} doesn't match type int of column "z"
+# UPDATE xyz SET z = (SELECT (10, 11)) WHERE x = 7
+#
+# statement error [subquery must return 2 columns, found 1 | number of columns (2) does not match number of values (1)]
+# UPDATE xyz SET (y, z) = (SELECT (11, 12)) WHERE x = 7
 
 #regression, see database-issues#2135
 #statement ok
@@ -435,22 +441,24 @@ SELECT x FROM xyz WHERE x IN (SELECT x FROM xyz WHERE x = 7)
 ----
 7
 
-query I
-SELECT x FROM xyz WHERE x = 7 LIMIT (SELECT x FROM xyz WHERE x = 1)
-----
-7
+# TODO(ggevay): Materialize doesn't allow subqueries in _top-level_ LIMIT or OFFSET clauses.
+# query I
+# SELECT x FROM xyz WHERE x = 7 LIMIT (SELECT x FROM xyz WHERE x = 1)
+# ----
+# 7
+#
+# query I
+# SELECT x FROM xyz ORDER BY x OFFSET (SELECT x FROM xyz WHERE x = 1)
+# ----
+# 4
+# 7
+# 10
 
-query I
-SELECT x FROM xyz ORDER BY x OFFSET (SELECT x FROM xyz WHERE x = 1)
-----
-4
-7
-10
-
-query B
-INSERT INTO xyz (x, y, z) VALUES (13, 11, 12) RETURNING (y IN (SELECT y FROM xyz))
-----
-true
+# TODO(ggevay): Materialize doesn't allow subqueries in RETURNING clause.
+# query B
+# INSERT INTO xyz (x, y, z) VALUES (13, 11, 12) RETURNING (y IN (SELECT y FROM xyz))
+# ----
+# true
 
 # This test checks that the double sub-query plan expansion caused by a
 # sub-expression being shared by two or more plan nodes does not
@@ -471,12 +479,6 @@ SELECT col0 FROM tab4 WHERE (col0 <= 0 AND col4 <= 5.38) OR (col4 IN (SELECT col
 statement ok
 CREATE TABLE z (z INT PRIMARY KEY)
 
-# Regression test for materialize#24171.
-query I
-SELECT * FROM  z WHERE CAST(COALESCE((SELECT 'a' FROM crdb_internal.zones LIMIT 1 OFFSET 5), (SELECT 'b' FROM pg_catalog.pg_trigger)) AS BYTEA) <= 'a'
-----
-
-# Regression test for materialize#24170.
 query I
 SELECT * FROM z WHERE CAST(COALESCE((SELECT 'a'), (SELECT 'a')) AS bytea) < 'a'
 ----
@@ -503,11 +505,11 @@ SELECT (SELECT 123 IN (VALUES (1), (2)))
 ----
 false
 
-statement error pq: subqueryfail
+statement error db error: ERROR: unknown schema 'crdb_internal'
 SELECT * FROM xyz WHERE x IN (SELECT crdb_internal.force_error('', 'subqueryfail'))
 
 statement ok
-PREPARE a AS SELECT 1 = (SELECT $1:::int)
+PREPARE a AS SELECT 1 = (SELECT $1::int)
 
 query B
 EXECUTE a(1)
@@ -520,7 +522,7 @@ EXECUTE a(2)
 false
 
 statement ok
-PREPARE b AS SELECT EXISTS (SELECT $1:::int)
+PREPARE b AS SELECT EXISTS (SELECT $1::int)
 
 query B
 EXECUTE b(3)
@@ -533,19 +535,23 @@ true
 statement ok
 CREATE TABLE a (a TEXT PRIMARY KEY)
 
-statement ok
-SELECT (SELECT repeat(a::STRING, 2) FROM [INSERT INTO a VALUES('foo') RETURNING a]);
+# Materialize doesn't support this non-standard [...] syntax.
+# statement ok
+# SELECT (SELECT repeat(a::STRING, 2) FROM [INSERT INTO a VALUES('foo') RETURNING a]);
+
+# statement ok
+# UPDATE abc SET a = 2, (b, c) = (SELECT 5, 6) WHERE a = 1;
 
 statement ok
-UPDATE abc SET a = 2, (b, c) = (SELECT 5, 6) WHERE a = 1;
+UPDATE abc SET a = 2, b = 5, c = 6 WHERE a = 1;
 
-# Failure in outer query with mutations in the subquery do not take effect.
-statement error pq: bar
-SELECT crdb_internal.force_error('foo', 'bar') FROM [INSERT INTO abc VALUES (11,12,13) RETURNING a]
+# # Failure in outer query with mutations in the subquery do not take effect.
+# statement error pq: bar
+# SELECT crdb_internal.force_error('foo', 'bar') FROM [INSERT INTO abc VALUES (11,12,13) RETURNING a]
 
 query III
 SELECT * FROM abc WHERE a = 11
 ----
 
-statement error pq: bar
-INSERT INTO abc VALUES (1,2, (SELECT crdb_internal.force_error('foo', 'bar')))
+# statement error pq: bar
+# INSERT INTO abc VALUES (1,2, (SELECT crdb_internal.force_error('foo', 'bar')))

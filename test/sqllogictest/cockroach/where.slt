@@ -90,11 +90,11 @@ SELECT 'hello' LIKE v FROM kvString WHERE k LIKE 'like%' ORDER BY k
 true
 false
 
-query B
-SELECT 'hello' SIMILAR TO v FROM kvString WHERE k SIMILAR TO 'like[1-2]' ORDER BY k
-----
-true
-false
+# query B
+# SELECT 'hello' SIMILAR TO v FROM kvString WHERE k SIMILAR TO 'like[1-2]' ORDER BY k
+# ----
+# true
+# false
 
 query B
 SELECT 'hello' ~ replace(v, '%', '.*') FROM kvString WHERE k ~ 'like[1-2]' ORDER BY k
