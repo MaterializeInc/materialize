@@ -10,7 +10,7 @@ publish = false
 workspace = true
 
 [dependencies]
-darling = "0.20.11"
+darling = "0.21.0"
 insta = { version = "1.43", optional = true, features = ["serde"] }
 prettyplease = { version = "0.2", optional = true }
 proc-macro2 = "1.0"
