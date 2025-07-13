@@ -1868,8 +1868,19 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "bab5b6b26ca5c422e9e203cd01be745028a79439988f154c1f0cf2ae47806193"
 dependencies = [
  "bytemuck",
- "columnar_derive",
+ "columnar_derive 0.2.5",
  "serde",
+ "smallvec",
+]
+
+[[package]]
+name = "columnar"
+version = "0.9.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "cb02edea000f77235c7c0112071cc14f60d7380cd010bf7339ed006204e334ac"
+dependencies = [
+ "bytemuck",
+ "columnar_derive 0.3.0",
  "smallvec",
 ]
 
@@ -1882,6 +1893,17 @@ dependencies = [
  "proc-macro2",
  "quote",
  "serde",
+ "syn 2.0.104",
+]
+
+[[package]]
+name = "columnar_derive"
+version = "0.3.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e9fe79597c93826f56d2cf75daa26677bdb060497a71bf694efb52ca9f73cdda"
+dependencies = [
+ "proc-macro2",
+ "quote",
  "syn 2.0.104",
 ]
 
@@ -2549,7 +2571,7 @@ version = "0.15.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a455d273f7d0c0e1669bd384a065e30ba5e5fe18e5ef2fb67200b649e9487e93"
 dependencies = [
- "columnar",
+ "columnar 0.6.0",
  "columnation",
  "fnv",
  "paste",
@@ -5524,7 +5546,7 @@ dependencies = [
  "anyhow",
  "async-stream",
  "bytesize",
- "columnar",
+ "columnar 0.9.0",
  "core_affinity",
  "crossbeam-channel",
  "dec",
@@ -5614,7 +5636,7 @@ dependencies = [
 name = "mz-compute-types"
 version = "0.0.0"
 dependencies = [
- "columnar",
+ "columnar 0.9.0",
  "columnation",
  "differential-dataflow",
  "itertools 0.14.0",
@@ -6558,7 +6580,7 @@ dependencies = [
  "bytes",
  "chrono",
  "clap",
- "columnar",
+ "columnar 0.9.0",
  "columnation",
  "compact_bytes",
  "console-subscriber",
@@ -7055,7 +7077,7 @@ dependencies = [
  "bytes",
  "cfg-if",
  "chrono",
- "columnar",
+ "columnar 0.9.0",
  "columnation",
  "compact_bytes",
  "criterion",
@@ -7915,7 +7937,7 @@ dependencies = [
  "ahash",
  "bincode",
  "bytemuck",
- "columnar",
+ "columnar 0.9.0",
  "columnation",
  "differential-dataflow",
  "either",
@@ -11233,7 +11255,7 @@ checksum = "17c9007b6f132ad1983f50665419e157c3386e5ab2706b3a6d29f832aef211ad"
 dependencies = [
  "bincode",
  "byteorder",
- "columnar",
+ "columnar 0.6.0",
  "columnation",
  "getopts",
  "serde",
@@ -11257,7 +11279,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c0913c463e192579113ebf1f2a50cdfd9d2c682281490b6c704ffbf951568c29"
 dependencies = [
  "byteorder",
- "columnar",
+ "columnar 0.6.0",
  "getopts",
  "serde",
  "timely_bytes",
