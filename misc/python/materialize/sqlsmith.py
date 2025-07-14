@@ -135,4 +135,5 @@ known_errors = [
     "exceeded recursion limit of 2048",
     "key cannot be null",  # expected, see PR materialize#25941
     "regexp_extract must specify at least one capture group",
+    "array_fill with arrays not yet supported",
 ]
