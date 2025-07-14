@@ -85,19 +85,16 @@ See also:
 
 In Materialize, a materialized view is a view whose underlying query is executed
 during the view creation. The view results are persisted in durable storage,
-**and, as new data arrives, incrementally updated**.
+**and, as new data arrives, incrementally updated**. Materialized views can be
+referenced across [clusters](/concepts/clusters/).
+
+To create materialized views, use the [`CREATE MATERIALIZED
+VIEW`](/sql/create-materialized-view) command:
 
 ```mzsql
 CREATE MATERIALIZED VIEW my_mat_view_name AS
   SELECT ... FROM ...  ;
 ```
-
-Materialized views can be referenced across [clusters](/concepts/clusters/).
-
-You can also index a materialized view to maintain the results in memory within
-the cluster. This enables queries within the cluster to use the index to access
-view results from memory.
-
 
 See also:
 
@@ -106,32 +103,39 @@ See also:
 
 ### Hydration and materialized views
 
+Materialized view undergoes hydration when it is created or when its cluster is
+restarted. Hydration refers to the reconstruction of in-memory state by reading
+data from Materialize’s storage layer; hydration does not require reading data
+from the upstream system.
+
 During hydration, materialized views require memory proportional to both
 the input and output.
 
 ### Indexes on materialized views
 
-In Materalize, materialized views can be indexed.
+In Materialize, materialized views can be queried from any cluster. In addition,
+in Materialize, materialized views can be indexed to make the results available
+in memory within the cluster associated with the index. For example, in a 3-tier
+architecture where you have a separate source cluster(s), a separate
+compute/transform cluster(s) with materialized views, and a separate serving
+cluster(s), you can create **in the serving cluster** an index on the
+materialized views.
 
 ```mzsql
 CREATE INDEX idx_on_my_view ON my_mat_view_name(...) ;
 ```
 
-Because materialized views maintain the up-to-date results in durable storage,
-indexes on materialized views serve up-to-date results without themselves
-performing the incremental computation. However, unlike materialized views that
-are accessible across clusters, indexes are accessible only within the cluster.
+Because materialized views already maintain the up-to-date results in durable
+storage, indexes on materialized views can serve up-to-date results without
+having to perform additional computation.
 
 {{< note >}}
-
-A materialized view can be queried from any cluster whereas its indexed results
-are available only within the cluster you create the index. Querying a
-materialized view, whether indexed or not, from any cluster is computationally
-free. However, querying an indexed materialized view within the cluster where
-the index is created is faster since the results are served from memory rather
-than from storage.
-
+Querying a materialized view, whether indexed or not, from any cluster is
+computationally free. However, querying an indexed materialized view within the
+cluster associated with the index is faster since the results are served from
+memory rather than from storage.
 {{</ note >}}
+
 
 See also:
 
@@ -142,7 +146,10 @@ See also:
 ## Indexed views vs. materialized views
 
 {{% views-indexes/table-usage-pattern-intro %}}
+
 {{% views-indexes/table-usage-pattern %}}
+
+{{% include-md file="shared-content/mat-view-use-cases.md" %}}
 
 ## General information
 
