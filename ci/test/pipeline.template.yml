@@ -232,7 +232,7 @@ steps:
     plugins:
       - ./ci/plugins/mzcompose:
           composition: cargo-test
-          ci-builder: stable
+          ci-builder: nightly
     agents:
       queue: hetzner-x86-64-dedi-48cpu-192gb
 

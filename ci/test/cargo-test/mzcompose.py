@@ -97,6 +97,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         MZ_S3_UPLOADER_TEST_S3_BUCKET="mz-test-1d-lifecycle-delete",
         MZ_PERSIST_EXTERNAL_STORAGE_TEST_AZURE_CONTAINER="mz-test-azure",
         MZ_PERSIST_EXTERNAL_STORAGE_TEST_POSTGRES_URL=cockroach_url,
+        CARGOFLAGS="-Z bindeps",
     )
 
     coverage = ui.env_is_truthy("CI_COVERAGE_ENABLED")
@@ -218,18 +219,6 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
                         "--profile=ci",
                     ],
                 )
-            else:
-                spawn.runv(
-                    [
-                        "cargo",
-                        "build",
-                        "--workspace",
-                        "--bin",
-                        "clusterd",
-                        "--profile=ci",
-                    ],
-                    env=env,
-                )
 
             partition = buildkite.get_parallelism_index() + 1
             total = buildkite.get_parallelism_count()
@@ -281,6 +270,8 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
                         "cargo",
                         "nextest",
                         "run",
+                        "-Z",
+                        "bindeps",
                         "--workspace",
                         "--all-features",
                         "--profile=ci",

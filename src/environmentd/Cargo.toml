@@ -139,6 +139,7 @@ http-body-util = "0.1.3"
 insta = { version = "1.43", features = ["json"] }
 itertools = "0.14.0"
 jsonwebtoken = "9.3.1"
+mz-clusterd = { path = "../clusterd", artifact = "bin:clusterd" }
 mz-environmentd = { path = "../environmentd", features = ["test"] }
 mz-pgrepr = { path = "../pgrepr" }
 mz-pgtest = { path = "../pgtest" }
