@@ -639,7 +639,6 @@ where
     metrics: Arc<Metrics>,
 
     write_schemas: Schemas<K, V>,
-    num_updates: usize,
     parts: BatchParts<T>,
 
     // These provide a bit more safety against appending a batch with the wrong
@@ -667,7 +666,6 @@ where
             blob,
             metrics,
             write_schemas,
-            num_updates: 0,
             parts,
             shard_id,
             version,
@@ -692,7 +690,11 @@ where
         let mut run_parts = vec![];
         let mut run_splits = vec![];
         let mut run_meta = vec![];
-        for (order, parts) in runs {
+        let total_updates = runs
+            .iter()
+            .map(|(_, _, num_updates)| num_updates)
+            .sum::<usize>();
+        for (order, parts, num_updates) in runs {
             if parts.is_empty() {
                 continue;
             }
@@ -709,6 +711,11 @@ where
                 } else {
                     None
                 },
+                len: if write_run_ids {
+                    Some(num_updates)
+                } else {
+                    None
+                },
             });
             run_parts.extend(parts);
         }
@@ -720,7 +727,7 @@ where
             self.blob,
             shard_metrics,
             self.version,
-            HollowBatch::new(desc, run_parts, self.num_updates, run_meta, run_splits),
+            HollowBatch::new(desc, run_parts, total_updates, run_meta, run_splits),
         );
 
         Ok(batch)
@@ -747,8 +754,25 @@ where
             .batch
             .step_part_writing
             .inc_by(start.elapsed().as_secs_f64());
+    }
+}
 
-        self.num_updates += num_updates;
+#[derive(Debug, Clone)]
+pub(crate) struct RunWithMeta<T> {
+    pub parts: Vec<RunPart<T>>,
+    pub num_updates: usize,
+}
+
+impl<T> RunWithMeta<T> {
+    pub fn new(parts: Vec<RunPart<T>>, num_updates: usize) -> Self {
+        Self { parts, num_updates }
+    }
+
+    pub fn single(part: RunPart<T>, num_updates: usize) -> Self {
+        Self {
+            parts: vec![part],
+            num_updates,
+        }
     }
 }
 
@@ -757,10 +781,10 @@ enum WritingRuns<T> {
     /// Building a single run with the specified ordering. Parts are expected to be internally
     /// sorted and added in order. Merging a vec of parts will shift them out to a hollow run
     /// in blob, bounding the total length of a run in memory.
-    Ordered(RunOrder, MergeTree<Pending<RunPart<T>>>),
+    Ordered(RunOrder, MergeTree<Pending<RunWithMeta<T>>>),
     /// Building multiple runs which may have different orders. Merging a vec of runs will cause
     /// them to be compacted together, bounding the total number of runs we generate.
-    Compacting(MergeTree<(RunOrder, Pending<Vec<RunPart<T>>>)>),
+    Compacting(MergeTree<(RunOrder, Pending<RunWithMeta<T>>)>),
 }
 
 // TODO: If this is dropped, cancel (and delete?) any writing parts and delete
@@ -806,7 +830,7 @@ impl<T: Timestamp + Codec64> BatchParts<T> {
             // Clamping to prevent extreme values given weird configs.
             let runs_per_compaction = runs_per_compaction.clamp(2, 1024);
 
-            let merge_fn = move |parts: Vec<(RunOrder, Pending<Vec<RunPart<T>>>)>| {
+            let merge_fn = move |parts: Vec<(RunOrder, Pending<RunWithMeta<T>>)>| {
                 let blob = Arc::clone(&blob);
                 let metrics = Arc::clone(&metrics);
                 let shard_metrics = Arc::clone(&shard_metrics);
@@ -819,6 +843,7 @@ impl<T: Timestamp + Codec64> BatchParts<T> {
                     async move {
                         let runs: Vec<_> = stream::iter(parts)
                             .then(|(order, parts)| async move {
+                                let completed_run = parts.into_result().await;
                                 (
                                     RunMeta {
                                         order: Some(order),
@@ -831,8 +856,13 @@ impl<T: Timestamp + Codec64> BatchParts<T> {
                                         } else {
                                             None
                                         },
+                                        len: if cfg.incremental_compaction {
+                                            Some(completed_run.num_updates)
+                                        } else {
+                                            None
+                                        },
                                     },
-                                    parts.into_result().await,
+                                    completed_run.parts,
                                 )
                             })
                             .collect()
@@ -862,7 +892,9 @@ impl<T: Timestamp + Codec64> BatchParts<T> {
                             1,
                             "compaction is guaranteed to emit a single run"
                         );
-                        output_batch.parts
+                        let total_compacted_updates: usize = output_batch.len;
+
+                        RunWithMeta::new(output_batch.parts, total_compacted_updates)
                     }
                     .instrument(debug_span!("batch::compact_runs")),
                 );
@@ -903,27 +935,38 @@ impl<T: Timestamp + Codec64> BatchParts<T> {
             let run_length_limit = (order == RunOrder::Unordered)
                 .then_some(usize::MAX)
                 .unwrap_or(cfg.run_length_limit);
-            let merge_fn = move |parts| {
+            let merge_fn = move |parts: Vec<Pending<RunWithMeta<T>>>| {
                 let blob = Arc::clone(&blob);
                 let writer_key = writer_key.clone();
                 let metrics = Arc::clone(&metrics);
                 let handle = mz_ore::task::spawn(
                     || "batch::spill_run",
                     async move {
-                        let parts = stream::iter(parts)
-                            .then(|p: Pending<RunPart<T>>| p.into_result())
+                        let completed_runs: Vec<RunWithMeta<T>> = stream::iter(parts)
+                            .then(|p| p.into_result())
                             .collect()
                             .await;
+
+                        let mut all_run_parts = Vec::new();
+                        let mut total_updates = 0;
+
+                        for completed_run in completed_runs {
+                            all_run_parts.extend(completed_run.parts);
+                            total_updates += completed_run.num_updates;
+                        }
+
                         let run_ref = HollowRunRef::set::<D>(
                             shard_id,
                             blob.as_ref(),
                             &writer_key,
-                            HollowRun { parts },
+                            HollowRun {
+                                parts: all_run_parts,
+                            },
                             &*metrics,
                         )
                         .await;
 
-                        RunPart::Many(run_ref)
+                        RunWithMeta::single(RunPart::Many(run_ref), total_updates)
                     }
                     .instrument(debug_span!("batch::spill_run")),
                 );
@@ -961,6 +1004,7 @@ impl<T: Timestamp + Codec64> BatchParts<T> {
         let batch_metrics = self.batch_metrics.clone();
         let index = self.next_index;
         self.next_index += 1;
+        let num_updates = updates.len();
         let ts_rewrite = None;
         let schema_id = write_schemas.id;
 
@@ -984,13 +1028,16 @@ impl<T: Timestamp + Codec64> BatchParts<T> {
                         .step_inline
                         .inc_by(start.elapsed().as_secs_f64());
 
-                    RunPart::Single(BatchPart::Inline {
-                        updates,
-                        ts_rewrite,
-                        schema_id,
-                        // Field has been deprecated but kept around to roundtrip state.
-                        deprecated_schema_id: None,
-                    })
+                    RunWithMeta::single(
+                        RunPart::Single(BatchPart::Inline {
+                            updates,
+                            ts_rewrite,
+                            schema_id,
+                            // Field has been deprecated but kept around to roundtrip state.
+                            deprecated_schema_id: None,
+                        }),
+                        num_updates,
+                    )
                 }
                 .instrument(span)
                 .boxed(),
@@ -1001,24 +1048,35 @@ impl<T: Timestamp + Codec64> BatchParts<T> {
                 updates,
                 index,
             };
+            let cfg = self.cfg.clone();
+            let blob = Arc::clone(&self.blob);
+            let metrics = Arc::clone(&self.metrics);
+            let shard_metrics = Arc::clone(&self.shard_metrics);
+            let isolated_runtime = Arc::clone(&self.isolated_runtime);
+            let expected_order = self.expected_order();
+            let encoded_diffs_sum = D::encode(&diffs_sum);
+            let write_schemas_clone = write_schemas.clone();
             let write_span =
                 debug_span!("batch::write_part", shard = %self.shard_metrics.shard_id).or_current();
             (
                 "batch::write_part",
-                BatchParts::write_hollow_part(
-                    self.cfg.clone(),
-                    Arc::clone(&self.blob),
-                    Arc::clone(&self.metrics),
-                    Arc::clone(&self.shard_metrics),
-                    batch_metrics.clone(),
-                    Arc::clone(&self.isolated_runtime),
-                    part,
-                    self.expected_order(),
-                    ts_rewrite,
-                    D::encode(&diffs_sum),
-                    write_schemas.clone(),
-                )
-                .map(RunPart::Single)
+                async move {
+                    let part = BatchParts::write_hollow_part(
+                        cfg,
+                        blob,
+                        metrics,
+                        shard_metrics,
+                        batch_metrics,
+                        isolated_runtime,
+                        part,
+                        expected_order,
+                        ts_rewrite,
+                        encoded_diffs_sum,
+                        write_schemas_clone,
+                    )
+                    .await;
+                    RunWithMeta::single(RunPart::Single(part), num_updates)
+                }
                 .instrument(write_span)
                 .boxed(),
             )
@@ -1042,9 +1100,7 @@ impl<T: Timestamp + Codec64> BatchParts<T> {
                 }
             }
             WritingRuns::Compacting(batches) => {
-                let run = Pending::Writing(mz_ore::task::spawn(|| name, async move {
-                    vec![write_future.await]
-                }));
+                let run = Pending::Writing(mz_ore::task::spawn(|| name, write_future));
                 batches.push((RunOrder::Unordered, run));
 
                 // Allow up to `max_outstanding_parts` (or one compaction) to be pending, and block
@@ -1240,30 +1296,37 @@ impl<T: Timestamp + Codec64> BatchParts<T> {
     }
 
     #[instrument(level = "debug", name = "batch::finish_upload", fields(shard = %self.shard_id))]
-    pub(crate) async fn finish(self) -> Vec<(RunOrder, Vec<RunPart<T>>)> {
+    pub(crate) async fn finish(self) -> Vec<(RunOrder, Vec<RunPart<T>>, usize)> {
         match self.writing_runs {
             WritingRuns::Ordered(RunOrder::Unordered, run) => {
-                let parts = run.finish();
-                let mut output = Vec::with_capacity(parts.len());
-                for part in parts {
-                    output.push((RunOrder::Unordered, vec![part.into_result().await]));
+                let completed_runs = run.finish();
+                let mut output = Vec::with_capacity(completed_runs.len());
+                for completed_run in completed_runs {
+                    let completed_run = completed_run.into_result().await;
+                    // Each part becomes its own run for unordered case
+                    for part in completed_run.parts {
+                        output.push((RunOrder::Unordered, vec![part], completed_run.num_updates));
+                    }
                 }
                 output
             }
             WritingRuns::Ordered(order, run) => {
-                let parts = run.finish();
-                let mut output = Vec::with_capacity(parts.len());
-                for part in parts {
-                    output.push(part.into_result().await);
+                let completed_runs = run.finish();
+                let mut all_parts = Vec::new();
+                let mut all_update_counts = 0;
+                for completed_run in completed_runs {
+                    let completed_run = completed_run.into_result().await;
+                    all_parts.extend(completed_run.parts);
+                    all_update_counts += completed_run.num_updates;
                 }
-                vec![(order, output)]
+                vec![(order, all_parts, all_update_counts)]
             }
             WritingRuns::Compacting(batches) => {
                 let runs = batches.finish();
-                let mut output = Vec::with_capacity(runs.len());
+                let mut output = Vec::new();
                 for (order, run) in runs {
-                    let run = run.into_result().await;
-                    output.push((order, run))
+                    let completed_run = run.into_result().await;
+                    output.push((order, completed_run.parts, completed_run.num_updates));
                 }
                 output
             }
