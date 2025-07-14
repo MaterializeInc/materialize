@@ -39,10 +39,10 @@ Bind {"statement": "q", "portal": "p"}
 ----
 
 # Unfortunately we cannot wait for BindComplete because it doesn't show up
-# until Sync, so this is probably a bit racey. But since this will initiate a
-# new connection, seems likely that the Bind always gets processed before this
-# connection is ready.
+# until Sync, so this is probably a bit racey. We need the bind to get processed before the `DROP TABLE`. We sleep first
+# to increase the chances of this.
 send conn=writer
+Query {"query": "SELECT mz_unsafe.mz_sleep(1)"}
 Query {"query": "DROP TABLE t"}
 Query {"query": "CREATE TABLE t (c INT, b INT)"}
 Query {"query": "INSERT INTO t VALUES (1, 2)"}
@@ -52,7 +52,12 @@ until conn=writer
 ReadyForQuery
 ReadyForQuery
 ReadyForQuery
+ReadyForQuery
 ----
+RowDescription {"fields":[{"name":"?column?"}]}
+DataRow {"fields":["NULL"]}
+CommandComplete {"tag":"SELECT 1"}
+ReadyForQuery {"status":"I"}
 CommandComplete {"tag":"DROP TABLE"}
 ReadyForQuery {"status":"I"}
 CommandComplete {"tag":"CREATE TABLE"}
