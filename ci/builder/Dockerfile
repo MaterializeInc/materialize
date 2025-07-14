@@ -158,8 +158,6 @@ RUN apt-get update --fix-missing && TZ=UTC DEBIAN_FRONTEND=noninteractive apt-ge
     python3 \
     python3-dev \
     python3-setuptools \
-    qemu-system \
-    qemu-user-static \
     rsync \
     ruby \
     unzip \
