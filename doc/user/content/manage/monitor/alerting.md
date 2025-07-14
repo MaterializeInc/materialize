@@ -43,7 +43,7 @@ Credits | Consumption rate increase by X% | Consumption rate increase by Y% | Av
 
 Materialize has a [release and a maintenance window almost every week](/releases/) at a defined [schedule](/releases/#schedule). We announce every maintenance window on the [status page](https://status.materialize.com/), where you can subscribe to updates and receive alerts for this, or an unexpected incident at Materialize.
 
-After an upgrade, you’ll experience a few minutes of downtime and the rehydration process. Alerts may get triggered during this brief period of time. For this case, you can configure your monitoring tool to avoid unnecessary alerts as follows:
+During an upgrade, clients may experience brief connection interruptions, but the service otherwise remains fully available. Alerts may get triggered during this brief period of time. For this case, you can configure your monitoring tool to avoid unnecessary alerts as follows:
 
 * [Datadog downtimes](https://docs.datadoghq.com/monitors/downtimes/)
 * [Grafana mute timings](https://grafana.com/docs/grafana/latest/alerting/manage-notifications/mute-timings/)
