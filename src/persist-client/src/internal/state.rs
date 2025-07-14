@@ -11,6 +11,7 @@ use anyhow::ensure;
 use async_stream::{stream, try_stream};
 use differential_dataflow::difference::Semigroup;
 use mz_persist::metrics::ColumnarMetrics;
+use proptest::prelude::{Arbitrary, Strategy};
 use std::borrow::Cow;
 use std::cmp::Ordering;
 use std::collections::BTreeMap;
@@ -752,7 +753,7 @@ pub(crate) enum RunOrder {
     Structured,
 }
 
-#[derive(Clone, PartialEq, Eq, Ord, PartialOrd, Serialize)]
+#[derive(Clone, PartialEq, Eq, Ord, PartialOrd, Serialize, Copy, Hash)]
 pub struct RunId(pub(crate) [u8; 16]);
 
 impl std::fmt::Display for RunId {
@@ -784,6 +785,17 @@ impl From<RunId> for String {
 impl RunId {
     pub(crate) fn new() -> Self {
         RunId(*Uuid::new_v4().as_bytes())
+    }
+}
+
+impl Arbitrary for RunId {
+    type Parameters = ();
+    type Strategy = proptest::strategy::BoxedStrategy<Self>;
+    fn arbitrary_with(_args: Self::Parameters) -> Self::Strategy {
+        Strategy::prop_map(proptest::prelude::any::<u128>(), |n| {
+            RunId(*Uuid::from_u128(n).as_bytes())
+        })
+        .boxed()
     }
 }
 
@@ -2789,6 +2801,7 @@ pub struct Upper<T>(pub Antichain<T>);
 #[cfg(test)]
 pub(crate) mod tests {
     use std::ops::Range;
+    use std::str::FromStr;
 
     use bytes::Bytes;
     use mz_build_info::DUMMY_BUILD_INFO;
@@ -4313,5 +4326,14 @@ pub(crate) mod tests {
         // Downgrade to v0.9.0 is _NOT_ allowed.
         let res = open_and_write(&mut clients, Version::new(0, 9, 0), shard_id).await;
         assert!(res.unwrap_err().is_panic());
+    }
+
+    #[mz_ore::test]
+    fn runid_roundtrip() {
+        proptest!(|(runid: RunId)| {
+            let runid_str = runid.to_string();
+            let parsed = RunId::from_str(&runid_str);
+            prop_assert_eq!(parsed, Ok(runid));
+        });
     }
 }

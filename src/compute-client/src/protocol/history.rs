@@ -34,7 +34,7 @@ pub struct ComputeCommandHistory<M, T = mz_repr::Timestamp> {
     /// can be unified, or dataflows that can be dropped due to allowed compaction.
     commands: Vec<ComputeCommand<T>>,
     /// Tracked metrics.
-    metrics: Option<HistoryMetrics<M>>,
+    metrics: HistoryMetrics<M>,
 }
 
 impl<M, T> ComputeCommandHistory<M, T>
@@ -43,10 +43,8 @@ where
     T: timely::progress::Timestamp,
 {
     /// TODO(database-issues#7533): Add documentation.
-    pub fn new(mut metrics: Option<HistoryMetrics<M>>) -> Self {
-        if let Some(metrics) = metrics.as_mut() {
-            metrics.reset();
-        }
+    pub fn new(metrics: HistoryMetrics<M>) -> Self {
+        metrics.reset();
 
         Self {
             reduced_count: 0,
@@ -63,13 +61,17 @@ where
 
         if self.commands.len() > 2 * self.reduced_count {
             self.reduce();
-        } else if let Some(metrics) = self.metrics.as_mut() {
+        } else {
             // Refresh reported metrics. `reduce` already refreshes metrics, so we only need to do
             // that here in the non-reduce case.
             let command = self.commands.last().expect("pushed above");
-            metrics.command_counts.for_command(command).borrow().inc();
+            self.metrics
+                .command_counts
+                .for_command(command)
+                .borrow()
+                .inc();
             if matches!(command, ComputeCommand::CreateDataflow(_)) {
-                metrics.dataflow_count.borrow().inc();
+                self.metrics.dataflow_count.borrow().inc();
             }
         }
     }
@@ -185,84 +187,60 @@ where
 
         // When we update `metrics`, we need to be careful to not transiently report incorrect
         // counts, as they would be observable by other threads.
+        let command_counts = &self.metrics.command_counts;
+        let dataflow_count = &self.metrics.dataflow_count;
 
-        if let Some(metrics) = &self.metrics {
-            let count = u64::from(create_timely_command.is_some());
-            metrics.command_counts.create_timely.borrow().set(count);
-        }
+        let count = u64::from(create_timely_command.is_some());
+        command_counts.create_timely.borrow().set(count);
         if let Some(create_timely_command) = create_timely_command {
             self.commands.push(create_timely_command);
         }
 
-        if let Some(metrics) = &self.metrics {
-            let count = u64::from(create_inst_command.is_some());
-            metrics.command_counts.create_instance.borrow().set(count);
-        }
+        let count = u64::from(create_inst_command.is_some());
+        command_counts.create_instance.borrow().set(count);
         if let Some(create_inst_command) = create_inst_command {
             self.commands.push(create_inst_command);
         }
 
-        if let Some(metrics) = &self.metrics {
-            let count = u64::from(!final_configuration.all_unset());
-            metrics
-                .command_counts
-                .update_configuration
-                .borrow()
-                .set(count);
-        }
+        let count = u64::from(!final_configuration.all_unset());
+        command_counts.update_configuration.borrow().set(count);
         if !final_configuration.all_unset() {
             let config = Box::new(final_configuration);
             self.commands
                 .push(ComputeCommand::UpdateConfiguration(config));
         }
 
-        if let Some(metrics) = &self.metrics {
-            let count = u64::cast_from(created_dataflows.len());
-            metrics.command_counts.create_dataflow.borrow().set(count);
-            metrics.dataflow_count.borrow().set(count);
-        }
+        let count = u64::cast_from(created_dataflows.len());
+        command_counts.create_dataflow.borrow().set(count);
+        dataflow_count.borrow().set(count);
         for dataflow in created_dataflows {
             self.commands.push(ComputeCommand::CreateDataflow(dataflow));
         }
 
-        if let Some(metrics) = &self.metrics {
-            let count = u64::cast_from(scheduled_collections.len());
-            metrics.command_counts.schedule.borrow().set(count);
-        }
+        let count = u64::cast_from(scheduled_collections.len());
+        command_counts.schedule.borrow().set(count);
         for id in scheduled_collections {
             self.commands.push(ComputeCommand::Schedule(id));
         }
 
-        if let Some(metrics) = &self.metrics {
-            let count = u64::cast_from(live_peeks.len());
-            metrics.command_counts.peek.borrow().set(count);
-        }
+        let count = u64::cast_from(live_peeks.len());
+        command_counts.peek.borrow().set(count);
         for peek in live_peeks.into_values() {
             self.commands.push(ComputeCommand::Peek(peek));
         }
 
-        if let Some(metrics) = &self.metrics {
-            metrics.command_counts.cancel_peek.borrow().set(0);
-        }
+        command_counts.cancel_peek.borrow().set(0);
 
         // Allow compaction only after emitting peek commands.
-        if let Some(metrics) = &self.metrics {
-            let count = u64::cast_from(final_frontiers.len());
-            metrics.command_counts.allow_compaction.borrow().set(count);
-        }
+        let count = u64::cast_from(final_frontiers.len());
+        command_counts.allow_compaction.borrow().set(count);
         for (id, frontier) in final_frontiers {
             self.commands
                 .push(ComputeCommand::AllowCompaction { id, frontier });
         }
 
-        if let Some(metrics) = &self.metrics {
-            let count = u64::from(initialization_complete);
-            metrics
-                .command_counts
-                .initialization_complete
-                .borrow()
-                .set(count);
-        }
+        let count = u64::from(initialization_complete);
+        command_counts.initialization_complete.borrow().set(count);
         if initialization_complete {
             self.commands.push(ComputeCommand::InitializationComplete);
         }
@@ -279,8 +257,12 @@ where
         self.commands.retain(|command| {
             use ComputeCommand::*;
             let is_peek = matches!(command, Peek(_) | CancelPeek { .. });
-            if is_peek && let Some(metrics) = &self.metrics {
-                metrics.command_counts.for_command(command).borrow().dec();
+            if is_peek {
+                self.metrics
+                    .command_counts
+                    .for_command(command)
+                    .borrow()
+                    .dec();
             }
             !is_peek
         });
@@ -308,14 +290,5 @@ where
     /// Iterate through the contained commands.
     pub fn iter(&self) -> impl Iterator<Item = &ComputeCommand<T>> {
         self.commands.iter()
-    }
-}
-
-impl<M, T> IntoIterator for ComputeCommandHistory<M, T> {
-    type Item = ComputeCommand<T>;
-    type IntoIter = std::vec::IntoIter<Self::Item>;
-
-    fn into_iter(self) -> Self::IntoIter {
-        self.commands.into_iter()
     }
 }

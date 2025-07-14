@@ -804,19 +804,18 @@ Explained Query:
         Project (#0{a}) // { arity: 1 }
           Join on=(#0{a} = #1) type=differential // { arity: 2 }
             implementation
-              %0:t_pk[#0{a}]UKiif » %1[#0]UKiif
+              %0:t_pk[#0{a}]UKiif » %1[#0]Kiif
             ArrangeBy keys=[[#0{a}]] // { arity: 1 }
               Project (#0{a}) // { arity: 1 }
                 Filter (#0{a} <= 195) AND (#0{a} >= 38) // { arity: 2 }
                   ReadStorage materialize.public.t_pk // { arity: 2 }
             ArrangeBy keys=[[#0]] // { arity: 1 }
-              Map (error("more than one record produced in subquery")) // { arity: 1 }
-                Project () // { arity: 0 }
-                  Filter (#0{count} > 1) // { arity: 1 }
-                    Reduce aggregates=[count(*)] // { arity: 1 }
-                      Project () // { arity: 0 }
-                        Filter (#0{a} = 1308) // { arity: 2 }
-                          ReadStorage materialize.public.t // { arity: 2 }
+              Project (#1) // { arity: 1 }
+                FlatMap guard_subquery_size(#0{count}) // { arity: 2 }
+                  Reduce aggregates=[count(*)] // { arity: 1 }
+                    Project () // { arity: 0 }
+                      Filter (#0{a} = 1308) // { arity: 2 }
+                        ReadStorage materialize.public.t // { arity: 2 }
   Return // { arity: 1 }
     Union // { arity: 1 }
       Get l0 // { arity: 1 }
@@ -847,19 +846,18 @@ Explained Query:
         Project (#0{a}) // { arity: 1 }
           Join on=(#0{a} = #1) type=differential // { arity: 2 }
             implementation
-              %1[#0]UK » %0:t[#0{a}]Kiif
+              %0:t[#0{a}]Kiif » %1[#0]Kiif
             ArrangeBy keys=[[#0{a}]] // { arity: 1 }
               Project (#0{a}) // { arity: 1 }
                 Filter (#0{a} <= 195) AND (#0{a} >= 38) // { arity: 2 }
                   ReadStorage materialize.public.t // { arity: 2 }
             ArrangeBy keys=[[#0]] // { arity: 1 }
-              Map (error("more than one record produced in subquery")) // { arity: 1 }
-                Project () // { arity: 0 }
-                  Filter (#0{count} > 1) // { arity: 1 }
-                    Reduce aggregates=[count(*)] // { arity: 1 }
-                      Project () // { arity: 0 }
-                        Filter (#0{a} = 1308) // { arity: 2 }
-                          ReadStorage materialize.public.t // { arity: 2 }
+              Project (#1) // { arity: 1 }
+                FlatMap guard_subquery_size(#0{count}) // { arity: 2 }
+                  Reduce aggregates=[count(*)] // { arity: 1 }
+                    Project () // { arity: 0 }
+                      Filter (#0{a} = 1308) // { arity: 2 }
+                        ReadStorage materialize.public.t // { arity: 2 }
   Return // { arity: 1 }
     Union // { arity: 1 }
       Get l0 // { arity: 1 }
@@ -919,8 +917,8 @@ EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, arity, join implementations) 
 Explained Query:
   CrossJoin type=delta // { arity: 4 }
     implementation
-      %0:t1 » %2[×]U » %1:t1[×]ef
-      %1:t1 » %2[×]U » %0:t1[×]
+      %0:t1 » %1:t1[×]ef » %2[×]ef
+      %1:t1 » %2[×]ef » %0:t1[×]
       %2 » %1:t1[×]ef » %0:t1[×]
     ArrangeBy keys=[[]] // { arity: 2 }
       ReadStorage materialize.public.t1 // { arity: 2 }
@@ -929,10 +927,11 @@ Explained Query:
         ReadStorage materialize.public.t1 // { arity: 2 }
     ArrangeBy keys=[[]] // { arity: 0 }
       Project () // { arity: 0 }
-        Filter error("more than one record produced in subquery") AND (#0{count} > 1) // { arity: 1 }
-          Reduce aggregates=[count(*)] // { arity: 1 }
-            Project () // { arity: 0 }
-              ReadStorage materialize.public.t1 // { arity: 2 }
+        Filter (9 = integer_to_double(#1)) // { arity: 2 }
+          FlatMap guard_subquery_size(#0{count}) // { arity: 2 }
+            Reduce aggregates=[count(*)] // { arity: 1 }
+              Project () // { arity: 0 }
+                ReadStorage materialize.public.t1 // { arity: 2 }
 
 Source materialize.public.t1
 

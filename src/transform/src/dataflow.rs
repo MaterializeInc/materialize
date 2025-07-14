@@ -99,6 +99,10 @@ pub fn optimize_dataflow(
         transform_ctx.df_meta,
     )?;
 
+    // Warning: If you want to add a transform call here, consider it very carefully whether it
+    // could accidentally invalidate information that we already derived above in
+    // `optimize_dataflow_monotonic` or `prune_and_annotate_dataflow_index_imports`.
+
     mz_repr::explain::trace_plan(dataflow);
 
     Ok(())

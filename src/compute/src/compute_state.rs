@@ -203,7 +203,7 @@ impl ComputeState {
         context: ComputeInstanceContext,
     ) -> Self {
         let traces = TraceManager::new(metrics.clone());
-        let command_history = ComputeCommandHistory::new(Some(metrics.for_history()));
+        let command_history = ComputeCommandHistory::new(metrics.for_history());
         let (hydration_tx, hydration_rx) = mpsc::channel();
 
         // We always initialize as read_only=true. Only when we're explicitly

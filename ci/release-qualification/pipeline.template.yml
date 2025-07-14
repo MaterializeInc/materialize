@@ -38,8 +38,6 @@ steps:
 
       - id: build-x86_64
         label: ":bazel: Build x86_64"
-        env:
-          CI_BAZEL_BUILD: "1"
         command: bin/ci-builder run min bin/pyactivate -m ci.test.build
         inputs:
           - "*"

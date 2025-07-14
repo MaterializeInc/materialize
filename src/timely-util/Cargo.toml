@@ -19,7 +19,7 @@ differential-dataflow = "0.15.3"
 either = "1"
 futures-util = "0.3.31"
 lgalloc = "0.6"
-mz-ore = { path = "../ore", features = ["async", "process", "tracing", "test", "num-traits", "region", "differential-dataflow", "overflowing"] }
+mz-ore = { path = "../ore", default-features = false, features = ["async", "process", "tracing", "test", "num-traits", "region", "differential-dataflow", "overflowing"] }
 num-traits = "0.2"
 proptest = { version = "1.7.0", default-features = false, features = ["std"] }
 serde = { version = "1.0.219", features = ["derive"] }
@@ -30,7 +30,7 @@ uuid = { version = "1.17.0", features = ["serde", "v4"] }
 workspace-hack = { version = "0.0.0", path = "../workspace-hack", optional = true }
 
 [features]
-default = ["workspace-hack"]
+default = ["mz-ore/default", "workspace-hack"]
 
 [package.metadata.cargo-udeps.ignore]
 normal = ["workspace-hack"]

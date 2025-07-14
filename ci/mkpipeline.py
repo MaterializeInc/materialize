@@ -108,15 +108,16 @@ so it is executed.""",
         raw = f.read()
     raw = raw.replace("$RUST_VERSION", rust_version())
 
-    bazel = ui.env_is_truthy("CI_BAZEL_BUILD", "1")
-    bazel_lto = ui.env_is_truthy("CI_BAZEL_LTO")
-
     # On 'main' or tagged branches, we use a separate remote cache that only CI can write to.
     if os.environ["BUILDKITE_BRANCH"] == "main" or os.environ["BUILDKITE_TAG"]:
         bazel_remote_cache = "https://bazel-remote-pa.dev.materialize.com"
     else:
         bazel_remote_cache = "https://bazel-remote.dev.materialize.com"
     raw = raw.replace("$BAZEL_REMOTE_CACHE", bazel_remote_cache)
+    pipeline = yaml.safe_load(raw)
+
+    bazel = pipeline.get("env", {}).get("CI_BAZEL_BUILD", 1) == 1
+    bazel_lto = pipeline.get("env", {}).get("CI_BAZEL_LTO", 1) == 1
 
     hash_check: dict[Arch, tuple[str, bool]] = {}
 
@@ -146,8 +147,6 @@ so it is executed.""",
 
     trim_builds_prep_thread = threading.Thread(target=fetch_hashes)
     trim_builds_prep_thread.start()
-
-    pipeline = yaml.safe_load(raw)
 
     # This has to run before other cutting steps because it depends on the id numbers
     if test_selection := os.getenv("CI_TEST_IDS"):
@@ -373,9 +372,6 @@ def increase_agents_timeouts(
 
 def switch_jobs_to_aws(pipeline: Any, priority: int) -> None:
     """Switch jobs to AWS if Hetzner is currently overloaded"""
-
-    # branch = os.getenv("BUILDKITE_BRANCH")
-
     # If Hetzner is entirely broken, you have to take these actions to switch everything back to AWS:
     # - CI_FORCE_SWITCH_TO_AWS env variable to 1
     # - Reconfigure the agent from hetzner-aarch64-4cpu-8gb to linux-aarch64-small in https://buildkite.com/materialize/test/settings/steps and other pipelines
@@ -383,10 +379,34 @@ def switch_jobs_to_aws(pipeline: Any, priority: int) -> None:
 
     stuck: set[str] = set()
     # TODO(def-): Remove me when Hetzner fixes its aarch64 availability
-    stuck.add("aarch64")
+    stuck.update(
+        [
+            "hetzner-aarch64-16cpu-32gb",
+            "hetzner-aarch64-8cpu-16gb",
+            "hetzner-aarch64-4cpu-8gb",
+            "hetzner-aarch64-2cpu-4gb",
+        ]
+    )
 
     if ui.env_is_truthy("CI_FORCE_SWITCH_TO_AWS", "0"):
-        stuck = set(["x86-64", "x86-64-dedi", "aarch64"])
+        stuck = set(
+            {
+                "hetzner-x86-64-16cpu-32gb",
+                "hetzner-x86-64-8cpu-16gb",
+                "hetzner-x86-64-4cpu-8gb",
+                "hetzner-x86-64-2cpu-4gb",
+                "hetzner-aarch64-16cpu-32gb",
+                "hetzner-aarch64-8cpu-16gb",
+                "hetzner-aarch64-4cpu-8gb",
+                "hetzner-aarch64-2cpu-4gb",
+                "hetzner-x86-64-dedi-48cpu-192gb",
+                "hetzner-x86-64-dedi-32cpu-128gb",
+                "hetzner-x86-64-dedi-16cpu-64gb",
+                "hetzner-x86-64-dedi-8cpu-32gb",
+                "hetzner-x86-64-dedi-4cpu-16gb",
+                "hetzner-x86-64-dedi-2cpu-8gb",
+            }
+        )
     else:
         # TODO(def-): Reenable me when Hetzner fixes its aarch64 availability
         # If priority has manually been set to be low, or on main branch, we can
@@ -394,7 +414,7 @@ def switch_jobs_to_aws(pipeline: Any, priority: int) -> None:
         # if branch == "main" or priority < 0:
         #     return
 
-        # Consider Hetzner to be overloaded/broken when an important job is stuck waiting for an agent for > 60 minutes, per arch (x86-64/x86-64-dedi/aarch64)
+        # Consider Hetzner to be overloaded/broken when an important job is stuck waiting for an agent for > 20 minutes
         try:
             builds = generic_api.get_multiple(
                 "builds",
@@ -420,11 +440,7 @@ def switch_jobs_to_aws(pipeline: Any, priority: int) -> None:
                     if not queue.startswith("hetzner-"):
                         continue
 
-                    # "hetzner-x86-64-dedi-4cpu-8gb" => "x86-64-dedi"
-                    # "hetzner-x86-64-4cpu-8gb"      => "x86-64"
-                    # "hetzner-aarch64-4cpu-8gb"     => "aarch64"
-                    queue_prefix = "-".join(queue.split("-")[1:-2])
-                    if queue_prefix in stuck:
+                    if queue in stuck:
                         continue
 
                     if job.get("state") != "scheduled":
@@ -435,13 +451,13 @@ def switch_jobs_to_aws(pipeline: Any, priority: int) -> None:
                         continue
                     if datetime.now(timezone.utc) - datetime.fromisoformat(
                         runnable
-                    ) < timedelta(hours=1):
+                    ) < timedelta(minutes=20):
                         continue
 
                     print(
-                        f"Job {job.get('id')} ({job.get('web_url')}) with priority {priority} is runnable since {runnable} on {queue}, considering {queue_prefix} stuck"
+                        f"Job {job.get('id')} ({job.get('web_url')}) with priority {priority} is runnable since {runnable} on {queue}, considering {queue} stuck"
                     )
-                    stuck.add(queue_prefix)
+                    stuck.add(queue)
         except Exception:
             print("switch_jobs_to_aws failed, ignoring:")
             traceback.print_exc()
@@ -450,60 +466,64 @@ def switch_jobs_to_aws(pipeline: Any, priority: int) -> None:
     if not stuck:
         return
 
-    print(f"Queue prefixes stuck in Hetzner, switching to AWS or another arch: {stuck}")
+    print(f"Queues stuck in Hetzner, switching to AWS or another arch: {stuck}")
 
     def visit(config: Any) -> None:
-        if "agents" in config:
-            agent = config["agents"].get("queue", None)
-            if "aarch64" in stuck:
-                if "x86-64" not in stuck:
-                    if agent == "hetzner-aarch64-2cpu-4gb":
-                        config["agents"]["queue"] = "hetzner-x86-64-2cpu-4gb"
-                        if config.get("depends_on") == "build-aarch64":
-                            config["depends_on"] = "build-x86_64"
-                    elif agent == "hetzner-aarch64-4cpu-8gb":
-                        config["agents"]["queue"] = "hetzner-x86-64-4cpu-8gb"
-                        if config.get("depends_on") == "build-aarch64":
-                            config["depends_on"] = "build-x86_64"
-                    elif agent == "hetzner-aarch64-8cpu-16gb":
-                        config["agents"]["queue"] = "hetzner-x86-64-8cpu-16gb"
-                        if config.get("depends_on") == "build-aarch64":
-                            config["depends_on"] = "build-x86_64"
-                    elif agent == "hetzner-aarch64-16cpu-32gb":
-                        config["agents"]["queue"] = "hetzner-x86-64-16cpu-32gb"
-                        if config.get("depends_on") == "build-aarch64":
-                            config["depends_on"] = "build-x86_64"
-                else:
-                    if agent in (
-                        "hetzner-aarch64-4cpu-8gb",
-                        "hetzner-aarch64-2cpu-4gb",
-                    ):
-                        config["agents"]["queue"] = "linux-aarch64"
-                    elif agent in (
-                        "hetzner-aarch64-8cpu-16gb",
-                        "hetzner-aarch64-16cpu-32gb",
-                    ):
-                        config["agents"]["queue"] = "linux-aarch64-medium"
-            if "x86-64" in stuck:
-                if agent in ("hetzner-x86-64-4cpu-8gb", "hetzner-x86-64-2cpu-4gb"):
-                    config["agents"]["queue"] = "linux-x86_64"
-                elif agent in ("hetzner-x86-64-8cpu-16gb", "hetzner-x86-64-16cpu-32gb"):
-                    config["agents"]["queue"] = "linux-x86_64-medium"
-            if "x86-64-dedi" in stuck:
-                if agent == "hetzner-x86-64-dedi-2cpu-8gb":
-                    config["agents"]["queue"] = "linux-x86_64"
-                elif agent == "hetzner-x86-64-dedi-4cpu-16gb":
-                    config["agents"]["queue"] = "linux-x86_64-medium"
-                elif agent in (
-                    "hetzner-x86-64-dedi-8cpu-32gb",
-                    "hetzner-x86-64-dedi-16cpu-64gb",
-                ):
-                    config["agents"]["queue"] = "linux-x86_64-large"
-                elif agent in (
-                    "hetzner-x86-64-dedi-32cpu-128gb",
-                    "hetzner-x86-64-dedi-48cpu-192gb",
-                ):
-                    config["agents"]["queue"] = "builder-linux-x86_64"
+        if "agents" not in config:
+            return
+
+        agent = config["agents"].get("queue", None)
+        if not agent in stuck:
+            return
+
+        if agent == "hetzner-aarch64-2cpu-4gb":
+            if "hetzner-x86-64-2cpu-4gb" not in stuck:
+                config["agents"]["queue"] = "hetzner-x86-64-2cpu-4gb"
+                if config.get("depends_on") == "build-aarch64":
+                    config["depends_on"] = "build-x86_64"
+            else:
+                config["agents"]["queue"] = "linux-aarch64"
+        elif agent == "hetzner-aarch64-4cpu-8gb":
+            if "hetzner-x86-64-4cpu-8gb" not in stuck:
+                config["agents"]["queue"] = "hetzner-x86-64-4cpu-8gb"
+                if config.get("depends_on") == "build-aarch64":
+                    config["depends_on"] = "build-x86_64"
+            else:
+                config["agents"]["queue"] = "linux-aarch64"
+        elif agent == "hetzner-aarch64-8cpu-16gb":
+            if "hetzner-x86-64-8cpu-16gb" not in stuck:
+                config["agents"]["queue"] = "hetzner-x86-64-8cpu-16gb"
+                if config.get("depends_on") == "build-aarch64":
+                    config["depends_on"] = "build-x86_64"
+            else:
+                config["agents"]["queue"] = "linux-aarch64-medium"
+
+        elif agent == "hetzner-aarch64-16cpu-32gb":
+            if "hetzner-x86-64-16cpu-32gb" not in stuck:
+                config["agents"]["queue"] = "hetzner-x86-64-16cpu-32gb"
+                if config.get("depends_on") == "build-aarch64":
+                    config["depends_on"] = "build-x86_64"
+            else:
+                config["agents"]["queue"] = "linux-aarch64-medium"
+
+        elif agent in ("hetzner-x86-64-4cpu-8gb", "hetzner-x86-64-2cpu-4gb"):
+            config["agents"]["queue"] = "linux-x86_64"
+        elif agent in ("hetzner-x86-64-8cpu-16gb", "hetzner-x86-64-16cpu-32gb"):
+            config["agents"]["queue"] = "linux-x86_64-medium"
+        elif agent == "hetzner-x86-64-dedi-2cpu-8gb":
+            config["agents"]["queue"] = "linux-x86_64"
+        elif agent == "hetzner-x86-64-dedi-4cpu-16gb":
+            config["agents"]["queue"] = "linux-x86_64-medium"
+        elif agent in (
+            "hetzner-x86-64-dedi-8cpu-32gb",
+            "hetzner-x86-64-dedi-16cpu-64gb",
+        ):
+            config["agents"]["queue"] = "linux-x86_64-large"
+        elif agent in (
+            "hetzner-x86-64-dedi-32cpu-128gb",
+            "hetzner-x86-64-dedi-48cpu-192gb",
+        ):
+            config["agents"]["queue"] = "builder-linux-x86_64"
 
     for config in pipeline["steps"]:
         if "trigger" in config or "wait" in config:

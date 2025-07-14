@@ -298,6 +298,7 @@ trufflehog_jq_filter_logs() {
     (.Raw | contains("jdbc:postgresql://cockroach") | not) and
     (.Raw | contains("materialize:materialize") | not) and
     (.Raw | contains("ExpirationReaper") | not) and
+    (.Raw | contains("u1@example.com") | not) and
     .Raw != "[REDACTED]"
   )'
 }

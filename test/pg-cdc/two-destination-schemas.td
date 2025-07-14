@@ -23,8 +23,8 @@
 $ postgres-execute connection=postgres://postgres:postgres@postgres
 ALTER USER postgres WITH replication;
 DROP PUBLICATION IF EXISTS mz_source;
-DROP TABLE IF EXISTS t1;
-DROP TABLE IF EXISTS t2;
+DROP TABLE IF EXISTS t1 CASCADE;
+DROP TABLE IF EXISTS t2 CASCADE;
 
 CREATE TABLE t1 (f1 INTEGER);
 ALTER TABLE t1 REPLICA IDENTITY FULL;
