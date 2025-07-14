@@ -309,7 +309,7 @@ pub(crate) fn render<G: Scope<Timestamp = Lsn>>(
                     ));
                     let () = return_definite_error(
                         definite_error.clone(),
-                        capture_instances.values().flat_map(|indexes| indexes.iter()),
+                        capture_instances.values().flat_map(|indexes| indexes.iter().copied()),
                         data_output,
                         data_cap_set,
                         definite_error_handle,
@@ -395,7 +395,7 @@ type StackedAsyncOutputHandle<T, D> = AsyncOutputHandle<
 /// Helper method to return a "definite" error upstream.
 async fn return_definite_error(
     err: DefiniteError,
-    outputs: impl Iterator<Item = &u64>,
+    outputs: impl Iterator<Item = u64>,
     data_handle: StackedAsyncOutputHandle<Lsn, (u64, Result<SourceMessage, DataflowError>)>,
     data_capset: &CapabilitySet<Lsn>,
     errs_handle: AsyncOutputHandle<
@@ -407,7 +407,7 @@ async fn return_definite_error(
 ) {
     for output_idx in outputs {
         let update = (
-            (*output_idx, Err(err.clone().into())),
+            (output_idx, Err(err.clone().into())),
             // TODO(sql_server1): Provide the correct LSN.
             Lsn::minimum(),
             Diff::ONE,
