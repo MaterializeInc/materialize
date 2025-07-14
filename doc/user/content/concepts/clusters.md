@@ -109,9 +109,7 @@ The following provides some general guidelines for clusters. See also
 
 {{% best-practices/architecture/three-tier %}}
 
-#### Upsert source consideration
-
-{{% best-practices/architecture/upsert-source %}}
+See also [Operational guidelines](/manage/operational-guidelines/).
 
 #### Alternatives
 
@@ -119,20 +117,8 @@ Alternatively, if a three-tier architecture is not feasible or unnecessary due
 to low volume or a non-production setup, a two cluster or a single cluster
 architecture may suffice.
 
-{{<tabs>}}
-{{< tab "Two cluster architecture" >}}
-
-{{< best-practices/architecture/two-cluster >}}
-
-{{</ tab >}}
-
-{{< tab "Single cluster architecture" >}}
-
-{{< best-practices/architecture/one-cluster >}}
-
-{{</ tab >}}
-
-{{</ tabs >}}
+See [Appendix: Alternative cluster
+architectures](/manage/appendix-alternative-cluster-architectures/) for details.
 
 ### Use production clusters for production workloads only
 
