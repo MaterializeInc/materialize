@@ -275,20 +275,20 @@ impl<T: Timestamp + Lattice + Codec64> StateDiff<T> {
                 Insert(_) => None,
                 Update(a, _) | Delete(a) => Some(a.parts.iter().collect::<Vec<_>>()),
             });
-        let added = self
+
+        let added: std::collections::BTreeSet<_> = self
             .referenced_batches()
             .filter_map(|spine_diff| match spine_diff {
-                Insert(a) => Some(a.parts.iter().collect::<Vec<_>>()),
-                Update(_, a) => Some(a.parts.iter().collect::<Vec<_>>()),
+                Insert(a) | Update(_, a) => Some(a.parts.iter().collect::<Vec<_>>()),
                 Delete(_) => None,
             })
-            .collect::<Vec<_>>();
+            .flatten()
+            .collect();
 
-        removed.into_iter().flat_map(|x| x).filter(move |part| {
-            !added
-                .iter()
-                .any(|y| y.iter().any(|added_part| added_part == part))
-        })
+        removed
+            .into_iter()
+            .flat_map(|x| x)
+            .filter(move |part| !added.contains(part))
     }
 
     pub(crate) fn rollup_deletes(&self) -> impl Iterator<Item = &HollowRollup> {
