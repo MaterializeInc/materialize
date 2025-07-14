@@ -167,8 +167,8 @@ fn handle_apply(
             apply_transform(transform, catalog, input)
         }
         "flatmap_to_map" => {
-            use mz_transform::canonicalization::FlatMapToMap;
-            let transform = FlatMapToMap;
+            use mz_transform::canonicalization::FlatMapElimination;
+            let transform = FlatMapElimination;
             apply_transform(transform, catalog, input)
         }
         "fold_constants" => {

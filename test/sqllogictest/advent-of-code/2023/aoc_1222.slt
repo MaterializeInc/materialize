@@ -273,12 +273,11 @@ Explained Query:
       cte l8 =
         Union // { arity: 2 }
           Get l7 // { arity: 2 }
-          Map (error("more than one record produced in subquery")) // { arity: 2 }
-            Project (#0) // { arity: 1 }
-              Filter (#1{count} > 1) // { arity: 2 }
-                Reduce group_by=[#0] aggregates=[count(*)] // { arity: 2 }
-                  Project (#0) // { arity: 1 }
-                    Get l7 // { arity: 2 }
+          Project (#0, #2) // { arity: 2 }
+            FlatMap guard_subquery_size(#1{count}) // { arity: 3 }
+              Reduce group_by=[#0] aggregates=[count(*)] // { arity: 2 }
+                Project (#0) // { arity: 1 }
+                  Get l7 // { arity: 2 }
       cte l9 =
         Union // { arity: 4 }
           Threshold // { arity: 4 }
@@ -438,12 +437,11 @@ Explained Query:
                 ArrangeBy keys=[[#0, #1{count}]] // { arity: 2 }
                   Union // { arity: 2 }
                     Get l21 // { arity: 2 }
-                    Map (error("more than one record produced in subquery")) // { arity: 2 }
-                      Project (#0) // { arity: 1 }
-                        Filter (#1{count} > 1) // { arity: 2 }
-                          Reduce group_by=[#0] aggregates=[count(*)] // { arity: 2 }
-                            Project (#0) // { arity: 1 }
-                              Get l21 // { arity: 2 }
+                    Project (#0, #2) // { arity: 2 }
+                      FlatMap guard_subquery_size(#1{count}) // { arity: 3 }
+                        Reduce group_by=[#0] aggregates=[count(*)] // { arity: 2 }
+                          Project (#0) // { arity: 1 }
+                            Get l21 // { arity: 2 }
     Return // { arity: 2 }
       With
         cte l23 =

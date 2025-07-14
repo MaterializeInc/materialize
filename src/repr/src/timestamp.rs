@@ -13,6 +13,7 @@ use std::time::Duration;
 
 use dec::TryFromDecimalError;
 use mz_proto::{RustType, TryFromProtoError};
+use mz_timely_util::temporal::BucketTimestamp;
 use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize, Serializer};
 
@@ -161,6 +162,13 @@ mod columnar_timestamp {
                 bytes.next().expect("Iterator exhausted prematurely"),
             ))
         }
+    }
+}
+
+impl BucketTimestamp for Timestamp {
+    fn advance_by_power_of_two(&self, exponent: u32) -> Option<Self> {
+        let rhs = 1_u64.checked_shl(exponent)?;
+        Some(self.internal.checked_add(rhs)?.into())
     }
 }
 

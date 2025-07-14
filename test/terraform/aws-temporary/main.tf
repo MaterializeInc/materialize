@@ -51,7 +51,7 @@ variable "orchestratord_version" {
 }
 
 module "materialize_infrastructure" {
-  source = "git::https://github.com/MaterializeInc/terraform-aws-materialize.git?ref=v0.4.8"
+  source = "git::https://github.com/MaterializeInc/terraform-aws-materialize.git?ref=v0.4.9"
 
   providers = {
     aws        = aws

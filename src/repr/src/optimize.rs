@@ -92,6 +92,7 @@ macro_rules! optimizer_feature_flags {
 }
 
 optimizer_feature_flags!({
+    enable_guard_subquery_tablefunc: bool,
     // Enable consolidation of unions that happen immediately after negate.
     //
     // The refinement happens in the LIR ⇒ LIR phase.

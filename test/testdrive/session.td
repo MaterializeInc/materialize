@@ -32,7 +32,7 @@ emit_plan_insights_notice                off                     "Boolean flag i
 emit_timestamp_notice                    off                     "Boolean flag indicating whether to send a NOTICE with timestamp explanations of queries (Materialize)."
 emit_trace_id_notice                     off                     "Boolean flag indicating whether to send a NOTICE specifying the trace id when available (Materialize)."
 enable_rbac_checks                       on                      "User facing global boolean flag indicating whether to apply RBAC checks before executing statements (Materialize)."
-enable_reduce_reduction                  on                      "split complex reductions in to simpler ones and a join (Materialize)."
+enable_reduce_reduction                  off                     "split complex reductions in to simpler ones and a join (Materialize)."
 enable_session_rbac_checks               off                     "User facing session boolean flag indicating whether to apply RBAC checks before executing statements (Materialize)."
 extra_float_digits                       3                       "Adjusts the number of digits displayed for floating-point values (PostgreSQL)."
 failpoints                               <omitted>               "Allows failpoints to be dynamically activated."

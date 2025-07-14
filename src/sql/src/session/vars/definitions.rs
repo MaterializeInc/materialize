@@ -1459,7 +1459,7 @@ pub static ENABLE_CONSOLIDATE_AFTER_UNION_NEGATE: VarDefinition = VarDefinition:
 
 pub static ENABLE_REDUCE_REDUCTION: VarDefinition = VarDefinition::new(
     "enable_reduce_reduction",
-    value!(bool; true),
+    value!(bool; false),
     "split complex reductions in to simpler ones and a join (Materialize).",
     true,
 );
@@ -1793,6 +1793,12 @@ feature_flags!(
         enable_for_item_parsing: true,
     },
     // Actual feature flags
+    {
+        name: enable_guard_subquery_tablefunc,
+        desc: "Whether HIR -> MIR lowering should use a new tablefunc to guard subquery sizes",
+        default: true,
+        enable_for_item_parsing: true,
+    },
     {
         name: enable_binary_date_bin,
         desc: "the binary version of date_bin function",
@@ -2214,6 +2220,7 @@ feature_flags!(
 impl From<&super::SystemVars> for OptimizerFeatures {
     fn from(vars: &super::SystemVars) -> Self {
         Self {
+            enable_guard_subquery_tablefunc: vars.enable_guard_subquery_tablefunc(),
             enable_consolidate_after_union_negate: vars.enable_consolidate_after_union_negate(),
             enable_eager_delta_joins: vars.enable_eager_delta_joins(),
             enable_new_outer_join_lowering: vars.enable_new_outer_join_lowering(),

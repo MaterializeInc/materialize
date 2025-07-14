@@ -1,0 +1,29 @@
+{{ $data := $.Site.Data.best_practices.two_tier_architecture }}
+
+If the [recommended three-tier
+architecture](/manage/operational-guidelines/#three-tier-architecture)
+is infeasible or unnecessary due to low volume or a **non**-production setup, a
+two-tier architecture may suffice. A two-tier architecture consists of:
+
+![Image of the 2-cluster architecture: Source cluster, Compute/Transform +
+Serving cluster](/images/2-tier-architecture.svg)
+
+{{ partial "yaml-tables/generic-table.html" (dict "rows" $data.rows "columns"
+$data.columns) }}
+
+Benefits of a two-tier architecture include:
+
+- Support for [blue/green
+  deployments](/manage/dbt/blue-green-deployments/)
+
+- More cost effective than a three-tier architecture.
+
+However, with a two-tier architecture:
+
+- Compute/transform operations and queries compete for the same cluster
+resources.
+
+- Cluster restarts require rehydration of the indexes on views.
+
+- Clusters containing sources or sinks can only have a replication factor of 0
+or 1.

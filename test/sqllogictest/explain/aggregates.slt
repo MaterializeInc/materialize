@@ -37,16 +37,8 @@ query T multiline
 EXPLAIN OPTIMIZED PLAN WITH (humanized expressions) AS VERBOSE TEXT FOR SELECT a, array_agg(b), array_agg(c) FROM t GROUP BY a;
 ----
 Explained Query:
-  Project (#0{a}, #1{array_agg}, #3{array_agg})
-    Join on=(#0{a} = #2{a}) type=differential
-      ArrangeBy keys=[[#0{a}]]
-        Reduce group_by=[#0{a}] aggregates=[array_agg[order_by=[]](row(array[#1{b}]))]
-          Project (#0{a}, #1{b})
-            ReadStorage materialize.public.t
-      ArrangeBy keys=[[#0{a}]]
-        Reduce group_by=[#0{a}] aggregates=[array_agg[order_by=[]](row(array[#1{c}]))]
-          Project (#0{a}, #2{c})
-            ReadStorage materialize.public.t
+  Reduce group_by=[#0{a}] aggregates=[array_agg[order_by=[]](row(array[#1{b}])), array_agg[order_by=[]](row(array[#2{c}]))]
+    ReadStorage materialize.public.t
 
 Source materialize.public.t
 
@@ -58,16 +50,8 @@ query T multiline
 EXPLAIN OPTIMIZED PLAN WITH (humanized expressions) AS VERBOSE TEXT FOR SELECT a, array_agg(b), string_agg(c, ',') FROM t GROUP BY a;
 ----
 Explained Query:
-  Project (#0{a}, #1{array_agg}, #3{string_agg})
-    Join on=(#0{a} = #2{a}) type=differential
-      ArrangeBy keys=[[#0{a}]]
-        Reduce group_by=[#0{a}] aggregates=[array_agg[order_by=[]](row(array[#1{b}]))]
-          Project (#0{a}, #1{b})
-            ReadStorage materialize.public.t
-      ArrangeBy keys=[[#0{a}]]
-        Reduce group_by=[#0{a}] aggregates=[string_agg[order_by=[]](row(row(#1{c}, ",")))]
-          Project (#0{a}, #2{c})
-            ReadStorage materialize.public.t
+  Reduce group_by=[#0{a}] aggregates=[array_agg[order_by=[]](row(array[#1{b}])), string_agg[order_by=[]](row(row(#2{c}, ",")))]
+    ReadStorage materialize.public.t
 
 Source materialize.public.t
 
@@ -79,15 +63,8 @@ query T multiline
 EXPLAIN OPTIMIZED PLAN WITH (humanized expressions) AS VERBOSE TEXT FOR SELECT a, array_agg(b), string_agg(c, ',' ORDER BY b DESC) FROM t GROUP BY a;
 ----
 Explained Query:
-  Project (#0{a}, #1{array_agg}, #3{string_agg})
-    Join on=(#0{a} = #2{a}) type=differential
-      ArrangeBy keys=[[#0{a}]]
-        Reduce group_by=[#0{a}] aggregates=[array_agg[order_by=[]](row(array[#1{b}]))]
-          Project (#0{a}, #1{b})
-            ReadStorage materialize.public.t
-      ArrangeBy keys=[[#0{a}]]
-        Reduce group_by=[#0{a}] aggregates=[string_agg[order_by=[#0{a} desc nulls_first]](row(row(#2{c}, ","), #1{b}))]
-          ReadStorage materialize.public.t
+  Reduce group_by=[#0{a}] aggregates=[array_agg[order_by=[]](row(array[#1{b}])), string_agg[order_by=[#0{a} desc nulls_first]](row(row(#2{c}, ","), #1{b}))]
+    ReadStorage materialize.public.t
 
 Source materialize.public.t
 
@@ -99,21 +76,9 @@ query T multiline
 EXPLAIN OPTIMIZED PLAN WITH (humanized expressions) AS VERBOSE TEXT FOR SELECT a, array_agg(b), max(c) FROM t WHERE c <> 'x' GROUP BY a;
 ----
 Explained Query:
-  With
-    cte l0 =
-      Filter (#2{c} != "x")
-        ReadStorage materialize.public.t
-  Return
-    Project (#0{a}, #3{array_agg}, #1{max_c})
-      Join on=(#0{a} = #2{a}) type=differential
-        ArrangeBy keys=[[#0{a}]]
-          Reduce group_by=[#0{a}] aggregates=[max(#1{c})]
-            Project (#0{a}, #2{c})
-              Get l0
-        ArrangeBy keys=[[#0{a}]]
-          Reduce group_by=[#0{a}] aggregates=[array_agg[order_by=[]](row(array[#1{b}]))]
-            Project (#0{a}, #1{b})
-              Get l0
+  Reduce group_by=[#0{a}] aggregates=[array_agg[order_by=[]](row(array[#1{b}])), max(#2{c})]
+    Filter (#2{c} != "x")
+      ReadStorage materialize.public.t
 
 Source materialize.public.t
   filter=((#2{c} != "x"))
@@ -126,24 +91,11 @@ query T multiline
 EXPLAIN OPTIMIZED PLAN WITH (humanized expressions) AS VERBOSE TEXT FOR SELECT a, array_agg(b), max(b) FROM t GROUP BY a HAVING count(a) > 1;
 ----
 Explained Query:
-  With
-    cte l0 =
-      Project (#0{a}, #1{b})
-        ReadStorage materialize.public.t
-  Return
-    Project (#0{a}, #5{array_agg}, #1{max_b})
-      Filter (#3{count} > 1)
-        Join on=(#0{a} = #2{a} = #4{a}) type=delta
-          ArrangeBy keys=[[#0{a}]]
-            Reduce group_by=[#0{a}] aggregates=[max(#1{b})]
-              Get l0
-          ArrangeBy keys=[[#0{a}]]
-            Reduce group_by=[#0{a}] aggregates=[count(*)]
-              Project (#0{a})
-                ReadStorage materialize.public.t
-          ArrangeBy keys=[[#0{a}]]
-            Reduce group_by=[#0{a}] aggregates=[array_agg[order_by=[]](row(array[#1{b}]))]
-              Get l0
+  Project (#0{a}..=#2{max_b})
+    Filter (#3{count} > 1)
+      Reduce group_by=[#0{a}] aggregates=[array_agg[order_by=[]](row(array[#1{b}])), max(#1{b}), count(*)]
+        Project (#0{a}, #1{b})
+          ReadStorage materialize.public.t
 
 Source materialize.public.t
 
@@ -169,19 +121,9 @@ query T multiline
 EXPLAIN OPTIMIZED PLAN WITH (humanized expressions) AS VERBOSE TEXT FOR SELECT a, array_agg(b ORDER BY b ASC), array_agg(b ORDER BY b DESC) FROM t GROUP BY a;
 ----
 Explained Query:
-  With
-    cte l0 =
-      Project (#0{a}, #1{b})
-        ReadStorage materialize.public.t
-  Return
-    Project (#0{a}, #1{array_agg}, #3{array_agg})
-      Join on=(#0{a} = #2{a}) type=differential
-        ArrangeBy keys=[[#0{a}]]
-          Reduce group_by=[#0{a}] aggregates=[array_agg[order_by=[#0{a} asc nulls_last]](row(array[#1{b}], #1{b}))]
-            Get l0
-        ArrangeBy keys=[[#0{a}]]
-          Reduce group_by=[#0{a}] aggregates=[array_agg[order_by=[#0{a} desc nulls_first]](row(array[#1{b}], #1{b}))]
-            Get l0
+  Reduce group_by=[#0{a}] aggregates=[array_agg[order_by=[#0{a} asc nulls_last]](row(array[#1{b}], #1{b})), array_agg[order_by=[#0{a} desc nulls_first]](row(array[#1{b}], #1{b}))]
+    Project (#0{a}, #1{b})
+      ReadStorage materialize.public.t
 
 Source materialize.public.t
 
@@ -195,31 +137,19 @@ EXPLAIN OPTIMIZED PLAN WITH (humanized expressions) AS VERBOSE TEXT FOR SELECT a
 Explained Query:
   With
     cte l0 =
-      Project (#1{b})
-        ReadStorage materialize.public.t
-    cte l1 =
-      CrossJoin type=delta
-        ArrangeBy keys=[[]]
-          Reduce aggregates=[sum(1)]
-            Project ()
-              ReadStorage materialize.public.t
-        ArrangeBy keys=[[]]
-          Reduce aggregates=[array_agg[order_by=[#0{b} asc nulls_last]](row(array[#0{b}], #0{b}))]
-            Get l0
-        ArrangeBy keys=[[]]
-          Reduce aggregates=[array_agg[order_by=[#0{b} desc nulls_first]](row(array[#0{b}], #0{b}))]
-            Get l0
+      Reduce aggregates=[array_agg[order_by=[#0{b} asc nulls_last]](row(array[#0{b}], #0{b})), array_agg[order_by=[#0{b} desc nulls_first]](row(array[#0{b}], #0{b})), sum(1)]
+        Project (#1{b})
+          ReadStorage materialize.public.t
   Return
     Project (#0{array_agg}, #1{array_agg}, #3)
       Map ((#2{sum} > 0))
         Union
-          Project (#1{array_agg}, #2{array_agg}, #0{sum})
-            Get l1
+          Get l0
           Map (null, null, null)
             Union
               Negate
                 Project ()
-                  Get l1
+                  Get l0
               Constant
                 - ()
 
@@ -262,29 +192,18 @@ EXPLAIN OPTIMIZED PLAN WITH (humanized expressions) AS VERBOSE TEXT FOR SELECT s
 Explained Query:
   With
     cte l0 =
-      Project (#1{b})
-        ReadStorage materialize.public.t
-    cte l1 =
-      CrossJoin type=delta
-        ArrangeBy keys=[[]]
-          Reduce aggregates=[sum(#0{a})]
-            Project (#0{a})
-              ReadStorage materialize.public.t
-        ArrangeBy keys=[[]]
-          Reduce aggregates=[jsonb_agg[order_by=[]](row(jsonbable_to_jsonb(#0{b})))]
-            Get l0
-        ArrangeBy keys=[[]]
-          Reduce aggregates=[array_agg[order_by=[]](row(array[#0{b}]))]
-            Get l0
+      Reduce aggregates=[sum(#0{a}), jsonb_agg[order_by=[]](row(jsonbable_to_jsonb(#1{b}))), array_agg[order_by=[]](row(array[#1{b}]))]
+        Project (#0{a}, #1{b})
+          ReadStorage materialize.public.t
   Return
     Project (#0{sum_a}..=#2{array_agg}, #2{array_agg})
       Union
-        Get l1
+        Get l0
         Map (null, null, null)
           Union
             Negate
               Project ()
-                Get l1
+                Get l0
             Constant
               - ()
 
@@ -298,19 +217,11 @@ query T multiline
 EXPLAIN OPTIMIZED PLAN WITH (humanized expressions) AS VERBOSE TEXT FOR SELECT a, array_agg(b ORDER BY b) FROM t GROUP BY a HAVING array_agg(b ORDER BY b) = array_agg(b ORDER BY b DESC);
 ----
 Explained Query:
-  With
-    cte l0 =
-      Project (#0{a}, #1{b})
-        ReadStorage materialize.public.t
-  Return
-    Project (#0{a}, #1{array_agg})
-      Join on=(#0{a} = #2{a} AND #1{array_agg} = #3{array_agg}) type=differential
-        ArrangeBy keys=[[#0{a}, #1{array_agg}]]
-          Reduce group_by=[#0{a}] aggregates=[array_agg[order_by=[#0{a} asc nulls_last]](row(array[#1{b}], #1{b}))]
-            Get l0
-        ArrangeBy keys=[[#0{a}, #1{array_agg}]]
-          Reduce group_by=[#0{a}] aggregates=[array_agg[order_by=[#0{a} desc nulls_first]](row(array[#1{b}], #1{b}))]
-            Get l0
+  Project (#0{a}, #1{array_agg})
+    Filter (#1{array_agg} = #2{array_agg})
+      Reduce group_by=[#0{a}] aggregates=[array_agg[order_by=[#0{a} asc nulls_last]](row(array[#1{b}], #1{b})), array_agg[order_by=[#0{a} desc nulls_first]](row(array[#1{b}], #1{b}))]
+        Project (#0{a}, #1{b})
+          ReadStorage materialize.public.t
 
 Source materialize.public.t
 
@@ -323,19 +234,9 @@ EXPLAIN OPTIMIZED PLAN WITH (humanized expressions) AS VERBOSE TEXT FOR SELECT a
 
 ----
 Explained Query:
-  With
-    cte l0 =
-      Project (#0{a}, #1{b})
-        ReadStorage materialize.public.t
-  Return
-    Project (#0{a}, #3{array_agg}, #1{array_agg})
-      Join on=(#0{a} = #2{a}) type=differential
-        ArrangeBy keys=[[#0{a}]]
-          Reduce group_by=[#0{a}] aggregates=[array_agg[order_by=[]](row(array[digest(text_to_bytea(#1{b}), "sha256")]))]
-            Get l0
-        ArrangeBy keys=[[#0{a}]]
-          Reduce group_by=[#0{a}] aggregates=[array_agg[order_by=[]](row(array[#1{b}]))]
-            Get l0
+  Reduce group_by=[#0{a}] aggregates=[array_agg[order_by=[]](row(array[#1{b}])), array_agg[order_by=[]](row(array[digest(text_to_bytea(#1{b}), "sha256")]))]
+    Project (#0{a}, #1{b})
+      ReadStorage materialize.public.t
 
 Source materialize.public.t
 
@@ -348,19 +249,9 @@ query T multiline
 EXPLAIN OPTIMIZED PLAN WITH (humanized expressions) AS VERBOSE TEXT FOR SELECT a, array_agg(b), array_agg(CASE WHEN a = 1 THEN 'ooo' ELSE b END) FROM t GROUP BY a;
 ----
 Explained Query:
-  With
-    cte l0 =
-      Project (#0{a}, #1{b})
-        ReadStorage materialize.public.t
-  Return
-    Project (#0{a}, #1{array_agg}, #3{array_agg})
-      Join on=(#0{a} = #2{a}) type=differential
-        ArrangeBy keys=[[#0{a}]]
-          Reduce group_by=[#0{a}] aggregates=[array_agg[order_by=[]](row(array[#1{b}]))]
-            Get l0
-        ArrangeBy keys=[[#0{a}]]
-          Reduce group_by=[#0{a}] aggregates=[array_agg[order_by=[]](row(array[case when (#0{a} = 1) then "ooo" else #1{b} end]))]
-            Get l0
+  Reduce group_by=[#0{a}] aggregates=[array_agg[order_by=[]](row(array[#1{b}])), array_agg[order_by=[]](row(array[case when (#0{a} = 1) then "ooo" else #1{b} end]))]
+    Project (#0{a}, #1{b})
+      ReadStorage materialize.public.t
 
 Source materialize.public.t
 
