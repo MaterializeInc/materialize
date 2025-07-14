@@ -12,9 +12,10 @@ Runs the Rust-based unit tests in Debug mode.
 """
 
 import json
-import multiprocessing
 import os
+import shutil
 import subprocess
+import threading
 
 from materialize import MZ_ROOT, buildkite, rustc_flags, spawn, ui
 from materialize.cli.run import SANITIZER_TARGET
@@ -102,6 +103,8 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     coverage = ui.env_is_truthy("CI_COVERAGE_ENABLED")
     sanitizer = Sanitizer[os.getenv("CI_SANITIZER", "none")]
     extra_env = {}
+    job_count: str = ""
+    clusterd_build_thread: threading.Thread | None = None
 
     if coverage:
         # TODO(def-): For coverage inside of clusterd called from unit tests need
@@ -219,20 +222,28 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
                     ],
                 )
             else:
-                spawn.runv(
-                    [
-                        "cargo",
-                        "build",
-                        "--workspace",
-                        "--bin",
-                        "clusterd",
-                        "--profile=ci",
-                    ],
-                    env=env,
-                )
+                job_count = os.getenv("BUILDKITE_PARALLEL_JOB_COUNT", "1")
+                assert job_count in (
+                    "1",
+                    "2",
+                ), "Special handling of parallelism, only 1 and 2 supported"
+                if job_count == "1" or os.getenv("BUILDKITE_PARALLEL_JOB") == "0":
 
-            partition = buildkite.get_parallelism_index() + 1
-            total = buildkite.get_parallelism_count()
+                    def worker():
+                        spawn.runv(
+                            [
+                                "cargo",
+                                "build",
+                                "--workspace",
+                                "--bin",
+                                "clusterd",
+                                "--profile=ci",
+                            ],
+                            env={**env, "CARGO_TARGET_DIR": "target/ci-clusterd"},
+                        )
+
+                    clusterd_build_thread = threading.Thread(target=worker)
+                    clusterd_build_thread.start()
 
             if sanitizer != Sanitizer.none:
                 # Can't just use --workspace because of https://github.com/rust-lang/cargo/issues/7160
@@ -262,7 +273,6 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
                                 "--no-default-features",
                                 "--profile=sanitizer",
                                 "--cargo-profile=ci",
-                                f"--partition=count:{partition}/{total}",
                                 # We want all tests to run
                                 "--no-fail-fast",
                                 "-Zbuild-std",
@@ -276,17 +286,52 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
                         print(f"Test against package {pkg['name']} failed, continuing")
 
             else:
+                # Current state 11 + 8 min in 2 runs: https://buildkite.com/materialize/test/builds/106184
+                # TODO: Maybe we could run on a single machine by running the `not package(mz-environmentd)` tests while clusterd is building
+                # TODO: Use the code from git diff 94a0ed3bd51032b4bb5475056294838b0726b096~..94a0ed3bd51032b4bb5475056294838b0726b096 to get clusterd and put it into the CARGET_TARGET_DIR/ci
+                assert job_count
+                if job_count == "1" or os.getenv("BUILDKITE_PARALLEL_JOB") == "0":
+                    assert clusterd_build_thread
+                    spawn.runv(
+                        [
+                            "cargo",
+                            "nextest",
+                            "run",
+                            "--workspace",
+                            "--all-features",
+                            "--cargo-profile=ci",
+                            "--no-run",
+                        ]
+                    )
+                    clusterd_build_thread.join()
+                    shutil.copy(
+                        "target/ci-clusterd/ci/clusterd",
+                        os.getenv("CARGO_TARGET_DIR", "target") + "/ci/",
+                    )
                 spawn.runv(
                     [
                         "cargo",
                         "nextest",
                         "run",
                         "--workspace",
+                        # We want all tests to run
+                        "--no-fail-fast",
                         "--all-features",
-                        "--profile=ci",
                         "--cargo-profile=ci",
-                        f"--test-threads={multiprocessing.cpu_count() * 2}",
-                        f"--partition=count:{partition}/{total}",
+                        "--profile=ci",
+                        *(
+                            (
+                                [
+                                    "--filterset=package(mz-environmentd) or package(mz-balancerd)"
+                                ]
+                                if os.getenv("BUILDKITE_PARALLEL_JOB") == "0"
+                                else [
+                                    "--filterset=not package(mz-environmentd) and not package(mz-balancerd)"
+                                ]
+                            )
+                            if os.getenv("BUILDKITE_PARALLEL_JOB_COUNT") == "2"
+                            else []
+                        ),
                         *args.args,
                     ],
                     env=env,
