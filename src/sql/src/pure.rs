@@ -23,6 +23,7 @@ use mz_ccsr::{Client, GetByIdError, GetBySubjectError, Schema as CcsrSchema};
 use mz_controller_types::ClusterId;
 use mz_kafka_util::client::MzClientContext;
 use mz_mysql_util::MySqlTableDesc;
+use mz_ore::collections::CollectionExt;
 use mz_ore::error::ErrorExt;
 use mz_ore::future::InTask;
 use mz_ore::iter::IteratorExt;
@@ -1914,7 +1915,7 @@ async fn purify_create_table_from_source(
             )
             .await?;
             // There should be exactly one source_export returned for this statement
-            let (_, purified_export) = source_exports.into_iter().next().unwrap();
+            let (_, purified_export) = source_exports.into_element();
             purified_export
         }
         GenericSourceConnection::MySql(mysql_source_connection) => {
@@ -1964,7 +1965,7 @@ async fn purify_create_table_from_source(
             )
             .await?;
             // There should be exactly one source_export returned for this statement
-            let (_, purified_export) = source_exports.into_iter().next().unwrap();
+            let (_, purified_export) = source_exports.into_element();
             purified_export
         }
         GenericSourceConnection::SqlServer(sql_server_source) => {
@@ -1999,11 +2000,7 @@ async fn purify_create_table_from_source(
             .await?;
 
             // There should be exactly one source_export returned for this statement
-            let (_, purified_export) = purified_source_exports
-                .source_exports
-                .into_iter()
-                .next()
-                .unwrap();
+            let (_, purified_export) = purified_source_exports.source_exports.into_element();
             purified_export
         }
         GenericSourceConnection::LoadGenerator(load_gen_connection) => {
@@ -2015,7 +2012,7 @@ async fn purify_create_table_from_source(
             let requested_exports = retrieved_source_references
                 .requested_source_exports(requested_references.as_ref(), &unresolved_source_name)?;
             // There should be exactly one source_export returned
-            let export = requested_exports.into_iter().next().unwrap();
+            let export = requested_exports.into_element();
             PurifiedSourceExport {
                 external_reference: export.external_reference,
                 details: PurifiedExportDetails::LoadGenerator {
@@ -2040,7 +2037,7 @@ async fn purify_create_table_from_source(
             let requested_exports = retrieved_source_references
                 .requested_source_exports(requested_references.as_ref(), &unresolved_source_name)?;
             // There should be exactly one source_export returned
-            let export = requested_exports.into_iter().next().unwrap();
+            let export = requested_exports.into_element();
 
             format_options = SourceFormatOptions::Kafka {
                 topic: kafka_conn.topic.clone(),
