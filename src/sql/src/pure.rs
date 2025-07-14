@@ -2091,12 +2091,13 @@ async fn purify_create_table_from_source(
                 .iter_mut()
                 .find(|option| option.name == TableFromSourceOptionName::TextColumns)
             {
-                if let Some(gen_text_columns) = gen_text_columns {
-                    text_cols_option.value = Some(WithOptionValue::Sequence(gen_text_columns));
-                } else {
-                    soft_panic_or_log!(
+                match gen_text_columns {
+                    Some(gen_text_columns) => {
+                        text_cols_option.value = Some(WithOptionValue::Sequence(gen_text_columns))
+                    }
+                    None => soft_panic_or_log!(
                         "text_columns should be Some if text_cols_option is present"
-                    );
+                    ),
                 }
             }
             match columns {
@@ -2130,24 +2131,27 @@ async fn purify_create_table_from_source(
                 .iter_mut()
                 .find(|option| option.name == TableFromSourceOptionName::TextColumns)
             {
-                if let Some(gen_text_columns) = gen_text_columns {
-                    text_cols_option.value = Some(WithOptionValue::Sequence(gen_text_columns));
-                } else {
-                    soft_panic_or_log!(
+                match gen_text_columns {
+                    Some(gen_text_columns) => {
+                        text_cols_option.value = Some(WithOptionValue::Sequence(gen_text_columns))
+                    }
+                    None => soft_panic_or_log!(
                         "text_columns should be Some if text_cols_option is present"
-                    );
+                    ),
                 }
             }
             if let Some(ignore_cols_option) = with_options
                 .iter_mut()
                 .find(|option| option.name == TableFromSourceOptionName::ExcludeColumns)
             {
-                if let Some(gen_exclude_columns) = gen_exclude_columns {
-                    ignore_cols_option.value = Some(WithOptionValue::Sequence(gen_exclude_columns));
-                } else {
-                    soft_panic_or_log!(
-                        "text_columns should be Some if ignore_cols_option is present"
-                    );
+                match gen_exclude_columns {
+                    Some(gen_exclude_columns) => {
+                        ignore_cols_option.value =
+                            Some(WithOptionValue::Sequence(gen_exclude_columns))
+                    }
+                    None => soft_panic_or_log!(
+                        "exclude_columns should be Some if ignore_cols_option is present"
+                    ),
                 }
             }
             match columns {
@@ -2181,20 +2185,27 @@ async fn purify_create_table_from_source(
                 .iter_mut()
                 .find(|opt| opt.name == TableFromSourceOptionName::TextColumns)
             {
-                if let Some(gen_text_columns) = gen_text_columns {
-                    text_cols_option.value = Some(WithOptionValue::Sequence(gen_text_columns));
-                } else {
-                    soft_panic_or_log!("text_columns should be Some if text_cols_option is present")
-                };
+                match gen_text_columns {
+                    Some(gen_text_columns) => {
+                        text_cols_option.value = Some(WithOptionValue::Sequence(gen_text_columns))
+                    }
+                    None => soft_panic_or_log!(
+                        "text_columns should be Some if text_cols_option is present"
+                    ),
+                }
             }
             if let Some(exclude_cols_option) = with_options
                 .iter_mut()
                 .find(|opt| opt.name == TableFromSourceOptionName::ExcludeColumns)
             {
-                if let Some(gen_excl_columns) = gen_excl_columns {
-                    exclude_cols_option.value = Some(WithOptionValue::Sequence(gen_excl_columns));
-                } else {
-                    soft_panic_or_log!("excl_columns should be Some if excl_cols_option is present")
+                match gen_excl_columns {
+                    Some(gen_excl_columns) => {
+                        exclude_cols_option.value =
+                            Some(WithOptionValue::Sequence(gen_excl_columns))
+                    }
+                    None => soft_panic_or_log!(
+                        "excl_columns should be Some if excl_cols_option is present"
+                    ),
                 }
             }
 
