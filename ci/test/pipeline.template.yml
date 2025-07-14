@@ -84,10 +84,12 @@ steps:
         sanitizer: skip
 
       - id: build-wasm
-        label: Build WASM
+        label: ":rust: Build WASM"
         command: bin/ci-builder run stable bin/pyactivate -m ci.deploy.npm --no-release
         inputs:
-          - "*"
+          - "ci/deploy/npm.py"
+          - "bin/wasm-build"
+          - "misc/wasm"
         depends_on: []
         timeout_in_minutes: 20
         agents:
