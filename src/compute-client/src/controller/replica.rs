@@ -19,7 +19,6 @@ use mz_cluster_client::client::{ClusterReplicaLocation, TimelyConfig};
 use mz_compute_types::dyncfgs::ENABLE_COMPUTE_REPLICA_EXPIRATION;
 use mz_dyncfg::ConfigSet;
 use mz_ore::channel::InstrumentedUnboundedSender;
-use mz_ore::metrics::UIntGauge;
 use mz_ore::retry::{Retry, RetryState};
 use mz_ore::task::AbortOnDropHandle;
 use mz_service::client::GenericClient;
@@ -37,7 +36,6 @@ use crate::logging::LoggingConfig;
 use crate::metrics::IntCounter;
 use crate::metrics::ReplicaMetrics;
 use crate::protocol::command::ComputeCommand;
-use crate::protocol::history::ComputeCommandHistory;
 use crate::protocol::response::ComputeResponse;
 use crate::service::{ComputeClient, ComputeGrpcClient};
 
@@ -169,44 +167,15 @@ where
     ComputeGrpcClient: ComputeClient<T>,
 {
     /// Asynchronously forwards commands to and responses from a single replica.
-    async fn run(mut self) {
+    async fn run(self) {
         let replica_id = self.replica_id;
         info!(replica = ?replica_id, "starting replica task");
 
-        // Connect the replica
-        let mut client = self.connect().await;
-
-        // Absorb commands that were sent before the replica was connected.
-        if let Err(error) = self.absorb_history(&mut client).await {
-            warn!(replica = ?replica_id, "failed to absorb history: {error:#}");
-            return;
-        }
-
-        // Switch to stead-state message loop.
+        let client = self.connect().await;
         match self.run_message_loop(client).await {
             Ok(()) => info!(replica = ?replica_id, "stopped replica task"),
             Err(error) => warn!(replica = ?replica_id, "replica task failed: {error:#}"),
         }
-    }
-
-    /// Absorbs all pending commands from the command channel, reduces them, and sends them to
-    /// the replica.
-    ///
-    /// Depending on how long it takes for the replica to connect, reducing the command history
-    /// allows us to observe updated configuration and other changes that may have occurred
-    /// while the replica was disconnected.
-    async fn absorb_history(&mut self, client: &mut Client<T>) -> Result<(), anyhow::Error> {
-        let mut history = ComputeCommandHistory::<UIntGauge, _>::new(None);
-        // Drain the command channel. Note that this is not guaranteed to capture all commands,
-        // but any prefix is fine.
-        while let Ok(command) = self.command_rx.try_recv() {
-            history.push(command);
-        }
-        history.reduce();
-        for command in history {
-            self.send_command(client, command).await?;
-        }
-        Ok(())
     }
 
     /// Connects to the replica.
@@ -260,19 +229,6 @@ where
         SequentialHydration::new(client, dyncfg, metrics)
     }
 
-    /// Sends a command to the replica.
-    ///
-    /// Calls `specialize_command` and `observe_command` before sending the command.
-    async fn send_command(
-        &mut self,
-        client: &mut Client<T>,
-        mut command: ComputeCommand<T>,
-    ) -> Result<(), anyhow::Error> {
-        self.specialize_command(&mut command);
-        self.observe_command(&command);
-        client.send(command).await
-    }
-
     /// Runs the message loop.
     ///
     /// Returns (with an `Err`) if it encounters an error condition (e.g. the replica disconnects).
@@ -287,12 +243,14 @@ where
             select! {
                 // Command from controller to forward to replica.
                 command = self.command_rx.recv() => {
-                    let Some(command) = command else {
+                    let Some(mut command) = command else {
                         // Controller is no longer interested in this replica. Shut down.
                         break;
                     };
 
-                    self.send_command(&mut client, command).await?;
+                    self.specialize_command(&mut command);
+                    self.observe_command(&command);
+                    client.send(command).await?;
                 },
                 // Response from replica to forward to controller.
                 response = client.recv() => {
