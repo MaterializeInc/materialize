@@ -248,14 +248,13 @@ pub(crate) fn render<G: Scope<Timestamp = Lsn>>(
             // If a source is created with no subsources, there will be no inputs
             // as each capture instance collects data for a table. Without a cdc stream
             // to consume, this source will have no outputs either.
-            if resume_lsn.is_none() {
+            let Some(resume_lsn) = resume_lsn else {
                 // TODO: this is only in place until we implement RLU
                 // https://github.com/MaterializeInc/database-issues/issues/9212
                 tracing::warn!(%config.id, "timely-{} no resume_lsn, waiting.", config.worker_id);
                 std::future::pending::<()>().await;
-            }
-            let resume_lsn = resume_lsn.unwrap();
-
+                unreachable!();
+            };
             tracing::info!(%config.id, "timely-{} replication starting with resume_lsn = {}", config.worker_id, resume_lsn);
 
             for instance in capture_instances.keys() {
