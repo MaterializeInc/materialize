@@ -5727,8 +5727,6 @@ def workflow_test_lgalloc_limiter(c: Composition) -> None:
         else:
             raise RuntimeError("replica did not exit with code 167")
 
-        c.kill("clusterd1")
-
         # Test 3: The MV should be able to hydrate with a disk limit of 10 MiB
         # and a burst budget of 10 GiB-seconds.
         c.sql(
@@ -5740,6 +5738,13 @@ def workflow_test_lgalloc_limiter(c: Composition) -> None:
             user="mz_system",
         )
         setup_workload()
+
+        # Force a reconnect to make sure the replica gets the new config immediately.
+        # TODO(database-issues#9483): make this workaround unnecessary
+        c.up("clusterd1")
+        time.sleep(1)
+        c.kill("clusterd1")
+
         c.up("clusterd1")
 
         c.testdrive("> SELECT count(*) FROM mv\n1000000")
@@ -5852,9 +5857,14 @@ def workflow_test_memory_limiter(c: Composition) -> None:
             port=6877,
             user="mz_system",
         )
+        setup_workload()
+
+        # Force a reconnect to make sure the replica gets the new config immediately.
+        # TODO(database-issues#9483): make this workaround unnecessary
+        c.up("clusterd1")
+        time.sleep(1)
         c.kill("clusterd1")
 
-        setup_workload()
         c.up("clusterd1")
 
         c.testdrive("> SELECT count(*) FROM mv\n1000000")
