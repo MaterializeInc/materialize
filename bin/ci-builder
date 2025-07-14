@@ -33,6 +33,7 @@ Commands:
     run         run a command in the ci-builder image
     build       build the ci-builder image locally
     exists      reports via the exit code whether the ci-builder image exists
+    tag         reports the tag for the ci-builder image
     root-shell  open a root shell to the most recently started ci-builder container
 
 For details, consult ci/builder/README.md."
@@ -140,6 +141,9 @@ case "$cmd" in
         ;;
     exists)
         docker manifest inspect materialize/ci-builder:"$tag" &> /dev/null
+        ;;
+    tag)
+        echo "$tag"
         ;;
     push)
         build "$@"
