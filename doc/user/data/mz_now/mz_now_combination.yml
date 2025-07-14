@@ -1,0 +1,39 @@
+columns:
+  - column: "mz_now() Compound Clause"
+  - column: "Valid/Invalid"
+
+rows:
+  - "mz_now() Compound Clause": |
+      ```mzsql
+      WHERE order_date + interval '3' days > mz_now()
+      AND order_date + interval '1' days < mz_now()
+      ```
+
+    "Valid/Invalid": "✅ **Valid**"
+
+  - "mz_now() Compound Clause": |
+      ```mzsql
+      WHERE (status = 'Complete' OR status = 'Shipped')
+      AND order_date + interval '1' days <= mz_now()
+      ```
+    "Valid/Invalid": "✅ **Valid**"
+
+  - "mz_now() Compound Clause": |
+      ```mzsql
+      WHERE status = 'Shipped'
+      OR order_date + interval '1' days <= mz_now()
+      ```
+    "Valid/Invalid": |
+      ❌ **Invalid**
+
+      `mz_now()` clause can only be combined using an `AND`
+
+  - "mz_now() Compound Clause": |
+      ```mzsql
+      WHERE status = 'Complete'
+      OR (status = 'Shipped' AND order_date + interval '1' days <= mz_now())
+      ```
+    "Valid/Invalid": |
+      ❌ **Invalid**
+
+      Top-level conditions must be combined using an `AND`.

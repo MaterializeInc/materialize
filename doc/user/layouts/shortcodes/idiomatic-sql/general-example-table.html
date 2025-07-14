@@ -45,6 +45,35 @@ ORDER BY s.week_of, o.order_id, o.item, o.quantity
 
 </td>
 </tr>
+<tr>
+<td><code>mz_now()</code> cannot be used with date/time operators</td>
+<td class="copyableCode">
+
+```mzsql
+SELECT * from orders
+WHERE mz_now() > order_date + INTERVAL '5min'
+;
+```
+
+</td>
+</tr>
+<tr>
+<td><code>mz_now()</code> cannot be used with <code>OR</code>s </td>
+<td class="copyableCode">
+
+***Rewrite as `UNION ALL`***
+
+```mzsql
+SELECT * from orders
+WHERE status = 'Shipped'
+UNION ALL
+SELECT * from orders
+WHERE  order_date + interval '30' minutes >= mz_now()
+;
+```
+
+</td>
+</tr>
 
 </tbody>
 </table>

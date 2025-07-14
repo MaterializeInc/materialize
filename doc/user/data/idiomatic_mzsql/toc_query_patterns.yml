@@ -1,0 +1,19 @@
+columns:
+  - column: "Query Pattern"
+  - column: "Idiomatic Materialize"
+
+rows:
+  - Query Pattern: |
+      [ANY() Equi-join condition](/transform-data/idiomatic-materialize-sql/any/)
+    Idiomatic Materialize: |
+      [Use `UNNEST()` or `DISTINCT UNNEST()` to expand the values and join](/transform-data/idiomatic-materialize-sql/any/).
+
+  - Query Pattern: |
+      [`mz_now()`](/transform-data/idiomatic-materialize-sql/mz_now/):
+      - with date/time operators
+      - with disjunctions (`OR`)
+    Idiomatic Materialize: |
+      [Rewrite the query
+      expression](/transform-data/idiomatic-materialize-sql/mz_now/):
+      - Move the operation to the other side of the comparison
+      - Rewrite using `UNION ALL`

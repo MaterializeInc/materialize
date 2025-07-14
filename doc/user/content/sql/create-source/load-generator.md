@@ -123,7 +123,7 @@ is placed in the currently ongoing auction.
 {{< private-preview />}}
 
 The clock load generator tracks the system clock time, and can be used in
-contexts where the [`now()` function cannot](/sql/functions/now_and_mz_now/#limitations).
+contexts where the [`now()` function cannot](/sql/functions/now_and_mz_now/#materialization-limitations).
 On each tick interval, the source emits the system clock time. For example,
 configuring this load generator with `TICK INTERVAL '1 minute'` will cause the
 source to update every minute.

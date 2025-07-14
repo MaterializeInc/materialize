@@ -55,35 +55,7 @@ moves forward:
 When creating a temporal filter using `mz_now()`in a `WHERE` or `HAVING` clause,
 the clause has the following shape:
 
-```mzsql
-mz_now() <comparison_operator> <numeric_expr | timestamp_expr>
-```
-
-- The `mz_now()` must be used with a comparison operator.
-
-- The comparison operator must be one of `=`, `<`, `<=`, `>`, or `>=`, or
-  operators that desugar to them or a conjunction of them (for example,
-  `BETWEEN...AND...`).
-
-- The clause can only compare `mz_now()` to either a
-  [`numeric`](/sql/types/numeric) expression or a
-  [`timestamp`](/sql/types/timestamp) expression not containing `mz_now()`.
-
-### Restrictions
-
-- If part of a  `WHERE` clause, the `WHERE` clause cannot be an [aggregate
- `FILTER` expression](/sql/functions/filters).
-
-- The `mz_now()` only accepts comparison operators `=`, `<`, `<=`, `>`, or `>=`,
-  or operators that desugar to them or a conjunction of them (for example,
-  `BETWEEN...AND...`); i.e., you cannot use `mz_now()` with date/time operators.
-
-{{< tip >}}
-
-When possible, prefer materialized views (instead of indexed views) when using
-temporal filter to take advantage of custom consolidation.
-
-{{</ tip >}}
+{{< include-md file="shared-content/mz_now_clause_requirements.md" >}}
 
 ## Examples
 

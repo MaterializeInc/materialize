@@ -8,58 +8,61 @@ menu:
     identifier: idiomatic-materialize-appendix-example-orders
 ---
 
-The following sample data is used in:
-
-- [First value in group
-  examples](/transform-data/idiomatic-materialize-sql/first-value/#examples)
-
-- [Last value in group
-  examples](/transform-data/idiomatic-materialize-sql/last-value/#examples)
-
-- [Top-K in group
-  examples](/transform-data/idiomatic-materialize-sql/top-k/#examples)
+The following sample data is used in the various Idiomaitc Materialize SQL
+pages:
 
 ```mzsql
 CREATE TABLE orders (
     order_id int NOT NULL,
     order_date timestamp NOT NULL,
     item text NOT NULL,
-    quantity int NOT NULL
+    quantity int NOT NULL,
+    status text NOT NULL
 );
 
 INSERT INTO orders VALUES
-(1,current_timestamp,'brownie',10),
-(1,current_timestamp,'chocolate cake',1),
-(1,current_timestamp,'chocolate chip cookie',20),
-(1,current_timestamp,'coffee cake',1),
-(1,current_timestamp,'fruit tart',4),
-(2,current_timestamp + (15 * interval '1 minute'),'chocolate chip cookie',20),
-(2,current_timestamp + (15 * interval '1 minute'),'brownie',20),
-(3,current_timestamp + (30 * interval '1 minute'),'sugar cookie',10),
-(3,current_timestamp + (30 * interval '1 minute'),'donut',36),
-(3,current_timestamp + (30 * interval '1 minute'),'chiffon cake',2),
-(3,current_timestamp + (30 * interval '1 minute'),'egg tart',6),
-(4,current_timestamp + (1 * interval '1 day') + (35 * interval '1 minute'),'cheesecake',1),
-(5,current_timestamp + (1 * interval '1 day')+ (35 * interval '1 minute'),'chocolate chip cookie',20),
-(5,current_timestamp + (1 * interval '1 day')+ (35 * interval '1 minute'),'brownie',20),
-(5,current_timestamp + (1 * interval '1 day')+ (35 * interval '1 minute'),'cheesecake',1),
-(5,current_timestamp + (1 * interval '1 day')+ (35 * interval '1 minute'),'cupcake',6),
-(5,current_timestamp + (1 * interval '1 day')+ (35 * interval '1 minute'),'chocolate cake',1),
-(6,current_timestamp + (1 * interval '2 day'),'chocolate cake',1),
-(7,current_timestamp + (1 * interval '2 day')+ (10 * interval '1 minute'),'coffee cake',1),
-(7,current_timestamp + (1 * interval '2 day')+ (10 * interval '1 minute'),'egg tart',12),
-(8,current_timestamp + (1 * interval '2 day')+ (15 * interval '1 minute'),'chocolate chip cookie',12),
-(8,current_timestamp + (1 * interval '2 day')+ (15 * interval '1 minute'),'brownie',12),
-(8,current_timestamp + (1 * interval '2 day')+ (15 * interval '1 minute'),'sugar cookie',12),
-(8,current_timestamp + (1 * interval '2 day')+ (15 * interval '1 minute'),'donut',12),
-(9,current_timestamp + (1 * interval '2 day')+ (30 * interval '1 minute'),'cupcake',6),
-(10,current_timestamp + (1 * interval '3 day'),'chiffon cake',1),
-(10,current_timestamp + (1 * interval '3 day'),'egg tart',6),
-(10,current_timestamp + (1 * interval '3 day'),'fruit tart',6),
-(11,current_timestamp + (1 * interval '3 day') + (15 * interval '1 minute'),'cheesecake',1),
-(12,current_timestamp + (1 * interval '3 day') + (35 * interval '1 minute'),'brownies',12),
-(12,current_timestamp + (1 * interval '3 day') + (35 * interval '1 minute'),'cupcake',12),
-(12,current_timestamp + (1 * interval '3 day') + (35 * interval '1 minute'),'chocolate cake',1)
+(1,current_timestamp - (1 * interval '3 day') - (35 * interval '1 minute'),'brownies',12, 'Complete'),
+(1,current_timestamp - (1 * interval '3 day') - (35 * interval '1 minute'),'cupcake',12, 'Complete'),
+(1,current_timestamp - (1 * interval '3 day') - (35 * interval '1 minute'),'chocolate cake',1, 'Complete'),
+(2,current_timestamp - (1 * interval '3 day') - (15 * interval '1 minute'),'cheesecake',1, 'Complete'),
+(3,current_timestamp - (1 * interval '3 day'),'chiffon cake',1, 'Complete'),
+(3,current_timestamp - (1 * interval '3 day'),'egg tart',6, 'Complete'),
+(3,current_timestamp - (1 * interval '3 day'),'fruit tart',6, 'Complete'),
+(4,current_timestamp - (1 * interval '2 day')- (30 * interval '1 minute'),'cupcake',6, 'Shipped'),
+(4,current_timestamp - (1 * interval '2 day')- (30 * interval '1 minute'),'cupcake',6, 'Shipped'),
+(5,current_timestamp - (1 * interval '2 day'),'chocolate cake',1, 'Processing'),
+(6,current_timestamp,'brownie',10, 'Pending'),
+(6,current_timestamp,'chocolate cake',1, 'Pending'),
+(7,current_timestamp,'chocolate chip cookie',20, 'Processing'),
+(8,current_timestamp,'coffee cake',1, 'Complete'),
+(8,current_timestamp,'fruit tart',4, 'Complete'),
+(9,current_timestamp + (15 * interval '1 minute'),'chocolate chip cookie',20, 'Pending'),
+(9,current_timestamp + (15 * interval '1 minute'),'brownie',20, 'Processing'),
+(10,current_timestamp + (30 * interval '1 minute'),'sugar cookie',10, 'Pending'),
+(10,current_timestamp + (30 * interval '1 minute'),'donut',36, 'Pending'),
+(11,current_timestamp + (30 * interval '1 minute'),'chiffon cake',2, 'Pending'),
+(11,current_timestamp + (30 * interval '1 minute'),'egg tart',6, 'Pending'),
+(12,current_timestamp + (1 * interval '1 day') + (35 * interval '1 minute'),'cheesecake',1, 'Pending'),
+(13,current_timestamp + (1 * interval '1 day')+ (35 * interval '1 minute'),'chocolate chip cookie',20, 'Pending'),
+(14,current_timestamp + (1 * interval '1 day')+ (35 * interval '1 minute'),'brownie',20, 'Pending'),
+(14,current_timestamp + (1 * interval '1 day')+ (35 * interval '1 minute'),'cheesecake',1, 'Pending'),
+(14,current_timestamp + (1 * interval '1 day')+ (35 * interval '1 minute'),'cupcake',6, 'Pending'),
+(15,current_timestamp + (1 * interval '1 day')+ (35 * interval '1 minute'),'chocolate cake',1, 'Pending'),
+(16,current_timestamp + (1 * interval '2 day'),'chocolate cake',1, 'Pending'),
+(17,current_timestamp + (1 * interval '2 day')+ (10 * interval '1 minute'),'coffee cake',1, 'Pending'),
+(17,current_timestamp + (1 * interval '2 day')+ (10 * interval '1 minute'),'egg tart',12, 'Pending'),
+(18,current_timestamp + (1 * interval '2 day')+ (15 * interval '1 minute'),'chocolate chip cookie',12, 'Pending'),
+(18,current_timestamp + (1 * interval '2 day')+ (15 * interval '1 minute'),'brownie',12, 'Pending'),
+(18,current_timestamp + (1 * interval '2 day')+ (15 * interval '1 minute'),'sugar cookie',12, 'Pending'),
+(18,current_timestamp + (1 * interval '2 day')+ (15 * interval '1 minute'),'donut',12, 'Pending'),
+(19,current_timestamp + (1 * interval '2 day')+ (30 * interval '1 minute'),'cupcake',6, 'Pending'),
+(20,current_timestamp + (1 * interval '3 day'),'chiffon cake',1, 'Pending'),
+(20,current_timestamp + (1 * interval '3 day'),'egg tart',6, 'Pending'),
+(20,current_timestamp + (1 * interval '3 day'),'fruit tart',6, 'Pending'),
+(21,current_timestamp + (1 * interval '3 day') + (15 * interval '1 minute'),'cheesecake',1, 'Pending'),
+(22,current_timestamp + (1 * interval '3 day') + (35 * interval '1 minute'),'brownies',12, 'Pending'),
+(22,current_timestamp + (1 * interval '3 day') + (35 * interval '1 minute'),'cupcake',12, 'Pending'),
+(22,current_timestamp + (1 * interval '3 day') + (35 * interval '1 minute'),'chocolate cake',1, 'Pending')
 ;
 
 CREATE TABLE items(

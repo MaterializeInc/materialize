@@ -38,5 +38,17 @@ JOIN my_expanded_values t ON a.fieldZ = t.fieldZ
 
 </td>
 </tr>
+<tr>
+<td><code>mz_now()</code> cannot be used with date/time operators</td>
+<td>
+Rewrite the query expression to have the move the operation to the other side of the comparison.
+</td>
+</tr>
+<tr>
+<td><code>mz_now()</code> cannot be used with <code>OR</code>s </td>
+<td>
+Rewrite as <code>UNION ALL</code>.
+</td>
+</tr>
 </tbody>
 </table>

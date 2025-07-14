@@ -1,0 +1,37 @@
+columns:
+  - column: "Valid/Invalid"
+  - column: "mz_now() SQL"
+
+rows:
+  - "Valid/Invalid": |
+      <blue>Materialize SQL</blue> ✅
+    "mz_now() SQL": |
+
+      <div style="background-color: var(--code-block)">
+
+      ```mzsql
+      SELECT * from orders
+      WHERE status = 'Shipped'
+      UNION ALL
+      SELECT * from orders
+      WHERE order_date + interval '30' minutes >= mz_now()
+      ;
+      ```
+
+      </div>
+  - "Valid/Invalid": |
+      <red>Anti-pattern</red> ❌
+
+    "mz_now() SQL": |
+
+      <red>Not supported</red>
+
+      <div style="background-color: var(--code-block)">
+
+      ```none
+      -- Unsupported
+      SELECT * from orders
+      WHERE status = 'Shipped'
+      OR order_date + interval '30' minutes >= mz_now();
+      ```
+      </div>

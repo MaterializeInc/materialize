@@ -16,7 +16,11 @@ as a [`mz_timestamp`] value.
 
 ## Details
 
-### Common patterns
+### `mz_now()` clause
+
+{{< include-md file="shared-content/mz_now_clause_requirements.md" >}}
+
+### Usage patterns
 
 The typical uses of `now()` and `mz_now()` are:
 
@@ -49,25 +53,17 @@ a logical timestamp within a few seconds of 9pm, even if data for 8:30–9pm has
 not yet arrived and the query will need to block until the data for 9pm arrives.
 In this scenario, both `now()` and `mz_now()` would return 9pm.
 
-### Limitations
+### Materialization limitations
 
-#### Materialization
-  * Queries that use `now()` cannot be materialized. In other words, you cannot
-    create an index or a materialized view on a query that calls `now()`.
+* Queries that use `now()` cannot be materialized. In other words, you cannot
+  create an index or a materialized view on a query that calls `now()`.
 
-  * Queries that use `mz_now()` can only be materialized if the call to
-    `mz_now()` is used in a [temporal filter](/sql/patterns/temporal-filters).
+* Queries that use `mz_now()` can only be materialized if the call to
+  `mz_now()` is used in a [temporal filter](/sql/patterns/temporal-filters).
 
 These limitations are in place because `now()` changes every microsecond and
 `mz_now()` changes every millisecond. Allowing these functions to be
 materialized would be resource prohibitive.
-
-#### Comparison operators
-
-  * `mz_now()` only accepts comparison operators `=`, `<`, `<=`, `>`, or
-  `>=`, or operators that desugar to them or a conjunction of them (for example,
-  `BETWEEN...AND...`). You cannot use `mz_now()` with date/time operators (for
-  example, `mz_now() - INTERVAL '5min'`).
 
 ## Examples
 
