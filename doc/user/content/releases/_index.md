@@ -38,7 +38,7 @@ Materialize may occasionally deploy unscheduled releases to fix urgent bugs as w
 You can find details about upcoming and current maintenance on the [status
 page](https://status.materialize.com). You can also use the [status page API](https://status.materialize.com/api) to programmatically access this information.
 
-When your region is upgraded, you’ll experience just a few minutes of downtime. After the initial downtime, the new version of Materialize will begin rehydrating your indexes and materialized views. This takes time proportional to data volume and query complexity. Indexes and materialized views with large amounts of data will take longer to rehydrate than indexes and materialized views with small amounts of data. Similarly, indexes and materialized views for complex queries will take longer to rehydrate than indexes and materialized views for simple queries.
+During an upgrade, clients may experience brief connection interruptions, but the service otherwise remains fully available.
 
 [America/New_York]: https://time.is/New_York
 [Europe/Dublin]: https://time.is/Dublin
