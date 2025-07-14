@@ -35,7 +35,8 @@ use mz_repr::Datum;
 use tracing::debug;
 
 use crate::analysis::equivalences::{
-    EquivalenceClasses, EquivalenceClassesWithholdingErrors, Equivalences, ExpressionReducer,
+    EqClassesImpl, EquivalenceClasses, EquivalenceClassesWithholdingErrors, Equivalences,
+    ExpressionReducer,
 };
 use crate::analysis::{Arity, DerivedView, RelationType};
 
@@ -448,7 +449,14 @@ impl EquivalencePropagation {
                 }
 
                 // Form the equivalences we will use to replace `equivalences`.
-                let mut join_equivalences = EquivalenceClassesWithholdingErrors::default();
+                let mut join_equivalences: EqClassesImpl =
+                    if ctx.features.enable_eq_classes_withholding_errors {
+                        EqClassesImpl::EquivalenceClassesWithholdingErrors(
+                            EquivalenceClassesWithholdingErrors::default(),
+                        )
+                    } else {
+                        EqClassesImpl::EquivalenceClasses(EquivalenceClasses::default())
+                    };
                 join_equivalences.extend_equivalences(equivalences.clone());
 
                 // // Optionally, introduce `outer_equivalences` into `equivalences`.
@@ -460,7 +468,11 @@ impl EquivalencePropagation {
                 // Reduce join equivalences by the input equivalences.
                 for input_equivs in input_equivalences.iter() {
                     let reducer = input_equivs.reducer();
-                    for class in join_equivalences.equivalence_classes.classes.iter_mut() {
+                    for class in join_equivalences
+                        .equivalence_classes_mut()
+                        .classes
+                        .iter_mut()
+                    {
                         for expr in class.iter_mut() {
                             // Semijoin elimination currently fails if you do more advanced simplification than
                             // literal substitution.
@@ -486,7 +498,7 @@ impl EquivalencePropagation {
                     }
                 }
                 join_equivalences
-                    .equivalence_classes
+                    .equivalence_classes_mut()
                     .minimize(input_types.as_ref().map(|x| &x[..]));
 
                 // Revisit each child, determining the information to present to it, and recurring.
@@ -508,7 +520,7 @@ impl EquivalencePropagation {
                     self.apply(
                         expr,
                         child,
-                        push_equivalences.equivalence_classes,
+                        push_equivalences.equivalence_classes().clone(),
                         get_equivalences,
                         ctx,
                     );

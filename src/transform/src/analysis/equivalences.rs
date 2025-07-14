@@ -340,6 +340,90 @@ pub struct EquivalenceClasses {
     remap: BTreeMap<MirScalarExpr, MirScalarExpr>,
 }
 
+/// An enum that can represent either a standard `EquivalenceClasses` or a
+/// `EquivalenceClassesWithholdingErrors`.
+#[derive(Clone, Debug)]
+pub enum EqClassesImpl {
+    /// Standard equivalence classes.
+    EquivalenceClasses(EquivalenceClasses),
+    /// Equivalence classes that withhold errors, reintroducing them when extracting equivalences.
+    EquivalenceClassesWithholdingErrors(EquivalenceClassesWithholdingErrors),
+}
+
+impl EqClassesImpl {
+    /// Returns a reference to the underlying `EquivalenceClasses`.
+    pub fn equivalence_classes(&self) -> &EquivalenceClasses {
+        match self {
+            EqClassesImpl::EquivalenceClasses(classes) => classes,
+            EqClassesImpl::EquivalenceClassesWithholdingErrors(classes) => {
+                &classes.equivalence_classes
+            }
+        }
+    }
+
+    /// Returns a mutable reference to the underlying `EquivalenceClasses`.
+    pub fn equivalence_classes_mut(&mut self) -> &mut EquivalenceClasses {
+        match self {
+            EqClassesImpl::EquivalenceClasses(classes) => classes,
+            EqClassesImpl::EquivalenceClassesWithholdingErrors(classes) => {
+                &mut classes.equivalence_classes
+            }
+        }
+    }
+
+    /// Extend the equivalence classes with new equivalences.
+    pub fn extend_equivalences(&mut self, equivalences: Vec<Vec<MirScalarExpr>>) {
+        match self {
+            EqClassesImpl::EquivalenceClasses(classes) => {
+                classes.classes.extend(equivalences);
+            }
+            EqClassesImpl::EquivalenceClassesWithholdingErrors(classes) => {
+                classes.extend_equivalences(equivalences);
+            }
+        }
+    }
+
+    /// Push a new equivalence class.
+    pub fn push_equivalences(&mut self, equivalences: Vec<MirScalarExpr>) {
+        match self {
+            EqClassesImpl::EquivalenceClasses(classes) => {
+                classes.classes.push(equivalences);
+            }
+            EqClassesImpl::EquivalenceClassesWithholdingErrors(classes) => {
+                classes.push_equivalences(equivalences);
+            }
+        }
+    }
+
+    /// Subject the constraints to the column projection, reworking and removing equivalences.
+    pub fn project<I>(&mut self, output_columns: I)
+    where
+        I: IntoIterator<Item = usize> + Clone,
+    {
+        match self {
+            EqClassesImpl::EquivalenceClasses(classes) => {
+                classes.project(output_columns);
+            }
+            EqClassesImpl::EquivalenceClassesWithholdingErrors(classes) => {
+                classes.project(output_columns);
+            }
+        }
+    }
+
+    /// Extract the equivalences
+    pub fn extract_equivalences(
+        &mut self,
+        columns: Option<&[ColumnType]>,
+    ) -> Vec<Vec<MirScalarExpr>> {
+        match self {
+            EqClassesImpl::EquivalenceClasses(classes) => classes.classes.clone(),
+            EqClassesImpl::EquivalenceClassesWithholdingErrors(classes) => {
+                classes.extract_equivalences(columns)
+            }
+        }
+    }
+}
+
 /// A wrapper struct for equivalence classes that witholds errors
 /// from the underlying equivalence classes, reintroducing them
 /// when extracting equivalences.
