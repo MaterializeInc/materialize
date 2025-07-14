@@ -892,8 +892,7 @@ impl<T: Timestamp + Codec64> BatchParts<T> {
                             1,
                             "compaction is guaranteed to emit a single run"
                         );
-                        let total_compacted_updates: usize =
-                            runs.iter().filter_map(|(meta, _)| meta.len).sum();
+                        let total_compacted_updates: usize = output_batch.len;
 
                         RunWithMeta::new(output_batch.parts, total_compacted_updates)
                     }

@@ -801,7 +801,7 @@ pub struct RunMeta {
     /// If set, a UUID that uniquely identifies this run.
     pub(crate) id: Option<RunId>,
 
-    /// The number of updates in this run.
+    /// The number of updates in this run, or `None` if the number is unknown.
     pub(crate) len: Option<usize>,
 }
 
