@@ -117,7 +117,7 @@ so it is executed.""",
     pipeline = yaml.safe_load(raw)
 
     bazel = pipeline.get("env", {}).get("CI_BAZEL_BUILD", 1) == 1
-    bazel_lto = pipeline.get("env", {}).get("CI_BAZEL_LTO", 1) == 1
+    bazel_lto = pipeline.get("env", {}).get("CI_BAZEL_LTO", 0) == 1
 
     hash_check: dict[Arch, tuple[str, bool]] = {}
 
