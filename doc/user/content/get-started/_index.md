@@ -74,24 +74,7 @@ filters**](/sql/patterns/temporal-filters/), and
 
 Materialize provides **native connectors** that allow ingesting data from various external systems:
 
-{{< multilinkbox >}}
-{{< linkbox title="Message Brokers" >}}
-- [Kafka](/sql/create-source/kafka)
-- [Redpanda](/sql/create-source/kafka)
-{{</ linkbox >}}
-{{< linkbox title="Databases (CDC)" >}}
-- [PostgreSQL](/ingest-data/postgres/)
-- [MySQL](/ingest-data/mysql/)
-- [SQL Server](/ingest-data/sql-server)
-- [CockroachDB](/ingest-data/cdc-cockroachdb/)
-- [MongoDB](https://github.com/MaterializeIncLabs/materialize-mongodb-debezium)
-{{</ linkbox >}}
-{{< linkbox title="Webhooks" >}}
-- [Amazon EventBridge](/ingest-data/webhooks/amazon-eventbridge/)
-- [Segment](/ingest-data/webhooks/segment/)
-- [Other webhooks](/sql/create-source/webhook)
-{{</ linkbox >}}
-{{</ multilinkbox >}}
+{{< include-md file="shared-content/multilink-box-native-connectors.md" >}}
 
 For more information, see [Ingest Data](/ingest-data/) and
 [Integrations](/integrations/).
