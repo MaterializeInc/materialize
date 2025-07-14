@@ -219,6 +219,7 @@ steps:
       - ".config/nextest.toml"
       - "**/Cargo.toml"
       - "**/*.rs"
+      - "**/*.pt"
       - "**/*.proto"
       - "**/testdata/**"
     depends_on: []
