@@ -5,7 +5,7 @@ columns:
 rows:
   - Failure Type: "**Accidental source drop (and dependent objects)**"
     RPO: |
-      100% data loss.
+      Same as upstream source system. Source will need to be recreated in Materialize.
 
       Consider using [RBAC](/manage/access-control/rbac/) to reduce the risk of
       accidentally dropping sources.
