@@ -22,7 +22,7 @@ use timely::dataflow::channels::pact::Pipeline;
 use timely::dataflow::operators::Operator;
 use timely::dataflow::{Scope, StreamCore};
 use timely::order::TotalOrder;
-use timely::progress::{Antichain, Timestamp};
+use timely::progress::{Antichain, PathSummary, Timestamp};
 use timely::{Data, PartialOrder};
 
 use crate::typedefs::MzData;
@@ -32,8 +32,12 @@ use crate::typedefs::MzData;
 /// at times between the last input frontier and the current input frontier.
 pub trait TemporalBucketing<G: Scope, O> {
     /// Construct a new stream that stores updates into a [`BucketChain`] and reveals data
-    /// not in advance of the frontier.
-    fn bucket<CB>(&self) -> StreamCore<G, CB::Container>
+    /// not in advance of the frontier. Data that is `threshold` distance within the frontier
+    /// is passed through without being stored in the chain.
+    fn bucket<CB>(
+        &self,
+        threshold: <G::Timestamp as Timestamp>::Summary,
+    ) -> StreamCore<G, CB::Container>
     where
         CB: ContainerBuilder + PushInto<O>;
 }
@@ -46,7 +50,10 @@ where
     G::Timestamp: Data + MzData + BucketTimestamp + TotalOrder,
     D: Data + MzData + Ord + std::fmt::Debug,
 {
-    fn bucket<CB>(&self) -> StreamCore<G, CB::Container>
+    fn bucket<CB>(
+        &self,
+        threshold: <G::Timestamp as Timestamp>::Summary,
+    ) -> StreamCore<G, CB::Container>
     where
         CB: ContainerBuilder + PushInto<(D, G::Timestamp, mz_repr::Diff)>,
     {
@@ -60,7 +67,16 @@ where
             let mut cap = Some(cap);
             let mut buffer = Vec::new();
             move |input, output| {
-                while let Some((_time, data)) = input.next() {
+                let threshold: Antichain<_> = input
+                    .frontier()
+                    .frontier()
+                    .iter()
+                    .flat_map(|f| threshold.results_in(f)).collect();
+                while let Some((time, data)) = input.next() {
+                    // Skip data that is about to be revealed.
+                    let extracted = data.extract_if(.., |(_, t, _)| !threshold.less_than(t));
+                    output.session_with_builder(&time).give_iterator(extracted);
+
                     // Sort data by time, then drain it into a buffer that contains data for a
                     // single bucket.
                     data.sort_by(|(_, t, _), (_, t2, _)| t.cmp(t2));
