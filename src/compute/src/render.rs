@@ -462,7 +462,7 @@ pub fn build_compute_dataflow<A: Allocate>(
                 for (id, (oks, errs)) in imported_sources.into_iter() {
                     let oks = if ENABLE_TEMPORAL_BUCKETING.get(&compute_state.worker_config) {
                         oks.inner
-                            .bucket::<CapacityContainerBuilder<_>>()
+                            .bucket::<CapacityContainerBuilder<_>>(2000.into())
                             .as_collection()
                     } else {
                         oks
