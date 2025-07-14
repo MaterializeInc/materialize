@@ -126,7 +126,7 @@ pub(crate) fn render<G: Scope<Timestamp = Lsn>>(
                 .cdc(capture_instances.keys().cloned())
                 .max_lsn_wait(SNAPSHOT_MAX_LSN_WAIT.get(config.config.config_set()));
 
-            // Snapshot any instances that requires it.
+            // Snapshot any instance that requires it.
             // The LSN returned here will be the max LSN for any capture instance on the SQL server.
             let snapshot_lsn = {
                 // Small helper closure.
