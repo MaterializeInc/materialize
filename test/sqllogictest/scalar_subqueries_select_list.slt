@@ -53,12 +53,11 @@ Explained Query:
     cte l0 =
       Union // { arity: 1 }
         ReadStorage materialize.public.t1 // { arity: 1 }
-        Map (error("more than one record produced in subquery")) // { arity: 1 }
-          Project () // { arity: 0 }
-            Filter (#0{count} > 1) // { arity: 1 }
-              Reduce aggregates=[count(*)] // { arity: 1 }
-                Project () // { arity: 0 }
-                  ReadStorage materialize.public.t1 // { arity: 1 }
+        Project (#1) // { arity: 1 }
+          FlatMap guard_subquery_size(#0{count}) // { arity: 2 }
+            Reduce aggregates=[count(*)] // { arity: 1 }
+              Project () // { arity: 0 }
+                ReadStorage materialize.public.t1 // { arity: 1 }
   Return // { arity: 2 }
     Project (#0{f1}, #0{f1}) // { arity: 2 }
       CrossJoin type=differential // { arity: 1 }
@@ -112,11 +111,10 @@ Explained Query:
       Union // { arity: 2 }
         Project (#0{f1}, #0{f1}) // { arity: 2 }
           Get l1 // { arity: 1 }
-        Map (error("more than one record produced in subquery")) // { arity: 2 }
-          Project (#0{f1}) // { arity: 1 }
-            Filter (#1{count} > 1) // { arity: 2 }
-              Reduce group_by=[#0{f1}] aggregates=[count(*)] // { arity: 2 }
-                Get l1 // { arity: 1 }
+        Project (#0{f1}, #2) // { arity: 2 }
+          FlatMap guard_subquery_size(#1{count}) // { arity: 3 }
+            Reduce group_by=[#0{f1}] aggregates=[count(*)] // { arity: 2 }
+              Get l1 // { arity: 1 }
   Return // { arity: 2 }
     Project (#2{f1}, #2{f1}) // { arity: 2 }
       Join on=(#0{f1} = #1{f1}) type=differential // { arity: 3 }
@@ -187,12 +185,11 @@ Explained Query:
     cte l4 =
       Union // { arity: 2 }
         Get l3 // { arity: 2 }
-        Map (error("more than one record produced in subquery")) // { arity: 2 }
-          Project (#0{f1}) // { arity: 1 }
-            Filter (#1{count} > 1) // { arity: 2 }
-              Reduce group_by=[#0{f1}] aggregates=[count(*)] // { arity: 2 }
-                Project (#0{f1}) // { arity: 1 }
-                  Get l3 // { arity: 2 }
+        Project (#0{f1}, #2) // { arity: 2 }
+          FlatMap guard_subquery_size(#1{count}) // { arity: 3 }
+            Reduce group_by=[#0{f1}] aggregates=[count(*)] // { arity: 2 }
+              Project (#0{f1}) // { arity: 1 }
+                Get l3 // { arity: 2 }
   Return // { arity: 2 }
     Project (#2{f1}, #2{f1}) // { arity: 2 }
       Join on=(#0{f1} = #1{f1}) type=differential // { arity: 3 }
@@ -248,12 +245,11 @@ Explained Query:
     cte l4 =
       Union // { arity: 2 }
         Get l3 // { arity: 2 }
-        Map (error("more than one record produced in subquery")) // { arity: 2 }
-          Project (#0{f1}) // { arity: 1 }
-            Filter (#1{count} > 1) // { arity: 2 }
-              Reduce group_by=[#0{f1}] aggregates=[count(*)] // { arity: 2 }
-                Project (#0{f1}) // { arity: 1 }
-                  Get l3 // { arity: 2 }
+        Project (#0{f1}, #2) // { arity: 2 }
+          FlatMap guard_subquery_size(#1{count}) // { arity: 3 }
+            Reduce group_by=[#0{f1}] aggregates=[count(*)] // { arity: 2 }
+              Project (#0{f1}) // { arity: 1 }
+                Get l3 // { arity: 2 }
     cte l5 =
       Join on=(#1{f1} = (#0{f1} + 2)) type=differential // { arity: 2 }
         implementation
@@ -264,12 +260,11 @@ Explained Query:
     cte l6 =
       Union // { arity: 2 }
         Get l5 // { arity: 2 }
-        Map (error("more than one record produced in subquery")) // { arity: 2 }
-          Project (#0{f1}) // { arity: 1 }
-            Filter (#1{count} > 1) // { arity: 2 }
-              Reduce group_by=[#0{f1}] aggregates=[count(*)] // { arity: 2 }
-                Project (#0{f1}) // { arity: 1 }
-                  Get l5 // { arity: 2 }
+        Project (#0{f1}, #2) // { arity: 2 }
+          FlatMap guard_subquery_size(#1{count}) // { arity: 3 }
+            Reduce group_by=[#0{f1}] aggregates=[count(*)] // { arity: 2 }
+              Project (#0{f1}) // { arity: 1 }
+                Get l5 // { arity: 2 }
   Return // { arity: 2 }
     Project (#2{f1}, #4{f1}) // { arity: 2 }
       Join on=(#0{f1} = #1{f1} = #3{f1}) type=delta // { arity: 5 }
@@ -338,11 +333,10 @@ Explained Query:
             Filter (#0{f1}) IS NOT NULL // { arity: 1 }
               ReadStorage materialize.public.t1 // { arity: 1 }
     cte l2 =
-      Map (error("more than one record produced in subquery")) // { arity: 2 }
-        Project (#0{f1}) // { arity: 1 }
-          Filter (#1{count} > 1) // { arity: 2 }
-            Reduce group_by=[#0{f1}] aggregates=[count(*)] // { arity: 2 }
-              Get l1 // { arity: 1 }
+      Project (#0{f1}, #2) // { arity: 2 }
+        FlatMap guard_subquery_size(#1{count}) // { arity: 3 }
+          Reduce group_by=[#0{f1}] aggregates=[count(*)] // { arity: 2 }
+            Get l1 // { arity: 1 }
     cte l3 =
       Union // { arity: 2 }
         Map ((#0{f1} + 1)) // { arity: 2 }
@@ -522,11 +516,10 @@ Explained Query:
       Union // { arity: 2 }
         Project (#0{f1}, #0{f1}) // { arity: 2 }
           Get l3 // { arity: 1 }
-        Map (error("more than one record produced in subquery")) // { arity: 2 }
-          Project (#0{f1}) // { arity: 1 }
-            Filter (#1{count} > 1) // { arity: 2 }
-              Reduce group_by=[#0{f1}] aggregates=[count(*)] // { arity: 2 }
-                Get l3 // { arity: 1 }
+        Project (#0{f1}, #2) // { arity: 2 }
+          FlatMap guard_subquery_size(#1{count}) // { arity: 3 }
+            Reduce group_by=[#0{f1}] aggregates=[count(*)] // { arity: 2 }
+              Get l3 // { arity: 1 }
     cte l5 =
       Project (#0{f1}, #2{f1}) // { arity: 2 }
         Join on=(#0{f1} = #1{f1}) type=differential // { arity: 3 }
@@ -547,12 +540,11 @@ Explained Query:
     cte l6 =
       Union // { arity: 2 }
         Get l5 // { arity: 2 }
-        Map (error("more than one record produced in subquery")) // { arity: 2 }
-          Project (#0{f1}) // { arity: 1 }
-            Filter (#1{count} > 1) // { arity: 2 }
-              Reduce group_by=[#0{f1}] aggregates=[count(*)] // { arity: 2 }
-                Project (#0{f1}) // { arity: 1 }
-                  Get l5 // { arity: 2 }
+        Project (#0{f1}, #2) // { arity: 2 }
+          FlatMap guard_subquery_size(#1{count}) // { arity: 3 }
+            Reduce group_by=[#0{f1}] aggregates=[count(*)] // { arity: 2 }
+              Project (#0{f1}) // { arity: 1 }
+                Get l5 // { arity: 2 }
   Return // { arity: 1 }
     Project (#2{f1}) // { arity: 1 }
       Join on=(#0{f1} = #1{f1}) type=differential // { arity: 3 }
@@ -616,11 +608,10 @@ Explained Query:
       Union // { arity: 2 }
         Project (#0{f1}, #0{f1}) // { arity: 2 }
           Get l2 // { arity: 1 }
-        Map (error("more than one record produced in subquery")) // { arity: 2 }
-          Project (#0{f1}) // { arity: 1 }
-            Filter (#1{count} > 1) // { arity: 2 }
-              Reduce group_by=[#0{f1}] aggregates=[count(*)] // { arity: 2 }
-                Get l2 // { arity: 1 }
+        Project (#0{f1}, #2) // { arity: 2 }
+          FlatMap guard_subquery_size(#1{count}) // { arity: 3 }
+            Reduce group_by=[#0{f1}] aggregates=[count(*)] // { arity: 2 }
+              Get l2 // { arity: 1 }
     cte l4 =
       Project (#0{f1}, #2{f1}) // { arity: 2 }
         Join on=(#0{f1} = #1{f1}) type=differential // { arity: 3 }
@@ -654,11 +645,10 @@ Explained Query:
       Union // { arity: 2 }
         Project (#0{f1}, #0{f1}) // { arity: 2 }
           Get l6 // { arity: 1 }
-        Map (error("more than one record produced in subquery")) // { arity: 2 }
-          Project (#0{f1}) // { arity: 1 }
-            Filter (#1{count} > 1) // { arity: 2 }
-              Reduce group_by=[#0{f1}] aggregates=[count(*)] // { arity: 2 }
-                Get l6 // { arity: 1 }
+        Project (#0{f1}, #2) // { arity: 2 }
+          FlatMap guard_subquery_size(#1{count}) // { arity: 3 }
+            Reduce group_by=[#0{f1}] aggregates=[count(*)] // { arity: 2 }
+              Get l6 // { arity: 1 }
     cte l8 =
       Reduce aggregates=[min(#0{f1}), max(#1{f1})] // { arity: 2 }
         Project (#1{f1}, #3{f1}) // { arity: 2 }
@@ -736,11 +726,10 @@ Explained Query:
       Union // { arity: 2 }
         Project (#0{f1}, #0{f1}) // { arity: 2 }
           Get l1 // { arity: 1 }
-        Map (error("more than one record produced in subquery")) // { arity: 2 }
-          Project (#0{f1}) // { arity: 1 }
-            Filter (#1{count} > 1) // { arity: 2 }
-              Reduce group_by=[#0{f1}] aggregates=[count(*)] // { arity: 2 }
-                Get l1 // { arity: 1 }
+        Project (#0{f1}, #2) // { arity: 2 }
+          FlatMap guard_subquery_size(#1{count}) // { arity: 3 }
+            Reduce group_by=[#0{f1}] aggregates=[count(*)] // { arity: 2 }
+              Get l1 // { arity: 1 }
   Return // { arity: 2 }
     Project (#2{f1}, #2{f1}) // { arity: 2 }
       Join on=(#0{f1} = #1{f1}) type=differential // { arity: 3 }
@@ -818,11 +807,10 @@ Explained Query:
       Union // { arity: 3 }
         Project (#0{f1}, #1{f1}, #0{f1}) // { arity: 3 }
           Get l2 // { arity: 2 }
-        Map (error("more than one record produced in subquery")) // { arity: 3 }
-          Project (#0{f1}, #1{f1}) // { arity: 2 }
-            Filter (#2{count} > 1) // { arity: 3 }
-              Reduce group_by=[#0{f1}, #1{f1}] aggregates=[count(*)] // { arity: 3 }
-                Get l2 // { arity: 2 }
+        Project (#0{f1}, #1{f1}, #3) // { arity: 3 }
+          FlatMap guard_subquery_size(#2{count}) // { arity: 4 }
+            Reduce group_by=[#0{f1}, #1{f1}] aggregates=[count(*)] // { arity: 3 }
+              Get l2 // { arity: 2 }
   Return // { arity: 2 }
     Project (#4{f1}, #4{f1}) // { arity: 2 }
       Join on=(#0{f1} = #2{f1} AND #1{f1} = #3{f1}) type=differential // { arity: 5 }
@@ -895,11 +883,10 @@ With
   cte l1 =
     Union // { arity: 1, types: "(integer)" }
       Get l0 // { arity: 1, types: "(integer)" }
-      Map (error("more than one record produced in subquery")) // { arity: 1, types: "(integer)" }
-        Project () // { arity: 0, types: "()" }
-          Filter (#0 > 1) // { arity: 1, types: "(bigint)" }
-            Reduce aggregates=[count(*)] // { arity: 1, types: "(bigint)" }
-              Get l0 // { arity: 1, types: "(integer)" }
+      Project (#1) // { arity: 1, types: "(integer)" }
+        FlatMap guard_subquery_size(#0) // { arity: 2, types: "(bigint, integer)" }
+          Reduce aggregates=[count(*)] // { arity: 1, types: "(bigint)" }
+            Get l0 // { arity: 1, types: "(integer)" }
 Return // { arity: 2, types: "(integer, text)" }
   Project (#1, #2) // { arity: 2, types: "(integer, text)" }
     Map (case when (#0 = 1) then 0 else 2 end, "TEXT") // { arity: 3, types: "(integer?, integer, text)" }

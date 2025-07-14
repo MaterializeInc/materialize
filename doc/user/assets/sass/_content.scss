@@ -750,9 +750,8 @@ p+p {
         padding: 0;
         border-bottom: 1px solid #9c86e0;
         display: flex;
-        overflow-x: scroll;
+        overflow-x: auto;
 
-        padding-bottom: var(--xx-small);
 
         @media(max-width: 850px) {}
 
@@ -1285,4 +1284,9 @@ sup {
     a {
         color: var(--link);
     }
+}
+
+// Remove the bottom border from the last row of a nested table
+table table tr:last-child {
+    border-bottom: none;
 }

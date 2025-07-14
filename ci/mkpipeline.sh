@@ -39,9 +39,12 @@ while IFS=: read -r arch flavor; do
     if [[ $arch == aarch64 ]]; then
         queue=builder-linux-aarch64-mem
     fi
+    tag=$(MZ_DEV_CI_BUILDER_ARCH=$arch bin/ci-builder tag "$flavor")
     bootstrap_steps+="
   - label: bootstrap $flavor $arch
-    command: bin/ci-builder push $flavor
+    command: bin/ci-builder exists $flavor || bin/ci-builder push $flavor
+    concurrency: 1
+    concurrency_group: \"ci-builder:$tag\"
     agents:
       queue: $queue
 "

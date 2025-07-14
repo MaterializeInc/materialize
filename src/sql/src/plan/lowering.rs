@@ -138,6 +138,7 @@ pub struct Config {
     pub enable_new_outer_join_lowering: bool,
     /// Enable outer join lowering implemented in database-issues#7561.
     pub enable_variadic_left_join_lowering: bool,
+    pub enable_guard_subquery_tablefunc: bool,
 }
 
 impl From<&SystemVars> for Config {
@@ -145,6 +146,7 @@ impl From<&SystemVars> for Config {
         Self {
             enable_new_outer_join_lowering: vars.enable_new_outer_join_lowering(),
             enable_variadic_left_join_lowering: vars.enable_variadic_left_join_lowering(),
+            enable_guard_subquery_tablefunc: vars.enable_guard_subquery_tablefunc(),
         }
     }
 }
@@ -1955,17 +1957,35 @@ fn apply_scalar_subquery(
                     }],
                     None,
                 );
+
+                let use_guard = context.config.enable_guard_subquery_tablefunc;
+
                 // Errors should result from counts > 1.
-                let errors = counts
-                    .filter(vec![MirScalarExpr::column(inner_arity).call_binary(
-                        MirScalarExpr::literal_ok(Datum::Int64(1), ScalarType::Int64),
-                        mz_expr::BinaryFunc::Gt,
-                    )])
-                    .project((0..inner_arity).collect::<Vec<_>>())
-                    .map_one(MirScalarExpr::literal(
-                        Err(mz_expr::EvalError::MultipleRowsFromSubquery),
-                        col_type.clone().scalar_type,
-                    ));
+                let errors = if use_guard {
+                    counts
+                        .flat_map(
+                            mz_expr::TableFunc::GuardSubquerySize {
+                                column_type: col_type.clone().scalar_type,
+                            },
+                            vec![MirScalarExpr::column(inner_arity)],
+                        )
+                        .project(
+                            (0..inner_arity)
+                                .chain(Some(inner_arity + 1))
+                                .collect::<Vec<_>>(),
+                        )
+                } else {
+                    counts
+                        .filter(vec![MirScalarExpr::column(inner_arity).call_binary(
+                            MirScalarExpr::literal_ok(Datum::Int64(1), ScalarType::Int64),
+                            mz_expr::BinaryFunc::Gt,
+                        )])
+                        .project((0..inner_arity).collect::<Vec<_>>())
+                        .map_one(MirScalarExpr::literal(
+                            Err(mz_expr::EvalError::MultipleRowsFromSubquery),
+                            col_type.clone().scalar_type,
+                        ))
+                };
                 // Return `get_select` and any errors added in.
                 Ok::<_, PlanError>(get_select.union(errors))
             })?;

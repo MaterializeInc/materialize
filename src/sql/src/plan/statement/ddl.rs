@@ -4760,6 +4760,7 @@ pub fn unplan_create_cluster(
         }) => {
             let schedule = unplan_cluster_schedule(schedule);
             let OptimizerFeatureOverrides {
+                enable_guard_subquery_tablefunc: _,
                 enable_consolidate_after_union_negate: _,
                 enable_reduce_mfp_fusion: _,
                 enable_cardinality_estimates: _,

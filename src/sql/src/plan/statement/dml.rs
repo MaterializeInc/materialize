@@ -541,6 +541,7 @@ impl TryFrom<ExplainPlanOptionExtracted> for ExplainConfig {
             types: v.types,
             // The ones that are initialized with `Default::default()` are not wired up to EXPLAIN.
             features: OptimizerFeatureOverrides {
+                enable_guard_subquery_tablefunc: Default::default(),
                 enable_eager_delta_joins: v.enable_eager_delta_joins,
                 enable_new_outer_join_lowering: v.enable_new_outer_join_lowering,
                 enable_variadic_left_join_lowering: v.enable_variadic_left_join_lowering,

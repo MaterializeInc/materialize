@@ -4386,7 +4386,7 @@ pub static MZ_STATEMENT_LIFECYCLE_HISTORY: LazyLock<BuiltinSource> = LazyLock::n
         is_retained_metrics_object: false,
         // TODO[btv]: Maybe this should be public instead of
         // `MONITOR_REDACTED`, but since that would be a backwards-compatible
-        // chagne, we probably don't need to worry about it now.
+        // change, we probably don't need to worry about it now.
         access: vec![
             SUPPORT_SELECT,
             ANALYTICS_SELECT,
@@ -9125,7 +9125,7 @@ pub static MZ_EXPECTED_GROUP_SIZE_ADVICE: LazyLock<BuiltinView> = LazyLock::new(
         -- such pattern, we look for how many levels can be eliminated without hitting a level
         -- that actually substantially filters the input. The advice is constructed so that
         -- setting the hint for the affected region will eliminate these redundant levels of
-        -- the hierachical rendering.
+        -- the hierarchical rendering.
         --
         -- A number of helper CTEs are used for the view definition. The first one, operators,
         -- looks for operator names that comprise arrangements of inputs to each level of a
