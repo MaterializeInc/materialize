@@ -23,7 +23,7 @@ mz-ore = { path = "../ore", default-features = false, features = ["async", "proc
 num-traits = "0.2"
 proptest = { version = "1.7.0", default-features = false, features = ["std"] }
 serde = { version = "1.0.219", features = ["derive"] }
-timely = "0.21.3"
+timely = "0.21.4"
 tokio = { version = "1.44.1", features = ["macros", "rt-multi-thread", "time"] }
 tracing = "0.1.37"
 uuid = { version = "1.17.0", features = ["serde", "v4"] }

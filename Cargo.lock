@@ -613,7 +613,7 @@ dependencies = [
  "proc-macro-error",
  "proc-macro2",
  "quote",
- "syn 1.0.107",
+ "syn 1.0.109",
 ]
 
 [[package]]
@@ -1369,7 +1369,25 @@ dependencies = [
  "proc-macro2",
  "quote",
  "regex",
- "rustc-hash",
+ "rustc-hash 1.1.0",
+ "shlex",
+ "syn 2.0.104",
+]
+
+[[package]]
+name = "bindgen"
+version = "0.71.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5f58bf3d7db68cfbac37cfc485a8d711e87e064c3d0fe0435b92f7a407f9d6b3"
+dependencies = [
+ "bitflags 2.9.0",
+ "cexpr",
+ "clang-sys",
+ "itertools 0.13.0",
+ "proc-macro2",
+ "quote",
+ "regex",
+ "rustc-hash 2.1.1",
  "shlex",
  "syn 2.0.104",
 ]
@@ -1613,7 +1631,7 @@ dependencies = [
  "quote",
  "serde",
  "serde_json",
- "syn 1.0.107",
+ "syn 2.0.104",
  "tempfile",
  "tracing",
  "tracing-subscriber",
@@ -1875,6 +1893,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "columnar"
+version = "0.8.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "cffc0fe101808104552fa2de62ac13d95a0a50288fe783ecfb5842e4e98c892d"
+dependencies = [
+ "bytemuck",
+ "columnar_derive",
+ "serde",
+ "smallvec",
+]
+
+[[package]]
 name = "columnar_derive"
 version = "0.2.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1913,7 +1943,7 @@ checksum = "43b5affba7c91c039a483065125dd8c6d4a0985e1e9ac5ab6dffdea4fe4e637f"
 dependencies = [
  "proc-macro2",
  "quote",
- "syn 1.0.107",
+ "syn 1.0.109",
 ]
 
 [[package]]
@@ -2499,7 +2529,7 @@ checksum = "fcc3dd5e9e9c0b295d6e1e4d811fb6f157d5ffd784b8d202fc62eac8035a770b"
 dependencies = [
  "proc-macro2",
  "quote",
- "syn 1.0.107",
+ "syn 1.0.109",
 ]
 
 [[package]]
@@ -2510,7 +2540,7 @@ checksum = "7a2c35ab6e03642397cdda1dd58abbc05d418aef8e36297f336d5aba060fe8df"
 dependencies = [
  "proc-macro2",
  "quote",
- "syn 1.0.107",
+ "syn 1.0.109",
 ]
 
 [[package]]
@@ -2550,7 +2580,7 @@ version = "0.15.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a455d273f7d0c0e1669bd384a065e30ba5e5fe18e5ef2fb67200b649e9487e93"
 dependencies = [
- "columnar",
+ "columnar 0.6.0",
  "columnation",
  "fnv",
  "paste",
@@ -2810,7 +2840,7 @@ checksum = "4e40a16955681d469ab3da85aaa6b42ff656b3c67b52e1d8d3dd36afe97fd462"
 dependencies = [
  "proc-macro2",
  "quote",
- "syn 1.0.107",
+ "syn 1.0.109",
 ]
 
 [[package]]
@@ -3997,6 +4027,17 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8bb03732005da905c88227371639bf1ad885cc712789c011c31c5fb3ab3ccf02"
 
 [[package]]
+name = "io-uring"
+version = "0.7.8"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b86e202f00093dcba4275d4636b93ef9dd75d025ae560d2521b45ea28ab49013"
+dependencies = [
+ "bitflags 2.9.0",
+ "cfg-if",
+ "libc",
+]
+
+[[package]]
 name = "ipnet"
 version = "2.11.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4491,7 +4532,7 @@ version = "0.16.0+8.10.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ce3d60bc059831dc1c83903fb45c103f75db65c5a7bf22272764d9cc683e348c"
 dependencies = [
- "bindgen",
+ "bindgen 0.69.4",
  "bzip2-sys",
  "cc",
  "glob",
@@ -5525,7 +5566,7 @@ dependencies = [
  "anyhow",
  "async-stream",
  "bytesize",
- "columnar",
+ "columnar 0.6.0",
  "core_affinity",
  "crossbeam-channel",
  "dec",
@@ -5615,7 +5656,7 @@ dependencies = [
 name = "mz-compute-types"
 version = "0.0.0"
 dependencies = [
- "columnar",
+ "columnar 0.6.0",
  "columnation",
  "differential-dataflow",
  "itertools 0.14.0",
@@ -6287,7 +6328,7 @@ version = "0.0.0"
 dependencies = [
  "proc-macro2",
  "quote",
- "syn 1.0.107",
+ "syn 2.0.104",
  "workspace-hack",
 ]
 
@@ -6559,7 +6600,7 @@ dependencies = [
  "bytes",
  "chrono",
  "clap",
- "columnar",
+ "columnar 0.6.0",
  "columnation",
  "compact_bytes",
  "console-subscriber",
@@ -6630,7 +6671,7 @@ version = "0.1.0"
 dependencies = [
  "proc-macro2",
  "quote",
- "syn 1.0.107",
+ "syn 2.0.104",
  "tracing",
  "workspace-hack",
 ]
@@ -6751,7 +6792,7 @@ version = "0.1.0"
 dependencies = [
  "proc-macro2",
  "quote",
- "syn 1.0.107",
+ "syn 2.0.104",
  "workspace-hack",
 ]
 
@@ -7056,7 +7097,7 @@ dependencies = [
  "bytes",
  "cfg-if",
  "chrono",
- "columnar",
+ "columnar 0.6.0",
  "columnation",
  "compact_bytes",
  "criterion",
@@ -7916,7 +7957,7 @@ dependencies = [
  "ahash",
  "bincode",
  "bytemuck",
- "columnar",
+ "columnar 0.6.0",
  "columnation",
  "differential-dataflow",
  "either",
@@ -8054,7 +8095,7 @@ dependencies = [
  "mz-ore",
  "mz-ore-build",
  "quote",
- "syn 1.0.107",
+ "syn 2.0.104",
  "tempfile",
  "workspace-hack",
 ]
@@ -8273,7 +8314,7 @@ dependencies = [
  "proc-macro-crate",
  "proc-macro2",
  "quote",
- "syn 1.0.107",
+ "syn 1.0.109",
 ]
 
 [[package]]
@@ -9167,7 +9208,7 @@ dependencies = [
  "proc-macro-error-attr",
  "proc-macro2",
  "quote",
- "syn 1.0.107",
+ "syn 1.0.109",
  "version_check",
 ]
 
@@ -9275,7 +9316,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "be769465445e8c1474e9c5dac2018218498557af32d9ed057325ec9a41ae81bf"
 dependencies = [
  "heck",
- "itertools 0.10.5",
+ "itertools 0.14.0",
  "log",
  "multimap",
  "once_cell",
@@ -9295,7 +9336,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8a56d757972c98b346a9b766e3f02746cde6dd1cd1d1d563472929fdd74bec4d"
 dependencies = [
  "anyhow",
- "itertools 0.10.5",
+ "itertools 0.14.0",
  "proc-macro2",
  "quote",
  "syn 2.0.104",
@@ -9984,6 +10025,12 @@ name = "rustc-hash"
 version = "1.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "08d43f7aa6b08d49f382cde6a7982047c3426db949b1424bc4b7ec9ae12c6ce2"
+
+[[package]]
+name = "rustc-hash"
+version = "2.1.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "357703d41365b4b27c590e3ed91eabb1b663f07c4c084095e60cbed4362dff0d"
 
 [[package]]
 name = "rustc_version"
@@ -10848,9 +10895,9 @@ dependencies = [
 
 [[package]]
 name = "syn"
-version = "1.0.107"
+version = "1.0.109"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1f4064b5b16e03ae50984a5a8ed5d4f8803e6bc1fd170a3cda91a1be4b18e3f5"
+checksum = "72b64191b275b66ffe2469e8af2c1cfe3bafa67b529ead792a6d0160888b4237"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -11228,13 +11275,13 @@ dependencies = [
 
 [[package]]
 name = "timely"
-version = "0.21.3"
+version = "0.21.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "17c9007b6f132ad1983f50665419e157c3386e5ab2706b3a6d29f832aef211ad"
+checksum = "6aff0b2a1cf1f24b853c91b6cf56b464d405591ad19fbf7e5e88bb33fb8de35e"
 dependencies = [
  "bincode",
  "byteorder",
- "columnar",
+ "columnar 0.8.0",
  "columnation",
  "getopts",
  "serde",
@@ -11258,7 +11305,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c0913c463e192579113ebf1f2a50cdfd9d2c682281490b6c704ffbf951568c29"
 dependencies = [
  "byteorder",
- "columnar",
+ "columnar 0.6.0",
  "getopts",
  "serde",
  "timely_bytes",
@@ -11317,17 +11364,19 @@ checksum = "cda74da7e1a664f795bb1f8a87ec406fb89a02522cf6e50620d016add6dbbf5c"
 
 [[package]]
 name = "tokio"
-version = "1.44.2"
+version = "1.46.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e6b88822cbe49de4185e3a4cbf8321dd487cf5fe0c5c65695fef6346371e9c48"
+checksum = "0cc3a2344dafbe23a245241fe8b09735b521110d30fcefbbd5feb1797ca35d17"
 dependencies = [
  "backtrace",
  "bytes",
+ "io-uring",
  "libc",
  "mio",
  "parking_lot",
  "pin-project-lite",
  "signal-hook-registry",
+ "slab",
  "socket2 0.5.10",
  "tokio-macros",
  "tracing",
@@ -11366,9 +11415,9 @@ dependencies = [
 
 [[package]]
 name = "tokio-metrics"
-version = "0.4.2"
+version = "0.4.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7817b32d36c9b94744d7aa3f8fc13526aa0f5112009d7045f3c659413a6e44ac"
+checksum = "23ff82f660c98e4ff60da5eb8fa864a4130f34b56d92d5cd23d6fdfcc14e95fa"
 dependencies = [
  "futures-util",
  "pin-project-lite",
@@ -12937,7 +12986,7 @@ dependencies = [
  "similar",
  "smallvec",
  "subtle",
- "syn 1.0.107",
+ "syn 1.0.109",
  "syn 2.0.104",
  "time",
  "time-macros",
@@ -13069,10 +13118,11 @@ dependencies = [
 
 [[package]]
 name = "zstd-sys"
-version = "2.0.13+zstd.1.5.6"
+version = "2.0.15+zstd.1.5.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "38ff0f21cfee8f97d94cef41359e0c89aa6113028ab0291aa8ca0038995a95aa"
+checksum = "eb81183ddd97d0c74cedf1d50d85c8d08c1b8b68ee863bdee9e706eedba1a237"
 dependencies = [
+ "bindgen 0.71.1",
  "cc",
  "pkg-config",
 ]

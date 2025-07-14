@@ -84,7 +84,7 @@ serde_plain = "1.0.2"
 sha2 = "0.10.9"
 smallvec = { version = "1.15.1", features = ["union"] }
 static_assertions = "1.1"
-timely = "0.21.3"
+timely = "0.21.4"
 tokio = { version = "1.44.1", features = ["rt", "time"] }
 tokio-postgres = { version = "0.7.8" }
 tokio-stream = "0.1.17"

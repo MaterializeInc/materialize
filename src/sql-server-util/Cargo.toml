@@ -36,7 +36,7 @@ smallvec = { version = "1.15.1", features = ["union"] }
 static_assertions = "1.1"
 thiserror = "2.0.11"
 tiberius = { version = "0.12", features = ["chrono", "sql-browser-tokio", "tds73", "native-tls"], default-features = false }
-timely = "0.21.3"
+timely = "0.21.4"
 tokio = { version = "1.44.1", features = ["net"] }
 tokio-stream = "0.1.17"
 tokio-util = { version = "0.7.15", features = ["compat"] }

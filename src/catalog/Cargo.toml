@@ -61,7 +61,7 @@ serde_plain = "1.0.2"
 static_assertions = "1.1"
 sha2 = "0.10.9"
 thiserror = "2.0.12"
-timely = "0.21.3"
+timely = "0.21.4"
 tokio = { version = "1.44.1" }
 tracing = "0.1.37"
 uuid = "1.17.0"

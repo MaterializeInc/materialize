@@ -61,7 +61,7 @@ serde_json = "1.0.127"
 sha1 = "0.10.6"
 sha2 = "0.10.9"
 subtle = "2.6.1"
-timely = "0.21.3"
+timely = "0.21.4"
 tracing = "0.1.37"
 uncased = "0.9.7"
 uuid = { version = "1.17.0", features = ["v5"] }
