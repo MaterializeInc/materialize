@@ -1097,6 +1097,9 @@ class FlipFlagsAction(Action):
             "1048576",  # 1 MiB, an in-between value
             "314572800",  # 300 MiB, the production value
         ]
+        self.flags_with_values["persist_enable_incremental_compaction"] = (
+            BOOLEAN_FLAG_VALUES
+        )
 
         # If you are adding a new config flag in Materialize, consider using it
         # here instead of just marking it as uninteresting to silence the

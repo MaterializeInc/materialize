@@ -38,7 +38,7 @@ use crate::{Compactor, GarbageCollector, Machine};
 /// Operations that run regularly once a handle is registered, such
 /// as heartbeats, are expected to always perform maintenance.
 #[must_use]
-#[derive(Debug, Default, PartialEq)]
+#[derive(Debug, Default, PartialEq, Eq, PartialOrd, Ord)]
 pub struct RoutineMaintenance {
     pub(crate) garbage_collection: Option<GcReq>,
     pub(crate) write_rollup: Option<SeqNo>,
