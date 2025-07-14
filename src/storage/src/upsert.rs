@@ -737,7 +737,7 @@ where
     let previous = previous.flat_map(move |result| {
         let value = match result {
             Ok(ok) => Ok(ok),
-            Err(DataflowError::EnvelopeError(err)) => match *err {
+            Err(DataflowError::EnvelopeError(err)) => match *err.into_inner() {
                 EnvelopeError::Upsert(err) => Err(err),
                 _ => return None,
             },

@@ -37,6 +37,7 @@ pub mod channel;
 #[cfg(feature = "cli")]
 pub mod cli;
 pub mod collections;
+pub mod columnar;
 pub mod env;
 pub mod error;
 pub mod fmt;

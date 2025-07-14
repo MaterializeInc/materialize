@@ -129,6 +129,7 @@ use mz_compute_types::plan::render_plan::{
     self, BindStage, LetBind, LetFreePlan, RecBind, RenderPlan,
 };
 use mz_expr::{EvalError, Id, LocalId};
+use mz_ore::columnar::Boxed;
 use mz_persist_client::operators::shard_source::{ErrorHandler, SnapshotMode};
 use mz_repr::explain::DummyHumanizer;
 use mz_repr::{Datum, Diff, GlobalId, Row, SharedRow};
@@ -896,7 +897,7 @@ where
                     oks = Collection::new(in_limit);
                     if !limit.return_at_limit {
                         err = err.concat(&Collection::new(over_limit).map(move |_data| {
-                            DataflowError::EvalError(Box::new(EvalError::LetRecLimitExceeded(
+                            DataflowError::EvalError(Boxed::new(EvalError::LetRecLimitExceeded(
                                 format!("{}", limit.max_iters.get()).into(),
                             )))
                         }));

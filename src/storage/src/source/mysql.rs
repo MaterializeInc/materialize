@@ -60,12 +60,23 @@ use differential_dataflow::AsCollection;
 use differential_dataflow::containers::TimelyStack;
 use itertools::Itertools;
 use mz_mysql_util::quote_identifier;
+use mz_mysql_util::{
+    MySqlError, MySqlTableDesc, ensure_full_row_binlog_format, ensure_gtid_consistency,
+    ensure_replication_commit_order,
+};
 use mz_ore::cast::CastFrom;
+use mz_ore::columnar::Boxed;
+use mz_ore::error::ErrorExt;
 use mz_repr::Diff;
 use mz_repr::GlobalId;
+use mz_storage_types::errors::SourceErrorDetails;
 use mz_storage_types::errors::{DataflowError, SourceError};
 use mz_storage_types::sources::SourceExport;
+use mz_storage_types::sources::mysql::{GtidPartition, GtidState, gtid_set_frontier};
+use mz_storage_types::sources::{MySqlSourceConnection, SourceExportDetails, SourceTimestamp};
+use mz_timely_util::builder_async::{AsyncOutputHandle, PressOnDropButton};
 use mz_timely_util::containers::stack::AccountedStackBuilder;
+use mz_timely_util::order::Extrema;
 use serde::{Deserialize, Serialize};
 use timely::container::CapacityContainerBuilder;
 use timely::dataflow::channels::pushers::Tee;
@@ -74,17 +85,6 @@ use timely::dataflow::operators::{CapabilitySet, Concat, Map, ToStream};
 use timely::dataflow::{Scope, Stream};
 use timely::progress::Antichain;
 use uuid::Uuid;
-
-use mz_mysql_util::{
-    MySqlError, MySqlTableDesc, ensure_full_row_binlog_format, ensure_gtid_consistency,
-    ensure_replication_commit_order,
-};
-use mz_ore::error::ErrorExt;
-use mz_storage_types::errors::SourceErrorDetails;
-use mz_storage_types::sources::mysql::{GtidPartition, GtidState, gtid_set_frontier};
-use mz_storage_types::sources::{MySqlSourceConnection, SourceExportDetails, SourceTimestamp};
-use mz_timely_util::builder_async::{AsyncOutputHandle, PressOnDropButton};
-use mz_timely_util::order::Extrema;
 
 use crate::healthcheck::{HealthStatusMessage, HealthStatusUpdate, StatusNamespace};
 use crate::source::types::Probe;
@@ -306,7 +306,7 @@ pub enum DefiniteError {
 impl From<DefiniteError> for DataflowError {
     fn from(err: DefiniteError) -> Self {
         let m = err.to_string().into();
-        DataflowError::SourceError(Box::new(SourceError {
+        DataflowError::SourceError(Boxed::new(SourceError {
             error: match &err {
                 DefiniteError::ValueDecodeError(_) => SourceErrorDetails::Other(m),
                 DefiniteError::TableTruncated(_) => SourceErrorDetails::Other(m),

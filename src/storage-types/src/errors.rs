@@ -14,6 +14,7 @@ use std::fmt::Display;
 use bytes::BufMut;
 use mz_expr::EvalError;
 use mz_kafka_util::client::TunnelingClientContext;
+use mz_ore::columnar::Boxed;
 use mz_proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
 use mz_repr::Row;
 use mz_ssh_util::tunnel::SshTunnelStatus;
@@ -88,8 +89,8 @@ impl Display for DecodeError {
 
 #[derive(Arbitrary, Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash)]
 pub enum DecodeErrorKind {
-    Text(Box<str>),
-    Bytes(Box<str>),
+    Text(Boxed<str>),
+    Bytes(Boxed<str>),
 }
 
 impl RustType<ProtoDecodeErrorKind> for DecodeErrorKind {
@@ -97,8 +98,8 @@ impl RustType<ProtoDecodeErrorKind> for DecodeErrorKind {
         use proto_decode_error_kind::Kind::*;
         ProtoDecodeErrorKind {
             kind: Some(match self {
-                DecodeErrorKind::Text(v) => Text(v.into_proto()),
-                DecodeErrorKind::Bytes(v) => Bytes(v.into_proto()),
+                DecodeErrorKind::Text(v) => Text(v.inner().into_proto()),
+                DecodeErrorKind::Bytes(v) => Bytes(v.inner().into_proto()),
             }),
         }
     }
@@ -106,7 +107,7 @@ impl RustType<ProtoDecodeErrorKind> for DecodeErrorKind {
     fn from_proto(proto: ProtoDecodeErrorKind) -> Result<Self, TryFromProtoError> {
         use proto_decode_error_kind::Kind::*;
         match proto.kind {
-            Some(Text(v)) => Ok(DecodeErrorKind::Text(v.into())),
+            Some(Text(v)) => Ok(DecodeErrorKind::Text(Boxed::from(Box::from(v)))),
             Some(Bytes(v)) => Ok(DecodeErrorKind::Bytes(v.into())),
             None => Err(TryFromProtoError::missing_field("ProtoDecodeError::kind")),
         }
@@ -116,7 +117,7 @@ impl RustType<ProtoDecodeErrorKind> for DecodeErrorKind {
 impl Display for DecodeErrorKind {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            DecodeErrorKind::Text(e) => f.write_str(e),
+            DecodeErrorKind::Text(e) => f.write_str(&*e),
             DecodeErrorKind::Bytes(e) => f.write_str(e),
         }
     }
@@ -384,10 +385,10 @@ impl Display for SourceErrorDetails {
 /// size less than or equal to that of `Row` is important to ensure we are not wasting memory.
 #[derive(Arbitrary, Ord, PartialOrd, Clone, Debug, Eq, Deserialize, Serialize, PartialEq, Hash)]
 pub enum DataflowError {
-    DecodeError(Box<DecodeError>),
-    EvalError(Box<EvalError>),
-    SourceError(Box<SourceError>),
-    EnvelopeError(Box<EnvelopeError>),
+    DecodeError(Boxed<DecodeError>),
+    EvalError(Boxed<EvalError>),
+    SourceError(Boxed<SourceError>),
+    EnvelopeError(Boxed<EnvelopeError>),
 }
 
 impl Error for DataflowError {}
@@ -490,10 +491,10 @@ mod columnation {
             DecodeError {
                 kind: match &decode_error.kind {
                     DecodeErrorKind::Text(string) => {
-                        DecodeErrorKind::Text(self.string_region.copy(string))
+                        DecodeErrorKind::Text(self.string_region.copy(string.inner()).into())
                     }
                     DecodeErrorKind::Bytes(string) => {
-                        DecodeErrorKind::Bytes(self.string_region.copy(string))
+                        DecodeErrorKind::Bytes(self.string_region.copy(string.inner()).into())
                     }
                 },
                 raw: self.u8_region.copy(&decode_error.raw),
@@ -524,7 +525,7 @@ mod columnation {
                     let err = self.copy_decode_error(&*err);
                     let reference = self.decode_error_region.copy_iter(once(err));
                     let boxed = unsafe { Box::from_raw(reference.as_mut_ptr()) };
-                    DataflowError::DecodeError(boxed)
+                    DataflowError::DecodeError(boxed.into())
                 }
                 DataflowError::EvalError(err) => {
                     let err: &EvalError = &*err;
@@ -771,7 +772,7 @@ mod columnation {
                     };
                     let reference = self.eval_error_region.copy_iter(once(err));
                     let boxed = unsafe { Box::from_raw(reference.as_mut_ptr()) };
-                    DataflowError::EvalError(boxed)
+                    DataflowError::EvalError(boxed.into())
                 }
                 DataflowError::SourceError(err) => {
                     let err: &SourceError = &*err;
@@ -787,7 +788,7 @@ mod columnation {
                     };
                     let reference = self.source_error_region.copy_iter(once(err));
                     let boxed = unsafe { Box::from_raw(reference.as_mut_ptr()) };
-                    DataflowError::SourceError(boxed)
+                    DataflowError::SourceError(boxed.into())
                 }
                 DataflowError::EnvelopeError(err) => {
                     let err: &EnvelopeError = &*err;
@@ -811,7 +812,7 @@ mod columnation {
                     };
                     let reference = self.envelope_error_region.copy_iter(once(err));
                     let boxed = unsafe { Box::from_raw(reference.as_mut_ptr()) };
-                    DataflowError::EnvelopeError(boxed)
+                    DataflowError::EnvelopeError(boxed.into())
                 }
             };
             // Debug-only check that we're returning an equal object.
@@ -934,10 +935,10 @@ impl RustType<ProtoDataflowError> for DataflowError {
         use proto_dataflow_error::Kind::*;
         ProtoDataflowError {
             kind: Some(match self {
-                DataflowError::DecodeError(err) => DecodeError(*err.into_proto()),
-                DataflowError::EvalError(err) => EvalError(*err.into_proto()),
-                DataflowError::SourceError(err) => SourceError(*err.into_proto()),
-                DataflowError::EnvelopeError(err) => EnvelopeErrorV1(*err.into_proto()),
+                DataflowError::DecodeError(err) => DecodeError(err.into_proto()),
+                DataflowError::EvalError(err) => EvalError(err.into_proto()),
+                DataflowError::SourceError(err) => SourceError(err.into_proto()),
+                DataflowError::EnvelopeError(err) => EnvelopeErrorV1(err.into_proto()),
             }),
         }
     }
@@ -946,11 +947,11 @@ impl RustType<ProtoDataflowError> for DataflowError {
         use proto_dataflow_error::Kind::*;
         match proto.kind {
             Some(kind) => match kind {
-                DecodeError(err) => Ok(DataflowError::DecodeError(Box::new(err.into_rust()?))),
-                EvalError(err) => Ok(DataflowError::EvalError(Box::new(err.into_rust()?))),
-                SourceError(err) => Ok(DataflowError::SourceError(Box::new(err.into_rust()?))),
+                DecodeError(err) => Ok(DataflowError::DecodeError(Boxed::new(err.into_rust()?))),
+                EvalError(err) => Ok(DataflowError::EvalError(Boxed::new(err.into_rust()?))),
+                SourceError(err) => Ok(DataflowError::SourceError(Boxed::new(err.into_rust()?))),
                 EnvelopeErrorV1(err) => {
-                    Ok(DataflowError::EnvelopeError(Box::new(err.into_rust()?)))
+                    Ok(DataflowError::EnvelopeError(Boxed::new(err.into_rust()?)))
                 }
             },
             None => Err(TryFromProtoError::missing_field("ProtoDataflowError::kind")),
@@ -979,25 +980,25 @@ impl Display for DataflowError {
 
 impl From<DecodeError> for DataflowError {
     fn from(e: DecodeError) -> Self {
-        Self::DecodeError(Box::new(e))
+        Self::DecodeError(Boxed::new(e))
     }
 }
 
 impl From<EvalError> for DataflowError {
     fn from(e: EvalError) -> Self {
-        Self::EvalError(Box::new(e))
+        Self::EvalError(Boxed::new(e))
     }
 }
 
 impl From<SourceError> for DataflowError {
     fn from(e: SourceError) -> Self {
-        Self::SourceError(Box::new(e))
+        Self::SourceError(Boxed::new(e))
     }
 }
 
 impl From<EnvelopeError> for DataflowError {
     fn from(e: EnvelopeError) -> Self {
-        Self::EnvelopeError(Box::new(e))
+        Self::EnvelopeError(Boxed::new(e))
     }
 }
 
