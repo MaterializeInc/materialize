@@ -11,7 +11,6 @@ $ skip-if
 SELECT mz_version_num() < 13300;
 
 $ set-sql-timeout duration=1s
-$ set-max-tries max-tries=20
 
 
 #

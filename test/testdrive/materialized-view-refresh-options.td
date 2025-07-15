@@ -409,7 +409,7 @@ true
 4
 
 # Seems to take a while in k8s
-$ set-max-tries max-tries=50
+$ set-max-tries max-tries=5000
 
 # The cluster should be turned off at some point.
 > SELECT replication_factor FROM mz_catalog.mz_clusters WHERE name = 'scheduled_cluster';

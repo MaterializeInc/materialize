@@ -65,6 +65,7 @@ class Testdrive(Service):
         cluster_replica_size: dict[str, dict[str, Any]] | None = None,
         network_mode: str | None = None,
         set_persist_urls: bool = True,
+        backoff_factor: float = 1.0,
     ) -> None:
         depends_graph: dict[str, ServiceDependency] = {}
 
@@ -107,7 +108,10 @@ class Testdrive(Service):
                 f"--materialize-url={materialize_url}",
                 f"--materialize-internal-url={materialize_url_internal}",
                 *(["--materialize-use-https"] if materialize_use_https else []),
+                # Faster retries
             ]
+
+        entrypoint.append(f"--backoff-factor={backoff_factor}")
 
         if aws_region:
             entrypoint.append(f"--aws-region={aws_region}")
