@@ -826,9 +826,17 @@ impl<T: Timestamp + Lattice> SpineBatch<T> {
     }
 
     pub fn is_compact(&self) -> bool {
-        // This definition is extremely likely to change, but for now, we consider a batch
-        // "compact" if it has at most one hollow batch with at most one run.
-        self.parts.len() <= 1 && self.parts.iter().all(|p| p.batch.run_splits.is_empty())
+        // A compact batch has at most one run.
+        // This check used to be if there was at most one hollow batch with at most one run,
+        // but that was a bit too strict since introducing incremental compaction.
+        // Incremental compaction can result in a batch with a single run, but multiple empty
+        // hollow batches, which we still consider compact. As levels are merged, we
+        // will eventually clean up the empty hollow batches.
+        self.parts
+            .iter()
+            .map(|p| p.batch.run_meta.len())
+            .sum::<usize>()
+            <= 1
     }
 
     pub fn is_merging(&self) -> bool {
