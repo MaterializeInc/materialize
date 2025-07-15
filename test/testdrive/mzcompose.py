@@ -14,7 +14,6 @@ retried until it produces the desired result.
 """
 
 import glob
-from pathlib import Path
 
 from materialize import MZ_ROOT, buildkite, ci_util
 from materialize.mzcompose.composition import Composition, WorkflowArgumentParser
@@ -215,21 +214,16 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
             ):
                 return
             junit_report = ci_util.junit_report_filename(f"{c.name}_{file}")
-            try:
-                c.run_testdrive_files(
-                    (
-                        "--rewrite-results"
-                        if args.rewrite_results
-                        else f"--junit-report={junit_report}"
-                    ),
-                    *non_default_testdrive_vars,
-                    *passthrough_args,
-                    file,
-                )
-            finally:
-                ci_util.upload_junit_report(
-                    "testdrive", Path(__file__).parent / junit_report
-                )
+            c.run_testdrive_files(
+                (
+                    "--rewrite-results"
+                    if args.rewrite_results
+                    else f"--junit-report={junit_report}"
+                ),
+                *non_default_testdrive_vars,
+                *passthrough_args,
+                file,
+            )
 
         files = buildkite.shard_list(
             [
