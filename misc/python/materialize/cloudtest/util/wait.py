@@ -26,6 +26,7 @@ def wait(
     *,
     label: str | None = None,
     namespace: str | None = None,
+    server: str | None = None,
 ) -> None:
     cmd = [
         "kubectl",
@@ -44,6 +45,9 @@ def wait(
 
     if namespace is not None:
         cmd.extend(["--namespace", namespace])
+
+    if server is not None:
+        cmd.extend(["--server", server])
 
     ui.progress(f'waiting for {" ".join(cmd)} ... ')
 
