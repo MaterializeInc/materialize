@@ -18,6 +18,7 @@ use std::sync::Arc;
 use differential_dataflow::AsCollection;
 use itertools::Itertools;
 use mz_ore::cast::CastFrom;
+use mz_ore::columnar::Boxed;
 use mz_ore::error::ErrorExt;
 use mz_repr::{Diff, GlobalId};
 use mz_sql_server_util::SqlServerError;
@@ -91,7 +92,7 @@ pub enum DefiniteError {
 impl From<DefiniteError> for DataflowError {
     fn from(val: DefiniteError) -> Self {
         let msg = val.to_string().into();
-        DataflowError::SourceError(Box::new(SourceError {
+        DataflowError::SourceError(Boxed::new(SourceError {
             error: SourceErrorDetails::Other(msg),
         }))
     }
