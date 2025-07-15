@@ -668,7 +668,6 @@ impl<T: Timestamp + Lattice + Codec64> Trace<T> {
         ApplyMergeResult::NotAppliedNoMatch
     }
 
-    #[allow(dead_code)]
     pub fn apply_merge_res_checked<D: Codec64 + Semigroup + PartialEq>(
         &mut self,
         res: &FueledMergeRes<T>,
@@ -719,10 +718,8 @@ pub enum CompactionInput {
     /// unchecked legacy replacements.
     Legacy,
     /// This compaction output is a total replacement for all batches in this id range.
-    #[allow(dead_code)]
     IdRange(SpineId),
     /// This compaction output replaces the specified runs in this id range.
-    #[allow(dead_code)]
     PartialBatch(SpineId, BTreeSet<RunId>),
 }
 
@@ -823,9 +820,17 @@ impl<T: Timestamp + Lattice> SpineBatch<T> {
     }
 
     pub fn is_compact(&self) -> bool {
-        // This definition is extremely likely to change, but for now, we consider a batch
-        // "compact" if it has at most one hollow batch with at most one run.
-        self.parts.len() <= 1 && self.parts.iter().all(|p| p.batch.run_splits.is_empty())
+        // A compact batch has at most one run.
+        // This check used to be if there was at most one hollow batch with at most one run,
+        // but that was a bit too strict since introducing incremental compaction.
+        // Incremental compaction can result in a batch with a single run, but multiple empty
+        // hollow batches, which we still consider compact. As levels are merged, we
+        // will eventually clean up the empty hollow batches.
+        self.parts
+            .iter()
+            .map(|p| p.batch.run_meta.len())
+            .sum::<usize>()
+            <= 1
     }
 
     pub fn is_merging(&self) -> bool {
@@ -949,7 +954,6 @@ impl<T: Timestamp + Lattice + Codec64> SpineBatch<T> {
             .flatten()
     }
 
-    #[allow(dead_code)]
     fn diffs_sum_for_runs<D: Semigroup + Codec64>(
         batch: &HollowBatch<T>,
         run_ids: &[RunId],
@@ -989,7 +993,6 @@ impl<T: Timestamp + Lattice + Codec64> SpineBatch<T> {
         }
     }
 
-    #[allow(dead_code)]
     fn construct_batch_with_runs_replaced(
         original: &HollowBatch<T>,
         run_ids: &[RunId],
@@ -1106,6 +1109,10 @@ impl<T: Timestamp + Lattice + Codec64> SpineBatch<T> {
             .enumerate()
             .filter_map(|(i, p)| if id.covers(p.id) { Some(i) } else { None })
             .collect::<Vec<_>>();
+
+        if range.is_empty() {
+            return ApplyMergeResult::NotAppliedNoMatch;
+        }
 
         // This is the range of hollow batches that we will replace.
         let min = *range.iter().min().unwrap();
