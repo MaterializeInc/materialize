@@ -12,11 +12,13 @@
 use futures::Stream;
 use itertools::Itertools;
 use mz_ore::cast::CastFrom;
+use mz_ore::retry::RetryResult;
 use smallvec::SmallVec;
 use std::collections::BTreeMap;
 use std::fmt;
 use std::sync::Arc;
 use tiberius::numeric::Numeric;
+use std::time::Duration;
 
 use crate::cdc::{Lsn, RowFilterOption};
 use crate::desc::{SqlServerColumnRaw, SqlServerTableRaw};
@@ -35,6 +37,28 @@ pub async fn get_min_lsn(
     mz_ore::soft_assert_eq_or_log!(result.len(), 1);
     parse_lsn(&result[..1])
 }
+/// Returns the minimum log sequence number for the specified `capture_instance`, retrying
+/// if the log sequence number is not available.
+///
+/// See: <https://learn.microsoft.com/en-us/sql/relational-databases/system-functions/sys-fn-cdc-get-min-lsn-transact-sql?view=sql-server-ver16>
+pub async fn get_min_lsn_retry(
+    client: &mut Client,
+    capture_instance: &str,
+    max_retry_duration: Duration,
+) -> Result<Lsn, SqlServerError> {
+    let (_client, lsn_result) = mz_ore::retry::Retry::default()
+        .max_duration(max_retry_duration)
+        .retry_async_with_state(client, |_, client| async {
+            let result = crate::inspect::get_min_lsn(client, capture_instance).await;
+            (client, map_null_lsn_to_retry(result))
+        })
+        .await;
+    let Ok(lsn) = lsn_result else {
+        tracing::warn!("database did not report a maximum LSN in time");
+        return lsn_result;
+    };
+    Ok(lsn)
+}
 
 /// Returns the maximum log sequence number for the entire database.
 ///
@@ -45,6 +69,37 @@ pub async fn get_max_lsn(client: &mut Client) -> Result<Lsn, SqlServerError> {
 
     mz_ore::soft_assert_eq_or_log!(result.len(), 1);
     parse_lsn(&result[..1])
+}
+
+/// Returns the maximum log sequence number for the entire database, retrying
+/// if the log sequence number is not available.
+///
+/// See: <https://learn.microsoft.com/en-us/sql/relational-databases/system-functions/sys-fn-cdc-get-max-lsn-transact-sql?view=sql-server-ver16>
+pub async fn get_max_lsn_retry(
+    client: &mut Client,
+    max_retry_duration: Duration,
+) -> Result<Lsn, SqlServerError> {
+    let (_client, lsn_result) = mz_ore::retry::Retry::default()
+        .max_duration(max_retry_duration)
+        .retry_async_with_state(client, |_, client| async {
+            let result = crate::inspect::get_max_lsn(client).await;
+            (client, map_null_lsn_to_retry(result))
+        })
+        .await;
+
+    let Ok(lsn) = lsn_result else {
+        tracing::warn!("database did not report a maximum LSN in time");
+        return lsn_result;
+    };
+    Ok(lsn)
+}
+
+fn map_null_lsn_to_retry<T>(result: Result<T, SqlServerError>) -> RetryResult<T, SqlServerError> {
+    match result {
+        Ok(val) => RetryResult::Ok(val),
+        Err(err @ SqlServerError::NullLsn) => RetryResult::RetryableErr(err),
+        Err(other) => RetryResult::FatalErr(other),
+    }
 }
 
 /// Increments the log sequence number.

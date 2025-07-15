@@ -14,7 +14,7 @@ use std::time::Duration;
 
 use mz_dyncfg::Config;
 use mz_ore::future::InTask;
-use mz_proto::{IntoRustIfSome, RustType};
+use mz_proto::{IntoRustIfSome, RustType, TryFromProtoError};
 use mz_repr::{CatalogItemId, Datum, GlobalId, RelationDesc, Row, ScalarType};
 use mz_sql_server_util::cdc::Lsn;
 use proptest_derive::Arbitrary;
@@ -274,6 +274,10 @@ pub struct SqlServerSourceExportDetails {
     pub text_columns: Vec<String>,
     /// Columns from the upstream source that should be excluded.
     pub exclude_columns: Vec<String>,
+    /// The initial 'LSN' for this export.
+    /// This is used as a consistent snapshot point for this export to ensure
+    /// correctness in the case of multiple replicas.
+    pub initial_lsn: mz_sql_server_util::cdc::Lsn,
 }
 
 impl RustType<ProtoSqlServerSourceExportDetails> for SqlServerSourceExportDetails {
@@ -283,6 +287,7 @@ impl RustType<ProtoSqlServerSourceExportDetails> for SqlServerSourceExportDetail
             table: Some(self.table.into_proto()),
             text_columns: self.text_columns.clone(),
             exclude_columns: self.exclude_columns.clone(),
+            initial_lsn: self.initial_lsn.as_bytes().to_vec(),
         }
     }
 
@@ -296,6 +301,8 @@ impl RustType<ProtoSqlServerSourceExportDetails> for SqlServerSourceExportDetail
                 .into_rust_if_some("ProtoSqlServerSourceExportDetails::table")?,
             text_columns: proto.text_columns,
             exclude_columns: proto.exclude_columns,
+            initial_lsn: mz_sql_server_util::cdc::Lsn::try_from(proto.initial_lsn.as_ref())
+                .map_err(|e| TryFromProtoError::InvalidFieldError(e.to_string()))?,
         })
     }
 }

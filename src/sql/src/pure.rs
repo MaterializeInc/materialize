@@ -16,6 +16,7 @@ use std::fmt;
 use std::iter;
 use std::path::Path;
 use std::sync::Arc;
+use std::time::Duration;
 
 use anyhow::anyhow;
 use itertools::Itertools;
@@ -262,6 +263,7 @@ pub enum PurifiedExportDetails {
         text_columns: Option<Vec<Ident>>,
         excl_columns: Option<Vec<Ident>>,
         capture_instance: Arc<str>,
+        initial_lsn: mz_sql_server_util::cdc::Lsn,
     },
     Kafka {},
     LoadGenerator {
@@ -998,6 +1000,12 @@ async fn purify_create_source(
                     replication_errors,
                 ))?;
             }
+            // If CDC is enabled for a table, there is a period where the max LSN will not be
+            // available.  Rather than return an error to the user, we retry for 5 seconds to
+            // allow the CDC job a chance to run.  By default, the job every 5 seconds.
+            let initial_lsn =
+                mz_sql_server_util::inspect::get_max_lsn_retry(&mut client, Duration::from_secs(5))
+                    .await?;
 
             // We've validated that CDC is configured for the system, now let's
             // purify the individual exports (i.e. subsources).
@@ -1017,6 +1025,7 @@ async fn purify_create_source(
                 &text_columns,
                 &exclude_columns,
                 source_name,
+                initial_lsn,
                 &reference_policy,
             )
             .await?;
@@ -1610,6 +1619,12 @@ async fn purify_alter_source_add_subsources(
                 )
                 .await?;
             let mut client = mz_sql_server_util::Client::connect(config).await?;
+            // If CDC is enabled for a table, there is a period where the max LSN will not be
+            // available.  Rather than return an error to the user, we retry for 5 seconds to
+            // allow the CDC job a chance to run.  By default, the job every 5 seconds.
+            let initial_lsn =
+                mz_sql_server_util::inspect::get_max_lsn_retry(&mut client, Duration::from_secs(5))
+                    .await?;
 
             // Query the upstream SQL Server instance for available tables to replicate.
             let database = sql_server_connection.database.clone().into();
@@ -1629,6 +1644,7 @@ async fn purify_alter_source_add_subsources(
                 &text_columns,
                 &exclude_columns,
                 &unresolved_source_name,
+                initial_lsn,
                 &SourceReferencePolicy::Required,
             )
             .await;
@@ -1980,6 +1996,12 @@ async fn purify_create_table_from_source(
             let mut client = mz_sql_server_util::Client::connect(config).await?;
 
             let database: Arc<str> = connection.database.into();
+            // If CDC is enabled for a table, there is a period where the max LSN will not be
+            // available.  Rather than return an error to the user, we retry for 5 seconds to
+            // allow the CDC job a chance to run.  By default, the job every 5 seconds.
+            let initial_lsn =
+                mz_sql_server_util::inspect::get_max_lsn_retry(&mut client, Duration::from_secs(5))
+                    .await?;
             let reference_client = SourceReferenceClient::SqlServer {
                 client: &mut client,
                 database: Arc::clone(&database),
@@ -1995,6 +2017,7 @@ async fn purify_create_table_from_source(
                 &qualified_text_columns,
                 &qualified_exclude_columns,
                 &unresolved_source_name,
+                initial_lsn,
                 &SourceReferencePolicy::Required,
             )
             .await?;

@@ -57,6 +57,7 @@ pub(super) async fn purify_source_exports(
     text_columns: &[UnresolvedItemName],
     excl_columns: &[UnresolvedItemName],
     unresolved_source_name: &UnresolvedItemName,
+    initial_lsn: mz_sql_server_util::cdc::Lsn,
     reference_policy: &SourceReferencePolicy,
 ) -> Result<PurifiedSourceExports, PlanError> {
     let requested_exports = match requested_references.as_ref() {
@@ -239,6 +240,7 @@ pub(super) async fn purify_source_exports(
                     text_columns,
                     excl_columns,
                     capture_instance: Arc::clone(capture_instance),
+                    initial_lsn: initial_lsn.clone(),
                 },
             };
 
@@ -329,6 +331,7 @@ pub(super) fn generate_source_export_statement_values(
         text_columns,
         excl_columns,
         capture_instance,
+        initial_lsn,
     } = purified_export.details
     else {
         unreachable!("purified export details must be SQL Server")
@@ -394,6 +397,7 @@ pub(super) fn generate_source_export_statement_values(
     let details = SourceExportStatementDetails::SqlServer {
         table,
         capture_instance,
+        initial_lsn,
     };
     let text_columns = text_columns.map(|mut columns| {
         columns.sort();
