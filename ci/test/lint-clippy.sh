@@ -13,6 +13,6 @@ set -euo pipefail
 
 . misc/shlib/shlib.bash
 
-try bin/xcompile cargo test --locked --profile=ci --doc
+try cargo clippy --all-targets -- -D warnings
 
 try_status_report

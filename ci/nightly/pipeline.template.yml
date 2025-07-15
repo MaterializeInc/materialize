@@ -102,6 +102,21 @@ steps:
           queue: hetzner-aarch64-4cpu-8gb
         sanitizer: skip
 
+      - id: lint-cargo-doc-test
+        label: Cargo doc tests
+        command: bin/ci-builder run stable ci/test/lint-cargo-doc-test.sh
+        inputs:
+          - Cargo.lock
+          - Cargo.toml
+          - "**/Cargo.toml"
+          - "**/*.rs"
+        depends_on: []
+        timeout_in_minutes: 40
+        agents:
+          queue: hetzner-aarch64-16cpu-32gb
+        coverage: skip
+        sanitizer: skip
+
   - id: miri-test
     label: ":rust: Miri test (full)"
     depends_on: []

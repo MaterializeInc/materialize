@@ -370,6 +370,7 @@ def workflow_migration(c: Composition, parser: WorkflowArgumentParser) -> None:
 
     for file in matching_files:
         with c.override(testdrive, mz_old):
+            c.rm("testdrive")
             c.up(*dependencies)
 
             c.sql(
@@ -433,7 +434,8 @@ def workflow_migration(c: Composition, parser: WorkflowArgumentParser) -> None:
 
             c.kill("materialized", wait=True)
 
-            with c.override(mz_new):
+            with c.override(testdrive, mz_new):
+                c.rm("testdrive")
                 c.up("materialized")
 
                 print("Running mz_new")

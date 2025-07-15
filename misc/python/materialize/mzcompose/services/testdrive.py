@@ -16,7 +16,6 @@ from materialize.mzcompose import DEFAULT_MZ_VOLUMES, cluster_replica_size_map
 from materialize.mzcompose.service import (
     Service,
     ServiceConfig,
-    ServiceDependency,
 )
 from materialize.mzcompose.services.azure import azure_blob_uri
 from materialize.mzcompose.services.minio import minio_blob_uri
