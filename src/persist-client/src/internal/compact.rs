@@ -396,7 +396,11 @@ where
                     );
                     let res = Self::compact_all(stream, req.clone()).await?;
                     let maintenance = Self::apply(
-                        FueledMergeRes { output: res.output },
+                        FueledMergeRes {
+                            output: res.output,
+                            inputs: vec![],
+                            new_active_compaction: None,
+                        },
                         &metrics_clone,
                         &machine_clone,
                     )

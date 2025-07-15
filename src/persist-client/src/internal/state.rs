@@ -1053,6 +1053,29 @@ impl<T> HollowBatch<T> {
         }
     }
 
+    #[cfg(test)]
+    pub(crate) fn new_run_for_test(
+        desc: Description<T>,
+        parts: Vec<RunPart<T>>,
+        len: usize,
+        run_id: RunId,
+    ) -> Self {
+        let run_meta = if parts.is_empty() {
+            vec![]
+        } else {
+            let mut meta = RunMeta::default();
+            meta.id = Some(run_id);
+            vec![meta]
+        };
+        Self {
+            desc,
+            len,
+            parts,
+            run_splits: vec![],
+            run_meta,
+        }
+    }
+
     /// An empty hollow batch, representing no updates over the given desc.
     pub(crate) fn empty(desc: Description<T>) -> Self {
         Self {
@@ -1810,7 +1833,9 @@ where
             return Break(NoOpStateTransition(ApplyMergeResult::NotAppliedNoMatch));
         }
 
-        let apply_merge_result = self.trace.apply_merge_res_checked::<D>(res, metrics);
+        let apply_merge_result = self
+            .trace
+            .apply_merge_res_checked_classic::<D>(res, metrics);
         Continue(apply_merge_result)
     }
 
@@ -2164,6 +2189,8 @@ where
             // able to append that batch in the first place.
             let fake_merge = FueledMergeRes {
                 output: HollowBatch::empty(desc),
+                inputs: vec![],
+                new_active_compaction: None,
             };
             let result = self.trace.apply_tombstone_merge(&fake_merge);
             assert!(
@@ -2833,34 +2860,92 @@ pub(crate) mod tests {
         }
     }
 
-    pub fn any_hollow_batch<T: Arbitrary + Timestamp>() -> impl Strategy<Value = HollowBatch<T>> {
-        Strategy::prop_map(
-            (
-                any::<T>(),
-                any::<T>(),
-                any::<T>(),
-                proptest::collection::vec(any_run_part::<T>(), 0..3),
-                any::<usize>(),
-                any::<bool>(),
-            ),
-            |(t0, t1, since, parts, len, runs)| {
+    pub fn any_hollow_batch_with_exact_runs<T: Arbitrary + Timestamp>(
+        num_runs: usize,
+    ) -> impl Strategy<Value = HollowBatch<T>> {
+        (
+            any::<T>(),
+            any::<T>(),
+            any::<T>(),
+            proptest::collection::vec(any_run_part::<T>(), num_runs + 1..20),
+            any::<usize>(),
+        )
+            .prop_map(move |(t0, t1, since, parts, len)| {
                 let (lower, upper) = if t0 <= t1 {
                     (Antichain::from_elem(t0), Antichain::from_elem(t1))
                 } else {
                     (Antichain::from_elem(t1), Antichain::from_elem(t0))
                 };
                 let since = Antichain::from_elem(since);
-                if runs && parts.len() > 2 {
-                    let split_at = parts.len() / 2;
+
+                let run_splits = (1..num_runs)
+                    .map(|i| i * parts.len() / num_runs)
+                    .collect::<Vec<_>>();
+
+                let run_meta = (0..num_runs)
+                    .map(|_| {
+                        let mut meta = RunMeta::default();
+                        meta.id = Some(RunId::new());
+                        meta
+                    })
+                    .collect::<Vec<_>>();
+
+                HollowBatch::new(
+                    Description::new(lower, upper, since),
+                    parts,
+                    len % 10,
+                    run_meta,
+                    run_splits,
+                )
+            })
+    }
+
+    pub fn any_hollow_batch<T: Arbitrary + Timestamp>() -> impl Strategy<Value = HollowBatch<T>> {
+        Strategy::prop_map(
+            (
+                any::<T>(),
+                any::<T>(),
+                any::<T>(),
+                proptest::collection::vec(any_run_part::<T>(), 0..20),
+                any::<usize>(),
+                0..=10usize,
+                proptest::collection::vec(any::<RunId>(), 10),
+            ),
+            |(t0, t1, since, parts, len, num_runs, run_ids)| {
+                let (lower, upper) = if t0 <= t1 {
+                    (Antichain::from_elem(t0), Antichain::from_elem(t1))
+                } else {
+                    (Antichain::from_elem(t1), Antichain::from_elem(t0))
+                };
+                let since = Antichain::from_elem(since);
+                if num_runs > 0 && parts.len() > 2 && num_runs < parts.len() {
+                    let run_splits = (1..num_runs)
+                        .map(|i| i * parts.len() / num_runs)
+                        .collect::<Vec<_>>();
+
+                    let run_meta = (0..num_runs)
+                        .enumerate()
+                        .map(|(i, _)| {
+                            let mut meta = RunMeta::default();
+                            meta.id = Some(run_ids[i]);
+                            meta
+                        })
+                        .collect::<Vec<_>>();
+
                     HollowBatch::new(
                         Description::new(lower, upper, since),
                         parts,
                         len % 10,
-                        vec![RunMeta::default(), RunMeta::default()],
-                        vec![split_at],
+                        run_meta,
+                        run_splits,
                     )
                 } else {
-                    HollowBatch::new_run(Description::new(lower, upper, since), parts, len % 10)
+                    HollowBatch::new_run_for_test(
+                        Description::new(lower, upper, since),
+                        parts,
+                        len % 10,
+                        run_ids[0],
+                    )
                 }
             },
         )

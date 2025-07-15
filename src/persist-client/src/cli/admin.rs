@@ -509,7 +509,11 @@ where
                 start.elapsed(),
             );
             let (apply_res, maintenance) = machine
-                .merge_res(&FueledMergeRes { output: res.output })
+                .merge_res(&FueledMergeRes {
+                    output: res.output,
+                    inputs: vec![],
+                    new_active_compaction: None,
+                })
                 .await;
             if !maintenance.is_empty() {
                 info!("ignoring non-empty requested maintenance: {maintenance:?}")

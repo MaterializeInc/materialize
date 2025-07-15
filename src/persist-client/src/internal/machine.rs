@@ -2464,7 +2464,11 @@ pub mod datadriven {
             .clone();
         let (merge_res, maintenance) = datadriven
             .machine
-            .merge_res(&FueledMergeRes { output: batch })
+            .merge_res(&FueledMergeRes {
+                output: batch,
+                inputs: vec![],
+                new_active_compaction: None,
+            })
             .await;
         datadriven.routine.push(maintenance);
         Ok(format!(
