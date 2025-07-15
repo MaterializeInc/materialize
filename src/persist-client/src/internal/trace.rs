@@ -361,7 +361,7 @@ impl<T: Timestamp + Lattice> Trace<T> {
                     batch = Arc::new(HollowBatch::empty(Description::new(
                         batch.desc.lower().clone(),
                         new_upper,
-                        expected_desc.since().clone(),
+                        batch.desc.since().clone(),
                     )))
                 }
 
@@ -668,7 +668,6 @@ impl<T: Timestamp + Lattice + Codec64> Trace<T> {
         ApplyMergeResult::NotAppliedNoMatch
     }
 
-    #[allow(dead_code)]
     pub fn apply_merge_res_checked<D: Codec64 + Semigroup + PartialEq>(
         &mut self,
         res: &FueledMergeRes<T>,
@@ -719,10 +718,8 @@ pub enum CompactionInput {
     /// unchecked legacy replacements.
     Legacy,
     /// This compaction output is a total replacement for all batches in this id range.
-    #[allow(dead_code)]
     IdRange(SpineId),
     /// This compaction output replaces the specified runs in this id range.
-    #[allow(dead_code)]
     PartialBatch(SpineId, BTreeSet<RunId>),
 }
 
@@ -737,6 +734,20 @@ impl Serialize for SpineId {
         let SpineId(lo, hi) = self;
         serializer.serialize_str(&format!("{lo}-{hi}"))
     }
+}
+
+/// Creates a `SpineId` that covers the range of ids in the set.
+pub fn id_range(ids: BTreeSet<SpineId>) -> SpineId {
+    let lower_spine_bound = ids
+        .first()
+        .map(|id| id.0)
+        .expect("at least one batch must be present");
+    let upper_spine_bound = ids
+        .last()
+        .map(|id| id.1)
+        .expect("at least one batch must be present");
+
+    SpineId(lower_spine_bound, upper_spine_bound)
 }
 
 impl SpineId {
@@ -823,9 +834,17 @@ impl<T: Timestamp + Lattice> SpineBatch<T> {
     }
 
     pub fn is_compact(&self) -> bool {
-        // This definition is extremely likely to change, but for now, we consider a batch
-        // "compact" if it has at most one hollow batch with at most one run.
-        self.parts.len() <= 1 && self.parts.iter().all(|p| p.batch.run_splits.is_empty())
+        // A compact batch has at most one run.
+        // This check used to be if there was at most one hollow batch with at most one run,
+        // but that was a bit too strict since introducing incremental compaction.
+        // Incremental compaction can result in a batch with a single run, but multiple empty
+        // hollow batches, which we still consider compact. As levels are merged, we
+        // will eventually clean up the empty hollow batches.
+        self.parts
+            .iter()
+            .map(|p| p.batch.run_meta.len())
+            .sum::<usize>()
+            <= 1
     }
 
     pub fn is_merging(&self) -> bool {
@@ -949,7 +968,6 @@ impl<T: Timestamp + Lattice + Codec64> SpineBatch<T> {
             .flatten()
     }
 
-    #[allow(dead_code)]
     fn diffs_sum_for_runs<D: Semigroup + Codec64>(
         batch: &HollowBatch<T>,
         run_ids: &[RunId],
@@ -989,7 +1007,6 @@ impl<T: Timestamp + Lattice + Codec64> SpineBatch<T> {
         }
     }
 
-    #[allow(dead_code)]
     fn construct_batch_with_runs_replaced(
         original: &HollowBatch<T>,
         run_ids: &[RunId],
@@ -1028,7 +1045,7 @@ impl<T: Timestamp + Lattice + Codec64> SpineBatch<T> {
             .collect::<Vec<_>>();
 
         let run_splits = {
-            let mut splits = Vec::with_capacity(run_meta.len() - 1);
+            let mut splits = Vec::with_capacity(run_meta.len().saturating_sub(1));
             let mut pointer = 0;
             for (i, (_, parts)) in runs.into_iter().enumerate() {
                 if parts.is_empty() {
@@ -1104,8 +1121,31 @@ impl<T: Timestamp + Lattice + Codec64> SpineBatch<T> {
             .parts
             .iter()
             .enumerate()
-            .filter_map(|(i, p)| if id.covers(p.id) { Some(i) } else { None })
+            .filter_map(|(i, p)| {
+                if id.covers(p.id) {
+                    Some((i, p.id))
+                } else {
+                    None
+                }
+            })
             .collect::<Vec<_>>();
+
+        let ids: BTreeSet<_> = range.iter().map(|(_, id)| *id).collect();
+
+        // If ids is empty, it means that we didn't find any parts that match the id range.
+        // We also check that the id matches the range of ids we found.
+        // At scale, sometimes regular compaction will race forced compaction,
+        // for things like the catalog. In that case, we may have a
+        // a replacement that no longer lines up with the spine batches.
+        // I think this is because forced compaction ignores the active_compaction
+        // and just goes for it. This is slightly annoying but probably the right behavior
+        // for a functions whose prefix is `force_`, so we just return
+        // NotAppliedNoMatch here.
+        if ids.is_empty() || id != &id_range(ids) {
+            return ApplyMergeResult::NotAppliedNoMatch;
+        }
+
+        let range: BTreeSet<_> = range.iter().map(|(i, _)| *i).collect();
 
         // This is the range of hollow batches that we will replace.
         let min = *range.iter().min().unwrap();
@@ -1121,13 +1161,11 @@ impl<T: Timestamp + Lattice + Codec64> SpineBatch<T> {
             metrics,
         );
 
-        self.validate_diffs_sum_match(old_diffs_sum, new_diffs_sum);
+        self.validate_diffs_sum_match(old_diffs_sum, new_diffs_sum, "id range replacement");
 
-        let parts = &self.parts[replacement_range.clone()];
-        let id = SpineId(parts.first().unwrap().id.0, parts.last().unwrap().id.1);
         self.perform_subset_replacement(
             &res.output,
-            id,
+            *id,
             replacement_range,
             res.new_active_compaction.clone(),
         )
@@ -1160,12 +1198,16 @@ impl<T: Timestamp + Lattice + Codec64> SpineBatch<T> {
         let old_batch_diff_sum = Self::diffs_sum::<D>(batch.parts.iter(), metrics);
         let old_diffs_sum = Self::diffs_sum_for_runs::<D>(batch, &run_ids, metrics);
 
-        self.validate_diffs_sum_match(old_diffs_sum, new_diffs_sum);
+        self.validate_diffs_sum_match(old_diffs_sum, new_diffs_sum, "partial batch replacement");
 
         match Self::construct_batch_with_runs_replaced(batch, &run_ids, &res.output) {
             Ok(new_batch) => {
                 let new_batch_diff_sum = Self::diffs_sum::<D>(new_batch.parts.iter(), metrics);
-                self.validate_diffs_sum_match(old_batch_diff_sum, new_batch_diff_sum);
+                self.validate_diffs_sum_match(
+                    old_batch_diff_sum,
+                    new_batch_diff_sum,
+                    "sanity checking diffs sum for replaced runs",
+                );
                 self.perform_subset_replacement(
                     &new_batch,
                     id,
@@ -1177,25 +1219,32 @@ impl<T: Timestamp + Lattice + Codec64> SpineBatch<T> {
         }
     }
 
-    fn validate_diffs_sum_match<D>(&self, old_diffs_sum: Option<D>, new_diffs_sum: Option<D>)
-    where
+    fn validate_diffs_sum_match<D>(
+        &self,
+        old_diffs_sum: Option<D>,
+        new_diffs_sum: Option<D>,
+        context: &str,
+    ) where
         D: Semigroup + Codec64 + PartialEq + Debug,
     {
-        if new_diffs_sum.is_none() {
-            assert!(
-                old_diffs_sum.is_none(),
-                "merge res diffs sum ({:?}) did not match spine batch diffs sum ({:?})",
-                new_diffs_sum,
-                old_diffs_sum
-            );
-        }
-        if let (Some(old_diffs_sum), Some(new_diffs_sum)) = (old_diffs_sum, new_diffs_sum) {
-            assert_eq!(
-                old_diffs_sum, new_diffs_sum,
-                "merge res diffs sum ({:?}) did not match spine batch diffs sum ({:?})",
-                new_diffs_sum, old_diffs_sum
-            );
-        }
+        match (new_diffs_sum, old_diffs_sum) {
+            (None, Some(old)) => {
+                if !D::is_zero(&old) {
+                    panic!(
+                        "merge res diffs sum is None, but spine batch diffs sum ({:?}) is not zero ({})",
+                        old, context
+                    );
+                }
+            }
+            (Some(new_diffs_sum), Some(old_diffs_sum)) => {
+                assert_eq!(
+                    old_diffs_sum, new_diffs_sum,
+                    "merge res diffs sum ({:?}) did not match spine batch diffs sum ({:?}) ({})",
+                    new_diffs_sum, old_diffs_sum, context
+                );
+            }
+            _ => {}
+        };
     }
 
     /// This is the "legacy" way of replacing a spine batch with a merge result.
