@@ -235,13 +235,21 @@ pub(crate) fn render<G: Scope<Timestamp = Lsn>>(
             // Resumption point is the minimum LSN that has been observed.
             let resume_lsn = outputs
                 .values()
-                .flat_map(|src_info| src_info.resume_upper.elements())
-                .map(|&lsn| {
-                    if lsn == Lsn::minimum() {
-                        replication_start_lsn
-                    } else {
-                        lsn
-                    }
+                .flat_map(|src_info| {
+                    // initial_lsn is the max lsn observed seen, but the resume lsn
+                    // is the next lsn that should be read.  After a snapshot, initial_lsn
+                    // has been read, so replication will start at the next available lsn.
+                    let start_lsn = src_info.initial_lsn.increment();
+                    src_info.resume_upper
+                        .elements()
+                        .iter()
+                        .map(move |lsn| {
+                            if *lsn == Lsn::minimum() {
+                                start_lsn
+                            } else {
+                                *lsn
+                            }
+                        })
                 })
                 .min();
 
