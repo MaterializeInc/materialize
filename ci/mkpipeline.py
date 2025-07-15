@@ -184,7 +184,6 @@ so it is executed.""",
                 args.bazel_remote_cache,
                 bazel_lto,
             )
-
     handle_sanitizer_skip(pipeline, args.sanitizer)
     increase_agents_timeouts(pipeline, args.sanitizer, args.coverage)
     prioritize_pipeline(pipeline, args.priority)
@@ -197,9 +196,7 @@ so it is executed.""",
     add_version_to_preflight_tests(pipeline)
     trim_builds_prep_thread.join()
     trim_builds(pipeline, hash_check)
-    add_cargo_test_dependency(
-        pipeline, args.coverage, args.sanitizer, args.bazel_remote_cache, bazel_lto
-    )
+    remove_dependencies_on_prs(pipeline, args.pipeline)
     remove_mz_specific_keys(pipeline)
 
     print("--- Uploading new pipeline:")
@@ -861,34 +858,25 @@ def trim_tests_pipeline(
     ]
 
 
-def add_cargo_test_dependency(
+def remove_dependencies_on_prs(
     pipeline: Any,
-    coverage: bool,
-    sanitizer: Sanitizer,
-    bazel_remote_cache: str,
-    bazel_lto: bool,
+    pipeline_name: str,
 ) -> None:
-    """Cargo Test normally doesn't have to wait for the build to complete, but it requires a few images (ubuntu-base, postgres), which are rarely changed. So only add a dependency when those images are not on Dockerhub yet."""
-    repo = mzbuild.Repository(
-        Path("."),
-        arch=Arch.X86_64,
-        coverage=coverage,
-        sanitizer=sanitizer,
-        bazel=True,
-        bazel_remote_cache=bazel_remote_cache,
-        bazel_lto=bazel_lto,
-    )
-    composition = Composition(repo, name="cargo-test")
-    deps = composition.dependencies
-    if deps.check():
-        # We already have the dependencies available, no need to add a build dependency
+    """On PRs in test pipeline remove dependencies on the build, start up tests immediately, they keep retrying for the Docker image"""
+    if pipeline_name != "test":
         return
-
+    if not os.getenv("BUILDKITE_PULL_REQUEST"):
+        return
     for step in steps(pipeline):
-        if step.get("id") == "cargo-test":
-            step["depends_on"] = "build-x86_64"
-        if step.get("id") == "miri-test":
-            step["depends_on"] = "build-aarch64"
+        if step.get("id") in (
+            "upload-debug-symbols-x86_64",
+            "upload-debug-symbols-aarch64",
+        ):
+            continue
+        if step.get("depends_on") in ("build-x86_64", "build-aarch64"):
+            del step["depends_on"]
+            # In turn we have to stop the tests once builds are failing
+            step["cancel_on_build_failing"] = True
 
 
 def trim_builds(

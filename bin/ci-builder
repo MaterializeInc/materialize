@@ -233,6 +233,7 @@ case "$cmd" in
             # For self managed docs
             --env BUILDKITE_BRANCH
             --env BUILDKITE_ORGANIZATION_SLUG
+            --env BUILDKITE_PULL_REQUEST
         )
 
         if [[ $detach_container == "true" ]]; then
