@@ -919,6 +919,12 @@ class Composition:
                 service["command"] = []
             self.files = {}
 
+        if (
+            os.getenv("BUILDKITE_PULL_REQUEST")
+            and os.getenv("BUILDKITE_PIPELINE_SLUG") == "test"
+        ):
+            max_tries = 300
+
         self.capture_logs()
         self.invoke(
             "up",

@@ -960,7 +960,7 @@ class ResolvedImage:
                         # want to print output directly to terminal.
                         print(f"Retrying in {sleep_time}s ...")
                         time.sleep(sleep_time)
-                        sleep_time *= 2
+                        sleep_time = min(sleep_time * 2, 10)
                         continue
                     else:
                         break
@@ -1137,12 +1137,26 @@ class DependencySet:
 
         # Only retry in CI runs since we struggle with flaky docker pulls there
         if not max_retries:
-            max_retries = 5 if ui.env_is_truthy("CI") else 1
+            max_retries = (
+                90
+                if os.getenv("BUILDKITE_PULL_REQUEST")
+                and os.getenv("BUILDKITE_PIPELINE_SLUG") == "test"
+                else 5 if ui.env_is_truthy("CI") else 1
+            )
         assert max_retries > 0
 
-        deps_to_build = [
-            dep for dep in self if not dep.publish or not dep.try_pull(max_retries)
-        ]
+        deps_to_check = [dep for dep in self if not dep.publish]
+        deps_to_build = []
+
+        if deps_to_check:
+            with ThreadPoolExecutor(max_workers=len(deps_to_check)) as executor:
+                futures = {
+                    executor.submit(dep.try_pull, max_retries): dep
+                    for dep in deps_to_check
+                }
+                deps_to_build = [
+                    dep for future, dep in futures.items() if not future.result()
+                ]
 
         # Don't attempt to build in CI, as our timeouts and small machines won't allow it anyway
         if ui.env_is_truthy("CI"):
