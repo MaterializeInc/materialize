@@ -32,6 +32,7 @@ use crate::internal::state::{
     LeasedReaderState, ProtoStateField, ProtoStateFieldDiffType, ProtoStateFieldDiffs, RunPart,
     State, StateCollections, WriterState,
 };
+use crate::internal::trace::CompactionInput;
 use crate::internal::trace::{FueledMergeRes, SpineId, ThinMerge, ThinSpineBatch, Trace};
 use crate::read::LeasedReaderId;
 use crate::write::WriterId;
@@ -877,7 +878,11 @@ fn apply_diffs_spine<T: Timestamp + Lattice + Codec64>(
 
     // Fast-path: compaction
     if let Some((_inputs, output)) = sniff_compaction(&diffs) {
-        let res = FueledMergeRes { output };
+        let res = FueledMergeRes {
+            output,
+            input: CompactionInput::Legacy,
+            new_active_compaction: None,
+        };
         // We can't predict how spine will arrange the batches when it's
         // hydrated. This means that something that is maintaining a Spine
         // starting at some seqno may not exactly match something else
@@ -1444,7 +1449,11 @@ mod tests {
                             leader
                                 .collections
                                 .trace
-                                .apply_merge_res_unchecked(&FueledMergeRes { output });
+                                .apply_merge_res_unchecked(&FueledMergeRes {
+                                    output,
+                                    input: CompactionInput::Legacy,
+                                    new_active_compaction: None,
+                                });
                         }
                     }
                 }
