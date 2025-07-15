@@ -11,7 +11,6 @@
 # (part of the CREATE SOURCE statement).
 
 $ set-sql-timeout duration=1s
-$ set-max-tries max-tries=20
 
 
 > CREATE SECRET ssl_ca AS '${arg.ssl-ca}'

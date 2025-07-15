@@ -8,7 +8,6 @@
 # by the Apache License, Version 2.0.
 
 $ set-sql-timeout duration=1s
-$ set-max-tries max-tries=5
 
 $ set-arg-default single-replica-cluster=quickstart
 
