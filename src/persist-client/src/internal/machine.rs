@@ -47,9 +47,9 @@ use crate::internal::maintenance::{RoutineMaintenance, WriterMaintenance};
 use crate::internal::metrics::{CmdMetrics, Metrics, MetricsRetryStream, RetryMetrics};
 use crate::internal::paths::PartialRollupKey;
 use crate::internal::state::{
-    CompareAndAppendBreak, CriticalReaderState, HandleDebugState, HollowBatch, HollowRollup,
-    IdempotencyToken, LeasedReaderState, NoOpStateTransition, Since, SnapshotErr, StateCollections,
-    Upper,
+    CompareAndAppendBreak, CriticalReaderState, ENABLE_INCREMENTAL_COMPACTION, HandleDebugState,
+    HollowBatch, HollowRollup, IdempotencyToken, LeasedReaderState, NoOpStateTransition, Since,
+    SnapshotErr, StateCollections, Upper,
 };
 use crate::internal::state_versions::StateVersions;
 use crate::internal::trace::{ApplyMergeResult, FueledMergeRes};
@@ -273,11 +273,7 @@ where
             .map(|req| CompactReq {
                 shard_id: self.shard_id(),
                 desc: req.desc,
-                inputs: req
-                    .inputs
-                    .into_iter()
-                    .map(|b| Arc::unwrap_or_clone(b.batch))
-                    .collect(),
+                inputs: req.inputs,
             })
             .collect();
         (reqs, maintenance)
@@ -495,11 +491,7 @@ where
                         let req = CompactReq {
                             shard_id: self.shard_id(),
                             desc: req.desc,
-                            inputs: req
-                                .inputs
-                                .into_iter()
-                                .map(|b| Arc::unwrap_or_clone(b.batch))
-                                .collect(),
+                            inputs: req.inputs,
                         };
                         compact_reqs.push(req);
                     }
@@ -1095,6 +1087,7 @@ where
         res: &FueledMergeRes<T>,
     ) -> (ApplyMergeResult, RoutineMaintenance) {
         let metrics = Arc::clone(&self.applier.metrics);
+        let use_incremental_compaction = ENABLE_INCREMENTAL_COMPACTION.get(&self.applier.cfg);
 
         // SUBTLE! If Machine::merge_res returns false, the blobs referenced in
         // compaction output are deleted so we don't leak them. Naively passing
@@ -1127,7 +1120,11 @@ where
         let mut merge_result_ever_applied = ApplyMergeResult::NotAppliedNoMatch;
         let (_seqno, _apply_merge_result, maintenance) = self
             .apply_unbatched_idempotent_cmd(&metrics.cmds.merge_res, |_, _, state| {
-                let ret = state.apply_merge_res::<D>(res, &Arc::clone(&metrics).columnar);
+                let ret = if use_incremental_compaction {
+                    state.apply_merge_res::<D>(res, &Arc::clone(&metrics).columnar)
+                } else {
+                    state.apply_merge_res_classic::<D>(res, &Arc::clone(&metrics).columnar)
+                };
                 if let Continue(result) = ret {
                     // record if we've ever applied the merge
                     if result.applied() {
@@ -1413,7 +1410,7 @@ where
 
 #[cfg(test)]
 pub mod datadriven {
-    use std::collections::BTreeMap;
+    use std::collections::{BTreeMap, BTreeSet};
     use std::pin::pin;
     use std::sync::{Arc, LazyLock};
 
@@ -1438,7 +1435,7 @@ pub mod datadriven {
     use crate::internal::paths::{BlobKey, BlobKeyPrefix, PartialBlobKey};
     use crate::internal::state::{BatchPart, RunOrder, RunPart};
     use crate::internal::state_versions::EncodedRollup;
-    use crate::internal::trace::CompactionInput;
+    use crate::internal::trace::{CompactionInput, IdHollowBatch, SpineId};
     use crate::read::{Listen, ListenEvent, READER_LEASE_DURATION};
     use crate::rpc::NoopPubSubSender;
     use crate::tests::new_test_client;
@@ -1461,10 +1458,12 @@ pub mod datadriven {
         pub state_versions: Arc<StateVersions>,
         pub machine: Machine<String, (), u64, i64>,
         pub gc: GarbageCollector<String, (), u64, i64>,
-        pub batches: BTreeMap<String, HollowBatch<u64>>,
+        pub batches: BTreeMap<String, IdHollowBatch<u64>>,
+        pub next_id: usize,
         pub rollups: BTreeMap<String, EncodedRollup>,
         pub listens: BTreeMap<String, Listen<String, (), u64, i64>>,
         pub routine: Vec<RoutineMaintenance>,
+        pub compactions: BTreeMap<String, CompactReq<u64>>,
     }
 
     impl MachineState {
@@ -1509,6 +1508,8 @@ pub mod datadriven {
                 rollups: BTreeMap::default(),
                 listens: BTreeMap::default(),
                 routine: Vec::new(),
+                compactions: BTreeMap::default(),
+                next_id: 0,
             }
         }
 
@@ -1559,7 +1560,7 @@ pub mod datadriven {
                     datadriven
                         .batches
                         .iter()
-                        .find(|(_, original_batch)| original_batch.parts == b.parts)
+                        .find(|(_, original_batch)| original_batch.batch.parts == b.parts)
                         .map(|(batch_name, _)| batch_name.to_owned())
                 })
                 .collect();
@@ -1821,21 +1822,32 @@ pub mod datadriven {
                 .await;
         }
         let batch = batch.into_hollow_batch();
+        let batch = IdHollowBatch {
+            batch: Arc::new(batch),
+            id: SpineId(datadriven.next_id, datadriven.next_id + 1),
+        };
+        datadriven.next_id += 1;
 
         if let Some(size) = parts_size_override {
             let mut batch = batch.clone();
-            for part in batch.parts.iter_mut() {
+            let mut hollow_batch = (*batch.batch).clone();
+            for part in hollow_batch.parts.iter_mut() {
                 match part {
                     RunPart::Many(run) => run.max_part_bytes = size,
                     RunPart::Single(BatchPart::Hollow(part)) => part.encoded_size_bytes = size,
                     RunPart::Single(BatchPart::Inline { .. }) => unreachable!("flushed out above"),
                 }
             }
+            batch.batch = Arc::new(hollow_batch);
             datadriven.batches.insert(output.to_owned(), batch);
         } else {
             datadriven.batches.insert(output.to_owned(), batch.clone());
         }
-        Ok(format!("parts={} len={}\n", batch.part_count(), batch.len))
+        Ok(format!(
+            "parts={} len={}\n",
+            batch.batch.part_count(),
+            batch.batch.len
+        ))
     }
 
     pub async fn fetch_batch(
@@ -1849,6 +1861,7 @@ pub mod datadriven {
         let mut s = String::new();
         let mut stream = pin!(
             batch
+                .batch
                 .part_stream(
                     datadriven.shard_id,
                     &*datadriven.state_versions.blob,
@@ -1901,7 +1914,7 @@ pub mod datadriven {
                 datadriven.client.metrics.as_ref(),
                 datadriven.machine.applier.shard_metrics.as_ref(),
                 &datadriven.client.metrics.read.batch_fetcher,
-                &batch.desc,
+                &batch.batch.desc,
                 part,
             )
             .await
@@ -1918,10 +1931,11 @@ pub mod datadriven {
             }
         }
         if !s.is_empty() {
-            for (idx, (_meta, run)) in batch.runs().enumerate() {
+            for (idx, (_meta, run)) in batch.batch.runs().enumerate() {
                 write!(s, "<run {idx}>\n");
                 for part in run {
                     let part_idx = batch
+                        .batch
                         .parts
                         .iter()
                         .position(|p| p == part)
@@ -1943,16 +1957,27 @@ pub mod datadriven {
         let lower = args.expect_antichain("lower");
         let upper = args.expect_antichain("upper");
 
-        let mut batch = datadriven
+        let batch = datadriven
             .batches
             .get(input)
             .expect("unknown batch")
             .clone();
-        let truncated_desc = Description::new(lower, upper, batch.desc.since().clone());
-        let () = validate_truncate_batch(&batch, &truncated_desc, false, true)?;
-        batch.desc = truncated_desc;
-        datadriven.batches.insert(output.to_owned(), batch.clone());
-        Ok(format!("parts={} len={}\n", batch.part_count(), batch.len))
+        let truncated_desc = Description::new(lower, upper, batch.batch.desc.since().clone());
+        let () = validate_truncate_batch(&batch.batch, &truncated_desc, false, true)?;
+        let mut new_hollow_batch = (*batch.batch).clone();
+        new_hollow_batch.desc = truncated_desc;
+        let new_batch = IdHollowBatch {
+            batch: Arc::new(new_hollow_batch),
+            id: batch.id,
+        };
+        datadriven
+            .batches
+            .insert(output.to_owned(), new_batch.clone());
+        Ok(format!(
+            "parts={} len={}\n",
+            batch.batch.part_count(),
+            batch.batch.len
+        ))
     }
 
     #[allow(clippy::unused_async)]
@@ -1963,7 +1988,8 @@ pub mod datadriven {
         let input = args.expect_str("input");
         let size = args.expect("size");
         let batch = datadriven.batches.get_mut(input).expect("unknown batch");
-        for part in batch.parts.iter_mut() {
+        let mut hollow_batch = (*batch.batch).clone();
+        for part in hollow_batch.parts.iter_mut() {
             match part {
                 RunPart::Single(BatchPart::Hollow(x)) => x.encoded_size_bytes = size,
                 _ => {
@@ -1971,6 +1997,7 @@ pub mod datadriven {
                 }
             }
         }
+        batch.batch = Arc::new(hollow_batch);
         Ok("ok\n".to_string())
     }
 
@@ -2006,8 +2033,22 @@ pub mod datadriven {
         let req = CompactReq {
             shard_id: datadriven.shard_id,
             desc: Description::new(lower, upper, since),
-            inputs,
+            inputs: inputs.clone(),
         };
+        datadriven
+            .compactions
+            .insert(output.to_owned(), req.clone());
+        let spine_lower = inputs
+            .first()
+            .map_or_else(|| datadriven.next_id, |x| x.id.0);
+        let spine_upper = inputs.last().map_or_else(
+            || {
+                datadriven.next_id += 1;
+                datadriven.next_id
+            },
+            |x| x.id.1,
+        );
+        let new_spine_id = SpineId(spine_lower, spine_upper);
         let res = Compactor::<String, (), u64, i64>::compact(
             CompactConfig::new(&cfg, datadriven.shard_id),
             Arc::clone(&datadriven.client.blob),
@@ -2019,9 +2060,12 @@ pub mod datadriven {
         )
         .await?;
 
-        datadriven
-            .batches
-            .insert(output.to_owned(), res.output.clone());
+        let batch = IdHollowBatch {
+            batch: Arc::new(res.output.clone()),
+            id: new_spine_id,
+        };
+
+        datadriven.batches.insert(output.to_owned(), batch.clone());
         Ok(format!(
             "parts={} len={}\n",
             res.output.part_count(),
@@ -2076,9 +2120,11 @@ pub mod datadriven {
         let upper = args.expect_antichain("upper");
 
         let batch = datadriven.batches.get_mut(input).expect("unknown batch");
-        let () = batch
+        let mut hollow_batch = (*batch.batch).clone();
+        let () = hollow_batch
             .rewrite_ts(&ts_rewrite, upper)
             .map_err(|err| anyhow!("invalid rewrite: {}", err))?;
+        batch.batch = Arc::new(hollow_batch);
         Ok("ok\n".into())
     }
 
@@ -2328,10 +2374,12 @@ pub mod datadriven {
             .expect("missing batches")
             .into_iter()
             .map(|batch| {
-                let hollow = datadriven
+                let hollow = (*datadriven
                     .batches
                     .get(batch)
                     .expect("unknown batch")
+                    .clone()
+                    .batch)
                     .clone();
                 datadriven.to_batch(hollow)
             })
@@ -2414,7 +2462,7 @@ pub mod datadriven {
             let res = datadriven
                 .machine
                 .compare_and_append_idempotent(
-                    &batch,
+                    &batch.batch,
                     &writer_id,
                     now,
                     &token,
@@ -2428,7 +2476,8 @@ pub mod datadriven {
                     return Err(anyhow!("{:?}", Upper(upper)));
                 }
                 CompareAndAppendRes::InlineBackpressure => {
-                    let mut b = datadriven.to_batch(batch.clone());
+                    let hollow_batch = (*batch.batch).clone();
+                    let mut b = datadriven.to_batch(hollow_batch);
                     let cfg = BatchBuilderConfig::new(&datadriven.client.cfg, datadriven.shard_id);
                     b.flush_to_blob(
                         &cfg,
@@ -2437,7 +2486,7 @@ pub mod datadriven {
                         &*SCHEMAS,
                     )
                     .await;
-                    batch = b.into_hollow_batch();
+                    batch.batch = Arc::new(b.into_hollow_batch());
                     continue;
                 }
                 _ => panic!("{:?}", res),
@@ -2463,11 +2512,32 @@ pub mod datadriven {
             .get(input)
             .expect("unknown batch")
             .clone();
+        let compact_req = datadriven
+            .compactions
+            .get(input)
+            .expect("unknown compact req")
+            .clone();
+        let input_batches = compact_req
+            .inputs
+            .iter()
+            .map(|x| x.id)
+            .collect::<BTreeSet<_>>();
+        let lower_spine_bound = input_batches
+            .first()
+            .map(|id| id.0)
+            .expect("at least one batch must be present");
+        let upper_spine_bound = input_batches
+            .last()
+            .map(|id| id.1)
+            .expect("at least one batch must be present");
+        let id = SpineId(lower_spine_bound, upper_spine_bound);
+        let hollow_batch = (*batch.batch).clone();
+
         let (merge_res, maintenance) = datadriven
             .machine
             .merge_res(&FueledMergeRes {
-                output: batch,
-                input: CompactionInput::Legacy,
+                output: hollow_batch,
+                input: CompactionInput::IdRange(id),
                 new_active_compaction: None,
             })
             .await;
