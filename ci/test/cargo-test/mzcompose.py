@@ -12,15 +12,16 @@ Runs the Rust-based unit tests in Debug mode.
 """
 
 import json
+import multiprocessing
 import os
 import shutil
 import subprocess
-import threading
 
 from materialize import MZ_ROOT, buildkite, rustc_flags, spawn, ui
 from materialize.cli.run import SANITIZER_TARGET
 from materialize.mzcompose.composition import Composition, WorkflowArgumentParser
 from materialize.mzcompose.services.azure import Azurite
+from materialize.mzcompose.services.clusterd import Clusterd
 from materialize.mzcompose.services.kafka import Kafka
 from materialize.mzcompose.services.minio import Minio
 from materialize.mzcompose.services.postgres import (
@@ -30,6 +31,7 @@ from materialize.mzcompose.services.postgres import (
 from materialize.mzcompose.services.schema_registry import SchemaRegistry
 from materialize.mzcompose.services.zookeeper import Zookeeper
 from materialize.rustc_flags import Sanitizer
+from materialize.util import PropagatingThread
 from materialize.xcompile import Arch, target
 
 SERVICES = [
@@ -58,6 +60,7 @@ SERVICES = [
         ports=["40111:10000"],
         allow_host_ports=True,
     ),
+    Clusterd(),  # Only to attempt to download the binary
 ]
 
 
@@ -103,8 +106,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     coverage = ui.env_is_truthy("CI_COVERAGE_ENABLED")
     sanitizer = Sanitizer[os.getenv("CI_SANITIZER", "none")]
     extra_env = {}
-    job_count: str = ""
-    clusterd_build_thread: threading.Thread | None = None
+    clusterd_thread: PropagatingThread | None = None
 
     if coverage:
         # TODO(def-): For coverage inside of clusterd called from unit tests need
@@ -222,36 +224,82 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
                     ],
                 )
             else:
-                job_count = os.getenv("BUILDKITE_PARALLEL_JOB_COUNT", "1")
-                assert job_count in (
-                    "1",
-                    "2",
+                assert (
+                    buildkite.get_parallelism_count() <= 2
                 ), "Special handling of parallelism, only 1 and 2 supported"
-                if job_count == "1" or os.getenv("BUILDKITE_PARALLEL_JOB") == "0":
+                if (
+                    buildkite.get_parallelism_count() == 1
+                    or buildkite.get_parallelism_index() == 0
+                ):
 
-                    def worker():
-                        spawn.runv(
-                            [
-                                "cargo",
-                                "build",
-                                "--workspace",
-                                "--bin",
-                                "clusterd",
-                                "--profile=ci",
-                            ],
-                            env={**env, "CARGO_TARGET_DIR": "target/ci-clusterd"},
-                        )
+                    def worker() -> None:
+                        clusterd = c.compose["services"]["clusterd"]
+                        try:
+                            subprocess.run(
+                                ["docker", "pull", clusterd["image"]],
+                                check=True,
+                                capture_output=True,
+                            )
+                            container_id = subprocess.check_output(
+                                ["docker", "create", clusterd["image"]], text=True
+                            ).strip()
+                            target_dir = os.getenv("CARGO_TARGET_DIR", "target") + "/ci"
+                            os.makedirs(target_dir, exist_ok=True)
+                            subprocess.run(
+                                [
+                                    "docker",
+                                    "cp",
+                                    f"{container_id}:/usr/local/bin/clusterd",
+                                    target_dir,
+                                ],
+                                check=True,
+                            )
+                        except subprocess.CalledProcessError as e:
+                            print(f"Failed to get clusterd image: {e}")
+                            spawn.runv(
+                                [
+                                    "cargo",
+                                    "build",
+                                    "--workspace",
+                                    "--bin",
+                                    "clusterd",
+                                    "--profile=ci",
+                                ],
+                                env={**env, "CARGO_TARGET_DIR": "target/ci-clusterd"},
+                            )
+                            shutil.copy(
+                                "target/ci-clusterd/ci/clusterd",
+                                os.getenv("CARGO_TARGET_DIR", "target") + "/ci/",
+                            )
 
-                    clusterd_build_thread = threading.Thread(target=worker)
-                    clusterd_build_thread.start()
+                    clusterd_thread = PropagatingThread(target=worker)
+                    clusterd_thread.start()
+                    spawn.runv(
+                        [
+                            "cargo",
+                            "nextest",
+                            "run",
+                            "--no-run",
+                            "--all-features",
+                            "--cargo-profile=ci",
+                            "--profile=ci",
+                            *(
+                                ["--package=mz-environmentd", "--package=mz-balancerd"]
+                                if buildkite.get_parallelism_count() == 2
+                                else ["--workspace"]
+                            ),
+                        ],
+                        env=env,
+                    )
+                    clusterd_thread.join()
 
+            metadata = json.loads(
+                subprocess.check_output(
+                    ["cargo", "metadata", "--no-deps", "--format-version=1"]
+                )
+            )
             if sanitizer != Sanitizer.none:
                 # Can't just use --workspace because of https://github.com/rust-lang/cargo/issues/7160
-                metadata = json.loads(
-                    subprocess.check_output(
-                        ["cargo", "metadata", "--no-deps", "--format-version=1"]
-                    )
-                )
                 for pkg in metadata["packages"]:
                     try:
                         spawn.runv(
@@ -286,51 +334,33 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
                         print(f"Test against package {pkg['name']} failed, continuing")
 
             else:
-                # Current state 11 + 8 min in 2 runs: https://buildkite.com/materialize/test/builds/106184
-                # TODO: Maybe we could run on a single machine by running the `not package(mz-environmentd)` tests while clusterd is building
-                # TODO: Use the code from git diff 94a0ed3bd51032b4bb5475056294838b0726b096~..94a0ed3bd51032b4bb5475056294838b0726b096 to get clusterd and put it into the CARGET_TARGET_DIR/ci
-                assert job_count
-                if job_count == "1" or os.getenv("BUILDKITE_PARALLEL_JOB") == "0":
-                    assert clusterd_build_thread
-                    spawn.runv(
-                        [
-                            "cargo",
-                            "nextest",
-                            "run",
-                            "--workspace",
-                            "--all-features",
-                            "--cargo-profile=ci",
-                            "--no-run",
-                        ]
-                    )
-                    clusterd_build_thread.join()
-                    shutil.copy(
-                        "target/ci-clusterd/ci/clusterd",
-                        os.getenv("CARGO_TARGET_DIR", "target") + "/ci/",
-                    )
+                pkgs = [
+                    f"--package={p['name']}"
+                    for p in metadata["packages"]
+                    if p["name"] not in ("mz-environmentd", "mz-balancerd")
+                ]
                 spawn.runv(
                     [
                         "cargo",
                         "nextest",
                         "run",
-                        "--workspace",
                         # We want all tests to run
                         "--no-fail-fast",
                         "--all-features",
-                        "--cargo-profile=ci",
                         "--profile=ci",
+                        "--cargo-profile=ci",
+                        f"--test-threads={multiprocessing.cpu_count() * 2}",
                         *(
                             (
-                                [
-                                    "--filterset=package(mz-environmentd) or package(mz-balancerd)"
-                                ]
-                                if os.getenv("BUILDKITE_PARALLEL_JOB") == "0"
+                                pkgs
+                                if buildkite.get_parallelism_index() == 1
                                 else [
-                                    "--filterset=not package(mz-environmentd) and not package(mz-balancerd)"
+                                    "--package=mz-environmentd",
+                                    "--package=mz-balancerd",
                                 ]
                             )
-                            if os.getenv("BUILDKITE_PARALLEL_JOB_COUNT") == "2"
-                            else []
+                            if buildkite.get_parallelism_count() == 2
+                            else ["--workspace"]
                         ),
                         *args.args,
                     ],
