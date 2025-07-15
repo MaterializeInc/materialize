@@ -109,7 +109,7 @@ def get_minimal_system_parameters(
         "enable_refresh_every_mvs": "true",
         "enable_cluster_schedule_refresh": "true",
         "enable_statement_lifecycle_logging": "true",
-        "enable_compute_temporal_bucketing": "true",
+        "enable_compute_temporal_bucketing": "false",
         "enable_variadic_left_join_lowering": "true",
         "enable_worker_core_affinity": "true",
         "grpc_client_http2_keep_alive_timeout": "5s",
