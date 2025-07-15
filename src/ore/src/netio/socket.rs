@@ -340,6 +340,9 @@ impl Listener {
     }
 
     /// Accepts a new incoming connection to this listener.
+    ///
+    /// If the connection protocol is TCP, the returned stream has `TCP_NODELAY` set, making it
+    /// suitable for low-latency communication by default.
     pub async fn accept(&self) -> Result<(Stream, SocketAddr), io::Error> {
         match self {
             Listener::Tcp(listener) => {
@@ -421,6 +424,9 @@ pub enum Stream {
 
 impl Stream {
     /// Opens a connection to the specified socket address.
+    ///
+    /// If the connection protocol is TCP, the returned stream has `TCP_NODELAY` set, making it
+    /// suitable for low-latency communication by default.
     pub async fn connect<A>(addr: A) -> Result<Stream, io::Error>
     where
         A: ToSocketAddrs,
@@ -444,6 +450,7 @@ impl Stream {
         match addr {
             SocketAddr::Inet(addr) => {
                 let stream = TcpStream::connect(addr).await?;
+                stream.set_nodelay(true)?;
                 Ok(Stream::Tcp(stream))
             }
             SocketAddr::Unix(UnixSocketAddr { path: Some(path) }) => {

@@ -344,9 +344,6 @@ async fn connect_lower(
         address: &str,
     ) -> anyhow::Result<(Epoch, Stream)> {
         let mut s = Stream::connect(address).await?;
-        if let Stream::Tcp(tcp) = &s {
-            tcp.set_nodelay(true)?;
-        }
 
         // Make sure all network calls have timeouts, so we don't get stuck when the peer goes
         // away. Writes are buffered, so they probably don't need timeouts, but we're adding them
@@ -424,9 +421,6 @@ async fn accept_higher(
 
     async fn accept(listener: &Listener) -> anyhow::Result<(usize, Stream)> {
         let (mut s, _) = listener.accept().await?;
-        if let Stream::Tcp(tcp) = &s {
-            tcp.set_nodelay(true)?;
-        }
 
         // Make sure all network calls have timeouts, so we don't get stuck when the peer goes
         // away.
