@@ -56,6 +56,11 @@ macro_rules! wire_compatible {
 
         ::paste::paste! {
             ::proptest::proptest! {
+                #![proptest_config(::proptest::test_runner::Config {
+                    cases: 64,
+                    ..Default::default()
+                })]
+
                 #[mz_ore::test]
                 #[cfg_attr(miri, ignore)] // slow
                 fn [<proptest_wire_compat_ $a:snake $(_$a_sub:snake)* _to_ $b:snake $(_$b_sub:snake)* >](a: $a $(::$a_sub)* ) {

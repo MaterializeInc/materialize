@@ -11,7 +11,7 @@
 
 use std::io::{Read, Write};
 use std::net::TcpStream;
-use std::path::PathBuf;
+use std::path::Path;
 use std::time::Duration;
 
 use bytes::BytesMut;
@@ -613,13 +613,19 @@ fn test_record_types() {
     assert_eq!(rows.len(), 2);
 }
 
-fn pg_test_inner(dir: PathBuf, flags: &[&'static str]) {
-    // We want a new server per file, so we can't use pgtest::walk.
-    datadriven::walk(dir.to_str().unwrap(), |tf| {
+fn pg_test_inner(path: &Path, mz_flags: bool) {
+    datadriven::walk(path.to_str().unwrap(), |tf| {
         let server = test_util::TestHarness::default()
             .unsafe_mode()
             .start_blocking();
-        server.enable_feature_flags(flags);
+        if mz_flags {
+            server.enable_feature_flags(&[
+                "enable_copy_to_expr",
+                "enable_raise_statement",
+                "unsafe_enable_unorchestrated_cluster_replicas",
+                "unsafe_enable_unsafe_functions",
+            ]);
+        }
         let config = server.pg_config();
         let addr = match &config.get_hosts()[0] {
             tokio_postgres::config::Host::Tcp(host) => {
@@ -635,22 +641,157 @@ fn pg_test_inner(dir: PathBuf, flags: &[&'static str]) {
 }
 
 #[mz_ore::test]
-fn test_pgtest() {
-    let dir: PathBuf = ["..", "..", "test", "pgtest"].iter().collect();
-    pg_test_inner(dir, &[]);
+fn test_pgtest_binary() {
+    pg_test_inner(Path::new("../../test/pgtest/binary.pt"), false);
 }
 
 #[mz_ore::test]
+fn test_pgtest_chr() {
+    pg_test_inner(Path::new("../../test/pgtest/chr.pt"), false);
+}
+
+#[mz_ore::test]
+fn test_pgtest_client_min_messages() {
+    pg_test_inner(Path::new("../../test/pgtest/client_min_messages.pt"), false);
+}
+
+#[mz_ore::test]
+fn test_pgtest_copy_from_2() {
+    pg_test_inner(Path::new("../../test/pgtest/copy-from-2.pt"), false);
+}
+
+#[mz_ore::test]
+fn test_pgtest_copy_from_fail() {
+    pg_test_inner(Path::new("../../test/pgtest/copy-from-fail.pt"), false);
+}
+
+#[mz_ore::test]
+fn test_pgtest_copy_from_null() {
+    pg_test_inner(Path::new("../../test/pgtest/copy-from-null.pt"), false);
+}
+
+#[mz_ore::test]
+fn test_pgtest_copy_from() {
+    pg_test_inner(Path::new("../../test/pgtest/copy-from.pt"), false);
+}
+
+#[mz_ore::test]
+fn test_pgtest_copy() {
+    pg_test_inner(Path::new("../../test/pgtest/copy.pt"), false);
+}
+
+#[mz_ore::test]
+fn test_pgtest_cursors() {
+    pg_test_inner(Path::new("../../test/pgtest/cursors.pt"), false);
+}
+
+#[mz_ore::test]
+fn test_pgtest_ddl_extended() {
+    pg_test_inner(Path::new("../../test/pgtest/ddl-extended.pt"), false);
+}
+
+#[mz_ore::test]
+fn test_pgtest_desc() {
+    pg_test_inner(Path::new("../../test/pgtest/desc.pt"), false);
+}
+
+#[mz_ore::test]
+fn test_pgtest_empty() {
+    pg_test_inner(Path::new("../../test/pgtest/empty.pt"), false);
+}
+
+#[mz_ore::test]
+fn test_pgtest_notice() {
+    pg_test_inner(Path::new("../../test/pgtest/notice.pt"), false);
+}
+
+#[mz_ore::test]
+fn test_pgtest_params() {
+    pg_test_inner(Path::new("../../test/pgtest/params.pt"), false);
+}
+
+#[mz_ore::test]
+fn test_pgtest_portals() {
+    pg_test_inner(Path::new("../../test/pgtest/portals.pt"), false);
+}
+
+#[mz_ore::test]
+fn test_pgtest_prepare() {
+    pg_test_inner(Path::new("../../test/pgtest/prepare.pt"), false);
+}
+
+#[mz_ore::test]
+fn test_pgtest_range() {
+    pg_test_inner(Path::new("../../test/pgtest/range.pt"), false);
+}
+
+#[mz_ore::test]
+fn test_pgtest_transactions() {
+    pg_test_inner(Path::new("../../test/pgtest/transactions.pt"), false);
+}
+
+#[mz_ore::test]
+fn test_pgtest_vars() {
+    pg_test_inner(Path::new("../../test/pgtest/vars.pt"), false);
+}
+
 // Materialize's differences from Postgres' responses.
-fn test_pgtest_mz() {
-    let dir: PathBuf = ["..", "..", "test", "pgtest-mz"].iter().collect();
-    pg_test_inner(
-        dir,
-        &[
-            "enable_copy_to_expr",
-            "enable_raise_statement",
-            "unsafe_enable_unorchestrated_cluster_replicas",
-            "unsafe_enable_unsafe_functions",
-        ],
-    );
+#[mz_ore::test]
+fn test_pgtest_mz_copy_from_csv() {
+    pg_test_inner(Path::new("../../test/pgtest-mz/copy-from-csv.pt"), true);
+}
+
+#[mz_ore::test]
+fn test_pgtest_mz_copy_to() {
+    pg_test_inner(Path::new("../../test/pgtest-mz/copy-to.pt"), true);
+}
+
+#[mz_ore::test]
+fn test_pgtest_mz_datums() {
+    pg_test_inner(Path::new("../../test/pgtest-mz/datums.pt"), true);
+}
+
+#[mz_ore::test]
+fn test_pgtest_mz_ddl_extended() {
+    pg_test_inner(Path::new("../../test/pgtest-mz/ddl-extended.pt"), true);
+}
+
+#[mz_ore::test]
+fn test_pgtest_mz_desc() {
+    pg_test_inner(Path::new("../../test/pgtest-mz/desc.pt"), true);
+}
+
+#[mz_ore::test]
+fn test_pgtest_mz_notice() {
+    pg_test_inner(Path::new("../../test/pgtest-mz/notice.pt"), true);
+}
+
+#[mz_ore::test]
+fn test_pgtest_mz_parse_started() {
+    pg_test_inner(Path::new("../../test/pgtest-mz/parse-started.pt"), true);
+}
+
+#[mz_ore::test]
+fn test_pgtest_mz_portals() {
+    pg_test_inner(Path::new("../../test/pgtest-mz/portals.pt"), true);
+}
+
+#[mz_ore::test]
+fn test_pgtest_mz_raise() {
+    pg_test_inner(Path::new("../../test/pgtest-mz/raise.pt"), true);
+}
+
+#[mz_ore::test]
+fn test_pgtest_mz_startup() {
+    pg_test_inner(Path::new("../../test/pgtest-mz/startup.pt"), true);
+}
+
+#[mz_ore::test]
+fn test_pgtest_mz_transactions() {
+    pg_test_inner(Path::new("../../test/pgtest-mz/transactions.pt"), true);
+}
+
+#[mz_ore::test]
+fn test_pgtest_mz_vars() {
+    pg_test_inner(Path::new("../../test/pgtest-mz/vars.pt"), true);
 }

@@ -8,19 +8,37 @@ slow-timeout = { period = "1200s", terminate-after = 2 }
 # these sorted in order from most specific to least specific.
 
 [[profile.default.overrides]]
-filter = "package(mz-environmentd) and test(test_pgtest)"
-threads-required = 4
-slow-timeout = { period = "300s", terminate-after = 2 }
+filter = "package(mz-environmentd) and test(test_concurrent_id_reuse)"
 priority = 100
 
 [[profile.default.overrides]]
-filter = "package(mz-environmentd) and test(test_pgtest_mz)"
+filter = "package(mz-environmentd) and test(test_timestamp_recovery)"
+priority = 99
+
+[[profile.default.overrides]]
+filter = "package(mz-balancerd) and test(test_balancer)"
+priority = 98
+
+[[profile.default.overrides]]
+filter = "package(mz-environmentd) and test(test_pgtest*)"
 threads-required = 4
 slow-timeout = { period = "300s", terminate-after = 2 }
-priority = 100
+priority = 95
 
 [[profile.default.overrides]]
 filter = "package(mz-environmentd) and test(test_storage_usage_collection_interval)"
+slow-timeout = { period = "300s", terminate-after = 2 }
+priority = 90
+
+[[profile.default.overrides]]
+filter = "package(mz-environmentd) and test(test_statement_logging_subscribes)"
+threads-required = 4
+slow-timeout = { period = "300s", terminate-after = 2 }
+priority = 90
+
+[[profile.default.overrides]]
+filter = "package(mz-environmentd) and test(test_strong_session_serializability)"
+threads-required = 4
 slow-timeout = { period = "300s", terminate-after = 2 }
 priority = 90
 

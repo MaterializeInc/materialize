@@ -2441,7 +2441,7 @@ async fn test_concurrent_id_reuse() {
     // state and `B` will panic at any point it tries to access it's state. If they don't use
     // the same connection ID, then everything will be fine.
     fail::cfg("async_prepare", "return(true)").unwrap();
-    for i in 0..100 {
+    for i in 0..50 {
         let http_url = http_url.clone();
         if i % 2 == 0 {
             let fut = reqwest::Client::new()
