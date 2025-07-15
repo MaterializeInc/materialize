@@ -36,6 +36,7 @@ pub trait TemporalBucketing<G: Scope, O> {
     /// is passed through without being stored in the chain.
     fn bucket<CB>(
         &self,
+        as_of: Antichain<G::Timestamp>,
         threshold: <G::Timestamp as Timestamp>::Summary,
     ) -> StreamCore<G, CB::Container>
     where
@@ -52,6 +53,7 @@ where
 {
     fn bucket<CB>(
         &self,
+        as_of: Antichain<G::Timestamp>,
         threshold: <G::Timestamp as Timestamp>::Summary,
     ) -> StreamCore<G, CB::Container>
     where
@@ -67,11 +69,16 @@ where
             let mut cap = Some(cap);
             let mut buffer = Vec::new();
             move |input, output| {
-                let threshold: Antichain<_> = input
-                    .frontier()
-                    .frontier()
+                let frontier =
+                    if PartialOrder::less_than(&input.frontier().frontier(), &as_of.borrow()) {
+                        input.frontier().frontier()
+                    } else {
+                        as_of.borrow()
+                    };
+                let threshold: Antichain<_> = frontier
                     .iter()
-                    .flat_map(|f| threshold.results_in(f)).collect();
+                    .flat_map(|f| threshold.results_in(f))
+                    .collect();
                 while let Some((time, data)) = input.next() {
                     // Skip data that is about to be revealed.
                     let extracted = data.extract_if(.., |(_, t, _)| !threshold.less_than(t));

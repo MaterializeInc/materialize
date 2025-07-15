@@ -462,7 +462,13 @@ pub fn build_compute_dataflow<A: Allocate>(
                 for (id, (oks, errs)) in imported_sources.into_iter() {
                     let oks = if ENABLE_TEMPORAL_BUCKETING.get(&compute_state.worker_config) {
                         oks.inner
-                            .bucket::<CapacityContainerBuilder<_>>(2000.into())
+                            .bucket::<CapacityContainerBuilder<_>>(
+                                dataflow
+                                    .as_of
+                                    .clone()
+                                    .unwrap_or_else(|| Antichain::from_elem(Timestamp::minimum())),
+                                2000.into(),
+                            )
                             .as_collection()
                     } else {
                         oks
