@@ -31,16 +31,17 @@ disallowed-methods = [
     { path = "tokio::task::JoinSet::spawn_local", reason = "use the spawn wrappers in `mz_ore::task` instead" },
 
     # These are banned because we want to ensure people don't forget to use .name(...), so we require the use of `mz_ore`
-    { path = "tokio::task::Builder::spawn", reason = "use the spawn wrappers in `mz_ore::task` instead" },
-    { path = "tokio::task::Builder::spawn_on", reason = "use the spawn wrappers in `mz_ore::task` instead" },
-    { path = "tokio::task::Builder::spawn_blocking", reason = "use the spawn wrappers in `mz_ore::task` instead" },
-    { path = "tokio::task::Builder::spawn_blocking_on", reason = "use the spawn wrappers in `mz_ore::task` instead" },
-    { path = "tokio::task::Builder::spawn_local", reason = "use the spawn wrappers in `mz_ore::task` instead" },
-    { path = "tokio::task::join_set::Builder::spawn_local", reason = "use the spawn wrappers in `mz_ore::task` instead" },
-    { path = "tokio::task::join_set::Builder::spawn", reason = "use the spawn wrappers in `mz_ore::task` instead" },
-    { path = "tokio::task::join_set::Builder::spawn_on", reason = "use the spawn wrappers in `mz_ore::task` instead" },
-    { path = "tokio::task::join_set::Builder::spawn_local", reason = "use the spawn wrappers in `mz_ore::task` instead" },
-    { path = "tokio::task::join_set::Builder::spawn_local", reason = "use the spawn wrappers in `mz_ore::task` instead" },
+    # We allow invalid because these paths only exist with tokio_unstable and feature tracing.
+    { path = "tokio::task::Builder::spawn", reason = "use the spawn wrappers in `mz_ore::task` instead", allow-invalid = true },
+    { path = "tokio::task::Builder::spawn_on", reason = "use the spawn wrappers in `mz_ore::task` instead", allow-invalid = true },
+    { path = "tokio::task::Builder::spawn_blocking", reason = "use the spawn wrappers in `mz_ore::task` instead", allow-invalid = true },
+    { path = "tokio::task::Builder::spawn_blocking_on", reason = "use the spawn wrappers in `mz_ore::task` instead", allow-invalid = true },
+    { path = "tokio::task::Builder::spawn_local", reason = "use the spawn wrappers in `mz_ore::task` instead", allow-invalid = true },
+    { path = "tokio::task::join_set::Builder::spawn_local", reason = "use the spawn wrappers in `mz_ore::task` instead", allow-invalid = true },
+    { path = "tokio::task::join_set::Builder::spawn", reason = "use the spawn wrappers in `mz_ore::task` instead", allow-invalid = true },
+    { path = "tokio::task::join_set::Builder::spawn_on", reason = "use the spawn wrappers in `mz_ore::task` instead", allow-invalid = true },
+    { path = "tokio::task::join_set::Builder::spawn_local", reason = "use the spawn wrappers in `mz_ore::task` instead", allow-invalid = true },
+    { path = "tokio::task::join_set::Builder::spawn_local", reason = "use the spawn wrappers in `mz_ore::task` instead", allow-invalid = true },
 
     { path = "rdkafka::config::ClientConfig::new", reason = "use the `client::create_new_client_config` wrapper in `kafka_util` instead" },
 
