@@ -16,4 +16,4 @@ rows:
       [Rewrite the query
       expression](/transform-data/idiomatic-materialize-sql/mz_now/):
       - Move the operation to the other side of the comparison
-      - Rewrite using `UNION ALL`
+      - Rewrite using `UNION ALL` or `UNION` (deduplicating as necessary)

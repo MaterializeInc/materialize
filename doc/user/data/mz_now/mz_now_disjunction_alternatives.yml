@@ -6,14 +6,46 @@ rows:
   - "Valid/Invalid": |
       <blue>Materialize SQL</blue> ✅
     "mz_now() SQL": |
+      **Rewrite as UNION ALL with possible duplicates**
 
       <div style="background-color: var(--code-block)">
 
       ```mzsql
-      SELECT * from orders
+      SELECT item, quantity, status from orders
       WHERE status = 'Shipped'
       UNION ALL
-      SELECT * from orders
+      SELECT item, quantity, status from orders
+      WHERE order_date + interval '30' minutes >= mz_now()
+      ;
+      ```
+
+      </div>
+
+      **Rewrite as UNION ALL with deduplication condition**
+
+      <div style="background-color: var(--code-block)">
+
+      ```mzsql
+      SELECT item, quantity, status from orders
+      WHERE status = 'Shipped'
+      UNION
+      SELECT item, quantity, status from orders
+      WHERE order_date + interval '30' minutes >= mz_now()
+      AND status != 'Shipped' -- Deduplicate by excluding those with status 'Shipped'
+      ;
+      ```
+
+      </div>
+
+      **Rewrite as UNION to handle any and all duplicated results**
+
+      <div style="background-color: var(--code-block)">
+
+      ```mzsql
+      SELECT item, quantity, status from orders
+      WHERE status = 'Shipped'
+      UNION
+      SELECT item, quantity, status from orders
       WHERE order_date + interval '30' minutes >= mz_now()
       ;
       ```
@@ -30,7 +62,7 @@ rows:
 
       ```none
       -- Unsupported
-      SELECT * from orders
+      SELECT item, quantity, status from orders
       WHERE status = 'Shipped'
       OR order_date + interval '30' minutes >= mz_now();
       ```

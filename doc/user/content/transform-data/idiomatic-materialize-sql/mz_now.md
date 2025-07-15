@@ -43,8 +43,16 @@ For example:
 
 {{< yaml-table data="mz_now/mz_now_combination" >}}
 
-**Idiomatic Materialize SQL**: To use disjunctions (`OR`) when using `mz_now()`
-in your query, rewrite the query to use `UNION ALL` instead.
+**Idiomatic Materialize SQL**: Instead of using disjunctions (`OR`) when using
+`mz_now()` in your query, rewrite the query to use `UNION ALL` or `UNION`
+instead, deduplicating as necessary:
+
+- In some cases, you may need to modify the conditions to deduplicate results
+  when using `UNION ALL`. For example, you might add the negation of one input's
+  condition to the other as a conjunction.
+
+- In some cases, using `UNION` instead of `UNION ALL` may suffice if the inputs
+  do not contain other duplicates that need to be retained.
 
 For example:
 

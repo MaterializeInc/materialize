@@ -61,14 +61,37 @@ WHERE mz_now() > order_date + INTERVAL '5min'
 <td><code>mz_now()</code> cannot be used with <code>OR</code>s </td>
 <td class="copyableCode">
 
-***Rewrite as `UNION ALL`***
+**Rewrite as `UNION ALL` with possible duplicates**
 
 ```mzsql
-SELECT * from orders
+SELECT item, quantity, status from orders
 WHERE status = 'Shipped'
 UNION ALL
-SELECT * from orders
+SELECT item, quantity, status from orders
 WHERE  order_date + interval '30' minutes >= mz_now()
+;
+```
+
+**Rewrite as UNION ALL with deduplication condition**
+
+```mzsql
+SELECT item, quantity, status from orders
+WHERE status = 'Shipped'
+UNION ALL
+SELECT item, quantity, status from orders
+WHERE order_date + interval '30' minutes >= mz_now()
+AND status != 'Shipped' -- Deduplicate by excluding those with status 'Shipped'
+;
+```
+
+**Rewrite as UNION to handle any and all duplicated results**
+
+```mzsql
+SELECT item, quantity, status from orders
+WHERE status = 'Shipped'
+UNION
+SELECT item, quantity, status from orders
+WHERE order_date + interval '30' minutes >= mz_now()
 ;
 ```
 
