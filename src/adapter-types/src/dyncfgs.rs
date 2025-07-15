@@ -87,7 +87,7 @@ pub const ENABLE_INTROSPECTION_SUBSCRIBES: Config<bool> = Config::new(
 
 /// The plan insights notice will not investigate fast path clusters if plan optimization took longer than this.
 pub const PLAN_INSIGHTS_NOTICE_FAST_PATH_CLUSTERS_OPTIMIZE_DURATION: Config<Duration> = Config::new(
-    "plan_insights_notice fast_path_clusters_optimize_duration",
+    "plan_insights_notice_fast_path_clusters_optimize_duration",
     // Looking at production values of the mz_optimizer_e2e_optimization_time_seconds metric, most
     // optimizations run faster than 10ms, so this should still work well for most queries. We want
     // to avoid the case where an optimization took just under this value and there are lots of

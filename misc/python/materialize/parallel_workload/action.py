@@ -1281,7 +1281,7 @@ class FlipFlagsAction(Action):
             "with_0dt_caught_up_check_cutoff",
             "enable_statement_lifecycle_logging",
             "enable_introspection_subscribes",
-            "plan_insights_notice fast_path_clusters_optimize_duration",
+            "plan_insights_notice_fast_path_clusters_optimize_duration",
             "enable_continual_task_builtins",
             "enable_expression_cache",
             "enable_multi_replica_sources",
