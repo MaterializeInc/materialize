@@ -61,6 +61,11 @@ pub struct Optimizer {
     metrics: OptimizerMetrics,
     /// The time spent performing optimization so far.
     duration: Duration,
+    /// When this is set, we quickly error out the optimization with
+    /// [OptimizerError::NonFastPathPlan] if it doesn't look like we'll arrive at a fast path plan.
+    /// (Note that this error does not mean that a normal optimization would have definitely not
+    /// arrived at a fast path plan, only that it _probably_ would not have.)
+    force_fast_path: bool,
 }
 
 impl Optimizer {
@@ -72,6 +77,7 @@ impl Optimizer {
         index_id: GlobalId,
         config: OptimizerConfig,
         metrics: OptimizerMetrics,
+        force_fast_path: bool,
     ) -> Self {
         Self {
             typecheck_ctx: empty_context(),
@@ -83,6 +89,7 @@ impl Optimizer {
             config,
             metrics,
             duration: Default::default(),
+            force_fast_path,
         }
     }
 
@@ -174,18 +181,24 @@ impl Optimize<HirRelationExpr> for Optimizer {
         trace_plan!(at: "raw", &expr);
 
         // HIR ⇒ MIR lowering and decorrelation
-        let expr = expr.lower(&self.config, Some(&self.metrics))?;
+        let mut expr = expr.lower(&self.config, Some(&self.metrics))?;
+
+        let mut df_meta = DataflowMetainfo::default();
 
         // MIR ⇒ MIR optimization (local)
-        let mut df_meta = DataflowMetainfo::default();
-        let mut transform_ctx = TransformCtx::local(
-            &self.config.features,
-            &self.typecheck_ctx,
-            &mut df_meta,
-            Some(&self.metrics),
-            Some(self.select_id),
-        );
-        let expr = optimize_mir_local(expr, &mut transform_ctx)?.into_inner();
+        // If we are being forced to produce a fast path plan, then let's skip the local
+        // optimization, because the only optimizations that we want to run in this case are in
+        // `fast_path_optimizer`.
+        if !self.force_fast_path {
+            let mut transform_ctx = TransformCtx::local(
+                &self.config.features,
+                &self.typecheck_ctx,
+                &mut df_meta,
+                Some(&self.metrics),
+                Some(self.select_id),
+            );
+            expr = optimize_mir_local(expr, &mut transform_ctx)?.into_inner();
+        }
 
         self.duration += time.elapsed();
 
@@ -342,6 +355,10 @@ impl<'s> Optimize<LocalMirPlan<Resolved<'s>>> for Optimizer {
                 return Err(e);
             }
         };
+
+        if self.force_fast_path && !use_fast_path_optimizer {
+            return Err(OptimizerError::NonFastPathPlan);
+        }
 
         // Run global optimization.
         mz_transform::optimize_dataflow(&mut df_desc, &mut transform_ctx, use_fast_path_optimizer)?;

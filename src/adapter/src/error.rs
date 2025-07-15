@@ -531,6 +531,9 @@ impl AdapterError {
                 // This should be handled by peek optimization, so it's an internal error if it
                 // reaches the user.
                 OptimizerError::UnsafeMfpPlan => SqlState::INTERNAL_ERROR,
+                // This should be caught by `compute_fast_path_clusters`, so it's an internal error
+                // if it reaches the user.
+                OptimizerError::NonFastPathPlan => SqlState::INTERNAL_ERROR,
             },
             AdapterError::UnallowedOnCluster { .. } => {
                 SqlState::S_R_E_PROHIBITED_SQL_STATEMENT_ATTEMPTED

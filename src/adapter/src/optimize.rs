@@ -290,6 +290,8 @@ pub enum OptimizerError {
     },
     #[error("MfpPlan couldn't be converted into SafeMfpPlan")]
     UnsafeMfpPlan,
+    #[error("the optimizer was asked to produce a fast path plan, but the plan is too complicated")]
+    NonFastPathPlan,
     #[error("internal optimizer error: {0}")]
     Internal(String),
 }

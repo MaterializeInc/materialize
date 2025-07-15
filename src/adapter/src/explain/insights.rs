@@ -106,6 +106,7 @@ impl PlanInsights {
                     ctx.index_id,
                     ctx.optimizer_config.clone(),
                     ctx.metrics.clone(),
+                    true,
                 );
                 mz_ore::task::spawn_blocking(
                     || "compute fast path clusters",

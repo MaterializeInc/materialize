@@ -311,6 +311,7 @@ impl Coordinator {
                     index_id,
                     optimizer_config,
                     self.optimizer_metrics(),
+                    false,
                 ))
             }
             Some(mut copy_to_ctx) => {
