@@ -1438,6 +1438,7 @@ pub mod datadriven {
     use crate::internal::paths::{BlobKey, BlobKeyPrefix, PartialBlobKey};
     use crate::internal::state::{BatchPart, RunOrder, RunPart};
     use crate::internal::state_versions::EncodedRollup;
+    use crate::internal::trace::CompactionInput;
     use crate::read::{Listen, ListenEvent, READER_LEASE_DURATION};
     use crate::rpc::NoopPubSubSender;
     use crate::tests::new_test_client;
@@ -2464,7 +2465,11 @@ pub mod datadriven {
             .clone();
         let (merge_res, maintenance) = datadriven
             .machine
-            .merge_res(&FueledMergeRes { output: batch })
+            .merge_res(&FueledMergeRes {
+                output: batch,
+                input: CompactionInput::Legacy,
+                new_active_compaction: None,
+            })
             .await;
         datadriven.routine.push(maintenance);
         Ok(format!(
