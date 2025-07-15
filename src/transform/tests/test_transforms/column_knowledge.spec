@@ -151,7 +151,7 @@ With
       Get t0
 Return
   Map (6, (3 * #3))
-    Join on=(3 = #2)
+    Join on=(#2 = 3)
       Get l0
       Get t0
 

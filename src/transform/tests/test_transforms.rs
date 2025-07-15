@@ -264,6 +264,7 @@ fn apply_transform<T: mz_transform::Transform>(
     // Apply a non-default feature flag to test the right implementation.
     features.enable_letrec_fixpoint_analysis = true;
     features.enable_dequadratic_eqprop_map = true;
+    features.enable_eq_classes_withholding_errors = true;
     let typecheck_ctx = mz_transform::typecheck::empty_context();
     let mut df_meta = DataflowMetainfo::default();
     let mut transform_ctx = mz_transform::TransformCtx::local(

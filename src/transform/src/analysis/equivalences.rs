@@ -18,6 +18,7 @@
 use std::collections::BTreeMap;
 use std::fmt::Formatter;
 
+use mz_expr::canonicalize::{UnionFind, canonicalize_equivalence_classes};
 use mz_expr::explain::{HumanizedExplain, HumanizerMode};
 use mz_expr::{AggregateFunc, Id, MirRelationExpr, MirScalarExpr};
 use mz_ore::str::{bracketed, separated};
@@ -337,6 +338,156 @@ pub struct EquivalenceClasses {
     /// appending to `self.classes`. This will be corrected in the next call to `self.refresh()`,
     /// but until then `remap` could be arbitrarily wrong. This should be improved in the future.
     remap: BTreeMap<MirScalarExpr, MirScalarExpr>,
+}
+
+/// An enum that can represent either a standard `EquivalenceClasses` or a
+/// `EquivalenceClassesWithholdingErrors`.
+#[derive(Clone, Debug)]
+pub enum EqClassesImpl {
+    /// Standard equivalence classes.
+    EquivalenceClasses(EquivalenceClasses),
+    /// Equivalence classes that withhold errors, reintroducing them when extracting equivalences.
+    EquivalenceClassesWithholdingErrors(EquivalenceClassesWithholdingErrors),
+}
+
+impl EqClassesImpl {
+    /// Returns a reference to the underlying `EquivalenceClasses`.
+    pub fn equivalence_classes(&self) -> &EquivalenceClasses {
+        match self {
+            EqClassesImpl::EquivalenceClasses(classes) => classes,
+            EqClassesImpl::EquivalenceClassesWithholdingErrors(classes) => {
+                &classes.equivalence_classes
+            }
+        }
+    }
+
+    /// Returns a mutable reference to the underlying `EquivalenceClasses`.
+    pub fn equivalence_classes_mut(&mut self) -> &mut EquivalenceClasses {
+        match self {
+            EqClassesImpl::EquivalenceClasses(classes) => classes,
+            EqClassesImpl::EquivalenceClassesWithholdingErrors(classes) => {
+                &mut classes.equivalence_classes
+            }
+        }
+    }
+
+    /// Extend the equivalence classes with new equivalences.
+    pub fn extend_equivalences(&mut self, equivalences: Vec<Vec<MirScalarExpr>>) {
+        match self {
+            EqClassesImpl::EquivalenceClasses(classes) => {
+                classes.classes.extend(equivalences);
+            }
+            EqClassesImpl::EquivalenceClassesWithholdingErrors(classes) => {
+                classes.extend_equivalences(equivalences);
+            }
+        }
+    }
+
+    /// Push a new equivalence class.
+    pub fn push_equivalences(&mut self, equivalences: Vec<MirScalarExpr>) {
+        match self {
+            EqClassesImpl::EquivalenceClasses(classes) => {
+                classes.classes.push(equivalences);
+            }
+            EqClassesImpl::EquivalenceClassesWithholdingErrors(classes) => {
+                classes.push_equivalences(equivalences);
+            }
+        }
+    }
+
+    /// Subject the constraints to the column projection, reworking and removing equivalences.
+    pub fn project<I>(&mut self, output_columns: I)
+    where
+        I: IntoIterator<Item = usize> + Clone,
+    {
+        match self {
+            EqClassesImpl::EquivalenceClasses(classes) => {
+                classes.project(output_columns);
+            }
+            EqClassesImpl::EquivalenceClassesWithholdingErrors(classes) => {
+                classes.project(output_columns);
+            }
+        }
+    }
+
+    /// Extract the equivalences
+    pub fn extract_equivalences(
+        &mut self,
+        columns: Option<&[ColumnType]>,
+    ) -> Vec<Vec<MirScalarExpr>> {
+        match self {
+            EqClassesImpl::EquivalenceClasses(classes) => classes.classes.clone(),
+            EqClassesImpl::EquivalenceClassesWithholdingErrors(classes) => {
+                classes.extract_equivalences(columns)
+            }
+        }
+    }
+}
+
+/// A wrapper struct for equivalence classes that witholds errors
+/// from the underlying equivalence classes, reintroducing them
+/// when extracting equivalences.
+#[derive(Clone, Eq, PartialEq, Ord, PartialOrd, Default, Debug)]
+pub struct EquivalenceClassesWithholdingErrors {
+    /// The underlying equivalence classes.
+    pub equivalence_classes: EquivalenceClasses,
+    /// A list of equivalence classes that contain errors, which we hold back
+    pub held_back_classes: Vec<(Option<MirScalarExpr>, Vec<MirScalarExpr>)>,
+}
+
+impl EquivalenceClassesWithholdingErrors {
+    /// Extend the equivalence classes with new equivalences.
+    pub fn extend_equivalences(&mut self, equivalences: Vec<Vec<MirScalarExpr>>) {
+        for class in equivalences {
+            self.push_equivalences(class);
+        }
+    }
+
+    /// Push a new equivalence class, which may contain errors.
+    pub fn push_equivalences(&mut self, equivalences: Vec<MirScalarExpr>) {
+        let (with_errs, without_errs): (Vec<_>, Vec<_>) =
+            equivalences.into_iter().partition(|e| e.contains_err());
+        self.held_back_classes
+            .push((without_errs.first().cloned(), with_errs));
+        if without_errs.len() > 1 {
+            self.equivalence_classes.classes.push(without_errs);
+        }
+    }
+
+    /// Subject the constraints to the column projection, reworking and removing equivalences.
+    /// This method should also introduce equivalences representing any repeated columns.
+    /// This notably does not project the held back classes.
+    pub fn project<I>(&mut self, output_columns: I)
+    where
+        I: IntoIterator<Item = usize> + Clone,
+    {
+        self.equivalence_classes.project(output_columns.clone());
+    }
+
+    /// Minimize the equivalence classes, and return the result, reintroducing any held back classes.
+    pub fn extract_equivalences(
+        &mut self,
+        columns: Option<&[ColumnType]>,
+    ) -> Vec<Vec<MirScalarExpr>> {
+        self.equivalence_classes.minimize(columns);
+
+        if self.held_back_classes.is_empty() {
+            self.equivalence_classes.classes.clone()
+        } else {
+            let reducer = self.equivalence_classes.reducer();
+            let mut classes = self.equivalence_classes.classes.clone();
+            for (anchor, mut class) in self.held_back_classes.drain(..) {
+                if let Some(mut anchor) = anchor {
+                    // Reduce the anchor expression to its canonical form.
+                    reducer.reduce_expr(&mut anchor);
+                    class.push(anchor.clone());
+                }
+                classes.push(class.clone());
+            }
+            canonicalize_equivalence_classes(&mut classes);
+            classes
+        }
+    }
 }
 
 /// Raw printing of [`EquivalenceClasses`] with default expression humanization.
@@ -696,7 +847,12 @@ impl EquivalenceClasses {
             for expr in class.iter_mut() {
                 self.remap.reduce_child(expr);
                 if let Some(columns) = columns {
+                    let orig_expr = expr.clone();
                     expr.reduce(columns);
+                    if expr.contains_err() {
+                        // Rollback to the original expression if it contains an error.
+                        *expr = orig_expr;
+                    }
                 }
             }
         }
@@ -1042,55 +1198,6 @@ impl ExpressionReducer for BTreeMap<MirScalarExpr, MirScalarExpr> {
             }
         }
         false
-    }
-}
-
-trait UnionFind<T> {
-    /// Sets `self[x]` to the root from `x`, and returns a reference to the root.
-    fn find<'a>(&'a mut self, x: &T) -> Option<&'a T>;
-    /// Ensures that `x` and `y` have the same root.
-    fn union(&mut self, x: &T, y: &T);
-}
-
-impl<T: Clone + Ord> UnionFind<T> for BTreeMap<T, T> {
-    fn find<'a>(&'a mut self, x: &T) -> Option<&'a T> {
-        if !self.contains_key(x) {
-            None
-        } else {
-            if self[x] != self[&self[x]] {
-                // Path halving
-                let mut y = self[x].clone();
-                while y != self[&y] {
-                    let grandparent = self[&self[&y]].clone();
-                    *self.get_mut(&y).unwrap() = grandparent;
-                    y.clone_from(&self[&y]);
-                }
-                *self.get_mut(x).unwrap() = y;
-            }
-            Some(&self[x])
-        }
-    }
-
-    fn union(&mut self, x: &T, y: &T) {
-        match (self.find(x).is_some(), self.find(y).is_some()) {
-            (true, true) => {
-                if self[x] != self[y] {
-                    let root_x = self[x].clone();
-                    let root_y = self[y].clone();
-                    self.insert(root_x, root_y);
-                }
-            }
-            (false, true) => {
-                self.insert(x.clone(), self[y].clone());
-            }
-            (true, false) => {
-                self.insert(y.clone(), self[x].clone());
-            }
-            (false, false) => {
-                self.insert(x.clone(), x.clone());
-                self.insert(y.clone(), x.clone());
-            }
-        }
     }
 }
 

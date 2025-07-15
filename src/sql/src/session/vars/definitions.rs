@@ -2215,6 +2215,12 @@ feature_flags!(
         default: true,
         enable_for_item_parsing: false,
     },
+    {
+        name: enable_eq_classes_withholding_errors,
+        desc: "Use `EquivalenceClassesWithholdingErrors` instead of raw `EquivalenceClasses` during eq prop for joins.",
+        default: true,
+        enable_for_item_parsing: false,
+    },
 );
 
 impl From<&super::SystemVars> for OptimizerFeatures {
@@ -2236,6 +2242,7 @@ impl From<&super::SystemVars> for OptimizerFeatures {
                 .enable_projection_pushdown_after_relation_cse(),
             enable_less_reduce_in_eqprop: vars.enable_less_reduce_in_eqprop(),
             enable_dequadratic_eqprop_map: vars.enable_dequadratic_eqprop_map(),
+            enable_eq_classes_withholding_errors: vars.enable_eq_classes_withholding_errors(),
         }
     }
 }
