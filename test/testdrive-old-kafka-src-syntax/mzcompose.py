@@ -13,7 +13,6 @@ the expected-result/actual-result (aka golden testing) paradigm. A query is
 retried until it produces the desired result.
 """
 import glob
-from pathlib import Path
 
 from materialize import MZ_ROOT, ci_util, spawn
 from materialize.mzcompose.composition import Composition, WorkflowArgumentParser
@@ -216,31 +215,24 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
             )
 
         junit_report = ci_util.junit_report_filename(c.name)
+        print(f"Passing through arguments to testdrive {passthrough_args}\n")
 
-        try:
-            junit_report = ci_util.junit_report_filename(c.name)
-            print(f"Passing through arguments to testdrive {passthrough_args}\n")
-
-            # do not set default args, they should be set in the td file using set-arg-default to easen the execution
-            # without mzcompose
-            def process(file: str) -> None:
-                c.run_testdrive_files(
-                    (
-                        "--rewrite-results"
-                        if args.rewrite_results
-                        else f"--junit-report={junit_report}"
-                    ),
-                    *non_default_testdrive_vars,
-                    *passthrough_args,
-                    file,
-                )
-
-            c.test_parts(args.files, process)
-            c.sanity_restart_mz()
-        finally:
-            ci_util.upload_junit_report(
-                "testdrive", Path(__file__).parent / junit_report
+        # do not set default args, they should be set in the td file using set-arg-default to easen the execution
+        # without mzcompose
+        def process(file: str) -> None:
+            c.run_testdrive_files(
+                (
+                    "--rewrite-results"
+                    if args.rewrite_results
+                    else f"--junit-report={junit_report}"
+                ),
+                *non_default_testdrive_vars,
+                *passthrough_args,
+                file,
             )
+
+        c.test_parts(args.files, process)
+        c.sanity_restart_mz()
 
 
 def workflow_migration(c: Composition, parser: WorkflowArgumentParser) -> None:

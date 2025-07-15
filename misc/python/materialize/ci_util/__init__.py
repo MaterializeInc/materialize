@@ -34,49 +34,6 @@ def junit_report_filename(suite: str) -> Path:
     return Path(f"{filename}.xml")
 
 
-def upload_junit_report(suite: str, junit_report: Path) -> None:
-    """Upload a JUnit report to Buildkite Test Analytics.
-
-    Outside of CI, this function does nothing. Inside of CI, the API key for
-    Buildkite Test Analytics is expected to be in the environment variable
-    `BUILDKITE_TEST_ANALYTICS_API_KEY_{SUITE}`, where `{SUITE}` is the
-    upper-snake-cased rendition of the `suite` parameter.
-
-    Args:
-        suite: The identifier for the test suite in Buildkite Test Analytics.
-        junit_report: The path to the JUnit XML-formatted report file.
-    """
-    if not buildkite.is_in_buildkite():
-        return
-    suite = suite.upper().replace("-", "_")
-    token = os.getenv(f"BUILDKITE_TEST_ANALYTICS_API_KEY_{suite}")
-    if not token:
-        return
-    try:
-        res = requests.post(
-            "https://analytics-api.buildkite.com/v1/uploads",
-            headers={"Authorization": f"Token {token}"},
-            json={
-                "format": "junit",
-                "run_env": {
-                    "key": os.environ["BUILDKITE_BUILD_ID"],
-                    "CI": "buildkite",
-                    "number": os.environ["BUILDKITE_BUILD_NUMBER"],
-                    "job_id": os.environ["BUILDKITE_JOB_ID"],
-                    "branch": os.environ["BUILDKITE_BRANCH"],
-                    "commit_sha": os.environ["BUILDKITE_COMMIT"],
-                    "message": os.environ["BUILDKITE_MESSAGE"],
-                    "url": os.environ["BUILDKITE_BUILD_URL"],
-                },
-                "data": junit_report.read_text(),
-            },
-        )
-    except Exception as e:
-        print(f"Got exception when uploading analytics: {e}")
-    else:
-        print(res.status_code, res.text)
-
-
 def get_artifacts() -> Any:
     """Get artifact informations from Buildkite. Outside of CI, this function does nothing."""
 

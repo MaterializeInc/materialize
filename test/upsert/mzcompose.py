@@ -14,7 +14,6 @@
 Test Kafka Upsert sources using Testdrive.
 """
 
-from pathlib import Path
 from textwrap import dedent
 
 from materialize import ci_util
@@ -139,24 +138,17 @@ def workflow_testdrive(c: Composition, parser: WorkflowArgumentParser) -> None:
 
         junit_report = ci_util.junit_report_filename(c.name)
 
-        try:
-            junit_report = ci_util.junit_report_filename(c.name)
-
-            def process(file: str) -> None:
-                c.run_testdrive_files(
-                    f"--junit-report={junit_report}",
-                    f"--var=replicas={args.replicas}",
-                    f"--var=default-replica-size={materialized.default_replica_size}",
-                    f"--var=default-storage-size={materialized.default_storage_size}",
-                    file,
-                )
-
-            c.test_parts(args.files, process)
-            c.sanity_restart_mz()
-        finally:
-            ci_util.upload_junit_report(
-                "testdrive", Path(__file__).parent / junit_report
+        def process(file: str) -> None:
+            c.run_testdrive_files(
+                f"--junit-report={junit_report}",
+                f"--var=replicas={args.replicas}",
+                f"--var=default-replica-size={materialized.default_replica_size}",
+                f"--var=default-storage-size={materialized.default_storage_size}",
+                file,
             )
+
+        c.test_parts(args.files, process)
+        c.sanity_restart_mz()
 
 
 def workflow_rehydration(c: Composition) -> None:

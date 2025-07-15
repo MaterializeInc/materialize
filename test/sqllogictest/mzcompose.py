@@ -19,7 +19,7 @@ import argparse
 from argparse import Namespace
 from pathlib import Path
 
-from materialize import MZ_ROOT, buildkite, ci_util, file_util
+from materialize import buildkite, ci_util, file_util
 from materialize.mzcompose.composition import Composition, WorkflowArgumentParser
 from materialize.mzcompose.services.mz import Mz
 from materialize.mzcompose.services.postgres import CockroachOrPostgresMetadata
@@ -114,7 +114,6 @@ def run_sqllogictest(
             try:
                 c.run(container_name, *cmd)
             except:
-                ci_util.upload_junit_report(c.name, MZ_ROOT / junit_report_path)
                 j += 1
                 raise
 

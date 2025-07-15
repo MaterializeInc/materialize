@@ -744,8 +744,7 @@ To see the available workflows, run:
 
             if self.shall_generate_junit_report(args.find):
                 junit_suite = self.generate_junit_suite(composition)
-                junit_xml_file_path = self.write_junit_report_to_file(junit_suite)
-                ci_util.upload_junit_report("mzcompose", junit_xml_file_path)
+                self.write_junit_report_to_file(junit_suite)
 
             if any(
                 not result.is_successful()
