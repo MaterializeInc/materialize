@@ -32,6 +32,8 @@ disallowed-methods = [
 
     # These are banned because we want to ensure people don't forget to use .name(...), so we require the use of `mz_ore`
     # We allow invalid because these paths only exist with tokio_unstable and feature tracing.
+    # When these features are disabled, clippy warns about the path not existing. We don't use tokio_unstable in the cloud
+    # repo, so clippy gives erroneous warnings about the path not referring to an existing function.
     { path = "tokio::task::Builder::spawn", reason = "use the spawn wrappers in `mz_ore::task` instead", allow-invalid = true },
     { path = "tokio::task::Builder::spawn_on", reason = "use the spawn wrappers in `mz_ore::task` instead", allow-invalid = true },
     { path = "tokio::task::Builder::spawn_blocking", reason = "use the spawn wrappers in `mz_ore::task` instead", allow-invalid = true },
