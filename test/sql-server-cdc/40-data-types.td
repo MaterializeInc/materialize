@@ -97,7 +97,7 @@ CREATE TABLE table_nvarchar(val nvarchar(999));
 INSERT INTO table_nvarchar VALUES (N'🦀🚀🦀🚀🦀🚀🦀🚀🦀🚀🦀🚀🦀🚀'), (N'💯💯💯💯💯💯💯💯💯'), (NULL);
 EXEC sys.sp_cdc_enable_table @source_schema = 'dbo', @source_name = 'table_nvarchar', @role_name = 'SA', @supports_net_changes = 0;
 
-# TODO (maz): remove when we fix LSN selection (https://github.com/MaterializeInc/database-issues/issues/9476)
+# TODO (maz): remove when we fix LSN selection (database-issues#9476)
 $ sleep-is-probably-flaky-i-have-justified-my-need-with-a-comment duration=5s
 
 # Exercise Materialize.
