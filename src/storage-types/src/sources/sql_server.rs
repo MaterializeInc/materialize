@@ -55,7 +55,7 @@ pub const CDC_POLL_INTERVAL: Config<Duration> = Config::new(
 
 pub const CDC_CLEANUP_CHANGE_TABLE: Config<bool> = Config::new(
     "sql_server_cdc_cleanup_change_table",
-    true,
+    false,
     "When enabled we'll notify SQL Server that it can cleanup the change tables \
     as the source makes progress and commits data.",
 );
