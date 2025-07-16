@@ -15,7 +15,6 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use fail::fail_point;
-use futures::Future;
 use maplit::{btreemap, btreeset};
 use mz_adapter_types::compaction::SINCE_GRANULARITY;
 use mz_adapter_types::connection::ConnectionId;
@@ -64,7 +63,7 @@ use crate::session::{Session, Transaction, TransactionOps};
 use crate::statement_logging::StatementEndedExecutionReason;
 use crate::telemetry::{EventDetails, SegmentClientExt};
 use crate::util::ResultExt;
-use crate::{AdapterError, TimestampProvider, catalog, flags};
+use crate::{AdapterError, ExecuteContext, TimestampProvider, catalog, flags};
 
 impl Coordinator {
     /// Same as [`Self::catalog_transact_conn`] but takes a [`Session`].
@@ -82,20 +81,19 @@ impl Coordinator {
     /// builtin table updates concurrently with any side effects (e.g. creating
     /// collections).
     #[instrument(name = "coord::catalog_transact_with_side_effects")]
-    pub(crate) async fn catalog_transact_with_side_effects<'c, F, Fut>(
-        &'c mut self,
-        session: Option<&Session>,
+    pub(crate) async fn catalog_transact_with_side_effects<F>(
+        &mut self,
+        ctx: Option<&mut ExecuteContext>,
         ops: Vec<catalog::Op>,
         side_effect: F,
     ) -> Result<(), AdapterError>
     where
-        F: FnOnce(&'c mut Coordinator) -> Fut,
-        Fut: Future<Output = ()>,
+        F: AsyncFnOnce(&mut Coordinator, Option<&mut ExecuteContext>) -> () + 'static,
     {
         let table_updates = self
-            .catalog_transact_inner(session.map(|session| session.conn_id()), ops)
+            .catalog_transact_inner(ctx.as_ref().map(|ctx| ctx.session().conn_id()), ops)
             .await?;
-        let side_effects_fut = side_effect(self);
+        let side_effects_fut = side_effect(self, ctx);
 
         // Run our side effects concurrently with the table updates.
         let ((), ()) = futures::future::join(
