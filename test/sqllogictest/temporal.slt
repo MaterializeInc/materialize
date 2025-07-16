@@ -231,3 +231,53 @@ query B
 select x < '3000-01-01' from v;
 ----
 true
+
+statement ok
+SELECT *
+FROM events
+WHERE insert_ts + 30 >= mz_now();
+
+query error db error: ERROR: WHERE clause error: operator does not exist: mz_timestamp \- integer
+SELECT *
+FROM events
+WHERE insert_ts >= mz_now() - 30;
+
+statement ok
+CREATE TABLE t2(ts timestamp, x int);
+
+statement ok
+SELECT *
+FROM t2
+WHERE ts + INTERVAL '30' minutes >= mz_now();
+
+statement ok
+CREATE MATERIALIZED VIEW mv1 AS
+SELECT *
+FROM t2
+WHERE ts + INTERVAL '30' minutes >= mz_now();
+
+query error db error: ERROR: WHERE clause error: operator does not exist: mz_timestamp \- interval
+SELECT *
+FROM t2
+WHERE ts >= mz_now() - INTERVAL '30' minutes;
+
+query error db error: ERROR: WHERE clause error: operator does not exist: mz_timestamp \- interval
+CREATE MATERIALIZED VIEW mv_err AS
+SELECT *
+FROM t2
+WHERE ts >= mz_now() - INTERVAL '30' minutes;
+
+statement ok
+SELECT *
+FROM t2
+WHERE
+  ts + INTERVAL '30' minutes >= mz_now()
+  OR ts IS NULL;
+
+query error db error: ERROR: internal error: Unsupported temporal predicate\. Note: `mz_now\(\)` must be directly compared to a non\-temporal expression of mz_timestamp\-castable type\. Expression found: \(\(#0\{ts\}\) IS NULL OR \(timestamp_to_mz_timestamp\(\(#0\{ts\} \+ 00:30:00\)\) >= mz_now\(\)\)\)
+CREATE MATERIALIZED VIEW mv_err AS
+SELECT *
+FROM t2
+WHERE
+  ts + INTERVAL '30' minutes >= mz_now()
+  OR ts IS NULL;
