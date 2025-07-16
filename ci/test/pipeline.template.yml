@@ -148,9 +148,9 @@ steps:
         coverage: skip
         sanitizer: skip
 
-      - id: lint-clippy-doc
-        label: Clippy and doctests
-        command: bin/ci-builder run stable ci/test/lint-clippy-doc.sh
+      - id: lint-clippy
+        label: Clippy
+        command: bin/ci-builder run stable ci/test/lint-clippy.sh
         inputs:
           - Cargo.lock
           - Cargo.toml
@@ -164,14 +164,15 @@ steps:
         coverage: skip
         sanitizer: skip
 
-      - id: lint-cargo-doc-test
-        label: Cargo doc tests
-        command: bin/ci-builder run stable ci/test/lint-cargo-doc-test.sh
+      - id: lint-doctests
+        label: Doctests
+        command: bin/ci-builder run stable ci/test/lint-doc.sh
         inputs:
           - Cargo.lock
           - Cargo.toml
           - "**/Cargo.toml"
           - "**/*.rs"
+          - misc/helm-charts
         depends_on: []
         timeout_in_minutes: 40
         agents:
@@ -588,13 +589,12 @@ steps:
     label: "mz-debug tool"
     depends_on: build-aarch64
     timeout_in_minutes: 45
+    inputs: [test/mz-debug]
     plugins:
       - ./ci/plugins/mzcompose:
           composition: mz-debug
-          ci-builder: stable
     agents:
-      # Faster agent since it currently compiles mz-debug itself
-      queue: hetzner-aarch64-16cpu-32gb
+      queue: hetzner-aarch64-4cpu-8gb
 
   - id: secrets-logging
     label: "Secrets Logging"

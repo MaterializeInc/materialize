@@ -151,6 +151,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
 
     with c.override(testdrive, materialized):
         c.up(*dependencies)
+        c.up("testdrive", persistent=True)
 
         c.sql(
             "ALTER SYSTEM SET max_clusters = 50;",

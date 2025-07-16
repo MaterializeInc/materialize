@@ -1,5 +1,3 @@
-#!/usr/bin/env bash
-
 # Copyright Materialize, Inc. and contributors. All rights reserved.
 #
 # Use of this software is governed by the Business Source License
@@ -9,10 +7,8 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-set -euo pipefail
+MZFROM ubuntu-base
 
-. misc/shlib/shlib.bash
+COPY mz-debug /usr/local/bin/
 
-try bin/xcompile cargo test --locked --profile=ci --doc
-
-try_status_report
+WORKDIR /workdir

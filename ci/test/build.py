@@ -24,36 +24,49 @@ from materialize.xcompile import Arch
 
 
 def main() -> None:
-    coverage = ui.env_is_truthy("CI_COVERAGE_ENABLED")
-    sanitizer = Sanitizer[os.getenv("CI_SANITIZER", "none")]
-    bazel = ui.env_is_truthy("CI_BAZEL_BUILD")
-    bazel_remote_cache = os.getenv("CI_BAZEL_REMOTE_CACHE")
-    bazel_lto = ui.env_is_truthy("CI_BAZEL_LTO")
+    try:
+        coverage = ui.env_is_truthy("CI_COVERAGE_ENABLED")
+        sanitizer = Sanitizer[os.getenv("CI_SANITIZER", "none")]
+        bazel = ui.env_is_truthy("CI_BAZEL_BUILD")
+        bazel_remote_cache = os.getenv("CI_BAZEL_REMOTE_CACHE")
+        bazel_lto = ui.env_is_truthy("CI_BAZEL_LTO")
 
-    repo = mzbuild.Repository(
-        Path("."),
-        coverage=coverage,
-        sanitizer=sanitizer,
-        bazel=bazel,
-        bazel_remote_cache=bazel_remote_cache,
-        bazel_lto=bazel_lto,
-    )
+        repo = mzbuild.Repository(
+            Path("."),
+            coverage=coverage,
+            sanitizer=sanitizer,
+            bazel=bazel,
+            bazel_remote_cache=bazel_remote_cache,
+            bazel_lto=bazel_lto,
+        )
 
-    # Build and push any images that are not already available on Docker Hub,
-    # so they are accessible to other build agents.
-    print("--- Acquiring mzbuild images")
-    built_images = set()
-    deps = repo.resolve_dependencies(image for image in repo if image.publish)
-    deps.ensure(post_build=lambda image: built_images.add(image))
+        # Build and push any images that are not already available on Docker Hub,
+        # so they are accessible to other build agents.
+        print("--- Acquiring mzbuild images")
+        built_images = set()
+        deps = repo.resolve_dependencies(image for image in repo if image.publish)
+        deps.ensure(post_build=lambda image: built_images.add(image))
 
-    with ThreadPoolExecutor(max_workers=2) as executor:
-        futures = [
-            executor.submit(maybe_upload_debuginfo, repo, built_images),
-            executor.submit(annotate_buildkite_with_tags, repo.rd.arch, deps),
-        ]
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            futures = [
+                executor.submit(maybe_upload_debuginfo, repo, built_images),
+                executor.submit(annotate_buildkite_with_tags, repo.rd.arch, deps),
+            ]
 
-        # Wait until all tasks are complete
-        wait(futures)
+            # Wait until all tasks are complete
+            wait(futures)
+    except:
+        if step_key := os.getenv("BUILDKITE_STEP_KEY"):
+            spawn.runv(
+                [
+                    "buildkite-agent",
+                    "meta-data",
+                    "set",
+                    step_key,
+                    "failed",
+                ]
+            )
+        raise
 
 
 def annotate_buildkite_with_tags(arch: Arch, deps: mzbuild.DependencySet) -> None:

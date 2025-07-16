@@ -13,8 +13,6 @@ set -euo pipefail
 
 . misc/shlib/shlib.bash
 
-try cargo clippy --all-targets -- -D warnings
-
 try bin/doc
 try bin/doc --document-private-items
 

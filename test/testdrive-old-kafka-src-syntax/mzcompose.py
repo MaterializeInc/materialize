@@ -229,6 +229,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
                 *non_default_testdrive_vars,
                 *passthrough_args,
                 file,
+                persistent=False,
             )
 
         c.test_parts(args.files, process)
@@ -369,6 +370,7 @@ def workflow_migration(c: Composition, parser: WorkflowArgumentParser) -> None:
 
     for file in matching_files:
         with c.override(testdrive, mz_old):
+            c.rm("testdrive")
             c.up(*dependencies)
 
             c.sql(
@@ -427,11 +429,13 @@ def workflow_migration(c: Composition, parser: WorkflowArgumentParser) -> None:
                 *non_default_testdrive_vars,
                 "--no-reset",
                 file,
+                persistent=False,
             )
 
             c.kill("materialized", wait=True)
 
-            with c.override(mz_new):
+            with c.override(testdrive, mz_new):
+                c.rm("testdrive")
                 c.up("materialized")
 
                 print("Running mz_new")
@@ -452,11 +456,9 @@ def workflow_migration(c: Composition, parser: WorkflowArgumentParser) -> None:
                 c.rm(METADATA_STORE)
                 c.rm("postgres")
                 c.rm("mysql")
-
                 # remove the testdrive container which uses the mzdata volume
                 testdrive_container_id = spawn.capture(
                     ["docker", "ps", "-a", "--filter", f"volume={c.name}_mzdata", "-q"]
                 ).strip()
                 spawn.runv(["docker", "rm", testdrive_container_id])
-
                 c.rm_volumes("mzdata", force=True)

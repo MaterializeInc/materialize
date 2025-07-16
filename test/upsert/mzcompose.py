@@ -121,6 +121,7 @@ def workflow_testdrive(c: Composition, parser: WorkflowArgumentParser) -> None:
     )
 
     with c.override(testdrive, materialized):
+        c.rm("testdrive")
         c.up(*dependencies)
 
         if args.replicas > 1:
@@ -259,6 +260,7 @@ def workflow_rehydration(c: Composition) -> None:
             clusterd,
             Testdrive(no_reset=True, consistent_seed=True),
         ):
+            c.rm("testdrive")
             print(f"Running rehydration workflow {style}")
             c.down(destroy_volumes=True)
 
@@ -307,6 +309,7 @@ def run_one_failpoint(c: Composition, failpoint: str, error_message: str) -> Non
         Testdrive(no_reset=True, consistent_seed=True),
         Clusterd(name="clusterd1", workers=4),
     ):
+        c.rm("testdrive")
         c.run_testdrive_files("failpoint/01-setup.td")
         c.up("clusterd1")
         c.run_testdrive_files("failpoint/02-source.td")
@@ -371,6 +374,7 @@ def workflow_incident_49(c: Composition) -> None:
             mz,
             Testdrive(no_reset=True, consistent_seed=True),
         ):
+            c.rm("testdrive")
             print(f"Running incident-49 workflow {style}")
             c.down(destroy_volumes=True)
             c.up(*dependencies)
@@ -431,6 +435,7 @@ def workflow_rocksdb_cleanup(c: Composition) -> None:
         with c.override(
             Testdrive(no_reset=True),
         ):
+            c.rm("testdrive")
             c.up("testdrive", persistent=True)
             c.exec("testdrive", f"rocksdb-cleanup/{testdrive_file}")
 
@@ -531,6 +536,7 @@ def workflow_autospill(c: Composition) -> None:
             ),
             Testdrive(no_reset=True, consistent_seed=True),
         ):
+            c.rm("testdrive")
             c.down(destroy_volumes=True)
             print(f"Running autospill workflow {style}")
             c.up(*dependencies)
@@ -580,6 +586,7 @@ def workflow_load_test(c: Composition, parser: WorkflowArgumentParser) -> None:
             name="clusterd1",
         ),
     ):
+        c.rm("testdrive")
         c.up("testdrive", persistent=True)
         c.exec("testdrive", "load-test/setup.td")
         c.testdrive(
@@ -721,6 +728,7 @@ def workflow_large_scale(c: Composition, parser: WorkflowArgumentParser) -> None
     with c.override(
         Testdrive(no_reset=True, consistent_seed=True),
     ):
+        c.rm("testdrive")
         c.up("testdrive", persistent=True)
 
         c.testdrive(
