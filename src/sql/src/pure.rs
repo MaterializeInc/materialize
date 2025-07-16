@@ -1620,7 +1620,7 @@ async fn purify_alter_source_add_subsources(
                 .await?;
             let mut client = mz_sql_server_util::Client::connect(config).await?;
             // If CDC is enabled for a table, there is a period where the max LSN will not be
-            // available.  Rather than return an error to the user, we retrsource_y for 5 seconds to
+            // available.  Rather than return an error to the user, we retry for 5 seconds to
             // allow the CDC job a chance to run.  By default, the job runs every 5 seconds.
             let initial_lsn =
                 mz_sql_server_util::inspect::get_max_lsn_retry(&mut client, Duration::from_secs(5))
