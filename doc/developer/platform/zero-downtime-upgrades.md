@@ -13,13 +13,16 @@ elsewhere.
 
 ## Overview
 
-Zero-downtime upgrades in Materialize enable seamless software updates without
-service interruption. The system maintains two key properties during upgrades:
+Zero-downtime upgrades in Materialize enable version upgrades without service
+interruption. The system maintains two key properties during upgrades:
 
-- **RESPONSIVENESS**: Storage objects (sources, tables, sinks) remain available
-  and responsive to queries
-- **FRESHNESS**: Compute objects (indexes, materialized views) continue to
-  process updates and remain fresh
+- **RESPONSIVENESS**: The system, a part of it, or an object responds to
+  queries at some timestamp with “sufficiently low” latency.
+- **FRESHNESS**: The system, a part of it, or an object responds to queries
+  with data that is “sufficiently recent”.
+
+We use the term *AVAILABILITY* to describe the simultaneous combination of
+*responsiveness* and *freshness*.
 
 The architecture achieves zero-downtime through a carefully orchestrated
 sequence of READ-ONLY MODE initialization, CAUGHT-UP DETECTION, PROMOTION
@@ -38,16 +41,16 @@ coordination mechanism for zero-downtime upgrades.
 The zero-downtime upgrade process follows a strict state machine:
 
 1. **INITIALIZING**: Environment starts up and determines its deployment mode
-2. **CATCHING_UP**: Environment hydrates workloads in read-only mode
+2. **CATCHING_UP**: Environment hydrates clusters/workloads in read-only mode
 3. **READY_TO_PROMOTE**: Environment is fully caught up and ready for promotion
-4. **PROMOTING**: External orchestrator has triggered promotion
+4. **PROMOTING**: External (Cloud) orchestrator has triggered promotion
 5. **IS_LEADER**: Environment is the active leader serving queries
 
 ### READ-ONLY MODE
 
 A special operating mode where controllers and replicas can read from external
-systems but cannot write to them. This enables pre-hydration of workloads
-without affecting persistent state.
+systems (including persist) but cannot write to them. This enables
+pre-hydration of workloads without affecting persistent state.
 
 ## Zero-Downtime Upgrade Flow
 
@@ -68,6 +71,9 @@ When a new `environmentd` starts, it follows this sequence:
 // From environmentd/src/deployment/preflight.rs:168-169
 if catalog_generation < deploy_generation {
     info!("this deployment is a new generation; booting in read only mode");
+
+    [...]
+
     return Ok(PreflightOutput {
         read_only: true,
         caught_up_trigger: Some(caught_up_trigger),
@@ -79,13 +85,13 @@ if catalog_generation < deploy_generation {
 
 During the CATCHING_UP phase:
 
-1. **Cluster Reconnection**: Compute replicas reconnect to existing cluster
-   instances
+1. **Cluster Creation**: Cluster replicas matching the cluster replicas of the
+   running environment are brought up
 2. **Dataflow Hydration**: Indexes and materialized views hydrate using leased
    read handles
 3. **Source Preparation**: Storage sources prepare for ingestion without
-   actually writing
-4. **DDL Monitoring**: System monitors for schema changes that would require
+   actually writing, largely this means that UPSERT sources hydrate their state
+4. **DDL Monitoring**: System monitors for catalog changes that would require
    restart
 
 ### Phase 3: Caught-Up Detection
@@ -93,6 +99,7 @@ During the CATCHING_UP phase:
 The system implements CAUGHT-UP DETECTION:
 
 #### New Frontier-Based Algorithm
+
 - **Frontier Comparison**: Compares collection frontiers against live
   deployment frontiers
 - **Lag Tolerance**: Allows configurable lag via
@@ -103,6 +110,7 @@ The system implements CAUGHT-UP DETECTION:
   hydration
 
 #### Legacy Hydration Check
+
 - **Simple Boolean**: Checks if all compute clusters have hydrated
 - **Compatibility**: Fallback for environments with
   `ENABLE_0DT_CAUGHT_UP_CHECK: false`
@@ -113,9 +121,10 @@ When caught up, the environment signals readiness:
 
 1. **State Transition**: Deployment state becomes `READY_TO_PROMOTE`
 2. **API Exposure**: `/api/leader/status` endpoint returns `ReadyToPromote`
-3. **External Coordination**: Orchestrator monitors status and determines
-   promotion timing
-4. **Promotion Trigger**: Orchestrator calls `/api/leader/promote` when ready
+3. **External Coordination**: (Cloud) Orchestrator monitors status and
+   determines promotion timing
+4. **Promotion Trigger**: (Cloud) Orchestrator calls `/api/leader/promote` when
+   ready
 
 ### Phase 5: Fencing and Takeover
 
@@ -166,6 +175,8 @@ pub struct Controller {
     read_only: bool,
     storage: Box<dyn StorageController>,
     compute: ComputeController,
+
+    [...]
 }
 
 // Read-only controllers prevent writes
@@ -176,22 +187,21 @@ if self.read_only() {
 
 #### Storage Read-Only Mode
 
-- **Leased Read Handles**: Uses time-limited read capabilities instead of
-  critical since handles
-- **No Source Execution**: Prevents source command execution that would advance
-  state
+- **Leased Read Handles**: Storage controller uses time-limited read
+  capabilities instead of critical since handles
+- **Read-only sources**: Sources hydrate their state, but don't write anything
+  down to persist
 - **Persist Integration**: Read-only mode table worker restricts persist
   operations
 
 #### Compute Read-Only Mode
 
-- **Hydration Only**: Allows dataflow hydration but prevents new sink creation
-- **Sequential Hydration**: Controlled hydration prevents resource thrashing
-- **Replica Continuity**: Existing replicas continue running without restart
+- **Hydration Only**: Allows dataflow hydration but sinks (materialized views)
+  are barred from writing
 
 ### Orchestration Integration
 
-The system integrates with external orchestrators through well-defined APIs:
+The system integrates with the (Cloud) orchestrator through http APIs:
 
 #### Status API
 
@@ -214,7 +224,8 @@ Response: {"result": "Success"}
 
 ## Configuration
 
-The zero-downtime upgrade system is controlled by several configuration parameters:
+The zero-downtime upgrade system is controlled by several configuration
+parameters:
 
 ### Core Configuration
 
@@ -231,7 +242,8 @@ The zero-downtime upgrade system is controlled by several configuration paramete
 
 ### Operational Control
 
-- `ENABLE_0DT_DEPLOYMENT_PANIC_AFTER_TIMEOUT`: Panic vs. continue on timeout
+- `ENABLE_0DT_DEPLOYMENT_PANIC_AFTER_TIMEOUT`: Panic vs. continue on timeout,
+  only used for testing
 - `WITH_0DT_DEPLOYMENT_CAUGHT_UP_CHECK_INTERVAL`: Caught-up check frequency
 
 ## Architectural Properties
@@ -250,29 +262,12 @@ The system maintains strict consistency through:
 
 Zero-downtime is achieved through:
 
-- **Workload Continuity**: Dataflows continue running during upgrades
 - **Pre-Hydration**: New deployments hydrate before taking over
 - **Graceful Fencing**: Old deployments shut down gracefully when fenced
 
-### Fault Tolerance
-
-The system handles failures through:
-
-- **Infinite Retry**: Replica connections retry indefinitely with exponential
-  backoff
-- **Timeout Handling**: Configurable timeouts with graceful degradation
-- **DDL Change Detection**: Automatic restart if schema changes detected
-- **Rollback Safety**: Failed promotions don't affect running deployments
-
 ## Future Considerations
 
-### Performance Optimizations
-- **Hydration Concurrency**: Configurable parallel hydration for faster startup
-- **Incremental Hydration**: Hydrate only changed components
-- **Smart Reconnection**: Optimize replica reconnection patterns
-
 ### Operational Improvements
-- **Automated Rollback**: Automatic rollback on promotion failures
 - **Health Monitoring**: Enhanced monitoring of upgrade progress
 - **Metric Collection**: Comprehensive metrics for upgrade performance
 
@@ -280,16 +275,3 @@ The system handles failures through:
 - **Multi-Region Support**: Coordinate upgrades across regions
 - **Staging Rollouts**: Gradual rollouts with canary deployments
 - **Load Balancing**: Intelligent load balancing during upgrades
-
-## Conclusion
-
-The zero-downtime upgrade system in Materialize provides a robust foundation
-for seamless software updates. Through careful orchestration of read-only mode,
-caught-up detection, promotion signaling, and fencing mechanisms, the system
-maintains both responsiveness and freshness during upgrades while providing
-strong consistency guarantees.
-
-The architecture's layered approach - with clear separation between deployment
-state management, workload hydration, and fencing coordination - enables
-flexible deployment strategies while maintaining operational safety and data
-consistency.
