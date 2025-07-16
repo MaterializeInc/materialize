@@ -22,8 +22,3 @@ rows:
       cluster resources.
 
       {{< include-md file="shared-content/shared-cluster-indexed-view-tip.md" >}}
-
-      **Additional Considerations:**
-
-      - Clusters containing [sinks](/serve-results/sink/) can only have a
-      replication factor of `1` (or `0`).

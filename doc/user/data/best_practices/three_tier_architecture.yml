@@ -39,8 +39,3 @@ rows:
       **A dedicated cluster(s)** for serving queries, including
       [indexes](/concepts/indexes/) on the materialized views. Indexes are local
       to the cluster in which they are created.
-
-      **Additional Considerations:**
-
-      - Clusters containing [sinks](/serve-results/sink/) can only have a
-      replication factor of 0 or 1.
